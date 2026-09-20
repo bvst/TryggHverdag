@@ -1,3 +1,4 @@
+// req-coverage: fixtures-only — the IDs below are sample data for testing the gates.
 // HK-02: separation of duties. The agent that writes code cannot touch tests,
 // and the agent that writes tests cannot touch production code (RG-03).
 import { describe, expect, test } from 'vitest';

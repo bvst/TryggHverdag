@@ -1,3 +1,4 @@
+// req-coverage: fixtures-only — the IDs below are sample data for testing the gates.
 // HK-04: every edit is checked immediately, by the same script CI runs.
 import { afterEach, describe, expect, test } from 'vitest';
 import { readFileSync } from 'node:fs';

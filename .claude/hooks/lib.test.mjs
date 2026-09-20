@@ -1,3 +1,4 @@
+// req-coverage: fixtures-only — the IDs below are sample data for testing the gates.
 // The shared helpers every hook is built on. If these are wrong, every gate is
 // wrong, so they are tested directly.
 import { describe, expect, test } from 'vitest';

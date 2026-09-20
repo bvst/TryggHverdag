@@ -57,12 +57,15 @@ Scripts are added by the task that needs them, so `docs/progress.md` is the
 list that is actually true. Today:
 
 `pnpm install` · `pnpm run gate:file <path>` · `pnpm run gate:quick` ·
-`pnpm run gate:static` · `pnpm run test:hooks` · `pnpm run test:unit` ·
-`pnpm run doctor`
+`pnpm run gate:full` · `pnpm run gate:static` · `pnpm run test:unit` ·
+`pnpm run test:hooks` · `pnpm run req:coverage` · `pnpm run tests:changes` ·
+`pnpm run coverage:ratchet` · `pnpm run api:diff` · `pnpm run mutation` ·
+`pnpm run licenses:check` · `pnpm run doctor`
 
-Still to come, with their tasks: `gate:full`, `req:coverage`, `tests:changes`,
-`coverage:ratchet`, `api:diff`, `mutation` (INF-03), `dev`, `test:integration`,
-`test:system` (INF-05), `e2e:android`, `e2e:ios` (INF-06).
+`gate:full` prints the steps it cannot run yet and which task brings them, so
+"passed" never quietly means "did not check". Still to come: `dev`,
+`test:integration`, `test:system` (INF-05), `e2e:android`, `e2e:ios` (INF-06),
+`gate:integrity` (INF-04).
 
 Use `pnpm run <name>`: `pnpm doctor` and `pnpm test` are pnpm's own commands and
 would run instead of ours.

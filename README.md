@@ -30,7 +30,12 @@ The full picture is in [`docs/plan/05-architecture.md`](docs/plan/05-architectur
 | Command | What it does |
 |---------|--------------|
 | `pnpm install` | Installs everything (Node 22, pnpm 10 — see `pnpm run doctor`) |
+| `pnpm run gate:quick` | What a session must pass before calling a task done: static checks, unit tests, no weakened tests |
+| `pnpm run gate:full` | Everything that runs without a phone or a deployment — what CI repeats |
+| `pnpm run gate:file <path>` | The same checks for one file; this is what runs after every edit |
 | `pnpm run gate:static` | The static gate (L1): formatting, types, lint, import rules |
+| `pnpm run test:unit` · `test:hooks` | All unit tests · just the tests of the gates |
+| `pnpm run req:coverage` | Which requirements have a test that names them (RG-01), written to `docs/requirements-status.md` |
 | `pnpm run doctor` | Checks this machine has the tools the project needs (INF-00) |
 | `pnpm run format` | Formats the code Prettier owns (Markdown is wrapped by hand) |
 
@@ -40,5 +45,9 @@ and it would run instead of this one.
 ## How the quality gates fit together
 
 The checks live in repository scripts, so a local session, a Claude Code hook
-and CI all run exactly the same thing. `gate:static` is the first of them; the
-rest arrive with INF-02 (hooks), INF-03 (gate scripts) and INF-04 (CI).
+and CI all run exactly the same thing. The hooks in `.claude/hooks/` call the
+same `gate:*` scripts that CI will call (INF-04).
+
+One rule runs through all of them: **a check that cannot run yet is reported as
+skipped, with the task that will bring it — never as a check that passed.**
+`pnpm run gate:full` prints that list every time.

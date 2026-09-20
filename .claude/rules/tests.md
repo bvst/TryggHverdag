@@ -2,6 +2,7 @@
 paths:
   - "**/*.test.ts"
   - "**/*.test.tsx"
+  - "**/*.test.mjs"
   - "apps/mobile/e2e/**"
   - "packages/test-kit/**"
 ---
@@ -13,3 +14,7 @@ paths:
 - Never add `.skip` or `.only`, remove assertions, or delete tests without a
   written reason in the pull request (RG-03). Hooks and `test-auditor` check
   this.
+- A test that only *quotes* requirement IDs as sample data — the tests of the
+  gates themselves do — starts with the line
+  `// req-coverage: fixtures-only`, so `pnpm run req:coverage` never counts
+  sample data as coverage (RG-01).

@@ -1,3 +1,4 @@
+// req-coverage: fixtures-only — the IDs below are sample data for testing the gates.
 // HK-06: "done" means the gate passed. A session cannot finish on a red gate
 // without that being written down where the next session will see it.
 import { afterEach, describe, expect, test } from 'vitest';

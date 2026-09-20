@@ -33,6 +33,12 @@ if (existsSync(failed))
     '⚠ The last stop gate FAILED and was not resolved:',
     readFileSync(failed, 'utf8').slice(0, 600),
   );
+const progress = path.join(cwd, '.claude/state/progress-missing');
+if (existsSync(progress))
+  lines.push(
+    '⚠ The last session changed code without updating docs/progress.md:',
+    readFileSync(progress, 'utf8').slice(0, 400),
+  );
 const pr = spawnSync('gh', ['pr', 'list', '--limit', '5'], {
   cwd,
   encoding: 'utf8',

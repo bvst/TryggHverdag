@@ -1,3 +1,4 @@
+// req-coverage: fixtures-only — the IDs below are sample data for testing the gates.
 // HK-05 / RG-03: a failing test must not be "fixed" by making it check less.
 // The hook compares the edited file against the version in HEAD.
 import { afterEach, describe, expect, test } from 'vitest';

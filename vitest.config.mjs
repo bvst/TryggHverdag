@@ -11,5 +11,13 @@ export default defineConfig({
     ],
     environment: 'node',
     testTimeout: 60_000,
+    coverage: {
+      provider: 'v8',
+      // json-summary is what the coverage ratchet (RG-04) reads.
+      reporter: ['text-summary', 'json-summary'],
+      include: ['scripts/**/*.mjs', 'packages/**/src/**/*.ts', 'apps/**/src/**/*.ts'],
+      exclude: ['**/*.test.*'],
+      reportsDirectory: 'coverage',
+    },
   },
 });

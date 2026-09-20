@@ -1,3 +1,4 @@
+// req-coverage: fixtures-only — the IDs below are sample data for testing the gates.
 // HK-01: a new session starts by being told where the work stands. Sessions are
 // short and there are many of them, so this is what keeps them in step.
 import { afterEach, describe, expect, test } from 'vitest';
@@ -60,6 +61,14 @@ describe('HK-01: unfinished business from the last session', () => {
     const output = runHook('session-start.mjs', { cwd: dir }).stdout;
     expect(output).toContain('stop gate FAILED');
     expect(output).toContain('2 tests failed');
+  });
+
+  test('a session that left no progress note is reminded of it', () => {
+    const dir = repoWith({
+      '.claude/state/progress-missing': '2026-09-20 HK-08: docs/progress.md has not been updated',
+    });
+    const output = runHook('session-start.mjs', { cwd: dir }).stdout;
+    expect(output).toContain('without updating docs/progress.md');
   });
 
   test('and a clean session is not given false alarms', () => {

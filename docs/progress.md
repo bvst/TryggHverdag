@@ -13,8 +13,8 @@ What has actually been built, task by task. The plan is in
 | INF-00 | Mac environment check | ⬜ Waits for the Mac (A-10). `pnpm run doctor` is ready for it |
 | INF-01 | Monorepo skeleton | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-02 | Claude Code configuration + hook tests | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
-| INF-03 | Gate scripts | 🔜 Next (runs in a cloud session) |
-| INF-04 | CI workflows, merge rules, CODEOWNERS | ⬜ Blocked on owner: see below |
+| INF-03 | Gate scripts + HK-08 | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
+| INF-04 | CI workflows, merge rules, CODEOWNERS | 🔜 Next — needs the tokens below |
 | INF-05 | Server skeleton | ⬜ Not started — needs Docker for the L3 tests |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
 | INF-07 | Staging on Clever Cloud | ⬜ Blocked on owner: Clever Cloud token |
@@ -172,8 +172,85 @@ and INF-02 share one pull request. Back to one task per pull request after this.
 - Hook tests live next to the hooks (`.claude/hooks/*.test.mjs`) and run with
   `pnpm run test:hooks`.
 
+### 2026-09-20 — INF-03: the gate scripts ✅ (same pull request [#2](https://github.com/bvst/TryggHverdag/pull/2))
+
+Third task on this branch, at the owner's request. The gates now have real
+implementations instead of the two placeholders INF-02 needed.
+
+**Written, each with its own tests**
+
+| Script | What it enforces |
+|--------|------------------|
+| `gate:file <path>` | HK-04: formatting, lint, types, import rules and the tests covering that one file — what runs after every edit |
+| `gate:quick` | Static checks, unit tests, and "no test was weakened". What a session must pass before calling a task done |
+| `gate:full` | Everything that runs without a phone or a deployment: the quick gate plus coverage, requirement coverage, the ratchet, API compatibility, mutation and licences |
+| `req:coverage` | RG-01: reads the requirement IDs out of the plan, finds the tests that name them, writes `docs/requirements-status.md`. `--fail-on-uncovered-changed` is what CI uses |
+| `tests:changes` | RG-03 across a whole pull request, including test files deleted outright — the case the per-edit hook cannot see |
+| `coverage:ratchet` | RG-04: coverage on changed files may not go down; safety code needs 95 % branches; product code 80 % lines |
+| `api:diff` | AR-08 / D-030: the current API against every released version still on someone's phone |
+| `mutation` | D-036: mutation score on safety code, run only when safety code changed |
+| `licenses:check` | SEC-06: every dependency under a licence this app can actually ship |
+
+**HK-08 is now real** (the owner asked for it here rather than later). A session
+that changed code but not `docs/progress.md` is refused once at the stop gate,
+warned at session end and before compaction, and reminded at the start of the
+next session. That rule used to live in `CLAUDE.md` as an instruction; it is
+machinery now, which is the whole point of Section 7.
+
+**The rule that shaped all of it**
+
+Four of these gates have nothing to check in M0: there is no server, no released
+API, no safety code. A gate with nothing to check looks exactly like a gate that
+passed — until the day it was supposed to catch something. So every one of them
+distinguishes the two cases in words:
+
+- `gate:full` prints `· integration tests — no "test:integration" script yet — INF-05 adds it`;
+- `api:diff` says there are no released versions yet, and **fails** if there are
+  released versions it cannot compare against, or if oasdiff is missing;
+- `mutation` skips only when no safety code changed, and **fails** if safety code
+  changed while Stryker is not set up (D-036);
+- `coverage:ratchet` prints "floor not in force — safety code: none exists yet"
+  rather than passing silently.
+
+**Two things found while building it**
+
+1. **The first requirement report was wrong, in the flattering direction.** It
+   counted LOST-02 and PRIV-07 as covered, because the tests of the *gates* use
+   real requirement IDs as sample data. A test file that only quotes IDs now says
+   so with `// req-coverage: fixtures-only`, and the honest count is **0 of 63**.
+   Over-reporting coverage is the exact false confidence this project exists to
+   avoid.
+2. **The coverage floor caught real code.** `packages/contracts` and
+   `packages/test-kit` were product code with no tests, so the 80 % floor failed
+   — correctly. They have tests now, and the floor passes on merit.
+
+**Also**
+
+- The RG-03 detector moved to `scripts/lib/test-strength.mjs`, so the hook and
+  `tests:changes` share one implementation and cannot drift apart.
+- Vitest coverage (v8) is set up; `coverage-baseline.json` is committed and is
+  what the ratchet compares against. Raise it deliberately with
+  `pnpm run coverage:ratchet -- --update`.
+- `docs/requirements-status.md` is generated — do not edit it by hand.
+
+**Still open**
+
+- `gate:integrity` (CI-01, checks the merge rules through GitHub's API) belongs
+  to INF-04, with the workflows.
+- Stryker is not installed. It is not needed until safety code exists (INF-05,
+  M2), and the gate fails loudly rather than skipping if that changes.
+- oasdiff is not an npm package, so CI will install it separately or use the
+  oasdiff action (INF-04).
+
 ## In flight
 
-Nothing. INF-03 is the next task: the full gate scripts (`gate:file`,
-`gate:quick`, `gate:full`, `req:coverage`, `tests:changes`, `coverage:ratchet`,
-`api:diff`, `mutation`, `licenses:check`), each with its own tests.
+Nothing. **INF-04 is next, and it is the first task that needs the owner**: the
+CI workflows from `docs/plan/08b-ci-files/`, the merge rules, the required
+checks and `gate:integrity`. Claude can write the workflows without any token;
+switching the merge rules on, and the AI review and daily report jobs, need the
+three things listed under "What Claude needs from the owner" above.
+
+If the tokens are still not set up, the next session can instead do **INF-05**
+(the server skeleton), which needs nothing from the owner — but note that its
+integration tests need Docker, and the Docker daemon does not run in a cloud
+session.

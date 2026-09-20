@@ -23,10 +23,18 @@
     "test:unit": "vitest run",
     "gate:file": "node scripts/gate-file.mjs",
     "gate:static": "pnpm run format:check && pnpm run typecheck && pnpm run lint && pnpm run imports:check",
-    "gate:quick": "pnpm run gate:static && pnpm run test:unit"
+    "gate:quick": "node scripts/gate.mjs quick",
+    "req:coverage": "node scripts/req-coverage.mjs",
+    "tests:changes": "node scripts/tests-changes.mjs",
+    "coverage:ratchet": "node scripts/coverage-ratchet.mjs",
+    "licenses:check": "node scripts/licenses-check.mjs",
+    "api:diff": "node scripts/api-diff.mjs",
+    "mutation": "node scripts/mutation.mjs",
+    "gate:full": "node scripts/gate.mjs full"
   },
   "devDependencies": {
     "@trygghverdag/config": "workspace:*",
+    "@vitest/coverage-v8": "^5.0.1",
     "dependency-cruiser": "^18.4.0",
     "eslint": "^10.11.0",
     "prettier": "^3.9.8",

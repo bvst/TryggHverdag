@@ -1,3 +1,4 @@
+// req-coverage: fixtures-only — the IDs below are sample data for testing the gates.
 // HK-03: the shell is the way around every other guard, so it has its own.
 // Two independent layers protect the same rules: these checks and the deny list
 // in .claude/settings.json.

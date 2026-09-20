@@ -9,3 +9,4 @@ packages:
 # One place for versions that every package shares.
 catalog:
   typescript: ~6.0.3
+  vitest: ^5.0.1

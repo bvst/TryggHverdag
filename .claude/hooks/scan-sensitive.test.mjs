@@ -1,3 +1,4 @@
+// req-coverage: fixtures-only — the IDs below are sample data for testing the gates.
 // HK-07: secrets, real personal data and location logging never reach the
 // repository (PRIV-07, RG-07). The examples below are invented for these tests.
 import { describe, expect, test } from 'vitest';
