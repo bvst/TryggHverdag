@@ -268,7 +268,10 @@ it is.
 - `pnpm run gate:integrity` — reads the merge rules out of GitHub's API and
   compares them with what this repository can actually check today.
 - `docs/plan/merge-rules.md` — every setting the owner has to switch on, and
-  why each one is there.
+  why each one is there, plus `main-ruleset.json` to import rather than click
+  through. A test puts that file through the same `reviewRuleset` and
+  `reviewBypass` that CI-01 runs against the live repository, so the file the
+  owner uploads cannot drift from the checks that actually exist.
 
 **The rule that shaped it**
 
@@ -363,7 +366,7 @@ read by mistake.
 - **`workflow-lint` compares job *ids*, not the check *names* GitHub reports.**
   They coincide today. Giving each check in `CHECKS` a `producedBy` would make
   the mapping data instead of a heuristic.
-- **Part 2 of `merge-rules.md` is not verified by anything** — auto-merge,
+- **The repository settings in `merge-rules.md` are not verified** — auto-merge,
   squash-only, the code-security settings. The document now says so.
 
 **Decisions recorded:** D-060 (CI configuration v1, as installed), including why

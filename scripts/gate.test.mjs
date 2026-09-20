@@ -8,7 +8,12 @@ import { describe, expect, test } from 'vitest';
 import { FULL_STEPS, QUICK_STEPS } from './gate.mjs';
 import { packageScripts } from './lib/proc.mjs';
 import { findActionUses } from './lib/workflow-lint.mjs';
-import { OWNER_APPROVAL_PATHS } from './lib/merge-rules.mjs';
+import {
+  OWNER_APPROVAL_PATHS,
+  planChecks,
+  reviewBypass,
+  reviewRuleset,
+} from './lib/merge-rules.mjs';
 
 const WORKFLOWS = '.github/workflows';
 const scripts = packageScripts(process.cwd());
@@ -75,5 +80,37 @@ describe("this repository's own workflows", () => {
       const glob = path.replace(/^\//, '').replace(/\/$/, '/**');
       expect(text).toContain(`'${glob}'`);
     }
+  });
+});
+
+describe('the ruleset the owner imports', () => {
+  // docs/plan/main-ruleset.json is what the owner uploads to GitHub, so it is a
+  // copy of the required-check list — the kind of copy that goes stale quietly.
+  // Rather than compare it field by field, put it through the very functions
+  // that will later judge the live repository: if the file would not satisfy
+  // gate:integrity, it is wrong now, and this says so before the owner imports
+  // it rather than after.
+  const ruleset = JSON.parse(readFileSync('docs/plan/main-ruleset.json', 'utf8'));
+  const required = planChecks(scripts).required;
+
+  test('it satisfies the same check that CI-01 runs against the live repository', () => {
+    expect(reviewRuleset({ branchRules: ruleset.rules, required })).toEqual([]);
+  });
+
+  test('nobody may bypass it (D-029)', () => {
+    expect(reviewBypass({ rulesets: [ruleset] })).toEqual([]);
+  });
+
+  test('it targets the default branch', () => {
+    expect(ruleset.target).toBe('branch');
+    expect(ruleset.conditions.ref_name.include).toEqual(['~DEFAULT_BRANCH']);
+  });
+
+  test('it requires every check that must be required today, and no others', () => {
+    const contexts = ruleset.rules
+      .find((rule) => rule.type === 'required_status_checks')
+      .parameters.required_status_checks.map((entry) => entry.context);
+
+    expect(contexts).toEqual(required);
   });
 });

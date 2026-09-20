@@ -663,7 +663,7 @@ new decision that supersedes it (see `00-working-agreement.md`).
   and `ai-review` checks are red. That is the intended state: an unenforced gate
   that reported itself as enforced would be the exact failure this project is
   built to avoid (D-029). Because the merge rules are not switched on yet, a red
-  check does not block merging — the owner still merges by hand until Part 1 of
+  check does not block merging — the owner still merges by hand until
   `merge-rules.md` is done.
 - **Not installed yet, and why:** `deploy-staging.yml` belongs to INF-07 (it
   needs the Clever Cloud token), `daily-status.yml` and the owner-question issue
