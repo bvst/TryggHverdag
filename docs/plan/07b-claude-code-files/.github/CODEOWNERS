@@ -1,0 +1,15 @@
+# Changes to these paths need the owner's approval before merge (D-042).
+# Everything else auto-merges when all required checks pass.
+# Replace @OWNER with the owner's GitHub username at setup.
+/apps/server/src/domain/          @OWNER
+/apps/server/src/modules/alerts/  @OWNER
+/apps/server/src/worker.ts        @OWNER
+/apps/mobile/src/safety-core/     @OWNER
+/.github/                         @OWNER
+/.claude/                         @OWNER
+/packages/contracts/released/     @OWNER
+/docs/plan/decisions.md           @OWNER
+/infra/                           @OWNER
+
+# Reviewer memory changes often and needs no approval (last match wins).
+/.claude/agent-memory/

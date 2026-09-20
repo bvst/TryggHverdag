@@ -1,0 +1,38 @@
+# Scheduled checks (Section 8).
+name: nightly
+on:
+  schedule:
+    - cron: '0 2 * * *'      # every night 02:00 UTC
+    - cron: '0 3 * * 1'      # Mondays 03:00 UTC (weekly iOS simulator run)
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  full-mutation:             # D-036: full run nightly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm mutation --full
+  canary-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm canary:report --last 24h
+  ios-e2e:                   # weekly, on Expo's macOS machines (no GitHub macOS minutes)
+    if: github.event.schedule == '0 3 * * 1' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: cd apps/mobile && eas workflow:run .eas/workflows/ios-e2e.yml --non-interactive --wait

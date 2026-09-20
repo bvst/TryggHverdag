@@ -1,0 +1,93 @@
+# CI-11: AI reviews (D-043). Blocking: safety, privacy, test-auditor. Advisory: code, a11y-i18n.
+# Each reviewer is its own job, so each is its own required status check.
+# Every job always reports: if a reviewer doesn't apply to this change, it passes as "not applicable".
+name: ai-review
+on:
+  pull_request:
+concurrency:
+  group: ai-review-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      safety: ${{ steps.f.outputs.safety }}
+      privacy: ${{ steps.f.outputs.privacy }}
+      ui: ${{ steps.f.outputs.ui }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: f
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            safety:
+              - 'apps/server/src/domain/**'
+              - 'apps/server/src/modules/alerts/**'
+              - 'apps/server/src/worker.ts'
+              - 'apps/mobile/src/safety-core/**'
+            privacy:
+              - 'apps/server/src/modules/identity/**'
+              - 'apps/server/src/modules/privacy/**'
+              - 'apps/server/src/adapters/**'
+              - '**/logging/**'
+              - '**/package.json'
+              - 'infra/**'
+            ui:
+              - 'apps/mobile/src/**/*.tsx'
+
+  review:
+    needs: changes
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { agent: safety-reviewer,           blocking: true,  applies: safety }
+          - { agent: privacy-security-reviewer, blocking: true,  applies: privacy }
+          - { agent: test-auditor,              blocking: true,  applies: always }
+          - { agent: code-reviewer,             blocking: false, applies: always }
+          - { agent: a11y-i18n-reviewer,        blocking: false, applies: ui }
+    name: ai-review (${{ matrix.agent }})
+    steps:
+      - id: applies
+        run: |
+          case "${{ matrix.applies }}" in
+            always) echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            safety) echo "run=${{ needs.changes.outputs.safety }}" >> "$GITHUB_OUTPUT" ;;
+            privacy) echo "run=${{ needs.changes.outputs.privacy }}" >> "$GITHUB_OUTPUT" ;;
+            ui) echo "run=${{ needs.changes.outputs.ui }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - if: steps.applies.outputs.run != 'true'
+        run: echo "Not applicable to this change."
+      - if: steps.applies.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - if: steps.applies.outputs.run == 'true'
+        uses: pnpm/action-setup@v4
+      - if: steps.applies.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - if: steps.applies.outputs.run == 'true'
+        run: pnpm install --frozen-lockfile
+      # Input names below follow the Claude Code GitHub Action v1 docs; verify at setup.
+      - if: steps.applies.outputs.run == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}   # Max plan (D-045); fallback: anthropic_api_key
+          prompt: |
+            Use the ${{ matrix.agent }} subagent to review this pull request against origin/${{ github.base_ref }}.
+            Write its final verdict line and findings to review-${{ matrix.agent }}.md, and post the findings as a PR comment.
+      - if: steps.applies.outputs.run == 'true'
+        name: Enforce verdict
+        run: |
+          f="review-${{ matrix.agent }}.md"
+          test -f "$f" || { echo "Reviewer produced no verdict: failing loudly."; exit 1; }
+          if grep -q "VERDICT: BLOCK" "$f"; then
+            if [ "${{ matrix.blocking }}" = "true" ]; then echo "Blocking review: see the PR comment."; exit 1; fi
+            echo "::warning::Advisory reviewer raised blocking-level findings: see the PR comment."
+          fi
