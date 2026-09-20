@@ -11,7 +11,7 @@ What has actually been built, task by task. The plan is in
 | ID | Task | Status |
 |----|------|--------|
 | INF-00 | Mac environment check | ⬜ Waits for the Mac (A-10). `pnpm run doctor` is ready for it |
-| INF-01 | Monorepo skeleton | ✅ Done — 2026-09-20 |
+| INF-01 | Monorepo skeleton | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-02 | Claude Code configuration + hook tests | 🔜 Next (runs in a cloud session) |
 | INF-03 | Gate scripts | ⬜ Not started |
 | INF-04 | CI workflows, merge rules, CODEOWNERS | ⬜ Blocked on owner: see below |
@@ -42,7 +42,7 @@ needed before the tasks in brackets:
 
 ## Log
 
-### 2026-09-20 — INF-01: monorepo skeleton ✅
+### 2026-09-20 — INF-01: monorepo skeleton ✅ (pull request [#2](https://github.com/bvst/TryggHverdag/pull/2))
 
 **Built**
 
