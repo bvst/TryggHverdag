@@ -24,6 +24,7 @@
     "gate:file": "node scripts/gate-file.mjs",
     "gate:static": "pnpm run format:check && pnpm run typecheck && pnpm run lint && pnpm run imports:check",
     "gate:quick": "node scripts/gate.mjs quick",
+    "gate:integrity": "node scripts/gate-integrity.mjs",
     "req:coverage": "node scripts/req-coverage.mjs",
     "tests:changes": "node scripts/tests-changes.mjs",
     "coverage:ratchet": "node scripts/coverage-ratchet.mjs",

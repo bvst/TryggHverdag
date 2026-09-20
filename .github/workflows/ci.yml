@@ -1,0 +1,144 @@
+# Required checks on every pull request (Section 8, CI-01 to CI-10).
+#
+# Every job runs a repository script, so CI runs exactly what a session runs
+# locally. The list of jobs here is not free-form: scripts/lib/merge-rules.mjs
+# holds the one list of checks, and the gate-integrity job fails if this file,
+# that list and the repository's own merge rules ever stop agreeing.
+#
+# Jobs missing on purpose, because the script they would run does not exist yet:
+#   integration (CI-04) and system (CI-05) — INF-05 adds them
+#   android-e2e (CI-09)                    — INF-06 adds it
+# They are absent rather than skipped: a skipped job reports as a green tick,
+# and a green tick for work nobody did is the one thing this repository must not
+# produce. gate-integrity lists them every run, and starts failing the day their
+# script exists but the job still does not.
+#
+# Actions are pinned to a commit, never a tag: whoever can move a tag can
+# otherwise run their own code in a job that holds this repository's secrets.
+# Dependabot raises the pins (.github/dependabot.yml).
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+
+jobs:
+  gate-integrity: # CI-01: the merge rules are real (D-029), CODEOWNERS is complete (D-042)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run gate:integrity
+        env:
+          # The branch's rules are readable with ordinary repository access.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Who may bypass them is a repository setting, and needs its own
+          # read-only token. Without it this job fails on purpose: "nobody
+          # checked" is not the same answer as "nobody can bypass" (D-029).
+          RULES_READ_TOKEN: ${{ secrets.RULES_READ_TOKEN }}
+      - run: pnpm run test:hooks
+
+  static: # CI-02 (L1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run gate:static
+
+  unit: # CI-03 (L2, L5)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      # No `--` before the flag: it would reach vitest as a filename to filter
+      # tests by, and the suite would pass having measured nothing.
+      - run: pnpm run test:unit --coverage
+
+  contract: # CI-06 (L4, RG-08) — the API against every app version still in use
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      # There are no released versions yet, so this reports that and passes. It
+      # starts failing the moment there is something to break and no oasdiff to
+      # check it with (D-030).
+      - run: pnpm run api:diff
+
+  traceability: # CI-07 — RG-01 requirement coverage, RG-03 test changes, RG-04 coverage ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run req:coverage -- --fail-on-uncovered-changed
+      - name: The committed requirement report still matches the tests
+        # req:coverage rewrites docs/requirements-status.md. If the committed
+        # copy differs, the report people read is out of date — which is how a
+        # requirement comes to look covered when it is not.
+        run: |
+          git diff --exit-code docs/requirements-status.md || {
+            echo "::error file=docs/requirements-status.md::Out of date. Run 'pnpm run req:coverage' and commit the result."
+            exit 1
+          }
+      - run: pnpm run tests:changes -- --base origin/${{ github.base_ref || 'main' }}
+      # The ratchet reads coverage/coverage-summary.json, and each job starts on
+      # a clean runner, so this job measures its own rather than reaching for
+      # what the unit job produced. It refuses to pass on missing numbers, so
+      # leaving this out would turn CI-07 red rather than quietly unmeasured.
+      - run: pnpm run test:unit --coverage
+      - run: pnpm run coverage:ratchet -- --base origin/${{ github.base_ref || 'main' }}
+
+  mutation: # CI-08 (RG-05, D-036) — only when safety code changed; fails if it changed and Stryker is missing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: >-
+          pnpm run mutation --
+          --incremental --only-if-safety-paths-changed
+          --base origin/${{ github.base_ref || 'main' }}
+
+  security: # CI-10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level high
+      - run: pnpm run licenses:check
+      # Free for personal accounts; a GITLEAKS_LICENSE is needed if this
+      # repository is ever moved to an organisation (D-029).
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

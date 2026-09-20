@@ -37,6 +37,12 @@
       "coveredLines": 20,
       "totalLines": 36
     },
+    "scripts/gate-integrity.mjs": {
+      "lines": 49.25,
+      "branches": 53.12,
+      "coveredLines": 33,
+      "totalLines": 67
+    },
     "scripts/gate.mjs": {
       "lines": 0,
       "branches": 0,
@@ -97,11 +103,17 @@
       "coveredLines": 17,
       "totalLines": 17
     },
+    "scripts/lib/merge-rules.mjs": {
+      "lines": 100,
+      "branches": 90.9,
+      "coveredLines": 61,
+      "totalLines": 61
+    },
     "scripts/lib/proc.mjs": {
-      "lines": 0,
-      "branches": 0,
-      "coveredLines": 0,
-      "totalLines": 11
+      "lines": 58.33,
+      "branches": 25,
+      "coveredLines": 7,
+      "totalLines": 12
     },
     "scripts/lib/requirements.mjs": {
       "lines": 98.24,
@@ -120,6 +132,12 @@
       "branches": 100,
       "coveredLines": 16,
       "totalLines": 17
+    },
+    "scripts/lib/workflow-lint.mjs": {
+      "lines": 93.84,
+      "branches": 89.47,
+      "coveredLines": 61,
+      "totalLines": 65
     }
   }
 }

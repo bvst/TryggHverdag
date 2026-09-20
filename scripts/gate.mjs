@@ -35,8 +35,12 @@ export const QUICK_STEPS = [
 export const FULL_STEPS = [
   ...QUICK_STEPS.slice(0, 2),
   {
+    // No `--` before the flag: `pnpm run test:unit -- --coverage` reaches vitest
+    // as `vitest run -- --coverage`, where `--coverage` is read as a filename to
+    // filter tests by rather than as a flag. The suite then passes, no coverage
+    // is written, and the ratchet below fails saying it has nothing to measure.
     name: 'unit tests with coverage',
-    command: pnpmRun('test:unit', '--', '--coverage'),
+    command: pnpmRun('test:unit', '--coverage'),
     needsScript: 'test:unit',
   },
   {

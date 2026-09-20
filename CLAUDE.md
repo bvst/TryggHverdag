@@ -60,12 +60,14 @@ list that is actually true. Today:
 `pnpm run gate:full` · `pnpm run gate:static` · `pnpm run test:unit` ·
 `pnpm run test:hooks` · `pnpm run req:coverage` · `pnpm run tests:changes` ·
 `pnpm run coverage:ratchet` · `pnpm run api:diff` · `pnpm run mutation` ·
-`pnpm run licenses:check` · `pnpm run doctor`
+`pnpm run licenses:check` · `pnpm run gate:integrity` · `pnpm run doctor`
 
 `gate:full` prints the steps it cannot run yet and which task brings them, so
 "passed" never quietly means "did not check". Still to come: `dev`,
-`test:integration`, `test:system` (INF-05), `e2e:android`, `e2e:ios` (INF-06),
-`gate:integrity` (INF-04).
+`test:integration`, `test:system` (INF-05), `e2e:android`, `e2e:ios` (INF-06).
+
+`gate:integrity` (CI-01) checks the merge rules through GitHub's API. It is red
+until the owner finishes `docs/plan/merge-rules.md`, deliberately (D-029, D-060).
 
 Use `pnpm run <name>`: `pnpm doctor` and `pnpm test` are pnpm's own commands and
 would run instead of ours.

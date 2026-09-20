@@ -1,6 +1,8 @@
 // Running other tools, in one place, so every gate script reports failures the
 // same way: what ran, whether it passed, and what it printed.
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 /**
  * @param {string} command
@@ -25,19 +27,32 @@ export function exists(command) {
   return run('which', [command]).ok;
 }
 
-/** The scripts a package.json actually has — gates skip what does not exist yet. */
+/**
+ * The scripts a package.json actually has — gates skip what does not exist yet.
+ *
+ * Read from the file, and never from a subprocess's output. `run` above hands
+ * back stdout and stderr glued together, so a single warning from node — an
+ * experimental flag, a deprecation, an environment variable someone exported —
+ * used to land in the middle of the JSON. Parsing failed, the catch returned
+ * "no scripts", and every gate then reported every step as "not possible yet"
+ * and passed. A gate that runs nothing must never be able to look like a gate
+ * that passed, so this throws rather than shrugging.
+ */
 export function packageScripts(cwd = process.cwd()) {
-  const result = run(
-    'node',
-    ['-e', 'process.stdout.write(JSON.stringify(require("./package.json").scripts ?? {}))'],
-    { cwd, timeout: 20_000 },
-  );
-  if (!result.ok) {
-    return {};
+  const file = path.join(cwd, 'package.json');
+  let text;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (error) {
+    throw new Error(`Could not read ${file}, so no gate can tell what it may run.`, {
+      cause: error,
+    });
   }
   try {
-    return JSON.parse(result.output);
-  } catch {
-    return {};
+    return JSON.parse(text).scripts ?? {};
+  } catch (error) {
+    throw new Error(`${file} is not valid JSON, so no gate can tell what it may run.`, {
+      cause: error,
+    });
   }
 }

@@ -1,0 +1,134 @@
+# CI-11: the AI reviews (D-043).
+#
+# Blocking: safety-reviewer, privacy-security-reviewer, test-auditor. A BLOCK
+# from one of those stops the merge until it is fixed, or the owner overrides it.
+# Advisory: code-reviewer, a11y-i18n-reviewer — they comment, they never block.
+#
+# Each reviewer is its own job, so each is its own status check and the merge
+# rules can treat them differently.
+#
+# Two outcomes are deliberately kept apart:
+#   "this reviewer has nothing to look at"  → passes, and says so
+#   "this reviewer could not run"           → fails
+# The second covers a missing token and a reviewer that produced no verdict. A
+# review that did not happen must never look like a review that found nothing
+# (D-045).
+name: ai-review
+on:
+  pull_request:
+concurrency:
+  group: ai-review-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      safety: ${{ steps.f.outputs.safety }}
+      privacy: ${{ steps.f.outputs.privacy }}
+      ui: ${{ steps.f.outputs.ui }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - id: f
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            safety:
+              - 'apps/server/src/domain/**'
+              - 'apps/server/src/modules/alerts/**'
+              - 'apps/server/src/worker.ts'
+              - 'apps/mobile/src/safety-core/**'
+            privacy:
+              - 'apps/server/src/modules/identity/**'
+              - 'apps/server/src/modules/privacy/**'
+              - 'apps/server/src/adapters/**'
+              - '**/logging/**'
+              - '**/package.json'
+              - 'pnpm-lock.yaml'
+              - 'infra/**'
+            ui:
+              - 'apps/mobile/src/**/*.tsx'
+
+  review:
+    needs: changes
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { agent: safety-reviewer, blocking: true, applies: safety }
+          - { agent: privacy-security-reviewer, blocking: true, applies: privacy }
+          - { agent: test-auditor, blocking: true, applies: always }
+          - { agent: code-reviewer, blocking: false, applies: always }
+          - { agent: a11y-i18n-reviewer, blocking: false, applies: ui }
+    name: ai-review (${{ matrix.agent }})
+    steps:
+      - id: applies
+        run: |
+          case "${{ matrix.applies }}" in
+            always)  echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            safety)  echo "run=${{ needs.changes.outputs.safety }}" >> "$GITHUB_OUTPUT" ;;
+            privacy) echo "run=${{ needs.changes.outputs.privacy }}" >> "$GITHUB_OUTPUT" ;;
+            ui)      echo "run=${{ needs.changes.outputs.ui }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - if: steps.applies.outputs.run != 'true'
+        run: echo "This change touches nothing ${{ matrix.agent }} reviews, so there is nothing to look at."
+
+      - if: steps.applies.outputs.run == 'true'
+        name: The reviewer can actually run
+        # A missing token is not a passing review. Said here rather than left to
+        # the action, so the failure names the owner action that fixes it.
+        env:
+          TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Kept in step, not job, scope: only this step needs to know whether
+          # the secrets exist, and it never prints them.
+        run: |
+          if [ -z "$TOKEN" ] && [ -z "$KEY" ]; then
+            echo "::error::${{ matrix.agent }} did not run: no CLAUDE_CODE_OAUTH_TOKEN. Owner to-do A-09 — run 'claude setup-token' and save it as a repository secret (D-045). ANTHROPIC_API_KEY is the documented fallback."
+            exit 1
+          fi
+
+      - if: steps.applies.outputs.run == 'true'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - if: steps.applies.outputs.run == 'true'
+        uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+      - if: steps.applies.outputs.run == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version: 22, cache: pnpm }
+      - if: steps.applies.outputs.run == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - if: steps.applies.outputs.run == 'true'
+        uses: anthropics/claude-code-action@cb49f7eb1fff4f09c0a1447c09031a18891bcb94 # v1.0.231
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Use the ${{ matrix.agent }} subagent to review this pull request
+            against origin/${{ github.base_ref }}.
+            Write its findings and its final verdict line to
+            review-${{ matrix.agent }}.md, and post the findings as one pull
+            request comment.
+
+      - if: steps.applies.outputs.run == 'true'
+        name: Enforce the verdict
+        run: |
+          f="review-${{ matrix.agent }}.md"
+          if [ ! -f "$f" ]; then
+            echo "::error::${{ matrix.agent }} produced no verdict file. A review that did not happen is not a review that found nothing."
+            exit 1
+          fi
+          if grep -q "VERDICT: BLOCK" "$f"; then
+            if [ "${{ matrix.blocking }}" = "true" ]; then
+              echo "::error::${{ matrix.agent }} blocks this pull request. Its findings are in the pull request comment (D-043)."
+              exit 1
+            fi
+            echo "::warning::${{ matrix.agent }} is advisory, and raised findings at blocking level. See the pull request comment."
+          fi

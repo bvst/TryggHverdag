@@ -1,0 +1,38 @@
+# Weekly dependency updates, through exactly the same gates as any other change.
+#
+# Actions are pinned to commit SHAs (see .github/workflows/ci.yml). Dependabot
+# understands that pinning and raises the SHA together with the version comment,
+# so keeping the pins current does not mean keeping them by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'ci(deps)'
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      # One pull request for the routine ones, so the review effort goes to the
+      # updates that can actually change behaviour.
+      dev-tooling:
+        patterns:
+          - '@types/*'
+          - 'eslint*'
+          - 'prettier'
+          - 'vitest'
+          - '@vitest/*'
+          - 'turbo'
+          - 'dependency-cruiser'
+        update-types:
+          - minor
+          - patch

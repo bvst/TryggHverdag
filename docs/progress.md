@@ -14,8 +14,8 @@ What has actually been built, task by task. The plan is in
 | INF-01 | Monorepo skeleton | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-02 | Claude Code configuration + hook tests | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-03 | Gate scripts + HK-08 | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
-| INF-04 | CI workflows, merge rules, CODEOWNERS | 🔜 Next — needs the tokens below |
-| INF-05 | Server skeleton | ⬜ Not started — needs Docker for the L3 tests |
+| INF-04 | CI workflows, merge rules, CODEOWNERS | 🟡 Built — waiting on the owner (A-15) to switch the rules on |
+| INF-05 | Server skeleton | 🔜 Next — the L3 tests need Docker, which only CI has |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
 | INF-07 | Staging on Clever Cloud | ⬜ Blocked on owner: Clever Cloud token |
 | INF-08 | Monitoring | ⬜ Blocked on owner: Healthchecks.io / UptimeRobot |
@@ -24,21 +24,28 @@ What has actually been built, task by task. The plan is in
 
 ## What Claude needs from the owner next
 
-Nothing blocks INF-02 or INF-03, so cloud sessions can continue. These are
-needed before the tasks in brackets:
+**A-15 is the one that matters now, and it is about 10 minutes.** Every step is
+written out in [`plan/merge-rules.md`](plan/merge-rules.md):
 
-1. **A-09 — `claude setup-token`**, saved as the repository secret
-   `CLAUDE_CODE_OAUTH_TOKEN` [INF-04 AI reviews, INF-09 daily report].
-2. **A token for Claude's GitHub account (A-06)** in the cloud environment, so
-   pull requests are opened by Claude's account and the owner's approvals count
-   (D-042). Until then the owner merges the pull requests. The same account's
-   token is the `CLAUDE_BOT_TOKEN` secret that `gate:integrity` uses to read the
-   merge rules [INF-04].
-3. **Repository merge rules** need repository-admin rights, which Claude's
-   account does not have on purpose (A-06). Claude will write down the exact
-   settings for the owner to switch on [INF-04].
-4. **Clever Cloud API token** for the AS's account (A-04) [INF-07].
-5. **Healthchecks.io and UptimeRobot API keys** (A-08) [INF-08].
+1. **Create the ruleset on `main`** — nothing else in this repository can do it,
+   because Claude's account deliberately has no admin rights (A-06). Until it
+   exists, `main` can be pushed to, force-pushed and deleted by anyone with
+   write access, and no check has to pass before a merge. `gate:integrity`
+   confirmed that against the live API while INF-04 was being built.
+2. **`RULES_READ_TOKEN`** — a fine-grained token, this repository only,
+   Administration: Read-only, nothing else. It is how CI reads *who may bypass*
+   the rules, which is the whole point of D-029. Claude's own account cannot be
+   given this without also being given admin over the gates it is subject to.
+3. **A-09 — `claude setup-token`**, saved as `CLAUDE_CODE_OAUTH_TOKEN`. Without
+   it the three blocking AI reviews fail rather than pass (D-045).
+
+Later tasks, not blocking anything today:
+
+4. **A token for Claude's GitHub account (A-06)** in the cloud environment, so
+   pull requests come from Claude's account and the owner's approvals count
+   (D-042). Until then the owner merges the pull requests.
+5. **Clever Cloud API token** for the AS's account (A-04) [INF-07].
+6. **Healthchecks.io and UptimeRobot API keys** (A-08) [INF-08].
 
 ## Log
 
@@ -242,15 +249,106 @@ distinguishes the two cases in words:
 - oasdiff is not an npm package, so CI will install it separately or use the
   oasdiff action (INF-04).
 
+### 2026-09-20 — INF-04: CI, and a gate that checks the gates 🟡 (pull request pending)
+
+The workflows are in and tested. The merge rules themselves need the owner
+(A-15), so INF-04 is not finished — and `gate-integrity` is red on purpose until
+it is.
+
+**Built**
+
+- `.github/workflows/ci.yml` — seven jobs, each running a repository script, so
+  CI runs exactly what a session runs: `gate-integrity` (CI-01), `static`
+  (CI-02), `unit` (CI-03), `contract` (CI-06), `traceability` (CI-07),
+  `mutation` (CI-08), `security` (CI-10).
+- `.github/workflows/ai-review.yml` — CI-11. One job per reviewer, so each is
+  its own status check: three blocking, two advisory (D-043).
+- `.github/dependabot.yml` — weekly updates for npm and for the actions,
+  through the same gates.
+- `pnpm run gate:integrity` — reads the merge rules out of GitHub's API and
+  compares them with what this repository can actually check today.
+- `docs/plan/merge-rules.md` — every setting the owner has to switch on, and
+  why each one is there.
+
+**The rule that shaped it**
+
+INF-03 established that a gate with nothing to check must say so rather than
+pass. CI has a sharper version of the same trap: **GitHub reports a skipped job
+as a green tick**, and a required check that is always skipped can never fail.
+
+So the jobs whose script does not exist yet — `integration` and `system`
+(INF-05), `android-e2e` (INF-06) — are *absent*, not skipped. What keeps that
+honest is that the list of checks lives in one place
+(`scripts/lib/merge-rules.mjs`) and is read at run time: `gate:integrity` works
+out from the repository's own scripts which checks must be required today, and
+fails if the workflow files, that list and the repository's merge rules ever
+disagree — a required check nothing produces, or a job nothing requires. Nobody
+has to remember to add `integration` when INF-05 lands; the gate starts failing
+until they do.
+
+**Two bugs found by running things rather than reading them**
+
+1. **`pnpm run test:unit -- --coverage` never measured any coverage.** The `--`
+   reaches vitest as part of the command line, so `--coverage` was read as a
+   filename to filter tests by. The suite passed, no coverage was written, and
+   `coverage:ratchet` (RG-04) then failed saying it had nothing to measure —
+   which is how it was found. `gate:full` had been red on this since INF-03.
+2. **`packageScripts()` could silently answer "this repository has no
+   scripts".** It read `package.json` by spawning node, and `run()` returns
+   stdout and stderr glued together — so one warning from node (an experimental
+   flag, a deprecation, an environment variable someone exported) landed in the
+   middle of the JSON, parsing failed, and the `catch` returned `{}`. Every gate
+   asks that function what it may run and skips what is missing, so the result
+   would have been **`gate:quick` and `gate:full` passing having run nothing**,
+   looking exactly like a clean run. It now reads the file directly and throws
+   rather than shrugging. `scripts/lib/proc.mjs` had no tests at all before
+   this; it does now.
+
+   This was found by accident, while checking that the API call works through
+   this session's proxy. It is the single most dangerous kind of bug this
+   project can have, and no gate would have caught it — INF-10's drills are
+   what would.
+
+**Verified**
+
+- `pnpm run gate:full` — 9 passed, 0 failed, 2 not possible yet (INF-05's
+  levels). Green for the first time since INF-03, because of bug 1 above.
+- `pnpm run gate:integrity` run **against the live GitHub API**, not only
+  against fixtures. It reports the truth: `main` has no protection at all today.
+- 58 new tests across `merge-rules`, `workflow-lint`, `gate-integrity` and
+  `proc`; 239 in the suite.
+- Actions are pinned to commit SHAs, and `gate:integrity` refuses a tag or a
+  branch.
+
+**Decision recorded:** D-060 (CI configuration v1, as installed), including why
+reading the bypass list needs its own token rather than Claude's.
+
+**Worth knowing for the next task**
+
+- **`gate-integrity` and the three `ai-review` checks are red until A-15 and
+  A-09.** That is the designed state, not a regression (D-029). Because the
+  merge rules are not on yet, a red check does not block merging — the owner
+  still merges by hand.
+- **Not installed yet, and why:** `deploy-staging.yml` belongs to INF-07 (it
+  needs the Clever Cloud token), `daily-status.yml` and the owner-question issue
+  template to INF-09, `release.yml` and `nightly.yml` to the milestones whose
+  scripts they call. The drafts stay in `docs/plan/08b-ci-files/`.
+- **The requirement report was stale**, claiming 0 of 63 when the true count was
+  1 of 63 (`licenses.test.mjs` covers SEC-06). CI now regenerates it and fails
+  if the committed copy differs, so it cannot drift again.
+- **The coverage baseline was raised** deliberately, to cover the new files and
+  `proc.mjs`; nothing was lowered.
+
 ## In flight
 
-Nothing. **INF-04 is next, and it is the first task that needs the owner**: the
-CI workflows from `docs/plan/08b-ci-files/`, the merge rules, the required
-checks and `gate:integrity`. Claude can write the workflows without any token;
-switching the merge rules on, and the AI review and daily report jobs, need the
-three things listed under "What Claude needs from the owner" above.
+INF-04 is built but **not done**: it is finished when `gate:integrity` passes,
+which needs A-15 from the owner. The pull request can merge before that.
 
-If the tokens are still not set up, the next session can instead do **INF-05**
-(the server skeleton), which needs nothing from the owner — but note that its
-integration tests need Docker, and the Docker daemon does not run in a cloud
-session.
+**INF-05 (server skeleton) is next** and needs nothing from the owner. One thing
+to know before starting it: its integration tests (L3, Testcontainers) need
+Docker, and the Docker daemon does not run in a cloud session — the binary is
+there, the socket is not. CI is now the place those tests can run, which is part
+of why INF-04 came first.
+
+After INF-05 and INF-06 land, `gate:integrity` will start failing until their
+checks are added to the required list; that is the intended reminder.
