@@ -45,30 +45,18 @@ says so, not because every pull request does.
 
 ### The checks to require
 
-Add exactly these ten, spelled this way:
+Run `pnpm run gate:integrity` and copy the names it prints under "required
+today" — ten of them at the time of writing. Copying them from here instead
+would be copying from a list nothing verifies; the gate works its list out from
+the scripts the repository actually has.
 
-```
-gate-integrity
-static
-unit
-contract
-traceability
-mutation
-security
-ai-review (safety-reviewer)
-ai-review (privacy-security-reviewer)
-ai-review (test-auditor)
-```
-
-Three more are missing on purpose, because the scripts they would run do not
+Three checks are missing on purpose, because the scripts they would run do not
 exist yet: `integration` and `system` (INF-05) and `android-e2e` (INF-06).
 `ai-review (code-reviewer)` and `ai-review (a11y-i18n-reviewer)` are advisory
 and must never be required (D-043).
 
-Nobody has to remember to add the missing ones later. `gate:integrity` works out
-the list from the scripts the repository actually has, and starts failing the day
-one of those checks becomes possible but is still not required. It prints the
-full list on every run.
+Nobody has to remember to add the missing ones later: `gate:integrity` starts
+failing the day one of those checks becomes possible but is still not required.
 
 ## Part 2 — the repository settings (1 minute)
 
@@ -79,6 +67,16 @@ full list on every run.
 - **Allow squash merging** — on; the other two off, so `main` stays one commit
   per task (D-052).
 - **Automatically delete head branches** — on.
+
+**Settings → Code security:**
+
+- **Dependency graph** — on, and **Dependabot alerts** and **Dependabot
+  security updates** with it. `.github/dependabot.yml` only schedules *version*
+  updates; these are what react when an advisory lands against a dependency
+  nobody is touching. Between pull requests, nothing else is watching.
+- **Secret scanning** and **push protection** — on. The gitleaks step in CI
+  catches a secret that has already been committed; push protection is what
+  stops it being committed.
 
 ## Part 3 — the two secrets
 
@@ -117,12 +115,22 @@ gate:integrity — CI-01: are the gates real?
 ```
 
 Anything less than five ticks names what is wrong and what to do about it.
+(Run from a clone whose origin is not this repository, there are four sections
+rather than five, and it says so.)
 
-To see it before pushing anything, run it locally against the live repository:
+**Part 2 is not checked by anything.** The gate reads the ruleset and
+CODEOWNERS; whether auto-merge is on, and whether the code-security settings
+are, it cannot see. Those are on you until a later task adds them.
+
+To see it before pushing anything, run it locally against the live repository.
+Read the tokens from files rather than typing them on the command line, where
+they would land in shell history and be visible to anyone else on the machine
+(the Mac is shared with a separate `claude-dev` user, A-10):
 
 ```
-GITHUB_TOKEN=<any token that can read this repo> \
-RULES_READ_TOKEN=<the fine-grained token> \
+chmod 600 ~/.config/trygghverdag/rules-read-token
+GITHUB_TOKEN="$(cat ~/.config/trygghverdag/github-token)" \
+RULES_READ_TOKEN="$(cat ~/.config/trygghverdag/rules-read-token)" \
 pnpm run gate:integrity
 ```
 

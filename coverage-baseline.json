@@ -38,15 +38,15 @@
       "totalLines": 36
     },
     "scripts/gate-integrity.mjs": {
-      "lines": 49.25,
-      "branches": 53.12,
-      "coveredLines": 33,
-      "totalLines": 67
+      "lines": 50,
+      "branches": 54.9,
+      "coveredLines": 39,
+      "totalLines": 78
     },
     "scripts/gate.mjs": {
-      "lines": 0,
-      "branches": 0,
-      "coveredLines": 0,
+      "lines": 21.05,
+      "branches": 10,
+      "coveredLines": 4,
       "totalLines": 19
     },
     "scripts/licenses-check.mjs": {
@@ -105,9 +105,9 @@
     },
     "scripts/lib/merge-rules.mjs": {
       "lines": 100,
-      "branches": 90.9,
-      "coveredLines": 61,
-      "totalLines": 61
+      "branches": 91.66,
+      "coveredLines": 64,
+      "totalLines": 64
     },
     "scripts/lib/proc.mjs": {
       "lines": 58.33,
@@ -124,8 +124,8 @@
     "scripts/lib/steps.mjs": {
       "lines": 100,
       "branches": 100,
-      "coveredLines": 26,
-      "totalLines": 26
+      "coveredLines": 31,
+      "totalLines": 31
     },
     "scripts/lib/test-strength.mjs": {
       "lines": 94.11,

@@ -669,3 +669,47 @@ new decision that supersedes it (see `00-working-agreement.md`).
   needs the Clever Cloud token), `daily-status.yml` and the owner-question issue
   template to INF-09, and `release.yml` and `nightly.yml` to the milestones whose
   scripts they call. The drafts stay in `08b-ci-files/` until then.
+
+## D-061 — What the INF-04 reviews changed
+- **Date:** 2026-09-20 · **Status:** Accepted (delegated, D-031) · **Section:** 8
+- **Context:** The three reviewers of the INF-04 branch each returned BLOCK, and
+  two found the same bug independently. Amends D-060 rather than replacing it.
+- **Decision:**
+  1. **`privacy-security-reviewer` runs on every pull request.** Its draft path
+     filter covered two of the seven planned server modules, so a change to
+     journeys, groups, alerts, notifications or maps — and every change to
+     `.github/` or `scripts/` — would have reported a green privacy tick on a
+     *required* check without the reviewer ever looking. A path filter that
+     misses decides silently that there was nothing to review. Filters are now
+     used only where the path list is small and written down elsewhere, and a
+     test holds the `safety` filter to `OWNER_APPROVAL_PATHS`.
+  2. **The generated requirement report carries no date.** CI regenerates
+     `docs/requirements-status.md` and fails if the committed copy differs; with
+     the generation date in it, that check would have gone red at midnight every
+     night, for a reason nobody changed. `renderStatus` is now a pure function
+     of the rows (AR-03). Git already records when a file changed.
+  3. **An upstream failure cannot skip a blocking review.** The reviewer jobs
+     depend on a paths-filter job; if that job failed, all five were skipped —
+     and a skipped job is a green tick, which is the premise D-060 is built on.
+     They now run with `if: always()` and fail loudly when the filter did not.
+  4. **The verdict must be the last line, anchored.** The draft accepted a file
+     with no verdict at all, and missed `**VERDICT: BLOCK**`.
+  5. **Every ruleset covering `main` is read, not the first.** A bypass entry in
+     a second ruleset was invisible, and the gate printed a tick over it — in
+     the one check D-029 exists to make.
+  6. **A gate in which nothing ran has not passed.** `summarize` returned `ok`
+     when every step was skipped, so a typo in a script name would have turned a
+     gate into a decoration. With `packageScripts` now throwing, these were the
+     two routes to a silent green gate; both are closed.
+  7. **The secret scan uses the gitleaks CLI (MIT), not `gitleaks-action`**,
+     which is under a proprietary end-user licence that is not on the allowed
+     list and needs a key on an organisation account — where this repository is
+     headed (D-029). Pinned by version and checked against its published
+     checksum.
+  8. **`/scripts/` and `/package.json` need the owner's approval** (CODEOWNERS
+     and `OWNER_APPROVAL_PATHS`). They decide what every gate does and run with
+     the token the `gate-integrity` job holds, so they are part of the gates.
+- **Consequences:** `privacy-security-reviewer` uses more of the Max allowance
+  than the draft assumed (D-045); that is the price of the check meaning what it
+  says. The reviewers' remaining suggestions are recorded in `progress.md` as
+  named follow-ups rather than done here, so INF-04 stays one task.

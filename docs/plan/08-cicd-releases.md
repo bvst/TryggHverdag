@@ -191,6 +191,8 @@ one phone.
   - Healthchecks check-in URLs
   - Claude OAuth token
   - Claude's GitHub token (A-06)
+  - `RULES_READ_TOKEN` — reads the merge rules for CI-01; fine-grained, this
+    repository only, Administration: Read-only (A-15, D-060)
 - **Rotation:** yearly, and immediately if a secret leaks. The secret scan
   (CI-10) plus the local hook (HK-07) make leaks unlikely.
 

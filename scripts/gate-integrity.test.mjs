@@ -1,17 +1,28 @@
 // CI-01, the part a person reads. A gate that finds a problem and then buries
 // it in output nobody scrolls to has not really found anything.
 import { describe, expect, test } from 'vitest';
-import { renderReport, repoSlug, sectionsFor } from './gate-integrity.mjs';
+import {
+  combineRulesetAnswers,
+  renderReport,
+  repoSlug,
+  rulesetIdsOf,
+  sectionsFor,
+} from './gate-integrity.mjs';
+import { OWNER_APPROVAL_PATHS } from './lib/merge-rules.mjs';
 
 describe('sectionsFor', () => {
   const plan = { required: ['static'], waiting: [], advisory: [] };
   const base = {
     plan,
     workflowProblems: [],
-    codeownersText: null,
+    // A complete CODEOWNERS, so that a section under test is the only thing
+    // that can contribute a problem. With this left null, every assertion of
+    // the form "some section has a problem" passes no matter what the section
+    // under test does.
+    codeownersText: OWNER_APPROVAL_PATHS.map((path) => `${path} @bvst`).join('\n'),
     slug: { owner: 'bvst', repo: 'TryggHverdag' },
     branchRules: [],
-    ruleset: null,
+    rulesets: null,
   };
   const section = (sections, needle) =>
     sections.find((s) => s.title.includes(needle)) ?? { problems: [], notes: [] };
@@ -39,8 +50,19 @@ describe('sectionsFor', () => {
   test('not knowing which repository this is does not quietly pass the rules', () => {
     const sections = sectionsFor({ ...base, slug: null });
 
-    expect(sections.some((s) => s.problems.length > 0)).toBe(true);
+    expect(section(sections, "main's merge rules").problems[0]?.what).toContain(
+      'Could not tell which GitHub repository this is',
+    );
     expect(sections.every((s) => !s.title.includes('bypass'))).toBe(true);
+  });
+
+  test('the checks required today are named, not just counted', () => {
+    // The owner copies these into the repository settings. A count would mean
+    // copying them out of a hand-maintained table instead, which is the one
+    // copy nothing verifies.
+    const notes = section(sectionsFor(base), 'required today').notes ?? [];
+
+    expect(notes).toContain('static — required today');
   });
 
   test('the checks waiting for a later task are notes, not failures', () => {
@@ -57,6 +79,61 @@ describe('sectionsFor', () => {
     expect(checks.problems).toEqual([]);
     expect(checks.notes?.join(' ')).toContain('system');
     expect(checks.notes?.join(' ')).toContain('ai-review (code-reviewer)');
+  });
+});
+
+describe('rulesetIdsOf', () => {
+  test('every distinct ruleset covering the branch, not just the first', () => {
+    const rules = [
+      { type: 'deletion', ruleset_id: 1 },
+      { type: 'pull_request', ruleset_id: 1 },
+      { type: 'non_fast_forward', ruleset_id: 2 },
+    ];
+
+    expect(rulesetIdsOf(rules)).toEqual([1, 2]);
+  });
+
+  test('rules that name no ruleset contribute nothing', () => {
+    expect(rulesetIdsOf([{ type: 'deletion' }])).toEqual([]);
+  });
+
+  test('rules that could not be read are no ids, not an error', () => {
+    expect(rulesetIdsOf(null)).toEqual([]);
+  });
+});
+
+describe('combineRulesetAnswers', () => {
+  const ok = (body) => ({ body, status: 200 });
+
+  test('all readable: the rulesets, and no status to complain about', () => {
+    expect(combineRulesetAnswers([ok({ id: 1 }), ok({ id: 2 })])).toEqual({
+      rulesets: [{ id: 1 }, { id: 2 }],
+      status: null,
+    });
+  });
+
+  test('one unreadable makes the whole answer unknown, never a partial pass', () => {
+    // Reporting the two that were readable as "nobody can bypass" would be a
+    // tick over a ruleset nobody saw.
+    expect(combineRulesetAnswers([ok({ id: 1 }), { body: null, status: 404 }])).toEqual({
+      rulesets: null,
+      status: 404,
+    });
+  });
+
+  test('a rejected token surfaces its status, so the message can name it', () => {
+    expect(combineRulesetAnswers([{ body: null, status: 401 }]).status).toBe(401);
+  });
+
+  test('no token at all has no status to report', () => {
+    expect(combineRulesetAnswers([{ body: null, status: null }])).toEqual({
+      rulesets: null,
+      status: null,
+    });
+  });
+
+  test('nothing to ask about is unknown, not an empty pass', () => {
+    expect(combineRulesetAnswers([])).toEqual({ rulesets: null, status: null });
   });
 });
 

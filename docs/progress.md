@@ -315,13 +315,60 @@ until they do.
   levels). Green for the first time since INF-03, because of bug 1 above.
 - `pnpm run gate:integrity` run **against the live GitHub API**, not only
   against fixtures. It reports the truth: `main` has no protection at all today.
-- 58 new tests across `merge-rules`, `workflow-lint`, `gate-integrity` and
-  `proc`; 239 in the suite.
+- 94 new tests across `merge-rules`, `workflow-lint`, `gate-integrity`, `proc`,
+  `gate` and `steps`; 275 in the suite. Three of them were checked by mutation
+  rather than by reading: a test that cannot fail is worse than no test.
 - Actions are pinned to commit SHAs, and `gate:integrity` refuses a tag or a
   branch.
 
-**Decision recorded:** D-060 (CI configuration v1, as installed), including why
-reading the bypass list needs its own token rather than Claude's.
+**Reviewed, and it changed the work**
+
+All three reviewers returned BLOCK (D-043). Two found the same bug
+independently. What they caught:
+
+| Found by | The problem | Why it mattered |
+|----------|-------------|-----------------|
+| privacy | The `privacy` path filter covered 2 of the 7 planned server modules | A change to journeys, groups, alerts, notifications or maps — or to `.github/` — would have shown a **green privacy tick on a required check** with the reviewer never looking. That reviewer now runs on everything |
+| code | The requirement report carries its generation date, and CI now compares it | The `traceability` check would have gone red at **midnight every night**, for a reason nobody changed. The report is a pure function of the repository now (AR-03) |
+| code | `needs: changes` made the five reviewers skippable | If the filter job failed, all five were **skipped — which is a green tick**. Exactly the premise D-060 is built on, violated in the same commit |
+| test-auditor | The verdict check accepted a file with no verdict, and missed `**VERDICT: BLOCK**` | A blocking review passing without a verdict. Now anchored, last line only; the six cases were run by hand |
+| code + auditor | Only the first ruleset's bypass list was read | A bypass entry in a second ruleset covering `main` was invisible, and the gate printed ✓ — in the one check D-029 exists to make |
+| test-auditor | `summarize` returned "ok" when every step was skipped | A typo in one script name would turn a gate into a decoration. With `packageScripts` throwing, these were the two routes to a silent green gate; both are closed |
+| test-auditor | One new test passed for the wrong reason | It asserted "some section has a problem" while the fixture guaranteed one. Proven by mutation, fixed, and the fix proven by mutation again |
+| privacy | `gitleaks-action` is under a proprietary end-user licence | The one dependency the project's own licence policy would reject, arriving through the one path that policy does not cover. Replaced with the MIT gitleaks CLI, pinned and checksummed |
+| privacy | `/scripts/` and `/package.json` were not owner-approved paths | They decide what every gate does, and run with the token the `gate-integrity` job holds. Added to CODEOWNERS |
+
+Also fixed: the stray `--` in six more places (including the ratchet's own error
+message, which recommended the broken form at exactly the moment the bug bit);
+two action pins that named the annotated tag rather than the commit, which
+Dependabot would have stopped updating; workflow-wide `pull-requests: write`
+narrowed to the job that needs it; `node-version` read from `.nvmrc` instead of
+repeated seven times; the whole unit suite no longer running twice per pull
+request. The superseded `ci.yml`, `ai-review.yml` and `dependabot.yml` drafts
+were deleted from `08b-ci-files/`, where they had become a second version to
+read by mistake.
+
+**Follow-ups the reviewers raised that are deliberately not in this task**
+
+- **`apps/server/src/worker.ts` is missing from the safety paths in
+  `scripts/lib/coverage.mjs`**, so the 95 % branch floor will not apply to the
+  watchdog and outbox sender while mutation testing does. The file does not
+  exist yet, so nothing is wrong today — but it will be by INF-05. That list
+  lives in five places and two already disagree; it wants one source and its own
+  `/bugfix`.
+- **RG-01 cannot see the CI requirements.** `CI-01` to `CI-11` live in a table
+  `scripts/lib/requirements.mjs` does not read, so the report still says 1 of 63
+  after a task that built eleven of them. Adding that source is a scope decision
+  for the owner, not a review fix.
+- **`workflow-lint` compares job *ids*, not the check *names* GitHub reports.**
+  They coincide today. Giving each check in `CHECKS` a `producedBy` would make
+  the mapping data instead of a heuristic.
+- **Part 2 of `merge-rules.md` is not verified by anything** — auto-merge,
+  squash-only, the code-security settings. The document now says so.
+
+**Decisions recorded:** D-060 (CI configuration v1, as installed), including why
+reading the bypass list needs its own token rather than Claude's, and D-061
+(what the reviews changed).
 
 **Worth knowing for the next task**
 
@@ -336,8 +383,14 @@ reading the bypass list needs its own token rather than Claude's.
 - **The requirement report was stale**, claiming 0 of 63 when the true count was
   1 of 63 (`licenses.test.mjs` covers SEC-06). CI now regenerates it and fails
   if the committed copy differs, so it cannot drift again.
-- **The coverage baseline was raised** deliberately, to cover the new files and
-  `proc.mjs`; nothing was lowered.
+- **The coverage baseline was raised** deliberately, twice: for the new files
+  and `proc.mjs`, and again after the review round. Nothing was lowered either
+  time. The ratchet did its job in between — it refused a drop in
+  `gate-integrity.mjs`, which is how the untested ruleset logic ended up
+  extracted into pure functions and tested.
+- **`pnpm run gate:full` now includes CI-01** and is therefore red until A-15,
+  or skipped with its reason where no token is set. `gate:quick` — what the stop
+  gate runs — is green.
 
 ## In flight
 

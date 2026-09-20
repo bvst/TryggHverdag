@@ -101,10 +101,16 @@ function workflowFiles(cwd) {
     .filter((file) => file.text !== null);
 }
 
-/** One GitHub API call. Anything other than a clean 200 means "unknown", not "fine". */
+/**
+ * One GitHub API call. Anything other than a clean 200 means "unknown", not
+ * "fine" — and the status comes back with it, so that a token GitHub rejected
+ * can be told apart from a token nobody added.
+ *
+ * @returns {Promise<{ body: unknown | null, status: number | null }>}
+ */
 async function api(url, token) {
   if (token === undefined || token === '') {
-    return null;
+    return { body: null, status: null };
   }
   try {
     const response = await fetch(url, {
@@ -114,10 +120,36 @@ async function api(url, token) {
         'x-github-api-version': '2022-11-28',
       },
     });
-    return response.ok ? await response.json() : null;
+    return { body: response.ok ? await response.json() : null, status: response.status };
   } catch {
-    return null;
+    return { body: null, status: null };
   }
+}
+
+/**
+ * The distinct rulesets covering the branch. Every rule carries the id of the
+ * ruleset it came from, and more than one ruleset can cover a branch — reading
+ * only the first would print a tick over a bypass entry sitting in the second.
+ *
+ * @param {{ruleset_id?: number}[] | null} branchRules
+ */
+export function rulesetIdsOf(branchRules) {
+  return [
+    ...new Set((branchRules ?? []).map((rule) => rule.ruleset_id).filter((id) => id !== undefined)),
+  ];
+}
+
+/**
+ * What several ruleset reads add up to. One unreadable answer makes the whole
+ * thing unknown: reporting the ones that were readable as "nobody can bypass"
+ * would be a tick over a ruleset nobody saw.
+ *
+ * @param {{body: unknown | null, status: number | null}[]} answers
+ */
+export function combineRulesetAnswers(answers) {
+  const status = answers.find((a) => a.status !== null && a.status !== 200)?.status ?? null;
+  const readable = answers.length > 0 && answers.every((a) => a.body !== null);
+  return { rulesets: readable ? answers.map((a) => a.body) : null, status };
 }
 
 /**
@@ -132,7 +164,8 @@ async function api(url, token) {
  *   codeownersText: string | null,
  *   slug: {owner: string, repo: string} | null,
  *   branchRules: {type: string}[] | null,
- *   ruleset: object | null,
+ *   rulesets: object[] | null,
+ *   rulesetStatus?: number | null,
  * }} state
  */
 export function sectionsFor({
@@ -141,13 +174,15 @@ export function sectionsFor({
   codeownersText,
   slug,
   branchRules,
-  ruleset,
+  rulesets,
+  rulesetStatus = null,
 }) {
   const sections = [
     {
       title: `the checks that must be required today (${String(plan.required.length)})`,
       problems: [],
       notes: [
+        ...plan.required.map((check) => `${check} — required today`),
         ...plan.waiting.map((w) => `${w.check} — ${w.reason}, so it is not required yet`),
         ...plan.advisory.map((check) => `${check} — advisory, never required (D-043)`),
       ],
@@ -186,8 +221,9 @@ export function sectionsFor({
       // read them and found none. Only an answer we actually got can say a
       // ruleset is missing.
       problems: reviewBypass({
-        ruleset,
+        rulesets,
         rulesExist: branchRules === null || branchRules.length > 0,
+        status: rulesetStatus,
       }),
     },
   );
@@ -203,17 +239,32 @@ async function main() {
   const plan = planChecks(scripts);
 
   let branchRules = null;
-  let ruleset = null;
+  let rulesets = null;
+  let rulesetStatus = null;
   if (slug !== null) {
     const base = `${API}/repos/${slug.owner}/${slug.repo}`;
     // The branch's own rules are readable with ordinary repository access, so
     // GITHUB_TOKEN is enough. Who may bypass them is a repository setting, and
     // needs a token that can read those — deliberately a different, narrower
     // secret than the one Claude's account uses to open pull requests.
-    branchRules = await api(`${base}/rules/branches/${BRANCH}`, env.GITHUB_TOKEN);
-    const rulesetId = branchRules?.find((rule) => rule.ruleset_id !== undefined)?.ruleset_id;
-    if (rulesetId !== undefined) {
-      ruleset = await api(`${base}/rulesets/${String(rulesetId)}`, env.RULES_READ_TOKEN);
+    branchRules = (await api(`${base}/rules/branches/${BRANCH}`, env.GITHUB_TOKEN)).body;
+
+    // Every rule carries the id of the ruleset it came from, and more than one
+    // ruleset can cover a branch. All of them, or the answer is worthless.
+    // A ruleset owned by an organisation lives at /orgs/{org}/rulesets/{id}, so
+    // this call 404s for it — which surfaces as "could not be checked", not as
+    // a pass. Worth revisiting if the repository moves to an AS (D-029).
+    const ids = [
+      ...new Set(
+        (branchRules ?? []).map((rule) => rule.ruleset_id).filter((id) => id !== undefined),
+      ),
+    ];
+    if (ids.length > 0) {
+      const answers = await Promise.all(
+        ids.map((id) => api(`${base}/rulesets/${String(id)}`, env.RULES_READ_TOKEN)),
+      );
+      rulesetStatus = answers.find((a) => a.status !== null && a.status !== 200)?.status ?? null;
+      rulesets = answers.every((a) => a.body !== null) ? answers.map((a) => a.body) : null;
     }
   }
 
@@ -228,7 +279,8 @@ async function main() {
       codeownersText: readOrNull(path.join(cwd, '.github/CODEOWNERS')),
       slug,
       branchRules,
-      ruleset,
+      rulesets,
+      rulesetStatus,
     }),
   );
   process.stdout.write(report.text);

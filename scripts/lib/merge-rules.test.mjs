@@ -177,39 +177,67 @@ describe('reviewRuleset', () => {
 });
 
 describe('reviewBypass', () => {
+  const clean = { enforcement: 'active', bypass_actors: [] };
+
   test('a ruleset nobody can bypass is what D-029 asks for', () => {
-    expect(reviewBypass({ ruleset: { enforcement: 'active', bypass_actors: [] } })).toEqual([]);
+    expect(reviewBypass({ rulesets: [clean] })).toEqual([]);
   });
 
   test('any bypass actor is a hole, and the report names it', () => {
     const problems = reviewBypass({
-      ruleset: {
-        enforcement: 'active',
-        bypass_actors: [{ actor_type: 'RepositoryRole', actor_id: 5, bypass_mode: 'always' }],
-      },
+      rulesets: [
+        {
+          enforcement: 'active',
+          bypass_actors: [{ actor_type: 'RepositoryRole', actor_id: 5, bypass_mode: 'always' }],
+        },
+      ],
     });
 
     expect(problems[0]?.what).toContain('RepositoryRole');
   });
 
-  test('a ruleset in evaluate mode reports, but does not block — so it is not enforcement', () => {
+  test('a second ruleset covering main is read too, not just the first', () => {
+    // main can be covered by more than one ruleset. Checking only the first
+    // would print a tick over a bypass entry sitting in the second.
     const problems = reviewBypass({
-      ruleset: { enforcement: 'evaluate', bypass_actors: [] },
+      rulesets: [
+        clean,
+        {
+          enforcement: 'active',
+          bypass_actors: [{ actor_type: 'OrganizationAdmin', bypass_mode: 'always' }],
+        },
+      ],
     });
+
+    expect(problems).toHaveLength(1);
+    expect(problems[0]?.what).toContain('OrganizationAdmin');
+  });
+
+  test('a ruleset in evaluate mode reports, but does not block — so it is not enforcement', () => {
+    const problems = reviewBypass({ rulesets: [{ enforcement: 'evaluate', bypass_actors: [] }] });
 
     expect(problems[0]?.what).toContain('not enforced');
   });
 
   test('unreadable bypass list: says so plainly instead of assuming the best', () => {
-    const problems = reviewBypass({ ruleset: null });
+    const problems = reviewBypass({ rulesets: null });
 
     expect(problems).toHaveLength(1);
     expect(problems[0]?.what).toContain('could not be checked');
     expect(problems[0]?.fix).toContain('RULES_READ_TOKEN');
   });
 
+  test('a token that was rejected says so, rather than asking for one that is already there', () => {
+    // The secret expires. Without this, the gate tells the owner to add a
+    // secret they added a year ago, and they go looking in the wrong place.
+    const problems = reviewBypass({ rulesets: null, status: 401 });
+
+    expect(problems[0]?.what).toContain('401');
+    expect(problems[0]?.fix).toContain('expired');
+  });
+
   test('no ruleset yet: asks for the ruleset, not for a token that would not help', () => {
-    const problems = reviewBypass({ ruleset: null, rulesExist: false });
+    const problems = reviewBypass({ rulesets: null, rulesExist: false });
 
     expect(problems).toHaveLength(1);
     expect(problems[0]?.what).toContain('nothing to bypass');

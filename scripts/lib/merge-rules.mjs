@@ -22,6 +22,10 @@ export const OWNER_APPROVAL_PATHS = [
   '/apps/mobile/src/safety-core/',
   '/.github/',
   '/.claude/',
+  // The gates are not only .github and .claude: these run with the tokens the
+  // gate-integrity job holds, and decide what every other check does.
+  '/scripts/',
+  '/package.json',
   '/packages/contracts/released/',
   '/docs/plan/decisions.md',
   '/infra/',
@@ -201,12 +205,17 @@ export function reviewRuleset({ branchRules, required }) {
 /**
  * The part D-029 is really about: who is allowed to ignore all of the above.
  *
+ * `main` can be covered by more than one ruleset, so this takes all of them.
+ * Reading only the first would print a tick over a bypass entry sitting in the
+ * second — in the one check D-029 exists to make.
+ *
  * @param {{
- *   ruleset: { enforcement?: string, bypass_actors?: {actor_type?: string, bypass_mode?: string}[] } | null,
+ *   rulesets: { enforcement?: string, bypass_actors?: {actor_type?: string, bypass_mode?: string}[] }[] | null,
  *   rulesExist?: boolean,
+ *   status?: number | null,
  * }} state
  */
-export function reviewBypass({ ruleset, rulesExist = true }) {
+export function reviewBypass({ rulesets, rulesExist = true, status = null }) {
   if (!rulesExist) {
     return [
       {
@@ -215,7 +224,15 @@ export function reviewBypass({ ruleset, rulesExist = true }) {
       },
     ];
   }
-  if (ruleset === null) {
+  if (rulesets === null) {
+    if (status === 401 || status === 403) {
+      return [
+        {
+          what: `Who can bypass main's rules could not be checked: GitHub answered ${String(status)}, so the token was rejected.`,
+          fix: 'RULES_READ_TOKEN is present but not accepted. It has most likely expired, or lost its Administration: Read-only permission on this repository. Issue a new one (docs/plan/merge-rules.md).',
+        },
+      ];
+    }
     return [
       {
         what: "Who can bypass main's rules could not be checked, so the most important property of the merge rules is unknown.",
@@ -225,17 +242,19 @@ export function reviewBypass({ ruleset, rulesExist = true }) {
   }
 
   const problems = [];
-  if (ruleset.enforcement !== 'active') {
-    problems.push({
-      what: `The ruleset is "${String(ruleset.enforcement)}", not "active": it is reported on but not enforced.`,
-      fix: 'Set the ruleset to Active.',
-    });
-  }
-  for (const actor of ruleset.bypass_actors ?? []) {
-    problems.push({
-      what: `${String(actor.actor_type)} may bypass the rules (${String(actor.bypass_mode)}), so the gates are optional for whoever that is (D-029).`,
-      fix: 'Remove every bypass entry. Nobody bypasses the gates — that is the whole point of having them.',
-    });
+  for (const ruleset of rulesets) {
+    if (ruleset.enforcement !== 'active') {
+      problems.push({
+        what: `The ruleset is "${String(ruleset.enforcement)}", not "active": it is reported on but not enforced.`,
+        fix: 'Set the ruleset to Active.',
+      });
+    }
+    for (const actor of ruleset.bypass_actors ?? []) {
+      problems.push({
+        what: `${String(actor.actor_type)} may bypass the rules (${String(actor.bypass_mode)}), so the gates are optional for whoever that is (D-029).`,
+        fix: 'Remove every bypass entry. Nobody bypasses the gates — that is the whole point of having them.',
+      });
+    }
   }
   return problems;
 }

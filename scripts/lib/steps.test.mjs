@@ -48,6 +48,45 @@ describe('runPlan', () => {
   });
 });
 
+describe('planSteps and the environment', () => {
+  const step = {
+    name: 'merge rules',
+    command: ['pnpm', 'run', 'gate:integrity'],
+    needsScript: 'gate:integrity',
+    needsEnv: ['GITHUB_TOKEN'],
+    envReason: 'owner to-do A-15',
+  };
+  const scripts = { 'gate:integrity': 'x' };
+
+  test('a step whose environment variable is missing is skipped, with the reason', () => {
+    const [planned] = planSteps([step], scripts, {});
+
+    expect(planned?.willRun).toBe(false);
+    expect(planned?.reason).toContain('GITHUB_TOKEN');
+    expect(planned?.reason).toContain('owner to-do A-15');
+  });
+
+  test('the same step runs once the variable is there', () => {
+    expect(planSteps([step], scripts, { GITHUB_TOKEN: 'x' })[0]?.willRun).toBe(true);
+  });
+
+  test('a step with no advice still says which variable is missing', () => {
+    const bare = { ...step, envReason: undefined };
+
+    expect(planSteps([bare], scripts, {})[0]?.reason).toBe('needs GITHUB_TOKEN');
+  });
+
+  test('a variable set to the empty string counts as missing, as CI leaves it', () => {
+    expect(planSteps([step], scripts, { GITHUB_TOKEN: '' })[0]?.willRun).toBe(false);
+  });
+
+  test('a step that needs no environment runs whatever the environment holds', () => {
+    const plain = { name: 'x', command: ['x'], needsScript: 'gate:integrity' };
+
+    expect(planSteps([plain], scripts, {})[0]?.willRun).toBe(true);
+  });
+});
+
 describe('summarize', () => {
   test('a skipped step is counted as "not possible yet", never as passed', () => {
     const results = [
@@ -62,6 +101,20 @@ describe('summarize', () => {
     expect(summary.ok).toBe(true);
     expect(summary.text).toContain('1 passed, 0 failed, 1 not possible yet');
     expect(summary.text).toContain('INF-05 adds it');
+  });
+
+  test('a gate in which nothing ran at all has not passed', () => {
+    // Every step skipped looks identical to every step passing, in the one
+    // number a person reads. A typo in a needsScript value, or a package.json
+    // that could not be read, would otherwise produce a silent green gate.
+    const results = [
+      { name: 'static checks', status: 'skipped', detail: 'no script' },
+      { name: 'unit tests', status: 'skipped', detail: 'no script' },
+    ];
+    const summary = summarize(results, 'gate:quick');
+
+    expect(summary.ok).toBe(false);
+    expect(summary.text).toContain('nothing ran');
   });
 
   test('a failure shows its output and fails the gate', () => {

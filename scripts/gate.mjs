@@ -57,7 +57,7 @@ export const FULL_STEPS = [
   },
   {
     name: 'requirement coverage (RG-01)',
-    command: pnpmRun('req:coverage', '--', '--fail-on-uncovered-changed'),
+    command: pnpmRun('req:coverage', '--fail-on-uncovered-changed'),
     needsScript: 'req:coverage',
   },
   {
@@ -73,13 +73,24 @@ export const FULL_STEPS = [
   { name: 'API compatibility (AR-08)', command: pnpmRun('api:diff'), needsScript: 'api:diff' },
   {
     name: 'mutation score on safety code (D-036)',
-    command: pnpmRun('mutation', '--', '--incremental', '--only-if-safety-paths-changed'),
+    command: pnpmRun('mutation', '--incremental', '--only-if-safety-paths-changed'),
     needsScript: 'mutation',
   },
   {
     name: 'dependency licences (SEC-06)',
     command: pnpmRun('licenses:check'),
     needsScript: 'licenses:check',
+  },
+  {
+    // CI-01 reads the merge rules over the network, so it can only run where
+    // the tokens are. Listed here rather than left out, so that a local run
+    // says the merge rules were not checked instead of quietly not checking
+    // them — which is the same rule the rest of this file follows.
+    name: 'the merge rules are real (CI-01)',
+    command: pnpmRun('gate:integrity'),
+    needsScript: 'gate:integrity',
+    needsEnv: ['GITHUB_TOKEN'],
+    envReason: 'it reads GitHub; RULES_READ_TOKEN too (owner to-do A-15)',
   },
 ];
 
@@ -88,7 +99,7 @@ function main() {
   const steps = which === 'full' ? FULL_STEPS : QUICK_STEPS;
   const cwd = process.cwd();
 
-  const plan = planSteps(steps, packageScripts(cwd));
+  const plan = planSteps(steps, packageScripts(cwd), process.env);
   for (const planned of plan) {
     process.stdout.write(
       planned.willRun ? `▶ ${planned.step.name}\n` : `· ${planned.step.name} — ${planned.reason}\n`,

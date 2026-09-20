@@ -7,14 +7,16 @@ Copied into the repository at setup, together with `07b-claude-code-files/`.
 
 | File | Purpose |
 |------|---------|
-| `.github/workflows/ci.yml` | Required checks CI-01 to CI-10 on every pull request |
-| `.github/workflows/ai-review.yml` | CI-11: one required check per AI reviewer; blocking vs advisory (D-043) |
 | `.github/workflows/deploy-staging.yml` | Merge to `main` → staging (D-046) |
 | `.github/workflows/release.yml` | Owner-approved release PR → gates → production (from go-live) + app builds and store submission (D-047) |
 | `.github/workflows/nightly.yml` | Full mutation run, canary report, weekly iOS simulator tests on EAS |
-| `.github/dependabot.yml` | Weekly dependency updates through the same gates |
 | `.github/workflows/daily-status.yml` | Daily status report as a comment on the pinned issue (D-050) |
 | `.github/ISSUE_TEMPLATE/owner-question.md` | One question per issue, with a recommendation (D-051) |
+
+**`ci.yml`, `ai-review.yml` and `dependabot.yml` are no longer here.** INF-04
+installed them, with the changes recorded in D-060, and a draft sitting beside
+the installed file is a second version for someone to read by mistake. The
+remaining files are still drafts, waiting for the task that installs them.
 
 ## To verify at setup (automated where possible, D-035)
 - The input names of the Claude Code GitHub Action (`claude_code_oauth_token`,
@@ -27,4 +29,8 @@ Copied into the repository at setup, together with `07b-claude-code-files/`.
   `mutation`, `e2e:*`, `db:migrate`, `smoke`, `canary:*`, `release:gates`,
   `licenses:check`, `test:hooks`.
 - Mark every job as a **required status check** in the merge rules, and pin
-  action versions to commit SHAs.
+  action versions to commit SHAs. **Done for the installed workflows**, and
+  `pnpm run gate:integrity` now enforces both (CI-01).
+- The note above said `CLAUDE_BOT_TOKEN` would read the merge rules. It cannot:
+  Claude's account has write access and not admin, on purpose (A-06). See
+  `../merge-rules.md` and D-060.
