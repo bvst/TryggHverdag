@@ -1,0 +1,63 @@
+# 7b · Claude Code files — draft v0
+
+**Status:** Draft v0 (D-044) · **Last updated:** 2026-09-20
+
+These are the first versions of the Claude Code configuration from
+`07-claude-code-setup.md`. They are copied into the repository root when it is
+created (Section 10's first milestone), then verified as described below.
+
+```
+CLAUDE.md                     build-phase version (replaces the planning one)
+.github/CODEOWNERS            paths that need the owner's approval (D-042)
+.claude/settings.json         permissions + hook wiring
+.claude/rules/                5 path-scoped rule files
+.claude/agents/               11 agents
+.claude/skills/               5 workflows + 7 reference skills
+.claude/hooks/                7 hook scripts + shared lib (Node 22+, no dependencies)
+```
+
+## How the pieces enforce the gates
+
+| Gate | Enforced by |
+|------|-------------|
+| Tests first; implementers can't touch tests (RG-02, RG-03) | `implementer` frontmatter hooks → `guard-paths.mjs --deny` and `guard-bash.mjs --deny-write-glob` |
+| Test authors can't touch production code | `test-author` frontmatter hooks |
+| Reviewers are read-only | `guard-bash.mjs --readonly` in each reviewer, plus no Edit or Write tools |
+| No pushing to `main`, force pushes, `--no-verify`, local deploys, admin merges | `settings.json` deny rules **and** `guard-bash.mjs --global` (two independent layers) |
+| No secrets, real phone numbers or location logging (PRIV-07, RG-07) | `scan-sensitive.mjs` |
+| Checks after every edit | `post-edit.mjs` → `pnpm gate:file` |
+| Test weakening flagged immediately | `test-weakening.mjs` (CI repeats it on the whole PR) |
+| Can't finish while the gate fails | `stop-gate.mjs` on Stop and on `implementer`'s SubagentStop |
+| Owner approval for safety paths and the gates themselves | `CODEOWNERS` + GitHub rules (D-042) |
+
+**Hooks are thin by design.** The real checks live in repository scripts
+(`gate:file`, `gate:static`, `gate:quick`, `gate:full`, `req:coverage`,
+`api:diff`, `mutation`), so CI runs exactly the same logic as the local
+session.
+
+## Verification at repository setup (all automated, D-035)
+1. Accept the workspace trust prompt once, so project agents' hooks run.
+2. `claude plugin validate .claude/agents` checks the agents' frontmatter.
+3. Unit tests for every hook script, run in CI (for example: `guard-paths`
+   blocks `apps/server/src/x.test.ts` for `implementer`; `guard-bash --global`
+   blocks `git push origin main`).
+4. A scripted Claude Code session in CI (headless) tries each forbidden action
+   and asserts it is blocked.
+5. Verify the permission rule path syntax (`./` prefixes) against the current
+   Claude Code documentation.
+
+## Known limits (stated honestly)
+- **Shell loophole:** `guard-bash --deny-write-glob` is a heuristic. An agent
+  could still change a test file through an unusual command. The CI test-change
+  detector and `test-auditor` are the backstop, and CODEOWNERS stops unreviewed
+  gate changes.
+- **Stop-gate loops:** if the gate still fails after Claude was asked to
+  continue once, the hook records `.claude/state/gate-failed` instead of looping
+  forever. `session-start` and `/status` show it, and CI blocks the merge.
+- **Red phase:** `/feature` writes `.claude/state/phase` while tests are meant to
+  fail. A stale marker is shown at session start. Add `.claude/state/` to
+  `.gitignore`.
+
+## Still to write at repository setup
+The `gate:*`, `req:coverage`, `api:diff` and `mutation` scripts; the CI
+workflows (Section 8); hook unit tests; and replacing `@OWNER` in CODEOWNERS.

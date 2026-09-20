@@ -1,0 +1,29 @@
+# Merge to main → deploy the backend to staging (synthetic data only, D-046).
+name: deploy-staging
+on:
+  push:
+    branches: [main]
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:migrate --env staging          # expand-only migrations; backward compatible
+        env: { DATABASE_URL: "${{ secrets.STAGING_DATABASE_URL }}" }
+      - run: npx --yes clever-tools@latest deploy --alias staging --force
+        env:
+          CLEVER_TOKEN: ${{ secrets.CLEVER_TOKEN }}
+          CLEVER_SECRET: ${{ secrets.CLEVER_SECRET }}
+      - run: pnpm smoke --env staging
+      - run: pnpm canary:check --env staging --within 10m

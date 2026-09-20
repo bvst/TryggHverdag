@@ -1,0 +1,530 @@
+# Decision log
+
+**Last updated:** 2026-09-20
+
+Accepted decisions are binding for all sessions and agents. To change one, add a
+new decision that supersedes it (see `00-working-agreement.md`).
+
+---
+
+## D-001 — Planning lives in the repo as Markdown
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 0
+- **Context:** The owner will not write code; Claude Code does all the work
+  across many sessions, and chat history is not a reliable memory.
+- **Decision:** All planning material lives in `docs/plan/`. `README.md` is the
+  entry point, this file is the decision log, and `CLAUDE.md` tells Claude to
+  read both at the start of every session.
+- **Consequences:** Every session must end by updating the section file and the
+  status table.
+
+## D-002 — All code is written by Claude Code; the owner decides and reviews
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 0
+- **Context:** Owner has strong software experience but will not code on this
+  project.
+- **Decision:** Claude Code writes all code, tests and configuration, working
+  through specialised subagents and skills (designed in Section 7). The owner
+  approves specs and decisions.
+- **Consequences:** Quality must be enforced by automation (tests, hooks, CI),
+  not by memory or goodwill. This makes Sections 6–7 critical.
+
+## D-003 — Platforms and market
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 0
+- **Decision:** The app targets both iOS and Android. The launch market is
+  Norway.
+- **Consequences:** Norwegian emergency services, law and language shape the
+  product (Section 2). Cross-platform delivery is a hard requirement for the
+  stack choice (Section 4).
+
+## D-004 — Launch with a small private group first
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 1
+- **Context:** Owner chose a small private group over a public launch.
+- **Decision:** The first release goes to a small, invited group, not the
+  public app stores.
+- **Consequences:**
+  - Distribution through TestFlight (iOS) and a Google Play closed test.
+  - Google Play requires new personal accounts to run a closed test with at
+    least 12 testers for 14 continuous days before production access; the
+    private phase can double as that gate.
+  - GDPR still applies (Section 2), but payments and public support are out of
+    scope for now.
+  - The architecture must allow a later public launch without a rewrite, but we
+    don't build for scale yet.
+
+## D-005 — MVP core features
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 1
+- **Context:** Owner's round 1 answer, as read by Claude (see Section 1,
+  round 1). If the reading is wrong, this decision is superseded.
+- **Decision:** The MVP includes (a) one tap to call the user's #1 contact and
+  (b) sharing location with contacts for the length of a journey. The group
+  "Everyone home?" feature is parked for after the MVP.
+- **Open:** whether an automatic safety net (lost-contact alert and/or overdue
+  check) is part of the MVP — Section 1, round 2.
+
+## D-006 — Responders are the user's contacts plus a volunteer network
+- **Date:** 2026-09-20 · **Status:** Accepted in principle · **Section:** 1
+- **Decision:** When something is wrong, the user's own contacts respond, and a
+  volunteer network is part of the product direction.
+- **Open:** who the volunteers are (private-group members, an organisation, or
+  nearby users) and whether they are in the MVP — Section 1, round 2. Legal
+  questions (vetting, liability) go to Section 2.
+
+## D-007 — The MVP includes a server-side lost-contact alert
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 1
+- **Context:** Location sharing alone fails silently if the phone dies or is
+  taken (see Section 1, round 1). Resolves the open point in D-005.
+- **Decision:** During a journey the phone sends regular heartbeats. If they
+  stop, a server alerts the journey's responders with the last known position.
+  Overdue checks and "Are you OK?" prompts are parked for after the MVP.
+- **Consequences:** The MVP needs a backend that works independently of the
+  phone. The lost-contact end-to-end test is the most important test in the
+  project. Thresholds are set in Section 3.
+
+## D-008 — Volunteers are members of the private group
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 1
+- **Context:** Refines D-006. Organisation volunteers and nearby strangers bring
+  vetting, misuse and liability problems.
+- **Decision:** The volunteer network in the MVP is the private group itself:
+  members act as responders for each other. No organisation or stranger
+  volunteers in the MVP.
+- **Consequences:** "Responder" = group member. Every alert includes guidance
+  for responders (HELP-01). Organisation partnerships can be revisited after the
+  MVP, with legal review.
+
+## D-009 — First group: friends and family, 12 or more people
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 1
+- **Decision:** The first private group is friends and family, at least 12
+  people.
+- **Consequences:**
+  - Could meet Google Play's closed-test rule (12 testers, 14 days) if at least
+    12 members use Android. The actual iPhone/Android mix is needed in
+    Section 8.
+  - A family group may include teenagers, so Section 2 must cover age rules.
+
+## D-010 — Calling #1 also shares the walker's live location with #1
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 1
+- **Decision:** When #1 is a group member, the call button also starts sharing
+  live location with #1 (as a journey, so the lost-contact alert applies).
+  Details in CALL-03.
+- **Consequences:** Pressing the call button always leaves a safety trail, not
+  just a phone call.
+
+## D-011 — Journeys end with "I'm home"; no automatic arrival in the MVP
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 1
+- **Decision:** A journey ends when the walker taps "I'm home" or when the
+  automatic stop in JRN-06 kicks in. Arrival detection is parked.
+- **Consequences:** No geofencing in the MVP. JRN-06 is the only protection
+  against forgotten journeys; the private test should measure how often it
+  triggers.
+
+## D-012 — MVP scope v1 is approved
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 1
+- **Decision:** `01b-mvp-scope.md` v1 is the MVP. Story IDs are permanent and
+  will be referenced by tests.
+- **Consequences:** Changing MVP scope requires a new decision. ⚙️ numbers may
+  be tuned in Sections 3–4 without a new decision.
+
+## D-013 — Everyone who receives journeys or alerts has the app
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 1
+- **Decision:** Responders are group members with the app installed. The #1
+  contact for calling can be any phone number.
+- **Consequences:** No public web links in the MVP, which removes a whole class
+  of security risks.
+
+## D-014 — Languages: bokmål first, then English, then nynorsk
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 1
+- **Decision:** The MVP ships in Norwegian bokmål. English comes next, nynorsk
+  later. All app text goes through translation files from day one.
+- **Consequences:** No hard-coded text. The a11y-i18n reviewer agent checks
+  this (Section 7).
+
+## D-015 — Full GDPR compliance from day one
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 2
+- **Context:** It is unclear whether the household exemption covers a private
+  group app. Retrofitting privacy is expensive.
+- **Decision:** The private phase follows GDPR fully: a legal basis for each data
+  type, a DPIA before launch, a privacy notice, data subject rights, and
+  retention limits.
+- **Consequences:** A DPIA draft is due after Section 5 (architecture). A
+  privacy lawyer reviews everything before any public launch.
+
+## D-016 — Personal data is stored inside the EEA
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 2
+- **Context:** The EU–US Data Privacy Framework is valid but under appeal at
+  the EU Court of Justice.
+- **Decision:** All personal data, especially location, is stored and
+  processed by providers and regions inside the EEA.
+- **Consequences:** Constrains the backend and push-notification choices in
+  Section 4. Every provider needs a data processing agreement.
+
+## D-017 — Minimum age is 13, with safeguards for minors
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 2
+- **Decision:** Group members must be at least 13. Members under 18 are covered
+  by PRIV-12: age band only, parent/guardian awareness without location access,
+  and no consent-based features for members under 15.
+- **Consequences:** Minors count as vulnerable data subjects in the DPIA. Check
+  the status of the proposed 15-year age limit before any public launch.
+
+## D-018 — Privacy requirements PRIV-01 to PRIV-12 are binding
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 2
+- **Decision:** The PRIV table in `02-norway-law-privacy.md` is binding for all
+  design, code and reviews.
+- **Consequences:** The privacy-security-reviewer agent (Section 7) checks
+  changes against the PRIV IDs. Tests reference the IDs where they can be tested
+  automatically, for example retention deletion (PRIV-04) and log scrubbing
+  (PRIV-07).
+
+## D-019 — Unacknowledged alerts escalate to SMS after 2 minutes
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 3
+- **Context:** Push delivery is best effort, and a missed alert is the worst
+  failure (F6). Amends D-012 (MVP scope).
+- **Decision:** A lost-contact alert goes out as a push notification. If no
+  responder taps "I'm on it" within 2 minutes, every responder on the journey
+  gets an SMS. LOST-06 becomes a Must, and LOST-07 is added.
+- **Consequences:** An SMS provider inside the EEA with a data processing
+  agreement (Section 4). A small per-message cost. SMS messages carry no
+  location (REL-12).
+
+## D-020 — Apply for Apple Critical Alerts; responders opt in
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 3
+- **Decision:** Apply to Apple for the Critical Alerts entitlement as early as
+  possible, with Time Sensitive as the fallback. On Android, use a high-priority
+  alert channel that can override Do Not Disturb. Responders opt in during setup
+  (GRP-04).
+- **Consequences:** The request needs an Apple Developer account, so the account
+  question in Section 8 may need to be pulled forward. Amends D-012 with GRP-04.
+
+## D-021 — Lost-contact threshold is 5 minutes
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 3
+- **Decision:** Responders are alerted when the server has heard nothing from a
+  journey for 5 minutes.
+- **Consequences:** The heartbeat interval (⚙️ 60 s) must leave several chances
+  to report within 5 minutes. Changing the threshold after the spike or the
+  private test needs the owner's approval.
+
+## D-022 — Reliability and security requirements are binding
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 3
+- **Decision:** REL-01 to REL-12, SEC-01 to SEC-07 and the reliability targets
+  in `03-safety-reliability-security.md` are binding.
+- **Consequences:** The canary journey (REL-10) and external monitoring (REL-08)
+  are part of the MVP, not extras. A missed canary alert stops feature work until
+  it is fixed.
+
+## D-023 — React Native with Expo, TypeScript everywhere
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 4
+- **Decision:** The app is built with React Native and Expo (development builds,
+  strict TypeScript). The backend is also TypeScript and shares types with the
+  app. The safety-critical background part uses the Transistorsoft background
+  geolocation SDK, evaluated for free in the spike, plus small native modules
+  where needed. The background part does not use `expo-location`.
+- **Consequences:** One language for all agents and tests. The fallback, if the
+  spike fails, is native modules for the background part with React Native kept
+  for the UI. A $399 licence is needed before release builds.
+
+## D-024 — Running budget: €30–100 per month in the private phase
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 4
+- **Decision:** Monthly running costs (hosting, SMS, monitoring) should stay
+  between €30 and €100 during the private phase. One-time costs (developer
+  accounts, the location SDK licence) come on top.
+- **Consequences:** Rules out expensive managed platforms and paid monitoring
+  tiers. Favours small managed EEA services.
+
+## D-025 — Hosting on Clever Cloud
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 4
+- **Decision:** Backend apps (API and worker) and managed PostgreSQL run on
+  Clever Cloud, a French PaaS running only on European infrastructure.
+- **Consequences:** Low operations work, per-second billing within D-024. The
+  infrastructure is defined as code where possible (Section 5). A data
+  processing agreement with Clever Cloud is needed.
+
+## D-026 — Maps: Kartverket tiles through our own tile proxy
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 4
+- **Decision:** Maps use Kartverket's topographic map of Norway. The app fetches
+  tiles through a small caching proxy on our EEA server, so Kartverket never
+  sees users' IP addresses. Rendering uses MapLibre (open source).
+- **Consequences:** Map coverage is Norway only, which fits D-003. Verify
+  Kartverket's terms and rate limits, and MapLibre support for its tile format,
+  in the spike.
+
+## D-027 — The owner's AS holds the developer accounts
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 4/5
+- **Decision:** The Apple Developer Program and Google Play accounts are opened
+  as organisation accounts for the owner's existing AS.
+- **Consequences:**
+  - The AS is the GDPR controller (refines D-015). The privacy notice, DPIA and
+    data processing agreements are in the AS's name.
+  - Needs a D-U-N-S number, a public website and an email on the AS's domain.
+  - No later app transfer, so no second Critical Alerts request.
+  - Organisation accounts fall outside Google's documented 12-tester rule.
+
+## D-028 — Code lives on GitHub
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 5
+- **Decision:** The repository is hosted on GitHub, under an organisation owned
+  by the AS.
+- **Consequences:** The repository holds code only, never personal data; test
+  data is always synthetic, consistent with D-016. The GitHub plan is decided in
+  Section 5, round 2. CI runs on GitHub Actions (Section 8).
+
+## D-029 — Repository on the owner's paid personal GitHub account
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 5
+- **Context:** Amends D-028 (which assumed an AS organisation). The owner already
+  has a paid GitHub account. Paid plans enforce rulesets on private
+  repositories.
+- **Decision:** The private repository lives on the owner's paid personal
+  account. It can be transferred to an AS organisation later.
+- **Consequences:**
+  - Merge rules (tests must pass, no direct pushes to `main`) must also apply to
+    admins. Claude Code works with the owner's credentials, so an admin bypass
+    would let it skip the gates.
+  - The first CI setup task checks through GitHub's API that the rules are
+    actually enforced, and fails loudly if not.
+
+## D-030 — REST + OpenAPI, contract-first
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 5
+- **Decision:** One REST API. Schemas are defined once in `packages/contracts`,
+  and the OpenAPI description and the typed app client are generated from them.
+  The OpenAPI file of every released app version is stored, and CI fails on
+  breaking changes against any supported version (oasdiff).
+- **Consequences:** Native code (location SDK uploads), webhooks and future
+  external systems use the same documented API.
+
+## D-031 — Library-level choices are delegated to Claude
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 5
+- **Decision:** Claude chooses libraries and tools and records each choice, with
+  its reasons and a fallback, as "Accepted (delegated)". The owner can reopen any
+  of them. Product scope, cost, privacy and safety decisions stay with the owner.
+
+## D-032 — Library set v1
+- **Date:** 2026-09-20 · **Status:** Accepted (delegated, D-031) · **Section:** 5
+- **Decision:** oRPC (contract-first, OpenAPI handler) with zod · Hono on
+  Node.js LTS · Drizzle ORM · Graphile Worker · Better Auth (SMS codes; passkey
+  for the admin) · a hand-written state machine · dependency-cruiser · pino ·
+  pnpm workspaces + Turborepo · Expo Router, TanStack Query, react-i18next,
+  MapLibre React Native. Reasons and fallbacks are in
+  `05-architecture.md`.
+- **Consequences:** Items marked "verify at setup" are checked when the
+  repository is created. Any swap is recorded as a new decision.
+
+## D-033 — Journey state machine v1 and rules SM-01 to SM-10
+- **Date:** 2026-09-20 · **Status:** Accepted (delegated, D-031) · **Section:** 5
+- **Decision:** Journey states are ACTIVE, LOST_CONTACT and ENDED. Alert states
+  are OPEN, ESCALATED, ACKNOWLEDGED and RESOLVED. Rules SM-01 to SM-10 in
+  `05-architecture.md` are binding. The most important: a journey in lost
+  contact is never ended by the automatic stop (SM-05), and removing the
+  acknowledging responder restarts escalation (SM-10).
+- **Consequences:** Every transition and rule gets a test (Section 6).
+  SM-06 depends on the owner's answer on LOST-08.
+
+## D-034 — LOST-08: the acknowledging responder can close an alert
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 6 (scope question from Section 5)
+- **Decision:** The responder who tapped "I'm on it" can close a lost-contact
+  alert ("They're safe"). This ends the journey and informs the other
+  responders. Amends D-012 (MVP scope) and completes SM-06 (D-033).
+
+## D-035 — No reliance on manual testing by people
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 6
+- **Context:** The owner's principle: "I want everything automated with tests.
+  If something doesn't work when releasing, we should add tests to cover it. We
+  should never rely on manual testing from people."
+- **Decision:**
+  - All verification is automated, including behaviour on real phones, through
+    scripted tests on emulators, simulators and a cloud device farm.
+  - Every failure found at release or in production gets an automated
+    regression test before it is fixed (extends RG-02).
+  - What no automation can prove is listed as a documented residual risk and
+    monitored automatically in production.
+- **Consequences:**
+  - SPIKE-01 becomes automated.
+  - Test level L9 becomes "automated real-device tests".
+  - A new level, L10, monitors real-world reliability from server data.
+  - A real-device platform must be chosen (Section 6, round 2).
+
+## D-036 — Mutation testing blocks below 80 % on safety code
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 6
+- **Decision:** StrykerJS runs on domain, alert and safety-core code. A mutation
+  score below 80 % blocks the merge. Pull requests run incrementally; a full run
+  happens nightly. Elsewhere the score is reported but doesn't block.
+
+## D-037 — Real-phone tests deferred until the app has been shown
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 6
+- **Decision:** Automated tests run on emulators and simulators only until the
+  app has been shown. The real-device suite (L9), with Firebase Test Lab as the
+  default candidate, is switched on later.
+- **Consequences:** Behaviour on real phones (manufacturer battery managers,
+  real iPhone background limits) is not verified before then. The SPIKE-01
+  real-phone parts stay open. The switch-on point is asked in Section 7.
+
+## D-038 — Residual risks accepted, with automatic monitoring
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 6
+- **Decision:** RR-01 to RR-04 are accepted. They are covered by automatic
+  production monitoring (L10), and every anomaly gets an automated regression
+  test (D-035).
+
+## D-039 — Test tool set v1
+- **Date:** 2026-09-20 · **Status:** Accepted (delegated, D-031) · **Section:** 6
+- **Decision:** Vitest (server and packages) · fast-check (property-based
+  tests) · Testcontainers (real PostgreSQL) · jest-expo with React Native Testing
+  Library (app) · Maestro (UI end-to-end) · StrykerJS (mutation) · oasdiff (API
+  compatibility). XCUITest and UI Automator are used for L9 once it is switched
+  on.
+- **Reason:** Each is the standard, maintained tool for its level. Two test
+  runners are used because jest-expo is Expo's supported path for app tests and
+  Vitest is faster for the server.
+
+## D-040 — Regression gates RG-01 to RG-08 are binding
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 6
+- **Decision:** The gates in `06-testing-strategy.md` are binding and are
+  enforced by hooks and CI (Sections 7–8), not by instructions alone.
+
+## D-041 — Real-phone tests switch on before the group relies on the app
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 7 (carried from Section 6)
+- **Decision:** The automated real-device suite (L9) must be switched on and
+  passing before the private group uses the app for real walks home. Until
+  then, emulators and simulators only (D-037).
+- **Consequences:** A release gate in `/release` and a milestone gate in the
+  roadmap (Section 10).
+
+## D-042 — Merge autonomy
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 7
+- **Decision:**
+  - Pull requests merge automatically when every required check passes.
+  - Changes to safety paths (domain, alerts, worker, safety-core) and to the
+    gates themselves (`.github/`, `.claude/`, released contracts, decisions,
+    infra) also need the owner's approval, through CODEOWNERS. The approval is
+    based on the reviewers' plain-language summary.
+- **Consequences:**
+  - GitHub doesn't let a pull request's author approve it. Claude therefore
+    commits and opens pull requests through its own GitHub account, with write
+    access but not admin (A-06).
+  - This also means the merge rules apply to Claude with no admin bypass,
+    which resolves the concern in D-029.
+
+## D-043 — Blocking AI reviewers
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 7
+- **Decision:** `safety-reviewer`, `privacy-security-reviewer` and `test-auditor`
+  produce a blocking verdict: a BLOCK stops the merge until it is fixed or the
+  owner overrides it, and any override is logged. `code-reviewer` and
+  `a11y-i18n-reviewer` are advisory.
+
+## D-044 — Claude Code configuration v0
+- **Date:** 2026-09-20 · **Status:** Accepted (delegated, D-031) · **Section:** 7
+- **Decision:** The draft files in `docs/plan/07b-claude-code-files/` —
+  CLAUDE.md, settings, CODEOWNERS, 5 rules, 11 agents, 12 skills and 7 hooks —
+  are the starting configuration. They are copied into the repository at
+  setup.
+- **Consequences:** At setup, verification is automated: agent validation, hook
+  unit tests, and a scripted session that tries each forbidden action. The known
+  limits are listed in the 07b README.
+
+## D-045 — Claude plan: Max; how agents use it
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 7/8
+- **Context:** The owner uses a Claude Max subscription for Claude Code.
+- **Decision:**
+  - Main sessions, `planner`, `implementer` and the three blocking reviewers
+    use the session's model (`inherit`). `plan-keeper` and `a11y-i18n-reviewer`
+    use Sonnet to save usage.
+  - Reviewers may run in parallel.
+  - AI reviews in CI use a Claude Code OAuth token generated from the Max
+    subscription, with a pay-per-use API key as the documented fallback if
+    subscription authentication fails.
+- **Consequences:** CI reviews share the Max usage limits with local sessions.
+  If limits are hit, AI review checks fail loudly rather than being skipped.
+
+## D-046 — Phased environments: staging only until go-live
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 8
+- **Context:** The owner wants staging separation "but without the cost" at
+  first.
+- **Decision:**
+  - Until go-live, only staging is deployed: synthetic data, one XS instance
+    running the API and worker together, and the free DEV PostgreSQL (about
+    €5 a month).
+  - Production is created at go-live, gated by D-041 and PRIV-11.
+  - Separation is structural: a separate Clever Cloud organisation, secrets,
+    domain and app variant.
+- **Consequences:** Small connection pools on the DEV database. CI proves
+  migrations on production's exact PostgreSQL version. After go-live, staging
+  may be stopped outside test runs.
+
+## D-047 — The owner approves each production release
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 8
+- **Decision:** Releases happen through a release pull request (version, notes,
+  API snapshot) that the owner approves through CODEOWNERS. Merging it triggers
+  the gates (RL-01 to RL-07), the production deploy and the store submissions
+  automatically.
+
+## D-048 — Budget ceiling of about €165 a month once real-phone tests run
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 8
+- **Decision:** From go-live, when the real-phone tests (D-041) run, monthly
+  running costs may go up to about €165. Until then, D-024 (€30–100) applies,
+  and phase A is expected at about €5–10 a month.
+- **Consequences:** Refines D-024. `/status` reports the actual monthly cost.
+
+## D-049 — CI configuration v0
+- **Date:** 2026-09-20 · **Status:** Accepted (delegated, D-031) · **Section:** 8
+- **Decision:** The draft workflows in `docs/plan/08b-ci-files/` — required
+  checks CI-01 to CI-11, staging deploy, release, nightly jobs and Dependabot —
+  and the filled-in `/release` skill are the starting CI configuration. The
+  items to verify at setup are listed in its README.
+
+## D-050 — Daily status report
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 9
+- **Decision:** Every morning (05:00 UTC; 07:00 Oslo time in summer, 06:00 in
+  winter) a scheduled workflow runs `/status` and posts it as a comment on a
+  pinned "Daily status" issue. The report fits one phone screen and starts with
+  ✅ healthy, ⚠️ needs attention or 🛑 action required.
+- **Consequences:** It uses a little of the Max usage (D-045). If the report
+  fails, that failure shows in CI instead of being silently missing.
+
+## D-051 — Owner questions as GitHub issues
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 9
+- **Decision:** When Claude needs a decision and the owner isn't in the
+  session, it opens one issue per question, using the `owner-question` template
+  (question, options, recommendation, what it blocks). Work on that
+  requirement stops until the owner answers. `plan-keeper` records the answer
+  as a decision and closes the issue.
+
+## D-052 — One feature at a time to start
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 9
+- **Decision:** Work-in-progress limit of 1: one requirement in flight at a
+  time. Revisit after milestone M2 (Section 10).
+
+## D-053 — Roadmap M0 → M6 approved
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 10
+- **Decision:** Milestones in this order:
+  - **M0** foundations, ending with the gate drills;
+  - **M1** spike on emulators and simulators;
+  - **M2** core safety loop on the server;
+  - **M3** app MVP, which the owner can demo;
+  - **M4** privacy, security and the DPIA;
+  - **M5** go-live readiness (real-phone tests, production, release 1.0);
+  - **M6** private group phase.
+- **Consequences:** Exit criteria are automated. Go-live is gated by D-041,
+  PRIV-11 and RL-01 to RL-07.
+
+## D-054 — No fixed date: quality first
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 10
+- **Decision:** No target date for the demo or go-live. `/status` forecasts
+  dates from the measured pace after M0 and M2. A gate is never weakened to meet
+  a date.
+
+## D-055 — Hybrid sessions: Mac and cloud
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 10
+- **Decision:**
+  - Claude Code runs on the owner's Mac (with Remote Control from the phone)
+    for M0, M1 and UI work (M3), where the iOS simulator and Android emulator
+    are needed.
+  - Everyday work from M2 runs as cloud sessions, and so does any work while
+    the Mac is off.
+- **Consequences:**
+  - A cloud environment (A-14) with a setup script (`pnpm install`), an
+    allowlist of the domains the work needs, and Claude's GitHub token for
+    opening pull requests (D-042).
+  - Hooks detect cloud sessions through `CLAUDE_CODE_REMOTE`.
+  - CI stays the single authority on what merges.
+
+## D-056 — On the Mac, Claude runs under a separate Standard user
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 10
+- **Decision:** A dedicated macOS Standard user (for example `claude-dev`),
+  with no admin rights and FileVault on. Shared tools (Xcode, Android Studio,
+  Homebrew, a Docker runtime) are installed once from the owner's admin account.
+- **Consequences:** Claude can't reach the owner's personal files, keychain or
+  browser sessions. Anything that needs admin rights is an owner action.

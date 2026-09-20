@@ -1,0 +1,58 @@
+# Merging an owner-approved release PR (docs/releases/**, CODEOWNERS) triggers the release (D-047).
+name: release
+on:
+  push:
+    branches: [main]
+    paths: ['docs/releases/**']
+concurrency:
+  group: release
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm release:gates        # RL-01 to RL-07; RL-03 (real phones) is required once D-041 applies
+
+  backend-production:
+    needs: gates
+    if: vars.PRODUCTION_ENABLED == 'true'     # production exists only from go-live (D-046)
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:migrate --env production
+        env: { DATABASE_URL: "${{ secrets.PRODUCTION_DATABASE_URL }}" }
+      - run: npx --yes clever-tools@latest deploy --alias production --force
+        env:
+          CLEVER_TOKEN: ${{ secrets.CLEVER_TOKEN }}
+          CLEVER_SECRET: ${{ secrets.CLEVER_SECRET }}
+      - run: pnpm smoke --env production
+      - run: pnpm canary:check --env production --within 10m
+
+  apps:
+    needs: [gates]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      # Before go-live the "preview" profile points at staging; after go-live, "production".
+      - run: cd apps/mobile && eas build --profile ${{ vars.PRODUCTION_ENABLED == 'true' && 'production' || 'preview' }} --platform all --non-interactive --auto-submit
