@@ -2,6 +2,8 @@
 
 **Last updated:** 2026-09-20 · **Phase:** ✅ Planning complete → **next: milestone M0** — start with [M0-kickoff.md](M0-kickoff.md) · Section 4 closes after the spike in M1
 
+**Current section:** milestone M0 — foundations. Build log: [../progress.md](../progress.md)
+
 This folder is the project's memory. Everything we research, discuss and decide
 ends up here, so any session (in Claude Code or claude.ai) can pick up exactly
 where the last one stopped.

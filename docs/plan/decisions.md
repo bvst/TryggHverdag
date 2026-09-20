@@ -566,3 +566,34 @@ new decision that supersedes it (see `00-working-agreement.md`).
 - **Consequences:** Dependabot (INF-04) proposes upgrades, and they go through
   the same gates as any other change. The TypeScript 7 move is a task of its
   own, once typed lint supports it.
+
+## D-059 — Claude Code configuration v1, as installed
+- **Date:** 2026-09-20 · **Status:** Accepted (delegated, D-031) · **Section:** 7 (M0, INF-02)
+- **Context:** D-044 accepted the draft files in
+  `docs/plan/07b-claude-code-files/` and said they would be verified when the
+  repository was set up. Verifying them found four things that had to change,
+  and one thing that is missing.
+- **Decision:** The drafts are installed as they were, with these changes:
+  1. **Permission paths are anchored at the project** (`Edit(/.claude/hooks/**)`),
+     not at the session's current directory (`./`), which is what the drafts
+     used. Source: https://code.claude.com/docs/en/permissions — `path` and
+     `./path` are relative to the current directory, while `/path` is relative
+     to the settings source, which for project settings is the project root.
+     This was the item the 07b notes asked to verify.
+  2. **`claude/*` branches are on the push allow list**, because that is the
+     branch a cloud session is given (D-055).
+  3. **`**/*.test.mjs` is treated as a test file** by the weakening detector
+     (HK-05) and by the two role guards, because the hook tests are written in
+     `.mjs`. Otherwise the tests that protect the gates would be the only tests
+     not protected themselves.
+  4. **Environment files are denied in both the project-anchored and the bare
+     form**, so the rule holds wherever a session starts.
+- **Open:** **HK-08** — the hook that checks `docs/progress.md` and the plan
+  status were updated before a session ends — has no script in the draft set.
+  Claude recommends writing it in INF-03 with the other gate scripts. Until
+  then, the "update progress before you finish" rule in `CLAUDE.md` is an
+  instruction, not machinery, which is exactly the distinction Section 7 warns
+  about.
+- **Consequences:** Refines D-044; the draft files stay in `docs/plan/07b…` as
+  the record of what was accepted. Hook scripts now have tests
+  (`pnpm run test:hooks`, 77 cases) that run in CI like any other code.

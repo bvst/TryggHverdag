@@ -18,8 +18,12 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "typecheck": "turbo run typecheck",
-    "imports:check": "depcruise --config .dependency-cruiser.cjs apps packages scripts",
-    "gate:static": "pnpm run format:check && pnpm run typecheck && pnpm run lint && pnpm run imports:check"
+    "imports:check": "depcruise --config .dependency-cruiser.cjs .claude/hooks apps packages scripts",
+    "test:hooks": "vitest run .claude/hooks",
+    "test:unit": "vitest run",
+    "gate:file": "node scripts/gate-file.mjs",
+    "gate:static": "pnpm run format:check && pnpm run typecheck && pnpm run lint && pnpm run imports:check",
+    "gate:quick": "pnpm run gate:static && pnpm run test:unit"
   },
   "devDependencies": {
     "@trygghverdag/config": "workspace:*",
@@ -27,6 +31,7 @@
     "eslint": "^10.11.0",
     "prettier": "^3.9.8",
     "turbo": "^2.11.2",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "^5.0.1"
   }
 }

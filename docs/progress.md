@@ -12,8 +12,8 @@ What has actually been built, task by task. The plan is in
 |----|------|--------|
 | INF-00 | Mac environment check | ⬜ Waits for the Mac (A-10). `pnpm run doctor` is ready for it |
 | INF-01 | Monorepo skeleton | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
-| INF-02 | Claude Code configuration + hook tests | 🔜 Next (runs in a cloud session) |
-| INF-03 | Gate scripts | ⬜ Not started |
+| INF-02 | Claude Code configuration + hook tests | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
+| INF-03 | Gate scripts | 🔜 Next (runs in a cloud session) |
 | INF-04 | CI workflows, merge rules, CODEOWNERS | ⬜ Blocked on owner: see below |
 | INF-05 | Server skeleton | ⬜ Not started — needs Docker for the L3 tests |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
@@ -111,7 +111,69 @@ needed before the tasks in brackets:
   either the Mac or CI, unless the cloud environment (A-14) is set up with
   Docker. Worth checking before INF-05 starts.
 
+### 2026-09-20 — INF-02: the gates are installed ✅ (same pull request [#2](https://github.com/bvst/TryggHverdag/pull/2))
+
+The owner chose to continue in the same session rather than switch, so INF-01
+and INF-02 share one pull request. Back to one task per pull request after this.
+
+**Installed**
+
+- `.claude/` — 11 agents, 12 skills, 5 path-scoped rule files, 7 hook scripts
+  and the permission settings from `docs/plan/07b-claude-code-files/` (D-044).
+- `CLAUDE.md` — replaced by the build-phase version, with the real command list.
+- `.github/CODEOWNERS` — `@OWNER` replaced by `@bvst`. Changes to the safety
+  paths, the gates themselves and the decision log need the owner's approval
+  (D-042). INF-04 wires it into the merge rules.
+- `pnpm run gate:file` and `pnpm run gate:quick` — minimal versions, because the
+  post-edit and stop hooks call them. INF-03 replaces them with the full ones.
+- Vitest, with `pnpm run test:hooks` and `pnpm run test:unit`.
+
+**Tested — 77 cases, one file per hook**
+
+| Hook | What the tests prove |
+|------|----------------------|
+| `lib.mjs` | Glob matching and path handling: if these are wrong, every gate is wrong |
+| `guard-paths.mjs` (HK-02) | `implementer` cannot touch tests or the test kit; `test-author` cannot touch production code; nothing outside the repository can be edited |
+| `guard-bash.mjs` (HK-03) | Pushes to `main`, force pushes, skipped git hooks, reading environment files, deploys and admin merges are blocked; reviewers cannot change anything; `implementer` cannot reach tests through `sed` or a redirect either |
+| `scan-sensitive.mjs` (HK-07) | Private keys, hard-coded secrets, positions in log lines and real-looking Norwegian numbers are blocked; the one fixtures file is the exception |
+| `test-weakening.mjs` (HK-05) | Skipped, focused and deleted tests and removed assertions are caught; honest changes are not |
+| `post-edit.mjs` (HK-04) | The gate runs on the edited file, failures stop the work, and a **missing** gate is loud rather than silent |
+| `stop-gate.mjs` (HK-06) | "Done" is refused while the gate fails; the red phase of `/feature` runs only the static checks; after being asked to continue once it writes the failure down instead of looping |
+| `session-start.mjs` (HK-01) | A session is told the branch, the plan status, the open owner to-dos, and anything left failing last time |
+
+`claude plugin validate .claude` passes (agents, skills and commands).
+
+**Changed from the draft, and why** (recorded as D-059)
+
+1. **Permission paths are anchored at the project.** The drafts used `./x`,
+   which the [permissions documentation](https://code.claude.com/docs/en/permissions)
+   anchors at the session's *current* directory; `/x` anchors at the project.
+   This was the one item the 07b notes asked to verify, and it needed changing.
+2. **`claude/*` branches may be pushed**, which is what cloud sessions are given
+   (D-055).
+3. **The weakening detector and the two role guards now also cover
+   `**/*.test.mjs`**, because the hook tests are written in `.mjs`. Without it,
+   the tests that protect the gates would have been the one kind of test nobody
+   was watching.
+4. **Environment files are denied in both forms**, project-anchored and bare.
+
+**Worth knowing for the next task**
+
+- **HK-08 has no script.** Section 7 lists eight hooks; the draft set has seven.
+  The missing one checks that `docs/progress.md` and the plan status were
+  updated before a session ends. Claude recommends adding it in INF-03, next to
+  the other gate scripts, unless the owner would rather leave it out.
+- **The gates are live and they bite.** While the tests were being written,
+  `guard-bash` twice blocked Claude's own shell commands, because the test data
+  contains forbidden commands as strings. The way around it is the ordinary one
+  — write the file with the editor instead of the shell — which is exactly the
+  shell loophole the 07b notes describe. CODEOWNERS is the backstop: every
+  change under `.claude/` needs the owner's approval.
+- Hook tests live next to the hooks (`.claude/hooks/*.test.mjs`) and run with
+  `pnpm run test:hooks`.
+
 ## In flight
 
-Nothing. INF-02 is the next task: copy in the Claude Code configuration from
-`docs/plan/07b-claude-code-files/` and give every hook script a test.
+Nothing. INF-03 is the next task: the full gate scripts (`gate:file`,
+`gate:quick`, `gate:full`, `req:coverage`, `tests:changes`, `coverage:ratchet`,
+`api:diff`, `mutation`, `licenses:check`), each with its own tests.
