@@ -1,0 +1,75 @@
+# Requirement status
+
+**Generated:** 2026-09-20 by `pnpm run req:coverage` — do not edit by hand.
+
+0 of 63 live requirements have at least one test that names them (RG-01).
+
+Status: ⚪ no spec and no test · 📝 a spec, no test yet · 🟢 at least one test names it.
+Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
+
+| ID | Requirement | Priority | Status | Tests |
+|----|-------------|----------|--------|-------|
+| GRP-01 | Join by invitation | must | ⚪ | 0 |
+| GRP-02 | Choose my #1 contact | must | ⚪ | 0 |
+| GRP-03 | Safety permission check | must | ⚪ | 0 |
+| GRP-04 | Responder setup | must | ⚪ | 0 |
+| CALL-01 | Call my #1 contact | must | ⚪ | 0 |
+| CALL-02 | 112 is always one tap away | must | ⚪ | 0 |
+| CALL-03 | Calling #1 also shares my location with #1 | must | ⚪ | 0 |
+| JRN-01 | Start a journey | must | ⚪ | 0 |
+| JRN-02 | Sharing is always visible | must | ⚪ | 0 |
+| JRN-03 | What responders see | must | ⚪ | 0 |
+| JRN-04 | Start and end notifications | must | ⚪ | 0 |
+| JRN-05 | "I'm home" | must | ⚪ | 0 |
+| JRN-06 | Journeys never run forever | must | ⚪ | 0 |
+| JRN-07 | Automatic arrival | ⛔ parked | ⚪ | 0 |
+| LOST-01 | Heartbeat | must | ⚪ | 0 |
+| LOST-02 | Lost-contact alert | must | ⚪ | 0 |
+| LOST-03 | Back in contact | must | ⚪ | 0 |
+| LOST-04 | Low battery warning | must | ⚪ | 0 |
+| LOST-05 | The walker knows when they're offline | must | ⚪ | 0 |
+| LOST-06 | "I'm on it" | must | ⚪ | 0 |
+| LOST-07 | SMS escalation | must | ⚪ | 0 |
+| LOST-08 | "They're safe" | must | ⚪ | 0 |
+| HELP-01 | What to do | must | ⚪ | 0 |
+| REL-01 | The lost-contact decision is made by the server, using the server's clock, never the phone's. | must | ⚪ | 0 |
+| REL-02 | Positions recorded while offline are queued on the phone and sent in order when the connection returns. | must | ⚪ | 0 |
+| REL-03 | The share of journeys interrupted by the operating system is measured per phone model during the private test. | must | ⚪ | 0 |
+| REL-04 | While a journey runs, the app keeps a local reminder scheduled ⚙️ 2 minutes ahead and keeps moving it forward. | must | ⚪ | 0 |
+| REL-05 | If location access is lost during a journey, the walker is warned at once and responders see "location unavai… | must | ⚪ | 0 |
+| REL-06 | Lost-contact and SOS-related alerts to responders use the strongest notification level the platform and the r… | must | ⚪ | 0 |
+| REL-07 | Alerts need acknowledgement ("I'm on it", LOST-06). | must | ⚪ | 0 |
+| REL-08 | External uptime monitoring checks the API and the watchdog every minute and alerts the owner within ⚙️ 5 minu… | must | ⚪ | 0 |
+| REL-09 | If the phone can't reach the safety service, the walker sees it straight away (extends LOST-05). | must | ⚪ | 0 |
+| REL-10 | A **canary journey** runs in production every ⚙️ 15 minutes: a test walker goes silent, and the system must a… | must | ⚪ | 0 |
+| REL-11 | Every position shown to responders includes its accuracy and age. | must | ⚪ | 0 |
+| REL-12 | Escalation SMS messages contain no location, because SMS is not encrypted. | must | ⚪ | 0 |
+| SEC-01 | Account takeover (stolen login code, SIM swap) | must | ⚪ | 0 |
+| SEC-02 | An abusive group member, e.g. | must | ⚪ | 0 |
+| SEC-03 | Server breach | must | ⚪ | 0 |
+| SEC-04 | Leaked invitation | must | ⚪ | 0 |
+| SEC-05 | Admin (owner) account compromised | must | ⚪ | 0 |
+| SEC-06 | Vulnerable or malicious dependencies | must | ⚪ | 0 |
+| SEC-07 | Faked "I'm fine" heartbeats | must | ⚪ | 0 |
+| PRIV-01 | Location is collected only while a journey is running (including one started by CALL-03). | must | ⚪ | 0 |
+| PRIV-02 | Only the walker can start sharing their own location. | must | ⚪ | 0 |
+| PRIV-03 | Only the responders on a journey can see it, and only while it runs. | must | ⚪ | 0 |
+| PRIV-04 | Retention: precise positions deleted ⚙️ 24 hours after a journey ends; alert records (who was alerted, when,… | must | ⚪ | 0 |
+| PRIV-05 | Personal data is stored inside the EEA, with a provider and region chosen in Section 4 (D-016). | must | ⚪ | 0 |
+| PRIV-06 | No third-party analytics or advertising SDKs. | must | ⚪ | 0 |
+| PRIV-07 | Logs and error reports never contain precise locations or phone numbers. | must | ⚪ | 0 |
+| PRIV-08 | Encryption in transit and at rest. | must | ⚪ | 0 |
+| PRIV-09 | Users can see, export and delete their own data from within the app. | must | ⚪ | 0 |
+| PRIV-10 | A plain-language privacy notice in bokmål, shown before the first journey. | must | ⚪ | 0 |
+| PRIV-11 | A DPIA is written and kept in `docs/` before the private group starts. | must | ⚪ | 0 |
+| PRIV-12 | Members under 18 (D-017): the admin records only an age band at invitation (under 15 / 15–17 / 18+), never a… | must | ⚪ | 0 |
+| SM-01 | One active journey per walker. | must | ⚪ | 0 |
+| SM-02 | A journey needs at least one responder to start. | must | ⚪ | 0 |
+| SM-03 | Heartbeats keep a journey ACTIVE even without a position; "location unavailable" is a flag (REL-05). | must | ⚪ | 0 |
+| SM-04 | LOST_CONTACT → ENDED (home) is allowed, e.g. | must | ⚪ | 0 |
+| SM-05 | The 2-hour automatic stop (JRN-06) **never** ends a journey that is in LOST_CONTACT. | must | ⚪ | 0 |
+| SM-06 | A LOST_CONTACT journey ends when the phone reconnects and the walker ends it, or when the acknowledging respo… | must | ⚪ | 0 |
+| SM-07 | Events that arrive after ENDED are ignored and logged without location; late positions are discarded. | must | ⚪ | 0 |
+| SM-08 | Every event carries an ID. | must | ⚪ | 0 |
+| SM-09 | Events are applied in the order the server receives them, using database time. | must | ⚪ | 0 |
+| SM-10 | If the responder who acknowledged an alert is removed, the alert goes back to unacknowledged and escalation r… | must | ⚪ | 0 |

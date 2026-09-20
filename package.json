@@ -1,0 +1,45 @@
+{
+  "name": "trygghverdag",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.13.0 <23",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "doctor": "node scripts/doctor.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "turbo run typecheck",
+    "imports:check": "depcruise --config .dependency-cruiser.cjs .claude/hooks apps packages scripts",
+    "test:hooks": "vitest run .claude/hooks",
+    "test:unit": "vitest run",
+    "gate:file": "node scripts/gate-file.mjs",
+    "gate:static": "pnpm run format:check && pnpm run typecheck && pnpm run lint && pnpm run imports:check",
+    "gate:quick": "node scripts/gate.mjs quick",
+    "req:coverage": "node scripts/req-coverage.mjs",
+    "tests:changes": "node scripts/tests-changes.mjs",
+    "coverage:ratchet": "node scripts/coverage-ratchet.mjs",
+    "licenses:check": "node scripts/licenses-check.mjs",
+    "api:diff": "node scripts/api-diff.mjs",
+    "mutation": "node scripts/mutation.mjs",
+    "gate:full": "node scripts/gate.mjs full"
+  },
+  "devDependencies": {
+    "@trygghverdag/config": "workspace:*",
+    "@vitest/coverage-v8": "^5.0.1",
+    "dependency-cruiser": "^18.4.0",
+    "eslint": "^10.11.0",
+    "prettier": "^3.9.8",
+    "turbo": "^2.11.2",
+    "typescript": "catalog:",
+    "vitest": "^5.0.1"
+  }
+}

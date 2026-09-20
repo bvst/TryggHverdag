@@ -528,3 +528,106 @@ new decision that supersedes it (see `00-working-agreement.md`).
   Homebrew, a Docker runtime) are installed once from the owner's admin account.
 - **Consequences:** Claude can't reach the owner's personal files, keychain or
   browser sessions. Anything that needs admin rights is an owner action.
+
+## D-057 — Internal packages use the `@trygghverdag` scope
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 10 (M0, INF-01)
+- **Context:** The workspace packages need a name to refer to each other by.
+  Nothing is published to npm, so the scope is internal only.
+- **Decision:** Workspace packages are named `@trygghverdag/<package>`, matching
+  the repository name: `@trygghverdag/contracts`, `@trygghverdag/test-kit`,
+  `@trygghverdag/config`.
+- **Consequences:** The public app name is still open and is decided before the
+  store listings (M3/M5). Renaming the scope later is a find-and-replace inside
+  this repository; nothing outside it depends on the names.
+
+## D-058 — Toolchain versions v1
+- **Date:** 2026-09-20 · **Status:** Accepted (delegated, D-031) · **Section:** 10 (M0, INF-01)
+- **Context:** INF-01 has to pin exact versions, and one of them is a real
+  trade-off: TypeScript 7.0 is out, but the type-aware lint rules that the L1
+  gate depends on do not support it yet.
+- **Decision:**
+  - Node 22 LTS (`>=22.13 <23`, pinned in `.node-version`), pnpm 10.33.0 (pinned
+    through `packageManager`), Turborepo 2.
+  - **TypeScript 6.0.x, not 7.0.** `typescript-eslint` 8.70 — which provides the
+    typed lint rules — declares support for TypeScript `>=4.8.4 <6.1.0`.
+    Upgrading the compiler would mean turning off type-aware linting, and the
+    gates are the point of this project. Revisit when `typescript-eslint`
+    supports TypeScript 7.
+  - ESLint 10 (flat config) for lint, Prettier 3 for formatting, and
+    dependency-cruiser 18 for the import rules (AR-10). The shared settings live
+    in `packages/config`, so a session, a hook and CI run the same rules.
+  - Prettier does not format Markdown, and neither tool reads `docs/`: planning
+    documents are prose wrapped by hand, and `07b`/`08b` hold templates that are
+    copied in unchanged.
+  - The root `package.json` carries an npm-style `workspaces` field beside
+    `pnpm-workspace.yaml`, because dependency-cruiser recognises workspace
+    packages only from that field. A guard in the import-rule config fails the
+    check if the two lists drift apart.
+- **Consequences:** Dependabot (INF-04) proposes upgrades, and they go through
+  the same gates as any other change. The TypeScript 7 move is a task of its
+  own, once typed lint supports it.
+
+## D-059 — Claude Code configuration v1, as installed
+- **Date:** 2026-09-20 · **Status:** Accepted (delegated, D-031) · **Section:** 7 (M0, INF-02)
+- **Context:** D-044 accepted the draft files in
+  `docs/plan/07b-claude-code-files/` and said they would be verified when the
+  repository was set up. Verifying them found four things that had to change,
+  and one thing that is missing.
+- **Decision:** The drafts are installed as they were, with these changes:
+  1. **Permission paths are anchored at the project** (`Edit(/.claude/hooks/**)`),
+     not at the session's current directory (`./`), which is what the drafts
+     used. Source: https://code.claude.com/docs/en/permissions — `path` and
+     `./path` are relative to the current directory, while `/path` is relative
+     to the settings source, which for project settings is the project root.
+     This was the item the 07b notes asked to verify.
+  2. **`claude/*` branches are on the push allow list**, because that is the
+     branch a cloud session is given (D-055).
+  3. **`**/*.test.mjs` is treated as a test file** by the weakening detector
+     (HK-05) and by the two role guards, because the hook tests are written in
+     `.mjs`. Otherwise the tests that protect the gates would be the only tests
+     not protected themselves.
+  4. **Environment files are denied in both the project-anchored and the bare
+     form**, so the rule holds wherever a session starts.
+- **Open:** **HK-08** — the hook that checks `docs/progress.md` and the plan
+  status were updated before a session ends — has no script in the draft set.
+  Claude recommends writing it in INF-03 with the other gate scripts. Until
+  then, the "update progress before you finish" rule in `CLAUDE.md` is an
+  instruction, not machinery, which is exactly the distinction Section 7 warns
+  about.
+- **Consequences:** Refines D-044; the draft files stay in `docs/plan/07b…` as
+  the record of what was accepted. Hook scripts now have tests
+  (`pnpm run test:hooks`, 77 cases) that run in CI like any other code.
+
+## D-060 — Gate scripts v1, and HK-08 is machinery
+- **Date:** 2026-09-20 · **Status:** Accepted (owner answered the HK-08 question; the rest delegated, D-031) · **Section:** 6/7 (M0, INF-03)
+- **Context:** INF-02 left two placeholder gate scripts and one missing hook.
+  Writing the real ones forced three choices about how a gate behaves when the
+  thing it guards does not exist yet.
+- **Decision:**
+  1. **HK-08 is a hook, not an instruction.** A session that changed code but
+     not `docs/progress.md` is refused once at the stop gate, warned at session
+     end and before compaction, and reminded at the start of the next session.
+     The owner asked for it here rather than leaving it out.
+  2. **A gate that cannot run says so, in words, and never reports a pass.**
+     `gate:full` names each step it cannot run and the task that brings it;
+     `api:diff` and `mutation` **fail** when they should have run but their tool
+     is missing; `coverage:ratchet` prints which floors are not in force yet.
+     A check that quietly passes because there is nothing to check is the failure
+     mode this project is built around.
+  3. **Requirement coverage counts tests, not mentions.** A test file that only
+     quotes requirement IDs as sample data marks itself
+     `// req-coverage: fixtures-only`, and only product code, specs and tests
+     count toward RG-01. The first honest count is 0 of 63.
+  4. **The coverage ratchet compares against a committed baseline**
+     (`coverage-baseline.json`), raised deliberately with `--update` and reviewed
+     like any other change, because comparing against the base branch would mean
+     running the whole suite twice on every pull request.
+  5. **Licences are an allowlist** (`scripts/lib/licenses.mjs`): permissive
+     licences plus MPL-2.0. Copyleft licences are excluded, not because they are
+     bad, but because an app distributed through the stores cannot honour them —
+     and finding that out at release time would be expensive (SEC-06).
+- **Consequences:** `gate:quick` is what the stop gate runs; `gate:full` is what
+  CI repeats (INF-04). Stryker (D-036) and oasdiff (D-030) are installed when
+  the code they judge exists — until then their gates fail loudly rather than
+  skipping. `docs/requirements-status.md` is generated by `pnpm run req:coverage`
+  and is not edited by hand (Section 9).

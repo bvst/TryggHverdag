@@ -1,0 +1,28 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/
+coverage/
+.turbo/
+
+# Claude Code session state (07b README: never committed)
+.claude/state/
+
+# Local environment and secrets — never committed (SEC-03)
+.env
+.env.*
+!.env.example
+
+# Tooling caches
+*.tsbuildinfo
+.eslintcache
+.stryker-tmp/
+
+# Expo / native build output (from INF-06)
+.expo/
+apps/mobile/ios/
+apps/mobile/android/
+
+# Editors and OS
+.DS_Store
+*.log

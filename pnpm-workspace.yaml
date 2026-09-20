@@ -1,0 +1,12 @@
+# pnpm reads this file; dependency-cruiser reads the "workspaces" field in
+# package.json instead. Both lists must say the same thing, and the import check
+# stops with an explanation if they ever drift apart
+# (packages/config/dependency-cruiser.cjs).
+packages:
+  - apps/*
+  - packages/*
+
+# One place for versions that every package shares.
+catalog:
+  typescript: ~6.0.3
+  vitest: ^5.0.1

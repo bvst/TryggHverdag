@@ -1,0 +1,22 @@
+{
+  "name": "@trygghverdag/test-kit",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Fakes, builders and synthetic data for tests (AR-02, RG-07)",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@trygghverdag/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@trygghverdag/config": "workspace:*",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

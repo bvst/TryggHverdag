@@ -1,0 +1,125 @@
+{
+  "generated": "2026-09-20",
+  "files": {
+    "packages/contracts/src/index.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 1,
+      "totalLines": 1
+    },
+    "packages/test-kit/src/index.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 1,
+      "totalLines": 1
+    },
+    "scripts/api-diff.mjs": {
+      "lines": 0,
+      "branches": 0,
+      "coveredLines": 0,
+      "totalLines": 28
+    },
+    "scripts/coverage-ratchet.mjs": {
+      "lines": 0,
+      "branches": 0,
+      "coveredLines": 0,
+      "totalLines": 33
+    },
+    "scripts/doctor.mjs": {
+      "lines": 0,
+      "branches": 0,
+      "coveredLines": 0,
+      "totalLines": 73
+    },
+    "scripts/gate-file.mjs": {
+      "lines": 55.55,
+      "branches": 56.52,
+      "coveredLines": 20,
+      "totalLines": 36
+    },
+    "scripts/gate.mjs": {
+      "lines": 0,
+      "branches": 0,
+      "coveredLines": 0,
+      "totalLines": 19
+    },
+    "scripts/licenses-check.mjs": {
+      "lines": 0,
+      "branches": 0,
+      "coveredLines": 0,
+      "totalLines": 21
+    },
+    "scripts/mutation.mjs": {
+      "lines": 0,
+      "branches": 0,
+      "coveredLines": 0,
+      "totalLines": 22
+    },
+    "scripts/req-coverage.mjs": {
+      "lines": 0,
+      "branches": 0,
+      "coveredLines": 0,
+      "totalLines": 37
+    },
+    "scripts/tests-changes.mjs": {
+      "lines": 34.37,
+      "branches": 31.25,
+      "coveredLines": 11,
+      "totalLines": 32
+    },
+    "scripts/lib/coverage.mjs": {
+      "lines": 100,
+      "branches": 83.87,
+      "coveredLines": 43,
+      "totalLines": 43
+    },
+    "scripts/lib/gate-decisions.mjs": {
+      "lines": 100,
+      "branches": 93.75,
+      "coveredLines": 15,
+      "totalLines": 15
+    },
+    "scripts/lib/git.mjs": {
+      "lines": 5.88,
+      "branches": 0,
+      "coveredLines": 1,
+      "totalLines": 17
+    },
+    "scripts/lib/glob.mjs": {
+      "lines": 94.73,
+      "branches": 90,
+      "coveredLines": 18,
+      "totalLines": 19
+    },
+    "scripts/lib/licenses.mjs": {
+      "lines": 100,
+      "branches": 91.66,
+      "coveredLines": 17,
+      "totalLines": 17
+    },
+    "scripts/lib/proc.mjs": {
+      "lines": 0,
+      "branches": 0,
+      "coveredLines": 0,
+      "totalLines": 11
+    },
+    "scripts/lib/requirements.mjs": {
+      "lines": 98.24,
+      "branches": 90.62,
+      "coveredLines": 56,
+      "totalLines": 57
+    },
+    "scripts/lib/steps.mjs": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 26,
+      "totalLines": 26
+    },
+    "scripts/lib/test-strength.mjs": {
+      "lines": 94.11,
+      "branches": 100,
+      "coveredLines": 16,
+      "totalLines": 17
+    }
+  }
+}

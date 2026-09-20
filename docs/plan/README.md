@@ -2,6 +2,8 @@
 
 **Last updated:** 2026-09-20 · **Phase:** ✅ Planning complete → **next: milestone M0** — start with [M0-kickoff.md](M0-kickoff.md) · Section 4 closes after the spike in M1
 
+**Current section:** milestone M0 — foundations. Build log: [../progress.md](../progress.md)
+
 This folder is the project's memory. Everything we research, discuss and decide
 ends up here, so any session (in Claude Code or claude.ai) can pick up exactly
 where the last one stopped.
@@ -33,6 +35,9 @@ continues from that section's **Next steps**.
 Legend: ⚪ Not started · 🟡 In progress · 🔵 Waiting for owner · ✅ Done
 
 Decisions so far: [decisions.md](decisions.md)
+
+**Milestone M0 is under way.** What has been built, what is next and what
+Claude needs from the owner: [../progress.md](../progress.md).
 
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every

@@ -1,0 +1,14 @@
+# Changes to these paths need the owner's approval before merge (D-042).
+# Everything else auto-merges when all required checks pass.
+/apps/server/src/domain/          @bvst
+/apps/server/src/modules/alerts/  @bvst
+/apps/server/src/worker.ts        @bvst
+/apps/mobile/src/safety-core/     @bvst
+/.github/                         @bvst
+/.claude/                         @bvst
+/packages/contracts/released/     @bvst
+/docs/plan/decisions.md           @bvst
+/infra/                           @bvst
+
+# Reviewer memory changes often and needs no approval (last match wins).
+/.claude/agent-memory/
