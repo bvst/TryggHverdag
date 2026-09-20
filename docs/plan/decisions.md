@@ -528,3 +528,41 @@ new decision that supersedes it (see `00-working-agreement.md`).
   Homebrew, a Docker runtime) are installed once from the owner's admin account.
 - **Consequences:** Claude can't reach the owner's personal files, keychain or
   browser sessions. Anything that needs admin rights is an owner action.
+
+## D-057 — Internal packages use the `@trygghverdag` scope
+- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 10 (M0, INF-01)
+- **Context:** The workspace packages need a name to refer to each other by.
+  Nothing is published to npm, so the scope is internal only.
+- **Decision:** Workspace packages are named `@trygghverdag/<package>`, matching
+  the repository name: `@trygghverdag/contracts`, `@trygghverdag/test-kit`,
+  `@trygghverdag/config`.
+- **Consequences:** The public app name is still open and is decided before the
+  store listings (M3/M5). Renaming the scope later is a find-and-replace inside
+  this repository; nothing outside it depends on the names.
+
+## D-058 — Toolchain versions v1
+- **Date:** 2026-09-20 · **Status:** Accepted (delegated, D-031) · **Section:** 10 (M0, INF-01)
+- **Context:** INF-01 has to pin exact versions, and one of them is a real
+  trade-off: TypeScript 7.0 is out, but the type-aware lint rules that the L1
+  gate depends on do not support it yet.
+- **Decision:**
+  - Node 22 LTS (`>=22.13 <23`, pinned in `.node-version`), pnpm 10.33.0 (pinned
+    through `packageManager`), Turborepo 2.
+  - **TypeScript 6.0.x, not 7.0.** `typescript-eslint` 8.70 — which provides the
+    typed lint rules — declares support for TypeScript `>=4.8.4 <6.1.0`.
+    Upgrading the compiler would mean turning off type-aware linting, and the
+    gates are the point of this project. Revisit when `typescript-eslint`
+    supports TypeScript 7.
+  - ESLint 10 (flat config) for lint, Prettier 3 for formatting, and
+    dependency-cruiser 18 for the import rules (AR-10). The shared settings live
+    in `packages/config`, so a session, a hook and CI run the same rules.
+  - Prettier does not format Markdown, and neither tool reads `docs/`: planning
+    documents are prose wrapped by hand, and `07b`/`08b` hold templates that are
+    copied in unchanged.
+  - The root `package.json` carries an npm-style `workspaces` field beside
+    `pnpm-workspace.yaml`, because dependency-cruiser recognises workspace
+    packages only from that field. A guard in the import-rule config fails the
+    check if the two lists drift apart.
+- **Consequences:** Dependabot (INF-04) proposes upgrades, and they go through
+  the same gates as any other change. The TypeScript 7 move is a task of its
+  own, once typed lint supports it.

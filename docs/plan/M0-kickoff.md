@@ -119,8 +119,9 @@ you merge the pull requests yourself.
   licence, needed in M3 to M5 (Section 10).
 
 ## INF-00 — Mac environment check (added to M0)
-Done when `pnpm doctor` (written in INF-01) confirms all of these on the
-`claude-dev` user:
+Done when `pnpm run doctor` (written in INF-01) confirms all of these on the
+`claude-dev` user — `pnpm run doctor`, not `pnpm doctor`, because pnpm has a
+built-in command by that name:
 - Claude Code, git, gh (logged in as Claude's account), Node 22, pnpm;
 - Docker running;
 - Xcode with an iOS simulator, and Android Studio with an emulator image;

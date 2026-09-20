@@ -34,6 +34,9 @@ Legend: ⚪ Not started · 🟡 In progress · 🔵 Waiting for owner · ✅ Don
 
 Decisions so far: [decisions.md](decisions.md)
 
+**Milestone M0 is under way.** What has been built, what is next and what
+Claude needs from the owner: [../progress.md](../progress.md).
+
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every
 session.

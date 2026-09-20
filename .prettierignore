@@ -1,0 +1,11 @@
+pnpm-lock.yaml
+node_modules/
+dist/
+coverage/
+.turbo/
+
+# Markdown is prose: wrapped by hand so diffs stay readable for the owner.
+**/*.md
+
+# Planning material, including the file templates INF-02 copies in unchanged.
+docs/

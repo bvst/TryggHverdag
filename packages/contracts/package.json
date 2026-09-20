@@ -1,0 +1,17 @@
+{
+  "name": "@trygghverdag/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "API request and response schemas shared by app and server (AR-07)",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@trygghverdag/config": "workspace:*",
+    "typescript": "catalog:"
+  }
+}

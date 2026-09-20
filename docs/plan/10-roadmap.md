@@ -130,7 +130,7 @@ Each task has an ID so it flows through `/feature` like any requirement.
 
 | ID | Task | Done when |
 |----|------|-----------|
-| INF-00 | Mac environment check: toolchain for the `claude-dev` user (D-056), see `M0-kickoff.md` | `pnpm doctor` passes on the Mac |
+| INF-00 | Mac environment check: toolchain for the `claude-dev` user (D-056), see `M0-kickoff.md` | `pnpm run doctor` passes on the Mac |
 | INF-01 | Monorepo skeleton: pnpm workspaces, Turborepo, strict TypeScript, shared lint and import-rule config | `pnpm gate:static` passes on the empty skeleton |
 | INF-02 | Copy in the Claude Code configuration (`07b`) and write unit tests for every hook | `pnpm test:hooks` passes; `claude plugin validate .claude/agents` is clean |
 | INF-03 | Gate scripts: `gate:file`, `gate:static`, `gate:quick`, `gate:full`, `req:coverage`, `tests:changes`, `coverage:ratchet`, `api:diff`, `mutation`, `licenses:check` | Each script has its own tests |

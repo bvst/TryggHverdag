@@ -1,0 +1,32 @@
+{
+  "name": "trygghverdag",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.13.0 <23",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "doctor": "node scripts/doctor.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "turbo run typecheck",
+    "imports:check": "depcruise --config .dependency-cruiser.cjs apps packages scripts",
+    "gate:static": "pnpm run format:check && pnpm run typecheck && pnpm run lint && pnpm run imports:check"
+  },
+  "devDependencies": {
+    "@trygghverdag/config": "workspace:*",
+    "dependency-cruiser": "^18.4.0",
+    "eslint": "^10.11.0",
+    "prettier": "^3.9.8",
+    "turbo": "^2.11.2",
+    "typescript": "catalog:"
+  }
+}
