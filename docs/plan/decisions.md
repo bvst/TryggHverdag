@@ -713,3 +713,31 @@ new decision that supersedes it (see `00-working-agreement.md`).
   than the draft assumed (D-045); that is the price of the check meaning what it
   says. The reviewers' remaining suggestions are recorded in `progress.md` as
   named follow-ups rather than done here, so INF-04 stays one task.
+
+## D-062 — CI-01 reads the merge rules with the Actions token
+- **Date:** 2026-09-21 · **Status:** Accepted (delegated, D-031) · **Section:** 8
+- **Context:** D-060 point 4 and the first version of `merge-rules.md` asked the
+  owner for a `RULES_READ_TOKEN` with **Administration: Read-only**, on the
+  assumption that reading a ruleset's bypass list is an administrative act. The
+  owner asked how to create the tokens, which was the occasion to check rather
+  than assume.
+- **Evidence:** GitHub states the answer in its own responses.
+  `GET /repos/{owner}/{repo}/rulesets`, `/rulesets/{id}` and
+  `/rules/branches/{branch}` all return
+  `X-Accepted-Github-Permissions: metadata=read`. (By contrast
+  `/rulesets/rule-suites` returns `administration=read` and 403s without it,
+  which is what made the distinction visible.)
+- **Decision:** CI-01 reads the rulesets with the ordinary Actions token, which
+  always has metadata read for its own repository. `RULES_READ_TOKEN` stays
+  supported and takes precedence when set, documented as the way out if that
+  ever stops holding — and specified as **Metadata: Read-only**, not
+  Administration.
+- **Consequences:** One fewer secret for the owner to create, store and rotate,
+  and the permission asked for is the smallest that works rather than the
+  smallest that was guessed at. Supersedes D-060 point 4. The gate still fails
+  rather than passing when it cannot read the bypass list, so being wrong about
+  this costs a red check, never a false tick.
+- **Also found while checking:** `ai-review.yml` passes no `github_token`, so
+  the action authenticates as the **Claude GitHub App** — which therefore has to
+  be installed on the repository. That step was missing from `merge-rules.md`
+  entirely; without it the reviews cannot post their findings.

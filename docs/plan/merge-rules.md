@@ -14,33 +14,70 @@ that cannot tell whether it is enforced must not report that it is (D-029).
 At the time of writing, `main` has **no protection at all** — anyone with write
 access can push to it directly, force-push it, or delete it.
 
-## Part 1 — the two secrets (5 minutes)
+## Part 1 — the Claude app and its token (5 minutes)
 
-**Settings → Secrets and variables → Actions → New repository secret.**
+### 1. Install the Claude GitHub App
 
-| Secret | What it is | What breaks without it |
-|--------|------------|------------------------|
-| `RULES_READ_TOKEN` | A **fine-grained personal access token** on the owner's account, scoped to this repository only, with one permission: **Administration → Read-only**. No expiry longer than a year. | `gate-integrity` fails: it can read the rules on `main`, but not who is allowed to bypass them — which is the one thing D-029 is about |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Owner to-do **A-09**: run `claude setup-token` and paste the result | The three blocking AI reviews fail (D-045). `ANTHROPIC_API_KEY` is the documented fallback |
+[github.com/apps/claude](https://github.com/apps/claude) → install it on
+`bvst/TryggHverdag` only, not on every repository.
 
-**Why a separate read-only token rather than Claude's account token.** Claude's
-GitHub account has write access but not admin, on purpose (A-06) — so it cannot
-read who may bypass the rules. Giving it admin to fix that would hand the gates'
-own enforcement to the account being gated. A token that can read one
-repository's settings and do nothing else is the smaller thing to trust. This
-corrects the note in `08b-ci-files/README.md`, which assumed `CLAUDE_BOT_TOKEN`
-would do (D-060).
+The AI reviews need this. `ai-review.yml` passes no `github_token`, so the
+action signs in as the Claude GitHub App — without the app installed it cannot
+post its findings. Installing it grants the app's whole permission set (contents,
+issues, pull requests, checks, workflows and more, read and write); GitHub does
+not let you accept a subset.
 
-`CLAUDE_BOT_TOKEN` is still wanted, for a different job: so that pull requests
-are opened by Claude's account and the owner's approvals count as real
-approvals (D-042). Nothing in CI reads it yet.
+### 2. `CLAUDE_CODE_OAUTH_TOKEN`
+
+On a machine with Claude Code signed in to your Max subscription:
+
+```
+claude setup-token
+```
+
+It prints a long-lived token. **Settings → Secrets and variables → Actions →
+New repository secret**, name `CLAUDE_CODE_OAUTH_TOKEN`, paste, save.
+
+Without it the three blocking AI reviews fail rather than pass (D-045). The
+token is tied to whoever ran the command, and CI reviews draw on that person's
+Max allowance.
+
+There is a `/install-github-app` command inside Claude Code that does both steps
+and more — but it also pushes its own workflow files, which would sit beside the
+ones this repository already has. Do the two steps above instead.
+
+**If you would rather not tie CI to your subscription:** an API key from
+[platform.claude.com](https://platform.claude.com), saved as `ANTHROPIC_API_KEY`,
+works instead and is billed per use. The workflow accepts either.
+
+### No second token — probably
+
+An earlier version of this document asked for a `RULES_READ_TOKEN` with
+*Administration: Read-only*, so CI could read who may bypass the merge rules.
+That was wrong twice over. GitHub itself answers
+`X-Accepted-Github-Permissions: metadata=read` for both ruleset endpoints, so
+the permission needed is **Metadata**, not Administration — and the ordinary
+Actions token already has it. `gate:integrity` now uses that, and asks for
+nothing extra.
+
+If it turns out not to work, the gate says so rather than passing, and the way
+out is a fine-grained token on your account, **this repository only, Metadata:
+Read-only, nothing else**, saved as `RULES_READ_TOKEN`. The gate prefers it when
+it is there. Do not create it up front.
+
+### `CLAUDE_BOT_TOKEN` — later, and not a repository secret
+
+A-06's machine account needs a token so that pull requests come from Claude's
+account rather than yours, which is what makes your approvals count as real
+approvals (D-042). That token goes in the **cloud environment** at
+claude.ai/code, not in repository secrets, and nothing in CI reads it. Until it
+exists, you merge the pull requests by hand.
 
 ## Part 2 — the ruleset (2 minutes)
 
-Part 1 first, and not only for tidiness: importing this while the two secrets
-are missing leaves `gate-integrity` and the three `ai-review` checks red *and*
-required, so nothing can merge at all — including the pull request that added
-them.
+Part 1 first, and not only for tidiness: importing this while the Claude token
+is missing leaves the three `ai-review` checks red *and* required, so nothing
+can merge at all — including the pull request that added them.
 
 **Settings → Rules → Rulesets → New ruleset → Import a ruleset**, and upload
 [`main-ruleset.json`](main-ruleset.json). That is everything below in one file;
@@ -144,16 +181,20 @@ CODEOWNERS; whether auto-merge is on, and whether the code-security settings
 are, it cannot see. Those are on you until a later task adds them.
 
 To see it before pushing anything, run it locally against the live repository.
-Read the tokens from files rather than typing them on the command line, where
-they would land in shell history and be visible to anyone else on the machine
-(the Mac is shared with a separate `claude-dev` user, A-10):
+One token that can read the repository is enough. Read it from a file rather
+than typing it on the command line, where it would land in shell history and be
+visible to anyone else on the machine (the Mac is shared with a separate
+`claude-dev` user, A-10):
 
 ```
-chmod 600 ~/.config/trygghverdag/rules-read-token
-GITHUB_TOKEN="$(cat ~/.config/trygghverdag/github-token)" \
-RULES_READ_TOKEN="$(cat ~/.config/trygghverdag/rules-read-token)" \
-pnpm run gate:integrity
+gh auth token > ~/.config/trygghverdag/github-token
+chmod 600 ~/.config/trygghverdag/github-token
+GITHUB_TOKEN="$(cat ~/.config/trygghverdag/github-token)" pnpm run gate:integrity
 ```
+
+Without a token it prints what it could check and says plainly that it could not
+check the rest, and fails. That is the same thing it does in CI when something is
+missing.
 
 ## What is still not proven
 

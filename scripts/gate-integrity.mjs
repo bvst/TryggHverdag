@@ -13,8 +13,8 @@
  *      pushes and no deletion?
  *   4. Can anyone bypass all of that?
  *
- * Question 4 is the one D-029 is about, and it needs a token that can read the
- * repository's settings — see docs/plan/merge-rules.md. Without it this gate
+ * Question 4 is the one D-029 is about. It needs a token that can read the
+ * rulesets, which in CI is the ordinary Actions token. Without one this gate
  * fails, because "nobody checked" and "nobody can bypass" are not the same
  * answer.
  *
@@ -124,6 +124,23 @@ async function api(url, token) {
   } catch {
     return { body: null, status: null };
   }
+}
+
+/**
+ * Which token reads the rulesets.
+ *
+ * GitHub answers `X-Accepted-Github-Permissions: metadata=read` for both ruleset
+ * endpoints, and the Actions token always has metadata read for its own
+ * repository — so CI normally needs no extra secret at all. RULES_READ_TOKEN is
+ * kept as the documented way out if that ever stops being true, and wins when
+ * it is set, because it was set on purpose.
+ *
+ * @param {Record<string, string | undefined>} env
+ */
+export function rulesReadToken(env) {
+  return env.RULES_READ_TOKEN === undefined || env.RULES_READ_TOKEN === ''
+    ? env.GITHUB_TOKEN
+    : env.RULES_READ_TOKEN;
 }
 
 /**
@@ -243,10 +260,7 @@ async function main() {
   let rulesetStatus = null;
   if (slug !== null) {
     const base = `${API}/repos/${slug.owner}/${slug.repo}`;
-    // The branch's own rules are readable with ordinary repository access, so
-    // GITHUB_TOKEN is enough. Who may bypass them is a repository setting, and
-    // needs a token that can read those — deliberately a different, narrower
-    // secret than the one Claude's account uses to open pull requests.
+    // Both of these ask only for metadata read, which the Actions token has.
     branchRules = (await api(`${base}/rules/branches/${BRANCH}`, env.GITHUB_TOKEN)).body;
 
     // Every rule carries the id of the ruleset it came from, and more than one
@@ -261,7 +275,7 @@ async function main() {
     ];
     if (ids.length > 0) {
       const answers = await Promise.all(
-        ids.map((id) => api(`${base}/rulesets/${String(id)}`, env.RULES_READ_TOKEN)),
+        ids.map((id) => api(`${base}/rulesets/${String(id)}`, rulesReadToken(env))),
       );
       rulesetStatus = answers.find((a) => a.status !== null && a.status !== 200)?.status ?? null;
       rulesets = answers.every((a) => a.body !== null) ? answers.map((a) => a.body) : null;

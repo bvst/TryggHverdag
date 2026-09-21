@@ -5,6 +5,7 @@ import {
   combineRulesetAnswers,
   renderReport,
   repoSlug,
+  rulesReadToken,
   rulesetIdsOf,
   sectionsFor,
 } from './gate-integrity.mjs';
@@ -79,6 +80,28 @@ describe('sectionsFor', () => {
     expect(checks.problems).toEqual([]);
     expect(checks.notes?.join(' ')).toContain('system');
     expect(checks.notes?.join(' ')).toContain('ai-review (code-reviewer)');
+  });
+});
+
+describe('rulesReadToken', () => {
+  // GitHub answers `X-Accepted-Github-Permissions: metadata=read` for the
+  // ruleset endpoints, and the Actions token always has metadata read — so no
+  // second secret is normally needed. RULES_READ_TOKEN stays as the way out if
+  // that ever stops being true.
+  test('the ordinary CI token is enough, so no extra secret is asked for', () => {
+    expect(rulesReadToken({ GITHUB_TOKEN: 'ci' })).toBe('ci');
+  });
+
+  test('a token added on purpose wins, because it was added to fix something', () => {
+    expect(rulesReadToken({ GITHUB_TOKEN: 'ci', RULES_READ_TOKEN: 'narrow' })).toBe('narrow');
+  });
+
+  test('an empty secret is not a token — CI sets unset secrets to the empty string', () => {
+    expect(rulesReadToken({ GITHUB_TOKEN: 'ci', RULES_READ_TOKEN: '' })).toBe('ci');
+  });
+
+  test('nothing at all is undefined, and the caller reports that it could not check', () => {
+    expect(rulesReadToken({})).toBe(undefined);
   });
 });
 

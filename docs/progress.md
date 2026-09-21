@@ -32,12 +32,16 @@ written out in [`plan/merge-rules.md`](plan/merge-rules.md):
    exists, `main` can be pushed to, force-pushed and deleted by anyone with
    write access, and no check has to pass before a merge. `gate:integrity`
    confirmed that against the live API while INF-04 was being built.
-2. **`RULES_READ_TOKEN`** — a fine-grained token, this repository only,
-   Administration: Read-only, nothing else. It is how CI reads *who may bypass*
-   the rules, which is the whole point of D-029. Claude's own account cannot be
-   given this without also being given admin over the gates it is subject to.
+2. **Install the [Claude GitHub App](https://github.com/apps/claude)** on this
+   repository. `ai-review.yml` passes no `github_token`, so the action signs in
+   as that app; without it the reviews cannot post their findings.
 3. **A-09 — `claude setup-token`**, saved as `CLAUDE_CODE_OAUTH_TOKEN`. Without
    it the three blocking AI reviews fail rather than pass (D-045).
+
+**No `RULES_READ_TOKEN`** — an earlier version of this list asked for one with
+Administration: Read-only. GitHub answers `metadata=read` for the ruleset
+endpoints, which the ordinary Actions token already has, so CI-01 needs no extra
+secret (D-062).
 
 Later tasks, not blocking anything today:
 

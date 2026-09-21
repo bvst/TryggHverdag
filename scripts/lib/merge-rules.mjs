@@ -229,14 +229,14 @@ export function reviewBypass({ rulesets, rulesExist = true, status = null }) {
       return [
         {
           what: `Who can bypass main's rules could not be checked: GitHub answered ${String(status)}, so the token was rejected.`,
-          fix: 'RULES_READ_TOKEN is present but not accepted. It has most likely expired, or lost its Administration: Read-only permission on this repository. Issue a new one (docs/plan/merge-rules.md).',
+          fix: 'The token was not accepted. If RULES_READ_TOKEN is set it has most likely expired; issue a new fine-grained token with Metadata: Read-only on this repository. If it is not set, the Actions token lacked the access this endpoint asks for — see docs/plan/merge-rules.md.',
         },
       ];
     }
     return [
       {
         what: "Who can bypass main's rules could not be checked, so the most important property of the merge rules is unknown.",
-        fix: 'Add the repository secret RULES_READ_TOKEN — a fine-grained token with Administration: Read-only on this repository and nothing else. See docs/plan/merge-rules.md.',
+        fix: 'Nothing could read the rulesets. In CI this uses the ordinary Actions token, which normally suffices — GitHub asks only for metadata read. If it does not, add the repository secret RULES_READ_TOKEN: a fine-grained token with Metadata: Read-only on this repository and nothing else. See docs/plan/merge-rules.md.',
       },
     ];
   }
