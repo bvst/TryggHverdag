@@ -49,9 +49,32 @@ not a dependency. Revisit before M5.
 1. **FileVault** on — System Settings → Privacy & Security.
 2. **Create the `claude-dev` Standard user** — System Settings → Users & Groups
    → Add User → **Standard** (not Administrator). D-056.
-3. **Energy** — System Settings → Battery → Options: prevent sleeping on power
+3. **`claude-dev`'s password.** A long unique one from the password manager;
+   you will rarely type it. Three things about it are easy to get wrong:
+
+   - **Let it unlock the disk at startup.** FileVault turns automatic login
+     off, so after any reboot — a macOS update, a power cut — somebody has to
+     type a password before any session exists. If `claude-dev` cannot unlock
+     the disk, that somebody has to be you, at the machine. Check by rebooting:
+     `claude-dev` should appear on the startup screen. Unlocking the disk does
+     not let it read your home folder; macOS keeps home folders private between
+     users, and it is still not an administrator.
+   - **Never reset it from your admin account.** That leaves the login keychain
+     locked behind the old password, and the keychain is where Claude Code and
+     `gh` keep their credentials — both would silently lose their logins.
+     Change it from inside the `claude-dev` session instead.
+   - **It is not an administrator password.** Anything that asks for admin
+     rights will ask for *yours*. If a Claude Code session triggers such a
+     prompt, that is the guard in D-056 working; do not type your password to
+     get past it.
+
+   Turn on **Fast User Switching** (Control Centre settings) so both accounts
+   can be logged in at once, and set the screen to lock rather than to log out
+   — logging out would end the session the phone connects to.
+
+4. **Energy** — System Settings → Battery → Options: prevent sleeping on power
    adapter. Set macOS updates to notify rather than install and restart.
-4. **Install the shared tools.** These need admin, and a Standard user cannot
+5. **Install the shared tools.** These need admin, and a Standard user cannot
    install them later:
    - **Homebrew** — `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`.
      **(Intel)** it installs to `/usr/local`, not `/opt/homebrew`, so it is
@@ -76,9 +99,8 @@ not a dependency. Revisit before M5.
    A Standard user cannot `brew install` into `/usr/local`, so anything missed
    here has to come back to this account.
 
-5. **Give `claude-dev` what it needs and nothing else.** It should not be able
-   to read your home folder; macOS defaults to that already. Do not add it to
-   the `admin` group.
+6. **Do not add `claude-dev` to the `admin` group.** That is the whole point of
+   the separate user (D-056).
 
 ### Logged in as `claude-dev`
 
