@@ -56,7 +56,10 @@ not a dependency. Revisit before M5.
    - **Homebrew** — `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`.
      **(Intel)** it installs to `/usr/local`, not `/opt/homebrew`, so it is
      already on everyone's `PATH` and no `shellenv` line is needed.
-   - `brew install node@22 git gh colima docker docker-compose maestro`
+   - `brew install node@22 git gh colima docker`
+     — `node@22` is keg-only, so add its bin directory to `claude-dev`'s
+     `PATH`: **(Intel)** `/usr/local/opt/node@22/bin`. Not plain `brew install
+     node`: package.json pins `>=22.13.0 <23` and the latest would fail it.
    - **Xcode** from the App Store, then open it once and let it install its
      components. **(Intel)** Xcode 26.x is the line to use; Apple's
      requirements page states only one architecture restriction (visionOS needs
@@ -87,14 +90,17 @@ not a dependency. Revisit before M5.
 3. **Clone** — `git clone https://github.com/bvst/TryggHverdag.git ~/code/TryggHverdag`
 4. **`corepack enable pnpm`** — pnpm 10.33.0 comes from the `packageManager`
    field; do not install pnpm separately.
-5. **Colima** — `colima start --cpu 4 --memory 6 --disk 40`. **(Intel)** with
+5. **Maestro** — `curl -fsSL https://get.maestro.mobile.dev | bash`. It
+   installs into `~/.maestro`, so no admin is needed and each user has its own.
+   (It is not in homebrew-core; there is a tap, but the installer is simpler.)
+6. **Colima** — `colima start --cpu 4 --memory 6 --disk 40`. **(Intel)** with
    16 GB in the machine, leave room: do not run the Android emulator and Colima
    at the same time on this Mac.
-6. **Android Studio** → SDK Manager → install an **x86_64** system image
+7. **Android Studio** → SDK Manager → install an **x86_64** system image
    (API 34). **(Intel)** an `arm64-v8a` image will not run here.
-7. **Remote Control** — turn it on in Claude Code, so the Mac appears in the
+8. **Remote Control** — turn it on in Claude Code, so the Mac appears in the
    Code tab of the Claude app on your phone.
-8. **`pnpm install && pnpm run doctor`** — it names anything still missing and
+9. **`pnpm install && pnpm run doctor`** — it names anything still missing and
    why it is needed. That is INF-00.
 
 ### What only *you* can do, from your own account
