@@ -37,6 +37,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # paths-filter asks the API which files this pull request touches, so
+      # `contents: read` alone fails it with "Resource not accessible by
+      # integration" — and that failure takes all five reviewers down with it.
+      pull-requests: read
     outputs:
       safety: ${{ steps.f.outputs.safety }}
       ui: ${{ steps.f.outputs.ui }}

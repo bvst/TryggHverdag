@@ -328,6 +328,15 @@ until they do.
 - Actions are pinned to commit SHAs, and `gate:integrity` refuses a tag or a
   branch.
 
+**The Mac (A-10) is a 2019 Intel MacBook Pro**, not Apple silicon —
+`plan/M0-kickoff.md` Part 2 is rewritten for it. The parts that differ:
+Homebrew lives in `/usr/local`, Android emulator images must be x86_64, Colima
+containers run amd64 natively (so the L3 tests are faster here than on Apple
+silicon), and 16 GB means not running the emulator and Colima at once. macOS
+Tahoe 26 is the last release for Intel, so the machine's Xcode runway is finite
+— which does not put the plan at risk, because iOS builds and the weekly
+simulator run happen on Expo's machines, not this one.
+
 **Reviewed, and it changed the work**
 
 All three reviewers returned BLOCK (D-043). Two found the same bug
@@ -354,6 +363,25 @@ repeated seven times; the whole unit suite no longer running twice per pull
 request. The superseded `ci.yml`, `ai-review.yml` and `dependabot.yml` drafts
 were deleted from `08b-ci-files/`, where they had become a second version to
 read by mistake.
+
+**The first CI run, and what it proved**
+
+CI ran for the first time on pull request [#3](https://github.com/bvst/TryggHverdag/pull/3),
+after the owner imported the ruleset. Six of the seven `ci` jobs passed, and one
+of them settled an open question:
+
+- **`gate-integrity` passed in CI**, reading the live rulesets with the ordinary
+  Actions token. That is the live confirmation D-062 was missing: no second
+  secret is needed, and `RULES_READ_TOKEN` stays unnecessary.
+- **`changes` failed**, and took all five reviewers with it:
+  `##[error]Resource not accessible by integration`. `dorny/paths-filter` asks
+  the API which files the pull request touches, and the job had only
+  `contents: read` — narrowed one field too far when the privacy review asked
+  for least privilege. Fixed with `pull-requests: read`, and a test now asserts
+  that job keeps it.
+- The guard step behaved exactly as designed: an upstream failure made the three
+  blocking reviewers **fail**, not skip. Without `if: always()` and that guard
+  they would have been green ticks for reviews that never ran.
 
 **Follow-ups the reviewers raised that are deliberately not in this task**
 

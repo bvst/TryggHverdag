@@ -31,50 +31,92 @@ start milestone M0. Part 1 can be done from a phone.
 | ☐ | A-04 | Create a Clever Cloud account for the AS. |
 | ☐ | A-01 | Send the phone survey to the group (drafted in Section 4). |
 
-## Part 2 — at the Mac (tonight or tomorrow)
+## Part 2 — at the Mac
 
-**From your normal (admin) account** — these tools are shared by all users:
-1. Turn on FileVault (System Settings → Privacy & Security).
-2. Create a new **Standard** user (not Admin) for Claude, for example `claude-dev`
-   (D-056).
-3. Install Xcode from the App Store (it includes the iOS simulator), Android
-   Studio (for the Android emulator), Homebrew, and a Docker runtime. For
-   Docker, either Docker Desktop (check its licence terms for the AS) or Colima
-   (free, open source).
-4. Stop the Mac from sleeping while it's on power (System Settings → Energy /
-   Battery). Set macOS updates to notify you rather than restart at night.
+**The Mac (confirmed 2026-09-22):** MacBook Pro 16-inch, 2019 — 8-core Intel
+Core i9, 16 GB, macOS Tahoe 26.6.2. Intel, not Apple silicon, which changes
+several steps below; they are marked **(Intel)**.
 
-**Logged in as `claude-dev`:**
-1. Install Claude Code (see the current installer at code.claude.com/docs),
-   and log in with your Max account.
-2. Install the GitHub CLI, log in as **Claude's** GitHub account (A-06), and
-   clone the repository into `~/code/walk-home`.
-3. Unzip this plan package into the repository root: `CLAUDE.md` plus
-   `docs/plan/`.
-4. Run `claude setup-token` and save the token as the repository secret
-   `CLAUDE_CODE_OAUTH_TOKEN` (A-09).
-5. Start Claude Code in `~/code/walk-home`, accept the workspace trust prompt,
-   and turn on Remote Control, so the Mac appears in the Code tab of the Claude
-   app on your phone.
+**(Intel) What this means for the plan.** macOS Tahoe 26 is the last macOS
+release for Intel Macs, so this machine's Xcode runway is finite. It does not
+put the project at risk: iOS builds happen on Expo's machines (EAS, Section 8),
+and the weekly iOS simulator run in `nightly.yml` is an EAS workflow, not a
+local one. The Mac is a convenience for the M1 spike and M3 UI work (D-055),
+not a dependency. Revisit before M5.
 
-Node, pnpm, Maestro and everything else are installed by Claude in task
-INF-00 (below), without admin rights. Claude checks each tool and tells you
-exactly what's missing.
+### From your normal (admin) account
+
+1. **FileVault** on — System Settings → Privacy & Security.
+2. **Create the `claude-dev` Standard user** — System Settings → Users & Groups
+   → Add User → **Standard** (not Administrator). D-056.
+3. **Energy** — System Settings → Battery → Options: prevent sleeping on power
+   adapter. Set macOS updates to notify rather than install and restart.
+4. **Install the shared tools.** These need admin, and a Standard user cannot
+   install them later:
+   - **Homebrew** — `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`.
+     **(Intel)** it installs to `/usr/local`, not `/opt/homebrew`, so it is
+     already on everyone's `PATH` and no `shellenv` line is needed.
+   - `brew install node@22 git gh colima docker docker-compose maestro`
+   - **Xcode** from the App Store, then open it once and let it install its
+     components. **(Intel)** Xcode 26.x is the line to use; Apple's
+     requirements page states only one architecture restriction (visionOS needs
+     Apple silicon), and Tahoe 26.6.2 satisfies Xcode 26.6's minimum. Xcode 27
+     is reported to drop Intel — check before upgrading, and do not let it
+     upgrade automatically.
+   - **Android Studio** from developer.android.com.
+   - **Docker: Colima**, not Docker Desktop. Colima is open source with no
+     licence question for the AS, and it runs per-user, so `claude-dev` starts
+     and stops its own VM without admin. **(Intel)** containers run amd64
+     natively — no emulation, so the PostgreSQL integration tests (L3) are
+     faster here than on Apple silicon.
+
+   A Standard user cannot `brew install` into `/usr/local`, so anything missed
+   here has to come back to this account.
+
+5. **Give `claude-dev` what it needs and nothing else.** It should not be able
+   to read your home folder; macOS defaults to that already. Do not add it to
+   the `admin` group.
+
+### Logged in as `claude-dev`
+
+1. **Claude Code** — installer at code.claude.com/docs. Log in with the Max
+   account.
+2. **GitHub CLI** — `gh auth login`, as **Claude's** account (A-06), not yours.
+   Pull requests must come from Claude's account so that your approvals count
+   (D-042).
+3. **Clone** — `git clone https://github.com/bvst/TryggHverdag.git ~/code/TryggHverdag`
+4. **`corepack enable pnpm`** — pnpm 10.33.0 comes from the `packageManager`
+   field; do not install pnpm separately.
+5. **Colima** — `colima start --cpu 4 --memory 6 --disk 40`. **(Intel)** with
+   16 GB in the machine, leave room: do not run the Android emulator and Colima
+   at the same time on this Mac.
+6. **Android Studio** → SDK Manager → install an **x86_64** system image
+   (API 34). **(Intel)** an `arm64-v8a` image will not run here.
+7. **Remote Control** — turn it on in Claude Code, so the Mac appears in the
+   Code tab of the Claude app on your phone.
+8. **`pnpm install && pnpm run doctor`** — it names anything still missing and
+   why it is needed. That is INF-00.
+
+### What only *you* can do, from your own account
+
+Claude's GitHub account has Write access, not Admin (A-06), so it cannot add
+repository secrets or change settings. Those are in
+[merge-rules.md](merge-rules.md) and stay with you.
 
 ## Part 3 — the first prompt
 
 Paste this into Claude Code on the Mac (or from your phone via Remote
 Control):
 
-> Read `docs/plan/README.md`, `docs/plan/decisions.md` and
-> `docs/plan/10-roadmap.md`. Planning is complete; start milestone M0.
-> First do INF-00: check this Mac's toolchain against
-> `docs/plan/M0-kickoff.md` and install what's missing that doesn't need admin
-> rights. Then continue with INF-01, and install the Claude Code configuration
-> from `docs/plan/07b-claude-code-files/` as early as possible (INF-02), so the
-> gates protect everything after it. One task at a time (D-052). Ask me one
-> question at a time, with a recommendation. Record progress in
-> `docs/progress.md`.
+> Read `CLAUDE.md`, `docs/plan/README.md` and `docs/progress.md`. Do INF-00:
+> run `pnpm run doctor`, install what is missing that does not need admin
+> rights, and tell me what does. Then take the next M0 task from
+> `docs/plan/10-roadmap.md`. One task, one pull request (D-052). Ask me one
+> question at a time, with a recommendation. Update `docs/progress.md` before
+> you finish.
+
+(INF-01 to INF-04 are done — the original version of this prompt, which started
+from an empty repository, is in the git history.)
 
 ## Part 3b — starting in the cloud (owner's choice, 2026-09-20)
 M0 starts in Claude Code on the web while the Mac is being set up (allowed by

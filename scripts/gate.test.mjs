@@ -67,6 +67,17 @@ describe("this repository's own workflows", () => {
     }
   });
 
+  test('the job that works out which reviewers apply can read the pull request', () => {
+    // dorny/paths-filter asks the API which files the pull request touches, so
+    // `contents: read` alone fails the job with "Resource not accessible by
+    // integration" — and that failure takes all five reviewers down with it.
+    // Narrowing this job's permissions is right; narrowing it past this is not.
+    const text = readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8');
+    const changesJob = text.slice(text.indexOf('  changes:'), text.indexOf('  review:'));
+
+    expect(changesJob).toContain('pull-requests: read');
+  });
+
   test('the safety filter in ai-review.yml matches the paths the owner must approve', () => {
     // Two copies of the same list: the paths CODEOWNERS holds for the owner,
     // and the paths that summon safety-reviewer. If they drift, a safety change
