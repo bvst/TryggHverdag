@@ -27,7 +27,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
 | INF-07 | Staging on Clever Cloud | ⬜ Blocked: Clever Cloud API token |
 | INF-08 | Monitoring | ⬜ Blocked: UptimeRobot needs a URL to watch (comes with INF-07) |
-| INF-09 | Daily status workflow | ⬜ Not started — no longer blocked, see A-09 below |
+| INF-09 | Daily status workflow | ⬜ Not started, and **no longer blocked**: A-09 is done |
 | INF-10 | Gate drills | ⬜ Not started. The first real test of the merge rules under load |
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
@@ -37,10 +37,10 @@ could not record a verdict at all (D-069, D-070, D-073).
 
 ## What the owner still needs to do
 
-**A-09 — is it actually done?** The plan says ⬜ Open, but the reviewers run,
-which means one of `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` is set — the
-guard accepts either, so which one cannot be told from here. Worth confirming and
-marking, because INF-09 is waiting on it and nothing else.
+**A-09 is done** (2026-09-23, confirmed by the owner). `CLAUDE_CODE_OAUTH_TOKEN`
+is set; `ANTHROPIC_API_KEY` is not. The guard accepts either, which is why this
+could not be told from inside a session and had to be asked. **INF-09 was waiting
+on this and nothing else, so it is now startable.**
 
 **A-10 — the Mac.** Blocks INF-00 and INF-06, which is the app skeleton.
 
@@ -109,22 +109,38 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**[#13](https://github.com/bvst/TryggHverdag/pull/13)** — this restructure, plus
-a correction to a drift note that landed wrong when [#12](https://github.com/bvst/TryggHverdag/pull/12)
-merged mid-review.
+**[#17](https://github.com/bvst/TryggHverdag/pull/17)** — CI-12: a gate with
+nothing to check runs, says so, and passes, instead of being skipped. The only
+open pull request.
+
+**Merged today:** #13 (progress-log restructure, D-075), #14 (the retraction
+that had only reached the archive), #15 (HK-09, the pre-commit hook), #16 (the
+reviewer verdict must now be corroborated; `/.githooks/` owned; `pnpm exec`).
 
 **An unmerged branch exists: `claude/inf-04-follow-through`.** It closes INF-04's
 record and widens `engines.node` so Dependabot can run. It holds **D-063 and
 D-064**, which is why INF-05's decisions start at D-065. Deliberately parked, not
 forgotten.
 
-**The `ai-review.yml` batch, not yet written.** Three items are grounded in job
-logs and ready: the Dependabot guard message (it blames A-09 for a secret that is
-already set), `checks: read` (reviewers have reported a 403 on five pull requests
-rather than assume), and the cancelled-versus-failed guard condition above. A
-fourth — reviewers being cut off before their subagent returns, four occurrences
-across two agents — is **not** grounded: `--max-turns` is unset, so the obvious
-turn-budget theory is wrong, and the action's source needs reading first.
+**Two Dependabot branches are open** (`actions/checkout`, `actions/setup-node`).
+Both bump actions that `ai-review.yml` pins, so both edit that workflow and
+neither can pass the reviewers. They need a manual merge (D-075).
+
+**The `ai-review.yml` batch — two items left.** The other two shipped in #16:
+`checks: read`, and the verdict corroboration that closed the false-green hole.
+What remains:
+
+- **The Dependabot guard message.** It fires when neither
+  `CLAUDE_CODE_OAUTH_TOKEN` nor `ANTHROPIC_API_KEY` is visible and then advises
+  running `claude setup-token`. A-09 is done and the repository secret is set,
+  so the only way it can fire now is a context where repository secrets are not
+  passed at all — a Dependabot pull request being the one that happens here.
+  The advice is wrong for that case and should name it. **Grounded**, since the
+  owner confirmed which secrets exist.
+- **The cancelled-versus-failed guard condition.** `needs.changes.result != 'success'`
+  treats a cancelled duplicate run as a failure, producing reds that look real.
+  **Not re-verified today**, so it waits: changing an unreviewable file on an
+  unverified claim is how the placeholder verdict got in.
 
 **After INF-06 lands**, `gate:integrity` will fail until `android-e2e` joins the
 required list. Expected, not a defect.

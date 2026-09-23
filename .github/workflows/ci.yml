@@ -53,11 +53,33 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      # CI-12. Not a paths: filter and not a job-level if:, because either
+      # would leave this required check skipped — and a skipped job reports as
+      # a green tick, which the header above calls the one thing this
+      # repository must not produce. Worse, a required check that never
+      # reports deadlocks the pull request outright.
+      #
+      # So the job runs, asks, and either works or says it had nothing to
+      # check. `mutation` has worked this way since INF-04. Kept inside each
+      # job rather than in a shared one: a shared job would itself have to be a
+      # required check, and a job nothing requires can fail without stopping
+      # anything (gate:integrity says so, and it is right).
+      - id: affected
+        run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
+      - name: Nothing for this gate to check
+        if: steps.affected.outputs.code != 'true'
+        run: |
+          echo "Every changed file is documentation or reviewer memory."
+          echo "static has nothing to check on this diff (CI-12)."
+      - if: steps.affected.outputs.code == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.affected.outputs.code == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with: { node-version-file: .nvmrc, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run gate:static
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm run gate:static
 
   unit: # CI-03 (L2, L5)
     runs-on: ubuntu-latest
@@ -65,11 +87,33 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      # CI-12. Not a paths: filter and not a job-level if:, because either
+      # would leave this required check skipped — and a skipped job reports as
+      # a green tick, which the header above calls the one thing this
+      # repository must not produce. Worse, a required check that never
+      # reports deadlocks the pull request outright.
+      #
+      # So the job runs, asks, and either works or says it had nothing to
+      # check. `mutation` has worked this way since INF-04. Kept inside each
+      # job rather than in a shared one: a shared job would itself have to be a
+      # required check, and a job nothing requires can fail without stopping
+      # anything (gate:integrity says so, and it is right).
+      - id: affected
+        run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
+      - name: Nothing for this gate to check
+        if: steps.affected.outputs.code != 'true'
+        run: |
+          echo "Every changed file is documentation or reviewer memory."
+          echo "unit has nothing to check on this diff (CI-12)."
+      - if: steps.affected.outputs.code == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.affected.outputs.code == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with: { node-version-file: .nvmrc, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run test:unit
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm run test:unit
 
   integration: # CI-04 (L3) — a real PostgreSQL in a container, via Testcontainers
     runs-on: ubuntu-latest
@@ -77,16 +121,38 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      # CI-12. Not a paths: filter and not a job-level if:, because either
+      # would leave this required check skipped — and a skipped job reports as
+      # a green tick, which the header above calls the one thing this
+      # repository must not produce. Worse, a required check that never
+      # reports deadlocks the pull request outright.
+      #
+      # So the job runs, asks, and either works or says it had nothing to
+      # check. `mutation` has worked this way since INF-04. Kept inside each
+      # job rather than in a shared one: a shared job would itself have to be a
+      # required check, and a job nothing requires can fail without stopping
+      # anything (gate:integrity says so, and it is right).
+      - id: affected
+        run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
+      - name: Nothing for this gate to check
+        if: steps.affected.outputs.code != 'true'
+        run: |
+          echo "Every changed file is documentation or reviewer memory."
+          echo "integration has nothing to check on this diff (CI-12)."
+      - if: steps.affected.outputs.code == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.affected.outputs.code == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with: { node-version-file: .nvmrc, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm install --frozen-lockfile
       # Docker is present on the GitHub runners, which is what makes this the
       # only place these tests can run today: a cloud session has the docker
       # binary but no daemon. Nothing is mocked here on purpose — the upsert,
       # the timestamp round trip and the database clock either work against
       # PostgreSQL or they do not.
-      - run: pnpm run test:integration
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm run test:integration
 
   system: # CI-05 (L6) — whole flows through the real API, fakes at the edges
     runs-on: ubuntu-latest
@@ -98,11 +164,33 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      # CI-12. Not a paths: filter and not a job-level if:, because either
+      # would leave this required check skipped — and a skipped job reports as
+      # a green tick, which the header above calls the one thing this
+      # repository must not produce. Worse, a required check that never
+      # reports deadlocks the pull request outright.
+      #
+      # So the job runs, asks, and either works or says it had nothing to
+      # check. `mutation` has worked this way since INF-04. Kept inside each
+      # job rather than in a shared one: a shared job would itself have to be a
+      # required check, and a job nothing requires can fail without stopping
+      # anything (gate:integrity says so, and it is right).
+      - id: affected
+        run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
+      - name: Nothing for this gate to check
+        if: steps.affected.outputs.code != 'true'
+        run: |
+          echo "Every changed file is documentation or reviewer memory."
+          echo "system has nothing to check on this diff (CI-12)."
+      - if: steps.affected.outputs.code == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.affected.outputs.code == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with: { node-version-file: .nvmrc, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run test:system
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm run test:system
 
   contract: # CI-06 (L4, RG-08) — the API against every app version still in use
     runs-on: ubuntu-latest
@@ -110,14 +198,36 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      # CI-12. Not a paths: filter and not a job-level if:, because either
+      # would leave this required check skipped — and a skipped job reports as
+      # a green tick, which the header above calls the one thing this
+      # repository must not produce. Worse, a required check that never
+      # reports deadlocks the pull request outright.
+      #
+      # So the job runs, asks, and either works or says it had nothing to
+      # check. `mutation` has worked this way since INF-04. Kept inside each
+      # job rather than in a shared one: a shared job would itself have to be a
+      # required check, and a job nothing requires can fail without stopping
+      # anything (gate:integrity says so, and it is right).
+      - id: affected
+        run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
+      - name: Nothing for this gate to check
+        if: steps.affected.outputs.code != 'true'
+        run: |
+          echo "Every changed file is documentation or reviewer memory."
+          echo "contract has nothing to check on this diff (CI-12)."
+      - if: steps.affected.outputs.code == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.affected.outputs.code == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with: { node-version-file: .nvmrc, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm install --frozen-lockfile
       # There are no released versions yet, so this reports that and passes. It
       # starts failing the moment there is something to break and no oasdiff to
       # check it with (D-030).
-      - run: pnpm run api:diff
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm run api:diff
 
   traceability: # CI-07 — RG-01 requirement coverage, RG-03 test changes, RG-04 coverage ratchet
     runs-on: ubuntu-latest
@@ -146,8 +256,16 @@ jobs:
       # leaving this out would turn CI-07 red rather than quietly unmeasured.
       # test:coverage, not test:unit --coverage: the baseline was recorded from
       # unit and system tests together (vitest.coverage.config.mjs says why).
-      - run: pnpm run test:coverage
-      - run: pnpm run coverage:ratchet --base origin/${{ github.base_ref || 'main' }}
+      # Coverage cannot move when no code moved, and measuring it means
+      # running the whole unit and system suite. Everything above still
+      # runs on every diff: requirement IDs live in docs/plan, so a
+      # documentation change can add or remove one (CI-12).
+      - id: affected
+        run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm run test:coverage
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm run coverage:ratchet --base origin/${{ github.base_ref || 'main' }}
 
   mutation: # CI-08 (RG-05, D-036) — only when safety code changed; fails if it changed and Stryker is missing
     runs-on: ubuntu-latest
@@ -155,11 +273,33 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      # CI-12. Not a paths: filter and not a job-level if:, because either
+      # would leave this required check skipped — and a skipped job reports as
+      # a green tick, which the header above calls the one thing this
+      # repository must not produce. Worse, a required check that never
+      # reports deadlocks the pull request outright.
+      #
+      # So the job runs, asks, and either works or says it had nothing to
+      # check. `mutation` has worked this way since INF-04. Kept inside each
+      # job rather than in a shared one: a shared job would itself have to be a
+      # required check, and a job nothing requires can fail without stopping
+      # anything (gate:integrity says so, and it is right).
+      - id: affected
+        run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
+      - name: Nothing for this gate to check
+        if: steps.affected.outputs.code != 'true'
+        run: |
+          echo "Every changed file is documentation or reviewer memory."
+          echo "mutation has nothing to check on this diff (CI-12)."
+      - if: steps.affected.outputs.code == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.affected.outputs.code == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with: { node-version-file: .nvmrc, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: >-
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.affected.outputs.code == 'true'
+        run: >-
           pnpm run mutation
           --incremental --only-if-safety-paths-changed
           --base origin/${{ github.base_ref || 'main' }}
@@ -170,18 +310,52 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      # CI-12. Not a paths: filter and not a job-level if:, because either
+      # would leave this required check skipped — and a skipped job reports as
+      # a green tick, which the header above calls the one thing this
+      # repository must not produce. Worse, a required check that never
+      # reports deadlocks the pull request outright.
+      #
+      # So the job runs, asks, and either works or says it had nothing to
+      # check. `mutation` has worked this way since INF-04. Kept inside each
+      # job rather than in a shared one: a shared job would itself have to be a
+      # required check, and a job nothing requires can fail without stopping
+      # anything (gate:integrity says so, and it is right).
+      - id: affected
+        run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
+      - name: Nothing for this gate to check
+        if: steps.affected.outputs.code != 'true'
+        run: |
+          echo "Every changed file is documentation or reviewer memory."
+          echo "security has nothing to check on this diff (CI-12)."
+      - if: steps.affected.outputs.code == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.affected.outputs.code == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with: { node-version-file: .nvmrc, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm audit --audit-level high
-      - run: pnpm run licenses:check
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm audit --audit-level high
+      - if: steps.affected.outputs.code == 'true'
+        run: pnpm run licenses:check
       # The gitleaks CLI (MIT), not gitleaks-action: the action is under a
       # proprietary end-user licence that is not on the allowed list in
       # scripts/lib/licenses.mjs, and it requires a key once a repository is
       # owned by an organisation — which is where this one is headed (D-029).
       # Pinned by version and checked against its published checksum, for the
       # same reason the actions are pinned by commit.
+      #
+      # Deliberately NOT guarded by CI-12, unlike the audit and licence steps
+      # above: a secret leaks just as well through prose as through code, and a
+      # documentation-only diff is exactly where someone pastes a token into an
+      # example. It is also the one step in this job that needs no install.
+      #
+      # Honest footnote: it came out unguarded by accident — the edit that
+      # added the guards matched `- run:` steps and this one starts with
+      # `- name:`. A reviewer read it as a considered split. It is the right
+      # behaviour, so it stays, but it is written down now rather than left as
+      # luck that the next edit could undo.
       - name: Secret scan (gitleaks)
         env:
           GITLEAKS_VERSION: '8.30.1'
