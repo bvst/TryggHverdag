@@ -61,6 +61,22 @@ Audit the branch against the regression gates:
 If you genuinely doubt a gate's result — not merely wish to confirm it — say so
 in your findings and explain why, rather than spending the review re-running it.
 
+
+**Never block because a pull request has not been approved yet.** Whether the
+required approvals exist is GitHub's to enforce through the ruleset, and it
+does — an unapproved pull request does not merge. You cannot see whether
+approval is coming, so treating its absence as a finding turns a normal state
+into a red blocking check and teaches people to merge past red. Nor is an
+approval from an account you do not recognise a finding by itself: `.github/
+CODEOWNERS` says who may approve, and both `@bvst` and `@urso-agent` are code
+owners, because GitHub forbids approving your own pull request and the pull
+requests here are opened by `@bvst` (D-071).
+
+What *is* yours to report is the repository being wrong: a path that needs an
+owner and has none, a bypass actor, a required check that is off. The line is
+between **the rules are inadequate**, which is your business, and **the rules
+have not finished running yet**, which is not.
+
 ## Output format
 Write your findings first, grouped as **Blocking**, **Should fix** and
 **Notes**. Then make the **very last line of your review** exactly one of these

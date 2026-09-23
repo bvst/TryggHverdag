@@ -1174,3 +1174,43 @@ through is a decision, not a commit. Options are on #6.
   which #6 creates; `.claude/rules/server-domain.md` cites D-067 and
   `packages/config/eslint/index.test.mjs`, also from #6. Landing this first
   would document scripts and a lint rule that do not exist yet.
+
+## D-071 — `urso-agent` is a code owner, and approval is GitHub's to enforce
+- **Date:** 2026-09-23 · **Status:** Accepted (owner) · **Section:** 6
+- **Context.** Auditing #7, `test-auditor` blocked it: the only approval came
+  from `urso-agent`, an account with write access that appeared nowhere in
+  CODEOWNERS or `docs/plan/`, on paths CODEOWNERS assigned to `@bvst` alone.
+  `privacy-security-reviewer` reached the same finding independently. Both were
+  right that nothing explained the account, and both were wrong to read that
+  silence as the approval being illegitimate. The silence was the defect.
+- **Why a second owner is necessary, not a convenience.** **GitHub does not let
+  anyone approve their own pull request**, and the pull requests here are opened
+  by `@bvst`. With `@bvst` as the sole code owner, the code-owner rule could
+  never be satisfied on the work this repository actually does: it would block
+  every change rather than check any. A gate that can only ever say no is not a
+  gate. `urso-agent` is the owner's second account and exists for this.
+- **Decision.** Every CODEOWNERS path now reads `@bvst @urso-agent`, and the
+  file says why in a comment rather than leaving the next reviewer to infer it.
+  `scripts/lib/merge-rules.mjs` already accepted any owner — it checks a path is
+  claimed, not by whom — so only its suggested-fix text needed updating.
+- **A reviewer never blocks on "this has not been approved yet".** That is
+  GitHub's to enforce, through the ruleset, and it does: an unapproved pull
+  request does not merge. A reviewer cannot see the future and cannot know
+  whether approval is coming, so treating its absence as a finding turns a
+  normal state — a pull request early in its life — into a red blocking check,
+  and trains everyone to merge past red. **What remains a real finding** is the
+  repository being wrong: a path that needs an owner and has none, a bypass
+  actor, a rule that is off. The line is between *the rules are inadequate*,
+  which is the reviewer's business, and *the rules have not finished running
+  yet*, which is not.
+- **What stays open, and is genuinely the owner's.** The live ruleset pairs
+  `require_code_owner_review: true` with `required_approving_review_count: 0`,
+  and `docs/plan/merge-rules.md` has flagged that pairing as unverified since
+  INF-04. Adding a second owner makes the gate *satisfiable*; it does not prove
+  the gate is *enforced*. INF-10's drills settle that, and the honest position
+  until then is that we believe it holds and have not watched it hold.
+- **On how this surfaced.** Two blocking reviewers independently refused to
+  accept an approval they could not trace to a documented owner, on a change to
+  the reviewers' own trust boundary. That is the behaviour D-043 exists to buy.
+  The fix is to write down what they could not find, not to teach them to stop
+  looking.

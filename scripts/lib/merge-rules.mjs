@@ -296,6 +296,6 @@ export function reviewCodeowners(text) {
 
   return OWNER_APPROVAL_PATHS.filter((path) => !owned.has(path)).map((path) => ({
     what: `${path} has no code owner, so a change there could merge without the owner seeing it (D-042).`,
-    fix: `Add a line to .github/CODEOWNERS: "${path} @bvst".`,
+    fix: `Add a line to .github/CODEOWNERS: "${path} @bvst @urso-agent".`,
   }));
 }

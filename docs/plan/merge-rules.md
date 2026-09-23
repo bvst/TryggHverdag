@@ -193,11 +193,19 @@ approval. Its conclusion, and it is the right one: *"this PR may become
 mergeable on `urso-agent`'s approval alone, on paths CODEOWNERS assigns solely
 to `@bvst`."*
 
-So the question this section already asked now has a concrete case attached.
-Two things settle it, and both are the owner's: approve from `@bvst` directly,
-and either confirm that code-owner review really is enforced at count 0 or
-raise the count to 1. Claude does not change the merge rules (D-029), least of
-all to unblock its own pull request.
+**Half of that is now answered, and the reviewers had the wrong end of it.**
+GitHub does not let anyone approve their own pull request, and the pull
+requests here are opened by `@bvst`. With `@bvst` as the sole code owner the
+rule could never be satisfied on this repository's actual work — it would block
+everything and check nothing. `urso-agent` is the owner's second account and
+exists for exactly that. CODEOWNERS now lists both, and says so in a comment,
+so the next reviewer finds an explanation instead of an anomaly (D-071).
+
+**The other half is still open and still yours.** A second owner makes the gate
+*satisfiable*; it does not prove the gate is *enforced*. `require_code_owner_review:
+true` with `required_approving_review_count: 0` remains unwatched — we believe
+it holds and have not seen it hold. INF-10's drills settle it. Claude does not
+change the merge rules (D-029), least of all to unblock its own pull request.
 
 **Part 3 is not checked by anything.** The gate reads the ruleset and
 CODEOWNERS; whether auto-merge is on, and whether the code-security settings
