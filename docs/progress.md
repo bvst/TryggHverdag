@@ -745,6 +745,14 @@ and `.npmrc` sets `engine-strict=true`). It holds decisions **D-063 and D-064**,
 which is why INF-05's decisions start at D-065. The owner has decided to tie it
 up **after #6 merges**, so no pull request yet — deliberately, not forgotten.
 
+**A smaller follow-up:** seven CI jobs still have no `timeout-minutes` —
+`gate-integrity`, `static`, `unit`, `contract`, `traceability`, `mutation` and
+`security`. They came with INF-04 and are left alone here, because the finding
+was about the asymmetry between the two jobs INF-05 added and fixing the rest
+would widen this task. `mutation` is the one worth a bound first: Stryker is the
+only step that can legitimately run for a long time, so it is also the one where
+a hang looks most like work.
+
 **A `/bugfix` is waiting to be written:** `ai-review (code-reviewer)` reports red
 although it approves, because it writes `VERDICT: APPROVE WITH COMMENTS` and the
 enforcement reads only `VERDICT: PASS` or `VERDICT: BLOCK`. Advisory today, and

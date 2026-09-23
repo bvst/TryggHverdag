@@ -87,6 +87,11 @@ jobs:
 
   system: # CI-05 (L6) — whole flows through the real API, fakes at the edges
     runs-on: ubuntu-latest
+    # The suite runs in about a second, so this is not a budget — it is a bound
+    # on a hang. These tests drive the API in-process against a clock the test
+    # moves by hand, and a bug that leaves one awaiting a promise nothing
+    # resolves would otherwise sit at the runner's own six-hour ceiling.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
