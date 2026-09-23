@@ -139,6 +139,31 @@ one phone.
 | CI-09 | Android UI tests (Maestro on an emulator) against a test server | L7 |
 | CI-10 | Security: dependency audit, secret scan, licence check | SEC-06 |
 | CI-11 | AI reviews: safety, privacy and test-auditor are **blocking**; code and a11y-i18n are advisory | D-043 |
+| CI-12 | A gate with nothing to check runs anyway, says so, and passes — it is never skipped | the rule below |
+
+**CI-12, and why it is not a `paths:` filter.** A documentation-only change does
+not need the unit, integration, system or contract suites, and running them costs
+Actions minutes this repository pays for. The obvious implementations are both
+wrong here:
+
+- a **`paths:` filter** stops the workflow producing the check at all, and a
+  required check that never reports leaves the pull request unmergeable for ever;
+- a **job-level `if:`** reports the job as *skipped*, which GitHub counts as
+  passing a required check — a green tick for work nobody did.
+
+So the condition lives on **steps**, never on jobs. Every job still runs, asks
+`scripts/affected.mjs` whether this diff holds anything it could fail on, and
+either does its work or prints that it had nothing to check. `mutation` has
+worked this way since INF-04 (`--only-if-safety-paths-changed`); CI-12
+generalises it.
+
+The classification is deliberately conservative: only markdown outside
+`.claude/` and reviewer memory count as inert, because the cost of being wrong
+is not symmetric. Running a gate that had nothing to find wastes a minute;
+skipping one that did puts a defect on `main` with a green tick over it.
+`CLAUDE.md` and everything else under `.claude/` are excluded — `scripts/ai-review.test.mjs`
+reads the agent briefs and asserts on them, so editing one really can fail
+`unit`.
 
 **Scheduled:**
 - Nightly: full mutation run, staging canary report, dependency update pull

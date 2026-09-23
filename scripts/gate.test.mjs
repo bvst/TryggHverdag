@@ -131,6 +131,42 @@ describe("this repository's own workflows", () => {
     );
   });
 
+  test('no ci job can be skipped into a green tick (CI-12)', () => {
+    // The saving here is real but the failure mode is worse than the cost. A
+    // required check that GitHub reports as *skipped* counts as passing, so
+    // `paths:` or a job-level `if:` would hand out green ticks for work nobody
+    // did — which ci.yml's own header calls the one thing this repository must
+    // not produce. And a required check that never reports at all deadlocks
+    // the pull request: #16 sat unmergeable on exactly that.
+    //
+    // So the conditionality lives on steps, never on jobs. This asserts the
+    // shape rather than the intent, because intent is what erodes.
+    const text = readFileSync(`${WORKFLOWS}/ci.yml`, 'utf8');
+    const workflow = text.slice(text.indexOf('\njobs:'));
+
+    // No job-level `if:` anywhere (four spaces of indent = job key).
+    expect(workflow).not.toMatch(/^ {4}if:/m);
+    // No paths filters, which would stop the workflow producing the check at all.
+    expect(workflow).not.toMatch(/^\s*paths(-ignore)?:/m);
+  });
+
+  test('every gate that can sit out a diff first asks whether it should', () => {
+    // A guarded step with no classify step above it would never run at all —
+    // `steps.affected.outputs.code` would simply be empty, and empty is not
+    // 'true'. That fails silently in the worst direction: the gate stops
+    // running and still reports success.
+    const text = readFileSync(`${WORKFLOWS}/ci.yml`, 'utf8');
+    const jobs = text.slice(text.indexOf('\njobs:')).split(/(?=^ {2}[a-z-]+:)/m);
+
+    for (const job of jobs) {
+      if (!job.includes("steps.affected.outputs.code == 'true'")) continue;
+      const name = /^ {2}([a-z-]+):/.exec(job)?.[1];
+      expect(job, `${name} guards steps without classifying the diff`).toContain('- id: affected');
+      // And the classify step itself must never be guarded, or it cannot run.
+      expect(job).not.toMatch(/if:[^\n]*\n\s+- id: affected/);
+    }
+  });
+
   test('a verdict is only accepted with the comment that proves a review happened', () => {
     // On 2026-09-23 this gate accepted
     //   {"verdict":"PASS","summary":"Placeholder — waiting for test-auditor
