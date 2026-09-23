@@ -724,6 +724,43 @@ instead, and a required check now blocks a merge. The failure now says what it
 is, with the command to confirm it — proven by reverting an agent file to its
 `origin/main` copy and watching the note appear.
 
+**The typecheck gate could pass code that does not compile.** A privacy review
+raised drizzle-kit's telemetry and recommended `telemetry: false` in
+`apps/server/drizzle.config.ts`. Both halves turned out to be wrong, and
+checking them found something worse.
+
+drizzle-kit 0.31.11 has no telemetry: no `telemetry`, `posthog`, `mixpanel` or
+`amplitude` anywhere in the package, and the one `analytics` hit is an entry in
+a bundled list of English uncountable nouns. Nor is `telemetry` a valid option —
+`Config` has no such key, and tsc rejects it with `TS2353`. The suggested fix
+would have broken the build. (Older drizzle-kit did collect telemetry and did
+take that option, which is presumably where the advice comes from.)
+
+But `pnpm run typecheck` **accepted it**: `FULL TURBO`, exit 0, on a file tsc
+refuses to compile. A deliberately absurd key (`thisIsDefinitelyNotAnOption:
+42`) passed too. `turbo.json` gives the typecheck task
+`inputs: ["src/**", "tsconfig.json", "package.json"]`, while what tsc reads is
+decided by the tsconfig — and this task added `drizzle.config.ts` to
+`apps/server`'s `include`, at the package root. It is the only file in the
+repository that is typechecked and outside `src/**`, so it was the first one
+able to fall through: changing it did not change the cache key, and Turbo
+replayed a stale success.
+
+`turbo.json` predates this branch; the exposure does not. Fixed by adding
+`*.ts` to the inputs, and guarded by `scripts/turbo-inputs.test.mjs`, which
+compares the two lists directly — every file `tsc --showConfig` resolves for a
+package must match a turbo input — so the next root-level entry in an `include`
+cannot quietly reopen it. `--showConfig` is used rather than reading the
+tsconfig, because it resolves `extends` and the include globs into the real file
+list. Proven both ways: the test fails on the old `turbo.json` naming
+`drizzle.config.ts` exactly, and the same broken file that scored `FULL TURBO`
+now fails the gate with `error TS2353` and exit 2.
+
+Worth stating plainly, because it is the shape the non-negotiables are about: a
+review comment that was wrong on both its facts still led to a real defect,
+because checking it meant running it instead of reasoning about it. The finding
+itself is declined, with the evidence above.
+
 **A fourth wrong diagnosis, and then the job log.** The guess was that
 `test-auditor` alone was ordered to re-run slow gates — `pnpm mutation
 --incremental`, about six and a half minutes — and collapsed before reaching its
