@@ -649,39 +649,53 @@ appears, including in prose that denies it. `req-coverage: fixtures-only` covers
 the sample-data case; there is no marker for "explicitly not this", and the
 cheapest answer is to describe the requirement instead of naming it.
 
-**A gate defect found along the way — and then it stopped being hypothetical**
+**A gate defect found along the way — two of them, mistaken for one**
 
-`ai-review` reads one thing from a review: the last line must be exactly
-`VERDICT: PASS` or `VERDICT: BLOCK`. `code-reviewer` failed that four times on
-this pull request, in two spellings (`VERDICT: APPROVE WITH COMMENTS`, then a
-bare `**APPROVE**`), and it was written off as an unreliable agent on an
-advisory check. The note here said the reason to fix it was the day a *blocking*
-reviewer did the same.
+`ai-review` reads one file per reviewer, `review-<agent>.md`, and fails if its
+last line is not exactly `VERDICT: PASS` or `VERDICT: BLOCK`. `code-reviewer`
+failed that four times on this pull request in two spellings, and it was written
+off as an unreliable agent on an advisory check. The note here said the reason
+to fix it was the day a *blocking* reviewer did the same.
 
-That day was the same afternoon. **`safety-reviewer` — blocking — failed on a
-review whose verdict was PASS**, because its last line read `**Verdict: PASS**`
-and the gate's pattern is case-sensitive. A passing safety review, recorded as a
-review that never happened, over one letter's case.
+That day was the same afternoon, and it arrived twice, in two different ways:
 
-**The cause was not an unreliable agent.** All five definitions said: *"End with
-exactly one line: `VERDICT: PASS` or `VERDICT: BLOCK`, followed by your
-findings"* — which puts the findings **after** the verdict, while the gate reads
-the **last** line. A reviewer following that literally cannot pass. The ones
-that passed were reading it charitably. Four failures got blamed on the agents
-for a fortnight of runs when the instruction was the thing that was wrong.
+- **`safety-reviewer`** — "did not end with a verdict line". Its file ended
+  `**Verdict: PASS**`, and the pattern is case-sensitive. A passing safety
+  review turned into a failing check by one letter's case.
+- **`test-auditor`** — "produced no verdict file". It posted a pull request
+  comment ending in a perfectly conforming `VERDICT: PASS`, and still failed,
+  because **the gate never reads the comment.** No file, no review.
 
-Fixed here because it blocks this pull request (D-069): findings first, then an
-unmissable statement that the very last line is one of two exact strings, naming
-the spellings that get rejected and what it costs. `scripts/ai-review.test.mjs`
-reads the pattern out of the workflow and holds all five definitions to it, so
-the two cannot drift apart again. Both failure modes were confirmed by planting
-them — the old wording, and a canonical line in the wrong case.
+**Both causes were in the instructions, not the agents.** For the first, all
+five definitions said *"End with exactly one line: `VERDICT: PASS` ... followed
+by your findings"* — which puts the findings **after** the verdict, while the
+gate reads the **last** line. A reviewer following it literally cannot pass; the
+ones that passed were reading it charitably. For the second, the definitions
+never mentioned the file at all — only the workflow prompt did, asking for the
+file and the comment in one sentence, so producing the comment felt like
+producing the review.
 
-**The better fix still has to happen on `main`.** The regex should be tolerant —
-case-insensitive at least — but editing `ai-review.yml` on a branch re-triggers
-D-063 and stops the reviewers running at all, so it cannot be done or verified
-from here. Until it is, a reviewer that words its verdict differently still
-fails, and a green run is not evidence the problem is gone. The test is.
+Fixed here (D-069) because it blocks this pull request: each definition now
+names its own `review-<agent>.md`, says that is what CI reads and that the
+comment is not a substitute, and states that the very last line of that file is
+one of two exact strings. `scripts/ai-review.test.mjs` reads the pattern out of
+the workflow and holds all five to all of it, verified by planting each failure
+— the old wording, a wrongly-cased line, a trailing qualifier, and a definition
+with the filename removed.
+
+**The diagnosis was wrong twice before it was right**, and the reason is worth
+keeping. Both early readings came from the reviewer's pull request *comment*
+rather than its job log — and the comment is precisely the artefact the gate
+ignores. That inference happened to hold for `safety-reviewer` and was flatly
+wrong for `test-auditor`, whose comment was flawless while its check was red.
+The log names which of the two errors fired. Nothing else does.
+
+**The better fix still has to happen on `main`.** The regex should be
+case-insensitive, and the missing-file path should say what to do about it — but
+editing `ai-review.yml` on a branch re-triggers D-063 and stops the reviewers
+running at all, so neither can be done or verified from here. Until then a
+differently-worded verdict or a missing file still fails, and a green run is not
+evidence the problem is gone. The test is.
 
 **Decisions recorded:** D-065 (the server skeleton as built: `/v1` in the path,
 health that answers 200 with the truth in the body, an async clock port, one

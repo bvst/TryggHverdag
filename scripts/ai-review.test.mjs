@@ -67,6 +67,26 @@ describe('the verdict line the reviewers must produce', () => {
     expect(agent?.text).toContain('VERDICT: BLOCK');
   });
 
+  test.each(AGENTS.map((a) => a.name))('%s names the file CI actually reads', (name) => {
+    // The other half of the same bug, and the one that cost longer to see.
+    // test-auditor posted a pull request comment ending in a perfectly
+    // conforming `VERDICT: PASS` and still failed, because the gate does not
+    // read the comment — it reads `review-<agent>.md`, and that file was never
+    // written. "produced no verdict file" and "did not end with a verdict line"
+    // are different failures, and only the second one is about wording.
+    const agent = AGENTS.find((a) => a.name === name);
+    const expected = `review-${name.replace(/\.md$/, '')}.md`;
+
+    expect(agent?.text).toContain(expected);
+  });
+
+  test.each(AGENTS.map((a) => a.name))('%s says the file matters, not just the comment', (name) => {
+    const agent = AGENTS.find((a) => a.name === name);
+
+    expect(agent?.text).toMatch(/pull request comment/i);
+    expect(agent?.text).toMatch(/what CI reads|the gate reads|CI reads/i);
+  });
+
   test.each(AGENTS.map((a) => a.name))('%s says the verdict goes last, not first', (name) => {
     // The exact contradiction that caused this: "End with ... followed by your
     // findings" put the findings after the verdict, where the gate cannot see
