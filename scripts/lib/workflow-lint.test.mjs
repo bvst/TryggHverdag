@@ -7,6 +7,7 @@ import {
   findJobIds,
   findPnpmScripts,
   findUnboundedJobs,
+  findUngroupedEcosystems,
   reviewWorkflows,
 } from './workflow-lint.mjs';
 
@@ -163,6 +164,209 @@ describe('findUnboundedJobs', () => {
     );
 
     expect(findUnboundedJobs(text)).toEqual([]);
+  });
+});
+
+describe('findUngroupedEcosystems', () => {
+  const grouped = (eco) =>
+    [
+      `  - package-ecosystem: ${eco}`,
+      '    directory: /',
+      '    groups:',
+      '      non-major:',
+      '        patterns:',
+      "          - '*'",
+      '        update-types:',
+      '          - minor',
+      '          - patch',
+    ].join('\n');
+
+  test('an ecosystem that groups every non-major update passes', () => {
+    expect(findUngroupedEcosystems(`updates:\n${grouped('npm')}`)).toEqual([]);
+  });
+
+  test('an ecosystem with no groups at all is named', () => {
+    const text = ['updates:', '  - package-ecosystem: github-actions', '    directory: /'].join(
+      '\n',
+    );
+
+    expect(findUngroupedEcosystems(text)).toEqual(['github-actions']);
+  });
+
+  test('a group that names only some packages does not cover the ecosystem', () => {
+    // The shape this replaced: a `dev-tooling` group listing eslint, vitest and
+    // friends, which left every runtime dependency arriving on its own. That is
+    // most of the churn, and exactly the part the grouping is for.
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    groups:',
+      '      dev-tooling:',
+      '        patterns:',
+      "          - 'eslint*'",
+      '        update-types:',
+      '          - minor',
+      '          - patch',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual(['npm']);
+  });
+
+  test('a group covering everything but only patch leaves minors loose', () => {
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    groups:',
+      '      patches:',
+      '        patterns:',
+      "          - '*'",
+      '        update-types:',
+      '          - patch',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual(['npm']);
+  });
+
+  test('every ecosystem is judged, not just the first', () => {
+    const text = [
+      'updates:',
+      grouped('npm'),
+      '  - package-ecosystem: github-actions',
+      '    directory: /',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual(['github-actions']);
+  });
+
+  test('two groups that each cover half do not add up to coverage', () => {
+    // code-reviewer found this on #11, and it is the exact failure this
+    // function exists to catch: flags were tracked per ECOSYSTEM, so a group
+    // taking '*' for majors and a separate group taking minor+patch for
+    // eslint* looked, added together, like full coverage. Neither group alone
+    // catches every non-major update, which is the thing being asserted.
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    groups:',
+      '      majors:',
+      '        patterns:',
+      "          - '*'",
+      '        update-types:',
+      '          - major',
+      '      tooling:',
+      '        patterns:',
+      "          - 'eslint*'",
+      '        update-types:',
+      '          - minor',
+      '          - patch',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual(['npm']);
+  });
+
+  test('a group that sweeps majors in too is not the policy', () => {
+    // Majors are deliberately ungrouped: a major is where behaviour may change
+    // and is the one that earns a whole reading. A group taking '*' for all
+    // three update types is not "covered", it is the policy inverted.
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    groups:',
+      '      everything:',
+      '        patterns:',
+      "          - '*'",
+      '        update-types:',
+      '          - minor',
+      '          - patch',
+      '          - major',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual(['npm']);
+  });
+
+  test('a double-quoted wildcard counts, because YAML does not care', () => {
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    groups:',
+      '      non-major:',
+      '        patterns:',
+      '          - "*"',
+      '        update-types:',
+      '          - minor',
+      '          - patch',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual([]);
+  });
+
+  test('quoted update-types count, as the quoted wildcard already did', () => {
+    // code-reviewer hand-verified this on #11: the wildcard tolerated both
+    // quote styles while minor/patch/major accepted unquoted scalars only, so
+    // a quoted `- 'minor'` read as absent. It failed loud rather than silent —
+    // an over-strict red gate — but an inconsistency in what counts as the
+    // same value is a trap either way.
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    groups:',
+      '      non-major:',
+      '        patterns:',
+      "          - '*'",
+      '        update-types:',
+      "          - 'minor'",
+      '          - "patch"',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual([]);
+  });
+
+  test('a quoted major is still a major', () => {
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    groups:',
+      '      everything:',
+      '        patterns:',
+      '          - "*"',
+      '        update-types:',
+      "          - 'minor'",
+      "          - 'patch'",
+      "          - 'major'",
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual(['npm']);
+  });
+
+  test('a key at group depth outside the groups block is not a group', () => {
+    // `commit-message:` has `prefix:` at the same indentation a group name
+    // sits at. Reading that as a group would silently split the real one.
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    commit-message:',
+      "      prefix: 'chore(deps)'",
+      '    groups:',
+      '      non-major:',
+      '        patterns:',
+      "          - '*'",
+      '        update-types:',
+      '          - minor',
+      '          - patch',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual([]);
+  });
+
+  test('a commented-out group covers nothing', () => {
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    # groups:',
+      "    #   non-major: { patterns: ['*'], update-types: [minor, patch] }",
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual(['npm']);
   });
 });
 

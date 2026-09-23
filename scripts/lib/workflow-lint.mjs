@@ -14,8 +14,9 @@
 //      nobody has to pay attention to.
 //
 // Reading YAML line by line is enough for all three and keeps the gate free of
-// a parser dependency. The shapes it has to read are in .github/workflows, and
-// the tests below hold them to that.
+// a parser dependency. The shapes it has to read are in .github/workflows —
+// and, for findUngroupedEcosystems below, .github/dependabot.yml, which is the
+// same concern one file over: what .github claims about itself.
 
 const USES = /^\s*-?\s*uses:\s*(?<ref>\S+)/;
 const PNPM_RUN = /\bpnpm run (?<script>[\w:@.-]+)/g;
@@ -161,6 +162,85 @@ export function findUnboundedJobs(text) {
   }
   close();
   return unbounded;
+}
+
+/**
+ * Ecosystems in `.github/dependabot.yml` whose non-major updates are not grouped.
+ *
+ * Covered means **one single group** takes every package and both `minor` and
+ * `patch`, and does *not* take `major`. All four are read per group: tracking
+ * them per ecosystem let a majors group and an `eslint*` group add up to a
+ * false pass, which is the failure this exists to catch. Why it matters, and
+ * what the grouping costs, is in docs/progress.md.
+ *
+ * Known limits, both of which fail loud rather than silent — an over-strict red
+ * gate, never a missed ecosystem: flow style (`patterns: ["*"]` on one line) is
+ * not read, and `exclude-patterns` is not accounted for, so a group narrowed
+ * that way would still read as covering everything.
+ *
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function findUngroupedEcosystems(text) {
+  const ungrouped = [];
+  let current = null;
+  let inGroups = false;
+  let group = null;
+
+  const close = () => {
+    if (current !== null && !current.groups.some((g) => g.all && g.minor && g.patch && !g.major)) {
+      ungrouped.push(current.name);
+    }
+    current = null;
+    inGroups = false;
+    group = null;
+  };
+
+  for (const line of text.split('\n')) {
+    if (isComment(line)) {
+      continue;
+    }
+    const start = /^\s*-\s*package-ecosystem:\s*(?<name>\S+)/.exec(line);
+    if (start?.groups !== undefined) {
+      close();
+      current = { name: start.groups.name, groups: [] };
+      continue;
+    }
+    if (current === null) {
+      continue;
+    }
+    if (/^ {4}groups:/.test(line)) {
+      inGroups = true;
+      group = null;
+      continue;
+    }
+    // Any other key at ecosystem depth ends the groups block. `commit-message:`
+    // puts `prefix:` at exactly the depth a group name sits at, so without this
+    // the real group would be silently split in two.
+    if (/^ {4}\S/.test(line)) {
+      inGroups = false;
+      group = null;
+      continue;
+    }
+    if (inGroups && /^ {6}\S[^:]*:\s*$/.test(line)) {
+      group = { all: false, minor: false, patch: false, major: false };
+      current.groups.push(group);
+      continue;
+    }
+    if (group === null) {
+      continue;
+    }
+    // Quoting is the author's taste, not a difference in meaning, so every
+    // scalar here tolerates it. Accepting it for `'*'` alone was an
+    // inconsistency that would have read a quoted `- 'minor'` as absent.
+    const item = /^\s*-\s*['"]?(?<value>\*|minor|patch|major)['"]?\s*$/.exec(line);
+    if (item?.groups !== undefined) {
+      const key = { '*': 'all', minor: 'minor', patch: 'patch', major: 'major' }[item.groups.value];
+      group[key] = true;
+    }
+  }
+  close();
+  return ungrouped;
 }
 
 /** `ai-review (test-auditor)` → `test-auditor`; anything else → null. */

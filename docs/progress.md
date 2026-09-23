@@ -1101,3 +1101,113 @@ With squash merges and auto-delete both on, that is a false alarm on every
 pull request — which trains its reader to ignore it. A `git remote prune`, or
 comparing against the default branch rather than the same-named remote, fixes
 it.
+
+
+### Dependabot sends one pull request per ecosystem for everything non-major
+
+`github-actions` had no grouping at all, which is why `actions/checkout` and
+`actions/setup-node` arrived as two pull requests. `npm` grouped only a named
+`dev-tooling` list — `@types/*`, `eslint*`, prettier, vitest, turbo,
+dependency-cruiser — leaving every runtime dependency to arrive on its own,
+which is most of the churn and exactly the part the old comment said the
+grouping was meant to spare people. Both ecosystems now take `'*'` for minor
+and patch.
+
+Majors stay ungrouped deliberately: a major is where behaviour is allowed to
+change, and is the one that earns a whole reading. The two open right now are
+both majors (checkout 6→7, setup-node 6→7), so they would have arrived
+separately under this policy anyway — the grouping helps the next fortnight,
+not those two.
+
+**The cost, named rather than discovered later:** a grouped update that breaks
+something has to be bisected across every bump in the group. CI runs on the
+group before it merges, so a break is a red check rather than a surprise, and
+a red group can be split by hand.
+
+`findUngroupedEcosystems` holds it there, line by line rather than through a
+YAML parser, as the rest of `workflow-lint.mjs` does. Its tests cover the two
+ways this check could be decorative: a group that names only some packages,
+and one that takes `'*'` but only `patch`.
+
+### Dependabot pull requests cannot pass the reviewer gate at all
+
+Separate finding, and it outlives this change. The `ai-review` jobs fail on a
+dependabot pull request at step 5, **"The reviewer can actually run"** — the
+token guard — with every later step skipped, `claude-code-action` included.
+Dependabot-triggered runs do not receive repository secrets; they have their
+own store.
+
+Two consequences:
+
+1. **The guard's message is wrong in this case**, and wrong in the direction
+   that wastes someone's afternoon: it blames owner to-do A-09 and asks for a
+   repository secret that is already set — which is why reviewers run on every
+   other pull request. It should name the Dependabot secret store when the
+   actor is `dependabot[bot]`.
+2. **Three required blocking checks can never pass there**, so dependency
+   updates — a security-relevant stream under SEC-06 — are permanently
+   unmergeable without a manual merge.
+
+The fix is the owner's: add `CLAUDE_CODE_OAUTH_TOKEN` to the Dependabot secret
+store, or accept that this stream is manual forever. Worth knowing before
+deciding: a dependabot bump of `claude-code-action` itself would change
+`ai-review.yml`, which makes the action skip — so the token cannot reach an
+unreviewed version of it that way. The residual exposure is a poisoned version
+of another action in the same job reading the job's secrets.
+
+The message fix lives in `ai-review.yml`, so it is the third change that the
+reviewers structurally cannot review. That file is its own class of change and
+should be batched.
+
+
+### D-073 works, and the reviewers earned their keep on the first real pull request
+
+#11 was the first pull request since D-073 that touches no workflow file, so
+it is the first one the reviewers could actually run on. The answer, from the
+job logs:
+
+**The mechanism works.** `structured_output` came back as valid JSON with the
+verdict constrained to the enum, and the enforcement step read it correctly.
+No file to forget, no invented third value. Two of the three reviewers that
+applied completed real reviews and returned `PASS`.
+
+**They were real reviews, not rubber stamps.** `test-auditor` ran
+`req:coverage`, ran 51 tests, independently re-derived `findUngroupedEcosystems`
+against the real file, and — this is the part worth noting — reported the 403
+on `gh pr checks` as **unverified rather than assumed passing**, which is
+exactly what D-070 asked of it.
+
+**`code-reviewer` found two genuine bugs in the function added that same
+day**, and both were confirmed by running them:
+
+1. Coverage flags were tracked per **ecosystem**, not per group. A group
+   sweeping `'*'` for majors plus a separate group naming `eslint*` for
+   minor and patch added up, between them, to a false pass — while neither
+   alone caught every non-major update, the thing being asserted. This is the
+   exact "decorative check" failure the function exists to catch, written by
+   someone who had just written tests against that failure.
+2. A group taking `'*'` for `minor`, `patch` **and** `major` also passed, and
+   a double-quoted `"*"` would have false-negatived.
+
+Both fixed by tracking all four flags per group and requiring one group to
+satisfy every condition, with the two cases reproduced before the fix and
+asserted after.
+
+**A fourth failure mode, not predicted and not in the three we were watching
+for.** `privacy-security-reviewer` returned:
+
+> `{"verdict":"BLOCK","summary":"The privacy-security-reviewer subagent had not
+> finished its review … when a structured-output response was forced; no real
+> verdict was available, so this reports BLOCK rather than fabricate a PASS"}`
+
+`--json-schema` changes *when* a verdict is owed: the old design let the agent
+finish and then write a file, the new one demands a value the moment the turn
+ends. So the trade is "forgets to record a real verdict" for "must produce one
+before it has one".
+
+**It failed safe, and that matters.** Asked for a verdict it did not have, the
+agent refused to fabricate a PASS and blocked instead — the right direction for
+a safety-critical repository, and the opposite of every failure recorded above
+it, which all read as green or as noise. Still wrong: it blocks a pull request
+nobody reviewed. Worth watching whether it recurs before deciding what it needs
+(a turn budget, a prompt that finishes the subagent first, or both).

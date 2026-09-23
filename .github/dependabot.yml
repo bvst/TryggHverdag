@@ -3,6 +3,14 @@
 # Actions are pinned to commit SHAs (see .github/workflows/ci.yml). Dependabot
 # understands that pinning and raises the SHA together with the version comment,
 # so keeping the pins current does not mean keeping them by hand.
+#
+# Every non-major update arrives in one pull request per ecosystem; majors
+# arrive on their own, because a major is where behaviour may change and is the
+# one that earns a whole reading. Security-alert pull requests are unaffected
+# and stay individual: these groups apply to version updates only.
+#
+# Why, and what it costs: docs/progress.md. Held to by findUngroupedEcosystems
+# in scripts/lib/workflow-lint.mjs.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -12,6 +20,13 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: 'ci(deps)'
+    groups:
+      non-major:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: npm
     directory: /
@@ -22,17 +37,13 @@ updates:
     commit-message:
       prefix: 'chore(deps)'
     groups:
-      # One pull request for the routine ones, so the review effort goes to the
-      # updates that can actually change behaviour.
-      dev-tooling:
+      # This replaced a narrower `dev-tooling` group that named @types/*,
+      # eslint*, prettier, vitest, turbo and dependency-cruiser. That group left
+      # every runtime dependency ungrouped, which is most of the churn and the
+      # part the old comment said it wanted to spare people.
+      non-major:
         patterns:
-          - '@types/*'
-          - 'eslint*'
-          - 'prettier'
-          - 'vitest'
-          - '@vitest/*'
-          - 'turbo'
-          - 'dependency-cruiser'
+          - '*'
         update-types:
           - minor
           - patch
