@@ -80,6 +80,58 @@ describe('planSteps and the environment', () => {
     expect(planSteps([step], scripts, { GITHUB_TOKEN: '' })[0]?.willRun).toBe(false);
   });
 
+  test('a step needing a tool this machine does not have is skipped, with the reason', () => {
+    // Without this, gate:full on a laptop with no Docker daemon fails with
+    // "Could not find a working container runtime strategy" — which reads as
+    // "your code is broken" rather than "this machine cannot run this level".
+    const containerStep = {
+      name: 'integration tests',
+      command: ['pnpm', 'run', 'test:integration'],
+      needsScript: 'gate:integrity',
+      needsTool: 'docker',
+      toolReason: 'a real PostgreSQL runs in a container',
+    };
+
+    const [planned] = planSteps([containerStep], scripts, {}, { docker: false });
+
+    expect(planned?.willRun).toBe(false);
+    expect(planned?.reason).toContain('docker');
+    expect(planned?.reason).toContain('a real PostgreSQL runs in a container');
+  });
+
+  test('the same step runs where the tool is there', () => {
+    const containerStep = {
+      name: 'integration tests',
+      command: ['x'],
+      needsScript: 'gate:integrity',
+      needsTool: 'docker',
+    };
+
+    expect(planSteps([containerStep], scripts, {}, { docker: true })[0]?.willRun).toBe(true);
+  });
+
+  test('a tool-needing step with no reason still says which tool is missing', () => {
+    const [planned] = planSteps(
+      [{ name: 'x', command: ['x'], needsScript: 'gate:integrity', needsTool: 'docker' }],
+      scripts,
+      {},
+      { docker: false },
+    );
+
+    expect(planned?.reason).toBe('needs docker, which is not working on this machine');
+  });
+
+  test('a missing script is reported before a missing tool, because it is the bigger problem', () => {
+    const [planned] = planSteps(
+      [{ name: 'x', command: ['x'], needsScript: 'nope', needsTool: 'docker' }],
+      scripts,
+      {},
+      { docker: false },
+    );
+
+    expect(planned?.reason).toContain('no "nope" script yet');
+  });
+
   test('a step that needs no environment runs whatever the environment holds', () => {
     const plain = { name: 'x', command: ['x'], needsScript: 'gate:integrity' };
 

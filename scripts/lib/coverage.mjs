@@ -10,12 +10,18 @@ export const FLOORS = {
   overallLines: 80,
 };
 
-/** Code where a missed branch is a missed alert (AR-02, AR-09). */
-export const SAFETY_PATHS = [
-  'apps/server/src/domain/',
-  'apps/server/src/modules/alerts/',
-  'apps/mobile/src/safety-core/',
-];
+/**
+ * Code where a missed branch is a missed alert (AR-02, AR-06, AR-09).
+ *
+ * Imported rather than listed again. This file used to keep its own copy, and
+ * the copy was missing `apps/server/src/worker.ts` — so the watchdog and the
+ * outbox sender, which are the two things that actually deliver an alert, were
+ * held to the mutation gate but not to the 95 % branch floor. Two lists that
+ * are supposed to say the same thing eventually do not.
+ */
+import { SAFETY_PATHS } from './gate-decisions.mjs';
+
+export { SAFETY_PATHS };
 
 /** Code that ships to people, as opposed to the repository's own tooling. */
 export const PRODUCT_PATHS = ['apps/', 'packages/'];

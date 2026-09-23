@@ -35,25 +35,27 @@ export const QUICK_STEPS = [
 export const FULL_STEPS = [
   ...QUICK_STEPS.slice(0, 2),
   {
-    // No `--` before the flag: `pnpm run test:unit -- --coverage` reaches vitest
-    // as `vitest run -- --coverage`, where `--coverage` is read as a filename to
-    // filter tests by rather than as a flag. The suite then passes, no coverage
-    // is written, and the ratchet below fails saying it has nothing to measure.
-    name: 'unit tests with coverage',
-    command: pnpmRun('test:unit', '--coverage'),
-    needsScript: 'test:unit',
+    // Its own script and its own config, not `test:unit --coverage`. The floor
+    // and the baseline in coverage-baseline.json were recorded from unit *and*
+    // system tests, because the API, the router and the health service are
+    // reached at L6 and nowhere else. Measuring the unit run alone reports
+    // about 59 % for code that is in fact tested, and the ratchet then fails on
+    // a number that is not about the code at all.
+    name: 'coverage (unit and system, the run the baseline was recorded from)',
+    command: pnpmRun('test:coverage'),
+    needsScript: 'test:coverage',
   },
   {
     name: 'integration tests (real PostgreSQL)',
     command: pnpmRun('test:integration'),
     needsScript: 'test:integration',
-    arrivesIn: 'INF-05',
+    needsTool: 'docker',
+    toolReason: 'a real PostgreSQL runs in a container (L3)',
   },
   {
     name: 'system tests (the alert path end to end)',
     command: pnpmRun('test:system'),
     needsScript: 'test:system',
-    arrivesIn: 'INF-05',
   },
   {
     name: 'requirement coverage (RG-01)',
@@ -94,12 +96,28 @@ export const FULL_STEPS = [
   },
 ];
 
+/**
+ * Which tools this machine can actually use. Separate from planSteps so the
+ * decision there stays pure, and injectable so this can be tested without
+ * depending on whether the machine running the tests happens to have Docker.
+ *
+ * `docker info`, not `which docker`: a cloud session has the binary and no
+ * daemon, and the binary on its own cannot start a container. Asking the wrong
+ * question here would let the gate try, fail deep inside Testcontainers, and
+ * report it as broken code.
+ *
+ * @param {(command: string, args: string[], options?: object) => { ok: boolean }} runCommand
+ */
+export function availableTools(runCommand = run, cwd = process.cwd()) {
+  return { docker: runCommand('docker', ['info'], { cwd, timeout: 15_000 }).ok };
+}
+
 function main() {
   const which = process.argv[2] === 'full' ? 'full' : 'quick';
   const steps = which === 'full' ? FULL_STEPS : QUICK_STEPS;
   const cwd = process.cwd();
 
-  const plan = planSteps(steps, packageScripts(cwd), process.env);
+  const plan = planSteps(steps, packageScripts(cwd), process.env, availableTools(run, cwd));
   for (const planned of plan) {
     process.stdout.write(
       planned.willRun ? `▶ ${planned.step.name}\n` : `· ${planned.step.name} — ${planned.reason}\n`,

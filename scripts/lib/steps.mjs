@@ -12,6 +12,8 @@
  * @property {string} [arrivesIn] the task that adds that script
  * @property {string[]} [needsEnv] environment variables this step cannot run without
  * @property {string} [envReason] what a person should do about a missing one
+ * @property {string} [needsTool] a tool that must be present and working on this machine
+ * @property {string} [toolReason] why the step needs it
  */
 
 /**
@@ -20,8 +22,10 @@
  * @param {Step[]} steps
  * @param {Record<string, string>} scripts the package.json scripts that exist
  * @param {Record<string, string | undefined>} env
+ * @param {Record<string, boolean>} available which tools this machine has working,
+ *   probed by the caller so that this stays a pure decision
  */
-export function planSteps(steps, scripts, env = {}) {
+export function planSteps(steps, scripts, env = {}, available = {}) {
   return steps.map((step) => {
     if (step.needsScript !== undefined && scripts[step.needsScript] === undefined) {
       return {
@@ -36,6 +40,15 @@ export function planSteps(steps, scripts, env = {}) {
         step,
         willRun: false,
         reason: `needs ${missing.join(' and ')}${step.envReason === undefined ? '' : ` — ${step.envReason}`}`,
+      };
+    }
+    if (step.needsTool !== undefined && available[step.needsTool] !== true) {
+      return {
+        step,
+        willRun: false,
+        reason: `needs ${step.needsTool}, which is not working on this machine${
+          step.toolReason === undefined ? '' : ` — ${step.toolReason}`
+        }`,
       };
     }
     return { step, willRun: true, reason: '' };
