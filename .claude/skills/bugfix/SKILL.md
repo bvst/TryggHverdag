@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # /bugfix $ARGUMENTS
 
-1. Give the bug the next ID `BUG-<n>` (see `docs/progress.md`) and create the
+1. Give the bug the next ID `BUG-<n>` (see `docs/progress/m0.md`) and create the
    branch `fix/BUG-<n>-<short-name>`.
 2. **Reproduce** — `test-author` writes the smallest failing test named
    `BUG-<n>: <symptom>`, at the lowest level that reproduces it. For
