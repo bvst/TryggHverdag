@@ -865,11 +865,17 @@ new decision that supersedes it (see `00-working-agreement.md`).
   bugfix, before anyone had chosen how logging works.
 - **Decision (the owner's):** defer it to the task that brings logging. Until
   then the crash stands.
-- **When the handler is written, its log line is a PRIV-07 question.** A
-  connection-pool error should carry no location and no phone number, but
-  `privacy-security-reviewer` asked on #6 that this be checked rather than
-  assumed — which is the right standard for the first log line in a repository
-  whose whole logging posture starts here.
+- **When the handler is written, its log line is a PRIV-07 question — and a
+  SEC-03 one, which is worse.** A connection-pool error carries no location and
+  no phone number, so PRIV-07 is the easy half. The half that bites:
+  `privacy-security-reviewer` pointed out on #6 that **`pg` and
+  `graphile-worker` error objects can include the connection string**, and the
+  connection string carries the database password. `console.error(err)` on a
+  pool error is therefore a plausible way to print production credentials into
+  a log that is not treated as a secret. Whoever writes that handler logs a
+  chosen message, never the error object, and a test should assert the
+  connection string does not appear in what is logged — the same shape as the
+  existing `SEC-03: the internal error does not reach the caller` test.
 - **Consequences:** the failure is loud rather than hidden. The platform
   restarts the process; if it is the worker, the heartbeat stops and
   `/v1/health` reports `degraded` within three minutes, which is the signal the
