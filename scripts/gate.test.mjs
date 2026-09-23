@@ -108,14 +108,22 @@ describe("this repository's own workflows", () => {
 
   test('the reviewers are granted the tools their prompt needs', () => {
     // The action gives a plain-text prompt no tools at all unless claude_args
-    // lists them. Without Write the reviewer cannot produce the verdict file,
-    // and the job fails at "Enforce the verdict" having done the whole review —
-    // the reviewer works, the evidence of it does not survive.
+    // lists them, so the reviewer needs its read tools and the comment tool
+    // that carries findings to a person.
+    //
+    // This test required Write as well, for a reason that no longer holds:
+    // the verdict used to reach CI as review-<agent>.md, so without Write the
+    // review happened and its evidence did not survive. The verdict now comes
+    // back through --json-schema, so there is no file and no reason for the
+    // harness to hold a write tool. Changed because the premise was removed,
+    // not to make a failure go away — and the constraint got stricter, since
+    // `ai-review.test.mjs` now asserts Write is *absent* rather than this one
+    // merely tolerating it.
     const text = readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8');
     const allowed = /--allowedTools\s+"(?<tools>[^"]+)"/.exec(text)?.groups?.tools ?? '';
 
     expect(allowed.split(',').map((s) => s.trim())).toEqual(
-      expect.arrayContaining(['Read', 'Grep', 'Glob', 'Bash', 'Write']),
+      expect.arrayContaining(['Read', 'Grep', 'Glob', 'Bash', 'mcp__github__add_issue_comment']),
     );
   });
 

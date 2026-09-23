@@ -1004,3 +1004,61 @@ one. On a branch off `main`:
 **What this costs today:** #8 cannot merge while a required check fails this
 way, and re-pushing is the only lever a branch has. That is not a fix, it is a
 retry, and it is worth naming as one.
+
+
+### The verdict stopped being a file (D-073)
+
+The gate that had blocked every pull request is fixed at the mechanism rather
+than the wording. `ai-review.yml` now asks for a `--json-schema` result whose
+`verdict` field is constrained to `PASS` or `BLOCK`, and reads it from
+`structured_output`. Nothing writes `review-<agent>.md`; the harness no longer
+holds `Write`.
+
+**Both failure modes have the same root, and it is a design one.** The prompt
+asked for two artefacts in one clause — save the file *and* post a comment —
+and the gate read only the file. The agent produced the artefact a person
+would read and dropped the one only a script would. Meanwhile the verdict's
+*value* was free text, so a reviewer could invent a third one. A schema closes
+both: there is nothing to forget, and nothing to invent.
+
+**Verified before writing it, which is the point.** `--json-schema` is not
+assumed to exist — it is exercised by the action's own
+`.github/workflows/test-structured-output.yml`, and `structured_output` is set
+in `src/entrypoints/run.ts:312`. Read from a clone of the action, not from
+memory.
+
+**What cannot be verified before merging, stated plainly.**
+`claude-code-action` refuses to run when the workflow differs from the default
+branch, so the pull request that carries this change has no reviewer output
+and goes red for exactly that reason. The new error says so in its own text,
+naming the "Skipping action due to workflow validation" line, so the next
+person to meet it is not left guessing. **Whether the fix works is answered by
+the next pull request, not this one.** That is inherent to the deadlock, not a
+shortcut taken here.
+
+**The tests moved with the mechanism, and got stricter.** The old test checked
+only that the enforced pattern mentioned `VERDICT`, which every form that
+actually broke this gate would have passed. It now reads the enum out of the
+workflow, asserts the briefs offer exactly those two words, and asserts the
+pattern *rejects* the real offenders: `APPROVE WITH COMMENTS`,
+`PASS WITH COMMENTS`, wrong case, and the empty string `jq` yields for a
+missing field. Two new tests cover the file and tool grant. Both were
+falsified deliberately before being trusted — putting `Write` back, and
+widening the enum, each fail the expected test and nothing else.
+
+`gate.test.mjs` required `Write` in `--allowedTools` for a reason this change
+removes ("without Write the reviewer cannot produce the verdict file"). It was
+changed, not deleted, with the reason written beside it — and the net
+constraint is tighter, because `Write` being *absent* is now asserted where
+tolerating it used to be.
+
+**Left alone deliberately:** the five briefs still end with `VERDICT: PASS` or
+`VERDICT: BLOCK`. That line is how the invoking agent knows which verdict to
+return, and changing agent definitions has no effect from a branch anyway —
+the reviewer harness reverts them before the reviewer reads them.
+
+**Noticed, not fixed, not this PR's:** `docs/plan/decisions.md` has two
+different decisions both numbered **D-060** (lines 601 and 635, "Gate scripts
+v1" and "CI configuration v1"). Decisions are binding and cited by ID, so an
+ambiguous one is worth the owner's attention; renumbering a binding decision
+is not Claude's call.

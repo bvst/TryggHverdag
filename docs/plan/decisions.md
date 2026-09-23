@@ -1269,3 +1269,58 @@ through is a decision, not a commit. Options are on #6.
   on would be the stronger setting and the owner did not ask for it; changing a
   merge rule beyond what was asked is the thing D-029 exists to prevent. Raised
   as a question instead.
+
+## D-073 — The verdict comes back as structured output, not as a file
+
+**Decision.** `ai-review.yml` asks `claude-code-action` for a
+`--json-schema` result with a `verdict` field constrained to `PASS` or
+`BLOCK`, and the enforcement step reads `structured_output`. No reviewer
+writes `review-<agent>.md`, and the harness no longer holds `Write` at all.
+
+**The defect this replaces.** The workflow asked for two artefacts in one
+clause with no ordering — save the file *and* post a comment. The agent
+produced the artefact a person would read and dropped the one only a script
+would, and the gate read only the dropped one. On PR #8's commit `3f1f04d`
+all three reviewers that ran failed this way, two of them blocking, each
+having posted a complete review comment first — `privacy-security-reviewer`
+had even run the tests and reported 32/32. A review that genuinely happened,
+and said so in public, was recorded as not having happened.
+
+**Why not a better-worded instruction.** That lever was pulled and did not
+hold. D-069 rewrote the five briefs to put the verdict last and name the
+rejected forms; `code-reviewer` then returned `VERDICT: APPROVE WITH
+COMMENTS` on a branch that changed nothing under `.claude/`, with
+`VERDICT: PASS WITH COMMENTS` named as forbidden in the very file it read.
+An enum does not leave the choice open; prose does.
+
+**What was verified before merging, and what could not be.** The mechanism
+is real, not assumed: `--json-schema` is exercised by the action's own
+`test-structured-output.yml`, and `structured_output` is set in
+`src/entrypoints/run.ts`. The end-to-end behaviour **could not** be tested
+first — `claude-code-action` refuses to run when the workflow differs from
+the default branch, so the pull request carrying this change necessarily has
+no reviewer output and goes red for that reason. It says so in its own error
+text. Whether this works is answered by the *next* pull request, not this
+one.
+
+**Kept deliberately.** Two verdicts and no third. `APPROVE WITH COMMENTS` is
+a request for a middle verdict, and refusing the middle verdict is the
+design: qualifications belong in the findings, where they are read, not in a
+value a script must interpret. Widening the accepted set would have made
+this failure disappear by conceding the point it exists to make.
+
+**Also fixed, because the log had to send its reader elsewhere.** A rejected
+verdict is now echoed in the error. Previously the log named only what it
+expected, so finding out what actually happened meant reading the pull
+request comment — the one artefact the gate ignores. A repository whose
+non-negotiables say *read the job log before theorising* has to make the log
+enough on its own.
+
+**Tests.** `ai-review.test.mjs` now reads the enum out of the workflow and
+holds the briefs to it, asserts the pattern rejects the forms that actually
+broke this gate (`APPROVE WITH COMMENTS`, `PASS WITH COMMENTS`, wrong case,
+empty), and asserts no reviewer is asked for a file and none can write one.
+`gate.test.mjs`'s tool-grant test required `Write` for a premise this change
+removes; it now requires the read and comment tools, and the stricter
+assertion — that `Write` is absent — lives beside the reasoning in
+`ai-review.test.mjs`.
