@@ -939,6 +939,21 @@ end — a fix nobody could have run, defended with reasoning rather than evidenc
 Both changes are reverted. The reviewers are read-only again and are told
 nothing about the file.
 
+### The guard against a repeat already exists
+`test-auditor` asked for a permanent guard so that a pull request cannot change
+its reviewers' instructions unnoticed. There is one, and it was in place the
+whole time: **CODEOWNERS already assigns `/.claude/` and
+`/docs/plan/decisions.md` to the owner**, so both the agent definitions and the
+decision log used to justify changing them need the owner's approval before
+anything merges. Recorded here so nobody builds a second one.
+
+That makes three independent layers that stopped this, only one of which was
+designed for it: the blocking review caught it, the reviewer harness reverts
+those files so the change could not have taken effect on its own pull request
+anyway, and CODEOWNERS would have held the merge for a human. The layer that
+did *not* stop it was the author's own judgement, which is the argument for
+having the other three.
+
 ### Still open, and it is the owner's
 Failure (2) is unfixed and blocks merges, because the required `ai-review`
 checks are among the twelve. The fix belongs in `ai-review.yml` on `main`: make
