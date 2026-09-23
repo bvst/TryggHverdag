@@ -816,6 +816,35 @@ protection that makes the breach above impossible to sneak past.
 **So no pull request can fix this gate from inside the gate**, and the way
 through is a decision, not a commit. Options are on #6.
 
+- **Two gaps in the guard, both found by `test-auditor` and both still open.**
+  `scripts/ai-review.test.mjs` holds the briefs to the verdict pattern and
+  proves the reviewers are not told to write files and hold no `Write` tool. It
+  does **not** cover either of these:
+  1. A pull request *relaxing* what a blocking reviewer must check. The test
+     catches a reviewer being told to write a file; it says nothing about one
+     being told to check less.
+  2. `.claude/rules/**` and root `CLAUDE.md`. Both change what a reviewer
+     enforces as surely as a brief does — `server-domain.md` states the AR-03
+     rule that `implementer` and `test-author` work to — and neither is pinned
+     by any test.
+- **The protection is indistinguishable from the attack, and that is its own
+  problem.** On one branch, hours apart, two `test-auditor` instances met the
+  same reverted working tree: one called it "unrelated harness/session state,
+  not part of PR #6" and audited the committed files; the other reported it as
+  out-of-band tampering and told the owner to treat it as a security incident.
+  `safety-reviewer` met it too and drew the first conclusion. All three behaved
+  correctly — escalating what you cannot verify is the right instinct — but a
+  guard that looks exactly like the thing it guards against will keep producing
+  false alarms, and a reader who learns to wave them through will wave the real
+  one through too. Whatever fixes `ai-review.yml` should make the reversion
+  *legible*: say in the reviewer's own prompt that these paths were reset and
+  why, so the difference between "protected" and "attacked" is readable rather
+  than inferred.
+- **The auto-revert's real scope is not known.** D-069 records it as covering
+  `.claude/agents/*.md`. A reviewer reported `.claude/rules/server-domain.md`
+  and `CLAUDE.md` reverted as well, which is wider. Worth establishing by
+  observation rather than inference before anything is built on either claim.
+
 ## D-070 — `test-auditor` reads the slow gates instead of re-running them
 - **Date:** 2026-09-23 · **Status:** Accepted (owner) · **Section:** 6
 - **Decision.** `test-auditor`'s brief no longer orders it to re-run
