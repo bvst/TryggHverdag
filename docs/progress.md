@@ -667,23 +667,30 @@ reasons that took three attempts to tell apart:
   failed anyway, because **the gate never reads the comment**. **Not fixed, and
   not fixable from a branch.**
 
-**Why the second one cannot be fixed here.** The reviewers are read-only:
-`tools: Read, Grep, Glob, Bash`, no `Write`, because a reviewer that can edit
-the code it reviews is not an independent reviewer. The file is written by the
-agent that *invokes* them, instructed by the prompt inside `ai-review.yml` — and
-editing that file on a branch re-triggers D-063 and stops the reviewers running
-at all. So it belongs on `main`: make the writing step explicit and checkable,
-or have the enforcement read the comment, which is the artefact that reliably
-exists.
+**Why the second one cannot be fixed here.** The file is written by the agent
+that *invokes* the reviewers, instructed by the prompt inside `ai-review.yml` —
+and editing that file on a branch re-triggers D-063 and stops the reviewers
+running at all. So it belongs on `main`: make the writing step explicit and
+checkable, or have the enforcement read the comment, which is the artefact that
+reliably exists.
+
+The reviewers are the wrong place to fix it, and that is a narrower claim than
+the one first written here. Their frontmatter grants `Read, Grep, Glob, Bash`
+and no `Write`, so "write it with the Write tool" was unfollowable as written —
+but `Bash` can write a file, so a reviewer told to shell out would manage it.
+The objection is not that it is impossible. It is that a reviewer writing into
+the tree it is reviewing turns "read-only review" into a formality, and the
+failure is in the invoking agent either way.
 
 **Three wrong diagnoses, and they rhyme.** First "an unreliable agent" — read
 off the reviewer's *comment*, the one artefact the gate ignores; right by luck
 for one reviewer, flatly wrong for another whose comment was flawless while its
 check was red. Then "the instruction contradicts itself" — true, and only half
-the story. Then "tell the reviewers to write the file" — **an instruction they
-cannot follow**, which was added and removed again, because an instruction that
-cannot be obeyed is worse than none: it moves the blame without moving the
-behaviour, and reads to the next person as a fix that was tried and failed. The
+the story. Then "tell the reviewers to write the file" — added and
+removed again, first on the grounds that they could not, which was itself an
+overclaim: they have no `Write` tool, but `Bash` writes files perfectly well.
+The real objection is that it is the wrong actor, and an instruction aimed at
+the wrong actor moves the blame without moving the behaviour. The
 job log names which of the two errors fired. Nothing else does, and it was not
 read until the third attempt.
 

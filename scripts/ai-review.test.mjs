@@ -68,15 +68,18 @@ describe('the verdict line the reviewers must produce', () => {
   });
 
   test.each(AGENTS.map((a) => a.name))('%s is not told to write the verdict file', (name) => {
-    // It cannot. Every reviewer's frontmatter grants `Read, Grep, Glob, Bash`
-    // and no Write, because a reviewer that can edit the code it reviews is not
-    // an independent reviewer (D-043 calls them read-only). The file is written
-    // by the agent that invokes them, which is instructed by the workflow.
+    // Not because it is impossible — `Bash` can write a file, and a reviewer
+    // that shelled out would succeed. Because it is the wrong place. Every
+    // reviewer's frontmatter grants `Read, Grep, Glob, Bash` and no `Write`,
+    // since a reviewer that edits the code it reviews is not an independent
+    // one (D-043 calls them read-only), and routing around that with a shell
+    // redirect makes the property a formality. The file belongs to the agent
+    // that invokes them, which has `Write` and is told to use it.
     //
-    // An earlier version of this file told the reviewers to write it, after
-    // `test-auditor` failed with "produced no verdict file". That instruction
-    // could not be followed, and an instruction that cannot be followed is
-    // worse than none: it moves the blame without moving the behaviour.
+    // An earlier version of this file told the reviewers to write it with the
+    // Write tool, after `test-auditor` failed with "produced no verdict file".
+    // They have no Write tool, so that instruction was unfollowable as written
+    // — and the failure it was aimed at happens in the invoking agent anyway.
     const agent = AGENTS.find((a) => a.name === name);
 
     expect(agent?.text).not.toMatch(/write it with the Write tool/i);

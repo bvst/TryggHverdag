@@ -902,15 +902,19 @@ new decision that supersedes it (see `00-working-agreement.md`).
   following it literally could not pass; the ones that passed read it
   charitably. `scripts/ai-review.test.mjs` reads the pattern out of the workflow
   and holds all five definitions to it.
-- **(2) cannot be fixed from a branch, and the reason matters.** The reviewers
-  are read-only: their frontmatter grants `Read, Grep, Glob, Bash` and no
-  `Write`, because a reviewer that can edit the code it reviews is not an
-  independent reviewer. The file is written by the agent that *invokes* them,
-  instructed by the prompt in `ai-review.yml` — and editing that file on a
-  branch re-triggers D-063, so the reviewers stop running entirely. So the fix
-  belongs on `main`: make the writing step explicit and checkable, or have the
-  enforcement read the posted comment, which is the artefact that does reliably
-  exist.
+- **(2) cannot be fixed from a branch, and the reason matters.** The file is
+  written by the agent that *invokes* the reviewers, instructed by the prompt in
+  `ai-review.yml` — and editing that file on a branch re-triggers D-063, so the
+  reviewers stop running entirely. The fix belongs on `main`: make the writing
+  step explicit and checkable, or have the enforcement read the posted comment,
+  which is the artefact that does reliably exist.
+- **The reviewers are not the place to fix it**, which is a narrower claim than
+  the one first made here. Their frontmatter grants `Read, Grep, Glob, Bash` and
+  no `Write`, so "write it with the Write tool" was unfollowable as written —
+  but `Bash` can write a file, so a reviewer told to shell out would succeed.
+  The objection is not that it is impossible; it is that a reviewer writing into
+  the tree it is reviewing makes "read-only review" a formality, and the failure
+  is in the invoking agent regardless.
 - **Three wrong diagnoses before this one**, each from evidence that felt
   sufficient:
   1. "an unreliable agent" — from the *comment's* last line, which is the one
