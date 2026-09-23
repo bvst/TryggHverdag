@@ -153,6 +153,20 @@ describe('reviewRuleset', () => {
     );
   });
 
+  test('a ruleset that omits the approval count entirely is read as zero', () => {
+    // GitHub omits the key rather than sending 0 in some ruleset shapes, and a
+    // missing requirement is not a satisfied one. Without this the `?? 0`
+    // fallback is untested, which is how the branch coverage on this file went
+    // down and the traceability gate caught it.
+    const branchRules = rulesFor(required);
+    const pullRequest = branchRules.find((rule) => rule.type === 'pull_request');
+    delete pullRequest.parameters.required_approving_review_count;
+
+    expect(reviewRuleset({ branchRules, required })[0]?.what).toContain(
+      'no approval is actually required',
+    );
+  });
+
   test('without the status-check rule, red checks do not stop a merge', () => {
     const branchRules = rulesFor(required).filter((rule) => rule.type !== 'required_status_checks');
 
