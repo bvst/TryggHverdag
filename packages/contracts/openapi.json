@@ -34,6 +34,7 @@
                     },
                     "checkedAt": {
                       "type": "string",
+                      "format": "date-time",
                       "description": "When the server answered, from the database clock (REL-01), as RFC 3339."
                     },
                     "worker": {
@@ -42,7 +43,8 @@
                         "lastBeatAt": {
                           "anyOf": [
                             {
-                              "type": "string"
+                              "type": "string",
+                              "format": "date-time"
                             },
                             {
                               "type": "null"

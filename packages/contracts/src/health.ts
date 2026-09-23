@@ -40,13 +40,13 @@ export const healthResponseSchema = z
         'ok when the worker has checked in recently; degraded when it has not, ' +
           'which means nothing is watching the journeys.',
       ),
-    checkedAt: z
-      .string()
+    checkedAt: z.iso
+      .datetime()
       .describe('When the server answered, from the database clock (REL-01), as RFC 3339.'),
     worker: z
       .object({
-        lastBeatAt: z
-          .string()
+        lastBeatAt: z.iso
+          .datetime()
           .nullable()
           .describe('The worker’s last check-in, or null if it has never checked in.'),
         silentForMs: z

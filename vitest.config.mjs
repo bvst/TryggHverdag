@@ -1,18 +1,10 @@
 import { defineConfig } from 'vitest/config';
+import { TEST_FILES } from './vitest.shared.mjs';
 
 export default defineConfig({
   test: {
     // Hook tests run the hooks as real processes, so they need room to breathe.
-    include: [
-      '.claude/hooks/**/*.test.mjs',
-      'scripts/**/*.test.mjs',
-      // Not every package keeps its code under src/: packages/config holds the
-      // eslint and tsconfig presets at its root, and their tests were invisible
-      // to this runner until this line existed.
-      'packages/**/*.test.mjs',
-      'packages/**/src/**/*.test.ts',
-      'apps/**/src/**/*.test.ts',
-    ],
+    include: TEST_FILES,
     // L3 needs Docker and L6 is its own gate, so neither belongs in the run
     // that must stay fast and work on any machine. Without this they would be
     // swept up by the patterns above and a laptop with no Docker would see a

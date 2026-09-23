@@ -7,6 +7,12 @@ Two processes from one codebase (AR-01):
 | `src/api.ts` | The HTTP API. Hono, with oRPC serving the contract from `packages/contracts` |
 | `src/worker.ts` | Graphile Worker. Owns the watchdog, the outbox sender, retention and the canary |
 
+**Neither is a runnable process yet.** `createApi` builds the app but nothing
+listens on a port, and `startWorker` has to be handed a connection string.
+Binding them to a port and an environment is INF-07's job, with the staging
+deployment. Today both exist to be constructed and tested, which is why the
+system tests can drive the whole API without a server running at all.
+
 Inside:
 
 | Folder | Rule |

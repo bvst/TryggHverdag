@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { TEST_FILES } from './vitest.shared.mjs';
 
 /**
  * The run the coverage ratchet measures (RG-04).
@@ -19,19 +20,7 @@ import { defineConfig } from 'vitest/config';
  */
 export default defineConfig({
   test: {
-    include: [
-      '.claude/hooks/**/*.test.mjs',
-      'scripts/**/*.test.mjs',
-      // Not every package keeps its code under src/: packages/config holds the
-      // eslint and tsconfig presets at its root, and their tests were invisible
-      // to this runner until this line existed.
-      'packages/**/*.test.mjs',
-      'packages/**/src/**/*.test.ts',
-      // Matches the system tests too: only *.integration.test.ts is excluded
-      // below. Listing them separately as well looked like it was doing
-      // something and was not.
-      'apps/**/src/**/*.test.ts',
-    ],
+    include: TEST_FILES,
     exclude: ['**/node_modules/**', '**/*.integration.test.ts'],
     environment: 'node',
     testTimeout: 60_000,
