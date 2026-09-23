@@ -58,13 +58,20 @@ list that is actually true. Today:
 
 `pnpm install` · `pnpm run gate:file <path>` · `pnpm run gate:quick` ·
 `pnpm run gate:full` · `pnpm run gate:static` · `pnpm run test:unit` ·
+`pnpm run test:integration` · `pnpm run test:system` · `pnpm run test:coverage` ·
 `pnpm run test:hooks` · `pnpm run req:coverage` · `pnpm run tests:changes` ·
-`pnpm run coverage:ratchet` · `pnpm run api:diff` · `pnpm run mutation` ·
-`pnpm run licenses:check` · `pnpm run gate:integrity` · `pnpm run doctor`
+`pnpm run coverage:ratchet` · `pnpm run api:diff` · `pnpm run api:spec` ·
+`pnpm run mutation` · `pnpm run licenses:check` · `pnpm run gate:integrity` ·
+`pnpm run doctor`
 
 `gate:full` prints the steps it cannot run yet and which task brings them, so
 "passed" never quietly means "did not check". Still to come: `dev`,
-`test:integration`, `test:system` (INF-05), `e2e:android`, `e2e:ios` (INF-06).
+`e2e:android`, `e2e:ios` (INF-06).
+
+`test:integration` (L3) needs a Docker daemon, so it runs in CI and on the Mac
+but not in a cloud session; `gate:full` says so rather than skipping quietly.
+`test:coverage` is the only run the coverage ratchet measures — unit and system
+together, because the API is reached at L6 and nowhere else.
 
 `gate:integrity` (CI-01) checks the merge rules through GitHub's API. It is red
 until the owner finishes `docs/plan/merge-rules.md`, deliberately (D-029, D-060).

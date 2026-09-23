@@ -741,3 +741,153 @@ new decision that supersedes it (see `00-working-agreement.md`).
   the action authenticates as the **Claude GitHub App** — which therefore has to
   be installed on the repository. That step was missing from `merge-rules.md`
   entirely; without it the reviews cannot post their findings.
+
+## D-069 — The reviewers' verdict line, and a boundary I should not have crossed
+- **Date:** 2026-09-23 · **Status:** Partly accepted (delegated, D-031); the
+  rest **needs the owner** · **Section:** 8
+- **Context:** the `ai-review` gate reads one file per reviewer,
+  `review-<agent>.md`, and fails if its last line is not exactly `VERDICT: PASS`
+  or `VERDICT: BLOCK`. Blocking reviewers failed on reviews that had found
+  nothing wrong, in two distinct ways, each with its own error:
+  1. **"did not end with a verdict line"** — the file exists, its last line is
+     something else. `safety-reviewer` wrote `**Verdict: PASS**`; the pattern is
+     case-sensitive. `code-reviewer` wrote `VERDICT: APPROVE WITH COMMENTS`,
+     then `**APPROVE**`, then `VERDICT: APPROVE`.
+  2. **"produced no verdict file"** — no file at all. The `claude-code-action`
+     step reports success, three and a half to five minutes, and the pull
+     request comment appears; nothing is written.
+
+### Accepted, and delegated under D-031: the wording
+All five definitions said *"End with exactly one line: `VERDICT: PASS` or
+`VERDICT: BLOCK`, followed by your findings"* — which puts the findings **after**
+the verdict, while the gate reads the **last** line. A reviewer following it
+literally could not pass. They now put findings first and state that the last
+line is one of two exact strings. `scripts/ai-review.test.mjs` reads the pattern
+out of the workflow and holds the definitions to it. This is a wording fix to
+Claude's own tooling and is within D-031.
+
+### Not accepted, and not Claude's to accept: the trust boundary
+Failure (2) was answered by instructing the reviewers to write
+`review-<agent>.md` themselves. `test-auditor` blocked it and was right on both
+counts.
+
+**It was a governance breach.** A pull request that edits the instructions of
+the agent reviewing it, so that the agent writes files, is indistinguishable in
+form from prompt injection — whatever the author intended, and intent is exactly
+what a reviewer cannot verify. The read-only reviewer boundary is **D-043, which
+the owner accepted**. D-031 delegates library and tool choices to Claude; it
+does not delegate that. This decision originally carried the status "Accepted
+(delegated, D-031)", which was a self-grant of authority over an owner's
+decision. That is the part worth remembering.
+
+**It also could not have worked.** Each reviewer's frontmatter runs
+`guard-bash.mjs --agent <name> --readonly` on `Bash`, and that hook blocks every
+output redirection. The instruction was shipped without being exercised end to
+end — a fix nobody could have run, defended with reasoning rather than evidence.
+
+Both changes are reverted. The reviewers are read-only again and are told
+nothing about the file.
+
+### The guard against a repeat already exists
+`test-auditor` asked for a permanent guard so that a pull request cannot change
+its reviewers' instructions unnoticed. There is one, and it was in place the
+whole time: **CODEOWNERS already assigns `/.claude/` and
+`/docs/plan/decisions.md` to the owner**, so both the agent definitions and the
+decision log used to justify changing them need the owner's approval before
+anything merges. Recorded here so nobody builds a second one.
+
+That makes three independent layers that stopped this, only one of which was
+designed for it: the blocking review caught it, the reviewer harness reverts
+those files so the change could not have taken effect on its own pull request
+anyway, and CODEOWNERS would have held the merge for a human. The layer that
+did *not* stop it was the author's own judgement, which is the argument for
+having the other three.
+
+### Still open, and it is the owner's
+Failure (2) is unfixed and blocks merges, because the required `ai-review`
+checks are among the twelve. The fix belongs in `ai-review.yml` on `main`: make
+the file-writing step explicit and checkable, or have the enforcement read the
+pull request comment, which is the artefact that reliably exists. It cannot be
+done from a branch — editing that workflow stops `claude-code-action` running at
+all (D-063), and editing the agent definitions has no effect because the
+reviewer harness reverts them before the reviewer reads them, which is the same
+protection that makes the breach above impossible to sneak past.
+
+**So no pull request can fix this gate from inside the gate**, and the way
+through is a decision, not a commit. Options are on #6.
+
+## D-070 — `test-auditor` reads the slow gates instead of re-running them
+- **Date:** 2026-09-23 · **Status:** Accepted (owner) · **Section:** 6
+- **Decision.** `test-auditor`'s brief no longer orders it to re-run
+  `pnpm mutation --incremental` or the coverage gates. `req:coverage` stays (it
+  takes seconds, and its output is what the RG-01 judgement is made on); the
+  ratchet becomes reading the `coverage-baseline.json` diff, because the
+  arithmetic is the `traceability` job's to enforce while the *reason* for a
+  lowered number is the auditor's; mutation is read from its check, not run. It
+  may still re-run a gate it genuinely doubts, and must then say in its findings
+  why — the line is between doubting a result and wishing to confirm one.
+- **Why.** Each of those is already a **required check on the same commit**:
+  `mutation` (RG-05), `traceability` (RG-01, RG-03, RG-04). If one is red the
+  pull request cannot merge whatever the auditor concludes, so re-running them
+  cannot change an outcome — it only spends the review. A full pass costs about
+  six and a half minutes of mutation plus four test suites. What the auditor
+  uniquely gives is judgement those gates cannot make: whether the tests mean
+  anything, whether an existing test was weakened for a bad reason, whether a
+  requirement ID is a real claim or a word in a comment. That is reading work.
+- **This weakens nothing.** What it stops re-running are checks that must be
+  green on this commit for the pull request to merge at all. Nothing becomes
+  unverified; it stops being verified twice.
+- **What this is NOT.** It is **not** a fix for `ai-review (test-auditor)`
+  failing with `produced no verdict file`, and must not be recorded as one. That
+  was the hypothesis this decision was first written around, and the job log
+  falsifies it. Read the evidence before building on it:
+  - On `32bf28c` (run 35835508846, attempt 2, job 107106395461) the
+    `claude-code-action` step ran 2 min 11 s and **succeeded**. Its own result
+    record says `subtype: success`, `is_error: false`, `duration_ms: 95476`,
+    `num_turns: 7`, `permission_denials_count: 0`, on `claude-sonnet-5` with a
+    1,000,000-token context. It then wrote no file, and `No buffered inline
+    comments` — no comment either. Only the separate `Enforce the verdict` step
+    failed.
+  - Seven turns in ninety-five seconds is an agent that stopped believing it was
+    finished. It did not run out of room, hit a denial, or collapse under the
+    slow gates — **it never attempted them**. A real mutation run alone would
+    have taken four times the whole step.
+  - And the brief's work plainly *can* complete: on an earlier commit
+    `test-auditor` posted a full review reporting `test:unit` 343/343,
+    `test:integration` 6/6 against a real PostgreSQL container, `test:system`
+    10/10, the ratchet, `tests:changes`, and **mutation at 97.37 %** — then
+    ended `VERDICT: PASS`. That run did all the slow work and produced a
+    complete review; its check still failed, because the gate reads the file and
+    never the comment (D-069).
+  - So the two runs fail for opposite reasons, and neither is fixed here. The
+    verdict file is written by the agent that *invokes* the reviewer, per the
+    prompt inside `ai-review.yml` — which is on `main`, and D-063 stops a branch
+    from testing a change to it. That remains the open defect.
+- **Three hypotheses about that defect have now been wrong**, each stated with
+  more confidence than the evidence carried: "an unreliable agent" (read off the
+  reviewer's comment, the one artefact the gate ignores), "it exhausted its
+  budget" (it ran the shortest of the five), and "the redundant slow gates
+  starved it" (it never ran them). The pattern is reasoning from plausibility
+  instead of reading the job log, which is the only artefact that says which
+  branch of the enforcement fired. Read it first.
+- **Why this is the owner's decision and not mine.** It changes what a blocking
+  reviewer does, inside the pull request that reviewer is judging — the same
+  shape `test-auditor` blocked earlier on this branch, and the reason D-069
+  records that D-031 delegates library and tool choices, not the reviewer trust
+  boundary. The owner chose it explicitly when asked.
+- **It cannot take effect on PR #6.** The reviewer harness reverts
+  `.claude/agents/*.md` to their pre-pull-request contents before a reviewer
+  reads them, so no pull request can change the brief of the agent reviewing it.
+- **Why this lives in its own pull request.** `test-auditor` blocked #6 for
+  carrying these changes, and it was right: a pull request that edits the briefs
+  of the blocking reviewers judging it is indistinguishable in form from prompt
+  injection, and a decision record inside the diff asserting the owner approved
+  it is not evidence of approval from where the reviewer stands. The owner chose
+  to split rather than override. It also named a real gap — the guard test
+  covers reviewers being told to write files, but not a pull request *relaxing*
+  what a blocking reviewer must check.
+- **This pull request merges after #6, not before.** `CLAUDE.md`'s change here
+  documents `test:integration`, `test:system`, `test:coverage` and `api:spec`,
+  which #6 creates; `.claude/rules/server-domain.md` cites D-067 and
+  `packages/config/eslint/index.test.mjs`, also from #6. Landing this first
+  would document scripts and a lint rule that do not exist yet.
