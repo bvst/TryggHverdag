@@ -789,6 +789,24 @@ That argument stands on its own and needs no theory of the failure. **It is not
 a fix for `produced no verdict file`**, and D-070 says so in those words, so the
 next session does not inherit a solved-looking problem that is still open.
 
+**It affects every reviewer, and it is not about their briefs.** By the end of
+this task all four reviewers that run had failed at least once with
+`produced no verdict file`, each while posting a good review comment:
+`test-auditor` and `safety-reviewer` on `6e392e5`, `code-reviewer` on
+`73208ef`, `privacy-security-reviewer` earlier. Their briefs have nothing in
+common — `safety-reviewer`'s names no gates to run at all — so no theory about
+what a reviewer was *told to do* survives. `code-reviewer` is the clearest case:
+it has now hit **both** branches of the enforcement at different times, the
+wording one (`VERDICT: APPROVE WITH COMMENTS`, which the pattern rejects) and
+this one, which fires before any wording is read.
+
+Which of them can block a merge is a separate question, and worth keeping
+straight: `main-ruleset.json` requires only the three blocking reviewers —
+`safety-reviewer`, `privacy-security-reviewer`, `test-auditor`.
+`ai-review (code-reviewer)` and `ai-review (a11y-i18n-reviewer)` are advisory
+(D-043) and required by nothing, so their red is noise on the merge decision,
+however loud it looks in the checks list.
+
 **What this means for the next session.** The verdict file is written by the
 agent that *invokes* the reviewer, from the prompt inside `ai-review.yml` — on
 `main`, where D-063 stops a branch from testing a change to it. That is still
