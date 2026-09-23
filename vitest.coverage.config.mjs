@@ -27,8 +27,10 @@ export default defineConfig({
       // to this runner until this line existed.
       'packages/**/*.test.mjs',
       'packages/**/src/**/*.test.ts',
+      // Matches the system tests too: only *.integration.test.ts is excluded
+      // below. Listing them separately as well looked like it was doing
+      // something and was not.
       'apps/**/src/**/*.test.ts',
-      'apps/**/src/**/*.system.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/*.integration.test.ts'],
     environment: 'node',

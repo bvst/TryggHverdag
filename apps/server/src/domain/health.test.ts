@@ -1,6 +1,15 @@
 // The first domain rule, and the shape every later one follows: given numbers,
 // return a decision. No database, no network, no clock — so these run in
 // milliseconds and time is something the test states rather than waits for.
+//
+// No requirement ID in these names, deliberately, and not an oversight —
+// code-reviewer asked for one and the answer is no. The rule these tests cover
+// is the server side of REL-08: making "the watchdog has stopped" visible to
+// something that watches. The other side — something that polls this every
+// minute and wakes the owner within five — is INF-08 and does not exist yet.
+// RG-01 counts a requirement as covered the moment a test names it, so naming
+// REL-08 here would turn the report green for a requirement nothing satisfies.
+// An ID is a claim about what is true, not a label for what a file is near.
 import { describe, expect, test } from 'vitest';
 import { assessWorkerHealth } from './health.ts';
 
