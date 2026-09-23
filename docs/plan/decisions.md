@@ -893,6 +893,18 @@ new decision that supersedes it (see `00-working-agreement.md`).
   this before the worker carries journey state, not merely if churn is observed.
   Deferred is not the same as decided against.
 
+- **A second, adjacent gap in the same pool's lifecycle, found later on #6.**
+  `startWorker` creates the pool and returns graphile-worker's `Runner`, and
+  nothing ever closes it. When `pgPool` is passed in, the caller owns it —
+  graphile-worker only ends pools it created itself — so stopping the runner
+  leaves the connections open. Harmless today, because nothing binds a real
+  process yet and only tests call it; from **INF-07**, when a process is
+  actually wired and restarts, it leaks against the same five-connection DEV
+  budget `db.test.ts` exists to protect. Whoever does INF-07 closes the pool on
+  shutdown and proves it. Written here rather than fixed on #6 because there is
+  no shutdown path to hook into until that task creates one, and inventing one
+  early is the speculative work `safety-reviewer` explicitly did not ask for.
+
 ## D-069 — The reviewers' verdict line, and a boundary I should not have crossed
 - **Date:** 2026-09-23 · **Status:** Partly accepted (delegated, D-031); the
   rest **needs the owner** · **Section:** 8
