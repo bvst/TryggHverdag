@@ -163,6 +163,58 @@ export function findUnboundedJobs(text) {
   return unbounded;
 }
 
+/**
+ * Ecosystems in `.github/dependabot.yml` whose non-major updates are not grouped.
+ *
+ * Not a workflow file, but the same concern as the rest of this module: what
+ * `.github` claims about itself, held to line by line rather than through a
+ * YAML parser this repository has chosen not to depend on.
+ *
+ * An ecosystem is covered when one group takes `'*'` and both `minor` and
+ * `patch`. A narrower group is the shape this replaced — `dev-tooling` named
+ * eslint, vitest and friends, and left every runtime dependency arriving on its
+ * own, which is most of the churn. Majors are deliberately left ungrouped: a
+ * major is where behaviour may change, and is the one worth a reader's whole
+ * attention.
+ *
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function findUngroupedEcosystems(text) {
+  const ungrouped = [];
+  let current = null;
+  const close = () => {
+    if (current !== null && !(current.all && current.minor && current.patch)) {
+      ungrouped.push(current.name);
+    }
+    current = null;
+  };
+
+  for (const line of text.split('\n')) {
+    if (isComment(line)) {
+      continue;
+    }
+    const start = /^\s*-\s*package-ecosystem:\s*(?<name>\S+)/.exec(line);
+    if (start?.groups !== undefined) {
+      close();
+      current = { name: start.groups.name, all: false, minor: false, patch: false };
+      continue;
+    }
+    if (current === null) {
+      continue;
+    }
+    if (/^\s*-\s*'\*'\s*$/.test(line)) {
+      current.all = true;
+    } else if (/^\s*-\s*minor\s*$/.test(line)) {
+      current.minor = true;
+    } else if (/^\s*-\s*patch\s*$/.test(line)) {
+      current.patch = true;
+    }
+  }
+  close();
+  return ungrouped;
+}
+
 /** `ai-review (test-auditor)` → `test-auditor`; anything else → null. */
 function reviewerOf(check) {
   return /^ai-review \((?<agent>[\w-]+)\)$/.exec(check)?.groups?.agent ?? null;

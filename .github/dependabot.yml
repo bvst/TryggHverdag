@@ -3,6 +3,19 @@
 # Actions are pinned to commit SHAs (see .github/workflows/ci.yml). Dependabot
 # understands that pinning and raises the SHA together with the version comment,
 # so keeping the pins current does not mean keeping them by hand.
+#
+# Every non-major update arrives in one pull request per ecosystem. Majors stay
+# on their own, because a major is where behaviour is allowed to change and is
+# the one that earns a reader's full attention. The grouping is what makes that
+# attention affordable: a fortnight of patch bumps as twelve pull requests is
+# reviewed by nobody, and the two open right now — actions/checkout 6→7 and
+# actions/setup-node 6→7 — are both majors, so they would still have arrived
+# separately under this policy.
+#
+# The cost, named rather than discovered later: if a grouped update breaks
+# something, the bisect is across every bump in the group. CI runs on the group
+# before it merges, so a break shows up as a red check rather than in
+# production, and a group that goes red can be split by hand.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -12,6 +25,13 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: 'ci(deps)'
+    groups:
+      non-major:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: npm
     directory: /
@@ -22,17 +42,13 @@ updates:
     commit-message:
       prefix: 'chore(deps)'
     groups:
-      # One pull request for the routine ones, so the review effort goes to the
-      # updates that can actually change behaviour.
-      dev-tooling:
+      # This replaced a narrower `dev-tooling` group that named @types/*,
+      # eslint*, prettier, vitest, turbo and dependency-cruiser. That group left
+      # every runtime dependency ungrouped, which is most of the churn and the
+      # part the old comment said it wanted to spare people.
+      non-major:
         patterns:
-          - '@types/*'
-          - 'eslint*'
-          - 'prettier'
-          - 'vitest'
-          - '@vitest/*'
-          - 'turbo'
-          - 'dependency-cruiser'
+          - '*'
         update-types:
           - minor
           - patch

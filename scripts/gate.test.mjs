@@ -7,7 +7,11 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { FULL_STEPS, QUICK_STEPS, availableTools } from './gate.mjs';
 import { packageScripts } from './lib/proc.mjs';
-import { findActionUses, findUnboundedJobs } from './lib/workflow-lint.mjs';
+import {
+  findActionUses,
+  findUnboundedJobs,
+  findUngroupedEcosystems,
+} from './lib/workflow-lint.mjs';
 import {
   OWNER_APPROVAL_PATHS,
   planChecks,
@@ -125,6 +129,13 @@ describe("this repository's own workflows", () => {
     expect(allowed.split(',').map((s) => s.trim())).toEqual(
       expect.arrayContaining(['Read', 'Grep', 'Glob', 'Bash', 'mcp__github__add_issue_comment']),
     );
+  });
+
+  test('every ecosystem groups its non-major updates into one pull request', () => {
+    // Twelve patch bumps as twelve pull requests are reviewed by nobody, and a
+    // dependency stream nobody reads is a security gate in name only (SEC-06).
+    // Majors stay ungrouped on purpose: that is where behaviour may change.
+    expect(findUngroupedEcosystems(readFileSync('.github/dependabot.yml', 'utf8'))).toEqual([]);
   });
 
   test('every workflow job is bounded by a timeout', () => {

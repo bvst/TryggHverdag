@@ -7,6 +7,7 @@ import {
   findJobIds,
   findPnpmScripts,
   findUnboundedJobs,
+  findUngroupedEcosystems,
   reviewWorkflows,
 } from './workflow-lint.mjs';
 
@@ -163,6 +164,89 @@ describe('findUnboundedJobs', () => {
     );
 
     expect(findUnboundedJobs(text)).toEqual([]);
+  });
+});
+
+describe('findUngroupedEcosystems', () => {
+  const grouped = (eco) =>
+    [
+      `  - package-ecosystem: ${eco}`,
+      '    directory: /',
+      '    groups:',
+      '      non-major:',
+      '        patterns:',
+      "          - '*'",
+      '        update-types:',
+      '          - minor',
+      '          - patch',
+    ].join('\n');
+
+  test('an ecosystem that groups every non-major update passes', () => {
+    expect(findUngroupedEcosystems(`updates:\n${grouped('npm')}`)).toEqual([]);
+  });
+
+  test('an ecosystem with no groups at all is named', () => {
+    const text = ['updates:', '  - package-ecosystem: github-actions', '    directory: /'].join(
+      '\n',
+    );
+
+    expect(findUngroupedEcosystems(text)).toEqual(['github-actions']);
+  });
+
+  test('a group that names only some packages does not cover the ecosystem', () => {
+    // The shape this replaced: a `dev-tooling` group listing eslint, vitest and
+    // friends, which left every runtime dependency arriving on its own. That is
+    // most of the churn, and exactly the part the grouping is for.
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    groups:',
+      '      dev-tooling:',
+      '        patterns:',
+      "          - 'eslint*'",
+      '        update-types:',
+      '          - minor',
+      '          - patch',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual(['npm']);
+  });
+
+  test('a group covering everything but only patch leaves minors loose', () => {
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    groups:',
+      '      patches:',
+      '        patterns:',
+      "          - '*'",
+      '        update-types:',
+      '          - patch',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual(['npm']);
+  });
+
+  test('every ecosystem is judged, not just the first', () => {
+    const text = [
+      'updates:',
+      grouped('npm'),
+      '  - package-ecosystem: github-actions',
+      '    directory: /',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual(['github-actions']);
+  });
+
+  test('a commented-out group covers nothing', () => {
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    # groups:',
+      "    #   non-major: { patterns: ['*'], update-types: [minor, patch] }",
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual(['npm']);
   });
 });
 
