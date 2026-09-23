@@ -6,6 +6,9 @@
 /apps/mobile/src/safety-core/     @bvst
 /.github/                         @bvst
 /.claude/                         @bvst
+# Loaded into every agent session, and states the non-negotiables and the
+# binding-decisions rule. As governance-critical as anything under /.claude/.
+/CLAUDE.md                        @bvst
 /scripts/                         @bvst
 /package.json                     @bvst
 /packages/contracts/released/     @bvst

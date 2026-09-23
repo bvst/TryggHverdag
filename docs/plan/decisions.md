@@ -1114,6 +1114,21 @@ through is a decision, not a commit. Options are on #6.
   default branch, so a branch cannot test a change to it. Alongside
   `produced no verdict file`.
 
+- **The CODEOWNERS claim was wrong about one file, and it is the one this
+  change touches.** D-069 and this pull request both argued that the affected
+  paths need the owner's approval regardless, because CODEOWNERS gates them.
+  `privacy-security-reviewer` checked and found root `CLAUDE.md` was **not**
+  listed — while CODEOWNERS' own header says everything unlisted "auto-merges
+  when all required checks pass". So the file that states the non-negotiables,
+  the roles and the rule that decisions here are binding could be changed
+  without the owner ever seeing it: the same class of gap D-069 exists to
+  describe, sitting one line away from the paths it does cover.
+  Closed here, in both places that have to agree: `/CLAUDE.md @bvst` in
+  `.github/CODEOWNERS`, and `/CLAUDE.md` in `OWNER_APPROVAL_PATHS` in
+  `scripts/lib/merge-rules.mjs`, which is the list CI-01 holds that file to.
+  Adding it to only one would have left `gate:integrity` disagreeing with the
+  repository, which is exactly what that check exists to catch.
+
 - **A follow-up worth doing, not done here.** The ~18-line verdict block is now
   byte-identical in all five briefs. `code-reviewer` points out the repository
   already has a shared-include mechanism for exactly this — each agent's
