@@ -83,15 +83,24 @@ not a dependency. Revisit before M5.
      — `node@22` is keg-only, so add its bin directory to `claude-dev`'s
      `PATH`: **(Intel)** `/usr/local/opt/node@22/bin`. Not plain `brew install
      node`: package.json pins `>=22.13.0 <23` and the latest would fail it.
-   - **Xcode** from the App Store, then open it once and let it install its
-     components. **(Intel)** Xcode 26.x is the line to use; Apple's
-     requirements page states only one architecture restriction (visionOS needs
-     Apple silicon), and Tahoe 26.6.2 satisfies Xcode 26.6's minimum. Xcode 27
-     is reported to drop Intel — check before upgrading, and do not let it
-     upgrade automatically. `pnpm run doctor` sets no version floor: it asks
-     only that `xcodebuild -version` answers and that an iPhone simulator
-     exists, so there is nothing to gain from chasing releases, and an upgrade
-     past the Intel line would cost the simulator.
+   - **Xcode** — already installed: **26.0.1 (17A400)**, from the App Store.
+     **(Intel) That is the ceiling on this machine, and it is fine.** The App
+     Store offers no update even though Xcode 26.6 exists and Tahoe 26.6.2
+     meets its stated macOS minimum, so the limit is the architecture, not the
+     OS: Apple began shipping an Apple-silicon-only Xcode build during the 26
+     line, and Xcode 27 drops Intel outright.
+
+     Nothing in this project needs a newer one. `pnpm run doctor` sets no
+     version floor — it asks only that `xcodebuild -version` answers and that
+     an iPhone simulator exists. Xcode is untouched until M1, and iOS builds
+     and the weekly simulator run happen on Expo's machines (Section 8). So do
+     not chase a newer Xcode through `xcodes` or the developer downloads: the
+     realistic outcome is an Apple-silicon build that does not run here, and
+     the tool that fetches them has an open bug doing exactly that on Intel
+     (XcodesOrg/xcodes#456).
+
+     Confirm it works and move on:
+     `xcrun simctl list devices available | grep iPhone`
    - **Android Studio** from developer.android.com.
    - **Docker: Colima**, not Docker Desktop. Colima is open source with no
      licence question for the AS, and it runs per-user, so `claude-dev` starts
