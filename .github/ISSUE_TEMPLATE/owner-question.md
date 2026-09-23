@@ -9,6 +9,7 @@ labels: owner-question
 **Why it matters:**
 
 **Options:**
+
 1.
 2.
 
@@ -17,5 +18,7 @@ labels: owner-question
 **Blocks:** <!-- requirement IDs that wait for this answer -->
 
 ---
+
 Answer by commenting on this issue. `plan-keeper` records the decision in
-`docs/plan/decisions.md` and closes the issue.
+`docs/plan/decisions.md` and closes the issue. Open questions are listed in the
+daily status report until they are answered.

@@ -1460,3 +1460,68 @@ them harder than anything else in the repository.
 
 **What it does not license.** Nothing else gets a manual merge. A red check on
 any other path is work, not a candidate for the same treatment.
+
+## D-076 — Daily status v1, as installed
+- **Date:** 2026-09-23 · **Status:** Accepted (delegated, D-031; item 4 by the owner) · **Section:** 9
+- **Context:** INF-09 installs D-050's daily report and D-051's owner-question
+  template. The 08b draft had Claude run `/status` and post the comment itself,
+  holding the Claude app's token. Two failures this repository has already had
+  argue against that shape: a reviewer that posted its review and skipped the
+  file the gate read (D-073), and one that returned a placeholder verdict over a
+  review that never happened (#15).
+- **Decision:**
+  1. **Claude writes; a script posts.** `daily-status.yml` has two jobs.
+     `report` runs `claude-code-action` and gets the report back through
+     `--json-schema` — `status` (`healthy`, `attention` or `action`) and
+     `report` (markdown). `post` runs `scripts/daily-status.mjs`, which turns
+     `status` into the ✅ / ⚠️ / 🛑 headline and posts the comment. "Starts with
+     ✅, ⚠️ or 🛑" therefore holds by construction, not by instruction.
+  2. **The job that reads other people's text cannot write.** `report` holds
+     read permissions only and passes its own `GITHUB_TOKEN` as `github_token`,
+     so the action never exchanges OIDC for the Claude app's token, which can
+     write. Verified in the pinned action's source (`src/github/token.ts`,
+     `setupGitHubToken`: a provided token skips the exchange entirely). Its
+     tools are Read, Grep, Glob and a list of read-only `git`, `gh` and
+     `pnpm run req:coverage` commands. **The token is the boundary, not the
+     list:** the project's `.claude/settings.json` still allows `Bash(pnpm *)`
+     and some `gh` writes in every session, and with a read-only token those
+     writes fail rather than land.
+  3. **A morning without a report still reaches the owner.** `post` runs
+     whenever `report` finishes (`!cancelled()`), and on any failure posts
+     "🛑 Action required — no report today" with the reason and the run link,
+     then exits 1. D-050 asked for a failure to show in CI; this puts it on the
+     owner's phone as well, since a red run is seen only by someone already
+     looking at the Actions tab.
+  4. **A morning when the workflow does not run at all pages the owner through
+     Healthchecks.io.** The owner chose this (asked 2026-09-23, recommendation
+     accepted). The last step pings `HEALTHCHECKS_DAILY_STATUS_URL` every run,
+     `/0` for a posted report and `/1` otherwise; no ping within the check's
+     period and grace pages the owner. Until the secret exists, each report
+     says so and the run is red (A-16).
+  5. **Reaching the phone.** The workflow creates the "Daily status" issue,
+     assigns it to the repository owner (which subscribes them) and pins it;
+     each comment also mentions the owner, because a mention is what GitHub
+     Mobile pushes by default. It creates the `daily-status` and
+     `owner-question` labels too: GitHub applies a template's label only if it
+     exists, and a question filed without it would be invisible to the report
+     that counts those questions.
+- **What could not be verified before merging.** GitHub runs scheduled and
+  manual workflows only from the default branch, so no run of this workflow is
+  possible from the pull request. Everything that can be held without one is
+  held by tests: the poster's logic (100 % lines and branches), the entry
+  script run as a real process, the workflow's permissions, tools, schema and
+  step order, and the ping step's own shell script executed against a stand-in
+  `curl`. That the action accepts a read-only token on a `schedule` event, that
+  `gh issue pin` works with `GITHUB_TOKEN`, and that the mention pushes to the
+  owner's phone are **not verified** — the first run answers all three, and
+  INF-09 is done only when the owner confirms the report arrived (A-17).
+- **Residual risk, stated plainly.** The script checks that a report arrived
+  with a valid status. It does not judge whether the report is true. "One
+  phone screen" is asked for in the prompt and not enforced.
+- **Consequences:** One more workflow run a day, estimated at 5–10 Actions
+  minutes across the two jobs until the first run measures it, against a
+  private repository's minutes (see the budget gotcha in `docs/progress.md`).
+  The GitHub tools in a cloud session act as `@bvst` (checked with `get_me` on
+  2026-09-23), so an owner question filed from a session is the owner's own
+  issue, and GitHub does not notify people of their own actions. The daily
+  report is therefore where those questions reach the owner.
