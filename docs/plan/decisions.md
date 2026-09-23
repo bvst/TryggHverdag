@@ -1084,9 +1084,26 @@ through is a decision, not a commit. Options are on #6.
   The brief now says this outright: read the check if you can, say so plainly
   when you cannot, and do **not** re-run the gate to compensate, because it is a
   required check either way and the merge is gated on it whether or not the
-  reviewer could see the number. The real fix is one line — `checks: read` in
-  that job's `permissions:` — and it belongs on `main` with the other
-  `ai-review.yml` work (D-063), not in a pull request under review.
+  reviewer could see the number.
+- **And the real fix is not one line, which is what this entry first claimed.**
+  `code-reviewer` took the same finding two steps further, and both hold up
+  when checked:
+  1. **The subagent has no way to ask.** `test-auditor`'s frontmatter is
+     `tools: Read, Grep, Glob, Bash` — no GitHub-reading tool at all. The MCP
+     github tools in `ai-review.yml`'s `claude_args` go to the *invoking*
+     session, not the subagent. So `checks: read` on the job would not by
+     itself put the answer within the auditor's reach.
+  2. **There is nothing to read yet.** `ci.yml` and `ai-review.yml` are
+     independent workflows on the same `pull_request` trigger with no `needs:`
+     between them (`ai-review`'s only `needs:` is its own `changes` job).
+     Nothing orders them, so `mutation` may not have finished — or started —
+     when the auditor looks. A check read too early is worse than no check,
+     because it reads as a result.
+  The option that solves both, and the one to try first: have the **workflow**
+  fetch the check result for the commit and inject it into the prompt as text.
+  Then the subagent needs no tool and no permission, and the workflow is the
+  thing that waits. That is `ai-review.yml` work, on `main` (D-063), alongside
+  `produced no verdict file`.
 
 - **Why this is the owner's decision and not mine.** It changes what a blocking
   reviewer does, inside the pull request that reviewer is judging — the same
