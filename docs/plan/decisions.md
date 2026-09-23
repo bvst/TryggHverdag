@@ -848,3 +848,31 @@ new decision that supersedes it (see `00-working-agreement.md`).
   argument for the L3 level. No unit or system test could have caught it: the
   fake clock returns a `Date`, so every test that used a fake passed. Only a
   real PostgreSQL disagreed.
+
+## D-068 — The pool's `error` event waits for the task that brings logging
+- **Date:** 2026-09-23 · **Status:** Accepted (owner) · **Section:** 5
+- **Context:** `safety-reviewer` asked for a `pool.on('error', ...)` handler on
+  the `pg.Pool` in `apps/server/src/adapters/db.ts`. The concern is real: with
+  no listener, an idle client's error is an unhandled `'error'` event, which
+  exits the process — and databases close idle connections as a matter of
+  routine, so the worker could end up restarting in a loop. A worker that keeps
+  dying is a watchdog that is not watching.
+- **Why it was not simply done:** every version of the handler decides something
+  that was not the reviewer's to decide. One that swallows the event trades a
+  loud crash for silence, which is the one thing this project must not do. One
+  that reports needs somewhere to report to, and that would be the first logging
+  call in the repository — a precedent under PRIV-07, set in passing, in a
+  bugfix, before anyone had chosen how logging works.
+- **Decision (the owner's):** defer it to the task that brings logging. Until
+  then the crash stands.
+- **Consequences:** the failure is loud rather than hidden. The platform
+  restarts the process; if it is the worker, the heartbeat stops and
+  `/v1/health` reports `degraded` within three minutes, which is the signal the
+  health endpoint exists to give. What is lost meanwhile is attribution — the
+  crash says a connection died, not which one or why — and that is exactly what
+  the logging task is for. `db.ts` says so at the point where the handler will
+  go, so the next reader finds the reasoning rather than an oversight.
+- **Carries a cost worth naming:** if idle-connection churn turns out to be
+  frequent on Clever Cloud's DEV plan, a restart loop would be a real
+  availability problem, and this decision should be revisited before staging
+  carries anything that matters (INF-07).

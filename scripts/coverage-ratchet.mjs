@@ -2,7 +2,7 @@
 /**
  * RG-04: coverage on changed files may not go down, and safety code has a floor.
  *
- * Reads coverage/coverage-summary.json (written by `pnpm run test:unit --coverage`)
+ * Reads coverage/coverage-summary.json (written by `pnpm run test:coverage`)
  * and compares it with the committed baseline.
  *
  * Usage:
@@ -29,7 +29,7 @@ function main() {
   if (!existsSync(summaryPath)) {
     process.stdout.write(
       `coverage:ratchet: ${SUMMARY} is missing, so nothing was measured. ` +
-        'Run `pnpm run test:unit --coverage` first — a coverage gate with no numbers is not a gate.\n',
+        'Run `pnpm run test:coverage` first — a coverage gate with no numbers is not a gate.\n',
     );
     process.exitCode = 1;
     return;

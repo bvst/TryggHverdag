@@ -3,13 +3,20 @@
 // milliseconds and time is something the test states rather than waits for.
 //
 // No requirement ID in these names, deliberately, and not an oversight —
-// code-reviewer asked for one and the answer is no. The rule these tests cover
-// is the server side of REL-08: making "the watchdog has stopped" visible to
-// something that watches. The other side — something that polls this every
-// minute and wakes the owner within five — is INF-08 and does not exist yet.
-// RG-01 counts a requirement as covered the moment a test names it, so naming
-// REL-08 here would turn the report green for a requirement nothing satisfies.
-// An ID is a claim about what is true, not a label for what a file is near.
+// code-reviewer asked for one and the answer is no. What these tests cover is
+// the server half of the monitoring requirement (the uptime rule in
+// docs/plan/03-safety-reliability-security.md): making "the watchdog has
+// stopped" visible to something that watches. The other half — something that
+// polls this every minute and wakes the owner within five — is INF-08 and does
+// not exist yet.
+//
+// The ID is left unwritten on purpose, and the reason is worth knowing, because
+// the first version of this comment got it wrong. `coverage()` counts a test
+// file as covering a requirement when the file's *text* mentions the ID, and
+// text includes comments. So spelling it out here — even in a sentence saying
+// this does not cover it — turned the report green for a requirement nothing
+// satisfies. A comment denying the claim still made it. An ID is a claim about
+// what is true, not a label for what a file is near.
 import { describe, expect, test } from 'vitest';
 import { assessWorkerHealth } from './health.ts';
 

@@ -11,7 +11,20 @@ import * as schema from '../db/schema.ts';
 
 export type Database = ReturnType<typeof createDatabase>;
 
-/** The connection pool. Close it with `pool.end()` when a process shuts down. */
+/**
+ * The connection pool. Close it with `pool.end()` when a process shuts down.
+ *
+ * No `pool.on('error', ...)` here, and that is a decision rather than an
+ * oversight (D-068). Without a listener an idle client's error exits the
+ * process, which is loud — the platform restarts it, and if it is the worker
+ * the heartbeat stops and `/v1/health` reports `degraded` within three minutes.
+ * A handler that swallowed the event would trade that for silence; a handler
+ * that reported it needs somewhere to report to, and that belongs to the task
+ * that decides how logging works, not to this one. The handler goes here when
+ * it does. D-068 has the reasoning and the privacy rule behind it — named there
+ * rather than here, because a requirement ID in product code reads to RG-01 as
+ * a claim to implement it, and this is a reason for deferring, not a claim.
+ */
 export function createPool(connectionString: string): pg.Pool {
   return new pg.Pool({ connectionString, max: 5 });
 }

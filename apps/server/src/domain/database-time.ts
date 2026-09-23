@@ -33,11 +33,16 @@
  * mistake can live without ever going red.
  */
 function toIsoForm(text: string): string {
+  // One anchored pattern, not two. Two sequential replaces meant two `$`
+  // anchors, and each could be removed without any realistic timestamp
+  // noticing — two mutants that survived for want of an input rather than for
+  // want of a test. Saying it once leaves one anchor and one thing to get right.
   return text
     .trim()
     .replace(' ', 'T')
-    .replace(/([+-]\d\d)(\d\d)$/, '$1:$2')
-    .replace(/([+-]\d\d)$/, '$1:00');
+    .replace(/([+-]\d\d):?(\d\d)?$/, (_match, hours: string, minutes?: string) => {
+      return `${hours}:${minutes ?? '00'}`;
+    });
 }
 
 const HAS_ZONE = /(?:Z|[+-]\d\d:\d\d)$/;

@@ -517,7 +517,7 @@ test levels with one real example each.
 | `gate:quick` | 3 of 3 pass |
 | `gate:full` | 10 pass · 1 not possible here (L3) · 1 fails (`gate:integrity`, waiting on A-15 — the designed state, D-029) |
 | Coverage | product code 96.08 % lines against a floor of 80; every file 100 % except the fake clock, which now has its own tests too |
-| Mutation | **97.37 %** — two survivors, both regex mutants in the time parser |
+| Mutation | **98.68 %** — one survivor, in the time parser's remaining anchor |
 
 **The integration tests could not run in this session, and on their first run in
 CI they found a real bug.** That is the whole argument for the L3 level, made
@@ -625,6 +625,30 @@ the moment a test names it, so naming REL-08 there would turn the report green
 for a requirement nothing satisfies. An ID is a claim about what is true, not a
 label for what a file is near.
 
+**The requirement gate caught two things in this task's own writing**
+
+Both while adding the note that records D-068, and both worth knowing because
+they are easy to repeat.
+
+`RG-01` reads a requirement ID in **product code** as a claim to implement that
+requirement. A comment in `db.ts` cited PRIV-07 as the *reason* a handler is
+deferred, and the gate read it as a promise the branch had not kept — correctly,
+by its own rule. The ID now lives in D-068, where a claim belongs, and the
+comment points there.
+
+Worse, and more instructive: `coverage()` counts a test file as covering a
+requirement when the file's **text** mentions the ID, and text includes
+comments. The first version of the note in `health.test.ts` explained at length
+why naming REL-08 there would turn the report green for a requirement nothing
+satisfies — and, by writing the ID in order to say that, turned the report green
+for it. A comment denying the claim still made it. The report said REL-08 🟢
+until it was caught.
+
+The lesson is narrow and sharp: in this repository an ID is a claim wherever it
+appears, including in prose that denies it. `req-coverage: fixtures-only` covers
+the sample-data case; there is no marker for "explicitly not this", and the
+cheapest answer is to describe the requirement instead of naming it.
+
 **A gate defect found along the way, deliberately not fixed here**
 
 `ai-review (code-reviewer)` reports **red although it approved**. It writes
@@ -683,21 +707,19 @@ Waiting for the owner, and none of it is a bug:
   repository but not in GitHub's rules is a check that stops nothing. This is
   the only thing between #6 and mergeable.
 - **A-15 and A-09** as before, for the merge rules and the AI reviews.
-- **One question, asked on #6 and not answered yet:** `safety-reviewer` wants a
-  `pool.on('error')` handler on the pg pool. It was not added, because every
-  version of it decides something the owner has not. A handler that swallows
-  the event trades a loud crash for silence, which this project must not do; a
-  handler that reports needs somewhere to report to, and that would be the first
-  logging call in the repository, setting a precedent under PRIV-07. The
-  recommendation is to defer it to the task that brings logging, and to let the
-  crash stand until then — the platform restarts the process and health reports
-  `degraded` within three minutes, so the failure is visible rather than hidden.
+The `pool.on('error')` question is **answered: deferred to the task that brings
+logging** (D-068, the owner's call). Until then the crash stands, which is loud
+rather than hidden — the platform restarts the process, and if it is the worker
+the heartbeat stops and `/v1/health` reports `degraded` within three minutes.
+`db.ts` says so where the handler will go, so the next reader finds reasoning
+rather than an oversight. Worth revisiting before INF-07 if idle-connection
+churn on Clever Cloud's DEV plan turns out to cause a restart loop.
 
 **An unmerged branch exists: `claude/inf-04-follow-through`.** It closes INF-04's
 record and widens `engines.node` so Dependabot can run (its updater uses Node 24
 and `.npmrc` sets `engine-strict=true`). It holds decisions **D-063 and D-064**,
-which is why INF-05's decisions start at D-065. No pull request has been opened
-for it, because none was asked for.
+which is why INF-05's decisions start at D-065. The owner has decided to tie it
+up **after #6 merges**, so no pull request yet — deliberately, not forgotten.
 
 **A `/bugfix` is waiting to be written:** `ai-review (code-reviewer)` reports red
 although it approves, because it writes `VERDICT: APPROVE WITH COMMENTS` and the
