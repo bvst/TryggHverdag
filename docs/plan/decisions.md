@@ -1144,14 +1144,26 @@ through is a decision, not a commit. Options are on #6.
   that comes back red or without those checks in its list. `test-auditor` found
   this, having confirmed the premise itself rather than assuming it.
 
-- **A follow-up worth doing, not done here.** The ~18-line verdict block is now
-  byte-identical in all five briefs. `code-reviewer` points out the repository
-  already has a shared-include mechanism for exactly this — each agent's
-  `skills:` list — and that five copies is the same shape as the drift D-069
-  describes, where three different wordings had diverged before converging.
-  Extracting it would make the next wording fix one edit instead of five.
-  `scripts/ai-review.test.mjs` asserts against the briefs, so it moves too;
-  that is why this is a follow-up rather than a late addition here.
+- **A follow-up worth doing, and the precondition that makes it safe.** The
+  duplication across the five briefs is now roughly 35 lines each — the verdict
+  block plus the approval rule from D-071 — and D-069's own history is what
+  happens when those copies drift: `**Verdict: PASS**` in one file,
+  `VERDICT: APPROVE WITH COMMENTS` in another. `code-reviewer` has raised it
+  twice and is right; the second push made it worse.
+  The repository already has the mechanism — each agent's `skills:` list, which
+  these reviewers already use for `testing-conventions`. So extract both blocks
+  into one skill (`reviewer-protocol`), point all five at it, and have
+  `scripts/ai-review.test.mjs` assert that each brief *lists* the skill and that
+  the skill carries the wording.
+  **Not done here, for a reason worth stating rather than deferring vaguely.**
+  Moving the verdict instruction out of the brief only works if the skill's text
+  actually reaches the reviewer subagent inside `claude-code-action`. That the
+  `skills:` key is present in the frontmatter is not evidence that it does, and
+  a cloud session cannot run the reviewer harness to find out. If it does not
+  reach them, D-069's fix regresses **silently** — reviewers go back to writing
+  unparseable verdicts and the checks go red for no visible reason. Confirm the
+  skill content arrives first, in one throwaway pull request that changes
+  nothing else; then do the extraction.
 
 - **Why this is the owner's decision and not mine.** It changes what a blocking
   reviewer does, inside the pull request that reviewer is judging — the same

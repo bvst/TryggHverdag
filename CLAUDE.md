@@ -73,8 +73,10 @@ but not in a cloud session; `gate:full` says so rather than skipping quietly.
 `test:coverage` is the only run the coverage ratchet measures — unit and system
 together, because the API is reached at L6 and nowhere else.
 
-`gate:integrity` (CI-01) checks the merge rules through GitHub's API. It is red
-until the owner finishes `docs/plan/merge-rules.md`, deliberately (D-029, D-060).
+`gate:integrity` (CI-01) checks the merge rules through GitHub's API. The owner
+has imported the ruleset, so it now reports **5 of 5** against the live
+repository. It goes red the moment the rules and this repository disagree —
+which is the point (D-029, D-060).
 
 Use `pnpm run <name>`: `pnpm doctor` and `pnpm test` are pnpm's own commands and
 would run instead of ours.
