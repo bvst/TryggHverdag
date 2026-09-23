@@ -48,6 +48,19 @@ describe('HK-08: work that is written down', () => {
     expect(check(dir).status).toBe(ALLOWED);
   });
 
+  test('passes when the narrative went to the archive instead', () => {
+    // docs/progress.md was split: it is now a short current-state file, and the
+    // narrative lives in docs/progress/m0.md. plan-keeper is told never to
+    // append to the short one. Without this, a code change that moves no task
+    // status would be blocked — or forced into a decorative edit, which is the
+    // churn the split removed. Either counts as having written the work down.
+    const dir = repoWith({
+      'apps/server/src/api.ts': 'export const api = 1;',
+      'docs/progress/m0.md': '# M0 build log\n\n- built the API\n',
+    });
+    expect(check(dir).status).toBe(ALLOWED);
+  });
+
   test('passes when only documents changed — nothing to log', () => {
     const dir = repoWith({ 'docs/plan/decisions.md': '## D-060' });
     expect(check(dir).status).toBe(ALLOWED);
@@ -75,7 +88,12 @@ describe('HK-08: when blocking would cost more than it is worth', () => {
     const dir = repoWith({ 'apps/server/src/api.ts': 'export const api = 1;' });
     const result = check(dir, {}, ['--warn-only']);
     expect(result.status).toBe(ALLOWED);
-    expect(result.stdout).toContain('has not been updated');
+    // Was `toContain('has not been updated')`, which pinned a phrase rather
+    // than a fact. The warning now has to name both halves of the split log,
+    // so a reader knows where to write — stricter than the sentence it
+    // replaced, not looser.
+    expect(result.stdout).toContain('docs/progress.md');
+    expect(result.stdout).toContain('docs/progress/m0.md');
     expect(existsSync(marker(dir))).toBe(true);
   });
 
