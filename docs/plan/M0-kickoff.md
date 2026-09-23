@@ -88,7 +88,10 @@ not a dependency. Revisit before M5.
      requirements page states only one architecture restriction (visionOS needs
      Apple silicon), and Tahoe 26.6.2 satisfies Xcode 26.6's minimum. Xcode 27
      is reported to drop Intel — check before upgrading, and do not let it
-     upgrade automatically.
+     upgrade automatically. `pnpm run doctor` sets no version floor: it asks
+     only that `xcodebuild -version` answers and that an iPhone simulator
+     exists, so there is nothing to gain from chasing releases, and an upgrade
+     past the Intel line would cost the simulator.
    - **Android Studio** from developer.android.com.
    - **Docker: Colima**, not Docker Desktop. Colima is open source with no
      licence question for the AS, and it runs per-user, so `claude-dev` starts
