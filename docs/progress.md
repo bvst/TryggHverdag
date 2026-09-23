@@ -60,6 +60,18 @@ the default branch. Those pull requests need a manual merge (D-075).
 
 The things that still bite, and cost a session hours the first time.
 
+- **Every job failing in ~2 seconds means the Actions budget, not the code.**
+  On 2026-09-23 all fifteen checks went red for two and a half hours. The
+  signature: `runner_id: 0`, empty `runner_name`, **no `steps` array at all** —
+  not even GitHub's own "Set up job" — and a job log returning HTTP 404, because
+  nothing ran to write one. The included minutes had run out against a spending
+  limit, and the owner raising it fixed it within minutes. This repository is
+  private, so Actions minutes bill against the account; a public one gets
+  standard runners free and cannot fail this way. **Check Settings → Billing and
+  licensing → Plans and usage first.** Re-running is pointless and consumes more
+  of what is already gone. Fifteen jobs fire on every push (nine `ci`, six
+  `ai-review`), so a day of many small pushes is expensive — which is the
+  argument for path filters on the docs-only ones.
 - **`ai-review.yml` cannot be reviewed by the reviewers.** Editing it stops the
   action running at all, so every change to that file is merged by hand, on
   purpose (**D-075**). Batch changes to it rather than spending a manual merge

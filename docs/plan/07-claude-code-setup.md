@@ -158,9 +158,21 @@ third agent checks both.
 | HK-06 | When an agent tries to finish | Refuses "done" while affected tests, the type check or the requirement-coverage check fail | RG-01, RG-02 |
 | HK-07 | Before an edit | Blocks anything that looks like secrets or real personal data (real phone numbers, coordinates in log statements) | PRIV-07, RG-07 |
 | HK-08 | Before the session ends or compacts | Checks that `docs/progress.md` and the plan status were updated | Resuming work |
+| HK-09 | Before a commit (a git hook, not a Claude Code hook) | Formats staged files with Prettier and re-stages what it changed; reports ESLint findings and refuses the commit. A partly staged file is checked, never rewritten | HK-04's blind spot |
 
 Hooks are code, so they have their own tests in CI. A broken guard fails
 loudly.
+
+HK-09 is the odd one out: a git hook rather than a Claude Code hook, because it
+covers a gap the others cannot see. HK-04 runs on `Edit` and `Write` — every
+edit Claude Code makes *through those tools*. Work that reaches disk another
+way, through Bash (a `sed` one-liner, a heredoc, a generator), never passes it.
+That is not hypothetical: on #13 a test file written with a heredoc kept a
+formatting error, and only `gate:quick`, run by hand before pushing, caught it.
+git sees all of those paths, because every one of them ends at a commit.
+
+HK-03 has always blocked the flag that skips git hooks — so the guard against
+stepping around this one predates the hook itself by several months.
 
 ## Permissions baseline (proposed)
 - **Deny:** pushing to `main`, force pushing, `--no-verify`, reading `.env`

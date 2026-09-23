@@ -1,0 +1,81 @@
+#!/usr/bin/env node
+// HK-09. The rules live in scripts/lib/pre-commit.mjs so they can be tested;
+// this file is the part git calls, and does the talking to git and to disk.
+//
+// Installed by the `prepare` script setting core.hooksPath, so `pnpm install`
+// is all anyone has to remember. HK-03 already blocks `--no-verify`, so a
+// Claude Code session cannot step around it either.
+import { spawnSync } from 'node:child_process';
+import { preCommit } from '../scripts/lib/pre-commit.mjs';
+
+const git = (args) => spawnSync('git', args, { encoding: 'utf8' });
+
+const lines = (out) =>
+  (out ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+// ACMR, not D: a file deleted in this commit has nothing left to format.
+const staged = lines(git(['diff', '--cached', '--name-only', '--diff-filter=ACMR']).stdout);
+if (staged.length === 0) process.exit(0);
+
+const unstaged = lines(git(['diff', '--name-only']).stdout);
+
+const npx = (args) => {
+  const r = spawnSync('npx', args, { encoding: 'utf8', timeout: 120_000 });
+  if (r.error) {
+    // A missing toolchain must not be reported as clean. Say what happened.
+    return { ok: false, output: `could not run "npx ${args.join(' ')}": ${r.error.message}` };
+  }
+  return { ok: r.status === 0, output: (r.stdout ?? '') + (r.stderr ?? '') };
+};
+
+/**
+ * Check what the COMMIT holds, not what the working tree holds.
+ *
+ * These are the partly staged files, so the two differ by definition. Checking
+ * the file on disk could pass while the staged version is misformatted — and
+ * CI reads the committed version, so that false pass is exactly the red build
+ * this hook exists to prevent. `git show :path` is the staged content, and
+ * prettier honours .prettierignore on a --stdin-filepath just as it does on a
+ * real path (verified, not assumed).
+ */
+const checkStaged = (files) => {
+  const bad = [];
+  for (const file of files) {
+    const blob = git(['show', `:${file}`]);
+    if (blob.status !== 0) continue; // gone from the index; nothing to check
+    const r = spawnSync('npx', ['prettier', '--check', '--stdin-filepath', file], {
+      input: blob.stdout,
+      encoding: 'utf8',
+      timeout: 120_000,
+    });
+    if (r.error) return { ok: false, output: `could not run prettier: ${r.error.message}` };
+    if (r.status !== 0) bad.push(file);
+  }
+  return { ok: bad.length === 0, output: bad.join('\n') };
+};
+
+const result = preCommit({
+  staged,
+  unstaged,
+  format: (files) => npx(['prettier', '--write', '--ignore-unknown', ...files]),
+  // A writable file had no working-tree changes before prettier ran, so whatever
+  // git now reports as modified is what prettier rewrote — and nothing else.
+  changed: (files) => lines(git(['diff', '--name-only', '--', ...files]).stdout),
+  check: checkStaged,
+  lint: (files) => npx(['eslint', ...files]),
+  stage: (files) => git(['add', '--', ...files]),
+});
+
+if (result.formatted.length > 0) {
+  process.stdout.write(
+    `HK-09: formatted and re-staged ${String(result.formatted.length)} file(s).\n`,
+  );
+}
+
+if (!result.ok) {
+  process.stderr.write(`\nHK-09: commit stopped.\n\n${result.problems.join('\n\n')}\n\n`);
+  process.exit(1);
+}
