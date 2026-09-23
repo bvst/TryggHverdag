@@ -22,6 +22,10 @@ export default defineConfig({
     include: [
       '.claude/hooks/**/*.test.mjs',
       'scripts/**/*.test.mjs',
+      // Not every package keeps its code under src/: packages/config holds the
+      // eslint and tsconfig presets at its root, and their tests were invisible
+      // to this runner until this line existed.
+      'packages/**/*.test.mjs',
       'packages/**/src/**/*.test.ts',
       'apps/**/src/**/*.test.ts',
       'apps/**/src/**/*.system.test.ts',

@@ -25,6 +25,12 @@
       "coveredLines": 2,
       "totalLines": 2
     },
+    "apps/server/src/domain/database-time.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 15,
+      "totalLines": 15
+    },
     "apps/server/src/domain/health.ts": {
       "lines": 100,
       "branches": 100,

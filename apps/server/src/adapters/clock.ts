@@ -8,13 +8,19 @@
  * someone is overdue. The database is the one clock they already share.
  */
 import { sql } from 'drizzle-orm';
+import { databaseTime } from '../domain/database-time.ts';
 import type { Clock } from '../ports.ts';
 import type { Database } from './db.ts';
 
 export function databaseClock(db: Database): Clock {
   return {
     async now(): Promise<Date> {
-      const result = await db.execute<{ now: Date }>(sql`select now() as now`);
+      // `unknown`, not `{ now: Date }`. Drizzle's execute does not map a raw
+      // query's columns — it only maps columns it knows from the schema — so
+      // this comes back as PostgreSQL's own text. Naming it `Date` here is what
+      // let the first version of this file ship a value that had no getTime(),
+      // and the type argument is exactly what hid it from the compiler.
+      const result = await db.execute<{ now: unknown }>(sql`select now() as now`);
       const row = result.rows[0];
       if (row === undefined) {
         // `select now()` returning nothing is not a case to paper over with a
@@ -22,7 +28,7 @@ export function databaseClock(db: Database): Clock {
         // decision made on a guessed clock is worse than no answer.
         throw new Error('The database did not return a time, so nothing can be timed against it.');
       }
-      return row.now;
+      return databaseTime(row.now, 'The database clock');
     },
   };
 }

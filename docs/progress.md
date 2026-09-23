@@ -517,18 +517,37 @@ test levels with one real example each.
 | `gate:quick` | 3 of 3 pass |
 | `gate:full` | 10 pass · 1 not possible here (L3) · 1 fails (`gate:integrity`, waiting on A-15 — the designed state, D-029) |
 | Coverage | product code 96.08 % lines against a floor of 80; every file 100 % except the fake clock, which now has its own tests too |
-| Mutation | **95.65 %** — domain 100 %, worker 85.71 %, one survivor in `startWorker`'s empty-options branch |
+| Mutation | **96.05 %** — three survivors: two regex mutants in the time parser, and `startWorker`'s empty-options branch |
 
-**The integration tests were not run in this session, and that matters.**
-INF-05's exit criterion is that the contract, integration and system levels each
-have one passing example. Two of the three are proven here. The third is
-written — a real PostgreSQL 17 in a container, the real generated migrations,
-the real upsert and timestamp round trip — and **cannot run in a cloud session**,
-because the Docker binary is present but no daemon is. `gate:full` now says so
-in those words rather than skipping the step quietly, which is the change that
-made this honest instead of invisible. **CI is what proves it**, on the new
-`integration` job. If that job is red on the pull request, this task is not
-done, whatever the rest of the gate says.
+**The integration tests could not run in this session, and on their first run in
+CI they found a real bug.** That is the whole argument for the L3 level, made
+within an hour of the level existing.
+
+`databaseClock` asked PostgreSQL for `select now()` and told TypeScript the
+answer was a `Date`. It was not. Drizzle's node-postgres driver installs its own
+type parsers so that it can map columns itself, so a query written through the
+schema comes back as a `Date` while a raw `sql` query comes back as PostgreSQL's
+text — `2026-09-23 05:18:34.38631+00`. The type argument silenced the compiler.
+In production, **every call to `/v1/health` would have thrown `getTime is not a
+function`**, and so would every later safety decision that asks what time it is.
+
+No unit or system test could have caught it: they use the fake clock, which
+returns a `Date`, so all of them passed. Only a real database disagreed.
+
+The fix is `apps/server/src/domain/database-time.ts` — pure, so it is tested at
+L2 on every machine rather than only where Docker runs, and in `domain/` so the
+mutation gate and the 95 % branch floor cover it. It refuses rather than
+guesses: a timestamp with no time zone throws, because reading it as UTC or as
+local time would put every "has it been more than N minutes" decision out by
+hours with nothing going red.
+
+Putting it there needed **AR-03's lint rule narrowed** (D-067): it banned every
+`new Date(...)` in domain code, parsing included, which would have forced the
+one conversion that must be protected out of the only place that protects it.
+It now bans `new Date()` with no arguments — the actual clock read — and
+`Date.now()` and `performance.now()` as before. Those rules had no tests at all,
+although the comment beside them said they did; they have them now, including
+one that asserts parsing stays allowed so the decision cannot be quietly undone.
 
 **Three things went wrong, and each left something behind**
 
@@ -562,8 +581,9 @@ will be by INF-05". It was, so it is fixed: both that file and
 
 **Decisions recorded:** D-065 (the server skeleton as built: `/v1` in the path,
 health that answers 200 with the truth in the body, an async clock port, one
-heartbeat row, three minutes before `degraded`) and D-066 (Stryker's command
-runner, with the evidence that the Vitest runner was wrong).
+heartbeat row, three minutes before `degraded`), D-066 (Stryker's command
+runner, with the evidence that the Vitest runner was wrong) and D-067 (AR-03
+bans reading the clock, not constructing a Date — with the bug that prompted it).
 
 **What the owner has to do before this can merge.** `docs/plan/main-ruleset.json`
 now lists **12** required checks — `integration` and `system` are new. Until the

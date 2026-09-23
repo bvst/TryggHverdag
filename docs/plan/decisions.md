@@ -813,3 +813,38 @@ new decision that supersedes it (see `00-working-agreement.md`).
   own copy — which was missing `apps/server/src/worker.ts`, the file this task
   created. That was a named follow-up from INF-04's review; it is fixed here
   because the file it was about now exists.
+
+## D-067 — AR-03's lint rule bans reading the clock, not constructing a Date
+- **Date:** 2026-09-23 · **Status:** Accepted (delegated, D-031) · **Section:** 5
+- **Context:** INF-05's integration job failed on a real defect: `databaseClock`
+  asked for `select now()` and told TypeScript the answer was a `Date`. It was
+  not — drizzle-orm's node-postgres driver installs its own type parsers so it
+  can map columns itself, so a query written through the schema returns a `Date`
+  while a raw `sql` query returns PostgreSQL's text, `2026-09-23 05:18:34+00`.
+  The type argument silenced the compiler. In production every call to
+  `/v1/health`, and every later safety decision that asks the time, would have
+  thrown `getTime is not a function`.
+- **The fix needed somewhere to live.** Converting what the database said into a
+  moment is small, pure, and exactly the kind of code that should sit under the
+  mutation gate and the 95 % branch floor — that is, in `apps/server/src/domain/`.
+  But the AR-03 lint rule banned every `new Date(...)` there, parsing included,
+  which would have forced the conversion out of the one place that protects it.
+- **Decision:** the selector now matches `new Date()` with **no arguments**.
+  `Date.now()` and `performance.now()` stay banned, as does `new Date()`.
+  `new Date(value)` — turning a value someone handed in into a moment — is
+  allowed, because it reads no clock.
+- **Consequences:** AR-03 now says what it means. The conversion lives in
+  `apps/server/src/domain/database-time.ts`, under the mutation gate, and
+  refuses rather than guesses: a timestamp with no time zone throws, because
+  reading it as UTC or as local time would put every "has it been more than N
+  minutes" decision out by hours with nothing going red.
+- **Also:** the clock rules had no tests at all, although the comment beside
+  them claimed they did. They have them now — including one that asserts
+  parsing is allowed, so this decision cannot be quietly reverted. And
+  `packages/**/*.test.mjs` was missing from the Vitest include list, which is
+  why a test file there would have been invisible: packages/config keeps its
+  presets at the package root rather than under `src/`.
+- **What this cost to learn:** nothing but a red CI job — which is the whole
+  argument for the L3 level. No unit or system test could have caught it: the
+  fake clock returns a `Date`, so every test that used a fake passed. Only a
+  real PostgreSQL disagreed.
