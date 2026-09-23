@@ -1025,7 +1025,13 @@ through is a decision, not a commit. Options are on #6.
   which is what that entry asked for.
 
 ## D-070 — `test-auditor` reads the slow gates instead of re-running them
-- **Date:** 2026-09-23 · **Status:** Accepted (owner) · **Section:** 6
+- **Date:** 2026-09-23 · **Status:** Accepted (owner, in conversation) ·
+  **Section:** 6
+- **What that status does and does not mean.** The owner chose this in
+  conversation with Claude. It is **not** a claim that the owner has formally
+  approved any pull request carrying it, and a reviewer cannot verify the
+  conversation from inside the diff — D-069 says exactly this, and it applies to
+  D-070's own status line. `test-auditor` made the point against this entry.
 - **Decision.** `test-auditor`'s brief no longer orders it to re-run
   `pnpm mutation --incremental` or the coverage gates. `req:coverage` stays (it
   takes seconds, and its output is what the RG-01 judgement is made on); the
@@ -1128,6 +1134,15 @@ through is a decision, not a commit. Options are on #6.
   `scripts/lib/merge-rules.mjs`, which is the list CI-01 holds that file to.
   Adding it to only one would have left `gate:integrity` disagreeing with the
   repository, which is exactly what that check exists to catch.
+
+- **The brief now checks the premise it rests on.** All of D-070 depends on
+  `mutation` and `traceability` genuinely being required checks on the commit
+  under review. The brief asserted that rather than confirming it, so nothing in
+  it would notice a commit where branch protection had lapsed, been
+  misconfigured, or did not apply — a fork, say. It now says to run
+  `pnpm run gate:integrity` first, and to run the gates directly and say why if
+  that comes back red or without those checks in its list. `test-auditor` found
+  this, having confirmed the premise itself rather than assuming it.
 
 - **A follow-up worth doing, not done here.** The ~18-line verdict block is now
   byte-identical in all five briefs. `code-reviewer` points out the repository

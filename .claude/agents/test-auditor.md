@@ -51,6 +51,11 @@ Audit the branch against the regression gates:
   Fixing the permission means editing `.github/workflows/ai-review.yml`, which
   belongs on `main`, not in the pull request under review: `claude-code-action`
   refuses to run when the workflow differs from the default branch.
+  **Confirm the premise before you lean on it.** All of the above rests on
+  `mutation` and `traceability` actually being required checks on this commit.
+  Run `pnpm run gate:integrity`, which reads the live rules and lists what is
+  required today. If it is red, or they are not in the list, that reasoning does
+  not hold here — run the gates directly instead and say why.
 - Tests actually assert behaviour, not just run code.
 
 If you genuinely doubt a gate's result — not merely wish to confirm it — say so
