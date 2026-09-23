@@ -72,11 +72,28 @@ const explained =
 
 /** The pattern the workflow actually enforces, read from the workflow itself. */
 function enforcedPattern() {
-  const match = /grep -qE '(?<pattern>\^[^']*VERDICT[^']*)'/.exec(WORKFLOW);
+  const match = /grep -qE '(?<pattern>\^[^']+\$)'/.exec(WORKFLOW);
   if (match?.groups?.pattern === undefined) {
     throw new Error('Could not find the verdict pattern in ai-review.yml.');
   }
   return new RegExp(match.groups.pattern);
+}
+
+/**
+ * The verdicts the schema allows, read out of the workflow's --json-schema.
+ *
+ * The enum is now the first line of defence rather than the prose in a brief.
+ * `code-reviewer` returned `VERDICT: APPROVE WITH COMMENTS` on #8 although its
+ * own brief named `VERDICT: PASS WITH COMMENTS` as a form that would be
+ * rejected — warned by name, and it produced the variant anyway. An enum does
+ * not leave the choice open, so this test reads it rather than the prose.
+ */
+function acceptedVerdicts() {
+  const match = /"verdict":\{"type":"string","enum":\[(?<enum>[^\]]+)\]\}/.exec(WORKFLOW);
+  if (match?.groups?.enum === undefined) {
+    throw new Error('Could not find the verdict enum in ai-review.yml.');
+  }
+  return match.groups.enum.split(',').map((value) => value.trim().replace(/"/g, ''));
 }
 
 const names = AGENTS.map((a) => a.name);
@@ -84,9 +101,53 @@ const agentNamed = (name) => AGENTS.find((a) => a.name === name);
 
 describe('the verdict line the reviewers must produce', () => {
   test(
-    'the workflow still enforces a pattern this test can read',
+    'the schema allows exactly the two verdicts, and no middle one',
     explained(() => {
-      expect(enforcedPattern().source).toContain('VERDICT');
+      expect(acceptedVerdicts()).toEqual(['PASS', 'BLOCK']);
+    }),
+  );
+
+  test(
+    'the enforced pattern accepts both verdicts and rejects the near-misses',
+    explained(() => {
+      // The old test only checked that the pattern mentioned VERDICT, so every
+      // form that actually broke this gate would have passed it. These are the
+      // real ones, from the run logs: an invented middle verdict (#8,
+      // code-reviewer), the form its brief named (D-069), wrong case, and the
+      // empty string jq yields when the field is missing altogether.
+      const pattern = enforcedPattern();
+
+      for (const verdict of acceptedVerdicts()) {
+        expect({ verdict, accepted: pattern.test(verdict) }).toMatchObject({ accepted: true });
+      }
+      for (const wrong of [
+        'APPROVE WITH COMMENTS',
+        'PASS WITH COMMENTS',
+        'Pass',
+        'pass',
+        'VERDICT: PASS',
+        'APPROVE',
+        '',
+      ]) {
+        expect({ wrong, accepted: pattern.test(wrong) }).toMatchObject({ accepted: false });
+      }
+    }),
+  );
+
+  test(
+    'no reviewer is asked for a verdict file, and none can write one',
+    explained(() => {
+      // Both halves of the defect this replaced. The workflow asked the agent
+      // to save review-<agent>.md *and* post a comment, in one clause with no
+      // ordering; the agent produced the artefact a person would read and
+      // dropped the one only a script would, and the gate read only the
+      // dropped one. Three reviewers did it on a single commit, two of them
+      // blocking. With the verdict coming back through structured output there
+      // is nothing to write, so the harness needs no Write tool either.
+      expect(WORKFLOW).not.toMatch(/review-\$\{\{ matrix\.agent \}\}\.md/);
+      const allowed = /--allowedTools\s+"(?<list>[^"]+)"/.exec(WORKFLOW)?.groups?.list ?? '';
+      expect(allowed).toMatch(/\bRead\b/);
+      expect(allowed).not.toMatch(/\bWrite\b/);
     }),
   );
 
@@ -107,14 +168,21 @@ describe('the verdict line the reviewers must produce', () => {
       // is the point: a canonical line in the wrong case is the bug this file
       // exists for, and a scan that looked only for upper case would miss it by
       // passing over the offending line rather than by judging it.
-      const pattern = enforcedPattern();
+      const accepted = acceptedVerdicts();
       const canonical = (agentNamed(name)?.text.split('\n') ?? [])
         .filter((line) => /^ {4}\S/.test(line) && /verdict:/i.test(line))
         .map((line) => line.trim());
 
       expect(canonical.length).toBe(2);
       for (const line of canonical) {
-        expect({ name, line, accepted: pattern.test(line) }).toMatchObject({ accepted: true });
+        // The brief still names the line the subagent ends its review with —
+        // that is how the invoking agent knows which verdict to return. What
+        // the gate reads is the structured field, so the two have to agree on
+        // the same pair of words, case included.
+        const verdict = /^VERDICT: (?<value>.+)$/.exec(line)?.groups?.value;
+        expect({ name, line, verdict, known: accepted.includes(verdict) }).toMatchObject({
+          known: true,
+        });
       }
     }),
   );
