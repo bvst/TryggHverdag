@@ -176,8 +176,24 @@ describe("this repository's own workflows", () => {
       expect(classify, `${name} classifies the diff after already guarding on it`).toBeLessThan(
         firstGuard,
       );
-      // And the classify step itself must never be guarded, or it cannot run.
-      expect(job).not.toMatch(/if:[^\n]*\n\s+- id: affected/);
+      // And the classify step itself must never be guarded, or it cannot run:
+      // a guard on it would read the output it is supposed to set, find an
+      // empty string, skip the step, and leave every guarded step below it
+      // skipping too — the job green having done nothing.
+      //
+      // This began as a regex looking for an `if:` line immediately followed by
+      // `- id: affected`, which only ever caught a guard on the *preceding*
+      // step. Writing it the natural way, with `if:` under the `id:`, sailed
+      // past. test-auditor blocked #17 over it, and was right to: the sibling
+      // assertion above had already been found broken the same way one commit
+      // earlier, and fixing the instance rather than the class left this one
+      // sitting there. Reading the step's own block is not pattern-matching
+      // around the problem, so there is no second shape to miss.
+      const nextStep = job.indexOf('\n      - ', classify);
+      const classifyStep = job.slice(classify, nextStep === -1 ? undefined : nextStep);
+      expect(classifyStep, `${name} puts a condition on its own classify step`).not.toMatch(
+        /^\s*if:/m,
+      );
     }
   });
 

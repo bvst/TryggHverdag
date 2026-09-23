@@ -5,6 +5,7 @@
 // docs/requirements-status.md — so these prove nothing it counts. That is the
 // exemption D-074 keys to what a test proves rather than to a directory.
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { onlyInert, reasons } from './affected.mjs';
 
@@ -110,6 +111,24 @@ describe('the script refuses to guess', () => {
     expect(result.status).not.toBe(0);
     expect(`${result.stdout}${result.stderr}`).not.toContain('code=false');
     expect(`${result.stdout}${result.stderr}`).toContain('not knowing is not the same');
+  });
+
+  test('it imports nothing the runner might not have', () => {
+    // This script runs before actions/setup-node, on whatever Node the runner
+    // ships. 8a7280e wrote that constraint into a comment — "stable Node
+    // built-ins and repository-local modules, never a dependency" — and nothing
+    // enforced it, which test-auditor pointed out is a claim rather than a
+    // check. A dependency here would not fail a test; it would fail on the
+    // runner, before any gate had a chance to report.
+    const source = readFileSync('scripts/affected.mjs', 'utf8');
+    const specifiers = [...source.matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]);
+
+    expect(specifiers.length).toBeGreaterThan(0);
+    for (const specifier of specifiers) {
+      expect(specifier, `${specifier} is neither a Node built-in nor a local module`).toMatch(
+        /^(node:|\.\/)/,
+      );
+    }
   });
 
   test('a resolvable base still answers', () => {
