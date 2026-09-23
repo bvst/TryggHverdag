@@ -67,7 +67,8 @@ const explained =
       return body(...args);
     } catch (error) {
       if (REVERTED_HINT === '') throw error;
-      throw new Error(`${error instanceof Error ? error.message : String(error)}${REVERTED_HINT}`);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${message}${REVERTED_HINT}`, { cause: error });
     }
   };
 
