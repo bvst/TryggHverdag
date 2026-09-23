@@ -1211,3 +1211,119 @@ a safety-critical repository, and the opposite of every failure recorded above
 it, which all read as green or as noise. Still wrong: it blocks a pull request
 nobody reviewed. Worth watching whether it recurs before deciding what it needs
 (a turn budget, a prompt that finishes the subagent first, or both).
+
+
+### The test-naming rule now says what practice has always done (D-074)
+
+`test-auditor` and `code-reviewer` raised the same inconsistency independently,
+on different pull requests: `.claude/rules/tests.md` asked every test to start
+with a requirement ID, and **no test under `scripts/` has ever done so**. Both
+asked for a deliberate decision rather than a quiet edit, and both were right
+to — a rule that universal practice ignores is a finding that gets re-raised on
+every infrastructure change until someone settles it.
+
+The owner scoped the rule. Checked before writing it down, from
+`scripts/lib/requirements.mjs` and the generated report rather than from the
+reviewers' word: `collectRequirements`'s `SOURCES` reads the MVP scope and the
+REL/SEC, PRIV and SM tables, with no CI document among them, and `CI-` appears
+**zero times** in `docs/requirements-status.md`. So prefixing gate tests with
+`CI-01` would satisfy the rule's letter while `req:coverage` ignored every one
+— the look of traceability over a number that cannot move, which is the exact
+decorative-check shape this repository spent the day removing from its own
+gates.
+
+Everything else in `tests.md` still binds gate tests: fake clock, no `.skip` or
+`.only`, no assertion removed without a written reason, and the
+`// req-coverage: fixtures-only` marker. Only the naming prefix is scoped.
+
+**Read the reviewers on this one with a caveat.** The harness reverts
+`.claude/rules/**` before a reviewer reads it, so they will judge this change
+against the *old* rule text. They do still run — unlike an `ai-review.yml`
+change, which stops them entirely — but they cannot see the wording being
+changed, and their silence on it is not agreement.
+
+**Two corrections to the above, both from reviewers on #12.**
+
+`test-auditor` found D-074 half-finished. `.claude/hooks/*.test.mjs` matches
+the same `**/*.test.mjs` glob and carries `HK-01`-style prefixes, and `HK` is
+exactly as untracked as `CI` — its source document is not in `SOURCES`, and
+`HK-` appears zero times in `docs/requirements-status.md`. Verified both before
+agreeing. The exemption now names `.claude/hooks/` alongside `scripts/`, and
+says plainly that the existing `HK` prefixes stay: **exempt is not forbidden**,
+and `HK-01` names a real hook requirement that makes its test findable. What
+the exemption removes is the obligation.
+
+`privacy-security-reviewer` produced a sharper version of this decision's own
+argument by reading `requirements.mjs` rather than trusting the rationale:
+`mentions()` counts an ID **anywhere in a test file's text, never in the test
+name**. So no prefix has ever moved `req:coverage` by itself — the naming rule
+was decorative with respect to coverage from the day it was written, which is a
+better reason for scoping it than the one first recorded.
+
+It also found, unaided, how to review a `.claude/**` change at all:
+`git show HEAD:<path>` and `git diff origin/main...HEAD -- <path>` show the
+committed text where the Read tool shows the reverted working tree. That is
+worth putting in the reviewer briefs, and it is cheaper than the workflow
+change previously planned for this — briefs are ordinary repository content, so
+a pull request changing them can actually be reviewed, unlike one changing
+`ai-review.yml`.
+
+And one wording fix in D-074 itself: the revert was described as "the reviewer
+harness reverts", which sent `test-auditor` grepping the workflows,
+`.claude/hooks/`, `.claude/settings.json` and `.git/hooks/` for a mechanism
+that is not in this repository. It reproduced the symptom and correctly
+reported that it could not locate the cause here. The decision now says what is
+true: this is behaviour of the environment the reviewer runs in, not automation
+in this repository.
+
+**A third correction, and it undoes one I made an hour earlier.** The forced-verdict
+cut-off is **not** specific to `privacy-security-reviewer`. On #12's `ae7bda6` it hit
+`test-auditor` as well, in the same run, with the same shape:
+
+> `{"verdict":"BLOCK","summary":"test-auditor's review … had not finished … defaulting to
+> BLOCK because an incomplete safety-critical audit must not be reported as a pass."}`
+
+Three occurrences now, across two agents, while `code-reviewer` completed normally on that
+same run. So it is systemic and per-job, not one agent's problem — which is what I said
+after the first occurrence ("transient"), and again after the second ("two for two on the
+same agent"). Both readings were too small, and each was made from one more data point than
+the last. The turn budget in `ai-review.yml` stops being tidy-up here: two blocking required
+checks were red on a three-file docs change that neither of them had found anything wrong
+with.
+
+**`code-reviewer` found the copy this pull request left behind.**
+`docs/plan/07b-claude-code-files/.claude/rules/tests.md` is a bootstrap snapshot of the live
+rules, and scoping the live rule drifted it. Worth being exact about whose fault which part
+is: of the five rule files there, three are byte-identical to live, and two differ —
+`tests.md`, which **this pull request** drifted five minutes ago, and `server-domain.md`,
+which drifted earlier when D-067 added the `new Date(value)` clarification to the live copy
+and not the snapshot.
+
+`tests.md` is resynced here because this change caused it. `server-domain.md` is left alone
+and recorded instead: it is someone else's drift, it is not what this pull request is about,
+and silently fixing it would hide that the snapshot has no mechanism keeping it in step. That
+is the real finding — five files kept in sync by hand, already out of step twice. Worth a
+test that diffs the snapshot against live, or a note in the snapshot saying which direction
+is authoritative.
+
+**All of the paragraph above is wrong, and the resync it describes has been undone.**
+Reading what `07b-claude-code-files/` is for — which should have come before editing it —
+settles it: the README says **"Draft v0 (D-044) · Last updated: 2026-09-20 … the first
+versions … copied into the repository root when it is created"**, and **D-059, "Claude Code
+configuration v1, as installed"**, records that the drafts were installed *with changes*.
+
+So this repository already keeps v0 and v1 apart on purpose: the snapshot is a dated record
+of where the configuration started, the live files are where it is now, and the differences
+are captured in decisions rather than by copying files around. Ten of the ~30 files differ
+already — `CLAUDE.md`, the README, seven agent briefs and `server-domain.md` — because
+D-067, D-069, D-070, D-071 and D-074 changed the live ones. **That drift is the artifact
+working, not rotting.**
+
+Which makes the resync a small act of vandalism on a historical record, done in response to
+a reviewer finding without first asking what the file was for. A sync test — `code-reviewer`
+suggested one and I was about to write it — would have been worse: it would have forced a
+dated v0 to chase a moving target for ever.
+
+What the finding was actually about is real and now fixed properly: a reader could follow
+these files as a current template. The README says plainly that it is v0, that live is
+authoritative, and that nothing should sync them.

@@ -2,6 +2,20 @@
 
 **Status:** Draft v0 (D-044) · **Last updated:** 2026-09-20
 
+> **This is a dated record of v0, not the current configuration. Do not follow
+> it as a template.** The drafts here were installed with changes, recorded as
+> **D-059 — Claude Code configuration v1, as installed**, and the live
+> `.claude/`, `CLAUDE.md` and `.github/CODEOWNERS` have moved on since. Where
+> the two differ, **the live files are authoritative** and these are the
+> history of where they started.
+>
+> Ten of the files here already differ from live — `CLAUDE.md`, the README,
+> seven agent briefs and `.claude/rules/server-domain.md` — because D-067,
+> D-069, D-070, D-071 and D-074 changed the live ones. **That drift is the
+> point, not a defect**: v0 is meant to stay v0. Nothing should sync these to
+> live, and a test asserting they match would erase the v0/v1 distinction this
+> repository keeps on purpose.
+
 These are the first versions of the Claude Code configuration from
 `07-claude-code-setup.md`. They are copied into the repository root when it is
 created (Section 10's first milestone), then verified as described below.

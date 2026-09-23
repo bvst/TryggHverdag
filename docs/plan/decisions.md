@@ -1332,3 +1332,70 @@ empty), and asserts no reviewer is asked for a file and none can write one.
 removes; it now requires the read and comment tools, and the stricter
 assertion — that `Write` is absent — lives beside the reasoning in
 `ai-review.test.mjs`.
+
+## D-074 — The test-naming rule applies to requirement tests, not gate tests
+
+**Decision.** `.claude/rules/tests.md` asks for an `<ID>-ACn:` prefix on tests
+that prove a requirement. Gate and tooling tests under `scripts/` are exempt
+and describe the behaviour they hold instead.
+
+**Why this came up.** `test-auditor` and `code-reviewer` raised it
+independently, on different pull requests, both noting the same thing: the rule
+said every test, and **no test in `scripts/` has ever followed it**. A rule that
+universal practice ignores is not a rule, it is a finding waiting to be
+re-raised on every infrastructure change.
+
+**Why the rule moved rather than the tests.** Checked rather than assumed, from
+`scripts/lib/requirements.mjs` and the generated report:
+
+- `collectRequirements`'s `SOURCES` reads four documents — the MVP scope, and
+  the REL/SEC, PRIV and SM rule tables. There is no CI document among them.
+- `CI-` appears **zero times** in `docs/requirements-status.md`.
+
+So `CI-01` is not a tracked requirement ID. Prefixing gate tests with it would
+satisfy the letter of the rule while `req:coverage` ignored every one of them —
+the appearance of traceability over a number that cannot move. That is the
+exact shape of decorative check this repository has spent a day digging out of
+its own gates, and adding one deliberately would be worse than the
+inconsistency it fixes.
+
+**What this does not change.** Everything else in `tests.md` still applies to
+gate tests: the fake clock, no `.skip` or `.only`, no assertion removed without
+a written reason, and the `// req-coverage: fixtures-only` marker on files that
+quote requirement IDs as sample data. Only the naming prefix is scoped.
+
+**The owner decided this**, after both reviewers asked for a deliberate
+decision rather than a quiet edit. Renaming every gate test was the alternative
+and was declined.
+
+**`.claude/hooks/` is covered too, and its prefixes stay.** `test-auditor`
+found the first version of this decision half-finished: `.claude/hooks/*.test.mjs`
+matches the same `**/*.test.mjs` glob and carries `HK-01`-style prefixes, and
+`HK` is exactly as untracked as `CI` — its source document is not in `SOURCES`
+and `HK-` appears zero times in `docs/requirements-status.md`. Verified both
+before agreeing.
+
+The resolution is not to strip those prefixes. **Exempt is not forbidden.**
+`HK-01` names a real hook requirement and makes the test findable; what the
+exemption removes is the *obligation*, and with it the implication that a
+prefix creates coverage. It never did: `mentions()` counts an ID anywhere in a
+test file's text, never in the test name — which is a sharper version of this
+decision's own argument than the one first written, and came from
+`privacy-security-reviewer` reading `requirements.mjs` rather than taking the
+rationale on trust.
+
+**Reading a `.claude/**` change under review.** The working tree a reviewer
+sees has `.claude/rules/**` and `.claude/agents/*.md` reverted to their
+pre-pull-request contents, so the Read tool shows the *old* text while the
+commit holds the new one. `git show HEAD:<path>` and
+`git diff origin/main...HEAD -- <path>` show what actually changed;
+`privacy-security-reviewer` found that route unaided and reviewed this decision
+through it.
+
+Stated precisely, because a reviewer went looking and could not find it:
+**this is behaviour of the environment the reviewer runs in, not automation in
+this repository.** A grep of the workflows, `.claude/hooks/`,
+`.claude/settings.json` and `.git/hooks/` turns up nothing that reverts these
+paths, and the symptom still reproduces. Earlier wording called it "the
+reviewer harness", which sent someone hunting in the repository for a mechanism
+that is not there.
