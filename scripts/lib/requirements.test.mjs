@@ -102,10 +102,20 @@ describe('coverage and status', () => {
   });
 
   test('the report counts live requirements, not parked ones', () => {
-    const markdown = renderStatus(rows, { date: '2026-09-20' });
+    const markdown = renderStatus(rows);
     expect(markdown).toContain('1 of 2 live requirements');
     expect(markdown).toContain('| LOST-02 | Lost contact | must | 🟢 | 1 |');
     expect(markdown).toContain('⛔ parked');
+  });
+
+  test('the same repository always renders the same report (AR-03)', () => {
+    // CI regenerates this file and fails if the committed copy differs. If the
+    // report carried the date it was generated on, that check would go red at
+    // midnight every night, for a reason nobody changed — and a gate that cries
+    // wolf daily is a gate that stops being read. Git already records when the
+    // file last changed.
+    expect(renderStatus(rows)).toBe(renderStatus(rows));
+    expect(renderStatus(rows)).not.toMatch(/\d{4}-\d{2}-\d{2}/);
   });
 
   test('changed work on an untested requirement is what blocks CI', () => {

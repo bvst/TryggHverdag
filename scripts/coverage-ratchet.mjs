@@ -29,7 +29,7 @@ function main() {
   if (!existsSync(summaryPath)) {
     process.stdout.write(
       `coverage:ratchet: ${SUMMARY} is missing, so nothing was measured. ` +
-        'Run `pnpm run test:unit -- --coverage` first — a coverage gate with no numbers is not a gate.\n',
+        'Run `pnpm run test:unit --coverage` first — a coverage gate with no numbers is not a gate.\n',
     );
     process.exitCode = 1;
     return;

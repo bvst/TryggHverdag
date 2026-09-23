@@ -1,0 +1,154 @@
+# Required checks on every pull request (Section 8, CI-01 to CI-10).
+#
+# Every job runs a repository script, so CI runs exactly what a session runs
+# locally. The list of jobs here is not free-form: scripts/lib/merge-rules.mjs
+# holds the one list of checks, and the gate-integrity job fails if this file,
+# that list and the repository's own merge rules ever stop agreeing.
+#
+# Jobs missing on purpose, because the script they would run does not exist yet:
+#   integration (CI-04) and system (CI-05) — INF-05 adds them
+#   android-e2e (CI-09)                    — INF-06 adds it
+# They are absent rather than skipped: a skipped job reports as a green tick,
+# and a green tick for work nobody did is the one thing this repository must not
+# produce. gate-integrity lists them every run, and starts failing the day their
+# script exists but the job still does not.
+#
+# Actions are pinned to a commit, never a tag: whoever can move a tag can
+# otherwise run their own code in a job that holds this repository's secrets.
+# Dependabot raises the pins (.github/dependabot.yml).
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+
+jobs:
+  gate-integrity: # CI-01: the merge rules are real (D-029), CODEOWNERS is complete (D-042)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run gate:integrity
+        env:
+          # The branch's rules are readable with ordinary repository access.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Who may bypass them is a repository setting, and needs its own
+          # read-only token. Without it this job fails on purpose: "nobody
+          # checked" is not the same answer as "nobody can bypass" (D-029).
+          RULES_READ_TOKEN: ${{ secrets.RULES_READ_TOKEN }}
+      - run: pnpm run test:hooks
+
+  static: # CI-02 (L1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run gate:static
+
+  unit: # CI-03 (L2, L5)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:unit
+
+  contract: # CI-06 (L4, RG-08) — the API against every app version still in use
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      # There are no released versions yet, so this reports that and passes. It
+      # starts failing the moment there is something to break and no oasdiff to
+      # check it with (D-030).
+      - run: pnpm run api:diff
+
+  traceability: # CI-07 — RG-01 requirement coverage, RG-03 test changes, RG-04 coverage ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run req:coverage --fail-on-uncovered-changed
+      - name: The committed requirement report still matches the tests
+        # req:coverage rewrites docs/requirements-status.md. If the committed
+        # copy differs, the report people read is out of date — which is how a
+        # requirement comes to look covered when it is not.
+        run: |
+          git diff --exit-code docs/requirements-status.md || {
+            echo "::error file=docs/requirements-status.md::Out of date. Run 'pnpm run req:coverage' and commit the result."
+            exit 1
+          }
+      - run: pnpm run tests:changes --base origin/${{ github.base_ref || 'main' }}
+      # The ratchet reads coverage/coverage-summary.json, and each job starts on
+      # a clean runner, so this job measures its own rather than reaching for
+      # what the unit job produced. It refuses to pass on missing numbers, so
+      # leaving this out would turn CI-07 red rather than quietly unmeasured.
+      - run: pnpm run test:unit --coverage
+      - run: pnpm run coverage:ratchet --base origin/${{ github.base_ref || 'main' }}
+
+  mutation: # CI-08 (RG-05, D-036) — only when safety code changed; fails if it changed and Stryker is missing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: >-
+          pnpm run mutation
+          --incremental --only-if-safety-paths-changed
+          --base origin/${{ github.base_ref || 'main' }}
+
+  security: # CI-10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level high
+      - run: pnpm run licenses:check
+      # The gitleaks CLI (MIT), not gitleaks-action: the action is under a
+      # proprietary end-user licence that is not on the allowed list in
+      # scripts/lib/licenses.mjs, and it requires a key once a repository is
+      # owned by an organisation — which is where this one is headed (D-029).
+      # Pinned by version and checked against its published checksum, for the
+      # same reason the actions are pinned by commit.
+      - name: Secret scan (gitleaks)
+        env:
+          GITLEAKS_VERSION: '8.30.1'
+          GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
+        run: |
+          set -euo pipefail
+          curl -sSLo gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks git . --redact --no-banner --log-opts="--no-merges"

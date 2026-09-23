@@ -63,7 +63,7 @@ function main() {
   const specFiles = withText(tracked.filter((file) => file.startsWith('docs/specs/')));
 
   const rows = coverage(requirements, testFiles, specFiles);
-  const report = renderStatus(rows, { date: new Date().toISOString().slice(0, 10) });
+  const report = renderStatus(rows);
   writeFileSync(path.join(cwd, REPORT), report);
 
   const covered = rows.filter((row) => row.tests.length > 0).length;

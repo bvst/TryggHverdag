@@ -6,6 +6,8 @@
 /apps/mobile/src/safety-core/     @bvst
 /.github/                         @bvst
 /.claude/                         @bvst
+/scripts/                         @bvst
+/package.json                     @bvst
 /packages/contracts/released/     @bvst
 /docs/plan/decisions.md           @bvst
 /infra/                           @bvst
