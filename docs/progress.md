@@ -763,7 +763,9 @@ rulesets, which the script says in those words), so CI decides that one.
 one problem for most of a morning. `did not end with a verdict line` is the
 brief's fault and this fixes it: `safety-reviewer` demonstrated it on #6 by
 passing on the merits and signing off `PASS — no SM/REL/LOST-relevant…`, which
-the anchored pattern rejects. `produced no verdict file` is a different thing
+the anchored pattern rejects. **("This fixes it" turned out to be wrong, on the
+very next pull request — see "The brief already said so" below. The paragraph
+is left as written so the correction has something to correct.)** `produced no verdict file` is a different thing
 and is **not** fixed: the agent writes nothing at all, file or comment, while
 its own result record reports `success`, `is_error: false` and no denials. That
 write belongs to the agent that *invokes* the reviewer, in `ai-review.yml`.
@@ -895,3 +897,57 @@ is repository content and therefore takes effect on the branch that changes it.
 **Where the numbers are going.** After INF-06 lands, `gate:integrity` will start
 failing again until `android-e2e` joins the required list. That is the same
 reminder, and it should be expected rather than debugged.
+
+
+### The brief already said so, and the reviewer did it anyway
+
+`ai-review (code-reviewer)` went red on #8 (commit `14cacd6`) with
+`did not end with a verdict line` — the mode #7 was supposed to have closed.
+
+Read from the job log and the comment it came from, in that order:
+
+```
+##[error]code-reviewer did not end with a verdict line, so its verdict is unknown.
+```
+```
+VERDICT: APPROVE WITH COMMENTS
+```
+
+So it is not the mode #7 fixed, and not `produced no verdict file` either. The
+reviewer wrote a verdict, last line, correct prefix — and **invented a third
+value**.
+
+**Why this is worth a paragraph rather than a shrug.** `origin/main`'s
+`.claude/agents/code-reviewer.md`, lines 48–49, names `VERDICT: PASS WITH
+COMMENTS` as a form that will be read as "this review produced no verdict".
+#8 changes nothing under `.claude/` — `git diff origin/main...HEAD -- .claude/`
+is empty — so that is the text the reviewer read. It was told, by name, that a
+`WITH COMMENTS` suffix would be rejected, and it produced one anyway.
+
+That falsifies the remedy recorded above this entry, which was *"it has to
+change the agent definition"*. Changing the agent definition is exactly what #7
+did. The instruction-side lever has now been pulled, and observed not to hold.
+
+**What the evidence points at instead.** Both remaining levers are in
+`ai-review.yml`, on `main`, alongside the still-open `produced no verdict file`
+defect — so one branch off `main` can take both:
+
+- The error should **echo the line it rejected**. Today it prints only what it
+  expected, so learning what actually happened means leaving the log for the
+  pull request comment — the one artefact the gate ignores. A gate that says
+  "read the log first" has to make the log sufficient.
+- The invoking agent, not the reviewer, should be the thing that writes a
+  verdict it has already checked. The reviewer is a language model asked to end
+  on an exact string; three briefs now say so and one still drifted.
+
+**What should not change:** the two permitted values. `APPROVE WITH COMMENTS`
+is the reviewer asking for a middle verdict, and the middle verdict is the
+thing the design refuses — qualifications belong in the findings, where they
+are read, not in a verdict line that a script has to interpret. Widening the
+pattern would make this failure disappear by conceding the point it exists to
+make.
+
+**Still advisory, still worth fixing.** `code-reviewer` is not a required check
+(D-043), so none of this blocked #8. The reason to fix it is the day a
+*blocking* reviewer drifts the same way, and the PR stops on a review that
+passed.
