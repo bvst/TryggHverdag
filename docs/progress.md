@@ -1275,3 +1275,33 @@ that is not in this repository. It reproduced the symptom and correctly
 reported that it could not locate the cause here. The decision now says what is
 true: this is behaviour of the environment the reviewer runs in, not automation
 in this repository.
+
+**A third correction, and it undoes one I made an hour earlier.** The forced-verdict
+cut-off is **not** specific to `privacy-security-reviewer`. On #12's `ae7bda6` it hit
+`test-auditor` as well, in the same run, with the same shape:
+
+> `{"verdict":"BLOCK","summary":"test-auditor's review … had not finished … defaulting to
+> BLOCK because an incomplete safety-critical audit must not be reported as a pass."}`
+
+Three occurrences now, across two agents, while `code-reviewer` completed normally on that
+same run. So it is systemic and per-job, not one agent's problem — which is what I said
+after the first occurrence ("transient"), and again after the second ("two for two on the
+same agent"). Both readings were too small, and each was made from one more data point than
+the last. The turn budget in `ai-review.yml` stops being tidy-up here: two blocking required
+checks were red on a three-file docs change that neither of them had found anything wrong
+with.
+
+**`code-reviewer` found the copy this pull request left behind.**
+`docs/plan/07b-claude-code-files/.claude/rules/tests.md` is a bootstrap snapshot of the live
+rules, and scoping the live rule drifted it. Worth being exact about whose fault which part
+is: of the five rule files there, three are byte-identical to live, and two differ —
+`tests.md`, which **this pull request** drifted five minutes ago, and `server-domain.md`,
+which drifted earlier when D-067 added the `new Date(value)` clarification to the live copy
+and not the snapshot.
+
+`tests.md` is resynced here because this change caused it. `server-domain.md` is left alone
+and recorded instead: it is someone else's drift, it is not what this pull request is about,
+and silently fixing it would hide that the snapshot has no mechanism keeping it in step. That
+is the real finding — five files kept in sync by hand, already out of step twice. Worth a
+test that diffs the snapshot against live, or a note in the snapshot saying which direction
+is authoritative.
