@@ -14,7 +14,7 @@ What has actually been built, task by task. The plan is in
 | INF-01 | Monorepo skeleton | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-02 | Claude Code configuration + hook tests | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-03 | Gate scripts + HK-08 | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
-| INF-04 | CI workflows, merge rules, CODEOWNERS | 🟡 Built — waiting on the owner (A-15) to switch the rules on |
+| INF-04 | CI workflows, merge rules, CODEOWNERS | ✅ Done — 2026-09-23 ([#3](https://github.com/bvst/TryggHverdag/pull/3)); `gate:integrity` 5 of 5 against the live rules |
 | INF-05 | Server skeleton | 🟡 Built ([#6](https://github.com/bvst/TryggHverdag/pull/6)) — all four test levels green, reviewers passed; waiting on the owner to re-import the ruleset |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
 | INF-07 | Staging on Clever Cloud | ⬜ Blocked on owner: Clever Cloud token |
@@ -717,8 +717,12 @@ become optional by being forgotten.
 
 ## In flight
 
-**INF-04** is built but not done: it is finished when `gate:integrity` passes,
-which needs A-15 from the owner.
+**INF-04 is done.** The owner switched the merge rules on, and `gate:integrity`
+now reports **5 of 5 against the live repository** — the required checks match,
+the workflows produce them, CODEOWNERS covers the paths that need the owner,
+`main` requires review and forbids rewriting history, and **nobody can bypass
+those rules** (D-029). That last line is the one the whole task existed for, and
+it is the first time it has been true rather than asserted.
 
 **INF-05** is in [#6](https://github.com/bvst/TryggHverdag/pull/6) and its exit
 criterion is met: the `integration` job is **green**, so the contract,
@@ -726,15 +730,12 @@ integration and system levels each have a passing example — the third one prov
 where it can be, which is CI. Eight of nine jobs are green on the current head
 and the five reviewers have passed. One check is red, and it is the owner's.
 
-Waiting for the owner, and none of it is a bug:
-
-- **Re-import `docs/plan/main-ruleset.json`** — it lists 12 required checks now
-  that `integration` and `system` exist. `gate-integrity` fails until then, on
-  purpose, and on exactly one row: "These checks run in CI but do not have to
-  pass before merging: integration, system." A check that is required in this
-  repository but not in GitHub's rules is a check that stops nothing. This is
-  the only thing between #6 and mergeable.
-- **A-15 and A-09** as before, for the merge rules and the AI reviews.
+**The merge rules are live, and that changes what a red check means.** Until
+now a failing check was a note; from now it stops a merge. The three
+`ai-review` checks are among the twelve required — which puts the unfixed
+missing-file failure below squarely on the critical path, because a blocking
+reviewer that fails for that reason now blocks the pull request rather than
+just looking untidy.
 The `pool.on('error')` question is **answered: deferred to the task that brings
 logging** (D-068, the owner's call). Until then the crash stands, which is loud
 rather than hidden — the platform restarts the process, and if it is the worker
