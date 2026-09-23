@@ -4,6 +4,7 @@
 // req:coverage does not collect the prefix and it appears zero times in
 // docs/requirements-status.md — so these prove nothing it counts. That is the
 // exemption D-074 keys to what a test proves rather than to a directory.
+import { spawnSync } from 'node:child_process';
 import { describe, expect, test } from 'vitest';
 import { onlyInert, reasons } from './affected.mjs';
 
@@ -69,6 +70,12 @@ describe('onlyInert', () => {
   });
 
   test('an empty diff has nothing to check, and says so rather than guessing', () => {
+    // Safe only because scripts/affected.mjs refuses to call this at all when
+    // the merge base will not resolve. Without that guard this answer is the
+    // most dangerous one in the file: changedFiles() swallows a failed git call,
+    // so "could not work out what changed" and "nothing changed" arrive here as
+    // the same empty list — and every gate in every job would report nothing to
+    // check and pass. The guard is tested below.
     expect(onlyInert([])).toBe(true);
   });
 });
@@ -84,5 +91,35 @@ describe('reasons', () => {
 
   test('is empty exactly when the diff is inert', () => {
     expect(reasons(['docs/progress.md'])).toEqual([]);
+  });
+});
+
+describe('the script refuses to guess', () => {
+  test('an unresolvable base fails loudly instead of reporting "nothing to check"', () => {
+    // The whole design rests on changedFiles(), which swallows a git call that
+    // fails. If the base cannot resolve, it returns an empty list on a clean
+    // checkout, onlyInert([]) is true, and every guarded step in every job sits
+    // out and passes. This runs the real script against a branch that does not
+    // exist, and requires it to exit non-zero rather than print code=false.
+    const result = spawnSync(
+      process.execPath,
+      ['scripts/affected.mjs', '--base', 'origin/no-such-branch-exists'],
+      { encoding: 'utf8' },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).not.toContain('code=false');
+    expect(`${result.stdout}${result.stderr}`).toContain('not knowing is not the same');
+  });
+
+  test('a resolvable base still answers', () => {
+    // The contrast: the guard must reject only the unanswerable case, not
+    // every case. HEAD always resolves against itself.
+    const result = spawnSync(process.execPath, ['scripts/affected.mjs', '--base', 'HEAD'], {
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/^code=(true|false)$/m);
   });
 });
