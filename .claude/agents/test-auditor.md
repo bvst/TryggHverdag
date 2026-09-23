@@ -39,9 +39,17 @@ Audit the branch against the regression gates:
 - RG-04: read the diff of `coverage-baseline.json`. Every entry must be equal
   or higher; a lowered number needs a written reason. The `traceability` job
   enforces this — you are checking the reason, not the arithmetic.
-- RG-05: read the `mutation` check's result on this commit. Do not run it.
-  Mutants that survive in domain, alert or safety-core code are blocking below
-  80 %, and the job already fails the build if so.
+- RG-05: read the `mutation` check's result on this commit if you can. Do not
+  run it. Mutants that survive in domain, alert or safety-core code are blocking
+  below 80 %, and the job already fails the build if so.
+  **You very likely cannot read it**, and that is not your fault: the workflow
+  grants this job `contents: read`, `pull-requests: write` and `id-token: write`
+  — no `checks: read` — so the check-run API answers 403. When it does, say so
+  plainly in your findings and do not claim a verification you did not make.
+  Do **not** re-run the gate to compensate: it is a required check either way,
+  so the merge is already gated on it whether or not you could see the number.
+  Fixing the permission means editing `.github/workflows/ai-review.yml`, which
+  belongs on `main` (D-063), not in the pull request under review.
 - Tests actually assert behaviour, not just run code.
 
 If you genuinely doubt a gate's result — not merely wish to confirm it — say so

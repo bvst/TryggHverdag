@@ -1072,6 +1072,22 @@ through is a decision, not a commit. Options are on #6.
   starved it" (it never ran them). The pattern is reasoning from plausibility
   instead of reading the job log, which is the only artefact that says which
   branch of the enforcement fired. Read it first.
+- **Half of this decision is currently unfollowable, and a reviewer found it.**
+  D-070 says to *read* the `mutation` and coverage results instead of running
+  them. The reviewer cannot read them: `ai-review.yml` grants the reviewer job
+  `contents: read`, `pull-requests: write` and `id-token: write`, with no
+  `checks: read`, so the check-run API answers 403. Two `test-auditor` runs hit
+  it independently and both said so plainly rather than claiming a verification
+  they had not made — which is the behaviour the non-negotiables ask for, and
+  the reason the gap surfaced at all instead of turning into a quiet false
+  assurance.
+  The brief now says this outright: read the check if you can, say so plainly
+  when you cannot, and do **not** re-run the gate to compensate, because it is a
+  required check either way and the merge is gated on it whether or not the
+  reviewer could see the number. The real fix is one line — `checks: read` in
+  that job's `permissions:` — and it belongs on `main` with the other
+  `ai-review.yml` work (D-063), not in a pull request under review.
+
 - **Why this is the owner's decision and not mine.** It changes what a blocking
   reviewer does, inside the pull request that reviewer is judging — the same
   shape `test-auditor` blocked earlier on this branch, and the reason D-069
