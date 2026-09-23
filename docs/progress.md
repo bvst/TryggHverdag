@@ -649,39 +649,39 @@ appears, including in prose that denies it. `req-coverage: fixtures-only` covers
 the sample-data case; there is no marker for "explicitly not this", and the
 cheapest answer is to describe the requirement instead of naming it.
 
-**A gate defect found along the way, deliberately not fixed here**
+**A gate defect found along the way — and then it stopped being hypothetical**
 
-`ai-review (code-reviewer)` reported **red although it approved**. The
-enforcement in `ai-review.yml` matches `^\**VERDICT: (PASS|BLOCK)\**$` on the
-last line and fails with "its verdict is unknown". The gate is right to refuse
-to interpret — a verdict that cannot be read is not a review that found nothing,
-and guessing would let an unparseable BLOCK merge. But the outcome is still
-wrong, and it happened four times on this pull request, in two different
-wordings: `VERDICT: APPROVE WITH COMMENTS`, and later a bare `**APPROVE**` with
-no `VERDICT:` prefix at all.
+`ai-review` reads one thing from a review: the last line must be exactly
+`VERDICT: PASS` or `VERDICT: BLOCK`. `code-reviewer` failed that four times on
+this pull request, in two spellings (`VERDICT: APPROVE WITH COMMENTS`, then a
+bare `**APPROVE**`), and it was written off as an unreliable agent on an
+advisory check. The note here said the reason to fix it was the day a *blocking*
+reviewer did the same.
 
-**It is intermittent, not consistent, and that is the part to carry forward.**
-An earlier version of this entry said the agent got it wrong on every run; then
-it wrote `VERDICT: PASS` correctly on the fifth head and the check went green.
-The distinction matters to whoever fixes this: a fix verified by one green run
-proves nothing, because one green run is what the unfixed system already does.
-Its own definition already says to end with exactly one of the two lines, so the
-instruction is not missing — it is being followed unreliably, which is the
-harder problem and the reason a test should pin the enforcement regex against
-the five agent files rather than a passing run being taken as evidence.
+That day was the same afternoon. **`safety-reviewer` — blocking — failed on a
+review whose verdict was PASS**, because its last line read `**Verdict: PASS**`
+and the gate's pattern is case-sensitive. A passing safety review, recorded as a
+review that never happened, over one letter's case.
 
-It is advisory (D-043), so nothing was blocked. It matters for the day a
-*blocking* reviewer words a verdict that way and stops a pull request over
-phrasing with no finding behind it. A false red costs a gate its credibility
-about as fast as a false green costs it its purpose.
+**The cause was not an unreliable agent.** All five definitions said: *"End with
+exactly one line: `VERDICT: PASS` or `VERDICT: BLOCK`, followed by your
+findings"* — which puts the findings **after** the verdict, while the gate reads
+the **last** line. A reviewer following that literally cannot pass. The ones
+that passed were reading it charitably. Four failures got blamed on the agents
+for a fortnight of runs when the instruction was the thing that was wrong.
 
-Left out of INF-05 on purpose: this task touches neither the workflow nor the
-agent definitions, and **editing `ai-review.yml` on a branch re-triggers D-063**
-— the fix cannot be verified on the pull request that makes it. The proposed
-patch is in a comment on [#6](https://github.com/bvst/TryggHverdag/pull/6):
-tighten the agent definition, which is repository content and so *is* verifiable
-on a branch, and add a test running the enforcement's own regex against all five
-agent files so the workflow and they cannot drift. **It wants its own `/bugfix`.**
+Fixed here because it blocks this pull request (D-069): findings first, then an
+unmissable statement that the very last line is one of two exact strings, naming
+the spellings that get rejected and what it costs. `scripts/ai-review.test.mjs`
+reads the pattern out of the workflow and holds all five definitions to it, so
+the two cannot drift apart again. Both failure modes were confirmed by planting
+them — the old wording, and a canonical line in the wrong case.
+
+**The better fix still has to happen on `main`.** The regex should be tolerant —
+case-insensitive at least — but editing `ai-review.yml` on a branch re-triggers
+D-063 and stops the reviewers running at all, so it cannot be done or verified
+from here. Until it is, a reviewer that words its verdict differently still
+fails, and a green run is not evidence the problem is gone. The test is.
 
 **Decisions recorded:** D-065 (the server skeleton as built: `/v1` in the path,
 health that answers 200 with the truth in the body, an async clock port, one

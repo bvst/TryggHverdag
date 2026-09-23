@@ -876,3 +876,39 @@ new decision that supersedes it (see `00-working-agreement.md`).
   frequent on Clever Cloud's DEV plan, a restart loop would be a real
   availability problem, and this decision should be revisited before staging
   carries anything that matters (INF-07).
+
+## D-069 — The verdict line is the last line, and the instruction now says so
+- **Date:** 2026-09-23 · **Status:** Accepted (delegated, D-031) · **Section:** 8
+- **Context:** `ai-review (safety-reviewer)` — a **blocking** reviewer (D-043) —
+  failed on a review whose verdict was PASS. Its last line was
+  `**Verdict: PASS**`; the enforcement in `ai-review.yml` matches
+  `^\**VERDICT: (PASS|BLOCK)\**$`, which is case-sensitive. A passing review was
+  recorded as a review that never happened, over letter case. `code-reviewer`
+  had failed the same way four times, in two further spellings
+  (`VERDICT: APPROVE WITH COMMENTS`, then a bare `**APPROVE**`), which was
+  written off as that agent being unreliable because it is only advisory.
+- **The cause was an instruction that contradicted itself**, not an unreliable
+  agent. All five definitions said: *"End with exactly one line: `VERDICT: PASS`
+  or `VERDICT: BLOCK`, followed by your findings"* — which puts the findings
+  **after** the verdict, while the gate reads the **last** line. A reviewer
+  following it literally cannot pass. The ones that passed were reading it
+  charitably.
+- **Decision:** the five reviewer definitions now put findings first and state
+  that the very last line must be exactly `VERDICT: PASS` or `VERDICT: BLOCK`,
+  with nothing after it, naming the spellings that are rejected and what it
+  costs when one is used. `scripts/ai-review.test.mjs` reads the pattern out of
+  the workflow and holds every definition to it, so the gate and the
+  instructions cannot drift apart again. Both failure modes were confirmed by
+  planting them: the old wording, and a canonical line in the wrong case.
+- **Why the workflow was not changed instead**, which is the better fix:
+  `claude-code-action` refuses to run when the workflow file differs from the
+  default branch (the deadlock recorded as D-063), so editing `ai-review.yml` on
+  a branch stops the reviewers running at all and the three blocking checks
+  never report. The regex should also become tolerant — case-insensitive at
+  minimum — and that has to be done on `main`, where it can be verified.
+- **Consequences:** the gate still refuses to guess, which is right: a verdict
+  it cannot read is not a review that found nothing, and interpreting loosely
+  would let an unparseable BLOCK through. What changes is that a reviewer now
+  has an unambiguous instruction to follow. Until the regex is made tolerant,
+  a reviewer that words its verdict differently still fails — so a green run is
+  not evidence the problem is gone; the test is.
