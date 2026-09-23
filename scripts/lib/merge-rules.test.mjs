@@ -149,7 +149,7 @@ describe('reviewRuleset', () => {
     });
 
     expect(reviewRuleset({ branchRules, required })[0]?.what).toContain(
-      'no approval is actually required',
+      'No approval is required before merging',
     );
   });
 
@@ -163,8 +163,24 @@ describe('reviewRuleset', () => {
     delete pullRequest.parameters.required_approving_review_count;
 
     expect(reviewRuleset({ branchRules, required })[0]?.what).toContain(
-      'no approval is actually required',
+      'No approval is required before merging',
     );
+  });
+
+  test('with code-owner review off as well, both are reported and neither overstates', () => {
+    // The report is the one thing here that has to be literally true. With
+    // both switched off this branch fires beside the code-owner one, so its
+    // wording may not assert that code-owner review is on — it never read it.
+    const branchRules = rulesFor(required, {
+      pullRequest: { require_code_owner_review: false, required_approving_review_count: 0 },
+    });
+    const problems = reviewRuleset({ branchRules, required });
+
+    expect(problems.map((p) => p.what)).toEqual([
+      expect.stringContaining('Code owner review is not required'),
+      expect.stringContaining('No approval is required before merging'),
+    ]);
+    expect(problems[1]?.what).toContain('if it is on');
   });
 
   test('without the status-check rule, red checks do not stop a merge', () => {
