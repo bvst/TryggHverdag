@@ -724,26 +724,45 @@ instead, and a required check now blocks a merge. The failure now says what it
 is, with the command to confirm it — proven by reverting an agent file to its
 `origin/main` copy and watching the note appear.
 
-**A fourth diagnosis, and this one has evidence behind it.** `test-auditor` was
-not failing at random. On the run where the other four reviewers passed,
-`claude-code-action` ran **2.2 minutes** for `test-auditor` against **5.5 to 6.0
-minutes** for three of the four that passed beside it — the failing one was the
-*shortest*, so it was not running out of room, which had been the guess. It also
-posted no pull request comment, so it produced nothing at all rather than
-producing a review the gate could not read. What is different about that brief
-is that it alone ordered long re-runs — `pnpm mutation --incremental`, about six
-and a half minutes here — of work that is *already a required check on the same
-commit*. The owner's decision (D-070) is to have it read those results instead.
-That removes a redundancy whatever caused the failure; whether it also cures the
-failure is a hypothesis, and it will be tested on `main`, not here — the harness
-reverts `.claude/agents/*.md` before a reviewer reads them, so PR #6 is still
-judged by the old brief.
+**A fourth wrong diagnosis, and then the job log.** The guess was that
+`test-auditor` alone was ordered to re-run slow gates — `pnpm mutation
+--incremental`, about six and a half minutes — and collapsed before reaching its
+findings. The job log says otherwise, and says it plainly. On `32bf28c` the
+`claude-code-action` step ran 2 min 11 s and **succeeded**; its own result record
+reads `subtype: success`, `is_error: false`, `num_turns: 7`,
+`permission_denials_count: 0`, on `claude-sonnet-5` with a million-token
+context. Seven turns in ninety-five seconds. It did not run out of room, hit a
+denial, or drown in the slow gates — **it never attempted them**, since the
+mutation run alone is four times the whole step. Only the separate
+`Enforce the verdict` step failed, and `No buffered inline comments` says it
+posted nothing either.
 
-**What this means for the next session.** D-070 explains one reviewer, not the
-gate. The others have gone red on earlier runs for reasons still unexplained, and
-a green run proves nothing either way — the reviewers have produced conforming
-output by chance throughout. Adding
-`Write` to the reviewers would make them self-sufficient and is **not**
+The brief's work also plainly *can* complete. On an earlier commit
+`test-auditor` posted a full review — `test:unit` 343/343, `test:integration`
+6/6 against a real PostgreSQL container, `test:system` 10/10, the ratchet,
+`tests:changes`, mutation at **97.37 %** — ending `VERDICT: PASS`. That run did
+every slow thing the brief asked and produced a complete review; its check still
+failed, because the gate reads the file and never the comment. So the two
+failures have opposite shapes, and the slow-gate theory explains neither.
+
+**What was kept, and on what grounds.** D-070 still trims the brief, because the
+re-runs are redundant — `mutation` and `traceability` are required checks on the
+same commit, so re-running them cannot change an outcome, only spend the review.
+That argument stands on its own and needs no theory of the failure. **It is not
+a fix for `produced no verdict file`**, and D-070 says so in those words, so the
+next session does not inherit a solved-looking problem that is still open.
+
+**What this means for the next session.** The verdict file is written by the
+agent that *invokes* the reviewer, from the prompt inside `ai-review.yml` — on
+`main`, where D-063 stops a branch from testing a change to it. That is still
+the open defect and still the owner's call. Three hypotheses about it have now
+been wrong, each stated more confidently than its evidence: "an unreliable
+agent" (read off the comment, the one artefact the gate ignores), "it exhausted
+its budget" (it ran the shortest of the five), "the slow gates starved it" (it
+never ran them). Each time the job log would have settled it in a minute, and
+each time it was reached for last. Read it first.
+
+Adding `Write` to the reviewers would make them self-sufficient and is **not**
 recommended: it trades an independent review for a convenience, and it is the
 owner's call.
 

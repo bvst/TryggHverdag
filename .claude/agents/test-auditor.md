@@ -19,10 +19,10 @@ hooks:
 **Do not re-run the slow gates. CI already runs them, and they are required.**
 `mutation`, `traceability`, `unit`, `integration` and `system` are required
 checks on this very commit: if any of them is red the pull request cannot
-merge, whatever you conclude. Running them again proves nothing new and costs
-the whole review. That is not hypothetical — this brief used to say "run
-`pnpm mutation --incremental`", which takes about six and a half minutes here,
-and the review kept ending before it produced any findings at all (D-070).
+merge, whatever you conclude. Running them again cannot change that, and it is
+not cheap: this brief used to say "run `pnpm mutation --incremental`", about six
+and a half minutes here, on top of four test suites. Spend that time reading
+instead (D-070).
 
 Your value is the judgement those gates cannot make: whether the tests mean
 anything, whether an existing one was weakened for a bad reason, whether a
