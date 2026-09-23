@@ -238,6 +238,88 @@ describe('findUngroupedEcosystems', () => {
     expect(findUngroupedEcosystems(text)).toEqual(['github-actions']);
   });
 
+  test('two groups that each cover half do not add up to coverage', () => {
+    // code-reviewer found this on #11, and it is the exact failure this
+    // function exists to catch: flags were tracked per ECOSYSTEM, so a group
+    // taking '*' for majors and a separate group taking minor+patch for
+    // eslint* looked, added together, like full coverage. Neither group alone
+    // catches every non-major update, which is the thing being asserted.
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    groups:',
+      '      majors:',
+      '        patterns:',
+      "          - '*'",
+      '        update-types:',
+      '          - major',
+      '      tooling:',
+      '        patterns:',
+      "          - 'eslint*'",
+      '        update-types:',
+      '          - minor',
+      '          - patch',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual(['npm']);
+  });
+
+  test('a group that sweeps majors in too is not the policy', () => {
+    // Majors are deliberately ungrouped: a major is where behaviour may change
+    // and is the one that earns a whole reading. A group taking '*' for all
+    // three update types is not "covered", it is the policy inverted.
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    groups:',
+      '      everything:',
+      '        patterns:',
+      "          - '*'",
+      '        update-types:',
+      '          - minor',
+      '          - patch',
+      '          - major',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual(['npm']);
+  });
+
+  test('a double-quoted wildcard counts, because YAML does not care', () => {
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    groups:',
+      '      non-major:',
+      '        patterns:',
+      '          - "*"',
+      '        update-types:',
+      '          - minor',
+      '          - patch',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual([]);
+  });
+
+  test('a key at group depth outside the groups block is not a group', () => {
+    // `commit-message:` has `prefix:` at the same indentation a group name
+    // sits at. Reading that as a group would silently split the real one.
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    commit-message:',
+      "      prefix: 'chore(deps)'",
+      '    groups:',
+      '      non-major:',
+      '        patterns:',
+      "          - '*'",
+      '        update-types:',
+      '          - minor',
+      '          - patch',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual([]);
+  });
+
   test('a commented-out group covers nothing', () => {
     const text = [
       'updates:',

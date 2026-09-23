@@ -170,12 +170,17 @@ export function findUnboundedJobs(text) {
  * `.github` claims about itself, held to line by line rather than through a
  * YAML parser this repository has chosen not to depend on.
  *
- * An ecosystem is covered when one group takes `'*'` and both `minor` and
- * `patch`. A narrower group is the shape this replaced — `dev-tooling` named
- * eslint, vitest and friends, and left every runtime dependency arriving on its
- * own, which is most of the churn. Majors are deliberately left ungrouped: a
- * major is where behaviour may change, and is the one worth a reader's whole
- * attention.
+ * An ecosystem is covered when **one single group** takes every package and
+ * both `minor` and `patch`, and does *not* take `major`. All four conditions
+ * are read per group, which is the correction `code-reviewer` earned on #11:
+ * tracking them per ecosystem meant a group sweeping majors and a separate
+ * group naming `eslint*` added up, between them, to a false pass — while
+ * neither alone caught every non-major update, the thing being asserted.
+ *
+ * Majors are excluded deliberately rather than merely unmentioned. A group
+ * taking `'*'` for all three update types is not coverage, it is the policy
+ * inverted: a major is where behaviour may change and is the one that earns a
+ * reader's whole attention.
  *
  * @param {string} text
  * @returns {string[]}
@@ -183,11 +188,16 @@ export function findUnboundedJobs(text) {
 export function findUngroupedEcosystems(text) {
   const ungrouped = [];
   let current = null;
+  let inGroups = false;
+  let group = null;
+
   const close = () => {
-    if (current !== null && !(current.all && current.minor && current.patch)) {
+    if (current !== null && !current.groups.some((g) => g.all && g.minor && g.patch && !g.major)) {
       ungrouped.push(current.name);
     }
     current = null;
+    inGroups = false;
+    group = null;
   };
 
   for (const line of text.split('\n')) {
@@ -197,18 +207,41 @@ export function findUngroupedEcosystems(text) {
     const start = /^\s*-\s*package-ecosystem:\s*(?<name>\S+)/.exec(line);
     if (start?.groups !== undefined) {
       close();
-      current = { name: start.groups.name, all: false, minor: false, patch: false };
+      current = { name: start.groups.name, groups: [] };
       continue;
     }
     if (current === null) {
       continue;
     }
-    if (/^\s*-\s*'\*'\s*$/.test(line)) {
-      current.all = true;
+    if (/^ {4}groups:/.test(line)) {
+      inGroups = true;
+      group = null;
+      continue;
+    }
+    // Any other key at ecosystem depth ends the groups block. `commit-message:`
+    // puts `prefix:` at exactly the depth a group name sits at, so without this
+    // the real group would be silently split in two.
+    if (/^ {4}\S/.test(line)) {
+      inGroups = false;
+      group = null;
+      continue;
+    }
+    if (inGroups && /^ {6}\S[^:]*:\s*$/.test(line)) {
+      group = { all: false, minor: false, patch: false, major: false };
+      current.groups.push(group);
+      continue;
+    }
+    if (group === null) {
+      continue;
+    }
+    if (/^\s*-\s*['"]\*['"]\s*$/.test(line)) {
+      group.all = true;
     } else if (/^\s*-\s*minor\s*$/.test(line)) {
-      current.minor = true;
+      group.minor = true;
     } else if (/^\s*-\s*patch\s*$/.test(line)) {
-      current.patch = true;
+      group.patch = true;
+    } else if (/^\s*-\s*major\s*$/.test(line)) {
+      group.major = true;
     }
   }
   close();
