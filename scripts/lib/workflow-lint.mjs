@@ -14,8 +14,9 @@
 //      nobody has to pay attention to.
 //
 // Reading YAML line by line is enough for all three and keeps the gate free of
-// a parser dependency. The shapes it has to read are in .github/workflows, and
-// the tests below hold them to that.
+// a parser dependency. The shapes it has to read are in .github/workflows —
+// and, for findUngroupedEcosystems below, .github/dependabot.yml, which is the
+// same concern one file over: what .github claims about itself.
 
 const USES = /^\s*-?\s*uses:\s*(?<ref>\S+)/;
 const PNPM_RUN = /\bpnpm run (?<script>[\w:@.-]+)/g;
@@ -166,21 +167,16 @@ export function findUnboundedJobs(text) {
 /**
  * Ecosystems in `.github/dependabot.yml` whose non-major updates are not grouped.
  *
- * Not a workflow file, but the same concern as the rest of this module: what
- * `.github` claims about itself, held to line by line rather than through a
- * YAML parser this repository has chosen not to depend on.
+ * Covered means **one single group** takes every package and both `minor` and
+ * `patch`, and does *not* take `major`. All four are read per group: tracking
+ * them per ecosystem let a majors group and an `eslint*` group add up to a
+ * false pass, which is the failure this exists to catch. Why it matters, and
+ * what the grouping costs, is in docs/progress.md.
  *
- * An ecosystem is covered when **one single group** takes every package and
- * both `minor` and `patch`, and does *not* take `major`. All four conditions
- * are read per group, which is the correction `code-reviewer` earned on #11:
- * tracking them per ecosystem meant a group sweeping majors and a separate
- * group naming `eslint*` added up, between them, to a false pass — while
- * neither alone caught every non-major update, the thing being asserted.
- *
- * Majors are excluded deliberately rather than merely unmentioned. A group
- * taking `'*'` for all three update types is not coverage, it is the policy
- * inverted: a major is where behaviour may change and is the one that earns a
- * reader's whole attention.
+ * Known limits, both of which fail loud rather than silent — an over-strict red
+ * gate, never a missed ecosystem: flow style (`patterns: ["*"]` on one line) is
+ * not read, and `exclude-patterns` is not accounted for, so a group narrowed
+ * that way would still read as covering everything.
  *
  * @param {string} text
  * @returns {string[]}
@@ -234,14 +230,13 @@ export function findUngroupedEcosystems(text) {
     if (group === null) {
       continue;
     }
-    if (/^\s*-\s*['"]\*['"]\s*$/.test(line)) {
-      group.all = true;
-    } else if (/^\s*-\s*minor\s*$/.test(line)) {
-      group.minor = true;
-    } else if (/^\s*-\s*patch\s*$/.test(line)) {
-      group.patch = true;
-    } else if (/^\s*-\s*major\s*$/.test(line)) {
-      group.major = true;
+    // Quoting is the author's taste, not a difference in meaning, so every
+    // scalar here tolerates it. Accepting it for `'*'` alone was an
+    // inconsistency that would have read a quoted `- 'minor'` as absent.
+    const item = /^\s*-\s*['"]?(?<value>\*|minor|patch|major)['"]?\s*$/.exec(line);
+    if (item?.groups !== undefined) {
+      const key = { '*': 'all', minor: 'minor', patch: 'patch', major: 'major' }[item.groups.value];
+      group[key] = true;
     }
   }
   close();

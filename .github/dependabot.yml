@@ -4,18 +4,13 @@
 # understands that pinning and raises the SHA together with the version comment,
 # so keeping the pins current does not mean keeping them by hand.
 #
-# Every non-major update arrives in one pull request per ecosystem. Majors stay
-# on their own, because a major is where behaviour is allowed to change and is
-# the one that earns a reader's full attention. The grouping is what makes that
-# attention affordable: a fortnight of patch bumps as twelve pull requests is
-# reviewed by nobody, and the two open right now — actions/checkout 6→7 and
-# actions/setup-node 6→7 — are both majors, so they would still have arrived
-# separately under this policy.
+# Every non-major update arrives in one pull request per ecosystem; majors
+# arrive on their own, because a major is where behaviour may change and is the
+# one that earns a whole reading. Security-alert pull requests are unaffected
+# and stay individual: these groups apply to version updates only.
 #
-# The cost, named rather than discovered later: if a grouped update breaks
-# something, the bisect is across every bump in the group. CI runs on the group
-# before it merges, so a break shows up as a red check rather than in
-# production, and a group that goes red can be split by hand.
+# Why, and what it costs: docs/progress.md. Held to by findUngroupedEcosystems
+# in scripts/lib/workflow-lint.mjs.
 version: 2
 updates:
   - package-ecosystem: github-actions

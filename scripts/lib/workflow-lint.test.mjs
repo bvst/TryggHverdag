@@ -300,6 +300,44 @@ describe('findUngroupedEcosystems', () => {
     expect(findUngroupedEcosystems(text)).toEqual([]);
   });
 
+  test('quoted update-types count, as the quoted wildcard already did', () => {
+    // code-reviewer hand-verified this on #11: the wildcard tolerated both
+    // quote styles while minor/patch/major accepted unquoted scalars only, so
+    // a quoted `- 'minor'` read as absent. It failed loud rather than silent —
+    // an over-strict red gate — but an inconsistency in what counts as the
+    // same value is a trap either way.
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    groups:',
+      '      non-major:',
+      '        patterns:',
+      "          - '*'",
+      '        update-types:',
+      "          - 'minor'",
+      '          - "patch"',
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual([]);
+  });
+
+  test('a quoted major is still a major', () => {
+    const text = [
+      'updates:',
+      '  - package-ecosystem: npm',
+      '    groups:',
+      '      everything:',
+      '        patterns:',
+      '          - "*"',
+      '        update-types:',
+      "          - 'minor'",
+      "          - 'patch'",
+      "          - 'major'",
+    ].join('\n');
+
+    expect(findUngroupedEcosystems(text)).toEqual(['npm']);
+  });
+
   test('a key at group depth outside the groups block is not a group', () => {
     // `commit-message:` has `prefix:` at the same indentation a group name
     // sits at. Reading that as a group would silently split the real one.
