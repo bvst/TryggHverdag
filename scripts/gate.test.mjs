@@ -159,9 +159,23 @@ describe("this repository's own workflows", () => {
     const jobs = text.slice(text.indexOf('\njobs:')).split(/(?=^ {2}[a-z-]+:)/m);
 
     for (const job of jobs) {
-      if (!job.includes("steps.affected.outputs.code == 'true'")) continue;
+      const firstGuard = job.indexOf("steps.affected.outputs.code == 'true'");
+      if (firstGuard === -1) continue;
       const name = /^ {2}([a-z-]+):/.exec(job)?.[1];
-      expect(job, `${name} guards steps without classifying the diff`).toContain('- id: affected');
+      const classify = job.indexOf('- id: affected');
+
+      expect(classify, `${name} guards steps without classifying the diff`).toBeGreaterThan(-1);
+      // Order, not merely presence. An earlier version of this test asserted
+      // only that the classify step existed somewhere in the job, and
+      // code-reviewer showed on #17 that moving it below the guarded steps
+      // left the test passing — which is the precise bug it exists to catch.
+      // A guard that reads steps.affected.outputs.code before the step that
+      // sets it reads an empty string, so every guarded step sits out, and the
+      // job still reports success: a gate switched off with a green tick over
+      // it. Comparing positions is the cheap check that actually holds.
+      expect(classify, `${name} classifies the diff after already guarding on it`).toBeLessThan(
+        firstGuard,
+      );
       // And the classify step itself must never be guarded, or it cannot run.
       expect(job).not.toMatch(/if:[^\n]*\n\s+- id: affected/);
     }

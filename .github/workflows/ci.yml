@@ -345,6 +345,17 @@ jobs:
       # owned by an organisation — which is where this one is headed (D-029).
       # Pinned by version and checked against its published checksum, for the
       # same reason the actions are pinned by commit.
+      #
+      # Deliberately NOT guarded by CI-12, unlike the audit and licence steps
+      # above: a secret leaks just as well through prose as through code, and a
+      # documentation-only diff is exactly where someone pastes a token into an
+      # example. It is also the one step in this job that needs no install.
+      #
+      # Honest footnote: it came out unguarded by accident — the edit that
+      # added the guards matched `- run:` steps and this one starts with
+      # `- name:`. A reviewer read it as a considered split. It is the right
+      # behaviour, so it stays, but it is written down now rather than left as
+      # luck that the next edit could undo.
       - name: Secret scan (gitleaks)
         env:
           GITLEAKS_VERSION: '8.30.1'
