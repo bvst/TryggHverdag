@@ -78,6 +78,19 @@ describe("this repository's own workflows", () => {
     expect(changesJob).toContain('pull-requests: read');
   });
 
+  test('the reviewers are granted the tools their prompt needs', () => {
+    // The action gives a plain-text prompt no tools at all unless claude_args
+    // lists them. Without Write the reviewer cannot produce the verdict file,
+    // and the job fails at "Enforce the verdict" having done the whole review —
+    // the reviewer works, the evidence of it does not survive.
+    const text = readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8');
+    const allowed = /--allowedTools\s+"(?<tools>[^"]+)"/.exec(text)?.groups?.tools ?? '';
+
+    expect(allowed.split(',').map((s) => s.trim())).toEqual(
+      expect.arrayContaining(['Read', 'Grep', 'Glob', 'Bash', 'Write']),
+    );
+  });
+
   test('the safety filter in ai-review.yml matches the paths the owner must approve', () => {
     // Two copies of the same list: the paths CODEOWNERS holds for the owner,
     // and the paths that summon safety-reviewer. If they drift, a safety change

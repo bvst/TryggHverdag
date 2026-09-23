@@ -133,6 +133,16 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # A plain-text prompt gets no tools at all unless they are listed
+          # here. Without Write the reviewer does the whole review and then
+          # cannot record its verdict, so the job fails having learned
+          # something and thrown it away. Read/Grep/Glob/Bash are what the
+          # reviewer subagents declare in .claude/agents; Write is for the
+          # verdict file, and the comment tools are how the findings reach a
+          # person rather than only the run log.
+          claude_args: >-
+            --allowedTools
+            "Read,Grep,Glob,Bash,Write,mcp__github__add_issue_comment,mcp__github_inline_comment__create_inline_comment"
           prompt: |
             Use the ${{ matrix.agent }} subagent to review this pull request
             against origin/${{ github.base_ref }}.
