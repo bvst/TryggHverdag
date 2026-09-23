@@ -1,16 +1,26 @@
-# Changes to these paths need the owner's approval before merge (D-042).
+# Changes to these paths need a code owner's approval before merge (D-042).
 # Everything else auto-merges when all required checks pass.
-/apps/server/src/domain/          @bvst
-/apps/server/src/modules/alerts/  @bvst
-/apps/server/src/worker.ts        @bvst
-/apps/mobile/src/safety-core/     @bvst
-/.github/                         @bvst
-/.claude/                         @bvst
-/scripts/                         @bvst
-/package.json                     @bvst
-/packages/contracts/released/     @bvst
-/docs/plan/decisions.md           @bvst
-/infra/                           @bvst
+#
+# Two owners, and the second one is not decoration: GitHub does not let anyone
+# approve their own pull request, and this repository's pull requests are
+# opened by @bvst. With @bvst alone listed, the code-owner gate could never be
+# satisfied on the work that actually happens here — it would be a rule that
+# blocks everything rather than a rule that checks anything. @urso-agent is the
+# owner's second account and exists for exactly this. See D-071.
+/apps/server/src/domain/          @bvst @urso-agent
+/apps/server/src/modules/alerts/  @bvst @urso-agent
+/apps/server/src/worker.ts        @bvst @urso-agent
+/apps/mobile/src/safety-core/     @bvst @urso-agent
+/.github/                         @bvst @urso-agent
+/.claude/                         @bvst @urso-agent
+# Loaded into every agent session, and states the non-negotiables and the
+# binding-decisions rule. As governance-critical as anything under /.claude/.
+/CLAUDE.md                        @bvst @urso-agent
+/scripts/                         @bvst @urso-agent
+/package.json                     @bvst @urso-agent
+/packages/contracts/released/     @bvst @urso-agent
+/docs/plan/decisions.md           @bvst @urso-agent
+/infra/                           @bvst @urso-agent
 
 # Reviewer memory changes often and needs no approval (last match wins).
 /.claude/agent-memory/

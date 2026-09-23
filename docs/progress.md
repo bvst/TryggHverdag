@@ -732,6 +732,63 @@ that fired for INF-04, working as intended: the checks this task added cannot
 become optional by being forgotten.
 
 
+### The reviewer gate — the verdict line, `test-auditor`'s brief, and what is still broken
+
+The work #6 pointed at, in [#7](https://github.com/bvst/TryggHverdag/pull/7).
+It is separate because `test-auditor` blocked #6 for carrying it and the owner
+chose to split rather than override — and the block was right, for the reason
+D-069 already records: a pull request that edits the briefs of the blocking
+reviewers judging it is indistinguishable in form from prompt injection, and a
+decision record inside the diff asserting the owner approved it is not evidence
+of approval from where the reviewer stands.
+
+**What was built.** Five reviewer briefs now put the findings first and the
+verdict on the literal last line (D-069), with `Verdict: PASS`, `**APPROVE**`
+and `VERDICT: PASS WITH COMMENTS` named as traps. `test-auditor` reads the
+`mutation` and coverage results instead of re-running them (D-070), because
+they are required checks on the same commit and re-running cannot change an
+outcome, only spend the review. `scripts/ai-review.test.mjs` holds every brief
+to the verdict pattern read out of `ai-review.yml` and proves the reviewers are
+not told to write the verdict file and hold no `Write` tool.
+`.claude/rules/server-domain.md` and `CLAUDE.md` came along per the reviewer's
+recommended fix.
+
+**What was verified.** `gate:quick` 3 of 3 and `ai-review.test.mjs` 27 of 27
+against these briefs — and **10 failing against `main`'s**, which is the point
+of the test and the reason it had to move with them rather than stay in #6.
+`gate:integrity` cannot run in a cloud session at all (no token to read the
+rulesets, which the script says in those words), so CI decides that one.
+
+**Two failure modes, and only one of them is fixed.** They had been treated as
+one problem for most of a morning. `did not end with a verdict line` is the
+brief's fault and this fixes it: `safety-reviewer` demonstrated it on #6 by
+passing on the merits and signing off `PASS — no SM/REL/LOST-relevant…`, which
+the anchored pattern rejects. `produced no verdict file` is a different thing
+and is **not** fixed: the agent writes nothing at all, file or comment, while
+its own result record reports `success`, `is_error: false` and no denials. That
+write belongs to the agent that *invokes* the reviewer, in `ai-review.yml`.
+
+**What is left, and where.** The `produced no verdict file` defect, on `main`,
+where D-063 no longer blocks testing a change to the workflow now that it lives
+there. Three hypotheses about it have been wrong — an unreliable agent (read off
+the reviewer's comment, the one artefact the gate ignores), an exhausted budget
+(the failing runs were the *shortest*), and the slow gates starving it (the
+failing runs never ran them). D-070 records all three so the next attempt starts
+from evidence rather than repeating them. **Read the job log first**; each wrong
+guess came from reading something else.
+
+Also left, recorded in D-070 rather than closed: `ai-review.test.mjs` does not
+catch a pull request *relaxing* what a blocking reviewer must check, and does
+not cover `.claude/rules/**` or root `CLAUDE.md`, which change what a reviewer
+enforces as surely as a brief does. And the sharpest one — the harness's
+auto-revert is indistinguishable from an attack. Two `test-auditor` instances
+met the same reverted tree hours apart; one called it routine harness state, the
+other reported tampering and advised treating it as a security incident. Both
+behaved correctly. Whatever fixes `ai-review.yml` should make the reversion
+legible, so the difference between "protected" and "attacked" is readable rather
+than inferred.
+
+
 ## In flight
 
 **INF-04 is done.** The owner switched the merge rules on, and `gate:integrity`

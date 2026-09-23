@@ -1,6 +1,11 @@
 # Merge rules — what the owner switches on
 
-**Status:** ⬜ Waiting for the owner · **Added by:** INF-04 · **Last updated:** 2026-09-20
+**Status:** 🟢 Imported and live · **Added by:** INF-04 · **Last updated:** 2026-09-23
+
+The owner imported the ruleset; `gate:integrity` reports **5 of 5** against the
+live repository, so parts 1 and 2 are on. **Part 3 below is still open**, and a
+reviewer has now produced evidence for it rather than leaving it hypothetical —
+see the note there.
 
 Everything else in this repository — the hooks, the gates, the reviewers —
 assumes it is allowed to stop a merge. Nothing here can switch that on: it needs
@@ -175,6 +180,32 @@ ordinary changes merge on green checks while safety paths still wait for you
 (D-042). If a change under a CODEOWNERS path turns out to merge without your
 approval, raise `required_approving_review_count` to 1 — at the cost of every
 pull request then waiting for you. INF-10's drills settle this properly.
+
+**This stopped being hypothetical on 2026-09-23.** Auditing #7, `test-auditor`
+went to the API rather than the prose and found the only `APPROVED` review on a
+change touching `/scripts/` and `/docs/plan/decisions.md` — both assigned to
+`@bvst` alone — came from `urso-agent`, a second collaborator with write access
+that appears nowhere in CODEOWNERS or in `docs/plan/`. With
+`required_approving_review_count: 0`, and `gh pr view --json reviewDecision`
+returning an empty string rather than a definite answer, it could not establish
+whether GitHub will actually withhold the merge pending the owner's own
+approval. Its conclusion, and it is the right one: *"this PR may become
+mergeable on `urso-agent`'s approval alone, on paths CODEOWNERS assigns solely
+to `@bvst`."*
+
+**Half of that is now answered, and the reviewers had the wrong end of it.**
+GitHub does not let anyone approve their own pull request, and the pull
+requests here are opened by `@bvst`. With `@bvst` as the sole code owner the
+rule could never be satisfied on this repository's actual work — it would block
+everything and check nothing. `urso-agent` is the owner's second account and
+exists for exactly that. CODEOWNERS now lists both, and says so in a comment,
+so the next reviewer finds an explanation instead of an anomaly (D-071).
+
+**The other half is still open and still yours.** A second owner makes the gate
+*satisfiable*; it does not prove the gate is *enforced*. `require_code_owner_review:
+true` with `required_approving_review_count: 0` remains unwatched — we believe
+it holds and have not seen it hold. INF-10's drills settle it. Claude does not
+change the merge rules (D-029), least of all to unblock its own pull request.
 
 **Part 3 is not checked by anything.** The gate reads the ruleset and
 CODEOWNERS; whether auto-merge is on, and whether the code-security settings

@@ -22,6 +22,9 @@ export const OWNER_APPROVAL_PATHS = [
   '/apps/mobile/src/safety-core/',
   '/.github/',
   '/.claude/',
+  // Loaded into every agent session, and states the non-negotiables and the
+  // binding-decisions rule that the rest of this file assumes.
+  '/CLAUDE.md',
   // The gates are not only .github and .claude: these run with the tokens the
   // gate-integrity job holds, and decide what every other check does.
   '/scripts/',
@@ -293,6 +296,6 @@ export function reviewCodeowners(text) {
 
   return OWNER_APPROVAL_PATHS.filter((path) => !owned.has(path)).map((path) => ({
     what: `${path} has no code owner, so a change there could merge without the owner seeing it (D-042).`,
-    fix: `Add a line to .github/CODEOWNERS: "${path} @bvst".`,
+    fix: `Add a line to .github/CODEOWNERS: "${path} @bvst @urso-agent".`,
   }));
 }
