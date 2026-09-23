@@ -383,6 +383,38 @@ of them settled an open question:
   blocking reviewers **fail**, not skip. Without `if: always()` and that guard
   they would have been green ticks for reviews that never ran.
 
+**The bootstrap deadlock (open, needs the owner)**
+
+With the secret added, the reviewers got as far as the action and then
+stopped:
+
+> Skipping action due to workflow validation: The workflow file must exist and
+> have identical content to the version on the repository's default branch.
+> … your workflow will begin working once you merge your PR.
+
+That is a deliberate defence in `claude-code-action`: a pull request must not be
+able to rewrite the workflow that holds the secrets and have the rewritten
+version run. `ai-review.yml` is *being added* by this pull request, so it does
+not exist on `main`, so the action skips itself — and the three `ai-review`
+checks can never pass on the pull request that introduces them.
+
+The ruleset requires those three checks. So the gates are now strong enough to
+block the change that creates them. Nobody can bypass it either, which is D-029
+working exactly as designed and exactly as inconveniently as designed.
+
+It resolves itself after one merge, and the only way to get that merge is for
+the owner to relax enforcement once, deliberately. Written up in
+`plan/merge-rules.md`; the owner decides.
+
+Confirmed along the way: the **Claude GitHub App is installed** (the log shows
+the OIDC exchange succeeding and the actor as `claude[bot]`), and the
+**`CLAUDE_CODE_OAUTH_TOKEN` is valid** — the token guard passed, which it only
+does when a credential is present.
+
+Still unverified: whether the `claude_args` tool grant added for the verdict
+file is sufficient. The action has never actually run a review, so that fix is
+reasoned rather than proven. The first merge is what tests it.
+
 **Follow-ups the reviewers raised that are deliberately not in this task**
 
 - **`apps/server/src/worker.ts` is missing from the safety paths in
