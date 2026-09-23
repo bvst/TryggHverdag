@@ -724,9 +724,25 @@ instead, and a required check now blocks a merge. The failure now says what it
 is, with the command to confirm it — proven by reverting an agent file to its
 `origin/main` copy and watching the note appear.
 
-**What this means for the next session.** Blocking reviewers will keep going red
-at random until the workflow is fixed. A green run proves nothing either way —
-the reviewers have produced conforming output by chance throughout. Adding
+**A fourth diagnosis, and this one has evidence behind it.** `test-auditor` was
+not failing at random. On the run where the other four reviewers passed,
+`claude-code-action` ran **2.2 minutes** for `test-auditor` against **5.5 to 6.0
+minutes** for three of the four that passed beside it — the failing one was the
+*shortest*, so it was not running out of room, which had been the guess. It also
+posted no pull request comment, so it produced nothing at all rather than
+producing a review the gate could not read. What is different about that brief
+is that it alone ordered long re-runs — `pnpm mutation --incremental`, about six
+and a half minutes here — of work that is *already a required check on the same
+commit*. The owner's decision (D-070) is to have it read those results instead.
+That removes a redundancy whatever caused the failure; whether it also cures the
+failure is a hypothesis, and it will be tested on `main`, not here — the harness
+reverts `.claude/agents/*.md` before a reviewer reads them, so PR #6 is still
+judged by the old brief.
+
+**What this means for the next session.** D-070 explains one reviewer, not the
+gate. The others have gone red on earlier runs for reasons still unexplained, and
+a green run proves nothing either way — the reviewers have produced conforming
+output by chance throughout. Adding
 `Write` to the reviewers would make them self-sufficient and is **not**
 recommended: it trades an independent review for a convenience, and it is the
 owner's call.
@@ -734,8 +750,12 @@ owner's call.
 **Decisions recorded:** D-065 (the server skeleton as built: `/v1` in the path,
 health that answers 200 with the truth in the body, an async clock port, one
 heartbeat row, three minutes before `degraded`), D-066 (Stryker's command
-runner, with the evidence that the Vitest runner was wrong) and D-067 (AR-03
-bans reading the clock, not constructing a Date — with the bug that prompted it).
+runner, with the evidence that the Vitest runner was wrong), D-067 (AR-03
+bans reading the clock, not constructing a Date — with the bug that prompted it),
+D-068 (`pool.on('error')` deferred to the task that brings logging), D-069 (the
+reviewers' verdict line, and the trust boundary a pull request may not move) and
+D-070 (`test-auditor` reads the slow gates rather than re-running required
+checks).
 
 **What the owner has to do before this can merge.** `docs/plan/main-ruleset.json`
 now lists **12** required checks — `integration` and `system` are new. Until the

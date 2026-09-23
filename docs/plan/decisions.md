@@ -966,3 +966,57 @@ protection that makes the breach above impossible to sneak past.
 
 **So no pull request can fix this gate from inside the gate**, and the way
 through is a decision, not a commit. Options are on #6.
+
+## D-070 — `test-auditor` reads the slow gates instead of re-running them
+- **Date:** 2026-09-23 · **Status:** Accepted (owner) · **Section:** 6
+- **Context:** `ai-review (test-auditor)` — a required check — failed on PR #6
+  with `produced no verdict file`, repeatedly, including after a re-run, while
+  the other four reviewers passed on the same commit.
+- **What the evidence shows.** On the run where the other four succeeded,
+  `claude-code-action` ran **2.2 minutes** for `test-auditor` and **5.5 to 6.0
+  minutes** for `code-reviewer`, `safety-reviewer` and
+  `privacy-security-reviewer`. The failing one was the *shortest*, not the
+  longest. And it posted **no pull request comment either** — not a review that
+  forgot to write its verdict file, but a review that ended before producing
+  anything at all.
+- **What its brief uniquely asks for.** `test-auditor` was told to run
+  `pnpm req:coverage`, check the coverage ratchet, and run
+  `pnpm mutation --incremental`, which takes about six and a half minutes here
+  by the reviewer's own reports. Each of those is already a **required check on
+  the same commit**: `mutation` (RG-05), `traceability` (RG-01, RG-03, RG-04).
+  No other reviewer's brief asks for a long re-run, and no other reviewer
+  failed.
+- **The mechanism is not proven, and this decision does not rest on it.** Two
+  guesses have already been wrong. "It exhausted its budget" — it ran the
+  shortest of the five. "The read-only guard blocked the mutation run" — the
+  guard matches shell command strings, `pnpm mutation` matches none of its
+  patterns, and Stryker's writes happen inside node where the guard never looks
+  (checked in `guard-bash.mjs`, not assumed). What links the redundant work to
+  the empty output is still a hypothesis. The case for removing it is that it is
+  redundant, and that holds either way.
+- **Decision (the owner's).** The brief now tells `test-auditor` to read those
+  results rather than re-run them. `req:coverage` stays: it takes seconds, and
+  its output is what the RG-01 judgement is made on. The ratchet becomes reading
+  the `coverage-baseline.json` diff — the arithmetic is the `traceability` job's
+  to enforce, the *reason* for a lowered number is the auditor's. Mutation is
+  read, not run. It may still re-run a gate it genuinely doubts, and must then
+  say in its findings why it doubted it: the line is between doubting a result
+  and wishing to confirm one.
+- **This weakens nothing.** What it stops re-running are required checks that
+  must be green on this same commit for the pull request to merge at all.
+  Nothing becomes unverified — it stops being verified twice. What the auditor
+  uniquely gives is judgement those gates cannot make: whether the tests mean
+  anything, whether an existing test was weakened for a bad reason, whether a
+  requirement ID is a real claim or a word in a comment. That is reading work,
+  and it is what was being lost.
+- **Why this is the owner's decision and not mine.** It changes what a blocking
+  reviewer does, inside the pull request that reviewer is judging — the same
+  shape `test-auditor` blocked earlier in this branch, and the reason D-069 says
+  D-031 delegates library and tool choices, not the reviewer trust boundary.
+  The owner chose it explicitly when asked.
+- **It cannot take effect on PR #6.** The reviewer harness reverts
+  `.claude/agents/*.md` to their pre-pull-request contents before a reviewer
+  reads them, so no pull request can change the brief of the agent reviewing it.
+  `ai-review (test-auditor)` will keep failing on #6 with the old brief. Merging
+  #6 still needs the owner's separate call on that required check; this decision
+  is what makes the next pull request behave.
