@@ -668,61 +668,16 @@ appears, including in prose that denies it. `req-coverage: fixtures-only` covers
 the sample-data case; there is no marker for "explicitly not this", and the
 cheapest answer is to describe the requirement instead of naming it.
 
-**A gate defect found along the way — two of them, and one is still live**
-
-`ai-review` reads one file per reviewer, `review-<agent>.md`, and fails if its
-last line is not exactly `VERDICT: PASS` or `VERDICT: BLOCK`. Two **blocking**
-reviewers failed on reviews that had found nothing wrong, for two different
-reasons that took three attempts to tell apart:
-
-- **`safety-reviewer`** — "did not end with a verdict line". Its file ended
-  `**Verdict: PASS**`; the pattern is case-sensitive. A passing safety review
-  turned into a failing check by one letter's case. **Fixed** (D-069): the
-  definitions said *"End with exactly one line: `VERDICT: PASS` ... followed by
-  your findings"*, which puts the findings **after** the verdict while the gate
-  reads the **last** line. A reviewer following it literally could not pass.
-- **`test-auditor`, then `code-reviewer`** — "produced no verdict file". They
-  posted pull request comments ending in perfectly conforming verdicts and
-  failed anyway, because **the gate never reads the comment**. **Not fixed, and
-  not fixable from a branch.**
-
-**Why the second one cannot be fixed here.** The file is written by the agent
-that *invokes* the reviewers, instructed by the prompt inside `ai-review.yml` —
-and editing that file on a branch re-triggers D-063 and stops the reviewers
-running at all. So it belongs on `main`: make the writing step explicit and
-checkable, or have the enforcement read the comment, which is the artefact that
-reliably exists.
-
-The reviewers are the wrong place to fix it, and that is a narrower claim than
-the one first written here. Their frontmatter grants `Read, Grep, Glob, Bash`
-and no `Write`, so "write it with the Write tool" was unfollowable as written —
-but `Bash` can write a file, so a reviewer told to shell out would manage it.
-The objection is not that it is impossible. It is that a reviewer writing into
-the tree it is reviewing turns "read-only review" into a formality, and the
-failure is in the invoking agent either way.
-
-**Three wrong diagnoses, and they rhyme.** First "an unreliable agent" — read
-off the reviewer's *comment*, the one artefact the gate ignores; right by luck
-for one reviewer, flatly wrong for another whose comment was flawless while its
-check was red. Then "the instruction contradicts itself" — true, and only half
-the story. Then "tell the reviewers to write the file" — added and
-removed again, first on the grounds that they could not, which was itself an
-overclaim: they have no `Write` tool, but `Bash` writes files perfectly well.
-The real objection is that it is the wrong actor, and an instruction aimed at
-the wrong actor moves the blame without moving the behaviour. The
-job log names which of the two errors fired. Nothing else does, and it was not
-read until the third attempt.
-
-**The test that guards all this had a trap of its own.** `test-auditor` ran the
-unit suite inside its own sandbox and hit about twenty failures in
-`scripts/ai-review.test.mjs` — because that harness reverts `.claude/agents/*.md`
-to their pre-pull-request contents, so a pull request cannot rewrite the
-instructions of the agent reviewing it. Sound protection, and a file that reads
-those very files fails for a reason that has nothing to do with the code. That
-reviewer worked it out and said so; the next one might report it as a finding
-instead, and a required check now blocks a merge. The failure now says what it
-is, with the command to confirm it — proven by reverting an agent file to its
-`origin/main` copy and watching the note appear.
+**The reviewer gate's defects moved to their own pull request.** Investigating
+them produced changes to `.claude/agents/*.md`, `.claude/rules/server-domain.md`
+and `CLAUDE.md` — and `test-auditor` blocked #6 for carrying them, correctly: a
+pull request that edits its own blocking reviewers' briefs is indistinguishable
+in form from prompt injection, and a decision record inside the diff claiming
+the owner approved it is not evidence of approval from where the reviewer
+stands. The owner chose to split them out rather than override. So D-069, D-070,
+`scripts/ai-review.test.mjs` and the whole account of that investigation live in
+that pull request, which the owner reviews directly; the paths were already
+CODEOWNERS-gated to them.
 
 **The typecheck gate could pass code that does not compile.** A privacy review
 raised drizzle-kit's telemetry and recommended `telemetry: false` in
@@ -761,99 +716,13 @@ review comment that was wrong on both its facts still led to a real defect,
 because checking it meant running it instead of reasoning about it. The finding
 itself is declined, with the evidence above.
 
-**A fourth wrong diagnosis, and then the job log.** The guess was that
-`test-auditor` alone was ordered to re-run slow gates — `pnpm mutation
---incremental`, about six and a half minutes — and collapsed before reaching its
-findings. The job log says otherwise, and says it plainly. On `32bf28c` the
-`claude-code-action` step ran 2 min 11 s and **succeeded**; its own result record
-reads `subtype: success`, `is_error: false`, `num_turns: 7`,
-`permission_denials_count: 0`, on `claude-sonnet-5` with a million-token
-context. Seven turns in ninety-five seconds. It did not run out of room, hit a
-denial, or drown in the slow gates — **it never attempted them**, since the
-mutation run alone is four times the whole step. Only the separate
-`Enforce the verdict` step failed, and `No buffered inline comments` says it
-posted nothing either.
-
-The brief's work also plainly *can* complete. On an earlier commit
-`test-auditor` posted a full review — `test:unit` 343/343, `test:integration`
-6/6 against a real PostgreSQL container, `test:system` 10/10, the ratchet,
-`tests:changes`, mutation at **97.37 %** — ending `VERDICT: PASS`. That run did
-every slow thing the brief asked and produced a complete review; its check still
-failed, because the gate reads the file and never the comment. So the two
-failures have opposite shapes, and the slow-gate theory explains neither.
-
-**What was kept, and on what grounds.** D-070 still trims the brief, because the
-re-runs are redundant — `mutation` and `traceability` are required checks on the
-same commit, so re-running them cannot change an outcome, only spend the review.
-That argument stands on its own and needs no theory of the failure. **It is not
-a fix for `produced no verdict file`**, and D-070 says so in those words, so the
-next session does not inherit a solved-looking problem that is still open.
-
-**Two failures, not one — and merging this fixes the first.** They are worth
-separating, because the enforcement has two branches and they have different
-causes and different cures.
-
-*"did not end with a verdict line"* is the brief's fault, and `safety-reviewer`
-demonstrated it on `73208ef` while passing on the merits. Its review put the
-findings first and signed off `PASS — no SM/REL/LOST-relevant behavior change is
-missing coverage…`, so the file existed and the gate rejected its last line. The
-brief it was actually given is `origin/main`'s, because the harness reverts these
-files: *"End with exactly one line: `VERDICT: PASS` or `VERDICT: BLOCK`, followed
-by your findings."* That puts the verdict **before** the findings while the gate
-reads the **last** line — a reviewer following it literally cannot pass. This
-pull request already fixes it (findings first, the verdict as the literal last
-line, with `Verdict: PASS`, `**APPROVE**` and `VERDICT: PASS WITH COMMENTS`
-named as traps), and the fix takes effect for every review after it merges.
-Predicted from the comment's ending before the log was read, then confirmed by
-it — the first guess about this gate that survived contact with the evidence.
-
-*"produced no verdict file"* is a different thing and is **not** fixed here: the
-agent writes nothing at all, file or comment, and the write belongs to the agent
-that invokes the reviewer, in `ai-review.yml` on `main`.
-
-So merging closes one of the two and leaves the other exactly where it was.
-
-**It affects every reviewer, and it is not about their briefs.** By the end of
-this task all four reviewers that run had failed at least once with
-`produced no verdict file`, each while posting a good review comment:
-`test-auditor` and `safety-reviewer` on `6e392e5`, `code-reviewer` on
-`73208ef`, `privacy-security-reviewer` earlier. Their briefs have nothing in
-common — `safety-reviewer`'s names no gates to run at all — so no theory about
-what a reviewer was *told to do* survives. `code-reviewer` is the clearest case:
-it has now hit **both** branches of the enforcement at different times, the
-wording one (`VERDICT: APPROVE WITH COMMENTS`, which the pattern rejects) and
-this one, which fires before any wording is read.
-
-Which of them can block a merge is a separate question, and worth keeping
-straight: `main-ruleset.json` requires only the three blocking reviewers —
-`safety-reviewer`, `privacy-security-reviewer`, `test-auditor`.
-`ai-review (code-reviewer)` and `ai-review (a11y-i18n-reviewer)` are advisory
-(D-043) and required by nothing, so their red is noise on the merge decision,
-however loud it looks in the checks list.
-
-**What this means for the next session.** The verdict file is written by the
-agent that *invokes* the reviewer, from the prompt inside `ai-review.yml` — on
-`main`, where D-063 stops a branch from testing a change to it. That is still
-the open defect and still the owner's call. Three hypotheses about it have now
-been wrong, each stated more confidently than its evidence: "an unreliable
-agent" (read off the comment, the one artefact the gate ignores), "it exhausted
-its budget" (it ran the shortest of the five), "the slow gates starved it" (it
-never ran them). Each time the job log would have settled it in a minute, and
-each time it was reached for last. Read it first.
-
-Adding `Write` to the reviewers would make them self-sufficient and is **not**
-recommended: it trades an independent review for a convenience, and it is the
-owner's call.
-
 **Decisions recorded:** D-065 (the server skeleton as built: `/v1` in the path,
 health that answers 200 with the truth in the body, an async clock port, one
 heartbeat row, three minutes before `degraded`), D-066 (Stryker's command
-runner, with the evidence that the Vitest runner was wrong), D-067 (AR-03
-bans reading the clock, not constructing a Date — with the bug that prompted it),
-D-068 (`pool.on('error')` deferred to the task that brings logging), D-069 (the
-reviewers' verdict line, and the trust boundary a pull request may not move) and
-D-070 (`test-auditor` reads the slow gates rather than re-running required
-checks).
+runner, with the evidence that the Vitest runner was wrong), D-067 (AR-03 bans
+reading the clock, not constructing a Date — with the bug that prompted it) and
+D-068 (`pool.on('error')` deferred to the task that brings logging, why it must
+never log the raw error, and the pool `startWorker` never closes).
 
 **What the owner has to do before this can merge.** `docs/plan/main-ruleset.json`
 now lists **12** required checks — `integration` and `system` are new. Until the
