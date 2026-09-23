@@ -15,7 +15,7 @@ What has actually been built, task by task. The plan is in
 | INF-02 | Claude Code configuration + hook tests | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-03 | Gate scripts + HK-08 | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-04 | CI workflows, merge rules, CODEOWNERS | 🟡 Built — waiting on the owner (A-15) to switch the rules on |
-| INF-05 | Server skeleton | 🟡 Built — L2, L4 and L6 pass here; **L3 is proven by CI only** (no Docker in a cloud session) |
+| INF-05 | Server skeleton | 🟡 Built ([#6](https://github.com/bvst/TryggHverdag/pull/6)) — L2, L4 and L6 pass here; **L3 is proven by CI only** (no Docker in a cloud session) |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
 | INF-07 | Staging on Clever Cloud | ⬜ Blocked on owner: Clever Cloud token |
 | INF-08 | Monitoring | ⬜ Blocked on owner: Healthchecks.io / UptimeRobot |
@@ -466,7 +466,7 @@ reading the bypass list needs its own token rather than Claude's, and D-061
   or skipped with its reason where no token is set. `gate:quick` — what the stop
   gate runs — is green.
 
-### 2026-09-23 — INF-05: the server skeleton 🟡 (pull request pending)
+### 2026-09-23 — INF-05: the server skeleton 🟡 (pull request [#6](https://github.com/bvst/TryggHverdag/pull/6))
 
 **What it is.** Two processes that share a database and nothing else: an API
 that answers `/v1/health`, and a worker that proves it is alive by writing a row
@@ -578,8 +578,8 @@ become optional by being forgotten.
 **INF-04** is built but not done: it is finished when `gate:integrity` passes,
 which needs A-15 from the owner.
 
-**INF-05** is built and pushed. It is done when the `integration` job is green
-on its pull request — that job is the only place the L3 tests can run, so until
+**INF-05** is built and in [#6](https://github.com/bvst/TryggHverdag/pull/6). It is done when the `integration` job is green
+on that pull request — that job is the only place the L3 tests can run, so until
 it reports, one third of this task's exit criterion is written but unproven.
 
 Two things are waiting for the owner, and neither is a bug:
