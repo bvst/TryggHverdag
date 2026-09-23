@@ -1314,10 +1314,17 @@ configuration v1, as installed"**, records that the drafts were installed *with 
 
 So this repository already keeps v0 and v1 apart on purpose: the snapshot is a dated record
 of where the configuration started, the live files are where it is now, and the differences
-are captured in decisions rather than by copying files around. Ten of the ~30 files differ
-already — `CLAUDE.md`, the README, seven agent briefs and `server-domain.md` — because
-D-067, D-069, D-070, D-071 and D-074 changed the live ones. **That drift is the artifact
-working, not rotting.**
+are captured in decisions rather than by copying files around. Most of the files there differ
+already — briefs, hooks, settings, `CLAUDE.md` and `.github/CODEOWNERS` among them —
+because D-059 installed them with changes and D-067, D-069, D-070, D-071 and D-074 have
+moved the live ones since. **That drift is the artifact working, not rotting.**
+
+*(This paragraph first said "ten", and named D-071 as a cause in the same breath as
+omitting `CODEOWNERS`, which is the file D-071 changed. `code-reviewer` caught it: the
+comparison behind the number had quietly been `-name '*.md'`, so every hook, `settings.json`
+and `CODEOWNERS` fell out of it. A recount gives 21 against the working tree and the
+reviewer got 20 against `origin/main`. Two careful counts disagreeing is the argument for
+its own fix — the note now carries no tally at all, just the command that computes one.)*
 
 Which makes the resync a small act of vandalism on a historical record, done in response to
 a reviewer finding without first asking what the file was for. A sync test — `code-reviewer`

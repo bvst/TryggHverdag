@@ -10,14 +10,16 @@ paths:
 - A test that proves a requirement starts its name with that requirement's ID
   and acceptance criterion, e.g.
   `LOST-02-AC1: alerts every responder after 5 minutes of silence`.
-- **Gate, hook and tooling tests are exempt from that naming rule** — under
-  `scripts/` and `.claude/hooks/` — and describe the behaviour they hold
-  instead. They prove the machinery works, not that a requirement is met, and
-  the IDs they would carry (`CI-01`, `HK-01`) are not in
-  `collectRequirements`'s `SOURCES`, so `req:coverage` never counts them.
-  Requiring a prefix here produces the look of traceability over a number that
-  does not move: the exact shape of decorative check this repository keeps
-  having to dig out (D-074).
+- **A test that proves no tracked requirement is exempt from that naming rule**
+  and describes the behaviour it holds instead — gate, hook and tooling tests,
+  wherever they live. Today that is `scripts/` and `.claude/hooks/`, and also
+  `packages/config/eslint/index.test.mjs`, but the exemption is keyed to what
+  the test proves, not to a directory: a tooling test in a new place should not
+  need this rule amended again. Tracked means the ID's source document is in
+  `collectRequirements`'s `SOURCES`; `CI-`, `HK-` and `AR-` are not, and
+  `req:coverage` never counts them. Requiring a prefix here produces the look
+  of traceability over a number that does not move: the exact shape of
+  decorative check this repository keeps having to dig out (D-074).
 - The hook tests already carry `HK-01`-style prefixes and **should keep them**.
   Exempt is not forbidden: `HK-01` names a real hook requirement in
   `docs/plan/07-claude-code-setup.md` and makes the test findable. What the
