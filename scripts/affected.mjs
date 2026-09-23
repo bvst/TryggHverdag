@@ -11,6 +11,15 @@
 // It never says "skip this job". It says whether there is work, and each job
 // decides what to do with that — because a skipped job reports as a green tick
 // and a green tick for work nobody did is what this repository must not produce.
+//
+// This runs BEFORE actions/setup-node in every job, on whatever Node the runner
+// ships rather than the version .nvmrc pins. That is deliberate: setting up Node
+// is most of what a job pays for on an inert diff, so asking the question after
+// paying for the answer would give most of the saving back. The price is a
+// standing constraint on this file — it must import only stable Node built-ins
+// and repository-local modules, never a dependency and never a recent-version
+// API. It imports node:fs and two local modules, and should stay that way.
+// (test-auditor noted the version gap on #17; it is a trade, not an oversight.)
 import { appendFileSync } from 'node:fs';
 import { changedFiles, mergeBase } from './lib/git.mjs';
 import { onlyInert, reasons } from './lib/affected.mjs';

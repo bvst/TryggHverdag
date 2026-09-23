@@ -1,6 +1,6 @@
 # 8 · CI/CD, environments & releases
 
-**Status:** ✅ Done — draft v0 files in [08b-ci-files/](08b-ci-files/README.md) · **Last updated:** 2026-09-20
+**Status:** ✅ Done — draft v0 files in [08b-ci-files/](08b-ci-files/README.md) · **Last updated:** 2026-09-23
 
 ## Summary
 - **Every local gate runs again in CI:** 11 required checks, including one
