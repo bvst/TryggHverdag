@@ -740,8 +740,14 @@ logging** (D-068, the owner's call). Until then the crash stands, which is loud
 rather than hidden — the platform restarts the process, and if it is the worker
 the heartbeat stops and `/v1/health` reports `degraded` within three minutes.
 `db.ts` says so where the handler will go, so the next reader finds reasoning
-rather than an oversight. Worth revisiting before INF-07 if idle-connection
-churn on Clever Cloud's DEV plan turns out to cause a restart loop.
+rather than an oversight.
+
+**The stake changes at M2, and D-068 now says so.** Today a restart loop from
+idle-connection churn is an availability problem: health goes `degraded` and
+someone is annoyed. Once the worker carries the watchdog, a worker that keeps
+restarting is a watchdog that keeps not sweeping — the symptom is a journey
+nobody is watching, not a red tick. Revisit it before the worker carries journey
+state, not merely if churn is observed.
 
 **An unmerged branch exists: `claude/inf-04-follow-through`.** It closes INF-04's
 record and widens `engines.node` so Dependabot can run (its updater uses Node 24

@@ -872,10 +872,15 @@ new decision that supersedes it (see `00-working-agreement.md`).
   crash says a connection died, not which one or why — and that is exactly what
   the logging task is for. `db.ts` says so at the point where the handler will
   go, so the next reader finds the reasoning rather than an oversight.
-- **Carries a cost worth naming:** if idle-connection churn turns out to be
-  frequent on Clever Cloud's DEV plan, a restart loop would be a real
-  availability problem, and this decision should be revisited before staging
-  carries anything that matters (INF-07).
+- **Carries a cost worth naming, and the cost grows:** if idle-connection churn
+  turns out to be frequent on Clever Cloud's DEV plan, a restart loop is an
+  availability problem today — the health endpoint goes `degraded` and someone
+  is annoyed. **From M2 it is not that.** Once the worker carries the watchdog,
+  a worker that keeps restarting is a watchdog that keeps not sweeping, and the
+  symptom is a journey nobody is watching rather than a red tick. `safety-reviewer`
+  made that point on #6 and it is the sharper statement of the stake: revisit
+  this before the worker carries journey state, not merely if churn is observed.
+  Deferred is not the same as decided against.
 
 ## D-069 — Two review-gate failures, and only one of them is fixable from a branch
 - **Date:** 2026-09-23 · **Status:** Accepted (delegated, D-031) · **Section:** 8
