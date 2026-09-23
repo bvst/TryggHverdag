@@ -15,7 +15,7 @@ What has actually been built, task by task. The plan is in
 | INF-02 | Claude Code configuration + hook tests | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-03 | Gate scripts + HK-08 | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-04 | CI workflows, merge rules, CODEOWNERS | 🟡 Built — waiting on the owner (A-15) to switch the rules on |
-| INF-05 | Server skeleton | 🟡 Built ([#6](https://github.com/bvst/TryggHverdag/pull/6)) — L2, L4 and L6 pass here; **L3 is proven by CI only** (no Docker in a cloud session) |
+| INF-05 | Server skeleton | 🟡 Built ([#6](https://github.com/bvst/TryggHverdag/pull/6)) — all four test levels green, reviewers passed; waiting on the owner to re-import the ruleset |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
 | INF-07 | Staging on Clever Cloud | ⬜ Blocked on owner: Clever Cloud token |
 | INF-08 | Monitoring | ⬜ Blocked on owner: Healthchecks.io / UptimeRobot |
@@ -601,6 +601,54 @@ follow-up from INF-04's review, listed there as "nothing is wrong today — but 
 will be by INF-05". It was, so it is fixed: both that file and
 `stryker.config.mjs` now import the one list from `scripts/lib/gate-decisions.mjs`.
 
+**The five AI reviewers ran for the first time, and the deadlock is gone**
+
+D-063 recorded that `claude-code-action` refuses to run when the workflow file
+differs from the default branch, so the three blocking reviews could never pass
+on the pull request that introduced them. Now that `ai-review.yml` is on `main`,
+they ran. All five posted real reviews, which also proves the `claude_args` tool
+grant that INF-04 had to leave unproven.
+
+`test-auditor` blocked on the clock bug, having reproduced it against a real
+PostgreSQL — the same defect the `integration` job found, reached independently.
+It re-ran the mutation suite to completion, the coverage ratchet and
+`req:coverage` rather than trusting this log's numbers, and they matched. It
+also checked whether narrowing the AR-03 lint rule was a disguised weakening of
+a safety rule, and concluded it was not. That is the review working as intended.
+
+**One finding was declined, and the reason is in the file.** `code-reviewer`
+asked for requirement IDs on `health.test.ts`'s tests. The rule they cover is
+the server side of REL-08 — making "the watchdog has stopped" visible to
+something that watches — and the other side, something that polls it and wakes
+the owner, is INF-08 and does not exist. RG-01 counts a requirement as covered
+the moment a test names it, so naming REL-08 there would turn the report green
+for a requirement nothing satisfies. An ID is a claim about what is true, not a
+label for what a file is near.
+
+**A gate defect found along the way, deliberately not fixed here**
+
+`ai-review (code-reviewer)` reports **red although it approved**. It writes
+`VERDICT: APPROVE WITH COMMENTS`; the enforcement in `ai-review.yml` matches
+`^\**VERDICT: (PASS|BLOCK)\**$` and fails with "its verdict is unknown". The
+gate is right to refuse to interpret — a verdict that cannot be read is not a
+review that found nothing, and guessing would let an unparseable BLOCK merge.
+But the outcome is still wrong, and it is reproducible: that agent has done it
+on every run, while the other four wrote conforming verdicts every time, even
+though its own definition already says to end with exactly one of the two lines.
+
+It is advisory (D-043), so nothing is blocked today. It matters for the day a
+*blocking* reviewer words a verdict that way and stops a pull request over
+phrasing with no finding behind it. A false red costs a gate its credibility
+about as fast as a false green costs it its purpose.
+
+Left out of INF-05 on purpose: this task touches neither the workflow nor the
+agent definitions, and **editing `ai-review.yml` on a branch re-triggers D-063**
+— the fix cannot be verified on the pull request that makes it. The proposed
+patch is in a comment on [#6](https://github.com/bvst/TryggHverdag/pull/6):
+tighten the agent definition, which is repository content and so *is* verifiable
+on a branch, and add a test running the enforcement's own regex against all five
+agent files so the workflow and they cannot drift. **It wants its own `/bugfix`.**
+
 **Decisions recorded:** D-065 (the server skeleton as built: `/v1` in the path,
 health that answers 200 with the truth in the body, an async clock port, one
 heartbeat row, three minutes before `degraded`), D-066 (Stryker's command
@@ -620,23 +668,44 @@ become optional by being forgotten.
 **INF-04** is built but not done: it is finished when `gate:integrity` passes,
 which needs A-15 from the owner.
 
-**INF-05** is built and in [#6](https://github.com/bvst/TryggHverdag/pull/6). It is done when the `integration` job is green
-on that pull request — that job is the only place the L3 tests can run, so until
-it reports, one third of this task's exit criterion is written but unproven.
+**INF-05** is in [#6](https://github.com/bvst/TryggHverdag/pull/6) and its exit
+criterion is met: the `integration` job is **green**, so the contract,
+integration and system levels each have a passing example — the third one proven
+where it can be, which is CI. Eight of nine jobs are green on the current head
+and the five reviewers have passed. One check is red, and it is the owner's.
 
-Two things are waiting for the owner, and neither is a bug:
+Waiting for the owner, and none of it is a bug:
 
 - **Re-import `docs/plan/main-ruleset.json`** — it lists 12 required checks now
   that `integration` and `system` exist. `gate-integrity` fails until then, on
-  purpose: a check that is required in this repository but not in GitHub's rules
-  is a check that stops anything.
+  purpose, and on exactly one row: "These checks run in CI but do not have to
+  pass before merging: integration, system." A check that is required in this
+  repository but not in GitHub's rules is a check that stops nothing. This is
+  the only thing between #6 and mergeable.
 - **A-15 and A-09** as before, for the merge rules and the AI reviews.
+- **One question, asked on #6 and not answered yet:** `safety-reviewer` wants a
+  `pool.on('error')` handler on the pg pool. It was not added, because every
+  version of it decides something the owner has not. A handler that swallows
+  the event trades a loud crash for silence, which this project must not do; a
+  handler that reports needs somewhere to report to, and that would be the first
+  logging call in the repository, setting a precedent under PRIV-07. The
+  recommendation is to defer it to the task that brings logging, and to let the
+  crash stand until then — the platform restarts the process and health reports
+  `degraded` within three minutes, so the failure is visible rather than hidden.
 
 **An unmerged branch exists: `claude/inf-04-follow-through`.** It closes INF-04's
 record and widens `engines.node` so Dependabot can run (its updater uses Node 24
 and `.npmrc` sets `engine-strict=true`). It holds decisions **D-063 and D-064**,
 which is why INF-05's decisions start at D-065. No pull request has been opened
 for it, because none was asked for.
+
+**A `/bugfix` is waiting to be written:** `ai-review (code-reviewer)` reports red
+although it approves, because it writes `VERDICT: APPROVE WITH COMMENTS` and the
+enforcement reads only `VERDICT: PASS` or `VERDICT: BLOCK`. Advisory today, and
+the reason to fix it is the day a blocking reviewer does the same. The proposed
+patch is on #6. It cannot be done by editing `ai-review.yml` on a branch — that
+re-triggers the deadlock above — so it has to change the agent definition, which
+is repository content and therefore takes effect on the branch that changes it.
 
 **Where the numbers are going.** After INF-06 lands, `gate:integrity` will start
 failing again until `android-e2e` joins the required list. That is the same
