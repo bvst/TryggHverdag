@@ -904,4 +904,14 @@ new decision that supersedes it (see `00-working-agreement.md`).
   shutdown and proves it. Written here rather than fixed on #6 because there is
   no shutdown path to hook into until that task creates one, and inventing one
   early is the speculative work `safety-reviewer` explicitly did not ask for.
+- **The tests can close it today, though, and that half needs no INF-07.**
+  `code-reviewer` added the detail that `worker.test.ts` leaks a pool per
+  `startWorker` call, and said the fix waits on INF-07 giving `startWorker` a
+  way to hand the pool back. That last part is wrong, and the correction is
+  worth having: `startWorker` passes `pgPool: pool` into the runner, and both
+  tests capture the whole options object from their fake runner, so
+  `options.pgPool` is already in reach. An `afterEach` ending it closes the test
+  leak now. Left to whoever edits these tests under the RG-02 roles rather than
+  taken here at the end of an unrelated task, but it is a one-liner, not a
+  blocked item.
 
