@@ -49,7 +49,8 @@ Audit the branch against the regression gates:
   Do **not** re-run the gate to compensate: it is a required check either way,
   so the merge is already gated on it whether or not you could see the number.
   Fixing the permission means editing `.github/workflows/ai-review.yml`, which
-  belongs on `main` (D-063), not in the pull request under review.
+  belongs on `main`, not in the pull request under review: `claude-code-action`
+  refuses to run when the workflow differs from the default branch.
 - Tests actually assert behaviour, not just run code.
 
 If you genuinely doubt a gate's result — not merely wish to confirm it — say so

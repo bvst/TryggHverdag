@@ -982,7 +982,8 @@ checks are among the twelve. The fix belongs in `ai-review.yml` on `main`: make
 the file-writing step explicit and checkable, or have the enforcement read the
 pull request comment, which is the artefact that reliably exists. It cannot be
 done from a branch — editing that workflow stops `claude-code-action` running at
-all (D-063), and editing the agent definitions has no effect because the
+all — `claude-code-action` refuses to run when the workflow differs from the
+  default branch — and editing the agent definitions has no effect because the
 reviewer harness reverts them before the reviewer reads them, which is the same
 protection that makes the breach above impossible to sneak past.
 
@@ -1013,10 +1014,15 @@ through is a decision, not a commit. Options are on #6.
   *legible*: say in the reviewer's own prompt that these paths were reset and
   why, so the difference between "protected" and "attacked" is readable rather
   than inferred.
-- **The auto-revert's real scope is not known.** D-069 records it as covering
-  `.claude/agents/*.md`. A reviewer reported `.claude/rules/server-domain.md`
-  and `CLAUDE.md` reverted as well, which is wider. Worth establishing by
-  observation rather than inference before anything is built on either claim.
+- **The auto-revert's real scope, now confirmed by observation.** D-069 recorded
+  it as covering `.claude/agents/*.md` and left the rest open. `code-reviewer`
+  checked its own sandbox directly and reported the boundary: `.claude/agents/*.md`,
+  `.claude/rules/server-domain.md` and `CLAUDE.md` **were** reverted to
+  `origin/main`'s content, while `docs/plan/decisions.md`, `docs/progress.md`
+  and `scripts/ai-review.test.mjs` were **not**. So the revert covers agent
+  briefs, rule files and root `CLAUDE.md` — wider than D-069 claimed — and
+  leaves the decision log and scripts alone. Established rather than inferred,
+  which is what that entry asked for.
 
 ## D-070 — `test-auditor` reads the slow gates instead of re-running them
 - **Date:** 2026-09-23 · **Status:** Accepted (owner) · **Section:** 6
@@ -1063,8 +1069,9 @@ through is a decision, not a commit. Options are on #6.
     never the comment (D-069).
   - So the two runs fail for opposite reasons, and neither is fixed here. The
     verdict file is written by the agent that *invokes* the reviewer, per the
-    prompt inside `ai-review.yml` — which is on `main`, and D-063 stops a branch
-    from testing a change to it. That remains the open defect.
+    prompt inside `ai-review.yml` — which is on `main`. A branch cannot test a
+    change to it, because `claude-code-action` refuses to run when the workflow
+    differs from the default branch. That remains the open defect.
 - **Three hypotheses about that defect have now been wrong**, each stated with
   more confidence than the evidence carried: "an unreliable agent" (read off the
   reviewer's comment, the one artefact the gate ignores), "it exhausted its
@@ -1102,8 +1109,19 @@ through is a decision, not a commit. Options are on #6.
   The option that solves both, and the one to try first: have the **workflow**
   fetch the check result for the commit and inject it into the prompt as text.
   Then the subagent needs no tool and no permission, and the workflow is the
-  thing that waits. That is `ai-review.yml` work, on `main` (D-063), alongside
+  thing that waits. That is `ai-review.yml` work, and it has to happen on
+  `main`: `claude-code-action` refuses to run when the workflow differs from the
+  default branch, so a branch cannot test a change to it. Alongside
   `produced no verdict file`.
+
+- **A follow-up worth doing, not done here.** The ~18-line verdict block is now
+  byte-identical in all five briefs. `code-reviewer` points out the repository
+  already has a shared-include mechanism for exactly this — each agent's
+  `skills:` list — and that five copies is the same shape as the drift D-069
+  describes, where three different wordings had diverged before converging.
+  Extracting it would make the next wording fix one edit instead of five.
+  `scripts/ai-review.test.mjs` asserts against the briefs, so it moves too;
+  that is why this is a follow-up rather than a late addition here.
 
 - **Why this is the owner's decision and not mine.** It changes what a blocking
   reviewer does, inside the pull request that reviewer is judging — the same
