@@ -865,6 +865,11 @@ new decision that supersedes it (see `00-working-agreement.md`).
   bugfix, before anyone had chosen how logging works.
 - **Decision (the owner's):** defer it to the task that brings logging. Until
   then the crash stands.
+- **When the handler is written, its log line is a PRIV-07 question.** A
+  connection-pool error should carry no location and no phone number, but
+  `privacy-security-reviewer` asked on #6 that this be checked rather than
+  assumed — which is the right standard for the first log line in a repository
+  whose whole logging posture starts here.
 - **Consequences:** the failure is loud rather than hidden. The platform
   restarts the process; if it is the worker, the heartbeat stops and
   `/v1/health` reports `degraded` within three minutes, which is the signal the

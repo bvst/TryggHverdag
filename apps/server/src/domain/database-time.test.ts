@@ -36,6 +36,18 @@ describe('databaseTime', () => {
     expect(() => databaseTime('2026-09-23 05:18:34.38631')).toThrow(/no time zone/);
   });
 
+  test('REL-01: a zone-shaped substring is not a time zone unless it ends the value', () => {
+    // The anchor earns its keep here. Without the `$` on HAS_ZONE, this passes
+    // the zone check on the `+00:00` in the middle and is refused one step
+    // later for being unparseable — the same outcome by luck, reached through
+    // the wrong door, and reported with the wrong reason. Asserting the message
+    // rather than merely that it throws is what makes the anchor testable:
+    // mutation testing flagged it as the one survivor in this file, and
+    // test-auditor was right that a file arguing this hard for anchored
+    // patterns should not leave its own anchor unexamined.
+    expect(() => databaseTime('2026-09-23T05:18:34+00:00x')).toThrow(/carries no time zone/);
+  });
+
   test('REL-01: a string that is not a time is refused', () => {
     expect(() => databaseTime('not a time+00')).toThrow(/is not a time/);
   });
