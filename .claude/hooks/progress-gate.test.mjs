@@ -61,6 +61,20 @@ describe('HK-08: work that is written down', () => {
     expect(check(dir).status).toBe(ALLOWED);
   });
 
+  test("passes for the next milestone's archive, not just M0's", () => {
+    // The archive half is matched by shape, not by name. code-reviewer caught
+    // the hardcoded 'docs/progress/m0.md' on #13: the day M1 opened its own
+    // log, HK-08 would have stopped counting the archive and started demanding
+    // a decorative edit of the short file — the exact churn the split removed,
+    // and it would have failed silently, which is what this gate exists to
+    // prevent. m1.md does not exist yet; that is the point of testing it.
+    const dir = repoWith({
+      'apps/server/src/api.ts': 'export const api = 1;',
+      'docs/progress/m1.md': '# M1 build log\n\n- built the API\n',
+    });
+    expect(check(dir).status).toBe(ALLOWED);
+  });
+
   test('passes when only documents changed — nothing to log', () => {
     const dir = repoWith({ 'docs/plan/decisions.md': '## D-060' });
     expect(check(dir).status).toBe(ALLOWED);
