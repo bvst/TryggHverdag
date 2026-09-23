@@ -1241,3 +1241,37 @@ Everything else in `tests.md` still binds gate tests: fake clock, no `.skip` or
 against the *old* rule text. They do still run — unlike an `ai-review.yml`
 change, which stops them entirely — but they cannot see the wording being
 changed, and their silence on it is not agreement.
+
+**Two corrections to the above, both from reviewers on #12.**
+
+`test-auditor` found D-074 half-finished. `.claude/hooks/*.test.mjs` matches
+the same `**/*.test.mjs` glob and carries `HK-01`-style prefixes, and `HK` is
+exactly as untracked as `CI` — its source document is not in `SOURCES`, and
+`HK-` appears zero times in `docs/requirements-status.md`. Verified both before
+agreeing. The exemption now names `.claude/hooks/` alongside `scripts/`, and
+says plainly that the existing `HK` prefixes stay: **exempt is not forbidden**,
+and `HK-01` names a real hook requirement that makes its test findable. What
+the exemption removes is the obligation.
+
+`privacy-security-reviewer` produced a sharper version of this decision's own
+argument by reading `requirements.mjs` rather than trusting the rationale:
+`mentions()` counts an ID **anywhere in a test file's text, never in the test
+name**. So no prefix has ever moved `req:coverage` by itself — the naming rule
+was decorative with respect to coverage from the day it was written, which is a
+better reason for scoping it than the one first recorded.
+
+It also found, unaided, how to review a `.claude/**` change at all:
+`git show HEAD:<path>` and `git diff origin/main...HEAD -- <path>` show the
+committed text where the Read tool shows the reverted working tree. That is
+worth putting in the reviewer briefs, and it is cheaper than the workflow
+change previously planned for this — briefs are ordinary repository content, so
+a pull request changing them can actually be reviewed, unlike one changing
+`ai-review.yml`.
+
+And one wording fix in D-074 itself: the revert was described as "the reviewer
+harness reverts", which sent `test-auditor` grepping the workflows,
+`.claude/hooks/`, `.claude/settings.json` and `.git/hooks/` for a mechanism
+that is not in this repository. It reproduced the symptom and correctly
+reported that it could not locate the cause here. The decision now says what is
+true: this is behaviour of the environment the reviewer runs in, not automation
+in this repository.

@@ -1368,10 +1368,34 @@ quote requirement IDs as sample data. Only the naming prefix is scoped.
 decision rather than a quiet edit. Renaming every gate test was the alternative
 and was declined.
 
-**One property worth knowing about this pull request.** The reviewer harness
-reverts `.claude/rules/**` to its pre-pull-request contents before a reviewer
-reads it, so the reviewers on the change that carries this decision will judge
-it against the *old* rule text. They still run — unlike a change to
-`ai-review.yml`, which stops them running at all — but they cannot see the
-wording being changed. Recorded so the next person does not read their silence
-on it as agreement.
+**`.claude/hooks/` is covered too, and its prefixes stay.** `test-auditor`
+found the first version of this decision half-finished: `.claude/hooks/*.test.mjs`
+matches the same `**/*.test.mjs` glob and carries `HK-01`-style prefixes, and
+`HK` is exactly as untracked as `CI` — its source document is not in `SOURCES`
+and `HK-` appears zero times in `docs/requirements-status.md`. Verified both
+before agreeing.
+
+The resolution is not to strip those prefixes. **Exempt is not forbidden.**
+`HK-01` names a real hook requirement and makes the test findable; what the
+exemption removes is the *obligation*, and with it the implication that a
+prefix creates coverage. It never did: `mentions()` counts an ID anywhere in a
+test file's text, never in the test name — which is a sharper version of this
+decision's own argument than the one first written, and came from
+`privacy-security-reviewer` reading `requirements.mjs` rather than taking the
+rationale on trust.
+
+**Reading a `.claude/**` change under review.** The working tree a reviewer
+sees has `.claude/rules/**` and `.claude/agents/*.md` reverted to their
+pre-pull-request contents, so the Read tool shows the *old* text while the
+commit holds the new one. `git show HEAD:<path>` and
+`git diff origin/main...HEAD -- <path>` show what actually changed;
+`privacy-security-reviewer` found that route unaided and reviewed this decision
+through it.
+
+Stated precisely, because a reviewer went looking and could not find it:
+**this is behaviour of the environment the reviewer runs in, not automation in
+this repository.** A grep of the workflows, `.claude/hooks/`,
+`.claude/settings.json` and `.git/hooks/` turns up nothing that reverts these
+paths, and the symptom still reproduces. Earlier wording called it "the
+reviewer harness", which sent someone hunting in the repository for a mechanism
+that is not there.

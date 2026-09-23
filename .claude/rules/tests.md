@@ -10,15 +10,21 @@ paths:
 - A test that proves a requirement starts its name with that requirement's ID
   and acceptance criterion, e.g.
   `LOST-02-AC1: alerts every responder after 5 minutes of silence`.
-- **Gate and tooling tests under `scripts/` are exempt from that naming rule**,
-  and describe the behaviour they hold instead. They prove the machinery works,
-  not that a requirement is met, and the IDs they would carry — `CI-01` and the
-  like — are not in `collectRequirements`'s `SOURCES`, so `req:coverage` never
-  counts them. Prefixing them would produce the look of traceability over a
-  number that does not move: the exact shape of decorative check this
-  repository keeps having to dig out. Two reviewers raised the inconsistency
-  independently; the owner scoped the rule rather than rename the tests
-  (D-074).
+- **Gate, hook and tooling tests are exempt from that naming rule** — under
+  `scripts/` and `.claude/hooks/` — and describe the behaviour they hold
+  instead. They prove the machinery works, not that a requirement is met, and
+  the IDs they would carry (`CI-01`, `HK-01`) are not in
+  `collectRequirements`'s `SOURCES`, so `req:coverage` never counts them.
+  Requiring a prefix here produces the look of traceability over a number that
+  does not move: the exact shape of decorative check this repository keeps
+  having to dig out (D-074).
+- The hook tests already carry `HK-01`-style prefixes and **should keep them**.
+  Exempt is not forbidden: `HK-01` names a real hook requirement in
+  `docs/plan/07-claude-code-setup.md` and makes the test findable. What the
+  exemption removes is the *obligation*, and with it the implication that a
+  prefix creates coverage — it does not. `mentions()` counts an ID anywhere in
+  a test file's text, never in the test name, so no prefix has ever moved
+  `req:coverage` by itself.
 - Use the fake clock and the test-kit builders. Never use real personal data
   (RG-07).
 - Never add `.skip` or `.only`, remove assertions, or delete tests without a
