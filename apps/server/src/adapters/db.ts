@@ -12,6 +12,18 @@ import * as schema from '../db/schema.ts';
 export type Database = ReturnType<typeof createDatabase>;
 
 /**
+ * How many connections each process may hold, and what is left over.
+ *
+ * Two each leaves one spare on the DEV plan — for a migration, or for a person
+ * with `psql` working out why the worker stopped. That spare is why the numbers
+ * do not add up to five.
+ */
+export const POOL_SIZE = { api: 2, worker: 2, spare: 1 } as const;
+
+/** What the DEV plan allows in total (Section 8). The budget above must fit inside it. */
+export const DEV_PLAN_CONNECTION_LIMIT = 5;
+
+/**
  * The connection pool. Close it with `pool.end()` when a process shuts down.
  *
  * No `pool.on('error', ...)` here, and that is a decision rather than an
@@ -25,8 +37,8 @@ export type Database = ReturnType<typeof createDatabase>;
  * rather than here, because a requirement ID in product code reads to RG-01 as
  * a claim to implement it, and this is a reason for deferring, not a claim.
  */
-export function createPool(connectionString: string): pg.Pool {
-  return new pg.Pool({ connectionString, max: 5 });
+export function createPool(connectionString: string, max: number): pg.Pool {
+  return new pg.Pool({ connectionString, max });
 }
 
 export function createDatabase(pool: pg.Pool) {

@@ -573,6 +573,25 @@ one that asserts parsing stays allowed so the decision cannot be quietly undone.
    settings at all so there is only one way to produce the number, and the test
    in `scripts/gate.test.mjs` now pins the *script*, not the flags.
 
+**The connection pool was twice the size the plan allows, in two processes**
+
+`privacy-security-reviewer` asked, as a forward-looking note, whether the API
+and the worker together would stay under Clever Cloud's DEV-plan ceiling once
+more adapters arrive. Checking turned a future question into a present bug:
+`08-cicd-releases.md` records the ceiling as **five connections in total** and
+says in the same line "API 2, worker 2" — and `createPool` defaulted to
+`max: 5`. That is the whole budget for one process and twice the budget between
+two, in a file whose own comment warns that a pool exhausting the ceiling
+"would take the watchdog down with it".
+
+The plan had written the right numbers down and the code had not read them.
+`max` is now a required argument rather than a default, so the next caller
+cannot inherit the mistake silently; `POOL_SIZE` and `DEV_PLAN_CONNECTION_LIMIT`
+sit beside each other, and `db.test.ts` holds the arithmetic — the budget plus a
+spare must fit inside the ceiling, and the spare must exist, so that a migration
+or a person with `psql` is not locked out while working out why the worker
+stopped. Checked by raising the pools and watching the test fail.
+
 **Two more things CI and the reviewers found, both fixed**
 
 - **`startWorker` could have been wired to nothing.** Mutation testing left one

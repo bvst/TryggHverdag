@@ -16,7 +16,7 @@ import path from 'node:path';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { databaseClock } from './clock.ts';
-import { createDatabase, createPool, type Database } from './db.ts';
+import { POOL_SIZE, createDatabase, createPool, type Database } from './db.ts';
 import { databaseWorkerHeartbeats } from './worker-heartbeats.ts';
 
 const MIGRATIONS = path.join(import.meta.dirname, '..', 'db', 'migrations');
@@ -29,7 +29,7 @@ let db: Database | undefined;
 
 beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:17-alpine').start();
-  pool = createPool(container.getConnectionUri());
+  pool = createPool(container.getConnectionUri(), POOL_SIZE.worker);
   db = createDatabase(pool);
   // The same migrations that run in staging and production. A test that built
   // its tables by hand would prove the code works against a schema nobody ships.

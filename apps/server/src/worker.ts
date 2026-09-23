@@ -13,7 +13,7 @@
  */
 import { run, type Runner, type TaskList } from 'graphile-worker';
 import { databaseClock } from './adapters/clock.ts';
-import { createDatabase, createPool } from './adapters/db.ts';
+import { POOL_SIZE, createDatabase, createPool } from './adapters/db.ts';
 import { databaseWorkerHeartbeats } from './adapters/worker-heartbeats.ts';
 import type { Clock, WorkerHeartbeats } from './ports.ts';
 
@@ -48,7 +48,7 @@ export async function startWorker(
   connectionString: string,
   runWorker: RunWorker = run,
 ): Promise<Runner> {
-  const pool = createPool(connectionString);
+  const pool = createPool(connectionString, POOL_SIZE.worker);
   const db = createDatabase(pool);
 
   return runWorker({
