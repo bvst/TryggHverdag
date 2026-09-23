@@ -85,3 +85,49 @@ describe('GET /health', () => {
     expect((await api.request('/health')).status).toBe(404);
   });
 });
+
+describe('GET /health when the database cannot answer', () => {
+  // safety-reviewer asked for this, and was right to: the behaviour was already
+  // correct and entirely untested, which means nothing would have noticed it
+  // changing. An error handler added later for tidiness — or a middleware that
+  // catches everything and returns a friendly body — would turn the one endpoint
+  // an uptime monitor watches into a permanent green tick over a dead system.
+  const apiThatCannotCheck = () =>
+    createApi({
+      health: {
+        check: () =>
+          Promise.reject(new Error('The database did not return a time, so nothing can be timed')),
+      },
+    });
+
+  test('it fails loudly: 500, not a cheerful 200', async () => {
+    const response = await apiThatCannotCheck().request(HEALTH);
+
+    expect(response.status).toBe(500);
+  });
+
+  test('the body says something went wrong rather than being empty', async () => {
+    // A 500 with an empty body reads to some monitors as "no data", which is
+    // not the same as "this system is broken".
+    const response = await apiThatCannotCheck().request(HEALTH);
+
+    expect(await response.json()).toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+  });
+
+  test('it does not answer `ok`, and does not answer at all in the health shape', async () => {
+    // The failure that matters: anything that parses as a health response is
+    // something a monitor will believe.
+    const response = await apiThatCannotCheck().request(HEALTH);
+
+    expect(healthResponseSchema.safeParse(await response.json()).success).toBe(false);
+  });
+
+  test('SEC-03: the internal error does not reach the caller', async () => {
+    // The message names the database and what it failed to do. That belongs in
+    // the server's own record, not in a response anyone on the internet can get
+    // by asking an unauthenticated endpoint at the wrong moment.
+    const response = await apiThatCannotCheck().request(HEALTH);
+
+    expect(await response.text()).not.toContain('database');
+  });
+});
