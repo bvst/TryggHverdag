@@ -35,9 +35,23 @@ function readOrNull(cwd, file) {
   }
 }
 
-/** Every file git knows about, which is every file a requirement could be named in. */
+/**
+ * Every file a requirement could be named in.
+ *
+ * `--others --exclude-standard` as well as the tracked ones, because a plain
+ * `git ls-files` sees only what has already been added — and the file that most
+ * often names a requirement for the first time is a test written minutes ago
+ * and not yet staged. Without this the report counts it as missing, the run
+ * before `git add` and the run after disagree, and the disagreement surfaces as
+ * a CI failure on a report that was correct when it was written. A requirement
+ * reported as uncovered when it is covered is the milder half; the same gap
+ * would let `--fail-on-uncovered-changed` pass a change whose only test is new.
+ */
 export function trackedFiles(cwd) {
-  const result = run('git', ['ls-files'], { cwd, timeout: 60_000 });
+  const result = run('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
+    cwd,
+    timeout: 60_000,
+  });
   return result.ok ? result.output.split('\n').filter((line) => line.trim() !== '') : [];
 }
 

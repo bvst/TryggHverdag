@@ -6,8 +6,7 @@
 # that list and the repository's own merge rules ever stop agreeing.
 #
 # Jobs missing on purpose, because the script they would run does not exist yet:
-#   integration (CI-04) and system (CI-05) — INF-05 adds them
-#   android-e2e (CI-09)                    — INF-06 adds it
+#   android-e2e (CI-09) — INF-06 adds it
 # They are absent rather than skipped: a skipped job reports as a green tick,
 # and a green tick for work nobody did is the one thing this repository must not
 # produce. gate-integrity lists them every run, and starts failing the day their
@@ -69,6 +68,39 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run test:unit
 
+  integration: # CI-04 (L3) — a real PostgreSQL in a container, via Testcontainers
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      # Docker is present on the GitHub runners, which is what makes this the
+      # only place these tests can run today: a cloud session has the docker
+      # binary but no daemon. Nothing is mocked here on purpose — the upsert,
+      # the timestamp round trip and the database clock either work against
+      # PostgreSQL or they do not.
+      - run: pnpm run test:integration
+
+  system: # CI-05 (L6) — whole flows through the real API, fakes at the edges
+    runs-on: ubuntu-latest
+    # The suite runs in about a second, so this is not a budget — it is a bound
+    # on a hang. These tests drive the API in-process against a clock the test
+    # moves by hand, and a bug that leaves one awaiting a promise nothing
+    # resolves would otherwise sit at the runner's own six-hour ceiling.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:system
+
   contract: # CI-06 (L4, RG-08) — the API against every app version still in use
     runs-on: ubuntu-latest
     steps:
@@ -107,7 +139,9 @@ jobs:
       # a clean runner, so this job measures its own rather than reaching for
       # what the unit job produced. It refuses to pass on missing numbers, so
       # leaving this out would turn CI-07 red rather than quietly unmeasured.
-      - run: pnpm run test:unit --coverage
+      # test:coverage, not test:unit --coverage: the baseline was recorded from
+      # unit and system tests together (vitest.coverage.config.mjs says why).
+      - run: pnpm run test:coverage
       - run: pnpm run coverage:ratchet --base origin/${{ github.base_ref || 'main' }}
 
   mutation: # CI-08 (RG-05, D-036) — only when safety code changed; fails if it changed and Stryker is missing

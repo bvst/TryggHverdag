@@ -1,0 +1,90 @@
+{
+  "info": {
+    "title": "TryggHverdag API",
+    "version": "v1",
+    "description": "The server that watches journeys home. Every route lives under /v1; a breaking change gets a new version rather than changing this one, because phones keep running old app versions (AR-08)."
+  },
+  "servers": [
+    {
+      "url": "/v1"
+    }
+  ],
+  "openapi": "3.1.1",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "health",
+        "summary": "Is the safety system working?",
+        "description": "Returns 200 whenever the API is up. Read `status` in the body to tell whether the worker is still running, because an API with no worker raises no alerts.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "ok",
+                        "degraded"
+                      ],
+                      "type": "string",
+                      "description": "ok when the worker has checked in recently; degraded when it has not, which means nothing is watching the journeys."
+                    },
+                    "checkedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "When the server answered, from the database clock (REL-01), as RFC 3339."
+                    },
+                    "worker": {
+                      "type": "object",
+                      "properties": {
+                        "lastBeatAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "The worker’s last check-in, or null if it has never checked in."
+                        },
+                        "silentForMs": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "How long the worker has been silent, or null if it has never checked in."
+                        }
+                      },
+                      "required": [
+                        "lastBeatAt",
+                        "silentForMs"
+                      ],
+                      "description": "What the API can see of the worker."
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "checkedAt",
+                    "worker"
+                  ],
+                  "description": "Whether the safety system as a whole is working, not just this process."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

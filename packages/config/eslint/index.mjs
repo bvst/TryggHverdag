@@ -26,11 +26,19 @@ const CLOCK_MESSAGE =
 const TIMER_MESSAGE =
   'AR-06: safety code must not keep time in memory. Timing lives in the database-backed watchdog, so a restart loses nothing.';
 
-/** Rules applied to CLOCK_FREE_PATHS. Exported on its own so hook tests can assert on it. */
+/** Rules applied to CLOCK_FREE_PATHS. Exported on its own so tests can assert on it. */
 export const clockFreeRules = {
   'no-restricted-syntax': [
     'error',
-    { selector: "NewExpression[callee.name='Date']", message: CLOCK_MESSAGE },
+    // Zero arguments only. `new Date()` asks the machine what time it is, which
+    // is the thing AR-03 forbids; `new Date(text)` turns a value someone handed
+    // in into a moment, which is a parse and reads no clock at all.
+    //
+    // The rule used to ban both. That sounds stricter and is not: it pushed the
+    // one place that must convert what PostgreSQL said into a Date out of
+    // domain/, and so out of the 95 % branch floor and the mutation gate — away
+    // from the protection this rule exists to provide. See D-067.
+    { selector: "NewExpression[callee.name='Date'][arguments.length=0]", message: CLOCK_MESSAGE },
     {
       selector: "MemberExpression[object.name='Date'][property.name='now']",
       message: CLOCK_MESSAGE,

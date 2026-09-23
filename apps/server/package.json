@@ -1,0 +1,32 @@
+{
+  "name": "@trygghverdag/server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The API and the worker: two processes, one codebase (AR-01)",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "@orpc/openapi": "^1.15.3",
+    "@orpc/server": "^1.15.3",
+    "@trygghverdag/contracts": "workspace:*",
+    "drizzle-orm": "^0.45.3",
+    "graphile-worker": "^0.18.0",
+    "hono": "^4.13.8",
+    "pg": "^8.23.0",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^12.1.0",
+    "@trygghverdag/config": "workspace:*",
+    "@trygghverdag/test-kit": "workspace:*",
+    "@types/node": "catalog:",
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "^0.31.11",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

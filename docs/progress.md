@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-09-20 · **Milestone:** M0 (foundations)
+**Last updated:** 2026-09-23 · **Milestone:** M0 (foundations)
 
 What has actually been built, task by task. The plan is in
 [`plan/README.md`](plan/README.md); the M0 task list is in
@@ -14,8 +14,8 @@ What has actually been built, task by task. The plan is in
 | INF-01 | Monorepo skeleton | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-02 | Claude Code configuration + hook tests | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-03 | Gate scripts + HK-08 | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
-| INF-04 | CI workflows, merge rules, CODEOWNERS | 🟡 Built — waiting on the owner (A-15) to switch the rules on |
-| INF-05 | Server skeleton | 🔜 Next — the L3 tests need Docker, which only CI has |
+| INF-04 | CI workflows, merge rules, CODEOWNERS | ✅ Done — 2026-09-23 ([#3](https://github.com/bvst/TryggHverdag/pull/3)); `gate:integrity` 5 of 5 against the live rules |
+| INF-05 | Server skeleton | 🟡 Built ([#6](https://github.com/bvst/TryggHverdag/pull/6)) — all four test levels green, reviewers passed; waiting on the owner to re-import the ruleset |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
 | INF-07 | Staging on Clever Cloud | ⬜ Blocked on owner: Clever Cloud token |
 | INF-08 | Monitoring | ⬜ Blocked on owner: Healthchecks.io / UptimeRobot |
@@ -24,7 +24,14 @@ What has actually been built, task by task. The plan is in
 
 ## What Claude needs from the owner next
 
-**A-15 is the one that matters now, and it is about 10 minutes.** Every step is
+**Re-import the ruleset (1 minute), because INF-05 added two checks.**
+`docs/plan/main-ruleset.json` now lists **12** required checks — `integration`
+and `system` are new. Import it again the same way as the first time
+(Settings → Rules → Rulesets → the existing ruleset → Import). Until then
+`gate-integrity` fails and says the live rules and this repository disagree,
+which is the point: a check cannot become optional by being forgotten.
+
+**A-15 is the one that matters most, and it is about 10 minutes.** Every step is
 written out in [`plan/merge-rules.md`](plan/merge-rules.md):
 
 1. **Create the ruleset on `main`** — nothing else in this repository can do it,
@@ -459,16 +466,329 @@ reading the bypass list needs its own token rather than Claude's, and D-061
   or skipped with its reason where no token is set. `gate:quick` — what the stop
   gate runs — is green.
 
+### 2026-09-23 — INF-05: the server skeleton 🟡 (pull request [#6](https://github.com/bvst/TryggHverdag/pull/6))
+
+**What it is.** Two processes that share a database and nothing else: an API
+that answers `/v1/health`, and a worker that proves it is alive by writing a row
+once a minute. Small on purpose — the point of this task is not the health
+endpoint, it is that every pattern the safety loop will need now exists and is
+tested: a contract the app and the server cannot disagree about, a clock that
+comes from the database, pure domain logic, adapters behind ports, and three new
+test levels with one real example each.
+
+**Built**
+
+- **`packages/contracts`** — the oRPC + zod contract, and the generated OpenAPI
+  description committed as `openapi.json` (`pnpm run api:spec` writes it; a test
+  fails if the committed copy drifts). Split into four small modules after a
+  circular import bit — see below. `API_PREFIX` (`/v1`) is one constant, so the
+  server, the OpenAPI `servers` list and the app cannot disagree.
+- **`apps/server/src/domain/health.ts`** — pure: milliseconds in, `ok` or
+  `degraded` out. No clock, no I/O (AR-02, AR-03).
+- **`apps/server/src/ports.ts`** — `Clock` and `WorkerHeartbeats`. `now()`
+  returns a `Promise<Date>` because the only clock a safety decision may use is
+  the database's, and reading it is a query (D-065).
+- **`apps/server/src/adapters/`** — Drizzle over node-postgres, a clock that
+  runs `select now()`, and a heartbeat that upserts one row. The clock throws if
+  the database returns nothing: a safety decision made on a guessed clock is
+  worse than no answer.
+- **`apps/server/src/api.ts`** — Hono holding an oRPC `OpenAPIHandler`.
+  `createApi` takes its dependencies, so a system test runs the whole API
+  in-process against fakes and a clock it controls.
+- **`apps/server/src/worker.ts`** — Graphile Worker, one cron task
+  (`* * * * * heartbeat`). `startWorker` takes its runner as an argument, so the
+  wiring itself is assertable rather than something only production exercises.
+- **`packages/test-kit`** — `fakeClock` and `fakeWorkerHeartbeats`, matching the
+  ports by shape so the test kit imports nothing from the server.
+- **Three new test levels, and the scripts and CI jobs to run them:**
+  `test:integration` (L3, Testcontainers), `test:system` (L6), and
+  `test:coverage` (the run the ratchet measures). `stryker.config.mjs` is
+  installed and configured.
+
+**Verified**
+
+| | |
+|---|---|
+| L2 unit (domain) | 6 tests, including the boundary — exactly at the limit is `ok`, one millisecond past is not |
+| L4 contract | 5 tests; the committed `openapi.json` must equal what the contract generates today |
+| L6 system | 6 tests through the real API, including `degraded` still answering 200 and an unversioned path 404ing |
+| worker | 3 tests, one of them REL-01: the heartbeat records the time *the database* gave, not this process |
+| L3 integration | **Green in CI** — and it found a real bug on its first run; see below |
+| `gate:quick` | 3 of 3 pass |
+| `gate:full` | 10 pass · 1 not possible here (L3) · 1 fails (`gate:integrity`, waiting on A-15 — the designed state, D-029) |
+| Coverage | product code 96.08 % lines against a floor of 80; every file 100 % except the fake clock, which now has its own tests too |
+| Mutation | **98.68 %** — one survivor, in the time parser's remaining anchor |
+
+**The integration tests could not run in this session, and on their first run in
+CI they found a real bug.** That is the whole argument for the L3 level, made
+within an hour of the level existing.
+
+`databaseClock` asked PostgreSQL for `select now()` and told TypeScript the
+answer was a `Date`. It was not. Drizzle's node-postgres driver installs its own
+type parsers so that it can map columns itself, so a query written through the
+schema comes back as a `Date` while a raw `sql` query comes back as PostgreSQL's
+text — `2026-09-23 05:18:34.38631+00`. The type argument silenced the compiler.
+In production, **every call to `/v1/health` would have thrown `getTime is not a
+function`**, and so would every later safety decision that asks what time it is.
+
+No unit or system test could have caught it: they use the fake clock, which
+returns a `Date`, so all of them passed. Only a real database disagreed.
+
+The fix is `apps/server/src/domain/database-time.ts` — pure, so it is tested at
+L2 on every machine rather than only where Docker runs, and in `domain/` so the
+mutation gate and the 95 % branch floor cover it. It refuses rather than
+guesses: a timestamp with no time zone throws, because reading it as UTC or as
+local time would put every "has it been more than N minutes" decision out by
+hours with nothing going red.
+
+Putting it there needed **AR-03's lint rule narrowed** (D-067): it banned every
+`new Date(...)` in domain code, parsing included, which would have forced the
+one conversion that must be protected out of the only place that protects it.
+It now bans `new Date()` with no arguments — the actual clock read — and
+`Date.now()` and `performance.now()` as before. Those rules had no tests at all,
+although the comment beside them said they did; they have them now, including
+one that asserts parsing stays allowed so the decision cannot be quietly undone.
+
+**Three things went wrong, and each left something behind**
+
+1. **A circular import that produced a wrong document rather than an error.**
+   `index.ts` re-exported `openapi.ts`, which imported `API_PREFIX` back from
+   `index.ts` and read it at module scope. Node's evaluation order happened to
+   work; Vitest's did not — and the failure mode was not a crash but a published
+   API description whose `servers` list said routes live "under undefined". Now
+   `api-version.ts` has no imports at all, and nothing inside the package
+   imports `index.ts`.
+2. **Stryker reported 4.35 % and was wrong.** Rather than believe it, the mutant
+   was planted by hand: `>` changed to `<=` in the domain, and four tests failed.
+   The tests kill the mutants; Stryker's Vitest runner could not see them.
+   Switched to the command runner — 95.65 % (D-066). A number that is wrong in
+   the dangerous direction is worse than no number, because it argues for
+   deleting good tests.
+3. **The coverage gate measured the wrong tests, twice.** First
+   `pnpm run test:unit -- --coverage` measured nothing at all (the `--` turns the
+   flag into a filename). That was found in INF-04. Here the fixed version
+   measured the right way but the wrong set: unit tests alone report 58.73 % for
+   code that is reached at L6, so the gate went red about nothing. `gate:full`
+   and CI now both run `test:coverage`, `vitest.config.mjs` has no coverage
+   settings at all so there is only one way to produce the number, and the test
+   in `scripts/gate.test.mjs` now pins the *script*, not the flags.
+
+**The connection pool was twice the size the plan allows, in two processes**
+
+`privacy-security-reviewer` asked, as a forward-looking note, whether the API
+and the worker together would stay under Clever Cloud's DEV-plan ceiling once
+more adapters arrive. Checking turned a future question into a present bug:
+`08-cicd-releases.md` records the ceiling as **five connections in total** and
+says in the same line "API 2, worker 2" — and `createPool` defaulted to
+`max: 5`. That is the whole budget for one process and twice the budget between
+two, in a file whose own comment warns that a pool exhausting the ceiling
+"would take the watchdog down with it".
+
+The plan had written the right numbers down and the code had not read them.
+`max` is now a required argument rather than a default, so the next caller
+cannot inherit the mistake silently; `POOL_SIZE` and `DEV_PLAN_CONNECTION_LIMIT`
+sit beside each other, and `db.test.ts` holds the arithmetic — the budget plus a
+spare must fit inside the ceiling, and the spare must exist, so that a migration
+or a person with `psql` is not locked out while working out why the worker
+stopped. Checked by raising the pools and watching the test fail.
+
+**Two more things CI and the reviewers found, both fixed**
+
+- **`startWorker` could have been wired to nothing.** Mutation testing left one
+  survivor: replacing the whole dependency object with `{}` still produced a
+  task list with a `heartbeat` key, so every assertion passed — a worker that
+  starts, schedules, and then fails every beat, the only symptom being the API
+  reporting the system degraded for reasons nobody could see. `test-auditor`
+  called it a real wiring gap rather than noise, and it was right. The test now
+  invokes the task the worker actually scheduled, against a socket directory
+  that does not exist, and asserts on *how* it fails: reaching the query proves
+  the real database clock was wired in. Verified by planting the mutant by hand.
+  Mutation went from 96.05 % to **97.37 %**.
+- **`req:coverage` could not see a brand-new test file.** It listed candidates
+  with `git ls-files`, which shows only what has already been added — so a test
+  written minutes ago and not yet staged did not exist as far as the requirement
+  report was concerned. Running the gate before `git add` and after it gave
+  different answers, and the second answer arrived as a red `traceability` job
+  on a report that had been correct when it was written. It now lists untracked,
+  non-ignored files too. The milder half of that bug is a requirement reported
+  as uncovered when it is covered; the other half would let
+  `--fail-on-uncovered-changed` pass a change whose only test is new.
+
+**Also fixed here:** `scripts/lib/coverage.mjs` kept its own copy of the safety
+paths, and the copy was missing `apps/server/src/worker.ts`. That was a named
+follow-up from INF-04's review, listed there as "nothing is wrong today — but it
+will be by INF-05". It was, so it is fixed: both that file and
+`stryker.config.mjs` now import the one list from `scripts/lib/gate-decisions.mjs`.
+
+**The five AI reviewers ran for the first time, and the deadlock is gone**
+
+D-063 recorded that `claude-code-action` refuses to run when the workflow file
+differs from the default branch, so the three blocking reviews could never pass
+on the pull request that introduced them. Now that `ai-review.yml` is on `main`,
+they ran. All five posted real reviews, which also proves the `claude_args` tool
+grant that INF-04 had to leave unproven.
+
+`test-auditor` blocked on the clock bug, having reproduced it against a real
+PostgreSQL — the same defect the `integration` job found, reached independently.
+It re-ran the mutation suite to completion, the coverage ratchet and
+`req:coverage` rather than trusting this log's numbers, and they matched. It
+also checked whether narrowing the AR-03 lint rule was a disguised weakening of
+a safety rule, and concluded it was not. That is the review working as intended.
+
+**One finding was declined, and the reason is in the file.** `code-reviewer`
+asked for requirement IDs on `health.test.ts`'s tests. The rule they cover is
+the server side of REL-08 — making "the watchdog has stopped" visible to
+something that watches — and the other side, something that polls it and wakes
+the owner, is INF-08 and does not exist. RG-01 counts a requirement as covered
+the moment a test names it, so naming REL-08 there would turn the report green
+for a requirement nothing satisfies. An ID is a claim about what is true, not a
+label for what a file is near.
+
+**The requirement gate caught two things in this task's own writing**
+
+Both while adding the note that records D-068, and both worth knowing because
+they are easy to repeat.
+
+`RG-01` reads a requirement ID in **product code** as a claim to implement that
+requirement. A comment in `db.ts` cited PRIV-07 as the *reason* a handler is
+deferred, and the gate read it as a promise the branch had not kept — correctly,
+by its own rule. The ID now lives in D-068, where a claim belongs, and the
+comment points there.
+
+Worse, and more instructive: `coverage()` counts a test file as covering a
+requirement when the file's **text** mentions the ID, and text includes
+comments. The first version of the note in `health.test.ts` explained at length
+why naming REL-08 there would turn the report green for a requirement nothing
+satisfies — and, by writing the ID in order to say that, turned the report green
+for it. A comment denying the claim still made it. The report said REL-08 🟢
+until it was caught.
+
+The lesson is narrow and sharp: in this repository an ID is a claim wherever it
+appears, including in prose that denies it. `req-coverage: fixtures-only` covers
+the sample-data case; there is no marker for "explicitly not this", and the
+cheapest answer is to describe the requirement instead of naming it.
+
+**The reviewer gate's defects moved to their own pull request.** Investigating
+them produced changes to `.claude/agents/*.md`, `.claude/rules/server-domain.md`
+and `CLAUDE.md` — and `test-auditor` blocked #6 for carrying them, correctly: a
+pull request that edits its own blocking reviewers' briefs is indistinguishable
+in form from prompt injection, and a decision record inside the diff claiming
+the owner approved it is not evidence of approval from where the reviewer
+stands. The owner chose to split them out rather than override. So D-069, D-070,
+`scripts/ai-review.test.mjs` and the whole account of that investigation live in
+that pull request, which the owner reviews directly; the paths were already
+CODEOWNERS-gated to them.
+
+**The typecheck gate could pass code that does not compile.** A privacy review
+raised drizzle-kit's telemetry and recommended `telemetry: false` in
+`apps/server/drizzle.config.ts`. Both halves turned out to be wrong, and
+checking them found something worse.
+
+drizzle-kit 0.31.11 has no telemetry: no `telemetry`, `posthog`, `mixpanel` or
+`amplitude` anywhere in the package, and the one `analytics` hit is an entry in
+a bundled list of English uncountable nouns. Nor is `telemetry` a valid option —
+`Config` has no such key, and tsc rejects it with `TS2353`. The suggested fix
+would have broken the build. (Older drizzle-kit did collect telemetry and did
+take that option, which is presumably where the advice comes from.)
+
+But `pnpm run typecheck` **accepted it**: `FULL TURBO`, exit 0, on a file tsc
+refuses to compile. A deliberately absurd key (`thisIsDefinitelyNotAnOption:
+42`) passed too. `turbo.json` gives the typecheck task
+`inputs: ["src/**", "tsconfig.json", "package.json"]`, while what tsc reads is
+decided by the tsconfig — and this task added `drizzle.config.ts` to
+`apps/server`'s `include`, at the package root. It is the only file in the
+repository that is typechecked and outside `src/**`, so it was the first one
+able to fall through: changing it did not change the cache key, and Turbo
+replayed a stale success.
+
+`turbo.json` predates this branch; the exposure does not. Fixed by adding
+`*.ts` to the inputs, and guarded by `scripts/turbo-inputs.test.mjs`, which
+compares the two lists directly — every file `tsc --showConfig` resolves for a
+package must match a turbo input — so the next root-level entry in an `include`
+cannot quietly reopen it. `--showConfig` is used rather than reading the
+tsconfig, because it resolves `extends` and the include globs into the real file
+list. Proven both ways: the test fails on the old `turbo.json` naming
+`drizzle.config.ts` exactly, and the same broken file that scored `FULL TURBO`
+now fails the gate with `error TS2353` and exit 2.
+
+Worth stating plainly, because it is the shape the non-negotiables are about: a
+review comment that was wrong on both its facts still led to a real defect,
+because checking it meant running it instead of reasoning about it. The finding
+itself is declined, with the evidence above.
+
+**Decisions recorded:** D-065 (the server skeleton as built: `/v1` in the path,
+health that answers 200 with the truth in the body, an async clock port, one
+heartbeat row, three minutes before `degraded`), D-066 (Stryker's command
+runner, with the evidence that the Vitest runner was wrong), D-067 (AR-03 bans
+reading the clock, not constructing a Date — with the bug that prompted it) and
+D-068 (`pool.on('error')` deferred to the task that brings logging, why it must
+never log the raw error, and the pool `startWorker` never closes).
+
+**What the owner has to do before this can merge.** `docs/plan/main-ruleset.json`
+now lists **12** required checks — `integration` and `system` are new. Until the
+ruleset is re-imported on GitHub, `gate-integrity` will correctly fail, saying
+the live rules and the repository disagree. That is the same designed reminder
+that fired for INF-04, working as intended: the checks this task added cannot
+become optional by being forgotten.
+
+
 ## In flight
 
-INF-04 is built but **not done**: it is finished when `gate:integrity` passes,
-which needs A-15 from the owner. The pull request can merge before that.
+**INF-04 is done.** The owner switched the merge rules on, and `gate:integrity`
+now reports **5 of 5 against the live repository** — the required checks match,
+the workflows produce them, CODEOWNERS covers the paths that need the owner,
+`main` requires review and forbids rewriting history, and **nobody can bypass
+those rules** (D-029). That last line is the one the whole task existed for, and
+it is the first time it has been true rather than asserted.
 
-**INF-05 (server skeleton) is next** and needs nothing from the owner. One thing
-to know before starting it: its integration tests (L3, Testcontainers) need
-Docker, and the Docker daemon does not run in a cloud session — the binary is
-there, the socket is not. CI is now the place those tests can run, which is part
-of why INF-04 came first.
+**INF-05** is in [#6](https://github.com/bvst/TryggHverdag/pull/6) and its exit
+criterion is met: the `integration` job is **green**, so the contract,
+integration and system levels each have a passing example — the third one proven
+where it can be, which is CI. Eight of nine jobs are green on the current head
+and the five reviewers have passed. One check is red, and it is the owner's.
 
-After INF-05 and INF-06 land, `gate:integrity` will start failing until their
-checks are added to the required list; that is the intended reminder.
+**The merge rules are live, and that changes what a red check means.** Until
+now a failing check was a note; from now it stops a merge. The three
+`ai-review` checks are among the twelve required — which puts the unfixed
+missing-file failure below squarely on the critical path, because a blocking
+reviewer that fails for that reason now blocks the pull request rather than
+just looking untidy.
+The `pool.on('error')` question is **answered: deferred to the task that brings
+logging** (D-068, the owner's call). Until then the crash stands, which is loud
+rather than hidden — the platform restarts the process, and if it is the worker
+the heartbeat stops and `/v1/health` reports `degraded` within three minutes.
+`db.ts` says so where the handler will go, so the next reader finds reasoning
+rather than an oversight.
+
+**The stake changes at M2, and D-068 now says so.** Today a restart loop from
+idle-connection churn is an availability problem: health goes `degraded` and
+someone is annoyed. Once the worker carries the watchdog, a worker that keeps
+restarting is a watchdog that keeps not sweeping — the symptom is a journey
+nobody is watching, not a red tick. Revisit it before the worker carries journey
+state, not merely if churn is observed.
+
+**An unmerged branch exists: `claude/inf-04-follow-through`.** It closes INF-04's
+record and widens `engines.node` so Dependabot can run (its updater uses Node 24
+and `.npmrc` sets `engine-strict=true`). It holds decisions **D-063 and D-064**,
+which is why INF-05's decisions start at D-065. The owner has decided to tie it
+up **after #6 merges**, so no pull request yet — deliberately, not forgotten.
+
+**A smaller follow-up:** seven CI jobs still have no `timeout-minutes` —
+`gate-integrity`, `static`, `unit`, `contract`, `traceability`, `mutation` and
+`security`. They came with INF-04 and are left alone here, because the finding
+was about the asymmetry between the two jobs INF-05 added and fixing the rest
+would widen this task. `mutation` is the one worth a bound first: Stryker is the
+only step that can legitimately run for a long time, so it is also the one where
+a hang looks most like work.
+
+**A `/bugfix` is waiting to be written:** `ai-review (code-reviewer)` reports red
+although it approves, because it writes `VERDICT: APPROVE WITH COMMENTS` and the
+enforcement reads only `VERDICT: PASS` or `VERDICT: BLOCK`. Advisory today, and
+the reason to fix it is the day a blocking reviewer does the same. The proposed
+patch is on #6. It cannot be done by editing `ai-review.yml` on a branch — that
+re-triggers the deadlock above — so it has to change the agent definition, which
+is repository content and therefore takes effect on the branch that changes it.
+
+**Where the numbers are going.** After INF-06 lands, `gate:integrity` will start
+failing again until `android-e2e` joins the required list. That is the same
+reminder, and it should be expected rather than debugged.
