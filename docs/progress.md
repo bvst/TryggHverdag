@@ -14,7 +14,7 @@ What has actually been built, task by task. The plan is in
 | INF-01 | Monorepo skeleton | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-02 | Claude Code configuration + hook tests | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-03 | Gate scripts + HK-08 | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
-| INF-04 | CI workflows, merge rules, CODEOWNERS | 🟡 Built — waiting on the owner (A-15) to switch the rules on |
+| INF-04 | CI workflows, merge rules, CODEOWNERS | ✅ Done — 2026-09-23 ([#3](https://github.com/bvst/TryggHverdag/pull/3)). `gate:integrity` passes against the live repository |
 | INF-05 | Server skeleton | 🔜 Next — the L3 tests need Docker, which only CI has |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
 | INF-07 | Staging on Clever Cloud | ⬜ Blocked on owner: Clever Cloud token |
@@ -24,32 +24,20 @@ What has actually been built, task by task. The plan is in
 
 ## What Claude needs from the owner next
 
-**A-15 is the one that matters now, and it is about 10 minutes.** Every step is
-written out in [`plan/merge-rules.md`](plan/merge-rules.md):
+**Nothing blocks the next task.** A-15 is done: the ruleset is active with no
+bypass, all ten checks required, and `CLAUDE_CODE_OAUTH_TOKEN` and the Claude
+GitHub App are in place.
 
-1. **Create the ruleset on `main`** — nothing else in this repository can do it,
-   because Claude's account deliberately has no admin rights (A-06). Until it
-   exists, `main` can be pushed to, force-pushed and deleted by anyone with
-   write access, and no check has to pass before a merge. `gate:integrity`
-   confirmed that against the live API while INF-04 was being built.
-2. **Install the [Claude GitHub App](https://github.com/apps/claude)** on this
-   repository. `ai-review.yml` passes no `github_token`, so the action signs in
-   as that app; without it the reviews cannot post their findings.
-3. **A-09 — `claude setup-token`**, saved as `CLAUDE_CODE_OAUTH_TOKEN`. Without
-   it the three blocking AI reviews fail rather than pass (D-045).
+Still open, for tasks that have not started:
 
-**No `RULES_READ_TOKEN`** — an earlier version of this list asked for one with
-Administration: Read-only. GitHub answers `metadata=read` for the ruleset
-endpoints, which the ordinary Actions token already has, so CI-01 needs no extra
-secret (D-062).
-
-Later tasks, not blocking anything today:
-
-4. **A token for Claude's GitHub account (A-06)** in the cloud environment, so
+1. **A token for Claude's GitHub account (A-06)** in the cloud environment, so
    pull requests come from Claude's account and the owner's approvals count
    (D-042). Until then the owner merges the pull requests.
-5. **Clever Cloud API token** for the AS's account (A-04) [INF-07].
-6. **Healthchecks.io and UptimeRobot API keys** (A-08) [INF-08].
+2. **Clever Cloud API token** for the AS's account (A-04) [INF-07].
+3. **Healthchecks.io and UptimeRobot API keys** (A-08) [INF-08].
+
+There is no `RULES_READ_TOKEN` and there never needs to be: CI-01 reads the
+rulesets with the ordinary Actions token, confirmed in a real CI run (D-062).
 
 ## Log
 
@@ -383,7 +371,7 @@ of them settled an open question:
   blocking reviewers **fail**, not skip. Without `if: always()` and that guard
   they would have been green ticks for reviews that never ran.
 
-**The bootstrap deadlock (open, needs the owner)**
+**The bootstrap deadlock (resolved 2026-09-23)**
 
 With the secret added, the reviewers got as far as the action and then
 stopped:
@@ -402,9 +390,12 @@ The ruleset requires those three checks. So the gates are now strong enough to
 block the change that creates them. Nobody can bypass it either, which is D-029
 working exactly as designed and exactly as inconveniently as designed.
 
-It resolves itself after one merge, and the only way to get that merge is for
-the owner to relax enforcement once, deliberately. Written up in
-`plan/merge-rules.md`; the owner decides.
+**The owner resolved it by merging.** `ai-review.yml` is on `main` now, so the
+action will run on every pull request from here. The ruleset was checked
+afterwards and is intact: active, bypass list empty, all ten checks required,
+strict, code-owner review on. Recorded as D-063, because a merge that the gates
+would otherwise have refused is exactly the kind of event that must be written
+down rather than remembered.
 
 Confirmed along the way: the **Claude GitHub App is installed** (the log shows
 the OIDC exchange succeeding and the actor as `claude[bot]`), and the
@@ -412,8 +403,8 @@ the OIDC exchange succeeding and the actor as `claude[bot]`), and the
 does when a credential is present.
 
 Still unverified: whether the `claude_args` tool grant added for the verdict
-file is sufficient. The action has never actually run a review, so that fix is
-reasoned rather than proven. The first merge is what tests it.
+file is sufficient. The action never got far enough to try. **This pull request
+is the test** — it is the first one where the reviewers can actually run.
 
 **Follow-ups the reviewers raised that are deliberately not in this task**
 
@@ -439,8 +430,9 @@ reading the bypass list needs its own token rather than Claude's, and D-061
 
 **Worth knowing for the next task**
 
-- **`gate-integrity` and the three `ai-review` checks are red until A-15 and
-  A-09.** That is the designed state, not a regression (D-029). Because the
+- **All of this is now green on `main`**, `gate-integrity` included. What
+  follows described the state before the merge, and is kept because the
+  reasoning still applies to the next task that adds a check. Because the
   merge rules are not on yet, a red check does not block merging — the owner
   still merges by hand.
 - **Not installed yet, and why:** `deploy-staging.yml` belongs to INF-07 (it
@@ -461,14 +453,25 @@ reading the bypass list needs its own token rather than Claude's, and D-061
 
 ## In flight
 
-INF-04 is built but **not done**: it is finished when `gate:integrity` passes,
-which needs A-15 from the owner. The pull request can merge before that.
+**INF-04 is done.** Every check is green on `main`, the ruleset is enforced with
+nobody able to bypass it, and `gate:integrity` verifies that on every pull
+request rather than taking it on trust.
 
-**INF-05 (server skeleton) is next** and needs nothing from the owner. One thing
-to know before starting it: its integration tests (L3, Testcontainers) need
-Docker, and the Docker daemon does not run in a cloud session — the binary is
-there, the socket is not. CI is now the place those tests can run, which is part
-of why INF-04 came first.
+**INF-05 (server skeleton) is next** and needs nothing from the owner.
 
-After INF-05 and INF-06 land, `gate:integrity` will start failing until their
-checks are added to the required list; that is the intended reminder.
+Two things to carry into it:
+
+1. **Its integration tests (L3, Testcontainers) need Docker**, and the Docker
+   daemon does not run in a cloud session — the binary is there, the socket is
+   not. CI is where those tests run, which is part of why INF-04 came first.
+2. **Do not make `integration` and `system` required in the same pull request
+   that adds their jobs.** D-063: a check whose workflow is not yet on `main`
+   cannot pass on the pull request that introduces it, and the ruleset will
+   then block the very change that would fix it. Add the jobs first, let them
+   run green, then require them. `gate:integrity` will be red in between,
+   saying exactly which checks CI can now run that the rules do not yet
+   require — which is the reminder, not a problem to work around.
+
+**Also waiting:** the `claude_args` tool grant in `ai-review.yml` has never been
+exercised. This pull request is the first one where the reviewers can run, so it
+is the test of whether a reviewer can actually write its verdict file.

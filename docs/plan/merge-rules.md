@@ -1,18 +1,22 @@
 # Merge rules — what the owner switches on
 
-**Status:** ⬜ Waiting for the owner · **Added by:** INF-04 · **Last updated:** 2026-09-20
+**Status:** ✅ Done (2026-09-23) · **Added by:** INF-04 · **Last updated:** 2026-09-23
 
 Everything else in this repository — the hooks, the gates, the reviewers —
 assumes it is allowed to stop a merge. Nothing here can switch that on: it needs
 repository-admin rights, which Claude's account deliberately does not have
 (A-06, D-042).
 
-Until it is switched on, `pnpm run gate:integrity` fails and the `gate-integrity`
-check is red. That is the intended behaviour, not a bug to work around: a gate
-that cannot tell whether it is enforced must not report that it is (D-029).
+**This is done.** The ruleset is active, nobody can bypass it, and all ten
+checks are required. `gate:integrity` confirms it on every pull request, and
+fails rather than passing whenever it cannot tell — a gate that does not know
+whether it is enforced must not report that it is (D-029).
 
-At the time of writing, `main` has **no protection at all** — anyone with write
-access can push to it directly, force-push it, or delete it.
+The instructions below are kept because they are what the gate holds the
+repository to, and because the next person to add or change a check will need
+them. **Read D-063 first if you are adding one**: a check whose job lives in a
+workflow that is not yet on `main` cannot pass on the pull request that adds
+it.
 
 ## Part 1 — the Claude app and its token (5 minutes)
 

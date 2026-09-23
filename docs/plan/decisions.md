@@ -741,3 +741,48 @@ new decision that supersedes it (see `00-working-agreement.md`).
   the action authenticates as the **Claude GitHub App** — which therefore has to
   be installed on the repository. That step was missing from `merge-rules.md`
   entirely; without it the reviews cannot post their findings.
+
+## D-063 — The first merge went in before its own reviews could run
+- **Date:** 2026-09-23 · **Status:** Accepted · **Section:** 8
+- **Context:** `claude-code-action` refuses to run when the workflow file
+  differs from the copy on the default branch — the defence that stops a pull
+  request from rewriting the workflow that holds the secrets and having the
+  rewrite run. `ai-review.yml` was *added* by the pull request that INF-04
+  opened, so it was not on `main`, so the action skipped itself, so the three
+  `ai-review` checks could not pass. The ruleset required them and nobody could
+  bypass it. The gates were strong enough to block the change that created
+  them.
+- **Decision:** The owner merged that one pull request with those three checks
+  unsatisfied. `ai-review.yml` is on `main` from then on and the action runs
+  normally, so the situation cannot recur for these reviewers.
+- **Consequences:**
+  - The INF-04 branch is the only change in this repository's history that the
+    gates would have refused. Its other ten checks were green, and three
+    reviewers had run against it locally and been answered — but that is not
+    the same as the gate passing, and this entry exists so nobody later reads
+    a green history and concludes otherwise.
+  - The ruleset was checked immediately afterwards and is intact: active,
+    bypass list empty, ten checks, strict, code-owner review on.
+  - **The same trap waits for any future task that adds a required check in the
+    workflow that produces it.** INF-05 and INF-06 do exactly that. The way
+    through is to add the job in one pull request and make the check required
+    in the next, so the check exists on `main` before anything depends on it.
+  - INF-10's drills must include this: a pull request that removes
+    `ai-review.yml` should be refused.
+
+## D-064 — `engines.node` loses its upper bound
+- **Date:** 2026-09-23 · **Status:** Accepted (delegated, D-031) · **Section:** 8
+- **Context:** The first Dependabot run on `main` failed:
+  `typescript | tool_version_not_supported | {"tool-name": "Node",
+  "detected-version": ">=22.13.0 <23", "supported-versions": "v24.21.0"}`.
+  Dependabot's updater runs Node 24; `.npmrc` sets `engine-strict=true`; the
+  `<23` bound therefore stopped it touching the npm dependencies at all.
+- **Decision:** `engines.node` becomes `>=22.13.0`. `engine-strict` stays.
+- **Consequences:** Dependency and **security** updates work, which is what
+  SEC-06 is for — between pull requests, Dependabot alerts are the only thing
+  watching a dependency nobody is touching. The upper bound was the third guard
+  on the Node version, after `.nvmrc`/`.node-version` (which CI reads through
+  `node-version-file`, and which fnm and nvm read locally) and `doctor`'s own
+  check that the major version is 22. Those two remain, and they are the ones
+  a person actually meets. Relaxes D-058's pin in this one respect and for this
+  one reason.
