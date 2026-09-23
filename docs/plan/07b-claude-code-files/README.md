@@ -9,12 +9,32 @@
 > the two differ, **the live files are authoritative** and these are the
 > history of where they started.
 >
-> Ten of the files here already differ from live — `CLAUDE.md`, the README,
-> seven agent briefs and `.claude/rules/server-domain.md` — because D-067,
-> D-069, D-070, D-071 and D-074 changed the live ones. **That drift is the
-> point, not a defect**: v0 is meant to stay v0. Nothing should sync these to
-> live, and a test asserting they match would erase the v0/v1 distinction this
-> repository keeps on purpose.
+> **Most of these files already differ from live** — briefs, hooks, settings,
+> `CLAUDE.md` and `.github/CODEOWNERS` among them — because D-059 installed
+> them with changes and D-067, D-069, D-070, D-071 and D-074 have moved the
+> live ones since. **That drift is the point, not a defect**: v0 is meant to
+> stay v0. Nothing should sync these to live, and a test asserting they match
+> would erase the v0/v1 distinction this repository keeps on purpose.
+>
+> No count is given here on purpose. The first version of this note said
+> "ten", having quietly compared only `*.md` files and so missing the hooks,
+> `settings.json` and `CODEOWNERS` — in the very sentence that cites D-071,
+> the decision that changed `CODEOWNERS`. A reviewer counted 20, a recount
+> against the working tree gave 21, and the difference is which tree was
+> measured. A hand-maintained tally in a static note is wrong the moment
+> anything moves. Ask the repository instead:
+>
+> ```sh
+> find docs/plan/07b-claude-code-files -type f | while read -r f; do
+>   rel="${f#docs/plan/07b-claude-code-files/}"
+>   [ "$rel" = "README.md" ] && continue   # this file; not one that is copied out
+>   [ -f "$rel" ] && ! diff -q "$f" "$rel" >/dev/null && echo "$rel"
+> done
+> ```
+>
+> The `continue` is load-bearing. Without it the loop compares *this* README
+> against the project's top-level `README.md` — unrelated files that share a
+> name — and reports a difference that means nothing.
 
 These are the first versions of the Claude Code configuration from
 `07-claude-code-setup.md`. They are copied into the repository root when it is

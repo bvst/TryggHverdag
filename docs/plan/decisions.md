@@ -1399,3 +1399,64 @@ this repository.** A grep of the workflows, `.claude/hooks/`,
 paths, and the symptom still reproduces. Earlier wording called it "the
 reviewer harness", which sent someone hunting in the repository for a mechanism
 that is not there.
+
+**Addendum, 2026-09-23 — the exemption is keyed to proof, not to a directory.**
+The decision above names `scripts/` and `.claude/hooks/`. `code-reviewer` found
+`packages/config/eslint/index.test.mjs` naming its tests `AR-03:` and `AR-06:`,
+which is the same shape of untracked prefix and lives in neither directory — so
+a rule keyed to paths needs amending every time a tooling test appears
+somewhere new. The live rule now reads: a test that proves no **tracked**
+requirement is exempt, wherever it lives, with those paths as examples.
+
+Recorded here rather than left in the rule file alone, because D-074 exists
+precisely because two reviewers asked for a deliberate decision instead of a
+quiet edit — and widening it quietly would have repeated what it was written to
+stop. Both reviewers on #13 asked for this addendum independently.
+
+**And a correction to the definition.** The first wording said tracked means
+"the ID's source document is in `collectRequirements`'s `SOURCES`". That is
+wrong, and self-contradicting: `docs/plan/05-architecture.md` **is** in
+`SOURCES`, `AR-01`…`AR-12` live in it, and they are excluded by that entry
+collecting `prefixes: ['SM']` only. Read literally the definition made `AR-03`
+tracked, in the clause immediately before listing `AR-` as untracked. Tracked
+now means what `req:coverage` actually counts — the prefix is collected — with
+`docs/requirements-status.md` as the check.
+
+## D-075 — Changes to `ai-review.yml` are merged by hand
+
+**Decision.** `.github/workflows/ai-review.yml` is its own class of change. The
+AI reviewers cannot review it, so a pull request touching it is merged manually
+by the owner, with the three blocking reviewer checks red. Changes to that file
+are **batched** rather than shipped one at a time.
+
+**Why it cannot be reviewed.** `claude-code-action` refuses to run when the
+workflow differs from the repository's default branch:
+
+> Skipping action due to workflow validation: The workflow file must exist and
+> have identical content to the version on the repository's default branch.
+
+That is a deliberate defence — a pull request must not be able to rewrite the
+workflow holding the secrets and have the rewritten version run — and it means
+**the one file that decides what the reviewers check is the one file they are
+structurally unable to look at.** Not "hard to"; cannot.
+
+**Four cases in one day**, which is what turned this from a curiosity into a
+policy: bounding the workflow's own jobs with `timeout-minutes`; the guard
+message that misattributes a Dependabot secret failure; every Dependabot bump of
+`actions/checkout`, `actions/setup-node` or `pnpm/action-setup`, because that
+workflow pins them; and the guard that reads a cancelled run as a failed one.
+
+**The alternative, considered and not taken.** A `workflow_run`-triggered
+reviewer runs from the default branch's definition, so a pull request cannot
+change what reviews it — which would dissolve all four cases. It also hands
+secrets to a run evaluating unreviewed code. For a safety-critical repository
+that trade needs its own decision with its own evidence, not a default chosen
+while fixing something else. Left open deliberately.
+
+**What this costs, stated plainly.** Every change to the reviewer gate goes in
+unreviewed by the gate itself. Human review is the only review those changes will
+ever get, which is an argument for making them rare and batched, and for reading
+them harder than anything else in the repository.
+
+**What it does not license.** Nothing else gets a manual merge. A red check on
+any other path is work, not a candidate for the same treatment.
