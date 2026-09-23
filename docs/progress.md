@@ -72,6 +72,18 @@ The things that still bite, and cost a session hours the first time.
   of what is already gone. Fifteen jobs fire on every push (nine `ci`, six
   `ai-review`), so a day of many small pushes is expensive — which is the
   argument for path filters on the docs-only ones.
+- **A green `ai-review` tick is not proof a review happened.** Twice on #15 a
+  reviewer returned a verdict without having reviewed. `test-auditor` — one of
+  the three *blocking* reviewers — emitted
+  `{"verdict":"PASS","summary":"Placeholder — waiting for test-auditor subagent
+  to finish before posting PR comment and final verdict."}`, and the gate, which
+  only greps for `^(PASS|BLOCK)$`, accepted it. `code-reviewer` hit the same
+  cut-off and honestly returned `BLOCK`, but it is advisory, so the job warned,
+  exited 0 and pointed at a comment that was never posted. **The tell is a
+  reviewer that goes green without commenting**, in well under the four to six
+  minutes a real review takes. Read the job log's `STRUCTURED:` line before
+  trusting any verdict. The fix belongs in `ai-review.yml`, so it waits for a
+  D-075 batch — which is also why it went unnoticed.
 - **`ai-review.yml` cannot be reviewed by the reviewers.** Editing it stops the
   action running at all, so every change to that file is merged by hand, on
   purpose (**D-075**). Batch changes to it rather than spending a manual merge

@@ -17,6 +17,10 @@
 # binding-decisions rule. As governance-critical as anything under /.claude/.
 /CLAUDE.md                        @bvst @urso-agent
 /scripts/                         @bvst @urso-agent
+# HK-09's entry point. Its rules live in /scripts/ and were already owned, but
+# git executes this file: an unowned copy could switch the gate off without the
+# rules changing a line.
+/.githooks/                       @bvst @urso-agent
 /package.json                     @bvst @urso-agent
 /packages/contracts/released/     @bvst @urso-agent
 /docs/plan/decisions.md           @bvst @urso-agent

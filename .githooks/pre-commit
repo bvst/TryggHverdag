@@ -22,11 +22,22 @@ if (staged.length === 0) process.exit(0);
 
 const unstaged = lines(git(['diff', '--name-only']).stdout);
 
-const npx = (args) => {
-  const r = spawnSync('npx', args, { encoding: 'utf8', timeout: 120_000 });
+// `pnpm exec`, not `npx`, and not by taste: npx falls back to fetching an
+// unpinned version from the registry when the local install is incomplete, so a
+// half-installed checkout would silently run whatever the registry served,
+// against every commit. pnpm exec resolves from node_modules and fails when the
+// binary is not there. The rest of the repository already shells out through
+// pnpm (post-edit.mjs, stop-gate.mjs); this is the same choice for the same
+// reason.
+const tool = (args, options = {}) => {
+  const r = spawnSync('pnpm', ['exec', ...args], {
+    encoding: 'utf8',
+    timeout: 120_000,
+    ...options,
+  });
   if (r.error) {
     // A missing toolchain must not be reported as clean. Say what happened.
-    return { ok: false, output: `could not run "npx ${args.join(' ')}": ${r.error.message}` };
+    return { ok: false, output: `could not run "pnpm exec ${args.join(' ')}": ${r.error.message}` };
   }
   return { ok: r.status === 0, output: (r.stdout ?? '') + (r.stderr ?? '') };
 };
@@ -46,13 +57,9 @@ const checkStaged = (files) => {
   for (const file of files) {
     const blob = git(['show', `:${file}`]);
     if (blob.status !== 0) continue; // gone from the index; nothing to check
-    const r = spawnSync('npx', ['prettier', '--check', '--stdin-filepath', file], {
-      input: blob.stdout,
-      encoding: 'utf8',
-      timeout: 120_000,
-    });
-    if (r.error) return { ok: false, output: `could not run prettier: ${r.error.message}` };
-    if (r.status !== 0) bad.push(file);
+    const r = tool(['prettier', '--check', '--stdin-filepath', file], { input: blob.stdout });
+    if (!r.ok && r.output.startsWith('could not run')) return r;
+    if (!r.ok) bad.push(file);
   }
   return { ok: bad.length === 0, output: bad.join('\n') };
 };
@@ -60,12 +67,12 @@ const checkStaged = (files) => {
 const result = preCommit({
   staged,
   unstaged,
-  format: (files) => npx(['prettier', '--write', '--ignore-unknown', ...files]),
+  format: (files) => tool(['prettier', '--write', '--ignore-unknown', ...files]),
   // A writable file had no working-tree changes before prettier ran, so whatever
   // git now reports as modified is what prettier rewrote — and nothing else.
   changed: (files) => lines(git(['diff', '--name-only', '--', ...files]).stdout),
   check: checkStaged,
-  lint: (files) => npx(['eslint', ...files]),
+  lint: (files) => tool(['eslint', ...files]),
   stage: (files) => git(['add', '--', ...files]),
 });
 
