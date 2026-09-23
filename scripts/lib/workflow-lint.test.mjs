@@ -2,7 +2,13 @@
 // can be a lie — an action that is whatever its author pushed this morning, a
 // job that calls a script nobody wrote, and a check that no job produces.
 import { describe, expect, test } from 'vitest';
-import { findActionUses, findJobIds, findPnpmScripts, reviewWorkflows } from './workflow-lint.mjs';
+import {
+  findActionUses,
+  findJobIds,
+  findPnpmScripts,
+  findUnboundedJobs,
+  reviewWorkflows,
+} from './workflow-lint.mjs';
 
 const SHA = 'd23441a48e516b6c34aea4fa41551a30e30af803';
 
@@ -96,6 +102,67 @@ describe('findJobIds', () => {
     const text = ['on:', '  pull_request:', 'jobs:', '  static:'].join('\n');
 
     expect(findJobIds(text)).toEqual(['static']);
+  });
+});
+
+describe('findUnboundedJobs', () => {
+  test('a job with no timeout is named', () => {
+    const text = ['jobs:', '  a:', '    runs-on: ubuntu-latest'].join('\n');
+
+    expect(findUnboundedJobs(text)).toEqual(['a']);
+  });
+
+  test('a job with a timeout is not', () => {
+    const text = ['jobs:', '  a:', '    runs-on: ubuntu-latest', '    timeout-minutes: 10'].join(
+      '\n',
+    );
+
+    expect(findUnboundedJobs(text)).toEqual([]);
+  });
+
+  test("a step's own timeout does not count as the job's", () => {
+    // The one way this check could pass while the job is still unbounded. Step
+    // keys sit at eight spaces under `      - `; job keys sit at four. Reading
+    // the indentation is what tells them apart, so the wrong one has to fail
+    // here or the whole check is decorative.
+    const text = [
+      'jobs:',
+      '  a:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - name: slow',
+      '        timeout-minutes: 5',
+    ].join('\n');
+
+    expect(findUnboundedJobs(text)).toEqual(['a']);
+  });
+
+  test('every job is judged, not just the first', () => {
+    const text = [
+      'jobs:',
+      '  a:',
+      '    timeout-minutes: 10',
+      '  b:',
+      '    runs-on: ubuntu-latest',
+      '  c:',
+      '    timeout-minutes: 5',
+    ].join('\n');
+
+    expect(findUnboundedJobs(text)).toEqual(['b']);
+  });
+
+  test('a commented-out timeout bounds nothing', () => {
+    const text = ['jobs:', '  a:', '    # timeout-minutes: 10'].join('\n');
+
+    expect(findUnboundedJobs(text)).toEqual(['a']);
+  });
+
+  test('keys after the jobs block are not mistaken for jobs', () => {
+    const text = ['jobs:', '  a:', '    timeout-minutes: 10', 'concurrency:', '  group: x'].join(
+      '\n',
+    );
+
+    expect(findUnboundedJobs(text)).toEqual([]);
   });
 });
 

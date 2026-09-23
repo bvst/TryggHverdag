@@ -1062,3 +1062,42 @@ different decisions both numbered **D-060** (lines 601 and 635, "Gate scripts
 v1" and "CI configuration v1"). Decisions are binding and cited by ID, so an
 ambiguous one is worth the owner's attention; renumbering a binding decision
 is not Claude's call.
+
+
+### Every workflow job now has a timeout, and two docs stopped contradicting themselves
+
+Small cleanup, kept small on purpose — it is also the first pull request after
+D-073, so it doubles as the test of whether the reviewers return a verdict
+through `structured_output`. A throwaway payload is the right place to find out.
+
+**Nine of eleven jobs had no `timeout-minutes`**, inheriting GitHub's six-hour
+default. `integration` and `system` were bounded because they were added last;
+the rest inherited the default by nobody deciding. The cost is the shape of the
+failure, not the runner minutes: a hung job is indistinguishable from a working
+one, so it is waited on rather than investigated. `ai-review`'s `review` job is
+the sharpest case — it hands control to a language model, where "thinking" and
+"hung" look alike — and `mutation` the next, since Stryker legitimately runs
+long, so a hang there is the most believable and the least likely to be chased.
+
+Bounds are roughly an order of magnitude above what these jobs actually take
+(30–40s for most, ~90s for a reviewer): 5–30 minutes. `findUnboundedJobs` in
+`workflow-lint.mjs` keeps them there, reading indentation line by line so the
+gate stays free of a YAML parser, as the rest of that file does. Its tests
+include the one way the check could be decorative — a single step's own
+`timeout-minutes` being read as the whole job's.
+
+**Two documents were contradicting themselves.** `merge-rules.md` still
+described 0 approvals plus code-owner review as the working configuration,
+directly above the D-072 paragraphs saying it never was; it now carries the
+superseded pointer this repository uses elsewhere. And `decisions.md` has **two
+different decisions numbered D-060** (gate scripts, CI configuration), so a
+citation of D-060 is ambiguous. Both are named at their headings rather than
+renumbered: changing a binding decision's ID is the owner's call.
+
+**Noticed, outside the repository so not fixable here:** the stop hook at
+`~/.claude/stop-hook-git-check.sh` reports unpushed commits after every squash
+merge, because the pre-squash head is never an ancestor of the squash commit.
+With squash merges and auto-delete both on, that is a false alarm on every
+pull request — which trains its reader to ignore it. A `git remote prune`, or
+comparing against the default branch rather than the same-named remote, fixes
+it.

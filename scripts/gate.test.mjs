@@ -7,7 +7,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { FULL_STEPS, QUICK_STEPS, availableTools } from './gate.mjs';
 import { packageScripts } from './lib/proc.mjs';
-import { findActionUses } from './lib/workflow-lint.mjs';
+import { findActionUses, findUnboundedJobs } from './lib/workflow-lint.mjs';
 import {
   OWNER_APPROVAL_PATHS,
   planChecks,
@@ -125,6 +125,22 @@ describe("this repository's own workflows", () => {
     expect(allowed.split(',').map((s) => s.trim())).toEqual(
       expect.arrayContaining(['Read', 'Grep', 'Glob', 'Bash', 'mcp__github__add_issue_comment']),
     );
+  });
+
+  test('every workflow job is bounded by a timeout', () => {
+    // Without timeout-minutes a job gets GitHub's six-hour default, and a job
+    // that hangs is indistinguishable from one that is working — so it is not
+    // investigated, it is waited on. The two jobs that had a bound were the two
+    // added last; the other nine inherited the default by nobody deciding.
+    const unbounded = readdirSync(WORKFLOWS)
+      .filter((name) => name.endsWith('.yml'))
+      .flatMap((name) =>
+        findUnboundedJobs(readFileSync(`${WORKFLOWS}/${name}`, 'utf8')).map(
+          (id) => `${name}: ${id}`,
+        ),
+      );
+
+    expect(unbounded).toEqual([]);
   });
 
   test('the safety filter in ai-review.yml matches the paths the owner must approve', () => {

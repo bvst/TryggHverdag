@@ -29,6 +29,7 @@ permissions:
 jobs:
   gate-integrity: # CI-01: the merge rules are real (D-029), CODEOWNERS is complete (D-042)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
@@ -48,6 +49,7 @@ jobs:
 
   static: # CI-02 (L1)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
@@ -59,6 +61,7 @@ jobs:
 
   unit: # CI-03 (L2, L5)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
@@ -103,6 +106,7 @@ jobs:
 
   contract: # CI-06 (L4, RG-08) — the API against every app version still in use
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
@@ -117,6 +121,7 @@ jobs:
 
   traceability: # CI-07 — RG-01 requirement coverage, RG-03 test changes, RG-04 coverage ratchet
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
@@ -146,6 +151,7 @@ jobs:
 
   mutation: # CI-08 (RG-05, D-036) — only when safety code changed; fails if it changed and Stryker is missing
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
@@ -160,6 +166,7 @@ jobs:
 
   security: # CI-10
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0 }
