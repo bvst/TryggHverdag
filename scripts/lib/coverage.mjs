@@ -19,8 +19,9 @@ export const FLOORS = {
  * held to the mutation gate but not to the 95 % branch floor. Two lists that
  * are supposed to say the same thing eventually do not.
  */
-export { SAFETY_PATHS } from './gate-decisions.mjs';
 import { SAFETY_PATHS } from './gate-decisions.mjs';
+
+export { SAFETY_PATHS };
 
 /** Code that ships to people, as opposed to the repository's own tooling. */
 export const PRODUCT_PATHS = ['apps/', 'packages/'];
