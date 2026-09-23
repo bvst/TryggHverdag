@@ -1332,3 +1332,46 @@ empty), and asserts no reviewer is asked for a file and none can write one.
 removes; it now requires the read and comment tools, and the stricter
 assertion — that `Write` is absent — lives beside the reasoning in
 `ai-review.test.mjs`.
+
+## D-074 — The test-naming rule applies to requirement tests, not gate tests
+
+**Decision.** `.claude/rules/tests.md` asks for an `<ID>-ACn:` prefix on tests
+that prove a requirement. Gate and tooling tests under `scripts/` are exempt
+and describe the behaviour they hold instead.
+
+**Why this came up.** `test-auditor` and `code-reviewer` raised it
+independently, on different pull requests, both noting the same thing: the rule
+said every test, and **no test in `scripts/` has ever followed it**. A rule that
+universal practice ignores is not a rule, it is a finding waiting to be
+re-raised on every infrastructure change.
+
+**Why the rule moved rather than the tests.** Checked rather than assumed, from
+`scripts/lib/requirements.mjs` and the generated report:
+
+- `collectRequirements`'s `SOURCES` reads four documents — the MVP scope, and
+  the REL/SEC, PRIV and SM rule tables. There is no CI document among them.
+- `CI-` appears **zero times** in `docs/requirements-status.md`.
+
+So `CI-01` is not a tracked requirement ID. Prefixing gate tests with it would
+satisfy the letter of the rule while `req:coverage` ignored every one of them —
+the appearance of traceability over a number that cannot move. That is the
+exact shape of decorative check this repository has spent a day digging out of
+its own gates, and adding one deliberately would be worse than the
+inconsistency it fixes.
+
+**What this does not change.** Everything else in `tests.md` still applies to
+gate tests: the fake clock, no `.skip` or `.only`, no assertion removed without
+a written reason, and the `// req-coverage: fixtures-only` marker on files that
+quote requirement IDs as sample data. Only the naming prefix is scoped.
+
+**The owner decided this**, after both reviewers asked for a deliberate
+decision rather than a quiet edit. Renaming every gate test was the alternative
+and was declined.
+
+**One property worth knowing about this pull request.** The reviewer harness
+reverts `.claude/rules/**` to its pre-pull-request contents before a reviewer
+reads it, so the reviewers on the change that carries this decision will judge
+it against the *old* rule text. They still run — unlike a change to
+`ai-review.yml`, which stops them running at all — but they cannot see the
+wording being changed. Recorded so the next person does not read their silence
+on it as agreement.

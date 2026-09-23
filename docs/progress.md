@@ -1211,3 +1211,33 @@ a safety-critical repository, and the opposite of every failure recorded above
 it, which all read as green or as noise. Still wrong: it blocks a pull request
 nobody reviewed. Worth watching whether it recurs before deciding what it needs
 (a turn budget, a prompt that finishes the subagent first, or both).
+
+
+### The test-naming rule now says what practice has always done (D-074)
+
+`test-auditor` and `code-reviewer` raised the same inconsistency independently,
+on different pull requests: `.claude/rules/tests.md` asked every test to start
+with a requirement ID, and **no test under `scripts/` has ever done so**. Both
+asked for a deliberate decision rather than a quiet edit, and both were right
+to — a rule that universal practice ignores is a finding that gets re-raised on
+every infrastructure change until someone settles it.
+
+The owner scoped the rule. Checked before writing it down, from
+`scripts/lib/requirements.mjs` and the generated report rather than from the
+reviewers' word: `collectRequirements`'s `SOURCES` reads the MVP scope and the
+REL/SEC, PRIV and SM tables, with no CI document among them, and `CI-` appears
+**zero times** in `docs/requirements-status.md`. So prefixing gate tests with
+`CI-01` would satisfy the rule's letter while `req:coverage` ignored every one
+— the look of traceability over a number that cannot move, which is the exact
+decorative-check shape this repository spent the day removing from its own
+gates.
+
+Everything else in `tests.md` still binds gate tests: fake clock, no `.skip` or
+`.only`, no assertion removed without a written reason, and the
+`// req-coverage: fixtures-only` marker. Only the naming prefix is scoped.
+
+**Read the reviewers on this one with a caveat.** The harness reverts
+`.claude/rules/**` before a reviewer reads it, so they will judge this change
+against the *old* rule text. They do still run — unlike an `ai-review.yml`
+change, which stops them entirely — but they cannot see the wording being
+changed, and their silence on it is not agreement.
