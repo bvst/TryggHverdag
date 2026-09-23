@@ -28,9 +28,19 @@ Audit the branch against the regression gates:
 - Tests actually assert behaviour, not just run code.
 
 ## Output format
+**Before you finish, write your review to `review-test-auditor.md` in the repository
+root**, verdict line included, using a shell heredoc. The agent that invoked you
+is supposed to do this, and repeatedly has not: the review runs, the pull
+request comment appears, no file is written, and CI records it as a review that
+never happened — failing a required check on work that passed. Writing it
+yourself costs one command and removes that whole failure. It is your own
+output, not a change to the code under review; do not touch anything else.
+
+Then post the same content as a pull request comment, for people to read.
+
 Write your findings first, grouped as **Blocking**, **Should fix** and
-**Notes**. Then make the **very last line of your review** exactly one of these
-two strings and nothing else:
+**Notes**. Then make the **very last line of `review-test-auditor.md`** exactly one of
+these two strings and nothing else:
 
     VERDICT: PASS
     VERDICT: BLOCK

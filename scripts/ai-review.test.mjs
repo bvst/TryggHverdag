@@ -130,28 +130,42 @@ describe('the verdict line the reviewers must produce', () => {
   );
 
   test.each(names)(
-    '%s is not told to write the verdict file',
+    '%s is told to write its own verdict file',
     explained((name) => {
-      // Not because it is impossible — `Bash` can write a file, and a reviewer
-      // that shelled out would succeed. Because it is the wrong place. Every
-      // reviewer's frontmatter grants `Read, Grep, Glob, Bash` and no `Write`,
-      // since a reviewer that edits the code it reviews is not an independent
-      // one (D-043 calls them read-only), and routing around that with a shell
-      // redirect makes the property a formality. The file belongs to the agent
-      // that invokes them, which has `Write` and is told to use it.
-      expect(agentNamed(name)?.text).not.toMatch(/write it with the Write tool/i);
-      expect(agentNamed(name)?.text).not.toMatch(/review-[a-z0-9-]+\.md/i);
+      // This assertion was the other way round for two commits, and the reason
+      // for changing it is on the record rather than buried.
+      //
+      // The gate reads `review-<agent>.md`. The workflow tells the *invoking*
+      // agent to write it, and that agent kept not doing so: the action step
+      // reports success, the pull request comment appears, no file exists, and
+      // a required check records a passing review as one that never happened.
+      // It blocked a green, approved commit twice in a row.
+      //
+      // The first instinct was that reviewers must not write, being read-only
+      // (D-043). That over-applied the rule. A reviewer emitting its own
+      // verdict artefact is not a reviewer editing the code it reviews — the
+      // file is scratch output in the workspace and is never committed. The
+      // property worth protecting is that a reviewer cannot change what it is
+      // judging, and writing its own verdict does not touch that.
+      const agent = agentNamed(name);
+
+      expect(agent?.text).toContain(`review-${name.replace(/\.md$/, '')}.md`);
+      expect(agent?.text).toMatch(/do not touch anything else/i);
     }),
   );
 
   test.each(names)(
-    '%s is read-only, which is why that is the wrong place',
+    '%s has no Write tool, so it writes that file with a shell command',
     explained((name) => {
+      // The frontmatter grant stays `Read, Grep, Glob, Bash` — no Write — so
+      // the reviewer still cannot edit files as a matter of course. The
+      // instruction says heredoc for that reason, not by accident.
       const tools =
         /^tools:\s*(?<list>.+)$/m.exec(agentNamed(name)?.text ?? '')?.groups?.list ?? '';
 
       expect(tools).not.toMatch(/\bWrite\b/);
-      expect(tools).toMatch(/\bRead\b/);
+      expect(tools).toMatch(/\bBash\b/);
+      expect(agentNamed(name)?.text).toMatch(/heredoc/i);
     }),
   );
 

@@ -918,8 +918,27 @@ new decision that supersedes it (see `00-working-agreement.md`).
   reviewers stop running entirely. The fix belongs on `main`: make the writing
   step explicit and checkable, or have the enforcement read the posted comment,
   which is the artefact that does reliably exist.
-- **The reviewers are not the place to fix it**, which is a narrower claim than
-  the one first made here. Their frontmatter grants `Read, Grep, Glob, Bash` and
+- **Reversed, on evidence, after this blocked a green pull request twice.** The
+  reviewers now write the file themselves, with a shell heredoc. What settled it
+  was the job timings: `claude-code-action` reports **success** every time —
+  three and a half to five minutes, finished cleanly — and *then* the verdict
+  step fails in no time at all. The action is not running out of budget or
+  crashing. It completes, posts the pull request comment, and leaves no file.
+  Nothing on a branch can make the invoking agent write it, and on `d8c47a8` a
+  `VERDICT: PASS` from `test-auditor` failed its required check twice in a row
+  on a commit where all nine CI jobs were green and every other reviewer passed.
+- **The read-only objection was over-applied**, and that is worth saying plainly
+  because it was argued the other way here first. A reviewer emitting its own
+  verdict artefact is not a reviewer editing the code it reviews: the file is
+  scratch output in the workspace and is never committed. The property worth
+  protecting is that a reviewer cannot change what it is judging. Writing its
+  own verdict does not touch that, and the frontmatter still grants no `Write`
+  — hence the heredoc.
+- **This is a workaround, not the fix.** The right change is still in
+  `ai-review.yml` on `main`: make the write step explicit and checkable, or have
+  the enforcement read the pull request comment, which is the artefact that does
+  reliably exist. Until then the reviewers carry a belt they should not need.
+- **The earlier reasoning, kept because the reversal is the point** Their frontmatter grants `Read, Grep, Glob, Bash` and
   no `Write`, so "write it with the Write tool" was unfollowable as written —
   but `Bash` can write a file, so a reviewer told to shell out would succeed.
   The objection is not that it is impossible; it is that a reviewer writing into
