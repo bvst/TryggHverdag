@@ -19,10 +19,13 @@
 > No count is given here on purpose. The first version of this note said
 > "ten", having quietly compared only `*.md` files and so missing the hooks,
 > `settings.json` and `CODEOWNERS` — in the very sentence that cites D-071,
-> the decision that changed `CODEOWNERS`. A reviewer counted 20, a recount
-> against the working tree gave 21, and the difference is which tree was
-> measured. A hand-maintained tally in a static note is wrong the moment
-> anything moves. Ask the repository instead:
+> the decision that changed `CODEOWNERS`. A reviewer then counted 20 where a
+> recount gave 21, and I explained the gap as a difference in which tree was
+> measured. That was a guess. The real cause is the one the `continue` line
+> below guards against: the loop compared this file with the project's
+> top-level `README.md`, two unrelated files that share a name. 21 minus that
+> false positive is exactly the 20. A hand-maintained tally in a static note
+> is wrong the moment anything moves. Ask the repository instead:
 >
 > ```sh
 > find docs/plan/07b-claude-code-files -type f | while read -r f; do
