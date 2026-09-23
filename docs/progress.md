@@ -513,11 +513,11 @@ test levels with one real example each.
 | L4 contract | 5 tests; the committed `openapi.json` must equal what the contract generates today |
 | L6 system | 6 tests through the real API, including `degraded` still answering 200 and an unversioned path 404ing |
 | worker | 3 tests, one of them REL-01: the heartbeat records the time *the database* gave, not this process |
-| L3 integration | **Written, not run — see below** |
+| L3 integration | **Green in CI** — and it found a real bug on its first run; see below |
 | `gate:quick` | 3 of 3 pass |
 | `gate:full` | 10 pass · 1 not possible here (L3) · 1 fails (`gate:integrity`, waiting on A-15 — the designed state, D-029) |
 | Coverage | product code 96.08 % lines against a floor of 80; every file 100 % except the fake clock, which now has its own tests too |
-| Mutation | **96.05 %** — three survivors: two regex mutants in the time parser, and `startWorker`'s empty-options branch |
+| Mutation | **97.37 %** — two survivors, both regex mutants in the time parser |
 
 **The integration tests could not run in this session, and on their first run in
 CI they found a real bug.** That is the whole argument for the L3 level, made
@@ -572,6 +572,28 @@ one that asserts parsing stays allowed so the decision cannot be quietly undone.
    and CI now both run `test:coverage`, `vitest.config.mjs` has no coverage
    settings at all so there is only one way to produce the number, and the test
    in `scripts/gate.test.mjs` now pins the *script*, not the flags.
+
+**Two more things CI and the reviewers found, both fixed**
+
+- **`startWorker` could have been wired to nothing.** Mutation testing left one
+  survivor: replacing the whole dependency object with `{}` still produced a
+  task list with a `heartbeat` key, so every assertion passed — a worker that
+  starts, schedules, and then fails every beat, the only symptom being the API
+  reporting the system degraded for reasons nobody could see. `test-auditor`
+  called it a real wiring gap rather than noise, and it was right. The test now
+  invokes the task the worker actually scheduled, against a socket directory
+  that does not exist, and asserts on *how* it fails: reaching the query proves
+  the real database clock was wired in. Verified by planting the mutant by hand.
+  Mutation went from 96.05 % to **97.37 %**.
+- **`req:coverage` could not see a brand-new test file.** It listed candidates
+  with `git ls-files`, which shows only what has already been added — so a test
+  written minutes ago and not yet staged did not exist as far as the requirement
+  report was concerned. Running the gate before `git add` and after it gave
+  different answers, and the second answer arrived as a red `traceability` job
+  on a report that had been correct when it was written. It now lists untracked,
+  non-ignored files too. The milder half of that bug is a requirement reported
+  as uncovered when it is covered; the other half would let
+  `--fail-on-uncovered-changed` pass a change whose only test is new.
 
 **Also fixed here:** `scripts/lib/coverage.mjs` kept its own copy of the safety
 paths, and the copy was missing `apps/server/src/worker.ts`. That was a named

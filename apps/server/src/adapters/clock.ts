@@ -26,6 +26,12 @@ export function databaseClock(db: Database): Clock {
         // `select now()` returning nothing is not a case to paper over with a
         // local time: it means the database is not answering, and a safety
         // decision made on a guessed clock is worse than no answer.
+        //
+        // This branch is deliberately unverified: PostgreSQL always returns a
+        // row for `select now()`, so there is no way to provoke it without
+        // faking the driver, and faking the driver would only prove the fake.
+        // It is defence in depth against a future query shape, and saying so
+        // here is better than leaving a reader to wonder which it is.
         throw new Error('The database did not return a time, so nothing can be timed against it.');
       }
       return databaseTime(row.now, 'The database clock');

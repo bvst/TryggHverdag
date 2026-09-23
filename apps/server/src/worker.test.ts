@@ -51,4 +51,29 @@ describe('startWorker', () => {
     expect(HEARTBEAT_CRONTAB).toContain('heartbeat');
     expect(Object.keys(options?.taskList ?? {})).toContain('heartbeat');
   });
+
+  test('AR-06: the heartbeat it schedules is wired to the database, not to nothing', async () => {
+    // Having a task named `heartbeat` is not the same as that task being able
+    // to beat. Mutation testing made the difference concrete: replacing the
+    // whole dependency object with `{}` left a task list that still had a
+    // `heartbeat` key, and every assertion above still passed — a worker that
+    // starts, schedules, and then fails every beat, with the only symptom being
+    // the API reporting the system degraded for reasons nobody could see.
+    //
+    // So the task is invoked. The socket directory does not exist, so the
+    // attempt fails in milliseconds with no network involved — and *how* it
+    // fails is the assertion: reaching the query means the real database clock
+    // was wired in. With the dependencies missing it throws a TypeError for
+    // reading 'now' of undefined, long before any query is built.
+    let options: Parameters<Parameters<typeof startWorker>[1] & object>[0] | undefined;
+    const fakeRunner = ((given: typeof options) => {
+      options = given;
+      return Promise.resolve({} as never);
+    }) as Parameters<typeof startWorker>[1];
+
+    await startWorker('postgres:///db?host=/nonexistent-socket-dir', fakeRunner);
+    const { heartbeat } = options?.taskList ?? {};
+
+    await expect(heartbeat?.(null, {} as never)).rejects.toThrow(/select now\(\)/);
+  });
 });

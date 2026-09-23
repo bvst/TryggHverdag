@@ -32,7 +32,7 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | LOST-07 | SMS escalation | must | ⚪ | 0 |
 | LOST-08 | "They're safe" | must | ⚪ | 0 |
 | HELP-01 | What to do | must | ⚪ | 0 |
-| REL-01 | The lost-contact decision is made by the server, using the server's clock, never the phone's. | must | 🟢 | 2 |
+| REL-01 | The lost-contact decision is made by the server, using the server's clock, never the phone's. | must | 🟢 | 3 |
 | REL-02 | Positions recorded while offline are queued on the phone and sent in order when the connection returns. | must | ⚪ | 0 |
 | REL-03 | The share of journeys interrupted by the operating system is measured per phone model during the private test. | must | ⚪ | 0 |
 | REL-04 | While a journey runs, the app keeps a local reminder scheduled ⚙️ 2 minutes ahead and keeps moving it forward. | must | ⚪ | 0 |

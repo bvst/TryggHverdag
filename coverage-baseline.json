@@ -146,9 +146,9 @@
       "totalLines": 22
     },
     "scripts/req-coverage.mjs": {
-      "lines": 0,
-      "branches": 0,
-      "coveredLines": 0,
+      "lines": 10.81,
+      "branches": 11.11,
+      "coveredLines": 4,
       "totalLines": 37
     },
     "scripts/tests-changes.mjs": {
@@ -194,9 +194,9 @@
       "totalLines": 64
     },
     "scripts/lib/proc.mjs": {
-      "lines": 58.33,
-      "branches": 25,
-      "coveredLines": 7,
+      "lines": 83.33,
+      "branches": 75,
+      "coveredLines": 10,
       "totalLines": 12
     },
     "scripts/lib/requirements.mjs": {
