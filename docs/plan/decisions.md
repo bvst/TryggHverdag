@@ -1226,3 +1226,46 @@ through is a decision, not a commit. Options are on #6.
   the reviewers' own trust boundary. That is the behaviour D-043 exists to buy.
   The fix is to write down what they could not find, not to teach them to stop
   looking.
+
+## D-072 — One approval is required, and the gate checks it
+- **Date:** 2026-09-23 · **Status:** Accepted (owner) · **Section:** 6
+- **What was wrong.** `require_code_owner_review: true` sat next to
+  `required_approving_review_count: 0`. The first has nothing to attach to
+  while the second is zero — GitHub asks for a code owner *among the approvals
+  it requires*, and zero of them is none. Paired with
+  `dismiss_stale_reviews_on_push: true` it is worse than inert: **every push
+  erases the approvals and nothing asks for them back**, so the rule cannot
+  survive a single push.
+- **This is not a hypothetical, and the evidence is our own.** #6 merged at
+  10:19 on head `f2e8679` with **no standing approval at all** — its newest
+  review is `DISMISSED`, on the earlier commit `81166b2` — while touching
+  `/scripts/`, `/docs/plan/decisions.md`, `/.github/`,
+  `/apps/server/src/domain/`, `/apps/server/src/worker.ts` and `/package.json`,
+  every one of them assigned to `@bvst` alone at that moment. Independently,
+  `test-auditor` found `gh pr view --json reviewDecision` returning **empty**
+  on #7 despite a real approval, which is what GitHub returns when review is
+  not required at all.
+  One honest caveat: the owner may have relaxed a setting to land #6, so #6
+  alone is not airtight. Taken with the empty `reviewDecision`, the picture is
+  consistent and the risk is not worth carrying either way.
+- **Decision.** `required_approving_review_count` goes to **1** in
+  `docs/plan/main-ruleset.json`, and `gate:integrity` now fails when it is
+  below 1. The cost `merge-rules.md` feared — every pull request waiting for
+  the owner — no longer applies: `@urso-agent` is a code owner (D-071), so its
+  approval satisfies both the count and the code-owner rule.
+- **Be clear what this buys.** `@urso-agent` approves automatically, within a
+  minute of each push. So this closes the "merged with zero approvals" hole and
+  makes CODEOWNERS mean something; it does **not** add human judgement. The
+  real protection remains the required status checks. A human gate on the
+  safety paths specifically would need a different mechanism, and is not what
+  this decision claims to provide.
+- **Why the gate missed it.** `reviewRuleset` checked that
+  `require_code_owner_review` was *on* and never that it was on in a
+  configuration where it bites — so it reported **5 of 5** while the rule did
+  nothing. That is the shape the non-negotiables now name directly: a check
+  that confirms a flag rather than an effect is a check that can be green about
+  nothing.
+- **Not changed here:** `require_last_push_approval` stays `false`. Turning it
+  on would be the stronger setting and the owner did not ask for it; changing a
+  merge rule beyond what was asked is the thing D-029 exists to prevent. Raised
+  as a question instead.

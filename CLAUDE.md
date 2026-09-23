@@ -29,6 +29,16 @@ safety. Claude decides libraries and tools and records why (D-031).
 
 ## Non-negotiables (the reasons behind the hooks)
 - Fail loudly, never silently. If something can't be verified, say so plainly.
+- Read the job log before theorising. A red check is explained by its job log,
+  and by nothing else — not its pull request comment, not how long it ran, not a
+  script you reasoned about without running. Open the log, quote what it says,
+  then explain. Three hypotheses about one failing gate were wrong in a single
+  morning because the log was reached for last, and each was stated more
+  confidently than its evidence carried (D-070).
+- Say what you checked, not what you assume. "These paths are CODEOWNERS-gated"
+  and "this is a required check" are claims: run the command, read the file,
+  and if you cannot, say which part is unverified rather than rounding it up to
+  true.
 - Safety decisions use the database clock. Domain code never reads the clock
   itself (AR-03).
 - Journey and alert behaviour follows SM-01 to SM-10 exactly (see

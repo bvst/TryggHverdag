@@ -29,7 +29,7 @@ const rulesFor = (checks, overrides = {}) => [
     parameters: {
       require_code_owner_review: true,
       dismiss_stale_reviews_on_push: true,
-      required_approving_review_count: 0,
+      required_approving_review_count: 1,
       ...(overrides.pullRequest ?? {}),
     },
   },
@@ -134,6 +134,22 @@ describe('reviewRuleset', () => {
 
     expect(reviewRuleset({ branchRules, required })[0]?.what).toContain(
       'Stale approvals are not dismissed',
+    );
+  });
+
+  test('code owner review with no approvals required is a rule that cannot bite', () => {
+    // The combination that made CODEOWNERS decorative on this repository:
+    // require_code_owner_review was on, so the gate reported it healthy, while
+    // required_approving_review_count sat at 0 with dismiss-on-push on. Every
+    // push erased the approvals and nothing required them back, so the rule
+    // could never survive a push — #6 merged on owner-gated paths with no
+    // approval standing at all.
+    const branchRules = rulesFor(required, {
+      pullRequest: { required_approving_review_count: 0 },
+    });
+
+    expect(reviewRuleset({ branchRules, required })[0]?.what).toContain(
+      'no approval is actually required',
     );
   });
 

@@ -201,11 +201,27 @@ everything and check nothing. `urso-agent` is the owner's second account and
 exists for exactly that. CODEOWNERS now lists both, and says so in a comment,
 so the next reviewer finds an explanation instead of an anomaly (D-071).
 
-**The other half is still open and still yours.** A second owner makes the gate
-*satisfiable*; it does not prove the gate is *enforced*. `require_code_owner_review:
-true` with `required_approving_review_count: 0` remains unwatched — we believe
-it holds and have not seen it hold. INF-10's drills settle it. Claude does not
-change the merge rules (D-029), least of all to unblock its own pull request.
+**And the other half is now answered, badly.** It was never enforced. #6 merged
+on owner-gated paths with **no standing approval at all** — its newest review is
+`DISMISSED`, on an earlier commit — because `dismiss_stale_reviews_on_push`
+erases approvals on every push and `required_approving_review_count: 0` never
+asks for them back. `require_code_owner_review` has nothing to attach to at
+zero: GitHub asks for a code owner among the approvals it requires, and zero of
+them is none.
+
+**So: set "Required approvals" to 1** when you next import this ruleset.
+`docs/plan/main-ruleset.json` already says 1, and `gate:integrity` now fails
+while the live rules say otherwise, so the two cannot drift apart again (D-072).
+This does not mean every pull request waits for you — `@urso-agent` is a code
+owner (D-071) and its approval satisfies both the count and the code-owner rule.
+
+Be clear what it buys: `@urso-agent` approves automatically, so this closes the
+"merged with zero approvals" hole and makes CODEOWNERS mean something. It does
+not add human judgement. The required status checks remain the real protection.
+
+**Still open:** `require_last_push_approval` is `false`, so an approval can
+predate the final commit. Turning it on is the stronger setting. Claude has not
+touched it — that is a merge rule and the owner did not ask for it (D-029).
 
 **Part 3 is not checked by anything.** The gate reads the ruleset and
 CODEOWNERS; whether auto-merge is on, and whether the code-security settings

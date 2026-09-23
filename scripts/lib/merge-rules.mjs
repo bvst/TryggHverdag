@@ -156,6 +156,20 @@ export function reviewRuleset({ branchRules, required }) {
         fix: 'Switch on "Dismiss stale pull request approvals when new commits are pushed".',
       });
     }
+    // "Require review from Code Owners" has nothing to attach to while no
+    // approval is required at all: GitHub asks for a code owner among the
+    // approvals it requires, and zero of them is none. Paired with
+    // dismiss-on-push it is worse than inert — every push erases the approvals
+    // and nothing asks for them back, so the rule cannot survive a push. This
+    // check exists because the gate reported the repository healthy while that
+    // was true, and #6 merged on owner-gated paths with no approval standing
+    // (D-072).
+    if ((parameters.required_approving_review_count ?? 0) < 1) {
+      problems.push({
+        what: 'Code owner review is switched on but no approval is actually required, so it never has to be satisfied — with stale approvals dismissed on every push, it cannot survive one (D-042).',
+        fix: 'Set "Required approvals" to at least 1. @urso-agent is a code owner (D-071), so this does not mean waiting for a second person.',
+      });
+    }
   }
 
   const statusChecks = ruleOf(branchRules, 'required_status_checks');

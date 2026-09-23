@@ -789,6 +789,52 @@ legible, so the difference between "protected" and "attacked" is readable rather
 than inferred.
 
 
+### The approval rule was decorative, and the gate said it was fine
+
+`gate:integrity` reported **5 of 5** while `require_code_owner_review: true` sat
+beside `required_approving_review_count: 0`. The first has nothing to attach to
+at zero — GitHub asks for a code owner *among the approvals it requires*, and
+zero of them is none. With `dismiss_stale_reviews_on_push` also on, it is worse
+than inert: every push erases the approvals and nothing asks for them back, so
+the rule cannot survive one push.
+
+**Our own merge is the evidence.** #6 landed on head `f2e8679` with no standing
+approval at all — its newest review is `DISMISSED`, on the earlier commit
+`81166b2` — while touching six paths CODEOWNERS assigned to `@bvst` alone.
+`test-auditor` had already found the matching signal on #7: `reviewDecision`
+returning empty despite a real approval, which is what GitHub returns when
+review is not required. (Honest caveat: the owner may have relaxed something to
+land #6, so that merge alone is not airtight. The two together are enough.)
+
+**What was built.** `required_approving_review_count` is **1** in
+`docs/plan/main-ruleset.json`, and `reviewRuleset` now fails below 1, so the
+recorded rules and the live ones cannot drift apart unnoticed again (D-072).
+Test first, and it failed for the right reason: `reviewRuleset` returned no
+problem at all for a count of zero. The fixture had `0` baked in as its default,
+which is how the hole stayed invisible — a test suite that treats the broken
+state as normal will never fail about it.
+
+**What it does not buy.** `@urso-agent` approves automatically, so this closes
+the "merged with zero approvals" hole and makes CODEOWNERS mean something. It
+adds no human judgement. The required status checks remain the real protection,
+and D-072 says so rather than letting the change read as stronger than it is.
+
+**Two non-negotiables added, in CLAUDE.md where every session reads them.**
+*Read the job log before theorising* — a red check is explained by its job log
+and nothing else, not its comment, not its duration, not a script reasoned about
+without running. And *say what you checked, not what you assume*: "these paths
+are CODEOWNERS-gated" and "this is a required check" are claims, not facts, and
+both turned out false this morning. They are written down because a single
+session produced eight corrections of exactly that shape, three of them wrong
+guesses about one failing gate.
+
+**Left for the owner.** Import the ruleset so the live rules match. And
+`require_last_push_approval` is still `false`, so an approval can predate the
+final commit — turning it on is the stronger setting, and it is deliberately
+untouched here because a merge rule is not Claude's to change beyond what was
+asked (D-029).
+
+
 ## In flight
 
 **INF-04 is done.** The owner switched the merge rules on, and `gate:integrity`
