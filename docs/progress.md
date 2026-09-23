@@ -694,6 +694,17 @@ the wrong actor moves the blame without moving the behaviour. The
 job log names which of the two errors fired. Nothing else does, and it was not
 read until the third attempt.
 
+**The test that guards all this had a trap of its own.** `test-auditor` ran the
+unit suite inside its own sandbox and hit about twenty failures in
+`scripts/ai-review.test.mjs` — because that harness reverts `.claude/agents/*.md`
+to their pre-pull-request contents, so a pull request cannot rewrite the
+instructions of the agent reviewing it. Sound protection, and a file that reads
+those very files fails for a reason that has nothing to do with the code. That
+reviewer worked it out and said so; the next one might report it as a finding
+instead, and a required check now blocks a merge. The failure now says what it
+is, with the command to confirm it — proven by reverting an agent file to its
+`origin/main` copy and watching the note appear.
+
 **What this means for the next session.** Blocking reviewers will keep going red
 at random until the workflow is fixed. A green run proves nothing either way —
 the reviewers have produced conforming output by chance throughout. Adding
