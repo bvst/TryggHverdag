@@ -769,6 +769,9 @@ is left as written so the correction has something to correct.)** `produced no v
 and is **not** fixed: the agent writes nothing at all, file or comment, while
 its own result record reports `success`, `is_error: false` and no denials. That
 write belongs to the agent that *invokes* the reviewer, in `ai-review.yml`.
+**("Nothing at all, file or comment" is wrong — see "One sentence, two
+artefacts" below, where the comment is complete and only the file is missing.
+Left standing so the correction has something to correct.)**
 
 **What is left, and where.** The `produced no verdict file` defect, on `main`,
 where D-063 no longer blocks testing a change to the workflow now that it lives
@@ -951,3 +954,53 @@ make.
 (D-043), so none of this blocked #8. The reason to fix it is the day a
 *blocking* reviewer drifts the same way, and the PR stops on a review that
 passed.
+
+
+### One sentence, two artefacts, and the gate reads the forgotten one
+
+The same morning, on #8, `produced no verdict file` took down **two blocking
+reviewers** on two different commits: `privacy-security-reviewer` on `c36d21c`
+and `test-auditor` on `167c1cd`. Both are required checks, so this is the mode
+that actually stops a merge — unlike the verdict-value drift above it, which
+only ever hit an advisory one.
+
+**What makes it diagnosable at last.** `test-auditor` posted a *complete*
+review comment on `167c1cd` — RG-01 through RG-05, "Blocking: None found",
+the parser read rather than assumed — and its job still failed for want of the
+file. So the earlier description, "the agent writes nothing at all, file or
+comment", is false. It writes the comment. It skips the file.
+
+**And the prompt asks for both in one sentence** (`ai-review.yml`):
+
+> Write its findings and its final verdict line to `review-<agent>.md`, with
+> the verdict as the last line, **and post the findings as one pull request
+> comment.**
+
+Two artefacts, one clause, no ordering. The agent produces the one a person
+will read and drops the one only a script will. The gate reads only the
+dropped one — so the load-bearing artefact is the one the agent has least
+reason to remember, and a review that genuinely happened, and said so in
+public, is recorded as a review that did not happen.
+
+**A proposed patch, not a verified one.** It cannot be tested from a branch:
+`claude-code-action` refuses to run when the workflow differs from the default
+branch — quoted at "The bootstrap deadlock" above — so editing `ai-review.yml`
+here would skip all five reviewers, including the three blocking ones, to fix
+one. On a branch off `main`:
+
+1. **Stop asking the agent for the artefact the gate depends on.** The verdict
+   should be read from something the reviewer produces as a matter of course —
+   its own final output — rather than from a file it has to remember to create
+   alongside the comment it would rather write. This is the change worth
+   making; the two below are cheap regardless.
+2. **Order the sentence, and say which one is load-bearing:** file first, as
+   its own step, with the comment named as the copy for people. This is the
+   instruction-side lever, which the verdict-value drift above shows is worth
+   little on its own — so it is a mitigation, not the fix.
+3. **Echo the rejected line** in the `did not end with a verdict line` error,
+   so the log stops sending its reader to the pull request comment — the one
+   artefact the gate ignores — to find out what happened.
+
+**What this costs today:** #8 cannot merge while a required check fails this
+way, and re-pushing is the only lever a branch has. That is not a fix, it is a
+retry, and it is worth naming as one.
