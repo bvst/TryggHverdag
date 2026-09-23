@@ -651,16 +651,26 @@ cheapest answer is to describe the requirement instead of naming it.
 
 **A gate defect found along the way, deliberately not fixed here**
 
-`ai-review (code-reviewer)` reports **red although it approved**. It writes
-`VERDICT: APPROVE WITH COMMENTS`; the enforcement in `ai-review.yml` matches
-`^\**VERDICT: (PASS|BLOCK)\**$` and fails with "its verdict is unknown". The
-gate is right to refuse to interpret — a verdict that cannot be read is not a
-review that found nothing, and guessing would let an unparseable BLOCK merge.
-But the outcome is still wrong, and it is reproducible: that agent has done it
-on every run, while the other four wrote conforming verdicts every time, even
-though its own definition already says to end with exactly one of the two lines.
+`ai-review (code-reviewer)` reported **red although it approved**. The
+enforcement in `ai-review.yml` matches `^\**VERDICT: (PASS|BLOCK)\**$` on the
+last line and fails with "its verdict is unknown". The gate is right to refuse
+to interpret — a verdict that cannot be read is not a review that found nothing,
+and guessing would let an unparseable BLOCK merge. But the outcome is still
+wrong, and it happened four times on this pull request, in two different
+wordings: `VERDICT: APPROVE WITH COMMENTS`, and later a bare `**APPROVE**` with
+no `VERDICT:` prefix at all.
 
-It is advisory (D-043), so nothing is blocked today. It matters for the day a
+**It is intermittent, not consistent, and that is the part to carry forward.**
+An earlier version of this entry said the agent got it wrong on every run; then
+it wrote `VERDICT: PASS` correctly on the fifth head and the check went green.
+The distinction matters to whoever fixes this: a fix verified by one green run
+proves nothing, because one green run is what the unfixed system already does.
+Its own definition already says to end with exactly one of the two lines, so the
+instruction is not missing — it is being followed unreliably, which is the
+harder problem and the reason a test should pin the enforcement regex against
+the five agent files rather than a passing run being taken as evidence.
+
+It is advisory (D-043), so nothing was blocked. It matters for the day a
 *blocking* reviewer words a verdict that way and stops a pull request over
 phrasing with no finding behind it. A false red costs a gate its credibility
 about as fast as a false green costs it its purpose.
