@@ -12,6 +12,14 @@
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
 
+    // Node 22 runs TypeScript directly by stripping the types, and it resolves
+    // the extension it is given — so a relative import names the .ts file it
+    // actually means. erasableSyntaxOnly above is the other half of that: it
+    // refuses the TypeScript that stripping cannot erase. Nothing here is ever
+    // emitted (noEmit), so there is no build step for the extension to be
+    // wrong for.
+    "allowImportingTsExtensions": true,
+
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,

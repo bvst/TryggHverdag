@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-09-20 · **Milestone:** M0 (foundations)
+**Last updated:** 2026-09-23 · **Milestone:** M0 (foundations)
 
 What has actually been built, task by task. The plan is in
 [`plan/README.md`](plan/README.md); the M0 task list is in
@@ -15,7 +15,7 @@ What has actually been built, task by task. The plan is in
 | INF-02 | Claude Code configuration + hook tests | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-03 | Gate scripts + HK-08 | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-04 | CI workflows, merge rules, CODEOWNERS | 🟡 Built — waiting on the owner (A-15) to switch the rules on |
-| INF-05 | Server skeleton | 🔜 Next — the L3 tests need Docker, which only CI has |
+| INF-05 | Server skeleton | 🟡 Built — L2, L4 and L6 pass here; **L3 is proven by CI only** (no Docker in a cloud session) |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
 | INF-07 | Staging on Clever Cloud | ⬜ Blocked on owner: Clever Cloud token |
 | INF-08 | Monitoring | ⬜ Blocked on owner: Healthchecks.io / UptimeRobot |
@@ -24,7 +24,14 @@ What has actually been built, task by task. The plan is in
 
 ## What Claude needs from the owner next
 
-**A-15 is the one that matters now, and it is about 10 minutes.** Every step is
+**Re-import the ruleset (1 minute), because INF-05 added two checks.**
+`docs/plan/main-ruleset.json` now lists **12** required checks — `integration`
+and `system` are new. Import it again the same way as the first time
+(Settings → Rules → Rulesets → the existing ruleset → Import). Until then
+`gate-integrity` fails and says the live rules and this repository disagree,
+which is the point: a check cannot become optional by being forgotten.
+
+**A-15 is the one that matters most, and it is about 10 minutes.** Every step is
 written out in [`plan/merge-rules.md`](plan/merge-rules.md):
 
 1. **Create the ruleset on `main`** — nothing else in this repository can do it,
@@ -459,16 +466,136 @@ reading the bypass list needs its own token rather than Claude's, and D-061
   or skipped with its reason where no token is set. `gate:quick` — what the stop
   gate runs — is green.
 
+### 2026-09-23 — INF-05: the server skeleton 🟡 (pull request pending)
+
+**What it is.** Two processes that share a database and nothing else: an API
+that answers `/v1/health`, and a worker that proves it is alive by writing a row
+once a minute. Small on purpose — the point of this task is not the health
+endpoint, it is that every pattern the safety loop will need now exists and is
+tested: a contract the app and the server cannot disagree about, a clock that
+comes from the database, pure domain logic, adapters behind ports, and three new
+test levels with one real example each.
+
+**Built**
+
+- **`packages/contracts`** — the oRPC + zod contract, and the generated OpenAPI
+  description committed as `openapi.json` (`pnpm run api:spec` writes it; a test
+  fails if the committed copy drifts). Split into four small modules after a
+  circular import bit — see below. `API_PREFIX` (`/v1`) is one constant, so the
+  server, the OpenAPI `servers` list and the app cannot disagree.
+- **`apps/server/src/domain/health.ts`** — pure: milliseconds in, `ok` or
+  `degraded` out. No clock, no I/O (AR-02, AR-03).
+- **`apps/server/src/ports.ts`** — `Clock` and `WorkerHeartbeats`. `now()`
+  returns a `Promise<Date>` because the only clock a safety decision may use is
+  the database's, and reading it is a query (D-065).
+- **`apps/server/src/adapters/`** — Drizzle over node-postgres, a clock that
+  runs `select now()`, and a heartbeat that upserts one row. The clock throws if
+  the database returns nothing: a safety decision made on a guessed clock is
+  worse than no answer.
+- **`apps/server/src/api.ts`** — Hono holding an oRPC `OpenAPIHandler`.
+  `createApi` takes its dependencies, so a system test runs the whole API
+  in-process against fakes and a clock it controls.
+- **`apps/server/src/worker.ts`** — Graphile Worker, one cron task
+  (`* * * * * heartbeat`). `startWorker` takes its runner as an argument, so the
+  wiring itself is assertable rather than something only production exercises.
+- **`packages/test-kit`** — `fakeClock` and `fakeWorkerHeartbeats`, matching the
+  ports by shape so the test kit imports nothing from the server.
+- **Three new test levels, and the scripts and CI jobs to run them:**
+  `test:integration` (L3, Testcontainers), `test:system` (L6), and
+  `test:coverage` (the run the ratchet measures). `stryker.config.mjs` is
+  installed and configured.
+
+**Verified**
+
+| | |
+|---|---|
+| L2 unit (domain) | 6 tests, including the boundary — exactly at the limit is `ok`, one millisecond past is not |
+| L4 contract | 5 tests; the committed `openapi.json` must equal what the contract generates today |
+| L6 system | 6 tests through the real API, including `degraded` still answering 200 and an unversioned path 404ing |
+| worker | 3 tests, one of them REL-01: the heartbeat records the time *the database* gave, not this process |
+| L3 integration | **Written, not run — see below** |
+| `gate:quick` | 3 of 3 pass |
+| `gate:full` | 10 pass · 1 not possible here (L3) · 1 fails (`gate:integrity`, waiting on A-15 — the designed state, D-029) |
+| Coverage | product code 96.08 % lines against a floor of 80; every file 100 % except the fake clock, which now has its own tests too |
+| Mutation | **95.65 %** — domain 100 %, worker 85.71 %, one survivor in `startWorker`'s empty-options branch |
+
+**The integration tests were not run in this session, and that matters.**
+INF-05's exit criterion is that the contract, integration and system levels each
+have one passing example. Two of the three are proven here. The third is
+written — a real PostgreSQL 17 in a container, the real generated migrations,
+the real upsert and timestamp round trip — and **cannot run in a cloud session**,
+because the Docker binary is present but no daemon is. `gate:full` now says so
+in those words rather than skipping the step quietly, which is the change that
+made this honest instead of invisible. **CI is what proves it**, on the new
+`integration` job. If that job is red on the pull request, this task is not
+done, whatever the rest of the gate says.
+
+**Three things went wrong, and each left something behind**
+
+1. **A circular import that produced a wrong document rather than an error.**
+   `index.ts` re-exported `openapi.ts`, which imported `API_PREFIX` back from
+   `index.ts` and read it at module scope. Node's evaluation order happened to
+   work; Vitest's did not — and the failure mode was not a crash but a published
+   API description whose `servers` list said routes live "under undefined". Now
+   `api-version.ts` has no imports at all, and nothing inside the package
+   imports `index.ts`.
+2. **Stryker reported 4.35 % and was wrong.** Rather than believe it, the mutant
+   was planted by hand: `>` changed to `<=` in the domain, and four tests failed.
+   The tests kill the mutants; Stryker's Vitest runner could not see them.
+   Switched to the command runner — 95.65 % (D-066). A number that is wrong in
+   the dangerous direction is worse than no number, because it argues for
+   deleting good tests.
+3. **The coverage gate measured the wrong tests, twice.** First
+   `pnpm run test:unit -- --coverage` measured nothing at all (the `--` turns the
+   flag into a filename). That was found in INF-04. Here the fixed version
+   measured the right way but the wrong set: unit tests alone report 58.73 % for
+   code that is reached at L6, so the gate went red about nothing. `gate:full`
+   and CI now both run `test:coverage`, `vitest.config.mjs` has no coverage
+   settings at all so there is only one way to produce the number, and the test
+   in `scripts/gate.test.mjs` now pins the *script*, not the flags.
+
+**Also fixed here:** `scripts/lib/coverage.mjs` kept its own copy of the safety
+paths, and the copy was missing `apps/server/src/worker.ts`. That was a named
+follow-up from INF-04's review, listed there as "nothing is wrong today — but it
+will be by INF-05". It was, so it is fixed: both that file and
+`stryker.config.mjs` now import the one list from `scripts/lib/gate-decisions.mjs`.
+
+**Decisions recorded:** D-065 (the server skeleton as built: `/v1` in the path,
+health that answers 200 with the truth in the body, an async clock port, one
+heartbeat row, three minutes before `degraded`) and D-066 (Stryker's command
+runner, with the evidence that the Vitest runner was wrong).
+
+**What the owner has to do before this can merge.** `docs/plan/main-ruleset.json`
+now lists **12** required checks — `integration` and `system` are new. Until the
+ruleset is re-imported on GitHub, `gate-integrity` will correctly fail, saying
+the live rules and the repository disagree. That is the same designed reminder
+that fired for INF-04, working as intended: the checks this task added cannot
+become optional by being forgotten.
+
+
 ## In flight
 
-INF-04 is built but **not done**: it is finished when `gate:integrity` passes,
-which needs A-15 from the owner. The pull request can merge before that.
+**INF-04** is built but not done: it is finished when `gate:integrity` passes,
+which needs A-15 from the owner.
 
-**INF-05 (server skeleton) is next** and needs nothing from the owner. One thing
-to know before starting it: its integration tests (L3, Testcontainers) need
-Docker, and the Docker daemon does not run in a cloud session — the binary is
-there, the socket is not. CI is now the place those tests can run, which is part
-of why INF-04 came first.
+**INF-05** is built and pushed. It is done when the `integration` job is green
+on its pull request — that job is the only place the L3 tests can run, so until
+it reports, one third of this task's exit criterion is written but unproven.
 
-After INF-05 and INF-06 land, `gate:integrity` will start failing until their
-checks are added to the required list; that is the intended reminder.
+Two things are waiting for the owner, and neither is a bug:
+
+- **Re-import `docs/plan/main-ruleset.json`** — it lists 12 required checks now
+  that `integration` and `system` exist. `gate-integrity` fails until then, on
+  purpose: a check that is required in this repository but not in GitHub's rules
+  is a check that stops anything.
+- **A-15 and A-09** as before, for the merge rules and the AI reviews.
+
+**An unmerged branch exists: `claude/inf-04-follow-through`.** It closes INF-04's
+record and widens `engines.node` so Dependabot can run (its updater uses Node 24
+and `.npmrc` sets `engine-strict=true`). It holds decisions **D-063 and D-064**,
+which is why INF-05's decisions start at D-065. No pull request has been opened
+for it, because none was asked for.
+
+**Where the numbers are going.** After INF-06 lands, `gate:integrity` will start
+failing again until `android-e2e` joins the required list. That is the same
+reminder, and it should be expected rather than debugged.

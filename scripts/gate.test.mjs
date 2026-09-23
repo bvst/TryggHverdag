@@ -5,7 +5,7 @@
 // and passes. These tests hold the lists to the repository they describe.
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { FULL_STEPS, QUICK_STEPS } from './gate.mjs';
+import { FULL_STEPS, QUICK_STEPS, availableTools } from './gate.mjs';
 import { packageScripts } from './lib/proc.mjs';
 import { findActionUses } from './lib/workflow-lint.mjs';
 import {
@@ -19,14 +19,22 @@ const WORKFLOWS = '.github/workflows';
 const scripts = packageScripts(process.cwd());
 
 describe('the gate step lists', () => {
-  test('the coverage step passes --coverage to vitest as a flag, not as a filename', () => {
+  test('coverage is measured by the one script whose config the baseline came from', () => {
+    // Two bugs are pinned here, and both of them passed quietly.
+    //
     // `pnpm run test:unit -- --coverage` reaches vitest as `vitest run --
-    // --coverage`, where --coverage is read as a path to filter tests by. The
-    // suite then passes, no coverage is written, and the ratchet below has
-    // nothing to measure. This is the shape of that bug, pinned.
-    const step = FULL_STEPS.find((s) => s.name.includes('with coverage'));
+    // --coverage`, where --coverage is read as a path to filter tests by: the
+    // suite passes, nothing is written, and the ratchet has nothing to measure.
+    //
+    // Then `pnpm run test:unit --coverage` measured the right way but the wrong
+    // tests. The baseline was recorded from unit *and* system tests, because
+    // the API and the health service are reached at L6 and nowhere else, so the
+    // unit run alone reported 58.73 % against an 80 % floor — a red gate about
+    // nothing. Naming the script, not the flags, is what stops a third version.
+    const step = FULL_STEPS.find((s) => s.name.startsWith('coverage'));
 
-    expect(step?.command).toEqual(['pnpm', 'run', 'test:unit', '--coverage']);
+    expect(step?.command).toEqual(['pnpm', 'run', 'test:coverage']);
+    expect(scripts['test:coverage']).toContain('vitest.coverage.config.mjs');
   });
 
   test('no step separates its flags with --, which would hide them from the script', () => {
@@ -48,6 +56,26 @@ describe('the gate step lists', () => {
     for (const step of FULL_STEPS.filter((s) => s.arrivesIn !== undefined)) {
       expect(step.arrivesIn).toMatch(/^INF-\d\d$/);
     }
+  });
+});
+
+describe('availableTools', () => {
+  test('asks whether the docker daemon answers, not whether the binary exists', () => {
+    // A cloud session has /usr/bin/docker and no daemon. `which docker` would
+    // say yes and the integration step would then fail inside Testcontainers,
+    // which reads as broken code rather than as a machine that cannot run L3.
+    const asked = [];
+    const tools = availableTools((command, args) => {
+      asked.push([command, ...args].join(' '));
+      return { ok: true };
+    }, '/tmp');
+
+    expect(asked).toEqual(['docker info']);
+    expect(tools).toEqual({ docker: true });
+  });
+
+  test('a daemon that does not answer means the tool is not available', () => {
+    expect(availableTools(() => ({ ok: false }), '/tmp')).toEqual({ docker: false });
   });
 });
 

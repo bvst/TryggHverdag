@@ -1,4 +1,10 @@
 {
   "extends": "@trygghverdag/config/tsconfig/base.json",
+  "compilerOptions": {
+    // Named rather than left to discovery: the automatic sweep of node_modules/@types
+    // does not find pnpm's linked copy reliably, and the failure it produces
+    // ("Cannot find name 'node:fs'") points at the wrong thing entirely.
+    "types": ["node"]
+  },
   "include": ["src/**/*.ts"]
 }

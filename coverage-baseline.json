@@ -1,11 +1,83 @@
 {
-  "generated": "2026-09-20",
+  "generated": "2026-09-23",
   "files": {
-    "packages/contracts/src/index.ts": {
+    "apps/server/src/api.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 11,
+      "totalLines": 11
+    },
+    "apps/server/src/ports.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 0,
+      "totalLines": 0
+    },
+    "apps/server/src/worker.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 6,
+      "totalLines": 6
+    },
+    "apps/server/src/db/schema.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 2,
+      "totalLines": 2
+    },
+    "apps/server/src/domain/health.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 4,
+      "totalLines": 4
+    },
+    "apps/server/src/modules/health/service.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 5,
+      "totalLines": 5
+    },
+    "packages/contracts/src/api-version.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 2,
+      "totalLines": 2
+    },
+    "packages/contracts/src/contract.ts": {
       "lines": 100,
       "branches": 100,
       "coveredLines": 1,
       "totalLines": 1
+    },
+    "packages/contracts/src/health.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 3,
+      "totalLines": 3
+    },
+    "packages/contracts/src/index.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 0,
+      "totalLines": 0
+    },
+    "packages/contracts/src/openapi.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 4,
+      "totalLines": 4
+    },
+    "packages/test-kit/src/fake-clock.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 7,
+      "totalLines": 7
+    },
+    "packages/test-kit/src/fake-worker-heartbeats.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 5,
+      "totalLines": 5
     },
     "packages/test-kit/src/index.ts": {
       "lines": 100,
@@ -18,6 +90,12 @@
       "branches": 0,
       "coveredLines": 0,
       "totalLines": 28
+    },
+    "scripts/api-spec.mjs": {
+      "lines": 0,
+      "branches": 0,
+      "coveredLines": 0,
+      "totalLines": 8
     },
     "scripts/coverage-ratchet.mjs": {
       "lines": 0,
@@ -38,16 +116,16 @@
       "totalLines": 36
     },
     "scripts/gate-integrity.mjs": {
-      "lines": 50,
-      "branches": 54.9,
-      "coveredLines": 39,
-      "totalLines": 78
+      "lines": 50.63,
+      "branches": 58.18,
+      "coveredLines": 40,
+      "totalLines": 79
     },
     "scripts/gate.mjs": {
-      "lines": 21.05,
-      "branches": 10,
-      "coveredLines": 4,
-      "totalLines": 19
+      "lines": 25,
+      "branches": 25,
+      "coveredLines": 5,
+      "totalLines": 20
     },
     "scripts/licenses-check.mjs": {
       "lines": 0,
@@ -76,8 +154,8 @@
     "scripts/lib/coverage.mjs": {
       "lines": 100,
       "branches": 83.87,
-      "coveredLines": 43,
-      "totalLines": 43
+      "coveredLines": 42,
+      "totalLines": 42
     },
     "scripts/lib/gate-decisions.mjs": {
       "lines": 100,
@@ -124,8 +202,8 @@
     "scripts/lib/steps.mjs": {
       "lines": 100,
       "branches": 100,
-      "coveredLines": 31,
-      "totalLines": 31
+      "coveredLines": 33,
+      "totalLines": 33
     },
     "scripts/lib/test-strength.mjs": {
       "lines": 94.11,

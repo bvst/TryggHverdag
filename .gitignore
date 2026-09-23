@@ -17,6 +17,7 @@ coverage/
 *.tsbuildinfo
 .eslintcache
 .stryker-tmp/
+reports/
 
 # Expo / native build output (from INF-06)
 .expo/

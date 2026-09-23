@@ -741,3 +741,75 @@ new decision that supersedes it (see `00-working-agreement.md`).
   the action authenticates as the **Claude GitHub App** — which therefore has to
   be installed on the repository. That step was missing from `merge-rules.md`
   entirely; without it the reviews cannot post their findings.
+
+> D-063 and D-064 are reserved by the INF-04 follow-through branch, which is
+> pushed but not merged. The numbers are left unused here rather than reused, so
+> that the two branches cannot both claim one.
+
+## D-065 — Server skeleton v1, as built
+- **Date:** 2026-09-23 · **Status:** Accepted (delegated, D-031) · **Section:** 5
+- **Context:** INF-05 turns the library choices in D-024 into a running server.
+  The libraries were already decided; the shape of the first route, the clock
+  and the worker's proof of life were not, and each of them sets a pattern every
+  later feature copies. Recorded together because they are one design.
+- **Decision:**
+  1. **The API is versioned by path prefix**, `/v1`, held in
+     `packages/contracts/src/api-version.ts`. Every route lives under it, so
+     `/health` is served at `/v1/health` and an unversioned path is a 404. A
+     version in a header is invisible in a log, a proxy rule and a monitor's
+     configuration; a version in the path is not. The prefix is exported as one
+     constant so the server, the OpenAPI `servers` list and the app cannot
+     disagree about it.
+  2. **`/v1/health` returns 200 whenever the API process is up**, and puts the
+     system's real answer in `status` (`ok` or `degraded`) in the body. The two
+     questions — "is this process answering?" and "is anything watching the
+     journeys?" — have different answers and different audiences: a load
+     balancer needs the first, the owner's phone needs the second. Collapsing
+     them into the HTTP status would either take a working API out of rotation
+     because the worker is late, or hide a dead worker behind a green tick.
+  3. **The clock port is asynchronous** — `now(): Promise<Date>` — because the
+     one clock a safety decision may use is the database's (AR-03, REL-01), and
+     reading it is a query. Making the port synchronous would have quietly
+     invited `new Date()` as an implementation, which is the failure AR-03
+     exists to prevent. The cost is that every caller of `now()` awaits; that is
+     the point.
+  4. **The worker proves it is alive by writing one row.** `worker_heartbeat`
+     has a single row, upserted once a minute by a Graphile Worker cron task,
+     stamped with the database's time rather than the worker process's. The API
+     reads that row; it never talks to the worker. Two processes that share only
+     a database stay two processes, and the heartbeat survives a restart of
+     either one.
+  5. **Silent for more than three minutes is `degraded`** (`WORKER_STALE_AFTER_MS`),
+     so two missed beats are tolerated. Equal to the beat interval would page on
+     ordinary jitter, and a monitor that cries wolf gets muted — which is the
+     failure this is meant to catch, arriving by a longer route.
+- **Consequences:** The health endpoint is a fact about the whole system, so
+  INF-08 can wire a monitor to it without further design. The async clock is now
+  the pattern for the safety loop in M2. Nothing here decides the watchdog's own
+  cadence (AR-06 says 10-15 seconds); this is only how long the API waits before
+  saying the worker has stopped.
+
+## D-066 — Mutation testing runs Stryker's command runner, not its Vitest runner
+- **Date:** 2026-09-23 · **Status:** Accepted (delegated, D-031) · **Section:** 6
+- **Context:** D-036 requires a mutation score on safety code. With
+  `testRunner: 'vitest'`, Stryker reported **4.35 %** on the first run — which,
+  taken at face value, says the domain tests are worthless.
+- **Evidence:** The score was checked rather than believed. Planting the mutant
+  by hand — `silentForMs > staleAfterMs` changed to `<=` in
+  `apps/server/src/domain/health.ts` — made **four** tests fail. The tests kill
+  the mutants; Stryker's Vitest runner was not seeing them, against Vitest 5 and
+  this workspace layout.
+- **Decision:** `stryker.config.mjs` uses `testRunner: 'command'` with
+  `pnpm exec vitest run apps packages`. Slower per mutant, because each run is a
+  fresh process, and `--incremental` in CI keeps that affordable.
+- **Consequences:** The score is now **95.65 %** — the domain 100 %, the worker
+  85.71 %, one survivor in `startWorker`'s empty-options branch. Revisit when
+  the Vitest runner supports Vitest 5 properly; until then a number that is
+  wrong in the safe direction would have been bad enough, and this one was wrong
+  in the dangerous direction — it looked like the tests were weak.
+- **Also:** `stryker.config.mjs` imports `SAFETY_PATHS` from
+  `scripts/lib/gate-decisions.mjs` rather than listing the paths again, and
+  `scripts/lib/coverage.mjs` now imports the same list instead of keeping its
+  own copy — which was missing `apps/server/src/worker.ts`, the file this task
+  created. That was a named follow-up from INF-04's review; it is fixed here
+  because the file it was about now exists.

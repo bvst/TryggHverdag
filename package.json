@@ -21,6 +21,9 @@
     "imports:check": "depcruise --config .dependency-cruiser.cjs .claude/hooks apps packages scripts",
     "test:hooks": "vitest run .claude/hooks",
     "test:unit": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.mjs",
+    "test:system": "vitest run --config vitest.system.config.mjs",
+    "test:coverage": "vitest run --coverage --config vitest.coverage.config.mjs",
     "gate:file": "node scripts/gate-file.mjs",
     "gate:static": "pnpm run format:check && pnpm run typecheck && pnpm run lint && pnpm run imports:check",
     "gate:quick": "node scripts/gate.mjs quick",
@@ -30,10 +33,13 @@
     "coverage:ratchet": "node scripts/coverage-ratchet.mjs",
     "licenses:check": "node scripts/licenses-check.mjs",
     "api:diff": "node scripts/api-diff.mjs",
+    "api:spec": "node scripts/api-spec.mjs",
     "mutation": "node scripts/mutation.mjs",
     "gate:full": "node scripts/gate.mjs full"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^10.0.0",
+    "@stryker-mutator/vitest-runner": "^10.0.0",
     "@trygghverdag/config": "workspace:*",
     "@vitest/coverage-v8": "^5.0.1",
     "dependency-cruiser": "^18.4.0",

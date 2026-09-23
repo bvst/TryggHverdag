@@ -9,3 +9,10 @@ coverage/
 
 # Planning material, including the file templates INF-02 copies in unchanged.
 docs/
+
+# Generated, and owned by whatever generated them. Formatting these here would
+# put two tools in charge of one file: Prettier would reformat openapi.json and
+# the contract test — which holds it to exactly what `pnpm run api:spec` writes
+# — would then fail, with neither tool wrong.
+packages/contracts/openapi.json
+apps/server/src/db/migrations/
