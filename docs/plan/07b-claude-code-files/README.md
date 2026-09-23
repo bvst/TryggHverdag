@@ -27,9 +27,14 @@
 > ```sh
 > find docs/plan/07b-claude-code-files -type f | while read -r f; do
 >   rel="${f#docs/plan/07b-claude-code-files/}"
+>   [ "$rel" = "README.md" ] && continue   # this file; not one that is copied out
 >   [ -f "$rel" ] && ! diff -q "$f" "$rel" >/dev/null && echo "$rel"
 > done
 > ```
+>
+> The `continue` is load-bearing. Without it the loop compares *this* README
+> against the project's top-level `README.md` — unrelated files that share a
+> name — and reports a difference that means nothing.
 
 These are the first versions of the Claude Code configuration from
 `07-claude-code-setup.md`. They are copied into the repository root when it is

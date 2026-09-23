@@ -15,9 +15,13 @@ paths:
   wherever they live. Today that is `scripts/` and `.claude/hooks/`, and also
   `packages/config/eslint/index.test.mjs`, but the exemption is keyed to what
   the test proves, not to a directory: a tooling test in a new place should not
-  need this rule amended again. Tracked means the ID's source document is in
-  `collectRequirements`'s `SOURCES`; `CI-`, `HK-` and `AR-` are not, and
-  `req:coverage` never counts them. Requiring a prefix here produces the look
+  need this rule amended again. **Tracked** means `req:coverage` counts the ID:
+  its prefix is one `collectRequirements` collects, which is narrower than its
+  document being listed in `SOURCES`. `AR-` is the case that shows the
+  difference — it lives in `docs/plan/05-architecture.md`, which *is* a source,
+  but that entry collects `prefixes: ['SM']` only. `CI-`, `HK-` and `AR-` are
+  all untracked; `docs/requirements-status.md` is the check, and none of them
+  appear in it. Requiring a prefix here produces the look
   of traceability over a number that does not move: the exact shape of
   decorative check this repository keeps having to dig out (D-074).
 - The hook tests already carry `HK-01`-style prefixes and **should keep them**.

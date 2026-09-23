@@ -1400,6 +1400,28 @@ paths, and the symptom still reproduces. Earlier wording called it "the
 reviewer harness", which sent someone hunting in the repository for a mechanism
 that is not there.
 
+**Addendum, 2026-09-23 — the exemption is keyed to proof, not to a directory.**
+The decision above names `scripts/` and `.claude/hooks/`. `code-reviewer` found
+`packages/config/eslint/index.test.mjs` naming its tests `AR-03:` and `AR-06:`,
+which is the same shape of untracked prefix and lives in neither directory — so
+a rule keyed to paths needs amending every time a tooling test appears
+somewhere new. The live rule now reads: a test that proves no **tracked**
+requirement is exempt, wherever it lives, with those paths as examples.
+
+Recorded here rather than left in the rule file alone, because D-074 exists
+precisely because two reviewers asked for a deliberate decision instead of a
+quiet edit — and widening it quietly would have repeated what it was written to
+stop. Both reviewers on #13 asked for this addendum independently.
+
+**And a correction to the definition.** The first wording said tracked means
+"the ID's source document is in `collectRequirements`'s `SOURCES`". That is
+wrong, and self-contradicting: `docs/plan/05-architecture.md` **is** in
+`SOURCES`, `AR-01`…`AR-12` live in it, and they are excluded by that entry
+collecting `prefixes: ['SM']` only. Read literally the definition made `AR-03`
+tracked, in the clause immediately before listing `AR-` as untracked. Tracked
+now means what `req:coverage` actually counts — the prefix is collected — with
+`docs/requirements-status.md` as the check.
+
 ## D-075 — Changes to `ai-review.yml` are merged by hand
 
 **Decision.** `.github/workflows/ai-review.yml` is its own class of change. The
