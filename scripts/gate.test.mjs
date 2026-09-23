@@ -131,6 +131,49 @@ describe("this repository's own workflows", () => {
     );
   });
 
+  test('a verdict is only accepted with the comment that proves a review happened', () => {
+    // On 2026-09-23 this gate accepted
+    //   {"verdict":"PASS","summary":"Placeholder — waiting for test-auditor
+    //    subagent to finish before posting PR comment and final verdict."}
+    // and went green. test-auditor is one of the three blocking reviewers, so a
+    // blocking check reported success over a review that had not happened —
+    // worse than a red, which would have been investigated.
+    //
+    // The gate asked whether the answer had the right shape. It never asked
+    // whether anyone did the work. The comment is what a finished review leaves
+    // behind and a cut-off one does not, so commentUrl is what makes the
+    // verdict corroborable rather than merely well-formed.
+    //
+    // ai-review.yml is the one file the reviewers structurally cannot review
+    // (D-075), so this test is the only thing standing behind the change.
+    const text = readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8');
+    const schema = /--json-schema\s+'(?<schema>[^']+)'/.exec(text)?.groups?.schema ?? '';
+
+    expect(schema).not.toBe('');
+    const parsed = JSON.parse(schema);
+    expect(parsed.required).toEqual(expect.arrayContaining(['verdict', 'summary', 'commentUrl']));
+    expect(parsed.properties.commentUrl.pattern).toContain('issuecomment-');
+  });
+
+  test('the verdict gate reads the comment back rather than trusting the URL', () => {
+    // A URL is a claim like any other. Three separate things have to hold, and
+    // each closes a different route to passing without reviewing: the comment
+    // exists (read back through the API), it is on THIS pull request rather
+    // than some other one, and its body names the same verdict — so an agent
+    // that posts "I could not finish" and returns PASS is caught by the two
+    // artefacts disagreeing.
+    const text = readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8');
+    const enforce = text.slice(text.indexOf('Enforce the verdict'));
+
+    expect(enforce).toContain('issues/comments/');
+    expect(enforce).toContain('issue_url');
+    expect(enforce).toContain('PR_NUMBER');
+    // The body check: whatever verdict was reported has to appear in the
+    // comment. Asserted on the shell variable, so rewording the message cannot
+    // quietly drop the check.
+    expect(enforce).toMatch(/jq -r '\.body[^|]*\| grep -qiE "[^"]*\$\{verdict\}/);
+  });
+
   test('every ecosystem groups its non-major updates into one pull request', () => {
     // Twelve patch bumps as twelve pull requests are reviewed by nobody, and a
     // dependency stream nobody reads is a security gate in name only (SEC-06).
