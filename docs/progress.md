@@ -763,10 +763,15 @@ rulesets, which the script says in those words), so CI decides that one.
 one problem for most of a morning. `did not end with a verdict line` is the
 brief's fault and this fixes it: `safety-reviewer` demonstrated it on #6 by
 passing on the merits and signing off `PASS — no SM/REL/LOST-relevant…`, which
-the anchored pattern rejects. `produced no verdict file` is a different thing
+the anchored pattern rejects. **("This fixes it" turned out to be wrong, on the
+very next pull request — see "The brief already said so" below. The paragraph
+is left as written so the correction has something to correct.)** `produced no verdict file` is a different thing
 and is **not** fixed: the agent writes nothing at all, file or comment, while
 its own result record reports `success`, `is_error: false` and no denials. That
 write belongs to the agent that *invokes* the reviewer, in `ai-review.yml`.
+**("Nothing at all, file or comment" is wrong — see "One sentence, two
+artefacts" below, where the comment is complete and only the file is missing.
+Left standing so the correction has something to correct.)**
 
 **What is left, and where.** The `produced no verdict file` defect, on `main`,
 where D-063 no longer blocks testing a change to the workflow now that it lives
@@ -787,6 +792,52 @@ other reported tampering and advised treating it as a security incident. Both
 behaved correctly. Whatever fixes `ai-review.yml` should make the reversion
 legible, so the difference between "protected" and "attacked" is readable rather
 than inferred.
+
+
+### The approval rule was decorative, and the gate said it was fine
+
+`gate:integrity` reported **5 of 5** while `require_code_owner_review: true` sat
+beside `required_approving_review_count: 0`. The first has nothing to attach to
+at zero — GitHub asks for a code owner *among the approvals it requires*, and
+zero of them is none. With `dismiss_stale_reviews_on_push` also on, it is worse
+than inert: every push erases the approvals and nothing asks for them back, so
+the rule cannot survive one push.
+
+**Our own merge is the evidence.** #6 landed on head `f2e8679` with no standing
+approval at all — its newest review is `DISMISSED`, on the earlier commit
+`81166b2` — while touching six paths CODEOWNERS assigned to `@bvst` alone.
+`test-auditor` had already found the matching signal on #7: `reviewDecision`
+returning empty despite a real approval, which is what GitHub returns when
+review is not required. (Honest caveat: the owner may have relaxed something to
+land #6, so that merge alone is not airtight. The two together are enough.)
+
+**What was built.** `required_approving_review_count` is **1** in
+`docs/plan/main-ruleset.json`, and `reviewRuleset` now fails below 1, so the
+recorded rules and the live ones cannot drift apart unnoticed again (D-072).
+Test first, and it failed for the right reason: `reviewRuleset` returned no
+problem at all for a count of zero. The fixture had `0` baked in as its default,
+which is how the hole stayed invisible — a test suite that treats the broken
+state as normal will never fail about it.
+
+**What it does not buy.** `@urso-agent` approves automatically, so this closes
+the "merged with zero approvals" hole and makes CODEOWNERS mean something. It
+adds no human judgement. The required status checks remain the real protection,
+and D-072 says so rather than letting the change read as stronger than it is.
+
+**Two non-negotiables added, in CLAUDE.md where every session reads them.**
+*Read the job log before theorising* — a red check is explained by its job log
+and nothing else, not its comment, not its duration, not a script reasoned about
+without running. And *say what you checked, not what you assume*: "these paths
+are CODEOWNERS-gated" and "this is a required check" are claims, not facts, and
+both turned out false this morning. They are written down because a single
+session produced eight corrections of exactly that shape, three of them wrong
+guesses about one failing gate.
+
+**Left for the owner.** Import the ruleset so the live rules match. And
+`require_last_push_approval` is still `false`, so an approval can predate the
+final commit — turning it on is the stronger setting, and it is deliberately
+untouched here because a merge rule is not Claude's to change beyond what was
+asked (D-029).
 
 
 ## In flight
@@ -849,3 +900,107 @@ is repository content and therefore takes effect on the branch that changes it.
 **Where the numbers are going.** After INF-06 lands, `gate:integrity` will start
 failing again until `android-e2e` joins the required list. That is the same
 reminder, and it should be expected rather than debugged.
+
+
+### The brief already said so, and the reviewer did it anyway
+
+`ai-review (code-reviewer)` went red on #8 (commit `14cacd6`) with
+`did not end with a verdict line` — the mode #7 was supposed to have closed.
+
+Read from the job log and the comment it came from, in that order:
+
+```
+##[error]code-reviewer did not end with a verdict line, so its verdict is unknown.
+```
+```
+VERDICT: APPROVE WITH COMMENTS
+```
+
+So it is not the mode #7 fixed, and not `produced no verdict file` either. The
+reviewer wrote a verdict, last line, correct prefix — and **invented a third
+value**.
+
+**Why this is worth a paragraph rather than a shrug.** `origin/main`'s
+`.claude/agents/code-reviewer.md`, lines 48–49, names `VERDICT: PASS WITH
+COMMENTS` as a form that will be read as "this review produced no verdict".
+#8 changes nothing under `.claude/` — `git diff origin/main...HEAD -- .claude/`
+is empty — so that is the text the reviewer read. It was told, by name, that a
+`WITH COMMENTS` suffix would be rejected, and it produced one anyway.
+
+That falsifies the remedy recorded above this entry, which was *"it has to
+change the agent definition"*. Changing the agent definition is exactly what #7
+did. The instruction-side lever has now been pulled, and observed not to hold.
+
+**What the evidence points at instead.** Both remaining levers are in
+`ai-review.yml`, on `main`, alongside the still-open `produced no verdict file`
+defect — so one branch off `main` can take both:
+
+- The error should **echo the line it rejected**. Today it prints only what it
+  expected, so learning what actually happened means leaving the log for the
+  pull request comment — the one artefact the gate ignores. A gate that says
+  "read the log first" has to make the log sufficient.
+- The invoking agent, not the reviewer, should be the thing that writes a
+  verdict it has already checked. The reviewer is a language model asked to end
+  on an exact string; three briefs now say so and one still drifted.
+
+**What should not change:** the two permitted values. `APPROVE WITH COMMENTS`
+is the reviewer asking for a middle verdict, and the middle verdict is the
+thing the design refuses — qualifications belong in the findings, where they
+are read, not in a verdict line that a script has to interpret. Widening the
+pattern would make this failure disappear by conceding the point it exists to
+make.
+
+**Still advisory, still worth fixing.** `code-reviewer` is not a required check
+(D-043), so none of this blocked #8. The reason to fix it is the day a
+*blocking* reviewer drifts the same way, and the PR stops on a review that
+passed.
+
+
+### One sentence, two artefacts, and the gate reads the forgotten one
+
+The same morning, on #8, `produced no verdict file` took down **two blocking
+reviewers** on two different commits: `privacy-security-reviewer` on `c36d21c`
+and `test-auditor` on `167c1cd`. Both are required checks, so this is the mode
+that actually stops a merge — unlike the verdict-value drift above it, which
+only ever hit an advisory one.
+
+**What makes it diagnosable at last.** `test-auditor` posted a *complete*
+review comment on `167c1cd` — RG-01 through RG-05, "Blocking: None found",
+the parser read rather than assumed — and its job still failed for want of the
+file. So the earlier description, "the agent writes nothing at all, file or
+comment", is false. It writes the comment. It skips the file.
+
+**And the prompt asks for both in one sentence** (`ai-review.yml`):
+
+> Write its findings and its final verdict line to `review-<agent>.md`, with
+> the verdict as the last line, **and post the findings as one pull request
+> comment.**
+
+Two artefacts, one clause, no ordering. The agent produces the one a person
+will read and drops the one only a script will. The gate reads only the
+dropped one — so the load-bearing artefact is the one the agent has least
+reason to remember, and a review that genuinely happened, and said so in
+public, is recorded as a review that did not happen.
+
+**A proposed patch, not a verified one.** It cannot be tested from a branch:
+`claude-code-action` refuses to run when the workflow differs from the default
+branch — quoted at "The bootstrap deadlock" above — so editing `ai-review.yml`
+here would skip all five reviewers, including the three blocking ones, to fix
+one. On a branch off `main`:
+
+1. **Stop asking the agent for the artefact the gate depends on.** The verdict
+   should be read from something the reviewer produces as a matter of course —
+   its own final output — rather than from a file it has to remember to create
+   alongside the comment it would rather write. This is the change worth
+   making; the two below are cheap regardless.
+2. **Order the sentence, and say which one is load-bearing:** file first, as
+   its own step, with the comment named as the copy for people. This is the
+   instruction-side lever, which the verdict-value drift above shows is worth
+   little on its own — so it is a mitigation, not the fix.
+3. **Echo the rejected line** in the `did not end with a verdict line` error,
+   so the log stops sending its reader to the pull request comment — the one
+   artefact the gate ignores — to find out what happened.
+
+**What this costs today:** #8 cannot merge while a required check fails this
+way, and re-pushing is the only lever a branch has. That is not a fix, it is a
+retry, and it is worth naming as one.

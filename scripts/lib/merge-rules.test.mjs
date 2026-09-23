@@ -29,7 +29,7 @@ const rulesFor = (checks, overrides = {}) => [
     parameters: {
       require_code_owner_review: true,
       dismiss_stale_reviews_on_push: true,
-      required_approving_review_count: 0,
+      required_approving_review_count: 1,
       ...(overrides.pullRequest ?? {}),
     },
   },
@@ -135,6 +135,52 @@ describe('reviewRuleset', () => {
     expect(reviewRuleset({ branchRules, required })[0]?.what).toContain(
       'Stale approvals are not dismissed',
     );
+  });
+
+  test('code owner review with no approvals required is a rule that cannot bite', () => {
+    // The combination that made CODEOWNERS decorative on this repository:
+    // require_code_owner_review was on, so the gate reported it healthy, while
+    // required_approving_review_count sat at 0 with dismiss-on-push on. Every
+    // push erased the approvals and nothing required them back, so the rule
+    // could never survive a push — #6 merged on owner-gated paths with no
+    // approval standing at all.
+    const branchRules = rulesFor(required, {
+      pullRequest: { required_approving_review_count: 0 },
+    });
+
+    expect(reviewRuleset({ branchRules, required })[0]?.what).toContain(
+      'No approval is required before merging',
+    );
+  });
+
+  test('a ruleset that omits the approval count entirely is read as zero', () => {
+    // GitHub omits the key rather than sending 0 in some ruleset shapes, and a
+    // missing requirement is not a satisfied one. Without this the `?? 0`
+    // fallback is untested, which is how the branch coverage on this file went
+    // down and the traceability gate caught it.
+    const branchRules = rulesFor(required);
+    const pullRequest = branchRules.find((rule) => rule.type === 'pull_request');
+    delete pullRequest.parameters.required_approving_review_count;
+
+    expect(reviewRuleset({ branchRules, required })[0]?.what).toContain(
+      'No approval is required before merging',
+    );
+  });
+
+  test('with code-owner review off as well, both are reported and neither overstates', () => {
+    // The report is the one thing here that has to be literally true. With
+    // both switched off this branch fires beside the code-owner one, so its
+    // wording may not assert that code-owner review is on — it never read it.
+    const branchRules = rulesFor(required, {
+      pullRequest: { require_code_owner_review: false, required_approving_review_count: 0 },
+    });
+    const problems = reviewRuleset({ branchRules, required });
+
+    expect(problems.map((p) => p.what)).toEqual([
+      expect.stringContaining('Code owner review is not required'),
+      expect.stringContaining('No approval is required before merging'),
+    ]);
+    expect(problems[1]?.what).toContain('if it is on');
   });
 
   test('without the status-check rule, red checks do not stop a merge', () => {
