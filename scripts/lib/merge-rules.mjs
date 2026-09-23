@@ -28,6 +28,10 @@ export const OWNER_APPROVAL_PATHS = [
   // The gates are not only .github and .claude: these run with the tokens the
   // gate-integrity job holds, and decide what every other check does.
   '/scripts/',
+  // HK-09's entry point. Its rules live in /scripts/ and were already owned,
+  // but git executes this file, so an unowned copy of it could switch the gate
+  // off without the rules changing a line — the gate present and doing nothing.
+  '/.githooks/',
   '/package.json',
   '/packages/contracts/released/',
   '/docs/plan/decisions.md',
