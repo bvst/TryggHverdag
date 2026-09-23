@@ -877,56 +877,58 @@ new decision that supersedes it (see `00-working-agreement.md`).
   availability problem, and this decision should be revisited before staging
   carries anything that matters (INF-07).
 
-## D-069 — A review exists in the verdict file, not in the comment
+## D-069 — Two review-gate failures, and only one of them is fixable from a branch
 - **Date:** 2026-09-23 · **Status:** Accepted (delegated, D-031) · **Section:** 8
 - **Context:** two **blocking** reviewers (D-043) failed on reviews that had
-  found nothing wrong, for two different reasons, and both were mistaken for
-  one. `code-reviewer` had failed the same way four times and was written off as
-  an unreliable agent because it is only advisory.
-- **The two failures are not the same failure.** The enforcement in
-  `ai-review.yml` reads a file, `review-<agent>.md`, and it prints a different
-  error for each:
-  1. **"did not end with a verdict line"** — the file exists, its last line is
+  found nothing wrong. `code-reviewer` had failed the same way four times and
+  was written off as an unreliable agent because it is only advisory.
+- **They are two different failures**, and the enforcement in `ai-review.yml`
+  prints a different error for each. It reads a file, `review-<agent>.md`:
+  1. **"did not end with a verdict line"** — the file exists; its last line is
      not `VERDICT: PASS` or `VERDICT: BLOCK`. `safety-reviewer` ended
-     `**Verdict: PASS**`; the pattern is case-sensitive. `code-reviewer` ended
-     `VERDICT: APPROVE WITH COMMENTS`, and later a bare `**APPROVE**`.
+     `**Verdict: PASS**` and the pattern is case-sensitive; `code-reviewer`
+     ended `VERDICT: APPROVE WITH COMMENTS`, then `**APPROVE**`, then
+     `VERDICT: APPROVE`.
   2. **"produced no verdict file"** — there is no file at all. `test-auditor`
      posted a pull request comment ending in a perfectly conforming
      `VERDICT: PASS` and still failed, because **the gate never reads the
      comment.**
-- **Both had a cause in the instructions, not in the agents.**
-  For (1), all five definitions said: *"End with exactly one line:
-  `VERDICT: PASS` or `VERDICT: BLOCK`, followed by your findings"* — which puts
-  the findings **after** the verdict, while the gate reads the **last** line. A
-  reviewer following it literally cannot pass; the ones that passed were reading
-  it charitably. For (2), the definitions never mentioned the file at all. Only
-  the workflow prompt did, and it asked for the file and the comment in one
-  sentence, so producing the comment felt like producing the review.
-- **Decision:** each reviewer definition now says, in its own words and with its
-  own filename, that the review must be written to `review-<agent>.md` because
-  that is what CI reads, that the comment is for people and is not a substitute,
-  and that the very last line of that file must be exactly `VERDICT: PASS` or
-  `VERDICT: BLOCK` with nothing after it — naming the spellings that get
-  rejected and what a false red costs. `scripts/ai-review.test.mjs` reads the
-  pattern out of the workflow and holds all five definitions to all of it.
-- **How it was checked:** by planting each failure — the old wording, a
-  canonical line in the wrong case, a trailing qualifier, and a definition with
-  the filename removed — and confirming the test goes red for each. The first
-  version of that test had a hole: it scanned only for upper-case verdicts, so a
-  wrongly-cased line passed by not being looked at rather than by being judged.
-- **Diagnosed twice from the wrong evidence.** The first reading of (1) came
-  from the reviewer's pull request *comment*, not its job log, and the comment
-  is exactly the artefact the gate ignores. It happened to be right for
-  `safety-reviewer` and would have been wrong for `test-auditor`, whose comment
-  was flawless. The log says which of the two errors fired; nothing else does.
-- **Why the workflow was not changed instead**, which is still the better fix:
-  `claude-code-action` refuses to run when the workflow file differs from the
-  default branch (D-063), so editing `ai-review.yml` on a branch stops the
-  reviewers running at all and the blocking checks never report. The regex
-  should become case-insensitive, and the "no verdict file" path should say what
-  to do about it. Both have to be done on `main`, where they can be verified.
-- **Consequences:** the gate still refuses to guess, which is right — a verdict
-  it cannot read is not a review that found nothing. What changes is that the
-  reviewers are now told the whole truth about what CI reads. Until the workflow
-  is fixed, a differently-worded verdict or a missing file still fails, so a
-  green run is not evidence that this is solved. The test is.
+- **Decision, for (1):** the reviewer definitions now put findings first and
+  state that the very last line of the review must be exactly `VERDICT: PASS` or
+  `VERDICT: BLOCK` with nothing after it, naming the rejected spellings and what
+  a false red costs. The old wording — *"End with exactly one line: `VERDICT:
+  PASS` ... followed by your findings"* — told the reviewer to put its findings
+  **after** the verdict, while the gate reads the **last** line. A reviewer
+  following it literally could not pass; the ones that passed read it
+  charitably. `scripts/ai-review.test.mjs` reads the pattern out of the workflow
+  and holds all five definitions to it.
+- **(2) cannot be fixed from a branch, and the reason matters.** The reviewers
+  are read-only: their frontmatter grants `Read, Grep, Glob, Bash` and no
+  `Write`, because a reviewer that can edit the code it reviews is not an
+  independent reviewer. The file is written by the agent that *invokes* them,
+  instructed by the prompt in `ai-review.yml` — and editing that file on a
+  branch re-triggers D-063, so the reviewers stop running entirely. So the fix
+  belongs on `main`: make the writing step explicit and checkable, or have the
+  enforcement read the posted comment, which is the artefact that does reliably
+  exist.
+- **Three wrong diagnoses before this one**, each from evidence that felt
+  sufficient:
+  1. "an unreliable agent" — from the *comment's* last line, which is the one
+     artefact the gate ignores. Right by luck for `safety-reviewer`, flatly
+     wrong for `test-auditor`, whose comment was flawless while its check was red.
+  2. "the instruction contradicts itself" — true, and only half the story: it
+     explains (1) and says nothing about (2).
+  3. "tell the reviewers to write the file" — **an instruction they cannot
+     follow**, having no `Write` tool. It was added and then removed. An
+     instruction that cannot be obeyed is worse than none: it moves the blame
+     without moving the behaviour, and it would have read to the next person as
+     a fix that was tried and failed.
+  The job log names which error fired. Nothing else does, and it was not read
+  until the third attempt.
+- **Consequences:** the wording failure is addressed and tested. The
+  missing-file failure is **still live** and will keep making blocking reviewers
+  red at random until the workflow is fixed on `main`. A green run is not
+  evidence either way — the reviewers have produced conforming output by chance
+  throughout. Adding `Write` to the reviewers would make them self-sufficient
+  and is **not** recommended: it trades an independent review for a convenience,
+  and it is the owner's call if anyone wants it.

@@ -21,21 +21,9 @@ error handling, the import boundaries (AR-10) and the injected clock (AR-03).
 Prefer deleting code to adding it.
 
 ## Output format
-Your review has to exist in **two** places, and they are not the same thing:
-
-- **`review-code-reviewer.md`** in the repository root — this is what CI reads. Write
-  it with the Write tool. A review that was never written to this file is
-  recorded as a review that did not happen, whatever else you produced, and the
-  check fails.
-- **a pull request comment** — this is what people read.
-
-Posting the comment is not enough on its own. Write the file first, then post
-the same content as the comment, so that a failure to comment cannot cost the
-review its verdict.
-
 Write your findings first, grouped as **Blocking**, **Should fix** and
-**Notes**. Then make the **very last line of `review-code-reviewer.md`** exactly one
-of these two strings and nothing else:
+**Notes**. Then make the **very last line of your review** exactly one of these
+two strings and nothing else:
 
     VERDICT: PASS
     VERDICT: BLOCK
