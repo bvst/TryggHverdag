@@ -4,8 +4,10 @@
 // req:coverage does not collect the prefix and it appears zero times in
 // docs/requirements-status.md — so these prove nothing it counts. That is the
 // exemption D-074 keys to what a test proves rather than to a directory.
-import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { onlyInert, reasons } from './affected.mjs';
 
@@ -111,6 +113,67 @@ describe('the script refuses to guess', () => {
     expect(result.status).not.toBe(0);
     expect(`${result.stdout}${result.stderr}`).not.toContain('code=false');
     expect(`${result.stdout}${result.stderr}`).toContain('not knowing is not the same');
+  });
+
+  test('a push to main runs everything, because it has no base to compare with', () => {
+    // ci.yml runs on push to main as well as on pull requests. There,
+    // github.base_ref is empty, the base falls back to origin/main — and
+    // origin/main IS the commit just pushed. HEAD against itself is empty, so
+    // every guarded step in six of seven jobs would sit out while each job
+    // reported success: every required check on main's own commits decorative.
+    // code-reviewer blocked #17 over it.
+    //
+    // This builds the condition rather than approximating it. A first draft ran
+    // the script here with --base HEAD and asserted code=true — and passed with
+    // the guard removed, because this working tree is dirty and so the diff was
+    // never empty. A test of a silent-pass bug that cannot see the bug is the
+    // thing this whole pull request is about.
+    const dir = mkdtempSync(join(tmpdir(), 'affected-push-'));
+    try {
+      const git = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
+      git('init', '-q', '-b', 'main');
+      git('config', 'user.email', 'test@example.invalid');
+      git('config', 'user.name', 'Test');
+      writeFileSync(join(dir, 'app.ts'), 'export const x = 1;\n');
+      git('add', '-A');
+      git('commit', '-qm', 'initial');
+      // origin/main at the same commit: exactly what a push-to-main checkout has.
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+
+      const run = (event) =>
+        spawnSync(process.execPath, [resolve('scripts/affected.mjs'), '--base', 'origin/main'], {
+          cwd: dir,
+          encoding: 'utf8',
+          env: { ...process.env, GITHUB_EVENT_NAME: event },
+        });
+
+      // The condition really is an empty diff: a pull_request event here says
+      // there is nothing to check. That is the false green the guard prevents.
+      expect(run('pull_request').stdout).toContain('code=false');
+      // And on a push, the guard turns it into "run everything".
+      const push = run('push');
+      expect(push.status).toBe(0);
+      expect(push.stdout).toContain('code=true');
+      expect(push.stdout).not.toContain('code=false');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a pull request event still classifies normally', () => {
+    // The guard must not swallow the case it exists to serve. Asserted on the
+    // guard not firing, rather than on a particular verdict: the verdict
+    // depends on the working tree, and a first draft of this test assumed a
+    // clean one and failed on a dirty one. What matters here is which path was
+    // taken, so that is what it checks.
+    const result = spawnSync(process.execPath, ['scripts/affected.mjs', '--base', 'HEAD'], {
+      encoding: 'utf8',
+      env: { ...process.env, GITHUB_EVENT_NAME: 'pull_request' },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain('not a pull request');
+    expect(result.stdout).toMatch(/^code=(true|false)$/m);
   });
 
   test('it imports nothing the runner might not have', () => {

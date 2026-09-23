@@ -27,6 +27,29 @@ import { onlyInert, reasons } from './lib/affected.mjs';
 const args = process.argv.slice(2);
 const base = args[args.indexOf('--base') + 1] ?? 'origin/main';
 
+// Only a pull request has a base to compare against.
+//
+// ci.yml also runs on push to main, where github.base_ref is empty and the base
+// falls back to origin/main — which, on a push-to-main run, is the commit that
+// was just pushed. HEAD compared with itself is empty, so every guarded step in
+// six of the seven jobs would sit out while each job reported success: every
+// required check on main's own commits decorative from the day this landed.
+// code-reviewer found it on #17.
+//
+// The answer is not a cleverer base. On anything that is not a pull request
+// there is no diff to reason about, so the question does not apply and
+// everything runs. That is also the conservative direction: a push to main
+// happens once per merge, and running the full suite on it costs one run.
+const event = process.env.GITHUB_EVENT_NAME;
+if (event !== undefined && event !== 'pull_request') {
+  const line = 'code=true';
+  console.log(`affected: this is a ${event} event, not a pull request.`);
+  console.log('There is no base to compare against, so every gate runs.');
+  console.log(line);
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${line}\n`);
+  process.exit(0);
+}
+
 // "Nothing changed" and "could not tell" must not be the same answer (D-045).
 //
 // changedFiles() swallows a git call that fails — `if (!result.ok) continue` —
