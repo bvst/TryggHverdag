@@ -789,6 +789,30 @@ That argument stands on its own and needs no theory of the failure. **It is not
 a fix for `produced no verdict file`**, and D-070 says so in those words, so the
 next session does not inherit a solved-looking problem that is still open.
 
+**Two failures, not one — and merging this fixes the first.** They are worth
+separating, because the enforcement has two branches and they have different
+causes and different cures.
+
+*"did not end with a verdict line"* is the brief's fault, and `safety-reviewer`
+demonstrated it on `73208ef` while passing on the merits. Its review put the
+findings first and signed off `PASS — no SM/REL/LOST-relevant behavior change is
+missing coverage…`, so the file existed and the gate rejected its last line. The
+brief it was actually given is `origin/main`'s, because the harness reverts these
+files: *"End with exactly one line: `VERDICT: PASS` or `VERDICT: BLOCK`, followed
+by your findings."* That puts the verdict **before** the findings while the gate
+reads the **last** line — a reviewer following it literally cannot pass. This
+pull request already fixes it (findings first, the verdict as the literal last
+line, with `Verdict: PASS`, `**APPROVE**` and `VERDICT: PASS WITH COMMENTS`
+named as traps), and the fix takes effect for every review after it merges.
+Predicted from the comment's ending before the log was read, then confirmed by
+it — the first guess about this gate that survived contact with the evidence.
+
+*"produced no verdict file"* is a different thing and is **not** fixed here: the
+agent writes nothing at all, file or comment, and the write belongs to the agent
+that invokes the reviewer, in `ai-review.yml` on `main`.
+
+So merging closes one of the two and leaves the other exactly where it was.
+
 **It affects every reviewer, and it is not about their briefs.** By the end of
 this task all four reviewers that run had failed at least once with
 `produced no verdict file`, each while posting a good review comment:
