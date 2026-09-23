@@ -1305,3 +1305,25 @@ and silently fixing it would hide that the snapshot has no mechanism keeping it 
 is the real finding — five files kept in sync by hand, already out of step twice. Worth a
 test that diffs the snapshot against live, or a note in the snapshot saying which direction
 is authoritative.
+
+**All of the paragraph above is wrong, and the resync it describes has been undone.**
+Reading what `07b-claude-code-files/` is for — which should have come before editing it —
+settles it: the README says **"Draft v0 (D-044) · Last updated: 2026-09-20 … the first
+versions … copied into the repository root when it is created"**, and **D-059, "Claude Code
+configuration v1, as installed"**, records that the drafts were installed *with changes*.
+
+So this repository already keeps v0 and v1 apart on purpose: the snapshot is a dated record
+of where the configuration started, the live files are where it is now, and the differences
+are captured in decisions rather than by copying files around. Ten of the ~30 files differ
+already — `CLAUDE.md`, the README, seven agent briefs and `server-domain.md` — because
+D-067, D-069, D-070, D-071 and D-074 changed the live ones. **That drift is the artifact
+working, not rotting.**
+
+Which makes the resync a small act of vandalism on a historical record, done in response to
+a reviewer finding without first asking what the file was for. A sync test — `code-reviewer`
+suggested one and I was about to write it — would have been worse: it would have forced a
+dated v0 to chase a moving target for ever.
+
+What the finding was actually about is real and now fixed properly: a reader could follow
+these files as a current template. The README says plainly that it is v0, that live is
+authoritative, and that nothing should sync them.
