@@ -599,6 +599,10 @@ new decision that supersedes it (see `00-working-agreement.md`).
   (`pnpm run test:hooks`, 77 cases) that run in CI like any other code.
 
 ## D-060 — Gate scripts v1, and HK-08 is machinery
+
+> **Two decisions carry the number D-060** — this one and the CI configuration one appears further down. A citation of "D-060" is therefore ambiguous. Both are left as
+> they are and named here instead: renumbering a binding decision is
+> the owner's call, not Claude's.
 - **Date:** 2026-09-20 · **Status:** Accepted (owner answered the HK-08 question; the rest delegated, D-031) · **Section:** 6/7 (M0, INF-03)
 - **Context:** INF-02 left two placeholder gate scripts and one missing hook.
   Writing the real ones forced three choices about how a gate behaves when the
@@ -633,6 +637,10 @@ new decision that supersedes it (see `00-working-agreement.md`).
   and is not edited by hand (Section 9).
 
 ## D-060 — CI configuration v1, as installed
+
+> **Two decisions carry the number D-060** — this one and the gate-scripts one appears further up. A citation of "D-060" is therefore ambiguous. Both are left as
+> they are and named here instead: renumbering a binding decision is
+> the owner's call, not Claude's.
 - **Date:** 2026-09-20 · **Status:** Accepted (delegated, D-031) · **Section:** 8
 - **Context:** INF-04 installs the draft workflows from `08b-ci-files/`. Four
   things had to change to make them true rather than plausible.

@@ -21,6 +21,10 @@ const USES = /^\s*-?\s*uses:\s*(?<ref>\S+)/;
 const PNPM_RUN = /\bpnpm run (?<script>[\w:@.-]+)/g;
 const JOB_ID = /^ {2}(?<id>[A-Za-z_][\w-]*):\s*(?:#.*)?$/;
 const FULL_SHA = /@[0-9a-f]{40}$/;
+// Four spaces is what makes this unambiguous. A job's own keys sit at four; a
+// step's sit at eight or deeper, under `      - `. Matching loosely would read
+// a single slow step's bound as the whole job's.
+const JOB_TIMEOUT = /^ {4}timeout-minutes:\s*\d+/;
 
 const isComment = (line) => line.trimStart().startsWith('#');
 
@@ -98,6 +102,65 @@ export function findJobIds(text) {
     }
   }
   return ids;
+}
+
+/**
+ * The jobs in this workflow that no timeout bounds.
+ *
+ * A job without `timeout-minutes` inherits GitHub's six-hour default, which is
+ * not so much a bound as most of a day of a runner spent on something that
+ * stopped making progress. The shape of that failure is the real cost: a stuck
+ * job is indistinguishable from a working one, so nobody looks until a pull
+ * request has been "still running" all afternoon — and a gate people wait on
+ * without trusting is the failure mode this repository keeps paying for.
+ *
+ * `ai-review` is the sharpest case, because it hands control to a language
+ * model, where "thinking" and "hung" genuinely look alike from outside.
+ * `mutation` is next: Stryker legitimately runs long, so a hang there is the
+ * most believable, and therefore the least likely to be investigated.
+ *
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function findUnboundedJobs(text) {
+  const unbounded = [];
+  let inJobs = false;
+  let current = null;
+  const close = () => {
+    if (current !== null && !current.bounded) {
+      unbounded.push(current.id);
+    }
+    current = null;
+  };
+
+  for (const line of text.split('\n')) {
+    if (isComment(line)) {
+      continue;
+    }
+    if (/^jobs:\s*$/.test(line)) {
+      inJobs = true;
+      continue;
+    }
+    if (!inJobs) {
+      continue;
+    }
+    if (/^\S/.test(line)) {
+      close();
+      inJobs = false;
+      continue;
+    }
+    const match = JOB_ID.exec(line);
+    if (match?.groups !== undefined) {
+      close();
+      current = { id: match.groups.id, bounded: false };
+      continue;
+    }
+    if (current !== null && JOB_TIMEOUT.test(line)) {
+      current.bounded = true;
+    }
+  }
+  close();
+  return unbounded;
 }
 
 /** `ai-review (test-auditor)` → `test-auditor`; anything else → null. */

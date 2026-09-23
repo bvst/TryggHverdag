@@ -174,6 +174,12 @@ Anything less than five ticks names what is wrong and what to do about it.
 (Run from a clone whose origin is not this repository, there are four sections
 rather than five, and it says so.)
 
+**Superseded by D-072 below — left standing so the correction has something to
+correct.** What this paragraph proposed watching for is exactly what happened:
+#6 merged on owner-gated paths with no approval standing at all. The count is
+now 1, and `gate:integrity` fails if the live ruleset drops below it. The
+paragraph as written:
+
 **One thing to watch on the first pull request after this.** The ruleset asks
 for 0 approvals plus "require review from Code Owners", which is what lets
 ordinary changes merge on green checks while safety paths still wait for you
