@@ -19,6 +19,9 @@ export const OWNER_APPROVAL_PATHS = [
   '/apps/server/src/domain/',
   '/apps/server/src/modules/alerts/',
   '/apps/server/src/worker.ts',
+  // Where a stopped worker is made to exit with 1, so it is restarted (D-077).
+  '/apps/server/src/bin/worker.ts',
+  '/apps/server/src/process.ts',
   '/apps/mobile/src/safety-core/',
   '/.github/',
   '/.claude/',

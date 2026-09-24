@@ -1,0 +1,129 @@
+# INF-07, D-077: how staging's infrastructure changes. Two runs, both started
+# by the owner from the Actions tab (or GitHub Mobile):
+#
+#   1. action "plan"  — plans, shows exactly what would change in the run's
+#                       summary, and publishes a fingerprint of that plan.
+#   2. action "apply" — given run 1's ID or address, plans again and applies
+#                       only if the new plan has the same fingerprint. If
+#                       anything moved in between, it refuses.
+#
+# Why two runs: GitHub cannot pause a job for approval in a private repository
+# below Enterprise, so the owner's reading of run 1 *is* the approval, and run
+# 2 proves it is applying what was read. Why a fingerprint and not the plan
+# file: a saved plan holds the database password in plain text, and anyone who
+# can read the repository can download a run's artifacts. Both are explained
+# in scripts/lib/plan-approval.mjs.
+#
+# Only the owner starts these. The keys are in the "staging" environment,
+# limited to main (A-21), and Claude's sessions are denied the tools that start
+# a run, because GitHub sees them as the owner (HK-03, .claude/settings.json).
+name: infra-staging
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'plan, or apply a plan you have read'
+        type: choice
+        options: [plan, apply]
+        required: true
+      plan_run:
+        description: 'For apply: the plan run to apply — its ID or its address'
+        type: string
+        required: false
+concurrency:
+  # One at a time: the state has no lock (infra/staging/versions.tf says why).
+  group: infra-staging
+  cancel-in-progress: false
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    if: inputs.action == 'plan'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    # The staging environment's secrets reach only jobs that name the
+    # environment, so they are read here, in the job, not at the top.
+    env:
+      CC_OAUTH_TOKEN: ${{ secrets.CLEVER_TOKEN }}
+      CC_OAUTH_SECRET: ${{ secrets.CLEVER_SECRET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.CELLAR_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.CELLAR_KEY_SECRET }}
+      # Cellar rejects the trailing checksums recent Terraform sends on write
+      # (Clever Cloud's Terraform page: "The last variable is not optional").
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        # Nothing here pushes to GitHub, so the token checkout would leave in
+        # .git/config is not left there for the steps that hold the keys.
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version-file: .nvmrc }
+      - name: Initialise
+        run: node scripts/terraform.mjs -chdir=infra/staging init -input=false -lockfile=readonly
+      - name: Plan
+        run: node scripts/terraform.mjs -chdir=infra/staging plan -input=false -out=staging.tfplan
+      - name: Show the plan in this run's summary
+        # `show` without -json masks sensitive values, so this is safe to publish.
+        run: |
+          {
+            echo '## What applying this plan would change'
+            echo
+            echo 'To apply it: Run workflow → action `apply` → plan run: this run'"'"'s ID, `${{ github.run_id }}`.'
+            echo
+            echo '```'
+            node scripts/terraform.mjs -chdir=infra/staging show -no-color staging.tfplan
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Fingerprint
+        # The JSON holds secrets in plain text; it goes straight into the hash
+        # and is never written anywhere.
+        run: |
+          set -o pipefail
+          node scripts/terraform.mjs -chdir=infra/staging show -json staging.tfplan \
+            | node scripts/plan-approval.mjs fingerprint
+
+  apply:
+    if: inputs.action == 'apply'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    # The staging environment's secrets reach only jobs that name the
+    # environment, so they are read here, in the job, not at the top.
+    env:
+      CC_OAUTH_TOKEN: ${{ secrets.CLEVER_TOKEN }}
+      CC_OAUTH_SECRET: ${{ secrets.CLEVER_SECRET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.CELLAR_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.CELLAR_KEY_SECRET }}
+      # Cellar rejects the trailing checksums recent Terraform sends on write
+      # (Clever Cloud's Terraform page: "The last variable is not optional").
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+    permissions:
+      contents: read
+      # To read the plan run the owner named: its details and its log.
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        # Nothing here pushes to GitHub, so the token checkout would leave in
+        # .git/config is not left there for the steps that hold the keys.
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version-file: .nvmrc }
+      - name: Initialise
+        run: node scripts/terraform.mjs -chdir=infra/staging init -input=false -lockfile=readonly
+      - name: Plan again
+        run: node scripts/terraform.mjs -chdir=infra/staging plan -input=false -out=staging.tfplan
+      - name: The plan the owner read, or nothing
+        # One command checks the run the owner named and compares its
+        # fingerprint with this plan's, so a failure anywhere in it fails this
+        # step with its own reason. The plan's JSON goes only into the hash.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_RUN: ${{ inputs.plan_run }}
+        run: |
+          set -o pipefail
+          node scripts/terraform.mjs -chdir=infra/staging show -json staging.tfplan \
+            | node scripts/plan-approval.mjs matches "$PLAN_RUN"
+      - name: Apply
+        run: node scripts/terraform.mjs -chdir=infra/staging apply -input=false staging.tfplan

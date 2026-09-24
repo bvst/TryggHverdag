@@ -28,8 +28,9 @@ export const DEV_PLAN_CONNECTION_LIMIT = 5;
  *
  * No `pool.on('error', ...)` here, and that is a decision rather than an
  * oversight (D-068). Without a listener an idle client's error exits the
- * process, which is loud — the platform restarts it, and if it is the worker
- * the heartbeat stops and `/v1/health` reports `degraded` within three minutes.
+ * process, which is loud — the platform restarts it. That is the API's pool:
+ * graphile-worker adds its own listener to the worker's pool, which logs the
+ * message and carries on (D-077).
  * A handler that swallowed the event would trade that for silence; a handler
  * that reported it needs somewhere to report to, and that belongs to the task
  * that decides how logging works, not to this one. The handler goes here when

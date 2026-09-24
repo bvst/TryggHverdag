@@ -7,11 +7,24 @@ Two processes from one codebase (AR-01):
 | `src/api.ts` | The HTTP API. Hono, with oRPC serving the contract from `packages/contracts` |
 | `src/worker.ts` | Graphile Worker. Owns the watchdog, the outbox sender, retention and the canary |
 
-**Neither is a runnable process yet.** `createApi` builds the app but nothing
-listens on a port, and `startWorker` has to be handed a connection string.
-Binding them to a port and an environment is INF-07's job, with the staging
-deployment. Today both exist to be constructed and tested, which is why the
-system tests can drive the whole API without a server running at all.
+`createApi` and `startWorker` take their dependencies, so tests can build them
+against fakes. The processes that run on a server are in `src/bin/` (INF-07):
+
+| Process | Started by | What it does |
+|---------|-----------|--------------|
+| `src/bin/migrate.ts` | Clever Cloud's pre-run hook, before every start | Brings the schema up to date. A failure stops the deploy |
+| `src/bin/api.ts` | Clever Cloud's run command | `startApiProcess`: the real adapters, the API, `0.0.0.0:$PORT` (8080) |
+| `src/bin/worker.ts` | `CC_WORKER_COMMAND`, beside the API | `startWorker`; exits with 1 if the runner ends without being asked, so it is restarted |
+
+All three read `DATABASE_URL`, or `POSTGRESQL_ADDON_URI`, which Clever Cloud
+sets for a linked database (`src/config.ts`). On SIGTERM they stop cleanly;
+on failure they exit with 1 and print one line, with any password removed
+(`src/process.ts`, D-077).
+
+There is no build step: Node strips the types when it starts
+(`node --experimental-strip-types src/bin/api.ts`). `src/bin/bin.test.ts` runs
+the entry files exactly that way, because every other test runs through
+Vitest, which compiles TypeScript itself.
 
 Inside:
 

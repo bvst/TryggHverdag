@@ -32,11 +32,30 @@ Notes kept between reviews. Newest section last.
    job/check agreement — not whether the shell inside a step is right.
 5. **Duplicated lists with no cross-check.** `OWNER_APPROVAL_PATHS`,
    `.github/CODEOWNERS` and the `paths-filter` blocks in `ai-review.yml` are
-   three copies of the same path list. Only the first two are compared.
+   three copies of the same path list. All three are compared now
+   (`gate.test.mjs`), but only in one direction for `ai-review.yml`: every
+   `/apps/` owner path must be in its safety filter, not the reverse.
 6. **A test whose fixture is "everything broken" asserts nothing.** A base
    fixture with `codeownersText: null` makes `sections.some(s => s.problems
    .length > 0)` true whatever the case under test does. Assert on the named
    section, not on the aggregate. (Caught by mutation in `gate-integrity.test.mjs`.)
+
+## Found in INF-07
+- A child-process test that only asserts "exit 1 + '<name> failed:'" passes
+  for any start failure. Also assert the expected cause (for example
+  `ECONNREFUSED`), and check that a redaction assertion can fail with the
+  error the test actually produces.
+- `echo "x=$(cmd)" >> $GITHUB_OUTPUT` swallows `cmd`'s failure even under
+  `bash -e` with pipefail. Grep workflows for it.
+- `test-strength.mjs`: a `)` inside a `test.each` table hides the whole table
+  from the test count. Removing cases from a table is invisible to it anyway,
+  so read `test.each` diffs by hand.
+- HK-03 matches literal text, so check global-option forms
+  (`terraform -chdir=… apply`) and re-run routes, not just the forms listed
+  in the tests.
+- In a cloud session, Node's `fetch` gets 401 from the GitHub API but `curl`
+  through the proxy works. Use `curl` to confirm the live rules when
+  `gate:integrity` cannot.
 
 ## Method that paid off
 - Mutation by hand: copy the production module into the scratchpad, reword or

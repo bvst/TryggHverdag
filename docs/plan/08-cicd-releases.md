@@ -212,7 +212,14 @@ reads the agent briefs and asserts on them, so editing one really can fail
   - location SDK licence keys
   - login secret
   - database URLs
-  - Clever Cloud token, EAS token
+  - EAS token
+  - `CLEVER_TOKEN`, `CLEVER_SECRET` — the staging CI user's Clever Cloud key
+    (A-19). A user that is a Manager of the staging organisation and of
+    nothing else; the key expires after a year. Stored as secrets of the
+    GitHub environment `staging`, which only `main` can read (A-21, D-077).
+    Production gets its own user and key at go-live
+  - `CELLAR_KEY_ID`, `CELLAR_KEY_SECRET` — the Cellar add-on holding
+    Terraform's staging state (A-20). Same store (A-21, D-077)
   - Healthchecks check-in URLs
   - Claude OAuth token
   - Claude's GitHub token (A-06)
