@@ -15,6 +15,19 @@ const read = (file) => readFileSync(path.join(ROOT, file), 'utf8');
 const main = read('infra/staging/main.tf');
 
 describe('infra/staging', () => {
+  test('BUG-2: the state backend sends no checksum Cellar would refuse', () => {
+    // Staging's first apply created the app and the database, then could not
+    // save its state: "PutObject … 400 … XAmzContentSHA256Mismatch". Terraform
+    // 1.16 asks for a SHA-256 checksum on every state upload unless
+    // skip_s3_checksum is set, and an algorithm asked for explicitly is sent
+    // whatever AWS_REQUEST_CHECKSUM_CALCULATION says. Planning only reads the
+    // state, so no plan could have shown this; only a real write to Cellar
+    // proves the fix, and a session has no route there.
+    const backend = /backend "s3" \{[\s\S]*?\n {2}\}/.exec(read('infra/staging/versions.tf'));
+
+    expect(backend?.[0]).toMatch(/\n\s*skip_s3_checksum\s*=\s*true\n/);
+  });
+
   test('asks for the same Terraform minor version that scripts/lib/terraform.mjs downloads', () => {
     const [major, minor] = TERRAFORM_VERSION.split('.');
 

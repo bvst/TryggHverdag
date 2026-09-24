@@ -25,7 +25,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-04 | CI workflows, merge rules, CODEOWNERS | ✅ Done — 2026-09-23 ([#3](https://github.com/bvst/TryggHverdag/pull/3)) |
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
-| INF-07 | Staging on Clever Cloud | 🟡 Merged 2026-09-24 ([#22](https://github.com/bvst/TryggHverdag/pull/22)). The first plan run planned staging (2 to add) and then failed on BUG-1, fixed on `fix/BUG-1-plan-stdin`. Done when staging is applied, a deploy runs and the smoke test passes (A-22) |
+| INF-07 | Staging on Clever Cloud | 🟡 Merged 2026-09-24 ([#22](https://github.com/bvst/TryggHverdag/pull/22)). BUG-1 fixed in [#23](https://github.com/bvst/TryggHverdag/pull/23). The first apply created staging but could not save Terraform's state (BUG-2, fixed on `fix/BUG-2-cellar-checksum`), so the owner deletes the two orphans and applies again. Done when staging is applied, a deploy runs and the smoke test passes (A-22) |
 | INF-08 | Monitoring | ⬜ Next after INF-07: UptimeRobot will watch `https://trygghverdag-staging.cleverapps.io/v1/health` |
 | INF-09 | Daily status workflow | 🟡 Merged 2026-09-24 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). First report posted to [#19](https://github.com/bvst/TryggHverdag/issues/19) at 05:23 UTC, every step verified in the log. Done when the owner confirms it reached the phone (A-17) |
 | INF-10 | Gate drills | ⬜ Not started. Parked 2026-09-24 for INF-07. Open question to the owner: split into offline drills now and live GitHub drills later? |
@@ -185,8 +185,23 @@ The things that still bite, and cost a session hours the first time.
   read, which a pipe answers with EAGAIN while `terraform show` is still
   writing. `apply` would have failed the same way. Reproduced locally, then
   fixed test-first by reading stdin as a stream.
-- **Next, after the BUG-1 fix merges:** `plan` again, then `apply` with that
-  run's ID, then re-run `deploy-staging`.
+- BUG-1 merged as [#23](https://github.com/bvst/TryggHverdag/pull/23). The next
+  plan ([36050891944](https://github.com/bvst/TryggHverdag/actions/runs/36050891944))
+  printed one fingerprint. `apply` with it
+  ([36051517379](https://github.com/bvst/TryggHverdag/actions/runs/36051517379))
+  re-planned to the same fingerprint, so plans are reproducible, and created the
+  database (`postgresql_70966f35-c1e9-4af0-865d-cb73540c8641`) and the app
+  (`app_bc864d53-42ae-4591-8465-eb1edb8ce740`). Then it could not save the
+  state: `PutObject … 400 … XAmzContentSHA256Mismatch`. **BUG-2**: Terraform
+  asks for a SHA-256 checksum on every state upload unless
+  `skip_s3_checksum = true`, and Cellar refuses it. Plans only read the state,
+  so none could show this. Terraform's recovery file went with the runner (the
+  workflow keeps no artifacts, because state holds the database password), so
+  **both resources exist and the state does not know them**. Another apply now
+  would create a second app and database with the same names.
+- **Next:** the owner deletes that app and that database in the console, the
+  BUG-2 fix merges, then `plan`, `apply` with that run, and a re-run of
+  `deploy-staging`. Nothing may deploy to the orphaned app in between.
 
 **What it built:** three runnable server processes (migrate as the pre-run
 hook, the API, and the worker beside it); Terraform for one nano instance and

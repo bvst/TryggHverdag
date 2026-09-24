@@ -1667,11 +1667,20 @@ any other path is work, not a candidate for the same treatment.
     2026-09-24). So D-068's "the error exits the process, which is loud" holds
     for the API's pool only. For the worker, the open question when D-068 is
     revisited is that message reaching the log unredacted, not a restart loop.
+  - **An apply that cannot save its state leaves resources Terraform does not
+    know.** Terraform writes `errored.tfstate` on the runner, and the runner is
+    gone when the job ends. The workflow deliberately uploads no artifact,
+    because state holds the database password. Recovery is by hand: delete the
+    orphans in the console (while staging holds nothing), or import them. The
+    first apply hit exactly this (BUG-2, 2026-09-24).
 - **Not verified before merging, and how each gets verified:** that Clever
   Cloud accepts the flavour `nano` and the vhost as written (the Cellar
   host is no longer on this list: the owner read `CELLAR_ADDON_HOST` as
   `cellar-c2.services.clever-cloud.com` in A-20), that the provider maps `start_script` to the run command, and reading the plan run's
-  log as the source of the fingerprint. The first `plan` and `apply` (A-22) and
+  log as the source of the fingerprint. (That last one is verified: the first
+  apply found the plan run's fingerprint and matched it. The first *state
+  write* was never on this list and should have been: planning only reads, so
+  nothing before an apply could exercise it — BUG-2.) The first `plan` and `apply` (A-22) and
   the first deploy answer all of them; none can run from a pull request,
   because the keys are limited to `main`. Also open until the first deploy:
   - **Connections while old and new overlap.** If Clever Cloud keeps the old
