@@ -171,11 +171,12 @@ DEV PostgreSQL, a deploy on every merge to `main` with a smoke test that waits
 for a heartbeat well *after* the deploy, and a Terraform apply that takes two
 runs the owner starts and applies only the plan the owner read. All four
 reviewers passed it; their findings were fixed in the same branch (the worker's
-shutdown race with Graphile's own signal handler among them). **It waits on
-[#21](https://github.com/bvst/TryggHverdag/pull/21)**, the two-line
-`ai-review.yml` change the owner chose to ship first and merge by hand
-(D-075). Until #21 merges and `main` is merged in, one test fails, and says
-why. Then the owner's A-19 to A-21 (A-18 is done), and A-22 after merge. **What only the
+shutdown race with Graphile's own signal handler among them). Open as
+[#22](https://github.com/bvst/TryggHverdag/pull/22). The `ai-review.yml` change
+it needed shipped first, as the owner chose, in
+[#21](https://github.com/bvst/TryggHverdag/pull/21) (merged by hand, D-075),
+and `main` is merged in, so the AI reviewers can run on it. Waiting on the
+owner's A-19 to A-21 (A-18 is done), and A-22 after merge. **What only the
 first real run can verify** is listed at the end of D-077, with the follow-ups.
 
 **INF-10 was parked for it.** Before switching, Claude found that
@@ -243,9 +244,9 @@ first item below. What remains:
 (owner's decision, 2026-09-24). INF-07 makes `apps/server/src/bin/worker.ts`
 and `apps/server/src/process.ts` safety code: they decide whether a stopped
 worker is restarted. The safety filter lists them first, in a two-line pull
-request merged by hand (D-075). Then INF-07 can add them to CODEOWNERS and
-the owner-approval list, and keep its own AI reviews. The three items above
-still wait.
+request merged by hand (D-075, [#21](https://github.com/bvst/TryggHverdag/pull/21),
+merged 2026-09-24). INF-07 then adds them to CODEOWNERS and the owner-approval
+list, and keeps its own AI reviews. The three items above still wait.
 
 **After INF-06 lands**, `gate:integrity` will fail until `android-e2e` joins the
 required list. Expected, not a defect.

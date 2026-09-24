@@ -1687,11 +1687,12 @@ any other path is work, not a candidate for the same treatment.
     `(sensitive value)`. That it does so in the job summary is seen at the
     first plan run.
 - **Follow-ups, each its own task:**
-  - **Decided by the owner, 2026-09-24:** `ai-review.yml`'s safety filter
-    lists `apps/server/src/bin/worker.ts` and `apps/server/src/process.ts` in
-    its own two-line pull request (#21, merged by hand under D-075), ahead of
-    this one. This change adds them to CODEOWNERS and `OWNER_APPROVAL_PATHS`,
-    and keeps its own AI reviews by not touching that file.
+  - **Done, by the owner's choice (2026-09-24):** `ai-review.yml`'s safety
+    filter lists `apps/server/src/bin/worker.ts` and
+    `apps/server/src/process.ts`. It shipped first, in its own two-line pull
+    request (#21, merged by hand under D-075 the same day). This change adds
+    them to CODEOWNERS and `OWNER_APPROVAL_PATHS`, and keeps its own AI
+    reviews by not touching that file.
   - A heartbeat that names the worker that made it, replacing `LINGER_MS`.
   - Redaction for the output item 14 names, before an M2 task binds a
     location or a phone number (PRIV-07).
