@@ -135,7 +135,9 @@ failed `unit` and `traceability` on one test in `scripts/lib/affected.test.mjs`,
 which inherited the runner's `GITHUB_EVENT_NAME=push` and so tested the push
 shortcut instead of the unresolvable-base guard it names. A test bug from #17 —
 no gate was letting anything through. The daily report's first run found it.
-The owner approved the fix on 2026-09-24; it rides with INF-09's closing record.
+The owner approved the fix on 2026-09-24; `test-author` made it, and it was
+verified here by running the whole suite as a push to `main` (510/510 unit,
+520/520 coverage). It rides with INF-09's closing record in one pull request.
 
 **INF-09 — the daily status report** (D-076) is merged
 ([#18](https://github.com/bvst/TryggHverdag/pull/18)) and ran for the first time
