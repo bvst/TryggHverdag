@@ -27,7 +27,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
 | INF-07 | Staging on Clever Cloud | ⬜ Blocked: Clever Cloud API token |
 | INF-08 | Monitoring | ⬜ Blocked: UptimeRobot needs a URL to watch (comes with INF-07) |
-| INF-09 | Daily status workflow | 🟡 Merged 2026-09-24 ([#18](https://github.com/bvst/TryggHverdag/pull/18)); all three reviewers PASS. Done when the first report reaches the owner's phone (A-17) |
+| INF-09 | Daily status workflow | 🟡 Merged 2026-09-24 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). First report posted to [#19](https://github.com/bvst/TryggHverdag/issues/19) at 05:23 UTC, every step verified in the log. Done when the owner confirms it reached the phone (A-17) |
 | INF-10 | Gate drills | ⬜ Not started. The first real test of the merge rules under load |
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
@@ -37,18 +37,18 @@ could not record a verdict at all (D-069, D-070, D-073).
 
 ## What the owner still needs to do
 
-**A-17 — the first daily report.** Check that it reaches the phone. That is
-INF-09's done-criterion, and only the owner can see it. #18 merged at 04:57 UTC
-on 2026-09-24; the owner chose to let the 05:00 slot run it, with a start by
-hand as the fallback, because a scheduled run tests the one path a manual run
-cannot.
+**A-17 — confirm the first daily report reached the phone.** It was posted to
+[#19](https://github.com/bvst/TryggHverdag/issues/19) at 05:23 UTC on
+2026-09-24, mentioning `@bvst`. That is INF-09's done-criterion, and only the
+owner can see it. The 05:00 slot did not fire for a workflow merged at 04:57, so
+the owner's fallback applied and the run was started by hand at 05:21.
 
-**A-16 is done** (2026-09-24, reported by the owner). A session cannot read
-secrets, so this is the owner's word until the first run's ping step passes.
-Healthchecks.io does not alert on a check that has never been pinged — a `new`
+**A-16 is done, and now verified** (2026-09-24). The first run's post step saw
+`PING_CONFIGURED: true`, and its ping step logged
+`Pinged Healthchecks.io with exit status 0`. That ping also armed the check:
+Healthchecks.io never alerts on a check that has not been pinged — a `new`
 check stays `new` (its own source, `hc/api/models.py`, `get_status`; the site's
-docs are blocked from sessions) — so the dead-man's switch is armed by that
-run, not by adding the secret.
+docs are blocked from sessions).
 
 **A-09 is done** (2026-09-23). `CLAUDE_CODE_OAUTH_TOKEN` is set;
 `ANTHROPIC_API_KEY` is not.
@@ -120,17 +120,32 @@ The things that still bite, and cost a session hours the first time.
 - **Owner questions filed from a session do not notify the owner.** The GitHub
   tools here act as `@bvst`, so the issue is the owner's own, and GitHub does not
   notify anyone of their own actions. The daily report lists open ones (D-076).
+- **A test that spawns a script inherits the runner's environment.** On a push
+  to `main` that means `GITHUB_EVENT_NAME=push` and a live `GITHUB_OUTPUT`, so a
+  test green on its pull request can be red on `main` — one was, from #17 until
+  the fix on this branch. Set the environment in the spawn; don't inherit it.
 - **Read the job log before theorising** (D-070) and **say what you checked, not
   what you assume** — both are non-negotiables in `CLAUDE.md` because three
   hypotheses about one failing gate were wrong in a single morning.
 
 ## In flight
 
+**`main` is red, and this branch fixes it.** Every push to `main` since #17
+failed `unit` and `traceability` on one test in `scripts/lib/affected.test.mjs`,
+which inherited the runner's `GITHUB_EVENT_NAME=push` and so tested the push
+shortcut instead of the unresolvable-base guard it names. A test bug from #17 —
+no gate was letting anything through. The daily report's first run found it.
+The owner approved the fix on 2026-09-24; it rides with INF-09's closing record.
+
 **INF-09 — the daily status report** (D-076) is merged
-([#18](https://github.com/bvst/TryggHverdag/pull/18)) and waiting for its first
-run. Three questions only that run can answer: does the action accept a
-read-only token, does `gh issue pin` work with `GITHUB_TOKEN`, and does the
-mention reach the phone.
+([#18](https://github.com/bvst/TryggHverdag/pull/18)) and ran for the first time
+at 05:21 UTC, by hand. Two of the three open questions are answered by its log:
+the action ran on the read-only token (`Using provided GITHUB_TOKEN for
+authentication`; the app-token revoke step `skipped`), and `gh issue pin` worked
+with `GITHUB_TOKEN`. The third — does the mention reach the phone — is A-17.
+Still open: whether a **`schedule`** run passes the action's human-actor check
+(the manual run's actor was `bvst`). Tomorrow's 05:00 run answers it, and if it
+fails, #19 gets a 🛑 and the run goes red.
 
 **Merged:** 2026-09-23 — #13 (progress-log restructure, D-075), #14 (the
 retraction that had only reached the archive), #15 (HK-09, the pre-commit hook),
