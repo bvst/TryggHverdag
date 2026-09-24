@@ -98,11 +98,17 @@ push credentials, which is the rule.
 GitHub traffic goes through its own proxy, which only serves repositories
 attached to the session. Release downloads from other repositories can
 therefore fail with a 403 even though `github.com` is on the default list.
-The Clever Cloud Terraform provider is published as GitHub release assets, so
-if `terraform init` fails that way, the fix is attaching
-`CleverCloud/terraform-provider-clevercloud` to the session read-only, not a
-domain here. **Not verified yet** — checked when INF-07 first runs `terraform
-init` in a session.
+The Clever Cloud Terraform provider is published as GitHub release assets, and
+this was the worry. **Checked 2026-09-24: it does not bite.** With the list
+above applied, `terraform init` in a session downloaded Terraform 1.16.4 from
+`releases.hashicorp.com` (checksum verified) and provider
+`CleverCloud/clevercloud` 2.2.1. If it ever does fail with a 403, the fix is
+attaching `CleverCloud/terraform-provider-clevercloud` to the session
+read-only, not a domain here.
+
+**The allowlist change reached the running session.** The owner applied it
+mid-session on 2026-09-24 and the next request to `www.clever.cloud` went
+through, with no new session needed.
 
 ## Still to add (D-055)
 

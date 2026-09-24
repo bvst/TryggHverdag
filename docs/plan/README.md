@@ -59,6 +59,11 @@ session.
 | A-15 | Switch on the merge rules and add the two secrets — every step is written out in [merge-rules.md](merge-rules.md), about 10 minutes | Without them no gate can stop a merge, and `gate-integrity` stays red (D-029, D-042) | ✅ Done (2026-09-23) — `gate:integrity` reports 5 of 5 against the live rules, including that nobody can bypass them |
 | A-16 | In Healthchecks.io, add a check named `daily-status` with **Period 1 day** and **Grace 3 hours**, copy its ping URL, and save it as the repository secret `HEALTHCHECKS_DAILY_STATUS_URL` (Settings → Secrets and variables → Actions). About 3 minutes | Pages you when a morning passes with no daily report at all — the one failure the report cannot tell you about itself (D-076). Until then every report says it is missing and the run is red | ⬜ Open (INF-09) |
 | A-17 | After the INF-09 pull request is merged: Actions → **daily-status** → **Run workflow**, then check that the report reaches your phone. If it does not, turn on push notifications for mentions in GitHub Mobile | INF-09 is done when the first report arrives on your phone, and only you can see that (D-050) | ⬜ Open (INF-09) |
+| A-18 | Create the Clever Cloud organisation `TryggHverdag Staging` and send Claude its ID — steps in [staging-setup.md](staging-setup.md) | Staging lives in its own organisation (D-046, D-077) | ⬜ Open (INF-07) |
+| A-19 | Create a Clever Cloud CI user that is a Manager of the staging organisation only, and get its key | CI's key must reach staging and nothing else (D-077) | ⬜ Open (INF-07) |
+| A-20 | Create the Cellar add-on and bucket for Terraform's state, and send Claude its host | Terraform cannot create the place it keeps its own state | ⬜ Open (INF-07) |
+| A-21 | Create the GitHub environment `staging`, limited to `main`, with the four secrets | No pull request branch can reach the keys | ⬜ Open (INF-07) |
+| A-22 | After INF-07 merges: run `infra-staging` with `plan`, read it, then run it with `apply` | Creates staging; the two runs are the approval (D-077) | ⬜ After INF-07 merges |
 
 ## Why this order
 The specialised agents and skills (Section 7) are where your quality bar gets
