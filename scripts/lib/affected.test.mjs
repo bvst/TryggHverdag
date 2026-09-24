@@ -67,6 +67,15 @@ describe('onlyInert', () => {
     expect(onlyInert(['README.md'])).toBe(true);
   });
 
+  test('an issue template is configuration, not prose', () => {
+    // scripts/daily-status.test.mjs holds the owner-question template's label
+    // to the ones the daily report creates, so changing the template alone
+    // really can fail `unit`. Before INF-09 this read as markdown and was
+    // inert — the .claude/agents/*.md mistake again, one directory over.
+    expect(onlyInert(['.github/ISSUE_TEMPLATE/owner-question.md'])).toBe(false);
+    expect(onlyInert(['.github/pull_request_template.md'])).toBe(false);
+  });
+
   test('a lockfile change is never inert', () => {
     // security runs pnpm audit and licenses:check against exactly this.
     expect(onlyInert(['pnpm-lock.yaml'])).toBe(false);

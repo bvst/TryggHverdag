@@ -32,7 +32,9 @@
  * Notably absent, and none of them by accident:
  *   .claude/hooks/    tested by test:hooks and linted by gate:static
  *   scripts/          the gates themselves
- *   .github/          the workflows, which scripts/gate.test.mjs asserts on
+ *   .github/          the workflows, which scripts/gate.test.mjs asserts on,
+ *                     and the issue templates, which scripts/daily-status.test.mjs
+ *                     does — markdown there is configuration, not prose
  *
  * Markdown and `docs/` are also exactly what `.prettierignore` excludes, for
  * the same underlying reason: prose here is wrapped by hand and no tool reads
@@ -51,7 +53,16 @@ export const INERT = [
   // No test reads it today, so it would pass as prose on the letter of the
   // rule — which is an argument for excluding it, not for including it. The
   // cost of being wrong is one avoidable CI run on a file that changes rarely.
-  (file) => file.endsWith('.md') && !file.startsWith('.claude/') && file !== 'CLAUDE.md',
+  //
+  // .github/ is excluded for the same reason as .claude/: its markdown is
+  // configuration. scripts/daily-status.test.mjs holds the owner-question
+  // issue template's label to the ones the daily report creates, so a change
+  // to that template alone can fail `unit` — and would not have been checked.
+  (file) =>
+    file.endsWith('.md') &&
+    !file.startsWith('.claude/') &&
+    !file.startsWith('.github/') &&
+    file !== 'CLAUDE.md',
   // Written by reviewers between runs, read by nobody else. CODEOWNERS exempts
   // it for the same reason.
   (file) => file.startsWith('.claude/agent-memory/'),

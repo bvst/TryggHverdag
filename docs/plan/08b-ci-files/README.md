@@ -10,18 +10,19 @@ Copied into the repository at setup, together with `07b-claude-code-files/`.
 | `.github/workflows/deploy-staging.yml` | Merge to `main` → staging (D-046) |
 | `.github/workflows/release.yml` | Owner-approved release PR → gates → production (from go-live) + app builds and store submission (D-047) |
 | `.github/workflows/nightly.yml` | Full mutation run, canary report, weekly iOS simulator tests on EAS |
-| `.github/workflows/daily-status.yml` | Daily status report as a comment on the pinned issue (D-050) |
-| `.github/ISSUE_TEMPLATE/owner-question.md` | One question per issue, with a recommendation (D-051) |
 
 **`ci.yml`, `ai-review.yml` and `dependabot.yml` are no longer here.** INF-04
 installed them, with the changes recorded in D-060, and a draft sitting beside
 the installed file is a second version for someone to read by mistake. The
-remaining files are still drafts, waiting for the task that installs them.
+same went for `daily-status.yml` and the owner-question issue template when
+INF-09 installed them (D-076). The remaining files are still drafts, waiting
+for the task that installs them.
 
 ## To verify at setup (automated where possible, D-035)
 - The input names of the Claude Code GitHub Action (`claude_code_oauth_token`,
   `prompt`), and that the OAuth token works with the Max plan; if not, use an
-  API key (D-045).
+  API key (D-045). **Done**: `ai-review.yml` has run on them since #8, and
+  `daily-status.yml` uses the same inputs plus `github_token` (D-076).
 - The `clever-tools` deploy syntax and aliases; that a free DEV PostgreSQL
   works with the connection pool settings (maximum 5 connections).
 - The repository scripts named in the workflows: `gate:*`, `test:*`,

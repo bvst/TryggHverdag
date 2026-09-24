@@ -27,7 +27,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
 | INF-07 | Staging on Clever Cloud | ⬜ Blocked: Clever Cloud API token |
 | INF-08 | Monitoring | ⬜ Blocked: UptimeRobot needs a URL to watch (comes with INF-07) |
-| INF-09 | Daily status workflow | ⬜ Not started, and **no longer blocked**: A-09 is done |
+| INF-09 | Daily status workflow | 🟡 Built and tested; pull request open from `claude/m0-roadmap-task-0qgkmf`. Done when the first report reaches the owner's phone (A-16, A-17) |
 | INF-10 | Gate drills | ⬜ Not started. The first real test of the merge rules under load |
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
@@ -37,10 +37,17 @@ could not record a verdict at all (D-069, D-070, D-073).
 
 ## What the owner still needs to do
 
-**A-09 is done** (2026-09-23, confirmed by the owner). `CLAUDE_CODE_OAUTH_TOKEN`
-is set; `ANTHROPIC_API_KEY` is not. The guard accepts either, which is why this
-could not be told from inside a session and had to be asked. **INF-09 was waiting
-on this and nothing else, so it is now startable.**
+**A-16 — the Healthchecks.io check for the daily report** (about 3 minutes). A
+check named `daily-status`, Period 1 day, Grace 3 hours, with its ping URL saved
+as the repository secret `HEALTHCHECKS_DAILY_STATUS_URL`. Until then every daily
+report says the ping is missing, and the run is red — on purpose (D-076).
+
+**A-17 — the first daily report.** After the INF-09 pull request merges, run
+Actions → daily-status → Run workflow once and check that it reaches the phone.
+That is INF-09's done-criterion, and only the owner can see it.
+
+**A-09 is done** (2026-09-23). `CLAUDE_CODE_OAUTH_TOKEN` is set;
+`ANTHROPIC_API_KEY` is not.
 
 **A-10 — the Mac.** Blocks INF-00 and INF-06, which is the app skeleton.
 
@@ -103,19 +110,29 @@ The things that still bite, and cost a session hours the first time.
   it for you.
 - **Pushing while a reviewer run is in flight** cancels it and manufactures the
   false reds above. Wait for the run, then push.
+- **`daily-status.yml` cannot run from a pull request.** GitHub runs scheduled
+  and manual workflows only from the default branch, so its first real run is
+  after merge. Its tests hold its shape and run its scripts; they cannot run it.
+- **Owner questions filed from a session do not notify the owner.** The GitHub
+  tools here act as `@bvst`, so the issue is the owner's own, and GitHub does not
+  notify anyone of their own actions. The daily report lists open ones (D-076).
 - **Read the job log before theorising** (D-070) and **say what you checked, not
   what you assume** — both are non-negotiables in `CLAUDE.md` because three
   hypotheses about one failing gate were wrong in a single morning.
 
 ## In flight
 
-**[#17](https://github.com/bvst/TryggHverdag/pull/17)** — CI-12: a gate with
-nothing to check runs, says so, and passes, instead of being skipped. The only
-open pull request.
+**INF-09 — the daily status report** (D-076), pull request open from
+`claude/m0-roadmap-task-0qgkmf`. Claude writes the report with a read-only token;
+a script posts it, or posts a 🛑 when there is none; Healthchecks.io pages the
+owner when a morning passes with no run at all. It touches `.github/`,
+`.claude/skills/` and `scripts/`, so it needs a code owner's approval. It does
+**not** touch `ai-review.yml`, so the reviewers can review it.
 
 **Merged today:** #13 (progress-log restructure, D-075), #14 (the retraction
 that had only reached the archive), #15 (HK-09, the pre-commit hook), #16 (the
-reviewer verdict must now be corroborated; `/.githooks/` owned; `pnpm exec`).
+reviewer verdict must now be corroborated; `/.githooks/` owned; `pnpm exec`),
+#17 (CI-12: a gate with nothing to check says so instead of being skipped).
 
 **An unmerged branch exists: `claude/inf-04-follow-through`.** It closes INF-04's
 record and widens `engines.node` so Dependabot can run. It holds **D-063 and
