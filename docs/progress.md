@@ -25,7 +25,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-04 | CI workflows, merge rules, CODEOWNERS | ✅ Done — 2026-09-23 ([#3](https://github.com/bvst/TryggHverdag/pull/3)) |
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
-| INF-07 | Staging on Clever Cloud | 🟡 Built, tested and reviewed 2026-09-24 on `claude/busy-faraday-40n2zl` (D-077); all four reviewers PASS. Done when a merge to `main` deploys and the smoke test passes — which needs the owner's A-18 to A-22 |
+| INF-07 | Staging on Clever Cloud | 🟡 Merged 2026-09-24 ([#22](https://github.com/bvst/TryggHverdag/pull/22)). The first plan run planned staging (2 to add) and then failed on BUG-1, fixed on `fix/BUG-1-plan-stdin`. Done when staging is applied, a deploy runs and the smoke test passes (A-22) |
 | INF-08 | Monitoring | ⬜ Next after INF-07: UptimeRobot will watch `https://trygghverdag-staging.cleverapps.io/v1/health` |
 | INF-09 | Daily status workflow | 🟡 Merged 2026-09-24 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). First report posted to [#19](https://github.com/bvst/TryggHverdag/issues/19) at 05:23 UTC, every step verified in the log. Done when the owner confirms it reached the phone (A-17) |
 | INF-10 | Gate drills | ⬜ Not started. Parked 2026-09-24 for INF-07. Open question to the owner: split into offline drills now and live GitHub drills later? |
@@ -167,20 +167,35 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**INF-07 — staging on Clever Cloud** (D-077), built, tested and reviewed on
-`claude/busy-faraday-40n2zl`. Three runnable server processes (migrate as the
-pre-run hook, API, worker beside it), Terraform for one nano instance and the
-DEV PostgreSQL, a deploy on every merge to `main` with a smoke test that waits
-for a heartbeat well *after* the deploy, and a Terraform apply that takes two
-runs the owner starts and applies only the plan the owner read. All four
-reviewers passed it; their findings were fixed in the same branch (the worker's
-shutdown race with Graphile's own signal handler among them). Open as
-[#22](https://github.com/bvst/TryggHverdag/pull/22). The `ai-review.yml` change
-it needed shipped first, as the owner chose, in
-[#21](https://github.com/bvst/TryggHverdag/pull/21) (merged by hand, D-075),
-and `main` is merged in, so the AI reviewers can run on it. Waiting on the
-owner's A-22 after merge (A-18 to A-21 are done). **What only the
-first real run can verify** is listed at the end of D-077, with the follow-ups.
+**INF-07 — staging on Clever Cloud** (D-077), merged as
+[#22](https://github.com/bvst/TryggHverdag/pull/22) on 2026-09-24.
+
+**Its first runs on `main`, read from their logs:**
+- `deploy-staging` failed as designed: `[ERROR] Application not found`, because
+  nothing had created staging yet. Clever Cloud answered the CI user's key,
+  which suggests A-19 and A-21 work.
+- The owner then started `infra-staging` with `plan`
+  ([run 36024686949](https://github.com/bvst/TryggHverdag/actions/runs/36024686949)).
+  Terraform read its state from Cellar and planned `2 to add, 0 to change, 0 to
+  destroy`, with the database password and URI shown as `(sensitive value)`. So
+  the CI user's key, the Cellar keys, the bucket and the organisation all work,
+  and the plan summary hides what it should.
+- The step after it failed: `plan-approval: EAGAIN: resource temporarily
+  unavailable, read`. **BUG-1**: the script read stdin with one synchronous
+  read, which a pipe answers with EAGAIN while `terraform show` is still
+  writing. `apply` would have failed the same way. Reproduced locally, then
+  fixed test-first by reading stdin as a stream.
+- **Next, after the BUG-1 fix merges:** `plan` again, then `apply` with that
+  run's ID, then re-run `deploy-staging`.
+
+**What it built:** three runnable server processes (migrate as the pre-run
+hook, the API, and the worker beside it); Terraform for one nano instance and
+the DEV PostgreSQL; a deploy on every merge to `main`, with a smoke test that
+waits for a heartbeat well *after* the deploy; and a Terraform apply that takes
+two runs the owner starts and applies only the plan the owner read. The
+`ai-review.yml` change it needed shipped first, in
+[#21](https://github.com/bvst/TryggHverdag/pull/21). **What only the first real
+runs can verify** is listed at the end of D-077, with the follow-ups.
 
 **INF-10 was parked for it.** Before switching, Claude found that
 `req:coverage` counts requirement IDs, not acceptance criteria. RG-01 says the
