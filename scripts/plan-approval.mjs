@@ -1,13 +1,22 @@
 #!/usr/bin/env node
 /**
  * The two halves of applying staging (D-077); the reasoning is in
- * scripts/lib/plan-approval.mjs.
+ * scripts/lib/plan-approval.mjs. Both read `terraform show -json <plan>` on
+ * stdin — which holds secrets in plain text, so it is hashed here and nothing
+ * of it is printed.
  *
- *   node scripts/plan-approval.mjs fingerprint < plan.json
- *       reads `terraform show -json` on stdin and prints the fingerprint line
- *   node scripts/plan-approval.mjs approved <run ID or address>
- *       prints the fingerprint that plan run published, after checking the run
- *       (needs GH_TOKEN with actions: read)
+ *   node scripts/plan-approval.mjs fingerprint
+ *       prints the plan's fingerprint line, for the plan run's log
+ *   node scripts/plan-approval.mjs matches <run ID or address>
+ *       exits 0 only if the plan is the one that run published, after
+ *       checking the run; otherwise exits 1 and says why (needs GH_TOKEN with
+ *       actions: read)
+ *
+ * One command does the whole check so that a failure anywhere in it fails its
+ * step with its own reason. An earlier version read the approved fingerprint
+ * into a step output, where a failure to read it passed silently and surfaced
+ * later as the wrong reason (code-reviewer, test-auditor and
+ * privacy-security-reviewer on INF-07).
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -17,6 +26,7 @@ import {
   approvedFingerprint,
   parseRunId,
   planFingerprint,
+  samePlan,
 } from './lib/plan-approval.mjs';
 
 const gh = (...args) => execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
@@ -24,22 +34,22 @@ const gh = (...args) => execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 
 const [command, argument] = process.argv.slice(2);
 try {
   if (command === 'fingerprint') {
-    // The plan JSON holds secrets in plain text. It is read here and hashed;
-    // nothing of it is printed.
     const plan = JSON.parse(readFileSync(0, 'utf8'));
     process.stdout.write(`${FINGERPRINT_MARKER}${planFingerprint(plan)}\n`);
-  } else if (command === 'approved') {
+  } else if (command === 'matches') {
     const id = parseRunId(argument ?? '');
+    const current = planFingerprint(JSON.parse(readFileSync(0, 'utf8')));
     const run = JSON.parse(
-      gh('run', 'view', id, '--json', 'workflowName,headBranch,conclusion,jobs'),
+      gh('run', 'view', id, '--json', 'workflowName,event,headBranch,conclusion,jobs'),
     );
-    process.stdout.write(`${approvedFingerprint(run, gh('run', 'view', id, '--log'))}\n`);
+    const approved = approvedFingerprint(run, gh('run', 'view', id, '--log'));
+    process.stdout.write(`${samePlan(current, approved, id)}\n`);
   } else {
-    throw new Error('Usage: plan-approval.mjs fingerprint < plan.json | approved <run>');
+    throw new Error('Usage: plan-approval.mjs fingerprint | matches <run>, with the plan on stdin');
   }
 } catch (error) {
-  process.stderr.write(
-    `plan-approval: ${error instanceof Error ? error.message : String(error)}\n`,
+  process.stdout.write(
+    `::error::plan-approval: ${error instanceof Error ? error.message : String(error)}\n`,
   );
   process.exitCode = 1;
 }

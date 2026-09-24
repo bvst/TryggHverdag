@@ -9,9 +9,12 @@
 import { describe, expect, test } from 'vitest';
 import {
   FINGERPRINT_MARKER,
+  PLAN_JOB,
+  WORKFLOW,
   approvedFingerprint,
   parseRunId,
   planFingerprint,
+  samePlan,
 } from './plan-approval.mjs';
 
 /** The parts of `terraform show -json` that matter, plus the ones that must not. */
@@ -83,10 +86,11 @@ describe('parseRunId', () => {
 describe('approvedFingerprint', () => {
   const FINGERPRINT = 'a'.repeat(64);
   const run = {
-    workflowName: 'infra-staging',
+    workflowName: WORKFLOW,
+    event: 'workflow_dispatch',
     headBranch: 'main',
     conclusion: 'success',
-    jobs: [{ name: 'plan', conclusion: 'success' }],
+    jobs: [{ name: PLAN_JOB, conclusion: 'success' }],
   };
   const log = `plan\tFingerprint\t2026-09-24T21:00:00Z ${FINGERPRINT_MARKER}${FINGERPRINT}\n`;
 
@@ -99,6 +103,7 @@ describe('approvedFingerprint', () => {
     ['a run on another branch', { headBranch: 'feat/x' }, /main/],
     ['a run that failed', { conclusion: 'failure' }, /succeed/],
     ['a run that did not plan', { jobs: [{ name: 'apply', conclusion: 'success' }] }, /plan/],
+    ['a run nobody started by hand', { event: 'push' }, /started by hand/],
   ])('refuses %s', (_what, change, message) => {
     expect(() => approvedFingerprint({ ...run, ...change }, log)).toThrow(message);
   });
@@ -111,5 +116,21 @@ describe('approvedFingerprint', () => {
     const two = `${log}${FINGERPRINT_MARKER}${'b'.repeat(64)}\n`;
 
     expect(() => approvedFingerprint(run, two)).toThrow(/more than one/);
+  });
+});
+
+describe('samePlan', () => {
+  const approved = 'a'.repeat(64);
+
+  test('says so when the new plan is the one that was read', () => {
+    expect(samePlan(approved, approved, '123')).toContain(approved);
+  });
+
+  test('refuses a different plan, and says what to do about it', () => {
+    // The only red step when this happens, so its message is the one the owner
+    // reads: it must say what moved and what to do, not just "mismatch".
+    expect(() => samePlan('b'.repeat(64), approved, '123')).toThrow(
+      /changed since run 123 was planned.*plan.*again/s,
+    );
   });
 });

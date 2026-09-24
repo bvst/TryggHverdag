@@ -58,6 +58,9 @@ describe('decideMutation', () => {
     ['apps/server/src/domain/journey.ts'],
     ['apps/server/src/modules/alerts/escalate.ts'],
     ['apps/server/src/worker.ts'],
+    // Where a worker that stopped is made to exit with 1, so it is restarted.
+    ['apps/server/src/bin/worker.ts'],
+    ['apps/server/src/process.ts'],
     ['apps/mobile/src/safety-core/heartbeat.ts'],
   ])('%s counts as safety code', (file) => {
     const decision = decideMutation({

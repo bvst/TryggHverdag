@@ -12,6 +12,11 @@ export const SAFETY_PATHS = [
   'apps/server/src/domain/',
   'apps/server/src/modules/alerts/',
   'apps/server/src/worker.ts',
+  // Whether a worker that stopped is restarted: bin/worker.ts starts it, and
+  // process.ts chooses its exit code (D-077). Both reviewers of INF-07 found
+  // this contract had moved out of worker.ts and out of every safety check.
+  'apps/server/src/bin/worker.ts',
+  'apps/server/src/process.ts',
   'apps/mobile/src/safety-core/',
 ];
 

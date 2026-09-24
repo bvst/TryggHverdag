@@ -1,54 +1,14 @@
 /**
- * How a server process ends.
+ * How a server process ends — a safety path (D-077): whether a worker that
+ * stopped is restarted depends on the exit code this chooses.
  *
  * Two rules. On the platform's signal it stops what it started and exits with
  * 0, so a deploy or a restart never cuts a query in half. On any failure it
- * exits with 1 and says what failed, so the platform restarts it and whoever
- * reads the log knows why.
- *
- * What it says is chosen, never the raw error object. `pg` and
- * `graphile-worker` errors can carry the connection string, and the connection
- * string carries the database password (D-068). Every message leaving a
- * process goes through `redactCredentials` first.
+ * exits with 1 and says what failed, in one line with any password removed
+ * (redact.ts), so the platform restarts it and whoever reads the log knows why.
  */
 import process from 'node:process';
-import { inspect } from 'node:util';
-
-/** `scheme://user:password@` — the password is whatever sits between the colon and the @. */
-const URL_PASSWORD = /(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:)[^\s@/]*@/gi;
-
-/** libpq's other form: `password=secret` among `host=… dbname=…`. */
-const KEYWORD_PASSWORD = /\b(password\s*=\s*)('[^']*'|\S+)/gi;
-
-export function redactCredentials(text: string): string {
-  return text.replace(URL_PASSWORD, '$1***@').replace(KEYWORD_PASSWORD, '$1***');
-}
-
-/**
- * One line: what kind of failure, what it said, and what caused it — with any
- * password removed. The cause matters: Drizzle reports a refused connection as
- * "Failed query: …" and keeps the refusal in `cause`, so leaving the chain out
- * would report that something failed and hide why.
- */
-export function describeFailure(error: unknown): string {
-  const parts: string[] = [];
-  const seen = new Set<unknown>();
-  let current: unknown = error;
-  while (current !== undefined && !seen.has(current)) {
-    seen.add(current);
-    parts.push(describeOne(current));
-    current = current instanceof Error ? current.cause : undefined;
-  }
-  return redactCredentials(parts.join(' ← '));
-}
-
-/** An Error by its name and message; anything else thrown as itself, never "[object Object]". */
-function describeOne(value: unknown): string {
-  if (value instanceof Error) {
-    return `${value.name}: ${value.message}`;
-  }
-  return typeof value === 'string' ? value : inspect(value, { depth: 2, breakLength: Infinity });
-}
+import { describeFailure } from './redact.ts';
 
 export interface Reporting {
   write?: (text: string) => void;

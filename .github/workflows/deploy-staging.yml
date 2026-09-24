@@ -24,7 +24,8 @@ on:
   # GitHub tools see it as the owner, so it is denied them instead (D-077).
   workflow_dispatch:
 concurrency:
-  # One deploy at a time, and never cancel one halfway: queued, not replaced.
+  # One deploy at a time, and never cancel one halfway. GitHub keeps one run
+  # waiting behind it and replaces an older waiting one, so the newest main wins.
   group: deploy-staging
   cancel-in-progress: false
 permissions:
@@ -40,8 +41,9 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         # All of it: Clever Cloud deploys by git push, and a shallow clone
-        # cannot be pushed to a new remote.
-        with: { fetch-depth: 0 }
+        # cannot be pushed to a new remote. The push goes to Clever Cloud, not
+        # GitHub, so checkout's GitHub token is not left in .git/config.
+        with: { fetch-depth: 0, persist-credentials: false }
       # Node 24, not the repository's 22: Clever Cloud's command-line tool
       # needs it. Nothing here installs the repository's dependencies — the
       # deploy and the smoke test use only Node's own modules.

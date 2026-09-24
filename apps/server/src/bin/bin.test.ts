@@ -25,8 +25,16 @@ const NODE_ARGS = ['--experimental-strip-types'];
 
 function start(file: string, env: Record<string, string>) {
   // Only what is given: the test must not inherit a DATABASE_URL from the machine.
+  // The one exception is Stryker's: it chooses which planted bug is live through
+  // this variable, and a child that never saw it would run the unmutated code —
+  // so every mutant these tests exist to catch would survive unexamined.
+  const mutant = process.env['__STRYKER_ACTIVE_MUTANT__'];
   const child = spawn(process.execPath, [...NODE_ARGS, path.join(import.meta.dirname, file)], {
-    env: { PATH: process.env['PATH'] ?? '', ...env },
+    env: {
+      PATH: process.env['PATH'] ?? '',
+      ...(mutant === undefined ? {} : { __STRYKER_ACTIVE_MUTANT__: mutant }),
+      ...env,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
@@ -97,7 +105,10 @@ describe('bin/api.ts', () => {
 });
 
 describe('bin/worker.ts', () => {
-  test('SEC-03: a worker that cannot reach its database exits with 1 and does not print the password', async () => {
+  test('a worker that cannot reach its database exits with 1 and says why', async () => {
+    // That the password stays out of what it says is proven in redact.test.ts:
+    // the errors this produces never contain the connection string, so a
+    // redaction check here could not fail. test-auditor pointed that out.
     const worker = start('worker.ts', { DATABASE_URL: UNREACHABLE });
 
     const [code] = await worker.exited;
@@ -107,12 +118,15 @@ describe('bin/worker.ts', () => {
     // …/worker.ts" contains that word too, and passed this test before the file
     // existed.
     expect(worker.output()).toContain('worker failed:');
+    // And the reason, which proves it got as far as the database: without it,
+    // a worker started with no DATABASE_URL at all passed this test too.
+    expect(worker.output()).toContain('ECONNREFUSED');
     expect(worker.output()).not.toContain(SENTINEL);
   });
 });
 
 describe('bin/migrate.ts', () => {
-  test('SEC-03: a migration that cannot reach the database fails the deploy, without the password', async () => {
+  test('a migration that cannot reach the database fails the deploy, and says why', async () => {
     // It runs as Clever Cloud's pre-run hook, and a non-zero exit there stops
     // the deploy — which is the point: new code must not start against an old
     // schema.
@@ -122,6 +136,10 @@ describe('bin/migrate.ts', () => {
 
     expect(code).toBe(1);
     expect(migration.output()).toContain('migration failed:');
+    // Drizzle reads the migration files before it connects, so reaching the
+    // database also proves the files were found under plain node — the kind
+    // of path that resolves inside Vitest and nowhere else.
+    expect(migration.output()).toContain('ECONNREFUSED');
     expect(migration.output()).not.toContain(SENTINEL);
   });
 });

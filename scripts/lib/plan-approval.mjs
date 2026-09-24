@@ -18,6 +18,13 @@ import { createHash } from 'node:crypto';
 /** The line the plan job writes and the apply job looks for. */
 export const FINGERPRINT_MARKER = 'TRYGGHVERDAG_PLAN_FINGERPRINT=';
 
+/**
+ * The workflow and the job whose runs can be approved. infra-staging.yml must
+ * use these names; scripts/staging-workflows.test.mjs holds it to them.
+ */
+export const WORKFLOW = 'infra-staging';
+export const PLAN_JOB = 'plan';
+
 /** JSON with its keys sorted, so the same data always hashes the same. */
 function canonical(value) {
   if (Array.isArray(value)) {
@@ -68,12 +75,15 @@ export function parseRunId(given) {
  * The fingerprint the owner approved, from the plan run they named — after
  * checking that it is a plan run of this workflow, on main, that succeeded.
  *
- * @param {{ workflowName: string, headBranch: string, conclusion: string, jobs: { name: string, conclusion: string }[] }} run
+ * @param {{ workflowName: string, event: string, headBranch: string, conclusion: string, jobs: { name: string, conclusion: string }[] }} run
  * @param {string} log the run's log, as `gh run view --log` prints it
  */
 export function approvedFingerprint(run, log) {
-  if (run.workflowName !== 'infra-staging') {
-    throw new Error(`That run is from "${run.workflowName}", not infra-staging.`);
+  if (run.workflowName !== WORKFLOW) {
+    throw new Error(`That run is from "${run.workflowName}", not ${WORKFLOW}.`);
+  }
+  if (run.event !== 'workflow_dispatch') {
+    throw new Error(`That run was not started by hand (it came from "${run.event}").`);
   }
   if (run.headBranch !== 'main') {
     throw new Error(`That run planned "${run.headBranch}", not main.`);
@@ -81,7 +91,7 @@ export function approvedFingerprint(run, log) {
   if (run.conclusion !== 'success') {
     throw new Error(`That run did not succeed (${run.conclusion}), so there is no plan to apply.`);
   }
-  if (!run.jobs.some((job) => job.name === 'plan' && job.conclusion === 'success')) {
+  if (!run.jobs.some((job) => job.name === PLAN_JOB && job.conclusion === 'success')) {
     throw new Error('That run did not plan anything: start one with action "plan" first.');
   }
 
@@ -95,4 +105,18 @@ export function approvedFingerprint(run, log) {
     throw new Error('That plan run published more than one fingerprint; refusing to pick one.');
   }
   return [...found][0];
+}
+
+/**
+ * The apply run's last check: is the plan it just made the one the owner read?
+ * Returns what to print when it is; throws, with what to do, when it is not.
+ */
+export function samePlan(current, approved, runId) {
+  if (current !== approved) {
+    throw new Error(
+      `Staging or its configuration changed since run ${runId} was planned, so this is not the ` +
+        'plan that was read. Nothing was applied. Start infra-staging with "plan" again and read the new one.',
+    );
+  }
+  return `Same plan as the one read in run ${runId}: ${approved}`;
 }

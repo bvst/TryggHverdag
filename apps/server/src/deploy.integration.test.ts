@@ -14,6 +14,11 @@
 // cannot.
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { addJobAdhoc } from 'graphile-worker';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import path from 'node:path';
+import process from 'node:process';
+import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { startApiProcess } from './api-process.ts';
 import { migrateDatabase } from './adapters/migrations.ts';
@@ -87,4 +92,65 @@ describe('a staging deploy, in order', () => {
       await api.stop();
     }
   }, 60_000);
+});
+
+/** Waits, in attempts rather than by a clock, until `check` holds or the attempts run out. */
+async function eventually(check: () => Promise<boolean>, attempts = 120): Promise<boolean> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await check()) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return check();
+}
+
+describe('stopping the worker process', () => {
+  test('D-068: on SIGTERM the real worker exits with 0 and leaves no connection behind', async () => {
+    // The unit tests prove this against a fake runner. safety-reviewer ran the
+    // real one and found Graphile Worker's own signal handler killing the
+    // process first — so this runs bin/worker.ts itself, as the platform does.
+    // Its connections are tagged so they can be counted apart from this test's.
+    const tag = 'deploy-test-worker';
+    const workerUrl = `${databaseUrl()}?application_name=${tag}`;
+    const probe = new pg.Client({ connectionString: databaseUrl() });
+    await probe.connect();
+    const connections = async () =>
+      Number(
+        (
+          await probe.query<{ n: string }>(
+            'select count(*) as n from pg_stat_activity where application_name = $1',
+            [tag],
+          )
+        ).rows[0]?.n,
+      );
+
+    const worker = spawn(
+      process.execPath,
+      ['--experimental-strip-types', path.join(import.meta.dirname, 'bin', 'worker.ts')],
+      {
+        // Only what is given: the child must not inherit the runner's environment.
+        env: { PATH: process.env['PATH'] ?? '', DATABASE_URL: workerUrl },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    let output = '';
+    worker.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()));
+    worker.stderr.on('data', (chunk: Buffer) => (output += chunk.toString()));
+    const exited = once(worker, 'exit') as Promise<[number | null, NodeJS.Signals | null]>;
+
+    try {
+      expect(await eventually(async () => (await connections()) > 0)).toBe(true);
+
+      worker.kill('SIGTERM');
+      const [code, signal] = await exited;
+
+      expect({ code, signal }).toEqual({ code: 0, signal: null });
+      expect(output).not.toContain('worker failed');
+      expect(await eventually(async () => (await connections()) === 0)).toBe(true);
+    } finally {
+      worker.kill('SIGKILL');
+      await probe.end();
+    }
+  }, 90_000);
 });

@@ -55,6 +55,9 @@ jobs:
       AWS_REQUEST_CHECKSUM_CALCULATION: when_required
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        # Nothing here pushes to GitHub, so the token checkout would leave in
+        # .git/config is not left there for the steps that hold the keys.
+        with: { persist-credentials: false }
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with: { node-version-file: .nvmrc }
       - name: Initialise
@@ -102,31 +105,25 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        # Nothing here pushes to GitHub, so the token checkout would leave in
+        # .git/config is not left there for the steps that hold the keys.
+        with: { persist-credentials: false }
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with: { node-version-file: .nvmrc }
-      - name: The plan the owner read
-        id: approved
+      - name: Initialise
+        run: node scripts/terraform.mjs -chdir=infra/staging init -input=false -lockfile=readonly
+      - name: Plan again
+        run: node scripts/terraform.mjs -chdir=infra/staging plan -input=false -out=staging.tfplan
+      - name: The plan the owner read, or nothing
+        # One command checks the run the owner named and compares its
+        # fingerprint with this plan's, so a failure anywhere in it fails this
+        # step with its own reason. The plan's JSON goes only into the hash.
         env:
           GH_TOKEN: ${{ github.token }}
           PLAN_RUN: ${{ inputs.plan_run }}
         run: |
           set -o pipefail
-          echo "fingerprint=$(node scripts/plan-approval.mjs approved "$PLAN_RUN")" >> "$GITHUB_OUTPUT"
-      - name: Initialise
-        run: node scripts/terraform.mjs -chdir=infra/staging init -input=false -lockfile=readonly
-      - name: Plan again
-        run: node scripts/terraform.mjs -chdir=infra/staging plan -input=false -out=staging.tfplan
-      - name: The same plan, or nothing
-        env:
-          APPROVED: ${{ steps.approved.outputs.fingerprint }}
-        run: |
-          set -o pipefail
-          now=$(node scripts/terraform.mjs -chdir=infra/staging show -json staging.tfplan \
-            | node scripts/plan-approval.mjs fingerprint)
-          if [ "$now" != "TRYGGHVERDAG_PLAN_FINGERPRINT=$APPROVED" ]; then
-            echo "::error::Staging or its configuration changed since that plan was made, so it is not the plan that was read. Run \"plan\" again and read the new one."
-            exit 1
-          fi
-          echo "Same plan as the one approved: $APPROVED"
+          node scripts/terraform.mjs -chdir=infra/staging show -json staging.tfplan \
+            | node scripts/plan-approval.mjs matches "$PLAN_RUN"
       - name: Apply
         run: node scripts/terraform.mjs -chdir=infra/staging apply -input=false staging.tfplan
