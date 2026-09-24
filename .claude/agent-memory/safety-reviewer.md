@@ -53,6 +53,17 @@ Since INF-07 the worker's liveness contract spans `apps/server/src/worker.ts`,
 `apps/server/src/bin/worker.ts` and `apps/server/src/process.ts`; only the first
 is in SAFETY_PATHS / CODEOWNERS / the ai-review `safety` filter. Check each
 review whether the lists have caught up (D-042 names "worker" as a safety path).
+**Caught up in INF-07** (#21 for the filter, #22 for the other three).
+
+### Your working tree's `.claude/**` is main's, not the pull request's
+The environment you run in puts back `main`'s `.claude/**` and `CLAUDE.md`
+before you read them. So a plain `git diff` (working tree against `HEAD`) shows
+every `.claude/` change the pull request makes as *uncommitted and reverted*.
+They are not. On #22 this was read as "uncommitted changes strip the D-077
+guardrails" and became a BLOCK, while the committed head had every guardrail.
+Read the pull request's version with `git show HEAD:<path>`, and its change
+with `git diff origin/main...HEAD -- <path>`. Only a difference *there* is a
+finding.
 
 ## How to verify here
 A PostgreSQL 16 binary is installed (`/usr/lib/postgresql/16/bin`) even though

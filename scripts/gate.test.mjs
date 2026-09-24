@@ -6,6 +6,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { FULL_STEPS, QUICK_STEPS, availableTools } from './gate.mjs';
+import { MUTATION_TIMEOUT_MS } from './lib/gate-decisions.mjs';
 import { packageScripts } from './lib/proc.mjs';
 import {
   findActionUses,
@@ -261,6 +262,21 @@ describe("this repository's own workflows", () => {
       );
 
     expect(unbounded).toEqual([]);
+  });
+
+  test('the mutation run is given time to finish, inside the job that runs it', () => {
+    // proc.mjs gives every command 590 s unless told otherwise. On INF-07's
+    // first CI run Stryker needed longer, was killed, and the job failed on a
+    // score nobody measured. The limit must also stay inside the job's own
+    // timeout, with room for checkout and install, or GitHub kills the job
+    // first and nothing explains why.
+    const ci = readFileSync(`${WORKFLOWS}/ci.yml`, 'utf8');
+    const job = /^ {2}mutation:.*\n(?:(?! {2}\S).*\n)*? {4}timeout-minutes: (\d+)/m.exec(ci);
+
+    expect(job).not.toBeNull();
+    const jobMinutes = Number(job?.[1]);
+    expect(MUTATION_TIMEOUT_MS).toBeGreaterThan(590_000);
+    expect(MUTATION_TIMEOUT_MS).toBeLessThanOrEqual((jobMinutes - 3) * 60_000);
   });
 
   test('the safety filter in ai-review.yml matches the paths the owner must approve', () => {

@@ -37,14 +37,13 @@ could not record a verdict at all (D-069, D-070, D-073).
 
 ## What the owner still needs to do
 
-**A-18 to A-21 — staging's accounts and keys** (about 20 minutes, step by step
-in [`plan/staging-setup.md`](plan/staging-setup.md)): the `TryggHverdag Staging`
-organisation, a Clever Cloud CI user that is a Manager of it and nothing else,
-a Cellar bucket for Terraform's state, and the GitHub environment `staging`,
-limited to `main`, holding the four keys. **A-18 and A-20 are done**: the
-organisation's ID is committed in `infra/staging/staging.auto.tfvars`, and the
-Cellar bucket exists, at the host `versions.tf` already used. Left: A-19 (the CI
-user) and A-21 (the environment and its four keys).
+**A-18 to A-21 — staging's accounts and keys are done** (2026-09-24): the
+`TryggHverdag Staging` organisation (its ID committed), the Cellar bucket at the
+host `versions.tf` already used, the CI user, and the `staging` environment with
+its four keys. A-19 and A-21 are the owner's report: a session's GitHub access
+may not read environment settings, so neither the `main` limit nor the secret
+names were confirmed from here. The first `infra-staging` plan run proves the
+keys work.
 
 **A-22 — after INF-07 merges, create staging**: `infra-staging` with `plan`,
 read it, then with `apply` and that run's ID. Then re-run the deploy that failed
@@ -139,7 +138,10 @@ The things that still bite, and cost a session hours the first time.
   `git show HEAD:<path>` or `git diff origin/main...HEAD -- <path>`. This is
   behaviour of the environment the reviewer runs in, **not** automation in this
   repository — a reviewer grepped the workflows, hooks, settings and `.git/hooks`
-  looking for it and correctly reported finding nothing.
+  looking for it and correctly reported finding nothing. **It can produce a false
+  BLOCK**: on #22, safety-reviewer read the revert as "uncommitted changes strip
+  the D-077 guardrails" while the committed head had all of them. Check any
+  `.claude/` finding against `git show HEAD:<path>` before acting on it.
 - **A superseded run posts five red `ai-review` checks.** The guard fires on
   `needs.changes.result != 'success'`, and a cancelled duplicate run is not
   `success`. They look exactly like real failures. Check whether a newer run for
@@ -177,7 +179,7 @@ shutdown race with Graphile's own signal handler among them). Open as
 it needed shipped first, as the owner chose, in
 [#21](https://github.com/bvst/TryggHverdag/pull/21) (merged by hand, D-075),
 and `main` is merged in, so the AI reviewers can run on it. Waiting on the
-owner's A-19 and A-21 (A-18 and A-20 are done), and A-22 after merge. **What only the
+owner's A-22 after merge (A-18 to A-21 are done). **What only the
 first real run can verify** is listed at the end of D-077, with the follow-ups.
 
 **INF-10 was parked for it.** Before switching, Claude found that

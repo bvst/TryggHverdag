@@ -12,7 +12,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { changedFiles } from './lib/git.mjs';
 import { run } from './lib/proc.mjs';
-import { decideMutation } from './lib/gate-decisions.mjs';
+import { MUTATION_TIMEOUT_MS, decideMutation, judgeMutationRun } from './lib/gate-decisions.mjs';
 
 const CONFIGS = ['stryker.config.mjs', 'stryker.config.json', 'stryker.conf.json'];
 
@@ -46,13 +46,11 @@ function main() {
   if (process.argv.includes('--incremental')) {
     args.push('--incremental');
   }
-  const result = run('pnpm', ['exec', ...args], { cwd });
+  const result = run('pnpm', ['exec', ...args], { cwd, timeout: MUTATION_TIMEOUT_MS });
   process.stdout.write(result.output);
-  if (!result.ok) {
-    process.stdout.write(
-      '\nD-036: the mutation score on safety code is below 80 %. Tests that run the code but ' +
-        'would not notice it breaking are not protection — strengthen them.\n',
-    );
+  const verdict = judgeMutationRun(result);
+  if (!verdict.ok) {
+    process.stdout.write(`\n${verdict.message}\n`);
     process.exitCode = 1;
   }
 }

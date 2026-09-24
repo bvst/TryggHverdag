@@ -1646,6 +1646,14 @@ any other path is work, not a candidate for the same treatment.
       2026-09-24. It proves the archive has not changed since, not that it was
       right then.
 - **Known and accepted:**
+  - **Mutation testing got slower.** Stryker's command runner runs the whole
+    product suite once per mutant, and INF-07's tests start real processes: about
+    7 s a run, 119 mutants, so about 10 minutes on CI's two cores — past the 590 s
+    every gate command had. `MUTATION_TIMEOUT_MS` (25 minutes, held inside the
+    job's 30 by a test) gives it room, and a run that does not finish is now
+    reported as that, not as a score below 80 %. `stryker.config.mjs` says to
+    make the suite faster rather than weaken the approach once it stops being
+    fast; that is a follow-up, not done here.
   - **Nano runs at reduced CPU priority** on Clever Cloud's hosts and can slow
     under load. Fine for staging today; revisit before the staging canary
     (REL-10, M2) times alerts on it.
