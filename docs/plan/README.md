@@ -61,7 +61,7 @@ session.
 | A-17 | Check that the report reaches your phone. If it does not, turn on push notifications for mentions in GitHub Mobile | INF-09 is done when the first report arrives on your phone, and only you can see that (D-050) | ⬜ Open — the first report was posted to #19 at 05:23 UTC on 2026-09-24; waiting for the owner to confirm it arrived |
 | A-18 | Create the Clever Cloud organisation `TryggHverdag Staging` and send Claude its ID — steps in [staging-setup.md](staging-setup.md) | Staging lives in its own organisation (D-046, D-077) | ✅ Done (2026-09-24) — its ID is committed in `infra/staging/staging.auto.tfvars` |
 | A-19 | Create a Clever Cloud CI user that is a Manager of the staging organisation only, and get its key | CI's key must reach staging and nothing else (D-077) | ⬜ Open (INF-07) |
-| A-20 | Create the Cellar add-on and bucket for Terraform's state, and send Claude its host | Terraform cannot create the place it keeps its own state | ⬜ Open (INF-07) |
+| A-20 | Create the Cellar add-on and bucket for Terraform's state, and send Claude its host | Terraform cannot create the place it keeps its own state | ✅ Done (2026-09-24) — host `cellar-c2.services.clever-cloud.com`, as `infra/staging/versions.tf` already had it |
 | A-21 | Create the GitHub environment `staging`, limited to `main`, with the four secrets | No pull request branch can reach the keys | ⬜ Open (INF-07) |
 | A-22 | After INF-07 merges: run `infra-staging` with `plan`, read it, then run it with `apply` | Creates staging; the two runs are the approval (D-077) | ⬜ After INF-07 merges |
 

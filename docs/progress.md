@@ -41,9 +41,10 @@ could not record a verdict at all (D-069, D-070, D-073).
 in [`plan/staging-setup.md`](plan/staging-setup.md)): the `TryggHverdag Staging`
 organisation, a Clever Cloud CI user that is a Manager of it and nothing else,
 a Cellar bucket for Terraform's state, and the GitHub environment `staging`,
-limited to `main`, holding the four keys. The organisation's ID (A-18) has
-come back and is committed in `infra/staging/staging.auto.tfvars`. **One value
-still comes back to Claude**: `CELLAR_ADDON_HOST` (A-20), which is not secret.
+limited to `main`, holding the four keys. **A-18 and A-20 are done**: the
+organisation's ID is committed in `infra/staging/staging.auto.tfvars`, and the
+Cellar bucket exists, at the host `versions.tf` already used. Left: A-19 (the CI
+user) and A-21 (the environment and its four keys).
 
 **A-22 — after INF-07 merges, create staging**: `infra-staging` with `plan`,
 read it, then with `apply` and that run's ID. Then re-run the deploy that failed
@@ -176,7 +177,7 @@ shutdown race with Graphile's own signal handler among them). Open as
 it needed shipped first, as the owner chose, in
 [#21](https://github.com/bvst/TryggHverdag/pull/21) (merged by hand, D-075),
 and `main` is merged in, so the AI reviewers can run on it. Waiting on the
-owner's A-19 to A-21 (A-18 is done), and A-22 after merge. **What only the
+owner's A-19 and A-21 (A-18 and A-20 are done), and A-22 after merge. **What only the
 first real run can verify** is listed at the end of D-077, with the follow-ups.
 
 **INF-10 was parked for it.** Before switching, Claude found that

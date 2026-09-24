@@ -28,6 +28,7 @@ terraform {
     # Cellar ignores the region; the S3 client insists on having one.
     region = "us-east-1"
 
+    # The add-on's CELLAR_ADDON_HOST, as the owner read it (A-20, 2026-09-24).
     endpoints = { s3 = "https://cellar-c2.services.clever-cloud.com" }
 
     use_path_style              = true

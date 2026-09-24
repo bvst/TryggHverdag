@@ -60,9 +60,9 @@ this one thing is made by hand.
 2. In its dashboard, create a bucket named `trygg-hverdag-staging-tfstate`.
 3. From the add-on's environment variables, copy `CELLAR_ADDON_KEY_ID` and
    `CELLAR_ADDON_KEY_SECRET` for A-21, and **send Claude `CELLAR_ADDON_HOST`**
-   (not a secret). `infra/staging/versions.tf` assumes
-   `cellar-c2.services.clever-cloud.com`, the host Clever Cloud's documentation
-   uses; if yours differs, that line changes before the first plan.
+   (not a secret). **Done 2026-09-24**: it is
+   `cellar-c2.services.clever-cloud.com`, the host `infra/staging/versions.tf`
+   uses.
 
 ## A-21 — The GitHub environment that holds the keys
 

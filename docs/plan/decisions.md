@@ -1660,9 +1660,9 @@ any other path is work, not a candidate for the same treatment.
     for the API's pool only. For the worker, the open question when D-068 is
     revisited is that message reaching the log unredacted, not a restart loop.
 - **Not verified before merging, and how each gets verified:** that Clever
-  Cloud accepts the flavour `nano` and the vhost as written, the Cellar
-  endpoint (`cellar-c2`, to be confirmed by the owner in A-20), that the
-  provider maps `start_script` to the run command, and reading the plan run's
+  Cloud accepts the flavour `nano` and the vhost as written (the Cellar
+  host is no longer on this list: the owner read `CELLAR_ADDON_HOST` as
+  `cellar-c2.services.clever-cloud.com` in A-20), that the provider maps `start_script` to the run command, and reading the plan run's
   log as the source of the fingerprint. The first `plan` and `apply` (A-22) and
   the first deploy answer all of them; none can run from a pull request,
   because the keys are limited to `main`. Also open until the first deploy:
