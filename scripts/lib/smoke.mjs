@@ -9,10 +9,20 @@
 // as fresh for three minutes, so for a while after a deploy the API says ok on
 // the strength of a beat from the worker that was just stopped — while the new
 // one may never have started. So the smoke test takes the database's time from
-// its first answer (checkedAt) and waits for a beat later than that. Both
-// stamps come from the same database clock (REL-01), so comparing them is fair.
+// its first answer (checkedAt) and waits for a beat more than LINGER_MS after
+// that. Both stamps come from the same database clock (REL-01), so comparing
+// them is fair.
 
 const HEALTH_PATH = '/v1/health';
+
+/**
+ * How long the old instance may outlive a deploy. A beat inside this window
+ * after the first answer could still be the old worker's, if the old instance
+ * lingered past a minute boundary (safety-reviewer, INF-07). Ninety seconds
+ * means the passing beat is at least the second one after the deploy began.
+ * The lasting fix is a beat that says which worker made it; until then, this.
+ */
+export const LINGER_MS = 90_000;
 
 /** The shape /v1/health answers with, or null when the body is something else. */
 function asHealth(body) {
@@ -100,7 +110,7 @@ export async function smokeTest({
     if (
       health.status === 'ok' &&
       lastBeat !== null &&
-      Date.parse(lastBeat) > Date.parse(deployedBy)
+      Date.parse(lastBeat) > Date.parse(deployedBy) + LINGER_MS
     ) {
       return {
         ok: true,

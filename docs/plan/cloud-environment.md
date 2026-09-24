@@ -74,7 +74,8 @@ A session holds no production or staging credentials, and the list keeps it
 that way by not reaching the places those credentials would be used.
 
 - **`api.clever-cloud.com`** — the Clever Cloud API. `terraform plan`, `apply`
-  and deploys run in GitHub Actions, with the token as a repository secret.
+  and deploys run in GitHub Actions, with the token as a secret of the
+  `staging` environment, which only `main` can read (A-21).
   A session that could reach this host is one pasted token away from changing
   or deleting staging, and later production.
 - **`hc-ping.com`** — Healthchecks.io's ping endpoint. A ping from a session

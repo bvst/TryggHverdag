@@ -34,11 +34,16 @@ else**, ever (D-077). Production gets its own user at go-live.
 3. Accept the invitation as the CI user.
 4. Get its key. On a computer, open a **private browser window** and log in to
    the console as the CI user — not as yourself, or the key will be yours. Then
-   run `npx clever-tools@latest login` and, when it opens a page or prints a
+   run `npx clever-tools@5.0.2 login` and, when it opens a page or prints a
    URL, finish the login in that private window. The key is now in
    `~/.config/clever-cloud/clever-tools.json` as `token` and `secret`.
-5. Save them in GitHub (A-21), then delete the local copy:
-   `npx clever-tools@latest logout`.
+   5.0.2 is the version CI runs. Its npm package needs Node 24 or newer; if
+   `node --version` says less, use the macOS build from the same release
+   instead (`clever-tools-5.0.2_macos.tar.gz` on
+   github.com/CleverCloud/clever-tools/releases): unpack it and run
+   `./clever login`.
+5. Save them in GitHub (A-21), then delete the local copy with the same tool:
+   `npx clever-tools@5.0.2 logout` (or `./clever logout`).
 
 The key expires after one year. Put a reminder in your calendar for eleven
 months from today: when it lapses, every deploy fails, loudly.

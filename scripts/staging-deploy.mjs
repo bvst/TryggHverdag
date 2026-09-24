@@ -5,11 +5,13 @@
  * route to Clever Cloud's API anyway (docs/plan/cloud-environment.md).
  *
  * Needs CLEVER_TOKEN and CLEVER_SECRET (the staging environment's secrets,
- * A-19) and Node 24 for Clever Cloud's command-line tool.
+ * A-19). Clever Cloud's command-line tool is the pinned, hash-checked binary
+ * from scripts/lib/clever-tools.mjs.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import process from 'node:process';
+import { ensureCleverTools } from './lib/clever-tools.mjs';
 import { deployCommands, readOrganisation } from './lib/staging-deploy.mjs';
 import { STAGING_APP_NAME } from './lib/staging.mjs';
 
@@ -31,7 +33,7 @@ if (organisation === null) {
   fail(`No staging organisation in ${TFVARS}: the owner's A-18 gives its ID.`);
 }
 
-const [link, deploy] = deployCommands(organisation);
+const [link, deploy] = deployCommands(organisation, await ensureCleverTools());
 const run = (argv) => spawnSync(argv[0], argv.slice(1), { stdio: 'inherit' }).status;
 
 if (run(link) !== 0) {

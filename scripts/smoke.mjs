@@ -12,7 +12,13 @@ import { STAGING_URL } from './lib/staging.mjs';
 
 const args = process.argv.slice(2);
 const urlIndex = args.indexOf('--url');
-const url = urlIndex === -1 ? STAGING_URL : (args[urlIndex + 1] ?? STAGING_URL);
+const given = urlIndex === -1 ? STAGING_URL : args[urlIndex + 1];
+if (given === undefined || given.startsWith('--')) {
+  // Quietly testing staging instead of what was meant would pass for the wrong thing.
+  process.stdout.write('smoke: --url needs an address after it.\n');
+  process.exit(1);
+}
+const url = given;
 
 const result = await smokeTest({
   url,

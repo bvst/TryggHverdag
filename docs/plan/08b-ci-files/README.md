@@ -7,7 +7,6 @@ Copied into the repository at setup, together with `07b-claude-code-files/`.
 
 | File | Purpose |
 |------|---------|
-| `.github/workflows/deploy-staging.yml` | Merge to `main` → staging (D-046) |
 | `.github/workflows/release.yml` | Owner-approved release PR → gates → production (from go-live) + app builds and store submission (D-047) |
 | `.github/workflows/nightly.yml` | Full mutation run, canary report, weekly iOS simulator tests on EAS |
 
@@ -15,7 +14,8 @@ Copied into the repository at setup, together with `07b-claude-code-files/`.
 installed them, with the changes recorded in D-060, and a draft sitting beside
 the installed file is a second version for someone to read by mistake. The
 same went for `daily-status.yml` and the owner-question issue template when
-INF-09 installed them (D-076). The remaining files are still drafts, waiting
+INF-09 installed them (D-076), and for `deploy-staging.yml` when INF-07
+installed it (D-077). The remaining files are still drafts, waiting
 for the task that installs them.
 
 ## To verify at setup (automated where possible, D-035)
@@ -24,7 +24,9 @@ for the task that installs them.
   API key (D-045). **Done**: `ai-review.yml` has run on them since #8, and
   `daily-status.yml` uses the same inputs plus `github_token` (D-076).
 - The `clever-tools` deploy syntax and aliases; that a free DEV PostgreSQL
-  works with the connection pool settings (maximum 5 connections).
+  works with the connection pool settings (maximum 5 connections). **Moved to
+  INF-07**: D-077 records what was checked and what stays unverified until
+  the first deploy.
 - The repository scripts named in the workflows: `gate:*`, `test:*`,
   `api:diff`, `req:coverage`, `tests:changes`, `coverage:ratchet`,
   `mutation`, `e2e:*`, `db:migrate`, `smoke`, `canary:*`, `release:gates`,

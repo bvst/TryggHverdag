@@ -57,7 +57,7 @@ async function main() {
     const result = spawnSync(terraform, step.args, { cwd: root, env, encoding: 'utf8' });
     if (result.status !== 0) {
       process.stdout.write(
-        `infra:check: ${step.what} — failed\n${result.stdout ?? ''}${result.stderr ?? ''}\n`,
+        `infra:check: ${step.what} — failed\n${result.error?.message ?? ''}${result.stdout ?? ''}${result.stderr ?? ''}\n`,
       );
       process.exitCode = 1;
       return;

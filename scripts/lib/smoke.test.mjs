@@ -4,11 +4,17 @@
 // "status: ok" is not enough on its own. The worker's last beat stays fresh for
 // three minutes, so right after a deploy the API reports ok on the strength of
 // a heartbeat from the worker that was just stopped. What proves the new worker
-// runs is a beat *after* the deploy, so that is what this waits for.
+// runs is a beat *after* the deploy — and, since the old instance may outlive
+// the deploy by a little, a beat more than LINGER_MS after it.
 import { describe, expect, test } from 'vitest';
-import { smokeTest } from './smoke.mjs';
+import { healthResponseSchema } from '../../packages/contracts/src/health.ts';
+import { LINGER_MS, smokeTest } from './smoke.mjs';
 
 const URL = 'https://staging.example.invalid';
+
+/** The first answer after a deploy, and a beat comfortably after it. */
+const DEPLOY = '2026-09-24T21:00:00.000Z';
+const BEAT = '2026-09-24T21:02:00.000Z';
 
 /** A health answer, as /v1/health gives it. */
 function health(status, checkedAt, lastBeatAt) {
@@ -50,14 +56,45 @@ describe('smokeTest', () => {
     expect(asked[0]).toBe(`${URL}/v1/health`);
   });
 
-  test('passes once the worker has beaten after the deploy', async () => {
+  test('its fixtures are real health responses, so a renamed field breaks here first', () => {
+    // The smoke test reads /v1/health's shape by hand (asHealth). Checking the
+    // fixtures against the contract means a change to the contract fails this
+    // file, rather than the first deploy after it merges.
+    expect(healthResponseSchema.safeParse(health('ok', DEPLOY, BEAT).body).success).toBe(true);
+    expect(healthResponseSchema.safeParse(health('degraded', DEPLOY, null).body).success).toBe(
+      true,
+    );
+  });
+
+  test('passes once the worker has beaten well after the deploy', async () => {
     const result = await against([
-      health('ok', '2026-09-24T21:00:00Z', '2026-09-24T20:59:10Z'),
-      health('ok', '2026-09-24T21:00:40Z', '2026-09-24T21:00:30Z'),
+      health('ok', DEPLOY, '2026-09-24T20:59:10Z'),
+      health('ok', '2026-09-24T21:02:05Z', BEAT),
     ]);
 
     expect(result.ok).toBe(true);
-    expect(result.reason).toContain('2026-09-24T21:00:30Z');
+    expect(result.reason).toContain(BEAT);
+  });
+
+  test('a beat within LINGER_MS of the deploy is not enough — the old instance may have made it', async () => {
+    // safety-reviewer on INF-07: if the old instance outlives the deploy past a
+    // minute boundary, its beat lands after the first answer.
+    expect(LINGER_MS).toBe(90_000);
+    const result = await against([
+      health('ok', DEPLOY, '2026-09-24T20:59:10Z'),
+      health('ok', '2026-09-24T21:01:05Z', '2026-09-24T21:01:00Z'),
+    ]);
+
+    expect(result.ok).toBe(false);
+  });
+
+  test('a recent beat does not pass while the API says degraded', async () => {
+    const result = await against([
+      health('degraded', DEPLOY, null),
+      health('degraded', '2026-09-24T21:02:05Z', BEAT),
+    ]);
+
+    expect(result.ok).toBe(false);
   });
 
   test('fails when the only beat is from before the deploy, even though the API says ok', async () => {
@@ -87,8 +124,8 @@ describe('smokeTest', () => {
     const result = await against([
       new Error('connect ECONNREFUSED'),
       { status: 503, body: null },
-      health('degraded', '2026-09-24T21:00:00Z', null),
-      health('ok', '2026-09-24T21:01:00Z', '2026-09-24T21:00:59Z'),
+      health('degraded', DEPLOY, null),
+      health('ok', '2026-09-24T21:02:05Z', BEAT),
     ]);
 
     expect(result.ok).toBe(true);
@@ -125,8 +162,8 @@ describe('smokeTest', () => {
 
   test('reports its progress, so a slow deploy is visibly waiting rather than hung', async () => {
     const { log } = await against([
-      health('degraded', '2026-09-24T21:00:00Z', null),
-      health('ok', '2026-09-24T21:01:00Z', '2026-09-24T21:00:59Z'),
+      health('degraded', DEPLOY, null),
+      health('ok', '2026-09-24T21:02:05Z', BEAT),
     ]);
 
     expect(log.length).toBeGreaterThan(0);

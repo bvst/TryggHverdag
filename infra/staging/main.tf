@@ -57,8 +57,11 @@ resource "clevercloud_nodejs" "staging" {
     # The worker, as a second process on the same instance.
     CC_WORKER_COMMAND = "${local.node} apps/server/src/bin/worker.ts"
     # Restart it whatever way it ended. It exits with 1 when it stops on its
-    # own, which "on-failure" would catch too; "always" also covers an exit
-    # nobody foresaw. The delay keeps a crash loop under systemd's burst limit.
+    # own, which "on-failure" would catch too. But systemd counts an exit after
+    # SIGTERM, SIGINT, SIGHUP or SIGPIPE as clean, and the worker exits 0 once
+    # it has stopped for a signal, so "on-failure" would leave a worker stopped
+    # by a stray signal stopped. The delay keeps a crash loop under systemd's
+    # burst limit.
     CC_WORKER_RESTART       = "always"
     CC_WORKER_RESTART_DELAY = "5"
 

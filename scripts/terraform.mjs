@@ -17,4 +17,8 @@ const result = spawnSync(terraform, process.argv.slice(2), {
   stdio: 'inherit',
   env: { ...process.env, ...TERRAFORM_ENV },
 });
+if (result.error !== undefined) {
+  // Could not start at all: say why, rather than exiting 1 with nothing printed.
+  process.stderr.write(`terraform: could not run ${terraform}: ${result.error.message}\n`);
+}
 process.exitCode = result.status ?? 1;

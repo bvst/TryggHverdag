@@ -57,20 +57,22 @@ describe('infra/staging', () => {
   });
 
   test('its name and address are the ones the deploy and the smoke test use', () => {
+    // Written twice, here and in scripts/lib/staging.mjs. There are no
+    // Terraform outputs repeating them: a third copy is one more to drift.
     expect(main).toContain(`name        = "${STAGING_APP_NAME}"`);
     expect(main).toContain(`fqdn = "${new URL(STAGING_URL).host}"`);
-    expect(read('infra/staging/outputs.tf')).toContain(`value       = "${STAGING_URL}"`);
+    expect(existsSync(path.join(ROOT, 'infra/staging/outputs.tf'))).toBe(false);
   });
 
-  test('when its organisation is set, it is an organisation and not a personal space', () => {
-    // Filled in from the owner's A-18. Until then there is no file, and the
-    // plan fails asking for the variable — loudly, which is the point.
-    const file = path.join(ROOT, 'infra/staging/staging.auto.tfvars');
-    if (existsSync(file)) {
-      expect(readOrganisation(readFileSync(file, 'utf8'))).toMatch(/^orga_/);
-    } else {
-      expect(readOrganisation('')).toBeNull();
-    }
+  test('its organisation is an organisation, and a personal space is refused before any plan', () => {
+    // The owner's A-18. The deploy reads the organisation from this same file,
+    // so Terraform and the deploy find staging in the same place.
+    expect(readOrganisation(read('infra/staging/staging.auto.tfvars'))).toMatch(
+      /^orga_[0-9a-f-]{36}$/,
+    );
+    expect(read('infra/staging/variables.tf')).toContain(
+      'condition     = can(regex("^orga_[0-9a-f-]{36}$", var.organisation))',
+    );
   });
 });
 

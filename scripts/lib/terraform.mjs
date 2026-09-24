@@ -9,10 +9,9 @@
 //
 // infra/staging/versions.tf says `required_version = "~> 1.16.0"`; a test in
 // scripts/infra.test.mjs holds that and this constant together.
-import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { ensurePinnedBinary, fetchArchiveFrom } from './pinned-binary.mjs';
 import { run } from './proc.mjs';
 
 export const TERRAFORM_VERSION = '1.16.4';
@@ -50,14 +49,6 @@ export function downloadUrl(key) {
   return `https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_${key}.zip`;
 }
 
-async function fetchFromHashiCorp(url) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Downloading Terraform from ${url} failed: HTTP ${String(response.status)}.`);
-  }
-  return Buffer.from(await response.arrayBuffer());
-}
-
 function unzipWithSystemTool(zip, into) {
   const result = run('unzip', ['-o', '-q', zip, 'terraform', '-d', into], { timeout: 120_000 });
   if (!result.ok) {
@@ -66,7 +57,8 @@ function unzipWithSystemTool(zip, into) {
 }
 
 /**
- * The path of the pinned Terraform, downloading and checking it the first time.
+ * The path of the pinned Terraform, downloading and checking it the first time
+ * (scripts/lib/pinned-binary.mjs does the checking and the caching).
  *
  * @param {{
  *   root?: string,
@@ -76,38 +68,20 @@ function unzipWithSystemTool(zip, into) {
  *   unzip?: (zip: string, into: string) => unknown,
  * }} options — everything but `root` exists so a test can stand in for the network
  */
-export async function ensureTerraform({
+export function ensureTerraform({
   root = process.cwd(),
   key = platformKey(),
   hashes = TERRAFORM_SHA256,
-  fetchArchive = fetchFromHashiCorp,
+  fetchArchive = fetchArchiveFrom,
   unzip = unzipWithSystemTool,
 } = {}) {
-  const dir = path.join(root, 'node_modules', '.cache', 'terraform', TERRAFORM_VERSION, key);
-  const binary = path.join(dir, 'terraform');
-  if (existsSync(binary)) {
-    return binary;
-  }
-
-  const archive = await fetchArchive(downloadUrl(key));
-  const actual = createHash('sha256').update(archive).digest('hex');
-  if (actual !== hashes[key]) {
-    throw new Error(
-      `The Terraform ${TERRAFORM_VERSION} archive for ${key} does not match its pinned hash ` +
-        `(expected ${String(hashes[key])}, got ${actual}). Refusing to run it.`,
-    );
-  }
-
-  mkdirSync(dir, { recursive: true });
-  const zip = path.join(dir, 'terraform.zip');
-  writeFileSync(zip, archive);
-  try {
-    await unzip(zip, dir);
-  } finally {
-    rmSync(zip, { force: true });
-  }
-  if (existsSync(binary)) {
-    chmodSync(binary, 0o755);
-  }
-  return binary;
+  return ensurePinnedBinary({
+    dir: path.join(root, 'node_modules', '.cache', 'terraform', TERRAFORM_VERSION, key),
+    binaryName: 'terraform',
+    what: `Terraform ${TERRAFORM_VERSION} for ${key}`,
+    url: downloadUrl(key),
+    sha256: hashes[key],
+    fetchArchive,
+    extract: unzip,
+  });
 }

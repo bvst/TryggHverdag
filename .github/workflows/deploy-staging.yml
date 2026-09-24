@@ -44,11 +44,11 @@ jobs:
         # cannot be pushed to a new remote. The push goes to Clever Cloud, not
         # GitHub, so checkout's GitHub token is not left in .git/config.
         with: { fetch-depth: 0, persist-credentials: false }
-      # Node 24, not the repository's 22: Clever Cloud's command-line tool
-      # needs it. Nothing here installs the repository's dependencies — the
-      # deploy and the smoke test use only Node's own modules.
+      # Nothing here installs the repository's dependencies: the deploy and the
+      # smoke test use only Node's own modules, and Clever Cloud's command-line
+      # tool is a self-contained binary checked by hash (scripts/lib/clever-tools.mjs).
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with: { node-version: 24 }
+        with: { node-version-file: .nvmrc }
       - name: Deploy
         env:
           CLEVER_TOKEN: ${{ secrets.CLEVER_TOKEN }}

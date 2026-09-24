@@ -3,7 +3,7 @@
 // quietly become something else: an archive whose hash is wrong is refused, not
 // run, and a machine this does not know is an error, not a guess.
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
@@ -96,12 +96,65 @@ describe('ensureTerraform', () => {
       fetchArchive: () => Promise.resolve(archive),
       unzip: (zip, into) => {
         unzipped.push({ zip, into });
+        writeFileSync(path.join(into, 'terraform'), 'pretend binary');
       },
     });
 
     expect(unzipped).toHaveLength(1);
-    expect(binary).toBe(path.join(unzipped[0]?.into ?? '', 'terraform'));
+    expect(existsSync(binary)).toBe(true);
     expect(binary).toContain(TERRAFORM_VERSION);
+    expect(path.basename(binary)).toBe('terraform');
+  });
+
+  test('an archive that unzips to nothing is an error, not a path to a binary that is not there', async () => {
+    // test-auditor on INF-07: the first version returned the path anyway, and
+    // the wrapper then failed with no reason given.
+    const root = scratch();
+    const archive = Buffer.from('pretend archive');
+
+    await expect(
+      ensureTerraform({
+        root,
+        key: 'linux_amd64',
+        hashes: { linux_amd64: sha256(archive) },
+        fetchArchive: () => Promise.resolve(archive),
+        unzip: () => undefined,
+      }),
+    ).rejects.toThrow(/no terraform binary/i);
+  });
+
+  test('an unzip that fails half way leaves nothing that a later run would trust', async () => {
+    // Unzipped into a folder of its own and moved into place only when whole:
+    // a truncated binary in the cache would otherwise be run from then on,
+    // because the cache is trusted once the file exists.
+    const root = scratch();
+    const archive = Buffer.from('pretend archive');
+    const options = {
+      root,
+      key: 'linux_amd64',
+      hashes: { linux_amd64: sha256(archive) },
+      fetchArchive: () => Promise.resolve(archive),
+    };
+
+    await expect(
+      ensureTerraform({
+        ...options,
+        unzip: (_zip, into) => {
+          writeFileSync(path.join(into, 'terraform'), 'half a bin');
+          throw new Error('disk full');
+        },
+      }),
+    ).rejects.toThrow('disk full');
+
+    let unzips = 0;
+    await ensureTerraform({
+      ...options,
+      unzip: (_zip, into) => {
+        unzips += 1;
+        writeFileSync(path.join(into, 'terraform'), 'whole binary');
+      },
+    });
+    expect(unzips).toBe(1);
   });
 
   test('does not download again when the pinned version is already there', async () => {
