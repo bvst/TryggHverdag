@@ -63,7 +63,7 @@ session.
 | A-19 | Create a Clever Cloud CI user that is a Manager of the staging organisation only, and get its key | CI's key must reach staging and nothing else (D-077) | ✅ Done (2026-09-24), reported by the owner. Not checkable from a session; the first `infra-staging` plan run proves the key works |
 | A-20 | Create the Cellar add-on and bucket for Terraform's state, and send Claude its host | Terraform cannot create the place it keeps its own state | ✅ Done (2026-09-24) — host `cellar-c2.services.clever-cloud.com`, as `infra/staging/versions.tf` already had it |
 | A-21 | Create the GitHub environment `staging`, limited to `main`, with the four secrets | No pull request branch can reach the keys | ✅ Done (2026-09-24), reported by the owner. A session's GitHub access may not read environment settings, so Claude could not confirm the `main` limit or the secret names; the first plan run proves the four keys are there, and `gate:integrity` should check the rest (D-077 follow-up) |
-| A-22 | After INF-07 merges: run `infra-staging` with `plan`, read it, then run it with `apply` | Creates staging; the two runs are the approval (D-077) | ⬜ After INF-07 merges |
+| A-22 | After INF-07 merges: run `infra-staging` with `plan`, read it, then run it with `apply` | Creates staging; the two runs are the approval (D-077) | 🟡 Started 2026-09-24: the first `plan` run planned staging, then failed on BUG-1. Run `plan` again once the BUG-1 fix is merged |
 
 ## Why this order
 The specialised agents and skills (Section 7) are where your quality bar gets

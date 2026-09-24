@@ -17,9 +17,13 @@
  * into a step output, where a failure to read it passed silently and surfaced
  * later as the wrong reason (code-reviewer, test-auditor and
  * privacy-security-reviewer on INF-07).
+ *
+ * The plan is read from stdin as a stream, never with one synchronous read: a
+ * pipe whose writer has not written yet answers that with EAGAIN instead of
+ * waiting, and `terraform show` is never instant. Staging's first plan run
+ * failed that way (BUG-1).
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import {
   FINGERPRINT_MARKER,
@@ -29,16 +33,23 @@ import {
   samePlan,
 } from './lib/plan-approval.mjs';
 
+/** All of stdin, however slowly it arrives. */
+async function readPlan() {
+  let text = '';
+  for await (const chunk of process.stdin) text += String(chunk);
+  return JSON.parse(text);
+}
+
 const gh = (...args) => execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 
 const [command, argument] = process.argv.slice(2);
 try {
   if (command === 'fingerprint') {
-    const plan = JSON.parse(readFileSync(0, 'utf8'));
+    const plan = await readPlan();
     process.stdout.write(`${FINGERPRINT_MARKER}${planFingerprint(plan)}\n`);
   } else if (command === 'matches') {
     const id = parseRunId(argument ?? '');
-    const current = planFingerprint(JSON.parse(readFileSync(0, 'utf8')));
+    const current = planFingerprint(await readPlan());
     const run = JSON.parse(
       gh('run', 'view', id, '--json', 'workflowName,event,headBranch,conclusion,jobs'),
     );
