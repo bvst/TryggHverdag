@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-09-23 · **Milestone:** M0 (foundations)
+**Last updated:** 2026-09-24 · **Milestone:** M0 (foundations)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md).
@@ -25,10 +25,10 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-04 | CI workflows, merge rules, CODEOWNERS | ✅ Done — 2026-09-23 ([#3](https://github.com/bvst/TryggHverdag/pull/3)) |
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
-| INF-07 | Staging on Clever Cloud | ⬜ Blocked: Clever Cloud API token |
+| INF-07 | Staging on Clever Cloud | 🟡 Started 2026-09-24 on `claude/busy-faraday-40n2zl` (the owner chose it before INF-10). Waiting on the session's network allowlist (A-14), then needs the Clever Cloud token |
 | INF-08 | Monitoring | ⬜ Blocked: UptimeRobot needs a URL to watch (comes with INF-07) |
-| INF-09 | Daily status workflow | 🟡 Built and tested; pull request open from `claude/m0-roadmap-task-0qgkmf`. Done when the first report reaches the owner's phone (A-16, A-17) |
-| INF-10 | Gate drills | ⬜ Not started. The first real test of the merge rules under load |
+| INF-09 | Daily status workflow | 🟡 Merged 2026-09-23 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). Done when the first report reaches the owner's phone (A-16, A-17) |
+| INF-10 | Gate drills | ⬜ Not started. Parked 2026-09-24 for INF-07. Open question to the owner: split into offline drills now and live GitHub drills later? |
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
 verdicts. On its first working day it caught two genuine bugs, a half-finished
@@ -42,7 +42,7 @@ check named `daily-status`, Period 1 day, Grace 3 hours, with its ping URL saved
 as the repository secret `HEALTHCHECKS_DAILY_STATUS_URL`. Until then every daily
 report says the ping is missing, and the run is red — on purpose (D-076).
 
-**A-17 — the first daily report.** After the INF-09 pull request merges, run
+**A-17 — the first daily report.** INF-09 merged as #18, so run
 Actions → daily-status → Run workflow once and check that it reaches the phone.
 That is INF-09's done-criterion, and only the owner can see it.
 
@@ -122,17 +122,26 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**INF-09 — the daily status report** (D-076), pull request open from
-`claude/m0-roadmap-task-0qgkmf`. Claude writes the report with a read-only token;
-a script posts it, or posts a 🛑 when there is none; Healthchecks.io pages the
-owner when a morning passes with no run at all. It touches `.github/`,
-`.claude/skills/` and `scripts/`, so it needs a code owner's approval. It does
-**not** touch `ai-review.yml`, so the reviewers can review it.
+**INF-07 — staging on Clever Cloud** (started 2026-09-24). Nothing built yet.
+This session's network blocked `www.clever.cloud`, `api.clever-cloud.com` and
+`registry.terraform.io`, so neither the docs nor `terraform init` were
+reachable. The allowlist the owner is applying is in
+[`plan/cloud-environment.md`](plan/cloud-environment.md), with what was left
+off on purpose. The Clever Cloud API stays blocked: plan, apply and deploys run
+in GitHub Actions with the token as a secret. Whether the Clever Cloud provider
+downloads through the session's GitHub proxy is not verified yet.
 
-**Merged today:** #13 (progress-log restructure, D-075), #14 (the retraction
+**INF-10 was parked for it.** Before switching, Claude found that
+`req:coverage` counts requirement IDs, not acceptance criteria. RG-01 says the
+same, but the roadmap's drill ("a new acceptance criterion without a test")
+asks for more, so that drill would pass for a requirement that already has one
+test. Raise it when INF-10 resumes.
+
+**Merged 2026-09-23:** #13 (progress-log restructure, D-075), #14 (the retraction
 that had only reached the archive), #15 (HK-09, the pre-commit hook), #16 (the
 reviewer verdict must now be corroborated; `/.githooks/` owned; `pnpm exec`),
-#17 (CI-12: a gate with nothing to check says so instead of being skipped).
+#17 (CI-12: a gate with nothing to check says so instead of being skipped),
+#18 (INF-09, the daily status report).
 
 **An unmerged branch exists: `claude/inf-04-follow-through`.** It closes INF-04's
 record and widens `engines.node` so Dependabot can run. It holds **D-063 and
