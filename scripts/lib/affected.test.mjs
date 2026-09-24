@@ -106,23 +106,76 @@ describe('reasons', () => {
   });
 });
 
-describe('the script refuses to guess', () => {
-  test('an unresolvable base fails loudly instead of reporting "nothing to check"', () => {
-    // The whole design rests on changedFiles(), which swallows a git call that
-    // fails. If the base cannot resolve, it returns an empty list on a clean
-    // checkout, onlyInert([]) is true, and every guarded step in every job sits
-    // out and passes. This runs the real script against a branch that does not
-    // exist, and requires it to exit non-zero rather than print code=false.
-    const result = spawnSync(
-      process.execPath,
-      ['scripts/affected.mjs', '--base', 'origin/no-such-branch-exists'],
-      { encoding: 'utf8' },
-    );
-
-    expect(result.status).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).not.toContain('code=false');
-    expect(`${result.stdout}${result.stderr}`).toContain('not knowing is not the same');
+// Every run of scripts/affected.mjs in this file goes through runAffected, and
+// the environment it runs in is pinned rather than inherited.
+//
+// The script reads two variables. GITHUB_EVENT_NAME picks its path: any value
+// but pull_request is an event with no base to compare with, so the script
+// prints code=true and exits 0 before it looks at the merge base at all. That is
+// correct for a push. GITHUB_OUTPUT is a file the script appends its answer to.
+// A run that inherits the environment inherits both from whatever is running
+// the tests, and in CI that is a GitHub Actions job.
+//
+// That is how main went red on every push from #17 on. The unresolvable-base
+// test inherited GITHUB_EVENT_NAME=push from the push-to-main run, took the push
+// shortcut, exited 0, and failed. On a pull request the variable says
+// pull_request and on a laptop it is unset, so the test passed in both places
+// and nobody saw it before merge. The resolvable-base test had the same flaw
+// with the opposite symptom: on a push it took the shortcut too, and passed
+// without testing what its name says. That silent twin is the worse of the two,
+// because nothing turned red. And every run inherited GITHUB_OUTPUT, the ones
+// that did pin the event included, so in CI each run that got as far as an
+// answer appended a code= line to the outputs of the step running the tests. No
+// step reads those today, and a test has no business writing them.
+//
+// So `event` is required and has no default: every test states which path it
+// exercises. A string sets GITHUB_EVENT_NAME. null removes it, which is a local
+// run, and the script treats that like pull_request. GITHUB_OUTPUT is always
+// removed. The last test in this file runs all of this inside a push job's
+// environment, so that it stays true.
+function runAffected(args, { event, cwd }) {
+  if (event === undefined) {
+    throw new Error('runAffected needs an event: "pull_request", "push", or null for a local run.');
+  }
+  const env = { ...process.env };
+  delete env.GITHUB_OUTPUT;
+  if (event === null) {
+    delete env.GITHUB_EVENT_NAME;
+  } else {
+    env.GITHUB_EVENT_NAME = event;
+  }
+  // Resolved against this process's working directory, the repository root, so
+  // the script is still found when cwd points somewhere else.
+  return spawnSync(process.execPath, [resolve('scripts/affected.mjs'), ...args], {
+    cwd,
+    encoding: 'utf8',
+    env,
   });
+}
+
+// The two paths on which the merge-base guard applies. A push never reaches it,
+// and the push-to-main test below covers that path.
+const GUARDED = [
+  { event: 'pull_request', label: 'a pull request' },
+  { event: null, label: 'a local run' },
+];
+
+describe('the script refuses to guess', () => {
+  test.each(GUARDED)(
+    'an unresolvable base fails loudly instead of reporting "nothing to check", on $label',
+    ({ event }) => {
+      // The whole design rests on changedFiles(), which swallows a git call that
+      // fails. If the base cannot resolve, it returns an empty list on a clean
+      // checkout, onlyInert([]) is true, and every guarded step in every job sits
+      // out and passes. This runs the real script against a branch that does not
+      // exist, and requires it to exit non-zero rather than print code=false.
+      const result = runAffected(['--base', 'origin/no-such-branch-exists'], { event });
+
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}${result.stderr}`).not.toContain('code=false');
+      expect(`${result.stdout}${result.stderr}`).toContain('not knowing is not the same');
+    },
+  );
 
   test('a push to main runs everything, because it has no base to compare with', () => {
     // ci.yml runs on push to main as well as on pull requests. There,
@@ -149,12 +202,7 @@ describe('the script refuses to guess', () => {
       // origin/main at the same commit: exactly what a push-to-main checkout has.
       git('update-ref', 'refs/remotes/origin/main', 'HEAD');
 
-      const run = (event) =>
-        spawnSync(process.execPath, [resolve('scripts/affected.mjs'), '--base', 'origin/main'], {
-          cwd: dir,
-          encoding: 'utf8',
-          env: { ...process.env, GITHUB_EVENT_NAME: event },
-        });
+      const run = (event) => runAffected(['--base', 'origin/main'], { event, cwd: dir });
 
       // The condition really is an empty diff: a pull_request event here says
       // there is nothing to check. That is the false green the guard prevents.
@@ -175,10 +223,7 @@ describe('the script refuses to guess', () => {
     // depends on the working tree, and a first draft of this test assumed a
     // clean one and failed on a dirty one. What matters here is which path was
     // taken, so that is what it checks.
-    const result = spawnSync(process.execPath, ['scripts/affected.mjs', '--base', 'HEAD'], {
-      encoding: 'utf8',
-      env: { ...process.env, GITHUB_EVENT_NAME: 'pull_request' },
-    });
+    const result = runAffected(['--base', 'HEAD'], { event: 'pull_request' });
 
     expect(result.status).toBe(0);
     expect(result.stdout).not.toContain('not a pull request');
@@ -203,14 +248,70 @@ describe('the script refuses to guess', () => {
     }
   });
 
-  test('a resolvable base still answers', () => {
+  test.each(GUARDED)('a resolvable base still answers, on $label', ({ event }) => {
     // The contrast: the guard must reject only the unanswerable case, not
     // every case. HEAD always resolves against itself.
-    const result = spawnSync(process.execPath, ['scripts/affected.mjs', '--base', 'HEAD'], {
-      encoding: 'utf8',
-    });
+    //
+    // The push shortcut also exits 0 with a code= line, so the status and the
+    // code= line cannot tell the paths apart. This test passed through the
+    // shortcut on every push to main while checking nothing its name says. The
+    // pinned event stops that, and the expectation on "not a pull request"
+    // makes sure it stays stopped.
+    const result = runAffected(['--base', 'HEAD'], { event });
 
     expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain('not a pull request');
     expect(result.stdout).toMatch(/^code=(true|false)$/m);
+  });
+});
+
+describe('the environment these tests run in', () => {
+  test('cannot pick the path a test takes, or receive its output', () => {
+    // The conditions main went red in, rebuilt in this process: a push-to-main
+    // job with a step-output file of its own. Every run below must behave as if
+    // neither were there. Both variables are restored however this ends, so
+    // nothing that runs after this test inherits them.
+    const dir = mkdtempSync(join(tmpdir(), 'affected-job-'));
+    const output = join(dir, 'github-output');
+    writeFileSync(output, '');
+    const before = {
+      GITHUB_EVENT_NAME: process.env.GITHUB_EVENT_NAME,
+      GITHUB_OUTPUT: process.env.GITHUB_OUTPUT,
+    };
+    process.env.GITHUB_EVENT_NAME = 'push';
+    process.env.GITHUB_OUTPUT = output;
+    try {
+      // The failure itself: a run that names pull_request meets the guard, not
+      // the push shortcut this job's own event would have picked. And a run
+      // that names no event at all, because null has to remove the job's value
+      // rather than keep it, and only a job that has one can show the difference.
+      for (const { event, label } of GUARDED) {
+        const guarded = runAffected(['--base', 'origin/no-such-branch-exists'], { event });
+        expect(guarded.status, label).not.toBe(0);
+        expect(`${guarded.stdout}${guarded.stderr}`, label).toContain(
+          'not knowing is not the same',
+        );
+      }
+
+      // The guard exits before the script writes anything, so those runs would
+      // leave the file empty even if GITHUB_OUTPUT leaked through. These two
+      // runs reach the two places the script does write, the push shortcut and
+      // the normal answer, and each prints its answer just before writing it.
+      const shortcut = runAffected(['--base', 'HEAD'], { event: 'push' });
+      expect(shortcut.stdout).toMatch(/^code=true$/m);
+      const answered = runAffected(['--base', 'HEAD'], { event: 'pull_request' });
+      expect(answered.stdout).toMatch(/^code=(true|false)$/m);
+
+      expect(readFileSync(output, 'utf8')).toBe('');
+    } finally {
+      for (const [name, value] of Object.entries(before)) {
+        if (value === undefined) {
+          delete process.env[name];
+        } else {
+          process.env[name] = value;
+        }
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
