@@ -25,8 +25,8 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-04 | CI workflows, merge rules, CODEOWNERS | ✅ Done — 2026-09-23 ([#3](https://github.com/bvst/TryggHverdag/pull/3)) |
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
-| INF-07 | Staging on Clever Cloud | 🟡 Started 2026-09-24 on `claude/busy-faraday-40n2zl` (the owner chose it before INF-10). Waiting on the session's network allowlist (A-14), then needs the Clever Cloud token |
-| INF-08 | Monitoring | ⬜ Blocked: UptimeRobot needs a URL to watch (comes with INF-07) |
+| INF-07 | Staging on Clever Cloud | 🟡 Built and tested 2026-09-24 on `claude/busy-faraday-40n2zl` (D-077). Done when a merge to `main` deploys and the smoke test passes — which needs the owner's A-18 to A-22 |
+| INF-08 | Monitoring | ⬜ Next after INF-07: UptimeRobot will watch `https://trygghverdag-staging.cleverapps.io/v1/health` |
 | INF-09 | Daily status workflow | 🟡 Merged 2026-09-23 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). Done when the first report reaches the owner's phone (A-16, A-17) |
 | INF-10 | Gate drills | ⬜ Not started. Parked 2026-09-24 for INF-07. Open question to the owner: split into offline drills now and live GitHub drills later? |
 
@@ -36,6 +36,20 @@ decision and a factually wrong count — all in Claude's own work. Before that i
 could not record a verdict at all (D-069, D-070, D-073).
 
 ## What the owner still needs to do
+
+**A-18 to A-21 — staging's accounts and keys** (about 20 minutes, step by step
+in [`plan/staging-setup.md`](plan/staging-setup.md)): the `TryggHverdag Staging`
+organisation, a Clever Cloud CI user that is a Manager of it and nothing else,
+a Cellar bucket for Terraform's state, and the GitHub environment `staging`,
+limited to `main`, holding the four keys. **Two values come back to Claude**:
+the organisation's ID (A-18) and `CELLAR_ADDON_HOST` (A-20). Neither is secret.
+
+**A-22 — after INF-07 merges, create staging**: `infra-staging` with `plan`,
+read it, then with `apply` and that run's ID. Then re-run the deploy that failed
+on merge because there was nothing yet to deploy to.
+
+**A-14 — the cloud environment's allowlist is applied** (2026-09-24); it
+reached the running session without a restart. A setup script is still to come.
 
 **A-16 — the Healthchecks.io check for the daily report** (about 3 minutes). A
 check named `daily-status`, Period 1 day, Grace 3 hours, with its ping URL saved
@@ -54,7 +68,7 @@ That is INF-09's done-criterion, and only the owner can see it.
 **A-01, A-02, A-03 — phones, Apple, Google Play.** Not blocking today; they
 block the first real device build.
 
-**A-08 — UptimeRobot** needs a URL to watch, so it follows INF-07.
+**A-08 — UptimeRobot** can watch staging once A-22 has created it.
 
 **Dependabot and the reviewer gate.** `CLAUDE_CODE_OAUTH_TOKEN` is now in the
 Dependabot secret store, which unblocks npm updates. **github-actions updates
@@ -66,6 +80,23 @@ the default branch. Those pull requests need a manual merge (D-075).
 ## Live gotchas
 
 The things that still bite, and cost a session hours the first time.
+
+- **HK-03 matches text, not intent.** A shell command that merely *mentions*
+  starting a workflow run from the command line, a Clever Cloud deploy,
+  `scripts/staging-deploy.mjs`, or Terraform apply/destroy is blocked — a
+  heredoc writing documentation included. Write such text with the Edit or
+  Write tools instead.
+- **HK-05 counts a `test.each` only up to its first `)`.** A comment with
+  parentheses inside a `test.each([...])` array hides that test from the
+  counter, which then reports "the number of tests went down". Keep
+  parentheses out of those comments.
+- **Clever Cloud's CLI needs Node 24**; the repository is on 22. It runs as
+  `npx clever-tools@<exact version>` in the deploy job only, never as a
+  dependency (D-077).
+- **Sessions reach `www.clever.cloud` and `registry.terraform.io`, and never
+  `api.clever-cloud.com`** — on purpose (`plan/cloud-environment.md`).
+  `pnpm run infra:check` works in a session; `plan` and `apply` do not, and
+  must not.
 
 - **Every job failing in ~2 seconds means the Actions budget, not the code.**
   On 2026-09-23 all fifteen checks went red for two and a half hours. The
@@ -122,14 +153,16 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**INF-07 — staging on Clever Cloud** (started 2026-09-24). Nothing built yet.
-This session's network blocked `www.clever.cloud`, `api.clever-cloud.com` and
-`registry.terraform.io`, so neither the docs nor `terraform init` were
-reachable. The allowlist the owner is applying is in
-[`plan/cloud-environment.md`](plan/cloud-environment.md), with what was left
-off on purpose. The Clever Cloud API stays blocked: plan, apply and deploys run
-in GitHub Actions with the token as a secret. Whether the Clever Cloud provider
-downloads through the session's GitHub proxy is not verified yet.
+**INF-07 — staging on Clever Cloud** (D-077), built and tested on
+`claude/busy-faraday-40n2zl`. Three runnable server processes (migrate as the
+pre-run hook, API, worker beside it), Terraform for one nano instance and the
+DEV PostgreSQL, a deploy on every merge to `main` with a smoke test that waits
+for a heartbeat *after* the deploy, and a Terraform apply that takes two runs
+the owner starts and applies only the plan the owner read. Waiting on the
+owner's A-18 to A-21, then A-22 after merge. **What only the first real run
+can verify** is listed at the end of D-077: the flavour and vhost as written,
+the Cellar host, `start_script`, and reading the fingerprint from the plan
+run's log.
 
 **INF-10 was parked for it.** Before switching, Claude found that
 `req:coverage` counts requirement IDs, not acceptance criteria. RG-01 says the
