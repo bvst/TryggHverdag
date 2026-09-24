@@ -5,6 +5,36 @@ Newest first.
 
 ## Patterns worth checking every time
 
+### `echo "key=$(cmd)" >> "$GITHUB_OUTPUT"` swallows cmd's failure
+GitHub's default `run:` shell is `bash -e`, and `-e` does not see a failed
+command substitution inside another command's arguments: the step goes green
+and writes `key=`. Verified with `bash -e` in the INF-07 review
+(`infra-staging.yml`, step "The plan the owner read"). Assign first
+(`fp=$(cmd)` does propagate the failure), then echo. Check every `$(...)` in a
+workflow `run:` block.
+
+### A test that "holds two files together" by copying the literal holds nothing
+`scripts/staging-workflows.test.mjs` looks for the string
+`TRYGGHVERDAG_PLAN_FINGERPRINT=` in the YAML instead of building it from the
+exported `FINGERPRINT_MARKER`, so renaming the constant passes every test and
+breaks the workflow. When a test claims to pin a cross-file constant, check that
+it imports the constant rather than restating it. Same shape in INF-07: the
+workflow name `infra-staging` and job id `plan` hard-coded in
+`scripts/lib/plan-approval.mjs`, with no test tying them to the YAML.
+
+### "A session cannot X": check every route to X
+D-077 says sessions cannot start a workflow run. HK-03 and the settings deny
+cover dispatch, but `gh run rerun` and the REST `.../runs/<id>/rerun` route get
+through (verified in the INF-07 review by piping hook JSON into
+`.claude/hooks/guard-bash.mjs --global`). When a decision states a session
+boundary, list the routes (CLI, REST through `gh api`, MCP tool) and test each
+one against the hook.
+
+### HK-03 matches text, so it blocks reviewers too
+Any Bash command that merely names the deploy wrapper (the staging-deploy entry
+file under scripts/) or the Terraform apply/destroy routes is refused, including
+a plain `cat` of the file. Use the Read tool for those files.
+
 ### Generated files compared with `git diff --exit-code` in CI
 `scripts/req-coverage.mjs` stamps `new Date()` into `docs/requirements-status.md`.
 Any CI step that regenerates such a file and demands no diff goes red on the
@@ -39,6 +69,11 @@ Five copies today: `scripts/lib/gate-decisions.mjs` (SAFETY_PATHS, 4 entries),
 `.github/workflows/ai-review.yml`. The worker hosts the watchdog and the outbox
 (AR-05, AR-06), so the missing entry means the 95 % safety branch floor does not
 apply to it. Push for one exported list that the others derive from.
+Update (INF-07 review): `coverage.mjs` now imports `SAFETY_PATHS` from
+`gate-decisions.mjs`, so that copy is gone. Four remain (gate-decisions,
+merge-rules, CODEOWNERS, the ai-review filter). The worker's entry and exit path
+(`apps/server/src/bin/worker.ts`, `apps/server/src/process.ts`) is in none of
+them.
 
 ### `pnpm run <script> -- --flag` passes the `--` through
 Verified against pnpm 10: argv becomes `['--', '--flag']`. Harmless for the
@@ -52,6 +87,9 @@ that later moves to `node:util parseArgs`. Flag stray `--` in workflows and in
 `ci.yml`, `ai-review.yml` and `dependabot.yml`, now superseded and wrong (the
 README there still names `CLAUDE_BOT_TOKEN`). When a draft is installed, the
 draft should go. Check `08b-ci-files/` on every infrastructure change.
+Happened again in INF-07: `08b-ci-files/.github/workflows/deploy-staging.yml`
+stayed behind when the real one was installed. It uses `clever-tools@latest`,
+`--force` and a database-URL secret, and D-077 rejects all three.
 
 ## Conventions this repository actually keeps
 - Pure decision modules (`scripts/lib/*.mjs`) take state and return
