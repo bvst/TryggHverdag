@@ -27,7 +27,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
 | INF-07 | Staging on Clever Cloud | ⬜ Blocked: Clever Cloud API token |
 | INF-08 | Monitoring | ⬜ Blocked: UptimeRobot needs a URL to watch (comes with INF-07) |
-| INF-09 | Daily status workflow | 🟡 Built and tested; pull request open from `claude/m0-roadmap-task-0qgkmf`. Done when the first report reaches the owner's phone (A-16, A-17) |
+| INF-09 | Daily status workflow | 🟡 Merged 2026-09-24 ([#18](https://github.com/bvst/TryggHverdag/pull/18)); all three reviewers PASS. Done when the first report reaches the owner's phone (A-17) |
 | INF-10 | Gate drills | ⬜ Not started. The first real test of the merge rules under load |
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
@@ -37,14 +37,18 @@ could not record a verdict at all (D-069, D-070, D-073).
 
 ## What the owner still needs to do
 
-**A-16 — the Healthchecks.io check for the daily report** (about 3 minutes). A
-check named `daily-status`, Period 1 day, Grace 3 hours, with its ping URL saved
-as the repository secret `HEALTHCHECKS_DAILY_STATUS_URL`. Until then every daily
-report says the ping is missing, and the run is red — on purpose (D-076).
+**A-17 — the first daily report.** Check that it reaches the phone. That is
+INF-09's done-criterion, and only the owner can see it. #18 merged at 04:57 UTC
+on 2026-09-24; the owner chose to let the 05:00 slot run it, with a start by
+hand as the fallback, because a scheduled run tests the one path a manual run
+cannot.
 
-**A-17 — the first daily report.** After the INF-09 pull request merges, run
-Actions → daily-status → Run workflow once and check that it reaches the phone.
-That is INF-09's done-criterion, and only the owner can see it.
+**A-16 is done** (2026-09-24, reported by the owner). A session cannot read
+secrets, so this is the owner's word until the first run's ping step passes.
+Healthchecks.io does not alert on a check that has never been pinged — a `new`
+check stays `new` (its own source, `hc/api/models.py`, `get_status`; the site's
+docs are blocked from sessions) — so the dead-man's switch is armed by that
+run, not by adding the secret.
 
 **A-09 is done** (2026-09-23). `CLAUDE_CODE_OAUTH_TOKEN` is set;
 `ANTHROPIC_API_KEY` is not.
@@ -122,17 +126,16 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**INF-09 — the daily status report** (D-076), pull request open from
-`claude/m0-roadmap-task-0qgkmf`. Claude writes the report with a read-only token;
-a script posts it, or posts a 🛑 when there is none; Healthchecks.io pages the
-owner when a morning passes with no run at all. It touches `.github/`,
-`.claude/skills/` and `scripts/`, so it needs a code owner's approval. It does
-**not** touch `ai-review.yml`, so the reviewers can review it.
+**INF-09 — the daily status report** (D-076) is merged
+([#18](https://github.com/bvst/TryggHverdag/pull/18)) and waiting for its first
+run. Three questions only that run can answer: does the action accept a
+read-only token, does `gh issue pin` work with `GITHUB_TOKEN`, and does the
+mention reach the phone.
 
-**Merged today:** #13 (progress-log restructure, D-075), #14 (the retraction
-that had only reached the archive), #15 (HK-09, the pre-commit hook), #16 (the
-reviewer verdict must now be corroborated; `/.githooks/` owned; `pnpm exec`),
-#17 (CI-12: a gate with nothing to check says so instead of being skipped).
+**Merged:** 2026-09-23 — #13 (progress-log restructure, D-075), #14 (the
+retraction that had only reached the archive), #15 (HK-09, the pre-commit hook),
+#16 (the reviewer verdict must now be corroborated; `/.githooks/` owned;
+`pnpm exec`), #17 (CI-12). 2026-09-24 — #18 (INF-09).
 
 **An unmerged branch exists: `claude/inf-04-follow-through`.** It closes INF-04's
 record and widens `engines.node` so Dependabot can run. It holds **D-063 and
@@ -143,9 +146,22 @@ forgotten.
 Both bump actions that `ai-review.yml` pins, so both edit that workflow and
 neither can pass the reviewers. They need a manual merge (D-075).
 
-**The `ai-review.yml` batch — two items left.** The other two shipped in #16:
-`checks: read`, and the verdict corroboration that closed the false-green hole.
-What remains:
+**The `ai-review.yml` batch — three items left.** The verdict corroboration
+shipped in #16 and works: every reviewer on #18 went green only with a
+corroborating comment (read in `test-auditor`'s log; the others by their green
+checks). `checks: read` also shipped in #16, and **does not work** — the
+first item below. What remains:
+
+- **`checks: read` never reaches the reviewer.** It is on the job's token, and
+  the reviewer's `gh` does not use that token. With no `github_token` input the
+  action mints the Claude app's token — `contents`, `pull_requests` and `issues`
+  only (`src/github/token.ts:69-73` at the pinned commit) — and sets `GH_TOKEN`
+  to it (`src/entrypoints/run.ts:189-191`). The action's documented route is
+  `additional_permissions: | actions: read`. **Evidence:** that source, read on
+  2026-09-24, and `test-auditor` reporting a 403 reading check results on #18.
+  **Not in the evidence:** the 403 itself — the action does not print the
+  agent's tool calls, so the job log cannot show it. Also unknown: whether the
+  Claude app's installation may grant `actions: read` at all.
 
 - **The Dependabot guard message.** It fires when neither
   `CLAUDE_CODE_OAUTH_TOKEN` nor `ANTHROPIC_API_KEY` is visible and then advises
