@@ -171,8 +171,11 @@ DEV PostgreSQL, a deploy on every merge to `main` with a smoke test that waits
 for a heartbeat well *after* the deploy, and a Terraform apply that takes two
 runs the owner starts and applies only the plan the owner read. All four
 reviewers passed it; their findings were fixed in the same branch (the worker's
-shutdown race with Graphile's own signal handler among them). Waiting on the
-owner's A-19 to A-21 (A-18 is done), then A-22 after merge. **What only the
+shutdown race with Graphile's own signal handler among them). **It waits on
+[#21](https://github.com/bvst/TryggHverdag/pull/21)**, the two-line
+`ai-review.yml` change the owner chose to ship first and merge by hand
+(D-075). Until #21 merges and `main` is merged in, one test fails, and says
+why. Then the owner's A-19 to A-21 (A-18 is done), and A-22 after merge. **What only the
 first real run can verify** is listed at the end of D-077, with the follow-ups.
 
 **INF-10 was parked for it.** Before switching, Claude found that
