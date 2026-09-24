@@ -26,7 +26,7 @@ and never from a session:
 3. Run workflow again, action **apply**, with the plan run's ID or address. It
    plans again and applies only if the plan is the one you read.
 
-The state lives in the `trygghverdag-staging-tfstate` Cellar bucket (A-20), and
+The state lives in the `trygg-hverdag-staging-tfstate` Cellar bucket (A-20), and
 never in git: `.gitignore` refuses state files and saved plans, because both
 can hold the database password.
 

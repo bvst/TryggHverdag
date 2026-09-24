@@ -52,7 +52,7 @@ this one thing is made by hand.
 
 1. In the staging organisation, create a **Cellar** add-on named
    `trygghverdag-staging-tfstate` in region **Paris**.
-2. In its dashboard, create a bucket named `trygghverdag-staging-tfstate`.
+2. In its dashboard, create a bucket named `trygg-hverdag-staging-tfstate`.
 3. From the add-on's environment variables, copy `CELLAR_ADDON_KEY_ID` and
    `CELLAR_ADDON_KEY_SECRET` for A-21, and **send Claude `CELLAR_ADDON_HOST`**
    (not a secret). `infra/staging/versions.tf` assumes

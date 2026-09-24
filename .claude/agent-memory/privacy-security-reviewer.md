@@ -3,6 +3,58 @@
 Recurring problems and conventions, so the same lesson is not relearned every
 session. Newest first.
 
+## INF-07 (staging on Clever Cloud) — what to re-check on every deploy/infra change
+- **Redaction regexes** (`apps/server/src/process.ts` `redactCredentials`): probe them, do
+  not read them. As shipped they leaked on: `@` in a URL password (only the part
+  before the first `@` was hidden), a scheme preceded by `_`/digit (`\b`), `PGPASSWORD=`
+  / `POSTGRESQL_ADDON_PASSWORD=` / `DB_PASSWORD=` (`\bpassword`), quoted values with
+  escapes or spaces, and the colon forms `password: '…'` / `"password":"…"` — which is
+  exactly what `util.inspect` of a non-Error thrown value produces. A version that
+  passed all of those plus the no-credential cases:
+  `/([a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:)[^\s/]*@/gi` and
+  `/(password['"]?\s*[:=]\s*)('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|[^\s,;}&]+)/gi`.
+  Quick probe: `node --experimental-strip-types` on a scratch .mts importing process.ts
+  (Vitest swallows console output).
+- **Output channels that bypass `redactCredentials`** (so "every message goes through
+  it" is false): graphile-worker's default logger (`Failed task … with error '<msg>'` +
+  stack; it also installs its own pool error handlers when none exist), Hono's default
+  `onError` (`console.error(err)`), `@hono/node-server` `handleResponseError`
+  (`console.error` and it echoes `Error: <message>` to the client), Node's
+  uncaught-exception printer. **`DrizzleQueryError`'s message contains the query
+  params verbatim** — the PRIV-07 hazard for M2, when params are positions and phone
+  numbers. oRPC 1.15 itself logs nothing.
+- **Clever Cloud's CLI deploy command streams deploy and start-up logs into the GitHub
+  Actions log** (US, readable by anyone with repo read, not GitHub-masked since the DB
+  URL is not a GitHub secret). Redaction is what stands between a crash message and
+  that log. Relevant again for production at go-live (PRIV-05).
+- **HK-03 is text matching.** Allowed as shipped: `gh -R o/r workflow run …`,
+  `gh --repo …`, `gh run rerun <id>`, `gh api -X POST …/actions/runs/<id>/rerun`, and
+  `terraform -chdir=… apply` (flags between the words). Test by piping
+  `{"tool_input":{"command":…}}` into a copy of the hook, building the command string
+  by concatenation — the live hook blocks your own Bash call otherwise. HK-03 also
+  blocks any Bash command whose *text* contains the staging deploy script's path or
+  the CLI's two-word deploy command — even a heredoc writing this memory file. Read
+  that script with the Read tool, and word such notes around those strings.
+- **The `staging` environment's "main only" branch policy is the only barrier** between
+  a pushed branch and CLEVER_*/CELLAR_* (a push-triggered workflow on any branch runs
+  immediately, CODEOWNERS only gates merging). gate:integrity (5 checks) does not look
+  at environments or at whether those names exist as *repository* secrets.
+- **`npx pkg@x.y.z` pins only the top package.** clever-tools@5.0.2 resolves 180
+  packages fresh on every deploy (`_hasShrinkwrap: false`), invisible to pnpm audit,
+  Dependabot and licenses:check. Resolve it with `npm install --package-lock-only
+  --ignore-scripts` in scratch to count and see licences.
+- **Terraform ≥1.6 is BUSL-1.1 (IBM)**, not on ALLOWED_LICENCES and not gated (not npm).
+  Own-infrastructure use is inside the Additional Use Grant. CleverCloud provider is
+  Apache-2.0. Provider schema (`terraform providers schema -json` with
+  `-plugin-dir=infra/staging/.terraform/providers`): `clevercloud_postgresql.password`,
+  `.uri` and `clevercloud_nodejs.environment` are sensitive, so `terraform show`
+  (non-JSON) masks them. Pinned Terraform hashes matched HashiCorp's SHA256SUMS
+  (curl works to releases.hashicorp.com).
+- **Shell gotcha in workflows:** `echo "x=$(cmd)" >> "$GITHUB_OUTPUT"` hides a failing
+  `cmd` even under `bash -e -o pipefail`; assign first (`x=$(cmd)`), then echo.
+- **Secrets inventory** (`docs/plan/08-cicd-releases.md`): check new secret *names* and
+  their store (environment vs repository), not just the service. Cellar keys were missing.
+
 ## Path filters that route reviewers (`.github/workflows/ai-review.yml`)
 A `dorny/paths-filter` list decides whether this reviewer runs at all. When a
 path is missing from the `privacy` filter the job still reports **green** — a
@@ -21,7 +73,8 @@ review that never happened, wearing the badge of a review that found nothing
 
 INF-04 (f757ef0) shipped a `privacy` filter covering only `identity`, `privacy`,
 `adapters`, `**/logging/**`, `**/package.json`, `pnpm-lock.yaml` and `infra/**`.
-Re-check this list on every workflow change.
+**Since then this reviewer runs with `applies: always`** (checked 2026-09-24), so the
+filter no longer gates it; only `safety` is filtered. Re-check on workflow changes.
 
 ## Licences of GitHub Actions are not gated
 `pnpm run licenses:check` reads `pnpm licenses list` — npm dependencies only.
@@ -54,8 +107,9 @@ Dependabot expects.
   `[\w.-]+`, so the token cannot be redirected off `api.github.com`.
 
 ## Secrets in CI — the gap to keep checking
-`.github/**` needs owner approval via CODEOWNERS, but `/scripts/` and
-`/package.json` do not — and those are what the jobs holding `RULES_READ_TOKEN`
+**Closed by 2026-09-24:** `/scripts/`, `/package.json` and `/infra/` are now in
+CODEOWNERS. Historical note — `.github/**` needed owner approval, but `/scripts/` and
+`/package.json` did not — and those are what the jobs holding `RULES_READ_TOKEN`
 actually execute on a `pull_request` event. Any new CI secret inherits this.
 Also: every new secret must be added to the inventory in
 `docs/plan/08-cicd-releases.md`, or the yearly rotation policy never reaches it.

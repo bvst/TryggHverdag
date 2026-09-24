@@ -31,6 +31,21 @@ describe('HK-03: rules that apply to every session and every agent', () => {
     ['gh api -X POST repos/o/r/actions/workflows/infra-staging.yml/dispatches', 'D-077'],
     // The deploy itself goes through a script too.
     ['node scripts/staging-deploy.mjs', 'CI only'],
+    // Forms three reviewers found getting through: a flag between the words,
+    // the pinned binary called directly, another repository named, a re-run.
+    ['terraform -chdir=infra/staging apply', 'owner'],
+    ['terraform -chdir=infra/staging destroy -auto-approve', 'owner'],
+    [
+      'node_modules/.cache/terraform/1.16.4/linux_amd64/terraform -chdir=infra/staging apply',
+      'owner',
+    ],
+    ['gh -R bvst/TryggHverdag workflow run infra-staging.yml -f action=apply', 'D-077'],
+    ['gh --repo bvst/TryggHverdag workflow run deploy-staging.yml', 'D-077'],
+    ['gh run rerun 12345678901', 'D-077'],
+    ['gh -R bvst/TryggHverdag run rerun 12345678901 --failed', 'D-077'],
+    ['gh api -X POST repos/o/r/actions/runs/123/rerun', 'D-077'],
+    ['gh api -X POST repos/o/r/actions/runs/123/rerun-failed-jobs', 'D-077'],
+    ['gh api -X POST repos/o/r/actions/jobs/456/rerun', 'D-077'],
   ])('blocks: %s', (command, expected) => {
     const result = guard(command);
     expect(result.status).toBe(BLOCKED);
@@ -43,7 +58,9 @@ describe('HK-03: rules that apply to every session and every agent', () => {
     'git status --short',
     'gh pr create --fill',
     'node scripts/terraform.mjs -chdir=infra/staging validate',
+    'terraform -chdir=infra/staging plan',
     'gh workflow list',
+    'gh run view 12345678901 --log',
   ])('allows: %s', (command) => {
     expect(guard(command).status).toBe(ALLOWED);
   });
@@ -118,6 +135,25 @@ describe('HK-03: the second layer, the deny list in .claude/settings.json', () =
 
   test('D-077: nor through the GitHub command line', () => {
     expect(deny).toContain('Bash(gh workflow run*)');
+    expect(deny).toContain('Bash(gh * workflow run*)');
+  });
+
+  test('D-077: nor by re-running a run that already exists', () => {
+    expect(deny).toContain('Bash(gh run rerun*)');
+    expect(deny).toContain('Bash(gh * run rerun*)');
+  });
+
+  test('D-077: nor through older GitHub tool names that start or re-run a run', () => {
+    // This server exposes one tool for all of it, denied above. Other versions
+    // of the GitHub MCP server split it; denying a name that does not exist
+    // costs nothing, and a session on the Mac may run a different version.
+    for (const tool of [
+      'mcp__github__run_workflow',
+      'mcp__github__rerun_workflow_run',
+      'mcp__github__rerun_failed_jobs',
+    ]) {
+      expect(deny).toContain(tool);
+    }
   });
 });
 

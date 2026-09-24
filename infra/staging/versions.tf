@@ -23,7 +23,7 @@ terraform {
   # locking needs is unverified, and the workflow that runs Terraform allows
   # one run at a time instead (`concurrency` in infra-staging.yml).
   backend "s3" {
-    bucket = "trygghverdag-staging-tfstate"
+    bucket = "trygg-hverdag-staging-tfstate"
     key    = "staging.tfstate"
     # Cellar ignores the region; the S3 client insists on having one.
     region = "us-east-1"

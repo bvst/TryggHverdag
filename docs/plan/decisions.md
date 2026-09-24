@@ -1572,9 +1572,11 @@ any other path is work, not a candidate for the same treatment.
      `scripts/lib/terraform.mjs`, with HashiCorp's call home turned off, so CI,
      sessions and the Mac run one version. `infra:check` (fmt, the lock file,
      validate — offline, no credentials) is part of `gate:static`.
-  9. **State lives in a Cellar bucket in the staging organisation**, as Clever
-     Cloud's own Terraform page recommends, created by hand (A-20) because a
-     backend cannot create itself. No state lock: Cellar's support for S3's
+  9. **State lives in the Cellar bucket `trygg-hverdag-staging-tfstate` in the
+     staging organisation**, as Clever Cloud's own Terraform page recommends,
+     created by hand (A-20) because a backend cannot create itself. The
+     organisation's ID is committed in `infra/staging/staging.auto.tfvars`
+     (A-18); it is an identifier, not a secret. No state lock: Cellar's support for S3's
      conditional writes is unverified, so the workflow runs one at a time
      instead.
   10. **No build step.** Node strips the TypeScript at start-up

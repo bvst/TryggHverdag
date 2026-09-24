@@ -25,19 +25,18 @@ const GLOBAL = [
   [/\bclever\s+deploy\b/, 'Deploys run from CI only (Section 8).'],
   // The same deploy, through the script deploy-staging.yml runs (INF-07).
   [/\bscripts\/staging-deploy\.mjs\b/, 'Deploys run from CI only (Section 8).'],
-  [/\bterraform\s+(apply|destroy)\b/, 'terraform apply and destroy need the owner.'],
-  // The pinned Terraform runs through a wrapper (INF-07), which the line above
-  // would not see.
-  [
-    /\bscripts\/terraform\.mjs\b[^\n]*\s(apply|destroy)\b/,
-    'terraform apply and destroy need the owner.',
-  ],
+  // Anything named terraform, with anything between it and the verb: flags
+  // such as -chdir= sit there, and so does the path when the pinned binary or
+  // its wrapper (scripts/terraform.mjs, INF-07) is called directly.
+  [/\bterraform\b[^\n]*\s(apply|destroy)\b/, 'terraform apply and destroy need the owner.'],
   // Staging is applied by two workflow runs the owner starts (D-077). GitHub
   // sees a session's tools as the owner, so it could not tell the difference —
-  // which is why a session must not start a run at all.
+  // which is why a session must not start a run at all, nor re-run one, by
+  // any route: gh with any flags first (-R names another repository), or the
+  // REST endpoints behind it.
   [
-    /\bgh\s+workflow\s+run\b|\/actions\/workflows\/\S*\/dispatches\b/,
-    'Starting a workflow run is for the owner (D-077): GitHub cannot tell this session from the owner.',
+    /\bgh\b[^\n]*\bworkflow\s+run\b|\bgh\b[^\n]*\brun\s+rerun\b|\/actions\/workflows\/\S*\/dispatches\b|\/actions\/(runs|jobs)\/\d+\/rerun/,
+    'Starting or re-running a workflow run is for the owner (D-077): GitHub cannot tell this session from the owner.',
   ],
   [/\bgh\s+pr\s+merge\b[^\n]*--admin\b/, 'Admin merges bypass the gates (D-042).'],
 ];
