@@ -239,6 +239,14 @@ first item below. What remains:
   **Not re-verified today**, so it waits: changing an unreviewable file on an
   unverified claim is how the placeholder verdict got in.
 
+**One change to `ai-review.yml` shipped on its own, ahead of the batch**
+(owner's decision, 2026-09-24). INF-07 makes `apps/server/src/bin/worker.ts`
+and `apps/server/src/process.ts` safety code: they decide whether a stopped
+worker is restarted. The safety filter lists them first, in a two-line pull
+request merged by hand (D-075). Then INF-07 can add them to CODEOWNERS and
+the owner-approval list, and keep its own AI reviews. The three items above
+still wait.
+
 **After INF-06 lands**, `gate:integrity` will fail until `android-e2e` joins the
 required list. Expected, not a defect.
 

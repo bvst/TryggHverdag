@@ -55,6 +55,8 @@ jobs:
               - 'apps/server/src/domain/**'
               - 'apps/server/src/modules/alerts/**'
               - 'apps/server/src/worker.ts'
+              - 'apps/server/src/bin/worker.ts'
+              - 'apps/server/src/process.ts'
               - 'apps/server/src/api.ts'
               - 'apps/mobile/src/safety-core/**'
               - 'packages/contracts/**'
