@@ -77,3 +77,107 @@ describe('startWorker', () => {
     await expect(heartbeat?.(null, {} as never)).rejects.toThrow(/select now\(\)/);
   });
 });
+
+type RunnerOptions = Parameters<Parameters<typeof startWorker>[1] & object>[0];
+
+/**
+ * A runner that records what happens to it. `ends` settles the promise that
+ * Graphile Worker's own runner settles when it stops or crashes.
+ */
+function recordingRunner() {
+  const events: string[] = [];
+  let options: RunnerOptions | undefined;
+  let settle: { resolve: () => void; reject: (error: Error) => void } = {
+    resolve: () => undefined,
+    reject: () => undefined,
+  };
+  const promise = new Promise<void>((resolve, reject) => {
+    settle = { resolve, reject };
+  });
+  const run = ((given: RunnerOptions) => {
+    options = given;
+    const pool = given.pgPool;
+    if (pool !== undefined) {
+      const end = pool.end.bind(pool);
+      pool.end = () => {
+        events.push('pool ended');
+        return end();
+      };
+    }
+    return Promise.resolve({
+      promise,
+      stop: () => {
+        events.push('runner stopped');
+        settle.resolve();
+        return Promise.resolve();
+      },
+    } as never);
+  }) as Parameters<typeof startWorker>[1];
+  return {
+    run,
+    events,
+    options: () => options,
+    endsOnItsOwn: () => {
+      settle.resolve();
+    },
+    crashes: (error: Error) => {
+      settle.reject(error);
+    },
+  };
+}
+
+describe('stopping the worker', () => {
+  test('D-068: stopping ends the connection pool it opened, after the runner has stopped', async () => {
+    // The pool is handed to Graphile Worker, which only ends pools it created
+    // itself. Left open, every restart of the process would leak connections
+    // against a database that allows five in total.
+    const runner = recordingRunner();
+    const worker = await startWorker('postgres://example/db', runner.run);
+
+    await worker.stop();
+
+    expect(runner.events).toEqual(['runner stopped', 'pool ended']);
+    expect(runner.options()?.pgPool?.ended).toBe(true);
+  });
+
+  test('a runner that fails to start does not leave its pool open', async () => {
+    let options: RunnerOptions | undefined;
+    const failing = ((given: RunnerOptions) => {
+      options = given;
+      return Promise.reject(new Error('cannot start'));
+    }) as Parameters<typeof startWorker>[1];
+
+    await expect(startWorker('postgres://example/db', failing)).rejects.toThrow('cannot start');
+    expect(options?.pgPool?.ended).toBe(true);
+  });
+
+  test('stopping on request ends quietly', async () => {
+    const runner = recordingRunner();
+    const worker = await startWorker('postgres://example/db', runner.run);
+
+    const stopped = worker.untilStopped();
+    await worker.stop();
+
+    await expect(stopped).resolves.toBeUndefined();
+  });
+
+  test('AR-06: a runner that ends without being asked to is a failure, not a quiet exit', async () => {
+    // A worker process that exits with 0 is one the platform does not restart,
+    // and a worker that is not running is a watchdog that is not watching.
+    const runner = recordingRunner();
+    const worker = await startWorker('postgres://example/db', runner.run);
+
+    runner.endsOnItsOwn();
+
+    await expect(worker.untilStopped()).rejects.toThrow(/without being asked/);
+  });
+
+  test('a runner that crashes passes the crash on, so the process can say what happened', async () => {
+    const runner = recordingRunner();
+    const worker = await startWorker('postgres://example/db', runner.run);
+
+    runner.crashes(new Error('lost the database'));
+
+    await expect(worker.untilStopped()).rejects.toThrow('lost the database');
+  });
+});

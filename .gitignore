@@ -27,3 +27,16 @@ apps/mobile/android/
 # Editors and OS
 .DS_Store
 *.log
+
+# Terraform (infra/). The lock file is committed; nothing else here is.
+# State holds the database password, so it lives in Cellar (A-20) and never in
+# git — even a stray local copy is ignored rather than trusted not to be added.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# Written by `clever link` in deploy-staging.yml; names an app, holds no secret, but
+# belongs to one checkout only.
+.clever.json

@@ -23,7 +23,22 @@ const GLOBAL = [
     'Reading .env files is not allowed.',
   ],
   [/\bclever\s+deploy\b/, 'Deploys run from CI only (Section 8).'],
-  [/\bterraform\s+apply\b/, 'terraform apply needs the owner.'],
+  // The same deploy, through the script deploy-staging.yml runs (INF-07).
+  [/\bscripts\/staging-deploy\.mjs\b/, 'Deploys run from CI only (Section 8).'],
+  [/\bterraform\s+(apply|destroy)\b/, 'terraform apply and destroy need the owner.'],
+  // The pinned Terraform runs through a wrapper (INF-07), which the line above
+  // would not see.
+  [
+    /\bscripts\/terraform\.mjs\b[^\n]*\s(apply|destroy)\b/,
+    'terraform apply and destroy need the owner.',
+  ],
+  // Staging is applied by two workflow runs the owner starts (D-077). GitHub
+  // sees a session's tools as the owner, so it could not tell the difference —
+  // which is why a session must not start a run at all.
+  [
+    /\bgh\s+workflow\s+run\b|\/actions\/workflows\/\S*\/dispatches\b/,
+    'Starting a workflow run is for the owner (D-077): GitHub cannot tell this session from the owner.',
+  ],
   [/\bgh\s+pr\s+merge\b[^\n]*--admin\b/, 'Admin merges bypass the gates (D-042).'],
 ];
 

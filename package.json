@@ -26,7 +26,7 @@
     "test:system": "vitest run --config vitest.system.config.mjs",
     "test:coverage": "vitest run --coverage --config vitest.coverage.config.mjs",
     "gate:file": "node scripts/gate-file.mjs",
-    "gate:static": "pnpm run format:check && pnpm run typecheck && pnpm run lint && pnpm run imports:check",
+    "gate:static": "pnpm run format:check && pnpm run typecheck && pnpm run lint && pnpm run imports:check && pnpm run infra:check",
     "gate:quick": "node scripts/gate.mjs quick",
     "gate:integrity": "node scripts/gate-integrity.mjs",
     "req:coverage": "node scripts/req-coverage.mjs",
@@ -36,7 +36,9 @@
     "api:diff": "node scripts/api-diff.mjs",
     "api:spec": "node scripts/api-spec.mjs",
     "mutation": "node scripts/mutation.mjs",
-    "gate:full": "node scripts/gate.mjs full"
+    "gate:full": "node scripts/gate.mjs full",
+    "infra:check": "node scripts/infra-check.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {
     "@stryker-mutator/core": "^10.0.0",

@@ -55,7 +55,9 @@ this one thing is made by hand.
 2. In its dashboard, create a bucket named `trygghverdag-staging-tfstate`.
 3. From the add-on's environment variables, copy `CELLAR_ADDON_KEY_ID` and
    `CELLAR_ADDON_KEY_SECRET` for A-21, and **send Claude `CELLAR_ADDON_HOST`**
-   (not a secret).
+   (not a secret). `infra/staging/versions.tf` assumes
+   `cellar-c2.services.clever-cloud.com`, the host Clever Cloud's documentation
+   uses; if yours differs, that line changes before the first plan.
 
 ## A-21 — The GitHub environment that holds the keys
 
@@ -79,10 +81,16 @@ from two runs you start yourself (D-077, and A-22 after merging).
 ## After the INF-07 pull request merges
 
 - **A-22 — create staging.** Actions → `infra-staging` → Run workflow with
-  `plan`. Read what it will create (one Node.js app, one DEV PostgreSQL). Then
-  Run workflow again with `apply` and the plan run's number. It applies that
-  plan and nothing else.
+  action `plan`. Read what it will create in the run's summary (one Node.js
+  app, one DEV PostgreSQL). Then Run workflow again with action `apply`, and
+  in "plan run" paste that run's ID or its address (the summary shows the ID).
+  It plans again and applies only if the plan is the one you read; if anything
+  changed in between, it refuses and you plan again.
 - **The first deploy.** The deploy that ran on merge will have failed, saying
   the app does not exist yet — on purpose, because a deploy with nowhere to go
   must not look green. Re-run it after A-22.
-- **A-08 — UptimeRobot** can then watch the staging URL (INF-08).
+- **A-08 — UptimeRobot** can then watch
+  `https://trygghverdag-staging.cleverapps.io/v1/health` (INF-08).
+- **Optional:** add `trygghverdag-staging.cleverapps.io` to the cloud
+  environment's allowed domains, so a session can check staging's health
+  endpoint itself (`docs/plan/cloud-environment.md`).

@@ -1,0 +1,56 @@
+# INF-07: every merge to main deploys to staging, then proves it works.
+#
+# Staging is one nano instance running the API and the worker, and the free DEV
+# PostgreSQL, in its own Clever Cloud organisation with synthetic data only
+# (D-046, D-077). Terraform creates it (infra-staging.yml); this only pushes code.
+#
+# The job reads the Clever Cloud key from the "staging" environment, which the
+# owner limited to main (A-21). A pull request branch cannot reach it — not a
+# person's, and not a Claude session's.
+#
+# What "worked" means is the smoke test's call, not the deploy's: Clever Cloud
+# calls a deploy done when /v1/health answers, and that endpoint answers 200
+# whenever the API is up (D-065). The smoke test then waits until the worker —
+# the process that will own every alert — has checked in since the deploy.
+#
+# Until the owner has run infra-staging (A-22), there is no app to deploy to,
+# and this fails saying so. That is on purpose: a deploy with nowhere to go must
+# not look green.
+name: deploy-staging
+on:
+  push:
+    branches: [main]
+  # Re-running a deploy, by the owner. A Claude session cannot start runs: the
+  # GitHub tools see it as the owner, so it is denied them instead (D-077).
+  workflow_dispatch:
+concurrency:
+  # One deploy at a time, and never cancel one halfway: queued, not replaced.
+  group: deploy-staging
+  cancel-in-progress: false
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # A deploy on a nano instance builds on a separate build instance, then
+    # starts, then the smoke test waits up to five minutes for a heartbeat.
+    timeout-minutes: 25
+    environment: staging
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        # All of it: Clever Cloud deploys by git push, and a shallow clone
+        # cannot be pushed to a new remote.
+        with: { fetch-depth: 0 }
+      # Node 24, not the repository's 22: Clever Cloud's command-line tool
+      # needs it. Nothing here installs the repository's dependencies — the
+      # deploy and the smoke test use only Node's own modules.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version: 24 }
+      - name: Deploy
+        env:
+          CLEVER_TOKEN: ${{ secrets.CLEVER_TOKEN }}
+          CLEVER_SECRET: ${{ secrets.CLEVER_SECRET }}
+        run: node scripts/staging-deploy.mjs
+      - name: Smoke test — the API answers and the worker has checked in since
+        run: node scripts/smoke.mjs

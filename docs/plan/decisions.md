@@ -1525,3 +1525,101 @@ any other path is work, not a candidate for the same treatment.
   2026-09-23), so an owner question filed from a session is the owner's own
   issue, and GitHub does not notify people of their own actions. The daily
   report is therefore where those questions reach the owner.
+
+## D-077 — Staging v1: where it lives, who holds its key, and how it changes
+- **Date:** 2026-09-24 · **Status:** Accepted (items 1–4 by the owner; the rest delegated, D-031) · **Section:** 8
+- **Context:** INF-07 builds staging on Clever Cloud (D-025, D-046). Four
+  questions were the owner's, because they spend money or hand out keys; the
+  rest are how the pieces fit. Recorded together because they are one design.
+- **Decision — the owner's (asked 2026-09-24, one at a time):**
+  1. **Staging is its own Clever Cloud organisation**, `TryggHverdag Staging`,
+     owned by the owner's account (A-18). The price is the same as a personal
+     space; the organisation is what lets the next item limit a key to staging.
+  2. **CI holds the key of a dedicated user that is a Manager of the staging
+     organisation and nothing else** (A-19). A Clever Cloud key reaches every
+     organisation its user belongs to, so the user's memberships are the
+     boundary, not the key. Production gets its own user at go-live. The owner's
+     main account (`dev@urso.no`) is deliberately not that user.
+  3. **One nano instance** (512 MB), not the XS that D-046 names. D-046's "about
+     €5 a month" did not survive checking: secondary sources put XS at about
+     €16 and nano at about €6 a month (the live prices load from the Clever
+     Cloud API, which sessions do not reach). Nano keeps D-048's €5–10. **This
+     amends D-046's instance size.**
+  4. **Terraform is applied by two runs the owner starts** (`infra-staging.yml`):
+     `plan`, which the owner reads, then `apply`, given that run, which applies
+     only an identical plan. The first proposal — a GitHub environment that
+     pauses for the owner's approval — does not exist for private repositories
+     below Enterprise (GitHub's documentation, checked 2026-09-24), which was
+     found before building on it.
+- **Decision — delegated (D-031):**
+  5. **The approval is a fingerprint, not a stored plan.** A saved plan holds
+     the database password in plain text and anyone who can read the repository
+     can download a run's artifacts, so the plan run publishes a SHA-256 of the
+     planned changes and the apply run compares its own. Anything that moved in
+     between — code, state, the platform — changes the hash and stops the apply.
+  6. **Claude's sessions cannot start a workflow run.** GitHub sees a session's
+     tools as the owner, so it could not tell "the owner pressed Run" from "a
+     session did". The GitHub tool that starts runs, and the command-line
+     equivalent, are denied in `.claude/settings.json`; HK-03 blocks the shell
+     routes, including Terraform apply and destroy and the deploy through their
+     wrapper scripts. **This is a local rule, not a GitHub one**: it binds
+     sessions run from this repository, and nothing else. HK-03 matches text,
+     so it also blocks a command that merely *mentions* those routes — writing
+     this entry through a shell was blocked for that reason.
+  7. **Keys live in the GitHub environment `staging`, limited to `main`**
+     (A-21): no pull-request branch can reach them, including a session's.
+  8. **Terraform 1.16.4 is downloaded and checked by hash** by
+     `scripts/lib/terraform.mjs`, with HashiCorp's call home turned off, so CI,
+     sessions and the Mac run one version. `infra:check` (fmt, the lock file,
+     validate — offline, no credentials) is part of `gate:static`.
+  9. **State lives in a Cellar bucket in the staging organisation**, as Clever
+     Cloud's own Terraform page recommends, created by hand (A-20) because a
+     backend cannot create itself. No state lock: Cellar's support for S3's
+     conditional writes is unverified, so the workflow runs one at a time
+     instead.
+  10. **No build step.** Node strips the TypeScript at start-up
+      (`--experimental-strip-types`, on by default from 22.18; named so an older
+      22 cannot fail). `apps/server/src/bin/bin.test.ts` runs the real entry
+      files under plain `node`, because every other test runs through Vitest,
+      which compiles TypeScript itself.
+  11. **The worker runs beside the API on the same instance**
+      (`CC_WORKER_COMMAND`, restart `always`, 5 s delay), exactly one instance,
+      so exactly one worker inside the DEV plan's five connections.
+      `untilStopped()` makes a worker that ends on its own exit with 1.
+  12. **Migrations run as the pre-run hook**, so a failed migration stops the
+      deploy, and the database URL never leaves Clever Cloud (the 08b draft ran
+      them from CI with the URL as a GitHub secret).
+  13. **A deploy is done when the worker beats after it.** `/v1/health` answers
+      200 whenever the API is up, and the old worker's beat stays fresh for
+      three minutes, so "status ok" right after a deploy can come from a worker
+      that no longer exists. The smoke test waits for a beat later than its
+      first answer, both stamped by the database clock.
+  14. **Process failures are reported, redacted.** The entry points print
+      `<process> failed: <error ← cause>` with passwords removed from any
+      connection string — the first output this server writes. D-068's warning
+      was the reason: `pg` and `graphile-worker` errors can carry the connection
+      string. Nothing else is logged; request errors still are not.
+  15. **Staging answers at `trygghverdag-staging.cleverapps.io`**, fixed in
+      Terraform so the smoke test and UptimeRobot (INF-08) have a stable
+      address. Clever Cloud says `cleverapps.io` is not production quality;
+      production gets its own domain (D-046).
+  16. **Clever Cloud's CLI runs as `npx clever-tools@5.0.2`**, an exact
+      version, on Node 24 in the deploy job only: it requires Node 24 and the
+      repository is on 22, so it cannot be a normal dependency.
+- **Known and accepted:**
+  - **Nano runs at reduced CPU priority** on Clever Cloud's hosts and can slow
+    under load. Fine for staging today; revisit before the staging canary
+    (REL-10, M2) times alerts on it.
+  - **Staging's PostgreSQL is 15** (the DEV plan offers only 15.18) while the
+    other integration tests use 17. `deploy.integration.test.ts` runs the
+    deploy sequence on 15 for that reason.
+  - **Graphile Worker warns "Your pool doesn't have error handlers!"** at every
+    start. That is D-068's deferred handler, still deferred; the warning is the
+    same fact D-068 already records.
+- **Not verified before merging, and how each gets verified:** that Clever
+  Cloud accepts the flavour `nano` and the vhost as written, the Cellar
+  endpoint (`cellar-c2`, to be confirmed by the owner in A-20), that the
+  provider maps `start_script` to the run command, and reading the plan run's
+  log as the source of the fingerprint. The first `plan` and `apply` (A-22) and
+  the first deploy answer all of them; none can run from a pull request,
+  because the keys are limited to `main`.

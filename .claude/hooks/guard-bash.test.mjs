@@ -2,6 +2,8 @@
 // HK-03: the shell is the way around every other guard, so it has its own.
 // Two independent layers protect the same rules: these checks and the deny list
 // in .claude/settings.json.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { ALLOWED, BLOCKED, bash, runHook } from './test-helpers.mjs';
 
@@ -17,6 +19,18 @@ describe('HK-03: rules that apply to every session and every agent', () => {
     ['clever deploy', 'CI only'],
     ['terraform apply -auto-approve', 'owner'],
     ['gh pr merge 12 --admin', 'D-042'],
+    // The pinned Terraform runs through a wrapper, which the rule above would
+    // not see: INF-07. No parentheses in these comments — the test counter in
+    // scripts/lib/test-strength.mjs reads test.each up to the first one.
+    ['node scripts/terraform.mjs -chdir=infra/staging apply', 'owner'],
+    ['node scripts/terraform.mjs -chdir=infra/staging destroy -auto-approve', 'owner'],
+    ['terraform destroy', 'owner'],
+    // Applying staging is two workflow runs the owner starts; GitHub sees a
+    // session's tools as the owner, so the session must not start them: D-077.
+    ['gh workflow run infra-staging.yml -f action=apply', 'D-077'],
+    ['gh api -X POST repos/o/r/actions/workflows/infra-staging.yml/dispatches', 'D-077'],
+    // The deploy itself goes through a script too.
+    ['node scripts/staging-deploy.mjs', 'CI only'],
   ])('blocks: %s', (command, expected) => {
     const result = guard(command);
     expect(result.status).toBe(BLOCKED);
@@ -28,6 +42,8 @@ describe('HK-03: rules that apply to every session and every agent', () => {
     'pnpm run gate:quick',
     'git status --short',
     'gh pr create --fill',
+    'node scripts/terraform.mjs -chdir=infra/staging validate',
+    'gh workflow list',
   ])('allows: %s', (command) => {
     expect(guard(command).status).toBe(ALLOWED);
   });
@@ -84,6 +100,24 @@ describe('HK-03: implementer cannot reach tests through the shell either (RG-03)
   test('allows a command that changes nothing', () => {
     const result = guard('grep -r "toBe(5)" apps/server/src/journey.test.ts', noTests);
     expect(result.status).toBe(ALLOWED);
+  });
+});
+
+describe('HK-03: the second layer, the deny list in .claude/settings.json', () => {
+  // A shell hook cannot see a tool call, and the GitHub tools can start a
+  // workflow run without a shell. Staging is applied by runs the owner starts,
+  // and GitHub sees a session's tools as the owner — so the tool itself is
+  // denied. Nothing else would notice the line being deleted.
+  const deny = JSON.parse(
+    readFileSync(path.join(import.meta.dirname, '..', 'settings.json'), 'utf8'),
+  ).permissions.deny;
+
+  test('D-077: a session cannot start a workflow run through the GitHub tools', () => {
+    expect(deny).toContain('mcp__github__actions_run_trigger');
+  });
+
+  test('D-077: nor through the GitHub command line', () => {
+    expect(deny).toContain('Bash(gh workflow run*)');
   });
 });
 

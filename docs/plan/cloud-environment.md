@@ -82,10 +82,10 @@ that way by not reaching the places those credentials would be used.
   signal a watchdog must never receive (REL-08).
 - **The APIs of LINK Mobility and UptimeRobot** — same reasoning as Clever
   Cloud. They are reached from CI or the server, never from a session.
-- **`*.cleverapps.io`** — where Clever Cloud serves apps. Once INF-07 has
-  created staging, add its exact hostname (not the wildcard) so a session can
-  check `/v1/health`; the endpoint is unauthenticated and staging holds only
-  synthetic data (D-046).
+- **`*.cleverapps.io`** — where Clever Cloud serves apps. Staging's exact
+  hostname is `trygghverdag-staging.cleverapps.io` (D-077); add that, not the
+  wildcard, once staging exists, so a session can check `/v1/health`. The
+  endpoint is unauthenticated and staging holds only synthetic data (D-046).
 - **Full access** — every domain. Not needed, and it would make this list
   meaningless.
 

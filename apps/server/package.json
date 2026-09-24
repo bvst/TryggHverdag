@@ -10,6 +10,7 @@
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.1",
     "@orpc/openapi": "^1.15.3",
     "@orpc/server": "^1.15.3",
     "@trygghverdag/contracts": "workspace:*",

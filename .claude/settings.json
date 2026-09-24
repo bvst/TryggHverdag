@@ -46,6 +46,8 @@
       "Bash(* --no-verify*)",
       "Bash(clever deploy*)",
       "Bash(gh pr merge --admin*)",
+      "Bash(gh workflow run*)",
+      "mcp__github__actions_run_trigger",
       "Read(/**/.env*)",
       "Edit(/**/.env*)",
       "Read(.env*)",

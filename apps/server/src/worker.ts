@@ -44,20 +44,60 @@ export function createTaskList({
  */
 export type RunWorker = typeof run;
 
+export interface Worker {
+  runner: Runner;
+  /**
+   * Stops the runner, then ends the connection pool. Graphile Worker only ends
+   * pools it created itself, and this one was handed to it — left open, every
+   * restart would leak connections against a database that allows five
+   * (D-068).
+   */
+  stop: () => Promise<void>;
+  /**
+   * Settles when the runner does: quietly after `stop()`, and as a failure if
+   * it ended any other way. A worker process that exits with 0 is one the
+   * platform does not restart, and a worker that is not running is a watchdog
+   * that is not watching.
+   */
+  untilStopped: () => Promise<void>;
+}
+
 export async function startWorker(
   connectionString: string,
   runWorker: RunWorker = run,
-): Promise<Runner> {
+): Promise<Worker> {
   const pool = createPool(connectionString, POOL_SIZE.worker);
   const db = createDatabase(pool);
 
-  return runWorker({
-    pgPool: pool,
-    concurrency: 2,
-    crontab: HEARTBEAT_CRONTAB,
-    taskList: createTaskList({
-      clock: databaseClock(db),
-      heartbeats: databaseWorkerHeartbeats(db),
-    }),
-  });
+  let runner: Runner;
+  try {
+    runner = await runWorker({
+      pgPool: pool,
+      concurrency: 2,
+      crontab: HEARTBEAT_CRONTAB,
+      taskList: createTaskList({
+        clock: databaseClock(db),
+        heartbeats: databaseWorkerHeartbeats(db),
+      }),
+    });
+  } catch (error) {
+    await pool.end();
+    throw error;
+  }
+
+  let stopRequested = false;
+  return {
+    runner,
+    async stop() {
+      stopRequested = true;
+      await runner.stop();
+      await pool.end();
+    },
+    async untilStopped() {
+      await runner.promise;
+      if (!stopRequested) {
+        throw new Error('The worker stopped without being asked to, so nothing is watching.');
+      }
+    },
+  };
 }
