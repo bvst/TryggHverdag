@@ -3,11 +3,14 @@
 // The gates are lists of steps, and a list is easy to get quietly wrong: a typo
 // in a script name drops a step, and the gate then reports "not possible yet"
 // and passes. These tests hold the lists to the repository they describe.
-import { readFileSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { FULL_STEPS, QUICK_STEPS, availableTools } from './gate.mjs';
 import { MUTATION_TIMEOUT_MS } from './lib/gate-decisions.mjs';
 import { packageScripts } from './lib/proc.mjs';
+import { planSteps } from './lib/steps.mjs';
 import {
   findActionUses,
   findUnboundedJobs,
@@ -69,18 +72,26 @@ describe('availableTools', () => {
     // A cloud session has /usr/bin/docker and no daemon. `which docker` would
     // say yes and the integration step would then fail inside Testcontainers,
     // which reads as broken code rather than as a machine that cannot run L3.
+    //
+    // Narrowed to Docker by INF-06, which adds a second probe (an Android
+    // device, for L7): the whole list of commands and the whole result object
+    // now hold that probe too, so they are asserted on their Docker part. The
+    // fake also answers with `output`, as proc.mjs `run` does, because the
+    // device probe reads what adb printed.
     const asked = [];
     const tools = availableTools((command, args) => {
       asked.push([command, ...args].join(' '));
-      return { ok: true };
+      return { ok: true, output: '' };
     }, '/tmp');
 
-    expect(asked).toEqual(['docker info']);
-    expect(tools).toEqual({ docker: true });
+    expect(asked.filter((command) => command.startsWith('docker'))).toEqual(['docker info']);
+    expect(tools).toMatchObject({ docker: true });
   });
 
   test('a daemon that does not answer means the tool is not available', () => {
-    expect(availableTools(() => ({ ok: false }), '/tmp')).toEqual({ docker: false });
+    expect(availableTools(() => ({ ok: false, output: '' }), '/tmp')).toMatchObject({
+      docker: false,
+    });
   });
 });
 
@@ -160,8 +171,17 @@ describe("this repository's own workflows", () => {
     const jobs = text.slice(text.indexOf('\njobs:')).split(/(?=^ {2}[a-z-]+:)/m);
 
     for (const job of jobs) {
-      const firstGuard = job.indexOf("steps.affected.outputs.code == 'true'");
-      if (firstGuard === -1) continue;
+      // Either answer the classifier gives: `code` for the code gates, and
+      // `app` for android-e2e (INF-06-AC12). A job guarded only on `app` is
+      // held to the same order as one guarded on `code`.
+      const guards = [
+        "steps.affected.outputs.code == 'true'",
+        "steps.affected.outputs.app == 'true'",
+      ]
+        .map((guard) => job.indexOf(guard))
+        .filter((at) => at !== -1);
+      if (guards.length === 0) continue;
+      const firstGuard = Math.min(...guards);
       const name = /^ {2}([a-z-]+):/.exec(job)?.[1];
       const classify = job.indexOf('- id: affected');
 
@@ -324,5 +344,280 @@ describe('the ruleset the owner imports', () => {
       .parameters.required_status_checks.map((entry) => entry.context);
 
     expect(contexts).toEqual(required);
+  });
+
+  // INF-06-AC14. The two tests above already fail on their own once
+  // e2e:android exists and this file does not list android-e2e. These say what
+  // they are waiting for, by name, so that neither can pass merely because
+  // the script was never added.
+  test('INF-06-AC14: e2e:android exists, so android-e2e is a check that must be required', () => {
+    expect(scripts['e2e:android']).toBeDefined();
+    expect(required).toContain('android-e2e');
+  });
+
+  test('INF-06-AC14: the ruleset the owner imports requires android-e2e', () => {
+    const contexts = ruleset.rules
+      .find((rule) => rule.type === 'required_status_checks')
+      .parameters.required_status_checks.map((entry) => entry.context);
+
+    expect(contexts).toContain('android-e2e');
+  });
+});
+
+/**
+ * A root script, followed into the app's own scripts wherever it hands over to
+ * one: `pnpm --filter @trygghverdag/mobile run test`, `pnpm -C apps/mobile test`.
+ * The first entry is the root script itself.
+ */
+function scriptChain(name) {
+  const own = scripts[name] ?? '';
+  const appManifest = 'apps/mobile/package.json';
+  const app = existsSync(appManifest)
+    ? (JSON.parse(readFileSync(appManifest, 'utf8')).scripts ?? {})
+    : {};
+  const handedOver = [
+    ...own.matchAll(
+      /(?:--filter[= ]|-F ?)\S*mobile\S*\s+(?:run\s+)?([\w:-]+)|(?:--dir[= ]|-C ?)\S*apps\/mobile\S*\s+(?:run\s+)?([\w:-]+)/g,
+    ),
+  ]
+    .map((match) => match[1] ?? match[2])
+    .filter((script) => app[script] !== undefined)
+    .map((script) => app[script]);
+  return [own, ...handedOver];
+}
+
+describe('the unit run covers both test runners', () => {
+  test("INF-06-AC6: test:unit runs Vitest and then the app's jest-expo suite, in CI mode", () => {
+    const chain = scriptChain('test:unit').join('\n');
+
+    expect(chain).toMatch(/\bvitest run\b/);
+    expect(chain).toMatch(/\bjest\b[^\n]*--ci\b/);
+  });
+
+  test('INF-06-AC6: a failure in either runner fails it, and "no tests found" is a failure', () => {
+    // `&&` stops at the first failure and passes its exit code on; `;` or `||`
+    // would each let one runner's failure pass. Jest exits non-zero when it
+    // finds no tests unless told otherwise, and nothing may tell it otherwise.
+    const [own, ...app] = scriptChain('test:unit');
+
+    expect([own, ...app].join('\n')).toMatch(/\bjest\b/);
+    expect(own).not.toMatch(/;|\|\|/);
+    expect([own, ...app].join('\n')).not.toMatch(/passWithNoTests/);
+  });
+
+  test.each([
+    { config: 'vitest.config.mjs', run: 'the unit run' },
+    { config: 'vitest.coverage.config.mjs', run: 'the coverage run' },
+  ])('INF-06-AC6: Vitest collects no file under apps/mobile in $run', ({ config }) => {
+    // Its pattern for app tests, apps/**/src/**/*.test.ts, reaches the app's
+    // jest-expo tests too, which Vitest cannot run: they would fail on every
+    // run for a reason that has nothing to do with them.
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join('node_modules', 'vitest', 'vitest.mjs'),
+        'list',
+        '--filesOnly',
+        '--json',
+        '--config',
+        config,
+      ],
+      { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: process.env.HOME } },
+    );
+    const files = JSON.parse(result.stdout).map((entry) =>
+      path.relative(process.cwd(), entry.file),
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.filter((file) => file.startsWith('apps/mobile/'))).toEqual([]);
+  });
+
+  test("INF-06-AC8: test:coverage measures the app with jest-expo, beside Vitest's run", () => {
+    const [own, ...app] = scriptChain('test:coverage');
+    const chain = [own, ...app].join('\n');
+
+    expect(chain).toContain('vitest.coverage.config.mjs');
+    expect(chain).toMatch(/\bjest\b[^\n]*--coverage\b/);
+    expect(own).not.toMatch(/;|\|\|/);
+    expect(chain).not.toMatch(/passWithNoTests/);
+  });
+});
+
+describe('the development build', () => {
+  test('INF-06-AC16: pnpm run dev starts Metro for the development client', () => {
+    expect(scriptChain('dev').join('\n')).toMatch(/\bexpo start\b[^\n]*--dev-client\b/);
+  });
+});
+
+describe('L7 in gate:full', () => {
+  const l7 = FULL_STEPS.find((step) => step.command.join(' ') === 'pnpm run e2e:android');
+
+  /** proc.mjs `run`, as a machine whose adb reports these device lines answers it. */
+  const machine = (devices) => (command, args) => {
+    if (command !== 'adb') return { ok: true, output: '' };
+    if (args[0] === 'devices') {
+      return { ok: true, output: `List of devices attached\n${devices}\n` };
+    }
+    if (args[0] === 'get-state') {
+      return devices.includes('\tdevice')
+        ? { ok: true, output: 'device\n' }
+        : { ok: false, output: 'error: no devices/emulators found' };
+    }
+    return { ok: false, output: '' };
+  };
+
+  const planned = (runCommand) => {
+    if (l7 === undefined) {
+      throw new Error('gate:full has no step that runs pnpm run e2e:android.');
+    }
+    const [step] = planSteps(
+      [l7],
+      { 'e2e:android': 'node scripts/e2e-android.mjs' },
+      {},
+      availableTools(runCommand, '/tmp'),
+    );
+    return step;
+  };
+
+  test('INF-06-AC15: gate:full has an L7 step, and it runs pnpm run e2e:android', () => {
+    expect(l7).toBeDefined();
+    expect(l7?.needsScript).toBe('e2e:android');
+  });
+
+  test('INF-06-AC15: with no Android device it is not possible here, and says android-e2e is where it runs', () => {
+    const step = planned(machine(''));
+
+    expect(step?.willRun).toBe(false);
+    expect(step?.reason).toContain('android-e2e');
+  });
+
+  test('INF-06-AC15: a device that is offline is no device', () => {
+    expect(planned(machine('emulator-5554\toffline'))?.willRun).toBe(false);
+  });
+
+  test('INF-06-AC15: no adb at all is no device, not a crash', () => {
+    const noAdb = (command) =>
+      command === 'adb' ? { ok: false, output: 'spawnSync adb ENOENT' } : { ok: true, output: '' };
+
+    expect(planned(noAdb)?.willRun).toBe(false);
+  });
+
+  test('INF-06-AC15: with a device connected, it runs e2e:android', () => {
+    expect(planned(machine('emulator-5554\tdevice'))).toMatchObject({
+      willRun: true,
+      step: { command: ['pnpm', 'run', 'e2e:android'] },
+    });
+  });
+});
+
+/** A ci.yml job's own lines with comment lines dropped, or null when there is no such job. */
+function ciJob(id) {
+  const lines = readFileSync(`${WORKFLOWS}/ci.yml`, 'utf8').split('\n');
+  const start = lines.findIndex((line) => new RegExp(`^ {2}${id}:(\\s|$)`).test(line));
+  if (start === -1) return null;
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => /^ {2}\S/.test(line) || /^\S/.test(line));
+  return (end === -1 ? rest : rest.slice(0, end))
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n');
+}
+
+/** The job's steps in order, each as the text of its block. */
+function ciSteps(id) {
+  const job = ciJob(id) ?? '';
+  const at = job.indexOf('    steps:');
+  return at === -1
+    ? []
+    : job
+        .slice(at)
+        .split(/\n(?= {6}- )/)
+        .slice(1);
+}
+
+/** A step's `if:` condition, or '' when it has none. */
+const guardOf = (step) => /^\s*-?\s*if:\s*(.+)$/m.exec(step)?.[1] ?? '';
+
+/** The step that boots an emulator: the pinned action, or a script of our own. */
+const bootsEmulator = (step) =>
+  /uses: reactivecircus\/android-emulator-runner@/.test(step) || /\bemulator\s+(-avd|@)/.test(step);
+
+describe('the android-e2e job in ci.yml', () => {
+  test('INF-06-AC12: there is a job named exactly android-e2e, the check the merge rules expect', () => {
+    expect(ciJob('android-e2e')).not.toBeNull();
+  });
+
+  test('INF-06-AC12: it checks out full history, then classifies the diff before any other step', () => {
+    const [checkout, classify] = ciSteps('android-e2e');
+
+    expect(checkout).toMatch(/uses: actions\/checkout@/);
+    expect(checkout).toMatch(/fetch-depth: 0/);
+    expect(classify).toMatch(/id: affected/);
+    expect(classify).toMatch(/run: node scripts\/affected\.mjs --base /);
+    expect(guardOf(classify ?? '')).toBe('');
+  });
+
+  test('INF-06-AC12: a diff that cannot change the app is reported as such, and the job passes', () => {
+    const nothing = ciSteps('android-e2e').filter((step) =>
+      guardOf(step).includes("steps.affected.outputs.app != 'true'"),
+    );
+
+    expect(nothing).toHaveLength(1);
+    expect(nothing[0]).toContain('android-e2e');
+    expect(nothing[0]).toMatch(/nothing to check/);
+    expect(nothing[0]).not.toMatch(/exit 1/);
+  });
+
+  test('INF-06-AC12: every other step works only when the diff can change the app', () => {
+    const rest = ciSteps('android-e2e')
+      .slice(2)
+      .filter((step) => !guardOf(step).includes("steps.affected.outputs.app != 'true'"));
+
+    expect(rest.length).toBeGreaterThan(0);
+    for (const step of rest) {
+      expect(guardOf(step), step.split('\n')[0]).toContain("steps.affected.outputs.app == 'true'");
+    }
+  });
+
+  test('INF-06-AC12: KVM is switched on and checked before the emulator, and failing that it stops with a message', () => {
+    const steps = ciSteps('android-e2e');
+    const kvm = steps.findIndex((step) => step.includes('/dev/kvm') && step.includes('udevadm'));
+    const emulator = steps.findIndex(bootsEmulator);
+
+    expect(kvm).toBeGreaterThan(1);
+    expect(emulator).toBeGreaterThan(kvm);
+    expect(steps[kvm]).toMatch(/::error/);
+    expect(steps[kvm]).toMatch(/exit 1/);
+  });
+
+  test('INF-06-AC12: the app is built before the emulator boots, which then runs pnpm run e2e:android', () => {
+    const steps = ciSteps('android-e2e');
+    const e2e = steps.flatMap((step, at) => (/pnpm run e2e:android\b/.test(step) ? [at] : []));
+    const emulator = steps.findIndex(bootsEmulator);
+
+    expect(emulator).toBeGreaterThan(-1);
+    expect(e2e.length).toBeGreaterThanOrEqual(2);
+    expect(e2e[0]).toBeLessThan(emulator);
+    expect(e2e.at(-1)).toBeGreaterThanOrEqual(emulator);
+  });
+
+  test('INF-06-AC10: the emulator is x86_64, the one ABI the build contains', () => {
+    expect(ciSteps('android-e2e').find(bootsEmulator)).toMatch(/\bx86_64\b/);
+  });
+
+  test('INF-06-AC12: it is bounded, holds no secret, and never tolerates or retries a failure', () => {
+    const job = ciJob('android-e2e');
+
+    expect(job).toMatch(/^ {4}timeout-minutes: \d+/m);
+    expect(job).not.toMatch(/secrets\./);
+    expect(job).not.toMatch(/continue-on-error/);
+    expect(job).not.toMatch(/uses: [^\n]*retry/i);
+    expect(job).not.toMatch(/:\s*write\b/);
+  });
+
+  test("INF-06-AC12: ci.yml's header no longer calls android-e2e missing", () => {
+    const text = readFileSync(`${WORKFLOWS}/ci.yml`, 'utf8');
+
+    expect(text.slice(0, text.indexOf('\nname:'))).not.toMatch(/android-e2e[^\n]*INF-06 adds it/);
   });
 });

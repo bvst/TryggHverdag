@@ -17,7 +17,7 @@
  * tsconfig by hand would not.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
@@ -28,10 +28,21 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const turbo = JSON.parse(readFileSync(path.join(root, 'turbo.json'), 'utf8'));
 const inputs = turbo.tasks.typecheck.inputs;
 
-/** Packages whose typecheck actually runs tsc: the ones with a tsconfig. */
-const packages = ['apps/server', 'packages/contracts', 'packages/test-kit'].filter((p) =>
-  existsSync(path.join(root, p, 'tsconfig.json')),
-);
+/**
+ * Packages whose typecheck actually runs tsc: the ones with a tsconfig.
+ *
+ * Found in the workspace folders rather than listed. The list used to name
+ * three packages by hand, and the app would have had to be added to it by
+ * hand too (INF-06-AC1); the package after that would have been missed the
+ * same way the root-level drizzle.config.ts was.
+ */
+const packages = ['apps', 'packages']
+  .flatMap((group) =>
+    readdirSync(path.join(root, group), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => `${group}/${entry.name}`),
+  )
+  .filter((p) => existsSync(path.join(root, p, 'tsconfig.json')));
 
 /** Every file tsc reads for this package, relative to the package directory. */
 function checkedFiles(pkg) {
@@ -51,6 +62,15 @@ describe('the typecheck cache key covers everything TypeScript reads', () => {
   test('there are packages to check, and each one reads files', () => {
     expect(packages.length).toBeGreaterThan(0);
     for (const pkg of packages) expect(checkedFiles(pkg).length).toBeGreaterThan(0);
+  });
+
+  test('INF-06-AC1: the app is among them, so its typecheck key covers every file tsc reads there', () => {
+    // The packages found before INF-06 are still found: deriving the list
+    // must not lose one it used to name.
+    expect(packages).toEqual(
+      expect.arrayContaining(['apps/server', 'packages/contracts', 'packages/test-kit']),
+    );
+    expect(packages).toContain('apps/mobile');
   });
 
   for (const pkg of packages) {
