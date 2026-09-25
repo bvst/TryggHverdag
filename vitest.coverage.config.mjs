@@ -1,5 +1,5 @@
 import { defineConfig } from 'vitest/config';
-import { TEST_FILES } from './vitest.shared.mjs';
+import { JEST_EXPO_FILES, TEST_FILES } from './vitest.shared.mjs';
 
 /**
  * The run the coverage ratchet measures (RG-04).
@@ -21,7 +21,7 @@ import { TEST_FILES } from './vitest.shared.mjs';
 export default defineConfig({
   test: {
     include: TEST_FILES,
-    exclude: ['**/node_modules/**', '**/*.integration.test.ts'],
+    exclude: ['**/node_modules/**', JEST_EXPO_FILES, '**/*.integration.test.ts'],
     environment: 'node',
     testTimeout: 60_000,
     coverage: {

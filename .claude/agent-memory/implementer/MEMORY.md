@@ -1,1 +1,3 @@
 - [Stale git on the hook PATH](project_stale_git_on_path.md): /usr/local/bin/git 2.23 breaks `git init -b` in the hook tests when the stop gate runs them
+- [Expo peers under pnpm](project_expo_pnpm_peers.md): app must declare @babel/core ^7; expo-router's drawer-layout drags in Reanimated/Worklets; test-renderer must match React
+- [Typed lint vs red TS tests](project_red_phase_typed_lint.md): tests importing missing modules fail no-unsafe-*, so HK-09 blocks committing them before their source
