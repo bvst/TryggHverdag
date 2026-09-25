@@ -80,6 +80,7 @@ describe('Docker', () => {
     const result = run(sys, 'Docker');
     expect(result.status).toBe('missing');
     expect(text(result)).toMatch(/Testcontainers/);
+    expect(result.detail).toContain('Could not find a working container runtime strategy');
     expect(result.fix).toContain('DOCKER_HOST');
     expect(result.fix).toContain('TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE');
   });
@@ -152,11 +153,23 @@ describe('Maestro', () => {
 });
 
 describe('GitHub', () => {
-  const gh = (status, remote, ssh) => {
+  // The account is read from the active github.com account only; plain
+  // `gh auth status` lists every host and account, and the first one listed need
+  // not be the one git pushes as.
+  const GH_ACTIVE_STATUS = 'gh auth status --active --hostname github.com';
+  // With an HTTPS origin, git pushes as whatever its credential helper hands it.
+  // Only gh's own helper makes that gh's account.
+  const GIT_HELPER = 'git config --get-all credential.https://github.com.helper';
+  const GH_HELPER = { stdout: '!/usr/local/bin/gh auth git-credential\n' };
+  // `git config --get-all` of an unset key prints nothing and exits 1.
+  const NO_HELPER = { code: 1 };
+
+  const gh = (status, remote, ssh, helper = NO_HELPER) => {
     const answers = {
       'gh --version': { stdout: 'gh version 2.63.0 (2024-11-27)\n' },
-      'gh auth status': status,
+      [GH_ACTIVE_STATUS]: status,
       'git remote get-url origin': { stdout: remote },
+      [GIT_HELPER]: helper,
     };
     if (ssh !== undefined) {
       answers[SSH_GITHUB] = { code: 1, stderr: ssh };
@@ -178,7 +191,12 @@ describe('GitHub', () => {
 
   test("BUG-4: gh as Claude's account with an HTTPS remote is ok, and SSH is never asked", () => {
     const sys = fakeSystem({
-      answers: gh({ stdout: loggedInAs('urso-agent') }, OWNER_REMOTE_HTTPS, sshGreeting('bvst')),
+      answers: gh(
+        { stdout: loggedInAs('urso-agent') },
+        OWNER_REMOTE_HTTPS,
+        sshGreeting('bvst'),
+        GH_HELPER,
+      ),
     });
     const result = run(sys, 'GitHub');
     expect(result.status).toBe('ok');
@@ -233,6 +251,86 @@ describe('GitHub', () => {
     const result = run(sys, 'GitHub');
     expect(result.status).toBe('missing');
     expect(result.detail).toMatch(/not logged in/);
+  });
+  test('BUG-4: an HTTPS remote whose credential helper is not gh does not push as gh', () => {
+    const sys = fakeSystem({
+      answers: gh({ stdout: loggedInAs('urso-agent') }, OWNER_REMOTE_HTTPS, undefined, {
+        stdout: 'osxkeychain\n',
+      }),
+    });
+    const result = run(sys, 'GitHub');
+    expect(result.status).toBe('missing');
+    expect(result.detail).toMatch(/credential/i);
+    expect(result.fix).toContain('gh auth setup-git');
+  });
+
+  test("BUG-4: an HTTPS remote whose credential helper is gh's pushes as gh, so it is ok", () => {
+    const sys = fakeSystem({
+      answers: gh({ stdout: loggedInAs('urso-agent') }, OWNER_REMOTE_HTTPS, undefined, GH_HELPER),
+    });
+    expect(run(sys, 'GitHub').status).toBe('ok');
+  });
+
+  test('BUG-4: the account is the active github.com one, not the first plain gh auth status lists', () => {
+    const answers = gh(
+      { stdout: loggedInAs('urso-agent') },
+      OWNER_REMOTE_HTTPS,
+      undefined,
+      GH_HELPER,
+    );
+    // A second, inactive account listed first by plain `gh auth status`.
+    answers['gh auth status'] = {
+      stdout: `${loggedInAs('bvst')}  - Active account: false\n${loggedInAs('urso-agent')}`,
+    };
+    const result = run(fakeSystem({ answers }), 'GitHub');
+    expect(result.status).toBe('ok');
+    expect(result.detail).toContain('urso-agent');
+  });
+
+  test('BUG-4: an SSH key GitHub refuses is missing, and says what SSH said', () => {
+    const answers = gh({ stdout: loggedInAs('urso-agent') }, OWNER_REMOTE_SSH);
+    answers[SSH_GITHUB] = { code: 255, stderr: 'git@github.com: Permission denied (publickey).\n' };
+    const result = run(fakeSystem({ answers }), 'GitHub');
+    expect(result.status).toBe('missing');
+    expect(result.detail).toContain('Permission denied');
+  });
+
+  test('BUG-4: gh logged in but with no readable account is missing, never ok', () => {
+    const sys = fakeSystem({
+      answers: gh(
+        { stdout: 'github.com\n  ✓ Logged in to github.com\n' },
+        OWNER_REMOTE_HTTPS,
+        undefined,
+        GH_HELPER,
+      ),
+    });
+    const result = run(sys, 'GitHub');
+    expect(result.status).toBe('missing');
+    expect(result.detail).toMatch(/account/i);
+    expect(result.detail).not.toMatch(/not logged in/);
+  });
+
+  test('BUG-4: an origin that is not on github.com is missing, since its owner cannot be read', () => {
+    const sys = fakeSystem({
+      answers: gh(
+        { stdout: loggedInAs('urso-agent') },
+        'https://gitlab.example/x/y.git\n',
+        undefined,
+        GH_HELPER,
+      ),
+    });
+    const result = run(sys, 'GitHub');
+    expect(result.status).toBe('missing');
+    expect(result.detail).toMatch(/origin|remote/i);
+  });
+
+  test('BUG-4: a login that differs from the owner only in case is still the owner', () => {
+    const sys = fakeSystem({
+      answers: gh({ stdout: loggedInAs('BVST') }, OWNER_REMOTE_HTTPS, undefined, GH_HELPER),
+    });
+    const result = run(sys, 'GitHub');
+    expect(result.status).toBe('missing');
+    expect(result.detail).toMatch(/owner/i);
   });
 });
 
