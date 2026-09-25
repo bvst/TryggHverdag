@@ -1,6 +1,6 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-09-20 · **Phase:** ✅ Planning complete → **next: milestone M0** — start with [M0-kickoff.md](M0-kickoff.md) · Section 4 closes after the spike in M1
+**Last updated:** 2026-09-25 · **Phase:** ✅ Planning complete → **next: milestone M0** — start with [M0-kickoff.md](M0-kickoff.md) · Section 4 closes after the spike in M1
 
 **Current section:** milestone M0 — foundations. Status: [../progress.md](../progress.md) · Build log: [../progress/m0.md](../progress/m0.md)
 
@@ -52,7 +52,7 @@ session.
 | A-05 | Create a private repository on your paid GitHub account and give Claude Code access | Code and CI (D-029) | ✅ Done (2026-09-20) |
 | A-06 | Create a separate GitHub account for Claude (a "machine user"), add it to the repository with write access (not admin), and give Claude Code its token | Your approvals count as real approvals, and the merge rules can't be bypassed (D-042) | ✅ Done (2026-09-20) |
 | A-07 | Create an Expo account for the AS | iOS builds without a Mac; app builds and store submission (Section 8) | ✅ Done (2026-09-20) |
-| A-08 | Create Healthchecks.io and UptimeRobot accounts, with alerts to your phone | Get paged if the safety system stops (REL-08) | 🟡 Healthchecks.io done · UptimeRobot can now watch `https://trygg-hverdag-staging.cleverapps.io/v1/health` (INF-08) |
+| A-08 | Create Healthchecks.io and UptimeRobot accounts, with alerts to your phone | Get paged if the safety system stops (REL-08) | 🟡 Healthchecks.io done · UptimeRobot's monitor is now A-25 |
 | A-09 | Run `claude setup-token` and save the token as the repository secret `CLAUDE_CODE_OAUTH_TOKEN` | AI reviews and the daily report in CI (D-045, D-050) | ✅ Done — 2026-09-23. `CLAUDE_CODE_OAUTH_TOKEN` is set and `ANTHROPIC_API_KEY` is not |
 | A-10 | Set up the Mac: separate `claude-dev` Standard user, FileVault, no sleep on power, shared tools — see [M0-kickoff.md](M0-kickoff.md) Part 2 | Hybrid sessions (D-055, D-056) | ✅ Done (2026-09-25) — `pnpm run doctor` passes 9 of 9 (INF-00); `claude-dev` is on GitHub as `urso-agent` only |
 | A-14 | Create a cloud environment at claude.ai/code (Claude prepares the settings) | Everyday cloud sessions (D-055) | 🟡 Network allowlist applied by the owner (2026-09-24, [cloud-environment.md](cloud-environment.md)); it reached the running session. Setup script still to come |
@@ -64,6 +64,10 @@ session.
 | A-20 | Create the Cellar add-on and bucket for Terraform's state, and send Claude its host | Terraform cannot create the place it keeps its own state | ✅ Done (2026-09-24) — host `cellar-c2.services.clever-cloud.com`, as `infra/staging/versions.tf` already had it |
 | A-21 | Create the GitHub environment `staging`, limited to `main`, with the four secrets | No pull request branch can reach the keys | ✅ Done (2026-09-24), reported by the owner. A session's GitHub access may not read environment settings, so Claude could not confirm the `main` limit or the secret names; the first plan run proves the four keys are there, and `gate:integrity` should check the rest (D-077 follow-up) |
 | A-22 | After INF-07 merges: run `infra-staging` with `plan`, read it, then run it with `apply` | Creates staging; the two runs are the approval (D-077) | ✅ Done (2026-09-25) — staging is created and a merge deploys to it with the smoke test passing. Left over: delete the first apply's `trygghverdag-staging` app and database in the console (outside Terraform; the app costs money) |
+| A-23 | Add the worker's check in Healthchecks.io and the `HEALTHCHECKS_WORKER_URL` environment secret, before the next `infra-staging` plan — see [monitoring-setup.md](monitoring-setup.md) | Monitoring (INF-08, REL-08) | ⬜ Open |
+| A-24 | After the INF-08 pull request merges: run `infra-staging` with `plan`, then `apply`, then confirm the check leaves `new` — see [monitoring-setup.md](monitoring-setup.md) | Monitoring (INF-08, REL-08) | ⬜ Open |
+| A-25 | Add the UptimeRobot keyword monitor and install its mobile app — see [monitoring-setup.md](monitoring-setup.md) | Monitoring (INF-08, REL-08, D-079) | ⬜ Open |
+| A-26 | The drill: stop the staging app and confirm both monitors page you within 5 minutes — see [monitoring-setup.md](monitoring-setup.md) | INF-08's done-criterion | ⬜ Open |
 
 ## Why this order
 The specialised agents and skills (Section 7) are where your quality bar gets

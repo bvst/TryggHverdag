@@ -25,7 +25,9 @@ than REL-08 until go-live. The worker is covered every minute either way.
 ## A-23 — The worker's check in Healthchecks.io, and its secret
 
 Do this before the next `infra-staging` plan. From INF-08 on, a plan without
-the secret stops with "No value for required variable".
+the secret stops with "Invalid value for variable" and a message saying where
+to set it: GitHub hands a missing secret to Terraform as an empty value, and
+the variable refuses anything that is not a Healthchecks.io ping URL.
 
 1. In Healthchecks.io, **add a check** named `staging-worker`:
    - **Period 1 minute**, **Grace 2 minutes**. The check goes down 3 minutes

@@ -1777,3 +1777,37 @@ any other path is work, not a candidate for the same treatment.
 - **Consequences:** Issue #19's body was written once, at creation, and still
   says 05:00. It is updated after this merges; the code that writes the body
   for any future issue is changed here.
+
+## D-079 — REL-08 on staging: UptimeRobot Free until go-live, Healthchecks.io for the worker
+- **Date:** 2026-09-25 · **Status:** Accepted (owner, 2026-09-25; question asked
+  in session with Claude's recommendation, answered "Free now, Solo at
+  go-live") · **Section:** 8
+- **Context:** REL-08 asks for checks every minute. Verified 2026-09-25 on
+  uptimerobot.com/pricing: Free = "5 min. monitoring interval", keyword monitor
+  included; Solo = "60-second monitoring interval", $12/month billed yearly
+  ($144/y) or $13 monthly. Terms (uptimerobot.com/terms): "UptimeRobot is
+  available for any use, including commercial and business use."
+- **Decision:** staging uses UptimeRobot Free (5-minute keyword monitor on
+  `/v1/health`, keyword `"status":"ok"`). The worker half of REL-08 is met
+  every minute by Healthchecks.io (Hobbyist, $0): the worker pings after each
+  recorded beat; check Period 1 min, Grace 2 min. Buying UptimeRobot Solo is an
+  **M5 go-live gate item**. **Amends how REL-08 is met on staging only**;
+  production at go-live meets it in full.
+- **Also record the delegated (D-031) design choices** from the spec's
+  Approach that set a pattern: ping only after a recorded beat; a failed ping
+  is a line, never a failed task; a monitoring setting never stops the worker
+  (the one exception to `config.ts`'s "a bad setting stops the process"); the
+  ping URL is a secret and is never written; `http:` refused; Terraform
+  variable required + sensitive + validated, passed from the `staging`
+  environment secret in both plan and apply; the provider (2.2.1, `update.go`,
+  read 2026-09-25) restarts the app when `environment` changes.
+- **Healthchecks.io commercial use, checked 2026-09-25:** its terms say
+  nothing on it; its FAQ gives "a Hobbyist account with 20 checks for
+  monitoring your company infrastructure" as allowed; the About page says
+  "free for hobby use, for open source projects, and for non-profits". So
+  Section 8's "paid for commercial use" (from a secondary source) does not
+  hold as written; whether the AS pays for Business ($20/month, SMS and
+  phone-call alerts) is a go-live question next to Solo.
+- **Consequences:** a known gap — an API-only failure on staging may page
+  later than 5 minutes (up to ~5–10 min); the drill (A-26) is INF-08's
+  done-criterion and has not happened yet.

@@ -25,8 +25,8 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-04 | CI workflows, merge rules, CODEOWNERS | ✅ Done — 2026-09-23 ([#3](https://github.com/bvst/TryggHverdag/pull/3)) |
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
 | INF-06 | App skeleton | ⬜ Not started. The Mac is ready (INF-00) |
-| INF-07 | Staging on Clever Cloud | ✅ Done — 2026-09-25 ([#22](https://github.com/bvst/TryggHverdag/pull/22), fixes [#23](https://github.com/bvst/TryggHverdag/pull/23) [#24](https://github.com/bvst/TryggHverdag/pull/24), names [#25](https://github.com/bvst/TryggHverdag/pull/25)). A merge deployed and the smoke test passed; BUG-3 fix in flight |
-| INF-08 | Monitoring | ⬜ Next after INF-07: UptimeRobot will watch `https://trygg-hverdag-staging.cleverapps.io/v1/health` |
+| INF-07 | Staging on Clever Cloud | ✅ Done — 2026-09-25 ([#22](https://github.com/bvst/TryggHverdag/pull/22), fixes [#23](https://github.com/bvst/TryggHverdag/pull/23) [#24](https://github.com/bvst/TryggHverdag/pull/24), names [#25](https://github.com/bvst/TryggHverdag/pull/25)). A merge deployed and the smoke test passed; BUG-3 fixed ([#27](https://github.com/bvst/TryggHverdag/pull/27)) |
+| INF-08 | Monitoring | 🟡 In flight — code on `claude/busy-faraday-40n2zl` (PR not yet opened); done when the owner's drill passes (A-26) |
 | INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). The owner sees the report on the phone, in [#19](https://github.com/bvst/TryggHverdag/issues/19) (A-17). Moves to 04:47 UTC in [#26](https://github.com/bvst/TryggHverdag/pull/26) (D-078) |
 | INF-10 | Gate drills | ⬜ Not started. Parked 2026-09-24 for INF-07. Open question to the owner: split into offline drills now and live GitHub drills later? |
 
@@ -73,7 +73,14 @@ docs are blocked from sessions).
 **A-01, A-02, A-03 — phones, Apple, Google Play.** Not blocking today; they
 block the first real device build.
 
-**A-08 — UptimeRobot** can now watch staging: `https://trygg-hverdag-staging.cleverapps.io/v1/health` (INF-08).
+**A-08 — UptimeRobot** can now watch staging: `https://trygg-hverdag-staging.cleverapps.io/v1/health` (INF-08). Its own step is now A-25.
+
+**A-23 to A-26 — monitoring (INF-08).** Steps for the owner, written out in
+[`plan/monitoring-setup.md`](plan/monitoring-setup.md): the worker's
+Healthchecks.io check and the `HEALTHCHECKS_WORKER_URL` secret (A-23, can be
+done before this merges); after merge, `infra-staging` plan and apply, then
+confirming the check leaves `new` (A-24); the UptimeRobot keyword monitor and
+its mobile app (A-25); and the drill, which is INF-08's done-criterion (A-26).
 
 **Dependabot and the reviewer gate.** `CLAUDE_CODE_OAUTH_TOKEN` is now in the
 Dependabot secret store, which unblocks npm updates. **github-actions updates
@@ -172,21 +179,38 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**BUG-3 — the worker also started on Clever Cloud's build machine** (fix on
-`fix/BUG-3-build-instance-worker`). Both first deploys log `Starting worker
-CC_WORKER_COMMAND…` and `Worker connected` on the build machine, 21 and 36 s
-before the migration ran on the new app and beside the old app's worker. That
-broke two things D-077 relies on: new code never meets an old schema, and one
-worker inside five connections. The worker now starts nothing when
-`INSTANCE_TYPE=build` (Clever Cloud's documented value) and waits to be stopped,
-since an exit would be restarted every 5 s.
+**INF-08 — monitoring** (code on `claude/busy-faraday-40n2zl`; pull request not
+yet opened). Reviews pending; `gate:full` (with mutation) is still running —
+this entry says nothing about their outcome, only what is built and what is
+known so far.
+
+- **Built:** the heartbeat task checks in with Healthchecks.io only after its
+  beat is recorded (a new `CheckIn` port and `fetch` adapter); a failed
+  check-in is one written line, never a failed task; `HEALTHCHECKS_WORKER_URL`
+  never stops the worker, even when it is unset, empty or not `https:`; the
+  ping URL is never written, including inside an underlying error message; the
+  build machine never checks in (BUG-3); Terraform requires and hides the URL,
+  passed from the `staging` environment secret in both the plan and apply
+  jobs; the owner's steps A-23 to A-26 are written out in
+  [`plan/monitoring-setup.md`](plan/monitoring-setup.md). D-079 records the
+  owner's choice: UptimeRobot Free on staging now, Solo at go-live.
+- **Verified so far:** `gate:quick` green, `coverage:ratchet` green,
+  `infra:check` green, `api:diff` reports no change. `req:coverage` now shows
+  REL-08 at 4 of 63 (was 3), which is this branch's tests.
+- **Left:** `gate:full` including mutation, the three blocking reviews,
+  opening the pull request, and the owner's steps A-23 to A-26 — the drill
+  (A-26) is INF-08's done-criterion and has not happened yet.
+- **Gotcha:** `req:coverage` counts REL-08, not INF-08 — a spec that names a
+  requirement ID (this one names REL-08) needs its own tests to name that ID
+  too, or RG-01 fails on the branch.
 
 **INF-07 is done** (2026-09-25). A merge (#26) deployed staging and the smoke
 test passed ([run 36096293539](https://github.com/bvst/TryggHverdag/actions/runs/36096293539)),
 after three bugs, each found in a real run's log and fixed test-first:
 - BUG-1, plan approval reading stdin;
 - BUG-2, Cellar refusing the state checksum;
-- BUG-3, above.
+- BUG-3, the worker also starting on Clever Cloud's build machine — fixed and
+  merged ([#27](https://github.com/bvst/TryggHverdag/pull/27)).
 
 The staging names were changed to `trygg-hverdag` before the working apply
 (#25). What the real runs settled, from their logs, is recorded in D-077 and
