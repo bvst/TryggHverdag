@@ -3,6 +3,34 @@
 Recurring problems and conventions, so the same lesson is not relearned every
 session. Newest first.
 
+## INF-08 (Healthchecks.io check-in, 2026-09-25) — secrets in outbound URLs
+- **Probe the adapter, do not read it.** A scratch `.mts` run with
+  `node --experimental-strip-types --no-warnings` that imports the adapter and
+  `redact.ts`, a secret-looking UUID, and these failure modes: unparseable URL,
+  `user:pass@` URL, refused, DNS, TLS to a plain-HTTP port, 404, redirect, reset,
+  timeout, `ftp:`, bad port. Check `describeFailure`, `.stack`,
+  `inspect(e,{showHidden:true})`, `JSON.stringify`, and `cause`. The INF-08 adapter
+  (a new Error from fixed words plus a `^[A-Z][A-Z0-9_]*$` cause code) passed all of them.
+- **Node's fetch follows redirects by default, including https→http.** A secret
+  in a URL path is "never sent in clear" only for the first hop unless the call
+  sets `redirect: 'error'`. Worth a note on every outbound call that carries a
+  secret in its URL.
+- **Terraform 1.16.4 with a `sensitive` variable** (verified with a scratch config and
+  `terraform_data`): validation errors, `plan` and `show` print `(sensitive value)`.
+  `show -json` holds it in clear, so check that JSON is only hashed and never uploaded.
+  **An unset GitHub secret becomes `TF_VAR_x=""`**, which Terraform reports as
+  "Invalid value for variable", not "No value for required variable".
+- **`gh` is not installed in the session**, so the settings of the `staging`
+  environment (the main-only branch policy) cannot be verified. Say so.
+- **New npm dependencies:** `npm view <pkg>@<v> dist.integrity` works through the
+  proxy. Compare it with the lockfile's `integrity`, and use `time.modified` to see
+  whether the package is maintained. test-kit's `dependencies` are dev-only
+  transitively: test-kit is only a devDependency of apps/server, and dependency-cruiser's
+  `test-kit-belongs-in-tests` rule keeps production code from importing it.
+- `reports/` (the Stryker incremental JSON, which holds test output) is gitignored.
+- The secrets inventory lists "Healthchecks check-in URLs" generically. New
+  Healthchecks secrets need their name and store listed, as CLEVER_*/CELLAR_* are.
+
 ## INF-07 (staging on Clever Cloud) — what to re-check on every deploy/infra change
 - **Redaction regexes** (`apps/server/src/process.ts` `redactCredentials`): probe them, do
   not read them. As shipped they leaked on: `@` in a URL password (only the part
