@@ -24,7 +24,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-03 | Gate scripts + HK-08 | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-04 | CI workflows, merge rules, CODEOWNERS | ✅ Done — 2026-09-23 ([#3](https://github.com/bvst/TryggHverdag/pull/3)) |
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
-| INF-06 | App skeleton | ⬜ Not started. The Mac is ready (INF-00) |
+| INF-06 | App skeleton | 🟡 In progress on `feat/INF-06-app-skeleton`: spec done, owner's answers in (Android only; CI cost accepted), failing tests written, implementation under way |
 | INF-07 | Staging on Clever Cloud | ✅ Done — 2026-09-25 ([#22](https://github.com/bvst/TryggHverdag/pull/22), fixes [#23](https://github.com/bvst/TryggHverdag/pull/23) [#24](https://github.com/bvst/TryggHverdag/pull/24), names [#25](https://github.com/bvst/TryggHverdag/pull/25)). A merge deployed and the smoke test passed; BUG-3 fix in flight |
 | INF-08 | Monitoring | ⬜ Next after INF-07: UptimeRobot will watch `https://trygg-hverdag-staging.cleverapps.io/v1/health` |
 | INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). The owner sees the report on the phone, in [#19](https://github.com/bvst/TryggHverdag/issues/19) (A-17). Moves to 04:47 UTC in [#26](https://github.com/bvst/TryggHverdag/pull/26) (D-078) |
@@ -266,8 +266,10 @@ request merged by hand (D-075, [#21](https://github.com/bvst/TryggHverdag/pull/2
 merged 2026-09-24). INF-07 then adds them to CODEOWNERS and the owner-approval
 list, and keeps its own AI reviews. The three items above still wait.
 
-**After INF-06 lands**, `gate:integrity` will fail until `android-e2e` joins the
-required list. Expected, not a defect.
+**INF-06's own pull request** turns `gate:integrity` red as soon as it adds
+`e2e:android`: the check reads the branch's `package.json`
+(`scripts/gate-integrity.mjs:255`). The owner adds `android-e2e` to the live
+ruleset before merge (proposed A-23). This is expected, not a defect.
 
 ## History
 
