@@ -821,6 +821,35 @@ new decision that supersedes it (see `00-working-agreement.md`).
   own copy — which was missing `apps/server/src/worker.ts`, the file this task
   created. That was a named follow-up from INF-04's review; it is fixed here
   because the file it was about now exists.
+- **Amended 2026-09-25 (owner, asked in the INF-08 session with Claude's
+  recommendation): the run is grouped.**
+  - **Why:** #31's required `mutation` check timed out on CI — its log:
+    `spawnSync pnpm ETIMEDOUT`, "Stryker did not finish … make that faster
+    before raising MUTATION_TIMEOUT_MS". Two things above did not hold.
+    "`--incremental` in CI keeps that affordable" is wrong: CI caches nothing,
+    so every pull request was a full run of every safety file (test-auditor,
+    INF-08). And each mutant ran the whole suite, which INF-08 made 40 %
+    slower (13.2 s against 9.4 s at two cores, mostly real-process tests) while
+    adding 44 mutants: 197 in all, about 26 minutes against a 25-minute budget.
+  - **Decision:** `MUTATION_GROUPS` in `scripts/lib/gate-decisions.mjs` gives
+    each group of safety files the tests that can kill its mutants — `domain`
+    runs the domain tests, `healthchecks` runs the adapter's tests and
+    `worker.test.ts`, and every other safety path runs the whole suite as
+    before (`mutationRuns()`). `stryker.config.mjs` picks its run from
+    `STRYKER_RUN`; `scripts/mutation.mjs` runs each in turn inside the one
+    25-minute budget, which is not raised. Every safety file is still mutated
+    on every pull request, and a test set that is too narrow can only score
+    lower, never falsely higher. `worker.ts`, `bin/worker.ts` and `process.ts`
+    stay on the whole suite: `bin.test.ts` is the only test that runs the real
+    worker process.
+  - **Measured** (fresh, no reused results, pinned to two cores like CI):
+    954 s in all — domain 69/69, healthchecks 44/44, whole-suite 82/84
+    (97.62 %; the two survivors are string literals in `worker.ts` that no
+    test reads). The earlier "three survivors in `process.ts`" were stale
+    incremental results: fresh, it is 25/25.
+  - **Not done, and D-036 still says it:** the nightly full run was never
+    built. Grouping keeps every pull request a full run, so nothing is left
+    unmeasured meanwhile.
 
 ## D-067 — AR-03's lint rule bans reading the clock, not constructing a Date
 - **Date:** 2026-09-23 · **Status:** Accepted (delegated, D-031) · **Section:** 5

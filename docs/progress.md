@@ -26,7 +26,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
 | INF-06 | App skeleton | ⬜ Not started. The Mac is ready (INF-00) |
 | INF-07 | Staging on Clever Cloud | ✅ Done — 2026-09-25 ([#22](https://github.com/bvst/TryggHverdag/pull/22), fixes [#23](https://github.com/bvst/TryggHverdag/pull/23) [#24](https://github.com/bvst/TryggHverdag/pull/24), names [#25](https://github.com/bvst/TryggHverdag/pull/25)). A merge deployed and the smoke test passed; BUG-3 fixed ([#27](https://github.com/bvst/TryggHverdag/pull/27)) |
-| INF-08 | Monitoring | 🟡 In flight — code on `claude/busy-faraday-40n2zl`, all four reviews PASS and `gate:full` done; pull request not yet opened ([#30](https://github.com/bvst/TryggHverdag/pull/30) merges first). Done when the owner's drill passes (A-26) |
+| INF-08 | Monitoring | 🟡 In flight — [#31](https://github.com/bvst/TryggHverdag/pull/31), all four reviews PASS; [#30](https://github.com/bvst/TryggHverdag/pull/30) merged. Done when the owner's drill passes (A-26) |
 | INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). The owner sees the report on the phone, in [#19](https://github.com/bvst/TryggHverdag/issues/19) (A-17). Moves to 04:47 UTC in [#26](https://github.com/bvst/TryggHverdag/pull/26) (D-078) |
 | INF-10 | Gate drills | ⬜ Not started. Parked 2026-09-24 for INF-07. Open question to the owner: split into offline drills now and live GitHub drills later? |
 
@@ -75,20 +75,14 @@ block the first real device build.
 
 **A-08 — UptimeRobot** can now watch staging: `https://trygg-hverdag-staging.cleverapps.io/v1/health` (INF-08). Its own step is now A-25.
 
-**#30 needs a manual merge first** (D-075): the one-line ai-review safety
-filter for the Healthchecks.io adapter —
-[#30](https://github.com/bvst/TryggHverdag/pull/30). Its CI checks are green;
-its ai-review jobs fail exactly as D-075 predicts (the job log's `STRUCTURED:`
-line is empty, "produced no structured output" — the action's own "Skipping
-action" line explains why and was not read the first time). Once #30 merges,
-`OWNER_APPROVAL_PATHS` is added to the INF-08 pull request itself
-(`scripts/gate.test.mjs` requires every owned `/apps/` path there) before that
-pull request can merge.
+**#30 is merged** (2026-09-25, by hand, D-075): the ai-review safety filter
+lists the Healthchecks.io adapter, so #31 now adds it to
+`OWNER_APPROVAL_PATHS` too.
 
 **A-23 to A-26 — monitoring (INF-08).** Steps for the owner, written out in
 [`plan/monitoring-setup.md`](plan/monitoring-setup.md): the worker's
 Healthchecks.io check and the `HEALTHCHECKS_WORKER_URL` secret (A-23, can be
-done before this merges); after #30 and the INF-08 pull request both merge,
+done before #31 merges); after #31 merges,
 `infra-staging` plan and apply, then confirming the check leaves `new` (A-24);
 the UptimeRobot keyword monitor and its mobile app (A-25); and the drill,
 which is INF-08's done-criterion (A-26).
@@ -198,10 +192,22 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**INF-08 — monitoring** (code on `claude/busy-faraday-40n2zl`; pull request
-not yet opened — [#30](https://github.com/bvst/TryggHverdag/pull/30) merges
-first, see "What the owner still needs to do"). Reviews and `gate:full` are
-done.
+**INF-08 — monitoring** ([#31](https://github.com/bvst/TryggHverdag/pull/31),
+on `claude/busy-faraday-40n2zl`; #30 merged). Reviews and `gate:full` are
+done; CI's first run on #31 found the mutation gate out of time, fixed below.
+
+- **The mutation gate ran out of time, and is now grouped** (owner's choice,
+  D-066 amended). CI's log: `spawnSync pnpm ETIMEDOUT`, "Stryker did not
+  finish … make that faster before raising MUTATION_TIMEOUT_MS". Every pull
+  request mutated every safety file (197 mutants) with the whole suite per
+  mutant, and INF-08 made that suite 40 % slower. Now domain mutants run the
+  domain tests, the adapter's run its tests and the worker's, and the rest
+  the whole suite. Measured fresh at two cores: 954 s, every run passing
+  (69/69, 44/44, 82/84); it was heading for about 26 minutes. The budget
+  stays 25. D-036's nightly full run was never built; grouping keeps every
+  pull request a full run meanwhile.
+- **`OWNER_APPROVAL_PATHS` lists the adapter**, and a new test holds that
+  every safety path is one the owner approves.
 
 - **Reviews: all four PASS, one round.** safety-reviewer, privacy-security-
   reviewer, code-reviewer (advisory), test-auditor. No BLOCK. Round 1 found
@@ -234,16 +240,15 @@ done.
   [`progress/m0.md`](progress/m0.md).
 - **Verified:** `gate:quick`, `coverage:ratchet`, `infra:check` green,
   `api:diff` reports no change, `req:coverage` shows REL-08 at 4 of 63 (was 3).
-- **Left:** the pull request, #30 merging first, `OWNER_APPROVAL_PATHS` added
-  after that, and the owner's steps A-23 to A-26 — the drill (A-26) is
-  INF-08's done-criterion and has not happened yet.
-- **Follow-ups, not this PR:** `scripts/mutation.mjs` should ignore or delete
-  the incremental file when a test changed, or accept `--force` — D-066's
-  "`--incremental` in CI keeps that affordable" is wrong as written, the flag
-  does nothing in CI (test-auditor, pre-existing); `OWNER_APPROVAL_PATHS`
-  gains the adapter after #30 merges (this PR, before merge); the D-079 M2
-  hand-offs (already recorded in D-079); AR-10's import rule is enforced by
-  nothing (code-reviewer; already a D-077 follow-up).
+- **Left:** #31 green on CI and merged, then the owner's steps A-23 to A-26
+  — the drill (A-26) is INF-08's done-criterion and has not happened yet.
+- **Follow-ups, not this PR:** locally, the incremental reports still reuse
+  old results for unchanged code — `scripts/mutation.mjs` should drop them
+  when a test changed (test-auditor, pre-existing; CI is unaffected); D-036's
+  nightly full run; the D-079 M2 hand-offs (already recorded in D-079);
+  AR-10's import rule is enforced by nothing (code-reviewer; already a D-077
+  follow-up); ESLint reads Stryker's `.stryker-tmp/` sandbox while a run is in
+  progress, so `gate:quick` is red locally during one.
 - **Gotcha:** `req:coverage` counts REL-08, not INF-08 — a spec that names a
   requirement ID (this one names REL-08) needs its own tests to name that ID
   too, or RG-01 fails on the branch.
