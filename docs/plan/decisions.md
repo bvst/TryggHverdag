@@ -1632,10 +1632,16 @@ any other path is work, not a candidate for the same treatment.
       staging's data is synthetic, so nothing personal can reach a log yet; the
       first M2 task that binds a location or a phone number meets this before
       it ships (PRIV-07, follow-up below).
-  15. **Staging answers at `trygghverdag-staging.cleverapps.io`**, fixed in
+  15. **Staging answers at `trygg-hverdag-staging.cleverapps.io`**, fixed in
       Terraform so the smoke test and UptimeRobot (INF-08) have a stable
       address. Clever Cloud says `cleverapps.io` is not production quality;
-      production gets its own domain (D-046).
+      production gets its own domain (D-046). **Every name staging gets on
+      Clever Cloud is spelled `trygg-hverdag`** (the owner, 2026-09-25),
+      matching the state bucket: the app `trygg-hverdag-staging`, the database
+      `trygg-hverdag-staging-db` and this address. A test in
+      `scripts/infra.test.mjs` holds it. Names inside the code, such as the
+      `@trygghverdag` package scope (D-057), are not Clever Cloud names and
+      keep their spelling.
   16. **Clever Cloud's CLI is the standalone clever-tools 5.0.2 binary,
       downloaded and checked by hash** (`scripts/lib/clever-tools.mjs`), the
       same way as Terraform, on the repository's Node 22. The npm package needs

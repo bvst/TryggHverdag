@@ -56,6 +56,19 @@ describe('infra/staging', () => {
     expect(main).toContain('CC_HEALTH_CHECK_PATH = "/v1/health"');
   });
 
+  test('every name staging gets on Clever Cloud is spelled trygg-hverdag', () => {
+    // The owner's choice (2026-09-25), matching the state bucket
+    // trygg-hverdag-staging-tfstate. The spelling is what shows in the console
+    // and in the address, so it is held for every name Terraform sends and for
+    // the two the deploy and the smoke test use.
+    const names = [...main.matchAll(/\b(?:name|fqdn)\s*=\s*"([^"]+)"/g)].map((m) => m[1]);
+
+    expect(names.length).toBeGreaterThanOrEqual(3);
+    for (const name of [...names, STAGING_APP_NAME, new URL(STAGING_URL).host]) {
+      expect(name).toMatch(/^trygg-hverdag-/);
+    }
+  });
+
   test('its name and address are the ones the deploy and the smoke test use', () => {
     // Written twice, here and in scripts/lib/staging.mjs. There are no
     // Terraform outputs repeating them: a third copy is one more to drift.

@@ -84,7 +84,7 @@ that way by not reaching the places those credentials would be used.
 - **The APIs of LINK Mobility and UptimeRobot** — same reasoning as Clever
   Cloud. They are reached from CI or the server, never from a session.
 - **`*.cleverapps.io`** — where Clever Cloud serves apps. Staging's exact
-  hostname is `trygghverdag-staging.cleverapps.io` (D-077); add that, not the
+  hostname is `trygg-hverdag-staging.cleverapps.io` (D-077); add that, not the
   wildcard, once staging exists, so a session can check `/v1/health`. The
   endpoint is unauthenticated and staging holds only synthetic data (D-046).
 - **Full access** — every domain. Not needed, and it would make this list

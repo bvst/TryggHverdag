@@ -26,7 +26,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
 | INF-07 | Staging on Clever Cloud | 🟡 Merged 2026-09-24 ([#22](https://github.com/bvst/TryggHverdag/pull/22)). The first plan run planned staging (2 to add) and then failed on BUG-1, fixed on `fix/BUG-1-plan-stdin`. Done when staging is applied, a deploy runs and the smoke test passes (A-22) |
-| INF-08 | Monitoring | ⬜ Next after INF-07: UptimeRobot will watch `https://trygghverdag-staging.cleverapps.io/v1/health` |
+| INF-08 | Monitoring | ⬜ Next after INF-07: UptimeRobot will watch `https://trygg-hverdag-staging.cleverapps.io/v1/health` |
 | INF-09 | Daily status workflow | 🟡 Merged 2026-09-24 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). First report posted to [#19](https://github.com/bvst/TryggHverdag/issues/19) at 05:23 UTC, every step verified in the log. Done when the owner confirms it reached the phone (A-17) |
 | INF-10 | Gate drills | ⬜ Not started. Parked 2026-09-24 for INF-07. Open question to the owner: split into offline drills now and live GitHub drills later? |
 
@@ -196,6 +196,14 @@ two runs the owner starts and applies only the plan the owner read. The
 `ai-review.yml` change it needed shipped first, in
 [#21](https://github.com/bvst/TryggHverdag/pull/21). **What only the first real
 runs can verify** is listed at the end of D-077, with the follow-ups.
+
+**Renamed before the next apply** (the owner, 2026-09-25, on
+`feat/INF-07-trygg-hverdag-names`): every name staging gets on Clever Cloud is
+spelled `trygg-hverdag`, matching the state bucket. That means the app
+`trygg-hverdag-staging`, the database `trygg-hverdag-staging-db` and
+`trygg-hverdag-staging.cleverapps.io`. The first apply's orphans keep the old
+spelling, so they can no longer be mistaken for the new ones by name. They
+should still be deleted: the app costs money and holds the old address.
 
 **INF-10 was parked for it.** Before switching, Claude found that
 `req:coverage` counts requirement IDs, not acceptance criteria. RG-01 says the
