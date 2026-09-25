@@ -1,0 +1,1 @@
+- [Stale git on the hook PATH](project_stale_git_on_path.md): /usr/local/bin/git 2.23 breaks `git init -b` in the hook tests when the stop gate runs them

@@ -1,0 +1,1 @@
+- [Doctor false-green review angle](project_doctor_false_green.md) — scripts/doctor.mjs: look for OK branches that are inferred, and for exec calls that can hang
