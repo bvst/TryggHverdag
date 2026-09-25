@@ -25,7 +25,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-04 | CI workflows, merge rules, CODEOWNERS | ✅ Done — 2026-09-23 ([#3](https://github.com/bvst/TryggHverdag/pull/3)) |
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
-| INF-07 | Staging on Clever Cloud | 🟡 Merged 2026-09-24 ([#22](https://github.com/bvst/TryggHverdag/pull/22)). BUG-1 fixed in [#23](https://github.com/bvst/TryggHverdag/pull/23), BUG-2 in [#24](https://github.com/bvst/TryggHverdag/pull/24). The first apply created staging but could not save Terraform's state (BUG-2), leaving two orphans under the old spelling. Staging's names are now `trygg-hverdag` (on `feat/INF-07-trygg-hverdag-names`). Done when staging is applied, a deploy runs and the smoke test passes (A-22) |
+| INF-07 | Staging on Clever Cloud | ✅ Done — 2026-09-25 ([#22](https://github.com/bvst/TryggHverdag/pull/22), fixes [#23](https://github.com/bvst/TryggHverdag/pull/23) [#24](https://github.com/bvst/TryggHverdag/pull/24), names [#25](https://github.com/bvst/TryggHverdag/pull/25)). A merge deployed and the smoke test passed; BUG-3 fix in flight |
 | INF-08 | Monitoring | ⬜ Next after INF-07: UptimeRobot will watch `https://trygg-hverdag-staging.cleverapps.io/v1/health` |
 | INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). The owner sees the report on the phone, in [#19](https://github.com/bvst/TryggHverdag/issues/19) (A-17). Moves to 04:47 UTC in [#26](https://github.com/bvst/TryggHverdag/pull/26) (D-078) |
 | INF-10 | Gate drills | ⬜ Not started. Parked 2026-09-24 for INF-07. Open question to the owner: split into offline drills now and live GitHub drills later? |
@@ -45,9 +45,11 @@ may not read environment settings, so neither the `main` limit nor the secret
 names were confirmed from here. The first `infra-staging` plan run proves the
 keys work.
 
-**A-22 — after INF-07 merges, create staging**: `infra-staging` with `plan`,
-read it, then with `apply` and that run's ID. Then re-run the deploy that failed
-on merge because there was nothing yet to deploy to.
+**A-22 is done** (2026-09-25). The owner's `plan`, `apply` and re-run deploy
+created staging at `https://trygg-hverdag-staging.cleverapps.io`, and the
+keys, the state bucket and the approval all worked in real runs. Left over:
+delete the first apply's `trygghverdag-staging` app and database in the
+console. They are outside Terraform, and the app costs money.
 
 **A-14 — the cloud environment's allowlist is applied** (2026-09-24); it
 reached the running session without a restart. A setup script is still to come.
@@ -71,7 +73,7 @@ docs are blocked from sessions).
 **A-01, A-02, A-03 — phones, Apple, Google Play.** Not blocking today; they
 block the first real device build.
 
-**A-08 — UptimeRobot** can watch staging once A-22 has created it.
+**A-08 — UptimeRobot** can now watch staging: `https://trygg-hverdag-staging.cleverapps.io/v1/health` (INF-08).
 
 **Dependabot and the reviewer gate.** `CLAUDE_CODE_OAUTH_TOKEN` is now in the
 Dependabot secret store, which unblocks npm updates. **github-actions updates
@@ -165,59 +167,27 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**INF-07 — staging on Clever Cloud** (D-077), merged as
-[#22](https://github.com/bvst/TryggHverdag/pull/22) on 2026-09-24.
+**BUG-3 — the worker also started on Clever Cloud's build machine** (fix on
+`fix/BUG-3-build-instance-worker`). Both first deploys log `Starting worker
+CC_WORKER_COMMAND…` and `Worker connected` on the build machine, 21 and 36 s
+before the migration ran on the new app and beside the old app's worker. That
+broke two things D-077 relies on: new code never meets an old schema, and one
+worker inside five connections. The worker now starts nothing when
+`INSTANCE_TYPE=build` (Clever Cloud's documented value) and waits to be stopped,
+since an exit would be restarted every 5 s.
 
-**Its first runs on `main`, read from their logs:**
-- `deploy-staging` failed as designed: `[ERROR] Application not found`, because
-  nothing had created staging yet. Clever Cloud answered the CI user's key,
-  which suggests A-19 and A-21 work.
-- The owner then started `infra-staging` with `plan`
-  ([run 36024686949](https://github.com/bvst/TryggHverdag/actions/runs/36024686949)).
-  Terraform read its state from Cellar and planned `2 to add, 0 to change, 0 to
-  destroy`, with the database password and URI shown as `(sensitive value)`. So
-  the CI user's key, the Cellar keys, the bucket and the organisation all work,
-  and the plan summary hides what it should.
-- The step after it failed: `plan-approval: EAGAIN: resource temporarily
-  unavailable, read`. **BUG-1**: the script read stdin with one synchronous
-  read, which a pipe answers with EAGAIN while `terraform show` is still
-  writing. `apply` would have failed the same way. Reproduced locally, then
-  fixed test-first by reading stdin as a stream.
-- BUG-1 merged as [#23](https://github.com/bvst/TryggHverdag/pull/23). The next
-  plan ([36050891944](https://github.com/bvst/TryggHverdag/actions/runs/36050891944))
-  printed one fingerprint. `apply` with it
-  ([36051517379](https://github.com/bvst/TryggHverdag/actions/runs/36051517379))
-  re-planned to the same fingerprint, so plans are reproducible, and created the
-  database (`postgresql_70966f35-c1e9-4af0-865d-cb73540c8641`) and the app
-  (`app_bc864d53-42ae-4591-8465-eb1edb8ce740`). Then it could not save the
-  state: `PutObject … 400 … XAmzContentSHA256Mismatch`. **BUG-2**: Terraform
-  asks for a SHA-256 checksum on every state upload unless
-  `skip_s3_checksum = true`, and Cellar refuses it. Plans only read the state,
-  so none could show this. Terraform's recovery file went with the runner (the
-  workflow keeps no artifacts, because state holds the database password), so
-  **both resources exist and the state does not know them**. BUG-2 is fixed in
-  [#24](https://github.com/bvst/TryggHverdag/pull/24).
-- **Next:** the rename below merges, then `plan`, `apply` with that run, and a
-  re-run of `deploy-staging`. After the rename the orphans no longer share a
-  name with anything Terraform creates, so deleting them is cleanup rather than
-  a precondition. It is still worth doing, because the orphaned app costs money.
+**INF-07 is done** (2026-09-25). A merge (#26) deployed staging and the smoke
+test passed ([run 36096293539](https://github.com/bvst/TryggHverdag/actions/runs/36096293539)),
+after three bugs, each found in a real run's log and fixed test-first:
+- BUG-1, plan approval reading stdin;
+- BUG-2, Cellar refusing the state checksum;
+- BUG-3, above.
 
-**What it built:** three runnable server processes (migrate as the pre-run
-hook, the API, and the worker beside it); Terraform for one nano instance and
-the DEV PostgreSQL; a deploy on every merge to `main`, with a smoke test that
-waits for a heartbeat well *after* the deploy; and a Terraform apply that takes
-two runs the owner starts and applies only the plan the owner read. The
-`ai-review.yml` change it needed shipped first, in
-[#21](https://github.com/bvst/TryggHverdag/pull/21). **What only the first real
-runs can verify** is listed at the end of D-077, with the follow-ups.
-
-**Renamed before the next apply** (the owner, 2026-09-25, on
-`feat/INF-07-trygg-hverdag-names`): every name staging gets on Clever Cloud is
-spelled `trygg-hverdag`, matching the state bucket. That means the app
-`trygg-hverdag-staging`, the database `trygg-hverdag-staging-db` and
-`trygg-hverdag-staging.cleverapps.io`. The first apply's orphans keep the old
-spelling, so they can no longer be mistaken for the new ones by name. They
-should still be deleted: the app costs money and holds the old address.
+The staging names were changed to `trygg-hverdag` before the working apply
+(#25). What the real runs settled, from their logs, is recorded in D-077 and
+[`progress/m0.md`](progress/m0.md). Two old resources from the first apply
+(`trygghverdag-staging` and `-db`) are outside Terraform and should be deleted
+in the console. The app costs money.
 
 **INF-10 was parked for it.** Before switching, Claude found that
 `req:coverage` counts requirement IDs, not acceptance criteria. RG-01 says the

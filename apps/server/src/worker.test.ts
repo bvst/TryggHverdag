@@ -3,7 +3,8 @@
 // rather than left to be discovered in production.
 import { fakeClock, fakeWorkerHeartbeats } from '@trygghverdag/test-kit';
 import { EventEmitter } from 'node:events';
-import { describe, expect, test } from 'vitest';
+import process from 'node:process';
+import { describe, expect, test, vi } from 'vitest';
 import {
   HEARTBEAT_CRONTAB,
   createTaskList,
@@ -240,6 +241,103 @@ describe('runWorkerProcess', () => {
     await settle();
     runner.endsOnItsOwn();
 
+    await expect(running).rejects.toThrow(/without being asked/);
+  });
+});
+
+describe("runWorkerProcess on Clever Cloud's build machine", () => {
+  // BUG-3: Clever Cloud also starts CC_WORKER_COMMAND on the machine that
+  // builds a deploy, which it marks INSTANCE_TYPE=build. Staging's first two
+  // deploys show that worker connecting to the database 21 and 36 seconds
+  // before the migration ran, beside the old app's own worker.
+  test('BUG-3: it never starts a runner there, and says why', async () => {
+    const runner = recordingRunner();
+    const written: string[] = [];
+
+    const running = runWorkerProcess('postgres://example/db', {
+      runWorker: runner.run,
+      signals: new EventEmitter(),
+      instanceType: 'build',
+      keepAlive: () => undefined,
+      write: (text) => {
+        written.push(text);
+      },
+      exit: () => undefined,
+    });
+    await settle();
+
+    expect(runner.options()).toBeUndefined();
+    expect(written.join('')).toContain('INSTANCE_TYPE=build');
+    await running;
+  });
+
+  test('BUG-3: it stays up without working until the platform stops it, then exits with 0', async () => {
+    // Exiting at once would not do: CC_WORKER_RESTART is "always", so systemd
+    // would start it again every five seconds for as long as the build lasts.
+    const signals = new EventEmitter();
+    const kept: string[] = [];
+    const exits: number[] = [];
+
+    const running = runWorkerProcess('postgres://example/db', {
+      runWorker: recordingRunner().run,
+      signals,
+      instanceType: 'build',
+      keepAlive: () => {
+        kept.push('kept alive');
+      },
+      write: () => undefined,
+      exit: (code) => {
+        exits.push(code);
+      },
+    });
+    await settle();
+    expect(kept).toEqual(['kept alive']);
+    expect(exits).toEqual([]);
+
+    signals.emit('SIGTERM');
+    await settle();
+
+    expect(exits).toEqual([0]);
+    await running;
+  });
+
+  test('BUG-3: by default it says so on stderr and holds a timer, which is what keeps Node up', async () => {
+    // The two defaults production uses. bin/bin.test.ts runs them for real, in a
+    // child process that coverage cannot see; this runs them here. Only the
+    // interval is faked, so nothing is left running after the test.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await runWorkerProcess('postgres://example/db', {
+        signals: new EventEmitter(),
+        instanceType: 'build',
+        exit: () => undefined,
+      });
+
+      expect(vi.getTimerCount()).toBe(1);
+      expect(stderr.mock.calls.map(([text]) => String(text)).join('')).toContain(
+        'INSTANCE_TYPE=build',
+      );
+    } finally {
+      stderr.mockRestore();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  test('BUG-3: on the machine that runs the app it starts, as before', async () => {
+    const runner = recordingRunner();
+
+    const running = runWorkerProcess('postgres://example/db', {
+      runWorker: runner.run,
+      signals: new EventEmitter(),
+      instanceType: 'production',
+      exit: () => undefined,
+    });
+    await settle();
+
+    expect(runner.options()).toBeDefined();
+    runner.endsOnItsOwn();
     await expect(running).rejects.toThrow(/without being asked/);
   });
 });
