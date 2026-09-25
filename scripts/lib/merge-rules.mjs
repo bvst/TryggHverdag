@@ -22,6 +22,8 @@ export const OWNER_APPROVAL_PATHS = [
   // Where a stopped worker is made to exit with 1, so it is restarted (D-077).
   '/apps/server/src/bin/worker.ts',
   '/apps/server/src/process.ts',
+  // The one file that can ping Healthchecks.io: an unasked ping keeps a dead worker's check green (D-079).
+  '/apps/server/src/adapters/healthchecks.ts',
   '/apps/mobile/src/safety-core/',
   '/.github/',
   '/.claude/',

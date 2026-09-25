@@ -5,6 +5,34 @@ Newest first.
 
 ## Patterns worth checking every time
 
+### A Stryker "Killed" can be a false kill from a slow child-process test
+stryker.config.mjs uses the command runner, so every mutant runs the whole
+suite and any failing test counts as a kill. In the INF-08 review the mutant
+`createCheckIn = (url) => healthchecksCheckIn({})` in worker.ts was "Killed"
+only because `bin/bin.test.ts` "BUG-3: on Clever Cloud's build machine…"
+(a fixed 1.5 s sleep before reading the child's output) timed out under
+mutation load. The mutant survives on merit. Check suspicious kills by reading
+`statusReason` in `reports/stryker-incremental.json` (node one-liner:
+filter `files[f].mutants` by line, print `statusReason`); a kill whose only
+failure is an unrelated child-process test is not a kill.
+
+### Node fetch follows redirects, so "only a 2xx counts" needs redirect: manual
+Verified: a HEAD answered 302 → 200 elsewhere resolves with `ok: true`.
+`redirect: 'manual'` gives the 302 back as `ok: false`. Also verified:
+fetch to port 1 fails before connecting ("fetch failed", cause "bad port",
+no `code`); an undefined URL fails with cause code ERR_INVALID_URL.
+
+### A missing GitHub secret is "", and Terraform treats "" as a value
+A workflow env line `TF_VAR_x: ${{ secrets.X }}` with no secret set gives
+Terraform an empty string: the error is "Invalid value for variable" (the
+validation message), not "No value for required variable". Terraform side
+verified with the pinned binary at node_modules/.cache/terraform/1.16.4 in a
+scratch dir. Check owner docs that quote the error.
+
+### The scratchpad is shared with reviewers running in parallel
+Another agent wrote main.tf/variables.tf into the same scratch subfolder
+mid-probe ("Duplicate variable declaration"). Use a unique subfolder name.
+
 ### `echo "key=$(cmd)" >> "$GITHUB_OUTPUT"` swallows cmd's failure
 GitHub's default `run:` shell is `bash -e`, and `-e` does not see a failed
 command substitution inside another command's arguments: the step goes green

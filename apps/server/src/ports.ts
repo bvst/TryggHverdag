@@ -25,3 +25,13 @@ export interface WorkerHeartbeats {
   lastBeat(): Promise<Date | null>;
   record(at: Date): Promise<void>;
 }
+
+/**
+ * The worker's "I am still here", told to an outside monitor (INF-08). The
+ * monitor pages the owner when these stop, so it must only ever follow a beat
+ * that was recorded.
+ */
+export interface CheckIn {
+  /** Resolves when the monitor accepted it; rejects on anything else. */
+  checkIn(): Promise<void>;
+}

@@ -68,5 +68,10 @@ resource "clevercloud_nodejs" "staging" {
     # A deploy counts only when this answers 2xx. /v1/health answers 200 while
     # the API is up (D-065); whether the worker beats is the smoke test's job.
     CC_HEALTH_CHECK_PATH = "/v1/health"
+
+    # Where the worker checks in with Healthchecks.io after each recorded beat,
+    # so a stopped worker pages the owner (INF-08). Only the worker reads it. A
+    # secret, so it comes from the staging environment and no plan shows it.
+    HEALTHCHECKS_WORKER_URL = var.healthchecks_worker_url
   }
 }

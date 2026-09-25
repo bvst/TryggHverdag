@@ -13,6 +13,8 @@
 # Where a stopped worker is made to exit with 1, so it is restarted (D-077).
 /apps/server/src/bin/worker.ts    @bvst @urso-agent
 /apps/server/src/process.ts       @bvst @urso-agent
+# The one file that can ping Healthchecks.io: an unasked ping keeps a dead worker's check green (D-079).
+/apps/server/src/adapters/healthchecks.ts       @bvst @urso-agent
 /apps/mobile/src/safety-core/     @bvst @urso-agent
 /.github/                         @bvst @urso-agent
 /.claude/                         @bvst @urso-agent

@@ -5,6 +5,34 @@ Newest first.
 
 ## Patterns worth checking every time
 
+### An unset GitHub secret is an empty TF_VAR, not a missing one (INF-08)
+`${{ secrets.X }}` for a secret that does not exist is `""`, and Terraform takes
+`TF_VAR_x=""` as a value: the plan fails on the variable's *validation*
+("Invalid value for variable"), not with "No value for required variable".
+Verified with the pinned Terraform 1.16.4 on a provider-free copy of the block.
+Check any doc that quotes which error the owner will see.
+
+### Graphile's graceful stop waits for a task that ignores its abort signal
+`runner.stop()` (0.18, `main.js` gracefulShutdown) waits for in-flight jobs; the
+5 s `gracefulShutdownAbortTimeout` only aborts `helpers.abortSignal`. A task
+doing its own I/O (INF-08's check-in, 10 s timeout) delays exit until that I/O
+ends: measured 6.8 s after SIGTERM with a hung stand-in. Bounded is fine; an
+unbounded await in a task is a stop that never finishes.
+
+### A monitor drill measured from the stop time passes on luck
+With a 1-minute beat, "stopped at T, alert by T+5" includes a random 0-60 s
+head start (the last ping can be up to a minute before T). Ask for the last
+ping's time L to be recorded, or the stop to be made right after a ping, so the
+drill tests the worst case (INF-08 A-26).
+
+### The ping/liveness contract keeps spreading past the safety paths
+INF-07 moved it into `bin/worker.ts` and `process.ts`; INF-08 moved "ping only
+after a recorded beat" partly into `adapters/healthchecks.ts` (it holds the URL
+and fetch, so it *can* ping without being asked) and "never throws at start-up"
+into `config.ts#readHealthchecksSetting`. Neither is in SAFETY_PATHS, CODEOWNERS
+or the ai-review filter. Each review: list every file the worker's start-up and
+check-in depend on, and compare with the three lists.
+
 ### Graphile Worker owns the worker's signals unless told not to
 `run()` without `noHandleSignals: true` installs its own handlers for SIGTERM,
 SIGINT, SIGHUP, SIGUSR2 and SIGABRT (graphile-worker `dist/main.js`), drains the
@@ -68,7 +96,12 @@ finding.
 ## How to verify here
 A PostgreSQL 16 binary is installed (`/usr/lib/postgresql/16/bin`) even though
 Docker is not usable: `initdb`/`pg_ctl` as user `postgres` in the scratchpad
-gives a real database to run the entry points under plain node. The harness may
-reset `/tmp/claude-0` to 0700 mid-session; stop the postmaster with
-`kill -INT <pid>` if `pg_ctl` loses access. `pkill -f <pattern>` matches the
-calling shell too — track child PIDs instead.
+gives a real database to run the entry points under plain node. The harness
+resets `/tmp/claude-0` to 0700 *between calls*: put `chmod 755 /tmp/claude-0` in
+the same command as anything run as `postgres`. The scratchpad path is too long
+for a Unix socket (107 bytes): start with `-c unix_socket_directories=''` and
+`-c listen_addresses=127.0.0.1`. Stop with `pg_ctl stop -m fast` (or
+`kill -INT <pid>`). `pkill -f <pattern>` matches the calling shell too — track
+child PIDs instead. For an outside HTTPS service (hc-ping.com), a self-signed
+cert for IP 127.0.0.1 plus `NODE_EXTRA_CA_CERTS` lets the real worker ping a
+local stand-in; Graphile's cron fires at second 0, so allow ~2.5 minutes.

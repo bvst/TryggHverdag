@@ -131,3 +131,64 @@ describe('GET /health when the database cannot answer', () => {
     expect(await response.text()).not.toContain('database');
   });
 });
+
+describe('REL-08: the keyword UptimeRobot watches for', () => {
+  // UptimeRobot watches /v1/health as a keyword monitor: it alerts when the
+  // raw body does not contain `"status":"ok"`, quotes included (D-079). So
+  // these read the bytes the API sends, not the parsed object. The dangerous
+  // direction is a body that still matches while the system is not healthy —
+  // a green monitor over a worker nobody is watching.
+  const KEYWORD = '"status":"ok"';
+
+  test('INF-08-AC10: a worker that beat a moment ago: the raw body contains the keyword, exactly', async () => {
+    const { api } = apiWith({ lastBeatAt: new Date(NOW.getTime() - 30_000) });
+
+    const text = await (await api.request(HEALTH)).text();
+
+    expect(text).toContain(KEYWORD);
+  });
+
+  test('INF-08-AC10: a worker that beat exactly WORKER_STALE_AFTER_MS ago is still within it, and so is the keyword', async () => {
+    const { api, clock } = apiWith({ lastBeatAt: NOW });
+    clock.advance(WORKER_STALE_AFTER_MS);
+
+    const text = await (await api.request(HEALTH)).text();
+
+    expect(text).toContain(KEYWORD);
+  });
+
+  test('INF-08-AC10: a worker silent past the threshold: the keyword is missing', async () => {
+    const { api, clock } = apiWith({ lastBeatAt: NOW });
+    clock.advance(WORKER_STALE_AFTER_MS + 1);
+
+    const text = await (await api.request(HEALTH)).text();
+
+    expect(text).not.toContain(KEYWORD);
+    expect(text).not.toMatch(/"status"\s*:\s*"ok"/);
+  });
+
+  test('INF-08-AC10: a worker that has never beaten: the keyword is missing', async () => {
+    const { api } = apiWith({ lastBeatAt: null });
+
+    const text = await (await api.request(HEALTH)).text();
+
+    expect(text).not.toContain(KEYWORD);
+    expect(text).not.toMatch(/"status"\s*:\s*"ok"/);
+  });
+
+  test('INF-08-AC10: a health check that cannot run at all, the 500 answer: the keyword is missing', async () => {
+    const api = createApi({
+      health: {
+        check: () =>
+          Promise.reject(new Error('The database did not return a time, so nothing can be timed')),
+      },
+    });
+
+    const response = await api.request(HEALTH);
+    const text = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(text).not.toContain(KEYWORD);
+    expect(text).not.toMatch(/"status"\s*:\s*"ok"/);
+  });
+});

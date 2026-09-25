@@ -821,6 +821,35 @@ new decision that supersedes it (see `00-working-agreement.md`).
   own copy — which was missing `apps/server/src/worker.ts`, the file this task
   created. That was a named follow-up from INF-04's review; it is fixed here
   because the file it was about now exists.
+- **Amended 2026-09-25 (owner, asked in the INF-08 session with Claude's
+  recommendation): the run is grouped.**
+  - **Why:** #31's required `mutation` check timed out on CI — its log:
+    `spawnSync pnpm ETIMEDOUT`, "Stryker did not finish … make that faster
+    before raising MUTATION_TIMEOUT_MS". Two things above did not hold.
+    "`--incremental` in CI keeps that affordable" is wrong: CI caches nothing,
+    so every pull request was a full run of every safety file (test-auditor,
+    INF-08). And each mutant ran the whole suite, which INF-08 made 40 %
+    slower (13.2 s against 9.4 s at two cores, mostly real-process tests) while
+    adding 44 mutants: 197 in all, about 26 minutes against a 25-minute budget.
+  - **Decision:** `MUTATION_GROUPS` in `scripts/lib/gate-decisions.mjs` gives
+    each group of safety files the tests that can kill its mutants — `domain`
+    runs the domain tests, `healthchecks` runs the adapter's tests and
+    `worker.test.ts`, and every other safety path runs the whole suite as
+    before (`mutationRuns()`). `stryker.config.mjs` picks its run from
+    `STRYKER_RUN`; `scripts/mutation.mjs` runs each in turn inside the one
+    25-minute budget, which is not raised. Every safety file is still mutated
+    on every pull request, and a test set that is too narrow can only score
+    lower, never falsely higher. `worker.ts`, `bin/worker.ts` and `process.ts`
+    stay on the whole suite: `bin.test.ts` is the only test that runs the real
+    worker process.
+  - **Measured** (fresh, no reused results, pinned to two cores like CI):
+    954 s in all — domain 69/69, healthchecks 44/44, whole-suite 82/84
+    (97.62 %; the two survivors are string literals in `worker.ts` that no
+    test reads). The earlier "three survivors in `process.ts`" were stale
+    incremental results: fresh, it is 25/25.
+  - **Not done, and D-036 still says it:** the nightly full run was never
+    built. Grouping keeps every pull request a full run, so nothing is left
+    unmeasured meanwhile.
 
 ## D-067 — AR-03's lint rule bans reading the clock, not constructing a Date
 - **Date:** 2026-09-23 · **Status:** Accepted (delegated, D-031) · **Section:** 5
@@ -1777,3 +1806,61 @@ any other path is work, not a candidate for the same treatment.
 - **Consequences:** Issue #19's body was written once, at creation, and still
   says 05:00. It is updated after this merges; the code that writes the body
   for any future issue is changed here.
+
+## D-079 — REL-08 on staging: UptimeRobot Free until go-live, Healthchecks.io for the worker
+- **Date:** 2026-09-25 · **Status:** Accepted (owner, 2026-09-25; question asked
+  in session with Claude's recommendation, answered "Free now, Solo at
+  go-live") · **Section:** 8
+- **Context:** REL-08 asks for checks every minute. Verified 2026-09-25 on
+  uptimerobot.com/pricing: Free = "5 min. monitoring interval", keyword monitor
+  included; Solo = "60-second monitoring interval", $12/month billed yearly
+  ($144/y) or $13 monthly. Terms (uptimerobot.com/terms): "UptimeRobot is
+  available for any use, including commercial and business use."
+- **Decision:** staging uses UptimeRobot Free (5-minute keyword monitor on
+  `/v1/health`, keyword `"status":"ok"`). The worker half of REL-08 is met
+  every minute by Healthchecks.io (Hobbyist, $0): the worker pings after each
+  recorded beat; check Period 1 min, Grace 2 min. Buying UptimeRobot Solo is an
+  **M5 go-live gate item**. **Amends how REL-08 is met on staging only**;
+  production at go-live meets it in full.
+- **The adapter is a safety path; `config.ts` is not** (owner, 2026-09-25,
+  asked with Claude's recommendation after `safety-reviewer` raised it).
+  `apps/server/src/adapters/healthchecks.ts` holds the ping URL and `fetch`, so
+  a later edit could make it ping without being asked — say once at start —
+  and keep a crash-looping worker's check green: silent, the dangerous
+  direction. It joins CODEOWNERS and `SAFETY_PATHS` in INF-08, and the
+  ai-review `safety` filter in its own one-line pull request, merged by hand
+  (#30, D-075). `OWNER_APPROVAL_PATHS` follows once #30 has merged:
+  `scripts/gate.test.mjs` requires every owned `/apps/` path to be in that
+  filter too, the same order INF-07 took with #21. `readHealthchecksSetting` stays out: if it ever
+  threw, the worker would crash-loop, `/v1/health` would turn `degraded` and
+  both monitors would page, so a mistake there fails loudly.
+- **Design choices that set a pattern** (delegated, D-031, from the spec's
+  Approach): ping only after a recorded beat; a failed ping is a line, never a
+  failed task; a monitoring setting never stops the worker (the one exception
+  to `config.ts`'s "a bad setting stops the process"); the ping URL is a secret
+  and is never written; `http:` is refused and redirects are not followed, so
+  the URL is never sent in clear; the Terraform variable is required,
+  sensitive and validated, passed from the `staging` environment secret in both
+  plan and apply; the provider (2.2.1, `update.go`, read 2026-09-25) restarts
+  the app when `environment` changes. The drill is timed from the **last
+  ping**, not from the stop: pings land at the start of each minute, so timing
+  from the stop would give it up to a minute of luck.
+- **Healthchecks.io commercial use, checked 2026-09-25:** its terms say
+  nothing on it; its FAQ gives "a Hobbyist account with 20 checks for
+  monitoring your company infrastructure" as allowed; the About page says
+  "free for hobby use, for open source projects, and for non-profits". So
+  Section 8's "paid for commercial use" (from a secondary source) does not
+  hold as written; whether the AS pays for Business ($20/month, SMS and
+  phone-call alerts) is a go-live question next to Solo.
+- **Consequences:** a known gap — an API-only failure on staging may page
+  later than 5 minutes (up to ~5–10 min); the drill (A-26) is INF-08's
+  done-criterion and has not happened yet.
+- **Follow-ups for M2, where the watchdog task will find them:**
+  - The check-in follows the **heartbeat**, not the watchdog's sweep. Once the
+    watchdog runs in the worker, a broken sweep beside a healthy heartbeat is
+    a ping saying a dead watchdog is alive. The watchdog's task must decide
+    whether it checks in, or feeds the beat.
+  - A slow Healthchecks.io holds one of the worker's two concurrency slots for
+    up to 10 seconds a minute, and delays a stop by as much (measured by
+    `safety-reviewer`: exit 6.8 s after SIGTERM during a hung check-in).
+    Graphile's `helpers.abortSignal` could cancel the ping on stop.

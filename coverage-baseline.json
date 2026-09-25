@@ -1,11 +1,29 @@
 {
-  "generated": "2026-09-23",
+  "generated": "2026-09-25",
   "files": {
+    "apps/server/src/api-process.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 10,
+      "totalLines": 10
+    },
     "apps/server/src/api.ts": {
       "lines": 100,
       "branches": 100,
       "coveredLines": 11,
       "totalLines": 11
+    },
+    "apps/server/src/config.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 24,
+      "totalLines": 24
+    },
+    "apps/server/src/http.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 10,
+      "totalLines": 10
     },
     "apps/server/src/ports.ts": {
       "lines": 100,
@@ -13,11 +31,47 @@
       "coveredLines": 0,
       "totalLines": 0
     },
+    "apps/server/src/process.ts": {
+      "lines": 88.88,
+      "branches": 100,
+      "coveredLines": 16,
+      "totalLines": 18
+    },
+    "apps/server/src/redact.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 14,
+      "totalLines": 14
+    },
     "apps/server/src/worker.ts": {
       "lines": 100,
       "branches": 100,
-      "coveredLines": 6,
-      "totalLines": 6
+      "coveredLines": 38,
+      "totalLines": 38
+    },
+    "apps/server/src/adapters/healthchecks.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 14,
+      "totalLines": 14
+    },
+    "apps/server/src/bin/api.ts": {
+      "lines": 0,
+      "branches": 100,
+      "coveredLines": 0,
+      "totalLines": 3
+    },
+    "apps/server/src/bin/migrate.ts": {
+      "lines": 0,
+      "branches": 100,
+      "coveredLines": 0,
+      "totalLines": 2
+    },
+    "apps/server/src/bin/worker.ts": {
+      "lines": 0,
+      "branches": 100,
+      "coveredLines": 0,
+      "totalLines": 2
     },
     "apps/server/src/db/schema.ts": {
       "lines": 100,
@@ -28,8 +82,8 @@
     "apps/server/src/domain/database-time.ts": {
       "lines": 100,
       "branches": 100,
-      "coveredLines": 15,
-      "totalLines": 15
+      "coveredLines": 16,
+      "totalLines": 16
     },
     "apps/server/src/domain/health.ts": {
       "lines": 100,
@@ -73,23 +127,41 @@
       "coveredLines": 4,
       "totalLines": 4
     },
+    "packages/test-kit/src/fake-check-in.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 10,
+      "totalLines": 10
+    },
     "packages/test-kit/src/fake-clock.ts": {
       "lines": 100,
       "branches": 100,
-      "coveredLines": 7,
-      "totalLines": 7
+      "coveredLines": 12,
+      "totalLines": 12
     },
     "packages/test-kit/src/fake-worker-heartbeats.ts": {
       "lines": 100,
       "branches": 100,
-      "coveredLines": 5,
-      "totalLines": 5
+      "coveredLines": 12,
+      "totalLines": 12
     },
     "packages/test-kit/src/index.ts": {
       "lines": 100,
       "branches": 100,
       "coveredLines": 1,
       "totalLines": 1
+    },
+    "packages/test-kit/src/ping-url.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 2,
+      "totalLines": 2
+    },
+    "scripts/affected.mjs": {
+      "lines": 0,
+      "branches": 0,
+      "coveredLines": 0,
+      "totalLines": 29
     },
     "scripts/api-diff.mjs": {
       "lines": 0,
@@ -109,11 +181,17 @@
       "coveredLines": 0,
       "totalLines": 33
     },
-    "scripts/doctor.mjs": {
+    "scripts/daily-status.mjs": {
       "lines": 0,
-      "branches": 0,
+      "branches": 100,
       "coveredLines": 0,
-      "totalLines": 73
+      "totalLines": 3
+    },
+    "scripts/doctor.mjs": {
+      "lines": 73.84,
+      "branches": 59.82,
+      "coveredLines": 96,
+      "totalLines": 130
     },
     "scripts/gate-file.mjs": {
       "lines": 55.55,
@@ -133,6 +211,12 @@
       "coveredLines": 5,
       "totalLines": 20
     },
+    "scripts/infra-check.mjs": {
+      "lines": 24.13,
+      "branches": 12.5,
+      "coveredLines": 7,
+      "totalLines": 29
+    },
     "scripts/licenses-check.mjs": {
       "lines": 0,
       "branches": 0,
@@ -143,7 +227,13 @@
       "lines": 0,
       "branches": 0,
       "coveredLines": 0,
-      "totalLines": 22
+      "totalLines": 23
+    },
+    "scripts/plan-approval.mjs": {
+      "lines": 0,
+      "branches": 0,
+      "coveredLines": 0,
+      "totalLines": 18
     },
     "scripts/req-coverage.mjs": {
       "lines": 10.81,
@@ -151,11 +241,41 @@
       "coveredLines": 4,
       "totalLines": 37
     },
+    "scripts/smoke.mjs": {
+      "lines": 0,
+      "branches": 0,
+      "coveredLines": 0,
+      "totalLines": 12
+    },
+    "scripts/staging-deploy.mjs": {
+      "lines": 0,
+      "branches": 0,
+      "coveredLines": 0,
+      "totalLines": 15
+    },
+    "scripts/terraform.mjs": {
+      "lines": 0,
+      "branches": 0,
+      "coveredLines": 0,
+      "totalLines": 5
+    },
     "scripts/tests-changes.mjs": {
       "lines": 34.37,
       "branches": 31.25,
       "coveredLines": 11,
       "totalLines": 32
+    },
+    "scripts/lib/affected.mjs": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 5,
+      "totalLines": 5
+    },
+    "scripts/lib/clever-tools.mjs": {
+      "lines": 57.14,
+      "branches": 71.42,
+      "coveredLines": 4,
+      "totalLines": 7
     },
     "scripts/lib/coverage.mjs": {
       "lines": 100,
@@ -163,11 +283,17 @@
       "coveredLines": 42,
       "totalLines": 42
     },
+    "scripts/lib/daily-status.mjs": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 78,
+      "totalLines": 78
+    },
     "scripts/lib/gate-decisions.mjs": {
       "lines": 100,
-      "branches": 93.75,
-      "coveredLines": 15,
-      "totalLines": 15
+      "branches": 95,
+      "coveredLines": 21,
+      "totalLines": 21
     },
     "scripts/lib/git.mjs": {
       "lines": 5.88,
@@ -189,9 +315,27 @@
     },
     "scripts/lib/merge-rules.mjs": {
       "lines": 100,
-      "branches": 91.66,
-      "coveredLines": 64,
-      "totalLines": 64
+      "branches": 92.18,
+      "coveredLines": 66,
+      "totalLines": 66
+    },
+    "scripts/lib/pinned-binary.mjs": {
+      "lines": 84.61,
+      "branches": 75,
+      "coveredLines": 22,
+      "totalLines": 26
+    },
+    "scripts/lib/plan-approval.mjs": {
+      "lines": 97.36,
+      "branches": 94.11,
+      "coveredLines": 37,
+      "totalLines": 38
+    },
+    "scripts/lib/pre-commit.mjs": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 28,
+      "totalLines": 28
     },
     "scripts/lib/proc.mjs": {
       "lines": 83.33,
@@ -205,11 +349,35 @@
       "coveredLines": 56,
       "totalLines": 57
     },
+    "scripts/lib/smoke.mjs": {
+      "lines": 80.55,
+      "branches": 90.32,
+      "coveredLines": 29,
+      "totalLines": 36
+    },
+    "scripts/lib/staging-deploy.mjs": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 3,
+      "totalLines": 3
+    },
+    "scripts/lib/staging.mjs": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 2,
+      "totalLines": 2
+    },
     "scripts/lib/steps.mjs": {
       "lines": 100,
       "branches": 100,
       "coveredLines": 33,
       "totalLines": 33
+    },
+    "scripts/lib/terraform.mjs": {
+      "lines": 78.57,
+      "branches": 88.88,
+      "coveredLines": 11,
+      "totalLines": 14
     },
     "scripts/lib/test-strength.mjs": {
       "lines": 94.11,
@@ -218,10 +386,10 @@
       "totalLines": 17
     },
     "scripts/lib/workflow-lint.mjs": {
-      "lines": 93.84,
-      "branches": 89.47,
-      "coveredLines": 61,
-      "totalLines": 65
+      "lines": 97.76,
+      "branches": 96.34,
+      "coveredLines": 131,
+      "totalLines": 134
     }
   }
 }

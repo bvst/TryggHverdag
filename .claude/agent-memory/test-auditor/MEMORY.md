@@ -1,3 +1,4 @@
 - [In-memory mutation](reference_in_memory_mutation.md) — hand mutants via a Vite plugin in startVitest; guard blocks file edits and `=>`
 - [gate:integrity locally](project_gate_integrity_local.md) — 3/5 locally (rulesets unreadable), so the "required check" premise is unverified
 - [Bug tests and untested fallbacks](feedback_bug_test_patterns.md) — recurring gaps: the error/fallback branch of a fix goes untested
+- [Stryker incremental reuse](reference_stryker_incremental_reuse.md) — local report reuses old results for unchanged code; flaky tests count as kills; rulesets via curl
