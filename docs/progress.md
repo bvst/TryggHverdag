@@ -265,6 +265,11 @@ worker is restarted. The safety filter lists them first, in a two-line pull
 request merged by hand (D-075, [#21](https://github.com/bvst/TryggHverdag/pull/21),
 merged 2026-09-24). INF-07 then adds them to CODEOWNERS and the owner-approval
 list, and keeps its own AI reviews. The three items above still wait.
+A second one-line change follows the same route (owner's decision,
+2026-09-25): the filter lists `apps/server/src/adapters/healthchecks.ts`,
+INF-08's Healthchecks.io adapter. A ping it sent on its own would keep a dead
+worker's check green, so INF-08 makes it a safety path, owned by the owner.
+`config.ts` stays out on purpose: a mistake there fails loudly.
 
 **After INF-06 lands**, `gate:integrity` will fail until `android-e2e` joins the
 required list. Expected, not a defect.
