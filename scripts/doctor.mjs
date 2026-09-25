@@ -66,7 +66,8 @@ function meaningfulLine(text) {
 
 /**
  * The real machine. Every check reaches the outside world through this and
- * nothing else, so the tests can hand it a fake one instead.
+ * nothing else (Node's check only reads the running process), so the tests can
+ * hand it a fake one instead.
  */
 export const realSystem = {
   /** Runs a command. `found` is false only when the command does not exist. */
@@ -107,6 +108,11 @@ export const realSystem = {
   env: process.env,
   exists: existsSync,
 };
+
+/** All a command said, standard output then standard error, for reading or quoting. */
+function everything(result) {
+  return `${result.stdout}\n${result.stderr}`;
+}
 
 /** A command's trimmed standard output, or null if it is not installed or failed. */
 function output(sys, command, args) {
@@ -157,14 +163,30 @@ function sshAccount(sys) {
     '-T',
     'git@github.com',
   ]);
-  const said = `${result.stdout}\n${result.stderr}`;
+  const said = everything(result);
   return { account: /Hi ([^!\s]+)!/.exec(said)?.[1] ?? null, said };
+}
+
+/**
+ * Whether git's credential helper for github.com is gh's. In git config an
+ * empty helper value clears the ones before it, so only the entries after the
+ * last empty line are in effect (`gh auth setup-git` writes exactly that).
+ */
+function usesGhCredentialHelper(sys) {
+  const result = sys.exec('git', ['config', '--get-all', 'credential.https://github.com.helper']);
+  if (!result.found || result.code !== 0) {
+    return false;
+  }
+  const lines = result.stdout.replace(/\n$/, '').split('\n');
+  const lastReset = lines.findLastIndex((line) => line.trim() === '');
+  return lines.slice(lastReset + 1).some((line) => line.includes('gh auth git-credential'));
 }
 
 /**
  * Every check. `platforms` says where the check must pass: 'any' everywhere,
  * 'macos' only on the owner's Mac (D-055: the Mac runs the simulator work).
- * Each check gets `sys` and reaches the machine through it only.
+ * Each check gets `sys` and reaches the machine through it only, except Node's,
+ * which reads the version of the Node process running the doctor.
  */
 export const checks = [
   {
@@ -226,14 +248,16 @@ export const checks = [
       if (output(sys, 'gh', ['--version']) === null) {
         return missing('gh not installed', 'Install the GitHub CLI: https://cli.github.com');
       }
-      const status = sys.exec('gh', ['auth', 'status']);
+      // Only the active github.com account: plain `gh auth status` lists every
+      // host and account, and the first one listed need not be the active one.
+      const status = sys.exec('gh', ['auth', 'status', '--active', '--hostname', 'github.com']);
       if (status.code !== 0) {
         return missing(
           'gh installed but not logged in',
           "gh auth login as Claude's account (A-06), then gh auth setup-git",
         );
       }
-      const account = /account (\S+)/.exec(`${status.stdout}\n${status.stderr}`)?.[1];
+      const account = /account (\S+)/.exec(everything(status))?.[1];
       if (account === undefined) {
         return missing(
           'gh is logged in, but its account could not be read from gh auth status',
@@ -257,7 +281,13 @@ export const checks = [
         );
       }
       if (!/^(?:ssh:\/\/)?git@/.test(remote)) {
-        return ok(`gh logged in as ${account}; origin is HTTPS, so git pushes through gh`);
+        // Over HTTPS, git pushes as whatever its credential helper hands it.
+        return usesGhCredentialHelper(sys)
+          ? ok(`gh logged in as ${account}; origin is HTTPS and git's credential helper is gh's`)
+          : missing(
+              `gh is logged in as ${account}, but git's credential helper for github.com is not gh's, so git may push as another account`,
+              'gh auth setup-git',
+            );
       }
       const toHttps = `switch origin to HTTPS (git remote set-url origin https://github.com/${owner}/<repo>.git), then ${switchAccount}`;
       const ssh = sshAccount(sys);
@@ -348,7 +378,7 @@ export const checks = [
         return missing('not installed', 'curl -fsSL https://get.maestro.mobile.dev | bash');
       }
       if (result.code !== 0) {
-        const said = `${result.stdout}\n${result.stderr}`;
+        const said = everything(result);
         return missing(
           `installed, but maestro --version failed: ${meaningfulLine(said) ?? `exit ${String(result.code)}, no output`}`,
           /java/i.test(said)
@@ -356,7 +386,8 @@ export const checks = [
             : 'Run maestro --version and fix what it reports',
         );
       }
-      return ok(firstLine(result.stdout.trim()));
+      const version = firstLine(result.stdout.trim());
+      return ok(version === '' ? 'version not reported' : version);
     },
   },
 ];
