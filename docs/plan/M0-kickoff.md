@@ -101,7 +101,9 @@ not a dependency. Revisit before M5.
 
      Confirm it works and move on:
      `xcrun simctl list devices available | grep iPhone`
-   - **Android Studio** from developer.android.com.
+   - **Android Studio** from developer.android.com/studio — **(Intel)** the
+     "Mac with Intel chip" download. Drag it into Applications; that step needs
+     admin, the setup wizard later does not.
    - **Docker: Colima**, not Docker Desktop. Colima is open source with no
      licence question for the AS, and it runs per-user, so `claude-dev` starts
      and stops its own VM without admin. **(Intel)** containers run amd64
@@ -110,6 +112,14 @@ not a dependency. Revisit before M5.
 
    A Standard user cannot `brew install` into `/usr/local`, so anything missed
    here has to come back to this account.
+
+   **Found on this Mac (2026-09-25): older installs that shadow Homebrew's.**
+   `/usr/local/bin/node` was a standalone Node 20 from 2024 and
+   `/usr/local/bin/git` a git 2.23 from a 2020 installer, both ahead of the
+   Homebrew versions on `PATH`. `pnpm install` refuses Node 20. `claude-dev`'s
+   `~/.zshrc` now puts `/usr/local/opt/node@22/bin` and
+   `/usr/local/opt/git/bin` first; the old installs were left alone. Check
+   with `which -a node git`.
 
 6. **Do not add `claude-dev` to the `admin` group.** That is the whole point of
    the separate user (D-056).
@@ -120,22 +130,50 @@ not a dependency. Revisit before M5.
    account.
 2. **GitHub CLI** — `gh auth login`, as **Claude's** account (A-06), not yours.
    Pull requests must come from Claude's account so that your approvals count
-   (D-042).
-3. **Clone** — `git clone https://github.com/bvst/TryggHverdag.git ~/code/TryggHverdag`
+   (D-042). Then `gh auth setup-git`, so git pushes over HTTPS as that account
+   too. **Check SSH as well:** `ssh -T git@github.com` must greet Claude's
+   account. On 2026-09-25 `gh` and SSH both answered `bvst`; the owner removed
+   that key from `claude-dev` and from GitHub.
+3. **Clone** — `git clone https://github.com/bvst/TryggHverdag.git ~/code/TryggHverdag`.
+   Set the commit identity to Claude's account's GitHub noreply address
+   (`git config --global user.email <id>+<login>@users.noreply.github.com`).
 4. **`corepack enable pnpm`** — pnpm 10.33.0 comes from the `packageManager`
-   field; do not install pnpm separately.
+   field; do not install pnpm separately. **Also run, outside the repository,
+   `corepack install -g pnpm@10.33.0`.** Outside the repository corepack uses
+   its global default, which was pnpm 12.5.1 on 2026-09-25. The hook tests run
+   fake scripts in temporary folders, and pnpm 12 rejects their `-s`
+   (`error: unexpected argument '-s' found`), so 8 hook tests fail in
+   `gate:quick` on a machine that is otherwise fine.
 5. **Maestro** — `curl -fsSL https://get.maestro.mobile.dev | bash`. It
    installs into `~/.maestro`, so no admin is needed and each user has its own.
    (It is not in homebrew-core; there is a tap, but the installer is simpler.)
 6. **Colima** — `colima start --cpu 4 --memory 6 --disk 40`. **(Intel)** with
    16 GB in the machine, leave room: do not run the Android emulator and Colima
-   at the same time on this Mac.
-7. **Android Studio** → SDK Manager → install an **x86_64** system image
-   (API 34). **(Intel)** an `arm64-v8a` image will not run here.
+   at the same time on this Mac. **Testcontainers does not follow Docker
+   contexts**, so without two variables the L3 tests fail with `Could not find
+   a working container runtime strategy` while `docker run` works. In
+   `~/.zshrc`:
+   `export DOCKER_HOST="unix://$HOME/.colima/default/docker.sock"` and
+   `export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock`.
+   Prove it with `pnpm run test:integration`, not with the doctor.
+7. **Android Studio** → Standard setup (the SDK goes to `~/Library/Android/sdk`)
+   → Virtual Device Manager → create a device with an **x86_64** image.
+   **(Intel)** an `arm64-v8a` image will not run here. Android Studio's
+   recommended image is fine: this Mac has a Pixel 8 on
+   `android-37.2/google_apis_ps16k/x86_64` (16 KB pages, which Google Play
+   requires of apps targeting Android 15+). Which versions the tests cover is
+   INF-06's decision, not this list's. Then in `~/.zshrc`:
+   `export ANDROID_HOME="$HOME/Library/Android/sdk"` and
+   `export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"`,
+   with `$JAVA_HOME/bin` on `PATH`. **Maestro needs Java 17 or newer**; the
+   JDKs already on this Mac are 8 and 11, and Android Studio brings its own
+   (25 on 2026-09-25), so nothing else needs installing.
 8. **Remote Control** — turn it on in Claude Code, so the Mac appears in the
    Code tab of the Claude app on your phone.
 9. **`pnpm install && pnpm run doctor`** — it names anything still missing and
-   why it is needed. That is INF-00.
+   why it is needed. That is INF-00, done on 2026-09-25 with 9 of 9. Restart
+   Claude Code after changing `~/.zshrc`: a running session keeps the `PATH` it
+   started with.
 
 ### What only *you* can do, from your own account
 
