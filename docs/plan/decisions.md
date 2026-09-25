@@ -1725,3 +1725,28 @@ any other path is work, not a candidate for the same treatment.
     tests import `adapters/`. True today, enforced by nothing.
   - HK-05's test counter reads a `test.each` table only up to its first `)`,
     so a comment with brackets inside a table miscounts (a `fix/BUG` change).
+
+## D-078 — The daily report runs at 04:47 UTC, off the top of the hour
+- **Date:** 2026-09-25 · **Status:** Accepted (owner) · **Section:** 9
+- **Context:** Amends D-050, whose 05:00 UTC was chosen for when the owner reads
+  it, not for how GitHub schedules. The first scheduled run (run 35983876995)
+  fired at 09:52 UTC on 2026-09-24 for the 05:00 slot — 4 h 52 min late. GitHub's
+  documentation for the `schedule` event, read on 2026-09-25: "The `schedule`
+  event can be delayed during periods of high loads of GitHub Actions workflow
+  runs. High load times include the start of every hour." Its advice is to
+  "schedule your workflow to run at a different time of the hour."
+- **Decision:** `daily-status.yml` runs at `47 4 * * *` — 04:47 UTC, which is
+  06:47 in Oslo in summer and 05:47 in winter, so the report still comes before
+  07:00 Oslo time. Everything else in D-050 and D-076 stands.
+- **What this does and does not establish.** One late run is one data point, and
+  it was also the schedule's first day, which GitHub does not document either
+  way. Moving off the hour follows GitHub's own advice at no cost; it does not
+  prove the top of the hour caused the delay. The Healthchecks.io check (period
+  1 day, grace 3 hours) is unchanged and still pages the owner if a day passes
+  with no run at all.
+- **Held by tests** in `scripts/daily-status.test.mjs`: the exact cron, a rule
+  that no cron minute in the workflow is 0, and that the time the issue states
+  is the time the workflow runs.
+- **Consequences:** Issue #19's body was written once, at creation, and still
+  says 05:00. It is updated after this merges; the code that writes the body
+  for any future issue is changed here.

@@ -27,7 +27,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
 | INF-07 | Staging on Clever Cloud | 🟡 Merged 2026-09-24 ([#22](https://github.com/bvst/TryggHverdag/pull/22)). BUG-1 fixed in [#23](https://github.com/bvst/TryggHverdag/pull/23), BUG-2 in [#24](https://github.com/bvst/TryggHverdag/pull/24). The first apply created staging but could not save Terraform's state (BUG-2), leaving two orphans under the old spelling. Staging's names are now `trygg-hverdag` (on `feat/INF-07-trygg-hverdag-names`). Done when staging is applied, a deploy runs and the smoke test passes (A-22) |
 | INF-08 | Monitoring | ⬜ Next after INF-07: UptimeRobot will watch `https://trygg-hverdag-staging.cleverapps.io/v1/health` |
-| INF-09 | Daily status workflow | 🟡 Merged 2026-09-24 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). First report posted to [#19](https://github.com/bvst/TryggHverdag/issues/19) at 05:23 UTC, every step verified in the log. Done when the owner confirms it reached the phone (A-17) |
+| INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). The owner sees the report on the phone, in [#19](https://github.com/bvst/TryggHverdag/issues/19) (A-17). Moves to 04:47 UTC in [#26](https://github.com/bvst/TryggHverdag/pull/26) (D-078) |
 | INF-10 | Gate drills | ⬜ Not started. Parked 2026-09-24 for INF-07. Open question to the owner: split into offline drills now and live GitHub drills later? |
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
@@ -52,11 +52,9 @@ on merge because there was nothing yet to deploy to.
 **A-14 — the cloud environment's allowlist is applied** (2026-09-24); it
 reached the running session without a restart. A setup script is still to come.
 
-**A-17 — confirm the first daily report reached the phone.** It was posted to
-[#19](https://github.com/bvst/TryggHverdag/issues/19) at 05:23 UTC on
-2026-09-24, mentioning `@bvst`. That is INF-09's done-criterion, and only the
-owner can see it. The 05:00 slot did not fire for a workflow merged at 04:57, so
-the owner's fallback applied and the run was started by hand at 05:21.
+**A-17 is done** (2026-09-25): the owner sees the daily report on the phone,
+as the GitHub issue [#19](https://github.com/bvst/TryggHverdag/issues/19). That
+was INF-09's done-criterion, so INF-09 is done.
 
 **A-16 is done, and now verified** (2026-09-24). The first run's post step saw
 `PING_CONFIGURED: true`, and its ping step logged
@@ -227,15 +225,18 @@ same, but the roadmap's drill ("a new acceptance criterion without a test")
 asks for more, so that drill would pass for a requirement that already has one
 test. Raise it when INF-10 resumes.
 
-**INF-09 — the daily status report** (D-076) is merged
-([#18](https://github.com/bvst/TryggHverdag/pull/18)) and ran for the first time
-at 05:21 UTC, by hand. Two of the three open questions are answered by its log:
-the action ran on the read-only token (`Using provided GITHUB_TOKEN for
-authentication`; the app-token revoke step `skipped`), and `gh issue pin` worked
-with `GITHUB_TOKEN`. The third — does the mention reach the phone — is A-17.
-Still open: whether a **`schedule`** run passes the action's human-actor check
-(the manual run's actor was `bvst`). Tomorrow's 05:00 run answers it, and if it
-fails, #19 gets a 🛑 and the run goes red.
+**[#26](https://github.com/bvst/TryggHverdag/pull/26) — the daily report moves
+to 04:47 UTC** (D-078, owner's decision 2026-09-25). The first `schedule` run
+came at 09:52 for the 05:00 slot, 4 h 52 min late, and GitHub names the top of
+the hour as its high-load time. After it merges, #19's description — written
+once, still saying 05:00 — is updated by hand.
+
+**INF-09 is done** (2026-09-25). Every open question was answered by a real run's
+log: the read-only token (`Using provided GITHUB_TOKEN for authentication`;
+app-token revoke `skipped`), `gh issue pin` with `GITHUB_TOKEN`, a `schedule`
+run passing the action's human-actor check (`Actor type: User` · `Verified human
+actor: bvst`), the Healthchecks.io ping (exit status 0), and — from the owner —
+the report reaching the phone.
 
 **Merged:** 2026-09-23 — #13 (progress-log restructure, D-075), #14 (the
 retraction that had only reached the archive), #15 (HK-09, the pre-commit hook),

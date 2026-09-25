@@ -16,7 +16,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { HEADLINES, LABELS } from './lib/daily-status.mjs';
+import { HEADLINES, LABELS, issueBody } from './lib/daily-status.mjs';
 
 const WORKFLOW = readFileSync('.github/workflows/daily-status.yml', 'utf8');
 const TEMPLATE = readFileSync('.github/ISSUE_TEMPLATE/owner-question.md', 'utf8');
@@ -105,10 +105,166 @@ function schema() {
   return JSON.parse(match.groups.json);
 }
 
+/**
+ * Every schedule the workflow runs on: each `cron:` line's expression, with its
+ * minute and hour fields. A `cron:` line this cannot read throws rather than
+ * being skipped, so a schedule written in an unexpected shape fails the tests
+ * that read these instead of passing them unread.
+ */
+function schedules() {
+  return WORKFLOW.split('\n')
+    .filter((line) => !line.trimStart().startsWith('#') && /\bcron:/.test(line))
+    .map((line) => {
+      const match =
+        /^\s*(?:-\s+)?cron:\s*(?<quote>['"]?)(?<expression>[^'"#]+?)\k<quote>\s*(?:#.*)?$/.exec(
+          line,
+        );
+      const fields = match?.groups?.expression.trim().split(/\s+/) ?? [];
+      if (fields.length !== 5) {
+        throw new Error(`Could not read this schedule in daily-status.yml: ${line.trim()}`);
+      }
+      return { expression: fields.join(' '), minute: fields[0], hour: fields[1] };
+    });
+}
+
+/**
+ * Whether a cron minute field fires at minute 0. Each comma-separated part is
+ * `*` or a number, optionally a range `a-b`, optionally with a `/step`; a part
+ * fires at minute 0 when it is `*`, with or without a step, or starts at 0.
+ */
+function firesAtMinuteZero(minute) {
+  return minute.split(',').some((part) => {
+    const match = /^(?:(?<every>\*)|(?<from>\d+)(?:-(?<to>\d+))?)(?:\/\d+)?$/.exec(part);
+    if (match?.groups === undefined) {
+      throw new Error(`Could not read the minute field "${minute}" in daily-status.yml.`);
+    }
+    const { every, from, to } = match.groups;
+    if (to !== undefined && Number(to) < Number(from)) {
+      throw new Error(`The minute range "${part}" runs backwards, which this test cannot read.`);
+    }
+    return every !== undefined || Number(from) === 0;
+  });
+}
+
+/** A schedule's one time of day, as numbers. A schedule without one has none to state. */
+function timeOfDay({ expression, minute, hour }) {
+  const time = { hour: Number(hour), minute: Number(minute) };
+  if (!/^\d+$/.test(minute) || !/^\d+$/.test(hour) || time.hour > 23 || time.minute > 59) {
+    throw new Error(`'${expression}' is not one time of day, so no one time can state it.`);
+  }
+  return time;
+}
+
+/** A schedule's time of day as the issue states it, "HH:MM UTC", zero-padded. */
+function utcTime(schedule) {
+  const { hour, minute } = timeOfDay(schedule);
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${pad(hour)}:${pad(minute)} UTC`;
+}
+
+/**
+ * A schedule's time on Oslo's clocks, "HH:MM", on a fixed day of 2026. Fixed,
+ * never today: the test must not read the clock, and must check summer and
+ * winter time whichever season it runs in. `month` counts from 0, as Date.UTC's
+ * does.
+ *
+ * The formatter is built here rather than once for the file: without Oslo's
+ * time zone data it throws, and that should fail this test, not every test in
+ * the file.
+ */
+function osloTime(schedule, month, day) {
+  const { hour, minute } = timeOfDay(schedule);
+  const oslo = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Oslo',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  });
+  return oslo.format(Date.UTC(2026, month, day, hour, minute));
+}
+
+/**
+ * The times a text gives beside a word: each "HH:MM" followed by that word
+ * within a few characters and no other number, as in "06:47 in Oslo in
+ * summer". Beside it, not anywhere in the text, so a summer time and a winter
+ * time that have swapped places read as swapped.
+ */
+function timesBeside(text, word) {
+  const pattern = new RegExp(String.raw`\b(?<time>\d{2}:\d{2})\b\D{0,20}\b${word}\b`, 'gi');
+  return [...text.matchAll(pattern)].map((match) => match.groups?.time ?? '');
+}
+
 describe('when it runs', () => {
-  test('every morning at 05:00 UTC (D-050), and by hand for the first report', () => {
-    expect(WORKFLOW).toMatch(/^ {4}- cron: '0 5 \* \* \*'/m);
+  test('every morning at 04:47 UTC (D-050, amended by D-078), and by hand for the first report', () => {
+    // This asserted '0 5 * * *' until D-078. The expected value moved because
+    // the spec did, not to make a test pass (RG-03). The first scheduled run,
+    // 35983876995, fired at 09:52 UTC on 2026-09-24 for the 05:00 slot — 4 h
+    // 52 min late — and GitHub names the start of every hour as a time it
+    // delays scheduled runs (the next test quotes it). The owner moved the
+    // report to 04:47 UTC on 2026-09-25: 06:47 in Oslo in summer, 05:47 in
+    // winter.
+    const found = schedules()
+      .map((s) => `'${s.expression}'`)
+      .join(', ');
+
+    expect(WORKFLOW, `The workflow is scheduled at ${found || 'no time at all'}`).toMatch(
+      /^ {4}- cron: '47 4 \* \* \*'/m,
+    );
     expect(WORKFLOW).toMatch(/^ {2}workflow_dispatch:/m);
+  });
+
+  test('never at the start of an hour, which GitHub names as a time it delays scheduled runs', () => {
+    // GitHub's docs for the `schedule` event, fetched on 2026-09-25: "The
+    // `schedule` event can be delayed during periods of high loads of GitHub
+    // Actions workflow runs. High load times include the start of every hour."
+    // Their advice: "schedule your workflow to run at a different time of the
+    // hour." A report hours late is a morning the owner starts without it.
+    //
+    // 04:47 is D-078's choice; this is the rule under it. A schedule moved back
+    // to :00, or to `*`, or to a list or a step that passes through minute 0,
+    // fails here whatever the exact time says.
+    const found = schedules();
+
+    expect(found.length).toBeGreaterThan(0);
+    expect(found.filter((s) => firesAtMinuteZero(s.minute)).map((s) => s.expression)).toEqual([]);
+  });
+
+  /** What the post job writes into a new "Daily status" issue. */
+  const issueText = () =>
+    issueBody({
+      workflowUrl: 'https://github.com/example/repo/actions/workflows/daily-status.yml',
+    });
+
+  test('the issue tells the owner the same time the workflow runs at', () => {
+    // Two copies of one fact: the cron line, and the sentence written into the
+    // "Daily status" issue when the post job creates it. If they drift, the
+    // issue promises the report at a time it never comes.
+    const found = schedules();
+    const stated = issueText().match(/\b\d{2}:\d{2} UTC\b/g) ?? [];
+
+    expect(found.length).toBeGreaterThan(0);
+    for (const schedule of found) {
+      expect(stated).toContain(utcTime(schedule));
+    }
+  });
+
+  test("the issue's Oslo times are the ones the workflow runs at, in summer and in winter", () => {
+    // The same fact again, on the clock the owner lives by — and the copy a
+    // search-and-replace of the UTC time leaves behind. Each time is read
+    // beside its own word, so a summer and a winter time that swap places fail
+    // too. 1 July is summer time in Oslo (CEST, UTC+2); 15 January is winter
+    // time (CET, UTC+1).
+    const found = schedules();
+    const summer = found.map((s) => osloTime(s, 6, 1));
+    const winter = found.map((s) => osloTime(s, 0, 15));
+
+    expect(found.length).toBeGreaterThan(0);
+    // Without Oslo's rules, a formatter that fell back to UTC rather than
+    // throwing would give one time for both seasons, and a text stating that
+    // one time twice would pass the two checks below. This one stops it.
+    expect(summer, 'Oslo summer and winter time came out the same.').not.toEqual(winter);
+    expect(timesBeside(issueText(), 'summer')).toEqual(summer);
+    expect(timesBeside(issueText(), 'winter')).toEqual(winter);
   });
 
   test('a second run queues behind the first rather than cancelling it', () => {

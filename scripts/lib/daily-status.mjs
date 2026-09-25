@@ -148,7 +148,7 @@ export function composeFailure({ why, owner, runUrl }) {
 export function issueBody({ workflowUrl }) {
   return [
     'The daily status report (D-050) is posted here as a comment every morning at',
-    '05:00 UTC — 07:00 in Oslo in summer, 06:00 in winter. Each one starts with',
+    '04:47 UTC — 06:47 in Oslo in summer, 05:47 in winter. Each one starts with',
     '✅ healthy, ⚠️ needs attention or 🛑 action required.',
     '',
     'If the report cannot be written, a 🛑 comment says so instead.',

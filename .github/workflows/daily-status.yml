@@ -29,7 +29,9 @@
 name: daily-status
 on:
   schedule:
-    - cron: '0 5 * * *' # 07:00 in Oslo in summer, 06:00 in winter (D-050)
+    # Off the top of the hour, which GitHub names as its high-load time for
+    # scheduled runs: the first one came at 09:52 for a 05:00 slot (D-078).
+    - cron: '47 4 * * *' # 06:47 in Oslo in summer, 05:47 in winter
   workflow_dispatch:
 concurrency:
   # Queue, never cancel: a cancelled report is a morning with nothing posted.
