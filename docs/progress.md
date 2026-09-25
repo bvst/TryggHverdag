@@ -26,7 +26,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
 | INF-06 | App skeleton | ⬜ Not started. The Mac is ready (INF-00) |
 | INF-07 | Staging on Clever Cloud | ✅ Done — 2026-09-25 ([#22](https://github.com/bvst/TryggHverdag/pull/22), fixes [#23](https://github.com/bvst/TryggHverdag/pull/23) [#24](https://github.com/bvst/TryggHverdag/pull/24), names [#25](https://github.com/bvst/TryggHverdag/pull/25)). A merge deployed and the smoke test passed; BUG-3 fixed ([#27](https://github.com/bvst/TryggHverdag/pull/27)) |
-| INF-08 | Monitoring | 🟡 In flight — code on `claude/busy-faraday-40n2zl` (PR not yet opened); done when the owner's drill passes (A-26) |
+| INF-08 | Monitoring | 🟡 In flight — code on `claude/busy-faraday-40n2zl`, all four reviews PASS and `gate:full` done; pull request not yet opened ([#30](https://github.com/bvst/TryggHverdag/pull/30) merges first). Done when the owner's drill passes (A-26) |
 | INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). The owner sees the report on the phone, in [#19](https://github.com/bvst/TryggHverdag/issues/19) (A-17). Moves to 04:47 UTC in [#26](https://github.com/bvst/TryggHverdag/pull/26) (D-078) |
 | INF-10 | Gate drills | ⬜ Not started. Parked 2026-09-24 for INF-07. Open question to the owner: split into offline drills now and live GitHub drills later? |
 
@@ -75,12 +75,23 @@ block the first real device build.
 
 **A-08 — UptimeRobot** can now watch staging: `https://trygg-hverdag-staging.cleverapps.io/v1/health` (INF-08). Its own step is now A-25.
 
+**#30 needs a manual merge first** (D-075): the one-line ai-review safety
+filter for the Healthchecks.io adapter —
+[#30](https://github.com/bvst/TryggHverdag/pull/30). Its CI checks are green;
+its ai-review jobs fail exactly as D-075 predicts (the job log's `STRUCTURED:`
+line is empty, "produced no structured output" — the action's own "Skipping
+action" line explains why and was not read the first time). Once #30 merges,
+`OWNER_APPROVAL_PATHS` is added to the INF-08 pull request itself
+(`scripts/gate.test.mjs` requires every owned `/apps/` path there) before that
+pull request can merge.
+
 **A-23 to A-26 — monitoring (INF-08).** Steps for the owner, written out in
 [`plan/monitoring-setup.md`](plan/monitoring-setup.md): the worker's
 Healthchecks.io check and the `HEALTHCHECKS_WORKER_URL` secret (A-23, can be
-done before this merges); after merge, `infra-staging` plan and apply, then
-confirming the check leaves `new` (A-24); the UptimeRobot keyword monitor and
-its mobile app (A-25); and the drill, which is INF-08's done-criterion (A-26).
+done before this merges); after #30 and the INF-08 pull request both merge,
+`infra-staging` plan and apply, then confirming the check leaves `new` (A-24);
+the UptimeRobot keyword monitor and its mobile app (A-25); and the drill,
+which is INF-08's done-criterion (A-26).
 
 **Dependabot and the reviewer gate.** `CLAUDE_CODE_OAUTH_TOKEN` is now in the
 Dependabot secret store, which unblocks npm updates. **github-actions updates
@@ -176,30 +187,63 @@ The things that still bite, and cost a session hours the first time.
 - **Read the job log before theorising** (D-070) and **say what you checked, not
   what you assume** — both are non-negotiables in `CLAUDE.md` because three
   hypotheses about one failing gate were wrong in a single morning.
+- **Stryker's local incremental report reuses old results for unchanged
+  code.** With the command runner, `mutantCanBeReused` is always true — the
+  command runner never reports coverage, so every mutant outside the diff
+  keeps its previous status whether or not it is still killed. Confirmed on
+  INF-08: `worker.ts:208` showed Survived in `reports/stryker-incremental.json`
+  while a hand mutant proved it killed. Never cite that file as current for
+  code the branch did not change; plant a hand mutant to check. CI is
+  unaffected — nothing caches `reports/`.
 
 ## In flight
 
-**INF-08 — monitoring** (code on `claude/busy-faraday-40n2zl`; pull request not
-yet opened). Reviews pending; `gate:full` (with mutation) is still running —
-this entry says nothing about their outcome, only what is built and what is
-known so far.
+**INF-08 — monitoring** (code on `claude/busy-faraday-40n2zl`; pull request
+not yet opened — [#30](https://github.com/bvst/TryggHverdag/pull/30) merges
+first, see "What the owner still needs to do"). Reviews and `gate:full` are
+done.
 
+- **Reviews: all four PASS, one round.** safety-reviewer, privacy-security-
+  reviewer, code-reviewer (advisory), test-auditor. No BLOCK. Round 1 found
+  three things, all fixed (`09beb34`, `53a74c2`, `0b434cc`, `06a9ba7`,
+  `86c094d`): a followed redirect could count as a ping or leak the URL over
+  `http:` — now refused (`redirect: 'manual'`); the drill was timed from the
+  stop rather than the last ping — fixed in `monitoring-setup.md`; and the
+  owner decided the adapter is a safety path (D-079) — CODEOWNERS and
+  `SAFETY_PATHS` cover it here, the ai-review filter line is in #30.
 - **Built:** the heartbeat task checks in with Healthchecks.io only after its
-  beat is recorded (a new `CheckIn` port and `fetch` adapter); a failed
-  check-in is one written line, never a failed task; `HEALTHCHECKS_WORKER_URL`
-  never stops the worker, even when it is unset, empty or not `https:`; the
-  ping URL is never written, including inside an underlying error message; the
-  build machine never checks in (BUG-3); Terraform requires and hides the URL,
-  passed from the `staging` environment secret in both the plan and apply
-  jobs; the owner's steps A-23 to A-26 are written out in
-  [`plan/monitoring-setup.md`](plan/monitoring-setup.md). D-079 records the
-  owner's choice: UptimeRobot Free on staging now, Solo at go-live.
-- **Verified so far:** `gate:quick` green, `coverage:ratchet` green,
-  `infra:check` green, `api:diff` reports no change. `req:coverage` now shows
-  REL-08 at 4 of 63 (was 3), which is this branch's tests.
-- **Left:** `gate:full` including mutation, the three blocking reviews,
-  opening the pull request, and the owner's steps A-23 to A-26 — the drill
-  (A-26) is INF-08's done-criterion and has not happened yet.
+  beat is recorded; a failed check-in is one written line, never a failed
+  task; `HEALTHCHECKS_WORKER_URL` never stops the worker; the ping URL is
+  never written and redirects are refused; the build machine never checks in
+  (BUG-3); Terraform requires and hides the URL. D-079: UptimeRobot Free on
+  staging now, Solo at go-live.
+- **Coverage and mutation:** the adapter is now measured, unlike other
+  adapters (L3-only by design; this one is L2-tested) — 100 % branches, 44 of
+  44 mutants, after the first pass scored 29.55 % (an emptied catch block
+  survived). The coverage baseline was brought current (`86c094d`, dated from
+  INF-05): 28 files added, 23 figures raised, none lowered.
+- **`gate:full`, this session: 10 passed.** `gate:integrity` could not read
+  the rulesets (no token in a session; test-auditor confirmed the required
+  checks with an anonymous read, but who can bypass them stays unverified).
+  Integration tests are not possible without Docker.
+- **A false reading, corrected.** The orchestrator first reported the
+  mutation run as "97.0 %, survivors only on untouched lines" from the local
+  incremental report; test-auditor showed that report reuses old results for
+  code the branch did not change, so `worker.ts:208`, shown as Survived, is in
+  fact killed (see "Live gotchas"). CI is unaffected. Full account:
+  [`progress/m0.md`](progress/m0.md).
+- **Verified:** `gate:quick`, `coverage:ratchet`, `infra:check` green,
+  `api:diff` reports no change, `req:coverage` shows REL-08 at 4 of 63 (was 3).
+- **Left:** the pull request, #30 merging first, `OWNER_APPROVAL_PATHS` added
+  after that, and the owner's steps A-23 to A-26 — the drill (A-26) is
+  INF-08's done-criterion and has not happened yet.
+- **Follow-ups, not this PR:** `scripts/mutation.mjs` should ignore or delete
+  the incremental file when a test changed, or accept `--force` — D-066's
+  "`--incremental` in CI keeps that affordable" is wrong as written, the flag
+  does nothing in CI (test-auditor, pre-existing); `OWNER_APPROVAL_PATHS`
+  gains the adapter after #30 merges (this PR, before merge); the D-079 M2
+  hand-offs (already recorded in D-079); AR-10's import rule is enforced by
+  nothing (code-reviewer; already a D-077 follow-up).
 - **Gotcha:** `req:coverage` counts REL-08, not INF-08 — a spec that names a
   requirement ID (this one names REL-08) needs its own tests to name that ID
   too, or RG-01 fails on the branch.
