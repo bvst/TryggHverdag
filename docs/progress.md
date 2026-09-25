@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-09-24 · **Milestone:** M0 (foundations)
+**Last updated:** 2026-09-25 · **Milestone:** M0 (foundations)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md).
@@ -18,13 +18,13 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 
 | ID | Task | Status |
 |----|------|--------|
-| INF-00 | Mac environment check | ⬜ Waits for the Mac (A-10). `pnpm run doctor` is ready for it |
+| INF-00 | Mac environment check | ✅ Done — 2026-09-25. `pnpm run doctor` passes 9 of 9 on `claude-dev`, and the owner confirmed Remote Control |
 | INF-01 | Monorepo skeleton | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-02 | Claude Code configuration + hook tests | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-03 | Gate scripts + HK-08 | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-04 | CI workflows, merge rules, CODEOWNERS | ✅ Done — 2026-09-23 ([#3](https://github.com/bvst/TryggHverdag/pull/3)) |
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
-| INF-06 | App skeleton | ⬜ Waits for the Mac |
+| INF-06 | App skeleton | ⬜ Not started. The Mac is ready (INF-00) |
 | INF-07 | Staging on Clever Cloud | ✅ Done — 2026-09-25 ([#22](https://github.com/bvst/TryggHverdag/pull/22), fixes [#23](https://github.com/bvst/TryggHverdag/pull/23) [#24](https://github.com/bvst/TryggHverdag/pull/24), names [#25](https://github.com/bvst/TryggHverdag/pull/25)). A merge deployed and the smoke test passed; BUG-3 fix in flight |
 | INF-08 | Monitoring | ⬜ Next after INF-07: UptimeRobot will watch `https://trygg-hverdag-staging.cleverapps.io/v1/health` |
 | INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). The owner sees the report on the phone, in [#19](https://github.com/bvst/TryggHverdag/issues/19) (A-17). Moves to 04:47 UTC in [#26](https://github.com/bvst/TryggHverdag/pull/26) (D-078) |
@@ -68,7 +68,7 @@ docs are blocked from sessions).
 **A-09 is done** (2026-09-23). `CLAUDE_CODE_OAUTH_TOKEN` is set;
 `ANTHROPIC_API_KEY` is not.
 
-**A-10 — the Mac.** Blocks INF-00 and INF-06, which is the app skeleton.
+**A-10 is done** (2026-09-25). `claude-dev` acts on GitHub as `urso-agent` only — `gh`, SSH and the HTTPS remote were each checked — and the owner removed the old `bvst` key from this user.
 
 **A-01, A-02, A-03 — phones, Apple, Google Play.** Not blocking today; they
 block the first real device build.
