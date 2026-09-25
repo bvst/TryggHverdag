@@ -1798,9 +1798,11 @@ any other path is work, not a candidate for the same treatment.
   `apps/server/src/adapters/healthchecks.ts` holds the ping URL and `fetch`, so
   a later edit could make it ping without being asked — say once at start —
   and keep a crash-looping worker's check green: silent, the dangerous
-  direction. It joins CODEOWNERS, `OWNER_APPROVAL_PATHS` and `SAFETY_PATHS` in
-  INF-08, and the ai-review `safety` filter in its own one-line pull request,
-  merged by hand (#30, D-075). `readHealthchecksSetting` stays out: if it ever
+  direction. It joins CODEOWNERS and `SAFETY_PATHS` in INF-08, and the
+  ai-review `safety` filter in its own one-line pull request, merged by hand
+  (#30, D-075). `OWNER_APPROVAL_PATHS` follows once #30 has merged:
+  `scripts/gate.test.mjs` requires every owned `/apps/` path to be in that
+  filter too, the same order INF-07 took with #21. `readHealthchecksSetting` stays out: if it ever
   threw, the worker would crash-loop, `/v1/health` would turn `degraded` and
   both monitors would page, so a mistake there fails loudly.
 - **Design choices that set a pattern** (delegated, D-031, from the spec's

@@ -2,6 +2,10 @@
 // start without. A process that starts with no database would answer every
 // request with an error and look, from the outside, like a working deploy —
 // so a missing or malformed setting stops it before anything listens.
+import {
+  SYNTHETIC_CHECK_UUID as CHECK,
+  SYNTHETIC_PING_URL as PING_URL,
+} from '@trygghverdag/test-kit';
 import { describe, expect, test } from 'vitest';
 import {
   DEFAULT_PORT,
@@ -72,9 +76,8 @@ describe('readServerConfig', () => {
 // and the value itself never appears in it: anyone holding a ping URL can keep
 // the check green while the worker is dead.
 
-/** The UUID of a ping URL. All zeros, so it names no real check. Never fetched here. */
-const CHECK = '00000000-0000-0000-0000-000000000000';
-const PING_URL = `https://hc-ping.com/${CHECK}`;
+// CHECK is the UUID of a ping URL, all zeros so it names no real check, and
+// PING_URL a usable https: one; both from the test kit. Nothing is fetched here.
 
 /** The reason a setting gives for not checking in. Fails the test if it would check in. */
 function reasonOf(setting: HealthchecksSetting): string {

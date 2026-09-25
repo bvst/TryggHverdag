@@ -4,6 +4,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
+import { SYNTHETIC_CHECK_UUID as CHECK } from '../packages/test-kit/src/ping-url.ts';
 import { terraformDirs } from './infra-check.mjs';
 import { readOrganisation } from './lib/staging-deploy.mjs';
 import { STAGING_APP_NAME, STAGING_URL } from './lib/staging.mjs';
@@ -121,8 +122,8 @@ describe('INF-08: the ping URL the worker checks in with', () => {
     return match?.[0] ?? '';
   }
 
-  /** The all-zero UUID: a well-formed ping URL that names no real check. */
-  const CHECK = '00000000-0000-0000-0000-000000000000';
+  // CHECK, from the test kit, is the all-zero UUID: with it, a well-formed ping
+  // URL that names no real check. None is ever fetched here.
 
   test('INF-08-AC8: it is a required string variable, with no default to fall back on', () => {
     const block = variableBlock();

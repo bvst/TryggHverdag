@@ -307,9 +307,12 @@ This is the done-criterion. It is a manual acceptance step carried out by the ow
   adapter "can only fail to ping". It can also ping without being asked — it
   holds the URL and `fetch` — and a ping sent on its own, say once at start,
   would keep a crash-looping worker's check green: silent, the dangerous
-  direction. So `adapters/healthchecks.ts` joins CODEOWNERS,
-  `OWNER_APPROVAL_PATHS` and `SAFETY_PATHS` here, and the ai-review `safety`
-  filter in its own pull request, merged by hand ([#30](https://github.com/bvst/TryggHverdag/pull/30), D-075).
+  direction. So `adapters/healthchecks.ts` joins CODEOWNERS and `SAFETY_PATHS`
+  here, and the ai-review `safety` filter in its own pull request, merged by
+  hand ([#30](https://github.com/bvst/TryggHverdag/pull/30), D-075).
+  `OWNER_APPROVAL_PATHS` follows once #30 has merged, because
+  `scripts/gate.test.mjs` requires every owned `/apps/` path to be in that
+  filter.
   `readHealthchecksSetting` in `config.ts` stays out: if it ever threw, the
   worker would crash-loop, `/v1/health` would turn `degraded` and both monitors
   would page — a mistake there fails loudly.

@@ -26,8 +26,9 @@ export function healthchecksCheckIn({
   fetch?: typeof fetch;
   timeoutMs?: number;
 }): CheckIn {
-  // The URL is not parsed here: new URL() throws with the value in its message,
-  // and at start-up, where a monitoring setting must never stop the worker.
+  // Not parsed here: new URL() would throw with the value in its message, and
+  // would do it at start-up, where a monitoring setting must never stop the
+  // worker.
   return {
     async checkIn(): Promise<void> {
       let response: Response;
@@ -35,7 +36,15 @@ export function healthchecksCheckIn({
         // HEAD: Healthchecks.io counts it as a ping, and there is no body to
         // send or to read. The timer is a network timeout, not a safety
         // decision, so it is not the database clock's to keep (AR-03).
-        response = await send(url, { method: 'HEAD', signal: AbortSignal.timeout(timeoutMs) });
+        // redirect 'manual': the URL goes nowhere but where it was set. A
+        // followed redirect would count whatever answered elsewhere as a
+        // check-in, and could carry the URL there in clear; so a 3xx comes
+        // back as it is and fails below, naming its status.
+        response = await send(url, {
+          method: 'HEAD',
+          redirect: 'manual',
+          signal: AbortSignal.timeout(timeoutMs),
+        });
       } catch (error: unknown) {
         throw notReached(error, timeoutMs);
       }

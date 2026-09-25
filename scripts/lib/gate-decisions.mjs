@@ -17,6 +17,9 @@ export const SAFETY_PATHS = [
   // this contract had moved out of worker.ts and out of every safety check.
   'apps/server/src/bin/worker.ts',
   'apps/server/src/process.ts',
+  // The one file that can ping Healthchecks.io: a ping it sent on its own would
+  // keep a dead worker's check green (D-079, the owner's decision).
+  'apps/server/src/adapters/healthchecks.ts',
   'apps/mobile/src/safety-core/',
 ];
 

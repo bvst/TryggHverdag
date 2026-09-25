@@ -4,6 +4,8 @@
 import {
   BEAT_RECORDED,
   CHECKED_IN,
+  SYNTHETIC_CHECK_UUID as CHECK,
+  SYNTHETIC_PING_URL as PING_URL,
   fakeCheckIn,
   fakeClock,
   fakeWorkerHeartbeats,
@@ -12,6 +14,7 @@ import {
 import { EventEmitter } from 'node:events';
 import process from 'node:process';
 import { describe, expect, test, vi } from 'vitest';
+import { healthchecksCheckIn } from './adapters/healthchecks.ts';
 import { readHealthchecksSetting, type HealthchecksSetting } from './config.ts';
 import type { CheckIn } from './ports.ts';
 import {
@@ -225,6 +228,7 @@ describe('runWorkerProcess', () => {
     const running = runWorkerProcess('postgres://example/db', {
       runWorker: runner.run,
       signals,
+      write: () => undefined,
       exit: (code) => {
         exits.push(code);
       },
@@ -245,6 +249,7 @@ describe('runWorkerProcess', () => {
     const running = runWorkerProcess('postgres://example/db', {
       runWorker: runner.run,
       signals,
+      write: () => undefined,
       exit: () => undefined,
     });
     await settle();
@@ -341,6 +346,7 @@ describe("runWorkerProcess on Clever Cloud's build machine", () => {
       runWorker: runner.run,
       signals: new EventEmitter(),
       instanceType: 'production',
+      write: () => undefined,
       exit: () => undefined,
     });
     await settle();
@@ -392,15 +398,11 @@ describe('runWorkerProcess, when stopping fails', () => {
 // worker that ignored the fake it was handed: a ping from a test would tell a
 // real check that the worker is alive.
 
-/** The UUID of a ping URL. All zeros, so it names no real check. */
-const CHECK = '00000000-0000-0000-0000-000000000000';
-/**
- * A usable setting: https, so the worker accepts it. On the loopback address
- * and on port 1, which fetch refuses to connect to at all, so whatever reaches
- * for it — a fake, a fetch that sends nothing, or the real adapter — nothing
- * leaves this machine.
- */
-const PING_URL = `https://127.0.0.1:1/${CHECK}`;
+// CHECK is the UUID of a ping URL: all zeros, so it names no real check.
+// PING_URL is a usable setting: https, so the worker accepts it. On the
+// loopback address and on port 1, which fetch refuses to connect to at all, so
+// whatever reaches for it — a fake, a fetch that sends nothing, or the real
+// adapter — nothing leaves this machine. Both come from the test kit.
 
 const CHECKING_IN = /^worker: checking in with Healthchecks\.io\b/;
 const NOT_CHECKING_IN = /^worker: not checking in with Healthchecks\.io\b/;
@@ -421,9 +423,6 @@ function reasonOf(setting: HealthchecksSetting): string {
   expect(setting.checkingIn).toBe(false);
   return setting.checkingIn ? '' : setting.reason;
 }
-
-/** The real adapter, for the tests that run it inside the worker. */
-const adapter = () => import('./adapters/healthchecks.ts');
 
 /** The URL a fetch was asked for, however it was handed over. */
 function urlOf(input: Parameters<typeof fetch>[0]): string {
@@ -878,7 +877,6 @@ describe('REL-08: runWorkerProcess and HEALTHCHECKS_WORKER_URL', () => {
     // The real adapter, run inside the real worker, over a fetch that fails the
     // way Node's does when it cannot parse an address: with that address in
     // the message and in the cause.
-    const { healthchecksCheckIn } = await adapter();
     const worker = workerProcess({
       healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: PING_URL }),
       createCheckIn: (url) => healthchecksCheckIn({ url, fetch: fetchThatRepeatsTheUrl }),
@@ -914,7 +912,11 @@ describe('REL-08: runWorkerProcess and HEALTHCHECKS_WORKER_URL', () => {
     const lines = linesOf(worker.written);
     expect(lines).toHaveLength(2);
     expect(lines[0]).toMatch(CHECKING_IN);
-    expect(lines[1]?.startsWith(CHECK_IN_FAILED)).toBe(true);
+    // The whole line, not its start: fetch refuses port 1 with a "bad port"
+    // that carries no code, so this reason is PING_URL's own. A check-in built
+    // without the URL fails too, but with ERR_INVALID_URL in its reason — and
+    // only this line tells the two apart.
+    expect(lines[1]).toBe(`${CHECK_IN_FAILED}Error: Healthchecks.io could not be reached.`);
     expect(worker.written.join('')).not.toContain(CHECK);
     expect(worker.exits).toEqual([]);
 
@@ -991,6 +993,7 @@ describe("REL-08: runWorkerProcess on Clever Cloud's build machine, with Healthc
     await settle();
     answerLikePostgres(app.runner, app.events);
     await runHeartbeat(app.runner);
+    expect(app.created).toEqual([PING_URL]);
     expect(app.checkIn.calls).toBe(1);
     await stopCleanly(app);
 
@@ -998,10 +1001,14 @@ describe("REL-08: runWorkerProcess on Clever Cloud's build machine, with Healthc
     await settle();
 
     expect(build.runner.options()).toBeUndefined();
+    // Not only never sent: never even built. A check-in that exists on the
+    // build machine is one a later change could send from there.
+    expect(build.created).toEqual([]);
     expect(build.checkIn.calls).toBe(0);
     expect(build.written.join('')).toContain('INSTANCE_TYPE=build');
     expect(build.written.join('')).not.toContain(CHECK);
     await stopCleanly(build);
+    expect(build.created).toEqual([]);
     expect(build.checkIn.calls).toBe(0);
   });
 });

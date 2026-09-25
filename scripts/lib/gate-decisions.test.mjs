@@ -61,6 +61,8 @@ describe('decideMutation', () => {
     // Where a worker that stopped is made to exit with 1, so it is restarted.
     ['apps/server/src/bin/worker.ts'],
     ['apps/server/src/process.ts'],
+    // The check-in that tells Healthchecks.io the worker is alive. The owner made it a safety path.
+    ['apps/server/src/adapters/healthchecks.ts'],
     ['apps/mobile/src/safety-core/heartbeat.ts'],
   ])('%s counts as safety code', (file) => {
     const decision = decideMutation({

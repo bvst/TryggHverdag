@@ -7,6 +7,10 @@
 // inside Vitest, a server that binds to localhost — each would pass every other
 // test and fail on the first deploy. This is the one place that runs the real
 // thing.
+import {
+  SYNTHETIC_CHECK_UUID as CHECK,
+  SYNTHETIC_PING_URL as PING_URL,
+} from '@trygghverdag/test-kit';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
@@ -74,6 +78,25 @@ async function firstResponse(url: string, attempts = 150): Promise<Response> {
   }
 }
 
+/**
+ * Waits until a child has written `text`, or has exited, because it takes a
+ * moment to start: up to 15 seconds, counted in attempts rather than read off
+ * a clock. Asserts nothing itself; the test's own assertions say what went
+ * wrong if the text never came.
+ */
+async function untilOutputContains(
+  started: ReturnType<typeof start>,
+  text: string,
+  attempts = 150,
+): Promise<void> {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (started.output().includes(text) || started.child.exitCode !== null) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
 describe('bin/api.ts', () => {
   test('starts under plain node, answers on PORT, and exits with 0 on SIGTERM', async () => {
     const port = await freePort();
@@ -126,9 +149,15 @@ describe('bin/worker.ts', () => {
 
   test("BUG-3: on Clever Cloud's build machine it never reaches for the database, and waits to be stopped", async () => {
     // The same unreachable database as above: a worker that tried it would
-    // fail with ECONNREFUSED within milliseconds. Still running after 1.5 s,
-    // having said why, is a worker that did not try.
+    // fail with ECONNREFUSED within milliseconds. Still running 1.5 s after
+    // it has said why is a worker that did not try.
+    //
+    // The 1.5 s is counted from that line, not from the spawn. Counted from
+    // the spawn, a machine busy enough — Stryker's, running every test per
+    // mutant — had not yet printed the line when the test looked, and failed
+    // here for no fault of the worker's. That counted as a killed mutant.
     const worker = start('worker.ts', { DATABASE_URL: UNREACHABLE, INSTANCE_TYPE: 'build' });
+    await untilOutputContains(worker, 'INSTANCE_TYPE=build');
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
     expect(worker.child.exitCode).toBeNull();
@@ -164,10 +193,8 @@ describe('REL-08: bin/worker.ts and HEALTHCHECKS_WORKER_URL', () => {
   // INF-08. The real process, to prove the entry file hands the setting to the
   // worker at all: everything past that is tested in-process in worker.test.ts.
   // The database is unreachable, so each run ends in milliseconds — and ends
-  // for that reason, not because of the setting.
-
-  /** The UUID of a ping URL. All zeros, so it names no real check. */
-  const CHECK = '00000000-0000-0000-0000-000000000000';
+  // for that reason, not because of the setting. CHECK, the ping URL's UUID,
+  // is all zeros, so it names no real check.
 
   test('INF-08-AC6: with it unset, the worker says it is not checking in and why, and fails only for want of its database', async () => {
     const worker = start('worker.ts', { DATABASE_URL: UNREACHABLE });
@@ -187,7 +214,7 @@ describe('REL-08: bin/worker.ts and HEALTHCHECKS_WORKER_URL', () => {
     // whatever the worker did with it.
     const worker = start('worker.ts', {
       DATABASE_URL: UNREACHABLE,
-      HEALTHCHECKS_WORKER_URL: `https://127.0.0.1:1/${CHECK}`,
+      HEALTHCHECKS_WORKER_URL: PING_URL,
     });
 
     const [code] = await worker.exited;

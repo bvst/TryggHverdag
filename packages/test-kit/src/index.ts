@@ -15,6 +15,7 @@ export { BEAT_RECORDED, fakeWorkerHeartbeats } from './fake-worker-heartbeats.ts
 export type { FakeWorkerHeartbeats } from './fake-worker-heartbeats.ts';
 export { CHECKED_IN, fakeCheckIn } from './fake-check-in.ts';
 export type { FakeCheckIn } from './fake-check-in.ts';
+export { SYNTHETIC_CHECK_UUID, SYNTHETIC_PING_URL } from './ping-url.ts';
 
 /**
  * fast-check, for the rules about time and order that no list of examples can

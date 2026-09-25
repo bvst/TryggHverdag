@@ -10,6 +10,10 @@
 // adapter that ignored the fetch it was handed: a ping from a test would tell a
 // real check that the worker is alive. What is fetched is a stand-in server on
 // the loopback address, or port 1 there, which fetch refuses to connect to.
+import {
+  SYNTHETIC_CHECK_UUID as CHECK,
+  SYNTHETIC_PING_URL as PING_URL,
+} from '@trygghverdag/test-kit';
 import { once } from 'node:events';
 import { createServer, type IncomingHttpHeaders } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -17,14 +21,11 @@ import { inspect } from 'node:util';
 import { afterEach, describe, expect, test } from 'vitest';
 import { CHECK_IN_TIMEOUT_MS, healthchecksCheckIn } from './healthchecks.ts';
 
-/** The path of a ping URL: the check's UUID. All zeros, so it names no real check. */
-const CHECK = '00000000-0000-0000-0000-000000000000';
-/**
- * For the tests that hand the adapter a fetch of their own. https, like a real
- * ping URL; port 1 on the loopback address, so nothing leaves this machine
- * even if the adapter reached past that fetch for the real one.
- */
-const PING_URL = `https://127.0.0.1:1/${CHECK}`;
+// CHECK is the path of a ping URL, the check's UUID: all zeros, so it names no
+// real check. PING_URL is for the tests that hand the adapter a fetch of their
+// own: https, like a real ping URL, but port 1 on the loopback address, so
+// nothing leaves this machine even if the adapter reached past that fetch for
+// the real one. Both come from the test kit, where test data is built.
 
 /** How a stand-in Healthchecks.io answers: a status, never at all, or by hanging up. */
 type Answer = number | 'never' | 'hang up';
@@ -42,8 +43,11 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()));
 });
 
-/** A stand-in Healthchecks.io on 127.0.0.1, on a port the system picks. */
-async function standIn(answer: Answer) {
+/**
+ * A stand-in Healthchecks.io on 127.0.0.1, on a port the system picks. Any
+ * `headers` go out with its answer, such as a redirect's Location.
+ */
+async function standIn(answer: Answer, headers: Record<string, string> = {}) {
   const received: Received[] = [];
   const server = createServer((request, response) => {
     let bodyBytes = 0;
@@ -64,7 +68,7 @@ async function standIn(answer: Answer) {
         request.socket.destroy();
         return;
       }
-      response.writeHead(answer, { 'content-type': 'text/plain' });
+      response.writeHead(answer, { 'content-type': 'text/plain', ...headers });
       response.end(answer >= 200 && answer < 300 ? 'OK' : 'not OK');
     });
   });
@@ -162,6 +166,28 @@ describe('REL-08: the check-in with Healthchecks.io', () => {
       expect(failure).toBeInstanceOf(Error);
       expect((failure as Error).message).toContain(String(status));
       expect(healthchecks.received).toHaveLength(1);
+    },
+  );
+
+  test.each([301, 302, 303, 307, 308])(
+    'INF-08-AC1: a %i redirect is a failure that names the status, and is never followed',
+    async (status) => {
+      // Only Healthchecks.io's own 2xx is a check-in. A redirect followed
+      // would count whatever answered at the other end as one, and would
+      // carry the check's UUID there — in clear text, when the new address is
+      // http:, as this one is.
+      const elsewhere = await standIn(200);
+      const healthchecks = await standIn(status, { location: elsewhere.url });
+
+      const failure = await failureOf(() =>
+        healthchecksCheckIn({ url: healthchecks.url }).checkIn(),
+      );
+      await aMoment();
+
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toContain(String(status));
+      expect(healthchecks.received).toHaveLength(1);
+      expect(elsewhere.received).toHaveLength(0);
     },
   );
 
