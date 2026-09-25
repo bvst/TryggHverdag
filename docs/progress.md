@@ -25,9 +25,9 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-04 | CI workflows, merge rules, CODEOWNERS | ✅ Done — 2026-09-23 ([#3](https://github.com/bvst/TryggHverdag/pull/3)) |
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
-| INF-07 | Staging on Clever Cloud | 🟡 Merged 2026-09-24 ([#22](https://github.com/bvst/TryggHverdag/pull/22)). The first plan run planned staging (2 to add) and then failed on BUG-1, fixed on `fix/BUG-1-plan-stdin`. Done when staging is applied, a deploy runs and the smoke test passes (A-22) |
-| INF-08 | Monitoring | ⬜ Next after INF-07: UptimeRobot will watch `https://trygghverdag-staging.cleverapps.io/v1/health` |
-| INF-09 | Daily status workflow | 🟡 Merged 2026-09-24 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). First report posted to [#19](https://github.com/bvst/TryggHverdag/issues/19) at 05:23 UTC, every step verified in the log. Done when the owner confirms it reached the phone (A-17) |
+| INF-07 | Staging on Clever Cloud | 🟡 Merged 2026-09-24 ([#22](https://github.com/bvst/TryggHverdag/pull/22)). BUG-1 fixed in [#23](https://github.com/bvst/TryggHverdag/pull/23), BUG-2 in [#24](https://github.com/bvst/TryggHverdag/pull/24). The first apply created staging but could not save Terraform's state (BUG-2), leaving two orphans under the old spelling. Staging's names are now `trygg-hverdag` (on `feat/INF-07-trygg-hverdag-names`). Done when staging is applied, a deploy runs and the smoke test passes (A-22) |
+| INF-08 | Monitoring | ⬜ Next after INF-07: UptimeRobot will watch `https://trygg-hverdag-staging.cleverapps.io/v1/health` |
+| INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). The owner sees the report on the phone, in [#19](https://github.com/bvst/TryggHverdag/issues/19) (A-17). Moves to 04:47 UTC in [#26](https://github.com/bvst/TryggHverdag/pull/26) (D-078) |
 | INF-10 | Gate drills | ⬜ Not started. Parked 2026-09-24 for INF-07. Open question to the owner: split into offline drills now and live GitHub drills later? |
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
@@ -52,12 +52,9 @@ on merge because there was nothing yet to deploy to.
 **A-14 — the cloud environment's allowlist is applied** (2026-09-24); it
 reached the running session without a restart. A setup script is still to come.
 
-**A-17 — confirm the first daily report reached the phone.** It was posted to
-[#19](https://github.com/bvst/TryggHverdag/issues/19) at 05:23 UTC on
-2026-09-24, mentioning `@bvst`. That is INF-09's done-criterion, and only the
-owner can see it. The 05:00 slot had not fired by 05:21, so the owner's fallback
-applied and the run was started by hand. The slot did fire in the end — at
-09:52, 4 h 52 min late — and posted a second report (see D-078).
+**A-17 is done** (2026-09-25): the owner sees the daily report on the phone,
+as the GitHub issue [#19](https://github.com/bvst/TryggHverdag/issues/19). That
+was INF-09's done-criterion, so INF-09 is done.
 
 **A-16 is done, and now verified** (2026-09-24). The first run's post step saw
 `PING_CONFIGURED: true`, and its ping step logged
@@ -186,8 +183,24 @@ The things that still bite, and cost a session hours the first time.
   read, which a pipe answers with EAGAIN while `terraform show` is still
   writing. `apply` would have failed the same way. Reproduced locally, then
   fixed test-first by reading stdin as a stream.
-- **Next, after the BUG-1 fix merges:** `plan` again, then `apply` with that
-  run's ID, then re-run `deploy-staging`.
+- BUG-1 merged as [#23](https://github.com/bvst/TryggHverdag/pull/23). The next
+  plan ([36050891944](https://github.com/bvst/TryggHverdag/actions/runs/36050891944))
+  printed one fingerprint. `apply` with it
+  ([36051517379](https://github.com/bvst/TryggHverdag/actions/runs/36051517379))
+  re-planned to the same fingerprint, so plans are reproducible, and created the
+  database (`postgresql_70966f35-c1e9-4af0-865d-cb73540c8641`) and the app
+  (`app_bc864d53-42ae-4591-8465-eb1edb8ce740`). Then it could not save the
+  state: `PutObject … 400 … XAmzContentSHA256Mismatch`. **BUG-2**: Terraform
+  asks for a SHA-256 checksum on every state upload unless
+  `skip_s3_checksum = true`, and Cellar refuses it. Plans only read the state,
+  so none could show this. Terraform's recovery file went with the runner (the
+  workflow keeps no artifacts, because state holds the database password), so
+  **both resources exist and the state does not know them**. BUG-2 is fixed in
+  [#24](https://github.com/bvst/TryggHverdag/pull/24).
+- **Next:** the rename below merges, then `plan`, `apply` with that run, and a
+  re-run of `deploy-staging`. After the rename the orphans no longer share a
+  name with anything Terraform creates, so deleting them is cleanup rather than
+  a precondition. It is still worth doing, because the orphaned app costs money.
 
 **What it built:** three runnable server processes (migrate as the pre-run
 hook, the API, and the worker beside it); Terraform for one nano instance and
@@ -198,24 +211,32 @@ two runs the owner starts and applies only the plan the owner read. The
 [#21](https://github.com/bvst/TryggHverdag/pull/21). **What only the first real
 runs can verify** is listed at the end of D-077, with the follow-ups.
 
+**Renamed before the next apply** (the owner, 2026-09-25, on
+`feat/INF-07-trygg-hverdag-names`): every name staging gets on Clever Cloud is
+spelled `trygg-hverdag`, matching the state bucket. That means the app
+`trygg-hverdag-staging`, the database `trygg-hverdag-staging-db` and
+`trygg-hverdag-staging.cleverapps.io`. The first apply's orphans keep the old
+spelling, so they can no longer be mistaken for the new ones by name. They
+should still be deleted: the app costs money and holds the old address.
+
 **INF-10 was parked for it.** Before switching, Claude found that
 `req:coverage` counts requirement IDs, not acceptance criteria. RG-01 says the
 same, but the roadmap's drill ("a new acceptance criterion without a test")
 asks for more, so that drill would pass for a requirement that already has one
 test. Raise it when INF-10 resumes.
 
-**INF-09 — the daily status report** (D-076) is merged
-([#18](https://github.com/bvst/TryggHverdag/pull/18)) and ran for the first time
-at 05:21 UTC, by hand. Two of the three open questions are answered by its log:
-the action ran on the read-only token (`Using provided GITHUB_TOKEN for
-authentication`; the app-token revoke step `skipped`), and `gh issue pin` worked
-with `GITHUB_TOKEN`. The third — does the mention reach the phone — is A-17.
-The last open question is answered too: the **`schedule`** run at 09:52 passed
-the action's human-actor check (`Auto-detected mode: agent for event: schedule`
-· `Actor type: User` · `Verified human actor: bvst`), posted to #19, and pinged
-Healthchecks.io with exit status 0. It ran 4 h 52 min late; GitHub names the top
-of the hour as its high-load time, so the report moves to 04:47 UTC (**D-078**,
-owner's decision 2026-09-25).
+**[#26](https://github.com/bvst/TryggHverdag/pull/26) — the daily report moves
+to 04:47 UTC** (D-078, owner's decision 2026-09-25). The first `schedule` run
+came at 09:52 for the 05:00 slot, 4 h 52 min late, and GitHub names the top of
+the hour as its high-load time. After it merges, #19's description — written
+once, still saying 05:00 — is updated by hand.
+
+**INF-09 is done** (2026-09-25). Every open question was answered by a real run's
+log: the read-only token (`Using provided GITHUB_TOKEN for authentication`;
+app-token revoke `skipped`), `gh issue pin` with `GITHUB_TOKEN`, a `schedule`
+run passing the action's human-actor check (`Actor type: User` · `Verified human
+actor: bvst`), the Healthchecks.io ping (exit status 0), and — from the owner —
+the report reaching the phone.
 
 **Merged:** 2026-09-23 — #13 (progress-log restructure, D-075), #14 (the
 retraction that had only reached the archive), #15 (HK-09, the pre-commit hook),

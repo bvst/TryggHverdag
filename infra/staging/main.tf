@@ -17,13 +17,13 @@ locals {
 }
 
 resource "clevercloud_postgresql" "staging" {
-  name   = "trygghverdag-staging-db"
+  name   = "trygg-hverdag-staging-db"
   plan   = "dev"
   region = "par"
 }
 
 resource "clevercloud_nodejs" "staging" {
-  name        = "trygghverdag-staging"
+  name        = "trygg-hverdag-staging"
   description = "TryggHverdag staging: API and worker, synthetic data only"
   region      = "par"
 
@@ -43,7 +43,7 @@ resource "clevercloud_nodejs" "staging" {
   redirect_https  = true
   start_script    = "${local.node} apps/server/src/bin/api.ts"
 
-  vhosts = [{ fqdn = "trygghverdag-staging.cleverapps.io" }]
+  vhosts = [{ fqdn = "trygg-hverdag-staging.cleverapps.io" }]
 
   hooks {
     # Before every start. A failure stops the deploy: new code never starts

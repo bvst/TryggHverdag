@@ -1632,10 +1632,16 @@ any other path is work, not a candidate for the same treatment.
       staging's data is synthetic, so nothing personal can reach a log yet; the
       first M2 task that binds a location or a phone number meets this before
       it ships (PRIV-07, follow-up below).
-  15. **Staging answers at `trygghverdag-staging.cleverapps.io`**, fixed in
+  15. **Staging answers at `trygg-hverdag-staging.cleverapps.io`**, fixed in
       Terraform so the smoke test and UptimeRobot (INF-08) have a stable
       address. Clever Cloud says `cleverapps.io` is not production quality;
-      production gets its own domain (D-046).
+      production gets its own domain (D-046). **Every name staging gets on
+      Clever Cloud is spelled `trygg-hverdag`** (the owner, 2026-09-25),
+      matching the state bucket: the app `trygg-hverdag-staging`, the database
+      `trygg-hverdag-staging-db` and this address. A test in
+      `scripts/infra.test.mjs` holds it. Names inside the code, such as the
+      `@trygghverdag` package scope (D-057), are not Clever Cloud names and
+      keep their spelling.
   16. **Clever Cloud's CLI is the standalone clever-tools 5.0.2 binary,
       downloaded and checked by hash** (`scripts/lib/clever-tools.mjs`), the
       same way as Terraform, on the repository's Node 22. The npm package needs
@@ -1667,11 +1673,20 @@ any other path is work, not a candidate for the same treatment.
     2026-09-24). So D-068's "the error exits the process, which is loud" holds
     for the API's pool only. For the worker, the open question when D-068 is
     revisited is that message reaching the log unredacted, not a restart loop.
+  - **An apply that cannot save its state leaves resources Terraform does not
+    know.** Terraform writes `errored.tfstate` on the runner, and the runner is
+    gone when the job ends. The workflow deliberately uploads no artifact,
+    because state holds the database password. Recovery is by hand: delete the
+    orphans in the console (while staging holds nothing), or import them. The
+    first apply hit exactly this (BUG-2, 2026-09-24).
 - **Not verified before merging, and how each gets verified:** that Clever
   Cloud accepts the flavour `nano` and the vhost as written (the Cellar
   host is no longer on this list: the owner read `CELLAR_ADDON_HOST` as
   `cellar-c2.services.clever-cloud.com` in A-20), that the provider maps `start_script` to the run command, and reading the plan run's
-  log as the source of the fingerprint. The first `plan` and `apply` (A-22) and
+  log as the source of the fingerprint. (That last one is verified: the first
+  apply found the plan run's fingerprint and matched it. The first *state
+  write* was never on this list and should have been: planning only reads, so
+  nothing before an apply could exercise it — BUG-2.) The first `plan` and `apply` (A-22) and
   the first deploy answer all of them; none can run from a pull request,
   because the keys are limited to `main`. Also open until the first deploy:
   - **Connections while old and new overlap.** If Clever Cloud keeps the old

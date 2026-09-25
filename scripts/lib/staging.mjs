@@ -2,7 +2,7 @@
 // and scripts/infra.test.mjs fails if the two ever disagree.
 
 /** The app's name in the staging organisation; the deploy finds it by this name. */
-export const STAGING_APP_NAME = 'trygghverdag-staging';
+export const STAGING_APP_NAME = 'trygg-hverdag-staging';
 
 /** Where staging answers (a cleverapps.io address, staging only: D-046). */
-export const STAGING_URL = 'https://trygghverdag-staging.cleverapps.io';
+export const STAGING_URL = 'https://trygg-hverdag-staging.cleverapps.io';
