@@ -107,3 +107,77 @@ describe('terraformDirs', () => {
     expect(terraformDirs(ROOT)).toContain('infra/staging');
   });
 });
+
+describe('INF-08: the ping URL the worker checks in with', () => {
+  // Anyone holding the URL can keep the Healthchecks.io check green while the
+  // worker is dead, so it is a secret: it comes from the staging environment,
+  // is never committed, and Terraform never prints it. And it must point at
+  // Healthchecks.io over https — a check pinged from nowhere never pages.
+  const variables = read('infra/staging/variables.tf');
+
+  /** The variable's block, from its header to the closing brace at the start of a line. */
+  function variableBlock() {
+    const match = /^variable "healthchecks_worker_url" \{\n[\s\S]*?\n\}$/m.exec(variables);
+    return match?.[0] ?? '';
+  }
+
+  /** The all-zero UUID: a well-formed ping URL that names no real check. */
+  const CHECK = '00000000-0000-0000-0000-000000000000';
+
+  test('INF-08-AC8: it is a required string variable, with no default to fall back on', () => {
+    const block = variableBlock();
+
+    expect(block).not.toBe('');
+    expect(block).toMatch(/\n\s*type\s*=\s*string\n/);
+    expect(block).not.toMatch(/\n\s*default\s*=/);
+  });
+
+  test('INF-08-AC8: it is sensitive, so no plan shows it', () => {
+    expect(variableBlock()).toMatch(/\n\s*sensitive\s*=\s*true\n/);
+  });
+
+  test('INF-08-AC8: its validation refuses anything that does not start https://hc-ping.com/', () => {
+    const block = variableBlock();
+    const condition =
+      /\n\s*condition\s*=\s*can\(regex\("((?:[^"\\]|\\.)*)", var\.healthchecks_worker_url\)\)\n/.exec(
+        block,
+      );
+    expect(condition).not.toBeNull();
+    expect(block).toMatch(/\n\s*error_message\s*=\s*"/);
+
+    // Terraform's string escapes undone: `\\.` in the file is `\.` to the
+    // regular expression. RE2 and JavaScript agree on a pattern this simple.
+    const pattern = new RegExp(String(condition?.[1]).replace(/\\\\/g, '\\'));
+
+    expect(pattern.test(`https://hc-ping.com/${CHECK}`)).toBe(true);
+    for (const refused of [
+      `http://hc-ping.com/${CHECK}`,
+      `https://hc-ping.com.example.invalid/${CHECK}`,
+      `https://hc-pingXcom/${CHECK}`,
+      `https://example.invalid/https://hc-ping.com/${CHECK}`,
+      ` https://hc-ping.com/${CHECK}`,
+      'https://hc-ping.com',
+      '',
+    ]) {
+      expect({ value: refused, accepted: pattern.test(refused) }).toEqual({
+        value: refused,
+        accepted: false,
+      });
+    }
+  });
+
+  test('INF-08-AC8: the app gets it as HEALTHCHECKS_WORKER_URL, from that variable and nowhere else', () => {
+    const environment = /\n {2}environment = \{\n([\s\S]*?)\n {2}\}\n/.exec(main)?.[1] ?? '';
+
+    expect(environment).toMatch(
+      /^\s*HEALTHCHECKS_WORKER_URL\s*=\s*var\.healthchecks_worker_url\s*$/m,
+    );
+    expect(main.match(/var\.healthchecks_worker_url\b/g)).toHaveLength(1);
+    // Nowhere else: the value comes from the staging environment's secret,
+    // through TF_VAR_healthchecks_worker_url, and is never committed.
+    expect(read('infra/staging/staging.auto.tfvars')).not.toMatch(/healthchecks|hc-ping/i);
+    for (const file of ['main.tf', 'variables.tf', 'versions.tf', 'staging.auto.tfvars']) {
+      expect(read(`infra/staging/${file}`)).not.toMatch(/hc-ping\.com\/[0-9a-f]{8}-/i);
+    }
+  });
+});

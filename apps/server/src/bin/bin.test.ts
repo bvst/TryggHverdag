@@ -159,3 +159,42 @@ describe('bin/migrate.ts', () => {
     expect(migration.output()).not.toContain(SENTINEL);
   });
 });
+
+describe('REL-08: bin/worker.ts and HEALTHCHECKS_WORKER_URL', () => {
+  // INF-08. The real process, to prove the entry file hands the setting to the
+  // worker at all: everything past that is tested in-process in worker.test.ts.
+  // The database is unreachable, so each run ends in milliseconds — and ends
+  // for that reason, not because of the setting.
+
+  /** The UUID of a ping URL. All zeros, so it names no real check. */
+  const CHECK = '00000000-0000-0000-0000-000000000000';
+
+  test('INF-08-AC6: with it unset, the worker says it is not checking in and why, and fails only for want of its database', async () => {
+    const worker = start('worker.ts', { DATABASE_URL: UNREACHABLE });
+
+    const [code] = await worker.exited;
+
+    expect(code).toBe(1);
+    expect(worker.output()).toMatch(
+      /^worker: not checking in with Healthchecks\.io\b.*HEALTHCHECKS_WORKER_URL/m,
+    );
+    expect(worker.output()).toContain('ECONNREFUSED');
+  });
+
+  test('INF-08-AC5: with a usable address, it says it is checking in, and never where', async () => {
+    // https, so the worker accepts it. Port 1 on the loopback address, which
+    // fetch refuses to connect to, so nothing could leave this machine
+    // whatever the worker did with it.
+    const worker = start('worker.ts', {
+      DATABASE_URL: UNREACHABLE,
+      HEALTHCHECKS_WORKER_URL: `https://127.0.0.1:1/${CHECK}`,
+    });
+
+    const [code] = await worker.exited;
+
+    expect(code).toBe(1);
+    expect(worker.output()).toMatch(/^worker: checking in with Healthchecks\.io\b/m);
+    expect(worker.output()).not.toContain(CHECK);
+    expect(worker.output()).toContain('ECONNREFUSED');
+  });
+});
