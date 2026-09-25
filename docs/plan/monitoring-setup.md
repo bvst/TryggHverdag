@@ -78,25 +78,35 @@ This is INF-08's done-criterion. Do it after A-23 to A-25, when the check shows
 a ping every minute and the monitor shows Up. Staging has no users, so
 stopping it harms nothing.
 
-1. **Note the time: T.**
+The worker pings at the start of every minute, and the check goes down 3
+minutes after the **last ping**, not after the moment you stop the app. So the
+5 minutes are measured from the last ping: timed from the stop, a drill could
+pass with up to a minute of luck.
+
+1. **Wait for a ping to show in the check's log in Healthchecks.io, then stop
+   the app straight away.** Note the time you stop it: T.
 2. **Stop the app `trygg-hverdag-staging`** in the Clever Cloud console (the
    button's wording was not checked from a session), or with `clever stop` on
    your own computer. That stops the worker and the API together. The pings
    come only from the worker, so this is exactly what a worker that stops on
    its own looks like to Healthchecks.io.
 3. **Write down when each alert reaches your phone**: Healthchecks.io's, and
-   UptimeRobot's.
-4. **Start the app again** from the console, or by running `deploy-staging` by
+   UptimeRobot's. Keep the app stopped until UptimeRobot has alerted, or for 10
+   minutes: its free plan checks every 5, so it can take longer than
+   Healthchecks.io.
+4. **Read the last ping's time, L,** from the check's log in Healthchecks.io.
+5. **Start the app again** from the console, or by running `deploy-staging` by
    hand: its deploy restarts the app when the commit is already there
    (`--same-commit-policy restart`). That a restart also starts a *stopped* app
    was not checked from a session; the console is the sure route. Write down
    when both monitors show up again.
-5. **Send Claude the five times**: T, the two alert times, and the two recovery
-   times.
+6. **Send Claude the six times**: L, T, the two alert times, and the two
+   recovery times.
 
-**Pass:** Healthchecks.io's alert reached the phone by T + 5 minutes,
-UptimeRobot alerted (its time is recorded, not held to 5 minutes, D-079), and
-both recovered. A miss is a bug, and INF-08 is not done until it passes.
+**Pass:** Healthchecks.io's alert reached the phone within 5 minutes of L, the
+last ping (which is never later than T), UptimeRobot alerted (its time is
+recorded, not held to 5 minutes, D-079), and both recovered. A miss is a bug,
+and INF-08 is not done until it passes.
 
 ## If the ping URL ever leaks
 

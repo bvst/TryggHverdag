@@ -222,9 +222,13 @@ and no personal data sent), and D-023.
 This is the done-criterion. It is a manual acceptance step carried out by the owner.
 - **Given** owner steps 1–5 are done, the worker check shows up with a ping every
   minute, and the UptimeRobot monitor shows Up
-- **When** the owner stops the staging app at a noted time T
+- **When** the owner stops the staging app at a noted time T, straight after a
+  ping shows in the check's log, and reads the last ping's time L from that log
 - **Then** Healthchecks.io's alert for the worker check reaches the owner's phone
-  no later than T + 5 minutes
+  no later than L + 5 minutes. Measured from L, not T: pings land at the start
+  of each minute and the check goes down 3 minutes after the last one, so timing
+  from T would give the drill up to a minute of luck (safety-reviewer, review
+  round 1)
 - **And** UptimeRobot's alert reaches the phone. Its time is recorded but not held
   to 5 minutes, because Free checks every 5 minutes (D-079).
 - **And** when the app is started again, both monitors return to up
@@ -282,7 +286,8 @@ This is the done-criterion. It is a manual acceptance step carried out by the ow
 | `apps/server/src/worker.ts` | The heartbeat task checks in after a recorded beat; wiring; start line | **yes** | **yes** |
 | `apps/server/src/bin/worker.ts` | Passes `HEALTHCHECKS_WORKER_URL` in | **yes** | **yes** |
 | `apps/server/src/ports.ts` | New `CheckIn` port | no | no |
-| `apps/server/src/adapters/healthchecks.ts` (new; the name is a suggestion) | The `fetch` adapter | no | no |
+| `apps/server/src/adapters/healthchecks.ts` (new) | The `fetch` adapter | **yes** (owner, D-079) | **yes** |
+| `.github/CODEOWNERS`, `scripts/lib/merge-rules.mjs`, `scripts/lib/gate-decisions.mjs` | The adapter joins the owned and safety paths | no | **yes** |
 | `apps/server/src/config.ts` | Reads the setting. Never throws, unlike `readServerConfig` | no | no |
 | `packages/test-kit/src/fake-check-in.ts` (new), `index.ts` | Recording fake | no | no |
 | `apps/server/src/*.test.ts`, `bin/bin.test.ts`, `api.system.test.ts` | Tests (test-author) | — | no |
@@ -296,12 +301,18 @@ This is the done-criterion. It is a manual acceptance step carried out by the ow
   - `process.ts` (a safety path), `redact.ts`, `api.ts`, `api-process.ts` and
     `bin/api.ts`. The API never reads the variable, even though Clever Cloud gives
     it to both processes.
-  - `deploy-staging.yml`, and `ai-review.yml` (D-075).
-  - `scripts/lib/gate-decisions.mjs`'s `SAFETY_PATHS`.
-- **Why the adapter is not a safety path.** A broken adapter can only fail to
-  ping, and a check that stops getting pings pages. The dangerous mistake would be
-  a ping without a beat, and that ordering lives in `worker.ts`, which is already
-  a safety path.
+  - `deploy-staging.yml`, and `ai-review.yml` (D-075; its one-line change is #30).
+- **The adapter is a safety path; `config.ts` is not** (the owner's decision,
+  2026-09-25, D-079). *Corrected after review:* this spec first said a broken
+  adapter "can only fail to ping". It can also ping without being asked — it
+  holds the URL and `fetch` — and a ping sent on its own, say once at start,
+  would keep a crash-looping worker's check green: silent, the dangerous
+  direction. So `adapters/healthchecks.ts` joins CODEOWNERS,
+  `OWNER_APPROVAL_PATHS` and `SAFETY_PATHS` here, and the ai-review `safety`
+  filter in its own pull request, merged by hand ([#30](https://github.com/bvst/TryggHverdag/pull/30), D-075).
+  `readHealthchecksSetting` in `config.ts` stays out: if it ever threw, the
+  worker would crash-loop, `/v1/health` would turn `degraded` and both monitors
+  would page — a mistake there fails loudly.
 
 ## Contract changes
 
@@ -399,20 +410,22 @@ plan-keeper will number them as to-dos next to A-08.
    - Send its alerts to the mobile app. Confirm it shows **Up**.
    - Cost $0. The exact wording of UptimeRobot's options was not checked from a
      session.
-6. **The drill (AC11).**
-   - Note the time T.
-   - Stop the staging app `trygg-hverdag-staging`: in the Clever Cloud Console
-     (the button's wording is not verified), or with `clever stop` on your own
-     computer.
-   - Write down when each monitor's alert reaches your phone.
+6. **The drill (AC11)**, step by step in `docs/plan/monitoring-setup.md` (A-26).
+   - Wait for a ping in the check's log, then stop the staging app
+     `trygg-hverdag-staging` straight away and note the time T: in the Clever
+     Cloud Console (the button's wording is not verified), or with `clever stop`
+     on your own computer.
+   - Write down when each monitor's alert reaches your phone. Keep the app
+     stopped until UptimeRobot has alerted, or for 10 minutes.
+   - Read the last ping's time L from the check's log.
    - Start the app again, from the Console or by running `deploy-staging` by hand.
      Write down when both monitors show up again.
    - Stopping the app stops the worker. Pings come only from the worker, so this is
      exactly the path a stop of the worker alone would take.
-7. **Send Claude the five times**: T, the two alert times and the two recovery
+7. **Send Claude the six times**: L, T, the two alert times and the two recovery
    times.
-   - **Pass:** Healthchecks.io's alert came by T + 5 minutes, UptimeRobot alerted,
-     and both recovered.
+   - **Pass:** Healthchecks.io's alert came within 5 minutes of L, UptimeRobot
+     alerted, and both recovered.
    - Claude records the result in `docs/progress.md`. A miss is a BUG, and INF-08
      is not done.
 

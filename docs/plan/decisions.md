@@ -1793,14 +1793,27 @@ any other path is work, not a candidate for the same treatment.
   recorded beat; check Period 1 min, Grace 2 min. Buying UptimeRobot Solo is an
   **M5 go-live gate item**. **Amends how REL-08 is met on staging only**;
   production at go-live meets it in full.
-- **Also record the delegated (D-031) design choices** from the spec's
-  Approach that set a pattern: ping only after a recorded beat; a failed ping
-  is a line, never a failed task; a monitoring setting never stops the worker
-  (the one exception to `config.ts`'s "a bad setting stops the process"); the
-  ping URL is a secret and is never written; `http:` refused; Terraform
-  variable required + sensitive + validated, passed from the `staging`
-  environment secret in both plan and apply; the provider (2.2.1, `update.go`,
-  read 2026-09-25) restarts the app when `environment` changes.
+- **The adapter is a safety path; `config.ts` is not** (owner, 2026-09-25,
+  asked with Claude's recommendation after `safety-reviewer` raised it).
+  `apps/server/src/adapters/healthchecks.ts` holds the ping URL and `fetch`, so
+  a later edit could make it ping without being asked — say once at start —
+  and keep a crash-looping worker's check green: silent, the dangerous
+  direction. It joins CODEOWNERS, `OWNER_APPROVAL_PATHS` and `SAFETY_PATHS` in
+  INF-08, and the ai-review `safety` filter in its own one-line pull request,
+  merged by hand (#30, D-075). `readHealthchecksSetting` stays out: if it ever
+  threw, the worker would crash-loop, `/v1/health` would turn `degraded` and
+  both monitors would page, so a mistake there fails loudly.
+- **Design choices that set a pattern** (delegated, D-031, from the spec's
+  Approach): ping only after a recorded beat; a failed ping is a line, never a
+  failed task; a monitoring setting never stops the worker (the one exception
+  to `config.ts`'s "a bad setting stops the process"); the ping URL is a secret
+  and is never written; `http:` is refused and redirects are not followed, so
+  the URL is never sent in clear; the Terraform variable is required,
+  sensitive and validated, passed from the `staging` environment secret in both
+  plan and apply; the provider (2.2.1, `update.go`, read 2026-09-25) restarts
+  the app when `environment` changes. The drill is timed from the **last
+  ping**, not from the stop: pings land at the start of each minute, so timing
+  from the stop would give it up to a minute of luck.
 - **Healthchecks.io commercial use, checked 2026-09-25:** its terms say
   nothing on it; its FAQ gives "a Hobbyist account with 20 checks for
   monitoring your company infrastructure" as allowed; the About page says
@@ -1811,3 +1824,12 @@ any other path is work, not a candidate for the same treatment.
 - **Consequences:** a known gap — an API-only failure on staging may page
   later than 5 minutes (up to ~5–10 min); the drill (A-26) is INF-08's
   done-criterion and has not happened yet.
+- **Follow-ups for M2, where the watchdog task will find them:**
+  - The check-in follows the **heartbeat**, not the watchdog's sweep. Once the
+    watchdog runs in the worker, a broken sweep beside a healthy heartbeat is
+    a ping saying a dead watchdog is alive. The watchdog's task must decide
+    whether it checks in, or feeds the beat.
+  - A slow Healthchecks.io holds one of the worker's two concurrency slots for
+    up to 10 seconds a minute, and delays a stop by as much (measured by
+    `safety-reviewer`: exit 6.8 s after SIGTERM during a hung check-in).
+    Graphile's `helpers.abortSignal` could cancel the ping on stop.
