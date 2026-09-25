@@ -86,6 +86,11 @@ the default branch. Those pull requests need a manual merge (D-075).
 
 The things that still bite, and cost a session hours the first time.
 
+- **On the Mac, hooks run with the PATH Claude Code started with.** A stop
+  hook that fails with no output, or with `git init -b` refused, is this
+  machine's old `/usr/local/bin` Node 20 or git 2.23, not the change. Restart
+  Claude Code after editing `~/.zshrc`; `claude-dev`'s pnpm shim also forces
+  Homebrew's Node and git (BUG-4's log).
 - **HK-03 matches text, not intent.** A shell command that merely *mentions*
   starting a workflow run from the command line, a Clever Cloud deploy,
   `scripts/staging-deploy.mjs`, or Terraform apply/destroy is blocked — a
