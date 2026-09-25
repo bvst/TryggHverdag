@@ -123,6 +123,22 @@ describe('bin/worker.ts', () => {
     expect(worker.output()).toContain('ECONNREFUSED');
     expect(worker.output()).not.toContain(SENTINEL);
   });
+
+  test("BUG-3: on Clever Cloud's build machine it never reaches for the database, and waits to be stopped", async () => {
+    // The same unreachable database as above: a worker that tried it would
+    // fail with ECONNREFUSED within milliseconds. Still running after 1.5 s,
+    // having said why, is a worker that did not try.
+    const worker = start('worker.ts', { DATABASE_URL: UNREACHABLE, INSTANCE_TYPE: 'build' });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    expect(worker.child.exitCode).toBeNull();
+    expect(worker.output()).toContain('INSTANCE_TYPE=build');
+    expect(worker.output()).not.toContain('ECONNREFUSED');
+
+    worker.child.kill('SIGTERM');
+    const [code, signal] = await worker.exited;
+    expect({ code, signal }).toEqual({ code: 0, signal: null });
+  });
 });
 
 describe('bin/migrate.ts', () => {

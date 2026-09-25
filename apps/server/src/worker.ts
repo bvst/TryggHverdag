@@ -112,19 +112,55 @@ export async function startWorker(
 }
 
 /**
+ * Clever Cloud's INSTANCE_TYPE on the machine that builds a deploy. The one
+ * that runs the app says "production" (Clever Cloud's environment variable
+ * reference).
+ */
+export const BUILD_INSTANCE = 'build';
+
+/** Keeps Node running with nothing to do: a signal listener alone does not. */
+function keepProcessAlive(): void {
+  setInterval(() => undefined, 60_000);
+}
+
+/**
  * The worker process: start the runner, stop it cleanly on the platform's
  * signal, and fail if it ends any other way. Here rather than in bin/worker.ts
  * so that the part deciding whether a dead worker is restarted is tested
  * in-process, under the mutation gate.
+ *
+ * Except on the build machine (BUG-3). Clever Cloud starts CC_WORKER_COMMAND
+ * there too, where it would run the new code against the database before the
+ * migration has, beside the old app's worker, and past the connection budget.
+ * So there it starts nothing and waits to be stopped. It does not exit:
+ * CC_WORKER_RESTART is "always", and an exit would be restarted every few
+ * seconds for as long as the build lasts.
  */
 export async function runWorkerProcess(
   connectionString: string,
   {
     runWorker = run,
     signals = process,
+    instanceType,
+    keepAlive = keepProcessAlive,
     ...reporting
-  }: { runWorker?: RunWorker; signals?: Signals } & Reporting = {},
+  }: {
+    runWorker?: RunWorker;
+    signals?: Signals;
+    instanceType?: string | undefined;
+    keepAlive?: () => void;
+  } & Reporting = {},
 ): Promise<void> {
+  if (instanceType === BUILD_INSTANCE) {
+    const write = reporting.write ?? ((text: string) => process.stderr.write(text));
+    write(
+      `worker: not started on Clever Cloud's build machine (INSTANCE_TYPE=${BUILD_INSTANCE}); ` +
+        'the machine that runs the app starts its own.\n',
+    );
+    keepAlive();
+    exitOnSignal({ name: 'worker', signals, stop: () => Promise.resolve(), ...reporting });
+    return;
+  }
   const worker = await startWorker(connectionString, runWorker);
   exitOnSignal({ name: 'worker', signals, stop: worker.stop, ...reporting });
   await worker.untilStopped();

@@ -1609,6 +1609,14 @@ any other path is work, not a candidate for the same treatment.
   12. **Migrations run as the pre-run hook**, so a failed migration stops the
       deploy, and the database URL never leaves Clever Cloud (the 08b draft ran
       them from CI with the URL as a GitHub secret).
+      **Corrected by BUG-3 (2026-09-25):** items 11 and 12 held for the app's
+      own machine only. Clever Cloud also starts `CC_WORKER_COMMAND` on the
+      machine that builds a deploy. Both first deploys log that worker
+      connecting 21 and 36 s before the migration ran, beside the old app's
+      worker. So on every deploy there was a second worker, running new code
+      against the old schema, past the connection budget. The worker now starts
+      nothing when `INSTANCE_TYPE=build` (Clever Cloud's documented value) and
+      waits to be stopped. `worker.test.ts` and `bin/bin.test.ts` hold it.
   13. **A deploy is done when the worker beats after it.** `/v1/health` answers
       200 whenever the API is up, and the old worker's beat stays fresh for
       three minutes, so "status ok" right after a deploy can come from a worker
@@ -1709,6 +1717,25 @@ any other path is work, not a candidate for the same treatment.
     `password` and `uri` as sensitive, so `terraform show` prints them as
     `(sensitive value)`. That it does so in the job summary is seen at the
     first plan run.
+- **Answered by the first real runs** (2026-09-24 and 25, read from their
+  logs):
+  - **Terraform side:**
+    - Clever Cloud accepted nano, the vhost, the hooks and the database link.
+    - The fingerprint round trip works, and plans are reproducible
+      (`Same plan as the one read in run …`).
+    - The state write works since BUG-2 (`Apply complete! Resources: 2 added`).
+    - The plan summary prints the password and URI as `(sensitive value)`.
+  - **Clever Cloud side:**
+    - It runs Node 22.23.3 and pnpm 10.33.0 from the lockfile.
+    - `--experimental-strip-types` works with no build step.
+    - The pre-run migration runs before start.
+    - Its own health check gets 200.
+  - **The deploy log in GitHub** carries environment variable *names*, never
+    values. The PRIV-05 question stays open for production.
+  - **Connections while old and new overlap:** no refused connection in two
+    deploys. BUG-3 was the larger overlap, a whole extra worker. Still not a
+    proof, and it stays on the list.
+  - **Still open:** PRIV-08, encryption in transit to PostgreSQL.
 - **Follow-ups, each its own task:**
   - **Done, by the owner's choice (2026-09-24):** `ai-review.yml`'s safety
     filter lists `apps/server/src/bin/worker.ts` and
