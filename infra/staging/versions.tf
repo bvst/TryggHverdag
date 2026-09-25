@@ -36,5 +36,11 @@ terraform {
     skip_credentials_validation = true
     skip_metadata_api_check     = true
     skip_requesting_account_id  = true
+    # Terraform asks for a SHA-256 checksum on every state upload unless told
+    # not to, and Cellar refuses it: XAmzContentSHA256Mismatch (BUG-2). Reads
+    # were never affected, so plans worked and the first apply failed after
+    # creating staging. AWS_REQUEST_CHECKSUM_CALCULATION in the workflow does
+    # not reach this, because Terraform names the algorithm itself.
+    skip_s3_checksum = true
   }
 }
