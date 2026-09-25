@@ -7,11 +7,17 @@ import path from 'node:path';
 /**
  * @param {string} command
  * @param {string[]} args
- * @param {{ cwd?: string, timeout?: number }} options
+ * @param {{ cwd?: string, timeout?: number, env?: Record<string, string> }} options — `env` is
+ *   added to this process's environment for the child, never a replacement for it
  * @returns {{ ok: boolean, status: number | null, output: string }}
  */
-export function run(command, args, { cwd = process.cwd(), timeout = 590_000 } = {}) {
-  const result = spawnSync(command, args, { cwd, encoding: 'utf8', timeout });
+export function run(command, args, { cwd = process.cwd(), timeout = 590_000, env = {} } = {}) {
+  const result = spawnSync(command, args, {
+    cwd,
+    encoding: 'utf8',
+    timeout,
+    env: { ...process.env, ...env },
+  });
   if (result.error) {
     return { ok: false, status: null, output: result.error.message };
   }

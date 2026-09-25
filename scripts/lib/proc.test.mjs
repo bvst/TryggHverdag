@@ -5,8 +5,8 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, test } from 'vitest';
-import { packageScripts } from './proc.mjs';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import { packageScripts, run } from './proc.mjs';
 
 function repoWith(contents) {
   const dir = mkdtempSync(path.join(tmpdir(), 'proc-test-'));
@@ -53,5 +53,49 @@ describe('packageScripts', () => {
         process.env.NODE_OPTIONS = before;
       }
     }
+  });
+});
+
+describe('run', () => {
+  // scripts/mutation.mjs names each Stryker run in STRYKER_RUN, and
+  // stryker.config.mjs reads it to pick that run's files and tests. The child
+  // still needs everything else the parent has, PATH first: without it pnpm is
+  // not found and Stryker never starts. So env is added to the environment, and
+  // is never a replacement for it.
+  const printBoth =
+    'process.stdout.write([process.env.PROC_TEST_FROM_PARENT, process.env.PROC_TEST_FROM_CALLER].join(" "))';
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test('env is added to the environment the child inherits, not a replacement for it', () => {
+    vi.stubEnv('PROC_TEST_FROM_PARENT', 'parent-value');
+
+    const result = run(process.execPath, ['-e', printBoth], {
+      env: { PROC_TEST_FROM_CALLER: 'caller-value' },
+    });
+
+    expect(result).toEqual({ ok: true, status: 0, output: 'parent-value caller-value' });
+    // Given to the child only: this process's own environment is left alone.
+    expect(process.env.PROC_TEST_FROM_CALLER).toBeUndefined();
+  });
+
+  test('a variable given in env wins over the one the parent has', () => {
+    vi.stubEnv('PROC_TEST_FROM_PARENT', 'parent-value');
+
+    const result = run(process.execPath, ['-e', printBoth], {
+      env: { PROC_TEST_FROM_PARENT: 'caller-value', PROC_TEST_FROM_CALLER: 'also-given' },
+    });
+
+    expect(result.output).toBe('caller-value also-given');
+  });
+
+  test('without env, the child sees exactly the parent environment, as before', () => {
+    vi.stubEnv('PROC_TEST_FROM_PARENT', 'parent-value');
+
+    const result = run(process.execPath, ['-e', printBoth]);
+
+    expect(result).toEqual({ ok: true, status: 0, output: 'parent-value ' });
   });
 });

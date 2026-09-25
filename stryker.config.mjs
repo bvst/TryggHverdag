@@ -8,10 +8,43 @@
 // again here. That file already decides *whether* this gate runs; if it and
 // this config could disagree, a safety path could be gated by one and ignored
 // by the other, which is the worst of both.
-import { SAFETY_PATHS } from './scripts/lib/gate-decisions.mjs';
+//
+// So do the runs (D-066, amended by the owner 2026-09-25). scripts/mutation.mjs
+// runs Stryker once per run of mutationRuns() and names it in STRYKER_RUN; the
+// config then mutates that run's paths against that run's tests. Unset, it is
+// the single run it always was: every safety path against the whole suite.
+import process from 'node:process';
+import { SAFETY_PATHS, WHOLE_SUITE, mutationRuns } from './scripts/lib/gate-decisions.mjs';
+
+/**
+ * The run STRYKER_RUN names. A name no run has throws rather than falling back
+ * to every path against the whole suite, which the log would never explain.
+ *
+ * @param {string | undefined} name
+ */
+function chosenRun(name) {
+  if (name === undefined) {
+    return {
+      paths: SAFETY_PATHS,
+      tests: WHOLE_SUITE,
+      incrementalFile: 'reports/stryker-incremental.json',
+    };
+  }
+  const runs = mutationRuns();
+  const run = runs.find((candidate) => candidate.name === name);
+  if (run === undefined) {
+    throw new Error(
+      `STRYKER_RUN is "${name}", and no mutation run has that name. The runs are: ` +
+        `${runs.map((candidate) => candidate.name).join(', ')} (D-066).`,
+    );
+  }
+  return { ...run, incrementalFile: `reports/stryker-${run.name}.json` };
+}
+
+const run = chosenRun(process.env.STRYKER_RUN);
 
 /** A safety path is either a folder (ends in /) or a single file. */
-const mutate = SAFETY_PATHS.map((path) => (path.endsWith('/') ? `${path}**/*.ts` : path));
+const mutate = run.paths.map((path) => (path.endsWith('/') ? `${path}**/*.ts` : path));
 
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
 export default {
@@ -28,13 +61,15 @@ export default {
   // A mutation score that is wrong in the reassuring direction would be worse
   // than no gate at all, and this one was wrong in the other direction while
   // looking exactly as authoritative. So: run the suite, read the exit code.
-  // Slower, and it cannot be quietly wrong.
+  // Slower, and it cannot be quietly wrong. Each run of a group runs that
+  // group's tests, the ones that can kill its mutants (D-066, amended
+  // 2026-09-25).
   testRunner: 'command',
   commandRunner: {
-    // apps and packages only. A mutant in safety code can only be killed by a
-    // test of the product; the hook and script tests would add seconds per
-    // mutant and could never fail because of one.
-    command: 'pnpm exec vitest run apps packages',
+    // The whole suite is apps and packages only. A mutant in safety code can
+    // only be killed by a test of the product; the hook and script tests would
+    // add seconds per mutant and could never fail because of one.
+    command: `pnpm exec vitest run ${run.tests.join(' ')}`,
   },
 
   // Tests are not mutated, and neither is anything outside a safety path: the
@@ -53,7 +88,8 @@ export default {
 
   thresholds: { high: 90, low: 80, break: 80 },
 
-  incrementalFile: 'reports/stryker-incremental.json',
+  // One per run: a run's file records its mutants against its own tests.
+  incrementalFile: run.incrementalFile,
   reporters: ['clear-text', 'progress'],
 
   // A surviving mutant is a real finding, so the report has to name it rather
