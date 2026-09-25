@@ -18,6 +18,17 @@ const sshGreeting = (account) =>
   `Hi ${account}! You've successfully authenticated, but GitHub does not provide shell access.\n`;
 
 /**
+ * The key an SSH greeting is stored under. A real doctor must pass
+ * non-interactive options (`-o BatchMode=yes -o ConnectTimeout=10`, …) so it can
+ * never hang on a passphrase or host-key prompt, so any `ssh` call with `-T`
+ * that ends in `git@github.com` answers here, whatever options sit in between.
+ */
+const SSH_GITHUB = 'ssh -T git@github.com';
+
+const isSshToGitHub = (command, args) =>
+  command === 'ssh' && args.includes('-T') && args.at(-1) === 'git@github.com';
+
+/**
  * A fake `sys`. `answers` maps "command arg1 arg2" to a partial exec result;
  * anything not listed is not installed (`found: false`). Every exec call is
  * logged so a test can say what was never asked.
@@ -28,7 +39,8 @@ function fakeSystem({ answers = {}, probe = { ok: true }, env = {}, paths = [] }
     calls,
     exec(command, args = []) {
       calls.push([command, ...args]);
-      const answer = answers[[command, ...args].join(' ')];
+      const key = isSshToGitHub(command, args) ? SSH_GITHUB : [command, ...args].join(' ');
+      const answer = answers[key];
       if (answer === undefined) {
         return { found: false, code: null, stdout: '', stderr: '' };
       }
@@ -147,7 +159,7 @@ describe('GitHub', () => {
       'git remote get-url origin': { stdout: remote },
     };
     if (ssh !== undefined) {
-      answers['ssh -T git@github.com'] = { code: 1, stderr: ssh };
+      answers[SSH_GITHUB] = { code: 1, stderr: ssh };
     }
     return answers;
   };
@@ -183,6 +195,10 @@ describe('GitHub', () => {
     expect(text(result)).toMatch(/SSH/i);
     expect(text(result)).toContain('bvst');
     expect(sshCalls(sys).length).toBeGreaterThan(0);
+    // A doctor that waits on a passphrase or host-key prompt never answers.
+    for (const [, ...args] of sshCalls(sys)) {
+      expect(args.some((arg) => arg.includes('BatchMode=yes'))).toBe(true);
+    }
   });
 
   test("BUG-4: an SSH remote whose key belongs to Claude's account is ok", () => {
