@@ -323,3 +323,163 @@ describe('REL-08: the ping URL never leaves the adapter', () => {
     expect(everything(failure)).not.toContain(CHECK);
   });
 });
+
+// What the adapter says when fetch fails rather than answering. The one thing
+// it copies from the underlying error is a code, from an Error's Error cause,
+// and only a code shaped like a bare identifier such as ECONNREFUSED. Anything
+// else is dropped, however it arrives. The worker writes this message as the
+// reason for a failed check-in (INF-08-AC4), so it is held exactly: a mutant
+// that loses the code, keeps a bad one, or throws while describing the error
+// changes it. These fetches reject without sending anything.
+
+/** The whole of a failure that has no code to give, as its message and class print. */
+const NOT_REACHED = 'Error: Healthchecks.io could not be reached.';
+
+/** A fetch that sends nothing and rejects with `reason`, whatever it is. */
+function rejectingWith(reason: unknown): typeof fetch {
+  // Thrown in the executor, which rejects with it unchanged. The lint rule
+  // against rejecting with a non-Error is right everywhere but here, where a
+  // non-Error is the case under test.
+  return () =>
+    new Promise<Response>(() => {
+      throw reason;
+    });
+}
+
+/** How Node's fetch fails to connect: a TypeError whose cause says why. */
+const fetchFailed = (cause: unknown) => new TypeError('fetch failed', { cause });
+
+/** A cause carrying `code`, the way Node's net module and undici set one. */
+const causeCoded = (code: unknown) => Object.assign(new Error('connect failed'), { code });
+
+/** What a check-in says when fetch rejects with `reason`. */
+async function describedAs(reason: unknown): Promise<unknown> {
+  return failureOf(() =>
+    healthchecksCheckIn({ url: PING_URL, fetch: rejectingWith(reason) }).checkIn(),
+  );
+}
+
+// Named here, not in the tables below: HK-05 counts tests by their text.
+const aLookalike = { name: 'TypeError', message: 'fetch failed', cause: causeCoded('ECONNRESET') };
+const noCause = new TypeError('fetch failed');
+const aStringCause = fetchFailed('ECONNRESET');
+const aPlainObjectCause = fetchFailed({ code: 'ECONNRESET' });
+const anUncodedCause = fetchFailed(new Error('connect failed'));
+const aSymbol = Symbol('ECONNRESET');
+
+describe('REL-08: a failed fetch is described only in words chosen here', () => {
+  test.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['a string', 'fetch failed'],
+    ['a plain object shaped like fetch’s error, coded cause and all', aLookalike],
+  ])(
+    'INF-08-AC1: a fetch that rejects with %s, not an Error, fails as not reached, with no code',
+    async (_what, reason) => {
+      const failure = await describedAs(reason);
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toBe(NOT_REACHED);
+    },
+  );
+
+  test.each([
+    ['no cause at all', noCause],
+    ['a cause that is a string', aStringCause],
+    ['a cause that is a plain object with a code', aPlainObjectCause],
+    ['a cause that is an Error without a code', anUncodedCause],
+  ])(
+    'INF-08-AC1: an Error from fetch with %s fails as not reached, with no code',
+    async (_what, reason) => {
+      const failure = await describedAs(reason);
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toBe(NOT_REACHED);
+    },
+  );
+
+  test.each([
+    ['a number', -111],
+    ['a symbol', aSymbol],
+    ['an empty string', ''],
+    ['in lower case', 'econnreset'],
+    ['starting with a digit', '1ECONNRESET'],
+    ['with a space in it', 'ECONN RESET'],
+    ['with a hyphen in it', 'ECONN-RESET'],
+  ])(
+    'INF-08-AC1: a cause whose code is %s, not a bare identifier, fails with no code',
+    async (_what, code) => {
+      const failure = await describedAs(fetchFailed(causeCoded(code)));
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toBe(NOT_REACHED);
+    },
+  );
+
+  test.each([
+    ['the ping URL', PING_URL],
+    ['the check’s UUID', CHECK],
+    ['the ping URL, then an identifier', `${PING_URL} ECONNRESET`],
+    ['an identifier, then the ping URL', `ECONNRESET ${PING_URL}`],
+    ['an identifier, a line break, then the ping URL', `ECONNRESET\n${PING_URL}`],
+    ['the UUID, then an identifier', `${CHECK} ECONNRESET`],
+    ['an identifier, then the UUID', `ECONNRESET${CHECK}`],
+  ])(
+    'INF-08-AC5: a cause whose code carries %s is dropped, and the failure does not repeat it',
+    async (_what, code) => {
+      // The cause's message is clean on purpose: the code is the only way
+      // the URL could get out, so it is the only thing this can be about.
+      const failure = await describedAs(fetchFailed(causeCoded(code)));
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toBe(NOT_REACHED);
+      expect(everything(failure)).not.toContain(PING_URL);
+      expect(everything(failure)).not.toContain(CHECK);
+    },
+  );
+
+  test('INF-08-AC5: a fetch that rejects with just a string naming the ping URL does not repeat it', async () => {
+    const failure = await describedAs(`fetch failed for ${PING_URL}`);
+
+    expect(String(failure)).toBe(NOT_REACHED);
+    expect(everything(failure)).not.toContain(PING_URL);
+    expect(everything(failure)).not.toContain(CHECK);
+  });
+
+  test.each([['ECONNRESET'], ['ENOTFOUND'], ['EAI_AGAIN'], ['UND_ERR_CONNECT_TIMEOUT']])(
+    'INF-08-AC1: a cause with the code %s is named in the failure, exactly',
+    async (code) => {
+      const failure = await describedAs(fetchFailed(causeCoded(code)));
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toBe(`Error: Healthchecks.io could not be reached (${code}).`);
+    },
+  );
+
+  test('INF-08-AC1: no answer within the timeout is described as exactly that, naming the time', async () => {
+    // Node's fetch rejects with its signal's reason when the signal fires;
+    // this one does the same, so the timeout here is the adapter's own.
+    const neverAnswers: typeof fetch = async (_input, init) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error('the adapter sent no signal, so nothing could ever end this request');
+      }
+      await once(signal, 'abort');
+      throw signal.reason;
+    };
+
+    const failure = await failureOf(() =>
+      healthchecksCheckIn({ url: PING_URL, fetch: neverAnswers, timeoutMs: 50 }).checkIn(),
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toBe('Error: Healthchecks.io did not answer within 50 ms.');
+  }, 2_000);
+
+  test('INF-08-AC1: an abort that is not the timeout is not described as one', async () => {
+    const failure = await describedAs(new DOMException('This operation was aborted', 'AbortError'));
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toBe(NOT_REACHED);
+  });
+});
