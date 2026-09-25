@@ -55,8 +55,9 @@ reached the running session without a restart. A setup script is still to come.
 **A-17 — confirm the first daily report reached the phone.** It was posted to
 [#19](https://github.com/bvst/TryggHverdag/issues/19) at 05:23 UTC on
 2026-09-24, mentioning `@bvst`. That is INF-09's done-criterion, and only the
-owner can see it. The 05:00 slot did not fire for a workflow merged at 04:57, so
-the owner's fallback applied and the run was started by hand at 05:21.
+owner can see it. The 05:00 slot had not fired by 05:21, so the owner's fallback
+applied and the run was started by hand. The slot did fire in the end — at
+09:52, 4 h 52 min late — and posted a second report (see D-078).
 
 **A-16 is done, and now verified** (2026-09-24). The first run's post step saw
 `PING_CONFIGURED: true`, and its ping step logged
@@ -209,9 +210,12 @@ at 05:21 UTC, by hand. Two of the three open questions are answered by its log:
 the action ran on the read-only token (`Using provided GITHUB_TOKEN for
 authentication`; the app-token revoke step `skipped`), and `gh issue pin` worked
 with `GITHUB_TOKEN`. The third — does the mention reach the phone — is A-17.
-Still open: whether a **`schedule`** run passes the action's human-actor check
-(the manual run's actor was `bvst`). Tomorrow's 05:00 run answers it, and if it
-fails, #19 gets a 🛑 and the run goes red.
+The last open question is answered too: the **`schedule`** run at 09:52 passed
+the action's human-actor check (`Auto-detected mode: agent for event: schedule`
+· `Actor type: User` · `Verified human actor: bvst`), posted to #19, and pinged
+Healthchecks.io with exit status 0. It ran 4 h 52 min late; GitHub names the top
+of the hour as its high-load time, so the report moves to 04:47 UTC (**D-078**,
+owner's decision 2026-09-25).
 
 **Merged:** 2026-09-23 — #13 (progress-log restructure, D-075), #14 (the
 retraction that had only reached the archive), #15 (HK-09, the pre-commit hook),
