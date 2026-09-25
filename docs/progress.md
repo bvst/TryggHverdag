@@ -25,8 +25,8 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-04 | CI workflows, merge rules, CODEOWNERS | ✅ Done — 2026-09-23 ([#3](https://github.com/bvst/TryggHverdag/pull/3)) |
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
 | INF-06 | App skeleton | ⬜ Waits for the Mac |
-| INF-07 | Staging on Clever Cloud | 🟡 Merged 2026-09-24 ([#22](https://github.com/bvst/TryggHverdag/pull/22)). BUG-1 fixed in [#23](https://github.com/bvst/TryggHverdag/pull/23). The first apply created staging but could not save Terraform's state (BUG-2, fixed on `fix/BUG-2-cellar-checksum`), so the owner deletes the two orphans and applies again. Done when staging is applied, a deploy runs and the smoke test passes (A-22) |
-| INF-08 | Monitoring | ⬜ Next after INF-07: UptimeRobot will watch `https://trygghverdag-staging.cleverapps.io/v1/health` |
+| INF-07 | Staging on Clever Cloud | 🟡 Merged 2026-09-24 ([#22](https://github.com/bvst/TryggHverdag/pull/22)). BUG-1 fixed in [#23](https://github.com/bvst/TryggHverdag/pull/23), BUG-2 in [#24](https://github.com/bvst/TryggHverdag/pull/24). The first apply created staging but could not save Terraform's state (BUG-2), leaving two orphans under the old spelling. Staging's names are now `trygg-hverdag` (on `feat/INF-07-trygg-hverdag-names`). Done when staging is applied, a deploy runs and the smoke test passes (A-22) |
+| INF-08 | Monitoring | ⬜ Next after INF-07: UptimeRobot will watch `https://trygg-hverdag-staging.cleverapps.io/v1/health` |
 | INF-09 | Daily status workflow | 🟡 Merged 2026-09-24 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). First report posted to [#19](https://github.com/bvst/TryggHverdag/issues/19) at 05:23 UTC, every step verified in the log. Done when the owner confirms it reached the phone (A-17) |
 | INF-10 | Gate drills | ⬜ Not started. Parked 2026-09-24 for INF-07. Open question to the owner: split into offline drills now and live GitHub drills later? |
 
@@ -197,11 +197,12 @@ The things that still bite, and cost a session hours the first time.
   `skip_s3_checksum = true`, and Cellar refuses it. Plans only read the state,
   so none could show this. Terraform's recovery file went with the runner (the
   workflow keeps no artifacts, because state holds the database password), so
-  **both resources exist and the state does not know them**. Another apply now
-  would create a second app and database with the same names.
-- **Next:** the owner deletes that app and that database in the console, the
-  BUG-2 fix merges, then `plan`, `apply` with that run, and a re-run of
-  `deploy-staging`. Nothing may deploy to the orphaned app in between.
+  **both resources exist and the state does not know them**. BUG-2 is fixed in
+  [#24](https://github.com/bvst/TryggHverdag/pull/24).
+- **Next:** the rename below merges, then `plan`, `apply` with that run, and a
+  re-run of `deploy-staging`. After the rename the orphans no longer share a
+  name with anything Terraform creates, so deleting them is cleanup rather than
+  a precondition. It is still worth doing, because the orphaned app costs money.
 
 **What it built:** three runnable server processes (migrate as the pre-run
 hook, the API, and the worker beside it); Terraform for one nano instance and
@@ -211,6 +212,14 @@ two runs the owner starts and applies only the plan the owner read. The
 `ai-review.yml` change it needed shipped first, in
 [#21](https://github.com/bvst/TryggHverdag/pull/21). **What only the first real
 runs can verify** is listed at the end of D-077, with the follow-ups.
+
+**Renamed before the next apply** (the owner, 2026-09-25, on
+`feat/INF-07-trygg-hverdag-names`): every name staging gets on Clever Cloud is
+spelled `trygg-hverdag`, matching the state bucket. That means the app
+`trygg-hverdag-staging`, the database `trygg-hverdag-staging-db` and
+`trygg-hverdag-staging.cleverapps.io`. The first apply's orphans keep the old
+spelling, so they can no longer be mistaken for the new ones by name. They
+should still be deleted: the app costs money and holds the old address.
 
 **INF-10 was parked for it.** Before switching, Claude found that
 `req:coverage` counts requirement IDs, not acceptance criteria. RG-01 says the

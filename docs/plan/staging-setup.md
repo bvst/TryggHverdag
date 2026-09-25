@@ -56,7 +56,9 @@ organisation. Terraform cannot create the place it stores its own state, so
 this one thing is made by hand.
 
 1. In the staging organisation, create a **Cellar** add-on named
-   `trygghverdag-staging-tfstate` in region **Paris**.
+   `trygghverdag-staging-tfstate` in region **Paris**. (Created with this
+   spelling. The add-on's name is only a label in the console; Terraform
+   finds its state by the bucket's name below.)
 2. In its dashboard, create a bucket named `trygg-hverdag-staging-tfstate`.
 3. From the add-on's environment variables, copy `CELLAR_ADDON_KEY_ID` and
    `CELLAR_ADDON_KEY_SECRET` for A-21, and **send Claude `CELLAR_ADDON_HOST`**
@@ -95,7 +97,7 @@ from two runs you start yourself (D-077, and A-22 after merging).
   the app does not exist yet — on purpose, because a deploy with nowhere to go
   must not look green. Re-run it after A-22.
 - **A-08 — UptimeRobot** can then watch
-  `https://trygghverdag-staging.cleverapps.io/v1/health` (INF-08).
-- **Optional:** add `trygghverdag-staging.cleverapps.io` to the cloud
+  `https://trygg-hverdag-staging.cleverapps.io/v1/health` (INF-08).
+- **Optional:** add `trygg-hverdag-staging.cleverapps.io` to the cloud
   environment's allowed domains, so a session can check staging's health
   endpoint itself (`docs/plan/cloud-environment.md`).
