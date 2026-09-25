@@ -243,7 +243,7 @@ already runs at in the `unit` job.
 | AC | Level | Test file | Runs in |
 |----|-------|-----------|---------|
 | AC1 | L1, plus tooling | the `static` job itself; `scripts/turbo-inputs.test.mjs` extended to `apps/mobile`, so turbo's typecheck key covers every file tsc reads there | `static`, `unit` |
-| AC2 | L5 | `apps/mobile/src/app/index.test.tsx`: the route rendered through Expo Router's testing library, queried by role and name | `unit`, HK-04 |
+| AC2 | L5 | `apps/mobile/src/app.test.tsx` (outside `src/app/`, see the layout): the route rendered through Expo Router's testing library, queried by role and name | `unit`, HK-04 |
 | AC3 | L5 | same file | `unit`, HK-04 |
 | AC4 | L5 | `apps/mobile/src/shared/translations/language.test.ts` (pure function, table of device lists) | `unit`, HK-04 |
 | AC5 | L5 | `apps/mobile/src/shared/translations/translations.test.ts` | `unit`, HK-04 |
@@ -337,8 +337,10 @@ apps/mobile/                      @trygghverdag/mobile
 └── src/
     ├── app/                      Expo Router routes
     │   ├── _layout.tsx           root layout; translations ready before first render
-    │   ├── index.tsx             the placeholder screen
-    │   └── index.test.tsx        AC2, AC3
+    │   └── index.tsx             the placeholder screen
+    ├── app.test.tsx              AC2, AC3. Never inside src/app/: Expo Router
+    │                             takes every .ts/.tsx there as a route, and
+    │                             Metro then bundles the test into the build
     └── shared/
         └── translations/         already watched by a11y-i18n-reviewer's filter
             ├── nb.json
