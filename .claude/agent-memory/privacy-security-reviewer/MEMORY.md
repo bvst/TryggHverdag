@@ -1,0 +1,1 @@
+- [Tooling scripts review](tooling_scripts_review.md) — checklist for scripts/ PRs shelling out to gh/git/ssh: no raw output, no shell, timeouts
