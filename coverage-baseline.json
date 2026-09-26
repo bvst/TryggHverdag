@@ -398,10 +398,10 @@
       "totalLines": 55
     },
     "scripts/lib/e2e-android.mjs": {
-      "lines": 92.85,
-      "branches": 82.22,
-      "coveredLines": 52,
-      "totalLines": 56
+      "lines": 95.16,
+      "branches": 85.71,
+      "coveredLines": 59,
+      "totalLines": 62
     },
     "apps/mobile/app.config.ts": {
       "lines": 100,
