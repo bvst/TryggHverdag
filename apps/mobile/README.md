@@ -22,7 +22,8 @@ Run from the repository root.
 
 `e2e:android` takes `--build-only` (no device needed) and `--skip-build`
 (install and test what was built), which is how CI builds before the emulator
-boots. It passes only when Maestro's report shows every flow ran and passed.
+boots. It uses emulators only, and passes only when Maestro exits 0 and its report
+shows every flow ran and passed.
 
 ## How it is put together
 

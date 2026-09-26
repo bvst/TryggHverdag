@@ -1913,9 +1913,9 @@ any other path is work, not a candidate for the same treatment.
   exact Expo SDK, its dependent versions and the L7 toolchain to Claude, asking
   for the newest stable SDK the workspace can install, and for each other
   version to be recorded with its reason and, where relevant, a fallback. The
-  spec's own review round (2026-09-26) added four more recorded choices (AC19,
-  AC20 and two others) that were made building the skeleton but not yet
-  written down. This is that record.
+  spec's own review round (2026-09-26) added more: no Android backup (AC19),
+  no vendor calls from Maestro (AC20), Java 17 to 21 and emulators only
+  (AC9, amended), and the `actions/cache` choice. This is that record.
 - **Decision:**
   1. **Expo SDK 57**, not a preview SDK 58: `expo ~57.0.25`,
      `react-native 0.86.3`, `react 19.2.3`, `expo-router ~57.0.23`,
@@ -1997,7 +1997,8 @@ any other path is work, not a candidate for the same treatment.
      component, `gradle-actions-caching`, under a licence restricted to
      internal use with no redistribution — the same category of licence this
      repository already rejected for `gitleaks-action` (D-061 point 7). The
-     cache is restored on every `android-e2e` run and saved from `main` only,
+     cache is restored on every `android-e2e` run that builds the app, and saved
+     from `main` only,
      so a pull-request branch cannot fill or poison it.
   10. **Java 17 to 21, and emulators only, for `e2e:android`.** Java 25 —
       which is what Android Studio's JBR ships on the Mac, and therefore the
@@ -2036,6 +2037,11 @@ any other path is work, not a candidate for the same treatment.
   12. **Not yet measured:** `android-e2e`'s CI durations, cold and warm, are
       added to this decision once the first CI run of the job has produced
       them. Estimates only exist so far (`docs/specs/INF-06.md`, "CI cost").
+  13. **Follow-up: mutation testing of app code.** Stryker runs Vitest only,
+      so it cannot mutate `apps/mobile/src/safety-core/`, which is empty
+      today. The task that first adds safety-core code also makes Stryker run
+      jest (spec risk R16). Until then a safety-core change would fail
+      `mutation` loudly, not pass it.
 - **Consequences:** Items 1–4 and 6–11 are recorded so that a later session
   does not "clean up" what looks like an odd version pin or an unused-looking
   environment variable without first reading why it is there — several of

@@ -473,8 +473,8 @@ tested in `scripts/lib/e2e-android.mjs`. This is the house pattern, as in
 `gate-decisions.mjs` and `daily-status.mjs`. It runs in order:
 
 1. **Preflight.** Checks that:
-   - an `adb` device is in the `device` state;
-   - Java 17 or newer is usable;
+   - an emulator (not a real phone) is in the `device` state;
+   - Java 17 to 21 is usable;
    - pinned Maestro is present, or is downloaded and hash-checked;
    - the device language is bokmål.
 
@@ -486,16 +486,17 @@ tested in `scripts/lib/e2e-android.mjs`. This is the house pattern, as in
    application ID and the expected bokmål strings are passed as `-e` values,
    read from `app.config.ts` and `nb.json`. The flow then asserts the text a
    reader sees without keeping a second copy of it.
-5. **Read the report.** Zero flows is a failure, and so is any failed flow.
-   Otherwise it prints "N of N flows passed". A run in which nothing ran has
+5. **Read the report and Maestro's exit status.** Zero flows is a failure,
+   and so is any flow that did not pass, and so is a non-zero exit from
+   Maestro. Otherwise it prints "N of N flows passed". A run in which nothing ran has
    not passed (D-060, gate scripts).
 
 On failure it prints the crash lines from `adb logcat`, and the job uploads
 Maestro's debug output. That output shows only synthetic screens (RG-07). It
 is kept for 7 days, because artefacts count against the account's storage.
 `EXPO_NO_TELEMETRY=1` and Maestro's analytics opt-out
-(`MAESTRO_CLI_NO_ANALYTICS=1`) are set wherever it runs; check both names at
-setup. No personal data is involved either way. Nothing leaves for a tooling
+(`MAESTRO_CLI_NO_ANALYTICS=1`), and `MAESTRO_DISABLE_UPDATE_CHECK=true`, are
+set wherever it runs (AC20). No personal data is involved either way. Nothing leaves for a tooling
 vendor that does not have to.
 
 **A failed flow is never retried automatically.** A pass on the second try
@@ -843,9 +844,9 @@ It is amended with the measured CI durations after the first run.
 - **A custom URL scheme.** Deep links are an attack surface, and they arrive
   with the first feature that needs a link. If Expo Router refuses to build
   without one, the pull request says so and names the intent filter it adds.
-- **Android's backup and other data-at-rest settings.** The skeleton stores
-  nothing; these are decided when the app first stores data. The pull request
-  lists the release APK's permissions as evidence. The skeleton should need
+- **Data-at-rest settings beyond backup.** Backup is off from the start
+  (AC19); the rest is decided when the app first stores data. The pull
+  request lists the release APK's permissions as evidence. The skeleton needs
   network access only.
 - **More than one emulator API level, and real devices** (L9, D-037, D-041).
 - **The Dependabot ignore rule (R12) and the Clever Cloud install filter
