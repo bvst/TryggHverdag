@@ -133,8 +133,8 @@ arrived with INF-06. `ai-review (code-reviewer)` and
 A check added later needs no reminder either: `gate:integrity` starts failing
 the day a check becomes possible but is still not required. That is how
 `android-e2e` arrives: the pull request that adds `e2e:android` is red on
-`gate-integrity` until the owner adds the check to the live ruleset (proposed
-A-23, in `docs/specs/INF-06.md`).
+`gate-integrity` until the owner adds the check to the live ruleset (A-27, in
+`docs/specs/INF-06.md`).
 
 ## Part 3 — the repository settings (1 minute)
 

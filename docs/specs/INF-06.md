@@ -268,7 +268,7 @@ Cloud installs (see the risks).
 
 ## Technical approach
 
-### Versions (delegated, D-031; recorded as D-079 or the next free number)
+### Versions (delegated, D-031; recorded as D-080, since INF-08 took D-079)
 
 - **Expo SDK: the newest stable SDK on the day the red phase starts**, as
   long as it (a) installs on Node 22 under `engine-strict=true` (D-058),
@@ -572,7 +572,7 @@ order:
    in CI but do not have to pass before merging: android-e2e". This is
    expected; say so in the pull request.
 3. When every other check is green, the **owner adds `android-e2e` to the
-   existing `main` ruleset's required checks** (proposed A-23). Edit the
+   existing `main` ruleset's required checks** (A-27). Edit the
    existing ruleset. Do not import a second one beside it: `gate:integrity`
    reads every ruleset, and two that disagree make its answer harder to read.
 4. The owner re-runs only the `gate-integrity` job. A session cannot (D-077
@@ -690,9 +690,9 @@ minutes are on top of a budget that is already tight**, but D-024/D-048's
 | ◆ `.github/workflows/ci.yml` | The `android-e2e` job; its header's "missing on purpose" note is deleted; possibly the install filter on five jobs |
 | `docs/plan/main-ruleset.json` | Adds `android-e2e` (13 required checks) |
 | `scripts/gate.test.mjs`, `scripts/lib/affected.test.mjs`, `scripts/gate-file.test.mjs`, `scripts/lib/coverage.test.mjs`, `scripts/turbo-inputs.test.mjs` | Extended (`test-author`) |
-| ◆ `docs/plan/decisions.md` | D-079 (or next free): the app skeleton as built, with each choice above, its reason and its fallback |
+| ◆ `docs/plan/decisions.md` | D-080: the app skeleton as built, with each choice above, its reason and its fallback |
 | ◆ `CLAUDE.md` | The command list: `dev` and `e2e:android` exist; `e2e:ios` is named with the task that brings it (see Q2) |
-| `docs/plan/merge-rules.md`, `apps/README.md`, `docs/progress.md`, `docs/progress/m0.md`, `docs/plan/README.md` | Missing-check prose, the app row, the progress entry, the corrected `gate:integrity` timing, and A-23 |
+| `docs/plan/merge-rules.md`, `apps/README.md`, `docs/progress.md`, `docs/progress/m0.md`, `docs/plan/README.md` | Missing-check prose, the app row, the progress entry, the corrected `gate:integrity` timing, and A-27 |
 
 **Deliberately not touched:** `.github/workflows/ai-review.yml` (D-075: its
 filters already cover the app), `.claude/**`, `apps/server/**`,
@@ -769,7 +769,7 @@ through.
 
 ## Owner actions
 
-- **A-23 (proposed): add `android-e2e` to the live `main` ruleset**, at step
+- **A-27: add `android-e2e` to the live `main` ruleset**, at step
   3 of "Making `android-e2e` a required check". It takes about a minute:
   Settings → Rules → Rulesets → `main` → required status checks. Then re-run
   the `gate-integrity` job on the INF-06 pull request.
