@@ -196,6 +196,11 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
+**BUG-5 — a failed BUG-3 worker test left its worker running** (branch
+`fix/BUG-5-worker-test-orphans`). The fix is test-only: the worker is always
+stopped, and the failure says how it ended. It does not block INF-06, by the
+owner's choice.
+
 **INF-08 — monitoring** ([#31](https://github.com/bvst/TryggHverdag/pull/31),
 on `claude/busy-faraday-40n2zl`; #30 merged). Reviews and `gate:full` are
 done; CI's first run on #31 found the mutation gate out of time, fixed below.
