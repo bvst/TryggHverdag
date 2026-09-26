@@ -709,6 +709,20 @@ describe('the app answer, as the workflow receives it', () => {
     expect(result.stdout).not.toMatch(/^app=false$/m);
   });
 
+  test('INF-06-AC13: a pull request that changes only a workspace package the app depends on is answered app=true', () => {
+    // Only the app's dependency closure reaches packages/shared/, and the script
+    // has to read that closure from the checkout it runs in. Read from anywhere
+    // else, the closure is empty and this change would be answered app=false.
+    const dir = pullRequestRepo({ 'packages/shared/index.mjs': 'export const shared = 2;\n' });
+
+    const result = runAffected(['--base', 'origin/main'], { event: 'pull_request', cwd: dir });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain('not a pull request');
+    expect(result.stdout).toMatch(/^app=true$/m);
+    expect(result.stdout).not.toMatch(/^app=false$/m);
+  });
+
   test('INF-06-AC12: a pull request that changes only documentation is answered app=false, and says so', () => {
     const dir = pullRequestRepo({ 'docs/notes.md': '# Notes, amended\n' });
 
@@ -726,6 +740,11 @@ describe('the app answer, as the workflow receives it', () => {
  * A repository checked out the way a pull request is: origin/main at the first
  * commit, and a branch on top of it that changes `files`. Everything is
  * committed, so the working tree adds nothing to the diff.
+ *
+ * The app depends on one workspace package, packages/shared, so that a pull
+ * request can reach the app through a file only the dependency closure finds:
+ * nothing under apps/, no install file, no workflow. The closure is read from
+ * the checkout the script runs in, and that is what such a change tests.
  */
 function pullRequestRepo(files) {
   const dir = mkdtempSync(join(tmpdir(), 'affected-pr-'));
@@ -738,8 +757,16 @@ function pullRequestRepo(files) {
   git('init', '-q', '-b', 'main');
   git('config', 'user.email', 'test@example.invalid');
   git('config', 'user.name', 'Test');
-  write('package.json', JSON.stringify({ name: 'fixture', private: true, workspaces: ['apps/*'] }));
-  write('apps/mobile/package.json', manifest('@trygghverdag/mobile'));
+  write(
+    'package.json',
+    JSON.stringify({ name: 'fixture', private: true, workspaces: ['apps/*', 'packages/*'] }),
+  );
+  write(
+    'apps/mobile/package.json',
+    manifest('@trygghverdag/mobile', { '@trygghverdag/shared': 'workspace:*' }),
+  );
+  write('packages/shared/package.json', manifest('@trygghverdag/shared'));
+  write('packages/shared/index.mjs', 'export const shared = 1;\n');
   write('docs/notes.md', '# Notes\n');
   git('add', '-A');
   git('commit', '-qm', 'main');

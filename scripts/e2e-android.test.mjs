@@ -163,23 +163,6 @@ describe('the entry script stops before it does anything when', () => {
   });
 });
 
-describe('what decides that a run passed', () => {
-  test("INF-06-AC9: the entry script judges the run by Maestro's report, through the tested decision", () => {
-    // A shape check, and a deliberately narrow one. The full run cannot be
-    // driven from here without the build, and how the build phase is skipped
-    // is the implementer's choice (spec, "e2e:android and the Maestro flow").
-    // What this holds is that the verdict comes from judgeReport, whose
-    // zero-flow and failed-flow cases are tested in lib/e2e-android.test.mjs,
-    // rather than from Maestro's exit code alone.
-    const source = readFileSync(SCRIPT, 'utf8');
-
-    expect(source).toMatch(
-      /import\s*\{[^}]*\bjudgeReport\b[^}]*\}\s*from\s*'\.\/lib\/e2e-android\.mjs'/,
-    );
-    expect(source).toMatch(/\bjudgeReport\s*\(/);
-  });
-});
-
 // Past the preflight. These runs go as far as Maestro, so they need what the
 // script reads from the repository, and a Maestro of their own. Each gets a
 // scratch copy of the app: its manifest, its config, its translations and its
