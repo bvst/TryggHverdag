@@ -2,3 +2,5 @@
 - [gate:integrity locally](project_gate_integrity_local.md) — 3/5 locally (rulesets unreadable), so the "required check" premise is unverified
 - [Bug tests and untested fallbacks](feedback_bug_test_patterns.md) — recurring gaps: the error/fallback branch of a fix goes untested
 - [Stryker incremental reuse](reference_stryker_incremental_reuse.md) — local report reuses old results for unchanged code; flaky tests count as kills; rulesets via curl
+- [Stale base](feedback_stale_base.md) — fetch main first; BUG-5 conflicted with a fix main already had, and CI never reviews conflicting PRs
+- [Safety-test gate gaps](project_safety_test_gate_gaps.md) — test-only edits to safety tests skip mutation and CI safety-reviewer

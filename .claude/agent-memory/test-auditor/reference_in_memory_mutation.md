@@ -18,5 +18,10 @@ matches of each pattern and report "NOT APPLIED" unless there is exactly one, so
 show up as SURVIVED. Include a no-op baseline mutant. Afterwards `git status --short` shows the tracked tree unchanged.
 
 Commands whose text contains `doctor.test.mjs` are blocked; use `pnpm exec vitest run scripts/doctor`.
+The guard also blocks `git merge-base` and `git merge-tree` (even the old read-only form) and `> file`. For
+conflicts, read `git diff HEAD...origin/main -- <file>` next to the branch diff. For long runs, use
+run_in_background with no redirect and read the task's output file.
+In-memory mutants cannot reach `bin.test.ts`: it spawns plain `node` on the files on disk, so a Vite transform never
+touches the child. Rely on the author's scratch-copy and Stryker evidence, and say so.
 
 Related: [[gate-integrity-local]]

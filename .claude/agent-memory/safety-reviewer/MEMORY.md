@@ -1,0 +1,3 @@
+- [Mutation gate skips test-only changes](project_mutation_gate_skips_test_only.md) — safety-test edits don't trigger Stryker in CI; no nightly run yet
+- [Spawned-process test review](feedback_spawned_process_tests.md) — exitCode-null vs signal deaths, output after 'exit', time windows can't prove "never"
+- [Reviewer sandbox limits](reference_reviewer_sandbox_limits.md) — read-only hook blocks `>` and file writes; node -e emulation; Stryker 10 facts

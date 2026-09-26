@@ -1,1 +1,3 @@
 - [Doctor false-green review angle](project_doctor_false_green.md) — scripts/doctor.mjs: look for OK branches that are inferred, and for exec calls that can hang
+- [Spawned-process tests](project_spawned_process_tests.md) — bin.test.ts style: flag fixed sleeps from spawn and kills outside finally (BUG-5)
+- [gate:file is silent on success](reference_gate_file_silent_success.md) — check its exit code; no GNU `timeout` on the Mac; Bash redirects blocked for this role

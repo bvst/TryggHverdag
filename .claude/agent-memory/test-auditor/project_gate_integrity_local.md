@@ -16,3 +16,5 @@ relevant gates directly.
 gates actually bear on the diff. For scripts/-only changes that means the unit tests, plus the baseline and
 mutation-path reasoning; `scripts/` is not in SAFETY_PATHS (scripts/lib/gate-decisions.mjs), so mutation does not
 mutate it. Check again each time: CI with RULES_READ_TOKEN may give 5 of 5.
+Still 3 of 5 locally on 2026-09-26 (BUG-5 audit). Also check whether the branch has been pushed or has a PR
+(`gh pr list --head <branch>`). If not, no check exists on the commit, so "CI already ran it" is false too.
