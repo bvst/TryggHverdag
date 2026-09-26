@@ -16,7 +16,7 @@ import { once } from 'node:events';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, onTestFinished, test } from 'vitest';
 
 /** Stands in for a database password. Short and plainly fake, so no scanner mistakes it. */
 const SENTINEL = 'sentinel-pw-7';
@@ -45,6 +45,15 @@ function start(file: string, env: Record<string, string>) {
   child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()));
   child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString()));
   const exited = once(child, 'exit') as Promise<[number | null, NodeJS.Signals | null]>;
+  // BUG-5: whatever the verdict, no child outlives its test. A test waits for
+  // its child to end, or stops it, and asserts on how it ended; this acts only
+  // after the verdict, on a child still running — because the test failed or
+  // timed out before the child ended, or the child ignored SIGTERM.
+  onTestFinished(() => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGKILL');
+    }
+  });
   return { child, exited, output: () => output };
 }
 
