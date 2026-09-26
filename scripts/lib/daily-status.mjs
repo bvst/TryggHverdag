@@ -1,24 +1,26 @@
-// INF-09, D-050: the daily status report, from what Claude returned to a
-// comment on the owner's phone.
+// INF-09, D-050, D-080: the daily status report, from what Claude returned to
+// the description of the pinned "Daily status" issue.
 //
 // Two jobs, and the split is the design. Claude writes the report and holds a
-// token that can only read. This module posts it, holds the token that can
+// token that can only read. This module publishes it, holds the token that can
 // write, and is not a language model. So the part that has to happen every
-// morning — a comment appears, and it starts with ✅, ⚠️ or 🛑 — does not
-// depend on a model remembering to do it. In this repository that has gone
-// wrong: a reviewer posted its review and skipped the file the gate read
+// morning — the description is replaced, and it starts with ✅, ⚠️ or 🛑 —
+// does not depend on a model remembering to do it. In this repository that has
+// gone wrong: a reviewer posted its review and skipped the file the gate read
 // (D-073), and another returned a placeholder instead of an answer (#15).
 //
-// And when the report cannot be written, the owner hears about that too, in the
-// same place, at the same time. D-050 says a failed report must show rather
-// than be silently missing; a red run in the Actions tab shows only to someone
-// already looking there.
+// A dashboard, not a diary (D-080). Like Renovate's Dependency Dashboard, each
+// run replaces the description with the current state and appends nothing, so
+// the issue stays one screen long. The price is that an edit notifies nobody.
+// That is why a failure is carried by the exit code as well as the text: a
+// failed run exits 1, and the workflow's last step then pings Healthchecks.io
+// with /1, which pages the owner.
 //
 // What this cannot cover: a morning when the workflow does not run at all — an
 // exhausted Actions budget, an outage, a scheduled run GitHub dropped. Nothing
 // here runs then, so nothing here can say so. That is Healthchecks.io's job:
 // the workflow's last step pings it every run, and it pages the owner when a
-// day passes without one. The issue body says so too.
+// day passes without one. The description's footer says so too.
 
 export const ISSUE_TITLE = 'Daily status';
 
@@ -102,32 +104,62 @@ export function parseReport({ result, structured }) {
   return { ok: true, status: /** @type {keyof typeof HEADLINES} */ (status), report };
 }
 
-/** The last line of every comment: who it is for, and how it was made. */
-function footer({ owner, runUrl }) {
-  return `<sub>@${owner} · [how this was made](${runUrl})</sub>`;
+/**
+ * When the workflow runs, as the issue states it. The cron in
+ * .github/workflows/daily-status.yml is the source; a test holds this sentence
+ * to it, in UTC and on both of Oslo's clocks (D-080).
+ */
+const SCHEDULE = '01:07 UTC — 03:07 in Oslo in summer, 02:07 in winter';
+
+/**
+ * What every description ends with: what it is, when it changes, what an old
+ * one means, and how it was made. No @mention: an edited description notifies
+ * nobody, so a mention would only be noise (D-080).
+ */
+function footer({ runUrl, workflowUrl }) {
+  // One line: the phrases the owner reads by are held by tests, and a line
+  // break inside one would split it. "A day and a half" rather than "a day":
+  // GitHub starts this run hours late by varying amounts, so two runs that both
+  // happened can be more than a day apart, and Healthchecks.io pages only after
+  // its grace time. At a day and a half, both halves of the sentence are true.
+  return [
+    '---',
+    `<sub>The current state, replaced on every run: every morning at ${SCHEDULE}, though GitHub often starts it hours late. It is not a history. If it stays unchanged for more than a day and a half, the workflow did not run, and Healthchecks.io will already have paged you. [This run](${runUrl}) · [All runs](${workflowUrl})</sub>`,
+  ].join('\n');
+}
+
+/** Problems found on the way, above the footer so they are read. */
+function problemLines(problems) {
+  return problems.length > 0 ? [`**Also wrong this morning:** ${problems.join(' ')}`, ''] : [];
 }
 
 /**
- * The comment for a report that was written.
+ * The whole description for a report that was written — the whole of it, since
+ * each run replaces the last (D-080).
  *
- * The headline comes from `status`, not from the model's prose, so "starts
- * with ✅, ⚠️ or 🛑" holds by construction rather than by instruction. The
- * owner is mentioned because a mention is the notification GitHub Mobile pushes
- * by default, and reaching the phone is what D-050 is for.
+ * The headline comes from `status`, not from the model's prose, so "starts with
+ * ✅, ⚠️ or 🛑" holds by construction rather than by instruction.
  *
- * @param {{ status: keyof typeof HEADLINES, report: string, owner: string, runUrl: string }} input
+ * @param {{ status: keyof typeof HEADLINES, report: string, runUrl: string, workflowUrl: string, problems?: string[] }} input
  */
-export function composeComment({ status, report, owner, runUrl }) {
-  return [`### ${HEADLINES[status]}`, '', report, '', footer({ owner, runUrl })].join('\n');
+export function composeDashboard({ status, report, runUrl, workflowUrl, problems = [] }) {
+  return [
+    `### ${HEADLINES[status]}`,
+    '',
+    report,
+    '',
+    ...problemLines(problems),
+    footer({ runUrl, workflowUrl }),
+  ].join('\n');
 }
 
 /**
- * The comment for a morning with no report. Always 🛑: the owner is being told
- * that nothing was checked, and that is not a ⚠️.
+ * The description for a morning with no report. Always 🛑: the owner is being
+ * told that nothing was checked, and that is not a ⚠️.
  *
- * @param {{ why: string, owner: string, runUrl: string }} input
+ * @param {{ why: string, runUrl: string, workflowUrl: string, problems?: string[] }} input
  */
-export function composeFailure({ why, owner, runUrl }) {
+export function composeFailureDashboard({ why, runUrl, workflowUrl, problems = [] }) {
   return [
     `### ${HEADLINES.action} — no report today`,
     '',
@@ -136,28 +168,8 @@ export function composeFailure({ why, owner, runUrl }) {
     '',
     `**Why:** ${why}`,
     '',
-    footer({ owner, runUrl }),
-  ].join('\n');
-}
-
-/**
- * The body of the issue, written once when it is created.
- *
- * @param {{ workflowUrl: string }} input
- */
-export function issueBody({ workflowUrl }) {
-  return [
-    'The daily status report (D-050) is posted here as a comment every morning at',
-    '04:47 UTC — 06:47 in Oslo in summer, 05:47 in winter. Each one starts with',
-    '✅ healthy, ⚠️ needs attention or 🛑 action required.',
-    '',
-    'If the report cannot be written, a 🛑 comment says so instead.',
-    '',
-    '**A morning with no comment at all means the workflow did not run.**',
-    'Healthchecks.io watches for exactly that and pages you when a day passes',
-    `without a run. The runs themselves are here: ${workflowUrl}`,
-    '',
-    'Keep this issue open. If it is closed, the next run opens a new one.',
+    ...problemLines(problems),
+    footer({ runUrl, workflowUrl }),
   ].join('\n');
 }
 
@@ -183,11 +195,13 @@ export function issueNumberFromUrl(output) {
 }
 
 /**
- * Posts today's report, or today's failure, and says what it did.
+ * Makes today's report, or today's failure, the description of the pinned
+ * "Daily status" issue, and says what it did. Never a comment (D-080).
  *
  * Every GitHub call goes through `gh`, injected so tests can play GitHub.
- * Returns the exit code: 0 only when a report was written and posted. A posted
- * failure notice still exits 1, so the run is red as well as the comment.
+ * Returns the exit code: 0 only when a report was written and published. A
+ * published failure notice still exits 1, so the run is red and the workflow's
+ * ping tells Healthchecks.io to page — an edited description notifies nobody.
  *
  * @param {{
  *   env: Record<string, string | undefined>,
@@ -205,8 +219,8 @@ export function postDailyStatus({ env, gh, log }) {
     return 1;
   }
 
-  // Problems that do not stop the report from being posted, but must not pass
-  // quietly either. They are appended to the comment and turn the run red.
+  // Problems that do not stop the report from being published, but must not
+  // pass quietly either. They go into the description and turn the run red.
   const problems = [];
 
   // The workflow's last step pings Healthchecks.io, which pages the owner when
@@ -262,6 +276,27 @@ export function postDailyStatus({ env, gh, log }) {
     return 1;
   }
 
+  const parsed = parseReport({ result: env.REPORT_RESULT, structured: env.STRUCTURED });
+  const describe = () =>
+    parsed.ok
+      ? composeDashboard({
+          status: parsed.status,
+          report: parsed.report,
+          runUrl,
+          workflowUrl,
+          problems,
+        })
+      : composeFailureDashboard({ why: parsed.why, runUrl, workflowUrl, problems });
+  const rewrite = (number) => {
+    const edited = gh(['issue', 'edit', String(number), '--body', describe()]);
+    if (!edited.ok) {
+      log(
+        `::error::Could not update the description of issue #${String(number)}: ${edited.output}`,
+      );
+    }
+    return edited.ok;
+  };
+
   if (issue === null) {
     const created = gh([
       'issue',
@@ -269,11 +304,11 @@ export function postDailyStatus({ env, gh, log }) {
       '--title',
       ISSUE_TITLE,
       '--body',
-      issueBody({ workflowUrl }),
+      describe(),
       '--label',
       'daily-status',
-      // Assigning subscribes the owner, so the comments reach their inbox even
-      // on a day the mention below does not push.
+      // Assigning subscribes the owner and puts the dashboard in their list of
+      // assigned issues, which is where GitHub Mobile shows it.
       '--assignee',
       owner,
     ]);
@@ -287,35 +322,24 @@ export function postDailyStatus({ env, gh, log }) {
     if (!pinned.ok) {
       problems.push(`Issue #${String(issue)} could not be pinned.`);
       log(`::error::Could not pin issue #${String(issue)}: ${pinned.output}`);
+      // Into the description too. If that fails, rewrite() says so, and the run
+      // exits 1 below either way: `problems` is no longer empty.
+      rewrite(issue);
     }
-  }
-
-  const parsed = parseReport({ result: env.REPORT_RESULT, structured: env.STRUCTURED });
-  let body = parsed.ok
-    ? composeComment({ status: parsed.status, report: parsed.report, owner, runUrl })
-    : composeFailure({ why: parsed.why, owner, runUrl });
-  if (problems.length > 0) {
-    body = `${body}\n\n**Also wrong this morning:** ${problems.join(' ')}`;
-  }
-
-  const posted = gh(['issue', 'comment', String(issue), '--body', body]);
-  if (!posted.ok) {
-    log(`::error::Could not post to issue #${String(issue)}: ${posted.output}`);
+  } else if (!rewrite(issue)) {
     return 1;
   }
 
   if (!parsed.ok) {
-    log(
-      `::error::No report today, and the owner has been told so on #${String(issue)}. ${parsed.why}`,
-    );
+    log(`::error::No report today, and #${String(issue)}'s description says so. ${parsed.why}`);
     return 1;
   }
   if (problems.length > 0) {
     log(
-      `::error::The report was posted to #${String(issue)}, with problems: ${problems.join(' ')}`,
+      `::error::The report is in #${String(issue)}'s description, with problems: ${problems.join(' ')}`,
     );
     return 1;
   }
-  log(`Posted the daily report (${parsed.status}) to #${String(issue)}.`);
+  log(`Put the daily report (${parsed.status}) in #${String(issue)}'s description.`);
   return 0;
 }

@@ -1865,6 +1865,48 @@ any other path is work, not a candidate for the same treatment.
     `safety-reviewer`: exit 6.8 s after SIGTERM during a hung check-in).
     Graphile's `helpers.abortSignal` could cancel the ping on stop.
 
+## D-080 — The daily report is a dashboard, refreshed at 01:07 UTC
+- **Date:** 2026-09-26 · **Status:** Accepted (owner) · **Section:** 9
+- **Context:** Amends D-050 (a comment every morning), D-076 item 5 (the
+  mention that made each comment reach the phone) and D-078 (04:47 UTC). Three
+  days of running it showed:
+  - **The comments pile up.** One a day turns the pinned issue into a log. The
+    owner: "I don't need to know the logs of what was missing last time, I just
+    need to know the current state of things."
+  - **GitHub starts the scheduled run about 4¾ hours late**, at both slots
+    tried: 05:00 → 09:52 (run 35983876995), 04:47 → 09:32 (run 36233069263).
+    D-078's move off the top of the hour did not change the arrival — which
+    D-078 said it could not promise.
+  - **The missed-run alarm works.** On 2026-09-25 the switch to 04:47 skipped a
+    morning, and Healthchecks.io paged the owner; the owner confirmed it.
+- **Decision:**
+  1. **Like Renovate's Dependency Dashboard.** Each run replaces the pinned
+     "Daily status" issue's description with the current state: the ✅ / ⚠️ /
+     🛑 headline, the report, and a short footer — the schedule, that the
+     description is replaced every run, that one unchanged for more than a day
+     means the workflow did not run, and links to the run. No comments.
+  2. **Earlier: `7 1 * * *`** — 01:07 UTC, 03:07 in Oslo in summer and 02:07
+     in winter ("make it 3AM", read as Oslo time; GitHub's cron has no time
+     zone). With the delay seen so far it would land around 08:00 in Oslo —
+     an estimate from two runs, not a promise. D-078's rule that no cron
+     minute is 0 stays.
+- **What the owner gives up, stated plainly.** An edited description sends no
+  notification, so the daily push to the phone stops; the owner opens the
+  pinned issue when they want the state. What still pages: a failed or empty
+  report exits 1, and the workflow's last step then pings Healthchecks.io with
+  `/1`; a morning with no run at all pages after the grace period. The
+  description carries no @mention: on an edit it would notify nobody, and D-076
+  had it only for the daily push that is gone.
+- **The Healthchecks.io grace goes from 3 to 8 hours** (A-27, owner's decision
+  2026-09-26). With runs starting about 4¾ hours late by amounts that vary, an
+  on-time run followed by a late one can be ~29 hours apart, past 1 day + 3
+  hours: a page for a run that happened, which teaches the owner to ignore the
+  real one. A genuinely missed report now pages at ~32 hours. The footer's
+  "unchanged for more than a day and a half" stays true for any grace up to
+  12 hours.
+- **Consequences:** #19 keeps the comments from before this decision. Closing it
+  makes the next run open a clean dashboard issue; that is the owner's choice.
+
 ## D-081 — App skeleton v1: Expo SDK 57 and the toolchain built around it
 - **Date:** 2026-09-26 · **Status:** Accepted (delegated, D-031) · **Section:** 4/5/6/8 (M0, INF-06)
 - **Context:** INF-06's spec (`docs/specs/INF-06.md`, "Versions") delegated the

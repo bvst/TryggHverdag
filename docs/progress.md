@@ -27,7 +27,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-06 | App skeleton | 🟡 In progress on `feat/INF-06-app-skeleton`: spec, tests and implementation committed; L7 and the development build proven on the Mac; reviews and pull request next. Needs the owner's A-28 (add `android-e2e` to the live ruleset) before merge |
 | INF-07 | Staging on Clever Cloud | ✅ Done — 2026-09-25 ([#22](https://github.com/bvst/TryggHverdag/pull/22), fixes [#23](https://github.com/bvst/TryggHverdag/pull/23) [#24](https://github.com/bvst/TryggHverdag/pull/24), names [#25](https://github.com/bvst/TryggHverdag/pull/25)). A merge deployed and the smoke test passed; BUG-3 fixed ([#27](https://github.com/bvst/TryggHverdag/pull/27)) |
 | INF-08 | Monitoring | 🟡 In flight — [#31](https://github.com/bvst/TryggHverdag/pull/31), all four reviews PASS; [#30](https://github.com/bvst/TryggHverdag/pull/30) merged. Done when the owner's drill passes (A-26) |
-| INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). The owner sees the report on the phone, in [#19](https://github.com/bvst/TryggHverdag/issues/19) (A-17). Moves to 04:47 UTC in [#26](https://github.com/bvst/TryggHverdag/pull/26) (D-078) |
+| INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). Since D-080 a dashboard: the pinned issue's description, replaced every run at 01:07 UTC (≈03:00 Oslo). The missed-run alarm is proven (2026-09-25) |
 | INF-10 | Gate drills | ⬜ Not started. Parked 2026-09-24 for INF-07. Open question to the owner: split into offline drills now and live GitHub drills later? |
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
@@ -53,6 +53,10 @@ console. They are outside Terraform, and the app costs money.
 
 **A-14 — the cloud environment's allowlist is applied** (2026-09-24); it
 reached the running session without a restart. A setup script is still to come.
+
+**A-27 — raise the daily-status check's grace in Healthchecks.io to 8 hours**
+(about a minute; agreed 2026-09-26). GitHub starts the report hours late by
+varying amounts, and 3 hours' grace could page for a run that happened (D-080).
 
 **A-17 is done** (2026-09-25): the owner sees the daily report on the phone,
 as the GitHub issue [#19](https://github.com/bvst/TryggHverdag/issues/19). That
@@ -273,11 +277,20 @@ same, but the roadmap's drill ("a new acceptance criterion without a test")
 asks for more, so that drill would pass for a requirement that already has one
 test. Raise it when INF-10 resumes.
 
-**[#26](https://github.com/bvst/TryggHverdag/pull/26) — the daily report moves
-to 04:47 UTC** (D-078, owner's decision 2026-09-25). The first `schedule` run
-came at 09:52 for the 05:00 slot, 4 h 52 min late, and GitHub names the top of
-the hour as its high-load time. After it merges, #19's description — written
-once, still saying 05:00 — is updated by hand.
+**The daily report becomes a dashboard (D-080, owner's decision 2026-09-26).**
+Each run replaces the pinned issue's description with the current state, like
+Renovate's Dependency Dashboard, instead of adding a comment; and it runs at
+01:07 UTC. Why: the comments were turning the issue into a log, and GitHub
+started both scheduled slots about 4¾ h late (05:00 → 09:52; 04:47 → 09:32), so
+D-078's move off the hour did not help, as D-078 allowed. What stops: the daily
+push — an edited description notifies nobody. What still pages: a failed run
+(Healthchecks.io gets `/1`) and a missing one (the grace period).
+
+**The missed-run alarm is proven** (2026-09-25). #26 merged at 04:53, between the
+old slot and the new, so no run happened that day; Healthchecks.io paged the
+owner, who confirmed it. The next run (09:32, 2026-09-26) posted and pinged
+`exit status 0`. #19's description had been updated to 04:47 on 2026-09-25,
+identical to what `issueBody()` rendered; D-080 replaces it with the dashboard.
 
 **INF-09 is done** (2026-09-25). Every open question was answered by a real run's
 log: the read-only token (`Using provided GITHUB_TOKEN for authentication`;
