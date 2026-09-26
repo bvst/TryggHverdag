@@ -16,7 +16,7 @@ import { once } from 'node:events';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, onTestFinished, test } from 'vitest';
 
 /** Stands in for a database password. Short and plainly fake, so no scanner mistakes it. */
 const SENTINEL = 'sentinel-pw-7';
@@ -45,6 +45,15 @@ function start(file: string, env: Record<string, string>) {
   child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()));
   child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString()));
   const exited = once(child, 'exit') as Promise<[number | null, NodeJS.Signals | null]>;
+  // BUG-5: whatever the verdict, no child outlives its test. A test waits for
+  // its child to end, or stops it, and asserts on how it ended; this acts only
+  // after the verdict, on a child still running — because the test failed or
+  // timed out before the child ended, or the child ignored SIGTERM.
+  onTestFinished(() => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGKILL');
+    }
+  });
   return { child, exited, output: () => output };
 }
 
@@ -79,18 +88,21 @@ async function firstResponse(url: string, attempts = 150): Promise<Response> {
 }
 
 /**
- * Waits until a child has written `text`, or has exited, because it takes a
+ * Waits until a child has written `text`, or has ended, because it takes a
  * moment to start: up to 15 seconds, counted in attempts rather than read off
- * a clock. Asserts nothing itself; the test's own assertions say what went
- * wrong if the text never came.
+ * a clock. Ended means an exit code or a signal: a child killed by a signal
+ * has no exit code, and would otherwise be waited on for the full 15 s.
+ * Asserts nothing itself; the test's own assertions say what went wrong if the
+ * text never came.
  */
-async function untilOutputContains(
+async function waitForOutput(
   started: ReturnType<typeof start>,
   text: string,
   attempts = 150,
 ): Promise<void> {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    if (started.output().includes(text) || started.child.exitCode !== null) {
+    const { exitCode, signalCode } = started.child;
+    if (started.output().includes(text) || exitCode !== null || signalCode !== null) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -148,23 +160,42 @@ describe('bin/worker.ts', () => {
   });
 
   test("BUG-3: on Clever Cloud's build machine it never reaches for the database, and waits to be stopped", async () => {
-    // The same unreachable database as above: a worker that tried it would
-    // fail with ECONNREFUSED within milliseconds. Still running 1.5 s after
-    // it has said why is a worker that did not try.
+    // "Never" is proven in-process, in worker.test.ts ("BUG-3: it never starts
+    // a runner there"). This runs the entry file under plain node and proves
+    // less: it says why it started nothing, makes no attempt on the
+    // unreachable database in the 1.5 s after saying so — a worker that tried
+    // would fail with ECONNREFUSED within milliseconds — and exits with 0 on
+    // SIGTERM.
     //
     // The 1.5 s is counted from that line, not from the spawn. Counted from
     // the spawn, a machine busy enough — Stryker's, running every test per
     // mutant — had not yet printed the line when the test looked, and failed
     // here for no fault of the worker's. That counted as a killed mutant.
     const worker = start('worker.ts', { DATABASE_URL: UNREACHABLE, INSTANCE_TYPE: 'build' });
-    await untilOutputContains(worker, 'INSTANCE_TYPE=build');
-    await new Promise((resolve) => setTimeout(resolve, 1500));
 
-    expect(worker.child.exitCode).toBeNull();
-    expect(worker.output()).toContain('INSTANCE_TYPE=build');
-    expect(worker.output()).not.toContain('ECONNREFUSED');
+    try {
+      await waitForOutput(worker, 'INSTANCE_TYPE=build');
+      // BUG-5: output can arrive after the exit, so a worker that crashed at
+      // start may show nothing yet, and read like one that was slow to start.
+      // The message says which it was.
+      const ended = worker.child.exitCode ?? worker.child.signalCode;
+      expect(
+        worker.output(),
+        ended === null ? 'the worker is still running' : `the worker exited with ${String(ended)}`,
+      ).toContain('INSTANCE_TYPE=build');
 
-    worker.child.kill('SIGTERM');
+      // Cut short by an exit, so a worker that does reach for the database
+      // fails here at once rather than 1.5 s later.
+      await Promise.race([worker.exited, new Promise((resolve) => setTimeout(resolve, 1500))]);
+      expect(worker.child.exitCode, worker.output()).toBeNull();
+      expect(worker.output()).not.toContain('ECONNREFUSED');
+    } finally {
+      // BUG-5: stopped even when an assertion fails, the way the API test
+      // stops the API. On the build machine the worker never ends by itself,
+      // so one left behind by a failed run stayed up for good.
+      worker.child.kill('SIGTERM');
+    }
+
     const [code, signal] = await worker.exited;
     expect({ code, signal }).toEqual({ code: 0, signal: null });
   });
