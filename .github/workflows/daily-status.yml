@@ -5,8 +5,9 @@
 #   report   Claude writes the report, following .claude/skills/status/SKILL.md,
 #            and returns it as structured output. It holds a token that can
 #            read and nothing else — this job cannot post, label or edit.
-#   post     scripts/daily-status.mjs posts it as a comment on the pinned
-#            "Daily status" issue, creating and pinning that issue if missing.
+#   post     scripts/daily-status.mjs makes it the description of the pinned
+#            "Daily status" issue, replacing yesterday's (D-080), creating and
+#            pinning that issue if missing.
 #            It holds the one write permission, and is not a language model.
 #
 # The split means the part that must happen every morning does not depend on a
@@ -15,8 +16,10 @@
 # instead of an answer (#15). It also keeps write access away from the job that
 # reads issue and pull request text, which is text other people wrote.
 #
-# `post` runs even when `report` fails, and then posts a 🛑 saying there is no
-# report today. D-050: a failed report must show, not be silently missing.
+# `post` runs even when `report` fails, and then puts a 🛑 in the description
+# saying there is no report today. D-050: a failed report must show, not be
+# silently missing — and since an edited description notifies nobody, the run
+# also exits 1, so the ping below tells Healthchecks.io to page (D-080).
 #
 # The one case nothing in a run can report is the run not happening at all —
 # an exhausted Actions budget, an outage, a scheduled run GitHub dropped. So the
@@ -29,9 +32,10 @@
 name: daily-status
 on:
   schedule:
-    # Off the top of the hour, which GitHub names as its high-load time for
-    # scheduled runs: the first one came at 09:52 for a 05:00 slot (D-078).
-    - cron: '47 4 * * *' # 06:47 in Oslo in summer, 05:47 in winter
+    # Early, because GitHub has started this run about 4¾ hours late at both
+    # slots tried (D-080), and off the top of the hour, which GitHub names as
+    # its high-load time (D-078).
+    - cron: '7 1 * * *' # 03:07 in Oslo in summer, 02:07 in winter
   workflow_dispatch:
 concurrency:
   # Queue, never cancel: a cancelled report is a morning with nothing posted.
@@ -99,9 +103,11 @@ jobs:
             first, and do its steps yourself rather than handing them to a
             subagent.
 
-            You are writing the report, not posting it. A later job posts it to
-            the pinned "Daily status" issue and adds the headline from
-            `status`, so do not write a headline of your own.
+            You are writing the report, not posting it. A later job makes it
+            the description of the pinned "Daily status" issue, replacing
+            yesterday's, and adds the headline from `status`, so do not write a
+            headline of your own. It is read as the current state, not as a
+            diary: say what is true now.
 
             Return, in the structured output:
               status  healthy   ✅ nothing needs the owner
@@ -159,8 +165,9 @@ jobs:
         # so, is exactly what this ping still has to carry.
         #
         # Healthchecks.io reads a trailing exit status. 0 is a good morning; 1
-        # pages the owner now rather than tomorrow — a failed run is already a
-        # 🛑 on the issue, and this reaches them even if that post failed too.
+        # pages the owner now rather than tomorrow. The 🛑 in the description
+        # notifies nobody (D-080), so this is how a failed run reaches them —
+        # and it reaches them even if updating the description failed too.
         # No ping at all within the check's period and grace is the case the
         # rest of this workflow cannot see, and Healthchecks.io pages for that.
         if: always()
