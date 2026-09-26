@@ -6,3 +6,4 @@
 - [Safety-test gate gaps](project_safety_test_gate_gaps.md) — test-only edits to safety tests skip mutation and CI safety-reviewer (open at 1c0b575)
 - [Baseline vs main](feedback_baseline_vs_main.md) — ratchet reads the branch's own baseline; diff it against origin/main and run ratchetDrops with main's
 - [Entry-script wiring](feedback_entry_script_wiring.md) — pure decisions tested, the entry script's use of them not; shape tests let false greens through
+- [Mutation pooled score](project_mutation_pooled_score.md) — safety-core mutants pooled in whole-suite run, *.ts only; "fails loudly" not guaranteed

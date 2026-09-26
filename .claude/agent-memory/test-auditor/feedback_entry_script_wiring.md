@@ -23,4 +23,11 @@ here. Unit-level coverage of the decision hides the gap.
 **How to apply:** for each `if (!result.ok) stop(...)` or verdict combination in an entry script, plant a mutant that
 drops it, and run the process tests. A shape test (a regex over the source) never counts as covering a verdict. When a
 test says the full run "cannot be driven from here", check whether a later commit added a harness that can.
+Outcome (re-audit at fa607f3): fb7ae01 added process runs where Maestro exits 0 and the report shows zero flows,
+ERROR or CANCELED. The report-ignoring mutant and its variants (report rewritten to SUCCESS, message stripped of the
+report) were all KILLED, and 14 of 14 children applied each mutant. The affected PR fixture kills app forced to
+true or false. One remaining survivor, graded a Note: `touchesApp(changed, { root: '/nonexistent' })`. The fixture
+has only `apps/*` and no workspace package the app depends on.
+Deleting a test from a file that is **new on the branch** is invisible to `tests:changes`, which diffs against the
+merge-base. So removing a superseded shape test before merge needs no RG-03 reason, but after merge it does.
 Related: [[bug-test-patterns]], [[in-memory-mutation]], [[baseline-vs-main]]

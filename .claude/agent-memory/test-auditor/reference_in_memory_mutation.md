@@ -44,6 +44,17 @@ zsh: `echo ===` in a Bash command fails with "== not found"; use `echo ---`.
   plugin so it passes `'--import', <register>`, and run the harness as a scratchpad file with `node <file>`. Its
   source can then use `=>` and `>` freely.
 Other guard traps: `"->"` inside a `node -e` string is blocked as a redirect. In zsh, `"$c:coverage-baseline.json"`
-applies the `:c` modifier; write `"${c}:file"`.
+applies the `:c` modifier; write `"${c}:file"`. A `grep -cF` loop over patterns containing `?? ''` or `${…}` was
+also blocked as a redirect, so count patterns inside the harness instead.
+
+**Expo config children** (INF-06 re-audit, 2026-09-26). `expo config --type introspect` loads app.config.ts through
+`@expo/require-utils`, which calls `fs.readFileSync` and compiles the file itself, so a loader hook never sees it.
+Instead, use a `--require` CJS preload in the scratchpad (`ta-fs-preload.cjs`). It wraps `fs.readFileSync`; for a path
+ending in the target, it replaces the text given in a JSON spec file and logs `matches=N`. Add `'--require', PRELOAD`
+to the test's spawn args with a Vite transform. A config-plugin mutant works inline:
+`(c) => require('expo/config-plugins').withAndroidManifest(c, …)` placed at the start of `plugins: [`.
+Reusable harnesses, all named `ta-*` so they do not collide with the test-author's `mutate.mjs`/`mutants.mjs` in the
+shared session scratchpad: `ta-harness-unit.mjs <target> <test> <mutants.json>` (in-process),
+`ta-harness-e2e.mjs`, `ta-harness-affected.mjs`, `ta-harness-ac19.mjs`, and `ta-ratchet-main.mjs`.
 
 Related: [[gate-integrity-local]], [[entry-script-wiring]]

@@ -25,4 +25,10 @@ scripts/lib/coverage.mjs to get the drops against main. Find the uncovered lines
 `vitest run --config vitest.coverage.config.mjs --coverage --coverage.include=<file> --coverage.reporter=text
 --coverage.reportsDirectory=<scratchpad>`. A lowered entry with no reason is Blocking. Check any merge commit's
 "conflicts resolved" note for coverage-baseline.json in particular.
+Outcome: fixed in adb4559. Two unreachable `?? ''` were removed, and the entry was raised by hand to 100/100
+(59/59). The re-audit on fa607f3 measured the same with test:coverage and found zero drops across 88 changed files
+against main's baseline. A hand-edited entry is fine if a fresh measurement matches it; always measure it.
+Also watch for the opposite drift: an entry whose measured value is now higher than the committed one (INF-06:
+lib/e2e-android.mjs was measured at 95.16/85.71 and committed as 92.85/82.22). The gain is not locked in. It is a
+Note, and the fix is a hand raise, not `--update`.
 Related: [[stale-base]], [[entry-script-wiring]]

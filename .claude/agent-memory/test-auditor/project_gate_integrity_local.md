@@ -27,3 +27,4 @@ Still 3 of 5 on 2026-09-26 (INF-06 audit at 6938a37). The branch was not pushed,
 answered 422 "No commit found": there was no check to read. Once the branch adds `e2e:android`, gate:integrity lists 13
 required checks while the live ruleset has 12 (no `android-e2e` until the owner does A-28). That mismatch is
 the designed reminder in AC14, not a finding.
+Unchanged at fa607f3 (INF-06 re-audit, 2026-09-26): 3 of 5, the branch still unpushed, no PR, and check-runs 422.
