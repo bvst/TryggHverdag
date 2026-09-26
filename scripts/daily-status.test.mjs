@@ -16,7 +16,12 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { HEADLINES, LABELS, issueBody } from './lib/daily-status.mjs';
+import {
+  HEADLINES,
+  LABELS,
+  composeDashboard,
+  composeFailureDashboard,
+} from './lib/daily-status.mjs';
 
 const WORKFLOW = readFileSync('.github/workflows/daily-status.yml', 'utf8');
 const TEMPLATE = readFileSync('.github/ISSUE_TEMPLATE/owner-question.md', 'utf8');
@@ -195,20 +200,23 @@ function timesBeside(text, word) {
 }
 
 describe('when it runs', () => {
-  test('every morning at 04:47 UTC (D-050, amended by D-078), and by hand for the first report', () => {
-    // This asserted '0 5 * * *' until D-078. The expected value moved because
-    // the spec did, not to make a test pass (RG-03). The first scheduled run,
-    // 35983876995, fired at 09:52 UTC on 2026-09-24 for the 05:00 slot — 4 h
-    // 52 min late — and GitHub names the start of every hour as a time it
-    // delays scheduled runs (the next test quotes it). The owner moved the
-    // report to 04:47 UTC on 2026-09-25: 06:47 in Oslo in summer, 05:47 in
-    // winter.
+  test('every night at 01:07 UTC (D-050, amended by D-078 and D-080), and by hand for the first report', () => {
+    // This asserted '0 5 * * *' until D-078, and '47 4 * * *' until D-080. The
+    // expected value moved because the spec did, not to make a test pass
+    // (RG-03). The first scheduled run, 35983876995, fired at 09:52 UTC on
+    // 2026-09-24 for the 05:00 slot — 4 h 52 min late — and GitHub names the
+    // start of every hour as a time it delays scheduled runs (the next test
+    // quotes it), so the owner moved the report to 04:47 UTC (D-078). That
+    // slot came late as well: run 36233069263 fired at 09:32 UTC on
+    // 2026-09-26, 4 h 45 min after it. The owner then said "Make it 3AM",
+    // read as Oslo time: 01:07 UTC is 03:07 in Oslo in summer and 02:07 in
+    // winter, and still off the top of the hour (D-080).
     const found = schedules()
       .map((s) => `'${s.expression}'`)
       .join(', ');
 
     expect(WORKFLOW, `The workflow is scheduled at ${found || 'no time at all'}`).toMatch(
-      /^ {4}- cron: '47 4 \* \* \*'/m,
+      /^ {4}- cron: '7 1 \* \* \*'/m,
     );
     expect(WORKFLOW).toMatch(/^ {2}workflow_dispatch:/m);
   });
@@ -220,7 +228,7 @@ describe('when it runs', () => {
     // Their advice: "schedule your workflow to run at a different time of the
     // hour." A report hours late is a morning the owner starts without it.
     //
-    // 04:47 is D-078's choice; this is the rule under it. A schedule moved back
+    // 01:07 is D-080's choice; this is D-078's rule under it. A schedule moved back
     // to :00, or to `*`, or to a list or a step that passes through minute 0,
     // fails here whatever the exact time says.
     const found = schedules();
@@ -229,26 +237,44 @@ describe('when it runs', () => {
     expect(found.filter((s) => firesAtMinuteZero(s.minute)).map((s) => s.expression)).toEqual([]);
   });
 
-  /** What the post job writes into a new "Daily status" issue. */
-  const issueText = () =>
-    issueBody({
+  /**
+   * What the post job writes as the "Daily status" issue's description, on a
+   * morning with a report and on one without (D-080). A function, so the text
+   * is made inside the tests that read it.
+   */
+  const descriptions = () => ({
+    'with a report': composeDashboard({
+      status: 'healthy',
+      report: 'All quiet.',
+      runUrl: 'https://github.com/example/repo/actions/runs/1',
       workflowUrl: 'https://github.com/example/repo/actions/workflows/daily-status.yml',
-    });
+    }),
+    'without one': composeFailureDashboard({
+      why: 'The token expired.',
+      runUrl: 'https://github.com/example/repo/actions/runs/1',
+      workflowUrl: 'https://github.com/example/repo/actions/workflows/daily-status.yml',
+    }),
+  });
 
-  test('the issue tells the owner the same time the workflow runs at', () => {
-    // Two copies of one fact: the cron line, and the sentence written into the
-    // "Daily status" issue when the post job creates it. If they drift, the
-    // issue promises the report at a time it never comes.
+  test('the description tells the owner the same time the workflow runs at, with a report or without', () => {
+    // Two copies of one fact: the cron line, and the sentence in the footer of
+    // the "Daily status" issue's description. Until D-080 that sentence was
+    // written once, when the post job created the issue (issueBody); now it is
+    // rewritten on every run, whether or not there is a report. If they drift,
+    // the issue promises the report at a time it never comes.
     const found = schedules();
-    const stated = issueText().match(/\b\d{2}:\d{2} UTC\b/g) ?? [];
 
     expect(found.length).toBeGreaterThan(0);
-    for (const schedule of found) {
-      expect(stated).toContain(utcTime(schedule));
+    for (const [morning, text] of Object.entries(descriptions())) {
+      const stated = text.match(/\b\d{2}:\d{2} UTC\b/g) ?? [];
+
+      for (const schedule of found) {
+        expect(stated, `The description ${morning}`).toContain(utcTime(schedule));
+      }
     }
   });
 
-  test("the issue's Oslo times are the ones the workflow runs at, in summer and in winter", () => {
+  test("the description's Oslo times are the ones the workflow runs at, in summer and in winter", () => {
     // The same fact again, on the clock the owner lives by — and the copy a
     // search-and-replace of the UTC time leaves behind. Each time is read
     // beside its own word, so a summer and a winter time that swap places fail
@@ -263,8 +289,10 @@ describe('when it runs', () => {
     // throwing would give one time for both seasons, and a text stating that
     // one time twice would pass the two checks below. This one stops it.
     expect(summer, 'Oslo summer and winter time came out the same.').not.toEqual(winter);
-    expect(timesBeside(issueText(), 'summer')).toEqual(summer);
-    expect(timesBeside(issueText(), 'winter')).toEqual(winter);
+    for (const [morning, text] of Object.entries(descriptions())) {
+      expect(timesBeside(text, 'summer'), `The description ${morning}`).toEqual(summer);
+      expect(timesBeside(text, 'winter'), `The description ${morning}`).toEqual(winter);
+    }
   });
 
   test('a second run queues behind the first rather than cancelling it', () => {
@@ -514,6 +542,8 @@ describe('the script the post job runs', () => {
           '#!/bin/sh',
           `echo "$*" >> "${log}"`,
           'if [ "$1 $2" = "issue list" ]; then echo \'[{"number":9,"title":"Daily status"}]\'; fi',
+          // What the real gh prints after an edit: the issue's URL.
+          'if [ "$1 $2" = "issue edit" ]; then echo "https://github.com/example/repo/issues/$3"; fi',
           'exit 0',
           '',
         ].join('\n'),
@@ -542,19 +572,29 @@ describe('the script the post job runs', () => {
     PING_CONFIGURED: 'true',
   };
 
-  test('posts through the real gh command line, and exits 0 on a good morning', () => {
+  /**
+   * The first line of each call that writes to an issue. The log keeps a
+   * multi-line description on several lines, and its first is the headline.
+   */
+  const issueWrites = (calls) =>
+    calls.filter((call) => /^issue (?:edit|comment|create) /.test(call));
+
+  test('replaces the description through the real gh command line, and exits 0 on a good morning', () => {
+    // D-080: this expected `issue comment 9 --body ### ✅ Healthy`. The
+    // report now replaces the issue's description, and nothing comments.
     const { code, calls } = runScript(WIRED);
 
-    expect(calls.some((call) => call.startsWith('issue comment 9 --body ### ✅ Healthy'))).toBe(
-      true,
-    );
+    expect(issueWrites(calls)).toEqual([`issue edit 9 --body ### ${HEADLINES.healthy}`]);
     expect(code).toBe(0);
   });
 
   test('a failed report makes the process exit non-zero, so the run is red too', () => {
+    // D-080: this expected `issue comment 9 --body ### 🛑`, for the same reason.
     const { code, calls } = runScript({ ...WIRED, REPORT_RESULT: 'failure' });
 
-    expect(calls.some((call) => call.startsWith('issue comment 9 --body ### 🛑'))).toBe(true);
+    expect(issueWrites(calls)).toEqual([
+      `issue edit 9 --body ### ${HEADLINES.action} — no report today`,
+    ]);
     expect(code).toBe(1);
   });
 });
