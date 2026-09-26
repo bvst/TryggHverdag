@@ -257,8 +257,11 @@ function maestroBody({ log, envLog, report, crashes, exit }) {
   ].join('\n');
 }
 
-/** The stand-in adb: emulators by serial, a bokmål device, and a crash buffer when there is one. */
-function deviceAdbBody({ log, devices, crashes }) {
+/**
+ * The stand-in adb: emulators by serial, a device set to `locale` (bokmål
+ * unless a test says otherwise), and a crash buffer when there is one.
+ */
+function deviceAdbBody({ log, devices, crashes, locale = 'nb-NO' }) {
   return [
     '#!/bin/sh',
     `echo "adb $*" >> "${log}"`,
@@ -269,7 +272,7 @@ function deviceAdbBody({ log, devices, crashes }) {
     '  shell)',
     '    case "$*" in',
     '      *ro.kernel.qemu*) case "$serial" in emulator-*) echo 1 ;; esac ;;',
-    '      *locale*) echo "nb-NO" ;;',
+    `      *locale*) echo "${locale}" ;;`,
     '      *boot_completed*) echo 1 ;;',
     '    esac ;;',
     '  logcat)',
@@ -305,8 +308,10 @@ function writeTool(file, body) {
  *   flows?: [string, string][],
  *   maestroExit?: number,
  *   crash?: boolean,
+ *   locale?: string,
  * }} options — `flows` is what Maestro's report says ran; `crash` puts a
- *   crash of the app, and one of another app, in the device's crash buffer
+ *   crash of the app, and one of another app, in the device's crash buffer;
+ *   `locale` is the language the device reports
  */
 async function runPastPreflight({
   args = ['--skip-build'],
@@ -315,6 +320,7 @@ async function runPastPreflight({
   flows = [['app-starts', 'SUCCESS']],
   maestroExit = 0,
   crash = false,
+  locale = 'nb-NO',
 } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'e2e-android-past-preflight-'));
   try {
@@ -362,7 +368,7 @@ async function runPastPreflight({
     });
 
     for (const file of [path.join(bin, 'adb'), path.join(sdk, 'platform-tools', 'adb')]) {
-      writeTool(file, deviceAdbBody({ log, devices, crashes }));
+      writeTool(file, deviceAdbBody({ log, devices, crashes, locale }));
     }
     for (const file of [path.join(bin, 'java'), path.join(jdk, 'bin', 'java')]) {
       writeTool(file, ['#!/bin/sh', `echo "java $*" >> "${log}"`, javaBody(java)].join('\n'));
@@ -404,6 +410,24 @@ async function runPastPreflight({
   }
 }
 
+/**
+ * Reports that do not show a pass, though Maestro exited 0. Kept out of the
+ * test.each call: the test counter reads a table only up to its first `)`.
+ */
+const REPORT_PROBLEMS = [
+  { what: 'no flow ran', flows: [], problem: /no flows ran/i },
+  {
+    what: 'a flow ended in ERROR',
+    flows: [['app-starts', 'ERROR']],
+    problem: /\bapp-starts \(ERROR\)/,
+  },
+  {
+    what: 'a flow was CANCELED',
+    flows: [['app-starts', 'CANCELED']],
+    problem: /\bapp-starts \(CANCELED\)/,
+  },
+];
+
 /** Calls that install onto a device, read its logs, or run a flow. */
 const touchedDevice = (calls) =>
   calls.filter(
@@ -433,6 +457,45 @@ describe('past the preflight', () => {
     expect(code, 'it was killed rather than finishing').not.toBeNull();
     expect(stderr).toMatch(/\bexit(?:ed| code| status)?\b[^\n]*\b1\b/i);
     expect(stderr).toMatch(/\breport\b/i);
+  });
+
+  // The other half of "both have to pass": Maestro exits 0, and its report
+  // says the run did not pass. The exit status says nothing about any of
+  // these, so each one fails on the report alone. Before these, a script that
+  // called judgeReport and then ignored it passed every test here.
+  test.each(REPORT_PROBLEMS)(
+    'INF-06-AC9: Maestro exiting 0 does not pass the run when its report shows $what, and the message says what the report shows',
+    async ({ flows, problem }) => {
+      const { code, stderr, output, calls } = await runPastPreflight({ flows, maestroExit: 0 });
+
+      // Not a preflight stop: the flows were run, and this is the report's verdict.
+      expect(
+        calls.some((call) => /^maestro\b.*\btest\b/.test(call)),
+        output,
+      ).toBe(true);
+      expect(code, output).not.toBe(0);
+      expect(code, 'it was killed rather than finishing').not.toBeNull();
+      expect(stderr).toMatch(problem);
+      expect(output).not.toMatch(/flows? passed/);
+    },
+  );
+
+  test('INF-06-AC9: on a device set to en-US it stops before the flows run, and says they expect bokmål', async () => {
+    // The flow asserts the bokmål strings, so on any other language it would
+    // fail for a reason that says nothing about the app.
+    const { code, output, calls } = await runPastPreflight({ locale: 'en-US' });
+
+    // Not vacuous: the device was asked for its language.
+    expect(
+      calls.some((call) => /^adb\b.*\bgetprop\b.*\blocale\b/.test(call)),
+      output,
+    ).toBe(true);
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    expect(output).toMatch(/bokmål/);
+    expect(output).not.toMatch(/flows? passed/);
+    expect(calls.filter((call) => /^maestro\b.*\btest\b/.test(call))).toEqual([]);
+    expect(touchedDevice(calls)).toEqual([]);
   });
 
   test('INF-06-AC20: every Maestro run has MAESTRO_DISABLE_UPDATE_CHECK=true and MAESTRO_CLI_NO_ANALYTICS, though the caller set neither', async () => {

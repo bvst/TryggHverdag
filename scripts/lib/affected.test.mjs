@@ -403,6 +403,22 @@ function fixtureRepo(overrides = {}) {
 
 const canChangeApp = (files, overrides) => touchesApp(files, { root: fixtureRepo(overrides) });
 
+/** The fixture's root package.json, with these "workspaces". */
+const withWorkspaces = (workspaces) => ({
+  'package.json': JSON.stringify({
+    name: 'fixture',
+    private: true,
+    workspaces,
+    scripts: { 'e2e:android': 'node scripts/e2e-android.mjs' },
+  }),
+});
+
+// Workspace globs that are neither `folder/*` nor a plain folder. `packages/*/*`
+// ends in `/*` like the ones that are read, so only the `*` before that tells
+// them apart. Kept out of the test.each call: the test counter reads a table
+// only up to its first `)`.
+const UNREADABLE_GLOBS = ['packages/**', 'packages/*/*', 'packages/*/src', 'apps/mobile*'];
+
 describe('touchesApp', () => {
   test.each([
     'apps/mobile/src/app/index.tsx',
@@ -545,6 +561,74 @@ describe('touchesApp', () => {
     expect(canChangeApp(['apps/mobile/app.config.ts'], overrides)).toBe(true);
   });
 
+  // The "workspaces" field, read every way this reads it. Only `folder/*` and
+  // plain folders are understood, and anything else is refused, because a glob
+  // this cannot read would leave packages out of the closure without a word.
+
+  test.each(UNREADABLE_GLOBS)(
+    'INF-06-AC13: a workspace glob it cannot read, %s, is an error that names the glob, not a closure without its packages',
+    (glob) => {
+      const overrides = withWorkspaces(['apps/*', glob]);
+
+      expect(() => canChangeApp(['packages/shared/src/index.ts'], overrides)).toThrow(`"${glob}"`);
+    },
+  );
+
+  test('INF-06-AC13: a plain folder in workspaces is followed as a glob would be, with or without a trailing slash', () => {
+    const overrides = withWorkspaces([
+      'apps/mobile',
+      'apps/server',
+      'packages/contracts',
+      'packages/shared/',
+      'packages/config',
+      'packages/test-kit',
+    ]);
+
+    expect(canChangeApp(['packages/contracts/src/index.ts'], overrides)).toBe(true);
+    expect(canChangeApp(['packages/shared/src/index.ts'], overrides)).toBe(true);
+    expect(canChangeApp(['packages/config/eslint/index.mjs'], overrides)).toBe(true);
+    // Not vacuous: a plain folder outside the closure still cannot.
+    expect(canChangeApp(['packages/test-kit/src/index.ts'], overrides)).toBe(false);
+  });
+
+  test('INF-06-AC13: a folder/* entry whose folder does not exist holds no packages, and the entries after it are still followed', () => {
+    const overrides = withWorkspaces(['apps/*', 'tools/*', 'packages/*']);
+
+    expect(canChangeApp(['packages/shared/src/index.ts'], overrides)).toBe(true);
+    expect(canChangeApp(['tools/lint/index.mjs'], overrides)).toBe(false);
+  });
+
+  test('INF-06-AC13: a folder under a workspace glob with no package.json, or one with no name, is not a package and is passed over', () => {
+    const overrides = {
+      'packages/notes/README.md': '# Not a package\n',
+      'packages/unnamed/package.json': JSON.stringify({ private: true }),
+    };
+
+    expect(canChangeApp(['packages/shared/src/index.ts'], overrides)).toBe(true);
+    expect(canChangeApp(['packages/notes/README.md'], overrides)).toBe(false);
+    expect(canChangeApp(['packages/unnamed/index.mjs'], overrides)).toBe(false);
+  });
+
+  test('INF-06-AC13: a root package.json with no workspaces field still answers for the app, the install files and the e2e script', () => {
+    // Which packages count is not asserted here. With no "workspaces" field
+    // there are none to follow, and the import check already stops the build
+    // when package.json and pnpm-workspace.yaml disagree
+    // (packages/config/dependency-cruiser.cjs). What this holds is that the
+    // rest of the answer does not depend on the field being there.
+    const overrides = {
+      'package.json': JSON.stringify({
+        name: 'fixture',
+        private: true,
+        scripts: { 'e2e:android': 'node scripts/e2e-android.mjs' },
+      }),
+    };
+
+    expect(canChangeApp(['apps/mobile/app.config.ts'], overrides)).toBe(true);
+    expect(canChangeApp(['pnpm-lock.yaml'], overrides)).toBe(true);
+    expect(canChangeApp(['scripts/lib/proc.mjs'], overrides)).toBe(true);
+    expect(canChangeApp(['docs/progress.md'], overrides)).toBe(false);
+  });
+
   test('INF-06-AC13: in this repository, the app, the e2e script and its decisions can; the server cannot', () => {
     const here = (file) => touchesApp([file], { root: process.cwd() });
 
@@ -608,4 +692,61 @@ describe('the app answer, as the workflow receives it', () => {
     expect(result.written).toMatch(/^code=true$/m);
     expect(result.written).toMatch(/^app=true$/m);
   });
+
+  // The tests above run against this checkout, whose diff is whatever the
+  // branch holds, so they can only match app=(true|false). An answer forced to
+  // one value passed them. These build the pull request instead, the way the
+  // push-to-main test above builds its condition.
+
+  test('INF-06-AC13: a pull request that changes the app is answered app=true', () => {
+    const dir = pullRequestRepo({ 'apps/mobile/app.config.ts': 'export default { name: "x" };\n' });
+
+    const result = runAffected(['--base', 'origin/main'], { event: 'pull_request', cwd: dir });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain('not a pull request');
+    expect(result.stdout).toMatch(/^app=true$/m);
+    expect(result.stdout).not.toMatch(/^app=false$/m);
+  });
+
+  test('INF-06-AC12: a pull request that changes only documentation is answered app=false, and says so', () => {
+    const dir = pullRequestRepo({ 'docs/notes.md': '# Notes, amended\n' });
+
+    const result = runAffected(['--base', 'origin/main'], { event: 'pull_request', cwd: dir });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain('not a pull request');
+    expect(result.stdout).toMatch(/^app=false$/m);
+    expect(result.stdout).not.toMatch(/^app=true$/m);
+    expect(result.stdout).toMatch(/nothing in this diff can change the app/);
+  });
 });
+
+/**
+ * A repository checked out the way a pull request is: origin/main at the first
+ * commit, and a branch on top of it that changes `files`. Everything is
+ * committed, so the working tree adds nothing to the diff.
+ */
+function pullRequestRepo(files) {
+  const dir = mkdtempSync(join(tmpdir(), 'affected-pr-'));
+  fixtures.push(dir);
+  const git = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
+  const write = (file, text) => {
+    mkdirSync(dirname(join(dir, file)), { recursive: true });
+    writeFileSync(join(dir, file), text);
+  };
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 'test@example.invalid');
+  git('config', 'user.name', 'Test');
+  write('package.json', JSON.stringify({ name: 'fixture', private: true, workspaces: ['apps/*'] }));
+  write('apps/mobile/package.json', manifest('@trygghverdag/mobile'));
+  write('docs/notes.md', '# Notes\n');
+  git('add', '-A');
+  git('commit', '-qm', 'main');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  git('checkout', '-q', '-b', 'the-pull-request');
+  for (const [file, text] of Object.entries(files)) write(file, text);
+  git('add', '-A');
+  git('commit', '-qm', 'the pull request');
+  return dir;
+}

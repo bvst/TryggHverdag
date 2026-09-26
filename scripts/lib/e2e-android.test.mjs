@@ -123,6 +123,27 @@ describe('checkDevices: an Android device has to be connected', () => {
   });
 });
 
+/**
+ * What a `java -version` can print with no version in it. Kept out of the
+ * test.each call: the test counter reads a table only up to its first `)`.
+ */
+const UNREADABLE_JAVA = [
+  {
+    // What macOS's /usr/bin/java stub prints when no JDK is installed.
+    what: "macOS's stub with no JDK behind it",
+    output:
+      'The operation couldn’t be completed. Unable to locate a Java Runtime.\n' +
+      'Please visit http://www.java.com for information on installing Java.\n',
+    printed: 'Unable to locate a Java Runtime',
+  },
+  {
+    // `java --version` rather than `-version`: no quoted version after "version".
+    what: 'the --version format',
+    output: 'openjdk 17.0.12 2024-07-16\nOpenJDK Runtime Environment Temurin-17.0.12+7\n',
+    printed: 'openjdk 17.0.12 2024-07-16',
+  },
+];
+
 describe('checkJava: Java 17 to 21 has to be usable', () => {
   test('INF-06-AC9: no Java at all is a failure that names Java 17', () => {
     const result = checkJava(null);
@@ -172,6 +193,19 @@ describe('checkJava: Java 17 to 21 has to be usable', () => {
   ])('INF-06-AC9: Java 17 to 21 is usable: %j', (output) => {
     expect(checkJava(output).ok).toBe(true);
   });
+
+  test.each(UNREADABLE_JAVA)(
+    'INF-06-AC9: a Java whose version cannot be read is a failure that says so and what it printed: $what',
+    ({ output, printed }) => {
+      const result = checkJava(output);
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toMatch(/Could not read the Java version/);
+      expect(result.message).toContain(printed);
+      expect(result.message).toMatch(/\bJAVA_HOME\b/);
+      expect(result.message).toMatch(/\bJDK 17\b/);
+    },
+  );
 });
 
 describe('checkMaestro: the pinned Maestro has to run', () => {

@@ -71,6 +71,7 @@ describe('the app config', () => {
     // (D-016). A restore would also move a login bound to one phone onto
     // another. Expo writes this setting into the generated manifest as
     // android:allowBackup, and Android's default, when it is left out, is true.
+    // What Expo writes is checked in scripts/mobile-app.test.mjs.
     expect(resolvedConfig().android?.allowBackup).toBe(false);
   });
 });

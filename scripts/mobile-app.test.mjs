@@ -10,6 +10,8 @@
 //         root scripts that hand over to the app.
 //   AC17  what Android actually links holds no expo-updates, whatever brought
 //         it in. apps/mobile/app.config.test.ts checks what is declared.
+//   AC19  the manifest Expo generates turns Android's cloud backup off.
+//         apps/mobile/app.config.test.ts checks the field in the config.
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -135,6 +137,47 @@ describe('what Android links', () => {
   test('INF-06-AC16: expo-dev-client is declared by the app and linked into Android', () => {
     expect(manifest().dependencies?.['expo-dev-client']).toBeDefined();
     expect(androidAutolinked()).toContain('expo-dev-client');
+  });
+});
+
+/**
+ * The app's main AndroidManifest.xml as `expo prebuild` would generate it from
+ * app.config.ts, asked of the Expo CLI that the app itself depends on.
+ * `expo config --type introspect` runs every config plugin in memory and
+ * writes nothing. The manifest comes back the way xml2js reads XML, with each
+ * element's attributes under `$`.
+ */
+function generatedAndroidManifest() {
+  const expoManifest = createRequire(path.join(APP, 'package.json')).resolve('expo/package.json');
+  const { bin } = readJson(expoManifest);
+  const cli = path.join(path.dirname(expoManifest), typeof bin === 'string' ? bin : bin.expo);
+  const result = spawnSync(process.execPath, [cli, 'config', '--type', 'introspect', '--json'], {
+    cwd: APP,
+    encoding: 'utf8',
+    // Nothing leaves for a tooling vendor that does not have to (D-081).
+    env: {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      EXPO_NO_TELEMETRY: '1',
+      EXPO_OFFLINE: '1',
+    },
+    timeout: 60_000,
+  });
+  if (result.status !== 0) {
+    throw new Error(`expo config --type introspect failed:\n${result.stderr}`);
+  }
+  return JSON.parse(result.stdout)._internal.modResults.android.manifest.manifest;
+}
+
+describe('the generated manifest', () => {
+  test('INF-06-AC19: the manifest Expo generates for the app has android:allowBackup="false"', () => {
+    // apps/mobile/app.config.test.ts holds the field in the config. This holds
+    // what Expo writes from it, which is what Android reads. Android's default,
+    // when the attribute is left out, is true, so a missing one fails too.
+    const applications = generatedAndroidManifest().application ?? [];
+
+    expect(applications).toHaveLength(1);
+    expect(applications[0]?.$?.['android:allowBackup']).toBe('false');
   });
 });
 
