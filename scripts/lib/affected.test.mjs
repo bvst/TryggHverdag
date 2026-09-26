@@ -512,6 +512,39 @@ describe('touchesApp', () => {
     );
   });
 
+  // Amended 2026-09-26. An e2e:android script whose entry file cannot be read
+  // from it used to give an empty import closure, and so a "no" for every
+  // change to the script and its modules: android-e2e green without running.
+  test.each([['pnpm --filter @trygghverdag/mobile run e2e'], ['maestro test apps/mobile/e2e']])(
+    'INF-06-AC13: an e2e:android script that names no entry file it can read is an error, not an empty closure: %s',
+    (command) => {
+      const overrides = {
+        'package.json': JSON.stringify({
+          name: 'fixture',
+          private: true,
+          workspaces: ['apps/*', 'packages/*'],
+          scripts: { 'e2e:android': command },
+        }),
+      };
+
+      expect(() => canChangeApp(['scripts/lib/e2e-android.mjs'], overrides)).toThrow(/e2e:android/);
+    },
+  );
+
+  test('INF-06-AC13: with no e2e:android script at all, there is no closure to follow, and that is not an error', () => {
+    const overrides = {
+      'package.json': JSON.stringify({
+        name: 'fixture',
+        private: true,
+        workspaces: ['apps/*', 'packages/*'],
+        scripts: {},
+      }),
+    };
+
+    expect(canChangeApp(['scripts/lib/e2e-android.mjs'], overrides)).toBe(false);
+    expect(canChangeApp(['apps/mobile/app.config.ts'], overrides)).toBe(true);
+  });
+
   test('INF-06-AC13: in this repository, the app, the e2e script and its decisions can; the server cannot', () => {
     const here = (file) => touchesApp([file], { root: process.cwd() });
 

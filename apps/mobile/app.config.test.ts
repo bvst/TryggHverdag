@@ -64,4 +64,13 @@ describe('the app config', () => {
   test('INF-06-AC10: the Android application ID is defined here, in reverse-domain form', () => {
     expect(resolvedConfig().android?.package).toMatch(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/);
   });
+
+  test("INF-06-AC19: the release app keeps nothing in Android's cloud backup", () => {
+    // Auto Backup would copy what the app stores, such as a session token or a
+    // journey, to Google Drive, outside the providers chosen for the EEA
+    // (D-016). A restore would also move a login bound to one phone onto
+    // another. Expo writes this setting into the generated manifest as
+    // android:allowBackup, and Android's default, when it is left out, is true.
+    expect(resolvedConfig().android?.allowBackup).toBe(false);
+  });
 });

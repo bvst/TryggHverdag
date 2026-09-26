@@ -15,7 +15,16 @@
 // INSTALLING, RUNNING, SUCCESS, ERROR, CANCELED, STOPPED or WARNING, so "has
 // no <failure>" is not the same as "passed".
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
@@ -84,9 +93,37 @@ describe('checkDevices: an Android device has to be connected', () => {
 
     expect(result).toMatchObject({ ok: true, serial: 'emulator-5554' });
   });
+
+  // Amended 2026-09-26: it never installs onto, or reads crash logs from, a
+  // real phone. An emulator is known by its adb serial, emulator-<port>. Both
+  // serials below are made up: a USB serial, and the form wireless debugging uses.
+  test.each(['R5CT21ABCDE', 'adb-R5CT21ABCDE-Xy9Zq1._adb-tls-connect._tcp'])(
+    'INF-06-AC9: a real phone, %s, is refused even when ready, and the message says only emulators are used',
+    (serial) => {
+      const result = checkDevices(`List of devices attached\n${serial}\tdevice\n\n`);
+
+      expect(result.ok).toBe(false);
+      expect(result.serial).toBeUndefined();
+      expect(result.message).toMatch(/emulator/i);
+      expect(result.message).toMatch(/\b(real|physical)\b|\bphones?\b/i);
+      expect(result.message).not.toMatch(/no Android device is connected/i);
+    },
+  );
+
+  test('INF-06-AC9: with a real phone and an emulator both ready, the emulator is used, whatever the order', () => {
+    const phoneFirst = checkDevices(
+      'List of devices attached\nR5CT21ABCDE\tdevice\nemulator-5554\tdevice\n\n',
+    );
+    const emulatorFirst = checkDevices(
+      'List of devices attached\nemulator-5556\tdevice\nR5CT21ABCDE\tdevice\n\n',
+    );
+
+    expect(phoneFirst).toMatchObject({ ok: true, serial: 'emulator-5554' });
+    expect(emulatorFirst).toMatchObject({ ok: true, serial: 'emulator-5556' });
+  });
 });
 
-describe('checkJava: Java 17 or newer has to be usable', () => {
+describe('checkJava: Java 17 to 21 has to be usable', () => {
   test('INF-06-AC9: no Java at all is a failure that names Java 17', () => {
     const result = checkJava(null);
 
@@ -97,6 +134,7 @@ describe('checkJava: Java 17 or newer has to be usable', () => {
   test.each([
     ['openjdk version "11.0.22" 2024-01-16\nOpenJDK Runtime Environment Temurin-11.0.22+7\n'],
     ['java version "1.8.0_401"\nJava SE Runtime Environment build 1.8.0_401-b10\n'],
+    ['openjdk version "16.0.2" 2021-07-20\n'],
   ])('INF-06-AC9: an older Java is a failure that names Java 17: %j', (output) => {
     const result = checkJava(output);
 
@@ -104,11 +142,34 @@ describe('checkJava: Java 17 or newer has to be usable', () => {
     expect(result.message).toMatch(/Java 17/);
   });
 
+  // Amended 2026-09-26. Java 25 passed a "17 or newer" check, and the native
+  // build then failed after about 18 minutes. Too new is refused up front, the
+  // same way too old is, and the message says what to do about it.
+  test.each([
+    ['openjdk version "22.0.2" 2024-07-16\n'],
+    ['openjdk version "23.0.1" 2024-10-15\n'],
+    ['openjdk version "25.0.3" 2026-04-21\nOpenJDK Runtime Environment build 25.0.3\n'],
+  ])('INF-06-AC9: a Java newer than 21 is a failure, not a pass: %j', (output) => {
+    expect(checkJava(output).ok).toBe(false);
+  });
+
+  test.each([
+    { what: 'no Java at all', output: null },
+    { what: 'Java 16', output: 'openjdk version "16.0.2" 2021-07-20\n' },
+    { what: 'Java 22', output: 'openjdk version "22.0.2" 2024-07-16\n' },
+    { what: 'Java 25', output: 'openjdk version "25.0.3" 2026-04-21\n' },
+  ])('INF-06-AC9: with $what, the message says to set JAVA_HOME to a JDK 17', ({ output }) => {
+    const result = checkJava(output);
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toMatch(/\bJAVA_HOME\b/);
+    expect(result.message).toMatch(/\bJDK 17\b/);
+  });
+
   test.each([
     ['openjdk version "17.0.12" 2024-07-16\n'],
     ['openjdk version "21.0.4" 2024-07-16 LTS\n'],
-    ['openjdk version "25.0.3" 2026-04-21\nOpenJDK Runtime Environment build 25.0.3\n'],
-  ])('INF-06-AC9: Java 17 or newer is usable: %j', (output) => {
+  ])('INF-06-AC9: Java 17 to 21 is usable: %j', (output) => {
     expect(checkJava(output).ok).toBe(true);
   });
 });
@@ -261,6 +322,57 @@ function envOf(argv) {
   );
 }
 
+/**
+ * A pattern as Maestro reads a text selector: a Java regular expression that
+ * has to match the element's whole text. JavaScript reads backslash escapes of
+ * punctuation the same way; Java's \Q…\E quoting is spelled out first, so the
+ * test holds whichever of the two the script uses.
+ */
+function maestroPattern(pattern) {
+  const quoted = pattern.replace(/\\Q([\s\S]*?)(?:\\E|$)/g, (_all, text) =>
+    text.replace(/[\\^$.*+?()[\]{}|/-]/g, '\\$&'),
+  );
+  return new RegExp(`^(?:${quoted})$`);
+}
+
+/**
+ * The text a Maestro pattern stands for when it is a plain literal, or null
+ * when it is not: every character that means something to a regular
+ * expression has to be escaped, with a backslash or inside \Q…\E.
+ */
+function literalOf(pattern) {
+  let text = '';
+  for (let at = 0; at < pattern.length; at += 1) {
+    const char = pattern.charAt(at);
+    const next = pattern.charAt(at + 1);
+    if (char === '\\' && next === 'Q') {
+      const end = pattern.indexOf('\\E', at + 2);
+      text += pattern.slice(at + 2, end === -1 ? pattern.length : end);
+      at = end === -1 ? pattern.length : end + 1;
+    } else if (char === '\\' && next !== '' && !/[A-Za-z0-9]/.test(next)) {
+      text += next;
+      at += 1;
+    } else if ('\\^$.*+?()[]{}|'.includes(char)) {
+      return null;
+    } else {
+      text += char;
+    }
+  }
+  return text;
+}
+
+/**
+ * Texts that read differently as a pattern, each with a text the unescaped
+ * pattern would also match. Kept out of the test.each call because HK-05's
+ * test counter stops at the first closing bracket inside one.
+ */
+const LOOKALIKES = [
+  { field: 'TITLE', text: 'Hjem (trygt)? Ja+', lookalike: 'Hjem trygt Jaaa' },
+  { field: 'STATUS', text: 'Klar? 1+1 er [to].', lookalike: 'Kla 11 er tX' },
+  { field: 'STATUS', text: 'Nesten (ferdig', lookalike: 'Nesten ferdig' },
+  { field: 'TITLE', text: 'a.b*c^d$e|f{2}g\\h', lookalike: 'ffgh' },
+];
+
 describe('maestroTestCommand: every flow, with a JUnit report', () => {
   const translations = { placeholder: { title: 'Tittel', status: 'Statuslinje' } };
   const argv = maestroTestCommand({
@@ -301,12 +413,42 @@ describe('maestroTestCommand: every flow, with a JUnit report', () => {
     );
 
     expect(Object.keys(env).sort()).toEqual(used.sort());
-    expect(env).toEqual({
-      APP_ID: 'no.example.placeholder',
-      TITLE: nb.placeholder.title,
-      STATUS: nb.placeholder.status,
-    });
+    expect(env.APP_ID).toBe('no.example.placeholder');
+    // TITLE and STATUS arrive escaped for Maestro's regular expressions, so
+    // what is compared is the text each one stands for: exactly nb.json's.
+    // The status line ends in a full stop, which unescaped matches anything.
+    expect(literalOf(env.TITLE ?? '')).toBe(nb.placeholder.title);
+    expect(literalOf(env.STATUS ?? '')).toBe(nb.placeholder.status);
   });
+
+  // Amended 2026-09-26. Maestro reads a text selector as a regular expression.
+  // Unescaped, a title with a bracket, a question mark or a plus also matches
+  // text the app does not show, so a flow could pass on the wrong screen; an
+  // unbalanced bracket stops the flow with a pattern error instead.
+  test.each(LOOKALIKES)(
+    'INF-06-AC11: $field arrives escaped, so Maestro matches $text and nothing like it',
+    ({ field, text, lookalike }) => {
+      const other = 'Vanlig tekst';
+      const env = envOf(
+        maestroTestCommand({
+          maestro: 'maestro',
+          report: 'report.xml',
+          appId: 'no.example.placeholder',
+          translations: {
+            placeholder: {
+              title: field === 'TITLE' ? text : other,
+              status: field === 'STATUS' ? text : other,
+            },
+          },
+        }),
+      );
+      const sent = env[field] ?? '';
+
+      expect(literalOf(sent)).toBe(text);
+      expect(maestroPattern(sent).test(text)).toBe(true);
+      expect(maestroPattern(sent).test(lookalike)).toBe(false);
+    },
+  );
 });
 
 describe('the flows themselves', () => {
@@ -353,5 +495,85 @@ describe('the pinned Maestro', () => {
         },
       }),
     ).rejects.toThrow(/does not match/);
+  });
+
+  // Maestro ships as a folder: a launcher under bin/ that starts the jars
+  // under lib/. The whole folder has to arrive, or the launcher has nothing to
+  // start. pinned-binary.mjs unpacks a single binary and a folder the same way,
+  // and these hold that way from outside, through ensureMaestro.
+
+  /** What unzipping Maestro's archive leaves: the launcher and the jars beside it. */
+  const unpackMaestro = (_archive, into) => {
+    mkdirSync(path.join(into, 'maestro', 'bin'), { recursive: true });
+    mkdirSync(path.join(into, 'maestro', 'lib'), { recursive: true });
+    writeFileSync(path.join(into, 'maestro', 'bin', 'maestro'), '#!/bin/sh\necho 2.10.0\n');
+    writeFileSync(path.join(into, 'maestro', 'lib', 'maestro-cli.jar'), 'pretend jar');
+  };
+
+  test('INF-06-AC9: a download that matches is unpacked whole, launcher and jars, and the launcher can be run', async () => {
+    const root = scratch();
+    const archive = Buffer.from('pretend maestro.zip');
+
+    const maestro = await ensureMaestro({
+      root,
+      sha256: sha256(archive),
+      fetchArchive: () => Promise.resolve(archive),
+      extract: unpackMaestro,
+    });
+    const home = path.dirname(path.dirname(maestro));
+
+    expect(maestro.startsWith(root)).toBe(true);
+    expect(maestro).toContain(MAESTRO_VERSION);
+    expect(maestro.endsWith(path.join('maestro', 'bin', 'maestro'))).toBe(true);
+    expect(statSync(maestro).mode & 0o111).not.toBe(0);
+    expect(readFileSync(path.join(home, 'lib', 'maestro-cli.jar'), 'utf8')).toBe('pretend jar');
+    // The tool and nothing else: the downloaded archive is not kept beside it.
+    expect(readdirSync(path.dirname(home))).toEqual(['maestro']);
+  });
+
+  test('INF-06-AC9: once it is there, it is not downloaded again', async () => {
+    const root = scratch();
+    const archive = Buffer.from('pretend maestro.zip');
+    let downloads = 0;
+    const options = {
+      root,
+      sha256: sha256(archive),
+      fetchArchive: () => {
+        downloads += 1;
+        return Promise.resolve(archive);
+      },
+      extract: unpackMaestro,
+    };
+
+    const first = await ensureMaestro(options);
+    const second = await ensureMaestro(options);
+
+    expect(second).toBe(first);
+    expect(downloads).toBe(1);
+  });
+
+  test('INF-06-AC9: what an interrupted run left, with no launcher in it, is replaced rather than mixed in', async () => {
+    // A stray jar left beside the new ones would be on Maestro's classpath.
+    const root = scratch();
+    const archive = Buffer.from('pretend maestro.zip');
+    const first = await ensureMaestro({
+      root,
+      sha256: sha256(archive),
+      fetchArchive: () => Promise.resolve(archive),
+      extract: unpackMaestro,
+    });
+    const home = path.dirname(path.dirname(first));
+    rmSync(first);
+    writeFileSync(path.join(home, 'lib', 'left-over.jar'), 'from an interrupted run');
+
+    const maestro = await ensureMaestro({
+      root,
+      sha256: sha256(archive),
+      fetchArchive: () => Promise.resolve(archive),
+      extract: unpackMaestro,
+    });
+
+    expect(existsSync(maestro)).toBe(true);
+    expect(readdirSync(path.join(home, 'lib'))).toEqual(['maestro-cli.jar']);
   });
 });

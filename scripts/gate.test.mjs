@@ -401,10 +401,58 @@ describe('the ruleset the owner imports', () => {
   });
 });
 
+/** The app's package name: a hand-over names exactly this, and nothing that merely contains "mobile". */
+const APP_PACKAGE = '@trygghverdag/mobile';
+
+/**
+ * One `pnpm …` command, read the way pnpm reads it: its selectors, its other
+ * options before the script, and the script it runs. Null for anything that is
+ * not a pnpm command.
+ *
+ * @param {string} command
+ */
+function pnpmCall(command) {
+  const words = command.trim().split(/\s+/);
+  if (words[0] !== 'pnpm') return null;
+  const filters = [];
+  const dirs = [];
+  const flags = [];
+  let at = 1;
+  while (at < words.length && (words[at] ?? '').startsWith('-')) {
+    const word = words[at] ?? '';
+    if (word === '--filter' || word === '-F') {
+      filters.push(words[at + 1] ?? '');
+      at += 2;
+    } else if (word === '--dir' || word === '-C') {
+      dirs.push(words[at + 1] ?? '');
+      at += 2;
+    } else {
+      if (word.startsWith('--filter=')) filters.push(word.slice('--filter='.length));
+      else if (word.startsWith('--dir=')) dirs.push(word.slice('--dir='.length));
+      else flags.push(word);
+      at += 1;
+    }
+  }
+  if (words[at] === 'run') at += 1;
+  return { filters, dirs, flags, script: words[at] };
+}
+
+/** The commands a root script chains, each a pnpm call or null. */
+const commandsOf = (script) => script.split(/&&|\|\||;/).map(pnpmCall);
+
+/** True when a pnpm call hands over to the app, by its exact package name or its exact folder. */
+const toApp = (call) =>
+  call !== null &&
+  (call.filters.length > 0
+    ? call.filters.every((filter) => filter === APP_PACKAGE)
+    : call.dirs.length > 0 && call.dirs.every((dir) => dir.replace(/\/$/, '') === 'apps/mobile'));
+
 /**
  * A root script, followed into the app's own scripts wherever it hands over to
  * one: `pnpm --filter @trygghverdag/mobile run test`, `pnpm -C apps/mobile test`.
- * The first entry is the root script itself.
+ * The first entry is the root script itself. A filter that only contains
+ * "mobile" is not followed: pnpm would read it as another selector, and a
+ * selector that matches nothing runs nothing.
  */
 function scriptChain(name) {
   const own = scripts[name] ?? '';
@@ -412,12 +460,9 @@ function scriptChain(name) {
   const app = existsSync(appManifest)
     ? (JSON.parse(readFileSync(appManifest, 'utf8')).scripts ?? {})
     : {};
-  const handedOver = [
-    ...own.matchAll(
-      /(?:--filter[= ]|-F ?)\S*mobile\S*\s+(?:run\s+)?([\w:-]+)|(?:--dir[= ]|-C ?)\S*apps\/mobile\S*\s+(?:run\s+)?([\w:-]+)/g,
-    ),
-  ]
-    .map((match) => match[1] ?? match[2])
+  const handedOver = commandsOf(own)
+    .filter(toApp)
+    .map((call) => call?.script ?? '')
     .filter((script) => app[script] !== undefined)
     .map((script) => app[script]);
   return [own, ...handedOver];
@@ -478,6 +523,46 @@ describe('the unit run covers both test runners', () => {
     expect(chain).toMatch(/\bjest\b[^\n]*--coverage\b/);
     expect(own).not.toMatch(/;|\|\|/);
     expect(chain).not.toMatch(/passWithNoTests/);
+  });
+
+  // Amended 2026-09-26. In pnpm 10 a --filter that matches nothing exits 0, so
+  // a renamed package or a typo in the selector would skip jest-expo and the
+  // run would still pass. --fail-if-no-match makes that a failure, and it has
+  // to come before the script name: after it, pnpm hands it to jest instead.
+  test.each(['test:unit', 'test:coverage'])(
+    'INF-06-AC6: %s hands over to the app with exactly --filter @trygghverdag/mobile and --fail-if-no-match',
+    (name) => {
+      const handOvers = commandsOf(scripts[name] ?? '').filter(
+        (call) => call !== null && (call.filters.length > 0 || call.dirs.length > 0),
+      );
+
+      expect(handOvers).toHaveLength(1);
+      expect(handOvers[0]?.filters).toEqual([APP_PACKAGE]);
+      expect(handOvers[0]?.dirs).toEqual([]);
+      expect(handOvers[0]?.flags).toContain('--fail-if-no-match');
+    },
+  );
+
+  test.each([
+    ['pnpm --filter @trygghverdag/mobile-old run test'],
+    ['pnpm --filter ./apps/mobile-legacy run test'],
+    ['pnpm --filter *mobile* run test'],
+  ])(
+    'INF-06-AC6: a selector that only contains mobile is not a hand-over to the app: %s',
+    (command) => {
+      expect(commandsOf(command).filter(toApp)).toEqual([]);
+    },
+  );
+
+  test('INF-06-AC6: the exact selector is a hand-over, with its options before the script or not', () => {
+    expect(
+      commandsOf(
+        'vitest run && pnpm --filter @trygghverdag/mobile --fail-if-no-match run test',
+      ).filter(toApp),
+    ).toEqual([
+      { filters: [APP_PACKAGE], dirs: [], flags: ['--fail-if-no-match'], script: 'test' },
+    ]);
+    expect(commandsOf('pnpm --filter=@trygghverdag/mobile test').filter(toApp)).toHaveLength(1);
   });
 });
 
@@ -579,6 +664,33 @@ const guardOf = (step) => /^\s*-?\s*if:\s*(.+)$/m.exec(step)?.[1] ?? '';
 const bootsEmulator = (step) =>
   /uses: reactivecircus\/android-emulator-runner@/.test(step) || /\bemulator\s+(-avd|@)/.test(step);
 
+/**
+ * A ci.yml job's own `env:` block, as name to value with any quotes taken off,
+ * or an empty object when the job has none.
+ */
+function jobEnv(id) {
+  const lines = (ciJob(id) ?? '').split('\n');
+  const at = lines.findIndex((line) => /^ {4}env:\s*$/.test(line));
+  const env = {};
+  if (at === -1) return env;
+  for (const line of lines.slice(at + 1)) {
+    if (!/^ {6}\S/.test(line)) break;
+    const match = /^ {6}([A-Za-z_][A-Za-z0-9_]*):\s*(.*?)\s*(?:#.*)?$/.exec(line);
+    if (match?.[1] !== undefined) env[match[1]] = (match[2] ?? '').replace(/^(['"])(.*)\1$/, '$2');
+  }
+  return env;
+}
+
+/** The names a piece of workflow text reads as `${{ env.NAME }}`. */
+const envNames = (text) => [...text.matchAll(/\$\{\{\s*env\.(\w+)\s*\}\}/g)].map((m) => m[1] ?? '');
+
+/** The text with every `${{ env.NAME }}` replaced by that job env value. */
+const resolveEnv = (text, env) =>
+  text.replace(/\$\{\{\s*env\.(\w+)\s*\}\}/g, (whole, name) => env[name] ?? whole);
+
+/** The step that runs the flows: the one that runs e2e:android and is not the build. */
+const runsFlows = (step) => /pnpm run e2e:android\b/.test(step) && !/--build-only\b/.test(step);
+
 describe('the android-e2e job in ci.yml', () => {
   test('INF-06-AC12: there is a job named exactly android-e2e, the check the merge rules expect', () => {
     expect(ciJob('android-e2e')).not.toBeNull();
@@ -639,7 +751,75 @@ describe('the android-e2e job in ci.yml', () => {
   });
 
   test('INF-06-AC10: the emulator is x86_64, the one ABI the build contains', () => {
-    expect(ciSteps('android-e2e').find(bootsEmulator)).toMatch(/\bx86_64\b/);
+    // Read through the job's env, where the emulator settings are written once.
+    const env = jobEnv('android-e2e');
+    const emulators = ciSteps('android-e2e').filter(bootsEmulator);
+
+    expect(emulators.length).toBeGreaterThan(0);
+    for (const step of emulators) {
+      expect(/^\s*arch:\s*(\S+)\s*$/m.exec(resolveEnv(step, env))?.[1]).toBe('x86_64');
+    }
+  });
+
+  test('INF-06-AC12: the step that runs the flows is guarded by exactly the app answer, and by nothing narrower', () => {
+    // Amended 2026-09-26. A guard that also asked for main would still contain
+    // the app answer, so a contains-check would pass, while on a pull request
+    // the flows would never run and the check would be green all the same.
+    const flows = ciSteps('android-e2e').filter(runsFlows);
+
+    expect(flows).toHaveLength(1);
+    expect(guardOf(flows[0] ?? '')).toBe("steps.affected.outputs.app == 'true'");
+  });
+
+  test('INF-06-AC20: Maestro is told to send nothing: MAESTRO_DISABLE_UPDATE_CHECK is exactly true, and MAESTRO_CLI_NO_ANALYTICS is set', () => {
+    // Maestro reads MAESTRO_DISABLE_UPDATE_CHECK with Boolean.parseBoolean, so
+    // "1" leaves the update check on, and every run sends a persistent ID to
+    // api.copilot.mobile.dev.
+    const env = jobEnv('android-e2e');
+
+    expect(env.MAESTRO_DISABLE_UPDATE_CHECK).toBe('true');
+    expect(env.MAESTRO_CLI_NO_ANALYTICS).toBeDefined();
+    expect(env.MAESTRO_CLI_NO_ANALYTICS).not.toBe('');
+  });
+
+  test('INF-06-AC12: its checkout keeps no credentials behind for later steps', () => {
+    const [checkout] = ciSteps('android-e2e');
+
+    expect(checkout).toMatch(/uses: actions\/checkout@/);
+    expect(checkout).toMatch(/\bpersist-credentials:\s*false\b/);
+  });
+
+  test('INF-06-AC12: the emulator settings are written once, as job env, which the snapshot key and every emulator step read', () => {
+    // Amended 2026-09-26. Written out in each place, a change to one copy
+    // leaves a snapshot cached under a key that no longer says what it holds.
+    const env = jobEnv('android-e2e');
+    const steps = ciSteps('android-e2e');
+    const emulators = steps.filter(bootsEmulator);
+    const keys = steps
+      .filter((step) => step.includes('~/.android/avd'))
+      .map((step) => /^\s*key:\s*(.+)$/m.exec(step)?.[1] ?? '');
+    const settings = [...new Set(keys.flatMap(envNames))];
+    const text = (ciJob('android-e2e') ?? '')
+      .split('\n')
+      .filter((line) => !/^\s*-?\s*name:/.test(line))
+      .join('\n');
+    const timesWritten = (value) =>
+      text.split(new RegExp(`(?<![\\w.])${value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w.])`))
+        .length - 1;
+
+    expect(emulators.length).toBeGreaterThan(0);
+    expect(keys.length).toBeGreaterThan(0);
+    // At least the image, the target, the ABI, the profile and the locale.
+    expect(settings.length).toBeGreaterThanOrEqual(5);
+    for (const name of settings) {
+      expect(env[name], `${name} is not in the job's env`).toBeDefined();
+      for (const step of emulators) {
+        expect(step, `an emulator step does not read ${name}`).toMatch(
+          new RegExp(`\\benv\\.${name}\\b`),
+        );
+      }
+      expect(timesWritten(env[name] ?? ''), `${name}'s value is written more than once`).toBe(1);
+    }
   });
 
   test('INF-06-AC12: it is bounded, holds no secret, and never tolerates or retries a failure', () => {

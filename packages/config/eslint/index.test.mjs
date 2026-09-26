@@ -44,11 +44,62 @@ describe('AR-06: safety code must not keep time in memory', () => {
   });
 });
 
+/**
+ * The messages the clock rules produce for `code` in a file at `file`, with the
+ * rules applied the way the repository applies them: to CLOCK_FREE_PATHS, and
+ * nowhere else. Every .ts and .tsx file is linted; only those paths get the
+ * clock rules.
+ */
+const complaintsAt = (file, code) =>
+  linter
+    .verify(
+      code,
+      [
+        {
+          files: ['**/*.{ts,tsx}'],
+          languageOptions: { parserOptions: { ecmaFeatures: { jsx: true } } },
+        },
+        { files: CLOCK_FREE_PATHS, rules: clockFreeRules },
+      ],
+      file,
+    )
+    .map((m) => m.message);
+
+/** A screen in the safety core that reads the clock while it renders. */
+const COMPONENT = 'export const Countdown = () => <Text>{Date.now()}</Text>;';
+
 describe('the paths these rules cover', () => {
   test('the server domain and the app safety core, which is where decisions are made', () => {
+    // The safety core's .tsx files too, amended 2026-09-26: .tsx is normal in
+    // the app, and a component in the safety core is safety code like any other.
     expect(CLOCK_FREE_PATHS).toEqual([
       'apps/server/src/domain/**/*.ts',
-      'apps/mobile/src/safety-core/**/*.ts',
+      'apps/mobile/src/safety-core/**/*.{ts,tsx}',
     ]);
+  });
+
+  test.each([
+    'apps/mobile/src/safety-core/countdown.tsx',
+    'apps/mobile/src/safety-core/journey/check-in-view.tsx',
+  ])('AR-03: a .tsx file in the app safety core may not read the clock either: %s', (file) => {
+    expect(complaintsAt(file, COMPONENT)).toEqual([expect.stringContaining('AR-03')]);
+  });
+
+  test('AR-06: nor keep time in memory there', () => {
+    expect(
+      complaintsAt('apps/mobile/src/safety-core/countdown.tsx', 'setInterval(tick, 1000);'),
+    ).toEqual([expect.stringContaining('AR-06')]);
+  });
+
+  test('a .ts file in the app safety core is still covered', () => {
+    expect(complaintsAt('apps/mobile/src/safety-core/journey.ts', 'const t = Date.now();')).toEqual(
+      [expect.stringContaining('AR-03')],
+    );
+  });
+
+  test('a .tsx file outside the safety core is not these rules to judge', () => {
+    // Not vacuous the other way either: the same component elsewhere passes,
+    // so the complaints above come from the path, not from the harness.
+    expect(complaintsAt('apps/mobile/src/app/index.tsx', COMPONENT)).toEqual([]);
   });
 });
