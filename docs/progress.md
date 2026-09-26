@@ -54,6 +54,10 @@ console. They are outside Terraform, and the app costs money.
 **A-14 — the cloud environment's allowlist is applied** (2026-09-24); it
 reached the running session without a restart. A setup script is still to come.
 
+**A-27 — raise the daily-status check's grace in Healthchecks.io to 8 hours**
+(about a minute; agreed 2026-09-26). GitHub starts the report hours late by
+varying amounts, and 3 hours' grace could page for a run that happened (D-080).
+
 **A-17 is done** (2026-09-25): the owner sees the daily report on the phone,
 as the GitHub issue [#19](https://github.com/bvst/TryggHverdag/issues/19). That
 was INF-09's done-criterion, so INF-09 is done.

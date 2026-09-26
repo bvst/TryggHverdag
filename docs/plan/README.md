@@ -68,6 +68,7 @@ session.
 | A-24 | After the INF-08 pull request merges: run `infra-staging` with `plan`, then `apply`, then confirm the check leaves `new` — see [monitoring-setup.md](monitoring-setup.md) | Monitoring (INF-08, REL-08) | ⬜ Open |
 | A-25 | Add the UptimeRobot keyword monitor and install its mobile app — see [monitoring-setup.md](monitoring-setup.md) | Monitoring (INF-08, REL-08, D-079) | ⬜ Open |
 | A-26 | The drill: stop the staging app and confirm both monitors page you within 5 minutes — see [monitoring-setup.md](monitoring-setup.md) | INF-08's done-criterion | ⬜ Open |
+| A-27 | In Healthchecks.io, open the `daily-status` check and set **Grace** to **8 hours** (Period stays 1 day). About a minute | GitHub starts the daily report about 4¾ hours late, by amounts that vary; with 3 hours' grace an on-time run followed by a late one could page you for a run that happened, and a false page teaches you to ignore the real one. A genuinely missed report now pages at about 32 hours instead of 27 (D-080) | ⬜ Open — agreed by the owner 2026-09-26 |
 
 ## Why this order
 The specialised agents and skills (Section 7) are where your quality bar gets

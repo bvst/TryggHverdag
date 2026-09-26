@@ -1897,5 +1897,12 @@ any other path is work, not a candidate for the same treatment.
   `/1`; a morning with no run at all pages after the grace period. The
   description carries no @mention: on an edit it would notify nobody, and D-076
   had it only for the daily push that is gone.
+- **The Healthchecks.io grace goes from 3 to 8 hours** (A-27, owner's decision
+  2026-09-26). With runs starting about 4¾ hours late by amounts that vary, an
+  on-time run followed by a late one can be ~29 hours apart, past 1 day + 3
+  hours: a page for a run that happened, which teaches the owner to ignore the
+  real one. A genuinely missed report now pages at ~32 hours. The footer's
+  "unchanged for more than a day and a half" stays true for any grace up to
+  12 hours.
 - **Consequences:** #19 keeps the comments from before this decision. Closing it
   makes the next run open a clean dashboard issue; that is the owner's choice.
