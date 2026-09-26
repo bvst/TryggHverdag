@@ -18,4 +18,8 @@ is rewritten against main's version, and the branch is audited again. The test c
 **How to apply:** if main changed the same test, treat the RG-03 reason as unverified until it is written against
 main's version of the test. Say that the audited diff is not the diff that will merge. Surface it as a scope
 question, whether the fix is still needed, instead of leaving the caller to find the conflict.
+Outcome: it was re-cut on 1c0b575 as `fix/BUG-5-worker-test-orphans` and passed the re-audit. Every claim in the author's
+fault table reproduced with in-memory child mutants. One side effect: docs/progress/m0.md then cited "its memory,
+`feedback_stale_base.md`", a file that existed only on the INF-06 branch (d81ac15) and in the Mac's working tree, not
+on main. Check that any doc citing `.claude/agent-memory/…` names a file present at the branch's HEAD.
 Related: [[bug-test-patterns]], [[gate-integrity-local]]

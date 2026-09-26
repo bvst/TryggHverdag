@@ -18,6 +18,9 @@ As of main f004300 (2026-09-26):
 tests yourself: the assertions, the timing windows, and which mutants each kills. Before repeating the finding,
 check whether gate-decisions.mjs, the ai-review filter or a nightly workflow has closed the gap. Both fixes belong on
 main.
+Still open at main 1c0b575 (2026-09-26, BUG-5 re-audit): SAFETY_PATHS and the ai-review filter are unchanged. There is
+still no nightly mutation workflow; `daily-status.yml`'s cron is the report and does not mutate. The loader technique in
+[[in-memory-mutation]] lets this audit plant mutants in the child process itself, so use it for bin.test.ts.
 Also: main's ai-review.yml now grants the review job `checks: read`, so in CI RG-05's mutation result may be
 readable. The brief's "you very likely cannot read it" may be stale.
 Related: [[stale-base]]

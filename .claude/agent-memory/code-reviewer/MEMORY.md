@@ -1,3 +1,5 @@
 - [Doctor false-green review angle](project_doctor_false_green.md) — scripts/doctor.mjs: look for OK branches that are inferred, and for exec calls that can hang
 - [Spawned-process tests](project_spawned_process_tests.md) — bin.test.ts style: flag fixed sleeps from spawn and kills outside finally (BUG-5)
-- [gate:file is silent on success](reference_gate_file_silent_success.md) — check its exit code; no GNU `timeout` on the Mac; Bash redirects blocked for this role
+- [gate:file is silent on success](reference_gate_file_silent_success.md) — check its exit code; no GNU `timeout` on the Mac; Bash redirects and `=>` in node -e blocked
+- [Spec promises vs HEAD](project_spec_promises_vs_head.md) — grep HEAD for promised D-/A- numbers; diff coverage-baseline.json for drops absorbed by --update
+- [Unowned gate config](project_unowned_gate_config.md) — packages/config and root test/lint configs lack CODEOWNERS; AR-03 glob misses .tsx (2026-09-26)

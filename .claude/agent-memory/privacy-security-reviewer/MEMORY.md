@@ -1,1 +1,3 @@
 - [Tooling scripts review](tooling_scripts_review.md) — checklist for scripts/ PRs shelling out to gh/git/ssh: no raw output, no shell, timeouts
+- [Mobile release review](mobile_release_review.md) — verify merged Android manifest, OTA, dev client, Expo/Maestro telemetry switches, audit baseline
+- [Reviewer sandbox quirks](reviewer_sandbox_quirks.md) — read-only guard blocks `>`/`=>`/`->` and "expo install" text; gh api works for SHAs and licences

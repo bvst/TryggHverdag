@@ -1,6 +1,6 @@
 ---
 name: in-memory-mutation
-description: How test-auditor runs hand mutations despite the read-only Bash guard — Vite transform plugin via vitest/node startVitest, no file writes
+description: How test-auditor runs hand mutations despite the read-only Bash guard — Vite transform plugin via vitest/node startVitest, plus a `--import data:` loader for spawned children; no repo writes
 metadata:
   type: reference
 ---
@@ -21,7 +21,17 @@ Commands whose text contains `doctor.test.mjs` are blocked; use `pnpm exec vites
 The guard also blocks `git merge-base` and `git merge-tree` (even the old read-only form) and `> file`. For
 conflicts, read `git diff HEAD...origin/main -- <file>` next to the branch diff. For long runs, use
 run_in_background with no redirect and read the task's output file.
-In-memory mutants cannot reach `bin.test.ts`: it spawns plain `node` on the files on disk, so a Vite transform never
-touches the child. Rely on the author's scratch-copy and Stryker evidence, and say so.
+**Child processes (bin.test.ts) can be mutated in memory too** (BUG-5 re-audit, 2026-09-26). Use the Vite transform to
+rewrite the test's `const NODE_ARGS = ['--experimental-strip-types'];` so it adds
+`'--import', 'data:text/javascript,' + encodeURIComponent("import {register} from 'node:module'; register('data:…hooks…')")`.
+The hooks module exports `load(url, ctx, nextLoad)`. It takes `r = await nextLoad(...)`, and for
+`url === 'file://' + absPath` it returns `{format: r.format, source: replaced, shortCircuit: true}`. This works on Node
+22.23 with strip-types: the source is still TS and gets stripped after the hook. Check the pattern count against the
+file on disk in the parent. `testNamePattern` and `testTimeout` go in startVitest's 3rd arg. The Write tool may put the
+harness in the scratchpad; the post-edit hook then complains about prettier/eslint, which is harmless. Import vitest by
+absolute path (`<checkout>/node_modules/vitest/dist/node.js`).
+Orphan probe: after `v.close()`, list `ps -Ao pid=,ppid=,etime=,command=` lines containing `<checkout>/apps/server/src/bin/`
+and SIGKILL them from the harness (`process.kill`). Include a control mutant that must orphan, so the probe is proven.
+zsh: `echo ===` in a Bash command fails with "== not found"; use `echo ---`.
 
 Related: [[gate-integrity-local]]

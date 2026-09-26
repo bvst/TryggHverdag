@@ -16,5 +16,10 @@ relevant gates directly.
 gates actually bear on the diff. For scripts/-only changes that means the unit tests, plus the baseline and
 mutation-path reasoning; `scripts/` is not in SAFETY_PATHS (scripts/lib/gate-decisions.mjs), so mutation does not
 mutate it. Check again each time: CI with RULES_READ_TOKEN may give 5 of 5.
-Still 3 of 5 locally on 2026-09-26 (BUG-5 audit). Also check whether the branch has been pushed or has a PR
-(`gh pr list --head <branch>`). If not, no check exists on the commit, so "CI already ran it" is false too.
+Still 3 of 5 locally on 2026-09-26 (BUG-5 audit and re-audit). Also check whether the branch has been pushed or has a PR
+(`gh pr list --head <branch>`). If not, no check exists on the commit, so "CI already ran it" is false too. ci.yml runs
+only on `pull_request` and push to main, so a pushed branch with no PR has zero check runs.
+**The repository is private as of 2026-09-26.** Anonymous `curl` to api.github.com returns 404. Use `gh api
+repos/bvst/TryggHverdag/rules/branches/main` instead; it lists the 12 required contexts (mutation, traceability, unit,
+integration and system among them). `gh api .../rulesets/23864486` shows `bypass_actors: null` with this token, so
+bypass stays unverified.
