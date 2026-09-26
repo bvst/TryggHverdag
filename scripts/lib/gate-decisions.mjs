@@ -17,8 +17,67 @@ export const SAFETY_PATHS = [
   // this contract had moved out of worker.ts and out of every safety check.
   'apps/server/src/bin/worker.ts',
   'apps/server/src/process.ts',
+  // The one file that can ping Healthchecks.io: a ping it sent on its own would
+  // keep a dead worker's check green (D-079, the owner's decision).
+  'apps/server/src/adapters/healthchecks.ts',
   'apps/mobile/src/safety-core/',
 ];
+
+/** The tests a mutant in safety code no group claims runs against: every product test. */
+export const WHOLE_SUITE = ['apps', 'packages'];
+
+/**
+ * Safety paths whose mutants only some tests can kill, each run against only
+ * those tests (D-066, amended by the owner 2026-09-25). Every mutant running the
+ * whole suite outran the mutation job on PR #31. A group only narrows the tests:
+ * a test left out can lower the score, never raise it.
+ */
+export const MUTATION_GROUPS = [
+  { name: 'domain', paths: ['apps/server/src/domain/'], tests: ['apps/server/src/domain'] },
+  {
+    name: 'healthchecks',
+    paths: ['apps/server/src/adapters/healthchecks.ts'],
+    tests: ['apps/server/src/adapters/healthchecks.test.ts', 'apps/server/src/worker.test.ts'],
+  },
+];
+
+/**
+ * The Stryker runs that together mutate every safety path exactly once: the
+ * groups, in order, then one whole-suite run for every path no group claims.
+ *
+ * A group may only claim a safety path exactly as it is listed. A wider path
+ * would mutate code that is not safety code; a file inside a safety folder
+ * would be mutated twice, once by its group and once with the folder.
+ *
+ * @param {string[]} safetyPaths
+ * @param {{ name: string, paths: string[], tests: string[] }[]} groups
+ * @returns {{ name: string, paths: string[], tests: string[] }[]}
+ */
+export function mutationRuns(safetyPaths = SAFETY_PATHS, groups = MUTATION_GROUPS) {
+  const claimed = new Map();
+  for (const group of groups) {
+    for (const p of group.paths) {
+      if (!safetyPaths.includes(p)) {
+        throw new Error(
+          `mutation group "${group.name}" claims ${p}, which is not one of the safety paths ` +
+            `(${safetyPaths.join(', ')}). A group takes a whole safety path as listed, or nothing (D-066).`,
+        );
+      }
+      const other = claimed.get(p);
+      if (other !== undefined) {
+        throw new Error(
+          `mutation groups "${other}" and "${group.name}" both claim ${p}, so it would be ` +
+            'mutated twice. Give it to one of them (D-066).',
+        );
+      }
+      claimed.set(p, group.name);
+    }
+  }
+  const rest = safetyPaths.filter((p) => !claimed.has(p));
+  return rest.length === 0
+    ? [...groups]
+    : [...groups, { name: 'whole-suite', paths: rest, tests: [...WHOLE_SUITE] }];
+}
 
 /**
  * Should `pnpm run api:diff` compare anything, and can it?
@@ -102,11 +161,13 @@ export function decideMutation({ changed, onlyIfSafetyPathsChanged, configured }
 }
 
 /**
- * How long Stryker may run. Each mutant runs the whole product suite (the
- * command runner in stryker.config.mjs): about 7 s once INF-07 added tests that
- * start real processes, and 119 mutants on CI's two cores outran proc.mjs's
- * default of 590 s. A test in scripts/gate.test.mjs keeps this inside ci.yml's
- * mutation job, with room for checkout and install.
+ * How long Stryker may run, across all the runs of mutationRuns together: each
+ * run gets what the ones before it left. In the whole-suite run each mutant
+ * runs the whole product suite (the command runner in stryker.config.mjs):
+ * about 7 s once INF-07 added tests that start real processes, and 119 mutants
+ * on CI's two cores outran proc.mjs's default of 590 s. The groups run only
+ * their own tests (D-066, amended 2026-09-25). A test in scripts/gate.test.mjs
+ * keeps this inside ci.yml's mutation job, with room for checkout and install.
  */
 export const MUTATION_TIMEOUT_MS = 25 * 60_000;
 

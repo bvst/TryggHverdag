@@ -12,7 +12,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@trygghverdag/contracts": "workspace:*"
+    "@trygghverdag/contracts": "workspace:*",
+    "fast-check": "^4.10.2"
   },
   "devDependencies": {
     "@trygghverdag/config": "workspace:*",

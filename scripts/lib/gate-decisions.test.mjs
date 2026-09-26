@@ -2,8 +2,21 @@
 // These two gates spend milestone M0 with nothing to check. The tests are mostly
 // about the difference between "checked, and it is fine" and "could not check" —
 // which is the difference between a gate and a decoration.
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
-import { decideApiDiff, decideMutation, judgeMutationRun } from './gate-decisions.mjs';
+import {
+  MUTATION_GROUPS,
+  SAFETY_PATHS,
+  WHOLE_SUITE,
+  decideApiDiff,
+  decideMutation,
+  judgeMutationRun,
+  mutationRuns,
+} from './gate-decisions.mjs';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 describe('decideApiDiff', () => {
   test('no released versions: nothing can break, and it says why', () => {
@@ -61,6 +74,8 @@ describe('decideMutation', () => {
     // Where a worker that stopped is made to exit with 1, so it is restarted.
     ['apps/server/src/bin/worker.ts'],
     ['apps/server/src/process.ts'],
+    // The check-in that tells Healthchecks.io the worker is alive. The owner made it a safety path.
+    ['apps/server/src/adapters/healthchecks.ts'],
     ['apps/mobile/src/safety-core/heartbeat.ts'],
   ])('%s counts as safety code', (file) => {
     const decision = decideMutation({
@@ -130,5 +145,126 @@ describe('judgeMutationRun', () => {
     expect(verdict.message).toContain('spawnSync pnpm ETIMEDOUT');
     expect(verdict.message).toContain('no mutation score was measured');
     expect(verdict.message).not.toContain('below 80');
+  });
+});
+
+describe('mutationRuns', () => {
+  // The owner's decision of 2026-09-25, an amendment to D-066. PR #31's
+  // mutation check was killed at its time limit because every mutant in every
+  // safety file ran the whole suite. Now each group of safety files runs only
+  // the tests that can kill its mutants, and whatever no group claims runs the
+  // whole suite, as before.
+  //
+  // A test set that is too narrow can only lower the score: a mutant no test
+  // ran survives. So grouping can make this gate stricter, never laxer. What it
+  // must never do is mutate less than every safety path, widen what is
+  // mutated, or mutate one path in two runs. The paths here are made up, so
+  // these tests hold the rule rather than today's lists.
+  const safety = ['src/domain/', 'src/alerts/', 'src/worker.ts', 'src/adapters/hc.ts'];
+  const domain = { name: 'domain', paths: ['src/domain/'], tests: ['src/domain'] };
+  const hc = {
+    name: 'hc',
+    paths: ['src/adapters/hc.ts'],
+    tests: ['src/adapters/hc.test.ts', 'src/worker.test.ts'],
+  };
+
+  test('the groups run first, in order, then one whole-suite run takes every safety path left', () => {
+    expect(mutationRuns(safety, [domain, hc])).toEqual([
+      domain,
+      hc,
+      { name: 'whole-suite', paths: ['src/alerts/', 'src/worker.ts'], tests: ['apps', 'packages'] },
+    ]);
+  });
+
+  test('with no groups, one whole-suite run mutates every safety path, as before the grouping', () => {
+    expect(mutationRuns(safety, [])).toEqual([
+      { name: 'whole-suite', paths: safety, tests: ['apps', 'packages'] },
+    ]);
+  });
+
+  test('when the groups claim every safety path, there is no whole-suite run', () => {
+    expect(mutationRuns(['src/domain/', 'src/adapters/hc.ts'], [domain, hc])).toEqual([domain, hc]);
+  });
+
+  test('a group that names a path outside the safety paths throws, naming the group and the path', () => {
+    // A group must never widen what is mutated: the score has to mean "the
+    // safety rules are protected", not be diluted by code protected some other way.
+    const wider = { name: 'wider', paths: ['src/api.ts'], tests: ['src'] };
+
+    expect(() => mutationRuns(safety, [domain, wider])).toThrow(/wider/);
+    expect(() => mutationRuns(safety, [domain, wider])).toThrow(/src\/api\.ts/);
+  });
+
+  test('a file inside a safety folder is not a safety path of its own, so a group cannot claim it', () => {
+    // Otherwise the folder would still go to the whole-suite run and the file
+    // would be mutated twice, once against each set of tests.
+    const oneFile = { name: 'one-file', paths: ['src/domain/journey.ts'], tests: ['src/domain'] };
+
+    expect(() => mutationRuns(safety, [oneFile])).toThrow(/src\/domain\/journey\.ts/);
+  });
+
+  test('two groups that claim the same path throw, naming the path', () => {
+    const again = { name: 'domain-again', paths: ['src/domain/'], tests: ['src'] };
+
+    expect(() => mutationRuns(safety, [domain, again])).toThrow(/src\/domain\//);
+  });
+});
+
+describe('the mutation runs of this repository', () => {
+  test('domain code runs the domain tests; the Healthchecks.io adapter runs its own and the worker tests', () => {
+    // The owner's grouping, pinned: measured on two cores, the domain tests
+    // take 1.1 s and the adapter's tests plus the worker's 3.7 s, against 13.2 s
+    // for the whole suite each mutant ran before.
+    expect(MUTATION_GROUPS).toEqual([
+      { name: 'domain', paths: ['apps/server/src/domain/'], tests: ['apps/server/src/domain'] },
+      {
+        name: 'healthchecks',
+        paths: ['apps/server/src/adapters/healthchecks.ts'],
+        tests: ['apps/server/src/adapters/healthchecks.test.ts', 'apps/server/src/worker.test.ts'],
+      },
+    ]);
+    expect(WHOLE_SUITE).toEqual(['apps', 'packages']);
+  });
+
+  test('every safety path is mutated in exactly one run', () => {
+    const mutated = mutationRuns().flatMap((run) => run.paths);
+
+    expect(SAFETY_PATHS.length).toBeGreaterThan(0);
+    expect(mutated.toSorted()).toEqual([...SAFETY_PATHS].toSorted());
+  });
+
+  test('every test path a group runs exists, and a folder of them holds tests', () => {
+    // A rename must not leave a group running no tests. Vitest given a path that
+    // matches nothing finds no test files, and a group whose tests all vanished
+    // would score 0 %, loudly but for a reason nobody would guess from the log.
+    const tests = MUTATION_GROUPS.flatMap((group) => group.tests);
+    const missing = tests.filter((test) => !existsSync(path.join(root, test)));
+    const empty = tests
+      .filter((test) => !missing.includes(test))
+      .filter((test) => statSync(path.join(root, test)).isDirectory())
+      .filter(
+        (test) =>
+          !readdirSync(path.join(root, test), { recursive: true }).some((file) =>
+            String(file).endsWith('.test.ts'),
+          ),
+      );
+
+    expect(tests.length).toBeGreaterThan(0);
+    expect(missing).toEqual([]);
+    expect(empty).toEqual([]);
+  });
+
+  // bin.test.ts is the only test that runs the real worker process, so these
+  // three keep the whole suite. Narrowing their tests needs a decision of its own.
+  test.each([
+    ['apps/server/src/worker.ts'],
+    ['apps/server/src/bin/worker.ts'],
+    ['apps/server/src/process.ts'],
+  ])('%s stays in the whole-suite run', (file) => {
+    const runs = mutationRuns().filter((run) => run.paths.includes(file));
+
+    expect(runs).toEqual([
+      expect.objectContaining({ name: 'whole-suite', tests: ['apps', 'packages'] }),
+    ]);
   });
 });

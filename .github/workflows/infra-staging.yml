@@ -53,6 +53,9 @@ jobs:
       # Cellar rejects the trailing checksums recent Terraform sends on write
       # (Clever Cloud's Terraform page: "The last variable is not optional").
       AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      # The worker's Healthchecks.io ping URL (INF-08), which Terraform requires.
+      # In the apply job too, because that job plans again.
+      TF_VAR_healthchecks_worker_url: ${{ secrets.HEALTHCHECKS_WORKER_URL }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         # Nothing here pushes to GitHub, so the token checkout would leave in
@@ -99,6 +102,9 @@ jobs:
       # Cellar rejects the trailing checksums recent Terraform sends on write
       # (Clever Cloud's Terraform page: "The last variable is not optional").
       AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      # The worker's Healthchecks.io ping URL (INF-08), as in the plan job: this
+      # job plans again, and Terraform refuses to plan without it.
+      TF_VAR_healthchecks_worker_url: ${{ secrets.HEALTHCHECKS_WORKER_URL }}
     permissions:
       contents: read
       # To read the plan run the owner named: its details and its log.

@@ -76,6 +76,9 @@ An automated path from pull request to testers to production, where:
   Source: https://canary.healthchecks.io/docs/healthchecks_cronitor_comparison
 - It is free for hobby projects and paid for commercial use.
   Source: https://mythos.one/me/brianswichkow/76da7f
+  **Amended by D-079** (2026-09-25): checked against Healthchecks.io's own
+  terms, FAQ and About page — this secondary-source claim does not hold as
+  written.
 - UptimeRobot, based in Slovakia, is an EU option for outside-in uptime checks.
   Source: https://eualternative.eu/service/healthchecks-io/
 - **Implication:** Two independent monitors:
@@ -220,7 +223,17 @@ reads the agent briefs and asserts on them, so editing one really can fail
     Production gets its own user and key at go-live
   - `CELLAR_KEY_ID`, `CELLAR_KEY_SECRET` — the Cellar add-on holding
     Terraform's staging state (A-20). Same store (A-21, D-077)
-  - Healthchecks check-in URLs
+  - Healthchecks check-in URLs. Anyone holding one can keep its check green
+    while the thing it watches is dead, so each is a secret:
+    - `HEALTHCHECKS_DAILY_STATUS_URL` — the daily report's check. A repository
+      secret (A-16, D-076)
+    - `HEALTHCHECKS_WORKER_URL` — the staging worker's check. It is in three
+      places: a secret of the GitHub environment `staging` (main only, A-21),
+      the staging app's environment on Clever Cloud (set by Terraform), and in
+      plain text in Terraform's state in Cellar, as the database password is
+      (A-23, INF-08, D-079). Rotating it means a new check, not a new value:
+      the steps are under "If the ping URL ever leaks" in
+      [monitoring-setup.md](monitoring-setup.md)
   - Claude OAuth token
   - Claude's GitHub token (A-06)
   - `RULES_READ_TOKEN` — **normally not needed.** CI-01 reads the merge rules

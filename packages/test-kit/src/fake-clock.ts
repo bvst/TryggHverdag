@@ -16,13 +16,24 @@ export interface FakeClock {
   set(at: Date): void;
   /** Move forward. Refuses to go backwards, which no real clock does either. */
   advance(ms: number): void;
+  /**
+   * From now on every reading fails with this error, as the database clock
+   * does when the database cannot be reached. Time still moves while it fails.
+   */
+  failWith(error: Error): void;
+  /** Readings succeed again. */
+  recover(): void;
 }
 
 export function fakeClock(startAt: Date): FakeClock {
   let current = startAt.getTime();
+  let failure: Error | null = null;
 
   return {
     now(): Promise<Date> {
+      if (failure !== null) {
+        return Promise.reject(failure);
+      }
       return Promise.resolve(new Date(current));
     },
     set(at: Date): void {
@@ -36,6 +47,12 @@ export function fakeClock(startAt: Date): FakeClock {
         );
       }
       current += ms;
+    },
+    failWith(error: Error): void {
+      failure = error;
+    },
+    recover(): void {
+      failure = null;
     },
   };
 }

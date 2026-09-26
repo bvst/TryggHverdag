@@ -11,8 +11,18 @@ import { API_VERSION } from '@trygghverdag/contracts';
 
 export { fakeClock } from './fake-clock.ts';
 export type { FakeClock } from './fake-clock.ts';
-export { fakeWorkerHeartbeats } from './fake-worker-heartbeats.ts';
+export { BEAT_RECORDED, fakeWorkerHeartbeats } from './fake-worker-heartbeats.ts';
 export type { FakeWorkerHeartbeats } from './fake-worker-heartbeats.ts';
+export { CHECKED_IN, fakeCheckIn } from './fake-check-in.ts';
+export type { FakeCheckIn } from './fake-check-in.ts';
+export { SYNTHETIC_CHECK_UUID, SYNTHETIC_PING_URL } from './ping-url.ts';
+
+/**
+ * fast-check, for the rules about time and order that no list of examples can
+ * cover: "for any sequence of events, …" (D-039). Handed out here so that every
+ * package's tests reach it the same way they reach the fakes.
+ */
+export * as fc from 'fast-check';
 
 /** The path a test should call for a route, so tests never hard-code the API version. */
 export function apiPath(route: string): string {

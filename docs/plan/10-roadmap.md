@@ -171,6 +171,7 @@ If any drill *succeeds*, M0 is not done.
 | M3 | Firebase project for Android push; Apple push key | A-11 |
 | M3 | SMS provider account (LINK Mobility) | A-12 |
 | M5 | Buy the location SDK licence ($399) if the spike passed | A-13 |
+| M5 | UptimeRobot Solo (60-second checks, about $12 a month), so REL-08's "every minute" holds for the API too; and decide whether Healthchecks.io Business ($20 a month, SMS and phone-call alerts) is worth it (D-079) | — (gate item, D-079) |
 
 ## Open questions for the owner
 

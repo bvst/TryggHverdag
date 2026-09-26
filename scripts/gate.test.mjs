@@ -8,7 +8,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { FULL_STEPS, QUICK_STEPS, availableTools } from './gate.mjs';
-import { MUTATION_TIMEOUT_MS } from './lib/gate-decisions.mjs';
+import { MUTATION_TIMEOUT_MS, SAFETY_PATHS } from './lib/gate-decisions.mjs';
 import { packageScripts } from './lib/proc.mjs';
 import { planSteps } from './lib/steps.mjs';
 import {
@@ -299,6 +299,19 @@ describe("this repository's own workflows", () => {
     expect(MUTATION_TIMEOUT_MS).toBeLessThanOrEqual((jobMinutes - 3) * 60_000);
   });
 
+  test('the mutation budget stays 25 minutes for all the runs together, inside the 30-minute job', () => {
+    // The owner's grouping decision of 2026-09-25 split one Stryker run into
+    // several and kept the budget as it was: 25 minutes across all of them,
+    // not per run, because the job around them still has 30. A slow run is
+    // fixed by making its tests faster, which is what the grouping did; this
+    // number moving is a decision for the owner, not a fix.
+    const ci = readFileSync(`${WORKFLOWS}/ci.yml`, 'utf8');
+    const job = /^ {2}mutation:.*\n(?:(?! {2}\S).*\n)*? {4}timeout-minutes: (\d+)/m.exec(ci);
+
+    expect(MUTATION_TIMEOUT_MS).toBe(25 * 60_000);
+    expect(Number(job?.[1])).toBe(30);
+  });
+
   test('the safety filter in ai-review.yml matches the paths the owner must approve', () => {
     // Two copies of the same list: the paths CODEOWNERS holds for the owner,
     // and the paths that summon safety-reviewer. If they drift, a safety change
@@ -312,6 +325,30 @@ describe("this repository's own workflows", () => {
       const glob = path.replace(/^\//, '').replace(/\/$/, '/**');
       expect(text).toContain(`'${glob}'`);
     }
+  });
+
+  test('every safety path needs the owner to approve a change to it', () => {
+    // Two more copies of one list, and nothing tied them together: the paths
+    // the gates treat as safety code, mutated by Stryker and held to the 95 %
+    // branch floor, and the paths CODEOWNERS must hold for the owner. A safety
+    // path the owner does not approve is a rule that a single pull request can
+    // change without them. The Healthchecks.io adapter, a safety path by the
+    // owner's decision D-079, reached SAFETY_PATHS and CODEOWNERS but not
+    // OWNER_APPROVAL_PATHS, the list CI-01 holds CODEOWNERS to, so its line in
+    // CODEOWNERS was one that nothing checked.
+    //
+    // The two are written differently. An owner path starts with / and is
+    // anchored at the root, and one that ends in / covers every file under it.
+    const covers = (owned, path) => {
+      const relative = owned.replace(/^\//, '');
+      return relative === path || (relative.endsWith('/') && path.startsWith(relative));
+    };
+    const unapproved = SAFETY_PATHS.filter(
+      (path) => !OWNER_APPROVAL_PATHS.some((owned) => covers(owned, path)),
+    );
+
+    expect(SAFETY_PATHS.length).toBeGreaterThan(0);
+    expect(unapproved).toEqual([]);
   });
 });
 

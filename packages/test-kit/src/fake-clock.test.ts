@@ -58,6 +58,27 @@ describe('fakeClock', () => {
     await expect(clock.now()).resolves.toEqual(START);
   });
 
+  test('a failing clock fails with exactly the error it was given', async () => {
+    // The database clock fails when the database is gone, and whatever reads
+    // the time has to be tested against that too.
+    const clock = fakeClock(START);
+    const error = new Error('the database did not answer');
+
+    clock.failWith(error);
+
+    await expect(clock.now()).rejects.toBe(error);
+  });
+
+  test('time still moves while the clock fails, and reads true once it recovers', async () => {
+    const clock = fakeClock(START);
+    clock.failWith(new Error('the database did not answer'));
+
+    clock.advance(60_000);
+    clock.recover();
+
+    await expect(clock.now()).resolves.toEqual(new Date('2026-01-01T22:01:00.000Z'));
+  });
+
   test('the Date it returns cannot be mutated from under a later reading', async () => {
     // now() hands out a Date, and a Date is mutable. If it handed out the same
     // one every time, a test that called setTime() on it — or any helper that
