@@ -200,7 +200,7 @@ function appClosure(root) {
     'peerDependencies',
   ]);
   while (queue.length > 0) {
-    const folder = packages.get(queue.shift() ?? '');
+    const folder = packages.get(queue.shift());
     if (folder === undefined || folders.has(folder)) continue;
     folders.add(folder);
     queue.push(
@@ -245,7 +245,7 @@ function e2eClosure(root) {
   const found = new Set();
   const queue = [path.normalize(entry)];
   while (queue.length > 0) {
-    const file = queue.shift() ?? '';
+    const file = queue.shift();
     if (found.has(file) || !existsSync(path.join(root, file))) continue;
     found.add(file);
     const source = readFileSync(path.join(root, file), 'utf8');

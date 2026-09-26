@@ -1,6 +1,8 @@
-- [In-memory mutation](reference_in_memory_mutation.md) — Vite plugin in startVitest; `--import data:` loader reaches spawned children; guard blocks `=>`
+- [In-memory mutation](reference_in_memory_mutation.md) — Vite plugin in startVitest; `--import` register file reaches spawned children; guard blocks `=>`
 - [gate:integrity locally](project_gate_integrity_local.md) — 3/5 locally; repo is private, so use `gh api .../rules/branches/main`, not curl
 - [Bug tests and untested fallbacks](feedback_bug_test_patterns.md) — fallback branches go untested; how to prove a cleanup hook masks nothing
 - [Stryker incremental reuse](reference_stryker_incremental_reuse.md) — local report reuses old results for unchanged code; flaky tests count as kills
 - [Stale base](feedback_stale_base.md) — fetch main first; BUG-5 conflicted with main's fix; docs citing agent memory must exist at HEAD
 - [Safety-test gate gaps](project_safety_test_gate_gaps.md) — test-only edits to safety tests skip mutation and CI safety-reviewer (open at 1c0b575)
+- [Baseline vs main](feedback_baseline_vs_main.md) — ratchet reads the branch's own baseline; diff it against origin/main and run ratchetDrops with main's
+- [Entry-script wiring](feedback_entry_script_wiring.md) — pure decisions tested, the entry script's use of them not; shape tests let false greens through

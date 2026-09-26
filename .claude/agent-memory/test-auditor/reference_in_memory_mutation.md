@@ -34,4 +34,16 @@ Orphan probe: after `v.close()`, list `ps -Ao pid=,ppid=,etime=,command=` lines 
 and SIGKILL them from the harness (`process.kill`). Include a control mutant that must orphan, so the probe is proven.
 zsh: `echo ===` in a Bash command fails with "== not found"; use `echo ---`.
 
-Related: [[gate-integrity-local]]
+**Simpler for spawned `.mjs` children** (INF-06 audit, 2026-09-26). Write `register.mjs`
+(`register(new URL('./hooks.mjs', import.meta.url))`) and `hooks.mjs` into the scratchpad with the Write tool.
+- If the test spreads `process.env` into the child (affected.test.mjs `runAffected`), no Vitest API is needed:
+  `NODE_OPTIONS="--import <scratch>/register.mjs" MUTANT_FROM=… MUTANT_TO=… pnpm exec vitest run <test>`.
+  The hook reads the mutant from the environment and appends `matches=N` to a log so you can see that it applied.
+- If the test sets the child's env in full (e2e-android.test.mjs), have the hooks read the mutant from a
+  `mutant.json` in the scratchpad. Rewrite the test's `spawnSync(process.execPath, [SCRIPT, …` in memory with a Vite
+  plugin so it passes `'--import', <register>`, and run the harness as a scratchpad file with `node <file>`. Its
+  source can then use `=>` and `>` freely.
+Other guard traps: `"->"` inside a `node -e` string is blocked as a redirect. In zsh, `"$c:coverage-baseline.json"`
+applies the `:c` modifier; write `"${c}:file"`.
+
+Related: [[gate-integrity-local]], [[entry-script-wiring]]

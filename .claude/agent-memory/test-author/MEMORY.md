@@ -1,2 +1,3 @@
 - [Hook quirks](reference_hook_quirks.md) — guard-bash trips on path text, Write blocked outside repo, HK-05 skips test.each tables containing `)`
 - [Main checkout is shared](project_main_checkout_shared.md) — other agents edit concurrently; stage test files by explicit path
+- [Mutation proof recipe](reference_mutation_proof.md) — prove a test kills a mutant: Vite transform, scratch copy of scripts/ or the app, control + match count

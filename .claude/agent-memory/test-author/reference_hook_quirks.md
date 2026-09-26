@@ -17,6 +17,9 @@ metadata:
   only up to the first `)`. A `)` anywhere in the table, string data too, makes
   it skip that test. Keep such tables in a `const` outside the call:
   `test.each(TABLE)(...)`.
+- **Edit order:** the post-edit hook lints and runs the file after every Edit, so a
+  test that uses a new `const` table fails (no-undef) until the table exists. Add
+  the table or helper first, then the test that uses it.
 - Python or shell edits skip the post-edit hook, so run prettier, eslint and
   the file's tests yourself afterwards.
 

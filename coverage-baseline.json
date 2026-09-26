@@ -266,10 +266,10 @@
       "totalLines": 32
     },
     "scripts/lib/affected.mjs": {
-      "lines": 94.64,
-      "branches": 76.59,
-      "coveredLines": 53,
-      "totalLines": 56
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 59,
+      "totalLines": 59
     },
     "scripts/lib/clever-tools.mjs": {
       "lines": 57.14,

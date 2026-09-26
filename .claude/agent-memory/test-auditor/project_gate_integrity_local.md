@@ -23,3 +23,7 @@ only on `pull_request` and push to main, so a pushed branch with no PR has zero 
 repos/bvst/TryggHverdag/rules/branches/main` instead; it lists the 12 required contexts (mutation, traceability, unit,
 integration and system among them). `gh api .../rulesets/23864486` shows `bypass_actors: null` with this token, so
 bypass stays unverified.
+Still 3 of 5 on 2026-09-26 (INF-06 audit at 6938a37). The branch was not pushed, so `gh api .../commits/<sha>/check-runs`
+answered 422 "No commit found": there was no check to read. Once the branch adds `e2e:android`, gate:integrity lists 13
+required checks while the live ruleset has 12 (no `android-e2e` until the owner does A-28). That mismatch is
+the designed reminder in AC14, not a finding.
