@@ -18,7 +18,7 @@ import tseslint from 'typescript-eslint';
  */
 export const CLOCK_FREE_PATHS = [
   'apps/server/src/domain/**/*.ts',
-  'apps/mobile/src/safety-core/**/*.ts',
+  'apps/mobile/src/safety-core/**/*.{ts,tsx}',
 ];
 
 const CLOCK_MESSAGE =

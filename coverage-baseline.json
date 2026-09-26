@@ -320,10 +320,10 @@
       "totalLines": 66
     },
     "scripts/lib/pinned-binary.mjs": {
-      "lines": 78.78,
-      "branches": 66.66,
-      "coveredLines": 26,
-      "totalLines": 33
+      "lines": 84.61,
+      "branches": 75,
+      "coveredLines": 22,
+      "totalLines": 26
     },
     "scripts/lib/plan-approval.mjs": {
       "lines": 97.36,

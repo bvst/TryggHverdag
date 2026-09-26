@@ -11,7 +11,9 @@ Found running INF-06's L7 and dev build on the Mac (`claude-dev`, 2026-09-25):
 - **The `Pixel_8` AVD's language is now nb-NO.** It was booted with `-change-locale nb-NO`, because `e2e:android` refuses any other locale. Boot it headless with `emulator -avd Pixel_8 -no-window -no-audio -no-boot-anim -no-snapshot-save -gpu swiftshader_indirect`. The first boot took 84 s.
 - **Stop Colima before booting the emulator** (16 GB, spec R14), and `colima start` afterwards. gate:full's integration step needs Docker.
 - The pinned Maestro is cached at `node_modules/.cache/maestro/2.10.0/` (315 MB download, about 2 min).
-- Warm release build: about 1.5 to 2 minutes. A full `pnpm run e2e:android` takes about 2 minutes with caches warm.
+- Warm release build: about 1.5 to 2 minutes. A full `pnpm run e2e:android` takes about 2 minutes with caches warm (2026-09-26: 194 s including a 2 m 42 s Gradle build; boot took 31 s).
+- **No `timeout` or `gtimeout` binary on this Mac** (no coreutils). Use the Bash tool's own timeout. Wait for boot without a local sleep: `adb wait-for-device shell 'while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 2; done'`.
+- **Teardown that leaves nothing:** `adb -s emulator-5554 emu kill`, then `./gradlew --stop` from `apps/mobile/android` with the JDK 17 `JAVA_HOME`, then `adb kill-server`. The emulator takes up to about 20 s to exit (its `emulator -kill <pid> -sleep 20` helper), and the Kotlin compile daemon exits with Gradle's. Check again with `pgrep -fl "qemu-system|GradleDaemon|KotlinCompileDaemon|maestro"` (VS Code's `chrome_crashpad_handler` is unrelated).
 
 **Why:** each of these cost a slow round trip to find.
 

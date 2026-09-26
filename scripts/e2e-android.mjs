@@ -2,7 +2,9 @@
 /**
  * L7 on Android (INF-06, CI-09): build the release app, install it on the
  * connected emulator, run every Maestro flow in apps/mobile/e2e, and pass only
- * when Maestro's report shows every flow ran and passed.
+ * when Maestro exits 0 and its report shows every flow ran and passed.
+ * Emulators only: it never installs onto, or reads crash logs from, a real
+ * phone.
  *
  * Usage:
  *   pnpm run e2e:android                 the whole run: check, build, install, test
@@ -30,6 +32,7 @@ import {
   checkLocale,
   checkMaestro,
   ensureMaestro,
+  escapeRegExp,
   judgeReport,
   maestroTestCommand,
 } from './lib/e2e-android.mjs';
@@ -41,9 +44,11 @@ const buildOnly = args.includes('--build-only');
 const skipBuild = args.includes('--skip-build');
 
 // Nothing leaves for a tooling vendor that does not have to. Set here, so
-// every tool this starts inherits it.
+// every tool this starts inherits it. Maestro reads the update check with
+// Boolean.parseBoolean, so only 'true' turns it off (D-081).
 process.env.EXPO_NO_TELEMETRY = '1';
 process.env.MAESTRO_CLI_NO_ANALYTICS = '1';
+process.env.MAESTRO_DISABLE_UPDATE_CHECK = 'true';
 
 /** Stops the run with a message that says which precondition failed. */
 function stop(message) {
@@ -93,9 +98,8 @@ if (buildOnly && skipBuild) {
 const device = buildOnly ? undefined : expectOk(checkDevices(output(adb, ['devices']))).serial;
 expectOk(checkJava(output(java, ['-version'])));
 
-let maestro;
-if (!buildOnly) {
-  maestro = await ensureMaestro({ root });
+const maestro = buildOnly ? undefined : await ensureMaestro({ root });
+if (maestro !== undefined) {
   expectOk(checkMaestro(run(maestro, ['--version'], { timeout: 120_000 })));
   const locale =
     output(adb, ['-s', device ?? '', 'shell', 'getprop', 'persist.sys.locale'])?.trim() ||
@@ -128,7 +132,7 @@ const report = path.join(REPORT_DIR, 'report.xml');
 rmSync(REPORT_DIR, { recursive: true, force: true });
 mkdirSync(REPORT_DIR, { recursive: true });
 const test = maestroTestCommand({
-  maestro: maestro ?? 'maestro',
+  maestro,
   report,
   appId,
   translations,
@@ -136,16 +140,29 @@ const test = maestroTestCommand({
   debugOutput: path.join(REPORT_DIR, 'debug'),
 });
 process.stdout.write(`\ne2e:android: run the flows\n  $ ${test.join(' ')}\n`);
-spawnSync(test[0] ?? '', test.slice(1), { cwd: root, stdio: 'inherit' });
+const maestroRun = spawnSync(test[0] ?? '', test.slice(1), { cwd: root, stdio: 'inherit' });
 
-// 5. The verdict comes from the report, never from Maestro's exit code alone:
+// 5. Both have to pass: Maestro's exit status and its report. The report alone
+// is not enough, because it is written as flows finish and does not show that
+// Maestro itself got to the end; the exit status alone is not enough, because
 // a run in which nothing ran exits 0 too.
 const verdict = judgeReport(existsSync(report) ? readFileSync(report, 'utf8') : null);
-if (!verdict.ok) {
-  const crashes = output(adb, ['-s', device ?? '', 'logcat', '-d', '-b', 'crash']) ?? '';
+if (maestroRun.status !== 0 || !verdict.ok) {
+  let exit = `Maestro exited with code ${String(maestroRun.status)}`;
+  if (maestroRun.signal !== null) exit = `Maestro was stopped by ${maestroRun.signal}`;
+  if (maestroRun.error !== undefined) exit = `Maestro could not run: ${maestroRun.error.message}`;
+  // Only the app's own lines: the crash buffer holds every app's crashes.
+  const crashes =
+    output(adb, ['-s', device ?? '', 'logcat', '-d', '-b', 'crash', '-e', escapeRegExp(appId)]) ??
+    '';
   if (crashes.trim() !== '') {
-    process.stderr.write(`\nCrash lines from the device (adb logcat -b crash):\n${crashes}\n`);
+    process.stderr.write(
+      `\nThe app's crash lines on the device (adb logcat -b crash):\n${crashes}\n`,
+    );
   }
-  stop(`${verdict.message} Maestro's debug output is in ${REPORT_DIR}/debug.`);
+  stop(
+    `${exit}, and its report says: ${verdict.message} Both have to pass. ` +
+      `Maestro's debug output is in ${REPORT_DIR}/debug.`,
+  );
 }
 process.stdout.write(`\ne2e:android: ${verdict.message}\n`);

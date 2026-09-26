@@ -310,12 +310,26 @@ jobs:
     permissions:
       contents: read
     env:
-      # Nothing leaves for a tooling vendor that does not have to.
+      # Nothing leaves for a tooling vendor that does not have to. Maestro reads
+      # the update check with Boolean.parseBoolean, so only 'true' turns it
+      # off; '1' would leave it sending a persistent ID (D-081).
       EXPO_NO_TELEMETRY: '1'
       MAESTRO_CLI_NO_ANALYTICS: '1'
+      MAESTRO_DISABLE_UPDATE_CHECK: 'true'
+      # The emulator, written once. Both emulator steps and the snapshot's
+      # cache key read these, so a changed setting also changes the key and a
+      # snapshot is never restored under a key that no longer says what it
+      # holds. The same image as the Mac's emulator: Android 17 with 16 KB
+      # memory pages, which Google Play requires apps to work on.
+      EMULATOR_API_LEVEL: '37'
+      EMULATOR_IMAGE_API_LEVEL: '37.2'
+      EMULATOR_TARGET: google_apis_ps16k
+      EMULATOR_ARCH: x86_64
+      EMULATOR_PROFILE: pixel_8
+      EMULATOR_LOCALE: nb-NO
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with: { fetch-depth: 0 }
+        with: { fetch-depth: 0, persist-credentials: false }
       # CI-12, as in every job above, with its own question: can this diff
       # change the app? `app` is worked out from the files themselves
       # (scripts/lib/affected.mjs, touchesApp), and is always true on a push to
@@ -378,20 +392,20 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-37.2-google_apis_ps16k-x86_64-pixel_8-nb-NO
+          key: avd-${{ env.EMULATOR_IMAGE_API_LEVEL }}-${{ env.EMULATOR_TARGET }}-${{ env.EMULATOR_ARCH }}-${{ env.EMULATOR_PROFILE }}-${{ env.EMULATOR_LOCALE }}
       # On main, with no cached device yet: boot once to make a clean snapshot
       # for later runs to start from. Pull requests only ever read it.
       - name: Create the virtual device and its snapshot
         if: steps.affected.outputs.app == 'true' && github.ref == 'refs/heads/main' && steps.avd-cache.outputs.cache-hit != 'true'
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
-          api-level: 37
-          system-image-api-level: '37.2'
-          target: google_apis_ps16k
-          arch: x86_64
-          profile: pixel_8
+          api-level: ${{ env.EMULATOR_API_LEVEL }}
+          system-image-api-level: ${{ env.EMULATOR_IMAGE_API_LEVEL }}
+          target: ${{ env.EMULATOR_TARGET }}
+          arch: ${{ env.EMULATOR_ARCH }}
+          profile: ${{ env.EMULATOR_PROFILE }}
           force-avd-creation: false
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -change-locale nb-NO
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -change-locale ${{ env.EMULATOR_LOCALE }}
           disable-animations: false
           script: echo "Created the virtual device and saved a clean snapshot."
       - if: steps.affected.outputs.app == 'true' && github.ref == 'refs/heads/main' && steps.avd-cache.outputs.cache-hit != 'true'
@@ -400,22 +414,22 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-37.2-google_apis_ps16k-x86_64-pixel_8-nb-NO
-      # The same image as the Mac's emulator: Android 17 with 16 KB memory
-      # pages, which Google Play requires apps to work on. A native library
-      # that is not aligned for them fails here, not at store upload.
+          # The key the restore above resolved, so it is written once.
+          key: ${{ steps.avd-cache.outputs.cache-primary-key }}
+      # On the job's 16 KB-page image, a native library that is not aligned for
+      # those pages fails here, not at store upload.
       - name: Boot the emulator in bokmål and run every flow
         if: steps.affected.outputs.app == 'true'
         timeout-minutes: 15
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
-          api-level: 37
-          system-image-api-level: '37.2'
-          target: google_apis_ps16k
-          arch: x86_64
-          profile: pixel_8
+          api-level: ${{ env.EMULATOR_API_LEVEL }}
+          system-image-api-level: ${{ env.EMULATOR_IMAGE_API_LEVEL }}
+          target: ${{ env.EMULATOR_TARGET }}
+          arch: ${{ env.EMULATOR_ARCH }}
+          profile: ${{ env.EMULATOR_PROFILE }}
           force-avd-creation: false
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -change-locale nb-NO
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -change-locale ${{ env.EMULATOR_LOCALE }}
           disable-animations: true
           script: pnpm run e2e:android --skip-build
       # Maestro's screenshots and logs show only synthetic screens (RG-07), and
@@ -433,7 +447,9 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/app.config.ts') }}
+          # The key the restore resolved: hashFiles() and runner.os cannot be
+          # job env, so the restore step is where it is written, once.
+          key: ${{ steps.gradle-cache.outputs.cache-primary-key }}
 
   security: # CI-10
     runs-on: ubuntu-latest

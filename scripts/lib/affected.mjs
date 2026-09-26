@@ -225,14 +225,25 @@ const IMPORTS = [
  * The e2e script and every repository module it imports, directly or through
  * another one, relative to `root`. Empty when there is no such script.
  *
+ * A script that names no entry file this can read is an error, not an empty
+ * closure: an empty one would answer "no" for every change to the script and
+ * its modules, and android-e2e would pass without running.
+ *
  * @param {string} root
  * @returns {Set<string>}
  */
 function e2eClosure(root) {
-  const command = readJson(root, 'package.json')?.scripts?.[E2E_SCRIPT] ?? '';
+  const command = readJson(root, 'package.json')?.scripts?.[E2E_SCRIPT];
+  if (command === undefined) return new Set();
   const entry = /\bnode\s+(\S+\.[cm]?js)\b/.exec(command)?.[1];
+  if (entry === undefined) {
+    throw new Error(
+      `The ${E2E_SCRIPT} script, ${JSON.stringify(command)}, names no \`node <file>.mjs\` entry ` +
+        'to follow, so what can change it cannot be worked out.',
+    );
+  }
   const found = new Set();
-  const queue = entry === undefined ? [] : [path.normalize(entry)];
+  const queue = [path.normalize(entry)];
   while (queue.length > 0) {
     const file = queue.shift() ?? '';
     if (found.has(file) || !existsSync(path.join(root, file))) continue;

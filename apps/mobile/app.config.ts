@@ -29,6 +29,10 @@ const config: ExpoConfig = {
   orientation: 'portrait',
   android: {
     package: APPLICATION_ID,
+    // Auto Backup would copy what the app stores, such as a session token or a
+    // journey, to Google Drive, outside the providers chosen for the EEA, and a
+    // restore would move a login bound to one phone onto another (D-081).
+    allowBackup: false,
     // Expo's template asks for these by default. The skeleton needs the network
     // and nothing else, and drawing over other apps or reading shared storage
     // is not something a safety app should hold without a reason. Debug builds

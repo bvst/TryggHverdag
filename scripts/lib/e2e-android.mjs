@@ -77,9 +77,14 @@ export function ensureMaestro({
   });
 }
 
+/** An emulator's adb serial is emulator-<port>; a real phone's is anything else. */
+const isEmulator = (serial) => /^emulator-\d+$/.test(serial);
+
 /**
- * Is an Android device connected and ready? Reads `adb devices`, or null when
- * adb could not be run at all.
+ * Is an Android emulator connected and ready? Reads `adb devices`, or null
+ * when adb could not be run at all. Emulators only: the run clears the app's
+ * state, installs a build and reads the device's crash log, none of which it
+ * may do to someone's real phone.
  *
  * @param {string | null} output
  * @returns {{ ok: boolean, message: string, serial?: string }}
@@ -100,9 +105,23 @@ export function checkDevices(output) {
     .map((line) => line.trim().split(/\s+/))
     .filter(([serial, state]) => serial !== undefined && serial !== '' && state !== undefined)
     .map(([serial, state]) => ({ serial, state }));
-  const ready = devices.find((device) => device.state === 'device');
-  if (ready !== undefined) {
-    return { ok: true, serial: ready.serial, message: `Using the Android device ${ready.serial}.` };
+  const ready = devices.filter((device) => device.state === 'device');
+  const emulator = ready.find((device) => isEmulator(device.serial));
+  if (emulator !== undefined) {
+    return {
+      ok: true,
+      serial: emulator.serial,
+      message: `Using the Android emulator ${emulator.serial}.`,
+    };
+  }
+  if (ready.length > 0) {
+    return {
+      ok: false,
+      message:
+        `Only real phones are ready (${ready.map((d) => d.serial).join(', ')}), and e2e:android ` +
+        'runs on emulators only: it never installs onto, or reads crash logs from, a real phone. ' +
+        'Start the emulator and run this again.',
+    };
   }
   if (devices.length > 0) {
     return {
@@ -121,14 +140,15 @@ export function checkDevices(output) {
 }
 
 /**
- * Is Java 17 or newer usable? Reads what `java -version` printed, or null
- * when no Java could be run.
+ * Is Java 17 to 21 usable? Reads what `java -version` printed, or null when no
+ * Java could be run. Newer is refused as firmly as older: Java 25 (Android
+ * Studio's own) fails the native build, after about 18 minutes (D-081).
  *
  * @param {string | null} output
  * @returns {{ ok: boolean, message: string }}
  */
 export function checkJava(output) {
-  const help = 'Maestro and the Android build need Java 17 or newer: set JAVA_HOME to one.';
+  const help = 'Maestro and the Android build need Java 17 to 21: set JAVA_HOME to a JDK 17.';
   if (output === null) {
     return { ok: false, message: `No Java could be run. ${help}` };
   }
@@ -141,7 +161,7 @@ export function checkJava(output) {
   }
   // "1.8.0" is Java 8: before Java 9, the major version came second.
   const major = version[1] === '1' ? Number(version[2]) : Number(version[1]);
-  if (major < 17) {
+  if (major < 17 || major > 21) {
     return { ok: false, message: `Found Java ${String(major)}. ${help}` };
   }
   return { ok: true, message: `Using Java ${String(major)}.` };
@@ -267,6 +287,10 @@ export function buildPlan({ root }) {
  * and ${STATUS}, and get exactly those, from the app config and nb.json, so no
  * flow keeps a second copy of the text a reader sees.
  *
+ * Maestro reads a text selector as a regular expression, so TITLE and STATUS
+ * are escaped: unescaped, "Klar." would also match "Klar!", and a flow could
+ * pass on a screen the app does not show.
+ *
  * @param {{
  *   maestro: string,
  *   report: string,
@@ -290,9 +314,20 @@ export function maestroTestCommand({ maestro, report, appId, translations, devic
     '-e',
     `APP_ID=${appId}`,
     '-e',
-    `TITLE=${translations.placeholder.title}`,
+    `TITLE=${escapeRegExp(translations.placeholder.title)}`,
     '-e',
-    `STATUS=${translations.placeholder.status}`,
+    `STATUS=${escapeRegExp(translations.placeholder.status)}`,
     FLOWS,
   ];
+}
+
+/**
+ * `text` as a regular expression that matches exactly that text: every
+ * character that means something in one gets a backslash. Java's, which
+ * Maestro uses, and logcat's both read it that way.
+ *
+ * @param {string} text
+ */
+export function escapeRegExp(text) {
+  return text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
 }
