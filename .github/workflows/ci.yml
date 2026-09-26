@@ -5,12 +5,11 @@
 # holds the one list of checks, and the gate-integrity job fails if this file,
 # that list and the repository's own merge rules ever stop agreeing.
 #
-# Jobs missing on purpose, because the script they would run does not exist yet:
-#   android-e2e (CI-09) — INF-06 adds it
-# They are absent rather than skipped: a skipped job reports as a green tick,
-# and a green tick for work nobody did is the one thing this repository must not
-# produce. gate-integrity lists them every run, and starts failing the day their
-# script exists but the job still does not.
+# A check whose script does not exist yet has no job here: it is absent rather
+# than skipped, because a skipped job reports as a green tick, and a green tick
+# for work nobody did is the one thing this repository must not produce.
+# gate-integrity lists such checks every run, and starts failing the day their
+# script exists but the job still does not. Today every check has its job.
 #
 # Actions are pinned to a commit, never a tag: whoever can move a tag can
 # otherwise run their own code in a job that holds this repository's secrets.
@@ -303,6 +302,138 @@ jobs:
           pnpm run mutation
           --incremental --only-if-safety-paths-changed
           --base origin/${{ github.base_ref || 'main' }}
+
+  android-e2e: # CI-09 (L7) — the release build on an Android emulator, driven by Maestro
+    runs-on: ubuntu-latest
+    # The first measured runs set this for good (docs/specs/INF-06.md, CI cost).
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      # Nothing leaves for a tooling vendor that does not have to.
+      EXPO_NO_TELEMETRY: '1'
+      MAESTRO_CLI_NO_ANALYTICS: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0 }
+      # CI-12, as in every job above, with its own question: can this diff
+      # change the app? `app` is worked out from the files themselves
+      # (scripts/lib/affected.mjs, touchesApp), and is always true on a push to
+      # main, which is the backstop for a wrong "no" on a pull request.
+      - id: affected
+        run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
+      - name: Nothing for this gate to check
+        if: steps.affected.outputs.app != 'true'
+        run: |
+          echo "Nothing in this diff can change the app or how it is tested."
+          echo "android-e2e has nothing to check on this diff (CI-12)."
+      # Without KVM the emulator runs in software, five to ten times slower, and
+      # times out looking like a flaky test. So it is checked first, before
+      # anything is paid for, and its absence stops the job with a reason.
+      - name: Enable KVM, and stop if it cannot be used
+        if: steps.affected.outputs.app == 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+            echo "::error::/dev/kvm is not usable on this runner, so the emulator would run without hardware acceleration and time out. android-e2e stops here rather than report a slow emulator as a broken app."
+            exit 1
+          fi
+      - if: steps.affected.outputs.app == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.affected.outputs.app == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - if: steps.affected.outputs.app == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.affected.outputs.app == 'true'
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with: { distribution: temurin, java-version: '17' }
+      # The Gradle cache comes from actions/cache (MIT), not gradle/actions:
+      # setup-gradle now bundles a proprietary caching component, and a
+      # proprietary licence is not on the allowed list (the gitleaks-action
+      # decision in the security job below). Restored on every run, saved from
+      # main only, so pull-request branches cannot fill the cache.
+      - id: gradle-cache
+        if: steps.affected.outputs.app == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/app.config.ts') }}
+          restore-keys: gradle-${{ runner.os }}-
+      # Built before the emulator boots: on a two-core runner, Gradle and an
+      # emulator running at once starve each other, and a slow build turns into
+      # a flaky test.
+      - name: Build the release app for x86_64
+        if: steps.affected.outputs.app == 'true'
+        timeout-minutes: 30
+        run: pnpm run e2e:android --build-only
+      - id: avd-cache
+        if: steps.affected.outputs.app == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-37.2-google_apis_ps16k-x86_64-pixel_8-nb-NO
+      # On main, with no cached device yet: boot once to make a clean snapshot
+      # for later runs to start from. Pull requests only ever read it.
+      - name: Create the virtual device and its snapshot
+        if: steps.affected.outputs.app == 'true' && github.ref == 'refs/heads/main' && steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 37
+          system-image-api-level: '37.2'
+          target: google_apis_ps16k
+          arch: x86_64
+          profile: pixel_8
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -change-locale nb-NO
+          disable-animations: false
+          script: echo "Created the virtual device and saved a clean snapshot."
+      - if: steps.affected.outputs.app == 'true' && github.ref == 'refs/heads/main' && steps.avd-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-37.2-google_apis_ps16k-x86_64-pixel_8-nb-NO
+      # The same image as the Mac's emulator: Android 17 with 16 KB memory
+      # pages, which Google Play requires apps to work on. A native library
+      # that is not aligned for them fails here, not at store upload.
+      - name: Boot the emulator in bokmål and run every flow
+        if: steps.affected.outputs.app == 'true'
+        timeout-minutes: 15
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 37
+          system-image-api-level: '37.2'
+          target: google_apis_ps16k
+          arch: x86_64
+          profile: pixel_8
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -change-locale nb-NO
+          disable-animations: true
+          script: pnpm run e2e:android --skip-build
+      # Maestro's screenshots and logs show only synthetic screens (RG-07), and
+      # are kept for 7 days: artefacts count against the account's storage.
+      - name: Keep Maestro's debug output when a flow failed
+        if: failure() && steps.affected.outputs.app == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-e2e-debug
+          path: reports/e2e-android/
+          retention-days: 7
+      - if: steps.affected.outputs.app == 'true' && github.ref == 'refs/heads/main' && steps.gradle-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/app.config.ts') }}
 
   security: # CI-10
     runs-on: ubuntu-latest

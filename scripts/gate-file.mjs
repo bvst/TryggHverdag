@@ -20,6 +20,13 @@ export function filesToCheck(args) {
 }
 
 /**
+ * The app's tests run on jest-expo, everything else's on Vitest (INF-06).
+ * Vitest cannot run React Native code, so an app file sent to `vitest related`
+ * would fail after every edit for a reason unrelated to the edit.
+ */
+const APP = 'apps/mobile/';
+
+/**
  * What to run for these files. Import rules only make sense for code the
  * dependency graph covers, and "related tests" only for files that have any.
  */
@@ -45,13 +52,14 @@ export function stepsFor(files) {
       command: ['pnpm', 'exec', 'depcruise', '--config', '.dependency-cruiser.cjs', ...cruisable],
     });
   }
-  const testable = code.filter((file) => !matchesAnyGlob(file, TEST_GLOBS));
+  const vitestCode = code.filter((file) => !file.startsWith(APP));
+  const testable = vitestCode.filter((file) => !matchesAnyGlob(file, TEST_GLOBS));
   if (testable.length > 0) {
     steps.push({
       name: 'tests that cover this file',
       command: ['pnpm', 'exec', 'vitest', 'related', '--run', ...testable],
     });
-  } else if (code.some((file) => matchesAnyGlob(file, TEST_GLOBS))) {
+  } else if (vitestCode.some((file) => matchesAnyGlob(file, TEST_GLOBS))) {
     steps.push({
       name: 'the edited tests',
       command: [
@@ -59,7 +67,25 @@ export function stepsFor(files) {
         'exec',
         'vitest',
         'run',
-        ...code.filter((file) => matchesAnyGlob(file, TEST_GLOBS)),
+        ...vitestCode.filter((file) => matchesAnyGlob(file, TEST_GLOBS)),
+      ],
+    });
+  }
+  // Jest runs in the app, so the files go to it relative to the app. An edited
+  // test is related to itself, so one step covers tests and code alike.
+  const appCode = code.filter((file) => file.startsWith(APP));
+  if (appCode.length > 0) {
+    steps.push({
+      name: 'app tests related to this file (jest-expo)',
+      command: [
+        'pnpm',
+        '--dir',
+        APP,
+        'exec',
+        'jest',
+        '--ci',
+        '--findRelatedTests',
+        ...appCode.map((file) => file.slice(APP.length)),
       ],
     });
   }

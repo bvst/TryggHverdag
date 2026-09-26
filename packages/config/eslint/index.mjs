@@ -63,6 +63,10 @@ export const IGNORED_PATHS = [
   '**/coverage/**',
   '**/.turbo/**',
   '**/.expo/**',
+  // What `expo prebuild` generates from app.config.ts (INF-06). Never committed,
+  // but on disk after a local build, and ESLint does not read .gitignore.
+  'apps/mobile/android/**',
+  'apps/mobile/ios/**',
   'spikes/**', // throwaway by definition — never shipped, never linted
   'docs/**', // planning material, including the file templates INF-02 copies in
 ];

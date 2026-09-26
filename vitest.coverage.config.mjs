@@ -28,7 +28,10 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text-summary', 'json-summary'],
       include: ['scripts/**/*.mjs', 'packages/**/src/**/*.ts', 'apps/**/src/**/*.ts'],
-      exclude: ['**/*.test.*', 'apps/server/src/adapters/**'],
+      // The app is measured by jest-expo alone. Measured here as well, its files
+      // would count at 0 % beside their real figure, and the ratchet refuses a
+      // file both runners report (scripts/lib/coverage.mjs, mergeSummaries).
+      exclude: ['**/*.test.*', 'apps/server/src/adapters/**', JEST_EXPO_FILES],
       reportsDirectory: 'coverage',
     },
   },

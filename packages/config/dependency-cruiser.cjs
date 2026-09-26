@@ -95,7 +95,10 @@ module.exports = {
       severity: 'error',
       comment:
         'AR-09: screens talk to the safety core only through its public interface (its index file), so UI work cannot break background location or heartbeats.',
-      from: { path: '^apps/mobile/src/(features|shared)/' },
+      // Everything in the app except the safety core itself: routes under
+      // src/app/ included, and any folder added later without an edit here.
+      // Naming features/ and shared/ alone let a route reach past the index.
+      from: { path: '^apps/mobile/src/', pathNot: SAFETY_CORE },
       to: { path: SAFETY_CORE, pathNot: `${SAFETY_CORE}index\\.tsx?$` },
     },
     {
@@ -166,7 +169,14 @@ module.exports = {
   ],
   options: {
     doNotFollow: { path: 'node_modules' },
-    exclude: { path: '(^|/)(node_modules|dist|build|coverage|\\.turbo|\\.expo)/' },
+    // apps/mobile/android and ios are what `expo prebuild` generates: on disk
+    // after a local build, never committed, and not ours to check (INF-06).
+    exclude: {
+      path: [
+        '(^|/)(node_modules|dist|build|coverage|\\.turbo|\\.expo)/',
+        '^apps/mobile/(android|ios)/',
+      ],
+    },
     tsPreCompilationDeps: true,
     combinedDependencies: true,
     enhancedResolveOptions: {

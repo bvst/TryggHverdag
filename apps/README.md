@@ -1,11 +1,11 @@
 # apps
 
-Two deployable applications live here. Both arrive later in milestone M0:
+Two deployable applications live here, both from milestone M0:
 
-| Folder | What it is | Arrives in |
+| Folder | What it is | Arrived in |
 |--------|-----------|-----------|
 | `server/` | Hono API and the watchdog worker, built from one codebase (AR-01) | INF-05 |
-| `mobile/` | The Expo app: `safety-core/`, `features/`, `shared/` (AR-09) | INF-06 (needs the Mac) |
+| `mobile/` | The Expo app: routes in `src/app/`, then `safety-core/`, `features/`, `shared/` (AR-09); see its README | INF-06 |
 
 The layout each of them follows is in
 [`docs/plan/05-architecture.md`](../docs/plan/05-architecture.md). The import

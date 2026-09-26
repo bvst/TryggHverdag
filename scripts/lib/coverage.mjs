@@ -56,6 +56,63 @@ export function summarize(summary, root) {
 }
 
 /**
+ * The two coverage runs the ratchet reads (INF-06). Vitest measures the server,
+ * the packages and the scripts; jest-expo measures the app. Each file belongs
+ * to exactly one of them: Vitest's coverage config excludes apps/mobile.
+ */
+export const COVERAGE_SUMMARIES = [
+  { runner: 'vitest', file: 'coverage/coverage-summary.json' },
+  { runner: 'jest-expo', file: 'apps/mobile/coverage/coverage-summary.json' },
+];
+
+/**
+ * Both runs' summaries as one set of per-file figures.
+ *
+ * A summary that is not there is a run that did not happen, not a run that
+ * measured nothing, so it is refused and named. So is a file both runners
+ * measured: one of them was measuring code it cannot run, and whichever figure
+ * won, the ratchet would be judging something other than the tests.
+ *
+ * @param {{ runner: string, file: string, summary: object | null }[]} runs
+ * @param {string} root absolute path of the repository
+ * @returns {{ ok: true, files: Record<string, object> } | { ok: false, message: string }}
+ */
+export function mergeSummaries(runs, root) {
+  const missing = runs.filter((run) => run.summary === null);
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      message:
+        `coverage:ratchet: nothing was measured by ${missing.map((run) => `${run.runner} (${run.file} is missing)`).join(' or ')}. ` +
+        'Run `pnpm run test:coverage` first: a coverage gate with no numbers is not a gate.',
+    };
+  }
+
+  const files = {};
+  const measuredBy = {};
+  const twice = [];
+  for (const run of runs) {
+    for (const [file, figures] of Object.entries(summarize(run.summary, root))) {
+      if (measuredBy[file] !== undefined) {
+        twice.push(`${file} (${measuredBy[file]} and ${run.runner})`);
+        continue;
+      }
+      measuredBy[file] = run.runner;
+      files[file] = figures;
+    }
+  }
+  if (twice.length > 0) {
+    return {
+      ok: false,
+      message:
+        `coverage:ratchet: measured by both runners, so one of them measured code it cannot run: ${twice.join(', ')}. ` +
+        'Exclude it from the runner that does not own it.',
+    };
+  }
+  return { ok: true, files };
+}
+
+/**
  * Where a changed file covers less than it used to. New files have nothing to
  * compare against, which the floors handle instead.
  */

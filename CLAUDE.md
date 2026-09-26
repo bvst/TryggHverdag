@@ -72,11 +72,17 @@ list that is actually true. Today:
 `pnpm run test:hooks` · `pnpm run req:coverage` · `pnpm run tests:changes` ·
 `pnpm run coverage:ratchet` · `pnpm run api:diff` · `pnpm run api:spec` ·
 `pnpm run mutation` · `pnpm run licenses:check` · `pnpm run gate:integrity` ·
-`pnpm run doctor`
+`pnpm run doctor` · `pnpm run dev` · `pnpm run e2e:android`
 
 `gate:full` prints the steps it cannot run yet and which task brings them, so
-"passed" never quietly means "did not check". Still to come: `dev`,
-`e2e:android`, `e2e:ios` (INF-06).
+"passed" never quietly means "did not check". Still to come: `e2e:ios`, with
+the weekly iOS simulator run, as its own task before M3's exit (the owner's
+answer to INF-06's Q2: Android only in INF-06).
+
+`test:unit` and `test:coverage` run Vitest and then the app's jest-expo suite.
+`e2e:android` (L7) builds the release app, installs it on a connected Android
+emulator and runs the Maestro flows; without a device, `gate:full` names the
+`android-e2e` check as where it runs.
 
 `test:integration` (L3) needs a Docker daemon, so it runs in CI and on the Mac
 but not in a cloud session; `gate:full` says so rather than skipping quietly.

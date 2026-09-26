@@ -32,7 +32,9 @@ export async function fetchArchiveFrom(url) {
  *   fetchArchive: (url: string) => Promise<Buffer>,
  *   extract: (archive: string, into: string) => unknown,
  * }} options — `what` names the tool in messages; `extract` must leave
- *   `binaryName` directly inside `into`
+ *   `binaryName` directly inside `into`. A tool that ships as a folder, such as
+ *   Maestro's launcher and its jars, gives a path instead (`maestro/bin/maestro`):
+ *   then everything `extract` unpacked becomes `dir`, moved into place whole.
  */
 export async function ensurePinnedBinary({
   dir,
@@ -63,14 +65,26 @@ export async function ensurePinnedBinary({
   try {
     const file = path.join(partial, 'archive');
     writeFileSync(file, archive);
-    await extract(file, partial);
-    const unpacked = path.join(partial, binaryName);
+    const shipsAsFolder = path.dirname(binaryName) !== '.';
+    // A folder tool is unpacked on its own, so the archive is not moved with it.
+    const into = shipsAsFolder ? path.join(partial, 'tree') : partial;
+    mkdirSync(into, { recursive: true });
+    await extract(file, into);
+    const unpacked = path.join(into, binaryName);
     if (!existsSync(unpacked)) {
       throw new Error(`The ${what} archive held no ${binaryName} binary.`);
     }
     chmodSync(unpacked, 0o755);
-    mkdirSync(dir, { recursive: true });
-    renameSync(unpacked, binary);
+    if (shipsAsFolder) {
+      // Whatever an earlier, interrupted run left has no binary in it (that
+      // was checked above), so it is not trusted: it is replaced.
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(path.dirname(dir), { recursive: true });
+      renameSync(into, dir);
+    } else {
+      mkdirSync(dir, { recursive: true });
+      renameSync(unpacked, binary);
+    }
   } finally {
     rmSync(partial, { recursive: true, force: true });
   }
