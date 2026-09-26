@@ -145,8 +145,14 @@ Given `pnpm run e2e:android`,
 when any of the following is true, then it exits non-zero with a message
 saying which one:
 - no Android device is connected;
-- Maestro, or Java 17 or newer, is not usable;
+- the only devices connected are real phones, not emulators (amended
+  2026-09-26: it never installs onto, or reads crash logs from, a real phone);
+- Maestro is not usable, or Java is not 17 to 21 (amended 2026-09-26: Java 25
+  passes a "17 or newer" check and then fails the native build after about 18
+  minutes; the message says to set `JAVA_HOME` to a JDK 17);
 - the pinned Maestro download does not match its hash;
+- Maestro exits non-zero, even if its report shows every flow passed
+  (amended 2026-09-26; the message names both the exit status and the report);
 - Maestro's report shows zero flows run;
 - any flow failed.
 
@@ -733,6 +739,84 @@ through.
 | R14 | The Mac's limits | 16 GB, so Colima and the emulator not together; Intel means x86_64 images only; `JAVA_HOME` points at Android Studio's JBR 25, which the project's Gradle may refuse | — | Stop Colima for L7 runs. If Gradle refuses JDK 25, use a JDK 17 unpacked into `claude-dev`'s home: no admin needed (D-056) |
 | R15 | Build artefacts and logs live on GitHub, outside the EEA | Screenshots in a failed run's artefact | — | Synthetic screens only (RG-07), 7-day retention. This is D-077's open question about build logs, which is settled before production |
 | R16 | The mutation gate cannot see app code | When `safety-core/` gets code (M1 or M3), Stryker's Vitest-only command kills no mutant in it, and the score falls below 80 % | — | Loud, not silent: a red `mutation`. The task that first adds safety-core code makes Stryker run jest too. Recorded as a follow-up in the decision |
+
+## Amendments after review (2026-09-26)
+
+The four reviews of the first implementation passed, except for
+`code-reviewer`'s block on the missing decision. These changes are in scope for
+INF-06; each gets a test before its code (RG-02).
+
+**INF-06-AC19: the release app keeps nothing in Android's cloud backup.**
+Given the generated release manifest, `android:allowBackup` is `false`. Auto
+Backup would later copy session tokens or journey data to Google Drive,
+outside the providers chosen for the EEA, and a restore would move a
+device-bound login to another phone. (`privacy-security-reviewer`.)
+
+**INF-06-AC20: CI and local tooling send nothing to their vendors.**
+Wherever Maestro runs (the `android-e2e` job and `e2e-android.mjs`),
+`MAESTRO_CLI_NO_ANALYTICS` and `MAESTRO_DISABLE_UPDATE_CHECK=true` are set.
+Maestro reads the second one with `Boolean.parseBoolean`, so `'1'` does nothing,
+and without it every run sends a persistent ID to `api.copilot.mobile.dev`.
+(`privacy-security-reviewer`.)
+
+**AC9, amended above:** emulators only; Java 17 to 21; Maestro's exit status
+and its report must both pass. (All three reviewers.)
+
+**Hand-overs fail loudly.** `test:unit` and `test:coverage` hand over to the
+app with `pnpm --filter @trygghverdag/mobile --fail-if-no-match`. A filter that
+matches nothing exits 0 in pnpm 10, and jest would be silently skipped.
+`e2eClosure` in `touchesApp` throws if the `e2e:android` script exists but
+names no entry file it can parse, rather than returning an empty closure.
+(`safety-reviewer`.)
+
+**Tests pin what a green check means.** The `android-e2e` step that runs the
+flows is guarded by exactly `steps.affected.outputs.app == 'true'`, and a test
+holds it to that, since a `main`-only guard would pass today.
+(`safety-reviewer`.)
+
+**Simpler code, and coverage that does not go down:**
+- `pinned-binary.mjs` has one unpack path for a single binary and for a
+  folder. The first implementation lowered this file's baseline, from 84.61 to
+  78.78 % of lines and from 75 to 66.66 % of branches. The baseline is
+  restored and must not go down (RG-04).
+- The emulator settings in `ci.yml` (API level, target, profile, locale, the
+  snapshot and Gradle cache keys) are written once, as job-level `env`.
+- The unreachable `maestro ?? 'maestro'` fallback, which would run an unpinned
+  Maestro from `PATH`, is removed.
+- The flow's `TITLE` and `STATUS` are escaped before Maestro reads them as
+  regular expressions.
+- The `android-e2e` checkout sets `persist-credentials: false`.
+(`code-reviewer`, `privacy-security-reviewer`.)
+
+**The clock rule covers `.tsx`.** The AR-03 and AR-06 lint rule's
+`apps/mobile/src/safety-core/**/*.ts` becomes `**/*.{ts,tsx}`, now that `.tsx`
+is normal in the app. (`code-reviewer`.)
+
+**D-080 is written, and A-27 is on the owner's list.** D-080 records each
+version and tool choice, and each deviation from this spec, with its reason:
+- Expo SDK 57, React Native 0.86.3 and React 19.2.3;
+- Maestro 2.10.0, with its hash from Maestro's own checksums;
+- the Apache-2.0 licences of `android-emulator-runner` and Maestro, which
+  `licenses:check` cannot see;
+- the Android SDK and system image, accepted under Google's SDK licence;
+- `actions/cache` instead of `setup-gradle`, whose caching component is
+  proprietary;
+- the `pnpm.packageExtensions` override, and the `@babel/core` pin;
+- Java 17 to 21, and emulators only.
+It is amended with the measured CI durations after the first run.
+(`code-reviewer`, `privacy-security-reviewer`.)
+
+**Not in INF-06; listed for the owner in the pull request:**
+- Renames are invisible to the change classifier (`scripts/lib/git.mjs`, no
+  `--no-renames`). This predates INF-06 and is its own `/bugfix`.
+- Code owners for the gate configuration and `apps/mobile/app.config.ts`
+  (a `/decision`).
+- Mutation testing and the AI safety filter both skip changes that touch only
+  a safety test.
+- Maven and Gradle dependency audit and licence checks, before the first
+  store upload.
+- Dark mode, status-bar contrast and `SafeAreaProvider` for the real home
+  screen.
 
 ## Out of scope
 
