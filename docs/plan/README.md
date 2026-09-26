@@ -68,6 +68,7 @@ session.
 | A-24 | After the INF-08 pull request merges: run `infra-staging` with `plan`, then `apply`, then confirm the check leaves `new` — see [monitoring-setup.md](monitoring-setup.md) | Monitoring (INF-08, REL-08) | ⬜ Open |
 | A-25 | Add the UptimeRobot keyword monitor and install its mobile app — see [monitoring-setup.md](monitoring-setup.md) | Monitoring (INF-08, REL-08, D-079) | ⬜ Open |
 | A-26 | The drill: stop the staging app and confirm both monitors page you within 5 minutes — see [monitoring-setup.md](monitoring-setup.md) | INF-08's done-criterion | ⬜ Open |
+| A-28 | Add `android-e2e` to the existing `main` ruleset's required checks (Settings → Rules → Rulesets → `main` → required status checks; edit the existing ruleset, do not import a second one), then re-run only the `gate-integrity` job on the INF-06 pull request. Open Dependabot pull requests will need a `@dependabot rebase` afterwards | INF-06 cannot merge otherwise: `gate:integrity` reads the branch's own `package.json` and goes red the moment `e2e:android` exists (D-042, D-060, CI-09) | ⬜ Open |
 
 ## Why this order
 The specialised agents and skills (Section 7) are where your quality bar gets

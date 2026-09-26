@@ -1864,3 +1864,138 @@ any other path is work, not a candidate for the same treatment.
     up to 10 seconds a minute, and delays a stop by as much (measured by
     `safety-reviewer`: exit 6.8 s after SIGTERM during a hung check-in).
     Graphile's `helpers.abortSignal` could cancel the ping on stop.
+
+## D-081 — App skeleton v1: Expo SDK 57 and the toolchain built around it
+- **Date:** 2026-09-26 · **Status:** Accepted (delegated, D-031) · **Section:** 4/5/6/8 (M0, INF-06)
+- **Context:** INF-06's spec (`docs/specs/INF-06.md`, "Versions") delegated the
+  exact Expo SDK, its dependent versions and the L7 toolchain to Claude, asking
+  for the newest stable SDK the workspace can install, and for each other
+  version to be recorded with its reason and, where relevant, a fallback. The
+  spec's own review round (2026-09-26) added four more recorded choices (AC19,
+  AC20 and two others) that were made building the skeleton but not yet
+  written down. This is that record.
+- **Decision:**
+  1. **Expo SDK 57**, not a preview SDK 58: `expo ~57.0.25`,
+     `react-native 0.86.3`, `react 19.2.3`, `expo-router ~57.0.23`,
+     `jest-expo ~57.0.5`. Every Expo and React Native package is installed
+     with `expo install`, so their versions are the SDK's own list rather than
+     picked by hand. **TypeScript stays at the workspace's catalog version,
+     `~6.0.3`** (D-058); Babel strips the app's types, so the compiler version
+     only matters to `tsc --noEmit`, and the app adds no second TypeScript to
+     the workspace. **Fallback**, unexercised: the previous stable SDK, had 57
+     failed to install under Node 22 / `engine-strict=true`, lacked a matching
+     `jest-expo`, or failed to build in this pnpm workspace.
+  2. **Jest and its testing libraries follow jest-expo's own line, not
+     Vitest's.** `jest-expo` 57 is built on Jest 29, so the app declares
+     `jest ~29.7.0` and `@jest/globals 29.7.0` rather than the newer Jest the
+     rest of the tooling could otherwise reach for.
+     `@testing-library/react-native` is at its current major, 14, whose peer
+     `test-renderer` is pinned to `~1.2.0`: that line matches
+     react-reconciler 0.33 for React ^19.2, while `test-renderer` 1.3 targets
+     react-reconciler 0.34 for React ^19.3, which SDK 57's React 19.2.3 is
+     not. **i18next 26** and **react-i18next 17** (D-032 already chose the
+     library; these are its current majors), with `expo-localization` for the
+     device's ordered language list.
+  3. **`pnpm.packageExtensions` in the root `package.json` marks
+     `react-native-drawer-layout`'s peers, `react-native-reanimated` and
+     `react-native-gesture-handler`, optional.** `expo-router` 57 hard-depends
+     on `react-native-drawer-layout`. Without the override, pnpm's
+     auto-install-peers filled those two peers — plus
+     `react-native-worklets` — with their latest versions: Reanimated 4.7.0,
+     Gesture Handler 3.3.0, Worklets 0.13.0, all outside SDK 57's supported
+     versions (4.5.1, `~2.32.0`, 0.10.1 respectively). These are native
+     modules the spec's "keep dependencies few" explicitly excludes (SEC-06),
+     and Android autolinking would have linked all three into the release
+     build whether or not the app ever imports `expo-router/drawer`. With the
+     override in place, importing `expo-router/drawer` now fails loudly at
+     bundle time instead of silently shipping unsupported native code.
+     **Removing this override needs a new decision**, not a quiet edit,
+     because it is the thing standing between "no Reanimated" as written in
+     the spec and Reanimated arriving as a side effect of an unrelated
+     dependency.
+  4. **`apps/mobile`'s `package.json` declares `@babel/core ^7.20.0`
+     itself.** Left undeclared, `babel-jest` and `babel-preset-expo` resolved
+     the workspace root's Babel — version 8, brought in by
+     `@stryker-mutator/instrumenter` for mutation testing (D-036) — against
+     peer ranges that ask for `^7`. Jest ran anyway; it was still an
+     unsupported combination that a lockfile change could break without
+     warning.
+  5. **The test build is `expo prebuild` plus Gradle, not EAS.** `e2e:android`
+     generates the native Android project from `app.config.ts` (continuous
+     native generation, no committed `android/` folder) and builds the
+     release variant for `x86_64` only, on the runner or the Mac, with no EAS
+     CLI, no Expo account or token, and no repository secret. It is what
+     ships, has no Metro server to keep alive on a runner, and has one fewer
+     moving part in a job that must not be flaky (INF-06-AC10).
+  6. **Maestro 2.10.0, pinned and hash-checked.** Its SHA-256 is read from
+     Maestro's own `checksums_sha256.txt` and matches the digest GitHub serves
+     for the release asset, so the check is against Maestro's stated hash, not
+     merely "unchanged since the day this was written". Its licence is
+     Apache-2.0. `MAESTRO_CLI_NO_ANALYTICS` and
+     `MAESTRO_DISABLE_UPDATE_CHECK=true` are both set wherever Maestro runs.
+     The second name matters exactly as written: Maestro reads it with Java's
+     `Boolean.parseBoolean`, so `'1'` parses as `false` and does nothing,
+     leaving every run sending a persistent ID to `api.copilot.mobile.dev`.
+     Only `'true'` (case-insensitively) turns it off.
+  7. **`reactivecircus/android-emulator-runner` v2.38.0, pinned by commit SHA**
+     (D-060 point 3), licensed Apache-2.0. `licenses:check` reads the npm
+     dependency tree and cannot see a GitHub Action, so this decision is where
+     that licence is recorded, the same way D-077 recorded Terraform's.
+  8. **The Android SDK and the system image
+     `system-images;android-37.2;google_apis_ps16k;x86_64` are accepted under
+     Google's Android SDK licence, in CI.** This is unavoidable for building
+     or testing anything Android at all, and it is written down because
+     `setup-gradle`'s own comment (see the next item) treats a proprietary
+     licence as disallowed in this repository — Google's SDK licence is a
+     different thing from that, and the distinction is worth being explicit
+     about rather than leaving a reader to wonder why one non-permissive
+     licence is accepted and another is not.
+  9. **`actions/cache` (MIT) is used instead of `gradle/actions/setup-gradle`
+     for the Gradle cache.** The current `setup-gradle` bundles a caching
+     component, `gradle-actions-caching`, under a licence restricted to
+     internal use with no redistribution — the same category of licence this
+     repository already rejected for `gitleaks-action` (D-061 point 7). The
+     cache is restored on every `android-e2e` run and saved from `main` only,
+     so a pull-request branch cannot fill or poison it.
+  10. **Java 17 to 21, and emulators only, for `e2e:android`.** Java 25 —
+      which is what Android Studio's JBR ships on the Mac, and therefore the
+      Mac's default `JAVA_HOME` — passes a "Java 17 or newer" check and then
+      fails the native build's `configureCMake…[x86_64]` tasks after about 18
+      minutes, with `WARNING: A restricted method in java.lang.System has been
+      called` (JDK 24+'s native-access restriction). CI's `setup-java` step
+      pins 17 and is unaffected. On the Mac, a Temurin 17 unpacked into
+      `claude-dev`'s own home (`~/jdks/`, no admin rights needed, D-056) is the
+      way round it; **the owner should point `JAVA_HOME` at a JDK 17 on the
+      Mac** so this does not have to be rediscovered per session.
+  11. **The release app's manifest and config carry these settings, each with
+      its own reason:**
+      - **`allowBackup: false`.** Android's Auto Backup would otherwise copy
+        whatever the app later stores — session tokens, journey data — to
+        Google Drive, a destination outside the providers chosen for the EEA
+        (D-016), and a restore could move a device-bound login to a different
+        phone.
+      - **Blocked permissions:** `SYSTEM_ALERT_WINDOW`,
+        `READ_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE`, `VIBRATE`. Expo's
+        template asks for these by default; the skeleton needs network access
+        and nothing else, and drawing over other apps or reading shared
+        storage is not something a safety app should hold without a reason
+        (SEC-06).
+      - **No generated deep-link scheme** (`expo-dev-client`'s
+        `addGeneratedScheme: false`). Left at its default, the dev client
+        registers an `exp+trygghverdag://` link in the *main* manifest, so
+        even release builds could be opened from any web page. No scheme
+        exists until a feature needs one.
+      - **No `expo-updates`** (D-023): a build whose JavaScript a server can
+        replace after testing is a build nobody tested.
+      - **The application ID, `no.trygghverdag.placeholder`, stays a
+        placeholder** until the first store upload, when the owner fixes it
+        together with the public name (D-057). It costs nothing to change
+        before then.
+  12. **Not yet measured:** `android-e2e`'s CI durations, cold and warm, are
+      added to this decision once the first CI run of the job has produced
+      them. Estimates only exist so far (`docs/specs/INF-06.md`, "CI cost").
+- **Consequences:** Items 1–4 and 6–11 are recorded so that a later session
+  does not "clean up" what looks like an odd version pin or an unused-looking
+  environment variable without first reading why it is there — several of
+  them (item 3 especially) fail silently or expensively if quietly removed.
+  Item 12 is a standing to-do on this same decision, not a separate task.
