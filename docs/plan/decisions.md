@@ -2037,11 +2037,16 @@ any other path is work, not a candidate for the same treatment.
   12. **Not yet measured:** `android-e2e`'s CI durations, cold and warm, are
       added to this decision once the first CI run of the job has produced
       them. Estimates only exist so far (`docs/specs/INF-06.md`, "CI cost").
-  13. **Follow-up: mutation testing of app code.** Stryker runs Vitest only,
-      so it cannot mutate `apps/mobile/src/safety-core/`, which is empty
-      today. The task that first adds safety-core code also makes Stryker run
-      jest (spec risk R16). Until then a safety-core change would fail
-      `mutation` loudly, not pass it.
+  13. **Follow-up, a precondition for the first safety-core code: mutation
+      testing of app code.** Stryker runs Vitest only. It mutates folder
+      safety paths as `**/*.ts` only (`stryker.config.mjs`), so a `.tsx` file
+      there is never mutated. Safety-core also shares the pooled
+      `whole-suite` run (`gate-decisions.mjs`), whose `break: 80` applies to
+      the combined score. So a safety-core change could leave `mutation`
+      green without testing it. The folder is empty today, so nothing is
+      exposed. The task that first adds safety-core code must first make
+      Stryker run jest on it, as its own run with a `{ts,tsx}` glob, so its
+      score stands alone (spec risk R16).
 - **Consequences:** Items 1–4 and 6–11 are recorded so that a later session
   does not "clean up" what looks like an odd version pin or an unused-looking
   environment variable without first reading why it is there — several of

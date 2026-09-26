@@ -739,7 +739,7 @@ through.
 | R13 | The required-check rollout | Open pull requests based on the old `main` wait for a check that never comes | — | The order in "Making `android-e2e` a required check"; WIP 1 (D-052) keeps it to Dependabot |
 | R14 | The Mac's limits | 16 GB, so Colima and the emulator not together; Intel means x86_64 images only; `JAVA_HOME` points at Android Studio's JBR 25, which the project's Gradle may refuse | — | Stop Colima for L7 runs. If Gradle refuses JDK 25, use a JDK 17 unpacked into `claude-dev`'s home: no admin needed (D-056) |
 | R15 | Build artefacts and logs live on GitHub, outside the EEA | Screenshots in a failed run's artefact | — | Synthetic screens only (RG-07), 7-day retention. This is D-077's open question about build logs, which is settled before production |
-| R16 | The mutation gate cannot see app code | When `safety-core/` gets code (M1 or M3), Stryker's Vitest-only command kills no mutant in it, and the score falls below 80 % | — | Loud, not silent: a red `mutation`. The task that first adds safety-core code makes Stryker run jest too. Recorded as a follow-up in the decision |
+| R16 | The mutation gate cannot see app code | When `safety-core/` gets code (M1 or M3), Stryker's Vitest-only command kills no mutant in it, and the score falls below 80 % | — | Not guaranteed loud: `.tsx` is never mutated, and safety-core shares the pooled `whole-suite` score (`break: 80`), so `mutation` could stay green. The folder is empty today. A precondition for the first safety-core code: Stryker runs jest on it as its own run with a `{ts,tsx}` glob (D-081 item 13) |
 
 ## Amendments after review (2026-09-26)
 

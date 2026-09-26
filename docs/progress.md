@@ -24,7 +24,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-03 | Gate scripts + HK-08 | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-04 | CI workflows, merge rules, CODEOWNERS | ✅ Done — 2026-09-23 ([#3](https://github.com/bvst/TryggHverdag/pull/3)) |
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
-| INF-06 | App skeleton | 🟡 In progress on `feat/INF-06-app-skeleton`: spec, tests and implementation committed; L7 and the development build proven on the Mac; reviews and pull request next. Needs the owner's A-28 (add `android-e2e` to the live ruleset) before merge |
+| INF-06 | App skeleton | 🟡 On `feat/INF-06-app-skeleton`: code, tests and reviews complete locally; the pull request is about to open. Needs the owner's A-28 (add `android-e2e` to the live ruleset) before merge — `gate:integrity` is red on the pull request until then |
 | INF-07 | Staging on Clever Cloud | ✅ Done — 2026-09-25 ([#22](https://github.com/bvst/TryggHverdag/pull/22), fixes [#23](https://github.com/bvst/TryggHverdag/pull/23) [#24](https://github.com/bvst/TryggHverdag/pull/24), names [#25](https://github.com/bvst/TryggHverdag/pull/25)). A merge deployed and the smoke test passed; BUG-3 fixed ([#27](https://github.com/bvst/TryggHverdag/pull/27)) |
 | INF-08 | Monitoring | 🟡 In flight — [#31](https://github.com/bvst/TryggHverdag/pull/31), all four reviews PASS; [#30](https://github.com/bvst/TryggHverdag/pull/30) merged. Done when the owner's drill passes (A-26) |
 | INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). Since D-080 a dashboard: the pinned issue's description, replaced every run at 01:07 UTC (≈03:00 Oslo). The missed-run alarm is proven (2026-09-25) |
@@ -196,11 +196,6 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**BUG-5 — a failed BUG-3 worker test left its worker running** (branch
-`fix/BUG-5-worker-test-orphans`). The fix is test-only: the worker is always
-stopped, and the failure says how it ended. It does not block INF-06, by the
-owner's choice.
-
 **INF-08 — monitoring** ([#31](https://github.com/bvst/TryggHverdag/pull/31),
 on `claude/busy-faraday-40n2zl`; #30 merged). Reviews and `gate:full` are
 done; CI's first run on #31 found the mutation gate out of time, fixed below.
@@ -309,6 +304,10 @@ retraction that had only reached the archive), #15 (HK-09, the pre-commit hook),
 #16 (the reviewer verdict must now be corroborated; `/.githooks/` owned;
 `pnpm exec`), #17 (CI-12). 2026-09-24 — #18 (INF-09), #20 (CI-12: the test that
 had kept `main` red since #17 inherited the runner's `GITHUB_EVENT_NAME`).
+2026-09-26 — [#33](https://github.com/bvst/TryggHverdag/pull/33) (BUG-5: a
+failed BUG-3 worker test no longer leaves its worker running; test-only,
+merged by the owner 17:16:26Z). Full account in
+[`progress/m0.md`](progress/m0.md).
 
 
 **An unmerged branch exists: `claude/inf-04-follow-through`.** It closes INF-04's
