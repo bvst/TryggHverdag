@@ -639,4 +639,112 @@ describe('postDailyStatus', () => {
       expect({ morning, mentioning }).toEqual({ morning, mentioning: [] });
     }
   });
+
+  /**
+   * What the footer says, as the footer test above holds it. Every description
+   * ends with the footer (D-080), so all of this must follow any problem the
+   * description reports: a problem written after the footer leaves none of it
+   * to find.
+   */
+  const FOOTER_SAYS = [
+    /\b\d{2}:\d{2} UTC — \d{2}:\d{2} in Oslo in summer, \d{2}:\d{2} in winter\b/u,
+    /\breplaced (?:on )?every run\b/i,
+    /\bcurrent state\b/i,
+    /\bnot a history\b/i,
+    /\bunchanged for more than a day\b/i,
+    /\bthe workflow did not run\b/i,
+    /\bHealthchecks\.io\b/,
+    /\balready (?:have )?paged\b/i,
+    RUN_URL,
+    WORKFLOW_URL,
+  ];
+
+  /** What a text says after its last mention of `part`; empty if there is none. */
+  const textAfter = (text, part) =>
+    text.includes(part) ? text.slice(text.lastIndexOf(part) + part.length) : '';
+
+  /**
+   * Problems that do not stop the description from being written, as runPost's
+   * input, each with what the description says about it and the writes the
+   * issue gets that morning.
+   */
+  const PROBLEMS = {
+    'no Healthchecks.io secret': {
+      setup: { env: { PING_CONFIGURED: 'false' } },
+      says: 'HEALTHCHECKS_DAILY_STATUS_URL',
+      writes: ['issue edit'],
+    },
+    'a label that cannot be made': {
+      setup: { responses: { 'label create': { ok: false, output: 'HTTP 403' } } },
+      says: '`owner-question` could not be created',
+      writes: ['issue edit'],
+    },
+    'a new issue that cannot be pinned': {
+      setup: {
+        responses: {
+          'issue list': { ok: true, output: '[]' },
+          'issue pin': { ok: false, output: 'HTTP 403' },
+        },
+      },
+      says: 'could not be pinned',
+      writes: ['issue create', 'issue pin', 'issue edit'],
+    },
+  };
+
+  /** The two ways a morning has no report, as runPost's env. */
+  const NO_REPORT = {
+    'a report job that failed': { REPORT_RESULT: 'failure' },
+    'a report job that returned nothing': { STRUCTURED: '' },
+  };
+
+  test('no report and a problem: one 🛑 description, with the why and the problem, and the footer still last', () => {
+    // Found by mutation after the green step: the no-report description,
+    // composed without `problems`, passed every test above, because none of
+    // them put a missing report and a problem on the same morning — nor did
+    // the comment-era tests. The owner must read both, that nothing was
+    // checked and what else went wrong, and the problem sits above the footer,
+    // where it is read. The run is red either way: exit 1 is what pages the
+    // owner (D-080).
+    for (const [missing, env] of Object.entries(NO_REPORT)) {
+      const { why } = parseReport({
+        result: env.REPORT_RESULT ?? 'success',
+        structured: env.STRUCTURED ?? GOOD,
+      });
+
+      for (const [problem, { setup, says, writes: expected }] of Object.entries(PROBLEMS)) {
+        const morning = `${missing}, and ${problem}`;
+        const run = runPost({ env: { ...env, ...setup.env }, responses: setup.responses });
+        const { code, writes, body = '' } = run;
+        const also = body.indexOf('Also wrong this morning');
+
+        expect({ morning, writes }).toEqual({ morning, writes: expected });
+        expect(body.split('\n')[0], morning).toBe(`### ${HEADLINES.action} — no report today`);
+        expect(body, morning).toContain(why);
+        expect(also, `${morning}: "Also wrong this morning" is missing`).toBeGreaterThan(-1);
+        expect(body.slice(also), morning).toContain(says);
+        for (const said of FOOTER_SAYS) {
+          expect(textAfter(body, says), morning).toMatch(said);
+        }
+        expect({ morning, code }).toEqual({ morning, code: 1 });
+      }
+    }
+  });
+
+  test('a report and a problem: the problem sits above the footer too', () => {
+    // The same rule on a morning with a report, which nothing held either:
+    // problems appended after the footer passed every test above.
+    for (const [problem, { setup, says }] of Object.entries(PROBLEMS)) {
+      const { code, body = '' } = runPost(setup);
+      const also = body.indexOf('Also wrong this morning');
+
+      expect(body.split('\n')[0], problem).toBe(`### ${HEADLINES.healthy}`);
+      expect(body, problem).toContain('All quiet.');
+      expect(also, `${problem}: "Also wrong this morning" is missing`).toBeGreaterThan(-1);
+      expect(body.slice(also), problem).toContain(says);
+      for (const said of FOOTER_SAYS) {
+        expect(textAfter(body, says), problem).toMatch(said);
+      }
+      expect({ problem, code }).toEqual({ problem, code: 1 });
+    }
+  });
 });
