@@ -367,6 +367,17 @@ jobs:
             echo "::error::/dev/kvm is not usable on this runner, so the emulator would run without hardware acceleration and time out. android-e2e stops here rather than report a slow emulator as a broken app."
             exit 1
           fi
+      # Run 36300860646 built the app and then stopped in the emulator's SDK
+      # install with "No space left on device" while unpacking the system
+      # image. These are toolchains this job never uses: .NET, Haskell (both
+      # places it is installed), Swift and CodeQL. Removed before the build, so
+      # the build has the room too. The Android SDK, Java, Node, ~/.gradle and
+      # node_modules are not touched here or anywhere in this job.
+      - name: Free disk space by removing toolchains this job never uses
+        if: steps.affected.outputs.app == 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift \
+            "$RUNNER_TOOL_CACHE/CodeQL"
       - if: steps.affected.outputs.app == 'true'
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - if: steps.affected.outputs.app == 'true'
@@ -398,6 +409,19 @@ jobs:
         if: steps.affected.outputs.app == 'true'
         timeout-minutes: 30
         run: pnpm run e2e:android --build-only
+      # What the build leaves that nothing after it reads. Gradle's daemon is
+      # stopped first: a file it still holds open keeps its space after it is
+      # deleted. The APK is in app/build/outputs, which stays, and so does
+      # ~/.gradle, which main saves after the flows; the flow step installs the
+      # APK already built and runs no Gradle. The free space is printed last,
+      # so a disk that is still too full shows here, not as a failed SDK
+      # install in the emulator step.
+      - name: Free the build's disk space for the emulator, and show what is left
+        if: steps.affected.outputs.app == 'true'
+        run: |
+          (cd apps/mobile/android && ./gradlew --stop)
+          rm -rf apps/mobile/android/app/build/intermediates apps/mobile/android/app/.cxx
+          df -h /
       - id: avd-cache
         if: steps.affected.outputs.app == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

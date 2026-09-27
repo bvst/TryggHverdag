@@ -2056,6 +2056,13 @@ any other path is work, not a candidate for the same treatment.
         image alike. The runner's sdkmanager warns that it reads SDK XML only
         up to version 3. That is harmless here: the version-3 index lists
         these packages.
+      - **Run 3** (36300860646, after `--settle`): the platform install
+        worked, the KVM step passed, and the build took 10 min 14 s. The
+        emulator action then failed unpacking the 16 KB-page system image:
+        `No space left on device`. The job now frees space before the
+        emulator: it removes unused preinstalled toolchains and the app's
+        Gradle intermediates, keeps the APK and `~/.gradle`, and prints
+        `df -h` so the next log shows the numbers.
       - **Still to measure:** the emulator boot, the flow, and the warm
         durations, from the first green run.
   13. **Follow-up, a precondition for the first safety-core code: mutation
