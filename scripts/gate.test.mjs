@@ -4,14 +4,17 @@
 // in a script name drops a step, and the gate then reports "not possible yet"
 // and passes. These tests hold the lists to the repository they describe.
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -899,6 +902,56 @@ const FREED = [
   },
 ];
 
+// Android's command-line tools (added 2026-09-27). Run 36303366850, job
+// 108575130560, passed the KVM step and printed `/dev/root 72G 51G 22G 71% /`
+// before the emulator, and then the emulator action stopped with:
+//   Error: No device found matching --device pixel_8.
+// The runner image (ubuntu-24.04 20260920.314) ships the command-line tools
+// 12.0, whose avdmanager knows pixel_6 to pixel_7_pro and no pixel_8. The
+// pinned action (a421e43, src/sdk-installer.ts) installs its own 20.0 only when
+// $ANDROID_HOME/cmdline-tools does not exist, and puts cmdline-tools/latest/bin
+// first on PATH either way, so whatever is in latest is the avdmanager it runs.
+// 20.0's knows pixel_8. So a step before the emulator puts 20.0 in latest,
+// from Google's archive, checked against a pinned SHA-256. The archive's size
+// (172789259) and SHA-1 (48833c34b761c10cb20bcd16582129395d121b27) match
+// Google's repository2-3.xml; the SHA-256 was computed from that download.
+// It unpacks to one top-level folder, cmdline-tools/.
+const CMDLINE_TOOLS = {
+  archive: 'commandlinetools-linux-14742923_latest.zip',
+  url: 'https://dl.google.com/android/repository/commandlinetools-linux-14742923_latest.zip',
+  sha256: '04453066b540409d975c676d781da1477479dde3761310f1a7eb92a1dfb15af7',
+  latest: `${RUNNER.sdk}/cmdline-tools/latest`,
+};
+
+/**
+ * A fake folder of command-line tools, as file in the folder to
+ * [executable, content]. `from` marks every file, so a file of one set is
+ * never mistaken for the same file of another.
+ */
+const cmdlineToolsFiles = (version, from) => ({
+  'source.properties': [
+    false,
+    `Pkg.Revision=${version}\nPkg.Path=cmdline-tools;${version}\nPkg.Desc=Android SDK Command-line Tools\n#${from}\n`,
+  ],
+  'bin/sdkmanager': [
+    true,
+    `#!/bin/sh\n#${from}\ncase "$1" in --version) echo ${version} ;; *) echo "fake sdkmanager: $*" ;; esac\n`,
+  ],
+  'bin/avdmanager': [true, `#!/bin/sh\n#${from}\necho "fake avdmanager: $*"\n`],
+  [`lib/${from}.jar`]: [false, `${from}\n`],
+  'NOTICE.txt': [false, `${from}\n`],
+});
+
+/** What the runner has in cmdline-tools/latest before the job changes it: 12.0, with a file 20.0 does not have. */
+const OLD_CMDLINE_TOOLS = cmdlineToolsFiles('12.0', 'runner-12.0');
+
+/** More of the runner's SDK: in no rm check's KEPT, and still not the command-line tools step's to touch. */
+const SDK_FILES = [
+  `${RUNNER.sdk}/licenses/android-sdk-license`,
+  `${RUNNER.sdk}/build-tools/36.0.0/aapt2`,
+  `${RUNNER_NDK}/source.properties`,
+];
+
 /** The step that builds the app. */
 const builds = (step) => /pnpm run e2e:android --build-only\b/.test(step);
 
@@ -1099,8 +1152,11 @@ const intoFakeRunner = (text, root) =>
       (_, before) => `${before}${root}/`,
     );
 
-/** Tools that remove or move files. On the fake runner they are the real ones behind a fence. */
-const FENCED = ['rm', 'rmdir', 'unlink', 'find', 'mv', 'rsync'];
+/**
+ * Tools that remove, move, unpack or change files. On the fake runner they are
+ * the real ones behind a fence, and each call is recorded.
+ */
+const FENCED = ['rm', 'rmdir', 'unlink', 'find', 'mv', 'rsync', 'cp', 'unzip', 'chmod'];
 
 /** Tools a step may call to free space or report on it. On the fake runner they only record the call. */
 const RECORDED = [
@@ -1118,6 +1174,7 @@ const RECORDED = [
   'free',
   'java',
   'jps',
+  'chown',
 ];
 
 /** A tool script that records its call in the fake runner's calls.log, then runs `then`. */
@@ -1130,6 +1187,7 @@ function fenced(name) {
   return [
     '#!/bin/sh',
     '[ -n "$FAKE_RUNNER" ] || { echo "fake runner: FAKE_RUNNER is not set" >&2; exit 97; }',
+    `echo "${name} $*" >> "$FAKE_RUNNER/calls.log"`,
     'for arg in "$@"; do',
     '  case "$arg" in -*) continue ;; esac',
     '  if [ -d "$arg" ]; then dir="$arg"; else dir=$(dirname -- "$arg"); fi',
@@ -1145,6 +1203,51 @@ function fenced(name) {
     '',
   ].join('\n');
 }
+
+/**
+ * A fake download tool. It records its call, then serves $FAKE_DOWNLOAD at
+ * $FAKE_DOWNLOAD_URL and fails for any other URL, as curl -f does for a 404.
+ * It writes to stdout or to a file inside the fake runner, nowhere else.
+ * `init` and `parse` are shell: `parse` is the `case` that reads its arguments
+ * into url, out (the file) and remote (a directory to save under the URL's own
+ * name).
+ */
+const downloader = (name, init, parse) =>
+  [
+    recorder(),
+    `url=''; out=''; ${init}`,
+    'while [ $# -gt 0 ]; do',
+    '  case "$1" in',
+    ...parse.map((line) => `    ${line}`),
+    '  esac',
+    '  shift',
+    'done',
+    `[ -n "$url" ] || { echo "fake runner: ${name} was given no URL" >&2; exit 2; }`,
+    'if [ "$url" != "$FAKE_DOWNLOAD_URL" ] || [ -z "$FAKE_DOWNLOAD" ]; then',
+    `  echo "fake runner: ${name}: nothing to download at $url, the fake runner serves only the pinned archive" >&2`,
+    '  exit 22',
+    'fi',
+    'if [ -z "$out" ] && [ -n "$remote" ]; then out="$remote/$(basename "$url")"; fi',
+    'if [ -z "$out" ] || [ "$out" = - ]; then exec cat "$FAKE_DOWNLOAD"; fi',
+    `dir=$(cd -- "$(dirname -- "$out")" 2>/dev/null && pwd -P) || { echo "fake runner: ${name} cannot write $out" >&2; exit 23; }`,
+    'case "$dir/" in "$FAKE_RUNNER"/*) ;; *)',
+    `  echo "fake runner: refused ${name} to $out, which is outside the fake runner" >&2`,
+    '  exit 97 ;;',
+    'esac',
+    'cat "$FAKE_DOWNLOAD" > "$out"',
+    '',
+  ].join('\n');
+
+/**
+ * sdkmanager or avdmanager called by name. runner-images'
+ * images/ubuntu/scripts/build/install-android-sdk.sh (read 2026-09-27) sets
+ * ANDROID_HOME and ANDROID_SDK_ROOT and puts nothing on PATH; its own tests
+ * call sdkmanager by its full path.
+ */
+const notOnPath = (name) =>
+  recorder(
+    `echo "fake runner: ${name} is not on the runner's PATH; call it by its path, $ANDROID_HOME/cmdline-tools/latest/bin/${name}" >&2\nexit 127\n`,
+  );
 
 /**
  * The fake runner's tools, written once per run of this file and shared by
@@ -1175,12 +1278,134 @@ function fakeToolsDir() {
     ),
   );
   tool('gradlew', recorder());
+  tool(
+    'curl',
+    downloader('curl', "remote=''", [
+      '-o|--output) out="$2"; shift ;;',
+      '--output=*) out="${1#--output=}" ;;',
+      '-O|--remote-name) remote=. ;;',
+      'http://*|https://*) url="$1" ;;',
+      '--*) ;;',
+      '-*o) out="$2"; shift ;;',
+      '-*O*) remote=. ;;',
+    ]),
+  );
+  tool(
+    'wget',
+    downloader('wget', 'remote=.', [
+      '-O|--output-document) out="$2"; shift ;;',
+      '--output-document=*) out="${1#*=}" ;;',
+      '-P|--directory-prefix) remote="$2"; shift ;;',
+      '--directory-prefix=*) remote="${1#*=}" ;;',
+      'http://*|https://*) url="$1" ;;',
+      '--*) ;;',
+      '-*O) out="$2"; shift ;;',
+      '-*O?*) out="${1#*O}" ;;',
+    ]),
+  );
+  for (const name of ['sdkmanager', 'avdmanager']) tool(name, notOnPath(name));
+  // mktemp as GNU's on the runner: with no template, or with -p, --tmpdir or
+  // -t, it creates in $TMPDIR, which is inside the fake runner. macOS's mktemp
+  // ignores TMPDIR and would create outside it.
+  const mktemp = spawnSync('sh', ['-c', 'command -v mktemp'], { encoding: 'utf8' }).stdout.trim();
+  tool(
+    'mktemp',
+    [
+      '#!/bin/sh',
+      "flags=''; base=''; template=''",
+      'while [ $# -gt 0 ]; do',
+      '  case "$1" in',
+      '    -p) base="$2"; shift ;;',
+      '    --tmpdir=*) base="${1#*=}" ;;',
+      '    --tmpdir|-t) base="$TMPDIR" ;;',
+      '    -*) flags="$flags $1" ;;',
+      '    *) template="$1" ;;',
+      '  esac',
+      '  shift',
+      'done',
+      'if [ -z "$template" ]; then template=tmp.XXXXXXXXXX; base="${base:-$TMPDIR}"; fi',
+      'case "$template" in /*) ;; *) [ -z "$base" ] || template="$base/$template" ;; esac',
+      `exec '${mktemp}' $flags "$template"`,
+      '',
+    ].join('\n'),
+  );
   fakeTools = bin;
   return bin;
 }
 
+/**
+ * Fake archives of command-line tools, each zipped once per run of this file,
+ * laid out like Google's: one top-level cmdline-tools/ folder.
+ *
+ * @returns {{ zip: string, sha256: string, files: ReturnType<typeof cmdlineToolsFiles> }}
+ */
+const fakeArchives = new Map();
+let fakeArchiveDir = '';
+function fakeCmdlineTools(version, from) {
+  const made = fakeArchives.get(from);
+  if (made !== undefined) return made;
+  if (fakeArchiveDir === '') {
+    fakeArchiveDir = realpathSync(mkdtempSync(path.join(tmpdir(), 'fake-cmdline-tools-')));
+  }
+  const dir = path.join(fakeArchiveDir, from);
+  const files = cmdlineToolsFiles(version, from);
+  for (const [name, [executable, content]] of Object.entries(files)) {
+    const file = path.join(dir, 'cmdline-tools', name);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, content, { mode: executable ? 0o755 : 0o644 });
+  }
+  const zip = path.join(fakeArchiveDir, `${from}.zip`);
+  const zipped = spawnSync('zip', ['-qrX', zip, 'cmdline-tools'], { cwd: dir, encoding: 'utf8' });
+  if (zipped.status !== 0) {
+    throw new Error(
+      `zip could not make the fake archive ${from}: ${zipped.stderr ?? ''}${zipped.error?.message ?? ''}`,
+    );
+  }
+  const archive = {
+    zip,
+    sha256: createHash('sha256').update(readFileSync(zip)).digest('hex'),
+    files,
+  };
+  fakeArchives.set(from, archive);
+  return archive;
+}
+
+/** Every file and symlink under `root`, as its path from there ('/usr/...') to "x content", "- content" or "-> target". */
+function treeOf(root) {
+  const tree = /** @type {Record<string, string>} */ ({});
+  for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
+    const file = path.join(entry.parentPath, entry.name);
+    const where = `/${path.relative(root, file).split(path.sep).join('/')}`;
+    if (where === '/calls.log' || where === '/step.sh') continue;
+    if (entry.isSymbolicLink()) tree[where] = `-> ${readlinkSync(file)}`;
+    else if (entry.isFile()) {
+      tree[where] =
+        `${(statSync(file).mode & 0o111) === 0 ? '-' : 'x'} ${readFileSync(file, 'utf8')}`;
+    }
+  }
+  return tree;
+}
+
+/** A set of cmdlineToolsFiles as treeOf writes it, by file in the folder. */
+const asTree = (files) =>
+  Object.fromEntries(
+    Object.entries(files).map(([name, [executable, content]]) => [
+      name,
+      `${executable ? 'x' : '-'} ${content}`,
+    ]),
+  );
+
+/** What cmdline-tools/latest holds in a tree, by file in the folder. */
+const latestIn = (tree) =>
+  Object.fromEntries(
+    Object.entries(tree)
+      .filter(([where]) => where.startsWith(`${CMDLINE_TOOLS.latest}/`))
+      .map(([where, what]) => [where.slice(CMDLINE_TOOLS.latest.length + 1), what]),
+  );
+
 afterAll(() => {
   if (fakeTools !== '') rmSync(fakeTools, { recursive: true, force: true });
+  if (fakeArchiveDir !== '') rmSync(fakeArchiveDir, { recursive: true, force: true });
 });
 
 /**
@@ -1190,15 +1415,21 @@ afterAll(() => {
  * runner variable in a script is moved into it. `pnpm run e2e:android
  * --build-only` makes what a build leaves (the APK, intermediates, .cxx) and
  * nothing else; sudo and timeout run their command; docker, gradle and the
- * other RECORDED tools record the call; the FENCED ones (rm, find, mv, rsync
- * and the like) are the real ones behind a fence, so nothing here can touch
- * the machine the test runs on. Stops at the first step that fails, as GitHub
- * does.
+ * other RECORDED tools record the call; the FENCED ones (rm, find, mv, rsync,
+ * unzip and the like) are the real ones behind a fence, so nothing here can
+ * touch the machine the test runs on. The runner's command-line tools, 12.0,
+ * are in cmdline-tools/latest. curl and wget serve `download` at the pinned
+ * archive's URL and nothing else, so no step downloads anything for real.
+ * Stops at the first step that fails, as GitHub does.
  *
- * @returns {{ status: number | null, output: string, present: string[], calls: string }}
- *   `present`: the files of KEPT and FREED that are there afterwards.
+ * @param {string[]} steps
+ * @param {Record<string, string>} [jobVars]
+ * @param {{ download?: string }} [options] `download`: the file served at CMDLINE_TOOLS.url.
+ * @returns {{ status: number | null, output: string, present: string[], calls: string, tree: Record<string, string> }}
+ *   `present`: the files of KEPT and FREED that are there afterwards. `tree`:
+ *   everything that is there afterwards, as treeOf reads it.
  */
-function onFakeRunner(steps, jobVars = {}) {
+function onFakeRunner(steps, jobVars = {}, { download = '' } = {}) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'fake-runner-')));
   const at = (where) => path.join(root, where);
   const log = at('calls.log');
@@ -1212,21 +1443,35 @@ function onFakeRunner(steps, jobVars = {}) {
     ]) {
       mkdirSync(dir, { recursive: true });
     }
-    for (const { file } of tracked.filter((entry) => !entry.built)) {
+    for (const file of [
+      ...tracked.filter((entry) => !entry.built).map(({ file }) => file),
+      ...SDK_FILES,
+    ]) {
       mkdirSync(path.dirname(at(file)), { recursive: true });
       writeFileSync(at(file), '');
+    }
+    for (const [name, [executable, content]] of Object.entries(OLD_CMDLINE_TOOLS)) {
+      const file = at(`${CMDLINE_TOOLS.latest}/${name}`);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, content, { mode: executable ? 0o755 : 0o644 });
     }
     symlinkSync(path.join(bin, 'gradlew'), at(`${RUNNER.workspace}/apps/mobile/android/gradlew`));
     const env = {
       PATH: `${bin}${path.delimiter}${process.env.PATH}`,
       LC_ALL: 'C',
       CI: 'true',
+      USER: 'runner',
+      TMPDIR: at('/tmp'),
       FAKE_RUNNER: root,
       FAKE_RUNNER_BUILT: tracked
         .filter((entry) => entry.built)
         .map(({ file }) => at(file))
         .join(' '),
-      ...jobVars,
+      FAKE_DOWNLOAD: download,
+      FAKE_DOWNLOAD_URL: CMDLINE_TOOLS.url,
+      ...Object.fromEntries(
+        Object.entries(jobVars).map(([name, value]) => [name, intoFakeRunner(value, root)]),
+      ),
       ...Object.fromEntries(Object.entries(RUNNER_VARS).map(([name, where]) => [name, at(where)])),
       ...Object.fromEntries(
         ['GITHUB_OUTPUT', 'GITHUB_ENV', 'GITHUB_PATH', 'GITHUB_STEP_SUMMARY'].map((name) => [
@@ -1239,7 +1484,9 @@ function onFakeRunner(steps, jobVars = {}) {
     let output = '';
     for (const step of steps) {
       const script = at('step.sh');
-      writeFileSync(script, intoFakeRunner(resolveEnv(scriptOf(step), jobVars), root));
+      // `${{ env.NAME }}` in a step reads the step's own env as well as the job's.
+      const vars = { ...jobVars, ...stepEnv(step) };
+      writeFileSync(script, intoFakeRunner(resolveEnv(scriptOf(step), vars), root));
       const own = Object.fromEntries(
         Object.entries(stepEnv(step)).map(([name, value]) => [
           name,
@@ -1262,18 +1509,174 @@ function onFakeRunner(steps, jobVars = {}) {
       output,
       present: tracked.filter(({ file }) => existsSync(at(file))).map(({ file }) => file),
       calls: existsSync(log) ? readFileSync(log, 'utf8') : '',
+      tree: treeOf(root),
     };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 }
 
-/** The steps the fake runner runs from android-e2e: before the first emulator, the build and every step that removes files. */
+/** The text with each of `vars` read as `${{ env.NAME }}`, `$NAME` or `${NAME…}` replaced by its value. */
+const withVars = (text, vars) =>
+  resolveEnv(text, vars).replace(
+    /\$(?:\{(\w+)(?:[:?=+-][^}]*)?\}|(\w+))/g,
+    (whole, braced, bare) => {
+      const name = braced ?? bare;
+      return Object.hasOwn(vars, name) ? vars[name] : whole;
+    },
+  );
+
+/** A step whose text names the pinned archive, read with the job's env and its own. */
+const usesTheArchive = (step, env) =>
+  withVars(step, { ...env, ...stepEnv(step) }).includes(CMDLINE_TOOLS.archive);
+
+/** android-e2e's steps that use the pinned archive. */
+const cmdlineToolsSteps = () => {
+  const env = jobEnv('android-e2e');
+  return ciSteps('android-e2e').filter((step) => usesTheArchive(step, env));
+};
+
+/** android-e2e's step that installs the command-line tools, or ''. */
+const cmdlineToolsStep = () => cmdlineToolsSteps()[0] ?? '';
+
+const NO_STEP = `android-e2e has no step that uses the pinned archive, ${CMDLINE_TOOLS.archive}`;
+
+/** The pinned archive's stand-in on the fake runner: 20.0, as Google's is. */
+const pinnedTools = () => fakeCmdlineTools('20.0', 'archive-20.0');
+
+/** The text with the pinned SHA-256 swapped for `sha256`: a fake archive stands in for Google's, and its hash for the pin. */
+const repinned = (text, sha256) => text.replaceAll(CMDLINE_TOOLS.sha256, sha256);
+
+/** Env with the pinned SHA-256 swapped for `sha256` in every value. */
+const repinnedEnv = (env, sha256) =>
+  Object.fromEntries(Object.entries(env).map(([name, value]) => [name, repinned(value, sha256)]));
+
+/**
+ * Runs `step` alone on a fake runner that serves `served` at the pinned URL,
+ * with the pin swapped for the hash of `pinned`: by default `served`'s own, so
+ * the download matches the pin, as Google's does.
+ */
+const installRun = (step, env, served, pinned = served) =>
+  onFakeRunner([repinned(step, pinned.sha256)], repinnedEnv(env, pinned.sha256), {
+    download: served.zip,
+  });
+
+/** What a single step printed: its output without the first line, which is the step's own, written by onFakeRunner. */
+const printedBy = (run) => run.output.slice(run.output.indexOf('\n') + 1);
+
+/** The files where two sets of files, by name, differ: missing, extra or changed. */
+const differing = (got, want) =>
+  [...new Set([...Object.keys(got), ...Object.keys(want)])]
+    .filter((name) => got[name] !== want[name])
+    .sort();
+
+/**
+ * The checks of a command-line tools step, each on fake runners. Each returns
+ * '' when it holds, or what is wrong. The tests below run them on ci.yml's
+ * step, and on steps done right and wrong, so each is known to notice what it
+ * is for.
+ */
+const CMDLINE_TOOLS_CHECKS = {
+  /** It downloads the pinned archive and leaves latest holding exactly its cmdline-tools folder. */
+  installs(step, env) {
+    if (step === '') return NO_STEP;
+    const archive = pinnedTools();
+    const run = installRun(step, env, archive);
+    if (run.status !== 0) {
+      return `with the pinned archive served, the step failed with ${run.status}:\n${run.output}`;
+    }
+    if (
+      !run.calls
+        .split('\n')
+        .some((line) => /^(?:curl|wget) /.test(line) && line.includes(CMDLINE_TOOLS.url))
+    ) {
+      return `nothing downloaded ${CMDLINE_TOOLS.url}. The calls:\n${run.calls}`;
+    }
+    const wrong = differing(latestIn(run.tree), asTree(archive.files));
+    return wrong.length === 0
+      ? ''
+      : `cmdline-tools/latest does not hold exactly the archive's cmdline-tools folder; these differ:\n${wrong.join('\n')}\n${run.output}`;
+  },
+
+  /** It prints the version it installed, read from latest: with an archive of another version, that version. */
+  prints(step, env) {
+    if (step === '') return NO_STEP;
+    for (const version of ['20.0', '19.0']) {
+      const run = installRun(step, env, fakeCmdlineTools(version, `archive-${version}`));
+      const shown = new RegExp(`(?<![\\w.])${version.replace('.', '\\.')}(?![\\w.])`);
+      if (!shown.test(printedBy(run))) {
+        return `with an archive of version ${version} served and pinned, the step does not print ${version}:\n${run.output}`;
+      }
+    }
+    return '';
+  },
+
+  /**
+   * A download that does not match the pin fails the step before anything is
+   * unpacked, and leaves latest as the runner had it. A pinned download that
+   * passes is the control: without it, a step that always fails would pass.
+   */
+  verifiesFirst(step, env) {
+    if (step === '') return NO_STEP;
+    const pinned = pinnedTools();
+    const control = installRun(step, env, pinned);
+    if (control.status !== 0) {
+      return `with the download that matches the pin, the step already fails, so its failing on one that does not would prove nothing:\n${control.output}`;
+    }
+    const run = installRun(step, env, fakeCmdlineTools('20.0', 'tampered-20.0'), pinned);
+    if (run.status === 0) {
+      return `a download whose SHA-256 is not the pin passed the step:\n${run.output}`;
+    }
+    const unpacked = [
+      ...run.calls.split('\n').filter((line) => /^unzip /.test(line)),
+      ...Object.entries(run.tree)
+        .filter(
+          ([, what]) =>
+            what.includes('tampered-20.0') && !what.slice(2).startsWith('PK\u0003\u0004'),
+        )
+        .map(([where]) => where),
+    ];
+    if (unpacked.length > 0) {
+      return `with a download whose SHA-256 is not the pin, the step unpacked it before it failed:\n${unpacked.join('\n')}`;
+    }
+    const wrong = differing(latestIn(run.tree), asTree(OLD_CMDLINE_TOOLS));
+    return wrong.length === 0
+      ? ''
+      : `with a download whose SHA-256 is not the pin, cmdline-tools/latest did not keep the runner's own tools; these differ:\n${wrong.join('\n')}`;
+  },
+
+  /** It changes nothing outside cmdline-tools/latest. */
+  touchesOnlyLatest(step, env) {
+    if (step === '') return NO_STEP;
+    const before = onFakeRunner([]).tree;
+    const run = installRun(step, env, pinnedTools());
+    if (run.status !== 0) {
+      return `with the pinned archive served, the step failed with ${run.status}:\n${run.output}`;
+    }
+    const changed = Object.keys(before).filter(
+      (where) => !where.startsWith(`${CMDLINE_TOOLS.latest}/`) && run.tree[where] !== before[where],
+    );
+    return changed.length === 0
+      ? ''
+      : `the step removed or changed what is not cmdline-tools/latest:\n${changed.join('\n')}`;
+  },
+};
+
+/**
+ * The steps the fake runner runs from android-e2e: before the first emulator,
+ * the build, every step that removes files, and the one that installs the
+ * command-line tools, served a stand-in for the pinned archive.
+ */
 const freeingRun = () => {
   const { steps } = beforeTheEmulator();
+  const env = jobEnv('android-e2e');
+  const tools = pinnedTools();
   return onFakeRunner(
-    steps.filter((step) => builds(step) || removesFiles(step)),
-    jobEnv('android-e2e'),
+    steps
+      .filter((step) => builds(step) || removesFiles(step) || usesTheArchive(step, env))
+      .map((step) => repinned(step, tools.sha256)),
+    repinnedEnv(env, tools.sha256),
+    { download: tools.zip },
   );
 };
 
@@ -1330,6 +1733,195 @@ const HARMFUL_FREEING = [
 
 /** Shell that lets a failed command pass: `|| true`, `|| :`, `|| exit 0`, `set +e`, continue-on-error. */
 const TOLERATES_FAILURE = /\|\|\s*(?:true\b|:(?=\s|$)|exit\s+0\b)|\bset\s+\+e\b|continue-on-error/;
+
+/** The pin as job env, the way the examples below read it. */
+const TOOLS_ENV = {
+  CMDLINE_TOOLS_ARCHIVE: CMDLINE_TOOLS.archive,
+  CMDLINE_TOOLS_SHA256: CMDLINE_TOOLS.sha256,
+};
+
+/** The lines of a command-line tools step done right, for the examples to rearrange. */
+const TOOLS_LINE = {
+  download: 'curl -fsSLo "$zip" "https://dl.google.com/android/repository/$CMDLINE_TOOLS_ARCHIVE"',
+  check: 'echo "$CMDLINE_TOOLS_SHA256  $zip" | sha256sum -c -',
+  unpack: 'unzip -q "$zip" -d "$RUNNER_TEMP/cmdline-tools-new"',
+  remove: 'rm -rf "$ANDROID_HOME/cmdline-tools/latest"',
+  move: 'mv "$RUNNER_TEMP/cmdline-tools-new/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"',
+  print: 'grep "^Pkg.Revision=" "$ANDROID_HOME/cmdline-tools/latest/source.properties"',
+};
+
+/** A command-line tools step's script: `lines` after naming the download. */
+const toolsScript = (...lines) =>
+  ['zip="$RUNNER_TEMP/$CMDLINE_TOOLS_ARCHIVE"', ...lines].join('\n');
+
+/** Installing done right: what every check must accept. */
+const GOOD_TOOLS = toolsScript(
+  TOOLS_LINE.download,
+  TOOLS_LINE.check,
+  TOOLS_LINE.unpack,
+  TOOLS_LINE.remove,
+  TOOLS_LINE.move,
+  TOOLS_LINE.print,
+);
+
+/** Installing done wrong, each with the check that must notice and what it must say. */
+const BAD_TOOLS = [
+  {
+    what: 'unpacks before it checks the SHA-256',
+    check: 'verifiesFirst',
+    says: /unpacked it before it failed/,
+    script: toolsScript(
+      TOOLS_LINE.download,
+      TOOLS_LINE.unpack,
+      TOOLS_LINE.check,
+      TOOLS_LINE.remove,
+      TOOLS_LINE.move,
+      TOOLS_LINE.print,
+    ),
+  },
+  {
+    what: 'unpacks before it checks, into a directory a trap removes',
+    check: 'verifiesFirst',
+    says: /unpacked it before it failed/,
+    script: toolsScript(
+      'tmp=$(mktemp -d)',
+      'trap \'rm -rf "$tmp"\' EXIT',
+      TOOLS_LINE.download,
+      'unzip -q "$zip" -d "$tmp"',
+      TOOLS_LINE.check,
+      TOOLS_LINE.remove,
+      'mv "$tmp/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"',
+      TOOLS_LINE.print,
+    ),
+  },
+  {
+    what: 'lets a mismatch pass with || true',
+    check: 'verifiesFirst',
+    says: /passed the step/,
+    script: toolsScript(
+      TOOLS_LINE.download,
+      `${TOOLS_LINE.check} || true`,
+      TOOLS_LINE.unpack,
+      TOOLS_LINE.remove,
+      TOOLS_LINE.move,
+      TOOLS_LINE.print,
+    ),
+  },
+  {
+    what: 'checks no SHA-256 at all',
+    check: 'verifiesFirst',
+    says: /passed the step/,
+    script: toolsScript(
+      TOOLS_LINE.download,
+      TOOLS_LINE.unpack,
+      TOOLS_LINE.remove,
+      TOOLS_LINE.move,
+      TOOLS_LINE.print,
+    ),
+  },
+  {
+    what: "removes the runner's tools before the check",
+    check: 'verifiesFirst',
+    says: /did not keep the runner's own tools/,
+    script: toolsScript(
+      TOOLS_LINE.remove,
+      TOOLS_LINE.download,
+      TOOLS_LINE.check,
+      TOOLS_LINE.unpack,
+      TOOLS_LINE.move,
+      TOOLS_LINE.print,
+    ),
+  },
+  {
+    what: 'copies 20.0 over 12.0, so what only 12.0 has stays',
+    check: 'installs',
+    says: /does not hold exactly[^]*lib\/runner-12\.0\.jar/,
+    script: toolsScript(
+      TOOLS_LINE.download,
+      TOOLS_LINE.check,
+      TOOLS_LINE.unpack,
+      'cp -R "$RUNNER_TEMP/cmdline-tools-new/cmdline-tools/." "$ANDROID_HOME/cmdline-tools/latest/"',
+      TOOLS_LINE.print,
+    ),
+  },
+  {
+    what: 'unpacks the cmdline-tools folder inside latest',
+    check: 'installs',
+    says: /does not hold exactly[^]*cmdline-tools\/source\.properties/,
+    script: toolsScript(
+      TOOLS_LINE.download,
+      TOOLS_LINE.check,
+      TOOLS_LINE.remove,
+      'unzip -q "$zip" -d "$ANDROID_HOME/cmdline-tools/latest"',
+      'grep "^Pkg.Revision=" "$ANDROID_HOME/cmdline-tools/latest/cmdline-tools/source.properties"',
+    ),
+  },
+  {
+    what: 'downloads the archive from somewhere else',
+    check: 'installs',
+    says: /nothing to download at https:\/\/mirror\.example\.org\//,
+    script: toolsScript(
+      TOOLS_LINE.download.replace('dl.google.com', 'mirror.example.org'),
+      TOOLS_LINE.check,
+      TOOLS_LINE.unpack,
+      TOOLS_LINE.remove,
+      TOOLS_LINE.move,
+      TOOLS_LINE.print,
+    ),
+  },
+  {
+    what: 'calls sdkmanager by name, which is not on the runner PATH',
+    check: 'installs',
+    says: /sdkmanager is not on the runner's PATH/,
+    script: toolsScript(
+      TOOLS_LINE.download,
+      TOOLS_LINE.check,
+      TOOLS_LINE.unpack,
+      TOOLS_LINE.remove,
+      TOOLS_LINE.move,
+      'sdkmanager --version',
+    ),
+  },
+  {
+    what: 'says 20.0 without reading it from latest',
+    check: 'prints',
+    says: /does not print 19\.0/,
+    script: toolsScript(
+      TOOLS_LINE.download,
+      TOOLS_LINE.check,
+      TOOLS_LINE.unpack,
+      TOOLS_LINE.remove,
+      TOOLS_LINE.move,
+      'echo "Installed the command-line tools 20.0"',
+    ),
+  },
+  {
+    what: 'prints the version before it replaces latest',
+    check: 'prints',
+    says: /does not print 20\.0/,
+    script: toolsScript(
+      TOOLS_LINE.download,
+      TOOLS_LINE.check,
+      TOOLS_LINE.print,
+      TOOLS_LINE.unpack,
+      TOOLS_LINE.remove,
+      TOOLS_LINE.move,
+    ),
+  },
+  {
+    what: 'removes more of the SDK than cmdline-tools/latest',
+    check: 'touchesOnlyLatest',
+    says: /licenses\/android-sdk-license/,
+    script: toolsScript(
+      TOOLS_LINE.download,
+      TOOLS_LINE.check,
+      TOOLS_LINE.unpack,
+      `${TOOLS_LINE.remove} "$ANDROID_HOME/licenses"`,
+      TOOLS_LINE.move,
+      TOOLS_LINE.print,
+    ),
+  },
+];
 
 describe('the android-e2e job in ci.yml', () => {
   test('INF-06-AC12: there is a job named exactly android-e2e, the check the merge rules expect', () => {
@@ -1724,5 +2316,107 @@ describe('the android-e2e job in ci.yml', () => {
 
     expect(run.status, run.output).toBe(97);
     expect(run.output).toMatch(/outside the fake runner/);
+  });
+
+  // The command-line tools: the evidence is above CMDLINE_TOOLS.
+
+  test("INF-06-AC12: one run step before the first emulator step uses the pinned command-line tools archive, since the runner's own 12.0 knows no pixel_8", () => {
+    const steps = ciSteps('android-e2e');
+    const tools = cmdlineToolsSteps();
+    const emulator = steps.findIndex(bootsEmulator);
+
+    expect(tools, NO_STEP).toHaveLength(1);
+    expect(emulator).toBeGreaterThan(-1);
+    expect(steps.indexOf(tools[0] ?? '')).toBeLessThan(emulator);
+    expect(scriptOf(tools[0] ?? ''), 'the step has no run: script').not.toBe('');
+    expect(tools[0]).not.toMatch(/^\s*-?\s*uses:/m);
+  });
+
+  test('INF-06-AC12: the command-line tools step is guarded by exactly the app answer', () => {
+    // Narrower (main only, say), pull requests would boot the emulator on 12.0
+    // and fail on pixel_8 again; wider, a diff that cannot change the app would
+    // download 170 MB for nothing.
+    const step = cmdlineToolsStep();
+
+    expect(step, NO_STEP).not.toBe('');
+    expect(guardOf(step)).toBe("steps.affected.outputs.app == 'true'");
+  });
+
+  test('INF-06-AC12: the archive name and its SHA-256 are each written once in ci.yml, both in the job env or both in that one step', () => {
+    // So a new version is one edit, and the name and the hash cannot drift
+    // apart. Comment lines do not count.
+    const text = readFileSync(`${WORKFLOWS}/ci.yml`, 'utf8')
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('#'))
+      .join('\n');
+    const env = Object.values(jobEnv('android-e2e')).join('\n');
+    const step = cmdlineToolsStep();
+    const pin = [CMDLINE_TOOLS.archive, CMDLINE_TOOLS.sha256];
+
+    for (const value of pin) {
+      expect(text.split(value).length - 1, `${value} is not written exactly once`).toBe(1);
+    }
+    expect(
+      pin.every((value) => env.includes(value)) || pin.every((value) => step.includes(value)),
+      'the archive name and its SHA-256 are not written in one place',
+    ).toBe(true);
+  });
+
+  test('INF-06-AC12: the command-line tools step tolerates no failure', () => {
+    const step = cmdlineToolsStep();
+
+    expect(step, NO_STEP).not.toBe('');
+    expect(step).not.toMatch(TOLERATES_FAILURE);
+  });
+
+  test('INF-06-AC12: on a fake runner, the command-line tools step downloads the pinned archive from dl.google.com and leaves cmdline-tools/latest holding exactly its cmdline-tools folder, 20.0, with nothing left of 12.0', () => {
+    // The action puts latest/bin first on PATH, so latest is what it runs.
+    expect(CMDLINE_TOOLS_CHECKS.installs(cmdlineToolsStep(), jobEnv('android-e2e'))).toBe('');
+  });
+
+  test('INF-06-AC12: on a fake runner, the command-line tools step prints the version now in cmdline-tools/latest, read from there', () => {
+    // Served an archive of 19.0 as well, pinned to its hash: a step that says
+    // "20.0" without reading it would print 20.0 there too. So a red emulator
+    // step can be read against the version its log shows (D-070).
+    expect(CMDLINE_TOOLS_CHECKS.prints(cmdlineToolsStep(), jobEnv('android-e2e'))).toBe('');
+  });
+
+  test('INF-06-AC12: on a fake runner, a download whose SHA-256 is not the pin fails the command-line tools step before anything is unpacked, and cmdline-tools/latest keeps 12.0', () => {
+    expect(CMDLINE_TOOLS_CHECKS.verifiesFirst(cmdlineToolsStep(), jobEnv('android-e2e'))).toBe('');
+  });
+
+  test('INF-06-AC12: on a fake runner, the command-line tools step changes nothing outside cmdline-tools/latest', () => {
+    // The emulator, platform-tools, platforms, system-images, the rest of the
+    // SDK, the APK, ~/.gradle, Java and Node among them.
+    expect(CMDLINE_TOOLS_CHECKS.touchesOnlyLatest(cmdlineToolsStep(), jobEnv('android-e2e'))).toBe(
+      '',
+    );
+  });
+
+  // The command-line tools checks' own tests.
+
+  test('INF-06-AC12: the command-line tools checks accept a step done right', () => {
+    const step = stepAround('Install the command-line tools', GOOD_TOOLS);
+
+    expect(usesTheArchive(step, TOOLS_ENV)).toBe(true);
+    expect(step).not.toMatch(TOLERATES_FAILURE);
+    for (const [name, check] of Object.entries(CMDLINE_TOOLS_CHECKS)) {
+      expect(check(step, TOOLS_ENV), name).toBe('');
+    }
+  });
+
+  test.each(BAD_TOOLS)(
+    'INF-06-AC12: the command-line tools checks notice a step that $what',
+    ({ check, says, script }) => {
+      const step = stepAround('Install the command-line tools', script);
+
+      expect(CMDLINE_TOOLS_CHECKS[check](step, TOOLS_ENV)).toMatch(says);
+    },
+  );
+
+  test('INF-06-AC12: every command-line tools check reports a job with no such step', () => {
+    for (const [name, check] of Object.entries(CMDLINE_TOOLS_CHECKS)) {
+      expect(check('', TOOLS_ENV), name).toBe(NO_STEP);
+    }
   });
 });
