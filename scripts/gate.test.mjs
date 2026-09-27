@@ -10,13 +10,16 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, test } from 'vitest';
+import { afterAll, describe, expect, test } from 'vitest';
 import { FULL_STEPS, QUICK_STEPS, availableTools } from './gate.mjs';
+import { APK } from './lib/e2e-android.mjs';
 import { MUTATION_TIMEOUT_MS, SAFETY_PATHS } from './lib/gate-decisions.mjs';
 import { packageScripts } from './lib/proc.mjs';
 import { planSteps } from './lib/steps.mjs';
@@ -766,6 +769,568 @@ function runWithoutKvm(step) {
   }
 }
 
+// Freeing disk space before the emulator (added 2026-09-27). Run 36300860646,
+// job 108568110574, built the release app in 10 min 14 s, and then in "Boot the
+// emulator in bokmål and run every flow" the action's SDK install stopped:
+//   Warning: An error occurred while preparing SDK package 16 KB Page Size
+//   Google APIs Intel x86_64 Atom System Image: No space left on device.
+// No emulator started. The checks below read the steps as text and also run
+// them on a fake runner, because the one thing worse than a full disk is a
+// cleanup that deletes what the flows need: the APK, Gradle's cache, the SDK,
+// Java or Node.
+
+/** Where things are on GitHub's ubuntu-latest runner. The rm check and the fake runner use this layout. */
+const RUNNER = {
+  home: '/home/runner',
+  workspace: '/home/runner/work/TryggHverdag/TryggHverdag',
+  temp: '/home/runner/work/_temp',
+  sdk: '/usr/local/lib/android/sdk',
+  toolCache: '/opt/hostedtoolcache',
+};
+const RUNNER_JAVA = `${RUNNER.toolCache}/Java_Temurin-Hotspot_jdk/17.0.16-8/x64`;
+const RUNNER_NODE = `${RUNNER.toolCache}/node/24.8.0/x64`;
+const RUNNER_NDK = `${RUNNER.sdk}/ndk/27.3.13750724`;
+
+/** The variables a step can name those places by, and where each points on the runner. */
+const RUNNER_VARS = {
+  HOME: RUNNER.home,
+  GITHUB_WORKSPACE: RUNNER.workspace,
+  RUNNER_TEMP: RUNNER.temp,
+  ANDROID_HOME: RUNNER.sdk,
+  ANDROID_SDK_ROOT: RUNNER.sdk,
+  ANDROID_NDK: RUNNER_NDK,
+  ANDROID_NDK_HOME: RUNNER_NDK,
+  ANDROID_NDK_ROOT: RUNNER_NDK,
+  ANDROID_NDK_LATEST_HOME: RUNNER_NDK,
+  AGENT_TOOLSDIRECTORY: RUNNER.toolCache,
+  RUNNER_TOOL_CACHE: RUNNER.toolCache,
+  JAVA_HOME: RUNNER_JAVA,
+  JAVA_HOME_17_X64: RUNNER_JAVA,
+};
+
+/**
+ * What the emulator step and the steps after it need. Freeing space may remove
+ * none of these, nothing inside one, and no directory that holds one. `path` is
+ * the thing on the runner, `file` a file in it for the fake runner, and `built`
+ * says the build makes it, so it is not there before.
+ */
+const KEPT = [
+  {
+    what: 'the APK the flows install',
+    path: `${RUNNER.workspace}/${APK}`,
+    file: `${RUNNER.workspace}/${APK}`,
+    built: true,
+  },
+  {
+    what: "Gradle's cache, which the job saves from main after the flows",
+    path: `${RUNNER.home}/.gradle`,
+    file: `${RUNNER.home}/.gradle/caches/modules-2/files-2.1/fake.jar`,
+    built: false,
+  },
+  {
+    what: "the SDK's emulator",
+    path: `${RUNNER.sdk}/emulator`,
+    file: `${RUNNER.sdk}/emulator/emulator`,
+    built: false,
+  },
+  {
+    what: "the SDK's platform-tools, adb among them",
+    path: `${RUNNER.sdk}/platform-tools`,
+    file: `${RUNNER.sdk}/platform-tools/adb`,
+    built: false,
+  },
+  {
+    what: "the SDK's platforms",
+    path: `${RUNNER.sdk}/platforms`,
+    file: `${RUNNER.sdk}/platforms/android-36/android.jar`,
+    built: false,
+  },
+  {
+    what: "the SDK's system images",
+    path: `${RUNNER.sdk}/system-images`,
+    file: `${RUNNER.sdk}/system-images/android-36/google_apis/fake/system.img`,
+    built: false,
+  },
+  {
+    what: 'the Java setup-java installed, which sdkmanager and Maestro run on',
+    path: RUNNER_JAVA,
+    file: `${RUNNER_JAVA}/bin/java`,
+    built: false,
+  },
+  {
+    what: "the runner's own Java",
+    path: '/usr/lib/jvm',
+    file: '/usr/lib/jvm/temurin-17-jdk-amd64/bin/java',
+    built: false,
+  },
+  {
+    what: 'the Node setup-node installed, which runs pnpm run e2e:android',
+    path: RUNNER_NODE,
+    file: `${RUNNER_NODE}/bin/node`,
+    built: false,
+  },
+  {
+    what: "the workspace's installed packages",
+    path: `${RUNNER.workspace}/node_modules`,
+    file: `${RUNNER.workspace}/node_modules/.modules.yaml`,
+    built: false,
+  },
+  {
+    what: "the app's installed packages, which the flow step reads the app's config with",
+    path: `${RUNNER.workspace}/apps/mobile/node_modules`,
+    file: `${RUNNER.workspace}/apps/mobile/node_modules/expo/package.json`,
+    built: false,
+  },
+];
+
+/** What freeing space must remove. A `built` one only exists after the build, so only a step after it removes it. */
+const FREED = [
+  { what: '.NET, /usr/share/dotnet', file: '/usr/share/dotnet/dotnet', built: false },
+  { what: 'GHC, /opt/ghc', file: '/opt/ghc/9.12.2/bin/ghc', built: false },
+  {
+    what: "the app's Gradle intermediates",
+    file: `${RUNNER.workspace}/apps/mobile/android/app/build/intermediates/dex/release/classes.dex`,
+    built: true,
+  },
+  {
+    what: "the app's .cxx",
+    file: `${RUNNER.workspace}/apps/mobile/android/app/.cxx/RelWithDebInfo/fake/build.ninja`,
+    built: true,
+  },
+];
+
+/** The step that builds the app. */
+const builds = (step) => /pnpm run e2e:android --build-only\b/.test(step);
+
+/** Words that only run the command after them: `sudo rm` is an rm. */
+const PREFIXES = new Set([
+  'sudo',
+  'xargs',
+  'command',
+  'exec',
+  'nice',
+  'time',
+  'then',
+  'do',
+  'else',
+]);
+
+/**
+ * The shell commands in a step's text, in order, each as its words: line
+ * continuations joined, `${{ … }}` kept as one word, `$(…)` read as a command
+ * of its own, a leading `run:`,
+ * `script:`, `(` or `{` taken off, sudo and the like dropped with their
+ * options, and a trailing `# comment` dropped.
+ */
+function shellCommands(step) {
+  return step
+    .replace(/\\\n/g, ' ')
+    .replace(/\$\{\{\s*([^}]*?)\s*\}\}/g, '${{$1}}')
+    .split(/\n|;|&&|\|\|?|\$\(|`/)
+    .map((command) => {
+      const words = command
+        .replace(/^\s*(?:-\s+)?(?:run|script):\s*(?:[|>][-+]?)?/, '')
+        .replace(/^\s*(?:[({]\s*)+/, '')
+        .replace(/[\s)]+$/, '')
+        .split(/\s+/)
+        .filter((word) => word !== '');
+      const comment = words.findIndex((word) => word.startsWith('#'));
+      if (comment !== -1) words.length = comment;
+      while (words.length > 0 && PREFIXES.has(words[0] ?? '')) {
+        words.shift();
+        while ((words[0] ?? '').startsWith('-')) words.shift();
+      }
+      return words;
+    })
+    .filter((words) => words.length > 0);
+}
+
+const REMOVERS = new Set(['rm', 'rmdir', 'unlink']);
+
+/** A command that removes files: rm, rmdir or unlink, a find that deletes, an rsync --delete. */
+const isRemoval = (words) =>
+  REMOVERS.has(words[0] ?? '') ||
+  (words[0] === 'find' &&
+    (words.includes('-delete') ||
+      (words.some((word) => /^-(?:exec|execdir|ok|okdir)$/.test(word)) &&
+        words.some((word) => REMOVERS.has(word))))) ||
+  (words[0] === 'rsync' && words.some((word) => word.startsWith('--delete')));
+
+/** A step with at least one command that removes files. */
+const removesFiles = (step) => shellCommands(step).some(isRemoval);
+
+/**
+ * A shell word as a path on the runner: quotes off, runner variables and `~`
+ * put in, and a relative path read from the workspace. A variable this does not
+ * know stays as it is, and so matches nothing.
+ */
+function onRunner(word) {
+  const named = word
+    .replace(/["']/g, '')
+    .replace(/\$\{\{\s*github\.workspace\s*\}\}/g, RUNNER.workspace)
+    .replace(/\$\{\{\s*runner\.tool_cache\s*\}\}/g, RUNNER.toolCache)
+    .replace(/\$\{\{\s*runner\.temp\s*\}\}/g, RUNNER.temp)
+    .replace(/\$\{(\w+)(?:[:?=+-][^}]*)?\}/g, '$$$1')
+    .replace(/^~(?=\/|$)/, RUNNER.home)
+    .replace(/\$(\w+)/g, (whole, name) =>
+      Object.hasOwn(RUNNER_VARS, name) ? RUNNER_VARS[name] : whole,
+    );
+  const absolute =
+    named.startsWith('/') || named.startsWith('$') ? named : `${RUNNER.workspace}/${named}`;
+  const normal = path.posix.normalize(absolute);
+  return normal === '/' ? normal : normal.replace(/\/+$/, '');
+}
+
+/** What an rm, rmdir or unlink names, each as a path on the runner. */
+const removedBy = (words) =>
+  REMOVERS.has(words[0] ?? '')
+    ? words
+        .slice(1)
+        .filter((word) => !word.startsWith('-') && word.replace(/["']/g, '') !== '')
+        .map(onRunner)
+    : [];
+
+/** Whether removing `target`, a path on the runner that may hold * or ?, removes `kept` or part of it. */
+function removesPartOf(target, kept) {
+  const glob = new RegExp(
+    `^${target
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*/g, '[^/]*')
+      .replace(/\?/g, '[^/]')}$`,
+  );
+  const holders = kept.split('/').map((_, at, parts) => parts.slice(0, at + 1).join('/') || '/');
+  const literal = target.split(/[*?[]/)[0] ?? '';
+  return holders.some((holder) => glob.test(holder)) || literal.startsWith(`${kept}/`);
+}
+
+/** Every rm in a step's text that removes something in KEPT, as "word removes what". */
+const endangered = (step) =>
+  shellCommands(step).flatMap((words) =>
+    removedBy(words).flatMap((target, at) =>
+      KEPT.filter((kept) => removesPartOf(target, kept.path)).map(
+        (kept) =>
+          `${words.slice(1).filter((word) => !word.startsWith('-'))[at]} removes ${kept.what}`,
+      ),
+    ),
+  );
+
+/** `./gradlew --stop`, `gradle --stop`, or a pkill or killall of Gradle. */
+const stopsGradle = (words) =>
+  (/(?:^|\/)gradlew?$/.test(words[0] ?? '') && words.includes('--stop')) ||
+  (/^(?:pkill|killall)$/.test(words[0] ?? '') && words.some((word) => /gradle/i.test(word)));
+
+/** `df -h` of every filesystem, or with `/` among those it names. */
+function printsRootSpace(words) {
+  if (words[0] !== 'df') return false;
+  const rest = words.slice(1);
+  const human = rest.some(
+    (word) => /^-[A-Za-z]*[hH]/.test(word) || word === '--human-readable' || word === '--si',
+  );
+  const named = rest
+    .filter((word, at) => !word.startsWith('-') && !/^-[xt]$/.test(rest[at - 1] ?? ''))
+    .map((word) => word.replace(/["']/g, ''));
+  return human && (named.length === 0 || named.includes('/'));
+}
+
+/** android-e2e's steps before its first emulator step, and the build's index among them. */
+function beforeTheEmulator() {
+  const steps = ciSteps('android-e2e');
+  const emulator = steps.findIndex(bootsEmulator);
+  const before = steps.slice(0, emulator === -1 ? steps.length : emulator);
+  return { steps: before, build: before.findIndex(builds) };
+}
+
+/** The commands before the first emulator step, in order, each with its step's index. */
+function commandsBeforeTheEmulator() {
+  const { steps, build } = beforeTheEmulator();
+  return {
+    build,
+    commands: steps.flatMap((step, at) =>
+      shellCommands(step).map((words) => ({ step: at, words })),
+    ),
+  };
+}
+
+/** A step's `run:` script in any YAML form (`|`, `>`, one line), or '' when it has none. */
+function scriptOf(step) {
+  const lines = step.split('\n');
+  const at = lines.findIndex((line) => /^\s*(?:-\s+)?run:/.test(line));
+  if (at === -1) return '';
+  const head = (lines[at] ?? '').replace(/^\s*(?:-\s+)?run:\s*/, '');
+  if (!/^[|>][-+]?\s*$/.test(head)) return `${head}\n`;
+  const body = lines.slice(at + 1);
+  const depth = (line) => /^ */.exec(line)?.[0].length ?? 0;
+  const indent = depth(body.find((line) => line.trim() !== '') ?? '');
+  const end = body.findIndex((line) => line.trim() !== '' && depth(line) < indent);
+  const text = (end === -1 ? body : body.slice(0, end)).map((line) => line.slice(indent));
+  return `${text.join(head.startsWith('>') ? ' ' : '\n')}\n`;
+}
+
+/** A step's own `env:` block, as name to value, or an empty object. */
+function stepEnv(step) {
+  const lines = step.split('\n');
+  const at = lines.findIndex((line) => /^ {8}env:\s*$/.test(line));
+  const env = {};
+  if (at === -1) return env;
+  for (const line of lines.slice(at + 1)) {
+    if (!/^ {10}\S/.test(line)) break;
+    const match = /^ {10}([A-Za-z_][A-Za-z0-9_]*):\s*(.*?)\s*(?:#.*)?$/.exec(line);
+    if (match?.[1] !== undefined) env[match[1]] = (match[2] ?? '').replace(/^(['"])(.*)\1$/, '$2');
+  }
+  return env;
+}
+
+/** How GitHub runs a step's script: `bash -e`, or `-eo pipefail` under `shell: bash`. */
+function shellFlags(step) {
+  const shell = /^\s*shell:\s*(\S+)\s*$/m.exec(step)?.[1];
+  if (shell === undefined) return ['-e'];
+  if (shell === 'bash') return ['--noprofile', '--norc', '-eo', 'pipefail'];
+  return ['-c', `echo "the test does not know how GitHub runs shell: ${shell}"; exit 99`];
+}
+
+/** The text with every absolute path but /dev, /proc and /sys, and every runner expression, moved under `root`. */
+const intoFakeRunner = (text, root) =>
+  text
+    .replace(/\$\{\{\s*github\.workspace\s*\}\}/g, RUNNER.workspace)
+    .replace(/\$\{\{\s*runner\.tool_cache\s*\}\}/g, RUNNER.toolCache)
+    .replace(/\$\{\{\s*runner\.temp\s*\}\}/g, RUNNER.temp)
+    .replace(
+      /(^|[\s"'=:(<>])\/(?!(?:dev|proc|sys)(?![\w.-]))(?=[\w.~-])/gm,
+      (_, before) => `${before}${root}/`,
+    );
+
+/** Tools that remove or move files. On the fake runner they are the real ones behind a fence. */
+const FENCED = ['rm', 'rmdir', 'unlink', 'find', 'mv', 'rsync'];
+
+/** Tools a step may call to free space or report on it. On the fake runner they only record the call. */
+const RECORDED = [
+  'docker',
+  'podman',
+  'gradle',
+  'pkill',
+  'killall',
+  'apt-get',
+  'apt',
+  'snap',
+  'systemctl',
+  'swapoff',
+  'du',
+  'free',
+  'java',
+  'jps',
+];
+
+/** A tool script that records its call in the fake runner's calls.log, then runs `then`. */
+const recorder = (then = '') =>
+  `#!/bin/sh\necho "$(basename "$0") $*" >> "$FAKE_RUNNER/calls.log"\n${then}`;
+
+/** The real `name`, behind a fence: any path it is given outside $FAKE_RUNNER stops the step with 97. */
+function fenced(name) {
+  const real = spawnSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
+  return [
+    '#!/bin/sh',
+    '[ -n "$FAKE_RUNNER" ] || { echo "fake runner: FAKE_RUNNER is not set" >&2; exit 97; }',
+    'for arg in "$@"; do',
+    '  case "$arg" in -*) continue ;; esac',
+    '  if [ -d "$arg" ]; then dir="$arg"; else dir=$(dirname -- "$arg"); fi',
+    '  real=$(cd -- "$dir" 2>/dev/null && pwd -P) || continue',
+    '  case "$real/" in "$FAKE_RUNNER"/*) ;; *)',
+    `    echo "fake runner: refused ${name} $arg, which is outside the fake runner" >&2`,
+    '    exit 97 ;;',
+    '  esac',
+    'done',
+    real === ''
+      ? `echo "fake runner: this machine has no ${name}" >&2; exit 127`
+      : `exec '${real}' "$@"`,
+    '',
+  ].join('\n');
+}
+
+/**
+ * The fake runner's tools, written once per run of this file and shared by
+ * every fake runner: macOS checks each new executable the first time it runs,
+ * at about 300 ms apiece. Each reads its fake runner from $FAKE_RUNNER, and
+ * the fake build what to make from $FAKE_RUNNER_BUILT.
+ */
+let fakeTools = '';
+function fakeToolsDir() {
+  if (fakeTools !== '') return fakeTools;
+  const bin = realpathSync(mkdtempSync(path.join(tmpdir(), 'fake-runner-tools-')));
+  const tool = (name, text) => writeFileSync(path.join(bin, name), text, { mode: 0o755 });
+  const skipOptions = 'while [ $# -gt 0 ]; do case "$1" in -*) shift ;; *) break ;; esac; done\n';
+  for (const name of FENCED) tool(name, fenced(name));
+  for (const name of RECORDED) tool(name, recorder());
+  tool('sudo', recorder(`${skipOptions}exec "$@"\n`));
+  tool('timeout', recorder(`${skipOptions}shift\nexec "$@"\n`));
+  tool(
+    'df',
+    recorder(
+      'echo "Filesystem Size Used Avail Use% Mounted on"\necho "/dev/root 72G 70G 2.0G 98% /"\n',
+    ),
+  );
+  tool(
+    'pnpm',
+    recorder(
+      'case "$*" in *e2e:android*--build-only*)\n  for built in $FAKE_RUNNER_BUILT; do mkdir -p "$(dirname "$built")" && : > "$built"; done ;;\nesac\n',
+    ),
+  );
+  tool('gradlew', recorder());
+  fakeTools = bin;
+  return bin;
+}
+
+afterAll(() => {
+  if (fakeTools !== '') rmSync(fakeTools, { recursive: true, force: true });
+});
+
+/**
+ * Runs the given android-e2e steps' scripts, in order, on a fake runner: a
+ * temporary directory laid out like GitHub's (RUNNER), holding a file for each
+ * of KEPT and FREED that is there before the build. Every absolute path and
+ * runner variable in a script is moved into it. `pnpm run e2e:android
+ * --build-only` makes what a build leaves (the APK, intermediates, .cxx) and
+ * nothing else; sudo and timeout run their command; docker, gradle and the
+ * other RECORDED tools record the call; the FENCED ones (rm, find, mv, rsync
+ * and the like) are the real ones behind a fence, so nothing here can touch
+ * the machine the test runs on. Stops at the first step that fails, as GitHub
+ * does.
+ *
+ * @returns {{ status: number | null, output: string, present: string[], calls: string }}
+ *   `present`: the files of KEPT and FREED that are there afterwards.
+ */
+function onFakeRunner(steps, jobVars = {}) {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'fake-runner-')));
+  const at = (where) => path.join(root, where);
+  const log = at('calls.log');
+  const tracked = [...KEPT, ...FREED];
+  try {
+    const bin = fakeToolsDir();
+    for (const dir of [
+      at(RUNNER.temp),
+      at('/tmp'),
+      at(`${RUNNER.workspace}/apps/mobile/android`),
+    ]) {
+      mkdirSync(dir, { recursive: true });
+    }
+    for (const { file } of tracked.filter((entry) => !entry.built)) {
+      mkdirSync(path.dirname(at(file)), { recursive: true });
+      writeFileSync(at(file), '');
+    }
+    symlinkSync(path.join(bin, 'gradlew'), at(`${RUNNER.workspace}/apps/mobile/android/gradlew`));
+    const env = {
+      PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+      LC_ALL: 'C',
+      CI: 'true',
+      FAKE_RUNNER: root,
+      FAKE_RUNNER_BUILT: tracked
+        .filter((entry) => entry.built)
+        .map(({ file }) => at(file))
+        .join(' '),
+      ...jobVars,
+      ...Object.fromEntries(Object.entries(RUNNER_VARS).map(([name, where]) => [name, at(where)])),
+      ...Object.fromEntries(
+        ['GITHUB_OUTPUT', 'GITHUB_ENV', 'GITHUB_PATH', 'GITHUB_STEP_SUMMARY'].map((name) => [
+          name,
+          at(`${RUNNER.temp}/${name}`),
+        ]),
+      ),
+    };
+    let status = /** @type {number | null} */ (0);
+    let output = '';
+    for (const step of steps) {
+      const script = at('step.sh');
+      writeFileSync(script, intoFakeRunner(resolveEnv(scriptOf(step), jobVars), root));
+      const own = Object.fromEntries(
+        Object.entries(stepEnv(step)).map(([name, value]) => [
+          name,
+          intoFakeRunner(resolveEnv(value, jobVars), root),
+        ]),
+      );
+      const dir = /^\s*working-directory:\s*(.+?)\s*$/m.exec(step)?.[1];
+      const result = spawnSync('bash', [...shellFlags(step), script], {
+        cwd: at(dir === undefined ? RUNNER.workspace : onRunner(dir)),
+        env: { ...env, ...own },
+        encoding: 'utf8',
+        timeout: 60_000,
+      });
+      output += `${step.split('\n')[0]}\n${result.stdout ?? ''}${result.stderr ?? ''}${result.error?.message ?? ''}\n`;
+      status = result.status;
+      if (status !== 0) break;
+    }
+    return {
+      status,
+      output,
+      present: tracked.filter(({ file }) => existsSync(at(file))).map(({ file }) => file),
+      calls: existsSync(log) ? readFileSync(log, 'utf8') : '',
+    };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/** The steps the fake runner runs from android-e2e: before the first emulator, the build and every step that removes files. */
+const freeingRun = () => {
+  const { steps } = beforeTheEmulator();
+  return onFakeRunner(
+    steps.filter((step) => builds(step) || removesFiles(step)),
+    jobEnv('android-e2e'),
+  );
+};
+
+/** A step written the way ci.yml writes one, around `script`, for the checks' own tests. */
+const stepAround = (name, script) =>
+  [
+    `      - name: ${name}`,
+    "        if: steps.affected.outputs.app == 'true'",
+    '        run: |',
+    ...script.split('\n').map((line) => `          ${line}`),
+  ].join('\n');
+
+const BUILD_STEP = stepAround('Build the release app', 'pnpm run e2e:android --build-only');
+
+/** Freeing that is right: what the checks below must all accept. */
+const GOOD_FREEING = [
+  'sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup "$AGENT_TOOLSDIRECTORY/CodeQL" \\',
+  '  "$ANDROID_HOME/ndk"',
+  '(cd apps/mobile/android && ./gradlew --stop)',
+  'rm -rf apps/mobile/android/app/build/intermediates apps/mobile/android/app/.cxx',
+  'df -h /',
+].join('\n');
+
+/** rm commands that take something the flows need: the rm check must name each. */
+const ENDANGERING = [
+  'rm -rf "$ANDROID_HOME"',
+  'sudo rm -rf /usr/local/lib/android',
+  'rm -rf "${ANDROID_SDK_ROOT:?}/system-images"',
+  'sudo rm -rf /usr/share/dotnet \\\n  /usr/local/lib/android/sdk/emulator',
+  'rm -rf apps/mobile/android',
+  'rm -rf ./apps/mobile/android/app/build',
+  'rm -rf "${{ github.workspace }}/apps/mobile/android/app/build/outputs"',
+  'rm -rf ~/.gradle',
+  'rm -rf "$HOME/.gradle/caches/transforms-4"',
+  'sudo rm -rf "$AGENT_TOOLSDIRECTORY"',
+  'sudo rm -rf /opt/hostedtoolcache/*',
+  'rm -rf "$JAVA_HOME"',
+  'sudo rm -rf /usr/lib/jvm',
+  'rm -rf node_modules',
+];
+
+/**
+ * Freeing that takes something the flows need, some of it in ways no rm check
+ * can read (a cd first, find, `$(…)`): the fake runner must notice each.
+ */
+const HARMFUL_FREEING = [
+  'rm -rf apps/mobile/android/app/build',
+  'cd apps/mobile/android && find . -type d -name build -prune -exec rm -rf {} +',
+  'cd "$ANDROID_HOME" && rm -rf -- *',
+  'sudo rm -rf "$(dirname "$JAVA_HOME")"',
+  'rm -rf ~/.gradle/caches',
+  'sudo rm -rf /usr/lib/jvm',
+];
+
+/** Shell that lets a failed command pass: `|| true`, `|| :`, `|| exit 0`, `set +e`, continue-on-error. */
+const TOLERATES_FAILURE = /\|\|\s*(?:true\b|:(?=\s|$)|exit\s+0\b)|\bset\s+\+e\b|continue-on-error/;
+
 describe('the android-e2e job in ci.yml', () => {
   test('INF-06-AC12: there is a job named exactly android-e2e, the check the merge rules expect', () => {
     expect(ciJob('android-e2e')).not.toBeNull();
@@ -1009,5 +1574,155 @@ describe('the android-e2e job in ci.yml', () => {
     const text = readFileSync(`${WORKFLOWS}/ci.yml`, 'utf8');
 
     expect(text.slice(0, text.indexOf('\nname:'))).not.toMatch(/android-e2e[^\n]*INF-06 adds it/);
+  });
+
+  // Freeing disk space before the emulator: the evidence is above RUNNER.
+
+  test('INF-06-AC12: before the emulator, a step removes the .NET and GHC toolchains the job never uses, /usr/share/dotnet and /opt/ghc', () => {
+    // Before or after the build, as long as it is before the emulator.
+    const removed = commandsBeforeTheEmulator().commands.flatMap(({ words }) => removedBy(words));
+
+    expect(removed).toContain('/usr/share/dotnet');
+    expect(removed).toContain('/opt/ghc');
+  });
+
+  test('INF-06-AC12: after the build and before the emulator, a step stops the Gradle daemon', () => {
+    // `./gradlew --stop`, `gradle --stop`, or a pkill or killall of Gradle.
+    const { build, commands } = commandsBeforeTheEmulator();
+
+    expect(build, 'no step builds the app before the emulator').toBeGreaterThan(-1);
+    expect(
+      commands.filter(({ step, words }) => step > build && stopsGradle(words)),
+      'nothing between the build and the emulator stops the Gradle daemon',
+    ).not.toEqual([]);
+  });
+
+  test("INF-06-AC12: after the build, and after anything is freed, the job prints the root filesystem's free space with df -h, before the emulator", () => {
+    // In the step that frees space or in one of its own. After the freeing,
+    // because a number printed before it says nothing about what the
+    // emulator's SDK install will have.
+    const { build, commands } = commandsBeforeTheEmulator();
+    const lastRemoval = commands.findLastIndex(({ words }) => isRemoval(words));
+    const shown = commands.flatMap(({ step, words }, at) =>
+      step > build && printsRootSpace(words) ? [at] : [],
+    );
+
+    expect(build, 'no step builds the app before the emulator').toBeGreaterThan(-1);
+    expect(shown, 'no `df -h` of / between the build and the emulator').not.toEqual([]);
+    expect(Math.max(...shown), 'the free space is printed only before the freeing').toBeGreaterThan(
+      lastRemoval,
+    );
+  });
+
+  test("INF-06-AC12: on a fake runner, the steps up to the emulator remove .NET and GHC, and after the build the app's intermediates and .cxx", () => {
+    // The fake build makes the intermediates and .cxx, so removing them
+    // before the build does not count: the build would only make them again.
+    const run = freeingRun();
+
+    expect(run.status, run.output).toBe(0);
+    for (const freed of FREED) {
+      expect(run.present, `${freed.what} is still there:\n${run.output}`).not.toContain(freed.file);
+    }
+  });
+
+  test("INF-06-AC12: on a fake runner, the steps up to the emulator leave the APK, ~/.gradle, the SDK's emulator, platform-tools, platforms and system-images, Java, Node and node_modules", () => {
+    // Whatever removes them, rm or find or a cd first, which the rm check
+    // below cannot read. Deleting the APK would fail loudly at install, but
+    // only after a whole build; deleting ~/.gradle would have main save an
+    // empty cache for every later run.
+    const { steps } = beforeTheEmulator();
+    const run = freeingRun();
+
+    expect(
+      steps.filter(removesFiles).length,
+      'no step before the emulator removes anything, so nothing was put at risk and nothing is shown',
+    ).toBeGreaterThan(0);
+    expect(run.status, run.output).toBe(0);
+    for (const kept of KEPT) {
+      expect(run.present, `${kept.what} is gone:\n${run.output}`).toContain(kept.file);
+    }
+  });
+
+  test('INF-06-AC12: no rm in the job names the APK, ~/.gradle, the SDK\'s emulator, platform-tools, platforms or system-images, Java, Node or node_modules, nor a directory that holds one, such as "$ANDROID_HOME" or apps/mobile/android', () => {
+    const steps = ciSteps('android-e2e');
+    const removals = steps.flatMap(shellCommands).filter((words) => REMOVERS.has(words[0] ?? ''));
+
+    expect(
+      removals.length,
+      'android-e2e removes nothing, so there is nothing here to check',
+    ).toBeGreaterThan(0);
+    expect(steps.flatMap(endangered)).toEqual([]);
+  });
+
+  test('INF-06-AC12: the steps that free space, and the one that prints it, run whenever the flows do: guarded by exactly the app answer', () => {
+    // A narrower guard (main only, say) would leave pull requests with a full
+    // disk again.
+    const { steps } = beforeTheEmulator();
+    const freeing = steps.filter(
+      (step) => removesFiles(step) || shellCommands(step).some(printsRootSpace),
+    );
+
+    expect(freeing.length, 'no step before the emulator frees space').toBeGreaterThan(0);
+    for (const step of freeing) {
+      expect(guardOf(step), step.split('\n')[0]).toBe("steps.affected.outputs.app == 'true'");
+    }
+  });
+
+  test('INF-06-AC12: freeing space cannot let the job pass without the emulator: the build and the flows tolerate no failure', () => {
+    // A build step that goes on to free space is where `|| true` or `set +e`
+    // would creep in, and a failed build would then look like a finished one.
+    const steps = ciSteps('android-e2e');
+    const build = steps.filter(builds);
+    const flows = steps.filter(runsFlows);
+
+    expect(build).toHaveLength(1);
+    expect(flows).toHaveLength(1);
+    for (const step of [...build, ...flows]) {
+      expect(step).not.toMatch(TOLERATES_FAILURE);
+    }
+  });
+
+  // The checks' own tests: each check accepts a right way of freeing space,
+  // and notices a wrong one.
+
+  test('INF-06-AC12: the checks accept freeing done right, and the fake runner runs it to the end', () => {
+    const step = stepAround('Free disk space for the emulator', GOOD_FREEING);
+    const commands = shellCommands(step);
+    const run = onFakeRunner([BUILD_STEP, step]);
+
+    expect(commands.flatMap(removedBy)).toEqual(
+      expect.arrayContaining(['/usr/share/dotnet', '/opt/ghc']),
+    );
+    expect(commands.some(stopsGradle)).toBe(true);
+    expect(commands.some(printsRootSpace)).toBe(true);
+    expect(endangered(step)).toEqual([]);
+    expect(run.status, run.output).toBe(0);
+    expect(run.present.sort()).toEqual(KEPT.map(({ file }) => file).sort());
+    expect(run.calls).toMatch(/^gradlew --stop$/m);
+  });
+
+  test.each(ENDANGERING)('INF-06-AC12: the rm check notices %s', (script) => {
+    expect(endangered(stepAround('Free disk space', script))).not.toEqual([]);
+  });
+
+  test.each(HARMFUL_FREEING)(
+    'INF-06-AC12: the fake runner notices what the flows need is gone after %s',
+    (script) => {
+      const run = onFakeRunner([BUILD_STEP, stepAround('Free disk space', script)]);
+
+      expect(run.status, run.output).toBe(0);
+      expect(KEPT.filter(({ file }) => !run.present.includes(file))).not.toEqual([]);
+    },
+  );
+
+  test('INF-06-AC12: the fake runner stops a step that reaches outside it, before rm runs', () => {
+    // A path the script rewrite cannot see: relative, after a cd to /. The
+    // file does not exist, so even without the fence nothing would be lost.
+    const run = onFakeRunner([
+      stepAround('Reach outside', 'cd / && rm -f trygghverdag-fake-runner-probe'),
+    ]);
+
+    expect(run.status, run.output).toBe(97);
+    expect(run.output).toMatch(/outside the fake runner/);
   });
 });
