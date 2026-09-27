@@ -2035,9 +2035,16 @@ any other path is work, not a candidate for the same treatment.
         together with the public name (D-057). It costs nothing to change
         before then.
   12. **What the first CI run proved** (PR #34, run 36267216821, 2026-09-26):
-      - **KVM:** GitHub's standard Linux runners expose it. The KVM step
-        passed, and the emulator action logged "disable Linux hardware
-        acceleration: false".
+      - **KVM: not settled.** GitHub documents hardware acceleration on its
+        2-vCPU Linux runners (changelog, 2024-04-02). On the first run the
+        KVM step passed. On the second (run 36298902708), on the same
+        `ubuntu-24.04` image, it failed: `/dev/kvm is not usable on this
+        runner`, 38 ms after `udevadm trigger`. That command only queues the
+        permission change, so the check may have raced it. The step now
+        waits with `--settle` and prints `/dev/kvm`'s state when it fails.
+        The owner's re-runs will show which it was. An earlier version of
+        this item said the runners "expose it" on the strength of one run;
+        that was more than one run could show.
       - **Cold build:** the x86_64 release build took 14 min 48 s with no
         Gradle cache (the cache is saved from `main` only).
       - **One API level, `37.2`.** The job failed before any emulator

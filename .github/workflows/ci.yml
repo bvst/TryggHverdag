@@ -355,8 +355,15 @@ jobs:
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
+          # Without --settle, trigger only queues the change and returns, so the
+          # check below could run before udev has applied the rule.
+          sudo udevadm trigger --name-match=kvm --settle
           if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+            if [ -e /dev/kvm ]; then
+              ls -l /dev/kvm
+            else
+              echo "/dev/kvm does not exist on this runner."
+            fi
             echo "::error::/dev/kvm is not usable on this runner, so the emulator would run without hardware acceleration and time out. android-e2e stops here rather than report a slow emulator as a broken app."
             exit 1
           fi
