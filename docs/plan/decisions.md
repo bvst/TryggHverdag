@@ -2105,8 +2105,19 @@ any other path is work, not a candidate for the same treatment.
         once the new framework is up. So the wait now ends only when
         `am get-config` reports bokmål and `service check package` finds the
         service.
-      - **Still to measure:** the flow on GitHub and the warm durations,
-        from the first green run.
+      - **Run 7, the first green run** (36323061166, 2026-09-27): `e2e:android:
+        1 of 1 flow passed.` It printed `The device's language is nb-rNO, and
+        its package service is up`, then `[Passed] app-starts (24s)`. The
+        cold job took 20 min 27 s:
+        - the release build, 14 min 35 s;
+        - the boot, 89.6 s;
+        - the Maestro download, 16 s;
+        - the install, 22 s;
+        - the flow, 24 s.
+        KVM passed with `--settle` on all five runs since the change.
+      - **Still to measure:** the warm durations. The Gradle cache and the AVD
+        snapshot are saved from `main` only, so the first run after merge
+        fills them and the next one shows the warm figure.
   13. **Follow-up, a precondition for the first safety-core code: mutation
       testing of app code.** Stryker runs Vitest only. It mutates folder
       safety paths as `**/*.ts` only (`stryker.config.mjs`), so a `.tsx` file
