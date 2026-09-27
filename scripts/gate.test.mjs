@@ -4,7 +4,16 @@
 // in a script name drops a step, and the gate then reports "not possible yet"
 // and passes. These tests hold the lists to the repository they describe.
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { FULL_STEPS, QUICK_STEPS, availableTools } from './gate.mjs';
@@ -691,6 +700,72 @@ const resolveEnv = (text, env) =>
 /** The step that runs the flows: the one that runs e2e:android and is not the build. */
 const runsFlows = (step) => /pnpm run e2e:android\b/.test(step) && !/--build-only\b/.test(step);
 
+/** android-e2e's KVM step: the one that runs udevadm and checks /dev/kvm, or ''. */
+const kvmStep = () =>
+  ciSteps('android-e2e').find((step) => step.includes('/dev/kvm') && step.includes('udevadm')) ??
+  '';
+
+/** A test of whether /dev/kvm can be read or written: `[ ! -r /dev/kvm ]`, `test -w /dev/kvm`. */
+const KVM_USABLE = /(?:\[\[?|\btest)\s+(?:!\s+)?-[rw]\s+\/dev\/kvm\b/;
+
+/** The step's `udevadm trigger` for the kvm device, with its arguments in [1], or undefined. */
+const kvmTrigger = (step) =>
+  [...step.matchAll(/\budevadm\s+trigger\b([^\n;&|]*)/g)].find((match) =>
+    /--name-match[= ](?:\/dev\/)?kvm\b/.test(match[1] ?? ''),
+  );
+
+/** Output that says a device is not there, in the words a script or `ls` would use. */
+const ABSENT =
+  /\b(?:does not|doesn't|did not|didn't) exist\b|\bno such file\b|\bmissing\b|\bnot present\b|\babsent\b/i;
+
+/** A step's `run: |` script with its YAML indentation taken off, or '' when it has none. */
+function runScript(step) {
+  const lines = step.split('\n');
+  const at = lines.findIndex((line) => /^\s*run:\s*\|\s*$/.test(line));
+  if (at === -1) return '';
+  const body = lines.slice(at + 1);
+  const depth = (line) => /^ */.exec(line)?.[0].length ?? 0;
+  const indent = depth(body.find((line) => line.trim() !== '') ?? '');
+  const end = body.findIndex((line) => line.trim() !== '' && depth(line) < indent);
+  return `${(end === -1 ? body : body.slice(0, end)).map((line) => line.slice(indent)).join('\n')}\n`;
+}
+
+/**
+ * Runs the KVM step's script on a runner that has no /dev/kvm at all, and
+ * returns its exit status and everything it printed. GitHub runs a step's
+ * script with `bash -e`, or with `-eo pipefail` under `shell: bash`, so this
+ * does too: evidence that itself fails ends the step there. sudo, udevadm and
+ * tee are fakes on PATH that change nothing, and `/dev/kvm` in the script is
+ * moved into a temporary directory where nothing is created.
+ */
+function runWithoutKvm(step) {
+  const shell = /^\s*shell:\s*(\S+)\s*$/m.exec(step)?.[1];
+  const flags =
+    shell === undefined
+      ? ['-e']
+      : shell === 'bash'
+        ? ['--noprofile', '--norc', '-eo', 'pipefail']
+        : ['-c', `echo "the test does not know how GitHub runs shell: ${shell}"; exit 99`];
+  const dir = mkdtempSync(path.join(tmpdir(), 'kvm-step-'));
+  try {
+    const bin = path.join(dir, 'bin');
+    mkdirSync(bin);
+    mkdirSync(path.join(dir, 'dev'));
+    writeFileSync(path.join(bin, 'sudo'), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
+    writeFileSync(path.join(bin, 'udevadm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    writeFileSync(path.join(bin, 'tee'), '#!/bin/sh\ncat > /dev/null\n', { mode: 0o755 });
+    const script = path.join(dir, 'step.sh');
+    writeFileSync(script, runScript(step).replace(/\/dev\/kvm\b/g, path.join(dir, 'dev', 'kvm')));
+    const result = spawnSync('bash', [...flags, script], {
+      encoding: 'utf8',
+      env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, HOME: dir, LC_ALL: 'C' },
+    });
+    return { status: result.status, output: `${result.stdout}${result.stderr}` };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 describe('the android-e2e job in ci.yml', () => {
   test('INF-06-AC12: there is a job named exactly android-e2e, the check the merge rules expect', () => {
     expect(ciJob('android-e2e')).not.toBeNull();
@@ -737,6 +812,52 @@ describe('the android-e2e job in ci.yml', () => {
     expect(emulator).toBeGreaterThan(kvm);
     expect(steps[kvm]).toMatch(/::error/);
     expect(steps[kvm]).toMatch(/exit 1/);
+  });
+
+  test('INF-06-AC12: the KVM step waits for udev to apply its rule before it checks /dev/kvm', () => {
+    // `udevadm trigger` queues its events and returns without waiting for
+    // them. Run 36298902708 wrote the rule at 06:02:08.1375 and found /dev/kvm
+    // unusable at 06:02:08.1757, 38 ms later, on the image whose first run had
+    // passed this step. Either wait is accepted: --settle (or its short form
+    // -w) on the trigger itself, or `udevadm settle` after the trigger and
+    // before the check.
+    const step = kvmStep();
+    const trigger = kvmTrigger(step);
+    const after = (trigger?.index ?? 0) + (trigger?.[0].length ?? 0);
+    const check = step.search(KVM_USABLE);
+    const waits =
+      /(?:^|\s)(?:--settle|-w)(?=\s|$)/.test(trigger?.[1] ?? '') ||
+      /\budevadm\s+settle\b/.test(step.slice(after, check));
+
+    expect(trigger, 'no `udevadm trigger --name-match=kvm` in the KVM step').toBeDefined();
+    expect(check).toBeGreaterThan(after);
+    expect(waits, `nothing waits for udev between the trigger and the check:\n${step}`).toBe(true);
+  });
+
+  test('INF-06-AC12: before it stops, the KVM step prints the ls -l line of /dev/kvm, with its mode and group', () => {
+    // So a red run tells wrong permissions (the rule did not take) apart from
+    // a device that is not there (the runner has no KVM). Printed after the
+    // trigger and before `exit 1`: on failure only, or always.
+    const step = kvmStep();
+    const from = kvmTrigger(step)?.index ?? -1;
+    const check = step.search(KVM_USABLE);
+    const exit = check + step.slice(check).search(/\bexit 1\b/);
+
+    expect(from).toBeGreaterThan(-1);
+    expect(check).toBeGreaterThan(from);
+    expect(exit).toBeGreaterThan(check);
+    expect(step.slice(from, exit)).toMatch(/\bls\s+-[A-Za-z]*l[A-Za-z]*\b[^\n;&|]*\/dev\/kvm\b/);
+  });
+
+  test('INF-06-AC12: with no /dev/kvm at all, the KVM step says the device does not exist, then stops with its ::error and exit 1', () => {
+    // Run as GitHub runs it, under `bash -e`: an `ls -l` of a device that is
+    // not there fails, and unguarded it would end the step before the ::error
+    // line, so the run would be red without its reason.
+    const { status, output } = runWithoutKvm(kvmStep());
+
+    expect(status, output).toBe(1);
+    expect(output).toMatch(/::error::/);
+    expect(output).toMatch(ABSENT);
   });
 
   test('INF-06-AC12: the app is built before the emulator boots, which then runs pnpm run e2e:android', () => {
