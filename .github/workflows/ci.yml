@@ -367,6 +367,32 @@ jobs:
             echo "::error::/dev/kvm is not usable on this runner, so the emulator would run without hardware acceleration and time out. android-e2e stops here rather than report a slow emulator as a broken app."
             exit 1
           fi
+      # Run 36303366850 stopped in the emulator step with "No device found
+      # matching --device pixel_8": the runner image ships the command-line
+      # tools 12.0, whose avdmanager has no Pixel 8. The pinned emulator action
+      # installs its own tools only when $ANDROID_HOME/cmdline-tools is missing,
+      # and runs whatever is in cmdline-tools/latest. So this puts 20.0 there,
+      # the same archive the action pins for a runner without tools
+      # (src/sdk-installer.ts), checked against its SHA-256 before anything is
+      # unpacked. Nothing but cmdline-tools/latest is replaced, and no sudo is
+      # needed: runner-images' install-android-sdk.sh ends with
+      # `chmod -R a+rwx` on the SDK. The version is read from what is now in
+      # latest, so a red emulator step can be read against it.
+      - name: Install the pinned Android command-line tools in cmdline-tools/latest
+        if: steps.affected.outputs.app == 'true'
+        env:
+          CMDLINE_TOOLS_ARCHIVE: 'commandlinetools-linux-14742923_latest.zip'
+          CMDLINE_TOOLS_SHA256: '04453066b540409d975c676d781da1477479dde3761310f1a7eb92a1dfb15af7'
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          archive="$tmp/$CMDLINE_TOOLS_ARCHIVE"
+          curl -fsSL -o "$archive" "https://dl.google.com/android/repository/${CMDLINE_TOOLS_ARCHIVE}"
+          echo "${CMDLINE_TOOLS_SHA256}  $archive" | sha256sum -c -
+          unzip -q "$archive" -d "$tmp/unpacked"
+          rm -rf "$ANDROID_HOME/cmdline-tools/latest"
+          mv "$tmp/unpacked/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          grep '^Pkg.Revision=' "$ANDROID_HOME/cmdline-tools/latest/source.properties"
       # Run 36300860646 built the app and then stopped in the emulator's SDK
       # install with "No space left on device" while unpacking the system
       # image. These are toolchains this job never uses: .NET, Haskell (both

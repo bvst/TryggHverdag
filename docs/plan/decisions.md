@@ -2063,6 +2063,20 @@ any other path is work, not a candidate for the same treatment.
         emulator: it removes unused preinstalled toolchains and the app's
         Gradle intermediates, keeps the APK and `~/.gradle`, and prints
         `df -h` so the next log shows the numbers.
+      - **Run 4** (36303366850): the KVM step passed again, and `df -h /`
+        showed 22 GB free before the emulator, so disk is fixed. The action
+        then failed: `No device found matching --device pixel_8`. The runner
+        image ships Android command-line tools 12.0, which has no Pixel 8
+        profile. The action installs its own 20.0 only when no version is
+        present. Both versions' `avdmanager list device` were run on the Mac:
+        12.0 stops at pixel_7_pro, and 20.0 has pixel_8. The job now installs
+        tools 20.0 as `cmdline-tools/latest` before the emulator, from
+        `commandlinetools-linux-14742923_latest.zip`. That archive's size and
+        SHA-1 match Google's `repository2-3.xml` (172789259 bytes,
+        `48833c34…1b27`), and its SHA-256
+        `04453066b540409d975c676d781da1477479dde3761310f1a7eb92a1dfb15af7`
+        is checked before unpacking. It is covered by the Android SDK licence
+        above. This also ends the "SDK XML version 4" warnings.
       - **Still to measure:** the emulator boot, the flow, and the warm
         durations, from the first green run.
   13. **Follow-up, a precondition for the first safety-core code: mutation
