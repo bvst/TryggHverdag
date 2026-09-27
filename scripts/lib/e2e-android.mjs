@@ -203,6 +203,50 @@ export function checkLocale(locale) {
   };
 }
 
+/**
+ * How long to wait for the device to report bokmål. An emulator started with
+ * `-change-locale nb-NO` applies it only after it has booted: on the Mac, a
+ * CI-identical one reported nb-NO about 20 s after sys.boot_completed, and
+ * CI's runner is slower. A shorter deadline fails runs that were only slow.
+ */
+export const LOCALE_DEADLINE_MS = 120_000;
+
+/** How often to ask the device for its language while waiting. */
+export const LOCALE_INTERVAL_MS = 1_000;
+
+/**
+ * Waits for the device to report bokmål: reads its language at once, then
+ * every `interval`, and passes on the first reading checkLocale accepts. It
+ * fails once `deadline` has passed without one, and says how long it waited
+ * and what the device reported last. `now` and `sleep` are its only clock.
+ *
+ * @param {() => string} read the device's language, as checkLocale reads it
+ * @param {{
+ *   deadline?: number,
+ *   interval?: number,
+ *   now: () => number,
+ *   sleep: (ms: number) => Promise<unknown>,
+ * }} options — milliseconds throughout
+ * @returns {Promise<{ ok: boolean, message: string }>}
+ */
+export async function waitForLocale(
+  read,
+  { deadline = LOCALE_DEADLINE_MS, interval = LOCALE_INTERVAL_MS, now, sleep },
+) {
+  const start = now();
+  for (;;) {
+    const verdict = checkLocale(read());
+    if (verdict.ok) return verdict;
+    if (now() - start >= deadline) {
+      return {
+        ok: false,
+        message: `Waited ${String(deadline / 1000)} s for the emulator to apply its language. ${verdict.message}`,
+      };
+    }
+    await sleep(interval);
+  }
+}
+
 /** The value of one XML attribute in an element's opening tag, or undefined. */
 const attribute = (tag, name) => new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
 

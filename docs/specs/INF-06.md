@@ -147,6 +147,10 @@ saying which one:
 - no Android device is connected;
 - the only devices connected are real phones, not emulators (amended
   2026-09-26: it never installs onto, or reads crash logs from, a real phone);
+- the device has not reported Norwegian bokmål within 120 s (amended
+  2026-09-27: the emulator applies `-change-locale` about 20 s after it
+  reports the boot complete, so the check waits, then fails with how long it
+  waited and the last language it saw);
 - Maestro is not usable, or Java is not 17 to 21 (amended 2026-09-26: Java 25
   passes a "17 or newer" check and then fails the native build after about 18
   minutes; the message says to set `JAVA_HOME` to a JDK 17);

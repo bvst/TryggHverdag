@@ -23,18 +23,21 @@ import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { setTimeout as sleep } from 'node:timers/promises';
 import {
   APK,
+  LOCALE_DEADLINE_MS,
+  LOCALE_INTERVAL_MS,
   REPORT_DIR,
   buildPlan,
   checkDevices,
   checkJava,
-  checkLocale,
   checkMaestro,
   ensureMaestro,
   escapeRegExp,
   judgeReport,
   maestroTestCommand,
+  waitForLocale,
 } from './lib/e2e-android.mjs';
 import { run } from './lib/proc.mjs';
 
@@ -82,6 +85,21 @@ function output(command, commandArgs) {
   return result.status === null ? null : result.output;
 }
 
+/**
+ * Milliseconds from the environment, or `fallback` when the variable is unset.
+ * Only the tests set these, to shorten a wait; a value that is not a whole
+ * number of milliseconds stops the run rather than being guessed at.
+ */
+function millisecondsFrom(name, fallback) {
+  const value = process.env[name];
+  if (value === undefined || value === '') return fallback;
+  const ms = Number(value);
+  if (!Number.isInteger(ms) || ms < 0) {
+    stop(`${name} must be a whole number of milliseconds, but is ${JSON.stringify(value)}.`);
+  }
+  return ms;
+}
+
 /** Runs a long step with its output shown as it happens. */
 function runLive(name, command, cwd) {
   process.stdout.write(`\ne2e:android: ${name}\n  $ ${command.join(' ')}\n`);
@@ -101,10 +119,19 @@ expectOk(checkJava(output(java, ['-version'])));
 const maestro = buildOnly ? undefined : await ensureMaestro({ root });
 if (maestro !== undefined) {
   expectOk(checkMaestro(run(maestro, ['--version'], { timeout: 120_000 })));
-  const locale =
+  // The emulator applies its language after it has booted, so one reading
+  // proves nothing: wait for bokmål, up to the deadline.
+  const readLocale = () =>
     output(adb, ['-s', device ?? '', 'shell', 'getprop', 'persist.sys.locale'])?.trim() ||
     (output(adb, ['-s', device ?? '', 'shell', 'getprop', 'ro.product.locale']) ?? '');
-  expectOk(checkLocale(locale));
+  expectOk(
+    await waitForLocale(readLocale, {
+      deadline: millisecondsFrom('E2E_ANDROID_LOCALE_DEADLINE_MS', LOCALE_DEADLINE_MS),
+      interval: millisecondsFrom('E2E_ANDROID_LOCALE_INTERVAL_MS', LOCALE_INTERVAL_MS),
+      now: Date.now,
+      sleep,
+    }),
+  );
 }
 
 // 2. Build.

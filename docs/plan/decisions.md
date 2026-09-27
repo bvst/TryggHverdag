@@ -2076,9 +2076,26 @@ any other path is work, not a candidate for the same treatment.
         `48833c34…1b27`), and its SHA-256
         `04453066b540409d975c676d781da1477479dde3761310f1a7eb92a1dfb15af7`
         is checked before unpacking. It is covered by the Android SDK licence
-        above. This also ends the "SDK XML version 4" warnings.
-      - **Still to measure:** the emulator boot, the flow, and the warm
-        durations, from the first green run.
+        above. (Tools 20.0 print the "SDK XML versions up to 3" warning too,
+        so a claim here that 20.0 ends it was wrong, and has been removed. It
+        is harmless, because the version-3 index lists every package the job
+        needs.)
+      - **Run 5** (36306264081):
+        - tools 20.0 installed (`Pkg.Revision=20.0`), and the Pixel 8 device
+          was created;
+        - KVM passed with `--settle` for the third time in a row;
+        - the emulator booted in 63.8 s, and `e2e:android` got as far as its
+          locale preflight, which stopped it: `The device's language is
+          "en-US"`.
+        The emulator applies `-change-locale` asynchronously, after
+        `sys.boot_completed`. A fresh CI-identical device on the Mac showed
+        `persist.sys.locale` empty and `am get-config` `en-rUS` straight after
+        boot, then `nb-NO` and `nb-rNO` about 20 s later. The Mac's own
+        Pixel_8 only looked right because the setting had persisted from an
+        earlier boot. `e2e:android` now waits, with a deadline, for the
+        device to report bokmål before the check fails.
+      - **Still to measure:** the flow on GitHub and the warm durations,
+        from the first green run.
   13. **Follow-up, a precondition for the first safety-core code: mutation
       testing of app code.** Stryker runs Vitest only. It mutates folder
       safety paths as `**/*.ts` only (`stryker.config.mjs`), so a `.tsx` file
