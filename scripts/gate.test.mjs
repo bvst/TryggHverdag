@@ -822,6 +822,58 @@ describe('the android-e2e job in ci.yml', () => {
     }
   });
 
+  test('INF-06-AC12: one API level, EMULATOR_API_LEVEL, is the api-level of every emulator step, and none sets system-image-api-level', () => {
+    // Added 2026-09-27, after the first real run (below). The job had two
+    // levels, api-level '37' and system-image-api-level '37.2'. The action
+    // installs `platforms;android-<api-level>` and takes the image's level
+    // from system-image-api-level, so the two could name different Androids,
+    // and the first one named a platform that does not exist. One level for
+    // both leaves no second value to drift (docs/specs/INF-06.md: one API
+    // level only).
+    const env = jobEnv('android-e2e');
+    const emulators = ciSteps('android-e2e').filter(bootsEmulator);
+
+    expect(Object.keys(env).filter((name) => /API_LEVEL/.test(name))).toEqual([
+      'EMULATOR_API_LEVEL',
+    ]);
+    expect(emulators.length).toBeGreaterThan(0);
+    for (const step of emulators) {
+      expect(step, step.split('\n')[0]).toMatch(
+        /^\s*api-level:\s*\$\{\{\s*env\.EMULATOR_API_LEVEL\s*\}\}\s*$/m,
+      );
+      expect(step, step.split('\n')[0]).not.toMatch(/^\s*system-image-api-level:/m);
+    }
+  });
+
+  test('INF-06-AC12: EMULATOR_API_LEVEL is major.minor, because a bare major names a platform package that does not exist', () => {
+    // Added 2026-09-27. Run 36267216821, job 108474077955, step "Boot the
+    // emulator in bokmål and run every flow", with api-level '37':
+    //   sdkmanager --install 'build-tools;37.0.0' platform-tools 'platforms;android-37'
+    //   Warning: Failed to find package 'platforms;android-37'
+    // and the step failed before any emulator started. Since API levels
+    // gained minor versions, Google's index (repository2-3.xml) lists
+    // platforms;android-37.0, 37.1 and 37.2, and no android-37. A beta
+    // (37.2-beta3) is not stable, and fails this too.
+    expect(jobEnv('android-e2e').EMULATOR_API_LEVEL).toMatch(/^\d+\.\d+$/);
+  });
+
+  test('INF-06-AC12: the snapshot key reads every setting the emulator steps read, the API level included', () => {
+    // Added 2026-09-27 (code review): the key read the image's level but not
+    // api-level, the level the emulator steps install. Every setting that
+    // shapes the device belongs in the key, or a snapshot made on one device
+    // is restored for another.
+    const steps = ciSteps('android-e2e');
+    const read = [...new Set(steps.filter(bootsEmulator).flatMap(envNames))];
+    const keyReads = steps
+      .filter((step) => step.includes('~/.android/avd'))
+      .flatMap((step) => envNames(/^\s*key:\s*(.+)$/m.exec(step)?.[1] ?? ''));
+
+    expect(read).toContain('EMULATOR_API_LEVEL');
+    for (const name of read) {
+      expect(keyReads, `the snapshot key does not read ${name}`).toContain(name);
+    }
+  });
+
   test('INF-06-AC12: it is bounded, holds no secret, and never tolerates or retries a failure', () => {
     const job = ciJob('android-e2e');
 
