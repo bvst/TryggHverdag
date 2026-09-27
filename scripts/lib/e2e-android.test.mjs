@@ -277,7 +277,80 @@ function fakeTime() {
  */
 const MAX_READS = 200_000;
 
-/** A device whose language is `answer(now, readingsSoFar)`; notes when each reading was taken. */
+// Amended 2026-09-27, run 6 of android-e2e (run 36309631129, job
+// 108592943641). The emulator booted, e2e:android printed `e2e:android: The
+// device's language is nb-NO.`, and 0.16 s later `adb … install -r
+// …/app-release.apk` failed with `adb: failed to install …: cmd: Can't find
+// service: package`. On the Mac, a fresh CI-identical device, recorded twice,
+// one row per change:
+//
+//   t+73s  boot=1 locale=       config=en-rUS package=found     system_server=739
+//   t+103s boot=1 locale=nb-NO  config=       package=found     system_server=
+//   t+104s boot=1 locale=nb-NO  config=       package=not found system_server=
+//   t+106s boot=1 locale=nb-NO  config=       package=not found system_server=4228
+//   t+107s boot=1 locale=nb-NO  config=       package=found     system_server=4228
+//   t+109s boot=1 locale=nb-NO  config=nb-rNO package=found     system_server=4228
+//
+// `locale` is getprop persist.sys.locale, `config` the locale on the `config:`
+// line of `adb shell am get-config`, `package` what `adb shell service check
+// package` says. The property flips to nb-NO a second or two before Android
+// restarts its framework to apply it, and sys.boot_completed stays 1
+// throughout. So the property alone proves nothing: the wait reads both
+// commands, and ends only when the configuration is bokmål and the package
+// service is found.
+//
+// `read` now answers what the two commands printed, as the entry script's
+// `output` returns it: stdout and stderr together, or null when adb could not
+// be run at all. { config, packageService }.
+
+/** What `adb shell service check package` prints, with the service up and gone. */
+const FOUND = 'Service package: found\n';
+const NOT_FOUND = 'Service package: not found\n';
+
+/**
+ * What `adb shell am get-config` prints while the activity service is down:
+ * `am` is `cmd activity`, and this is cmd's wording, as in run 6's install
+ * failure. The Mac's recording shows only that no configuration came back.
+ */
+const ACTIVITY_DOWN = "cmd: Can't find service: activity\n";
+
+/**
+ * What `adb shell am get-config` prints on a device whose configuration's
+ * locale is `qualifier`, written the way Android writes it, such as nb-rNO.
+ * Only the locale was recorded on the device; the rest is illustrative.
+ */
+function configOutput(qualifier, { network = true } = {}) {
+  return [
+    `config: ${network ? 'mcc310-mnc260-' : ''}${qualifier}-ldltr-sw411dp-w411dp-h914dp-normal-long-notround-lowdr-nowidecg-port-notnight-420dpi-finger-keysexposed-nokeys-navhidden-v37`,
+    'abi: x86_64',
+    '',
+  ].join('\n');
+}
+
+/**
+ * The reading of a device whose configuration's language is `reply`, with the
+ * package service up. An empty reply is a configuration that says nothing, as
+ * the Mac's did while its framework restarted.
+ */
+const asReading = (reply) => ({
+  config:
+    reply === '' ? '' : configOutput(reply.replace(/^([a-z]{2,3})[-_]r?([A-Z]{2})$/, '$1-r$2')),
+  packageService: FOUND,
+});
+
+/**
+ * A language as a message may write it: as the property does, nb-NO, or as
+ * the configuration does, nb-rNO.
+ */
+function spelled(locale) {
+  const [language = '', region = ''] = locale.split(/[-_]r?/);
+  return new RegExp(`\\b${language}[-_]r?${region}\\b`);
+}
+
+/**
+ * A device whose configuration's language is `answer(now, readingsSoFar)`, with
+ * the package service up throughout; notes when each reading was taken.
+ */
 function device(time, answer) {
   const reads = [];
   return {
@@ -290,10 +363,108 @@ function device(time, answer) {
       }
       const reply = answer(time.now(), reads.length);
       reads.push({ at: time.now(), reply });
-      return reply;
+      return asReading(reply);
     },
   };
 }
+
+/**
+ * A device whose reading, { config, packageService }, is `answer(now,
+ * readingsSoFar)`; notes when each reading was taken, and what it was.
+ */
+function rawDevice(time, answer) {
+  const reads = [];
+  return {
+    reads,
+    read: () => {
+      if (reads.length >= MAX_READS) {
+        throw new Error(
+          `read ${String(MAX_READS)} times: the wait is not following the now and sleep it was given`,
+        );
+      }
+      const reading = answer(time.now(), reads.length);
+      reads.push({ at: time.now(), ...reading });
+      return reading;
+    },
+  };
+}
+
+/**
+ * The Mac's second recording, as readings: milliseconds from its first row,
+ * t+73 s, when the device had booted in its image's language.
+ */
+function macRecording(at) {
+  if (at < 30_000) return { config: configOutput('en-rUS'), packageService: FOUND };
+  // t+103 s: persist.sys.locale is nb-NO, and the framework is going down.
+  if (at < 31_000) return { config: '', packageService: FOUND };
+  // t+104 s to t+106 s: no framework, and no package service to install with.
+  if (at < 34_000) return { config: '', packageService: NOT_FOUND };
+  // t+107 s: the package service is back, the configuration is not yet.
+  if (at < 36_000) return { config: '', packageService: FOUND };
+  // t+109 s: the restarted framework reports bokmål.
+  return { config: configOutput('nb-rNO'), packageService: FOUND };
+}
+
+/**
+ * A message that says the package service was not there. Near the word
+ * "package", so a message that says something else is missing does not count.
+ */
+const PACKAGE_MISSING =
+  /\bpackage\b[^.\n]{0,40}?\b(?:not found|missing|unavailable|absent|gone|down|not there|not running|not available|not up)\b|\b(?:no|missing|can't find|cannot find|could not find)\b[^.\n]{0,20}?\bpackage\b/i;
+
+/** Everything `am get-config` printed in the tests below, by name. */
+const CONFIGS = {
+  bokmål: configOutput('nb-rNO'),
+  english: configOutput('en-rUS'),
+  nothing: '',
+  'the activity service missing': ACTIVITY_DOWN,
+  'no adb': null,
+};
+
+/** Everything `service check package` printed in the tests below, by name. */
+const PACKAGE_ANSWERS = {
+  found: FOUND,
+  'not found': NOT_FOUND,
+  nothing: '',
+  'no adb': null,
+};
+
+/** Readings that end the wait at once. */
+const READY = [
+  {
+    what: "an emulator's configuration",
+    config: configOutput('nb-rNO'),
+  },
+  {
+    what: 'a configuration without mcc and mnc',
+    config: configOutput('nb-rNO', { network: false }),
+  },
+];
+
+/**
+ * The last reading before the deadline, after one that differs in both, and
+ * what the failure must then say about each.
+ */
+const LAST_SEEN = [
+  {
+    what: 'sv-rSE, the package service found',
+    readings: [
+      { config: configOutput('en-rUS'), packageService: NOT_FOUND },
+      { config: configOutput('sv-rSE'), packageService: FOUND },
+    ],
+    language: /\bsv[-_]r?SE\b/,
+    packageMissing: false,
+  },
+  {
+    what: 'nb-rNO, the package service not found',
+    readings: [
+      { config: configOutput('en-rUS'), packageService: FOUND },
+      { config: configOutput('nb-rNO'), packageService: NOT_FOUND },
+    ],
+    language: /\bnb[-_]r?NO\b/,
+    packageMissing: true,
+  },
+];
 
 /** Answers `replies` in turn, and the last one from then on. */
 const inTurn = (replies) => (_at, n) => replies[Math.min(n, replies.length - 1)];
@@ -335,7 +506,7 @@ describe('waitForLocale: the emulator applies its language after it has booted',
     });
 
     expect(result.ok, result.message).toBe(true);
-    expect(result.message).toContain('nb-NO');
+    expect(result.message).toMatch(spelled('nb-NO'));
     expect(phone.reads.map((r) => r.reply)).toEqual(['', '', 'en-US', 'nb-NO']);
     expect(phone.reads.map((r) => r.at)).toEqual([0, 1_000, 2_000, 3_000]);
   });
@@ -359,7 +530,7 @@ describe('waitForLocale: the emulator applies its language after it has booted',
     expect(result.message).toMatch(/bokmål/);
     expect(result.message).toMatch(/\bwait/i);
     expect(result.message).toMatch(saysHowLong(30_000));
-    expect(result.message).toContain('sv-SE');
+    expect(result.message).toMatch(spelled('sv-SE'));
   });
 
   test.each(NOT_BOKMAL)(
@@ -395,7 +566,7 @@ describe('waitForLocale: the emulator applies its language after it has booted',
 
       expect(phone.reads.length).toBeGreaterThanOrEqual(1);
       expect(result.ok).toBe(ok);
-      expect(result.message).toContain(reply);
+      expect(result.message).toMatch(spelled(reply));
     },
   );
 
@@ -457,6 +628,111 @@ describe('waitForLocale: the emulator applies its language after it has booted',
     expect(result.ok, result.message).toBe(true);
     expect(phone.reads.at(-1)?.at).toBeGreaterThanOrEqual(20_000);
   });
+});
+
+describe('waitForLocale: bokmål counts only once the restarted framework reports it and can install', () => {
+  test("INF-06-AC9: on the Mac's recording, it keeps reading through the framework's restart and passes at the first reading with bokmål in the configuration and the package service found", async () => {
+    const time = fakeTime();
+    const phone = rawDevice(time, macRecording);
+
+    const result = await waitForLocale(phone.read, {
+      deadline: 120_000,
+      interval: 1_000,
+      now: time.now,
+      sleep: time.sleep,
+    });
+
+    expect(result.ok, result.message).toBe(true);
+    // Not vacuous: it was reading while the package service was gone.
+    expect(phone.reads.some((r) => r.at >= 31_000 && r.at < 34_000)).toBe(true);
+    // It passed on t+109 s, the first reading with both, and not before.
+    expect(phone.reads.at(-1)?.at).toBeGreaterThanOrEqual(36_000);
+    expect(phone.reads.at(-1)?.at).toBeLessThan(37_000);
+    expect(result.message).toMatch(spelled('nb-NO'));
+  });
+
+  test("INF-06-AC9: with the production settings, the Mac's recording passes", async () => {
+    const time = fakeTime();
+    const phone = rawDevice(time, macRecording);
+
+    const result = await waitForLocale(phone.read, { now: time.now, sleep: time.sleep });
+
+    expect(result.ok, result.message).toBe(true);
+    expect(phone.reads.at(-1)?.at).toBeGreaterThanOrEqual(36_000);
+  });
+
+  test('INF-06-AC9: of every combination of what the two commands print, only bokmål in the configuration together with the package service found ends the wait', async () => {
+    for (const [configIs, config] of Object.entries(CONFIGS)) {
+      for (const [packageIs, packageService] of Object.entries(PACKAGE_ANSWERS)) {
+        const time = fakeTime();
+        const phone = rawDevice(
+          time,
+          inTurn([
+            { config: CONFIGS.english, packageService: FOUND },
+            { config, packageService },
+          ]),
+        );
+
+        const result = await waitForLocale(phone.read, {
+          deadline: 5_000,
+          interval: 1_000,
+          now: time.now,
+          sleep: time.sleep,
+        });
+        const ready = configIs === 'bokmål' && packageIs === 'found';
+        const where = `configuration: ${configIs}; package service: ${packageIs}; ${result.message}`;
+
+        expect(result.ok, where).toBe(ready);
+        // Passing stops at the second reading; anything else reads on.
+        expect(phone.reads.length > 2, where).toBe(!ready);
+        expect(phone.reads.length, where).toBeGreaterThanOrEqual(2);
+      }
+    }
+  });
+
+  test.each(READY)(
+    'INF-06-AC9: bokmål in $what, with the package service found, ends the wait at once',
+    async ({ config }) => {
+      const time = fakeTime();
+      const phone = rawDevice(time, () => ({ config, packageService: FOUND }));
+
+      const result = await waitForLocale(phone.read, {
+        deadline: 5_000,
+        interval: 1_000,
+        now: time.now,
+        sleep: time.sleep,
+      });
+
+      expect(result.ok, result.message).toBe(true);
+      expect(phone.reads.length).toBe(1);
+    },
+  );
+
+  test.each(LAST_SEEN)(
+    'INF-06-AC9: at the deadline, having last seen $what, the failure says both, names bokmål, and says how long it waited',
+    async ({ readings, language, packageMissing }) => {
+      const time = fakeTime();
+      const phone = rawDevice(time, inTurn(readings));
+
+      const result = await waitForLocale(phone.read, {
+        deadline: 30_000,
+        interval: 1_000,
+        now: time.now,
+        sleep: time.sleep,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(phone.reads.length).toBeGreaterThan(readings.length);
+      expect(result.message).toMatch(/bokmål/);
+      expect(result.message).toMatch(/\bwait/i);
+      expect(result.message).toMatch(saysHowLong(30_000));
+      // The configuration's language, as last seen.
+      expect(result.message).toMatch(language);
+      // And the package service, as last seen: named, and missing only if it was.
+      expect(result.message).toMatch(/\bpackage\b/i);
+      expect(PACKAGE_MISSING.test(result.message), result.message).toBe(packageMissing);
+    },
+  );
 });
 
 /** A Maestro JUnit report holding these <testcase> elements. */

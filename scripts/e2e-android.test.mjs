@@ -257,13 +257,19 @@ function maestroBody({ log, envLog, report, crashes, exit }) {
  * written to `readTimes`, so a test can say how long the script kept asking.
  * Only the locale part of the configuration line was seen on the device; the
  * rest of it is illustrative.
+ *
+ * Amended 2026-09-27, run 6: the package service is up throughout, and
+ * `service check package` says so without counting as a reading. A device
+ * whose framework restarts to apply the language is `timeline`'s.
  */
 function localeAnswers({ locale, appliedAfter, readCount, readTimes }) {
   const config = (qualifier) =>
     `config: mcc310-mnc260-${qualifier}-ldltr-sw411dp-w411dp-h914dp-420dpi-normal-long-notround-lowdr-nowidecg-port-notnight-finger-keysexposed-nokeys-navhidden-v37`;
   const stamp = `        "${process.execPath}" -e 'console.log(Date.now())' >> "${readTimes}"`;
+  const packageService = '      *service*check*) echo "Service package: found" ;;';
   if (appliedAfter === undefined) {
     return [
+      packageService,
       '      *locale*|*get-config*)',
       stamp,
       '        case "$*" in',
@@ -274,6 +280,7 @@ function localeAnswers({ locale, appliedAfter, readCount, readTimes }) {
   }
   const applied = appliedAfter === Infinity ? 'false' : `[ "$n" -gt ${String(appliedAfter)} ]`;
   return [
+    packageService,
     '      *locale*|*get-config*)',
     stamp,
     `        n=$(/bin/cat "${readCount}" 2>/dev/null || echo 0)`,
@@ -289,9 +296,71 @@ function localeAnswers({ locale, appliedAfter, readCount, readTimes }) {
 }
 
 /**
+ * A device that goes through `timeline`'s phases in turn, as the Mac's did in
+ * run 6's reproduction. Each phase lasts `questions` of the script's questions
+ * about the device's state, counted in `readCount`: getprop of a locale, `am
+ * get-config` and `service check package`. The last phase lasts for ever.
+ *
+ * In each phase, persist.sys.locale is `property`; `am get-config` reports
+ * `configLocale`, or fails as cmd does while the activity service is gone when
+ * that is empty; `service check package` says the service is `packageService`,
+ * found or not found; and ro.product.locale is the image's en-US. Each call to
+ * the stand-in, with the phase it came in, is written to `phaseLog`, so a test
+ * can say in which phase the release build was installed. `adb install` fails,
+ * as it did in run 6, while the package service is not found.
+ *
+ * These are the shell lines that set `phase`, `property`, `qualifier` and
+ * `pkg` for this call, before anything else.
+ */
+function timelinePhase({ timeline, readCount, phaseLog }) {
+  let upTo = 0;
+  const branches = timeline.map((step, i) => {
+    const set = `phase='${step.phase}'; property='${step.property}'; qualifier='${step.configLocale}'; pkg='${step.packageService}'`;
+    if (i === timeline.length - 1) return timeline.length === 1 ? set : `else ${set}; fi`;
+    upTo += step.questions;
+    return `${i === 0 ? 'if' : 'elif'} [ "$n" -le ${String(upTo)} ]; then ${set}`;
+  });
+  return [
+    `n=$(/bin/cat "${readCount}" 2>/dev/null || echo 0)`,
+    'case "$*" in',
+    `  shell*locale*|shell*get-config*|shell*service*check*) n=$((n + 1)); echo "$n" > "${readCount}" ;;`,
+    'esac',
+    ...branches,
+    `echo "$phase adb $*" >> "${phaseLog}"`,
+  ];
+}
+
+/** How the timeline's device answers the script's questions, in `shell`'s case. */
+function timelineAnswers({ readTimes }) {
+  return [
+    '      *locale*|*get-config*|*service*check*)',
+    `        "${process.execPath}" -e 'console.log(Date.now())' >> "${readTimes}"`,
+    '        case "$*" in',
+    '          *service*check*) echo "Service package: $pkg" ;;',
+    '          *ro.product.locale*) echo en-US ;;',
+    '          *get-config*)',
+    `            if [ -z "$qualifier" ]; then echo "cmd: Can't find service: activity" >&2; exit 20; fi`,
+    '            echo "config: mcc310-mnc260-$qualifier-ldltr-sw411dp-w411dp-h914dp-normal-long-notround-lowdr-nowidecg-port-notnight-420dpi-finger-keysexposed-nokeys-navhidden-v37"',
+    '            echo "abi: x86_64" ;;',
+    '          *) echo "$property" ;;',
+    '        esac ;;',
+  ];
+}
+
+/** `adb install` on the timeline's device: run 6's failure while the package service is gone. */
+const timelineInstall = [
+  '  install)',
+  '    if [ "$pkg" != found ]; then',
+  `      echo "adb: failed to install ${APK}: cmd: Can't find service: package" >&2`,
+  '      exit 1',
+  '    fi ;;',
+];
+
+/**
  * The stand-in adb: emulators by serial, a device set to `locale` (bokmål
  * unless a test says otherwise) or one that applies bokmål only after
- * `appliedAfter` readings, and a crash buffer when there is one.
+ * `appliedAfter` readings, or one that goes through `timeline`'s phases, and a
+ * crash buffer when there is one.
  */
 function deviceAdbBody({
   log,
@@ -301,20 +370,26 @@ function deviceAdbBody({
   appliedAfter,
   readCount,
   readTimes,
+  timeline,
+  phaseLog,
 }) {
   return [
     '#!/bin/sh',
     `echo "adb $*" >> "${log}"`,
     "serial=''",
     'if [ "$1" = "-s" ]; then serial="$2"; shift 2; fi',
+    ...(timeline === undefined ? [] : timelinePhase({ timeline, readCount, phaseLog })),
     'case "$1" in',
     `  devices) printf 'List of devices attached\\n${devices.map(([serial, state]) => `${serial}\\t${state}\\n`).join('')}\\n' ;;`,
     '  shell)',
     '    case "$*" in',
     '      *ro.kernel.qemu*) case "$serial" in emulator-*) echo 1 ;; esac ;;',
-    ...localeAnswers({ locale, appliedAfter, readCount, readTimes }),
+    ...(timeline === undefined
+      ? localeAnswers({ locale, appliedAfter, readCount, readTimes })
+      : timelineAnswers({ readTimes })),
     '      *boot_completed*) echo 1 ;;',
     '    esac ;;',
+    ...(timeline === undefined ? [] : timelineInstall),
     '  logcat)',
     "    pattern=''",
     "    prev=''",
@@ -350,13 +425,21 @@ function writeTool(file, body) {
  *   crash?: boolean,
  *   locale?: string,
  *   localeAppliedAfter?: number,
+ *   timeline?: {
+ *     phase: string,
+ *     questions: number,
+ *     property: string,
+ *     configLocale: string,
+ *     packageService: string,
+ *   }[],
  *   env?: Record<string, string>,
  *   timeout?: number,
  * }} options — `flows` is what Maestro's report says ran; `crash` puts a
  *   crash of the app, and one of another app, in the device's crash buffer;
  *   `locale` is the language the device reports, unless `localeAppliedAfter`
  *   makes it a device that applies bokmål only after that many readings
- *   (localeAnswers); `env` is added to the script's environment; `timeout` is
+ *   (localeAnswers), or `timeline` one whose framework restarts to apply it
+ *   (timelinePhase); `env` is added to the script's environment; `timeout` is
  *   when the run is killed
  */
 async function runPastPreflight({
@@ -368,6 +451,7 @@ async function runPastPreflight({
   crash = false,
   locale = 'nb-NO',
   localeAppliedAfter,
+  timeline,
   env = {},
   timeout = 60_000,
 } = {}) {
@@ -383,6 +467,7 @@ async function runPastPreflight({
     const crashes = path.join(dir, 'crash-buffer.txt');
     const readCount = path.join(dir, 'locale-reads');
     const readTimes = path.join(dir, 'locale-read-times');
+    const phaseLog = path.join(dir, 'phases.log');
 
     for (const file of [
       'package.json',
@@ -429,6 +514,8 @@ async function runPastPreflight({
           appliedAfter: localeAppliedAfter,
           readCount,
           readTimes,
+          timeline,
+          phaseLog,
         }),
       );
     }
@@ -472,6 +559,11 @@ async function runPastPreflight({
         return { args: maestroArgs, updateCheck, analytics };
       }),
       crashBuffer: lines(crashes),
+      // With a timeline: every call to adb, and the phase the device was in.
+      phaseCalls: lines(phaseLog).map((line) => {
+        const [phase = '', ...call] = line.split(' ');
+        return { phase, call: call.join(' ') };
+      }),
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -539,6 +631,100 @@ function saysHowLong(ms) {
   return new RegExp(`(?<![\\d.])(?:${forms.join('|')})\\b`);
 }
 
+// Added 2026-09-27, run 6 of android-e2e (run 36309631129, job 108592943641).
+// The emulator booted, e2e:android printed `e2e:android: The device's language
+// is nb-NO.`, and 0.16 s later `adb … install -r …/app-release.apk` failed with
+// `adb: failed to install …: cmd: Can't find service: package`. The Mac, on a
+// fresh CI-identical device, one row per change:
+//
+//   t+73s  boot=1 locale=       config=en-rUS package=found     system_server=739
+//   t+103s boot=1 locale=nb-NO  config=       package=found     system_server=
+//   t+104s boot=1 locale=nb-NO  config=       package=not found system_server=
+//   t+106s boot=1 locale=nb-NO  config=       package=not found system_server=4228
+//   t+107s boot=1 locale=nb-NO  config=       package=found     system_server=4228
+//   t+109s boot=1 locale=nb-NO  config=nb-rNO package=found     system_server=4228
+//
+// `locale` is getprop persist.sys.locale; `config` the locale on `am
+// get-config`'s `config:` line; `package` what `service check package` says.
+// persist.sys.locale flips a second or two before Android restarts its
+// framework to apply it, and sys.boot_completed stays 1 throughout. An earlier
+// recording had the property at nb-NO from t+92 s and the framework gone only
+// from t+94 s, which is `property-flipped` below.
+
+/** The Mac's recording, as timelinePhase plays it. */
+const MAC_RECORDING = [
+  { phase: 'booted', questions: 4, property: '', configLocale: 'en-rUS', packageService: 'found' },
+  {
+    phase: 'property-flipped',
+    questions: 4,
+    property: 'nb-NO',
+    configLocale: 'en-rUS',
+    packageService: 'found',
+  },
+  {
+    phase: 'framework-stopping',
+    questions: 2,
+    property: 'nb-NO',
+    configLocale: '',
+    packageService: 'found',
+  },
+  {
+    phase: 'framework-down',
+    questions: 4,
+    property: 'nb-NO',
+    configLocale: '',
+    packageService: 'not found',
+  },
+  {
+    phase: 'package-back',
+    questions: 3,
+    property: 'nb-NO',
+    configLocale: '',
+    packageService: 'found',
+  },
+  {
+    phase: 'ready',
+    questions: Infinity,
+    property: 'nb-NO',
+    configLocale: 'nb-rNO',
+    packageService: 'found',
+  },
+];
+
+/** A device whose property says nb-NO, and whose framework never restarts to apply it. */
+const PROPERTY_ONLY = [
+  { phase: 'booted', questions: 4, property: '', configLocale: 'en-rUS', packageService: 'found' },
+  {
+    phase: 'property-flipped',
+    questions: Infinity,
+    property: 'nb-NO',
+    configLocale: 'en-rUS',
+    packageService: 'found',
+  },
+];
+
+/** A device whose configuration says bokmål, and whose package service never comes back. */
+const PACKAGE_NEVER_BACK = [
+  { phase: 'booted', questions: 2, property: '', configLocale: 'en-rUS', packageService: 'found' },
+  {
+    phase: 'package-missing',
+    questions: Infinity,
+    property: 'nb-NO',
+    configLocale: 'nb-rNO',
+    packageService: 'not found',
+  },
+];
+
+/**
+ * A message that says the package service was not there. Near the word
+ * "package", so a message that says something else is missing does not count.
+ */
+const PACKAGE_MISSING =
+  /\bpackage\b[^.\n]{0,40}?\b(?:not found|missing|unavailable|absent|gone|down|not there|not running|not available|not up)\b|\b(?:no|missing|can't find|cannot find|could not find)\b[^.\n]{0,20}?\bpackage\b/i;
+
+/** The calls, in the timeline's log, that installed onto the device. */
+const isInstall = ({ call }) => /^adb\b.*\binstall\b/.test(call);
+
 describe('past the preflight', () => {
   test('INF-06-AC9: when every flow passed and Maestro exited 0, it passes and says how many flows ran', async () => {
     // The control for the tests below: the stand-ins are enough for a pass.
@@ -597,8 +783,11 @@ describe('past the preflight', () => {
     });
 
     // Not vacuous: the device was asked for its language.
+    // Amended 2026-09-27, run 6: asked through the configuration, `am
+    // get-config`, and no longer through persist.sys.locale, which says nb-NO
+    // before the framework has restarted to apply it.
     expect(
-      calls.some((call) => /^adb\b.*\bgetprop\b.*\blocale\b/.test(call)),
+      calls.some((call) => /^adb\b.*\bam get-config\b/.test(call)),
       output,
     ).toBe(true);
     expect(calls.filter(isLocaleRead).length, output).toBeGreaterThan(1);
@@ -669,6 +858,77 @@ describe('past the preflight', () => {
     expect(code, `it finished within 4 s, with exit code ${String(code)}:\n${output}`).toBeNull();
     expect(signal).toBe('SIGTERM');
     expect(calls.filter(isFlowRun)).toEqual([]);
+  });
+
+  test("INF-06-AC9: on the Mac's recording, where persist.sys.locale says nb-NO before the framework restarts, it installs only once the configuration says nb-rNO and the package service is found, and the flows run", async () => {
+    const { code, output, calls, phaseCalls } = await runPastPreflight({
+      timeline: MAC_RECORDING,
+      env: { ...SHORT_WAIT, E2E_ANDROID_LOCALE_DEADLINE_MS: '20000' },
+    });
+    const installs = phaseCalls.filter(isInstall);
+
+    // Installed, and only once the restarted framework reported bokmål and
+    // could install: never in the window run 6 installed in.
+    expect(installs.length, output).toBeGreaterThan(0);
+    expect(
+      installs.map(({ phase }) => phase),
+      output,
+    ).toEqual(installs.map(() => 'ready'));
+    // Not vacuous: it asked the two questions that decide, and kept asking
+    // while the framework was down.
+    expect(
+      calls.some((call) => /^adb\b.*\bam get-config\b/.test(call)),
+      output,
+    ).toBe(true);
+    expect(
+      calls.some((call) => /^adb\b.*\bservice check package\b/.test(call)),
+      output,
+    ).toBe(true);
+    expect(
+      phaseCalls.map(({ phase }) => phase),
+      output,
+    ).toContain('framework-down');
+    expect(code, output).toBe(0);
+    expect(output).toMatch(/\b1 of 1 flows? passed/);
+  });
+
+  test('INF-06-AC9: when persist.sys.locale says nb-NO but the framework never restarts to apply it, it installs nothing, and after the deadline says the configuration is en-rUS and the package service was found', async () => {
+    const { code, stderr, output, calls, askedFor } = await runPastPreflight({
+      timeline: PROPERTY_ONLY,
+      env: SHORT_WAIT,
+    });
+
+    expect(touchedDevice(calls), output).toEqual([]);
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    expect(askedFor, output).toBeGreaterThanOrEqual(WAITED_OUT);
+    expect(stderr, output).toMatch(/bokmål/);
+    expect(stderr, output).toMatch(/\bwait/i);
+    expect(stderr, output).toMatch(saysHowLong(SHORT_DEADLINE));
+    // What it last saw: the configuration's language, and the package service there.
+    expect(stderr, output).toMatch(/\ben[-_]r?US\b/);
+    expect(stderr, output).toMatch(/\bpackage\b/i);
+    expect(stderr, output).not.toMatch(PACKAGE_MISSING);
+    expect(output).not.toMatch(/flows? passed/);
+  });
+
+  test('INF-06-AC9: when the configuration says nb-rNO but the package service never comes back, it installs nothing, and after the deadline says the package service was not found', async () => {
+    const { code, stderr, output, calls, askedFor } = await runPastPreflight({
+      timeline: PACKAGE_NEVER_BACK,
+      env: SHORT_WAIT,
+    });
+
+    expect(touchedDevice(calls), output).toEqual([]);
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    expect(askedFor, output).toBeGreaterThanOrEqual(WAITED_OUT);
+    expect(stderr, output).toMatch(/bokmål/);
+    expect(stderr, output).toMatch(/\bwait/i);
+    expect(stderr, output).toMatch(saysHowLong(SHORT_DEADLINE));
+    // What it last saw: bokmål in the configuration, and no package service.
+    expect(stderr, output).toMatch(/\bnb[-_]r?NO\b/);
+    expect(stderr, output).toMatch(PACKAGE_MISSING);
+    expect(output).not.toMatch(/flows? passed/);
   });
 
   test('INF-06-AC9: only the tests shorten the wait for bokmål: no workflow and no package script sets its variables', () => {
