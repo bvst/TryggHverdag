@@ -147,10 +147,13 @@ saying which one:
 - no Android device is connected;
 - the only devices connected are real phones, not emulators (amended
   2026-09-26: it never installs onto, or reads crash logs from, a real phone);
-- the device has not reported Norwegian bokmål within 120 s (amended
-  2026-09-27: the emulator applies `-change-locale` about 20 s after it
-  reports the boot complete, so the check waits, then fails with how long it
-  waited and the last language it saw);
+- the device is not ready in Norwegian bokmål within 120 s. Ready means the
+  locale apps see (`am get-config`) is bokmål **and** the package service is
+  found. (Amended 2026-09-27. The emulator applies `-change-locale` well
+  after it reports the boot complete. `persist.sys.locale` flips about
+  1–2 s before Android restarts its framework, and the package service is
+  missing for about 4 s, which is how CI run 6 failed to install. On
+  failure it says how long it waited and what it last saw for each signal.)
 - Maestro is not usable, or Java is not 17 to 21 (amended 2026-09-26: Java 25
   passes a "17 or newer" check and then fails the native build after about 18
   minutes; the message says to set `JAVA_HOME` to a JDK 17);

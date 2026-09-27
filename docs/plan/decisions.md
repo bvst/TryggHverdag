@@ -2094,6 +2094,17 @@ any other path is work, not a candidate for the same treatment.
         Pixel_8 only looked right because the setting had persisted from an
         earlier boot. `e2e:android` now waits, with a deadline, for the
         device to report bokmål before the check fails.
+      - **Run 6** (36309631129). The cold build took 15 min 26 s and the
+        boot 91 s. The locale check passed (`The device's language is
+        nb-NO`), and 0.16 s later `adb install` failed: `cmd: Can't find
+        service: package`. Recorded twice on the Mac, on a fresh
+        CI-identical device: `persist.sys.locale` turns `nb-NO` about 1–2 s
+        before Android restarts its framework to apply it. For about 4 s
+        `system_server` is gone and the package service is missing, while
+        `sys.boot_completed` stays 1. `am get-config` reports `nb-rNO` only
+        once the new framework is up. So the wait now ends only when
+        `am get-config` reports bokmål and `service check package` finds the
+        service.
       - **Still to measure:** the flow on GitHub and the warm durations,
         from the first green run.
   13. **Follow-up, a precondition for the first safety-core code: mutation

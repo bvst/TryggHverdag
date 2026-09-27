@@ -2,4 +2,4 @@
 - [Expo peers under pnpm](project_expo_pnpm_peers.md): app must declare @babel/core ^7; expo-router's drawer-layout drags in Reanimated/Worklets; test-renderer must match React
 - [Typed lint vs red TS tests](project_red_phase_typed_lint.md): tests importing missing modules fail no-unsafe-*, so HK-09 blocks committing them before their source
 - [Mac Android toolchain](project_mac_android_toolchain.md): JBR 25 breaks the native build; use ~/jdks JDK 17; Pixel_8 is nb-NO; stop Colima first; no `timeout`; clean teardown
-- [Coverage and guard quirks](project_coverage_and_guard_quirks.md): baseline update needs a one-off reportOnFailure run; guard-bash reads `=>`/`>` as a write, blocks any `.env` text; no scratchpad writes
+- [Coverage and guard quirks](project_coverage_and_guard_quirks.md): baseline update needs a reportOnFailure run; guard-bash reads `=>`/`>` as a write, blocks `.env` text; post-edit ETIMEDOUT

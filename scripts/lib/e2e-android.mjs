@@ -188,7 +188,8 @@ export function checkMaestro(result) {
  * device in any other language it would fail for a reason that says nothing
  * about the app.
  *
- * @param {string} locale what the device reports, such as "nb-NO"
+ * @param {string} locale what the device reports, such as "nb-NO", or its
+ *   configuration's "nb-rNO"
  * @returns {{ ok: boolean, message: string }}
  */
 export function checkLocale(locale) {
@@ -205,9 +206,10 @@ export function checkLocale(locale) {
 
 /**
  * How long to wait for the device to report bokmål. An emulator started with
- * `-change-locale nb-NO` applies it only after it has booted: on the Mac, a
- * CI-identical one reported nb-NO about 20 s after sys.boot_completed, and
- * CI's runner is slower. A shorter deadline fails runs that were only slow.
+ * `-change-locale nb-NO` applies it only after it has booted, by restarting
+ * Android's framework: on the Mac, a CI-identical one reported nb-rNO about
+ * 36 s after it had booted, and CI's runner is slower. A shorter deadline
+ * fails runs that were only slow.
  */
 export const LOCALE_DEADLINE_MS = 120_000;
 
@@ -215,12 +217,39 @@ export const LOCALE_DEADLINE_MS = 120_000;
 export const LOCALE_INTERVAL_MS = 1_000;
 
 /**
- * Waits for the device to report bokmål: reads its language at once, then
- * every `interval`, and passes on the first reading checkLocale accepts. It
- * fails once `deadline` has passed without one, and says how long it waited
- * and what the device reported last. `now` and `sleep` are its only clock.
+ * The language on the `config:` line `adb shell am get-config` printed, as
+ * Android writes it (nb-rNO), or null when there is none: while the framework
+ * restarts, `am` prints cmd's "Can't find service: activity" instead.
  *
- * @param {() => string} read the device's language, as checkLocale reads it
+ * @param {string | null} output
+ */
+function configLanguage(output) {
+  const config = /^config: *(\S*)/m.exec(output ?? '')?.[1] ?? '';
+  return /^(?:mcc\d+-)?(?:mnc\d+-)?([a-z]{2,3}(?:-r[A-Z]{2})?)(?:[-,]|$)/.exec(config)?.[1] ?? null;
+}
+
+/**
+ * Did `adb shell service check package` find the service? Exactly "found":
+ * "Service package: not found" contains that word too.
+ *
+ * @param {string | null} output
+ */
+function packageServiceFound(output) {
+  return /^Service package: found\r?$/m.test(output ?? '');
+}
+
+/**
+ * Waits for the device to be ready for bokmål flows: reads it at once, then
+ * every `interval`, and passes on the first reading in which the configuration
+ * is bokmål and the package service is found. persist.sys.locale is not enough:
+ * it says nb-NO a second or two before Android restarts its framework to apply
+ * it, and nothing can be installed while the framework is down (run 6). It
+ * fails once `deadline` has passed without such a reading, and says how long it
+ * waited and what the device said last. `now` and `sleep` are its only clock.
+ *
+ * @param {() => { config: string | null, packageService: string | null }} read
+ *   what `adb shell am get-config` and `adb shell service check package`
+ *   printed, stdout and stderr together, or null when adb could not be run
  * @param {{
  *   deadline?: number,
  *   interval?: number,
@@ -235,12 +264,26 @@ export async function waitForLocale(
 ) {
   const start = now();
   for (;;) {
-    const verdict = checkLocale(read());
-    if (verdict.ok) return verdict;
+    const { config, packageService } = read();
+    const language = configLanguage(config);
+    const found = packageServiceFound(packageService);
+    if (language !== null && checkLocale(language).ok && found) {
+      return {
+        ok: true,
+        message: `The device's language is ${language}, and its package service is up.`,
+      };
+    }
     if (now() - start >= deadline) {
+      const asked = (output, answer) =>
+        output === null ? 'unknown, as adb could not be run' : answer;
       return {
         ok: false,
-        message: `Waited ${String(deadline / 1000)} s for the emulator to apply its language. ${verdict.message}`,
+        message:
+          `Waited ${String(deadline / 1000)} s for the emulator to be in Norwegian bokmål with ` +
+          'its package service up, ready to install the app. When last asked, its package ' +
+          `service was ${asked(packageService, found ? 'found' : 'not found')}, and its ` +
+          `configuration's language was ${asked(config, language ?? 'none')}. The flows ` +
+          'expect nb-NO; in CI, android-e2e starts the emulator with it.',
       };
     }
     await sleep(interval);

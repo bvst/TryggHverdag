@@ -119,13 +119,16 @@ expectOk(checkJava(output(java, ['-version'])));
 const maestro = buildOnly ? undefined : await ensureMaestro({ root });
 if (maestro !== undefined) {
   expectOk(checkMaestro(run(maestro, ['--version'], { timeout: 120_000 })));
-  // The emulator applies its language after it has booted, so one reading
-  // proves nothing: wait for bokmål, up to the deadline.
-  const readLocale = () =>
-    output(adb, ['-s', device ?? '', 'shell', 'getprop', 'persist.sys.locale'])?.trim() ||
-    (output(adb, ['-s', device ?? '', 'shell', 'getprop', 'ro.product.locale']) ?? '');
+  // The emulator applies its language after it has booted, by restarting
+  // Android's framework, so one reading proves nothing: wait, up to the
+  // deadline, for the restarted framework's configuration to be bokmål and its
+  // package service to be back, which the install needs.
+  const readDevice = () => ({
+    config: output(adb, ['-s', device ?? '', 'shell', 'am', 'get-config']),
+    packageService: output(adb, ['-s', device ?? '', 'shell', 'service', 'check', 'package']),
+  });
   expectOk(
-    await waitForLocale(readLocale, {
+    await waitForLocale(readDevice, {
       deadline: millisecondsFrom('E2E_ANDROID_LOCALE_DEADLINE_MS', LOCALE_DEADLINE_MS),
       interval: millisecondsFrom('E2E_ANDROID_LOCALE_INTERVAL_MS', LOCALE_INTERVAL_MS),
       now: Date.now,
