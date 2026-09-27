@@ -2034,9 +2034,23 @@ any other path is work, not a candidate for the same treatment.
         placeholder** until the first store upload, when the owner fixes it
         together with the public name (D-057). It costs nothing to change
         before then.
-  12. **Not yet measured:** `android-e2e`'s CI durations, cold and warm, are
-      added to this decision once the first CI run of the job has produced
-      them. Estimates only exist so far (`docs/specs/INF-06.md`, "CI cost").
+  12. **What the first CI run proved** (PR #34, run 36267216821, 2026-09-26):
+      - **KVM:** GitHub's standard Linux runners expose it. The KVM step
+        passed, and the emulator action logged "disable Linux hardware
+        acceleration: false".
+      - **Cold build:** the x86_64 release build took 14 min 48 s with no
+        Gradle cache (the cache is saved from `main` only).
+      - **One API level, `37.2`.** The job failed before any emulator
+        started: `Failed to find package 'platforms;android-37'`. The action
+        installs `platforms;android-<api-level>`, and since minor Android
+        versions there is no bare `android-37`; Google's index has 37.0,
+        37.1 and 37.2. `api-level` is now the single `EMULATOR_API_LEVEL:
+        '37.2'`, in `major.minor` form, used for the platform and the system
+        image alike. The runner's sdkmanager warns that it reads SDK XML only
+        up to version 3. That is harmless here: the version-3 index lists
+        these packages.
+      - **Still to measure:** the emulator boot, the flow, and the warm
+        durations, from the first green run.
   13. **Follow-up, a precondition for the first safety-core code: mutation
       testing of app code.** Stryker runs Vitest only. It mutates folder
       safety paths as `**/*.ts` only (`stryker.config.mjs`), so a `.tsx` file

@@ -321,8 +321,14 @@ jobs:
       # snapshot is never restored under a key that no longer says what it
       # holds. The same image as the Mac's emulator: Android 17 with 16 KB
       # memory pages, which Google Play requires apps to work on.
-      EMULATOR_API_LEVEL: '37'
-      EMULATOR_IMAGE_API_LEVEL: '37.2'
+      #
+      # One API level, for both the platform and the system image: the action
+      # installs platforms;android-<level> and, with no system-image-api-level,
+      # builds the image's package name from the same level. It is major.minor
+      # because API levels gained minor versions: Google's index has
+      # platforms;android-37.0 to 37.2 and no android-37, which is what a bare
+      # '37' asked for on the first run.
+      EMULATOR_API_LEVEL: '37.2'
       EMULATOR_TARGET: google_apis_ps16k
       EMULATOR_ARCH: x86_64
       EMULATOR_PROFILE: pixel_8
@@ -392,7 +398,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-${{ env.EMULATOR_IMAGE_API_LEVEL }}-${{ env.EMULATOR_TARGET }}-${{ env.EMULATOR_ARCH }}-${{ env.EMULATOR_PROFILE }}-${{ env.EMULATOR_LOCALE }}
+          key: avd-${{ env.EMULATOR_API_LEVEL }}-${{ env.EMULATOR_TARGET }}-${{ env.EMULATOR_ARCH }}-${{ env.EMULATOR_PROFILE }}-${{ env.EMULATOR_LOCALE }}
       # On main, with no cached device yet: boot once to make a clean snapshot
       # for later runs to start from. Pull requests only ever read it.
       - name: Create the virtual device and its snapshot
@@ -400,7 +406,6 @@ jobs:
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: ${{ env.EMULATOR_API_LEVEL }}
-          system-image-api-level: ${{ env.EMULATOR_IMAGE_API_LEVEL }}
           target: ${{ env.EMULATOR_TARGET }}
           arch: ${{ env.EMULATOR_ARCH }}
           profile: ${{ env.EMULATOR_PROFILE }}
@@ -424,7 +429,6 @@ jobs:
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: ${{ env.EMULATOR_API_LEVEL }}
-          system-image-api-level: ${{ env.EMULATOR_IMAGE_API_LEVEL }}
           target: ${{ env.EMULATOR_TARGET }}
           arch: ${{ env.EMULATOR_ARCH }}
           profile: ${{ env.EMULATOR_PROFILE }}
