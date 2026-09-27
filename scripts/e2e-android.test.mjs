@@ -22,6 +22,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -241,10 +242,66 @@ function maestroBody({ log, envLog, report, crashes, exit }) {
 }
 
 /**
- * The stand-in adb: emulators by serial, a device set to `locale` (bokmål
- * unless a test says otherwise), and a crash buffer when there is one.
+ * How the stand-in adb answers when asked the device's language, by `getprop`
+ * or by `am get-config`.
+ *
+ * With `appliedAfter` unset, the device is set to `locale` and says so every
+ * time. With it set, the device behaves as CI's emulator did in run 5 and a
+ * fresh CI-identical one did on the Mac: `-change-locale nb-NO` takes effect
+ * only after boot has completed. The first `appliedAfter` readings see the
+ * device as it booted, with persist.sys.locale empty and the configuration
+ * en-rUS; later ones see nb-NO and nb-rNO. ro.product.locale is the image's own
+ * and stays en-US throughout. Infinity is a device that never applies it.
+ *
+ * Each reading is counted in `readCount` and its time, in milliseconds, is
+ * written to `readTimes`, so a test can say how long the script kept asking.
+ * Only the locale part of the configuration line was seen on the device; the
+ * rest of it is illustrative.
  */
-function deviceAdbBody({ log, devices, crashes, locale = 'nb-NO' }) {
+function localeAnswers({ locale, appliedAfter, readCount, readTimes }) {
+  const config = (qualifier) =>
+    `config: mcc310-mnc260-${qualifier}-ldltr-sw411dp-w411dp-h914dp-420dpi-normal-long-notround-lowdr-nowidecg-port-notnight-finger-keysexposed-nokeys-navhidden-v37`;
+  const stamp = `        "${process.execPath}" -e 'console.log(Date.now())' >> "${readTimes}"`;
+  if (appliedAfter === undefined) {
+    return [
+      '      *locale*|*get-config*)',
+      stamp,
+      '        case "$*" in',
+      `          *get-config*) echo "${config(locale.replace('-', '-r'))}" ;;`,
+      `          *) echo "${locale}" ;;`,
+      '        esac ;;',
+    ];
+  }
+  const applied = appliedAfter === Infinity ? 'false' : `[ "$n" -gt ${String(appliedAfter)} ]`;
+  return [
+    '      *locale*|*get-config*)',
+    stamp,
+    `        n=$(/bin/cat "${readCount}" 2>/dev/null || echo 0)`,
+    '        n=$((n + 1))',
+    `        echo "$n" > "${readCount}"`,
+    `        if ${applied}; then lang=nb-NO; qualifier=nb-rNO; else lang=''; qualifier=en-rUS; fi`,
+    '        case "$*" in',
+    '          *ro.product.locale*) echo en-US ;;',
+    `          *get-config*) echo "${config('$qualifier')}" ;;`,
+    '          *) echo "$lang" ;;',
+    '        esac ;;',
+  ];
+}
+
+/**
+ * The stand-in adb: emulators by serial, a device set to `locale` (bokmål
+ * unless a test says otherwise) or one that applies bokmål only after
+ * `appliedAfter` readings, and a crash buffer when there is one.
+ */
+function deviceAdbBody({
+  log,
+  devices,
+  crashes,
+  locale = 'nb-NO',
+  appliedAfter,
+  readCount,
+  readTimes,
+}) {
   return [
     '#!/bin/sh',
     `echo "adb $*" >> "${log}"`,
@@ -255,7 +312,7 @@ function deviceAdbBody({ log, devices, crashes, locale = 'nb-NO' }) {
     '  shell)',
     '    case "$*" in',
     '      *ro.kernel.qemu*) case "$serial" in emulator-*) echo 1 ;; esac ;;',
-    `      *locale*) echo "${locale}" ;;`,
+    ...localeAnswers({ locale, appliedAfter, readCount, readTimes }),
     '      *boot_completed*) echo 1 ;;',
     '    esac ;;',
     '  logcat)',
@@ -292,9 +349,15 @@ function writeTool(file, body) {
  *   maestroExit?: number,
  *   crash?: boolean,
  *   locale?: string,
+ *   localeAppliedAfter?: number,
+ *   env?: Record<string, string>,
+ *   timeout?: number,
  * }} options — `flows` is what Maestro's report says ran; `crash` puts a
  *   crash of the app, and one of another app, in the device's crash buffer;
- *   `locale` is the language the device reports
+ *   `locale` is the language the device reports, unless `localeAppliedAfter`
+ *   makes it a device that applies bokmål only after that many readings
+ *   (localeAnswers); `env` is added to the script's environment; `timeout` is
+ *   when the run is killed
  */
 async function runPastPreflight({
   args = ['--skip-build'],
@@ -304,6 +367,9 @@ async function runPastPreflight({
   maestroExit = 0,
   crash = false,
   locale = 'nb-NO',
+  localeAppliedAfter,
+  env = {},
+  timeout = 60_000,
 } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'e2e-android-past-preflight-'));
   try {
@@ -315,6 +381,8 @@ async function runPastPreflight({
     const envLog = path.join(dir, 'maestro-env.log');
     const report = path.join(dir, 'report-to-write.xml');
     const crashes = path.join(dir, 'crash-buffer.txt');
+    const readCount = path.join(dir, 'locale-reads');
+    const readTimes = path.join(dir, 'locale-read-times');
 
     for (const file of [
       'package.json',
@@ -351,7 +419,18 @@ async function runPastPreflight({
     });
 
     for (const file of [path.join(bin, 'adb'), path.join(sdk, 'platform-tools', 'adb')]) {
-      writeTool(file, deviceAdbBody({ log, devices, crashes, locale }));
+      writeTool(
+        file,
+        deviceAdbBody({
+          log,
+          devices,
+          crashes,
+          locale,
+          appliedAfter: localeAppliedAfter,
+          readCount,
+          readTimes,
+        }),
+      );
     }
     for (const file of [path.join(bin, 'java'), path.join(jdk, 'bin', 'java')]) {
       writeTool(file, ['#!/bin/sh', `echo "java $*" >> "${log}"`, javaBody(java)].join('\n'));
@@ -362,7 +441,8 @@ async function runPastPreflight({
     );
 
     // Set in full: no MAESTRO_ or EXPO_ variable comes from the caller, so
-    // whatever Maestro is run with, the script set.
+    // whatever Maestro is run with, the script set. `env` adds only what a
+    // test names.
     const result = spawnSync(process.execPath, [SCRIPT, ...args], {
       cwd: root,
       encoding: 'utf8',
@@ -372,12 +452,17 @@ async function runPastPreflight({
         ANDROID_HOME: sdk,
         ANDROID_SDK_ROOT: sdk,
         JAVA_HOME: jdk,
+        ...env,
       },
-      timeout: 60_000,
+      timeout,
     });
     const lines = (file) => (existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n') : []);
+    const readAt = lines(readTimes).map(Number);
     return {
       code: result.status,
+      signal: result.signal,
+      // From the device's first language reading to its last, in milliseconds.
+      askedFor: readAt.length === 0 ? 0 : Math.max(...readAt) - Math.min(...readAt),
       stdout: result.stdout,
       stderr: result.stderr,
       output: `${result.stdout}${result.stderr}`,
@@ -416,6 +501,43 @@ const touchedDevice = (calls) =>
   calls.filter(
     (call) => /^adb\b.*\b(install|logcat)\b/.test(call) || /^maestro\b.*\btest\b/.test(call),
   );
+
+/** The calls that asked the device for its language. */
+const isLocaleRead = (call) => /^adb\b.*(?:\blocale\b|\bget-config\b)/.test(call);
+
+/** The calls that ran the flows. */
+const isFlowRun = (call) => /^maestro\b.*\btest\b/.test(call);
+
+/**
+ * The wait for bokmål, shortened for these tests: a one-second deadline, read
+ * every 100 ms. Only tests set these variables. The production deadline is at
+ * least 60 s (lib/e2e-android.test.mjs), and a test below holds that no
+ * workflow or package script sets them.
+ */
+const SHORT_DEADLINE = 1_000;
+const SHORT_INTERVAL = 100;
+const SHORT_WAIT = {
+  E2E_ANDROID_LOCALE_DEADLINE_MS: String(SHORT_DEADLINE),
+  E2E_ANDROID_LOCALE_INTERVAL_MS: String(SHORT_INTERVAL),
+};
+
+/**
+ * How long a run that waited out SHORT_DEADLINE kept asking the device, at the
+ * least: one interval off for a wait that stops when the next reading would be
+ * late, and two for the stand-in's own start-up, which stamps each reading. A
+ * run that does not wait asks for a few milliseconds at most.
+ */
+const WAITED_OUT = SHORT_DEADLINE - 3 * SHORT_INTERVAL;
+
+/** A message that states `ms` as a duration, in seconds, minutes or milliseconds. */
+function saysHowLong(ms) {
+  const forms = [
+    `${String(ms / 1000).replace('.', '\\.')}(?:\\.0+)? ?s(?:ec(?:ond)?s?)?`,
+    `${String(ms).replace(/\B(?=(\d{3})+$)/g, '[ ,.\\u00a0]?')} ?ms`,
+  ];
+  if (ms % 60_000 === 0) forms.push(`${String(ms / 60_000)} ?min(?:ute)?s?`);
+  return new RegExp(`(?<![\\d.])(?:${forms.join('|')})\\b`);
+}
 
 describe('past the preflight', () => {
   test('INF-06-AC9: when every flow passed and Maestro exited 0, it passes and says how many flows ran', async () => {
@@ -466,19 +588,103 @@ describe('past the preflight', () => {
   test('INF-06-AC9: on a device set to en-US it stops before the flows run, and says they expect bokmål', async () => {
     // The flow asserts the bokmål strings, so on any other language it would
     // fail for a reason that says nothing about the app.
-    const { code, output, calls } = await runPastPreflight({ locale: 'en-US' });
+    // Amended 2026-09-27: it now waits for bokmål before it stops, so this run
+    // has the tests' one-second deadline, and it stops after the wait, not at
+    // once: it asks more than once, and keeps asking for that long.
+    const { code, output, calls, askedFor } = await runPastPreflight({
+      locale: 'en-US',
+      env: SHORT_WAIT,
+    });
 
     // Not vacuous: the device was asked for its language.
     expect(
       calls.some((call) => /^adb\b.*\bgetprop\b.*\blocale\b/.test(call)),
       output,
     ).toBe(true);
+    expect(calls.filter(isLocaleRead).length, output).toBeGreaterThan(1);
+    expect(askedFor, output).toBeGreaterThanOrEqual(WAITED_OUT);
     expect(code, output).not.toBe(0);
     expect(code, 'it was killed rather than finishing').not.toBeNull();
     expect(output).toMatch(/bokmål/);
     expect(output).not.toMatch(/flows? passed/);
     expect(calls.filter((call) => /^maestro\b.*\btest\b/.test(call))).toEqual([]);
     expect(touchedDevice(calls)).toEqual([]);
+  });
+
+  // Added 2026-09-27. Run 5 of android-e2e (run 36306264081) booted the
+  // emulator, started with `-change-locale nb-NO`, at 08:41:46, and at 08:42:06
+  // e2e:android stopped on its first reading: `e2e:android: The device's
+  // language is "en-US", but the flows expect Norwegian bokmål (nb-NO). Set the
+  // emulator to nb-NO; in CI, android-e2e does.` On the Mac, a fresh device
+  // identical to CI's showed persist.sys.locale empty, ro.product.locale en-US
+  // and `am get-config` en-rUS straight after sys.boot_completed=1, and nb-NO
+  // and nb-rNO about 20 s later. localeAnswers plays that device.
+
+  test('INF-06-AC9: when the emulator applies bokmål only after it has booted, it waits for it, and then the flows run', async () => {
+    const { code, output, calls } = await runPastPreflight({
+      localeAppliedAfter: 3,
+      env: { ...SHORT_WAIT, E2E_ANDROID_LOCALE_DEADLINE_MS: '20000' },
+    });
+
+    expect(code, output).toBe(0);
+    expect(output).toMatch(/\b1 of 1 flows? passed/);
+    // It read past the three answers the device gave as it booted, and only
+    // then ran the flows.
+    expect(calls.filter(isLocaleRead).length, output).toBeGreaterThan(3);
+    expect(calls.findIndex(isFlowRun), output).toBeGreaterThan(calls.findLastIndex(isLocaleRead));
+  });
+
+  test('INF-06-AC9: when the emulator never applies bokmål, it stops after the deadline, says it waited, how long, bokmål and what the device reports, and runs no flow', async () => {
+    const { code, stderr, output, calls, askedFor } = await runPastPreflight({
+      localeAppliedAfter: Infinity,
+      env: SHORT_WAIT,
+    });
+
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    // It waited: it asked more than once, and kept asking until the deadline.
+    expect(calls.filter(isLocaleRead).length, output).toBeGreaterThan(1);
+    expect(askedFor, output).toBeGreaterThanOrEqual(WAITED_OUT);
+    // And it says so where a failure is said.
+    expect(stderr, output).toMatch(/bokmål/);
+    expect(stderr, output).toMatch(/\bwait/i);
+    expect(stderr, output).toMatch(saysHowLong(SHORT_DEADLINE));
+    // What the device reports: ro.product.locale's en-US, or the configuration's en-rUS.
+    expect(stderr, output).toMatch(/\ben[-_]r?US\b/);
+    expect(output).not.toMatch(/flows? passed/);
+    expect(calls.filter(isFlowRun)).toEqual([]);
+    expect(touchedDevice(calls)).toEqual([]);
+  });
+
+  test("INF-06-AC9: without the tests' shorter deadline, it is still waiting for bokmål after 4 s, not failing at once", async () => {
+    // The production deadline, at least 60 s, is what the script uses when no
+    // test shortens it. Killed at 4 s, it must still be waiting.
+    const { code, signal, output, calls } = await runPastPreflight({
+      localeAppliedAfter: Infinity,
+      timeout: 4_000,
+    });
+
+    // Not vacuous: it got as far as asking the device for its language.
+    expect(calls.filter(isLocaleRead).length, output).toBeGreaterThan(0);
+    expect(code, `it finished within 4 s, with exit code ${String(code)}:\n${output}`).toBeNull();
+    expect(signal).toBe('SIGTERM');
+    expect(calls.filter(isFlowRun)).toEqual([]);
+  });
+
+  test('INF-06-AC9: only the tests shorten the wait for bokmål: no workflow and no package script sets its variables', () => {
+    const workflows = readdirSync(path.join(REPO, '.github', 'workflows'))
+      .filter((name) => /\.ya?ml$/.test(name))
+      .map((name) => readFileSync(path.join(REPO, '.github', 'workflows', name), 'utf8'));
+    const packages = ['package.json', path.join(APP, 'package.json')].map((file) =>
+      readFileSync(path.join(REPO, file), 'utf8'),
+    );
+
+    // Not vacuous: these are the files that run e2e:android.
+    expect(workflows.join('\n')).toMatch(/\be2e:android\b/);
+    expect(packages.join('\n')).toMatch(/\be2e:android\b/);
+    for (const text of [...workflows, ...packages]) {
+      expect(text).not.toMatch(/\bE2E_ANDROID_LOCALE_/);
+    }
   });
 
   test('INF-06-AC20: every Maestro run has MAESTRO_DISABLE_UPDATE_CHECK=true and MAESTRO_CLI_NO_ANALYTICS, though the caller set neither', async () => {

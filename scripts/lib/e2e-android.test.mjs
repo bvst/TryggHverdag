@@ -29,6 +29,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import {
+  LOCALE_DEADLINE_MS,
   MAESTRO_SHA256,
   MAESTRO_VERSION,
   buildPlan,
@@ -40,6 +41,7 @@ import {
   judgeReport,
   maestroTestCommand,
   maestroUrl,
+  waitForLocale,
 } from './e2e-android.mjs';
 
 const FLOWS = 'apps/mobile/e2e';
@@ -236,6 +238,225 @@ describe('checkLocale: the flow expects a bokmål device', () => {
       expect(result.message).toMatch(/bokmål|nb-NO/);
     },
   );
+});
+
+// Added 2026-09-27. Run 5 of android-e2e (run 36306264081) started the
+// emulator with `-change-locale nb-NO`, it booted, and e2e:android stopped on
+// its first reading: `e2e:android: The device's language is "en-US", but the
+// flows expect Norwegian bokmål (nb-NO). Set the emulator to nb-NO; in CI,
+// android-e2e does.` A fresh device identical to CI's, on the Mac, showed why:
+// straight after sys.boot_completed=1, persist.sys.locale was empty,
+// ro.product.locale en-US and `am get-config` en-rUS; about 20 s later,
+// persist.sys.locale was nb-NO and `am get-config` nb-rNO. The emulator applies
+// the language after boot has completed, so one reading proves nothing. The
+// script waits for bokmål, up to a deadline, and only then fails.
+
+/**
+ * Time a test states rather than waits for. `now` reads it; `sleep` moves it
+ * on by exactly what it is asked, at once, and refuses to go backwards, as
+ * packages/test-kit's fakeClock does. That clock is the server's Clock port, an
+ * async Date, and scripts/ does not depend on test-kit, so this is its
+ * millisecond counterpart for a script.
+ */
+function fakeTime() {
+  let at = 0;
+  return {
+    now: () => at,
+    sleep: (ms) => {
+      if (!(ms >= 0)) throw new Error(`sleep(${String(ms)}): time does not go backwards`);
+      at += ms;
+      return Promise.resolve();
+    },
+  };
+}
+
+/**
+ * More readings than any wait here needs. A wait that goes past this is not
+ * following the `now` and `sleep` it was given, and would otherwise spin for
+ * the real deadline.
+ */
+const MAX_READS = 200_000;
+
+/** A device whose language is `answer(now, readingsSoFar)`; notes when each reading was taken. */
+function device(time, answer) {
+  const reads = [];
+  return {
+    reads,
+    read: () => {
+      if (reads.length >= MAX_READS) {
+        throw new Error(
+          `read ${String(MAX_READS)} times: the wait is not following the now and sleep it was given`,
+        );
+      }
+      const reply = answer(time.now(), reads.length);
+      reads.push({ at: time.now(), reply });
+      return reply;
+    },
+  };
+}
+
+/** Answers `replies` in turn, and the last one from then on. */
+const inTurn = (replies) => (_at, n) => replies[Math.min(n, replies.length - 1)];
+
+/** Answers en-US until `from`, and nb-NO from then on: an emulator applying its language. */
+const bokmalFrom = (from) => (at) => (at >= from ? 'nb-NO' : 'en-US');
+
+const isBokmal = (reply) => /^nb([-_]|$)/i.test(reply.trim());
+
+/** A message that states `ms` as a duration, in seconds, minutes or milliseconds. */
+function saysHowLong(ms) {
+  const forms = [
+    `${String(ms / 1000).replace('.', '\\.')}(?:\\.0+)? ?s(?:ec(?:ond)?s?)?`,
+    `${String(ms).replace(/\B(?=(\d{3})+$)/g, '[ ,.\\u00a0]?')} ?ms`,
+  ];
+  if (ms % 60_000 === 0) forms.push(`${String(ms / 60_000)} ?min(?:ute)?s?`);
+  return new RegExp(`(?<![\\d.])(?:${forms.join('|')})\\b`);
+}
+
+/** Replies that are not bokmål, however long they are read. */
+const NOT_BOKMAL = ['', 'en-US', 'en-rUS', 'sv-SE', 'da-DK', 'nbx'];
+
+/** A deadline of zero still reads the device once. */
+const AT_ONCE = [
+  { reply: 'nb-NO', ok: true },
+  { reply: 'en-US', ok: false },
+];
+
+describe('waitForLocale: the emulator applies its language after it has booted', () => {
+  test('INF-06-AC9: reads at once and then every interval until the device reports bokmål, then stops reading and passes', async () => {
+    const time = fakeTime();
+    const phone = device(time, inTurn(['', '', 'en-US', 'nb-NO']));
+
+    const result = await waitForLocale(phone.read, {
+      deadline: 30_000,
+      interval: 1_000,
+      now: time.now,
+      sleep: time.sleep,
+    });
+
+    expect(result.ok, result.message).toBe(true);
+    expect(result.message).toContain('nb-NO');
+    expect(phone.reads.map((r) => r.reply)).toEqual(['', '', 'en-US', 'nb-NO']);
+    expect(phone.reads.map((r) => r.at)).toEqual([0, 1_000, 2_000, 3_000]);
+  });
+
+  test('INF-06-AC9: a device that never reports bokmål fails at the deadline, and the message says it waited, how long, bokmål and the last language it saw', async () => {
+    const time = fakeTime();
+    const phone = device(time, inTurn(['', 'en-US', 'sv-SE']));
+
+    const result = await waitForLocale(phone.read, {
+      deadline: 30_000,
+      interval: 1_000,
+      now: time.now,
+      sleep: time.sleep,
+    });
+
+    expect(result.ok).toBe(false);
+    // It waited out the deadline, reading as it went, and not an interval past it.
+    expect(phone.reads.length).toBeGreaterThan(3);
+    expect(phone.reads.at(-1)?.at).toBeGreaterThanOrEqual(30_000 - 1_000);
+    expect(time.now()).toBeLessThanOrEqual(30_000 + 1_000);
+    expect(result.message).toMatch(/bokmål/);
+    expect(result.message).toMatch(/\bwait/i);
+    expect(result.message).toMatch(saysHowLong(30_000));
+    expect(result.message).toContain('sv-SE');
+  });
+
+  test.each(NOT_BOKMAL)(
+    'INF-06-AC9: a device that only ever says %j is never reported as bokmål',
+    async (reply) => {
+      const time = fakeTime();
+      const phone = device(time, () => reply);
+
+      const result = await waitForLocale(phone.read, {
+        deadline: 5_000,
+        interval: 1_000,
+        now: time.now,
+        sleep: time.sleep,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(phone.reads.length).toBeGreaterThan(1);
+    },
+  );
+
+  test.each(AT_ONCE)(
+    'INF-06-AC9: with a deadline of zero it still reads the device once, and a reading of $reply decides it',
+    async ({ reply, ok }) => {
+      const time = fakeTime();
+      const phone = device(time, () => reply);
+
+      const result = await waitForLocale(phone.read, {
+        deadline: 0,
+        interval: 1_000,
+        now: time.now,
+        sleep: time.sleep,
+      });
+
+      expect(phone.reads.length).toBeGreaterThanOrEqual(1);
+      expect(result.ok).toBe(ok);
+      expect(result.message).toContain(reply);
+    },
+  );
+
+  test('INF-06-AC9: for any deadline and interval, it reads at least once, passes only on a bokmål reading and stops there, never polls faster than the interval, and otherwise waits out the deadline', async () => {
+    // A sweep in place of fast-check, which the repository root does not have.
+    for (const deadline of [0, 1_000, 2_500, 30_000]) {
+      for (const interval of [1, 300, 1_000, 7_000]) {
+        const surelySeen = Math.max(0, deadline - interval);
+        for (const from of [0, 1_000, surelySeen, deadline + 1, Infinity]) {
+          const time = fakeTime();
+          const phone = device(time, bokmalFrom(from));
+
+          const result = await waitForLocale(phone.read, {
+            deadline,
+            interval,
+            now: time.now,
+            sleep: time.sleep,
+          });
+          const at = phone.reads.map((r) => r.at);
+          const bokmal = phone.reads.filter((r) => isBokmal(r.reply)).length;
+          const where = `deadline ${String(deadline)}, interval ${String(interval)}, bokmål from ${String(from)}; read at ${at.slice(0, 6).join(', ')}${at.length > 6 ? ' …' : ''}`;
+
+          expect(at.length, where).toBeGreaterThanOrEqual(1);
+          expect(at.length, where).toBeLessThanOrEqual(Math.floor(deadline / interval) + 2);
+          at.slice(1).forEach((t, i) => expect(t, where).toBeGreaterThan(at[i] ?? Infinity));
+          expect(at.at(-1), where).toBeLessThanOrEqual(deadline + interval);
+          // Passing means the last reading, and only that one, was bokmål.
+          expect(bokmal, where).toBe(result.ok ? 1 : 0);
+          expect(isBokmal(phone.reads.at(-1)?.reply ?? ''), where).toBe(result.ok);
+          if (!result.ok) expect(at.at(-1), where).toBeGreaterThanOrEqual(deadline - interval);
+          if (from <= surelySeen) expect(result.ok, where).toBe(true);
+          if (from === Infinity) expect(result.ok, where).toBe(false);
+        }
+      }
+    }
+  });
+
+  test('INF-06-AC9: the production deadline is at least 60 s, and is the one the wait uses when it is given none', async () => {
+    // The language arrived about 20 s after boot on the Mac, and CI's runner is
+    // slower. A shorter deadline fails runs that were only slow, so nobody
+    // shortens it without this test saying so.
+    expect(LOCALE_DEADLINE_MS).toBeGreaterThanOrEqual(60_000);
+
+    const time = fakeTime();
+    const phone = device(time, () => 'en-US');
+    const result = await waitForLocale(phone.read, { now: time.now, sleep: time.sleep });
+
+    expect(result.ok).toBe(false);
+    expect(phone.reads.at(-1)?.at).toBeGreaterThanOrEqual(60_000);
+    expect(result.message).toMatch(saysHowLong(LOCALE_DEADLINE_MS));
+  });
+
+  test("INF-06-AC9: with the production settings, a device that applies bokmål 20 s after boot, as the Mac's did, passes", async () => {
+    const time = fakeTime();
+    const phone = device(time, bokmalFrom(20_000));
+
+    const result = await waitForLocale(phone.read, { now: time.now, sleep: time.sleep });
+
+    expect(result.ok, result.message).toBe(true);
+    expect(phone.reads.at(-1)?.at).toBeGreaterThanOrEqual(20_000);
+  });
 });
 
 /** A Maestro JUnit report holding these <testcase> elements. */
