@@ -25,7 +25,7 @@ import { FULL_STEPS, QUICK_STEPS, availableTools } from './gate.mjs';
 import { APK } from './lib/e2e-android.mjs';
 import { MUTATION_TIMEOUT_MS, SAFETY_PATHS } from './lib/gate-decisions.mjs';
 import { packageScripts } from './lib/proc.mjs';
-import { planSteps } from './lib/steps.mjs';
+import { planSteps, runPlan, summarize } from './lib/steps.mjs';
 import {
   findActionUses,
   findUnboundedJobs,
@@ -1218,9 +1218,10 @@ const intoFakeRunner = (text, root) =>
 
 /**
  * Tools that remove, move, unpack or change files. On the fake runner they are
- * the real ones behind a fence, and each call is recorded.
+ * the real ones behind a fence, and each call is recorded. tar joined them for
+ * oasdiff's archive, a tar.gz (INF-10-AC16), as unzip is here for Google's.
  */
-const FENCED = ['rm', 'rmdir', 'unlink', 'find', 'mv', 'rsync', 'cp', 'unzip', 'chmod'];
+const FENCED = ['rm', 'rmdir', 'unlink', 'find', 'mv', 'rsync', 'cp', 'unzip', 'chmod', 'tar'];
 
 /**
  * Tools a step may call to free space or report on it. On the fake runner they
@@ -1495,12 +1496,13 @@ afterAll(() => {
  *
  * @param {string[]} steps
  * @param {Record<string, string>} [jobVars]
- * @param {{ download?: string }} [options] `download`: the file served at CMDLINE_TOOLS.url.
+ * @param {{ download?: string, url?: string }} [options] `download`: the file served at `url`,
+ *   which is CMDLINE_TOOLS.url unless a test names another (oasdiff's, INF-10-AC16).
  * @returns {{ status: number | null, output: string, present: string[], calls: string, tree: Record<string, string> }}
  *   `present`: the files of KEPT and FREED that are there afterwards. `tree`:
  *   everything that is there afterwards, as treeOf reads it.
  */
-function onFakeRunner(steps, jobVars = {}, { download = '' } = {}) {
+function onFakeRunner(steps, jobVars = {}, { download = '', url = CMDLINE_TOOLS.url } = {}) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'fake-runner-')));
   const at = (where) => path.join(root, where);
   const log = at('calls.log');
@@ -1541,7 +1543,7 @@ function onFakeRunner(steps, jobVars = {}, { download = '' } = {}) {
         .map(({ file }) => at(file))
         .join(' '),
       FAKE_DOWNLOAD: download,
-      FAKE_DOWNLOAD_URL: CMDLINE_TOOLS.url,
+      FAKE_DOWNLOAD_URL: url,
       ...Object.fromEntries(
         Object.entries(jobVars).map(([name, value]) => [name, intoFakeRunner(value, root)]),
       ),
@@ -2582,5 +2584,490 @@ describe('the android-e2e job in ci.yml', () => {
     expect(printed, `the memory total is not printed:\n${run.output}`).toMatch(
       FAKE_HARDWARE.memory,
     );
+  });
+});
+
+// The gate drills (INF-10, D-082). scripts/drills.test.mjs holds the seven
+// offline drills and runs in the unit run, and `pnpm run gate:drills` reports
+// them in the roadmap's nine rows. What follows holds where they run: in
+// gate:full after the unit tests (AC13), in the unit run and not in the
+// coverage run (AC14), and, for the CI-06 drill and its gate, beside an oasdiff
+// that ci.yml installs from one pin (AC16).
+
+describe('the gate drills in gate:full (INF-10)', () => {
+  const drills = FULL_STEPS.find((step) => step.name === 'gate drills (INF-10)');
+
+  test('INF-10-AC13: gate:full has a step "gate drills (INF-10)" that runs pnpm run gate:drills, after the unit tests', () => {
+    const at = FULL_STEPS.findIndex((step) => step.name === 'gate drills (INF-10)');
+    const unit = FULL_STEPS.findIndex((step) => step.command.join(' ') === 'pnpm run test:unit');
+
+    expect(drills?.command).toEqual(['pnpm', 'run', 'gate:drills']);
+    expect(drills?.needsScript).toBe('gate:drills');
+    expect(unit).toBeGreaterThan(-1);
+    expect(at).toBeGreaterThan(unit);
+  });
+
+  test('INF-10-AC13: the step needs nothing but its script, which runs scripts/gate-drills.mjs, so a session with no oasdiff and no token runs it too', () => {
+    expect(scripts['gate:drills']).toMatch(/\bnode scripts\/gate-drills\.mjs\b/);
+    expect(drills).toBeDefined();
+    expect(drills?.needsTool).toBeUndefined();
+    expect(drills?.needsEnv).toBeUndefined();
+  });
+
+  test('INF-10-AC13: the summary counts it like any other step: a pass as passed, a failure as failed', () => {
+    if (drills === undefined)
+      throw new Error('gate:full has no step named "gate drills (INF-10)".');
+    const plan = planSteps([drills], scripts, {}, {});
+    const passing = summarize(
+      runPlan(plan, () => ({ ok: true, output: '' })),
+      'gate:full',
+    );
+    const failing = summarize(
+      runPlan(plan, () => ({ ok: false, output: 'CI-11 drill: ✗ got through' })),
+      'gate:full',
+    );
+
+    expect(plan[0]?.willRun).toBe(true);
+    expect(passing.text).toContain('gate:full: 1 passed, 0 failed, 0 not possible yet.');
+    expect(passing.ok).toBe(true);
+    expect(failing.text).toContain('gate:full: 0 passed, 1 failed, 0 not possible yet.');
+    expect(failing.text).toContain('CI-11 drill: ✗ got through');
+    expect(failing.ok).toBe(false);
+  });
+});
+
+/** The test files a Vitest config collects, as `vitest list` reports them, relative to the repository. */
+function collectedBy(config) {
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.join('node_modules', 'vitest', 'vitest.mjs'),
+      'list',
+      '--filesOnly',
+      '--json',
+      '--config',
+      config,
+    ],
+    { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: process.env.HOME } },
+  );
+  if (result.status !== 0) {
+    throw new Error(`vitest list --config ${config} failed:\n${result.stderr}`);
+  }
+  return JSON.parse(result.stdout).map((entry) => path.relative(process.cwd(), entry.file));
+}
+
+describe('the drills run in the unit run, and only there (INF-10)', () => {
+  test('INF-10-AC14: the unit run collects the drill file, scripts/drills.test.mjs, so the required unit check runs it', () => {
+    expect(collectedBy('vitest.config.mjs')).toContain('scripts/drills.test.mjs');
+  });
+
+  test('INF-10-AC14: the coverage run leaves the drill file out: coverage cannot see the gates a drill spawns, and traceability has no oasdiff', () => {
+    const files = collectedBy('vitest.coverage.config.mjs');
+
+    expect(files.length).toBeGreaterThan(0);
+    expect(files).toContain('scripts/lib/gate-drills.test.mjs');
+    expect(files).not.toContain('scripts/drills.test.mjs');
+  });
+});
+
+// oasdiff, pinned (INF-10-AC16, D-082). api:diff compares the current API with
+// every released version through oasdiff, and nothing installed it: once a
+// version is released, the gate could only refuse to run. D-082 installs it the
+// way the security job installs gitleaks, in the two jobs that need it: unit,
+// where the CI-06 drill runs, and contract, where the gate runs. Version 1.32.1,
+// Apache-2.0; the SHA-256 is the one the release's checksums.txt publishes for
+// the archive, and the archive passed `sha256sum -c` against it in session on
+// 2026-09-28.
+const OASDIFF = {
+  version: '1.32.1',
+  archive: 'oasdiff_1.32.1_linux_amd64.tar.gz',
+  url: 'https://github.com/oasdiff/oasdiff/releases/download/v1.32.1/oasdiff_1.32.1_linux_amd64.tar.gz',
+  sha256: '7c8939fc49b75ee11fec66a5b83b37a2fca6aee109fed85013b1ba2ac2a1ee7f',
+};
+
+/** The jobs that need oasdiff, and the command there that needs it. */
+const OASDIFF_JOBS = [
+  { job: 'unit', needs: 'pnpm run test:unit' },
+  { job: 'contract', needs: 'pnpm run api:diff' },
+];
+
+/** ci.yml's workflow-level env, which every job reads, as name to value with quotes taken off. */
+function workflowEnv() {
+  const lines = readFileSync(`${WORKFLOWS}/ci.yml`, 'utf8').split('\n');
+  const at = lines.findIndex((line) => /^env:\s*$/.test(line));
+  const env = {};
+  if (at === -1) return env;
+  for (const line of lines.slice(at + 1)) {
+    if (line.trim() === '' || line.trimStart().startsWith('#')) continue;
+    if (!/^ {2}\S/.test(line)) break;
+    const match = /^ {2}([A-Za-z_][A-Za-z0-9_]*):\s*(.*?)\s*(?:#.*)?$/.exec(line);
+    if (match?.[1] !== undefined) env[match[1]] = (match[2] ?? '').replace(/^(['"])(.*)\1$/, '$2');
+  }
+  return env;
+}
+
+/** The env a job's steps get: the workflow's, then the job's own. */
+const envOfJob = (job) => ({ ...workflowEnv(), ...jobEnv(job) });
+
+/** The steps of `job` that use the pinned oasdiff archive, read with the env each gets. */
+const oasdiffSteps = (job) =>
+  ciSteps(job).filter((step) =>
+    withVars(step, { ...envOfJob(job), ...stepEnv(step) }).includes(OASDIFF.archive),
+  );
+
+/** `job`'s step that installs oasdiff, or ''. */
+const oasdiffStep = (job) => oasdiffSteps(job)[0] ?? '';
+
+/** The step of `job` whose script runs `command`, or ''. */
+const stepRunning = (job, command) =>
+  ciSteps(job).find((step) =>
+    scriptOf(step)
+      .split('\n')
+      .some((line) => line.trim() === command),
+  ) ?? '';
+
+const noOasdiffStep = (job) =>
+  `${job} has no step that uses the pinned oasdiff archive, ${OASDIFF.archive}`;
+const NO_OASDIFF_STEP = `no step uses the pinned oasdiff archive, ${OASDIFF.archive}`;
+
+/**
+ * Fake oasdiff release archives, each tarred once per run of this file: an
+ * oasdiff that says `marker` in its version, and a LICENSE, as the release's
+ * archive holds.
+ */
+const fakeOasdiffs = new Map();
+function fakeOasdiff(marker) {
+  const made = fakeOasdiffs.get(marker);
+  if (made !== undefined) return made;
+  if (fakeArchiveDir === '') {
+    fakeArchiveDir = realpathSync(mkdtempSync(path.join(tmpdir(), 'fake-cmdline-tools-')));
+  }
+  const dir = path.join(fakeArchiveDir, `oasdiff-${marker.replaceAll(' ', '-')}`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    path.join(dir, 'oasdiff'),
+    `#!/bin/sh\necho "oasdiff version ${OASDIFF.version} (${marker})"\n`,
+    { mode: 0o755 },
+  );
+  writeFileSync(path.join(dir, 'LICENSE'), `Apache License, Version 2.0 (${marker})\n`);
+  const archive = `${dir}.tar.gz`;
+  const tarred = spawnSync('tar', ['-czf', archive, 'LICENSE', 'oasdiff'], {
+    cwd: dir,
+    encoding: 'utf8',
+  });
+  if (tarred.status !== 0) {
+    throw new Error(
+      `tar could not make the fake oasdiff archive ${marker}: ${tarred.stderr ?? ''}${tarred.error?.message ?? ''}`,
+    );
+  }
+  const value = {
+    archive,
+    marker,
+    sha256: createHash('sha256').update(readFileSync(archive)).digest('hex'),
+  };
+  fakeOasdiffs.set(marker, value);
+  return value;
+}
+
+/** The folders on the ubuntu-latest runner's PATH that a step could put a tool in. */
+const RUNNER_PATH_DIRS = [
+  '/home/runner/.local/bin',
+  '/usr/local/sbin',
+  '/usr/local/bin',
+  '/usr/sbin',
+  '/usr/bin',
+  '/sbin',
+  '/bin',
+];
+
+/** A first step making those folders in the fake runner, as the real runner has them. */
+const RUNNER_PATH_STEP = stepAround(
+  'The folders on the runner PATH, as ubuntu-latest has them',
+  `mkdir -p ${RUNNER_PATH_DIRS.join(' ')}`,
+);
+
+/**
+ * A later step asking for oasdiff by name, on the PATH GitHub gives a later
+ * step: the folders the job wrote to GITHUB_PATH first, then the runner's own.
+ */
+const ASKS_FOR_OASDIFF = stepAround(
+  'Ask for oasdiff by name, as test:unit and api:diff will',
+  [
+    `PATH="${RUNNER_PATH_DIRS.join(':')}:$PATH"`,
+    'if [ -f "$GITHUB_PATH" ]; then',
+    '  while IFS= read -r dir || [ -n "$dir" ]; do',
+    '    if [ -n "$dir" ]; then PATH="$dir:$PATH"; fi',
+    '  done < "$GITHUB_PATH"',
+    'fi',
+    'oasdiff --version || echo "no oasdiff on the PATH a later step gets"',
+  ].join('\n'),
+);
+
+/** The text with the pinned SHA-256 swapped for `sha256`: a fake archive stands in for the release's, and its hash for the pin. */
+const oasdiffRepinned = (text, sha256) => text.replaceAll(OASDIFF.sha256, sha256);
+
+/**
+ * Runs `steps` on a fake runner that serves `served` at the release's URL,
+ * with the pin swapped for `pinned`'s hash: `served`'s own by default, so the
+ * download matches the pin, as the release's does.
+ */
+const oasdiffRun = (steps, env, served, pinned = served) =>
+  onFakeRunner(
+    steps.map((step) => oasdiffRepinned(step, pinned.sha256)),
+    Object.fromEntries(
+      Object.entries(env).map(([name, value]) => [name, oasdiffRepinned(value, pinned.sha256)]),
+    ),
+    { download: served.archive, url: OASDIFF.url },
+  );
+
+/** What `step` printed in `run`: the output after the step's own first line. */
+const printedByStep = (run, step) => {
+  const first = step.split('\n')[0] ?? '';
+  const at = run.output.lastIndexOf(first);
+  return at === -1 ? run.output : run.output.slice(at + first.length);
+};
+
+/**
+ * The checks of an oasdiff step, each on fake runners. Each returns '' when it
+ * holds, or what is wrong. The tests below run them on ci.yml's two steps, and
+ * on steps done right and wrong, so each is known to notice what it is for.
+ */
+const OASDIFF_CHECKS = {
+  /** It downloads the pinned archive from the release, and a later step finds that archive's oasdiff by name. */
+  landsOnPath(step, env) {
+    if (step === '') return NO_OASDIFF_STEP;
+    const pinned = fakeOasdiff('pinned stand-in');
+    const run = oasdiffRun([RUNNER_PATH_STEP, step, ASKS_FOR_OASDIFF], env, pinned);
+    if (run.status !== 0) {
+      return `with the pinned archive served, the step failed with ${String(run.status)}:\n${run.output}`;
+    }
+    if (
+      !run.calls
+        .split('\n')
+        .some((line) => /^(?:curl|wget) /.test(line) && line.includes(OASDIFF.url))
+    ) {
+      return `nothing downloaded ${OASDIFF.url}. The calls:\n${run.calls}`;
+    }
+    return printedByStep(run, ASKS_FOR_OASDIFF).includes(`(${pinned.marker})`)
+      ? ''
+      : `a later step does not find the archive's oasdiff on its PATH:\n${run.output}`;
+  },
+
+  /**
+   * A download whose SHA-256 is not the pin stops the step, with a message,
+   * before anything is unpacked. A pinned download that passes is the
+   * control: without it, a step that always fails would pass.
+   */
+  verifiesFirst(step, env) {
+    if (step === '') return NO_OASDIFF_STEP;
+    const pinned = fakeOasdiff('pinned stand-in');
+    const control = oasdiffRun([RUNNER_PATH_STEP, step], env, pinned);
+    if (control.status !== 0) {
+      return `with the download that matches the pin, the step already fails, so its failing on one that does not would prove nothing:\n${control.output}`;
+    }
+    const run = oasdiffRun([RUNNER_PATH_STEP, step], env, fakeOasdiff('tampered stand-in'), pinned);
+    if (run.status === 0)
+      return `a download whose SHA-256 is not the pin passed the step:\n${run.output}`;
+    const unpacked = [
+      ...run.calls.split('\n').filter((line) => /^tar /.test(line)),
+      ...Object.entries(run.tree)
+        .filter(
+          ([, what]) => what.includes('(tampered stand-in)') && !what.slice(2).startsWith('\u001f'),
+        )
+        .map(([where]) => where),
+    ];
+    if (unpacked.length > 0) {
+      return `with a download whose SHA-256 is not the pin, the step unpacked it before it failed:\n${unpacked.join('\n')}`;
+    }
+    return /checksum|sha-?256|FAILED|did not match/i.test(printedByStep(run, step))
+      ? ''
+      : `with a download whose SHA-256 is not the pin, the step stopped without saying why:\n${run.output}`;
+  },
+};
+
+/** The pin as the workflow env gives it, the way the examples below read it. */
+const OASDIFF_ENV = { OASDIFF_VERSION: OASDIFF.version, OASDIFF_SHA256: OASDIFF.sha256 };
+
+/** The lines of an oasdiff step done right, for the examples to rearrange. */
+const OASDIFF_LINE = {
+  download:
+    'curl -fsSLo "$archive" "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"',
+  check: 'echo "${OASDIFF_SHA256}  $archive" | sha256sum -c -',
+  unpack: 'tar -xzf "$archive" -C "$RUNNER_TEMP/oasdiff" oasdiff',
+  onPath: 'echo "$RUNNER_TEMP/oasdiff" >> "$GITHUB_PATH"',
+};
+
+/** An oasdiff step's script: `lines` after naming the download and making its folder. */
+const oasdiffScript = (...lines) =>
+  [
+    'set -euo pipefail',
+    'archive="$RUNNER_TEMP/oasdiff.tar.gz"',
+    'mkdir -p "$RUNNER_TEMP/oasdiff"',
+    ...lines,
+  ].join('\n');
+
+/** Installing done right: what every check must accept. */
+const GOOD_OASDIFF = oasdiffScript(
+  OASDIFF_LINE.download,
+  OASDIFF_LINE.check,
+  OASDIFF_LINE.unpack,
+  OASDIFF_LINE.onPath,
+);
+
+/** Installing done wrong, each with the check that must notice and what it must say. */
+const BAD_OASDIFF = [
+  {
+    what: 'unpacks before it checks the SHA-256',
+    check: 'verifiesFirst',
+    says: /unpacked it before it failed/,
+    script: oasdiffScript(
+      OASDIFF_LINE.download,
+      OASDIFF_LINE.unpack,
+      OASDIFF_LINE.check,
+      OASDIFF_LINE.onPath,
+    ),
+  },
+  {
+    what: 'unpacks before it checks, into a folder a trap removes',
+    check: 'verifiesFirst',
+    says: /unpacked it before it failed/,
+    script: oasdiffScript(
+      'tmp=$(mktemp -d)',
+      'trap \'rm -rf "$tmp"\' EXIT',
+      OASDIFF_LINE.download,
+      'tar -xzf "$archive" -C "$tmp" oasdiff',
+      OASDIFF_LINE.check,
+      'cp "$tmp/oasdiff" "$RUNNER_TEMP/oasdiff/oasdiff"',
+      OASDIFF_LINE.onPath,
+    ),
+  },
+  {
+    what: 'lets a mismatch pass with || true',
+    check: 'verifiesFirst',
+    says: /passed the step/,
+    script: oasdiffScript(
+      OASDIFF_LINE.download,
+      `${OASDIFF_LINE.check} || true`,
+      OASDIFF_LINE.unpack,
+      OASDIFF_LINE.onPath,
+    ),
+  },
+  {
+    what: 'checks no SHA-256 at all',
+    check: 'verifiesFirst',
+    says: /passed the step/,
+    script: oasdiffScript(OASDIFF_LINE.download, OASDIFF_LINE.unpack, OASDIFF_LINE.onPath),
+  },
+  {
+    what: 'leaves oasdiff off the PATH a later step gets',
+    check: 'landsOnPath',
+    says: /does not find the archive's oasdiff on its PATH/,
+    script: oasdiffScript(OASDIFF_LINE.download, OASDIFF_LINE.check, OASDIFF_LINE.unpack),
+  },
+  {
+    what: 'downloads the archive from somewhere else',
+    check: 'landsOnPath',
+    says: /nothing to download at https:\/\/mirror\.example\.org\//,
+    script: oasdiffScript(
+      OASDIFF_LINE.download.replace('github.com', 'mirror.example.org'),
+      OASDIFF_LINE.check,
+      OASDIFF_LINE.unpack,
+      OASDIFF_LINE.onPath,
+    ),
+  },
+];
+
+describe('oasdiff in ci.yml, pinned (INF-10-AC16, D-082)', () => {
+  test.each(OASDIFF_JOBS)(
+    'INF-10-AC16: $job has one step that uses the pinned oasdiff archive, after it classifies the diff and before the step that runs $needs',
+    ({ job, needs }) => {
+      const steps = ciSteps(job);
+      const install = oasdiffSteps(job);
+      const classify = steps.findIndex((step) => /^\s*- id: affected\b/m.test(step));
+      const needed = steps.indexOf(stepRunning(job, needs));
+
+      expect(install, noOasdiffStep(job)).toHaveLength(1);
+      expect(classify, `${job} does not classify the diff`).toBeGreaterThan(-1);
+      expect(needed, `${job} has no step that runs ${needs}`).toBeGreaterThan(-1);
+      expect(steps.indexOf(install[0] ?? '')).toBeGreaterThan(classify);
+      expect(steps.indexOf(install[0] ?? '')).toBeLessThan(needed);
+    },
+  );
+
+  test.each(OASDIFF_JOBS)(
+    "INF-10-AC16: $job's oasdiff step is guarded by exactly the code answer, the guard of the step that needs it",
+    ({ job, needs }) => {
+      const install = oasdiffStep(job);
+
+      expect(install, noOasdiffStep(job)).not.toBe('');
+      expect(guardOf(install)).toBe("steps.affected.outputs.code == 'true'");
+      expect(guardOf(install)).toBe(guardOf(stepRunning(job, needs)));
+    },
+  );
+
+  test('INF-10-AC16: the version and the SHA-256 are each written once in ci.yml, in the workflow env both jobs read, and they are the pin D-082 records', () => {
+    const text = readFileSync(`${WORKFLOWS}/ci.yml`, 'utf8')
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('#'))
+      .join('\n');
+    const env = Object.values(workflowEnv());
+
+    for (const value of [OASDIFF.version, OASDIFF.sha256]) {
+      expect(text.split(value).length - 1, `${value} is not written exactly once`).toBe(1);
+      expect(env, `${value} is not in the workflow env`).toContain(value);
+    }
+  });
+
+  test.each(OASDIFF_JOBS)(
+    "INF-10-AC16: $job's oasdiff step is a plain run step: no action, no secret, and it tolerates no failure",
+    ({ job }) => {
+      const install = oasdiffStep(job);
+
+      expect(install, noOasdiffStep(job)).not.toBe('');
+      expect(scriptOf(install), 'the step has no run: script').not.toBe('');
+      expect(install).not.toMatch(/^\s*-?\s*uses:/m);
+      expect(install).not.toMatch(/secrets\./);
+      expect(install).not.toMatch(TOLERATES_FAILURE);
+    },
+  );
+
+  test.each(OASDIFF_JOBS)(
+    "INF-10-AC16: on a fake runner, $job's oasdiff step downloads the pinned archive from its release, and a later step finds a stand-in with the pinned hash on its PATH",
+    ({ job }) => {
+      expect(OASDIFF_CHECKS.landsOnPath(oasdiffStep(job), envOfJob(job))).toBe('');
+    },
+  );
+
+  test.each(OASDIFF_JOBS)(
+    "INF-10-AC16: on a fake runner, $job's oasdiff step stops, with a message, before it unpacks an archive whose SHA-256 is not the pin",
+    ({ job }) => {
+      expect(OASDIFF_CHECKS.verifiesFirst(oasdiffStep(job), envOfJob(job))).toBe('');
+    },
+  );
+
+  // The oasdiff checks' own tests.
+
+  test('INF-10-AC16: the oasdiff checks accept a step done right', () => {
+    const step = stepAround('Install oasdiff', GOOD_OASDIFF);
+
+    expect(withVars(step, OASDIFF_ENV)).toContain(OASDIFF.archive);
+    for (const [name, check] of Object.entries(OASDIFF_CHECKS)) {
+      expect(check(step, OASDIFF_ENV), name).toBe('');
+    }
+  });
+
+  test.each(BAD_OASDIFF)(
+    'INF-10-AC16: the oasdiff checks notice a step that $what',
+    ({ check, says, script }) => {
+      expect(OASDIFF_CHECKS[check](stepAround('Install oasdiff', script), OASDIFF_ENV)).toMatch(
+        says,
+      );
+    },
+  );
+
+  test('INF-10-AC16: every oasdiff check reports a job with no such step', () => {
+    for (const [name, check] of Object.entries(OASDIFF_CHECKS)) {
+      expect(check('', OASDIFF_ENV), name).toBe(NO_OASDIFF_STEP);
+    }
   });
 });
