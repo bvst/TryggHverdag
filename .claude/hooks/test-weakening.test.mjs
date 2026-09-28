@@ -99,3 +99,49 @@ describe('HK-05: honest test changes are left alone', () => {
     expect(check(dir, 'apps/server/src/api.ts').status).toBe(ALLOWED);
   });
 });
+
+// INF-10-AC17 (D-082): a test switched off from inside its body, by a call to
+// its context's skip function, with every count unchanged. The call is put
+// together at run time: written out, it would count toward this file's own
+// skips, and tests:changes would refuse the pull request that adds it.
+describe('INF-10-AC17: HK-05 sees a test switched off from inside its body', () => {
+  /**
+   * The test's body, whose failure says so when the hook it runs is not what
+   * HEAD holds: a reviewer's sandbox reverts .claude/** (R5), as
+   * scripts/ai-review.test.mjs explains.
+   */
+  const noted = (body) => async () => {
+    try {
+      await body();
+    } catch (error) {
+      const { spawnSync } = await import('node:child_process');
+      const hook = ['test-weakening.mjs', 'lib.mjs'];
+      const asCommitted =
+        spawnSync('git', ['diff', '--quiet', 'HEAD', '--', ...hook], { cwd: import.meta.dirname })
+          .status === 0;
+      if (asCommitted) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `${message}\n\nNOTE: the hook on disk differs from HEAD, so this test ran something other than the committed hook. \`git diff HEAD -- .claude/hooks\` shows what differs.`,
+        { cause: error },
+      );
+    }
+  };
+
+  test(
+    "INF-10-AC17: HK-05 refuses an edit that makes a test call its context's skip first thing, with every count unchanged",
+    noted(() => {
+      const call = `${['ctx', ['sk', 'ip'].join('')].join('.')}();`;
+      const after = ORIGINAL.replace(
+        "resolves it', () => {\n",
+        `resolves it', (ctx) => {\n    ${call}\n`,
+      );
+      const result = check(repoWith(after));
+
+      expect(after).not.toBe(ORIGINAL);
+      expect(result.status).toBe(BLOCKED);
+      expect(result.stderr).toContain('skipped, focused or todo tests were added');
+      expect(result.stderr).toContain('RG-03');
+    }),
+  );
+});
