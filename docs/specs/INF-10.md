@@ -3,8 +3,8 @@
 **Milestone:** M0, its last task · **Serves:** RG-01, RG-03, CI-03, CI-06,
 CI-11, HK-02, HK-07; D-029 and CODEOWNERS by report only · **Decisions:**
 D-029, D-031, D-040, D-042, D-043, D-060 (both), D-061, D-071, D-072, D-073,
-D-074, D-075 · **Written:** 2026-09-28 · **Status:** 📝 Spec. Three questions
-for the owner at the end; AC1, AC3 and AC4 each have a part that waits on one
+D-074, D-075, D-082 · **Written:** 2026-09-28 · **Status:** 📝 Spec. The
+owner's answers are recorded at the end (2026-09-28, D-082)
 
 ## Requirement
 
@@ -29,7 +29,8 @@ From `docs/plan/10-roadmap.md`, the M0 table:
 What each gate promises, where it is defined:
 - **RG-01** (`06-testing-strategy.md`): "Every story ID in `01b-mvp-scope.md`,
   and every SM, REL and PRIV rule that can be tested automatically, has at
-  least one test that names it."
+  least one test that names it." D-082 extends it to each acceptance
+  criterion a changed spec names.
 - **RG-03** (same): "Tests can't be quietly weakened. CI flags skipped or
   focused tests, a drop in the number of tests, and changes to existing
   assertions."
@@ -62,7 +63,7 @@ later"**:
 > and adds no noise on the repository.
 
 Not chosen: "All nine now, live included" and "Offline only, never live".
-plan-keeper records this as a new decision; its number is assigned then.
+plan-keeper records it as D-082, together with the four answers at the end.
 
 What it means here:
 - This task builds seven drills. Drills 6 and 8 are **not run**. The report
@@ -76,9 +77,9 @@ What it means here:
 1. **One file of drills, collected by `test:unit`.** `scripts/drills.test.mjs`,
    written by test-author. Why: the drills run wherever tests run — the
    required `unit` check, and `gate:quick` at every stop. RG-03 guards them
-   like any test: deleting a drill, or adding `.skip` to one, turns
-   `traceability` red (Q3 names the skip forms it misses). One file gives
-   `gate:drills` one thing to count.
+   like any test: deleting a drill, or skipping one in any form RG-03
+   counts, turns `traceability` red. One file gives `gate:drills` one thing
+   to count.
 2. **A drill tests the path, not the logic.** Each gate's decisions already
    have tests (inventory below). A drill adds what they cannot show: the
    command the system really runs, fed a real bad change, refusing it in its
@@ -96,26 +97,71 @@ What it means here:
    synthetic; nothing lands in the repository (`req:coverage` rewrites
    `docs/requirements-status.md` wherever it runs); and "a test that spawns a
    script inherits the runner's environment" (Live gotchas).
-6. **Bad text is assembled at run time.** scan-sensitive would refuse to
-   write a drill file holding a secret or a phone number; gitleaks (the
-   `security` job) reads every committed line; and a literal `.skip` or
-   `expect(` in the drill file would count toward its own RG-03 numbers.
+6. **Bad text is assembled at run time**, in the drill file and in the
+   existing test files this work extends. scan-sensitive would refuse to
+   write a secret or a phone number; gitleaks (the `security` job) reads every
+   committed line; and a literal skip form or `expect(` counts toward that
+   file's own RG-03 numbers. In an existing file, `tests:changes` would then
+   refuse the INF-10 pull request itself.
 7. **`pnpm run gate:drills` prints the verdict; `gate:full` runs it.** A table
    for people: the owner, the pull request, a full local run. `gate:full` is
    where a session already reports what it could not check. Not in
    `gate:quick`: `test:unit` already runs the drills at every stop.
 8. **CI: the existing `unit` job. No new job.** A new job would be a new
    required check: a ruleset change by the owner and stuck pull requests, as
-   A-28 showed. It would also run the drills twice. CI-12's `code` answer is
-   already true for every file a drill reads — scripts, everything under
-   `.claude/` (agent definitions and settings included), workflows,
-   `package.json`. AC14 checks this with `affected.mjs`'s own rule. No new
-   classifier: a wrong "no" would skip the drills exactly when a gate changed.
+   A-28 showed. CI-12's `code` answer is already true for every file a drill
+   reads — scripts, everything under `.claude/` (agent definitions and
+   settings included), workflows, `package.json`. AC14 checks it with
+   `affected.mjs`'s own rule. No new classifier: a wrong "no" would skip the
+   drills exactly when a gate changed. The coverage run in `traceability`
+   leaves the drill file out: coverage cannot see the processes a drill
+   spawns, a second run costs minutes, and that job has no oasdiff.
 9. **`ai-review.yml` is not edited (D-075).** Drill 9 reads its step and runs
    it. No manual merge, no batch item.
+10. **oasdiff the gitleaks way (D-082).** In `unit` and `contract`, a step
+    downloads the pinned archive, checks its SHA-256 before unpacking, and
+    puts the binary on `PATH`. The version and hash are written once, in
+    `ci.yml`'s workflow `env` or one equivalent place, and both jobs read
+    them. `scripts/lib/pinned-binary.mjs` is not used: `api-diff.mjs` already
+    looks for oasdiff on `PATH`, so it stays unchanged. A session can reach
+    the release asset (checked below), but the install stays in CI by choice,
+    so no drill downloads anything. A session without oasdiff reports drill 4
+    as "fail-closed only", as the owner accepted.
+11. **The written way out is a line in the spec (D-082).** The form is
+    `req-coverage: not automated <ID>-ACn: <reason>`, in plain sight, like
+    the existing `req-coverage: fixtures-only` marker. Why: the gate must read
+    it, and name every criterion it let through, with the reason, on every
+    run. An exemption kept in a pull request description would leave the gate
+    red, or get waved through by hand.
 
 **Cost:** estimated 10–30 seconds on `unit`, mostly the test-runner starts in
-drill 2. Not measured; the pull request reports the job's real time.
+drill 2, plus oasdiff's download in `unit` and `contract`. Not measured; the
+pull request reports the jobs' real times.
+
+### oasdiff, checked on 2026-09-28 by the coordinating session
+
+- **Version 1.32.1:** tag `v1.32.1`, commit
+  `a47e8afb47f0aecb3c8903b1de0b6dd00632b7fc`, released 2026-09-15 (Go module
+  proxy).
+- **Archive:** `oasdiff_1.32.1_linux_amd64.tar.gz`, SHA-256
+  `7c8939fc49b75ee11fec66a5b83b37a2fca6aee109fed85013b1ba2ac2a1ee7f`, as the
+  release's `checksums.txt` publishes it. The downloaded archive passed
+  `sha256sum -c`, and holds `LICENSE` and `oasdiff`. `oasdiff --version`
+  prints `oasdiff version 1.32.1`.
+- **Licence:** Apache-2.0, from the `LICENSE` file in the module source at
+  `v1.32.1`.
+- **It reads our description.** The check used `api-diff.mjs`'s own call
+  (`oasdiff breaking <released> <current> --fail-on ERR`) on
+  `packages/contracts/openapi.json`, which is OpenAPI 3.1.1 with one path,
+  `GET /health`:
+  - against itself: `No changes detected`, exit 0;
+  - against a copy without `GET /health`: `1 changes: 1 error, 0 warning, 0
+    info`, with `api-path-removed-without-deprecation` for `GET /health`,
+    exit 1.
+- **Access from a session:** GitHub's HTML release page answers 403 through
+  the proxy, but release assets (`/releases/download/…`) and `checksums.txt`
+  answer 200. gitleaks's `checksums.txt` is reachable too, and its linux_x64
+  line equals the SHA-256 already pinned in `ci.yml`: the method matches.
 
 ### Inventory: which drills already exist
 
@@ -135,13 +181,13 @@ is not.
   runner red.
 - **3 · RG-01.** `scripts/lib/requirements.test.mjs` "changed work on an
   untested requirement is what blocks CI" is pure; its "a covered requirement
-  never blocks" is the gap in Q1. `scripts/req-coverage.test.mjs` tests
-  `trackedFiles` only. **Missing:** a run of the entry script with
+  never blocks" is the gap D-082 closes. `scripts/req-coverage.test.mjs`
+  tests `trackedFiles` only. **Missing:** a run of the entry script with
   `--fail-on-uncovered-changed`.
 - **4 · CI-06.** `scripts/lib/gate-decisions.test.mjs` tests `decideApiDiff`,
   including "released versions but no oasdiff: refuses to pass, rather than
   skipping quietly". **Missing:** no test has run `api-diff.mjs`, and oasdiff
-  has never run anywhere (Q2).
+  has never run anywhere; D-082 installs it.
 - **5 · HK-02.** `.claude/hooks/guard-paths.test.mjs` "HK-02: implementer may
   not change tests › blocks a test file and says why", and
   `guard-bash.test.mjs` "HK-03: implementer cannot reach tests through the
@@ -169,18 +215,18 @@ is not.
 
 ### The seven drills
 
-**INF-10-AC1 — Drill 1 (RG-03): a `.skip` in a pull request is blocked.**
+**INF-10-AC1 — Drill 1 (RG-03): a skip added in a pull request is blocked.**
 - **Given** a scratch git repository: a base commit with a synthetic test
-  file holding two tests, and a head commit that adds `.skip` to one of them
+  file holding two tests, and a head commit that switches them off — in turn
+  with `.skip`; with `describe.skipIf(true)`, `describe.runIf(false)` and
+  `describe.concurrent.skip` wrapped around them; and with `ctx.skip()` at
+  the start of a test's body
 - **When** `tests:changes` runs there as the `traceability` job runs it, with
   the scratch base in place of `origin/<base>`
-- **Then** it exits non-zero, naming the file and "skipped, focused or todo
-  tests were added", with its RG-03 line.
+- **Then** each time it exits non-zero, naming the file and "skipped, focused
+  or todo tests were added", with its RG-03 line.
 - **Control:** a head commit that adds a third test instead → exit 0, "1
   changed test file(s), none weakened".
-- **Depends on Q3.** If (a): the same for `describe.skipIf(true)`,
-  `describe.runIf(false)` and `describe.concurrent.skip` wrapped around the
-  existing tests.
 
 **INF-10-AC2 — Drill 2 (CI-03): a failing test turns the unit run red.**
 - **Given** a scratch folder holding one failing and one passing synthetic
@@ -194,34 +240,32 @@ is not.
 - The chaining of the runners is held by the INF-06-AC6 tests and is not
   repeated.
 
-**INF-10-AC3 — Drill 3 (RG-01): a requirement named without a test is blocked.**
-- **Given** a scratch git repository whose plan lists one synthetic story,
-  with `origin/main` at the base commit
-- **When** a head commit adds a spec naming that story and no test, and
-  `req:coverage --fail-on-uncovered-changed` runs there as `traceability` runs
-  it
-- **Then** it exits non-zero, with its RG-01 line naming the story.
-- **Control:** the head commit also adds a test naming it → exit 0, "1 of 1
-  live requirements".
-- **Depends on Q1.** If (a): **given** the story already has a test naming
-  `<ID>-AC1`, **when** a changed spec adds `<ID>-AC2` that no test names,
-  **then** `req:coverage` exits non-zero naming `<ID>-AC2`; control: a test
-  naming `<ID>-AC2` → exit 0. If (b): drill 3 is reworded to the case above,
-  in the roadmap and in the report.
+**INF-10-AC3 — Drill 3 (RG-01): a new acceptance criterion without a test is blocked.**
+- **Given** a scratch git repository whose plan lists one synthetic story, a
+  test naming its `<ID>-AC1`, and `origin/main` at the base commit
+- **When** a head commit adds `<ID>-AC2` to the story's spec and no test
+  names it, and `req:coverage --fail-on-uncovered-changed` runs there as
+  `traceability` runs it
+- **Then** it exits non-zero, with its RG-01 line naming `<ID>-AC2`.
+- **Control:** the head commit also adds a test naming `<ID>-AC2` → exit 0.
+- **And** a spec naming a second synthetic story that no test names is
+  blocked the same way, naming the story: the check RG-01 made before D-082.
 
 **INF-10-AC4 — Drill 4 (CI-06): a breaking API change is blocked.**
 - **Given** a scratch folder whose released version is a copy of the
   committed `packages/contracts/openapi.json`, and whose current description
   is that copy with one operation removed
-- **When** `api:diff` runs there as the `contract` job runs it, with oasdiff
-  installed
-- **Then** it exits non-zero, with its AR-08 line naming the released file.
+- **When** `api:diff` runs there as the `contract` job runs it, with the
+  pinned oasdiff on `PATH`
+- **Then** it exits non-zero, with its AR-08 line naming the released file,
+  and oasdiff's `api-path-removed-without-deprecation` in its output: oasdiff
+  has read our own OpenAPI 3.1.1 description and found the break.
 - **Control:** the current description unchanged → exit 0, having compared 1
   released version.
-- **Without oasdiff**, the drill requires `api:diff`'s own refusal
-  ("compatibility was NOT checked", non-zero), and the report says "fail-closed
-  only; detection not proven", never "blocked". **Depends on Q2:** if (a), a
-  missing oasdiff in CI (`CI=true`) fails the drill.
+- **In CI** (`CI=true`, where only `unit` runs the drills), a missing oasdiff
+  fails the drill. **Elsewhere**, without oasdiff, the drill requires
+  `api:diff`'s own refusal ("compatibility was NOT checked", non-zero), and
+  the report says "fail-closed only", never "blocked".
 
 **INF-10-AC5 — Drill 5 (HK-02): `implementer` cannot edit a test file.**
 - **Given** every PreToolUse hook Claude Code would run for `implementer`:
@@ -270,8 +314,8 @@ is not.
   hook) and the gate's own message: at least the rule it cites and what it
   refused. A crash, a timeout or another message is not "blocked".
 - **And** its control, through the same gate, passes and shows the gate
-  examined something: a changed test file, a requirement, a released version,
-  a verdict read back.
+  examined something: a changed test file, a requirement or criterion, a
+  released version, a verdict read back.
 
 **INF-10-AC9 — Each drill can go red.**
 - **Given** any drill, with its gate swapped for a stand-in that always
@@ -299,7 +343,7 @@ is not.
   the stand-in `gh`, which refuses any call it was not set up for. No Docker,
   no network.
 - **And** all data is synthetic (RG-07). No committed file holds a drill's
-  secret, phone number or `.skip`.
+  secret, phone number or skip form.
 - **And** every scratch folder is outside the repository and removed
   afterwards. The repository's `git status` is the same before and after.
 
@@ -332,26 +376,75 @@ is not.
 - **When** CI classifies it (CI-12)
 - **Then** `affected.mjs` answers `code=true`, so the required `unit` check
   runs `test:unit`, and the drills with it.
-- **And** a test holds this: every source file a drill declares exists, and
-  is code under `onlyInert` from `scripts/lib/affected.mjs`.
+- **And** tests hold this: every source file a drill declares exists and is
+  code under `onlyInert` (`scripts/lib/affected.mjs`); `vitest.config.mjs`
+  collects the drill file, and the coverage run does not (`vitest list`, as
+  the INF-06-AC6 test does).
 - No new job and no new required check.
+
+### The three gate changes (D-082)
+
+**INF-10-AC15 — `req:coverage` checks each acceptance criterion.**
+- **Given** `req:coverage --fail-on-uncovered-changed`, and a changed spec under
+  `docs/specs/` that names `<ID>-ACn` for a tracked requirement
+- **When** no counted test names that exact criterion (`<ID>-AC1` is not
+  `<ID>-AC10`; a `fixtures-only` test does not count)
+- **Then** it exits non-zero, listing each such criterion under its RG-01
+  line.
+- **And** criteria of untracked IDs (INF, CI, HK…) never block (D-074), and
+  neither do a parked requirement's, as today. Only specs are read for
+  criteria, and `docs/requirements-status.md` does not change.
+- **And** the line `req-coverage: not automated <ID>-ACn: <reason>` in that
+  spec lets the criterion through. The gate prints every such criterion and
+  its reason on every run, and refuses the line if the reason is empty.
+
+**INF-10-AC16 — oasdiff is installed, pinned, where the gate and the drill run.**
+- **Given** `ci.yml`'s `unit` and `contract` jobs, on a diff with work to do
+  (CI-12)
+- **When** they reach the step that needs oasdiff (`test:unit`, `api:diff`)
+- **Then** an earlier step under the same guard has installed it and put it
+  on `PATH`, from the one version and SHA-256 written once for both jobs
+  (1.32.1 and its `checksums.txt` hash today).
+- **And** an archive whose SHA-256 differs stops that step, with a message,
+  before anything is unpacked.
+- **And** there is no new job, action or secret. D-082 records the version,
+  the hash's source and the licence (Apache-2.0).
+
+**INF-10-AC17 — RG-03's skip pattern sees conditional, chained and in-body skips.**
+- **Given** a test file whose new version switches existing tests off with
+  `describe.skipIf(…)`, `describe.runIf(…)`, a skip behind another modifier
+  such as `describe.concurrent.skip` (and the same forms on `test` and `it`),
+  or any call to `skip(` in a test file, whatever the context is named:
+  `ctx.skip()`, `context.skip(…)`, `t.skip()`, or `skip()` destructured from
+  the context
+- **When** `weakenings` in `scripts/lib/test-strength.mjs` compares it with
+  the old version
+- **Then** it reports "skipped, focused or todo tests were added", so HK-05
+  and `tests:changes` both refuse it.
+- **And** focus and todo behind a modifier count too, since they share the
+  pattern. Every form counted today still is, and a name that only contains
+  those words, such as `skipIfMissing(`, is not.
 
 ## Test plan
 
 | AC | Level | Where |
 |----|-------|-------|
-| AC1–AC11, AC14 | L2, tooling: real processes, scratch repositories | `scripts/drills.test.mjs` (new) |
+| AC1–AC11, AC14 | L2, tooling: real processes, scratch repositories | `scripts/drills.test.mjs` (new). AC14's collection check is in `scripts/gate.test.mjs` |
 | AC12 | L2 | `scripts/lib/gate-drills.test.mjs` (new): results → rows, verdict and exit code. The entry script is run once against a small scratch drill file |
 | AC13 | L2 | `scripts/gate.test.mjs` (`FULL_STEPS`) |
+| AC15 | L2 | `scripts/lib/requirements.test.mjs`, one case per bullet. AC3 runs the entry script |
+| AC16 | L2 | `scripts/gate.test.mjs`: both steps' place, guard and single pin; each step run on the existing fake runner, where a stand-in archive with the pinned hash lands on `PATH` and one with another hash stops the step. AC4, in CI, proves the real binary |
+| AC17 | L2 | `scripts/lib/test-strength.test.mjs` (the rule); `.claude/hooks/test-weakening.test.mjs`, one HK-05 case; AC1 runs `tests:changes` |
 
 They run in `unit` on every pull request CI-12 calls code, at every stop
-through `gate:quick`, and in `gate:full` (twice: `test:unit` and
+through `gate:quick`, and in `gate:full` (in `test:unit`, and again in
 `gate:drills`).
 
 - **No L3 to L7.** No database, API, app or device is touched.
-- **Red phase.** New code gets tests that fail first, as usual: the runner,
-  and whatever the answers to Q1–Q3 add. The drills themselves are green on
-  their first run against working gates, so their red is shown two ways:
+- **Red phase.** The three gate changes (AC15–AC17) and the runner go red
+  first in the usual way: their new cases fail against today's code, and
+  AC16's before the steps exist. The drills themselves are green on their
+  first run against working gates, so their red is shown two ways:
   - AC9, on every run;
   - in the pull request, each drill run once against its real gate made to
     always pass, with the output quoted. For `scripts/`, a local edit that is
@@ -359,14 +452,16 @@ through `gate:quick`, and in `gate:full` (twice: `test:unit` and
     without asking, a changed copy the drill is pointed at. Nothing is
     committed, so no manual merge (D-075). test-auditor reads this evidence
     for DOD-02.
+- **Fixtures.** Skip forms, secrets and phone numbers are assembled at run
+  time everywhere, `test-strength.test.mjs` and `test-weakening.test.mjs`
+  included (Approach 6). New fixtures use synthetic IDs. Nothing written for
+  this work names a real tracked requirement or criterion.
 - **Names.** `INF-10-ACn: …`, with the drilled ID in the name, as in
   `INF-10-AC1: RG-03 drill — …` (the INF-06 precedent; D-074 makes it the
   practice, not an obligation). INF is untracked, so nothing moves in
   `req:coverage`. The drill file starts with `// req-coverage: fixtures-only`.
-  This spec names no tracked requirement, so `traceability`'s check of changed
-  specs has nothing to flag.
 - **Mutation.** No safety path changes, so Stryker does not run. The coverage
-  ratchet applies to the new runner as to any file.
+  ratchet applies to the changed gate code and the new runner as to any file.
 
 ## Modules and files affected
 
@@ -380,32 +475,36 @@ Paths marked ◆ need a code owner's approval (D-042).
   `scripts/lib/gate-drills.test.mjs` (test-author).
 
 **Changed**
-- ◆ `package.json`: the `gate:drills` script.
-- ◆ `scripts/gate.mjs`: the step in `FULL_STEPS`. ◆ `scripts/gate.test.mjs`
-  holds it (test-author).
+- ◆ `scripts/lib/requirements.mjs`, ◆ `scripts/req-coverage.mjs`: criteria
+  (AC15). Tests: ◆ `scripts/lib/requirements.test.mjs`.
+- ◆ `scripts/lib/test-strength.mjs`: the pattern (AC17). Tests: ◆
+  `scripts/lib/test-strength.test.mjs`, and ◆
+  `.claude/hooks/test-weakening.test.mjs` (an edit under `.claude/` asks the
+  owner first).
+- ◆ `.github/workflows/ci.yml`: oasdiff's version and SHA-256, once; an
+  install step in `unit` and in `contract` (AC16).
+- ◆ `scripts/gate.test.mjs`: AC13, AC14's collection check, AC16.
+- `vitest.coverage.config.mjs`: leaves out the drill file (Approach 8).
+- ◆ `package.json`: the `gate:drills` script. ◆ `scripts/gate.mjs`: the step
+  in `FULL_STEPS`.
 - ◆ `CLAUDE.md`: `gate:drills` in the command list.
-- ◆ `docs/plan/decisions.md`: the owner's split, and the choices above
+- ◆ `docs/plan/decisions.md`: D-082 (plan-keeper).
+- `docs/plan/06-testing-strategy.md`: RG-01's row, as D-082 amends it
   (plan-keeper).
 - `docs/progress.md`, `docs/progress/m0.md`, `docs/plan/README.md`
   (plan-keeper).
 
-**Only if the owner answers (a)**
-- Q1: ◆ `scripts/lib/requirements.mjs`, ◆ `scripts/req-coverage.mjs` and
-  their tests; RG-01's wording in `docs/plan/06-testing-strategy.md`.
-- Q2: ◆ `.github/workflows/ci.yml`: a pinned, hash-checked oasdiff in the
-  `unit` and `contract` jobs.
-- Q3: ◆ `scripts/lib/test-strength.mjs` and its test.
-
-With (b) to Q1 instead, `docs/plan/10-roadmap.md` rewords drill 3.
-
 **Deliberately unchanged**
 - `.github/workflows/ai-review.yml` (D-075): read and run by drill 9, never
   edited.
-- `.claude/**`: hooks, agents and settings are read, not changed.
+- `.claude/**`, except that one HK-05 test: hooks, agents and settings are
+  read, not changed.
+- `scripts/api-diff.mjs`: it already looks for oasdiff on `PATH`.
+- `scripts/lib/pinned-binary.mjs`: not used (Approach 10).
 - `scripts/lib/merge-rules.mjs`, `docs/plan/main-ruleset.json`: no new job,
   no new required check.
-- `vitest.config.mjs`, `vitest.shared.mjs`: `scripts/**/*.test.mjs` already
-  collects the drill file.
+- `vitest.config.mjs`: `scripts/**/*.test.mjs` already collects the drill
+  file.
 - `packages/contracts/**`: drill 4 copies `openapi.json` into a scratch
   folder.
 
@@ -422,131 +521,104 @@ through the gates: [F8](../plan/03-safety-reliability-security.md#failure-modes)
 that has quietly stopped working lets that release through with a green tick.
 The drills are the check on the gates.
 
-- **R1. A drill passes vacuously:** nothing ran, the gate crashed, or the
-  fixture was wrong. Mitigation: AC8 (status, message, and a control showing
-  the gate looked), AC9, AC12's count, and RG-03 over the drill file.
-- **R2. A drill tests a copy of its gate.** AC10. The HK-02 hook test shows
+- **R1. A drill passes vacuously** (nothing ran, the gate crashed, a wrong
+  fixture): AC8, AC9, AC12's count, RG-03 over the drill file, and AC14's
+  check that the unit run collects it.
+- **R2. A drill tests a copy of its gate:** AC10. The HK-02 hook test shows
   how copies drift.
-- **R3. A drill writes into the repository.** AC11. Run in the repository,
-  `req:coverage` would rewrite the committed report.
-- **R4. A spawned gate inherits the runner's environment.** AC11. On a push to
-  `main`, `GITHUB_EVENT_NAME` and `GITHUB_OUTPUT` change what gates do.
-- **R5. A reviewer's sandbox reverts `.claude/**`.** Drills 5 and 7 then read
-  the old files. They carry the same "differs from HEAD" note as
-  `ai-review.test.mjs`.
-- **R6. guard-bash matches text.** It sees `sed -i` and redirections, not
-  `node -e` or `perl -i`. Drill 5 proves the forms the hook claims, not a
-  sealed shell. Backstops: RG-03 in CI, test-auditor, and owner approval on
+- **R3. A drill writes into the repository:** AC11. Run there, `req:coverage`
+  would rewrite the committed report.
+- **R4. A spawned gate inherits the runner's environment:** AC11.
+- **R5. A reviewer's sandbox reverts `.claude/**`:** drills 5 and 7, and the
+  new HK-05 case, then read old files. They carry the same "differs from HEAD"
+  note as `ai-review.test.mjs`.
+- **R6. guard-bash matches text:** it sees `sed -i` and redirections, not
+  `node -e` or `perl -i`. Drill 5 proves what the hook claims, not a sealed
+  shell. Backstops: RG-03 in CI, test-auditor, and owner approval on
   `/scripts/` and `/.claude/`.
 - **R7. Claude Code not running the hooks at all** cannot be shown offline.
-  The drills prove the configuration and the scripts. D-044's scripted
-  session is out of scope.
-- **R8. HK-03 while building this.** A shell command that merely mentions a
+  D-044's scripted session is out of scope.
+- **R8. HK-03 while building this:** a shell command that merely mentions a
   push to `main`, `--no-verify`, starting a workflow run, or reading `.env`
   is refused, and `grep … process.env` counts. Write commit messages and the
   PR body to a file with Write (`git commit -F`, `--body-file`); search with
   Grep.
-- **R9. A drill's assertion rewritten.** `tests:changes` counts; it does not
-  read. Guard: test-auditor, and owner approval on `/scripts/`.
-- **R10. Friction.** Rewording a gate's message means updating its drill.
-  Accepted: changing a gate should be deliberate.
-- **R11. The Mac.** An old git on the hook `PATH` refuses `git init -b` (Live
+- **R9. What counting cannot see.** A test can be hollowed out while every
+  count stays the same: an assertion rewritten, an early `return`, a failure
+  swallowed. No text pattern can catch them all, so they stay with
+  test-auditor, as the owner decided, with owner approval on `/scripts/` for
+  the drills themselves.
+- **R10. The written way out waves a criterion through:** the gate prints
+  each one with its reason on every run and refuses an empty reason;
+  test-auditor reads them (DOD-02).
+- **R11. Specs name criteria as claims:** once AC15 lands, a changed spec that
+  names a tracked `<ID>-ACn`, even in passing, needs that criterion's test.
+  Examples use placeholders; this spec names no tracked requirement or
+  criterion.
+- **R12. oasdiff in CI:** it reads our description and finds the removed
+  operation (checked above). If CI's result ever differs from that check, the
+  implementer stops and reports.
+- **R13. The pin is raised by hand:** Dependabot cannot see it. D-082 records
+  1.32.1, the hash's source (`checksums.txt`) and Apache-2.0.
+- **R14. The wider pattern refuses every new conditional test,** `runIf`
+  included, and every call to the context's skip, like any skip. No test uses
+  any of them today (checked).
+- **R15. The Mac:** an old git on the hook `PATH` refuses `git init -b` (Live
   gotchas), so scratch repositories do not rely on it. `jq` there was not
-  checked; if it is missing, drill 9 fails and says so.
-- **R12. Flaky spawns.** No clocks, generous process timeouts, and RG-06
-  quarantine if it happens anyway.
+  checked; drill 9 names it if missing.
+- **R16. Friction and flakiness:** rewording a gate's message means updating
+  its drill (accepted). Spawned processes get generous timeouts and no
+  clocks, and RG-06 applies if one flakes anyway.
 
 **The live drills.** Until the live attempt, drills 6 and 8 rest on
 `gate:integrity` reading the rules. D-072 records that gate reporting 5 of 5
 while a rule did nothing. The live task must also get past urso-agent's
 automatic approval (D-072), or it shows nothing about the owner's.
 
-**Found while reading the gates, and not changed here** (Q1–Q3 aside):
-`tests:changes` passes, saying "nothing to compare against", when the base
-will not resolve. CI's full-history checkout keeps it from biting today.
-This is a candidate `/bugfix`.
+**Found while reading the gates, and not changed here:** `tests:changes`
+passes, saying "nothing to compare against", when the base will not resolve.
+CI's full-history checkout keeps it from biting today. A candidate
+`/bugfix`. (The in-body skip found at the same time is now in D-082: AC17.)
 
 ## Out of scope
 
 - Drills 6 and 8, live: a later task, with the owner watching.
 - HK-03's local refusal of a push to `main` as a drill. The owner's split puts
   drill 6 with GitHub. `guard-bash.test.mjs` already runs the hook on it.
-- Fixing what the drills find, beyond the owner's answers to Q1–Q3.
+- Fixing anything the drills find beyond D-082's gate changes.
 - Drills for gates not on the roadmap's list: static checks, the integration
   and system suites, the coverage ratchet, mutation, `android-e2e`, the
   security scan, HK-04/05/06/08/09 and CI-12.
 - A scripted Claude Code session that tries each forbidden action (D-044). It
   needs Claude Code itself and a token.
 - Any `ai-review.yml` change, the D-075 batch included.
+- Criterion coverage in `docs/requirements-status.md`: D-082 changes the
+  check, not the report.
 - Putting the drill table in the daily report.
 
-## Questions for the owner
+## The owner's answers (2026-09-28)
 
-**Q1 — Drill 3: should `req:coverage` check acceptance criteria, not just
-requirement IDs? (what a gate enforces)**
+All four were answered with the recommended option, as relayed to the
+planner by the coordinating session. D-082 records them, with the
+offline/live split above.
 
-Checked in the code: `req:coverage` treats a requirement as covered once any
-test names it. `uncoveredInChanges` flags only requirements with no test,
-and `mentions` counts `<ID>-AC1` as naming `<ID>`. RG-01 says the same. So a
-new `<ID>-AC7` in a spec, with no test, passes `traceability` whenever that
-requirement already has one test. The roadmap's drill 3 would get through
-today, and by the roadmap's own rule M0 would not be done.
-
-- **(a) Widen the gate.** With `--fail-on-uncovered-changed`, `req:coverage`
-  also fails when a changed spec names `<ID>-ACn` for a tracked requirement
-  and no test names that exact criterion. Untracked IDs (INF, CI, HK…) stay
-  out, as D-074 keeps them. Cost: a small change to
-  `scripts/lib/requirements.mjs` and its tests, plus RG-01's wording, amended
-  by a new decision (D-040 makes RG-01 binding). A criterion that truly cannot
-  be automated needs a written way out, as RG-01 already allows for whole
-  requirements.
-- **(b) Reword drill 3** to what RG-01 enforces: "a change that names a
-  requirement no test names". No cost. Coverage of each criterion stays with
-  test-auditor (DOD-02): a reviewer's judgement, not a gate.
-
-**Recommendation: (a).** From M2 on, one alert story carries several criteria
-(timings, escalation). A criterion added later without a test is what a
-reviewer can miss and a gate cannot. The change is small and fails loudly.
-
-**Q2 — Drill 4: install oasdiff now? (scope, and a small CI cost)**
-
-Checked: nothing installs oasdiff. `ci.yml`'s `contract` job has no install
-step; its own comment says it "starts failing the moment there is something
-to break and no oasdiff to check it with". It is not in this session either
-(`/usr/bin`, `/usr/local/bin`). Once a released version exists, `api:diff`
-refuses every change, breaking or not: "compatibility was NOT checked". That
-blocks drill 4's attempt, but not for the right reason. Nobody has seen this
-gate detect a break, or read the OpenAPI 3.1.1 description our contract
-package generates.
-
-- **(a) Install it now**, pinned by version and SHA-256 like gitleaks, in the
-  `unit` job (for the drill) and the `contract` job (for the gate). Drill 4
-  then proves detection. Cost: a few seconds per run (not measured); the pin
-  is raised by hand, since Dependabot cannot see it; its licence goes in the
-  decision. A session may be refused the download, and there the drill
-  reports "fail-closed only".
-- **(b) Wait for the first release.** Drill 4 proves only that `api:diff`
-  refuses to run without oasdiff. Its row says "fail-closed only; detection
-  not proven" until the first-release task installs it.
-
-**Recommendation: (a).** The first release is the worst moment to learn
-whether this gate can read our own API description.
-
-**Q3 — Drill 1: close a way around RG-03 found while writing this spec? (what
-a gate enforces)**
-
-Checked in `scripts/lib/test-strength.mjs`: the skip pattern needs a word
-boundary right after `skip`. So it does not see `describe.skipIf(true)`,
-`describe.runIf(false)`, or a skip behind another modifier such as
-`describe.concurrent.skip`. Wrapped around existing tests, these switch off a
-whole block while every count stays the same, so `tests:changes` and HK-05
-both let it through. Turning one `test(` into `test.skipIf(true)(` is caught,
-because the test count drops.
-
-- **(a) Include these forms in drill 1**, and widen the pattern in INF-10.
-  Cost: small. One pattern serves both HK-05 and `tests:changes`.
-- **(b) A `/bugfix` after INF-10.** M0 closes with this way through RG-03
-  written down.
-
-**Recommendation: (a).** The roadmap says a drill that gets through means M0
-is not done, and this one would.
+- **Q1, drill 3 → (a) "Check each criterion".** `req:coverage` fails when a
+  changed spec names a tracked `<ID>-ACn` that no test names. Untracked IDs
+  stay out (D-074), and a written way out covers a criterion that truly
+  cannot be automated. D-082 amends RG-01, which D-040 makes binding.
+  → AC3, AC15.
+- **Q2, drill 4 → (a) "Install it now".** oasdiff is pinned by version and
+  SHA-256 like gitleaks, written once and read by `unit` (the drill) and
+  `contract` (the gate), with its licence in D-082. Where it is not
+  installed, the drill says "fail-closed only", never "blocked". → AC4, AC16.
+- **Q3, drill 1 → (a) "Close it in INF-10".** The shared skip pattern also
+  sees `describe.skipIf(…)`, `describe.runIf(…)` and a skip behind another
+  modifier, so HK-05 and `tests:changes` catch them. No test uses `skipIf`
+  or `runIf` today. → AC1, AC17.
+- **Q4, drill 1's in-body skip → "Include it".** The owner's option read
+  "the check also counts a skip() call in a test file", so any call to
+  `skip(` counts, whatever the context is named (`ctx.skip()`,
+  `context.skip(…)`, `t.skip()`, a destructured `skip()`); names like
+  `skipIfMissing(` do not. Other
+  ways to hollow out a test, such as an early return, stay with test-auditor
+  (R9). → AC1, AC17.
