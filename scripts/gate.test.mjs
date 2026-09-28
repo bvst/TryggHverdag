@@ -902,6 +902,54 @@ const FREED = [
   },
 ];
 
+// The emulator's cores and the runner's hardware (BUG-6, added 2026-09-28).
+// Run 36418631362, job 108915697746, the first android-e2e run on main after
+// INF-06 merged, booted the emulator and failed in the flow:
+//   [Failed] app-starts (49s) (Assertion is false: "TryggHverdag" is visible)
+// Both emulator steps logged `cores: 2`, the pinned action's default, as
+// ci.yml sets none, and then:
+//   printf 'hw.cpu.ncore=2\n' >> /home/runner/.android/avd/test.avd/config.ini
+//   USER_WARNING | AVD 'test' will run more smoothly with 4 CPU cores (currently using 2).
+// The step that made the snapshot saved it with
+//   Cache saved with key: avd-37.2-google_apis_ps16k-x86_64-pixel_8-nb-NO
+// a key that says nothing of the 2 cores the device had. Maestro's screenshot
+// showed Android's "System-UI svarer ikke" over an app that had drawn (from
+// the run's debug artefact, not read by this file). The repository is public
+// now, and GitHub's docs give a public repository's standard Linux runner 4
+// CPUs, 16 GB of memory and 14 GB of SSD, where a private one's had 2 and 8.
+// Nothing in the log says which machine the run had. So the emulator is given
+// 4 cores, written once, and the job prints the CPUs and memory it got.
+
+/** The cores the emulator asks for, in every run's log: "will run more smoothly with 4 CPU cores". */
+const EMULATOR_ADVISED_CORES = 4;
+
+/**
+ * The CPUs of GitHub's standard Linux runner for a public repository (GitHub's
+ * docs, 2026-09-28). A private repository's has 2: if this one goes private
+ * again, this number changes, and EMULATOR_CORES with it.
+ */
+const RUNNER_CPUS = 4;
+
+/**
+ * What the fake runner's nproc, free and /proc/meminfo say: 6 CPUs and 23 GiB,
+ * numbers no step prints by itself, so a step that prints them has read them.
+ */
+const FAKE_HARDWARE = {
+  cpus: '6',
+  free: [
+    '               total        used        free      shared  buff/cache   available',
+    'Mem:            23Gi       1.2Gi        19Gi       2.0Mi       2.3Gi        21Gi',
+    'Swap:          3.0Gi          0B       3.0Gi',
+  ].join('\n'),
+  meminfo: [
+    'MemTotal:       24117248 kB',
+    'MemFree:        19922944 kB',
+    'MemAvailable:   22020096 kB',
+  ].join('\n'),
+  /** The total, as free -h or /proc/meminfo prints it. */
+  memory: /(?<![\w.])(?:23Gi|24117248)(?![\w.])/,
+};
+
 // Android's command-line tools (added 2026-09-27). Run 36303366850, job
 // 108575130560, passed the KVM step and printed `/dev/root 72G 51G 22G 71% /`
 // before the emulator, and then the emulator action stopped with:
@@ -1085,6 +1133,18 @@ function printsRootSpace(words) {
   return human && (named.length === 0 || named.includes('/'));
 }
 
+/** `nproc`, also as `$(nproc)` inside an echo, whose `)` stays on the word. */
+const countsCpus = (words) => /^nproc(?![\w.-])/.test(words[0] ?? '');
+
+/** `free`, or any command that reads /proc/meminfo. */
+const showsMemory = (words) =>
+  /^free(?![\w.-])/.test(words[0] ?? '') ||
+  words.some((word) => /\/proc\/meminfo(?![\w.-])/.test(word));
+
+/** A step that runs nproc or free, or reads /proc/meminfo. */
+const printsHardware = (step) =>
+  shellCommands(step).some((words) => countsCpus(words) || showsMemory(words));
+
 /** android-e2e's steps before its first emulator step, and the build's index among them. */
 function beforeTheEmulator() {
   const steps = ciSteps('android-e2e');
@@ -1141,14 +1201,18 @@ function shellFlags(step) {
   return ['-c', `echo "the test does not know how GitHub runs shell: ${shell}"; exit 99`];
 }
 
-/** The text with every absolute path but /dev, /proc and /sys, and every runner expression, moved under `root`. */
+/**
+ * The text with every absolute path but /dev, /proc and /sys, and every runner
+ * expression, moved under `root`. /proc/meminfo is moved too (BUG-6): the fake
+ * runner has its own, FAKE_HARDWARE's, and macOS has no /proc.
+ */
 const intoFakeRunner = (text, root) =>
   text
     .replace(/\$\{\{\s*github\.workspace\s*\}\}/g, RUNNER.workspace)
     .replace(/\$\{\{\s*runner\.tool_cache\s*\}\}/g, RUNNER.toolCache)
     .replace(/\$\{\{\s*runner\.temp\s*\}\}/g, RUNNER.temp)
     .replace(
-      /(^|[\s"'=:(<>])\/(?!(?:dev|proc|sys)(?![\w.-]))(?=[\w.~-])/gm,
+      /(^|[\s"'=:(<>])\/(?!(?:dev|sys)(?![\w.-])|proc(?![\w.-])(?!\/meminfo(?![\w.-])))(?=[\w.~-])/gm,
       (_, before) => `${before}${root}/`,
     );
 
@@ -1158,7 +1222,11 @@ const intoFakeRunner = (text, root) =>
  */
 const FENCED = ['rm', 'rmdir', 'unlink', 'find', 'mv', 'rsync', 'cp', 'unzip', 'chmod'];
 
-/** Tools a step may call to free space or report on it. On the fake runner they only record the call. */
+/**
+ * Tools a step may call to free space or report on it. On the fake runner they
+ * only record the call. df, nproc and free also print what FAKE_HARDWARE and
+ * a full disk would (fakeToolsDir).
+ */
 const RECORDED = [
   'docker',
   'podman',
@@ -1171,7 +1239,6 @@ const RECORDED = [
   'systemctl',
   'swapoff',
   'du',
-  'free',
   'java',
   'jps',
   'chown',
@@ -1271,6 +1338,10 @@ function fakeToolsDir() {
       'echo "Filesystem Size Used Avail Use% Mounted on"\necho "/dev/root 72G 70G 2.0G 98% /"\n',
     ),
   );
+  // BUG-6: macOS has neither, and a step that prints the hardware next to df
+  // must still run to the end here.
+  tool('nproc', recorder(`echo ${FAKE_HARDWARE.cpus}\n`));
+  tool('free', recorder(`cat <<'EOF'\n${FAKE_HARDWARE.free}\nEOF\n`));
   tool(
     'pnpm',
     recorder(
@@ -1456,6 +1527,8 @@ function onFakeRunner(steps, jobVars = {}, { download = '' } = {}) {
       writeFileSync(file, content, { mode: executable ? 0o755 : 0o644 });
     }
     symlinkSync(path.join(bin, 'gradlew'), at(`${RUNNER.workspace}/apps/mobile/android/gradlew`));
+    mkdirSync(at('/proc'));
+    writeFileSync(at('/proc/meminfo'), `${FAKE_HARDWARE.meminfo}\n`);
     const env = {
       PATH: `${bin}${path.delimiter}${process.env.PATH}`,
       LC_ALL: 'C',
@@ -2089,6 +2162,9 @@ describe('the android-e2e job in ci.yml', () => {
     expect(keys.length).toBeGreaterThan(0);
     // At least the image, the target, the ABI, the profile and the locale.
     expect(settings.length).toBeGreaterThanOrEqual(5);
+    // Amended 2026-09-28 (BUG-6): and the core count, one more setting the
+    // device is made with. The evidence is above EMULATOR_ADVISED_CORES.
+    expect(settings, 'the snapshot key does not read EMULATOR_CORES').toContain('EMULATOR_CORES');
     for (const name of settings) {
       expect(env[name], `${name} is not in the job's env`).toBeDefined();
       for (const step of emulators) {
@@ -2147,6 +2223,11 @@ describe('the android-e2e job in ci.yml', () => {
       .flatMap((step) => envNames(/^\s*key:\s*(.+)$/m.exec(step)?.[1] ?? ''));
 
     expect(read).toContain('EMULATOR_API_LEVEL');
+    // Amended 2026-09-28 (BUG-6): the core count too. Run 36418631362 saved
+    // the snapshot of a 2-core device under
+    // avd-37.2-google_apis_ps16k-x86_64-pixel_8-nb-NO; under a key that does
+    // not read the cores, a 4-core job would restore that snapshot.
+    expect(read, 'no emulator step reads EMULATOR_CORES').toContain('EMULATOR_CORES');
     for (const name of read) {
       expect(keyReads, `the snapshot key does not read ${name}`).toContain(name);
     }
@@ -2418,5 +2499,88 @@ describe('the android-e2e job in ci.yml', () => {
     for (const [name, check] of Object.entries(CMDLINE_TOOLS_CHECKS)) {
       expect(check('', TOOLS_ENV), name).toBe(NO_STEP);
     }
+  });
+
+  // The emulator's cores and the runner's hardware: the evidence is above
+  // EMULATOR_ADVISED_CORES. That the snapshot key reads the cores, and that
+  // their value is written once, is in the two settings tests above.
+
+  test('BUG-6: one core count, EMULATOR_CORES, is the cores of every emulator step, and nothing else sets how many cores the emulator has', () => {
+    // Run 36418631362 logged `cores: 2` in both emulator steps: the pinned
+    // action's default, because no step said otherwise. A -cores in
+    // emulator-options, or an hw.cpu.ncore written by hand, would be a second
+    // count that the snapshot key does not read.
+    const env = jobEnv('android-e2e');
+    const emulators = ciSteps('android-e2e').filter(bootsEmulator);
+
+    expect(Object.keys(env).filter((name) => /CORE|CPU/.test(name))).toEqual(['EMULATOR_CORES']);
+    expect(emulators.length).toBeGreaterThan(0);
+    for (const step of emulators) {
+      expect(step, step.split('\n')[0]).toMatch(
+        /^\s*cores:\s*\$\{\{\s*env\.EMULATOR_CORES\s*\}\}\s*$/m,
+      );
+      expect(step, step.split('\n')[0]).not.toMatch(/(?:^|\s)-cores(?=[\s=]|$)/m);
+    }
+    expect(ciJob('android-e2e')).not.toMatch(/\bhw\.cpu\.ncore\b/);
+  });
+
+  test("BUG-6: EMULATOR_CORES is at least the 4 cores the emulator asks for, and at most the runner's 4 CPUs", () => {
+    // At least: every run's emulator warned "AVD 'test' will run more smoothly
+    // with 4 CPU cores (currently using 2)", and with 2, run 36418631362's
+    // System UI stopped responding. At most: the emulator's cores are threads
+    // on the runner's CPUs, which it shares with adb, Maestro and Node, so
+    // more than the runner has are not more CPU, only more threads waiting
+    // for it. Both bounds are 4, so it is '4' for now. RUNNER_CPUS is a public
+    // repository's runner; a private one's has 2.
+    const cores = jobEnv('android-e2e').EMULATOR_CORES ?? '';
+
+    expect(cores, 'EMULATOR_CORES is not a whole number').toMatch(/^[1-9]\d*$/);
+    expect(Number(cores), 'fewer cores than the emulator asks for').toBeGreaterThanOrEqual(
+      EMULATOR_ADVISED_CORES,
+    );
+    expect(Number(cores), 'more cores than the runner has CPUs').toBeLessThanOrEqual(RUNNER_CPUS);
+  });
+
+  test('BUG-6: before the emulator, the job prints the CPUs it got with nproc and its memory with free or /proc/meminfo, in steps guarded by exactly the app answer', () => {
+    // Nothing in run 36418631362's log says which machine it had, a public
+    // repository's 4 CPUs and 16 GB or a private one's 2 and 8, so its red
+    // could not be read against them (D-070). Guarded as the freeing steps
+    // are: narrower (main only, say), a pull request's red run would show no
+    // numbers.
+    const { steps } = beforeTheEmulator();
+    const cpus = steps.filter((step) => shellCommands(step).some(countsCpus));
+    const memory = steps.filter((step) => shellCommands(step).some(showsMemory));
+
+    expect(cpus, 'no step before the emulator runs nproc').not.toEqual([]);
+    expect(memory, 'no step before the emulator runs free or reads /proc/meminfo').not.toEqual([]);
+    for (const step of new Set([...cpus, ...memory])) {
+      expect(guardOf(step), step.split('\n')[0]).toBe("steps.affected.outputs.app == 'true'");
+    }
+  });
+
+  test('BUG-6: on a fake runner, those steps print the CPU count nproc gives and the memory total free or /proc/meminfo gives, and pass', () => {
+    // nproc into a variable, or free with its output thrown away, would pass
+    // the check above and print nothing. The fake runner has 6 CPUs and
+    // 23 GiB (FAKE_HARDWARE), numbers no step prints by itself. The steps'
+    // own first lines are taken out of the output, so a name cannot count.
+    const steps = beforeTheEmulator().steps.filter(printsHardware);
+
+    expect(
+      steps,
+      'no step before the emulator runs nproc or free, or reads /proc/meminfo',
+    ).not.toEqual([]);
+    const run = onFakeRunner(steps, jobEnv('android-e2e'));
+    const printed = steps.reduce(
+      (output, step) => output.replace(step.split('\n')[0] ?? '', ''),
+      run.output,
+    );
+
+    expect(run.status, run.output).toBe(0);
+    expect(printed, `nproc's ${FAKE_HARDWARE.cpus} is not printed:\n${run.output}`).toMatch(
+      new RegExp(`(?<![\\w.])${FAKE_HARDWARE.cpus}(?![\\w.])`),
+    );
+    expect(printed, `the memory total is not printed:\n${run.output}`).toMatch(
+      FAKE_HARDWARE.memory,
+    );
   });
 });

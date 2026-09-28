@@ -333,6 +333,13 @@ jobs:
       EMULATOR_ARCH: x86_64
       EMULATOR_PROFILE: pixel_8
       EMULATOR_LOCALE: nb-NO
+      # The emulator's cores (BUG-6). Unset, the pinned action gives it 2, and
+      # every run's emulator warned "AVD 'test' will run more smoothly with 4
+      # CPU cores (currently using 2)"; run 36418631362's System UI then stopped
+      # responding over the app. No more than the runner has CPUs: a public
+      # repository's ubuntu-latest has 4, a private one's 2, so this drops to
+      # 2 if the repository goes private again.
+      EMULATOR_CORES: '4'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0, persist-credentials: false }
@@ -441,13 +448,18 @@ jobs:
       # ~/.gradle, which main saves after the flows; the flow step installs the
       # APK already built and runs no Gradle. The free space is printed last,
       # so a disk that is still too full shows here, not as a failed SDK
-      # install in the emulator step.
-      - name: Free the build's disk space for the emulator, and show what is left
+      # install in the emulator step. The runner's CPUs and memory are printed
+      # too (BUG-6): run 36418631362's log did not say which machine it had, a
+      # public repository's 4 CPUs and 16 GB or a private one's 2 and 8, so its
+      # red could not be read against them.
+      - name: Free the build's disk space for the emulator, and show what is left, the CPUs and the memory
         if: steps.affected.outputs.app == 'true'
         run: |
           (cd apps/mobile/android && ./gradlew --stop)
           rm -rf apps/mobile/android/app/build/intermediates apps/mobile/android/app/.cxx
           df -h /
+          echo "CPUs: $(nproc)"
+          free -h
       - id: avd-cache
         if: steps.affected.outputs.app == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -455,7 +467,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-${{ env.EMULATOR_API_LEVEL }}-${{ env.EMULATOR_TARGET }}-${{ env.EMULATOR_ARCH }}-${{ env.EMULATOR_PROFILE }}-${{ env.EMULATOR_LOCALE }}
+          key: avd-${{ env.EMULATOR_API_LEVEL }}-${{ env.EMULATOR_TARGET }}-${{ env.EMULATOR_ARCH }}-${{ env.EMULATOR_PROFILE }}-${{ env.EMULATOR_LOCALE }}-${{ env.EMULATOR_CORES }}cores
       # On main, with no cached device yet: boot once to make a clean snapshot
       # for later runs to start from. Pull requests only ever read it.
       - name: Create the virtual device and its snapshot
@@ -466,6 +478,7 @@ jobs:
           target: ${{ env.EMULATOR_TARGET }}
           arch: ${{ env.EMULATOR_ARCH }}
           profile: ${{ env.EMULATOR_PROFILE }}
+          cores: ${{ env.EMULATOR_CORES }}
           force-avd-creation: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -change-locale ${{ env.EMULATOR_LOCALE }}
           disable-animations: false
@@ -489,6 +502,7 @@ jobs:
           target: ${{ env.EMULATOR_TARGET }}
           arch: ${{ env.EMULATOR_ARCH }}
           profile: ${{ env.EMULATOR_PROFILE }}
+          cores: ${{ env.EMULATOR_CORES }}
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -change-locale ${{ env.EMULATOR_LOCALE }}
           disable-animations: true
