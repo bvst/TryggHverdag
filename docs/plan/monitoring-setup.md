@@ -1,6 +1,15 @@
 # Monitoring setup — the owner's steps (INF-08)
 
-**Last updated:** 2026-09-25 · Decisions: D-065, D-077, D-079 · Spec: [`../specs/INF-08.md`](../specs/INF-08.md)
+**Last updated:** 2026-09-28 · Decisions: D-065, D-077, D-079 · Spec: [`../specs/INF-08.md`](../specs/INF-08.md)
+
+**Status: done.** A-23 to A-26 are complete. The drill ran on 2026-09-26, and
+the owner accepted it on 2026-09-28. Two things differ from the steps below:
+- Both monitors alert by email, and UptimeRobot's app was not installed ("it is
+  enough for now").
+- UptimeRobot's recovery and its keyword rule were not checked.
+
+The times, and what is still unverified, are in the owner to-do list in
+[`README.md`](README.md).
 
 Everything here is something only the owner can do: it handles a key, starts a
 workflow run, or looks at the phone. About 15 minutes of clicking, plus the

@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-09-25 · **Milestone:** M0 (foundations)
+**Last updated:** 2026-09-28 · **Milestone:** M0 (foundations)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md).
@@ -26,8 +26,8 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
 | INF-06 | App skeleton | ✅ Done — 2026-09-28 ([#34](https://github.com/bvst/TryggHverdag/pull/34)). L5 and L7 pass in CI: `android-e2e` "1 of 1 flow passed" on runs 7 and 9. The first run on `main` failed on a "System UI isn't responding" dialog on a 2-core emulator; BUG-6 in flight |
 | INF-07 | Staging on Clever Cloud | ✅ Done — 2026-09-25 ([#22](https://github.com/bvst/TryggHverdag/pull/22), fixes [#23](https://github.com/bvst/TryggHverdag/pull/23) [#24](https://github.com/bvst/TryggHverdag/pull/24), names [#25](https://github.com/bvst/TryggHverdag/pull/25)). A merge deployed and the smoke test passed; BUG-3 fixed ([#27](https://github.com/bvst/TryggHverdag/pull/27)) |
-| INF-08 | Monitoring | 🟡 In flight — [#31](https://github.com/bvst/TryggHverdag/pull/31), all four reviews PASS; [#30](https://github.com/bvst/TryggHverdag/pull/30) merged. Done when the owner's drill passes (A-26) |
-| INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). Since D-080 a dashboard: the pinned issue's description, replaced every run at 01:07 UTC (≈03:00 Oslo). The missed-run alarm is proven (2026-09-25) |
+| INF-08 | Monitoring | ✅ Done — 2026-09-28 ([#31](https://github.com/bvst/TryggHverdag/pull/31)). In the owner's drill (2026-09-26) Healthchecks.io alerted about 3 minutes after the worker's last ping, and UptimeRobot alerted too, both by email. The owner accepted it with no UptimeRobot app; UptimeRobot's recovery and its keyword rule were not checked |
+| INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). Since D-080 ([#32](https://github.com/bvst/TryggHverdag/pull/32)) a dashboard: the description of the pinned issue [#35](https://github.com/bvst/TryggHverdag/issues/35), replaced every run. It is scheduled at 01:07 UTC, but GitHub starts it about 5½ hours late, so it lands around 08:30 in Oslo. The missed-run alarm is proven (2026-09-25) |
 | INF-10 | Gate drills | ⬜ Not started. Parked 2026-09-24 for INF-07. Open question to the owner: split into offline drills now and live GitHub drills later? |
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
@@ -60,7 +60,10 @@ varying amounts, and 3 hours' grace could page for a run that happened (D-080).
 
 **A-17 is done** (2026-09-25): the owner sees the daily report on the phone,
 as the GitHub issue [#19](https://github.com/bvst/TryggHverdag/issues/19). That
-was INF-09's done-criterion, so INF-09 is done.
+was INF-09's done-criterion, so INF-09 is done. Since D-080 the report is the
+description of [#35](https://github.com/bvst/TryggHverdag/issues/35). Merging
+#32 closed #19 (see "Live gotchas"), and the next run opened #35, pinned and
+assigned to the owner.
 
 **A-16 is done, and now verified** (2026-09-24). The first run's post step saw
 `PING_CONFIGURED: true`, and its ping step logged
@@ -77,19 +80,11 @@ docs are blocked from sessions).
 **A-01, A-02, A-03 — phones, Apple, Google Play.** Not blocking today; they
 block the first real device build.
 
-**A-08 — UptimeRobot** can now watch staging: `https://trygg-hverdag-staging.cleverapps.io/v1/health` (INF-08). Its own step is now A-25.
-
-**#30 is merged** (2026-09-25, by hand, D-075): the ai-review safety filter
-lists the Healthchecks.io adapter, so #31 now adds it to
-`OWNER_APPROVAL_PATHS` too.
-
-**A-23 to A-26 — monitoring (INF-08).** Steps for the owner, written out in
-[`plan/monitoring-setup.md`](plan/monitoring-setup.md): the worker's
-Healthchecks.io check and the `HEALTHCHECKS_WORKER_URL` secret (A-23, can be
-done before #31 merges); after #31 merges,
-`infra-staging` plan and apply, then confirming the check leaves `new` (A-24);
-the UptimeRobot keyword monitor and its mobile app (A-25); and the drill,
-which is INF-08's done-criterion (A-26).
+**A-08 and A-23 to A-26 are done** (INF-08). The owner followed
+[`plan/monitoring-setup.md`](plan/monitoring-setup.md) and ran the drill on
+2026-09-26. On 2026-09-28 the owner accepted it: both monitors alert by email,
+and UptimeRobot's app was not installed ("it is enough for now"). What the
+drill showed is under INF-08 below.
 
 **Dependabot and the reviewer gate.** `CLAUDE_CODE_OAUTH_TOKEN` is now in the
 Dependabot secret store, which unblocks npm updates. **github-actions updates
@@ -194,69 +189,50 @@ The things that still bite, and cost a session hours the first time.
   while a hand mutant proved it killed. Never cite that file as current for
   code the branch did not change; plant a hand mutant to check. CI is
   unaffected — nothing caches `reports/`.
+- **Writing "close #19" in a pull request's description closes #19 when it
+  merges.** GitHub reads close, fix and resolve, in any of their forms, as a
+  closing keyword when an issue number follows, even inside advice to the
+  owner. #32 said "If you'd like a clean issue, close #19", and merging it
+  closed the daily-status issue. Put the number first ("#19 can be closed"),
+  or leave the keyword out. The same goes for commit messages, which a squash
+  merge copies into its own.
+- **`req:coverage` counts the requirement a spec names, not the task ID.**
+  INF-08's spec names REL-08, so its tests had to name REL-08 too, or RG-01
+  fails on the branch.
 
 ## In flight
 
-**INF-08 — monitoring** ([#31](https://github.com/bvst/TryggHverdag/pull/31),
-on `claude/busy-faraday-40n2zl`; #30 merged). Reviews and `gate:full` are
-done; CI's first run on #31 found the mutation gate out of time, fixed below.
+**INF-08 is done** (2026-09-28).
+[#30](https://github.com/bvst/TryggHverdag/pull/30) and
+[#31](https://github.com/bvst/TryggHverdag/pull/31) merged on 2026-09-25. The
+owner ran the drill on 2026-09-26 and accepted it on 2026-09-28. The times come
+from the three alert emails, in UTC:
 
-- **The mutation gate ran out of time, and is now grouped** (owner's choice,
-  D-066 amended). CI's log: `spawnSync pnpm ETIMEDOUT`, "Stryker did not
-  finish … make that faster before raising MUTATION_TIMEOUT_MS". Every pull
-  request mutated every safety file (197 mutants) with the whole suite per
-  mutant, and INF-08 made that suite 40 % slower. Now domain mutants run the
-  domain tests, the adapter's run its tests and the worker's, and the rest
-  the whole suite. Measured fresh at two cores: 954 s, every run passing
-  (69/69, 44/44, 82/84); it was heading for about 26 minutes. The budget
-  stays 25. D-036's nightly full run was never built; grouping keeps every
-  pull request a full run meanwhile.
-- **`OWNER_APPROVAL_PATHS` lists the adapter**, and a new test holds that
-  every safety path is one the owner approves.
+| What | When |
+|---|---|
+| The worker's last ping, L | about 14:33 (the down email: "3 minutes ago") |
+| Healthchecks.io down, alert by email | 14:36:16, about 3 minutes after L, inside REL-08's 5 |
+| UptimeRobot incident, alert by email | 14:37:04 |
+| Healthchecks.io up | 14:44:00, after 7 min 44 s down |
+| UptimeRobot up | not captured |
 
-- **Reviews: all four PASS, one round.** safety-reviewer, privacy-security-
-  reviewer, code-reviewer (advisory), test-auditor. No BLOCK. Round 1 found
-  three things, all fixed (`09beb34`, `53a74c2`, `0b434cc`, `06a9ba7`,
-  `86c094d`): a followed redirect could count as a ping or leak the URL over
-  `http:` — now refused (`redirect: 'manual'`); the drill was timed from the
-  stop rather than the last ping — fixed in `monitoring-setup.md`; and the
-  owner decided the adapter is a safety path (D-079) — CODEOWNERS and
-  `SAFETY_PATHS` cover it here, the ai-review filter line is in #30.
-- **Built:** the heartbeat task checks in with Healthchecks.io only after its
-  beat is recorded; a failed check-in is one written line, never a failed
-  task; `HEALTHCHECKS_WORKER_URL` never stops the worker; the ping URL is
-  never written and redirects are refused; the build machine never checks in
-  (BUG-3); Terraform requires and hides the URL. D-079: UptimeRobot Free on
-  staging now, Solo at go-live.
-- **Coverage and mutation:** the adapter is now measured, unlike other
-  adapters (L3-only by design; this one is L2-tested) — 100 % branches, 44 of
-  44 mutants, after the first pass scored 29.55 % (an emptied catch block
-  survived). The coverage baseline was brought current (`86c094d`, dated from
-  INF-05): 28 files added, 23 figures raised, none lowered.
-- **`gate:full`, this session: 10 passed.** `gate:integrity` could not read
-  the rulesets (no token in a session; test-auditor confirmed the required
-  checks with an anonymous read, but who can bypass them stays unverified).
-  Integration tests are not possible without Docker.
-- **A false reading, corrected.** The orchestrator first reported the
-  mutation run as "97.0 %, survivors only on untouched lines" from the local
-  incremental report; test-auditor showed that report reuses old results for
-  code the branch did not change, so `worker.ts:208`, shown as Survived, is in
-  fact killed (see "Live gotchas"). CI is unaffected. Full account:
-  [`progress/m0.md`](progress/m0.md).
-- **Verified:** `gate:quick`, `coverage:ratchet`, `infra:check` green,
-  `api:diff` reports no change, `req:coverage` shows REL-08 at 4 of 63 (was 3).
-- **Left:** #31 green on CI and merged, then the owner's steps A-23 to A-26
-  — the drill (A-26) is INF-08's done-criterion and has not happened yet.
-- **Follow-ups, not this PR:** locally, the incremental reports still reuse
-  old results for unchanged code — `scripts/mutation.mjs` should drop them
-  when a test changed (test-auditor, pre-existing; CI is unaffected); D-036's
-  nightly full run; the D-079 M2 hand-offs (already recorded in D-079);
-  AR-10's import rule is enforced by nothing (code-reviewer; already a D-077
-  follow-up); ESLint reads Stryker's `.stryker-tmp/` sandbox while a run is in
-  progress, so `gate:quick` is red locally during one.
-- **Gotcha:** `req:coverage` counts REL-08, not INF-08 — a spec that names a
-  requirement ID (this one names REL-08) needs its own tests to name that ID
-  too, or RG-01 fails on the branch.
+The owner accepted it as is: both monitors alert by email, and UptimeRobot's app
+was not installed ("it is enough for now"). Two things are unverified:
+- **UptimeRobot's recovery** was not captured.
+- **Its keyword rule.** The alert gave the root cause "Keyword Exists", while
+  A-25 asked for an alert when `"status":"ok"` does *not* exist. The alert came
+  during the stop, which is what A-25's rule does; a monitor with that rule
+  inverted would have alerted while staging was healthy. So the setting is
+  probably right and the wording is UptimeRobot's, but nobody has looked at the
+  setting. If the monitor ever shows Down while staging is healthy, the rule is
+  inverted.
+
+Open follow-ups, recorded in [`progress/m0.md`](progress/m0.md):
+- The local mutation reports reuse old results for unchanged code.
+- D-036's nightly full mutation run.
+- D-079's hand-offs to M2.
+- AR-10's import rule, which nothing enforces.
+- ESLint reading Stryker's `.stryker-tmp/` during a run.
 
 **INF-07 is done** (2026-09-25). A merge (#26) deployed staging and the smoke
 test passed ([run 36096293539](https://github.com/bvst/TryggHverdag/actions/runs/36096293539)),
@@ -287,6 +263,13 @@ D-078's move off the hour did not help, as D-078 allowed. What stops: the daily
 push — an edited description notifies nobody. What still pages: a failed run
 (Healthchecks.io gets `/1`) and a missing one (the grace period).
 
+**It has been live since 2026-09-27, as
+[#35](https://github.com/bvst/TryggHverdag/issues/35).** Merging #32 closed #19,
+and the next run opened #35 ("Created issue #35 for the daily report."), pinned
+it, and ended with a ping of `exit status 0`. The first two scheduled runs
+started at 06:29 and 06:38 UTC, 5 h 22 min and 5 h 31 min late, so the report
+lands around 08:30 in Oslo. A-27 (grace 8 hours) is still open.
+
 **The missed-run alarm is proven** (2026-09-25). #26 merged at 04:53, between the
 old slot and the new, so no run happened that day; Healthchecks.io paged the
 owner, who confirmed it. The next run (09:32, 2026-09-26) posted and pinged
@@ -305,7 +288,9 @@ retraction that had only reached the archive), #15 (HK-09, the pre-commit hook),
 #16 (the reviewer verdict must now be corroborated; `/.githooks/` owned;
 `pnpm exec`), #17 (CI-12). 2026-09-24 — #18 (INF-09), #20 (CI-12: the test that
 had kept `main` red since #17 inherited the runner's `GITHUB_EVENT_NAME`).
-2026-09-26 — [#33](https://github.com/bvst/TryggHverdag/pull/33) (BUG-5: a
+2026-09-25 — [#31](https://github.com/bvst/TryggHverdag/pull/31) (INF-08).
+2026-09-26 — [#32](https://github.com/bvst/TryggHverdag/pull/32) (D-080: the
+daily report is a dashboard) and [#33](https://github.com/bvst/TryggHverdag/pull/33) (BUG-5: a
 failed BUG-3 worker test no longer leaves its worker running; test-only,
 merged by the owner 17:16:26Z). Full account in
 [`progress/m0.md`](progress/m0.md).
