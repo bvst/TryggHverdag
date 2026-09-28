@@ -29,6 +29,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import {
+  APK,
+  INSTALL_DEADLINE_MS,
+  INSTALL_INTERVAL_MS,
   LOCALE_DEADLINE_MS,
   MAESTRO_SHA256,
   MAESTRO_VERSION,
@@ -38,6 +41,8 @@ import {
   checkLocale,
   checkMaestro,
   ensureMaestro,
+  installVerdict,
+  installWhenReady,
   judgeReport,
   maestroTestCommand,
   maestroUrl,
@@ -733,6 +738,395 @@ describe('waitForLocale: bokmål counts only once the restarted framework report
       expect(PACKAGE_MISSING.test(result.message), result.message).toBe(packageMissing);
     },
   );
+});
+
+// Added 2026-09-28. Run 8 of android-e2e (run 36324362689, job 108634139466),
+// on code identical to the green run 7, printed `The device's language is
+// nb-rNO, and its package service is up.` Then `adb install -r …` failed:
+//
+//   adb: failed to install …/app-release.apk:
+//   Exception occurred while executing 'install':
+//   java.lang.NullPointerException: Attempt to invoke virtual method 'void
+//     android.content.pm.PackageManagerInternal.freeStorage(java.lang.String,
+//     long, int)' on a null object reference
+//   	at com.android.server.StorageManagerService.allocateBytes(StorageManagerService.java:4299)
+//
+// Run 6 had failed its install with `cmd: Can't find service: package`. On
+// the Mac, on fresh CI-identical devices: the language switch makes Android
+// restart its framework, and on the first boot in bokmål installs fail for a
+// while after the device reports ready. 17 s after boot_completed one failed,
+// and 80 s later one succeeded; a reboot after the switch did not help. Past
+// that first bokmål boot, installs straight after boot worked 6 of 6, and with
+// no language switch at all the install after the first boot worked. The
+// emulator refuses `-prop persist.sys.locale=…` ("only 'qemu.*' properties are
+// supported"), so the switch cannot be avoided that way.
+//
+// So the install waits, up to a deadline, while it fails with one of those two
+// signatures, and for nothing else. It waits for the device: a failed flow is
+// still never retried, which the test of the flows further down holds.
+//
+// `install` answers what `adb install -r` printed, stdout and stderr together,
+// or null when adb could not be run, as waitForLocale's `read` does.
+
+/** What `adb install -r` prints when it worked. */
+const INSTALLED = 'Performing Streamed Install\nSuccess\n';
+
+/** Run 6's install failure, with the runner's path to the APK shortened. */
+const PACKAGE_SERVICE_GONE = `adb: failed to install ${APK}: cmd: Can't find service: package\n`;
+
+/** Run 8's install failure, as its job log shows it, the path shortened. */
+const PACKAGE_MANAGER_NPE = [
+  `adb: failed to install ${APK}: `,
+  "Exception occurred while executing 'install':",
+  "java.lang.NullPointerException: Attempt to invoke virtual method 'void android.content.pm.PackageManagerInternal.freeStorage(java.lang.String, long, int)' on a null object reference",
+  '\tat com.android.server.StorageManagerService.allocateBytes(StorageManagerService.java:4299)',
+  '',
+].join('\n');
+
+/** What adb prints when the install worked: a Success line. */
+const INSTALL_OK = [
+  { what: 'a streamed install', output: INSTALLED },
+  {
+    what: 'an install that pushed the APK first',
+    output: `${APK}: 1 file pushed, 0 skipped. 88.1 MB/s (41943040 bytes in 0.454s)\n\tpkg: /data/local/tmp/app-release.apk\nSuccess\n`,
+  },
+];
+
+/**
+ * The two signatures seen while the package manager was not ready, and only
+ * those. The third is run 8's exception on another of PackageManagerInternal's
+ * methods: what counts is a NullPointerException there, not which call it hit.
+ */
+const INSTALL_NOT_READY = [
+  { what: "run 6: Can't find service: package", output: PACKAGE_SERVICE_GONE },
+  { what: 'run 8: NPE in PackageManagerInternal', output: PACKAGE_MANAGER_NPE },
+  {
+    what: 'another NPE in PackageManagerInternal',
+    output: PACKAGE_MANAGER_NPE.replace(
+      'freeStorage(java.lang.String, long, int)',
+      'getPackage(java.lang.String)',
+    ),
+  },
+];
+
+/**
+ * Everything else adb can say, each of which fails the install at once, and
+ * what the failure must then show of it. All synthetic. INSUFFICIENT_STORAGE is
+ * a real lack of space, not run 8's freeStorage; the last four are near misses
+ * of the two signatures and of a Success line.
+ */
+const INSTALL_FAILED = [
+  {
+    what: 'INSTALL_FAILED_INVALID_APK',
+    output: `Performing Streamed Install\nadb: failed to install ${APK}: Failure [INSTALL_FAILED_INVALID_APK: Failed to parse the package]\n`,
+    shows: 'INSTALL_FAILED_INVALID_APK',
+  },
+  {
+    what: 'INSTALL_FAILED_INSUFFICIENT_STORAGE',
+    output: `Performing Streamed Install\nadb: failed to install ${APK}: Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]\n`,
+    shows: 'INSTALL_FAILED_INSUFFICIENT_STORAGE',
+  },
+  {
+    what: 'INSTALL_FAILED_UPDATE_INCOMPATIBLE',
+    output: `Performing Streamed Install\nadb: failed to install ${APK}: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Package no.example.app signatures do not match previously installed version; ignoring!]\n`,
+    shows: 'INSTALL_FAILED_UPDATE_INCOMPATIBLE',
+  },
+  {
+    what: 'a missing APK',
+    output: `adb: failed to stat ${APK}: No such file or directory\n`,
+    shows: 'No such file or directory',
+  },
+  { what: 'an empty output', output: '', shows: '' },
+  { what: 'no adb at all', output: null, shows: '' },
+  {
+    what: "Can't find service: activity",
+    output: `adb: failed to install ${APK}: cmd: Can't find service: activity\n`,
+    shows: "Can't find service: activity",
+  },
+  {
+    what: 'an NPE elsewhere',
+    output: PACKAGE_MANAGER_NPE.replace(
+      'void android.content.pm.PackageManagerInternal.freeStorage(java.lang.String, long, int)',
+      'int android.content.pm.ApplicationInfo.getTargetSdkVersion()',
+    ),
+    shows: 'ApplicationInfo',
+  },
+  {
+    what: 'PackageManagerInternal, but no NPE',
+    output: `adb: failed to install ${APK}: \njava.lang.SecurityException: Permission Denial: PackageManagerInternal.freeStorage from pid=4242, uid=2000\n`,
+    shows: 'SecurityException',
+  },
+  {
+    what: 'Success only inside a failure line',
+    output: `adb: failed to install /tmp/Success/app-release.apk: Failure [INSTALL_FAILED_INVALID_APK]\n`,
+    shows: 'INSTALL_FAILED_INVALID_APK',
+  },
+];
+
+/**
+ * An `adb install -r` that prints `answer(now, installsSoFar)`; notes when each
+ * install was tried, and what it printed.
+ */
+function installer(time, answer) {
+  const calls = [];
+  return {
+    calls,
+    install: () => {
+      if (calls.length >= MAX_READS) {
+        throw new Error(
+          `installed ${String(MAX_READS)} times: the wait is not following the now and sleep it was given`,
+        );
+      }
+      const output = answer(time.now(), calls.length);
+      calls.push({ at: time.now(), output });
+      return output;
+    },
+  };
+}
+
+/** A message that says the install was tried `n` times: "7 attempts", "tried 7 times". */
+function saysAttempts(n) {
+  return new RegExp(
+    `(?<![\\d.])${String(n)} ?(?:install(?:ation)? )?(?:attempts?|tries|times)\\b|\\b(?:attempts?|tries)\\b:? ?${String(n)}(?![\\d.])`,
+    'i',
+  );
+}
+
+/** The last not-ready output before the deadline, after a different one, and a line only it has. */
+const LAST_INSTALL = [
+  {
+    what: 'first as run 8, last as run 6',
+    outputs: [PACKAGE_MANAGER_NPE, PACKAGE_SERVICE_GONE],
+    only: "Can't find service: package",
+  },
+  {
+    what: 'first as run 6, last as run 8',
+    outputs: [PACKAGE_SERVICE_GONE, PACKAGE_MANAGER_NPE],
+    only: 'PackageManagerInternal.freeStorage',
+  },
+];
+
+/** A deadline of zero still installs once, and that one answer decides. */
+const INSTALL_AT_ONCE = [
+  { what: 'Success', output: INSTALLED, ok: true },
+  { what: "run 8's not-ready", output: PACKAGE_MANAGER_NPE, ok: false },
+];
+
+describe('installVerdict: what `adb install -r` printed', () => {
+  test.each(INSTALL_OK)('INF-06-AC9: $what is ok', ({ output }) => {
+    expect(installVerdict(output)).toBe('ok');
+  });
+
+  test.each(INSTALL_NOT_READY)(
+    'INF-06-AC9: $what is not-ready, a device still starting',
+    ({ output }) => {
+      expect(installVerdict(output)).toBe('not-ready');
+    },
+  );
+
+  test.each(INSTALL_FAILED)('INF-06-AC9: $what is failed, never not-ready', ({ output }) => {
+    expect(installVerdict(output)).toBe('failed');
+  });
+});
+
+describe('installWhenReady: the package manager accepts installs a while after the device reports ready', () => {
+  test('INF-06-AC9: installs at once, and on Success passes without waiting or installing again', async () => {
+    const time = fakeTime();
+    const adb = installer(time, () => INSTALLED);
+
+    const result = await installWhenReady(adb.install, {
+      deadline: 30_000,
+      interval: 5_000,
+      now: time.now,
+      sleep: time.sleep,
+    });
+
+    expect(result.ok, result.message).toBe(true);
+    expect(adb.calls.map((c) => c.at)).toEqual([0]);
+    expect(time.now()).toBe(0);
+  });
+
+  test('INF-06-AC9: not ready as in run 8, then as in run 6, then Success: it tries again one interval after each, passes, and installs no more', async () => {
+    const time = fakeTime();
+    const adb = installer(time, inTurn([PACKAGE_MANAGER_NPE, PACKAGE_SERVICE_GONE, INSTALLED]));
+
+    const result = await installWhenReady(adb.install, {
+      deadline: 30_000,
+      interval: 5_000,
+      now: time.now,
+      sleep: time.sleep,
+    });
+
+    expect(result.ok, result.message).toBe(true);
+    expect(adb.calls.map((c) => c.at)).toEqual([0, 5_000, 10_000]);
+  });
+
+  test.each(INSTALL_NOT_READY)(
+    'INF-06-AC9: after $what, it tries again one interval later',
+    async ({ output }) => {
+      const time = fakeTime();
+      const adb = installer(time, inTurn([output, INSTALLED]));
+
+      const result = await installWhenReady(adb.install, {
+        deadline: 30_000,
+        interval: 5_000,
+        now: time.now,
+        sleep: time.sleep,
+      });
+
+      expect(result.ok, result.message).toBe(true);
+      expect(adb.calls.map((c) => c.at)).toEqual([0, 5_000]);
+    },
+  );
+
+  test.each(INSTALL_FAILED)(
+    'INF-06-AC9: $what stops the install at once, with what adb printed',
+    async ({ output, shows }) => {
+      // Were it tried again, the second install would pass.
+      const time = fakeTime();
+      const adb = installer(time, inTurn([output, INSTALLED]));
+
+      const result = await installWhenReady(adb.install, {
+        deadline: 30_000,
+        interval: 5_000,
+        now: time.now,
+        sleep: time.sleep,
+      });
+
+      expect(result.ok, result.message).toBe(false);
+      expect(adb.calls.length, result.message).toBe(1);
+      expect(time.now()).toBe(0);
+      expect(result.message).toMatch(/\binstall/i);
+      if (shows !== '') expect(result.message).toContain(shows);
+    },
+  );
+
+  test('INF-06-AC9: a failure after a not-ready install stops there too, with what adb printed', async () => {
+    const time = fakeTime();
+    const storageFull = INSTALL_FAILED.find((c) => c.what.endsWith('INSUFFICIENT_STORAGE'));
+    const adb = installer(time, inTurn([PACKAGE_MANAGER_NPE, storageFull?.output, INSTALLED]));
+
+    const result = await installWhenReady(adb.install, {
+      deadline: 30_000,
+      interval: 5_000,
+      now: time.now,
+      sleep: time.sleep,
+    });
+
+    expect(result.ok, result.message).toBe(false);
+    expect(adb.calls.map((c) => c.at)).toEqual([0, 5_000]);
+    expect(result.message).toContain('INSTALL_FAILED_INSUFFICIENT_STORAGE');
+  });
+
+  test.each(LAST_INSTALL)(
+    'INF-06-AC9: not ready until the deadline, $what, it fails there, naming the attempts, how long it waited, and the last output',
+    async ({ outputs, only }) => {
+      const time = fakeTime();
+      const adb = installer(time, inTurn(outputs));
+
+      const result = await installWhenReady(adb.install, {
+        deadline: 30_000,
+        interval: 5_000,
+        now: time.now,
+        sleep: time.sleep,
+      });
+
+      expect(result.ok).toBe(false);
+      // It kept trying up to the deadline, and not an interval past it.
+      expect(adb.calls.length).toBeGreaterThan(outputs.length);
+      expect(adb.calls.at(-1)?.at).toBeGreaterThanOrEqual(30_000 - 5_000);
+      expect(time.now()).toBeLessThanOrEqual(30_000 + 5_000);
+      expect(result.message).toMatch(/\bwait/i);
+      expect(result.message).toMatch(saysHowLong(30_000));
+      expect(result.message).toMatch(saysAttempts(adb.calls.length));
+      // The last output, which the first one did not have.
+      expect(result.message).toContain(only);
+    },
+  );
+
+  test.each(INSTALL_AT_ONCE)(
+    'INF-06-AC9: with a deadline of zero it still installs once, and $what decides it',
+    async ({ output, ok }) => {
+      const time = fakeTime();
+      const adb = installer(time, () => output);
+
+      const result = await installWhenReady(adb.install, {
+        deadline: 0,
+        interval: 5_000,
+        now: time.now,
+        sleep: time.sleep,
+      });
+
+      expect(adb.calls.length).toBe(1);
+      expect(result.ok, result.message).toBe(ok);
+    },
+  );
+
+  test('INF-06-AC9: for any deadline and interval, it installs at least once, never faster than the interval, passes only on Success and stops there, and otherwise tries until the deadline', async () => {
+    // A sweep in place of fast-check, which the repository root does not have.
+    for (const deadline of [0, 5_000, 12_500, 30_000]) {
+      for (const interval of [1, 1_000, 5_000, 7_000]) {
+        const surelySeen = Math.max(0, deadline - interval);
+        for (const from of [0, 5_000, surelySeen, deadline + 1, Infinity]) {
+          const time = fakeTime();
+          const adb = installer(time, (at) => (at >= from ? INSTALLED : PACKAGE_MANAGER_NPE));
+
+          const result = await installWhenReady(adb.install, {
+            deadline,
+            interval,
+            now: time.now,
+            sleep: time.sleep,
+          });
+          const at = adb.calls.map((c) => c.at);
+          const installed = adb.calls.filter((c) => c.output === INSTALLED).length;
+          const where = `deadline ${String(deadline)}, interval ${String(interval)}, ready from ${String(from)}; installed at ${at.slice(0, 6).join(', ')}${at.length > 6 ? ' …' : ''}`;
+
+          expect(at.length, where).toBeGreaterThanOrEqual(1);
+          expect(at.length, where).toBeLessThanOrEqual(Math.floor(deadline / interval) + 2);
+          at.slice(1).forEach((t, i) =>
+            expect(t - (at[i] ?? Infinity), where).toBeGreaterThanOrEqual(interval),
+          );
+          expect(at.at(-1), where).toBeLessThanOrEqual(deadline + interval);
+          // Passing means the last install, and only that one, printed Success.
+          expect(installed, where).toBe(result.ok ? 1 : 0);
+          expect(adb.calls.at(-1)?.output === INSTALLED, where).toBe(result.ok);
+          if (!result.ok) expect(at.at(-1), where).toBeGreaterThanOrEqual(deadline - interval);
+          if (from <= surelySeen) expect(result.ok, where).toBe(true);
+          if (from === Infinity) expect(result.ok, where).toBe(false);
+        }
+      }
+    }
+  });
+
+  test('INF-06-AC9: the production deadline is at least 60 s and the interval a few seconds, and they are what the wait uses when it is given none', async () => {
+    // The Mac's first bokmål boot accepted an install only some 80 s after an
+    // attempt at 17 s had failed, and CI's runner is slower. An interval under
+    // a second streams the APK over and over; one over ten seconds leaves a
+    // ready device idle.
+    expect(INSTALL_DEADLINE_MS).toBeGreaterThanOrEqual(60_000);
+    expect(INSTALL_INTERVAL_MS).toBeGreaterThanOrEqual(1_000);
+    expect(INSTALL_INTERVAL_MS).toBeLessThanOrEqual(10_000);
+
+    const time = fakeTime();
+    const adb = installer(time, () => PACKAGE_MANAGER_NPE);
+    const result = await installWhenReady(adb.install, { now: time.now, sleep: time.sleep });
+
+    expect(result.ok).toBe(false);
+    expect((adb.calls[1]?.at ?? 0) - (adb.calls[0]?.at ?? 0)).toBe(INSTALL_INTERVAL_MS);
+    expect(adb.calls.at(-1)?.at).toBeGreaterThanOrEqual(INSTALL_DEADLINE_MS - INSTALL_INTERVAL_MS);
+    expect(result.message).toMatch(saysHowLong(INSTALL_DEADLINE_MS));
+  });
+
+  test("INF-06-AC9: with the production settings, a device that first accepts the install 80 s in, as the Mac's first bokmål boot did, passes", async () => {
+    const time = fakeTime();
+    const adb = installer(time, (at) => (at >= 80_000 ? INSTALLED : PACKAGE_MANAGER_NPE));
+
+    const result = await installWhenReady(adb.install, { now: time.now, sleep: time.sleep });
+
+    expect(result.ok, result.message).toBe(true);
+    expect(adb.calls.at(-1)?.at).toBeGreaterThanOrEqual(80_000);
+    expect(adb.calls.at(-1)?.at).toBeLessThanOrEqual(80_000 + INSTALL_INTERVAL_MS);
+  });
 });
 
 /** A Maestro JUnit report holding these <testcase> elements. */

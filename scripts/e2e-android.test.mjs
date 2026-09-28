@@ -347,20 +347,78 @@ function timelineAnswers({ readTimes }) {
   ];
 }
 
-/** `adb install` on the timeline's device: run 6's failure while the package service is gone. */
+/**
+ * `adb install` on the timeline's device: run 6's failure while the package
+ * service is gone, and what adb prints on success otherwise.
+ *
+ * Amended 2026-09-28: it printed nothing on success, which no adb does, and
+ * the install is now judged by adb's Success line.
+ */
 const timelineInstall = [
   '  install)',
   '    if [ "$pkg" != found ]; then',
   `      echo "adb: failed to install ${APK}: cmd: Can't find service: package" >&2`,
   '      exit 1',
-  '    fi ;;',
+  '    fi',
+  "    printf 'Performing Streamed Install\\nSuccess\\n' ;;",
 ];
+
+/**
+ * `adb install` on any other device: the n-th install answers the n-th of the
+ * answers `installs` wrote to `installDir`, and the last from then on. Each
+ * install is counted, and its time, in milliseconds, written to
+ * `installDir`/times.
+ */
+function installAnswers({ installs, installDir }) {
+  return [
+    '  install)',
+    `    k=$(/bin/cat "${installDir}/count" 2>/dev/null || echo 0)`,
+    '    k=$((k + 1))',
+    `    echo "$k" > "${installDir}/count"`,
+    `    "${process.execPath}" -e 'console.log(Date.now())' >> "${installDir}/times"`,
+    `    i=$k; if [ "$i" -gt ${String(installs.length)} ]; then i=${String(installs.length)}; fi`,
+    `    /bin/cat "${installDir}/$i.out"`,
+    `    /bin/cat "${installDir}/$i.err" >&2`,
+    `    exit "$(/bin/cat "${installDir}/$i.exit")" ;;`,
+  ];
+}
+
+/** What adb prints when the install worked. */
+const INSTALL_SUCCESS = { stdout: 'Performing Streamed Install\nSuccess\n', stderr: '', exit: 0 };
+
+/** Run 6's install failure, with the runner's path to the APK shortened. */
+const RUN_6_INSTALL = {
+  stdout: '',
+  stderr: `adb: failed to install ${APK}: cmd: Can't find service: package\n`,
+  exit: 1,
+};
+
+/** Run 8's install failure, as its job log shows it, the path shortened. */
+const RUN_8_INSTALL = {
+  stdout: '',
+  stderr: [
+    `adb: failed to install ${APK}: `,
+    "Exception occurred while executing 'install':",
+    "java.lang.NullPointerException: Attempt to invoke virtual method 'void android.content.pm.PackageManagerInternal.freeStorage(java.lang.String, long, int)' on a null object reference",
+    '\tat com.android.server.StorageManagerService.allocateBytes(StorageManagerService.java:4299)',
+    '',
+  ].join('\n'),
+  exit: 1,
+};
+
+/** An install that can never work, whatever the wait. Synthetic. */
+const INVALID_APK = {
+  stdout: 'Performing Streamed Install\n',
+  stderr: `adb: failed to install ${APK}: Failure [INSTALL_FAILED_INVALID_APK: Failed to parse the package]\n`,
+  exit: 1,
+};
 
 /**
  * The stand-in adb: emulators by serial, a device set to `locale` (bokmål
  * unless a test says otherwise) or one that applies bokmål only after
  * `appliedAfter` readings, or one that goes through `timeline`'s phases, and a
- * crash buffer when there is one.
+ * crash buffer when there is one. Amended 2026-09-28: `adb install` answers
+ * `installs` in turn, and on the timeline's device, `timelineInstall`.
  */
 function deviceAdbBody({
   log,
@@ -372,6 +430,8 @@ function deviceAdbBody({
   readTimes,
   timeline,
   phaseLog,
+  installs,
+  installDir,
 }) {
   return [
     '#!/bin/sh',
@@ -389,7 +449,7 @@ function deviceAdbBody({
       : timelineAnswers({ readTimes })),
     '      *boot_completed*) echo 1 ;;',
     '    esac ;;',
-    ...(timeline === undefined ? [] : timelineInstall),
+    ...(timeline === undefined ? installAnswers({ installs, installDir }) : timelineInstall),
     '  logcat)',
     "    pattern=''",
     "    prev=''",
@@ -432,6 +492,7 @@ function writeTool(file, body) {
  *     configLocale: string,
  *     packageService: string,
  *   }[],
+ *   installs?: { stdout: string, stderr: string, exit: number }[],
  *   env?: Record<string, string>,
  *   timeout?: number,
  * }} options — `flows` is what Maestro's report says ran; `crash` puts a
@@ -439,8 +500,9 @@ function writeTool(file, body) {
  *   `locale` is the language the device reports, unless `localeAppliedAfter`
  *   makes it a device that applies bokmål only after that many readings
  *   (localeAnswers), or `timeline` one whose framework restarts to apply it
- *   (timelinePhase); `env` is added to the script's environment; `timeout` is
- *   when the run is killed
+ *   (timelinePhase); `installs` is what `adb install` answers, in turn, the
+ *   last one from then on (installAnswers); `env` is added to the script's
+ *   environment; `timeout` is when the run is killed
  */
 async function runPastPreflight({
   args = ['--skip-build'],
@@ -452,6 +514,7 @@ async function runPastPreflight({
   locale = 'nb-NO',
   localeAppliedAfter,
   timeline,
+  installs = [INSTALL_SUCCESS],
   env = {},
   timeout = 60_000,
 } = {}) {
@@ -468,6 +531,14 @@ async function runPastPreflight({
     const readCount = path.join(dir, 'locale-reads');
     const readTimes = path.join(dir, 'locale-read-times');
     const phaseLog = path.join(dir, 'phases.log');
+    const installDir = path.join(dir, 'installs');
+
+    mkdirSync(installDir, { recursive: true });
+    installs.forEach(({ stdout, stderr, exit }, i) => {
+      writeFileSync(path.join(installDir, `${String(i + 1)}.out`), stdout);
+      writeFileSync(path.join(installDir, `${String(i + 1)}.err`), stderr);
+      writeFileSync(path.join(installDir, `${String(i + 1)}.exit`), String(exit));
+    });
 
     for (const file of [
       'package.json',
@@ -516,6 +587,8 @@ async function runPastPreflight({
           readTimes,
           timeline,
           phaseLog,
+          installs,
+          installDir,
         }),
       );
     }
@@ -564,6 +637,8 @@ async function runPastPreflight({
         const [phase = '', ...call] = line.split(' ');
         return { phase, call: call.join(' ') };
       }),
+      // Without one: when each `adb install` began, in milliseconds.
+      installTimes: lines(path.join(installDir, 'times')).map(Number),
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -724,6 +799,44 @@ const PACKAGE_MISSING =
 
 /** The calls, in the timeline's log, that installed onto the device. */
 const isInstall = ({ call }) => /^adb\b.*\binstall\b/.test(call);
+
+// Added 2026-09-28. Run 8 of android-e2e (run 36324362689, job 108634139466),
+// on code identical to the green run 7, printed `The device's language is
+// nb-rNO, and its package service is up.` Then `adb install -r …` failed with
+// run 8's NullPointerException in PackageManagerInternal.freeStorage, as
+// RUN_8_INSTALL has it; run 6's had failed with `cmd: Can't find service:
+// package`. On the Mac, on fresh CI-identical devices, the first boot in
+// bokmål refused installs for a while after the device reported ready: 17 s
+// after boot_completed one failed, and 80 s later one succeeded. A reboot after
+// the switch did not help; later boots installed straight away, 6 of 6; with
+// no language switch the install after the first boot worked; and the emulator
+// refuses `-prop persist.sys.locale=…` ("only 'qemu.*' properties are
+// supported"). So the script waits, up to a deadline, while the install fails
+// with one of those two, and for nothing else. The flows still run once.
+
+/** The calls, in the stand-ins' log, that installed onto the device. */
+const isInstallCall = (call) => /^adb\b.*\binstall\b/.test(call);
+
+/**
+ * The wait for the install, shortened for these tests as the wait for bokmål
+ * is: a one-second deadline, tried every 250 ms. Only tests set these
+ * variables. The production deadline is at least 60 s (lib/e2e-android.test.mjs),
+ * and a test below holds that no workflow or package script sets them.
+ */
+const SHORT_INSTALL_DEADLINE = 1_000;
+const SHORT_INSTALL_INTERVAL = 250;
+const SHORT_INSTALL_WAIT = {
+  E2E_ANDROID_INSTALL_DEADLINE_MS: String(SHORT_INSTALL_DEADLINE),
+  E2E_ANDROID_INSTALL_INTERVAL_MS: String(SHORT_INSTALL_INTERVAL),
+};
+
+/** A message that says the install was tried `n` times: "7 attempts", "tried 7 times". */
+function saysAttempts(n) {
+  return new RegExp(
+    `(?<![\\d.])${String(n)} ?(?:install(?:ation)? )?(?:attempts?|tries|times)\\b|\\b(?:attempts?|tries)\\b:? ?${String(n)}(?![\\d.])`,
+    'i',
+  );
+}
 
 describe('past the preflight', () => {
   test('INF-06-AC9: when every flow passed and Maestro exited 0, it passes and says how many flows ran', async () => {
@@ -931,7 +1044,8 @@ describe('past the preflight', () => {
     expect(output).not.toMatch(/flows? passed/);
   });
 
-  test('INF-06-AC9: only the tests shorten the wait for bokmål: no workflow and no package script sets its variables', () => {
+  test('INF-06-AC9: only the tests shorten the waits for bokmål and for the install: no workflow and no package script sets their variables', () => {
+    // Amended 2026-09-28: the install's wait has variables of its own.
     const workflows = readdirSync(path.join(REPO, '.github', 'workflows'))
       .filter((name) => /\.ya?ml$/.test(name))
       .map((name) => readFileSync(path.join(REPO, '.github', 'workflows', name), 'utf8'));
@@ -944,7 +1058,88 @@ describe('past the preflight', () => {
     expect(packages.join('\n')).toMatch(/\be2e:android\b/);
     for (const text of [...workflows, ...packages]) {
       expect(text).not.toMatch(/\bE2E_ANDROID_LOCALE_/);
+      expect(text).not.toMatch(/\bE2E_ANDROID_INSTALL_/);
     }
+  });
+
+  test('INF-06-AC9: when the install fails as in run 8 and then as in run 6 before it works, it waits for the package manager, shows each attempt, and then runs the flows, once', async () => {
+    const { code, output, calls, installTimes } = await runPastPreflight({
+      installs: [RUN_8_INSTALL, RUN_6_INSTALL, INSTALL_SUCCESS],
+      env: SHORT_INSTALL_WAIT,
+    });
+
+    expect(calls.filter(isInstallCall).length, output).toBe(3);
+    // Each not-ready attempt is in the log, where CI shows it.
+    expect(output).toContain('PackageManagerInternal');
+    expect(output).toContain("Can't find service: package");
+    // Tried again a whole interval later, not straight away. Each install is
+    // stamped as it starts, and the next starts only after this one ended and
+    // the interval passed; 2 ms is for the clock's rounding.
+    const gaps = installTimes.slice(1).map((t, i) => t - (installTimes[i] ?? Infinity));
+    expect(gaps.length, output).toBe(2);
+    for (const gap of gaps) {
+      expect(gap, `gaps between installs: ${gaps.join(', ')} ms`).toBeGreaterThanOrEqual(
+        SHORT_INSTALL_INTERVAL - 2,
+      );
+    }
+    // A wait for the device, not a retry of a flow: the flows ran once, after the install worked.
+    expect(calls.filter(isFlowRun).length, output).toBe(1);
+    expect(calls.findIndex(isFlowRun), output).toBeGreaterThan(calls.findLastIndex(isInstallCall));
+    expect(code, output).toBe(0);
+    expect(output).toMatch(/\b1 of 1 flows? passed/);
+  });
+
+  test('INF-06-AC9: when the install is still not ready at the deadline, it stops, says how long it waited, how many attempts and what adb said last, and runs no flow', async () => {
+    const { code, stderr, output, calls, installTimes } = await runPastPreflight({
+      installs: [RUN_6_INSTALL, RUN_8_INSTALL],
+      env: SHORT_INSTALL_WAIT,
+    });
+    const installs = calls.filter(isInstallCall);
+
+    // It waited: it tried more than the two answers, and kept trying until the deadline.
+    expect(installs.length, output).toBeGreaterThan(2);
+    expect((installTimes.at(-1) ?? 0) - (installTimes[0] ?? 0), output).toBeGreaterThanOrEqual(
+      SHORT_INSTALL_DEADLINE - 3 * SHORT_INSTALL_INTERVAL,
+    );
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    expect(stderr, output).toMatch(/\bwait/i);
+    expect(stderr, output).toMatch(saysHowLong(SHORT_INSTALL_DEADLINE));
+    expect(stderr, output).toMatch(saysAttempts(installs.length));
+    // What adb said last: run 8's exception, which the first answer did not have.
+    expect(stderr, output).toContain('PackageManagerInternal');
+    expect(output).not.toMatch(/flows? passed/);
+    expect(calls.filter(isFlowRun)).toEqual([]);
+  });
+
+  test('INF-06-AC9: when the install fails with INSTALL_FAILED_INVALID_APK, it stops at once with what adb said: one install, and no flow', async () => {
+    // The production deadline and interval, and a second install that would
+    // work: an install tried again would be seen, and the flows would run.
+    const { code, stderr, output, calls } = await runPastPreflight({
+      installs: [INVALID_APK, INSTALL_SUCCESS],
+    });
+
+    expect(calls.filter(isInstallCall).length, output).toBe(1);
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    expect(stderr, output).toContain('INSTALL_FAILED_INVALID_APK');
+    expect(output).not.toMatch(/flows? passed/);
+    expect(calls.filter(isFlowRun)).toEqual([]);
+  });
+
+  test("INF-06-AC9: without the tests' shorter install deadline, it is still waiting for the package manager after 6 s, not failing at once", async () => {
+    // The production deadline, at least 60 s, is what the script uses when no
+    // test shortens it. Killed at 6 s, it must still be waiting.
+    const { code, signal, output, calls } = await runPastPreflight({
+      installs: [RUN_8_INSTALL],
+      timeout: 6_000,
+    });
+
+    // Not vacuous: it got as far as installing.
+    expect(calls.filter(isInstallCall).length, output).toBeGreaterThan(0);
+    expect(code, `it finished within 6 s, with exit code ${String(code)}:\n${output}`).toBeNull();
+    expect(signal).toBe('SIGTERM');
+    expect(calls.filter(isFlowRun)).toEqual([]);
   });
 
   test('INF-06-AC20: every Maestro run has MAESTRO_DISABLE_UPDATE_CHECK=true and MAESTRO_CLI_NO_ANALYTICS, though the caller set neither', async () => {
