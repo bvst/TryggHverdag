@@ -11,6 +11,7 @@
  * Usage: pnpm run gate:quick · pnpm run gate:full
  */
 import process from 'node:process';
+import { checkDevices } from './lib/e2e-android.mjs';
 import { packageScripts, run } from './lib/proc.mjs';
 import { planSteps, runPlan, summarize } from './lib/steps.mjs';
 
@@ -56,6 +57,17 @@ export const FULL_STEPS = [
     name: 'system tests (the alert path end to end)',
     command: pnpmRun('test:system'),
     needsScript: 'test:system',
+  },
+  {
+    // A full native build and an emulator run, so only where a device is
+    // connected. Everywhere else it is reported as not possible here, with
+    // where it does run, rather than left out of the list.
+    name: 'Android end-to-end flows (L7)',
+    command: pnpmRun('e2e:android'),
+    needsScript: 'e2e:android',
+    needsTool: 'android',
+    toolReason:
+      'no Android device or emulator is connected; the android-e2e check runs it on every pull request that can change the app (CI-09)',
   },
   {
     name: 'requirement coverage (RG-01)',
@@ -106,10 +118,18 @@ export const FULL_STEPS = [
  * question here would let the gate try, fail deep inside Testcontainers, and
  * report it as broken code.
  *
- * @param {(command: string, args: string[], options?: object) => { ok: boolean }} runCommand
+ * The same goes for an Android device: `adb devices` has to list one that is
+ * ready, not merely answer. An emulator still booting or a phone that has not
+ * accepted debugging would fail L7 deep inside the install step.
+ *
+ * @param {(command: string, args: string[], options?: object) => { ok: boolean, output: string }} runCommand
  */
 export function availableTools(runCommand = run, cwd = process.cwd()) {
-  return { docker: runCommand('docker', ['info'], { cwd, timeout: 15_000 }).ok };
+  const adb = runCommand('adb', ['devices'], { cwd, timeout: 15_000 });
+  return {
+    docker: runCommand('docker', ['info'], { cwd, timeout: 15_000 }).ok,
+    android: checkDevices(adb.ok ? adb.output : null).ok,
+  };
 }
 
 function main() {

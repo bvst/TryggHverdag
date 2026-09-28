@@ -1,5 +1,5 @@
 import { defineConfig } from 'vitest/config';
-import { TEST_FILES } from './vitest.shared.mjs';
+import { JEST_EXPO_FILES, TEST_FILES } from './vitest.shared.mjs';
 
 export default defineConfig({
   test: {
@@ -9,7 +9,12 @@ export default defineConfig({
     // that must stay fast and work on any machine. Without this they would be
     // swept up by the patterns above and a laptop with no Docker would see a
     // confusing failure rather than a passing unit suite.
-    exclude: ['**/node_modules/**', '**/*.integration.test.ts', '**/*.system.test.ts'],
+    exclude: [
+      '**/node_modules/**',
+      JEST_EXPO_FILES,
+      '**/*.integration.test.ts',
+      '**/*.system.test.ts',
+    ],
     environment: 'node',
     testTimeout: 60_000,
     // No coverage settings here on purpose. Coverage is measured by

@@ -1,8 +1,21 @@
 // req-coverage: fixtures-only — the IDs below are sample data for testing the gates.
 // RG-04. The two questions are tested apart: has this change made things worse,
 // and is safety code tested well enough to trust.
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { floorBreaches, linesAcross, ratchetDrops, summarize } from './coverage.mjs';
+import vitestCoverageConfig from '../../vitest.coverage.config.mjs';
+import {
+  COVERAGE_SUMMARIES,
+  floorBreaches,
+  linesAcross,
+  mergeSummaries,
+  ratchetDrops,
+  summarize,
+} from './coverage.mjs';
+import { matchesAnyGlob } from './glob.mjs';
 
 const SUMMARY = {
   total: { lines: { pct: 50 } },
@@ -118,5 +131,182 @@ describe('linesAcross', () => {
 
   test('is null when nothing matches', () => {
     expect(linesAcross({}, () => true)).toBeNull();
+  });
+});
+
+// INF-06-AC8: two runners, one ratchet. Vitest measures the server, the
+// packages and the scripts; jest-expo measures the app. Each file is measured
+// by exactly one of them, and a summary that is not there is not "nothing to
+// measure" — it is a run that did not happen.
+const VITEST_SUMMARY = {
+  total: { lines: { pct: 90 } },
+  '/repo/apps/server/src/api.ts': {
+    lines: { pct: 100, covered: 11, total: 11 },
+    branches: { pct: 100 },
+  },
+  '/repo/scripts/gate.mjs': { lines: { pct: 25, covered: 5, total: 20 }, branches: { pct: 25 } },
+};
+const JEST_SUMMARY = {
+  total: { lines: { pct: 95 } },
+  '/repo/apps/mobile/src/shared/translations/language.ts': {
+    lines: { pct: 100, covered: 8, total: 8 },
+    branches: { pct: 100 },
+  },
+};
+const VITEST_FILE = 'coverage/coverage-summary.json';
+const JEST_FILE = 'apps/mobile/coverage/coverage-summary.json';
+
+describe('the two coverage summaries', () => {
+  test("INF-06-AC8: the ratchet reads Vitest's summary and the app's jest-expo summary", () => {
+    expect(COVERAGE_SUMMARIES.map((summary) => summary.file).sort()).toEqual(
+      [JEST_FILE, VITEST_FILE].sort(),
+    );
+  });
+
+  test('INF-06-AC8: they merge into one set of files, relative to the repository', () => {
+    const result = mergeSummaries(
+      [
+        { runner: 'vitest', file: VITEST_FILE, summary: VITEST_SUMMARY },
+        { runner: 'jest-expo', file: JEST_FILE, summary: JEST_SUMMARY },
+      ],
+      '/repo',
+    );
+
+    expect(result.ok).toBe(true);
+    expect(Object.keys(result.files).sort()).toEqual([
+      'apps/mobile/src/shared/translations/language.ts',
+      'apps/server/src/api.ts',
+      'scripts/gate.mjs',
+    ]);
+    expect(result.files['apps/mobile/src/shared/translations/language.ts']).toMatchObject({
+      lines: 100,
+      coveredLines: 8,
+      totalLines: 8,
+    });
+  });
+
+  test('INF-06-AC8: a missing summary is refused, naming the file, rather than measured as nothing', () => {
+    const result = mergeSummaries(
+      [
+        { runner: 'vitest', file: VITEST_FILE, summary: VITEST_SUMMARY },
+        { runner: 'jest-expo', file: JEST_FILE, summary: null },
+      ],
+      '/repo',
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(JEST_FILE);
+    expect(result.files).toBeUndefined();
+  });
+
+  test('INF-06-AC8: with both missing, both are named', () => {
+    const result = mergeSummaries(
+      [
+        { runner: 'vitest', file: VITEST_FILE, summary: null },
+        { runner: 'jest-expo', file: JEST_FILE, summary: null },
+      ],
+      '/repo',
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(VITEST_FILE);
+    expect(result.message).toContain(JEST_FILE);
+  });
+
+  test('INF-06-AC8: a file both runners measured is refused, because one of them measured it wrongly', () => {
+    // The shape this takes in practice: Vitest's include pattern reaches into
+    // apps/mobile, finds files it cannot run, and reports them at 0 % beside
+    // jest-expo's real figure. Whichever number won, the ratchet would be
+    // measuring something other than the tests.
+    const result = mergeSummaries(
+      [
+        {
+          runner: 'vitest',
+          file: VITEST_FILE,
+          summary: {
+            ...VITEST_SUMMARY,
+            '/repo/apps/mobile/src/shared/translations/language.ts': {
+              lines: { pct: 0, covered: 0, total: 8 },
+              branches: { pct: 0 },
+            },
+          },
+        },
+        { runner: 'jest-expo', file: JEST_FILE, summary: JEST_SUMMARY },
+      ],
+      '/repo',
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('apps/mobile/src/shared/translations/language.ts');
+  });
+
+  test("INF-06-AC8: Vitest's coverage run leaves the app out, so it cannot count it at 0 %", () => {
+    const { include, exclude } = vitestCoverageConfig.test.coverage;
+    const appFile = 'apps/mobile/src/shared/translations/language.ts';
+
+    // Included by the pattern that measures the server's source, which is
+    // exactly why the exclusion has to exist.
+    expect(matchesAnyGlob(appFile, include)).toBe(true);
+    expect(matchesAnyGlob(appFile, exclude)).toBe(true);
+    expect(matchesAnyGlob('apps/server/src/api.ts', exclude)).toBe(false);
+  });
+
+  test("INF-06-AC8: the committed baseline includes the app's files", () => {
+    const baseline = JSON.parse(readFileSync('coverage-baseline.json', 'utf8'));
+
+    expect(
+      Object.keys(baseline.files).filter((file) => file.startsWith('apps/mobile/src/')),
+    ).not.toEqual([]);
+  });
+});
+
+describe('pnpm run coverage:ratchet', () => {
+  /**
+   * Runs the ratchet in a folder holding only the summaries given. The folder
+   * is not a git repository, so no file counts as changed and only the
+   * summaries and the floors decide the answer.
+   */
+  function ratchet(summaries) {
+    const dir = mkdtempSync(path.join(tmpdir(), 'coverage-ratchet-'));
+    try {
+      for (const [file, summary] of Object.entries(summaries)) {
+        mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+        const absolute = Object.fromEntries(
+          Object.entries(summary).map(([key, value]) => [
+            key.replace(/^\/repo\//, `${dir}/`),
+            value,
+          ]),
+        );
+        writeFileSync(path.join(dir, file), JSON.stringify(absolute));
+      }
+      const result = spawnSync(process.execPath, [path.resolve('scripts/coverage-ratchet.mjs')], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH, HOME: process.env.HOME },
+      });
+      return { code: result.status, output: `${result.stdout}${result.stderr}` };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("INF-06-AC8: refuses to pass when the app's summary is missing, and names it", () => {
+    const { code, output } = ratchet({ [VITEST_FILE]: VITEST_SUMMARY });
+
+    expect(code).toBe(1);
+    expect(output).toContain(JEST_FILE);
+  });
+
+  test("INF-06-AC8: refuses to pass when Vitest's summary is missing, and names it", () => {
+    const { code, output } = ratchet({ [JEST_FILE]: JEST_SUMMARY });
+
+    expect(code).toBe(1);
+    expect(output).toContain(VITEST_FILE);
+  });
+
+  test('INF-06-AC8: with both summaries present and nothing below a floor, it passes', () => {
+    const { code, output } = ratchet({ [VITEST_FILE]: VITEST_SUMMARY, [JEST_FILE]: JEST_SUMMARY });
+
+    expect(code, output).toBe(0);
   });
 });

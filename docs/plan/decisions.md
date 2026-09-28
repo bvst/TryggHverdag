@@ -1906,3 +1906,246 @@ any other path is work, not a candidate for the same treatment.
   12 hours.
 - **Consequences:** #19 keeps the comments from before this decision. Closing it
   makes the next run open a clean dashboard issue; that is the owner's choice.
+
+## D-081 — App skeleton v1: Expo SDK 57 and the toolchain built around it
+- **Date:** 2026-09-26 · **Status:** Accepted (delegated, D-031) · **Section:** 4/5/6/8 (M0, INF-06)
+- **Context:** INF-06's spec (`docs/specs/INF-06.md`, "Versions") delegated the
+  exact Expo SDK, its dependent versions and the L7 toolchain to Claude, asking
+  for the newest stable SDK the workspace can install, and for each other
+  version to be recorded with its reason and, where relevant, a fallback. The
+  spec's own review round (2026-09-26) added more: no Android backup (AC19),
+  no vendor calls from Maestro (AC20), Java 17 to 21 and emulators only
+  (AC9, amended), and the `actions/cache` choice. This is that record.
+- **Decision:**
+  1. **Expo SDK 57**, not a preview SDK 58: `expo ~57.0.25`,
+     `react-native 0.86.3`, `react 19.2.3`, `expo-router ~57.0.23`,
+     `jest-expo ~57.0.5`. Every Expo and React Native package is installed
+     with `expo install`, so their versions are the SDK's own list rather than
+     picked by hand. **TypeScript stays at the workspace's catalog version,
+     `~6.0.3`** (D-058); Babel strips the app's types, so the compiler version
+     only matters to `tsc --noEmit`, and the app adds no second TypeScript to
+     the workspace. **Fallback**, unexercised: the previous stable SDK, had 57
+     failed to install under Node 22 / `engine-strict=true`, lacked a matching
+     `jest-expo`, or failed to build in this pnpm workspace.
+  2. **Jest and its testing libraries follow jest-expo's own line, not
+     Vitest's.** `jest-expo` 57 is built on Jest 29, so the app declares
+     `jest ~29.7.0` and `@jest/globals 29.7.0` rather than the newer Jest the
+     rest of the tooling could otherwise reach for.
+     `@testing-library/react-native` is at its current major, 14, whose peer
+     `test-renderer` is pinned to `~1.2.0`: that line matches
+     react-reconciler 0.33 for React ^19.2, while `test-renderer` 1.3 targets
+     react-reconciler 0.34 for React ^19.3, which SDK 57's React 19.2.3 is
+     not. **i18next 26** and **react-i18next 17** (D-032 already chose the
+     library; these are its current majors), with `expo-localization` for the
+     device's ordered language list.
+  3. **`pnpm.packageExtensions` in the root `package.json` marks
+     `react-native-drawer-layout`'s peers, `react-native-reanimated` and
+     `react-native-gesture-handler`, optional.** `expo-router` 57 hard-depends
+     on `react-native-drawer-layout`. Without the override, pnpm's
+     auto-install-peers filled those two peers — plus
+     `react-native-worklets` — with their latest versions: Reanimated 4.7.0,
+     Gesture Handler 3.3.0, Worklets 0.13.0, all outside SDK 57's supported
+     versions (4.5.1, `~2.32.0`, 0.10.1 respectively). These are native
+     modules the spec's "keep dependencies few" explicitly excludes (SEC-06),
+     and Android autolinking would have linked all three into the release
+     build whether or not the app ever imports `expo-router/drawer`. With the
+     override in place, importing `expo-router/drawer` now fails loudly at
+     bundle time instead of silently shipping unsupported native code.
+     **Removing this override needs a new decision**, not a quiet edit,
+     because it is the thing standing between "no Reanimated" as written in
+     the spec and Reanimated arriving as a side effect of an unrelated
+     dependency.
+  4. **`apps/mobile`'s `package.json` declares `@babel/core ^7.20.0`
+     itself.** Left undeclared, `babel-jest` and `babel-preset-expo` resolved
+     the workspace root's Babel — version 8, brought in by
+     `@stryker-mutator/instrumenter` for mutation testing (D-036) — against
+     peer ranges that ask for `^7`. Jest ran anyway; it was still an
+     unsupported combination that a lockfile change could break without
+     warning.
+  5. **The test build is `expo prebuild` plus Gradle, not EAS.** `e2e:android`
+     generates the native Android project from `app.config.ts` (continuous
+     native generation, no committed `android/` folder) and builds the
+     release variant for `x86_64` only, on the runner or the Mac, with no EAS
+     CLI, no Expo account or token, and no repository secret. It is what
+     ships, has no Metro server to keep alive on a runner, and has one fewer
+     moving part in a job that must not be flaky (INF-06-AC10).
+  6. **Maestro 2.10.0, pinned and hash-checked.** Its SHA-256 is read from
+     Maestro's own `checksums_sha256.txt` and matches the digest GitHub serves
+     for the release asset, so the check is against Maestro's stated hash, not
+     merely "unchanged since the day this was written". Its licence is
+     Apache-2.0. `MAESTRO_CLI_NO_ANALYTICS` and
+     `MAESTRO_DISABLE_UPDATE_CHECK=true` are both set wherever Maestro runs.
+     The second name matters exactly as written: Maestro reads it with Java's
+     `Boolean.parseBoolean`, so `'1'` parses as `false` and does nothing,
+     leaving every run sending a persistent ID to `api.copilot.mobile.dev`.
+     Only `'true'` (case-insensitively) turns it off.
+  7. **`reactivecircus/android-emulator-runner` v2.38.0, pinned by commit SHA**
+     (D-060 point 3), licensed Apache-2.0. `licenses:check` reads the npm
+     dependency tree and cannot see a GitHub Action, so this decision is where
+     that licence is recorded, the same way D-077 recorded Terraform's.
+  8. **The Android SDK and the system image
+     `system-images;android-37.2;google_apis_ps16k;x86_64` are accepted under
+     Google's Android SDK licence, in CI.** This is unavoidable for building
+     or testing anything Android at all, and it is written down because
+     `setup-gradle`'s own comment (see the next item) treats a proprietary
+     licence as disallowed in this repository — Google's SDK licence is a
+     different thing from that, and the distinction is worth being explicit
+     about rather than leaving a reader to wonder why one non-permissive
+     licence is accepted and another is not.
+  9. **`actions/cache` (MIT) is used instead of `gradle/actions/setup-gradle`
+     for the Gradle cache.** The current `setup-gradle` bundles a caching
+     component, `gradle-actions-caching`, under a licence restricted to
+     internal use with no redistribution — the same category of licence this
+     repository already rejected for `gitleaks-action` (D-061 point 7). The
+     cache is restored on every `android-e2e` run that builds the app, and saved
+     from `main` only,
+     so a pull-request branch cannot fill or poison it.
+  10. **Java 17 to 21, and emulators only, for `e2e:android`.** Java 25 —
+      which is what Android Studio's JBR ships on the Mac, and therefore the
+      Mac's default `JAVA_HOME` — passes a "Java 17 or newer" check and then
+      fails the native build's `configureCMake…[x86_64]` tasks after about 18
+      minutes, with `WARNING: A restricted method in java.lang.System has been
+      called` (JDK 24+'s native-access restriction). CI's `setup-java` step
+      pins 17 and is unaffected. On the Mac, a Temurin 17 unpacked into
+      `claude-dev`'s own home (`~/jdks/`, no admin rights needed, D-056) is the
+      way round it; **the owner should point `JAVA_HOME` at a JDK 17 on the
+      Mac** so this does not have to be rediscovered per session.
+  11. **The release app's manifest and config carry these settings, each with
+      its own reason:**
+      - **`allowBackup: false`.** Android's Auto Backup would otherwise copy
+        whatever the app later stores — session tokens, journey data — to
+        Google Drive, a destination outside the providers chosen for the EEA
+        (D-016), and a restore could move a device-bound login to a different
+        phone.
+      - **Blocked permissions:** `SYSTEM_ALERT_WINDOW`,
+        `READ_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE`, `VIBRATE`. Expo's
+        template asks for these by default; the skeleton needs network access
+        and nothing else, and drawing over other apps or reading shared
+        storage is not something a safety app should hold without a reason
+        (SEC-06).
+      - **No generated deep-link scheme** (`expo-dev-client`'s
+        `addGeneratedScheme: false`). Left at its default, the dev client
+        registers an `exp+trygghverdag://` link in the *main* manifest, so
+        even release builds could be opened from any web page. No scheme
+        exists until a feature needs one.
+      - **No `expo-updates`** (D-023): a build whose JavaScript a server can
+        replace after testing is a build nobody tested.
+      - **The application ID, `no.trygghverdag.placeholder`, stays a
+        placeholder** until the first store upload, when the owner fixes it
+        together with the public name (D-057). It costs nothing to change
+        before then.
+  12. **What the first CI run proved** (PR #34, run 36267216821, 2026-09-26):
+      - **KVM: not settled.** GitHub documents hardware acceleration on its
+        2-vCPU Linux runners (changelog, 2024-04-02). On the first run the
+        KVM step passed. On the second (run 36298902708), on the same
+        `ubuntu-24.04` image, it failed: `/dev/kvm is not usable on this
+        runner`, 38 ms after `udevadm trigger`. That command only queues the
+        permission change, so the check may have raced it. The step now
+        waits with `--settle` and prints `/dev/kvm`'s state when it fails.
+        The owner's re-runs will show which it was. An earlier version of
+        this item said the runners "expose it" on the strength of one run;
+        that was more than one run could show.
+      - **Cold build:** the x86_64 release build took 14 min 48 s with no
+        Gradle cache (the cache is saved from `main` only).
+      - **One API level, `37.2`.** The job failed before any emulator
+        started: `Failed to find package 'platforms;android-37'`. The action
+        installs `platforms;android-<api-level>`, and since minor Android
+        versions there is no bare `android-37`; Google's index has 37.0,
+        37.1 and 37.2. `api-level` is now the single `EMULATOR_API_LEVEL:
+        '37.2'`, in `major.minor` form, used for the platform and the system
+        image alike. The runner's sdkmanager warns that it reads SDK XML only
+        up to version 3. That is harmless here: the version-3 index lists
+        these packages.
+      - **Run 3** (36300860646, after `--settle`): the platform install
+        worked, the KVM step passed, and the build took 10 min 14 s. The
+        emulator action then failed unpacking the 16 KB-page system image:
+        `No space left on device`. The job now frees space before the
+        emulator: it removes unused preinstalled toolchains and the app's
+        Gradle intermediates, keeps the APK and `~/.gradle`, and prints
+        `df -h` so the next log shows the numbers.
+      - **Run 4** (36303366850): the KVM step passed again, and `df -h /`
+        showed 22 GB free before the emulator, so disk is fixed. The action
+        then failed: `No device found matching --device pixel_8`. The runner
+        image ships Android command-line tools 12.0, which has no Pixel 8
+        profile. The action installs its own 20.0 only when no version is
+        present. Both versions' `avdmanager list device` were run on the Mac:
+        12.0 stops at pixel_7_pro, and 20.0 has pixel_8. The job now installs
+        tools 20.0 as `cmdline-tools/latest` before the emulator, from
+        `commandlinetools-linux-14742923_latest.zip`. That archive's size and
+        SHA-1 match Google's `repository2-3.xml` (172789259 bytes,
+        `48833c34…1b27`), and its SHA-256
+        `04453066b540409d975c676d781da1477479dde3761310f1a7eb92a1dfb15af7`
+        is checked before unpacking. It is covered by the Android SDK licence
+        above. (Tools 20.0 print the "SDK XML versions up to 3" warning too,
+        so a claim here that 20.0 ends it was wrong, and has been removed. It
+        is harmless, because the version-3 index lists every package the job
+        needs.)
+      - **Run 5** (36306264081):
+        - tools 20.0 installed (`Pkg.Revision=20.0`), and the Pixel 8 device
+          was created;
+        - KVM passed with `--settle` for the third time in a row;
+        - the emulator booted in 63.8 s, and `e2e:android` got as far as its
+          locale preflight, which stopped it: `The device's language is
+          "en-US"`.
+        The emulator applies `-change-locale` asynchronously, after
+        `sys.boot_completed`. A fresh CI-identical device on the Mac showed
+        `persist.sys.locale` empty and `am get-config` `en-rUS` straight after
+        boot, then `nb-NO` and `nb-rNO` about 20 s later. The Mac's own
+        Pixel_8 only looked right because the setting had persisted from an
+        earlier boot. `e2e:android` now waits, with a deadline, for the
+        device to report bokmål before the check fails.
+      - **Run 6** (36309631129). The cold build took 15 min 26 s and the
+        boot 91 s. The locale check passed (`The device's language is
+        nb-NO`), and 0.16 s later `adb install` failed: `cmd: Can't find
+        service: package`. Recorded twice on the Mac, on a fresh
+        CI-identical device: `persist.sys.locale` turns `nb-NO` about 1–2 s
+        before Android restarts its framework to apply it. For about 4 s
+        `system_server` is gone and the package service is missing, while
+        `sys.boot_completed` stays 1. `am get-config` reports `nb-rNO` only
+        once the new framework is up. So the wait now ends only when
+        `am get-config` reports bokmål and `service check package` finds the
+        service.
+      - **Run 7, the first green run** (36323061166, 2026-09-27): `e2e:android:
+        1 of 1 flow passed.` It printed `The device's language is nb-rNO, and
+        its package service is up`, then `[Passed] app-starts (24s)`. The
+        cold job took 20 min 27 s:
+        - the release build, 14 min 35 s;
+        - the boot, 89.6 s;
+        - the Maestro download, 16 s;
+        - the install, 22 s;
+        - the flow, 24 s.
+        KVM passed with `--settle` on all five runs since the change.
+      - **Run 8** (36324362689, the same code as run 7) failed. Its locale
+        check passed, and then `adb install` threw `NullPointerException:
+        … PackageManagerInternal.freeStorage …`. So run 7's green was partly
+        timing. Tested on the Mac, on fresh CI-identical devices:
+        - on the first boot in bokmål, installs fail for a while after the
+          device reports ready (17 s after it failed, 80 s after it worked);
+        - a reboot after the switch did not help;
+        - later boots installed straight away, 6 of 6;
+        - with no language switch, the install after the first boot worked;
+        - `-prop persist.sys.locale` is refused ("only 'qemu.*' properties
+          are supported").
+        So `adb install` now waits, for up to 120 s, while it fails with one
+        of the two not-ready errors seen: `Can't find service: package`, or a
+        `NullPointerException` in `PackageManagerInternal`. Any other install
+        error fails at once. This is a readiness wait on the install, and D-060
+        still holds: a failed flow is never retried.
+      - **Still to measure:** the warm durations. The Gradle cache and the AVD
+        snapshot are saved from `main` only, so the first run after merge
+        fills them and the next one shows the warm figure.
+  13. **Follow-up, a precondition for the first safety-core code: mutation
+      testing of app code.** Stryker runs Vitest only. It mutates folder
+      safety paths as `**/*.ts` only (`stryker.config.mjs`), so a `.tsx` file
+      there is never mutated. Safety-core also shares the pooled
+      `whole-suite` run (`gate-decisions.mjs`), whose `break: 80` applies to
+      the combined score. So a safety-core change could leave `mutation`
+      green without testing it. The folder is empty today, so nothing is
+      exposed. The task that first adds safety-core code must first make
+      Stryker run jest on it, as its own run with a `{ts,tsx}` glob, so its
+      score stands alone (spec risk R16).
+- **Consequences:** Items 1–4 and 6–11 are recorded so that a later session
+  does not "clean up" what looks like an odd version pin or an unused-looking
+  environment variable without first reading why it is there — several of
+  them (item 3 especially) fail silently or expensively if quietly removed.
+  Item 12 is a standing to-do on this same decision, not a separate task.

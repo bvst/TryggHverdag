@@ -1,0 +1,53 @@
+{
+  "name": "@trygghverdag/mobile",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The app: an Expo development build with Expo Router, in bokmål and English (INF-06)",
+  "main": "expo-router/entry",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "jest --ci",
+    "test:coverage": "jest --ci --coverage",
+    "start": "EXPO_NO_TELEMETRY=1 expo start --dev-client",
+    "android": "EXPO_NO_TELEMETRY=1 expo run:android"
+  },
+  "dependencies": {
+    "expo": "~57.0.25",
+    "expo-constants": "~57.0.19",
+    "expo-dev-client": "~57.0.19",
+    "expo-linking": "~57.0.11",
+    "expo-localization": "~57.0.2",
+    "expo-router": "~57.0.23",
+    "i18next": "^26.4.2",
+    "react": "19.2.3",
+    "react-i18next": "^17.0.15",
+    "react-native": "0.86.3",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0",
+    "@jest/globals": "29.7.0",
+    "@react-native/jest-preset": "0.86.3",
+    "@testing-library/react-native": "^14.0.1",
+    "@trygghverdag/config": "workspace:*",
+    "@types/react": "~19.2.2",
+    "jest": "~29.7.0",
+    "jest-expo": "~57.0.5",
+    "test-renderer": "~1.2.0",
+    "typescript": "catalog:"
+  },
+  "jest": {
+    "preset": "jest-expo",
+    "collectCoverageFrom": [
+      "app.config.ts",
+      "src/**/*.{ts,tsx}",
+      "!src/**/*.test.{ts,tsx}"
+    ],
+    "coverageDirectory": "coverage",
+    "coverageReporters": [
+      "text-summary",
+      "json-summary"
+    ]
+  }
+}

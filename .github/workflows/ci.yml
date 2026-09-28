@@ -5,12 +5,11 @@
 # holds the one list of checks, and the gate-integrity job fails if this file,
 # that list and the repository's own merge rules ever stop agreeing.
 #
-# Jobs missing on purpose, because the script they would run does not exist yet:
-#   android-e2e (CI-09) — INF-06 adds it
-# They are absent rather than skipped: a skipped job reports as a green tick,
-# and a green tick for work nobody did is the one thing this repository must not
-# produce. gate-integrity lists them every run, and starts failing the day their
-# script exists but the job still does not.
+# A check whose script does not exist yet has no job here: it is absent rather
+# than skipped, because a skipped job reports as a green tick, and a green tick
+# for work nobody did is the one thing this repository must not produce.
+# gate-integrity lists such checks every run, and starts failing the day their
+# script exists but the job still does not. Today every check has its job.
 #
 # Actions are pinned to a commit, never a tag: whoever can move a tag can
 # otherwise run their own code in a job that holds this repository's secrets.
@@ -303,6 +302,215 @@ jobs:
           pnpm run mutation
           --incremental --only-if-safety-paths-changed
           --base origin/${{ github.base_ref || 'main' }}
+
+  android-e2e: # CI-09 (L7) — the release build on an Android emulator, driven by Maestro
+    runs-on: ubuntu-latest
+    # The first measured runs set this for good (docs/specs/INF-06.md, CI cost).
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      # Nothing leaves for a tooling vendor that does not have to. Maestro reads
+      # the update check with Boolean.parseBoolean, so only 'true' turns it
+      # off; '1' would leave it sending a persistent ID (D-081).
+      EXPO_NO_TELEMETRY: '1'
+      MAESTRO_CLI_NO_ANALYTICS: '1'
+      MAESTRO_DISABLE_UPDATE_CHECK: 'true'
+      # The emulator, written once. Both emulator steps and the snapshot's
+      # cache key read these, so a changed setting also changes the key and a
+      # snapshot is never restored under a key that no longer says what it
+      # holds. The same image as the Mac's emulator: Android 17 with 16 KB
+      # memory pages, which Google Play requires apps to work on.
+      #
+      # One API level, for both the platform and the system image: the action
+      # installs platforms;android-<level> and, with no system-image-api-level,
+      # builds the image's package name from the same level. It is major.minor
+      # because API levels gained minor versions: Google's index has
+      # platforms;android-37.0 to 37.2 and no android-37, which is what a bare
+      # '37' asked for on the first run.
+      EMULATOR_API_LEVEL: '37.2'
+      EMULATOR_TARGET: google_apis_ps16k
+      EMULATOR_ARCH: x86_64
+      EMULATOR_PROFILE: pixel_8
+      EMULATOR_LOCALE: nb-NO
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0, persist-credentials: false }
+      # CI-12, as in every job above, with its own question: can this diff
+      # change the app? `app` is worked out from the files themselves
+      # (scripts/lib/affected.mjs, touchesApp), and is always true on a push to
+      # main, which is the backstop for a wrong "no" on a pull request.
+      - id: affected
+        run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
+      - name: Nothing for this gate to check
+        if: steps.affected.outputs.app != 'true'
+        run: |
+          echo "Nothing in this diff can change the app or how it is tested."
+          echo "android-e2e has nothing to check on this diff (CI-12)."
+      # Without KVM the emulator runs in software, five to ten times slower, and
+      # times out looking like a flaky test. So it is checked first, before
+      # anything is paid for, and its absence stops the job with a reason.
+      - name: Enable KVM, and stop if it cannot be used
+        if: steps.affected.outputs.app == 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          # Without --settle, trigger only queues the change and returns, so the
+          # check below could run before udev has applied the rule.
+          sudo udevadm trigger --name-match=kvm --settle
+          if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+            if [ -e /dev/kvm ]; then
+              ls -l /dev/kvm
+            else
+              echo "/dev/kvm does not exist on this runner."
+            fi
+            echo "::error::/dev/kvm is not usable on this runner, so the emulator would run without hardware acceleration and time out. android-e2e stops here rather than report a slow emulator as a broken app."
+            exit 1
+          fi
+      # Run 36303366850 stopped in the emulator step with "No device found
+      # matching --device pixel_8": the runner image ships the command-line
+      # tools 12.0, whose avdmanager has no Pixel 8. The pinned emulator action
+      # installs its own tools only when $ANDROID_HOME/cmdline-tools is missing,
+      # and runs whatever is in cmdline-tools/latest. So this puts 20.0 there,
+      # the same archive the action pins for a runner without tools
+      # (src/sdk-installer.ts), checked against its SHA-256 before anything is
+      # unpacked. Nothing but cmdline-tools/latest is replaced, and no sudo is
+      # needed: runner-images' install-android-sdk.sh ends with
+      # `chmod -R a+rwx` on the SDK. The version is read from what is now in
+      # latest, so a red emulator step can be read against it.
+      - name: Install the pinned Android command-line tools in cmdline-tools/latest
+        if: steps.affected.outputs.app == 'true'
+        env:
+          CMDLINE_TOOLS_ARCHIVE: 'commandlinetools-linux-14742923_latest.zip'
+          CMDLINE_TOOLS_SHA256: '04453066b540409d975c676d781da1477479dde3761310f1a7eb92a1dfb15af7'
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          archive="$tmp/$CMDLINE_TOOLS_ARCHIVE"
+          curl -fsSL -o "$archive" "https://dl.google.com/android/repository/${CMDLINE_TOOLS_ARCHIVE}"
+          echo "${CMDLINE_TOOLS_SHA256}  $archive" | sha256sum -c -
+          unzip -q "$archive" -d "$tmp/unpacked"
+          rm -rf "$ANDROID_HOME/cmdline-tools/latest"
+          mv "$tmp/unpacked/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          grep '^Pkg.Revision=' "$ANDROID_HOME/cmdline-tools/latest/source.properties"
+      # Run 36300860646 built the app and then stopped in the emulator's SDK
+      # install with "No space left on device" while unpacking the system
+      # image. These are toolchains this job never uses: .NET, Haskell (both
+      # places it is installed), Swift and CodeQL. Removed before the build, so
+      # the build has the room too. The Android SDK, Java, Node, ~/.gradle and
+      # node_modules are not touched here or anywhere in this job.
+      - name: Free disk space by removing toolchains this job never uses
+        if: steps.affected.outputs.app == 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift \
+            "$RUNNER_TOOL_CACHE/CodeQL"
+      - if: steps.affected.outputs.app == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.affected.outputs.app == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - if: steps.affected.outputs.app == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.affected.outputs.app == 'true'
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with: { distribution: temurin, java-version: '17' }
+      # The Gradle cache comes from actions/cache (MIT), not gradle/actions:
+      # setup-gradle now bundles a proprietary caching component, and a
+      # proprietary licence is not on the allowed list (the gitleaks-action
+      # decision in the security job below). Restored on every run, saved from
+      # main only, so pull-request branches cannot fill the cache.
+      - id: gradle-cache
+        if: steps.affected.outputs.app == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/app.config.ts') }}
+          restore-keys: gradle-${{ runner.os }}-
+      # Built before the emulator boots: on a two-core runner, Gradle and an
+      # emulator running at once starve each other, and a slow build turns into
+      # a flaky test.
+      - name: Build the release app for x86_64
+        if: steps.affected.outputs.app == 'true'
+        timeout-minutes: 30
+        run: pnpm run e2e:android --build-only
+      # What the build leaves that nothing after it reads. Gradle's daemon is
+      # stopped first: a file it still holds open keeps its space after it is
+      # deleted. The APK is in app/build/outputs, which stays, and so does
+      # ~/.gradle, which main saves after the flows; the flow step installs the
+      # APK already built and runs no Gradle. The free space is printed last,
+      # so a disk that is still too full shows here, not as a failed SDK
+      # install in the emulator step.
+      - name: Free the build's disk space for the emulator, and show what is left
+        if: steps.affected.outputs.app == 'true'
+        run: |
+          (cd apps/mobile/android && ./gradlew --stop)
+          rm -rf apps/mobile/android/app/build/intermediates apps/mobile/android/app/.cxx
+          df -h /
+      - id: avd-cache
+        if: steps.affected.outputs.app == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-${{ env.EMULATOR_API_LEVEL }}-${{ env.EMULATOR_TARGET }}-${{ env.EMULATOR_ARCH }}-${{ env.EMULATOR_PROFILE }}-${{ env.EMULATOR_LOCALE }}
+      # On main, with no cached device yet: boot once to make a clean snapshot
+      # for later runs to start from. Pull requests only ever read it.
+      - name: Create the virtual device and its snapshot
+        if: steps.affected.outputs.app == 'true' && github.ref == 'refs/heads/main' && steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: ${{ env.EMULATOR_API_LEVEL }}
+          target: ${{ env.EMULATOR_TARGET }}
+          arch: ${{ env.EMULATOR_ARCH }}
+          profile: ${{ env.EMULATOR_PROFILE }}
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -change-locale ${{ env.EMULATOR_LOCALE }}
+          disable-animations: false
+          script: echo "Created the virtual device and saved a clean snapshot."
+      - if: steps.affected.outputs.app == 'true' && github.ref == 'refs/heads/main' && steps.avd-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          # The key the restore above resolved, so it is written once.
+          key: ${{ steps.avd-cache.outputs.cache-primary-key }}
+      # On the job's 16 KB-page image, a native library that is not aligned for
+      # those pages fails here, not at store upload.
+      - name: Boot the emulator in bokmål and run every flow
+        if: steps.affected.outputs.app == 'true'
+        timeout-minutes: 15
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: ${{ env.EMULATOR_API_LEVEL }}
+          target: ${{ env.EMULATOR_TARGET }}
+          arch: ${{ env.EMULATOR_ARCH }}
+          profile: ${{ env.EMULATOR_PROFILE }}
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -change-locale ${{ env.EMULATOR_LOCALE }}
+          disable-animations: true
+          script: pnpm run e2e:android --skip-build
+      # Maestro's screenshots and logs show only synthetic screens (RG-07), and
+      # are kept for 7 days: artefacts count against the account's storage.
+      - name: Keep Maestro's debug output when a flow failed
+        if: failure() && steps.affected.outputs.app == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-e2e-debug
+          path: reports/e2e-android/
+          retention-days: 7
+      - if: steps.affected.outputs.app == 'true' && github.ref == 'refs/heads/main' && steps.gradle-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          # The key the restore resolved: hashFiles() and runner.os cannot be
+          # job env, so the restore step is where it is written, once.
+          key: ${{ steps.gradle-cache.outputs.cache-primary-key }}
 
   security: # CI-10
     runs-on: ubuntu-latest

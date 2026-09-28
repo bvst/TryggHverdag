@@ -1,7 +1,8 @@
 // A tool downloaded once, checked by hash, and cached under node_modules/.cache
 // — for tools that are not npm packages, or whose npm package would pull in
-// dependencies nothing locks. Terraform (scripts/lib/terraform.mjs) and Clever
-// Cloud's command-line tool (scripts/lib/clever-tools.mjs) come this way.
+// dependencies nothing locks. Terraform (scripts/lib/terraform.mjs), Clever
+// Cloud's command-line tool (scripts/lib/clever-tools.mjs) and Maestro
+// (scripts/lib/e2e-android.mjs) come this way.
 //
 // Two rules. An archive whose hash is not the pinned one is refused, not run.
 // And the cache is trusted once the binary exists, so the binary is unpacked
@@ -32,7 +33,10 @@ export async function fetchArchiveFrom(url) {
  *   fetchArchive: (url: string) => Promise<Buffer>,
  *   extract: (archive: string, into: string) => unknown,
  * }} options — `what` names the tool in messages; `extract` must leave
- *   `binaryName` directly inside `into`
+ *   `binaryName` at that path inside `into`: a single file (`terraform`), or a
+ *   path into a folder the tool ships as (`maestro/bin/maestro`, a launcher
+ *   and its jars). Either way, everything `extract` unpacked becomes `dir`,
+ *   moved into place whole.
  */
 export async function ensurePinnedBinary({
   dir,
@@ -63,14 +67,20 @@ export async function ensurePinnedBinary({
   try {
     const file = path.join(partial, 'archive');
     writeFileSync(file, archive);
-    await extract(file, partial);
-    const unpacked = path.join(partial, binaryName);
+    // Unpacked into a tree of its own, so the archive is not moved with it.
+    const tree = path.join(partial, 'tree');
+    mkdirSync(tree);
+    await extract(file, tree);
+    const unpacked = path.join(tree, binaryName);
     if (!existsSync(unpacked)) {
       throw new Error(`The ${what} archive held no ${binaryName} binary.`);
     }
     chmodSync(unpacked, 0o755);
-    mkdirSync(dir, { recursive: true });
-    renameSync(unpacked, binary);
+    // Whatever an earlier, interrupted run left has no binary in it (that was
+    // checked at the top), so it is not trusted: it is replaced, whole.
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(path.dirname(dir), { recursive: true });
+    renameSync(tree, dir);
   } finally {
     rmSync(partial, { recursive: true, force: true });
   }

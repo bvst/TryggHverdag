@@ -1,0 +1,6 @@
+- [Mutation gate skips test-only changes](project_mutation_gate_skips_test_only.md) — safety-test edits don't trigger Stryker in CI; no nightly run yet
+- [Spawned-process test review](feedback_spawned_process_tests.md) — exitCode-null vs signal deaths, output after 'exit', windows can't prove "never", onTestFinished kills
+- [Reviewer sandbox limits](reference_reviewer_sandbox_limits.md) — hook blocks `>`, file writes, `cp` as a word; file-free fault injection via NODE_OPTIONS data: URLs
+- [changedFiles rename blind spot](project_changed_files_rename_blind_spot.md) — `--name-only` lists only a rename's destination; code=/app= classifiers miss moves out
+- [pnpm --filter no-match exits 0](feedback_pnpm_filter_no_match.md) — gate scripts handing over with --filter need `--fail-if-no-match`
+- [Unowned gate configs](project_unowned_gate_configs.md) — depcruise rules, vitest coverage config, app jest coverage block have no CODEOWNERS entry

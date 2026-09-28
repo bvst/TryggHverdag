@@ -1,0 +1,19 @@
+{
+  "extends": "@trygghverdag/config/tsconfig/base.json",
+  "compilerOptions": {
+    // The repository's base is for Node, which runs TypeScript itself. Here
+    // Metro bundles the code and Babel strips the types, so resolution, JSX and
+    // the available globals are Metro's: these are the values in Expo's own
+    // expo/tsconfig.base.json (SDK 57). Everything else, strictness included,
+    // stays the base's.
+    //
+    // Nothing here depends on files only `expo start` writes (expo-env.d.ts,
+    // .expo/types), so the type check in CI reads exactly what git holds.
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "customConditions": ["react-native"],
+    "jsx": "react-jsx",
+    "lib": ["DOM", "ESNext"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "*.ts"]
+}

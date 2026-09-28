@@ -1,0 +1,31 @@
+# INF-06-AC11: the release build, installed on an Android emulator whose
+# language is Norwegian bokmål, starts from a cleared state and shows the
+# placeholder screen's bokmål title and status line, and no raw translation key.
+#
+# Nothing a reader sees is written here. scripts/e2e-android.mjs reads the
+# application ID from app.config.ts and the two strings from nb.json, and passes
+# them in with -e, so this flow cannot drift from the app it tests:
+#   APP_ID  the Android application ID
+#   TITLE   placeholder.title in nb.json
+#   STATUS  placeholder.status in nb.json
+#
+# Maestro matches text as a regular expression over an element's whole text.
+#
+# Never add `retry:` or `optional: true` to a step here. A flow that passes on
+# its second try hides a flaky test, which RG-06 deals with in the open, and an
+# optional assertion is an assertion that cannot fail.
+appId: ${APP_ID}
+---
+- launchApp:
+    clearState: true
+# A cold start of a release build on a CI emulator can take a while. Waiting
+# for the title, rather than asserting at once, keeps a slow start from
+# looking like a broken app.
+- extendedWaitUntil:
+    visible: ${TITLE}
+    timeout: 30000
+- assertVisible: ${TITLE}
+- assertVisible: ${STATUS}
+# What i18next shows for a key it cannot find is the dotted key itself, such as
+# "placeholder.title". No visible text may look like one.
+- assertNotVisible: '[a-z][a-zA-Z0-9]*(\.[a-zA-Z0-9]+)+'

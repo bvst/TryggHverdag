@@ -5,11 +5,11 @@
 // docs/requirements-status.md — so these prove nothing it counts. That is the
 // exemption D-074 keys to what a test proves rather than to a directory.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { describe, expect, test } from 'vitest';
-import { onlyInert, reasons } from './affected.mjs';
+import { dirname, join, resolve } from 'node:path';
+import { afterEach, describe, expect, test } from 'vitest';
+import { onlyInert, reasons, touchesApp } from './affected.mjs';
 
 describe('onlyInert', () => {
   test('a documentation-only diff leaves the code gates nothing to check', () => {
@@ -315,3 +315,465 @@ describe('the environment these tests run in', () => {
     }
   });
 });
+
+// INF-06-AC12 and AC13: can this diff change the app? android-e2e asks, and a
+// "no" costs one billed minute instead of ten or more (the spec's CI cost).
+//
+// A wrong "no" is the expensive mistake here: an app-breaking change merges
+// with a green android-e2e over it. So the answer is worked out from the files
+// themselves, the app's dependency closure from package.json files and the e2e
+// script's import closure from its source, and each test below builds a small
+// repository to work it out from. A list kept by hand would be right on the
+// day it was written.
+
+const fixtures = [];
+afterEach(() => {
+  for (const dir of fixtures.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const manifest = (name, dependencies = {}, devDependencies = {}) =>
+  JSON.stringify({ name, dependencies, devDependencies });
+
+/**
+ * A small repository: the app, the server, four packages, and the e2e script
+ * with what it imports, written every way an import can be written.
+ */
+function fixtureRepo(overrides = {}) {
+  const files = {
+    'package.json': JSON.stringify({
+      name: 'fixture',
+      private: true,
+      workspaces: ['apps/*', 'packages/*'],
+      scripts: { 'e2e:android': 'node scripts/e2e-android.mjs' },
+    }),
+    'pnpm-workspace.yaml': 'packages:\n  - apps/*\n  - packages/*\n',
+    'apps/mobile/package.json': manifest(
+      '@trygghverdag/mobile',
+      { '@trygghverdag/contracts': 'workspace:*', expo: '~57.0.25' },
+      { '@trygghverdag/config': 'workspace:*' },
+    ),
+    'apps/server/package.json': manifest(
+      '@trygghverdag/server',
+      { '@trygghverdag/contracts': 'workspace:*' },
+      { '@trygghverdag/test-kit': 'workspace:*' },
+    ),
+    'packages/contracts/package.json': manifest('@trygghverdag/contracts', {
+      '@trygghverdag/shared': 'workspace:*',
+      zod: '^4.6.5',
+    }),
+    'packages/shared/package.json': manifest('@trygghverdag/shared'),
+    'packages/config/package.json': manifest('@trygghverdag/config'),
+    'packages/test-kit/package.json': manifest('@trygghverdag/test-kit', {
+      '@trygghverdag/contracts': 'workspace:*',
+    }),
+    'scripts/e2e-android.mjs': [
+      "import { spawnSync } from 'node:child_process';",
+      'import {',
+      '  buildPlan,',
+      '  judgeReport,',
+      "} from './lib/e2e-android.mjs';",
+      "import { run } from './lib/proc.mjs';",
+      "import './lib/side-effect.mjs';",
+      '',
+    ].join('\n'),
+    'scripts/lib/e2e-android.mjs': [
+      "import { ensurePinnedBinary } from './pinned-binary.mjs';",
+      "export { renamed } from './reexported.mjs';",
+      '',
+    ].join('\n'),
+    'scripts/lib/pinned-binary.mjs':
+      "import path from 'node:path';\nexport const sep = path.sep;\n",
+    'scripts/lib/proc.mjs': 'export const run = 1;\n',
+    'scripts/lib/side-effect.mjs': 'globalThis.loaded = true;\n',
+    'scripts/lib/reexported.mjs': 'export const renamed = 1;\n',
+    'scripts/lib/unrelated.mjs': 'export const unrelated = 1;\n',
+    'scripts/gate.mjs': "import { run } from './lib/proc.mjs';\n",
+    ...overrides,
+  };
+  const dir = mkdtempSync(join(tmpdir(), 'affected-app-'));
+  fixtures.push(dir);
+  for (const [file, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, file)), { recursive: true });
+    writeFileSync(join(dir, file), text);
+  }
+  return dir;
+}
+
+const canChangeApp = (files, overrides) => touchesApp(files, { root: fixtureRepo(overrides) });
+
+/** The fixture's root package.json, with these "workspaces". */
+const withWorkspaces = (workspaces) => ({
+  'package.json': JSON.stringify({
+    name: 'fixture',
+    private: true,
+    workspaces,
+    scripts: { 'e2e:android': 'node scripts/e2e-android.mjs' },
+  }),
+});
+
+// Workspace globs that are neither `folder/*` nor a plain folder. `packages/*/*`
+// ends in `/*` like the ones that are read, so only the `*` before that tells
+// them apart. Kept out of the test.each call: the test counter reads a table
+// only up to its first `)`.
+const UNREADABLE_GLOBS = ['packages/**', 'packages/*/*', 'packages/*/src', 'apps/mobile*'];
+
+describe('touchesApp', () => {
+  test.each([
+    'apps/mobile/src/app/index.tsx',
+    'apps/mobile/app.config.ts',
+    'apps/mobile/package.json',
+    'apps/mobile/e2e/app-starts.yaml',
+    'apps/mobile/README.md',
+  ])('INF-06-AC13: %s is under apps/mobile/, so it can change the app', (file) => {
+    expect(canChangeApp([file])).toBe(true);
+  });
+
+  test.each([
+    { file: 'packages/contracts/src/index.ts', how: 'a dependency of the app' },
+    { file: 'packages/shared/src/index.ts', how: 'a dependency of that dependency' },
+    { file: 'packages/config/eslint/index.mjs', how: 'a devDependency of the app' },
+  ])('INF-06-AC13: $file can change the app, as $how', ({ file }) => {
+    expect(canChangeApp([file])).toBe(true);
+  });
+
+  test.each([
+    {
+      file: 'packages/test-kit/src/index.ts',
+      how: 'it depends on what the app uses, not the reverse',
+    },
+    { file: 'apps/server/src/api.ts', how: 'the app does not depend on the server' },
+  ])('INF-06-AC13: $file cannot change the app: $how', ({ file }) => {
+    expect(canChangeApp([file])).toBe(false);
+  });
+
+  test.each([
+    'package.json',
+    'pnpm-lock.yaml',
+    'pnpm-workspace.yaml',
+    '.npmrc',
+    '.nvmrc',
+    '.node-version',
+  ])(
+    'INF-06-AC13: the root file %s decides what is installed, so it can change the app',
+    (file) => {
+      expect(canChangeApp([file])).toBe(true);
+    },
+  );
+
+  test('INF-06-AC13: ci.yml, which runs android-e2e, can; another workflow cannot', () => {
+    expect(canChangeApp(['.github/workflows/ci.yml'])).toBe(true);
+    expect(canChangeApp(['.github/workflows/ai-review.yml'])).toBe(false);
+  });
+
+  test.each([
+    { file: 'scripts/e2e-android.mjs', how: 'the e2e script itself' },
+    { file: 'scripts/lib/e2e-android.mjs', how: 'imported over several lines' },
+    { file: 'scripts/lib/proc.mjs', how: 'imported on one line' },
+    { file: 'scripts/lib/side-effect.mjs', how: 'imported for its side effect' },
+    { file: 'scripts/lib/pinned-binary.mjs', how: 'imported by a module the script imports' },
+    { file: 'scripts/lib/reexported.mjs', how: 're-exported by one' },
+  ])('INF-06-AC13: $file can change the app, as $how', ({ file }) => {
+    expect(canChangeApp([file])).toBe(true);
+  });
+
+  test.each(['scripts/lib/unrelated.mjs', 'scripts/gate.mjs'])(
+    'INF-06-AC13: a script the e2e script does not import, %s, cannot',
+    (file) => {
+      expect(canChangeApp([file])).toBe(false);
+    },
+  );
+
+  test.each([
+    'docs/progress.md',
+    'README.md',
+    'apps/server/package.json',
+    'turbo.json',
+    '.claude/hooks/lib.mjs',
+    'infra/staging/main.tf',
+  ])('INF-06-AC13: %s cannot change the app', (file) => {
+    expect(canChangeApp([file])).toBe(false);
+  });
+
+  test('INF-06-AC13: one file that can, among many that cannot, is enough', () => {
+    expect(canChangeApp(['docs/progress.md', 'packages/shared/src/index.ts', 'README.md'])).toBe(
+      true,
+    );
+  });
+
+  test('INF-06-AC13: an empty diff gives android-e2e nothing to check', () => {
+    expect(canChangeApp([])).toBe(false);
+  });
+
+  test('INF-06-AC13: a dependency the app gains is followed without editing any list', () => {
+    const gained = manifest(
+      '@trygghverdag/mobile',
+      { '@trygghverdag/contracts': 'workspace:*', '@trygghverdag/test-kit': 'workspace:*' },
+      { '@trygghverdag/config': 'workspace:*' },
+    );
+
+    expect(canChangeApp(['packages/test-kit/src/index.ts'])).toBe(false);
+    expect(
+      canChangeApp(['packages/test-kit/src/index.ts'], { 'apps/mobile/package.json': gained }),
+    ).toBe(true);
+  });
+
+  test('INF-06-AC13: an import the e2e script gains is followed without editing any list', () => {
+    const gained = "import { unrelated } from './lib/unrelated.mjs';\n";
+
+    expect(canChangeApp(['scripts/lib/unrelated.mjs'])).toBe(false);
+    expect(canChangeApp(['scripts/lib/unrelated.mjs'], { 'scripts/e2e-android.mjs': gained })).toBe(
+      true,
+    );
+  });
+
+  // Amended 2026-09-26. An e2e:android script whose entry file cannot be read
+  // from it used to give an empty import closure, and so a "no" for every
+  // change to the script and its modules: android-e2e green without running.
+  test.each([['pnpm --filter @trygghverdag/mobile run e2e'], ['maestro test apps/mobile/e2e']])(
+    'INF-06-AC13: an e2e:android script that names no entry file it can read is an error, not an empty closure: %s',
+    (command) => {
+      const overrides = {
+        'package.json': JSON.stringify({
+          name: 'fixture',
+          private: true,
+          workspaces: ['apps/*', 'packages/*'],
+          scripts: { 'e2e:android': command },
+        }),
+      };
+
+      expect(() => canChangeApp(['scripts/lib/e2e-android.mjs'], overrides)).toThrow(/e2e:android/);
+    },
+  );
+
+  test('INF-06-AC13: with no e2e:android script at all, there is no closure to follow, and that is not an error', () => {
+    const overrides = {
+      'package.json': JSON.stringify({
+        name: 'fixture',
+        private: true,
+        workspaces: ['apps/*', 'packages/*'],
+        scripts: {},
+      }),
+    };
+
+    expect(canChangeApp(['scripts/lib/e2e-android.mjs'], overrides)).toBe(false);
+    expect(canChangeApp(['apps/mobile/app.config.ts'], overrides)).toBe(true);
+  });
+
+  // The "workspaces" field, read every way this reads it. Only `folder/*` and
+  // plain folders are understood, and anything else is refused, because a glob
+  // this cannot read would leave packages out of the closure without a word.
+
+  test.each(UNREADABLE_GLOBS)(
+    'INF-06-AC13: a workspace glob it cannot read, %s, is an error that names the glob, not a closure without its packages',
+    (glob) => {
+      const overrides = withWorkspaces(['apps/*', glob]);
+
+      expect(() => canChangeApp(['packages/shared/src/index.ts'], overrides)).toThrow(`"${glob}"`);
+    },
+  );
+
+  test('INF-06-AC13: a plain folder in workspaces is followed as a glob would be, with or without a trailing slash', () => {
+    const overrides = withWorkspaces([
+      'apps/mobile',
+      'apps/server',
+      'packages/contracts',
+      'packages/shared/',
+      'packages/config',
+      'packages/test-kit',
+    ]);
+
+    expect(canChangeApp(['packages/contracts/src/index.ts'], overrides)).toBe(true);
+    expect(canChangeApp(['packages/shared/src/index.ts'], overrides)).toBe(true);
+    expect(canChangeApp(['packages/config/eslint/index.mjs'], overrides)).toBe(true);
+    // Not vacuous: a plain folder outside the closure still cannot.
+    expect(canChangeApp(['packages/test-kit/src/index.ts'], overrides)).toBe(false);
+  });
+
+  test('INF-06-AC13: a folder/* entry whose folder does not exist holds no packages, and the entries after it are still followed', () => {
+    const overrides = withWorkspaces(['apps/*', 'tools/*', 'packages/*']);
+
+    expect(canChangeApp(['packages/shared/src/index.ts'], overrides)).toBe(true);
+    expect(canChangeApp(['tools/lint/index.mjs'], overrides)).toBe(false);
+  });
+
+  test('INF-06-AC13: a folder under a workspace glob with no package.json, or one with no name, is not a package and is passed over', () => {
+    const overrides = {
+      'packages/notes/README.md': '# Not a package\n',
+      'packages/unnamed/package.json': JSON.stringify({ private: true }),
+    };
+
+    expect(canChangeApp(['packages/shared/src/index.ts'], overrides)).toBe(true);
+    expect(canChangeApp(['packages/notes/README.md'], overrides)).toBe(false);
+    expect(canChangeApp(['packages/unnamed/index.mjs'], overrides)).toBe(false);
+  });
+
+  test('INF-06-AC13: a root package.json with no workspaces field still answers for the app, the install files and the e2e script', () => {
+    // Which packages count is not asserted here. With no "workspaces" field
+    // there are none to follow, and the import check already stops the build
+    // when package.json and pnpm-workspace.yaml disagree
+    // (packages/config/dependency-cruiser.cjs). What this holds is that the
+    // rest of the answer does not depend on the field being there.
+    const overrides = {
+      'package.json': JSON.stringify({
+        name: 'fixture',
+        private: true,
+        scripts: { 'e2e:android': 'node scripts/e2e-android.mjs' },
+      }),
+    };
+
+    expect(canChangeApp(['apps/mobile/app.config.ts'], overrides)).toBe(true);
+    expect(canChangeApp(['pnpm-lock.yaml'], overrides)).toBe(true);
+    expect(canChangeApp(['scripts/lib/proc.mjs'], overrides)).toBe(true);
+    expect(canChangeApp(['docs/progress.md'], overrides)).toBe(false);
+  });
+
+  test('INF-06-AC13: in this repository, the app, the e2e script and its decisions can; the server cannot', () => {
+    const here = (file) => touchesApp([file], { root: process.cwd() });
+
+    expect(here('apps/mobile/src/app/index.tsx')).toBe(true);
+    expect(here('scripts/e2e-android.mjs')).toBe(true);
+    expect(here('scripts/lib/e2e-android.mjs')).toBe(true);
+    expect(here('apps/server/src/api.ts')).toBe(false);
+    expect(here('docs/progress.md')).toBe(false);
+  });
+});
+
+/**
+ * Runs scripts/affected.mjs with a step-output file of the test's own, the
+ * way GitHub runs it, so the test can read what ci.yml's later steps read.
+ * Both variables the script reads are set here, never inherited.
+ */
+function runAffectedWithOutput(args, { event }) {
+  const dir = mkdtempSync(join(tmpdir(), 'affected-output-'));
+  const output = join(dir, 'github-output');
+  writeFileSync(output, '');
+  try {
+    const result = spawnSync(process.execPath, [resolve('scripts/affected.mjs'), ...args], {
+      encoding: 'utf8',
+      env: { ...process.env, GITHUB_EVENT_NAME: event, GITHUB_OUTPUT: output },
+    });
+    return { status: result.status, stdout: result.stdout, written: readFileSync(output, 'utf8') };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe('the app answer, as the workflow receives it', () => {
+  test('INF-06-AC12: a push to main does the full android-e2e run: app=true, as well as code=true', () => {
+    const result = runAffected(['--base', 'HEAD'], { event: 'push' });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/^code=true$/m);
+    expect(result.stdout).toMatch(/^app=true$/m);
+  });
+
+  test('INF-06-AC13: a pull request is answered app= beside code=', () => {
+    const result = runAffected(['--base', 'HEAD'], { event: 'pull_request' });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/^code=(true|false)$/m);
+    expect(result.stdout).toMatch(/^app=(true|false)$/m);
+  });
+
+  test('INF-06-AC12: on a pull request, the app answer reaches the step outputs that ci.yml reads', () => {
+    const result = runAffectedWithOutput(['--base', 'HEAD'], { event: 'pull_request' });
+
+    expect(result.status).toBe(0);
+    expect(result.written).toMatch(/^code=(true|false)$/m);
+    expect(result.written).toMatch(/^app=(true|false)$/m);
+  });
+
+  test('INF-06-AC12: on a push, the step outputs say app=true', () => {
+    const result = runAffectedWithOutput(['--base', 'HEAD'], { event: 'push' });
+
+    expect(result.status).toBe(0);
+    expect(result.written).toMatch(/^code=true$/m);
+    expect(result.written).toMatch(/^app=true$/m);
+  });
+
+  // The tests above run against this checkout, whose diff is whatever the
+  // branch holds, so they can only match app=(true|false). An answer forced to
+  // one value passed them. These build the pull request instead, the way the
+  // push-to-main test above builds its condition.
+
+  test('INF-06-AC13: a pull request that changes the app is answered app=true', () => {
+    const dir = pullRequestRepo({ 'apps/mobile/app.config.ts': 'export default { name: "x" };\n' });
+
+    const result = runAffected(['--base', 'origin/main'], { event: 'pull_request', cwd: dir });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain('not a pull request');
+    expect(result.stdout).toMatch(/^app=true$/m);
+    expect(result.stdout).not.toMatch(/^app=false$/m);
+  });
+
+  test('INF-06-AC13: a pull request that changes only a workspace package the app depends on is answered app=true', () => {
+    // Only the app's dependency closure reaches packages/shared/, and the script
+    // has to read that closure from the checkout it runs in. Read from anywhere
+    // else, the closure is empty and this change would be answered app=false.
+    const dir = pullRequestRepo({ 'packages/shared/index.mjs': 'export const shared = 2;\n' });
+
+    const result = runAffected(['--base', 'origin/main'], { event: 'pull_request', cwd: dir });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain('not a pull request');
+    expect(result.stdout).toMatch(/^app=true$/m);
+    expect(result.stdout).not.toMatch(/^app=false$/m);
+  });
+
+  test('INF-06-AC12: a pull request that changes only documentation is answered app=false, and says so', () => {
+    const dir = pullRequestRepo({ 'docs/notes.md': '# Notes, amended\n' });
+
+    const result = runAffected(['--base', 'origin/main'], { event: 'pull_request', cwd: dir });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain('not a pull request');
+    expect(result.stdout).toMatch(/^app=false$/m);
+    expect(result.stdout).not.toMatch(/^app=true$/m);
+    expect(result.stdout).toMatch(/nothing in this diff can change the app/);
+  });
+});
+
+/**
+ * A repository checked out the way a pull request is: origin/main at the first
+ * commit, and a branch on top of it that changes `files`. Everything is
+ * committed, so the working tree adds nothing to the diff.
+ *
+ * The app depends on one workspace package, packages/shared, so that a pull
+ * request can reach the app through a file only the dependency closure finds:
+ * nothing under apps/, no install file, no workflow. The closure is read from
+ * the checkout the script runs in, and that is what such a change tests.
+ */
+function pullRequestRepo(files) {
+  const dir = mkdtempSync(join(tmpdir(), 'affected-pr-'));
+  fixtures.push(dir);
+  const git = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
+  const write = (file, text) => {
+    mkdirSync(dirname(join(dir, file)), { recursive: true });
+    writeFileSync(join(dir, file), text);
+  };
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 'test@example.invalid');
+  git('config', 'user.name', 'Test');
+  write(
+    'package.json',
+    JSON.stringify({ name: 'fixture', private: true, workspaces: ['apps/*', 'packages/*'] }),
+  );
+  write(
+    'apps/mobile/package.json',
+    manifest('@trygghverdag/mobile', { '@trygghverdag/shared': 'workspace:*' }),
+  );
+  write('packages/shared/package.json', manifest('@trygghverdag/shared'));
+  write('packages/shared/index.mjs', 'export const shared = 1;\n');
+  write('docs/notes.md', '# Notes\n');
+  git('add', '-A');
+  git('commit', '-qm', 'main');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  git('checkout', '-q', '-b', 'the-pull-request');
+  for (const [file, text] of Object.entries(files)) write(file, text);
+  git('add', '-A');
+  git('commit', '-qm', 'the pull request');
+  return dir;
+}

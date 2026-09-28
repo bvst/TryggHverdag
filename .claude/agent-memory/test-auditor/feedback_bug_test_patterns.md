@@ -24,4 +24,10 @@ ENOENT → found:false) sit behind the fake seam and go untested; mention it as 
 Bug tests are named `BUG-<n>: …` (.claude/skills/bugfix/SKILL.md). req:coverage does not track them, because they
 are not spec IDs.
 
+Cleanup safety nets in tests, such as BUG-5's `onTestFinished` SIGKILL of a child: they are fine when every test
+awaits the child's end and asserts on its code and signal before finishing. Then the hook can act only after a
+failure or a timeout. Prove it with a timeout mutant (the test must still fail) and a control with the hook disabled
+(an orphan must appear). A remaining gap worth a note: a child that ignores SIGTERM still fails only as a bare "Test
+timed out", with nothing saying the worker would not stop.
+
 Related: [[in-memory-mutation]]

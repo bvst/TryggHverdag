@@ -18,7 +18,7 @@ import tseslint from 'typescript-eslint';
  */
 export const CLOCK_FREE_PATHS = [
   'apps/server/src/domain/**/*.ts',
-  'apps/mobile/src/safety-core/**/*.ts',
+  'apps/mobile/src/safety-core/**/*.{ts,tsx}',
 ];
 
 const CLOCK_MESSAGE =
@@ -63,6 +63,10 @@ export const IGNORED_PATHS = [
   '**/coverage/**',
   '**/.turbo/**',
   '**/.expo/**',
+  // What `expo prebuild` generates from app.config.ts (INF-06). Never committed,
+  // but on disk after a local build, and ESLint does not read .gitignore.
+  'apps/mobile/android/**',
+  'apps/mobile/ios/**',
   'spikes/**', // throwaway by definition — never shipped, never linted
   'docs/**', // planning material, including the file templates INF-02 copies in
 ];

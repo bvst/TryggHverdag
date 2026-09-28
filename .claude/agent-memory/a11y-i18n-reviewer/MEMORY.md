@@ -1,0 +1,1 @@
+- [INF-06 skeleton screen precedent](project_inf06_placeholder_screen.md) — placeholder screen has no interactive elements and no dark-first support; both judged acceptable because the spec scopes them out explicitly.

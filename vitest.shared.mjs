@@ -25,3 +25,13 @@ export const TEST_FILES = [
   // separately — so each config says which of those it wants by excluding it.
   'apps/**/src/**/*.test.ts',
 ];
+
+/**
+ * The app's tests belong to jest-expo, not to Vitest (INF-06).
+ *
+ * `apps/**\/src/**\/*.test.ts` above reaches them as well, and Vitest cannot run
+ * React Native code: every run would fail on files with nothing wrong in them.
+ * Unlike the L3 and L6 exclusions, this one is the same for every config, so
+ * it is written once, here.
+ */
+export const JEST_EXPO_FILES = 'apps/mobile/**';

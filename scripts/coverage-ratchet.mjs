@@ -2,8 +2,10 @@
 /**
  * RG-04: coverage on changed files may not go down, and safety code has a floor.
  *
- * Reads coverage/coverage-summary.json (written by `pnpm run test:coverage`)
- * and compares it with the committed baseline.
+ * Reads both coverage summaries that `pnpm run test:coverage` writes, Vitest's
+ * and the app's jest-expo one (COVERAGE_SUMMARIES), and compares them with the
+ * committed baseline. Either one missing is a failure, never "nothing to
+ * measure".
  *
  * Usage:
  *   pnpm run coverage:ratchet [--base origin/main]
@@ -13,9 +15,13 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { changedFiles } from './lib/git.mjs';
-import { floorBreaches, ratchetDrops, summarize } from './lib/coverage.mjs';
+import {
+  COVERAGE_SUMMARIES,
+  floorBreaches,
+  mergeSummaries,
+  ratchetDrops,
+} from './lib/coverage.mjs';
 
-const SUMMARY = 'coverage/coverage-summary.json';
 export const BASELINE = 'coverage-baseline.json';
 
 function argValue(name, fallback) {
@@ -25,17 +31,24 @@ function argValue(name, fallback) {
 
 function main() {
   const cwd = process.cwd();
-  const summaryPath = path.join(cwd, SUMMARY);
-  if (!existsSync(summaryPath)) {
-    process.stdout.write(
-      `coverage:ratchet: ${SUMMARY} is missing, so nothing was measured. ` +
-        'Run `pnpm run test:coverage` first — a coverage gate with no numbers is not a gate.\n',
-    );
+  const merged = mergeSummaries(
+    COVERAGE_SUMMARIES.map(({ runner, file }) => {
+      const summaryPath = path.join(cwd, file);
+      return {
+        runner,
+        file,
+        summary: existsSync(summaryPath) ? JSON.parse(readFileSync(summaryPath, 'utf8')) : null,
+      };
+    }),
+    cwd,
+  );
+  if (!merged.ok) {
+    process.stdout.write(`${merged.message}\n`);
     process.exitCode = 1;
     return;
   }
 
-  const current = summarize(JSON.parse(readFileSync(summaryPath, 'utf8')), cwd);
+  const current = merged.files;
 
   if (process.argv.includes('--update')) {
     writeFileSync(

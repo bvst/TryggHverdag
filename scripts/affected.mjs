@@ -22,7 +22,7 @@
 // (test-auditor noted the version gap on #17; it is a trade, not an oversight.)
 import { appendFileSync } from 'node:fs';
 import { changedFiles, mergeBase } from './lib/git.mjs';
-import { onlyInert, reasons } from './lib/affected.mjs';
+import { onlyInert, reasons, touchesApp } from './lib/affected.mjs';
 
 const args = process.argv.slice(2);
 const base = args[args.indexOf('--base') + 1] ?? 'origin/main';
@@ -42,11 +42,15 @@ const base = args[args.indexOf('--base') + 1] ?? 'origin/main';
 // happens once per merge, and running the full suite on it costs one run.
 const event = process.env.GITHUB_EVENT_NAME;
 if (event !== undefined && event !== 'pull_request') {
-  const line = 'code=true';
+  // android-e2e included: on main it is the backstop for a wrong "no" on the
+  // pull request (INF-06).
+  const lines = ['code=true', 'app=true'];
   console.log(`affected: this is a ${event} event, not a pull request.`);
   console.log('There is no base to compare against, so every gate runs.');
-  console.log(line);
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${line}\n`);
+  for (const line of lines) console.log(line);
+  if (process.env.GITHUB_OUTPUT) {
+    appendFileSync(process.env.GITHUB_OUTPUT, lines.map((line) => `${line}\n`).join(''));
+  }
   process.exit(0);
 }
 
@@ -86,6 +90,17 @@ if (inert) {
   if (why.length > 20) console.log(`  … and ${String(why.length - 20)} more`);
 }
 
-const line = `code=${inert ? 'false' : 'true'}`;
-console.log(line);
-if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${line}\n`);
+// The second question, for android-e2e alone: can this diff change the app?
+// Worked out from the files themselves (lib/affected.mjs, touchesApp).
+const app = touchesApp(changed, { root: process.cwd() });
+console.log(
+  app
+    ? 'android-e2e: this diff can change the app, so the flows run on an emulator.'
+    : 'android-e2e: nothing in this diff can change the app, and it will say so.',
+);
+
+const lines = [`code=${inert ? 'false' : 'true'}`, `app=${app ? 'true' : 'false'}`];
+for (const line of lines) console.log(line);
+if (process.env.GITHUB_OUTPUT) {
+  appendFileSync(process.env.GITHUB_OUTPUT, lines.map((line) => `${line}\n`).join(''));
+}

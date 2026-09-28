@@ -19,6 +19,11 @@
 // its work still costs a checkout — a few seconds against thirty or forty.
 // That is the honest trade, and it is worth naming rather than claiming the
 // jobs "do not run".
+//
+// Node built-ins only: scripts/affected.mjs runs before setup-node, on whatever
+// Node the runner ships, and imports this file.
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 
 /**
  * Files that cannot change the outcome of a type check, a lint, a test or an
@@ -102,4 +107,178 @@ export function onlyInert(files) {
  */
 export function reasons(files) {
   return files.filter((file) => !INERT.some((isInert) => isInert(file)));
+}
+
+// INF-06: can this diff change the app? android-e2e asks, because its full run
+// costs ten minutes or more and a "no" costs one.
+//
+// A wrong "no" is the expensive mistake: an app-breaking change would merge
+// with a green android-e2e over it. So nothing here is a list kept by hand. The
+// app's dependency closure is read from the package.json files, and the e2e
+// script's import closure from its source, every time this runs: a dependency
+// or an import added later is followed without an edit here.
+
+/** Where the app lives. */
+const APP_DIR = 'apps/mobile/';
+
+/** Root files that decide what is installed, and with which Node. */
+const INSTALL_FILES = [
+  'package.json',
+  'pnpm-lock.yaml',
+  'pnpm-workspace.yaml',
+  '.npmrc',
+  '.nvmrc',
+  '.node-version',
+];
+
+/** The workflow that runs android-e2e: a change to it changes how the app is tested. */
+const CI_WORKFLOW = '.github/workflows/ci.yml';
+
+/** The package.json script that runs the flows (CI-09). */
+const E2E_SCRIPT = 'e2e:android';
+
+/** A JSON file under `root`, or null when it is not there. */
+function readJson(root, file) {
+  const at = path.join(root, file);
+  return existsSync(at) ? JSON.parse(readFileSync(at, 'utf8')) : null;
+}
+
+/**
+ * The workspace packages, as package name → folder (with a trailing slash),
+ * from the root package.json's "workspaces" globs. Only `folder/*` and plain
+ * folders are written there; anything else is refused loudly, because a glob
+ * this cannot read would leave packages out of the closure without a word.
+ *
+ * @param {string} root
+ * @returns {Map<string, string>}
+ */
+function workspacePackages(root) {
+  const packages = new Map();
+  for (const glob of readJson(root, 'package.json')?.workspaces ?? []) {
+    let folders;
+    if (glob.endsWith('/*') && !glob.slice(0, -2).includes('*')) {
+      const parent = glob.slice(0, -2);
+      folders = existsSync(path.join(root, parent))
+        ? readdirSync(path.join(root, parent), { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => `${parent}/${entry.name}`)
+        : [];
+    } else if (!glob.includes('*')) {
+      folders = [glob.replace(/\/$/, '')];
+    } else {
+      throw new Error(
+        `affected: cannot read the workspace glob "${glob}", so the app's dependency closure cannot be worked out.`,
+      );
+    }
+    for (const folder of folders) {
+      const name = readJson(root, `${folder}/package.json`)?.name;
+      if (typeof name === 'string') packages.set(name, `${folder}/`);
+    }
+  }
+  return packages;
+}
+
+const namesIn = (manifest, fields) =>
+  fields.flatMap((field) => Object.keys(manifest?.[field] ?? {}));
+
+/**
+ * The folders of the workspace packages the app is built from: what it
+ * depends on, dev dependencies included, and what those depend on in turn.
+ * A dependency's own dev dependencies are not installed with it, so the walk
+ * past the app follows only what is.
+ *
+ * @param {string} root
+ * @returns {string[]}
+ */
+function appClosure(root) {
+  const packages = workspacePackages(root);
+  const folders = new Set();
+  const queue = namesIn(readJson(root, `${APP_DIR}package.json`), [
+    'dependencies',
+    'devDependencies',
+    'optionalDependencies',
+    'peerDependencies',
+  ]);
+  while (queue.length > 0) {
+    const folder = packages.get(queue.shift());
+    if (folder === undefined || folders.has(folder)) continue;
+    folders.add(folder);
+    queue.push(
+      ...namesIn(readJson(root, `${folder}package.json`), [
+        'dependencies',
+        'optionalDependencies',
+        'peerDependencies',
+      ]),
+    );
+  }
+  return [...folders];
+}
+
+/** Specifiers of every static import, re-export, side-effect import and dynamic import. */
+const IMPORTS = [
+  /\b(?:import|export)\s[^'"`;]*?\sfrom\s*['"]([^'"]+)['"]/g,
+  /\bimport\s*['"]([^'"]+)['"]/g,
+  /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+];
+
+/**
+ * The e2e script and every repository module it imports, directly or through
+ * another one, relative to `root`. Empty when there is no such script.
+ *
+ * A script that names no entry file this can read is an error, not an empty
+ * closure: an empty one would answer "no" for every change to the script and
+ * its modules, and android-e2e would pass without running.
+ *
+ * @param {string} root
+ * @returns {Set<string>}
+ */
+function e2eClosure(root) {
+  const command = readJson(root, 'package.json')?.scripts?.[E2E_SCRIPT];
+  if (command === undefined) return new Set();
+  const entry = /\bnode\s+(\S+\.[cm]?js)\b/.exec(command)?.[1];
+  if (entry === undefined) {
+    throw new Error(
+      `The ${E2E_SCRIPT} script, ${JSON.stringify(command)}, names no \`node <file>.mjs\` entry ` +
+        'to follow, so what can change it cannot be worked out.',
+    );
+  }
+  const found = new Set();
+  const queue = [path.normalize(entry)];
+  while (queue.length > 0) {
+    const file = queue.shift();
+    if (found.has(file) || !existsSync(path.join(root, file))) continue;
+    found.add(file);
+    const source = readFileSync(path.join(root, file), 'utf8');
+    for (const pattern of IMPORTS) {
+      for (const [, specifier] of source.matchAll(pattern)) {
+        if (specifier?.startsWith('./') || specifier?.startsWith('../')) {
+          queue.push(path.normalize(path.join(path.dirname(file), specifier)));
+        }
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * True when any changed file can change the app or how android-e2e tests it.
+ *
+ * An empty diff answers false: there is nothing for android-e2e to check.
+ *
+ * @param {string[]} files paths, relative to the repository root
+ * @param {{ root: string }} options root is the repository to read the closures from
+ * @returns {boolean}
+ */
+export function touchesApp(files, { root }) {
+  if (files.length === 0) return false;
+  const dependencies = appClosure(root);
+  const e2e = e2eClosure(root);
+  return files.some(
+    (file) =>
+      file.startsWith(APP_DIR) ||
+      INSTALL_FILES.includes(file) ||
+      file === CI_WORKFLOW ||
+      dependencies.some((folder) => file.startsWith(folder)) ||
+      e2e.has(file),
+  );
 }

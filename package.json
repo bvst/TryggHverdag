@@ -21,10 +21,12 @@
     "typecheck": "turbo run typecheck",
     "imports:check": "depcruise --config .dependency-cruiser.cjs .claude/hooks apps packages scripts",
     "test:hooks": "vitest run .claude/hooks",
-    "test:unit": "vitest run",
+    "test:unit": "vitest run && pnpm --filter @trygghverdag/mobile --fail-if-no-match run test",
     "test:integration": "vitest run --config vitest.integration.config.mjs",
     "test:system": "vitest run --config vitest.system.config.mjs",
-    "test:coverage": "vitest run --coverage --config vitest.coverage.config.mjs",
+    "test:coverage": "vitest run --coverage --config vitest.coverage.config.mjs && pnpm --filter @trygghverdag/mobile --fail-if-no-match run test:coverage",
+    "e2e:android": "node scripts/e2e-android.mjs",
+    "dev": "pnpm --filter @trygghverdag/mobile run start",
     "gate:file": "node scripts/gate-file.mjs",
     "gate:static": "pnpm run format:check && pnpm run typecheck && pnpm run lint && pnpm run imports:check && pnpm run infra:check",
     "gate:quick": "node scripts/gate.mjs quick",
@@ -50,5 +52,19 @@
     "turbo": "^2.11.2",
     "typescript": "catalog:",
     "vitest": "^5.0.1"
+  },
+  "pnpm": {
+    "packageExtensions": {
+      "react-native-drawer-layout": {
+        "peerDependenciesMeta": {
+          "react-native-gesture-handler": {
+            "optional": true
+          },
+          "react-native-reanimated": {
+            "optional": true
+          }
+        }
+      }
+    }
   }
 }

@@ -122,17 +122,19 @@ says so, not because every pull request does.
 
 ### The checks to require
 
-The ten in `main-ruleset.json`. Adding them by hand instead, run
+The thirteen in `main-ruleset.json`. Adding them by hand instead, run
 `pnpm run gate:integrity` and copy the names it prints under "required today" —
 never from prose, which is a list nothing verifies.
 
-Three checks are missing on purpose, because the scripts they would run do not
-exist yet: `integration` and `system` (INF-05) and `android-e2e` (INF-06).
-`ai-review (code-reviewer)` and `ai-review (a11y-i18n-reviewer)` are advisory
-and must never be required (D-043).
+Every check from Section 8 now has a job: the last one, `android-e2e` (CI-09),
+arrived with INF-06. `ai-review (code-reviewer)` and
+`ai-review (a11y-i18n-reviewer)` are advisory and must never be required (D-043).
 
-Nobody has to remember to add the missing ones later: `gate:integrity` starts
-failing the day one of those checks becomes possible but is still not required.
+A check added later needs no reminder either: `gate:integrity` starts failing
+the day a check becomes possible but is still not required. That is how
+`android-e2e` arrives: the pull request that adds `e2e:android` is red on
+`gate-integrity` until the owner adds the check to the live ruleset (A-28, in
+`docs/specs/INF-06.md`).
 
 ## Part 3 — the repository settings (1 minute)
 

@@ -23,7 +23,6 @@ Found on INF-08 (2026-09-25).
   anywhere counts as a kill. INF-08: a mutant was "killed" only because a slow
   `bin.test.ts` test failed under Stryker's load. Load-test new timing-based
   tests (parallel runs plus CPU burners) before trusting a score.
-- **Required checks without a token:** `curl` against
-  `/repos/bvst/TryggHverdag/rulesets/<id>` confirms them when `gate:integrity`
-  cannot (ruleset 23864486, 2026-09-25). `bypass_actors` comes back `[]`
-  without a token, so bypass stays unverified that way.
+- **Required checks without a token:** superseded. The repository went private
+  on 2026-09-26, so anonymous `curl` returns 404. Use `gh api` instead; see
+  [[gate-integrity-local]].

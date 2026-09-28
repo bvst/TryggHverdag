@@ -1,5 +1,5 @@
 import { defineConfig } from 'vitest/config';
-import { TEST_FILES } from './vitest.shared.mjs';
+import { JEST_EXPO_FILES, TEST_FILES } from './vitest.shared.mjs';
 
 /**
  * The run the coverage ratchet measures (RG-04).
@@ -36,17 +36,21 @@ import { TEST_FILES } from './vitest.shared.mjs';
 export default defineConfig({
   test: {
     include: TEST_FILES,
-    exclude: ['**/node_modules/**', '**/*.integration.test.ts'],
+    exclude: ['**/node_modules/**', JEST_EXPO_FILES, '**/*.integration.test.ts'],
     environment: 'node',
     testTimeout: 60_000,
     coverage: {
       provider: 'v8',
       reporter: ['text-summary', 'json-summary'],
       include: ['scripts/**/*.mjs', 'packages/**/src/**/*.ts', 'apps/**/src/**/*.ts'],
+      // The app is measured by jest-expo alone. Measured here as well, its files
+      // would count at 0 % beside their real figure, and the ratchet refuses a
+      // file both runners report (scripts/lib/coverage.mjs, mergeSummaries).
       exclude: [
         '**/*.test.*',
         'apps/server/src/adapters/!(healthchecks.ts)',
         'apps/server/src/adapters/*/**',
+        JEST_EXPO_FILES,
       ],
       reportsDirectory: 'coverage',
     },
