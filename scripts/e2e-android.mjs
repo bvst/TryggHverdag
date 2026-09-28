@@ -26,6 +26,8 @@ import process from 'node:process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
   APK,
+  INSTALL_DEADLINE_MS,
+  INSTALL_INTERVAL_MS,
   LOCALE_DEADLINE_MS,
   LOCALE_INTERVAL_MS,
   REPORT_DIR,
@@ -35,6 +37,7 @@ import {
   checkMaestro,
   ensureMaestro,
   escapeRegExp,
+  installWhenReady,
   judgeReport,
   maestroTestCommand,
   waitForLocale,
@@ -115,6 +118,8 @@ if (buildOnly && skipBuild) {
 // 1. Preflight: everything that can be checked before a ten-minute build.
 const device = buildOnly ? undefined : expectOk(checkDevices(output(adb, ['devices']))).serial;
 expectOk(checkJava(output(java, ['-version'])));
+const installDeadline = millisecondsFrom('E2E_ANDROID_INSTALL_DEADLINE_MS', INSTALL_DEADLINE_MS);
+const installInterval = millisecondsFrom('E2E_ANDROID_INSTALL_INTERVAL_MS', INSTALL_INTERVAL_MS);
 
 const maestro = buildOnly ? undefined : await ensureMaestro({ root });
 if (maestro !== undefined) {
@@ -144,11 +149,35 @@ if (!skipBuild) {
 }
 if (buildOnly) process.exit(0);
 
-// 3. Install.
+// 3. Install. On the first boot in bokmål the package manager refuses installs
+// for a while after the device reports ready (runs 6 and 8), so an install
+// that fails that way is tried again, up to a deadline; any other failure
+// stops the run. This waits for the device: the flows still run once.
 if (!existsSync(path.join(root, APK))) {
   stop(`there is no release build at ${APK}. Run with --build-only first, or without flags.`);
 }
-runLive('install the release build', [adb, '-s', device ?? '', 'install', '-r', APK], root);
+const installArgs = ['-s', device ?? '', 'install', '-r', APK];
+let installAttempt = 0;
+const install = () => {
+  installAttempt += 1;
+  process.stdout.write(
+    `\ne2e:android: install the release build, attempt ${String(installAttempt)}\n` +
+      `  $ ${[adb, ...installArgs].join(' ')}\n`,
+  );
+  // Two minutes is far past any install seen, and keeps a hung adb inside
+  // the CI step's own time limit.
+  const result = run(adb, installArgs, { cwd: root, timeout: 120_000 });
+  process.stdout.write(`${result.output.trimEnd()}\n`);
+  return result.status === null ? null : result.output;
+};
+expectOk(
+  await installWhenReady(install, {
+    deadline: installDeadline,
+    interval: installInterval,
+    now: Date.now,
+    sleep,
+  }),
+);
 
 // 4. Run every flow, with what the flows need read from the app itself.
 const appDir = path.join(root, 'apps', 'mobile');

@@ -290,6 +290,93 @@ export async function waitForLocale(
   }
 }
 
+/**
+ * How long to keep trying the install while the package manager is not ready.
+ * On the first boot in bokmål, the device refuses installs for a while after
+ * it reports ready: on the Mac, an install 17 s after boot_completed failed
+ * and one 80 s later worked, and CI's runner is slower (runs 6 and 8).
+ */
+export const INSTALL_DEADLINE_MS = 120_000;
+
+/** How long to wait between installs: each one streams the whole APK again. */
+export const INSTALL_INTERVAL_MS = 5_000;
+
+/**
+ * What `adb install -r` printed means. 'ok' only when a line is exactly
+ * Success. 'not-ready' only for the two answers of a package manager that has
+ * not come back after the language switch: `Can't find service: package` (run
+ * 6) and a NullPointerException in PackageManagerInternal (run 8). Everything
+ * else is 'failed', so an install that cannot work is never waited on.
+ *
+ * @param {string | null} output stdout and stderr together, or null when adb
+ *   could not be run
+ * @returns {'ok' | 'not-ready' | 'failed'}
+ */
+export function installVerdict(output) {
+  if (output === null) return 'failed';
+  if (/^Success\r?$/m.test(output)) return 'ok';
+  const packageServiceGone = /Can't find service: package\r?$/m.test(output);
+  const packageManagerNull = /NullPointerException\b.*\bPackageManagerInternal\./.test(output);
+  return packageServiceGone || packageManagerNull ? 'not-ready' : 'failed';
+}
+
+/** What adb printed, for a message: on lines of its own, or why there is nothing. */
+function adbPrinted(output) {
+  if (output === null) return 'adb could not be run.';
+  if (output.trim() === '') return 'adb printed nothing.';
+  return `adb printed:\n${output.trim()}`;
+}
+
+/**
+ * Installs at once, and while the package manager is not ready, again every
+ * `interval`. It passes on the first Success. Any other failure stops it at
+ * once, with what adb printed: only a device that is still starting is waited
+ * for. Once `deadline` has passed without a Success it fails, and says how long
+ * it waited, how many times it tried and what adb printed last. `now` and
+ * `sleep` are its only clock, as in waitForLocale.
+ *
+ * @param {() => string | null} install runs `adb install -r` and answers what
+ *   it printed, stdout and stderr together, or null when adb could not be run
+ * @param {{
+ *   deadline?: number,
+ *   interval?: number,
+ *   now: () => number,
+ *   sleep: (ms: number) => Promise<unknown>,
+ * }} options — milliseconds throughout
+ * @returns {Promise<{ ok: boolean, message: string }>}
+ */
+export async function installWhenReady(
+  install,
+  { deadline = INSTALL_DEADLINE_MS, interval = INSTALL_INTERVAL_MS, now, sleep },
+) {
+  const start = now();
+  for (let attempts = 1; ; attempts += 1) {
+    const output = install();
+    const verdict = installVerdict(output);
+    if (verdict === 'ok') {
+      return { ok: true, message: `The install succeeded on attempt ${String(attempts)}.` };
+    }
+    if (verdict === 'failed') {
+      return {
+        ok: false,
+        message:
+          'The install failed, and not with either answer of a device that is still starting, ' +
+          `so it is not tried again. ${adbPrinted(output)}`,
+      };
+    }
+    if (now() - start >= deadline) {
+      return {
+        ok: false,
+        message:
+          `Waited ${String(deadline / 1000)} s for the device's package manager to accept the ` +
+          `install, and it was still not ready after ${String(attempts)} ` +
+          `${attempts === 1 ? 'attempt' : 'attempts'}. When last tried, ${adbPrinted(output)}`,
+      };
+    }
+    await sleep(interval);
+  }
+}
+
 /** The value of one XML attribute in an element's opening tag, or undefined. */
 const attribute = (tag, name) => new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
 

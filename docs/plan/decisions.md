@@ -2115,6 +2115,22 @@ any other path is work, not a candidate for the same treatment.
         - the install, 22 s;
         - the flow, 24 s.
         KVM passed with `--settle` on all five runs since the change.
+      - **Run 8** (36324362689, the same code as run 7) failed. Its locale
+        check passed, and then `adb install` threw `NullPointerException:
+        … PackageManagerInternal.freeStorage …`. So run 7's green was partly
+        timing. Tested on the Mac, on fresh CI-identical devices:
+        - on the first boot in bokmål, installs fail for a while after the
+          device reports ready (17 s after it failed, 80 s after it worked);
+        - a reboot after the switch did not help;
+        - later boots installed straight away, 6 of 6;
+        - with no language switch, the install after the first boot worked;
+        - `-prop persist.sys.locale` is refused ("only 'qemu.*' properties
+          are supported").
+        So `adb install` now waits, for up to 120 s, while it fails with one
+        of the two not-ready errors seen: `Can't find service: package`, or a
+        `NullPointerException` in `PackageManagerInternal`. Any other install
+        error fails at once. This is a readiness wait on the install, and D-060
+        still holds: a failed flow is never retried.
       - **Still to measure:** the warm durations. The Gradle cache and the AVD
         snapshot are saved from `main` only, so the first run after merge
         fills them and the next one shows the warm figure.
