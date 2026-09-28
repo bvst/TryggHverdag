@@ -1855,6 +1855,14 @@ any other path is work, not a candidate for the same treatment.
 - **Consequences:** a known gap — an API-only failure on staging may page
   later than 5 minutes (up to ~5–10 min); the drill (A-26) is INF-08's
   done-criterion and has not happened yet.
+- **Update 2026-09-28:** the drill ran on 2026-09-26, and the owner accepted
+  it on 2026-09-28, which closes INF-08.
+  - Healthchecks.io alerted about 3 minutes after the worker's last ping.
+    UptimeRobot alerted 48 seconds after that.
+  - Both alert by email. UptimeRobot's app was not installed: "it is enough
+    for now" (owner).
+  - UptimeRobot's recovery and its keyword rule were not checked.
+  - How production pages the owner stays the go-live question above.
 - **Follow-ups for M2, where the watchdog task will find them:**
   - The check-in follows the **heartbeat**, not the watchdog's sweep. Once the
     watchdog runs in the worker, a broken sweep beside a healthy heartbeat is
@@ -1906,6 +1914,14 @@ any other path is work, not a candidate for the same treatment.
   12 hours.
 - **Consequences:** #19 keeps the comments from before this decision. Closing it
   makes the next run open a clean dashboard issue; that is the owner's choice.
+- **Update 2026-09-28:** #32 closed #19 itself; the owner did not choose to.
+  - #32's description suggested "close #19", and GitHub reads those words as
+    a closing keyword.
+  - The next run (2026-09-27) opened, pinned and assigned #35, as designed.
+    #35 is the dashboard now.
+  - The first two scheduled runs started at 06:29 and 06:38 UTC, 5 h 22 min
+    and 5 h 31 min late. So the report lands around 08:30 in Oslo, not the
+    08:00 estimated above.
 
 ## D-081 — App skeleton v1: Expo SDK 57 and the toolchain built around it
 - **Date:** 2026-09-26 · **Status:** Accepted (delegated, D-031) · **Section:** 4/5/6/8 (M0, INF-06)
