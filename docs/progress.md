@@ -24,7 +24,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-03 | Gate scripts + HK-08 | ✅ Done — 2026-09-20 ([#2](https://github.com/bvst/TryggHverdag/pull/2)) |
 | INF-04 | CI workflows, merge rules, CODEOWNERS | ✅ Done — 2026-09-23 ([#3](https://github.com/bvst/TryggHverdag/pull/3)) |
 | INF-05 | Server skeleton | ✅ Done — 2026-09-23 ([#6](https://github.com/bvst/TryggHverdag/pull/6)); four test levels green, mutation 100 % |
-| INF-06 | App skeleton | 🟡 [#34](https://github.com/bvst/TryggHverdag/pull/34): every check green, including the first green `android-e2e` (2026-09-27, "1 of 1 flow passed" on GitHub), except `gate-integrity`. That one waits on the owner's A-28 (add `android-e2e` to the live ruleset), then a re-run; the owner's approval follows |
+| INF-06 | App skeleton | ✅ Done — 2026-09-28 ([#34](https://github.com/bvst/TryggHverdag/pull/34)). L5 and L7 pass in CI: `android-e2e` "1 of 1 flow passed" on runs 7 and 9. The first run on `main` failed on a "System UI isn't responding" dialog on a 2-core emulator; BUG-6 in flight |
 | INF-07 | Staging on Clever Cloud | ✅ Done — 2026-09-25 ([#22](https://github.com/bvst/TryggHverdag/pull/22), fixes [#23](https://github.com/bvst/TryggHverdag/pull/23) [#24](https://github.com/bvst/TryggHverdag/pull/24), names [#25](https://github.com/bvst/TryggHverdag/pull/25)). A merge deployed and the smoke test passed; BUG-3 fixed ([#27](https://github.com/bvst/TryggHverdag/pull/27)) |
 | INF-08 | Monitoring | ✅ Done — 2026-09-28 ([#31](https://github.com/bvst/TryggHverdag/pull/31)). In the owner's drill (2026-09-26) Healthchecks.io alerted about 3 minutes after the worker's last ping, and UptimeRobot alerted too, both by email. The owner accepted it with no UptimeRobot app; UptimeRobot's recovery and its keyword rule were not checked |
 | INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). Since D-080 ([#32](https://github.com/bvst/TryggHverdag/pull/32)) a dashboard: the description of the pinned issue [#35](https://github.com/bvst/TryggHverdag/issues/35), replaced every run. It is scheduled at 01:07 UTC, but GitHub starts it about 5½ hours late, so it lands around 08:30 in Oslo. The missed-run alarm is proven (2026-09-25) |
@@ -126,10 +126,11 @@ The things that still bite, and cost a session hours the first time.
   signature: `runner_id: 0`, empty `runner_name`, **no `steps` array at all** —
   not even GitHub's own "Set up job" — and a job log returning HTTP 404, because
   nothing ran to write one. The included minutes had run out against a spending
-  limit, and the owner raising it fixed it within minutes. This repository is
-  private, so Actions minutes bill against the account; a public one gets
-  standard runners free and cannot fail this way. **Check Settings → Billing and
-  licensing → Plans and usage first.** Re-running is pointless and consumes more
+  limit, and the owner raising it fixed it within minutes. **Since 2026-09-28
+  the repository is public**, so standard runners are free and unlimited, and
+  have 4 CPUs and 16 GB RAM instead of 2 and 8 (GitHub's docs). This cannot
+  happen on standard runners any more; if the signature ever returns, check
+  Settings → Billing and licensing → Plans and usage first. Re-running is pointless and consumes more
   of what is already gone. Fifteen jobs fire on every push (nine `ci`, six
   `ai-review`), so a day of many small pushes is expensive — which is the
   argument for path filters on the docs-only ones.
