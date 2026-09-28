@@ -28,7 +28,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-07 | Staging on Clever Cloud | ✅ Done — 2026-09-25 ([#22](https://github.com/bvst/TryggHverdag/pull/22), fixes [#23](https://github.com/bvst/TryggHverdag/pull/23) [#24](https://github.com/bvst/TryggHverdag/pull/24), names [#25](https://github.com/bvst/TryggHverdag/pull/25)). A merge deployed and the smoke test passed; BUG-3 fixed ([#27](https://github.com/bvst/TryggHverdag/pull/27)) |
 | INF-08 | Monitoring | ✅ Done — 2026-09-28 ([#31](https://github.com/bvst/TryggHverdag/pull/31)). In the owner's drill (2026-09-26) Healthchecks.io alerted about 3 minutes after the worker's last ping, and UptimeRobot alerted too, both by email. The owner accepted it with no UptimeRobot app; UptimeRobot's recovery and its keyword rule were not checked |
 | INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). Since D-080 ([#32](https://github.com/bvst/TryggHverdag/pull/32)) a dashboard: the description of the pinned issue [#35](https://github.com/bvst/TryggHverdag/issues/35), replaced every run. It is scheduled at 01:07 UTC, but GitHub starts it about 5½ hours late, so it lands around 08:30 in Oslo. The missed-run alarm is proven (2026-09-25) |
-| INF-10 | Gate drills | ⬜ Not started. Parked 2026-09-24 for INF-07. Open question to the owner: split into offline drills now and live GitHub drills later? |
+| INF-10 | Gate drills | 🟡 In flight on `claude/m0-roadmap-task-0qgkmf`. The spec (`docs/specs/INF-10.md`) and D-082 are final; the red phase is verified (68 failing tests, all INF-10); the implementer is at work |
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
 verdicts. On its first working day it caught two genuine bugs, a half-finished
@@ -248,11 +248,33 @@ The staging names were changed to `trygg-hverdag` before the working apply
 (`trygghverdag-staging` and `-db`) are outside Terraform and should be deleted
 in the console. The app costs money.
 
-**INF-10 was parked for it.** Before switching, Claude found that
-`req:coverage` counts requirement IDs, not acceptance criteria. RG-01 says the
-same, but the roadmap's drill ("a new acceptance criterion without a test")
-asks for more, so that drill would pass for a requirement that already has one
-test. Raise it when INF-10 resumes.
+**INF-10 — gate drills — is in flight** (2026-09-28, branch
+`claude/m0-roadmap-task-0qgkmf`). The owner answered five questions, each with
+the recommended option, recorded as **D-082**:
+- offline drills now, and one live attempt at the two GitHub-only drills
+  later;
+- `req:coverage` checks each acceptance criterion (amends RG-01);
+- oasdiff 1.32.1 is installed now, pinned by its published SHA-256;
+- RG-03's skip check is widened to conditional and chained skips, and to any
+  `skip()` call in a test file.
+
+Done and verified:
+- **The spec is final**, with 17 acceptance criteria.
+- **oasdiff was checked before it was decided.** The release archive matched
+  its `checksums.txt`. On our OpenAPI 3.1.1 description, the unchanged file
+  exited 0, and the file with `GET /health` removed exited 1.
+- **The red phase is verified independently.** Of 1364 tests, 68 fail, every
+  one named INF-10, and none is skipped. `tests:changes` reports none weakened,
+  and `req:coverage` still says 4 of 63.
+
+**Left:**
+- green (the implementer is at work);
+- each drill run once against its real gate made to always pass;
+- reviews and the audit;
+- the records and the pull request.
+
+The stop gate's `gate:static` fails in the meantime, on purpose. A red test
+imports `scripts/lib/gate-drills.mjs`, which the implementer is writing.
 
 **The daily report becomes a dashboard (D-080, owner's decision 2026-09-26).**
 Each run replaces the pinned issue's description with the current state, like
