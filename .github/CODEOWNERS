@@ -27,6 +27,11 @@
 # rules changing a line.
 /.githooks/                       @bvst @urso-agent
 /package.json                     @bvst @urso-agent
+# Their include and exclude lists decide which tests CI runs at all, the gate
+# drills among them (D-082).
+/vitest.config.mjs                @bvst @urso-agent
+/vitest.shared.mjs                @bvst @urso-agent
+/vitest.coverage.config.mjs       @bvst @urso-agent
 /packages/contracts/released/     @bvst @urso-agent
 /docs/plan/decisions.md           @bvst @urso-agent
 /infra/                           @bvst @urso-agent

@@ -2175,3 +2175,101 @@ any other path is work, not a candidate for the same treatment.
   environment variable without first reading why it is there — several of
   them (item 3 especially) fail silently or expensively if quietly removed.
   Item 12 is a standing to-do on this same decision, not a separate task.
+
+## D-082 — Gate drills: offline now, live later; three gates tightened first
+- **Date:** 2026-09-28 · **Status:** Accepted (owner, 2026-09-28 and
+  2026-09-29: seven questions asked in session, each with Claude's
+  recommendation, and each answered with it) · **Section:** 6/8 (M0, INF-10)
+- **Context:** INF-10 is M0's last task: the roadmap's nine gate drills. Each
+  is a scripted attempt that must be blocked, and a drill that gets through
+  means M0 is not done. Writing the spec (`docs/specs/INF-10.md`) showed that
+  three of the drills that can run offline would get through today. In each
+  case the gap is in the gate, not the drill:
+  - **RG-01.** `req:coverage` counts a requirement as covered once any test
+    names it. So a new acceptance criterion with no test passes whenever its
+    requirement already has one.
+  - **CI-06.** Nothing installs oasdiff. Once a version is released, `api:diff`
+    can only refuse to run ("compatibility was NOT checked"), and nobody has
+    seen it detect a break.
+  - **RG-03.** The skip check in `scripts/lib/test-strength.mjs` is shared by
+    HK-05 and `tests:changes`. It misses `describe.skipIf(true)`,
+    `describe.runIf(false)`, a skip behind another modifier such as
+    `describe.concurrent.skip`, and a test that calls its context's `skip()`
+    from its body. Each switches tests off with every count unchanged. Checked
+    by running the pattern on those lines.
+- **Decision:**
+  1. **Offline now, live later.** Seven drills become tests that run in CI:
+     RG-03, CI-03, RG-01, CI-06, HK-02, HK-07 and CI-11.
+     - The two that only GitHub can enforce are a push to `main` (D-029) and a
+       merge without code-owner approval. They stay covered by `gate:integrity`
+       reading the live rules. The drill report shows them as not run here,
+       never as passed.
+     - One live attempt at those two follows later, as its own task, with the
+       owner watching. D-071's question, whether code-owner review is
+       enforced, stays open until then. That attempt must allow for
+       `urso-agent`'s automatic approval (D-072).
+  2. **RG-01 checks acceptance criteria.** This amends RG-01, which D-040 makes
+     binding.
+     - With `--fail-on-uncovered-changed`, `req:coverage` also fails when a
+       changed spec names `<ID>-ACn` for a tracked requirement and no test
+       names that exact criterion.
+     - Untracked IDs (INF, CI, HK, AR and the like) stay out (D-074), and
+       parked requirements never block, as today.
+     - The way out, for a criterion that truly cannot be automated, is a spec
+       line `req-coverage: not automated <ID>-ACn: <reason>`. The gate prints
+       every such line on every run and refuses an empty reason.
+  3. **oasdiff is installed now.**
+     - Version 1.32.1, Apache-2.0.
+     - It runs in CI's `unit` job for the drill and in the `contract` job for
+       the gate.
+     - It is installed like gitleaks: downloaded from the release and checked
+       against the SHA-256 the release publishes in `checksums.txt`:
+       `7c8939fc49b75ee11fec66a5b83b37a2fca6aee109fed85013b1ba2ac2a1ee7f` for
+       `oasdiff_1.32.1_linux_amd64.tar.gz`.
+     - The version and hash are written once. Dependabot cannot see the pin, so
+       it is raised by hand.
+  4. **RG-03's skip check is widened.** It now counts:
+     - `skipIf` and `runIf`;
+     - a skip, focus or todo behind another modifier;
+     - any call to `skip(` in a test file, whatever the test context is
+       named: `ctx.skip()`, `t.skip()`, or a `skip()` taken from the context.
+
+     Names such as `skipIfMissing` do not count. Other ways to hollow out a
+     test, such as an early return, stay with `test-auditor`: no text pattern
+     catches them all.
+  5. **RG-03 widened further** (2026-09-29), after `code-reviewer` found more
+     forms. Nothing in the repository uses them today.
+     - The same forms count on `suite`, and on any test object, such as one
+       made with `test.extend`, including bracket access.
+     - `.fails` and `.failing` count too, on their own and with their own
+       message. They turn a failing test into a passing one, and the run
+       reports it as passed.
+  6. **The files that decide which tests CI runs need the owner**
+     (2026-09-29). `vitest.config.mjs`, `vitest.shared.mjs` and
+     `vitest.coverage.config.mjs` join CODEOWNERS and `OWNER_APPROVAL_PATHS`.
+     Otherwise, a change that stopped the drills from running would be caught
+     only by the AI reviewers. `code-reviewer` and `privacy-security-reviewer`
+     each found this; INF-06 had raised it earlier.
+- **Checked before deciding (2026-09-28, in session):**
+  - The release archive passed `sha256sum -c` against the published
+    `checksums.txt`, and printed `oasdiff version 1.32.1`.
+  - Run the way `api:diff` runs it (`breaking <released> <current> --fail-on
+    ERR`) on `packages/contracts/openapi.json`, which is OpenAPI 3.1.1:
+    - unchanged: `No changes detected`, exit 0;
+    - with `GET /health` removed: `error
+      [api-path-removed-without-deprecation] … in API GET /health`, exit 1.
+  - The licence is the Apache-2.0 `LICENSE` of the module source at v1.32.1.
+  - The same method reproduces the gitleaks hash already pinned in `ci.yml`.
+- **Consequences:**
+  - A conditional test is refused like a skip, so one that is needed must say
+    why, as any RG-03 change does. No test in the repository uses these forms
+    today, so nothing existing breaks.
+  - Every tracked criterion that a changed spec names needs a test that names
+    it, or a visible not-automated line. That matters from M2 on, where one
+    alert story carries several criteria.
+  - Every CI run of `unit` and `contract` downloads oasdiff. INF-10 measures
+    the cost.
+  - How the drills are built is Claude's choice (D-031): one Vitest file, a
+    `gate:drills` report, CI's existing `unit` job, and no new required check.
+    It is recorded in the spec's Approach and summarised here when INF-10 is
+    done.

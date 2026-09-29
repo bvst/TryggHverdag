@@ -36,6 +36,14 @@ export const QUICK_STEPS = [
 export const FULL_STEPS = [
   ...QUICK_STEPS.slice(0, 2),
   {
+    // The unit tests have just run the drills with every other test. This is
+    // their verdict in the roadmap's nine rows, blocked or not, for the person
+    // reading a full run. Not in quick: test:unit already runs them there.
+    name: 'gate drills (INF-10)',
+    command: pnpmRun('gate:drills'),
+    needsScript: 'gate:drills',
+  },
+  {
     // Its own script and its own config, not `test:unit --coverage`. The floor
     // and the baseline in coverage-baseline.json were recorded from unit *and*
     // system tests, because the API, the router and the health service are

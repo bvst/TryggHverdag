@@ -6,10 +6,15 @@
  * and writes docs/requirements-status.md. This report is also how progress is
  * measured (Section 9) — by tests, not by claims.
  *
+ * Every run also prints each criterion a spec lets through untested with a
+ * `req-coverage: not automated <ID>-ACn: <reason>` line, and its reason (D-082).
+ *
  * Usage:
  *   pnpm run req:coverage                          write the report
  *   pnpm run req:coverage --fail-on-uncovered-changed   also fail when this
- *       branch touches a requirement that still has no test (used in CI)
+ *       branch touches a requirement that still has no test, a changed spec
+ *       names an acceptance criterion no test names, or a not-automated line
+ *       gives no reason (used in CI)
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -19,10 +24,15 @@ import { matchesAnyGlob } from './lib/glob.mjs';
 import { run } from './lib/proc.mjs';
 import { TEST_GLOBS } from './lib/test-strength.mjs';
 import {
+  SPECS_DIR,
   collectRequirements,
   coverage,
+  isLive,
+  notAutomatedLines,
+  notAutomatedNotices,
   renderStatus,
-  uncoveredInChanges,
+  rg01Message,
+  rg01Refusals,
 } from './lib/requirements.mjs';
 
 const REPORT = 'docs/requirements-status.md';
@@ -74,18 +84,23 @@ function main() {
   const withText = (files) =>
     files.map((file) => ({ file, text: read(file) ?? '' })).filter((f) => f.text !== '');
   const testFiles = withText(tracked.filter((file) => matchesAnyGlob(file, TEST_GLOBS)));
-  const specFiles = withText(tracked.filter((file) => file.startsWith('docs/specs/')));
+  const specFiles = withText(tracked.filter((file) => file.startsWith(SPECS_DIR)));
 
   const rows = coverage(requirements, testFiles, specFiles);
   const report = renderStatus(rows);
   writeFileSync(path.join(cwd, REPORT), report);
 
   const covered = rows.filter((row) => row.tests.length > 0).length;
-  const live = rows.filter((row) => row.priority !== 'parked').length;
+  const live = rows.filter(isLive).length;
   process.stdout.write(
     `req:coverage: ${String(covered)} of ${String(live)} live requirements have a test that names them. ` +
       `Report written to ${REPORT}.\n`,
   );
+
+  // The way out is never taken quietly: every criterion a spec lets through
+  // untested is printed with its reason, quoted, on every run (D-082).
+  const notAutomated = notAutomatedLines(specFiles);
+  for (const notice of notAutomatedNotices(notAutomated)) process.stdout.write(`${notice}\n`);
 
   if (!failOnUncovered) {
     return;
@@ -95,20 +110,17 @@ function main() {
   // tooling mentions requirement IDs constantly — in comments explaining why a
   // guard exists — and counting those would make this gate cry wolf until nobody
   // listened to it.
-  const changed = changedFiles({ cwd }).filter(
-    (file) =>
-      !matchesAnyGlob(file, TEST_GLOBS) &&
-      (file.startsWith('apps/') || file.startsWith('packages/') || file.startsWith('docs/specs/')),
+  const changed = withText(
+    changedFiles({ cwd }).filter(
+      (file) =>
+        !matchesAnyGlob(file, TEST_GLOBS) &&
+        (file.startsWith('apps/') || file.startsWith('packages/') || file.startsWith(SPECS_DIR)),
+    ),
   );
-  const changedText = changed.map((file) => read(file) ?? '').join('\n');
-  const missing = uncoveredInChanges(rows, changedText);
-  if (missing.length > 0) {
-    process.stdout.write(
-      `\nRG-01: this branch touches ${String(missing.length)} requirement(s) that no test names:\n` +
-        missing.map((row) => `  ${row.id} — ${row.title}`).join('\n') +
-        '\n\nWrite the failing test first (RG-02), or say in the pull request why this requirement ' +
-        'cannot be tested automatically.\n',
-    );
+  // What RG-01 refuses is decided in requirements.mjs; this prints it and fails.
+  const refusals = rg01Refusals({ rows, changed, testFiles, notAutomated });
+  if (refusals.length > 0) {
+    process.stdout.write(rg01Message(refusals));
     process.exitCode = 1;
   }
 }

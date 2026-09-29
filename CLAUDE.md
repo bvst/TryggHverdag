@@ -72,7 +72,12 @@ list that is actually true. Today:
 `pnpm run test:hooks` · `pnpm run req:coverage` · `pnpm run tests:changes` ·
 `pnpm run coverage:ratchet` · `pnpm run api:diff` · `pnpm run api:spec` ·
 `pnpm run mutation` · `pnpm run licenses:check` · `pnpm run gate:integrity` ·
-`pnpm run doctor` · `pnpm run dev` · `pnpm run e2e:android`
+`pnpm run gate:drills` · `pnpm run doctor` · `pnpm run dev` ·
+`pnpm run e2e:android`
+
+`gate:drills` (INF-10, D-082) tries a bad change against each gate and prints
+one row per drill: blocked, got through, or missing. `gate:full` runs it. The
+two drills only GitHub can enforce show "not run here", never "passed".
 
 `gate:full` prints the steps it cannot run yet and which task brings them, so
 "passed" never quietly means "did not check". Still to come: `e2e:ios`, with
