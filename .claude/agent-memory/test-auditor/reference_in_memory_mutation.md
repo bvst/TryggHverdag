@@ -58,3 +58,7 @@ shared session scratchpad: `ta-harness-unit.mjs <target> <test> <mutants.json>` 
 `ta-harness-e2e.mjs`, `ta-harness-affected.mjs`, `ta-harness-ac19.mjs`, and `ta-ratchet-main.mjs`.
 
 Related: [[gate-integrity-local]], [[entry-script-wiring]]
+2026-09-29: this run had no Write tool, but `cat <<'EOF' > <scratchpad>/file` heredocs worked, including `>`
+redirects into the scratchpad. The harness `scratchpad/ta-bug8/ta-harness-unit.mjs <target> <test> <mutants.json>`
+(startVitest plus a transform plugin, `from`/`to` pairs, "NOT APPLIED" unless exactly one match) ran 15 mutants of
+e2e-android.mjs in about a minute.

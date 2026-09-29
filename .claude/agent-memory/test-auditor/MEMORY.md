@@ -7,3 +7,4 @@
 - [Baseline vs main](feedback_baseline_vs_main.md) — ratchet reads the branch's own baseline; diff it against origin/main and run ratchetDrops with main's
 - [Entry-script wiring](feedback_entry_script_wiring.md) — pure decisions tested, the entry script's use of them not; shape tests let false greens through
 - [Mutation pooled score](project_mutation_pooled_score.md) — safety-core mutants pooled in whole-suite run, *.ts only; "fails loudly" not guaranteed
+- [Parallel ID collision](feedback_parallel_id_collision.md) — new D-0xx/BUG-n may already be taken on main or an open PR; dirty PR = zero check runs
