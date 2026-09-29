@@ -112,7 +112,7 @@ runs never changes what is allowed to merge.
 
 | # | Milestone | Main content | Exit criteria (all automated) |
 |---|-----------|--------------|-------------------------------|
-| **M0** | Foundations | Repository, toolchain, Claude Code configuration, CI, merge rules, staging, monitoring, daily report | All INF tasks done; **gate drills pass**; CI green on `main` |
+| **M0** | Foundations | Repository, toolchain, Claude Code configuration, CI, merge rules, staging, monitoring, daily report | All INF tasks done; **gate drills pass**; CI green on `main`. The push to `main` and the merge without code-owner approval count as covered by `gate:integrity`'s live read until their live attempt at M5 (D-083) |
 | **M1** | Spike (emulators and simulators) | SPIKE-01, S1–S7 on emulators and simulators (D-037); location SDK in debug mode; Critical Alerts request drafted | Spike results recorded; SDK go/no-go decision; Section 4 closed |
 | **M2** | Core safety loop (server) | State machine, watchdog, outbox, fake push and SMS; LOST-01 to LOST-03, LOST-06 to LOST-08, SM-01 to SM-10; staging canary (REL-10) | L6 tests green; mutation ≥ 80 %; the staging canary alerts on time for 24 hours |
 | **M3** | App MVP (demo-able) | GRP-01 to GRP-04, CALL-01 to CALL-03, JRN-01 to JRN-06, LOST-04, LOST-05, HELP-01; real push to the owner's phone; SMS to the owner's own number only | L7 green on Android (every PR) and iOS (weekly); **the owner can show the app** via internal TestFlight and Google Play internal testing |
@@ -172,6 +172,7 @@ If any drill *succeeds*, M0 is not done.
 | M3 | SMS provider account (LINK Mobility) | A-12 |
 | M5 | Buy the location SDK licence ($399) if the spike passed | A-13 |
 | M5 | UptimeRobot Solo (60-second checks, about $12 a month), so REL-08's "every minute" holds for the API too; and decide whether Healthchecks.io Business ($20 a month, SMS and phone-call alerts) is worth it (D-079) | — (gate item, D-079) |
+| M5 | The live gate drills: watch GitHub refuse a push to `main` and a merge without code-owner approval, run once from the Mac as `urso-agent` (D-082, D-083) | — (gate item, D-083) |
 
 ## Open questions for the owner
 
