@@ -218,7 +218,10 @@ between 19 October and 19 November 2026. Every job in `ci.yml`,
 `ubuntu-26.04`, so the pull request's own CI is the test. `ai-review.yml` stays
 on `ubuntu-latest` until the next D-075 batch. Not verified until after merge:
 `deploy-staging` (the merge is its first run), `daily-status` (the next
-morning) and `infra-staging` (the owner's next `plan`).
+morning) and `infra-staging` (the owner's next `plan`). The first 26.04 run was
+green on 15 of 16 checks. `android-e2e` failed its install with a third
+not-ready signature, a `SecurityException` refusing the install's own session.
+BUG-8 makes the install wait through it, as it does for the other two.
 
 **INF-08 is done** (2026-09-28).
 [#30](https://github.com/bvst/TryggHverdag/pull/30) and
