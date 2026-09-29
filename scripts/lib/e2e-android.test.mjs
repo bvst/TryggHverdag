@@ -762,10 +762,10 @@ describe('waitForLocale: bokmål counts only once the restarted framework report
 // supported"), so the switch cannot be avoided that way.
 //
 // So the install waits, up to a deadline, while it fails with one of those two
-// signatures, and at the time for nothing else. BUG-8 later added a third, the
+// signatures, and at the time for nothing else. BUG-9 later added a third, the
 // session refusal of run 36569778633: a SecurityException saying the caller
 // has no access to the session a streamed install had just created. See the
-// BUG-8 block below. It waits for the device: a failed flow is still never
+// BUG-9 block below. It waits for the device: a failed flow is still never
 // retried, which the test of the flows further down holds.
 //
 // `install` answers what `adb install -r` printed, stdout and stderr together,
@@ -799,7 +799,7 @@ const INSTALL_OK = [
  * The two signatures runs 6 and 8 saw while the package manager was not ready.
  * The third row is run 8's exception on another of PackageManagerInternal's
  * methods: what counts is a NullPointerException there, not which call it hit.
- * These are not the only not-ready answers: BUG-8's SESSION_NOT_READY, below,
+ * These are not the only not-ready answers: BUG-9's SESSION_NOT_READY, below,
  * is the third signature.
  */
 const INSTALL_NOT_READY = [
@@ -917,8 +917,8 @@ const INSTALL_AT_ONCE = [
   { what: "run 8's not-ready", output: PACKAGE_MANAGER_NPE, ok: false },
 ];
 
-// Added 2026-09-29, BUG-8. android-e2e on PR #43, which moves CI to
-// ubuntu-26.04 (D-083): run 36569778633, job 109410598303. The emulator
+// Added 2026-09-29, BUG-9. android-e2e on PR #43, which moves CI to
+// ubuntu-26.04 (D-085): run 36569778633, job 109410598303. The emulator
 // booted, `-change-locale nb-NO` restarted Android's framework at 12:49:35.61,
 // and at 12:49:52.77 e2e:android printed `The device's language is nb-rNO, and
 // its package service is up.` 0.46 s later the first `adb install -r` failed:
@@ -976,9 +976,13 @@ const SESSION_REFUSED = [
 ].join('\n');
 
 /**
- * BUG-8's signature: this run's output, and the same refusal of other
+ * BUG-9's signature: this run's output, and the same refusal of other
  * sessions. The number is whichever session adb had just created, so what
- * counts is the message, not the number or how many digits it has.
+ * counts is the message, not the number or how many digits it has. The last
+ * row is this run's output with CRLF line ends, which Success and the other two
+ * signatures already allow. It holds the answer, not the pattern's `\r?`: in
+ * JavaScript a multiline `$` already stops before a `\r`, so a pattern without
+ * `\r?` answers the same, and no row can tell the two apart.
  */
 const SESSION_NOT_READY = [
   { what: 'run 36569778633, session 1046719992', output: SESSION_REFUSED },
@@ -990,13 +994,27 @@ const SESSION_NOT_READY = [
     what: 'the same refusal of session 42',
     output: SESSION_REFUSED.replace('session 1046719992', 'session 42'),
   },
+  {
+    what: 'run 36569778633 with CRLF line ends',
+    output: SESSION_REFUSED.replaceAll('\n', '\r\n'),
+  },
 ];
 
 /**
- * Near misses of BUG-8's signature, each of which still fails the install at
+ * Near misses of BUG-9's signature, each of which still fails the install at
  * once, and what the failure must then show of it. All synthetic. The first is
- * the refusal PackageInstallerService makes of a package; the other two carry
+ * the refusal PackageInstallerService makes of a package; the next two carry
  * the session's words outside a SecurityException.
+ *
+ * The last three hold that only the whole line counts, exactly as run
+ * 36569778633 printed it: `java.lang.SecurityException: Caller has no access
+ * to session ` and a number, with nothing before it on its line and nothing
+ * after it. Text after the number, an id that is not a number, and a prefix all
+ * fail at once. The prefix is a `Caused by: ` line, as Java prints an exception
+ * wrapped in another. That was not observed, and it does not count: the
+ * decision is that only the exact line observed waits, and any other refusal
+ * fails at once rather than being waited on. Each of the three is the whole
+ * of run 36569778633's output with that one line changed.
  */
 const SESSION_NEAR_MISSES = [
   {
@@ -1023,6 +1041,24 @@ const SESSION_NEAR_MISSES = [
     output: `Performing Streamed Install\nadb: failed to install ${APK}: Failure [INSTALL_FAILED_INTERNAL_ERROR: Caller has no access to session 1046719992]\n`,
     shows: 'INSTALL_FAILED_INTERNAL_ERROR',
   },
+  {
+    what: "the session's line with text after the number",
+    output: SESSION_REFUSED.replace('session 1046719992\n', 'session 1046719992 (abandoned)\n'),
+    shows: 'Caller has no access to session 1046719992 (abandoned)',
+  },
+  {
+    what: "the session's line behind a Caused by prefix",
+    output: SESSION_REFUSED.replace(
+      '\njava.lang.SecurityException: Caller',
+      '\nCaused by: java.lang.SecurityException: Caller',
+    ),
+    shows: 'Caused by: java.lang.SecurityException: Caller has no access to session 1046719992',
+  },
+  {
+    what: "the session's line with an id that is not a number",
+    output: SESSION_REFUSED.replace('session 1046719992\n', 'session abc\n'),
+    shows: 'Caller has no access to session abc',
+  },
 ];
 
 describe('installVerdict: what `adb install -r` printed', () => {
@@ -1042,13 +1078,13 @@ describe('installVerdict: what `adb install -r` printed', () => {
   });
 
   test.each(SESSION_NOT_READY)(
-    'BUG-8: a SecurityException refusing its own session, $what, is not-ready, a device still starting',
+    'BUG-9: a SecurityException refusing its own session, $what, is not-ready, a device still starting',
     ({ output }) => {
       expect(installVerdict(output)).toBe('not-ready');
     },
   );
 
-  test.each(SESSION_NEAR_MISSES)('BUG-8: $what is failed, never not-ready', ({ output }) => {
+  test.each(SESSION_NEAR_MISSES)('BUG-9: $what is failed, never not-ready', ({ output }) => {
     expect(installVerdict(output)).toBe('failed');
   });
 });
@@ -1252,7 +1288,7 @@ describe('installWhenReady: the package manager accepts installs a while after t
     expect(adb.calls.at(-1)?.at).toBeLessThanOrEqual(80_000 + INSTALL_INTERVAL_MS);
   });
 
-  test('BUG-8: refused its own session as in run 36569778633 on attempt 1, and Success on attempt 2, it tries again one interval later and passes on attempt 2', async () => {
+  test('BUG-9: refused its own session as in run 36569778633 on attempt 1, and Success on attempt 2, it tries again one interval later and passes on attempt 2', async () => {
     const time = fakeTime();
     const adb = installer(time, inTurn([SESSION_REFUSED, INSTALLED]));
 
@@ -1268,7 +1304,7 @@ describe('installWhenReady: the package manager accepts installs a while after t
     expect(adb.calls.map((c) => c.at)).toEqual([0, 5_000]);
   });
 
-  test('BUG-8: not ready as in run 8, then refused its own session as in run 36569778633, then Success: it tries again one interval after each, passes, and installs no more', async () => {
+  test('BUG-9: not ready as in run 8, then refused its own session as in run 36569778633, then Success: it tries again one interval after each, passes, and installs no more', async () => {
     const time = fakeTime();
     const adb = installer(time, inTurn([PACKAGE_MANAGER_NPE, SESSION_REFUSED, INSTALLED]));
 
@@ -1283,7 +1319,7 @@ describe('installWhenReady: the package manager accepts installs a while after t
     expect(adb.calls.map((c) => c.at)).toEqual([0, 5_000, 10_000]);
   });
 
-  test('BUG-8: refused its own session on every attempt, it keeps trying until the deadline, then fails naming the attempts, how long it waited, and what adb printed', async () => {
+  test('BUG-9: refused its own session on every attempt, it keeps trying until the deadline, then fails naming the attempts, how long it waited, and what adb printed', async () => {
     const time = fakeTime();
     const adb = installer(time, () => SESSION_REFUSED);
 
@@ -1308,7 +1344,7 @@ describe('installWhenReady: the package manager accepts installs a while after t
   });
 
   test.each(SESSION_NEAR_MISSES)(
-    'BUG-8: $what stops the install at once, with what adb printed',
+    'BUG-9: $what stops the install at once, with what adb printed',
     async ({ output, shows }) => {
       // Were it tried again, the second install would pass.
       const time = fakeTime();

@@ -837,7 +837,13 @@ function runWithoutKvm(step) {
 // cleanup that deletes what the flows need: the APK, Gradle's cache, the SDK,
 // Java or Node.
 
-/** Where things are on GitHub's ubuntu-latest runner. The rm check and the fake runner use this layout. */
+/**
+ * Where things are on GitHub's Ubuntu runner, written from ubuntu-24.04's
+ * layout, which ubuntu-latest was at the time. CI now names ubuntu-26.04
+ * (D-085). D-085 records the same ANDROID_HOME and default NDK on 26.04; the
+ * rest of this layout has not been checked against it. The rm check and the
+ * fake runner use this layout.
+ */
 const RUNNER = {
   home: '/home/runner',
   workspace: '/home/runner/work/TryggHverdag/TryggHverdag',
@@ -2824,7 +2830,11 @@ function fakeOasdiff(marker) {
   return value;
 }
 
-/** The folders on the ubuntu-latest runner's PATH that a step could put a tool in. */
+/**
+ * The folders on the runner's PATH that a step could put a tool in, as
+ * ubuntu-24.04 has them, which ubuntu-latest was at the time. CI now names
+ * ubuntu-26.04 (D-085), and this list has not been checked against it.
+ */
 const RUNNER_PATH_DIRS = [
   '/home/runner/.local/bin',
   '/usr/local/sbin',
@@ -2837,7 +2847,7 @@ const RUNNER_PATH_DIRS = [
 
 /** A first step making those folders in the fake runner, as the real runner has them. */
 const RUNNER_PATH_STEP = stepAround(
-  'The folders on the runner PATH, as ubuntu-latest has them',
+  'The folders on the runner PATH, as ubuntu-24.04 has them',
   `mkdir -p ${RUNNER_PATH_DIRS.join(' ')}`,
 );
 
