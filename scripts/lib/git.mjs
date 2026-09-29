@@ -13,16 +13,22 @@ export function mergeBase(base, cwd = process.cwd()) {
  * Every file this branch touches: committed since the merge base, changed in the
  * working tree, or not yet added. Paths are relative to the repository root.
  *
+ * A moved file is listed under both paths: the one it left and the one it went
+ * to. With git's default rename detection, `git diff --name-only` names only the
+ * new path, so a move out of code (say to docs/) would look like a docs-only
+ * change and every gate that reads this list would skip it (BUG-7). With
+ * `--no-renames`, git reports a move as a deletion plus an addition.
+ *
  * @param {{ base?: string, cwd?: string }} options
  */
 export function changedFiles({ base = 'origin/main', cwd = process.cwd() } = {}) {
   const outputs = [
-    git(['diff', '--name-only', 'HEAD'], cwd),
+    git(['diff', '--name-only', '--no-renames', 'HEAD'], cwd),
     git(['ls-files', '--others', '--exclude-standard'], cwd),
   ];
   const since = mergeBase(base, cwd);
   if (since !== null) {
-    outputs.push(git(['diff', '--name-only', since, 'HEAD'], cwd));
+    outputs.push(git(['diff', '--name-only', '--no-renames', since, 'HEAD'], cwd));
   }
   const files = new Set();
   for (const result of outputs) {

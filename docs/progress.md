@@ -202,6 +202,10 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
+**BUG-7: a moved file was invisible under the path it left** (branch
+`fix/BUG-7-renames-invisible`). Every gate that works from the changed files
+now lists both paths of a move (`--no-renames`). Its tests are in `38bdccf`.
+
 **INF-08 is done** (2026-09-28).
 [#30](https://github.com/bvst/TryggHverdag/pull/30) and
 [#31](https://github.com/bvst/TryggHverdag/pull/31) merged on 2026-09-25. The
