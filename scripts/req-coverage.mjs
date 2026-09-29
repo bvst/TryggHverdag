@@ -27,6 +27,7 @@ import {
   SPECS_DIR,
   collectRequirements,
   coverage,
+  isLive,
   notAutomatedLines,
   notAutomatedNotices,
   renderStatus,
@@ -90,7 +91,7 @@ function main() {
   writeFileSync(path.join(cwd, REPORT), report);
 
   const covered = rows.filter((row) => row.tests.length > 0).length;
-  const live = rows.filter((row) => row.priority !== 'parked').length;
+  const live = rows.filter(isLive).length;
   process.stdout.write(
     `req:coverage: ${String(covered)} of ${String(live)} live requirements have a test that names them. ` +
       `Report written to ${REPORT}.\n`,

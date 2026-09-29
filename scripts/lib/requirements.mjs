@@ -95,6 +95,16 @@ export function isFixturesOnly(text) {
   return text.includes(FIXTURES_MARKER);
 }
 
+/** The test files that count as coverage: every one but those marked fixtures-only. */
+function countedTests(testFiles) {
+  return testFiles.filter((f) => !isFixturesOnly(f.text));
+}
+
+/** A requirement in scope: every one but a parked one, which never blocks. */
+export function isLive(row) {
+  return row.priority !== 'parked';
+}
+
 /** True when the text names this requirement (and not a longer ID that contains it). */
 export function mentions(text, id) {
   return new RegExp(`(?<![A-Z0-9-])${id}(?![0-9])`).test(text);
@@ -108,7 +118,7 @@ export function mentions(text, id) {
  * @param {{file: string, text: string}[]} specFiles
  */
 export function coverage(requirements, testFiles, specFiles = []) {
-  const counted = testFiles.filter((f) => !isFixturesOnly(f.text));
+  const counted = countedTests(testFiles);
   return requirements.map((requirement) => ({
     ...requirement,
     tests: counted.filter((f) => mentions(f.text, requirement.id)).map((f) => f.file),
@@ -130,7 +140,7 @@ export function statusOf(row) {
  */
 export function uncoveredInChanges(rows, changedText) {
   return rows.filter(
-    (row) => row.priority !== 'parked' && row.tests.length === 0 && mentions(changedText, row.id),
+    (row) => isLive(row) && row.tests.length === 0 && mentions(changedText, row.id),
   );
 }
 
@@ -173,8 +183,8 @@ export function notAutomatedLines(specFiles) {
  * @returns {{criterion: string, file: string}[]}
  */
 export function uncoveredCriteria(rows, changedFiles, testFiles) {
-  const live = rows.filter((row) => row.priority !== 'parked');
-  const counted = testFiles.filter((f) => !isFixturesOnly(f.text));
+  const live = rows.filter(isLive);
+  const counted = countedTests(testFiles);
   const found = new Map();
   for (const spec of changedFiles.filter((f) => f.file.startsWith(SPECS_DIR))) {
     const excused = notAutomatedLines([spec])
@@ -265,7 +275,7 @@ export function notAutomatedNotices(notAutomated) {
  */
 export function renderStatus(rows) {
   const covered = rows.filter((row) => row.tests.length > 0).length;
-  const live = rows.filter((row) => row.priority !== 'parked');
+  const live = rows.filter(isLive);
   const lines = [
     '# Requirement status',
     '',
