@@ -40,7 +40,7 @@ permissions:
 jobs:
   plan:
     if: inputs.action == 'plan'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     environment: staging
     # The staging environment's secrets reach only jobs that name the
@@ -89,7 +89,7 @@ jobs:
 
   apply:
     if: inputs.action == 'apply'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     environment: staging
     # The staging environment's secrets reach only jobs that name the

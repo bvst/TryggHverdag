@@ -46,7 +46,7 @@ permissions:
 
 jobs:
   report:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     # Read-only, all of it. `gh run list` needs actions, `gh pr checks` needs
     # checks, and the rest is what /status reads. No id-token either: the token
@@ -134,7 +134,7 @@ jobs:
     # Even when `report` failed — that is when the owner most needs to hear.
     # Not on a cancel: that is a person stopping the run on purpose.
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read

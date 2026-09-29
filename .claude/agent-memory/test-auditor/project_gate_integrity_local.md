@@ -28,3 +28,7 @@ answered 422 "No commit found": there was no check to read. Once the branch adds
 required checks while the live ruleset has 12 (no `android-e2e` until the owner does A-28). That mismatch is
 the designed reminder in AC14, not a finding.
 Unchanged at fa607f3 (INF-06 re-audit, 2026-09-26): 3 of 5, the branch still unpushed, no PR, and check-runs 422.
+2026-09-29 cloud session (PR #43 audit): `gh` is not installed, but GH_TOKEN is set and `curl` through the proxy
+reads `rules/branches/main`. It showed 13 required contexts, now including `android-e2e`. It also reads
+`rulesets/23864486`: `bypass_actors: []`, `current_user_can_bypass: never`, enforcement active. gate:integrity itself
+was still 3 of 5 in the session, so verify the premise with curl, not with the script.

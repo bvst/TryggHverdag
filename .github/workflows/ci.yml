@@ -14,6 +14,15 @@
 # Actions are pinned to a commit, never a tag: whoever can move a tag can
 # otherwise run their own code in a job that holds this repository's secrets.
 # Dependabot raises the pins (.github/dependabot.yml).
+#
+# Every job names its Ubuntu release, ubuntu-26.04, never ubuntu-latest. GitHub
+# moves that label to a new release over weeks, so for a while some runs would
+# get the old release and some the new, and a red that comes and goes would
+# look like a flaky test. Moving to a new release is a pull request of its own,
+# whose CI shows whether every job still works (D-085). Dependabot cannot see
+# the label, so it is raised by hand. The label names the release, not one
+# build: GitHub still updates the image under it. When a red comes and goes,
+# compare the Image Version that each job's "Set up job" step prints.
 name: ci
 on:
   pull_request:
@@ -37,7 +46,7 @@ env:
 
 jobs:
   gate-integrity: # CI-01: the merge rules are real (D-029), CODEOWNERS is complete (D-042)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -57,7 +66,7 @@ jobs:
       - run: pnpm run test:hooks
 
   static: # CI-02 (L1)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -91,7 +100,7 @@ jobs:
         run: pnpm run gate:static
 
   unit: # CI-03 (L2, L5)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       # No token is left in .git/config for the steps after: a downloaded
@@ -145,7 +154,7 @@ jobs:
         run: pnpm run test:unit
 
   integration: # CI-04 (L3) — a real PostgreSQL in a container, via Testcontainers
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -184,7 +193,7 @@ jobs:
         run: pnpm run test:integration
 
   system: # CI-05 (L6) — whole flows through the real API, fakes at the edges
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The suite runs in about a second, so this is not a budget — it is a bound
     # on a hang. These tests drive the API in-process against a clock the test
     # moves by hand, and a bug that leaves one awaiting a promise nothing
@@ -222,7 +231,7 @@ jobs:
         run: pnpm run test:system
 
   contract: # CI-06 (L4, RG-08) — the API against every app version still in use
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       # No token is left in .git/config for the steps after: a downloaded
@@ -276,7 +285,7 @@ jobs:
         run: pnpm run api:diff
 
   traceability: # CI-07 — RG-01 requirement coverage, RG-03 test changes, RG-04 coverage ratchet
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -314,7 +323,7 @@ jobs:
         run: pnpm run coverage:ratchet --base origin/${{ github.base_ref || 'main' }}
 
   mutation: # CI-08 (RG-05, D-036) — only when safety code changed; fails if it changed and Stryker is missing
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -351,7 +360,7 @@ jobs:
           --base origin/${{ github.base_ref || 'main' }}
 
   android-e2e: # CI-09 (L7) — the release build on an Android emulator, driven by Maestro
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The first measured runs set this for good (docs/specs/INF-06.md, CI cost).
     timeout-minutes: 45
     permissions:
@@ -384,8 +393,8 @@ jobs:
       # every run's emulator warned "AVD 'test' will run more smoothly with 4
       # CPU cores (currently using 2)"; run 36418631362's System UI then stopped
       # responding over the app. No more than the runner has CPUs: a public
-      # repository's ubuntu-latest has 4, a private one's 2, so this drops to
-      # 2 if the repository goes private again.
+      # repository's standard Linux runner has 4, a private one's 2, so this
+      # drops to 2 if the repository goes private again.
       EMULATOR_CORES: '4'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -574,7 +583,7 @@ jobs:
           key: ${{ steps.gradle-cache.outputs.cache-primary-key }}
 
   security: # CI-10
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0

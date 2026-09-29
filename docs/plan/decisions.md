@@ -2147,6 +2147,15 @@ any other path is work, not a candidate for the same treatment.
         `NullPointerException` in `PackageManagerInternal`. Any other install
         error fails at once. This is a readiness wait on the install, and D-060
         still holds: a failed flow is never retried.
+        **Amended 2026-09-29 (BUG-9):** a third not-ready error, a
+        `SecurityException: Caller has no access to session <n>` line. The
+        first `ubuntu-26.04` run (run 36569778633, D-085) hit it 17 s after the
+        framework restart. AOSP's `PackageInstallerService` throws it when the
+        session is missing from its table or not the caller's, and here the
+        shell had just created that session itself. A broken APK fails with
+        `INSTALL_FAILED_*` instead. The match is the whole line, so a refusal
+        of a *package*, or the same words in another exception or in a
+        `Failure […]` line, still fails at once.
       - **Run 9** (36409755274, the install wait): green; the install
         succeeded on attempt 1.
       - **BUG-6** (#37) gave the emulator 4 cores. It is a public repository
@@ -2337,3 +2346,106 @@ any other path is work, not a candidate for the same treatment.
     covers the last-match gap above. Everywhere else it stays a `/bugfix`
     candidate.
 
+## D-085 — CI names its Ubuntu release, `ubuntu-26.04`, not `ubuntu-latest`
+- **Date:** 2026-09-29 · **Status:** Accepted (owner asked; the label is
+  Claude's choice, D-031) · **Section:** 8
+- **Context:** GitHub announced that `ubuntu-latest` moves from Ubuntu 24.04 to
+  26.04 "over a period of several weeks beginning October 19, 2026", to be
+  complete "by November 19, 2026" (actions/runner-images#14748). The owner
+  asked to move first, so that we see the new image working before GitHub
+  moves us.
+- **Decision:**
+  1. **Every job in `ci.yml`, `deploy-staging.yml`, `infra-staging.yml` and
+     `daily-status.yml` runs on `ubuntu-26.04`.** That is 15 jobs.
+  2. **`ai-review.yml` stays on `ubuntu-latest` for now.** A change to it is
+     merged by hand (D-075). Putting it in this pull request would take the
+     reviewers off the other four files too. #45, a D-075 change that merged
+     while this pull request was open, did not carry it. So it moves in a
+     one-line pull request of its own, merged by hand, after this one
+     merges. Until then it follows GitHub's rollout.
+  3. **The next release is a pull request of its own**, made by hand, like
+     the oasdiff and gitleaks pins: Dependabot does not raise runner labels.
+- **Why a named release, not `ubuntu-latest`:**
+  - **GitHub's rollout is gradual.** For about a month some runs would get
+    24.04 and some 26.04. A red that comes and goes with the release reads
+    as a flaky test, and this repository treats "flake" as never a root
+    cause.
+  - **A new release is then a change we make**, on a branch, with its CI to
+    show what broke.
+  - **The label is not a pinned image.** It names the Ubuntu release, and
+    GitHub still updates the image under it. Each job's "Set up job" step
+    prints the Image Version (the first 26.04 run had 20260920.143.1), which
+    is where to look when a red comes and goes.
+  - **The pull request tests itself.** `ci.yml` is in `touchesApp` and is
+    not inert (`scripts/lib/affected.mjs`), so every `ci.yml` job does its
+    full work on the new image, `android-e2e` included.
+- **Checked before deciding (2026-09-29, in session):**
+  - runner-images' `README.md` lists `ubuntu-26.04` as GA, and
+    `ubuntu-latest` as still 24.04.
+  - `Ubuntu2604-Readme.md` (image 20260920.143.1) against
+    `Ubuntu2404-Readme.md`, for what the jobs rely on:
+    - **Android:** the same `ANDROID_HOME` (`/usr/local/lib/android/sdk`), the
+      same default NDK (27.3.13750724) and the same platforms, `android-37.2`
+      among them. The command-line tools are 20.0 where 24.04 has 12.0.
+      `android-e2e` still puts its own pinned, hash-checked 20.0 in
+      `cmdline-tools/latest`, so the image's version does not matter.
+    - **Java:** the default is 25, where 24.04's is 17. `android-e2e` sets 17
+      itself with `actions/setup-java`.
+    - **Node:** the default is 24.21.0. Every job sets its own from `.nvmrc`.
+    - **Docker:** 29.4.2, where 24.04 has 28.0.4. `test:integration` reaches
+      it through testcontainers 12.1.0.
+    - **Swift is gone.** `android-e2e`'s clean-up step deletes it with
+      `rm -rf`, which does not fail on a missing path. .NET, Haskell and
+      CodeQL, which it also deletes, are still there.
+    - **Kernel:** 7.0, where 24.04 has 6.17.
+- **The CI result on 26.04** (read from the job logs):
+  - **Run 36569778633**, the first: 9 of 10 `ci` jobs green. `android-e2e`'s
+    install was refused with `SecurityException: Caller has no access to
+    session`, a not-ready error nothing knew yet (BUG-9).
+  - **Run 36579467633**, with BUG-9 (`11efded`): all 10 `ci` jobs green,
+    and `ai-review`'s 6 too. `android-e2e`'s install succeeded on attempt 1,
+    and `[Passed] app-starts (14s)`. So 26.04 can pass the whole gate.
+  - **Run 36581002792** (`5d614c1`): green. Attempt 1 of the install was
+    refused with run 8's `NullPointerException … PackageManagerInternal.
+    freeStorage`. The existing wait tried again 5 s later, and attempt 2
+    succeeded.
+  - **The run for `f22d5ee`** (after #46): all 10 `ci` jobs green; the
+    install succeeded on attempt 1.
+  - **So, four runs on 26.04:** the install was refused on attempt 1 in two,
+    each time straight after the device reported bokmål with its package
+    service up. Once with BUG-9's session error, and once with a signature
+    already known.
+    That fits D-081's window, and the wait is doing real work on this image.
+    BUG-9's own signature has not come back yet, so its wait is proven by
+    its tests, not yet by a run.
+- **Not verified yet:**
+  - **Three workflows cannot run from a pull request.** `deploy-staging` runs
+    on a push to `main`, so this pull request's merge is its first run on
+    26.04. `daily-status` runs the morning after. `infra-staging` runs when
+    the owner next starts a `plan`.
+- **Consequences:**
+  - The way back, if 26.04 breaks something that cannot be fixed at once, is
+    `ubuntu-24.04` in the same lines. That label keeps working after the
+    rollout. It is not `ubuntu-latest`, which by then is 26.04 anyway.
+  - The Gradle and emulator caches are keyed without the image, so what
+    24.04 saved is restored on 26.04. Nothing in Gradle's cache is built
+    against the image: it holds Java libraries and the Android build's own
+    tools, such as `aapt2`, fetched for Linux. The first 26.04 build
+    succeeded with the restored cache.
+  - **Neither of the two runs compared loaded the emulator's snapshot.** The
+    first run on 26.04 (job 109410598303) and the newest green one on `main`
+    on 24.04 (job 109379152187) both restored the AVD cache under the same
+    key. Then both logged `Feature QuickbootFileBacked is disabled due to
+    stability issues` and `Emulator is performing a full startup`, and
+    neither has a line about loading a snapshot. Both then restarted the
+    framework for bokmål (`Changing locale to nb-NO`, `Restarting
+    framework.`), the window in which D-081 saw installs refused. The
+    restored AVD still carries its data image, so what the AVD cache saves
+    is not measured. Neither log says why the snapshot is not loaded. The
+    comment on "Create the virtual device and its snapshot" in `ci.yml`
+    ("a clean snapshot for later runs to start from") is therefore not borne
+    out, and is left for a follow-up.
+  - The fake runner in `scripts/gate.test.mjs` is written from 24.04's
+    layout. Its Android paths are the same on 26.04, by the readme. Its home,
+    tool-cache and `PATH` folders are not in either readme, so they were not
+    checked; `android-e2e` passing on 26.04 is what shows they still hold.

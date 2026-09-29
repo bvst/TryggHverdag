@@ -158,12 +158,18 @@ saying which one:
   passes a "17 or newer" check and then fails the native build after about 18
   minutes; the message says to set `JAVA_HOME` to a JDK 17);
 - the pinned Maestro download does not match its hash;
-- the app cannot be installed. An install that fails with one of the two
-  not-ready errors seen after the language switch (`Can't find service:
-  package`, or a `NullPointerException` in `PackageManagerInternal`) is
-  tried again for up to 120 s. Any other install error fails at once.
-  (Amended 2026-09-28, after CI run 8 and the Mac experiments recorded in
-  D-081. This waits for the device, and flows are still never retried.)
+- the app cannot be installed. An install that fails with one of the three
+  not-ready errors seen after the language switch is tried again for up to
+  120 s:
+  - `Can't find service: package`;
+  - a `NullPointerException` in `PackageManagerInternal`;
+  - a whole `java.lang.SecurityException: Caller has no access to session
+    <n>` line.
+
+  Any other install error fails at once. (Amended 2026-09-28, after CI run 8
+  and the Mac experiments recorded in D-081. This waits for the device, and
+  flows are still never retried. Amended 2026-09-29, BUG-9: the third error,
+  seen on the first `ubuntu-26.04` run, D-085.)
 - Maestro exits non-zero, even if its report shows every flow passed
   (amended 2026-09-26; the message names both the exit status and the report);
 - Maestro's report shows zero flows run;

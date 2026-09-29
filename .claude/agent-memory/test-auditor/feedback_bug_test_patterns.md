@@ -31,3 +31,10 @@ failure or a timeout. Prove it with a timeout mutant (the test must still fail) 
 timed out", with nothing saying the worker would not stop.
 
 Related: [[in-memory-mutation]]
+
+**Regex "whole line" claims (BUG-8 install fix, PR #43, 2026-09-29).** The commit, the spec and the decision all said
+"the match is the whole line". The near-miss rows (a package refusal, another exception class, a Failure line) were
+killed by other parts of the regex, the class name and the word "session", never by the anchors. Dropping `^`, `$`,
+`\r?`, or widening `\d+` to `.*` all survived. Mutate each anchor on its own. The missing rows are the same text with
+a prefix or a suffix on the line, a non-numeric id, and a CRLF copy. The grade depends on the direction: over-matching
+a not-ready signature only delays a loud failure (the pass needs a Success line), so it was Should fix.

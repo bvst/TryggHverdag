@@ -303,10 +303,12 @@ export const INSTALL_INTERVAL_MS = 5_000;
 
 /**
  * What `adb install -r` printed means. 'ok' only when a line is exactly
- * Success. 'not-ready' only for the two answers of a package manager that has
- * not come back after the language switch: `Can't find service: package` (run
- * 6) and a NullPointerException in PackageManagerInternal (run 8). Everything
- * else is 'failed', so an install that cannot work is never waited on.
+ * Success. 'not-ready' only for the three answers of a package manager that
+ * has not come back after the language switch: `Can't find service: package`
+ * (run 6), a NullPointerException in PackageManagerInternal (run 8) and a
+ * SecurityException refusing the install's own session (run 36569778633,
+ * BUG-9). Everything else is 'failed', so an install that cannot work is never
+ * waited on.
  *
  * @param {string | null} output stdout and stderr together, or null when adb
  *   could not be run
@@ -317,7 +319,9 @@ export function installVerdict(output) {
   if (/^Success\r?$/m.test(output)) return 'ok';
   const packageServiceGone = /Can't find service: package\r?$/m.test(output);
   const packageManagerNull = /NullPointerException\b.*\bPackageManagerInternal\./.test(output);
-  return packageServiceGone || packageManagerNull ? 'not-ready' : 'failed';
+  const sessionRefused =
+    /^java\.lang\.SecurityException: Caller has no access to session \d+\r?$/m.test(output);
+  return packageServiceGone || packageManagerNull || sessionRefused ? 'not-ready' : 'failed';
 }
 
 /** What adb printed, for a message: on lines of its own, or why there is nothing. */
@@ -360,7 +364,7 @@ export async function installWhenReady(
       return {
         ok: false,
         message:
-          'The install failed, and not with either answer of a device that is still starting, ' +
+          'The install failed, and not with any answer of a device that is still starting, ' +
           `so it is not tried again. ${adbPrinted(output)}`,
       };
     }

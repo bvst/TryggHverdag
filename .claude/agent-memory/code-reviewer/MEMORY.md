@@ -4,3 +4,4 @@
 - [Spec promises vs HEAD](project_spec_promises_vs_head.md) — grep HEAD for promised D-/A- numbers and "in the decision" follow-ups; diff coverage-baseline.json for drops
 - [Unowned gate config](project_unowned_gate_config.md) — packages/config, root configs, app.config.ts lack CODEOWNERS; no mobile→server import rule (2026-09-26)
 - [Stale prose after amendment](project_stale_prose_after_amendment.md) — amended ACs leave old wording in spec tech-approach, README, doctor hints; grep it
+- [IDs taken while open](project_ids_taken_while_open.md) — grep main and open PRs for the branch's new D-/BUG-/A- numbers; dirty PR = no workflows; label = release, not image
