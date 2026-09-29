@@ -2389,9 +2389,16 @@ any other path is work, not a candidate for the same treatment.
       `rm -rf`, which does not fail on a missing path. .NET, Haskell and
       CodeQL, which it also deletes, are still there.
     - **Kernel:** 7.0, where 24.04 has 6.17.
+- **The CI result on 26.04** (read from the job logs):
+  - **Run 36569778633**, the first: 9 of 10 `ci` jobs green. `android-e2e`'s
+    install was refused with `SecurityException: Caller has no access to
+    session`, a not-ready error nothing knew yet (BUG-9).
+  - **Run 36579467633**, with BUG-9 (`11efded`): all 10 `ci` jobs green,
+    and `ai-review`'s 6 too. `android-e2e`'s install succeeded on attempt 1,
+    and `[Passed] app-starts (14s)`. So 26.04 can pass the whole gate. The
+    first run's error did not come back, so BUG-9's wait was not exercised:
+    one run each way does not say how often it happens.
 - **Not verified yet:**
-  - **The CI run itself.** It is the real test, and its result is recorded
-    below when it is known.
   - **Three workflows cannot run from a pull request.** `deploy-staging` runs
     on a push to `main`, so this pull request's merge is its first run on
     26.04. `daily-status` runs the morning after. `infra-staging` runs when

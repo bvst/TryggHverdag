@@ -247,7 +247,10 @@ next `plan`). On the first 26.04 run, 9 of 10 `ci` jobs were green.
 `android-e2e` failed its install with a third not-ready signature, a
 `SecurityException` refusing the install's own session. BUG-9 makes the install
 wait through it, as it does for the other two. The IDs were D-083 and BUG-8
-until `main` took both (#44).
+until `main` took both (#44). With BUG-9 (`11efded`, run 36579467633) all 16
+checks were green, `android-e2e` included; its install succeeded on attempt 1,
+so the wait was not needed. code-reviewer, test-auditor and
+privacy-security-reviewer gave PASS in CI. It waits on the owner's approval.
 
 **INF-08 is done** (2026-09-28).
 [#30](https://github.com/bvst/TryggHverdag/pull/30) and
