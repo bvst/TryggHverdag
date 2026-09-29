@@ -2331,9 +2331,18 @@ any other path is work, not a candidate for the same treatment.
     `ubuntu-24.04` in the same lines. That label keeps working after the
     rollout. It is not `ubuntu-latest`, which by then is 26.04 anyway.
   - The Gradle and emulator caches are keyed without the image, so what
-    24.04 saved is restored on 26.04. Gradle's cache is only Java files. If
-    the flows step shows the emulator failing to load its snapshot, the
-    emulator cache key needs the image in it.
+    24.04 saved is restored on 26.04. Gradle's cache is only Java files.
+  - **No run loads the emulator's snapshot, on either image.** The first run
+    on 26.04 (job 109410598303) and the newest green one on `main` on 24.04
+    (job 109379152187) both restored the AVD cache under the same key. Then
+    both logged `Feature QuickbootFileBacked is disabled due to stability
+    issues` and `Emulator is performing a full startup`, and neither has a
+    line about loading a snapshot. So the "warm" runs in D-081 item 12 are
+    warm in Gradle's cache only. Every run starts the emulator from scratch
+    and then restarts its framework for bokmål (`Changing locale to nb-NO`,
+    `Restarting framework.`), the window in which D-081 saw installs refused.
+    Neither log says why the snapshot is not loaded, and this pull request
+    does not change it.
   - The fake runner in `scripts/gate.test.mjs` is written from 24.04's
     layout. Its Android paths are the same on 26.04, by the readme. Its home,
     tool-cache and `PATH` folders are not in either readme, so they were not
