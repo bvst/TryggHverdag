@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-09-29 · **Milestone:** M0 (foundations)
+**Last updated:** 2026-09-29 · **Milestone:** M0 closed (2026-09-29, D-083) · next: M1, the spike
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md).
@@ -28,7 +28,21 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-07 | Staging on Clever Cloud | ✅ Done — 2026-09-25 ([#22](https://github.com/bvst/TryggHverdag/pull/22), fixes [#23](https://github.com/bvst/TryggHverdag/pull/23) [#24](https://github.com/bvst/TryggHverdag/pull/24), names [#25](https://github.com/bvst/TryggHverdag/pull/25)). A merge deployed and the smoke test passed; BUG-3 fixed ([#27](https://github.com/bvst/TryggHverdag/pull/27)) |
 | INF-08 | Monitoring | ✅ Done — 2026-09-28 ([#31](https://github.com/bvst/TryggHverdag/pull/31)). In the owner's drill (2026-09-26) Healthchecks.io alerted about 3 minutes after the worker's last ping, and UptimeRobot alerted too, both by email. The owner accepted it with no UptimeRobot app; UptimeRobot's recovery and its keyword rule were not checked |
 | INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). Since D-080 ([#32](https://github.com/bvst/TryggHverdag/pull/32)) a dashboard: the description of the pinned issue [#35](https://github.com/bvst/TryggHverdag/issues/35), replaced every run. It is scheduled at 01:07 UTC, but GitHub starts it about 5½ hours late, so it lands around 08:30 in Oslo. The missed-run alarm is proven (2026-09-25) |
-| INF-10 | Gate drills | ✅ Done — 2026-09-29 ([#42](https://github.com/bvst/TryggHverdag/pull/42)). Seven offline drills run on every pull request that can change a gate, and each is shown to go red when its gate is made to pass. The push to `main` and the merge without owner approval are covered by `gate:integrity`; their one live attempt is M0's last exit item (D-082) |
+| INF-10 | Gate drills | ✅ Done — 2026-09-29 ([#42](https://github.com/bvst/TryggHverdag/pull/42)). Seven offline drills run on every pull request that can change a gate, and each is shown to go red when its gate is made to pass. The push to `main` and the merge without owner approval are covered by `gate:integrity`; their one live attempt is an M5 go-live item (D-083) |
+
+**M0 is closed** (2026-09-29, D-083):
+- every INF task above is done;
+- the seven offline gate drills pass on every pull request that can change a
+  gate;
+- CI is green on `main` after #42 and #41.
+
+The owner chose to move the live attempt at the two GitHub-only drills to M5's
+go-live checklist. So D-071's question, whether GitHub enforces code-owner
+review, stays open until then.
+
+**Next:**
+- **BUG-8.** The remaining gate files need the owner (D-084).
+- **M1, the spike,** when the owner starts it.
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
 verdicts. On its first working day it caught two genuine bugs, a half-finished
@@ -211,7 +225,17 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**D-083: CI moves to `ubuntu-26.04` before GitHub moves `ubuntu-latest`**
+**BUG-8, step 1 of 2: ai-review's safety filter lists
+`apps/mobile/app.config.ts`** (owner's decision, 2026-09-29). BUG-8 makes the
+remaining gate files owner-approved (D-084). A test requires every
+owner-approved path under `apps/` to call safety-reviewer too, so the filter
+gains that one line first. It is its own pull request, merged by hand
+(D-075), as #21 and #30 were. `app.config.ts` holds the app's permissions,
+background modes, backup and deep-link settings, and background location is
+what the safety core will stand on. **Step 2** is BUG-8 itself: CODEOWNERS and
+`OWNER_APPROVAL_PATHS` for all six files, test-first.
+
+**D-085: CI moves to `ubuntu-26.04` before GitHub moves `ubuntu-latest`**
 (branch `claude/busy-faraday-40n2zl`). GitHub moves `ubuntu-latest` to 26.04
 between 19 October and 19 November 2026. Every job in `ci.yml`,
 `deploy-staging.yml`, `infra-staging.yml` and `daily-status.yml` now names
@@ -221,7 +245,7 @@ on `ubuntu-latest` until the next D-075 batch. Not verified until after merge:
 morning) and `infra-staging` (the owner's next `plan`). The first 26.04 run was
 green on 15 of 16 checks. `android-e2e` failed its install with a third
 not-ready signature, a `SecurityException` refusing the install's own session.
-BUG-8 makes the install wait through it, as it does for the other two.
+BUG-9 makes the install wait through it, as it does for the other two.
 
 **INF-08 is done** (2026-09-28).
 [#30](https://github.com/bvst/TryggHverdag/pull/30) and
@@ -303,8 +327,12 @@ Evidence, all re-run by the main session rather than taken from a report:
   all passed. Every should-fix went into this pull request.
 
 **Open follow-ups:**
-- the live attempt at drills 6 and 8 (D-082). It needs an ID and the owner
-  watching; it is M0's last exit item ("gate drills pass");
+- the live attempt at drills 6 and 8 is an M5 go-live item (D-083). It runs
+  once from the Mac as `urso-agent`, with the owner watching;
+- **BUG-8, next:** the remaining gate files need the owner (D-084):
+  `eslint.config.mjs`, `.dependency-cruiser.cjs`, `stryker.config.mjs`,
+  `coverage-baseline.json`, `packages/config/` and
+  `apps/mobile/app.config.ts`;
 - `reviewCodeowners` ignores GitHub's last-match rule for CODEOWNERS, found
   by `test-author`. This predates INF-10 and is a `/bugfix` candidate;
 - the drills and `gate.test.mjs` each hold copies of the workflow-reading
@@ -358,8 +386,10 @@ merged by the owner 17:16:26Z). 2026-09-28 —
 [#37](https://github.com/bvst/TryggHverdag/pull/37) (BUG-6: the emulator gets
 4 cores) and [#39](https://github.com/bvst/TryggHverdag/pull/39) (record).
 2026-09-29 — [#40](https://github.com/bvst/TryggHverdag/pull/40) (BUG-7:
-every changed-file list names both paths of a move). Full account in
-[`progress/m0.md`](progress/m0.md).
+every changed-file list names both paths of a move),
+[#41](https://github.com/bvst/TryggHverdag/pull/41) (BUG-7's record) and
+[#42](https://github.com/bvst/TryggHverdag/pull/42) (INF-10: the gate drills).
+Full account in [`progress/m0.md`](progress/m0.md).
 
 
 **An unmerged branch exists: `claude/inf-04-follow-through`.** It closes INF-04's

@@ -2147,9 +2147,9 @@ any other path is work, not a candidate for the same treatment.
         `NullPointerException` in `PackageManagerInternal`. Any other install
         error fails at once. This is a readiness wait on the install, and D-060
         still holds: a failed flow is never retried.
-        **Amended 2026-09-29 (BUG-8):** a third not-ready error, a
+        **Amended 2026-09-29 (BUG-9):** a third not-ready error, a
         `SecurityException: Caller has no access to session <n>` line. The
-        first `ubuntu-26.04` run (run 36569778633, D-083) hit it 17 s after the
+        first `ubuntu-26.04` run (run 36569778633, D-085) hit it 17 s after the
         framework restart. AOSP's `PackageInstallerService` throws it when the
         session is missing from its table or not the caller's, and here the
         shell had just created that session itself. A broken APK fails with
@@ -2283,7 +2283,61 @@ any other path is work, not a candidate for the same treatment.
     It is recorded in the spec's Approach and summarised here when INF-10 is
     done.
 
-## D-083 — CI runs on `ubuntu-26.04`, named, not on `ubuntu-latest`
+## D-083 — M0 closes; the live gate drills move to the go-live checklist
+- **Date:** 2026-09-29 · **Status:** Accepted (owner, 2026-09-29). Asked in
+  session with Claude's recommendation, which was to plan the live attempt now;
+  the owner chose "close M0, and do it before go-live" · **Section:** 10 (M0)
+- **Context:** M0's exit criteria in `10-roadmap.md` are "all INF tasks done;
+  gate drills pass; CI green on `main`".
+  - **All INF tasks:** INF-00 to INF-10 are done. INF-10 merged on 2026-09-29
+    as #42.
+  - **CI green on `main`:** `ci` and `deploy-staging` passed on #42's merge
+    commit (`c24d725`) and on #41's after it (`cb9109d`).
+  - **Gate drills:** seven pass offline on every pull request that can change a
+    gate (D-082). The two that only GitHub can enforce, a push to `main` and a
+    merge without code-owner approval, are covered by `gate:integrity` reading
+    the live rules (5 of 5 in CI), not by an attempt.
+- **Decision:** M0 is closed. Its criterion "gate drills pass" counts drills 6
+  and 8 as covered by `gate:integrity`'s live read, until their live attempt.
+  That attempt becomes an M5 go-live gate item. It runs once, from the Mac as
+  `urso-agent`, never from a session acting as the owner, with the owner
+  watching.
+- **What stays open:**
+  - D-071's question, whether GitHub enforces code-owner review, is not
+    answered until then.
+  - `gate:integrity` checks what the rules say, not that GitHub enforces them,
+    and #6 once merged with no standing approval (D-072).
+- **Consequences:**
+  - `10-roadmap.md`'s M0 exit carries this exception, and its "owner actions by
+    milestone" table gains the M5 item.
+  - The next milestone is M1, the spike.
+
+## D-084 — The remaining gate files need the owner (BUG-8)
+- **Date:** 2026-09-29 · **Status:** Accepted (owner, 2026-09-29). Asked in
+  session with Claude's recommendation, and answered with it · **Section:** 6/8
+- **Context:** INF-10 made the three root Vitest configurations owner-approved
+  (D-082 item 6). `code-reviewer` and `privacy-security-reviewer`, and before
+  them INF-06's follow-up 2, found more files that shape a gate and need no
+  owner:
+  - `eslint.config.mjs` and `.dependency-cruiser.cjs`;
+  - `stryker.config.mjs` and `coverage-baseline.json`;
+  - `packages/config/` and `apps/mobile/app.config.ts`.
+
+  A change to one could loosen a lint rule, an import rule, the mutation setup
+  or the coverage baseline, with only the AI reviewers to notice.
+- **Decision:** they join CODEOWNERS and `OWNER_APPROVAL_PATHS`, held by
+  `gate:integrity` and a test, as the Vitest files are. It is its own small
+  task, BUG-8, after the M0 records. The owner took the ID suggested with the
+  option.
+- **Consequences:**
+  - More pull requests wait for an owner's approval. `urso-agent` approves
+    automatically (D-072), so this adds a named owner, not human judgement.
+  - A related gap stays separate: `reviewCodeowners` ignores GitHub's
+    last-match rule for CODEOWNERS (`test-author`, during INF-10). It bears on
+    how far `gate:integrity`'s ownership check can be trusted, and is a
+    `/bugfix` candidate.
+
+## D-085 — CI runs on `ubuntu-26.04`, named, not on `ubuntu-latest`
 - **Date:** 2026-09-29 · **Status:** Accepted (owner asked; the label is
   Claude's choice, D-031) · **Section:** 8
 - **Context:** GitHub announced that `ubuntu-latest` moves from Ubuntu 24.04 to

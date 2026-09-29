@@ -307,7 +307,7 @@ export const INSTALL_INTERVAL_MS = 5_000;
  * has not come back after the language switch: `Can't find service: package`
  * (run 6), a NullPointerException in PackageManagerInternal (run 8) and a
  * SecurityException refusing the install's own session (run 36569778633,
- * BUG-8). Everything else is 'failed', so an install that cannot work is never
+ * BUG-9). Everything else is 'failed', so an install that cannot work is never
  * waited on.
  *
  * @param {string | null} output stdout and stderr together, or null when adb
