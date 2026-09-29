@@ -10,8 +10,15 @@ export const TEST_GLOBS = ['**/*.test.ts', '**/*.test.tsx', '**/*.test.mjs', 'ap
 
 const TESTS = /\b(it|test)(\.each\([^)]*\))?\s*\(/g;
 const ASSERTIONS = /\bexpect\s*\(|\bassert(Visible|NotVisible|True)?\b/g;
+// A test is switched off by name (a skip, focus or todo, behind any modifiers
+// such as concurrent), on a condition (skipIf, runIf), by the x- and f-
+// prefixes, or from inside its body by a call to its context's skip, whatever
+// the context is called (D-082). One alternation, matched left to right, so
+// each form counts once: a skip on a test is matched from the test's name,
+// never again as a call. Early returns and swallowed failures stay with
+// test-auditor: no pattern sees them all.
 const SKIPS =
-  /\b(it|test|describe)\.(skip|only|todo)\b|\bx(it|test|describe)\b|\bf(it|describe)\b/g;
+  /\b(it|test|describe)(\.\w+)*\.(skip|only|todo|skipIf|runIf)\b|\bx(it|test|describe)\b|\bf(it|describe)\b|\bskip\s*\(/g;
 
 /** How much a test file actually checks. */
 export function strengthOf(source) {
