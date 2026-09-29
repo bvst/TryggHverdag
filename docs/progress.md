@@ -41,7 +41,8 @@ go-live checklist. So D-071's question, whether GitHub enforces code-owner
 review, stays open until then.
 
 **Next:**
-- **BUG-8.** The remaining gate files need the owner (D-084).
+- **BUG-8.** The remaining gate files need the owner (D-084). Step 1 merged
+  as #45; step 2 is in flight.
 - **M1, the spike,** when the owner starts it.
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
@@ -225,15 +226,18 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**BUG-8, step 1 of 2: ai-review's safety filter lists
-`apps/mobile/app.config.ts`** (owner's decision, 2026-09-29). BUG-8 makes the
-remaining gate files owner-approved (D-084). A test requires every
-owner-approved path under `apps/` to call safety-reviewer too, so the filter
-gains that one line first. It is its own pull request, merged by hand
-(D-075), as #21 and #30 were. `app.config.ts` holds the app's permissions,
-background modes, backup and deep-link settings, and background location is
-what the safety core will stand on. **Step 2** is BUG-8 itself: CODEOWNERS and
-`OWNER_APPROVAL_PATHS` for all six files, test-first.
+**BUG-8, step 2 of 2: the remaining gate files need the owner (D-084).**
+- **Step 1 is merged:** [#45](https://github.com/bvst/TryggHverdag/pull/45),
+  the owner's decision (2026-09-29). It adds `apps/mobile/app.config.ts` to
+  ai-review's safety filter. The owner merged it by hand at 13:19 UTC (D-075).
+- **Red, verified:** two new tests in `scripts/gate.test.mjs` fail for the
+  right reason. Of 1497 tests, the only 2 failures are BUG-8's.
+  `tests:changes` finds nothing weakened.
+- **Next, the implementer:**
+  - add the six paths to `OWNER_APPROVAL_PATHS`: `eslint.config.mjs`,
+    `.dependency-cruiser.cjs`, `stryker.config.mjs`, `coverage-baseline.json`,
+    `packages/config/` and `apps/mobile/app.config.ts`;
+  - give each one an owned line in `.github/CODEOWNERS`.
 
 **INF-08 is done** (2026-09-28).
 [#30](https://github.com/bvst/TryggHverdag/pull/30) and
@@ -317,10 +321,6 @@ Evidence, all re-run by the main session rather than taken from a report:
 **Open follow-ups:**
 - the live attempt at drills 6 and 8 is an M5 go-live item (D-083). It runs
   once from the Mac as `urso-agent`, with the owner watching;
-- **BUG-8, next:** the remaining gate files need the owner (D-084):
-  `eslint.config.mjs`, `.dependency-cruiser.cjs`, `stryker.config.mjs`,
-  `coverage-baseline.json`, `packages/config/` and
-  `apps/mobile/app.config.ts`;
 - `reviewCodeowners` ignores GitHub's last-match rule for CODEOWNERS, found
   by `test-author`. This predates INF-10 and is a `/bugfix` candidate;
 - the drills and `gate.test.mjs` each hold copies of the workflow-reading
