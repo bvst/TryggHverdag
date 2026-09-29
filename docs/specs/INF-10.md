@@ -345,10 +345,13 @@ is not.
 
   Each makes the drill fail, naming the step and what it found.
 - **And** the same holds one level up, for the job that holds the step.
-  - A job-level `continue-on-error`, or a job-level `if:` other than the job's
-    own, fails the drill.
+  - A job-level `continue-on-error`, or a job-level `if:` or `needs:` other
+    than the job's own, fails the drill. A job skipped because a job it needs
+    failed or was skipped is skipped all the same.
   - The job's own `if:` is none for `ci.yml`'s `traceability`, `unit` and
     `contract`, and `always()` for `ai-review.yml`'s `review`.
+  - Its own `needs:` is none for those three, and exactly `changes` for
+    `review`.
   - GitHub reports a skipped job as a success, even for a required check. So
     `if: false` on the `traceability` job would switch RG-01 and RG-03 off
     with every check green.
