@@ -237,7 +237,7 @@
     },
     "scripts/req-coverage.mjs": {
       "lines": 10.81,
-      "branches": 11.11,
+      "branches": 12.5,
       "coveredLines": 4,
       "totalLines": 37
     },
@@ -295,6 +295,12 @@
       "coveredLines": 21,
       "totalLines": 21
     },
+    "scripts/lib/gate-drills.mjs": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 50,
+      "totalLines": 50
+    },
     "scripts/lib/git.mjs": {
       "lines": 5.88,
       "branches": 0,
@@ -344,10 +350,10 @@
       "totalLines": 12
     },
     "scripts/lib/requirements.mjs": {
-      "lines": 98.24,
-      "branches": 90.62,
-      "coveredLines": 56,
-      "totalLines": 57
+      "lines": 98.86,
+      "branches": 92.3,
+      "coveredLines": 87,
+      "totalLines": 88
     },
     "scripts/lib/smoke.mjs": {
       "lines": 80.55,
@@ -380,10 +386,10 @@
       "totalLines": 14
     },
     "scripts/lib/test-strength.mjs": {
-      "lines": 94.11,
+      "lines": 95.83,
       "branches": 100,
-      "coveredLines": 16,
-      "totalLines": 17
+      "coveredLines": 23,
+      "totalLines": 24
     },
     "scripts/lib/workflow-lint.mjs": {
       "lines": 97.76,

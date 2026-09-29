@@ -95,6 +95,16 @@ export function isFixturesOnly(text) {
   return text.includes(FIXTURES_MARKER);
 }
 
+/** The test files that count as coverage: every one but those marked fixtures-only. */
+function countedTests(testFiles) {
+  return testFiles.filter((f) => !isFixturesOnly(f.text));
+}
+
+/** A requirement in scope: every one but a parked one, which never blocks. */
+export function isLive(row) {
+  return row.priority !== 'parked';
+}
+
 /** True when the text names this requirement (and not a longer ID that contains it). */
 export function mentions(text, id) {
   return new RegExp(`(?<![A-Z0-9-])${id}(?![0-9])`).test(text);
@@ -108,7 +118,7 @@ export function mentions(text, id) {
  * @param {{file: string, text: string}[]} specFiles
  */
 export function coverage(requirements, testFiles, specFiles = []) {
-  const counted = testFiles.filter((f) => !isFixturesOnly(f.text));
+  const counted = countedTests(testFiles);
   return requirements.map((requirement) => ({
     ...requirement,
     tests: counted.filter((f) => mentions(f.text, requirement.id)).map((f) => f.file),
@@ -130,7 +140,127 @@ export function statusOf(row) {
  */
 export function uncoveredInChanges(rows, changedText) {
   return rows.filter(
-    (row) => row.priority !== 'parked' && row.tests.length === 0 && mentions(changedText, row.id),
+    (row) => isLive(row) && row.tests.length === 0 && mentions(changedText, row.id),
+  );
+}
+
+/** Where acceptance criteria are written: one spec per requirement. */
+export const SPECS_DIR = 'docs/specs/';
+
+/**
+ * The written way out for a criterion that truly cannot be automated (D-082):
+ * a spec line `req-coverage: not automated <ID>-ACn: <reason>`. Only a real
+ * criterion makes it a line, so a spec can describe the form with placeholders.
+ */
+const NOT_AUTOMATED = /^req-coverage: not automated ([A-Z][A-Z0-9]*-\d+-AC\d+):(.*)$/;
+
+/**
+ * Every not-automated line in these specs, with its reason trimmed: '' when
+ * there is none, which lets nothing through.
+ *
+ * @param {{file: string, text: string}[]} specFiles
+ * @returns {{file: string, criterion: string, reason: string}[]}
+ */
+export function notAutomatedLines(specFiles) {
+  return specFiles.flatMap(({ file, text }) =>
+    text.split('\n').flatMap((line) => {
+      const match = NOT_AUTOMATED.exec(line.trim());
+      return match === null ? [] : [{ file, criterion: match[1], reason: match[2].trim() }];
+    }),
+  );
+}
+
+/**
+ * Acceptance criteria (`<ID>-ACn`) that a changed spec names, for a live
+ * requirement, and no counted test names exactly (D-082). A requirement that
+ * already has a test does not carry a new criterion through; that spec's own
+ * not-automated line, with a reason, does. Each criterion is listed once, with
+ * the spec it was found in.
+ *
+ * @param {{id: string, priority: string}[]} rows
+ * @param {{file: string, text: string}[]} changedFiles
+ * @param {{file: string, text: string}[]} testFiles
+ * @returns {{criterion: string, file: string}[]}
+ */
+export function uncoveredCriteria(rows, changedFiles, testFiles) {
+  const live = rows.filter(isLive);
+  const counted = countedTests(testFiles);
+  const found = new Map();
+  for (const spec of changedFiles.filter((f) => f.file.startsWith(SPECS_DIR))) {
+    const excused = notAutomatedLines([spec])
+      .filter((line) => line.reason !== '')
+      .map((line) => line.criterion);
+    for (const row of live) {
+      for (const [criterion] of spec.text.matchAll(
+        new RegExp(`(?<![A-Z0-9-])${row.id}-AC\\d+`, 'g'),
+      )) {
+        if (
+          !found.has(criterion) &&
+          !excused.includes(criterion) &&
+          !counted.some((f) => mentions(f.text, criterion))
+        ) {
+          found.set(criterion, spec.file);
+        }
+      }
+    }
+  }
+  return [...found].map(([criterion, file]) => ({ criterion, file }));
+}
+
+/**
+ * What RG-01 refuses in a change, one line each, in this order: a requirement
+ * the change touches that no test names; a criterion a changed spec names that
+ * no test names, since a requirement with a test does not carry a new
+ * criterion through; and a not-automated line with no reason, which lets
+ * nothing through (D-082). Empty when nothing is refused.
+ *
+ * @param {{
+ *   rows: ReturnType<typeof coverage>,
+ *   changed: {file: string, text: string}[],
+ *   testFiles: {file: string, text: string}[],
+ *   notAutomated: ReturnType<typeof notAutomatedLines>,
+ * }} change `changed`: the changed files that can implement a requirement, read
+ * @returns {string[]}
+ */
+export function rg01Refusals({ rows, changed, testFiles, notAutomated }) {
+  return [
+    ...uncoveredInChanges(rows, changed.map((f) => f.text).join('\n')).map(
+      (row) => `${row.id} — ${row.title}: no test names it`,
+    ),
+    ...uncoveredCriteria(rows, changed, testFiles).map(
+      ({ criterion, file }) => `${criterion}, in ${file}: no test names it`,
+    ),
+    ...notAutomated
+      .filter((line) => line.reason === '')
+      .map(
+        ({ criterion, file }) => `${criterion}, in ${file}: its not-automated line gives no reason`,
+      ),
+  ];
+}
+
+/** What req:coverage prints when RG-01 refuses: how many, each one, and how to make it pass. */
+export function rg01Message(refusals) {
+  return (
+    `\nRG-01: this branch leaves ${String(refusals.length)} requirement(s) or acceptance criteria uncovered:\n` +
+    refusals.map((line) => `  ${line}`).join('\n') +
+    '\n\nWrite the failing test first, naming it (RG-02). If one truly cannot be tested ' +
+    'automatically, say why: for a requirement, in the pull request; for a criterion, in its ' +
+    'spec, on a line of its own: "req-coverage: not automated <ID>-ACn: <reason>".\n'
+  );
+}
+
+/**
+ * One line per criterion a spec lets through untested, with its reason
+ * quoted, so an empty one shows as "" (D-082). req:coverage prints them on
+ * every run, changed or not.
+ *
+ * @param {ReturnType<typeof notAutomatedLines>} notAutomated
+ * @returns {string[]}
+ */
+export function notAutomatedNotices(notAutomated) {
+  return notAutomated.map(
+    ({ file, criterion, reason }) =>
+      `req:coverage: ${criterion} is not automated (${file}): "${reason}"`,
   );
 }
 
@@ -145,7 +275,7 @@ export function uncoveredInChanges(rows, changedText) {
  */
 export function renderStatus(rows) {
   const covered = rows.filter((row) => row.tests.length > 0).length;
-  const live = rows.filter((row) => row.priority !== 'parked');
+  const live = rows.filter(isLive);
   const lines = [
     '# Requirement status',
     '',

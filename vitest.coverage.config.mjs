@@ -32,11 +32,21 @@ import { JEST_EXPO_FILES, TEST_FILES } from './vitest.shared.mjs';
  * quietly measure a `healthchecks-v2.ts`. `!(healthchecks.ts)` at the end is an
  * exact match; `*` + `/**` catches adapters in subfolders, which a
  * one-segment pattern cannot.
+ *
+ * The gate drills (INF-10) are left out of this run, and run in the unit run
+ * instead. Coverage cannot see the gates a drill spawns as processes, a second
+ * run of them costs minutes, and the traceability job that runs this has no
+ * oasdiff, without which the CI-06 drill fails in CI by design (D-082).
  */
 export default defineConfig({
   test: {
     include: TEST_FILES,
-    exclude: ['**/node_modules/**', JEST_EXPO_FILES, '**/*.integration.test.ts'],
+    exclude: [
+      '**/node_modules/**',
+      JEST_EXPO_FILES,
+      '**/*.integration.test.ts',
+      'scripts/drills.test.mjs',
+    ],
     environment: 'node',
     testTimeout: 60_000,
     coverage: {
