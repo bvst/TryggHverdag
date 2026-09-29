@@ -2147,6 +2147,15 @@ any other path is work, not a candidate for the same treatment.
         `NullPointerException` in `PackageManagerInternal`. Any other install
         error fails at once. This is a readiness wait on the install, and D-060
         still holds: a failed flow is never retried.
+        **Amended 2026-09-29 (BUG-8):** a third not-ready error, a
+        `SecurityException: Caller has no access to session <n>` line. The
+        first `ubuntu-26.04` run (run 36569778633, D-083) hit it 17 s after the
+        framework restart. AOSP's `PackageInstallerService` throws it when the
+        session is missing from its table or not the caller's, and here the
+        shell had just created that session itself. A broken APK fails with
+        `INSTALL_FAILED_*` instead. The match is the whole line, so a refusal
+        of a *package*, or the same words in another exception or in a
+        `Failure […]` line, still fails at once.
       - **Run 9** (36409755274, the install wait): green; the install
         succeeded on attempt 1.
       - **BUG-6** (#37) gave the emulator 4 cores. It is a public repository

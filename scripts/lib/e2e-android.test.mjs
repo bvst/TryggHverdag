@@ -762,8 +762,11 @@ describe('waitForLocale: bokmål counts only once the restarted framework report
 // supported"), so the switch cannot be avoided that way.
 //
 // So the install waits, up to a deadline, while it fails with one of those two
-// signatures, and for nothing else. It waits for the device: a failed flow is
-// still never retried, which the test of the flows further down holds.
+// signatures, and at the time for nothing else. BUG-8 later added a third, the
+// session refusal of run 36569778633: a SecurityException saying the caller
+// has no access to the session a streamed install had just created. See the
+// BUG-8 block below. It waits for the device: a failed flow is still never
+// retried, which the test of the flows further down holds.
 //
 // `install` answers what `adb install -r` printed, stdout and stderr together,
 // or null when adb could not be run, as waitForLocale's `read` does.
@@ -793,9 +796,11 @@ const INSTALL_OK = [
 ];
 
 /**
- * The two signatures seen while the package manager was not ready, and only
- * those. The third is run 8's exception on another of PackageManagerInternal's
+ * The two signatures runs 6 and 8 saw while the package manager was not ready.
+ * The third row is run 8's exception on another of PackageManagerInternal's
  * methods: what counts is a NullPointerException there, not which call it hit.
+ * These are not the only not-ready answers: BUG-8's SESSION_NOT_READY, below,
+ * is the third signature.
  */
 const INSTALL_NOT_READY = [
   { what: "run 6: Can't find service: package", output: PACKAGE_SERVICE_GONE },
@@ -912,6 +917,114 @@ const INSTALL_AT_ONCE = [
   { what: "run 8's not-ready", output: PACKAGE_MANAGER_NPE, ok: false },
 ];
 
+// Added 2026-09-29, BUG-8. android-e2e on PR #43, which moves CI to
+// ubuntu-26.04 (D-083): run 36569778633, job 109410598303. The emulator
+// booted, `-change-locale nb-NO` restarted Android's framework at 12:49:35.61,
+// and at 12:49:52.77 e2e:android printed `The device's language is nb-rNO, and
+// its package service is up.` 0.46 s later the first `adb install -r` failed:
+//
+//   Performing Streamed Install
+//   adb: failed to install …/app-release.apk:
+//   Exception occurred while executing 'install':
+//   java.lang.SecurityException: Caller has no access to session 1046719992
+//   	at com.android.server.pm.PackageInstallerService.openSessionInternal(PackageInstallerService.java:1448)
+//   	at com.android.server.pm.PackageInstallerService.openSession(PackageInstallerService.java:1420)
+//   	at com.android.server.pm.PackageManagerShellCommand.doCommitSession(PackageManagerShellCommand.java:4533)
+//
+// That was neither of the two signatures installVerdict knew, so
+// installWhenReady gave up on attempt 1. The newest green run on main, on
+// ubuntu-24.04 (job 109379152187), had the same emulator, 37.1.11.0, a full
+// boot with no snapshot, and the install about 15 s after the framework's
+// restart: Success on attempt 1.
+//
+// AOSP's PackageInstallerService, read from aosp-mirror's frameworks/base,
+// which is older than the emulator's Android 17 so its line numbers differ:
+// openSessionInternal throws exactly "Caller has no access to session " +
+// sessionId when checkOpenSessionAccess refuses, that is when it holds no such
+// session or the caller is not the session's owner. A streamed `adb install`
+// creates the session, writes to it and commits it from one shell command, so
+// the shell owns the session it was refused. That points at a package manager
+// not yet ready, not at the APK, which fails with Failure [INSTALL_FAILED_…]
+// or INSTALL_PARSE_FAILED_… instead. It is a third signature of the window
+// D-081 item 12 records. The same class throws "Caller has no access to
+// package " + packageName when it does refuse a caller, so only a
+// SecurityException saying it of a session counts, whatever the session's
+// number.
+
+/** Run 36569778633's install failure, all of what adb printed, as its job log shows it. */
+const SESSION_REFUSED = [
+  'Performing Streamed Install',
+  `adb: failed to install ${APK}: `,
+  "Exception occurred while executing 'install':",
+  'java.lang.SecurityException: Caller has no access to session 1046719992',
+  '\tat com.android.server.pm.PackageInstallerService.openSessionInternal(PackageInstallerService.java:1448)',
+  '\tat com.android.server.pm.PackageInstallerService.openSession(PackageInstallerService.java:1420)',
+  '\tat com.android.server.pm.PackageManagerShellCommand.doCommitSession(PackageManagerShellCommand.java:4533)',
+  '\tat com.android.server.pm.PackageManagerShellCommand.doRunInstall(PackageManagerShellCommand.java:1741)',
+  '\tat com.android.server.pm.PackageManagerShellCommand.runInstall(PackageManagerShellCommand.java:1662)',
+  '\tat com.android.server.pm.PackageManagerShellCommand.onCommand(PackageManagerShellCommand.java:251)',
+  '\tat com.android.modules.utils.BasicShellCommandHandler.exec(BasicShellCommandHandler.java:97)',
+  '\tat android.os.ShellCommand.exec(ShellCommand.java:40)',
+  '\tat com.android.server.pm.PackageManagerService$IPackageManagerImpl.onShellCommand(PackageManagerService.java:7439)',
+  '\tat android.os.Binder.shellCommand(Binder.java:1061)',
+  '\tat android.os.Binder.onTransact(Binder.java:921)',
+  '\tat android.content.pm.IPackageManager$Stub.onTransact(IPackageManager.java:4767)',
+  '\tat com.android.server.pm.PackageManagerService$IPackageManagerImpl.onTransact(PackageManagerService.java:7423)',
+  '\tat android.os.Binder.execTransactInternal(Binder.java:1347)',
+  '\tat android.os.Binder.execTransact(Binder.java:1301)',
+  '',
+].join('\n');
+
+/**
+ * BUG-8's signature: this run's output, and the same refusal of other
+ * sessions. The number is whichever session adb had just created, so what
+ * counts is the message, not the number or how many digits it has.
+ */
+const SESSION_NOT_READY = [
+  { what: 'run 36569778633, session 1046719992', output: SESSION_REFUSED },
+  {
+    what: 'the same refusal of session 1286904417',
+    output: SESSION_REFUSED.replace('session 1046719992', 'session 1286904417'),
+  },
+  {
+    what: 'the same refusal of session 42',
+    output: SESSION_REFUSED.replace('session 1046719992', 'session 42'),
+  },
+];
+
+/**
+ * Near misses of BUG-8's signature, each of which still fails the install at
+ * once, and what the failure must then show of it. All synthetic. The first is
+ * the refusal PackageInstallerService makes of a package; the other two carry
+ * the session's words outside a SecurityException.
+ */
+const SESSION_NEAR_MISSES = [
+  {
+    what: 'a SecurityException refusing a package',
+    output: [
+      'Performing Streamed Install',
+      `adb: failed to install ${APK}: `,
+      "Exception occurred while executing 'install':",
+      'java.lang.SecurityException: Caller has no access to package no.example.app',
+      '',
+    ].join('\n'),
+    shows: 'Caller has no access to package no.example.app',
+  },
+  {
+    what: "the session's words in another exception",
+    output: SESSION_REFUSED.replace(
+      'java.lang.SecurityException: Caller',
+      'java.lang.IllegalStateException: Caller',
+    ),
+    shows: 'IllegalStateException',
+  },
+  {
+    what: "the session's words in a Failure line",
+    output: `Performing Streamed Install\nadb: failed to install ${APK}: Failure [INSTALL_FAILED_INTERNAL_ERROR: Caller has no access to session 1046719992]\n`,
+    shows: 'INSTALL_FAILED_INTERNAL_ERROR',
+  },
+];
+
 describe('installVerdict: what `adb install -r` printed', () => {
   test.each(INSTALL_OK)('INF-06-AC9: $what is ok', ({ output }) => {
     expect(installVerdict(output)).toBe('ok');
@@ -925,6 +1038,17 @@ describe('installVerdict: what `adb install -r` printed', () => {
   );
 
   test.each(INSTALL_FAILED)('INF-06-AC9: $what is failed, never not-ready', ({ output }) => {
+    expect(installVerdict(output)).toBe('failed');
+  });
+
+  test.each(SESSION_NOT_READY)(
+    'BUG-8: a SecurityException refusing its own session, $what, is not-ready, a device still starting',
+    ({ output }) => {
+      expect(installVerdict(output)).toBe('not-ready');
+    },
+  );
+
+  test.each(SESSION_NEAR_MISSES)('BUG-8: $what is failed, never not-ready', ({ output }) => {
     expect(installVerdict(output)).toBe('failed');
   });
 });
@@ -1127,6 +1251,83 @@ describe('installWhenReady: the package manager accepts installs a while after t
     expect(adb.calls.at(-1)?.at).toBeGreaterThanOrEqual(80_000);
     expect(adb.calls.at(-1)?.at).toBeLessThanOrEqual(80_000 + INSTALL_INTERVAL_MS);
   });
+
+  test('BUG-8: refused its own session as in run 36569778633 on attempt 1, and Success on attempt 2, it tries again one interval later and passes on attempt 2', async () => {
+    const time = fakeTime();
+    const adb = installer(time, inTurn([SESSION_REFUSED, INSTALLED]));
+
+    const result = await installWhenReady(adb.install, {
+      deadline: 30_000,
+      interval: 5_000,
+      now: time.now,
+      sleep: time.sleep,
+    });
+
+    expect(result.ok, result.message).toBe(true);
+    expect(result.message).toMatch(/\battempt 2\b/);
+    expect(adb.calls.map((c) => c.at)).toEqual([0, 5_000]);
+  });
+
+  test('BUG-8: not ready as in run 8, then refused its own session as in run 36569778633, then Success: it tries again one interval after each, passes, and installs no more', async () => {
+    const time = fakeTime();
+    const adb = installer(time, inTurn([PACKAGE_MANAGER_NPE, SESSION_REFUSED, INSTALLED]));
+
+    const result = await installWhenReady(adb.install, {
+      deadline: 30_000,
+      interval: 5_000,
+      now: time.now,
+      sleep: time.sleep,
+    });
+
+    expect(result.ok, result.message).toBe(true);
+    expect(adb.calls.map((c) => c.at)).toEqual([0, 5_000, 10_000]);
+  });
+
+  test('BUG-8: refused its own session on every attempt, it keeps trying until the deadline, then fails naming the attempts, how long it waited, and what adb printed', async () => {
+    const time = fakeTime();
+    const adb = installer(time, () => SESSION_REFUSED);
+
+    const result = await installWhenReady(adb.install, {
+      deadline: 30_000,
+      interval: 5_000,
+      now: time.now,
+      sleep: time.sleep,
+    });
+
+    expect(result.ok).toBe(false);
+    // It kept trying up to the deadline, and not an interval past it.
+    expect(adb.calls.length, result.message).toBeGreaterThan(1);
+    expect(adb.calls.at(-1)?.at).toBeGreaterThanOrEqual(30_000 - 5_000);
+    expect(time.now()).toBeLessThanOrEqual(30_000 + 5_000);
+    expect(result.message).toMatch(/\bwait/i);
+    expect(result.message).toMatch(saysHowLong(30_000));
+    expect(result.message).toMatch(saysAttempts(adb.calls.length));
+    expect(result.message).toContain(
+      'java.lang.SecurityException: Caller has no access to session 1046719992',
+    );
+  });
+
+  test.each(SESSION_NEAR_MISSES)(
+    'BUG-8: $what stops the install at once, with what adb printed',
+    async ({ output, shows }) => {
+      // Were it tried again, the second install would pass.
+      const time = fakeTime();
+      const adb = installer(time, inTurn([output, INSTALLED]));
+
+      const result = await installWhenReady(adb.install, {
+        deadline: 30_000,
+        interval: 5_000,
+        now: time.now,
+        sleep: time.sleep,
+      });
+
+      expect(result.ok, result.message).toBe(false);
+      expect(adb.calls.length, result.message).toBe(1);
+      expect(time.now()).toBe(0);
+      expect(result.message).toMatch(/\binstall/i);
+      expect(result.message).toContain(shows);
+    },
+  );
 });
 
 /** A Maestro JUnit report holding these <testcase> elements. */

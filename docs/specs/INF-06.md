@@ -163,7 +163,10 @@ saying which one:
   package`, or a `NullPointerException` in `PackageManagerInternal`) is
   tried again for up to 120 s. Any other install error fails at once.
   (Amended 2026-09-28, after CI run 8 and the Mac experiments recorded in
-  D-081. This waits for the device, and flows are still never retried.)
+  D-081. This waits for the device, and flows are still never retried.
+  Amended 2026-09-29, BUG-8: a third not-ready error waits too, a whole
+  `java.lang.SecurityException: Caller has no access to session <n>` line,
+  seen on the first `ubuntu-26.04` run.)
 - Maestro exits non-zero, even if its report shows every flow passed
   (amended 2026-09-26; the message names both the exit status and the report);
 - Maestro's report shows zero flows run;
