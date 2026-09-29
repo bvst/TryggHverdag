@@ -344,6 +344,14 @@ is not.
     the verdict" it is the one the workflow gives it today.
 
   Each makes the drill fail, naming the step and what it found.
+- **And** the same holds one level up, for the job that holds the step.
+  - A job-level `continue-on-error`, or a job-level `if:` other than the job's
+    own, fails the drill.
+  - The job's own `if:` is none for `ci.yml`'s `traceability`, `unit` and
+    `contract`, and `always()` for `ai-review.yml`'s `review`.
+  - GitHub reports a skipped job as a success, even for a required check. So
+    `if: false` on the `traceability` job would switch RG-01 and RG-03 off
+    with every check green.
 
 **INF-10-AC11 — Offline, synthetic and tidy.**
 - **Given** the drills running in a cloud session or in CI
