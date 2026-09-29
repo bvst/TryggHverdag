@@ -16,6 +16,9 @@
 # The one file that can ping Healthchecks.io: an unasked ping keeps a dead worker's check green (D-079).
 /apps/server/src/adapters/healthchecks.ts       @bvst @urso-agent
 /apps/mobile/src/safety-core/     @bvst @urso-agent
+# Where the app's permissions, background modes, backup and deep links are set;
+# background location is what the safety core stands on (D-084).
+/apps/mobile/app.config.ts        @bvst @urso-agent
 /.github/                         @bvst @urso-agent
 /.claude/                         @bvst @urso-agent
 # Loaded into every agent session, and states the non-negotiables and the
@@ -32,6 +35,13 @@
 /vitest.config.mjs                @bvst @urso-agent
 /vitest.shared.mjs                @bvst @urso-agent
 /vitest.coverage.config.mjs       @bvst @urso-agent
+# They decide what the lint, import-rule, mutation and coverage gates check, so
+# a change to one can loosen a gate without any test changing (D-084).
+/eslint.config.mjs                @bvst @urso-agent
+/.dependency-cruiser.cjs          @bvst @urso-agent
+/stryker.config.mjs               @bvst @urso-agent
+/coverage-baseline.json           @bvst @urso-agent
+/packages/config/                 @bvst @urso-agent
 /packages/contracts/released/     @bvst @urso-agent
 /docs/plan/decisions.md           @bvst @urso-agent
 /infra/                           @bvst @urso-agent

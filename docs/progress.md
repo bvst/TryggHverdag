@@ -41,7 +41,8 @@ go-live checklist. So D-071's question, whether GitHub enforces code-owner
 review, stays open until then.
 
 **Next:**
-- **BUG-8.** The remaining gate files need the owner (D-084).
+- **BUG-8.** The remaining gate files need the owner (D-084). Step 1 merged
+  as #45; step 2 is #46.
 - **M1, the spike,** when the owner starts it.
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
@@ -222,18 +223,27 @@ The things that still bite, and cost a session hours the first time.
 - **`req:coverage` counts the requirement a spec names, not the task ID.**
   INF-08's spec names REL-08, so its tests had to name REL-08 too, or RG-01
   fails on the branch.
+- **Two sessions can take the same decision number.** On 2026-09-29, #43
+  (another session, still open) and #44 (merged) both wrote a D-083, each
+  the next number after `main`'s last at the time. Before taking a number,
+  check the open pull requests' `decisions.md` too.
 
 ## In flight
 
-**BUG-8, step 1 of 2: ai-review's safety filter lists
-`apps/mobile/app.config.ts`** (owner's decision, 2026-09-29). BUG-8 makes the
-remaining gate files owner-approved (D-084). A test requires every
-owner-approved path under `apps/` to call safety-reviewer too, so the filter
-gains that one line first. It is its own pull request, merged by hand
-(D-075), as #21 and #30 were. `app.config.ts` holds the app's permissions,
-background modes, backup and deep-link settings, and background location is
-what the safety core will stand on. **Step 2** is BUG-8 itself: CODEOWNERS and
-`OWNER_APPROVAL_PATHS` for all six files, test-first.
+**BUG-8, step 2 of 2: the remaining gate files need the owner (D-084),
+[#46](https://github.com/bvst/TryggHverdag/pull/46).** Auto-merge is on, and
+`urso-agent` approves automatically (D-072).
+- **Step 1 is merged:** [#45](https://github.com/bvst/TryggHverdag/pull/45),
+  the owner's decision (2026-09-29). It adds `apps/mobile/app.config.ts` to
+  ai-review's safety filter. The owner merged it by hand at 13:19 UTC (D-075).
+- **Step 2, test-first:** six paths join `OWNER_APPROVAL_PATHS` and
+  `.github/CODEOWNERS`: `eslint.config.mjs`, `.dependency-cruiser.cjs`,
+  `stryker.config.mjs`, `coverage-baseline.json`, `packages/config/` and
+  `apps/mobile/app.config.ts`.
+- **Verified in session:** 1497 of 1497 tests pass. `gate:quick`,
+  `tests:changes`, `req:coverage` and the coverage ratchet are green.
+- **Not verified here:** `gate:integrity`'s two GitHub API sections. CI's
+  `gate-integrity` job runs them with its token.
 
 **D-085: CI moves to `ubuntu-26.04` before GitHub moves `ubuntu-latest`**
 (branch `claude/busy-faraday-40n2zl`). GitHub moves `ubuntu-latest` to 26.04
@@ -334,10 +344,6 @@ Evidence, all re-run by the main session rather than taken from a report:
 **Open follow-ups:**
 - the live attempt at drills 6 and 8 is an M5 go-live item (D-083). It runs
   once from the Mac as `urso-agent`, with the owner watching;
-- **BUG-8, next:** the remaining gate files need the owner (D-084):
-  `eslint.config.mjs`, `.dependency-cruiser.cjs`, `stryker.config.mjs`,
-  `coverage-baseline.json`, `packages/config/` and
-  `apps/mobile/app.config.ts`;
 - `reviewCodeowners` ignores GitHub's last-match rule for CODEOWNERS, found
   by `test-author`. This predates INF-10 and is a `/bugfix` candidate;
 - the drills and `gate.test.mjs` each hold copies of the workflow-reading
