@@ -225,6 +225,15 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
+**BUG-8, step 1 of 2: ai-review's safety filter lists
+`apps/mobile/app.config.ts`** (owner's decision, 2026-09-29). BUG-8 makes the
+remaining gate files owner-approved (D-084). A test requires every
+owner-approved path under `apps/` to call safety-reviewer too, so the filter
+gains that one line first. It is its own pull request, merged by hand
+(D-075), as #21 and #30 were. `app.config.ts` holds the app's permissions,
+background modes, backup and deep-link settings, and background location is
+what the safety core will stand on. **Step 2** is BUG-8 itself: CODEOWNERS and
+`OWNER_APPROVAL_PATHS` for all six files, test-first.
 
 **INF-08 is done** (2026-09-28).
 [#30](https://github.com/bvst/TryggHverdag/pull/30) and
