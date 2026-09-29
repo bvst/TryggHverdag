@@ -198,6 +198,63 @@ export function uncoveredCriteria(rows, changedFiles, testFiles) {
 }
 
 /**
+ * What RG-01 refuses in a change, one line each, in this order: a requirement
+ * the change touches that no test names; a criterion a changed spec names that
+ * no test names, since a requirement with a test does not carry a new
+ * criterion through; and a not-automated line with no reason, which lets
+ * nothing through (D-082). Empty when nothing is refused.
+ *
+ * @param {{
+ *   rows: ReturnType<typeof coverage>,
+ *   changed: {file: string, text: string}[],
+ *   testFiles: {file: string, text: string}[],
+ *   notAutomated: ReturnType<typeof notAutomatedLines>,
+ * }} change `changed`: the changed files that can implement a requirement, read
+ * @returns {string[]}
+ */
+export function rg01Refusals({ rows, changed, testFiles, notAutomated }) {
+  return [
+    ...uncoveredInChanges(rows, changed.map((f) => f.text).join('\n')).map(
+      (row) => `${row.id} — ${row.title}: no test names it`,
+    ),
+    ...uncoveredCriteria(rows, changed, testFiles).map(
+      ({ criterion, file }) => `${criterion}, in ${file}: no test names it`,
+    ),
+    ...notAutomated
+      .filter((line) => line.reason === '')
+      .map(
+        ({ criterion, file }) => `${criterion}, in ${file}: its not-automated line gives no reason`,
+      ),
+  ];
+}
+
+/** What req:coverage prints when RG-01 refuses: how many, each one, and how to make it pass. */
+export function rg01Message(refusals) {
+  return (
+    `\nRG-01: this branch leaves ${String(refusals.length)} requirement(s) or acceptance criteria uncovered:\n` +
+    refusals.map((line) => `  ${line}`).join('\n') +
+    '\n\nWrite the failing test first, naming it (RG-02). If one truly cannot be tested ' +
+    'automatically, say why: for a requirement, in the pull request; for a criterion, in its ' +
+    'spec, on a line of its own: "req-coverage: not automated <ID>-ACn: <reason>".\n'
+  );
+}
+
+/**
+ * One line per criterion a spec lets through untested, with its reason
+ * quoted, so an empty one shows as "" (D-082). req:coverage prints them on
+ * every run, changed or not.
+ *
+ * @param {ReturnType<typeof notAutomatedLines>} notAutomated
+ * @returns {string[]}
+ */
+export function notAutomatedNotices(notAutomated) {
+  return notAutomated.map(
+    ({ file, criterion, reason }) =>
+      `req:coverage: ${criterion} is not automated (${file}): "${reason}"`,
+  );
+}
+
+/**
  * The generated report. Nobody edits it by hand; `pnpm run req:coverage` writes
  * it, and CI regenerates it and fails if the committed copy differs.
  *

@@ -28,9 +28,10 @@ import {
   collectRequirements,
   coverage,
   notAutomatedLines,
+  notAutomatedNotices,
   renderStatus,
-  uncoveredCriteria,
-  uncoveredInChanges,
+  rg01Message,
+  rg01Refusals,
 } from './lib/requirements.mjs';
 
 const REPORT = 'docs/requirements-status.md';
@@ -98,9 +99,7 @@ function main() {
   // The way out is never taken quietly: every criterion a spec lets through
   // untested is printed with its reason, quoted, on every run (D-082).
   const notAutomated = notAutomatedLines(specFiles);
-  for (const { file, criterion, reason } of notAutomated) {
-    process.stdout.write(`req:coverage: ${criterion} is not automated (${file}): "${reason}"\n`);
-  }
+  for (const notice of notAutomatedNotices(notAutomated)) process.stdout.write(`${notice}\n`);
 
   if (!failOnUncovered) {
     return;
@@ -117,31 +116,10 @@ function main() {
         (file.startsWith('apps/') || file.startsWith('packages/') || file.startsWith(SPECS_DIR)),
     ),
   );
-  // What RG-01 refuses: a requirement the branch touches that no test names; a
-  // criterion a changed spec names that no test names, since a requirement with
-  // a test does not carry a new criterion through; and a not-automated line
-  // with no reason, which lets nothing through (D-082).
-  const missing = [
-    ...uncoveredInChanges(rows, changed.map((f) => f.text).join('\n')).map(
-      (row) => `${row.id} — ${row.title}: no test names it`,
-    ),
-    ...uncoveredCriteria(rows, changed, testFiles).map(
-      ({ criterion, file }) => `${criterion}, in ${file}: no test names it`,
-    ),
-    ...notAutomated
-      .filter((line) => line.reason === '')
-      .map(
-        ({ criterion, file }) => `${criterion}, in ${file}: its not-automated line gives no reason`,
-      ),
-  ];
-  if (missing.length > 0) {
-    process.stdout.write(
-      `\nRG-01: this branch leaves ${String(missing.length)} requirement(s) or acceptance criteria uncovered:\n` +
-        missing.map((line) => `  ${line}`).join('\n') +
-        '\n\nWrite the failing test first, naming it (RG-02). If one truly cannot be tested ' +
-        'automatically, say why: for a requirement, in the pull request; for a criterion, in its ' +
-        'spec, on a line of its own: "req-coverage: not automated <ID>-ACn: <reason>".\n',
-    );
+  // What RG-01 refuses is decided in requirements.mjs; this prints it and fails.
+  const refusals = rg01Refusals({ rows, changed, testFiles, notAutomated });
+  if (refusals.length > 0) {
+    process.stdout.write(rg01Message(refusals));
     process.exitCode = 1;
   }
 }
