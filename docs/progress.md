@@ -42,7 +42,7 @@ review, stays open until then.
 
 **Next:**
 - **BUG-8.** The remaining gate files need the owner (D-084). Step 1 merged
-  as #45; step 2 is in flight.
+  as #45; step 2 is #46.
 - **M1, the spike,** when the owner starts it.
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
@@ -223,21 +223,27 @@ The things that still bite, and cost a session hours the first time.
 - **`req:coverage` counts the requirement a spec names, not the task ID.**
   INF-08's spec names REL-08, so its tests had to name REL-08 too, or RG-01
   fails on the branch.
+- **Two sessions can take the same decision number.** On 2026-09-29, #43
+  (another session, still open) and #44 (merged) both wrote a D-083, each
+  the next number after `main`'s last at the time. Before taking a number,
+  check the open pull requests' `decisions.md` too.
 
 ## In flight
 
-**BUG-8, step 2 of 2: the remaining gate files need the owner (D-084).**
+**BUG-8, step 2 of 2: the remaining gate files need the owner (D-084),
+[#46](https://github.com/bvst/TryggHverdag/pull/46).** Auto-merge is on, and
+`urso-agent` approves automatically (D-072).
 - **Step 1 is merged:** [#45](https://github.com/bvst/TryggHverdag/pull/45),
   the owner's decision (2026-09-29). It adds `apps/mobile/app.config.ts` to
   ai-review's safety filter. The owner merged it by hand at 13:19 UTC (D-075).
-- **Red, verified:** two new tests in `scripts/gate.test.mjs` fail for the
-  right reason. Of 1497 tests, the only 2 failures are BUG-8's.
-  `tests:changes` finds nothing weakened.
-- **Next, the implementer:**
-  - add the six paths to `OWNER_APPROVAL_PATHS`: `eslint.config.mjs`,
-    `.dependency-cruiser.cjs`, `stryker.config.mjs`, `coverage-baseline.json`,
-    `packages/config/` and `apps/mobile/app.config.ts`;
-  - give each one an owned line in `.github/CODEOWNERS`.
+- **Step 2, test-first:** six paths join `OWNER_APPROVAL_PATHS` and
+  `.github/CODEOWNERS`: `eslint.config.mjs`, `.dependency-cruiser.cjs`,
+  `stryker.config.mjs`, `coverage-baseline.json`, `packages/config/` and
+  `apps/mobile/app.config.ts`.
+- **Verified in session:** 1497 of 1497 tests pass. `gate:quick`,
+  `tests:changes`, `req:coverage` and the coverage ratchet are green.
+- **Not verified here:** `gate:integrity`'s two GitHub API sections. CI's
+  `gate-integrity` job runs them with its token.
 
 **INF-08 is done** (2026-09-28).
 [#30](https://github.com/bvst/TryggHverdag/pull/30) and
