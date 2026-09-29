@@ -25,6 +25,9 @@ export const OWNER_APPROVAL_PATHS = [
   // The one file that can ping Healthchecks.io: an unasked ping keeps a dead worker's check green (D-079).
   '/apps/server/src/adapters/healthchecks.ts',
   '/apps/mobile/src/safety-core/',
+  // Where the app's permissions, background modes, backup and deep links are
+  // set; background location is what the safety core stands on (D-084).
+  '/apps/mobile/app.config.ts',
   '/.github/',
   '/.claude/',
   // Loaded into every agent session, and states the non-negotiables and the
@@ -43,6 +46,13 @@ export const OWNER_APPROVAL_PATHS = [
   '/vitest.config.mjs',
   '/vitest.shared.mjs',
   '/vitest.coverage.config.mjs',
+  // They decide what the lint, import-rule, mutation and coverage gates check,
+  // so a change to one can loosen a gate without any test changing (D-084).
+  '/eslint.config.mjs',
+  '/.dependency-cruiser.cjs',
+  '/stryker.config.mjs',
+  '/coverage-baseline.json',
+  '/packages/config/',
   '/packages/contracts/released/',
   '/docs/plan/decisions.md',
   '/infra/',

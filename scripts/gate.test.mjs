@@ -372,6 +372,44 @@ describe("this repository's own workflows", () => {
   // one that stopped them would otherwise be caught only by the AI reviewers.
   const VITEST_CONFIGS = ['vitest.config.mjs', 'vitest.shared.mjs', 'vitest.coverage.config.mjs'];
 
+  /** The rules of CODEOWNERS `text`, in order: each line's pattern and its owners, comments and blank lines left out. */
+  const codeownersRules = (text) =>
+    text
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '' && !line.startsWith('#'))
+      .map((line) => {
+        const [pattern = '', ...owners] = line.split(/\s+/);
+        return { pattern, owners };
+      });
+
+  // CODEOWNERS reads its patterns as .gitignore does, and the last line that
+  // matches a file decides its owners: a later line with none un-owns it,
+  // as the reviewer-memory line at the end of the file does on purpose.
+  const matches = (pattern, file) => {
+    const directory = pattern.endsWith('/');
+    const bare = pattern.replace(/^\//, '').replace(/\/$/, '');
+    const anchored = pattern.startsWith('/') || bare.includes('/');
+    const body = bare
+      .split('**')
+      .map((part) =>
+        part
+          .split('*')
+          .map((piece) => piece.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+          .join('[^/]*'),
+      )
+      .join('.*');
+    return new RegExp(
+      `^${anchored ? '' : '(?:.*/)?'}${body}${directory ? '/.*' : '(?:/.*)?'}$`,
+    ).test(file);
+  };
+
+  /** The owners CODEOWNERS `text` gives a file: those of the last line that matches it, [] when none does. */
+  const lastMatchOwners = (text) => {
+    const rules = codeownersRules(text);
+    return (file) => rules.filter((rule) => matches(rule.pattern, file)).at(-1)?.owners ?? [];
+  };
+
   test('INF-10-AC18: the three root Vitest configurations, which decide whether the drills run at all, are paths the owner must approve', () => {
     for (const file of VITEST_CONFIGS) {
       expect(existsSync(file), file).toBe(true);
@@ -381,42 +419,63 @@ describe("this repository's own workflows", () => {
 
   test('INF-10-AC18: .github/CODEOWNERS gives each of them to the owner: gate:integrity finds every owner-approval path owned, and the last line matching each names an owner', () => {
     const text = readFileSync('.github/CODEOWNERS', 'utf8');
-    const rules = text
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line !== '' && !line.startsWith('#'))
-      .map((line) => {
-        const [pattern = '', ...owners] = line.split(/\s+/);
-        return { pattern, owners };
-      });
-    // CODEOWNERS reads its patterns as .gitignore does, and the last line that
-    // matches a file decides its owners: a later line with none un-owns it,
-    // as the reviewer-memory line at the end of the file does on purpose.
-    const matches = (pattern, file) => {
-      const directory = pattern.endsWith('/');
-      const bare = pattern.replace(/^\//, '').replace(/\/$/, '');
-      const anchored = pattern.startsWith('/') || bare.includes('/');
-      const body = bare
-        .split('**')
-        .map((part) =>
-          part
-            .split('*')
-            .map((piece) => piece.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
-            .join('[^/]*'),
-        )
-        .join('.*');
-      return new RegExp(
-        `^${anchored ? '' : '(?:.*/)?'}${body}${directory ? '/.*' : '(?:/.*)?'}$`,
-      ).test(file);
-    };
-    const ownersOf = (file) =>
-      rules.filter((rule) => matches(rule.pattern, file)).at(-1)?.owners ?? [];
+    const ownersOf = lastMatchOwners(text);
 
     expect(reviewCodeowners(text)).toEqual([]);
     // The reading is checked on the file's own lines first.
     expect(ownersOf('.claude/settings.json').length).toBeGreaterThan(0);
     expect(ownersOf('.claude/agent-memory/notes.md')).toEqual([]);
     for (const file of VITEST_CONFIGS) {
+      expect(ownersOf(file), file).not.toEqual([]);
+    }
+  });
+
+  // BUG-8 (D-084): the files that shape the lint, import-rule, mutation and
+  // coverage gates, and the app's own configuration, needed no owner to
+  // change. A change to one could loosen a gate with only the AI reviewers to
+  // notice. Written as OWNER_APPROVAL_PATHS writes a path: from the root, and
+  // a directory with its trailing slash.
+  const GATE_FILES = [
+    '/eslint.config.mjs',
+    '/.dependency-cruiser.cjs',
+    '/stryker.config.mjs',
+    '/coverage-baseline.json',
+    '/packages/config/',
+    '/apps/mobile/app.config.ts',
+  ];
+
+  test("BUG-8: the files that shape the lint, import-rule, mutation and coverage gates, and the app's config, are paths the owner must approve", () => {
+    for (const owned of GATE_FILES) {
+      const found = statSync(owned.replace(/^\//, '').replace(/\/$/, ''), {
+        throwIfNoEntry: false,
+      });
+      const kind = found === undefined ? 'nothing' : found.isDirectory() ? 'a directory' : 'a file';
+
+      expect(kind, owned).toBe(owned.endsWith('/') ? 'a directory' : 'a file');
+      expect(OWNER_APPROVAL_PATHS, owned).toContain(owned);
+    }
+  });
+
+  test('BUG-8: .github/CODEOWNERS gives each of them to the owner: each has an owned line of its own, gate:integrity finds every owner-approval path owned, and the last line matching each file, and every file in packages/config, names an owner', () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const rules = codeownersRules(text);
+    const ownersOf = lastMatchOwners(text);
+    const listed = spawnSync('git', ['ls-files', '--', 'packages/config'], { encoding: 'utf8' });
+    const inside = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    for (const owned of GATE_FILES) {
+      expect(
+        rules.some((rule) => rule.pattern === owned && rule.owners.length > 0),
+        `${owned} has no owned line of its own in .github/CODEOWNERS`,
+      ).toBe(true);
+    }
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(inside.length, 'packages/config holds no file git tracks').toBeGreaterThan(0);
+    for (const file of [
+      ...GATE_FILES.filter((owned) => !owned.endsWith('/')).map((owned) => owned.slice(1)),
+      ...inside,
+    ]) {
       expect(ownersOf(file), file).not.toEqual([]);
     }
   });

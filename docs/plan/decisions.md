@@ -2327,4 +2327,13 @@ any other path is work, not a candidate for the same treatment.
     last-match rule for CODEOWNERS (`test-author`, during INF-10). It bears on
     how far `gate:integrity`'s ownership check can be trusted, and is a
     `/bugfix` candidate.
+- **Update 2026-09-29:** done in two pull requests.
+  - **#45 put `apps/mobile/app.config.ts` into ai-review's safety filter
+    first.** A test requires every owner-approval path under `apps/` to call
+    safety-reviewer. The owner chose this and merged #45 by hand (D-075).
+  - **#46 adds the six paths** to CODEOWNERS and `OWNER_APPROVAL_PATHS`,
+    test-first. Its test also checks GitHub's last-match rule, for these
+    files and for each file in `packages/config`. So for them, a test now
+    covers the last-match gap above. Everywhere else it stays a `/bugfix`
+    candidate.
 
