@@ -39,6 +39,7 @@
     "api:spec": "node scripts/api-spec.mjs",
     "mutation": "node scripts/mutation.mjs",
     "gate:full": "node scripts/gate.mjs full",
+    "gate:drills": "node scripts/gate-drills.mjs",
     "infra:check": "node scripts/infra-check.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
