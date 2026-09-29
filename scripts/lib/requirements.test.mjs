@@ -13,9 +13,12 @@ import {
   coverage,
   mentions,
   notAutomatedLines,
+  notAutomatedNotices,
   parseRules,
   parseStories,
   renderStatus,
+  rg01Message,
+  rg01Refusals,
   statusOf,
   uncoveredCriteria,
   uncoveredInChanges,
@@ -424,5 +427,164 @@ describe('INF-10-AC15: req:coverage, run as the traceability job runs it', () =>
     };
 
     expect(report(named)).toBe(report(plain));
+  });
+});
+
+// INF-10-AC15, in process (RG-04). What RG-01 refuses, the message it prints
+// when it does, and the notice for each criterion a spec lets through, decided
+// by pure functions here rather than inside req-coverage.mjs's main(): what a
+// spawned process runs, the coverage run cannot see. The texts are copied from
+// that main() as it printed them when these tests were written.
+//
+// What these tests expect of requirements.mjs:
+//
+//   rg01Refusals({ rows, changed, testFiles, notAutomated }) → string[]
+//     one line per refusal: each requirement the change touches that no test
+//     names, then each criterion a changed spec names that no test names, then
+//     each not-automated line with no reason. [] when nothing is refused.
+//   rg01Message(refusals) → the text req:coverage prints when RG-01 refuses
+//   notAutomatedNotices(notAutomated) → string[], one line per entry, with no
+//     trailing newline
+
+/**
+ * How RG-01 tells the author to make it pass, copied from req-coverage.mjs's
+ * main(). The literal is split in front of "(RG-02)" only so that this file's
+ * text holds no "it" followed by a parenthesis, which RG-03 would count as a
+ * test; the text itself is the same, character for character.
+ */
+const RG01_CLOSING =
+  '\n\nWrite the failing test first, naming it ' +
+  '(RG-02). If one truly cannot be tested ' +
+  'automatically, say why: for a requirement, in the pull request; for a criterion, in its ' +
+  'spec, on a line of its own: "req-coverage: not automated <ID>-ACn: <reason>".\n';
+
+describe('INF-10-AC15: what RG-01 refuses, and what it says, decided in process', () => {
+  const SPEC = 'docs/specs/DEMO-01.md';
+  const requirements = [
+    { id: 'DEMO-01', title: 'A synthetic story', priority: 'must' },
+    { id: 'DEMO-02', title: 'Another synthetic story', priority: 'should' },
+    { id: 'DEMO-03', title: 'A parked synthetic story', priority: 'parked' },
+  ];
+  /** One counted test file, naming DEMO-01's first criterion, and so DEMO-01. */
+  const testFiles = [{ file: 'apps/server/src/demo.test.ts', text: 'names DEMO-01-AC1' }];
+  const rows = coverage(requirements, testFiles, []);
+  const REQUIREMENT_REFUSED = 'DEMO-02 — Another synthetic story: no test names it';
+  const CRITERION_REFUSED = `DEMO-01-AC2, in ${SPEC}: no test names it`;
+
+  test('INF-10-AC15: rg01Refusals refuses nothing when every requirement and criterion a change names has a test, and every not-automated line a reason', () => {
+    const refusals = rg01Refusals({
+      rows,
+      changed: [
+        { file: SPEC, text: '**DEMO-01-AC1** — one.' },
+        { file: 'apps/server/src/parked.ts', text: '// DEMO-03 is parked' },
+      ],
+      testFiles,
+      notAutomated: [{ file: SPEC, criterion: 'DEMO-01-AC4', reason: REASON }],
+    });
+
+    expect(refusals).toEqual([]);
+  });
+
+  test('INF-10-AC15: rg01Refusals names a requirement the change touches that no test names, with its title', () => {
+    const refusals = rg01Refusals({
+      rows,
+      changed: [{ file: 'apps/server/src/demo.ts', text: '// the DEMO-02 handler' }],
+      testFiles,
+      notAutomated: [],
+    });
+
+    expect(refusals).toEqual([REQUIREMENT_REFUSED]);
+  });
+
+  test('INF-10-AC15: rg01Refusals names a criterion a changed spec names that no test names, with the spec it is in', () => {
+    const refusals = rg01Refusals({
+      rows,
+      changed: [{ file: SPEC, text: '**DEMO-01-AC1** — one.\n**DEMO-01-AC2** — two.' }],
+      testFiles,
+      notAutomated: [],
+    });
+
+    expect(refusals).toEqual([CRITERION_REFUSED]);
+  });
+
+  test('INF-10-AC15: rg01Refusals refuses a not-automated line that gives no reason, naming its criterion and spec, and lets one with a reason be', () => {
+    const refusals = rg01Refusals({
+      rows,
+      changed: [],
+      testFiles,
+      notAutomated: [
+        { file: SPEC, criterion: 'DEMO-01-AC4', reason: '' },
+        { file: 'docs/specs/DEMO-02.md', criterion: 'DEMO-02-AC1', reason: REASON },
+      ],
+    });
+
+    expect(refusals).toEqual([`DEMO-01-AC4, in ${SPEC}: its not-automated line gives no reason`]);
+  });
+
+  test('INF-10-AC15: rg01Refusals lists requirements, then criteria, then not-automated lines with no reason, in that order', () => {
+    const refusals = rg01Refusals({
+      rows,
+      changed: [
+        { file: 'apps/server/src/demo.ts', text: '// the DEMO-02 handler' },
+        { file: SPEC, text: '**DEMO-01-AC1** — one.\n**DEMO-01-AC2** — two.' },
+      ],
+      testFiles,
+      notAutomated: [{ file: SPEC, criterion: 'DEMO-01-AC1', reason: '' }],
+    });
+
+    expect(refusals).toEqual([
+      REQUIREMENT_REFUSED,
+      CRITERION_REFUSED,
+      `DEMO-01-AC1, in ${SPEC}: its not-automated line gives no reason`,
+    ]);
+  });
+
+  test('INF-10-AC15: rg01Message is the text req:coverage prints when RG-01 refuses: the count, each refusal indented by two spaces, and how to make it pass', () => {
+    expect(rg01Message([REQUIREMENT_REFUSED, CRITERION_REFUSED])).toBe(
+      '\nRG-01: this branch leaves 2 requirement(s) or acceptance criteria uncovered:\n' +
+        '  DEMO-02 — Another synthetic story: no test names it\n' +
+        '  DEMO-01-AC2, in docs/specs/DEMO-01.md: no test names it' +
+        RG01_CLOSING,
+    );
+  });
+
+  test('INF-10-AC15: rg01Message counts one refusal, or three, the same way, keeping their order', () => {
+    const three = rg01Message(['first refusal', 'second refusal', 'third refusal']);
+
+    expect(rg01Message([REQUIREMENT_REFUSED])).toBe(
+      '\nRG-01: this branch leaves 1 requirement(s) or acceptance criteria uncovered:\n' +
+        '  DEMO-02 — Another synthetic story: no test names it' +
+        RG01_CLOSING,
+    );
+    expect(three.startsWith('\nRG-01: this branch leaves 3 requirement(s) or')).toBe(true);
+    expect(three.split('\n').filter((line) => line.startsWith('  '))).toEqual([
+      '  first refusal',
+      '  second refusal',
+      '  third refusal',
+    ]);
+    expect(three.endsWith(RG01_CLOSING)).toBe(true);
+  });
+
+  test('INF-10-AC15: notAutomatedNotices gives one line per not-automated criterion, with its spec and its reason quoted, and no newline', () => {
+    const notices = notAutomatedNotices([
+      { file: SPEC, criterion: 'DEMO-01-AC4', reason: REASON },
+      {
+        file: 'docs/specs/DEMO-02.md',
+        criterion: 'DEMO-02-AC1',
+        reason: 'needs the owner at the door',
+      },
+    ]);
+
+    expect(notices).toEqual([
+      'req:coverage: DEMO-01-AC4 is not automated (docs/specs/DEMO-01.md): "needs a person to hold the phone"',
+      'req:coverage: DEMO-02-AC1 is not automated (docs/specs/DEMO-02.md): "needs the owner at the door"',
+    ]);
+    expect(notAutomatedNotices([])).toEqual([]);
+  });
+
+  test('INF-10-AC15: notAutomatedNotices shows an empty reason as "", so the missing reason is in plain sight', () => {
+    expect(notAutomatedNotices([{ file: SPEC, criterion: 'DEMO-01-AC4', reason: '' }])).toEqual([
+      'req:coverage: DEMO-01-AC4 is not automated (docs/specs/DEMO-01.md): ""',
+    ]);
   });
 });
