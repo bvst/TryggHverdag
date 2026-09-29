@@ -2167,9 +2167,9 @@ any other path is work, not a candidate for the same treatment.
   Item 12 is a standing to-do on this same decision, not a separate task.
 
 ## D-082 — Gate drills: offline now, live later; three gates tightened first
-- **Date:** 2026-09-28 · **Status:** Accepted (owner, 2026-09-28: five
-  questions asked in session, each with Claude's recommendation, and each
-  answered with it) · **Section:** 6/8 (M0, INF-10)
+- **Date:** 2026-09-28 · **Status:** Accepted (owner, 2026-09-28 and
+  2026-09-29: seven questions asked in session, each with Claude's
+  recommendation, and each answered with it) · **Section:** 6/8 (M0, INF-10)
 - **Context:** INF-10 is M0's last task: the roadmap's nine gate drills. Each
   is a scripted attempt that must be blocked, and a drill that gets through
   means M0 is not done. Writing the spec (`docs/specs/INF-10.md`) showed that
@@ -2227,6 +2227,19 @@ any other path is work, not a candidate for the same treatment.
      Names such as `skipIfMissing` do not count. Other ways to hollow out a
      test, such as an early return, stay with `test-auditor`: no text pattern
      catches them all.
+  5. **RG-03 widened further** (2026-09-29), after `code-reviewer` found more
+     forms. Nothing in the repository uses them today.
+     - The same forms count on `suite`, and on any test object, such as one
+       made with `test.extend`, including bracket access.
+     - `.fails` and `.failing` count too, on their own and with their own
+       message. They turn a failing test into a passing one, and the run
+       reports it as passed.
+  6. **The files that decide which tests CI runs need the owner**
+     (2026-09-29). `vitest.config.mjs`, `vitest.shared.mjs` and
+     `vitest.coverage.config.mjs` join CODEOWNERS and `OWNER_APPROVAL_PATHS`.
+     Otherwise, a change that stopped the drills from running would be caught
+     only by the AI reviewers. `code-reviewer` and `privacy-security-reviewer`
+     each found this; INF-06 had raised it earlier.
 - **Checked before deciding (2026-09-28, in session):**
   - The release archive passed `sha256sum -c` against the published
     `checksums.txt`, and printed `oasdiff version 1.32.1`.

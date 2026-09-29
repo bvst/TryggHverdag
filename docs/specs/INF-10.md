@@ -263,7 +263,9 @@ is not.
 - **Control:** the current description unchanged → exit 0, having compared 1
   released version.
 - **In CI** (`CI=true`, where only `unit` runs the drills), a missing oasdiff
-  fails the drill. **Elsewhere**, without oasdiff, the drill requires
+  fails the drill, and so does one whose `oasdiff --version`, resolved on the
+  gate's own `PATH`, is not the version pinned in `ci.yml`'s `env`: a binary
+  shadowing the pinned one, such as a `node_modules/.bin/oasdiff`, is caught. **Elsewhere**, without oasdiff, the drill requires
   `api:diff`'s own refusal ("compatibility was NOT checked", non-zero), and
   the report says "fail-closed only", never "blocked".
 
@@ -334,16 +336,31 @@ is not.
   GitHub differ.
 - **And** if that step, script or hook entry is missing, or no longer runs
   its gate, the drill fails and says what it looked for.
+- **And** a step made to tolerate its gate's failure no longer runs it:
+  - a shell operator on the gate's line, such as `|| true`;
+  - `continue-on-error: true`;
+  - an `if:` other than the step's own. That is none for `traceability`'s
+    steps, and the CI-12 code guard for `unit`'s and `contract`'s. For "Enforce
+    the verdict" it is the one the workflow gives it today.
+
+  Each makes the drill fail, naming the step and what it found.
 
 **INF-10-AC11 — Offline, synthetic and tidy.**
 - **Given** the drills running in a cloud session or in CI
 - **When** they spawn a gate
-- **Then** it gets an explicit environment: no token, nothing a gate reads
-  from the runner (`GITHUB_*`, `CI`), and a `PATH` whose only GitHub tool is
-  the stand-in `gh`, which refuses any call it was not set up for. No Docker,
-  no network.
+- **Then** it gets an explicit environment:
+  - no token, and nothing a gate reads from the runner (`GITHUB_*`, `CI`);
+  - a `PATH` whose first `gh` is the stand-in, which refuses any call it was
+    not set up for. The runner's own `gh` stays behind it, shadowed, with no
+    token;
+  - proxy variables that point at a dead address, with `NODE_USE_ENV_PROXY=1`,
+    so that Node's own `fetch` cannot reach the network either;
+  - no Docker.
+- **And** the check that no token reaches a gate asserts true or false. A
+  failure names the variable, never its value (SEC-03).
 - **And** all data is synthetic (RG-07). No committed file holds a drill's
-  secret, phone number or skip form.
+  secret or phone number, and no test file holds a skip form. RG-03 counts
+  test files only; prose in the docs names the forms on purpose.
 - **And** every scratch folder is outside the repository and removed
   afterwards. The repository's `git status` is the same before and after.
 
@@ -361,6 +378,25 @@ is not.
   each passed. It exits non-zero, saying why, if a drill got through, is
   missing or was skipped, if any other test in the file failed, or if nothing
   ran.
+- **And** each offline row is backed by its attempt. It needs a passed test
+  whose name starts with that drill's attempt criterion:
+
+  | Drill | Attempt |
+  |---|---|
+  | RG-03 | AC1 |
+  | CI-03 | AC2 |
+  | RG-01 | AC3 |
+  | CI-06 | AC4 |
+  | HK-02 | AC5 |
+  | HK-07 | AC6 |
+  | CI-11 | AC7 |
+
+  Without one, the row reads "✗ missing", whatever else of that drill passed.
+- **And** Vitest's own exit status and signal reach the verdict:
+  - a run where Vitest exits non-zero although every test passed is not
+    trusted, and says so;
+  - a run Vitest did not finish, because it was stopped or timed out, says
+    that rather than "nothing ran".
 - **And** the two live rows are never shown or counted as passed. CI-06's row
   says whether it proved detection or fail-closed only; oasdiff is probed the
   way `gate:full` probes Docker.
@@ -395,7 +431,9 @@ is not.
   neither do a parked requirement's, as today. Only specs are read for
   criteria, and `docs/requirements-status.md` does not change.
 - **And** the line `req-coverage: not automated <ID>-ACn: <reason>` in that
-  spec lets the criterion through. The gate prints every such criterion and
+  spec lets the criterion through. It counts only at the start of a line, so
+  prose naming a criterion mid-line excuses nothing. It counts only in the
+  spec that names that criterion: one spec's line never excuses another's. The gate prints every such criterion and
   its reason on every run, and refuses the line if the reason is empty.
 
 **INF-10-AC16 — oasdiff is installed, pinned, where the gate and the drill run.**
@@ -407,10 +445,13 @@ is not.
   (1.32.1 and its `checksums.txt` hash today).
 - **And** an archive whose SHA-256 differs stops that step, with a message,
   before anything is unpacked.
+- **And** `unit` and `contract` check out without persisting credentials
+  (`persist-credentials: false`, as `android-e2e` already does), since a
+  downloaded binary runs there.
 - **And** there is no new job, action or secret. D-082 records the version,
   the hash's source and the licence (Apache-2.0).
 
-**INF-10-AC17 — RG-03's skip pattern sees conditional, chained and in-body skips.**
+**INF-10-AC17 — RG-03's skip pattern sees conditional, chained, in-body and inverted skips.**
 - **Given** a test file whose new version switches existing tests off with
   `describe.skipIf(…)`, `describe.runIf(…)`, a skip behind another modifier
   such as `describe.concurrent.skip` (and the same forms on `test` and `it`),
@@ -422,8 +463,29 @@ is not.
 - **Then** it reports "skipped, focused or todo tests were added", so HK-05
   and `tests:changes` both refuse it.
 - **And** focus and todo behind a modifier count too, since they share the
-  pattern. Every form counted today still is, and a name that only contains
-  those words, such as `skipIfMissing(`, is not.
+  pattern. That holds behind two or more modifiers, such as
+  `describe.shuffle.concurrent.only` and
+  `test.concurrent.sequential.skipIf(true)`.
+- **And**, since the owner's sixth answer (D-082, 2026-09-29), these count as
+  well:
+  - the same forms on `suite`, Vitest's other name for `describe`;
+  - the same forms on any test object, such as one made with `test.extend`
+    (`myTest.skip(…)`), including bracket access (`test['skip']`);
+  - `.fails` and `.failing`. These turn a test that fails into one that
+    passes, so they are counted on their own, with their own RG-03 message:
+    tests were inverted to expect failure.
+- **And** every form counted today still is. A name that only contains those
+  words, such as `skipIfMissing(` or a lowercase `unskip(`, is not.
+
+**INF-10-AC18 — The files that decide which tests CI runs need the owner.**
+- **Given** `vitest.config.mjs`, `vitest.shared.mjs` and
+  `vitest.coverage.config.mjs`, whose include and exclude lists decide whether
+  the drills run at all
+- **When** a pull request changes one
+- **Then** it needs the owner's approval: all three are in
+  `.github/CODEOWNERS` and in `OWNER_APPROVAL_PATHS`
+  (`scripts/lib/merge-rules.mjs`), so `gate:integrity` holds them (D-042,
+  D-082).
 
 ## Test plan
 
@@ -435,6 +497,7 @@ is not.
 | AC15 | L2 | `scripts/lib/requirements.test.mjs`, one case per bullet. AC3 runs the entry script |
 | AC16 | L2 | `scripts/gate.test.mjs`: both steps' place, guard and single pin; each step run on the existing fake runner, where a stand-in archive with the pinned hash lands on `PATH` and one with another hash stops the step. AC4, in CI, proves the real binary |
 | AC17 | L2 | `scripts/lib/test-strength.test.mjs` (the rule); `.claude/hooks/test-weakening.test.mjs`, one HK-05 case; AC1 runs `tests:changes` |
+| AC18 | L2 | Where `OWNER_APPROVAL_PATHS` and CODEOWNERS coverage are already tested (`scripts/gate.test.mjs` or `scripts/lib/merge-rules` tests) |
 
 They run in `unit` on every pull request CI-12 calls code, at every stop
 through `gate:quick`, and in `gate:full` (in `test:unit`, and again in
@@ -482,9 +545,13 @@ Paths marked ◆ need a code owner's approval (D-042).
   `.claude/hooks/test-weakening.test.mjs` (an edit under `.claude/` asks the
   owner first).
 - ◆ `.github/workflows/ci.yml`: oasdiff's version and SHA-256, once; an
-  install step in `unit` and in `contract` (AC16).
+  install step in `unit` and in `contract`, whose checkouts stop persisting
+  credentials (AC16).
+- ◆ `.github/CODEOWNERS` and ◆ `scripts/lib/merge-rules.mjs`
+  (`OWNER_APPROVAL_PATHS`): the three root Vitest configurations (AC18).
 - ◆ `scripts/gate.test.mjs`: AC13, AC14's collection check, AC16.
-- `vitest.coverage.config.mjs`: leaves out the drill file (Approach 8).
+- `vitest.coverage.config.mjs`: leaves out the drill file (Approach 8). It
+  is owned from this change on (AC18).
 - ◆ `package.json`: the `gate:drills` script. ◆ `scripts/gate.mjs`: the step
   in `FULL_STEPS`.
 - ◆ `CLAUDE.md`: `gate:drills` in the command list.
@@ -501,10 +568,11 @@ Paths marked ◆ need a code owner's approval (D-042).
   read, not changed.
 - `scripts/api-diff.mjs`: it already looks for oasdiff on `PATH`.
 - `scripts/lib/pinned-binary.mjs`: not used (Approach 10).
-- `scripts/lib/merge-rules.mjs`, `docs/plan/main-ruleset.json`: no new job,
-  no new required check.
-- `vitest.config.mjs`: `scripts/**/*.test.mjs` already collects the drill
-  file.
+- `docs/plan/main-ruleset.json`: no new job, no new required check.
+  `merge-rules.mjs` changes only its owner-approval list (AC18).
+- The include lists in `vitest.config.mjs` and `vitest.shared.mjs`:
+  `scripts/**/*.test.mjs` already collects the drill file. Both files become
+  owned (AC18).
 - `packages/contracts/**`: drill 4 copies `openapi.json` into a scratch
   folder.
 
