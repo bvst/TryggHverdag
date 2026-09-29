@@ -2404,9 +2404,20 @@ any other path is work, not a candidate for the same treatment.
     session`, a not-ready error nothing knew yet (BUG-9).
   - **Run 36579467633**, with BUG-9 (`11efded`): all 10 `ci` jobs green,
     and `ai-review`'s 6 too. `android-e2e`'s install succeeded on attempt 1,
-    and `[Passed] app-starts (14s)`. So 26.04 can pass the whole gate. The
-    first run's error did not come back, so BUG-9's wait was not exercised:
-    one run each way does not say how often it happens.
+    and `[Passed] app-starts (14s)`. So 26.04 can pass the whole gate.
+  - **Run 36581002792** (`5d614c1`): green. Attempt 1 of the install was
+    refused with run 8's `NullPointerException … PackageManagerInternal.
+    freeStorage`. The existing wait tried again 5 s later, and attempt 2
+    succeeded.
+  - **The run for `f22d5ee`** (after #46): all 10 `ci` jobs green; the
+    install succeeded on attempt 1.
+  - **So, four runs on 26.04:** the install was refused on attempt 1 in two,
+    each time straight after the device reported bokmål with its package
+    service up. Once with BUG-9's session error, and once with a signature
+    already known.
+    That fits D-081's window, and the wait is doing real work on this image.
+    BUG-9's own signature has not come back yet, so its wait is proven by
+    its tests, not yet by a run.
 - **Not verified yet:**
   - **Three workflows cannot run from a pull request.** `deploy-staging` runs
     on a push to `main`, so this pull request's merge is its first run on
