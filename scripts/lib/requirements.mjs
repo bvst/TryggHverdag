@@ -134,6 +134,69 @@ export function uncoveredInChanges(rows, changedText) {
   );
 }
 
+/** Where acceptance criteria are written: one spec per requirement. */
+export const SPECS_DIR = 'docs/specs/';
+
+/**
+ * The written way out for a criterion that truly cannot be automated (D-082):
+ * a spec line `req-coverage: not automated <ID>-ACn: <reason>`. Only a real
+ * criterion makes it a line, so a spec can describe the form with placeholders.
+ */
+const NOT_AUTOMATED = /^req-coverage: not automated ([A-Z][A-Z0-9]*-\d+-AC\d+):(.*)$/;
+
+/**
+ * Every not-automated line in these specs, with its reason trimmed: '' when
+ * there is none, which lets nothing through.
+ *
+ * @param {{file: string, text: string}[]} specFiles
+ * @returns {{file: string, criterion: string, reason: string}[]}
+ */
+export function notAutomatedLines(specFiles) {
+  return specFiles.flatMap(({ file, text }) =>
+    text.split('\n').flatMap((line) => {
+      const match = NOT_AUTOMATED.exec(line.trim());
+      return match === null ? [] : [{ file, criterion: match[1], reason: match[2].trim() }];
+    }),
+  );
+}
+
+/**
+ * Acceptance criteria (`<ID>-ACn`) that a changed spec names, for a live
+ * requirement, and no counted test names exactly (D-082). A requirement that
+ * already has a test does not carry a new criterion through; that spec's own
+ * not-automated line, with a reason, does. Each criterion is listed once, with
+ * the spec it was found in.
+ *
+ * @param {{id: string, priority: string}[]} rows
+ * @param {{file: string, text: string}[]} changedFiles
+ * @param {{file: string, text: string}[]} testFiles
+ * @returns {{criterion: string, file: string}[]}
+ */
+export function uncoveredCriteria(rows, changedFiles, testFiles) {
+  const live = rows.filter((row) => row.priority !== 'parked');
+  const counted = testFiles.filter((f) => !isFixturesOnly(f.text));
+  const found = new Map();
+  for (const spec of changedFiles.filter((f) => f.file.startsWith(SPECS_DIR))) {
+    const excused = notAutomatedLines([spec])
+      .filter((line) => line.reason !== '')
+      .map((line) => line.criterion);
+    for (const row of live) {
+      for (const [criterion] of spec.text.matchAll(
+        new RegExp(`(?<![A-Z0-9-])${row.id}-AC\\d+`, 'g'),
+      )) {
+        if (
+          !found.has(criterion) &&
+          !excused.includes(criterion) &&
+          !counted.some((f) => mentions(f.text, criterion))
+        ) {
+          found.set(criterion, spec.file);
+        }
+      }
+    }
+  }
+  return [...found].map(([criterion, file]) => ({ criterion, file }));
+}
+
 /**
  * The generated report. Nobody edits it by hand; `pnpm run req:coverage` writes
  * it, and CI regenerates it and fails if the committed copy differs.
