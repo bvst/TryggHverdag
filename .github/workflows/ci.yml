@@ -94,8 +94,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # No token is left in .git/config for the steps after: a downloaded
+      # binary, oasdiff, runs in this job, and nothing here fetches (INF-10).
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with: { fetch-depth: 0 }
+        with: { fetch-depth: 0, persist-credentials: false }
       # CI-12. Not a paths: filter and not a job-level if:, because either
       # would leave this required check skipped — and a skipped job reports as
       # a green tick, which the header above calls the one thing this
@@ -223,8 +225,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # No token is left in .git/config for the steps after: a downloaded
+      # binary, oasdiff, runs in this job, and nothing here fetches (INF-10).
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with: { fetch-depth: 0 }
+        with: { fetch-depth: 0, persist-credentials: false }
       # CI-12. Not a paths: filter and not a job-level if:, because either
       # would leave this required check skipped — and a skipped job reports as
       # a green tick, which the header above calls the one thing this
