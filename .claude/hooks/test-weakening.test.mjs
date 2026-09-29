@@ -144,4 +144,28 @@ describe('INF-10-AC17: HK-05 sees a test switched off from inside its body', () 
       expect(result.stderr).toContain('RG-03');
     }),
   );
+
+  // D-082 item 5: a test inverted to expect failure passes when it fails, so
+  // HK-05 refuses it in its own words, never as a skip. Put together at run
+  // time, like the skip call above.
+  test(
+    'INF-10-AC17: HK-05 refuses an edit that marks a test to expect failure, in its own words for an inverted test, with RG-03',
+    noted(() => {
+      const [word, fails, failing] = [
+        ['te', 'st'].join(''),
+        ['fa', 'ils'].join(''),
+        ['fa', 'iling'].join(''),
+      ];
+      const after = ORIGINAL.replace(`\n  ${word}('`, `\n  ${[word, fails].join('.')}('`);
+      const result = check(repoWith(after));
+
+      expect(after).not.toBe(ORIGINAL);
+      expect(result.status).toBe(BLOCKED);
+      expect(result.stderr).toContain(
+        `tests were inverted to expect failure (.${fails} or .${failing})`,
+      );
+      expect(result.stderr).toContain('RG-03');
+      expect(result.stderr).not.toContain('skipped, focused or todo tests were added');
+    }),
+  );
 });

@@ -35,6 +35,7 @@ import {
   OWNER_APPROVAL_PATHS,
   planChecks,
   reviewBypass,
+  reviewCodeowners,
   reviewRuleset,
 } from './lib/merge-rules.mjs';
 
@@ -364,6 +365,60 @@ describe("this repository's own workflows", () => {
 
     expect(SAFETY_PATHS.length).toBeGreaterThan(0);
     expect(unapproved).toEqual([]);
+  });
+
+  // INF-10-AC18 (D-082 item 6): the root Vitest configurations decide, by
+  // their include and exclude lists, whether the drills run at all. A change to
+  // one that stopped them would otherwise be caught only by the AI reviewers.
+  const VITEST_CONFIGS = ['vitest.config.mjs', 'vitest.shared.mjs', 'vitest.coverage.config.mjs'];
+
+  test('INF-10-AC18: the three root Vitest configurations, which decide whether the drills run at all, are paths the owner must approve', () => {
+    for (const file of VITEST_CONFIGS) {
+      expect(existsSync(file), file).toBe(true);
+      expect(OWNER_APPROVAL_PATHS, file).toContain(`/${file}`);
+    }
+  });
+
+  test('INF-10-AC18: .github/CODEOWNERS gives each of them to the owner: gate:integrity finds every owner-approval path owned, and the last line matching each names an owner', () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const rules = text
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '' && !line.startsWith('#'))
+      .map((line) => {
+        const [pattern = '', ...owners] = line.split(/\s+/);
+        return { pattern, owners };
+      });
+    // CODEOWNERS reads its patterns as .gitignore does, and the last line that
+    // matches a file decides its owners: a later line with none un-owns it,
+    // as the reviewer-memory line at the end of the file does on purpose.
+    const matches = (pattern, file) => {
+      const directory = pattern.endsWith('/');
+      const bare = pattern.replace(/^\//, '').replace(/\/$/, '');
+      const anchored = pattern.startsWith('/') || bare.includes('/');
+      const body = bare
+        .split('**')
+        .map((part) =>
+          part
+            .split('*')
+            .map((piece) => piece.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+            .join('[^/]*'),
+        )
+        .join('.*');
+      return new RegExp(
+        `^${anchored ? '' : '(?:.*/)?'}${body}${directory ? '/.*' : '(?:/.*)?'}$`,
+      ).test(file);
+    };
+    const ownersOf = (file) =>
+      rules.filter((rule) => matches(rule.pattern, file)).at(-1)?.owners ?? [];
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    // The reading is checked on the file's own lines first.
+    expect(ownersOf('.claude/settings.json').length).toBeGreaterThan(0);
+    expect(ownersOf('.claude/agent-memory/notes.md')).toEqual([]);
+    for (const file of VITEST_CONFIGS) {
+      expect(ownersOf(file), file).not.toEqual([]);
+    }
   });
 });
 
@@ -3017,6 +3072,20 @@ describe('oasdiff in ci.yml, pinned (INF-10-AC16, D-082)', () => {
       expect(env, `${value} is not in the workflow env`).toContain(value);
     }
   });
+
+  test.each(OASDIFF_JOBS)(
+    'INF-10-AC16: $job checks out without persisting credentials, as android-e2e does, since a downloaded binary runs there',
+    ({ job }) => {
+      const checkouts = ciSteps(job).filter((step) => /uses: actions\/checkout@/.test(step));
+
+      expect(checkouts.length, `${job} has no checkout step`).toBeGreaterThan(0);
+      for (const checkout of checkouts) {
+        expect(checkout, `${job}'s checkout keeps its credentials`).toMatch(
+          /\bpersist-credentials:\s*false\b/,
+        );
+      }
+    },
+  );
 
   test.each(OASDIFF_JOBS)(
     "INF-10-AC16: $job's oasdiff step is a plain run step: no action, no secret, and it tolerates no failure",

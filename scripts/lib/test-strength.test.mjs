@@ -18,7 +18,7 @@ describe('LOST-02', () => {
 
 describe('strengthOf', () => {
   test('counts tests, assertions and anything switched off', () => {
-    expect(strengthOf(BEFORE)).toEqual({ tests: 2, assertions: 3, skips: 0 });
+    expect(strengthOf(BEFORE)).toEqual({ tests: 2, assertions: 3, skips: 0, inverted: 0 });
   });
 
   test('counts a table-driven test once, as written', () => {
@@ -192,5 +192,174 @@ describe('INF-10-AC17: the widened skip pattern', () => {
         'skipped, focused or todo tests were added',
       ]);
     }
+  });
+});
+
+// D-082 item 5 (the owner's sixth answer, 2026-09-29): the same forms on
+// `suite`, on any test object, and through bracket access, and tests inverted
+// to expect failure, which are counted on their own and said in their own
+// words. Put together at run time, like every form above.
+const FAILS = ['fa', 'ils'].join('');
+const FAILING = ['fa', 'iling'].join('');
+
+/** What weakenings says of a skip, and of a test inverted to expect failure. */
+const SKIPPED = 'skipped, focused or todo tests were added';
+const INVERTED = `tests were inverted to expect failure (.${FAILS} or .${FAILING})`;
+
+/** The same forms on suite, Vitest's other name for describe. */
+const ON_SUITE = [
+  on('suite', SKIP),
+  on('suite', ONLY),
+  on('suite', TODO),
+  `${on('suite', `${SKIP}If`)}(true)`,
+  `${on('suite', `run${'If'}`)}(false)`,
+  on('suite', 'concurrent', ONLY),
+];
+
+/** The same forms on any test object, such as one made with test.extend. */
+const ON_ANY_TEST = [
+  on('myTest', SKIP),
+  on('myTest', ONLY),
+  on('myTest', TODO),
+  `${on('anyName', `${SKIP}If`)}(true)`,
+  `${on('anyName', `run${'If'}`)}(false)`,
+  on('myTest', 'concurrent', ONLY),
+  `${on('myTest', 'sequential', `${SKIP}If`)}(true)`,
+];
+
+/** The same forms through bracket access, in each kind of quote. */
+const BRACKETED = [
+  `${TEST}['${SKIP}']`,
+  `describe["${ONLY}"]`,
+  `it[\`${TODO}\`]`,
+  `suite['${SKIP}If'](true)`,
+  `myTest['run${'If'}'](false)`,
+  `${on(TEST, 'concurrent')}['${ONLY}']`,
+];
+
+/** Behind two modifiers or more: each counts once. */
+const DEEP = [
+  on('describe', 'shuffle', 'concurrent', ONLY),
+  `${on(TEST, 'concurrent', 'sequential', `${SKIP}If`)}(true)`,
+];
+
+/** A test inverted to expect failure, on test, it or any test object, and through bracket access. */
+const INVERTED_FORMS = [
+  on(TEST, FAILS),
+  on('it', FAILS),
+  on(TEST, 'concurrent', FAILS),
+  on('myTest', FAILS),
+  on(TEST, FAILING),
+  on('it', FAILING),
+  `${TEST}['${FAILS}']`,
+  `it["${FAILING}"]`,
+];
+
+/** Names that only contain those words, from this repository's own tests and others: none inverts a test. */
+const NOT_INVERTED = [
+  `if (database.${FAILING} === 'time') {`,
+  `database.${FAILING} = null;`,
+  `${EXPECT}(summary.${FAILS}).toBe(0);`,
+  `const count = report.${FAILING}Tests.length;`,
+  `retry.${FAILS}afe();`,
+];
+
+/** Two synthetic tests, each checking one thing. */
+const DEMO = [
+  "describe('DEMO-01', () => {",
+  `  ${TEST}('DEMO-01-AC1: a synthetic check', () => {`,
+  `    ${EXPECT}(1).toBe(1);`,
+  '  });',
+  `  ${TEST}('DEMO-01-AC2: another synthetic check', () => {`,
+  `    ${EXPECT}(2).toBe(2);`,
+  '  });',
+  '});',
+  '',
+].join('\n');
+
+/** DEMO with its first test's name made `form`. */
+const firstAs = (form) => DEMO.replace(`${TEST}('DEMO-01-AC1`, `${form}('DEMO-01-AC1`);
+
+describe('INF-10-AC17: suite, any test object, bracket access, and tests inverted to expect failure', () => {
+  test.each(ON_SUITE)('INF-10-AC17: %s, on suite, counts as switching a test off, once', (form) => {
+    expect(strengthOf(used(form)).skips).toBe(1);
+  });
+
+  test.each(ON_ANY_TEST)(
+    'INF-10-AC17: %s, on a test object of any name, counts as switching a test off, once',
+    (form) => {
+      expect(strengthOf(used(form)).skips).toBe(1);
+    },
+  );
+
+  test.each(BRACKETED)(
+    'INF-10-AC17: %s, through bracket access, counts as switching a test off, once',
+    (form) => {
+      expect(strengthOf(used(form)).skips).toBe(1);
+    },
+  );
+
+  test.each(DEEP)('INF-10-AC17: %s, behind two modifiers, counts once', (form) => {
+    expect(strengthOf(used(form)).skips).toBe(1);
+  });
+
+  test('INF-10-AC17: a call to a longer lowercase name that only ends in the word, un and the word joined, does not count', () => {
+    expect(strengthOf(`un${SKIP}(x);`)).toMatchObject({ skips: 0 });
+  });
+
+  test.each(INVERTED_FORMS)(
+    'INF-10-AC17: %s counts as a test inverted to expect failure, once, and not as a skip',
+    (form) => {
+      expect(strengthOf(used(form))).toMatchObject({ skips: 0, inverted: 1 });
+    },
+  );
+
+  test('INF-10-AC17: a test both focused and inverted counts once as each', () => {
+    expect(strengthOf(used(on(TEST, ONLY, FAILING)))).toMatchObject({ skips: 1, inverted: 1 });
+  });
+
+  test.each(NOT_INVERTED)('INF-10-AC17: %s inverts nothing', (source) => {
+    expect(strengthOf(source)).toMatchObject({ skips: 0, inverted: 0 });
+  });
+
+  test('INF-10-AC17: nothing inverted in a file counts as 0 inverted', () => {
+    expect(strengthOf(DEMO)).toEqual({ tests: 2, assertions: 2, skips: 0, inverted: 0 });
+  });
+
+  test('INF-10-AC17: weakenings reports a test inverted to expect failure in its own words, after any skip and before the counts', () => {
+    for (const form of [on(TEST, FAILS), on('it', FAILING)]) {
+      expect(weakenings(DEMO, firstAs(form)), form).toEqual([
+        INVERTED,
+        'the number of tests went down',
+      ]);
+    }
+    const both = firstAs(on(TEST, FAILS)).replace(
+      `${TEST}('DEMO-01-AC2`,
+      `${on(TEST, SKIP)}('DEMO-01-AC2`,
+    );
+
+    expect(weakenings(DEMO, both)).toEqual([SKIPPED, INVERTED, 'the number of tests went down']);
+  });
+
+  test('INF-10-AC17: a skip keeps its own words, and is never called inverted', () => {
+    expect(weakenings(DEMO, firstAs(on(TEST, SKIP)))).toEqual([
+      SKIPPED,
+      'the number of tests went down',
+    ]);
+  });
+
+  test('INF-10-AC17: weakenings reports tests switched off by a suite, test-object or bracket form, with every other count unchanged', () => {
+    for (const form of [...ON_SUITE, ...ON_ANY_TEST, ...BRACKETED, ...DEEP]) {
+      const after = DEMO.replace("describe('DEMO-01'", `${form}('DEMO-01'`);
+
+      expect(after, form).not.toBe(DEMO);
+      expect(weakenings(DEMO, after), form).toEqual([SKIPPED]);
+    }
+  });
+
+  test('INF-10-AC17: an unchanged inverted test is not reported again', () => {
+    const inverted = firstAs(on(TEST, FAILS));
+
+    expect(weakenings(inverted, inverted)).toEqual([]);
   });
 });

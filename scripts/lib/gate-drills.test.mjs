@@ -5,24 +5,33 @@
 //
 // What these tests expect of scripts/lib/gate-drills.mjs:
 //
-//   drillReport(results, { oasdiff }) → { rows, exitCode, text }
+//   drillReport(results, { oasdiff, status, signal }) → { rows, exitCode, text }
 //
-//   results  every test the drill file ran, each as { name, status }: the name
-//            in full (the describe titles, then the test's own), the status as
-//            Vitest's JSON reporter gives it: 'passed', 'failed', 'skipped',
-//            'todo' or 'pending'
+//   results  every test the drill file ran, each as { name, title, status }:
+//            the name in full (the describe titles, then the test's own), the
+//            test's own name as Vitest's JSON reporter gives it (`title`), and
+//            the status as that reporter gives it: 'passed', 'failed',
+//            'skipped', 'todo' or 'pending'
 //   oasdiff  whether oasdiff works on this machine, asked by running it, the
 //            way gate:full asks whether Docker works
+//   status   Vitest's exit status: 0, another number, or null when it was
+//            stopped; a run whose status is not 0 is not trusted, and one
+//            without a status is not trusted either
+//   signal   the signal that stopped Vitest (killed, or timed out), or null
 //   rows     nine { id, text, passed }, in the roadmap's order
 //   text     what the command prints: the rows, then the verdict, and why when
 //            it fails
 //
 // A test belongs to the drill whose ID it names in front of " drill", as
-// `INF-10-AC1: RG-03 drill — …` does in scripts/drills.test.mjs.
+// `INF-10-AC1: RG-03 drill — …` does in scripts/drills.test.mjs. An offline
+// row is backed by its attempt: a passed test of that drill whose own name
+// starts with the drill's attempt criterion, followed by a colon (ATTEMPTS
+// below). Without one the row reads "✗ missing", whatever else passed.
 //
 // And of scripts/gate-drills.mjs, the command: run in a repository, it runs
 // that repository's scripts/drills.test.mjs with the repository's own Vitest
-// configuration, prints the report, and exits with its exitCode.
+// configuration, hands the report each test's full and own name, and Vitest's
+// exit status and signal, prints the report, and exits with its exitCode.
 import { spawnSync } from 'node:child_process';
 import {
   copyFileSync,
@@ -42,9 +51,15 @@ import { afterEach, describe, expect, test } from 'vitest';
 const REPO = realpathSync(path.resolve(import.meta.dirname, '..', '..'));
 const ENTRY = path.join(REPO, 'scripts', 'gate-drills.mjs');
 
+/** How Vitest ends a run it finished: exit 0, no signal. */
+const CLEAN_EXIT = { status: 0, signal: null };
+
 /** The module under test, loaded when a test needs it, so that a missing one fails each test by name. */
-const report = async (results, tools) =>
+const drillReport = async (results, tools) =>
   (await import('./gate-drills.mjs')).drillReport(results, tools);
+
+/** The report of a run Vitest finished cleanly, unless `tools` says otherwise. */
+const report = (results, tools) => drillReport(results, { ...CLEAN_EXIT, ...tools });
 
 /** The roadmap's nine drills, in its order (docs/plan/10-roadmap.md). */
 const ORDER = [
@@ -74,8 +89,29 @@ const GATES = {
 const NOT_RUN =
   'not run here — covered by gate:integrity reading the live rules (CI-01); live attempt not yet run';
 
-/** A test result, named the way Vitest's JSON reporter names one in full. */
-const result = (name, status = 'passed') => ({ name, status });
+/** Each offline drill's attempt: the criterion its row needs a passed test for (INF-10-AC12). */
+const ATTEMPTS = {
+  'RG-03': 'INF-10-AC1',
+  'CI-03': 'INF-10-AC2',
+  'RG-01': 'INF-10-AC3',
+  'CI-06': 'INF-10-AC4',
+  'HK-02': 'INF-10-AC5',
+  'HK-07': 'INF-10-AC6',
+  'CI-11': 'INF-10-AC7',
+};
+
+/** A test's own name within its full one: from its criterion on, as the drill file names its tests. */
+const ownName = (name) => (name.includes('INF-10') ? name.slice(name.indexOf('INF-10')) : name);
+
+/** A test result, named the way Vitest's JSON reporter names one: in full, and its own name. */
+const result = (name, status = 'passed') => ({ name, title: ownName(name), status });
+
+/** A test result inside a describe block, as the drill file has each. */
+const within = (describeTitle, title, status = 'passed') => ({
+  name: `${describeTitle} ${title}`,
+  title,
+  status,
+});
 
 /** What a good run gives: two passing tests for each offline drill, and one check of the whole file. */
 const goodRun = () => [
@@ -221,6 +257,122 @@ describe('the drill report (INF-10-AC12)', () => {
   });
 });
 
+/** Whether a line of `text` holds every one of `words`. */
+const saysOnOneLine = (text, ...words) =>
+  text.split('\n').some((line) => words.every((word) => line.includes(word)));
+
+describe('each offline row is backed by its attempt (INF-10-AC12)', () => {
+  test('INF-10-AC12: a drill with only its AC14 test is missing, and the command exits non-zero, naming the drill and the attempt it looked for', async () => {
+    const built = await report(
+      [
+        ...goodRun().filter((each) => !each.name.includes('CI-06 drill')),
+        within(
+          'every drill: run by unit whenever a gate changes',
+          'INF-10-AC14: CI-06 drill — every file it reads or runs exists',
+        ),
+      ],
+      { oasdiff: true },
+    );
+    const row = rowOf(built, 'CI-06');
+
+    expect(row.text).toContain('✗ missing');
+    expect(row.text).not.toContain('✓');
+    expect(row.passed).toBe(false);
+    expect(built.exitCode).not.toBe(0);
+    expect(saysOnOneLine(built.text, 'CI-06', 'missing', 'INF-10-AC4'), built.text).toBe(true);
+  });
+
+  test.each(OFFLINE)(
+    "INF-10-AC12: %s's row needs a passed test whose own name starts with its attempt criterion: with every other test of it passing, it reads ✗ missing",
+    async (id) => {
+      const attempt = ATTEMPTS[id] ?? '';
+      const built = await report(
+        [
+          ...goodRun().filter(
+            (each) => !(each.name.includes(`${id} drill`) && each.title.startsWith(`${attempt}:`)),
+          ),
+          within(`${id} drill`, `INF-10-AC8: ${id} drill — blocked for the right reason`),
+          within(`${id} drill`, `INF-10-AC10: ${id} drill — runs what CI runs`),
+          within('every drill', `INF-10-AC14: ${id} drill — every file it reads exists`),
+        ],
+        { oasdiff: true },
+      );
+
+      expect(attempt).toMatch(/^INF-10-AC[1-7]$/);
+      expect(rowOf(built, id).text).toContain('✗ missing');
+      expect(rowOf(built, id).passed).toBe(false);
+      expect(built.exitCode).not.toBe(0);
+      for (const other of OFFLINE.filter((each) => each !== id)) {
+        expect(rowOf(built, other).passed, other).toBe(true);
+      }
+    },
+  );
+
+  test('INF-10-AC12: INF-10-AC1 is not INF-10-AC10 or INF-10-AC11: a drill whose only tests are named from those is missing its attempt', async () => {
+    const built = await report(
+      [
+        ...goodRun().filter((each) => !each.name.includes('RG-03 drill')),
+        within('RG-03 drill (1 of 9)', "INF-10-AC10: RG-03 drill — runs traceability's step"),
+        within('RG-03 drill (1 of 9)', 'INF-10-AC11: RG-03 drill — leaves nothing behind'),
+      ],
+      { oasdiff: true },
+    );
+
+    expect(rowOf(built, 'RG-03').text).toContain('✗ missing');
+    expect(rowOf(built, 'RG-03').passed).toBe(false);
+    expect(built.exitCode).not.toBe(0);
+  });
+
+  test("INF-10-AC12: the attempt criterion must lead the test's own name: one that names it later, or only in its describe block, does not back the row", async () => {
+    const built = await report(
+      [
+        ...goodRun().filter((each) => !each.name.includes('RG-01 drill')),
+        within('RG-01 drill (3 of 9)', 'INF-10-AC9: RG-01 drill — not the INF-10-AC3: attempt'),
+        within('INF-10-AC3: RG-01 drill', 'a test whose describe block names the attempt'),
+      ],
+      { oasdiff: true },
+    );
+
+    expect(rowOf(built, 'RG-01').text).toContain('✗ missing');
+    expect(rowOf(built, 'RG-01').passed).toBe(false);
+    expect(built.exitCode).not.toBe(0);
+  });
+});
+
+describe("Vitest's own exit status and signal reach the verdict (INF-10-AC12)", () => {
+  test('INF-10-AC12: a run where Vitest exited non-zero although every test passed is not trusted: the command exits non-zero, saying so', async () => {
+    const built = await report(goodRun(), { oasdiff: true, status: 1, signal: null });
+
+    expect(built.exitCode).not.toBe(0);
+    expect(built.text).toContain('is not trusted');
+  });
+
+  test("INF-10-AC12: without Vitest's exit status the run is not trusted either", async () => {
+    const built = await drillReport(goodRun(), { oasdiff: true });
+
+    expect(built.exitCode).not.toBe(0);
+    expect(built.text).toContain('is not trusted');
+  });
+
+  test.each(['SIGTERM', 'SIGKILL'])(
+    'INF-10-AC12: a run Vitest did not finish, stopped by %s, says Vitest was stopped, with the signal, and never that nothing ran',
+    async (signal) => {
+      for (const results of [[], goodRun()]) {
+        const built = await report(results, { oasdiff: true, status: null, signal });
+        const ran = `${String(results.length)} results`;
+
+        expect(built.exitCode, ran).not.toBe(0);
+        expect(built.text, ran).toMatch(/stopped/i);
+        expect(built.text, ran).toContain(signal);
+        expect(built.text, ran).not.toMatch(/nothing ran/i);
+      }
+      const none = await report([], { oasdiff: true, status: null, signal });
+
+      expect(none.rows.filter((row) => row.passed)).toEqual([]);
+    },
+  );
+});
+
 // The command itself, run once or so, each time in a scratch repository with a
 // small drill file of its own: the repository's Vitest configuration as it is,
 // node_modules linked entry by entry, and a stand-in oasdiff first on PATH.
@@ -307,6 +459,42 @@ function drillFile(failing = []) {
   ].join('\n');
 }
 
+/** A small drill file whose tests all pass, and whose afterAll then throws, so Vitest fails the run with every test passed. */
+function drillFileThrowingAfterAll() {
+  const [t, e] = [['te', 'st'].join(''), ['exp', 'ect'].join('')];
+  return [
+    `import { afterAll, ${e}, ${t} } from 'vitest';`,
+    '',
+    'afterAll(() => {',
+    "  throw new Error('drill: afterAll fails on purpose, after every test passed');",
+    '});',
+    '',
+    ...OFFLINE.map(
+      (id) =>
+        `${t}('${ATTEMPTS[id] ?? ''}: ${id} drill — a stand-in', () => {\n  ${e}(1).toBe(1);\n});\n`,
+    ),
+  ].join('\n');
+}
+
+/**
+ * A small drill file laid out as the real one is: each drill's tests in a
+ * describe block of its own, and every drill's AC14 test in one more. The
+ * drills in `onlyTheirAC14` have no test but that one. Every test passes.
+ */
+function describedDrillFile(onlyTheirAC14 = []) {
+  const [t, e] = [['te', 'st'].join(''), ['exp', 'ect'].join('')];
+  const check = (title) => `  ${t}('${title}', () => {\n    ${e}(1).toBe(1);\n  });\n`;
+  return [
+    `import { describe, ${e}, ${t} } from 'vitest';`,
+    '',
+    ...OFFLINE.filter((id) => !onlyTheirAC14.includes(id)).map(
+      (id) =>
+        `describe('${id} drill: a stand-in', () => {\n${check(`${ATTEMPTS[id] ?? ''}: ${id} drill — a stand-in attempt`)}${check(`INF-10-AC9: ${id} drill — a stand-in that can go red`)}});\n`,
+    ),
+    `describe('every drill: a stand-in', () => {\n${OFFLINE.map((id) => check(`INF-10-AC14: ${id} drill — every file it reads exists`)).join('')}});\n`,
+  ].join('\n');
+}
+
 /** Whether a printed line names `id` and says `words`. */
 const hasLine = (output, id, words) =>
   output.split('\n').some((line) => line.includes(id) && line.includes(words));
@@ -349,5 +537,24 @@ describe('the command, pnpm run gate:drills (INF-10-AC12)', () => {
     expect(status, output).not.toBeNull();
     expect(output).toMatch(/nothing ran/i);
     expect(output).not.toContain('✓ blocked');
+  }, 120_000);
+
+  test('INF-10-AC12: when Vitest fails the run although every test passed, as an afterAll that throws makes it, it exits non-zero, saying the run is not trusted', () => {
+    const { status, output } = runCommand(scratchProject(drillFileThrowingAfterAll(), 'works'));
+
+    expect(status, output).not.toBe(0);
+    expect(status, output).not.toBeNull();
+    expect(output).toContain('is not trusted');
+  }, 120_000);
+
+  test('INF-10-AC12: it reads each test by its own name, as Vitest reports one inside a describe block: every attempt backs its row, and a drill with only its AC14 test is missing', () => {
+    const { status, output } = runCommand(scratchProject(describedDrillFile(['CI-11']), 'works'));
+
+    expect(status, output).not.toBe(0);
+    expect(status, output).not.toBeNull();
+    expect(hasLine(output, 'CI-11', '✗ missing'), output).toBe(true);
+    for (const id of OFFLINE.filter((each) => each !== 'CI-11')) {
+      expect(hasLine(output, id, '✓ blocked'), `${id}:\n${output}`).toBe(true);
+    }
   }, 120_000);
 });

@@ -266,6 +266,38 @@ describe('INF-10-AC15: each criterion a changed spec names', () => {
 
     expect(notAutomatedLines([spec(prose)])).toEqual([]);
   });
+
+  test('INF-10-AC15: a not-automated line counts only at the start of a line: prose naming a real criterion in that form mid-line excuses nothing', () => {
+    const text = [
+      '**DEMO-01-AC2** — two.',
+      `A spec may write ${NOT_AUTOMATED} DEMO-01-AC2: ${REASON}, and mean it only as an example.`,
+      `See \`${NOT_AUTOMATED} DEMO-01-AC2: ${REASON}\` for the form.`,
+      '',
+    ].join('\n');
+
+    expect(uncovered([spec(text)], [])).toEqual(['DEMO-01-AC2']);
+    expect(notAutomatedLines([spec(text)])).toEqual([]);
+  });
+
+  test("INF-10-AC15: a not-automated line counts only in the spec that names its criterion: one spec's line never excuses another spec's", () => {
+    const excusing = spec(
+      `**DEMO-01-AC2** — two.\n${NOT_AUTOMATED} DEMO-02-AC1: ${REASON}\n`,
+      'docs/specs/DEMO-01.md',
+    );
+    const naming = spec('**DEMO-02-AC1** — one.\n', 'docs/specs/DEMO-02.md');
+
+    for (const changed of [
+      [excusing, naming],
+      [naming, excusing],
+    ]) {
+      const found = uncoveredCriteria(rows, changed, []);
+
+      expect(
+        found.map((each) => `${each.criterion} in ${each.file}`).sort(),
+        changed.map((each) => each.file).join(', then '),
+      ).toEqual(['DEMO-01-AC2 in docs/specs/DEMO-01.md', 'DEMO-02-AC1 in docs/specs/DEMO-02.md']);
+    }
+  });
 });
 
 // The same, through the entry script, as the traceability job runs it: in a

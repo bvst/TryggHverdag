@@ -24,7 +24,7 @@
 // put together at run time, so that no committed file holds one (AC11):
 // scan-sensitive would refuse to write it, gitleaks reads every committed line,
 // and RG-03 counts this file's own text.
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
   copyFileSync,
   existsSync,
@@ -37,6 +37,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -77,6 +78,8 @@ const WORD = {
   expect: ['exp', 'ect'].join(''),
   skipName: ['sk', 'ip'].join(''),
   runIfName: ['run', 'If'].join(''),
+  failsName: ['fa', 'ils'].join(''),
+  failingName: ['fa', 'iling'].join(''),
 };
 
 /** `a.b.c`, from its parts. */
@@ -183,6 +186,10 @@ function standInTools() {
  * reads from the runner (GITHUB_*, CI), no proxy of the runner's, a home of its
  * own, and the runner's PATH behind the stand-in gh. `extra` is what a drill
  * hands one gate on purpose, the stand-ins for GitHub among it.
+ *
+ * Node's own fetch ignores the proxy variables unless NODE_USE_ENV_PROXY is
+ * set, so it is: a gate's fetch goes to the dead proxy too (AC11). Node then
+ * warns, once a process, that the proxy agent is experimental.
  */
 function drillEnv(extra = {}) {
   const { bin, home, ghLog } = standInTools();
@@ -204,9 +211,23 @@ function drillEnv(extra = {}) {
     ALL_PROXY: NOWHERE,
     NO_PROXY: '',
     no_proxy: '',
+    NODE_USE_ENV_PROXY: '1',
     DRILL_GH_LOG: ghLog,
     ...extra,
   };
+}
+
+/** Where pnpm puts the repository's own binaries: first on the PATH of every script it runs. */
+const MODULES_BIN = path.join(REPO, 'node_modules', '.bin');
+
+/**
+ * What a gate that CI runs through `pnpm run` sees: the drill's environment,
+ * with node_modules/.bin first on PATH, as pnpm puts it. A tool there shadows
+ * the runner's, in CI as here (AC4).
+ */
+function gateEnv(extra = {}, modulesBin = MODULES_BIN) {
+  const env = drillEnv(extra);
+  return { ...env, PATH: `${modulesBin}${path.delimiter}${env.PATH}` };
 }
 
 /** Who a drill's own scratch commits are by. */
@@ -415,22 +436,99 @@ function standInFor(text, known, where) {
 /** The base ref: the scratch repositories keep their base at origin/main. */
 const BASE_REF = new Map([["github.base_ref || 'main'", 'main']]);
 
-/** The one line in `job`'s steps that runs `pnpm run <script>`, as written in ci.yml. */
-function stepLine(job, script, ci = read(CI_YML)) {
+/**
+ * A step's own `key:`, on its first line or at its keys' depth, as GitHub reads
+ * it: a trailing comment, the ${{ }} around it and its quotes taken off. ''
+ * when the step has none.
+ */
+function stepKey(step, key) {
+  const value = new RegExp(`^(?: {6}- | {8})${key}:[ \\t]*(.*?)[ \\t]*$`, 'm').exec(step)?.[1];
+  return (value ?? '')
+    .replace(/\s+#.*$/, '')
+    .replace(/^\$\{\{\s*(.*?)\s*\}\}$/, '$1')
+    .replace(/^(['"])(.*)\1$/, '$2');
+}
+
+/** CI-12's guard: the step runs when the diff holds code. */
+const CODE_GUARD = "steps.affected.outputs.code == 'true'";
+
+/** The if: each job's gate step has in ci.yml, and the only one it may have (AC10). */
+const OWN_GUARD = { traceability: '', unit: CODE_GUARD, contract: CODE_GUARD };
+
+/**
+ * How `step` tolerates its gate's failure, in words, or '' when it does not
+ * (AC10): a shell operator on the gate's `line` (a ${{ }} expression is
+ * GitHub's, not the shell's), another command beside it, continue-on-error, or
+ * an if: other than `own`, the step's own.
+ */
+function tolerance(step, own, line) {
+  if (line !== undefined) {
+    const operator = /\|\||&&|[;|&]/.exec(line.replace(/\$\{\{.*?\}\}/g, ''))?.[0];
+    if (operator !== undefined) {
+      return `has the shell operator "${operator}" on its line, "${line}"`;
+    }
+    const beside = runOf(step)
+      .split('\n')
+      .map((each) => each.trim())
+      .find((each) => each !== '' && !each.startsWith('#') && each !== line);
+    if (beside !== undefined) return `runs "${beside}" beside its gate`;
+  }
+  const excused = stepKey(step, 'continue-on-error');
+  if (excused !== '' && excused !== 'false') return `has continue-on-error: ${excused}`;
+  const guard = stepKey(step, 'if');
+  if (guard !== own) {
+    return `${guard === '' ? 'has no if:' : `runs only if: ${guard}`}, where its own is ${own === '' ? 'none' : `if: ${own}`}`;
+  }
+  return '';
+}
+
+/** The step in `job` that runs `pnpm run <script>`: its line as written in ci.yml, its if: and its continue-on-error:. */
+function gateStep(job, script, ci = read(CI_YML)) {
   const steps = stepsOf(ci, job);
   if (steps === null) {
     throw new Error(`${CI_YML} has no ${job} job, which this drill reads its command from.`);
   }
-  const lines = steps
-    .flatMap((step) => runOf(step).split('\n'))
-    .map((line) => line.trim())
-    .filter((line) => line === `pnpm run ${script}` || line.startsWith(`pnpm run ${script} `));
-  if (lines.length !== 1) {
+  const found = steps.flatMap((step) =>
+    runOf(step)
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line === `pnpm run ${script}` || line.startsWith(`pnpm run ${script} `))
+      .map((line) => ({ step, line })),
+  );
+  if (found.length !== 1) {
     throw new Error(
-      `${CI_YML}'s ${job} job has ${lines.length === 0 ? 'no step that runs' : 'more than one step that runs'} "pnpm run ${script}", which this drill looks for.`,
+      `${CI_YML}'s ${job} job has ${found.length === 0 ? 'no step that runs' : 'more than one step that runs'} "pnpm run ${script}", which this drill looks for.`,
     );
   }
-  return lines[0] ?? '';
+  const [{ step, line }] = found;
+  return {
+    step,
+    line,
+    if: stepKey(step, 'if'),
+    continueOnError: stepKey(step, 'continue-on-error'),
+  };
+}
+
+/**
+ * The one line in `job`'s steps that runs `pnpm run <script>`, as written in
+ * ci.yml, from a step that runs its gate and tolerates nothing: a step made to
+ * tolerate its gate's failure no longer runs it, and the drill says so (AC10).
+ */
+function stepLine(job, script, ci = read(CI_YML)) {
+  const { step, line } = gateStep(job, script, ci);
+  const own = OWN_GUARD[job];
+  if (own === undefined) {
+    throw new Error(
+      `This drill does not know which if: is the own of ${CI_YML}'s ${job} job's step that runs "pnpm run ${script}", so it cannot tell whether the step tolerates its gate.`,
+    );
+  }
+  const tolerates = tolerance(step, own, line);
+  if (tolerates !== '') {
+    throw new Error(
+      `${CI_YML}'s ${job} job's step that runs "pnpm run ${script}" ${tolerates}. A step made to tolerate its gate's failure no longer runs it, so this drill does not run it either (INF-10-AC10).`,
+    );
+  }
+  return line;
 }
 
 /**
@@ -469,6 +567,78 @@ function scriptCommand(line, manifest = read('package.json')) {
 /** The command a ci.yml job runs for `script`, with only its base its own. */
 const commandOf = (job, script, { ci, pkg } = {}) =>
   scriptCommand(standInFor(stepLine(job, script, ci), BASE_REF, `${CI_YML}'s ${job} job`), pkg);
+
+/** What `run` threw, as text; '' when it threw nothing. */
+function failureOf(run) {
+  try {
+    run();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return '';
+}
+
+/**
+ * The ways a CI step is made to tolerate its gate's failure (AC10), each a
+ * change to the step's text, with what the drill must say it found. The last
+ * two are the step's own keys, which "Enforce the verdict" can have too.
+ */
+const OPERATOR = {
+  what: '|| true on its line',
+  found: 'the shell operator "||"',
+  tolerate: (step, script) => step.replace(new RegExp(`(pnpm run ${script}[^\\n]*)`), '$1 || true'),
+};
+const BESIDE = {
+  what: 'set +e before its line and exit 0 after it',
+  found: '"set +e"',
+  tolerate: (step, script) =>
+    step.replace(
+      new RegExp(`^( {6}- | {8})run: (pnpm run ${script}[^\\n]*)$`, 'm'),
+      '$1run: |\n          set +e\n          $2\n          exit 0',
+    ),
+};
+const CONTINUE_ON_ERROR = {
+  what: 'continue-on-error: true',
+  found: 'continue-on-error: true',
+  tolerate: (step) => step.replace(/^( {6}- .*)$/m, '$1\n        continue-on-error: true'),
+};
+const IF_FALSE = {
+  what: 'an if: of its own, false',
+  found: 'if: false',
+  tolerate: (step) =>
+    /^(?: {6}- | {8})if:/m.test(step)
+      ? step.replace(/^( {6}- | {8})if:.*$/m, '$1if: false')
+      : step.replace(/^( {6}- .*)$/m, '$1\n        if: false'),
+};
+const TOLERANCES = [OPERATOR, BESIDE, CONTINUE_ON_ERROR, IF_FALSE];
+
+/** A scratch copy of a workflow's `text`, with the step of `job` that holds `needle` put through `change`. */
+function tolerating(text, job, needle, change) {
+  const step = (stepsOf(text, job) ?? []).find((each) => each.includes(needle));
+  if (step === undefined) {
+    throw new Error(`No step of ${job} holds ${needle}, so the drill has no step to change.`);
+  }
+  const changed = change(step);
+  if (changed === step)
+    throw new Error(`The change left ${job}'s step holding ${needle} as it was.`);
+  const at = text.indexOf(step, text.search(new RegExp(`^ {2}${job}:`, 'm')));
+  return `${text.slice(0, at)}${changed}${text.slice(at + step.length)}`;
+}
+
+/**
+ * AC10: with `job`'s step for `script` made to tolerate its gate in a scratch
+ * copy of ci.yml, building the drill's command from that copy fails, naming
+ * the step and what it found there.
+ */
+function refusesTolerance(job, script, build, { tolerate, found }) {
+  const ci = tolerating(read(CI_YML), job, `pnpm run ${script}`, (step) => tolerate(step, script));
+  const message = failureOf(() => build(ci));
+
+  expect(message, `the drill ran ${job}'s step although it tolerates its gate`).toContain(
+    `${job} job's step that runs "pnpm run ${script}"`,
+  );
+  expect(message, message).toContain(found);
+}
 
 /** A file and every repository file it imports, by relative path, for AC14. */
 function withImports(files) {
@@ -575,6 +745,17 @@ const SWITCH_OFFS = [
   ],
 ];
 
+/** Drill 1's other attempt: the first test marked to expect failure, which turns a failing test into a passing one (D-082). */
+const INVERT = (source) =>
+  source.replace(
+    `${WORD.test}('first sample'`,
+    `${dotted(WORD.test, WORD.failsName)}('first sample'`,
+  );
+
+/** What tests:changes says of a skip, and of a test inverted to expect failure: each in its own words. */
+const SKIP_WORDS = 'skipped, focused or todo tests were added';
+const INVERTED_WORDS = `tests were inverted to expect failure (.${WORD.failsName} or .${WORD.failingName})`;
+
 /** The text each switch-off adds, for AC11's search of the repository. */
 const SWITCH_OFF_TEXT = [
   `${dotted('describe', WORD.skipName)}(`,
@@ -582,6 +763,7 @@ const SWITCH_OFF_TEXT = [
   `${dotted('describe', WORD.runIfName)}(false)`,
   dotted('describe', 'concurrent', WORD.skipName),
   `${dotted('ctx', WORD.skipName)}()`,
+  `${dotted(WORD.test, WORD.failsName)}(`,
 ];
 
 const RG03 = {
@@ -589,20 +771,22 @@ const RG03 = {
   sources: [CI_YML, 'package.json', 'scripts/tests-changes.mjs'],
   /** traceability's command: tests:changes against the base. */
   gate: (files) => commandOf('traceability', 'tests:changes', files),
-  /** Runs `gate` in a repository whose head changed the sample by `change`. */
+  /** Runs `gate` in a repository whose head changed the sample by `change`, as pnpm runs it. */
   run: (change, gate = RG03.gate()) =>
     spawnGate(gate, {
       cwd: scratchRepo('rg03', { [SAMPLE_TEST]: TWO_TESTS }, { [SAMPLE_TEST]: change(TWO_TESTS) }),
+      env: gateEnv(),
     }),
-  judge(result) {
+  /** Blocked: tests:changes refused it, naming the sample, saying `words` and giving its RG-03 line. */
+  judge(result, words = SKIP_WORDS) {
     const own =
       result.output.includes(SAMPLE_TEST) &&
-      result.output.includes('skipped, focused or todo tests were added') &&
+      result.output.includes(words) &&
       /^RG-03: /m.test(result.output);
     return refused(result) && own
-      ? blocked('tests:changes refused it, naming the file, the skip and RG-03')
+      ? blocked(`tests:changes refused it, naming the file, "${words}" and RG-03`)
       : notBlocked(
-          `expected tests:changes to exit non-zero naming ${SAMPLE_TEST}, "skipped, focused or todo tests were added" and its RG-03 line; it gave ${said(result)}`,
+          `expected tests:changes to exit non-zero naming ${SAMPLE_TEST}, "${words}" and its RG-03 line; it gave ${said(result)}`,
         );
   },
   evidence: /1 changed test file\(s\), none weakened/,
@@ -624,6 +808,13 @@ describe('RG-03 drill (1 of 9): a skip added in a pull request', () => {
       expect(verdict.verdict, verdict.why).toBe('blocked');
     },
   );
+
+  test('INF-10-AC1: RG-03 drill — tests:changes refuses a head commit that marks a test to expect failure, in its own words for an inverted test, with its RG-03 line', () => {
+    const verdict = RG03.judge(RG03.run(INVERT), INVERTED_WORDS);
+
+    expect(INVERT(TWO_TESTS)).not.toBe(TWO_TESTS);
+    expect(verdict.verdict, verdict.why).toBe('blocked');
+  });
 
   test('INF-10-AC1: RG-03 drill — control: a head commit that adds a third test instead passes, having checked 1 changed test file', () => {
     const answer = RG03.controlJudge(RG03.controlSample());
@@ -667,6 +858,13 @@ describe('RG-03 drill (1 of 9): a skip added in a pull request', () => {
       /package\.json has no "tests:changes" script/,
     );
   });
+
+  test.each(TOLERANCES)(
+    "INF-10-AC10: RG-03 drill — traceability's tests:changes step made to tolerate its gate with $what fails the drill, naming the step and what it found",
+    (tolerance) => {
+      refusesTolerance('traceability', 'tests:changes', (ci) => RG03.gate({ ci }), tolerance);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -947,6 +1145,13 @@ describe('CI-03 drill (2 of 9): a failing test', () => {
       /package\.json has no "test:unit" script/,
     );
   });
+
+  test.each(TOLERANCES)(
+    "INF-10-AC10: CI-03 drill — unit's test:unit step made to tolerate its gate with $what fails the drill, naming the step and what it found",
+    (tolerance) => {
+      refusesTolerance('unit', 'test:unit', (ci) => runnersOf({ ci }), tolerance);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1017,7 +1222,7 @@ const RG01 = {
   /** traceability's command: req:coverage, failing on uncovered changes. */
   gate: (files) => commandOf('traceability', 'req:coverage', files),
   run: (head, gate = RG01.gate()) =>
-    spawnGate(gate, { cwd: scratchRepo('rg01', RG01_BASE, RG01_HEADS[head]) }),
+    spawnGate(gate, { cwd: scratchRepo('rg01', RG01_BASE, RG01_HEADS[head]), env: gateEnv() }),
   judge(result, named = OTHER_STORY) {
     const rule = result.output.indexOf('RG-01:');
     const own = rule !== -1 && result.output.slice(rule).includes(named);
@@ -1090,6 +1295,13 @@ describe('RG-01 drill (3 of 9): a new acceptance criterion without a test', () =
       /package\.json has no "req:coverage" script/,
     );
   });
+
+  test.each(TOLERANCES)(
+    "INF-10-AC10: RG-01 drill — traceability's req:coverage step made to tolerate its gate with $what fails the drill, naming the step and what it found",
+    (tolerance) => {
+      refusesTolerance('traceability', 'req:coverage', (ci) => RG01.gate({ ci }), tolerance);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1110,25 +1322,74 @@ function withoutFirstPath(description) {
   return copy;
 }
 
-/**
- * Whether oasdiff answers here, asked by running it, as gate:full asks Docker.
- * In CI it must: ci.yml installs it there (D-082), and without it the drill
- * cannot show api:diff finding a break. Elsewhere the drill holds api:diff to
- * refusing to pass unchecked, and the report says "fail-closed only".
- */
-function oasdiffMode() {
-  const probe = spawnSync('oasdiff', ['--version'], {
-    env: drillEnv(),
-    encoding: 'utf8',
-    timeout: 30_000,
-  });
-  if (probe.status === 0) return 'detects';
-  if (process.env.CI === 'true') {
+/** The oasdiff version ci.yml pins in its workflow env (D-082), read, never retyped. */
+function pinnedOasdiffVersion(ci = read(CI_YML)) {
+  const lines = ci.split('\n');
+  const at = lines.findIndex((line) => /^env:\s*$/.test(line));
+  const block = at === -1 ? [] : lines.slice(at + 1);
+  const end = block.findIndex((line) => /^\S/.test(line));
+  const version = (end === -1 ? block : block.slice(0, end))
+    .map((line) => /^ {2}OASDIFF_VERSION:[ \t]*(.*?)[ \t]*$/.exec(line)?.[1])
+    .find((value) => value !== undefined)
+    ?.replace(/\s+#.*$/, '')
+    .replace(/^(['"])(.*)\1$/, '$2');
+  if (version === undefined || version === '') {
     throw new Error(
-      'In CI the CI-06 drill runs with oasdiff on PATH, which ci.yml installs from the version and SHA-256 D-082 pins (INF-10-AC16), and there is none here. Without it the drill cannot show api:diff finding a break.',
+      `${CI_YML}'s workflow env pins no OASDIFF_VERSION, which the CI-06 drill holds oasdiff to in CI (INF-10-AC4).`,
     );
   }
-  return 'fail-closed';
+  return version;
+}
+
+/**
+ * Whether oasdiff answers here, asked by running it on the gate's own PATH,
+ * node_modules/.bin first, as gate:full asks Docker. In CI it must, and it must
+ * be the version ci.yml pins: CI installs that one (D-082), and a binary that
+ * shadows it proves nothing. Elsewhere the drill holds api:diff to refusing to
+ * pass unchecked, and the report says "fail-closed only".
+ */
+function oasdiffMode({
+  ci = read(CI_YML),
+  inCI = process.env.CI === 'true',
+  modulesBin = MODULES_BIN,
+} = {}) {
+  const env = gateEnv({}, modulesBin);
+  const probe = spawnSync('oasdiff', ['--version'], { env, encoding: 'utf8', timeout: 30_000 });
+  if (!inCI) return probe.status === 0 ? 'detects' : 'fail-closed';
+  const where = spawnSync('sh', ['-c', 'command -v oasdiff'], {
+    env,
+    encoding: 'utf8',
+  }).stdout.trim();
+  if (probe.status !== 0) {
+    throw new Error(
+      `In CI the CI-06 drill runs with oasdiff on the gate's PATH, which ci.yml installs from the version and SHA-256 D-082 pins (INF-10-AC16), and ${where === '' ? 'there is none here' : `${where} did not answer --version`}. Without it the drill cannot show api:diff finding a break.`,
+    );
+  }
+  const pinned = pinnedOasdiffVersion(ci);
+  const printed = `${probe.stdout ?? ''}${probe.stderr ?? ''}`.trim();
+  if (/oasdiff version (\S+)/.exec(printed)?.[1] !== pinned) {
+    throw new Error(
+      `In CI the CI-06 drill runs the oasdiff ${CI_YML} pins, version ${pinned}, and the one first on the gate's PATH, ${where}, printed "${printed}". A binary that shadows the pinned one is not what CI installed (INF-10-AC4).`,
+    );
+  }
+  return 'detects';
+}
+
+/** The oasdiff version ci.yml's workflow env pins, as a test reads it, beside the drill's own reader. */
+const pinInCi = () =>
+  /^ {2}OASDIFF_VERSION:[ \t]*['"]?([^'"\s]+)['"]?/m.exec(read(CI_YML))?.[1] ?? '';
+
+/** A stand-in oasdiff in `dir` that answers --version with `answer`, or, when that is null, fails as a broken one does. */
+function standInOasdiff(dir, answer) {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    path.join(dir, 'oasdiff'),
+    answer === null
+      ? '#!/bin/sh\necho "oasdiff: a stand-in that does not answer" >&2\nexit 127\n'
+      : `#!/bin/sh\necho "${answer}"\n`,
+    { mode: 0o755 },
+  );
+  return dir;
 }
 
 const CI06 = {
@@ -1145,7 +1406,7 @@ const CI06 = {
       [`packages/contracts/released/${RELEASED}`]: `${JSON.stringify(committed, null, 2)}\n`,
       [CONTRACT]: `${JSON.stringify(current, null, 2)}\n`,
     });
-    return spawnGate(gate, { cwd: dir });
+    return spawnGate(gate, { cwd: dir, env: gateEnv() });
   },
   judge(result, mode) {
     if (mode === 'fail-closed') {
@@ -1234,6 +1495,58 @@ describe('CI-06 drill (4 of 9): a breaking API change', () => {
       /package\.json has no "api:diff" script/,
     );
   });
+
+  test("INF-10-AC4: CI-06 drill — the oasdiff version it holds CI to is read from ci.yml's workflow env, never retyped, and a copy with none fails it, naming OASDIFF_VERSION", () => {
+    const ci = read(CI_YML);
+    const pin = /^ {2}OASDIFF_VERSION:[ \t]*['"]?([^'"\s]+)['"]?[ \t]*$/m;
+
+    expect(pinnedOasdiffVersion()).toBe(pin.exec(ci)?.[1]);
+    expect(pinnedOasdiffVersion(ci.replace(pin, "  OASDIFF_VERSION: '9.9.9-drill'"))).toBe(
+      '9.9.9-drill',
+    );
+    expect(() => pinnedOasdiffVersion(ci.replace(pin, ''))).toThrow(/OASDIFF_VERSION/);
+  });
+
+  test("INF-10-AC4: CI-06 drill — in CI, an oasdiff first on the gate's PATH that is not the pinned version fails the drill, naming where it was, what it printed and the pin: one in node_modules/.bin shadowing the pinned one is caught", () => {
+    const pinned = pinInCi();
+    standInOasdiff(standInTools().bin, `oasdiff version ${pinned}`);
+    const shadow = standInOasdiff(
+      path.join(scratch('ci06-modules'), '.bin'),
+      'oasdiff version 0.0.1-drill',
+    );
+    const message = failureOf(() => oasdiffMode({ inCI: true, modulesBin: shadow }));
+
+    expect(message, 'in CI, the drill ran with an oasdiff that is not the pinned one').toContain(
+      path.join(shadow, 'oasdiff'),
+    );
+    expect(message).toContain('oasdiff version 0.0.1-drill');
+    expect(message).toContain(pinned);
+  });
+
+  test("INF-10-AC4: CI-06 drill — in CI, the pinned oasdiff first on the gate's PATH is detection, and one there that does not answer fails the drill", () => {
+    const pinned = pinInCi();
+    const modules = path.join(scratch('ci06-modules'), '.bin');
+    mkdirSync(modules);
+    standInOasdiff(standInTools().bin, `oasdiff version ${pinned}`);
+
+    expect(oasdiffMode({ inCI: true, modulesBin: modules })).toBe('detects');
+    expect(
+      failureOf(() =>
+        oasdiffMode({
+          inCI: true,
+          modulesBin: standInOasdiff(path.join(scratch('ci06-broken'), '.bin'), null),
+        }),
+      ),
+      'in CI, the drill ran with an oasdiff that does not answer',
+    ).toMatch(/^In CI the CI-06 drill runs with oasdiff/);
+  });
+
+  test.each(TOLERANCES)(
+    "INF-10-AC10: CI-06 drill — contract's api:diff step made to tolerate its gate with $what fails the drill, naming the step and what it found",
+    (tolerance) => {
+      refusesTolerance('contract', 'api:diff', (ci) => CI06.gate({ ci }), tolerance);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1626,7 +1939,15 @@ const BLOCKING_REVIEWERS = CHECKS.filter(
   (check) => check.blocking && /^ai-review \(.+\)$/.test(check.check),
 ).map((check) => check.check.slice('ai-review ('.length, -1));
 
-/** The step "Enforce the verdict", read from ai-review.yml's review job. */
+/** The if: ai-review.yml gives "Enforce the verdict", and the only one it may have (AC10). */
+const VERDICT_GUARD = "steps.applies.outputs.run == 'true'";
+
+/**
+ * The step "Enforce the verdict", read from ai-review.yml's review job, with
+ * its own if: and continue-on-error:. One that tolerates a BLOCK, by
+ * continue-on-error or an if: other than its own, fails the drill: the drill
+ * runs its script, and GitHub, not the script, reads those (AC10).
+ */
 function verdictStep(text = read(AI_REVIEW_YML)) {
   const steps = stepsOf(text, 'review');
   if (steps === null) {
@@ -1640,10 +1961,18 @@ function verdictStep(text = read(AI_REVIEW_YML)) {
       `${AI_REVIEW_YML}'s review job has no step named "Enforce the verdict", which this drill runs.`,
     );
   }
+  const tolerates = tolerance(step, VERDICT_GUARD);
+  if (tolerates !== '') {
+    throw new Error(
+      `${AI_REVIEW_YML}'s step "Enforce the verdict" ${tolerates}. A step made to tolerate a BLOCK no longer enforces it, so this drill does not run it either (INF-10-AC10).`,
+    );
+  }
   return {
     script: runOf(step),
     env: envOf(step),
     shell: /^\s*shell:\s*(\S+)\s*$/m.exec(step)?.[1],
+    if: stepKey(step, 'if'),
+    continueOnError: stepKey(step, 'continue-on-error'),
   };
 }
 
@@ -1813,6 +2142,34 @@ const STAND_IN_STEPS = [
 
 const FIRST_REVIEWER = BLOCKING_REVIEWERS[0] ?? '';
 
+/**
+ * The ways "Enforce the verdict" is made to tolerate a BLOCK (AC10), and what
+ * the drill must say it found. A shell operator in its script is run, as GitHub
+ * runs it, so the drill finds what it did; the step's own keys are read.
+ */
+const VERDICT_TOLERANCES = [
+  {
+    what: 'its script run in a subshell with || true after it',
+    found: 'exit 0',
+    tolerate: (step) =>
+      step
+        .replace(/^( {8}run: \|\n)/m, '$1          (\n')
+        .replace(/\n*$/, '\n          ) || true\n'),
+  },
+  CONTINUE_ON_ERROR,
+  IF_FALSE,
+];
+
+/** What the CI-11 drill says of a BLOCK with ai-review.yml as `text`: why it is not blocked, or '' when it is. */
+function verdictFailure(text) {
+  let why = '';
+  const thrown = failureOf(() => {
+    const verdict = CI11.judge(runVerdict(FIRST_REVIEWER, 'BLOCK', { text }));
+    why = verdict.verdict === 'blocked' ? '' : verdict.why;
+  });
+  return thrown === '' ? why : thrown;
+}
+
 const CI11 = {
   id: 'CI-11',
   sources: [AI_REVIEW_YML, 'scripts/lib/merge-rules.mjs'],
@@ -1902,6 +2259,28 @@ describe('CI-11 drill (9 of 9): a blocking AI review verdict', () => {
       }),
     ).toThrow(/does not know how to stand in for/);
   });
+
+  test('INF-10-AC10: CI-11 drill — the step reader gives "Enforce the verdict"\'s own if:, the one ai-review.yml gives it, and no continue-on-error', () => {
+    const { if: guard, continueOnError } = verdictStep();
+
+    expect({ if: guard, continueOnError }).toEqual({
+      if: "steps.applies.outputs.run == 'true'",
+      continueOnError: '',
+    });
+  });
+
+  test.each(VERDICT_TOLERANCES)(
+    'INF-10-AC10: CI-11 drill — "Enforce the verdict" made to tolerate a BLOCK with $what fails the drill, naming the step and what it found',
+    ({ tolerate, found }) => {
+      const text = tolerating(read(AI_REVIEW_YML), 'review', 'name: Enforce the verdict', tolerate);
+      const message = verdictFailure(text);
+
+      expect(message, 'the drill said blocked for a step that tolerates a BLOCK').toContain(
+        '"Enforce the verdict"',
+      );
+      expect(message, message).toContain(found);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1910,6 +2289,55 @@ describe('CI-11 drill (9 of 9): a blocking AI review verdict', () => {
 
 /** The seven offline drills, in the roadmap's order. */
 const DRILLS = [RG03, CI03, RG01, CI06, HK02, HK07, CI11];
+
+describe('every drill: the CI steps it reads', () => {
+  test("INF-10-AC10: the step reader gives each gate step's line, if: and continue-on-error: as ci.yml has them: no if: for traceability's, the CI-12 code guard for unit's and contract's", () => {
+    const code = "steps.affected.outputs.code == 'true'";
+    const stepOf = (job, script) => {
+      const { line, if: guard, continueOnError } = gateStep(job, script);
+      return { line, if: guard, continueOnError };
+    };
+
+    expect(stepOf('traceability', 'tests:changes')).toEqual({
+      line: "pnpm run tests:changes --base origin/${{ github.base_ref || 'main' }}",
+      if: '',
+      continueOnError: '',
+    });
+    expect(stepOf('traceability', 'req:coverage')).toEqual({
+      line: 'pnpm run req:coverage --fail-on-uncovered-changed',
+      if: '',
+      continueOnError: '',
+    });
+    expect(stepOf('unit', 'test:unit')).toEqual({
+      line: 'pnpm run test:unit',
+      if: code,
+      continueOnError: '',
+    });
+    expect(stepOf('contract', 'api:diff')).toEqual({
+      line: 'pnpm run api:diff',
+      if: code,
+      continueOnError: '',
+    });
+  });
+
+  test("INF-10-AC10: tests:changes, req:coverage and api:diff each run as pnpm runs a script: the repository's node_modules/.bin first on PATH, and the stand-in gh next", () => {
+    const printPath = ['sh', '-c', 'echo "PATH=$PATH"'];
+    const runs = {
+      'tests:changes': RG03.run(() => THREE_TESTS, printPath),
+      'req:coverage': RG01.run('control', printPath),
+      'api:diff': CI06.run(false, printPath),
+    };
+
+    for (const [gate, result] of Object.entries(runs)) {
+      const entries = (/^PATH=(.*)$/m.exec(result.output)?.[1] ?? '').split(path.delimiter);
+
+      expect(entries.slice(0, 2), `${gate}: ${said(result)}`).toEqual([
+        path.join(REPO, 'node_modules', '.bin'),
+        standInTools().bin,
+      ]);
+    }
+  });
+});
 
 describe('every drill: run by unit whenever a gate changes', () => {
   test.each(DRILLS)(
@@ -1923,6 +2351,93 @@ describe('every drill: run by unit whenever a gate changes', () => {
     },
   );
 });
+
+/**
+ * AC11: no value of the runner's tokens, and none of its proxies, reached a
+ * gate that printed `seen` and was given `gate`. Each check asserts true or
+ * false, so a failure names the variable and never prints its value.
+ */
+function expectNoLeak(seen, gate, runner = process.env) {
+  for (const [name, value = ''] of Object.entries(runner)) {
+    if (/TOKEN|SECRET|PASSWORD|_KEY$/i.test(name) && value.length > 8) {
+      expect(seen.includes(value), `${name}'s value reached the gate`).toBe(false);
+    }
+    if (/PROXY/i.test(name) && value !== '') {
+      expect(gate.get(name) === value, `the runner's ${name} reached the gate`).toBe(false);
+    }
+  }
+}
+
+/** Runs `node -e script ...args` in `env` without blocking this process, which may be answering it: its exit status and what it printed. */
+function nodeRun(script, args, env) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', script, ...args], {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    child.stdout.on('data', (chunk) => {
+      output += String(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      output += String(chunk);
+    });
+    const bound = setTimeout(() => child.kill('SIGKILL'), 30_000);
+    child.on('error', reject);
+    child.on('close', (status, signal) => {
+      clearTimeout(bound);
+      resolve({ status, signal, output });
+    });
+  });
+}
+
+/** A server on this machine that counts who reached it: where the network test sends a gate's fetch. */
+async function countingServer() {
+  let hits = 0;
+  const server = http.createServer((_, response) => {
+    hits += 1;
+    response.end('reached');
+  });
+  await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve(undefined));
+  });
+  const address = server.address();
+  const port = typeof address === 'object' && address !== null ? address.port : 0;
+  return {
+    url: `http://127.0.0.1:${String(port)}/`,
+    hits: () => hits,
+    close: () =>
+      new Promise((resolve) => {
+        server.close(() => resolve(undefined));
+      }),
+  };
+}
+
+/** Node's own fetch, from a spawned process: what it fetched, or why it could not. */
+const FETCH = [
+  'fetch(process.argv[1])',
+  '  .then((response) => response.text())',
+  "  .then((text) => console.log('fetched: ' + text), (error) => {",
+  "    console.log('refused: ' + String(error.cause?.code ?? error.message));",
+  '    process.exitCode = 3;',
+  '  });',
+].join('\n');
+
+/** Where AC11 looks for a skip form: the files RG-03 counts, as TEST_GLOBS names them, read at run time. */
+const SKIP_FORM_PATHSPECS = TEST_GLOBS.map((glob) => `:(glob)${glob}`);
+
+/** The files under `cwd`, tracked or not, that hold `needle`, one a line, searched in `pathspecs` or everywhere. */
+function holding(needle, pathspecs = [], cwd = REPO) {
+  const found = spawnSync(
+    'git',
+    ['grep', '-l', '-F', '--untracked', '-e', needle, '--', ...pathspecs],
+    { cwd, encoding: 'utf8' },
+  );
+  if (found.status !== 0 && found.status !== 1) {
+    throw new Error(`git grep could not search for ${needle}: ${found.stderr}`);
+  }
+  return found.stdout.trim();
+}
 
 describe('every drill: offline, synthetic and tidy', () => {
   test('INF-10-AC11: a gate a drill spawns sees an explicit environment: no token, no GITHUB_ or CI variable, no proxy of the runner, and a home of its own', () => {
@@ -1939,15 +2454,84 @@ describe('every drill: offline, synthetic and tidy', () => {
         /^(GITHUB_|GH_|RUNNER_|ACTIONS_)|^CI$|TOKEN|SECRET|PASSWORD|_KEY$/i.test(name),
       ),
     ).toEqual([]);
-    for (const [name, value = ''] of Object.entries(process.env)) {
-      if (/TOKEN|SECRET|PASSWORD|_KEY$/i.test(name) && value.length > 8) {
-        expect(seen, `${name}'s value reached the gate`).not.toContain(value);
-      }
-      if (/PROXY/i.test(name) && value !== '') {
-        expect(gate.get(name), `the runner's ${name} reached the gate`).not.toBe(value);
-      }
-    }
+    expectNoLeak(seen, gate);
     expect(gate.get('HOME')).toBe(standInTools().home);
+  });
+
+  test("INF-10-AC11: the check that no token or proxy reaches a gate asserts true or false, so its failure names the variable and never prints the variable's value", () => {
+    const value = ['drill', 'leak', 'probe', 'value'].join('-');
+    const proxy = `http://${['drill', 'proxy'].join('-')}.invalid:3128`;
+    const leaks = [
+      [
+        'DRILL_TOKEN',
+        value,
+        () => expectNoLeak(`DRILL_TOKEN=${value}\n`, new Map(), { DRILL_TOKEN: value }),
+      ],
+      [
+        'DRILL_PROXY',
+        proxy,
+        () => expectNoLeak('', new Map([['DRILL_PROXY', proxy]]), { DRILL_PROXY: proxy }),
+      ],
+    ];
+
+    for (const [name, secret, check] of leaks) {
+      let caught;
+      try {
+        check();
+      } catch (error) {
+        caught = error;
+      }
+      const shown = [caught?.message, caught?.stack, caught?.actual, caught?.expected]
+        .map((part) => String(part))
+        .join('\n');
+
+      expect(caught === undefined, `a leak of ${name} got through the check`).toBe(false);
+      expect(shown.includes(name), `the failure does not name ${name}`).toBe(true);
+      expect(shown.includes(secret), `the failure prints ${name}'s value`).toBe(false);
+    }
+  });
+
+  test("INF-10-AC11: Node's own fetch in a spawned gate cannot reach the network: NODE_USE_ENV_PROXY sends it to the dead proxy, as a server on this machine that counts its visitors shows", async () => {
+    const server = await countingServer();
+    try {
+      const env = drillEnv();
+      const direct = { ...env };
+      delete direct.NODE_USE_ENV_PROXY;
+      // The control: without the variable, fetch goes past every proxy variable
+      // to the server, so this test can go red.
+      const control = await nodeRun(FETCH, [server.url], direct);
+
+      expect(control.output, 'the control could not reach the server').toContain(
+        'fetched: reached',
+      );
+      expect(server.hits()).toBe(1);
+
+      const gate = await nodeRun(FETCH, [server.url], env);
+
+      expect(gate.output, "a spawned gate's fetch reached the network").not.toContain('fetched:');
+      expect(server.hits(), "a spawned gate's fetch reached the server").toBe(1);
+      expect(gate.output).toMatch(/^refused: /m);
+      expect(env.NODE_USE_ENV_PROXY).toBe('1');
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('INF-10-AC11: the search for skip forms reads TEST_GLOBS, so it covers every kind of test file RG-03 counts, and only those', () => {
+    for (const glob of TEST_GLOBS) {
+      expect(SKIP_FORM_PATHSPECS, glob).toContain(`:(glob)${glob}`);
+    }
+    const needle = ['drill', 'needle', 'for', 'the', 'search'].join('-');
+    const outside = 'docs/drill-sample.md';
+    const dir = scratchRepo(
+      'ac11-search',
+      Object.fromEntries([...TEST_SAMPLES, outside].map((file) => [file, `${needle}\n`])),
+      {},
+    );
+
+    expect(holding(needle, SKIP_FORM_PATHSPECS, dir).split('\n').sort()).toEqual(
+      [...TEST_SAMPLES].sort(),
+    );
   });
 
   test('INF-10-AC11: the only gh a spawned gate reaches is the stand-in, which refuses any call it was not set up for', () => {
@@ -1962,27 +2546,13 @@ describe('every drill: offline, synthetic and tidy', () => {
   });
 
   test(
-    "INF-10-AC11: no file holds a drill's secret, phone number or skip form, since each is put together at run time",
+    'INF-10-AC11: no committed file holds the secret or the number, and no test file holds a skip form',
     explained(() => {
       const own = readFileSync(import.meta.filename, 'utf8');
       const write = {
         what: 'a Write of the drill file',
         tool: 'Write',
         input: { file_path: import.meta.filename, content: own },
-      };
-      const holding = (needle, ...pathspecs) => {
-        const found = spawnSync(
-          'git',
-          ['grep', '-l', '-F', '--untracked', '-e', needle, '--', ...pathspecs],
-          {
-            cwd: REPO,
-            encoding: 'utf8',
-          },
-        );
-        if (found.status !== 0 && found.status !== 1) {
-          throw new Error(`git grep could not search for ${needle}: ${found.stderr}`);
-        }
-        return found.stdout.trim();
       };
 
       expect(strengthOf(own).skips, 'RG-03 counts a skip in the drill file itself').toBe(0);
@@ -1991,10 +2561,7 @@ describe('every drill: offline, synthetic and tidy', () => {
       }
       for (const needle of [SECRET_LINE.trim(), PHONE]) expect(holding(needle), needle).toBe('');
       for (const needle of SWITCH_OFF_TEXT) {
-        expect(
-          holding(needle, '*.test.ts', '*.test.tsx', '*.test.mjs', 'apps/mobile/e2e/**'),
-          needle,
-        ).toBe('');
+        expect(holding(needle, SKIP_FORM_PATHSPECS), needle).toBe('');
       }
     }),
   );
