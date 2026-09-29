@@ -47,7 +47,7 @@ jobs:
       # Nothing here installs the repository's dependencies: the deploy and the
       # smoke test use only Node's own modules, and Clever Cloud's command-line
       # tool is a self-contained binary checked by hash (scripts/lib/clever-tools.mjs).
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version-file: .nvmrc }
       - name: Deploy
         env:
