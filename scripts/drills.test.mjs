@@ -460,8 +460,41 @@ function jobOf(text, job) {
 }
 
 /**
- * A job's own if: and continue-on-error:, at its keys' depth, wherever they
- * sit among its keys, as GitHub reads them; '' for each it has none of.
+ * The jobs a job's own needs: names, as GitHub reads it: one job, or a list in
+ * flow form (on one line or several) or block form (deeper than the key, or
+ * at its own depth), each name as written; [] when the job has none.
+ */
+function jobNeeds(lines) {
+  const at = lines.findIndex((line) => /^ {4}needs:/.test(line));
+  if (at === -1) return [];
+  const rest = lines.slice(at + 1);
+  const value = asRead(/^ {4}needs:[ \t]*(.*?)[ \t]*$/.exec(lines[at] ?? '')?.[1] ?? '');
+  if (value.startsWith('[')) {
+    let flow = value;
+    for (const line of rest) {
+      if (flow.includes(']')) break;
+      flow += ` ${asRead(line.trim())}`;
+    }
+    return flow
+      .slice(1, flow.includes(']') ? flow.indexOf(']') : undefined)
+      .split(',')
+      .map((name) => asRead(name.trim()))
+      .filter((name) => name !== '');
+  }
+  if (value !== '') return [value];
+  const names = [];
+  for (const line of rest) {
+    if (line.trim() === '' || line.trim().startsWith('#')) continue;
+    const item = /^ {4,}-[ \t]+(.*?)[ \t]*$/.exec(line);
+    if (item === null) break;
+    names.push(asRead(item[1] ?? ''));
+  }
+  return names;
+}
+
+/**
+ * A job's own if:, continue-on-error: and needs:, at its keys' depth, wherever
+ * they sit among its keys, as GitHub reads them; '' or [] for each it has none of.
  */
 function jobGuards(text, job) {
   const lines = jobOf(text, job) ?? [];
@@ -471,7 +504,7 @@ function jobGuards(text, job) {
         .map((line) => new RegExp(`^ {4}${name}:[ \\t]*(.*?)[ \\t]*$`).exec(line)?.[1])
         .find((value) => value !== undefined) ?? '',
     );
-  return { if: key('if'), continueOnError: key('continue-on-error') };
+  return { if: key('if'), continueOnError: key('continue-on-error'), needs: jobNeeds(lines) };
 }
 
 /** CI-12's guard: the step runs when the diff holds code. */
@@ -481,11 +514,35 @@ const CODE_GUARD = "steps.affected.outputs.code == 'true'";
 const OWN_GUARD = { traceability: '', unit: CODE_GUARD, contract: CODE_GUARD };
 
 /**
- * The if: each job that holds a gate's step has in ci.yml, and the only one it
- * may have: none. GitHub reports a skipped job as a success, even for a
- * required check (AC10).
+ * The if: and needs: each job that holds a gate's step has in ci.yml, and the
+ * only ones it may have: none of either. GitHub reports a skipped job as a
+ * success, even for a required check (AC10).
  */
-const OWN_JOB_GUARD = { traceability: '', unit: '', contract: '' };
+const OWN_JOB_GUARD = {
+  traceability: { if: '', needs: [] },
+  unit: { if: '', needs: [] },
+  contract: { if: '', needs: [] },
+};
+
+/**
+ * How a job tolerates or skips the gate it holds, or null when it does not
+ * (AC10): its own keys, as for a step, and then a needs: other than its own,
+ * since a job that needs one that failed or was skipped is skipped too.
+ */
+function jobTolerance(guards, own) {
+  const keys = guardTolerance(guards, own.if);
+  if (keys !== '') return { found: keys, byNeeds: false };
+  const [found, wanted] = [guards.needs, own.needs].map((names) => [...names].sort().join(', '));
+  if (found === wanted) return null;
+  return {
+    found: `needs ${found === '' ? 'no job' : found}, where its own needs ${wanted === '' ? 'no job' : wanted}`,
+    byNeeds: true,
+  };
+}
+
+/** Why a job that tolerates or skips its gate no longer runs it, in the drill's words. */
+const jobWhy = ({ byNeeds }, what) =>
+  `${byNeeds ? 'A job that needs a job that failed or was skipped is skipped too, and' : `A job made to tolerate ${what}, or to be skipped, no longer runs it:`} GitHub reports a skipped job as a success, even for a required check. So this drill does not run it either (INF-10-AC10).`;
 
 /**
  * How a step or a job tolerates its gate by its own keys, in words, or '' when
@@ -577,10 +634,10 @@ function stepLine(job, script, ci = read(CI_YML)) {
       `${CI_YML}'s ${job} job's step that runs "pnpm run ${script}" ${tolerates}. A step made to tolerate its gate's failure no longer runs it, so this drill does not run it either (INF-10-AC10).`,
     );
   }
-  const jobTolerates = guardTolerance(guards, ownJob);
-  if (jobTolerates !== '') {
+  const jobTolerates = jobTolerance(guards, ownJob);
+  if (jobTolerates !== null) {
     throw new Error(
-      `${CI_YML}'s ${job} job ${jobTolerates}, and it holds the step that runs "pnpm run ${script}". A job made to tolerate its gate's failure, or to be skipped, no longer runs it: GitHub reports a skipped job as a success, even for a required check. So this drill does not run it either (INF-10-AC10).`,
+      `${CI_YML}'s ${job} job ${jobTolerates.found}, and it holds the step that runs "pnpm run ${script}". ${jobWhy(jobTolerates, "its gate's failure")}`,
     );
   }
   return line;
@@ -743,6 +800,58 @@ function refusesJobTolerance(job, script, build, { tolerate, found }) {
     `the drill ran a step of the ${job} job although the job tolerates or skips it`,
   ).toContain(`${CI_YML}'s ${job} job `);
   expect(message, message).toContain(found);
+}
+
+/**
+ * The ways a job's needs: is written, as GitHub reads each: one job, a flow
+ * list, a block list, and a block list at the key's own depth. The jobs named
+ * are the drill's own; each form names them in the same order.
+ */
+const NEEDS_FORMS = [
+  { what: 'one job', text: '    needs: drill-build', names: ['drill-build'] },
+  {
+    what: 'a flow list',
+    text: "    needs: [drill-build, 'drill-lint']",
+    names: ['drill-build', 'drill-lint'],
+  },
+  {
+    what: 'a flow list over three lines',
+    text: '    needs: [\n      drill-build,\n      drill-lint ]',
+    names: ['drill-build', 'drill-lint'],
+  },
+  {
+    what: 'a block list',
+    text: '    needs:\n      - drill-build\n      - "drill-lint" # the drill\'s own',
+    names: ['drill-build', 'drill-lint'],
+  },
+  {
+    what: "a block list at the key's own depth",
+    text: '    needs:\n    - drill-build\n    - drill-lint',
+    names: ['drill-build', 'drill-lint'],
+  },
+];
+
+/** A job's own lines, before its steps, with `needs` written in after its header line. */
+const withNeeds = (needs) => (head) => head.replace(/^( {2}\S.*)$/m, `$1\n${needs}`);
+
+/**
+ * AC10, one level up: with the job that holds `script`'s step given a needs:
+ * of its own, in each form, building the drill's command from a scratch copy
+ * of ci.yml fails, naming the job, what it needs, and why that matters.
+ */
+function refusesJobNeeds(job, script, build) {
+  for (const form of NEEDS_FORMS) {
+    const message = failureOf(() => build(atJob(read(CI_YML), job, withNeeds(form.text))));
+
+    expect(
+      message,
+      `${form.what}: the drill ran a step of the ${job} job although the job now needs another`,
+    ).toContain(`${CI_YML}'s ${job} job `);
+    expect(message, `${form.what}: ${message}`).toContain(
+      `needs ${form.names.join(', ')}, where its own needs no job`,
+    );
+    expect(message, `${form.what}: ${message}`).toContain('failed or was skipped');
+  }
 }
 
 /** A file and every repository file it imports, by relative path, for AC14. */
@@ -977,6 +1086,10 @@ describe('RG-03 drill (1 of 9): a skip added in a pull request', () => {
       refusesJobTolerance('traceability', 'tests:changes', (ci) => RG03.gate({ ci }), tolerance);
     },
   );
+
+  test('INF-10-AC10: RG-03 drill — the traceability job given a needs: of its own, written as one job, a flow list or a block list, fails the drill, naming the job, what it needs and why', () => {
+    refusesJobNeeds('traceability', 'tests:changes', (ci) => RG03.gate({ ci }));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1271,6 +1384,10 @@ describe('CI-03 drill (2 of 9): a failing test', () => {
       refusesJobTolerance('unit', 'test:unit', (ci) => runnersOf({ ci }), tolerance);
     },
   );
+
+  test('INF-10-AC10: CI-03 drill — the unit job given a needs: of its own, written as one job, a flow list or a block list, fails the drill, naming the job, what it needs and why', () => {
+    refusesJobNeeds('unit', 'test:unit', (ci) => runnersOf({ ci }));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1428,6 +1545,10 @@ describe('RG-01 drill (3 of 9): a new acceptance criterion without a test', () =
       refusesJobTolerance('traceability', 'req:coverage', (ci) => RG01.gate({ ci }), tolerance);
     },
   );
+
+  test('INF-10-AC10: RG-01 drill — the traceability job given a needs: of its own, written as one job, a flow list or a block list, fails the drill, naming the job, what it needs and why', () => {
+    refusesJobNeeds('traceability', 'req:coverage', (ci) => RG01.gate({ ci }));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1680,6 +1801,10 @@ describe('CI-06 drill (4 of 9): a breaking API change', () => {
       refusesJobTolerance('contract', 'api:diff', (ci) => CI06.gate({ ci }), tolerance);
     },
   );
+
+  test('INF-10-AC10: CI-06 drill — the contract job given a needs: of its own, written as one job, a flow list or a block list, fails the drill, naming the job, what it needs and why', () => {
+    refusesJobNeeds('contract', 'api:diff', (ci) => CI06.gate({ ci }));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2076,11 +2201,11 @@ const BLOCKING_REVIEWERS = CHECKS.filter(
 const VERDICT_GUARD = "steps.applies.outputs.run == 'true'";
 
 /**
- * The if: ai-review.yml gives the review job, and the only one it may have:
- * always(), so that a failure in the changes job it needs cannot skip it, and
- * a skipped job is reported as a success (AC10).
+ * The if: and needs: ai-review.yml gives the review job, and the only ones it
+ * may have: it needs changes, and runs always(), so that a failure in changes
+ * cannot skip it, and a skipped job is reported as a success (AC10).
  */
-const REVIEW_JOB_GUARD = 'always()';
+const REVIEW_JOB_GUARD = { if: 'always()', needs: ['changes'] };
 
 /**
  * The step "Enforce the verdict", read from ai-review.yml's review job, with
@@ -2109,10 +2234,10 @@ function verdictStep(text = read(AI_REVIEW_YML)) {
     );
   }
   const job = jobGuards(text, 'review');
-  const jobTolerates = guardTolerance(job, REVIEW_JOB_GUARD);
-  if (jobTolerates !== '') {
+  const jobTolerates = jobTolerance(job, REVIEW_JOB_GUARD);
+  if (jobTolerates !== null) {
     throw new Error(
-      `${AI_REVIEW_YML}'s review job ${jobTolerates}, and it holds "Enforce the verdict". A job made to tolerate a BLOCK, or to be skipped, no longer enforces it: GitHub reports a skipped job as a success, even for a required check. So this drill does not run it either (INF-10-AC10).`,
+      `${AI_REVIEW_YML}'s review job ${jobTolerates.found}, and it holds "Enforce the verdict". ${jobWhy(jobTolerates, 'a BLOCK')}`,
     );
   }
   return {
@@ -2330,6 +2455,29 @@ const REVIEW_JOB_TOLERANCES = [
   JOB_CONTINUE_ON_ERROR,
 ];
 
+/**
+ * The ways the review job's own needs: changes is made another's (AC10): a
+ * job whose needs: differs from its own may be skipped when it should run,
+ * and a skipped job is reported as a success.
+ */
+const REVIEW_NEEDS = [
+  {
+    what: 'changed to another job',
+    change: (head) => head.replace(/^( {4}needs:).*$/m, '$1 drill-build'),
+    found: 'needs drill-build, where its own needs changes',
+  },
+  {
+    what: 'widened with another job',
+    change: (head) => head.replace(/^( {4}needs:).*$/m, '$1 [changes, drill-build]'),
+    found: 'needs changes, drill-build, where its own needs changes',
+  },
+  {
+    what: 'taken away',
+    change: (head) => head.replace(/^ {4}needs:.*\n/m, ''),
+    found: 'needs no job, where its own needs changes',
+  },
+];
+
 /** What the CI-11 drill says of a BLOCK with ai-review.yml as `text`: why it is not blocked, or '' when it is. */
 function verdictFailure(text) {
   let why = '';
@@ -2464,6 +2612,19 @@ describe('CI-11 drill (9 of 9): a blocking AI review verdict', () => {
       expect(message, message).toContain(found);
     },
   );
+
+  test('INF-10-AC10: CI-11 drill — the review job with its needs: changes changed, widened or taken away fails the drill, naming the job, what it needs and why', () => {
+    for (const variant of REVIEW_NEEDS) {
+      const message = verdictFailure(atJob(read(AI_REVIEW_YML), 'review', variant.change));
+
+      expect(
+        message,
+        `${variant.what}: the drill said blocked although the review job's needs: is not its own`,
+      ).toContain(`${AI_REVIEW_YML}'s review job `);
+      expect(message, `${variant.what}: ${message}`).toContain(variant.found);
+      expect(message, `${variant.what}: ${message}`).toContain('failed or was skipped');
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2503,7 +2664,7 @@ describe('every drill: the CI steps it reads', () => {
     });
   });
 
-  test("INF-10-AC10: the readers give the job's own if: and continue-on-error: next to the step's: none for ci.yml's traceability, unit and contract, and always() for ai-review.yml's review", () => {
+  test("INF-10-AC10: the readers give the job's own if:, continue-on-error: and needs: next to the step's: none for ci.yml's traceability, unit and contract, and always() and changes for ai-review.yml's review", () => {
     for (const [job, script] of [
       ['traceability', 'tests:changes'],
       ['traceability', 'req:coverage'],
@@ -2513,9 +2674,35 @@ describe('every drill: the CI steps it reads', () => {
       expect(gateStep(job, script).job, `${job}, for ${script}`).toEqual({
         if: '',
         continueOnError: '',
+        needs: [],
       });
     }
-    expect(verdictStep().job, 'review').toEqual({ if: 'always()', continueOnError: '' });
+    expect(verdictStep().job, 'review').toEqual({
+      if: 'always()',
+      continueOnError: '',
+      needs: ['changes'],
+    });
+  });
+
+  test("INF-10-AC10: the reader reads a job's needs: as GitHub does, one job or a list in flow or block form, and the review job's own changes, written as a list, is still its own", () => {
+    for (const form of NEEDS_FORMS) {
+      const ci = atJob(read(CI_YML), 'traceability', withNeeds(form.text));
+
+      expect(gateStep('traceability', 'tests:changes', ci).job.needs, form.what).toEqual(
+        form.names,
+      );
+    }
+    for (const own of [
+      '    needs: [changes]',
+      '    needs:\n      - changes',
+      "    needs: 'changes'",
+    ]) {
+      const text = atJob(read(AI_REVIEW_YML), 'review', (head) =>
+        head.replace(/^ {4}needs:.*$/m, own),
+      );
+
+      expect(verdictStep(text).job.needs, own).toEqual(['changes']);
+    }
   });
 
   test("INF-10-AC10: tests:changes, req:coverage and api:diff each run as pnpm runs a script: the repository's node_modules/.bin first on PATH, and the stand-in gh next", () => {
