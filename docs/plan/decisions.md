@@ -2337,7 +2337,7 @@ any other path is work, not a candidate for the same treatment.
     how far `gate:integrity`'s ownership check can be trusted, and is a
     `/bugfix` candidate.
 
-## D-085 — CI runs on `ubuntu-26.04`, named, not on `ubuntu-latest`
+## D-085 — CI names its Ubuntu release, `ubuntu-26.04`, not `ubuntu-latest`
 - **Date:** 2026-09-29 · **Status:** Accepted (owner asked; the label is
   Claude's choice, D-031) · **Section:** 8
 - **Context:** GitHub announced that `ubuntu-latest` moves from Ubuntu 24.04 to
@@ -2350,16 +2350,23 @@ any other path is work, not a candidate for the same treatment.
      `daily-status.yml` runs on `ubuntu-26.04`.** That is 15 jobs.
   2. **`ai-review.yml` stays on `ubuntu-latest` for now.** A change to it is
      merged by hand (D-075). Putting it in this pull request would take the
-     reviewers off the other four files too. It moves in the next D-075
-     batch. Until then it follows GitHub's rollout.
-  3. **The next image is a pull request of its own**, made by hand, like the
-     oasdiff and gitleaks pins: Dependabot does not raise runner labels.
-- **Why a named image, not `ubuntu-latest`:**
+     reviewers off the other four files too. #45, a D-075 change that merged
+     while this pull request was open, did not carry it. So it moves in a
+     one-line pull request of its own, merged by hand, after this one
+     merges. Until then it follows GitHub's rollout.
+  3. **The next release is a pull request of its own**, made by hand, like
+     the oasdiff and gitleaks pins: Dependabot does not raise runner labels.
+- **Why a named release, not `ubuntu-latest`:**
   - **GitHub's rollout is gradual.** For about a month some runs would get
-    24.04 and some 26.04. A red that comes and goes with the image reads as
-    a flaky test, and this repository treats "flake" as never a root cause.
-  - **A new image is then a change we make**, on a branch, with its CI to
-    show what broke. It is the same reason actions are pinned to a commit.
+    24.04 and some 26.04. A red that comes and goes with the release reads
+    as a flaky test, and this repository treats "flake" as never a root
+    cause.
+  - **A new release is then a change we make**, on a branch, with its CI to
+    show what broke.
+  - **The label is not a pinned image.** It names the Ubuntu release, and
+    GitHub still updates the image under it. Each job's "Set up job" step
+    prints the Image Version (the first 26.04 run had 20260920.143.1), which
+    is where to look when a red comes and goes.
   - **The pull request tests itself.** `ci.yml` is in `touchesApp` and is
     not inert (`scripts/lib/affected.mjs`), so every `ci.yml` job does its
     full work on the new image, `android-e2e` included.
@@ -2394,18 +2401,23 @@ any other path is work, not a candidate for the same treatment.
     `ubuntu-24.04` in the same lines. That label keeps working after the
     rollout. It is not `ubuntu-latest`, which by then is 26.04 anyway.
   - The Gradle and emulator caches are keyed without the image, so what
-    24.04 saved is restored on 26.04. Gradle's cache is only Java files.
-  - **No run loads the emulator's snapshot, on either image.** The first run
-    on 26.04 (job 109410598303) and the newest green one on `main` on 24.04
-    (job 109379152187) both restored the AVD cache under the same key. Then
-    both logged `Feature QuickbootFileBacked is disabled due to stability
-    issues` and `Emulator is performing a full startup`, and neither has a
-    line about loading a snapshot. So the "warm" runs in D-081 item 12 are
-    warm in Gradle's cache only. Every run starts the emulator from scratch
-    and then restarts its framework for bokmål (`Changing locale to nb-NO`,
-    `Restarting framework.`), the window in which D-081 saw installs refused.
-    Neither log says why the snapshot is not loaded, and this pull request
-    does not change it.
+    24.04 saved is restored on 26.04. Nothing in Gradle's cache is built
+    against the image: it holds Java libraries and the Android build's own
+    tools, such as `aapt2`, fetched for Linux. The first 26.04 build
+    succeeded with the restored cache.
+  - **Neither of the two runs compared loaded the emulator's snapshot.** The
+    first run on 26.04 (job 109410598303) and the newest green one on `main`
+    on 24.04 (job 109379152187) both restored the AVD cache under the same
+    key. Then both logged `Feature QuickbootFileBacked is disabled due to
+    stability issues` and `Emulator is performing a full startup`, and
+    neither has a line about loading a snapshot. Both then restarted the
+    framework for bokmål (`Changing locale to nb-NO`, `Restarting
+    framework.`), the window in which D-081 saw installs refused. The
+    restored AVD still carries its data image, so what the AVD cache saves
+    is not measured. Neither log says why the snapshot is not loaded. The
+    comment on "Create the virtual device and its snapshot" in `ci.yml`
+    ("a clean snapshot for later runs to start from") is therefore not borne
+    out, and is left for a follow-up.
   - The fake runner in `scripts/gate.test.mjs` is written from 24.04's
     layout. Its Android paths are the same on 26.04, by the readme. Its home,
     tool-cache and `PATH` folders are not in either readme, so they were not

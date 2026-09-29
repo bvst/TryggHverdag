@@ -15,12 +15,14 @@
 # otherwise run their own code in a job that holds this repository's secrets.
 # Dependabot raises the pins (.github/dependabot.yml).
 #
-# The runner image is pinned for the same reason: ubuntu-26.04, never
-# ubuntu-latest. GitHub moves that label to a new Ubuntu over weeks, so for a
-# while some runs would get the old image and some the new, and a red that
-# comes and goes looks like a flaky test. Moving to a new image is a pull
-# request of its own, whose CI shows whether every job still works (D-083).
-# Dependabot cannot see this pin, so it is raised by hand.
+# Every job names its Ubuntu release, ubuntu-26.04, never ubuntu-latest. GitHub
+# moves that label to a new release over weeks, so for a while some runs would
+# get the old release and some the new, and a red that comes and goes would
+# look like a flaky test. Moving to a new release is a pull request of its own,
+# whose CI shows whether every job still works (D-085). Dependabot cannot see
+# the label, so it is raised by hand. The label names the release, not one
+# build: GitHub still updates the image under it. When a red comes and goes,
+# compare the Image Version that each job's "Set up job" step prints.
 name: ci
 on:
   pull_request:
