@@ -2147,9 +2147,19 @@ any other path is work, not a candidate for the same treatment.
         `NullPointerException` in `PackageManagerInternal`. Any other install
         error fails at once. This is a readiness wait on the install, and D-060
         still holds: a failed flow is never retried.
-      - **Still to measure:** the warm durations. The Gradle cache and the AVD
-        snapshot are saved from `main` only, so the first run after merge
-        fills them and the next one shows the warm figure.
+      - **Run 9** (36409755274, the install wait): green; the install
+        succeeded on attempt 1.
+      - **BUG-6** (#37) gave the emulator 4 cores. It is a public repository
+        since 2026-09-28, so `ubuntu-latest` has 4 CPUs and 16 GB. This
+        followed a `main` run that failed on a "System UI isn't responding"
+        dialog on 2 cores. The snapshot key gained `-4cores`.
+      - **Warm durations**, with the Gradle cache and the 4-core snapshot both
+        restored, on `main`:
+        - 10 min 17 s (run for `8c62af9`): build 6 min, boot 33 s, flow 15 s;
+        - 9 min 25 s (run for `627a4b5`): boot 31 s, flow 11 s.
+        A cold run on 4 cores took 12 min 14 s (#37). This is at the low end
+        of the spec's 10–16 min warm estimate, and on a public repository
+        the minutes are free.
   13. **Follow-up, a precondition for the first safety-core code: mutation
       testing of app code.** Stryker runs Vitest only. It mutates folder
       safety paths as `**/*.ts` only (`stryker.config.mjs`), so a `.tsx` file

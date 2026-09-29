@@ -202,9 +202,6 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**BUG-7: a moved file was invisible under the path it left** (branch
-`fix/BUG-7-renames-invisible`). Every gate that works from the changed files
-now lists both paths of a move (`--no-renames`). Its tests are in `38bdccf`.
 
 **INF-08 is done** (2026-09-28).
 [#30](https://github.com/bvst/TryggHverdag/pull/30) and
@@ -296,7 +293,12 @@ had kept `main` red since #17 inherited the runner's `GITHUB_EVENT_NAME`).
 2026-09-26 — [#32](https://github.com/bvst/TryggHverdag/pull/32) (D-080: the
 daily report is a dashboard) and [#33](https://github.com/bvst/TryggHverdag/pull/33) (BUG-5: a
 failed BUG-3 worker test no longer leaves its worker running; test-only,
-merged by the owner 17:16:26Z). Full account in
+merged by the owner 17:16:26Z). 2026-09-28 —
+[#34](https://github.com/bvst/TryggHverdag/pull/34) (INF-06),
+[#37](https://github.com/bvst/TryggHverdag/pull/37) (BUG-6: the emulator gets
+4 cores) and [#39](https://github.com/bvst/TryggHverdag/pull/39) (record).
+2026-09-29 — [#40](https://github.com/bvst/TryggHverdag/pull/40) (BUG-7:
+every changed-file list names both paths of a move). Full account in
 [`progress/m0.md`](progress/m0.md).
 
 
