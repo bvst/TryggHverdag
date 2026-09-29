@@ -11,13 +11,17 @@ const input = await readInput();
 const cwd = input.cwd || process.cwd();
 const git = (...a) => spawnSync('git', a, { cwd, encoding: 'utf8' });
 
+// --no-renames: a moved file counts under the path it left too, so code moved
+// to docs/ still runs the gate (BUG-7).
 const changed = new Set();
 for (const out of [
-  git('diff', '--name-only', 'HEAD').stdout,
+  git('diff', '--name-only', '--no-renames', 'HEAD').stdout,
   git('ls-files', '--others', '--exclude-standard').stdout,
   (() => {
     const mb = git('merge-base', 'HEAD', 'origin/main');
-    return mb.status === 0 ? git('diff', '--name-only', mb.stdout.trim(), 'HEAD').stdout : '';
+    return mb.status === 0
+      ? git('diff', '--name-only', '--no-renames', mb.stdout.trim(), 'HEAD').stdout
+      : '';
   })(),
 ])
   for (const f of (out || '').split('\n')) if (f.trim()) changed.add(f.trim());

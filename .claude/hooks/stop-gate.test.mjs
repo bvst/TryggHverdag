@@ -2,7 +2,8 @@
 // HK-06: "done" means the gate passed. A session cannot finish on a red gate
 // without that being written down where the next session will see it.
 import { afterEach, describe, expect, test } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   ALLOWED,
@@ -120,4 +121,52 @@ describe('HK-06: when there is nothing to check', () => {
     expect(stop(dir).status).toBe(ALLOWED);
     expect(ranLog(dir)).toBe('');
   });
+});
+
+// BUG-7: code moved into docs/ is a code change. The hook asked git for the
+// changed paths with rename detection on, which is git's default, and git
+// reported the move only under docs/. So the one path that makes it a code
+// change never reached the check above, and the session finished without the
+// gate. safety-reviewer found this on INF-06, 2026-09-26, beside the same flaw
+// in scripts/lib/git.mjs.
+const CODE_MOVED_TO_DOCS = [
+  { how: 'staged with git mv and not yet committed', committed: false },
+  { how: 'committed on a branch', committed: true },
+];
+
+describe('HK-06: a move from code to docs/', () => {
+  test.each(CODE_MOVED_TO_DOCS)(
+    'BUG-7: code moved to docs/, $how, is a code change, so the gate runs',
+    ({ committed }) => {
+      const from = 'apps/server/src/api.ts';
+      const to = 'docs/old-api.md';
+      const dir = makeRepo({
+        ...fakeScripts({ 'gate:quick': FAILS }),
+        [from]: 'export const a = 1;\n',
+      });
+      repos.push(dir);
+      const git = (...args) =>
+        execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: 'pipe' });
+      // git's own default, pinned so that a global config cannot hide the move.
+      git('config', 'diff.renames', 'true');
+      // origin/main at the first commit, as on a pull request's branch.
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      git('checkout', '-q', '-b', 'the-branch');
+      mkdirSync(path.join(dir, 'docs'), { recursive: true });
+      git('mv', from, to);
+      if (committed) {
+        git('commit', '-qm', 'move the code into docs');
+      }
+      // The condition itself: git pairs the two paths as one move.
+      expect(git('diff', '--name-status', 'origin/main')).toMatch(
+        new RegExp(`^R100\\t${from}\\t${to}$`, 'm'),
+      );
+
+      const result = stop(dir);
+
+      expect(ranLog(dir)).toContain('gate:quick');
+      expect(result.status).toBe(BLOCKED);
+      expect(result.stderr).toContain('2 tests failed');
+    },
+  );
 });

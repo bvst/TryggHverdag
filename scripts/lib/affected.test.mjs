@@ -736,6 +736,35 @@ describe('the app answer, as the workflow receives it', () => {
   });
 });
 
+// BUG-7: a pull request that moves a file out of the app has changed the app,
+// and one that moves code into docs/ has changed code. git reported each move
+// only under the path it went to, so both were answered from that path alone.
+// safety-reviewer measured both of these on INF-06, 2026-09-26: the first gave
+// app=false, the second app=false and code=false, so every code gate on such a
+// pull request printed "nothing to check" and passed.
+const MOVES_OUT_OF_THE_APP = [
+  { from: 'apps/mobile/e2e/app-starts.yaml', to: 'e2e-archive/app-starts.yaml' },
+  { from: 'apps/mobile/src/app/index.tsx', to: 'docs/old-index.md' },
+];
+
+describe('a pull request that moves a file out of the app', () => {
+  test.each(MOVES_OUT_OF_THE_APP)(
+    'BUG-7: a pull request that only moves $from to $to is answered app=true and code=true',
+    ({ from, to }) => {
+      const dir = pullRequestRepo({}, { [from]: to });
+
+      const result = runAffected(['--base', 'origin/main'], { event: 'pull_request', cwd: dir });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).not.toContain('not a pull request');
+      expect(result.stdout).toMatch(/^app=true$/m);
+      expect(result.stdout).toMatch(/^code=true$/m);
+      expect(result.stdout).not.toMatch(/^app=false$/m);
+      expect(result.stdout).not.toMatch(/^code=false$/m);
+    },
+  );
+});
+
 /**
  * A repository checked out the way a pull request is: origin/main at the first
  * commit, and a branch on top of it that changes `files`. Everything is
@@ -745,8 +774,13 @@ describe('the app answer, as the workflow receives it', () => {
  * request can reach the app through a file only the dependency closure finds:
  * nothing under apps/, no install file, no workflow. The closure is read from
  * the checkout the script runs in, and that is what such a change tests.
+ *
+ * `moves` maps a path to the path the branch moves it to with `git mv`
+ * (BUG-7). Each path it moves from is a file on main, and the branch moves it
+ * unchanged. Rename detection is set to git's own default, so that a global
+ * config that turns it off cannot hide what a pull request looks like on CI.
  */
-function pullRequestRepo(files) {
+function pullRequestRepo(files, moves = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'affected-pr-'));
   fixtures.push(dir);
   const git = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
@@ -768,11 +802,17 @@ function pullRequestRepo(files) {
   write('packages/shared/package.json', manifest('@trygghverdag/shared'));
   write('packages/shared/index.mjs', 'export const shared = 1;\n');
   write('docs/notes.md', '# Notes\n');
+  for (const from of Object.keys(moves)) write(from, `${from}, as main has it\n`);
+  git('config', 'diff.renames', 'true');
   git('add', '-A');
   git('commit', '-qm', 'main');
   git('update-ref', 'refs/remotes/origin/main', 'HEAD');
   git('checkout', '-q', '-b', 'the-pull-request');
   for (const [file, text] of Object.entries(files)) write(file, text);
+  for (const [from, to] of Object.entries(moves)) {
+    mkdirSync(dirname(join(dir, to)), { recursive: true });
+    git('mv', from, to);
+  }
   git('add', '-A');
   git('commit', '-qm', 'the pull request');
   return dir;
