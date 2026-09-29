@@ -436,17 +436,42 @@ function standInFor(text, known, where) {
 /** The base ref: the scratch repositories keep their base at origin/main. */
 const BASE_REF = new Map([["github.base_ref || 'main'", 'main']]);
 
-/**
- * A step's own `key:`, on its first line or at its keys' depth, as GitHub reads
- * it: a trailing comment, the ${{ }} around it and its quotes taken off. ''
- * when the step has none.
- */
-function stepKey(step, key) {
-  const value = new RegExp(`^(?: {6}- | {8})${key}:[ \\t]*(.*?)[ \\t]*$`, 'm').exec(step)?.[1];
-  return (value ?? '')
+/** A key's value as GitHub reads it: a trailing comment, the ${{ }} around it and its quotes taken off. */
+const asRead = (value) =>
+  value
     .replace(/\s+#.*$/, '')
     .replace(/^\$\{\{\s*(.*?)\s*\}\}$/, '$1')
     .replace(/^(['"])(.*)\1$/, '$2');
+
+/** A step's own `key:`, on its first line or at its keys' depth, as GitHub reads it; '' when the step has none. */
+function stepKey(step, key) {
+  const value = new RegExp(`^(?: {6}- | {8})${key}:[ \\t]*(.*?)[ \\t]*$`, 'm').exec(step)?.[1];
+  return asRead(value ?? '');
+}
+
+/** The lines of `job` in a workflow's text, its header line first; null when there is no such job. */
+function jobOf(text, job) {
+  const lines = text.split('\n');
+  const start = lines.findIndex((line) => new RegExp(`^ {2}${job}:(\\s|$)`).test(line));
+  if (start === -1) return null;
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => /^ {2}\S/.test(line) || /^\S/.test(line));
+  return [lines[start] ?? '', ...(end === -1 ? rest : rest.slice(0, end))];
+}
+
+/**
+ * A job's own if: and continue-on-error:, at its keys' depth, wherever they
+ * sit among its keys, as GitHub reads them; '' for each it has none of.
+ */
+function jobGuards(text, job) {
+  const lines = jobOf(text, job) ?? [];
+  const key = (name) =>
+    asRead(
+      lines
+        .map((line) => new RegExp(`^ {4}${name}:[ \\t]*(.*?)[ \\t]*$`).exec(line)?.[1])
+        .find((value) => value !== undefined) ?? '',
+    );
+  return { if: key('if'), continueOnError: key('continue-on-error') };
 }
 
 /** CI-12's guard: the step runs when the diff holds code. */
@@ -454,6 +479,27 @@ const CODE_GUARD = "steps.affected.outputs.code == 'true'";
 
 /** The if: each job's gate step has in ci.yml, and the only one it may have (AC10). */
 const OWN_GUARD = { traceability: '', unit: CODE_GUARD, contract: CODE_GUARD };
+
+/**
+ * The if: each job that holds a gate's step has in ci.yml, and the only one it
+ * may have: none. GitHub reports a skipped job as a success, even for a
+ * required check (AC10).
+ */
+const OWN_JOB_GUARD = { traceability: '', unit: '', contract: '' };
+
+/**
+ * How a step or a job tolerates its gate by its own keys, in words, or '' when
+ * it does not: continue-on-error, or an if: other than `own`.
+ */
+function guardTolerance({ if: guard, continueOnError }, own) {
+  if (continueOnError !== '' && continueOnError !== 'false') {
+    return `has continue-on-error: ${continueOnError}`;
+  }
+  if (guard !== own) {
+    return `${guard === '' ? 'has no if:' : `runs only if: ${guard}`}, where its own is ${own === '' ? 'none' : `if: ${own}`}`;
+  }
+  return '';
+}
 
 /**
  * How `step` tolerates its gate's failure, in words, or '' when it does not
@@ -473,16 +519,16 @@ function tolerance(step, own, line) {
       .find((each) => each !== '' && !each.startsWith('#') && each !== line);
     if (beside !== undefined) return `runs "${beside}" beside its gate`;
   }
-  const excused = stepKey(step, 'continue-on-error');
-  if (excused !== '' && excused !== 'false') return `has continue-on-error: ${excused}`;
-  const guard = stepKey(step, 'if');
-  if (guard !== own) {
-    return `${guard === '' ? 'has no if:' : `runs only if: ${guard}`}, where its own is ${own === '' ? 'none' : `if: ${own}`}`;
-  }
-  return '';
+  return guardTolerance(
+    { if: stepKey(step, 'if'), continueOnError: stepKey(step, 'continue-on-error') },
+    own,
+  );
 }
 
-/** The step in `job` that runs `pnpm run <script>`: its line as written in ci.yml, its if: and its continue-on-error:. */
+/**
+ * The step in `job` that runs `pnpm run <script>`: its line as written in
+ * ci.yml, its if: and its continue-on-error:, and, next to them, the job's own.
+ */
 function gateStep(job, script, ci = read(CI_YML)) {
   const steps = stepsOf(ci, job);
   if (steps === null) {
@@ -506,26 +552,35 @@ function gateStep(job, script, ci = read(CI_YML)) {
     line,
     if: stepKey(step, 'if'),
     continueOnError: stepKey(step, 'continue-on-error'),
+    job: jobGuards(ci, job),
   };
 }
 
 /**
  * The one line in `job`'s steps that runs `pnpm run <script>`, as written in
- * ci.yml, from a step that runs its gate and tolerates nothing: a step made to
- * tolerate its gate's failure no longer runs it, and the drill says so (AC10).
+ * ci.yml, from a step that runs its gate and tolerates nothing, in a job that
+ * does not either: a step or a job made to tolerate its gate's failure, or to
+ * be skipped, no longer runs it, and the drill says so (AC10).
  */
 function stepLine(job, script, ci = read(CI_YML)) {
-  const { step, line } = gateStep(job, script, ci);
+  const { step, line, job: guards } = gateStep(job, script, ci);
   const own = OWN_GUARD[job];
-  if (own === undefined) {
+  const ownJob = OWN_JOB_GUARD[job];
+  if (own === undefined || ownJob === undefined) {
     throw new Error(
-      `This drill does not know which if: is the own of ${CI_YML}'s ${job} job's step that runs "pnpm run ${script}", so it cannot tell whether the step tolerates its gate.`,
+      `This drill does not know which if: is the own of ${CI_YML}'s ${job} job, or of its step that runs "pnpm run ${script}", so it cannot tell whether either tolerates its gate.`,
     );
   }
   const tolerates = tolerance(step, own, line);
   if (tolerates !== '') {
     throw new Error(
       `${CI_YML}'s ${job} job's step that runs "pnpm run ${script}" ${tolerates}. A step made to tolerate its gate's failure no longer runs it, so this drill does not run it either (INF-10-AC10).`,
+    );
+  }
+  const jobTolerates = guardTolerance(guards, ownJob);
+  if (jobTolerates !== '') {
+    throw new Error(
+      `${CI_YML}'s ${job} job ${jobTolerates}, and it holds the step that runs "pnpm run ${script}". A job made to tolerate its gate's failure, or to be skipped, no longer runs it: GitHub reports a skipped job as a success, even for a required check. So this drill does not run it either (INF-10-AC10).`,
     );
   }
   return line;
@@ -637,6 +692,56 @@ function refusesTolerance(job, script, build, { tolerate, found }) {
   expect(message, `the drill ran ${job}'s step although it tolerates its gate`).toContain(
     `${job} job's step that runs "pnpm run ${script}"`,
   );
+  expect(message, message).toContain(found);
+}
+
+/**
+ * The same, one level up (AC10): the ways the job that holds a gate's step is
+ * made to tolerate or skip it, each a change to the job's own lines before
+ * its steps. GitHub reports a skipped job as a success, even for a required
+ * check. A job that has an if: of its own gets it replaced, never doubled.
+ */
+const JOB_IF_FALSE = {
+  what: 'a job-level if: false',
+  found: 'if: false',
+  tolerate: (head) =>
+    /^ {4}if:/m.test(head)
+      ? head.replace(/^ {4}if:.*$/m, '    if: false')
+      : head.replace(/^( {2}\S.*)$/m, '$1\n    if: false'),
+};
+const JOB_CONTINUE_ON_ERROR = {
+  what: 'a job-level continue-on-error: true',
+  found: 'continue-on-error: true',
+  tolerate: (head) => head.replace(/^( {2}\S.*)$/m, '$1\n    continue-on-error: true'),
+};
+const JOB_TOLERANCES = [JOB_IF_FALSE, JOB_CONTINUE_ON_ERROR];
+
+/** A scratch copy of a workflow's `text`, with `job`'s own lines before its steps put through `change`. */
+function atJob(text, job, change) {
+  const lines = text.split('\n');
+  const start = lines.findIndex((line) => new RegExp(`^ {2}${job}:(\\s|$)`).test(line));
+  const steps = lines.findIndex((line, at) => at > start && /^ {4}steps:\s*$/.test(line));
+  if (start === -1 || steps === -1) {
+    throw new Error(`No ${job} job with steps, so the drill has no job to change.`);
+  }
+  const head = lines.slice(start, steps).join('\n');
+  const changed = change(head);
+  if (changed === head) throw new Error(`The change left the ${job} job as it was.`);
+  return [...lines.slice(0, start), changed, ...lines.slice(steps)].join('\n');
+}
+
+/**
+ * AC10, one level up: with the job that holds `script`'s step made to
+ * tolerate or skip it in a scratch copy of ci.yml, building the drill's
+ * command from that copy fails, naming the job and what it found there.
+ */
+function refusesJobTolerance(job, script, build, { tolerate, found }) {
+  const message = failureOf(() => build(atJob(read(CI_YML), job, tolerate)));
+
+  expect(
+    message,
+    `the drill ran a step of the ${job} job although the job tolerates or skips it`,
+  ).toContain(`${CI_YML}'s ${job} job `);
   expect(message, message).toContain(found);
 }
 
@@ -863,6 +968,13 @@ describe('RG-03 drill (1 of 9): a skip added in a pull request', () => {
     "INF-10-AC10: RG-03 drill — traceability's tests:changes step made to tolerate its gate with $what fails the drill, naming the step and what it found",
     (tolerance) => {
       refusesTolerance('traceability', 'tests:changes', (ci) => RG03.gate({ ci }), tolerance);
+    },
+  );
+
+  test.each(JOB_TOLERANCES)(
+    'INF-10-AC10: RG-03 drill — the traceability job, which holds the tests:changes step, made to tolerate or skip it with $what fails the drill, naming the job and what it found',
+    (tolerance) => {
+      refusesJobTolerance('traceability', 'tests:changes', (ci) => RG03.gate({ ci }), tolerance);
     },
   );
 });
@@ -1152,6 +1264,13 @@ describe('CI-03 drill (2 of 9): a failing test', () => {
       refusesTolerance('unit', 'test:unit', (ci) => runnersOf({ ci }), tolerance);
     },
   );
+
+  test.each(JOB_TOLERANCES)(
+    'INF-10-AC10: CI-03 drill — the unit job, which holds the test:unit step, made to tolerate or skip it with $what fails the drill, naming the job and what it found',
+    (tolerance) => {
+      refusesJobTolerance('unit', 'test:unit', (ci) => runnersOf({ ci }), tolerance);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1300,6 +1419,13 @@ describe('RG-01 drill (3 of 9): a new acceptance criterion without a test', () =
     "INF-10-AC10: RG-01 drill — traceability's req:coverage step made to tolerate its gate with $what fails the drill, naming the step and what it found",
     (tolerance) => {
       refusesTolerance('traceability', 'req:coverage', (ci) => RG01.gate({ ci }), tolerance);
+    },
+  );
+
+  test.each(JOB_TOLERANCES)(
+    'INF-10-AC10: RG-01 drill — the traceability job, which holds the req:coverage step, made to tolerate or skip it with $what fails the drill, naming the job and what it found',
+    (tolerance) => {
+      refusesJobTolerance('traceability', 'req:coverage', (ci) => RG01.gate({ ci }), tolerance);
     },
   );
 });
@@ -1545,6 +1671,13 @@ describe('CI-06 drill (4 of 9): a breaking API change', () => {
     "INF-10-AC10: CI-06 drill — contract's api:diff step made to tolerate its gate with $what fails the drill, naming the step and what it found",
     (tolerance) => {
       refusesTolerance('contract', 'api:diff', (ci) => CI06.gate({ ci }), tolerance);
+    },
+  );
+
+  test.each(JOB_TOLERANCES)(
+    'INF-10-AC10: CI-06 drill — the contract job, which holds the api:diff step, made to tolerate or skip it with $what fails the drill, naming the job and what it found',
+    (tolerance) => {
+      refusesJobTolerance('contract', 'api:diff', (ci) => CI06.gate({ ci }), tolerance);
     },
   );
 });
@@ -1943,10 +2076,18 @@ const BLOCKING_REVIEWERS = CHECKS.filter(
 const VERDICT_GUARD = "steps.applies.outputs.run == 'true'";
 
 /**
+ * The if: ai-review.yml gives the review job, and the only one it may have:
+ * always(), so that a failure in the changes job it needs cannot skip it, and
+ * a skipped job is reported as a success (AC10).
+ */
+const REVIEW_JOB_GUARD = 'always()';
+
+/**
  * The step "Enforce the verdict", read from ai-review.yml's review job, with
- * its own if: and continue-on-error:. One that tolerates a BLOCK, by
- * continue-on-error or an if: other than its own, fails the drill: the drill
- * runs its script, and GitHub, not the script, reads those (AC10).
+ * its own if: and continue-on-error:, and the review job's next to them. A
+ * step or a job that tolerates a BLOCK, by continue-on-error or an if: other
+ * than its own, fails the drill: the drill runs the step's script, and
+ * GitHub, not the script, reads those (AC10).
  */
 function verdictStep(text = read(AI_REVIEW_YML)) {
   const steps = stepsOf(text, 'review');
@@ -1967,12 +2108,20 @@ function verdictStep(text = read(AI_REVIEW_YML)) {
       `${AI_REVIEW_YML}'s step "Enforce the verdict" ${tolerates}. A step made to tolerate a BLOCK no longer enforces it, so this drill does not run it either (INF-10-AC10).`,
     );
   }
+  const job = jobGuards(text, 'review');
+  const jobTolerates = guardTolerance(job, REVIEW_JOB_GUARD);
+  if (jobTolerates !== '') {
+    throw new Error(
+      `${AI_REVIEW_YML}'s review job ${jobTolerates}, and it holds "Enforce the verdict". A job made to tolerate a BLOCK, or to be skipped, no longer enforces it: GitHub reports a skipped job as a success, even for a required check. So this drill does not run it either (INF-10-AC10).`,
+    );
+  }
   return {
     script: runOf(step),
     env: envOf(step),
     shell: /^\s*shell:\s*(\S+)\s*$/m.exec(step)?.[1],
     if: stepKey(step, 'if'),
     continueOnError: stepKey(step, 'continue-on-error'),
+    job,
   };
 }
 
@@ -2160,6 +2309,27 @@ const VERDICT_TOLERANCES = [
   IF_FALSE,
 ];
 
+/**
+ * The ways the review job, which holds "Enforce the verdict", is made to
+ * tolerate or skip it (AC10). Its own if: is always(), so that a failure in
+ * the changes job it needs cannot skip it: taken away or changed, the three
+ * blocking reviewers would pass without having run.
+ */
+const REVIEW_JOB_TOLERANCES = [
+  JOB_IF_FALSE,
+  {
+    what: 'its if: always() taken away',
+    found: 'has no if:',
+    tolerate: (head) => head.replace(/^ {4}if:.*\n/m, ''),
+  },
+  {
+    what: 'its if: always() made success()',
+    found: 'if: success()',
+    tolerate: (head) => head.replace(/^( {4}if:).*$/m, '$1 success()'),
+  },
+  JOB_CONTINUE_ON_ERROR,
+];
+
 /** What the CI-11 drill says of a BLOCK with ai-review.yml as `text`: why it is not blocked, or '' when it is. */
 function verdictFailure(text) {
   let why = '';
@@ -2281,6 +2451,19 @@ describe('CI-11 drill (9 of 9): a blocking AI review verdict', () => {
       expect(message, message).toContain(found);
     },
   );
+
+  test.each(REVIEW_JOB_TOLERANCES)(
+    'INF-10-AC10: CI-11 drill — the review job, which holds "Enforce the verdict", made to tolerate or skip it with $what fails the drill, naming the job and what it found',
+    ({ tolerate, found }) => {
+      const message = verdictFailure(atJob(read(AI_REVIEW_YML), 'review', tolerate));
+
+      expect(
+        message,
+        'the drill said blocked although the review job tolerates or skips the step',
+      ).toContain(`${AI_REVIEW_YML}'s review job `);
+      expect(message, message).toContain(found);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -2318,6 +2501,21 @@ describe('every drill: the CI steps it reads', () => {
       if: code,
       continueOnError: '',
     });
+  });
+
+  test("INF-10-AC10: the readers give the job's own if: and continue-on-error: next to the step's: none for ci.yml's traceability, unit and contract, and always() for ai-review.yml's review", () => {
+    for (const [job, script] of [
+      ['traceability', 'tests:changes'],
+      ['traceability', 'req:coverage'],
+      ['unit', 'test:unit'],
+      ['contract', 'api:diff'],
+    ]) {
+      expect(gateStep(job, script).job, `${job}, for ${script}`).toEqual({
+        if: '',
+        continueOnError: '',
+      });
+    }
+    expect(verdictStep().job, 'review').toEqual({ if: 'always()', continueOnError: '' });
   });
 
   test("INF-10-AC10: tests:changes, req:coverage and api:diff each run as pnpm runs a script: the repository's node_modules/.bin first on PATH, and the stand-in gh next", () => {
