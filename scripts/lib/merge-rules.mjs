@@ -38,6 +38,11 @@ export const OWNER_APPROVAL_PATHS = [
   // off without the rules changing a line — the gate present and doing nothing.
   '/.githooks/',
   '/package.json',
+  // Their include and exclude lists decide which tests CI runs at all, the
+  // gate drills among them (D-082).
+  '/vitest.config.mjs',
+  '/vitest.shared.mjs',
+  '/vitest.coverage.config.mjs',
   '/packages/contracts/released/',
   '/docs/plan/decisions.md',
   '/infra/',
