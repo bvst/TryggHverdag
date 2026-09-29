@@ -28,7 +28,7 @@ The plan is in [`plan/README.md`](plan/README.md); the M0 task list is in
 | INF-07 | Staging on Clever Cloud | ✅ Done — 2026-09-25 ([#22](https://github.com/bvst/TryggHverdag/pull/22), fixes [#23](https://github.com/bvst/TryggHverdag/pull/23) [#24](https://github.com/bvst/TryggHverdag/pull/24), names [#25](https://github.com/bvst/TryggHverdag/pull/25)). A merge deployed and the smoke test passed; BUG-3 fixed ([#27](https://github.com/bvst/TryggHverdag/pull/27)) |
 | INF-08 | Monitoring | ✅ Done — 2026-09-28 ([#31](https://github.com/bvst/TryggHverdag/pull/31)). In the owner's drill (2026-09-26) Healthchecks.io alerted about 3 minutes after the worker's last ping, and UptimeRobot alerted too, both by email. The owner accepted it with no UptimeRobot app; UptimeRobot's recovery and its keyword rule were not checked |
 | INF-09 | Daily status workflow | ✅ Done — 2026-09-25 ([#18](https://github.com/bvst/TryggHverdag/pull/18)). Since D-080 ([#32](https://github.com/bvst/TryggHverdag/pull/32)) a dashboard: the description of the pinned issue [#35](https://github.com/bvst/TryggHverdag/issues/35), replaced every run. It is scheduled at 01:07 UTC, but GitHub starts it about 5½ hours late, so it lands around 08:30 in Oslo. The missed-run alarm is proven (2026-09-25) |
-| INF-10 | Gate drills | 🟡 In flight on `claude/m0-roadmap-task-0qgkmf`. The spec (`docs/specs/INF-10.md`) and D-082 are final; the red phase is verified (68 failing tests, all INF-10); the implementer is at work |
+| INF-10 | Gate drills | ✅ Done — 2026-09-29 ([#42](https://github.com/bvst/TryggHverdag/pull/42)). Seven offline drills run on every pull request that can change a gate, and each is shown to go red when its gate is made to pass. The push to `main` and the merge without owner approval are covered by `gate:integrity`; their one live attempt is M0's last exit item (D-082) |
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
 verdicts. On its first working day it caught two genuine bugs, a half-finished
@@ -181,6 +181,15 @@ The things that still bite, and cost a session hours the first time.
 - **Read the job log before theorising** (D-070) and **say what you checked, not
   what you assume** — both are non-negotiables in `CLAUDE.md` because three
   hypotheses about one failing gate were wrong in a single morning.
+- **Vitest's coverage cannot see a spawned process.** Logic that runs only in
+  an entry script that tests spawn counts as uncovered, and the ratchet drops.
+  Keep entry scripts to IO and put decisions in `scripts/lib/`, as INF-10's
+  `req-coverage.mjs` shows.
+- **A session reaches GitHub release assets but not release pages.** The proxy
+  answers 403 for `…/releases/latest` and 200 for `…/releases/download/…`.
+  Probe the asset, not the page.
+- **The Bash guard reads `rm -f` beside a `git push` as a force push.** Keep a
+  push in a command of its own.
 - **Stryker's local incremental report reuses old results for unchanged
   code.** With the command runner, `mutantCanBeReused` is always true — the
   command runner never reports coverage, so every mutant outside the diff
@@ -252,33 +261,51 @@ The staging names were changed to `trygg-hverdag` before the working apply
 (`trygghverdag-staging` and `-db`) are outside Terraform and should be deleted
 in the console. The app costs money.
 
-**INF-10 — gate drills — is in flight** (2026-09-28, branch
-`claude/m0-roadmap-task-0qgkmf`). The owner answered five questions, each with
-the recommended option, recorded as **D-082**:
-- offline drills now, and one live attempt at the two GitHub-only drills
-  later;
-- `req:coverage` checks each acceptance criterion (amends RG-01);
-- oasdiff 1.32.1 is installed now, pinned by its published SHA-256;
-- RG-03's skip check is widened to conditional and chained skips, and to any
-  `skip()` call in a test file.
+**INF-10 is done** (2026-09-29, [#42](https://github.com/bvst/TryggHverdag/pull/42)).
+`pnpm run gate:drills` tries a bad change against each gate and prints nine
+rows. The drill file, `scripts/drills.test.mjs`, runs in CI's `unit` job on
+every pull request that can change a gate. Each drill:
+- reads its command from where the real system does: `ci.yml`,
+  `package.json`, `settings.json`, the agent's definition or `ai-review.yml`;
+- also fails when that step or its job is made to tolerate the gate (`|| true`,
+  `continue-on-error`, or an `if:` or `needs:` that is not its own).
 
-Done and verified:
-- **The spec is final**, with 17 acceptance criteria.
-- **oasdiff was checked before it was decided.** The release archive matched
-  its `checksums.txt`. On our OpenAPI 3.1.1 description, the unchanged file
-  exited 0, and the file with `GET /health` removed exited 1.
-- **The red phase is verified independently.** Of 1364 tests, 68 fail, every
-  one named INF-10, and none is skipped. `tests:changes` reports none weakened,
-  and `req:coverage` still says 4 of 63.
+The owner answered seven questions, each with the recommended option, in
+**D-082**:
+1. offline drills now, and one live attempt at the two GitHub-only drills
+   later;
+2. `req:coverage` checks each acceptance criterion (RG-01 amended);
+3. oasdiff 1.32.1 is installed in `unit` and `contract`, pinned by its
+   published SHA-256;
+4. and 5. RG-03's check also counts conditional, chained and in-body skips,
+   the same forms on `suite` and on any test object, and tests inverted with
+   `.fails`/`.failing`;
+6. and 7. the three root Vitest configurations need the owner's approval.
 
-**Left:**
-- green (the implementer is at work);
-- each drill run once against its real gate made to always pass;
-- reviews and the audit;
-- the records and the pull request.
+Evidence, all re-run by the main session rather than taken from a report:
+- **Red first,** in four rounds, each checked independently. The first had 68
+  failing tests of 1364, all INF-10.
+- **Green:** 1495 of 1495, with the whole suite and `gate:quick` passing.
+- **The ratchet was not lowered.** When the entry script `req-coverage.mjs`
+  dropped to 4/44 lines, its decisions moved into `requirements.mjs`, which is
+  tested in-process. D-060 raised the baseline for INF-10's own files only.
+- **Red when forced.** Each drill went red when its real gate was made to
+  always pass, and CI-06 proved detection with the real oasdiff.
+- **Reviews:** `code-reviewer`, `test-auditor` and `privacy-security-reviewer`
+  all passed. Every should-fix went into this pull request.
 
-The stop gate's `gate:static` fails in the meantime, on purpose. A red test
-imports `scripts/lib/gate-drills.mjs`, which the implementer is writing.
+**Open follow-ups:**
+- the live attempt at drills 6 and 8 (D-082). It needs an ID and the owner
+  watching; it is M0's last exit item ("gate drills pass");
+- `reviewCodeowners` ignores GitHub's last-match rule for CODEOWNERS, found
+  by `test-author`. This predates INF-10 and is a `/bugfix` candidate;
+- the drills and `gate.test.mjs` each hold copies of the workflow-reading
+  helpers. One tested reader should replace them (`code-reviewer`);
+- the drills do not carry a workflow's `env:` into the gates. A gate that
+  honoured an env toggle set in the workflow would get past them; none does
+  today;
+- when the test kit's phone-number builder lands, the drills' number should
+  come from it (`privacy-security-reviewer`).
 
 **The daily report becomes a dashboard (D-080, owner's decision 2026-09-26).**
 Each run replaces the pinned issue's description with the current state, like
