@@ -6,38 +6,63 @@
 // runs the file and asks whether oasdiff works.
 //
 // The rule that matters: the verdict cannot pass vacuously. A drill passes only
-// when it ran and every one of its tests passed. One with no test is missing,
-// not passed. The two drills only GitHub can enforce are never counted as
-// passed, whatever the file holds.
+// when its attempt passed and every other test of it passed too. One whose
+// attempt is not there is missing, not passed. The two drills only GitHub can
+// enforce are never counted as passed, whatever the file holds. And a run that
+// Vitest itself failed, or did not finish, is not trusted.
 
 /** The drill file, relative to the repository it runs in. */
 export const DRILL_FILE = 'scripts/drills.test.mjs';
 
 /**
  * The roadmap's nine drills, in its order (docs/plan/10-roadmap.md): the bad
- * change each tries, and the gate that must refuse it. A test belongs to the
- * drill whose ID its name puts in front of " drill". `live` drills only GitHub
- * can enforce: gate:integrity reads their rules, and a live attempt at them is
- * a later task, with the owner watching.
+ * change each tries, the criterion its attempt is named from, and the gate that
+ * must refuse it. A test belongs to the drill whose ID its name puts in front
+ * of " drill". `live` drills only GitHub can enforce: gate:integrity reads
+ * their rules, and a live attempt at them is a later task, with the owner
+ * watching.
  */
 const DRILLS = [
-  { id: 'RG-03', attempt: 'a skip added to a test in a pull request', gate: 'tests:changes' },
-  { id: 'CI-03', attempt: 'a failing test', gate: 'test:unit' },
-  { id: 'RG-01', attempt: 'a new acceptance criterion without a test', gate: 'req:coverage' },
+  {
+    id: 'RG-03',
+    change: 'a skip added to a test in a pull request',
+    attempt: 'INF-10-AC1',
+    gate: 'tests:changes',
+  },
+  { id: 'CI-03', change: 'a failing test', attempt: 'INF-10-AC2', gate: 'test:unit' },
+  {
+    id: 'RG-01',
+    change: 'a new acceptance criterion without a test',
+    attempt: 'INF-10-AC3',
+    gate: 'req:coverage',
+  },
   // Without oasdiff, api:diff can only refuse to pass unchecked: that is shown,
   // and finding the break is not.
-  { id: 'CI-06', attempt: 'a breaking API change', gate: 'api:diff', needsOasdiff: true },
-  { id: 'HK-02', attempt: 'implementer editing a test file', gate: 'guard-paths and guard-bash' },
-  { id: 'D-029', attempt: 'a push to main', live: true },
+  {
+    id: 'CI-06',
+    change: 'a breaking API change',
+    attempt: 'INF-10-AC4',
+    gate: 'api:diff',
+    needsOasdiff: true,
+  },
+  {
+    id: 'HK-02',
+    change: 'implementer editing a test file',
+    attempt: 'INF-10-AC5',
+    gate: 'guard-paths and guard-bash',
+  },
+  { id: 'D-029', change: 'a push to main', live: true },
   {
     id: 'HK-07',
-    attempt: 'a hard-coded secret or a real-looking phone number',
+    change: 'a hard-coded secret or a real-looking phone number',
+    attempt: 'INF-10-AC6',
     gate: 'scan-sensitive',
   },
-  { id: 'CODEOWNERS', attempt: 'a safety-path change without owner approval', live: true },
+  { id: 'CODEOWNERS', change: 'a safety-path change without owner approval', live: true },
   {
     id: 'CI-11',
-    attempt: 'a blocking AI review verdict',
+    change: 'a blocking AI review verdict',
+    attempt: 'INF-10-AC7',
     gate: '"Enforce the verdict" in ai-review.yml',
   },
 ];
@@ -59,13 +84,6 @@ const named = (results) => results.map((result) => `"${result.name}"`).join(', '
  * and, when it did not, why, for the verdict.
  */
 function outcome(drill, tests, oasdiff) {
-  if (tests.length === 0) {
-    return {
-      mark: '✗ missing',
-      passed: false,
-      why: `${drill.id}: missing — no test in ${DRILL_FILE} is named "${drill.id} drill"`,
-    };
-  }
   const failed = tests.filter((test) => test.status === 'failed');
   if (failed.length > 0) {
     return {
@@ -83,6 +101,15 @@ function outcome(drill, tests, oasdiff) {
       why: `${drill.id}: did not run — came back ${statuses}: ${named(idle)}`,
     };
   }
+  // The row stands on the attempt itself, not on whatever else of the drill
+  // passed. `INF-10-AC1:` is not `INF-10-AC10:`, hence the colon.
+  if (!tests.some((test) => test.title.startsWith(`${drill.attempt}:`))) {
+    return {
+      mark: '✗ missing',
+      passed: false,
+      why: `${drill.id}: missing — no passed test's own name starts with its attempt, ${drill.attempt}:`,
+    };
+  }
   if (drill.needsOasdiff && !oasdiff) {
     return { mark: `✓ ${FAIL_CLOSED}`, passed: true, why: '' };
   }
@@ -90,19 +117,76 @@ function outcome(drill, tests, oasdiff) {
 }
 
 /**
+ * The verdict line, or lines, and whether the run held. A run Vitest did not
+ * finish is not trusted, whatever results it left; nor is one it failed with
+ * every test passed.
+ */
+function verdictOf({ results, problems, oasdiff, status, signal }) {
+  if (signal) {
+    return {
+      held: false,
+      lines: [
+        `gate:drills: Vitest was stopped by ${signal} before it finished, as a timeout stops it, so the run is not trusted.`,
+      ],
+    };
+  }
+  if (results.length === 0) {
+    return {
+      held: false,
+      lines: [
+        `gate:drills: nothing ran, so nothing was checked. That is not a pass. ${DRILL_FILE} gave no results.`,
+      ],
+    };
+  }
+  if (problems.length > 0) {
+    return {
+      held: false,
+      lines: [
+        'gate:drills: FAILED. What did not hold:',
+        ...problems.map((problem) => `  ${problem}`),
+      ],
+    };
+  }
+  if (status !== 0) {
+    const exit =
+      typeof status === 'number' ? `exited with ${String(status)}` : 'gave no exit status';
+    return {
+      held: false,
+      lines: [
+        `gate:drills: Vitest ${exit} although every test passed, so the run is not trusted. Its own output says why.`,
+      ],
+    };
+  }
+  const offline = DRILLS.filter((drill) => drill.live !== true);
+  const failClosed = offline.filter((drill) => drill.needsOasdiff && !oasdiff).length;
+  return {
+    held: true,
+    lines: [
+      `gate:drills: ${String(offline.length - failClosed)} of ${String(offline.length)} offline drills blocked` +
+        (failClosed === 0
+          ? '.'
+          : `, and ${String(failClosed)} fail-closed only, for want of oasdiff here.`) +
+        ` The ${String(DRILLS.length - offline.length)} live ones are not run here (D-082).`,
+    ],
+  };
+}
+
+/**
  * The nine rows, in the roadmap's order, and the verdict: what the command
  * prints, and the exit code it ends with.
  *
- * @param {{ name: string, status: string }[]} results every test the drill file
- *   ran: its name in full, and its status as Vitest's JSON reporter gives it
- * @param {{ oasdiff: boolean }} tools whether oasdiff works on this machine,
- *   asked by running it
+ * @param {{ name: string, title: string, status: string }[]} results every test
+ *   the drill file ran: its name in full, its own name (`title`), and its status
+ *   as Vitest's JSON reporter gives them
+ * @param {{ oasdiff: boolean, status?: number | null, signal?: string | null }} run
+ *   whether oasdiff works on this machine, asked by running it; and Vitest's
+ *   exit status and the signal that stopped it, if one did
  * @returns {{ rows: { id: string, text: string, passed: boolean }[], exitCode: number, text: string }}
  */
-export function drillReport(results, { oasdiff }) {
+export function drillReport(results, { oasdiff, status, signal }) {
   const idWidth = Math.max(...DRILLS.map((drill) => drill.id.length));
-  const attemptWidth = Math.max(...DRILLS.map((drill) => drill.attempt.length));
-  const label = (drill) => `${drill.id.padEnd(idWidth)}  ${drill.attempt.padEnd(attemptWidth)}  `;
+  const changeWidth = Math.max(...DRILLS.map((drill) => drill.change.length));
+  const label = (drill) => `${drill.id.padEnd(idWidth)}  ${drill.change.padEnd(changeWidth)}  `;
 
   const problems = [];
   const rows = DRILLS.map((drill) => {
@@ -124,33 +208,14 @@ export function drillReport(results, { oasdiff }) {
     problems.push(`a test outside the drills came back ${other.status}: "${other.name}"`);
   }
 
-  const lines = [
+  const verdict = verdictOf({ results, problems, oasdiff, status, signal });
+  const text = [
     `Gate drills (INF-10): each is a bad change that its gate must refuse (${DRILL_FILE}).`,
     '',
     ...rows.map((row) => row.text),
     '',
-  ];
-  if (results.length === 0) {
-    lines.push(
-      `gate:drills: nothing ran, so nothing was checked. That is not a pass. ${DRILL_FILE} gave no results.`,
-    );
-  } else if (problems.length > 0) {
-    lines.push(
-      'gate:drills: FAILED. While a drill gets through, M0 is not done (INF-10):',
-      ...problems.map((problem) => `  ${problem}`),
-    );
-  } else {
-    const failClosed = offline.filter((drill) => drill.needsOasdiff && !oasdiff).length;
-    lines.push(
-      `gate:drills: ${String(offline.length - failClosed)} of ${String(offline.length)} offline drills blocked` +
-        (failClosed === 0
-          ? '.'
-          : `, and ${String(failClosed)} fail-closed only, for want of oasdiff here.`) +
-        ` The ${String(DRILLS.length - offline.length)} live ones are not run here (D-082).`,
-    );
-  }
-  lines.push('');
-
-  const exitCode = results.length > 0 && problems.length === 0 ? 0 : 1;
-  return { rows, exitCode, text: lines.join('\n') };
+    ...verdict.lines,
+    '',
+  ].join('\n');
+  return { rows, exitCode: verdict.held ? 0 : 1, text };
 }
