@@ -2263,3 +2263,68 @@ any other path is work, not a candidate for the same treatment.
     `gate:drills` report, CI's existing `unit` job, and no new required check.
     It is recorded in the spec's Approach and summarised here when INF-10 is
     done.
+
+## D-083 — CI runs on `ubuntu-26.04`, named, not on `ubuntu-latest`
+- **Date:** 2026-09-29 · **Status:** Accepted (owner asked; the label is
+  Claude's choice, D-031) · **Section:** 8
+- **Context:** GitHub announced that `ubuntu-latest` moves from Ubuntu 24.04 to
+  26.04 "over a period of several weeks beginning October 19, 2026", to be
+  complete "by November 19, 2026" (actions/runner-images#14748). The owner
+  asked to move first, so that we see the new image working before GitHub
+  moves us.
+- **Decision:**
+  1. **Every job in `ci.yml`, `deploy-staging.yml`, `infra-staging.yml` and
+     `daily-status.yml` runs on `ubuntu-26.04`.** That is 15 jobs.
+  2. **`ai-review.yml` stays on `ubuntu-latest` for now.** A change to it is
+     merged by hand (D-075). Putting it in this pull request would take the
+     reviewers off the other four files too. It moves in the next D-075
+     batch. Until then it follows GitHub's rollout.
+  3. **The next image is a pull request of its own**, made by hand, like the
+     oasdiff and gitleaks pins: Dependabot does not raise runner labels.
+- **Why a named image, not `ubuntu-latest`:**
+  - **GitHub's rollout is gradual.** For about a month some runs would get
+    24.04 and some 26.04. A red that comes and goes with the image reads as
+    a flaky test, and this repository treats "flake" as never a root cause.
+  - **A new image is then a change we make**, on a branch, with its CI to
+    show what broke. It is the same reason actions are pinned to a commit.
+  - **The pull request tests itself.** `ci.yml` is in `touchesApp` and is
+    not inert (`scripts/lib/affected.mjs`), so every `ci.yml` job does its
+    full work on the new image, `android-e2e` included.
+- **Checked before deciding (2026-09-29, in session):**
+  - runner-images' `README.md` lists `ubuntu-26.04` as GA, and
+    `ubuntu-latest` as still 24.04.
+  - `Ubuntu2604-Readme.md` (image 20260920.143.1) against
+    `Ubuntu2404-Readme.md`, for what the jobs rely on:
+    - **Android:** the same `ANDROID_HOME` (`/usr/local/lib/android/sdk`), the
+      same default NDK (27.3.13750724) and the same platforms, `android-37.2`
+      among them. The command-line tools are 20.0 where 24.04 has 12.0.
+      `android-e2e` still puts its own pinned, hash-checked 20.0 in
+      `cmdline-tools/latest`, so the image's version does not matter.
+    - **Java:** the default is 25, where 24.04's is 17. `android-e2e` sets 17
+      itself with `actions/setup-java`.
+    - **Node:** the default is 24.21.0. Every job sets its own from `.nvmrc`.
+    - **Docker:** 29.4.2, where 24.04 has 28.0.4. `test:integration` reaches
+      it through testcontainers 12.1.0.
+    - **Swift is gone.** `android-e2e`'s clean-up step deletes it with
+      `rm -rf`, which does not fail on a missing path. .NET, Haskell and
+      CodeQL, which it also deletes, are still there.
+    - **Kernel:** 7.0, where 24.04 has 6.17.
+- **Not verified yet:**
+  - **The CI run itself.** It is the real test, and its result is recorded
+    below when it is known.
+  - **Three workflows cannot run from a pull request.** `deploy-staging` runs
+    on a push to `main`, so this pull request's merge is its first run on
+    26.04. `daily-status` runs the morning after. `infra-staging` runs when
+    the owner next starts a `plan`.
+- **Consequences:**
+  - The way back, if 26.04 breaks something that cannot be fixed at once, is
+    `ubuntu-24.04` in the same lines. That label keeps working after the
+    rollout. It is not `ubuntu-latest`, which by then is 26.04 anyway.
+  - The Gradle and emulator caches are keyed without the image, so what
+    24.04 saved is restored on 26.04. Gradle's cache is only Java files. If
+    the flows step shows the emulator failing to load its snapshot, the
+    emulator cache key needs the image in it.
+  - The fake runner in `scripts/gate.test.mjs` is written from 24.04's
+    layout. Its Android paths are the same on 26.04, by the readme. Its home,
+    tool-cache and `PATH` folders are not in either readme, so they were not
+    checked; `android-e2e` passing on 26.04 is what shows they still hold.

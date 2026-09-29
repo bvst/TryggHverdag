@@ -22,7 +22,7 @@ export const CLEVER_TOOLS_VERSION = '5.0.2';
 export const CLEVER_TOOLS_SHA256 =
   '01fb1260bd9cdfe0e392e4e0494466f4e6a6e83907aec3c1f07757efd08cb3ed';
 
-/** Linux on x64 only: the tool runs in deploy-staging.yml, on ubuntu-latest, and nowhere else. */
+/** Linux on x64 only: the tool runs in deploy-staging.yml, on ubuntu-26.04, and nowhere else. */
 export function cleverToolsUrl() {
   return `https://github.com/CleverCloud/clever-tools/releases/download/${CLEVER_TOOLS_VERSION}/clever-tools-${CLEVER_TOOLS_VERSION}_linux.tar.gz`;
 }

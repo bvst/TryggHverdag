@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-09-28 · **Milestone:** M0 (foundations)
+**Last updated:** 2026-09-29 · **Milestone:** M0 (foundations)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md).
@@ -210,6 +210,15 @@ The things that still bite, and cost a session hours the first time.
   fails on the branch.
 
 ## In flight
+
+**D-083: CI moves to `ubuntu-26.04` before GitHub moves `ubuntu-latest`**
+(branch `claude/busy-faraday-40n2zl`). GitHub moves `ubuntu-latest` to 26.04
+between 19 October and 19 November 2026. Every job in `ci.yml`,
+`deploy-staging.yml`, `infra-staging.yml` and `daily-status.yml` now names
+`ubuntu-26.04`, so the pull request's own CI is the test. `ai-review.yml` stays
+on `ubuntu-latest` until the next D-075 batch. Not verified until after merge:
+`deploy-staging` (the merge is its first run), `daily-status` (the next
+morning) and `infra-staging` (the owner's next `plan`).
 
 **BUG-7: a moved file was invisible under the path it left** (branch
 `fix/BUG-7-renames-invisible`). Every gate that works from the changed files

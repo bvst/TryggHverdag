@@ -33,7 +33,7 @@ permissions:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # A deploy on a nano instance builds on a separate build instance, then
     # starts, then the smoke test waits up to five minutes for a heartbeat.
     timeout-minutes: 25
