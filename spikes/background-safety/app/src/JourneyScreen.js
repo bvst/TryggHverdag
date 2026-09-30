@@ -49,7 +49,9 @@ export function JourneyScreen({ state, problem, received, delivered, callResult,
       <Text testID="delivered">
         {delivered.length === 0
           ? '-'
-          : delivered.map((item) => `${item.deliveredAt} ${item.id} ${item.title}`).join('\n')}
+          : delivered
+              .map((item) => `${new Date(item.deliveredAt).toISOString()} ${item.id} ${item.title}`)
+              .join('\n')}
       </Text>
 
       <Text style={styles.heading}>Map (S8)</Text>

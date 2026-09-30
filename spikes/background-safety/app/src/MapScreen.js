@@ -3,21 +3,21 @@
 // from anyone; the only source is Kartverket. There is no user-location layer,
 // and the screen is never opened during S1 to S7.
 import { Camera, Map } from '@maplibre/maplibre-react-native';
-import { useState } from 'react';
-import { Button, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Button, PixelRatio, StyleSheet, Text, View } from 'react-native';
 
+import { EVIDENCE, record } from './evidence';
 import fixed from './fixed.json';
 
 /** Galdhøpiggen, Norway's highest mountain: a public landmark where nobody lives. [lng, lat] */
 const GALDHOPIGGEN = [8.3125, 61.6364];
 /**
- * Map zoom levels. Each view lies inside Norway. The tiles are 256 px, and
- * MapLibre Native sizes its world at 512 px per tile, so it should fetch one
- * level deeper: 10, 14 and 18, where 18 is the deepest level of Kartverket's
- * webmercator set. That is reasoned from MapLibre's tile-cover rule, not yet
- * observed: S8's run is where it is checked.
+ * Map zoom levels. Each view lies inside Norway. 18 is the deepest level of
+ * Kartverket's webmercator set: at map zoom 18 MapLibre draws level-18 tiles
+ * whether it fetches one level deeper for 256 px tiles (then it overzooms 18,
+ * the source's maxzoom) or not. The other two are 10 and 14.
  */
-export const ZOOMS = [9, 13, 17];
+export const ZOOMS = [10, 14, 18];
 
 const hex = (rgb) => `#${rgb.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
 
@@ -44,6 +44,8 @@ export function MapScreen({ onBack }) {
   const [zoom, setZoom] = useState(ZOOMS[0]);
   const [rendered, setRendered] = useState(null);
   const [failed, setFailed] = useState(false);
+  const frame = useRef(null);
+  const mapView = useRef(null);
   const show = (next) => {
     setRendered(null);
     setFailed(false);
@@ -52,6 +54,24 @@ export function MapScreen({ onBack }) {
   let status = `loading zoom ${zoom}`;
   if (failed) status = `failed zoom ${zoom}`;
   else if (rendered === zoom) status = `rendered zoom ${zoom}`;
+
+  // For the S8 driver: the status, and the map's frame in screen pixels, so it
+  // crops its screenshot to the map without reading the screen.
+  useEffect(() => {
+    record(EVIDENCE.map, { status, zoom, frame: frame.current });
+  }, [status, zoom]);
+  const measure = () =>
+    mapView.current?.measureInWindow((x, y, width, height) => {
+      const scale = PixelRatio.get();
+      frame.current = {
+        x: Math.round(x * scale),
+        y: Math.round(y * scale),
+        width: Math.round(width * scale),
+        height: Math.round(height * scale),
+      };
+      record(EVIDENCE.map, { status, zoom, frame: frame.current });
+    });
+
   return (
     <View style={styles.screen}>
       <View style={styles.bar}>
@@ -66,7 +86,7 @@ export function MapScreen({ onBack }) {
         ))}
       </View>
       <Text testID="map-status">{status}</Text>
-      <View testID="map" style={styles.map}>
+      <View testID="map" ref={mapView} style={styles.map} onLayout={measure}>
         <Map
           key={zoom}
           style={styles.map}

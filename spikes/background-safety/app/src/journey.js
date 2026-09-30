@@ -10,6 +10,7 @@ import BackgroundGeolocation, {
   LogLevel,
 } from 'react-native-background-geolocation';
 
+import { EVIDENCE, record } from './evidence';
 import fixed from './fixed.json';
 
 /**
@@ -208,9 +209,23 @@ export async function onHeartbeat() {
   }
 }
 
+/**
+ * S4's independent record of what the SDK holds: the IDs of the records still
+ * in its queue, read from the SDK's own store and written to a local file (no
+ * network, no position). Refreshed on each recorded location and each upload
+ * result, so when the device goes back online the file shows the queue as of
+ * the last event before it.
+ */
+export async function snapshotHeld() {
+  const records = await BackgroundGeolocation.getLocations();
+  const ids = records.map((location) => location.uuid).filter((id) => typeof id === 'string');
+  const failed = record(EVIDENCE.held, { ids, count: ids.length });
+  if (failed !== null) note(`held snapshot not written (${failed})`);
+}
+
 function onLocation() {
   changed({ locations: live.locations + 1 });
-  return moveReminder();
+  return Promise.all([moveReminder(), snapshotHeld()]);
 }
 
 function onHttp(event) {
@@ -219,7 +234,7 @@ function onHttp(event) {
     uploadsOk: live.uploadsOk + (event.success ? 1 : 0),
     uploadsFailed: live.uploadsFailed + (event.success ? 0 : 1),
   });
-  return refreshStatus();
+  return Promise.all([refreshStatus(), snapshotHeld()]);
 }
 
 function onProviderChange(provider) {
@@ -328,9 +343,9 @@ export async function headlessTask({ name, params }) {
     case 'heartbeat':
       return onHeartbeat();
     case 'location':
-      return moveReminder();
+      return Promise.all([moveReminder(), snapshotHeld()]);
     case 'http':
-      return refreshStatus();
+      return Promise.all([refreshStatus(), snapshotHeld()]);
     case 'providerchange':
       return refreshStatus({ provider: params });
     default:
