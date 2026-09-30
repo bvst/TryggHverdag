@@ -107,11 +107,21 @@ DISABLE_EAS_ANALYTICS=1 EXPO_NO_TELEMETRY=1 EXPO_TOKEN="$(cat ~/.config/trygghve
   (`TSLOCATIONMANAGER_VERSION=4.7.1`; the podspec's default is a range), asks
   React Native to bundle for the simulator (`FORCE_BUNDLING=1`), and turns
   Expo's telemetry off. It also pins Node 22.23.2 and pnpm 10.33.0.
-- **Bundled JavaScript on iOS** also needs `app/plugins/with-spike-ios-bundling.js`.
-  Expo's bundling build phase sets `SKIP_BUNDLING=1` in every Debug build, and
-  React Native checks that before `FORCE_BUNDLING`. The plugin replaces that
-  one line at prebuild, and throws if the template no longer has it exactly
-  once.
+- **Bundled JavaScript on iOS** also needs `app/plugins/with-spike-ios-bundling.js`,
+  because the native build stays Debug (what the SDK's licence lets run without
+  a key) and the bundle must still be a production one, as on Android. It makes
+  two edits to Expo's bundling build phase at prebuild:
+  - Expo sets `SKIP_BUNDLING=1` in every Debug build, and React Native checks
+    that before anything else. That line becomes an unset.
+  - React Native builds a development bundle for Debug, and Expo SDK 57 refuses
+    to start one that Metro did not serve ("Cannot create devtools websocket
+    connections in embedded environments"). So `react-native-xcode.sh` runs
+    with `CONFIGURATION=Release` in its own environment only. It then bundles
+    with `--dev false --minify false` and compiles with `hermesc -O`, to the
+    same paths; the rest of the build stays Debug.
+
+  Each edit throws at prebuild unless its text is found exactly once.
+  `FORCE_BUNDLING=1` is no longer reached, and is kept as it is harmless.
 - **`app/pnpm-workspace.yaml`** makes the app its own pnpm workspace root.
   Without it, a plain `pnpm install` in `app/`, which is what EAS runs, finds
   the repository's workspace further up, installs that instead, and never
