@@ -976,8 +976,8 @@ confidence** about F1 to F6.
 ## Questions for the owner
 
 None open now. Q1, Q2 and Q3 were asked and answered, and are kept below as
-the record. One more question is asked later, with the go/no-go. The vendor's
-answer on high-risk use (Q3) is awaited.
+the record. One more question is asked later, with the go/no-go. The vendor answered
+Q3 on 2026-09-30, and its licence now permits safety apps.
 
 ### Answered
 
@@ -1102,6 +1102,28 @@ vendor answers; (c) treat it as NO-GO now and move to D-023's fallback. The
 recommendation was (a). The terms allow the evaluation, the vendor's answer
 takes days, and the receiver, the analysis, S5, S6 and S8 are needed whatever
 the answer. The owner writes to the vendor at the notice address in its 14.5.
+
+**The vendor's answer (2026-09-30).** The vendor replied that it had not been
+aware of the clause and would change it, and that the licence was already
+updated. Checked the same evening: the licence page read at 19:21 differs from
+the 14:10 copy in two places only.
+- **9.5 is now "Safety-related applications":** "Licensee may use the Software
+  in Applications intended to help keep people safe, such as personal-safety,
+  lone-worker, family location-sharing and check-in Applications." It also
+  says the Software "is not designed, tested or certified as a safety-critical
+  system", and that the Licensee is solely responsible "for designing the
+  Application to allow for delayed, missing or inaccurate location data, and
+  for anything the Application tells End Users about its reliability or about
+  how to obtain emergency assistance".
+- **The summary gained a line:** "Safety apps are welcome, including
+  personal-safety, lone-worker and family location-sharing apps."
+
+So the prohibition that concerned go/no-go item 7 is gone. What remains are two
+duties that match the plan: fail loudly when locations are late or missing, and
+say nothing in the app that overstates its reliability. Both versions are kept,
+dated and with checksums, outside the repository (`~/spike-runs/licence/`), for
+the results. The terms can change again, so the go/no-go decision quotes the
+version read at the time.
 
 ### Asked with the go/no-go, not now
 
