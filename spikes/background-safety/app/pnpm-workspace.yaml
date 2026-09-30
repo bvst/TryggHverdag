@@ -1,0 +1,8 @@
+# SPIKE-01: this file makes the spike app its own pnpm workspace root.
+#
+# Without it, a plain `pnpm install` here (as EAS's build machines run it) finds
+# the repository's pnpm-workspace.yaml further up, installs the repository's
+# workspace instead, and never reads this app's own lockfile. The app is not a
+# member of that workspace, and must never become one (SPIKE-01-AC1).
+packages:
+  - .

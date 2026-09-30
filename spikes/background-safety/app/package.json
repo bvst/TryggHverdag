@@ -18,7 +18,8 @@
     "react-native-background-geolocation": "5.7.0"
   },
   "devDependencies": {
-    "@babel/core": "7.29.7"
+    "@babel/core": "7.29.7",
+    "eas-cli": "24.8.0"
   },
   "pnpm": {
     "overrides": {

@@ -10,6 +10,10 @@ const APP_ID = 'org.example.spike.backgroundsafety';
 const config: ExpoConfig = {
   name: 'SPIKE-01',
   slug: 'spike-background-safety',
+  // The Expo account and project that build the iOS simulator app on EAS
+  // (spec, Q2). Neither is a secret.
+  owner: 'urso-as',
+  extra: { eas: { projectId: '87782d47-6415-4076-9bee-351fbf42ab74' } },
   version: '0.0.0',
   orientation: 'portrait',
   platforms: ['android', 'ios'],
