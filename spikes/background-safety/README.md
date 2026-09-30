@@ -140,8 +140,57 @@ cleanly. The emulator reaches it as `10.0.2.2`; the simulator as `127.0.0.1`.
 
 ## Running the scenarios
 
-To come. Before each run, clear the app's data (`pm clear`): positions the SDK
-could not upload stay queued, and would arrive in the next run.
+One driver per scenario and platform, in `drivers/`. From this folder:
+
+```sh
+node drivers/s1-android.mjs [--tcpdump] [--dry]
+node drivers/s2-android.mjs --case swipe|lmk|forcestop [--dry]
+node drivers/s3-android.mjs --case exempt|not-exempt [--dry]
+node drivers/s4-android.mjs [--dry]
+node drivers/s5-android.mjs [--dry]
+node drivers/s6-android.mjs --case without|with [--dry]
+node drivers/s7-android.mjs --case background|fine [--dry]
+node drivers/s8-android.mjs [--tcpdump] [--dry]
+node drivers/s1-ios.mjs | s2-ios.mjs | s4-ios.mjs | s5-ios.mjs | s8-ios.mjs [--dry]
+node drivers/s7-ios.mjs --case always-to-inuse [--dry]
+```
+
+- **Before running:** Colima stopped; the Android build at
+  `~/spike-runs/builds/android-app-debug.apk` and the iOS build at
+  `~/spike-runs/builds/ios/SPIKE01.app` (each with its `*-build.json`). Run one
+  driver at a time: each starts the receiver on the fixed port. Nothing else
+  may use the emulator or the simulator meanwhile.
+- **What a driver does:** it opens `~/spike-runs/<run-id>/`, holds a
+  `caffeinate`, and starts the receiver in its own process. It resets every
+  forced state, installs the app fresh (its data cleared) with its grants, and
+  replays the route on the Mac's clock. It posts the marks the judges read,
+  then collects the platform's records, `pmset -g log` and `meta.json`, and
+  resets everything again. It never prints a position.
+- **`--dry`:** a short, uncounted run, whose run id starts with `dry-`. It is
+  for checking the harness and collecting sample outputs, never for a verdict.
+- **The drivers only act and collect.** Every verdict comes from `analysis/`.
+  The Maestro flows in `drivers/maestro/` only tap and wait. The drivers launch
+  the app with simctl, because Maestro's `launchApp` would grant every
+  permission itself.
+
+**What the harness had to learn (2026-09-30), and does:**
+
+- **Android, the swipe:** `input swipe` does not dismiss a card in this
+  launcher's recent apps, and a drag of separate touch events does. The driver
+  checks that the task is gone, and fails if it is not.
+- **Android, the network capture (AC12):** the emulator's `-tcpdump` sees
+  only `eth0`, and with Wi-Fi on the app's traffic leaves through `wlan0`. So
+  `--tcpdump` runs go without Wi-Fi, and `meta.json` says so.
+- **Android, the restricted standby bucket (S3):** Android re-promotes a
+  journeying app from `restricted` (45) to 10 or 30 within a second. The
+  driver records the bucket actually in force.
+- **Android, S6:** the console's `gsm list` never lists a call on this image,
+  so calls are read from `dumpsys telecom`.
+- **iOS, the route:** stepping `simctl location set` every 10 s is a moving
+  replay the SDK follows. A position that stays still, as at the route's stop,
+  gives it nothing new.
+- **iOS, the lock:** simctl cannot lock the simulator, and this simulator has
+  no window, so S1 on iOS runs in the background, unlocked.
 
 ## Settings used (for M3)
 
