@@ -1,6 +1,6 @@
 ---
 name: coverage-and-guard-quirks
-description: Updating coverage-baseline.json when a baseline test is red needs a one-off --coverage.reportOnFailure run; guard-bash reads `=>` or `>` near a *.test.* path as a write, blocks any `.env` text, and the implementer cannot Write to the scratchpad; e2e-android AC9 "still waiting after 4 s" fails intermittently under load
+description: Updating coverage-baseline.json when a baseline test is red needs a one-off --coverage.reportOnFailure run; `prettier --check .gitignore` always errors (no parser); guard-bash reads `=>` or `>` near a *.test.* path as a write, blocks any `.env` text, and the implementer cannot Write to the scratchpad; e2e-android AC9 "still waiting after 4 s" fails intermittently under load
 metadata:
   type: project
 ---
@@ -14,6 +14,8 @@ Tooling quirks met in INF-06 and BUG-6 (2026-09-25 to 2026-09-28):
 
 4. **A wall-clock test that fails under load.** `scripts/e2e-android.test.mjs` "INF-06-AC9: without the tests' shorter deadline, it is still waiting for bokmål after 4 s" kills the script at 4 s and expects at least one locale read by then. On 2026-09-28 it failed once in the stop gate's full run (1-minute load average 4.66), with output stopping at "Using Java 17.". It also failed on the first of 13 isolated runs on the branch, then passed 12 times, and passed 8 of 8 on a main worktree. gate:quick then passed on rerun. A BUG-6 ci.yml-only change could not reach it, since neither the script nor that test reads ci.yml. Before blaming your change, check whether your diff can reach the test's code path, then rerun it on its own and on main. Report it as intermittent rather than retrying quietly; if it recurs, raise it with test-author.
 
-**Why:** all four cost a retry before the cause was clear.
+5. **`prettier --check .gitignore` always errors** ("No parser could be inferred"), exit 2, whatever the file holds. A brief that asks for `prettier --check spikes/ .gitignore` (SPIKE-01, 2026-09-30) cannot go green as written. Check the code paths by name and let `gate:static`'s `prettier --check .` stand for the rest, since it skips files it has no parser for. Say so in the hand-off rather than dropping the check quietly.
+
+**Why:** all five cost a retry before the cause was clear.
 
 **How to apply:** when a baseline or guard error looks impossible, check these first. Neither is a reason to edit a test or a hook. Related: [[red-phase-typed-lint]].
