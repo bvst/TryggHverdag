@@ -30,11 +30,16 @@ export const minutes = (count) => count * MINUTE;
 export const seconds = (count) => count * 1000;
 export const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
+/** A run id the runner chose (--run-id), which openRun then uses. */
+let requestedRunId = null;
+const RUN_ID = /^[A-Za-z0-9-]{1,64}$/;
+
 /**
  * The command line every driver takes:
  *   --dry        a short, uncounted run (its run id starts with "dry-")
  *   --case NAME  the case, for scenarios that have more than one
  *   --tcpdump    Android only: boot the emulator with a network capture (AC12, AC16)
+ *   --run-id ID  the run's id and directory name, as the runner chooses it
  */
 export function readArguments({ cases = [] } = {}) {
   const { values } = parseArgs({
@@ -42,12 +47,18 @@ export function readArguments({ cases = [] } = {}) {
       dry: { type: 'boolean', default: false },
       case: { type: 'string' },
       tcpdump: { type: 'boolean', default: false },
+      'run-id': { type: 'string' },
     },
   });
   if (cases.length > 0 && !cases.includes(values.case)) {
     throw new Error(`--case must be one of: ${cases.join(', ')}`);
   }
   if (cases.length === 0 && values.case !== undefined) throw new Error('this driver has no cases');
+  if (values['run-id'] !== undefined) {
+    if (!RUN_ID.test(values['run-id']))
+      throw new Error('--run-id: letters, digits and hyphens only');
+    requestedRunId = values['run-id'];
+  }
   return { dry: values.dry, runCase: values.case ?? null, tcpdump: values.tcpdump };
 }
 
@@ -67,10 +78,11 @@ function digest(path) {
  * receiver on loopback. Returns the run's handle.
  */
 export async function openRun({ scenario, platform, runCase = null, dry = false, build }) {
-  const runId = [dry ? 'dry' : null, scenario, platform, runCase, stamp()]
-    .filter(Boolean)
-    .join('-');
+  const runId =
+    requestedRunId ??
+    [dry ? 'dry' : null, scenario, platform, runCase, stamp()].filter(Boolean).join('-');
   const dir = join(RUNS, runId);
+  if (existsSync(dir)) throw new Error(`the run directory ${runId} exists already`);
   mkdirSync(dir, { recursive: true });
   const logFile = join(dir, 'driver.jsonl');
   const log = (step, detail = {}) => {
@@ -157,6 +169,9 @@ export async function openRun({ scenario, platform, runCase = null, dry = false,
           receiver.kill('SIGINT');
         });
       }
+      // pmset's log gives whole seconds: a log read in the same second as
+      // endedAt could look read before the run ended, and be refused.
+      await sleep(1500);
       try {
         writeFileSync(
           join(dir, 'pmset.txt'),
