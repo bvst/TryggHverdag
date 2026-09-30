@@ -1,0 +1,80 @@
+// SPIKE-01: what the scenario verdicts share. Pure functions over the
+// receiver's records (arrivals, ticks and marks); no clock, no I/O.
+//
+// Every duration is measured on `mono`, the receiver's monotonic clock, so a
+// wall-clock correction mid-run can neither create nor hide a gap.
+
+/** The receiver writes a tick every 10 s. A longer silence than this means it stopped. */
+export const TICK_HOLE_MS = 15_000;
+
+/** No two consecutive arrivals may be further apart than this (S1, S2, S3). */
+export const GAP_LIMIT_MS = 120_000;
+
+/** The record of the driver's mark `label`. Throws if the run has none. */
+export function findMark(records, label) {
+  const mark = records.find((record) => record.kind === 'mark' && record.label === label);
+  if (mark === undefined) {
+    throw new Error(`the run has no "${label}" mark, so it cannot be judged`);
+  }
+  return mark;
+}
+
+/** The journey's window: from its "journey-started" mark to its "journey-ended" mark. */
+export function journeyWindow(records) {
+  if (!Array.isArray(records)) throw new Error('records must be the list the receiver wrote');
+  const start = findMark(records, 'journey-started');
+  const end = findMark(records, 'journey-ended');
+  if (end.mono < start.mono) {
+    throw new Error('the "journey-ended" mark comes before the "journey-started" mark');
+  }
+  return { start, end };
+}
+
+/** Whether `record` falls inside the window, both ends included. */
+export const inWindow = (record, { start, end }) =>
+  record.mono >= start.mono && record.mono <= end.mono;
+
+/** The arrivals inside the window, in the order the receiver wrote them. */
+export const arrivalsIn = (records, window) =>
+  records.filter((record) => record.kind === 'arrival' && inWindow(record, window));
+
+/** Each silence between start, the arrivals and end, in ms. Never empty. */
+export function gapsBetween(arrivals, { start, end }) {
+  const times = [start.mono, ...arrivals.map((arrival) => arrival.mono), end.mono];
+  return times.slice(1).map((time, i) => time - times[i]);
+}
+
+/** "12 min 5 s", for evidence and findings. */
+export function duration(ms) {
+  const seconds = Math.round(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes === 0) return `${rest} s`;
+  return rest === 0 ? `${minutes} min` : `${minutes} min ${rest} s`;
+}
+
+/**
+ * Why the harness, not the device, may have decided the run: the breaks the
+ * driver saw, kept word for word, and every hole in the receiver's ticks inside
+ * the window. An empty list means the run is valid.
+ */
+export function harnessEvidence(records, window, breaks = []) {
+  if (!Array.isArray(breaks) || breaks.some((line) => typeof line !== 'string' || line === '')) {
+    throw new Error('breaks must be a list of non-empty descriptions');
+  }
+  const ticks = records
+    .filter((record) => record.kind === 'tick' && inWindow(record, window))
+    .map((tick) => tick.mono);
+  const times = [window.start.mono, ...ticks, window.end.mono];
+  const holes = [];
+  for (let i = 1; i < times.length; i++) {
+    const silence = times[i] - times[i - 1];
+    if (silence > TICK_HOLE_MS) {
+      const from = duration(times[i - 1] - window.start.mono);
+      holes.push(
+        `the receiver wrote no tick for ${duration(silence)}, from ${from} into the journey`,
+      );
+    }
+  }
+  return [...breaks, ...holes];
+}
