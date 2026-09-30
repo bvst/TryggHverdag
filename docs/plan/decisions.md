@@ -2472,3 +2472,14 @@ any other path is work, not a candidate for the same treatment.
     back, so its wait is still proven by its tests and not by a run.
   - **`ai-review.yml` still names `ubuntu-latest`.** It moves in its own
     hand-merged pull request (D-075), which has not been opened yet.
+- **Update 2026-09-30, later:**
+  - **`daily-status` on 26.04: verified.** Its scheduled run for `0637482`
+    (06:34 UTC) succeeded, both jobs, `report` and `post`, on
+    `ubuntu-26.04`. Only `infra-staging` is left, on the owner's next
+    `plan`.
+  - **`ai-review.yml` moves to `ubuntu-26.04`** in a D-075 batch, merged by
+    hand, together with the three Dependabot bumps that also edit it (the
+    owner's choice): `actions/setup-node` 7.0.0, `actions/checkout` 7.0.1 and
+    `anthropics/claude-code-action` 1.0.235, in all five workflows. Each
+    commit was checked against its release tag with `git ls-remote` before
+    it went in. #4, #5 and #36 close when the batch merges.

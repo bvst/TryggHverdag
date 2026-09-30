@@ -282,13 +282,13 @@ follows** ([`specs/SPIKE-01.md`](specs/SPIKE-01.md), commit `27873bf` on
 **D-085's loose ends** (the pull request merged, [#43](https://github.com/bvst/TryggHverdag/pull/43)).
 - **Verified:** `deploy-staging` on `ubuntu-26.04`. Run 36621209842, for
   `0637482`, succeeded, and so did its Deploy step and its smoke test.
-- **Not verified yet:**
-  - `daily-status`: its first 26.04 run is the morning's. At 05:47 UTC on
-    2026-09-30 it had not started, and the last three started at 06:29 to 06:46;
-  - `infra-staging`: the owner's next `plan`.
-- **`ai-review.yml` still names `ubuntu-latest`.** GitHub moves that label to
-  26.04 between 19 October and 19 November 2026. The change is a pull request of
-  its own, merged by hand (D-075), and it has not been opened.
+- **Verified:** `daily-status` on `ubuntu-26.04`, 2026-09-30 06:34 UTC, both
+  jobs.
+- **Not verified yet:** `infra-staging`, on the owner's next `plan`.
+- **The D-075 batch is in flight** (branch `claude/busy-faraday-40n2zl`):
+  `ai-review.yml` on `ubuntu-26.04`, and the three Dependabot bumps that also
+  edit it (setup-node 7.0.0, checkout 7.0.1, claude-code-action 1.0.235) in
+  all five workflows. It is merged by hand; #4, #5 and #36 close with it.
 - **On 26.04, `android-e2e`'s install was refused on attempt 1 in 3 of 6
   runs:** BUG-9's session error once, run 8's `NullPointerException` twice. The
   wait got past the NPE both times. BUG-9's own signature has not come back.
