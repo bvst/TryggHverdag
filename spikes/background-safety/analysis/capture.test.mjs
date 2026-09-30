@@ -313,3 +313,127 @@ test('SPIKE-01-AC16: a map capture that cannot be read, or no Kartverket host to
   await refuses(listDestinations({ ...ok, kartverket: undefined }), 'no Kartverket host given');
   await refuses(listDestinations({ ...ok, kartverket: [] }), 'an empty list of Kartverket hosts');
 });
+
+// The dry S1 capture (android-37.2, Wi-Fi off, 2026-09-30) failed on four
+// destinations nobody had placed, all of them the platform's or the harness's:
+// DNS over TLS to the emulator's resolver (port 853), the debug build probing
+// the Mac for Metro (port 8081), and the emulator SIM's carrier entitlement
+// service, named by the capture's own DNS as ts43.eas3.msg.t-mobile.com. The
+// lines keep that capture's format; the carrier's addresses are replaced with
+// documentation ones, since the rule goes by the name, never the address.
+
+const ENTITLEMENT = 'ts43.eas3.msg.t-mobile.com';
+
+/** The dry run's four "unknown" destinations, in the capture's own lines. */
+const DRY_RUN = [
+  '21:00:10.000000 IP 10.0.2.15.45074 > 10.0.2.3.853: Flags [S], seq 1080971292, win 65448, options [mss 1212,sackOK,TS val 1496964593 ecr 0,nop,wscale 7,tfo  cookiereq,nop,nop], length 0',
+  '21:00:10.001000 IP 10.0.2.3.853 > 10.0.2.15.45074: Flags [R.], seq 0, ack 1080971293, win 0, length 0',
+  `21:00:11.000000 IP 10.0.2.15.12656 > 10.0.2.3.53: 19576+ AAAA? ${ENTITLEMENT}. (44)`,
+  `21:00:11.000100 IP 10.0.2.15.17569 > 10.0.2.3.53: 10978+ A? ${ENTITLEMENT}. (44)`,
+  '21:00:11.180000 IP 10.0.2.3.53 > 10.0.2.15.12656: 19576 1/0/0 AAAA 2001:db8::98 (72)',
+  '21:00:11.200000 IP 10.0.2.3.53 > 10.0.2.15.17569: 10978 1/0/0 A 198.51.100.98 (60)',
+  '21:00:11.220000 IP 10.0.2.15.58018 > 198.51.100.98.443: Flags [S], seq 3863964492, win 65535, options [mss 1460,sackOK,TS val 233846138 ecr 0,nop,wscale 9], length 0',
+  '21:00:11.380000 IP 198.51.100.98.443 > 10.0.2.15.58018: Flags [S.], seq 256001, ack 3863964493, win 8192, options [mss 1460], length 0',
+  '21:00:12.000000 IP 10.0.2.15.39070 > 10.0.2.2.8081: Flags [S], seq 665417719, win 65535, options [mss 1460,sackOK,TS val 3436156711 ecr 0,nop,wscale 9], length 0',
+  '21:00:12.000200 IP 10.0.2.2.8081 > 10.0.2.15.39070: Flags [R.], seq 0, ack 665417720, win 0, length 0',
+  `21:04:00.000000 IP 10.0.2.15.45254 > 10.0.2.3.53: 53912+ A? ${ENTITLEMENT}. (44)`,
+  '21:04:00.020000 IP 10.0.2.3.53 > 10.0.2.15.45254: 53912 1/0/0 A 198.51.100.122 (60)',
+  '21:04:00.040000 IP 10.0.2.15.48366 > 198.51.100.122.443: Flags [S], seq 1035259364, win 65535, options [mss 1460,sackOK,TS val 3940744971 ecr 0,nop,wscale 9], length 0',
+];
+
+/** The owner of the destination at `address` and `port`. */
+const ownerAt = (result, address, port) =>
+  result.destinations.find((d) => d.address === address && d.port === port)?.owner;
+
+test("SPIKE-01-AC12: the emulator's resolver is DNS on any port: DNS over TLS on 853 as much as 53", async () => {
+  const result = await judgeCapture({ text: text(...DRY_RUN), ...NETWORK });
+  assert.equal(ownerAt(result, '10.0.2.3', 853), 'dns');
+  assert.equal(ownerAt(result, '10.0.2.3', 53), 'dns');
+});
+
+test("SPIKE-01-AC12: the Mac's address on a port other than the receiver's is the harness's, listed and never unknown, and the receiver stays the receiver", async () => {
+  const result = await judgeCapture({ text: text(...DRY_RUN), ...NETWORK });
+  assert.equal(ownerAt(result, '10.0.2.2', 8081), 'harness', "Metro's port on the Mac");
+  assert.equal(ownerAt(result, '10.0.2.2', 8787), 'receiver');
+});
+
+test("SPIKE-01-AC12: the emulator SIM's carrier entitlement host is the platform's, by the name the capture's DNS gives it", async () => {
+  const result = await judgeCapture({ text: text(...DRY_RUN), ...NETWORK });
+  for (const address of ['198.51.100.98', '198.51.100.122']) {
+    const destination = result.destinations.find((d) => d.address === address);
+    assert.deepEqual(destination?.names, [ENTITLEMENT], address);
+    assert.equal(destination?.owner, 'platform', address);
+  }
+});
+
+test("SPIKE-01-AC12: with the resolver, the harness and the carrier placed, the dry run's capture passes: nothing unknown, nothing flagged", async () => {
+  const result = await judgeCapture({ text: text(...DRY_RUN), ...NETWORK });
+  assert.deepEqual(result.problems, []);
+  assert.deepEqual(result.flagged, []);
+  assert.equal(result.status, 'passed');
+  assert.ok(
+    result.destinations.every((d) => d.owner !== 'unknown'),
+    'a destination is still unknown',
+  );
+});
+
+test("SPIKE-01-AC12: the carrier rule goes by the name alone: the carrier's address with no name, or a name that only looks like the carrier's, stays unknown", async () => {
+  const result = await judgeCapture({
+    text: text(
+      ...DRY_RUN,
+      '21:05:00.000000 IP 10.0.2.15.50010 > 198.51.100.99.443: Flags [S], seq 1, win 65535, length 0',
+      `21:05:01.000000 IP 10.0.2.15.40010 > 10.0.2.3.53: 6101+ A? ${ENTITLEMENT}.example. (52)`,
+      '21:05:01.010000 IP 10.0.2.3.53 > 10.0.2.15.40010: 6101 1/0/0 A 203.0.113.70 (68)',
+      '21:05:01.020000 IP 10.0.2.15.50011 > 203.0.113.70.443: Flags [S], seq 1, win 65535, length 0',
+      '21:05:02.000000 IP 10.0.2.15.40011 > 10.0.2.3.53: 6102+ A? ts43.eas3.msg.not-t-mobile.com. (48)',
+      '21:05:02.010000 IP 10.0.2.3.53 > 10.0.2.15.40011: 6102 1/0/0 A 203.0.113.71 (64)',
+      '21:05:02.020000 IP 10.0.2.15.50012 > 203.0.113.71.443: Flags [S], seq 1, win 65535, length 0',
+    ),
+    ...NETWORK,
+  });
+  assert.equal(ownerAt(result, '198.51.100.99', 443), 'unknown', 'no name places it');
+  assert.equal(
+    ownerAt(result, '203.0.113.70', 443),
+    'unknown',
+    'the carrier name with more after it',
+  );
+  assert.equal(ownerAt(result, '203.0.113.71', 443), 'unknown', 'a name that only ends the same');
+  assert.notEqual(result.status, 'passed');
+});
+
+test("SPIKE-01-AC12: none of them can hide a vendor, analytics or advertising host: a flagged name wins over the carrier's and the Mac's", async () => {
+  const shared = await judgeCapture({
+    text: text(
+      ...DRY_RUN,
+      '21:06:00.000000 IP 10.0.2.15.40020 > 10.0.2.3.53: 6201+ A? googleads.g.doubleclick.net. (45)',
+      '21:06:00.010000 IP 10.0.2.3.53 > 10.0.2.15.40020: 6201 1/0/0 A 198.51.100.98 (61)',
+    ),
+    ...NETWORK,
+  });
+  assert.equal(
+    ownerAt(shared, '198.51.100.98', 443),
+    'advertising',
+    'an address the carrier shares with an advertising host',
+  );
+  assert.equal(shared.status, 'failed');
+
+  const onTheMac = await judgeCapture({
+    text: text(
+      ...DRY_RUN,
+      '21:07:00.000000 IP 10.0.2.15.40021 > 10.0.2.3.53: 6202+ A? tracker.transistorsoft.com. (44)',
+      '21:07:00.010000 IP 10.0.2.3.53 > 10.0.2.15.40021: 6202 1/0/0 A 10.0.2.2 (60)',
+      '21:07:00.020000 IP 10.0.2.15.50021 > 10.0.2.2.443: Flags [S], seq 1, win 65535, length 0',
+    ),
+    ...NETWORK,
+  });
+  assert.equal(
+    ownerAt(onTheMac, '10.0.2.2', 443),
+    'vendor',
+    "the vendor's name answered with the Mac's address",
+  );
+  assert.equal(onTheMac.status, 'failed');
+  assert.ok(
+    onTheMac.flagged.some((flag) => flag.owner === 'vendor'),
+    'the vendor is not flagged',
+  );
+});

@@ -334,3 +334,111 @@ test('SPIKE-01-AC16: a device run without three zoom levels, or on Android witho
   );
   await refuses(judgeS8(device('android', (run) => delete run.aligned16k)), 'no alignment check');
 });
+
+// Android 17's native crash header adds the parent's pid: "pid: N, ppid: N,
+// tid: N, name: …  >>> process <<<". The blocks below keep the structure of
+// `adb logcat -b crash -d` from a dry run on the android-37.2 image
+// (2026-09-30), whose UWB HAL aborts in a loop from boot. Build IDs and the
+// fingerprint's build number are rewritten; the app's block is the same
+// structure with the app's process, as Android writes it for an app.
+
+/** One tombstone in the crash buffer, as Android 17 writes it. */
+function tombstone({ time, pid, ppid, tid, thread, crasher, executable, cmdline, uid, signal }) {
+  const ids = (a, b) => `${String(a).padStart(5)} ${String(b).padStart(5)}`;
+  const at = (ms) => `01-01 ${time}.${ms}`;
+  const debug = (line) => `${at('391')} ${ids(5580, 5580)} F DEBUG   : ${line}`;
+  // The libc line names the process by its kernel name: at most 15 characters.
+  const comm = crasher.startsWith('/') ? thread : crasher.slice(0, 15);
+  return [
+    `${at('120')} ${ids(pid, tid)} F libc    : Fatal signal ${signal} in tid ${tid} (${thread}), pid ${pid} (${comm})`,
+    debug('*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***'),
+    debug(
+      "Build fingerprint: 'google/sdk_gphone16k_x86_64/emu64xa16k:17/EXAMPLE.000000.001/1:userdebug/dev-keys'",
+    ),
+    debug("Kernel Release: '6.12.81-android16-6-g0000000000000-ab00000000'"),
+    debug("Revision: '0'"),
+    debug("ABI: 'x86_64'"),
+    debug(`Timestamp: 2031-01-01 ${time}.195987187+0100`),
+    debug('Process uptime: 1s'),
+    debug('Page size: 16384 bytes'),
+    debug(`Executable: ${executable}`),
+    debug(`Cmdline: ${cmdline}`),
+    debug(`pid: ${pid}, ppid: ${ppid}, tid: ${tid}, name: ${thread}  >>> ${crasher} <<<`),
+    debug(`uid: ${uid}`),
+    debug(`signal ${signal}, fault addr --------`),
+    debug(''),
+    debug('backtrace:'),
+    debug(
+      '      #00 pc 000000000005b06d  /apex/com.android.runtime/lib64/bionic/libc.so (abort+189) (BuildId: 00000000000000000000000000000000)',
+    ),
+    debug(''),
+    debug('Note: To display stack pointer information, use the pbtombstone tool:'),
+    debug('        pbtombstone --display-sp tombstone_XX.pb'),
+  ];
+}
+
+const HAL = '/vendor/bin/hw/android.hardware.uwb-service';
+/** The image's UWB HAL, restarted by init and aborting again. */
+const halAbort = (time, pid) =>
+  tombstone({
+    time,
+    pid,
+    ppid: 1,
+    tid: pid,
+    thread: 'android.hardwar',
+    crasher: HAL,
+    executable: HAL,
+    cmdline: `${HAL} /dev/uwb0`,
+    uid: 1083,
+    signal: '6 (SIGABRT), code -1 (SI_QUEUE)',
+  });
+/** The app's own native crash, on one of its threads. */
+const appNativeCrash = (time) =>
+  tombstone({
+    time,
+    pid: 4321,
+    ppid: 402,
+    tid: 4400,
+    thread: 'mqt_v_native',
+    crasher: APP,
+    executable: '/system/bin/app_process64',
+    cmdline: APP,
+    uid: 10123,
+    signal: '11 (SIGSEGV), code 1 (SEGV_MAPERR)',
+  });
+
+const crashBuffer = (...blocks) =>
+  ['--------- beginning of crash', ...blocks.flat()].join('\n') + '\n';
+
+test("SPIKE-01-AC16: Android 17's crash log: the app's native crash, under the header with ppid, is found, once", async () => {
+  const crashes = await readCrashes({
+    platform: 'android',
+    text: crashBuffer(appNativeCrash('21:20:00')),
+    app: APP,
+  });
+  assert.deepEqual(
+    crashes,
+    [{ kind: 'native', process: APP }],
+    'one tombstone is one crash, even though its Cmdline line names the app too',
+  );
+});
+
+test("SPIKE-01-AC16: Android 17's crash log: the image's UWB HAL abort loop is no crash of the app, and the build fingerprint lines do not stop the read", async () => {
+  const loop = crashBuffer(
+    halAbort('21:00:40', 529),
+    halAbort('21:00:44', 686),
+    halAbort('21:00:50', 893),
+  );
+  assert.deepEqual(await readCrashes({ platform: 'android', text: loop, app: APP }), []);
+});
+
+test("SPIKE-01-AC16: Android 17's crash log: the app's native crash in the middle of the HAL loop is found, and only it", async () => {
+  const text = crashBuffer(
+    halAbort('21:00:40', 529),
+    appNativeCrash('21:20:00'),
+    halAbort('21:20:05', 1314),
+  );
+  assert.deepEqual(await readCrashes({ platform: 'android', text, app: APP }), [
+    { kind: 'native', process: APP },
+  ]);
+});

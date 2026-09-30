@@ -306,3 +306,98 @@ test("SPIKE-01-AC13: an out-of-order arrival seen 20 s after reconnecting is sti
   );
   assert.match(result.evidence.join('\n'), /tick/i);
 });
+
+// held.json: the app's own snapshot of the SDK's store, IDs only, as the
+// driver saves it from the device just before reconnecting (drivers/lib/s4.mjs):
+// { ids, count, writtenAt (the device's ms), readAt (the Mac's ms) }. The
+// dry runs' files (2026-09-30) are this shape; the IDs below are made up in
+// the same forms: lowercase UUIDs on Android, uppercase on iOS.
+
+const readHeld = async (input) => (await import('./s4.mjs')).readHeld(input);
+
+const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError];
+/** Rejects on purpose: not a missing module, and not a programming error. */
+async function refuses(promise, why) {
+  await assert.rejects(
+    promise,
+    (error) => {
+      assert.ok(
+        error?.code !== 'ERR_MODULE_NOT_FOUND' &&
+          !PROGRAMMING_ERRORS.some((type) => error instanceof type),
+        `${why}: it broke instead of refusing (${error?.name}: ${error?.message})`,
+      );
+      return true;
+    },
+    why,
+  );
+}
+
+/** held.json as the driver saves it: read 60 ms before the "offline-ended" mark. */
+const heldFile = ({ ids, count = ids.length, writtenAt, readAt = WALL0 + ONLINE - 60 }) =>
+  `${JSON.stringify({ ids, count, writtenAt: writtenAt ?? readAt - 29_656, readAt }, null, 2)}\n`;
+
+const ANDROID_IDS = [
+  '00000000-0000-4000-8000-000000000001',
+  '00000000-0000-4000-8000-000000000002',
+  '00000000-0000-4000-8000-000000000003',
+];
+const IOS_IDS = ['00000000-0000-4000-8000-00000000000A', '00000000-0000-4000-8000-00000000000B'];
+
+test('SPIKE-01-AC8: reads the IDs the device held from held.json, in their order, on either platform', async () => {
+  const records = run(flushed());
+  assert.deepEqual(await readHeld({ text: heldFile({ ids: ANDROID_IDS }), records }), ANDROID_IDS);
+  assert.deepEqual(
+    await readHeld({ text: heldFile({ ids: IOS_IDS, writtenAt: WALL0 + ONLINE - 124 }), records }),
+    IOS_IDS,
+  );
+});
+
+test("SPIKE-01-AC8: held.json's IDs are what judgeS4 takes as held", async () => {
+  const records = run(flushed());
+  const held = await readHeld({ text: heldFile({ ids: HELD }), records });
+  assert.equal((await judgeS4({ records, held })).status, 'passed');
+});
+
+test('SPIKE-01-AC8: a held.json whose count does not match its IDs is refused', async () => {
+  const records = run(flushed());
+  await refuses(readHeld({ text: heldFile({ ids: ANDROID_IDS, count: 2 }), records }), 'count 2');
+  await refuses(readHeld({ text: heldFile({ ids: ANDROID_IDS, count: 4 }), records }), 'count 4');
+  await refuses(readHeld({ text: heldFile({ ids: [], count: 1 }), records }), 'count 1, no IDs');
+});
+
+test('SPIKE-01-AC8: a held.json read after the "offline-ended" mark is refused: by then it may miss what was already uploaded', async () => {
+  const records = run(flushed());
+  const atTheMark = WALL0 + ONLINE;
+  assert.deepEqual(
+    await readHeld({ text: heldFile({ ids: ANDROID_IDS, readAt: atTheMark }), records }),
+    ANDROID_IDS,
+    'read at the mark itself',
+  );
+  await refuses(
+    readHeld({ text: heldFile({ ids: ANDROID_IDS, readAt: atTheMark + 1 }), records }),
+    'read 1 ms after the mark',
+  );
+  await refuses(
+    readHeld({ text: heldFile({ ids: ANDROID_IDS, readAt: atTheMark + 30_000 }), records }),
+    'read 30 s after reconnecting',
+  );
+});
+
+test('SPIKE-01-AC8: text that is not held.json is refused, never read as "nothing held"', async () => {
+  const records = run(flushed());
+  const cases = [
+    ['nothing', ''],
+    ['not JSON', 'run-as: package not debuggable\n'],
+    ['null', 'null\n'],
+    [
+      'IDs that are not a list',
+      `${JSON.stringify({ ids: 'x', count: 1, writtenAt: 1, readAt: WALL0 })}\n`,
+    ],
+    ['an empty ID', heldFile({ ids: ['', ANDROID_IDS[0]] })],
+    [
+      'no time it was read',
+      `${JSON.stringify({ ids: ANDROID_IDS, count: 3, writtenAt: WALL0 })}\n`,
+    ],
+  ];
+  for (const [what, text] of cases) await refuses(readHeld({ text, records }), what);
+});

@@ -6,8 +6,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+/**
+ * What the driver found in force at the start and the end of the restrictions
+ * (meta.json's `inForce`): `dumpsys deviceidle get deep` and
+ * `am get-standby-bucket`, trimmed. Deep Doze is IDLE; the restricted bucket
+ * is 45. Every run below held both, unless a test says otherwise.
+ */
+const HELD = { start: { idle: 'IDLE', bucket: '45' }, end: { idle: 'IDLE', bucket: '45' } };
+
 /** Imported per call, so that each test reports a missing module on its own. */
-const judgeS3 = async (input) => (await import('./s3.mjs')).judgeS3(input);
+const judgeS3 = async (input) => (await import('./s3.mjs')).judgeS3({ inForce: HELD, ...input });
 
 const S = 1_000;
 const MIN = 60 * S;
@@ -228,4 +236,120 @@ test('SPIKE-01-AC7: a run whose restrictions held for 28 min that would otherwis
     assert.equal(result.status, 'invalid', `${what}: 28 min of restrictions passed for 45`);
     namesBothDurations(result, what);
   }
+});
+
+// Which restrictions actually held. Android re-promotes a journeying app out
+// of the restricted standby bucket within a second (seen on the android-37.2
+// image, 2026-09-30: back to 10 or 30), so the driver records deep Doze and
+// the bucket when the restrictions start and when they end. A restriction is
+// in force only if both readings show it. One that did not hold is not shown,
+// and a pass never rests on it.
+
+const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError];
+/** Rejects on purpose: not a missing module, and not a programming error. */
+async function refuses(promise, why) {
+  await assert.rejects(
+    promise,
+    (error) => {
+      assert.ok(
+        error?.code !== 'ERR_MODULE_NOT_FOUND' &&
+          !PROGRAMMING_ERRORS.some((type) => error instanceof type),
+        `${why}: it broke instead of refusing (${error?.name}: ${error?.message})`,
+      );
+      return true;
+    },
+    why,
+  );
+}
+
+/** The restriction record with the readings at the start and the end changed. */
+const readings = (start = {}, end = {}) => ({
+  start: { ...HELD.start, ...start },
+  end: { ...HELD.end, ...end },
+});
+const DOZE = /doze/i;
+const BUCKET = /bucket/i;
+/** The names in `list` that match `pattern`. */
+const names = (list, pattern) => list.filter((name) => pattern.exec(name) !== null);
+
+test('SPIKE-01-AC7: reports the restrictions in force at the start and the end: deep Doze and the restricted bucket', async () => {
+  const result = await judgeS3({
+    exemption: true,
+    records: run(minutely({ exempt: true })),
+    inForce: HELD,
+  });
+  assert.equal(result.status, 'passed');
+  assert.equal(names(result.restrictions.inForce, DOZE).length, 1, 'deep Doze is not reported');
+  assert.equal(names(result.restrictions.inForce, BUCKET).length, 1, 'the bucket is not reported');
+  assert.deepEqual(result.restrictions.notShown, []);
+});
+
+test('SPIKE-01-AC7: a restricted bucket that did not hold is listed as not shown, never as in force, so a pass rests on deep Doze alone and says so', async () => {
+  const cases = [
+    ['re-promoted by the end', readings({}, { bucket: '10' })],
+    ['re-promoted before the first reading', readings({ bucket: '30' }, { bucket: '10' })],
+  ];
+  for (const [what, inForce] of cases) {
+    const result = await judgeS3({
+      exemption: true,
+      records: run(minutely({ exempt: true })),
+      inForce,
+    });
+    assert.equal(names(result.restrictions.notShown, BUCKET).length, 1, `${what}: not listed`);
+    assert.deepEqual(names(result.restrictions.inForce, BUCKET), [], `${what}: in force`);
+    assert.equal(names(result.restrictions.inForce, DOZE).length, 1, `${what}: Doze held`);
+    assert.equal(result.status, 'passed', `${what}: no gap over 120 s under deep Doze`);
+  }
+});
+
+test('SPIKE-01-AC7: with the exemption, a run in which deep Doze did not hold is invalid, never passed, and a gap over 120 s is still failed', async () => {
+  const cases = [
+    ['Doze ended before the restrictions did', readings({}, { idle: 'ACTIVE' })],
+    ['Doze never began', readings({ idle: 'ACTIVE' }, { idle: 'ACTIVE' })],
+  ];
+  for (const [what, inForce] of cases) {
+    const result = await judgeS3({
+      exemption: true,
+      records: run(minutely({ exempt: true })),
+      inForce,
+    });
+    assert.equal(result.status, 'invalid', `${what}: nothing held the app in Doze`);
+    assert.match(result.evidence.join('\n'), /doze|idle/i, `${what}: the evidence does not say`);
+    assert.equal(names(result.restrictions.notShown, DOZE).length, 1, `${what}: not listed`);
+  }
+
+  const times = [
+    ...every(MIN, 30 * S, 20 * MIN + 30 * S),
+    ...every(MIN, 22 * MIN + 31 * S, END - 29 * S),
+  ];
+  const gap = await judgeS3({
+    exemption: true,
+    records: run(times.map((t) => arrival(t, { exempt: true }))),
+    inForce: readings({}, { idle: 'ACTIVE' }),
+  });
+  assert.equal(gap.status, 'failed', 'a gap already seen is final');
+});
+
+test('SPIKE-01-AC7: without the exemption the verdict rests on the report before the restrictions, so what did not hold is listed and changes nothing', async () => {
+  const result = await judgeS3({
+    exemption: false,
+    records: run(minutely({ exempt: false })),
+    inForce: readings({}, { idle: 'ACTIVE', bucket: '10' }),
+  });
+  assert.equal(result.status, 'passed');
+  assert.equal(names(result.restrictions.notShown, DOZE).length, 1, 'Doze is not listed');
+  assert.equal(names(result.restrictions.notShown, BUCKET).length, 1, 'the bucket is not listed');
+});
+
+test('SPIKE-01-AC7: a run without the record of what was in force is refused, never judged as if the restrictions held', async () => {
+  const records = run(minutely({ exempt: true }));
+  await refuses(judgeS3({ exemption: true, records, inForce: undefined }), 'no record at all');
+  await refuses(
+    judgeS3({ exemption: true, records, inForce: { start: HELD.start } }),
+    'no reading at the end',
+  );
+  await refuses(
+    judgeS3({ exemption: true, records, inForce: { start: { idle: 'IDLE' }, end: HELD.end } }),
+    'no bucket at the start',
+  );
 });
