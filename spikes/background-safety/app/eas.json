@@ -1,0 +1,15 @@
+{
+  "build": {
+    "simulator": {
+      "ios": {
+        "simulator": true,
+        "buildConfiguration": "Debug"
+      },
+      "env": {
+        "FORCE_BUNDLING": "1",
+        "TSLOCATIONMANAGER_VERSION": "4.7.1",
+        "EXPO_NO_TELEMETRY": "1"
+      }
+    }
+  }
+}

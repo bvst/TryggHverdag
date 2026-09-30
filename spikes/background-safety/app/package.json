@@ -1,0 +1,40 @@
+{
+  "name": "spike-background-safety-app",
+  "version": "0.0.0",
+  "private": true,
+  "description": "SPIKE-01: the throwaway spike app. Outside the workspace, installed with its own lockfile; never shipped or imported.",
+  "main": "index.js",
+  "scripts": {
+    "prebuild:android": "EXPO_NO_TELEMETRY=1 expo prebuild --platform android --clean --no-install"
+  },
+  "dependencies": {
+    "@maplibre/maplibre-react-native": "11.4.0",
+    "expo": "57.0.25",
+    "expo-gradle-ext-vars": "0.1.3",
+    "expo-intent-launcher": "~57.0.1",
+    "expo-notifications": "~57.0.21",
+    "react": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-background-geolocation": "5.7.0"
+  },
+  "devDependencies": {
+    "@babel/core": "7.29.7"
+  },
+  "pnpm": {
+    "overrides": {
+      "@types/node": "26.6.2",
+      "babel-plugin-react-native-web": "0.21.2",
+      "baseline-browser-mapping": "2.11.25",
+      "browserslist": "4.29.0",
+      "caniuse-lite": "1.0.30001810",
+      "electron-to-chromium": "1.5.436",
+      "expo-constants": "57.0.19",
+      "expo-modules-core": "57.0.19",
+      "node-releases": "2.0.56",
+      "regenerate-unicode-properties": "10.2.2",
+      "regexpu-core": "6.4.0",
+      "shell-quote": "1.10.0",
+      "ws@8": "8.21.3"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "receiverPort": 8765,
+  "syntheticNumber": "+447700900123",
+  "alert": {
+    "title": "SPIKE-01 alert",
+    "body": "Open the app now."
+  },
+  "reminder": {
+    "title": "SPIKE-01 reminder",
+    "body": "Your journey protection stopped. Open the app."
+  },
+  "sentinel": [255, 0, 255]
+}
