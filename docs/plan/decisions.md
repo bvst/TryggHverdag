@@ -2449,3 +2449,26 @@ any other path is work, not a candidate for the same treatment.
     layout. Its Android paths are the same on 26.04, by the readme. Its home,
     tool-cache and `PATH` folders are not in either readme, so they were not
     checked; `android-e2e` passing on 26.04 is what shows they still hold.
+- **Update 2026-09-30:** #43 merged on 2026-09-29 at 19:42:58 UTC as
+  `0637482`. One of the three "not verified yet" items is now verified, and
+  the CI record has a fifth `android-e2e` run.
+  - **`deploy-staging` on 26.04: verified.** The post-merge run (36621209842,
+    for `0637482`) completed with success on `ubuntu-26.04`. Its Deploy step,
+    which runs the pinned clever-tools binary, and its smoke test both
+    passed. `ci` on `main` for the same commit (run 36621209674) passed all
+    10 jobs on 26.04 as well.
+  - **Still not verified:** `daily-status` (the morning after; at 05:47 UTC
+    on 2026-09-30 its 26.04 run had not started, and earlier runs started at
+    06:29 to 06:46) and `infra-staging` (the owner's next `plan`).
+  - **The fifth 26.04 `android-e2e` run** (`9f1d1ad`, run 36594992491, job
+    109497479165) was green, and its install was refused on attempt 1 with
+    run 8's `NullPointerException … PackageManagerInternal.freeStorage`. The
+    wait tried again, and attempt 2 succeeded.
+  - **The sixth**, on `main` for `0637482` (job 109586777108), was green;
+    its install succeeded on attempt 1.
+  - **So, six runs on 26.04:** the install was refused on attempt 1 in 3 of
+    6. BUG-9's session error was one of them, and run 8's NPE the other two.
+    The wait got past the NPE both times. BUG-9's own signature has not come
+    back, so its wait is still proven by its tests and not by a run.
+  - **`ai-review.yml` still names `ubuntu-latest`.** It moves in its own
+    hand-merged pull request (D-075), which has not been opened yet.
