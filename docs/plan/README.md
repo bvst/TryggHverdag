@@ -1,8 +1,8 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-09-29 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → **next: milestone M1**, the spike · Section 4 closes after the spike in M1
+**Last updated:** 2026-09-30 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → 🟡 **M1, the spike, started** (2026-09-29): SPIKE-01's spec is written · Section 4 closes after the spike in M1
 
-**Current section:** milestone M0 closed (2026-09-29, D-083); M1, the spike, is next. Status: [../progress.md](../progress.md) · Build log: [../progress/m0.md](../progress/m0.md)
+**Current section:** milestone M1, the spike, started 2026-09-29. SPIKE-01's spec is written ([../specs/SPIKE-01.md](../specs/SPIKE-01.md)); the spike is built next, in a Mac session. Status: [../progress.md](../progress.md) · Build log: [../progress/m1.md](../progress/m1.md) (M0's: [../progress/m0.md](../progress/m0.md))
 
 This folder is the project's memory. Everything we research, discuss and decide
 ends up here, so any session (in Claude Code or claude.ai) can pick up exactly
@@ -24,7 +24,7 @@ continues from that section's **Next steps**.
 | 1 | Product vision, users & MVP scope | ✅ Done | [01-product-vision.md](01-product-vision.md) · [01b-mvp-scope.md](01b-mvp-scope.md) |
 | 2 | Norway context: emergency services, law & privacy (GDPR, Datatilsynet, age limits, hosting) | ✅ Done | [02-norway-law-privacy.md](02-norway-law-privacy.md) |
 | 3 | Safety, reliability & security requirements — what must never fail silently | ✅ Done | [03-safety-reliability-security.md](03-safety-reliability-security.md) |
-| 4 | Tech stack: app framework, backend, maps/location, push (incl. background-location spike) | 🟡 Providers chosen · spike (emulators/simulators) not started | [04-tech-stack.md](04-tech-stack.md) |
+| 4 | Tech stack: app framework, backend, maps/location, push (incl. background-location spike) | 🟡 Providers chosen · spike (emulators/simulators): spec written ([SPIKE-01](../specs/SPIKE-01.md)), not yet built | [04-tech-stack.md](04-tech-stack.md) |
 | 5 | Architecture & code structure — modularity, boundaries, how to change things safely | ✅ Done | [05-architecture.md](05-architecture.md) |
 | 6 | Testing strategy & regression protection | ✅ Done | [06-testing-strategy.md](06-testing-strategy.md) |
 | 7 | Claude Code setup: CLAUDE.md, subagents, skills, hooks, commands | ✅ Done (draft v0 files) | [07-claude-code-setup.md](07-claude-code-setup.md) · [07b files](07b-claude-code-files/README.md) |
@@ -38,8 +38,13 @@ Decisions so far: [decisions.md](decisions.md)
 
 **Milestone M0 is closed** (2026-09-29, D-083): every INF task is done, the
 seven offline gate drills pass, and CI is green on `main`. The live attempt at
-the two GitHub-only drills is an M5 go-live item. Next is M1, the spike. What
-has been built and what Claude needs from the owner: [../progress.md](../progress.md).
+the two GitHub-only drills is an M5 go-live item.
+
+**Milestone M1, the spike, started on 2026-09-29.** SPIKE-01's spec is written
+and goes to the owner as a docs-only pull request. The spike itself is built and
+run in a Mac session (D-055). Five open items for the owner came out of planning
+it, in [../progress/m1.md](../progress/m1.md). What has been built and what
+Claude needs from the owner: [../progress.md](../progress.md).
 
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every
