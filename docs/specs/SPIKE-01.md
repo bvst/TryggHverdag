@@ -1,6 +1,6 @@
 # SPIKE-01 · Background safety on emulators and simulators
 
-**Status:** 📝 Spec. The owner answered Q1 on 2026-09-29: S8, the map check, is added · **Last updated:** 2026-09-29 ·
+**Status:** 📝 Spec. The owner answered Q1 on 2026-09-29: S8, the map check, is added. Q2 on 2026-09-30: iOS builds on EAS · **Last updated:** 2026-09-30 ·
 **Branch:** this spec on `claude/busy-faraday-40n2zl` (cloud session, docs only); the
 spike on `feat/SPIKE-01-background-safety` (the Mac, `claude-dev`, D-055/D-056) ·
 **Milestone:** M1
@@ -975,8 +975,8 @@ confidence** about F1 to F6.
 
 ## Questions for the owner
 
-None open now. Q1 was asked and answered, and is kept below as the record.
-One more question is asked later, with the go/no-go.
+None open now. Q1 and Q2 were asked and answered, and are kept below as the
+record. One more question is asked later, with the go/no-go.
 
 ### Answered
 
@@ -1012,6 +1012,47 @@ Options:
 app already has the right stack, and a map library that fails with Expo SDK 57
 or the 16 KB image is cheapest to find now. S8 would get its own criterion, in
 the same shape as the others.
+
+**Q2: The Mac cannot build Expo SDK 57 for iOS. How does the spike get its iOS
+build?**
+
+**Answered by the owner 2026-09-30: an EAS simulator build.**
+
+Step 2's first job, proving the iOS toolchain, was run on the Mac as
+`claude-dev` on 2026-09-30. Two of its three stop conditions were met:
+- **Xcode is too old.** Expo's SDK table (docs.expo.dev/versions/latest, read
+  2026-09-30) lists "57.0.0 … iOS 16.4+ … Xcode 26.4+". The Mac has Xcode
+  26.0.1 (17A400) with the iOS 26.0 simulator SDK, which `M0-kickoff.md`
+  records as this Intel Mac's ceiling.
+- **CocoaPods is missing** (`pod not found`, no gem). Homebrew's Cellar
+  belongs to the owner's admin account, so `claude-dev` cannot install it.
+  It would not help on its own, because Xcode would still be below Expo's
+  minimum.
+- **The simulator boots.** The iPhone 17 simulator (iOS 26.0.1) booted in 59 s,
+  opened Settings, and took a screenshot. `claude-dev` was the console user at
+  the time and no other user was logged in, so "while another user is at the
+  screen" was **not** tested.
+
+Options put to the owner: (a) an EAS simulator build; (b) Android only for now,
+with iOS decided later; (c) the owner installs CocoaPods and the spike builds
+with Xcode 26.0.1 below Expo's documented minimum. The recommendation was (a),
+because under (c) a failure could not be told apart from a problem with the SDK.
+
+What (a) means:
+- The owner creates an Expo access token and puts it on the Mac for
+  `claude-dev`. It is never committed or printed.
+- The spike's code is uploaded to Expo's build servers. It holds no personal
+  data: the routes are synthetic (AC4). It costs $0 on the free plan
+  (`08-cicd-releases.md`).
+- Expo's build machines, not the Mac, run Xcode and CocoaPods. The simulator
+  build is then installed and run on the Mac's simulator with `simctl`, as
+  above.
+- **Not verified:** whether EAS's simulator build carries the x86_64 slice
+  that this Intel Mac's simulator needs. EAS builds on Apple silicon. The
+  first build is checked with `lipo -archs`; if x86_64 is missing, the spike
+  stops and reports again.
+- The versions in the results header (AC14) name the Xcode that EAS used,
+  not the Mac's.
 
 ### Asked with the go/no-go, not now
 
