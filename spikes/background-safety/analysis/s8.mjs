@@ -177,7 +177,8 @@ export function judgeTiles({ png, sentinel, region }) {
 const LOGCAT_LINE =
   /^(?:\d{4}-)?\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}\s+\d+\s+\d+\s+[VDIWEFAS]\s+([^:]*?)\s*:\s?(.*)$/;
 const JAVA_PROCESS = /^Process: (\S+), PID: \d+/;
-const NATIVE_PROCESS = /^pid: \d+, tid: \d+, name: .*>>> (\S+) <<<$/;
+/** Android 17 adds the parent's pid: "pid: N, ppid: N, tid: N, name: …  >>> process <<<". */
+const NATIVE_PROCESS = /^pid: \d+, (?:ppid: \d+, )?tid: \d+, name: .*>>> (\S+) <<<$/;
 
 function readAndroidCrashes(text, app) {
   const crashes = [];

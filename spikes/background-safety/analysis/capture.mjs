@@ -51,6 +51,9 @@ const OWNERS = [
       'gvt1.com',
       'gvt2.com',
       'ggpht.com',
+      // The emulator SIM's carrier entitlement service, which the image calls
+      // itself: by this name only, never by address.
+      'ts43.eas3.msg.t-mobile.com',
     ],
   ],
 ];
@@ -160,17 +163,28 @@ function readCapture({ text, device, resolver }) {
 }
 
 /**
- * Each destination with its names and owner. `fixed(destination)` gives an
- * owner that does not come from names (DNS, the receiver), or null.
+ * Each destination with its names and owner, in this order:
+ * - the receiver itself (judgeCapture only);
+ * - a vendor, analytics or advertising name: nothing below can hide one;
+ * - the resolver's address on any port: DNS, and DNS over TLS on 853;
+ * - the receiver's address on another port: the harness (the Mac, such as the
+ *   debug build probing it for Metro), in judgeCapture only;
+ * - the owner its names give, else unknown.
  */
-function ownDestinations({ destinations, namesOf }, fixed, owners) {
+function ownDestinations(
+  { destinations, namesOf },
+  { resolver, receiver = null },
+  owners = OWNERS,
+) {
   return destinations.map(({ address, port }) => {
     const names = [...(namesOf.get(address) ?? [])];
-    let owner = fixed({ address, port });
-    if (owner === null) {
-      const found = names.map((name) => ownerOfName(name, owners)).filter((o) => o !== null);
-      owner = RANK.find((rank) => found.includes(rank)) ?? 'unknown';
-    }
+    const found = names.map((name) => ownerOfName(name, owners)).filter((o) => o !== null);
+    const byName = RANK.find((rank) => found.includes(rank)) ?? null;
+    let owner = byName ?? 'unknown';
+    if (receiver !== null && same({ address, port }, receiver)) owner = 'receiver';
+    else if (FLAGGED.has(byName)) owner = byName;
+    else if (address === resolver.address) owner = 'dns';
+    else if (receiver !== null && address === receiver.address) owner = 'harness';
     return { address, port, names, owner };
   });
 }
@@ -186,10 +200,7 @@ export function judgeCapture({ text, device, receiver, resolver }) {
   if (!capture.destinations.some((to) => same(to, receiver))) {
     throw new Error('the capture holds no upload to the receiver, so it did not capture the run');
   }
-  const listed = ownDestinations(capture, (to) => {
-    if (same(to, resolver)) return 'dns';
-    return same(to, receiver) ? 'receiver' : null;
-  });
+  const listed = ownDestinations(capture, { resolver, receiver });
 
   // Each flagged name once, whether it was only looked up or also connected to.
   const flags = new Map();
@@ -239,11 +250,7 @@ export function listDestinations({ text, device, resolver, kartverket }) {
   const owners = [...OWNERS.slice(0, at), ['kartverket', hosts], ...OWNERS.slice(at)];
 
   const capture = readCapture({ text, device, resolver });
-  const destinations = ownDestinations(
-    capture,
-    (to) => (same(to, resolver) ? 'dns' : null),
-    owners,
-  );
+  const destinations = ownDestinations(capture, { resolver }, owners);
 
   const flagged = destinations.filter(
     (destination) => destination.owner === 'unknown' || FLAGGED.has(destination.owner),

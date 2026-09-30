@@ -25,6 +25,43 @@ function recordedTime(arrival) {
 }
 
 /**
+ * The IDs the device held when it went back online, from held.json as the
+ * driver saves it: { ids, count, writtenAt, readAt }. Refused when it is not
+ * that file, when its count does not match its IDs, or when it was read after
+ * the "offline-ended" mark (on the Mac's wall clock), when it may already miss
+ * what was uploaded.
+ *
+ * @param {{ text: string, records: object[] }} input
+ * @returns {string[]} the IDs, in the file's order
+ */
+export function readHeld({ text, records }) {
+  let held;
+  try {
+    held = JSON.parse(text);
+  } catch {
+    throw new Error('held.json is not JSON, so what the device held is unknown');
+  }
+  const ids = held?.ids;
+  if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string' || id === '')) {
+    throw new Error("held.json's ids must be a list of record IDs");
+  }
+  if (held.count !== ids.length) {
+    throw new Error(`held.json counts ${held.count} records and lists ${ids.length}`);
+  }
+  if (!Number.isFinite(held.readAt)) {
+    throw new Error('held.json does not say when it was read');
+  }
+  const online = records.find(
+    (record) => record.kind === 'mark' && record.label === 'offline-ended',
+  );
+  if (online === undefined) throw new Error('the run has no "offline-ended" mark');
+  if (held.readAt > online.at) {
+    throw new Error('held.json was read after the device went back online, so it may miss records');
+  }
+  return ids;
+}
+
+/**
  * @param {{ records: object[], held: string[], breaks?: string[] }} input
  *   `held`: the SDK record IDs the device held in its queue when the window closed.
  */
