@@ -1,6 +1,6 @@
 # SPIKE-01 · Background safety on emulators and simulators
 
-**Status:** 📝 Spec. The owner answered Q1 on 2026-09-29: S8, the map check, is added. Q2 on 2026-09-30: iOS builds on EAS · **Last updated:** 2026-09-30 ·
+**Status:** 📝 Spec. The owner answered Q1 on 2026-09-29: S8, the map check, is added. Q2 on 2026-09-30: iOS builds on EAS. Q3 on 2026-09-30: continue, and ask the SDK's vendor about its high-risk clause · **Last updated:** 2026-09-30 ·
 **Branch:** this spec on `claude/busy-faraday-40n2zl` (cloud session, docs only); the
 spike on `feat/SPIKE-01-background-safety` (the Mac, `claude-dev`, D-055/D-056) ·
 **Milestone:** M1
@@ -975,8 +975,9 @@ confidence** about F1 to F6.
 
 ## Questions for the owner
 
-None open now. Q1 and Q2 were asked and answered, and are kept below as the
-record. One more question is asked later, with the go/no-go.
+None open now. Q1, Q2 and Q3 were asked and answered, and are kept below as
+the record. One more question is asked later, with the go/no-go. The vendor's
+answer on high-risk use (Q3) is awaited.
 
 ### Answered
 
@@ -1053,6 +1054,54 @@ What (a) means:
   stops and reports again.
 - The versions in the results header (AC14) name the Xcode that EAS used,
   not the Mac's.
+
+**Q3: The SDK's licence forbids "high-risk use" (its clause 9.5). What does
+the spike do?**
+
+**Answered by the owner 2026-09-30: continue the spike, and ask the vendor in
+writing.** The vendor's answer decides go/no-go item 7.
+
+Read at step 2 on 2026-09-30, from the vendor's licence agreement
+(docs.transistorsoft.com/license, which the iOS podspec's licence text links
+to):
+- **Evaluation in debug builds is allowed.** 3.5: "The Software is fully
+  functional in DEBUG builds without a License Key; the license-validation
+  warning shown in DEBUG builds does not restrict functionality. DEBUG builds
+  may be used for development and testing only and may not be distributed to
+  End Users."
+- **No data to the vendor, by the terms.** 7.1: "It transmits location and
+  related data only to the server endpoints that Licensee configures in its
+  Application. Licensor operates no server that receives that data". 7.2: the
+  licence check "involves no network request to Licensor and transmits no
+  data". AC12 still measures this.
+- **The price is $399.** The product page lists "Starter - $399.00", for one
+  app on both platforms.
+- **The tracking engine is commercial on both platforms.** The npm package
+  (5.7.0) declares MIT, and its `LICENSE` file is MIT. That covers only the
+  wrapper. The engine it pulls in is separate:
+  - `TSLocationManager` from CocoaPods, `~> 4.7.1`. Its podspec says
+    `"type": "Commercial"`.
+  - `com.transistorsoft:tslocationmanager` from Maven Central, `4.6.+`. Its
+    POM names the licence "Commercial".
+
+  This is R9, confirmed. Both are version ranges, so the spike pins them
+  itself.
+- **High-risk use is forbidden.** 9.5: "The Software is not designed or
+  intended for use in any application in which its failure could lead to death,
+  personal injury or severe physical or environmental damage, including
+  life-support, safety-critical navigation, or use as the sole means of
+  emergency response. Licensee shall not use the Software in such
+  applications." The plan never weighed this. D-023 chose the SDK without it,
+  and on a plain reading it covers this app. Only the vendor can say whether it
+  does.
+
+None of step 2's stop conditions was met: evaluation is allowed, no data goes
+to the vendor, and the price is $399. So the spike goes on. Options put to the
+owner: (a) continue, and ask the vendor; (b) pause the SDK runs until the
+vendor answers; (c) treat it as NO-GO now and move to D-023's fallback. The
+recommendation was (a). The terms allow the evaluation, the vendor's answer
+takes days, and the receiver, the analysis, S5, S6 and S8 are needed whatever
+the answer. The owner writes to the vendor at the notice address in its 14.5.
 
 ### Asked with the go/no-go, not now
 
