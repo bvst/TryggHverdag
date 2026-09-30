@@ -68,6 +68,7 @@ const config: ExpoConfig = {
     '@maplibre/maplibre-react-native',
     ['expo-notifications', { enableBackgroundRemoteNotifications: false }],
     './plugins/with-spike-android',
+    './plugins/with-spike-ios-bundling',
   ],
 };
 

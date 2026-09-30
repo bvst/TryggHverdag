@@ -87,10 +87,36 @@ config plugin `app/plugins/with-spike-android.js` sets that up at every
 prebuild, together with cleartext HTTP to `10.0.2.2` only.
 
 **iOS, on EAS** (the Mac's Xcode 26.0.1 cannot build Expo SDK 57): the
-`simulator` profile in `app/eas.json` builds a Debug simulator app. Its
-environment bundles the JavaScript (`FORCE_BUNDLING=1`), pins the SDK's iOS
-engine exactly (`TSLOCATIONMANAGER_VERSION=4.7.1`; the podspec's default is a
-range), and turns Expo's telemetry off.
+`simulator` profile in `app/eas.json` builds a Debug simulator app, as the
+project `@urso-as/spike-background-safety`. It needs the owner's robot token,
+passed only as an environment variable, never as an argument:
+
+```sh
+cd app
+DISABLE_EAS_ANALYTICS=1 EXPO_NO_TELEMETRY=1 EXPO_TOKEN="$(cat ~/.config/trygghverdag/expo-token)" \
+  ./node_modules/.bin/eas build --platform ios --profile simulator --non-interactive --wait
+```
+
+- **`DISABLE_EAS_ANALYTICS=1` and `EXPO_NO_TELEMETRY=1` on every `eas`
+  command.** Without the first, eas-cli sends usage analytics to Expo
+  (Rudderstack, `cdp.expo.dev`).
+- **What EAS receives:** eas-cli uploads a depth-1 `git clone` of the whole
+  repository (the committed working tree and one commit of history). Commit
+  first; the repository is public.
+- **The profile's environment** pins the SDK's iOS engine exactly
+  (`TSLOCATIONMANAGER_VERSION=4.7.1`; the podspec's default is a range), asks
+  React Native to bundle for the simulator (`FORCE_BUNDLING=1`), and turns
+  Expo's telemetry off. It also pins Node 22.23.2 and pnpm 10.33.0.
+- **Bundled JavaScript on iOS** also needs `app/plugins/with-spike-ios-bundling.js`.
+  Expo's bundling build phase sets `SKIP_BUNDLING=1` in every Debug build, and
+  React Native checks that before `FORCE_BUNDLING`. The plugin replaces that
+  one line at prebuild, and throws if the template no longer has it exactly
+  once.
+- **`app/pnpm-workspace.yaml`** makes the app its own pnpm workspace root.
+  Without it, a plain `pnpm install` in `app/`, which is what EAS runs, finds
+  the repository's workspace further up, installs that instead, and never
+  reads the app's lockfile. The app stays outside the repository's workspace
+  (AC1).
 
 ## Running the receiver
 
@@ -153,7 +179,8 @@ These are for the spike only (spec, risk R13). None of them may reach
   `10.0.2.2`, and on iOS `NSAllowsLocalNetworking`. The product talks HTTPS and
   authenticates each device. The receiver is not the heartbeat endpoint.
 - **Debug builds that carry their JavaScript** (`debuggableVariants = []`,
-  `FORCE_BUNDLING=1`). The product ships release builds.
+  `FORCE_BUNDLING=1`, and the iOS plugin that unsets Expo's `SKIP_BUNDLING`).
+  The product ships release builds.
 - **The app's direct status posts.** They carry no authentication.
 - **Permissions and grants made by script:** `adb` and `simctl privacy`, and
   the drivers' grants of `CALL_PHONE`, `SCHEDULE_EXACT_ALARM` and the alert
