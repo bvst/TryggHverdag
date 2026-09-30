@@ -22,7 +22,7 @@ closed.
 
 | ID | Task | Status |
 |----|------|--------|
-| SPIKE-01 | Background safety on emulators and simulators: S1–S7, and S8, MapLibre with Kartverket's tiles | 🟡 In flight — the spec is written ([`specs/SPIKE-01.md`](specs/SPIKE-01.md), 16 acceptance criteria, commit `27873bf`). Its docs-only pull request is next, then the build and the runs in a Mac session |
+| SPIKE-01 | Background safety on emulators and simulators: S1–S7, and S8, MapLibre with Kartverket's tiles | 🟡 In flight — the spec is merged ([#47](https://github.com/bvst/TryggHverdag/pull/47), [`specs/SPIKE-01.md`](specs/SPIKE-01.md), 16 acceptance criteria). Step 2 is under way on the Mac (`feat/SPIKE-01-background-safety`). The Mac cannot build Expo SDK 57 for iOS (Xcode 26.0.1, and 26.4 is needed), so the owner chose EAS simulator builds (Q2, 2026-09-30) |
 | — | Critical Alerts request drafted | ⚪ Not started. The roadmap lists it under M1, but it has no ID and no spec (an open item in [`progress/m1.md`](progress/m1.md)) |
 
 ## M0 at a glance
