@@ -173,6 +173,43 @@ node drivers/s7-ios.mjs --case always-to-inuse [--dry]
   the app with simctl, because Maestro's `launchApp` would grant every
   permission itself.
 
+### The overnight runner
+
+```sh
+node drivers/run-all.mjs --plan                  # the plan and its expected time; runs nothing
+node drivers/run-all.mjs --night night-YYYYMMDD  # every counted run, resumable
+node drivers/run-all.mjs --smoke                 # one real S6 run, in its own smoke- manifest
+node drivers/summarize.mjs --night night-YYYYMMDD
+```
+
+- **Self-checks first:**
+  - Colima stopped, the Mac on AC power, and no emulator or simulator running;
+  - the receiver's port free;
+  - both builds from `20545d9` with their recorded sha256s;
+  - Maestro, JDK 17 and tcpdump present.
+
+  If any fails, nothing runs.
+- **One device at a time:** the Android block, then the iOS block. The
+  go/no-go scenarios (S1, S3, S4, S7 and the AC12 capture) come first in each
+  block, then the findings (S2, S5, S6, S8).
+- **Each case twice.** Each run is judged when it ends, by
+  `drivers/lib/judge.mjs` over the analysis, with the Mac's sleeps from its
+  `pmset` log as breaks.
+- **An invalid run** (the harness broke, the driver threw or timed out) is
+  repeated, at most twice extra per case. After that the case stops, and the
+  manifest says why.
+- **A failed run is never repeated** (D-060).
+- **Everything goes in `~/spike-runs/<night>/`:** `manifest.jsonl` (one line
+  per run, and each stopped case), `runner.log`, and each driver's output in
+  `logs/`. Restarted with the same `--night`, the runner skips what the
+  manifest holds.
+
+**In the morning:** `tail ~/spike-runs/night-YYYYMMDD/runner.log` shows the
+last run started or finished. `node drivers/summarize.mjs --night night-YYYYMMDD`
+prints each scenario's verdict per platform (through `judgeScenario`), with
+every run's status and evidence. "NO VERDICT" means a case has fewer than two
+valid runs.
+
 **What the harness had to learn (2026-09-30), and does:**
 
 - **Android, the swipe:** `input swipe` does not dismiss a card in this
