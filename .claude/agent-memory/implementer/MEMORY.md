@@ -4,5 +4,5 @@
 - [Mac Android toolchain](project_mac_android_toolchain.md): JBR 25 breaks the native build; use ~/jdks JDK 17; Pixel_8 is nb-NO; stop Colima first; no `timeout`; clean teardown; gsm list shows no calls
 
 - [Coverage and guard quirks](project_coverage_and_guard_quirks.md): baseline needs reportOnFailure; prettier cannot check .gitignore; guard-bash reads `=>`/`>` as a write, blocks `.env` text (incl. `.xcode.env`); post-edit ETIMEDOUT; AC9 4-s test fails under load
-- [EAS iOS builds](project_eas_ios_builds.md): FORCE_BUNDLING can't bundle Debug (Expo sets SKIP_BUNDLING); nested app needs own pnpm-workspace.yaml; DISABLE_EAS_ANALYTICS
+- [EAS iOS builds](project_eas_ios_builds.md): Debug needs SKIP_BUNDLING unset + CONFIGURATION=Release for the RN script; own pnpm-workspace.yaml; DISABLE_EAS_ANALYTICS; iOS notif date in s
 - [Transistorsoft SDK docs](reference_transistorsoft_docs.md): v5 docs live per type on docs.transistorsoft.com; shipped .d.ts has none; heartbeat, params, RPC facts
