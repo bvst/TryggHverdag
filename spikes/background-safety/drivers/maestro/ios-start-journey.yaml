@@ -1,0 +1,13 @@
+# SPIKE-01, iOS simulator: start a journey in the spike app. The flow only
+# acts; every verdict comes from the receiver's records and the analysis.
+# Location and motion are granted beforehand with `simctl privacy`; the
+# notification prompt has no simctl grant, so the flow accepts it here.
+# Run with MAESTRO_CLI_NO_ANALYTICS=1 and MAESTRO_DISABLE_UPDATE_CHECK=true.
+appId: org.example.spike.backgroundsafety
+---
+- launchApp
+- tapOn:
+    id: start-journey
+- tapOn:
+    text: Allow
+    optional: true
