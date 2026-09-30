@@ -143,3 +143,85 @@ test("SPIKE-01-AC13: a gap in the receiver's ticks, or a break the driver saw, m
   assert.equal(broken.status, 'invalid');
   assert.ok(broken.evidence.includes('the Mac slept at 12 min'), 'the evidence was not kept');
 });
+
+// How long an S2 run must keep watching after the app is ended. A reminder
+// counts up to 5 min after the last arrival, so the run must see that far,
+// plus a margin of 1 min, for 6 min in all:
+// - reminders carry the device's clock and arrivals the Mac's, and the
+//   emulator's clock can be seconds off the Mac's;
+// - the platform writes its record of a delivered notification after showing
+//   it, and the driver reads that record when the run ends;
+// - 1 min is the rule's own step: the app moves the reminder on each heartbeat,
+//   every 60 s.
+// The 6 min count from the app being ended, or from the last arrival when
+// arrivals stopped after it. A shorter run is invalid, never passed or failed,
+// with the measured and the required duration as evidence.
+
+/** The same records with the driver's `label` mark moved to `t`. */
+const moveMark = (records, label, t) =>
+  records
+    .map((record) => (record.kind === 'mark' && record.label === label ? mark(label, t) : record))
+    .sort((a, b) => a.mono - b.mono);
+
+test('SPIKE-01-AC6: when arrivals stop, watching 6 min after the last arrival is long enough, and 1 ms less is invalid, even with the reminder seen', async () => {
+  const full = await judgeS2({
+    records: moveMark(stopped(), 'journey-ended', LAST + 6 * MIN),
+    reminders: [reminder(LAST + 5 * MIN)],
+  });
+  assert.equal(full.status, 'passed');
+  assert.equal(full.reminderDelayMs, 5 * MIN);
+
+  const short = await judgeS2({
+    records: moveMark(stopped(), 'journey-ended', LAST + 6 * MIN - 1),
+    reminders: [reminder(LAST + 2 * MIN)],
+  });
+  assert.equal(
+    short.status,
+    'invalid',
+    'a run that could not have seen a reminder at 5 min passed',
+  );
+  assert.ok(short.evidence.length > 0, 'an invalid run needs its evidence');
+});
+
+test('SPIKE-01-AC6: when arrivals go on, watching 6 min after the app is ended is long enough, and 3 min is invalid, not passed', async () => {
+  const full = await judgeS2({
+    records: moveMark(continuing(), 'journey-ended', APP_ENDED + 6 * MIN),
+    reminders: [],
+  });
+  assert.equal(full.status, 'passed');
+  assert.equal(full.arrivalsStopped, false);
+
+  const edge = await judgeS2({
+    records: moveMark(continuing(), 'journey-ended', APP_ENDED + 6 * MIN - 1),
+    reminders: [],
+  });
+  assert.equal(edge.status, 'invalid', 'arrivals watched for 5 min 59.999 s were judged');
+
+  const short = await judgeS2({
+    records: moveMark(continuing(), 'journey-ended', APP_ENDED + 3 * MIN),
+    reminders: [],
+  });
+  assert.equal(short.status, 'invalid', 'arrivals watched for only 3 min passed');
+  const evidence = short.evidence.join('\n');
+  assert.match(evidence, /\b3 min\b/, 'the evidence does not say how long the run watched');
+  assert.match(evidence, /\b6 min\b/, 'the evidence does not say how long S2 must watch');
+});
+
+test('SPIKE-01-AC6: arrivals that stop 90 s after the app is ended, watched for 5 min 30 s after the last one, are invalid, not failed, without a reminder', async () => {
+  // The location service ran on for 90 s after the app was ended, then stopped.
+  // The run ends 7 min after the app was ended: enough from the app being
+  // ended, but not from the last arrival, so a reminder due by 11 min 30 s
+  // after it could still have come.
+  const last = APP_ENDED + 90 * S;
+  const records = journey({
+    end: APP_ENDED + 7 * MIN,
+    marks: [mark('app-ended', APP_ENDED)],
+    arrivals: every(MIN, 30 * S, last).map((t) => arrival(t)),
+  });
+  const result = await judgeS2({ records, reminders: [] });
+  assert.equal(result.status, 'invalid', 'the platform was blamed for a run that stopped watching');
+  assert.equal(result.arrivalsStopped, true);
+  const evidence = result.evidence.join('\n');
+  assert.match(evidence, /\b5 min 30 s\b/, 'the evidence does not say how long the run watched');
+  assert.match(evidence, /\b6 min\b/, 'the evidence does not say how long S2 must watch');
+});

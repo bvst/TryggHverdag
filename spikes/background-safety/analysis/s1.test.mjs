@@ -170,3 +170,74 @@ test('SPIKE-01-AC13: a break the driver saw (the emulator exited, the Mac slept)
   assert.equal(result.status, 'invalid');
   assert.ok(result.evidence.includes('the emulator exited at 31 min'), 'the evidence was not kept');
 });
+
+// A run shorter than the scenario means the driver did not run it: the harness
+// broke, not the SDK. It is invalid, with the measured and the required
+// duration as evidence. It is never passed, because a run in which the
+// scenario did not run has not passed (D-060). It is never failed, because that
+// would blame the SDK for the driver. Durations in evidence are written the way
+// journey.mjs's `duration` writes them ("30 min", "5 min 30 s").
+
+/** Arrivals every minute from 30 s to a minute before `end`: no gap anywhere. */
+const steady = (end) =>
+  journey({ end, arrivals: every(MIN, 30 * S, end - MIN).map((t) => arrival(t)) });
+
+test('SPIKE-01-AC5: a journey of exactly 45 min is long enough, and one 1 ms shorter is invalid, not passed', async () => {
+  const full = await judgeS1({ records: steady(END) });
+  assert.equal(full.status, 'passed');
+  assert.deepEqual(full.evidence, []);
+
+  const short = await judgeS1({ records: steady(END - 1) });
+  assert.equal(short.status, 'invalid', 'a journey of 44 min 59.999 s was judged');
+  assert.ok(short.evidence.length > 0, 'an invalid run needs its evidence');
+});
+
+test('SPIKE-01-AC5: a 30-minute S1 run is invalid, never passed, with the measured and the required duration as evidence', async () => {
+  const result = await judgeS1({ records: steady(30 * MIN) });
+  assert.equal(result.status, 'invalid');
+  const evidence = result.evidence.join('\n');
+  assert.match(evidence, /\b30 min\b/, 'the evidence does not say how long the journey lasted');
+  assert.match(evidence, /\b45 min\b/, 'the evidence does not say how long S1 must last');
+});
+
+test('SPIKE-01-AC5: a 30-minute S1 run with a gap over 120 s is invalid, not failed, and keeps the gap in its numbers', async () => {
+  const times = [
+    ...every(MIN, 30 * S, 10 * MIN + 30 * S),
+    ...every(MIN, 13 * MIN + 50 * S, 29 * MIN),
+  ];
+  const result = await judgeS1({
+    records: journey({ end: 30 * MIN, arrivals: times.map((t) => arrival(t)) }),
+  });
+  assert.equal(result.status, 'invalid');
+  assert.match(result.evidence.join('\n'), /\b45 min\b/);
+  assert.equal(result.largestGapMs, 200 * S, 'the gap seen before the run ended is not recorded');
+  assert.equal(result.gapsOver120s, 1);
+});
+
+/** The same records with the receiver's ticks at `times` instead of every 10 s. */
+const withTicks = (records, times) =>
+  [...records.filter((record) => record.kind !== 'tick'), ...times.map(tick)].sort(
+    (a, b) => a.mono - b.mono,
+  );
+
+/** Ticks every 10 s, with one silence of `silence` ms after the tick at 20 min 5 s. */
+const ticksWithSilence = (silence) => [
+  ...every(10 * S, -5 * S, 20 * MIN + 5 * S),
+  ...every(10 * S, 20 * MIN + 5 * S + silence, END + 5 * S),
+];
+/** Ticks every 10 s until the last one, `silence` ms before the journey ends. */
+const ticksEndingBefore = (silence) => [...every(10 * S, -5 * S, END - 25 * S), END - silence];
+
+test('SPIKE-01-AC13: 15 s without a tick is still a working receiver, and 15 s and 1 ms is a hole that makes an S1 run invalid, mid-run and at the end', async () => {
+  const cases = [
+    ['15 s mid-run', ticksWithSilence(15 * S), 'passed'],
+    ['15 s and 1 ms mid-run', ticksWithSilence(15 * S + 1), 'invalid'],
+    ['15 s before the end', ticksEndingBefore(15 * S), 'passed'],
+    ['15 s and 1 ms before the end', ticksEndingBefore(15 * S + 1), 'invalid'],
+  ];
+  for (const [what, times, status] of cases) {
+    const result = await judgeS1({ records: withTicks(withGap(MIN), times) });
+    assert.equal(result.status, status, `no tick for ${what}`);
+    if (status === 'invalid') assert.match(result.evidence.join('\n'), /tick/i, what);
+  }
+});

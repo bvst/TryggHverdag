@@ -12,6 +12,7 @@ import { test } from 'node:test';
 
 /** Imported per call, so that each test reports a missing module on its own. */
 const judgeCapture = async (input) => (await import('./capture.mjs')).judgeCapture(input);
+const listDestinations = async (input) => (await import('./capture.mjs')).listDestinations(input);
 
 const NETWORK = {
   device: ['10.0.2.15', 'fec0::15'],
@@ -165,4 +166,150 @@ test('SPIKE-01-AC12: text that is not a capture of the run is refused, never rea
     /receiver/i,
     'a capture with no upload to the receiver did not capture the run',
   );
+});
+
+// S8's capture (AC16, "recorded, not judged"). The map screen uploads nothing,
+// so this capture has no receiver in it, and only Kartverket is expected.
+// Kartverket's tile host is not verified yet: it is the caller's input, and the
+// samples use a made-up name under the reserved .example domain.
+
+const TILE_HOST = 'tiles.kartverket.example';
+const MAP_NETWORK = { device: NETWORK.device, resolver: NETWORK.resolver };
+
+/** One map run: the platform's connectivity check, then tiles through a CDN name. */
+const MAP = [
+  'reading from file map.pcap, link-type EN10MB (Ethernet), snapshot length 262144',
+  '21:00:00.100000 IP 10.0.2.15.40001 > 10.0.2.3.53: 5101+ A? connectivitycheck.gstatic.com. (47)',
+  '21:00:00.110000 IP 10.0.2.3.53 > 10.0.2.15.40001: 5101 1/0/0 A 192.0.2.10 (63)',
+  '21:00:00.120000 IP 10.0.2.15.50001 > 192.0.2.10.443: Flags [S], seq 1000, win 65535, length 0',
+  '21:00:01.000000 IP 10.0.2.15.40002 > 10.0.2.3.53: 5102+ A? tiles.kartverket.example. (42)',
+  '21:00:01.010000 IP 10.0.2.3.53 > 10.0.2.15.40002: 5102 2/0/0 CNAME edge.tilecdn.example., A 192.0.2.50 (88)',
+  '21:00:01.020000 IP 10.0.2.15.50002 > 192.0.2.50.443: Flags [S], seq 1, win 65535, length 0',
+  '21:00:01.030000 IP 192.0.2.50.443 > 10.0.2.15.50002: Flags [S.], seq 2, ack 2, win 65535, length 0',
+  '21:00:01.100000 IP 10.0.2.15.50002 > 192.0.2.50.443: Flags [P.], seq 1:518, ack 1, win 502, length 517',
+];
+const mapText = (...extra) => [...MAP, ...extra].join('\n') + '\n';
+const byAddress = (a, b) => (a.address < b.address ? -1 : a.address > b.address ? 1 : 0);
+const ownerOf = (result) =>
+  Object.fromEntries(result.destinations.map((d) => [d.address, d.owner]));
+const FINE = new Set(['kartverket', 'platform', 'dns']);
+
+test('SPIKE-01-AC16: a map capture with no upload to the receiver is read, recorded rather than judged, with Kartverket, the platform and DNS marked', async () => {
+  const result = await listDestinations({
+    text: mapText(),
+    ...MAP_NETWORK,
+    kartverket: [TILE_HOST],
+  });
+  assert.deepEqual(summary(result.destinations).sort(byAddress), [
+    { address: '10.0.2.3', port: 53, names: [], owner: 'dns' },
+    {
+      address: '192.0.2.10',
+      port: 443,
+      names: ['connectivitycheck.gstatic.com'],
+      owner: 'platform',
+    },
+    {
+      address: '192.0.2.50',
+      port: 443,
+      names: ['edge.tilecdn.example', 'tiles.kartverket.example'],
+      owner: 'kartverket',
+    },
+  ]);
+  assert.deepEqual(result.flagged, []);
+  assert.ok(!('status' in result), "S8's capture is recorded, not judged: it has no verdict");
+});
+
+test('SPIKE-01-AC16: in the map capture, the vendor, analytics, advertising and anything the capture cannot place are flagged, lookups included', async () => {
+  const result = await listDestinations({
+    text: mapText(
+      '21:00:02.000000 IP 10.0.2.15.40003 > 10.0.2.3.53: 5103+ A? license.transistorsoft.com. (44)',
+      '21:00:03.000000 IP 10.0.2.15.40004 > 10.0.2.3.53: 5104+ A? app-measurement.com. (37)',
+      '21:00:03.010000 IP 10.0.2.3.53 > 10.0.2.15.40004: 5104 1/0/0 A 198.51.100.30 (53)',
+      '21:00:03.020000 IP 10.0.2.15.50003 > 198.51.100.30.443: Flags [S], seq 1, win 65535, length 0',
+      '21:00:04.000000 IP 10.0.2.15.40005 > 10.0.2.3.53: 5105+ A? googleads.g.doubleclick.net. (45)',
+      '21:00:04.010000 IP 10.0.2.3.53 > 10.0.2.15.40005: 5105 1/0/0 A 198.51.100.31 (61)',
+      '21:00:04.020000 IP 10.0.2.15.50004 > 198.51.100.31.443: Flags [S], seq 1, win 65535, length 0',
+      '21:00:05.000000 IP 10.0.2.15.50005 > 203.0.113.40.443: Flags [S], seq 1, win 65535, length 0',
+      '21:00:06.000000 IP 10.0.2.15.40006 > 10.0.2.3.53: 5106+ A? demotiles.maplibre.org. (40)',
+    ),
+    ...MAP_NETWORK,
+    kartverket: [TILE_HOST],
+  });
+  assert.deepEqual(ownerOf(result), {
+    '10.0.2.3': 'dns',
+    '192.0.2.10': 'platform',
+    '192.0.2.50': 'kartverket',
+    '198.51.100.30': 'analytics',
+    '198.51.100.31': 'advertising',
+    '203.0.113.40': 'unknown',
+  });
+  assert.deepEqual([...new Set(result.flagged.map((flag) => flag.owner))].sort(), [
+    'advertising',
+    'analytics',
+    'unknown',
+    'vendor',
+  ]);
+  assert.ok(
+    result.flagged.some(
+      (flag) => flag.name === 'license.transistorsoft.com' && flag.owner === 'vendor',
+    ),
+    'a lookup of the vendor, with no connection after it, is not flagged',
+  );
+  assert.ok(
+    result.flagged.some(
+      (flag) => flag.name === 'demotiles.maplibre.org' && flag.owner === 'unknown',
+    ),
+    'a lookup of a host nobody expected (a map demo server) is not flagged',
+  );
+  assert.ok(
+    result.flagged.some((flag) => flag.address === '203.0.113.40' && flag.owner === 'unknown'),
+    'a destination no DNS answer places is not flagged',
+  );
+  assert.ok(
+    result.flagged.every((flag) => !FINE.has(flag.owner)),
+    'Kartverket, the platform or DNS was flagged',
+  );
+});
+
+test("SPIKE-01-AC16: Kartverket's host is the caller's input: a name covers itself and its subdomains, and a name it was not given is flagged", async () => {
+  const text = mapText(
+    '21:00:02.000000 IP 10.0.2.15.40003 > 10.0.2.3.53: 5103+ A? cache.kartverket.no. (37)',
+    '21:00:02.010000 IP 10.0.2.3.53 > 10.0.2.15.40003: 5103 1/0/0 A 198.51.100.60 (53)',
+    '21:00:02.020000 IP 10.0.2.15.50003 > 198.51.100.60.443: Flags [S], seq 1, win 65535, length 0',
+    '21:00:03.000000 IP 10.0.2.15.40004 > 10.0.2.3.53: 5104+ A? notkartverket.example. (39)',
+    '21:00:03.010000 IP 10.0.2.3.53 > 10.0.2.15.40004: 5104 1/0/0 A 198.51.100.61 (55)',
+    '21:00:03.020000 IP 10.0.2.15.50004 > 198.51.100.61.443: Flags [S], seq 1, win 65535, length 0',
+  );
+  const domain = ownerOf(
+    await listDestinations({ text, ...MAP_NETWORK, kartverket: ['kartverket.example'] }),
+  );
+  assert.equal(domain['192.0.2.50'], 'kartverket', 'a subdomain of the name given');
+  assert.equal(
+    domain['198.51.100.60'],
+    'unknown',
+    'a Kartverket-looking name that was not given counts for nothing: no host is built in',
+  );
+  assert.equal(domain['198.51.100.61'], 'unknown', 'a name that only ends in the same letters');
+
+  const elsewhere = await listDestinations({
+    text: mapText(),
+    ...MAP_NETWORK,
+    kartverket: ['maps.elsewhere.example'],
+  });
+  assert.equal(ownerOf(elsewhere)['192.0.2.50'], 'unknown');
+  assert.ok(
+    elsewhere.flagged.some((flag) => flag.address === '192.0.2.50'),
+    "tiles from a host not given as Kartverket's are not flagged",
+  );
+});
+
+test('SPIKE-01-AC16: a map capture that cannot be read, or no Kartverket host to read it with, is refused, never read as "only Kartverket"', async () => {
+  const ok = { text: mapText(), ...MAP_NETWORK, kartverket: [TILE_HOST] };
+  await refuses(listDestinations({ ...ok, text: '' }), 'an empty capture');
+  await refuses(
+    listDestinations({ ...ok, text: 'tcpdump: map.pcap: No such file or directory\n' }),
+    "tcpdump's own error",
+  );
+  await refuses(listDestinations({ ...ok, kartverket: undefined }), 'no Kartverket host given');
+  await refuses(listDestinations({ ...ok, kartverket: [] }), 'an empty list of Kartverket hosts');
 });

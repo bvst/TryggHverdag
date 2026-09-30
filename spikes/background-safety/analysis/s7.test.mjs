@@ -133,3 +133,44 @@ test("SPIKE-01-AC13: a gap in the receiver's ticks, or a break the driver saw, m
   assert.equal(broken.status, 'invalid');
   assert.ok(broken.evidence.includes('the Mac slept at 6 min'), 'the evidence was not kept');
 });
+
+// An S7 run must watch for at least 60 s after the "permission-reduced" mark,
+// so that a report at 60 s can be seen. No margin is added: the report and the
+// mark are timed on the same monotonic clock, and a window of exactly 60 s
+// decides both ways (a report at 60 s passes; none by then fails). A shorter
+// window means the driver did not run the scenario: the run is invalid, never
+// passed or failed, with the measured and the required duration as evidence.
+
+/** The same records with the driver's `label` mark moved to `t`. */
+const moveMark = (records, label, t) =>
+  records
+    .map((record) => (record.kind === 'mark' && record.label === label ? mark(label, t) : record))
+    .sort((a, b) => a.mono - b.mono);
+
+test('SPIKE-01-AC11: watching exactly 60 s after the change is long enough to pass a report at 60 s, and 1 ms less is invalid, even with a report seen', async () => {
+  const full = await judgeS7({
+    records: moveMark(reduced(60 * S), 'journey-ended', CHANGE + 60 * S),
+  });
+  assert.equal(full.status, 'passed');
+  assert.equal(full.reportDelayMs, 60 * S);
+
+  const short = await judgeS7({
+    records: moveMark(reduced(40 * S), 'journey-ended', CHANGE + 60 * S - 1),
+  });
+  assert.equal(short.status, 'invalid', 'a run that watched for 59.999 s was judged');
+  assert.ok(short.evidence.length > 0, 'an invalid run needs its evidence');
+});
+
+test('SPIKE-01-AC11: a run that stops watching 30 s after the change is invalid, not failed, with the measured and the required duration as evidence', async () => {
+  const result = await judgeS7({
+    records: moveMark(reduced(40 * S), 'journey-ended', CHANGE + 30 * S),
+  });
+  assert.equal(
+    result.status,
+    'invalid',
+    'the app was blamed for a report the run stopped watching for',
+  );
+  const evidence = result.evidence.join('\n');
+  assert.match(evidence, /\b30 s\b/, 'the evidence does not say how long the run watched');
+  assert.match(evidence, /\b1 min\b/, 'the evidence does not say how long S7 must watch');
+});
