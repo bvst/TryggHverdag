@@ -8,6 +8,12 @@ appId: org.example.spike.backgroundsafety
 - launchApp
 - tapOn:
     id: start-journey
+# KNOWN PROBLEM, cause not established (2026-09-30, build 39a638d6, twice):
+# after this tap, the app's "Post the alert in 10 s" button, which then sits
+# under the prompt's Allow button, was pressed too, and the S5 alert was
+# scheduled. Turning off Maestro's retryTapIfNoChange made no difference.
+# Until this is fixed, any run using this flow must check the app's event list
+# for "alert scheduled" and clear delivered notifications before S2 or S5.
 - tapOn:
     text: Allow
     optional: true
