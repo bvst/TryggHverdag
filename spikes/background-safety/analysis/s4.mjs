@@ -1,6 +1,19 @@
 // SPIKE-01-AC8 (S4): positions recorded offline arrive, in order, after 3
 // minutes offline, and the SDK's queue empties. Pure: reads no clock and no file.
-import { arrivalsIn, findMark, harnessEvidence, journeyWindow } from './journey.mjs';
+//
+// Two windows must be long enough. The device must be offline for 3 min, from
+// the "offline-started" mark to the "offline-ended" mark; a shorter window
+// means the scenario did not run, so the run is invalid. And the run must watch
+// for 5 min after reconnecting (D-021's threshold), to the journey's end; a
+// shorter watch is never passed, and it is failed only if an out-of-order
+// arrival already shows, since more watching could not undo that. A break
+// still makes any run invalid.
+import { arrivalsIn, harnessEvidence, journeyWindow, markInside, shortRun } from './journey.mjs';
+
+/** S4 cuts the device off for 3 minutes. */
+const OFFLINE_MS = 3 * 60_000;
+/** Then it watches for D-021's 5 minutes. */
+const WATCH_MS = 5 * 60_000;
 
 /** When the device recorded `arrival`, in ms since the epoch. Throws if unreadable. */
 function recordedTime(arrival) {
@@ -17,12 +30,26 @@ function recordedTime(arrival) {
  */
 export function judgeS4({ records, held, breaks = [] }) {
   const window = journeyWindow(records);
-  const online = findMark(records, 'offline-ended');
-  const offline = findMark(records, 'offline-started');
+  const online = markInside(records, 'offline-ended', window);
+  const offline = markInside(records, 'offline-started', window);
+  if (online.mono < offline.mono) {
+    throw new Error('the "offline-ended" mark comes before the "offline-started" mark');
+  }
   if (!Array.isArray(held) || held.some((id) => typeof id !== 'string' || id === '')) {
     throw new Error('held must be the list of record IDs the device held offline');
   }
-  const evidence = harnessEvidence(records, window, breaks);
+  const broken = harnessEvidence(records, window, breaks);
+  const offlineShort = shortRun(
+    online.mono - offline.mono,
+    OFFLINE_MS,
+    (measured, required) => `the device was offline for ${measured}, and S4 needs ${required}`,
+  );
+  const watchShort = shortRun(
+    window.end.mono - online.mono,
+    WATCH_MS,
+    (measured, required) =>
+      `the run watched ${measured} after reconnecting, and S4 needs ${required}`,
+  );
   const arrivals = arrivalsIn(records, window);
   const after = arrivals.filter((arrival) => arrival.mono >= online.mono);
 
@@ -48,7 +75,8 @@ export function judgeS4({ records, held, breaks = [] }) {
 
   let status =
     held.length > 0 && missing.length === 0 && !outOfOrder && queueEmptied ? 'passed' : 'failed';
-  if (evidence.length > 0) status = 'invalid';
+  if (broken.length > 0 || offlineShort.length > 0) status = 'invalid';
+  else if (watchShort.length > 0 && !outOfOrder) status = 'invalid';
   return {
     status,
     missing,
@@ -58,6 +86,6 @@ export function judgeS4({ records, held, breaks = [] }) {
     offlineMs: online.mono - offline.mono,
     firstArrivalAfterReconnectMs: flushed.length > 0 ? flushed[0].mono - online.mono : null,
     lastArrivalAfterReconnectMs: lastHeld === undefined ? null : lastHeld.mono - online.mono,
-    evidence,
+    evidence: [...broken, ...offlineShort, ...watchShort],
   };
 }

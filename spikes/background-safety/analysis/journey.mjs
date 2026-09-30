@@ -19,6 +19,19 @@ export function findMark(records, label) {
   return mark;
 }
 
+/**
+ * The driver's mark `label`, which must lie inside the journey's window: a
+ * scenario's step outside its journey means the driver broke, and a duration
+ * measured from it would mean nothing.
+ */
+export function markInside(records, label, window) {
+  const mark = findMark(records, label);
+  if (!inWindow(mark, window)) {
+    throw new Error(`the "${label}" mark lies outside the journey, so the run cannot be judged`);
+  }
+  return mark;
+}
+
 /** The journey's window: from its "journey-started" mark to its "journey-ended" mark. */
 export function journeyWindow(records) {
   if (!Array.isArray(records)) throw new Error('records must be the list the receiver wrote');
@@ -51,6 +64,21 @@ export function duration(ms) {
   const rest = seconds % 60;
   if (minutes === 0) return `${rest} s`;
   return rest === 0 ? `${minutes} min` : `${minutes} min ${rest} s`;
+}
+
+/**
+ * A run shorter than its scenario needs: the evidence for it, as a list of one
+ * line, or an empty list when the run lasted long enough (equal is enough).
+ * `describe(measured, required)` writes the line from both durations. When the
+ * shortfall is too small to show in whole seconds, it is added in ms, so the
+ * line never reads as "45 min, and 45 min is needed".
+ */
+export function shortRun(measuredMs, requiredMs, describe) {
+  if (measuredMs >= requiredMs) return [];
+  const required = duration(requiredMs);
+  let measured = duration(measuredMs);
+  if (measured === required) measured += ` (${requiredMs - measuredMs} ms short)`;
+  return [describe(measured, required)];
 }
 
 /**

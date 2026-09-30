@@ -1,10 +1,13 @@
-// SPIKE-01-AC12: reads the text of `tcpdump -nn -r <capture.pcap>` for the
-// emulator's capture of one S1 run, lists every destination the device sent to,
-// and flags the SDK's vendor, analytics and advertising. Pure.
+// SPIKE-01-AC12 and AC16: reads the text of `tcpdump -nn -r <capture.pcap>` for
+// an emulator capture and lists every destination the device sent to. Pure.
+//
+// - judgeCapture (AC12) judges one S1 run: uploads go to the receiver only,
+//   and the SDK's vendor, analytics and advertising are flagged.
+// - listDestinations (AC16) records S8's map run, with no verdict: Kartverket,
+//   the platform and DNS are marked, and everything else is flagged.
 //
 // Names come only from the capture's own DNS answers. A destination that no
-// name places is "unknown", and the capture then does not pass: nothing is
-// assumed about an address nobody named.
+// name places is "unknown": nothing is assumed about an address nobody named.
 
 /** Owners by domain, in the order they are checked: the first match wins. */
 const OWNERS = [
@@ -52,17 +55,22 @@ const OWNERS = [
   ],
 ];
 const FLAGGED = new Set(['vendor', 'analytics', 'advertising']);
-const RANK = ['vendor', 'analytics', 'advertising', 'platform'];
+const RANK = ['vendor', 'analytics', 'advertising', 'kartverket', 'platform'];
 
 const PACKET = /^\d\d:\d\d:\d\d\.\d+\s+(\S+)\s+(.*)$/;
 const FLOW = /^(\S+) > (\S+): ?(.*)$/;
 const QUERY = /^(\d+)\+?(?:\s+\[[^\]]*\])*\s+(\w+)\?\s+(\S+)/;
 const ANSWER = /^(\d+)\S*\s+(?:[A-Za-z]+\s+)?\d+\/\d+\/\d+(.*)$/;
+/** A host name of two labels or more: a bare top-level domain would cover a whole country. */
+const HOST = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
 
-/** The owner a DNS name belongs to, or null. */
-function ownerOfName(name) {
-  for (const [owner, domains] of OWNERS) {
-    if (domains.some((domain) => name === domain || name.endsWith(`.${domain}`))) return owner;
+/** Whether `name` is `domain` or one of its subdomains. */
+const within = (name, domain) => name === domain || name.endsWith(`.${domain}`);
+
+/** The owner a DNS name belongs to, or null. `owners` is OWNERS unless told otherwise. */
+function ownerOfName(name, owners = OWNERS) {
+  for (const [owner, domains] of owners) {
+    if (domains.some((domain) => within(name, domain))) return owner;
   }
   return null;
 }
@@ -84,15 +92,17 @@ function endpoint(text, ipv6) {
 const same = (a, b) => a.address === b.address && a.port === b.port;
 
 /**
- * @param {{ text: string, device: string[], receiver: { address: string, port: number },
- *   resolver: { address: string, port: number } }} input
- * @returns {{ status: 'passed' | 'failed', destinations: object[], flagged: object[],
- *   problems: string[] }}
+ * Reads tcpdump's text: where the device sent to, the names the capture's DNS
+ * answers give each address, and every name the device looked up. Throws on
+ * text that is not tcpdump's packet output, or that holds no packets.
  */
-export function judgeCapture({ text, device, receiver, resolver }) {
+function readCapture({ text, device, resolver }) {
   if (typeof text !== 'string') throw new Error('the capture must be the text tcpdump printed');
   if (!Array.isArray(device) || device.length === 0) {
     throw new Error("the device's own addresses are needed to read the capture");
+  }
+  if (typeof resolver?.address !== 'string' || !Number.isInteger(resolver?.port)) {
+    throw new Error("the resolver's address and port are needed to read the capture's DNS");
   }
   const destinations = new Map();
   const namesOf = new Map();
@@ -146,25 +156,44 @@ export function judgeCapture({ text, device, receiver, resolver }) {
     }
   }
   if (packets === 0) throw new Error('the capture holds no packets, so it shows nothing');
-  if (![...destinations.values()].some((to) => same(to, receiver))) {
-    throw new Error('the capture holds no upload to the receiver, so it did not capture the run');
-  }
+  return { destinations: [...destinations.values()], namesOf, lookedUp };
+}
 
-  const listed = [...destinations.values()].map(({ address, port }) => {
+/**
+ * Each destination with its names and owner. `fixed(destination)` gives an
+ * owner that does not come from names (DNS, the receiver), or null.
+ */
+function ownDestinations({ destinations, namesOf }, fixed, owners) {
+  return destinations.map(({ address, port }) => {
     const names = [...(namesOf.get(address) ?? [])];
-    let owner;
-    if (same({ address, port }, resolver)) owner = 'dns';
-    else if (same({ address, port }, receiver)) owner = 'receiver';
-    else {
-      const owners = names.map(ownerOfName).filter((found) => found !== null);
-      owner = RANK.find((rank) => owners.includes(rank)) ?? 'unknown';
+    let owner = fixed({ address, port });
+    if (owner === null) {
+      const found = names.map((name) => ownerOfName(name, owners)).filter((o) => o !== null);
+      owner = RANK.find((rank) => found.includes(rank)) ?? 'unknown';
     }
     return { address, port, names, owner };
+  });
+}
+
+/**
+ * @param {{ text: string, device: string[], receiver: { address: string, port: number },
+ *   resolver: { address: string, port: number } }} input
+ * @returns {{ status: 'passed' | 'failed', destinations: object[], flagged: object[],
+ *   problems: string[] }}
+ */
+export function judgeCapture({ text, device, receiver, resolver }) {
+  const capture = readCapture({ text, device, resolver });
+  if (!capture.destinations.some((to) => same(to, receiver))) {
+    throw new Error('the capture holds no upload to the receiver, so it did not capture the run');
+  }
+  const listed = ownDestinations(capture, (to) => {
+    if (same(to, resolver)) return 'dns';
+    return same(to, receiver) ? 'receiver' : null;
   });
 
   // Each flagged name once, whether it was only looked up or also connected to.
   const flags = new Map();
-  const names = [...lookedUp, ...listed.flatMap((destination) => destination.names)];
+  const names = [...capture.lookedUp, ...listed.flatMap((destination) => destination.names)];
   for (const name of names) {
     const owner = ownerOfName(name);
     if (FLAGGED.has(owner) && !flags.has(name)) flags.set(name, { name, owner });
@@ -182,4 +211,49 @@ export function judgeCapture({ text, device, receiver, resolver }) {
     flagged,
     problems,
   };
+}
+
+/**
+ * S8's map capture: recorded, not judged, so there is no verdict and no
+ * receiver. Kartverket's hosts are the caller's input, since none is verified
+ * yet: each name covers itself and its subdomains.
+ *
+ * `flagged` holds every vendor, analytics, advertising or unknown destination;
+ * every lookup of a vendor, analytics or advertising name, even with no
+ * connection after it; and every looked-up name that nothing places.
+ *
+ * @param {{ text: string, device: string[], resolver: { address: string, port: number },
+ *   kartverket: string[] }} input
+ * @returns {{ destinations: { address: string, port: number | null, names: string[],
+ *   owner: string }[], flagged: object[] }}
+ */
+export function listDestinations({ text, device, resolver, kartverket }) {
+  if (!Array.isArray(kartverket) || kartverket.length === 0) {
+    throw new Error("Kartverket's host names are needed: without them every tile host is unknown");
+  }
+  const hosts = kartverket.map((name) => (typeof name === 'string' ? dnsName(name) : ''));
+  if (hosts.some((name) => !HOST.test(name))) {
+    throw new Error("each of Kartverket's hosts must be a DNS name such as tiles.example.no");
+  }
+  const at = OWNERS.findIndex(([owner]) => owner === 'platform');
+  const owners = [...OWNERS.slice(0, at), ['kartverket', hosts], ...OWNERS.slice(at)];
+
+  const capture = readCapture({ text, device, resolver });
+  const destinations = ownDestinations(
+    capture,
+    (to) => (same(to, resolver) ? 'dns' : null),
+    owners,
+  );
+
+  const flagged = destinations.filter(
+    (destination) => destination.owner === 'unknown' || FLAGGED.has(destination.owner),
+  );
+  const seen = new Set();
+  for (const name of capture.lookedUp) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const owner = ownerOfName(name, owners) ?? 'unknown';
+    if (owner === 'unknown' || FLAGGED.has(owner)) flagged.push({ name, owner });
+  }
+  return { destinations, flagged };
 }
