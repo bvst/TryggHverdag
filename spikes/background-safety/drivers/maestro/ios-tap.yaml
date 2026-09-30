@@ -1,0 +1,11 @@
+# SPIKE-01, iOS simulator: taps the element whose testID is TARGET, scrolling
+# to it first. Only acts; never decides a verdict.
+# Run with -e TARGET=<testID>, MAESTRO_CLI_NO_ANALYTICS=1 and
+# MAESTRO_DISABLE_UPDATE_CHECK=true.
+appId: org.example.spike.backgroundsafety
+---
+- scrollUntilVisible:
+    element:
+      id: ${TARGET}
+- tapOn:
+    id: ${TARGET}

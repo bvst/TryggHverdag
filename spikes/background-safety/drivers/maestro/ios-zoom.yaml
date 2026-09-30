@@ -1,0 +1,13 @@
+# SPIKE-01, iOS simulator, S8: on the map screen, shows zoom level ZOOM and
+# waits until MapLibre reports that the map finished rendering. The driver then
+# takes the screenshot with simctl. Only acts; never decides a verdict.
+# Run with -e ZOOM=<level>, MAESTRO_CLI_NO_ANALYTICS=1 and
+# MAESTRO_DISABLE_UPDATE_CHECK=true.
+appId: org.example.spike.backgroundsafety
+---
+- tapOn:
+    id: zoom-${ZOOM}
+- extendedWaitUntil:
+    visible:
+      text: rendered zoom ${ZOOM}
+    timeout: 120000
