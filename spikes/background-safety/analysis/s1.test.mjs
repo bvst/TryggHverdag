@@ -171,12 +171,16 @@ test('SPIKE-01-AC13: a break the driver saw (the emulator exited, the Mac slept)
   assert.ok(result.evidence.includes('the emulator exited at 31 min'), 'the evidence was not kept');
 });
 
-// A run shorter than the scenario means the driver did not run it: the harness
-// broke, not the SDK. It is invalid, with the measured and the required
-// duration as evidence. It is never passed, because a run in which the
-// scenario did not run has not passed (D-060). It is never failed, because that
-// would blame the SDK for the driver. Durations in evidence are written the way
-// journey.mjs's `duration` writes them ("30 min", "5 min 30 s").
+// A run shorter than the scenario means the driver did not run all of it. It is
+// never passed, because a run in which the scenario did not run has not passed
+// (D-060). But a failure its observed part already shows, one that more
+// watching could not undo, is final: a gap over 120 s, seen with the receiver's
+// ticks intact, fails the run whatever came after. Calling it invalid would let
+// a re-run replace a failure (AC13, D-060). Otherwise the short run is invalid.
+// Either way its evidence gives the measured and the required duration, written
+// the way journey.mjs's `duration` writes them ("30 min", "5 min 30 s"). A break
+// (a hole in the ticks, the emulator exiting, the Mac sleeping) still makes any
+// run invalid.
 
 /** Arrivals every minute from 30 s to a minute before `end`: no gap anywhere. */
 const steady = (end) =>
@@ -200,18 +204,59 @@ test('SPIKE-01-AC5: a 30-minute S1 run is invalid, never passed, with the measur
   assert.match(evidence, /\b45 min\b/, 'the evidence does not say how long S1 must last');
 });
 
-test('SPIKE-01-AC5: a 30-minute S1 run with a gap over 120 s is invalid, not failed, and keeps the gap in its numbers', async () => {
-  const times = [
-    ...every(MIN, 30 * S, 10 * MIN + 30 * S),
-    ...every(MIN, 13 * MIN + 50 * S, 29 * MIN),
-  ];
-  const result = await judgeS1({
-    records: journey({ end: 30 * MIN, arrivals: times.map((t) => arrival(t)) }),
+/** A 30-minute run, arrivals every minute but for a 200 s gap after 10 min 30 s. */
+const shortWithGap = (options = {}) =>
+  journey({
+    ...options,
+    end: 30 * MIN,
+    arrivals: [
+      ...every(MIN, 30 * S, 10 * MIN + 30 * S),
+      ...every(MIN, 13 * MIN + 50 * S, 29 * MIN),
+    ].map((t) => arrival(t)),
   });
-  assert.equal(result.status, 'invalid');
-  assert.match(result.evidence.join('\n'), /\b45 min\b/);
+
+test('SPIKE-01-AC5: a 30-minute S1 run with a 200 s gap between arrivals, ticks intact, is failed, not invalid: the gap is final whatever came after, and the evidence names both durations', async () => {
+  const result = await judgeS1({ records: shortWithGap() });
+  assert.equal(result.status, 'failed', 'a re-run could replace a gap already seen');
+  const evidence = result.evidence.join('\n');
+  assert.match(evidence, /\b30 min\b/, 'the evidence does not say how long the journey lasted');
+  assert.match(evidence, /\b45 min\b/, 'the evidence does not say how long S1 must last');
   assert.equal(result.largestGapMs, 200 * S, 'the gap seen before the run ended is not recorded');
   assert.equal(result.gapsOver120s, 1);
+});
+
+/** A 30-minute run, arrivals every minute, the last one `silence` ms before its end. */
+const shortEndingInSilence = (silence) =>
+  journey({
+    end: 30 * MIN,
+    arrivals: every(MIN, 3 * MIN - silence, 30 * MIN - silence).map((t) => arrival(t)),
+  });
+
+test('SPIKE-01-AC5: in a 30-minute S1 run, 120 s of silence up to its end is invalid, and 120 s and 1 ms is failed: more watching could only make it longer', async () => {
+  const open = await judgeS1({ records: shortEndingInSilence(120 * S) });
+  assert.equal(open.largestGapMs, 120 * S);
+  assert.equal(open.status, 'invalid', 'an arrival just after the end could still have passed it');
+
+  const final = await judgeS1({ records: shortEndingInSilence(120 * S + 1) });
+  assert.equal(final.largestGapMs, 120 * S + 1);
+  assert.equal(final.status, 'failed', 'a silence already over 120 s was left to a re-run');
+  for (const result of [open, final]) {
+    const evidence = result.evidence.join('\n');
+    assert.match(evidence, /\b30 min\b/, 'the evidence does not say how long the journey lasted');
+    assert.match(evidence, /\b45 min\b/, 'the evidence does not say how long S1 must last');
+  }
+});
+
+test('SPIKE-01-AC13: a 30-minute S1 run with a 200 s gap is still invalid when the harness broke during the gap: a hole in the ticks, or a break the driver saw', async () => {
+  const outage = await judgeS1({
+    records: shortWithGap({ tickHoles: [[10 * MIN + 35 * S, 13 * MIN + 45 * S]] }),
+  });
+  assert.equal(outage.status, 'invalid', 'a receiver outage was judged as a silent phone');
+  assert.match(outage.evidence.join('\n'), /tick/i);
+
+  const slept = await judgeS1({ records: shortWithGap(), breaks: ['the Mac slept at 11 min'] });
+  assert.equal(slept.status, 'invalid', "the Mac's sleep was judged as a silent phone");
+  assert.ok(slept.evidence.includes('the Mac slept at 11 min'), 'the evidence was not kept');
 });
 
 /** The same records with the receiver's ticks at `times` instead of every 10 s. */

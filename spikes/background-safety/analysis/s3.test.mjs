@@ -136,8 +136,13 @@ test("SPIKE-01-AC13: a gap in the receiver's ticks, or a break the driver saw, m
 // S3 holds the device in the restrictions "for 45 minutes" (the spec's
 // criterion), so the run must last 45 min from the "restrictions-started" mark
 // to the journey's end, with the exemption and without it. A shorter run means
-// the driver did not run the scenario: it is invalid, never passed or failed,
-// with the measured and the required duration as evidence.
+// the driver did not run all of it, so it is never passed. But a failure its
+// observed part already shows is final, because an invalid run is re-run and
+// a re-run must never replace a failure (AC13, D-060): with the exemption, a
+// gap over 120 s; without it, no "not exempt" report before the restrictions
+// started, which is settled the moment they start. Such a run is failed. Any
+// other short run is invalid. Either way the evidence gives the measured and
+// the required duration.
 
 /** The same records with the driver's `label` mark moved to `t`. */
 const moveMark = (records, label, t) =>
@@ -170,18 +175,57 @@ test('SPIKE-01-AC7: a journey of 46 min whose restrictions held for 44 min is in
   assert.match(evidence, /\b45 min\b/, 'the evidence does not say how long S3 must hold them');
 });
 
-test('SPIKE-01-AC7: a run whose restrictions held for 28 min is invalid, whether it would have passed or failed', async () => {
+/** The run's records with the journey ended once the restrictions have held for 28 min. */
+const heldFor28Min = (arrivals) => moveMark(run(arrivals), 'journey-ended', RESTRICTED + 28 * MIN);
+
+/** Asserts the evidence gives the 28 min measured and the 45 min required. */
+function namesBothDurations(result, what) {
+  const evidence = result.evidence.join('\n');
+  assert.match(evidence, /\b28 min\b/, `${what}: the measured duration is not in the evidence`);
+  assert.match(evidence, /\b45 min\b/, `${what}: the required duration is not in the evidence`);
+}
+
+test('SPIKE-01-AC7: with the exemption, a run whose restrictions held for 28 min with a gap over 120 s is failed, not invalid: the gap is final', async () => {
+  const times = [
+    ...every(MIN, 30 * S, 20 * MIN + 30 * S),
+    ...every(MIN, 22 * MIN + 31 * S, END - 29 * S),
+  ];
+  const result = await judgeS3({
+    exemption: true,
+    records: heldFor28Min(times.map((t) => arrival(t, { exempt: true }))),
+  });
+  assert.equal(result.status, 'failed', 'a re-run could replace a gap already seen');
+  assert.equal(result.largestGapMs, 121 * S);
+  namesBothDurations(result, 'a gap of 121 s');
+});
+
+test('SPIKE-01-AC7: without the exemption, a run whose restrictions held for 28 min with no "not exempt" report before they started is failed, not invalid: that was settled when they started', async () => {
+  const cases = [
+    ['the app said it was exempt', minutely({ exempt: true })],
+    ['the app never checked', minutely({ exempt: null })],
+    [
+      'the report came after the restrictions started',
+      every(MIN, 30 * S, END - 30 * S).map((t) =>
+        arrival(t, { exempt: t < RESTRICTED ? null : false }),
+      ),
+    ],
+  ];
+  for (const [what, arrivals] of cases) {
+    const result = await judgeS3({ exemption: false, records: heldFor28Min(arrivals) });
+    assert.equal(result.status, 'failed', `${what}: a re-run could replace the missed report`);
+    assert.equal(result.notExemptReported, false, what);
+    namesBothDurations(result, what);
+  }
+});
+
+test('SPIKE-01-AC7: a run whose restrictions held for 28 min that would otherwise pass is invalid, with the exemption and without', async () => {
   const cases = [
     ['with the exemption, no gap', true, { exempt: true }],
     ['without it, and a "not exempt" report', false, { exempt: false }],
-    ['without it, and no "not exempt" report', false, { exempt: true }],
   ];
   for (const [what, exemption, fields] of cases) {
-    const records = moveMark(run(minutely(fields)), 'journey-ended', RESTRICTED + 28 * MIN);
-    const result = await judgeS3({ exemption, records });
-    assert.equal(result.status, 'invalid', what);
-    const evidence = result.evidence.join('\n');
-    assert.match(evidence, /\b28 min\b/, `${what}: the measured duration is not in the evidence`);
-    assert.match(evidence, /\b45 min\b/, `${what}: the required duration is not in the evidence`);
+    const result = await judgeS3({ exemption, records: heldFor28Min(minutely(fields)) });
+    assert.equal(result.status, 'invalid', `${what}: 28 min of restrictions passed for 45`);
+    namesBothDurations(result, what);
   }
 });

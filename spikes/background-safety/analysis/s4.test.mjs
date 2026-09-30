@@ -193,3 +193,116 @@ test('SPIKE-01-AC8: a 10-second offline window in which the device held nothing 
   assert.match(evidence, /\b10 s\b/, 'the evidence does not say how long the device was offline');
   assert.match(evidence, /\b3 min\b/, 'the evidence does not say how long S4 must cut it off');
 });
+
+// After reconnecting, the run must watch for at least 5 min, D-021's
+// lost-contact threshold, from the "offline-ended" mark to the "journey-ended"
+// mark. A journey that ends sooner has not given the held positions and the
+// queue report time to arrive, so calling them missing would blame the SDK for
+// the driver. Such a run is never passed, and it is invalid, with the measured
+// and the required duration as evidence. But an out-of-order arrival it has
+// already seen is final: more watching could not undo it, and an invalid run
+// is re-run, which must never replace a failure (AC13, D-060). That run is
+// failed, with the same evidence.
+
+/** The same records with the journey ended `after` ms after reconnecting. */
+const endedAfterReconnect = (records, after) => moveMark(records, 'journey-ended', ONLINE + after);
+
+/** Asserts the evidence gives the time watched after reconnecting and the 5 min required. */
+function namesBothDurations(result, watched, what) {
+  const evidence = result.evidence.join('\n');
+  assert.match(evidence, watched, `${what}: the evidence does not say how long the run watched`);
+  assert.match(evidence, /\b5 min\b/, `${what}: the evidence does not say how long S4 must watch`);
+}
+
+test('SPIKE-01-AC8: watching exactly 5 min after reconnecting is long enough, and 1 ms less is invalid, not passed', async () => {
+  const full = await judgeS4({
+    records: endedAfterReconnect(run(flushed()), 5 * MIN),
+    held: HELD,
+  });
+  assert.equal(full.status, 'passed');
+  assert.deepEqual(full.evidence, []);
+
+  const short = await judgeS4({
+    records: endedAfterReconnect(run(flushed()), 5 * MIN - 1),
+    held: HELD,
+  });
+  assert.equal(
+    short.status,
+    'invalid',
+    'a run that watched for 4 min 59.999 s after reconnecting was judged',
+  );
+  assert.ok(short.evidence.length > 0, 'an invalid run needs its evidence');
+});
+
+test('SPIKE-01-AC8: a journey that ends 20 s after reconnecting, before every held position has arrived or the queue is reported empty, is invalid, not failed, with both durations as evidence', async () => {
+  const cases = [
+    [
+      'two held positions still to come',
+      [
+        ...HELD.slice(0, 2).map((id) => held(id, ONLINE + 5 * S)),
+        ...HELD.slice(2).map((id) => held(id, ONLINE + 40 * S)),
+        ...every(MIN, 9 * MIN, 14 * MIN).map((t) => arrival(t)),
+      ],
+    ],
+    ['all held positions in, the queue not yet reported', flushed()],
+  ];
+  for (const [what, afterReconnect] of cases) {
+    const result = await judgeS4({
+      records: endedAfterReconnect(run(afterReconnect), 20 * S),
+      held: HELD,
+    });
+    assert.equal(
+      result.status,
+      'invalid',
+      `${what}: the SDK was blamed for a run that stopped watching`,
+    );
+    namesBothDurations(result, /\b20 s\b/, what);
+  }
+});
+
+test('SPIKE-01-AC8: an out-of-order arrival already seen 20 s after reconnecting is failed, not invalid: more watching could not undo it', async () => {
+  const cases = [
+    ['all four in, held-3 before held-2', flushed(['held-1', 'held-3', 'held-2', 'held-4'])],
+    [
+      'held-2 before held-1, two still to come',
+      [
+        held('held-2', ONLINE + 5 * S),
+        held('held-1', ONLINE + 12 * S),
+        held('held-3', ONLINE + 40 * S),
+        held('held-4', ONLINE + 40 * S),
+        ...every(MIN, 9 * MIN, 14 * MIN).map((t) => arrival(t)),
+      ],
+    ],
+  ];
+  for (const [what, afterReconnect] of cases) {
+    const result = await judgeS4({
+      records: endedAfterReconnect(run(afterReconnect), 20 * S),
+      held: HELD,
+    });
+    assert.equal(
+      result.status,
+      'failed',
+      `${what}: a re-run could replace an order already broken`,
+    );
+    assert.equal(result.outOfOrder, true, what);
+    namesBothDurations(result, /\b20 s\b/, what);
+  }
+});
+
+test("SPIKE-01-AC13: an out-of-order arrival seen 20 s after reconnecting is still invalid when the receiver's ticks stopped", async () => {
+  const result = await judgeS4({
+    records: endedAfterReconnect(
+      run(flushed(['held-1', 'held-3', 'held-2', 'held-4']), {
+        tickHoles: [[ONLINE - 5 * S, ONLINE + 25 * S]],
+      }),
+      20 * S,
+    ),
+    held: HELD,
+  });
+  assert.equal(
+    result.status,
+    'invalid',
+    'an order broken while the receiver was down was blamed on the SDK',
+  );
+  assert.match(result.evidence.join('\n'), /tick/i);
+});
