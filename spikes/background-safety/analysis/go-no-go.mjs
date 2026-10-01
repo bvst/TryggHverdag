@@ -7,12 +7,18 @@
 //   B3) never passes an item either. While a deciding item has no verdict, the
 //   rule gives no recommendation, unless a deciding item already failed: a
 //   failure shown is final (D-060), so that is NO-GO whatever the rest shows.
-// - S2, S3 without the exemption, S5, S5's "heard", S6 and S8 do not decide the
-//   SDK; a failure there is a finding.
+// - S2, S3 without the exemption, S5, S5's "heard", S6, S8 and S1 with the
+//   exemption do not decide the SDK; a failure there is a finding.
 // - S7 is judged per run: a failed run is a finding only where the platform
 //   ended that run's own process and nothing arrived after the change. A
 //   platform that ends the process does so for any SDK; an SDK that kept
 //   running, or came back, and still failed, decides.
+// - The SDK's documented settings (the spec: "NO-GO follows when any item
+//   fails and none of the SDK's documented settings fixes it. Every setting
+//   tried is recorded"; review loop 2): a failed deciding item whose setting,
+//   tried on its own platform, passed is "passed with <setting>", a condition
+//   of the GO, not NO-GO. A setting that failed or has no verdict leaves its
+//   item as it was. Every setting tried is printed.
 // The owner decides; this only prints what the rule gives.
 
 const PASSED = 'passed';
@@ -21,10 +27,15 @@ const NOT_SHOWN = 'not shown on simulators';
 const NO_VERDICT = 'no verdict';
 const VERDICTS = new Set([PASSED, FAILED, NOT_SHOWN, NO_VERDICT]);
 
-/** Each item, the platforms it is judged on (null: no platform), and whether it decides. */
+/**
+ * Each item, the platforms it is judged on (null: no platform), whether it
+ * decides, and whether it may be left out (S1 with the exemption, when it was
+ * not planned).
+ */
 const ITEMS = [
   { item: 'build', platforms: ['android', 'ios'], deciding: true },
   { item: 'S1', platforms: ['android', 'ios'], deciding: true },
+  { item: 'S1 exempt', platforms: ['android'], deciding: false, optional: true },
   { item: 'S2', platforms: ['android', 'ios'], deciding: false },
   { item: 'S3', platforms: ['android'], deciding: true },
   { item: 'S3 not exempt', platforms: ['android'], deciding: false },
@@ -89,24 +100,53 @@ function givenFindings(verdicts) {
   return given.map(({ item, platform, run, why }) => ({ item, platform, run, why }));
 }
 
+/** The settings tried: { item, platform, setting, verdict }, the verdict one of the four. */
+function settingsTried(verdicts) {
+  const tried = verdicts.settings ?? [];
+  const ok = (entry) =>
+    typeof entry?.item === 'string' &&
+    entry.item !== '' &&
+    (entry.platform === null || typeof entry.platform === 'string') &&
+    typeof entry.setting === 'string' &&
+    entry.setting.trim() !== '' &&
+    VERDICTS.has(entry.verdict);
+  if (!Array.isArray(tried) || !tried.every(ok)) {
+    throw new Error(
+      'settings must be a list of { item, platform, setting, verdict }, ' +
+        `the verdict passed, failed, ${NOT_SHOWN} or ${NO_VERDICT}`,
+    );
+  }
+  return tried.map(({ item, platform, setting, verdict }) => ({
+    item,
+    platform,
+    setting,
+    verdict,
+  }));
+}
+
 const label = ({ item, platform }) => (platform === null ? item : `${item} ${platform}`);
 
 /**
- * @param {object} verdicts `{ build: { android, ios }, S1: …, S3: { android },
- *   'S3 not exempt': { android }, …, 'S5 heard': { android, ios }, …,
+ * @param {object} verdicts `{ build: { android, ios }, S1: …, 'S1 exempt'?: { android },
+ *   S3: { android }, 'S3 not exempt': { android }, …, 'S5 heard': { android, ios }, …,
  *   S7: { android, ios, runs: [{ id, platform, case, status, processEnded,
  *   arrivalsAfterChange }] }, capture: …, licence, findings?: [{ item, platform,
- *   run, why }] }`; each verdict passed, failed, not shown on simulators or no verdict
+ *   run, why }], settings?: [{ item, platform, setting, verdict }] }`; each
+ *   verdict passed, failed, not shown on simulators or no verdict
  * @returns {{ recommendation: 'GO' | 'NO-GO' | null, items: object[], findings: object[],
- *   open: object[], noVerdict: object[], text: string }}
+ *   conditions: object[], settings: object[], open: object[], noVerdict: object[],
+ *   text: string }}
  */
 export function goNoGo(verdicts) {
+  const settings = settingsTried(verdicts);
   const items = [];
   const findings = [];
+  const conditions = [];
   const open = [];
   const noVerdict = [];
   let noGo = false;
-  for (const { item, platforms, deciding } of ITEMS) {
+  for (const { item, platforms, deciding, optional } of ITEMS) {
+    if (optional && verdicts?.[item] === undefined) continue;
     for (const platform of platforms) {
       const verdict = verdictOf(verdicts, item, platform);
       const entry = { item, platform, verdict, deciding };
@@ -116,8 +156,18 @@ export function goNoGo(verdicts) {
       } else if (verdict === NO_VERDICT) {
         noVerdict.push({ item, platform, deciding });
       } else if (verdict === FAILED) {
+        const fixedBy = settings.find(
+          (entry) => entry.item === item && entry.platform === platform && entry.verdict === PASSED,
+        );
         if (!deciding) {
-          findings.push({ item, platform, why: 'failed; it does not decide the SDK' });
+          const why =
+            item === 'S1 exempt' && verdicts.S1?.[platform] === PASSED
+              ? 'failed with the exemption, while S1 without it passed; it does not decide the SDK'
+              : 'failed; it does not decide the SDK';
+          findings.push({ item, platform, why });
+        } else if (fixedBy !== undefined) {
+          entry.passedWith = fixedBy.setting;
+          conditions.push({ item, platform, setting: fixedBy.setting });
         } else if (item === 'S7') {
           const { excused, runs } = s7Excuse(verdicts, platform);
           if (excused) {
@@ -149,7 +199,18 @@ export function goNoGo(verdicts) {
   const lines = [headline, '', 'Items:'];
   for (const entry of items) {
     const role = entry.deciding ? 'decides' : 'finding only';
-    lines.push(`- ${label(entry)}: ${entry.verdict} (${role})`);
+    const verdict =
+      entry.passedWith === undefined ? entry.verdict : `failed; passed with ${entry.passedWith}`;
+    lines.push(`- ${label(entry)}: ${verdict} (${role})`);
+  }
+  if (conditions.length > 0) {
+    lines.push('', 'Conditions (the GO holds only with these settings):');
+    for (const entry of conditions) lines.push(`- ${label(entry)}: passed with ${entry.setting}`);
+  }
+  if (settings.length > 0) {
+    lines.push('', 'Settings tried:');
+    for (const entry of settings)
+      lines.push(`- ${label(entry)}: ${entry.setting}: ${entry.verdict}`);
   }
   if (findings.length > 0) {
     lines.push('', 'Findings for the owner:');
@@ -159,7 +220,10 @@ export function goNoGo(verdicts) {
     }
   }
   if (noVerdict.length > 0) {
-    lines.push('', 'No verdict (fewer than two valid runs; the harness broke, not the device):');
+    lines.push(
+      '',
+      'No verdict (a planned case with fewer than two valid runs, or none: the harness, not the device):',
+    );
     for (const entry of noVerdict) {
       lines.push(`- ${label(entry)}: no verdict${entry.deciding ? ' (decides)' : ''}`);
     }
@@ -169,5 +233,14 @@ export function goNoGo(verdicts) {
     for (const entry of open) lines.push(`- ${label(entry)}`);
   }
   if (recommendation === 'GO') lines.push('', 'GO rests on emulator and simulator evidence only.');
-  return { recommendation, items, findings, open, noVerdict, text: lines.join('\n') };
+  return {
+    recommendation,
+    items,
+    findings,
+    conditions,
+    settings,
+    open,
+    noVerdict,
+    text: lines.join('\n'),
+  };
 }
