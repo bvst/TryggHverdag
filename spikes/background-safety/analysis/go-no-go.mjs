@@ -204,7 +204,7 @@ export function goNoGo(verdicts) {
     lines.push(`- ${label(entry)}: ${verdict} (${role})`);
   }
   if (conditions.length > 0) {
-    lines.push('', 'Conditions (the GO holds only with these settings):');
+    lines.push('', 'Conditions (items that passed only with these settings):');
     for (const entry of conditions) lines.push(`- ${label(entry)}: passed with ${entry.setting}`);
   }
   if (settings.length > 0) {
