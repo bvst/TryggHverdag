@@ -48,6 +48,15 @@ describe('the generated OpenAPI description', () => {
   });
 });
 
+/** The keys of an OpenAPI path item that are operations. */
+const HTTP_METHODS = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
+
+/**
+ * The operations anyone may call without a device credential, as the
+ * document names them, under the /v1 server. Only health, as in AC9's list.
+ */
+const PUBLIC_OPERATIONS = ['GET /health'];
+
 /** The parts of an OpenAPI document these tests read. */
 interface Operation {
   responses?: Record<string, unknown>;
@@ -107,6 +116,38 @@ describe('SM-01: the journeys route, as published', () => {
 
     expect(bearerName).toBeDefined();
     expect(securityOf(paths['/journeys']?.['post'])).toContainEqual({ [bearerName ?? '']: [] });
+  });
+
+  test('SM-01-AC16: every operation but GET /health, read from the document, declares the 401 and requires the bearer scheme', async () => {
+    // AC9 calls every route in the contract without a credential; this is
+    // the published half. Read from the document, never typed out, so a
+    // route added later is checked the day it appears: an app built from
+    // this description must know that route wants a device credential.
+    const { paths, securitySchemes, securityOf } = await described();
+    const [bearerName] = Object.entries(securitySchemes)
+      .filter(([, scheme]) => scheme.type === 'http' && scheme.scheme?.toLowerCase() === 'bearer')
+      .map(([name]) => name);
+    const operations = Object.entries(paths).flatMap(([route, item]) =>
+      Object.entries(item)
+        .filter(([method]) => HTTP_METHODS.includes(method))
+        .map(([method, operation]) => ({ key: `${method.toUpperCase()} ${route}`, operation })),
+    );
+    const guarded = operations.filter(({ key }) => !PUBLIC_OPERATIONS.includes(key));
+
+    expect(bearerName).toBeDefined();
+    expect(operations.map(({ key }) => key)).toEqual(expect.arrayContaining(PUBLIC_OPERATIONS));
+    expect(guarded.length).toBe(operations.length - PUBLIC_OPERATIONS.length);
+    expect(guarded.length).toBeGreaterThan(0);
+    expect(
+      guarded.map(({ key, operation }) => ({
+        key,
+        declares401: Object.keys(operation?.responses ?? {}).includes('401'),
+        requiresBearer: securityOf(operation).some(
+          (requirement) =>
+            JSON.stringify(requirement) === JSON.stringify({ [bearerName ?? '']: [] }),
+        ),
+      })),
+    ).toEqual(guarded.map(({ key }) => ({ key, declares401: true, requiresBearer: true })));
   });
 
   test('SM-01-AC16: GET /health requires nothing, so the monitors and the deploy check still reach it', async () => {

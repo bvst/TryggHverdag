@@ -13,7 +13,12 @@
  *     second start is "not inserted" and names the journey already there;
  *   - a walker and every responder must be users, as the foreign keys do: a
  *     start that names anyone else is refused whole, and leaves nothing;
- *   - a start's journey and its responders are stored together or not at all.
+ *   - a start's journey and its responders are stored together or not at all,
+ *     so a start with no responders is refused, not stored as a journey with
+ *     nobody to alert;
+ *   - IDs are UUIDs, matched as PostgreSQL's `uuid` type matches them: the
+ *     same ID in upper or lower case is one ID, and every ID the fake holds
+ *     or hands back is lower-case, as the database returns it.
  *
  * The shared behaviour suite (`journey-store-behaviour.ts`) runs the same
  * expectations against this fake and against the real adapter, which is
@@ -64,10 +69,13 @@ export interface FakeJourneyStore {
   unendedJourneyOf(walkerId: string): Promise<{ id: string; state: UnendedJourneyState } | null>;
   /** Which of these IDs are users. */
   existingUsers(ids: readonly string[]): Promise<ReadonlySet<string>>;
-  /** Stores a start as ACTIVE, unless the walker already has an unended journey. */
+  /**
+   * Stores a start as ACTIVE, unless the walker already has an unended
+   * journey. Rejects a start with no responders.
+   */
   insertStarted(journey: StartedJourney): Promise<InsertStartedResult>;
 
-  /** Makes a user exist, with a fresh ID unless one is given. Returns the ID. */
+  /** Makes a user exist, with a fresh ID unless one is given. Returns the ID, lower-case. */
   addUser(id?: string): string;
   /**
    * Puts a journey in directly, in any state, as a test's own setup. Keeps
@@ -99,6 +107,15 @@ function copy(journey: StoredJourney): StoredJourney {
   };
 }
 
+/**
+ * An ID as a `uuid` column holds it. PostgreSQL reads a UUID's hex digits in
+ * either case and writes them back lower-case, so an ID given in upper case
+ * finds the same row, and comes back different from how it was sent.
+ */
+function asStored(id: string): string {
+  return id.toLowerCase();
+}
+
 export function fakeJourneyStore(): FakeJourneyStore {
   const users = new Set<string>();
   const stored: StoredJourney[] = [];
@@ -106,7 +123,7 @@ export function fakeJourneyStore(): FakeJourneyStore {
   let failure: Error | null = null;
 
   const unendedOf = (walkerId: string): StoredJourney | undefined =>
-    stored.find((journey) => journey.walkerId === walkerId && journey.state !== 'ENDED');
+    stored.find((journey) => journey.walkerId === asStored(walkerId) && journey.state !== 'ENDED');
 
   /** What a foreign key would refuse, worded as PostgreSQL words it. */
   const notAUser = (role: string, id: string): Error =>
@@ -139,10 +156,24 @@ export function fakeJourneyStore(): FakeJourneyStore {
       });
     },
     existingUsers(ids) {
-      return answer('existingUsers', () => new Set(ids.filter((id) => users.has(id))));
+      return answer(
+        'existingUsers',
+        () => new Set(ids.map(asStored).filter((id) => users.has(id))),
+      );
     },
-    insertStarted({ walkerId, responderIds, startedAt }) {
+    insertStarted({ walkerId: givenWalkerId, responderIds: givenResponderIds, startedAt }) {
       return answer('insertStarted', (): InsertStartedResult => {
+        const walkerId = asStored(givenWalkerId);
+        const responderIds = givenResponderIds.map(asStored);
+        if (responderIds.length === 0) {
+          // The domain refuses an empty list before this, as NO_RESPONDER. A
+          // store asked anyway refuses too, rather than keep a journey that
+          // would alert nobody.
+          throw new Error(
+            'fakeJourneyStore.insertStarted: a start with no responders is refused, so no ' +
+              'journey is ever stored with nobody to alert',
+          );
+        }
         if (!users.has(walkerId)) {
           throw notAUser('walker', walkerId);
         }
@@ -166,11 +197,15 @@ export function fakeJourneyStore(): FakeJourneyStore {
       });
     },
 
-    addUser(id = syntheticUuid()) {
+    addUser(givenId = syntheticUuid()) {
+      const id = asStored(givenId);
       users.add(id);
       return id;
     },
-    seed({ walkerId, state, responderIds, startedAt, id = syntheticUuid() }) {
+    seed({ state, startedAt, ...given }) {
+      const walkerId = asStored(given.walkerId);
+      const responderIds = given.responderIds.map(asStored);
+      const id = asStored(given.id ?? syntheticUuid());
       if (!users.has(walkerId)) {
         throw notAUser('walker', walkerId);
       }

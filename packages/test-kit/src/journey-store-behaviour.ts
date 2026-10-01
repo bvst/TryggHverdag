@@ -14,7 +14,13 @@
  *   - an ENDED journey blocks nothing and is never reported as unended;
  *   - a start is written whole or not at all, and a walker or responder who
  *     is not a user is refused, not half-stored;
- *   - `existingUsers` names exactly the IDs that are users.
+ *   - a start with no responders is refused, and leaves nothing: a journey
+ *     with nobody to alert is the silent failure this whole app exists to
+ *     prevent, so the store holds the line even if a caller gets past the
+ *     domain's NO_RESPONDER;
+ *   - `existingUsers` names exactly the IDs that are users;
+ *   - an ID is matched as PostgreSQL's `uuid` type matches it, in either
+ *     case, and comes back lower-case.
  *
  * Each behaviour is a value — a name and a function — rather than a test of
  * its own, so a runner file states it with `test.each(JOURNEY_STORE_BEHAVIOUR)`
@@ -307,6 +313,46 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     },
   },
   {
+    name: 'an ID in upper case finds the same user and the same journey, and every ID comes back lower-case',
+    async run(subject) {
+      // A UUID's hex digits may be written in either case and name one ID;
+      // PostgreSQL reads both and writes lower-case. A fake that matched IDs
+      // as exact strings would hide what the database does to them, and so
+      // hide a caller that compares the IDs it sent with the IDs it got back.
+      const [walkerId = '', responderId = ''] = await users(subject, 2);
+      expect([walkerId, responderId]).toEqual([walkerId.toLowerCase(), responderId.toLowerCase()]);
+
+      expect([...(await subject.store.existingUsers([responderId.toUpperCase()]))]).toEqual([
+        responderId,
+      ]);
+
+      const journeyId = insertedId(
+        await subject.store.insertStarted({
+          walkerId: walkerId.toUpperCase(),
+          responderIds: [responderId.toUpperCase()],
+          startedAt: STARTED_AT,
+        }),
+      );
+
+      expect(journeyId).toBe(journeyId.toLowerCase());
+      expect(normalised(await subject.journeysOf(walkerId))).toEqual(
+        normalised([
+          {
+            id: journeyId,
+            walkerId,
+            state: 'ACTIVE',
+            startedAt: STARTED_AT,
+            responderIds: [responderId],
+          },
+        ]),
+      );
+      expect(await subject.store.unendedJourneyOf(walkerId.toUpperCase())).toEqual({
+        id: journeyId,
+        state: 'ACTIVE',
+      });
+    },
+  },
+  {
     name: 'a responder who is not a user is refused whole: the store rejects, and leaves no journey',
     async run(subject) {
       const [walkerId = '', responderId = ''] = await users(subject, 2);
@@ -345,6 +391,31 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       ).rejects.toThrow();
 
       expect(await subject.journeysOf(stranger)).toEqual([]);
+    },
+  },
+  {
+    name: 'a start with no responders is refused, and stores nothing',
+    async run(subject) {
+      // The domain refuses an empty list first, as NO_RESPONDER. This is the
+      // store's own half: asked anyway, it must not keep a journey that
+      // alerts nobody. Refusing because a library happens to throw on an
+      // empty insert, after the journey row is written, is not a rule; an
+      // upgrade that made that insert a no-op would leave the journey.
+      const [walkerId = '', responderId = ''] = await users(subject, 2);
+
+      await expect(
+        subject.store.insertStarted({ walkerId, responderIds: [], startedAt: STARTED_AT }),
+      ).rejects.toThrow();
+
+      expect(await subject.store.unendedJourneyOf(walkerId)).toBeNull();
+      expect(await subject.journeysOf(walkerId)).toEqual([]);
+      // And nothing half-written is left to block the walker's next start.
+      const retried = await subject.store.insertStarted({
+        walkerId,
+        responderIds: [responderId],
+        startedAt: STARTED_AT,
+      });
+      expect(retried.inserted).toBe(true);
     },
   },
 ];

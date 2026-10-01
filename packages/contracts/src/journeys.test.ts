@@ -5,6 +5,12 @@
 // field, `responderIds`, and anything else is refused rather than ignored. A
 // field that was quietly dropped today is one that a later version reads.
 //
+// SM-02's start rule needs one more thing from this edge. A responder must be
+// an existing user, and the server checks that by comparing IDs as strings
+// with what the database hands back, which is always lower-case. A UUID's hex
+// digits mean the same in either case, so the schema hands every ID on in
+// lower case, and a real user named in upper case is found.
+//
 // The IDs are generated per run, never written out. This package may not
 // depend on the test kit (it depends on nothing of ours), so they come from
 // node:crypto here.
@@ -65,6 +71,23 @@ describe('SEC-07: the start request holds exactly the responder list, and nothin
     expect(
       startJourneyRequestSchema.safeParse({ responderIds: [responderId, responderId] }).success,
     ).toBe(true);
+  });
+
+  test('SM-01-AC6: responder IDs come through lower-case, whatever case they were sent in', () => {
+    const [first = '', second = '', third = ''] = uuids(3);
+    // Every other hex letter upper-cased, so one ID is sent in mixed case.
+    let letters = 0;
+    const mixed = second.replace(/[a-f]/g, (letter) =>
+      (letters += 1) % 2 === 0 ? letter : letter.toUpperCase(),
+    );
+    const sent = [first.toUpperCase(), mixed, third];
+    // randomUUID writes lower-case, so the expected list is already that.
+    expect([first, second, third].every((id) => id === id.toLowerCase())).toBe(true);
+    expect(sent).not.toEqual([first, second, third]);
+
+    const parsed = startJourneyRequestSchema.parse({ responderIds: sent });
+
+    expect(parsed.responderIds).toEqual([first, second, third]);
   });
 
   test.each(REFUSED_BODIES)('SM-01-AC10: refuses $what', ({ body }) => {

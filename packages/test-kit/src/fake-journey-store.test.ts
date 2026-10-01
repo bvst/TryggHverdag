@@ -41,8 +41,10 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       'one walker’s unended journey does not block another walker',
       'starts racing for one walker, 10 at once and 5 times over: exactly one is inserted, and every other names it',
       'existingUsers names exactly the given IDs that are users',
+      'an ID in upper case finds the same user and the same journey, and every ID comes back lower-case',
       'a responder who is not a user is refused whole: the store rejects, and leaves no journey',
       'a walker who is not a user is refused: the store rejects, and stores nothing',
+      'a start with no responders is refused, and stores nothing',
     ]);
     expect(RACERS).toBeGreaterThanOrEqual(10);
     expect(RACE_ROUNDS).toBeGreaterThanOrEqual(5);
@@ -127,13 +129,14 @@ describe('fakeJourneyStore, beyond the shared suite', () => {
   test('records each port method called, in order, and nothing for its own test helpers', async () => {
     const store = fakeJourneyStore();
     const walkerId = store.addUser();
+    const responderId = store.addUser();
     store.seed({ walkerId, state: 'ENDED', responderIds: [], startedAt: AT });
     store.journeys();
     expect(store.calls).toEqual([]);
 
     await store.unendedJourneyOf(walkerId);
     await store.existingUsers([walkerId]);
-    await store.insertStarted({ walkerId, responderIds: [], startedAt: AT });
+    await store.insertStarted({ walkerId, responderIds: [responderId], startedAt: AT });
 
     expect(store.calls).toEqual(['unendedJourneyOf', 'existingUsers', 'insertStarted']);
   });
@@ -157,19 +160,25 @@ describe('fakeJourneyStore, beyond the shared suite', () => {
   test('answers again after recovering', async () => {
     const store = fakeJourneyStore();
     const walkerId = store.addUser();
+    const responderId = store.addUser();
     store.failWith(new Error('the database did not answer'));
 
     store.recover();
 
-    const result = await store.insertStarted({ walkerId, responderIds: [], startedAt: AT });
+    const result = await store.insertStarted({
+      walkerId,
+      responderIds: [responderId],
+      startedAt: AT,
+    });
     expect(result.inserted).toBe(true);
   });
 
   test('a start counts as stored only once it has settled, not when it is asked for', async () => {
     const store = fakeJourneyStore();
     const walkerId = store.addUser();
+    const responderId = store.addUser();
 
-    const storing = store.insertStarted({ walkerId, responderIds: [], startedAt: AT });
+    const storing = store.insertStarted({ walkerId, responderIds: [responderId], startedAt: AT });
     expect(store.journeys()).toEqual([]);
 
     await storing;
@@ -205,6 +214,49 @@ describe('fakeJourneyStore, beyond the shared suite', () => {
 
     expect(store.journeys()).toEqual([
       expect.objectContaining({ startedAt: AT, responderIds: [responderId] }),
+    ]);
+  });
+
+  test('refuses a start with no responders even beside an unended journey, so no path through it stores one', async () => {
+    // The shared suite holds the walker with no journey; this is the other
+    // situation, where the fake could otherwise answer "not inserted" and
+    // look as though it had accepted the list.
+    const store = fakeJourneyStore();
+    const walkerId = store.addUser();
+    store.seed({ walkerId, state: 'LOST_CONTACT', responderIds: [], startedAt: AT });
+    const before = store.journeys();
+
+    await expect(
+      store.insertStarted({ walkerId, responderIds: [], startedAt: AT }),
+    ).rejects.toThrow(/no responders/);
+
+    expect(store.journeys()).toEqual(before);
+  });
+
+  test('holds IDs given in upper case as lower-case, as a uuid column does', () => {
+    const store = fakeJourneyStore();
+    const given = syntheticUuid();
+    const responderId = syntheticUuid();
+
+    expect(store.addUser(given.toUpperCase())).toBe(given);
+    store.addUser(responderId.toUpperCase());
+    const journeyId = syntheticUuid();
+    store.seed({
+      walkerId: given.toUpperCase(),
+      state: 'ENDED',
+      responderIds: [responderId.toUpperCase()],
+      startedAt: AT,
+      id: journeyId.toUpperCase(),
+    });
+
+    expect(store.journeys()).toEqual([
+      {
+        id: journeyId,
+        walkerId: given,
+        state: 'ENDED',
+        startedAt: AT,
+        responderIds: [responderId],
+      },
     ]);
   });
 

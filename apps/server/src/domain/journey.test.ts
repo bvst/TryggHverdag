@@ -103,11 +103,14 @@ const TRANSITIONS = {
     none: { outcome: STARTED_WITH([RESPONDER]) },
     ACTIVE: { outcome: ALREADY_ON(JOURNEY) },
     LOST_CONTACT: { outcome: ALREADY_ON(JOURNEY) },
-    ENDED: {
-      notASituation:
-        'an ENDED journey is never a current journey: it is the one state that frees the ' +
-        'walker, so a walker whose journeys have all ended starts from "none"',
-    },
+    // ENDED frees the walker, so an ENDED journey handed in as the current
+    // one is no journey at all, and the start goes ahead exactly as from
+    // "none". This row was "not a situation" until review: the module never
+    // reads an ENDED journey as current, but a caller that passed one got
+    // ALREADY_ON_A_JOURNEY naming it, which tells the app to adopt a journey
+    // nobody is watching. A refusal pointing at an ended journey is the
+    // silent failure; starting is the safe answer.
+    ENDED: { outcome: STARTED_WITH([RESPONDER]) },
   },
 } satisfies Record<JourneyEventType, Record<Situation, Row>>;
 
@@ -166,9 +169,11 @@ describe('AR-04: the journey state machine is one module, total over its own lis
     ).toEqual([]);
   });
 
-  test('SM-01-AC14: the pairs with an outcome are exactly none, ACTIVE and LOST_CONTACT, each with start', () => {
+  test('SM-01-AC14: the pairs with an outcome are exactly none, ACTIVE, LOST_CONTACT and ENDED, each with start', () => {
+    // ENDED × start joined the three in review: an ENDED journey handed in
+    // is "no journey", see its row above.
     expect(OUTCOME_ROWS.map(({ situation, event }) => `${situation} × ${event}`).sort()).toEqual(
-      ['ACTIVE × start', 'LOST_CONTACT × start', 'none × start'].sort(),
+      ['ACTIVE × start', 'ENDED × start', 'LOST_CONTACT × start', 'none × start'].sort(),
     );
   });
 
@@ -384,6 +389,19 @@ function expectedOutcome(current: { id: string } | null, event: StartEvent): Out
 }
 
 describe('SM-01 and SM-02: the order of the start rule', () => {
+  test('SM-01-AC4: an ENDED journey handed in as the current one is no journey: every list gets exactly the outcome it gets with none', () => {
+    // Not only the one valid list the table asks with: an empty list is
+    // NO_RESPONDER and a bad one INVALID_RESPONDER, never a refusal that
+    // names the ended journey.
+    fc.assert(
+      fc.property(fc.uuid(), startArbitrary, (journeyId, event) => {
+        expect(transition(asCurrent({ id: journeyId, state: 'ENDED' }), event)).toEqual(
+          expectedOutcome(null, event),
+        );
+      }),
+    );
+  });
+
   test('SM-01-AC7: with an unended journey, every list is refused ALREADY_ON_A_JOURNEY with that journey', () => {
     fc.assert(
       fc.property(

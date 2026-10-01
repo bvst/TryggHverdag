@@ -379,6 +379,51 @@ describe('SM-02: at least one responder to start', () => {
     expect(store.journeys().map((journey) => journey.responderIds)).toEqual([[responderId]]);
   });
 
+  test('SM-01-AC6: an existing responder named in upper case is that user: the journey starts with them, stored lower-case', async () => {
+    // A UUID's hex digits mean the same in either case, the contract accepts
+    // both, and the database hands IDs back lower-case. The start rule
+    // compares IDs as strings, so unless the edge makes them one case, a real
+    // user named in upper case is refused as INVALID_RESPONDER: a walker told
+    // their friend cannot follow them, for the way an ID was spelled.
+    const { start, walker, user, store } = world();
+    const device = walker();
+    const responderId = user();
+    expect(responderId).toBe(responderId.toLowerCase());
+
+    const response = await start(device.credential, { responderIds: [responderId.toUpperCase()] });
+
+    expect(response.status).toBe(201);
+    expect(store.journeys().map((journey) => journey.responderIds)).toEqual([[responderId]]);
+  });
+
+  test('SM-01-AC6: one responder named in both cases counts once', async () => {
+    const { start, walker, user, store } = world();
+    const device = walker();
+    const responderId = user();
+
+    const response = await start(device.credential, {
+      responderIds: [responderId.toUpperCase(), responderId],
+    });
+
+    expect(response.status).toBe(201);
+    expect(store.journeys().map((journey) => journey.responderIds)).toEqual([[responderId]]);
+  });
+
+  test('SM-01-AC6: the walker naming themself in upper case is still the walker, and refused INVALID_RESPONDER', async () => {
+    // Making IDs one case must not open a way round the self check.
+    const { start, walker, user, store } = world();
+    const device = walker();
+    const responderId = user();
+
+    const response = await start(device.credential, {
+      responderIds: [responderId, device.userId.toUpperCase()],
+    });
+
+    expect(response.status).toBe(422);
+    expect((await errorOf(response)).code).toBe('INVALID_RESPONDER');
+    expect(store.journeys()).toEqual([]);
+  });
+
   test('SM-01-AC6: several responders, with repeats, are stored once each in the order first named', async () => {
     const { start, walker, user, store } = world();
     const device = walker();
@@ -569,6 +614,20 @@ describe('SEC-07: every route but health needs a valid device credential', () =>
 
       expect(response.status, route.key).not.toBe(401);
     }
+  });
+
+  test('SM-01-AC9: the server registers no route of its own, only the one handler that serves the contract', () => {
+    // Every test above reaches the routes through the contract, and the
+    // authentication middleware is part of the contract's router. A route
+    // registered on the Hono app directly would be neither: it would skip the
+    // middleware, and these tests, reading the contract, would never call it.
+    // The likeliest one is a raw route for the location SDK's own upload
+    // body, which is not the contract's shape. So the app's own route table
+    // is pinned here: anything beside the contract handler fails until it is
+    // brought into the contract, or this test is changed on purpose.
+    const { api } = world();
+
+    expect(api.routes.map((route) => `${route.method} ${route.path}`)).toEqual(['ALL /*']);
   });
 
   test('SM-01-AC9: GET /v1/health still answers 200 with no credential', async () => {

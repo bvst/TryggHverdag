@@ -23,6 +23,7 @@ import {
   RACE_ROUNDS,
   RACERS,
   apiPath,
+  endTestPool,
   syntheticCredential,
   syntheticUuid,
   type FakeJourneyState,
@@ -32,7 +33,7 @@ import {
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createApi } from '../api.ts';
-import { JOURNEY_STATES } from '../domain/journey.ts';
+import { JOURNEY_STATES, type JourneyState } from '../domain/journey.ts';
 import { createHealthService } from '../modules/health/service.ts';
 import { createJourneyService } from '../modules/journeys/service.ts';
 import { databaseClock } from './clock.ts';
@@ -50,6 +51,14 @@ const CONNECTIONS = RACERS + 2;
 
 const EARLIER = new Date('2026-10-01T20:00:00.000Z');
 
+/** The partial unique index that holds one unended journey per walker. */
+const ONE_UNENDED_INDEX = 'journeys_one_unended_per_walker';
+
+/** Every state the module lists but the one that frees the walker. */
+const UNENDED_STATES = JOURNEY_STATES.filter(
+  (state): state is Exclude<JourneyState, 'ENDED'> => state !== 'ENDED',
+);
+
 let container: StartedPostgreSqlContainer | undefined;
 let pool: pg.Pool | undefined;
 let db: Database | undefined;
@@ -63,7 +72,11 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
-  await pool?.end();
+  // endTestPool, not pool.end() alone: the pool's sockets are still closing
+  // when end() resolves, and stopping the container then hands the pool a
+  // 57P01 it has no listener for, which fails the run with every test
+  // passed. The test kit says why; the production pool keeps none (D-068).
+  await endTestPool(pool);
   await container?.stop();
 });
 
@@ -350,21 +363,45 @@ describe('SM-01: starting a journey, on the real tables', () => {
     }
   }, 120_000);
 
-  test('SM-01-AC3: the database itself refuses a second unended journey written directly, and allows an ENDED one beside it', async () => {
-    // The backstop, without the adapter in the way: if the index were
-    // missing, the races above could pass by luck and then fail on a phone.
-    const walkerId = await addUser();
-    await seedJourney({ walkerId, state: 'ACTIVE', responderIds: [], startedAt: EARLIER });
+  test.each(UNENDED_STATES)(
+    'SM-01-AC3: beside a journey in %s, the database itself refuses a second journey in every state but ENDED, and allows an ENDED one',
+    async (existing) => {
+      // The backstop, without the adapter in the way: if the index were
+      // missing, the races above could pass by luck and then fail on a phone.
+      // Every state the module lists but ENDED, read from the list rather
+      // than written out, so a state added later is tried here the day it is
+      // added, on both sides of the pair.
+      const walkerId = await addUser();
+      await seedJourney({ walkerId, state: existing, responderIds: [], startedAt: EARLIER });
 
-    await expect(
-      seedJourney({ walkerId, state: 'LOST_CONTACT', responderIds: [], startedAt: EARLIER }),
-    ).rejects.toMatchObject({ code: '23505' });
-    await expect(
-      seedJourney({ walkerId, state: 'ACTIVE', responderIds: [], startedAt: EARLIER }),
-    ).rejects.toMatchObject({ code: '23505' });
-    await expect(
-      seedJourney({ walkerId, state: 'ENDED', responderIds: [], startedAt: EARLIER }),
-    ).resolves.toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+      for (const second of UNENDED_STATES) {
+        await expect(
+          seedJourney({ walkerId, state: second, responderIds: [], startedAt: EARLIER }),
+          `${existing} then ${second}`,
+        ).rejects.toMatchObject({ code: '23505', constraint: ONE_UNENDED_INDEX });
+      }
+      await expect(
+        seedJourney({ walkerId, state: 'ENDED', responderIds: [], startedAt: EARLIER }),
+      ).resolves.toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+    },
+  );
+
+  test('SM-01-AC3: the index names the one state that frees the walker, not the states that block, so a state added later blocks by default', async () => {
+    // The test above tries today's states. An index written as an allow-list
+    // of blocking states would pass it, and then let a walker in a state
+    // added later start a second journey: two journeys splitting one walker's
+    // heartbeats, one of them watched for a silence that is really the
+    // other's. So the predicate itself is read back from the database.
+    const result = await connection().query<{ definition: string }>(
+      'select pg_get_indexdef($1::regclass) as definition',
+      [ONE_UNENDED_INDEX],
+    );
+    const definition = result.rows[0]?.definition ?? '';
+
+    expect(definition).toMatch(/^CREATE UNIQUE INDEX /);
+    expect(definition).toContain('(walker_id)');
+    expect(definition).toContain("<> 'ENDED'");
+    expect(definition).toMatch(/ WHERE \(state <> 'ENDED'(::[\w."]+)?\)$/);
   });
 
   test('SM-01-AC4: a walker whose only journey is ENDED, put there directly, starts a new one; the ended one is unchanged', async () => {
@@ -419,6 +456,25 @@ describe('SM-02: responders are users other than the walker, checked against the
     expect(answer.status).toBe(422);
     expect((answer.body as ErrorBody).code).toBe('INVALID_RESPONDER');
     expect(await journeysOf(device.userId)).toEqual([]);
+  });
+
+  test('SM-01-AC6: an existing responder named in upper case is that user: 201, and the row holds the ID lower-case', async () => {
+    // PostgreSQL reads a UUID in either case and hands it back lower-case;
+    // the start rule compares IDs as strings. Unless the edge makes them one
+    // case, a real user named in upper case is refused as INVALID_RESPONDER.
+    const device = await walker();
+    const responderId = await addUser();
+    expect(responderId).toBe(responderId.toLowerCase());
+
+    const answer = await start(device.credential, { responderIds: [responderId.toUpperCase()] });
+
+    expect(answer.status).toBe(201);
+    const { journeyId } = answer.body as StartedBody;
+    const rows = await connection().query<{ responder_id: string }>(
+      'select responder_id::text as responder_id from journey_responders where journey_id = $1',
+      [journeyId],
+    );
+    expect(rows.rows).toEqual([{ responder_id: responderId }]);
   });
 
   test('SM-01-AC6: a responder named twice is one responder row', async () => {

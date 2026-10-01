@@ -15,7 +15,7 @@
 // PostgreSQL 15, staging's version. Needs Docker: CI's integration job runs
 // it, a cloud session cannot.
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { apiPath, syntheticCredential, syntheticUuid } from '@trygghverdag/test-kit';
+import { apiPath, endTestPool, syntheticCredential, syntheticUuid } from '@trygghverdag/test-kit';
 import { createHash } from 'node:crypto';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -45,7 +45,11 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
-  await pool?.end();
+  // endTestPool, not pool.end() alone: the pool's sockets are still closing
+  // when end() resolves, and stopping the container then hands the pool a
+  // 57P01 it has no listener for, which fails the run with every test
+  // passed. The test kit says why; the production pool keeps none (D-068).
+  await endTestPool(pool);
   await container?.stop();
 });
 

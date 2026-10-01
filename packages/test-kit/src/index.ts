@@ -34,6 +34,8 @@ export type {
   UnendedJourneyState,
 } from './fake-journey-store.ts';
 export { JOURNEY_STORE_BEHAVIOUR, RACE_ROUNDS, RACERS } from './journey-store-behaviour.ts';
+export { ADMIN_SHUTDOWN, endTestPool } from './end-test-pool.ts';
+export type { EndablePool } from './end-test-pool.ts';
 export type {
   JourneyAsStored,
   JourneyStoreBehaviour,
