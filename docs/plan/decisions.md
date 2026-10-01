@@ -2710,3 +2710,80 @@ any other path is work, not a candidate for the same treatment.
     filled in on the phone, never sent in clear).
   - Supersedes nothing. It settles how D-020 and REL-06 read for the MVP,
     within what they already say.
+
+## D-088 — M1 closes
+- **Date:** 2026-10-01 · **Status:** Accepted (owner, 2026-10-01). Asked in
+  session with Claude's recommendation, which was "close M1, record (e)
+  too"; the owner chose it · **Section:** 10 (M1)
+- **Context:** M1's exit criteria in `10-roadmap.md` are "Spike results
+  recorded; SDK go/no-go decision; Section 4 closed". The roadmap's M1 row
+  also lists the Critical Alerts request drafted.
+  - **Spike results recorded:** `docs/plan/04b-spike-results.md`, merged in
+    #49 (`d6a2dff`, 2026-10-01).
+  - **SDK go/no-go decision:** D-086, conditional GO (#49).
+  - **Section 4 closed:** in #49 (`04-tech-stack.md` ✅).
+  - **Critical Alerts request drafted:** STORE-01, D-087, merged in #51
+    (`881c780`, 2026-10-01).
+  - **CI green on `main`:** `ci` and `deploy-staging` passed on `881c780`,
+    and on `d6a2dff` and `f46660c` before it.
+- **Decision:** M1 is closed.
+- **What stays open** (none of it blocks M2):
+  - **D-086's conditions:** L9 must show a 5-minute stop on a real iPhone,
+    and the Android exemption on a real Samsung; plus the M3 items it
+    lists.
+  - **A-30:** send the Critical Alerts request, which needs A-02, by M4 at
+    the latest.
+  - **The spike harness's known limits:** fixed only if more nights are
+    ever run (`04b-spike-results.md`, part 8).
+  - **`.claude/` configuration gaps,** each needing the owner's approval
+    and an ID:
+    - `planner`'s and `test-author`'s path guards block their own agent
+      memory (fired five times over SPIKE-01 and STORE-01);
+    - the write-time privacy hook only catches `+47`/`0047` numbers;
+    - `plan-keeper`'s brief, `/status` and `/bugfix` still name
+      `docs/progress/m0.md`.
+- **Consequences:**
+  - `10-roadmap.md`'s M1 row is marked done (D-088);
+  - the next milestone is M2, the core safety loop on the server.
+
+## D-089 — The repository is public
+- **Date:** 2026-10-01 · **Status:** Accepted (owner, 2026-10-01). Asked in
+  session with Claude's recommendation; the owner chose "close M1, record
+  (e) too" (the recommendation) · **Section:** 5 (amends D-029)
+- **Context:**
+  - D-029 says: "The private repository lives on the owner's paid personal
+    account". Its reason was that paid plans enforce rulesets on private
+    repositories.
+  - **The repository has been public since 2026-09-28.** That was the
+    owner's change, recorded in `docs/progress/m0.md`'s INF-06 entry
+    (2026-09-28). It quotes GitHub's docs: standard Linux runners for
+    public repositories "are free and unlimited", with "4 CPUs, 16 GB RAM
+    and 14 GB SSD". The owner also set **"Require approval for all
+    external contributors"** (Settings → Actions → General).
+  - No decision recorded it until now. Open item (e) in `m1.md` has the
+    details.
+- **Decision:** the repository is public. This amends D-029's "private";
+  the rest of D-029 stands. Checked against D-029's own text: its Decision
+  names "the owner's paid personal account" (unchanged) and allows a later
+  transfer to an AS organisation (unchanged); its Consequences — merge
+  rules apply to admins with no bypass, and the first CI setup task checks
+  through GitHub's API that the rules are enforced — do not name
+  visibility and hold regardless of it. Only D-029's *Context*, the reason
+  given at the time ("paid plans enforce rulesets on private repositories"),
+  is superseded: GitHub enforces rulesets on public repositories on the
+  free plan too, which is moot now the repository is public either way.
+- **What it costs, and the rules that follow:**
+  - every file is world-readable: no personal data, and synthetic test
+    data only (RG-07);
+  - results documents hold no coordinates, no phone number and nothing
+    about a real person, as SPIKE-01 practised (AC14);
+  - secrets are never committed: gitleaks runs in CI's `security` job
+    (`.github/workflows/ci.yml`, "Secret scan (gitleaks)");
+  - the merge rules still apply. **Checked, not assumed:** `gate:integrity`
+    reported "gate:integrity: 5 of 5 checks passed." on commit `881c780`
+    (job run 36901149291, read 2026-10-01T17:41:28Z) — it is checked on
+    every pull request in CI, not a one-time claim.
+- **Consequences:**
+  - A-05 in `docs/plan/README.md`, and A-05 in the roadmap's
+    owner-actions table, stop saying "private";
+  - open item (e) is answered.

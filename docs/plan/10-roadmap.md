@@ -113,7 +113,7 @@ runs never changes what is allowed to merge.
 | # | Milestone | Main content | Exit criteria (all automated) |
 |---|-----------|--------------|-------------------------------|
 | **M0** | Foundations | Repository, toolchain, Claude Code configuration, CI, merge rules, staging, monitoring, daily report | All INF tasks done; **gate drills pass**; CI green on `main`. The push to `main` and the merge without code-owner approval count as covered by `gate:integrity`'s live read until their live attempt at M5 (D-083) |
-| **M1** | Spike (emulators and simulators) | SPIKE-01, S1–S7 on emulators and simulators (D-037); location SDK in debug mode; Critical Alerts request drafted (STORE-01) | Spike results recorded; SDK go/no-go decision; Section 4 closed |
+| **M1** | Spike (emulators and simulators) — ✅ **closed** (2026-10-01, D-088) | SPIKE-01, S1–S7 on emulators and simulators (D-037); location SDK in debug mode; Critical Alerts request drafted (STORE-01) | Spike results recorded; SDK go/no-go decision; Section 4 closed — all met |
 | **M2** | Core safety loop (server) | State machine, watchdog, outbox, fake push and SMS; LOST-01 to LOST-03, LOST-06 to LOST-08, SM-01 to SM-10; staging canary (REL-10) | L6 tests green; mutation ≥ 80 %; the staging canary alerts on time for 24 hours |
 | **M3** | App MVP (demo-able) | GRP-01 to GRP-04, CALL-01 to CALL-03, JRN-01 to JRN-06, LOST-04, LOST-05, HELP-01; real push to the owner's phone; SMS to the owner's own number only | L7 green on Android (every PR) and iOS (weekly); **the owner can show the app** via internal TestFlight and Google Play internal testing |
 | **M4** | Privacy, security and compliance | PRIV-01 to PRIV-12 (retention jobs, export and delete, privacy notice in nb and en, age bands); SEC-01 to SEC-07; DPIA; Critical Alerts entitlement requested | Every PRIV and SEC ID covered by tests; DPIA in `docs/dpia/` |
@@ -159,7 +159,7 @@ If any drill *succeeds*, M0 is not done.
 
 | Needed by | Action | To-do ID |
 |-----------|--------|----------|
-| M0 | Private repository on your paid GitHub account | A-05 |
+| M0 | Repository on your paid GitHub account (public since 2026-09-28, D-089) | A-05 |
 | M0 | Separate GitHub account for Claude, with write access (not admin) | A-06 |
 | M0 | Clever Cloud account for the AS | A-04 |
 | M0 | Expo account for the AS | A-07 |
