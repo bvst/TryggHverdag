@@ -230,12 +230,88 @@ export function readCrashes({ platform, text, app }) {
   throw new Error('platform must be android or ios');
 }
 
+const ALIGN_HEADER = /^Verifying alignment of .+ \(\d+\)\.\.\.$/;
+const ALIGN_ENTRY = /^\s*\d+ (.+) \((OK|OK - compressed|BAD - \d+)\)$/;
+const ALIGN_VERDICTS = new Map([
+  ['Verification successful', true],
+  ['Verification FAILED', false],
+]);
+
+/**
+ * The 16 KB alignment, from `zipalign -c -P 16 -v 4 <apk>`: its output and its
+ * exit code (0 aligned, 1 not). Output that is not the verification, has no
+ * verdict, or disagrees with the exit code is refused, never read as aligned.
+ * @param {{ text: string, exitCode: number }} input
+ * @returns {{ aligned16k: boolean, misaligned: string[] }} the BAD entries' names
+ */
+export function readAlignment({ text, exitCode }) {
+  if (exitCode !== 0 && exitCode !== 1) {
+    throw new Error(`zipalign's exit code must be 0 or 1, and it was ${String(exitCode)}`);
+  }
+  if (typeof text !== 'string') throw new Error("zipalign's output must be text");
+  let header = false;
+  let verdict = null;
+  const misaligned = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (line.trim() === '') continue;
+    if (ALIGN_HEADER.test(line)) {
+      header = true;
+      continue;
+    }
+    if (ALIGN_VERDICTS.has(line.trim())) {
+      verdict = ALIGN_VERDICTS.get(line.trim());
+      continue;
+    }
+    const entry = ALIGN_ENTRY.exec(line);
+    if (entry === null || !header || verdict !== null) {
+      throw new Error("zipalign's output holds a line that is not its verification");
+    }
+    if (entry[2].startsWith('BAD')) misaligned.push(entry[1]);
+  }
+  if (!header)
+    throw new Error('the text is not zipalign\'s verification: no "Verifying alignment of"');
+  if (verdict === null) throw new Error("zipalign's output has no verdict, so it was cut short");
+  if (verdict !== (exitCode === 0)) {
+    throw new Error(`zipalign's verdict disagrees with its exit code ${exitCode}`);
+  }
+  if (verdict && misaligned.length > 0) {
+    throw new Error('zipalign said successful, yet named entries that are not aligned');
+  }
+  return { aligned16k: verdict, misaligned };
+}
+
+const MAP_STATUS = /^(loading|rendered|failed) zoom (\d+)$/;
+
+/**
+ * The map's render at one zoom level, from the app's own evidence (the last
+ * map.json the driver saw for that zoom). Evidence that is not the map's, or is
+ * for another zoom, is refused, never read as rendered or not.
+ * @param {{ text: string, zoom: number }} input
+ * @returns {{ rendered: boolean, frame: object | null }}
+ */
+export function readMapRender({ text, zoom }) {
+  if (!Number.isInteger(zoom)) throw new Error('the zoom asked for must be a whole number');
+  let evidence;
+  try {
+    evidence = JSON.parse(text);
+  } catch {
+    throw new Error("the map's evidence is not JSON, so it is not the app's");
+  }
+  const status = typeof evidence?.status === 'string' ? MAP_STATUS.exec(evidence.status) : null;
+  if (status === null) throw new Error("the map's evidence has no status the app writes");
+  if (Number(status[2]) !== zoom) {
+    throw new Error(`the map's evidence is for zoom ${status[2]}, not ${zoom}`);
+  }
+  return { rendered: status[1] === 'rendered', frame: evidence.frame ?? null };
+}
+
 /**
  * One device's S8 run: three zoom levels drawn, no crash, the app still running,
- * and on Android the native libraries aligned for 16 KB pages.
- * @param {{ platform: 'android' | 'ios', shots: { zoom: number, png: Uint8Array,
- *   region?: object }[], sentinel: number[], crashes: object[],
- *   processRunning: boolean, aligned16k?: boolean }} run
+ * and on Android the native libraries aligned for 16 KB pages. A shot whose map
+ * never rendered (`{ zoom, rendered: false }`, no screenshot) is failed.
+ * @param {{ platform: 'android' | 'ios', shots: ({ zoom: number, png: Uint8Array,
+ *   region?: object } | { zoom: number, rendered: false })[], sentinel: number[],
+ *   crashes: object[], processRunning: boolean, aligned16k?: boolean }} run
  */
 export function judgeS8(run) {
   const { platform, shots, sentinel, crashes, processRunning, aligned16k } = run;
@@ -257,14 +333,17 @@ export function judgeS8(run) {
     throw new Error('an Android run needs the result of the 16 KB alignment check');
   }
 
-  const judged = shots.map((shot) => ({
-    zoom: shot.zoom,
-    ...judgeTiles({ png: shot.png, sentinel, region: shot.region }),
-  }));
+  checkSentinel(sentinel);
   const problems = [];
-  for (const shot of judged) {
-    if (shot.status !== 'passed') problems.push(`zoom ${shot.zoom}: the tiles were not drawn`);
-  }
+  const judged = shots.map((shot) => {
+    if (shot.rendered === false && shot.png === undefined) {
+      problems.push(`zoom ${shot.zoom}: the map never rendered`);
+      return { zoom: shot.zoom, status: 'failed', rendered: false };
+    }
+    const tiles = judgeTiles({ png: shot.png, sentinel, region: shot.region });
+    if (tiles.status !== 'passed') problems.push(`zoom ${shot.zoom}: the tiles were not drawn`);
+    return { zoom: shot.zoom, ...tiles };
+  });
   if (crashes.length > 0) problems.push(`${crashes.length} crash(es) of the app`);
   if (!processRunning) problems.push('the app was no longer running');
   if (platform === 'android' && !aligned16k) {

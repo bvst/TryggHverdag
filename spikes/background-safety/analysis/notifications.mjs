@@ -51,6 +51,8 @@ function readRecord(lines) {
     pkg: pkg ?? null,
     channel: channel ?? null,
     title: field(/^\s+android\.title=String \((.*)\)$/) ?? null,
+    // Greedy to the last ")", so a text with parentheses is read whole; "android.text=null" gives none.
+    text: field(/^\s+android\.text=(?:Spannable)?String \((.*)\)$/) ?? null,
     createdAt: created === undefined ? null : Number(created),
     intercepted: intercept === undefined ? null : intercept === 'true',
     bypassDnd: bypass === undefined ? null : bypass === 'true',
@@ -87,7 +89,8 @@ export function readAndroidReminders({ text, app, title }) {
  *
  * @param {{ text: string, app: string, title: string }} input
  * @returns {{ posted: boolean, intercepted: boolean | null, channel: string | null,
- *   bypassDnd: boolean | null, usage: string | null }}
+ *   bypassDnd: boolean | null, usage: string | null, text: string | null }}
+ *   `text`: the record's android.text, or null when it has none
  */
 export function readAndroidAlert({ text, app, title }) {
   const alerts = matching(notificationRecords(text), app, title).sort(
@@ -95,7 +98,14 @@ export function readAndroidAlert({ text, app, title }) {
   );
   const alert = alerts.at(-1);
   if (alert === undefined) {
-    return { posted: false, intercepted: null, channel: null, bypassDnd: null, usage: null };
+    return {
+      posted: false,
+      intercepted: null,
+      channel: null,
+      bypassDnd: null,
+      usage: null,
+      text: null,
+    };
   }
   return {
     posted: true,
@@ -103,6 +113,7 @@ export function readAndroidAlert({ text, app, title }) {
     channel: alert.channel,
     bypassDnd: alert.bypassDnd,
     usage: alert.usage,
+    text: alert.text,
   };
 }
 
@@ -147,12 +158,23 @@ export function readIosReminders({ text, title }) {
 
 /**
  * S5 on iOS: the pushed alert as the app received it (the payload as it came,
- * and the text shown), and whether the platform lists it as delivered.
+ * and the text shown), and whether the platform presented the background push:
+ * a delivered entry with the alert's title, delivered after the app went to
+ * the background (the safety review's S3). The foreground push reaches the
+ * app's handler whether or not anything is presented, so it never counts.
  *
- * @param {{ received: string, delivered: string, title: string }} input the two files' text
+ * @param {{ received: string, delivered: string, title: string, backgroundAt: number }} input
+ *   the two files' text, and when the app went to the background, in ms on the Mac's clock
  * @returns {{ alert: { payload: object, shownText: string }, presented: boolean }}
  */
-export function readIosAlert({ received, delivered, title }) {
+export function readIosAlert({ received, delivered, title, backgroundAt }) {
+  if (!Number.isFinite(backgroundAt) || backgroundAt < MS_FLOOR) {
+    throw new Error(
+      'when the app went to the background must be a time in ms since the epoch, ' +
+        'so "presented" is never guessed',
+    );
+  }
+  if (typeof title !== 'string' || title === '') throw new Error('the fixed title is missing');
   const notification = parse(received, 'received.json')?.notification;
   if (!isObject(notification)) throw new Error('received.json holds no notification');
   if (!isObject(notification.payload)) {
@@ -163,6 +185,6 @@ export function readIosAlert({ received, delivered, title }) {
   const list = readDelivered(delivered);
   return {
     alert: { payload: notification.payload, shownText: notification.body },
-    presented: list.some((entry) => entry.id === notification.id && entry.title === title),
+    presented: list.some((entry) => entry.title === title && entry.deliveredAt > backgroundAt),
   };
 }
