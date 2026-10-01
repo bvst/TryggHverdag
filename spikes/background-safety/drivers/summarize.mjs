@@ -1,15 +1,18 @@
 #!/usr/bin/env node
-// SPIKE-01-AC13 and AC15: reads a night's manifest and prints each scenario's
-// verdict per platform through judgeScenario, with its valid and invalid runs,
-// then the go/no-go: its input computed by goNoGoInput, its rule applied by
-// goNoGo. Thin glue over the tested analysis: it decides nothing itself.
+// SPIKE-01-AC13 and AC15: reads one or more nights' manifests and prints each
+// scenario's verdict per platform through judgeScenario, with its valid and
+// invalid runs, then the go/no-go: its input computed by goNoGoInput from the
+// runs and the runner's plan (lib/plan.mjs: the night's blocks and the S1
+// exempt case), its rule applied by goNoGo. Thin glue over the tested
+// analysis: it decides nothing itself.
 //
 //   node drivers/summarize.mjs --night night-YYYYMMDD
-//   node drivers/summarize.mjs --manifest <path>
+//   node drivers/summarize.mjs --manifest <path> [--manifest <path> …]
 //   … --build-android passed --build-ios passed --licence passed
 //
-// The build (AC2) and the licence (AC15) are read by hand, so they are given
-// here. Without all three, the verdicts are printed and the go/no-go is not.
+// Several manifests are read as one list of entries, in the order given. The
+// build (AC2) and the licence (AC15) are read by hand, so they are given here.
+// Without all three, the verdicts are printed and the go/no-go is not.
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -17,47 +20,54 @@ import { parseArgs } from 'node:util';
 import { goNoGo } from '../analysis/go-no-go.mjs';
 import { goNoGoInput } from '../analysis/manifest.mjs';
 import { judgeScenario } from '../analysis/runs.mjs';
+import { expectedCases } from './lib/plan.mjs';
 import { RUNS } from './lib/run.mjs';
 
 const { values } = parseArgs({
   options: {
     night: { type: 'string' },
-    manifest: { type: 'string' },
+    manifest: { type: 'string', multiple: true },
     'build-android': { type: 'string' },
     'build-ios': { type: 'string' },
     licence: { type: 'string' },
   },
 });
-const file = values.manifest ?? (values.night ? join(RUNS, values.night, 'manifest.jsonl') : null);
-if (file === null || !existsSync(file)) {
+const files = values.manifest ?? (values.night ? [join(RUNS, values.night, 'manifest.jsonl')] : []);
+if (files.length === 0 || files.some((file) => !existsSync(file))) {
   process.stderr.write(
-    'give --night night-YYYYMMDD or --manifest <path> of an existing manifest\n',
+    'give --night night-YYYYMMDD, or --manifest <path> (once or more) of existing manifests\n',
   );
   process.exit(2);
 }
-const entries = readFileSync(file, 'utf8')
-  .split('\n')
-  .filter(Boolean)
-  .map((line) => JSON.parse(line));
+const entries = files.flatMap((file) =>
+  readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line)),
+);
 const runs = entries.filter((entry) => entry.kind === 'run');
 const say = (line = '') => process.stdout.write(`${line}\n`);
 
 const runner = entries.filter((entry) => entry.kind === 'runner');
 const time = (ms) => new Date(ms).toISOString().replace('.000Z', 'Z');
-for (const entry of runner) say(`runner ${entry.event} at ${time(entry.at)}`);
-say(`${runs.length} run(s) in ${file}`);
+for (const entry of runner) {
+  say(`runner ${entry.event} at ${time(entry.at)}${entry.only ? ` (only ${entry.only})` : ''}`);
+}
+for (const file of files) say(`manifest: ${file}`);
+say(`${runs.length} run(s) in ${files.length} manifest(s)`);
 say();
 
-/** Each scenario and platform, in the order they first ran. */
+/** Each scenario and platform, in the order they first ran; S1's exempt case apart. */
 const groups = new Map();
 for (const run of runs) {
-  const key = `${run.scenario} ${run.platform}`;
+  const scenario = run.scenario === 's1' && run.case === 'exempt' ? 's1 exempt' : run.scenario;
+  const key = `${scenario}|${run.platform}`;
   if (!groups.has(key)) groups.set(key, []);
   groups.get(key).push(run);
 }
 
 for (const [key, group] of groups) {
-  const [scenario, platform] = key.split(' ');
+  const [scenario, platform] = key.split('|');
   const judged = group.filter((run) => run.judged !== false);
   const recorded = group.filter((run) => run.judged === false);
   let verdict;
@@ -107,10 +117,11 @@ if (byHand.some((value) => value === undefined)) {
 } else {
   const verdicts = goNoGoInput({
     entries,
+    expected: expectedCases(),
     build: { android: values['build-android'], ios: values['build-ios'] },
     licence: values.licence,
   });
-  say('Go/no-go (goNoGoInput, then goNoGo):');
+  say("Go/no-go (goNoGoInput over the runner's plan and the S1 exempt case, then goNoGo):");
   say();
   say(goNoGo(verdicts).text);
 }

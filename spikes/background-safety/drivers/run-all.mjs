@@ -44,91 +44,10 @@ import { parseArgs } from 'node:util';
 import * as android from './lib/android.mjs';
 import * as ios from './lib/ios.mjs';
 import { judgeRunFolder } from './lib/judge.mjs';
+import { BLOCKS, EXTRAS, isJudged, planned, runFolder } from './lib/plan.mjs';
 import { BUILDS, REPOSITORY, RUNS, SPIKE, fixed, sleep } from './lib/run.mjs';
 
 const MIN = 60_000;
-
-/**
- * The plan: the go/no-go scenarios first in each block (S1, S3, S4, S7, and the
- * AC12 capture), then the findings (S2, S5, S6, S8). `repeat` is the planned
- * run's number within its case; each case is run twice. One of each pair of
- * S1 and S8 runs on Android carries the network capture.
- */
-const BLOCKS = [
-  {
-    platform: 'android',
-    runs: [
-      { scenario: 's1', tcpdump: true, minutes: 50, timeout: 75 },
-      { scenario: 's1', minutes: 49, timeout: 70 },
-      ...twice({ scenario: 's3', case: 'exempt', minutes: 50, timeout: 70 }),
-      ...twice({ scenario: 's3', case: 'not-exempt', minutes: 50, timeout: 70 }),
-      ...twice({ scenario: 's4', minutes: 13, timeout: 25 }),
-      ...twice({ scenario: 's7', case: 'background', minutes: 9, timeout: 20 }),
-      ...twice({ scenario: 's7', case: 'fine', minutes: 9, timeout: 20 }),
-      // S2 watches until 6.5 min after the last arrival, up to 15 min after the app was ended.
-      ...twice({ scenario: 's2', case: 'swipe', minutes: 23, timeout: 35 }),
-      ...twice({ scenario: 's2', case: 'lmk', minutes: 23, timeout: 35 }),
-      ...twice({ scenario: 's2', case: 'forcestop', minutes: 15, timeout: 35 }),
-      ...twice({ scenario: 's5', minutes: 2, timeout: 10 }),
-      ...twice({ scenario: 's6', case: 'without', minutes: 1.5, timeout: 8 }),
-      ...twice({ scenario: 's6', case: 'with', minutes: 1.5, timeout: 8 }),
-      { scenario: 's8', tcpdump: true, minutes: 5, timeout: 15 },
-      { scenario: 's8', minutes: 3, timeout: 12 },
-    ],
-  },
-  {
-    platform: 'ios',
-    runs: [
-      ...twice({ scenario: 's1', minutes: 50, timeout: 70 }),
-      ...twice({ scenario: 's4', minutes: 14, timeout: 25 }),
-      ...twice({ scenario: 's7', case: 'always-to-inuse', minutes: 9, timeout: 20 }),
-      ...twice({ scenario: 's2', minutes: 15, timeout: 35 }),
-      ...twice({ scenario: 's5', minutes: 3, timeout: 10 }),
-      ...twice({ scenario: 's8', minutes: 3, timeout: 12 }),
-    ],
-  },
-];
-
-/**
- * Cases outside the night's plan, run only when asked for with --only: S1 on
- * Android with the battery-optimisation exemption granted (review loop 1,
- * 2026-10-01).
- */
-const EXTRAS = [
-  {
-    platform: 'android',
-    // The first carries the capture, as S1's first run does, so the same runs
-    // can show whose Firebase lookup it is (with firebase-logcat.txt).
-    runs: [
-      { scenario: 's1', case: 'exempt', tcpdump: true, minutes: 50, timeout: 75 },
-      { scenario: 's1', case: 'exempt', minutes: 50, timeout: 70 },
-    ],
-  },
-];
-
-function twice(run) {
-  return [run, { ...run }];
-}
-
-/** Each planned run with its platform, its case key and its number within the case. */
-function planned(blocks = BLOCKS) {
-  const slots = [];
-  for (const { platform, runs } of blocks) {
-    const seen = new Map();
-    for (const run of runs) {
-      const key = caseKey({ platform, scenario: run.scenario, case: run.case ?? null });
-      const repeat = (seen.get(key) ?? 0) + 1;
-      seen.set(key, repeat);
-      slots.push({ platform, case: null, tcpdump: false, ...run, repeat, key });
-    }
-  }
-  return slots;
-}
-
-const caseKey = ({ platform, scenario, case: name }) => `${scenario}/${platform}/${name ?? '-'}`;
-
-/** S2's Force stop is recorded, not judged (AC6). */
-const isJudged = (slot) => !(slot.scenario === 's2' && slot.case === 'forcestop');
 
 /** The builds from 20545d9, as recorded when they were built and downloaded. */
 const EXPECTED = {
@@ -287,8 +206,6 @@ function runDriver(slot, runId, logFile, say) {
   });
 }
 
-const RUN_FOLDER = /^(s\d)-(android|ios)(?:-(.+))?-(\d+)$/;
-
 /**
  * The night's run folders with no line in the manifest: the runner stopped
  * while they ran. Each with the slot it belongs to, so it can be recorded.
@@ -298,13 +215,10 @@ function unrecordedFolders(night, manifest, slots) {
   const recorded = new Set(manifest.filter((e) => e.kind === 'run').map((e) => e.runId));
   const found = [];
   for (const name of readdirSync(RUNS)) {
-    if (!name.startsWith(`${night}-`) || recorded.has(name)) continue;
-    const parts = RUN_FOLDER.exec(name.slice(night.length + 1));
-    if (parts === null) continue;
-    const [, scenario, platform, runCase = null, attempt] = parts;
-    const key = caseKey({ platform, scenario, case: runCase });
-    const slot = slots.find((candidate) => candidate.key === key);
-    if (slot !== undefined) found.push({ runId: name, slot, attempt: Number(attempt) });
+    const folder = runFolder(night, name);
+    if (folder === null || recorded.has(name)) continue;
+    const slot = slots.find((candidate) => candidate.key === folder.key);
+    if (slot !== undefined) found.push({ runId: name, slot, attempt: folder.attempt });
   }
   return found.sort((a, b) => a.attempt - b.attempt);
 }
@@ -515,6 +429,9 @@ async function main() {
       const startedAt = Date.now();
       const exit = await runDriver(slot, runId, logFile, say);
       const endedAt = Date.now();
+      // A capture's emulator stops before the run is judged, so its pcap is
+      // complete when tcpdump reads it (the code review, loop 2).
+      if (slot.tcpdump) await stopEmulator(say);
       // Judged however the driver exited: a failure it saved is final (B2c).
       const result = judgeRunFolder(join(RUNS, runId), exit);
       if (exit.code !== 0) {
@@ -543,11 +460,9 @@ async function main() {
       say(
         `${runId}: ${result.status}${result.evidence.length ? ` (${result.evidence[0].slice(0, 160)})` : ''}`,
       );
-      // A capture's emulator stops with its run, so no later run writes into
-      // its pcap; an invalid Android run's emulator may be hung, so it goes too.
-      if (slot.platform === 'android' && (slot.tcpdump || result.status === 'invalid')) {
-        await stopEmulator(say);
-      }
+      // A capture's emulator was stopped above, so no later run writes into its
+      // pcap; an invalid Android run's emulator may be hung, so it goes too.
+      if (slot.platform === 'android' && result.status === 'invalid') await stopEmulator(say);
       await sleep(5000);
       if (result.status !== 'invalid') break;
     }
