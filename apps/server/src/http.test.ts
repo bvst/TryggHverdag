@@ -2,7 +2,7 @@
 // port 8080 on a public interface before it sends traffic, and fails the
 // deploy with "listening on localhost instead of publicly" otherwise — so the
 // address is asserted, not assumed.
-import { fakeClock, fakeWorkerHeartbeats } from '@trygghverdag/test-kit';
+import { fakeClock, fakeDeviceAuthenticator, fakeWorkerHeartbeats } from '@trygghverdag/test-kit';
 import { describe, expect, test } from 'vitest';
 import { createApi } from './api.ts';
 import { listen } from './http.ts';
@@ -13,6 +13,10 @@ const NOW = new Date('2026-09-24T21:00:00.000Z');
 function api() {
   return createApi({
     health: createHealthService({ clock: fakeClock(NOW), heartbeats: fakeWorkerHeartbeats(NOW) }),
+    // These tests are about the port; they start no journey, so the journey
+    // service fails loudly if anything calls it.
+    journeys: { start: () => Promise.reject(new Error('the port tests start no journey')) },
+    devices: fakeDeviceAuthenticator(),
   });
 }
 
