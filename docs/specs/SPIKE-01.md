@@ -1151,8 +1151,9 @@ for different reasons:
 - **iOS.** The only gap, 370 s in both runs, is exactly the route's 6-minute
   stop. A perfectly still simulated position gives no location updates, and
   the simulator has no motion sensor. So the SDK stayed "moving" and never sent
-  stationary heartbeats. No documented setting was found that changes this on
-  a simulator, so it is recorded with its cause, open until a real iPhone (L9).
+  stationary heartbeats. No documented setting was found that changes this on a simulator. It is
+  recorded as **failed and deciding**, with its cause, never as open. L9 must
+  show a stop of 5 minutes or more on a real iPhone, unplugged, screen off.
 
 The go/no-go rule says NO-GO unless one of the SDK's documented settings fixes a
 failure, with every setting tried recorded. The exemption is such a setting
