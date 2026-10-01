@@ -168,13 +168,7 @@ export function readIosReminders({ text, title }) {
  * @returns {{ alert: { payload: object, shownText: string }, presented: boolean }}
  */
 export function readIosAlert({ received, delivered, title, backgroundAt }) {
-  if (!Number.isFinite(backgroundAt) || backgroundAt < MS_FLOOR) {
-    throw new Error(
-      'when the app went to the background must be a time in ms since the epoch, ' +
-        'so "presented" is never guessed',
-    );
-  }
-  if (typeof title !== 'string' || title === '') throw new Error('the fixed title is missing');
+  const presented = readIosPresented({ delivered, title, backgroundAt });
   const notification = parse(received, 'received.json')?.notification;
   if (!isObject(notification)) throw new Error('received.json holds no notification');
   if (!isObject(notification.payload)) {
@@ -182,9 +176,27 @@ export function readIosAlert({ received, delivered, title, backgroundAt }) {
       'the notification received has no pushed payload, so it is not the pushed alert',
     );
   }
-  const list = readDelivered(delivered);
-  return {
-    alert: { payload: notification.payload, shownText: notification.body },
-    presented: list.some((entry) => entry.title === title && entry.deliveredAt > backgroundAt),
-  };
+  return { alert: { payload: notification.payload, shownText: notification.body }, presented };
+}
+
+/**
+ * S5 on iOS: whether the platform presented the background push, from
+ * delivered.json alone: a delivered entry with the alert's title, delivered
+ * after the app went to the background. Read also when the app recorded no
+ * foreground push (review loop 2).
+ *
+ * @param {{ delivered: string, title: string, backgroundAt: number }} input
+ * @returns {boolean}
+ */
+export function readIosPresented({ delivered, title, backgroundAt }) {
+  if (!Number.isFinite(backgroundAt) || backgroundAt < MS_FLOOR) {
+    throw new Error(
+      'when the app went to the background must be a time in ms since the epoch, ' +
+        'so "presented" is never guessed',
+    );
+  }
+  if (typeof title !== 'string' || title === '') throw new Error('the fixed title is missing');
+  return readDelivered(delivered).some(
+    (entry) => entry.title === title && entry.deliveredAt > backgroundAt,
+  );
 }

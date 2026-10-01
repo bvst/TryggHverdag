@@ -24,6 +24,7 @@ import {
   readAndroidAlert,
   readAndroidReminders,
   readIosAlert,
+  readIosPresented,
   readIosReminders,
 } from './notifications.mjs';
 import { readSleeps } from './pmset.mjs';
@@ -81,10 +82,24 @@ function driverSteps(files) {
 
 const breakText = (found) => (typeof found === 'string' ? found : found.text);
 
-/** For judges that take no breaks: any break makes the run invalid. */
-function withBreaks(breaks, result) {
+/**
+ * Breaks for the judges with no timing of their own, S5, S6 and S8 (review
+ * loop 2). A run that would pass is invalid with any break. A failure stays
+ * failed, with the breaks in the evidence, when it rests on evidence no break
+ * of the harness can produce: `always` with any break (a crash log naming the
+ * app, a failed alignment check, a changed alert text), `timed` only when
+ * every break has its time (S5's own platform records, beside a sleep of the
+ * Mac). Otherwise the run is invalid.
+ */
+function withBreaks(breaks, result, { always = false, timed = false } = {}) {
   if (breaks.length === 0) return result;
-  return { ...result, status: INVALID, evidence: [...breaks.map(breakText), ...result.evidence] };
+  const untimed = breaks.some((found) => typeof found === 'string');
+  const keep = result.status === FAILED && (always || (timed && !untimed));
+  return {
+    ...result,
+    status: keep ? FAILED : INVALID,
+    evidence: [...breaks.map(breakText), ...result.evidence],
+  };
 }
 
 /** The device's addresses: the emulator's, and any the driver recorded for this run. */
@@ -266,6 +281,7 @@ function s8Capture({ meta, records, files }) {
       text,
       device: network.device,
       resolver: network.resolver,
+      receiver: network.receiver,
       kartverket: KARTVERKET,
       ...(clock === null ? {} : clock.window),
     });
@@ -298,14 +314,36 @@ function alignmentOf(meta, files) {
   throw new Error('the run has no result of the 16 KB alignment check');
 }
 
+/**
+ * The map's render at a shot's zoom. Evidence written for an earlier zoom
+ * (the tap never moved the map) means it did not render at this one (review
+ * loop 2); anything else readMapRender refuses stays refused.
+ */
+function renderAt(evidence, zoom, earlier) {
+  try {
+    return readMapRender({ text: evidence, zoom });
+  } catch (error) {
+    for (const before of earlier) {
+      try {
+        readMapRender({ text: evidence, zoom: before });
+        return { rendered: false, frame: null };
+      } catch {
+        // Not that zoom's either.
+      }
+    }
+    throw error;
+  }
+}
+
 /** S8's shots: each zoom's map evidence, then its screenshot where the map rendered. */
 function shotsOf(meta, files) {
   if (!Array.isArray(meta.shots)) throw new Error('meta.json lists no shots');
-  return meta.shots.map((shot) => {
+  return meta.shots.map((shot, i) => {
     const evidence = files?.[`zoom-${shot.zoom}.json`];
     if (typeof evidence !== 'string')
       throw new Error(`the run has no map evidence for zoom ${shot.zoom}`);
-    const render = readMapRender({ text: evidence, zoom: shot.zoom });
+    const earlier = meta.shots.slice(0, i).map((before) => before.zoom);
+    const render = renderAt(evidence, shot.zoom, earlier);
     if (!render.rendered) return { zoom: shot.zoom, rendered: false };
     const png = typeof shot.file === 'string' ? files?.[shot.file] : undefined;
     if (!(png instanceof Uint8Array)) {
@@ -380,19 +418,38 @@ const JUDGES = {
       const text = alert.text === FIXED.alert.body ? PASSED : FAILED;
       const details = { seen: shown, heard, text };
       const failed = [shown, heard, text].includes(FAILED);
-      return withBreaks(breaks, { status: failed ? FAILED : PASSED, evidence: [], details });
+      // The platform's own records: no sleep of the Mac or hole in the ticks
+      // makes them; a changed text, not even a break with no time.
+      return withBreaks(
+        breaks,
+        { status: failed ? FAILED : PASSED, evidence: [], details },
+        { always: text === FAILED, timed: true },
+      );
     }
+    const steps = driverSteps(files);
+    const backgrounded = steps.find((step) => step.step === 'app-backgrounded');
+    const backgroundAt = Number.isFinite(meta.backgroundAt) ? meta.backgroundAt : backgrounded?.at;
     if (meta.received === null && typeof files?.['received.json'] !== 'string') {
-      // The driver saw no foreground push recorded by the app: the alert's
-      // own path failed, so nothing it carried can be checked.
+      // No foreground push recorded. Failed only when the driver pushed and
+      // waited for it (review loop 2); otherwise the harness broke first.
+      if (!steps.some((step) => step.step === 'foreground-push-not-recorded')) {
+        throw new Error(
+          'the app recorded no foreground push, and the driver never waited for one: ' +
+            'it broke before the push',
+        );
+      }
+      const delivered = files?.['delivered.json'];
+      const presented =
+        typeof delivered === 'string'
+          ? readIosPresented({ delivered, title: FIXED.alert.title, backgroundAt })
+          : null;
       const problems = [
-        'the app recorded no foreground push, so its payload and text could not be checked',
+        "the app recorded no foreground push within the driver's wait, " +
+          'so its payload and text could not be checked',
       ];
-      const details = { presented: null, text: FAILED, problems };
+      const details = { presented, text: null, problems };
       return withBreaks(breaks, { status: FAILED, evidence: [], details });
     }
-    const backgrounded = driverSteps(files).find((step) => step.step === 'app-backgrounded');
-    const backgroundAt = Number.isFinite(meta.backgroundAt) ? meta.backgroundAt : backgrounded?.at;
     const alert = readIosAlert({
       received: need(files, 'received.json'),
       delivered: need(files, 'delivered.json'),
@@ -409,7 +466,11 @@ const JUDGES = {
       problems: checked.problems,
     };
     const passed = alert.presented && checked.status === PASSED;
-    return withBreaks(breaks, { status: passed ? PASSED : FAILED, evidence: [], details });
+    return withBreaks(
+      breaks,
+      { status: passed ? PASSED : FAILED, evidence: [], details },
+      { always: checked.status === FAILED },
+    );
   },
   // S6: the behaviour is recorded, not scored (AC10): a run passes once
   // Telecom's record was read.
@@ -429,6 +490,9 @@ const JUDGES = {
     const { status, evidence, ...details } = judgeS7({ records, breaks });
     return { status, evidence, details: { ...details, processEnded: processEndedOf(meta, files) } };
   },
+  // S8: the crash log and the alignment check are read first (review loop 2).
+  // Either failing is final, even when the shots cannot be read, and beside
+  // any break; without them, what cannot be read makes the run invalid.
   s8: ({ meta, records, files, breaks }) => {
     const android = meta.platform === 'android';
     const crashes = android
@@ -436,19 +500,48 @@ const JUDGES = {
       : (meta.crashReports ?? []).flatMap((name) =>
           readCrashes({ platform: 'ios', text: need(files, name), app: APP }),
         );
-    const alignment = android ? alignmentOf(meta, files) : null;
-    const result = judgeS8({
-      platform: meta.platform,
-      shots: shotsOf(meta, files),
-      sentinel: FIXED.sentinel,
-      crashes,
-      processRunning: meta.processRunning,
-      ...(android ? { aligned16k: alignment.aligned16k } : {}),
-    });
+    let alignment = null;
+    let alignmentError = null;
+    if (android) {
+      try {
+        alignment = alignmentOf(meta, files);
+      } catch (error) {
+        alignmentError = error;
+      }
+    }
+    const final = [];
+    if (crashes.length > 0) final.push(`${crashes.length} crash(es) of the app in its crash log`);
+    if (alignment?.aligned16k === false) {
+      final.push('the native libraries are not aligned for 16 KB pages');
+    }
+    let result;
+    try {
+      if (alignmentError !== null) throw alignmentError;
+      result = judgeS8({
+        platform: meta.platform,
+        shots: shotsOf(meta, files),
+        sentinel: FIXED.sentinel,
+        crashes,
+        processRunning: meta.processRunning,
+        ...(android ? { aligned16k: alignment.aligned16k } : {}),
+      });
+    } catch (error) {
+      if (final.length === 0) throw error;
+      result = {
+        status: FAILED,
+        shots: [],
+        problems: [...final, `the rest could not be judged: ${error.message}`],
+      };
+    }
     const details = { shots: result.shots, problems: result.problems };
     if (alignment !== null) details.alignment = alignment;
     if (meta.capture) Object.assign(details, s8Capture({ meta, records, files }));
-    return withBreaks(breaks, { status: result.status, evidence: [], details });
+    const evidence = result.status === FAILED ? result.problems : [];
+    return withBreaks(
+      breaks,
+      { status: result.status, evidence, details },
+      { always: final.length > 0 },
+    );
   },
 };
 

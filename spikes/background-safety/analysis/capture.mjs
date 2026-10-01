@@ -38,12 +38,14 @@ const OWNERS = [
       'branch.io',
       'bugsnag.com',
       // Firebase, which expo-notifications links on Android (the privacy
-      // review's should-fix 2). These hosts sit under googleapis.com; as
-      // analytics comes before the platform, they win over it.
-      'firebaseinstallations.googleapis.com',
+      // review's should-fix 2): by pattern, every host under googleapis.com
+      // whose first label starts with "firebase" (review loop 2), Firebase
+      // Messaging's own hosts, and Crashlytics' report host. As analytics
+      // comes before the platform, they win over googleapis.com.
+      /^firebase[^.]*\.(?:[^.]+\.)*googleapis\.com$/,
       'fcm.googleapis.com',
       'fcmtoken.googleapis.com',
-      'firebaselogging-pa.googleapis.com',
+      'crashlyticsreports-pa.googleapis.com',
     ],
   ],
   [
@@ -92,8 +94,9 @@ const within = (name, domain) => name === domain || name.endsWith(`.${domain}`);
 
 /** The owner a DNS name belongs to, or null. `owners` is OWNERS unless told otherwise. */
 function ownerOfName(name, owners = OWNERS) {
+  const matches = (domain) => (domain instanceof RegExp ? domain.test(name) : within(name, domain));
   for (const [owner, domains] of owners) {
-    if (domains.some((domain) => within(name, domain))) return owner;
+    if (domains.some(matches)) return owner;
   }
   return null;
 }
@@ -226,11 +229,12 @@ function checkPackets({ packets, window }) {
 
 /**
  * Each destination with its names and owner, in this order:
- * - the receiver itself, any of its addresses on its port (judgeCapture only);
+ * - the receiver itself, any of its addresses on its port, when the receiver
+ *   is given;
  * - a vendor, analytics or advertising name: nothing below can hide one;
  * - any of the resolver's addresses on any port: DNS, and DNS over TLS on 853;
  * - any of the receiver's addresses on another port: the harness (the Mac,
- *   such as the debug build probing it for Metro), in judgeCapture only;
+ *   such as the debug build probing it for Metro), when the receiver is given;
  * - the owner its names give, else unknown.
  */
 function ownDestinations(
@@ -293,20 +297,24 @@ export function judgeCapture({ text, device, receiver, resolver, from, to }) {
 }
 
 /**
- * S8's map capture: recorded, not judged, so there is no verdict and no
- * receiver. Kartverket's hosts are the caller's input, since none is verified
- * yet: each name covers itself and its subdomains.
+ * S8's map capture: recorded, not judged, so there is no verdict. Kartverket's
+ * hosts are the caller's input, since none is verified yet: each name covers
+ * itself and its subdomains. Given the receiver (review loop 2), the Mac on
+ * the receiver's own port is the receiver, and on any other port the
+ * harness's, as in judgeCapture; neither is flagged.
  *
  * `flagged` holds every vendor, analytics, advertising or unknown destination;
  * every lookup of a vendor, analytics or advertising name, even with no
  * connection after it; and every looked-up name that nothing places.
  *
  * @param {{ text: string, device: string[], resolver: { addresses: string[], port: number },
- *   kartverket: string[], from?: number, to?: number }} input
+ *   receiver?: { addresses: string[], port: number }, kartverket: string[],
+ *   from?: number, to?: number }} input
  * @returns {{ destinations: { address: string, port: number | null, names: string[],
  *   owner: string }[], flagged: object[] }}
  */
-export function listDestinations({ text, device, resolver, kartverket, from, to }) {
+export function listDestinations({ text, device, resolver, receiver, kartverket, from, to }) {
+  if (receiver !== undefined) checkRole(receiver, 'receiver');
   if (!Array.isArray(kartverket) || kartverket.length === 0) {
     throw new Error("Kartverket's host names are needed: without them every tile host is unknown");
   }
@@ -319,7 +327,7 @@ export function listDestinations({ text, device, resolver, kartverket, from, to 
 
   const capture = readCapture({ text, device, resolver, from, to });
   checkPackets(capture);
-  const destinations = ownDestinations(capture, { resolver }, owners);
+  const destinations = ownDestinations(capture, { resolver, receiver: receiver ?? null }, owners);
 
   const flagged = destinations.filter(
     (destination) => destination.owner === 'unknown' || FLAGGED.has(destination.owner),
