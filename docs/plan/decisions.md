@@ -2534,11 +2534,13 @@ any other path is work, not a candidate for the same treatment.
     License Key; the license-validation warning shown in DEBUG builds does
     not restrict functionality. DEBUG builds may be used for development
     and testing only and may not be distributed to End Users."
-  - **3.6:** read by the owner as allowing evaluation in release builds
-    without distribution to end users — the clause the 30-day trial key
-    below relies on. Its exact wording is **not independently re-quoted in
-    this session**; it should be quoted verbatim here the next time it is
-    read.
+  - **3.6:** "Licensor may issue Trial Keys valid for thirty days from issue.
+    A Trial Key may be used only to evaluate the Software in RELEASE builds
+    and not for production use or distribution to End Users. Trial Keys
+    expire automatically and may not be renewed except at Licensor's
+    discretion." This is the clause the 30-day trial key below relies on.
+    Quoted from the copy read at 19:21 on 2026-09-30, unchanged by the
+    vendor's edit to 9.5.
   - **7.1:** "It transmits location and related data only to the server
     endpoints that Licensee configures in its Application. Licensor
     operates no server that receives that data."
