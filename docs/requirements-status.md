@@ -50,7 +50,7 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | SEC-04 | Leaked invitation | must | ⚪ | 0 |
 | SEC-05 | Admin (owner) account compromised | must | ⚪ | 0 |
 | SEC-06 | Vulnerable or malicious dependencies | must | 🟢 | 1 |
-| SEC-07 | Faked "I'm fine" heartbeats | must | ⚪ | 0 |
+| SEC-07 | Faked "I'm fine" heartbeats | must | 📝 | 0 |
 | PRIV-01 | Location is collected only while a journey is running (including one started by CALL-03). | must | ⚪ | 0 |
 | PRIV-02 | Only the walker can start sharing their own location. | must | ⚪ | 0 |
 | PRIV-03 | Only the responders on a journey can see it, and only while it runs. | must | ⚪ | 0 |
@@ -63,8 +63,8 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | PRIV-10 | A plain-language privacy notice in bokmål, shown before the first journey. | must | ⚪ | 0 |
 | PRIV-11 | A DPIA is written and kept in `docs/` before the private group starts. | must | ⚪ | 0 |
 | PRIV-12 | Members under 18 (D-017): the admin records only an age band at invitation (under 15 / 15–17 / 18+), never a… | must | ⚪ | 0 |
-| SM-01 | One active journey per walker. | must | ⚪ | 0 |
-| SM-02 | A journey needs at least one responder to start. | must | ⚪ | 0 |
+| SM-01 | One active journey per walker. | must | 📝 | 0 |
+| SM-02 | A journey needs at least one responder to start. | must | 📝 | 0 |
 | SM-03 | Heartbeats keep a journey ACTIVE even without a position; "location unavailable" is a flag (REL-05). | must | ⚪ | 0 |
 | SM-04 | LOST_CONTACT → ENDED (home) is allowed, e.g. | must | ⚪ | 0 |
 | SM-05 | The 2-hour automatic stop (JRN-06) **never** ends a journey that is in LOST_CONTACT. | must | ⚪ | 0 |
