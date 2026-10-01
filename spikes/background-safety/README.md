@@ -18,7 +18,7 @@ package. Deleting this folder removes the spike completely.
 | `routes/`   | The synthetic route: made-up waypoints and a fixed seed                     |
 | `analysis/` | Pure functions: the verdicts, the results tables and the go/no-go rule      |
 | `app/`      | The spike app: Expo SDK 57, its own `package.json` and `pnpm-lock.yaml`     |
-| `drivers/`  | One script per scenario and platform, and the Maestro flows (to come)       |
+| `drivers/`  | One script per scenario and platform, and the Maestro flows (`maestro/`)    |
 
 Plain `.mjs` on Node 22, with no dependencies outside the app.
 
@@ -143,7 +143,7 @@ cleanly. The emulator reaches it as `10.0.2.2`; the simulator as `127.0.0.1`.
 One driver per scenario and platform, in `drivers/`. From this folder:
 
 ```sh
-node drivers/s1-android.mjs [--tcpdump] [--dry]
+node drivers/s1-android.mjs [--case exempt] [--tcpdump] [--dry]
 node drivers/s2-android.mjs --case swipe|lmk|forcestop [--dry]
 node drivers/s3-android.mjs --case exempt|not-exempt [--dry]
 node drivers/s4-android.mjs [--dry]
@@ -169,9 +169,20 @@ node drivers/s7-ios.mjs --case always-to-inuse [--dry]
 - **`--dry`:** a short, uncounted run, whose run id starts with `dry-`. It is
   for checking the harness and collecting sample outputs, never for a verdict.
 - **The drivers only act and collect.** Every verdict comes from `analysis/`.
-  The Maestro flows in `drivers/maestro/` only tap and wait. The drivers launch
-  the app with simctl, because Maestro's `launchApp` would grant every
-  permission itself.
+  A driver never throws on a scenario's own outcome (a map that did not
+  render, zipalign's "not aligned", a report that never came): it records it
+  for the judge. The Maestro flows in `drivers/maestro/`
+  (`ios-allow-notifications.yaml`, `ios-tap.yaml`, `ios-zoom.yaml`) only tap
+  and wait, each within 3 min. The drivers launch the app with simctl, because
+  Maestro's `launchApp` would grant every permission itself.
+- **`s1-android --case exempt`:** S1 with the battery-optimisation exemption
+  granted by script first, as the app's setup would ask the user (the same
+  grant as S3's exempt case). Before the screen goes off it shows the
+  exemption in force: deviceidle's list holds the app, and the app's own
+  `exempt: true` report has reached the receiver (`meta.json`,
+  `exemptionInForce`). If it cannot show that, the run stops with a break,
+  which makes it invalid. Everything else is S1's: screen off, battery
+  unplugged, no forced Doze, the same route and seed.
 
 ### The overnight runner
 
@@ -179,36 +190,60 @@ node drivers/s7-ios.mjs --case always-to-inuse [--dry]
 node drivers/run-all.mjs --plan                  # the plan and its expected time; runs nothing
 node drivers/run-all.mjs --night night-YYYYMMDD  # every counted run, resumable
 node drivers/run-all.mjs --smoke                 # one real S6 run, in its own smoke- manifest
-node drivers/summarize.mjs --night night-YYYYMMDD
+node drivers/run-all.mjs --night night-YYYYMMDD-s1-exempt --only s1/android/exempt
+                                                 # one case outside the plan, twice, in a night of its own
+node drivers/summarize.mjs --night night-YYYYMMDD \
+  [--build-android passed --build-ios passed --licence passed]
+node drivers/rejudge.mjs --night night-YYYYMMDD  # re-judge a night from its saved folders
 ```
 
 - **Self-checks first:**
   - Colima stopped, the Mac on AC power, and no emulator or simulator running;
   - the receiver's port free;
   - both builds from `20545d9` with their recorded sha256s;
-  - Maestro, JDK 17 and tcpdump present.
+  - Maestro, JDK 17 and tcpdump present;
+  - a driver for every planned case.
 
-  If any fails, nothing runs.
+  If any fails, nothing runs. A night holds one plan: the full night, or one
+  `--only` case. A night that already holds another plan's runs is refused
+  before anything is written.
 - **One device at a time:** the Android block, then the iOS block. The
   go/no-go scenarios (S1, S3, S4, S7 and the AC12 capture) come first in each
   block, then the findings (S2, S5, S6, S8).
 - **Each case twice.** Each run is judged when it ends, by
-  `drivers/lib/judge.mjs` over the analysis, with the Mac's sleeps from its
-  `pmset` log as breaks.
-- **An invalid run** (the harness broke, the driver threw or timed out) is
-  repeated, at most twice extra per case. After that the case stops, and the
-  manifest says why.
+  `drivers/lib/judge.mjs`, which reads the run's folder and hands it to the
+  tested per-run judge, `analysis/judge-run.mjs`. The Mac's sleeps from the
+  run's `pmset` log are breaks, each with its span.
+- **Every run is judged, however its driver exited.** A failure its records
+  show is failed and final, even if the driver then threw or timed out. A
+  driver that threw or timed out with no failure shown makes the run invalid.
+- **"Invalid" means only that the harness broke:** a break the driver saw, the
+  Mac asleep or the receiver silent over the moment that decided the run, a
+  driver that did not finish, or a file the judge cannot read. An invalid run
+  says nothing about the SDK. It is repeated, at most twice extra per case.
+  After that the case stops, and the manifest says why.
 - **A failed run is never repeated** (D-060).
+- **The emulator is stopped** after each run with a capture, so no later run
+  writes into its pcap, and after any invalid Android run, killed outright if
+  it does not answer.
 - **Everything goes in `~/spike-runs/<night>/`:** `manifest.jsonl` (one line
   per run, and each stopped case), `runner.log`, and each driver's output in
   `logs/`. Restarted with the same `--night`, the runner skips what the
-  manifest holds.
+  manifest holds. A run folder with no line (the runner stopped during it) is
+  judged as it was left and recorded as interrupted; its id is never reused.
 
 **In the morning:** `tail ~/spike-runs/night-YYYYMMDD/runner.log` shows the
 last run started or finished. `node drivers/summarize.mjs --night night-YYYYMMDD`
 prints each scenario's verdict per platform (through `judgeScenario`), with
 every run's status and evidence. "NO VERDICT" means a case has fewer than two
-valid runs.
+valid runs: the harness broke, and the case needs runs, not a reading. Given
+the build and the licence as read by hand, it also prints the go/no-go, its
+input computed from the manifest (`analysis/manifest.mjs`).
+
+**Re-judging:** `drivers/rejudge.mjs` judges every run of a night again from
+its saved folder, with the exit its driver had, and writes
+`manifest.rejudged.jsonl` beside the manifest. It only reads the manifest and
+the run folders. Summarize it with `--manifest`.
 
 **What the harness had to learn (2026-09-30), and does:**
 
@@ -218,6 +253,13 @@ valid runs.
 - **Android, the network capture (AC12):** the emulator's `-tcpdump` sees
   only `eth0`, and with Wi-Fi on the app's traffic leaves through `wlan0`. So
   `--tcpdump` runs go without Wi-Fi, and `meta.json` says so.
+- **Android, the capture's clock (2026-10-01):** the pcap's times ran about an
+  hour (3603.8 s) behind the Mac's on the night of 2026-09-30, and the file
+  kept growing as long as its emulator ran. The judge places the run on the
+  capture's clock from the run's own uploads to the receiver, and reads only
+  the run's window. A run it cannot place (S8 has one arrival) is not guessed:
+  its destinations are the whole file's, and the details say so. The device's
+  addresses, IPv6 included, are in `meta.json` (`deviceAddresses`).
 - **Android, the restricted standby bucket (S3):** Android re-promotes a
   journeying app from `restricted` (45) to 10 or 30 within a second. The
   driver records the bucket actually in force.
