@@ -1662,3 +1662,120 @@ test("SPIKE-01-AC16: S8's capture through judgeRun: the Mac on the receiver's ow
     'the receiver is flagged',
   );
 });
+
+// Rules the per-run judge applies that no test held (implementer's loop-2
+// green pass, RG-02). Beside a break, a run is failed only on evidence no
+// break of the harness can produce. Two outcomes a break can produce are
+// therefore invalid beside one, timed or not, and never failed:
+// - S5 on iOS, the alert not presented. That is the absence of a delivery,
+//   which a simulator that stopped or a Mac that slept leaves behind too.
+//   Android's own record of an alert Do Not Disturb intercepted is a record,
+//   not an absence, and stays failed beside a sleep (above);
+// - S8, the tiles not drawn, or the map never rendered at a zoom. These are
+//   render outcomes: a sleep that cut the tile fetch, or an emulator that
+//   froze, can cause them. A crash log naming the app and zipalign's failed
+//   check are static evidence, and stay failed beside any break (above).
+// And S5 on iOS with no foreground push recorded after the driver waited for
+// it, and no delivered.json: the run is failed on the push alone, and
+// "presented" was never read, so it is null, never false.
+
+/** The iOS driver's own words when the simulator stops mid-run (drivers/lib/ios.mjs). */
+const SIMULATOR_GONE = 'the iOS simulator was Shutdown during the run';
+
+/** A 20 × 20 RGBA screenshot of the style's background alone: every pixel the sentinel. */
+function sentinelPng() {
+  const row = Buffer.alloc(1 + SHOT * 4);
+  for (let x = 0; x < SHOT; x++) row.set([...FIXED.sentinel, 255], 1 + x * 4);
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(SHOT, 0);
+  header.writeUInt32BE(SHOT, 4);
+  header[8] = 8;
+  header[9] = 6;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk('IHDR', header),
+    pngChunk('IDAT', deflateSync(Buffer.concat(Array.from({ length: SHOT }, () => row)))),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+test('SPIKE-01-AC13: S5 on iOS: an alert not presented, beside a sleep of the Mac or a break with no time, is invalid, never failed, with the break in the evidence', async () => {
+  const notPresented = s5Ios([deliveredEntry(FOREGROUND_ID, 17_825)]);
+  const control = await judgeRun(notPresented);
+  assert.equal(control.status, 'failed', 'the control: not presented, with no break');
+  assert.equal(control.details.presented, false, 'the control is not the alert not presented');
+
+  const slept = await judgeRun(withSleep(notPresented, IOS_START + 10 * S, 5));
+  assert.equal(slept.status, 'invalid', "the Mac's sleep was blamed on the alert");
+  assert.match(slept.evidence.join('\n'), /slept|sleep/i, 'the sleep is not in the evidence');
+
+  const gone = await judgeRun(withUntimedBreak(notPresented, SIMULATOR_GONE));
+  assert.equal(gone.status, 'invalid', "the simulator's stop was blamed on the alert");
+  assert.ok(gone.evidence.includes(SIMULATOR_GONE), 'the break is not in the evidence');
+});
+
+test('SPIKE-01-AC13: S8 with the tiles not drawn, or the map never rendered at a zoom, beside a sleep of the Mac or a break with no time, is invalid, never failed: a render outcome is not static evidence', async () => {
+  const cases = [
+    ['the tiles not drawn at zoom 14', (meta, files) => (files['zoom-14.png'] = sentinelPng())],
+    [
+      'the map never rendered at zoom 14',
+      (meta, files) => {
+        meta.shots[1] = { zoom: 14, rendered: false, file: null, region: null };
+        files['zoom-14.json'] = mapJson('rendered zoom 10', 10);
+        delete files['zoom-14.png'];
+      },
+    ],
+  ];
+  for (const platform of ['android', 'ios']) {
+    const untimed = platform === 'android' ? EMULATOR_EXITED : SIMULATOR_GONE;
+    for (const [what, change] of cases) {
+      const run = s8Run(platform, change);
+      const control = await judgeRun(run);
+      assert.equal(control.status, 'failed', `${platform}, ${what}, with no break: the control`);
+      assert.match(
+        control.evidence.join('\n'),
+        /zoom 14/,
+        `${platform}, ${what}: the control did not fail at zoom 14`,
+      );
+
+      const slept = await judgeRun(withSleep(run, WALL0 + 30 * S, 15));
+      assert.equal(
+        slept.status,
+        'invalid',
+        `${platform}, ${what}: the Mac's sleep was blamed on the map`,
+      );
+      assert.match(
+        slept.evidence.join('\n'),
+        /slept|sleep/i,
+        `${platform}, ${what}: the sleep is not in the evidence`,
+      );
+
+      const broke = await judgeRun(withUntimedBreak(run, untimed));
+      assert.equal(
+        broke.status,
+        'invalid',
+        `${platform}, ${what}: the break was blamed on the map`,
+      );
+      assert.ok(
+        broke.evidence.includes(untimed),
+        `${platform}, ${what}: the break is not in the evidence`,
+      );
+    }
+  }
+});
+
+test('SPIKE-01-AC9: S5 on iOS: a foreground push the app never recorded, after the driver waited for it, with no delivered.json, is failed on the push alone, and "presented" is null: never read, so never false', async () => {
+  for (const exit of [{ code: 0, signal: null }, THREW]) {
+    const result = await judgeRun(s5IosUnrecorded({ steps: TIMED_OUT_STEPS, exit }));
+    assert.equal(
+      result.status,
+      'failed',
+      `exit ${JSON.stringify(exit)}: the missing delivered.json overruled the push that never came`,
+    );
+    assert.equal(
+      result.details.presented,
+      null,
+      `exit ${JSON.stringify(exit)}: "presented" was given without delivered.json`,
+    );
+  }
+});

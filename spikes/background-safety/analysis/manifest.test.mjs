@@ -625,3 +625,43 @@ test("SPIKE-01-AC12: the capture is failed if any capture run failed, from eithe
   );
   assert.equal(plainFailed.capture.android, F, "the plain run's failed capture");
 });
+
+// A scenario with no planned case (implementer's loop-2 green pass, RG-02):
+// left out of `expected`, its platform left out, or planned with an empty
+// list. Its runs, passed ones included, belong to no planned case, so its item
+// has no verdict there, never a pass. S4 decides, so the go/no-go then refuses
+// to recommend.
+
+test('SPIKE-01-AC13: a scenario with no planned case in `expected` has no verdict, never a pass, beside two passed runs: left out of the plan, its platform left out, or planned with no case', async () => {
+  for (const platform of ['android', 'ios']) {
+    assert.deepEqual(
+      runsOf(night(), 's4', platform).map((run) => run.status),
+      [P, P],
+      `the control: S4 on ${platform} ran twice and passed`,
+    );
+  }
+  const withoutS4 = Object.fromEntries(
+    Object.entries(NIGHT_PLAN).filter(([scenario]) => scenario !== 's4'),
+  );
+  const cases = [
+    ['S4 left out of the plan', withoutS4, ['android', 'ios']],
+    ['S4 on iOS left out of the plan', { ...NIGHT_PLAN, s4: { android: [null] } }, ['ios']],
+    [
+      'S4 on iOS planned with no case',
+      { ...NIGHT_PLAN, s4: { android: [null], ios: [] } },
+      ['ios'],
+    ],
+  ];
+  for (const [what, plan, unplanned] of cases) {
+    const verdicts = await goNoGoInput(input(undefined, plan));
+    for (const platform of ['android', 'ios']) {
+      const want = unplanned.includes(platform) ? NV : P;
+      assert.equal(verdicts.S4[platform], want, `${what}: S4 on ${platform}`);
+    }
+    assert.equal(
+      (await goNoGo(verdicts)).recommendation,
+      null,
+      `${what}: the go/no-go recommended anyway`,
+    );
+  }
+});

@@ -505,3 +505,21 @@ test('SPIKE-01-AC15: a setting that is not { item, platform, setting, verdict },
     );
   }
 });
+
+// "S1 exempt" is a line only when its case was planned (implementer's loop-2
+// green pass, RG-02). With no such key, the night did not plan the exempt
+// case: the item is left out, not made up as no verdict or as open.
+
+test('SPIKE-01-AC15: with no "S1 exempt" verdict given, the item is left out: not among the items, not printed, and not listed as no verdict or as open', async () => {
+  const given = await goNoGo(verdicts((all) => (all['S1 exempt'] = { android: P })));
+  assert.ok(find(given.items, 'S1 exempt', 'android'), 'the control: given, it is an item');
+  assert.ok(linesWith(given.text, 'S1 exempt').length > 0, 'the control: given, it is printed');
+
+  const result = await goNoGo(verdicts());
+  assert.equal(result.recommendation, 'GO');
+  const named = (list) => list.filter((entry) => entry.item === 'S1 exempt');
+  assert.deepEqual(named(result.items), [], '"S1 exempt" is an item without a verdict given');
+  assert.deepEqual(named(result.noVerdict), [], '"S1 exempt" is listed as no verdict');
+  assert.deepEqual(named(result.open), [], '"S1 exempt" is listed as open until L9');
+  assert.deepEqual(linesWith(result.text, 'S1 exempt'), [], '"S1 exempt" is printed');
+});
