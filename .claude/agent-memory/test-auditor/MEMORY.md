@@ -7,5 +7,6 @@
 - [Baseline vs main](feedback_baseline_vs_main.md) — ratchet reads the branch's own baseline; diff it against origin/main and run ratchetDrops with main's
 - [Entry-script wiring](feedback_entry_script_wiring.md) — pure decisions tested, their callers/dispatch entries not; shape tests let false greens through
 - [Mutation pooled score](project_mutation_pooled_score.md) — safety-core mutants pooled in whole-suite run, *.ts only; "fails loudly" not guaranteed
-- [SPIKE-01 audit](project_spike01_audit.md) — spike tests outside CI/Stryker; BLOCK at 8a37a5e for judge-run S3/S4; re-audit list
+- [SPIKE-01 audit](project_spike01_audit.md) — spike tests outside CI/Stryker; BLOCK at 8a37a5e, PASS at 6ae585f; open should-fix ids
 - [Parallel ID collision](feedback_parallel_id_collision.md) — new D-0xx/BUG-n may already be taken on main or an open PR; dirty PR = zero check runs
+- [Shadowed guards](feedback_shadowed_guards.md) — a new filter layer (plan) can shadow an old guard and silently drop failures; re-run old mutants

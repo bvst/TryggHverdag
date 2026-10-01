@@ -35,3 +35,6 @@ was still 3 of 5 in the session, so verify the premise with curl, not with the s
 2026-10-01 on the Mac (SPIKE-01 at 8a37a5e): still 3 of 5. `gh api …/rules/branches/main` lists 13 contexts
 (gate-integrity, static, unit, integration, system, contract, traceability, mutation, security, the three blocking
 ai-reviews, android-e2e). The branch was unpushed (check-runs 422, no PR), so no check existed on the commit.
+Same at 6ae585f (SPIKE-01 re-audit, later on 2026-10-01): 3 of 5, the same 13 contexts live, unpushed, no PR, 422.
+`req:coverage` rewrites docs/requirements-status.md. If `git status` shows it unchanged afterwards, the run
+changed nothing.

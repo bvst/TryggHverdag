@@ -5,4 +5,4 @@
 - [pnpm --filter no-match exits 0](feedback_pnpm_filter_no_match.md) — gate scripts handing over with --filter need `--fail-if-no-match`
 - [Unowned gate configs](project_unowned_gate_configs.md) — depcruise rules, vitest coverage config, app jest coverage block have no CODEOWNERS entry
 - [Verdict-pipeline review](feedback_verdict_pipeline_review.md) — invalid-over-failed precedence, glue args vs test fixtures, coarse go/no-go inputs, "no verdict"
-- [SPIKE-01 night 2026-09-30](project_spike01_night_20260930.md) — loop 1 PASS; verified raw facts and open should-fixes for 04b-spike-results / go-no-go
+- [SPIKE-01 night 2026-09-30](project_spike01_night_20260930.md) — loop 2 PASS (6ae585f); verified raw facts; open should-fixes for 04b-spike-results, spec, code

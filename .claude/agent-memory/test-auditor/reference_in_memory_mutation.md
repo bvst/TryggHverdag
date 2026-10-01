@@ -66,6 +66,13 @@ output for the failing test names. 51 mutants took about 2 min. Mutant 0 is a no
 `analysis/*.test.mjs` while a live device run is up: the receiver tests open sockets (port 0, but still).
 Guard traps on the Mac: `git stash list` is blocked as a git write; `| … > <scratchpad file>` is blocked as a redirect
 (unlike the 2026-09-29 cloud run). Pipe straight into grep instead.
+**v2 (SPIKE-01 re-audit, 6ae585f):** `ta-spike-harness2.mjs <mutants.mjs> [id-prefix] [--dry]` reads `MUTANTS`
+(`{id, name, target, from, to}`) from a JS module written with the Write tool, then passes each mutant to
+`ta-spike-hooks2.mjs` as JSON in the `TA_MUTANT` env var. No per-run files. `--dry` counts each pattern on disk first;
+run it before every batch. 132 mutants took about 5 min in the background. While it runs, `sleep N; cat` is blocked;
+do other reading until the completion notice arrives.
+A grep pattern containing ` > ` (e.g. `deliveredAt > backgroundAt`) trips the read-only redirect guard. Drop the
+`>` part from the pattern; never try to get round the guard itself.
 2026-09-29: this run had no Write tool, but `cat <<'EOF' > <scratchpad>/file` heredocs worked, including `>`
 redirects into the scratchpad. The harness `scratchpad/ta-bug8/ta-harness-unit.mjs <target> <test> <mutants.json>`
 (startVitest plus a transform plugin, `from`/`to` pairs, "NOT APPLIED" unless exactly one match) ran 15 mutants of

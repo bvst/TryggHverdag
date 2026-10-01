@@ -39,6 +39,17 @@ When the code under review turns device runs into verdicts (SPIKE-01 style: pure
 - **"Open until L9" is a term of art.** In goNoGo it means not shown, which never blocks GO; a failed
   item described as "open for L9" in prose can drift into that list. Keep failed items out of it.
 
+- **Interval arithmetic across two clocks.** Cutting a wall-clock span (a Mac sleep) out of a gap measured
+  on a monotonic clock (performance.now(), which on macOS likely stops in sleep) overshoots by the sleep's
+  length and erases real post-sleep silence. Test fixtures that advance mono and wall together hide it.
+- **Several manifests at once.** Concatenated inputs need duplicate-runId refusal (one run counted twice
+  turns "no verdict" into a pass) and a refusal of runs whose case the plan does not know (their
+  failures silently leave the go/no-go while the per-scenario printout still shows them).
+- **"Condition" vs "resolved" vs "fixed".** A setting that makes an item pass is a condition of a GO;
+  check prose (results, progress log) and the GO headline say so, and quote the vendor's own caveats.
+- **"The cause" in results.** A plausible platform mechanism (an AOSP flag) is a likely cause until its
+  state on the image is read and a run with the fix passes; "not a platform limit" needs that run.
+
 **Why:** the spec's risk list (R1-R19) is all false confidence; a GO rests on these paths.
 **How to apply:** any review of spikes/**, results documents, or go/no-go code. The fix for a live run
 is post-hoc re-judging of saved run directories, never a re-run. Related: [[spike-01-night-20260930]],
