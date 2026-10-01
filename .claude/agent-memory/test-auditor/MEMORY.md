@@ -1,5 +1,7 @@
 - [In-memory mutation](reference_in_memory_mutation.md) — Vite plugin in startVitest; `--import` register file reaches spawned children; guard blocks `=>`
-- [gate:integrity locally](project_gate_integrity_local.md) — 3/5 locally; repo is private, so use `gh api .../rules/branches/main`, not curl
+- [gate:integrity locally](project_gate_integrity_local.md) — 3/5 locally; use `gh api .../rules/branches/main`; repo visibility changes (public 2026-10-01)
+- [Promised future tests](feedback_promised_future_tests.md) — "Mx will test X" needs a tracked ID or decision to land on; design-only promises escape RG-01
+- [Read-only guard](feedback_readonly_guard.md) — guard blocks heredoc/redirect scratch files; don't route around it via Write; use grep and repo scripts
 - [Bug tests and untested fallbacks](feedback_bug_test_patterns.md) — fallback branches go untested; how to prove a cleanup hook masks nothing
 - [Stryker incremental reuse](reference_stryker_incremental_reuse.md) — local report reuses old results for unchanged code; flaky tests count as kills
 - [Stale base](feedback_stale_base.md) — fetch main first; BUG-5 conflicted with main's fix; docs citing agent memory must exist at HEAD

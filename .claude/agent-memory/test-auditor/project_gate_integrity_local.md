@@ -19,8 +19,10 @@ mutate it. Check again each time: CI with RULES_READ_TOKEN may give 5 of 5.
 Still 3 of 5 locally on 2026-09-26 (BUG-5 audit and re-audit). Also check whether the branch has been pushed or has a PR
 (`gh pr list --head <branch>`). If not, no check exists on the commit, so "CI already ran it" is false too. ci.yml runs
 only on `pull_request` and push to main, so a pushed branch with no PR has zero check runs.
-**The repository is private as of 2026-09-26.** Anonymous `curl` to api.github.com returns 404. Use `gh api
-repos/bvst/TryggHverdag/rules/branches/main` instead; it lists the 12 required contexts (mutation, traceability, unit,
+**Visibility changes: check it, don't recall it.** It was private on 2026-09-26 (anonymous curl gave 404), and
+`gh api repos/bvst/TryggHverdag --jq .visibility` said **public** on 2026-10-01. So a doc saying "the repository is
+public" was true at STORE-01 (ca72239). Use `gh api
+repos/bvst/TryggHverdag/rules/branches/main` either way; it lists the 12 required contexts (mutation, traceability, unit,
 integration and system among them). `gh api .../rulesets/23864486` shows `bypass_actors: null` with this token, so
 bypass stays unverified.
 Still 3 of 5 on 2026-09-26 (INF-06 audit at 6938a37). The branch was not pushed, so `gh api .../commits/<sha>/check-runs`
@@ -36,5 +38,9 @@ was still 3 of 5 in the session, so verify the premise with curl, not with the s
 (gate-integrity, static, unit, integration, system, contract, traceability, mutation, security, the three blocking
 ai-reviews, android-e2e). The branch was unpushed (check-runs 422, no PR), so no check existed on the commit.
 Same at 6ae585f (SPIKE-01 re-audit, later on 2026-10-01): 3 of 5, the same 13 contexts live, unpushed, no PR, 422.
+Same at ca72239 (STORE-01, docs only, 2026-10-01): 3 of 5, 13 contexts live, unpushed, no PR, 422. For a docs-only
+diff, traceability's cheap steps are enough to run by hand: `req:coverage --fail-on-uncovered-changed`,
+`tests:changes --base origin/main` and `node scripts/affected.mjs --base origin/main`. With `code=false`,
+test:coverage, the ratchet and mutation all take "nothing to check".
 `req:coverage` rewrites docs/requirements-status.md. If `git status` shows it unchanged afterwards, the run
 changed nothing.

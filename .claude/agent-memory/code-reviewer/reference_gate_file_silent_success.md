@@ -20,4 +20,6 @@ More blocks, from the SPIKE-01 review on 2026-09-30:
 
 2026-10-01 (SPIKE-01 loop-2 review): in a `python3 - <<'EOF'` heredoc, a variable named `mv` was blocked as a "file-changing command", because the guard reads the token as the shell's move command. Avoid the shell's command names (`mv`, `cp`, `rm`, `tee`, `touch`) as identifiers. These passed: `subprocess.run(['tcpdump','-tt','-nn','-r',…])` inside a heredoc, `<` comparisons, and `2>&1`. Running repository node scripts that only print, such as `node drivers/summarize.mjs`, also passed.
 
+2026-10-01 (STORE-01 review): this happened again. A python heredoc with `ord(c) >= 128` was blocked as "output redirection", so the non-ASCII and length probe was not done. Before sending any heredoc, scan it for `>`. `not c.isascii()` and `len(...)` need none (untested). Process substitution, `diff <(…) <(…)`, passed.
+
 The brief says a guard block means stop and report. Do not rephrase the command to get past it; list the check as not done. Running a Write-created probe with `node <file>` in the scratchpad did work, and it may import repository modules read-only.

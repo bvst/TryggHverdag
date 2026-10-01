@@ -6,4 +6,5 @@
 - [Stale prose after amendment](project_stale_prose_after_amendment.md) — amended ACs leave old wording in spec tech-approach, README, doctor hints; grep it
 - [Spike harness: invalid vs failed](project_spike_harness_invalid_vs_failed.md) — D-060 holes both ways; aggregators: duplicate run ids, unplanned cases; capture facts; SF list in shared scratchpad
 - [Results doc vs evidence](project_results_doc_vs_evidence.md) — diff the generator's rows exactly; convert times; read `from`/scope fields; test the documented flag combinations
+- [Owner docs for outside forms](project_owner_docs_for_external_forms.md) — paste hygiene, field-limit stop rule, numbered cross-refs, paraphrase vs quote, milestones vs roadmap
 - [IDs taken while open](project_ids_taken_while_open.md) — grep main and open PRs for the branch's new D-/BUG-/A- numbers; dirty PR = no workflows; label = release, not image
