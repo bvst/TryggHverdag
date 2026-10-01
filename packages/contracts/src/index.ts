@@ -17,6 +17,24 @@
 
 export { API_PREFIX, API_VERSION } from './api-version.ts';
 export { contract } from './contract.ts';
+export {
+  DEVICE_CREDENTIAL_SCHEME,
+  deviceCredentialErrors,
+  deviceCredentialSecurityScheme,
+  deviceRoute,
+} from './device-credential.ts';
 export { health, healthResponseSchema, WORKER_STALE_AFTER_MS } from './health.ts';
 export type { HealthResponse } from './health.ts';
+export {
+  MAX_RESPONDERS,
+  startJourney,
+  startJourneyErrors,
+  startJourneyRequestSchema,
+  startJourneyResponseSchema,
+} from './journeys.ts';
+export type {
+  StartJourneyErrorCode,
+  StartJourneyRequest,
+  StartJourneyResponse,
+} from './journeys.ts';
 export { openApiDocument, openApiJson, OPENAPI_INFO } from './openapi.ts';

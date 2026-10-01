@@ -11,6 +11,7 @@ import { OpenAPIGenerator } from '@orpc/openapi';
 import { ZodToJsonSchemaConverter } from '@orpc/zod/zod4';
 import { API_PREFIX, API_VERSION } from './api-version.ts';
 import { contract } from './contract.ts';
+import { DEVICE_CREDENTIAL_SCHEME, deviceCredentialSecurityScheme } from './device-credential.ts';
 
 export const OPENAPI_INFO = {
   title: 'TryggHverdag API',
@@ -30,6 +31,12 @@ export async function openApiDocument(): Promise<Record<string, unknown>> {
   return generator.generate(contract, {
     info: OPENAPI_INFO,
     servers: [{ url: API_PREFIX }],
+    // Declared here, required route by route: each device route names it
+    // through its 401 (device-credential.ts), and health, which monitors call,
+    // requires nothing.
+    components: {
+      securitySchemes: { [DEVICE_CREDENTIAL_SCHEME]: deviceCredentialSecurityScheme },
+    },
   });
 }
 
