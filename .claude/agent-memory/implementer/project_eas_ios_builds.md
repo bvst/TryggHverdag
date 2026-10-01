@@ -1,0 +1,28 @@
+---
+name: eas-ios-builds
+description: EAS iOS builds for an Expo SDK 57 app outside the pnpm workspace: FORCE_BUNDLING cannot bundle a Debug build, a nested app needs its own pnpm-workspace.yaml, eas-cli sends analytics unless DISABLE_EAS_ANALYTICS, EAS logs are Brotli
+metadata:
+  type: project
+---
+
+Found building SPIKE-01's simulator app on EAS (2026-09-30, eas-cli 24.8.0, Expo SDK 57, build `8acc62f7`):
+
+- **`FORCE_BUNDLING=1` cannot bundle a Debug build.** Expo's template bundling step exports `SKIP_BUNDLING=1` whenever `CONFIGURATION` is Debug, and React Native's `react-native-xcode.sh` checks `SKIP_BUNDLING` before `FORCE_BUNDLING`. The log says `SKIP_BUNDLING enabled; skipping.`, the `.app` has no `main.jsbundle`, and the app opens on "No script URL provided". The only overrides are files that step sources afterwards, in the generated `ios/` folder (the `.updates` and `.local` variants of the Xcode env file). Writing them means touching the iOS bundling step, which is the coordinator's decision.
+- **Unsetting SKIP_BUNDLING is not enough either:** a Debug configuration makes `react-native-xcode.sh` build a *development* bundle (`DEV=true`, set from `CONFIGURATION` with no override), and Expo SDK 57's `Expo.fx.tsx` then requires `async-require/messageSocket`. That module throws "Cannot create devtools websocket connections in embedded environments" whenever the bundle wasn't loaded from a dev server (build `dc1aa815`: red screen "[runtime not ready]"). An embedded bundle must be a production one (`--dev false`), which Android's `debuggableVariants = []` gives and iOS Debug does not.
+- **Builds and where they are kept:** build 4 is `b08e812d` (commit 20545d9), the drivers' iOS build, at `~/spike-runs/builds/ios/SPIKE01.app` with `ios-build.json`. The Android APK from the same commit is at `~/spike-runs/builds/android-app-debug.apk`.
+- **`simctl` best-effort calls print to stderr** unless their stdio is piped (Node's execFileSync lets stderr through by default).
+- **What worked (build `39a638d6`):** the local plugin unsets `SKIP_BUNDLING` and prefixes the phase's one `react-native-xcode.sh` call with `CONFIGURATION=Release`, for that process only. The script then bundles `--dev false --minify false` and runs `hermesc -O`; the native build stays Debug. Nothing else in the bundling path reads `CONFIGURATION` (checked: @expo/cli 57.0.27, React Native's cli.js, hermesc). Reproduce the bundle locally first: `export:embed` with the log's arguments takes 6 s on the Mac.
+- **The SDK on the iOS simulator:** it logs `LICENSE VALIDATION FAILURE … (missing) … BGGeo is fully functional in DEBUG builds without a license`, and tracks. With a static `simctl location set`, it recorded only two fixes, then nothing for 7 minutes: still "moving", no stop detected, no heartbeat. In a second run it went stationary within a minute. Expect upload gaps whenever the simulated position stands still.
+- **expo-notifications' `notification.date` is in seconds on iOS** (57.0.21), so `new Date(date)` shows 1970-01-21. The value is still recoverable to the second.
+- **Maestro's `launchApp` grants all permissions by default** ("all=allow through simctl"), but simctl cannot grant notifications, so the prompt still appears. After the optional `tapOn: Allow`, the app's button under that point was pressed too, twice, with or without `retryTapIfNoChange`. Cause not established.
+- **Maestro 2.10.0's iOS driver works here:** it drove the iOS 26.0 simulator on this Intel Mac with Xcode 26.0.1 (JDK 17, analytics and update check off); a run takes about a minute.
+- **An app inside the repository but outside its workspace needs its own `pnpm-workspace.yaml`.** A plain `pnpm install` in `spikes/background-safety/app` installed the root workspace ("Scope: all 6 workspace projects"), ignoring the app's own lockfile. EAS runs exactly that, `pnpm install --frozen-lockfile`. `--ignore-workspace` only helps on the Mac.
+- **eas-cli sends Rudderstack analytics to cdp.expo.dev** unless `DISABLE_EAS_ANALYTICS` is set (which also stores the opt-out in `~/.expo/state.json`). Set it, and `EXPO_NO_TELEMETRY=1`, on every `eas` command.
+- **eas-cli's upload** is a tar.gz of a depth-1 `git clone` of the repository root: the whole clean working tree plus a shallow `.git` (2.2 MB for this repository).
+- **EAS log files download Brotli-compressed** with no gzip header: decode them with Node's `zlib.brotliDecompressSync`. `logFiles[1]` equals the `xcodeBuildLogsUrl` artifact: the raw xcodebuild log.
+- **An EAS simulator build is universal** (`x86_64 arm64`): the generic simulator destination overrides `ONLY_ACTIVE_ARCH=YES`. Every prebuilt framework involved has an x86_64 simulator slice (React, ReactNativeDependencies, Hermes, Expo's precompiled modules, TSLocationManager 4.7.1, MapLibre 6.31.0).
+- **`eas init --non-interactive`** needs `--force` to create a project, and cannot write the project ID into `app.config.ts`: add `extra.eas.projectId` by hand.
+
+**Why:** the first iOS build was spent before the bundling mechanism was checked in a real build log. Expo's template script is what decides, not React Native's.
+
+**How to apply:** before any EAS iOS build, read the template's bundling-step script and prove the bundle lands in the `.app`. Related: [[coverage-and-guard-quirks]], [[transistorsoft-docs]].

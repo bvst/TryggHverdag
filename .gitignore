@@ -23,6 +23,9 @@ reports/
 .expo/
 apps/mobile/ios/
 apps/mobile/android/
+# The same for the throwaway app of SPIKE-01, which is built outside the workspace
+spikes/background-safety/app/ios/
+spikes/background-safety/app/android/
 
 # Editors and OS
 .DS_Store

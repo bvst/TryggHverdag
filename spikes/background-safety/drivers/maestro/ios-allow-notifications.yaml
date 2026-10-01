@@ -1,0 +1,17 @@
+# SPIKE-01, iOS simulator: accepts the notification prompt the app shows at
+# launch, then waits for the journey screen. At that moment the app shows no
+# button, so the tap can press nothing of the app's. simctl cannot grant
+# notifications; location and motion are granted by the driver.
+#
+# The driver launches the app with simctl: Maestro's launchApp would set every
+# permission to "allow" itself. Only acts; never decides a verdict.
+# Run with MAESTRO_CLI_NO_ANALYTICS=1 and MAESTRO_DISABLE_UPDATE_CHECK=true.
+appId: org.example.spike.backgroundsafety
+---
+- tapOn:
+    text: Allow
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: start-journey
+    timeout: 60000

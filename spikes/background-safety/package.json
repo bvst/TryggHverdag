@@ -1,0 +1,12 @@
+{
+  "name": "spike-background-safety",
+  "private": true,
+  "description": "SPIKE-01: throwaway background-safety spike. Not a workspace package; never shipped or imported.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test 'receiver/**/*.test.mjs' 'routes/**/*.test.mjs' 'analysis/**/*.test.mjs'"
+  }
+}

@@ -1,6 +1,6 @@
 # SPIKE-01 · Background safety on emulators and simulators
 
-**Status:** 📝 Spec. The owner answered Q1 on 2026-09-29: S8, the map check, is added · **Last updated:** 2026-09-29 ·
+**Status:** 🔵 Runs done, results being written (2026-10-01). The owner answered Q1 on 2026-09-29: S8, the map check, is added. Q2 on 2026-09-30: iOS builds on EAS. Q3 on 2026-09-30: continue, and ask the SDK's vendor about its high-risk clause · **Last updated:** 2026-10-01 ·
 **Branch:** this spec on `claude/busy-faraday-40n2zl` (cloud session, docs only); the
 spike on `feat/SPIKE-01-background-safety` (the Mac, `claude-dev`, D-055/D-056) ·
 **Milestone:** M1
@@ -151,6 +151,10 @@ recommendation, and lists what closing Section 4 needs.
 **passed**, **failed** or **not shown on simulators**. "Not shown" never counts
 as a pass. A proxy that only looks like the real thing is not used to fill a
 gap: when a device cannot show something, the verdict says so.
+
+**No verdict** (added 2026-10-01, review loop 1). A case with fewer than two
+valid runs has no verdict. It is never a pass, it is never "not shown", and
+while a deciding item has none the go/no-go rule makes no recommendation.
 
 **What each platform can show** (details in each criterion):
 
@@ -435,10 +439,13 @@ then:
 - every run is reported;
 - a scenario passes on a platform only if every valid run passed.
 
-A run is **invalid** only when the harness broke: the emulator or simulator
-exited, the receiver's ticks stopped, or the Mac slept. It is reported as
-invalid, with that evidence, and run again. A failed run is never re-run to
-replace it (D-060).
+A run is **invalid** only when the harness broke **and** it had not already
+shown a failure: the emulator or simulator exited, the receiver's ticks
+stopped, the Mac slept, or the driver stopped or left files that cannot be
+read. A failure shown while the harness was up (a gap over 120 s, or a missed
+report) is final: a break elsewhere in the run does not rescue it (amended
+2026-10-01, review loops 1 and 2). An invalid run is reported with its
+evidence and run again. A failed run is never re-run to replace it (D-060).
 
 **SPIKE-01-AC14: the results document.**
 Given the runs are done,
@@ -535,7 +542,7 @@ with Node's built-in test runner (`node --test`) by the spike's own script.
 | AC2 | None: the build runs or it does not | The first upload from each device, and the versions | The Mac |
 | AC3 | Receiver: a request with coordinates leaves none in the record or the output; loopback only; refuses on command; ticks | Receiver output | The Mac |
 | AC4 | Route: same seed, same route; 45 min; a stop of 5 min or more; walking pace | — | The Mac |
-| AC5 | S1 verdict: a 120 s gap passes and 121 s fails; missing receiver ticks make a run invalid, not failed | At least 2 runs per device | The Mac |
+| AC5 | S1 verdict: a 120 s gap passes and 121 s fails; missing receiver ticks make a run invalid, not failed, unless a failure was already shown | At least 2 runs per device | The Mac |
 | AC6 | S2 verdict: a reminder at 5 min 1 s fails; arrivals that never stop pass under the 120 s rule; a reminder while arrivals continue is a finding | Runs | The Mac |
 | AC7 | S3 verdict: with the exemption, one gap over 120 s fails; without it, no "not exempt" report before the restrictions fails | Runs | The Mac |
 | AC8 | S4 verdict: a missing position, an out-of-order arrival, or a queue left non-empty each fail | Runs | The Mac |
@@ -544,7 +551,7 @@ with Node's built-in test runner (`node --test`) by the spike's own script.
 | AC11 | S7 verdict: a report at 60 s passes and at 61 s fails | Runs | The Mac |
 | AC12 | Capture reader: lists destinations and flags a vendor host | One capture | The Mac |
 | AC13 | Two runs with one failed gives failed; an invalid run is listed, never counted as passed | — | The Mac |
-| AC14 | Results renderer: uses only the three verdict words; refuses a number shaped like a coordinate | The results document | The Mac |
+| AC14 | Results renderer: uses only the three verdict words, plus "no verdict"; refuses a number shaped like a coordinate | The results document | The Mac |
 | AC15 | The rule: "not shown" never passes an item; any failed SDK item gives NO-GO; S2, S5, S6 and S8 give findings, not NO-GO | The recommendation | The Mac |
 | AC16 | Sentinel check on sample screenshots: all sentinel fails, drawn tiles pass, the 1 % boundary holds; the crash-log reader, on sample output | At least 2 runs per device; the terms and licences quoted by hand | The Mac |
 
@@ -975,8 +982,9 @@ confidence** about F1 to F6.
 
 ## Questions for the owner
 
-None open now. Q1 was asked and answered, and is kept below as the record.
-One more question is asked later, with the go/no-go.
+None open now. Q1 to Q4 were asked and answered, and are kept below as
+the record. One more question is asked later, with the go/no-go. The vendor answered
+Q3 on 2026-09-30, and its licence now permits safety apps.
 
 ### Answered
 
@@ -1012,6 +1020,147 @@ Options:
 app already has the right stack, and a map library that fails with Expo SDK 57
 or the 16 KB image is cheapest to find now. S8 would get its own criterion, in
 the same shape as the others.
+
+**Q2: The Mac cannot build Expo SDK 57 for iOS. How does the spike get its iOS
+build?**
+
+**Answered by the owner 2026-09-30: an EAS simulator build.**
+
+Step 2's first job, proving the iOS toolchain, was run on the Mac as
+`claude-dev` on 2026-09-30. Two of its three stop conditions were met:
+- **Xcode is too old.** Expo's SDK table (docs.expo.dev/versions/latest, read
+  2026-09-30) lists "57.0.0 … iOS 16.4+ … Xcode 26.4+". The Mac has Xcode
+  26.0.1 (17A400) with the iOS 26.0 simulator SDK, which `M0-kickoff.md`
+  records as this Intel Mac's ceiling.
+- **CocoaPods is missing** (`pod not found`, no gem). Homebrew's Cellar
+  belongs to the owner's admin account, so `claude-dev` cannot install it.
+  It would not help on its own, because Xcode would still be below Expo's
+  minimum.
+- **The simulator boots.** The iPhone 17 simulator (iOS 26.0.1) booted in 59 s,
+  opened Settings, and took a screenshot. `claude-dev` was the console user at
+  the time and no other user was logged in, so "while another user is at the
+  screen" was **not** tested.
+
+Options put to the owner: (a) an EAS simulator build; (b) Android only for now,
+with iOS decided later; (c) the owner installs CocoaPods and the spike builds
+with Xcode 26.0.1 below Expo's documented minimum. The recommendation was (a),
+because under (c) a failure could not be told apart from a problem with the SDK.
+
+What (a) means:
+- The owner creates an Expo access token and puts it on the Mac for
+  `claude-dev`. It is never committed or printed.
+- The spike's code is uploaded to Expo's build servers. It holds no personal
+  data: the routes are synthetic (AC4). It costs $0 on the free plan
+  (`08-cicd-releases.md`).
+- Expo's build machines, not the Mac, run Xcode and CocoaPods. The simulator
+  build is then installed and run on the Mac's simulator with `simctl`, as
+  above.
+- **Not verified:** whether EAS's simulator build carries the x86_64 slice
+  that this Intel Mac's simulator needs. EAS builds on Apple silicon. The
+  first build is checked with `lipo -archs`; if x86_64 is missing, the spike
+  stops and reports again.
+- The versions in the results header (AC14) name the Xcode that EAS used,
+  not the Mac's.
+
+**Q3: The SDK's licence forbids "high-risk use" (its clause 9.5). What does
+the spike do?**
+
+**Answered by the owner 2026-09-30: continue the spike, and ask the vendor in
+writing.** The vendor's answer decides go/no-go item 7.
+
+Read at step 2 on 2026-09-30, from the vendor's licence agreement
+(docs.transistorsoft.com/license, which the iOS podspec's licence text links
+to):
+- **Evaluation in debug builds is allowed.** 3.5: "The Software is fully
+  functional in DEBUG builds without a License Key; the license-validation
+  warning shown in DEBUG builds does not restrict functionality. DEBUG builds
+  may be used for development and testing only and may not be distributed to
+  End Users."
+- **No data to the vendor, by the terms.** 7.1: "It transmits location and
+  related data only to the server endpoints that Licensee configures in its
+  Application. Licensor operates no server that receives that data". 7.2: the
+  licence check "involves no network request to Licensor and transmits no
+  data". AC12 still measures this.
+- **The price is $399.** The product page lists "Starter - $399.00", for one
+  app on both platforms.
+- **The tracking engine is commercial on both platforms.** The npm package
+  (5.7.0) declares MIT, and its `LICENSE` file is MIT. That covers only the
+  wrapper. The engine it pulls in is separate:
+  - `TSLocationManager` from CocoaPods, `~> 4.7.1`. Its podspec says
+    `"type": "Commercial"`.
+  - `com.transistorsoft:tslocationmanager` from Maven Central, `4.6.+`. Its
+    POM names the licence "Commercial".
+
+  This is R9, confirmed. Both are version ranges, so the spike pins them
+  itself.
+- **High-risk use is forbidden.** 9.5: "The Software is not designed or
+  intended for use in any application in which its failure could lead to death,
+  personal injury or severe physical or environmental damage, including
+  life-support, safety-critical navigation, or use as the sole means of
+  emergency response. Licensee shall not use the Software in such
+  applications." The plan never weighed this. D-023 chose the SDK without it,
+  and on a plain reading it covers this app. Only the vendor can say whether it
+  does.
+
+None of step 2's stop conditions was met: evaluation is allowed, no data goes
+to the vendor, and the price is $399. So the spike goes on. Options put to the
+owner: (a) continue, and ask the vendor; (b) pause the SDK runs until the
+vendor answers; (c) treat it as NO-GO now and move to D-023's fallback. The
+recommendation was (a). The terms allow the evaluation, the vendor's answer
+takes days, and the receiver, the analysis, S5, S6 and S8 are needed whatever
+the answer. The owner writes to the vendor at the notice address in its 14.5.
+
+**The vendor's answer (2026-09-30).** The vendor replied that it had not been
+aware of the clause and would change it, and that the licence was already
+updated. Checked the same evening: the licence page read at 19:21 differs from
+the 14:10 copy in two places only.
+- **9.5 is now "Safety-related applications":** "Licensee may use the Software
+  in Applications intended to help keep people safe, such as personal-safety,
+  lone-worker, family location-sharing and check-in Applications." It also
+  says the Software "is not designed, tested or certified as a safety-critical
+  system", and that the Licensee is solely responsible "for designing the
+  Application to allow for delayed, missing or inaccurate location data, and
+  for anything the Application tells End Users about its reliability or about
+  how to obtain emergency assistance".
+- **The summary gained a line:** "Safety apps are welcome, including
+  personal-safety, lone-worker and family location-sharing apps."
+
+So the prohibition that concerned go/no-go item 7 is gone. What remains are two
+duties that match the plan: fail loudly when locations are late or missing, and
+say nothing in the app that overstates its reliability. Both versions are kept,
+dated and with checksums, outside the repository (`~/spike-runs/licence/`), for
+the results. The terms can change again, so the go/no-go decision quotes the
+version read at the time.
+
+**Q4: S1 failed on both platforms overnight. Is more run time spent before the
+go/no-go?**
+
+**Answered by the owner 2026-10-01: two Android S1 runs with the
+battery-optimisation exemption granted,** as their own case
+(`night-20261001-s1-exempt`). The night's S1 failures stay recorded as they
+are.
+
+The night (`night-20260930`, 38 runs, none invalid) failed S1 on both devices,
+for different reasons:
+- **Android, without the exemption.** The SDK went stationary at the route's
+  stop. With the screen off on battery, it then fell silent for 10 to 13
+  minutes (largest gaps 802 s and 602 s), and never noticed that the walk
+  resumed.
+- **Android, with the exemption.** S3's exempt runs, under forced deep Doze,
+  went through the same stop with heartbeats every 104 to 110 s.
+- **iOS.** The only gap, 370 s in both runs, is exactly the route's 6-minute
+  stop. A perfectly still simulated position gives no location updates, and
+  the simulator has no motion sensor. So the SDK stayed "moving" and never sent
+  stationary heartbeats. No documented setting was found that changes this on a simulator. It is
+  recorded as **failed and deciding**, with its cause, never as open. L9 must
+  show a stop of 5 minutes or more on a real iPhone, unplugged, screen off.
+
+The go/no-go rule says NO-GO unless one of the SDK's documented settings fixes a
+failure, with every setting tried recorded. The exemption is such a setting
+(the SDK's `deviceSettings`), and the app's setup would ask the user for it. The
+extra case tests it directly, rather than inferring it from S3. Options put to
+the owner: (a) the Android exemption case; (b) as (a), plus an iOS case with
+GPS-like jitter at the stop; (c) no more runs. The recommendation was (a).
 
 ### Asked with the go/no-go, not now
 

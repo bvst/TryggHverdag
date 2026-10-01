@@ -5,6 +5,8 @@
 - [Stale base](feedback_stale_base.md) — fetch main first; BUG-5 conflicted with main's fix; docs citing agent memory must exist at HEAD
 - [Safety-test gate gaps](project_safety_test_gate_gaps.md) — test-only edits to safety tests skip mutation and CI safety-reviewer (open at 1c0b575)
 - [Baseline vs main](feedback_baseline_vs_main.md) — ratchet reads the branch's own baseline; diff it against origin/main and run ratchetDrops with main's
-- [Entry-script wiring](feedback_entry_script_wiring.md) — pure decisions tested, the entry script's use of them not; shape tests let false greens through
+- [Entry-script wiring](feedback_entry_script_wiring.md) — pure decisions tested, their callers/dispatch entries not; shape tests let false greens through
 - [Mutation pooled score](project_mutation_pooled_score.md) — safety-core mutants pooled in whole-suite run, *.ts only; "fails loudly" not guaranteed
+- [SPIKE-01 audit](project_spike01_audit.md) — spike tests outside CI/Stryker; BLOCK at 8a37a5e, PASS at 6ae585f; open should-fix ids
 - [Parallel ID collision](feedback_parallel_id_collision.md) — new D-0xx/BUG-n may already be taken on main or an open PR; dirty PR = zero check runs
+- [Shadowed guards](feedback_shadowed_guards.md) — a new filter layer (plan) can shadow an old guard and silently drop failures; re-run old mutants

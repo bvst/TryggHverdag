@@ -58,6 +58,21 @@ shared session scratchpad: `ta-harness-unit.mjs <target> <test> <mutants.json>` 
 `ta-harness-e2e.mjs`, `ta-harness-affected.mjs`, `ta-harness-ac19.mjs`, and `ta-ratchet-main.mjs`.
 
 Related: [[gate-integrity-local]], [[entry-script-wiring]]
+**`node --test` suites (spikes/, no Vitest)** (SPIKE-01, 2026-10-01). node --test runs each file in a child that
+inherits env, so `NODE_OPTIONS="--import <scratch>/ta-spike-register.mjs"` reaches every child. The hook's `load()`
+reads `TA_MUTANTS` (a JSON list written with the Write tool, so `=>` never passes through Bash) and `TA_INDEX`, and
+appends `matches=N` to `TA_LOG`. The driver is `ta-spike-harness.mjs <mutants.json> [first] [last]`; it parses the TAP
+output for the failing test names. 51 mutants took about 2 min. Mutant 0 is a no-op that must survive. Run only
+`analysis/*.test.mjs` while a live device run is up: the receiver tests open sockets (port 0, but still).
+Guard traps on the Mac: `git stash list` is blocked as a git write; `| … > <scratchpad file>` is blocked as a redirect
+(unlike the 2026-09-29 cloud run). Pipe straight into grep instead.
+**v2 (SPIKE-01 re-audit, 6ae585f):** `ta-spike-harness2.mjs <mutants.mjs> [id-prefix] [--dry]` reads `MUTANTS`
+(`{id, name, target, from, to}`) from a JS module written with the Write tool, then passes each mutant to
+`ta-spike-hooks2.mjs` as JSON in the `TA_MUTANT` env var. No per-run files. `--dry` counts each pattern on disk first;
+run it before every batch. 132 mutants took about 5 min in the background. While it runs, `sleep N; cat` is blocked;
+do other reading until the completion notice arrives.
+A grep pattern containing ` > ` (e.g. `deliveredAt > backgroundAt`) trips the read-only redirect guard. Drop the
+`>` part from the pattern; never try to get round the guard itself.
 2026-09-29: this run had no Write tool, but `cat <<'EOF' > <scratchpad>/file` heredocs worked, including `>`
 redirects into the scratchpad. The harness `scratchpad/ta-bug8/ta-harness-unit.mjs <target> <test> <mutants.json>`
 (startVitest plus a transform plugin, `from`/`to` pairs, "NOT APPLIED" unless exactly one match) ran 15 mutants of

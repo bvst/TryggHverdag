@@ -1,8 +1,8 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-09-30 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → 🟡 **M1, the spike, started** (2026-09-29): SPIKE-01's spec is written · Section 4 closes after the spike in M1
+**Last updated:** 2026-10-01 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → 🟡 **M1 in progress**: SPIKE-01 is done and Section 4 is closed (D-086, 2026-10-01) — what's left for M1 is the Critical Alerts request, which still has no ID and no spec
 
-**Current section:** milestone M1, the spike, started 2026-09-29. SPIKE-01's spec is written ([../specs/SPIKE-01.md](../specs/SPIKE-01.md)); the spike is built next, in a Mac session. Status: [../progress.md](../progress.md) · Build log: [../progress/m1.md](../progress/m1.md) (M0's: [../progress/m0.md](../progress/m0.md))
+**Current section:** milestone M1. SPIKE-01 ran on the Mac (D-055) and Section 4 is closed: a conditional GO for the location SDK, recorded as D-086, with full results in [04b-spike-results.md](04b-spike-results.md). Status: [../progress.md](../progress.md) · Build log: [../progress/m1.md](../progress/m1.md) (M0's: [../progress/m0.md](../progress/m0.md))
 
 This folder is the project's memory. Everything we research, discuss and decide
 ends up here, so any session (in Claude Code or claude.ai) can pick up exactly
@@ -24,7 +24,7 @@ continues from that section's **Next steps**.
 | 1 | Product vision, users & MVP scope | ✅ Done | [01-product-vision.md](01-product-vision.md) · [01b-mvp-scope.md](01b-mvp-scope.md) |
 | 2 | Norway context: emergency services, law & privacy (GDPR, Datatilsynet, age limits, hosting) | ✅ Done | [02-norway-law-privacy.md](02-norway-law-privacy.md) |
 | 3 | Safety, reliability & security requirements — what must never fail silently | ✅ Done | [03-safety-reliability-security.md](03-safety-reliability-security.md) |
-| 4 | Tech stack: app framework, backend, maps/location, push (incl. background-location spike) | 🟡 Providers chosen · spike (emulators/simulators): spec written ([SPIKE-01](../specs/SPIKE-01.md)), not yet built | [04-tech-stack.md](04-tech-stack.md) |
+| 4 | Tech stack: app framework, backend, maps/location, push (incl. background-location spike) | ✅ Done — SPIKE-01 ran ([spec](../specs/SPIKE-01.md), [results](04b-spike-results.md)); conditional GO for the location SDK (D-086) | [04-tech-stack.md](04-tech-stack.md) |
 | 5 | Architecture & code structure — modularity, boundaries, how to change things safely | ✅ Done | [05-architecture.md](05-architecture.md) |
 | 6 | Testing strategy & regression protection | ✅ Done | [06-testing-strategy.md](06-testing-strategy.md) |
 | 7 | Claude Code setup: CLAUDE.md, subagents, skills, hooks, commands | ✅ Done (draft v0 files) | [07-claude-code-setup.md](07-claude-code-setup.md) · [07b files](07b-claude-code-files/README.md) |
@@ -40,11 +40,14 @@ Decisions so far: [decisions.md](decisions.md)
 seven offline gate drills pass, and CI is green on `main`. The live attempt at
 the two GitHub-only drills is an M5 go-live item.
 
-**Milestone M1, the spike, started on 2026-09-29.** SPIKE-01's spec is written
-and goes to the owner as a docs-only pull request. The spike itself is built and
-run in a Mac session (D-055). Five open items for the owner came out of planning
-it, in [../progress/m1.md](../progress/m1.md). What has been built and what
-Claude needs from the owner: [../progress.md](../progress.md).
+**Milestone M1 is in progress.** SPIKE-01 ran on the Mac (D-055), and Section 4
+is now closed: a conditional GO for the location SDK, recorded as D-086, with
+full results in [04b-spike-results.md](04b-spike-results.md). **M1 itself is
+not closed yet:** the roadmap's "Critical Alerts request drafted" item still
+has no ID and no spec. Of the five open items found while planning SPIKE-01,
+four are still open; the licence-timing one is now answered (D-086) — all
+five, in [../progress/m1.md](../progress/m1.md). What Claude needs from the
+owner: [../progress.md](../progress.md).
 
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every
@@ -77,6 +80,7 @@ session.
 | A-26 | The drill: stop the staging app and confirm both monitors page you within 5 minutes — see [monitoring-setup.md](monitoring-setup.md) | INF-08's done-criterion | ✅ Done — ran 2026-09-26, accepted by the owner 2026-09-28. Healthchecks.io went down at 14:36:16 UTC, about 3 minutes after the last ping, and up at 14:44:00; UptimeRobot alerted at 14:37:04 UTC. **Not checked:** UptimeRobot's recovery, and why its alert gave the root cause "Keyword Exists" when A-25 asked for an alert when the keyword does *not* exist |
 | A-27 | In Healthchecks.io, open the `daily-status` check and set **Grace** to **8 hours** (Period stays 1 day). About a minute | GitHub starts the daily report about 4¾ hours late, by amounts that vary; with 3 hours' grace an on-time run followed by a late one could page you for a run that happened, and a false page teaches you to ignore the real one. A genuinely missed report now pages at about 32 hours instead of 27 (D-080) | ⬜ Open — agreed by the owner 2026-09-26 |
 | A-28 | Add `android-e2e` to the existing `main` ruleset's required checks (Settings → Rules → Rulesets → `main` → required status checks; edit the existing ruleset, do not import a second one), then re-run only the `gate-integrity` job on the INF-06 pull request. Open Dependabot pull requests will need a `@dependabot rebase` afterwards | INF-06 cannot merge otherwise: `gate:integrity` reads the branch's own `package.json` and goes red the moment `e2e:android` exists (D-042, D-060, CI-09) | ✅ Done (2026-09-28) — `android-e2e` is a required check on `main`, read back through the API; `gate-integrity` passed on #34 after it |
+| A-29 | Request a 30-day trial key for the location SDK shortly before M3's demo (transistorsoft.com/shop/trials/new); owner's own phones only | M3's internal demo (TestFlight, Google Play internal testing) needs the SDK to run in a release build, without buying the $399 licence yet (D-086) | ⬜ Open — due M3 |
 
 ## Why this order
 The specialised agents and skills (Section 7) are where your quality bar gets

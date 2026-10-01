@@ -1,6 +1,6 @@
 ---
 name: mac-android-toolchain
-description: On claude-dev the default JAVA_HOME (Android Studio's JBR 25) breaks the app's native build; a JDK 17 lives in ~/jdks, and the Pixel_8 AVD is now set to nb-NO
+description: On claude-dev the default JAVA_HOME (Android Studio's JBR 25) breaks the app's native build; a JDK 17 lives in ~/jdks, the Pixel_8 AVD is set to nb-NO, and its android-37.2 image lists no calls in `gsm list` and crash-loops a UWB HAL
 metadata:
   type: project
 ---
@@ -14,6 +14,22 @@ Found running INF-06's L7 and dev build on the Mac (`claude-dev`, 2026-09-25):
 - Warm release build: about 1.5 to 2 minutes. A full `pnpm run e2e:android` takes about 2 minutes with caches warm (2026-09-26: 194 s including a 2 m 42 s Gradle build; boot took 31 s).
 - **No `timeout` or `gtimeout` binary on this Mac** (no coreutils). Use the Bash tool's own timeout. Wait for boot without a local sleep: `adb wait-for-device shell 'while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 2; done'`.
 - **Teardown that leaves nothing:** `adb -s emulator-5554 emu kill`, then `./gradlew --stop` from `apps/mobile/android` with the JDK 17 `JAVA_HOME`, then `adb kill-server`. The emulator takes up to about 20 s to exit (its `emulator -kill <pid> -sleep 20` helper), and the Kotlin compile daemon exits with Gradle's. Check again with `pgrep -fl "qemu-system|GradleDaemon|KotlinCompileDaemon|maestro"` (VS Code's `chrome_crashpad_handler` is unrelated).
+
+Found on the same image in SPIKE-01 (2026-09-30, Android 17 / API 37, page size 16384):
+
+- **`adb emu gsm list` never lists a call** on this image: it answers `OK\r\n` alone for outbound calls (the modem ends them with a REMOTE/NORMAL disconnect about 0.4 s after DIALING) and for a ringing inbound `gsm call` too. `adb shell dumpsys telecom` records every call with its state changes. Don't spend time polling the console.
+- **The crash buffer is noisy:** the image's UWB HAL (`/vendor/bin/hw/android.hardware.uwb-service`) SIGABRTs every 5 s from boot, so `logcat -b crash -d` is never empty. Android 17's native-crash header reads `pid: N, ppid: N, tid: N, name: …  >>> process <<<`.
+- **`screencap -p`** gives an 8-bit RGBA PNG (colour type 6) with `sBIT` and `sRGB` chunks and hundreds of IDAT chunks.
+- **A spike or app build outside the workspace** reuses the warm Gradle cache: `assembleDebug` for x86_64 took 53 s from a fresh `android/`. The Kotlin daemon from Expo's Gradle plugin lingers a few seconds after `./gradlew --stop`, then exits.
+- **Harness facts from the SPIKE-01 drivers (2026-09-30, same image):**
+  - `input swipe` does not dismiss a recents card; a drag of `input motionevent DOWN/MOVE…/UP` does. Check with `am stack list`.
+  - The emulator's `-tcpdump` captures only `eth0`. With Wi-Fi on, app traffic (to `10.0.2.2` too) leaves by `wlan0` and is missing: `cmd wifi set-wifi-enabled disabled` first.
+  - `am set-standby-bucket <pkg> restricted` works on an idle app (reads 45), but a journeying app with a foreground service is re-promoted to 10 or 30 within a second (usagestats reasons `u-mb`, `s-mb`).
+  - `cmd notification set_dnd on` means `none` (total silence); ordinary Do Not Disturb is `priority`. The ringer is `cmd audio set-ringer-mode NORMAL|SILENT|VIBRATE`.
+  - `appops set <pkg> FINE_LOCATION ignore` does not stop fused locations reaching the SDK; `cmd location set-location-enabled false` does.
+  - A channel created with `USAGE_ALARM` keeps it in its stored settings, but the posted notification's effective channel and `mAttributes` use `USAGE_NOTIFICATION`, which the silent ringer mutes. Read the right channel print: `dumpsys notification` prints each channel more than once.
+  - `run-as <pkg> kill -9 <pid>` works on the debug build (a low-memory-killer stand-in). The SDK then restarts the process.
+- **Summarise Gradle `--info` output with a Node filter, not `sed`:** BSD `sed -E` rejects an empty alternative such as `(a/|)`, and the pipe then loses the build's output.
 
 **Why:** each of these cost a slow round trip to find.
 

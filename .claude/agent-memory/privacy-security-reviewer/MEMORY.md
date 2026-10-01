@@ -1,3 +1,4 @@
 - [Tooling scripts review](tooling_scripts_review.md) — checklist for scripts/ PRs shelling out to gh/git/ssh: no raw output, no shell, timeouts
 - [Mobile release review](mobile_release_review.md) — verify merged Android manifest, OTA, dev client, Expo/Maestro telemetry switches, audit baseline
-- [Reviewer sandbox quirks](reviewer_sandbox_quirks.md) — read-only guard blocks `>`/`=>`/`->` and "expo install" text; gh api works for SHAs and licences
+- [Device harness review](device_harness_review.md) — spikes/drivers: argv in execFile errors leaks positions; Firebase hosts vs platform; FIS attribution; results prose drifting from code
+- [Reviewer sandbox quirks](reviewer_sandbox_quirks.md) — guard blocks any `>`, "expo install", `cd … && git merge-base`; a block ends the review
