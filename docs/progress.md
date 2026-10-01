@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-01 · **Milestone:** M1 in progress: SPIKE-01 is done, Section 4 is closed (D-086); the Critical Alerts request is what's left for M1's exit · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-01 · **Milestone:** M1's four roadmap items are all done — SPIKE-01, Section 4 closed (D-086), the Critical Alerts request drafted (D-087, STORE-01); closing M1 is the owner's call · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0 and
@@ -18,12 +18,15 @@ The plan is in [`plan/README.md`](plan/README.md); the milestone task lists are 
 ## M1 at a glance
 
 M1's exit: spike results recorded, the SDK go/no-go decision, and Section 4
-closed.
+closed — all three are done (D-086). The roadmap's fourth M1 item, the
+Critical Alerts request, is drafted too (D-087, STORE-01). **M1 itself is not
+closed by this:** as with M0 (D-083), closing a milestone is the owner's call,
+made once this work has merged.
 
 | ID | Task | Status |
 |----|------|--------|
 | SPIKE-01 | Background safety on emulators and simulators: S1–S7, and S8, MapLibre with Kartverket's tiles | ✅ Done (2026-10-01) — both nights ran (`night-20260930`, 38 runs; `night-20261001-s1-exempt`, 2 runs; none invalid), all four reviewers passed through review loop 2, and the owner chose a **conditional GO** over the rule's NO-GO, recorded as **D-086**. Results: `docs/plan/04b-spike-results.md`. Section 4 is closed Merged as `d6a2dff` ([#49](https://github.com/bvst/TryggHverdag/pull/49), 2026-10-01); CI on `main` green, 10 of 10 jobs; the raw network captures deleted, as D-086 says |
-| STORE-01 | Critical Alerts entitlement request drafted | ⚪ Not started. The owner gave it an ID on 2026-10-01: Claude drafts the request in M1, and the owner sends it once the Apple Developer account (A-02) exists. Spec next (`/feature STORE-01`). **The only thing still open for M1's exit** |
+| STORE-01 | Critical Alerts entitlement request drafted | ✅ Drafted (2026-10-01) — `docs/plan/critical-alerts-request.md`, from the spec `docs/specs/STORE-01.md`. The owner answered Q1–Q4; **D-087** records them. Safety, privacy, test-auditor and code reviews all PASS (safety and privacy re-checked after fixes, and passed again). The owner's to-do to send it once A-02 exists is **A-30**, due M4 at the latest. Branch `feat/STORE-01-critical-alerts-request` at `9bda922`; not yet merged |
 
 ## M0 at a glance
 
@@ -72,8 +75,15 @@ could not record a verdict at all (D-069, D-070, D-073).
 demo** (transistorsoft.com/shop/trials/new; owner's own phones only; D-086).
 Due M3, not now.
 
-**Four open items from planning SPIKE-01** (the licence-timing one is now
-answered, D-086), in [`progress/m1.md`](progress/m1.md).
+**A-30 — send the Critical Alerts entitlement request**
+(`docs/plan/critical-alerts-request.md`, Part D) once the Apple Developer
+account (A-02) exists; D-087. Due M4 at the latest; record only the outcome.
+
+**One open item from planning SPIKE-01: the public repository, with no
+decision recording it** (item (e) in [`progress/m1.md`](progress/m1.md)).
+Items (a) to (d) are now all resolved: (a) and (c) when Section 4 closed,
+(b) by the licence timing in D-086, (d) by STORE-01 getting an ID and being
+drafted.
 
 **A-27 — raise the daily-status check's grace in Healthchecks.io to 8 hours**
 (about a minute; agreed 2026-09-26). GitHub starts the report hours late by
@@ -88,8 +98,7 @@ script is still to come.
 
 **A-01, A-02, A-03 — phones, Apple, Google Play.** Not needed for SPIKE-01:
 simulators and emulators need no account. A-02 is needed to send the Critical
-Alerts request, and when that is sent is an open item in
-[`progress/m1.md`](progress/m1.md). The rest block the first real device build.
+Alerts request (**A-30**, above). The rest block the first real device build.
 
 **Dependabot and the reviewer gate.** `CLAUDE_CODE_OAUTH_TOKEN` is in the
 Dependabot secret store, which unblocks npm updates. **github-actions updates
@@ -251,6 +260,22 @@ The things that still bite, and cost a session hours the first time.
   `/status` and `/bugfix` name `docs/progress/m0.md`. M1's narrative is
   [`progress/m1.md`](progress/m1.md), and a bug's next `BUG-<n>` has to be
   looked for in both files. The last paragraph of `progress/m1.md` says why.
+- **The write-time sensitive-data hook catches only `+47`/`0047` phone
+  numbers, on Write and Edit.** `scan-sensitive.mjs` does not look for 8-digit
+  domestic numbers, email addresses, postal addresses, D-U-N-S or
+  organisation numbers, or coordinates in prose, and it does not see a file
+  written from a shell. Found by `test-author` while checking STORE-01's
+  AC11, 2026-10-01. Review carries the rest; a `.claude/` fix needs the
+  owner's approval and has no ID yet.
+- **`planner`'s and `test-author`'s own `guard-paths` hooks block them from
+  writing their own agent memory.** `planner` may only write
+  `docs/specs/**`, and `test-author` only test files and `packages/test-kit/**`
+  — neither allowlist covers `.claude/agent-memory/<agent>/**`, so a memory
+  write from either agent is blocked and the session must stop and report it
+  (never work around a guard block). It has fired: `test-author` three times
+  in SPIKE-01 and `planner` twice in STORE-01, each stopped and reported. The
+  reviewers and `implementer` write their own memory without trouble. A
+  configuration gap for the owner, with no ID yet.
 
 ## In flight
 
