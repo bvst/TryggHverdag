@@ -11,8 +11,8 @@
 - Library choices are delegated to Claude (D-031). Set v1 is D-032, shown in
   the table below.
 - The state machine and its edge-case rules SM-01 to SM-10 are binding (D-033).
-- Code lives in a private repository on the owner's paid GitHub account, with
-  merge rules that also apply to admins (D-029).
+- Code lives in a repository on the owner's paid GitHub account, public since
+  2026-09-28 (D-089), with merge rules that also apply to admins (D-029).
 - **Open:** LOST-08 ("responder closes an alert") is a scope question, asked in
   Section 6, round 1.
 - **Follow-up:** draft the DPIA (PRIV-11) before the private group starts;
@@ -76,6 +76,8 @@ A structure where changes are easy and safe:
 - **Implication:** Without a paid plan, a private repository has no enforced
   "tests must pass before merge" rule. It would fail quietly, which is exactly
   what this project must avoid.
+- **Since 2026-09-28 the repository is public (D-089),** so rulesets apply on
+  any plan. This finding is kept as the reason D-029 chose a paid plan.
 
 ## API style — pros and cons
 

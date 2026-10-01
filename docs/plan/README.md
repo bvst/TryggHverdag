@@ -1,8 +1,15 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-01 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → 🟡 **M1 in progress**: SPIKE-01 is done, Section 4 is closed (D-086), and the Critical Alerts request is drafted (D-087, STORE-01, 2026-10-01) — all four of M1's roadmap items are now done; closing M1 is the owner's call
+**Last updated:** 2026-10-01 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server
 
-**Current section:** milestone M1. SPIKE-01 ran on the Mac (D-055) and Section 4 is closed: a conditional GO for the location SDK, recorded as D-086, with full results in [04b-spike-results.md](04b-spike-results.md). The Critical Alerts entitlement request is drafted, not sent: [critical-alerts-request.md](critical-alerts-request.md) (D-087, STORE-01). Status: [../progress.md](../progress.md) · Build log: [../progress/m1.md](../progress/m1.md) (M0's: [../progress/m0.md](../progress/m0.md))
+**Current section:** milestone M2. M1 closed with all four roadmap items done:
+SPIKE-01 (S1–S8), Section 4 closed with a conditional GO for the location SDK
+(D-086, full results in [04b-spike-results.md](04b-spike-results.md)), and the
+Critical Alerts entitlement request drafted
+([critical-alerts-request.md](critical-alerts-request.md), D-087, STORE-01).
+Open item (e), the public repository, is answered (D-089). Status:
+[../progress.md](../progress.md) · Build log: [../progress/m1.md](../progress/m1.md)
+(M0's: [../progress/m0.md](../progress/m0.md))
 
 This folder is the project's memory. Everything we research, discuss and decide
 ends up here, so any session (in Claude Code or claude.ai) can pick up exactly
@@ -40,18 +47,22 @@ Decisions so far: [decisions.md](decisions.md)
 seven offline gate drills pass, and CI is green on `main`. The live attempt at
 the two GitHub-only drills is an M5 go-live item.
 
-**Milestone M1 is in progress.** SPIKE-01 ran on the Mac (D-055), and Section 4
-is closed: a conditional GO for the location SDK, recorded as D-086, with
-full results in [04b-spike-results.md](04b-spike-results.md). The Critical
-Alerts request is now drafted too (D-087, STORE-01):
+**Milestone M1 is closed** (2026-10-01, D-088). SPIKE-01 ran on the Mac
+(D-055), and Section 4 is closed: a conditional GO for the location SDK,
+recorded as D-086, with full results in
+[04b-spike-results.md](04b-spike-results.md). The Critical Alerts request is
+drafted (D-087, STORE-01):
 [critical-alerts-request.md](critical-alerts-request.md) holds the text and
-the owner's steps to send it, due by M4 at the latest (**A-30**, above).
-**All four of M1's roadmap items are now done. M1 itself is not closed by
-this:** as with M0 (D-083), closing a milestone is the owner's call, made once
-this work has merged. Of the five open items found while planning SPIKE-01,
-four are now answered; one — the public repository with no decision recording
-it — is still open, in [../progress/m1.md](../progress/m1.md). What Claude
-needs from the owner: [../progress.md](../progress.md).
+the owner's steps to send it, due by M4 at the latest (**A-30**, above). All
+five open items found while planning SPIKE-01 are now answered, including
+(e), the public repository, recorded as **D-089** — see
+[../progress/m1.md](../progress/m1.md). What stays open does not block M2:
+D-086's conditions, A-30, and three `.claude/` configuration gaps, each
+needing the owner's approval and an ID.
+
+**Milestone M2 is next:** the core safety loop on the server (state machine,
+watchdog, outbox, fake push and SMS; the staging canary). What Claude needs
+from the owner: [../progress.md](../progress.md).
 
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every
@@ -63,7 +74,7 @@ session.
 | A-02 | Enrol the AS in the Apple Developer Program: look up the AS's D-U-N-S number (Apple has a lookup tool), and check that the AS has a public website and an email address on its own domain | Test builds on iPhones; Critical Alerts request | ⬜ Open (D-027) |
 | A-03 | Create a Google Play developer account for the AS (same D-U-N-S number) | Android test track | ⬜ Open (D-027) |
 | A-04 | Create a Clever Cloud account for the AS | Hosting (D-025) | ✅ Done (2026-09-20) |
-| A-05 | Create a private repository on your paid GitHub account and give Claude Code access | Code and CI (D-029) | ✅ Done (2026-09-20) |
+| A-05 | Create a repository on your paid GitHub account and give Claude Code access | Code and CI (D-029); public since 2026-09-28 (D-089) | ✅ Done (2026-09-20) |
 | A-06 | Create a separate GitHub account for Claude (a "machine user"), add it to the repository with write access (not admin), and give Claude Code its token | Your approvals count as real approvals, and the merge rules can't be bypassed (D-042) | ✅ Done (2026-09-20) |
 | A-07 | Create an Expo account for the AS | iOS builds without a Mac; app builds and store submission (Section 8) | ✅ Done (2026-09-20) |
 | A-08 | Create Healthchecks.io and UptimeRobot accounts, with alerts to your phone | Get paged if the safety system stops (REL-08) | ✅ Done (2026-09-26) — both alert by email, which the owner accepts for now (2026-09-28); UptimeRobot's monitor was A-25 |

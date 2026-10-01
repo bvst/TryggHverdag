@@ -85,6 +85,11 @@ GitHub cannot make these jobs wait for your approval in a private repository on
 the Pro and Team plans — only Enterprise can. The approval is therefore built
 from two runs you start yourself (D-077, and A-22 after merging).
 
+**Since 2026-09-28 the repository is public (D-089).** GitHub may allow
+required reviewers on deployment environments for public repositories on any
+plan, which would lift the limit above. This is **not verified**, and the
+two-run approval stays as it is until the owner decides whether to change it.
+
 ## After the INF-07 pull request merges
 
 - **A-22 — create staging.** Actions → `infra-staging` → Run workflow with
