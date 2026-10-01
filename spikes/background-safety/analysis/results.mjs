@@ -6,7 +6,9 @@
 // the refusal names where it was, never what it was.
 
 const NOT_SHOWN = 'not shown on simulators';
-const VERDICTS = new Set(['passed', 'failed', NOT_SHOWN]);
+/** Too few valid runs: the harness broke, which L9 will not show (the safety review's B3). */
+const NO_VERDICT = 'no verdict';
+const VERDICTS = new Set(['passed', 'failed', NOT_SHOWN, NO_VERDICT]);
 
 /**
  * Coordinate-shaped: 4 or more decimals, with an absolute value of 180 or
@@ -55,7 +57,7 @@ const isCount = (value) => Number.isInteger(value) && value >= 0;
 function verdictCell(cell, where) {
   if (cell === null) return 'not applicable';
   if (!VERDICTS.has(cell?.verdict)) {
-    throw new Error(`${where}: the verdict must be passed, failed or ${NOT_SHOWN}`);
+    throw new Error(`${where}: the verdict must be passed, failed, ${NOT_SHOWN} or ${NO_VERDICT}`);
   }
   if (!isCount(cell.valid) || !isCount(cell.invalid)) {
     throw new Error(`${where}: the counts of valid and invalid runs are missing`);

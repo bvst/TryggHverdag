@@ -4,10 +4,13 @@
 // - A failed run is final: re-runs that pass never replace it (D-060).
 // - An invalid run (the harness broke) is listed with its evidence, and never
 //   counted as passed.
-// - A pass needs at least two valid runs of each case.
+// - A pass needs at least two valid runs of each case. With fewer, and no
+//   failed run, the verdict is "no verdict", a state of its own with the reason
+//   (the safety review's B3): never an exception, and never "not shown".
 
 const RUN_STATUSES = new Set(['passed', 'failed', 'invalid']);
 const MIN_VALID_RUNS = 2;
+const NO_VERDICT = 'no verdict';
 
 function checkRun(run, i) {
   if (typeof run?.id !== 'string' || run.id === '') throw new Error(`run ${i + 1} has no id`);
@@ -25,7 +28,8 @@ function checkRun(run, i) {
 /**
  * @param {{ scenario: string, platform: string,
  *   runs: { id: string, status: string, case?: string, evidence?: string[] }[] }} input
- * @returns {{ scenario: string, platform: string, verdict: 'passed' | 'failed',
+ * @returns {{ scenario: string, platform: string,
+ *   verdict: 'passed' | 'failed' | 'no verdict', why?: string,
  *   validRuns: number, invalidRuns: number, runs: object[] }}
  */
 export function judgeScenario({ scenario, platform, runs }) {
@@ -47,14 +51,19 @@ export function judgeScenario({ scenario, platform, runs }) {
     perCase.set(name, (perCase.get(name) ?? 0) + (run.status === 'invalid' ? 0 : 1));
   }
   if (perCase.size === 0) perCase.set('', 0);
-  for (const [name, count] of perCase) {
-    if (count < MIN_VALID_RUNS) {
-      const which = name === '' ? '' : ` (case ${name})`;
-      throw new Error(
-        `${scenario} on ${platform}${which} has ${count} valid run(s); ` +
-          `a verdict needs at least ${MIN_VALID_RUNS}`,
-      );
-    }
+  const short = [...perCase].filter(([, count]) => count < MIN_VALID_RUNS);
+  if (short.length > 0) {
+    const why = short
+      .map(([name, count]) => {
+        const which = name === '' ? '' : ` (case ${name})`;
+        return `${scenario} on ${platform}${which} has ${count} valid run(s)`;
+      })
+      .join('; ');
+    return {
+      ...result,
+      verdict: NO_VERDICT,
+      why: `${why}; a verdict needs at least ${MIN_VALID_RUNS}`,
+    };
   }
   return { ...result, verdict: 'passed' };
 }
