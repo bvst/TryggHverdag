@@ -33,8 +33,9 @@ M4 at the latest.
   a journey has no responder left (Q4).
 - No guarantee, no measured figure and no usage number. No SOS button: the MVP
   has none. Only the numbers the spec allows, each with its source (Part B).
-- Each answer stands alone, because the answers may be split across the form's
-  fields. No answer points to another by number.
+- No answer points to another, by number or by place, because the answers may
+  be split across the form's fields. A term is explained where Part A first
+  uses it.
 - It names no requirement or decision ID, because Apple does not know them.
   Part B maps every claim to its ID.
 - It is in English, because it goes to Apple. D-014's bokmål-first rule is for
@@ -72,8 +73,9 @@ This request is for two builds of the same app:
 - the production app, [production identifier];
 - one test build of it, [production identifier].test.
 
-The test build will be used for automated tests of the lost-contact alert
-described below, on real iPhones. Those tests must pass before the group
+The test build will be used for automated tests, on real iPhones, of the
+lost-contact alert, which will go to a walker's responders when our server
+stops hearing from the walker's phone. Those tests must pass before the group
 relies on the app. It is not a demo.
 
 **3. Why the app needs Critical Alerts**
@@ -128,8 +130,8 @@ No other notification will use Critical Alerts.
 
 **6. How often**
 
-- The alert will fire only during an active journey, and only after the server
-  has heard nothing from the walker's phone for 5 minutes.
+- The lost-contact alert will fire only during an active journey, and only
+  after the server has heard nothing from the walker's phone for 5 minutes.
 - Only that journey's responders will get it, once for each lost-contact
   event. If nobody taps "I'm on it" within 2 minutes, every responder will get
   an SMS instead of further alerts. The SMS will hold no location.
@@ -145,8 +147,9 @@ These points are about the production app.
 
 **7. Who receives it, and how they control it**
 
-- Only responders will receive it: members of the private, invitation-only
-  group whom the walker chose for that journey. Nobody outside the group will.
+- Only responders will receive the lost-contact alert: members of the
+  private, invitation-only group whom the walker chose for that journey.
+  Nobody outside the group will.
 - The app will ask for Critical Alerts only in responder setup, through iOS's
   own permission request. Each responder will decide for their own phone.
 - A responder who declines will still get the strongest level they allow,
@@ -198,7 +201,7 @@ will make the claim true; until then, every claim is a promise.
 | C17 | 8 | Location collected only during a journey the walker starts; the phone shows it is shared for as long as the journey runs | PRIV-01; JRN-02; the mechanism, as the spike's app used it: `04-tech-stack.md`, "Spike results" (`app.notification` on Android, `geolocation.showsBackgroundLocationIndicator` on iOS), and `04b-spike-results.md`, part 4.6 | M3; tested in M4 |
 | C18 | 3 | The alert matters most at night, when a phone may be on silent or in a Focus. Apple's guidelines say a Critical notification can override the Ring/Silent switch | Apple's Human Interface Guidelines (Part C); `03-safety-reliability-security.md` finding 3 | — |
 | C19 | 3 | This alert will be how responders learn a walker's phone went silent. A missed alert is the failure the app is being built to prevent | `03-safety-reliability-security.md`, "The promise we are protecting", and F6 | — |
-| C20 | 2 | The request is for [production identifier] and one test build, [production identifier].test, for automated tests of the lost-contact alert (described in Part A's later answers) on real iPhones, which must pass before the group relies on the app. Not a demo | The owner's answer to Q2; D-041; D-035; `06-testing-strategy.md`, L9 ("permission states for Critical Alerts", "real push delivery to the phone") | M5 (L9) |
+| C20 | 2 | The request is for [production identifier] and one test build, [production identifier].test, for automated tests, on real iPhones, of the lost-contact alert, which will go to a walker's responders when our server stops hearing from the walker's phone. Those tests must pass before the group relies on the app. Not a demo | The owner's answer to Q2; D-041; D-035; `06-testing-strategy.md`, L9 ("permission states for Critical Alerts", "real push delivery to the phone") | M5 (L9) |
 
 **Nothing in Part A falls outside C1 to C20.** Three wordings only explain a
 term for a reader who does not know the plan: "the person on their way home"
@@ -252,8 +255,8 @@ app, a video or a usage figure, **stop and tell Claude.** Do not write an
 answer the plan does not back, in the form or in this file. The answer then
 comes from the owner, through Part D's step 4.
 - **Relay the form's question, not its prefilled contact fields.**
-- **If a video is asked for,** any video made uses synthetic names and
-  positions only, and is kept out of the repository.
+- **If a video is asked for,** any video made uses synthetic names, phone
+  numbers and positions only, and is kept out of the repository.
 
 ### Apple's words, as read on 2026-10-01
 
@@ -408,8 +411,8 @@ later break, and Apple would have approved it on that promise.
 - If the form asks for something Part A does not answer, **stop and tell
   Claude**. Nothing is made up in the form either. **Relay the form's
   question, not its prefilled contact fields.** If a video is asked for, any
-  video made uses synthetic names and positions only, and is kept out of the
-  repository.
+  video made uses synthetic names, phone numbers and positions only, and is
+  kept out of the repository.
 
 **Why:** every claim in Part A has a source (Part B), and changing or
 shortening it in the form would lose that. Production goes first so the test
@@ -511,18 +514,37 @@ Listed so it is not lost.
 6. **Tests that hold Part A's promises, written in M3 whatever Apple
    answers.** Q1's rule (only the lost-contact alert is critical) and Q4's (the
    no-responder warning is not) bind either way, so these tests do not wait for
-   approval. They are named in M3, not here. Each bullet names its carrier:
-   the requirement whose test names carry it.
+   approval. They are named in M3, not here; the decision that records Q1's
+   and Q4's answers lists them, or points to this item, so M3 finds them. Each
+   bullet names its carrier: the requirement whose test names carry it.
    - **Only the lost-contact message carries the critical level.** L6, with
      the recording push fake, over **every** message type the outbox can hold,
      so a notice added later (for example SEC-01's new-device notice, which
      comes in M4) cannot pick up the critical level unnoticed. Plus L2 for the
      pure rule. Carriers: REL-06, and the decision that records Q1's and Q4's
      answers.
+   - **No notification the app schedules itself uses the critical level.**
+     This covers the walker's reminder that protection stopped (REL-04), and
+     any offline warning that becomes a local notification (LOST-05). Held by
+     an L1 rule: no app module sets the critical interruption level or a
+     critical sound; the notifications library's keys are to verify. Or by an
+     L2 test on the safety core's reminder builder; only the L1 rule also
+     covers a local notification built elsewhere. Carriers: REL-04 and REL-06.
    - **Exactly one lost-contact message per responder per event is written to
      the outbox, and the outbox's retries still deliver it.** A duplicate is
      collapsed (by a collapse ID, to verify), never avoided by skipping a
-     retry. L6. Carriers: REL-07, LOST-07 and AR-05.
+     retry. The collapse ID is opaque and per message, for example the outbox
+     row's own random ID, never a walker, user or journey ID. **No further
+     critical push follows the SMS:** C8 promises Apple an SMS "instead of
+     further alerts". L6: time runs past the 2-minute SMS, through the resumed
+     escalation (SM-10), and with the watchdog run twice, and the test still
+     finds exactly one lost-contact message per responder. Carriers: LOST-02
+     (its state-machine step that opens the alert and pushes to the
+     responders), REL-07, LOST-07 and SM-10; plus AR-05 (the outbox) and AR-06
+     (the watchdog), which are not tracked. **No gate enforces the untracked
+     ones:** `req:coverage` asks for a test only for tracked requirements, and
+     for an untracked one the test-name prefix is practice, not an obligation
+     (D-074).
    - **The critical permission is requested only in responder setup.** An L1
      import rule: only the responder-setup module may request it, because L5
      and L7 can show that setup asks but cannot prove an "only". Plus L5 that
@@ -533,17 +555,26 @@ Listed so it is not lost.
      because a responder can switch Critical Alerts off in Settings. The
      walker sees a responder with Time Sensitive only, and after a refusal
      every iPhone responder, as **not sounding on a silenced phone**.
-     Carrier: GRP-04, whose own spec decides how the app-side parts are
-     tested.
-   - **The push carries no personal details.** The lost-contact push to APNs
-     holds only the fixed text: no name, position or phone number, and no
-     walker or user ID. L6, on the push adapter's payload builder, with the
-     recording push fake. **Carrier: none tracked.** The source is D-086
-     (content-free payloads) and `04-tech-stack.md` finding 4.
-   - **Push goes straight to APNs.** The iOS path registers the native APNs
-     device token, with no Expo push token and no FCM on iOS. L5 or L6.
-     Carrier: none tracked; the source is D-086 (push straight to APNs and
-     FCM).
+     Readiness can go stale while a responder does not open the app (the
+     GRP-04 flag below). Carrier: GRP-04, whose own spec decides how the
+     app-side parts are tested.
+   - **No push carries personal details, in its payload or its request
+     headers.** L6, on what the push adapter builds, with the recording push
+     fake, over **every** push message type the outbox can hold, headers
+     included: no name, position or phone number, and no walker, user or
+     journey ID. The collapse ID is checked here too. The lost-contact push
+     holds only its fixed text. A notice whose plan text shows a name, such as
+     the call notice to #1, gets the name on the phone (the CALL-03 flag
+     below). The SMS messages are not pushes: LOST-07's SMS says who, and
+     holds no location (REL-12). **Carrier: none tracked.** The source is
+     D-086 (content-free payloads) and `04-tech-stack.md` finding 4.
+   - **Push goes straight to APNs: no FCM and no Expo push token on iOS.**
+     That is a "never", which L5 and L6 cannot prove, so it is held by an L1
+     rule: no module asks for an Expo push token or sends through Expo's push
+     service, and no iOS path uses FCM; the exact imports and calls the rule
+     bans are to verify. Plus L5 or L6 that the iOS path registers the native
+     APNs device token. Carrier: none tracked; the source is D-086 (push
+     straight to APNs and FCM).
    - **The alert is distinct.** The critical sound at full volume, and a fixed
      lost-contact text different from every routine notice's. L6, on the push
      adapter's payload builder, with the recording push fake; the sound's keys
@@ -566,7 +597,8 @@ Listed so it is not lost.
 
 ### Flags for other requirements' own specs
 
-STORE-01 changes neither requirement; each flag is for the spec that will:
+STORE-01 changes none of these requirements; each flag is for the spec that
+will:
 - **REL-10, the canary:** the canary never uses the critical level (the spec's
   R7). If it did, it would break through silence at every canary run, and
   Part A's picture of rarity would be wrong.
@@ -576,3 +608,12 @@ STORE-01 changes neither requirement; each flag is for the spec that will:
   where missing it means a later silence alerts nobody. The decision that
   records Q1's and Q4's answers records this as a requirement on that rule's
   design.
+- **GRP-04, the responder-setup story:** readiness can go stale while a
+  responder does not open the app, because it is re-read only at app start and
+  in the foreground (item 6). The walker's view shows how old a responder's
+  readiness is, or treats old readiness as unknown; that spec chooses which.
+- **CALL-03, the call-sharing story:** the call notice to #1,
+  `"<name> is calling you and sharing their location"`, carries a name. The
+  name is filled in on the phone, fetched from the EEA server or by a
+  notification service extension, and never sent in clear (item 6's
+  content-free test covers every push type).
