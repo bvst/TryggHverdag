@@ -8,7 +8,21 @@
 // The run must watch for 60 s after the change, with no margin: the report and
 // the mark are on the same clock. A shorter run is invalid, never passed or
 // failed.
-import { arrivalsIn, harnessEvidence, journeyWindow, markInside, shortRun } from './journey.mjs';
+//
+// Breaks (review loop 2): the failure is settled 60 s after the change. A
+// timed break over any part of those 60 s, or one with no time, makes a run
+// with no report in time invalid; a timed break wholly before the change or
+// after those 60 s does not rescue it. A run that would pass is invalid with
+// any break. Every break stays in the evidence.
+import {
+  arrivalsIn,
+  failureRule,
+  harnessBreaks,
+  journeyWindow,
+  markInside,
+  shortRun,
+  spanAfter,
+} from './journey.mjs';
 
 const REPORT_LIMIT_MS = 60_000;
 
@@ -17,7 +31,7 @@ export function judgeS7({ records, breaks = [] }) {
   const window = journeyWindow(records);
   const change = markInside(records, 'permission-reduced', window);
   const arrivals = arrivalsIn(records, window);
-  const broken = harnessEvidence(records, window, breaks);
+  const harness = harnessBreaks(records, window, breaks);
   const short = shortRun(
     window.end.mono - change.mono,
     REPORT_LIMIT_MS,
@@ -36,14 +50,17 @@ export function judgeS7({ records, breaks = [] }) {
   const afterChange = arrivals.filter((arrival) => arrival.mono >= change.mono);
   const reportDelayMs = report === null ? null : report.mono - change.mono;
 
-  let status = reportDelayMs !== null && reportDelayMs <= REPORT_LIMIT_MS ? 'passed' : 'failed';
-  if (broken.length > 0 || short.length > 0) status = 'invalid';
+  const inTime = reportDelayMs !== null && reportDelayMs <= REPORT_LIMIT_MS;
+  let status;
+  if (inTime) status = harness.texts.length > 0 ? 'invalid' : 'passed';
+  else status = failureRule(harness, spanAfter(change, REPORT_LIMIT_MS));
+  if (short.length > 0) status = 'invalid';
   return {
     status,
     reportDelayMs,
     arrivalsAfterChange: afterChange.length,
     withoutPositionAfterChange: afterChange.filter((arrival) => arrival.hasPosition === false)
       .length,
-    evidence: [...broken, ...short],
+    evidence: [...harness.texts, ...short],
   };
 }

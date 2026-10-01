@@ -6,9 +6,23 @@
 // means the scenario did not run, so the run is invalid. And the run must watch
 // for 5 min after reconnecting (D-021's threshold), to the journey's end; a
 // shorter watch is never passed, and it is failed only if an out-of-order
-// arrival already shows, since more watching could not undo that. A break
-// still makes any run invalid.
-import { arrivalsIn, harnessEvidence, journeyWindow, markInside, shortRun } from './journey.mjs';
+// arrival already shows, since more watching could not undo that.
+//
+// Breaks (review loop 2): S4's failure shows from the moment the device goes
+// back online. A timed break wholly before the "offline-ended" mark cannot
+// explain it, so the run stays failed. A break from that mark on, or one with
+// no time, makes it invalid, except that an order already broken before a
+// timed break began is final. A run that would pass is invalid with any
+// break. Every break stays in the evidence.
+import {
+  arrivalsIn,
+  breakOver,
+  harnessBreaks,
+  journeyWindow,
+  markInside,
+  shortRun,
+  spanOf,
+} from './journey.mjs';
 
 /** S4 cuts the device off for 3 minutes. */
 const OFFLINE_MS = 3 * 60_000;
@@ -75,7 +89,7 @@ export function judgeS4({ records, held, breaks = [] }) {
   if (!Array.isArray(held) || held.some((id) => typeof id !== 'string' || id === '')) {
     throw new Error('held must be the list of record IDs the device held offline');
   }
-  const broken = harnessEvidence(records, window, breaks);
+  const harness = harnessBreaks(records, window, breaks);
   const offlineShort = shortRun(
     online.mono - offline.mono,
     OFFLINE_MS,
@@ -99,9 +113,11 @@ export function judgeS4({ records, held, breaks = [] }) {
   }
   const flushed = [...firstOf.values()];
   const missing = held.filter((id) => !firstOf.has(id));
-  const outOfOrder = flushed.some(
+  // The arrival at which the order broke: recorded before the one ahead of it.
+  const orderBroken = flushed.find(
     (arrival, i) => i > 0 && recordedTime(arrival) < recordedTime(flushed[i - 1]),
   );
+  const outOfOrder = orderBroken !== undefined;
   const lastHeld = flushed.at(-1);
   const reportsAfterFlush =
     lastHeld === undefined ? after : after.slice(after.indexOf(lastHeld) + 1);
@@ -110,9 +126,24 @@ export function judgeS4({ records, held, breaks = [] }) {
   const ids = arrivals.map((arrival) => arrival.recordId).filter((id) => id != null);
   const duplicates = ids.length - new Set(ids).size;
 
-  let status =
-    held.length > 0 && missing.length === 0 && !outOfOrder && queueEmptied ? 'passed' : 'failed';
-  if (broken.length > 0 || offlineShort.length > 0) status = 'invalid';
+  const passed = held.length > 0 && missing.length === 0 && !outOfOrder && queueEmptied;
+  let status = passed ? 'passed' : 'failed';
+  const { untimed, timed, texts } = harness;
+  const fromOnline = spanOf(online, window.end);
+  const over = timed.filter((found) => breakOver(found, fromOnline));
+  // Each timed break over the flush and the watch began after the order broke.
+  const orderFinal =
+    outOfOrder &&
+    untimed.length === 0 &&
+    over.every(
+      (found) => found.from > (found.clock === 'mono' ? orderBroken.mono : orderBroken.at),
+    );
+  if (passed) {
+    if (texts.length > 0) status = 'invalid';
+  } else if (!orderFinal && (untimed.length > 0 || over.length > 0)) {
+    status = 'invalid';
+  }
+  if (offlineShort.length > 0) status = 'invalid';
   else if (watchShort.length > 0 && !outOfOrder) status = 'invalid';
   return {
     status,
@@ -123,6 +154,6 @@ export function judgeS4({ records, held, breaks = [] }) {
     offlineMs: online.mono - offline.mono,
     firstArrivalAfterReconnectMs: flushed.length > 0 ? flushed[0].mono - online.mono : null,
     lastArrivalAfterReconnectMs: lastHeld === undefined ? null : lastHeld.mono - online.mono,
-    evidence: [...broken, ...offlineShort, ...watchShort],
+    evidence: [...texts, ...offlineShort, ...watchShort],
   };
 }

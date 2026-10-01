@@ -12,15 +12,26 @@
 // shorter run is never passed. A failure it already shows is final (the code
 // review's S5): a reminder seen more than 5 min after the last arrival, or,
 // while arrivals went on, a gap over 120 s; more watching could change
-// neither. Any other short run is invalid. A break makes any run invalid.
+// neither. Any other short run is invalid.
+//
+// Breaks (review loop 2): a failure is judged where it shows. When arrivals
+// stopped, a late or missing reminder is failed unless a break could explain
+// it: one with no time, or a timed break over the 5 min after the last
+// arrival. When arrivals went on, the 120 s rule is judged on the stretches
+// of each gap the harness was intact for, as in S1. A run that would pass is
+// invalid with any break. Every break stays in the evidence.
 import {
   GAP_LIMIT_MS,
   arrivalsIn,
-  gapsBetween,
-  harnessEvidence,
+  failureRule,
+  gapRule,
+  gapSpans,
+  harnessBreaks,
   journeyWindow,
   markInside,
   shortRun,
+  spanAfter,
+  spanOf,
 } from './journey.mjs';
 
 /** D-021: lost contact after 5 minutes of silence. The reminder must come first. */
@@ -38,9 +49,9 @@ export function judgeS2({ records, reminders, breaks = [] }) {
     throw new Error('reminders must be a list of delivered notifications, each with its time');
   }
   const arrivals = arrivalsIn(records, window);
-  const gaps = gapsBetween(arrivals, window);
-  const largestGapMs = Math.max(...gaps);
-  const broken = harnessEvidence(records, window, breaks);
+  const spans = gapSpans(arrivals, window);
+  const largestGapMs = Math.max(...spans.map((gap) => gap.ms));
+  const harness = harnessBreaks(records, window, breaks);
 
   const last = arrivals.at(-1);
   const arrivalsStopped = last === undefined || window.end.mono - last.mono > GAP_LIMIT_MS;
@@ -63,7 +74,15 @@ export function judgeS2({ records, reminders, breaks = [] }) {
     const counted = last === undefined ? undefined : shown.find((r) => r.at >= last.at);
     reminderFired = counted !== undefined;
     if (counted !== undefined) reminderDelayMs = counted.at - last.at;
-    status = reminderDelayMs !== null && reminderDelayMs <= REMINDER_LIMIT_MS ? 'passed' : 'failed';
+    const onTime = reminderDelayMs !== null && reminderDelayMs <= REMINDER_LIMIT_MS;
+    if (!onTime) {
+      // The reminder had 5 min from the last arrival: only a break over them can explain it.
+      const decided =
+        last === undefined ? spanOf(window.start, window.end) : spanAfter(last, REMINDER_LIMIT_MS);
+      status = failureRule(harness, decided);
+    } else {
+      status = harness.texts.length > 0 ? 'invalid' : 'passed';
+    }
     if (whileRunning.length > 0) {
       findings.push(
         `${whileRunning.length} reminder(s) shown before the last arrival, while protection still ran`,
@@ -71,7 +90,7 @@ export function judgeS2({ records, reminders, breaks = [] }) {
     }
   } else {
     reminderFired = shown.length > 0;
-    status = largestGapMs > GAP_LIMIT_MS ? 'failed' : 'passed';
+    status = gapRule(spans, harness) ?? 'passed';
     if (reminderFired) {
       findings.push(
         `${shown.length} reminder(s) said protection had stopped while arrivals continued`,
@@ -80,8 +99,7 @@ export function judgeS2({ records, reminders, breaks = [] }) {
   }
   // Failed with a late reminder already seen, or with a gap while arrivals went on.
   const final = status === 'failed' && (!arrivalsStopped || reminderDelayMs !== null);
-  if (broken.length > 0) status = 'invalid';
-  else if (short.length > 0 && !final) status = 'invalid';
+  if (short.length > 0 && !final) status = 'invalid';
   return {
     status,
     arrivalsStopped,
@@ -89,6 +107,6 @@ export function judgeS2({ records, reminders, breaks = [] }) {
     reminderDelayMs,
     largestGapMs,
     findings,
-    evidence: [...broken, ...short],
+    evidence: [...harness.texts, ...short],
   };
 }

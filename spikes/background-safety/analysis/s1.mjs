@@ -5,11 +5,12 @@
 // shows is final, because more watching could only make it longer, so that run
 // is failed; any other short run is invalid.
 //
-// Breaks (the safety review's B2a): a gap over 120 s seen with the harness
-// intact is failed, unless a break with a time (a hole in the receiver's
-// ticks, or a sleep of the Mac) overlaps that gap. A break the driver saw,
-// with no time, makes the run invalid; so does any break when no gap is over
-// 120 s. Every break stays in the evidence.
+// Breaks (the safety review's B2a, made strict in review loop 2): every break
+// with a time (a hole in the receiver's ticks, or a sleep of the Mac) is taken
+// out of each gap together; a gap with a stretch over 120 s left was seen with
+// the harness intact, so the run is failed. A break the driver saw, with no
+// time, makes the run invalid; so does any break when no such stretch is left.
+// Every break stays in the evidence.
 import {
   GAP_LIMIT_MS,
   arrivalsIn,

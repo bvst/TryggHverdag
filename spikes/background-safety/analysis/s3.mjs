@@ -7,11 +7,14 @@
 // without it, no "not exempt" report before the restrictions started. Any other
 // short run is invalid.
 //
-// Breaks: with the exemption, as in S1 (the safety review's B2a), a gap over
-// 120 s seen with the harness intact is failed unless a break with a time
-// overlaps it; a break with no time, or any break when no gap is over 120 s,
-// makes the run invalid. Without the exemption, any break makes the run
-// invalid. Every break stays in the evidence.
+// Breaks: with the exemption, as in S1, a gap with a stretch over 120 s left
+// once every timed break is taken out of it is failed; a break with no time,
+// or any break when no such stretch is left, makes the run invalid. Without
+// the exemption, a missing report is settled when the restrictions start: a
+// timed break before them or over their start, or a break with no time, makes
+// the run invalid, and a timed break after it does not rescue it (review loop
+// 2). A run that would pass is invalid with any break. Every break stays in
+// the evidence.
 //
 // Which restrictions held comes from the driver's readings at the start and the
 // end (`inForce`): deep Doze (`dumpsys deviceidle get deep` = IDLE) and the
@@ -23,12 +26,14 @@
 import {
   GAP_LIMIT_MS,
   arrivalsIn,
+  failureRule,
   gapRule,
   gapSpans,
   harnessBreaks,
   journeyWindow,
   markInside,
   shortRun,
+  spanOf,
 } from './journey.mjs';
 
 /** S3 holds the device in the restrictions for 45 minutes. */
@@ -99,10 +104,12 @@ export function judgeS3({ exemption, records, breaks = [], inForce }) {
   let status = 'passed';
   if (exemption) {
     status = gapRule(spans, harness) ?? 'passed';
+  } else if (!notExemptReported) {
+    // Settled when the restrictions start: only a break before them, or over
+    // their start, could explain a report that never came.
+    status = failureRule(harness, spanOf(window.start, restricted));
   } else if (harness.texts.length > 0) {
     status = 'invalid';
-  } else if (!notExemptReported) {
-    status = 'failed';
   }
   if (status === 'passed' && (short.length > 0 || noDoze.length > 0)) status = 'invalid';
   return {

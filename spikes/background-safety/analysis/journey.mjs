@@ -151,22 +151,72 @@ export function gapSpans(arrivals, { start, end }) {
   }));
 }
 
+/** The span between two records (or marks), on both clocks: { mono: [a, b], wall: [a, b] }. */
+export const spanOf = (from, to) => ({ mono: [from.mono, to.mono], wall: [from.at, to.at] });
+
+/** The span from `from` to `ms` after it, on both clocks. */
+export const spanAfter = (from, ms) => ({
+  mono: [from.mono, from.mono + ms],
+  wall: [from.at, from.at + ms],
+});
+
 /**
- * The 120 s rule with the harness's breaks (the safety review's B2a): a gap
- * over 120 s is a failure seen with the harness intact unless a timed break
- * overlaps it. Gives 'invalid' when an untimed break exists, or when every gap
- * over 120 s is overlapped by a timed break, or when a timed break exists and
- * no gap is over 120 s; 'failed' when a gap over 120 s has no timed break over
- * it; null otherwise.
+ * Whether a timed break overlaps a span, on the break's own clock (a hole in
+ * the ticks on `mono`, a sleep on the Mac's wall clock). Touching is not
+ * overlapping: a break that ends as the span starts takes nothing from it.
+ */
+export function breakOver(found, span) {
+  const [from, to] = found.clock === 'mono' ? span.mono : span.wall;
+  return found.from < to && found.to > from;
+}
+
+/**
+ * The longest stretch of a gap the harness was intact for: every timed break
+ * taken out of it together, each on its own clock, measured from the gap's
+ * start (review loop 2).
+ */
+export function longestIntact(gap, timed) {
+  const cuts = [];
+  for (const found of timed) {
+    if (!breakOver(found, gap)) continue;
+    const [from] = found.clock === 'mono' ? gap.mono : gap.wall;
+    const start = Math.max(0, found.from - from);
+    const end = Math.min(gap.ms, found.to - from);
+    if (end > start) cuts.push([start, end]);
+  }
+  cuts.sort((a, b) => a[0] - b[0]);
+  let longest = 0;
+  let at = 0;
+  for (const [start, end] of cuts) {
+    longest = Math.max(longest, start - at);
+    at = Math.max(at, end);
+  }
+  return Math.max(longest, gap.ms - at);
+}
+
+/**
+ * The 120 s rule with the harness's breaks, judged on intact stretches (the
+ * safety review's B2a, made strict in review loop 2): a gap with a stretch
+ * over 120 s left once every timed break is taken out of it was seen with the
+ * harness intact, so it is 'failed'. 'invalid' when an untimed break exists
+ * (it could have been anywhere), or when a timed break exists and no such
+ * stretch is left; null otherwise.
  */
 export function gapRule(gaps, { untimed, timed }) {
-  const overlaps = (found, gap) => {
-    const [from, to] = found.clock === 'mono' ? gap.mono : gap.wall;
-    return found.from <= to && found.to >= from;
-  };
   if (untimed.length > 0) return 'invalid';
   const seen = gaps.filter((gap) => gap.ms > GAP_LIMIT_MS);
-  if (seen.some((gap) => !timed.some((found) => overlaps(found, gap)))) return 'failed';
+  if (seen.some((gap) => longestIntact(gap, timed) > GAP_LIMIT_MS)) return 'failed';
   if (timed.length > 0) return 'invalid';
   return null;
+}
+
+/**
+ * A failure that shows in one span of the run (review loop 2): it stays
+ * 'failed' unless a break could explain it, which makes it 'invalid': a break
+ * with no time, or a timed break over that span. A timed break elsewhere does
+ * not rescue it.
+ */
+export function failureRule({ untimed, timed }, span) {
+  if (untimed.length > 0) return 'invalid';
+  return timed.some((found) => breakOver(found, span)) ? 'invalid' : 'failed';
 }
