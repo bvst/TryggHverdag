@@ -7,11 +7,13 @@ drawing Kartverket's tiles (S8, outside the go/no-go), and applies the
 go/no-go rule. It contains no coordinates and no phone number; Galdhøpiggen is
 named only, never located (AC14). The repository is public.
 
-**Four words are used for every verdict:** passed, failed, not shown on
-simulators, and no verdict (a case with fewer than two valid runs). "Not
-shown" is never a pass. Every "not shown" below says where it will be shown:
-**L9, the automated real-device suite, which must be switched on and passing
-before the group uses the app for real walks home (D-041).**
+**Three verdicts, plus a separate state, as the spec sets out.** Each
+scenario gets one of three verdicts on each platform: passed, failed, or not
+shown on simulators. "Not shown" is never a pass. A case with fewer than two
+valid runs has **no verdict** at all — read as neither a pass nor "not
+shown". Every "not shown" below says where it will be shown: **L9, the
+automated real-device suite, which must be switched on and passing before
+the group uses the app for real walks home (D-041).**
 
 ## 1. Header
 
@@ -56,10 +58,14 @@ build; see `spikes/background-safety/README.md`). Both built from `20545d9`.
 - `node drivers/run-all.mjs --night night-YYYYMMDD` runs the full plan
   (resumable); `--only s1/android/exempt` runs one case alone, as the owner's
   Q4 case did;
-- `node drivers/summarize.mjs --night night-YYYYMMDD [--manifest <path> …]`
-  prints each scenario's verdict, the invalid/valid counts and the go/no-go,
-  reading the runner's own plan so a planned case that never ran shows "no
-  verdict", never a silent pass;
+- `node drivers/summarize.mjs --manifest <path> [--manifest <path> …]` prints
+  each scenario's verdict, the invalid/valid counts and the go/no-go for one
+  or more explicit manifests, read together (used for both nights here),
+  against the runner's own plan, so a planned case that never ran shows "no
+  verdict", never a silent pass. `summarize.mjs` also takes `--night
+  night-YYYYMMDD` alone, for one night by its own manifest path — but it
+  **ignores `--night` once any `--manifest` is given**, so the two forms are
+  not combined;
 - `node drivers/rejudge.mjs --night night-YYYYMMDD` re-judges a night's saved
   run folders against the current analysis code, writing
   `manifest.rejudged.jsonl` with the commit that judged it;
@@ -169,6 +175,12 @@ commit `0a91285`:
 | S1 exempt | android | gaps over 60 s | 3 | 2026-10-01 s1-android-exempt-2 |
 | S1 exempt | android | gaps over 120 s | 0 | 2026-10-01 s1-android-exempt-2 |
 
+**Note on the table above, not a change to it:** the two Force stop rows in
+S2 (`2026-09-30 s2-android-forcestop-1` and `-2`, "reminders after the last
+arrival") are **recorded, not judged**, as AC6 says — by Android's own
+design, Force stop cancels the app's scheduled alarms, so 0 reminders was
+expected, not a pass or fail condition for this case.
+
 ### S1 — 45 minutes in the background (AC5)
 
 **What ran.** `drivers/s1-android.mjs` and `drivers/s1-ios.mjs` replayed the
@@ -176,7 +188,7 @@ route for 45 minutes. Android: screen off (`input keyevent KEYCODE_SLEEP`),
 virtual battery unplugged, no other restriction forced. iOS: the app
 backgrounded; the simulator has no window, so `simctl` cannot lock it, and S1
 on iOS ran in the background **unlocked**, not locked. Two runs each, from
-`night-20260930` (20:09–03:43 CEST).
+`night-20260930` (20:09–05:43 CEST, 18:09:05Z–03:43:07Z).
 
 **Android, without the exemption — failed.** Largest gaps of 802 s (run
 2026-09-30 s1-android-1) and 602 s (run 2026-09-30 s1-android-2), both well
@@ -207,12 +219,14 @@ Q4 case (`night-20261001-s1-exempt`, run separately the next morning, started
 app's setup would ask the user to grant it, and the run only started once the
 exemption was shown in force (`deviceidle`'s list held the app, and the app's
 own `exempt: true` report had reached the receiver). Largest gap **109 s in
-both runs**, an **11 s margin** under the 120 s limit; 0 gaps over 120 s. In
-both exempt runs the SDK's own state shows it went back to moving at
-**30.4–30.5 minutes** into the run — the same stationary-geofence mechanism
-above, exited in time because the exemption kept the app able to notice,
-where the non-exempt runs could not. The first exempt run also carried a
-network capture (below): it passed, with nothing flagged.
+both runs**, an **11 s margin** under the 120 s limit; 0 gaps over 120 s.
+**Observed:** in both exempt runs the SDK's own state shows it went back to
+moving at **30.4–30.5 minutes** into the run. **Inference, not observed:**
+read against the mechanism above, this looks like the same stationary
+geofence, exited in time because the exemption kept the app able to notice
+the exit, where the non-exempt runs could not — but the geofence exit itself
+was not separately confirmed. The first exempt run also carried a network
+capture (below): it passed, with nothing flagged.
 
 **Side by side:**
 
@@ -228,14 +242,23 @@ and the app must report whether it was granted (as S3 and the exempt case
 both already do), so the walk can fail loudly, not silently, when it is
 refused.
 
-**iOS — failed, and deciding.** The only gap, 370 s, is the same in both
-runs, and it falls exactly where the route's roughly 6-minute stop is.
-**Observed, from the runs:** no arrival anywhere in the night's evidence had
-`moving: false`. A perfectly still simulated position gives the SDK no new
-fix, and the simulator has no motion sensor, so the SDK had nothing to tell
-it the device had stopped; it stayed in its "moving" state through the whole
-stop and sent no stationary heartbeat. No documented SDK setting was found
-that changes this on a simulator (none was tried, because none was found).
+**iOS — failed, and deciding.** **Observed:** the only gap, 370 s, is the
+same in both runs; it is exactly the route's roughly 6-minute stop plus one
+10 s step of the route's own replay (the simulator's position is stepped
+every 10 s, so the step after the stop is what the SDK finally received).
+Across both runs, 235 arrivals each, none had `moving: false`. **Inference,
+not observed:** a perfectly still simulated position is read here as giving
+the SDK no new fix, with no motion sensor to tell it the device had stopped
+another way — so it is read as staying in its "moving" state through the
+stop and sending no stationary heartbeat, rather than this chain being
+confirmed by anything beyond the `moving: true` reading itself. An earlier,
+uncounted dry run on this same simulator went stationary within a minute
+(`docs/progress/m1.md`, 2026-09-30, "AC2 shown on both platforms"): that run
+is not part of this night's counted evidence, but it shows the SDK's iOS
+behaviour on a static position is not perfectly consistent, which is itself
+a reason to read "never `moving: false`, 235 for 235" as an observation, not
+proof of a fixed mechanism. No documented SDK setting was found that changes
+this on a simulator (none was found to try).
 **Documented by the vendor, read apart from the observation above.** The
 same SDK's own documentation (`react-native-background-geolocation` 5.7.0,
 `src/declarations/interfaces/Config.d.ts`, read 2026-10-01 from the spike's
@@ -257,12 +280,18 @@ in the background:
 > expect to run your app in this mode 24 hours / day, 7 days-a-week."
 
 **Reading the two together is this document's own inference, not the
-vendor's claim about this spike:** a real iPhone, lying still with the
-screen off, is documented by the SDK's own engine to throttle heartbeats
-about 2 minutes in — close to the simulator's 370 s gap — so a real phone
-may fall silent at a stop for the same reason the simulator did. That is the
-safety reviewer's point: this is evidence against assuming a real phone
-would do better than the simulator, not proof that it would do the same.
+vendor's claim about this spike.** The vendor's "about 2 minutes" is a delay
+after the app enters the background, not a gap length, so it is not
+compared to the simulator's 370 s gap here. What it does say is that a real
+iPhone, lying still with the screen off, is documented by the SDK's own
+engine to throttle heartbeats on its own fixed timer — a different
+mechanism from the simulator's, which simply never received a new GPS fix
+to notice the stop with at all. Read together, the two amount to **a
+different mechanism, with the same outcome**: heartbeats stop at a real
+stop, not "for the same reason" as the simulator. That is the safety
+reviewer's point: this is evidence against assuming a real phone would do
+better than the simulator, not proof that it would fail in exactly the same
+way.
 **This stays FAILED and deciding — it is not listed as "open until L9".**
 What L9 must show: a stop of 5 minutes or more on a real iPhone, unplugged,
 with the screen off. M3 should consider a timer-driven upload as a fix that
@@ -364,9 +393,13 @@ the same 3 minutes instead; the radio itself was never off. Two runs each,
 
 Every held position arrived, in the order the device recorded it, and the
 SDK's on-device queue was empty afterwards, as the app read and reported it.
-3 minutes offline plus the longest of these flush times stays far under
-D-021's 5-minute lost-contact threshold, so a tunnel of this length would not
-become a false alarm.
+These four runs flush quickly, but the margin to D-021's 5-minute (300 s)
+lost-contact threshold is narrower than that alone suggests: the worst case
+is a last upload up to 60 s stale when the device goes offline (the SDK's
+own upload interval while moving, part 4.6), plus the 3 minutes offline,
+plus about 10 s to flush — around 250 s in the worst case, **about 50 s of
+margin**, not "far under" it. A longer flush, or a longer gap right before
+going offline, would close that margin further.
 
 **Not shown on simulators, open until L9 (D-041):**
 - iOS with its radio actually off;
@@ -389,18 +422,24 @@ as AC9 and the reviewers require:
 | Heard | **failed** | not shown on simulators |
 | Text (payload and shown text match exactly) | passed | passed |
 
-**Heard failed on Android — because of our own configuration, not a platform
-limit.** The alert channel is created with `USAGE_ALARM`, but the posted
-alert's effective audio usage came out as `USAGE_NOTIFICATION`, which the
-silent ringer mutes. The cause: Android's flag `restrict_audio_attributes_alarm`
+**Heard failed on Android — the likely cause, not verified.** The alert
+channel is created with `USAGE_ALARM`, but the posted alert's effective
+audio usage came out as `USAGE_NOTIFICATION`, which the silent ringer mutes.
+**What was checked:** Android's flag `restrict_audio_attributes_alarm`
 restricts `USAGE_ALARM` to notifications that carry `CATEGORY_ALARM` —
 "Only alarm category notifs can use USAGE_ALARM" (AOSP
-`core/java/android/app/notification.aconfig`, bug 331793339). The spike's
-alert is posted with no category set. **This is a fix the product can make**
-(post the alert with `CATEGORY_ALARM` set; `expo-notifications` may need
-native code for this, M3's work), **not a platform limit.** The exact site in
-our code that is missing the category was not pinpointed during the review;
-this document says so plainly rather than guessing.
+`core/java/android/app/notification.aconfig`, bug 331793339) — and that our
+own alert, posted from `spikes/background-safety/app/src/journey.js`
+(`alertSoon`), sets no category. **What was not shown:** whether this flag
+is actually on in the `android-37.2` image this spike runs on, where AOSP's
+code would enforce it; and a run that posts the alert with `CATEGORY_ALARM`
+set and comes back `heard: passed`. Until a run like that exists, this
+stays the likely cause, not a verified one, and it is not called "not a
+platform limit" either way. The fix to try is posting the alert with
+`CATEGORY_ALARM`; `expo-notifications` may need native code for that, M3's
+work. What was not found is **AOSP's own enforcement site** inside the
+flag's code path — our own posting site, `alertSoon`, is already known and
+named above.
 
 **iOS text — checked on the foreground push only.** The exact-text check
 (payload and shown text match the fixed text with no other keys) was
@@ -479,6 +518,17 @@ case**: with the process gone, neither the reminder (AC6) nor the server's
 5-minute silence was captured as the thing that would have noticed in the
 walker's place. That gap is a finding for the owner, not just a detail.
 
+**The asymmetry, for the owner, alongside the excuse.** The rule's letter is
+followed correctly: a platform ending the process excuses the failure,
+whichever case it happens in. But the two cases are not alike once the
+process ends. In the background case, the platform also ended the process —
+and the **same SDK** came back on its own within 7 s, with 28 arrivals
+following. In the fine case, it never came back: 0 arrivals, no report, for
+either run. The rule's premise is about the process ending, not about
+whether the SDK recovers afterwards — so being excused here does not mean
+the two cases behaved the same way, only that neither is counted against
+the SDK by the rule as written.
+
 **Not shown on simulators, open until L9 (D-041):**
 - the real Settings screens on phones;
 - the iPhone's precise-to-approximate change — `simctl` could not make it.
@@ -494,6 +544,11 @@ walker's place. That gap is a finding for the owner, not just a detail.
 | No native crash | passed | passed |
 | 16 KB page alignment (Android only) | aligned: true, both runs | not applicable |
 
+**"Aligned: true" is the driver's own reading (`meta.aligned16k`), not a
+fresh `zipalign` run for these two runs** — the night did not save
+`zipalign`'s exit code. AC2's separate, by-hand `zipalign -c -P 16` check at
+build time (all 17 native libraries OK) still stands; see part 5.4.
+
 Full detail — MapLibre's and Kartverket's licences, the tile address, and the
 capture — is in part 5. **S8 does not decide the location SDK's go/no-go**;
 it is a finding for D-026 only, and here it is a pass.
@@ -508,6 +563,28 @@ engine `com.transistorsoft:tslocationmanager` 4.6.1 (with
 its iOS engine `TSLocationManager` 4.7.1 (pinned through `eas.json`'s
 `TSLOCATIONMANAGER_VERSION`, since the podspec's own default is a range). No
 licence key is used; none is needed in debug builds (clause 3.5, below).
+
+**What the pinned engine adds to the Android manifest, and what comes from
+elsewhere (M3 to review).** Read from
+`app/android/app/build/outputs/logs/manifest-merger-debug-report.txt`, the
+build of 2026-09-30 17:20:
+- **the SDK's own engine** (`com.transistorsoft:tslocationmanager:4.6.1`)
+  adds the background location permission, `ACTIVITY_RECOGNITION` (physical
+  activity data, which matters for the DPIA), the location foreground
+  service, and a boot-completed receiver;
+- **`expo-notifications`**, not the location SDK, brings in the FCM receive
+  permission (through `firebase-messaging` 25.0.1) and about 20
+  badge-related permissions (through `ShortcutBadger` 1.1.22);
+- **the Install Referrer permission** (`com.android.installreferrer` 2.2, a
+  PRIV-06 question for M3) comes through `expo-application`, itself a
+  dependency of `expo-notifications`, not of the location SDK;
+- **`SYSTEM_ALERT_WINDOW`** is rejected in the app's own main manifest but
+  present in the merged **debug** manifest — a debug-build artefact, not
+  necessarily something a release build carries.
+
+M3 must review the merged manifest of the **release** build itself, not
+assume this debug-build reading describes it, and not assume any engine's
+declared licence covers everything a build actually includes.
 
 ### 4.2 Licence, read at step 2 (quoted)
 
@@ -566,14 +643,6 @@ run over `apps/mobile` will see only the npm package's MIT and miss this: the
 M3 task that brings the SDK in must handle the native engines' terms
 explicitly, not rely on `licenses:check`.
 
-**A gap found in the Android build, for M3 to review.** The SDK's merged
-Android debug manifest adds more than location tracking: FCM's receive
-permission, the Install Referrer permission (a PRIV-06 question for M3),
-about 20 badge-related permissions, and `SYSTEM_ALERT_WINDOW`, despite the
-app's own manifest blocking it. M3's task must review the merged manifest by
-hand, not assume the declared licence covers what the build actually
-includes.
-
 **Dependency sources (SEC-06).** Android: Maven Central, Google, the Gradle
 Plugin Portal, and local AARs; JitPack is declared but unused. iOS:
 CocoaPods, for `TSLocationManager` — pinned only through the `eas.json`
@@ -590,25 +659,45 @@ Google account on the device. The capturing run was 2026-09-30 s1-android-1.
 loopback.** No host belonging to the SDK's vendor appears in any capture.
 
 **One finding: an unattributed Firebase Installations TLS session.** At
-18:49:22.8Z, 13 ms after a DNS answer for `firebaseinstallations.googleapis.com`,
-the device opened a TLS session to that host's address, `172.217.112.4:443`
-— 2,649 B sent, 5,846 B received. It is the only Firebase connection in the
-capture. **The capture's verdict stays failed, unless the owner decides
-otherwise.** A full pass over the run's window (5,820 packets) found none
-with both endpoints unclassified, so this is not a gap in the review, it is
-a real, unexplained connection.
+18:49:22.8Z **on the Mac's clock** (the pcap's own clock ran about 3604 s
+behind — "What the harness had to learn", `spikes/background-safety/README.md`),
+13 ms after a DNS answer for `firebaseinstallations.googleapis.com`, the
+device opened a TLS session to that host's address, `172.217.112.4:443` —
+2,649 B sent, 5,846 B received. **Only the SNI in the TLS handshake ties
+this session to Firebase:** `172.217.112.4` is one of Google's own shared
+front-end addresses, serving many Google services, not a Firebase-only
+address; it is the session name, `firebaseinstallations.googleapis.com`,
+that identifies it. It is the only such connection in the capture. **The
+capture's verdict stays failed, unless the owner decides otherwise.** A full
+pass over the run's window (5,820 packets) found nothing with both
+endpoints unclassified beyond 26 ICMPv6 neighbour- and router-discovery and
+MLD packets — link-local and multicast housekeeping to the emulator's own
+gateway, none of them TCP or UDP, and none of them destinations in AC12's
+sense. So this is not a gap in the review; it is a real, unexplained
+connection.
 
 **The evidence on both sides.**
-- *Against the app:* the app cannot start Firebase itself. It has no
-  `google-services.json`, no Google Services Gradle plugin, and its `R.txt`
-  has neither `google_app_id` nor `gcm_defaultSenderId`. It links Firebase
-  only indirectly, through `expo-notifications`, with no configuration to
-  start it.
-- *Supporting that:* in the exempt night's run (below), the app's own process
-  logged that Firebase itself failed to start.
-- *Against attribution being settled:* nothing in the capture ties the TLS
-  session to a process. The exempt run's clean capture can only speak for
-  its own traffic, not for the night run that showed the connection.
+- *Against the app having started it:* the app cannot start Firebase
+  itself. It has no `google-services.json`, no Google Services Gradle
+  plugin, and its `R.txt` has neither `google_app_id` nor
+  `gcm_defaultSenderId`. It links Firebase only indirectly, through
+  `expo-notifications`, with no configuration to start it.
+- *Toward the app:* the session opened 6.5 s after the app's own arrival at
+  the receiver that ended the 802 s gap (part 3, S1), and Firebase's own
+  `FirebaseInitProvider` runs inside every app's process at launch, by
+  Android's own design, whether or not Firebase is configured for that app.
+- *Against the app, in the same moment:* those same seconds also hold a
+  burst of other Google connections — a lookup of `android.apis.google.com`,
+  and QUIC traffic — which looks like a Doze maintenance window the platform
+  opened for several apps and services at once, not something singling out
+  this one connection.
+- *Supporting "the app did not start it":* in the exempt night's run
+  (below), the app's own process logged that Firebase itself failed to
+  start.
+- *Against attribution being settled either way:* nothing in the capture
+  ties the TLS session to a process. The exempt run's clean capture can only
+  speak for its own traffic, not for the night run that showed the
+  connection.
 
 **The exempt night's own evidence (run window 05:00–05:48Z, 2026-10-01):**
 that run's capture (the exempt case's first run also carries a capture, as
@@ -627,14 +716,18 @@ against the Mac's, and the app's process IDs, are recorded in that run's
 `meta.json`, for anyone checking this by hand later; no automated judge reads
 them.
 
-**Other destinations, classified during the review:** the wildcard
-`firebase*.googleapis.com` family and `crashlyticsreports-pa.googleapis.com`
-are classified as analytics/platform traffic, distinct from the one
-unattributed session above. `geomobileservices-pa.googleapis.com` is Google
-Play services' own network location provider — a note for the product's DPIA,
-not a finding against this SDK. Every other destination in the window
-belongs to Google's own platform services on the emulator image, which AC12
-already treats as the platform's, not the app's or the vendor's.
+**Other destinations, classified during the review, to match the judge.**
+Every `firebase*.googleapis.com` host, plus `fcm.googleapis.com`,
+`fcmtoken.googleapis.com` and `crashlyticsreports-pa.googleapis.com`, is
+classified as **analytics, and flagged — never platform.** The session above
+is the **only** such destination that actually appears in this window; the
+rest of the category is the classification rule standing ready, not more
+traffic found. `geomobileservices-pa.googleapis.com` is classified
+separately, as Google Play services' own network location provider — a note
+for the product's DPIA, not a finding against this SDK. Every other
+destination in the window belongs to Google's own platform services on the
+emulator image, which AC12 already treats as the platform's, not the app's
+or the vendor's.
 
 **iOS — not shown.** The simulator shares the Mac's own network, so its
 traffic cannot be told apart from the Mac's without admin rights. This is
@@ -701,6 +794,16 @@ impact on battery performance". S1 measured the configuration a shipped
 product would use; M3 decides whether it keeps it, weighed against S1 iOS's
 open failure (part 3).
 
+**On-device retention, left at the SDK's defaults here — for M3.** The spike
+does not set how long the SDK keeps data on the device: by default it keeps
+every position in its offline queue, and keeps its own log database,
+indefinitely. M3 must set, record and test `persistence.maxDaysToPersist`,
+`persistence.maxRecordsToPersist` and `persistence.persistMode` (the queue),
+and `logger.logMaxDays` (the SDK's own log) — all 5.x setting names, checked
+against this pinned version's own type declarations — and must empty the
+queue itself when a journey ends, rather than leaving positions to age out
+on the SDK's own schedule.
+
 ## 5. The map (S8), outside the go/no-go
 
 ### 5.1 MapLibre's version and licence
@@ -761,11 +864,19 @@ Read 2026-09-30, by hand, for S8:
 |---|---|---|
 | Tiles drawn (≤ 1 % sentinel pixels) | passed, both runs | passed, both runs |
 | No native crash | passed | passed |
-| 16 KB page alignment | aligned: true, both runs (`zipalign -c -P 16`) | not applicable |
+| 16 KB page alignment | aligned: true, both runs | not applicable |
 
 Both devices draw Kartverket's tiles, not the style's sentinel background,
 with no native crash, and the Android build runs on the 16 KB-page image
 without a compatibility mode.
+
+**On "aligned: true" here.** This reading is the driver's own field,
+`meta.aligned16k`, not a fresh `zipalign -c -P 16` run during these two S8
+runs: the night did not save `zipalign`'s own exit code, so the analysis's
+`readAlignment` could not confirm it independently for S8. The `zipalign -c
+-P 16` check that does stand is AC2's, done once by hand at build time (part
+1, m1.md 2026-09-30: all 17 native libraries OK) — a separate check, and it
+still holds; it is not re-run per S8 run.
 
 ### 5.5 Destinations the capture saw
 
@@ -822,12 +933,14 @@ Android's own design, with nothing standing in for it.
 
 **The alert-level rule (S5).** "Heard" failed on Android because the alert's
 effective audio usage, `USAGE_NOTIFICATION`, is muted by the silent ringer,
-while the channel itself is `USAGE_ALARM`. The cause is Android's
-`restrict_audio_attributes_alarm` flag, which needs `CATEGORY_ALARM` on the
-notification itself (AOSP `core/java/android/app/notification.aconfig`, bug
-331793339) — this is the product's own configuration, fixable by posting
-with that category, not a limit of the platform. iOS "heard" stays not shown
-on simulators, open until L9.
+while the channel itself is `USAGE_ALARM`. The likely cause, not verified
+(part 3): Android's `restrict_audio_attributes_alarm` flag, which needs
+`CATEGORY_ALARM` on the notification itself (AOSP
+`core/java/android/app/notification.aconfig`, bug 331793339) — our own alert
+is posted with no category, from `alertSoon`. What was not shown is whether
+this flag is actually on in the image this spike runs on, and a run with
+`CATEGORY_ALARM` set that comes back heard. iOS "heard" stays not shown on
+simulators, open until L9.
 
 **The one-tap call story (S6).** Android is observed and matches the story:
 with `CALL_PHONE`, the tap alone calls (2 of 2); without it, the dialer waits
@@ -860,8 +973,10 @@ relies on the app (D-041). Residual-risk codes (RR-01 to RR-04, `06-testing-
 strategy.md`) are given where the spec ties them.
 
 - **S1:** battery use; real iPhone background limits and any real Android
-  phone (RR-02); the SDK's motion detection on a real accelerometer; other OS
-  versions (RR-04); the iPhone locked during the run.
+  phone (RR-02) — **S1 iOS itself is failed, not open; this item is the
+  further question of how a real iPhone behaves beyond that**; the SDK's
+  motion detection on a real accelerometer; other OS versions (RR-04); the
+  iPhone locked during the run.
 - **S2:** phone makers that treat a swipe as a force stop (RR-02); whether
   iOS treats `simctl terminate` like a user's swipe; whether a real iPhone
   delivers the reminder on time.
@@ -899,6 +1014,36 @@ No run was repeated to replace a failure (D-060): the night's S1 failures,
 the low-memory-kill failures, the precise-to-approximate failure, and the
 capture finding all stand as first recorded.
 
+### Known limits of the harness
+
+These are the reviewers' should-fixes from loop 2's audit of the analysis
+code. **None of them affects these two nights:** no run had a break, every
+run ID is distinct, and every run sits inside a planned case — all three
+were checked by hand against this specific evidence before this document
+was written. They are listed here because they must be fixed before any
+future night runs, not because any of them changes a verdict above:
+
+- duplicate run IDs across manifests would be counted twice;
+- runs of an unplanned case drop out of the go/no-go instead of being
+  flagged;
+- Mac-sleep cuts are measured on the wall clock, compared against a
+  monotonic gap;
+- an untimed break can make an S1 or S3 failure read as invalid instead of
+  failed;
+- a GO's headline does not say "with conditions" when a condition applies;
+- `drivers/lib/plan.mjs`, which decides which runs count at all, has no
+  tests of its own;
+- the S1-exempt judge does not check `exemptionInForce` itself — it only
+  reads what the driver already recorded;
+- `run-all` does not record its own harness commit in the manifest;
+- `meta.deviceAddresses` was empty in the exempt runs, and the judge fell
+  back to the emulator's default addresses instead of failing loudly;
+- the earlier re-judge file is named with the wrong time;
+- the S5 seen/text rows come from untested glue code;
+- test gaps the audit listed directly: touching breaks in S7 and S4,
+  `longestIntact`'s sort and its max, S4 `orderFinal`'s other side, S5's own
+  break handling, and the manifest guard for runs that were never judged.
+
 ## 9. Go/no-go
 
 ### The rule, applied item by item
@@ -927,28 +1072,53 @@ android (passed) and ios (not shown); S8 android and ios (both passed).
 **Settings tried:**
 - S1 android: the battery-optimisation exemption — passed.
 - S1 ios: no documented setting was found that changes a static simulated
-  position into a moving one; none was tried, because none exists to try.
+  position into a moving one; none was found to try. The spec's Q4 offered
+  a second option, (b) — an iOS case with GPS-like jitter at the stop,
+  alongside the Android exemption case — which the owner did not take; the
+  owner took (a), the Android exemption case alone (part 3, S1).
 - Capture android (AC12): no setting applies — this is a finding about an
   unattributed connection, not a configurable behaviour.
 
 ### What the recommendation actually rests on
 
-Three items in the table above show "failed". Two of them do not drive the
-recommendation:
-- **S1 android** failed without the exemption, but passed with it — a
-  documented SDK setting fixes it, so by the rule's own wording ("NO-GO
-  follows when any item fails and **none** of the SDK's documented settings
-  fixes it") this item is resolved, not a NO-GO driver.
+**Four failed lines, across three items in the table above, read "failed":**
+S1 android and S1 iOS (item 2), S7 android (item 5), and capture android
+(item 6). Two of these four lines do not drive the recommendation — though
+one of them is a condition the owner must grant, not a resolved line:
+
+- **S1 android** failed without the exemption (802 s, 602 s gaps, part 3).
+  With the battery-optimisation exemption, it passed. This makes it **a
+  condition of any GO, not a NO-GO driver — and not "resolved" or "fixed"
+  either.** The SDK's own documentation
+  (`react-native-background-geolocation` 5.7.0,
+  `src/declarations/interfaces/DeviceSettings.d.ts`, read 2026-10-01 from
+  the spike's installed package) treats this setting as a last resort, not
+  a normal mode:
+
+  > "In most cases, the plugin **will perform normally** with battery
+  > optimizations. You should only instruct the user to _Ignore Battery
+  > Optimizations_ for your app as a last resort to resolve issues with
+  > background operation."
+  >
+  > "**WARNING:** Ignoring battery optimizations _will_ cause your app to
+  > consume **much** more power."
+
+  Our own evidence runs against the first sentence: without the exemption,
+  S1 failed on stock Android — this was not a case where the plugin
+  "performed normally". So a GO would depend on every user granting a
+  setting the vendor itself calls a last resort, with a documented battery
+  cost. That dependency belongs in front of the owner, not folded into a
+  quiet "fixed".
 - **S7 android** failed only in the case where the platform itself ended the
   process. The rule's own item 5 excuses this explicitly: "A platform that
   ends the process does so for any SDK, so that is recorded as a finding and
   not counted against this SDK."
 
-**What is left, and what the recommendation rests on, is S1 iOS and the
-Android capture (AC12).** Neither has a documented SDK setting that fixes
-it: S1 iOS has no setting that gives a simulator real motion, and the
-unattributed Firebase connection is not something any SDK setting
-addresses.
+**The other two of the four failed lines — S1 iOS and the Android capture
+(AC12) — are what the recommendation rests on.** Neither has a documented
+SDK setting that fixes it: S1 iOS has no setting that gives a simulator real
+motion, and the unattributed Firebase connection is not something any SDK
+setting addresses.
 
 ### Recommendation
 
@@ -960,11 +1130,23 @@ decision exists.
 
 ### Findings for the owner (not deciding)
 
-- S2 android: the low-memory-kill case failed; it does not decide the SDK
-  (part 6).
-- S5 heard android: failed; it does not decide the SDK (part 6).
-- S7 android: failed because the platform ended the process, with nothing
-  arriving after the change (runs 2026-09-30 s7-android-fine-1 and -2).
+Pasted unchanged from the go/no-go output (commit `0a91285`):
+
+- S2 android: failed; it does not decide the SDK
+- S5 heard android: failed; it does not decide the SDK
+- S7 android: failed because the platform ended the process, and nothing
+  arrived after the change (night-20260930-s7-android-fine-1,
+  night-20260930-s7-android-fine-2)
+- S2 android: 1 reminder(s) said protection had stopped while arrivals
+  continued (night-20260930-s2-android-lmk-1)
+- S2 android: 1 reminder(s) said protection had stopped while arrivals
+  continued (night-20260930-s2-android-lmk-2)
+
+**Added here, not in the go/no-go's own output:** S7 fine's "what noticed
+instead" was not recorded for either run (part 3, part 6) — with the
+process gone, neither the reminder nor the server's 5-minute silence was
+captured as the thing that would have noticed the walker's permission
+change in the app's place.
 
 ### Open until L9 (D-041)
 
