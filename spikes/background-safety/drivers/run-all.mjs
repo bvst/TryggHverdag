@@ -8,16 +8,34 @@
 //   node drivers/run-all.mjs --plan                   the plan and its expected time; runs nothing
 //   node drivers/run-all.mjs --smoke                  one short real run (S6 Android "without"),
 //                                                     under a smoke- id, in its own manifest
+//   node drivers/run-all.mjs --night night-YYYYMMDD-s1-exempt --only s1/android/exempt
+//                                                     only that case, twice, in a night of its
+//                                                     own (with --plan: its plan)
 //
 // The rules (D-060, AC13):
-// - invalid (the harness broke, the driver threw or timed out): that run is
-//   repeated, at most twice extra per case; beyond that the case stops, and
-//   the manifest says why;
+// - every run is judged from what it saved, however its driver exited: a
+//   failure its records show is failed; a driver that threw or timed out
+//   with no failure shown is invalid (the safety review's B2c);
+// - invalid (the harness broke): that run is repeated, at most twice extra
+//   per case; beyond that the case stops, and the manifest says why;
 // - failed: never repeated. It is recorded, and the plan moves on;
-// - restarted with the same --night, it skips what the manifest already holds.
+// - restarted with the same --night, it skips what the manifest already
+//   holds. A run folder of the night with no line in the manifest (the runner
+//   stopped during it) is judged as it was left and recorded as interrupted.
+// - the emulator is stopped after each run with a capture, so the next run
+//   cannot write into its pcap, and after any invalid Android run, so a hung
+//   emulator is never reused.
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, closeSync } from 'node:fs';
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+} from 'node:fs';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -25,7 +43,7 @@ import { parseArgs } from 'node:util';
 
 import * as android from './lib/android.mjs';
 import * as ios from './lib/ios.mjs';
-import { judgeRun } from './lib/judge.mjs';
+import { judgeRunFolder } from './lib/judge.mjs';
 import { BUILDS, REPOSITORY, RUNS, SPIKE, fixed, sleep } from './lib/run.mjs';
 
 const MIN = 60_000;
@@ -47,9 +65,10 @@ const BLOCKS = [
       ...twice({ scenario: 's4', minutes: 13, timeout: 25 }),
       ...twice({ scenario: 's7', case: 'background', minutes: 9, timeout: 20 }),
       ...twice({ scenario: 's7', case: 'fine', minutes: 9, timeout: 20 }),
-      ...twice({ scenario: 's2', case: 'swipe', minutes: 15.5, timeout: 30 }),
-      ...twice({ scenario: 's2', case: 'lmk', minutes: 15.5, timeout: 30 }),
-      ...twice({ scenario: 's2', case: 'forcestop', minutes: 15.5, timeout: 30 }),
+      // S2 watches until 6.5 min after the last arrival, up to 15 min after the app was ended.
+      ...twice({ scenario: 's2', case: 'swipe', minutes: 23, timeout: 35 }),
+      ...twice({ scenario: 's2', case: 'lmk', minutes: 23, timeout: 35 }),
+      ...twice({ scenario: 's2', case: 'forcestop', minutes: 15, timeout: 35 }),
       ...twice({ scenario: 's5', minutes: 2, timeout: 10 }),
       ...twice({ scenario: 's6', case: 'without', minutes: 1.5, timeout: 8 }),
       ...twice({ scenario: 's6', case: 'with', minutes: 1.5, timeout: 8 }),
@@ -63,10 +82,22 @@ const BLOCKS = [
       ...twice({ scenario: 's1', minutes: 50, timeout: 70 }),
       ...twice({ scenario: 's4', minutes: 14, timeout: 25 }),
       ...twice({ scenario: 's7', case: 'always-to-inuse', minutes: 9, timeout: 20 }),
-      ...twice({ scenario: 's2', minutes: 16, timeout: 30 }),
+      ...twice({ scenario: 's2', minutes: 15, timeout: 35 }),
       ...twice({ scenario: 's5', minutes: 3, timeout: 10 }),
       ...twice({ scenario: 's8', minutes: 3, timeout: 12 }),
     ],
+  },
+];
+
+/**
+ * Cases outside the night's plan, run only when asked for with --only: S1 on
+ * Android with the battery-optimisation exemption granted (review loop 1,
+ * 2026-10-01).
+ */
+const EXTRAS = [
+  {
+    platform: 'android',
+    runs: twice({ scenario: 's1', case: 'exempt', minutes: 50, timeout: 70 }),
   },
 ];
 
@@ -75,9 +106,9 @@ function twice(run) {
 }
 
 /** Each planned run with its platform, its case key and its number within the case. */
-function planned() {
+function planned(blocks = BLOCKS) {
   const slots = [];
-  for (const { platform, runs } of BLOCKS) {
+  for (const { platform, runs } of blocks) {
     const seen = new Map();
     for (const run of runs) {
       const key = caseKey({ platform, scenario: run.scenario, case: run.case ?? null });
@@ -130,7 +161,7 @@ function portFree(port) {
 }
 
 /** Every check, each with what it found. The night does not start if any fails. */
-async function selfChecks() {
+async function selfChecks(slots) {
   const json = (file) => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {});
   const androidInfo = json(join(BUILDS, 'android-build.json'));
   const iosInfo = json(join(BUILDS, 'ios-build.json'));
@@ -165,6 +196,12 @@ async function selfChecks() {
       existsSync(join(homedir(), 'jdks/jdk-17.0.20.1+1/Contents/Home/bin/java')),
     ],
     ['tcpdump is installed', existsSync('/usr/sbin/tcpdump')],
+    [
+      `every planned case has its driver (${[...new Set(slots.map((slot) => slot.key))].length} case(s))`,
+      slots.every((slot) =>
+        existsSync(join(SPIKE, 'drivers', `${slot.scenario}-${slot.platform}.mjs`)),
+      ),
+    ],
   ];
   return checks.map(([what, ok]) => ({ what, ok: Boolean(ok) }));
 }
@@ -201,12 +238,22 @@ async function cleanUp(slot, say) {
   await sleep(3000);
 }
 
-/** Stops the emulator and waits for it to be gone. */
+/**
+ * Stops the emulator and waits for it to be gone. A hung emulator does not
+ * answer `adb emu kill`, so after a minute its process is killed outright
+ * (the code review, 2026-10-01).
+ */
 async function stopEmulator(say) {
-  if (!succeeds('pgrep', ['-f', 'qemu-system'])) return;
-  succeeds(join(homedir(), 'Library/Android/sdk/platform-tools/adb'), ['emu', 'kill']);
-  for (let i = 0; i < 30 && succeeds('pgrep', ['-f', 'qemu-system']); i += 1) await sleep(2000);
-  say(`emulator stopped: ${!succeeds('pgrep', ['-f', 'qemu-system'])}`);
+  const alive = () => succeeds('pgrep', ['-f', 'qemu-system']);
+  if (!alive()) return;
+  succeeds(android.ADB_PATH, ['emu', 'kill']);
+  for (let i = 0; i < 30 && alive(); i += 1) await sleep(2000);
+  if (alive()) {
+    say('the emulator did not answer adb emu kill; killing its process');
+    succeeds('pkill', ['-9', '-f', 'qemu-system']);
+    for (let i = 0; i < 15 && alive(); i += 1) await sleep(2000);
+  }
+  say(`emulator stopped: ${!alive()}`);
 }
 
 function shutDownSimulators(say) {
@@ -233,6 +280,28 @@ function runDriver(slot, runId, logFile, say) {
       resolve({ code, signal });
     });
   });
+}
+
+const RUN_FOLDER = /^(s\d)-(android|ios)(?:-(.+))?-(\d+)$/;
+
+/**
+ * The night's run folders with no line in the manifest: the runner stopped
+ * while they ran. Each with the slot it belongs to, so it can be recorded.
+ */
+function unrecordedFolders(night, manifest, slots) {
+  if (!existsSync(RUNS)) return [];
+  const recorded = new Set(manifest.filter((e) => e.kind === 'run').map((e) => e.runId));
+  const found = [];
+  for (const name of readdirSync(RUNS)) {
+    if (!name.startsWith(`${night}-`) || recorded.has(name)) continue;
+    const parts = RUN_FOLDER.exec(name.slice(night.length + 1));
+    if (parts === null) continue;
+    const [, scenario, platform, runCase = null, attempt] = parts;
+    const key = caseKey({ platform, scenario, case: runCase });
+    const slot = slots.find((candidate) => candidate.key === key);
+    if (slot !== undefined) found.push({ runId: name, slot, attempt: Number(attempt) });
+  }
+  return found.sort((a, b) => a.attempt - b.attempt);
 }
 
 /** The tail of a driver's log, for the evidence of a run that threw. */
@@ -269,9 +338,17 @@ async function main() {
       night: { type: 'string' },
       plan: { type: 'boolean', default: false },
       smoke: { type: 'boolean', default: false },
+      only: { type: 'string' },
     },
   });
   let slots = planned();
+  if (values.only !== undefined) {
+    slots = planned([...BLOCKS, ...EXTRAS]).filter((slot) => slot.key === values.only);
+    if (slots.length === 0) {
+      const keys = [...new Set(planned([...BLOCKS, ...EXTRAS]).map((slot) => slot.key))];
+      throw new Error(`--only: no case ${values.only}; the cases are ${keys.join(', ')}`);
+    }
+  }
   if (values.plan) {
     printPlan(slots);
     return;
@@ -300,13 +377,30 @@ async function main() {
       },
     ];
   }
-  if (!night || !/^(night|smoke)-[A-Za-z0-9]+$/.test(night)) {
-    throw new Error('--night must be given as night-YYYYMMDD (or use --plan or --smoke)');
+  if (!night || !/^(night|smoke)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(night)) {
+    throw new Error(
+      '--night must be given as night-YYYYMMDD, or night-YYYYMMDD-<name> (or use --plan or --smoke)',
+    );
   }
 
   const dir = join(RUNS, night);
-  mkdirSync(join(dir, 'logs'), { recursive: true });
   const manifestFile = join(dir, 'manifest.jsonl');
+  // A night holds one plan: the full night, or one --only case. Resuming it
+  // with another would mix its runs into a manifest they do not belong to.
+  const before = readManifest(manifestFile);
+  const keys = new Set(slots.map((slot) => slot.key));
+  const otherPlan = before.some(
+    (entry) =>
+      (entry.kind === 'runner' && entry.event === 'started' && entry.only !== values.only) ||
+      (entry.kind === 'run' && !keys.has(entry.key)),
+  );
+  if (otherPlan) {
+    throw new Error(
+      `${night} already holds another plan's runs: give this one a night of its own ` +
+        '(for example night-YYYYMMDD-s1-exempt). Nothing was run.',
+    );
+  }
+  mkdirSync(join(dir, 'logs'), { recursive: true });
   const record = (entry) => appendFileSync(manifestFile, `${JSON.stringify(entry)}\n`);
   const say = (line) => {
     const text = `${new Date().toISOString()} ${line}\n`;
@@ -316,7 +410,7 @@ async function main() {
   // The Mac stays awake between runs too.
   spawn('caffeinate', ['-dims', '-w', String(process.pid)], { stdio: 'ignore' });
 
-  const checks = await selfChecks();
+  const checks = await selfChecks(slots);
   for (const { what, ok } of checks) say(`self-check ${ok ? 'ok  ' : 'FAIL'} ${what}`);
   if (checks.some((check) => !check.ok)) {
     record({
@@ -327,7 +421,53 @@ async function main() {
     });
     throw new Error('a self-check failed: nothing was run');
   }
-  record({ kind: 'runner', event: 'started', at: Date.now(), smoke: values.smoke === true });
+  record({
+    kind: 'runner',
+    event: 'started',
+    at: Date.now(),
+    smoke: values.smoke === true,
+    ...(values.only === undefined ? {} : { only: values.only }),
+  });
+
+  // A run the runner was stopped during: judged as it was left, never re-used.
+  for (const { runId, slot, attempt } of unrecordedFolders(
+    night,
+    readManifest(manifestFile),
+    slots,
+  )) {
+    const result = judgeRunFolder(join(RUNS, runId), { code: null, signal: null });
+    const manifest = readManifest(manifestFile);
+    const ofCase = manifest.filter((entry) => entry.kind === 'run' && entry.key === slot.key);
+    const open = planned(values.only === undefined ? BLOCKS : [...BLOCKS, ...EXTRAS])
+      .filter((candidate) => candidate.key === slot.key)
+      .find(
+        (candidate) =>
+          !ofCase.some((entry) => entry.repeat === candidate.repeat && entry.status !== 'invalid'),
+      );
+    const interrupted =
+      'the runner stopped during this run: it was judged from what it saved, ' +
+      'with no exit from its driver';
+    record({
+      kind: 'run',
+      key: slot.key,
+      repeat: open?.repeat ?? slot.repeat,
+      attempt,
+      runId,
+      scenario: slot.scenario,
+      platform: slot.platform,
+      case: slot.case,
+      tcpdump: slot.tcpdump,
+      judged: isJudged(slot),
+      interrupted: true,
+      startedAt: null,
+      endedAt: null,
+      exitCode: null,
+      status: result.status,
+      evidence: [interrupted, ...result.evidence],
+      details: result.details,
+    });
+    say(`${runId}: interrupted earlier; recorded as ${result.status}`);
+  }
 
   let platform = null;
   for (const slot of slots) {
@@ -360,7 +500,8 @@ async function main() {
       }
       if (slot.tcpdump) await stopEmulator(say);
 
-      const attempt = ofCase.length + 1;
+      // Folders already used by this case, recorded or not, are never reused.
+      const attempt = Math.max(ofCase.length, ...ofCase.map((entry) => entry.attempt ?? 0)) + 1;
       const runId = `${night}-${slot.scenario}-${slot.platform}${slot.case ? `-${slot.case}` : ''}-${attempt}`;
       const logFile = join(dir, 'logs', `${runId}.log`);
       say(
@@ -369,19 +510,10 @@ async function main() {
       const startedAt = Date.now();
       const exit = await runDriver(slot, runId, logFile, say);
       const endedAt = Date.now();
-      let result;
-      if (exit.code === 0) {
-        result = judgeRun(join(RUNS, runId));
-      } else {
-        const why =
-          exit.code === null
-            ? `killed (${exit.signal}) after its timeout`
-            : `exited with ${exit.code}`;
-        result = {
-          status: 'invalid',
-          evidence: [`the driver ${why}: ${tail(logFile)}`],
-          details: {},
-        };
+      // Judged however the driver exited: a failure it saved is final (B2c).
+      const result = judgeRunFolder(join(RUNS, runId), exit);
+      if (exit.code !== 0) {
+        result.evidence = [...result.evidence, `the driver's log ends: ${tail(logFile)}`];
         await cleanUp(slot, say);
       }
       record({
@@ -398,6 +530,7 @@ async function main() {
         startedAt,
         endedAt,
         exitCode: exit.code,
+        signal: exit.signal ?? null,
         status: result.status,
         evidence: result.evidence,
         details: result.details,
@@ -405,6 +538,11 @@ async function main() {
       say(
         `${runId}: ${result.status}${result.evidence.length ? ` (${result.evidence[0].slice(0, 160)})` : ''}`,
       );
+      // A capture's emulator stops with its run, so no later run writes into
+      // its pcap; an invalid Android run's emulator may be hung, so it goes too.
+      if (slot.platform === 'android' && (slot.tcpdump || result.status === 'invalid')) {
+        await stopEmulator(say);
+      }
       await sleep(5000);
       if (result.status !== 'invalid') break;
     }
