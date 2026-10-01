@@ -65,24 +65,53 @@ test('SPIKE-01-AC13: an invalid run is listed with its evidence and never counte
   assert.deepEqual(result.runs[1].evidence, ['the receiver stopped ticking at 31 min']);
 });
 
-test('SPIKE-01-AC13: fewer than two valid runs give no verdict', async () => {
-  await refuses(judge([passed('r1'), invalid('r2')]), 'one valid run was enough to pass');
-  await refuses(judge([invalid('r1'), invalid('r2')]), 'no valid run, yet a verdict');
-  await refuses(judge([passed('r1')]), 'one run was enough to pass');
-  await refuses(judge([]), 'no run at all, yet a verdict');
+// "No verdict" is a state of its own (2026-10-01, the safety review's B3): a
+// case stopped after its invalid runs must reach the results and the go/no-go
+// as "no verdict", never as an exception the summary turns into text, and
+// never as "not shown", which the rule would read as open and so as GO.
+const NO_VERDICT = 'no verdict';
+
+test('SPIKE-01-AC13: fewer than two valid runs give no verdict, a state of its own, never an exception', async () => {
+  const cases = [
+    ['one valid run was enough to pass', [passed('r1'), invalid('r2')], [1, 1]],
+    ['no valid run, yet a verdict', [invalid('r1'), invalid('r2')], [0, 2]],
+    ['one run was enough to pass', [passed('r1')], [1, 0]],
+    ['no run at all, yet a verdict', [], [0, 0]],
+  ];
+  for (const [what, runs, [valid, invalidCount]] of cases) {
+    const result = await judge(runs);
+    assert.equal(result.verdict, NO_VERDICT, what);
+    assert.equal(result.validRuns, valid, `${what}: the valid runs are not counted`);
+    assert.equal(result.invalidRuns, invalidCount, `${what}: the invalid runs are not counted`);
+    assert.ok(
+      typeof result.why === 'string' && result.why.trim() !== '',
+      `${what}: no verdict without saying why`,
+    );
+  }
 });
 
 test('SPIKE-01-AC13: each case of a scenario needs two valid runs of its own', async () => {
   const swipe = (id) => passed(id, { case: 'swipe' });
   const kill = (id) => passed(id, { case: 'kill' });
-  await refuses(
-    judge([swipe('r1'), swipe('r2'), kill('r3')], 'S2'),
-    'the kill case ran once, yet S2 passed',
-  );
+  const once = await judge([swipe('r1'), swipe('r2'), kill('r3')], 'S2');
+  assert.equal(once.verdict, NO_VERDICT, 'the kill case ran once, yet S2 had a verdict');
+  assert.match(once.why, /\bkill\b/, 'the reason does not name the case that is short of runs');
   assert.equal(
     (await judge([swipe('r1'), swipe('r2'), kill('r3'), kill('r4')], 'S2')).verdict,
     'passed',
   );
+});
+
+test('SPIKE-01-AC13: a failed run is final even while another case of the scenario has no verdict', async () => {
+  const result = await judge(
+    [
+      failed('r1', { case: 'swipe' }),
+      { ...invalid('r2'), case: 'kill' },
+      { ...invalid('r3'), case: 'kill' },
+    ],
+    'S2',
+  );
+  assert.equal(result.verdict, 'failed', 'a failure waited for the other case');
 });
 
 test('SPIKE-01-AC13: an invalid run without its evidence is refused', async () => {

@@ -220,10 +220,16 @@ async function refuses(promise, why) {
   );
 }
 
+// Each break is { text, from, to }: its words for the evidence, and its span
+// on the Mac's wall clock in ms since the epoch, from when the event began to
+// when it ended. The judges need the span to tell whether a sleep overlaps a
+// gap they found (the safety review's B2a, 2026-10-01): a break elsewhere in
+// the run must not rescue a gap seen with the harness intact.
+
 /** Each of `times` is quoted by exactly one break. */
 function quotesEach(breaks, times) {
   for (const time of times) {
-    const quoting = breaks.filter((line) => line.includes(time));
+    const quoting = breaks.filter((found) => found.text.includes(time));
     assert.equal(quoting.length, 1, `the event at ${time} is quoted by ${quoting.length} breaks`);
   }
 }
@@ -232,11 +238,28 @@ test("SPIKE-01-AC13: each Sleep and DarkWake inside the run's window is one brea
   const breaks = await readSleeps({ text: log({ inside: SLEPT }), from: FROM, to: TO });
   assert.ok(Array.isArray(breaks), 'the breaks must be a list the judges take');
   assert.equal(breaks.length, 3, 'two sleeps and the dark wake between them');
-  for (const line of breaks) {
-    assert.equal(typeof line, 'string');
-    assert.match(line, /sle(?:ep|pt)|dark ?wake/i, `"${line}" does not say the Mac slept`);
+  for (const found of breaks) {
+    assert.equal(typeof found.text, 'string');
+    assert.match(
+      found.text,
+      /sle(?:ep|pt)|dark ?wake/i,
+      `"${found.text}" does not say the Mac slept`,
+    );
   }
   quotesEach(breaks, SLEPT_AT);
+});
+
+test("SPIKE-01-AC13: each break carries its span on the Mac's wall clock in ms, from when the event began to when it ended, read with the line's own offset", async () => {
+  const breaks = await readSleeps({ text: log({ inside: SLEPT }), from: FROM, to: TO });
+  const at = (h, m, s) => Date.UTC(2031, 0, 1, h, m, s); // 22:20:00 +0100 is 21:20:00 UTC
+  assert.deepEqual(
+    breaks.map(({ from, to }) => [from, to]),
+    [
+      [at(21, 20, 0), at(21, 25, 0)], // Sleep, 300 secs
+      [at(21, 25, 0), at(21, 25, 45)], // DarkWake, 45 secs
+      [at(21, 25, 45), at(21, 27, 45)], // Sleep, 120 secs
+    ],
+  );
 });
 
 test("SPIKE-01-AC13: sleeps outside the window are no break, and inside it neither are caffeinate's assertions, the display turning off, nor lines that merely mention sleep", async () => {
@@ -386,7 +409,10 @@ test("SPIKE-01-AC13: the reader's breaks make an S1 run invalid, with each break
   assert.equal(breaks.length, 3);
   const result = await judgeS1({ records, breaks });
   assert.equal(result.status, 'invalid', 'a run the Mac slept through was judged');
-  for (const line of breaks) {
-    assert.ok(result.evidence.includes(line), `the break "${line}" is not in the evidence`);
+  for (const found of breaks) {
+    assert.ok(
+      result.evidence.includes(found.text),
+      `the break "${found.text}" is not in the evidence`,
+    );
   }
 });

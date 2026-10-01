@@ -225,3 +225,43 @@ test('SPIKE-01-AC6: arrivals that stop 90 s after the app is ended, watched for 
   assert.match(evidence, /\b5 min 30 s\b/, 'the evidence does not say how long the run watched');
   assert.match(evidence, /\b6 min\b/, 'the evidence does not say how long S2 must watch');
 });
+
+// A failure shown is final in a short watch too (the code review's S5,
+// 2026-10-01). The 6 min of watching exist so that a reminder that could
+// still come is not missed. A reminder already seen more than 5 min after the
+// last arrival cannot come earlier with more watching, so the run is failed;
+// and a gap over 120 s while arrivals went on cannot close either. The
+// evidence still says the run stopped watching early. An on-time reminder in
+// a short watch stays invalid (the test above, at 6 min less 1 ms).
+
+test('SPIKE-01-AC6: a reminder seen more than 5 min after the last arrival is failed even when the run stopped watching early, and the evidence still names both durations', async () => {
+  const late = await judgeS2({
+    records: moveMark(stopped(), 'journey-ended', LAST + 5 * MIN + 30 * S),
+    reminders: [reminder(LAST + 5 * MIN + 10 * S)],
+  });
+  assert.equal(late.status, 'failed', 'a late reminder was left to a re-run');
+  assert.equal(late.reminderDelayMs, 5 * MIN + 10 * S);
+  const evidence = late.evidence.join('\n');
+  assert.match(evidence, /\b5 min 30 s\b/, 'the evidence does not say how long the run watched');
+  assert.match(evidence, /\b6 min\b/, 'the evidence does not say how long S2 must watch');
+
+  const onTime = await judgeS2({
+    records: moveMark(stopped(), 'journey-ended', LAST + 5 * MIN + 30 * S),
+    reminders: [reminder(LAST + 4 * MIN)],
+  });
+  assert.equal(onTime.status, 'invalid', 'an on-time reminder in a short watch was passed');
+});
+
+test('SPIKE-01-AC6: when arrivals go on, a gap over 120 s is failed even when the run stopped watching early', async () => {
+  // Arrivals every minute but for 121 s after 12 min 30 s; the run ends 5 min
+  // after the app was ended, 1 min short of the 6 min S2 watches.
+  const records = moveMark(
+    continuing([...every(MIN, 30 * S, 12 * MIN + 30 * S), ...every(MIN, 14 * MIN + 31 * S, END)]),
+    'journey-ended',
+    APP_ENDED + 5 * MIN,
+  );
+  const result = await judgeS2({ records, reminders: [] });
+  assert.equal(result.arrivalsStopped, false);
+  assert.equal(result.largestGapMs, 121 * S);
+  assert.equal(result.status, 'failed', 'a gap already seen was left to a re-run');
+});

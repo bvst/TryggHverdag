@@ -7,6 +7,11 @@
 // the Mac). Addresses are from the documentation ranges (192.0.2.0/24,
 // 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32); 10.0.2.x is the emulator's
 // own network: .15 the device, .2 the Mac (the receiver), .3 its DNS.
+//
+// The emulator's network has both families (the code review's B2,
+// 2026-10-01): fec0::2 and fec0::3 play the roles of 10.0.2.2 and 10.0.2.3,
+// and the device has an IPv6 address of its own. So the receiver and the
+// resolver are each given as { addresses, port }, every address the role has.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
@@ -16,8 +21,8 @@ const listDestinations = async (input) => (await import('./capture.mjs')).listDe
 
 const NETWORK = {
   device: ['10.0.2.15', 'fec0::15'],
-  receiver: { address: '10.0.2.2', port: 8787 },
-  resolver: { address: '10.0.2.3', port: 53 },
+  receiver: { addresses: ['10.0.2.2', 'fec0::2'], port: 8787 },
+  resolver: { addresses: ['10.0.2.3', 'fec0::3'], port: 53 },
 };
 
 /** The receiver, Google's platform services and the resolver: nothing else. */
@@ -435,5 +440,218 @@ test("SPIKE-01-AC12: none of them can hide a vendor, analytics or advertising ho
   assert.ok(
     onTheMac.flagged.some((flag) => flag.owner === 'vendor'),
     'the vendor is not flagged',
+  );
+});
+
+// IPv6 (the code review's B2, the safety review's S1). The night's S1 capture
+// (night-20260930-s1-android-1) holds 55 packets from the device's IPv6
+// address, which a reader given only 10.0.2.15 dropped without a word. The
+// device's addresses are the caller's input: here fec0::15; the emulator's
+// own was fec0::5054:ff:fe12:3456.
+
+test('SPIKE-01-AC12: over IPv6, the device is its own address as given, fec0::3 is the resolver and fec0::2 the receiver, on the same ports and rules as over IPv4', async () => {
+  const result = await judgeCapture({
+    text: text(
+      '21:01:00.000000 IP6 fec0::15.40010 > fec0::3.53: 7101+ AAAA? play.googleapis.com. (37)',
+      '21:01:00.010000 IP6 fec0::3.53 > fec0::15.40010: 7101 1/0/0 AAAA 2001:db8::20 (65)',
+      '21:01:00.020000 IP6 fec0::15.50010 > 2001:db8::20.443: Flags [S], seq 1, win 65535, length 0',
+      '21:01:01.000000 IP6 fec0::15.50011 > fec0::2.8787: Flags [P.], seq 1:301, ack 1, win 502, length 300',
+      '21:01:01.010000 IP6 fec0::2.8787 > fec0::15.50011: Flags [P.], seq 1:20, ack 301, win 502, length 19',
+      '21:01:02.000000 IP6 fec0::15.50012 > fec0::2.8081: Flags [S], seq 1, win 65535, length 0',
+      '21:01:03.000000 IP6 fec0::15.45000 > fec0::3.853: Flags [S], seq 1, win 65535, length 0',
+    ),
+    ...NETWORK,
+  });
+  assert.equal(ownerAt(result, '2001:db8::20', 443), 'platform', 'named by the IPv6 resolver');
+  assert.deepEqual(result.destinations.find((d) => d.address === '2001:db8::20')?.names, [
+    'play.googleapis.com',
+  ]);
+  assert.equal(ownerAt(result, 'fec0::2', 8787), 'receiver');
+  assert.equal(ownerAt(result, 'fec0::2', 8081), 'harness');
+  assert.equal(ownerAt(result, 'fec0::3', 53), 'dns');
+  assert.equal(ownerAt(result, 'fec0::3', 853), 'dns');
+  assert.deepEqual(result.problems, []);
+  assert.equal(result.status, 'passed');
+});
+
+test("SPIKE-01-AC12: the vendor reached from the device's IPv6 address is listed and flagged, and the capture fails", async () => {
+  const result = await judgeCapture({
+    text: text(
+      '21:02:00.000000 IP 10.0.2.15.40011 > 10.0.2.3.53: 7102+ AAAA? tracker.transistorsoft.com. (44)',
+      '21:02:00.010000 IP 10.0.2.3.53 > 10.0.2.15.40011: 7102 1/0/0 AAAA 2001:db8::66 (72)',
+      '21:02:00.020000 IP6 fec0::15.50013 > 2001:db8::66.443: Flags [S], seq 1, win 65535, length 0',
+    ),
+    ...NETWORK,
+  });
+  assert.equal(ownerAt(result, '2001:db8::66', 443), 'vendor', 'the IPv6 connection was dropped');
+  assert.ok(result.flagged.some((flag) => flag.owner === 'vendor'));
+  assert.equal(result.status, 'failed');
+});
+
+test("SPIKE-01-AC12: a capture that only reached the receiver over IPv6 still has its upload: the receiver's addresses are both families", async () => {
+  const ipv4Upload = (line) => line.includes('10.0.2.2.8787');
+  const result = await judgeCapture({
+    text: [
+      ...CLEAN.filter((line) => !ipv4Upload(line)),
+      '21:01:01.000000 IP6 fec0::15.50011 > fec0::2.8787: Flags [P.], seq 1:301, ack 1, win 502, length 300',
+    ].join('\n'),
+    ...NETWORK,
+  });
+  assert.equal(result.status, 'passed');
+  assert.equal(ownerAt(result, 'fec0::2', 8787), 'receiver');
+});
+
+// Firebase (the privacy review's should-fix 2). expo-notifications links
+// Firebase Messaging on Android, and its installation, token and logging
+// hosts live under googleapis.com, which the platform rule covers. They are
+// analytics, never the platform's: the rules are checked in order, the first
+// match wins, and analytics comes before the platform, so these four names
+// win over googleapis.com. The platform rule still covers Google's other hosts
+// there. An address that a Firebase name and a platform name share counts as
+// analytics, since a flagged owner always wins.
+
+const FIREBASE = [
+  ['firebaseinstallations.googleapis.com', '198.51.100.81'],
+  ['fcm.googleapis.com', '198.51.100.82'],
+  ['fcmtoken.googleapis.com', '198.51.100.83'],
+  ['firebaselogging-pa.googleapis.com', '198.51.100.84'],
+];
+
+/** A lookup of `name`, its answer `address`, and a connection to it, `n` making each unique. */
+const reached = (name, address, n) => [
+  `21:03:0${n}.000000 IP 10.0.2.15.4012${n} > 10.0.2.3.53: 720${n}+ A? ${name}. (50)`,
+  `21:03:0${n}.010000 IP 10.0.2.3.53 > 10.0.2.15.4012${n}: 720${n} 1/0/0 A ${address} (66)`,
+  `21:03:0${n}.020000 IP 10.0.2.15.5012${n} > ${address}.443: Flags [S], seq 1, win 65535, length 0`,
+];
+
+test("SPIKE-01-AC12: Firebase's installation, messaging, token and logging hosts are analytics and flagged, never the platform's, while Google's other googleapis.com hosts stay the platform's", async () => {
+  const result = await judgeCapture({
+    text: text(
+      ...FIREBASE.flatMap(([name, address], i) => reached(name, address, i + 1)),
+      ...reached('android.googleapis.com', '198.51.100.85', 5),
+    ),
+    ...NETWORK,
+  });
+  for (const [name, address] of FIREBASE) {
+    assert.equal(ownerAt(result, address, 443), 'analytics', `${name} is not analytics`);
+    assert.ok(
+      result.flagged.some((flag) => flag.name === name && flag.owner === 'analytics'),
+      `${name} is not flagged`,
+    );
+  }
+  assert.equal(ownerAt(result, '198.51.100.85', 443), 'platform', 'android.googleapis.com');
+  assert.equal(result.status, 'failed');
+});
+
+test('SPIKE-01-AC12: an address that a Firebase host shares with a platform host counts as analytics', async () => {
+  const result = await judgeCapture({
+    text: text(
+      ...reached('www.googleapis.com', '198.51.100.86', 1),
+      '21:04:00.000000 IP 10.0.2.15.40130 > 10.0.2.3.53: 7301+ A? fcm.googleapis.com. (36)',
+      '21:04:00.010000 IP 10.0.2.3.53 > 10.0.2.15.40130: 7301 1/0/0 A 198.51.100.86 (52)',
+    ),
+    ...NETWORK,
+  });
+  assert.equal(ownerAt(result, '198.51.100.86', 443), 'analytics');
+  assert.equal(result.status, 'failed');
+});
+
+test("SPIKE-01-AC16: in S8's map capture, a Firebase host is flagged too", async () => {
+  const result = await listDestinations({
+    text: mapText(...reached('fcmtoken.googleapis.com', '198.51.100.83', 1)),
+    ...MAP_NETWORK,
+    kartverket: [TILE_HOST],
+  });
+  assert.equal(ownerOf(result)['198.51.100.83'], 'analytics');
+  assert.ok(result.flagged.some((flag) => flag.owner === 'analytics'));
+});
+
+// Only the run's window (the safety review's S1). The emulator keeps its
+// -tcpdump on for every later run, so the file grows past the run: the night's
+// S1 pcap was last written hours after that run ended. The reader takes the
+// text of `tcpdump -tt -nn -r` (a time in seconds since the epoch, with
+// microseconds, at the start of each line) and a window `from`/`to` in ms
+// since the epoch, on the capture's own clock, and reads only the packets
+// inside it.
+
+const T0 = Date.UTC(2031, 0, 1, 20, 0, 0);
+const IN = { from: T0, to: T0 + 45 * 60_000 };
+/** A `tcpdump -tt` line at `ms` since the epoch. */
+const tt = (ms, rest) => `${(ms / 1000).toFixed(6)} ${rest}`;
+
+/** The run inside its window, then a later run's traffic two hours after it. */
+const GROWN = [
+  'reading from file capture.pcap, link-type EN10MB (Ethernet), snapshot length 262144',
+  tt(T0 + 5_000, 'ARP, Request who-has 10.0.2.3 tell 10.0.2.15, length 28'),
+  tt(T0 + 6_000, 'IP 10.0.2.15.40001 > 10.0.2.3.53: 4101+ A? connectivitycheck.gstatic.com. (47)'),
+  tt(T0 + 6_010, 'IP 10.0.2.3.53 > 10.0.2.15.40001: 4101 1/0/0 A 192.0.2.10 (63)'),
+  tt(T0 + 6_020, 'IP 10.0.2.15.50001 > 192.0.2.10.443: Flags [S], seq 1000, win 65535, length 0'),
+  tt(
+    T0 + 60_000,
+    'IP 10.0.2.15.50003 > 10.0.2.2.8787: Flags [P.], seq 1:301, ack 1, win 502, length 300',
+  ),
+  tt(
+    T0 + 60_010,
+    'IP 10.0.2.2.8787 > 10.0.2.15.50003: Flags [P.], seq 1:20, ack 301, win 502, length 19',
+  ),
+  tt(
+    IN.to + 120 * 60_000,
+    'IP 10.0.2.15.40002 > 10.0.2.3.53: 4102+ A? license.transistorsoft.com. (44)',
+  ),
+  tt(
+    IN.to + 120 * 60_000 + 10,
+    'IP 10.0.2.3.53 > 10.0.2.15.40002: 4102 1/0/0 A 198.51.100.20 (60)',
+  ),
+  tt(
+    IN.to + 120 * 60_000 + 20,
+    'IP 10.0.2.15.50004 > 198.51.100.20.443: Flags [S], seq 1, win 65535, length 0',
+  ),
+  tt(
+    IN.to + 121 * 60_000,
+    'IP 10.0.2.15.50005 > 203.0.113.40.443: Flags [S], seq 1, win 65535, length 0',
+  ),
+].join('\n');
+
+test('SPIKE-01-AC12: reads `tcpdump -tt` lines, and a window cuts a capture that kept growing to the run: what came after it is neither listed nor flagged', async () => {
+  const cut = await judgeCapture({ text: GROWN, ...NETWORK, ...IN });
+  assert.equal(cut.status, 'passed', 'traffic after the run decided the capture');
+  assert.deepEqual(cut.flagged, []);
+  const addresses = cut.destinations.map((d) => d.address);
+  assert.ok(addresses.includes('192.0.2.10'), "the run's own destination is missing");
+  assert.ok(addresses.includes('10.0.2.2'), 'the upload to the receiver is missing');
+  for (const later of ['198.51.100.20', '203.0.113.40']) {
+    assert.equal(addresses.includes(later), false, `${later}, from after the run, is listed`);
+  }
+
+  const whole = await judgeCapture({ text: GROWN, ...NETWORK });
+  assert.equal(whole.status, 'failed', 'without a window, the whole file is read');
+  assert.ok(whole.flagged.some((flag) => flag.owner === 'vendor'));
+});
+
+test('SPIKE-01-AC12: what came before the window is not read either', async () => {
+  const before = [
+    tt(T0 - 30 * 60_000, 'IP 10.0.2.15.40009 > 10.0.2.3.53: 4109+ A? app-measurement.com. (37)'),
+    GROWN,
+  ].join('\n');
+  const result = await judgeCapture({ text: before, ...NETWORK, ...IN });
+  assert.deepEqual(result.flagged, [], 'a lookup before the run was flagged');
+  assert.equal(result.status, 'passed');
+});
+
+test('SPIKE-01-AC12: a window over lines with only a time of day, or a window that holds no upload to the receiver, is refused, never read as "nothing sent"', async () => {
+  await assert.rejects(
+    judgeCapture({ text: text(), ...NETWORK, ...IN }),
+    /window|date|epoch|-tt/i,
+    'lines without a date cannot be placed in the window',
+  );
+  await assert.rejects(
+    judgeCapture({
+      text: GROWN,
+      ...NETWORK,
+      from: IN.to + 60 * 60_000,
+      to: IN.to + 90 * 60_000,
+    }),
+    /receiver/i,
+    'a window that holds none of the run, on the wrong clock, did not capture the run',
   );
 });

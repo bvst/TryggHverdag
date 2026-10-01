@@ -407,14 +407,37 @@ test("SPIKE-01-AC6: the readers' reminders, from either platform, are what judge
   assert.equal((await judgeS2({ records: stoppedRun(), reminders: ios })).status, 'passed');
 });
 
-test("SPIKE-01-AC9: Android: reads the alert's record: posted, not intercepted, its channel, and that record's mBypassDnd and effective usage, never the stored channel's or another package's", async () => {
+test("SPIKE-01-AC9: Android: reads the alert's record: posted, not intercepted, its channel, that record's mBypassDnd and effective usage, and its text, never the stored channel's or another package's", async () => {
   assert.deepEqual(await readAndroidAlert({ text: ALERT_DUMP, app: APP, title: ALERT.title }), {
     posted: true,
     intercepted: false,
     channel: 'alert',
     bypassDnd: true,
     usage: 'USAGE_NOTIFICATION',
+    text: ALERT.body,
   });
+});
+
+// The alert's text (the code review's S6, 2026-10-01): the record's
+// android.text, as the real dump prints it ("android.text=String (…)"), so the
+// judge can compare it with the fixed alert. A record with no text says
+// "android.text=null".
+
+test("SPIKE-01-AC9: Android: the alert's text is its own record's android.text, read whole, and none when the record has none", async () => {
+  const withParentheses = 'Open the app now (now).';
+  const changed = notificationDump({
+    records: [PHONE_RECORD, alertRecord({ body: withParentheses }), SYSTEM_UI],
+  });
+  assert.equal(
+    (await readAndroidAlert({ text: changed, app: APP, title: ALERT.title })).text,
+    withParentheses,
+  );
+
+  const noText = ALERT_DUMP.replace(`android.text=String (${ALERT.body})`, 'android.text=null');
+  assert.equal((await readAndroidAlert({ text: noText, app: APP, title: ALERT.title })).text, null);
+
+  const notPosted = await readAndroidAlert({ text: REMINDER_DUMP, app: APP, title: ALERT.title });
+  assert.equal(notPosted.text, null, 'an alert that was not posted has no text');
 });
 
 test('SPIKE-01-AC9: Android: an alert that Do Not Disturb intercepted reads as intercepted', async () => {
@@ -483,6 +506,13 @@ const BOTH_ALERTS = deliveredFile([
   alertEntry(BACKGROUND_ID, WALL0 + 5 * MIN + 4_898),
   alertEntry(FOREGROUND_ID, WALL0 + 5 * MIN),
 ]);
+/**
+ * When the app went to the background, on the Mac's clock, before the second
+ * push was sent: a delivery after it is the background push's. "Presented"
+ * means that push (the safety review's S3, 2026-10-01); the foreground one
+ * reaches the app's handler whether or not the platform presents anything.
+ */
+const BACKGROUND_AT = WALL0 + 5 * MIN + 1_175;
 
 test('SPIKE-01-AC6: iOS: reads the reminder from the delivered list, with its delivery time in ms, and only the fixed reminder title', async () => {
   const text = deliveredFile([
@@ -520,6 +550,7 @@ test('SPIKE-01-AC9: iOS: reads the payload as delivered and the shown text from 
     received: receivedFile(),
     delivered: BOTH_ALERTS,
     title: ALERT.title,
+    backgroundAt: BACKGROUND_AT,
   });
   assert.deepEqual(result.alert, { payload: PUSHED, shownText: ALERT.body });
   assert.equal(result.presented, true);
@@ -535,6 +566,7 @@ test('SPIKE-01-AC9: iOS: a changed text on the screen reaches checkAlert as it w
     received: receivedFile({ body: `${ALERT.body} ` }),
     delivered: BOTH_ALERTS,
     title: ALERT.title,
+    backgroundAt: BACKGROUND_AT,
   });
   const checked = await checkAlert({
     expected: { payload: PUSHED, text: ALERT.body },
@@ -548,6 +580,7 @@ test('SPIKE-01-AC9: iOS: an alert missing from the delivered list is not present
     received: receivedFile(),
     delivered: deliveredFile([reminderEntry()]),
     title: ALERT.title,
+    backgroundAt: BACKGROUND_AT,
   });
   assert.equal(result.presented, false);
 });
@@ -563,6 +596,60 @@ test('SPIKE-01-AC9: iOS: a received notification with no pushed payload is refus
     ['no notification', `${JSON.stringify({ writtenAt: WALL0 })}\n`],
   ];
   for (const [what, received] of cases) {
-    await refuses(readIosAlert({ received, delivered: BOTH_ALERTS, title: ALERT.title }), what);
+    await refuses(
+      readIosAlert({
+        received,
+        delivered: BOTH_ALERTS,
+        title: ALERT.title,
+        backgroundAt: BACKGROUND_AT,
+      }),
+      what,
+    );
+  }
+});
+
+test('SPIKE-01-AC9: iOS: "presented" means the background push: a delivered entry with the alert\'s title, delivered after the app went to the background; the foreground push alone is not presented', async () => {
+  const presented = async (delivered) =>
+    (
+      await readIosAlert({
+        received: receivedFile(),
+        delivered,
+        title: ALERT.title,
+        backgroundAt: BACKGROUND_AT,
+      })
+    ).presented;
+  assert.equal(await presented(BOTH_ALERTS), true);
+  assert.equal(
+    await presented(deliveredFile([alertEntry(FOREGROUND_ID, WALL0 + 5 * MIN)])),
+    false,
+    'only the foreground push, which the app received itself, was taken as presented',
+  );
+  assert.equal(
+    await presented(
+      deliveredFile([
+        alertEntry(FOREGROUND_ID, WALL0 + 5 * MIN),
+        { id: BACKGROUND_ID, title: REMINDER.title, deliveredAt: WALL0 + 5 * MIN + 4_898 },
+      ]),
+    ),
+    false,
+    'a later notification with another title is not the alert',
+  );
+});
+
+test('SPIKE-01-AC9: iOS: without the time the app went to the background, "presented" is refused, never guessed', async () => {
+  for (const [what, backgroundAt] of [
+    ['no time', undefined],
+    ['not a time', Number.NaN],
+    ['a time in seconds', BACKGROUND_AT / 1000],
+  ]) {
+    await refuses(
+      readIosAlert({
+        received: receivedFile(),
+        delivered: BOTH_ALERTS,
+        title: ALERT.title,
+        backgroundAt,
+      }),
+      what,
+    );
   }
 });

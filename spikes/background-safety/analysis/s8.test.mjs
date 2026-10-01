@@ -442,3 +442,139 @@ test("SPIKE-01-AC16: Android 17's crash log: the app's native crash in the middl
     { kind: 'native', process: APP },
   ]);
 });
+
+// The build's 16 KB alignment and the map's render come from readers, not from
+// the driver (the code review, 2026-10-01). The driver used to decide both: it
+// ran zipalign through execFileSync, which throws on zipalign's exit code 1,
+// and it waited for the map to render and threw when it did not. A thrown
+// driver becomes an invalid run, which is re-run: a real failure could be
+// replaced by a pass (D-060).
+//
+// zipalign: `zipalign -c -P 16 -v 4 <apk>` prints "Verifying alignment of
+// <apk> (4)...", then one line per entry ("<offset> <name> (OK)", "(OK -
+// compressed)" or "(BAD - <remainder>)"), then "Verification successful" or
+// "Verification FAILED", and exits 0 or 1. The lines below keep the night's
+// output (night-20260930-s8-android-1), cut down; the APK's path is made up.
+
+const readAlignment = async (input) => (await s8()).readAlignment(input);
+const readMapRender = async (input) => (await s8()).readMapRender(input);
+
+const zipalignOutput = (entries, verdict) =>
+  [
+    'Verifying alignment of /builds/android-app-debug.apk (4)...',
+    '      87 META-INF/com/android/build/gradle/app-metadata.properties (OK - compressed)',
+    '     181 classes.dex (OK - compressed)',
+    '14958592 lib/x86_64/libappmodules.so (OK)',
+    '18333696 lib/x86_64/libc++_shared.so (OK)',
+    ...entries,
+    '70677113 play-services-tasks.properties (OK - compressed)',
+    verdict,
+  ].join('\n') + '\n';
+const ALIGNED = zipalignOutput(
+  ['27295744 lib/x86_64/libmaplibre.so (OK)'],
+  'Verification successful',
+);
+const MISALIGNED = zipalignOutput(
+  ['27299840 lib/x86_64/libmaplibre.so (BAD - 4096)'],
+  'Verification FAILED',
+);
+
+test('SPIKE-01-AC16: zipalign: "Verification successful" with exit code 0 is aligned for 16 KB pages', async () => {
+  assert.deepEqual(await readAlignment({ text: ALIGNED, exitCode: 0 }), {
+    aligned16k: true,
+    misaligned: [],
+  });
+});
+
+test('SPIKE-01-AC16: zipalign: a BAD entry, "Verification FAILED" and exit code 1 are not aligned, and the entry is named', async () => {
+  assert.deepEqual(await readAlignment({ text: MISALIGNED, exitCode: 1 }), {
+    aligned16k: false,
+    misaligned: ['lib/x86_64/libmaplibre.so'],
+  });
+});
+
+test('SPIKE-01-AC16: zipalign: output that is not its verification, or that disagrees with its exit code, is refused, never read as aligned', async () => {
+  const cases = [
+    ['no output', '', 0],
+    ['the shell not finding zipalign', 'zsh: command not found: zipalign\n', 127],
+    [
+      'an APK it could not open',
+      "Unable to open '/builds/android-app-debug.apk' as zip archive\n",
+      1,
+    ],
+    ['output cut short, with no verdict', ALIGNED.replace('Verification successful\n', ''), 0],
+    ['successful, yet exit code 1', ALIGNED, 1],
+    ['FAILED, yet exit code 0', MISALIGNED, 0],
+    ['no exit code', ALIGNED, undefined],
+  ];
+  for (const [what, text, exitCode] of cases) {
+    await refuses(readAlignment({ text, exitCode }), what);
+  }
+});
+
+// The render: the app writes map.json with "loading zoom N", "rendered zoom N"
+// or "failed zoom N", and the map's frame; the driver saves the last one it saw
+// for each zoom as zoom-N.json, rendered or not.
+
+const mapEvidence = (status, zoom) =>
+  `${JSON.stringify(
+    {
+      status,
+      zoom,
+      frame: { x: 0, y: 270, width: 1080, height: 2037 },
+      writtenAt: Date.UTC(2031, 0, 1, 21, 0, 0),
+    },
+    null,
+    2,
+  )}\n`;
+
+test("SPIKE-01-AC16: the map's render, from the app's own evidence: rendered at the zoom asked for, with its frame", async () => {
+  const result = await readMapRender({ text: mapEvidence('rendered zoom 14', 14), zoom: 14 });
+  assert.equal(result.rendered, true);
+  assert.deepEqual(result.frame, { x: 0, y: 270, width: 1080, height: 2037 });
+});
+
+test('SPIKE-01-AC16: a map still loading, or one that reported a failure, at the zoom asked for, did not render', async () => {
+  for (const status of ['loading zoom 14', 'failed zoom 14']) {
+    assert.equal(
+      (await readMapRender({ text: mapEvidence(status, 14), zoom: 14 })).rendered,
+      false,
+      status,
+    );
+  }
+});
+
+test("SPIKE-01-AC16: evidence that is not the map's, or that is for another zoom (the tap never changed it), is refused, never read as rendered or not", async () => {
+  const cases = [
+    ['not JSON', 'adb: error: failed to read evidence\n'],
+    ['no status', `${JSON.stringify({ zoom: 14 })}\n`],
+    ['another zoom', mapEvidence('rendered zoom 10', 10)],
+  ];
+  for (const [what, text] of cases) {
+    await refuses(readMapRender({ text, zoom: 14 }), what);
+  }
+});
+
+test('SPIKE-01-AC16: a map that never rendered at a zoom level is failed, with that zoom named, not refused and not a thrown driver', async () => {
+  for (const platform of ['android', 'ios']) {
+    const result = await judgeS8(
+      device(platform, (run) => {
+        run.shots[1] = { zoom: 15, rendered: false };
+        run.shots[2] = { zoom: 18, rendered: false };
+      }),
+    );
+    assert.equal(result.status, 'failed', `${platform}: a map that never rendered`);
+    assert.deepEqual(
+      result.shots.map((shot) => [shot.zoom, shot.status]),
+      [
+        [12, 'passed'],
+        [15, 'failed'],
+        [18, 'failed'],
+      ],
+      platform,
+    );
+    const problems = result.problems.join('\n');
+    assert.match(problems, /\b15\b/, `${platform}: the zoom that never rendered is not named`);
+    assert.match(problems, /\b18\b/, `${platform}: the zoom that never rendered is not named`);
+  }
+});

@@ -169,3 +169,25 @@ test('SPIKE-01-AC14: S8 is marked as outside the go/no-go', async () => {
   const markdown = await renderResults(input());
   assert.match(row(markdown, 'S8'), /outside the go\/no-go/i);
 });
+
+/** A table row's cells, trimmed: [scenario, Android, iOS, notes]. */
+const cells = (line) =>
+  line
+    .split('|')
+    .slice(1, -1)
+    .map((text) => text.trim());
+
+test('SPIKE-01-AC14: "no verdict" is written as such, with its valid and invalid runs, never as passed, failed or not shown, and not as something L9 will show', async () => {
+  const markdown = await renderResults(
+    input((copy) => {
+      copy.summary[0].ios = cell('no verdict', 0, 3);
+    }),
+  );
+  const ios = cells(row(markdown, 'S1'))[2] ?? '';
+  assert.match(ios, /\bno verdict\b/, 'the iOS cell does not say "no verdict"');
+  assert.match(ios, /\b0 valid\b/);
+  assert.match(ios, /\b3 invalid\b/);
+  assert.doesNotMatch(ios, /\bpassed\b|\bfailed\b/, 'no verdict was written as a verdict');
+  assert.equal(ios.includes(NOT_SHOWN), false, 'no verdict was written as not shown');
+  assert.doesNotMatch(ios, /\bL9\b/, 'a harness that broke is not something L9 will show');
+});

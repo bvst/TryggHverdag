@@ -353,3 +353,63 @@ test('SPIKE-01-AC7: a run without the record of what was in force is refused, ne
     'no bucket at the start',
   );
 });
+
+// With the exemption, a failure shown stays final (the safety review's B2a,
+// 2026-10-01), as in S1: a gap over 120 s seen with the ticks intact at that
+// time is failed, unless a break with a time overlaps that gap (a hole in the
+// ticks, or a sleep's span as readSleeps gives it, { text, from, to } on the
+// Mac's wall clock). A break elsewhere does not rescue it. A break the driver
+// saw, with no time, still makes the run invalid.
+
+/** With the exemption: arrivals every minute but for one gap of 121 s, from 20 min 30 s to 22 min 31 s. */
+const gapOf121s = (options) =>
+  run(
+    [...every(MIN, 30 * S, 20 * MIN + 30 * S), ...every(MIN, 22 * MIN + 31 * S, END - 29 * S)].map(
+      (t) => arrival(t, { exempt: true }),
+    ),
+    options,
+  );
+/** A sleep of the Mac, `secs` long from `t` into the journey, as readSleeps gives it. */
+const sleepBreak = (t, secs) => ({
+  text: `the Mac slept: pmset logged Sleep at ${t / MIN} min into the journey for ${secs} secs`,
+  from: WALL0 + t,
+  to: WALL0 + t + secs * S,
+});
+
+test('SPIKE-01-AC7: with the exemption, a gap over 120 s seen with the ticks intact at that time is failed, even with a hole in the ticks or a sleep elsewhere in the run', async () => {
+  const hole = await judgeS3({
+    exemption: true,
+    records: gapOf121s({ tickHoles: [[35 * MIN, 36 * MIN]] }),
+  });
+  assert.equal(hole.status, 'failed', 'a hole in the ticks after the gap rescued it');
+  assert.match(hole.evidence.join('\n'), /tick/i, 'the hole is not in the evidence');
+
+  const slept = sleepBreak(40 * MIN, 60);
+  const sleep = await judgeS3({ exemption: true, records: gapOf121s(), breaks: [slept] });
+  assert.equal(sleep.status, 'failed', 'a sleep after the gap rescued it');
+  assert.ok(sleep.evidence.includes(slept.text), 'the sleep is not in the evidence');
+});
+
+test('SPIKE-01-AC13: with the exemption, a hole in the ticks or a sleep over the gap makes an S3 run invalid, and so does a break with no time', async () => {
+  const hole = await judgeS3({
+    exemption: true,
+    records: gapOf121s({ tickHoles: [[21 * MIN, 22 * MIN]] }),
+  });
+  assert.equal(hole.status, 'invalid', 'a receiver outage was judged as a silent phone');
+
+  const slept = sleepBreak(21 * MIN, 60);
+  const sleep = await judgeS3({ exemption: true, records: gapOf121s(), breaks: [slept] });
+  assert.equal(sleep.status, 'invalid', "the Mac's sleep was judged as a silent phone");
+  assert.ok(sleep.evidence.includes(slept.text), 'the sleep is not in the evidence');
+
+  const untimed = await judgeS3({
+    exemption: true,
+    records: gapOf121s(),
+    breaks: ['the emulator exited'],
+  });
+  assert.equal(
+    untimed.status,
+    'invalid',
+    'a break that could have been during the gap was ignored',
+  );
+});
