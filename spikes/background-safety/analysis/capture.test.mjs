@@ -43,7 +43,7 @@ const CLEAN = [
   '21:00:02.020000 IP 10.0.2.15.123 > 192.0.2.11.123: NTPv4, Client, length 48',
 ];
 
-const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError];
+const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError, RangeError];
 /** Rejects on purpose: not a missing module, and not a programming error. */
 async function refuses(promise, why) {
   await assert.rejects(
@@ -654,4 +654,99 @@ test('SPIKE-01-AC12: a window over lines with only a time of day, or a window th
     /receiver/i,
     'a window that holds none of the run, on the wrong clock, did not capture the run',
   );
+});
+
+// Firebase by pattern (the privacy review, loop 1, review loop 2): a list of
+// four names misses the next Firebase service. Every host under
+// googleapis.com whose first label starts with "firebase", and Crashlytics'
+// report host there, are analytics, ahead of the platform rule for
+// googleapis.com. Google's other hosts there stay the platform's.
+
+const FIREBASE_BY_PATTERN = [
+  ['firebase.googleapis.com', '198.51.100.87'],
+  ['firebaseremoteconfig.googleapis.com', '198.51.100.88'],
+  ['firebaseappcheck.googleapis.com', '198.51.100.89'],
+  ['firebasedynamiclinks-ipv6.googleapis.com', '198.51.100.90'],
+  ['crashlyticsreports-pa.googleapis.com', '198.51.100.91'],
+];
+
+test("SPIKE-01-AC12: any firebase*.googleapis.com host, and Crashlytics' report host, is analytics and flagged, never the platform's, while Google's other googleapis.com hosts stay the platform's", async () => {
+  const result = await judgeCapture({
+    text: text(
+      ...FIREBASE_BY_PATTERN.flatMap(([name, address], i) => reached(name, address, i + 1)),
+      ...reached('storage.googleapis.com', '198.51.100.92', 6),
+    ),
+    ...NETWORK,
+  });
+  for (const [name, address] of FIREBASE_BY_PATTERN) {
+    assert.equal(ownerAt(result, address, 443), 'analytics', `${name} is not analytics`);
+    assert.ok(
+      result.flagged.some((flag) => flag.name === name && flag.owner === 'analytics'),
+      `${name} is not flagged`,
+    );
+  }
+  assert.equal(ownerAt(result, '198.51.100.92', 443), 'platform', 'storage.googleapis.com');
+  assert.equal(result.status, 'failed');
+});
+
+test("SPIKE-01-AC16: in S8's map capture, a firebase*.googleapis.com host and Crashlytics' report host are flagged as analytics too", async () => {
+  const result = await listDestinations({
+    text: mapText(
+      ...reached('firebaseremoteconfig.googleapis.com', '198.51.100.88', 1),
+      ...reached('crashlyticsreports-pa.googleapis.com', '198.51.100.91', 2),
+    ),
+    ...MAP_NETWORK,
+    kartverket: [TILE_HOST],
+  });
+  assert.equal(
+    ownerOf(result)['198.51.100.88'],
+    'analytics',
+    'firebaseremoteconfig.googleapis.com',
+  );
+  assert.equal(
+    ownerOf(result)['198.51.100.91'],
+    'analytics',
+    'crashlyticsreports-pa.googleapis.com',
+  );
+  for (const name of [
+    'firebaseremoteconfig.googleapis.com',
+    'crashlyticsreports-pa.googleapis.com',
+  ]) {
+    assert.ok(
+      result.flagged.some((flag) => flag.name === name && flag.owner === 'analytics'),
+      `${name} is not flagged`,
+    );
+  }
+});
+
+// S8's listing knows the Mac (the code review's note c, review loop 2). Given
+// the receiver's addresses (`receiver`, as judgeCapture takes it), the Mac's
+// address on any port is the harness's: the debug build probing it for Metro,
+// over either family. Without that, the listing called it unknown and flagged
+// it.
+
+test("SPIKE-01-AC16: in S8's map capture, given the receiver's addresses, the Mac on any port is the harness's, over either family, never unknown and never flagged", async () => {
+  const result = await listDestinations({
+    text: mapText(
+      '21:00:12.000000 IP 10.0.2.15.39070 > 10.0.2.2.8081: Flags [S], seq 665417719, win 65535, options [mss 1460,sackOK,TS val 3436156711 ecr 0,nop,wscale 9], length 0',
+      '21:00:12.000200 IP 10.0.2.2.8081 > 10.0.2.15.39070: Flags [R.], seq 0, ack 665417720, win 0, length 0',
+      '21:00:13.000000 IP6 fec0::15.39072 > fec0::2.8081: Flags [S], seq 665417800, win 65535, length 0',
+      '21:00:14.000000 IP 10.0.2.15.39074 > 10.0.2.2.443: Flags [S], seq 665417900, win 65535, length 0',
+    ),
+    ...MAP_NETWORK,
+    receiver: NETWORK.receiver,
+    kartverket: [TILE_HOST],
+  });
+  for (const [address, port] of [
+    ['10.0.2.2', 8081],
+    ['fec0::2', 8081],
+    ['10.0.2.2', 443],
+  ]) {
+    assert.equal(ownerAt(result, address, port), 'harness', `${address} port ${port}`);
+    assert.ok(
+      !result.flagged.some((flag) => flag.address === address),
+      `${address} port ${port} is flagged`,
+    );
+  }
+  assert.equal(ownerOf(result)['192.0.2.50'], 'kartverket', 'the tiles are no longer listed');
 });

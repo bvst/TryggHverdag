@@ -265,3 +265,111 @@ test('SPIKE-01-AC6: when arrivals go on, a gap over 120 s is failed even when th
   assert.equal(result.largestGapMs, 121 * S);
   assert.equal(result.status, 'failed', 'a gap already seen was left to a re-run');
 });
+
+test('SPIKE-01-AC6: arrivals whose last one came exactly 120 s before the end have not stopped, and pass under the 120 s rule; 120 s and 1 ms is stopped', async () => {
+  const lastAt = (t) =>
+    journey({
+      end: END,
+      marks: [mark('app-ended', APP_ENDED)],
+      arrivals: [...every(MIN, 30 * S, 17 * MIN + 30 * S), t].map((time) => arrival(time)),
+    });
+  const exactly = await judgeS2({ records: lastAt(END - 120 * S), reminders: [] });
+  assert.equal(
+    exactly.arrivalsStopped,
+    false,
+    '120 s of silence at the end is not a gap over 120 s',
+  );
+  assert.equal(exactly.status, 'passed');
+
+  const over = await judgeS2({ records: lastAt(END - 120 * S - 1), reminders: [] });
+  assert.equal(
+    over.arrivalsStopped,
+    true,
+    '120 s and 1 ms of silence at the end did not stop them',
+  );
+  assert.notEqual(over.status, 'passed', 'arrivals that stopped, with no reminder, passed');
+});
+
+// A failure shown is final (the code review's note a; review loop 2). Today
+// any break overrules a failure S2 has shown. Instead, S2's failure is judged
+// where it shows:
+// - arrivals stopped: the reminder had 5 min from the last arrival. A timed
+//   break over any part of those 5 min (a hole in the ticks, or a sleep of the
+//   Mac, { text, from, to } on its wall clock) could have delayed it or hidden
+//   the arrivals, so it makes the run invalid. A timed break wholly before the
+//   last arrival, or wholly after those 5 min, does not rescue a reminder that
+//   came late or never came;
+// - arrivals went on: the 120 s rule, as in S1, on the stretches of the gap
+//   the harness was intact for.
+// The break stays in the evidence. A break with no time makes the run invalid,
+// and a run that would pass is invalid with any break, as before.
+
+/** A sleep of the Mac, `secs` long from `t` into the journey, as readSleeps gives it. */
+const sleepBreak = (t, secs) => ({
+  text: `the Mac slept: pmset logged Sleep at ${t / MIN} min into the journey for ${secs} secs`,
+  from: WALL0 + t,
+  to: WALL0 + t + secs * S,
+});
+/** Arrivals go on after the app is ended, but for a gap of 200 s from 12 min 30 s to 15 min 50 s. */
+const goingOnWithGap = (options = {}) =>
+  journey({
+    ...options,
+    end: END,
+    marks: [mark('app-ended', APP_ENDED)],
+    arrivals: [
+      ...every(MIN, 30 * S, 12 * MIN + 30 * S),
+      ...every(MIN, 15 * MIN + 50 * S, END - 30 * S),
+    ].map((t) => arrival(t)),
+  });
+
+test('SPIKE-01-AC6: when arrivals stop, a late reminder, or none, is failed even with a hole in the ticks before the last arrival or a sleep after the 5 min that followed it, and the break stays in the evidence', async () => {
+  const late = await judgeS2({
+    records: stopped({ tickHoles: [[3 * MIN, 4 * MIN]] }),
+    reminders: [reminder(LAST + 5 * MIN + S)],
+  });
+  assert.equal(late.status, 'failed', 'a hole at 3 min rescued a reminder 5 min 1 s late');
+  assert.match(late.evidence.join('\n'), /tick/i, 'the hole is not in the evidence');
+
+  const slept = sleepBreak(17 * MIN, 60);
+  const none = await judgeS2({ records: stopped(), reminders: [], breaks: [slept] });
+  assert.equal(none.status, 'failed', 'a sleep at 17 min rescued a reminder that never came');
+  assert.ok(none.evidence.includes(slept.text), 'the sleep is not in the evidence');
+});
+
+test('SPIKE-01-AC13: when arrivals stop, a sleep within the 5 min after the last arrival, or a break with no time, makes an S2 run with a late reminder invalid', async () => {
+  const cases = [
+    ['a sleep at 12 min', [sleepBreak(12 * MIN, 60)]],
+    ['a break with no time', ['the emulator exited']],
+  ];
+  for (const [what, breaks] of cases) {
+    const result = await judgeS2({
+      records: stopped(),
+      reminders: [reminder(LAST + 5 * MIN + S)],
+      breaks,
+    });
+    assert.equal(result.status, 'invalid', `${what}: the platform was blamed for the harness`);
+  }
+});
+
+test('SPIKE-01-AC6: when arrivals go on, a gap over 120 s is judged on the stretches with the harness intact: a break elsewhere, or over part of it leaving 170 s, leaves it failed; one leaving no stretch over 120 s makes it invalid', async () => {
+  const elsewhere = await judgeS2({
+    records: goingOnWithGap({ tickHoles: [[3 * MIN, 4 * MIN]] }),
+    reminders: [],
+  });
+  assert.equal(elsewhere.arrivalsStopped, false);
+  assert.equal(elsewhere.status, 'failed', 'a hole at 3 min rescued a gap of 200 s at 12 min 30 s');
+  assert.match(elsewhere.evidence.join('\n'), /tick/i, 'the hole is not in the evidence');
+
+  const partly = sleepBreak(12 * MIN, 60);
+  const part = await judgeS2({ records: goingOnWithGap(), reminders: [], breaks: [partly] });
+  assert.equal(part.status, 'failed', 'a sleep over the start of the gap rescued 170 s of it');
+  assert.ok(part.evidence.includes(partly.text), 'the sleep is not in the evidence');
+
+  // From 13 min to 15 min: 30 s and 50 s are left.
+  const covering = await judgeS2({
+    records: goingOnWithGap(),
+    reminders: [],
+    breaks: [sleepBreak(13 * MIN, 120)],
+  });
+  assert.equal(covering.status, 'invalid', "the Mac's sleep was judged as a silent phone");
+});

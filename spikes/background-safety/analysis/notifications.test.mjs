@@ -43,7 +43,7 @@ const S = 1_000;
 const MIN = 60 * S;
 const WALL0 = Date.UTC(2031, 0, 1, 21, 0, 0);
 
-const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError];
+const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError, RangeError];
 /** Rejects on purpose: not a missing module, and not a programming error. */
 async function refuses(promise, why) {
   await assert.rejects(

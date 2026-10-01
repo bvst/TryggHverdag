@@ -97,7 +97,7 @@ const fail = (item, platform) => (all) => {
   else all[item][platform] = F;
 };
 
-const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError];
+const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError, RangeError];
 /** Rejects on purpose: not a missing module, and not a programming error. */
 async function refuses(promise, why) {
   await assert.rejects(
@@ -350,5 +350,158 @@ test('SPIKE-01-AC15: a missing or unknown verdict is refused, never read as GO',
   ];
   for (const [what, change] of broken) {
     await refuses(goNoGo(verdicts(change)), what);
+  }
+});
+
+// The SDK's documented settings (the spec's go/no-go rule: "NO-GO follows
+// when any item fails and none of the SDK's documented settings fixes it.
+// Every setting tried is recorded"; the code review's SF3, review loop 2).
+// goNoGo takes each setting tried as `verdicts.settings`, a list of
+// { item, platform, setting, verdict }, the verdict being one of the four.
+// - A failed item whose setting passed is "passed with <setting>": not NO-GO,
+//   and listed among `conditions` ({ item, platform, setting }), which the
+//   text names as conditions.
+// - A setting that failed, or has no verdict, leaves the item as it was:
+//   failed, or with no verdict.
+// - A setting covers its own item on its own platform only.
+// - Every setting tried is printed, with its verdict.
+// iOS S1 has no documented setting (the owner's Q4): failed, it stays failed
+// and deciding, and is never listed as open until L9 (the safety review's
+// loop 1, item 2): it failed, so it is not "not shown".
+
+const EXEMPTION = 'the battery-optimisation exemption';
+/** Adds the exemption, tried for `item` on `platform`, with `verdict`. */
+const tried =
+  (verdict, item = 'S1', platform = 'android') =>
+  (all) => {
+    all.settings = [...(all.settings ?? []), { item, platform, setting: EXEMPTION, verdict }];
+  };
+/** The lines of `text` that hold every one of `parts`. */
+const linesWith = (text, ...parts) =>
+  text.split('\n').filter((line) => parts.every((part) => line.includes(part)));
+/** The lines of the "open until L9" list, up to the blank line after it. */
+function openSection(text) {
+  const lines = text.split('\n');
+  const at = lines.findIndex((line) => /open until L9/i.test(line));
+  if (at < 0) return [];
+  const end = lines.findIndex((line, i) => i > at && line.trim() === '');
+  return lines.slice(at + 1, end < 0 ? lines.length : end);
+}
+
+test('SPIKE-01-AC15: a failed item whose documented setting passed is "passed with" that setting: not NO-GO, and listed as a condition', async () => {
+  const result = await goNoGo(
+    verdicts((all) => {
+      all.S1.android = F;
+      tried(P)(all);
+    }),
+  );
+  assert.equal(result.recommendation, 'GO', 'a failure the setting fixed gave NO-GO');
+  assert.equal(
+    find(result.conditions ?? [], 'S1', 'android')?.setting,
+    EXEMPTION,
+    'the setting is not listed as a condition',
+  );
+  assert.ok(
+    linesWith(result.text, 'S1', 'android', `passed with ${EXEMPTION}`).length > 0,
+    `S1 on Android is not reported as "passed with ${EXEMPTION}"`,
+  );
+  assert.match(result.text, /condition/i, 'the text does not name the conditions');
+  assert.equal(find(result.open, 'S1', 'android'), undefined, 'S1 on Android is listed as open');
+
+  // The control: on an item that passed, the setting is no condition.
+  const passed = await goNoGo(verdicts(tried(P)));
+  assert.equal(passed.recommendation, 'GO');
+  assert.deepEqual(passed.conditions ?? [], [], 'a setting on a passed item became a condition');
+});
+
+test('SPIKE-01-AC15: a setting that failed, or has no verdict, leaves its item as it was: failed gives NO-GO, no verdict gives no recommendation; and the setting is printed with its verdict', async () => {
+  const cases = [
+    ['failed, the setting failed', F, F, 'NO-GO'],
+    ['failed, the setting with no verdict', F, NV, 'NO-GO'],
+    ['no verdict, the setting failed', NV, F, null],
+    ['no verdict, the setting with no verdict', NV, NV, null],
+  ];
+  for (const [what, item, setting, recommendation] of cases) {
+    const result = await goNoGo(
+      verdicts((all) => {
+        all.S1.android = item;
+        tried(setting)(all);
+      }),
+    );
+    assert.equal(result.recommendation, recommendation, what);
+    assert.equal(find(result.conditions ?? [], 'S1', 'android'), undefined, `${what}: a condition`);
+    assert.ok(
+      linesWith(result.text, EXEMPTION, setting).length > 0,
+      `${what}: the setting tried is not printed with its verdict`,
+    );
+  }
+});
+
+test('SPIKE-01-AC15: a setting covers its own item on its own platform only', async () => {
+  const otherPlatform = await goNoGo(
+    verdicts((all) => {
+      all.S1.ios = F;
+      tried(P, 'S1', 'android')(all);
+    }),
+  );
+  assert.equal(otherPlatform.recommendation, 'NO-GO', "Android's setting fixed S1 on iOS");
+
+  const otherItem = await goNoGo(
+    verdicts((all) => {
+      all.S4.android = F;
+      tried(P, 'S1', 'android')(all);
+    }),
+  );
+  assert.equal(otherItem.recommendation, 'NO-GO', "S1's setting fixed S4");
+});
+
+test('SPIKE-01-AC15: iOS S1, failed with no setting, stays failed and deciding: NO-GO with Android passed with its setting, and never listed as open until L9', async () => {
+  const result = await goNoGo(
+    verdicts((all) => {
+      all.S1.android = F;
+      all.S1.ios = F;
+      tried(P)(all);
+    }),
+  );
+  assert.equal(result.recommendation, 'NO-GO');
+  const ios = find(result.items, 'S1', 'ios');
+  assert.equal(ios?.verdict, F, 'iOS S1 is no longer failed');
+  assert.equal(ios?.deciding, true, 'iOS S1 no longer decides');
+  assert.equal(find(result.open, 'S1', 'ios'), undefined, 'iOS S1 is listed as open');
+  assert.deepEqual(
+    openSection(result.text).filter((line) => /\bS1\b/.test(line)),
+    [],
+    'S1 is in the printed "open until L9" list',
+  );
+  assert.ok(openSection(result.text).length > 0, 'the control: the open list is printed');
+});
+
+test('SPIKE-01-AC15: a setting that is not { item, platform, setting, verdict }, with one of the four verdicts, is refused', async () => {
+  const broken = [
+    ['settings that are not a list', (all) => (all.settings = 'the exemption')],
+    [
+      'no setting named',
+      (all) => (all.settings = [{ item: 'S1', platform: 'android', setting: '', verdict: P }]),
+    ],
+    [
+      'the word "pass"',
+      (all) =>
+        (all.settings = [{ item: 'S1', platform: 'android', setting: EXEMPTION, verdict: 'pass' }]),
+    ],
+    [
+      'no item',
+      (all) => (all.settings = [{ platform: 'android', setting: EXEMPTION, verdict: P }]),
+    ],
+  ];
+  for (const [what, change] of broken) {
+    await refuses(
+      goNoGo(
+        verdicts((all) => {
+          all.S1.android = F;
+          change(all);
+        }),
+      ),
+      what,
+    );
   }
 });

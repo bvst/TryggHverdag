@@ -203,7 +203,7 @@ function log({
   return [...before, ...inside, ...after, ...(complete ? closing(readAt) : [])].join('\n') + '\n';
 }
 
-const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError];
+const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError, RangeError];
 /** Rejects on purpose: not a missing module, and not a programming error. */
 async function refuses(promise, why) {
   await assert.rejects(

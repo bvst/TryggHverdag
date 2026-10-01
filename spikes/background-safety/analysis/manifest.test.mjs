@@ -144,11 +144,29 @@ const runsOf = (entries, scenario, platform, runCase) =>
       entry.platform === platform &&
       (runCase === undefined || entry.case === runCase),
   );
-/** The mapper's input: the night, changed by `change`, and what was read by hand. */
-function input(change = () => {}) {
+/**
+ * The night's planned cases, judged ones only, per scenario and platform, as
+ * goNoGoInput takes them (`expected`); null is a scenario's plain case. S2's
+ * Force stop is recorded, not judged, so it is not among them. This is
+ * run-all.mjs's plan for night-20260930 (review loop 2): a case planned here
+ * that never ran is not a pass.
+ */
+const NIGHT_PLAN = {
+  s1: { android: [null], ios: [null] },
+  s2: { android: ['swipe', 'lmk'], ios: [null] },
+  s3: { android: ['exempt', 'not-exempt'] },
+  s4: { android: [null], ios: [null] },
+  s5: { android: [null], ios: [null] },
+  s6: { android: ['without', 'with'] },
+  s7: { android: ['background', 'fine'], ios: ['always-to-inuse'] },
+  s8: { android: [null], ios: [null] },
+};
+
+/** The mapper's input: the night, changed by `change`, its plan, and what was read by hand. */
+function input(change = () => {}, expected = NIGHT_PLAN) {
   const entries = night();
   change(entries);
-  return { entries, ...BY_HAND };
+  return { entries, expected, ...BY_HAND };
 }
 
 test('SPIKE-01-AC15: a night in which every judged run passed gives each item per platform, the hand-read build and licence, and "not shown" where simulators cannot show it; the go/no-go takes it', async () => {
@@ -338,4 +356,219 @@ test('SPIKE-01-AC15: a case short of two valid runs has no verdict, and the go/n
   );
   assert.equal(verdicts.S4.ios, NV);
   assert.equal((await goNoGo(verdicts)).recommendation, null);
+});
+
+// S5 (the test audit's should-fix, review loop 2): an invalid run never counts,
+// whatever its details say, and "S5 heard" needs two valid runs like any line.
+
+test('SPIKE-01-AC13: an invalid S5 run whose details say seen, heard and its text passed stays invalid: with one valid run left, S5 and "S5 heard" have no verdict', async () => {
+  const verdicts = await goNoGoInput(
+    input((entries) => {
+      for (const run of runsOf(entries, 's5', 'android'))
+        run.details = { seen: P, heard: P, text: P };
+      const [, second] = runsOf(entries, 's5', 'android');
+      Object.assign(second, {
+        status: 'invalid',
+        evidence: ['the receiver wrote no tick for 30 s'],
+      });
+    }),
+  );
+  assert.equal(verdicts.S5.android, NV, "the invalid run's details counted as a pass");
+  assert.equal(verdicts['S5 heard'].android, NV, '"heard" passed on one valid run');
+
+  // The control: with both runs valid, both lines pass.
+  const both = await goNoGoInput(
+    input((entries) => {
+      for (const run of runsOf(entries, 's5', 'android'))
+        run.details = { seen: P, heard: P, text: P };
+    }),
+  );
+  assert.equal(both.S5.android, P);
+  assert.equal(both['S5 heard'].android, P);
+});
+
+// A planned case that never ran is not a pass (the safety review's loop 1,
+// item 4; review loop 2). goNoGoInput takes the planned cases (`expected`,
+// see NIGHT_PLAN), and a case with no run gives its item no verdict, as a
+// case short of two valid runs does. A failed run elsewhere in the item is
+// still final. On the night's real manifest, dropping S7's "fine" runs made
+// S7 on Android pass.
+
+const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError, RangeError];
+/** Rejects on purpose: not a missing module, and not a programming error. */
+async function refuses(promise, why) {
+  await assert.rejects(
+    promise,
+    (error) => {
+      assert.ok(
+        error?.code !== 'ERR_MODULE_NOT_FOUND' &&
+          !PROGRAMMING_ERRORS.some((type) => error instanceof type),
+        `${why}: it broke instead of refusing (${error?.name}: ${error?.message})`,
+      );
+      return true;
+    },
+    why,
+  );
+}
+
+/** Drops every run of one case. */
+const without = (scenario, platform, runCase) => (entries) => {
+  for (const run of runsOf(entries, scenario, platform, runCase)) {
+    entries.splice(entries.indexOf(run), 1);
+  }
+};
+
+test('SPIKE-01-AC13: a planned case with no run gives its item no verdict, never a pass: S7 on Android without its "fine" runs, and items that only give findings too', async () => {
+  const noFine = await goNoGoInput(input(without('s7', 'android', 'fine')));
+  assert.equal(noFine.S7.android, NV, 'S7 on Android passed on its background case alone');
+  assert.equal((await goNoGo(noFine)).recommendation, null, 'the go/no-go recommended anyway');
+
+  const cases = [
+    ['S2', 'android', without('s2', 'android', 'lmk')],
+    ['S6', 'android', without('s6', 'android', 'with')],
+    ['S4', 'ios', without('s4', 'ios', null)],
+  ];
+  for (const [item, platform, change] of cases) {
+    const verdicts = await goNoGoInput(input(change));
+    assert.equal(verdicts[item][platform], NV, `${item} on ${platform} passed with a case missing`);
+  }
+});
+
+test('SPIKE-01-AC13: a planned case with no run beside a case that failed leaves the item failed: a failure shown is final', async () => {
+  const verdicts = await goNoGoInput(
+    input((entries) => {
+      without('s7', 'android', 'fine')(entries);
+      for (const run of runsOf(entries, 's7', 'android', 'background')) {
+        run.status = F;
+        run.details = { reportDelayMs: 75_000, arrivalsAfterChange: 15, processEnded: false };
+      }
+    }),
+  );
+  assert.equal(verdicts.S7.android, F);
+  assert.equal((await goNoGo(verdicts)).recommendation, 'NO-GO');
+});
+
+test('SPIKE-01-AC13: goNoGoInput without the planned cases is refused, never judged as if every case ran', async () => {
+  await refuses(goNoGoInput({ entries: night(), ...BY_HAND }), 'no plan given');
+});
+
+// S1 with the battery-optimisation exemption (the owner's Q4, the code
+// review's SF3, review loop 2). The night's S1 runs are the plain case
+// (`case: null`); the two extra runs are the case "exempt", from their own
+// night (night-YYYYMMDD-s1-exempt), whose first run carries a capture, as S1's
+// first does. The two cases are kept apart: S1 is the plain case alone, and
+// "S1 exempt" is a line of its own. The exemption is one of the SDK's
+// documented settings, so goNoGoInput gives it to the go/no-go as the setting
+// tried for S1 on Android (`settings`: { item: 'S1', platform: 'android',
+// setting, verdict }), with the "S1 exempt" verdict.
+
+const WITH_EXEMPT = { ...NIGHT_PLAN, s1: { android: [null, 'exempt'], ios: [null] } };
+/** The entry of `list` for `item` on `platform`. */
+const find = (list, item, platform) =>
+  list.find((entry) => entry.item === item && (entry.platform ?? null) === platform);
+/** The two S1-exempt runs on Android, with `status`. */
+const exemptRuns = (status) => [
+  runEntry(
+    's1',
+    'android',
+    'exempt',
+    1,
+    status,
+    {
+      largestGapMs: status === P ? 104_000 : 610_000,
+      capture: { status: P, problems: [], flagged: [], destinations: [] },
+    },
+    { tcpdump: true },
+  ),
+  runEntry('s1', 'android', 'exempt', 2, status, {
+    largestGapMs: status === P ? 110_000 : 700_000,
+  }),
+];
+/** The plain S1 runs on `platform` failed, as on the night of 2026-09-30. */
+const plainS1Failed = (platform) => (entries) => {
+  for (const run of runsOf(entries, 's1', platform, null)) {
+    run.status = F;
+    run.details = { ...run.details, largestGapMs: 802_000, gapsOver120s: 1 };
+  }
+};
+/** The setting goNoGoInput gives for S1 on Android. */
+const s1Setting = (verdicts) =>
+  (Array.isArray(verdicts.settings) ? verdicts.settings : []).find(
+    (setting) => setting?.item === 'S1' && setting?.platform === 'android',
+  );
+/** The lines of the go/no-go's text that name S1, the exemption and `verdict`. */
+const exemptLines = (text, verdict) =>
+  text
+    .split('\n')
+    .filter((line) => /\bS1\b/.test(line) && /exempt/i.test(line) && line.includes(verdict));
+
+test('SPIKE-01-AC15: S1\'s plain case and its exempt case are kept apart; the plain case failing and the exempt case passing is "passed with" the exemption, a condition, not NO-GO', async () => {
+  const verdicts = await goNoGoInput(
+    input((entries) => {
+      plainS1Failed('android')(entries);
+      entries.push(...exemptRuns(P));
+    }, WITH_EXEMPT),
+  );
+  assert.equal(verdicts.S1.android, F, 'the exempt runs decided the plain case');
+  assert.equal(verdicts['S1 exempt']?.android, P, 'no "S1 exempt" line of its own');
+  const setting = s1Setting(verdicts);
+  assert.equal(setting?.verdict, P, 'the exemption is not given as the setting tried for S1');
+  assert.match(String(setting?.setting), /exempt/i, 'the setting does not say it is the exemption');
+  assert.equal(verdicts.capture.android, P, "the exempt run's capture changed the capture");
+
+  const result = await goNoGo(verdicts);
+  assert.equal(result.recommendation, 'GO', 'a failure the documented setting fixed gave NO-GO');
+  assert.ok(
+    find(result.conditions ?? [], 'S1', 'android'),
+    'the exemption is not listed as a condition',
+  );
+  assert.ok(exemptLines(result.text, 'passed').length > 0, 'no "S1 exempt" line is printed');
+});
+
+test("SPIKE-01-AC15: S1's exempt case never decides its plain case: a plain S1 that passed stays passed beside an exempt case that failed, which is printed as failed", async () => {
+  const verdicts = await goNoGoInput(
+    input((entries) => entries.push(...exemptRuns(F)), WITH_EXEMPT),
+  );
+  assert.equal(verdicts.S1.android, P, "the exempt case's failure decided the plain case");
+  assert.equal(verdicts['S1 exempt']?.android, F);
+  const result = await goNoGo(verdicts);
+  assert.ok(exemptLines(result.text, 'failed').length > 0, 'the failed exempt case is not printed');
+});
+
+test('SPIKE-01-AC15: S1 with the exemption failed, or planned and never run, leaves S1 on Android failed: NO-GO', async () => {
+  const cases = [
+    ['the exempt case failed', (entries) => entries.push(...exemptRuns(F)), F],
+    ['the exempt case never ran', () => {}, NV],
+  ];
+  for (const [what, addExempt, exempt] of cases) {
+    const verdicts = await goNoGoInput(
+      input((entries) => {
+        plainS1Failed('android')(entries);
+        addExempt(entries);
+      }, WITH_EXEMPT),
+    );
+    assert.equal(verdicts['S1 exempt']?.android, exempt, what);
+    assert.equal(s1Setting(verdicts)?.verdict, exempt, `${what}: the setting's verdict`);
+    const result = await goNoGo(verdicts);
+    assert.equal(result.recommendation, 'NO-GO', what);
+    assert.equal(find(result.conditions ?? [], 'S1', 'android'), undefined, `${what}: a condition`);
+  }
+});
+
+test("SPIKE-01-AC15: the night's pattern: S1 failed on both devices and passed with the exemption on Android gives NO-GO, and iOS S1 is never listed as open until L9", async () => {
+  const verdicts = await goNoGoInput(
+    input((entries) => {
+      plainS1Failed('android')(entries);
+      plainS1Failed('ios')(entries);
+      entries.push(...exemptRuns(P));
+    }, WITH_EXEMPT),
+  );
+  assert.equal(verdicts.S1.ios, F);
+  const result = await goNoGo(verdicts);
+  assert.equal(result.recommendation, 'NO-GO', 'iOS S1, failed with no setting, did not decide');
+  assert.equal(find(result.open, 'S1', 'ios'), undefined, 'iOS S1 is listed as open');
+  assert.ok(
+    find(result.conditions ?? [], 'S1', 'android'),
+    'Android S1 is not passed with the exemption',
+  );
 });

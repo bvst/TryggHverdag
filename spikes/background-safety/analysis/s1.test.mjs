@@ -287,16 +287,22 @@ test('SPIKE-01-AC13: 15 s without a tick is still a working receiver, and 15 s a
   }
 });
 
-// A failure shown stays final (the safety review's B2a, 2026-10-01). A gap
-// over 120 s seen with the receiver's ticks intact at that time is failed,
-// unless a break with a time overlaps that gap: a hole in the ticks, or a
-// sleep of the Mac, whose span readSleeps gives on the Mac's wall clock
-// ({ text, from, to }, compared with the arrivals' `at`). A break elsewhere in
-// the run does not rescue the gap, and is still listed in the evidence. A
-// break the driver saw, with no time, could have been anywhere, so it still
-// makes the run invalid.
+// A failure shown stays final (the safety review's B2a, 2026-10-01), judged
+// on the stretches of the gap the harness was intact for (the test audit's S2
+// and the safety review's rule from loop 1, made strict, review loop 2): every
+// timed break is taken out of the gap together, a hole in the ticks (from the
+// last tick before it to the first after it, on `mono`) and a sleep of the
+// Mac (its span as readSleeps gives it, { text, from, to } on the Mac's wall
+// clock, compared with the arrivals' `at`). If any stretch that is left, with
+// the ticks up, is over 120 s, the phone was silent for over 120 s with the
+// harness watching, and the run is failed. Only when no such stretch is left
+// is it invalid. A break elsewhere in the run, or over only part of the gap,
+// does not rescue it, and every break stays in the evidence. A break the
+// driver saw, with no time, could have been anywhere, so it still makes the
+// run invalid.
 //
-// withGap(200 s) has its gap from 20 min 30 s to 23 min 50 s.
+// withGap(200 s) has its gap from 20 min 30 s to 23 min 50 s. Its ticks are
+// at 5 s past each 10 s (20 min 55 s, 21 min 5 s, …).
 
 /** A sleep of the Mac, `secs` long from `t` into the journey, as readSleeps gives it. */
 const sleepBreak = (t, secs) => ({
@@ -304,8 +310,14 @@ const sleepBreak = (t, secs) => ({
   from: WALL0 + t,
   to: WALL0 + t + secs * S,
 });
+/** A timed break from `from` to `to` ms into the journey, to the ms. */
+const spanBreak = (from, to) => ({
+  text: `the Mac slept from ${from} ms to ${to} ms into the journey`,
+  from: WALL0 + from,
+  to: WALL0 + to,
+});
 
-test('SPIKE-01-AC5: a gap over 120 s seen with the ticks intact at that time is failed, even with a hole in the ticks elsewhere in the run, and the hole stays in the evidence', async () => {
+test('SPIKE-01-AC5: a gap over 120 s seen with the ticks intact for more than 120 s of it is failed: a hole in the ticks elsewhere in the run, or over only the end of the gap, does not rescue it, and the hole stays in the evidence', async () => {
   const elsewhere = [
     ['a hole before the gap', [5 * MIN, 6 * MIN]],
     ['a hole after the gap', [35 * MIN, 36 * MIN]],
@@ -317,21 +329,38 @@ test('SPIKE-01-AC5: a gap over 120 s seen with the ticks intact at that time is 
     assert.match(result.evidence.join('\n'), /tick/i, `${what} is not in the evidence`);
   }
 
+  // No tick from 22 min 55 s to 24 min 35 s: the 145 s from 20 min 30 s to
+  // 22 min 55 s were silent with the receiver writing its ticks.
   const overItsEnd = await judgeS1({
     records: withGap(200 * S, { tickHoles: [[23 * MIN, 24 * MIN + 30 * S]] }),
   });
-  assert.equal(overItsEnd.status, 'invalid', 'a hole over the end of the gap was ignored');
+  assert.equal(
+    overItsEnd.status,
+    'failed',
+    'a hole over the end of the gap rescued the 145 s before it, seen with the ticks up',
+  );
+  assert.match(overItsEnd.evidence.join('\n'), /tick/i, 'the hole is not in the evidence');
 });
 
-test('SPIKE-01-AC13: a sleep of the Mac whose span overlaps the gap makes an S1 run invalid, and a sleep elsewhere in the run does not rescue the gap; both stay in the evidence', async () => {
-  const overlapping = [
-    ['inside the gap', sleepBreak(21 * MIN, 60)],
-    ['over its start', sleepBreak(20 * MIN, 60)],
-    ['over its end', sleepBreak(23 * MIN + 30 * S, 120)],
+test('SPIKE-01-AC13: a sleep of the Mac makes an S1 run invalid only when, taken out of the gap, it leaves no stretch over 120 s; a sleep over part of the gap, or elsewhere in the run, leaves the gap failed; every sleep stays in the evidence', async () => {
+  const covering = [
+    ['inside the gap, leaving 30 s and 110 s', sleepBreak(21 * MIN, 60)],
+    ['over its start, leaving its last 90 s', sleepBreak(20 * MIN, 140)],
+    ['over its end, leaving its first 90 s', sleepBreak(22 * MIN, 180)],
   ];
-  for (const [what, slept] of overlapping) {
+  for (const [what, slept] of covering) {
     const result = await judgeS1({ records: withGap(200 * S), breaks: [slept] });
     assert.equal(result.status, 'invalid', `a sleep ${what} was judged as a silent phone`);
+    assert.ok(result.evidence.includes(slept.text), `${what}: the sleep is not in the evidence`);
+  }
+
+  const partly = [
+    ['over its start, leaving its last 170 s', sleepBreak(20 * MIN, 60)],
+    ['over its end, leaving its first 180 s', sleepBreak(23 * MIN + 30 * S, 120)],
+  ];
+  for (const [what, slept] of partly) {
+    const result = await judgeS1({ records: withGap(200 * S), breaks: [slept] });
+    assert.equal(result.status, 'failed', `a sleep ${what} rescued the gap`);
     assert.ok(result.evidence.includes(slept.text), `${what}: the sleep is not in the evidence`);
   }
 
@@ -342,6 +371,63 @@ test('SPIKE-01-AC13: a sleep of the Mac whose span overlaps the gap makes an S1 
   for (const [what, slept] of elsewhere) {
     const result = await judgeS1({ records: withGap(200 * S), breaks: [slept] });
     assert.equal(result.status, 'failed', `a sleep ${what} rescued the gap`);
+    assert.ok(result.evidence.includes(slept.text), `${what}: the sleep is not in the evidence`);
+  }
+});
+
+test('SPIKE-01-AC13: a stretch of exactly 120 s left with the ticks up makes an S1 run invalid, and one of 120 s and 1 ms makes it failed, at the end of the gap and at its start', async () => {
+  const cases = [
+    ['its first 120 s left', spanBreak(22 * MIN + 30 * S, 24 * MIN), 'invalid'],
+    ['its first 120 s and 1 ms left', spanBreak(22 * MIN + 30 * S + 1, 24 * MIN), 'failed'],
+    ['its last 120 s left', spanBreak(19 * MIN, 21 * MIN + 50 * S), 'invalid'],
+    ['its last 120 s and 1 ms left', spanBreak(19 * MIN, 21 * MIN + 50 * S - 1), 'failed'],
+  ];
+  for (const [what, slept, status] of cases) {
+    const result = await judgeS1({ records: withGap(200 * S), breaks: [slept] });
+    assert.equal(result.status, status, `the gap with ${what}`);
+    assert.ok(result.evidence.includes(slept.text), `${what}: the sleep is not in the evidence`);
+  }
+});
+
+test('SPIKE-01-AC13: every timed break is taken out of the gap together, and a stretch between two breaks counts as much as one at either end', async () => {
+  // A sleep from 20 min to 21 min 30 s leaves 140 s of the gap on its own; the
+  // hole in the ticks from 22 min 55 s to 24 min 35 s leaves 145 s on its own.
+  // Together they leave 85 s, from 21 min 30 s to 22 min 55 s.
+  const slept = sleepBreak(20 * MIN, 90);
+  const hole = { tickHoles: [[23 * MIN, 24 * MIN + 30 * S]] };
+  const sleepAlone = await judgeS1({ records: withGap(200 * S), breaks: [slept] });
+  assert.equal(sleepAlone.status, 'failed', 'the sleep alone leaves 140 s');
+  const holeAlone = await judgeS1({ records: withGap(200 * S, hole) });
+  assert.equal(holeAlone.status, 'failed', 'the hole alone leaves 145 s');
+  const both = await judgeS1({ records: withGap(200 * S, hole), breaks: [slept] });
+  assert.equal(both.status, 'invalid', 'the breaks were taken out of the gap one at a time');
+  assert.ok(both.evidence.includes(slept.text), 'the sleep is not in the evidence');
+  assert.match(both.evidence.join('\n'), /tick/i, 'the hole is not in the evidence');
+
+  // Two short sleeps: from 20 min 40 s and from 23 min, 10 s each, leave
+  // 10 s, 130 s and 40 s: the 130 s between them were seen with the ticks up.
+  const between = await judgeS1({
+    records: withGap(200 * S),
+    breaks: [sleepBreak(20 * MIN + 40 * S, 10), sleepBreak(23 * MIN, 10)],
+  });
+  assert.equal(between.status, 'failed', 'the 130 s between two sleeps were rescued');
+
+  // From 21 min and from 22 min 30 s, 10 s each: 30 s, 80 s and 70 s are left.
+  const short = await judgeS1({
+    records: withGap(200 * S),
+    breaks: [sleepBreak(21 * MIN, 10), sleepBreak(22 * MIN + 30 * S, 10)],
+  });
+  assert.equal(short.status, 'invalid', 'no stretch over 120 s is left, yet the run was failed');
+});
+
+test('SPIKE-01-AC13: a sleep that only touches the gap, ending as it starts or starting as it ends, takes nothing out of it, and the gap is failed', async () => {
+  const touching = [
+    ['ending as the gap starts', spanBreak(19 * MIN, 20 * MIN + 30 * S)],
+    ['starting as the gap ends', spanBreak(23 * MIN + 50 * S, 25 * MIN)],
+  ];
+  for (const [what, slept] of touching) {
+    const result = await judgeS1({ records: withGap(200 * S), breaks: [slept] });
+    assert.equal(result.status, 'failed', `a sleep ${what} rescued all 200 s of it`);
     assert.ok(result.evidence.includes(slept.text), `${what}: the sleep is not in the evidence`);
   }
 });

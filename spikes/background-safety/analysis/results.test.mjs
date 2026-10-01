@@ -47,7 +47,7 @@ function row(markdown, first) {
   );
 }
 
-const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError];
+const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError, RangeError];
 /** The error of a deliberate refusal: not a missing module, and not a programming error. */
 async function refusal(promise, why) {
   let caught = null;

@@ -13,7 +13,7 @@ const callStarted = async (input) => (await import('./s6.mjs')).callStarted(inpu
 const NUMBER = '+447700900123';
 const OTHER = '+447700900456';
 
-const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError];
+const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError, RangeError];
 /** Rejects on purpose: not a missing module, and not a programming error. */
 async function refuses(promise, why) {
   await assert.rejects(

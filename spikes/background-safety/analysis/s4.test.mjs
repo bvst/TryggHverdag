@@ -315,7 +315,7 @@ test("SPIKE-01-AC13: an out-of-order arrival seen 20 s after reconnecting is sti
 
 const readHeld = async (input) => (await import('./s4.mjs')).readHeld(input);
 
-const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError];
+const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError, RangeError];
 /** Rejects on purpose: not a missing module, and not a programming error. */
 async function refuses(promise, why) {
   await assert.rejects(
@@ -400,4 +400,75 @@ test('SPIKE-01-AC8: text that is not held.json is refused, never read as "nothin
     ],
   ];
   for (const [what, text] of cases) await refuses(readHeld({ text, records }), what);
+});
+
+// A failure shown is final (the safety review's loop 1, item 6; review loop 2).
+// S4's failure shows from the moment the device goes back online: a held
+// position missing, an order broken, or the queue left non-empty. A timed
+// break wholly before the "offline-ended" mark (a hole in the ticks, or a
+// sleep of the Mac, { text, from, to } on its wall clock) cannot explain any
+// of them, so it does not rescue the run: it is failed, and the break stays in
+// the evidence. A break from that mark on, over the flush and the watch after
+// it, could have hidden an arrival, so it makes the run invalid; so does a
+// break with no time. A run that would pass is invalid with any break, as
+// before.
+
+/** A sleep of the Mac, `secs` long from `t` into the journey, as readSleeps gives it. */
+const sleepBreak = (t, secs) => ({
+  text: `the Mac slept: pmset logged Sleep at ${t / MIN} min into the journey for ${secs} secs`,
+  from: WALL0 + t,
+  to: WALL0 + t + secs * S,
+});
+const IN_ORDER_BUT_HELD_3 = ['held-1', 'held-2', 'held-4'];
+const OUT_OF_ORDER = ['held-1', 'held-3', 'held-2', 'held-4'];
+
+test('SPIKE-01-AC8: a held position that never arrived, an order broken, or a queue left non-empty is failed even with a hole in the ticks or a sleep before the device went back online, and the break stays in the evidence', async () => {
+  const cases = [
+    [
+      'held-3 missing, a hole while online before the cut',
+      run(flushed(IN_ORDER_BUT_HELD_3), { tickHoles: [[MIN, 2 * MIN]] }),
+      [],
+    ],
+    [
+      'held-3 missing, a sleep while offline',
+      run(flushed(IN_ORDER_BUT_HELD_3)),
+      [sleepBreak(6 * MIN, 60)],
+    ],
+    ['out of order, a sleep while offline', run(flushed(OUT_OF_ORDER)), [sleepBreak(6 * MIN, 60)]],
+    [
+      'the queue left non-empty, a hole while offline',
+      run(flushed(HELD, 2), { tickHoles: [[6 * MIN, 7 * MIN]] }),
+      [],
+    ],
+  ];
+  for (const [what, records, breaks] of cases) {
+    const result = await judgeS4({ records, held: HELD, breaks });
+    assert.equal(result.status, 'failed', `${what}: the break before reconnecting rescued it`);
+    const evidence = result.evidence.join('\n');
+    if (breaks.length > 0) {
+      assert.ok(
+        result.evidence.includes(breaks[0].text),
+        `${what}: the sleep is not in the evidence`,
+      );
+    } else {
+      assert.match(evidence, /tick/i, `${what}: the hole is not in the evidence`);
+    }
+  }
+});
+
+test('SPIKE-01-AC13: a held position missing is still invalid with a break after the device went back online, over the flush or the watch, or a break with no time', async () => {
+  const cases = [
+    ['a sleep over the flush', run(flushed(IN_ORDER_BUT_HELD_3)), [sleepBreak(8 * MIN, 60)]],
+    [
+      'a hole in the watch',
+      run(flushed(IN_ORDER_BUT_HELD_3), { tickHoles: [[11 * MIN, 12 * MIN]] }),
+      [],
+    ],
+    ['a break with no time', run(flushed(IN_ORDER_BUT_HELD_3)), ['the emulator exited']],
+  ];
+  for (const [what, records, breaks] of cases) {
+    const result = await judgeS4({ records, held: HELD, breaks });
+    assert.equal(result.status, 'invalid', `${what}: the SDK was blamed for what the harness hid`);
+    assert.ok(result.evidence.length > 0, `${what}: invalid without its evidence`);
+  }
 });

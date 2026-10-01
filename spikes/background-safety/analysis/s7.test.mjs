@@ -174,3 +174,70 @@ test('SPIKE-01-AC11: a run that stops watching 30 s after the change is invalid,
   assert.match(evidence, /\b30 s\b/, 'the evidence does not say how long the run watched');
   assert.match(evidence, /\b1 min\b/, 'the evidence does not say how long S7 must watch');
 });
+
+test('SPIKE-01-AC11: a report that reaches the receiver exactly at the change counts, with a delay of 0', async () => {
+  const result = await judgeS7({ records: reduced(0) });
+  assert.equal(result.status, 'passed', 'a report at the mark itself was not counted');
+  assert.equal(result.reportDelayMs, 0);
+});
+
+// A failure shown is final (the safety review's loop 1, item 6; review loop 2).
+// S7's failure is settled 60 s after the change: no report by then. A timed
+// break wholly before the "permission-reduced" mark, or wholly after the 60 s
+// that follow it (a hole in the ticks, or a sleep of the Mac, { text, from,
+// to } on its wall clock), cannot explain that, so the run is failed and the
+// break stays in the evidence. A timed break over any part of those 60 s makes
+// the run invalid, and so does a break with no time. A run that would pass is
+// invalid with any break, as before.
+
+/** A sleep of the Mac, `secs` long from `t` into the journey, as readSleeps gives it. */
+const sleepBreak = (t, secs) => ({
+  text: `the Mac slept: pmset logged Sleep at ${t / MIN} min into the journey for ${secs} secs`,
+  from: WALL0 + t,
+  to: WALL0 + t + secs * S,
+});
+/** Nothing arrives after 4 min 30 s: the app never reported the change. */
+const silentAfter = (options) =>
+  run(
+    every(MIN, 30 * S, 4 * MIN + 30 * S).map((t) => arrival(t)),
+    options,
+  );
+
+test('SPIKE-01-AC11: no report within 60 s of the change is failed even with a hole in the ticks before the change or a sleep after its 60 s, and the break stays in the evidence', async () => {
+  const hole = await judgeS7({ records: silentAfter({ tickHoles: [[2 * MIN, 3 * MIN]] }) });
+  assert.equal(hole.status, 'failed', 'a hole at 2 min rescued a report missed after 5 min');
+  assert.match(hole.evidence.join('\n'), /tick/i, 'the hole is not in the evidence');
+
+  const late = [
+    ['no report at all', silentAfter(), sleepBreak(9 * MIN, 60)],
+    ['a report after 61 s', reduced(61 * S), sleepBreak(8 * MIN, 60)],
+  ];
+  for (const [what, records, slept] of late) {
+    const result = await judgeS7({ records, breaks: [slept] });
+    assert.equal(result.status, 'failed', `${what}: a sleep after the 60 s rescued it`);
+    assert.ok(result.evidence.includes(slept.text), `${what}: the sleep is not in the evidence`);
+  }
+});
+
+test('SPIKE-01-AC13: a break over any part of the 60 s after the change, or one with no time, makes an S7 run with no report in time invalid', async () => {
+  const cases = [
+    // No tick from 5 min 15 s to 5 min 55 s.
+    [
+      'a hole inside the 60 s',
+      silentAfter({ tickHoles: [[5 * MIN + 20 * S, 5 * MIN + 50 * S]] }),
+      [],
+    ],
+    [
+      'a sleep inside the 60 s, and a report after 61 s',
+      reduced(61 * S),
+      [sleepBreak(5.5 * MIN, 10)],
+    ],
+    ['a sleep over the change', silentAfter(), [sleepBreak(4.5 * MIN, 60)]],
+    ['a break with no time', silentAfter(), ['the emulator exited']],
+  ];
+  for (const [what, records, breaks] of cases) {
+    const result = await judgeS7({ records, breaks });
+    assert.equal(result.status, 'invalid', `${what}: the app was blamed for what the harness hid`);
+    assert.ok(result.evidence.length > 0, `${what}: invalid without its evidence`);
+  }
+});

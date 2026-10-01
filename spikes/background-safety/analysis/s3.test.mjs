@@ -245,7 +245,7 @@ test('SPIKE-01-AC7: a run whose restrictions held for 28 min that would otherwis
 // in force only if both readings show it. One that did not hold is not shown,
 // and a pass never rests on it.
 
-const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError];
+const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError, RangeError];
 /** Rejects on purpose: not a missing module, and not a programming error. */
 async function refuses(promise, why) {
   await assert.rejects(
@@ -412,4 +412,133 @@ test('SPIKE-01-AC13: with the exemption, a hole in the ticks or a sleep over the
     'invalid',
     'a break that could have been during the gap was ignored',
   );
+});
+
+// With the exemption, judged on the stretches the harness was intact for, as
+// in S1 (review loop 2): every timed break is taken out of the gap together,
+// and a stretch over 120 s left with the ticks up makes the run failed. Only
+// when none is left is it invalid. gapOf121s above is too short to tell the
+// two rules apart, so these use a gap of 200 s, from 20 min 30 s to 23 min
+// 50 s. The ticks are at 5 s past each 10 s.
+
+/** With the exemption: arrivals every minute but for one gap of 200 s, from 20 min 30 s to 23 min 50 s. */
+const gapOf200s = (options) =>
+  run(
+    [...every(MIN, 30 * S, 20 * MIN + 30 * S), ...every(MIN, 23 * MIN + 50 * S, END - 10 * S)].map(
+      (t) => arrival(t, { exempt: true }),
+    ),
+    options,
+  );
+
+test('SPIKE-01-AC7: with the exemption, a gap that a break covers only in part, leaving more than 120 s with the ticks up, is failed, and the break stays in the evidence', async () => {
+  // No tick from 22 min 55 s to 24 min 35 s: 145 s of the gap are left before it.
+  const hole = await judgeS3({
+    exemption: true,
+    records: gapOf200s({ tickHoles: [[23 * MIN, 24 * MIN + 30 * S]] }),
+  });
+  assert.equal(hole.status, 'failed', 'a hole over the end of the gap rescued the 145 s before it');
+  assert.equal(hole.largestGapMs, 200 * S);
+  assert.match(hole.evidence.join('\n'), /tick/i, 'the hole is not in the evidence');
+
+  // A sleep from 20 min to 21 min leaves the gap's last 170 s.
+  const slept = sleepBreak(20 * MIN, 60);
+  const sleep = await judgeS3({ exemption: true, records: gapOf200s(), breaks: [slept] });
+  assert.equal(sleep.status, 'failed', 'a sleep over the start of the gap rescued 170 s');
+  assert.ok(sleep.evidence.includes(slept.text), 'the sleep is not in the evidence');
+});
+
+test('SPIKE-01-AC13: with the exemption, breaks that together leave no stretch of the gap over 120 s make an S3 run invalid', async () => {
+  // A sleep from 21 min to 22 min leaves 30 s and 110 s.
+  const inside = await judgeS3({
+    exemption: true,
+    records: gapOf200s(),
+    breaks: [sleepBreak(21 * MIN, 60)],
+  });
+  assert.equal(inside.status, 'invalid', "the Mac's sleep was judged as a silent phone");
+
+  // A sleep from 20 min to 21 min 30 s and the hole from 22 min 55 s to
+  // 24 min 35 s leave 85 s between them; each alone would leave over 120 s.
+  const both = await judgeS3({
+    exemption: true,
+    records: gapOf200s({ tickHoles: [[23 * MIN, 24 * MIN + 30 * S]] }),
+    breaks: [sleepBreak(20 * MIN, 90)],
+  });
+  assert.equal(both.status, 'invalid', 'the breaks were taken out of the gap one at a time');
+});
+
+// Without the exemption, the verdict is settled when the restrictions start:
+// the app's "not exempt" report reached the receiver before them, or it did
+// not (review loop 2, the same principle). So only a break before the
+// "restrictions-started" mark, or over it, can explain a missing report, and
+// makes the run invalid. A timed break after it does not rescue a report that
+// never came with the harness intact, and stays in the evidence. A break with
+// no time could have been anywhere, so it makes the run invalid; and a run
+// that would pass is invalid with any break, as before.
+
+/** Without the exemption: the app says it is exempt, so no "not exempt" report ever comes. */
+const neverReported = (options) => run(minutely({ exempt: true }), options);
+
+test('SPIKE-01-AC7: without the exemption, no "not exempt" report before the restrictions is failed even with a hole in the ticks or a sleep after they started, and the break stays in the evidence', async () => {
+  const hole = await judgeS3({
+    exemption: false,
+    records: neverReported({ tickHoles: [[20 * MIN, 22 * MIN]] }),
+  });
+  assert.equal(hole.status, 'failed', 'a hole at 20 min rescued a report missed at 2 min');
+  assert.equal(hole.notExemptReported, false);
+  assert.match(hole.evidence.join('\n'), /tick/i, 'the hole is not in the evidence');
+
+  const slept = sleepBreak(30 * MIN, 60);
+  const sleep = await judgeS3({ exemption: false, records: neverReported(), breaks: [slept] });
+  assert.equal(sleep.status, 'failed', 'a sleep at 30 min rescued a report missed at 2 min');
+  assert.ok(sleep.evidence.includes(slept.text), 'the sleep is not in the evidence');
+});
+
+test('SPIKE-01-AC13: without the exemption, a break before the restrictions or over their start, or one with no time, makes a run with no "not exempt" report invalid; and a run with the report is invalid with any break', async () => {
+  const cases = [
+    // No tick from 35 s to 1 min 55 s, before the mark at 2 min.
+    ['a hole before the restrictions', neverReported({ tickHoles: [[40 * S, MIN + 50 * S]] }), []],
+    // No tick from 1 min 45 s to 2 min 25 s, over the mark.
+    [
+      'a hole over their start',
+      neverReported({ tickHoles: [[MIN + 50 * S, 2 * MIN + 20 * S]] }),
+      [],
+    ],
+    ['a sleep over their start', neverReported(), [sleepBreak(MIN + 30 * S, 60)]],
+    ['a break with no time', neverReported(), ['the emulator exited']],
+    [
+      'the report came, and a hole after the restrictions started',
+      run(minutely({ exempt: false }), { tickHoles: [[20 * MIN, 22 * MIN]] }),
+      [],
+    ],
+    [
+      'the report came, and a sleep after the restrictions started',
+      run(minutely({ exempt: false })),
+      [sleepBreak(30 * MIN, 60)],
+    ],
+  ];
+  for (const [what, records, breaks] of cases) {
+    const result = await judgeS3({ exemption: false, records, breaks });
+    assert.equal(result.status, 'invalid', what);
+    assert.ok(result.evidence.length > 0, `${what}: invalid without its evidence`);
+  }
+});
+
+test('SPIKE-01-AC7: without the exemption, a "not exempt" report that reaches the receiver exactly as the restrictions start is not before them, and fails; 1 ms earlier passes', async () => {
+  /** Unknown at 30 s and 1 min 30 s, then "not exempt" from `first` on. */
+  const reportFrom = (first) =>
+    run(
+      [
+        ...[30 * S, MIN + 30 * S].map((t) => arrival(t, { exempt: null })),
+        arrival(first, { exempt: false }),
+        ...every(MIN, 2 * MIN + 30 * S, END - 30 * S).map((t) => arrival(t, { exempt: false })),
+      ],
+      {},
+    );
+  const atTheMark = await judgeS3({ exemption: false, records: reportFrom(RESTRICTED) });
+  assert.equal(atTheMark.notExemptReported, false, 'a report at the mark counted as before it');
+  assert.equal(atTheMark.status, 'failed');
+
+  const justBefore = await judgeS3({ exemption: false, records: reportFrom(RESTRICTED - 1) });
+  assert.equal(justBefore.notExemptReported, true);
+  assert.equal(justBefore.status, 'passed');
 });
