@@ -2624,3 +2624,89 @@ any other path is work, not a candidate for the same treatment.
     "real phones" lines (superseded by D-037) and "tested on real walks"
     (against D-035) are corrected; the Summary is filled in; and
     `plan/README.md` shows Section 4 as ✅.
+
+## D-087 — STORE-01: Critical Alerts request drafted; the alert-level rule's scope and the no-responder warning's level settled
+- **Date:** 2026-10-01 · **Status:** Accepted (owner, 2026-10-01) ·
+  **Section:** 4/M1
+- **Context:** STORE-01 drafted the text of the Critical Alerts entitlement
+  request and the owner's steps to send it
+  ([`critical-alerts-request.md`](critical-alerts-request.md); spec:
+  [`../specs/STORE-01.md`](../specs/STORE-01.md)). Writing it forced four
+  questions the plan had left open: which notifications the alert-level rule's
+  "SOS-related" half covers, which apps the request names, when the bundle
+  identifiers are fixed, and whether the last-responder rule's warning should
+  join the lost-contact alert at the critical level. The owner answered Q1 to
+  Q3 on 2026-10-01, and Q4 the same day, after step 5's safety review.
+- **Decision:**
+  1. **Only the lost-contact alert uses Critical Alerts (Q1).** The MVP has no
+     SOS story — discreet triggers are parked, and CALL-02's 112 story calls
+     112 through the phone's own calling path without alerting the group — so
+     REL-06's "Lost-contact and SOS-related alerts" reads, for the MVP, as the
+     lost-contact alert (LOST-02) alone. The call notice to #1 (CALL-03,
+     "<name> is calling you and sharing their location") stays at Time
+     Sensitive.
+  2. **SM-02's no-responder warning to the walker stays non-critical (Q4).**
+     It is the one walker-facing notice where missing it means a later
+     silence alerts nobody, so SM-02's own spec must make the no-responder
+     state loud on the walker's journey screen itself, not rely on a
+     notification alone.
+  3. **The request names the production app and one test build (Q2).** The
+     test build is for automated, real-iPhone tests of the lost-contact alert
+     before the group relies on the app (L9, D-041) — not a demo. The owner
+     chose this over the drafting session's recommendation (production only),
+     a known trade-off recorded as R13 in STORE-01's spec.
+  4. **Both bundle identifiers are fixed at sending, name-neutral (Q3):**
+     production is the AS's own domain, reversed, plus a neutral word; the
+     test build is the same plus `.test` (the location SDK's licence, clause
+     1.9, covers development suffixes including `.test`, read 2026-09-30,
+     D-086). Neither value is fixed today. They are recorded with `/decision`
+     when the owner fixes them, at sending, and they are **public**: first in
+     `docs/plan/decisions.md`, later in `apps/mobile/app.config.ts`.
+
+  **The tests M3 owes these promises,** written in M3 whatever Apple answers
+  (`docs/plan/critical-alerts-request.md`, Part E, item 6, which this decision
+  points to so M3 finds them):
+  - only the lost-contact message carries the critical level — L6, with the
+    recording push fake, over **every** outbox message type, plus L2 for the
+    pure rule;
+  - no notification the app schedules itself uses the critical level — an L1
+    rule, or an L2 test on the safety core's reminder builder;
+  - exactly one lost-contact message per responder per event, across the SMS
+    escalation, SM-10's resumed escalation and the watchdog run twice — L6,
+    with an opaque, per-message collapse ID, never a walker, user or journey
+    ID;
+  - no further critical push follows the SMS — the same L6 test, running time
+    past the 2-minute SMS;
+  - the critical permission is requested only in responder setup (GRP-04) —
+    an L1 import rule, plus L5 that setup asks;
+  - readiness follows the granted level, re-read at app start and in the
+    foreground — L6;
+  - no push carries personal details in its payload or its request headers,
+    over every push message type, with the collapse ID checked too — L6;
+  - no FCM and no Expo push token on iOS — an L1 rule, plus L5 or L6 that the
+    iOS path registers the native APNs device token.
+
+  **Tracked carriers:** REL-06, CALL-03, REL-04, LOST-02, REL-07, LOST-07,
+  SM-10, GRP-04. **Not tracked, and no gate enforces them:** AR-05 (the
+  outbox), AR-06 (the watchdog), and the content-free payload rule (sourced
+  from D-086 and `04-tech-stack.md` finding 4) — `req:coverage` asks for a
+  test only against tracked requirements, and for an untracked one the
+  test-name prefix is practice, not an obligation (D-074).
+- **Consequences:**
+  - The owner sends the request once A-02 exists, by M4 at the latest
+    (**A-30**, added to `plan/README.md`), and records only the outcome:
+    approved, refused or partial for each identifier, the date, and any
+    condition Apple sets — never Apple's message itself, or any name, email
+    address or case number from it.
+  - The app is never transferred to another account or team (D-027; finding
+    10 of `04-tech-stack.md`: a transfer would probably need a new request).
+  - Time Sensitive stays the fallback on every path a refusal, a decline or an
+    unnamed build leaves open (D-020).
+  - Four flags go to other requirements' own specs, to be picked up when each
+    is written: **REL-10** (the canary never uses the critical level);
+    **SM-02** (the no-responder state loud on the walker's journey screen,
+    point 2 above); **GRP-04** (readiness can go stale while a responder does
+    not open the app); **CALL-03** (the call notice to #1 carries a name,
+    filled in on the phone, never sent in clear).
+  - Supersedes nothing. It settles how D-020 and REL-06 read for the MVP,
+    within what they already say.

@@ -422,8 +422,8 @@ the AS's details, and anything copied from the form, stay out of it.
 ### 6. Record it
 
 **What:**
-- Write the date or dates sent in the owner to-do row for this request in
-  [`README.md`](README.md).
+- Write the date or dates sent in the owner to-do row for this request,
+  **A-30**, in [`README.md`](README.md).
 - When Apple answers, record **only its outcome** as a decision (`/decision`):
   approved, refused or partial for each identifier, the date, and any
   condition Apple sets.
