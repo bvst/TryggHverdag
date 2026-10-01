@@ -9,7 +9,10 @@
 // the device's clock against the Mac's, the platform writing its record after
 // showing the reminder, and the rule's own 60 s step. They count from the
 // "app-ended" mark, or from the last arrival when arrivals stopped after it. A
-// shorter run is invalid, never passed or failed.
+// shorter run is never passed. A failure it already shows is final (the code
+// review's S5): a reminder seen more than 5 min after the last arrival, or,
+// while arrivals went on, a gap over 120 s; more watching could change
+// neither. Any other short run is invalid. A break makes any run invalid.
 import {
   GAP_LIMIT_MS,
   arrivalsIn,
@@ -75,7 +78,10 @@ export function judgeS2({ records, reminders, breaks = [] }) {
       );
     }
   }
-  if (broken.length > 0 || short.length > 0) status = 'invalid';
+  // Failed with a late reminder already seen, or with a gap while arrivals went on.
+  const final = status === 'failed' && (!arrivalsStopped || reminderDelayMs !== null);
+  if (broken.length > 0) status = 'invalid';
+  else if (short.length > 0 && !final) status = 'invalid';
   return {
     status,
     arrivalsStopped,

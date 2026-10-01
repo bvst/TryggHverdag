@@ -3,12 +3,19 @@
 //
 // A journey shorter than 45 min is never passed. A gap over 120 s it already
 // shows is final, because more watching could only make it longer, so that run
-// is failed; any other short run is invalid. A break still makes any run invalid.
+// is failed; any other short run is invalid.
+//
+// Breaks (the safety review's B2a): a gap over 120 s seen with the harness
+// intact is failed, unless a break with a time (a hole in the receiver's
+// ticks, or a sleep of the Mac) overlaps that gap. A break the driver saw,
+// with no time, makes the run invalid; so does any break when no gap is over
+// 120 s. Every break stays in the evidence.
 import {
   GAP_LIMIT_MS,
   arrivalsIn,
-  gapsBetween,
-  harnessEvidence,
+  gapRule,
+  gapSpans,
+  harnessBreaks,
   journeyWindow,
   shortRun,
 } from './journey.mjs';
@@ -17,7 +24,7 @@ import {
 const REQUIRED_MS = 45 * 60_000;
 
 /**
- * @param {{ records: object[], breaks?: string[] }} input
+ * @param {{ records: object[], breaks?: (string | { text: string, from: number, to: number })[] }} input
  * @returns {{ status: 'passed' | 'failed' | 'invalid', largestGapMs: number,
  *   gapsOver60s: number, gapsOver120s: number,
  *   stateChanges: { afterMs: number, moving: boolean }[], evidence: string[] }}
@@ -25,9 +32,10 @@ const REQUIRED_MS = 45 * 60_000;
 export function judgeS1({ records, breaks = [] }) {
   const window = journeyWindow(records);
   const arrivals = arrivalsIn(records, window);
-  const gaps = gapsBetween(arrivals, window);
+  const spans = gapSpans(arrivals, window);
+  const gaps = spans.map((gap) => gap.ms);
   const largestGapMs = Math.max(...gaps);
-  const broken = harnessEvidence(records, window, breaks);
+  const harness = harnessBreaks(records, window, breaks);
   const short = shortRun(
     window.end.mono - window.start.mono,
     REQUIRED_MS,
@@ -44,16 +52,14 @@ export function judgeS1({ records, breaks = [] }) {
     moving = arrival.moving;
   }
 
-  let status = 'passed';
-  if (broken.length > 0) status = 'invalid';
-  else if (largestGapMs > GAP_LIMIT_MS) status = 'failed';
-  else if (short.length > 0) status = 'invalid';
+  let status = gapRule(spans, harness) ?? 'passed';
+  if (status === 'passed' && short.length > 0) status = 'invalid';
   return {
     status,
     largestGapMs,
     gapsOver60s: gaps.filter((gap) => gap > 60_000).length,
     gapsOver120s: gaps.filter((gap) => gap > GAP_LIMIT_MS).length,
     stateChanges,
-    evidence: [...broken, ...short],
+    evidence: [...harness.texts, ...short],
   };
 }

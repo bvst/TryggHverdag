@@ -82,14 +82,31 @@ export function shortRun(measuredMs, requiredMs, describe) {
 }
 
 /**
- * Why the harness, not the device, may have decided the run: the breaks the
- * driver saw, kept word for word, and every hole in the receiver's ticks inside
- * the window. An empty list means the run is valid.
+ * A break: words alone (one the driver saw, with no time), or
+ * { text, from, to }, its span on the Mac's wall clock in ms (a sleep, as
+ * readSleeps gives it). Throws on anything else.
  */
-export function harnessEvidence(records, window, breaks = []) {
-  if (!Array.isArray(breaks) || breaks.some((line) => typeof line !== 'string' || line === '')) {
-    throw new Error('breaks must be a list of non-empty descriptions');
+function checkBreaks(breaks) {
+  const ok = (found) =>
+    (typeof found === 'string' && found !== '') ||
+    (typeof found?.text === 'string' &&
+      found.text !== '' &&
+      Number.isFinite(found.from) &&
+      Number.isFinite(found.to));
+  if (!Array.isArray(breaks) || !breaks.every(ok)) {
+    throw new Error('breaks must be a list of descriptions, each with its span or none');
   }
+}
+
+/**
+ * The harness's breaks inside the window, sorted by kind:
+ * - untimed: the driver's, which could have been at any time;
+ * - timed: each with its span, on the receiver's monotonic clock (a hole in the
+ *   ticks) or on the Mac's wall clock (a sleep);
+ * - texts: every break's words, for the evidence.
+ */
+export function harnessBreaks(records, window, breaks = []) {
+  checkBreaks(breaks);
   const ticks = records
     .filter((record) => record.kind === 'tick' && inWindow(record, window))
     .map((tick) => tick.mono);
@@ -99,10 +116,57 @@ export function harnessEvidence(records, window, breaks = []) {
     const silence = times[i] - times[i - 1];
     if (silence > TICK_HOLE_MS) {
       const from = duration(times[i - 1] - window.start.mono);
-      holes.push(
-        `the receiver wrote no tick for ${duration(silence)}, from ${from} into the journey`,
-      );
+      holes.push({
+        text: `the receiver wrote no tick for ${duration(silence)}, from ${from} into the journey`,
+        clock: 'mono',
+        from: times[i - 1],
+        to: times[i],
+      });
     }
   }
-  return [...breaks, ...holes];
+  const untimed = breaks.filter((found) => typeof found === 'string');
+  const slept = breaks
+    .filter((found) => typeof found !== 'string')
+    .map(({ text, from, to }) => ({ text, clock: 'wall', from, to }));
+  const timed = [...slept, ...holes];
+  return { untimed, timed, texts: [...untimed, ...timed.map((found) => found.text)] };
+}
+
+/**
+ * Why the harness, not the device, may have decided the run: the breaks the
+ * driver saw and the Mac's sleeps, kept word for word, and every hole in the
+ * receiver's ticks inside the window. An empty list means the run is valid.
+ */
+export function harnessEvidence(records, window, breaks = []) {
+  return harnessBreaks(records, window, breaks).texts;
+}
+
+/** Each silence between start, the arrivals and end, with its span on both clocks. */
+export function gapSpans(arrivals, { start, end }) {
+  const points = [start, ...arrivals, end];
+  return points.slice(1).map((point, i) => ({
+    ms: point.mono - points[i].mono,
+    mono: [points[i].mono, point.mono],
+    wall: [points[i].at, point.at],
+  }));
+}
+
+/**
+ * The 120 s rule with the harness's breaks (the safety review's B2a): a gap
+ * over 120 s is a failure seen with the harness intact unless a timed break
+ * overlaps it. Gives 'invalid' when an untimed break exists, or when every gap
+ * over 120 s is overlapped by a timed break, or when a timed break exists and
+ * no gap is over 120 s; 'failed' when a gap over 120 s has no timed break over
+ * it; null otherwise.
+ */
+export function gapRule(gaps, { untimed, timed }) {
+  const overlaps = (found, gap) => {
+    const [from, to] = found.clock === 'mono' ? gap.mono : gap.wall;
+    return found.from <= to && found.to >= from;
+  };
+  if (untimed.length > 0) return 'invalid';
+  const seen = gaps.filter((gap) => gap.ms > GAP_LIMIT_MS);
+  if (seen.some((gap) => !timed.some((found) => overlaps(found, gap)))) return 'failed';
+  if (timed.length > 0) return 'invalid';
+  return null;
 }

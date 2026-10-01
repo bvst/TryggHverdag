@@ -5,7 +5,13 @@
 // to the journey's end. A shorter run is never passed. A failure it already
 // shows is final, so that run is failed: with the exemption, a gap over 120 s;
 // without it, no "not exempt" report before the restrictions started. Any other
-// short run is invalid. A break still makes any run invalid.
+// short run is invalid.
+//
+// Breaks: with the exemption, as in S1 (the safety review's B2a), a gap over
+// 120 s seen with the harness intact is failed unless a break with a time
+// overlaps it; a break with no time, or any break when no gap is over 120 s,
+// makes the run invalid. Without the exemption, any break makes the run
+// invalid. Every break stays in the evidence.
 //
 // Which restrictions held comes from the driver's readings at the start and the
 // end (`inForce`): deep Doze (`dumpsys deviceidle get deep` = IDLE) and the
@@ -17,8 +23,9 @@
 import {
   GAP_LIMIT_MS,
   arrivalsIn,
-  gapsBetween,
-  harnessEvidence,
+  gapRule,
+  gapSpans,
+  harnessBreaks,
   journeyWindow,
   markInside,
   shortRun,
@@ -62,7 +69,8 @@ function restrictionsHeld(inForce) {
  * the app's "not exempt" report reached the receiver before the restrictions
  * started; what the restrictions then did is recorded, not judged.
  *
- * @param {{ exemption: boolean, records: object[], breaks?: string[],
+ * @param {{ exemption: boolean, records: object[],
+ *   breaks?: (string | { text: string, from: number, to: number })[],
  *   inForce: { start: { idle: string, bucket: string }, end: { idle: string, bucket: string } } }} input
  */
 export function judgeS3({ exemption, records, breaks = [], inForce }) {
@@ -73,9 +81,10 @@ export function judgeS3({ exemption, records, breaks = [], inForce }) {
   const window = journeyWindow(records);
   const restricted = markInside(records, 'restrictions-started', window);
   const arrivals = arrivalsIn(records, window);
-  const gaps = gapsBetween(arrivals, window);
+  const spans = gapSpans(arrivals, window);
+  const gaps = spans.map((gap) => gap.ms);
   const largestGapMs = Math.max(...gaps);
-  const broken = harnessEvidence(records, window, breaks);
+  const harness = harnessBreaks(records, window, breaks);
   const short = shortRun(
     window.end.mono - restricted.mono,
     REQUIRED_MS,
@@ -87,11 +96,15 @@ export function judgeS3({ exemption, records, breaks = [], inForce }) {
   const noDoze =
     exemption && !doze ? [`deep Doze did not hold for the whole run (${readings})`] : [];
 
-  const failed = exemption ? largestGapMs > GAP_LIMIT_MS : !notExemptReported;
   let status = 'passed';
-  if (broken.length > 0) status = 'invalid';
-  else if (failed) status = 'failed';
-  else if (short.length > 0 || noDoze.length > 0) status = 'invalid';
+  if (exemption) {
+    status = gapRule(spans, harness) ?? 'passed';
+  } else if (harness.texts.length > 0) {
+    status = 'invalid';
+  } else if (!notExemptReported) {
+    status = 'failed';
+  }
+  if (status === 'passed' && (short.length > 0 || noDoze.length > 0)) status = 'invalid';
   return {
     status,
     exemption,
@@ -99,6 +112,6 @@ export function judgeS3({ exemption, records, breaks = [], inForce }) {
     largestGapMs,
     gapsOver120s: gaps.filter((gap) => gap > GAP_LIMIT_MS).length,
     restrictions,
-    evidence: [...broken, ...short, ...noDoze],
+    evidence: [...harness.texts, ...short, ...noDoze],
   };
 }

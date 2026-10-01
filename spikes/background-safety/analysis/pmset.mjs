@@ -39,8 +39,10 @@ function epoch(stamp) {
 /**
  * @param {{ text: string, from: number, to: number }} input
  *   `from` and `to`: the run's window on the Mac's wall clock, in ms since the epoch.
- * @returns {string[]} one break per Sleep or DarkWake that overlaps the window,
- *   in time order, each quoting the time as pmset printed it
+ * @returns {{ text: string, from: number, to: number }[]} one break per Sleep or
+ *   DarkWake that overlaps the window, in time order: its words, quoting the
+ *   time as pmset printed it, and its span on the Mac's wall clock in ms, from
+ *   when it began to when it ended, so a judge can tell whether it overlaps a gap
  */
 export function readSleeps({ text, from, to }) {
   if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) {
@@ -83,10 +85,11 @@ export function readSleeps({ text, from, to }) {
     const until = at + Number(lasted[1]) * 1000;
     if (at <= to && until >= from) {
       breaks.push({
-        at,
-        line: `${meaning}: pmset logged ${domain} at ${stamp} for ${lasted[1]} secs`,
+        text: `${meaning}: pmset logged ${domain} at ${stamp} for ${lasted[1]} secs`,
+        from: at,
+        to: until,
       });
     }
   }
-  return breaks.sort((a, b) => a.at - b.at).map((found) => found.line);
+  return breaks.sort((a, b) => a.from - b.from);
 }
