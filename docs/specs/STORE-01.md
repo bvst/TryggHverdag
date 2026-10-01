@@ -698,7 +698,7 @@ only review can make.
 | AC8 | none | — | `code-reviewer` |
 | AC9 | none | — | `code-reviewer`; the owner |
 | AC10 | none | — | `safety-reviewer` |
-| AC11 | none | In part: `scan-sensitive.mjs` blocks Norwegian mobile numbers and secrets on every write, and gitleaks (`security`) scans for secrets | `privacy-security-reviewer`, for the rest |
+| AC11 | none | In part: `scan-sensitive.mjs` blocks `+47`/`0047`-prefixed Norwegian mobile numbers and secrets on Write and Edit (not 8-digit domestic numbers, email addresses or organisation numbers, and not files written from a shell), and gitleaks (`security`) scans for secrets | `privacy-security-reviewer`, for the rest |
 | AC12 | none | — | `code-reviewer` |
 | AC13 | none | — | `safety-reviewer`; the owner |
 | This spec | — | `req:coverage --fail-on-uncovered-changed` (`traceability`): it names no tracked requirement without a test | — |
@@ -710,7 +710,10 @@ only review can make.
   9-digit numbers and coordinate-shaped numbers in one file. But:
   - the file is a one-off, written once and filled in once;
   - the leak-prone fields are kept out by design (placeholders, AC11);
-  - the likeliest leak, a phone number, is already blocked on every write;
+  - a phone number written with `+47` or `0047` is blocked on Write and Edit;
+    a domestic 8-digit number, an email address or an organisation number is
+    not (checked by `test-author` at step 2, 2026-10-01), so review carries
+    those;
   - a regex over prose would be the kind of decorative check D-074 describes:
     traceability in appearance, over a number that cannot move.
 - **A required-sections check** would prove that headings exist, not that what
@@ -778,7 +781,7 @@ promises, and about what happens if it is late or refused.
 | R2 | Sent late | The group starts in M6 without Critical Alerts, because approval takes weeks | F6 | Drafted now; an owner to-do (AC12); M4 at the latest |
 | R3 | An overclaim | Apple approves on a promise M3 later breaks, for example routine notices at the critical level. Responders then silence the app | F6 | Permitted claims only; "will" throughout; Part B's sources; M3's tests (Part E, item 6); Q1's answer recorded as a decision |
 | R4 | The wrong App ID or team | The entitlement sits on a placeholder, on a build the group never installs, on an individual account, or on an app later transferred | F6 | A-02 as the AS (D-027); both identifiers fixed before the App IDs are registered (Q3); production named first (Q2); no transfer, ever |
-| R5 | Personal data in the public repository | The AS's numbers, an email address or the owner's name committed with the draft | — | Placeholders, filled in Apple's form only (AC11); review; the write-time hook for phone numbers |
+| R5 | Personal data in the public repository | The AS's numbers, an email address or the owner's name committed with the draft | — | Placeholders, filled in Apple's form only (AC11); review; the write-time hook for `+47`/`0047` phone numbers only |
 | R6 | Alert fatigue | False alarms at the critical level wake responders, who switch Critical Alerts off or leave the group | F6, caused by F1 to F4 | C10 says so honestly; the false-alarm target is measured (D-022); the threshold is the owner's to tune (D-021); readiness shows who has it off |
 | R7 | The canary at the critical level | If the canary journey's test responder were a person's iPhone, it would break through silence at every canary run, and Part A's picture of rarity would be wrong | F8 | Flagged for the canary rule's own spec: its test responder is not a person's phone at the critical level |
 | R8 | Approved, but not heard | The entitlement is granted, and nobody has shown the alert sounding on a silenced iPhone (RR-01) | F6 | L9 checks the permission states, plus RR-01's closest automated check (Part E, item 7). Part A never says it has been heard |
