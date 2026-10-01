@@ -97,7 +97,12 @@ const BLOCKS = [
 const EXTRAS = [
   {
     platform: 'android',
-    runs: twice({ scenario: 's1', case: 'exempt', minutes: 50, timeout: 70 }),
+    // The first carries the capture, as S1's first run does, so the same runs
+    // can show whose Firebase lookup it is (with firebase-logcat.txt).
+    runs: [
+      { scenario: 's1', case: 'exempt', tcpdump: true, minutes: 50, timeout: 75 },
+      { scenario: 's1', case: 'exempt', minutes: 50, timeout: 70 },
+    ],
   },
 ];
 

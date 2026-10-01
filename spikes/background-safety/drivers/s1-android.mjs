@@ -10,7 +10,10 @@
 // and the app's own `exempt: true` report reached the receiver (meta.json,
 // exemptionInForce). Everything else is S1's: screen off, battery unplugged,
 // no forced Doze, the same route and seed. The run id carries the case
-// (…-s1-android-exempt-N), so its runs never count as the plain case's.
+// (…-s1-android-exempt-N), so its runs never count as the plain case's. Each
+// exempt run also saves firebase-logcat.txt (the Firebase-related tags alone,
+// with each line's pid) and records the app's pid and the device's clock in
+// meta.json, for telling a Firebase lookup's owner by hand; no judge reads it.
 //   node drivers/s1-android.mjs [--case exempt] [--dry] [--tcpdump]
 import { join } from 'node:path';
 
@@ -70,10 +73,17 @@ main(async () => {
    * deviceidle's own list shows it and as the app itself reported it.
    */
   let exemptionInForce = null;
+  // With the exemption, the Firebase-related logcat (those tags alone), the
+  // app's pid and the device's clock, so a Firebase lookup in the capture can
+  // be told as the app's or Play Services' by hand.
+  const firebase = exempt ? android.firebaseLogcat(run) : null;
+  const appPids = [];
+  const clock = exempt ? { start: android.deviceClock() } : null;
   try {
     await runJourney(run, device, {
       grants: { exempt },
       during: async () => {
+        if (exempt) appPids.push({ at: Date.now(), when: 'launched', pid: android.pidOf() });
         await hold(run, seconds(20), 'the first uploads, with the screen on');
         if (exempt) exemptionInForce = await exemptionShown(run);
         android.shell('dumpsys battery unplug');
@@ -82,11 +92,17 @@ main(async () => {
       },
     });
   } finally {
+    if (exempt) {
+      appPids.push({ at: Date.now(), when: 'journey-ended', pid: android.pidOf() });
+      clock.end = android.deviceClock();
+      firebase.stop();
+    }
     run.save('crash.txt', android.shell('logcat -b crash -d'));
     device.tearDown();
     await run.close({
       exemption: exempt,
       exemptionInForce,
+      ...(exempt ? { appPids, deviceClock: clock } : {}),
       capture: capture === null ? null : 'capture.pcap',
       wifiOffForCapture: capture !== null,
       emulator: device.emulator,

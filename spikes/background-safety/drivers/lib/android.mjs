@@ -227,6 +227,76 @@ export const screenOff = (run) => {
 export const pidOf = () => quiet(`pidof ${APP_ID}`)?.trim() || null;
 
 /**
+ * The Firebase-related logcat tags kept for S1 exempt (2026-10-01), so a
+ * Firebase Installations lookup in the capture can be told as the app's or
+ * Play Services' by hand. Google Play Services' own tag for Firebase
+ * Installations is not named here: it could not be confirmed without a device.
+ */
+export const FIREBASE_TAGS = [
+  'FirebaseApp',
+  'FirebaseInitProvider',
+  'FirebaseInstallations',
+  'FirebaseMessaging',
+  'FirebaseInstanceId',
+  'FA',
+  'FA-SVC',
+];
+
+/** A `logcat -v threadtime -v epoch` line: time, pid, tid, level, then its tag before ": ". */
+const LOGCAT_TAGGED =
+  /^\s*(?:\d+\.\d+|\d\d-\d\d \d\d:\d\d:\d\d\.\d+)\s+\d+\s+\d+\s+[VDIWEFAS]\s+([^:]*?)\s*: /;
+
+/**
+ * Streams logcat, filtered to FIREBASE_TAGS alone, from the buffer since boot
+ * to `stop()`, which saves firebase-logcat.txt. Each line keeps its pid, and
+ * its time in seconds since the epoch on the device's clock. logcat's own
+ * filter (`-s`) is checked again here: a line whose tag is not in the list is
+ * dropped and only counted, so nothing else, and no position, is ever saved.
+ * Evidence read by hand; no judge reads it.
+ */
+export function firebaseLogcat(run) {
+  const tags = new Set(FIREBASE_TAGS);
+  const kept = [];
+  let dropped = 0;
+  let rest = '';
+  const keep = (line) => {
+    const tagged = LOGCAT_TAGGED.exec(line.replace(/\r$/, ''));
+    if (tagged !== null && tags.has(tagged[1])) kept.push(line.replace(/\r$/, ''));
+    else if (line.trim() !== '') dropped += 1;
+  };
+  const filters = FIREBASE_TAGS.map((tag) => `${tag}:V`);
+  const child = spawn(ADB, ['logcat', '-v', 'threadtime', '-v', 'epoch', '-s', ...filters], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  child.stdout.setEncoding('utf8').on('data', (chunk) => {
+    const lines = `${rest}${chunk}`.split('\n');
+    rest = lines.pop();
+    for (const line of lines) keep(line);
+  });
+  let exited = false;
+  child.on('exit', (code) => {
+    exited = true;
+    run.log('firebase-logcat-exited', { code });
+  });
+  run.log('firebase-logcat-started', { tags: FIREBASE_TAGS });
+  return {
+    stop: () => {
+      if (!exited) child.kill();
+      keep(rest);
+      run.save('firebase-logcat.txt', kept.map((line) => `${line}\n`).join(''));
+      run.log('firebase-logcat-saved', { lines: kept.length, dropped });
+    },
+  };
+}
+
+/** The device's clock against the Mac's, for reading logcat's times by hand. */
+export function deviceClock() {
+  const macAt = Date.now();
+  const deviceS = Number(quiet('date +%s')?.trim());
+  return { macAt, deviceEpochS: Number.isFinite(deviceS) ? deviceS : null };
+}
+
+/**
  * zipalign's check of the installed build for 16 KB pages: its output and its
  * exit code, for readAlignment. It never throws: exit code 1 (not aligned) is
  * a result, and the judge, not the driver, decides what it means.

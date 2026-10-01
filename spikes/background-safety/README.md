@@ -182,7 +182,15 @@ node drivers/s7-ios.mjs --case always-to-inuse [--dry]
   `exempt: true` report has reached the receiver (`meta.json`,
   `exemptionInForce`). If it cannot show that, the run stops with a break,
   which makes it invalid. Everything else is S1's: screen off, battery
-  unplugged, no forced Doze, the same route and seed.
+  unplugged, no forced Doze, the same route and seed. The runner's first
+  exempt run carries the capture, as S1's first run does. Every exempt run
+  saves `firebase-logcat.txt`: logcat filtered to the Firebase-related tags
+  alone (`FIREBASE_TAGS` in `drivers/lib/android.mjs`), each line with its pid
+  and its time on the device's clock, checked again line by line so nothing
+  else is kept. `meta.json` records the app's pid (`appPids`) and the device's
+  clock against the Mac's (`deviceClock`). It is evidence for telling a
+  Firebase lookup in the capture as the app's or Play Services', read by
+  hand; no judge reads it.
 
 ### The overnight runner
 
