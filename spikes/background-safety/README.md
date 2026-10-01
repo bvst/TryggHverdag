@@ -202,7 +202,9 @@ node drivers/run-all.mjs --night night-YYYYMMDD-s1-exempt --only s1/android/exem
                                                  # one case outside the plan, twice, in a night of its own
 node drivers/summarize.mjs --night night-YYYYMMDD \
   [--build-android passed --build-ios passed --licence passed]
+node drivers/summarize.mjs --manifest <path> --manifest <path> …   # several nights as one
 node drivers/rejudge.mjs --night night-YYYYMMDD  # re-judge a night from its saved folders
+node drivers/results-tables.mjs --manifest <path> [--manifest <path> …]   # the results' tables
 ```
 
 - **Self-checks first:**
@@ -231,9 +233,9 @@ node drivers/rejudge.mjs --night night-YYYYMMDD  # re-judge a night from its sav
   says nothing about the SDK. It is repeated, at most twice extra per case.
   After that the case stops, and the manifest says why.
 - **A failed run is never repeated** (D-060).
-- **The emulator is stopped** after each run with a capture, so no later run
-  writes into its pcap, and after any invalid Android run, killed outright if
-  it does not answer.
+- **The emulator is stopped** after each run with a capture, before the run
+  is judged, so its pcap is complete and no later run writes into it; and
+  after any invalid Android run, killed outright if it does not answer.
 - **Everything goes in `~/spike-runs/<night>/`:** `manifest.jsonl` (one line
   per run, and each stopped case), `runner.log`, and each driver's output in
   `logs/`. Restarted with the same `--night`, the runner skips what the
@@ -246,12 +248,17 @@ prints each scenario's verdict per platform (through `judgeScenario`), with
 every run's status and evidence. "NO VERDICT" means a case has fewer than two
 valid runs: the harness broke, and the case needs runs, not a reading. Given
 the build and the licence as read by hand, it also prints the go/no-go, its
-input computed from the manifest (`analysis/manifest.mjs`).
+input computed from the manifests (`analysis/manifest.mjs`) against the
+runner's plan (`drivers/lib/plan.mjs`, with the S1 exempt case), so a planned
+case that never ran is "no verdict", never a pass. Several `--manifest`s are
+read as one: the night's and the S1-exempt night's together.
 
 **Re-judging:** `drivers/rejudge.mjs` judges every run of a night again from
 its saved folder, with the exit its driver had, and writes
-`manifest.rejudged.jsonl` beside the manifest. It only reads the manifest and
-the run folders. Summarize it with `--manifest`.
+`manifest.rejudged.jsonl` beside the manifest, each run with the commit that
+judged it and whether the tree was dirty. It only reads the manifest and the
+run folders (it checks the manifest's sha256 after writing), and keeps an
+earlier re-judge under its own time. Summarize it with `--manifest`.
 
 **What the harness had to learn (2026-09-30), and does:**
 
