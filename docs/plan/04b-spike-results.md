@@ -402,15 +402,19 @@ tap alone places the call; without it, a second tap is needed. "Passed" here
 means the behaviour was recorded as AC10 asks, not a judgement that the
 behaviour itself is good or bad.
 
-**iOS — documented, not observed.** Apple's documented behaviour for opening
-a `tel:` link (through `UIApplication.open(_:)`) could not be reached or
-quoted in this drafting session: there is no network access here. **This is
-recorded as unverified.** Before this document is treated as complete, someone
-with network access must read Apple's current documentation for
-`UIApplication.open(_:)` and `tel:` URLs, quote it here, and mark it
-"documented, not observed." The one-tap call story expects at most one system
-confirmation on an iPhone; that stays open until it is checked against the
-documentation and, eventually, a real phone (L9).
+**iOS — documented, not observed.** Read 2026-10-01, from Apple's URL Scheme
+Reference, "Phone Links" (developer.apple.com/library/archive/featuredarticles/
+iPhoneURLScheme_Reference/PhoneLinks/PhoneLinks.html — an archived Apple
+document):
+
+> "When a user opens a URL with the tel scheme in a native app, iOS 10.3 and
+> later displays an alert and requires user confirmation before dialing."
+
+So on a real iPhone, a call from the app is a tap plus one system
+confirmation — within the one-tap call story's "at most one system
+confirmation on an iPhone." This is **documented, not observed**: the
+simulator has no Phone app, so it stays open until it is checked against a
+real phone (L9).
 
 ### S7 — reduced location permission detected within a minute (AC11)
 
@@ -661,16 +665,23 @@ use; M3 decides whether it keeps it, weighed against S1 iOS's open failure
 
 ### 5.1 MapLibre's version and licence
 
-`@maplibre/maplibre-react-native` 11.4.0 (JavaScript package); MapLibre
-Native 13.6.1 (Android, via Maven/Gradle); MapLibre Native 6.31.0 (iOS, via
-SwiftPM). **The licence text for the JavaScript package and for the native
-libraries was not read or quoted in any of the sources available to this
-draft.** AC16 asks for it to be "read by hand, and quoted with their source
-in the results"; this draft cannot do that without fabricating a quote, and
-plainly does not. Before this document is treated as complete, MapLibre's
-licence at these pinned versions must be read and quoted here, for both the
-JavaScript package and the native libraries Gradle and CocoaPods/SwiftPM
-pull in.
+Read 2026-10-01, by hand, at the pinned versions:
+
+- **JavaScript package**, `@maplibre/maplibre-react-native` 11.4.0: **MIT**
+  (npm's own licence field).
+- **Android native**, `org.maplibre.gl:android-sdk-opengl` 13.6.1: **BSD**,
+  `https://opensource.org/licenses/BSD-2-Clause`, from its POM on Maven
+  Central.
+- **iOS native**, MapLibre Native 6.31.0, pulled in through SwiftPM
+  (`maplibre/maplibre-gl-native-distribution`, tag `6.31.0`, its
+  `LICENSE.md`): **"BSD 2-Clause License"**, copyright "MapLibre
+  contributors", "MapTiler.com" and "Mapbox".
+
+All three are permissive and cost nothing. As with the location SDK's own
+engines (part 4.3), `licenses:check` cannot see any of these: it reads the
+root workspace, and the spike's app sits outside it. The M3 task that brings
+MapLibre into `apps/mobile` must record these licences explicitly, not rely
+on `licenses:check` finding them.
 
 ### 5.2 Kartverket's terms, licence, rate limits and attribution (quoted)
 
@@ -720,13 +731,38 @@ without a compatibility mode.
 
 AC16 asks for "the destinations in a network capture of one Android run",
 expecting only Kartverket because the style fetches raster tiles alone, no
-fonts, sprites or demo servers. **This draft could not find a recorded
-result for an S8-specific capture among the sources it was given** — the
-Firebase finding in part 4.4 comes from an S1 capture, not an S8 one.
-`drivers/s8-android.mjs` supports `--tcpdump`, so a dedicated capture may
-exist in `~/spike-runs/`; this document does not assume its contents. Before
-this document is treated as complete, the S8 capture's destination list
-should be confirmed by hand and recorded here.
+fonts, sprites or demo servers. Captured on run 2026-09-30 s8-android-1,
+re-judged at `a8de5ee`.
+
+**Scope.** This run had too few uploads to place it on the capture's clock
+(unlike S1's capture, part 4.4, which has enough uploads to cut the pcap to
+its own run window). So the destinations below are the **whole capture
+file's**, covering both S8 runs and the emulator's boot — not this one run
+alone. That is said here plainly, not rounded up to "this run's traffic
+only".
+
+- **Kartverket:** `cache.kartverket.no`, and `atgcp1-prod.kartverket.cloud`
+  (the name behind it).
+- **Platform (the emulator image, not the app):** `time.android.com`,
+  `time.google.com`, `connectivitycheck.gstatic.com`, `www.google.com`,
+  `www.gstatic.com`, `mtalk.google.com`, `ts43.eas3.msg.t-mobile.com` (the
+  SIM carrier's entitlement service), `android.googleapis.com`,
+  `www.googleapis.com`, `remoteprovisioning.googleapis.com`,
+  `digitalassetlinks.googleapis.com`.
+- **DNS:** the emulator's own resolver, on port 53 and port 853 (DNS over
+  TLS).
+- **The Mac:** the receiver (port 8765) and the debug build's Metro probe
+  (port 8081) — both the harness's, not the map's.
+- **No Firebase host, and no host of the SDK's vendor,** in this capture.
+- **One name flagged as unplaced:** `_dns.resolver.arpa` — Android looking
+  for an encrypted DNS resolver (Discovery of Designated Resolvers, RFC
+  9462). It is platform DNS; the reader flags it only because no rule names
+  it, not because it is suspicious.
+
+**For AC16:** "only Kartverket is expected" holds for the map's own traffic
+— `cache.kartverket.no` and the name behind it are the only hosts the
+style's own source, Kartverket's raster tiles, ever reaches. Everything
+else above belongs to the platform or to the harness, not to the map.
 
 ### 5.6 Finding for D-026
 
@@ -756,10 +792,11 @@ on simulators, open until L9.
 **The one-tap call story (S6).** Android is observed and matches the story:
 with `CALL_PHONE`, the tap alone calls (2 of 2); without it, the dialer waits
 for a second tap (2 of 2) — no disagreement between the cases. iOS is
-documented, not observed, and the citation for Apple's own `tel:` behaviour
-could not be reached in this session; it is recorded as unverified, to be
-completed with network access before this document is final. The story's "at
-most one system confirmation on an iPhone" stays open.
+documented, not observed: Apple's own documentation (part 3) says a `tel:`
+link needs one confirmation alert from iOS 10.3 on, which fits inside the
+story's "at most one system confirmation on an iPhone." That stays open
+until it is checked against a real phone (L9), because the simulator has no
+Phone app to observe it on.
 
 **The location-loss rule (S7).** Android's background-permission case is
 detected and reported within a minute (6.6 s, 6.8 s). Android's precise-to-
