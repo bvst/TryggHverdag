@@ -1,8 +1,8 @@
 - [Doctor false-green review angle](project_doctor_false_green.md) — scripts/doctor.mjs: look for OK branches that are inferred, and for exec calls that can hang
 - [Spawned-process tests](project_spawned_process_tests.md) — bin.test.ts style: flag fixed sleeps from spawn and kills outside finally (BUG-5)
-- [gate:file is silent on success](reference_gate_file_silent_success.md) — check its exit code; no GNU `timeout`; guard blocks `=>`, awk `>`, merge-base, zip/tee
+- [gate:file is silent on success](reference_gate_file_silent_success.md) — check its exit code; no GNU `timeout`; guard blocks any `>` (`=>`, `2>/dev/null`, python `>`), merge-base, zip/tee
 - [Spec promises vs HEAD](project_spec_promises_vs_head.md) — grep HEAD for promised D-/A- numbers and "in the decision" follow-ups; diff coverage-baseline.json for drops
 - [Unowned gate config](project_unowned_gate_config.md) — packages/config, root configs, app.config.ts lack CODEOWNERS; no mobile→server import rule (2026-09-26)
 - [Stale prose after amendment](project_stale_prose_after_amendment.md) — amended ACs leave old wording in spec tech-approach, README, doctor hints; grep it
-- [Spike harness: invalid vs failed](project_spike_harness_invalid_vs_failed.md) — drivers throwing on the scenario's own failure → re-run (D-060 hole); emulator IPv6 missed by captures
+- [Spike harness: invalid vs failed](project_spike_harness_invalid_vs_failed.md) — D-060 holes both ways (throws, sentinels set early, refusal before crash read); extra cases vs aggregators; capture facts
 - [IDs taken while open](project_ids_taken_while_open.md) — grep main and open PRs for the branch's new D-/BUG-/A- numbers; dirty PR = no workflows; label = release, not image

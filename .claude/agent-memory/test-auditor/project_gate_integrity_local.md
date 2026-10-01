@@ -32,3 +32,6 @@ Unchanged at fa607f3 (INF-06 re-audit, 2026-09-26): 3 of 5, the branch still unp
 reads `rules/branches/main`. It showed 13 required contexts, now including `android-e2e`. It also reads
 `rulesets/23864486`: `bypass_actors: []`, `current_user_can_bypass: never`, enforcement active. gate:integrity itself
 was still 3 of 5 in the session, so verify the premise with curl, not with the script.
+2026-10-01 on the Mac (SPIKE-01 at 8a37a5e): still 3 of 5. `gh api …/rules/branches/main` lists 13 contexts
+(gate-integrity, static, unit, integration, system, contract, traceability, mutation, security, the three blocking
+ai-reviews, android-e2e). The branch was unpushed (check-runs 422, no PR), so no check existed on the commit.

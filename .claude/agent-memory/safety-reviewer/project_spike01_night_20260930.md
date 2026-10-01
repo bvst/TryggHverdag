@@ -1,23 +1,28 @@
 ---
 name: spike-01-night-20260930
-description: SPIKE-01 overnight counted runs (night-20260930, harness e9753cc, builds 20545d9) were reviewed BLOCK on 2026-09-30; what to check when the results document / go-no-go reaches review
+description: SPIKE-01 overnight runs (night-20260930, builds 20545d9): loop 0 BLOCK at e9753cc, loop 1 PASS at 8a37a5e (2026-10-01); what the results document / go-no-go must still say
 metadata:
   type: project
 ---
 
-Reviewed `feat/SPIKE-01-background-safety` at e9753cc while the overnight runner ran (started 20:09
-CEST 2026-09-30, ~11 h). Verdict BLOCK, for fixes to land *before* the results and go/no-go are
-written, with no re-run needed (all raw evidence is in ~/spike-runs/<runId>/):
-- go-no-go.mjs: S7 `processEnded` is one boolean per platform, but Android S7 has two cases
-  (background, fine); processEnded is only in driver.jsonl, not meta.json or the manifest.
-- D-060 paths: s1.mjs/s3.mjs let any break override a shown gap; judge.mjs's S1 capture read can throw
-  and wipe S1's verdict; run-all.mjs judges nothing when a driver exits non-zero.
-- No representation for "no verdict" (case stopped after 3 invalid runs) in goNoGo/renderResults.
-Should-fix: judge.mjs passes only 10.0.2.15 to the capture reader (tests use fec0::15 too); S3
-not-exempt driver waits-or-throws on the very report AC7 judges; S5 iOS "presented" checks only the
-foreground push. The dry run showed the Android alert record going out as USAGE_NOTIFICATION.
+Loop 0 (e9753cc, 2026-09-30) BLOCKED on B1 (S7 per run), B2a/b/c (timed breaks, capture apart from
+S1, non-zero exit judged), B3 ("no verdict"). Loop 1 (8a37a5e, 2026-10-01): all fixed, 247 tests
+pass, the night re-judged into manifest.rejudged.jsonl with no status change; the rule gives NO-GO
+(S1 failed both platforms, S7 Android fine excused, capture Android failed). Verdict PASS.
+
+Verified against raw evidence (re-check if the results doc quotes otherwise):
+- S1 Android gaps 802+432 s / 602+464 s after going stationary at the stop; iOS 370 s = route stop
+  1320-1690 s after route start; no iOS arrival all night had moving=false (iOS heartbeats never seen).
+- S3 exempt passed with stationary heartbeats at 104-110 s (10 s margin); not-exempt "passed" with a 967 s gap.
+- Capture: not just a lookup. TLS to SNI firebaseinstallations.googleapis.com, 2649 B up / 5846 B down,
+  at Mac 18:49:22.8Z, 6.5 s after the arrival that ended the 802 s gap. APK has FirebaseInitProvider but
+  no google_app_id; app code never asks for a token. Unattributed; new runs cannot attribute it.
+- crash.txt is the whole crash buffer: thousands of UWB HAL aborts (/dev/uwb0), no app crash.
+
+Open should-fixes for the results: missing case passes silently in goNoGoInput; untimed breaks
+(route-step, device death, checked only at the end) still erase a shown gap; S4/S7 any break -> invalid;
+S7 fine "what noticed" not recorded (no notification dump); iOS S5 text is the foreground push only.
 
 **Why:** the owner's SDK go/no-go (D-023, $399) rests on these results.
-**How to apply:** when reviewing 04b-spike-results.md or a follow-up to spikes/background-safety,
-check each item above was fixed or explicitly handled, and that the results split S5 seen/heard and
-state S6 as observed behaviour. See [[verdict-pipeline-review]].
+**How to apply:** when 04b-spike-results.md or the S1-exempt results reach review, check the items
+above, that S1 iOS stays failed (never in the "open until L9" list), and see [[verdict-pipeline-review]].

@@ -1,6 +1,6 @@
 ---
 name: spike-harness-invalid-vs-failed
-description: Review angle for scenario runners and drivers (SPIKE-01 run-all.mjs, 2026-09-30) — a driver that throws on the scenario's own failure turns FAILED into INVALID and gets re-run (D-060 hole); emulator captures miss IPv6
+description: Review angle for scenario runners, drivers and judges (SPIKE-01, 2026-09-30 and loop 1 2026-10-01) — throws on the scenario's own failure turn FAILED into INVALID (D-060 hole); the inverse (failed sentinel set before harness steps); judges refusing before reading crashes; extra cases vs aggregators; capture facts
 metadata:
   type: project
 ---
@@ -17,9 +17,19 @@ The judges had already been fixed so that a short run's final failure counts as 
 
 **How to apply:** for every `waitFor` or `throw` in a driver, ask whether it fires when the harness broke or when the thing under test failed. The second kind must become data the judge reads, not an exit code. Check that every judge follows the same order of precedence: a failure already shown beats a short run.
 
+**Residual shapes after the fix** (loop-1 re-review, 2026-10-01, HEAD 8a37a5e). B1 and B2 were fixed, but the same class came back in new places:
+- **The inverse hole.** s5-ios set `received = null` (the "failed" sentinel) before `setUp()` and the first `simctl push`, either of which can throw. A harness break was then judged FAILED, and "a failure shown is final" kept it. Check where each outcome sentinel is assigned, compared with the harness steps that can throw before it.
+- **A judge that refuses before reading the crash log.** In S8, a missing or stale `zoom-N.json`, or `meta.shots` of `[]` after a throw, made the judge throw, so the run was invalid. A native crash, which is S8's own criterion, was lost. Failure evidence (crashes, the process gone) must be read before any refusal.
+- **`withBreaks`.** For S5, S6 and S8 (and S2 by its own rule), any break in the window turns FAILED into invalid. This does not follow the overlap rule that S1 and S3 use.
+- **Extra cases and aggregators.** An extra `--case` added later (s1/android/exempt) must be checked against every aggregator. `goNoGoInput`'s `per('s1')` has no case filter, and summarize groups by scenario and platform only.
+
+For a loop re-review, the original findings were not on GitHub (no PR was open). The main session's scratchpad `morning-checklist.md` had them; scratchpads are per session, so otherwise ask the caller.
+
 **Emulator capture facts** (dry-s1-android-20260930T163720Z):
 - The Pixel_8 emulator also has IPv6: fec0::5054:ff:fe12:3456, with fec0::2 as its gateway. A judge keyed on 10.0.2.15 silently dropped 9 of 27 destinations.
 - `-tcpdump` stays on for every later run on that emulator, because run-all never stops it after a capture slot. Re-judging a pcap must cut it to the run's window.
 - `tcpdump -nn -r` works on the dry-run pcaps from the reviewer's Bash.
+- The night's pcap clock ran 3603.8 s behind the Mac's. The capture reader still drops packets whose source is not a listed device address without saying so. Counting those packets was blocked by the guard on 2026-10-01 and is still unverified.
+- In the night's S5 Android alert record (notification.txt), the app's notification had no `category=` and its effective usage was USAGE_NOTIFICATION, while the channel was set to USAGE_ALARM. So "heard: unreachable" may come from the app or library, not the platform (open item N6).
 
 Related: [[spawned-process-tests]], [[doctor-false-green]], [[stale-prose-after-amendment]].

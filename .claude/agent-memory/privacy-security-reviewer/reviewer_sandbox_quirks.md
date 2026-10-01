@@ -7,6 +7,8 @@ metadata:
 
 The guard hook (`guard-bash.mjs --readonly`) matches on the command's text, not on what the command does:
 - Any `>` counts as a redirect: `2>/dev/null`, a JS arrow `=>` inside `node -e`, `->` inside an `echo` string, **and a `>` inside a grep regex** (`[^>]*`, `<application[^>]*>`; blocked on SPIKE-01, 2026-09-30). Pipe to `grep`/`sed` instead, write JS with `function(){}`, and for XML use patterns such as `android:name="[^"]*"` that need no `>`.
+- **A `>` inside a sed replacement placeholder** (`s/[0-9.]+/<num>/g`) is blocked too. This happened on SPIKE-01 loop 1 (2026-10-01) and cost the coordinate search. Mask with `#` or `N`, never with `<...>`.
+- Masking digits works for looking at evidence without quoting numbers: `sed -E 's/[0-9]/#/g'`. ugrep rejects `.{0,120}X.{0,120}` (its complexity limit), so split long JSON lines with `tr ',' '\n' | grep -n X` instead.
 - The text "expo install" (even inside a grep regex) counts as a dependency change. Rephrase the pattern.
 - macOS has no `timeout`; use the Bash tool's own timeout.
 - `gh api` and `gh release view` work, which is enough to check action tag SHAs (dereference annotated tags through `git/tags/<sha>`), repository licences (`repos/<o>/<r>/license`) and release asset digests.

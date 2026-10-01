@@ -16,4 +16,6 @@ More blocks, from the SPIKE-01 review on 2026-09-30:
 - `awk '… n>60 …'` is blocked as a redirect.
 - `zip` and `tee` into the scratchpad are blocked as file-changing commands. So a tool cannot be probed with a file made for the purpose; say it was not checked.
 
+2026-10-01 (SPIKE-01 loop-1 re-review): `2>/dev/null` is blocked as "output redirection". So is a `>` comparison inside a piped `python3 -c` script, and a `grep` pattern that contains `=>`. Python heredocs on stdin (`python3 - <<'EOF'`) with no `>` in them do pass. Plan probes so they contain no `>` at all.
+
 The brief says a guard block means stop and report. Do not rephrase the command to get past it; list the check as not done. Running a Write-created probe with `node <file>` in the scratchpad did work, and it may import repository modules read-only.

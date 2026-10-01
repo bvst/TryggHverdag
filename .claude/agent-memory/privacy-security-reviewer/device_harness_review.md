@@ -18,5 +18,8 @@ Seen on SPIKE-01 (2026-09-30). The happy path was clean, and the leaks were on t
 - Check which parts of a public results document bypass the renderer's guard.
 - Check the merged debug manifest. `blockedPermissions` does not remove SYSTEM_ALERT_WINDOW from the debug overlay, and expo-notifications adds c2dm RECEIVE, the Install Referrer permission and about 20 launcher-badge permissions.
 - Rank synthetic-only leaks outside the repository as Should fix, not Blocking.
+- Attributing a Firebase lookup in a capture (loop 1, 2026-10-01): the static check decides. The app can only reach Firebase Installations with a default FirebaseApp, so look for `google_app_id` and `gcm_defaultSenderId` in `app/build/intermediates/runtime_symbol_list/*/R.txt`, the google-services Gradle plugin, and `googleServicesFile`. A tag-filtered logcat can show the app *did* call it (a line from the app's pid), never that it *did not*: Firebase SDKs log little at INFO, and Play Services' own FIS tag is unknown. expo-notifications 57 reaches `FirebaseMessaging.getInstance()` only through getDevicePushTokenAsync and the topic functions.
+- `geomobileservices-pa.googleapis.com` in an emulator capture is Play Services' network location (platform). That makes it a DPIA note for the product, not a finding against the harness.
+- Firebase hosts are listed one by one in `analysis/capture.mjs`, so other `firebase*.googleapis.com` hosts still fall to the platform rule. Re-check if more Firebase modules get linked.
 
 Related: [[mobile-release-review]], [[reviewer-sandbox-quirks]], [[tooling-scripts-review]]

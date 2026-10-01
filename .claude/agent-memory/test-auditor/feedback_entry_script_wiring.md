@@ -30,4 +30,12 @@ true or false. One remaining survivor, graded a Note: `touchesApp(changed, { roo
 has only `apps/*` and no workspace package the app depends on.
 Deleting a test from a file that is **new on the branch** is invisible to `tests:changes`, which diffs against the
 merge-base. So removing a superseded shape test before merge needs no RG-03 reason, but after merge it does.
-Related: [[bug-test-patterns]], [[in-memory-mutation]], [[baseline-vs-main]]
+**Dispatch tables get tested one entry at a time** (SPIKE-01, 2026-10-01, 8a37a5e). `analysis/judge-run.mjs` holds
+`JUDGES = { s1, s2, …, s8 }`, moved into the analysis "so it is tested"; the M1 log says "every verdict rule now sits
+in tested analysis". judge-run.test.mjs drives only s1, s5, s6 and s7. Mutating the argument wiring of the other
+entries survived: s3 `inForce: meta.inForce` set to a constant HELD, s3 and s4 `breaks` set to `[]` (false passes on
+deciding go/no-go items), and s8 `processRunning: true` / `aligned16k: true`. Controls in the same file (s1 and s7
+breaks) were killed. Graded Blocking for the deciding items, Should fix for the findings-only ones.
+How to apply: when a commit says logic "moved into tested X", list X's dispatch entries and grep the test for each
+key (`metaOf('s3'`…), then mutate one argument per untested entry.
+Related: [[bug-test-patterns]], [[in-memory-mutation]], [[baseline-vs-main]], [[spike01-audit]]

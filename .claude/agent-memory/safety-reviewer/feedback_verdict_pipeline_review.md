@@ -28,6 +28,16 @@ When the code under review turns device runs into verdicts (SPIKE-01 style: pure
   never shows the task).
 - **Status words that mean "recorded"** (S6 "passed" once the record is read; S5 "passed" with heard
   not shown) must be split or reworded in the results, never shown as a bare pass.
+- **Cases that never ran.** A per-case "two valid runs" rule built from the cases *present* lets a
+  missing case vanish: the item passes on the rest. Emulate by dropping a case's lines from the real
+  manifest and calling the input builder (SPIKE-01 loop 1: S7 Android read "passed" without "fine").
+- **Untimed breaks after a timed-break fix.** Check which breaks still carry no time (device death
+  checked only at the end, route-step failures) and whether they still erase an earlier shown failure.
+- **"A lookup" may be a connection.** Read the SNI on saved pcaps (`tcpdump -A -r ... 'src port N'`)
+  and sum bytes per flow before accepting "only a DNS lookup". APK config checks need a positive
+  control (`unzip -p x.apk resources.arsc | tr -c '[:print:]' '\n' | grep app_name`).
+- **"Open until L9" is a term of art.** In goNoGo it means not shown, which never blocks GO; a failed
+  item described as "open for L9" in prose can drift into that list. Keep failed items out of it.
 
 **Why:** the spec's risk list (R1-R19) is all false confidence; a GO rests on these paths.
 **How to apply:** any review of spikes/**, results documents, or go/no-go code. The fix for a live run
