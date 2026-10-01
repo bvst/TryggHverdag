@@ -2,9 +2,11 @@
 // mid-journey (not proven equal to a user's swipe; the results say so). The
 // reminder's delivery is read from the platform's list of delivered
 // notifications, as the app gives it when next opened (delivered.json, ms).
+// The watch after the app was ended runs until 6.5 min after the last
+// arrival, up to 15 min (lib/journey.mjs, watchAfterEnded).
 //   node drivers/s2-ios.mjs [--dry]
 import * as ios from './lib/ios.mjs';
-import { iosDevice, runJourney } from './lib/journey.mjs';
+import { iosDevice, runJourney, watchAfterEnded } from './lib/journey.mjs';
 import {
   hold,
   main,
@@ -24,6 +26,7 @@ main(async () => {
     await runJourney(run, device, {
       during: async () => {
         await hold(run, dry ? minutes(1.5) : minutes(5), 'S2: the journey before the app is ended');
+        const endedAt = Date.now();
         await run.mark('app-ended');
         ios.terminate(run, device.udid);
         await sleep(seconds(5));
@@ -31,7 +34,7 @@ main(async () => {
           how: 'simctl terminate',
           processAfter5s: ios.appRunning(device.udid),
         });
-        await hold(run, dry ? minutes(4) : minutes(7), 'S2: watching after the app was ended');
+        await watchAfterEnded(run, { endedAt, dry });
       },
     });
     // After the window: the app's own read of the delivered list.

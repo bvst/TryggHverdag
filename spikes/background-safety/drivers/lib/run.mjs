@@ -37,11 +37,12 @@ const RUN_ID = /^[A-Za-z0-9-]{1,64}$/;
 /**
  * The command line every driver takes:
  *   --dry        a short, uncounted run (its run id starts with "dry-")
- *   --case NAME  the case, for scenarios that have more than one
+ *   --case NAME  the case, for scenarios that have more than one (or, with
+ *                `optionalCase`, an extra case beside the plain run)
  *   --tcpdump    Android only: boot the emulator with a network capture (AC12, AC16)
  *   --run-id ID  the run's id and directory name, as the runner chooses it
  */
-export function readArguments({ cases = [] } = {}) {
+export function readArguments({ cases = [], optionalCase = false } = {}) {
   const { values } = parseArgs({
     options: {
       dry: { type: 'boolean', default: false },
@@ -50,8 +51,11 @@ export function readArguments({ cases = [] } = {}) {
       'run-id': { type: 'string' },
     },
   });
-  if (cases.length > 0 && !cases.includes(values.case)) {
-    throw new Error(`--case must be one of: ${cases.join(', ')}`);
+  const caseGiven = values.case !== undefined;
+  if (cases.length > 0 && (caseGiven || !optionalCase) && !cases.includes(values.case)) {
+    throw new Error(
+      `--case must be one of: ${cases.join(', ')}${optionalCase ? ', or left out' : ''}`,
+    );
   }
   if (cases.length === 0 && values.case !== undefined) throw new Error('this driver has no cases');
   if (values['run-id'] !== undefined) {
@@ -128,6 +132,8 @@ export async function openRun({ scenario, platform, runCase = null, dry = false,
     if (!response.ok) throw new Error(`the receiver answered ${path} with ${response.status}`);
   };
   const breaks = [];
+  /** Facts the shared helpers record for meta.json, such as the device's addresses. */
+  const notes = {};
   const startedAt = Date.now();
   log('run-opened', { runId, scenario, platform, runCase, dry });
 
@@ -154,6 +160,11 @@ export async function openRun({ scenario, platform, runCase = null, dry = false,
     addBreak: (text) => {
       breaks.push(text);
       log('break', { text });
+    },
+    /** A fact for meta.json, recorded by a shared helper rather than the driver's own close(). */
+    note: (key, value) => {
+      notes[key] = value;
+      log('noted', { key });
     },
     save: (name, content) => {
       writeFileSync(join(dir, name), content);
@@ -196,6 +207,7 @@ export async function openRun({ scenario, platform, runCase = null, dry = false,
             endedAt,
             breaks,
             build: buildInfo,
+            ...notes,
             ...meta,
           },
           null,

@@ -91,10 +91,16 @@ export function terminate(run, udid) {
   run.log('app-terminated');
 }
 
-/** Puts the app in the background by bringing Settings to the front. */
+/**
+ * Puts the app in the background by bringing Settings to the front. Returns
+ * when that was done, on the Mac's clock: the time the "app-backgrounded" step
+ * is logged with.
+ */
 export function background(run, udid) {
   simctl('launch', udid, 'com.apple.Preferences');
+  const at = Date.now();
   run.log('app-backgrounded');
+  return at;
 }
 
 export function privacy(run, udid, action, service) {
@@ -102,11 +108,20 @@ export function privacy(run, udid, action, service) {
   run.log('privacy', { action, service });
 }
 
-/** Sets the simulator's position, without blocking the driver. Nothing is printed. */
+/**
+ * Sets the simulator's position, without blocking the driver. Nothing is
+ * printed, and a failure is rethrown without the command: execFile's own
+ * error names the command line, coordinates included (PRIV-07).
+ */
 export async function setPosition(udid, { lat, lon }) {
-  await promisify(execFile)('xcrun', ['simctl', 'location', udid, 'set', `${lat},${lon}`], {
-    timeout: 20_000,
-  });
+  try {
+    await promisify(execFile)('xcrun', ['simctl', 'location', udid, 'set', `${lat},${lon}`], {
+      timeout: 20_000,
+    });
+  } catch (error) {
+    const why = error?.killed ? 'timed out' : `code ${String(error?.code ?? error?.name)}`;
+    throw new Error(`simctl could not set the simulator's position (${why})`);
+  }
 }
 
 export function push(run, udid, payloadFile) {

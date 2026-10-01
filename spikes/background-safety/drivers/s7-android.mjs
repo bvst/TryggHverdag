@@ -24,6 +24,8 @@ main(async () => {
     build: android.BUILD,
   });
   const device = await androidDevice(run);
+  /** Whether the platform ended the app's process on the change, for the go/no-go (per run). */
+  let processEnded = null;
   try {
     await runJourney(run, device, {
       during: async () => {
@@ -32,16 +34,14 @@ main(async () => {
         await run.mark('permission-reduced');
         android.shell(`pm revoke ${APP_ID} ${REVOKE[runCase]}`);
         await sleep(seconds(3));
-        run.log('revoked', {
-          permission: REVOKE[runCase],
-          processEnded: pidBefore !== android.pidOf(),
-        });
+        processEnded = pidBefore !== android.pidOf();
+        run.log('revoked', { permission: REVOKE[runCase], processEnded });
         await hold(run, dry ? minutes(1.5) : minutes(3), 'S7: watching after the change');
       },
     });
   } finally {
     run.save('crash.txt', android.shell('logcat -b crash -d'));
     device.tearDown();
-    await run.close({ revoked: REVOKE[runCase] });
+    await run.close({ revoked: REVOKE[runCase], processEnded });
   }
 });

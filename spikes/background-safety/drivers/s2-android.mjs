@@ -4,10 +4,12 @@
 //   lmk        its process killed with SIGKILL, as the low-memory killer does
 //   forcestop  Settings' Force stop, recorded and not judged
 // Exact alarms are granted first, as a responder's setup would. The reminder's
-// delivery is read from the platform's own record (dumpsys notification).
+// delivery is read from the platform's own record (dumpsys notification). The
+// watch after the app was ended runs until 6.5 min after the last arrival, up
+// to 15 min (lib/journey.mjs, watchAfterEnded).
 //   node drivers/s2-android.mjs --case swipe|lmk|forcestop [--dry]
 import * as android from './lib/android.mjs';
-import { androidDevice, runJourney } from './lib/journey.mjs';
+import { androidDevice, runJourney, watchAfterEnded } from './lib/journey.mjs';
 import { APP_ID, hold, main, minutes, openRun, readArguments, seconds, sleep } from './lib/run.mjs';
 
 const hasTask = () => android.shell('am stack list').includes(APP_ID);
@@ -51,9 +53,10 @@ main(async () => {
       grants: { exactAlarm: true },
       during: async () => {
         await hold(run, dry ? minutes(1.5) : minutes(5), 'S2: the journey before the app is ended');
+        const endedAt = Date.now();
         await run.mark('app-ended');
         await endApp(run, runCase);
-        await hold(run, dry ? minutes(4) : minutes(7), 'S2: watching after the app was ended');
+        await watchAfterEnded(run, { endedAt, dry });
         run.log('process-at-end', { running: android.pidOf() !== null });
       },
     });

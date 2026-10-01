@@ -5,11 +5,13 @@ import * as android from './android.mjs';
 import * as ios from './ios.mjs';
 import { runFlow } from './maestro.mjs';
 import { firstPoint, replayRoute } from './route.mjs';
-import { APP_ID, seconds, waitFor } from './run.mjs';
+import { APP_ID, minutes, seconds, sleep, waitFor } from './run.mjs';
 
 /** The Android emulator, behind the shared interface. */
 export async function androidDevice(run, { tcpdump = null } = {}) {
   const emulator = await android.ensureEmulator(run, { tcpdump });
+  // Both families, for the capture reader (the code review's B2).
+  run.note('deviceAddresses', android.deviceAddresses());
   return {
     platform: 'android',
     build: android.BUILD,
@@ -85,6 +87,41 @@ export async function runJourney(run, device, { grants = {}, during }) {
     await run.mark('journey-ended');
   }
   if (failures > 0) run.addBreak(`${failures} route step(s) could not be set on the device`);
+}
+
+/**
+ * S2's watch after the app was ended (review loop 1, 2026-10-01). S2 needs 6 min
+ * after the "app-ended" mark, or after the last arrival when arrivals stopped
+ * after it, so a fixed watch could end too early. This watches until 6.5 min
+ * after the later of the two (30 s over, for the platform writing its record),
+ * read on the Mac's clock from the receiver's records every 10 s, and stops at
+ * `cap` after the app was ended, so arrivals that never stop cannot hold the
+ * run. The judge decides what the watch shows; this only says why it stopped.
+ */
+export async function watchAfterEnded(run, { endedAt, dry }) {
+  const needed = dry ? minutes(2) : minutes(6) + seconds(30);
+  const cap = dry ? minutes(4) : minutes(15);
+  run.log('watch-started', {
+    minutesAfterLastArrival: needed / 60_000,
+    capMinutes: cap / 60_000,
+  });
+  for (;;) {
+    const last = run
+      .records()
+      .filter((record) => record.kind === 'arrival' && record.at >= endedAt)
+      .at(-1);
+    const from = Math.max(endedAt, last?.at ?? endedAt);
+    const now = Date.now();
+    if (now >= from + needed) {
+      run.log('watch-ended', { why: 'watched long enough after the last arrival' });
+      return;
+    }
+    if (now >= endedAt + cap) {
+      run.log('watch-ended', { why: 'the cap: arrivals went on' });
+      return;
+    }
+    await sleep(Math.min(seconds(10), from + needed - now, endedAt + cap - now));
+  }
 }
 
 /** Waits until the receiver holds an arrival after the "journey-started" mark that `match`es. */

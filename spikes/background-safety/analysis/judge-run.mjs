@@ -382,6 +382,15 @@ const JUDGES = {
       const failed = [shown, heard, text].includes(FAILED);
       return withBreaks(breaks, { status: failed ? FAILED : PASSED, evidence: [], details });
     }
+    if (meta.received === null && typeof files?.['received.json'] !== 'string') {
+      // The driver saw no foreground push recorded by the app: the alert's
+      // own path failed, so nothing it carried can be checked.
+      const problems = [
+        'the app recorded no foreground push, so its payload and text could not be checked',
+      ];
+      const details = { presented: null, text: FAILED, problems };
+      return withBreaks(breaks, { status: FAILED, evidence: [], details });
+    }
     const backgrounded = driverSteps(files).find((step) => step.step === 'app-backgrounded');
     const backgroundAt = Number.isFinite(meta.backgroundAt) ? meta.backgroundAt : backgrounded?.at;
     const alert = readIosAlert({

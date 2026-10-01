@@ -1,7 +1,7 @@
 // SPIKE-01: the Android emulator, for the drivers. The Pixel_8 AVD
 // (android-37.2, google_apis_ps16k, x86_64), headless. Colima must be stopped:
 // with 16 GB the two do not fit together.
-import { execFile, execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -184,11 +184,34 @@ export function readEvidence(name) {
   }
 }
 
-/** Sets the emulator's position, without blocking the driver. Nothing is printed. */
+/**
+ * Sets the emulator's position, without blocking the driver. Nothing is
+ * printed, and a failure is rethrown without the command: execFile's own
+ * error names the command line, coordinates included (PRIV-07).
+ */
 export async function setPosition({ lat, lon }) {
-  await promisify(execFile)(ADB, ['emu', 'geo', 'fix', String(lon), String(lat)], {
-    timeout: 20_000,
-  });
+  try {
+    await promisify(execFile)(ADB, ['emu', 'geo', 'fix', String(lon), String(lat)], {
+      timeout: 20_000,
+    });
+  } catch (error) {
+    const why = error?.killed ? 'timed out' : `code ${String(error?.code ?? error?.name)}`;
+    throw new Error(`adb could not set the emulator's position (${why})`);
+  }
+}
+
+/**
+ * The device's own addresses, both families, as `ip -o addr` lists them: every
+ * global or site address on an interface other than loopback. The capture
+ * reader needs them all (the code review's B2).
+ */
+export function deviceAddresses() {
+  const addresses = [];
+  for (const line of shell('ip -o addr show').split('\n')) {
+    const found = /^\d+:\s+(\S+)\s+inet6?\s+([0-9a-f.:]+)\/\d+.*\bscope (global|site)\b/.exec(line);
+    if (found !== null && found[1] !== 'lo') addresses.push(found[2]);
+  }
+  return addresses;
 }
 
 /** A dump of one command's output into the run. */
@@ -203,10 +226,21 @@ export const screenOff = (run) => {
 
 export const pidOf = () => quiet(`pidof ${APP_ID}`)?.trim() || null;
 
-/** The installed build's 16 KB alignment, as zipalign reports it. */
+/**
+ * zipalign's check of the installed build for 16 KB pages: its output and its
+ * exit code, for readAlignment. It never throws: exit code 1 (not aligned) is
+ * a result, and the judge, not the driver, decides what it means.
+ */
 export function alignment() {
-  const output = execFileSync(ZIPALIGN, ['-c', '-P', '16', '-v', '4', APK], { encoding: 'utf8' });
-  return { aligned16k: output.includes('Verification successful'), output };
+  const result = spawnSync(ZIPALIGN, ['-c', '-P', '16', '-v', '4', APK], {
+    encoding: 'utf8',
+    maxBuffer: 1 << 26,
+  });
+  const text =
+    result.error === undefined
+      ? `${result.stdout ?? ''}${result.stderr ?? ''}`
+      : `zipalign could not run: ${result.error.code ?? result.error.message}\n`;
+  return { text, exitCode: result.status };
 }
 
 export async function stopEmulator(run) {

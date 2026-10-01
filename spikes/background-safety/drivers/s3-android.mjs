@@ -1,8 +1,9 @@
 // SPIKE-01-AC7 (S3), Android emulator: 45 minutes held in stock Android's own
 // restrictions (screen off, battery unplugged, deep Doze forced, the app in the
 // restricted standby bucket), once with the battery-optimisation exemption and
-// once without. "restrictions-started" is marked only once the app's report of
-// its exemption state has reached the receiver after the journey started.
+// once without. "restrictions-started" is marked once the app's report of its
+// exemption state has reached the receiver after the journey started; without
+// the exemption, after 3 min of waiting for it if it never comes.
 //   node drivers/s3-android.mjs --case exempt|not-exempt [--dry]
 import * as android from './lib/android.mjs';
 import { androidDevice, arrivalAfterStart, runJourney } from './lib/journey.mjs';
@@ -28,12 +29,20 @@ main(async () => {
     await runJourney(run, device, {
       grants: { exempt },
       during: async () => {
-        await arrivalAfterStart(
+        const report = arrivalAfterStart(
           run,
           `a report that the app is ${exempt ? '' : 'not '}exempt`,
           (arrival) => arrival.exempt === exempt,
           minutes(3),
         );
+        if (exempt) {
+          await report;
+        } else {
+          // Without the exemption, a report that never came is the scenario's
+          // own outcome, which the judge fails: the restrictions start anyway,
+          // never a thrown driver that a re-run could replace (D-060).
+          await report.catch(() => run.log('no-report-before-restrictions', { waited: '3 min' }));
+        }
         await run.mark('restrictions-started');
         android.shell('dumpsys battery unplug');
         android.screenOff(run);

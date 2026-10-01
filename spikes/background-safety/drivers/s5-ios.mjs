@@ -3,7 +3,10 @@
 // Pushed twice: with the app in front, where it keeps the payload exactly as it
 // arrived (received.json), and with the app in the background, where it is
 // read from the delivered list when the app is next opened (delivered.json).
-// The simulator has no silent switch and no sound check (not shown).
+// The simulator has no silent switch and no sound check (not shown). A
+// foreground push the app never recorded is recorded as `received: null` for
+// the judge, never thrown; meta.json keeps when the app went to the
+// background (`backgroundAt`), which "presented" is measured from.
 //   node drivers/s5-ios.mjs [--dry]
 import { join } from 'node:path';
 
@@ -26,22 +29,27 @@ main(async () => {
   const device = await iosDevice(run);
   const file = join(run.dir, 'payload.json');
   run.save('payload.json', `${JSON.stringify(payload(), null, 2)}\n`);
+  /** The foreground push as the app recorded it, or null when it recorded none: an outcome, not a throw. */
+  let received = null;
+  /** When the app went to the background: a delivery after it is the background push's. */
+  let backgroundAt = null;
   try {
     await device.setUp();
     const before = Date.now();
     ios.push(run, device.udid, file);
-    const received = await waitFor(
+    received = await waitFor(
       'the app to record the pushed alert',
       () => {
         const evidence = device.evidence('received.json');
         return evidence !== null && evidence.writtenAt >= before ? evidence : null;
       },
       { timeoutMs: seconds(30) },
-    );
-    run.save('received.json', `${JSON.stringify(received, null, 2)}\n`);
+    ).catch(() => null);
+    if (received === null) run.log('foreground-push-not-recorded', { waited: '30 s' });
+    else run.save('received.json', `${JSON.stringify(received, null, 2)}\n`);
     ios.screenshot(run, device.udid, join(run.dir, 'foreground.png'));
 
-    ios.background(run, device.udid);
+    backgroundAt = ios.background(run, device.udid);
     await hold(run, seconds(3), 'the app in the background');
     ios.push(run, device.udid, file);
     await hold(run, seconds(5), 'S5: the alert, delivered in the background');
@@ -59,6 +67,10 @@ main(async () => {
     run.save('delivered.json', `${JSON.stringify(delivered, null, 2)}\n`);
   } finally {
     device.tearDown();
-    await run.close({ interruptionLevel: 'time-sensitive' });
+    await run.close({
+      interruptionLevel: 'time-sensitive',
+      received: received === null ? null : 'received.json',
+      backgroundAt,
+    });
   }
 });

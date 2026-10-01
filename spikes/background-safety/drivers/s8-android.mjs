@@ -1,7 +1,8 @@
 // SPIKE-01-AC16 (S8), Android emulator: MapLibre draws Kartverket's tiles at
 // three zoom levels, with no native crash, on the 16 KB-page image. With
 // --tcpdump the emulator is booted with a network capture of the run (the
-// destinations are recorded, not judged). Outside the go/no-go.
+// destinations are recorded, not judged). Outside the go/no-go. A map that did
+// not render, and zipalign's result, are recorded for the judge, never thrown.
 //   node drivers/s8-android.mjs [--dry] [--tcpdump]
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
@@ -36,13 +37,14 @@ main(async () => {
     processRunning = android.pidOf() !== null;
   } finally {
     run.save('crash.txt', android.shell('logcat -b crash -d'));
-    const { aligned16k, output } = android.alignment();
-    run.save('zipalign.txt', output);
+    // zipalign's output and exit code, for readAlignment: the judge decides.
+    const { text, exitCode } = android.alignment();
+    run.save('zipalign.txt', text);
     device.tearDown();
     await run.close({
       shots,
       processRunning,
-      aligned16k,
+      zipalignExitCode: exitCode,
       capture: capture === null ? null : 'capture.pcap',
       wifiOffForCapture: capture !== null,
       emulator: device.emulator,

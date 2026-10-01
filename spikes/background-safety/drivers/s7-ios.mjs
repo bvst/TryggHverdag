@@ -11,6 +11,8 @@ main(async () => {
   const { dry, runCase } = readArguments({ cases: ['always-to-inuse'] });
   const run = await openRun({ scenario: 's7', platform: 'ios', runCase, dry, build: ios.BUILD });
   const device = await iosDevice(run);
+  /** Whether the platform ended the app's process on the change, for the go/no-go (per run). */
+  let processEnded = null;
   try {
     await runJourney(run, device, {
       during: async () => {
@@ -19,12 +21,17 @@ main(async () => {
         ios.privacy(run, device.udid, 'revoke', 'location-always');
         ios.privacy(run, device.udid, 'grant', 'location');
         await sleep(seconds(3));
-        run.log('reduced', { processRunning: ios.appRunning(device.udid) });
+        const processRunning = ios.appRunning(device.udid);
+        processEnded = !processRunning;
+        run.log('reduced', { processRunning });
         await hold(run, dry ? minutes(1.5) : minutes(3), 'S7: watching after the change');
       },
     });
   } finally {
     device.tearDown();
-    await run.close({ reduced: 'location-always revoked, location (while using) granted' });
+    await run.close({
+      reduced: 'location-always revoked, location (while using) granted',
+      processEnded,
+    });
   }
 });
