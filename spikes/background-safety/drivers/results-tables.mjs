@@ -125,6 +125,27 @@ const summary = [
   { scenario: 'S8', outsideGoNoGo: true, ...both(verdicts.S8, 's8') },
 ];
 
+/**
+ * A run id as the tables write it: its night's date with hyphens, then the
+ * run's own part, e.g. "night-20260930-s1-android-1" as "2026-09-30
+ * s1-android-1". The raw id holds the date as eight digits in a row, which
+ * renderResults rightly reads as phone-shaped (the coordinator's decision,
+ * 2026-10-01: the guard stays). An id that does not give such a label
+ * exactly is refused, never written raw.
+ */
+const RUN_ID = /^night-(\d{4})(\d{2})(\d{2})(?:-.+?)?-(s\d-(?:android|ios)(?:-[a-z0-9-]+)?-\d+)$/;
+function runLabel(runId) {
+  const parts = typeof runId === 'string' ? RUN_ID.exec(runId) : null;
+  if (parts === null) throw new Error(`run id ${String(runId)} does not give a table label`);
+  const [, year, month, day, own] = parts;
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  const iso = `${year}-${month}-${day}`;
+  if (date.toISOString().slice(0, 10) !== iso) {
+    throw new Error(`run id ${runId} does not hold a real date, so it gives no table label`);
+  }
+  return `${iso} ${own}`;
+}
+
 const seconds = (ms) => Math.round(ms / 1000);
 const isMs = (value) => Number.isFinite(value);
 
@@ -133,10 +154,11 @@ function numbersOf(entry) {
   const d = entry.details ?? {};
   const scenario =
     entry.scenario === 's1' && entry.case === 'exempt' ? 'S1 exempt' : entry.scenario.toUpperCase();
+  const run = runLabel(entry.runId);
   const number = (name, value, unit) => ({
     scenario,
     platform: entry.platform,
-    run: entry.runId,
+    run,
     name,
     value,
     unit,
@@ -184,13 +206,20 @@ function numbersOf(entry) {
   return list;
 }
 
-const numbers = entries
-  .filter((entry) => entry.kind === 'run' && entry.status !== 'invalid')
-  .flatMap(numbersOf);
-
 try {
+  const valid = entries.filter((entry) => entry.kind === 'run' && entry.status !== 'invalid');
+  // Two runs that would share a label are refused: the label must name one run.
+  const labels = new Map();
+  for (const entry of valid) {
+    const label = runLabel(entry.runId);
+    if (labels.has(label) && labels.get(label) !== entry.runId) {
+      throw new Error(`runs ${labels.get(label)} and ${entry.runId} give the same table label`);
+    }
+    labels.set(label, entry.runId);
+  }
+  const numbers = valid.flatMap(numbersOf);
   process.stdout.write(renderResults({ summary, numbers }));
 } catch (error) {
-  process.stderr.write(`renderResults refused the tables: ${error.message}\n`);
+  process.stderr.write(`the tables were refused: ${error.message}\n`);
   process.exit(1);
 }
