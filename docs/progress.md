@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-01 · **Milestone:** M1 in progress: SPIKE-01's results are drafted and the owner's go/no-go decision is what is left · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-01 · **Milestone:** M1 in progress: SPIKE-01 is done, Section 4 is closed (D-086); the Critical Alerts request is what's left for M1's exit · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0 and
@@ -22,8 +22,8 @@ closed.
 
 | ID | Task | Status |
 |----|------|--------|
-| SPIKE-01 | Background safety on emulators and simulators: S1–S7, and S8, MapLibre with Kartverket's tiles | 🟡 In flight — the spec is merged ([#47](https://github.com/bvst/TryggHverdag/pull/47)). Both nights are done (`night-20260930`, 38 runs; `night-20261001-s1-exempt`, 2 runs; none invalid), and all four reviewers passed, through review loop 2. The results are drafted (`docs/plan/04b-spike-results.md`): the rule gives NO-GO, resting on S1 iOS and the Android capture. **Owner's go/no-go answer: pending** ([`progress/m1.md`](progress/m1.md)) |
-| — | Critical Alerts request drafted | ⚪ Not started. The roadmap lists it under M1, but it has no ID and no spec (an open item in [`progress/m1.md`](progress/m1.md)) |
+| SPIKE-01 | Background safety on emulators and simulators: S1–S7, and S8, MapLibre with Kartverket's tiles | ✅ Done (2026-10-01) — both nights ran (`night-20260930`, 38 runs; `night-20261001-s1-exempt`, 2 runs; none invalid), all four reviewers passed through review loop 2, and the owner chose a **conditional GO** over the rule's NO-GO, recorded as **D-086**. Results: `docs/plan/04b-spike-results.md`. Section 4 is closed |
+| — | Critical Alerts request drafted | ⚪ Not started. The roadmap lists it under M1, but it has no ID and no spec (an open item in [`progress/m1.md`](progress/m1.md)). **This is the only thing still open for M1's exit** |
 
 ## M0 at a glance
 
@@ -68,17 +68,12 @@ could not record a verdict at all (D-069, D-070, D-073).
 
 ## What the owner still needs to do
 
-**The SPIKE-01 spec's pull request, when it is open.** The spec is
-[`specs/SPIKE-01.md`](specs/SPIKE-01.md). Five open items came out of planning it
-and wait for the owner, in [`progress/m1.md`](progress/m1.md). One is to be asked
-with the go/no-go: when the licence is bought. Nothing else is needed to start
-the spike, except:
-- **the Mac:** about 8 to 9 hours of Mac time, on power and awake, preferably
-  overnight;
-- **CocoaPods,** only if the Mac lacks it: installing it needs the owner's admin
-  account (D-056);
-- **a Kartverket account or key,** only if its terms ask for one. The spike stops
-  and asks first.
+**A-29 — request the location SDK's 30-day trial key shortly before M3's
+demo** (transistorsoft.com/shop/trials/new; owner's own phones only; D-086).
+Due M3, not now.
+
+**Four open items from planning SPIKE-01** (the licence-timing one is now
+answered, D-086), in [`progress/m1.md`](progress/m1.md).
 
 **A-27 — raise the daily-status check's grace in Healthchecks.io to 8 hours**
 (about a minute; agreed 2026-09-26). GitHub starts the report hours late by
@@ -258,29 +253,6 @@ The things that still bite, and cost a session hours the first time.
   looked for in both files. The last paragraph of `progress/m1.md` says why.
 
 ## In flight
-
-**SPIKE-01: results drafted; what is left is the owner's go/no-go decision**
-([`plan/04b-spike-results.md`](plan/04b-spike-results.md),
-[`specs/SPIKE-01.md`](specs/SPIKE-01.md)). Look for its pull request before
-opening another.
-- **Both nights are done, none invalid:** `night-20260930` (38 runs) and
-  `night-20261001-s1-exempt` (2 runs, the owner's Q4 case). All four
-  reviewers passed, through review loop 2.
-- **The rule gives NO-GO**, resting on S1 iOS (fails and stays deciding,
-  open only until L9) and the Android capture (an unattributed Firebase
-  Installations TLS session, AC12) — not on S1 Android, which is a
-  condition of any GO (it passes with the battery-optimisation exemption),
-  or S7 Android, excused by the rule's own exception for a platform that
-  ends the process.
-- **S8 passed** on both devices (MapLibre draws Kartverket's tiles); it does
-  not count toward the SDK's go/no-go. Its one finding is for D-026: the
-  Geovekst clause at zoom levels 12–20, for whoever builds the tile proxy.
-- **Asked alongside the go/no-go:** when the SDK's licence is bought, if the
-  answer is GO — the plan currently disagrees with itself on this (the
-  question is written out in the results document, part 9).
-- **Open for the owner:** five items found in the plan on 2026-09-29, still
-  listed, as far as this file's sources show, in
-  [`progress/m1.md`](progress/m1.md).
 
 **D-085's loose ends** (the pull request merged, [#43](https://github.com/bvst/TryggHverdag/pull/43)).
 - **Verified:** `deploy-staging` on `ubuntu-26.04`. Run 36621209842, for

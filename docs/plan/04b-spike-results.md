@@ -1170,4 +1170,41 @@ trial) because they are release builds; the roadmap's M3 exit shows the app
 through those same tracks; but the roadmap buys the licence in M5 (A-13). With
 a GO, the licence would be needed at M3, not M5.
 
-**Owner's answer: pending.**
+**Owner's answer (2026-10-01): conditional GO, recorded as D-086.**
+
+The owner took the recommended conditional GO over the rule's NO-GO, with
+four conditions:
+1. **Android:** setup asks the user for the battery-optimisation exemption,
+   and the app checks and reports whether it was granted, failing loudly
+   when it is missing. S1 passed only with it granted: 109 s against the
+   120 s limit, an 11 s margin, on emulator evidence. The SDK itself calls
+   the exemption "a last resort" that uses "much more power"
+   (`DeviceSettings.d.ts:101,105`, quoted in full above).
+2. **iOS:** journeys run with `activity.disableStopDetection: true` (the
+   vendor's own documentation: "With it off, location services run
+   continuously"). This setting was **not tried in this spike**. M3
+   configures it, and verifies it on a real phone.
+3. **L9:** a stop of 5 minutes or more on a real iPhone, unplugged with the
+   screen off, must pass before the group relies on the app (D-041). **If
+   it fails, D-086 is reopened**, and D-023's fallback (native modules) is
+   decided on.
+4. **The capture's Firebase Installations session** (part 4.4) is counted
+   as Google Play Services' own traffic, not the SDK's: the app's process
+   cannot start Firebase, other processes on the image run it, and the
+   exempt runs' own captures were clean. AC12's "nothing goes to the SDK's
+   vendor" held in every capture.
+
+**Licence timing:** M5, after L9 passes. A-13 stays in M5; the roadmap is
+unchanged. M3's internal demo (TestFlight, Google Play internal testing)
+uses a 30-day trial key, on the owner's own phones only — no group member
+gets a testing build with the SDK before M5 (owner to-do A-29). The app
+must say loudly if the SDK's licence check ever stops tracking.
+
+**Section 4's five proposed defaults:** all accepted as written, with one
+note added to the decision — FCM push brings Firebase into the Android app
+itself, a data flow to Google for the privacy assessment (PRIV-06, D-016),
+separate from this spike's own capture classifier, which is for the
+spike's own evidence only.
+
+Full decision: [`decisions.md`](decisions.md), **D-086**. **Section 4 is now
+closed.**

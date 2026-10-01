@@ -2483,3 +2483,142 @@ any other path is work, not a candidate for the same treatment.
     `anthropics/claude-code-action` 1.0.235, in all five workflows. Each
     commit was checked against its release tag with `git ls-remote` before
     it went in. #4, #5 and #36 close when the batch merges.
+
+## D-086 — SPIKE-01: conditional GO for the location SDK; Section 4 closes
+- **Date:** 2026-10-01 · **Status:** Accepted (owner, 2026-10-01; the rule's
+  recommendation and the spike's tool choices are Claude's, D-031) ·
+  **Section:** 4
+- **Context:** SPIKE-01 ran S1–S8 on the Android emulator and the iOS
+  simulator (D-037). Full results: [`04b-spike-results.md`](04b-spike-results.md).
+  The go/no-go rule's recommendation was **NO-GO**: S1 iOS failed and stayed
+  deciding (a static simulated position never leaves the SDK's "moving"
+  state, so no documented setting fixes it on a simulator), and the Android
+  capture showed an unattributed Firebase Installations TLS session. S1
+  Android and S7 Android also show "failed" in the rule's own table, but the
+  rule does not count either against the SDK: S1 Android passed with the
+  battery-optimisation exemption (a condition, not a fix), and S7 Android's
+  failure is excused by the rule's own exception for a platform that ends
+  the process.
+- **Decision:** The SDK is accepted, as a **conditional GO**, over the
+  rule's NO-GO, with four conditions:
+  1. **Android:** the app's setup asks the user for the battery-optimisation
+     exemption, and the app checks and reports whether it was granted,
+     failing loudly when it is missing. S1 passed only with the exemption
+     granted (109 s against the 120 s limit, an 11 s margin, on emulator
+     evidence).
+  2. **iOS:** journeys run with `activity.disableStopDetection: true` (the
+     SDK's own documentation: "With it off, location services run
+     continuously"). This setting was not tried in the spike. M3 configures
+     it, and verifies it on a real phone.
+  3. **L9:** a stop of 5 minutes or more on a real iPhone, unplugged with
+     the screen off, must pass before the group relies on the app (D-041).
+     **If it fails, this decision is reopened**, and D-023's fallback
+     (native modules for the background part) is decided on.
+  4. **The Firebase Installations session** found in the night's S1 capture
+     is counted as Google Play Services' own traffic, not the SDK's: the
+     app's process cannot start Firebase itself (no `google-services.json`,
+     no Google Services Gradle plugin, no `google_app_id`), other processes
+     on the same device image run Firebase, and the exempt runs' own
+     captures were clean. AC12's "nothing goes to the SDK's vendor" held in
+     every capture.
+
+  **The SDK, pinned:** `react-native-background-geolocation` **5.7.0**, with
+  its engines pinned exactly: Android `com.transistorsoft:tslocationmanager`
+  **4.6.1**, iOS `TSLocationManager` **4.7.1**.
+
+  **Its licence, read 2026-09-30** (full dated copies, with checksums, kept
+  outside the repository, `~/spike-runs/licence/`). The npm wrapper is MIT;
+  the two native engines are commercial (`TSLocationManager`'s podspec and
+  `tslocationmanager`'s Maven POM both say "Commercial"). Quoted:
+  - **3.5:** "The Software is fully functional in DEBUG builds without a
+    License Key; the license-validation warning shown in DEBUG builds does
+    not restrict functionality. DEBUG builds may be used for development
+    and testing only and may not be distributed to End Users."
+  - **3.6:** read by the owner as allowing evaluation in release builds
+    without distribution to end users — the clause the 30-day trial key
+    below relies on. Its exact wording is **not independently re-quoted in
+    this session**; it should be quoted verbatim here the next time it is
+    read.
+  - **7.1:** "It transmits location and related data only to the server
+    endpoints that Licensee configures in its Application. Licensor
+    operates no server that receives that data."
+  - **7.2:** the licence check itself "involves no network request to
+    Licensor and transmits no data."
+  - **9.5, as rewritten by the vendor on 2026-09-30** ("Safety-related
+    applications"): "Licensee may use the Software in Applications intended
+    to help keep people safe, such as personal-safety, lone-worker, family
+    location-sharing and check-in Applications." The Software "is not
+    designed, tested or certified as a safety-critical system", and the
+    Licensee is solely responsible "for designing the Application to allow
+    for delayed, missing or inaccurate location data, and for anything the
+    Application tells End Users about its reliability or about how to
+    obtain emergency assistance."
+
+  **Price:** Starter, **$399**, for one app on both platforms.
+
+  **Licence timing:** the $399 licence is bought in **M5**, after L9 passes
+  (A-13 stays in M5; the roadmap is unchanged). M3's demo (showing the app
+  through internal TestFlight and Google Play internal testing) uses a
+  **30-day trial key, on the owner's own phones only**; no group member gets
+  a testing build with the SDK before M5. The app must say loudly if the
+  SDK's licence check ever stops tracking. At purchase, a dated copy of the
+  licence text is kept with the order (fees are non-refundable, clause 5.4).
+  **Owner to-do A-29:** request a 30-day trial key shortly before M3's demo
+  (transistorsoft.com/shop/trials/new), owner's own phones only. Due: M3.
+
+  **MapLibre:** `@maplibre/maplibre-react-native` **11.4.0** (MIT); native
+  **13.6.1** on Android and **6.31.0** on iOS (both BSD-2-Clause). S8 passed
+  on both devices, with the Android build working on the 16 KB-page image.
+
+  **Kartverket:** tiles are CC BY 4.0, credited "©Kartverket". The Geovekst
+  clause on zoom levels 12–20 (special permission needed for anything beyond
+  direct display) goes to D-026's tile proxy, not to this decision.
+
+  **The spike's tool choices (D-031):** the throwaway loopback receiver, not
+  staging and not `apps/server` run locally; `node:test` for the analysis;
+  Maestro 2.10.0; EAS simulator builds for iOS (the spec's Q2), with eas-cli
+  24.8.0, `DISABLE_EAS_ANALYTICS` and `EXPO_NO_TELEMETRY` set; Expo pinned to
+  57.0.25.
+
+  **Section 4's five proposed defaults are accepted as written:** SMS via
+  LINK Mobility; push straight to APNs and FCM; SMS-code login with
+  device-bound sessions and an admin passkey; self-hosted EEA crash
+  reporting; no over-the-air updates. **Note:** FCM push brings Firebase
+  into the Android app itself (a Google Services configuration, and
+  Firebase Installations). That is push plumbing, not analytics, but it is
+  still a data flow to Google, for the privacy assessment (PRIV-06, D-016).
+  SPIKE-01's own network-capture classifier, which flags Firebase hosts as
+  analytics, describes the spike's own evidence only, not the product's FCM
+  integration.
+- **Consequences:**
+  - **M3 must:**
+    - post the alert with `CATEGORY_ALARM` set (S5's "heard" failed on
+      Android; the likely cause, not independently verified);
+    - decide what the app does when Android's precise location is reduced
+      and the process never comes back (S7's "fine" case): the server's
+      5-minute silence becomes the only signal;
+    - set, record and test the SDK's on-device retention
+      (`persistence.maxDaysToPersist`, `persistence.maxRecordsToPersist`,
+      `persistence.persistMode`, `logger.logMaxDays`), and empty its queue
+      when a journey ends;
+    - review the merged manifest of the **release** build (the debug
+      manifest showed background location and `ACTIVITY_RECOGNITION` from
+      the SDK's own engine, FCM receive and badge permissions from
+      `expo-notifications`, and the Install Referrer permission from
+      `expo-application`; `SYSTEM_ALERT_WINDOW` was a debug-only artefact);
+    - handle the native engines' and MapLibre's native libraries' licences
+      explicitly, since `licenses:check` cannot see them;
+    - consider a timer-driven upload: the SDK's own documentation describes
+      iOS throttling background heartbeats to about 2 minutes after
+      entering the background, unplugged with the screen off — documented,
+      not observed on a real phone in this spike.
+  - **L9 must show:** the iPhone stop above, and the Android exemption
+    tested on a real Samsung, not only the emulator.
+  - **The harness's known limits** (`04b-spike-results.md`, part 8) must be
+    fixed before any future spike night runs.
+  - **The raw capture files** (`~/spike-runs/`) are deleted once this
+    decision merges.
+  - **Section 4 closes.** `04-tech-stack.md`'s status moves to ✅; its stale
+    "real phones" lines (superseded by D-037) and "tested on real walks"
+    (against D-035) are corrected; the Summary is filled in; and
+    `plan/README.md` shows Section 4 as ✅.

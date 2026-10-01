@@ -1,9 +1,27 @@
 # 4 · Tech stack
 
-**Status:** 🟡 Providers and account type chosen · spike (emulators/simulators, D-037) not started · **Last updated:** 2026-09-20
+**Status:** ✅ Done · SPIKE-01 ran on emulators and simulators (D-037); conditional GO recorded as D-086 · **Last updated:** 2026-10-01
 
 ## Summary
-*(Filled in when the section closes.)*
+
+React Native + Expo, TypeScript everywhere (D-023). Clever Cloud for hosting
+(D-025). Kartverket's tiles drawn with MapLibre, through a tile proxy later
+(D-026). Background location: Transistorsoft's
+`react-native-background-geolocation`, decided by SPIKE-01 as a
+**conditional GO** (D-086) — the emulator and simulator evidence passed with
+two conditions: the Android battery-optimisation exemption (asked for in
+setup, checked and reported by the app), and iOS running with
+`activity.disableStopDetection: true` (not tried in the spike; M3
+configures and verifies it on a real phone). The real-device suite (L9)
+must still pass — a real iPhone's 5-minute stop, and the Android exemption
+on a real Samsung — before the group relies on the app (D-041); if it
+fails, D-086 is reopened and D-023's fallback (native modules) is decided
+on. The SDK's $399 licence is bought in M5, after L9 passes; M3's demo
+builds use a 30-day trial key on the owner's own phones only (A-29). SMS via
+LINK Mobility, push straight to APNs and FCM, SMS-code login with
+device-bound sessions and an admin passkey, self-hosted EEA crash reporting,
+and no over-the-air updates — all five proposed defaults accepted (D-086).
+Full spike results: [`04b-spike-results.md`](04b-spike-results.md).
 
 ## Goal of this section
 Choose the tools for the app, backend, notifications, SMS, maps, hosting and
@@ -131,12 +149,23 @@ before committing.
   Source: https://data.norge.no/en/datasets/95c43b8f-9873-306b-bd48-f797bd52b741
 - Third-party map tools credit it as CC BY 4.0.
   Source: https://git.gpxsee.org/root/GPXSee-maps/commit/dc20cd2364bdaadf6e103b20a072490b94083e6d
-  **To verify:** Kartverket's own terms, including any rate limits.
+  **Verified in SPIKE-01 (S8, 2026-09-30; D-086).** Kartverket's own terms
+  page (kartverket.no/en/api-and-data/terms-of-use) confirms CC BY 4.0,
+  "released for free use for both commercial and non-commercial purposes",
+  credited as "©Kartverket". No rate limit is stated. Tile address:
+  `https://cache.kartverket.no/v1/wmts/1.0.0/topo/default/webmercator/{z}/{y}/{x}.png`.
+  **Open item for the tile proxy (D-026), not for this section:** at zoom
+  levels 12–20 the terms require "special permission" from the Geovekst
+  cooperation for anything beyond direct display — a caching proxy must
+  settle this with Kartverket before it is built.
 - It only covers Norway, which fits the launch market (D-003).
-- **Claude's proposal:** Fetch tiles through our own EEA server (a small tile
-  proxy with a cache), so Kartverket never sees users' IP addresses. Render them
-  with MapLibre, an open-source map library (support for this tile type to be
-  verified in the spike).
+- **Verified in SPIKE-01 (S8).** MapLibre React Native
+  (`@maplibre/maplibre-react-native` 11.4.0, MIT) draws Kartverket's tiles on
+  both the Android emulator and the iOS simulator, with no native crash, and
+  the Android build runs on the 16 KB-page image. Its native libraries are
+  confirmed too, at 13.6.1 (Android) and 6.31.0 (iOS), both BSD-2-Clause.
+  Our own EEA tile proxy (this finding's original proposal) is confirmed as
+  later work, not yet built.
 
 ### 10. Critical Alerts: approval takes time and is tied to the app ID
 - On Apple's forum it is stated that the entitlement won't be granted purely for
@@ -237,16 +266,17 @@ before committing.
 | Hosting: app, worker and managed Postgres (private phase) | roughly €20–60 per month |
 | SMS: login codes and escalations for 12–20 people | a few NOK per month |
 
-## Spike plan — SPIKE-01: prove the risky parts on real phones
+## Spike plan — SPIKE-01: prove the risky parts on emulators and simulators (D-037)
 Throwaway code in `/spikes/background-safety/`, never shipped. Uses debug
 builds, so no SDK licence is needed yet. **Fully automated (D-035):** no one
-walks with a phone. Emulators and simulators replay recorded GPS routes, and a
-cloud device farm runs scripted tests on real phones (Section 6). Every test
-below is a script, and the server measures the heartbeat gaps.
+walks with a phone. Emulators and simulators replay recorded GPS routes
+(D-037); the real-device suite (L9) is separate work, switched on before the
+group relies on the app (D-041). Every test below is a script, and the
+server measures the heartbeat gaps.
 
 | Test | What we check | Pass when |
 |------|---------------|-----------|
-| S1 | 45-minute scripted journey, screen off, heartbeat every 60 s — real iPhone and real Samsung in the device farm; simulated GPS route on emulator and simulator | No gap longer than 2 minutes; battery use ≤ ⚙️ 10 % (measured by script where the platform allows) |
+| S1 | 45-minute scripted journey, screen off, heartbeat every 60 s — simulated GPS route on the Android emulator and the iOS simulator (D-037); the real-phone cases (a real iPhone, a real Samsung) are L9's | No gap longer than 2 minutes; battery use ≤ ⚙️ 10 % (measured by script where the platform allows) |
 | S2 | Swipe the app away mid-journey | The REL-04 reminder fires on both platforms |
 | S3 | Manufacturer battery managers, with and without the exemption | The service survives 45 minutes with the exemption; the failure without it is detectable |
 | S4 | Airplane mode for 3 minutes mid-walk | Queued positions arrive in order afterwards (REL-02) |
@@ -254,22 +284,55 @@ below is a script, and the server measures the heartbeat gaps.
 | S6 | One-tap call | Behaviour documented for both platforms (CALL-01) |
 | S7 | Reduce location permission mid-journey | Detected within 1 minute (REL-05) |
 
-Results go in `docs/plan/04b-spike-results.md`. If S1–S3 fail, we revisit the
-fallback in the recommendation above.
-
 **Scope change (D-037):** Until real-device tests are switched on, the spike
-runs on emulators and simulators only. The real-phone parts of S1–S3 (the
-Samsung battery manager, real iPhone background limits) stay open until then.
+ran on emulators and simulators only. The real-phone parts of S1–S3 (the
+Samsung battery manager, real iPhone background limits) stay open until L9
+runs them.
 
 **Licence note:** Test builds distributed through TestFlight and Google Play
-testing tracks are *release* builds, so the location SDK needs a licence (or its
-free 30-day trial licence) before the app can be shown on real phones.
+testing tracks are *release* builds, so the location SDK needs a licence (or
+its free 30-day trial licence) before the app can be shown on real phones.
 Source: https://github.com/transistorsoft/react-native-background-geolocation
+**Settled by D-086:** M3's demo builds use a 30-day trial key, on the
+owner's own phones only; the $399 licence itself is bought in M5, after L9
+passes.
 
-**Needed before the spike:** an Apple Developer account, to install test
-builds on iPhones. The same account is needed to request the Critical Alerts
-entitlement (D-020). The account-type question (private person or company)
-from Section 8 is pulled forward to round 2.
+## Spike results — conditional GO (D-086)
+
+SPIKE-01 ran S1–S7 on the Android emulator and the iOS simulator (D-037),
+and S8 checked MapLibre with Kartverket's tiles. Full results:
+[`04b-spike-results.md`](04b-spike-results.md).
+
+**The go/no-go rule gave NO-GO** (S1 iOS failed and stayed deciding; the
+Android capture showed an unattributed Firebase Installations session).
+**The owner chose the recommended conditional GO instead (D-086,
+2026-10-01):**
+1. **Android:** setup asks the user for the battery-optimisation exemption,
+   and the app checks and reports it, failing loudly when it is missing. S1
+   passed only with it granted: 109 s against the 120 s limit, an 11 s
+   margin, on emulator evidence.
+2. **iOS:** journeys run with `activity.disableStopDetection: true`, not
+   tried in the spike. M3 configures and verifies it on a real phone.
+3. **L9:** a real iPhone's 5-minute stop (unplugged, screen off) and the
+   Android exemption on a real Samsung must pass before the group relies on
+   the app (D-041). If L9 fails, D-086 is reopened and D-023's fallback
+   (native modules) is decided on.
+4. **The capture's Firebase Installations session** is counted as Google
+   Play Services' own traffic, not the SDK's, on the evidence in the
+   results document, part 4.4.
+
+**The sharing-is-visible mechanism** (the JRN section's second story), as
+the spike's app used it: on Android, the SDK's own location foreground
+service notification (`app.notification`, a fixed title and text); on iOS,
+the system's background-location indicator, turned on with
+`geolocation.showsBackgroundLocationIndicator: true`. Both are visible to
+the person carrying the phone for as long as a journey is active.
+
+**Needed before the spike started:** an Apple Developer account was expected
+to install test builds on iPhones, but the spike used an EAS simulator
+build instead (the spec's Q2), so no Apple account was needed for the spike
+itself. An account is still needed to request the Critical Alerts
+entitlement (D-020) and for real test builds.
 
 ## Open questions for the owner
 
@@ -283,10 +346,16 @@ from Section 8 is pulled forward to round 2.
 3. Map tiles? (Recommendation: Kartverket's map, served through our own EEA tile
    proxy.)
 
-**Proposed defaults** (accepted when Section 4 closes unless the owner objects):
+**Proposed defaults — all five accepted as written (D-086, 2026-10-01):**
 - **SMS:** LINK Mobility, with an alphanumeric sender name.
 - **Push:** straight from our server to APNs and FCM, with content-free
-  payloads.
+  payloads. **Note, added with D-086:** FCM push brings Firebase into the
+  Android app itself (a Google Services configuration, and Firebase
+  Installations). That is push plumbing, not analytics, but it is still a
+  data flow to Google, for the privacy assessment (PRIV-06, D-016).
+  SPIKE-01's own network-capture classifier, which flags Firebase hosts as
+  analytics, describes the spike's own evidence only, not this product
+  integration.
 - **Login:** SMS code plus device-bound sessions (SEC-01), and a passkey for the
   admin (SEC-05). Built into our own backend with an established library, so no
   third-party login provider holds user data. The library is chosen in
@@ -320,12 +389,22 @@ from Section 8 is pulled forward to round 2.
   enrolment.
 
 ## Next steps
-1. Owner sends the phone survey (A-01) and starts the AS enrolments (A-02,
-   A-03).
-2. Owner creates the Apple and Google developer accounts (A-02, A-03). Claude
-   drafts the Critical Alerts entitlement request.
-3. SPIKE-01 is built in Claude Code and tested on real walks. **Sections 5–7
-   continue in parallel**; they don't depend on the spike results except for the
-   fallback.
-4. Record the spike results, buy the location SDK licence if the spike passes,
-   and close Section 4.
+Section 4 is closed. What D-086 hands to later milestones:
+1. **M3** configures the two conditions: the Android battery-optimisation
+   exemption in setup, with the app checking and reporting it; and iOS's
+   `activity.disableStopDetection: true`, verified on a real phone.
+2. **M3** also: posts the alert with `CATEGORY_ALARM` (S5 "heard"); decides
+   what the app does when Android's precise location is reduced and the
+   process never comes back (S7's "fine" case); makes the on-device
+   retention settings explicit; reviews the SDK's release merged manifest;
+   and handles the native engines' and MapLibre's licences by hand, since
+   `licenses:check` cannot see them.
+3. **L9**, the real-device suite, must pass before the group relies on the
+   app: a real iPhone's 5-minute stop (unplugged, screen off) and the
+   Android exemption on a real Samsung (D-041). If it fails, D-086 is
+   reopened.
+4. **Owner:** request the SDK's 30-day trial key shortly before M3's demo
+   (A-29), and buy the $399 licence in M5, after L9 passes (D-086).
+5. **Owner:** send the phone survey (A-01) and start the Apple and Google
+   developer account enrolments (A-02, A-03) — still needed for the
+   Critical Alerts request and for real test builds.
