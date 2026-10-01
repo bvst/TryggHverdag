@@ -4,6 +4,6 @@
 - [changedFiles rename blind spot](project_changed_files_rename_blind_spot.md) — `--name-only` lists only a rename's destination; code=/app= classifiers miss moves out
 - [pnpm --filter no-match exits 0](feedback_pnpm_filter_no_match.md) — gate scripts handing over with --filter need `--fail-if-no-match`
 - [Unowned gate configs](project_unowned_gate_configs.md) — as of 2026-10-01 only the app's jest coverage block (apps/mobile/package.json) is unowned
-- [STORE-01 review](project_store01_critical_alerts_review.md) — Apple Critical Alerts text PASS 2026-10-01; open should-fixes; claims-doc checks (F10, fail-silent notices)
+- [STORE-01 review](project_store01_critical_alerts_review.md) — Critical Alerts text, loop 2 PASS (44b85b8); open: app-local "never critical", carriers; claims-doc checks
 - [Verdict-pipeline review](feedback_verdict_pipeline_review.md) — invalid-over-failed precedence, glue args vs test fixtures, coarse go/no-go inputs, "no verdict"
 - [SPIKE-01 night 2026-09-30](project_spike01_night_20260930.md) — loop 2 PASS (6ae585f); verified raw facts; open should-fixes for 04b-spike-results, spec, code
