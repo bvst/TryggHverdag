@@ -1,239 +1,99 @@
-// SPIKE-01: judges one run's directory with the analysis. Thin glue: it reads
-// the files the driver saved and hands them to the tested readers and judges.
-// It decides nothing itself, except how S5 and S6's outputs map to one status,
-// which is written out below.
+// SPIKE-01: judges one run's folder with the tested per-run judge
+// (analysis/judge-run.mjs). Thin glue: it reads the files the driver saved and
+// hands them over as data; every rule is in the analysis (the code review's
+// N4). It never throws.
 //
-// Every run's breaks are the driver's own (meta.json) plus the Mac's sleeps
-// in its window (readSleeps on pmset.txt). A reader that refuses its input
-// means the harness did not produce what the scenario needs: the run is
-// invalid, with the refusal as its evidence.
+// - meta.json and the receiver's records are parsed; a file that is missing
+//   or cannot be parsed is given as null, and the judge says so;
+// - screenshots (*.png) are given as bytes, every other file as text;
+// - the capture (meta.capture) is given as capture.txt, the text of
+//   `tcpdump -tt -nn -r` on it: the judge needs each packet's date.
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { judgeCapture, listDestinations } from '../../analysis/capture.mjs';
-import {
-  readAndroidAlert,
-  readAndroidReminders,
-  readIosAlert,
-  readIosReminders,
-} from '../../analysis/notifications.mjs';
-import { readSleeps } from '../../analysis/pmset.mjs';
-import { judgeS1 } from '../../analysis/s1.mjs';
-import { judgeS2 } from '../../analysis/s2.mjs';
-import { judgeS3 } from '../../analysis/s3.mjs';
-import { judgeS4, readHeld } from '../../analysis/s4.mjs';
-import { checkAlert, judgeAndroidAlert, readAudio } from '../../analysis/s5.mjs';
-import { readTelecom, telecomCallStarted } from '../../analysis/s6.mjs';
-import { judgeS7 } from '../../analysis/s7.mjs';
-import { judgeS8, readCrashes } from '../../analysis/s8.mjs';
-import { APP_ID, fixed } from './run.mjs';
+import { judgeRun } from '../../analysis/judge-run.mjs';
 
-/** The emulator's network, as the capture sees it with Wi-Fi off (drivers/lib/journey.mjs). */
-const EMULATOR_NETWORK = {
-  device: ['10.0.2.15'],
-  receiver: { address: '10.0.2.2', port: fixed.receiverPort },
-  resolver: { address: '10.0.2.3', port: 53 },
-};
-const KARTVERKET = ['cache.kartverket.no'];
+const RECEIVER_FILE = /^receiver-\d+\.jsonl$/;
 
-const text = (dir, name) => readFileSync(join(dir, name), 'utf8');
-const json = (dir, name) => JSON.parse(text(dir, name));
-
-function receiverRecords(dir) {
-  const file = readdirSync(dir).find((name) => /^receiver-\d+\.jsonl$/.test(name));
-  if (file === undefined) throw new Error('the run has no receiver records');
-  return text(dir, file)
+/** The JSON lines of a file; throws when one is not JSON. */
+function jsonLines(file) {
+  return readFileSync(file, 'utf8')
     .split('\n')
     .filter(Boolean)
     .map((line) => JSON.parse(line));
 }
 
-const captureText = (dir) =>
-  execFileSync('tcpdump', ['-nn', '-r', join(dir, 'capture.pcap')], {
+/** The text `tcpdump -tt -nn -r` prints for a pcap. */
+function captureText(file) {
+  return execFileSync('tcpdump', ['-tt', '-nn', '-r', file], {
     encoding: 'utf8',
-    maxBuffer: 1 << 28,
-    stdio: ['ignore', 'pipe', 'ignore'],
+    maxBuffer: 1 << 30,
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
-
-/** What each scenario's judge makes of the run: { status, evidence, details }. */
-const JUDGES = {
-  s1: ({ dir, meta, breaks }) => {
-    const result = judgeS1({ records: receiverRecords(dir), breaks });
-    const details = {
-      largestGapMs: result.largestGapMs,
-      gapsOver60s: result.gapsOver60s,
-      gapsOver120s: result.gapsOver120s,
-      stateChanges: result.stateChanges,
-    };
-    if (meta.capture) {
-      // AC12, judged on its own: it does not change S1's verdict.
-      const capture = judgeCapture({ text: captureText(dir), ...EMULATOR_NETWORK });
-      details.capture = {
-        status: capture.status,
-        problems: capture.problems,
-        flagged: capture.flagged,
-      };
-    }
-    return { status: result.status, evidence: result.evidence, details };
-  },
-  s2: ({ dir, meta, breaks }) => {
-    const title = fixed.reminder.title;
-    const reminders =
-      meta.platform === 'android'
-        ? readAndroidReminders({ text: text(dir, 'notification.txt'), app: APP_ID, title })
-        : readIosReminders({ text: text(dir, 'delivered.json'), title });
-    const result = judgeS2({ records: receiverRecords(dir), reminders, breaks });
-    const { status, evidence, ...details } = result;
-    return { status, evidence, details };
-  },
-  s3: ({ dir, meta, breaks }) => {
-    const result = judgeS3({
-      exemption: meta.exemption,
-      records: receiverRecords(dir),
-      breaks,
-      inForce: meta.inForce,
-    });
-    const { status, evidence, ...details } = result;
-    return { status, evidence, details };
-  },
-  s4: ({ dir, breaks }) => {
-    const records = receiverRecords(dir);
-    const held = readHeld({ text: text(dir, 'held.json'), records });
-    const { status, evidence, ...details } = judgeS4({ records, held, breaks });
-    return { status, evidence, details: { held: held.length, ...details } };
-  },
-  // S5: one status from two findings. Failed when the alert was not shown, or
-  // when the records show its sound went to a muted stream; "heard" not shown
-  // on simulators leaves it passed, and says so in the details.
-  s5: ({ dir, meta, breaks }) => {
-    if (meta.platform === 'android') {
-      const alert = readAndroidAlert({
-        text: text(dir, 'notification.txt'),
-        app: APP_ID,
-        title: fixed.alert.title,
-      });
-      const judged = judgeAndroidAlert({
-        alert,
-        audio: readAudio(text(dir, 'audio.txt')),
-        app: APP_ID,
-      });
-      const failed = judged.shown === 'failed' || judged.heard === 'failed';
-      return withBreaks(breaks, {
-        status: failed ? 'failed' : 'passed',
-        evidence: [],
-        details: judged,
-      });
-    }
-    const alert = readIosAlert({
-      received: text(dir, 'received.json'),
-      delivered: text(dir, 'delivered.json'),
-      title: fixed.alert.title,
-    });
-    const checked = checkAlert({
-      expected: { payload: json(dir, 'payload.json'), text: fixed.alert.body },
-      delivered: alert.alert,
-    });
-    const passed = checked.status === 'passed' && alert.presented;
-    return withBreaks(breaks, {
-      status: passed ? 'passed' : 'failed',
-      evidence: [],
-      details: { payload: checked.status, problems: checked.problems, presented: alert.presented },
-    });
-  },
-  // S6: the behaviour is recorded, not scored (AC10): a run passes once
-  // Telecom's record was read, and says whether the tap alone started a call.
-  s6: ({ dir, meta, breaks }) => {
-    const callStarted = telecomCallStarted({
-      before: readTelecom(text(dir, 'telecom-before.txt')),
-      after: readTelecom(text(dir, 'telecom.txt')),
-      app: APP_ID,
-    });
-    return withBreaks(breaks, {
-      status: 'passed',
-      evidence: [],
-      details: { callPhone: meta.callPhone, callStarted },
-    });
-  },
-  s7: ({ dir, breaks }) => {
-    const { status, evidence, ...details } = judgeS7({ records: receiverRecords(dir), breaks });
-    return { status, evidence, details };
-  },
-  s8: ({ dir, meta, breaks }) => {
-    const crashes =
-      meta.platform === 'android'
-        ? readCrashes({ platform: 'android', text: text(dir, 'crash.txt'), app: APP_ID })
-        : (meta.crashReports ?? []).flatMap((name) =>
-            readCrashes({ platform: 'ios', text: text(dir, name), app: APP_ID }),
-          );
-    const shots = (meta.shots ?? []).map((shot) => ({
-      zoom: shot.zoom,
-      region: shot.region,
-      png: readFileSync(join(dir, shot.file)),
-    }));
-    const result = judgeS8({
-      platform: meta.platform,
-      shots,
-      sentinel: fixed.sentinel,
-      crashes,
-      processRunning: meta.processRunning,
-      aligned16k: meta.aligned16k,
-    });
-    const details = {
-      shots: result.shots,
-      problems: result.problems,
-    };
-    if (meta.capture) {
-      // Recorded, not judged (AC16).
-      const listed = listDestinations({
-        text: captureText(dir),
-        device: EMULATOR_NETWORK.device,
-        resolver: EMULATOR_NETWORK.resolver,
-        kartverket: KARTVERKET,
-      });
-      details.destinations = listed.destinations;
-      details.flagged = listed.flagged;
-    }
-    return withBreaks(breaks, { status: result.status, evidence: [], details });
-  },
-};
-
-/** For judges that take no breaks: any break makes the run invalid. */
-function withBreaks(breaks, result) {
-  if (breaks.length === 0) return result;
-  return { ...result, status: 'invalid', evidence: [...breaks, ...result.evidence] };
 }
 
 /**
- * Judges the run in `dir`. Never throws: whatever cannot be judged is an
- * invalid run with the reason as its evidence.
+ * The run's folder as the judge takes it: { meta, records, files }, and what
+ * could not be read (`unread`), word for word.
+ */
+export function readRunFolder(dir) {
+  const unread = [];
+  if (!existsSync(dir)) {
+    return { meta: null, records: null, files: {}, unread: ['the run has no folder'] };
+  }
+  let meta = null;
+  try {
+    meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') unread.push(`meta.json could not be parsed (${error.name})`);
+  }
+  let records = null;
+  const receiver = readdirSync(dir).find((name) => RECEIVER_FILE.test(name));
+  if (receiver !== undefined) {
+    try {
+      records = jsonLines(join(dir, receiver));
+    } catch (error) {
+      unread.push(`${receiver} could not be parsed (${error.name})`);
+    }
+  }
+  const files = {};
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    if (!statSync(path).isFile() || name === 'meta.json' || RECEIVER_FILE.test(name)) continue;
+    if (name.endsWith('.pcap')) continue;
+    files[name] = name.endsWith('.png') ? readFileSync(path) : readFileSync(path, 'utf8');
+  }
+  if (typeof meta?.capture === 'string' && meta.capture !== '') {
+    try {
+      files['capture.txt'] = captureText(join(dir, meta.capture));
+    } catch (error) {
+      unread.push(`tcpdump could not read ${meta.capture} (${error.code ?? error.name})`);
+    }
+  }
+  return { meta, records, files, unread };
+}
+
+/**
+ * Judges the run in `dir`, given how its driver exited ({ code, signal }).
+ * Never throws: whatever cannot be judged is an invalid run with the reason.
  * @returns {{ status: 'passed' | 'failed' | 'invalid', evidence: string[], details: object }}
  */
-export function judgeRun(dir) {
-  let meta;
+export function judgeRunFolder(dir, exit) {
   try {
-    meta = json(dir, 'meta.json');
-  } catch {
+    const { meta, records, files, unread } = readRunFolder(dir);
+    const result = judgeRun({ meta, records, files, exit });
+    if (unread.length === 0) return result;
+    // What could not be read is said beside the result, and in an invalid
+    // run's evidence; it never changes the status.
+    const evidence =
+      result.status === 'invalid' ? [...unread, ...result.evidence] : result.evidence;
+    return { ...result, evidence, details: { ...result.details, unread } };
+  } catch (error) {
     return {
       status: 'invalid',
-      evidence: ['the run left no meta.json: the driver did not finish'],
+      evidence: [`the run's folder could not be read: ${error?.message ?? String(error)}`],
       details: {},
     };
-  }
-  try {
-    const breaks = [...(meta.breaks ?? [])];
-    if (!existsSync(join(dir, 'pmset.txt'))) throw new Error('the run has no pmset.txt');
-    breaks.push(
-      ...readSleeps({ text: text(dir, 'pmset.txt'), from: meta.startedAt, to: meta.endedAt }),
-    );
-    const judge = JUDGES[meta.scenario];
-    if (judge === undefined) throw new Error(`no judge for scenario ${meta.scenario}`);
-    const result = judge({ dir, meta, breaks });
-    if (result.status === 'invalid' && result.evidence.length === 0) {
-      return { ...result, evidence: ['the judge found the run invalid without saying why'] };
-    }
-    return result;
-  } catch (error) {
-    return { status: 'invalid', evidence: [`not judged: ${error.message}`], details: {} };
   }
 }

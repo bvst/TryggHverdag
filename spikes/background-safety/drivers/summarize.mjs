@@ -1,19 +1,32 @@
 #!/usr/bin/env node
-// SPIKE-01-AC13: reads a night's manifest and prints each scenario's verdict
-// per platform through judgeScenario, with its valid and invalid runs. Thin
-// glue over the tested analysis: it decides nothing itself.
+// SPIKE-01-AC13 and AC15: reads a night's manifest and prints each scenario's
+// verdict per platform through judgeScenario, with its valid and invalid runs,
+// then the go/no-go: its input computed by goNoGoInput, its rule applied by
+// goNoGo. Thin glue over the tested analysis: it decides nothing itself.
 //
 //   node drivers/summarize.mjs --night night-YYYYMMDD
 //   node drivers/summarize.mjs --manifest <path>
+//   … --build-android passed --build-ios passed --licence passed
+//
+// The build (AC2) and the licence (AC15) are read by hand, so they are given
+// here. Without all three, the verdicts are printed and the go/no-go is not.
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 
+import { goNoGo } from '../analysis/go-no-go.mjs';
+import { goNoGoInput } from '../analysis/manifest.mjs';
 import { judgeScenario } from '../analysis/runs.mjs';
 import { RUNS } from './lib/run.mjs';
 
 const { values } = parseArgs({
-  options: { night: { type: 'string' }, manifest: { type: 'string' } },
+  options: {
+    night: { type: 'string' },
+    manifest: { type: 'string' },
+    'build-android': { type: 'string' },
+    'build-ios': { type: 'string' },
+    licence: { type: 'string' },
+  },
 });
 const file = values.manifest ?? (values.night ? join(RUNS, values.night, 'manifest.jsonl') : null);
 if (file === null || !existsSync(file)) {
@@ -59,10 +72,13 @@ for (const [key, group] of groups) {
         evidence: run.evidence,
       })),
     });
-    verdict = `${result.verdict.toUpperCase()}  (valid ${result.validRuns}, invalid ${result.invalidRuns})`;
+    const counts = `(valid ${result.validRuns}, invalid ${result.invalidRuns})`;
+    verdict =
+      result.why === undefined
+        ? `${result.verdict.toUpperCase()}  ${counts}`
+        : `${result.verdict.toUpperCase()}: ${result.why}  ${counts}`;
   } catch (error) {
-    const valid = judged.filter((run) => run.status !== 'invalid').length;
-    verdict = `NO VERDICT: ${error.message}  (valid ${valid}, invalid ${judged.length - valid})`;
+    verdict = `NOT JUDGED: ${error.message}`;
   }
   say(`${scenario.toUpperCase()} ${platform}: ${verdict}`);
   for (const run of group) {
@@ -81,24 +97,51 @@ if (stopped.length > 0) {
   for (const entry of stopped) say(`case stopped: ${entry.key}: ${entry.reason}`);
 }
 
+say();
+const byHand = [values['build-android'], values['build-ios'], values.licence];
+if (byHand.some((value) => value === undefined)) {
+  say(
+    'Go/no-go: not computed. Give --build-android, --build-ios and --licence, ' +
+      'each as read by hand (passed, failed, or not shown on simulators).',
+  );
+} else {
+  const verdicts = goNoGoInput({
+    entries,
+    build: { android: values['build-android'], ios: values['build-ios'] },
+    licence: values.licence,
+  });
+  say('Go/no-go (goNoGoInput, then goNoGo):');
+  say();
+  say(goNoGo(verdicts).text);
+}
+
 /** The one or two facts about a run worth seeing next to its status. */
 function highlight(run) {
   const d = run.details ?? {};
   const parts = [];
   if (Number.isFinite(d.largestGapMs))
     parts.push(`largest gap ${Math.round(d.largestGapMs / 1000)} s`);
-  if (d.capture)
-    parts.push(
-      `capture ${d.capture.status}${d.capture.problems.length ? ` (${d.capture.problems.length} problems)` : ''}`,
-    );
+  if (d.capture) {
+    const problems = d.capture.problems?.length ?? 0;
+    const clock = Number.isFinite(d.capture.clock?.offsetMs)
+      ? `, pcap ${(d.capture.clock.offsetMs / 1000).toFixed(1)} s behind`
+      : '';
+    parts.push(`capture ${d.capture.status}${problems ? ` (${problems} problems)` : ''}${clock}`);
+  }
   if (d.restrictions) parts.push(`in force: ${d.restrictions.inForce.join(', ') || 'none'}`);
   if (Number.isFinite(d.reportDelayMs))
     parts.push(`report after ${Math.round(d.reportDelayMs / 1000)} s`);
+  if (typeof d.processEnded === 'boolean') {
+    parts.push(`process ended: ${d.processEnded}, ${d.arrivalsAfterChange} arrival(s) after`);
+  }
   if (Number.isFinite(d.reminderDelayMs))
     parts.push(`reminder after ${Math.round(d.reminderDelayMs / 1000)} s`);
-  if (d.shown) parts.push(`shown ${d.shown}, heard ${d.heard}`);
-  if (typeof d.callStarted === 'boolean') parts.push(`call started on the tap: ${d.callStarted}`);
-  if (typeof d.presented === 'boolean') parts.push(`presented ${d.presented}`);
+  if (d.seen) parts.push(`seen ${d.seen}, heard ${d.heard}, text ${d.text}`);
+  if (typeof d.callStarted === 'boolean') {
+    parts.push(`call started on the tap: ${d.callStarted}, placed by ${d.placedBy ?? 'nobody'}`);
+  }
+  if ('presented' in d) parts.push(`presented ${d.presented}, text ${d.text}`);
+  if (d.alignment) parts.push(`16 KB aligned: ${d.alignment.aligned16k}`);
   if (Array.isArray(d.missing) && d.missing.length > 0)
     parts.push(`${d.missing.length} held record(s) missing`);
   return parts.join('; ');
