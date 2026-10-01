@@ -22,8 +22,8 @@ closed.
 
 | ID | Task | Status |
 |----|------|--------|
-| SPIKE-01 | Background safety on emulators and simulators: S1–S7, and S8, MapLibre with Kartverket's tiles | ✅ Done (2026-10-01) — both nights ran (`night-20260930`, 38 runs; `night-20261001-s1-exempt`, 2 runs; none invalid), all four reviewers passed through review loop 2, and the owner chose a **conditional GO** over the rule's NO-GO, recorded as **D-086**. Results: `docs/plan/04b-spike-results.md`. Section 4 is closed |
-| — | Critical Alerts request drafted | ⚪ Not started. The roadmap lists it under M1, but it has no ID and no spec (an open item in [`progress/m1.md`](progress/m1.md)). **This is the only thing still open for M1's exit** |
+| SPIKE-01 | Background safety on emulators and simulators: S1–S7, and S8, MapLibre with Kartverket's tiles | ✅ Done (2026-10-01) — both nights ran (`night-20260930`, 38 runs; `night-20261001-s1-exempt`, 2 runs; none invalid), all four reviewers passed through review loop 2, and the owner chose a **conditional GO** over the rule's NO-GO, recorded as **D-086**. Results: `docs/plan/04b-spike-results.md`. Section 4 is closed Merged as `d6a2dff` ([#49](https://github.com/bvst/TryggHverdag/pull/49), 2026-10-01); CI on `main` green, 10 of 10 jobs; the raw network captures deleted, as D-086 says |
+| STORE-01 | Critical Alerts entitlement request drafted | ⚪ Not started. The owner gave it an ID on 2026-10-01: Claude drafts the request in M1, and the owner sends it once the Apple Developer account (A-02) exists. Spec next (`/feature STORE-01`). **The only thing still open for M1's exit** |
 
 ## M0 at a glance
 
