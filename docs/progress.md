@@ -272,9 +272,10 @@ The things that still bite, and cost a session hours the first time.
   `docs/specs/**`, and `test-author` only test files and `packages/test-kit/**`
   — neither allowlist covers `.claude/agent-memory/<agent>/**`, so a memory
   write from either agent is blocked and the session must stop and report it
-  (never work around a guard block). The four reviewer agents hold no
-  Edit/Write tool at all, so their memory is unaffected. Found while drafting
-  STORE-01, 2026-10-01; a configuration gap for the owner, with no ID yet.
+  (never work around a guard block). It has fired: `test-author` three times
+  in SPIKE-01 and `planner` twice in STORE-01, each stopped and reported. The
+  reviewers and `implementer` write their own memory without trouble. A
+  configuration gap for the owner, with no ID yet.
 
 ## In flight
 
