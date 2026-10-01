@@ -1568,3 +1568,97 @@ test("SPIKE-01-AC12: the capture's clock is refused when a rival offset matches 
   assert.equal(result.details.capture?.status, 'invalid', 'one of two equal offsets was picked');
   assert.match(result.details.capture.problems.join('\n'), /offset|clock/i);
 });
+
+// A break with no time (meta.breaks, the driver's own words) beside S5's and
+// S8's static evidence (the coordinator's decision, review loop 2). Evidence
+// that no harness break can produce is final: a crash log that names the app,
+// zipalign's failed check, or an alert text that differs from the fixed one.
+// The run stays failed, with the break in the evidence. But "the app was no
+// longer running" beside "the emulator exited" is the harness's doing as much
+// as the app's, so that run is invalid.
+
+/** The driver's own words when the emulator dies mid-run (drivers/lib/android.mjs). */
+const EMULATOR_EXITED = 'the Android emulator exited or stopped answering during the run';
+/** The run with `text`, a break with no time, in meta.json's breaks. */
+const withUntimedBreak = (run, text) => ({ ...run, meta: { ...run.meta, breaks: [text] } });
+
+test('SPIKE-01-AC13: S5 and S8 with a break that has no time: a changed alert text, a crash log naming the app, or a failed alignment check stays failed, with the break in the evidence', async () => {
+  const cases = [
+    [
+      'S5: the alert text changed',
+      s5Android({ text: `${FIXED.alert.body.slice(0, -1)}!`, usage: 'USAGE_ALARM' }),
+      'the receiver exited before the run ended',
+    ],
+    [
+      'S8: the crash log names the app',
+      s8Run('android', (meta, files) => (files['crash.txt'] = APP_CRASH_LOG)),
+      'the receiver exited before the run ended',
+    ],
+    [
+      'S8: the crash log names the app, which is no longer running, and the emulator exited',
+      s8Run('android', (meta, files) => {
+        files['crash.txt'] = APP_CRASH_LOG;
+        meta.processRunning = false;
+      }),
+      EMULATOR_EXITED,
+    ],
+    ['S8: zipalign found a library misaligned', s8Run('android', MISALIGNED), EMULATOR_EXITED],
+  ];
+  for (const [what, run, text] of cases) {
+    const result = await judgeRun(withUntimedBreak(run, text));
+    assert.equal(result.status, 'failed', `${what}: the break overruled it`);
+    assert.ok(result.evidence.includes(text), `${what}: the break is not in the evidence`);
+  }
+});
+
+test('SPIKE-01-AC13: S8 with "the app was no longer running" beside "the emulator exited", and no crash log naming the app, is invalid, not failed', async () => {
+  const result = await judgeRun(
+    withUntimedBreak(
+      s8Run('android', (meta) => {
+        meta.processRunning = false;
+      }),
+      EMULATOR_EXITED,
+    ),
+  );
+  assert.equal(result.status, 'invalid', "the emulator's exit was blamed on the app");
+  assert.ok(result.evidence.includes(EMULATOR_EXITED), 'the break is not in the evidence');
+});
+
+// S8's listing knows the receiver too (the coordinator's decision, review loop
+// 2): the Mac on the receiver's own port is the receiver, never unknown and
+// never flagged.
+
+test("SPIKE-01-AC16: S8's capture through judgeRun: the Mac on the receiver's own port is the receiver", async () => {
+  const at = (ms, rest) => capturedAt(WALL0 + ms, rest);
+  const capture =
+    [
+      'reading from file capture.pcap, link-type EN10MB (Ethernet), snapshot length 262144',
+      at(5 * S, 'IP 10.0.2.15.40001 > 10.0.2.3.53: 5101+ A? cache.kartverket.no. (37)'),
+      at(5 * S + 10, 'IP 10.0.2.3.53 > 10.0.2.15.40001: 5101 1/0/0 A 192.0.2.50 (53)'),
+      at(5 * S + 20, 'IP 10.0.2.15.50002 > 192.0.2.50.443: Flags [S], seq 1, win 65535, length 0'),
+      at(
+        20 * S,
+        `IP 10.0.2.15.54100 > 10.0.2.2.${PORT}: Flags [P.], seq 1:260, ack 1, win 65535, length 259`,
+      ),
+      at(
+        20 * S + 60,
+        `IP 10.0.2.2.${PORT} > 10.0.2.15.54100: Flags [P.], seq 1:20, ack 260, win 65535, length 19`,
+      ),
+    ].join('\n') + '\n';
+  const result = await judgeRun(
+    s8Run('android', (meta, files) => {
+      meta.capture = 'capture.pcap';
+      meta.wifiOffForCapture = true;
+      files['capture.txt'] = capture;
+    }),
+  );
+  assert.equal(result.status, 'passed', "the capture changed S8's verdict");
+  const receiver = (result.details.destinations ?? []).find(
+    (destination) => destination.address === '10.0.2.2' && destination.port === PORT,
+  );
+  assert.equal(receiver?.owner, 'receiver', "the receiver's own port is not the receiver's");
+  assert.ok(
+    !(result.details.flagged ?? []).some((flag) => flag.address === '10.0.2.2'),
+    'the receiver is flagged',
+  );
+});

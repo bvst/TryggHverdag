@@ -720,12 +720,13 @@ test("SPIKE-01-AC16: in S8's map capture, a firebase*.googleapis.com host and Cr
 });
 
 // S8's listing knows the Mac (the code review's note c, review loop 2). Given
-// the receiver's addresses (`receiver`, as judgeCapture takes it), the Mac's
-// address on any port is the harness's: the debug build probing it for Metro,
-// over either family. Without that, the listing called it unknown and flagged
-// it.
+// the receiver's addresses and port (`receiver`, as judgeCapture takes it),
+// the Mac's address on any other port is the harness's: the debug build
+// probing it for Metro, over either family. On the receiver's own port it is
+// the receiver (the coordinator's decision). Without that, the listing called
+// both unknown and flagged them.
 
-test("SPIKE-01-AC16: in S8's map capture, given the receiver's addresses, the Mac on any port is the harness's, over either family, never unknown and never flagged", async () => {
+test("SPIKE-01-AC16: in S8's map capture, given the receiver's addresses, the Mac on any port but the receiver's own is the harness's, over either family, never unknown and never flagged", async () => {
   const result = await listDestinations({
     text: mapText(
       '21:00:12.000000 IP 10.0.2.15.39070 > 10.0.2.2.8081: Flags [S], seq 665417719, win 65535, options [mss 1460,sackOK,TS val 3436156711 ecr 0,nop,wscale 9], length 0',
@@ -749,4 +750,24 @@ test("SPIKE-01-AC16: in S8's map capture, given the receiver's addresses, the Ma
     );
   }
   assert.equal(ownerOf(result)['192.0.2.50'], 'kartverket', 'the tiles are no longer listed');
+});
+
+test("SPIKE-01-AC16: in S8's map capture, given the receiver's addresses, the Mac on the receiver's own port is the receiver, over either family, never unknown and never flagged", async () => {
+  const result = await listDestinations({
+    text: mapText(
+      '21:00:20.000000 IP 10.0.2.15.50003 > 10.0.2.2.8787: Flags [P.], seq 1:301, ack 1, win 502, length 300',
+      '21:00:20.010000 IP 10.0.2.2.8787 > 10.0.2.15.50003: Flags [P.], seq 1:20, ack 301, win 502, length 19',
+      '21:00:21.000000 IP6 fec0::15.50004 > fec0::2.8787: Flags [P.], seq 1:301, ack 1, win 502, length 300',
+    ),
+    ...MAP_NETWORK,
+    receiver: NETWORK.receiver,
+    kartverket: [TILE_HOST],
+  });
+  for (const address of ['10.0.2.2', 'fec0::2']) {
+    assert.equal(ownerAt(result, address, 8787), 'receiver', `${address} port 8787`);
+    assert.ok(
+      !result.flagged.some((flag) => flag.address === address),
+      `${address} port 8787 is flagged`,
+    );
+  }
 });

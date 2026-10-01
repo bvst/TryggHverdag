@@ -572,3 +572,56 @@ test("SPIKE-01-AC15: the night's pattern: S1 failed on both devices and passed w
     'Android S1 is not passed with the exemption',
   );
 });
+
+// The coordinator's decisions (review loop 2):
+// - "S1 exempt" failing while the plain case passes is a finding for the
+//   owner: the exemption the app's setup would ask for made S1 worse. It does
+//   not decide the SDK, whose S1 passed.
+// - The capture (AC12) is failed if any capture run in the input failed, from
+//   either night: the plain case's or the exempt case's. A failed capture is
+//   final, whatever another run's capture could not show.
+
+test('SPIKE-01-AC15: "S1 exempt" failing while the plain case passes is listed as a finding, and does not decide the SDK', async () => {
+  const verdicts = await goNoGoInput(
+    input((entries) => entries.push(...exemptRuns(F)), WITH_EXEMPT),
+  );
+  const result = await goNoGo(verdicts);
+  assert.equal(result.recommendation, 'GO', 'the exempt case decided the SDK, whose S1 passed');
+  assert.ok(
+    result.findings.some(
+      (finding) =>
+        finding.platform === 'android' &&
+        /\bS1\b/.test(finding.item) &&
+        /exempt/i.test(`${finding.item} ${finding.why}`),
+    ),
+    '"S1 exempt" failing is not a finding',
+  );
+});
+
+test("SPIKE-01-AC12: the capture is failed if any capture run failed, from either night: the exempt case's capture failing fails it beside the plain case's that passed or could not be read", async () => {
+  const cases = [
+    ['beside a passed one', P],
+    ['beside one that could not be read', 'invalid'],
+  ];
+  for (const [what, plain] of cases) {
+    const verdicts = await goNoGoInput(
+      input((entries) => {
+        runsOf(entries, 's1', 'android', null)[0].details.capture.status = plain;
+        const exempt = exemptRuns(P);
+        exempt[0].details.capture.status = F;
+        entries.push(...exempt);
+      }, WITH_EXEMPT),
+    );
+    assert.equal(verdicts.capture.android, F, `the exempt run's failed capture, ${what}`);
+    assert.equal((await goNoGo(verdicts)).recommendation, 'NO-GO', what);
+  }
+
+  // The plain case's capture failing, beside the exempt case's that passed.
+  const plainFailed = await goNoGoInput(
+    input((entries) => {
+      runsOf(entries, 's1', 'android', null)[0].details.capture.status = F;
+      entries.push(...exemptRuns(P));
+    }, WITH_EXEMPT),
+  );
+  assert.equal(plainFailed.capture.android, F, "the plain run's failed capture");
+});

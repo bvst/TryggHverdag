@@ -409,9 +409,10 @@ test('SPIKE-01-AC8: text that is not held.json is refused, never read as "nothin
 // sleep of the Mac, { text, from, to } on its wall clock) cannot explain any
 // of them, so it does not rescue the run: it is failed, and the break stays in
 // the evidence. A break from that mark on, over the flush and the watch after
-// it, could have hidden an arrival, so it makes the run invalid; so does a
-// break with no time. A run that would pass is invalid with any break, as
-// before.
+// it, could have hidden an arrival, so it makes a run with a held position
+// missing invalid; so does a break with no time. An order already broken
+// before a break began is final (the last test below). A run that would pass
+// is invalid with any break, as before.
 
 /** A sleep of the Mac, `secs` long from `t` into the journey, as readSleeps gives it. */
 const sleepBreak = (t, secs) => ({
@@ -470,5 +471,40 @@ test('SPIKE-01-AC13: a held position missing is still invalid with a break after
     const result = await judgeS4({ records, held: HELD, breaks });
     assert.equal(result.status, 'invalid', `${what}: the SDK was blamed for what the harness hid`);
     assert.ok(result.evidence.length > 0, `${what}: invalid without its evidence`);
+  }
+});
+
+// An order broken before a break began is final (the coordinator's decision,
+// review loop 2): no later break can undo arrivals the receiver already
+// recorded out of order. In flushed(OUT_OF_ORDER), held-3 arrives at 8 min
+// 5 s and held-2, recorded before it, at 8 min 12 s: the order is broken from
+// then. A break over the flush itself (the hole from 7 min 55 s to 8 min 25 s
+// above) still makes the run invalid.
+
+test('SPIKE-01-AC8: an out-of-order arrival already seen before a break began is failed, with the break in the evidence', async () => {
+  const cases = [
+    ['a sleep at 10 min', run(flushed(OUT_OF_ORDER)), [sleepBreak(10 * MIN, 60)]],
+    [
+      'a hole in the ticks from 10 min 55 s',
+      run(flushed(OUT_OF_ORDER), { tickHoles: [[11 * MIN, 12 * MIN]] }),
+      [],
+    ],
+  ];
+  for (const [what, records, breaks] of cases) {
+    const result = await judgeS4({ records, held: HELD, breaks });
+    assert.equal(result.outOfOrder, true, what);
+    assert.equal(
+      result.status,
+      'failed',
+      `${what}: the later break rescued an order already broken`,
+    );
+    if (breaks.length > 0) {
+      assert.ok(
+        result.evidence.includes(breaks[0].text),
+        `${what}: the sleep is not in the evidence`,
+      );
+    } else {
+      assert.match(result.evidence.join('\n'), /tick/i, `${what}: the hole is not in the evidence`);
+    }
   }
 });
