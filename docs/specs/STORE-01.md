@@ -2,7 +2,9 @@
 
 **Status:** 📝 Spec written. The owner answered Q1 to Q3 on 2026-10-01: only
 the lost-contact alert; production and a test build; identifiers fixed at
-sending, name-neutral · **Milestone:** M1 · **Branch:**
+sending, name-neutral. After step 5's reviews, Q4 the same day: the warning
+that a journey has no responder left stays non-critical, and is loud in the
+app · **Milestone:** M1 · **Branch:**
 `feat/STORE-01-critical-alerts-request`, from `main` at `f46660c` ·
 **Written:** 2026-10-01
 
@@ -84,7 +86,7 @@ sending, which needs A-02, and it changes no code.
 | -------- | -------------------------- |
 | D-003 | The launch market is Norway |
 | D-004 | A small private group first; iOS through TestFlight |
-| D-007 | The lost-contact alert is decided on the server, because the phone may be dead or taken |
+| D-007 | The lost-contact alert is decided on the server, and only on silence: if the heartbeats stop, the server alerts the journey's responders |
 | D-008, D-013 | Responders are members of the private group, and all have the app |
 | D-009 | The first group is friends and family, at least 12 people |
 | D-014 | Bokmål first for **app text**. The request is not app text; it goes to Apple, whose form is in English |
@@ -102,7 +104,8 @@ sending, which needs A-02, and it changes no code.
 | D-086 | Push straight to APNs and FCM with content-free payloads; M3 posts the Android alert with `CATEGORY_ALARM`. Its sources include the location SDK's licence, read 2026-09-30, whose clause 1.9 covers identifiers with development suffixes (Q3) |
 
 **The owner's answers of 2026-10-01** (under "Answered", at the end) are binding
-for this spec. Q1's and Q3's become decisions at step 8.
+for this spec. Q1's and Q4's become one decision at step 8; Q3's goes with them
+or on its own.
 
 ### What Apple says, as read on 2026-10-01
 
@@ -169,6 +172,7 @@ the others in words:
 | the journey-only-location rule | `02-norway-law-privacy.md`, privacy table, 1st row |
 | the no-third-party-SDK rule | same table, 6th row |
 | the last-responder rule, the 24-hour rule | `05-architecture.md`, edge-case rules, 2nd and 6th rows |
+| the outbox rule | `05-architecture.md`, design principles, 5th row. Not tracked, but named in words like the rest |
 
 **STORE is not a tracked prefix.** `collectRequirements`
 (`scripts/lib/requirements.mjs`) reads stories written `**ID · title**` from
@@ -212,9 +216,10 @@ text for Apple names none, because Apple does not know them.
   run.
 - `.claude/hooks/scan-sensitive.mjs`, run on every Write and Edit
   (`.claude/settings.json`). It blocks private keys, hard-coded secrets,
-  locations in log statements, and real-looking Norwegian mobile numbers
-  outside the test kit's fixtures file. It does not look for email addresses,
-  postal addresses, D-U-N-S or organisation numbers, or coordinates in prose.
+  locations in log statements, and Norwegian mobile numbers written with
+  `+47` or `0047`, outside the test kit's fixtures file. It does not look for
+  8-digit domestic numbers, email addresses, postal addresses, D-U-N-S or
+  organisation numbers, or coordinates in prose.
 - `08-cicd-releases.md`: three app variants (development, preview, production),
   "each with its own app ID".
 - The location SDK's licence, clause 1.9, was quoted verbatim by the
@@ -238,11 +243,22 @@ particular:
 - how the App ID's capability and the provisioning profile change after
   approval;
 - the push payload's keys for the critical level and its sound;
+- whether APNs collapses a duplicate push by a collapse ID (Part E, item 6);
 - whether Time Sensitive needs a capability enabled on the App ID;
 - whether a registered App ID's identifier can be changed later;
-- how long Apple takes.
+- how long Apple takes;
+- what iOS does with a critical-level push to a device that has not authorised
+  critical alerts;
+- whether iOS lets the app read which level the user granted. Part E's
+  readiness (items 3 and 6) assumes it can.
 
-Each is marked "to verify" where the deliverable uses it.
+**Not checked either: the L9 device farm.** Whether the farm (Firebase Test
+Lab, M5, the roadmap's M5 row) can grant the critical permission on an iPhone
+and receive real APNs pushes is unknown. If it cannot, the owner is told, as in
+R14, before go-live, because D-041 asks L9 to pass first.
+
+Each is marked "to verify" where the deliverable uses it, and Part C lists them
+all.
 
 ## The deliverable
 
@@ -273,7 +289,10 @@ model (D-045). STORE-01 has no test to write (see "Test plan"); at step 2,
 ### Its parts, in order
 
 - **Header.** "Draft — not sent", the date, a link to this spec, and the
-  decisions it rests on.
+  decisions it rests on. Where it says what the placeholders are, it says:
+  the AS's details go into Apple's form only; the two identifiers are
+  placeholders in this file, and their values are recorded publicly at Part D,
+  step 2.
 - **Part A, the request text.** English, set apart with a clear start and end so
   the owner can copy it without the notes around it. It answers, in this order:
   1. what the app is, and who makes it (a placeholder);
@@ -287,15 +306,27 @@ model (D-045). STORE-01 has no test to write (see "Test plan"); at step 2,
   8. what the notification carries.
 
   Each answer is short, because the form's limits are unknown.
+
+  **Each answer stands alone,** because the owner may split the answers across
+  the form's fields:
+  - no answer points to another by number ("answer 2");
+  - answer 2 says the test build is for automated tests "of the lost-contact
+    alert described below", not "of exactly this alert";
+  - answer 6 says its points are about the production app, without pointing
+    to answer 2 for the test build.
+
+  Part A says "while the private group uses it", never "the private phase",
+  which is the plan's term, not Apple's.
 - **Part B, claims and sources.** One row per claim in Part A, with its source
   in the plan and the milestone that will build it. This part is not sent.
 - **Part C, Apple's form and Apple's words.** The form's address and what is
-  unknown about it, and the Apple quotes above with their documents and the
-  date read.
+  unknown about it, the Apple quotes above with their documents and the date
+  read, and every item under "Not checked" as "to verify", the device farm's
+  included.
 - **Part D, the owner's steps to send it** ("What sending needs", below).
-- **Part E, after Apple answers.** What follows approval, a refusal, or no
-  answer, and what the app then needs ("What the app needs once approved",
-  below).
+- **Part E, after Apple answers.** What follows approval, late approval, a
+  refusal, or no answer; what the app then needs; and two flags for other
+  requirements' own specs ("What the app needs once Apple answers", below).
 
 ### Which notifications will use Critical Alerts
 
@@ -331,6 +362,12 @@ the plan as one that never will, and adds that no other notification will:
 - the notice of the automatic end 24 hours after an alert (the 24-hour rule);
 - the new-device login notice (the new-device notice).
 
+**The warning that a journey has no responder left stays non-critical,** by
+the owner's answer to Q4 (2026-10-01). It is the one walker-facing notice where
+missing it means a later silence alerts nobody. So the last-responder rule's
+own spec makes the no-responder state loud on the walker's journey screen, and
+does not rely on a notification alone (R15; Part E's flags).
+
 The SMS messages (the SMS-escalation story) are not notifications and have no
 level.
 
@@ -347,26 +384,37 @@ the owner (STORE-01-AC7).
 | C2 | It is in development and has no users yet. It will first be used by a small private group of invited friends and family, at least 12 people, through TestFlight | D-004; D-009; the roadmap | M5, M6 |
 | C3 | It is developed by [the AS, as enrolled] | D-027 | A placeholder, filled in Apple's form only |
 | C4 | During a journey the phone reports to our server regularly. If the server hears nothing for 5 minutes, it alerts the journey's responders | The heartbeat story; D-021; the lost-contact story | M2, M3 |
-| C5 | The server decides, not the phone, so the alert still goes out when the phone is off, broken, out of coverage or taken | The lost-contact story; D-007 | M2 |
+| C5 | The server decides, not the phone, so the alert still goes out when the phone is off, broken or out of coverage | The lost-contact story; D-007 | M2 |
 | C6 | That lost-contact alert is the only notification that will use Critical Alerts. The notice to #1 when a walker calls them will use Time Sensitive | The alert-level rule, as the owner's answer to Q1 settles it (a decision at step 8) | M3, tested there (Part E) |
-| C7 | The notifications that never will, by name (the list above), and that no other notification will | The stories and rules named in that list; the owner's answer to Q1 | M3 |
+| C7 | The notifications that never will, by name (the list above), and that no other notification will | The stories and rules named in that list; the owner's answers to Q1 and Q4 | M3 |
 | C8 | Each responder is alerted once for each lost-contact event. If nobody taps "I'm on it" within 2 minutes, every responder gets an SMS instead of further alerts, and the SMS holds no location | The state machine table in `05-architecture.md` (D-033); D-019; the acknowledgement rule; the SMS-content rule | M2 |
-| C9 | The alert tells the responder what to do: call the person; if there is no answer and they are worried, call 112 and give the last known position; do not put themselves in danger. The app does not replace or contact emergency services | The guidance story; the MVP scope has no story that contacts emergency services; `01-product-vision.md`, "Explicitly out of scope" | M3 |
-| C10 | Some alerts will be false alarms: to the server, a flat battery, no coverage, or the phone's system stopping the app looks the same as an emergency. The starting target is fewer than one false lost-contact alert per 20 journeys, measured during the private phase | Section 3, failure modes F1–F4, and its reliability targets (D-022) | Measured in M6 |
+| C9 | When a responder opens the alert, the app will tell them what to do: call the person; if there is no answer and they are worried, call 112 and give the last known position; do not put themselves in danger. The app does not replace or contact emergency services | The guidance story; the MVP scope has no story that contacts emergency services; `01-product-vision.md`, "Explicitly out of scope" | M3 |
+| C10 | Some alerts will be false alarms: to the server, a flat battery, no coverage, or the phone's system stopping the app looks the same as an emergency. The starting target is fewer than one false lost-contact alert per 20 journeys, measured while the private group uses it | Section 3, failure modes F1–F4, and its reliability targets (D-022) | Measured in M6 |
 | C11 | Only responders receive it: members of the private, invitation-only group whom the walker chose for that journey. Nobody outside the group | D-008; D-013; the invitation story; the start-a-journey story | M3 |
 | C12 | The app asks for Critical Alerts only in responder setup, through iOS's own permission request. Each responder decides for their own phone | D-020; the responder-setup story; Apple's documentation of the entitlement (an app that has it "can request" the `criticalAlert` authorisation) | M3 |
-| C13 | A responder who declines still gets the strongest level they allow, Time Sensitive. When choosing responders, the walker sees who cannot receive break-through alerts | The alert-level rule; the responder-setup story | M3 |
+| C13 | A responder who declines still gets the strongest level they allow, usually Time Sensitive. When choosing responders, the walker sees who cannot receive break-through alerts | The alert-level rule; the responder-setup story | M3 |
 | C14 | A person receives Critical Alerts only as someone else's responder. Nothing about their own journey uses them | The alert-level rule ("alerts to responders") | M3 |
 | C15 | The push message that passes through Apple's push service will carry no personal details: no name, no location, no phone number. The responder opens the app to see who and where, from our server in the EEA | `04-tech-stack.md` finding 4; D-086 (content-free payloads); D-016; D-025 | M2, M3 |
-| C16 | Our server sends straight to Apple's push service, with no third-party relay. The app has no analytics or advertising SDKs | D-086 (push straight to APNs and FCM); the no-third-party-SDK rule | M2, M3 |
-| C17 | Location is collected only during a journey the walker starts, and the phone shows that it is shared for as long as the journey runs | The journey-only-location rule; the sharing-is-visible story; D-086 (the mechanism) | M3 |
-| C18 | Why Time Sensitive is not enough: the alert matters most at night, when a responder's phone may be set to silent or in a Focus, and Apple's guidelines describe the Critical level as the one that can override the Ring/Silent switch | Apple's guidelines (quoted above); `03-safety-reliability-security.md` finding 3 | — |
+| C16 | Our server sends straight to Apple's push service, with no third-party relay. The app has no analytics or advertising SDKs | D-086 (push straight to APNs and FCM); the no-third-party-SDK rule | M3; tested in M4 (the no-third-party-SDK rule) |
+| C17 | Location is collected only during a journey the walker starts, and the phone shows that it is shared for as long as the journey runs | The journey-only-location rule; the sharing-is-visible story; the mechanism, as the spike's app used it: `04-tech-stack.md`, "Spike results" (`app.notification` on Android, `geolocation.showsBackgroundLocationIndicator` on iOS), and `04b-spike-results.md`, part 4.6 | M3; tested in M4 |
+| C18 | Why Time Sensitive is not enough: the alert matters most at night, when a responder's phone may be set to silent or in a Focus. Apple's guidelines say a Critical notification can override the Ring/Silent switch | Apple's guidelines (quoted above); `03-safety-reliability-security.md` finding 3 | — |
 | C19 | Why the sound matters: this alert is how responders learn that a walker's phone went silent mid-journey. A missed alert is the failure the app exists to prevent | `03-safety-reliability-security.md`, "The promise we are protecting", and F6 | — |
-| C20 | The request is for the production app, [production identifier], and for one test build of the same app, [production identifier].test. The test build is for automated tests of exactly this alert on real iPhones, which must pass before the group relies on the app. It is not a demo | The owner's answer to Q2; D-041; D-035; `06-testing-strategy.md`, L9 ("permission states for Critical Alerts", "real push delivery to the phone") | M5 (L9) |
+| C20 | The request is for the production app, [production identifier], and for one test build of the same app, [production identifier].test. The test build is for automated tests of the lost-contact alert (described in Part A's later answers) on real iPhones, which must pass before the group relies on the app. It is not a demo | The owner's answer to Q2; D-041; D-035; `06-testing-strategy.md`, L9 ("permission states for Critical Alerts", "real push delivery to the phone") | M5 (L9) |
 
-C18's second half rests on Apple's own sentence and goes no further. That Time
-Sensitive keeps to the silent switch comes from third-party sources (finding 3).
-Part A does not state it as Apple's behaviour.
+**C5 never says "or taken".** The server alerts only on silence (D-007's rule;
+the lost-contact story's "off, broken or out of coverage"). A taken phone that
+keeps reporting raises nothing, and someone holding the walker's unlocked phone
+can end the journey (F10, a known limitation).
+
+**C16 and C17 are built in M3.** M2 has only the fake push; real APNs comes in
+M3, with the Apple push key (A-11). The no-third-party-SDK rule and the
+journey-only-location rule are tested in M4 (the roadmap's M4 row).
+
+C18's second half rests on Apple's own sentence and goes no further. Part A
+says Apple's guidelines say a Critical notification "can override" the
+Ring/Silent switch, never that it is "the one that" can. That Time Sensitive
+keeps to the silent switch comes from third-party sources (finding 3). Part A
+does not state it as Apple's behaviour.
 
 ### What Part A must never say
 
@@ -387,8 +435,21 @@ Part A does not state it as Apple's behaviour.
 6. Health or medical monitoring.
 7. Organisations, volunteers outside the group, or strangers (D-008).
 8. Any measured figure. No alert has been counted yet.
-9. A ⚙️ setting as if it were fixed. The two numbers Part A uses, 5 minutes and
-   2 minutes, are decisions (D-021, D-019) that only the owner changes.
+9. A ⚙️ setting as if it were fixed, or any number without a source. Part A may
+   use these numbers, each with its source, and **no other number**:
+   - 5 minutes (D-021);
+   - 2 minutes (the acknowledgement rule, from D-019);
+   - 24 hours (the 24-hour rule, binding under D-033, with no ⚙️);
+   - at least 12 (the private group, D-009);
+   - fewer than 1 in 20 (the starting target for false lost-contact alerts,
+     D-022).
+
+   None of them is a ⚙️ setting. The first four change only with the owner;
+   the last is a starting target, and Part A calls it one. Not numbers in this
+   sense: 112, the emergency number (C9); the "#1" of the walker's #1 contact
+   (C6); and the counts that say what the request is: one journey at a time,
+   one notification, once for each event, and two builds, one of them a test
+   build (C1, C6, C8, C20).
 10. A bundle identifier, the AS's details, or any person's details. These stay
     placeholders until the form.
 11. Apple's process as Apple's rule when the source is a forum report
@@ -410,11 +471,12 @@ answers with what the plan holds, and no more:
 - **How many people:** a private group of at least 12 (C2).
 - **False alarms:** they will happen, and the starting target is fewer than one
   per 20 journeys (C10).
-- **No count yet:** no alert has been counted, so the private phase will
-  measure them.
+- **No count yet:** no alert has been counted, so they will be counted while
+  the private group uses the app.
 
 This estimate is about the production app. For the test build, Part A gives
-its purpose (C20) and no figure. The plan gives the real-device suite a
+its purpose (C20) and no figure. Answer 6 says its points are about the
+production app, and does not point to answer 2. The plan gives the real-device suite a
 schedule (`06-testing-strategy.md`, L9: weekly, before every release, and when
 safety-core code, native dependencies or the Expo SDK change), but not how many
 alerts a run sends.
@@ -444,6 +506,11 @@ In this order:
    registered identifier can be changed later is to verify; the entitlement is
    tied to the App ID (finding 10).
 
+   **The identifiers become public.** Their values are recorded with
+   `/decision` in `docs/plan/decisions.md`, in the public repository, and later
+   in `apps/mobile/app.config.ts`. Under Q3's rule they show the AS's domain.
+   Part D says so plainly, so the owner chooses knowingly.
+
    **Why `.test`:** the location SDK's licence, clause 1.9, includes an
    Application Identifier "with any of the development suffixes .dev,
    .development, .staging, .stage, .qa, .uat, .test or .debug". So the test
@@ -456,30 +523,54 @@ In this order:
 5. **Send it.**
    - Sign in, open the form (Part C), and fit Part A's answers to its fields
      without changing what they say.
+   - **Copy Part A from the rendered GitHub page, not the raw file.** The raw
+     file carries `**` and hard line breaks.
+   - **If an answer does not fit a field, stop and tell Claude.** Never
+     shorten it in the form.
    - The request names the production app first and the test build second
      (Q2). Whether one request can name more than one identifier is to be
      verified when A-02 exists. **If the form takes only one, send two
      requests, production first,** each with the same Part A. That way the test
      build's request can never hold up production's.
-   - The AS's details go **into the form only, never into the repository**.
+   - The AS's details go **into the form only, never into the repository**:
+     the D-U-N-S and organisation numbers, the address, contact names and
+     email addresses.
    - If the form asks for something Part A does not answer, stop and tell
-     Claude; nothing is made up in the form either.
+     Claude; nothing is made up in the form either. **Relay the form's
+     question, not its prefilled contact fields.** If a video is asked for, any
+     video made uses synthetic names and positions only, and is kept out of the
+     repository.
 6. **Record it:** the date or dates sent, in the owner to-do row in
-   `docs/plan/README.md` (STORE-01-AC12). Apple's answer for each identifier is
-   recorded as a decision (`/decision`) when it comes.
+   `docs/plan/README.md` (STORE-01-AC12). Apple's answer is recorded as a
+   decision (`/decision`) when it comes, and **only its outcome**: approved,
+   refused or partial for each identifier, the date, and any condition Apple
+   sets. **Never** Apple's message itself, or any name, email address or case
+   number from it.
 7. **The deadline** is M4 at the latest (the owner, 2026-10-01). Approval can
    take weeks (finding 10), and the roadmap revisits the outcome before M5.
 8. **No transfer, ever.** The app stays on the AS's team (D-027). A transfer
    would probably need a new request (finding 10, one developer's report). The
    GitHub repository's possible move (D-029) has nothing to do with Apple.
 
-### What the app needs once approved (Part E: M3 and M4, outside STORE-01)
+### What the app needs once Apple answers (Part E, outside STORE-01)
 
-Listed so it is not lost. None of it is STORE-01's work.
+Listed so it is not lost. **Part E's introduction says this once, and no item
+repeats it:**
+- **None of it is STORE-01's work.**
+- **The work follows approval,** except three items that say why: item 5 (the
+  Time Sensitive path, needed whatever Apple answers), item 6 (the tests M3
+  writes whatever Apple answers) and item 8 (Android, which has nothing to do
+  with Apple's request).
+
+No item carries a milestone marker of its own, such as "M3 or M4". Only items 6
+and 7 name a milestone, because their timing is part of what they say.
 
 **Each outcome:**
-- **Approved:** the work below becomes part of the responder-setup story and
-  the alert-level rule's work in M3 or M4.
+- **Approved:** the work below becomes part of the responder-setup story's and
+  the alert-level rule's work, in whichever milestone the answer arrives.
+- **Approved late, in M5 or M6, after responders have done setup:** readiness
+  flags the existing iPhone responders and offers them setup again. That is
+  still "in responder setup", so C12 holds.
 - **Refused:** nothing is removed. The lost-contact alert stays at Time
   Sensitive (D-020), the readiness status shows walkers which responders cannot
   receive break-through alerts, and the roadmap revisits the outcome before M5.
@@ -491,7 +582,7 @@ Listed so it is not lost. None of it is STORE-01's work.
   Critical Alert on a real iPhone, and the owner is told before go-live,
   because D-041 asks L9 to pass first.
 
-**The work, once approved:**
+**The work:**
 1. **The builds carry the entitlement,**
    `com.apple.developer.usernotifications.critical-alerts`, for the production
    identifier and the `.test` identifier. This goes in
@@ -506,28 +597,84 @@ Listed so it is not lost. None of it is STORE-01's work.
 3. **Readiness reflects the level granted.** Each device reports whether it can
    receive Critical, Time Sensitive or neither, so the walker sees it (the
    responder-setup story). The data model sketch in `05-architecture.md` already
-   gives the `devices` table an "alert readiness" field.
+   gives the `devices` table an "alert readiness" field. Whether iOS lets the
+   app read which level the user granted is to verify (Part C); this item
+   assumes it can.
 4. **The server sends the lost-contact alert at the `critical` interruption
    level** to iOS devices that granted it, and no other message at that level.
    The payload stays content-free (C15). Its keys, and the rules for a critical
-   sound and its volume, are to verify against Apple's push documentation.
+   sound and its volume, are to verify against Apple's push documentation. So
+   is what iOS does with a critical-level push to a device that has not
+   authorised critical alerts (Part C).
 5. **Time Sensitive is the path** for a refused entitlement, a declined
    permission, the call-sharing notice to #1 (Q1), and any build whose
    identifier the request does not name. Whether the App ID needs the Time
    Sensitive capability is to verify.
-6. **Tests that hold Part A's promises, written in M3** (named there, not
-   here):
-   - only the lost-contact message carries the critical level (L2 or L6);
-   - each responder gets it once per lost-contact event, with SMS, not further
-     alerts, when nobody acknowledges (L2 or L6);
-   - the permission is requested only in responder setup (L5 or L7);
-   - readiness follows the granted level (L5).
-7. **L9 on a real iPhone, with the `.test` build:** the permission states for
-   Critical Alerts (`06-testing-strategy.md`, L9), and RR-01's closest
-   automated check: the alert was sent at the critical level and the permission
-   was granted. This is what the test build is in the request for (C20).
+6. **Tests that hold Part A's promises, written in M3 whatever Apple
+   answers.** Q1's rule (only the lost-contact alert is critical) and Q4's (the
+   no-responder warning is not) bind either way, so these tests do not wait for
+   approval. They are named in M3, not here. Each bullet names its carrier: the
+   requirement whose test names carry it. This spec names carriers in words;
+   the draft names them by ID.
+   - **Only the lost-contact message carries the critical level.** L6, with
+     the recording push fake, over **every** message type the outbox can hold,
+     so a notice added later (for example the new-device notice, which comes in
+     M4) cannot pick up the critical level unnoticed. Plus L2 for the pure
+     rule. Carriers: the alert-level rule, and the step-8 decision that records
+     Q1's and Q4's answers.
+   - **Exactly one lost-contact message per responder per event is written to
+     the outbox, and the outbox's retries still deliver it.** A duplicate is
+     collapsed (by a collapse ID, to verify), never avoided by skipping a
+     retry. L6. Carriers: the acknowledgement rule, the SMS-escalation story
+     and the outbox rule.
+   - **The critical permission is requested only in responder setup.** An L1
+     import rule: only the responder-setup module may request it, because L5
+     and L7 can show that setup asks but cannot prove an "only". Plus L5 that
+     setup asks. Carrier: the responder-setup story.
+   - **Readiness follows the granted level.** L6: the level the server sends
+     follows the level the device reports. Readiness is re-read at app start
+     and when the app comes to the foreground, and a change is reported,
+     because a responder can switch Critical Alerts off in Settings. The
+     walker sees a responder with Time Sensitive only, and after a refusal
+     every iPhone responder, as **not sounding on a silenced phone**.
+     Carrier: the responder-setup story, whose own spec decides how the
+     app-side parts are tested.
+   - **The push carries no personal details.** The lost-contact push to APNs
+     holds only the fixed text: no name, position or phone number, and no
+     walker or user ID. L6, on the push adapter's payload builder, with the
+     recording push fake. **Carrier: none tracked.** The source is D-086
+     (content-free payloads) and `04-tech-stack.md` finding 4, and the draft
+     says so.
+   - **Push goes straight to APNs.** The iOS path registers the native APNs
+     device token, with no Expo push token and no FCM on iOS. L5 or L6.
+     Carrier: none tracked; the source is D-086 (push straight to APNs and
+     FCM).
+   - **The alert is distinct.** The critical sound at full volume, and a fixed
+     lost-contact text different from every routine notice's. L6, on the push
+     adapter's payload builder, with the recording push fake; the sound's keys
+     and volume are to verify (item 4). Carrier: the alert-level rule.
+
+   **"Instead of further alerts" is now a promise to Apple** (C8: no re-alert
+   after the SMS). If the private phase shows that a single critical sound gets
+   missed, re-alerting at the critical level changes what Apple approved, so
+   Apple is asked again first.
+7. **L9 on a real iPhone, with the `.test` build: M5** (the roadmap's M5 row;
+   D-041 is the gate). The permission states for Critical Alerts
+   (`06-testing-strategy.md`, L9), and RR-01's closest automated check: the
+   alert was sent at the critical level and the permission was granted. This is
+   what the test build is in the request for (C20). Whether the device farm can
+   grant the critical permission and receive real APNs pushes is to verify
+   (Part C); if it cannot, the owner is told, as in R14.
 8. **Android, for completeness:** post the alert with `CATEGORY_ALARM` (D-086).
    It has nothing to do with Apple's request.
+
+**Flags for other requirements' own specs.** STORE-01 changes neither
+requirement; each flag is for the spec that will:
+- **The canary rule:** the canary never uses the critical level (R7).
+- **The last-responder rule:** the no-responder state is loud on the walker's
+  journey screen, and does not rely on a notification alone (the owner's answer
+  to Q4; R15). The step-8 decision records this as a requirement on that rule's
+  design, together with Q1's answer.
 
 ## Acceptance criteria
 
@@ -536,7 +683,9 @@ Given STORE-01's deliverable,
 when it is written,
 then it is the one file `docs/plan/critical-alerts-request.md`, and:
 - its header says "Draft — not sent", with the date, a link to this spec, and
-  the decisions it rests on;
+  the decisions it rests on. Where it says what the placeholders are, it says
+  the AS's details go into Apple's form only, and the identifiers' values are
+  recorded publicly at Part D, step 2;
 - it has the header and Parts A to E, in the order under "Its parts, in order";
 - Part A is set apart with a clear start and end, so it can be copied without
   the notes around it.
@@ -549,13 +698,16 @@ then:
 - it says the app is in development, has no users yet, and will first be used
   by a small private group of invited friends and family (C2);
 - every sentence about what the app does says "will";
+- each answer stands alone: none points to another by number, and none says
+  "the private phase";
 - it says none of the things under "What Part A must never say";
 - wherever the developer's details or a bundle identifier would go, it has a
   placeholder in square brackets, never a value.
 
 **STORE-01-AC3: one notification, and a named list of the rest.**
 Given Part A's answer to which notifications will use Critical Alerts,
-and the owner's answer to Q1 (only the lost-contact alert),
+the owner's answer to Q1 (only the lost-contact alert),
+and the owner's answer to Q4 (the no-responder warning stays non-critical),
 when it is read,
 then:
 - it names one notification only: the lost-contact alert to a journey's
@@ -582,8 +734,8 @@ then they say C11 to C14:
 - only responders receive it, chosen for each journey from the private group;
 - it is asked for only in responder setup, through iOS's own request, and each
   responder decides;
-- a responder who declines gets Time Sensitive, and the walker sees who cannot
-  receive break-through alerts;
+- a responder who declines gets the strongest level they allow, usually Time
+  Sensitive, and the walker sees who cannot receive break-through alerts;
 - nobody receives a Critical Alert about their own journey.
 
 **STORE-01-AC6: the push message carries no personal details.**
@@ -618,8 +770,13 @@ then:
 - every Apple quote in the file is one of those under "What Apple says, as read
   on 2026-10-01", with its document and the date;
 - what finding 10 says about Apple's process is labelled a forum report;
+- it lists every item under "Not checked" as "to verify", the device farm's
+  included;
 - it tells the owner to stop and report if the form asks for something Part A
-  does not answer, rather than write an answer the plan does not back.
+  does not answer, rather than write an answer the plan does not back. The
+  owner relays the form's question, not its prefilled contact fields. If a
+  video is asked for, any video made uses synthetic names and positions only,
+  and is kept out of the repository.
 
 **STORE-01-AC9: the owner's steps to send it.**
 Given Part D,
@@ -628,20 +785,36 @@ then it lists the eight steps under "What sending needs", in that order, each
 with what to do and why, including that:
 - no iOS bundle identifier is set today, and both are fixed at sending by the
   owner's rule: production name-neutral, the test build the same plus `.test`;
+- the identifiers' values become public, in `docs/plan/decisions.md` and later
+  in `apps/mobile/app.config.ts`, and under Q3's rule they show the AS's
+  domain (step 2);
 - the entitlement is tied to the App ID on the AS's team;
+- Part A is copied from the rendered GitHub page, not the raw file, and an
+  answer that does not fit a field is never shortened in the form: the owner
+  stops and tells Claude (step 5);
 - if the form takes only one identifier, two requests go, production first;
+- the D-U-N-S and organisation numbers, the address, contact names and email
+  addresses go into the form only, never into the repository (step 5);
 - the app is never transferred;
 - M4 is the latest point;
-- where the date sent and Apple's answer are recorded.
+- where the date sent and Apple's answer are recorded, and that only the
+  outcome is recorded: approved, refused or partial for each identifier, the
+  date, and any condition, never Apple's message or any name, email address or
+  case number from it (step 6).
 
 **STORE-01-AC10: after Apple answers, and what the app then needs.**
 Given Part E,
 when it is read,
 then:
-- it says what follows approval, a refusal, no answer by the start of M5, and
-  approval of only one of the two identifiers;
-- it lists the eight items under "What the app needs once approved", each
-  marked "M3 or M4, outside STORE-01";
+- its introduction says once that none of it is STORE-01's work, and that the
+  work follows approval except items 5, 6 and 8, each of which says why;
+- it says what follows approval, late approval in M5 or M6, a refusal, no
+  answer by the start of M5, and approval of only one of the two identifiers;
+- it lists the eight items under "What the app needs once Apple answers", with
+  no per-item "M3 or M4" marker. Item 6 says its tests are written in M3
+  whatever Apple answers, and names each test's level and carrier. Item 7 says
+  M5 (the roadmap's M5 row; D-041 is the gate);
+- it carries the two flags under "Flags for other requirements' own specs";
 - every Apple-side detail not read from Apple is marked "to verify".
 
 **STORE-01-AC11: no personal data in the repository.**
@@ -650,8 +823,9 @@ when they are committed to the public repository,
 then neither holds a phone number, an email address, a postal address, a
 D-U-N-S or organisation number, a person's name, coordinates, or a place where
 anyone lives. The AS's details are placeholders, filled in only in Apple's
-form. The two identifiers stay placeholders in Part A; their values are
-recorded with `/decision` when the owner fixes them (Part D, step 2).
+form. The two identifiers stay placeholders in this file; their values are
+recorded publicly, with `/decision`, when the owner fixes them (Part D, step
+2), and under Q3's rule they show the AS's domain.
 
 **STORE-01-AC12: the sending cannot be forgotten.**
 Given the draft is merged,
@@ -671,10 +845,10 @@ then:
 - Part A names the production app first and one test build second. Each is
   named by a placeholder identifier, the test build's being production's plus
   `.test`;
-- it gives the test build's purpose: automated tests of exactly this alert on
-  real iPhones, which must pass before the group relies on the app (C20). It
-  never calls the test build a demo, and claims nothing about where the build
-  runs;
+- it gives the test build's purpose: automated tests of the lost-contact
+  alert, described in Part A's later answers, on real iPhones, which must pass
+  before the group relies on the app (C20). It never calls the test build a
+  demo, and claims nothing about where the build runs;
 - Part D says that whether one request can name both identifiers is to be
   verified when A-02 exists, and that if the form takes only one, the owner
   sends two requests, production first.
@@ -696,7 +870,7 @@ only review can make.
 | AC6 | none | — | `privacy-security-reviewer` |
 | AC7 | none | — | `safety-reviewer` and `privacy-security-reviewer`, each row against its source |
 | AC8 | none | — | `code-reviewer` |
-| AC9 | none | — | `code-reviewer`; the owner |
+| AC9 | none | — | `code-reviewer`; `privacy-security-reviewer` for steps 2, 5 and 6; the owner |
 | AC10 | none | — | `safety-reviewer` |
 | AC11 | none | In part: `scan-sensitive.mjs` blocks `+47`/`0047`-prefixed Norwegian mobile numbers and secrets on Write and Edit (not 8-digit domestic numbers, email addresses or organisation numbers, and not files written from a shell), and gitleaks (`security`) scans for secrets | `privacy-security-reviewer`, for the rest |
 | AC12 | none | — | `code-reviewer` |
@@ -731,8 +905,9 @@ inventing a test. `test-auditor` still runs in CI. What it should confirm:
 because CI's path filter will not select it for a docs-only pull request, and
 Part A makes safety claims.
 
-**What protects the promises later is M3's tests,** listed in Part E, item 6.
-They make sure the app does what Part A told Apple it will do.
+**What protects the promises later is M3's tests,** listed in Part E, item 6,
+and written in M3 whatever Apple answers. They make sure the app does what Part
+A told Apple it will do.
 
 ## Modules and files affected
 
@@ -745,7 +920,7 @@ approval (CODEOWNERS, D-042).
 
 | Path | Change |
 | ---- | ------ |
-| ◆ `docs/plan/decisions.md` | Q1's answer (only the lost-contact alert; the call notice to #1 stays Time Sensitive), because it settles how a binding rule reads. Q3's answer (both identifiers fixed at sending, name-neutral, the test build with `.test`). Together or separately, as `plan-keeper` sees fit. The identifiers' values get their own decision when the owner fixes them, at sending |
+| ◆ `docs/plan/decisions.md` | One decision for Q1's and Q4's answers, because they settle how binding rules read: only the lost-contact alert uses the critical level, and the call notice to #1 stays Time Sensitive (Q1); the warning that a journey has no responder left stays non-critical, and the last-responder rule's design must make the no-responder state loud on the walker's journey screen, not rely on a notification alone (Q4). Q3's answer (both identifiers fixed at sending, name-neutral, the test build with `.test`), in the same decision or its own, as `plan-keeper` sees fit. The identifiers' values get their own decision when the owner fixes them, at sending |
 | `docs/plan/README.md` | The owner to-do for sending it (STORE-01-AC12); the status line |
 | `docs/progress.md`, `docs/progress/m1.md` | STORE-01's status and entry; whether M1's exit is met |
 | `docs/requirements-status.md` | Regenerated by `req:coverage`. It should come out unchanged, because this spec names no tracked requirement |
@@ -783,14 +958,15 @@ promises, and about what happens if it is late or refused.
 | R4 | The wrong App ID or team | The entitlement sits on a placeholder, on a build the group never installs, on an individual account, or on an app later transferred | F6 | A-02 as the AS (D-027); both identifiers fixed before the App IDs are registered (Q3); production named first (Q2); no transfer, ever |
 | R5 | Personal data in the public repository | The AS's numbers, an email address or the owner's name committed with the draft | — | Placeholders, filled in Apple's form only (AC11); review; the write-time hook for `+47`/`0047` phone numbers only |
 | R6 | Alert fatigue | False alarms at the critical level wake responders, who switch Critical Alerts off or leave the group | F6, caused by F1 to F4 | C10 says so honestly; the false-alarm target is measured (D-022); the threshold is the owner's to tune (D-021); readiness shows who has it off |
-| R7 | The canary at the critical level | If the canary journey's test responder were a person's iPhone, it would break through silence at every canary run, and Part A's picture of rarity would be wrong | F8 | Flagged for the canary rule's own spec: its test responder is not a person's phone at the critical level |
+| R7 | The canary at the critical level | If the canary journey's test responder were a person's iPhone, it would break through silence at every canary run, and Part A's picture of rarity would be wrong | F8 | Flagged for the canary rule's own spec: the canary never uses the critical level (Part E's flags) |
 | R8 | Approved, but not heard | The entitlement is granted, and nobody has shown the alert sounding on a silenced iPhone (RR-01) | F6 | L9 checks the permission states, plus RR-01's closest automated check (Part E, item 7). Part A never says it has been heard |
-| R9 | A stale draft | By the time A-02 exists, the plan has changed (a threshold, a story), and Part A describes another app | F6, through R3 | Part D, step 5: re-check Part B against the plan before sending |
+| R9 | A stale draft | By the time A-02 exists, the plan has changed (a threshold, a story), and Part A describes another app | F6, through R3 | Part D, step 4: re-check Part B against the plan before sending |
 | R10 | The form asks for what does not exist | A live app, a video or a usage figure, so sending stalls | F6, through R2 | Stop and report (AC8); M4 at the latest leaves time |
 | R11 | False coverage, or a red gate | This spec names a tracked requirement with no test, and `traceability` fails or the report shows a false 📝 | — | Requirements are named in words here; IDs appear only in `docs/plan/` |
 | R12 | A hurried identifier | A permanent bundle identifier is chosen in a hurry at sending time | — | The rule is settled now (Q3: name-neutral, the test build with `.test`) and recorded as a decision at step 8; only the values are chosen at sending |
 | R13 | The test build weakens the request | Apple's forum reports the entitlement is not granted "purely for demos" (finding 10), and a second, test identifier invites that reading. **A known trade-off the owner chose on 2026-10-01** (Q2), against the recommendation, so that L9 can show this alert on a real iPhone | F6, through R1 | Part A states the test build's purpose exactly (C20) and never calls it a demo (AC13); production is named first; if two requests are needed, production goes first, so the test build's request cannot hold it up |
 | R14 | The test build becomes a demo build | The `.test` identifier ends up on the build used to show the app, and C20's statement of purpose stops being true | F6, through R3 | Which build carries `.test` is for L9's planning (Part E, item 1). If it would also serve demos, the owner is told before that build ships, because the request said otherwise |
+| R15 | The no-responder warning is missed | The last responder leaves or is removed mid-journey. The walker's warning arrives below the critical level, which a silenced phone may not sound, so the walker walks on believing someone is watching. A later silence then alerts nobody: it is the one walker-facing notice where a miss ends in no alert at all | F6: the core promise fails silently | The owner's answer to Q4: the warning stays non-critical in Part A, and the last-responder rule's own spec makes the no-responder state loud on the walker's journey screen, not a notification alone. Recorded with Q1's answer in the step-8 decision, and flagged in Part E |
 
 ## Out of scope
 
@@ -802,7 +978,9 @@ promises, and about what happens if it is late or refused.
   That is for L9's planning.
 - **Any code or configuration:** the entitlement in the build, the
   authorisation in setup, the interruption level, readiness, the Time Sensitive
-  path, and `apps/mobile/app.config.ts` (Part E; M3 and M4).
+  path, the tests of item 6, and `apps/mobile/app.config.ts` (Part E).
+- **The last-responder rule's loud no-responder state** (Q4). Part E flags it
+  for that rule's own spec.
 - **Android's alert channel and `CATEGORY_ALARM`** (D-086, M3). The plan has no
   request to Google for it.
 - **Any SOS or help feature.** The request adds no notification that the plan
@@ -814,16 +992,17 @@ promises, and about what happens if it is late or refused.
 
 ## Owner actions
 
-- **Q1 to Q3: answered** on 2026-10-01 (below).
-- **Approve the decisions** that record Q1's and Q3's answers at step 8
+- **Q1 to Q4: answered** on 2026-10-01 (below).
+- **Approve the decisions** that record Q1's, Q3's and Q4's answers at step 8
   (`docs/plan/decisions.md` is code-owned).
 - **Later:** A-02, then fix the two identifiers and send the request (the new
   to-do), by M4 at the latest.
 
 ## Questions for the owner
 
-None open now. Q1 to Q3 were asked on 2026-10-01 and answered the same day.
-They are kept below as the record.
+None open now. Q1 to Q3 were asked on 2026-10-01 and answered the same day. Q4
+came from step 5's safety review and was answered the same day. They are kept
+below as the record.
 
 ### Answered
 
@@ -831,8 +1010,9 @@ They are kept below as the record.
 
 **Answered by the owner 2026-10-01: (a), only the lost-contact alert.** The
 alert is sent after 5 minutes of silence (D-021). The call notice to #1 stays at
-Time Sensitive. The answer is recorded as a decision at step 8, because it
-settles how the alert-level rule reads: its "SOS-related" part has no MVP story.
+Time Sensitive. The answer is recorded as a decision at step 8, together with
+Q4's, because it settles how the alert-level rule reads: its "SOS-related" part
+has no MVP story.
 Part A says exactly this (C6, C7, STORE-01-AC3).
 
 The question, its options and the recommendation, as asked:
@@ -869,8 +1049,8 @@ variant. Which variant carries that identifier is for L9's planning (Part E,
 item 1). What the answer brings:
 - **The request names the production app and one test build.** The test build's
   identifier is production's plus `.test` (Q3).
-- **Part A justifies the test build by its purpose:** automated tests of
-  exactly this alert on real iPhones, which must pass before the group relies
+- **Part A justifies the test build by its purpose:** automated tests of the
+  lost-contact alert on real iPhones, which must pass before the group relies
   on the app (L9, D-041). It is not a demo (C20, STORE-01-AC13).
 - **One request or two.** Whether one request can name more than one
   identifier stays "to be verified when A-02 exists". If the form takes only
@@ -920,7 +1100,7 @@ read on 2026-09-30, from D-086's sources; this planning session did not read
 the copy itself (see "What this spec checked").
 
 **Recording it.** The answer is recorded as a decision at step 8, together with
-Q1's or separately, as `plan-keeper` sees fit. Part A keeps placeholders for
+Q1's and Q4's or separately, as `plan-keeper` sees fit. Part A keeps placeholders for
 both identifiers. Part D, step 2, fixes their values, and step 5 puts them into
 the form.
 
@@ -949,3 +1129,21 @@ Options:
   delays a request that already takes weeks.
 - **Still to verify:** whether a registered identifier can be changed later.
   The entitlement is tied to the App ID either way (finding 10).
+
+**Q4: The walker's warning that their journey has no responder left (the
+last-responder rule): should it stay non-critical, as the draft tells Apple?
+(from step 5's safety review)**
+
+**Answered by the owner 2026-10-01: non-critical; loud in-app** (the
+recommendation). What the answer brings:
+- **Part A keeps that warning** in the list of notifications that never use
+  Critical Alerts (C7, STORE-01-AC3).
+- **The last-responder rule's own spec** must make the no-responder state loud
+  on the walker's journey screen, and not rely on a notification alone.
+- **It is recorded as a requirement on the last-responder rule's design** in
+  the step-8 decision, together with Q1's answer (only the lost-contact alert
+  is critical).
+- **R15** records the risk, and Part E flags it for that rule's own spec.
+
+**Why it was asked (step 5's safety review):** it is the one walker-facing
+notice where missing it means a later silence alerts nobody.
