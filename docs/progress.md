@@ -22,7 +22,7 @@ closed.
 
 | ID | Task | Status |
 |----|------|--------|
-| SPIKE-01 | Background safety on emulators and simulators: S1–S7, and S8, MapLibre with Kartverket's tiles | 🟡 In flight — the spec is merged ([#47](https://github.com/bvst/TryggHverdag/pull/47), [`specs/SPIKE-01.md`](specs/SPIKE-01.md), 16 acceptance criteria). Step 2 is under way on the Mac (`feat/SPIKE-01-background-safety`). The Mac cannot build Expo SDK 57 for iOS (Xcode 26.0.1, and 26.4 is needed), so the owner chose EAS simulator builds (Q2, 2026-09-30) |
+| SPIKE-01 | Background safety on emulators and simulators: S1–S7, and S8, MapLibre with Kartverket's tiles | 🟡 In flight — the spec is merged ([#47](https://github.com/bvst/TryggHverdag/pull/47)). The counted runs are done (`night-20260930`, 38 runs, none invalid), and two extra Android S1 runs with the battery exemption are running (Q4). Reviews in loop 2. Provisional: S1 failed on both platforms, so the rule points to NO-GO unless the exemption fixes Android. The results and the go/no-go question come next ([`progress/m1.md`](progress/m1.md)) |
 | — | Critical Alerts request drafted | ⚪ Not started. The roadmap lists it under M1, but it has no ID and no spec (an open item in [`progress/m1.md`](progress/m1.md)) |
 
 ## M0 at a glance

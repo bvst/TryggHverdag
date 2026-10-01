@@ -1,6 +1,6 @@
 # SPIKE-01 · Background safety on emulators and simulators
 
-**Status:** 📝 Spec. The owner answered Q1 on 2026-09-29: S8, the map check, is added. Q2 on 2026-09-30: iOS builds on EAS. Q3 on 2026-09-30: continue, and ask the SDK's vendor about its high-risk clause · **Last updated:** 2026-09-30 ·
+**Status:** 🔵 Runs done, results being written (2026-10-01). The owner answered Q1 on 2026-09-29: S8, the map check, is added. Q2 on 2026-09-30: iOS builds on EAS. Q3 on 2026-09-30: continue, and ask the SDK's vendor about its high-risk clause · **Last updated:** 2026-10-01 ·
 **Branch:** this spec on `claude/busy-faraday-40n2zl` (cloud session, docs only); the
 spike on `feat/SPIKE-01-background-safety` (the Mac, `claude-dev`, D-055/D-056) ·
 **Milestone:** M1
@@ -151,6 +151,10 @@ recommendation, and lists what closing Section 4 needs.
 **passed**, **failed** or **not shown on simulators**. "Not shown" never counts
 as a pass. A proxy that only looks like the real thing is not used to fill a
 gap: when a device cannot show something, the verdict says so.
+
+**No verdict** (added 2026-10-01, review loop 1). A case with fewer than two
+valid runs has no verdict. It is never a pass, it is never "not shown", and
+while a deciding item has none the go/no-go rule makes no recommendation.
 
 **What each platform can show** (details in each criterion):
 
@@ -435,10 +439,13 @@ then:
 - every run is reported;
 - a scenario passes on a platform only if every valid run passed.
 
-A run is **invalid** only when the harness broke: the emulator or simulator
-exited, the receiver's ticks stopped, or the Mac slept. It is reported as
-invalid, with that evidence, and run again. A failed run is never re-run to
-replace it (D-060).
+A run is **invalid** only when the harness broke **and** it had not already
+shown a failure: the emulator or simulator exited, the receiver's ticks
+stopped, the Mac slept, or the driver stopped or left files that cannot be
+read. A failure shown while the harness was up (a gap over 120 s, or a missed
+report) is final: a break elsewhere in the run does not rescue it (amended
+2026-10-01, review loops 1 and 2). An invalid run is reported with its
+evidence and run again. A failed run is never re-run to replace it (D-060).
 
 **SPIKE-01-AC14: the results document.**
 Given the runs are done,
@@ -535,7 +542,7 @@ with Node's built-in test runner (`node --test`) by the spike's own script.
 | AC2 | None: the build runs or it does not | The first upload from each device, and the versions | The Mac |
 | AC3 | Receiver: a request with coordinates leaves none in the record or the output; loopback only; refuses on command; ticks | Receiver output | The Mac |
 | AC4 | Route: same seed, same route; 45 min; a stop of 5 min or more; walking pace | — | The Mac |
-| AC5 | S1 verdict: a 120 s gap passes and 121 s fails; missing receiver ticks make a run invalid, not failed | At least 2 runs per device | The Mac |
+| AC5 | S1 verdict: a 120 s gap passes and 121 s fails; missing receiver ticks make a run invalid, not failed, unless a failure was already shown | At least 2 runs per device | The Mac |
 | AC6 | S2 verdict: a reminder at 5 min 1 s fails; arrivals that never stop pass under the 120 s rule; a reminder while arrivals continue is a finding | Runs | The Mac |
 | AC7 | S3 verdict: with the exemption, one gap over 120 s fails; without it, no "not exempt" report before the restrictions fails | Runs | The Mac |
 | AC8 | S4 verdict: a missing position, an out-of-order arrival, or a queue left non-empty each fail | Runs | The Mac |
@@ -544,7 +551,7 @@ with Node's built-in test runner (`node --test`) by the spike's own script.
 | AC11 | S7 verdict: a report at 60 s passes and at 61 s fails | Runs | The Mac |
 | AC12 | Capture reader: lists destinations and flags a vendor host | One capture | The Mac |
 | AC13 | Two runs with one failed gives failed; an invalid run is listed, never counted as passed | — | The Mac |
-| AC14 | Results renderer: uses only the three verdict words; refuses a number shaped like a coordinate | The results document | The Mac |
+| AC14 | Results renderer: uses only the three verdict words, plus "no verdict"; refuses a number shaped like a coordinate | The results document | The Mac |
 | AC15 | The rule: "not shown" never passes an item; any failed SDK item gives NO-GO; S2, S5, S6 and S8 give findings, not NO-GO | The recommendation | The Mac |
 | AC16 | Sentinel check on sample screenshots: all sentinel fails, drawn tiles pass, the 1 % boundary holds; the crash-log reader, on sample output | At least 2 runs per device; the terms and licences quoted by hand | The Mac |
 
