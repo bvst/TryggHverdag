@@ -975,7 +975,7 @@ confidence** about F1 to F6.
 
 ## Questions for the owner
 
-None open now. Q1, Q2 and Q3 were asked and answered, and are kept below as
+None open now. Q1 to Q4 were asked and answered, and are kept below as
 the record. One more question is asked later, with the go/no-go. The vendor answered
 Q3 on 2026-09-30, and its licence now permits safety apps.
 
@@ -1124,6 +1124,35 @@ say nothing in the app that overstates its reliability. Both versions are kept,
 dated and with checksums, outside the repository (`~/spike-runs/licence/`), for
 the results. The terms can change again, so the go/no-go decision quotes the
 version read at the time.
+
+**Q4: S1 failed on both platforms overnight. Is more run time spent before the
+go/no-go?**
+
+**Answered by the owner 2026-10-01: two Android S1 runs with the
+battery-optimisation exemption granted,** as their own case
+(`night-20261001-s1-exempt`). The night's S1 failures stay recorded as they
+are.
+
+The night (`night-20260930`, 38 runs, none invalid) failed S1 on both devices,
+for different reasons:
+- **Android, without the exemption.** The SDK went stationary at the route's
+  stop. With the screen off on battery, it then fell silent for 10 to 13
+  minutes (largest gaps 802 s and 602 s), and never noticed that the walk
+  resumed.
+- **Android, with the exemption.** S3's exempt runs, under forced deep Doze,
+  went through the same stop with heartbeats every 104 to 110 s.
+- **iOS.** The only gap, 370 s in both runs, is exactly the route's 6-minute
+  stop. A perfectly still simulated position gives no location updates, and
+  the simulator has no motion sensor. So the SDK stayed "moving" and never sent
+  stationary heartbeats. No documented setting was found that changes this on
+  a simulator, so it is recorded with its cause, open until a real iPhone (L9).
+
+The go/no-go rule says NO-GO unless one of the SDK's documented settings fixes a
+failure, with every setting tried recorded. The exemption is such a setting
+(the SDK's `deviceSettings`), and the app's setup would ask the user for it. The
+extra case tests it directly, rather than inferring it from S3. Options put to
+the owner: (a) the Android exemption case; (b) as (a), plus an iOS case with
+GPS-like jitter at the stop; (c) no more runs. The recommendation was (a).
 
 ### Asked with the go/no-go, not now
 
