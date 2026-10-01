@@ -185,15 +185,34 @@ the SDK went stationary at the route's stop, with the screen off on virtual
 battery; the SDK never resumed heartbeats once the route moved on, until the
 walk's next update reached it.
 
+**Why it did not notice the walk resuming — the vendor's documented
+mechanism, read here, not an independently verified cause.** The SDK's own
+documentation (`react-native-background-geolocation` 5.7.0,
+`src/declarations/interfaces/Config.d.ts`, read 2026-10-01 from the spike's
+installed package, the `disableMotionActivityUpdates` entry) says that
+without the Motion API, "the Android SDK has a fallback 'stationary
+geofence' mechanism just like iOS, the exit of which will cause the plugin
+to change to the *moving* state … This will, of course, require the device
+moves a distance of typically **200-500 meters** before tracking engages."
+Neither emulator has a real accelerometer, so both rely on this fallback.
+Read against the 802 s and 602 s gaps: a silent, Doze-limited app without
+the exemption has no occasion to notice it has crossed that 200–500 m
+geofence until something else wakes it. That is this document's reading of
+why the walk's resumption went unnoticed, not a cause confirmed by the SDK
+itself or by any test beyond this one.
+
 **Android, with the battery-optimisation exemption — passed.** The owner's
 Q4 case (`night-20261001-s1-exempt`, run separately the next morning, started
 2026-10-01 05:00:45.744Z). The exemption was granted by script first, as the
 app's setup would ask the user to grant it, and the run only started once the
 exemption was shown in force (`deviceidle`'s list held the app, and the app's
 own `exempt: true` report had reached the receiver). Largest gap **109 s in
-both runs**, an **11 s margin** under the 120 s limit; 0 gaps over 120 s. The
-first exempt run also carried a network capture (below): it passed, with
-nothing flagged.
+both runs**, an **11 s margin** under the 120 s limit; 0 gaps over 120 s. In
+both exempt runs the SDK's own state shows it went back to moving at
+**30.4–30.5 minutes** into the run — the same stationary-geofence mechanism
+above, exited in time because the exemption kept the app able to notice,
+where the non-exempt runs could not. The first exempt run also carried a
+network capture (below): it passed, with nothing flagged.
 
 **Side by side:**
 
@@ -217,18 +236,37 @@ fix, and the simulator has no motion sensor, so the SDK had nothing to tell
 it the device had stopped; it stayed in its "moving" state through the whole
 stop and sent no stationary heartbeat. No documented SDK setting was found
 that changes this on a simulator (none was tried, because none was found).
-**Hypothesis, not observed:** the vendor's own documentation is said to
-describe background heartbeats throttling to roughly every 2 minutes once the
-app is backgrounded, unplugged, with the screen off — which could mean a real
-iPhone fails the same way at a real stop. This draft could not reach or quote
-that documentation directly: this session has no network access. The claim is
-recorded here as the safety reviewer stated it during the Mac session
-(`morning-checklist.md`, "safety re-review", item 2), not independently
-verified, and it must not be read as a quote. **This stays FAILED and
-deciding — it is not listed as "open until L9".** What L9 must show: a stop
-of 5 minutes or more on a real iPhone, unplugged, with the screen off. M3
-should consider a timer-driven upload as a fix that does not depend on motion
-detection at all.
+**Documented by the vendor, read apart from the observation above.** The
+same SDK's own documentation (`react-native-background-geolocation` 5.7.0,
+`src/declarations/interfaces/Config.d.ts`, read 2026-10-01 from the spike's
+installed package), in the `preventSuspend` entry:
+
+> "When a device is unplugged form [sic] power with the screen off, iOS will
+> _still_ throttle [[BackgroundGeolocation.onHeartbeat]] events about 2
+> minutes after entering the background state. However, if the screen is lit
+> up or even the _slightest_ device-motion is detected,
+> [[BackgroundGeolocation.onHeartbeat]] events will immediately resume."
+> ("form" is the vendor's own typo, kept as written.)
+
+The same entry warns about the setting this spike runs with,
+`app.preventSuspend: true` (part 4.6), which is what gets heartbeats at all
+in the background:
+
+> "should **only** be used in **very** specific use-cases … _will_ have a
+> **very noticeable impact on battery performance** … You should **not**
+> expect to run your app in this mode 24 hours / day, 7 days-a-week."
+
+**Reading the two together is this document's own inference, not the
+vendor's claim about this spike:** a real iPhone, lying still with the
+screen off, is documented by the SDK's own engine to throttle heartbeats
+about 2 minutes in — close to the simulator's 370 s gap — so a real phone
+may fall silent at a stop for the same reason the simulator did. That is the
+safety reviewer's point: this is evidence against assuming a real phone
+would do better than the simulator, not proof that it would do the same.
+**This stays FAILED and deciding — it is not listed as "open until L9".**
+What L9 must show: a stop of 5 minutes or more on a real iPhone, unplugged,
+with the screen off. M3 should consider a timer-driven upload as a fix that
+depends on neither motion detection nor this battery-costly setting.
 
 **Not shown on simulators, open until L9 (D-041):**
 - battery use (S1's ⚙️ 10 % limit) — neither device has a real battery;
@@ -656,10 +694,12 @@ At journey start the app calls `changePace(true)` — neither device has real
 motion detection. On each heartbeat it calls `getCurrentPosition` with
 `persist: true`.
 
-**`app.preventSuspend` costs battery on a real iPhone** (the vendor warns
-against leaving it on). S1 measured the configuration a shipped product would
-use; M3 decides whether it keeps it, weighed against S1 iOS's open failure
-(part 3).
+**`app.preventSuspend` costs battery on a real iPhone, by the vendor's own
+documentation** (quoted in full in part 3's S1 section): it "should **only**
+be used in **very** specific use-cases" and "will have a very noticeable
+impact on battery performance". S1 measured the configuration a shipped
+product would use; M3 decides whether it keeps it, weighed against S1 iOS's
+open failure (part 3).
 
 ## 5. The map (S8), outside the go/no-go
 
