@@ -45,6 +45,7 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       'a responder who is not a user is refused whole: the store rejects, and leaves no journey',
       'a walker who is not a user is refused: the store rejects, and stores nothing',
       'a start with no responders is refused, and stores nothing',
+      'a start with no responders beside an unended journey is refused too, never answered as not inserted, and changes nothing',
     ]);
     expect(RACERS).toBeGreaterThanOrEqual(10);
     expect(RACE_ROUNDS).toBeGreaterThanOrEqual(5);
@@ -215,22 +216,6 @@ describe('fakeJourneyStore, beyond the shared suite', () => {
     expect(store.journeys()).toEqual([
       expect.objectContaining({ startedAt: AT, responderIds: [responderId] }),
     ]);
-  });
-
-  test('refuses a start with no responders even beside an unended journey, so no path through it stores one', async () => {
-    // The shared suite holds the walker with no journey; this is the other
-    // situation, where the fake could otherwise answer "not inserted" and
-    // look as though it had accepted the list.
-    const store = fakeJourneyStore();
-    const walkerId = store.addUser();
-    store.seed({ walkerId, state: 'LOST_CONTACT', responderIds: [], startedAt: AT });
-    const before = store.journeys();
-
-    await expect(
-      store.insertStarted({ walkerId, responderIds: [], startedAt: AT }),
-    ).rejects.toThrow(/no responders/);
-
-    expect(store.journeys()).toEqual(before);
   });
 
   test('holds IDs given in upper case as lower-case, as a uuid column does', () => {

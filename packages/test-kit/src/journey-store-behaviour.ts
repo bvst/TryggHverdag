@@ -14,10 +14,12 @@
  *   - an ENDED journey blocks nothing and is never reported as unended;
  *   - a start is written whole or not at all, and a walker or responder who
  *     is not a user is refused, not half-stored;
- *   - a start with no responders is refused, and leaves nothing: a journey
- *     with nobody to alert is the silent failure this whole app exists to
- *     prevent, so the store holds the line even if a caller gets past the
- *     domain's NO_RESPONDER;
+ *   - a start with no responders is refused, in the store's own words, and
+ *     leaves nothing: a journey with nobody to alert is the silent failure
+ *     this whole app exists to prevent, so the store holds the line even if a
+ *     caller gets past the domain's NO_RESPONDER. Beside an unended journey
+ *     too, where answering "not inserted" would let the empty list through
+ *     unrefused;
  *   - `existingUsers` names exactly the IDs that are users;
  *   - an ID is matched as PostgreSQL's `uuid` type matches it, in either
  *     case, and comes back lower-case.
@@ -81,6 +83,18 @@ export const RACE_ROUNDS = 5;
 const STARTED_AT = new Date('2026-10-01T21:00:00.000Z');
 const EARLIER = new Date('2026-10-01T20:00:00.000Z');
 const UNENDED: readonly FakeJourneyState[] = ['ACTIVE', 'LOST_CONTACT'];
+
+/**
+ * How a store says it refused a start for having no responders: the word
+ * "responder" or "responders", on its own. Both stores' messages say it. A
+ * refusal that comes from somewhere else does not: Drizzle's throw on an empty
+ * insert says "values() must be called with at least one value", and a query
+ * that failed on the responders' table names "journey_responders" and
+ * "responder_id", where the word is joined to its neighbours and so is not on
+ * its own. Without this, a store whose own refusal had been deleted would
+ * still pass, rejected by whatever broke next.
+ */
+const REFUSED_FOR_NO_RESPONDER = /\bresponders?\b/i;
 
 /** Order-free, so a database that returns rows in any order compares equal. */
 function normalised(journeys: readonly JourneyAsStored[]) {
@@ -400,12 +414,15 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       // store's own half: asked anyway, it must not keep a journey that
       // alerts nobody. Refusing because a library happens to throw on an
       // empty insert, after the journey row is written, is not a rule; an
-      // upgrade that made that insert a no-op would leave the journey.
+      // upgrade that made that insert a no-op would leave the journey. So the
+      // reason is checked, not only the rejection: Drizzle throws on an empty
+      // insert and the transaction rolls back, which with the store's own
+      // refusal deleted would otherwise pass here unseen.
       const [walkerId = '', responderId = ''] = await users(subject, 2);
 
       await expect(
         subject.store.insertStarted({ walkerId, responderIds: [], startedAt: STARTED_AT }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(REFUSED_FOR_NO_RESPONDER);
 
       expect(await subject.store.unendedJourneyOf(walkerId)).toBeNull();
       expect(await subject.journeysOf(walkerId)).toEqual([]);
@@ -416,6 +433,40 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         startedAt: STARTED_AT,
       });
       expect(retried.inserted).toBe(true);
+    },
+  },
+  {
+    name: 'a start with no responders beside an unended journey is refused too, never answered as not inserted, and changes nothing',
+    async run(subject) {
+      // The case above holds a walker with no journey. This is the other
+      // situation, where a store could answer "not inserted" through the
+      // one-unended rule and so never look at the list at all. The domain
+      // answers ALREADY_ON_A_JOURNEY here first and never asks the store;
+      // the store refuses on its own account, whatever its caller did. For
+      // the adapter, this is the only case that fails if its explicit check
+      // for an empty list is deleted: the insert's ON CONFLICT DO NOTHING
+      // would answer before Drizzle ever sees the empty list.
+      for (const state of UNENDED) {
+        const [walkerId = '', responderId = ''] = await users(subject, 2);
+        const journeyId = await subject.seedJourney({
+          walkerId,
+          state,
+          responderIds: [responderId],
+          startedAt: EARLIER,
+        });
+        const before = normalised(await subject.journeysOf(walkerId));
+
+        await expect(
+          subject.store.insertStarted({ walkerId, responderIds: [], startedAt: STARTED_AT }),
+          state,
+        ).rejects.toThrow(REFUSED_FOR_NO_RESPONDER);
+
+        expect(normalised(await subject.journeysOf(walkerId)), state).toEqual(before);
+        expect(await subject.store.unendedJourneyOf(walkerId), state).toEqual({
+          id: journeyId,
+          state,
+        });
+      }
     },
   },
 ];
