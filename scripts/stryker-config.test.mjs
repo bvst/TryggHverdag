@@ -82,21 +82,37 @@ async function configFor(run) {
 }
 
 /**
- * The per-test timeout a run's command gives Vitest, in milliseconds, or
- * undefined when it gives none. Vitest takes `--testTimeout 5000` and
- * `--testTimeout=5000`; its options are also accepted in kebab case.
+ * The Vitest options BUG-12 adds to every run's command, each as Vitest
+ * accepts it: `--name value` or `--name=value`, in camel or kebab case.
  */
-function testTimeoutIn(command) {
-  const match = /\s--test(?:Timeout|-timeout)(?:=|\s+)(\d+)(?=\s|$)/.exec(command);
+const MUTATION_OPTIONS = {
+  testTimeout: '--test(?:Timeout|-timeout)',
+  hookTimeout: '--hook(?:Timeout|-timeout)',
+  bail: '--bail',
+};
+
+const optionPattern = (flag, flags = '') =>
+  new RegExp(`\\s${flag}(?:=|\\s+)(\\d+)(?=\\s|$)`, flags);
+
+/** The number a run's command gives a Vitest option, or undefined when it gives none. */
+function optionIn(command, option) {
+  const match = optionPattern(MUTATION_OPTIONS[option]).exec(command);
   return match?.[1] === undefined ? undefined : Number(match[1]);
 }
 
+/** The per-test timeout a run's command gives Vitest, in milliseconds, or undefined. */
+const testTimeoutIn = (command) => optionIn(command, 'testTimeout');
+
 /**
- * A run's command without its per-test timeout, which BUG-12's own test pins.
- * What is left says which configuration the run uses and which tests it runs.
+ * A run's command without the options BUG-12 adds to every run: the per-test
+ * and hook timeouts and `--bail`, which BUG-12's own tests pin. What is left
+ * says which configuration the run uses and which tests it runs.
  */
-const withoutTestTimeout = (command) =>
-  command.replace(/\s--test(?:Timeout|-timeout)(?:=|\s+)\d+(?=\s|$)/, '');
+const withoutMutationOptions = (command) =>
+  Object.values(MUTATION_OPTIONS).reduce(
+    (rest, flag) => rest.replace(optionPattern(flag, 'g'), ''),
+    command,
+  );
 
 /**
  * The config with what a run is meant to change taken out: what it mutates,
@@ -160,13 +176,14 @@ describe('stryker.config.mjs', () => {
   // BUG-12 (RG-03) for the four tests that follow, each of which compared its
   // run with the config with no run named. That config now throws, so each
   // pins its own three settings here and leaves the rest to the test above,
-  // which holds them for every run. Its command is read without the per-test
-  // timeout that BUG-12 adds to every run, and which BUG-12's test pins.
+  // which holds them for every run. Its command is read without the options
+  // BUG-12 adds to every run (the per-test and hook timeouts and --bail),
+  // which BUG-12's own tests pin.
   test('the domain run mutates the domain and runs only the domain tests', async () => {
     const config = await configFor('domain');
 
     expect(config.mutate).toEqual(['apps/server/src/domain/**/*.ts', ...EXCLUSIONS]);
-    expect(withoutTestTimeout(config.commandRunner.command)).toBe(
+    expect(withoutMutationOptions(config.commandRunner.command)).toBe(
       'pnpm exec vitest run apps/server/src/domain',
     );
     expect(config.incrementalFile).toBe('reports/stryker-domain.json');
@@ -176,7 +193,7 @@ describe('stryker.config.mjs', () => {
     const config = await configFor('healthchecks');
 
     expect(config.mutate).toEqual(['apps/server/src/adapters/healthchecks.ts', ...EXCLUSIONS]);
-    expect(withoutTestTimeout(config.commandRunner.command)).toBe(
+    expect(withoutMutationOptions(config.commandRunner.command)).toBe(
       'pnpm exec vitest run apps/server/src/adapters/healthchecks.test.ts apps/server/src/worker.test.ts',
     );
     expect(config.incrementalFile).toBe('reports/stryker-healthchecks.json');
@@ -210,7 +227,7 @@ describe('stryker.config.mjs', () => {
       'apps/server/src/process.ts',
       ...EXCLUSIONS,
     ]);
-    expect(withoutTestTimeout(config.commandRunner.command)).toBe(
+    expect(withoutMutationOptions(config.commandRunner.command)).toBe(
       'pnpm exec vitest run apps/server/src/bin/bin.test.ts apps/server/src/worker.test.ts apps/server/src/process.test.ts',
     );
     expect(config.incrementalFile).toBe('reports/stryker-process.json');
@@ -225,7 +242,7 @@ describe('stryker.config.mjs', () => {
     const config = await configFor('api-process');
 
     expect(config.mutate).toEqual(['apps/server/src/api-process.ts', ...EXCLUSIONS]);
-    expect(withoutTestTimeout(config.commandRunner.command)).toBe(
+    expect(withoutMutationOptions(config.commandRunner.command)).toBe(
       'pnpm exec vitest run apps/server/src/api-process.test.ts',
     );
     expect(config.incrementalFile).toBe('reports/stryker-api-process.json');
@@ -244,7 +261,7 @@ describe('stryker.config.mjs', () => {
 
     expect(left).toEqual(['apps/server/src/modules/alerts/', 'apps/mobile/src/safety-core/']);
     expect(config.mutate).toEqual([...globs(left), ...EXCLUSIONS]);
-    expect(withoutTestTimeout(config.commandRunner.command)).toBe(
+    expect(withoutMutationOptions(config.commandRunner.command)).toBe(
       'pnpm exec vitest run apps packages',
     );
     expect(config.incrementalFile).toBe('reports/stryker-whole-suite.json');
@@ -301,6 +318,42 @@ describe('stryker.config.mjs', () => {
       expect(testTimeout, run.name).toBeGreaterThan(0);
       expect(config.timeoutMS, `${run.name}: Stryker's timeoutMS`).toBeGreaterThanOrEqual(
         (testTimeout ?? Number.POSITIVE_INFINITY) + 10_000,
+      );
+    }
+  });
+
+  test('BUG-12: each run stops Vitest at its first failed test, with --bail 1', async () => {
+    // Vitest runs one file's tests one after another. A mutant that makes k
+    // of them wait, as process.exit(code) planted as nothing can in
+    // bin.test.ts, would take k times the per-test timeout, and Stryker
+    // would stop it as a timeout after all. The command runner reads only
+    // the exit code, so the first failure is all it needs: --bail 1 ends the
+    // run there, and the mutant is killed.
+    for (const run of mutationRuns()) {
+      const config = await configFor(run.name);
+
+      expect(
+        optionIn(config.commandRunner.command, 'bail'),
+        `${run.name}: the command does not give Vitest --bail 1`,
+      ).toBe(1);
+    }
+  });
+
+  test("BUG-12: each run gives Vitest a hook timeout too, and Stryker's timeoutMS is at least 10 s more than the longer of the two", async () => {
+    // Stricter than the test above, which it leaves as it is: an afterEach
+    // that waits forever must also fail inside Vitest, with time to spare,
+    // before Stryker stops the mutant.
+    for (const run of mutationRuns()) {
+      const config = await configFor(run.name);
+      const testTimeout = optionIn(config.commandRunner.command, 'testTimeout');
+      const hookTimeout = optionIn(config.commandRunner.command, 'hookTimeout');
+
+      expect(hookTimeout, `${run.name}: the command gives Vitest no --hookTimeout`).toBeDefined();
+      expect(hookTimeout, run.name).toBeGreaterThan(0);
+      expect(testTimeout, `${run.name}: the command gives Vitest no --testTimeout`).toBeDefined();
+      expect(config.timeoutMS, `${run.name}: Stryker's timeoutMS`).toBeGreaterThanOrEqual(
+        Math.max(testTimeout ?? Number.POSITIVE_INFINITY, hookTimeout ?? Number.POSITIVE_INFINITY) +
+          10_000,
       );
     }
   });
