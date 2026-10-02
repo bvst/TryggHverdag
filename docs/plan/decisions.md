@@ -339,7 +339,7 @@ new decision that supersedes it (see `00-working-agreement.md`).
   - A real-device platform must be chosen (Section 6, round 2).
 
 ## D-036 — Mutation testing blocks below 80 % on safety code
-- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 6
+- **Date:** 2026-09-20 · **Status:** Accepted; its "pull requests run incrementally" is superseded by D-099 (every run is fresh) · **Section:** 6
 - **Decision:** StrykerJS runs on domain, alert and safety-core code. A mutation
   score below 80 % blocks the merge. Pull requests run incrementally; a full run
   happens nightly. Elsewhere the score is reported but doesn't block.
@@ -3146,7 +3146,40 @@ any other path is work, not a candidate for the same treatment.
     the code with a reason, where review sees it.
   - The 25-minute budget is not raised here. If an honest run does not fit, the
     choice goes to the owner (cost).
+  - Not included either: the code the groups' tests import but do not mutate,
+    such as `api.ts`, `http.ts`, the adapters and `packages/contracts`. A pull
+    request touching only those can lower a safety file's score without the
+    run starting. The next pull request that does start it then fails, loudly,
+    for a change it did not make (`code-reviewer`, BUG-12).
   - Not included: a dependency update that changes Stryker or Vitest does not
     trigger the run. Adding the lockfile would run mutation on every
     Dependabot pull request. That is a cost question, for the owner if it
     comes up.
+
+## D-099 — Every mutation run is fresh: `--incremental` is refused (BUG-12)
+- **Date:** 2026-10-02 · **Status:** Accepted (owner, 2026-10-02; asked in
+  session with Claude's recommendation) · **Section:** 6 (supersedes D-036's
+  "pull requests run incrementally"; extends D-098)
+- **Context:** `safety-reviewer` found it while reviewing BUG-12:
+  - With the command runner (D-066), Stryker gets no coverage data. Its
+    incremental mode then reuses every earlier result in code that has not
+    changed, whatever happened to the tests.
+  - It replaced `api-process.test.ts` with a test that asserts nothing. With
+    `--incremental`, all 8 results were reused and the run scored 100 %. A
+    fresh run scored 0 %.
+  - CI was never exposed: it keeps no cache, so every CI run was already fresh
+    (D-066's amendment). A local `gate:full`, which passed `--incremental`,
+    could be.
+- **Decision:**
+  - `pnpm run mutation` refuses `--incremental` and says why.
+  - `gate:full` and `ci.yml` no longer pass it, and the config writes no
+    incremental file.
+  - `gate:full`'s mutation step gets the whole mutation budget
+    (`MUTATION_TIMEOUT_MS`), not the 590 s every other step gets.
+- **Consequences:**
+  - CI's cost is unchanged.
+  - A local `gate:full` that touches the mutation run's inputs takes as long as
+    a fresh run: about 8 minutes on two cores.
+  - D-036's nightly full run is no longer what makes the pull-request runs
+    complete, because they are complete already. It is still the place for the
+    database files (D-095).
