@@ -1,13 +1,15 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-02 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01 and BUG-10 done, BUG-12 reviewed and its pull request opening, LOST-01 after it merges (D-090)
+**Last updated:** 2026-10-02 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12 and BUG-14 done, LOST-01 in progress (D-090)
 
-**Current section:** milestone M2, started 2026-10-01 with SM-01, task 1 of 8
+**Current section:** milestone M2, started 2026-10-01 with SM-01; LOST-01,
+the heartbeat, is task 2 of 8 and in progress
 (D-090; the task list is in [10-roadmap.md](10-roadmap.md)). SM-01 is done
 (#53, 2026-10-02). BUG-10, the journey files under the owner's approval and the
-safety review (D-092, D-094 to D-097), is done (#56, 2026-10-02); BUG-12, the
-mutation gate's silent false green (D-098, D-099), is reviewed and its pull
-request is opening, then LOST-01 after it merges. BUG-13 (`gate:full` miscounts
+safety review (D-092, D-094 to D-097), is done (#56, 2026-10-02); so are
+BUG-12, the mutation gate's silent false green (D-098, D-099; #57), and
+BUG-14, the test kit and the mutation check's own files under the owner and
+the safety review (D-100; #58), both 2026-10-02. BUG-13 (`gate:full` miscounts
 the steps that did not run after a failure) is queued for the owner to
 schedule. M1 closed with all four roadmap items done:
 SPIKE-01 (S1–S8), Section 4 closed with a conditional GO for the location SDK

@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-02 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 in progress** (D-100); LOST-01 after it · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-02 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **LOST-01 in progress** (task 2 of 8) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -34,7 +34,7 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | | BUG-13 | `gate:full` says "0 step(s) after it did not run" after a failure, even when steps did not run: `summarize` in `scripts/lib/steps.mjs` subtracts the counts of `results`, which never holds the steps after a failure, so the number is always 0. On 2026-10-02 four steps did not run and it said 0 | ⚪ **Queued**, for the owner to schedule. On `main`. A reporting bug in what a gate says it skipped, not in what it checks |
 | | BUG-14 | The test kit needs the owner, and the mutation check's own files and the test kit join the ai-review `safety` filter (D-100, the owner's answer of 2026-10-02 to CI's `code-reviewer` and `test-auditor` on #57) | 🟡 **Reviewed, pull request opening.** Branch `fix/BUG-14-gate-files-owned`. D-100 `097d835`, its amendment `1fca48c` (owner: the three Vitest configs join too; the group tests stay out); tests `f7daaa6`, `5d0174e`; fix `ef0c1cf`, `3e1babb`; `safety-reviewer`'s brief line `519c83b`. All four session reviewers PASS, twice for the blocking two. `gate:full`: 11 passed, the one failure `gate:integrity`'s API checks. It edits `ai-review.yml`, so the owner merges it by hand (D-075) |
 | | BUG-11 | The dependency audit accepts one advisory, GHSA-86w9-cpqp-85rv in `node-forge` (D-093) | ✅ **Done** — merged with SM-01 in [#53](https://github.com/bvst/TryggHverdag/pull/53) (`2db7046`). Its own pull request, [#54](https://github.com/bvst/TryggHverdag/pull/54), was closed as superseded: every file it held was already on `main` |
-| 2 | LOST-01 | Heartbeat, with or without position | ⚪ Not started |
+| 2 | LOST-01 | Heartbeat, with or without position | 🟡 **In progress** — started 2026-10-02 on `claude/busy-faraday-40n2zl`, from `main` at `34bc460`; the spec first |
 | 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ⚪ Not started |
 | 4 | LOST-03 | Back in contact | ⚪ Not started |
 | 5 | LOST-06 | "I'm on it" | ⚪ Not started |
@@ -317,9 +317,8 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**BUG-14** (D-100 and its amendment) is reviewed, and its pull request is
-opening. It edits `ai-review.yml`, so the owner merges it by hand (D-075).
-LOST-01 follows. Open after it:
+**LOST-01** (M2 task 2 of 8, the heartbeat) is in progress, from the spec.
+BUG-14 is done (#58). Still open from its reviews, for the owner:
 - nothing pins what `package.json`'s `mutation` script runs (`safety-reviewer`
   on BUG-14, for the owner): changed to `echo`, CI's required check would pass
   with only the owner's approval in the way;
@@ -418,6 +417,8 @@ batch, each merged by hand (D-075): [#21](https://github.com/bvst/TryggHverdag/p
 (`apps/mobile/app.config.ts`, D-084). The runner label and the three action
 bumps went in as [#48](https://github.com/bvst/TryggHverdag/pull/48). BUG-10's
 filter (D-092) went in as [#56](https://github.com/bvst/TryggHverdag/pull/56),
+and BUG-14's (D-100: the mutation check's own files, the test kit and the three
+Vitest configs) as [#58](https://github.com/bvst/TryggHverdag/pull/58), both
 merged by hand.
 
 ## History
