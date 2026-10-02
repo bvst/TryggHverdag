@@ -32,7 +32,7 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | | BUG-10 | The journey files need the owner and the safety review (D-092, D-094 to D-097): the six journey files, `api.ts`, `adapters/clock.ts`, the migrations' location and the system and integration Vitest configs in CODEOWNERS and `OWNER_APPROVAL_PATHS`, and in the ai-review `safety` filter; `modules/**` in `CLOCK_FREE_PATHS`; `modules/journeys/` and `api-process.ts` in `SAFETY_PATHS`, the first with its own mutation run under the system-test config | ✅ **Done** — 2026-10-02, [#56](https://github.com/bvst/TryggHverdag/pull/56), merged by the owner by hand (D-075) as `348f620`. Approved by `urso-agent`; all four session reviewers PASS (CI's AI reviewers cannot run on a pull request that edits `ai-review.yml`; their skip was read in each job log). In CI before the merge: `integration` 50 of 50, the new REL-01 clock test among them. On `main` after the merge: `ci` 10 of 10 jobs passed (run 37005844364), and `deploy-staging` passed with its smoke test (run 37005844368) |
 | | BUG-12 | The mutation gate fails silently: on CI the whole-suite run's mutants all time out, and Stryker scores timeouts as detected | ✅ **Done** — 2026-10-02, [#57](https://github.com/bvst/TryggHverdag/pull/57), merged as `a47334f` after `urso-agent` approved it (D-098, D-099). Only a kill counts, each file ≥ 80 %, every run fresh. On CI's four CPUs (#57's job 110875720392): 265 mutants, 0 timed out, about 3 minutes of 25. Reviews PASS in the session (safety, test-auditor, code) and in CI (privacy-security, test-auditor, code). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37040515081), and `deploy-staging` passed (run 37040515144). Record: `progress/m2.md` |
 | | BUG-13 | `gate:full` says "0 step(s) after it did not run" after a failure, even when steps did not run: `summarize` in `scripts/lib/steps.mjs` subtracts the counts of `results`, which never holds the steps after a failure, so the number is always 0. On 2026-10-02 four steps did not run and it said 0 | ⚪ **Queued**, for the owner to schedule. On `main`. A reporting bug in what a gate says it skipped, not in what it checks |
-| | BUG-14 | The test kit needs the owner, and the mutation check's own files and the test kit join the ai-review `safety` filter (D-100, the owner's answer of 2026-10-02 to CI's `code-reviewer` and `test-auditor` on #57) | 🟡 **In progress** on `fix/BUG-14-gate-files-owned`: D-100 `097d835`, tests `f7daaa6` (8 red). It edits `ai-review.yml`, so the owner merges it by hand (D-075) |
+| | BUG-14 | The test kit needs the owner, and the mutation check's own files and the test kit join the ai-review `safety` filter (D-100, the owner's answer of 2026-10-02 to CI's `code-reviewer` and `test-auditor` on #57) | 🟡 **Reviewed, pull request opening.** Branch `fix/BUG-14-gate-files-owned`. D-100 `097d835`, its amendment `1fca48c` (owner: the three Vitest configs join too; the group tests stay out); tests `f7daaa6`, `5d0174e`; fix `ef0c1cf`, `3e1babb`; `safety-reviewer`'s brief line `519c83b`. All four session reviewers PASS, twice for the blocking two. `gate:full`: 11 passed, the one failure `gate:integrity`'s API checks. It edits `ai-review.yml`, so the owner merges it by hand (D-075) |
 | | BUG-11 | The dependency audit accepts one advisory, GHSA-86w9-cpqp-85rv in `node-forge` (D-093) | ✅ **Done** — merged with SM-01 in [#53](https://github.com/bvst/TryggHverdag/pull/53) (`2db7046`). Its own pull request, [#54](https://github.com/bvst/TryggHverdag/pull/54), was closed as superseded: every file it held was already on `main` |
 | 2 | LOST-01 | Heartbeat, with or without position | ⚪ Not started |
 | 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ⚪ Not started |
@@ -285,7 +285,7 @@ The things that still bite, and cost a session hours the first time.
   `.claude/` gaps). M2's narrative is [`progress/m2.md`](progress/m2.md) and
   M1's is [`progress/m1.md`](progress/m1.md), so a bug's next `BUG-<n>` has to
   be looked for in all three files, in this one and in `decisions.md`. The
-  next one is **BUG-14** (BUG-13 is taken). The last paragraph of
+  next one is **BUG-15** (BUG-13 and BUG-14 are taken). The last paragraph of
   `progress/m1.md` says why.
 - **The write-time sensitive-data hook catches only `+47`/`0047` phone
   numbers, on Write and Edit.** `scan-sensitive.mjs` does not look for 8-digit
@@ -317,10 +317,16 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**BUG-12** (D-098, D-099), the mutation gate's silent false green, is reviewed
-and its pull request is opening; LOST-01 follows once it merges. Its `mutation`
-job is the first measurement on CI's four CPUs. Open after it, from D-098's
-consequences:
+**BUG-14** (D-100 and its amendment) is reviewed, and its pull request is
+opening. It edits `ai-review.yml`, so the owner merges it by hand (D-075).
+LOST-01 follows. Open after it:
+- nothing pins what `package.json`'s `mutation` script runs (`safety-reviewer`
+  on BUG-14, for the owner): changed to `echo`, CI's required check would pass
+  with only the owner's approval in the way;
+- an extra unowned entry in the safety filter is not caught by a test
+  (`test-auditor`; the safe direction, and `/.github/` needs the owner anyway).
+
+Still open from D-098's consequences (BUG-12, done):
 - imports do not trigger the run (`api.ts`, `http.ts`, the adapters, contracts);
 - dependency updates do not trigger it either (a cost question);
 - the whole-suite run is now unreachable, and removing it needs a decision;
