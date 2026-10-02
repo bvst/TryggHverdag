@@ -233,4 +233,69 @@ describe('fakePostgres', () => {
     ).toThrow(/describe/i);
     expect(database.queries).toEqual([]);
   });
+
+  // Test audit, test-auditor: Bind's result-format codes were read past
+  // unchecked, so a client asking for binary results would have been sent
+  // text, and would have decoded it wrong without either side saying so.
+  // Format codes: 0 is text, 1 is binary. Bind carries the parameters' codes,
+  // the parameters, then the results' codes; pg sends one result code, 0,
+  // which stands for every column.
+
+  /** A Bind of `select $1` with these format codes and one text parameter. */
+  const bind = (parameterFormats: number[], resultFormats: number[]): number[] => [
+    ...frame('P', [...cstring(''), ...cstring('select $1'), ...int16(0)]),
+    ...frame('B', [
+      ...cstring(''),
+      ...cstring(''),
+      ...int16(parameterFormats.length),
+      ...parameterFormats.flatMap(int16),
+      ...int16(1),
+      ...int32(1),
+      ...bytesOf('a'),
+      ...int16(resultFormats.length),
+      ...resultFormats.flatMap(int16),
+    ]),
+    ...frame('D', [...bytesOf('P'), ...cstring('')]),
+    ...frame('E', [...cstring(''), ...int32(0)]),
+    ...frame('S', []),
+  ];
+
+  test('BUG-12: results asked for as text, one code for every column as pg sends it, are answered', () => {
+    const { database, connection } = started(() => ({ columns: ['id'], rows: [['a']] }));
+
+    const reply = connection.receive(Uint8Array.from(bind([0], [0])));
+
+    expect(typesOf(reply)).toEqual(['1', '2', 'T', 'D', 'C', 'Z']);
+    expect(database.queries).toEqual([{ text: 'select $1', values: ['a'] }]);
+  });
+
+  test.each([
+    ['for every column', [1], '[1]'],
+    ['for one column of two', [0, 1], '[0,1]'],
+  ])(
+    'BUG-12: results asked for in binary %s throw, naming the codes and the query, and nothing is recorded as asked',
+    (_, resultFormats, named) => {
+      const { database, connection } = started(() => ({ columns: ['id'], rows: [['a']] }));
+
+      expect(() => connection.receive(Uint8Array.from(bind([0], resultFormats)))).toThrow(
+        `result format codes ${named}`,
+      );
+      expect(() =>
+        started(noRows).connection.receive(Uint8Array.from(bind([0], resultFormats))),
+      ).toThrow('select $1');
+      expect(database.queries).toEqual([]);
+    },
+  );
+
+  test('BUG-12: a parameter sent in binary throws, naming the codes and the query', () => {
+    const { database, connection } = started(noRows);
+
+    expect(() => connection.receive(Uint8Array.from(bind([1], [0])))).toThrow(
+      'parameter format codes [1]',
+    );
+    expect(() => started(noRows).connection.receive(Uint8Array.from(bind([1], [0])))).toThrow(
+      'select $1',
+    );
+    expect(database.queries).toEqual([]);
+  });
 });

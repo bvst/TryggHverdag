@@ -20,8 +20,9 @@
  * queries. Anything else it is sent throws, loudly, rather than being
  * answered with a guess: a TLS request, Close and Flush (pg sends them only
  * when TLS is configured, when a bind fails, or for a query with `rows` set,
- * and none of that is in use), a Describe of a statement, and an Execute with
- * no Describe before it.
+ * and none of that is in use), a Describe of a statement, an Execute with no
+ * Describe before it, and a Bind that sends a parameter in binary or asks for
+ * results in binary, naming the format codes it was sent.
  *
  * ASCII only. Synthetic data needs nothing else (RG-07), and a fake that
  * garbled a character would be wrong without saying so, so it refuses
@@ -264,17 +265,31 @@ export function fakePostgres(handler: FakePostgresHandler): FakePostgres {
           if (skippingToSync) return [];
           const portal = read.cstring();
           const statement = read.cstring();
-          const formats = Array.from({ length: read.int16() }, () => read.int16());
-          if (formats.some((format) => format !== 0)) {
-            throw new Error('The fake PostgreSQL server takes parameters as text only.');
+          const text = statements.get(statement);
+          if (text === undefined) {
+            throw new Error(`The fake PostgreSQL server was never sent statement "${statement}".`);
+          }
+          // Format codes: 0 is text, 1 is binary. Parameters' codes come
+          // first, then the parameters, then the results' codes.
+          const parameterFormats = Array.from({ length: read.int16() }, () => read.int16());
+          if (parameterFormats.some((format) => format !== 0)) {
+            throw new Error(
+              'The fake PostgreSQL server takes parameters as text only (format code 0), and was ' +
+                `sent parameter format codes ${JSON.stringify(parameterFormats)} for: ${text}`,
+            );
           }
           const values = Array.from({ length: read.int16() }, () => {
             const length = read.int32();
             return length === -1 ? null : read.text(length);
           });
-          const text = statements.get(statement);
-          if (text === undefined) {
-            throw new Error(`The fake PostgreSQL server was never sent statement "${statement}".`);
+          const resultFormats = Array.from({ length: read.int16() }, () => read.int16());
+          if (resultFormats.some((format) => format !== 0)) {
+            // Answered anyway, the rows would go back as text to a client
+            // that decodes them as binary, and neither side would say so.
+            throw new Error(
+              'The fake PostgreSQL server sends results as text only (format code 0), and was ' +
+                `asked for result format codes ${JSON.stringify(resultFormats)} for: ${text}`,
+            );
           }
           portals.set(portal, { query: { text, values } });
           return message('2');

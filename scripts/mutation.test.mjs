@@ -47,7 +47,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, test } from 'vitest';
-import { judgeMutationReport, mutationRuns } from './lib/gate-decisions.mjs';
+import { judgeMutationReport, mutationReportFile, mutationRuns } from './lib/gate-decisions.mjs';
 import { hasSourceFiles, runMutationGroups, strykerRunner } from './mutation.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -613,13 +613,23 @@ describe('strykerRunner', () => {
   });
 });
 
-describe('D-099: `pnpm run mutation --incremental` is refused', () => {
+// BUG-12 (RG-03): this block was "D-099: `pnpm run mutation --incremental` is
+// refused". Test audit, test-auditor: main's own wiring of hasSourceFiles was
+// tested nowhere, so the same harness now holds a second case, and the block
+// is named for the harness. The D-099 cases are unchanged, and their names
+// still say what they prove.
+describe('`pnpm run mutation` itself, in a scratch repository', () => {
   // Through the real script, as `pnpm run mutation` starts it: the refusal
   // has to come from main, before any run starts, and only the script itself
   // can show that. It runs in a scratch repository where every run would
   // start, against a stand-in `pnpm` that records each call and starts
   // nothing. So the real Stryker never runs here, even while the refusal is
   // missing, and a Stryker run that did start is on record.
+  //
+  // The same holds for what main asks before each run: whether each of a
+  // group's paths holds a source file. runMutationGroups is tested above
+  // with a fake answer, so only the script itself shows that main asks the
+  // real hasSourceFiles, about the real files.
   const made = [];
   afterEach(() => {
     for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -631,9 +641,15 @@ describe('D-099: `pnpm run mutation --incremental` is refused', () => {
    * A scratch repository in which `pnpm run mutation` would start every run:
    * a Stryker config, and a source file in each run's safety paths, untracked,
    * so that --only-if-safety-paths-changed finds them changed. Beside it, the
-   * only `pnpm` on PATH, which logs each call to `started` and exits 1.
+   * only `pnpm` on PATH, which logs each call to `started`. By default it
+   * exits 1. With `stryker: 'passes'` it writes, where Stryker writes a run's
+   * JSON report, one in which the run's only mutant was killed, and exits 0:
+   * every run passes, so the gate can fail only for what the test changed.
+   *
+   * BUG-12 (RG-03): `stryker` is new, and its default keeps the stand-in the
+   * D-099 cases had.
    */
-  function scratchRepository() {
+  function scratchRepository({ stryker = 'fails' } = {}) {
     const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'd099-incremental-')));
     made.push(dir);
     const repo = path.join(dir, 'repo');
@@ -655,11 +671,20 @@ describe('D-099: `pnpm run mutation --incremental` is refused', () => {
     });
     if (init.status !== 0) throw new Error(`git init failed:\n${init.stderr}`);
     mkdirSync(bin);
+    // The report's path as the shell expands it, from the function the
+    // script reads reports by, so the two cannot drift apart.
+    const report = mutationReportFile('$STRYKER_RUN');
+    const passing = JSON.stringify(reportOf({ 'planted.ts': { Killed: 1 } }));
     writeFileSync(
       path.join(bin, 'pnpm'),
-      ['#!/bin/sh', `echo "STRYKER_RUN=$STRYKER_RUN pnpm $*" >> "${started}"`, 'exit 1', ''].join(
-        '\n',
-      ),
+      [
+        '#!/bin/sh',
+        `echo "STRYKER_RUN=$STRYKER_RUN pnpm $*" >> "${started}"`,
+        ...(stryker === 'passes'
+          ? [`mkdir -p "$(dirname "${report}")"`, `echo '${passing}' > "${report}"`, 'exit 0']
+          : ['exit 1']),
+        '',
+      ].join('\n'),
     );
     chmodSync(path.join(bin, 'pnpm'), 0o755);
     return { repo, bin, started };
@@ -714,4 +739,41 @@ describe('D-099: `pnpm run mutation --incremental` is refused', () => {
       expect(refused.output).toMatch(/coverage/i);
     },
   );
+
+  // Review loop 1, safety-reviewer: with bin/worker.ts renamed, the process
+  // group was judged on the two files left, and the gate passed. Test audit,
+  // test-auditor: main handing the loop `() => true` for hasSourceFiles
+  // brought that back, and every test stayed green.
+  test("BUG-12: a group's safety file gone from the repository fails the gate, and the verdict names the file and its group", () => {
+    const gone = 'apps/server/src/bin/worker.ts';
+    expect(
+      mutationRuns().find((run) => run.name === 'process')?.paths,
+      'the process group no longer claims the file this test removes',
+    ).toContain(gone);
+    const repository = scratchRepository({ stryker: 'passes' });
+    // As ci.yml runs it.
+    const args = ['--only-if-safety-paths-changed', '--base', 'origin/main'];
+
+    // With every file there, every run passes and so does the gate. Without
+    // this, the failure below could come from anything but the missing file.
+    const whole = mutation(repository, args);
+    expect(whole.error, whole.output).toBeUndefined();
+    expect(whole.status, whole.output).toBe(0);
+    expect(starts(repository.started), whole.output).toContain('STRYKER_RUN=process ');
+
+    rmSync(path.join(repository.repo, gone));
+    const missing = mutation(repository, args);
+
+    expect(missing.error, missing.output).toBeUndefined();
+    expect(missing.signal, missing.output).toBeNull();
+    expect(missing.status, missing.output).not.toBe(0);
+    // The verdict is the last line the script prints. Anywhere else, the
+    // file is named even when the gate passes: in the line before the process
+    // run that lists what it mutates. And "process" alone matches
+    // "api-process".
+    const verdict = missing.stdout.trim().split('\n').at(-1) ?? '';
+    expect(verdict, missing.output).toContain(gone);
+    expect(verdict, missing.output).toMatch(/(?<![\w-])process\b/);
+    expect(verdict, missing.output).not.toContain('apps/server/src/process.ts');
+  });
 });

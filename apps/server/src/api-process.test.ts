@@ -33,6 +33,16 @@ const NO_DATABASE = 'postgres:///db?host=/nonexistent-socket-dir';
  * connect to by URL. It records what it is asked and answers through
  * `handler`. No password: the fake lets anyone in, so none is ever written
  * here.
+ *
+ * The fake throws on anything it would otherwise have to guess at (a message
+ * it does not speak, an answer it cannot encode). Thrown inside the socket's
+ * data handler, that was an uncaught exception, and the request waited for a
+ * reply until the test timed out (test audit, test-auditor). So the throw is
+ * caught, the connection is closed, which fails the request at once, and
+ * `close()` rejects with what the fake said. Every test awaits `close()` in
+ * its `finally`, so it fails with the fake's own message, in place of
+ * whatever the failed request made it assert, and even when the request
+ * somehow succeeded.
  */
 async function listeningFakePostgres(handler: FakePostgresHandler): Promise<{
   url: string;
@@ -41,12 +51,21 @@ async function listeningFakePostgres(handler: FakePostgresHandler): Promise<{
 }> {
   const database = fakePostgres(handler);
   const sockets = new Set<Socket>();
+  const thrown: unknown[] = [];
   const server = createServer((socket) => {
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
     const connection = database.connect();
     socket.on('data', (chunk) => {
-      socket.write(connection.receive(chunk));
+      let reply: Uint8Array;
+      try {
+        reply = connection.receive(chunk);
+      } catch (error) {
+        thrown.push(error);
+        socket.destroy();
+        return;
+      }
+      socket.write(reply);
     });
   });
   await new Promise<void>((resolve) => {
@@ -57,10 +76,22 @@ async function listeningFakePostgres(handler: FakePostgresHandler): Promise<{
     url: `postgres://synthetic@127.0.0.1:${String(port)}/synthetic`,
     queries: database.queries,
     close: () =>
-      new Promise<void>((resolve) => {
+      new Promise<void>((resolve, reject) => {
         for (const socket of sockets) socket.destroy();
         server.close(() => {
-          resolve();
+          if (thrown.length === 0) {
+            resolve();
+            return;
+          }
+          const said = thrown.map((error) =>
+            error instanceof Error ? error.message : String(error),
+          );
+          reject(
+            new Error(
+              `The fake PostgreSQL server threw, and closed the connection: ${said.join(' | ')}`,
+              { cause: thrown[0] },
+            ),
+          );
         });
       }),
   };
