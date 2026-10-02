@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-02 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 in flight** (no pull request yet) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-02 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 built and reviewed**, its pull request next · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -28,7 +28,7 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 
 | # | ID | Task | Status |
 |---|----|------|--------|
-| 1 | SM-01 | Start a journey: the base tables, per-device authentication (SEC-07), the state machine module (AR-04), one active journey per walker, at least one responder | 🟡 **In flight.** Spec `7101f94`; tests `8c5573f` (written first, all 16 criteria); code `cbc0eeb`; requirement report `57d5714`; review-loop tests `658f267`; the review-loop code is being written. **Evidence so far:** `gate:quick` 3 of 3; `gate:full` 11 passed, 1 failed and 2 not possible. The failure is `gate:integrity`, which cannot read GitHub's rules API from a cloud session (its three file-based checks passed). Not possible: L3 without Docker, and L7 without an emulator. Domain mutation 100 %. **Reviews:** privacy-security PASS, safety PASS, code PASS (advisory), each with "should fix" items now in review loop 1. test-auditor comes after the loop. No pull request yet |
+| 1 | SM-01 | Start a journey: the base tables, per-device authentication (SEC-07), the state machine module (AR-04), one active journey per walker, at least one responder | 🟡 **Built and reviewed; its pull request is next.** Spec `7101f94`; tests `8c5573f` (written first, all 16 criteria); code `cbc0eeb`; review loop 1: tests `658f267`, spec `4870049`, code `8f6932b`; test-auditor's should-fix `654a5d7`. **Reviews, all PASS:** safety, privacy-security, code (advisory), test-auditor. Every should-fix is in the branch, except optional ones listed in `progress/m2.md`. **Evidence:** `gate:quick` 3 of 3; domain mutation 100 %; coverage ratchet: nothing went down. `gate:full` in a session: `gate:integrity` cannot read GitHub's rules API (its file-based checks pass); L3 and L7 not possible. **L3 has not run under Testcontainers** — only against a local PostgreSQL 16, as supporting evidence; CI's `integration` job is the evidence |
 | | BUG-10 | The journey files become safety paths (D-092): `SAFETY_PATHS`, CODEOWNERS, the ai-review `safety` filter, and `CLOCK_FREE_PATHS`. Runs right after SM-01 merges, before task 3 | ⚪ Not started. Its `ai-review.yml` part is merged by hand (D-075) |
 | 2 | LOST-01 | Heartbeat, with or without position | ⚪ Not started |
 | 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ⚪ Not started |
@@ -320,10 +320,9 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**SM-01** (M2's first task, D-090) is the work in flight: review loop 1's code
-is being written on branch `claude/busy-faraday-40n2zl`, and there is no pull
-request yet. See "M2 at a glance" above. Behind it, in order: BUG-10 (D-092),
-then LOST-01.
+**SM-01** (M2's first task, D-090) is built, reviewed and audited on branch
+`claude/busy-faraday-40n2zl`; its pull request is next. See "M2 at a glance"
+above. Behind it, in order: BUG-10 (D-092), then LOST-01.
 
 **D-085's loose ends** (the pull request merged, [#43](https://github.com/bvst/TryggHverdag/pull/43)).
 - **Verified:** `deploy-staging` on `ubuntu-26.04`. Run 36621209842, for
