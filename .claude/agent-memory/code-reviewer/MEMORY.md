@@ -8,3 +8,4 @@
 - [Results doc vs evidence](project_results_doc_vs_evidence.md) — diff the generator's rows exactly; convert times; read `from`/scope fields; test the documented flag combinations
 - [Owner docs for outside forms](project_owner_docs_for_external_forms.md) — paste hygiene, field-limit stop rule, numbered cross-refs, paraphrase vs quote, milestones vs roadmap
 - [IDs taken while open](project_ids_taken_while_open.md) — grep main and open PRs for the branch's new D-/BUG-/A- numbers; dirty PR = no workflows; label = release, not image
+- [Mutation gate since D-098](project_mutation_gate_d098.md) — per-run JSON report, only kills count; Stryker 10 exits 0 on zero mutants; pg wire facts for fake-postgres; audit kills by FAIL file; trigger gaps
