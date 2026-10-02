@@ -16,6 +16,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
+import { MUTATION_GROUPS, MUTATION_INPUTS } from './lib/gate-decisions.mjs';
 
 const WORKFLOW = readFileSync('.github/workflows/ai-review.yml', 'utf8');
 const AGENTS = readdirSync('.claude/agents')
@@ -237,6 +238,38 @@ describe('the verdict line the reviewers must produce', () => {
       expect(agentNamed(name)?.text).not.toMatch(
         /VERDICT[^\n]*\n?[^\n]*followed by your findings/i,
       );
+    }),
+  );
+});
+
+describe("BUG-14: safety-reviewer's brief has something to check in the mutation gate's own files (D-100's amendment)", () => {
+  // D-100 and its amendment put the mutation run's own inputs in the safety
+  // filter: what builds and judges the runs, the test kit, and the Vitest
+  // configurations the groups run under. A change to one now brings
+  // safety-reviewer, whose brief named only product safety code, so the
+  // review they trigger had nothing to check (D-045). Loose on purpose: the
+  // citation and each path, read from the code's own lists as the filter
+  // test in gate.test.mjs reads them, and none of the wording around them.
+  test(
+    "BUG-14: safety-reviewer's brief cites D-100 and names every input of the mutation run, read from MUTATION_INPUTS and every group's config",
+    explained(() => {
+      const brief = agentNamed('safety-reviewer.md')?.text ?? '';
+
+      expect(brief, 'no safety-reviewer.md with a verdict line in .claude/agents').not.toBe('');
+      expect(
+        Array.isArray(MUTATION_INPUTS),
+        'MUTATION_INPUTS is not exported from scripts/lib/gate-decisions.mjs',
+      ).toBe(true);
+      const inputs = [
+        ...MUTATION_INPUTS,
+        ...MUTATION_GROUPS.flatMap((group) => (group.config === undefined ? [] : [group.config])),
+      ].map((input) => input.replace(/\/$/, ''));
+
+      expect(inputs.length).toBeGreaterThan(0);
+      expect(
+        ['D-100', ...inputs].filter((named) => !brief.includes(named)),
+        "what safety-reviewer's brief does not name",
+      ).toEqual([]);
     }),
   );
 });
