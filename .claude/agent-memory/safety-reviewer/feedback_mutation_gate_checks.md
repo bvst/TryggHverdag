@@ -24,3 +24,8 @@ Checklist that found real holes on BUG-12 (2026-10-02):
 **Why:** BUG-12's failure was a pass that measured nothing; each of the above is another way to get one.
 **How to apply:** any PR touching gate-decisions.mjs, mutation.mjs, stryker.config.mjs or the groups' tests.
 Related: [[bug12-mutation-gate-review]], [[reviewer-sandbox-limits]].
+
+**Vitest drops a named test file its config excludes, silently (2026-10-02, BUG-14).** Stryker's command names
+each group's tests, but `vitest list --filesOnly --exclude 'apps/server/src/bin/**' <bin.test.ts> <others>` lists
+only the others, exit 0, no warning. So the root Vitest config (include in vitest.shared.mjs, exclude in
+vitest.config.mjs) decides a group's real test set. CLI --exclude is a file-free way to emulate a config change.

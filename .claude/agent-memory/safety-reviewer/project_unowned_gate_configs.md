@@ -25,3 +25,7 @@ Related: [[changed-files-rename-blind-spot]].
 
 **2026-10-02 (BUG-10, D-096):** /vitest.system.config.mjs and /vitest.integration.config.mjs join
 CODEOWNERS and OWNER_APPROVAL_PATHS. apps/mobile/package.json jest block still the known gap.
+
+**2026-10-02 (BUG-14, D-100, not merged at review time):** /packages/test-kit/ joins CODEOWNERS and
+OWNER_APPROVAL_PATHS. Still in no list: the mutation groups' tests outside domain/ (see
+[[bug14-gate-files-owned-review]]). apps/mobile/package.json jest block still the known gap.

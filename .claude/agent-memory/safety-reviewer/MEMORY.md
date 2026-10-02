@@ -1,3 +1,4 @@
+- [BUG-14 review](project_bug14_gate_files_owned_review.md) — PASS ef0c1cf; open: Vitest configs not in safety filter, group tests in no list, package.json mutation script unpinned
 - [BUG-12 review](project_bug12_mutation_gate_review.md) — PASS 7f6c3a7; open: --incremental reuses all, vanished safety file passes, RuntimeError/Ignored unnamed, journey clock unproven in api-process
 - [Mutation gate checks](feedback_mutation_gate_checks.md) — synthetic reports through the real judge, one group through runMutationGroups, Stryker command-runner facts
 - [Mutation gate skips test-only changes](project_mutation_gate_skips_test_only.md) — CLOSED for group tests/configs/test-kit by D-098 (BUG-12); no nightly run yet
