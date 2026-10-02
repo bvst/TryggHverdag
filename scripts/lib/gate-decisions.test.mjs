@@ -136,6 +136,12 @@ describe('decideMutation', () => {
     // The root configuration, under which every group without its own runs.
     ['vitest.config.mjs'],
     ['vitest.shared.mjs'],
+    // The test kit, whose fakes the groups' tests import: the api-process
+    // group's tests talk to fake-postgres.ts, and the others use its fakes
+    // too. A changed fake can change a score, so all of packages/test-kit/
+    // is an input, its index included.
+    ['packages/test-kit/src/fake-postgres.ts'],
+    ['packages/test-kit/src/index.ts'],
   ])('BUG-12: a change to only %s starts the mutation run, and says so by name', (file) => {
     const decision = runsOnly(file);
 
@@ -172,6 +178,8 @@ describe('decideMutation', () => {
     // D-098 leaves dependency updates out: the lockfile would run mutation
     // on every Dependabot pull request, a cost the owner has not chosen.
     ['pnpm-lock.yaml'],
+    // Another package beside the test kit: only the test kit is an input.
+    ['packages/contracts/src/journeys.ts'],
   ])('BUG-12: a change to only %s still has nothing to mutate', (file) => {
     // The whole-suite run's tests are `apps` and `packages`, every product
     // test. They are a catch-all, not a group's tests, so they are not

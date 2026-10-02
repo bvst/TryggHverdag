@@ -3132,6 +3132,9 @@ any other path is work, not a candidate for the same treatment.
     it. That removes the slow whole-suite run, which is what timed out.
   - The run starts when its inputs change, not only its safety paths:
     - a group's tests and configuration;
+    - `packages/test-kit/`, whose fakes the groups' tests run on (the
+      api-process tests reach their database through its fake PostgreSQL
+      server);
     - `stryker.config.mjs`, `scripts/lib/gate-decisions.mjs` and
       `scripts/mutation.mjs`;
     - the root Vitest configuration.
