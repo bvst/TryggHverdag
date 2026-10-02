@@ -28,3 +28,5 @@ Open should-fixes, check before repeating:
 **Why:** these are the remaining places a REL-01 or SEC-07 guarantee changes with less than owner + safety
 review. **How to apply:** on LOST-01/LOST-02/BUG-12 reviews, check whether these landed first.
 Related: [[mutation-gate-skips-test-only-changes]], [[reviewer-sandbox-limits]].
+
+**2026-10-02 (BUG-12):** the config-only skip is closed by D-098. adapters/clock.ts is now in CODEOWNERS (line 31) but still not in SAFETY_PATHS; with test-kit's fake PostgreSQL it could be mutated in-process (api-process.test.ts reaches databaseClock). gate-decisions.mjs now says the nightly run "does not exist yet" — honest.
