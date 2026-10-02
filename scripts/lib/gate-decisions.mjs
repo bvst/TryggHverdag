@@ -20,6 +20,15 @@ export const SAFETY_PATHS = [
   // The one file that can ping Healthchecks.io: a ping it sent on its own would
   // keep a dead worker's check green (D-079, the owner's decision).
   'apps/server/src/adapters/healthchecks.ts',
+  // The journey service, and the one place the database clock is wired into
+  // it. Only these two of D-092's six journey files are here, because their
+  // tests run in-process, so a mutant in them can be killed (D-095). The two
+  // database adapters, db/schema.ts and the migrations are proved by L3 tests
+  // alone, which no mutation run starts: here, every mutant in them would
+  // survive. They need the owner and the safety review all the same
+  // (merge-rules.mjs), and are mutated by D-036's nightly run instead.
+  'apps/server/src/modules/journeys/',
+  'apps/server/src/api-process.ts',
   'apps/mobile/src/safety-core/',
 ];
 
@@ -31,6 +40,13 @@ export const WHOLE_SUITE = ['apps', 'packages'];
  * those tests (D-066, amended by the owner 2026-09-25). Every mutant running the
  * whole suite outran the mutation job on PR #31. A group only narrows the tests:
  * a test left out can lower the score, never raise it.
+ *
+ * `config` names the Vitest configuration a group's tests run under, when it
+ * is not the root one. The root one leaves *.system.test.ts out, and Vitest
+ * runs no excluded file even when it is named, so the journeys group, whose
+ * tests are system tests, says which configuration collects them (D-095).
+ *
+ * @type {{ name: string, paths: string[], tests: string[], config?: string }[]}
  */
 export const MUTATION_GROUPS = [
   { name: 'domain', paths: ['apps/server/src/domain/'], tests: ['apps/server/src/domain'] },
@@ -38,6 +54,12 @@ export const MUTATION_GROUPS = [
     name: 'healthchecks',
     paths: ['apps/server/src/adapters/healthchecks.ts'],
     tests: ['apps/server/src/adapters/healthchecks.test.ts', 'apps/server/src/worker.test.ts'],
+  },
+  {
+    name: 'journeys',
+    paths: ['apps/server/src/modules/journeys/'],
+    tests: ['apps/server/src/journeys.system.test.ts'],
+    config: 'vitest.system.config.mjs',
   },
 ];
 
@@ -49,9 +71,12 @@ export const MUTATION_GROUPS = [
  * would mutate code that is not safety code; a file inside a safety folder
  * would be mutated twice, once by its group and once with the folder.
  *
+ * A group's `config` goes with it unchanged; the whole-suite run has none, so
+ * it runs under the root configuration, as it always has.
+ *
  * @param {string[]} safetyPaths
- * @param {{ name: string, paths: string[], tests: string[] }[]} groups
- * @returns {{ name: string, paths: string[], tests: string[] }[]}
+ * @param {{ name: string, paths: string[], tests: string[], config?: string }[]} groups
+ * @returns {{ name: string, paths: string[], tests: string[], config?: string }[]}
  */
 export function mutationRuns(safetyPaths = SAFETY_PATHS, groups = MUTATION_GROUPS) {
   const claimed = new Map();

@@ -24,6 +24,15 @@ export const OWNER_APPROVAL_PATHS = [
   '/apps/server/src/process.ts',
   // The one file that can ping Healthchecks.io: an unasked ping keeps a dead worker's check green (D-079).
   '/apps/server/src/adapters/healthchecks.ts',
+  // Where the journey guarantees live: the responder insert and its
+  // transaction, the one-unended-journey index, the device-credential check,
+  // and the one place the database clock is wired in (D-092, D-094, D-095).
+  '/apps/server/src/adapters/journeys.ts',
+  '/apps/server/src/adapters/device-credentials.ts',
+  '/apps/server/src/db/schema.ts',
+  '/apps/server/src/db/migrations/',
+  '/apps/server/src/modules/journeys/',
+  '/apps/server/src/api-process.ts',
   '/apps/mobile/src/safety-core/',
   // Where the app's permissions, background modes, backup and deep links are
   // set; background location is what the safety core stands on (D-084).
@@ -46,6 +55,10 @@ export const OWNER_APPROVAL_PATHS = [
   '/vitest.config.mjs',
   '/vitest.shared.mjs',
   '/vitest.coverage.config.mjs',
+  // They decide what the system (L6) and integration (L3) tests collect: the
+  // journey module's mutation run, and the database files' only tests (D-096).
+  '/vitest.system.config.mjs',
+  '/vitest.integration.config.mjs',
   // They decide what the lint, import-rule, mutation and coverage gates check,
   // so a change to one can loosen a gate without any test changing (D-084).
   '/eslint.config.mjs',

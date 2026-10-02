@@ -15,9 +15,13 @@ import tseslint from 'typescript-eslint';
  * Code where safety decisions are made. Here the clock is a port that tests
  * control, never something the code reads for itself (AR-03), and there are no
  * in-memory timers — the watchdog owns time (AR-06).
+ *
+ * The server's modules too: the journey service decides when a journey
+ * started, and every module is handed its clock (D-092, D-095).
  */
 export const CLOCK_FREE_PATHS = [
   'apps/server/src/domain/**/*.ts',
+  'apps/server/src/modules/**/*.ts',
   'apps/mobile/src/safety-core/**/*.{ts,tsx}',
 ];
 
