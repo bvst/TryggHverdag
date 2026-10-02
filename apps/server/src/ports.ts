@@ -6,6 +6,7 @@
  * shape without depending on the implementation, and so that the test kit can
  * satisfy them structurally without importing any server code.
  */
+import type { UnendedJourney } from './domain/journey.ts';
 
 /**
  * The time, from the database (REL-01).
@@ -34,4 +35,49 @@ export interface WorkerHeartbeats {
 export interface CheckIn {
   /** Resolves when the monitor accepted it; rejects on anything else. */
   checkIn(): Promise<void>;
+}
+
+/** Who a device credential belongs to. */
+export interface AuthenticatedDevice {
+  deviceId: string;
+  userId: string;
+}
+
+/**
+ * Which device sent a request (SEC-07).
+ *
+ * Three answers, kept apart on purpose: the device, `null` for a credential no
+ * device has, and a rejection when it cannot check at all. The API answers the
+ * second with 401 and the third with 500, because a 401 tells an app its
+ * credential is bad, and a database that blinked must never sign a walker out.
+ */
+export interface DeviceAuthenticator {
+  authenticate(credential: string): Promise<AuthenticatedDevice | null>;
+}
+
+/** A start to be stored: the domain's decision, timed by the clock. */
+export interface StartedJourney {
+  walkerId: string;
+  /** Distinct, and at least one: the domain refuses anything else. */
+  responderIds: readonly string[];
+  startedAt: Date;
+}
+
+/** Stored, or refused because the walker already has an unended journey. */
+export type InsertStartedResult =
+  { inserted: true; journeyId: string } | { inserted: false; unendedJourneyId: string };
+
+/** Journeys, their responders, and the users both must be (SM-01). */
+export interface JourneyStore {
+  /** The walker's journey in any state but ENDED, or null. */
+  unendedJourneyOf(walkerId: string): Promise<UnendedJourney | null>;
+  /** Which of these IDs are users. */
+  existingUsers(ids: readonly string[]): Promise<ReadonlySet<string>>;
+  /**
+   * Stores the journey ACTIVE with its responders, all of it or none of it.
+   * When the walker already has an unended journey, as when two starts race
+   * past `unendedJourneyOf`, nothing is stored and that journey is named.
+   * Rejects a start with no responders, and stores nothing.
+   */
+  insertStarted(journey: StartedJourney): Promise<InsertStartedResult>;
 }

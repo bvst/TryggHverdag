@@ -16,6 +16,31 @@ export type { FakeWorkerHeartbeats } from './fake-worker-heartbeats.ts';
 export { CHECKED_IN, fakeCheckIn } from './fake-check-in.ts';
 export type { FakeCheckIn } from './fake-check-in.ts';
 export { SYNTHETIC_CHECK_UUID, SYNTHETIC_PING_URL } from './ping-url.ts';
+export { CREDENTIAL_BYTES, syntheticCredential, syntheticUuid } from './synthetic-ids.ts';
+export { fakeDeviceAuthenticator } from './fake-device-authenticator.ts';
+export type {
+  AuthenticatedDevice,
+  FakeDeviceAuthenticator,
+  RegisteredDevice,
+} from './fake-device-authenticator.ts';
+export { fakeJourneyStore } from './fake-journey-store.ts';
+export type {
+  FakeJourneyState,
+  FakeJourneyStore,
+  InsertStartedResult,
+  JourneyStoreCall,
+  StartedJourney,
+  StoredJourney,
+  UnendedJourneyState,
+} from './fake-journey-store.ts';
+export { JOURNEY_STORE_BEHAVIOUR, RACE_ROUNDS, RACERS } from './journey-store-behaviour.ts';
+export { ADMIN_SHUTDOWN, endTestPool } from './end-test-pool.ts';
+export type { EndablePool } from './end-test-pool.ts';
+export type {
+  JourneyAsStored,
+  JourneyStoreBehaviour,
+  JourneyStoreUnderTest,
+} from './journey-store-behaviour.ts';
 
 /**
  * fast-check, for the rules about time and order that no list of examples can

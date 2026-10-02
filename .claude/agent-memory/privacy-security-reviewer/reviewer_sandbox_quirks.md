@@ -18,3 +18,5 @@ The guard hook (`guard-bash.mjs --readonly`) matches on the command's text, not 
 **A block ends the review.** Briefs say a guard block means stop and report, never rephrase and retry. So a careless `>` costs every check still to come. Before each command, scan it for `>`. Run the checks most likely to decide the verdict first.
 
 Related: [[mobile-release-review]], [[tooling-scripts-review]], [[device-harness-review]]
+
+**Linux cloud session (BUG-11, 2026-10-02):** no guard fired on `2>/dev/null` or `>` in commands, and `pnpm exec vitest run scripts/<x>.test.mjs` ran. Still write memory with `tee <<'EOF'` rather than `>`, in case the Mac guard applies.

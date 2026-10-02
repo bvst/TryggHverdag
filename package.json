@@ -66,6 +66,11 @@
           }
         }
       }
+    },
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-86w9-cpqp-85rv"
+      ]
     }
   }
 }

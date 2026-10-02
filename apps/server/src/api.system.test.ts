@@ -5,7 +5,7 @@
 // What makes it a system test rather than a unit test is that nothing here is
 // stubbed between the HTTP request and the domain rule: the real router, the
 // real contract, the real serialisation. Only the edges are fake.
-import { fakeClock, fakeWorkerHeartbeats } from '@trygghverdag/test-kit';
+import { fakeClock, fakeDeviceAuthenticator, fakeWorkerHeartbeats } from '@trygghverdag/test-kit';
 import { API_PREFIX, WORKER_STALE_AFTER_MS, healthResponseSchema } from '@trygghverdag/contracts';
 import { describe, expect, test } from 'vitest';
 import { createApi } from './api.ts';
@@ -14,10 +14,22 @@ import { createHealthService } from './modules/health/service.ts';
 const NOW = new Date('2026-09-23T22:15:00.000Z');
 const HEALTH = `${API_PREFIX}/health`;
 
+/**
+ * What the API needs besides health. These tests start no journey, so the
+ * journey service fails loudly if anything calls it; the journey routes are
+ * proven in journeys.system.test.ts.
+ */
+function noJourneys() {
+  return {
+    journeys: { start: () => Promise.reject(new Error('the health tests start no journey')) },
+    devices: fakeDeviceAuthenticator(),
+  };
+}
+
 function apiWith({ lastBeatAt }: { lastBeatAt: Date | null }) {
   const clock = fakeClock(NOW);
   const heartbeats = fakeWorkerHeartbeats(lastBeatAt);
-  const api = createApi({ health: createHealthService({ clock, heartbeats }) });
+  const api = createApi({ health: createHealthService({ clock, heartbeats }), ...noJourneys() });
   return { api, clock, heartbeats };
 }
 
@@ -98,6 +110,7 @@ describe('GET /health when the database cannot answer', () => {
         check: () =>
           Promise.reject(new Error('The database did not return a time, so nothing can be timed')),
       },
+      ...noJourneys(),
     });
 
   test('it fails loudly: 500, not a cheerful 200', async () => {
@@ -182,6 +195,7 @@ describe('REL-08: the keyword UptimeRobot watches for', () => {
         check: () =>
           Promise.reject(new Error('The database did not return a time, so nothing can be timed')),
       },
+      ...noJourneys(),
     });
 
     const response = await api.request(HEALTH);
