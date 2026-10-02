@@ -38,6 +38,13 @@ export const SAFETY_PATHS = [
 export const WHOLE_SUITE = ['apps', 'packages'];
 
 /**
+ * The name of the run that takes the safety paths no group claims. It is the
+ * only run that may have nothing to mutate yet (scripts/mutation.mjs): a
+ * group exists because its files do.
+ */
+export const WHOLE_SUITE_RUN = 'whole-suite';
+
+/**
  * Safety paths whose mutants only some tests can kill, each run against only
  * those tests (D-066, amended by the owner 2026-09-25). Every mutant running the
  * whole suite outran the mutation job on PR #31. A group only narrows the tests:
@@ -68,9 +75,13 @@ export const MUTATION_GROUPS = [
     config: 'vitest.system.config.mjs',
   },
   {
-    // Whether a worker that stopped is restarted (D-077). bin.test.ts is the
-    // only test that runs the real worker process, so it goes with these
-    // three wherever they are mutated (D-066's amendment).
+    // Whether the worker runs, says it is alive, and is restarted when it
+    // stops (D-077). worker.ts is the worker process: it starts the runner,
+    // records a heartbeat once a minute and checks in with Healthchecks.io,
+    // stops on the platform's signal, and fails if it ends any other way.
+    // bin/worker.ts starts it, and process.ts chooses its exit code.
+    // bin.test.ts is the only test that runs the real worker process, so it
+    // goes with these three wherever they are mutated (D-066's amendment).
     name: 'process',
     paths: [
       'apps/server/src/worker.ts',
@@ -128,7 +139,7 @@ export function mutationRuns(safetyPaths = SAFETY_PATHS, groups = MUTATION_GROUP
   const rest = safetyPaths.filter((p) => !claimed.has(p));
   return rest.length === 0
     ? [...groups]
-    : [...groups, { name: 'whole-suite', paths: rest, tests: [...WHOLE_SUITE] }];
+    : [...groups, { name: WHOLE_SUITE_RUN, paths: rest, tests: [...WHOLE_SUITE] }];
 }
 
 /**
@@ -185,7 +196,7 @@ export function decideApiDiff({ releasedSpecs, currentSpec, toolAvailable }) {
  * every change to the product would start the run. Nor is the lockfile, which
  * would start it on every dependency update, a cost the owner has not chosen.
  */
-const MUTATION_SETTINGS = [
+const MUTATION_INPUTS = [
   'stryker.config.mjs',
   'scripts/lib/gate-decisions.mjs',
   'scripts/mutation.mjs',
@@ -193,8 +204,10 @@ const MUTATION_SETTINGS = [
   'vitest.shared.mjs',
   // The groups' tests run on the test kit's fakes: the api-process tests
   // reach their database through its fake PostgreSQL server. A changed fake
-  // can change a score. Only this package: the rest of packages/ is product
-  // code, which the whole-suite run's catch-all must not turn into triggers.
+  // can change a score. Only this package. Of the rest of packages/,
+  // contracts is product code, which the whole-suite run's catch-all must not
+  // turn into triggers, and config is tooling: the shared lint, TypeScript
+  // and import-rule settings (AR-10).
   'packages/test-kit/',
 ];
 
@@ -206,15 +219,16 @@ const within = (file, p) => file === p || file.startsWith(p.endsWith('/') ? p : 
  *
  * `onlyIfSafetyPathsChanged` keeps its name, which CI passes, and since D-098
  * also counts a change to what the score is measured with: a group's tests or
- * configuration, or MUTATION_SETTINGS.
+ * configuration, or MUTATION_INPUTS. Safety files and inputs are matched
+ * by the same rule, `within`.
  *
  * @param {{ changed: string[], onlyIfSafetyPathsChanged: boolean, configured: boolean }} state
  * @returns {{ ok: boolean, action: 'skip' | 'run', message: string }}
  */
 export function decideMutation({ changed, onlyIfSafetyPathsChanged, configured }) {
-  const safetyChanges = changed.filter((file) => SAFETY_PATHS.some((p) => file.startsWith(p)));
+  const safetyChanges = changed.filter((file) => SAFETY_PATHS.some((p) => within(file, p)));
   const inputs = [
-    ...MUTATION_SETTINGS,
+    ...MUTATION_INPUTS,
     ...MUTATION_GROUPS.flatMap((group) => [
       ...group.tests,
       ...(group.config === undefined ? [] : [group.config]),
@@ -314,15 +328,26 @@ export function judgeMutationRun(result) {
  */
 export const mutationReportFile = (name) => `reports/mutation/${name}.json`;
 
-/** D-036's threshold, which D-098 applies to every mutated file on its own. */
-const THRESHOLD_PERCENT = 80;
+/**
+ * D-036's threshold, which D-098 applies to every mutated file on its own.
+ * stryker.config.mjs gives Stryker the same number as its `break`.
+ */
+export const THRESHOLD_PERCENT = 80;
 
 /**
- * Mutants that say nothing about the tests: the code would not compile or run
- * with them, or a reason in the code excludes them. Neither caught nor missed.
- * Every other status counts, and only Killed counts as caught.
+ * Mutants that say nothing about the tests: the code would not compile with
+ * them, or a reason in the code excludes them. Neither caught nor missed, and
+ * named per file all the same: a score that rests on few mutants says so.
+ *
+ * Every other status counts, and only Killed counts as caught. A
+ * RuntimeError counts against its file: with the command runner it means the
+ * command never ran the tests against that mutant (the shell could not start
+ * them, or a Stryker worker crashed), so nothing caught it.
  */
-const LEFT_OUT = new Set(['CompileError', 'RuntimeError', 'Ignored']);
+const LEFT_OUT = new Set(['CompileError', 'Ignored']);
+
+/** `1 runtime error`, `2 runtime errors`. */
+const plural = (n, one, many = `${one}s`) => `${String(n)} ${n === 1 ? one : many}`;
 
 /**
  * 62.5, 70 or 66.66: at most two decimals, cut rather than rounded, so a file
@@ -335,58 +360,88 @@ const percent = (killed, counted) => Math.floor((killed * 10_000) / counted) / 1
  * a timed-out mutant as detected, and pools every file into one score, so on
  * #53 a run whose 84 mutants all timed out scored 100 % and exited 0. Here
  * only a killed mutant is caught, and each file must reach 80 % of
- * killed ÷ (killed + survived + timed out + no coverage) on its own.
+ * killed ÷ (killed + survived + timed out + no coverage + runtime error) on
+ * its own.
+ *
+ * A file with no mutant at all, such as one of types alone, has nothing to
+ * mutate and is left out: failing it would block for good. A file that had
+ * mutants and saw every one left out fails: nothing was measured in it.
  *
  * @param {{ files: Record<string, { mutants: { status: string }[] }> }} report
  *   — mutation-testing-report-schema, as Stryker's json reporter writes it
  * @returns {{ ok: boolean, message: string }}
  */
 export function judgeMutationReport(report) {
-  const scored = Object.entries(report.files)
+  const files = Object.entries(report.files)
+    .filter(([, { mutants }]) => mutants.length > 0)
     .map(([file, { mutants }]) => {
-      const counted = mutants.filter((mutant) => !LEFT_OUT.has(mutant.status));
-      const count = (status) => counted.filter((mutant) => mutant.status === status).length;
+      const count = (status) => mutants.filter((mutant) => mutant.status === status).length;
+      const counted = mutants.filter((mutant) => !LEFT_OUT.has(mutant.status)).length;
       const killed = count('Killed');
-      const missed = [
-        [count('Survived'), 'survived'],
-        [count('Timeout'), 'timed out'],
-        [count('NoCoverage'), 'no coverage'],
+      const missed = [count('Survived'), count('Timeout'), count('NoCoverage')];
+      const runtimeErrors = count('RuntimeError');
+      const counts = [
+        `${String(killed)} killed`,
+        `${String(missed[0])} survived`,
+        `${String(missed[1])} timed out`,
+        `${String(missed[2])} no coverage`,
       ];
+      if (runtimeErrors > 0) counts.push(plural(runtimeErrors, 'runtime error'));
       // Any other status, such as Pending, counts against the file and is
       // named, rather than passing unseen.
-      const other = counted.length - killed - missed.reduce((sum, [n]) => sum + n, 0);
-      if (other > 0) missed.push([other, 'other']);
-      const counts = [[killed, 'killed'], ...missed].map(([n, what]) => `${String(n)} ${what}`);
-      return { file, killed, counted: counted.length, counts: counts.join(', ') };
-    })
-    // A file of types alone, or one whose every mutant is left out, has no
-    // score to reach: failing it would block for good.
-    .filter((file) => file.counted > 0)
-    .map((file) => ({
-      ...file,
-      line: `${file.file}: ${String(percent(file.killed, file.counted))} % (${file.counts})`,
-    }));
+      const other = counted - killed - runtimeErrors - missed.reduce((sum, n) => sum + n, 0);
+      if (other > 0) counts.push(`${String(other)} other`);
+      const leftOut = [
+        plural(count('CompileError'), 'compile error'),
+        plural(count('Ignored'), 'ignored', 'ignored'),
+      ].filter((text) => !text.startsWith('0 '));
+      return {
+        file,
+        killed,
+        counted,
+        line:
+          counted === 0
+            ? `${file}: no score, every one of its ${String(mutants.length)} mutants was left ` +
+              `out (${leftOut.join(', ')})`
+            : `${file}: ${String(percent(killed, counted))} % (${counts.join(', ')}` +
+              `${leftOut.length > 0 ? `; left out of the score: ${leftOut.join(', ')}` : ''})`,
+      };
+    });
 
-  if (scored.length === 0) {
+  if (files.length === 0) {
     return {
       ok: false,
       message:
-        'mutation: the report has no mutant that was killed, survived, timed out or ran no test, ' +
-        'so this run measured nothing, and that is a failure, not a pass (D-098).',
+        'mutation: the report has no mutants, so this run measured nothing, and that is a ' +
+        'failure, not a pass (D-098).',
     };
   }
+  const scored = files.filter((file) => file.counted > 0);
+  const unmeasured = files.filter((file) => file.counted === 0);
   const below = scored.filter((file) => file.killed * 100 < THRESHOLD_PERCENT * file.counted);
+  const problems = [];
   if (below.length > 0) {
-    return {
-      ok: false,
-      message:
-        `mutation: below ${String(THRESHOLD_PERCENT)} % of mutants killed (D-036), file by file:\n` +
+    problems.push(
+      `mutation: below ${String(THRESHOLD_PERCENT)} % of mutants killed (D-036), file by file:\n` +
         below.map((file) => `  ${file.line}\n`).join('') +
-        'Only a killed mutant counts as caught (D-098): one that survived, timed out or ran no ' +
-        'test is not caught. The clear-text report above names each. A survivor needs a test ' +
-        'that fails on it. A timeout is a test that waited instead of failing: make it fail in ' +
-        'time, or, if the mutant can only ever hang, exclude it in the code with a reason.',
-    };
+        'Only a killed mutant counts as caught (D-098): one that survived, timed out, ran no ' +
+        'test or hit a runtime error is not caught. The clear-text report above names each. A ' +
+        'survivor needs a test that fails on it. A timeout is a test that waited instead of ' +
+        'failing: make it fail in time, or, if the mutant can only ever hang, exclude it in the ' +
+        'code with a reason. A runtime error means the tests never ran against that mutant: ' +
+        'the log above says why.',
+    );
+  }
+  if (unmeasured.length > 0) {
+    problems.push(
+      'mutation: these files had mutants, and every one failed to compile or was excluded in ' +
+        'the code, so nothing was measured in them, and that is a failure, not a pass (D-098):\n' +
+        unmeasured.map((file) => `  ${file.line}\n`).join('') +
+        'The clear-text report above names each mutant and why it was left out.',
+    );
+  }
+  if (problems.length > 0) {
+    return { ok: false, message: problems.join('\n') };
   }
   return {
     ok: true,

@@ -14,7 +14,11 @@
 // config then mutates that run's paths against that run's tests, and writes
 // the JSON report the gate judges the run by (D-098).
 import process from 'node:process';
-import { mutationReportFile, mutationRuns } from './scripts/lib/gate-decisions.mjs';
+import {
+  THRESHOLD_PERCENT,
+  mutationReportFile,
+  mutationRuns,
+} from './scripts/lib/gate-decisions.mjs';
 
 /**
  * The run STRYKER_RUN names. Unset, Stryker refuses to start: a run outside
@@ -42,7 +46,7 @@ function chosenRun(name) {
         `${runs.map((candidate) => candidate.name).join(', ')} (D-066).`,
     );
   }
-  return { ...run, incrementalFile: `reports/stryker-${run.name}.json` };
+  return run;
 }
 
 const run = chosenRun(process.env.STRYKER_RUN);
@@ -68,8 +72,10 @@ const vitestConfig = run.config === undefined ? '' : `--config ${run.config} `;
  * then 1.5 s more. And far above how long a test takes on a busy machine: on
  * two cores, with ten of these runs at once (Stryker runs two), the slowest
  * test of every group took 4.1 s, bin.test.ts's BUG-3 test (2.3 s alone).
- * The only hook, healthchecks.test.ts's afterEach, closes servers in
- * milliseconds; it gets the same limit. Measured for BUG-12, 2026-10-02.
+ * The hooks get the same limit, and take milliseconds: healthchecks.test.ts's
+ * afterEach closes servers, and bin.test.ts's onTestFinished kills a child
+ * still running, synchronously, without waiting for it to end. Measured for
+ * BUG-12, 2026-10-02.
  */
 const VITEST_TIMEOUT_MS = 20_000;
 
@@ -135,10 +141,17 @@ export default {
   // threshold.
   coverageAnalysis: 'all',
 
-  thresholds: { high: 90, low: 80, break: 80 },
+  // `break` is Stryker's own backstop to the gate's check: Stryker pools every
+  // file into one score and counts a timed-out mutant as caught, so the gate
+  // judges each file from the JSON report (D-098). The same number, so the
+  // two never disagree about the threshold.
+  thresholds: { high: 90, low: 80, break: THRESHOLD_PERCENT },
 
-  // One per run: a run's file records its mutants against its own tests.
-  incrementalFile: run.incrementalFile,
+  // No incrementalFile, and incremental is never switched on (D-099): every
+  // run is fresh. With the command runner Stryker has no coverage data, so an
+  // incremental run reuses every earlier result in code that has not changed,
+  // whatever happened to the tests. scripts/mutation.mjs refuses the flag.
+  //
   // The JSON report is what the gate judges, file by file (D-098). One per
   // run, so a run never reads another's.
   reporters: ['clear-text', 'progress', 'json'],

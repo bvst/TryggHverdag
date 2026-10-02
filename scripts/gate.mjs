@@ -12,6 +12,7 @@
  */
 import process from 'node:process';
 import { checkDevices } from './lib/e2e-android.mjs';
+import { MUTATION_TIMEOUT_MS } from './lib/gate-decisions.mjs';
 import { packageScripts, run } from './lib/proc.mjs';
 import { planSteps, runPlan, summarize } from './lib/steps.mjs';
 
@@ -94,9 +95,14 @@ export const FULL_STEPS = [
   },
   { name: 'API compatibility (AR-08)', command: pnpmRun('api:diff'), needsScript: 'api:diff' },
   {
+    // Fresh, never --incremental, which `pnpm run mutation` refuses (D-099).
+    // A fresh run may take the whole mutation budget, so the step gets it,
+    // and a minute for pnpm and node to start and print the verdict, where
+    // every other step keeps proc.mjs's 590 s.
     name: 'mutation score on safety code (D-036)',
-    command: pnpmRun('mutation', '--incremental', '--only-if-safety-paths-changed'),
+    command: pnpmRun('mutation', '--only-if-safety-paths-changed'),
     needsScript: 'mutation',
+    timeout: MUTATION_TIMEOUT_MS + 60_000,
   },
   {
     name: 'dependency licences (SEC-06)',
@@ -152,9 +158,10 @@ function main() {
     );
   }
 
-  const results = runPlan(plan, (command) => {
+  const results = runPlan(plan, (command, { timeout } = {}) => {
     const [program, ...args] = command;
-    const result = run(program, args, { cwd });
+    // A step without a timeout of its own keeps proc.mjs's default.
+    const result = run(program, args, timeout === undefined ? { cwd } : { cwd, timeout });
     return { ok: result.ok, output: result.output };
   });
 
