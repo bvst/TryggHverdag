@@ -284,6 +284,19 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
+**BUG-11: the dependency audit accepts one advisory (D-093, 2026-10-02).**
+CI's required `security` job (`pnpm audit --audit-level high`) went red on
+every pull request when a high advisory with no patched version,
+GHSA-86w9-cpqp-85rv in `node-forge`, reached npm's audit data. It arrives only
+through Expo's command-line tool (`apps/mobile` > `expo` > `@expo/cli`), never
+the server or the app's own code. Reproduced on `main`'s checkout: "7
+vulnerabilities found · Severity: 6 moderate | 1 high", exit 1. The owner
+accepted this one advisory, recorded as D-093: the root `package.json`
+ignores it by ID, and `scripts/dependency-audit.test.mjs` pins that every
+ignored advisory is named by an accepted decision and that nothing else ignores
+any. **Remove the ignore** when a patched `node-forge` exists or Expo drops it.
+The same change is ported into SM-01's pull request (#53), which this blocked.
+
 **D-085's loose ends** (the pull request merged, [#43](https://github.com/bvst/TryggHverdag/pull/43)).
 - **Verified:** `deploy-staging` on `ubuntu-26.04`. Run 36621209842, for
   `0637482`, succeeded, and so did its Deploy step and its smoke test.
