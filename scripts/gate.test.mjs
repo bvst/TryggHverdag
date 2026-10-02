@@ -779,6 +779,111 @@ describe("this repository's own workflows", () => {
     expect(reviewCodeowners(text)).toEqual([]);
     expect(D097_FILES.filter((owned) => ownersOf(owned.slice(1)).length === 0)).toEqual([]);
   });
+
+  // BUG-14 (D-100): api-process.ts's mutation score rests on the fake
+  // PostgreSQL server in the test kit, and D-098 starts the mutation run when
+  // the test kit changes. But the test kit needed no owner, so a later change
+  // could make a fake more lenient and quietly weaken what the tests prove.
+  // And the safety filter in ai-review.yml, which decides when CI's
+  // safety-reviewer runs, did not list the mutation check's own judging code:
+  // a pull request that changed only how a safety file's mutation score is
+  // judged got no safety review. The owner decided both (D-100).
+  const TEST_KIT = '/packages/test-kit/';
+  const OWNERS = ['@bvst', '@urso-agent'];
+  // Written as the safety filter writes a path: no leading /, a directory's
+  // files under /**.
+  const D100_SAFETY_ENTRIES = [
+    'scripts/mutation.mjs',
+    'scripts/lib/gate-decisions.mjs',
+    'stryker.config.mjs',
+    'packages/test-kit/**',
+  ];
+
+  test("BUG-14: the test kit, whose fakes the safety files' tests and mutation scores rest on, is a path the owner must approve (D-100)", () => {
+    const found = statSync(TEST_KIT.slice(1, -1), { throwIfNoEntry: false });
+
+    expect(found?.isDirectory(), `${TEST_KIT} is not a directory`).toBe(true);
+    expect(OWNER_APPROVAL_PATHS).toContain(TEST_KIT);
+  });
+
+  test('BUG-14: .github/CODEOWNERS gives the test kit to @bvst @urso-agent on a line of its own, which comes before the unowned /.claude/agent-memory/ line (D-100)', () => {
+    // The reviewer-memory line at the end is the one meant to un-own what it
+    // matches. Owned lines go above it, as every other owned line does, so the
+    // last-match rule can only ever un-own what it names.
+    const rules = codeownersRules(readFileSync('.github/CODEOWNERS', 'utf8'));
+    const testKit = rules.findIndex((rule) => rule.pattern === TEST_KIT);
+    const memory = rules.findIndex((rule) => rule.pattern === '/.claude/agent-memory/');
+
+    expect(memory, 'the /.claude/agent-memory/ line is gone').toBeGreaterThan(-1);
+    expect(rules[memory]?.owners, 'the /.claude/agent-memory/ line names an owner').toEqual([]);
+    expect(testKit, `${TEST_KIT} has no line of its own in .github/CODEOWNERS`).toBeGreaterThan(-1);
+    expect(rules[testKit]?.owners).toEqual(OWNERS);
+    expect(testKit, `${TEST_KIT}'s line comes after /.claude/agent-memory/`).toBeLessThan(memory);
+  });
+
+  test("BUG-14: under GitHub's last-match rule, packages/test-kit/src/fake-postgres.ts and every other file git tracks in the test kit belong to @bvst @urso-agent, and gate:integrity finds every owner-approval path owned (D-100)", () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+    const listed = spawnSync('git', ['ls-files', '--', TEST_KIT.slice(1)], { encoding: 'utf8' });
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(files, 'the fake PostgreSQL server is not a file git tracks').toContain(
+      'packages/test-kit/src/fake-postgres.ts',
+    );
+    expect(ownersOf('packages/test-kit/src/fake-postgres.ts')).toEqual(OWNERS);
+    expect(
+      files.filter((file) => ownersOf(file).join(' ') !== OWNERS.join(' ')),
+      `files in ${TEST_KIT} not owned by ${OWNERS.join(' ')}`,
+    ).toEqual([]);
+  });
+
+  test.each(D100_SAFETY_ENTRIES)(
+    "BUG-14: the safety filter in ai-review.yml lists %s, so a change to how a safety file's mutation score is judged gets the safety review (D-100)",
+    (glob) => {
+      // The safety filter's own list, as the tests above read it: a path in a
+      // comment, or under the ui filter, is not a safety entry.
+      const safety = filterEntries(readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8'), 'safety');
+
+      expect(safety.headers, 'how many filters are named safety').toBe(1);
+      expect(safety.unreadable).toEqual([]);
+      expect(safety.entries).toContain(glob);
+    },
+  );
+
+  test("BUG-14: each of D-100's safety-filter entries is a path the owner must approve: scripts/ and stryker.config.mjs already, the test kit now, and the last line of .github/CODEOWNERS matching each of their files names the owner (D-100)", () => {
+    // The safety review and the owner's approval are asked for together: a path
+    // that summons safety-reviewer but not the owner is the gap D-097 closed
+    // for api.ts. An owner path covers a glob when it is that glob, or is a
+    // directory the glob lies inside.
+    const covers = (owned, glob) =>
+      filterGlob(owned) === glob || (owned.endsWith('/') && glob.startsWith(owned.slice(1)));
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+    const listed = spawnSync(
+      'git',
+      ['ls-files', '--', ...D100_SAFETY_ENTRIES.map((glob) => glob.replace(/\*\*$/, ''))],
+      { encoding: 'utf8' },
+    );
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      D100_SAFETY_ENTRIES.filter(
+        (glob) =>
+          !files.some((file) => file === glob || file.startsWith(glob.replace(/\*\*$/, ''))),
+      ),
+      'entries that match no file git tracks',
+    ).toEqual([]);
+    expect(
+      D100_SAFETY_ENTRIES.filter(
+        (glob) => !OWNER_APPROVAL_PATHS.some((owned) => covers(owned, glob)),
+      ),
+      'entries no owner-approval path covers',
+    ).toEqual([]);
+    expect(files.filter((file) => ownersOf(file).length === 0)).toEqual([]);
+  });
 });
 
 describe('the ruleset the owner imports', () => {
