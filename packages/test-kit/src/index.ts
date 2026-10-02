@@ -36,6 +36,14 @@ export type {
 export { JOURNEY_STORE_BEHAVIOUR, RACE_ROUNDS, RACERS } from './journey-store-behaviour.ts';
 export { ADMIN_SHUTDOWN, endTestPool } from './end-test-pool.ts';
 export type { EndablePool } from './end-test-pool.ts';
+export { fakePostgres } from './fake-postgres.ts';
+export type {
+  FakePostgres,
+  FakePostgresAnswer,
+  FakePostgresConnection,
+  FakePostgresHandler,
+  FakePostgresQuery,
+} from './fake-postgres.ts';
 export type {
   JourneyAsStored,
   JourneyStoreBehaviour,

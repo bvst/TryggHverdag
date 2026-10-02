@@ -11,6 +11,15 @@
 // thresholds, the command runner, or "every test against every mutant", which
 // is what makes the score honest. Each run is therefore compared with the whole
 // config, not with the three settings it is meant to change.
+//
+// BUG-12 (D-098) changed what the runs are compared with, and how. Before, the
+// config with no run named was the yardstick. Now it throws, because a run
+// outside `pnpm run mutation` is judged by nothing, and Stryker counts a
+// timed-out mutant as caught. So the runs are compared with each other: every
+// run must have the same config apart from what it mutates, the tests it
+// runs, and the two files it writes. Each run also writes a JSON report the
+// gate reads, and gives Vitest a per-test timeout well inside Stryker's, so a
+// test that would wait forever fails in Vitest and kills its mutant.
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -72,53 +81,105 @@ async function configFor(run) {
   return module.default;
 }
 
+/**
+ * The per-test timeout a run's command gives Vitest, in milliseconds, or
+ * undefined when it gives none. Vitest takes `--testTimeout 5000` and
+ * `--testTimeout=5000`; its options are also accepted in kebab case.
+ */
+function testTimeoutIn(command) {
+  const match = /\s--test(?:Timeout|-timeout)(?:=|\s+)(\d+)(?=\s|$)/.exec(command);
+  return match?.[1] === undefined ? undefined : Number(match[1]);
+}
+
+/**
+ * A run's command without its per-test timeout, which BUG-12's own test pins.
+ * What is left says which configuration the run uses and which tests it runs.
+ */
+const withoutTestTimeout = (command) =>
+  command.replace(/\s--test(?:Timeout|-timeout)(?:=|\s+)\d+(?=\s|$)/, '');
+
+/**
+ * The config with what a run is meant to change taken out: what it mutates,
+ * the tests its command runs, and the two files it writes. What is left must
+ * be the same in every run.
+ */
+function apartFromTheRun(config) {
+  const shared = structuredClone(config);
+  delete shared.mutate;
+  delete shared.incrementalFile;
+  delete shared.commandRunner.command;
+  if (shared.jsonReporter !== undefined) delete shared.jsonReporter.fileName;
+  return shared;
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
 describe('stryker.config.mjs', () => {
-  test('with no run named, the config is the one before the grouping: every safety path, the whole suite', async () => {
-    const config = await configFor(undefined);
+  // BUG-12 (RG-03): this replaces "with no run named, the config is the one
+  // before the grouping: every safety path, the whole suite". It is stricter.
+  // That config was the one Stryker ran when started by hand, and nothing
+  // judged it: its score was Stryker's own, in which a timed-out mutant is
+  // caught, so 84 timeouts and no kill scored 100 % (D-098). An unjudged run
+  // is a silent pass, so with no run named Stryker now refuses to start.
+  // What that test also pinned, the thresholds, the command runner and every
+  // test against every mutant, is now pinned for every run, in the test
+  // after this one.
+  test('BUG-12: with no run named, the config throws, and says to run `pnpm run mutation`', async () => {
+    const error = await configFor(undefined).then(
+      () => null,
+      (thrown) => thrown,
+    );
 
-    expect(config.mutate).toEqual([...globs(SAFETY_PATHS), ...EXCLUSIONS]);
-    expect(config.commandRunner.command).toBe('pnpm exec vitest run apps packages');
-    expect(config.incrementalFile).toBe('reports/stryker-incremental.json');
-    expect(config).toMatchObject({
-      testRunner: 'command',
-      coverageAnalysis: 'all',
-      thresholds: { high: 90, low: 80, break: 80 },
-    });
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toContain('pnpm run mutation');
   });
 
+  test('every run has the same config apart from what it mutates, the tests it runs and the files it writes', async () => {
+    // BUG-12 (RG-03): this holds what each run's "equals the config with no
+    // run named, apart from three settings" held before, now that that config
+    // throws. The honest settings that test pinned on the unnamed config are
+    // pinned here on every run.
+    const shared = [];
+    for (const run of mutationRuns()) {
+      shared.push({ run: run.name, config: apartFromTheRun(await configFor(run.name)) });
+    }
+
+    expect(shared.length).toBeGreaterThan(1);
+    for (const { config } of shared) {
+      expect(config).toEqual(shared[0]?.config);
+      expect(config).toMatchObject({
+        testRunner: 'command',
+        coverageAnalysis: 'all',
+        thresholds: { high: 90, low: 80, break: 80 },
+      });
+    }
+  });
+
+  // BUG-12 (RG-03) for the four tests that follow, each of which compared its
+  // run with the config with no run named. That config now throws, so each
+  // pins its own three settings here and leaves the rest to the test above,
+  // which holds them for every run. Its command is read without the per-test
+  // timeout that BUG-12 adds to every run, and which BUG-12's test pins.
   test('the domain run mutates the domain and runs only the domain tests', async () => {
-    const whole = await configFor(undefined);
     const config = await configFor('domain');
 
-    expect(config).toEqual({
-      ...whole,
-      mutate: ['apps/server/src/domain/**/*.ts', ...EXCLUSIONS],
-      commandRunner: {
-        ...whole.commandRunner,
-        command: 'pnpm exec vitest run apps/server/src/domain',
-      },
-      incrementalFile: 'reports/stryker-domain.json',
-    });
+    expect(config.mutate).toEqual(['apps/server/src/domain/**/*.ts', ...EXCLUSIONS]);
+    expect(withoutTestTimeout(config.commandRunner.command)).toBe(
+      'pnpm exec vitest run apps/server/src/domain',
+    );
+    expect(config.incrementalFile).toBe('reports/stryker-domain.json');
   });
 
   test('the healthchecks run mutates the adapter and runs its tests and the worker tests', async () => {
-    const whole = await configFor(undefined);
     const config = await configFor('healthchecks');
 
-    expect(config).toEqual({
-      ...whole,
-      mutate: ['apps/server/src/adapters/healthchecks.ts', ...EXCLUSIONS],
-      commandRunner: {
-        ...whole.commandRunner,
-        command:
-          'pnpm exec vitest run apps/server/src/adapters/healthchecks.test.ts apps/server/src/worker.test.ts',
-      },
-      incrementalFile: 'reports/stryker-healthchecks.json',
-    });
+    expect(config.mutate).toEqual(['apps/server/src/adapters/healthchecks.ts', ...EXCLUSIONS]);
+    expect(withoutTestTimeout(config.commandRunner.command)).toBe(
+      'pnpm exec vitest run apps/server/src/adapters/healthchecks.test.ts apps/server/src/worker.test.ts',
+    );
+    expect(config.incrementalFile).toBe('reports/stryker-healthchecks.json');
   });
 
   test("BUG-10: the journeys run mutates modules/journeys/ and runs the journey system tests, under the system tests' configuration", async () => {
@@ -126,39 +187,75 @@ describe('stryker.config.mjs', () => {
     // does not run an excluded file even when it is named: under that
     // configuration this run would find no test file at all. So the command
     // is asked what it would run, not only read for what it says.
-    const whole = await configFor(undefined);
     const config = await configFor('journeys');
 
-    expect(config).toEqual({
-      ...whole,
-      mutate: ['apps/server/src/modules/journeys/**/*.ts', ...EXCLUSIONS],
-      commandRunner: {
-        ...whole.commandRunner,
-        command: expect.stringMatching(/^pnpm exec vitest run /),
-      },
-      incrementalFile: 'reports/stryker-journeys.json',
-    });
+    expect(config.mutate).toEqual(['apps/server/src/modules/journeys/**/*.ts', ...EXCLUSIONS]);
+    expect(config.commandRunner.command).toMatch(/^pnpm exec vitest run /);
+    expect(config.incrementalFile).toBe('reports/stryker-journeys.json');
     const args = vitestArgs(config.commandRunner.command);
     expect(configNamedIn(args)).toBe('vitest.system.config.mjs');
     expect(filesRunWith(args)).toEqual(['apps/server/src/journeys.system.test.ts']);
   });
 
+  test('BUG-12: the process run mutates worker.ts, bin/worker.ts and process.ts, against bin.test.ts and the worker and process tests', async () => {
+    // D-098 gives the three files of #53's timed-out whole-suite run a group.
+    // bin.test.ts is the only test that runs the real worker process (D-066's
+    // amendment). Under the root configuration, so no --config: it is asked
+    // what it would run, as the journeys run is.
+    const config = await configFor('process');
+
+    expect(config.mutate).toEqual([
+      'apps/server/src/worker.ts',
+      'apps/server/src/bin/worker.ts',
+      'apps/server/src/process.ts',
+      ...EXCLUSIONS,
+    ]);
+    expect(withoutTestTimeout(config.commandRunner.command)).toBe(
+      'pnpm exec vitest run apps/server/src/bin/bin.test.ts apps/server/src/worker.test.ts apps/server/src/process.test.ts',
+    );
+    expect(config.incrementalFile).toBe('reports/stryker-process.json');
+    expect(filesRunWith(vitestArgs(config.commandRunner.command)).toSorted()).toEqual([
+      'apps/server/src/bin/bin.test.ts',
+      'apps/server/src/process.test.ts',
+      'apps/server/src/worker.test.ts',
+    ]);
+  });
+
+  test('BUG-12: the api-process run mutates api-process.ts against its own tests', async () => {
+    const config = await configFor('api-process');
+
+    expect(config.mutate).toEqual(['apps/server/src/api-process.ts', ...EXCLUSIONS]);
+    expect(withoutTestTimeout(config.commandRunner.command)).toBe(
+      'pnpm exec vitest run apps/server/src/api-process.test.ts',
+    );
+    expect(config.incrementalFile).toBe('reports/stryker-api-process.json');
+    expect(filesRunWith(vitestArgs(config.commandRunner.command))).toEqual([
+      'apps/server/src/api-process.test.ts',
+    ]);
+  });
+
   test('the whole-suite run mutates every safety path no group claims, against the whole suite', async () => {
-    const whole = await configFor(undefined);
+    // BUG-12 (RG-03): `left` was only required to contain worker.ts. D-098
+    // gives worker.ts a group, and every other safety file that exists, so
+    // what is left is pinned exactly: the two safety paths that hold no file
+    // yet.
     const config = await configFor('whole-suite');
     const left = mutationRuns().find((run) => run.name === 'whole-suite')?.paths ?? [];
 
-    expect(left).toContain('apps/server/src/worker.ts');
-    expect(config).toEqual({
-      ...whole,
-      mutate: [...globs(left), ...EXCLUSIONS],
-      commandRunner: { ...whole.commandRunner, command: 'pnpm exec vitest run apps packages' },
-      incrementalFile: 'reports/stryker-whole-suite.json',
-    });
+    expect(left).toEqual(['apps/server/src/modules/alerts/', 'apps/mobile/src/safety-core/']);
+    expect(config.mutate).toEqual([...globs(left), ...EXCLUSIONS]);
+    expect(withoutTestTimeout(config.commandRunner.command)).toBe(
+      'pnpm exec vitest run apps packages',
+    );
+    expect(config.incrementalFile).toBe('reports/stryker-whole-suite.json');
   });
 
   test('across the runs, every safety path is mutated exactly once', async () => {
-    const whole = await configFor(undefined);
+    // BUG-12 (RG-03): two changes, neither looser. The run names gained the
+    // process and api-process groups (D-098). And the expected union was the
+    // config with no run named, which now throws; that config's `mutate` was
+    // every safety path, which is what is compared here directly, as its own
+    // test used to pin it.
     const mutated = [];
     for (const run of mutationRuns()) {
       const config = await configFor(run.name);
@@ -169,11 +266,43 @@ describe('stryker.config.mjs', () => {
       'domain',
       'healthchecks',
       'journeys',
+      'process',
+      'api-process',
       'whole-suite',
     ]);
-    expect(mutated.toSorted()).toEqual(
-      whole.mutate.filter((glob) => !glob.startsWith('!')).toSorted(),
-    );
+    expect(mutated.toSorted()).toEqual(globs(SAFETY_PATHS).toSorted());
+  });
+
+  test('BUG-12: each run writes a JSON report the gate can read, at reports/mutation/<run>.json', async () => {
+    // D-098: the gate judges each run from its report, file by file, because
+    // Stryker's exit code passed a run whose every mutant timed out. One file
+    // per run, so a run never reads another's. The clear-text report stays:
+    // it names each surviving mutant in the log.
+    for (const run of mutationRuns()) {
+      const config = await configFor(run.name);
+
+      expect(config.reporters, run.name).toEqual(expect.arrayContaining(['clear-text', 'json']));
+      expect(config.jsonReporter?.fileName, run.name).toBe(`reports/mutation/${run.name}.json`);
+    }
+  });
+
+  test("BUG-12: each run gives Vitest a per-test timeout at least 10 s inside Stryker's", async () => {
+    // vitest.config.mjs gives a test 60 s. Stryker stops a mutant after about
+    // 1.5 times the clean run plus timeoutMS, so a mutant that makes a test
+    // wait forever, such as process.exit(code) planted as nothing, was
+    // stopped by Stryker first and recorded as a timeout, never as a failed
+    // test. With Vitest's limit at least 10 s below Stryker's, the test fails
+    // inside Vitest, and the mutant is killed (D-098).
+    for (const run of mutationRuns()) {
+      const config = await configFor(run.name);
+      const testTimeout = testTimeoutIn(config.commandRunner.command);
+
+      expect(testTimeout, `${run.name}: the command gives Vitest no --testTimeout`).toBeDefined();
+      expect(testTimeout, run.name).toBeGreaterThan(0);
+      expect(config.timeoutMS, `${run.name}: Stryker's timeoutMS`).toBeGreaterThanOrEqual(
+        (testTimeout ?? Number.POSITIVE_INFINITY) + 10_000,
+      );
+    }
   });
 
   test('an unknown run throws, naming it and the runs there are', async () => {
