@@ -292,9 +292,12 @@ through Expo's command-line tool (`apps/mobile` > `expo` > `@expo/cli`), never
 the server or the app's own code. Reproduced on `main`'s checkout: "7
 vulnerabilities found · Severity: 6 moderate | 1 high", exit 1. The owner
 accepted this one advisory, recorded as D-093: the root `package.json`
-ignores it by ID, and `scripts/dependency-audit.test.mjs` pins that every
-ignored advisory is named by an accepted decision and that nothing else ignores
-any. **Remove the ignore** when a patched `node-forge` exists or Expo drops it.
+ignores it by GHSA ID. `scripts/dependency-audit.test.mjs` pins that every
+ignored advisory is named by an owner's accepted decision, that every workflow
+audit line is exactly `pnpm audit --audit-level high`, that no other route sets
+audit or hook settings, and D-093's premise from the lockfile. That last check
+fails when a patched `node-forge` arrives, when Expo drops it, or when anything
+else pulls it in, so **the ignore's removal is prompted by a red test**.
 The same change is ported into SM-01's pull request (#53), which this blocked.
 
 **D-085's loose ends** (the pull request merged, [#43](https://github.com/bvst/TryggHverdag/pull/43)).
