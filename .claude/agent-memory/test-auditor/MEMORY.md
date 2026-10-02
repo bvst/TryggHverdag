@@ -14,3 +14,4 @@
 - [Shadowed guards](feedback_shadowed_guards.md) — a new filter layer (plan) can shadow an old guard and silently drop failures; re-run old mutants
 - [Config-pinning tests](feedback_config_pinning_tests.md) — BUG-11 audit ignore; `pnpm -C . audit` escapes literal scans; delegated/superseded decisions still "Accepted"; pin path premises from the lockfile
 - [BUG-12 audit](project_bug12_audit.md) — PASS 6a3d606/5a8028f; 4 survivors with backstops (main hasSourceFiles wiring); RG-02 replay via git show in a transform
+- [BUG-14 audit](project_bug14_audit.md) — PASS 49d66ae; 28/28 faults killed; added fifth filter entry survives; D-100 list vs MUTATION_INPUTS; readFileSync override trick

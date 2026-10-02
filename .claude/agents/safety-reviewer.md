@@ -27,6 +27,15 @@ For the diff (`git diff origin/main...HEAD`), check:
 - the watchdog stays idempotent and lock-safe (AR-06);
 - nothing can fail silently: each new failure path is visible to the walker or
   the responders;
+- a change to the mutation gate or the files it runs on
+  (`scripts/mutation.mjs`, `scripts/lib/gate-decisions.mjs`,
+  `stryker.config.mjs`, `packages/test-kit/`, `vitest.config.mjs`,
+  `vitest.shared.mjs`, `vitest.system.config.mjs`) does not loosen what counts
+  as a kill, lower the 80 % per-file bar or pool files again, drop a safety
+  file or a group's test from a run, start the run on fewer changes, reuse an
+  earlier result instead of a fresh run, let a run that measured nothing pass,
+  or let a test-kit fake accept what the real adapter or database refuses
+  (D-098, D-099, D-100);
 - tests exist at L6 for any change in alert behaviour.
 
 

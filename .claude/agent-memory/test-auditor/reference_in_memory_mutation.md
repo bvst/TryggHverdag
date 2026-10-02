@@ -88,3 +88,12 @@ inside node -e passed); try a harmless command before relying on either. Everyth
   --import by rewriting the test spawnSync args in the transform. The hook appends m<count> to a scratchpad log to
   prove it applied, and can swap a whole source (S[url]) as well as one pattern.
 `reporters: [{}]` in startVitest third argument keeps it quiet; read results from v.state.getFiles().
+
+**Files a test reads rather than imports** (BUG-14, 2026-10-02). CODEOWNERS and ai-review.yml are read with
+`readFileSync('.github/CODEOWNERS', 'utf8')` inside gate.test.mjs, so no module transform reaches them. In the Vite transform for
+the test file, replace every `readFileSync(` with `__taRead(` (the import list has `readFileSync,` with no paren, so it is left
+alone). Prepend `import { readFileSync as __taRealRead } from 'node:fs'`, a JSON literal of `{path: text}` overrides, and a
+`__taRead` that returns the override or delegates. Grep first that no `readFileSync(` sits inside a string written to a child.
+Harness: scratchpad/ta-bug14/ta-harness.mjs (mutants inline, `rep()` throws NotApplied unless exactly one match; prints
+transform counts as proof). Heredoc writes into the scratchpad worked, and the guard did not fire on `=>` in node -e.
+Watch for HEAD moving during the audit (parallel reviewers commit memory); re-check `git log` before the verdict.

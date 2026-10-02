@@ -24,7 +24,12 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, describe, expect, test } from 'vitest';
 import { FULL_STEPS, QUICK_STEPS, availableTools } from './gate.mjs';
 import { APK } from './lib/e2e-android.mjs';
-import { MUTATION_TIMEOUT_MS, SAFETY_PATHS } from './lib/gate-decisions.mjs';
+import {
+  MUTATION_GROUPS,
+  MUTATION_INPUTS,
+  MUTATION_TIMEOUT_MS,
+  SAFETY_PATHS,
+} from './lib/gate-decisions.mjs';
 import { packageScripts } from './lib/proc.mjs';
 import { planSteps, runPlan, summarize } from './lib/steps.mjs';
 import {
@@ -778,6 +783,145 @@ describe("this repository's own workflows", () => {
 
     expect(reviewCodeowners(text)).toEqual([]);
     expect(D097_FILES.filter((owned) => ownersOf(owned.slice(1)).length === 0)).toEqual([]);
+  });
+
+  // BUG-14 (D-100): api-process.ts's mutation score rests on the fake
+  // PostgreSQL server in the test kit, and D-098 starts the mutation run when
+  // the test kit changes. But the test kit needed no owner, so a later change
+  // could make a fake more lenient and quietly weaken what the tests prove.
+  // And the safety filter in ai-review.yml, which decides when CI's
+  // safety-reviewer runs, did not list the mutation check's own judging code:
+  // a pull request that changed only how a safety file's mutation score is
+  // judged got no safety review. The owner decided both (D-100).
+  //
+  // D-100's amendment: a list kept here, of the four files D-100 named, left
+  // out the Vitest configurations the groups run under, and one --exclude line
+  // in one of them drops a group's test from every mutant's run with exit 0
+  // and no warning. So the filter is now held to the code's own lists, every
+  // entry of MUTATION_INPUTS and every group's config, and an input added to
+  // either later cannot be left out of it by accident.
+  const TEST_KIT = '/packages/test-kit/';
+  const OWNERS = ['@bvst', '@urso-agent'];
+
+  /**
+   * What the safety filter must list for the mutation run: every entry of
+   * MUTATION_INPUTS and every group's config, written as the filter writes a
+   * path. A folder is covered by its files under /**, a file by itself.
+   */
+  const mutationRunEntries = () => {
+    if (!Array.isArray(MUTATION_INPUTS)) {
+      throw new Error(
+        'MUTATION_INPUTS is not exported from scripts/lib/gate-decisions.mjs, so the safety ' +
+          "filter cannot be held to the mutation run's own inputs (D-100's amendment).",
+      );
+    }
+    return [
+      ...MUTATION_INPUTS,
+      ...MUTATION_GROUPS.flatMap((group) => (group.config === undefined ? [] : [group.config])),
+    ].map((input) =>
+      input.endsWith('/') || statSync(input, { throwIfNoEntry: false })?.isDirectory() === true
+        ? `${input.replace(/\/$/, '')}/**`
+        : input,
+    );
+  };
+
+  test("BUG-14: the test kit, whose fakes the safety files' tests and mutation scores rest on, is a path the owner must approve (D-100)", () => {
+    const found = statSync(TEST_KIT.slice(1, -1), { throwIfNoEntry: false });
+
+    expect(found?.isDirectory(), `${TEST_KIT} is not a directory`).toBe(true);
+    expect(OWNER_APPROVAL_PATHS).toContain(TEST_KIT);
+  });
+
+  test('BUG-14: .github/CODEOWNERS gives the test kit to @bvst @urso-agent on a line of its own (D-100)', () => {
+    // Whether a later line un-owns any of its files is the next test's
+    // question, asked of each file under the last-match rule.
+    const rules = codeownersRules(readFileSync('.github/CODEOWNERS', 'utf8'));
+    const testKit = rules.findIndex((rule) => rule.pattern === TEST_KIT);
+
+    expect(testKit, `${TEST_KIT} has no line of its own in .github/CODEOWNERS`).toBeGreaterThan(-1);
+    expect(rules[testKit]?.owners).toEqual(OWNERS);
+  });
+
+  test("BUG-14: under GitHub's last-match rule, packages/test-kit/src/fake-postgres.ts and every other file git tracks in the test kit belong to @bvst @urso-agent, and gate:integrity finds every owner-approval path owned (D-100)", () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+    const listed = spawnSync('git', ['ls-files', '--', TEST_KIT.slice(1)], { encoding: 'utf8' });
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(files, 'the fake PostgreSQL server is not a file git tracks').toContain(
+      'packages/test-kit/src/fake-postgres.ts',
+    );
+    expect(ownersOf('packages/test-kit/src/fake-postgres.ts')).toEqual(OWNERS);
+    expect(
+      files.filter((file) => ownersOf(file).join(' ') !== OWNERS.join(' ')),
+      `files in ${TEST_KIT} not owned by ${OWNERS.join(' ')}`,
+    ).toEqual([]);
+  });
+
+  test("BUG-14: the safety filter in ai-review.yml lists every input of the mutation run, read from MUTATION_INPUTS and every group's config, so a change to how a safety file's mutation score is measured or judged gets the safety review (D-100 and its amendment)", () => {
+    // The safety filter's own list, as the tests above read it: a path in a
+    // comment, or under the ui filter, is not a safety entry. Each input needs
+    // an entry of its own: a folder its files under /**, a file itself.
+    const safety = filterEntries(readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8'), 'safety');
+    const entries = mutationRunEntries();
+
+    expect(safety.headers, 'how many filters are named safety').toBe(1);
+    expect(safety.unreadable).toEqual([]);
+    expect(entries.length, 'the mutation run has no inputs to look for').toBeGreaterThan(0);
+    expect(
+      entries.filter((glob) => !safety.entries.includes(glob)),
+      'inputs of the mutation run the safety filter does not list',
+    ).toEqual([]);
+  });
+
+  test("BUG-14: each input of the mutation run the safety filter is held to, read from MUTATION_INPUTS and every group's config, is a path the owner must approve, and the last line of .github/CODEOWNERS matching each of their files names the owner (D-100 and its amendment)", () => {
+    // The safety review and the owner's approval are asked for together: a path
+    // that summons safety-reviewer but not the owner is the gap D-097 closed
+    // for api.ts. An owner path covers a glob when it is that glob, or is a
+    // directory the glob lies inside.
+    const covers = (owned, glob) =>
+      filterGlob(owned) === glob || (owned.endsWith('/') && glob.startsWith(owned.slice(1)));
+    const entries = mutationRunEntries();
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+    const listed = spawnSync(
+      'git',
+      ['ls-files', '--', ...entries.map((glob) => glob.replace(/\*\*$/, ''))],
+      { encoding: 'utf8' },
+    );
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(entries.length, 'the mutation run has no inputs to look for').toBeGreaterThan(0);
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      entries.filter(
+        (glob) =>
+          !files.some((file) => file === glob || file.startsWith(glob.replace(/\*\*$/, ''))),
+      ),
+      'entries that match no file git tracks',
+    ).toEqual([]);
+    expect(
+      entries.filter((glob) => !OWNER_APPROVAL_PATHS.some((owned) => covers(owned, glob))),
+      'entries no owner-approval path covers',
+    ).toEqual([]);
+    expect(files.filter((file) => ownersOf(file).length === 0)).toEqual([]);
+  });
+
+  test("BUG-14: no group's tests are among the inputs the safety filter is held to: the owner left them out (D-100's amendment)", () => {
+    // They already get test-auditor, the no-test-weakened check and a fresh
+    // mutation run whenever they change, and each changes three or four times
+    // a month, so in the filter they would bring safety-reviewer onto most
+    // server pull requests. This pins where the choice is written down, not
+    // the filter: a later decision to list them there changes nothing here.
+    const entries = mutationRunEntries();
+    const tests = MUTATION_GROUPS.flatMap((group) => group.tests);
+    const requires = (glob, file) =>
+      glob === file || (glob.endsWith('/**') && `${file}/`.startsWith(glob.slice(0, -2)));
+
+    expect(tests.length).toBeGreaterThan(0);
+    expect(tests.filter((file) => entries.some((glob) => requires(glob, file)))).toEqual([]);
   });
 });
 

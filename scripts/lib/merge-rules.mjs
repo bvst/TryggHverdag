@@ -74,6 +74,9 @@ export const OWNER_APPROVAL_PATHS = [
   '/stryker.config.mjs',
   '/coverage-baseline.json',
   '/packages/config/',
+  // The safety files' tests and mutation scores rest on its fakes, so a more
+  // lenient fake would quietly weaken what those tests prove (D-100).
+  '/packages/test-kit/',
   '/packages/contracts/released/',
   '/docs/plan/decisions.md',
   '/infra/',

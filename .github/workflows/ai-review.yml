@@ -71,6 +71,13 @@ jobs:
               - 'apps/mobile/src/safety-core/**'
               - 'apps/mobile/app.config.ts'
               - 'packages/contracts/**'
+              - 'scripts/mutation.mjs'
+              - 'scripts/lib/gate-decisions.mjs'
+              - 'stryker.config.mjs'
+              - 'packages/test-kit/**'
+              - 'vitest.config.mjs'
+              - 'vitest.shared.mjs'
+              - 'vitest.system.config.mjs'
             ui:
               - 'apps/mobile/src/**/*.tsx'
               - 'apps/mobile/src/shared/translations/**'

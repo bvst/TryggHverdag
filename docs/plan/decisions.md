@@ -3183,3 +3183,57 @@ any other path is work, not a candidate for the same treatment.
   - D-036's nightly full run is no longer what makes the pull-request runs
     complete, because they are complete already. It is still the place for the
     database files (D-095).
+
+## D-100 — The test kit needs the owner, and the mutation check's own files get the safety review (BUG-14)
+- **Date:** 2026-10-02 · **Status:** Accepted (owner, 2026-10-02; asked in
+  session with Claude's recommendation, both recommended options chosen)
+  · **Section:** 6/8 (extends D-092 to D-098)
+- **Context:** CI's `code-reviewer` and `test-auditor` both raised two points
+  on BUG-12's pull request, #57:
+  - **The test kit.** `api-process.ts`'s mutation score now rests on the fake
+    PostgreSQL server in `packages/test-kit/`, and D-098 starts the run when
+    the test kit changes. But the test kit needed no owner approval, so a later
+    change could make a fake more lenient and quietly weaken what the tests
+    prove.
+  - **The safety filter.** The ai-review `safety` filter decides when CI's
+    `safety-reviewer` runs. It listed product safety code, but not the
+    mutation check's own judging code: `scripts/mutation.mjs`,
+    `scripts/lib/gate-decisions.mjs`, `stryker.config.mjs` and the test kit.
+    So a pull request that changes only how safety code's mutation score is
+    judged got no automatic safety review. Those files already needed the
+    owner (`/scripts/`, `/stryker.config.mjs`).
+- **Decision:**
+  - `/packages/test-kit/` joins CODEOWNERS and `OWNER_APPROVAL_PATHS`.
+  - `scripts/mutation.mjs`, `scripts/lib/gate-decisions.mjs`,
+    `stryker.config.mjs` and `packages/test-kit/**` join the ai-review `safety`
+    filter.
+- **Consequences:**
+  - BUG-14 edits `ai-review.yml`, so CI's AI reviewers cannot run on it; the
+    owner merges it by hand (D-075).
+  - Every later change to a fake or builder in the test kit needs the owner.
+  - A change to the mutation gate's own files gets the safety review.
+- **Amended 2026-10-02 (owner, asked in session after BUG-14's four reviews,
+  with Claude's recommendation on both questions):**
+  - **Why:** `safety-reviewer`, `code-reviewer` and `test-auditor` all found
+    that D-100 covered four of the mutation run's inputs but not the Vitest
+    configurations the groups run under. `safety-reviewer` showed that one
+    `--exclude` line in such a configuration drops a group's test from every
+    mutant's run, with exit 0 and no warning.
+  - **Decision:**
+    - `vitest.config.mjs`, `vitest.shared.mjs` and `vitest.system.config.mjs`
+      also join the ai-review `safety` filter. All three already need the
+      owner (D-096 and earlier).
+    - The test checks the filter against the code's own lists: every entry in
+      `MUTATION_INPUTS` and every group's `config`. A future input therefore
+      cannot be left out by accident.
+    - The groups' test files stay out of the filter and stay unowned (the
+      owner's choice). They already get `test-auditor`, the no-test-weakened
+      check and a fresh mutation run whenever they change. Each changes three
+      or four times a month, so adding them would bring in `safety-reviewer`
+      on most server pull requests.
+    - `safety-reviewer`'s brief gains a checklist line for these files, so that
+      the review they now trigger has something to check (D-045).
+  - **Corrections to the Context above:**
+    - The test kit feeds the mutation check rather than judging it.
+    - Of D-100's four filter entries, only the first three already needed the
+      owner. The test kit is what the decision gives an owner.

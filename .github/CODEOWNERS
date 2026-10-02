@@ -62,6 +62,8 @@
 /stryker.config.mjs               @bvst @urso-agent
 /coverage-baseline.json           @bvst @urso-agent
 /packages/config/                 @bvst @urso-agent
+# The safety files' tests and mutation scores rest on its fakes (D-100).
+/packages/test-kit/               @bvst @urso-agent
 /packages/contracts/released/     @bvst @urso-agent
 /docs/plan/decisions.md           @bvst @urso-agent
 /infra/                           @bvst @urso-agent

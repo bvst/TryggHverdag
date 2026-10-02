@@ -5,6 +5,15 @@ Newest first.
 
 ## Patterns worth checking every time
 
+- **A path added to the ai-review `safety` filter summons safety-reviewer, whose brief
+  covers only SM/REL/LOST product code.** BUG-14 (D-100) added mutation-gate files and
+  test-kit fakes; the brief had no line for either, so the review risked being a PASS with
+  nothing checked (D-045). When a filter grows a new kind of file, check the brief has a
+  line for it. When a decision enumerates "X's own files", diff it against the code's own
+  list (D-100 took 4 of `MUTATION_INPUTS`' 6), and diff its Context against the pull
+  request's comments (`api.github.com/repos/bvst/TryggHverdag/issues/<n>/comments`). A
+  CODEOWNERS test that orders two disjoint patterns pins layout, not ownership.
+
 ### A Stryker "Killed" can be a false kill from a slow child-process test
 stryker.config.mjs uses the command runner, so every mutant runs the whole
 suite and any failing test counts as a kill. In the INF-08 review the mutant
