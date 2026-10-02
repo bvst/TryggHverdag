@@ -172,8 +172,11 @@ device sessions come only from tests and, on staging, from the canary (D-091).
 | 7 | LOST-08 | "They're safe" (SM-06, SM-05) | The acknowledging responder closes the alert, the journey ends and the others are told; the 2-hour stop never ends a lost-contact journey; both at L6 |
 | 8 | REL-10 | The staging canary every ⚙️ 15 minutes, paging the owner if late | The canary runs on staging, on time for 24 hours |
 
-**BUG-10 runs after task 1 and before task 3** (D-092): the journey files
-become safety paths. It is its own small pull request.
+**BUG-10 runs after task 1 and before task 3** (D-092, D-094 to D-097): the
+journey files need the owner's approval and get the safety review; the journey
+module and `api-process.ts` are mutation-tested (D-095). **BUG-12 follows it,
+before task 2:** the mutation gate's silent false green. Each is its own pull
+request.
 
 **Exit criteria, unchanged:** L6 green; mutation ≥ 80 %; the staging canary on
 time for 24 hours.
