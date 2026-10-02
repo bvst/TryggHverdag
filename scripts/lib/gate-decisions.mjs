@@ -191,6 +191,11 @@ const MUTATION_SETTINGS = [
   'scripts/mutation.mjs',
   'vitest.config.mjs',
   'vitest.shared.mjs',
+  // The groups' tests run on the test kit's fakes: the api-process tests
+  // reach their database through its fake PostgreSQL server. A changed fake
+  // can change a score. Only this package: the rest of packages/ is product
+  // code, which the whole-suite run's catch-all must not turn into triggers.
+  'packages/test-kit/',
 ];
 
 /** A path names itself, or the folder it is: `a/b` and `a/b/` both hold `a/b/c.ts`. */
