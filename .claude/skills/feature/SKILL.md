@@ -21,7 +21,8 @@ whenever a step can't be completed; never skip a step.
 3. **Green** — delegate to `implementer`. Its stop gate must pass. Then delete
    `.claude/state/phase`.
 4. **Full checks** — `pnpm gate:full` (includes `req:coverage` and `api:diff`;
-   includes `mutation --incremental` when safety paths changed).
+   includes a fresh `mutation` run when safety code or the run's inputs
+   changed, D-098 and D-099).
 5. **Reviews, in parallel** — `code-reviewer` always; `safety-reviewer` if domain,
    alerts, worker or safety-core changed; `privacy-security-reviewer` if data,
    auth, logging, storage or dependencies changed; `a11y-i18n-reviewer` if UI
