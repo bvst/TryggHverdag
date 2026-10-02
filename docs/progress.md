@@ -1,10 +1,11 @@
 # Progress log
 
-**Last updated:** 2026-10-01 · **Milestone:** M1 closed (2026-10-01, D-088) — SPIKE-01, Section 4 closed (D-086), the Critical Alerts request drafted and merged (D-087, STORE-01) · **M2 next:** the core safety loop on the server · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-02 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 in flight** (no pull request yet) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
-went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0 and
-[`progress/m1.md`](progress/m1.md) for M1.
+went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
+[`progress/m1.md`](progress/m1.md) for M1 and [`progress/m2.md`](progress/m2.md)
+for M2.
 
 This file is kept short on purpose. `CLAUDE.md` tells every session to read it
 before doing anything, and a thousand-line file that is read under protest stops
@@ -15,13 +16,35 @@ done. Length was the symptom; a status nobody trusts was the cost.
 The plan is in [`plan/README.md`](plan/README.md); the milestone task lists are in
 [`plan/10-roadmap.md`](plan/10-roadmap.md). One task per pull request (D-052).
 
+## M2 at a glance
+
+**M2 started on 2026-10-01** (**D-090**). The core safety loop on the server,
+in eight tasks, one pull request each, SM-01 first. The owner chose this order;
+the alternative was seven tasks with LOST-01 first. Exit: L6 green; mutation
+≥ 80 %; the staging canary on time for 24 hours. Until GRP-01 brings logins
+in M3, devices authenticate with a hashed per-device credential (**D-091**).
+The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
+[`progress/m2.md`](progress/m2.md).
+
+| # | ID | Task | Status |
+|---|----|------|--------|
+| 1 | SM-01 | Start a journey: the base tables, per-device authentication (SEC-07), the state machine module (AR-04), one active journey per walker, at least one responder | 🟡 **In flight.** Spec `7101f94`; tests `8c5573f` (written first, all 16 criteria); code `cbc0eeb`; requirement report `57d5714`; review-loop tests `658f267`; the review-loop code is being written. **Evidence so far:** `gate:quick` 3 of 3; `gate:full` 11 passed, 1 failed and 2 not possible. The failure is `gate:integrity`, which cannot read GitHub's rules API from a cloud session (its three file-based checks passed). Not possible: L3 without Docker, and L7 without an emulator. Domain mutation 100 %. **Reviews:** privacy-security PASS, safety PASS, code PASS (advisory), each with "should fix" items now in review loop 1. test-auditor comes after the loop. No pull request yet |
+| | BUG-10 | The journey files become safety paths (D-092): `SAFETY_PATHS`, CODEOWNERS, the ai-review `safety` filter, and `CLOCK_FREE_PATHS`. Runs right after SM-01 merges, before task 3 | ⚪ Not started. Its `ai-review.yml` part is merged by hand (D-075) |
+| 2 | LOST-01 | Heartbeat, with or without position | ⚪ Not started |
+| 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ⚪ Not started |
+| 4 | LOST-03 | Back in contact | ⚪ Not started |
+| 5 | LOST-06 | "I'm on it" | ⚪ Not started |
+| 6 | LOST-07 | SMS escalation at 2 minutes | ⚪ Not started |
+| 7 | LOST-08 | "They're safe" | ⚪ Not started |
+| 8 | REL-10 | The staging canary | ⚪ Not started |
+
 ## M1 at a glance
 
 **M1 is closed** (2026-10-01, **D-088**). Its exit — spike results recorded,
 the SDK go/no-go decision, and Section 4 closed — is met (D-086), and the
 roadmap's fourth M1 item, the Critical Alerts request, is drafted and merged
 too (D-087, STORE-01). As with M0 (D-083), the owner made the call. **M2,
-the core safety loop on the server, is next.**
+the core safety loop on the server, started on 2026-10-01 (above).**
 
 | ID | Task | Status |
 |----|------|--------|
@@ -74,6 +97,10 @@ review, stays open until then.
   emulator install waits through a refused session.
   [#43](https://github.com/bvst/TryggHverdag/pull/43), merged at 19:42 UTC as
   `0637482`. Its loose ends are under "In flight".
+- **The D-075 batch:** `ai-review.yml` on `ubuntu-26.04`, and three Dependabot
+  bumps. [#48](https://github.com/bvst/TryggHverdag/pull/48), merged as
+  `05ca463` (checked with `git log` and `git show --stat`: it changed all
+  five workflows).
 
 **The reviewer gate works.** As of 2026-09-23 it reviews real code and returns
 verdicts. On its first working day it caught two genuine bugs, a half-finished
@@ -111,17 +138,13 @@ still cannot pass**, structurally: `ai-review.yml` pins actions such as
 `actions/checkout`, `actions/setup-node` and `pnpm/action-setup`, so bumping any
 of them edits that workflow, and `claude-code-action` refuses to run when the
 workflow differs from the default branch. Those pull requests need a manual merge
-(D-075). Three are open, and GitHub's pulls API reported each as mergeable but
-blocked when they were checked for this record (2026-09-30):
-- [#4](https://github.com/bvst/TryggHverdag/pull/4): `actions/setup-node` 6.5.0
-  to 7.0.0;
-- [#5](https://github.com/bvst/TryggHverdag/pull/5): `actions/checkout` 6.1.0 to
-  7.0.1;
-- [#36](https://github.com/bvst/TryggHverdag/pull/36): the non-major group,
-  `anthropics/claude-code-action` 1.0.231 to 1.0.235.
-
-All three change `ai-review.yml`, and #4 and #5 also change the four workflows
-that #43 moved to `ubuntu-26.04`.
+(D-075). **The three that were open are no longer:** #4 (`actions/setup-node`),
+#5 (`actions/checkout`) and #36 (`anthropics/claude-code-action`). Their
+changes went into #48 (`05ca463`, 2026-09-30), pinned to the commits Dependabot
+proposed. **Checked:** the workflows now pin setup-node v7.0.0, checkout v7.0.1
+and claude-code-action v1.0.235. **Not checked from this session:** each pull
+request's own state on GitHub (no `gh` here). The orchestrating session found no
+open pull requests on 2026-10-01 and 2026-10-02.
 
 **Done, and recorded elsewhere:** A-04 to A-10, A-15 to A-26 (bar A-22's leftover)
 and A-28. Each row is in [`plan/README.md`](plan/README.md), and the evidence is
@@ -262,9 +285,11 @@ The things that still bite, and cost a session hours the first time.
   check the open pull requests' `decisions.md` too, and check it again before
   each push.
 - **The agent briefs still send the narrative to `m0.md`.** `plan-keeper`,
-  `/status` and `/bugfix` name `docs/progress/m0.md`. M1's narrative is
-  [`progress/m1.md`](progress/m1.md), and a bug's next `BUG-<n>` has to be
-  looked for in both files. The last paragraph of `progress/m1.md` says why.
+  `/status` and `/bugfix` name `docs/progress/m0.md` (D-088 lists it among the
+  `.claude/` gaps). M2's narrative is [`progress/m2.md`](progress/m2.md) and
+  M1's is [`progress/m1.md`](progress/m1.md), so a bug's next `BUG-<n>` has to
+  be looked for in all three files, in this one and in `decisions.md`. The
+  next one is **BUG-10**. The last paragraph of `progress/m1.md` says why.
 - **The write-time sensitive-data hook catches only `+47`/`0047` phone
   numbers, on Write and Edit.** `scan-sensitive.mjs` does not look for 8-digit
   domestic numbers, email addresses, postal addresses, D-U-N-S or
@@ -281,19 +306,34 @@ The things that still bite, and cost a session hours the first time.
   in SPIKE-01 and `planner` twice in STORE-01, each stopped and reported. The
   reviewers and `implementer` write their own memory without trouble. A
   configuration gap for the owner, with no ID yet.
+- **Red-phase TypeScript tests cannot be committed alone.** The pre-commit
+  hook (HK-09) lints staged files with type information, and a test that
+  imports modules which do not exist fails `no-unsafe-*`. SM-01's way: write
+  the code, then commit the tests first by explicit path, with the code
+  present but unstaged, and the code after them. The history keeps the order
+  that RG-02 asks for.
+- **Background agents hang on git's pager.** Run `git --no-pager …`, or pipe
+  to `cat`. One session lost an hour to it.
+- **A container restart stops background agents and loses uncommitted work.**
+  One attempt at a records task was cut off before it wrote anything. Commit
+  and push in small steps.
 
 ## In flight
+
+**SM-01** (M2's first task, D-090) is the work in flight: review loop 1's code
+is being written on branch `claude/busy-faraday-40n2zl`, and there is no pull
+request yet. See "M2 at a glance" above. Behind it, in order: BUG-10 (D-092),
+then LOST-01.
 
 **D-085's loose ends** (the pull request merged, [#43](https://github.com/bvst/TryggHverdag/pull/43)).
 - **Verified:** `deploy-staging` on `ubuntu-26.04`. Run 36621209842, for
   `0637482`, succeeded, and so did its Deploy step and its smoke test.
 - **Verified:** `daily-status` on `ubuntu-26.04`, 2026-09-30 06:34 UTC, both
   jobs.
+- **Verified:** every workflow names `ubuntu-26.04` since #48 (`05ca463`,
+  which moved `ai-review.yml`): `grep` finds `ubuntu-latest` only in a comment
+  in `ci.yml`.
 - **Not verified yet:** `infra-staging`, on the owner's next `plan`.
-- **The D-075 batch is in flight** (branch `claude/busy-faraday-40n2zl`):
-  `ai-review.yml` on `ubuntu-26.04`, and the three Dependabot bumps that also
-  edit it (setup-node 7.0.0, checkout 7.0.1, claude-code-action 1.0.235) in
-  all five workflows. It is merged by hand; #4, #5 and #36 close with it.
 - **On 26.04, `android-e2e`'s install was refused on attempt 1 in 3 of 6
   runs:** BUG-9's session error once, run 8's `NullPointerException` twice. The
   wait got past the NPE both times. BUG-9's own signature has not come back.
@@ -332,7 +372,7 @@ record and widens `engines.node` so Dependabot can run. It holds **D-063 and
 D-064**, which is why INF-05's decisions start at D-065. Deliberately parked, not
 forgotten.
 
-**The `ai-review.yml` batch — three items left, and the runner label.** The
+**The `ai-review.yml` batch — three items left.** The
 verdict corroboration shipped in #16 and works: every reviewer on #18 went green
 only with a corroborating comment (read in `test-auditor`'s log; the others by
 their green checks). `checks: read` also shipped in #16, and **does not work** —
@@ -360,17 +400,18 @@ the first item below. What remains:
   treats a cancelled duplicate run as a failure, producing reds that look real.
   **Not re-verified today**, so it waits: changing an unreviewable file on an
   unverified claim is how the placeholder verdict got in.
-- **The runner label,** `ubuntu-latest` to `ubuntu-26.04` (D-085, above). D-085
-  puts it in a pull request of its own.
 
 Three small changes to `ai-review.yml`'s safety filter shipped ahead of the
 batch, each merged by hand (D-075): [#21](https://github.com/bvst/TryggHverdag/pull/21)
 (the worker files), [#30](https://github.com/bvst/TryggHverdag/pull/30)
 (`healthchecks.ts`, D-079) and [#45](https://github.com/bvst/TryggHverdag/pull/45)
-(`apps/mobile/app.config.ts`, D-084).
+(`apps/mobile/app.config.ts`, D-084). The runner label and the three action
+bumps went in as [#48](https://github.com/bvst/TryggHverdag/pull/48). The next
+by-hand change is BUG-10's filter (D-092).
 
 ## History
 
 [`progress/m0.md`](progress/m0.md) — the full narrative of M0, including the wrong
 turns. Several entries exist only so the next session does not repeat them.
 [`progress/m1.md`](progress/m1.md) — M1, from 2026-09-29.
+[`progress/m2.md`](progress/m2.md) — M2, from 2026-10-01.

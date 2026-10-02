@@ -1,6 +1,6 @@
 # 10 · Roadmap & first milestone
 
-**Status:** ✅ Done — **planning complete**; next: [M0 kickoff](M0-kickoff.md) · **Last updated:** 2026-09-20
+**Status:** ✅ Done — **planning complete**; next: [M0 kickoff](M0-kickoff.md) · **Last updated:** 2026-10-02 (M2's task list, D-090)
 
 ## Summary
 - Roadmap M0 → M6 approved (D-053). No fixed dates; quality first (D-054).
@@ -114,9 +114,9 @@ runs never changes what is allowed to merge.
 |---|-----------|--------------|-------------------------------|
 | **M0** | Foundations | Repository, toolchain, Claude Code configuration, CI, merge rules, staging, monitoring, daily report | All INF tasks done; **gate drills pass**; CI green on `main`. The push to `main` and the merge without code-owner approval count as covered by `gate:integrity`'s live read until their live attempt at M5 (D-083) |
 | **M1** | Spike (emulators and simulators) — ✅ **closed** (2026-10-01, D-088) | SPIKE-01, S1–S7 on emulators and simulators (D-037); location SDK in debug mode; Critical Alerts request drafted (STORE-01) | Spike results recorded; SDK go/no-go decision; Section 4 closed — all met |
-| **M2** | Core safety loop (server) | State machine, watchdog, outbox, fake push and SMS; LOST-01 to LOST-03, LOST-06 to LOST-08, SM-01 to SM-10; staging canary (REL-10) | L6 tests green; mutation ≥ 80 %; the staging canary alerts on time for 24 hours |
+| **M2** | Core safety loop (server) — 🟡 **in progress** (D-090) | State machine, watchdog, outbox, fake push and SMS; LOST-01 to LOST-03, LOST-06 to LOST-08, SM-01 to SM-10; staging canary (REL-10) | L6 tests green; mutation ≥ 80 %; the staging canary alerts on time for 24 hours |
 | **M3** | App MVP (demo-able) | GRP-01 to GRP-04, CALL-01 to CALL-03, JRN-01 to JRN-06, LOST-04, LOST-05, HELP-01; real push to the owner's phone; SMS to the owner's own number only | L7 green on Android (every PR) and iOS (weekly); **the owner can show the app** via internal TestFlight and Google Play internal testing |
-| **M4** | Privacy, security and compliance | PRIV-01 to PRIV-12 (retention jobs, export and delete, privacy notice in nb and en, age bands); SEC-01 to SEC-07; DPIA; Critical Alerts entitlement requested | Every PRIV and SEC ID covered by tests; DPIA in `docs/dpia/` |
+| **M4** | Privacy, security and compliance | PRIV-01 to PRIV-12 (retention jobs, export and delete, privacy notice in nb and en, age bands); SEC-01 to SEC-07; DPIA; Critical Alerts entitlement requested; **decide how long journey records are kept** (open question in `README.md`, "Open for M4") | Every PRIV and SEC ID covered by tests; DPIA in `docs/dpia/` |
 | **M5** | Go-live readiness | Real-phone suite L9 on Firebase Test Lab (D-041); production environment (D-046, phase B); location SDK licence; Apple beta review; release 1.0 | RL-01 to RL-07 pass; owner approves the release pull request |
 | **M6** | Private group phase | Friends and family use it for real; L10 monitoring; tuning ⚙️ thresholds; every failure becomes a test (D-035) | Reliability targets from Section 3 met for ⚙️ 4 weeks |
 
@@ -154,6 +154,29 @@ Each task has an ID so it flows through `/feature` like any requirement.
 - a blocking AI review verdict (CI-11).
 
 If any drill *succeeds*, M0 is not done.
+
+## M2 — Core safety loop in detail
+
+Eight tasks, one pull request each, each through `/feature <ID>` (D-090). The
+order is the owner's choice. Logins arrive with GRP-01 in M3, so until then
+device sessions come only from tests and, on staging, from the canary (D-091).
+
+| # | ID | Task | Done when |
+|---|----|------|-----------|
+| 1 | SM-01 | Start a journey: the base tables, per-device authentication, the state machine module (AR-04), one active journey per walker, at least one responder to start | The start rules and SEC-07 pass at L2, L3 and L6; every route but health refuses an unknown device |
+| 2 | LOST-01 | Heartbeat, with or without position (SM-03); duplicates and order (SM-08, SM-09); events after ENDED (SM-07) | A heartbeat is stored once, in database-time order, and none of it reaches a log |
+| 3 | LOST-02 | Lost-contact alert: watchdog every 10–15 s (AR-06), alert and push in one transaction (AR-05) | "The most important test" passes at L6 against a recording push fake |
+| 4 | LOST-03 | Back in contact (SM-04) | A heartbeat, or a queued "I'm home", after an alert resolves it and tells the responders, at L6 |
+| 5 | LOST-06 | "I'm on it" | A responder's answer is recorded and shown, at L6 |
+| 6 | LOST-07 | SMS escalation at 2 minutes (REL-07); a failed SMS pages the owner; SM-10; SM-02's last-responder warning | The escalation and the page pass at L6 against a recording SMS fake |
+| 7 | LOST-08 | "They're safe" (SM-06, SM-05) | The acknowledging responder closes the alert, the journey ends and the others are told; the 2-hour stop never ends a lost-contact journey; both at L6 |
+| 8 | REL-10 | The staging canary every ⚙️ 15 minutes, paging the owner if late | The canary runs on staging, on time for 24 hours |
+
+**BUG-10 runs after task 1 and before task 3** (D-092): the journey files
+become safety paths. It is its own small pull request.
+
+**Exit criteria, unchanged:** L6 green; mutation ≥ 80 %; the staging canary on
+time for 24 hours.
 
 ## Owner actions by milestone
 

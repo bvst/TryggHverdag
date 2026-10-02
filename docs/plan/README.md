@@ -1,15 +1,17 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-01 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server
+**Last updated:** 2026-10-02 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server, started with SM-01 (D-090)
 
-**Current section:** milestone M2. M1 closed with all four roadmap items done:
+**Current section:** milestone M2, started 2026-10-01 with SM-01, task 1 of 8
+(D-090; the task list is in [10-roadmap.md](10-roadmap.md)). SM-01 is in flight
+and has no pull request yet. M1 closed with all four roadmap items done:
 SPIKE-01 (S1–S8), Section 4 closed with a conditional GO for the location SDK
 (D-086, full results in [04b-spike-results.md](04b-spike-results.md)), and the
 Critical Alerts entitlement request drafted
 ([critical-alerts-request.md](critical-alerts-request.md), D-087, STORE-01).
 Open item (e), the public repository, is answered (D-089). Status:
-[../progress.md](../progress.md) · Build log: [../progress/m1.md](../progress/m1.md)
-(M0's: [../progress/m0.md](../progress/m0.md))
+[../progress.md](../progress.md) · Build log: [../progress/m2.md](../progress/m2.md)
+(M1's: [../progress/m1.md](../progress/m1.md); M0's: [../progress/m0.md](../progress/m0.md))
 
 This folder is the project's memory. Everything we research, discuss and decide
 ends up here, so any session (in Claude Code or claude.ai) can pick up exactly
@@ -60,9 +62,20 @@ five open items found while planning SPIKE-01 are now answered, including
 D-086's conditions, A-30, and three `.claude/` configuration gaps, each
 needing the owner's approval and an ID.
 
-**Milestone M2 is next:** the core safety loop on the server (state machine,
-watchdog, outbox, fake push and SMS; the staging canary). What Claude needs
+**Milestone M2 is in progress** (D-090): the core safety loop on the server
+(state machine, watchdog, outbox, fake push and SMS; the staging canary), in
+eight tasks, SM-01 first. Devices authenticate with a hashed per-device
+credential until login arrives with GRP-01 (D-091). The journey files become
+safety paths in BUG-10, right after SM-01 merges (D-092). What Claude needs
 from the owner: [../progress.md](../progress.md).
+
+**Open for M4** (not an owner action, so not in the to-do table below; it sits
+here so that M4's planning, which starts from this file and the roadmap's M4
+row, finds it): **how long are journey records kept** (who walked, when, in
+which state, and who followed)? The retention rule sets times for positions,
+alerts and account data, not for the journey row. Recommendation (SM-01's spec,
+the question at its end): delete a journey and its responder rows with its alert
+records, 30 days after it ends. Decide it in M4, and write it into the DPIA.
 
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every

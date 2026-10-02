@@ -2787,3 +2787,134 @@ any other path is work, not a candidate for the same treatment.
   - A-05 in `docs/plan/README.md`, and A-05 in the roadmap's
     owner-actions table, stop saying "private";
   - open item (e) is answered.
+
+## D-090 — M2's order: eight tasks, SM-01 first
+- **Date:** 2026-10-01 · **Status:** Accepted (owner, 2026-10-01). Asked in
+  session with Claude's recommendation, "8 tasks, SM-01 first"; the
+  alternative offered was 7 tasks with LOST-01 first (journey start and
+  heartbeat in one task) · **Section:** 10 (M2)
+- **Context:**
+  - M2's roadmap row lists its requirements (LOST-01 to LOST-03, LOST-06 to
+    LOST-08, SM-01 to SM-10, REL-10) and its exit criteria. Unlike M0, it has
+    no order and no task table.
+  - One task per pull request (D-052).
+  - Logins arrive with GRP-01 in M3.
+- **Decision:** eight tasks, one pull request each, each through
+  `/feature <ID>`:
+  1. **SM-01 — Start a journey.** The base tables starting needs; every
+     request authenticated per device (SEC-07); the journey state machine
+     module (AR-04); one active journey per walker (SM-01); at least one
+     responder to start (SM-02's start rule).
+  2. **LOST-01 — Heartbeat,** with or without position (SM-03); duplicates
+     have no effect (SM-08); database-time order (SM-09); events after ENDED
+     ignored and logged without location (SM-07); location kept out of logs
+     before the first task that binds one ships (PRIV-07, D-077 item 14).
+     Inputs: `04b-spike-results.md` §4.5, including never echoing a
+     `background_geolocation` key.
+  3. **LOST-02 — Lost-contact alert.** Watchdog every 10–15 s (AR-06, REL-01);
+     alert and push in one transaction (AR-05); a recording push fake; "the
+     most important test" at L6; D-079's watchdog check-in follow-ups and
+     D-068's pool-lifecycle revisit.
+  4. **LOST-03 — Back in contact;** SM-04.
+  5. **LOST-06 — "I'm on it".**
+  6. **LOST-07 — SMS escalation** at 2 minutes (REL-07); a recording SMS fake;
+     a failed SMS pages the owner; SM-10; SM-02's last-responder warning
+     (with D-087's flag).
+  7. **LOST-08 — "They're safe";** SM-06; SM-05.
+  8. **REL-10 — The staging canary** every ⚙️ 15 minutes, paging the owner if
+     late; D-087's flag (the canary never uses the critical level); D-077's
+     note (Nano's reduced CPU priority).
+- **Logins before GRP-01:** device sessions come only from tests and, on
+  staging, from the canary. Staging's journey API admits nobody else. The
+  mechanism is D-091.
+- **Exit criteria unchanged:** L6 green; mutation ≥ 80 %; the staging canary
+  on time for 24 hours.
+- **Consequences:**
+  - The roadmap gains "M2 — Core safety loop in detail", and its M2 row is
+    marked in progress.
+  - A change to the order or the split goes back to the owner.
+  - A bug fix (BUG-10, D-092) may run between tasks.
+  - Supersedes nothing.
+
+## D-091 — Devices authenticate with a hashed per-device credential until login arrives
+- **Date:** 2026-10-01 · **Status:** Accepted (delegated to Claude, D-031) ·
+  **Section:** 5. D-032 (Better Auth) stands. Source: `docs/specs/SM-01.md`,
+  approach items 5 and 6.
+- **Context:** every route but health needs a known device (SEC-07), and
+  nothing can sign in until GRP-01 (M3). SM-01 is the first task to ship a
+  route that needs it.
+- **Decision:**
+  - A random 32-byte secret per device, base64url, sent as
+    `Authorization: Bearer`.
+  - Only its SHA-256 hash is stored, in `devices.credential_hash` (unique),
+    and the device is looked up by that hash.
+  - One oRPC middleware on every route but `GET /v1/health`. It is closed by
+    default: SM-01-AC9 enumerates the contract's routes, and since review
+    loop 1 a test also pins that the app registers no route outside the
+    contract.
+  - The same 401 for every cause. A store failure while checking is a 500,
+    never a 401. The raw header is not passed on to handlers.
+  - All of it sits behind a `DeviceAuthenticator` port.
+  - No route, seed or insert function creates a credential before GRP-01
+    (spec item 6).
+- **Why not Better Auth's sessions now:**
+  - Nothing can sign in until GRP-01.
+  - Its schema would fix the shape of personal data before the login task
+    designs the people tables.
+  - Native heartbeat uploads need a plain header.
+  - Fewer dependencies (SEC-06).
+- **Why plain SHA-256:** a 256-bit random secret cannot be guessed offline, so
+  a slow hash would only slow every request (privacy-security-reviewer,
+  SM-01, 2026-10-01).
+- **Fallback:** Better Auth's sessions through its bearer plugin, behind the
+  same port. Routes do not change either way.
+- **What GRP-01 inherits and decides:**
+  - It inherits `users`, `devices`, the port, the middleware, the
+    public-route tests and the 401 contract.
+  - It decides issuance, expiry, rotation, revocation, the new-device notice,
+    and Better Auth's use of UUID user IDs.
+  - **The issuer must use `crypto.randomBytes(32)`, with a test asserting
+    it.** The plain-SHA-256 premise rests on 256 bits.
+- **Consequences:** task 8's canary credential never expires and is revoked
+  only by deleting its row. It goes in the secrets inventory and in the
+  `staging` environment. Supersedes nothing.
+
+## D-092 — The journey files become safety paths
+- **Date:** 2026-10-02 · **Status:** Accepted (owner, 2026-10-02). Asked in
+  session with Claude's recommendation, "Yes, all of them"; the alternatives
+  offered were "only the database parts" and "not now" · **Section:** 6/8
+  (extends D-042's owner-approval paths, as D-079 and D-084 did)
+- **Context:**
+  - safety-reviewer (SM-01, PASS, 2026-10-01) found that SM-01's journey
+    guarantees live partly outside every safety list: `SAFETY_PATHS` in
+    `scripts/lib/gate-decisions.mjs`, `.github/CODEOWNERS`, the `safety`
+    filter in `.github/workflows/ai-review.yml`, and `CLOCK_FREE_PATHS` in
+    `packages/config/eslint/index.mjs`.
+  - **Checked** by the orchestrating session on 2026-10-02, by reading those
+    four files: none lists `adapters/journeys.ts`,
+    `adapters/device-credentials.ts`, `db/schema.ts`, `db/migrations/` or
+    `modules/journeys/`. The ai-review filter already lists `api.ts` and
+    `packages/contracts/**`. `CLOCK_FREE_PATHS` holds only `domain/` and
+    `safety-core`.
+  - **Failure scenario:** a later change moves the responder insert out of its
+    transaction, rewrites the one-unended index, or makes the credential check
+    accept anything (from task 2 it guards heartbeats). It gets no safety
+    review, no mutation run and no owner approval. Only the L3 tests stand in
+    the way.
+- **Decision:**
+  - `apps/server/src/adapters/journeys.ts`,
+    `apps/server/src/adapters/device-credentials.ts`,
+    `apps/server/src/db/schema.ts`, `apps/server/src/db/migrations/` and
+    `apps/server/src/modules/journeys/` become safety paths: in
+    `SAFETY_PATHS`, in CODEOWNERS (owner approval) and in the ai-review
+    `safety` filter.
+  - `apps/server/src/modules/**/*.ts` joins `CLOCK_FREE_PATHS`.
+  - **Done as BUG-10,** its own small pull request right after SM-01 merges
+    and before task 3 (the watchdog).
+  - Its `ai-review.yml` part is merged by hand (D-075).
+- **Cost:** more pull requests wait for the owner's approval.
+- **Not in the question, so not decided:** safety-reviewer also named
+  `api-process.ts`, which wires the database clock. BUG-10's spec asks about
+  it.
+- **Consequences:** supersedes the question SM-01's spec sent to task 2
+  (whether the credential adapter becomes a safety path). It is answered here.
