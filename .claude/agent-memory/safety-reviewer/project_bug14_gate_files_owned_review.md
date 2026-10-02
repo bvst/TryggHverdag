@@ -33,3 +33,10 @@ timeout pinned at gate.test.mjs:440/447; 10 commits since 09-01).
 
 **How to apply:** on any later mutation-gate or test-kit PR, check whether 1-3 landed before raising them again.
 Related: [[mutation-gate-checks]], [[unowned-gate-configs]], [[bug12-mutation-gate-review]].
+
+**Loop 1 (3e1babb), PASS.** Open item 1 CLOSED: D-100 amended, the three Vitest configs are in the filter and
+a test holds the filter to MUTATION_INPUTS (now exported) plus every group's config, read from the code. Item 2:
+the owner kept group tests out (pinned by a test). Item 3 (package.json mutation script) not taken up.
+My brief (.claude/agents/safety-reviewer.md) gained a D-100 line: kill rule, dropped safety file or group test,
+lenient fake. Suggested additions not yet in it: the 80 % per-file bar, when the run starts (decideMutation /
+MUTATION_INPUTS / SAFETY_PATHS), every run fresh (D-099), a run that measured nothing fails.

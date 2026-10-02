@@ -26,3 +26,14 @@ PASS.
   ai-review.yml already has `checks: read` (line 99), so the brief's "403, no checks: read" premise is stale.
 - gate:full (coordinator's run): 11 passed, gate:integrity 3 of 5 (token), integration and android not possible here.
 Related: [[bug12-audit]], [[in-memory-mutation]], [[gate-integrity-local]]
+
+**Loop 1 re-audit (HEAD 3e1babb, tests 5d0174e, D-100 amended 1fca48c): PASS.** D100_SAFETY_ENTRIES became a list derived from
+exported MUTATION_INPUTS plus every group's config; ai-review.test.mjs pins safety-reviewer's brief naming D-100 and each input.
+Harness v2: scratchpad/ta-bug14/ta-harness2.mjs (also rewrites gate-decisions.mjs, reads .claude/agents/safety-reviewer.md via
+the readFileSync override in ai-review.test.mjs, runs gate-decisions.test.mjs as the backstop). Two-stage RG-02 replay: at
+1fca48c 4 red on "MUTATION_INPUTS is not exported"; with only the export added, the filter test names the 3 Vitest configs and the
+brief test names D-100 plus all 7 paths. The owner and group-tests tests go green with the export alone (they pin
+conditions that already held). 30 faults killed. A filter list derived from the code cannot see the same removal in both places,
+but gate-decisions.test.mjs's per-input trigger rows (lines 126-144) catch it: test-kit, mutation.mjs and journeys' config
+(S1-S3) were all killed there. Dropped memory-line assertions: still covered by INF-10-AC18 (gate.test.mjs:618; Q3, Q4 killed). The
+ordering move (Q2) and an added unowned fifth entry (G2) survive, as expected and as already noted.
