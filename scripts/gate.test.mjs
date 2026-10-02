@@ -430,6 +430,31 @@ describe("this repository's own workflows", () => {
     }
   });
 
+  // BUG-10 (D-096): the system and integration Vitest configurations decide
+  // what the L6 and L3 tests collect. Under D-095 the journey module's mutation
+  // run uses the system one, and the database adapters, the schema and the
+  // migrations are guarded only by the L3 tests the integration one collects.
+  // One unapproved change to either could drop those tests with every check
+  // still green.
+  const TEST_LEVEL_CONFIGS = ['vitest.system.config.mjs', 'vitest.integration.config.mjs'];
+
+  test('BUG-10: the system and integration Vitest configurations, which decide what the L6 and L3 tests collect, are paths the owner must approve', () => {
+    const unapproved = TEST_LEVEL_CONFIGS.filter(
+      (file) => !OWNER_APPROVAL_PATHS.includes(`/${file}`),
+    );
+
+    expect(TEST_LEVEL_CONFIGS.filter((file) => !existsSync(file))).toEqual([]);
+    expect(unapproved).toEqual([]);
+  });
+
+  test('BUG-10: .github/CODEOWNERS gives both to the owner: gate:integrity finds every owner-approval path owned, and the last line matching each names an owner', () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    expect(TEST_LEVEL_CONFIGS.filter((file) => ownersOf(file).length === 0)).toEqual([]);
+  });
+
   // BUG-8 (D-084): the files that shape the lint, import-rule, mutation and
   // coverage gates, and the app's own configuration, needed no owner to
   // change. A change to one could loosen a gate with only the AI reviewers to
