@@ -3075,3 +3075,28 @@ any other path is work, not a candidate for the same treatment.
   join `OWNER_APPROVAL_PATHS` and CODEOWNERS, in BUG-10.
 - **Consequences:** a change to what the system or integration tests collect
   needs the owner's approval. Supersedes nothing.
+
+## D-097 — `api.ts`, the database clock and the migrations' location need the owner's approval too (BUG-10)
+- **Date:** 2026-10-02 · **Status:** Accepted (owner, 2026-10-02). Asked in
+  session with Claude's recommendation, all three; the owner chose all three
+  · **Section:** 6/8 (extends D-092, D-094 and D-096)
+- **Context:** BUG-10's four reviewers (2026-10-02, all PASS) found files that
+  carry the same journey guarantees as D-092's six and needed no owner
+  approval:
+  - `apps/server/src/api.ts`: the device-credential middleware (the 401
+    decision, and which routes use it) and the line that makes the walker
+    always the device's own user. The ai-review `safety` filter already lists
+    it; CODEOWNERS did not. From LOST-01 it guards heartbeats.
+  - `apps/server/src/adapters/clock.ts`: the database clock that
+    `api-process.ts` and `worker.ts` wire in. D-094's reason for owning
+    `api-process.ts` applies to it more directly, and its REL-01 test (within
+    60 s of the process's time) would pass a process clock.
+  - `apps/server/src/adapters/migrations.ts` and `apps/server/drizzle.config.ts`:
+    where migrations are read from and written to. Changing both could move
+    future migrations out of the owned `db/migrations/`.
+- **Decision:** the four files join `OWNER_APPROVAL_PATHS`, CODEOWNERS and the
+  ai-review `safety` filter, in BUG-10. None joins `SAFETY_PATHS` (D-095: no
+  in-process mutation run for them is decided). `clock.ts`'s REL-01 test is
+  strengthened so a process clock fails it.
+- **Consequences:** BUG-10 stays one pull request merged by hand (D-075).
+  Supersedes nothing.

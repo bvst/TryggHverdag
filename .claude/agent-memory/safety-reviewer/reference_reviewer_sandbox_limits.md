@@ -44,3 +44,9 @@ Stryker 10 facts (node_modules/.pnpm/@stryker-mutator+instrumenter@10.0.0), for 
 - Command runner timeout = timeoutMS (5 s) + factor 1.5 x initial run; timeouts count as detected, and
   Stryker tree-kills the runner with SIGKILL.
 See [[mutation-gate-skips-test-only-changes]].
+
+**Updated 2026-10-02 (BUG-10):** Stryker runs DO work for this role: `STRYKER_RUN=<group> pnpm exec
+stryker run [--mutate <file>]` (no --incremental) writes no reports/ file and removes .stryker-tmp. File writes
+via `node -e "fs.writeFileSync(path, fs.readFileSync(0,'utf8'))" <<'EOF'` work for memory. No gh CLI in the
+cloud session, so CI job logs cannot be read; say so. Under load (another session's stop gate, loadavg 8.5
+on 4 CPUs) a whole-suite run had 8/8 mutants time out, 0 killed, scored 100 % and passed: BUG-12 is not CI-only.

@@ -20,3 +20,6 @@ diff calls, likely via /bugfix since git.mjs was outside INF-06's file list.
 **How to apply:** on any PR touching affected.mjs, gate-decisions.mjs, coverage-ratchet or git.mjs, check
 whether `--no-renames` has landed before repeating the finding. Related:
 [[mutation-gate-skips-test-only-changes]], [[pnpm-filter-no-match-exits-zero]].
+
+**Closed (checked 2026-10-02, BUG-10 review):** scripts/lib/git.mjs lines 26 and 31 now pass
+`--no-renames`. Do not repeat the finding unless that flag disappears.
