@@ -215,6 +215,11 @@ describe('the mutation runs of this repository', () => {
     // The owner's grouping, pinned: measured on two cores, the domain tests
     // take 1.1 s and the adapter's tests plus the worker's 3.7 s, against 13.2 s
     // for the whole suite each mutant ran before.
+    //
+    // The journeys group came with BUG-10 (D-095). Its run also says which
+    // Vitest configuration it uses, the system tests' one, and how it says
+    // so is the implementer's to choose: stryker-config.test.mjs pins what
+    // the run does with it.
     expect(MUTATION_GROUPS).toEqual([
       { name: 'domain', paths: ['apps/server/src/domain/'], tests: ['apps/server/src/domain'] },
       {
@@ -222,6 +227,11 @@ describe('the mutation runs of this repository', () => {
         paths: ['apps/server/src/adapters/healthchecks.ts'],
         tests: ['apps/server/src/adapters/healthchecks.test.ts', 'apps/server/src/worker.test.ts'],
       },
+      expect.objectContaining({
+        name: 'journeys',
+        paths: ['apps/server/src/modules/journeys/'],
+        tests: ['apps/server/src/journeys.system.test.ts'],
+      }),
     ]);
     expect(WHOLE_SUITE).toEqual(['apps', 'packages']);
   });
@@ -265,6 +275,56 @@ describe('the mutation runs of this repository', () => {
 
     expect(runs).toEqual([
       expect.objectContaining({ name: 'whole-suite', tests: ['apps', 'packages'] }),
+    ]);
+  });
+});
+
+describe('BUG-10: the journey files, split by test level (D-095)', () => {
+  // SM-01 put journey guarantees in files no safety list named. D-095 makes
+  // all six need the owner's approval and the safety review; gate.test.mjs
+  // pins that. Here is the other half: mutation on every pull request, and
+  // the 95 % branch floor, only where the tests run in-process. The database
+  // files are proved by their L3 tests alone, which Stryker's runs do not
+  // start, so every mutant in them would survive and turn mutation red.
+  const safety = (file) =>
+    decideMutation({ changed: [file], onlyIfSafetyPathsChanged: true, configured: false });
+
+  test.each([['apps/server/src/modules/journeys/service.ts'], ['apps/server/src/api-process.ts']])(
+    'BUG-10: %s counts as safety code: its tests run in-process, so its mutants can be killed',
+    (file) => {
+      expect(safety(file).ok).toBe(false);
+    },
+  );
+
+  test.each([
+    ['apps/server/src/adapters/journeys.ts'],
+    ['apps/server/src/adapters/device-credentials.ts'],
+    ['apps/server/src/db/schema.ts'],
+    ['apps/server/src/db/migrations/0001_lying_ares.sql'],
+  ])(
+    'BUG-10: %s is not safety code for mutation: only its L3 tests can kill its mutants',
+    (file) => {
+      // The same question as the cases above, so this passing is not the
+      // harness passing everything: a safety path that covered this file,
+      // such as adapters/ or db/ whole, would turn it red.
+      expect(safety(file)).toMatchObject({ ok: true, action: 'skip' });
+    },
+  );
+
+  test('BUG-10: modules/journeys/ is mutated in one run, its own, against the journey system tests', () => {
+    // Those are the tests that drive the module through the API in-process.
+    // Which Vitest configuration the run uses is pinned in
+    // stryker-config.test.mjs, where the command is built.
+    const runs = mutationRuns().filter((run) =>
+      run.paths.includes('apps/server/src/modules/journeys/'),
+    );
+
+    expect(runs).toEqual([
+      expect.objectContaining({
+        name: 'journeys',
+        paths: ['apps/server/src/modules/journeys/'],
+        tests: ['apps/server/src/journeys.system.test.ts'],
+      }),
     ]);
   });
 });

@@ -479,6 +479,56 @@ describe("this repository's own workflows", () => {
       expect(ownersOf(file), file).not.toEqual([]);
     }
   });
+
+  // BUG-10 (D-092, D-094, D-095): SM-01 put journey guarantees in files no
+  // safety list named: the responder insert and its transaction, the index
+  // that allows one unended journey per walker, the device-credential check,
+  // and the one place the database clock is wired into the journey service.
+  // A pull request could change any of them with no owner and no safety
+  // review. All six need both now. The safety filter in ai-review.yml is
+  // reached through OWNER_APPROVAL_PATHS: the test above it holds that filter
+  // to every /apps/ path the owner must approve.
+  const JOURNEY_FILES = [
+    '/apps/server/src/adapters/journeys.ts',
+    '/apps/server/src/adapters/device-credentials.ts',
+    '/apps/server/src/db/schema.ts',
+    '/apps/server/src/db/migrations/',
+    '/apps/server/src/modules/journeys/',
+    '/apps/server/src/api-process.ts',
+  ];
+
+  test('BUG-10: the six journey files are paths the owner must approve, and so paths the safety filter in ai-review.yml lists', () => {
+    const kindOf = (owned) => {
+      const found = statSync(owned.replace(/^\//, '').replace(/\/$/, ''), {
+        throwIfNoEntry: false,
+      });
+      return found === undefined ? 'nothing' : found.isDirectory() ? 'a directory' : 'a file';
+    };
+
+    expect(JOURNEY_FILES.map((owned) => [owned, kindOf(owned)])).toEqual(
+      JOURNEY_FILES.map((owned) => [owned, owned.endsWith('/') ? 'a directory' : 'a file']),
+    );
+    expect(JOURNEY_FILES.filter((owned) => !OWNER_APPROVAL_PATHS.includes(owned))).toEqual([]);
+  });
+
+  test('BUG-10: .github/CODEOWNERS gives every file in them to the owner: gate:integrity finds every owner-approval path owned, and the last line matching each file names an owner', () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+    const listed = spawnSync(
+      'git',
+      ['ls-files', '--', ...JOURNEY_FILES.map((owned) => owned.slice(1))],
+      { encoding: 'utf8' },
+    );
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      JOURNEY_FILES.filter((owned) => !files.some((file) => file.startsWith(owned.slice(1)))),
+      'paths that hold no file git tracks',
+    ).toEqual([]);
+    expect(files.filter((file) => ownersOf(file).length === 0)).toEqual([]);
+  });
 });
 
 describe('the ruleset the owner imports', () => {

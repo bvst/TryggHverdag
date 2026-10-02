@@ -72,8 +72,13 @@ describe('the paths these rules cover', () => {
   test('the server domain and the app safety core, which is where decisions are made', () => {
     // The safety core's .tsx files too, amended 2026-09-26: .tsx is normal in
     // the app, and a component in the safety core is safety code like any other.
+    //
+    // And the server's modules, amended for BUG-10 (D-092, D-095): the
+    // journey service decides when a journey started, and every module is
+    // handed its clock, so none of them may read one.
     expect(CLOCK_FREE_PATHS).toEqual([
       'apps/server/src/domain/**/*.ts',
+      'apps/server/src/modules/**/*.ts',
       'apps/mobile/src/safety-core/**/*.{ts,tsx}',
     ]);
   });
@@ -83,6 +88,13 @@ describe('the paths these rules cover', () => {
     'apps/mobile/src/safety-core/journey/check-in-view.tsx',
   ])('AR-03: a .tsx file in the app safety core may not read the clock either: %s', (file) => {
     expect(complaintsAt(file, COMPONENT)).toEqual([expect.stringContaining('AR-03')]);
+  });
+
+  test.each([
+    'apps/server/src/modules/journeys/service.ts',
+    'apps/server/src/modules/health/service.ts',
+  ])('BUG-10: AR-03: a .ts file in the server modules may not read the clock: %s', (file) => {
+    expect(complaintsAt(file, 'const t = Date.now();')).toEqual([expect.stringContaining('AR-03')]);
   });
 
   test('AR-06: nor keep time in memory there', () => {
