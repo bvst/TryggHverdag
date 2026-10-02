@@ -11,24 +11,28 @@
 //
 // So do the runs (D-066, amended by the owner 2026-09-25). scripts/mutation.mjs
 // runs Stryker once per run of mutationRuns() and names it in STRYKER_RUN; the
-// config then mutates that run's paths against that run's tests. Unset, it is
-// the single run it always was: every safety path against the whole suite.
+// config then mutates that run's paths against that run's tests, and writes
+// the JSON report the gate judges the run by (D-098).
 import process from 'node:process';
-import { SAFETY_PATHS, WHOLE_SUITE, mutationRuns } from './scripts/lib/gate-decisions.mjs';
+import { mutationReportFile, mutationRuns } from './scripts/lib/gate-decisions.mjs';
 
 /**
- * The run STRYKER_RUN names. A name no run has throws rather than falling back
- * to every path against the whole suite, which the log would never explain.
+ * The run STRYKER_RUN names. Unset, Stryker refuses to start: a run outside
+ * `pnpm run mutation` is judged by nothing but Stryker's own score, in which a
+ * timed-out mutant counts as caught, so 84 timeouts and no kill scored 100 %
+ * on #53 (D-098). A name no run has throws too, rather than falling back to
+ * every path against the whole suite, which the log would never explain.
  *
  * @param {string | undefined} name
  */
 function chosenRun(name) {
   if (name === undefined) {
-    return {
-      paths: SAFETY_PATHS,
-      tests: WHOLE_SUITE,
-      incrementalFile: 'reports/stryker-incremental.json',
-    };
+    throw new Error(
+      'STRYKER_RUN is not set, so no mutation run is named. Run mutation testing with ' +
+        '`pnpm run mutation`: it starts each run, names it here, and judges its report file ' +
+        'by file. Stryker on its own counts a timed-out mutant as caught, and nothing would ' +
+        'judge it (D-098).',
+    );
   }
   const runs = mutationRuns();
   const run = runs.find((candidate) => candidate.name === name);
@@ -53,6 +57,43 @@ const mutate = run.paths.map((path) => (path.endsWith('/') ? `${path}**/*.ts` : 
  */
 const vitestConfig = run.config === undefined ? '' : `--config ${run.config} `;
 
+/**
+ * How long Vitest lets one test, and one hook, run (D-098). Without these,
+ * vitest.config.mjs gives a test 60 s, and Stryker stops a mutant long
+ * before: a mutant that makes a test wait forever was recorded as a timeout,
+ * which Stryker counts as caught, rather than as the failed test it is.
+ *
+ * Above the longest any test waits on purpose, so that test still fails by
+ * its own assertion: bin.test.ts waits up to 15 s for a process to start,
+ * then 1.5 s more. And far above how long a test takes on a busy machine: on
+ * two cores, with ten of these runs at once (Stryker runs two), the slowest
+ * test of every group took 4.1 s, bin.test.ts's BUG-3 test (2.3 s alone).
+ * The only hook, healthchecks.test.ts's afterEach, closes servers in
+ * milliseconds; it gets the same limit. Measured for BUG-12, 2026-10-02.
+ */
+const VITEST_TIMEOUT_MS = 20_000;
+
+/**
+ * Stryker's own allowance on top of 1.5 times the clean run. Inside it, Vitest
+ * must start, fail the waiting test, stop at --bail 1 and exit. With a hang
+ * planted by hand, two runs at once on two cores, that took 23.3 s in the
+ * process run (allowed 51 s) and 22.7 s in the api-process run (allowed 39 s),
+ * with a server and a pool left open. Under the ten-run load above, the
+ * api-process run's start alone rose to 9 s: about 31 s in all, which 10 s
+ * over Vitest's limit would leave almost no room for. Measured for BUG-12.
+ */
+const STRYKER_TIMEOUT_MS = VITEST_TIMEOUT_MS + 15_000;
+
+/**
+ * --bail 1: a mutant that makes several tests wait would otherwise take
+ * several times the per-test timeout, and Stryker would stop it as a timeout
+ * after all. The command runner reads only the exit code, so the first
+ * failure is all it needs.
+ */
+const vitestOptions =
+  `--testTimeout=${String(VITEST_TIMEOUT_MS)} --hookTimeout=${String(VITEST_TIMEOUT_MS)} ` +
+  '--bail=1 ';
+
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
 export default {
   packageManager: 'pnpm',
@@ -76,8 +117,9 @@ export default {
     // The whole suite is apps and packages only. A mutant in safety code can
     // only be killed by a test of the product; the hook and script tests would
     // add seconds per mutant and could never fail because of one.
-    command: `pnpm exec vitest run ${vitestConfig}${run.tests.join(' ')}`,
+    command: `pnpm exec vitest run ${vitestConfig}${vitestOptions}${run.tests.join(' ')}`,
   },
+  timeoutMS: STRYKER_TIMEOUT_MS,
 
   // Tests are not mutated, and neither is anything outside a safety path: the
   // score has to mean "the safety rules are protected", not be diluted by
@@ -97,7 +139,10 @@ export default {
 
   // One per run: a run's file records its mutants against its own tests.
   incrementalFile: run.incrementalFile,
-  reporters: ['clear-text', 'progress'],
+  // The JSON report is what the gate judges, file by file (D-098). One per
+  // run, so a run never reads another's.
+  reporters: ['clear-text', 'progress', 'json'],
+  jsonReporter: { fileName: mutationReportFile(run.name) },
 
   // A surviving mutant is a real finding, so the report has to name it rather
   // than summarise it away.
