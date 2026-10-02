@@ -3100,3 +3100,50 @@ any other path is work, not a candidate for the same treatment.
   strengthened so a process clock fails it.
 - **Consequences:** BUG-10 stays one pull request merged by hand (D-075).
   Supersedes nothing.
+
+## D-098 — A mutant counts as caught only when a test fails on it, file by file (BUG-12)
+- **Date:** 2026-10-02 · **Status:** Accepted (delegated, D-031). It is
+  stricter than before and loosens nothing; the owner chose BUG-12's scope
+  (2026-10-02) · **Section:** 6 (refines D-036 and D-066)
+- **Context:** On #53, CI's required `mutation` check passed with a whole-suite
+  run whose 84 mutants **all timed out, 0 killed**. Stryker scores a timeout as
+  detected, so it reported 100 % (job 110739523389). `safety-reviewer`
+  reproduced 8 of 8 timeouts scoring 100 % on a loaded session machine, so
+  this is not only CI. There are two causes:
+  - Stryker gives each mutant about 1.5 × the clean run plus 5 s, while
+    `vitest.config.mjs` gives each test 60 s. A mutant that makes a test wait
+    forever is therefore stopped by Stryker, as a "timeout", before Vitest can
+    fail the test.
+  - On a busy machine, runs that were never going to fail are stopped the same
+    way.
+
+  The score is pooled per run, so `api-process.ts` at 62.5 % sat inside a
+  passing run.
+- **Decision:**
+  - The gate reads each run's Stryker JSON report. **Only a killed mutant
+    counts as caught.** Each mutated file must reach 80 % (D-036's threshold)
+    of killed ÷ (killed + survived + timed out + no coverage) on its own.
+  - The output names each failing file with its counts. A run with no report,
+    or with no mutants, fails.
+  - The mutation command gives Vitest a per-test timeout well below Stryker's
+    per-mutant allowance. A test that waits forever then fails inside Vitest:
+    that mutant is killed, not timed out.
+  - Every safety file that exists gets a group with the tests that can kill
+    it. That removes the slow whole-suite run, which is what timed out.
+  - The run starts when its inputs change, not only its safety paths:
+    - a group's tests and configuration;
+    - `stryker.config.mjs`, `scripts/lib/gate-decisions.mjs` and
+      `scripts/mutation.mjs`;
+    - the root Vitest configuration.
+  - Unset `STRYKER_RUN`, Stryker refuses to start: a run outside
+    `pnpm run mutation` is judged by nothing.
+- **Consequences:**
+  - A mutant that can only be detected by hanging, such as a synchronous
+    infinite loop, counts against the file. If one is real, it is excluded in
+    the code with a reason, where review sees it.
+  - The 25-minute budget is not raised here. If an honest run does not fit, the
+    choice goes to the owner (cost).
+  - Not included: a dependency update that changes Stryker or Vitest does not
+    trigger the run. Adding the lockfile would run mutation on every
+    Dependabot pull request. That is a cost question, for the owner if it
+    comes up.
