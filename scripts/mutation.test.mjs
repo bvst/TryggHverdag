@@ -25,7 +25,24 @@
 //   run had anything to mutate measured nothing, so it fails.
 // The fakes below therefore also stand in for the report each run writes and
 // for the question "is there anything to mutate here".
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+//
+// D-099 (owner, 2026-10-02) makes every run fresh. With the command runner
+// Stryker has no coverage data, so its incremental mode reuses every earlier
+// result in code that has not changed, whatever happened to the tests: a
+// test file gutted to assert nothing scored 100 % incremental and 0 % fresh.
+// So `pnpm run mutation --incremental` is refused before any Stryker run
+// starts, and Stryker is never asked for incremental mode.
+import { spawnSync } from 'node:child_process';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -551,9 +568,18 @@ describe('strykerRunner', () => {
     return { calls, run };
   }
 
+  // BUG-12 (RG-03), for this test and the next, both on main: each passed
+  // strykerRunner an `incremental` option, and this one expected
+  // `--incremental` among Stryker's arguments when it was true. The owner's
+  // D-099 (2026-10-02) makes every run fresh: with the command runner Stryker
+  // has no coverage data, so an incremental run reuses earlier results
+  // whatever happened to the tests, and a gutted test file scored 100 %. The
+  // change only removes that reuse, so the run these tests pin is stricter.
+  // This one still pins the name, the time, the directory and the exact
+  // arguments; the next now pins that no caller can ask for reuse.
   test('starts Stryker with STRYKER_RUN naming the run, in the time it was given', () => {
     const { calls, run } = recordingRun();
-    const runStryker = strykerRunner({ run, cwd: '/repo', incremental: true });
+    const runStryker = strykerRunner({ run, cwd: '/repo' });
 
     const result = runStryker({ name: 'healthchecks', timeout: 21 * MINUTE });
 
@@ -561,19 +587,131 @@ describe('strykerRunner', () => {
     expect(calls).toEqual([
       {
         command: 'pnpm',
-        args: ['exec', 'stryker', 'run', '--incremental'],
+        args: ['exec', 'stryker', 'run'],
         options: { cwd: '/repo', timeout: 21 * MINUTE, env: { STRYKER_RUN: 'healthchecks' } },
       },
     ]);
   });
 
-  test('without --incremental, Stryker is not asked for it', () => {
-    const { calls, run } = recordingRun();
-    const runStryker = strykerRunner({ run, cwd: '/repo', incremental: false });
+  // BUG-12 (RG-03): was "without --incremental, Stryker is not asked for it",
+  // with `incremental: false` only. That case is still here, with the two a
+  // caller could still write after D-099: no option at all, and a stale
+  // `incremental: true`, which must not bring the reuse back.
+  test('BUG-12: Stryker is never asked for incremental mode, whatever the caller passes (D-099)', () => {
+    for (const asked of [{}, { incremental: false }, { incremental: true }]) {
+      const { calls, run } = recordingRun();
+      const runStryker = strykerRunner({ run, cwd: '/repo', ...asked });
 
-    runStryker({ name: 'domain', timeout: 25 * MINUTE });
+      runStryker({ name: 'domain', timeout: 25 * MINUTE });
 
-    expect(calls.map((call) => call.args)).toEqual([['exec', 'stryker', 'run']]);
-    expect(calls[0]?.options.env).toEqual({ STRYKER_RUN: 'domain' });
+      expect(
+        calls.map((call) => call.args),
+        JSON.stringify(asked),
+      ).toEqual([['exec', 'stryker', 'run']]);
+      expect(calls[0]?.options.env).toEqual({ STRYKER_RUN: 'domain' });
+    }
   });
+});
+
+describe('D-099: `pnpm run mutation --incremental` is refused', () => {
+  // Through the real script, as `pnpm run mutation` starts it: the refusal
+  // has to come from main, before any run starts, and only the script itself
+  // can show that. It runs in a scratch repository where every run would
+  // start, against a stand-in `pnpm` that records each call and starts
+  // nothing. So the real Stryker never runs here, even while the refusal is
+  // missing, and a Stryker run that did start is on record.
+  const made = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  const script = realpathSync(path.join(root, 'scripts', 'mutation.mjs'));
+
+  /**
+   * A scratch repository in which `pnpm run mutation` would start every run:
+   * a Stryker config, and a source file in each run's safety paths, untracked,
+   * so that --only-if-safety-paths-changed finds them changed. Beside it, the
+   * only `pnpm` on PATH, which logs each call to `started` and exits 1.
+   */
+  function scratchRepository() {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'd099-incremental-')));
+    made.push(dir);
+    const repo = path.join(dir, 'repo');
+    const bin = path.join(dir, 'bin');
+    const started = path.join(dir, 'stryker-started.log');
+    mkdirSync(repo);
+    writeFileSync(path.join(repo, 'stryker.config.mjs'), 'export default {};\n');
+    for (const run of mutationRuns()) {
+      for (const p of run.paths) {
+        const file = p.endsWith('/') ? path.join(repo, p, 'planted.ts') : path.join(repo, p);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, 'export const planted = 1;\n');
+      }
+    }
+    const init = spawnSync('git', ['init', '-q'], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: { PATH: process.env.PATH, HOME: process.env.HOME },
+    });
+    if (init.status !== 0) throw new Error(`git init failed:\n${init.stderr}`);
+    mkdirSync(bin);
+    writeFileSync(
+      path.join(bin, 'pnpm'),
+      ['#!/bin/sh', `echo "STRYKER_RUN=$STRYKER_RUN pnpm $*" >> "${started}"`, 'exit 1', ''].join(
+        '\n',
+      ),
+    );
+    chmodSync(path.join(bin, 'pnpm'), 0o755);
+    return { repo, bin, started };
+  }
+
+  /** `node scripts/mutation.mjs ...args` in `repo`, with the stand-in first on PATH. */
+  function mutation({ repo, bin }, args) {
+    const result = spawnSync(process.execPath, [script, ...args], {
+      cwd: repo,
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, HOME: process.env.HOME },
+    });
+    return { ...result, output: `${result.stdout}${result.stderr}` };
+  }
+
+  /** What the stand-in recorded: every Stryker run that started, one line each. */
+  const starts = (started) => (existsSync(started) ? readFileSync(started, 'utf8') : '');
+
+  test.each([
+    ['--incremental'],
+    // As gate:full and ci.yml passed it before D-099.
+    ['--incremental --only-if-safety-paths-changed --base origin/main'],
+    ['--only-if-safety-paths-changed --base origin/main --incremental'],
+  ])(
+    'D-099: `pnpm run mutation %s` exits non-zero before any Stryker run starts, naming D-099 and why',
+    (line) => {
+      const args = line.split(' ');
+      const repository = scratchRepository();
+
+      // The scratch repository is one in which the same line without
+      // --incremental starts Stryker, through the stand-in. Without this, "no
+      // run started" below could hold only because nothing would have.
+      const fresh = mutation(
+        repository,
+        args.filter((arg) => arg !== '--incremental'),
+      );
+      expect(fresh.error, fresh.output).toBeUndefined();
+      expect(starts(repository.started), fresh.output).toContain('pnpm exec stryker run');
+      rmSync(repository.started);
+
+      const refused = mutation(repository, args);
+
+      expect(refused.error, refused.output).toBeUndefined();
+      expect(refused.signal, refused.output).toBeNull();
+      expect(refused.status, refused.output).not.toBe(0);
+      expect(starts(repository.started), 'a Stryker run started').toBe('');
+      expect(refused.output).toContain('D-099');
+      expect(refused.output).toContain('--incremental');
+      // Why: results reused without coverage can hide a gutted test.
+      expect(refused.output).toMatch(/reus/i);
+      expect(refused.output).toMatch(/coverage/i);
+    },
+  );
 });

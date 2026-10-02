@@ -17,9 +17,14 @@
 // outside `pnpm run mutation` is judged by nothing, and Stryker counts a
 // timed-out mutant as caught. So the runs are compared with each other: every
 // run must have the same config apart from what it mutates, the tests it
-// runs, and the two files it writes. Each run also writes a JSON report the
+// runs, and the report it writes. Each run also writes a JSON report the
 // gate reads, and gives Vitest a per-test timeout well inside Stryker's, so a
 // test that would wait forever fails in Vitest and kills its mutant.
+//
+// D-099 (owner, 2026-10-02): every run is fresh, so no run writes or reads an
+// incremental file. With the command runner Stryker has no coverage data, and
+// its incremental mode reused every earlier result in unchanged code whatever
+// happened to the tests: a gutted test file scored 100 %, and 0 % fresh.
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -116,13 +121,16 @@ const withoutMutationOptions = (command) =>
 
 /**
  * The config with what a run is meant to change taken out: what it mutates,
- * the tests its command runs, and the two files it writes. What is left must
- * be the same in every run.
+ * the tests its command runs, and the report it writes. What is left must be
+ * the same in every run.
+ *
+ * BUG-12 (RG-03): this also took out each run's incremental file. D-099 (the
+ * owner's) leaves no run one, so it stays in, and a run that wrote its own
+ * would now differ from the others here. Stricter: less is left out.
  */
 function apartFromTheRun(config) {
   const shared = structuredClone(config);
   delete shared.mutate;
-  delete shared.incrementalFile;
   delete shared.commandRunner.command;
   if (shared.jsonReporter !== undefined) delete shared.jsonReporter.fileName;
   return shared;
@@ -152,7 +160,7 @@ describe('stryker.config.mjs', () => {
     expect(error?.message).toContain('pnpm run mutation');
   });
 
-  test('every run has the same config apart from what it mutates, the tests it runs and the files it writes', async () => {
+  test('every run has the same config apart from what it mutates, the tests it runs and the report it writes', async () => {
     // BUG-12 (RG-03): this holds what each run's "equals the config with no
     // run named, apart from three settings" held before, now that that config
     // throws. The honest settings that test pinned on the unnamed config are
@@ -179,6 +187,13 @@ describe('stryker.config.mjs', () => {
   // which holds them for every run. Its command is read without the options
   // BUG-12 adds to every run (the per-test and hook timeouts and --bail),
   // which BUG-12's own tests pin.
+  //
+  // BUG-12 (RG-03), D-099, for the six run tests that follow: each pinned its
+  // run's own incremental file, reports/stryker-<run>.json. The owner's D-099
+  // (2026-10-02) makes every run fresh, so each now pins that its run has
+  // none. The change only removes the reuse of earlier results, so the run is
+  // stricter. The test after them holds the same for every run, and that
+  // `incremental` is never switched on.
   test('the domain run mutates the domain and runs only the domain tests', async () => {
     const config = await configFor('domain');
 
@@ -186,7 +201,7 @@ describe('stryker.config.mjs', () => {
     expect(withoutMutationOptions(config.commandRunner.command)).toBe(
       'pnpm exec vitest run apps/server/src/domain',
     );
-    expect(config.incrementalFile).toBe('reports/stryker-domain.json');
+    expect(config.incrementalFile).toBeUndefined();
   });
 
   test('the healthchecks run mutates the adapter and runs its tests and the worker tests', async () => {
@@ -196,7 +211,7 @@ describe('stryker.config.mjs', () => {
     expect(withoutMutationOptions(config.commandRunner.command)).toBe(
       'pnpm exec vitest run apps/server/src/adapters/healthchecks.test.ts apps/server/src/worker.test.ts',
     );
-    expect(config.incrementalFile).toBe('reports/stryker-healthchecks.json');
+    expect(config.incrementalFile).toBeUndefined();
   });
 
   test("BUG-10: the journeys run mutates modules/journeys/ and runs the journey system tests, under the system tests' configuration", async () => {
@@ -208,7 +223,7 @@ describe('stryker.config.mjs', () => {
 
     expect(config.mutate).toEqual(['apps/server/src/modules/journeys/**/*.ts', ...EXCLUSIONS]);
     expect(config.commandRunner.command).toMatch(/^pnpm exec vitest run /);
-    expect(config.incrementalFile).toBe('reports/stryker-journeys.json');
+    expect(config.incrementalFile).toBeUndefined();
     const args = vitestArgs(config.commandRunner.command);
     expect(configNamedIn(args)).toBe('vitest.system.config.mjs');
     expect(filesRunWith(args)).toEqual(['apps/server/src/journeys.system.test.ts']);
@@ -230,7 +245,7 @@ describe('stryker.config.mjs', () => {
     expect(withoutMutationOptions(config.commandRunner.command)).toBe(
       'pnpm exec vitest run apps/server/src/bin/bin.test.ts apps/server/src/worker.test.ts apps/server/src/process.test.ts',
     );
-    expect(config.incrementalFile).toBe('reports/stryker-process.json');
+    expect(config.incrementalFile).toBeUndefined();
     expect(filesRunWith(vitestArgs(config.commandRunner.command)).toSorted()).toEqual([
       'apps/server/src/bin/bin.test.ts',
       'apps/server/src/process.test.ts',
@@ -245,7 +260,7 @@ describe('stryker.config.mjs', () => {
     expect(withoutMutationOptions(config.commandRunner.command)).toBe(
       'pnpm exec vitest run apps/server/src/api-process.test.ts',
     );
-    expect(config.incrementalFile).toBe('reports/stryker-api-process.json');
+    expect(config.incrementalFile).toBeUndefined();
     expect(filesRunWith(vitestArgs(config.commandRunner.command))).toEqual([
       'apps/server/src/api-process.test.ts',
     ]);
@@ -264,7 +279,7 @@ describe('stryker.config.mjs', () => {
     expect(withoutMutationOptions(config.commandRunner.command)).toBe(
       'pnpm exec vitest run apps packages',
     );
-    expect(config.incrementalFile).toBe('reports/stryker-whole-suite.json');
+    expect(config.incrementalFile).toBeUndefined();
   });
 
   test('across the runs, every safety path is mutated exactly once', async () => {
@@ -300,6 +315,20 @@ describe('stryker.config.mjs', () => {
 
       expect(config.reporters, run.name).toEqual(expect.arrayContaining(['clear-text', 'json']));
       expect(config.jsonReporter?.fileName, run.name).toBe(`reports/mutation/${run.name}.json`);
+    }
+  });
+
+  test('BUG-12: no run writes or reads an incremental file: no run has an incrementalFile, and none switches incremental on (D-099)', async () => {
+    // With the command runner Stryker has no coverage data, so an incremental
+    // run reuses every earlier result in code that has not changed, whatever
+    // happened to the tests. safety-reviewer replaced api-process.test.ts with
+    // a test asserting nothing: the incremental run scored 100 %, a fresh one
+    // 0 %. The owner's D-099: every run is fresh.
+    for (const run of mutationRuns()) {
+      const config = await configFor(run.name);
+
+      expect(config.incrementalFile, `${run.name}: incrementalFile`).toBeUndefined();
+      expect(config.incremental, `${run.name}: incremental`).not.toBe(true);
     }
   });
 
