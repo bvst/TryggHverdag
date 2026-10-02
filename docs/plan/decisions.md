@@ -2985,3 +2985,31 @@ any other path is work, not a candidate for the same treatment.
   predates this decision; the spike code is throwaway and never imported.
 - **Consequences:** BUG-11 is its own small pull request to `main`, and the
   same change is ported into #53 so SM-01 can merge. Supersedes nothing.
+
+## D-094 — BUG-10's scope: `api-process.ts` joins D-092; the pnpm settings files and the contracts source stay unowned
+- **Date:** 2026-10-02 · **Status:** Accepted (owner, 2026-10-02). Two answers
+  in session · **Section:** 6/8 (amends D-092's list)
+- **Context:**
+  - D-092 named five journey files to become safety paths. `safety-reviewer`
+    had also named `apps/server/src/api-process.ts`, which wires the database
+    clock into the journey service; D-092 left it for BUG-10's spec to ask.
+  - On SM-01 (#53) and BUG-11 (#54), `privacy-security-reviewer`,
+    `test-auditor` and `code-reviewer` suggested putting `/pnpm-workspace.yaml`,
+    `/.npmrc` and `packages/contracts/src/` under the owner's approval too.
+- **Decision:**
+  1. **`apps/server/src/api-process.ts` becomes a safety path with D-092's
+     five** (asked with Claude's recommendation, "Yes, add it"; the owner
+     chose it). It is the one file that wires the database clock into the
+     journey service: a process clock there would move every safety decision
+     off database time (REL-01) unnoticed. The cost is small, because every
+     M2 task already needs the owner's approval through `domain/`.
+  2. **`/pnpm-workspace.yaml`, `/.npmrc` and `packages/contracts/src/` stay
+     without a code owner** ("it's fine as is", the owner, 2026-10-02,
+     declining the optional suggestion). What already guards them:
+     `scripts/dependency-audit.test.mjs` (owned, in `/scripts/`) fails if
+     either pnpm file sets any audit or hook setting (D-093), and the
+     ai-review `safety` filter already lists `packages/contracts/**`, so a
+     contract change gets the safety review.
+- **Consequences:** BUG-10 makes six paths safety paths. Reviewers who
+  suggest owning the pnpm files or the contracts source again can be pointed
+  here. Supersedes nothing; amends D-092's list.
