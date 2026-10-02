@@ -59,8 +59,12 @@ export function planSteps(steps, scripts, env = {}, available = {}) {
  * Runs a plan in order and stops at the first failure: a later step's output is
  * rarely useful once an earlier one is red.
  *
+ * A step's own `timeout`, in milliseconds, goes to `execute` with its
+ * command. A step without one passes `timeout: undefined`, which leaves the
+ * runner's default (proc.mjs's `run` gives 590 s).
+ *
  * @param {ReturnType<typeof planSteps>} plan
- * @param {(command: string[]) => { ok: boolean, output: string }} execute
+ * @param {(command: string[], options: { timeout: number | undefined }) => { ok: boolean, output: string }} execute
  */
 export function runPlan(plan, execute) {
   const results = [];
@@ -69,7 +73,7 @@ export function runPlan(plan, execute) {
       results.push({ name: planned.step.name, status: 'skipped', detail: planned.reason });
       continue;
     }
-    const result = execute(planned.step.command);
+    const result = execute(planned.step.command, { timeout: planned.step.timeout });
     results.push({
       name: planned.step.name,
       status: result.ok ? 'passed' : 'failed',

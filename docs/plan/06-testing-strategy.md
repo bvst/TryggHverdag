@@ -54,7 +54,8 @@
   was released on 14 August 2026 and works with Vitest.
   Source: https://nevercodealone.de/de/frontend-development/strykerjs-mutation-testing-javascript-typescript-2026
 - An incremental mode only re-tests what changed, which keeps pull-request
-  runs fast, and a threshold can fail the build.
+  runs fast, and a threshold can fail the build. (Not used here: with the
+  command runner it reuses results whatever happened to the tests, D-099.)
   Sources: https://github.com/stryker-mutator/stryker-js/commit/82bea5604c81c1ccf76d44827ad3922cfb61463b ·
   https://oneuptime.com/blog/post/2026-01-25-mutation-testing-with-stryker/view
 - **Implication:** This is how we can be confident the tests are "sufficient",
@@ -100,7 +101,8 @@ share of planted bugs the tests caught.
 This matters here because the same AI writes the code and its tests. It can
 produce tests that run every line (so coverage looks perfect) but check too
 little. Mutation testing exposes that. It is slow, so it runs only on
-safety-critical code: incrementally on each pull request, fully every night.
+safety-critical code: in full on each pull request that touches it or the
+run's inputs (D-098, D-099); a nightly run is still to come (D-036).
 
 ## Test levels
 

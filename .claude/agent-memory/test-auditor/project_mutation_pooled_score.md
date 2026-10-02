@@ -24,3 +24,8 @@ task that adds safety-core code will lean on this belief.
 extensions. Check which run they fall into and whether that run's score could hide them. Before repeating this
 finding, see whether safety-core now has its own group, a `{ts,tsx}` glob, or a jest command.
 Related: [[safety-test-gate-gaps]], [[stryker-incremental-reuse]]
+
+**Resolved by D-098 (BUG-12, 2026-10-02).** The gate judges every file from the run JSON report, and only Killed counts.
+Every existing safety file has a group. The whole-suite run holds only the empty alerts/ and safety-core/ and is not
+started while they are empty. A repository test (matching .ts and .tsx) fails the day either gets a file without a
+group. The .ts-only mutate glob remains, so a safety-core .tsx will need a jest-expo group (docs/progress/m2.md).

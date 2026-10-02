@@ -1,4 +1,6 @@
-- [Mutation gate skips test-only changes](project_mutation_gate_skips_test_only.md) — safety-test edits don't trigger Stryker in CI; no nightly run yet
+- [BUG-12 review](project_bug12_mutation_gate_review.md) — PASS 7f6c3a7; open: --incremental reuses all, vanished safety file passes, RuntimeError/Ignored unnamed, journey clock unproven in api-process
+- [Mutation gate checks](feedback_mutation_gate_checks.md) — synthetic reports through the real judge, one group through runMutationGroups, Stryker command-runner facts
+- [Mutation gate skips test-only changes](project_mutation_gate_skips_test_only.md) — CLOSED for group tests/configs/test-kit by D-098 (BUG-12); no nightly run yet
 - [Spawned-process test review](feedback_spawned_process_tests.md) — exitCode-null vs signal deaths, output after 'exit', windows can't prove "never", onTestFinished kills
 - [Reviewer sandbox limits](reference_reviewer_sandbox_limits.md) — hook blocks `>`, file writes, `cp` as a word; file-free fault injection via NODE_OPTIONS data: URLs
 - [changedFiles rename blind spot](project_changed_files_rename_blind_spot.md) — CLOSED: git.mjs uses `--no-renames` (seen 2026-10-02)

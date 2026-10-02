@@ -22,3 +22,5 @@ See [[spawned-process-test-review]] and [[reviewer-sandbox-limits]].
 or a group's vitest config touches no SAFETY_PATHS file, so CI skips mutation and the new config is first
 run on the next safety PR. Still no nightly workflow (only daily-status.yml is scheduled). Emulate with
 `node --input-type=module -e` importing decideMutation and changedFiles from scripts/lib.
+
+**Closed by D-098 (BUG-12, checked 2026-10-02):** decideMutation now also runs on a change to any group's tests or config, packages/test-kit/, stryker.config.mjs, gate-decisions.mjs, mutation.mjs, vitest.config.mjs and vitest.shared.mjs (emulated: bin.test.ts-only and worker.test.ts-only now run). Still skipped: product files outside SAFETY_PATHS (config.ts, adapters/clock.ts, api.ts), scripts/lib/proc.mjs and git.mjs, package.json (the last three owner-gated via /scripts/ and /package.json), the lockfile (owner cost question). Still no nightly workflow.

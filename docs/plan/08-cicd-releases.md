@@ -138,7 +138,7 @@ one phone.
 | CI-05 | System tests: full flows with fakes and a controlled clock | L6 |
 | CI-06 | API compatibility with every supported app version | L4, RG-08 |
 | CI-07 | Requirement coverage, test-change detector, coverage ratchet | RG-01, RG-03, RG-04 |
-| CI-08 | Mutation testing (incremental) when safety paths change | RG-05, D-036 |
+| CI-08 | Mutation testing, always a fresh run, when safety paths or the run's inputs change | RG-05, D-036, D-098, D-099 |
 | CI-09 | Android UI tests (Maestro on an emulator) against a test server | L7 |
 | CI-10 | Security: dependency audit, secret scan, licence check | SEC-06 |
 | CI-11 | AI reviews: safety, privacy and test-auditor are **blocking**; code and a11y-i18n are advisory | D-043 |

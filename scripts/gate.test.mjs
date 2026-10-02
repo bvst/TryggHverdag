@@ -20,6 +20,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterAll, describe, expect, test } from 'vitest';
 import { FULL_STEPS, QUICK_STEPS, availableTools } from './gate.mjs';
 import { APK } from './lib/e2e-android.mjs';
@@ -79,6 +80,121 @@ describe('the gate step lists', () => {
   test('a step that cannot run yet says which task brings it', () => {
     for (const step of FULL_STEPS.filter((s) => s.arrivesIn !== undefined)) {
       expect(step.arrivesIn).toMatch(/^INF-\d\d$/);
+    }
+  });
+});
+
+describe("BUG-12: gate:full's mutation step runs fresh, with the whole mutation budget (D-099)", () => {
+  // D-099 (owner, 2026-10-02). gate:full passed --incremental, and with the
+  // command runner Stryker has no coverage data, so a local run reused every
+  // earlier result in unchanged code whatever had happened to the tests: a
+  // gutted api-process.test.ts scored 100 %. A fresh run may take the whole
+  // mutation budget, MUTATION_TIMEOUT_MS, and proc.mjs gives a command 590 s
+  // unless told otherwise: the step would be killed before its runs were
+  // judged. A step says how long it may take in `timeout`, in milliseconds,
+  // the name proc.mjs's `run` gives it; a step without one keeps the default.
+  const mutation = FULL_STEPS.find((step) => step.needsScript === 'mutation');
+  /** proc.mjs's default for a command that is given no timeout. */
+  const PROC_DEFAULT_MS = 590_000;
+  /** The whole budget, and a minute for pnpm and node to start and to print the verdict. */
+  const AT_LEAST_MS = MUTATION_TIMEOUT_MS + 60_000;
+
+  const made = [];
+  afterAll(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * Loaded before gate.mjs, with --import: replaces spawnSync, which proc.mjs's
+   * `run` calls, with a fake that records each call and the timeout it was
+   * given, and runs nothing. Every command passes at once. adb answers with a
+   * connected emulator, so L7 runs too.
+   */
+  const FAKE_SPAWN = [
+    "import { appendFileSync } from 'node:fs';",
+    "import childProcess from 'node:child_process';",
+    "import { syncBuiltinESMExports } from 'node:module';",
+    'childProcess.spawnSync = (command, args = [], options = {}) => {',
+    '  const call = { command, args, timeout: options.timeout ?? null };',
+    "  appendFileSync(process.env.FAKE_SPAWN_LOG, JSON.stringify(call) + '\\n');",
+    "  const stdout = command === 'adb' ? 'List of devices attached\\nemulator-5554\\tdevice\\n' : '';",
+    "  return { pid: 0, output: [null, stdout, ''], stdout, stderr: '', status: 0, signal: null };",
+    '};',
+    'syncBuiltinESMExports();',
+    '',
+  ].join('\n');
+
+  /**
+   * `pnpm run gate:full` as the gate runs it, from this repository's own
+   * package.json, with every step's command reaching the fake above. A
+   * synthetic GITHUB_TOKEN, so CI-01's step runs too. Returns what the gate
+   * printed and each `pnpm run` call it made.
+   */
+  function gateFull() {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'd099-gate-full-')));
+    made.push(dir);
+    const fake = path.join(dir, 'fake-spawn.mjs');
+    const log = path.join(dir, 'calls.jsonl');
+    writeFileSync(fake, FAKE_SPAWN);
+    const result = spawnSync(
+      process.execPath,
+      ['--import', pathToFileURL(fake).href, realpathSync('scripts/gate.mjs'), 'full'],
+      {
+        encoding: 'utf8',
+        timeout: 60_000,
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          GITHUB_TOKEN: 'synthetic-token-not-real',
+          FAKE_SPAWN_LOG: log,
+        },
+      },
+    );
+    const output = `${result.stdout}${result.stderr}`;
+    const calls = existsSync(log)
+      ? readFileSync(log, 'utf8')
+          .split('\n')
+          .filter((line) => line !== '')
+          .map((line) => JSON.parse(line))
+          .filter((call) => call.command === 'pnpm' && call.args[0] === 'run')
+      : [];
+    return { result, output, calls };
+  }
+
+  test('BUG-12: its command runs pnpm run mutation with no --incremental, still only when what the score is measured with changed', () => {
+    expect(mutation?.command.slice(0, 3)).toEqual(['pnpm', 'run', 'mutation']);
+    expect(mutation?.command.filter((arg) => arg.startsWith('--incremental'))).toEqual([]);
+    expect(mutation?.command).toContain('--only-if-safety-paths-changed');
+  });
+
+  test('BUG-12: it has a timeout of its own, at least the whole mutation budget and a minute more; no other step has one, so each keeps the default', () => {
+    expect(typeof mutation?.timeout, 'the mutation step has no timeout of its own').toBe('number');
+    expect(mutation?.timeout).toBeGreaterThanOrEqual(AT_LEAST_MS);
+    expect(Number.isFinite(mutation?.timeout)).toBe(true);
+    for (const step of [...QUICK_STEPS, ...FULL_STEPS].filter((s) => s !== mutation)) {
+      expect(step.timeout, step.name).toBeUndefined();
+    }
+  });
+
+  test("BUG-12: run by gate:full, the mutation step reaches spawnSync with at least the whole budget and a minute more, and every other step with proc.mjs's 590 s", () => {
+    // Through the real gate.mjs: a timeout on the step that main never hands
+    // to `run` would leave the step at 590 s, which is the bug.
+    const { result, output, calls } = gateFull();
+
+    expect(result.error, output).toBeUndefined();
+    expect(result.status, output).toBe(0);
+    expect(
+      calls.map((call) => call.args),
+      'gate:full ran each of its steps once',
+    ).toEqual(FULL_STEPS.map((step) => step.command.slice(1)));
+    const ran = calls.find((call) => call.args[1] === 'mutation');
+    expect(
+      ran?.timeout,
+      'the timeout the mutation step reached spawnSync with',
+    ).toBeGreaterThanOrEqual(AT_LEAST_MS);
+    expect(ran?.args, 'the arguments the mutation step ran with').not.toContain('--incremental');
+    for (const call of calls.filter((each) => each !== ran)) {
+      expect(call.timeout, call.args.join(' ')).toBe(PROC_DEFAULT_MS);
     }
   });
 });
@@ -326,6 +442,21 @@ describe("this repository's own workflows", () => {
 
     expect(MUTATION_TIMEOUT_MS).toBe(25 * 60_000);
     expect(Number(job?.[1])).toBe(30);
+  });
+
+  test("BUG-12: ci.yml's mutation job runs pnpm run mutation with no --incremental, and still with --only-if-safety-paths-changed and --base (D-099)", () => {
+    // CI keeps no cache, so its runs were already fresh (D-066's amendment).
+    // The flag goes anyway: `pnpm run mutation` now refuses it, and a job
+    // that passed it would fail on every pull request it runs on. The two
+    // flags that keep the run to the pull requests that need it, against the
+    // pull request's own base, stay. Comment lines are not read.
+    const runs = ciSteps('mutation').filter((step) => /\bpnpm run mutation\b/.test(step));
+
+    expect(runs, 'steps of the mutation job that run pnpm run mutation').toHaveLength(1);
+    const step = runs[0] ?? '';
+    expect(step).not.toMatch(/--incremental\b/);
+    expect(step).toMatch(/--only-if-safety-paths-changed\b/);
+    expect(step).toContain("--base origin/${{ github.base_ref || 'main' }}");
   });
 
   /**

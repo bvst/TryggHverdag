@@ -12,6 +12,7 @@ import {
   WHOLE_SUITE,
   decideApiDiff,
   decideMutation,
+  judgeMutationReport,
   judgeMutationRun,
   mutationRuns,
 } from './gate-decisions.mjs';
@@ -114,6 +115,78 @@ describe('decideMutation', () => {
     });
     expect(decision.ok).toBe(false);
   });
+
+  // D-098: the run starts when its inputs change, not only its safety paths.
+  // BUG-10's own pull request added the journeys group and its tests, touched
+  // no safety file, and so never ran that group on CI. A score is only as
+  // good as the tests and the settings it was measured with; a change to
+  // either is a change to the score.
+  const runsOnly = (file) =>
+    decideMutation({ changed: [file], onlyIfSafetyPathsChanged: true, configured: true });
+
+  test.each([
+    // A group's tests: the journeys group's.
+    ['apps/server/src/journeys.system.test.ts'],
+    // A group's own Vitest configuration: the journeys group's.
+    ['vitest.system.config.mjs'],
+    // What builds and judges the runs.
+    ['stryker.config.mjs'],
+    ['scripts/lib/gate-decisions.mjs'],
+    ['scripts/mutation.mjs'],
+    // The root configuration, under which every group without its own runs.
+    ['vitest.config.mjs'],
+    ['vitest.shared.mjs'],
+    // The test kit, whose fakes the groups' tests import: the api-process
+    // group's tests talk to fake-postgres.ts, and the others use its fakes
+    // too. A changed fake can change a score, so all of packages/test-kit/
+    // is an input, its index included.
+    ['packages/test-kit/src/fake-postgres.ts'],
+    ['packages/test-kit/src/index.ts'],
+  ])('BUG-12: a change to only %s starts the mutation run, and says so by name', (file) => {
+    const decision = runsOnly(file);
+
+    expect(decision).toMatchObject({ ok: true, action: 'run' });
+    expect(decision.message).toContain(file);
+  });
+
+  test("BUG-12: a change to only one of any group's tests starts the mutation run", () => {
+    // Every group, not only the ones named above: a group added later is a
+    // trigger with nothing else to remember. A folder of tests is changed by
+    // changing a test in it.
+    const changes = MUTATION_GROUPS.flatMap((group) => [
+      ...group.tests.map((test) => {
+        const at = path.join(root, test);
+        if (!existsSync(at) || !statSync(at).isDirectory()) return test;
+        const inside = readdirSync(at, { recursive: true }).find((file) =>
+          String(file).endsWith('.test.ts'),
+        );
+        return path.posix.join(test, String(inside));
+      }),
+      ...(group.config === undefined ? [] : [group.config]),
+    ]);
+
+    expect(changes.length).toBeGreaterThan(0);
+    for (const file of changes) {
+      expect(runsOnly(file), file).toMatchObject({ ok: true, action: 'run' });
+    }
+  });
+
+  test.each([
+    // A test in no group: not a test any mutation run starts.
+    ['apps/server/src/config.test.ts'],
+    ['docs/plan/README.md'],
+    // D-098 leaves dependency updates out: the lockfile would run mutation
+    // on every Dependabot pull request, a cost the owner has not chosen.
+    ['pnpm-lock.yaml'],
+    // Another package beside the test kit: only the test kit is an input.
+    ['packages/contracts/src/journeys.ts'],
+  ])('BUG-12: a change to only %s still has nothing to mutate', (file) => {
+    // The whole-suite run's tests are `apps` and `packages`, every product
+    // test. They are a catch-all, not a group's tests, so they are not
+    // triggers: if they were, every change to the product would start the
+    // mutation run.
+    expect(runsOnly(file)).toMatchObject({ ok: true, action: 'skip' });
+  });
 });
 
 describe('judgeMutationRun', () => {
@@ -145,6 +218,216 @@ describe('judgeMutationRun', () => {
     expect(verdict.message).toContain('spawnSync pnpm ETIMEDOUT');
     expect(verdict.message).toContain('no mutation score was measured');
     expect(verdict.message).not.toContain('below 80');
+  });
+});
+
+/**
+ * A Stryker JSON report (mutation-testing-report-schema), from counts:
+ * `{ 'a.ts': { Killed: 3, Timeout: 1 } }` gives a.ts four mutants with those
+ * statuses. The fields a mutant must have are filled in; the judge reads only
+ * where it is and what became of it.
+ */
+function reportOf(files) {
+  let id = 0;
+  return {
+    schemaVersion: '1.0',
+    thresholds: { high: 90, low: 80 },
+    files: Object.fromEntries(
+      Object.entries(files).map(([file, counts]) => [
+        file,
+        {
+          language: 'typescript',
+          source: '',
+          mutants: Object.entries(counts).flatMap(([status, count]) =>
+            Array.from({ length: count }, () => {
+              id += 1;
+              return {
+                id: String(id),
+                mutatorName: 'BlockStatement',
+                replacement: '{}',
+                status,
+                location: { start: { line: id, column: 1 }, end: { line: id, column: 3 } },
+              };
+            }),
+          ),
+        },
+      ]),
+    ),
+  };
+}
+
+describe('BUG-12: judgeMutationReport, a run judged file by file from its report (D-098)', () => {
+  // On #53 the required mutation check passed a run in which 84 of 84
+  // mutants timed out and none was killed: Stryker counts a timeout as
+  // detected, so it scored 100 % (job 110739523389). Its exit code says
+  // nothing about that, so the gate reads the report. Only a killed mutant is
+  // caught, and each file must reach 80 % (D-036) of
+  // killed ÷ (killed + survived + timed out + no coverage) on its own.
+  const PROCESS = 'apps/server/src/process.ts';
+  const API_PROCESS = 'apps/server/src/api-process.ts';
+  const JOURNEY = 'apps/server/src/domain/journey.ts';
+
+  test('BUG-12: 84 mutants timed out and none killed, the #53 run, fails, and says a timeout is not caught', () => {
+    const verdict = judgeMutationReport(reportOf({ [PROCESS]: { Timeout: 84 } }));
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.message).toContain(PROCESS);
+    expect(verdict.message).toContain('0 killed');
+    expect(verdict.message).toContain('84 timed out');
+    expect(verdict.message).toMatch(/not[^.]*caught/i);
+    expect(verdict.message).toContain('D-098');
+  });
+
+  test('BUG-12: one file below 80 % fails the run even when the pooled score passes, and only that file is named', () => {
+    // api-process.ts sat at 62.5 % inside a run that passed. Pooled, these
+    // two files score 45 of 48, 93.75 %.
+    const verdict = judgeMutationReport(
+      reportOf({ [JOURNEY]: { Killed: 40 }, [API_PROCESS]: { Killed: 5, Survived: 3 } }),
+    );
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.message).toContain(API_PROCESS);
+    expect(verdict.message).toMatch(/62\.5 ?%/);
+    expect(verdict.message).toContain('5 killed');
+    expect(verdict.message).toContain('3 survived');
+    // The message lists what failed. A passing file in that list would send
+    // the reader to tests that were never the problem.
+    expect(verdict.message).not.toContain(JOURNEY);
+  });
+
+  test('BUG-12: a timed-out mutant counts against its file: 8 killed and 2 timed out is exactly 80 %, and passes', () => {
+    expect(judgeMutationReport(reportOf({ [PROCESS]: { Killed: 8, Timeout: 2 } })).ok).toBe(true);
+  });
+
+  test('BUG-12: a timed-out mutant counts against its file: 7 killed and 3 timed out is 70 %, and fails', () => {
+    const verdict = judgeMutationReport(reportOf({ [PROCESS]: { Killed: 7, Timeout: 3 } }));
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.message).toContain(PROCESS);
+    expect(verdict.message).toMatch(/70 ?%/);
+    expect(verdict.message).toContain('3 timed out');
+  });
+
+  test('BUG-12: a mutant no test ran counts against its file', () => {
+    expect(judgeMutationReport(reportOf({ [PROCESS]: { Killed: 8, NoCoverage: 2 } })).ok).toBe(
+      true,
+    );
+
+    const verdict = judgeMutationReport(reportOf({ [PROCESS]: { Killed: 7, NoCoverage: 3 } }));
+    expect(verdict.ok).toBe(false);
+    expect(verdict.message).toContain(PROCESS);
+    expect(verdict.message).toMatch(/70 ?%/);
+  });
+
+  test('BUG-12: compile errors and ignored mutants are left out of the score, neither caught nor missed', () => {
+    // Review loop 1: this test also left RuntimeError out. It now counts
+    // against its file, in the test after this one.
+    //
+    // Counted against, these would make 8 of 19: a failure.
+    expect(
+      judgeMutationReport(
+        reportOf({ [PROCESS]: { Killed: 8, Survived: 2, CompileError: 5, Ignored: 4 } }),
+      ).ok,
+    ).toBe(true);
+
+    // Counted as caught, these would make 27 of 30: a pass.
+    const verdict = judgeMutationReport(
+      reportOf({ [PROCESS]: { Killed: 7, Survived: 3, CompileError: 10, Ignored: 10 } }),
+    );
+    expect(verdict.ok).toBe(false);
+    expect(verdict.message).toMatch(/70 ?%/);
+  });
+
+  test('BUG-12: a runtime error counts against its file, and is named: the tests never ran', () => {
+    // With the command runner, a RuntimeError means the command did not run
+    // the tests: the shell could not start them, or a Stryker worker
+    // crashed. Nothing was tested against that mutant, so it is not caught.
+    // Left out, this would be 8 of 9, 88.88 %: a pass.
+    const verdict = judgeMutationReport(
+      reportOf({ [PROCESS]: { Killed: 8, Survived: 1, RuntimeError: 2 } }),
+    );
+    expect(verdict.ok).toBe(false);
+    expect(verdict.message).toContain(PROCESS);
+    expect(verdict.message).toMatch(/72\.7\d? ?%/);
+    expect(verdict.message).toMatch(/\b2 runtime errors?\b/i);
+
+    // Named when its file passes too, so a crash is never silent.
+    const passing = judgeMutationReport(reportOf({ [PROCESS]: { Killed: 9, RuntimeError: 1 } }));
+    expect(passing.ok).toBe(true);
+    expect(passing.message).toMatch(/\b1 runtime errors?\b/i);
+  });
+
+  test('BUG-12: for each file, the output names how many of its mutants were left out', () => {
+    // Left out of the score is not the same as unseen: a file with many
+    // compile errors or exclusions has a score that rests on few mutants.
+    const lineOf = (message, file) => message.split('\n').find((line) => line.includes(file));
+
+    const passing = judgeMutationReport(
+      reportOf({
+        [JOURNEY]: { Killed: 10, CompileError: 3 },
+        [API_PROCESS]: { Killed: 8, Ignored: 2 },
+      }),
+    );
+    expect(passing.ok).toBe(true);
+    expect(lineOf(passing.message, JOURNEY)).toMatch(/\b3 (left out|compile errors?)\b/i);
+    expect(lineOf(passing.message, API_PROCESS)).toMatch(/\b2 (left out|ignored)\b/i);
+
+    const failing = judgeMutationReport(
+      reportOf({ [PROCESS]: { Killed: 7, Survived: 3, CompileError: 4 } }),
+    );
+    expect(failing.ok).toBe(false);
+    expect(lineOf(failing.message, PROCESS)).toMatch(/\b4 (left out|compile errors?)\b/i);
+  });
+
+  test('BUG-12: a file with no mutants at all, such as one of types alone, is left out beside one that was measured', () => {
+    // Review loop 1: this test also left out a file whose every mutant was
+    // left out. That file now fails, in the test after this one. A file with
+    // no mutant at all has nothing to mutate, can never reach 80 %, and
+    // failing it would block for good.
+    const verdict = judgeMutationReport(
+      reportOf({ [JOURNEY]: { Killed: 10 }, 'apps/server/src/domain/types.ts': {} }),
+    );
+
+    expect(verdict.ok).toBe(true);
+  });
+
+  test('BUG-12: a file whose every mutant was left out fails, and is named: nothing was measured in it', () => {
+    // It had mutants, and none of them was tested: every one failed to
+    // compile or was excluded. A score that leaves the file out would say
+    // nothing about it, beside a file that passed.
+    const verdict = judgeMutationReport(
+      reportOf({ [JOURNEY]: { Killed: 10 }, [PROCESS]: { CompileError: 2, Ignored: 1 } }),
+    );
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.message).toContain(PROCESS);
+    expect(verdict.message).toMatch(/measured nothing|nothing (was )?measured/i);
+    expect(verdict.message).not.toContain(JOURNEY);
+  });
+
+  // Built here, not in the table below: HK-05 reads a test.each table only
+  // up to its first closing parenthesis.
+  const NO_FILES = { files: {} };
+  const NO_MUTANTS = reportOf({ [PROCESS]: {} });
+  const ONLY_LEFT_OUT = reportOf({ [PROCESS]: { CompileError: 3, Ignored: 2 } });
+
+  test.each([
+    ['no files at all', NO_FILES],
+    ['files with no mutants', NO_MUTANTS],
+    ['only compile errors or ignored mutants', ONLY_LEFT_OUT],
+  ])('BUG-12: a report with %s fails: it measured nothing', (_, report) => {
+    const verdict = judgeMutationReport(report);
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.message).toMatch(/measured nothing|nothing (was )?measured|no mutants/i);
+  });
+
+  test('BUG-12: every mutant killed, in every file, passes', () => {
+    const verdict = judgeMutationReport(
+      reportOf({ [JOURNEY]: { Killed: 39 }, [API_PROCESS]: { Killed: 8 } }),
+    );
+
+    expect(verdict.ok).toBe(true);
   });
 });
 
@@ -220,6 +503,14 @@ describe('the mutation runs of this repository', () => {
     // Vitest configuration it uses, the system tests' one, and how it says
     // so is the implementer's to choose: stryker-config.test.mjs pins what
     // the run does with it.
+    //
+    // BUG-12 (RG-03): two groups were added to this pin, and nothing in it
+    // was loosened. D-098 gives every safety file that exists a group, which
+    // removes the whole-suite run whose 84 mutants all timed out on #53.
+    // `process` takes the three files that run had: bin.test.ts is the only
+    // test that runs the real worker process, so it goes with them (D-066's
+    // amendment). `api-process` runs its own tests, which now kill every
+    // mutant of it in-process.
     expect(MUTATION_GROUPS).toEqual([
       { name: 'domain', paths: ['apps/server/src/domain/'], tests: ['apps/server/src/domain'] },
       {
@@ -232,6 +523,24 @@ describe('the mutation runs of this repository', () => {
         paths: ['apps/server/src/modules/journeys/'],
         tests: ['apps/server/src/journeys.system.test.ts'],
       }),
+      {
+        name: 'process',
+        paths: [
+          'apps/server/src/worker.ts',
+          'apps/server/src/bin/worker.ts',
+          'apps/server/src/process.ts',
+        ],
+        tests: [
+          'apps/server/src/bin/bin.test.ts',
+          'apps/server/src/worker.test.ts',
+          'apps/server/src/process.test.ts',
+        ],
+      },
+      {
+        name: 'api-process',
+        paths: ['apps/server/src/api-process.ts'],
+        tests: ['apps/server/src/api-process.test.ts'],
+      },
     ]);
     expect(WHOLE_SUITE).toEqual(['apps', 'packages']);
   });
@@ -265,17 +574,124 @@ describe('the mutation runs of this repository', () => {
   });
 
   // bin.test.ts is the only test that runs the real worker process, so these
-  // three keep the whole suite. Narrowing their tests needs a decision of its own.
+  // three keep it, whichever run they are in. Narrowing their tests needed a
+  // decision of its own, and D-098 is that decision.
+  //
+  // BUG-12 (RG-03): this test said "%s stays in the whole-suite run". On #53
+  // that run's 84 mutants all timed out and none was killed, and it passed.
+  // D-098 moves these three files to a group of their own, so the pin moved
+  // with it: one run each still, now against the three tests that can kill
+  // their mutants, bin.test.ts first among them.
   test.each([
     ['apps/server/src/worker.ts'],
     ['apps/server/src/bin/worker.ts'],
     ['apps/server/src/process.ts'],
-  ])('%s stays in the whole-suite run', (file) => {
-    const runs = mutationRuns().filter((run) => run.paths.includes(file));
+  ])(
+    'BUG-12: %s is mutated in the process run, against bin.test.ts and the worker and process tests',
+    (file) => {
+      const runs = mutationRuns().filter((run) => run.paths.includes(file));
+
+      expect(runs).toEqual([
+        expect.objectContaining({
+          name: 'process',
+          tests: [
+            'apps/server/src/bin/bin.test.ts',
+            'apps/server/src/worker.test.ts',
+            'apps/server/src/process.test.ts',
+          ],
+        }),
+      ]);
+    },
+  );
+
+  test('BUG-12: api-process.ts is mutated in a run of its own, against its own tests', () => {
+    // At 62.5 % it sat inside a pooled run that passed. Its own run, judged
+    // file by file, can no longer hide it (D-098).
+    const runs = mutationRuns().filter((run) =>
+      run.paths.includes('apps/server/src/api-process.ts'),
+    );
 
     expect(runs).toEqual([
-      expect.objectContaining({ name: 'whole-suite', tests: ['apps', 'packages'] }),
+      {
+        name: 'api-process',
+        paths: ['apps/server/src/api-process.ts'],
+        tests: ['apps/server/src/api-process.test.ts'],
+      },
     ]);
+  });
+
+  test('BUG-12: no safety file that exists today falls to the whole-suite run; each has a group (D-098)', () => {
+    // The whole-suite run is what timed out on #53. It stays only for safety
+    // paths that hold no file yet, such as modules/alerts/ and safety-core/.
+    // The day one of them gets its first file, this fails and asks for a group
+    // with the tests that can kill its mutants.
+    const claimed = MUTATION_GROUPS.flatMap((group) => group.paths);
+    const unclaimed = SAFETY_PATHS.filter((p) => !claimed.includes(p));
+    const sourceFiles = (p) => {
+      const at = path.join(root, p);
+      if (!existsSync(at)) return [];
+      if (!statSync(at).isDirectory()) return [p];
+      return readdirSync(at, { recursive: true })
+        .map((file) => path.posix.join(p, String(file).split(path.sep).join('/')))
+        .filter((file) => /\.tsx?$/.test(file) && !file.endsWith('.test.ts'))
+        .filter((file) => statSync(path.join(root, file)).isFile());
+    };
+
+    expect(
+      unclaimed.flatMap(sourceFiles),
+      'these safety files have no mutation group; give each one, with the tests that can kill its mutants (D-098)',
+    ).toEqual([]);
+  });
+
+  // Review loop 1, safety-reviewer: it renamed bin/worker.ts. Stryker only
+  // warned that a glob matched nothing, the judge listed the two files that
+  // were left, and the gate passed. A check of a group as a whole, "it has
+  // something to mutate", let the one missing file through, so these check
+  // path by path. modules/alerts/ and safety-core/ are claimed by no group
+  // and may be absent: the whole-suite run takes them, and has nothing to
+  // mutate until they hold a file.
+  const at = (p) => path.join(root, p);
+  const holdsSource = (folder) =>
+    readdirSync(at(folder), { recursive: true, withFileTypes: true }).some(
+      (entry) => entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts'),
+    );
+
+  test('BUG-12: every safety path that names a file exists, as a file', () => {
+    const missing = SAFETY_PATHS.filter((p) => !p.endsWith('/')).filter(
+      (p) => !existsSync(at(p)) || !statSync(at(p)).isFile(),
+    );
+
+    expect(
+      missing,
+      'these safety paths name no file: a rename must move the safety path with it',
+    ).toEqual([]);
+  });
+
+  test('BUG-12: every safety path that is a folder ends in /', () => {
+    // Without it, the config would mutate the folder as one file, and the
+    // check above would read it as a file that is missing.
+    const unmarked = SAFETY_PATHS.filter((p) => !p.endsWith('/')).filter(
+      (p) => existsSync(at(p)) && statSync(at(p)).isDirectory(),
+    );
+
+    expect(unmarked, 'these safety paths are folders, and need a trailing /').toEqual([]);
+  });
+
+  test('BUG-12: every path a group claims exists, path by path: a file, or a folder holding a non-test .ts file', () => {
+    const missing = MUTATION_GROUPS.flatMap((group) =>
+      group.paths
+        .filter((p) =>
+          p.endsWith('/')
+            ? !existsSync(at(p)) || !statSync(at(p)).isDirectory() || !holdsSource(p)
+            : !existsSync(at(p)) || !statSync(at(p)).isFile(),
+        )
+        .map((p) => `${group.name}: ${p}`),
+    );
+
+    expect(
+      missing,
+      'these group paths hold nothing to mutate, so their group would pass without them',
+    ).toEqual([]);
   });
 });
 

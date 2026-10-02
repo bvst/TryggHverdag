@@ -50,3 +50,14 @@ stryker run [--mutate <file>]` (no --incremental) writes no reports/ file and re
 via `node -e "fs.writeFileSync(path, fs.readFileSync(0,'utf8'))" <<'EOF'` work for memory. No gh CLI in the
 cloud session, so CI job logs cannot be read; say so. Under load (another session's stop gate, loadavg 8.5
 on 4 CPUs) a whole-suite run had 8/8 mutants time out, 0 killed, scored 100 % and passed: BUG-12 is not CI-only.
+
+**2026-10-02 (BUG-12):** the read-only guard was NOT active for this run: redirection, heredocs, mkdir and
+`cp -a` all worked. A full scratch copy (`cp -a` of the repo incl. node_modules and .git, ~1 GB, 34 s) runs
+Stryker, git and vitest independently; reset only THAT copy, from inside it. The shared scratchpad also holds the
+implementer's logs (hang-*.log, heavy-*.log, clean-*.log) — evidence for their claims. Stryker's output reaches
+mutation.mjs only when each run ends (spawnSync), so poll reports/mutation/*.json to follow progress.
+
+**Lesson (2026-10-02, BUG-12): never put backticks inside a double-quoted `node -e "..."` string.** Bash runs
+them as command substitutions before node starts. A memory note containing a backticked git reset command
+ran it in the REAL repository (no-op that time: no tracked changes; reflog shows "reset: moving to HEAD").
+Write memory text with a quoted heredoc (`node --input-type=module - <<'EOF'` or `cat <<'EOF'`) only.

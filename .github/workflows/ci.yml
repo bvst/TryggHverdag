@@ -353,10 +353,12 @@ jobs:
         with: { node-version-file: .nvmrc, cache: pnpm }
       - if: steps.affected.outputs.code == 'true'
         run: pnpm install --frozen-lockfile
+      # Fresh, never --incremental, which `pnpm run mutation` refuses (D-099).
+      # Its 25-minute budget (MUTATION_TIMEOUT_MS) fits inside this job's 30.
       - if: steps.affected.outputs.code == 'true'
         run: >-
           pnpm run mutation
-          --incremental --only-if-safety-paths-changed
+          --only-if-safety-paths-changed
           --base origin/${{ github.base_ref || 'main' }}
 
   android-e2e: # CI-09 (L7) — the release build on an Android emulator, driven by Maestro

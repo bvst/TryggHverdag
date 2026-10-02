@@ -12,7 +12,7 @@ suite and any failing test counts as a kill. In the INF-08 review the mutant
 only because `bin/bin.test.ts` "BUG-3: on Clever Cloud's build machine…"
 (a fixed 1.5 s sleep before reading the child's output) timed out under
 mutation load. The mutant survives on merit. Check suspicious kills by reading
-`statusReason` in `reports/stryker-incremental.json` (node one-liner:
+`statusReason` in `reports/mutation/RUN.json` (node one-liner:
 filter `files[f].mutants` by line, print `statusReason`); a kill whose only
 failure is an unrelated child-process test is not a kill.
 

@@ -339,7 +339,7 @@ new decision that supersedes it (see `00-working-agreement.md`).
   - A real-device platform must be chosen (Section 6, round 2).
 
 ## D-036 — Mutation testing blocks below 80 % on safety code
-- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 6
+- **Date:** 2026-09-20 · **Status:** Accepted; its "pull requests run incrementally" is superseded by D-099 (every run is fresh) · **Section:** 6
 - **Decision:** StrykerJS runs on domain, alert and safety-core code. A mutation
   score below 80 % blocks the merge. Pull requests run incrementally; a full run
   happens nightly. Elsewhere the score is reported but doesn't block.
@@ -3100,3 +3100,86 @@ any other path is work, not a candidate for the same treatment.
   strengthened so a process clock fails it.
 - **Consequences:** BUG-10 stays one pull request merged by hand (D-075).
   Supersedes nothing.
+
+## D-098 — A mutant counts as caught only when a test fails on it, file by file (BUG-12)
+- **Date:** 2026-10-02 · **Status:** Accepted (delegated, D-031). It is
+  stricter than before and loosens nothing; the owner chose BUG-12's scope
+  (2026-10-02) · **Section:** 6 (refines D-036 and D-066)
+- **Context:** On #53, CI's required `mutation` check passed with a whole-suite
+  run whose 84 mutants **all timed out, 0 killed**. Stryker scores a timeout as
+  detected, so it reported 100 % (job 110739523389). `safety-reviewer`
+  reproduced 8 of 8 timeouts scoring 100 % on a loaded session machine, so
+  this is not only CI. There are two causes:
+  - Stryker gives each mutant about 1.5 × the clean run plus 5 s, while
+    `vitest.config.mjs` gives each test 60 s. A mutant that makes a test wait
+    forever is therefore stopped by Stryker, as a "timeout", before Vitest can
+    fail the test.
+  - On a busy machine, runs that were never going to fail are stopped the same
+    way.
+
+  The score is pooled per run, so `api-process.ts` at 62.5 % sat inside a
+  passing run.
+- **Decision:**
+  - The gate reads each run's Stryker JSON report. **Only a killed mutant
+    counts as caught.** Each mutated file must reach 80 % (D-036's threshold)
+    of killed ÷ (killed + survived + timed out + no coverage) on its own.
+  - The output names each failing file with its counts. A run with no report,
+    or with no mutants, fails.
+  - The mutation command gives Vitest a per-test timeout well below Stryker's
+    per-mutant allowance. A test that waits forever then fails inside Vitest:
+    that mutant is killed, not timed out.
+  - Every safety file that exists gets a group with the tests that can kill
+    it. That removes the slow whole-suite run, which is what timed out.
+  - The run starts when its inputs change, not only its safety paths:
+    - a group's tests and configuration;
+    - `packages/test-kit/`, whose fakes the groups' tests run on (the
+      api-process tests reach their database through its fake PostgreSQL
+      server);
+    - `stryker.config.mjs`, `scripts/lib/gate-decisions.mjs` and
+      `scripts/mutation.mjs`;
+    - the root Vitest configuration.
+  - Unset `STRYKER_RUN`, Stryker refuses to start: a run outside
+    `pnpm run mutation` is judged by nothing.
+- **Consequences:**
+  - A mutant that can only be detected by hanging, such as a synchronous
+    infinite loop, counts against the file. If one is real, it is excluded in
+    the code with a reason, where review sees it.
+  - The 25-minute budget is not raised here. If an honest run does not fit, the
+    choice goes to the owner (cost).
+  - Not included either: the code the groups' tests import but do not mutate,
+    such as `api.ts`, `http.ts`, the adapters and `packages/contracts`. A pull
+    request touching only those can lower a safety file's score without the
+    run starting. The next pull request that does start it then fails, loudly,
+    for a change it did not make (`code-reviewer`, BUG-12).
+  - Not included: a dependency update that changes Stryker or Vitest does not
+    trigger the run. Adding the lockfile would run mutation on every
+    Dependabot pull request. That is a cost question, for the owner if it
+    comes up.
+
+## D-099 — Every mutation run is fresh: `--incremental` is refused (BUG-12)
+- **Date:** 2026-10-02 · **Status:** Accepted (owner, 2026-10-02; asked in
+  session with Claude's recommendation) · **Section:** 6 (supersedes D-036's
+  "pull requests run incrementally"; extends D-098)
+- **Context:** `safety-reviewer` found it while reviewing BUG-12:
+  - With the command runner (D-066), Stryker gets no coverage data. Its
+    incremental mode then reuses every earlier result in code that has not
+    changed, whatever happened to the tests.
+  - It replaced `api-process.test.ts` with a test that asserts nothing. With
+    `--incremental`, all 8 results were reused and the run scored 100 %. A
+    fresh run scored 0 %.
+  - CI was never exposed: it keeps no cache, so every CI run was already fresh
+    (D-066's amendment). A local `gate:full`, which passed `--incremental`,
+    could be.
+- **Decision:**
+  - `pnpm run mutation` refuses `--incremental` and says why.
+  - `gate:full` and `ci.yml` no longer pass it, and the config writes no
+    incremental file.
+  - `gate:full`'s mutation step gets the whole mutation budget
+    (`MUTATION_TIMEOUT_MS`), not the 590 s every other step gets.
+- **Consequences:**
+  - CI's cost is unchanged.
+  - A local `gate:full` that touches the mutation run's inputs takes as long as
+    a fresh run: about 8 minutes on two cores.
+  - D-036's nightly full run is no longer what makes the pull-request runs
+    complete, because they are complete already. It is still the place for the
+    database files (D-095).

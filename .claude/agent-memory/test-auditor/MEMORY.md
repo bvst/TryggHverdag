@@ -13,3 +13,4 @@
 - [Parallel ID collision](feedback_parallel_id_collision.md) — new D-0xx/BUG-n may already be taken on main or an open PR; dirty PR = zero check runs
 - [Shadowed guards](feedback_shadowed_guards.md) — a new filter layer (plan) can shadow an old guard and silently drop failures; re-run old mutants
 - [Config-pinning tests](feedback_config_pinning_tests.md) — BUG-11 audit ignore; `pnpm -C . audit` escapes literal scans; delegated/superseded decisions still "Accepted"; pin path premises from the lockfile
+- [BUG-12 audit](project_bug12_audit.md) — PASS 6a3d606/5a8028f; 4 survivors with backstops (main hasSourceFiles wiring); RG-02 replay via git show in a transform

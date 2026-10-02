@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-02 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 in review** (D-092, D-094 to D-097); **BUG-12 next**, then LOST-01 · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-02 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 reviewed, its pull request opening** (D-098, D-099); LOST-01 after it merges · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -29,8 +29,9 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | # | ID | Task | Status |
 |---|----|------|--------|
 | 1 | SM-01 | Start a journey: the base tables, per-device authentication (SEC-07), the state machine module (AR-04), one active journey per walker, at least one responder | ✅ **Done** — 2026-10-02, [#53](https://github.com/bvst/TryggHverdag/pull/53), merged as `2db7046`. On `main` after the merge: `ci` 10 of 10 jobs passed (run 36978813054), and `deploy-staging` ran the first migration with journey tables and passed its smoke test (run 36978812889). In CI, L3 ran under Testcontainers for the first time, 49 of 49. Reviews, all PASS: safety, privacy-security, code, test-auditor, in the session and in CI. BUG-11 (D-093) merged with it. Its record: `progress/m2.md` |
-| | BUG-10 | The journey files need the owner and the safety review (D-092, D-094 to D-097): the six journey files, `api.ts`, `adapters/clock.ts`, the migrations' location and the system and integration Vitest configs in CODEOWNERS and `OWNER_APPROVAL_PATHS`, and in the ai-review `safety` filter; `modules/**` in `CLOCK_FREE_PATHS`; `modules/journeys/` and `api-process.ts` in `SAFETY_PATHS`, the first with its own mutation run under the system-test config | 🟡 **Pull request open; the owner merges it by hand (D-075).** Tests `4c940d9`, `2c305d4`, `4a1b642`; fix `e893440`, `c77eb47`. All four reviewers PASS in the session (CI's AI reviewers cannot run on it). The journeys mutation run: 21 mutants, 90.48 %, both survivors equivalent today |
-| | BUG-12 | The mutation gate fails silently: on CI the whole-suite run's mutants all time out, and Stryker scores timeouts as detected | ⚪ **Next after BUG-10, before LOST-01** (owner, 2026-10-02). See "Live gotchas" |
+| | BUG-10 | The journey files need the owner and the safety review (D-092, D-094 to D-097): the six journey files, `api.ts`, `adapters/clock.ts`, the migrations' location and the system and integration Vitest configs in CODEOWNERS and `OWNER_APPROVAL_PATHS`, and in the ai-review `safety` filter; `modules/**` in `CLOCK_FREE_PATHS`; `modules/journeys/` and `api-process.ts` in `SAFETY_PATHS`, the first with its own mutation run under the system-test config | ✅ **Done** — 2026-10-02, [#56](https://github.com/bvst/TryggHverdag/pull/56), merged by the owner by hand (D-075) as `348f620`. Approved by `urso-agent`; all four session reviewers PASS (CI's AI reviewers cannot run on a pull request that edits `ai-review.yml`; their skip was read in each job log). In CI before the merge: `integration` 50 of 50, the new REL-01 clock test among them. On `main` after the merge: `ci` 10 of 10 jobs passed (run 37005844364), and `deploy-staging` passed with its smoke test (run 37005844368) |
+| | BUG-12 | The mutation gate fails silently: on CI the whole-suite run's mutants all time out, and Stryker scores timeouts as detected | 🟡 **Pull request open, [#57](https://github.com/bvst/TryggHverdag/pull/57)** (D-098, D-099). Branch `fix/BUG-12-mutation-timeouts`, HEAD `ec653a9`. Tests `88ead9b`, `5343159`, `4c0c405`, `9f0e201`, `5f0902b`, `ec653a9`; fixes `b4f5511`, `7f6c3a7`, `6a3d606`, `5a8028f`. `safety-reviewer` and `test-auditor` PASS (the blocking reviewers that apply; no personal data, auth, logging, storage or dependency changed, so no privacy-security review), and so does `code-reviewer`. Only a kill counts, each file ≥ 80 %, every run fresh. Fresh on two cores: 265 mutants, 0 timed out, no RuntimeError, nothing left out, every file ≥ 80 %, 495 s. **Measured on CI's four CPUs** ([#57](https://github.com/bvst/TryggHverdag/pull/57), job 110875720392): every run fresh, 0 timed out; domain 108/108 (43 s), healthchecks 44/44 (31 s), journeys 19/21 (8 s), process 82/84 (1 min 12 s), api-process 8/8 (5 s); the job took about 3 minutes of its 25-minute budget. The same `process` files had 84 timed out and 0 killed on #53. Record: `progress/m2.md` |
+| | BUG-13 | `gate:full` says "0 step(s) after it did not run" after a failure, even when steps did not run: `summarize` in `scripts/lib/steps.mjs` subtracts the counts of `results`, which never holds the steps after a failure, so the number is always 0. On 2026-10-02 four steps did not run and it said 0 | ⚪ **Queued**, for the owner to schedule. On `main`. A reporting bug in what a gate says it skipped, not in what it checks |
 | | BUG-11 | The dependency audit accepts one advisory, GHSA-86w9-cpqp-85rv in `node-forge` (D-093) | ✅ **Done** — merged with SM-01 in [#53](https://github.com/bvst/TryggHverdag/pull/53) (`2db7046`). Its own pull request, [#54](https://github.com/bvst/TryggHverdag/pull/54), was closed as superseded: every file it held was already on `main` |
 | 2 | LOST-01 | Heartbeat, with or without position | ⚪ Not started |
 | 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ⚪ Not started |
@@ -164,9 +165,9 @@ The things that still bite, and cost a session hours the first time.
   every mutant time out, and Stryker counts a timeout as detected: #53's job
   110739523389 logged 84 timed out, 0 killed, "Ran 0.00 tests per mutant",
   score 100 %. The `domain` and `healthchecks` runs in the same job were real
-  (108 and 44 killed). Read a mutation job's killed and timeout columns, not
-  its score, until BUG-12 makes such a run fail loudly. Found while timing
-  BUG-10 (2026-10-02).
+  (108 and 44 killed). **Fixed by BUG-12 once merged** (D-098); until then it is
+  true on `main`, so read a mutation job's killed and timeout columns, not its
+  score. Found while timing BUG-10 (2026-10-02).
 
 - **On the Mac, hooks run with the PATH Claude Code started with.** A stop
   hook that fails with no output, or with `git init -b` refused, is this
@@ -273,13 +274,13 @@ The things that still bite, and cost a session hours the first time.
 - **The Bash guard reads `rm -f` beside a `git push` as a force push.** Keep a
   push in a command of its own.
 - **Stryker's local incremental report reuses old results for unchanged
-  code.** With the command runner, `mutantCanBeReused` is always true — the
-  command runner never reports coverage, so every mutant outside the diff
-  keeps its previous status whether or not it is still killed. Confirmed on
-  INF-08: `worker.ts:208` showed Survived in `reports/stryker-incremental.json`
-  while a hand mutant proved it killed. Never cite that file as current for
-  code the branch did not change; plant a hand mutant to check. CI is
-  unaffected — nothing caches `reports/`.
+  code.** **Resolved by D-099 once BUG-12 merges:** every run is then fresh and
+  `--incremental` is refused. Until it merges, with the command runner
+  `mutantCanBeReused` is always true — the command runner never reports
+  coverage, so every mutant outside the diff keeps its previous status whether
+  or not it is still killed. A gutted test scored 100 % incremental and 0 %
+  fresh. Never cite `reports/stryker-incremental.json` as current for code the
+  branch did not change. CI was never affected — nothing caches `reports/`.
 - **Writing "close #19" in a pull request's description closes #19 when it
   merges.** GitHub reads close, fix and resolve, in any of their forms, as a
   closing keyword when an issue number follows, even inside advice to the
@@ -300,7 +301,8 @@ The things that still bite, and cost a session hours the first time.
   `.claude/` gaps). M2's narrative is [`progress/m2.md`](progress/m2.md) and
   M1's is [`progress/m1.md`](progress/m1.md), so a bug's next `BUG-<n>` has to
   be looked for in all three files, in this one and in `decisions.md`. The
-  next one is **BUG-10**. The last paragraph of `progress/m1.md` says why.
+  next one is **BUG-14** (BUG-13 is taken). The last paragraph of
+  `progress/m1.md` says why.
 - **The write-time sensitive-data hook catches only `+47`/`0047` phone
   numbers, on Write and Edit.** `scan-sensitive.mjs` does not look for 8-digit
   domestic numbers, email addresses, postal addresses, D-U-N-S or
@@ -331,9 +333,16 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**BUG-10** (D-092, D-094 to D-096) is built and in review; its pull request is
-merged by hand (D-075). **BUG-12**, the mutation gate's silent false green, is
-next, then LOST-01.
+**BUG-12** (D-098, D-099), the mutation gate's silent false green, is reviewed
+and its pull request is opening; LOST-01 follows once it merges. Its `mutation`
+job is the first measurement on CI's four CPUs. Open after it, from D-098's
+consequences:
+- imports do not trigger the run (`api.ts`, `http.ts`, the adapters, contracts);
+- dependency updates do not trigger it either (a cost question);
+- the whole-suite run is now unreachable, and removing it needs a decision;
+- mobile `.tsx` safety files will need a jest-expo group.
+
+**BUG-13** is queued for the owner to schedule (the row under M2, above).
 
 **D-085's loose ends** (the pull request merged, [#43](https://github.com/bvst/TryggHverdag/pull/43)).
 - **Verified:** `deploy-staging` on `ubuntu-26.04`. Run 36621209842, for
@@ -358,7 +367,8 @@ next, then LOST-01.
   The alert came during the stop, which is what A-25's rule does, so the setting
   is probably right and the wording is UptimeRobot's. If the monitor ever shows
   Down while staging is healthy, the rule is inverted.
-- The local mutation reports reuse old results for unchanged code.
+- ~~The local mutation reports reuse old results for unchanged code.~~
+  Resolved by D-099 once BUG-12 merges.
 - D-036's nightly full mutation run.
 - D-079's hand-offs to M2.
 - AR-10's import rule, which nothing enforces.
@@ -416,8 +426,9 @@ batch, each merged by hand (D-075): [#21](https://github.com/bvst/TryggHverdag/p
 (the worker files), [#30](https://github.com/bvst/TryggHverdag/pull/30)
 (`healthchecks.ts`, D-079) and [#45](https://github.com/bvst/TryggHverdag/pull/45)
 (`apps/mobile/app.config.ts`, D-084). The runner label and the three action
-bumps went in as [#48](https://github.com/bvst/TryggHverdag/pull/48). The next
-by-hand change is BUG-10's filter (D-092).
+bumps went in as [#48](https://github.com/bvst/TryggHverdag/pull/48). BUG-10's
+filter (D-092) went in as [#56](https://github.com/bvst/TryggHverdag/pull/56),
+merged by hand.
 
 ## History
 
