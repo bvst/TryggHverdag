@@ -3,3 +3,4 @@
 - [Device harness review](device_harness_review.md) — spikes/drivers: argv in execFile errors leaks positions; Firebase hosts vs platform; FIS attribution; results prose drifting from code
 - [Reviewer sandbox quirks](reviewer_sandbox_quirks.md) — guard blocks any `>`, "expo install", `cd … && git merge-base`; a block ends the review
 - [Store request docs review](store_request_docs_review.md) — drafts to Apple/Google: placeholders vs later /decision and app.config.ts, vendor replies, privacy-promise tests, push headers and other notices
+- [Dependency audit ignore review](dependency_audit_ignore_review.md) — pnpm ignoreGhsas is path-agnostic; pnpmfile/.npmrc/quoted-YAML routes; @expo/cli node-forge reachability
