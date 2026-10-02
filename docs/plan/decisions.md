@@ -3053,3 +3053,25 @@ any other path is work, not a candidate for the same treatment.
     follow-up), not every pull request.
 - **Consequences:** BUG-10's tests pin all four lists. Supersedes nothing;
   D-092 and D-094 stand, carried out as above.
+
+## D-096 — The system and integration Vitest configurations need the owner's approval (BUG-10)
+- **Date:** 2026-10-02 · **Status:** Accepted (owner, 2026-10-02). Asked in
+  session with Claude's recommendation, "Own both"; the alternatives offered
+  were "only the system one" and "neither" · **Section:** 6/8 (extends
+  D-042's owner-approval paths, as D-082 and D-084 did)
+- **Context:**
+  - D-082 and D-084 put `/vitest.config.mjs`, `/vitest.shared.mjs`,
+    `/vitest.coverage.config.mjs` and `/stryker.config.mjs` under the owner's
+    approval, because they decide what the gates run. Checked 2026-10-02 in
+    `scripts/lib/merge-rules.mjs` and `.github/CODEOWNERS`:
+    `/vitest.system.config.mjs` and `/vitest.integration.config.mjs` were not.
+  - Found by `test-author` writing BUG-10's tests: under D-095 the journey
+    module's mutation run uses `vitest.system.config.mjs`, so that file now
+    decides what a safety path's mutation run executes. And D-095 leaves the
+    two database adapters, `db/schema.ts` and the migrations guarded only by
+    the L3 tests, which run under `vitest.integration.config.mjs`: one
+    unapproved change there could drop them with every check still green.
+- **Decision:** `/vitest.system.config.mjs` and `/vitest.integration.config.mjs`
+  join `OWNER_APPROVAL_PATHS` and CODEOWNERS, in BUG-10.
+- **Consequences:** a change to what the system or integration tests collect
+  needs the owner's approval. Supersedes nothing.
