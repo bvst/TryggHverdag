@@ -31,8 +31,11 @@ For the diff (`git diff origin/main...HEAD`), check:
   (`scripts/mutation.mjs`, `scripts/lib/gate-decisions.mjs`,
   `stryker.config.mjs`, `packages/test-kit/`, `vitest.config.mjs`,
   `vitest.shared.mjs`, `vitest.system.config.mjs`) does not loosen what counts
-  as a kill, drop a safety file or a group's test from a run, or let a test-kit
-  fake accept what the real adapter refuses (D-098, D-100);
+  as a kill, lower the 80 % per-file bar or pool files again, drop a safety
+  file or a group's test from a run, start the run on fewer changes, reuse an
+  earlier result instead of a fresh run, let a run that measured nothing pass,
+  or let a test-kit fake accept what the real adapter or database refuses
+  (D-098, D-099, D-100);
 - tests exist at L6 for any change in alert behaviour.
 
 
