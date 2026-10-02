@@ -22,11 +22,13 @@ export const SAFETY_PATHS = [
   'apps/server/src/adapters/healthchecks.ts',
   // The journey service, and the one place the database clock is wired into
   // it. Only these two of D-092's six journey files are here, because their
-  // tests run in-process, so a mutant in them can be killed (D-095). The two
-  // database adapters, db/schema.ts and the migrations are proved by L3 tests
-  // alone, which no mutation run starts: here, every mutant in them would
-  // survive. They need the owner and the safety review all the same
-  // (merge-rules.mjs), and are mutated by D-036's nightly run instead.
+  // tests run in-process (D-095). Not every mutant of theirs is killed there:
+  // 3 of api-process.ts's 8 wire its services empty and are killed only at L3,
+  // which no mutation run starts. BUG-12 closes them. The two database
+  // adapters, db/schema.ts and the migrations are proved by L3 tests alone:
+  // here, every mutant in them would survive. They need the owner and the
+  // safety review all the same (merge-rules.mjs), and are to be mutated by
+  // D-036's nightly run, which does not exist yet (an open follow-up).
   'apps/server/src/modules/journeys/',
   'apps/server/src/api-process.ts',
   'apps/mobile/src/safety-core/',

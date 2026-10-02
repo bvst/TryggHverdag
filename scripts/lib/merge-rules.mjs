@@ -26,13 +26,21 @@ export const OWNER_APPROVAL_PATHS = [
   '/apps/server/src/adapters/healthchecks.ts',
   // Where the journey guarantees live: the responder insert and its
   // transaction, the one-unended-journey index, the device-credential check,
-  // and the one place the database clock is wired in (D-092, D-094, D-095).
+  // and where the database clock is wired into the API's services (D-092,
+  // D-094, D-095).
   '/apps/server/src/adapters/journeys.ts',
   '/apps/server/src/adapters/device-credentials.ts',
   '/apps/server/src/db/schema.ts',
   '/apps/server/src/db/migrations/',
   '/apps/server/src/modules/journeys/',
   '/apps/server/src/api-process.ts',
+  // The device-credential middleware and the walker always the device's own
+  // user, the database clock itself, and where the migrations are read from
+  // and written to (D-097).
+  '/apps/server/src/api.ts',
+  '/apps/server/src/adapters/clock.ts',
+  '/apps/server/src/adapters/migrations.ts',
+  '/apps/server/drizzle.config.ts',
   '/apps/mobile/src/safety-core/',
   // Where the app's permissions, background modes, backup and deep links are
   // set; background location is what the safety core stands on (D-084).

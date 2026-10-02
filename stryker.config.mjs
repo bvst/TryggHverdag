@@ -51,7 +51,7 @@ const mutate = run.paths.map((path) => (path.endsWith('/') ? `${path}**/*.ts` : 
  * collects them, such as the journeys run's system tests (D-095). The others
  * run under the root configuration, so their command is the one it always was.
  */
-const vitestConfig = 'config' in run && run.config !== undefined ? `--config ${run.config} ` : '';
+const vitestConfig = run.config === undefined ? '' : `--config ${run.config} `;
 
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
 export default {
