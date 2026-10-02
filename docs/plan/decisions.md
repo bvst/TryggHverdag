@@ -2787,3 +2787,48 @@ any other path is work, not a candidate for the same treatment.
   - A-05 in `docs/plan/README.md`, and A-05 in the roadmap's
     owner-actions table, stop saying "private";
   - open item (e) is answered.
+
+## D-093 — The dependency audit accepts one advisory: node-forge's signature check (BUG-11)
+- **Date:** 2026-10-02 · **Status:** Accepted (owner, 2026-10-02). Asked in
+  session with Claude's recommendation, "Accept this one, recorded"; the
+  alternative offered was "wait for upstream" · **Section:** 8 (SEC-06).
+  D-090 to D-092 are taken by the open SM-01 pull request (#53), so this is
+  D-093.
+- **Context:**
+  - CI's required `security` job runs `pnpm audit --audit-level high`. On
+    2026-10-02 it failed on SM-01's pull request with one high advisory,
+    [GHSA-86w9-cpqp-85rv](https://github.com/advisories/GHSA-86w9-cpqp-85rv)
+    (CVE-2026-85393, CVSS 8.7): "node-forge RSA PKCS#1 v1.5 signature
+    verification accepts extra nested DigestAlgorithm elements". The
+    advisory page, read 2026-10-02, says published 2026-09-03, affected
+    "through 1.4.0", and patched versions "None available". An attacker can
+    forge signatures that verify, for low-exponent RSA keys.
+  - **Not that pull request's failure.** It changes no `package.json` and no
+    lockfile; the lockfile last changed on 2026-09-28. The same command on
+    `main`'s own checkout fails the same way: "7 vulnerabilities found ·
+    Severity: 6 moderate | 1 high", exit 1. `main`'s `security` job passed
+    on 2026-10-01 (D-088), so the advisory reached npm's audit data after
+    that. Every pull request fails the check until it is handled.
+  - **Where `node-forge` is used.** The audit's only path is
+    `apps__mobile>expo>@expo/cli>node-forge`: Expo's command-line tool. In
+    `@expo/cli` 57.0.27, read 2026-10-02, it is required by
+    `run/ios/codeSigning/Security.js` (reading local signing certificates for
+    a local iOS build), by `utils/codesigning.js`, and by
+    `@expo/code-signing-certificates` (both for signing over-the-air update
+    manifests). The app installs no over-the-air updates (D-023;
+    `apps/mobile/app.config.ts` leaves `expo-updates` out on purpose).
+    Nothing in `apps/server`, `packages/` or the app's own source imports it,
+    and it is not part of the app's runtime bundle or the server.
+- **Decision:** the audit ignores this one advisory, by its ID, in the root
+  `package.json` (`pnpm.auditConfig.ignoreGhsas`). Everything else stays at
+  `--audit-level high`. A test (BUG-11) pins that every ignored advisory is
+  named by an accepted decision, so the list cannot grow without one.
+- **Remove the ignore** as soon as a patched `node-forge` exists or Expo
+  stops depending on it. Dependabot's npm updates, and any pull request
+  that changes the lockfile, are the moments to check: run
+  `pnpm audit --audit-level high` without the ignore.
+- **Cost, stated plainly:** a developer machine or CI runner using Expo's
+  tool could accept a forged signature in the flows above. Neither flow
+  carries this app's safety logic, and over-the-air updates are ruled out.
+- **Consequences:** BUG-11 is its own small pull request to `main`, and the
+  same change is ported into #53 so SM-01 can merge. Supersedes nothing.
