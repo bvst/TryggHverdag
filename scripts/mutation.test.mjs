@@ -49,6 +49,13 @@ const RUNS = [
   },
 ];
 
+/** The whole-suite run as it is today: the two safety paths that hold no file yet. */
+const EMPTY_WHOLE_SUITE = {
+  name: 'whole-suite',
+  paths: ['apps/server/src/modules/alerts/', 'apps/mobile/src/safety-core/'],
+  tests: ['apps', 'packages'],
+};
+
 const MINUTE = 60_000;
 
 const lowScore = { ok: false, status: 1, output: 'Final mutation score of 71.43 is under break\n' };
@@ -360,10 +367,12 @@ describe('runMutationGroups', () => {
 
   test('BUG-12: a run whose paths hold no source file yet is not started, says so by name, and does not decide the gate', async () => {
     // modules/alerts/ and safety-core/ today: safety paths with nothing in
-    // them, which only the whole-suite run takes. Starting Stryker on them
-    // finds no file to mutate and fails, which would block every pull
-    // request for code that does not exist. Passing them would claim a score
-    // for it. So neither.
+    // them, which only the whole-suite run takes. Started anyway, Stryker 10
+    // finds no file to mutate, scores NaN, and exits 0, since NaN is not
+    // below the break threshold; the judge then fails the run as having
+    // measured nothing, which would block every pull request for code that
+    // does not exist. Passing it would claim a score for that code. So
+    // neither.
     const runs = [
       ...RUNS.slice(0, 2),
       {
@@ -377,8 +386,10 @@ describe('runMutationGroups', () => {
       empty: ['apps/server/src/modules/alerts/', 'apps/mobile/src/safety-core/'],
     });
 
-    expect(events.filter((event) => 'looked' in event).map((event) => event.looked)).toContainEqual(
-      ['apps/server/src/modules/alerts/', 'apps/mobile/src/safety-core/'],
+    // Asked about each of its paths, whether one at a time or together.
+    const looked = events.filter((event) => 'looked' in event).flatMap((event) => event.looked);
+    expect(looked).toEqual(
+      expect.arrayContaining(['apps/server/src/modules/alerts/', 'apps/mobile/src/safety-core/']),
     );
     expect(started.map((run) => run.started)).toEqual(['domain', 'healthchecks']);
     expect(written).toMatch(
@@ -413,12 +424,65 @@ describe('runMutationGroups', () => {
   });
 
   test('BUG-12: when no run had anything to mutate, nothing was measured, and the gate fails', async () => {
+    // Review loop 1: this made every run's paths empty, groups included. A
+    // group with an empty path now fails on its own, in the tests below, so
+    // this keeps to the case it is about: the one run that may have nothing
+    // to mutate had nothing, and there was no other.
     const { outcome, started } = await runGroups({
-      empty: RUNS.flatMap((run) => run.paths),
+      runs: [EMPTY_WHOLE_SUITE],
+      empty: EMPTY_WHOLE_SUITE.paths,
     });
 
     expect(started).toEqual([]);
     expect(outcome.ok).toBe(false);
+  });
+
+  // Review loop 1, safety-reviewer: it renamed bin/worker.ts. Stryker only
+  // warned that a glob matched nothing, the judge listed the two files left,
+  // and the gate passed. A group exists because its files exist, so a group
+  // path with no source file is a safety file gone missing, never "nothing to
+  // mutate yet". Only the whole-suite run, which takes the safety paths no
+  // group claims, may wait for its first file.
+  //
+  // The fake's hasSourceFiles answers for the paths it is given, true when
+  // any of them holds a source file, as the real one does. The loop may ask
+  // one path at a time; what is pinned is that a group's paths are judged
+  // one by one.
+  const PROCESS_GROUP = {
+    name: 'process',
+    paths: [
+      'apps/server/src/worker.ts',
+      'apps/server/src/bin/worker.ts',
+      'apps/server/src/process.ts',
+    ],
+    tests: [
+      'apps/server/src/bin/bin.test.ts',
+      'apps/server/src/worker.test.ts',
+      'apps/server/src/process.test.ts',
+    ],
+  };
+
+  test('BUG-12: a group with one path that holds no source file fails the gate, naming that path', async () => {
+    const { outcome } = await runGroups({
+      runs: [RUNS[0], PROCESS_GROUP],
+      empty: ['apps/server/src/bin/worker.ts'],
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toContain('process');
+    expect(outcome.message).toContain('apps/server/src/bin/worker.ts');
+    expect(outcome.message).not.toContain('apps/server/src/process.ts');
+  });
+
+  test('BUG-12: a group none of whose paths holds a source file fails the gate, naming them: only the whole-suite run may have nothing to mutate yet', async () => {
+    const { outcome } = await runGroups({
+      runs: [RUNS[0], RUNS[1], EMPTY_WHOLE_SUITE],
+      empty: ['apps/server/src/adapters/healthchecks.ts', ...EMPTY_WHOLE_SUITE.paths],
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toContain('healthchecks');
+    expect(outcome.message).toContain('apps/server/src/adapters/healthchecks.ts');
   });
 });
 

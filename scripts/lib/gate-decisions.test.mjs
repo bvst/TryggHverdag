@@ -319,52 +319,102 @@ describe('BUG-12: judgeMutationReport, a run judged file by file from its report
     expect(verdict.message).toMatch(/70 ?%/);
   });
 
-  test('BUG-12: invalid and ignored mutants are left out of the count, neither caught nor missed', () => {
-    // Counted against, these would make 8 of 22: a failure.
+  test('BUG-12: compile errors and ignored mutants are left out of the score, neither caught nor missed', () => {
+    // Review loop 1: this test also left RuntimeError out. It now counts
+    // against its file, in the test after this one.
+    //
+    // Counted against, these would make 8 of 19: a failure.
     expect(
       judgeMutationReport(
-        reportOf({
-          [PROCESS]: { Killed: 8, Survived: 2, CompileError: 5, RuntimeError: 3, Ignored: 4 },
-        }),
+        reportOf({ [PROCESS]: { Killed: 8, Survived: 2, CompileError: 5, Ignored: 4 } }),
       ).ok,
     ).toBe(true);
 
-    // Counted as caught, these would make 37 of 40: a pass.
+    // Counted as caught, these would make 27 of 30: a pass.
     const verdict = judgeMutationReport(
-      reportOf({
-        [PROCESS]: { Killed: 7, Survived: 3, CompileError: 10, RuntimeError: 10, Ignored: 10 },
-      }),
+      reportOf({ [PROCESS]: { Killed: 7, Survived: 3, CompileError: 10, Ignored: 10 } }),
     );
     expect(verdict.ok).toBe(false);
     expect(verdict.message).toMatch(/70 ?%/);
   });
 
-  test('BUG-12: a file with no mutant to count is left out, beside one that was measured', () => {
-    // A file of types alone has nothing to mutate, and a file whose every
-    // mutant was excluded has nothing to score. Neither can ever reach 80 %,
-    // so failing them would block for good; the run still measured the file
-    // next to them.
+  test('BUG-12: a runtime error counts against its file, and is named: the tests never ran', () => {
+    // With the command runner, a RuntimeError means the command did not run
+    // the tests: the shell could not start them, or a Stryker worker
+    // crashed. Nothing was tested against that mutant, so it is not caught.
+    // Left out, this would be 8 of 9, 88.88 %: a pass.
     const verdict = judgeMutationReport(
+      reportOf({ [PROCESS]: { Killed: 8, Survived: 1, RuntimeError: 2 } }),
+    );
+    expect(verdict.ok).toBe(false);
+    expect(verdict.message).toContain(PROCESS);
+    expect(verdict.message).toMatch(/72\.7\d? ?%/);
+    expect(verdict.message).toMatch(/\b2 runtime errors?\b/i);
+
+    // Named when its file passes too, so a crash is never silent.
+    const passing = judgeMutationReport(reportOf({ [PROCESS]: { Killed: 9, RuntimeError: 1 } }));
+    expect(passing.ok).toBe(true);
+    expect(passing.message).toMatch(/\b1 runtime errors?\b/i);
+  });
+
+  test('BUG-12: for each file, the output names how many of its mutants were left out', () => {
+    // Left out of the score is not the same as unseen: a file with many
+    // compile errors or exclusions has a score that rests on few mutants.
+    const lineOf = (message, file) => message.split('\n').find((line) => line.includes(file));
+
+    const passing = judgeMutationReport(
       reportOf({
-        [JOURNEY]: { Killed: 10 },
-        'apps/server/src/domain/types.ts': {},
-        [PROCESS]: { CompileError: 2, Ignored: 1 },
+        [JOURNEY]: { Killed: 10, CompileError: 3 },
+        [API_PROCESS]: { Killed: 8, Ignored: 2 },
       }),
+    );
+    expect(passing.ok).toBe(true);
+    expect(lineOf(passing.message, JOURNEY)).toMatch(/\b3 (left out|compile errors?)\b/i);
+    expect(lineOf(passing.message, API_PROCESS)).toMatch(/\b2 (left out|ignored)\b/i);
+
+    const failing = judgeMutationReport(
+      reportOf({ [PROCESS]: { Killed: 7, Survived: 3, CompileError: 4 } }),
+    );
+    expect(failing.ok).toBe(false);
+    expect(lineOf(failing.message, PROCESS)).toMatch(/\b4 (left out|compile errors?)\b/i);
+  });
+
+  test('BUG-12: a file with no mutants at all, such as one of types alone, is left out beside one that was measured', () => {
+    // Review loop 1: this test also left out a file whose every mutant was
+    // left out. That file now fails, in the test after this one. A file with
+    // no mutant at all has nothing to mutate, can never reach 80 %, and
+    // failing it would block for good.
+    const verdict = judgeMutationReport(
+      reportOf({ [JOURNEY]: { Killed: 10 }, 'apps/server/src/domain/types.ts': {} }),
     );
 
     expect(verdict.ok).toBe(true);
+  });
+
+  test('BUG-12: a file whose every mutant was left out fails, and is named: nothing was measured in it', () => {
+    // It had mutants, and none of them was tested: every one failed to
+    // compile or was excluded. A score that leaves the file out would say
+    // nothing about it, beside a file that passed.
+    const verdict = judgeMutationReport(
+      reportOf({ [JOURNEY]: { Killed: 10 }, [PROCESS]: { CompileError: 2, Ignored: 1 } }),
+    );
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.message).toContain(PROCESS);
+    expect(verdict.message).toMatch(/measured nothing|nothing (was )?measured/i);
+    expect(verdict.message).not.toContain(JOURNEY);
   });
 
   // Built here, not in the table below: HK-05 reads a test.each table only
   // up to its first closing parenthesis.
   const NO_FILES = { files: {} };
   const NO_MUTANTS = reportOf({ [PROCESS]: {} });
-  const ONLY_INVALID = reportOf({ [PROCESS]: { CompileError: 3, RuntimeError: 1, Ignored: 2 } });
+  const ONLY_LEFT_OUT = reportOf({ [PROCESS]: { CompileError: 3, Ignored: 2 } });
 
   test.each([
     ['no files at all', NO_FILES],
     ['files with no mutants', NO_MUTANTS],
-    ['only invalid or ignored mutants', ONLY_INVALID],
+    ['only compile errors or ignored mutants', ONLY_LEFT_OUT],
   ])('BUG-12: a report with %s fails: it measured nothing', (_, report) => {
     const verdict = judgeMutationReport(report);
 
@@ -590,6 +640,57 @@ describe('the mutation runs of this repository', () => {
     expect(
       unclaimed.flatMap(sourceFiles),
       'these safety files have no mutation group; give each one, with the tests that can kill its mutants (D-098)',
+    ).toEqual([]);
+  });
+
+  // Review loop 1, safety-reviewer: it renamed bin/worker.ts. Stryker only
+  // warned that a glob matched nothing, the judge listed the two files that
+  // were left, and the gate passed. A check of a group as a whole, "it has
+  // something to mutate", let the one missing file through, so these check
+  // path by path. modules/alerts/ and safety-core/ are claimed by no group
+  // and may be absent: the whole-suite run takes them, and has nothing to
+  // mutate until they hold a file.
+  const at = (p) => path.join(root, p);
+  const holdsSource = (folder) =>
+    readdirSync(at(folder), { recursive: true, withFileTypes: true }).some(
+      (entry) => entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts'),
+    );
+
+  test('BUG-12: every safety path that names a file exists, as a file', () => {
+    const missing = SAFETY_PATHS.filter((p) => !p.endsWith('/')).filter(
+      (p) => !existsSync(at(p)) || !statSync(at(p)).isFile(),
+    );
+
+    expect(
+      missing,
+      'these safety paths name no file: a rename must move the safety path with it',
+    ).toEqual([]);
+  });
+
+  test('BUG-12: every safety path that is a folder ends in /', () => {
+    // Without it, the config would mutate the folder as one file, and the
+    // check above would read it as a file that is missing.
+    const unmarked = SAFETY_PATHS.filter((p) => !p.endsWith('/')).filter(
+      (p) => existsSync(at(p)) && statSync(at(p)).isDirectory(),
+    );
+
+    expect(unmarked, 'these safety paths are folders, and need a trailing /').toEqual([]);
+  });
+
+  test('BUG-12: every path a group claims exists, path by path: a file, or a folder holding a non-test .ts file', () => {
+    const missing = MUTATION_GROUPS.flatMap((group) =>
+      group.paths
+        .filter((p) =>
+          p.endsWith('/')
+            ? !existsSync(at(p)) || !statSync(at(p)).isDirectory() || !holdsSource(p)
+            : !existsSync(at(p)) || !statSync(at(p)).isFile(),
+        )
+        .map((p) => `${group.name}: ${p}`),
+    );
+
+    expect(
+      missing,
+      'these group paths hold nothing to mutate, so their group would pass without them',
     ).toEqual([]);
   });
 });

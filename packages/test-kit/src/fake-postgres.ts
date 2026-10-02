@@ -13,10 +13,15 @@
  * process that URL, and reads what arrived.
  *
  * It speaks only what node-postgres sends for the queries the adapters make:
- * a startup with no password, the simple query, and the extended query
- * (Parse, Bind, Describe, Execute, Sync). Every column goes back as text.
- * Anything else it is sent throws, loudly, rather than being answered with a
- * guess.
+ * a startup with no password, the simple query, the extended query (Parse,
+ * Bind, Describe of a portal, then Execute, then Sync), and Terminate, which
+ * `pool.end()` sends. Every column goes back as text, and every command tag
+ * is `SELECT <number of rows>`, which neither pg nor Drizzle reads for these
+ * queries. Anything else it is sent throws, loudly, rather than being
+ * answered with a guess: a TLS request, Close and Flush (pg sends them only
+ * when TLS is configured, when a bind fails, or for a query with `rows` set,
+ * and none of that is in use), a Describe of a statement, and an Execute with
+ * no Describe before it.
  *
  * ASCII only. Synthetic data needs nothing else (RG-07), and a fake that
  * garbled a character would be wrong without saying so, so it refuses
@@ -37,8 +42,6 @@ export interface FakePostgresQuery {
 export interface FakePostgresAnswer {
   readonly columns: readonly string[];
   readonly rows: readonly (readonly (string | null)[])[];
-  /** The command tag; `SELECT <number of rows>` unless given. */
-  readonly command?: string;
 }
 
 /** Answers a query, or throws to make the database answer it with an error. */
@@ -58,8 +61,6 @@ export interface FakePostgres {
 
 /** Protocol 3.0, which every current client asks for at startup. */
 const PROTOCOL_3 = 196_608;
-/** A client's "may we use TLS?", answered no. */
-const SSL_REQUEST = 80_877_103;
 /** PostgreSQL's type ID for `text`. */
 const TEXT_TYPE = 25;
 
@@ -130,10 +131,7 @@ function rowsAndTag(answer: FakePostgresAnswer): number[] {
       ),
     ]),
   );
-  return [
-    ...rows,
-    ...message('C', cstring(answer.command ?? `SELECT ${String(answer.rows.length)}`)),
-  ];
+  return [...rows, ...message('C', cstring(`SELECT ${String(answer.rows.length)}`))];
 }
 
 function errorResponse(text: string): number[] {
@@ -233,9 +231,6 @@ export function fakePostgres(handler: FakePostgresHandler): FakePostgres {
     }
 
     function startup(code: number): number[] {
-      if (code === SSL_REQUEST) {
-        return ascii('N');
-      }
       if (code !== PROTOCOL_3) {
         throw new Error(`The fake PostgreSQL server does not speak protocol ${String(code)}.`);
       }
@@ -304,25 +299,21 @@ export function fakePostgres(handler: FakePostgresHandler): FakePostgres {
         case 'E': {
           if (skippingToSync) return [];
           const portal = portalNamed(read.cstring());
-          if (portal.answer !== undefined) {
-            return rowsAndTag(portal.answer);
+          if (portal.answer === undefined) {
+            // pg always describes a portal before it executes it, so this is
+            // not what it sent, and answering would be a guess.
+            throw new Error(
+              'The fake PostgreSQL server was asked to execute a portal it was never asked to describe.',
+            );
           }
-          const outcome = ask(portal.query);
-          if ('error' in outcome) {
-            skippingToSync = true;
-            return errorResponse(outcome.error);
-          }
-          return rowsAndTag(outcome.answer);
+          return rowsAndTag(portal.answer);
         }
         case 'S':
           skippingToSync = false;
           portals.delete('');
           return readyForQuery();
-        case 'H': // Flush: everything is sent as soon as it is made.
-        case 'X': // Terminate: the client closes the socket itself.
+        case 'X': // Terminate, from pool.end(): the client closes the socket itself.
           return [];
-        case 'C': // Close a statement or a portal.
-          return message('3');
         default:
           throw new Error(`The fake PostgreSQL server does not understand message "${type}".`);
       }

@@ -66,14 +66,14 @@ describe('fakePostgres', () => {
     ]);
   });
 
-  test('a TLS request is declined with a single N, and the startup after it is answered', () => {
+  test('BUG-12: a TLS request throws: pg sends one only when TLS is configured, so declining it would be a guess', () => {
+    // Review loop 1, code-reviewer: this was answered with N, which only
+    // this file's own test used.
     const connection = fakePostgres(noRows).connect();
 
-    const declined = connection.receive(Uint8Array.from([...int32(8), ...int32(80_877_103)]));
-    const greeting = connection.receive(Uint8Array.from(STARTUP));
-
-    expect(Array.from(declined)).toEqual(bytesOf('N'));
-    expect(typesOf(greeting)).toEqual(['R', 'Z']);
+    expect(() => connection.receive(Uint8Array.from([...int32(8), ...int32(80_877_103)]))).toThrow(
+      /protocol 80877103/,
+    );
   });
 
   test('a simple query is recorded, and answered with its columns, its rows as text, its tag and ready', () => {
@@ -124,8 +124,11 @@ describe('fakePostgres', () => {
     expect(messages(reply)[4]?.body).toEqual([...int16(1), ...int32(-1)]);
   });
 
-  test('a query with no columns to describe gets NoData, and the tag the handler gives', () => {
-    const { connection } = started(() => ({ columns: [], rows: [], command: 'INSERT 0 1' }));
+  test('a query with no columns to describe gets NoData, and the tag SELECT 0', () => {
+    // Review loop 1, code-reviewer: a handler could name its own tag, which
+    // only this test used, so the option is gone. pg and Drizzle do not read
+    // the tag for these queries.
+    const { connection } = started(() => ({ columns: [], rows: [] }));
 
     const reply = connection.receive(
       Uint8Array.from([
@@ -138,7 +141,7 @@ describe('fakePostgres', () => {
     );
 
     expect(typesOf(reply)).toEqual(['1', '2', 'n', 'C', 'Z']);
-    expect(messages(reply)[3]?.body).toEqual(cstring('INSERT 0 1'));
+    expect(messages(reply)[3]?.body).toEqual(cstring('SELECT 0'));
   });
 
   test('a handler that throws is an error to the client, carrying its message, and the next query is answered', () => {
@@ -193,5 +196,41 @@ describe('fakePostgres', () => {
     const { connection } = started(noRows);
 
     expect(() => connection.receive(Uint8Array.from(frame('F', [])))).toThrow(/"F"/);
+  });
+
+  // Review loop 1, code-reviewer: three messages were answered with a guess,
+  // against this file's own promise that anything unknown throws. pg sends
+  // Close only when a bind throws, Flush only for a query with `rows` set,
+  // and always describes a portal before it executes it.
+  const PARSED_AND_BOUND = [
+    ...frame('P', [...cstring(''), ...cstring('select 1'), ...int16(0)]),
+    ...frame('B', [...cstring(''), ...cstring(''), ...int16(0), ...int16(0), ...int16(0)]),
+  ];
+
+  test('BUG-12: Close throws, rather than answering that it closed what it did not', () => {
+    const { connection } = started(noRows);
+
+    expect(() =>
+      connection.receive(
+        Uint8Array.from([...PARSED_AND_BOUND, ...frame('C', [...bytesOf('P'), ...cstring('')])]),
+      ),
+    ).toThrow(/"C"/);
+  });
+
+  test('BUG-12: Flush throws: no adapter sends it', () => {
+    const { connection } = started(noRows);
+
+    expect(() => connection.receive(Uint8Array.from(frame('H', [])))).toThrow(/"H"/);
+  });
+
+  test('BUG-12: an Execute with no Describe before it throws, and nothing is recorded as asked', () => {
+    const { database, connection } = started(noRows);
+
+    expect(() =>
+      connection.receive(
+        Uint8Array.from([...PARSED_AND_BOUND, ...frame('E', [...cstring(''), ...int32(0)])]),
+      ),
+    ).toThrow(/describe/i);
+    expect(database.queries).toEqual([]);
   });
 });
