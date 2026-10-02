@@ -24,8 +24,12 @@ export const MAX_RESPONDERS = 50;
 
 export const startJourneyRequestSchema = z
   .strictObject({
+    // Lower-cased here, at the edge. A UUID names the same user in either
+    // case, the database hands IDs back lower-case, and the start rule
+    // compares IDs as strings: without this, a real user named in upper case
+    // would be refused as INVALID_RESPONDER.
     responderIds: z
-      .array(z.uuid())
+      .array(z.uuid().toLowerCase())
       .max(MAX_RESPONDERS)
       .describe(
         'The users who should follow this journey. Each must be an existing user other than ' +

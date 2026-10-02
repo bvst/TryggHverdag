@@ -56,7 +56,9 @@ export function createApi({ health, journeys, devices }: ApiDependencies): Hono 
    * bad, and a database that blinked must never sign a walker out.
    *
    * The credential itself is passed to the authenticator and to nothing else:
-   * it is never logged, and never part of an answer.
+   * it is never logged, and never part of an answer. Past this point the
+   * header is gone from the context: handlers get the device, and
+   * `authorization` is undefined, so none can read the credential.
    */
   const fromKnownDevice = os.use(async ({ context, next }) => {
     const credential = BEARER.exec(context.authorization ?? '')?.[1];
@@ -64,7 +66,7 @@ export function createApi({ health, journeys, devices }: ApiDependencies): Hono 
     if (device === null) {
       throw new ORPCError('UNAUTHORIZED', { message: deviceCredentialErrors.UNAUTHORIZED.message });
     }
-    return next({ context: { device } });
+    return next({ context: { device, authorization: undefined } });
   });
 
   const router = os.router({

@@ -8,9 +8,9 @@
  * conflict, so the second start waits for the first, inserts nothing, and is
  * told which journey won.
  *
- * A journey and its responders are written in one transaction. A journey
- * without its responders, even for a moment, is one the watchdog would alert
- * nobody about.
+ * A journey and its responders are written in one transaction, and a start
+ * with no responders is refused before it opens. A journey without its
+ * responders, even for a moment, is one the watchdog would alert nobody about.
  */
 import { and, eq, inArray } from 'drizzle-orm';
 import { journeyResponders, journeys, unended, users } from '../db/schema.ts';
@@ -54,7 +54,13 @@ export function databaseJourneyStore(db: Database): JourneyStore {
       return new Set(rows.map((row) => row.id));
     },
 
-    insertStarted({ walkerId, responderIds, startedAt }: StartedJourney) {
+    async insertStarted({ walkerId, responderIds, startedAt }: StartedJourney) {
+      // The domain refuses an empty list first, as NO_RESPONDER. Refused here
+      // too, before anything is written: a journey with nobody to alert is
+      // never stored, whoever calls.
+      if (responderIds.length === 0) {
+        throw new Error('A journey needs at least one responder; none was given.');
+      }
       return db.transaction(async (tx): Promise<InsertStartedResult> => {
         const [journey] = await tx
           .insert(journeys)
@@ -65,9 +71,17 @@ export function databaseJourneyStore(db: Database): JourneyStore {
         if (journey === undefined) {
           // The index refused it: the walker has an unended journey. Read in
           // this transaction, after the conflict, so it sees the journey that
-          // won the race.
+          // won the race. That relies on READ COMMITTED, PostgreSQL's default:
+          // each statement takes a fresh snapshot, so this read sees the
+          // winner the insert waited for. Under REPEATABLE READ (or
+          // SERIALIZABLE), a conflict with a journey this transaction's
+          // snapshot cannot see raises 40001 instead.
           const winner = await unendedJourneyOf(tx, walkerId);
           if (winner === null) {
+            // Unreachable while no journey can end: the conflicting journey
+            // is still unended when this reads it. Once one can end (tasks 4
+            // and 7), it may end between the conflict and this read; then the
+            // start should retry the insert once rather than answer 500.
             throw new Error(
               'A start was refused as a second unended journey, and no unended journey was found.',
             );
@@ -75,9 +89,6 @@ export function databaseJourneyStore(db: Database): JourneyStore {
           return { inserted: false, unendedJourneyId: winner.id };
         }
 
-        // An empty list is refused by the domain before this, and Drizzle
-        // refuses one too: inserting no rows throws, so the transaction rolls
-        // back and no journey is left without responders.
         await tx
           .insert(journeyResponders)
           .values(responderIds.map((responderId) => ({ journeyId: journey.id, responderId })));

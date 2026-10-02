@@ -8,6 +8,11 @@
  * The journey tables hold what starting a journey needs and nothing else: no
  * name, phone number, position, platform, push token, address or user agent
  * (D-068, D-077). Each later task adds the columns its own feature needs.
+ *
+ * Foreign keys are declared with `foreignKey()` in each table's extra-config
+ * callback, beside its indexes, so a table's constraints read as one list;
+ * Drizzle builds the same constraint, by the same name, as an inline
+ * `.references()` would.
  */
 import { sql } from 'drizzle-orm';
 import {

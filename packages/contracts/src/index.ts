@@ -17,12 +17,7 @@
 
 export { API_PREFIX, API_VERSION } from './api-version.ts';
 export { contract } from './contract.ts';
-export {
-  DEVICE_CREDENTIAL_SCHEME,
-  deviceCredentialErrors,
-  deviceCredentialSecurityScheme,
-  deviceRoute,
-} from './device-credential.ts';
+export { deviceCredentialErrors } from './device-credential.ts';
 export { health, healthResponseSchema, WORKER_STALE_AFTER_MS } from './health.ts';
 export type { HealthResponse } from './health.ts';
 export {

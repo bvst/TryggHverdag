@@ -77,6 +77,7 @@ export interface JourneyStore {
    * Stores the journey ACTIVE with its responders, all of it or none of it.
    * When the walker already has an unended journey, as when two starts race
    * past `unendedJourneyOf`, nothing is stored and that journey is named.
+   * Rejects a start with no responders, and stores nothing.
    */
   insertStarted(journey: StartedJourney): Promise<InsertStartedResult>;
 }

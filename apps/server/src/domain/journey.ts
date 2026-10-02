@@ -3,9 +3,10 @@
  * in this one module and nowhere else (D-033).
  *
  * A later feature that needs a new state or event adds it to the lists below,
- * and from then on it cannot pass unnoticed: `transition` has no case for the
- * new event (a type error below), and the transition test has no row for the
- * new pair (a type error there, and a failing test naming the pair).
+ * and from then on it cannot pass unnoticed: `transition` hands every event to
+ * the start rule, which takes only a start (a type error below), and the
+ * transition test has no row for the new pair (a type error there, and a
+ * failing test naming the pair).
  *
  * Pure by construction: no clock, no database, no I/O. The module around it
  * reads what it needs, asks here, and writes what comes back.
@@ -14,7 +15,8 @@
  *   - SM-01, its first sentence: one unended journey per walker. "Unended" is
  *     any state but ENDED, so a walker whose journey has lost contact still
  *     has that journey, and a state added later blocks a second journey by
- *     default, which is the safe direction.
+ *     default, which is the safe direction. ENDED frees the walker: an ENDED
+ *     journey handed in as the current one is no journey at all.
  *   - SM-02, its start rule: a journey needs at least one responder to start.
  *     A responder is an existing user other than the walker.
  */
@@ -35,6 +37,12 @@ export type UnendedJourneyState = Exclude<JourneyState, 'ENDED'>;
 export interface UnendedJourney {
   id: string;
   state: UnendedJourneyState;
+}
+
+/** A walker's journey in any state, as a caller may hand it in. */
+interface WalkersJourney {
+  id: string;
+  state: JourneyState;
 }
 
 /** A walker asks to start a journey, naming who should follow it. */
@@ -62,23 +70,16 @@ export type TransitionOutcome =
  * a refusal included, is a value.
  *
  * @param current the walker's unended journey, or null when there is none. An
- *   ENDED journey is never a current one.
+ *   ENDED journey frees the walker, so one handed in is treated as none.
  */
-export function transition(current: UnendedJourney | null, event: JourneyEvent): TransitionOutcome {
-  switch (event.type) {
-    // With one event type the linter sees this case as always true, and it is,
-    // today. The switch is here for the second type: the day it is added
-    // without a case, `event.type` below stops being `never`, and that is a
-    // type error. Remove this directive then; ESLint reports it once unused.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- see above
-    case 'start':
-      return start(current, event);
-  }
-  // Every event type has its case above, so no type is left here. An event
-  // type added without a case makes this a type error. (`event.type`, not
-  // `event`: TypeScript narrows a union of events, and today there is one.)
-  const unhandled: never = event.type;
-  return unhandled;
+export function transition(current: WalkersJourney | null, event: JourneyEvent): TransitionOutcome {
+  // One event type, so its rule is called directly: a second event added to
+  // JourneyEvent is not a StartEvent, so this call stops compiling until the
+  // event is handled. Then bring back a switch on `event.type`, one case per
+  // event, and a default that holds `const unhandled: never = event;` and
+  // throws. Never return from that default: a value handed back for an event
+  // nobody handled is a silent miss for whatever reads the outcome.
+  return start(current, event);
 }
 
 /**
@@ -86,8 +87,8 @@ export function transition(current: UnendedJourney | null, event: JourneyEvent):
  * already has a journey learns that first, whatever the list says, so a start
  * retried after its answer was lost always learns which journey it already has.
  */
-function start(current: UnendedJourney | null, event: StartEvent): TransitionOutcome {
-  if (current !== null) {
+function start(current: WalkersJourney | null, event: StartEvent): TransitionOutcome {
+  if (current !== null && current.state !== 'ENDED') {
     return { type: 'refused', reason: 'ALREADY_ON_A_JOURNEY', journeyId: current.id };
   }
   const { walkerId, responderIds, existingUserIds } = event;
