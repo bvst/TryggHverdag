@@ -1,12 +1,15 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-02 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01 done, BUG-10 in review, BUG-12 next (D-090)
+**Last updated:** 2026-10-02 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01 and BUG-10 done, BUG-12 reviewed and its pull request opening, LOST-01 after it merges (D-090)
 
 **Current section:** milestone M2, started 2026-10-01 with SM-01, task 1 of 8
 (D-090; the task list is in [10-roadmap.md](10-roadmap.md)). SM-01 is done
 (#53, 2026-10-02). BUG-10, the journey files under the owner's approval and the
-safety review (D-092, D-094 to D-097), is in review; BUG-12, the mutation
-gate's silent false green, is next, then LOST-01. M1 closed with all four roadmap items done:
+safety review (D-092, D-094 to D-097), is done (#56, 2026-10-02); BUG-12, the
+mutation gate's silent false green (D-098, D-099), is reviewed and its pull
+request is opening, then LOST-01 after it merges. BUG-13 (`gate:full` miscounts
+the steps that did not run after a failure) is queued for the owner to
+schedule. M1 closed with all four roadmap items done:
 SPIKE-01 (S1–S8), Section 4 closed with a conditional GO for the location SDK
 (D-086, full results in [04b-spike-results.md](04b-spike-results.md)), and the
 Critical Alerts entitlement request drafted
@@ -68,7 +71,7 @@ needing the owner's approval and an ID.
 (state machine, watchdog, outbox, fake push and SMS; the staging canary), in
 eight tasks, SM-01 first. Devices authenticate with a hashed per-device
 credential until login arrives with GRP-01 (D-091). The journey files become
-safety paths in BUG-10, right after SM-01 merges (D-092). What Claude needs
+safety paths in BUG-10 (D-092, done). What Claude needs
 from the owner: [../progress.md](../progress.md).
 
 **Open for M4** (not an owner action, so not in the to-do table below; it sits
