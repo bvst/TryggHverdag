@@ -158,10 +158,11 @@ function main() {
     );
   }
 
-  const results = runPlan(plan, (command, { timeout } = {}) => {
+  const results = runPlan(plan, (command, { timeout }) => {
     const [program, ...args] = command;
-    // A step without a timeout of its own keeps proc.mjs's default.
-    const result = run(program, args, timeout === undefined ? { cwd } : { cwd, timeout });
+    // A step without a timeout of its own passes undefined, and so keeps
+    // proc.mjs's default.
+    const result = run(program, args, { cwd, timeout });
     return { ok: result.ok, output: result.output };
   });
 
