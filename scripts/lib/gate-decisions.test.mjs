@@ -289,8 +289,14 @@ describe('BUG-10: the journey files, split by test level (D-095)', () => {
   const safety = (file) =>
     decideMutation({ changed: [file], onlyIfSafetyPathsChanged: true, configured: false });
 
+  // What these two cases hold is that each is a safety path, so a pull request
+  // that changes it must be mutation-tested: with no mutation run possible,
+  // the gate refuses. They do not show that every mutant can be killed
+  // in-process, and for api-process.ts that is not so: 3 of its 8 mutants
+  // wire its services empty and are killed only at L3, 62.5 % on its own,
+  // measured locally. BUG-12 closes them.
   test.each([['apps/server/src/modules/journeys/service.ts'], ['apps/server/src/api-process.ts']])(
-    'BUG-10: %s counts as safety code: its tests run in-process, so its mutants can be killed',
+    'BUG-10: %s is a safety path, so every pull request that changes it is mutation-tested',
     (file) => {
       expect(safety(file).ok).toBe(false);
     },
@@ -307,6 +313,23 @@ describe('BUG-10: the journey files, split by test level (D-095)', () => {
       // The same question as the cases above, so this passing is not the
       // harness passing everything: a safety path that covered this file,
       // such as adapters/ or db/ whole, would turn it red.
+      expect(safety(file)).toMatchObject({ ok: true, action: 'skip' });
+    },
+  );
+
+  // D-097: api.ts, the database clock, and the two files that say where the
+  // migrations are read from and written to need the owner and the safety
+  // review, which gate.test.mjs pins. No mutation run for them is decided, so
+  // none of them is a safety path: one that covered any of them, such as
+  // adapters/ or apps/server/ whole, would start a run no decision asked for.
+  test.each([
+    ['apps/server/src/api.ts'],
+    ['apps/server/src/adapters/clock.ts'],
+    ['apps/server/src/adapters/migrations.ts'],
+    ['apps/server/drizzle.config.ts'],
+  ])(
+    'BUG-10: %s is not safety code for mutation: D-097 makes it need the owner, and decides no mutation run for it',
+    (file) => {
       expect(safety(file)).toMatchObject({ ok: true, action: 'skip' });
     },
   );

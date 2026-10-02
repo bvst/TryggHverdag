@@ -328,19 +328,74 @@ describe("this repository's own workflows", () => {
     expect(Number(job?.[1])).toBe(30);
   });
 
+  /**
+   * The entries of one of the filters ai-review.yml gives paths-filter, read
+   * the way paths-filter reads them: a single-quoted list item indented under
+   * the filter's name. A path in a comment, or under another filter, is not an
+   * entry. A line in the filter that is neither an entry, a comment nor blank
+   * is returned as unreadable, so a shape this does not know fails the test
+   * that reads it rather than being passed over.
+   */
+  const filterEntries = (text, name) => {
+    const lines = text.split('\n');
+    const header = new RegExp(`^( *)${name}:\\s*$`);
+    const starts = lines.flatMap((line, index) => (header.test(line) ? [index] : []));
+    const indent = starts.length === 1 ? (header.exec(lines[starts[0]])?.[1].length ?? 0) : -1;
+    const entries = [];
+    const unreadable = [];
+    for (const line of starts.length === 1 ? lines.slice(starts[0] + 1) : []) {
+      const trimmed = line.trim();
+      if (trimmed === '' || trimmed.startsWith('#')) {
+        continue;
+      }
+      if (line.length - line.trimStart().length <= indent) {
+        break;
+      }
+      const entry = /^- '(?<glob>[^']+)'$/.exec(trimmed)?.groups?.glob;
+      if (entry === undefined) {
+        unreadable.push(line);
+      } else {
+        entries.push(entry);
+      }
+    }
+    return { headers: starts.length, entries, unreadable };
+  };
+
+  /** How an owner path is written as a paths-filter glob: no leading /, and a directory's files under /**. */
+  const filterGlob = (owned) => owned.replace(/^\//, '').replace(/\/$/, '/**');
+
   test('the safety filter in ai-review.yml matches the paths the owner must approve', () => {
     // Two copies of the same list: the paths CODEOWNERS holds for the owner,
     // and the paths that summon safety-reviewer. If they drift, a safety change
     // either merges with no safety review, or waits for a review nobody asked
     // for. Either way one of the two is lying.
+    //
+    // Each path is looked for in the safety filter's own list. Looked for in
+    // the file's text, a path still passed when it was moved into a comment,
+    // or under the ui filter, where paths-filter does not read it as safety
+    // (test-auditor, BUG-10).
     const text = readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8');
+    const safety = filterEntries(text, 'safety');
     const safetyPaths = OWNER_APPROVAL_PATHS.filter((p) => p.startsWith('/apps/'));
 
+    expect(safety.headers, 'how many filters are named safety').toBe(1);
+    expect(safety.unreadable).toEqual([]);
     expect(safetyPaths.length).toBeGreaterThan(0);
-    for (const path of safetyPaths) {
-      const glob = path.replace(/^\//, '').replace(/\/$/, '/**');
-      expect(text).toContain(`'${glob}'`);
-    }
+    expect(safetyPaths.filter((path) => !safety.entries.includes(filterGlob(path)))).toEqual([]);
+  });
+
+  test('BUG-10: every /apps/ path the safety filter in ai-review.yml lists is a path the owner must approve (D-097)', () => {
+    // The other direction of the test above. api.ts was in the safety filter
+    // and not in OWNER_APPROVAL_PATHS: the safety review was asked for and the
+    // owner was not, and nothing checked it until BUG-10's reviewers found it.
+    const safety = filterEntries(readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8'), 'safety');
+    const owned = OWNER_APPROVAL_PATHS.filter((p) => p.startsWith('/apps/')).map(filterGlob);
+
+    expect(safety.headers, 'how many filters are named safety').toBe(1);
+    expect(safety.entries.filter((glob) => glob.startsWith('apps/'))).not.toEqual([]);
+    expect(
+      safety.entries.filter((glob) => glob.startsWith('apps/') && !owned.includes(glob)),
+    ).toEqual([]);
   });
 
   test('every safety path needs the owner to approve a change to it', () => {
@@ -553,6 +608,45 @@ describe("this repository's own workflows", () => {
       'paths that hold no file git tracks',
     ).toEqual([]);
     expect(files.filter((file) => ownersOf(file).length === 0)).toEqual([]);
+  });
+
+  // BUG-10 (D-097): BUG-10's four reviewers found four more files carrying the
+  // same guarantees as the six above, with no owner needed to change them.
+  // api.ts holds the device-credential middleware, which decides the 401 and
+  // which routes use it, and the line that makes the walker always the
+  // device's own user. adapters/clock.ts is the database clock api-process.ts
+  // and worker.ts wire in. adapters/migrations.ts and drizzle.config.ts say
+  // where migrations are read from and written to: changing both could move
+  // future migrations out of the owned db/migrations/. All four need the owner
+  // and the safety review now, the second through the filter test above. None
+  // is a safety path, which gate-decisions.test.mjs holds.
+  const D097_FILES = [
+    '/apps/server/src/api.ts',
+    '/apps/server/src/adapters/clock.ts',
+    '/apps/server/src/adapters/migrations.ts',
+    '/apps/server/drizzle.config.ts',
+  ];
+
+  test("BUG-10: D-097's four files, api.ts, the database clock and where the migrations live, are paths the owner must approve, and so paths the safety filter in ai-review.yml lists", () => {
+    const listed = spawnSync(
+      'git',
+      ['ls-files', '--', ...D097_FILES.map((owned) => owned.slice(1))],
+      { encoding: 'utf8' },
+    );
+
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(listed.stdout.split('\n').filter((file) => file !== '')).toEqual(
+      D097_FILES.map((owned) => owned.slice(1)).toSorted(),
+    );
+    expect(D097_FILES.filter((owned) => !OWNER_APPROVAL_PATHS.includes(owned))).toEqual([]);
+  });
+
+  test("BUG-10: .github/CODEOWNERS gives D-097's four files to the owner: gate:integrity finds every owner-approval path owned, and the last line matching each names an owner", () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    expect(D097_FILES.filter((owned) => ownersOf(owned.slice(1)).length === 0)).toEqual([]);
   });
 });
 
