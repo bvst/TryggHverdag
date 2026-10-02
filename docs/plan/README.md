@@ -1,11 +1,12 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-02 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01 done, BUG-10 next (D-090)
+**Last updated:** 2026-10-02 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01 done, BUG-10 in review, BUG-12 next (D-090)
 
 **Current section:** milestone M2, started 2026-10-01 with SM-01, task 1 of 8
 (D-090; the task list is in [10-roadmap.md](10-roadmap.md)). SM-01 is done
-(#53, 2026-10-02); BUG-10, the journey files as safety paths (D-092, D-094),
-is next, then LOST-01. M1 closed with all four roadmap items done:
+(#53, 2026-10-02). BUG-10, the journey files under the owner's approval and the
+safety review (D-092, D-094 to D-097), is in review; BUG-12, the mutation
+gate's silent false green, is next, then LOST-01. M1 closed with all four roadmap items done:
 SPIKE-01 (S1–S8), Section 4 closed with a conditional GO for the location SDK
 (D-086, full results in [04b-spike-results.md](04b-spike-results.md)), and the
 Critical Alerts entitlement request drafted

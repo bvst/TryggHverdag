@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-02 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 next** (D-092, D-094) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-02 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 in review** (D-092, D-094 to D-097); **BUG-12 next**, then LOST-01 · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -29,7 +29,8 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | # | ID | Task | Status |
 |---|----|------|--------|
 | 1 | SM-01 | Start a journey: the base tables, per-device authentication (SEC-07), the state machine module (AR-04), one active journey per walker, at least one responder | ✅ **Done** — 2026-10-02, [#53](https://github.com/bvst/TryggHverdag/pull/53), merged as `2db7046`. On `main` after the merge: `ci` 10 of 10 jobs passed (run 36978813054), and `deploy-staging` ran the first migration with journey tables and passed its smoke test (run 36978812889). In CI, L3 ran under Testcontainers for the first time, 49 of 49. Reviews, all PASS: safety, privacy-security, code, test-auditor, in the session and in CI. BUG-11 (D-093) merged with it. Its record: `progress/m2.md` |
-| | BUG-10 | The journey files become safety paths (D-092, D-094): `adapters/journeys.ts`, `adapters/device-credentials.ts`, `db/schema.ts`, `db/migrations/`, `modules/journeys/` and `api-process.ts` go into `SAFETY_PATHS`, CODEOWNERS and the ai-review `safety` filter; `modules/**` joins `CLOCK_FREE_PATHS`. Before task 3 | 🟡 **Next.** Its `ai-review.yml` part is merged by hand (D-075) |
+| | BUG-10 | The journey files need the owner and the safety review (D-092, D-094 to D-097): the six journey files, `api.ts`, `adapters/clock.ts`, the migrations' location and the system and integration Vitest configs in CODEOWNERS and `OWNER_APPROVAL_PATHS`, and in the ai-review `safety` filter; `modules/**` in `CLOCK_FREE_PATHS`; `modules/journeys/` and `api-process.ts` in `SAFETY_PATHS`, the first with its own mutation run under the system-test config | 🟡 **Pull request open; the owner merges it by hand (D-075).** Tests `4c940d9`, `2c305d4`, `4a1b642`; fix `e893440`, `c77eb47`. All four reviewers PASS in the session (CI's AI reviewers cannot run on it). The journeys mutation run: 21 mutants, 90.48 %, both survivors equivalent today |
+| | BUG-12 | The mutation gate fails silently: on CI the whole-suite run's mutants all time out, and Stryker scores timeouts as detected | ⚪ **Next after BUG-10, before LOST-01** (owner, 2026-10-02). See "Live gotchas" |
 | | BUG-11 | The dependency audit accepts one advisory, GHSA-86w9-cpqp-85rv in `node-forge` (D-093) | ✅ **Done** — merged with SM-01 in [#53](https://github.com/bvst/TryggHverdag/pull/53) (`2db7046`). Its own pull request, [#54](https://github.com/bvst/TryggHverdag/pull/54), was closed as superseded: every file it held was already on `main` |
 | 2 | LOST-01 | Heartbeat, with or without position | ⚪ Not started |
 | 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ⚪ Not started |
@@ -157,6 +158,15 @@ UptimeRobot app ("it is enough for now").
 ## Live gotchas
 
 The things that still bite, and cost a session hours the first time.
+
+- **The required `mutation` check can pass without testing anything.** On
+  CI the whole-suite run (`worker.ts`, `process.ts`, `bin/worker.ts`) had
+  every mutant time out, and Stryker counts a timeout as detected: #53's job
+  110739523389 logged 84 timed out, 0 killed, "Ran 0.00 tests per mutant",
+  score 100 %. The `domain` and `healthchecks` runs in the same job were real
+  (108 and 44 killed). Read a mutation job's killed and timeout columns, not
+  its score, until BUG-12 makes such a run fail loudly. Found while timing
+  BUG-10 (2026-10-02).
 
 - **On the Mac, hooks run with the PATH Claude Code started with.** A stop
   hook that fails with no output, or with `git init -b` refused, is this
@@ -321,8 +331,9 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**BUG-10** (D-092, D-094) is next: the journey files become safety paths.
-After it, LOST-01 (M2's task 2). SM-01 and BUG-11 are done (above).
+**BUG-10** (D-092, D-094 to D-096) is built and in review; its pull request is
+merged by hand (D-075). **BUG-12**, the mutation gate's silent false green, is
+next, then LOST-01.
 
 **D-085's loose ends** (the pull request merged, [#43](https://github.com/bvst/TryggHverdag/pull/43)).
 - **Verified:** `deploy-staging` on `ubuntu-26.04`. Run 36621209842, for

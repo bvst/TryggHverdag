@@ -15,6 +15,22 @@
 /apps/server/src/process.ts       @bvst @urso-agent
 # The one file that can ping Healthchecks.io: an unasked ping keeps a dead worker's check green (D-079).
 /apps/server/src/adapters/healthchecks.ts       @bvst @urso-agent
+# Where the journey guarantees live: the responder insert and its transaction,
+# the one-unended-journey index, the device-credential check, and where the
+# database clock is wired into the API's services (D-092, D-094, D-095).
+/apps/server/src/adapters/journeys.ts           @bvst @urso-agent
+/apps/server/src/adapters/device-credentials.ts @bvst @urso-agent
+/apps/server/src/db/schema.ts     @bvst @urso-agent
+/apps/server/src/db/migrations/   @bvst @urso-agent
+/apps/server/src/modules/journeys/ @bvst @urso-agent
+/apps/server/src/api-process.ts   @bvst @urso-agent
+# The device-credential middleware and the walker always the device's own user,
+# the database clock itself, and where the migrations are read from and written
+# to (D-097).
+/apps/server/src/api.ts                    @bvst @urso-agent
+/apps/server/src/adapters/clock.ts         @bvst @urso-agent
+/apps/server/src/adapters/migrations.ts    @bvst @urso-agent
+/apps/server/drizzle.config.ts             @bvst @urso-agent
 /apps/mobile/src/safety-core/     @bvst @urso-agent
 # Where the app's permissions, background modes, backup and deep links are set;
 # background location is what the safety core stands on (D-084).
@@ -35,6 +51,10 @@
 /vitest.config.mjs                @bvst @urso-agent
 /vitest.shared.mjs                @bvst @urso-agent
 /vitest.coverage.config.mjs       @bvst @urso-agent
+# They decide what the system (L6) and integration (L3) tests collect: the
+# journey module's mutation run, and the database files' only tests (D-096).
+/vitest.system.config.mjs         @bvst @urso-agent
+/vitest.integration.config.mjs    @bvst @urso-agent
 # They decide what the lint, import-rule, mutation and coverage gates check, so
 # a change to one can loosen a gate without any test changing (D-084).
 /eslint.config.mjs                @bvst @urso-agent

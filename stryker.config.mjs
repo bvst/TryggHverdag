@@ -46,6 +46,13 @@ const run = chosenRun(process.env.STRYKER_RUN);
 /** A safety path is either a folder (ends in /) or a single file. */
 const mutate = run.paths.map((path) => (path.endsWith('/') ? `${path}**/*.ts` : path));
 
+/**
+ * A run whose tests the root configuration leaves out names the one that
+ * collects them, such as the journeys run's system tests (D-095). The others
+ * run under the root configuration, so their command is the one it always was.
+ */
+const vitestConfig = run.config === undefined ? '' : `--config ${run.config} `;
+
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
 export default {
   packageManager: 'pnpm',
@@ -69,7 +76,7 @@ export default {
     // The whole suite is apps and packages only. A mutant in safety code can
     // only be killed by a test of the product; the hook and script tests would
     // add seconds per mutant and could never fail because of one.
-    command: `pnpm exec vitest run ${run.tests.join(' ')}`,
+    command: `pnpm exec vitest run ${vitestConfig}${run.tests.join(' ')}`,
   },
 
   // Tests are not mutated, and neither is anything outside a safety path: the

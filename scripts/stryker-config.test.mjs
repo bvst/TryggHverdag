@@ -11,10 +11,55 @@
 // thresholds, the command runner, or "every test against every mutant", which
 // is what makes the score honest. Each run is therefore compared with the whole
 // config, not with the three settings it is meant to change.
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { SAFETY_PATHS, mutationRuns } from './lib/gate-decisions.mjs';
 
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
 const EXCLUSIONS = ['!**/*.test.ts', '!**/*.integration.test.ts', '!**/*.system.test.ts'];
+
+/** What a run's command hands Vitest: everything after `pnpm exec vitest run`. */
+const VITEST_RUN = 'pnpm exec vitest run ';
+const vitestArgs = (command) => command.slice(VITEST_RUN.length).trim().split(/\s+/);
+
+/** The configuration file Vitest's arguments `args` name, by --config or -c, or undefined. */
+function configNamedIn(args) {
+  for (const [at, arg] of args.entries()) {
+    const joined = /^(?:--config|-c)=(.+)$/.exec(arg);
+    if (joined?.[1] !== undefined) return path.normalize(joined[1]);
+    if (arg === '--config' || arg === '-c') {
+      const next = args[at + 1];
+      return next === undefined ? undefined : path.normalize(next);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The test files Vitest would run with the arguments `args`, as `vitest list`
+ * reports them, relative to the repository. `--json` comes last on purpose:
+ * followed by a path, it takes that path as a file to write the list into.
+ */
+function filesRunWith(args) {
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.join(root, 'node_modules', 'vitest', 'vitest.mjs'),
+      'list',
+      ...args,
+      '--filesOnly',
+      '--json',
+    ],
+    { cwd: root, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: process.env.HOME } },
+  );
+  if (result.status !== 0) {
+    throw new Error(`vitest list ${args.join(' ')} failed:\n${result.stderr}`);
+  }
+  return JSON.parse(result.stdout).map((entry) => path.relative(root, entry.file));
+}
 
 /** The rule the config has always used: a folder means every .ts file under it. */
 const globs = (paths) => paths.map((p) => (p.endsWith('/') ? `${p}**/*.ts` : p));
@@ -76,6 +121,28 @@ describe('stryker.config.mjs', () => {
     });
   });
 
+  test("BUG-10: the journeys run mutates modules/journeys/ and runs the journey system tests, under the system tests' configuration", async () => {
+    // D-095. The root configuration leaves *.system.test.ts out, and Vitest
+    // does not run an excluded file even when it is named: under that
+    // configuration this run would find no test file at all. So the command
+    // is asked what it would run, not only read for what it says.
+    const whole = await configFor(undefined);
+    const config = await configFor('journeys');
+
+    expect(config).toEqual({
+      ...whole,
+      mutate: ['apps/server/src/modules/journeys/**/*.ts', ...EXCLUSIONS],
+      commandRunner: {
+        ...whole.commandRunner,
+        command: expect.stringMatching(/^pnpm exec vitest run /),
+      },
+      incrementalFile: 'reports/stryker-journeys.json',
+    });
+    const args = vitestArgs(config.commandRunner.command);
+    expect(configNamedIn(args)).toBe('vitest.system.config.mjs');
+    expect(filesRunWith(args)).toEqual(['apps/server/src/journeys.system.test.ts']);
+  });
+
   test('the whole-suite run mutates every safety path no group claims, against the whole suite', async () => {
     const whole = await configFor(undefined);
     const config = await configFor('whole-suite');
@@ -101,6 +168,7 @@ describe('stryker.config.mjs', () => {
     expect(mutationRuns().map((run) => run.name)).toEqual([
       'domain',
       'healthchecks',
+      'journeys',
       'whole-suite',
     ]);
     expect(mutated.toSorted()).toEqual(

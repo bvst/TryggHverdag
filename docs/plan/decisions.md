@@ -3013,3 +3013,90 @@ any other path is work, not a candidate for the same treatment.
 - **Consequences:** BUG-10 makes six paths safety paths. Reviewers who
   suggest owning the pnpm files or the contracts source again can be pointed
   here. Supersedes nothing; amends D-092's list.
+
+## D-095 — BUG-10 applies D-092 by test level: owner approval and safety review for all six, mutation where the tests run in-process
+- **Date:** 2026-10-02 · **Status:** Accepted (owner, 2026-10-02). Asked in
+  session with Claude's recommendation, "Split by test level"; the
+  alternative offered was "Everything, literally" · **Section:** 6/8
+  (amends how D-092 and D-094 are carried out)
+- **Context:**
+  - D-092 and D-094 said six journey files go into `SAFETY_PATHS`,
+    CODEOWNERS and the ai-review `safety` filter. In this repository
+    `SAFETY_PATHS` also means mutation-tested on every pull request
+    (`stryker.config.mjs`) and held to the 95 % branch floor
+    (`scripts/lib/coverage.mjs`).
+  - **Checked, 2026-10-02:** Stryker's command runs `pnpm exec vitest run`
+    with the root configuration, and `vitest.config.mjs` excludes
+    `*.integration.test.ts` and `*.system.test.ts`; a file excluded there is
+    not run even when named. `vitest.coverage.config.mjs` leaves every adapter
+    but `healthchecks.ts` out of coverage.
+  - So the two database adapters and `db/schema.ts`, whose guarantees only
+    the real-PostgreSQL tests (L3) prove, would face only unit tests: their
+    mutants would survive and turn the required `mutation` check red. Running
+    L3 for every mutant starts a container each time, and would likely take
+    the job well past its 25-minute limit (not measured).
+- **Decision:**
+  - **All six** (`adapters/journeys.ts`, `adapters/device-credentials.ts`,
+    `db/schema.ts`, `db/migrations/`, `modules/journeys/`, `api-process.ts`)
+    go into CODEOWNERS and `OWNER_APPROVAL_PATHS` (the owner's approval) and
+    the ai-review `safety` filter (the safety review). That covers D-092's
+    failure scenario: no change to them without both.
+  - **`apps/server/src/modules/**/*.ts` joins `CLOCK_FREE_PATHS`.**
+  - **Only `modules/journeys/` and `api-process.ts` join `SAFETY_PATHS`**
+    (mutation on every pull request, and the 95 % branch floor), because
+    their tests run in-process: the system tests (L6) and the unit tests.
+    `modules/journeys/` gets its own mutation group, run with the system
+    tests' configuration.
+  - **The two database adapters, `db/schema.ts` and the migrations** stay
+    guarded by their L3 tests, which `implementer` cannot edit. Their
+    mutation testing joins D-036's nightly full mutation run (an open
+    follow-up), not every pull request.
+- **Consequences:** BUG-10's tests pin all four lists. Supersedes nothing;
+  D-092 and D-094 stand, carried out as above.
+
+## D-096 — The system and integration Vitest configurations need the owner's approval (BUG-10)
+- **Date:** 2026-10-02 · **Status:** Accepted (owner, 2026-10-02). Asked in
+  session with Claude's recommendation, "Own both"; the alternatives offered
+  were "only the system one" and "neither" · **Section:** 6/8 (extends
+  D-042's owner-approval paths, as D-082 and D-084 did)
+- **Context:**
+  - D-082 and D-084 put `/vitest.config.mjs`, `/vitest.shared.mjs`,
+    `/vitest.coverage.config.mjs` and `/stryker.config.mjs` under the owner's
+    approval, because they decide what the gates run. Checked 2026-10-02 in
+    `scripts/lib/merge-rules.mjs` and `.github/CODEOWNERS`:
+    `/vitest.system.config.mjs` and `/vitest.integration.config.mjs` were not.
+  - Found by `test-author` writing BUG-10's tests: under D-095 the journey
+    module's mutation run uses `vitest.system.config.mjs`, so that file now
+    decides what a safety path's mutation run executes. And D-095 leaves the
+    two database adapters, `db/schema.ts` and the migrations guarded only by
+    the L3 tests, which run under `vitest.integration.config.mjs`: one
+    unapproved change there could drop them with every check still green.
+- **Decision:** `/vitest.system.config.mjs` and `/vitest.integration.config.mjs`
+  join `OWNER_APPROVAL_PATHS` and CODEOWNERS, in BUG-10.
+- **Consequences:** a change to what the system or integration tests collect
+  needs the owner's approval. Supersedes nothing.
+
+## D-097 — `api.ts`, the database clock and the migrations' location need the owner's approval too (BUG-10)
+- **Date:** 2026-10-02 · **Status:** Accepted (owner, 2026-10-02). Asked in
+  session with Claude's recommendation, all three; the owner chose all three
+  · **Section:** 6/8 (extends D-092, D-094 and D-096)
+- **Context:** BUG-10's four reviewers (2026-10-02, all PASS) found files that
+  carry the same journey guarantees as D-092's six and needed no owner
+  approval:
+  - `apps/server/src/api.ts`: the device-credential middleware (the 401
+    decision, and which routes use it) and the line that makes the walker
+    always the device's own user. The ai-review `safety` filter already lists
+    it; CODEOWNERS did not. From LOST-01 it guards heartbeats.
+  - `apps/server/src/adapters/clock.ts`: the database clock that
+    `api-process.ts` and `worker.ts` wire in. D-094's reason for owning
+    `api-process.ts` applies to it more directly, and its REL-01 test (within
+    60 s of the process's time) would pass a process clock.
+  - `apps/server/src/adapters/migrations.ts` and `apps/server/drizzle.config.ts`:
+    where migrations are read from and written to. Changing both could move
+    future migrations out of the owned `db/migrations/`.
+- **Decision:** the four files join `OWNER_APPROVAL_PATHS`, CODEOWNERS and the
+  ai-review `safety` filter, in BUG-10. None joins `SAFETY_PATHS` (D-095: no
+  in-process mutation run for them is decided). `clock.ts`'s REL-01 test is
+  strengthened so a process clock fails it.
+- **Consequences:** BUG-10 stays one pull request merged by hand (D-075).
+  Supersedes nothing.

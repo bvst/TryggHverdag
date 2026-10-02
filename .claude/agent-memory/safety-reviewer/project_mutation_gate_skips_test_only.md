@@ -17,3 +17,8 @@ safety source — late and misattributed. First seen reviewing BUG-5 (2026-09-26
 yourself (old vs new assertions, timing windows, which mutants each kills) instead of trusting the gate.
 Check whether the gap has been closed (gate-decisions.mjs, a nightly workflow) before repeating the finding.
 See [[spawned-process-test-review]] and [[reviewer-sandbox-limits]].
+
+**Also config-only changes (2026-10-02, BUG-10):** a PR changing stryker.config.mjs, MUTATION_GROUPS
+or a group's vitest config touches no SAFETY_PATHS file, so CI skips mutation and the new config is first
+run on the next safety PR. Still no nightly workflow (only daily-status.yml is scheduled). Emulate with
+`node --input-type=module -e` importing decideMutation and changedFiles from scripts/lib.

@@ -22,3 +22,6 @@ green (a rule that stops matching fails nothing).
 **How to apply:** report as Should fix (owner decision, via OWNER_APPROVAL_PATHS + CODEOWNERS together, which
 gate:integrity compares) until it lands; check CODEOWNERS and merge-rules.mjs first, since this list shrinks.
 Related: [[changed-files-rename-blind-spot]].
+
+**2026-10-02 (BUG-10, D-096):** /vitest.system.config.mjs and /vitest.integration.config.mjs join
+CODEOWNERS and OWNER_APPROVAL_PATHS. apps/mobile/package.json jest block still the known gap.

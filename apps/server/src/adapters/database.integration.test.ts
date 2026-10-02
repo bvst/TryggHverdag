@@ -53,6 +53,13 @@ function database(): Database {
   return db;
 }
 
+function connectionUri(): string {
+  if (container === undefined) {
+    throw new Error('The container did not start, so there is nothing to connect to.');
+  }
+  return container.getConnectionUri();
+}
+
 function connection(): pg.Pool {
   if (pool === undefined) {
     throw new Error('The container did not start, so there is nothing to query.');
@@ -80,6 +87,50 @@ describe('databaseClock', () => {
     const second = await clock.now();
 
     expect(second.getTime()).toBeGreaterThanOrEqual(first.getTime());
+  });
+
+  test('BUG-10: REL-01: inside one transaction the clock answers the time the database froze for it, not the later time this process has moved on to (D-097)', async () => {
+    // The first test above would pass a process clock: `new Date()` is within
+    // 60 s of Date.now() too. This one tells the two apart. PostgreSQL's now()
+    // is the moment the transaction started and stays that until it ends, while
+    // a process clock keeps moving, so after a wait inside one transaction the
+    // clock must give back exactly what now() said before it.
+    //
+    // databaseClock takes a Database, and a Drizzle transaction is not one: it
+    // has no $client. So the transaction is held on the one connection of a
+    // pool of one, and the clock is given a Database on that same pool: every
+    // query it makes goes down that connection, inside that transaction. Had
+    // its query reached any other connection, now() there would be later and
+    // this would fail rather than pass.
+    const single = createPool(connectionUri(), 1);
+    try {
+      await single.query('begin');
+      const started = await single.query<{ now: Date }>('select now() as now');
+      const frozen = started.rows[0]?.now;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      const read = await databaseClock(createDatabase(single)).now();
+
+      const ended = await single.query<{ wall: Date; now: Date }>(
+        'select clock_timestamp() as wall, now() as now',
+      );
+      await single.query('rollback');
+      const after = ended.rows[0];
+
+      if (frozen === undefined || after === undefined) {
+        throw new Error(
+          'The database did not say what time it was, so there is nothing to compare.',
+        );
+      }
+      expect(read.toISOString()).toBe(frozen.toISOString());
+      // What makes the line above mean something: the database's own wall
+      // clock did move on during the wait, and the connection stayed in the
+      // same transaction throughout, its now() unmoved.
+      expect(after.wall.getTime() - frozen.getTime()).toBeGreaterThanOrEqual(20);
+      expect(after.now.toISOString()).toBe(frozen.toISOString());
+    } finally {
+      await endTestPool(single);
+    }
   });
 });
 
