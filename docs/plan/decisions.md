@@ -3013,3 +3013,43 @@ any other path is work, not a candidate for the same treatment.
 - **Consequences:** BUG-10 makes six paths safety paths. Reviewers who
   suggest owning the pnpm files or the contracts source again can be pointed
   here. Supersedes nothing; amends D-092's list.
+
+## D-095 — BUG-10 applies D-092 by test level: owner approval and safety review for all six, mutation where the tests run in-process
+- **Date:** 2026-10-02 · **Status:** Accepted (owner, 2026-10-02). Asked in
+  session with Claude's recommendation, "Split by test level"; the
+  alternative offered was "Everything, literally" · **Section:** 6/8
+  (amends how D-092 and D-094 are carried out)
+- **Context:**
+  - D-092 and D-094 said six journey files go into `SAFETY_PATHS`,
+    CODEOWNERS and the ai-review `safety` filter. In this repository
+    `SAFETY_PATHS` also means mutation-tested on every pull request
+    (`stryker.config.mjs`) and held to the 95 % branch floor
+    (`scripts/lib/coverage.mjs`).
+  - **Checked, 2026-10-02:** Stryker's command runs `pnpm exec vitest run`
+    with the root configuration, and `vitest.config.mjs` excludes
+    `*.integration.test.ts` and `*.system.test.ts`; a file excluded there is
+    not run even when named. `vitest.coverage.config.mjs` leaves every adapter
+    but `healthchecks.ts` out of coverage.
+  - So the two database adapters and `db/schema.ts`, whose guarantees only
+    the real-PostgreSQL tests (L3) prove, would face only unit tests: their
+    mutants would survive and turn the required `mutation` check red. Running
+    L3 for every mutant starts a container each time, and would likely take
+    the job well past its 25-minute limit (not measured).
+- **Decision:**
+  - **All six** (`adapters/journeys.ts`, `adapters/device-credentials.ts`,
+    `db/schema.ts`, `db/migrations/`, `modules/journeys/`, `api-process.ts`)
+    go into CODEOWNERS and `OWNER_APPROVAL_PATHS` (the owner's approval) and
+    the ai-review `safety` filter (the safety review). That covers D-092's
+    failure scenario: no change to them without both.
+  - **`apps/server/src/modules/**/*.ts` joins `CLOCK_FREE_PATHS`.**
+  - **Only `modules/journeys/` and `api-process.ts` join `SAFETY_PATHS`**
+    (mutation on every pull request, and the 95 % branch floor), because
+    their tests run in-process: the system tests (L6) and the unit tests.
+    `modules/journeys/` gets its own mutation group, run with the system
+    tests' configuration.
+  - **The two database adapters, `db/schema.ts` and the migrations** stay
+    guarded by their L3 tests, which `implementer` cannot edit. Their
+    mutation testing joins D-036's nightly full mutation run (an open
+    follow-up), not every pull request.
+- **Consequences:** BUG-10's tests pin all four lists. Supersedes nothing;
+  D-092 and D-094 stand, carried out as above.
