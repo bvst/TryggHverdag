@@ -2809,26 +2809,48 @@ any other path is work, not a candidate for the same treatment.
     Severity: 6 moderate | 1 high", exit 1. `main`'s `security` job passed
     on 2026-10-01 (D-088), so the advisory reached npm's audit data after
     that. Every pull request fails the check until it is handled.
-  - **Where `node-forge` is used.** The audit's only path is
-    `apps__mobile>expo>@expo/cli>node-forge`: Expo's command-line tool. In
-    `@expo/cli` 57.0.27, read 2026-10-02, it is required by
-    `run/ios/codeSigning/Security.js` (reading local signing certificates for
-    a local iOS build), by `utils/codesigning.js`, and by
-    `@expo/code-signing-certificates` (both for signing over-the-air update
-    manifests). The app installs no over-the-air updates (D-023;
-    `apps/mobile/app.config.ts` leaves `expo-updates` out on purpose).
-    Nothing in `apps/server`, `packages/` or the app's own source imports it,
-    and it is not part of the app's runtime bundle or the server.
-- **Decision:** the audit ignores this one advisory, by its ID, in the root
-  `package.json` (`pnpm.auditConfig.ignoreGhsas`). Everything else stays at
-  `--audit-level high`. A test (BUG-11) pins that every ignored advisory is
-  named by an accepted decision, so the list cannot grow without one.
-- **Remove the ignore** as soon as a patched `node-forge` exists or Expo
-  stops depending on it. Dependabot's npm updates, and any pull request
-  that changes the lockfile, are the moments to check: run
-  `pnpm audit --audit-level high` without the ignore.
-- **Cost, stated plainly:** a developer machine or CI runner using Expo's
-  tool could accept a forged signature in the flows above. Neither flow
-  carries this app's safety logic, and over-the-air updates are ruled out.
+  - **Where `node-forge` is used, and what it does there** (read in
+    `@expo/cli` 57.0.27 on 2026-10-02, and confirmed by
+    `privacy-security-reviewer`). The audit's only path is
+    `apps__mobile>expo>@expo/cli>node-forge`: Expo's command-line tool, and
+    `@expo/code-signing-certificates`, which only it uses.
+    - `run/ios/codeSigning/Security.js`, reached only from a local
+      `expo run:ios`, parses a certificate from the Mac's keychain. It
+      verifies nothing.
+    - `utils/codesigning.ts` signs the development server's manifests in
+      `expo start`, through `@expo/code-signing-certificates`. Its two
+      checks are of a local certificate's own signature and of the tool's
+      fresh signature, never of a signature an attacker supplies. In this
+      project neither branch even loads `node-forge`: the resolved
+      configuration has no `updates` and no EAS project ID, and the app
+      installs no over-the-air updates (D-023).
+    - The Android build CI runs (`android-e2e`) reaches none of this.
+    - `pnpm why` finds no path from the server, `packages/` or the app's
+      runtime code, and `expo`'s runtime entry does not import the tool.
+- **Decision:** the audit ignores this one advisory, by its GHSA ID, in the
+  root `package.json` (`pnpm.auditConfig.ignoreGhsas`). Everything else stays
+  at `--audit-level high`. `scripts/dependency-audit.test.mjs` (BUG-11)
+  pins:
+  - that every ignored advisory is named by an owner's accepted decision,
+    and that nothing is ignored by CVE;
+  - that every audit line in the workflows is exactly
+    `pnpm audit --audit-level high`, and that no other route sets audit
+    or hook settings (`pnpm-workspace.yaml`, a root `.pnpmfile.cjs`, a
+    `pnpmfile` setting);
+  - **D-093's premise, from the lockfile:** `node-forge` is depended on only
+    by Expo's tool and its signing package, by no workspace package, and only
+    in a version the advisory covers.
+- **Remove the ignore** when a patched `node-forge` exists or Expo stops
+  depending on it. Either change to the lockfile fails the premise test
+  with "decide again, or remove the ignore", so the moment is not left to
+  memory. The same test fails if anything else, such as a server
+  dependency, starts pulling `node-forge` in: the accepted risk is Expo's
+  tool only, and a new path needs a new decision.
+- **Risk, stated plainly:** no flow this project runs uses `node-forge` to
+  verify a signature from an untrusted source. The ignore accepts that a
+  future flow could, and the premise test is what would say so.
+- **Not covered:** `spikes/background-safety/app/` has its own lockfile, with
+  `eas-cli` and `node-forge`. Neither CI's audit nor Dependabot reads it. That
+  predates this decision; the spike code is throwaway and never imported.
 - **Consequences:** BUG-11 is its own small pull request to `main`, and the
   same change is ported into #53 so SM-01 can merge. Supersedes nothing.
