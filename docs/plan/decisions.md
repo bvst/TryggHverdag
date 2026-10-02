@@ -3212,3 +3212,28 @@ any other path is work, not a candidate for the same treatment.
     owner merges it by hand (D-075).
   - Every later change to a fake or builder in the test kit needs the owner.
   - A change to the mutation gate's own files gets the safety review.
+- **Amended 2026-10-02 (owner, asked in session after BUG-14's four reviews,
+  with Claude's recommendation on both questions):**
+  - **Why:** `safety-reviewer`, `code-reviewer` and `test-auditor` all found
+    that D-100 covered four of the mutation run's inputs but not the Vitest
+    configurations the groups run under. `safety-reviewer` showed that one
+    `--exclude` line in such a configuration drops a group's test from every
+    mutant's run, with exit 0 and no warning.
+  - **Decision:**
+    - `vitest.config.mjs`, `vitest.shared.mjs` and `vitest.system.config.mjs`
+      also join the ai-review `safety` filter. All three already need the
+      owner (D-096 and earlier).
+    - The test checks the filter against the code's own lists: every entry in
+      `MUTATION_INPUTS` and every group's `config`. A future input therefore
+      cannot be left out by accident.
+    - The groups' test files stay out of the filter and stay unowned (the
+      owner's choice). They already get `test-auditor`, the no-test-weakened
+      check and a fresh mutation run whenever they change. Each changes three
+      or four times a month, so adding them would bring in `safety-reviewer`
+      on most server pull requests.
+    - `safety-reviewer`'s brief gains a checklist line for these files, so that
+      the review they now trigger has something to check (D-045).
+  - **Corrections to the Context above:**
+    - The test kit feeds the mutation check rather than judging it.
+    - Of D-100's four filter entries, only the first three already needed the
+      owner. The test kit is what the decision gives an owner.
