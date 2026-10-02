@@ -196,7 +196,7 @@ export function decideApiDiff({ releasedSpecs, currentSpec, toolAvailable }) {
  * every change to the product would start the run. Nor is the lockfile, which
  * would start it on every dependency update, a cost the owner has not chosen.
  */
-const MUTATION_INPUTS = [
+export const MUTATION_INPUTS = [
   'stryker.config.mjs',
   'scripts/lib/gate-decisions.mjs',
   'scripts/mutation.mjs',

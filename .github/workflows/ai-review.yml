@@ -75,6 +75,9 @@ jobs:
               - 'scripts/lib/gate-decisions.mjs'
               - 'stryker.config.mjs'
               - 'packages/test-kit/**'
+              - 'vitest.config.mjs'
+              - 'vitest.shared.mjs'
+              - 'vitest.system.config.mjs'
             ui:
               - 'apps/mobile/src/**/*.tsx'
               - 'apps/mobile/src/shared/translations/**'
