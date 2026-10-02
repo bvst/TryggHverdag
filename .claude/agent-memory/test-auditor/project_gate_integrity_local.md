@@ -44,3 +44,4 @@ diff, traceability's cheap steps are enough to run by hand: `req:coverage --fail
 test:coverage, the ratchet and mutation all take "nothing to check".
 `req:coverage` rewrites docs/requirements-status.md. If `git status` shows it unchanged afterwards, the run
 changed nothing.
+2026-10-02 cloud session (BUG-11 at 786a5e4): gate:integrity 3 of 5 again; curl showed the same 13 contexts, `require_code_owner_review: true`, `bypass_actors: []`, `current_user_can_bypass: never`. The branch was pushed but had no PR, so check-runs gave total_count 0 (not 422, not 403).

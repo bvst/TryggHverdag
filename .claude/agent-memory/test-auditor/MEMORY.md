@@ -12,3 +12,4 @@
 - [SPIKE-01 audit](project_spike01_audit.md) — spike tests outside CI/Stryker; BLOCK at 8a37a5e, PASS at 6ae585f; open should-fix ids
 - [Parallel ID collision](feedback_parallel_id_collision.md) — new D-0xx/BUG-n may already be taken on main or an open PR; dirty PR = zero check runs
 - [Shadowed guards](feedback_shadowed_guards.md) — a new filter layer (plan) can shadow an old guard and silently drop failures; re-run old mutants
+- [Config-pinning tests](feedback_config_pinning_tests.md) — BUG-11 audit ignore; `pnpm -C . audit` escapes literal scans; delegated/superseded decisions still "Accepted"; pin path premises from the lockfile

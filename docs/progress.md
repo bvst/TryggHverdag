@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-02 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 built and reviewed**, its pull request next · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-02 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 in review** ([#53](https://github.com/bvst/TryggHverdag/pull/53)), with BUG-11 ([#54](https://github.com/bvst/TryggHverdag/pull/54)) ported in · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -28,7 +28,7 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 
 | # | ID | Task | Status |
 |---|----|------|--------|
-| 1 | SM-01 | Start a journey: the base tables, per-device authentication (SEC-07), the state machine module (AR-04), one active journey per walker, at least one responder | 🟡 **Built and reviewed; its pull request is next.** Spec `7101f94`; tests `8c5573f` (written first, all 16 criteria); code `cbc0eeb`; review loop 1: tests `658f267`, spec `4870049`, code `8f6932b`; test-auditor's should-fix `654a5d7`. **Reviews, all PASS:** safety, privacy-security, code (advisory), test-auditor. Every should-fix is in the branch, except optional ones listed in `progress/m2.md`. **Evidence:** `gate:quick` 3 of 3; domain mutation 100 %; coverage ratchet: nothing went down. `gate:full` in a session: `gate:integrity` cannot read GitHub's rules API (its file-based checks pass); L3 and L7 not possible. **L3 has not run under Testcontainers** — only against a local PostgreSQL 16, as supporting evidence; CI's `integration` job is the evidence |
+| 1 | SM-01 | Start a journey: the base tables, per-device authentication (SEC-07), the state machine module (AR-04), one active journey per walker, at least one responder | 🟡 **Built and reviewed: [#53](https://github.com/bvst/TryggHverdag/pull/53).** In CI every required check is green but `security` (BUG-11, [#54](https://github.com/bvst/TryggHverdag/pull/54), ported in); L3 ran under Testcontainers for the first time, 49 of 49. Waits on the owner's approval. Spec `7101f94`; tests `8c5573f` (written first, all 16 criteria); code `cbc0eeb`; review loop 1: tests `658f267`, spec `4870049`, code `8f6932b`; test-auditor's should-fix `654a5d7`. **Reviews, all PASS:** safety, privacy-security, code (advisory), test-auditor. Every should-fix is in the branch, except optional ones listed in `progress/m2.md`. **Evidence:** `gate:quick` 3 of 3; domain mutation 100 %; coverage ratchet: nothing went down. `gate:full` in a session: `gate:integrity` cannot read GitHub's rules API (its file-based checks pass); L3 and L7 not possible. **L3 has not run under Testcontainers** — only against a local PostgreSQL 16, as supporting evidence; CI's `integration` job is the evidence |
 | | BUG-10 | The journey files become safety paths (D-092): `SAFETY_PATHS`, CODEOWNERS, the ai-review `safety` filter, and `CLOCK_FREE_PATHS`. Runs right after SM-01 merges, before task 3 | ⚪ Not started. Its `ai-review.yml` part is merged by hand (D-075) |
 | 2 | LOST-01 | Heartbeat, with or without position | ⚪ Not started |
 | 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ⚪ Not started |
@@ -320,9 +320,28 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**SM-01** (M2's first task, D-090) is built, reviewed and audited on branch
-`claude/busy-faraday-40n2zl`; its pull request is next. See "M2 at a glance"
-above. Behind it, in order: BUG-10 (D-092), then LOST-01.
+**SM-01** (M2's first task, D-090) is built, reviewed and audited:
+[#53](https://github.com/bvst/TryggHverdag/pull/53). Every required check is
+green except `security`, which BUG-11 below fixes; it waits on that and on the
+owner's approval. Behind it, in order: BUG-10 (D-092), then LOST-01.
+
+**BUG-11: the dependency audit accepts one advisory (D-093, 2026-10-02).**
+CI's required `security` job (`pnpm audit --audit-level high`) went red on
+every pull request when a high advisory with no patched version,
+GHSA-86w9-cpqp-85rv in `node-forge`, reached npm's audit data. It arrives only
+through Expo's command-line tool (`apps/mobile` > `expo` > `@expo/cli`), never
+the server or the app's own code. Reproduced on `main`'s checkout: "7
+vulnerabilities found · Severity: 6 moderate | 1 high", exit 1. The owner
+accepted this one advisory, recorded as D-093: the root `package.json`
+ignores it by GHSA ID. `scripts/dependency-audit.test.mjs` pins that every
+ignored advisory is named by an owner's accepted decision, that every workflow
+audit line is exactly `pnpm audit --audit-level high`, that no other route sets
+audit or hook settings, and D-093's premise from the lockfile. That last check
+fails when a patched `node-forge` arrives, when Expo drops it, or when anything
+else pulls it in, so **the ignore's removal is prompted by a red test**.
+The same change is ported into SM-01's pull request (#53), which this blocked.
+[#54](https://github.com/bvst/TryggHverdag/pull/54) is BUG-11's own pull
+request.
 
 **D-085's loose ends** (the pull request merged, [#43](https://github.com/bvst/TryggHverdag/pull/43)).
 - **Verified:** `deploy-staging` on `ubuntu-26.04`. Run 36621209842, for
