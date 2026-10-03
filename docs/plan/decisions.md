@@ -3237,3 +3237,54 @@ any other path is work, not a candidate for the same treatment.
     - The test kit feeds the mutation check rather than judging it.
     - Of D-100's four filter entries, only the first three already needed the
       owner. The test kit is what the decision gives an owner.
+
+## D-104 — The dependency audit accepts a second advisory: braces' deeply nested patterns (BUG-15)
+- **Date:** 2026-10-03 · **Status:** Accepted (owner, 2026-10-03). Asked in
+  session with Claude's recommendation, "Accept this one, recorded"; the
+  alternative offered was "wait for upstream" · **Section:** 8 (SEC-06).
+  D-101 to D-103 are taken by LOST-01's open branch, so this is D-104.
+- **Context:**
+  - CI's required `security` job runs `pnpm audit --audit-level high`. On
+    2026-10-03 the same command failed on `main`'s own checkout (`34bc460`):
+    "8 vulnerabilities found · Severity: 6 moderate | 2 high (1 ignored)",
+    exit 1. The new high one is
+    [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)
+    (CVE-2026-93687, CVSS 8.7): "braces vulnerable to stack-exhaustion denial
+    of service through deeply nested patterns". The advisory page, read
+    2026-10-03, says published 2026-09-18, updated 2026-10-02, affected
+    "through 3.0.3", and patched versions "None available". A crafted,
+    deeply nested brace pattern exhausts the call stack and ends the Node.js
+    process with an uncaught `RangeError` (CWE-674).
+  - **Not any pull request's failure.** `main`'s `security` job passed on
+    2026-10-02 at 20:08 UTC (run 37058587754), so the advisory reached npm's
+    audit data after that. Every pull request fails the check until it is
+    handled, as with D-093.
+  - **Where `braces` is used** (read on 2026-10-03). The lockfile holds one
+    version, 3.0.3, and its only dependent is `micromatch`. The audit's
+    reported path is `apps__mobile>@jest/globals>…>micromatch>braces`, the
+    app's test runner. `pnpm why braces --prod` adds Expo's tooling:
+    `@expo/cli` and `@expo/metro-file-map`, the bundler's file watcher.
+    - Both expand glob patterns from this repository's own configuration,
+      never a pattern a user or the network supplies.
+    - Nothing reaches it from the server: `pnpm why braces --prod` in
+      `@trygghverdag/server` finds no path.
+    - No file in `apps/mobile/src` or `apps/mobile/app` imports `micromatch`
+      or `braces`, and the runtime packages checked (`expo-router`,
+      `expo-modules-core`, `react-native`) do not mention `micromatch`.
+      Whether a bundler could ever pull it into the app's JavaScript was not
+      tested by building a bundle.
+  - At worst, a crafted pattern in our own configuration would crash a
+    developer's or CI's test or bundler run. That fails loudly and touches
+    no one's data or safety.
+- **Decision:** the audit ignores this one advisory, by its GHSA ID, in the
+  root `package.json`'s `pnpm.auditConfig.ignoreGhsas`, next to D-093's.
+  Everything else stays at `--audit-level high`.
+- **Consequences:**
+  - The `security` job goes green again on `main` and on every pull request.
+  - The test that pins D-093's exception pins this one too, with its premise
+    read from `pnpm-lock.yaml`: `braces`' only dependent is `micromatch`, no
+    workspace package depends on `braces` directly, and every locked `braces`
+    is at most 3.0.3. A patched `braces` reaching the lockfile, or a new
+    dependent, fails the test: the prompt to remove the exception, or to look
+    again.
+  - **Revisit** when `braces` publishes a fix, or when the advisory changes.
