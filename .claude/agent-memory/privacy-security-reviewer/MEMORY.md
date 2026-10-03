@@ -5,3 +5,4 @@
 - [Store request docs review](store_request_docs_review.md) — drafts to Apple/Google: placeholders vs later /decision and app.config.ts, vendor replies, privacy-promise tests, push headers and other notices
 - [Dependency audit ignore review](dependency_audit_ignore_review.md) — pnpm ignoreGhsas is path-agnostic; pnpmfile/.npmrc/quoted-YAML routes; @expo/cli node-forge reachability
 - [Merge rules / CODEOWNERS review](merge_rules_codeowners_review.md) — last-match simulation, unauthenticated codeowners/errors + ruleset reads (bypass_actors hidden), open owner gaps: api.ts, adapters/clock.ts, migrations path
+- [Heartbeat / log adapter review](heartbeat_log_adapter_review.md) — LOST-01: end-to-end tsx probe of the real log chain, oRPC 1.15.3 error/decode path, pino quiet-by-default facts, journeyId free-string slot, heartbeats retention
