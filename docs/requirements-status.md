@@ -23,7 +23,7 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | JRN-05 | "I'm home" | must | ⚪ | 0 |
 | JRN-06 | Journeys never run forever | must | ⚪ | 0 |
 | JRN-07 | Automatic arrival | ⛔ parked | ⚪ | 0 |
-| LOST-01 | Heartbeat | must | 🟢 | 8 |
+| LOST-01 | Heartbeat | must | 🟢 | 11 |
 | LOST-02 | Lost-contact alert | must | ⚪ | 0 |
 | LOST-03 | Back in contact | must | ⚪ | 0 |
 | LOST-04 | Low battery warning | must | ⚪ | 0 |
