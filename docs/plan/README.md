@@ -82,7 +82,12 @@ row, finds it): **how long are journey records kept** (who walked, when, in
 which state, and who followed)? The retention rule sets times for positions,
 alerts and account data, not for the journey row. Recommendation (SM-01's spec,
 the question at its end): delete a journey and its responder rows with its alert
-records, 30 days after it ends. Decide it in M4, and write it into the DPIA.
+records, 30 days after it ends. **Since LOST-01, the same question covers the
+`heartbeats` rows:** a receive time about every 60 seconds and a battery level,
+a timeline of the walker's activity that fits none of the retention rule's
+three categories (positions, alert records, account data). Positions already
+fall under the rule (24 hours after the journey ends). Decide it in M4, and
+write it into the DPIA.
 
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every
