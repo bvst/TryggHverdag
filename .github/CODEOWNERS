@@ -31,6 +31,10 @@
 /apps/server/src/adapters/clock.ts         @bvst @urso-agent
 /apps/server/src/adapters/migrations.ts    @bvst @urso-agent
 /apps/server/drizzle.config.ts             @bvst @urso-agent
+# The server's one log adapter: it takes closed events only, which is what
+# keeps heartbeat data out of logs (PRIV-07). Not in the ai-review safety
+# filter, by the owner's decision (D-102).
+/apps/server/src/log.ts                    @bvst @urso-agent
 /apps/mobile/src/safety-core/     @bvst @urso-agent
 # Where the app's permissions, background modes, backup and deep links are set;
 # background location is what the safety core stands on (D-084).

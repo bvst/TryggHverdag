@@ -444,6 +444,432 @@
           }
         ]
       }
+    },
+    "/heartbeats": {
+      "post": {
+        "operationId": "recordHeartbeat",
+        "summary": "Send a heartbeat",
+        "description": "Needs a device credential. Answers only for the device user’s own journeys, and only from the device that started the journey. A 200, RECORDED or DUPLICATE, means the server has the event, so the phone may drop it. A 409 means the journey has ended: stop sending.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "journeyId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "The journey this heartbeat belongs to."
+                  },
+                  "eventId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[A-Za-z0-9-]+$",
+                    "description": "The heartbeat’s own ID, unique within its journey. Sent again, it changes nothing and is answered DUPLICATE (SM-08)."
+                  },
+                  "batteryLevel": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "The battery level from 0 to 1, or null when the phone does not know it."
+                  },
+                  "position": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "latitude": {
+                            "type": "number",
+                            "minimum": -90,
+                            "maximum": 90,
+                            "description": "Degrees, from -90 to 90."
+                          },
+                          "longitude": {
+                            "type": "number",
+                            "minimum": -180,
+                            "maximum": 180,
+                            "description": "Degrees, from -180 to 180."
+                          },
+                          "accuracyMeters": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": "The position’s accuracy in metres, 0 or more."
+                          },
+                          "recordedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "When the phone recorded the position, by the phone’s clock, as RFC 3339 with an offset. Any such time is accepted: it labels the position and decides nothing (REL-01)."
+                          }
+                        },
+                        "required": [
+                          "latitude",
+                          "longitude",
+                          "accuracyMeters",
+                          "recordedAt"
+                        ],
+                        "additionalProperties": false,
+                        "description": "Where the phone was, as the phone recorded it."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "The position, or null when the phone has none (SM-03)."
+                  }
+                },
+                "required": [
+                  "journeyId",
+                  "eventId",
+                  "batteryLevel",
+                  "position"
+                ],
+                "additionalProperties": false,
+                "description": "A heartbeat. The walker is the user whose device sends it, and the device must be the one that started the journey; no field names either."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The server has the heartbeat, so the phone may drop it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "enum": [
+                        "RECORDED",
+                        "DUPLICATE"
+                      ],
+                      "type": "string",
+                      "description": "RECORDED when the heartbeat was stored now; DUPLICATE when its journey already had its event ID, so nothing changed."
+                    }
+                  },
+                  "required": [
+                    "outcome"
+                  ],
+                  "description": "The server has the heartbeat, so the phone may drop it."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "400",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "defined": {
+                          "const": true
+                        },
+                        "code": {
+                          "const": "BAD_REQUEST"
+                        },
+                        "status": {
+                          "const": 400
+                        },
+                        "message": {
+                          "type": "string",
+                          "default": "Input validation failed"
+                        },
+                        "data": {}
+                      },
+                      "required": [
+                        "defined",
+                        "code",
+                        "status",
+                        "message"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "defined": {
+                          "const": false
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "number"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "data": {}
+                      },
+                      "required": [
+                        "defined",
+                        "code",
+                        "status",
+                        "message"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "defined": {
+                          "const": true
+                        },
+                        "code": {
+                          "const": "UNAUTHORIZED"
+                        },
+                        "status": {
+                          "const": 401
+                        },
+                        "message": {
+                          "type": "string",
+                          "default": "A valid device credential is required."
+                        },
+                        "data": {}
+                      },
+                      "required": [
+                        "defined",
+                        "code",
+                        "status",
+                        "message"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "defined": {
+                          "const": false
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "number"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "data": {}
+                      },
+                      "required": [
+                        "defined",
+                        "code",
+                        "status",
+                        "message"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "defined": {
+                          "const": true
+                        },
+                        "code": {
+                          "const": "NOT_THE_JOURNEYS_DEVICE"
+                        },
+                        "status": {
+                          "const": 403
+                        },
+                        "message": {
+                          "type": "string",
+                          "default": "Only the device that started this journey can send its heartbeats."
+                        },
+                        "data": {}
+                      },
+                      "required": [
+                        "defined",
+                        "code",
+                        "status",
+                        "message"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "defined": {
+                          "const": false
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "number"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "data": {}
+                      },
+                      "required": [
+                        "defined",
+                        "code",
+                        "status",
+                        "message"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "defined": {
+                          "const": true
+                        },
+                        "code": {
+                          "const": "JOURNEY_NOT_FOUND"
+                        },
+                        "status": {
+                          "const": 404
+                        },
+                        "message": {
+                          "type": "string",
+                          "default": "The walker has no journey with this ID."
+                        },
+                        "data": {}
+                      },
+                      "required": [
+                        "defined",
+                        "code",
+                        "status",
+                        "message"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "defined": {
+                          "const": false
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "number"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "data": {}
+                      },
+                      "required": [
+                        "defined",
+                        "code",
+                        "status",
+                        "message"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "409",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "defined": {
+                          "const": true
+                        },
+                        "code": {
+                          "const": "JOURNEY_ENDED"
+                        },
+                        "status": {
+                          "const": 409
+                        },
+                        "message": {
+                          "type": "string",
+                          "default": "The journey has ended, so the heartbeat was not stored. Stop sending them."
+                        },
+                        "data": {}
+                      },
+                      "required": [
+                        "defined",
+                        "code",
+                        "status",
+                        "message"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "defined": {
+                          "const": false
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "number"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "data": {}
+                      },
+                      "required": [
+                        "defined",
+                        "code",
+                        "status",
+                        "message"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "deviceCredential": []
+          }
+        ]
+      }
     }
   }
 }

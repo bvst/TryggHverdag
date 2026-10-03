@@ -14,6 +14,7 @@ import { databaseWorkerHeartbeats } from './adapters/worker-heartbeats.ts';
 import { createApi } from './api.ts';
 import type { ServerConfig } from './config.ts';
 import { listen } from './http.ts';
+import { createLog } from './log.ts';
 import { createHealthService } from './modules/health/service.ts';
 import { createJourneyService } from './modules/journeys/service.ts';
 
@@ -31,7 +32,13 @@ export async function startApiProcess(config: ServerConfig): Promise<ApiProcess>
   const clock = databaseClock(db);
   const app = createApi({
     health: createHealthService({ clock, heartbeats: databaseWorkerHeartbeats(db) }),
-    journeys: createJourneyService({ clock, journeys: databaseJourneyStore(db) }),
+    // The one place the real log is made: modules get the Log port (AR-10).
+    // It writes to this process's stdout, where the platform collects it.
+    journeys: createJourneyService({
+      clock,
+      journeys: databaseJourneyStore(db),
+      log: createLog(),
+    }),
     devices: databaseDeviceAuthenticator(db),
   });
 

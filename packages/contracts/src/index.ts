@@ -21,6 +21,16 @@ export { deviceCredentialErrors } from './device-credential.ts';
 export { health, healthResponseSchema, WORKER_STALE_AFTER_MS } from './health.ts';
 export type { HealthResponse } from './health.ts';
 export {
+  EVENT_ID_PATTERN,
+  MAX_EVENT_ID_LENGTH,
+  heartbeatErrors,
+  heartbeatPositionSchema,
+  heartbeatRequestSchema,
+  heartbeatResponseSchema,
+  recordHeartbeat,
+} from './heartbeats.ts';
+export type { HeartbeatErrorCode, HeartbeatRequest, HeartbeatResponse } from './heartbeats.ts';
+export {
   MAX_RESPONDERS,
   startJourney,
   startJourneyErrors,
