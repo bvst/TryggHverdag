@@ -373,7 +373,11 @@ describe('PRIV-07: each field of a line is written only when its value is one th
       const { line, text } = writtenThroughACast({ event: 'heartbeat_ignored', reason, journeyId });
 
       expect(line).toEqual({ event: 'heartbeat_ignored', reason: null, journeyId });
-      expect(markersIn(text, markers)).toEqual([]);
+      // Searched with the journey ID taken out. The ID is random hex, so it
+      // holds a short marker by chance: "409" in about one run in 110. The
+      // line above already holds it to exactly the ID given, which nothing
+      // of the reason went into (RG-03, LOST-01).
+      expect(markersIn(text.replaceAll(journeyId, ''), markers)).toEqual([]);
     },
   );
 
