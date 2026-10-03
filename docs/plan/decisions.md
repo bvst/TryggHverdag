@@ -3237,3 +3237,100 @@ any other path is work, not a candidate for the same treatment.
     - The test kit feeds the mutation check rather than judging it.
     - Of D-100's four filter entries, only the first three already needed the
       owner. The test kit is what the decision gives an owner.
+
+## D-104 — The dependency audit accepts a second advisory: braces' deeply nested patterns (BUG-15)
+- **Date:** 2026-10-03 · **Status:** Accepted (owner, 2026-10-03). Asked in
+  session with Claude's recommendation, "Accept this one, recorded"; the
+  alternative offered was "wait for upstream" · **Section:** 8 (SEC-06).
+  D-101 to D-103 are taken by LOST-01's open branch, so this is D-104.
+- **Context:**
+  - CI's required `security` job runs `pnpm audit --audit-level high`. On
+    2026-10-03 the same command failed on `main`'s own checkout (`34bc460`):
+    "8 vulnerabilities found · Severity: 6 moderate | 2 high (1 ignored)",
+    exit 1. The new high one is
+    [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)
+    (CVE-2026-93687; CVSS 4.0 8.7 on the advisory page, read by the orchestrating session on 2026-10-03; 7.5 under CVSS 3.1 in npm's audit data, which is what `pnpm audit` reads): "braces vulnerable to stack-exhaustion denial
+    of service through deeply nested patterns". The advisory page, read
+    2026-10-03, says published 2026-09-18, updated 2026-10-02, affected
+    "through 3.0.3", and patched versions "None available". A crafted,
+    deeply nested brace pattern exhausts the call stack and ends the Node.js
+    process with an uncaught `RangeError` (CWE-674).
+  - **Not any pull request's failure.** `main`'s `security` job passed on
+    2026-10-02 at 20:08 UTC (run 37058587754), so the advisory reached npm's
+    audit data after that. Every pull request fails the check until it is
+    handled, as with D-093.
+  - **Where `braces` is used** (read on 2026-10-03; corrected and extended by
+    BUG-15's reviews the same day). The lockfile holds one version, 3.0.3,
+    and its only dependent is `micromatch@4.0.8`. `micromatch`'s eight
+    dependents are all Jest or Metro packages: `@jest/core`,
+    `@jest/transform`, `jest-config`, `jest-haste-map`, `jest-message-util`,
+    Metro's own `metro-file-map` (0.84.5 and 0.84.6) and Expo's
+    `@expo/metro-file-map`. The audit's reported path is
+    `apps__mobile>@jest/globals>…>micromatch>braces`, the app's test runner.
+    - `pnpm why braces --prod` in `apps/mobile` lists them all. In pnpm,
+      `--prod` includes peers, so it does not mean runtime: React Native
+      0.86 reaches Jest through its optional peer `@react-native/jest-preset`,
+      and `expo-router` reaches `@expo/cli` through `expo`. Their own
+      package.json and source do not name `micromatch`.
+    - Only `apps/mobile` reaches `braces`: `pnpm -r why braces` names no
+      other workspace package, and a walk of the lockfile from the server
+      (461 packages, dev dependencies included) finds neither `braces` nor
+      `micromatch` (`test-auditor`).
+    - No file under `apps/mobile/src` names `micromatch` or `braces`.
+    - **The app's bundles hold none of it.** `privacy-security-reviewer`
+      built them with `expo export` for Android (1,218 modules) and iOS
+      (1,126): no `braces`, `micromatch`, `picomatch`, Jest, or Metro's
+      bundler and file watcher (`metro`, `metro-file-map`), by module path or
+      by source content. They hold only Metro's runtime
+      (`@expo/metro-runtime` and Metro's `require` polyfill), as every Expo
+      bundle does.
+    - **`braces` is loaded but never called.** In micromatch 4.0.8 it runs
+      only from `.parse`, `.braces` and `.braceExpand`; all eight callers use
+      picomatch-only functions. Their patterns come from Jest's and Metro's
+      configuration, never from a user or the network.
+    - **Not covered:** copies of `braces` built into other packages, which
+      the lockfile and the audit cannot see: Vite 8.3.0's bundled chokidar
+      (its dev server turns globbing off), tsx 4.23.15 (watch mode only),
+      prettier 3.9.8 (its command-line globs) and `resolve-workspace-root`
+      2.0.1 (the repository's own workspace globs). All are tooling; the
+      server runs under Node's own type stripping, not tsx.
+  - At worst, a crafted pattern in our own configuration would crash a
+    developer's or CI's test or bundler run. That fails loudly and touches
+    no one's data or safety.
+- **Decision:** the audit ignores this one advisory, by its GHSA ID, in the
+  root `package.json`'s `pnpm.auditConfig.ignoreGhsas`, next to D-093's.
+  Everything else stays at `--audit-level high`.
+- **Consequences:**
+  - The `security` job goes green again on `main` and on every pull request.
+  - The test that pins D-093's exception pins this one too, with its premise
+    read from `pnpm-lock.yaml`: `braces`' only dependent is `micromatch`, no
+    workspace package depends on `braces` directly, every locked `braces` is
+    at most 3.0.3, and **only `apps/mobile` reaches `braces`**, by any path.
+    A patched `braces` reaching the lockfile, a new dependent, or the server
+    (or any other workspace package) reaching it through `micromatch` fails
+    the test: the prompt to remove the exception, or to look again. The last
+    check was added at BUG-15's review (`test-auditor`,
+    `privacy-security-reviewer`): `micromatch` sits under almost every glob
+    library, so pinning `braces`' direct dependents alone caught almost
+    nothing.
+  - The list of ignored IDs is pinned to exactly D-093's and D-104's, so a
+    third ID fails until it is added beside its own decision.
+  - **Not pinned:**
+    - a later decision superseding this one (removing the ID is the loud
+      path);
+    - the copies under "Not covered" above;
+    - a new path to `braces` *inside* `apps/mobile`: a new app dependency
+      that uses `micromatch`, or the app depending on `micromatch` directly.
+      The walk allows `apps/mobile`, so either passes. Pinning `micromatch`'s
+      exact dependents would catch it, but would also fail on routine Jest and
+      Metro updates; `test-auditor` judged that a cost for the owner to
+      choose, and it is not pinned (BUG-15's review loop,
+      `privacy-security-reviewer` preferring the pin);
+    - whether app source imports `micromatch` or `braces` (read, not
+      tested).
+  - **Revisit** when `braces` publishes a fix, or when the advisory changes.
+    Nothing tells the project when that happens today: Dependabot alerts are
+    off for the repository ("Dependabot alerts are disabled for this
+    repository", GitHub's API, 2026-10-03), against the setup guide in
+    `merge-rules.md`. Turning them on is the owner's (A-31); D-093 has the
+    same gap.
