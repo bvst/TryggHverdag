@@ -25,6 +25,12 @@
       "coveredLines": 10,
       "totalLines": 10
     },
+    "apps/server/src/log.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 21,
+      "totalLines": 21
+    },
     "apps/server/src/ports.ts": {
       "lines": 100,
       "branches": 100,
@@ -91,17 +97,41 @@
       "coveredLines": 4,
       "totalLines": 4
     },
+    "apps/server/src/domain/journey.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 22,
+      "totalLines": 22
+    },
+    "apps/server/src/domain/sqlstate.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 11,
+      "totalLines": 11
+    },
     "apps/server/src/modules/health/service.ts": {
       "lines": 100,
       "branches": 100,
       "coveredLines": 5,
       "totalLines": 5
     },
+    "apps/server/src/modules/journeys/service.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 29,
+      "totalLines": 29
+    },
     "packages/contracts/src/api-version.ts": {
       "lines": 100,
       "branches": 100,
       "coveredLines": 2,
       "totalLines": 2
+    },
+    "packages/contracts/src/bad-request.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 1,
+      "totalLines": 1
     },
     "packages/contracts/src/contract.ts": {
       "lines": 100,
@@ -115,11 +145,23 @@
       "coveredLines": 3,
       "totalLines": 3
     },
+    "packages/contracts/src/heartbeats.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 9,
+      "totalLines": 9
+    },
     "packages/contracts/src/index.ts": {
       "lines": 100,
       "branches": 100,
       "coveredLines": 0,
       "totalLines": 0
+    },
+    "packages/contracts/src/journeys.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 5,
+      "totalLines": 5
     },
     "packages/contracts/src/openapi.ts": {
       "lines": 100,

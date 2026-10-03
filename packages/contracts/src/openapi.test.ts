@@ -14,9 +14,11 @@ describe('the generated OpenAPI description', () => {
     const document = await openApiDocument();
     const paths = document['paths'] as Record<string, Record<string, unknown>>;
 
-    // Was ['/health'] alone until SM-01 added the journeys route; the list is
+    // Was ['/health'] alone until SM-01 added the journeys route, and
+    // ['/health', '/journeys'] until LOST-01 added the heartbeat route (RG-03:
+    // a route added by design, LOST-01's spec, approach item 1). The list is
     // still exact, so a route added later has to be named here on purpose.
-    expect(Object.keys(paths).sort()).toEqual(['/health', '/journeys']);
+    expect(Object.keys(paths).sort()).toEqual(['/health', '/heartbeats', '/journeys']);
     expect(paths['/health']).toHaveProperty('get');
   });
 
@@ -155,5 +157,47 @@ describe('SM-01: the journeys route, as published', () => {
 
     expect(paths['/health']?.['get']).toBeDefined();
     expect(securityOf(paths['/health']?.['get'])).toEqual([]);
+  });
+});
+
+describe('LOST-01: the heartbeat route, as published', () => {
+  test('LOST-01-AC19: POST /heartbeats is described under the /v1 server', async () => {
+    const { paths } = await described();
+    const document = await openApiDocument();
+
+    expect(document['servers']).toEqual([{ url: API_PREFIX }]);
+    expect(API_PREFIX).toBe('/v1');
+    expect(paths['/heartbeats']?.['post']).toBeDefined();
+    expect(Object.keys(paths['/heartbeats'] ?? {})).toEqual(['post']);
+  });
+
+  test('LOST-01-AC19: its answers include 200, 400, 401, 403, 404 and 409', async () => {
+    const { paths } = await described();
+    const responses = Object.keys(paths['/heartbeats']?.['post']?.responses ?? {});
+
+    expect(responses).toEqual(expect.arrayContaining(['200', '400', '401', '403', '404', '409']));
+  });
+
+  test('LOST-01-AC19: POST /heartbeats requires the bearer scheme', async () => {
+    const { paths, securitySchemes, securityOf } = await described();
+    const [bearerName] = Object.entries(securitySchemes)
+      .filter(([, scheme]) => scheme.type === 'http' && scheme.scheme?.toLowerCase() === 'bearer')
+      .map(([name]) => name);
+
+    expect(bearerName).toBeDefined();
+    expect(securityOf(paths['/heartbeats']?.['post'])).toContainEqual({ [bearerName ?? '']: [] });
+  });
+
+  test('LOST-01-AC19: the journey is named in the body, never in the path, so no heartbeat value is ever in a URL', async () => {
+    // Access logs, the platform's own included, see the URL. A journey ID or
+    // anything else of a heartbeat in it would be in every one of them.
+    const { paths } = await described();
+
+    expect(Object.keys(paths).filter((route) => route.startsWith('/heartbeats'))).toEqual([
+      '/heartbeats',
+    ]);
+    expect(JSON.stringify(paths['/heartbeats']?.['post'] ?? {})).not.toMatch(
+      /"in":\s*"(path|query|header)"/,
+    );
   });
 });

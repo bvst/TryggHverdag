@@ -1,25 +1,81 @@
 /**
- * Journeys, their responders and the users both must be, in PostgreSQL (SM-01).
+ * Journeys, their responders, their heartbeats and the users all of them must
+ * be, in PostgreSQL (SM-01, LOST-01).
  *
  * The domain decides; this stores what it decided, and the database enforces
- * the one rule a read cannot: two starts that race past `unendedJourneyOf`
- * both meet the partial unique index `journeys_one_unended_per_walker`. The
- * insert names that index as its conflict target and does nothing on a
- * conflict, so the second start waits for the first, inserts nothing, and is
- * told which journey won.
+ * the rules a read cannot. Two starts that race past `unendedJourneyOf` both
+ * meet the partial unique index `journeys_one_unended_per_walker`. The insert
+ * names that index as its conflict target and does nothing on a conflict, so
+ * the second start waits for the first, inserts nothing, and is told which
+ * journey won.
  *
  * A journey and its responders are written in one transaction, and a start
  * with no responders is refused before it opens. A journey without its
  * responders, even for a moment, is one the watchdog would alert nobody about.
+ * The journey records the device that sent the start (D-101).
+ *
+ * A heartbeat is written in one transaction that first locks its journey's
+ * row. That lock is where racing heartbeats meet: copies of one event are
+ * stored once (SM-08), last contact only ever moves forward (SM-09), and a
+ * journey that has ended takes nothing (SM-07).
+ *
+ * It is also where the watchdog will meet them (the lost-contact story, task
+ * 3): its `for update skip locked` skips a journey whose heartbeat is being
+ * written. That is right only while the transaction is short. No clock is
+ * read inside it, so it is short as written, but nothing yet bounds it: the
+ * API's pool sets no `idle_in_transaction_session_timeout` or
+ * `lock_timeout`. An API instance that froze mid-transaction would hold the
+ * row until PostgreSQL noticed the dead connection, and the watchdog would
+ * skip that journey the whole time: a missed alert that shows up nowhere.
+ * Task 3, the lost-contact watchdog, must bound the lock before it merges, or must not let
+ * `skip locked` skip a journey indefinitely (LOST-01's spec, approach item
+ * 6; docs/progress/m2.md).
+ *
+ * Any failure while storing a heartbeat is replaced by a `HeartbeatStoreError`
+ * holding PostgreSQL's SQLSTATE and nothing else. PostgreSQL's own error can
+ * hold the row it refused ("Failing row contains (…)"), and Drizzle's names
+ * the query's parameters: either would carry the position into whatever
+ * printed the error. Cleaned here, where it starts, it cannot reach any of
+ * them (PRIV-07).
  */
-import { and, eq, inArray } from 'drizzle-orm';
-import { journeyResponders, journeys, unended, users } from '../db/schema.ts';
-import type { UnendedJourney } from '../domain/journey.ts';
-import type { InsertStartedResult, JourneyStore, StartedJourney } from '../ports.ts';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import {
+  heartbeats,
+  journeyResponders,
+  journeys,
+  positions,
+  unended,
+  users,
+} from '../db/schema.ts';
+import type { JourneyForHeartbeat, UnendedJourney } from '../domain/journey.ts';
+import { sqlstateOf } from '../domain/sqlstate.ts';
+import type {
+  HeartbeatToRecord,
+  InsertStartedResult,
+  JourneyStore,
+  LatestHeartbeat,
+  RecordHeartbeatResult,
+  StartedJourney,
+} from '../ports.ts';
 import type { Database } from './db.ts';
 
 /** A database, or a transaction on one: both can read. */
 type Reader = Pick<Database, 'select'>;
+
+/**
+ * Storing a heartbeat failed. A fixed message, the SQLSTATE when there is one,
+ * and nothing else: no cause, no detail, no parameters, so nothing of the
+ * heartbeat can be printed from it, however deep anything looks.
+ */
+export class HeartbeatStoreError extends Error {
+  readonly code: string | null;
+
+  constructor(code: string | null) {
+    super('The heartbeat could not be stored.');
+    this.name = 'HeartbeatStoreError';
+    this.code = code;
+  }
+}
 
 async function unendedJourneyOf(db: Reader, walkerId: string): Promise<UnendedJourney | null> {
   const rows = await db
@@ -54,7 +110,7 @@ export function databaseJourneyStore(db: Database): JourneyStore {
       return new Set(rows.map((row) => row.id));
     },
 
-    async insertStarted({ walkerId, responderIds, startedAt }: StartedJourney) {
+    async insertStarted({ walkerId, deviceId, responderIds, startedAt }: StartedJourney) {
       // The domain refuses an empty list first, as NO_RESPONDER. Refused here
       // too, before anything is written: a journey with nobody to alert is
       // never stored, whoever calls.
@@ -64,7 +120,7 @@ export function databaseJourneyStore(db: Database): JourneyStore {
       return db.transaction(async (tx): Promise<InsertStartedResult> => {
         const [journey] = await tx
           .insert(journeys)
-          .values({ walkerId, state: 'ACTIVE', startedAt })
+          .values({ walkerId, deviceId, state: 'ACTIVE', startedAt })
           .onConflictDoNothing({ target: journeys.walkerId, where: unended(journeys.state) })
           .returning({ id: journeys.id });
 
@@ -95,6 +151,107 @@ export function databaseJourneyStore(db: Database): JourneyStore {
 
         return { inserted: true, journeyId: journey.id };
       });
+    },
+
+    async journeyForHeartbeat(journeyId: string): Promise<JourneyForHeartbeat | null> {
+      const rows = await db
+        .select({
+          id: journeys.id,
+          walkerId: journeys.walkerId,
+          deviceId: journeys.deviceId,
+          state: journeys.state,
+        })
+        .from(journeys)
+        .where(eq(journeys.id, journeyId))
+        .limit(1);
+      return rows[0] ?? null;
+    },
+
+    async recordHeartbeat({
+      journeyId,
+      eventId,
+      receivedAt,
+      batteryLevel,
+      position,
+    }: HeartbeatToRecord): Promise<RecordHeartbeatResult> {
+      try {
+        return await db.transaction(async (tx): Promise<RecordHeartbeatResult> => {
+          // The journey's row, locked until this transaction ends: racing
+          // heartbeats for one journey take their turns here.
+          const [journey] = await tx
+            .select({ state: journeys.state })
+            .from(journeys)
+            .where(eq(journeys.id, journeyId))
+            .for('update');
+          if (journey === undefined) {
+            // Nothing deletes a journey before the retention work, so one
+            // that was read and is gone is an error, not a guess.
+            throw new Error('The journey a heartbeat names was not found to lock.');
+          }
+          if (journey.state === 'ENDED') {
+            return { outcome: 'ended' };
+          }
+
+          const [stored] = await tx
+            .insert(heartbeats)
+            .values({ journeyId, eventId, receivedAt, batteryLevel })
+            .onConflictDoNothing({ target: [heartbeats.journeyId, heartbeats.eventId] })
+            .returning({ id: heartbeats.id });
+          if (stored === undefined) {
+            // This journey already has this event: nothing changes, last
+            // contact included (SM-08).
+            return { outcome: 'duplicate' };
+          }
+
+          if (position !== null) {
+            await tx.insert(positions).values({
+              heartbeatId: stored.id,
+              latitude: position.latitude,
+              longitude: position.longitude,
+              accuracyMeters: position.accuracyMeters,
+              recordedAt: position.recordedAt,
+            });
+          }
+
+          // Never backwards, even when two heartbeats take the lock in the
+          // reverse order of their receive times (SM-09). GREATEST ignores
+          // NULLs, so the first heartbeat sets it.
+          const at = receivedAt.toISOString();
+          await tx
+            .update(journeys)
+            .set({
+              lastHeartbeatAt: sql`greatest(${journeys.lastHeartbeatAt}, ${at}::timestamptz)`,
+            })
+            .where(eq(journeys.id, journeyId));
+
+          return { outcome: 'recorded' };
+        });
+      } catch (error) {
+        throw new HeartbeatStoreError(sqlstateOf(error));
+      }
+    },
+
+    async latestHeartbeatOf(journeyId: string): Promise<LatestHeartbeat | null> {
+      const rows = await db
+        .select({
+          receivedAt: heartbeats.receivedAt,
+          batteryLevel: heartbeats.batteryLevel,
+          positionOf: positions.heartbeatId,
+        })
+        .from(heartbeats)
+        .leftJoin(positions, eq(positions.heartbeatId, heartbeats.id))
+        .where(eq(heartbeats.journeyId, journeyId))
+        .orderBy(desc(heartbeats.receivedAt), desc(heartbeats.id))
+        .limit(1);
+      const latest = rows[0];
+      return latest === undefined
+        ? null
+        : {
+            receivedAt: latest.receivedAt,
+            // "Location unavailable" is the latest heartbeat having none.
+            hasPosition: latest.positionOf !== null,
+            batteryLevel: latest.batteryLevel,
+          };
     },
   };
 }

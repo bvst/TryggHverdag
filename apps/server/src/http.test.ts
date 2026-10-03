@@ -14,8 +14,12 @@ function api() {
   return createApi({
     health: createHealthService({ clock: fakeClock(NOW), heartbeats: fakeWorkerHeartbeats(NOW) }),
     // These tests are about the port; they start no journey, so the journey
-    // service fails loudly if anything calls it.
-    journeys: { start: () => Promise.reject(new Error('the port tests start no journey')) },
+    // service fails loudly if anything calls it. RG-03: `heartbeat` added
+    // because LOST-01 made it part of the journey service; it rejects too.
+    journeys: {
+      start: () => Promise.reject(new Error('the port tests start no journey')),
+      heartbeat: () => Promise.reject(new Error('the port tests send no heartbeat')),
+    },
     devices: fakeDeviceAuthenticator(),
   });
 }

@@ -16,13 +16,31 @@
 // fails naming the pair, because the implementer cannot edit this file. That
 // is the state-machine principle in the architecture: every transition has a
 // test, and a new feature cannot add an unhandled state quietly.
-import { fc, syntheticUuid } from '@trygghverdag/test-kit';
+//
+// LOST-01 adds the second event, the heartbeat (approach item 4 of its spec).
+// Its rule, in its order, which is part of the rule:
+//   1. no journey by that ID, or another walker's → refused, JOURNEY_NOT_FOUND
+//      (SEC-07: one answer for both, so it says nothing about other walkers);
+//   2. ENDED → ignored, JOURNEY_ENDED (SM-07), before anything else the
+//      heartbeat holds, as SM-01 reports an unended journey first;
+//   3. not the device that started the journey → refused,
+//      NOT_THE_JOURNEYS_DEVICE (D-101), so a tablet left at home can never
+//      hide the walking phone's silence;
+//   4. otherwise → recorded, and the state stays as it was: ACTIVE stays
+//      ACTIVE (SM-03), and LOST_CONTACT stays LOST_CONTACT until the
+//      back-in-contact task moves it (reading 7 of the spec).
+// The domain never sees the position, the battery or the event ID, so
+// whether a heartbeat carried a position changes no outcome: SM-03, held by
+// construction, and checked below as a property.
+import { fc, syntheticPosition, syntheticUuid } from '@trygghverdag/test-kit';
 import { describe, expect, test } from 'vitest';
 import {
   JOURNEY_EVENTS,
   JOURNEY_STATES,
   transition,
+  type HeartbeatEvent,
   type JourneyEventType,
+  type JourneyForHeartbeat,
   type JourneyState,
 } from './journey.ts';
 
@@ -43,6 +61,12 @@ const RESPONDER = syntheticUuid();
 const OTHER_RESPONDER = syntheticUuid();
 const STRANGER = syntheticUuid();
 const JOURNEY = syntheticUuid();
+/** The device the walker started the journey from. */
+const DEVICE = syntheticUuid();
+/** Another device of the same walker: a tablet left at home (D-101). */
+const OTHER_DEVICE = syntheticUuid();
+const OTHER_WALKER = syntheticUuid();
+const OTHER_WALKERS_DEVICE = syntheticUuid();
 
 /**
  * A start, with `existingUserIds` worked out as the module works it out: the
@@ -79,6 +103,24 @@ const ALREADY_ON = (journeyId: string): Outcome => ({
 const INVALID_RESPONDER: Outcome = { type: 'refused', reason: 'INVALID_RESPONDER' };
 const NO_RESPONDER: Outcome = { type: 'refused', reason: 'NO_RESPONDER' };
 
+/** A heartbeat from this walker's device: the walker's own one unless a test says otherwise. */
+function heartbeat(deviceId = DEVICE, walkerId = WALKER): HeartbeatEvent {
+  return { type: 'heartbeat', walkerId, deviceId };
+}
+
+/** The journey a heartbeat names: the walker's own, started from their device, unless a test says otherwise. */
+function named(
+  state: JourneyState,
+  { walkerId = WALKER, deviceId = DEVICE }: { walkerId?: string; deviceId?: string } = {},
+): JourneyForHeartbeat {
+  return { id: JOURNEY, state, walkerId, deviceId };
+}
+
+const RECORDED_IN = (state: Unended): Outcome => ({ type: 'recorded', state });
+const JOURNEY_ENDED: Outcome = { type: 'ignored', reason: 'JOURNEY_ENDED' };
+const JOURNEY_NOT_FOUND: Outcome = { type: 'refused', reason: 'JOURNEY_NOT_FOUND' };
+const NOT_THE_JOURNEYS_DEVICE: Outcome = { type: 'refused', reason: 'NOT_THE_JOURNEYS_DEVICE' };
+
 // ---------------------------------------------------------------------------
 // The transition table.
 // ---------------------------------------------------------------------------
@@ -93,9 +135,14 @@ type Situation = 'none' | JourneyState;
  */
 type Row = { outcome: Outcome } | { notASituation: string };
 
-/** The event each row is asked with, per event type: one valid responder, so the situation decides. */
+/**
+ * The event each row is asked with, per event type: for a start, one valid
+ * responder; for a heartbeat, the walker's own device. So the situation
+ * decides.
+ */
 const EVENT_FOR = {
   start: () => start([RESPONDER]),
+  heartbeat: () => heartbeat(),
 } satisfies { [E in JourneyEventType]: () => Extract<JourneyEvent, { type: E }> };
 
 const TRANSITIONS = {
@@ -112,7 +159,59 @@ const TRANSITIONS = {
     // silent failure; starting is the safe answer.
     ENDED: { outcome: STARTED_WITH([RESPONDER]) },
   },
+  // The heartbeat's situation is the journey it names, here the walker's own,
+  // started from the device that sends it. Who else's journey it could be is
+  // the table below this one.
+  heartbeat: {
+    none: { outcome: JOURNEY_NOT_FOUND },
+    ACTIVE: { outcome: RECORDED_IN('ACTIVE') },
+    // Contact while LOST_CONTACT is recorded, and the state stays: the move
+    // back to ACTIVE resolves the alert and tells the responders, which is
+    // the back-in-contact task's. Until then an open alert stays open, a
+    // false alarm that stays loud rather than one closed silently.
+    LOST_CONTACT: { outcome: RECORDED_IN('LOST_CONTACT') },
+    ENDED: { outcome: JOURNEY_ENDED },
+  },
 } satisfies Record<JourneyEventType, Record<Situation, Row>>;
+
+/** Which test ID each event's rows prove: the start's are SM-01's, the heartbeat's LOST-01's. */
+const ROW_ID = {
+  start: 'SM-01-AC14',
+  heartbeat: 'LOST-01-AC17',
+} satisfies Record<JourneyEventType, string>;
+
+/**
+ * The heartbeat's other situations, for every state (SEC-07, D-101): the
+ * journey named is another walker's, or the walker's own but started from
+ * another of their devices. Typed over the states, so a state added later
+ * needs its rows here too.
+ */
+const HEARTBEAT_FROM_ELSEWHERE = {
+  ACTIVE: { anotherWalkers: JOURNEY_NOT_FOUND, anotherDevice: NOT_THE_JOURNEYS_DEVICE },
+  LOST_CONTACT: { anotherWalkers: JOURNEY_NOT_FOUND, anotherDevice: NOT_THE_JOURNEYS_DEVICE },
+  // Another walker's journey is not found, whatever its state: its state is
+  // theirs to know. The walker's own ended journey is reported as ended
+  // before the device is looked at.
+  ENDED: { anotherWalkers: JOURNEY_NOT_FOUND, anotherDevice: JOURNEY_ENDED },
+} satisfies Record<JourneyState, { anotherWalkers: Outcome; anotherDevice: Outcome }>;
+
+const ELSEWHERE_ROWS = Object.entries(HEARTBEAT_FROM_ELSEWHERE).flatMap(([state, rows]) => [
+  {
+    state,
+    whose: 'another walker’s',
+    journey: named(state as JourneyState, {
+      walkerId: OTHER_WALKER,
+      deviceId: OTHER_WALKERS_DEVICE,
+    }),
+    expected: rows.anotherWalkers,
+  },
+  {
+    state,
+    whose: 'the walker’s own, started from another of their devices',
+    journey: named(state as JourneyState, { deviceId: OTHER_DEVICE }),
+    expected: rows.anotherDevice,
+  },
+]);
 
 /** Every pair the module's own lists create, read at run time. */
 function pairsTheModuleCreates(): string[] {
@@ -131,7 +230,9 @@ function pairsThisTableHolds(): string[] {
 
 const OUTCOME_ROWS = Object.entries(TRANSITIONS).flatMap(([event, rows]) =>
   Object.entries(rows).flatMap(([situation, row]: [string, Row]) =>
-    'outcome' in row ? [{ event, situation, expected: row.outcome }] : [],
+    'outcome' in row
+      ? [{ id: ROW_ID[event as JourneyEventType], event, situation, expected: row.outcome }]
+      : [],
   ),
 );
 
@@ -149,10 +250,29 @@ function situationFor(situation: string): Current {
   return asCurrent(situation === 'none' ? null : { id: JOURNEY, state: situation });
 }
 
+/** A heartbeat's situation: the journey it names, the walker's own from their device, or none. */
+function heartbeatSituationFor(situation: string): JourneyForHeartbeat | null {
+  return situation === 'none' ? null : named(situation as JourneyState);
+}
+
+/** What one row of the table comes to: its event, asked in its situation. */
+function decide(event: JourneyEventType, situation: string): Outcome {
+  switch (event) {
+    case 'start':
+      return transition(situationFor(situation), EVENT_FOR.start());
+    case 'heartbeat':
+      return transition(heartbeatSituationFor(situation), EVENT_FOR.heartbeat());
+  }
+}
+
 describe('AR-04: the journey state machine is one module, total over its own lists', () => {
-  test('SM-01-AC14: the states are exactly ACTIVE, LOST_CONTACT and ENDED, and the only event is start', () => {
+  test('SM-01-AC14: the states are exactly ACTIVE, LOST_CONTACT and ENDED, and the events exactly start and heartbeat', () => {
+    // The events were exactly ['start'] until LOST-01 added the heartbeat
+    // (RG-03: an event added by design, LOST-01-AC17 and its spec's approach
+    // item 4). The list is still exact, so an event added later has to be
+    // named here on purpose.
     expect([...JOURNEY_STATES].sort()).toEqual(['ACTIVE', 'ENDED', 'LOST_CONTACT']);
-    expect([...JOURNEY_EVENTS]).toEqual(['start']);
+    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat']);
   });
 
   test('SM-01-AC14: every pair of situation and event the module’s lists create has a row here, and no row is stale', () => {
@@ -169,20 +289,30 @@ describe('AR-04: the journey state machine is one module, total over its own lis
     ).toEqual([]);
   });
 
-  test('SM-01-AC14: the pairs with an outcome are exactly none, ACTIVE, LOST_CONTACT and ENDED, each with start', () => {
+  test('SM-01-AC14: the pairs with an outcome are exactly none, ACTIVE, LOST_CONTACT and ENDED, each with start and with heartbeat', () => {
     // ENDED × start joined the three in review: an ENDED journey handed in
-    // is "no journey", see its row above.
+    // is "no journey", see its row above. The four heartbeat pairs joined
+    // with LOST-01 (RG-03: an event added by design, LOST-01-AC17).
     expect(OUTCOME_ROWS.map(({ situation, event }) => `${situation} × ${event}`).sort()).toEqual(
-      ['ACTIVE × start', 'ENDED × start', 'LOST_CONTACT × start', 'none × start'].sort(),
+      [
+        'ACTIVE × start',
+        'ENDED × start',
+        'LOST_CONTACT × start',
+        'none × start',
+        'ACTIVE × heartbeat',
+        'ENDED × heartbeat',
+        'LOST_CONTACT × heartbeat',
+        'none × heartbeat',
+      ].sort(),
     );
   });
 
   test.each(OUTCOME_ROWS)(
-    'SM-01-AC14: $situation × $event gives exactly its expected outcome',
+    '$id: $situation × $event gives exactly its expected outcome',
     ({ event, situation, expected }) => {
-      const build = EVENT_FOR[event as JourneyEventType];
-
-      expect(transition(situationFor(situation), build())).toEqual(expected);
+      // Each event is asked in its own kind of situation: a start meets the
+      // walker's unended journey, a heartbeat the journey it names (LOST-01).
+      expect(decide(event as JourneyEventType, situation)).toEqual(expected);
     },
   );
 
@@ -434,4 +564,310 @@ describe('SM-01 and SM-02: the order of the start rule', () => {
       }),
     );
   });
+});
+
+// ---------------------------------------------------------------------------
+// The heartbeat rule (LOST-01): SM-03, SM-07, SEC-07 and D-101.
+// ---------------------------------------------------------------------------
+
+/** The four outcomes a heartbeat can have, with exactly their fields and nothing else. */
+function isOneOfTheHeartbeatOutcomes(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const outcome = value as Record<string, unknown>;
+  const keys = Object.keys(outcome).sort().join(',');
+  if (outcome['type'] === 'recorded') {
+    return (
+      keys === 'state,type' &&
+      (outcome['state'] === 'ACTIVE' || outcome['state'] === 'LOST_CONTACT')
+    );
+  }
+  if (outcome['type'] === 'ignored') {
+    return keys === 'reason,type' && outcome['reason'] === 'JOURNEY_ENDED';
+  }
+  return (
+    outcome['type'] === 'refused' &&
+    keys === 'reason,type' &&
+    (outcome['reason'] === 'JOURNEY_NOT_FOUND' || outcome['reason'] === 'NOT_THE_JOURNEYS_DEVICE')
+  );
+}
+
+/** Approach item 4 of LOST-01's spec, written out once more, independently. */
+function expectedHeartbeatOutcome(
+  journey: JourneyForHeartbeat | null,
+  event: HeartbeatEvent,
+): Outcome {
+  if (journey?.walkerId !== event.walkerId) {
+    return JOURNEY_NOT_FOUND;
+  }
+  if (journey.state === 'ENDED') {
+    return JOURNEY_ENDED;
+  }
+  if (journey.deviceId !== event.deviceId) {
+    return NOT_THE_JOURNEYS_DEVICE;
+  }
+  return RECORDED_IN(journey.state);
+}
+
+/**
+ * Walkers and devices drawn from small pools, so the generated journeys and
+ * heartbeats often share a walker, a device, or both, and every branch of the
+ * rule is reached; and now and then any text at all.
+ */
+const someWalker = fc.oneof(
+  { weight: 4, arbitrary: fc.constantFrom(WALKER, OTHER_WALKER) },
+  { weight: 1, arbitrary: fc.string() },
+);
+const someDevice = fc.oneof(
+  { weight: 4, arbitrary: fc.constantFrom(DEVICE, OTHER_DEVICE, OTHER_WALKERS_DEVICE) },
+  { weight: 1, arbitrary: fc.string() },
+);
+const anyJourney: fc.Arbitrary<JourneyForHeartbeat | null> = fc.option(
+  fc.record({
+    id: fc.uuid(),
+    state: fc.constantFrom(...JOURNEY_STATES),
+    walkerId: someWalker,
+    deviceId: someDevice,
+  }),
+  { nil: null },
+);
+const anyHeartbeat: fc.Arbitrary<HeartbeatEvent> = fc
+  .record({ walkerId: someWalker, deviceId: someDevice })
+  .map(({ walkerId, deviceId }) => heartbeat(deviceId, walkerId));
+
+/**
+ * The heartbeat as the phone sent it, everything it carried included. The
+ * domain's event type has none of this; a rule that reached for it anyway
+ * would show in the properties below.
+ */
+function asSent(
+  event: HeartbeatEvent,
+  carried: { position: unknown; batteryLevel: number | null; eventId: string },
+): HeartbeatEvent {
+  return { ...event, ...carried };
+}
+
+describe('LOST-01: a heartbeat for the journey it names, in the rule’s order', () => {
+  test('LOST-01-AC17: JOURNEY_EVENTS is exactly start and heartbeat', () => {
+    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat']);
+  });
+
+  test.each(ELSEWHERE_ROWS)(
+    'LOST-01-AC17: a heartbeat for an $state journey that is $whose gives exactly its expected outcome',
+    ({ journey, expected }) => {
+      expect(transition(journey, heartbeat())).toEqual(expected);
+    },
+  );
+
+  test('LOST-01-AC17: the rows from elsewhere cover every state, each from another walker and from another device', () => {
+    expect(ELSEWHERE_ROWS.map(({ state }) => state).sort()).toEqual(
+      [...JOURNEY_STATES, ...JOURNEY_STATES].sort(),
+    );
+  });
+
+  test('LOST-01-AC17: for any situation and any heartbeat, the outcome is the rule’s, in its order', () => {
+    fc.assert(
+      fc.property(anyJourney, anyHeartbeat, (journey, event) => {
+        expect(transition(journey, event)).toEqual(expectedHeartbeatOutcome(journey, event));
+      }),
+    );
+  });
+
+  test('LOST-01-AC17: for any situation and any heartbeat, the outcome is one of the four, never a throw or undefined', () => {
+    fc.assert(
+      fc.property(anyJourney, anyHeartbeat, (journey, event) => {
+        let outcome: unknown;
+        expect(() => {
+          outcome = transition(journey, event);
+        }).not.toThrow();
+        expect(outcome).toSatisfy(isOneOfTheHeartbeatOutcomes);
+      }),
+    );
+  });
+
+  test('LOST-01-AC17: for any situation and any event of either kind, transition answers with a value: never a throw, never undefined', () => {
+    const anyStart = fc
+      .record({
+        walkerId: someWalker,
+        responderIds: fc.array(fc.oneof(fc.uuid(), someWalker), { maxLength: 6 }),
+        existingUserIds: fc.uniqueArray(fc.oneof(fc.uuid(), someWalker), { maxLength: 6 }),
+      })
+      .map(({ walkerId, responderIds, existingUserIds }): StartEvent => ({
+        type: 'start',
+        walkerId,
+        responderIds,
+        existingUserIds: new Set(existingUserIds),
+      }));
+    const anyEvent: fc.Arbitrary<JourneyEvent> = fc.oneof(anyStart, anyHeartbeat);
+
+    fc.assert(
+      fc.property(anyJourney, anyEvent, (journey, event) => {
+        let outcome: unknown;
+        expect(() => {
+          outcome = transition(journey, event);
+        }).not.toThrow();
+        expect(outcome).toBeDefined();
+        expect(outcome).toSatisfy((value: unknown) =>
+          event.type === 'heartbeat'
+            ? isOneOfTheHeartbeatOutcomes(value)
+            : isOneOfTheFourOutcomes(value),
+        );
+      }),
+    );
+  });
+
+  test('LOST-01-AC17: an event of a type the module does not list is thrown on in every situation, never answered with a value', () => {
+    // The switch's default holds `const unhandled: never = event` and throws:
+    // a value handed back for an event nobody handled is a silent miss for
+    // whatever reads the outcome.
+    const unlisted = {
+      type: 'teleport',
+      walkerId: WALKER,
+      deviceId: DEVICE,
+    } as unknown as HeartbeatEvent;
+
+    for (const journey of [null, ...JOURNEY_STATES.map((state) => named(state))]) {
+      expect(() => transition(journey, unlisted), journey?.state ?? 'none').toThrow();
+    }
+  });
+
+  test('LOST-01-AC17: deciding about a heartbeat changes neither the journey nor the heartbeat handed in', () => {
+    const journey = named('ACTIVE');
+    const event = heartbeat();
+    const before = { journey: { ...journey }, event: { ...event } };
+
+    transition(journey, event);
+
+    expect({ journey, event }).toEqual(before);
+  });
+});
+
+describe('SM-03: a heartbeat keeps a journey as it is, with a position or without', () => {
+  test('LOST-01-AC2: a heartbeat with no position keeps an ACTIVE journey ACTIVE, exactly as one with a position does', () => {
+    const carried = { batteryLevel: 0.734375, eventId: 'synthetic-event-0001' };
+
+    expect(
+      transition(named('ACTIVE'), asSent(heartbeat(), { ...carried, position: null })),
+    ).toEqual(RECORDED_IN('ACTIVE'));
+    expect(
+      transition(
+        named('ACTIVE'),
+        asSent(heartbeat(), { ...carried, position: syntheticPosition() }),
+      ),
+    ).toEqual(RECORDED_IN('ACTIVE'));
+  });
+
+  test('LOST-01-AC2: for any sequence of heartbeats, with and without positions, every outcome is the one the same heartbeats get with positions: whether a position came changes nothing', () => {
+    const sequence = fc.array(
+      fc.record({
+        event: anyHeartbeat,
+        hasPosition: fc.boolean(),
+        batteryLevel: fc.option(fc.double({ min: 0, max: 1, noNaN: true }), { nil: null }),
+      }),
+      { maxLength: 20 },
+    );
+
+    fc.assert(
+      fc.property(anyJourney, sequence, (start, heartbeats) => {
+        let asItCame = start;
+        let allWithPositions = start;
+        for (const [index, { event, hasPosition, batteryLevel }] of heartbeats.entries()) {
+          const eventId = `synthetic-event-${String(index)}`;
+          const withPosition = transition(
+            allWithPositions,
+            asSent(event, { position: syntheticPosition(), batteryLevel, eventId }),
+          );
+          const came = transition(
+            asItCame,
+            asSent(event, {
+              position: hasPosition ? syntheticPosition() : null,
+              batteryLevel,
+              eventId,
+            }),
+          );
+
+          expect(came).toEqual(withPosition);
+          expect(came).toEqual(transition(asItCame, event));
+          // A recorded heartbeat leaves the journey in the state it was in.
+          if (came.type === 'recorded' && asItCame !== null) {
+            expect(came.state).toBe(asItCame.state);
+            asItCame = { ...asItCame, state: came.state };
+          }
+          if (withPosition.type === 'recorded' && allWithPositions !== null) {
+            allWithPositions = { ...allWithPositions, state: withPosition.state };
+          }
+        }
+      }),
+    );
+  });
+
+  test('LOST-01-AC8: a journey in LOST_CONTACT takes the heartbeat and stays LOST_CONTACT, with a position or without', () => {
+    for (const position of [syntheticPosition(), null]) {
+      expect(
+        transition(
+          named('LOST_CONTACT'),
+          asSent(heartbeat(), { position, batteryLevel: null, eventId: 'synthetic-event-0002' }),
+        ),
+      ).toEqual(RECORDED_IN('LOST_CONTACT'));
+    }
+  });
+});
+
+describe('SM-07: a heartbeat for an ended journey is ignored, and reported first', () => {
+  test('LOST-01-AC7: an ENDED journey is ignored, JOURNEY_ENDED, from its starting device and from another of the walker’s', () => {
+    expect(transition(named('ENDED'), heartbeat())).toEqual(JOURNEY_ENDED);
+    expect(transition(named('ENDED'), heartbeat(OTHER_DEVICE))).toEqual(JOURNEY_ENDED);
+  });
+
+  test('LOST-01-AC7: for any heartbeat of the walker’s, from any device, an ENDED journey is JOURNEY_ENDED', () => {
+    fc.assert(
+      fc.property(fc.uuid(), someDevice, someDevice, (id, startedFrom, sentFrom) => {
+        expect(
+          transition(
+            { id, state: 'ENDED', walkerId: WALKER, deviceId: startedFrom },
+            heartbeat(sentFrom),
+          ),
+        ).toEqual(JOURNEY_ENDED);
+      }),
+    );
+  });
+});
+
+describe('SEC-07: a heartbeat only for the walker’s own journey, from the device that started it', () => {
+  test('LOST-01-AC9: no journey by that ID is JOURNEY_NOT_FOUND', () => {
+    expect(transition(null, heartbeat())).toEqual(JOURNEY_NOT_FOUND);
+  });
+
+  test.each(JOURNEY_STATES)(
+    'LOST-01-AC9: another walker’s %s journey is JOURNEY_NOT_FOUND, the same answer as none, even from the device that started it',
+    (state) => {
+      expect(transition(named(state, { walkerId: OTHER_WALKER }), heartbeat())).toEqual(
+        JOURNEY_NOT_FOUND,
+      );
+      expect(
+        transition(
+          named(state, { walkerId: OTHER_WALKER, deviceId: OTHER_WALKERS_DEVICE }),
+          heartbeat(),
+        ),
+      ).toEqual(transition(null, heartbeat()));
+    },
+  );
+
+  test.each(UNENDED)(
+    'LOST-01-AC10: the walker’s %s journey, started from another of their devices, is refused NOT_THE_JOURNEYS_DEVICE (D-101)',
+    (state) => {
+      expect(transition(named(state, { deviceId: OTHER_DEVICE }), heartbeat())).toEqual(
+        NOT_THE_JOURNEYS_DEVICE,
+      );
+      expect(transition(named(state), heartbeat(OTHER_DEVICE))).toEqual(NOT_THE_JOURNEYS_DEVICE);
+    },
+  );
+
+  test.each(UNENDED)(
+    'LOST-01-AC10: the walker’s %s journey takes the heartbeat from the device that started it',
+    (state) => {
+      expect(transition(named(state), heartbeat())).toEqual(RECORDED_IN(state));
+    },
+  );
 });

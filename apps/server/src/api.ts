@@ -10,14 +10,28 @@
  * (L6) — which is where the alert behaviour will be proven in M2.
  *
  * Every request but a health check comes from a known device (SEC-07). The
- * credential is checked first, before the body is even validated, so an
- * unknown caller learns nothing about what a valid request looks like; and
- * the walker of any journey a device starts is that device's own user, so no
- * field in a request can name anyone else.
+ * credential is checked before the body is validated against the route's
+ * schema, so an unknown caller learns nothing about what a valid request
+ * looks like. oRPC decodes the body before the credential check runs (in
+ * @orpc/server 1.15.3's StandardHandler, `decode_input` comes before
+ * `call_procedure`, which runs the middleware), so a body that is not JSON at
+ * all is answered with the fixed 400 even without a credential: that answer
+ * holds nothing of the request either. The walker of any journey a device
+ * starts is that device's own user, so no field in a request can name anyone
+ * else. A journey records the device that started it, and takes heartbeats
+ * from that device only (D-101).
+ *
+ * No answer carries anything of the request. Every BAD_REQUEST is one fixed
+ * body, see BAD_REQUEST_BODY below, and every other answer is a fixed shape.
  */
 import { OpenAPIHandler } from '@orpc/openapi/fetch';
 import { implement, ORPCError } from '@orpc/server';
-import { API_PREFIX, contract, deviceCredentialErrors } from '@trygghverdag/contracts';
+import {
+  API_PREFIX,
+  badRequestError,
+  contract,
+  deviceCredentialErrors,
+} from '@trygghverdag/contracts';
 import { Hono } from 'hono';
 import type { HealthService } from './modules/health/service.ts';
 import type { JourneyService } from './modules/journeys/service.ts';
@@ -40,6 +54,29 @@ interface RequestContext {
  * all. The scheme's name is case-insensitive (RFC 7235); the credential is not.
  */
 const BEARER = /^Bearer (\S+)$/i;
+
+/**
+ * The one body every BAD_REQUEST carries, on every route: the code, the
+ * status and a fixed message, and never `data`.
+ *
+ * oRPC puts the validator's issues in a 400's `data`, and zod's issue for an
+ * unknown key names the key. So a heartbeat holding a `background_geolocation`
+ * key would have been answered with that key in the body: an echo the
+ * location SDK could take for a command of its own (04b-spike-results.md
+ * §4.5). A body that is not JSON at all gets a 400 of its own words before
+ * any procedure runs. Both are BAD_REQUEST, and both are replaced here, where
+ * an error becomes a body, so no 400 can hold anything the request held,
+ * whichever check refused it.
+ *
+ * Built from the contract's `badRequestError`, the one object the error map
+ * of every route with a body declares as its 400, so this body and the
+ * published contract cannot drift apart.
+ */
+const BAD_REQUEST_BODY = new ORPCError('BAD_REQUEST', {
+  defined: true,
+  status: badRequestError.status,
+  message: badRequestError.message,
+}).toJSON();
 
 export function createApi({ health, journeys, devices }: ApiDependencies): Hono {
   const os = implement(contract).$context<RequestContext>();
@@ -77,6 +114,7 @@ export function createApi({ health, journeys, devices }: ApiDependencies): Hono 
     startJourney: fromKnownDevice.startJourney.handler(async ({ input, context, errors }) => {
       const result = await journeys.start({
         walkerId: context.device.userId,
+        deviceId: context.device.deviceId,
         responderIds: input.responderIds,
       });
       if (result.type === 'started') {
@@ -91,9 +129,37 @@ export function createApi({ health, journeys, devices }: ApiDependencies): Hono 
           throw errors.NO_RESPONDER();
       }
     }),
+
+    // LOST-01. The walker is the device's own user and the device is the one
+    // that sent it; the body names only the journey. A 200 means the server
+    // has the event, so the phone may drop it.
+    recordHeartbeat: fromKnownDevice.recordHeartbeat.handler(async ({ input, context, errors }) => {
+      const result = await journeys.heartbeat({
+        walkerId: context.device.userId,
+        deviceId: context.device.deviceId,
+        heartbeat: input,
+      });
+      switch (result.type) {
+        case 'recorded':
+          return { outcome: 'RECORDED' };
+        case 'duplicate':
+          return { outcome: 'DUPLICATE' };
+        case 'ignored':
+        case 'refused':
+          // Each reason the rule gives is the contract's code for it:
+          // JOURNEY_ENDED (409), JOURNEY_NOT_FOUND (404) and
+          // NOT_THE_JOURNEYS_DEVICE (403).
+          throw errors[result.reason]();
+      }
+    }),
   });
 
-  const handler = new OpenAPIHandler(router);
+  const handler = new OpenAPIHandler(router, {
+    // Keyed on the code, not the status: a route that later defines a 400 of
+    // its own, with its own code, keeps its own body.
+    customErrorResponseBodyEncoder: (error) =>
+      error.code === BAD_REQUEST_BODY.code ? BAD_REQUEST_BODY : undefined,
+  });
   const app = new Hono();
 
   app.all('/*', async (context) => {

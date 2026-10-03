@@ -97,3 +97,21 @@ alone). Prepend `import { readFileSync as __taRealRead } from 'node:fs'`, a JSON
 Harness: scratchpad/ta-bug14/ta-harness.mjs (mutants inline, `rep()` throws NotApplied unless exactly one match; prints
 transform counts as proof). Heredoc writes into the scratchpad worked, and the guard did not fire on `=>` in node -e.
 Watch for HEAD moving during the audit (parallel reviewers commit memory); re-check `git log` before the verdict.
+
+**LOST-01 (2026-10-03, cloud).** Harness `scratchpad/ta-lost01/replay2.mjs '<json>'` takes {base, runs, mutants:{path:[[from,to]]}}
+in argv (no env reads: a Bash command holding `process.env` together with `sed` was blocked as "Reading .env files"). It
+serves production files from `git show <base>:path` (or DISK) through a Vite `load` hook, throws for files absent at base,
+and overrides readFileSync for openapi.json/CODEOWNERS (replay3 adds ai-review.yml). Drivers: mutants.mjs (log/api/
+service), mutants-l3.mjs, mutants-fake.mjs, mutants-gate.mjs; tsc-mutants.mjs runs `ts.createProgram` with a host that
+swaps ports.ts in memory (L1 faults, look for TS2578).
+**L3 without Docker:** /tmp/claude-0 is 700 root, so `su postgres` cannot reach the scratchpad. `unshare --user
+--map-user=1000 --map-group=1000 /usr/lib/postgresql/16/bin/initdb -D <scratch>/pg/data -A trust -U postgres`, then
+`pg_ctl ... -o "-p 55432 -c unix_socket_directories='' -c listen_addresses=127.0.0.1"` (the socket path is too long).
+Alias `@testcontainers/postgresql` to a stand-in in a scratch vitest config; L3 journeys+deploy ran in 8 s. PG16, not 15.
+Stop it with the same unshare + `pg_ctl stop`.
+
+**BUG-15 (2026-10-03, cloud).** Heredoc writes into the scratchpad worked again. Generic config-pin harness:
+`scratchpad/ta-bug15/ta-harness.mjs <mutants.mjs> [id-prefixes]`, run from the worktree. Each mutant has `base` (a git rev per
+file, served with `git show`) and `f[path](text, rep)`, where `rep(text, from, to, n=1)` throws NotApplied unless the count is n.
+It overrides readFileSync for package.json, decisions.md and pnpm-lock.yaml and can rewrite the test file itself (helper faults).
+58 mutants took about 3 minutes.

@@ -18,6 +18,7 @@
     "graphile-worker": "^0.18.0",
     "hono": "^4.13.8",
     "pg": "^8.23.0",
+    "pino": "^10.3.1",
     "zod": "catalog:"
   },
   "devDependencies": {

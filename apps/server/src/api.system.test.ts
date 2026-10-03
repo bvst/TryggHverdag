@@ -21,7 +21,12 @@ const HEALTH = `${API_PREFIX}/health`;
  */
 function noJourneys() {
   return {
-    journeys: { start: () => Promise.reject(new Error('the health tests start no journey')) },
+    // RG-03: `heartbeat` added because LOST-01 made it part of the journey
+    // service. It rejects, as `start` does: the health tests call neither.
+    journeys: {
+      start: () => Promise.reject(new Error('the health tests start no journey')),
+      heartbeat: () => Promise.reject(new Error('the health tests send no heartbeat')),
+    },
     devices: fakeDeviceAuthenticator(),
   };
 }

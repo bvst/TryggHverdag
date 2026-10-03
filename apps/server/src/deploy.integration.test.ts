@@ -13,14 +13,28 @@
 // Needs Docker, like every *.integration.test.ts: CI runs it, a cloud session
 // cannot.
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { syntheticCredential, syntheticUuid } from '@trygghverdag/test-kit';
+import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { addJobAdhoc } from 'graphile-worker';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { startApiProcess } from './api-process.ts';
+import { createDatabase, createPool } from './adapters/db.ts';
+import { hashCredential } from './adapters/device-credentials.ts';
 import { migrateDatabase } from './adapters/migrations.ts';
 import { startWorker } from './worker.ts';
 
@@ -153,4 +167,217 @@ describe('stopping the worker process', () => {
       await probe.end();
     }
   }, 90_000);
+});
+
+// ---------------------------------------------------------------------------
+// LOST-01-AC20 (D-101): the migration that records each journey's device
+// refuses to guess the device of a journey that already exists.
+// ---------------------------------------------------------------------------
+//
+// No record says which device started a journey SM-01 stored, so any device
+// written in would be a guess, and a wrong guess is D-101's own failure: a
+// device that is not walking accepted, hiding the walking phone's silence, or
+// the walking phone refused. So `0002` adds `device_id` not null, with no
+// default and no update, and PostgreSQL refuses it on a table that holds a
+// row. Drizzle applies every pending migration in one transaction, so the
+// refusal leaves the database exactly as it was, and the deploy stops at the
+// pre-run hook.
+
+/** Where the real migrations live, as adapters/migrations.ts reads them. */
+const MIGRATIONS = path.join(import.meta.dirname, 'db', 'migrations');
+
+interface JournalEntry {
+  idx: number;
+  when: number;
+  tag: string;
+}
+
+function journal(folder: string): { entries: JournalEntry[] } & Record<string, unknown> {
+  return JSON.parse(readFileSync(path.join(folder, 'meta', '_journal.json'), 'utf8')) as {
+    entries: JournalEntry[];
+  } & Record<string, unknown>;
+}
+
+/** A copy of the migrations folder holding only `0000` and `0001`: the schema before LOST-01. */
+function migrationsUpTo0001(): string {
+  const folder = mkdtempSync(path.join(tmpdir(), 'migrations-0001-'));
+  mkdirSync(path.join(folder, 'meta'));
+  const real = journal(MIGRATIONS);
+  const kept = real.entries.filter((entry) => /^000[01]_/.test(entry.tag));
+  expect(kept.map((entry) => entry.idx)).toEqual([0, 1]);
+  for (const entry of kept) {
+    copyFileSync(path.join(MIGRATIONS, `${entry.tag}.sql`), path.join(folder, `${entry.tag}.sql`));
+  }
+  writeFileSync(
+    path.join(folder, 'meta', '_journal.json'),
+    JSON.stringify({ ...real, entries: kept }, null, 2),
+  );
+  return folder;
+}
+
+function withDatabase(uri: string, name: string): string {
+  const url = new URL(uri);
+  url.pathname = `/${name}`;
+  return url.toString();
+}
+
+/** A fresh database in the PostgreSQL 15 container, migrated up to `0001` only, and dropped afterwards. */
+async function databaseAt0001(
+  use: (uri: string, client: pg.Client) => Promise<void>,
+): Promise<void> {
+  const name = `lost01_${syntheticUuid().replaceAll('-', '')}`;
+  const admin = new pg.Client({ connectionString: databaseUrl() });
+  await admin.connect();
+  await admin.query(`create database ${name}`);
+  const uri = withDatabase(databaseUrl(), name);
+  const folder = migrationsUpTo0001();
+  const client = new pg.Client({ connectionString: uri });
+  try {
+    const pool = createPool(uri, 1);
+    try {
+      await migrate(createDatabase(pool), { migrationsFolder: folder });
+    } finally {
+      await pool.end();
+    }
+    await client.connect();
+    await use(uri, client);
+  } finally {
+    await client.end().catch(() => undefined);
+    rmSync(folder, { recursive: true, force: true });
+    await admin.query(`drop database if exists ${name}`);
+    await admin.end();
+  }
+}
+
+/** A synthetic user, their device, and nothing else. */
+async function userWithDevice(client: pg.Client): Promise<{ userId: string; deviceId: string }> {
+  const userId = syntheticUuid();
+  const deviceId = syntheticUuid();
+  await client.query('insert into users (id) values ($1)', [userId]);
+  await client.query('insert into devices (id, user_id, credential_hash) values ($1, $2, $3)', [
+    deviceId,
+    userId,
+    hashCredential(syntheticCredential()),
+  ]);
+  return { userId, deviceId };
+}
+
+/** What the database holds that the migration could change: every journey row, the tables, journeys' columns, and the migrations journal. */
+async function snapshot(client: pg.Client) {
+  const rows = async (text: string) =>
+    (await client.query<{ value: string }>(text)).rows.map((row) => row.value);
+  return {
+    journeys: await rows('select row_to_json(j)::text as value from journeys j order by j.id'),
+    responders: await rows(
+      'select row_to_json(r)::text as value from journey_responders r order by r.journey_id',
+    ),
+    tables: await rows(
+      "select table_name as value from information_schema.tables where table_schema = 'public' order by 1",
+    ),
+    journeyColumns: await rows(
+      "select column_name as value from information_schema.columns where table_name = 'journeys' order by 1",
+    ),
+    journal: await rows(
+      'select created_at::text as value from drizzle.__drizzle_migrations order by created_at',
+    ),
+  };
+}
+
+/** An error and every cause behind it. */
+function causes(error: unknown): unknown[] {
+  const chain: unknown[] = [];
+  let current = error;
+  while (current !== undefined && current !== null && chain.length < 20) {
+    chain.push(current);
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return chain;
+}
+
+describe('D-101: the migration refuses to guess the device of a journey that already exists', () => {
+  test('LOST-01-AC20: a PostgreSQL 15 database at 0001 holding one journey refuses the migrations, as the pre-run hook runs them, with 23502 naming device_id; and the database is exactly as it was', async () => {
+    await databaseAt0001(async (uri, client) => {
+      const { userId } = await userWithDevice(client);
+      const responderId = syntheticUuid();
+      await client.query('insert into users (id) values ($1)', [responderId]);
+      const journeyId = syntheticUuid();
+      await client.query(
+        "insert into journeys (id, walker_id, state, started_at) values ($1, $2, 'ACTIVE', now())",
+        [journeyId, userId],
+      );
+      await client.query(
+        'insert into journey_responders (journey_id, responder_id) values ($1, $2)',
+        [journeyId, responderId],
+      );
+      const before = await snapshot(client);
+      expect(before.journeys).toHaveLength(1);
+      expect(before.journal).toHaveLength(2);
+
+      let refusal: unknown;
+      try {
+        await migrateDatabase(uri);
+      } catch (error) {
+        refusal = error;
+      }
+
+      expect(refusal, 'the migrations ran on a database holding a journey').toBeInstanceOf(Error);
+      const notNull = causes(refusal).find(
+        (cause) => (cause as { code?: unknown }).code === '23502',
+      ) as { message?: string; column?: string } | undefined;
+      expect(notNull, 'no error in the chain carries SQLSTATE 23502').toBeDefined();
+      expect(`${notNull?.column ?? ''} ${notNull?.message ?? ''}`).toContain('device_id');
+      // Whole: nothing of 0002 is left, and nothing was ended, deleted or given a device.
+      expect(await snapshot(client)).toEqual(before);
+      expect(before.journeyColumns).not.toContain('device_id');
+      expect(before.tables).not.toContain('heartbeats');
+      expect(before.tables).not.toContain('positions');
+      expect(before.journal).toEqual(
+        journal(MIGRATIONS)
+          .entries.filter((entry) => /^000[01]_/.test(entry.tag))
+          .map((entry) => String(entry.when)),
+      );
+    });
+  }, 120_000);
+
+  test('LOST-01-AC20: (control) the same database without the journey migrates cleanly, and journeys.device_id is then not null and references devices', async () => {
+    await databaseAt0001(async (uri, client) => {
+      await userWithDevice(client);
+
+      await expect(migrateDatabase(uri)).resolves.toBeUndefined();
+
+      const column = await client.query<{ is_nullable: string }>(
+        "select is_nullable from information_schema.columns where table_name = 'journeys' and column_name = 'device_id'",
+      );
+      const references = await client.query<{ target: string }>(
+        `select confrelid::regclass::text as target
+           from pg_constraint
+          where conrelid = 'journeys'::regclass and contype = 'f'
+            and conkey = array[(select attnum from pg_attribute
+                                 where attrelid = 'journeys'::regclass and attname = 'device_id')]`,
+      );
+      expect(column.rows).toEqual([{ is_nullable: 'NO' }]);
+      expect(references.rows).toEqual([{ target: 'devices' }]);
+      expect((await snapshot(client)).journal).toHaveLength(journal(MIGRATIONS).entries.length);
+    });
+  }, 120_000);
+
+  test('LOST-01-AC20: the committed 0002 migration adds device_id with no default, and holds no update or delete of journeys, so a backfill added later fails here', () => {
+    const files = readdirSync(MIGRATIONS).filter((file) => /^0002_.*\.sql$/.test(file));
+    expect(files, 'exactly one 0002 migration').toHaveLength(1);
+    const text = readFileSync(path.join(MIGRATIONS, files[0] ?? ''), 'utf8');
+    const statements = text
+      .split(/--> statement-breakpoint|;/)
+      .map((statement) => statement.trim())
+      .filter((statement) => statement !== '');
+    const addsDevice = statements.filter((statement) =>
+      /\badd column\s+"?device_id"?/i.test(statement),
+    );
+
+    expect(addsDevice).toHaveLength(1);
+    expect(addsDevice[0]).toMatch(/\bnot null\b/i);
+    expect(addsDevice[0]).not.toMatch(/\bdefault\b/i);
+    expect(text).not.toMatch(/\bupdate\s+("?public"?\.)?"?journeys"?/i);
+    expect(text).not.toMatch(/\bdelete\s+from\s+("?public"?\.)?"?journeys"?/i);
+    expect(text).not.toMatch(/\btruncate\b/i);
+  });
 });

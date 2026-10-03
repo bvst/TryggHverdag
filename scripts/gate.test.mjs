@@ -500,6 +500,24 @@ describe("this repository's own workflows", () => {
   /** How an owner path is written as a paths-filter glob: no leading /, and a directory's files under /**. */
   const filterGlob = (owned) => owned.replace(/^\//, '').replace(/\/$/, '/**');
 
+  /**
+   * LOST-01 (D-102): apps/server/src/log.ts is the server's one log adapter.
+   * It takes closed events only, so a location or a phone number has no
+   * field to travel in: it is what keeps heartbeat data out of logs
+   * (PRIV-07). A later change to it could open that door with no one but its
+   * author and the AI reviewers seeing it, so the owner must approve it. It
+   * is left out of the ai-review safety filter on purpose (D-102 and its
+   * amendment), and both halves are pinned in the tests below.
+   *
+   * One list for both halves: the paths D-102 gives the owner are the /apps/
+   * owner paths the safety filter leaves out, and no others. It is pinned
+   * exactly in the filter test below, so a second exception has to show
+   * itself there, in a test change with its own reason. (Until LOST-01's
+   * code review this was two lists, D102_FILES and NOT_IN_SAFETY_FILTER, and
+   * a test held one equal to the other.)
+   */
+  const D102_FILES = ['/apps/server/src/log.ts'];
+
   test('the safety filter in ai-review.yml matches the paths the owner must approve', () => {
     // Two copies of the same list: the paths CODEOWNERS holds for the owner,
     // and the paths that summon safety-reviewer. If they drift, a safety change
@@ -510,13 +528,38 @@ describe("this repository's own workflows", () => {
     // the file's text, a path still passed when it was moved into a comment,
     // or under the ui filter, where paths-filter does not read it as safety
     // (test-auditor, BUG-10).
+    //
+    // One named exception, by the owner's decision (D-102, amended
+    // 2026-10-03): /apps/server/src/log.ts, the server's log adapter, needs
+    // the owner's approval but not the safety review. privacy-security-
+    // reviewer runs on every pull request and logging is in its brief, and
+    // leaving the filter alone meant LOST-01 did not edit ai-review.yml, so
+    // CI's reviewers could run on it (D-075). RG-03: until LOST-01 every
+    // /apps/ owner path was required here; this narrows the test by that one
+    // file and no other. The exceptions are pinned exactly, so the list cannot
+    // grow without changing this test, and every other /apps/ owner path is
+    // still required in the filter.
     const text = readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8');
     const safety = filterEntries(text, 'safety');
-    const safetyPaths = OWNER_APPROVAL_PATHS.filter((p) => p.startsWith('/apps/'));
+    const appsPaths = OWNER_APPROVAL_PATHS.filter((p) => p.startsWith('/apps/'));
+    const safetyPaths = appsPaths.filter((p) => !D102_FILES.includes(p));
 
+    expect(D102_FILES, 'the named exceptions (D-102, amended)').toEqual([
+      '/apps/server/src/log.ts',
+    ]);
     expect(safety.headers, 'how many filters are named safety').toBe(1);
     expect(safety.unreadable).toEqual([]);
     expect(safetyPaths.length).toBeGreaterThan(0);
+    // RG-03 (LOST-01's code review): this replaces the check that
+    // appsPaths.length - safetyPaths.length was at most the exceptions'
+    // length. safetyPaths is appsPaths with the exceptions taken out, so that
+    // could never fail. This one can: an exception that is not an /apps/
+    // owner path, misspelt, moved or no longer owned, excuses nothing, and
+    // would leave the pin above passing over a list that means nothing.
+    expect(
+      D102_FILES.filter((p) => !appsPaths.includes(p)),
+      'each named exception is an /apps/ path the owner must approve',
+    ).toEqual([]);
     expect(safetyPaths.filter((path) => !safety.entries.includes(filterGlob(path)))).toEqual([]);
   });
 
@@ -907,6 +950,68 @@ describe("this repository's own workflows", () => {
       'entries no owner-approval path covers',
     ).toEqual([]);
     expect(files.filter((file) => ownersOf(file).length === 0)).toEqual([]);
+  });
+
+  // LOST-01 (D-102): the log adapter's ownership, and its staying out of the
+  // ai-review safety filter, pinned with D102_FILES (declared above the
+  // safety filter test, which uses it as its one named exception).
+
+  /** Whether a paths-filter glob covers a file: `**` any path, `*` within one segment. */
+  const globCovers = (glob, file) =>
+    new RegExp(
+      `^${glob
+        .split('**')
+        .map((part) =>
+          part
+            .split('*')
+            .map((piece) => piece.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+            .join('[^/]*'),
+        )
+        .join('.*')}$`,
+    ).test(file);
+
+  test("LOST-01 (D-102): the server's log adapter is tracked by git and is a path the owner must approve", () => {
+    const listed = spawnSync(
+      'git',
+      ['ls-files', '--', ...D102_FILES.map((owned) => owned.slice(1))],
+      { encoding: 'utf8' },
+    );
+
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(listed.stdout.split('\n').filter((file) => file !== '')).toEqual(
+      D102_FILES.map((owned) => owned.slice(1)).toSorted(),
+    );
+    expect(D102_FILES.filter((owned) => !OWNER_APPROVAL_PATHS.includes(owned))).toEqual([]);
+  });
+
+  test("LOST-01 (D-102): under GitHub's last-match rule, the line of .github/CODEOWNERS that matches the log adapter names @bvst @urso-agent, and gate:integrity finds every owner-approval path owned", () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    expect(D102_FILES.map((owned) => [owned, ownersOf(owned.slice(1))])).toEqual(
+      D102_FILES.map((owned) => [owned, OWNERS]),
+    );
+  });
+
+  test('LOST-01 (D-102): the log adapter is not in the ai-review safety filter, by name or under a glob, as the owner decided', () => {
+    const safety = filterEntries(readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8'), 'safety');
+
+    expect(safety.headers, 'how many filters are named safety').toBe(1);
+    expect(safety.unreadable).toEqual([]);
+    expect(safety.entries.length).toBeGreaterThan(0);
+    // The matcher is checked on the filter's own entries first.
+    expect(globCovers('apps/server/src/domain/**', 'apps/server/src/domain/journey.ts')).toBe(true);
+    expect(globCovers('apps/server/src/api.ts', 'apps/server/src/api.ts')).toBe(true);
+    expect(
+      D102_FILES.flatMap((owned) =>
+        safety.entries.filter((glob) => globCovers(glob, owned.slice(1))),
+      ),
+    ).toEqual([]);
+    // RG-03 (LOST-01's code review): the assertion that D102_FILES equalled
+    // NOT_IN_SAFETY_FILTER was removed here. It held two copies of one list
+    // equal; they are now one constant, D102_FILES, so there is nothing left
+    // to hold equal.
   });
 
   test("BUG-14: no group's tests are among the inputs the safety filter is held to: the owner left them out (D-100's amendment)", () => {

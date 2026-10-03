@@ -27,13 +27,34 @@ export { fakeJourneyStore } from './fake-journey-store.ts';
 export type {
   FakeJourneyState,
   FakeJourneyStore,
+  HeartbeatPosition,
+  HeartbeatToRecord,
   InsertStartedResult,
+  JourneyForHeartbeat,
   JourneyStoreCall,
+  LatestHeartbeat,
+  RecordHeartbeatResult,
   StartedJourney,
+  StoredHeartbeat,
   StoredJourney,
+  StoredPosition,
   UnendedJourneyState,
 } from './fake-journey-store.ts';
 export { JOURNEY_STORE_BEHAVIOUR, RACE_ROUNDS, RACERS } from './journey-store-behaviour.ts';
+export { fakeLog } from './fake-log.ts';
+export type { FakeLog, FakeLogEvent } from './fake-log.ts';
+export {
+  SYNTHETIC_EVENT_ID_PREFIX,
+  syntheticAccuracy,
+  syntheticBatteryLevel,
+  syntheticCoordinate,
+  syntheticEventId,
+  syntheticHeartbeat,
+  syntheticPhoneTime,
+  syntheticPosition,
+  toStoredPosition,
+} from './synthetic-heartbeats.ts';
+export type { SyntheticHeartbeat, SyntheticPosition } from './synthetic-heartbeats.ts';
 export { ADMIN_SHUTDOWN, endTestPool } from './end-test-pool.ts';
 export type { EndablePool } from './end-test-pool.ts';
 export { fakePostgres } from './fake-postgres.ts';
@@ -45,9 +66,11 @@ export type {
   FakePostgresQuery,
 } from './fake-postgres.ts';
 export type {
+  HeartbeatAsStored,
   JourneyAsStored,
   JourneyStoreBehaviour,
   JourneyStoreUnderTest,
+  PositionAsStored,
 } from './journey-store-behaviour.ts';
 
 /**

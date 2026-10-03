@@ -15,6 +15,13 @@
       "when": 1790885461967,
       "tag": "0001_lying_ares",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791009344374,
+      "tag": "0002_famous_diamondback",
+      "breakpoints": true
     }
   ]
 }

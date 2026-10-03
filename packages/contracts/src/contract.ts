@@ -4,6 +4,7 @@
  * entry point — see the note in index.ts.
  */
 import { health } from './health.ts';
+import { recordHeartbeat } from './heartbeats.ts';
 import { startJourney } from './journeys.ts';
 
-export const contract = { health, startJourney };
+export const contract = { health, startJourney, recordHeartbeat };

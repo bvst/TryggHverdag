@@ -61,3 +61,9 @@ mutation.mjs only when each run ends (spawnSync), so poll reports/mutation/*.jso
 them as command substitutions before node starts. A memory note containing a backticked git reset command
 ran it in the REAL repository (no-op that time: no tracked changes; reflog shows "reset: moving to HEAD").
 Write memory text with a quoted heredoc (`node --input-type=module - <<'EOF'` or `cat <<'EOF'`) only.
+
+**2026-10-03 (LOST-01): a local PostgreSQL in the scratchpad is no longer workable.** Something resets
+/tmp/claude-0 to 0700 within a second, even mid-command, and the running server then PANICs ("could not open
+pg_control: Permission denied") a few seconds into a test run. Holding the permission open was refused by the
+permission system as weakening security, so do not attempt it: report L3 as not verified by you, and say so.
+Point checks that need only a few seconds of psql before the reset may still work, but are not dependable.

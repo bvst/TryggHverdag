@@ -15,7 +15,13 @@
 // PostgreSQL 15, staging's version. Needs Docker: CI's integration job runs
 // it, a cloud session cannot.
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { apiPath, endTestPool, syntheticCredential, syntheticUuid } from '@trygghverdag/test-kit';
+import {
+  apiPath,
+  endTestPool,
+  fakeLog,
+  syntheticCredential,
+  syntheticUuid,
+} from '@trygghverdag/test-kit';
 import { createHash } from 'node:crypto';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -107,7 +113,14 @@ function realApi() {
   const clock = databaseClock(database());
   return createApi({
     health: createHealthService({ clock, heartbeats: databaseWorkerHeartbeats(database()) }),
-    journeys: createJourneyService({ clock, journeys: databaseJourneyStore(database()) }),
+    // RG-03: `log` added because LOST-01 made it a required dependency of the
+    // journey service (its spec, approach item 8). The recording fake, as no
+    // test here reads what is logged; nothing these tests assert changes.
+    journeys: createJourneyService({
+      clock,
+      journeys: databaseJourneyStore(database()),
+      log: fakeLog(),
+    }),
     devices: databaseDeviceAuthenticator(database()),
   });
 }

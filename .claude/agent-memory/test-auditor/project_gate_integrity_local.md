@@ -49,3 +49,8 @@ changed nothing.
 2026-10-02 cloud session (BUG-14 at 49d66ae): gate:integrity 3 of 5; curl showed the same 13 contexts, require_code_owner_review
 true, bypass_actors [], current_user_can_bypass never. Pushed, no PR, check-runs total_count 0. Main's ai-review.yml review job
 now grants `checks: read`, so a CI test-auditor should no longer get the 403 the brief still describes.
+2026-10-03 cloud session (BUG-15 at 0ccd0f5): gate:integrity 3 of 5; `gh api` (built-in client) showed the same 13 contexts,
+require_code_owner_review true, bypass_actors [], current_user_can_bypass never, enforcement active. Pushed, no PR, check-runs
+total_count 0. Zero open PRs, so "CI already ran it" is false until the PR exists; for a scripts/package.json diff run the unit
+file, traceability's cheap steps and decideMutation inline instead.
+2026-10-03 cloud (LOST-01 loop 1 at 19db407): 3 of 5 again; `gh api` showed the same 13 contexts (mutation, traceability among them), code-owner review true. Branch pushed at 19db407, no open PR (only #59 BUG-15), check-runs total_count 0, so RG-05 was read from the local reports, not CI.

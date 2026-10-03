@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-02 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 in progress** (D-100); LOST-01 after it · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-03 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 in review** (task 2 of 8, [#60](https://github.com/bvst/TryggHverdag/pull/60)) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -32,10 +32,12 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | | BUG-10 | The journey files need the owner and the safety review (D-092, D-094 to D-097): the six journey files, `api.ts`, `adapters/clock.ts`, the migrations' location and the system and integration Vitest configs in CODEOWNERS and `OWNER_APPROVAL_PATHS`, and in the ai-review `safety` filter; `modules/**` in `CLOCK_FREE_PATHS`; `modules/journeys/` and `api-process.ts` in `SAFETY_PATHS`, the first with its own mutation run under the system-test config | ✅ **Done** — 2026-10-02, [#56](https://github.com/bvst/TryggHverdag/pull/56), merged by the owner by hand (D-075) as `348f620`. Approved by `urso-agent`; all four session reviewers PASS (CI's AI reviewers cannot run on a pull request that edits `ai-review.yml`; their skip was read in each job log). In CI before the merge: `integration` 50 of 50, the new REL-01 clock test among them. On `main` after the merge: `ci` 10 of 10 jobs passed (run 37005844364), and `deploy-staging` passed with its smoke test (run 37005844368) |
 | | BUG-12 | The mutation gate fails silently: on CI the whole-suite run's mutants all time out, and Stryker scores timeouts as detected | ✅ **Done** — 2026-10-02, [#57](https://github.com/bvst/TryggHverdag/pull/57), merged as `a47334f` after `urso-agent` approved it (D-098, D-099). Only a kill counts, each file ≥ 80 %, every run fresh. On CI's four CPUs (#57's job 110875720392): 265 mutants, 0 timed out, about 3 minutes of 25. Reviews PASS in the session (safety, test-auditor, code) and in CI (privacy-security, test-auditor, code). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37040515081), and `deploy-staging` passed (run 37040515144). Record: `progress/m2.md` |
 | | BUG-13 | `gate:full` says "0 step(s) after it did not run" after a failure, even when steps did not run: `summarize` in `scripts/lib/steps.mjs` subtracts the counts of `results`, which never holds the steps after a failure, so the number is always 0. On 2026-10-02 four steps did not run and it said 0 | ⚪ **Queued**, for the owner to schedule. On `main`. A reporting bug in what a gate says it skipped, not in what it checks |
-| | BUG-14 | The test kit needs the owner, and the mutation check's own files and the test kit join the ai-review `safety` filter (D-100, the owner's answer of 2026-10-02 to CI's `code-reviewer` and `test-auditor` on #57) | 🟡 **Reviewed, pull request opening.** Branch `fix/BUG-14-gate-files-owned`. D-100 `097d835`, its amendment `1fca48c` (owner: the three Vitest configs join too; the group tests stay out); tests `f7daaa6`, `5d0174e`; fix `ef0c1cf`, `3e1babb`; `safety-reviewer`'s brief line `519c83b`. All four session reviewers PASS, twice for the blocking two. `gate:full`: 11 passed, the one failure `gate:integrity`'s API checks. It edits `ai-review.yml`, so the owner merges it by hand (D-075) |
-| | BUG-15 | CI's required `security` check (`pnpm audit --audit-level high`) fails on `main` and every pull request since 2026-10-02: braces GHSA-vfj7-8cjw-p6xm, no patched version, reached only through Jest and Metro tooling (D-104) | 🟡 **Reviewed, pull request opening.** Branch `fix/BUG-15-braces-advisory`. D-104 `0d331f6` (owner, 2026-10-03: accept this one, recorded); test `1bfaa23`; fix `0ccd0f5`, one ID in `ignoreGhsas`. Reviews PASS (privacy and security, test audit, code); their should-fixes in loop 1: a test that only `apps/mobile` reaches braces, and D-104 made exact. Also ported into LOST-01's branch so its `security` check is green |
+| | BUG-14 | The test kit needs the owner, and the mutation check's own files and the test kit join the ai-review `safety` filter (D-100, the owner's answer of 2026-10-02 to CI's `code-reviewer` and `test-auditor` on #57) | ✅ **Done** — 2026-10-02, [#58](https://github.com/bvst/TryggHverdag/pull/58), merged by the owner by hand (D-075) as `34bc460` after `urso-agent` approved. D-100 and its amendment: `/packages/test-kit/` needs the owner; the mutation check's own files, the test kit and the three Vitest configs are in the safety filter. All four session reviewers PASS; CI's four AI reviewers skipped, as expected for a pull request that edits `ai-review.yml` (read in each job log). On #58, the new filter matched `gate-decisions.mjs` and started the safety review, and `mutation` ran fresh, identical to BUG-12 (job 110964175819). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37058587754), and `deploy-staging` passed with its smoke test (run 37058587803). Record: `progress/m2.md` |
+| | BUG-15 | CI's required `security` check (`pnpm audit --audit-level high`) failed on `main` and every pull request from 2026-10-02: braces GHSA-vfj7-8cjw-p6xm, no patched version, reached only through Jest and Metro tooling (D-104) | ✅ **Done** — 2026-10-03, [#59](https://github.com/bvst/TryggHverdag/pull/59), merged as `c46b3b3` after `urso-agent` approved; `main`'s tree is the reviewed head `10a1af4`. D-104 (owner, 2026-10-03: accept this one, recorded): one ID in `ignoreGhsas`, and a lockfile test that only `apps/mobile` reaches braces. Reviews PASS in the session (privacy and security, test audit, code) and in CI (all five AI reviewers). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37125357152), and `deploy-staging` passed with its smoke test (run 37125357148). Record: `progress/m2.md` |
+| | BUG-16 | `req:coverage` counts a requirement as tested when any test file names its ID, in a comment too: `mentions()` in `scripts/lib/requirements.mjs` searches the file's whole text. Found by CI's `test-auditor` on #60, which checked LOST-01's 20 criteria by hand and found a real test behind each | ⚪ **Queued**, for the owner to schedule. On `main` |
+| | BUG-17 | `android-e2e` fails before the app is installed: the emulator still reports `en-rUS` 120 s after the switch to nb-NO. Twice so far: #57 (job 110875720264) and #60 (job 111180346250). A re-run passed on #57 | ⚪ **Queued**, for the owner to schedule. `progress/m2.md` said a second time would make it a bug of its own |
 | | BUG-11 | The dependency audit accepts one advisory, GHSA-86w9-cpqp-85rv in `node-forge` (D-093) | ✅ **Done** — merged with SM-01 in [#53](https://github.com/bvst/TryggHverdag/pull/53) (`2db7046`). Its own pull request, [#54](https://github.com/bvst/TryggHverdag/pull/54), was closed as superseded: every file it held was already on `main` |
-| 2 | LOST-01 | Heartbeat, with or without position | ⚪ Not started |
+| 2 | LOST-01 | Heartbeat, with or without position | 🟡 **In review**, [#60](https://github.com/bvst/TryggHverdag/pull/60), waits on the owner. Branch `claude/busy-faraday-40n2zl`. D-101 to D-103 (D-102 amended); 20 acceptance criteria; tests `d21afbd` then code `01de08b`; review loop 1 tests `601e528` then code `16a9514`, plus `14351d4`. All four session reviewers PASS, and the three blocking ones PASS again after loop 1. In CI on `f7a008d`: all five AI reviewers PASS; `integration` 103 of 103 on PostgreSQL 15; `mutation` every safety file ≥ 96 %, 0 timed out; `android-e2e` failed before the app was installed (BUG-17). `main`, with BUG-15, is merged in (`b6514af`). Record: `progress/m2.md` |
 | 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ⚪ Not started |
 | 4 | LOST-03 | Back in contact | ⚪ Not started |
 | 5 | LOST-06 | "I'm on it" | ⚪ Not started |
@@ -162,6 +164,22 @@ UptimeRobot app ("it is enough for now").
 
 The things that still bite, and cost a session hours the first time.
 
+- **Naming a requirement that has no test yet, in a changed spec or source
+  file, fails `req:coverage --fail-on-uncovered-changed`** (and with it
+  `gate:full` and CI's `traceability`). LOST-01's loop 1 wrote "task 3
+  (LOST-02)" in a code comment and in its spec; LOST-02 went to 📝 and the gate
+  stopped at that step. Name a later task in words ("task 3, the lost-contact
+  watchdog"). Docs under `progress/` are not read for this.
+- **Don't run two gates at once in one checkout.** The drill test INF-10-AC11
+  compares `git status` before and after, so a background `gate:full`
+  rewriting `docs/requirements-status.md` fails a concurrent `gate:quick`;
+  and a `gate:quick` (or the stop hook) during a mutation run lints Stryker's
+  `.stryker-tmp/sandbox-*` copy, which carries `@ts-nocheck`. Let one finish.
+- **A git worktree outside the project gets no post-edit checks.** The
+  post-edit hook runs in `$CLAUDE_PROJECT_DIR`, so edits in a scratchpad
+  worktree are checked against the main checkout (reporting its errors, or
+  "No test files found"). Run the gates in the worktree yourself (BUG-15).
+
 - **On the Mac, hooks run with the PATH Claude Code started with.** A stop
   hook that fails with no output, or with `git init -b` refused, is this
   machine's old `/usr/local/bin` Node 20 or git 2.23, not the change. Restart
@@ -286,7 +304,7 @@ The things that still bite, and cost a session hours the first time.
   `.claude/` gaps). M2's narrative is [`progress/m2.md`](progress/m2.md) and
   M1's is [`progress/m1.md`](progress/m1.md), so a bug's next `BUG-<n>` has to
   be looked for in all three files, in this one and in `decisions.md`. The
-  next one is **BUG-16** (BUG-13 to BUG-15 are taken). The last paragraph of
+  next one is **BUG-18** (BUG-13 to BUG-17 are taken). The last paragraph of
   `progress/m1.md` says why.
 - **The write-time sensitive-data hook catches only `+47`/`0047` phone
   numbers, on Write and Edit.** `scan-sensitive.mjs` does not look for 8-digit
@@ -318,9 +336,24 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**BUG-14** (D-100 and its amendment) is reviewed, and its pull request is
-opening. It edits `ai-review.yml`, so the owner merges it by hand (D-075).
-LOST-01 follows. Open after it:
+**LOST-01** (M2 task 2 of 8, the heartbeat) is in review as
+[#60](https://github.com/bvst/TryggHverdag/pull/60) and waits on the owner. On
+`f7a008d` every check passed except `android-e2e`, which failed before the app
+was installed (BUG-17). **BUG-15** is done
+([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`). **A-31**
+(Dependabot alerts are off) is the owner's. LOST-01's reviews leave items for
+later tasks, listed in `progress/m2.md` ("Left for later tasks"); the first is
+that task 3 must bound the heartbeat's row lock before it merges.
+
+**For the owner, from CI's `test-auditor` on #60:** should
+`apps/server/src/log.ts` be mutation-tested? It is the one place that keeps
+locations and phone numbers out of the server's logs (PRIV-07), and
+`SAFETY_PATHS` holds only code where a missed bug is a missed alert (D-036).
+Claude recommends a mutation group for it on every pull request, under a new
+decision, as its own task after LOST-01. The alternative is to wait for D-036's
+nightly run, which does not exist yet.
+
+Still open from BUG-14's reviews, for the owner:
 - nothing pins what `package.json`'s `mutation` script runs (`safety-reviewer`
   on BUG-14, for the owner): changed to `echo`, CI's required check would pass
   with only the owner's approval in the way;
@@ -333,7 +366,7 @@ Still open from D-098's consequences (BUG-12, done):
 - the whole-suite run is now unreachable, and removing it needs a decision;
 - mobile `.tsx` safety files will need a jest-expo group.
 
-**BUG-13** is queued for the owner to schedule (the row under M2, above).
+**BUG-13**, **BUG-16** and **BUG-17** are queued for the owner to schedule (the rows under M2, above).
 
 **D-085's loose ends** (the pull request merged, [#43](https://github.com/bvst/TryggHverdag/pull/43)).
 - **Verified:** `deploy-staging` on `ubuntu-26.04`. Run 36621209842, for
@@ -419,6 +452,8 @@ batch, each merged by hand (D-075): [#21](https://github.com/bvst/TryggHverdag/p
 (`apps/mobile/app.config.ts`, D-084). The runner label and the three action
 bumps went in as [#48](https://github.com/bvst/TryggHverdag/pull/48). BUG-10's
 filter (D-092) went in as [#56](https://github.com/bvst/TryggHverdag/pull/56),
+and BUG-14's (D-100: the mutation check's own files, the test kit and the three
+Vitest configs) as [#58](https://github.com/bvst/TryggHverdag/pull/58), both
 merged by hand.
 
 ## History

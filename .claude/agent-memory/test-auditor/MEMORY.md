@@ -15,3 +15,6 @@
 - [Config-pinning tests](feedback_config_pinning_tests.md) — BUG-11 audit ignore; `pnpm -C . audit` escapes literal scans; delegated/superseded decisions still "Accepted"; pin path premises from the lockfile
 - [BUG-12 audit](project_bug12_audit.md) — PASS 6a3d606/5a8028f; 4 survivors with backstops (main hasSourceFiles wiring); RG-02 replay via git show in a transform
 - [BUG-14 audit](project_bug14_audit.md) — PASS 49d66ae; 28/28 faults killed; added fifth filter entry survives; D-100 list vs MUTATION_INPUTS; readFileSync override trick
+- [LOST-01 audit](project_lost01_audit.md) — PASS 7ddcd72 and loop-1 19db407 (43 faults; L1 log `^` anchor and H3 UTC-in-CI survive); RG-02 replay via load hook
+- [BUG-15 audit](project_bug15_audit.md) — PASS 0ccd0f5 and loop-1 a7423d9 (walk: 14/14 lockfile faults, H8 near-equivalent survivor); supersession gap open
+- [Allowlist anchors and TZ](feedback_allowlist_anchor_tz.md) — plant `^` and `$` removal separately; getUTC* -> local survives in UTC CI, re-run with TZ=Europe/Oslo

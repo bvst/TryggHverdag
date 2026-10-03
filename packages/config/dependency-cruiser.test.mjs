@@ -1,4 +1,4 @@
-// req-coverage: fixtures-only — the IDs below name architecture rules, not product requirements.
+// req-coverage: fixtures-only — the IDs below name architecture rules, and the work that brought one; none is coverage of a product requirement.
 //
 // INF-06-AC18, and the part of AC1 that belongs to the import check: the rules
 // in dependency-cruiser.cjs, run the way `pnpm run imports:check` runs them
@@ -11,6 +11,12 @@
 // exactly that state for routes. It named features/ and shared/ as the only
 // sources, so a screen under src/app/ could reach into the safety core's
 // internals and pass.
+//
+// The tests named LOST-01 hold the AR-10 rule that LOST-01's review asked for
+// (D-102, PRIV-07): only the process wiring and tests import the server's log
+// adapter, and every module gets the `Log` port. They prove an import rule,
+// not a LOST-01 criterion, so the marker above keeps them out of LOST-01's
+// coverage; the name says which piece of work the rule came from.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -39,6 +45,35 @@ const APP = {
   // What `expo prebuild` and a local build leave on disk. Not ours to check.
   'apps/mobile/android/app/src/main/Generated.js': reachesIn('./does-not-exist'),
   'apps/mobile/ios/TryggHverdag/Generated.js': reachesIn('./does-not-exist'),
+};
+
+const LOG_RULE = 'only-the-process-wires-the-log';
+const LOG = 'apps/server/src/log.ts';
+const usesTheLog = (from) => `import { createLog } from '${from}';\nexport default createLog;\n`;
+
+/**
+ * A small server. The process wiring and the tests may import the log
+ * adapter; every other file tries to, and a module that does it properly
+ * takes the `Log` port instead. Imports are written both with and without
+ * `.ts`, because the repository writes them with it and the rule must hold
+ * either way.
+ */
+const SERVER = {
+  [LOG]: 'export const createLog = (): number => 1;\n',
+  'apps/server/src/ports.ts': 'export interface Log {\n  write: (event: string) => void;\n}\n',
+  'apps/server/src/api-process.ts': usesTheLog('./log.ts'),
+  'apps/server/src/log.test.ts': usesTheLog('./log'),
+  // journeys.system.test.ts loads it this way, inside the test that needs it.
+  'apps/server/src/journeys.system.test.ts':
+    "export const load = async (): Promise<unknown> => (await import('./log.ts')).createLog;\n",
+  'apps/server/src/modules/journeys/service.ts': usesTheLog('../../log'),
+  'apps/server/src/modules/health/service.ts':
+    "import type { Log } from '../../ports.ts';\nexport const report = (log: Log): void => log.write('x');\n",
+  'apps/server/src/domain/journey.ts': usesTheLog('../log.ts'),
+  'apps/server/src/adapters/journeys.ts': usesTheLog('../log'),
+  // Named like the two exemptions without being either.
+  'apps/server/src/modules/journeys/service.test-helpers.ts': usesTheLog('../../log.ts'),
+  'apps/server/src/modules/journeys/api-process.ts': usesTheLog('../../log.ts'),
 };
 
 const made = [];
@@ -113,6 +148,51 @@ describe('the safety core is reached through its index, from anywhere in the app
   });
 });
 
+describe('only the process wiring and tests import the log adapter; modules get the Log port', () => {
+  let check;
+  beforeAll(() => {
+    check = importCheck(SERVER);
+  });
+
+  const refused = (from) => check.violations.filter((v) => v.rule === LOG_RULE && v.from === from);
+
+  test('LOST-01 (AR-10, D-102): a module may not import the log adapter', () => {
+    expect(refused('apps/server/src/modules/journeys/service.ts')).toEqual([
+      { rule: LOG_RULE, from: 'apps/server/src/modules/journeys/service.ts', to: LOG },
+    ]);
+  });
+
+  test('LOST-01 (AR-10, D-102): nor may domain code', () => {
+    expect(refused('apps/server/src/domain/journey.ts')).toEqual([
+      { rule: LOG_RULE, from: 'apps/server/src/domain/journey.ts', to: LOG },
+    ]);
+  });
+
+  test('LOST-01 (AR-10, D-102): nor may an adapter', () => {
+    expect(refused('apps/server/src/adapters/journeys.ts')).toEqual([
+      { rule: LOG_RULE, from: 'apps/server/src/adapters/journeys.ts', to: LOG },
+    ]);
+  });
+
+  test('LOST-01 (AR-10, D-102): nor a file only named like a test or like the process wiring', () => {
+    expect(refused('apps/server/src/modules/journeys/service.test-helpers.ts')).toHaveLength(1);
+    expect(refused('apps/server/src/modules/journeys/api-process.ts')).toHaveLength(1);
+  });
+
+  test('LOST-01 (AR-10, D-102): api-process.ts, which wires the real log, may import it', () => {
+    expect(refused('apps/server/src/api-process.ts')).toEqual([]);
+  });
+
+  test('LOST-01 (AR-10, D-102): tests may import it, the system test included', () => {
+    expect(refused('apps/server/src/log.test.ts')).toEqual([]);
+    expect(refused('apps/server/src/journeys.system.test.ts')).toEqual([]);
+  });
+
+  test('LOST-01 (AR-10, D-102): a module that takes the Log port is not refused', () => {
+    expect(refused('apps/server/src/modules/health/service.ts')).toEqual([]);
+  });
+});
+
 describe('pnpm run imports:check', () => {
   test('INF-06-AC18: fails on a route that reaches past the index, naming the rule, and the rule names AR-09', () => {
     const check = importCheck({
@@ -127,6 +207,23 @@ describe('pnpm run imports:check', () => {
     expect(check.status, check.output).not.toBe(0);
     expect(check.output).toContain(`error ${RULE}: apps/mobile/src/app/index.tsx`);
     expect(rule?.comment).toContain('AR-09');
+  });
+
+  test('LOST-01 (AR-10, D-102): fails on a module that imports the log adapter, naming the rule, and the rule names AR-10 and D-102', () => {
+    const check = importCheck({
+      [LOG]: SERVER[LOG],
+      'apps/server/src/modules/journeys/service.ts': usesTheLog('../../log.ts'),
+    });
+    const rule = createRequire(import.meta.url)('./dependency-cruiser.cjs').forbidden.find(
+      (r) => r.name === LOG_RULE,
+    );
+
+    expect(check.status, check.output).not.toBe(0);
+    expect(check.output).toContain(
+      `error ${LOG_RULE}: apps/server/src/modules/journeys/service.ts`,
+    );
+    expect(rule?.comment).toContain('AR-10');
+    expect(rule?.comment).toContain('D-102');
   });
 
   test('INF-06-AC1: cruises apps/, where the app lives', () => {

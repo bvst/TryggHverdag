@@ -21,3 +21,12 @@ log actually holds (evaluate the test's helpers inline with `node --input-type=m
 which writes no file), and ask whether the decision's premise (who depends on it) is pinned.
 Also: D-060 is used by two different decisions on main (lines 601 and 639), pre-existing.
 Related: [[bug-test-patterns]], [[promised-future-tests]], [[gate-integrity-local]]
+BUG-15 (2026-10-03, D-104, PASS): the decided premise (braces only via micromatch, <= 3.0.3, no direct workspace dep) was
+pinned, but the fact the risk rests on ("nothing reaches it from the server") sat only in D-104's Context. Separate a
+decision's *Consequences* premise from the *Context* facts its "at worst" sentence relies on; when the lockfile can show a
+Context fact offline (an importer's closure), recommend pinning it in the same PR without a new decision. Do not recommend
+pinning a fast-churning dependent set (micromatch's jest/metro/expo dependents): that is a cost the owner chooses.
+Graph-walk pins (BUG-15 loop 1): plant faults at every edge kind (direct, dev, optional, alias, peer-suffixed key, link,
+injected file:, deep transitive, new unlinked importer) plus a must-survive control inside the allowed importer; cross-check
+the real result with `pnpm why -r <pkg> --depth Infinity --json`. Probe the start set with two source versions, and look for
+sanity anchors that pin an incidental edge (a shortest-chain index) which a routine dependency change would break.

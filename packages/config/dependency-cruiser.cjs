@@ -91,6 +91,14 @@ module.exports = {
       },
     },
     {
+      name: 'only-the-process-wires-the-log',
+      severity: 'error',
+      comment:
+        "AR-10, D-102: apps/server/src/log.ts is the server's one log adapter. Only api-process.ts, which wires the real log, and tests may import it. Every module gets the Log port, so nothing can write to the log past its closed event types (PRIV-07).",
+      from: { pathNot: ['^apps/server/src/api-process\\.ts$', '\\.(test|spec)\\.[cm]?[jt]sx?$'] },
+      to: { path: '^apps/server/src/log\\.ts$' },
+    },
+    {
       name: 'ui-cannot-reach-the-safety-core',
       severity: 'error',
       comment:

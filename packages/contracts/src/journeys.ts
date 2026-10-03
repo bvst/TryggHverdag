@@ -13,6 +13,7 @@
  * than ignored. The walker is always the user whose device sent the request.
  */
 import { z } from 'zod';
+import { badRequestError } from './bad-request.ts';
 import { deviceRoute } from './device-credential.ts';
 
 /**
@@ -55,12 +56,9 @@ export type StartJourneyResponse = z.infer<typeof startJourneyResponseSchema>;
 
 /** Every refusal a start can meet besides the 401, by its code. */
 export const startJourneyErrors = {
-  // Raised by oRPC itself when the body fails the request schema, in its own
-  // words; declared here so the description lists it.
-  BAD_REQUEST: {
-    status: 400,
-    message: 'Input validation failed',
-  },
+  // A body that is not JSON, or not a start request: the one fixed 400 every
+  // route with a body declares, never with `data`.
+  BAD_REQUEST: badRequestError,
   ALREADY_ON_A_JOURNEY: {
     status: 409,
     message: 'The walker already has a journey that has not ended.',
