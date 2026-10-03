@@ -2,10 +2,10 @@
 - [Spawned-process tests](project_spawned_process_tests.md) — bin.test.ts style: flag fixed sleeps from spawn and kills outside finally (BUG-5)
 - [gate:file is silent on success](reference_gate_file_silent_success.md) — check its exit code; no GNU `timeout`; guard blocks any `>` (`=>`, `2>/dev/null`, python `>`), merge-base, zip/tee, a python var named `mv`
 - [Spec promises vs HEAD](project_spec_promises_vs_head.md) — grep HEAD for promised D-/A- numbers and "in the decision" follow-ups; diff coverage-baseline.json for drops
-- [Unowned gate config](project_unowned_gate_config.md) — packages/config, root configs, app.config.ts lack CODEOWNERS; no mobile→server import rule (2026-09-26)
 - [Stale prose after amendment](project_stale_prose_after_amendment.md) — amended ACs leave old wording in spec tech-approach, README, doctor hints; grep it
 - [Spike harness: invalid vs failed](project_spike_harness_invalid_vs_failed.md) — D-060 holes both ways; aggregators: duplicate run ids, unplanned cases; capture facts; SF list in shared scratchpad
 - [Results doc vs evidence](project_results_doc_vs_evidence.md) — diff the generator's rows exactly; convert times; read `from`/scope fields; test the documented flag combinations
 - [Owner docs for outside forms](project_owner_docs_for_external_forms.md) — paste hygiene, field-limit stop rule, numbered cross-refs, paraphrase vs quote, milestones vs roadmap
 - [IDs taken while open](project_ids_taken_while_open.md) — grep main and open PRs for the branch's new D-/BUG-/A- numbers; dirty PR = no workflows; label = release, not image
 - [Mutation gate since D-098](project_mutation_gate_d098.md) — per-run JSON report, only kills count; Stryker 10 exits 0 on zero mutants; pg wire facts for fake-postgres; audit kills by FAIL file; trigger gaps
+- [LOST-01 library facts](project_lost01_library_facts.md) — pino `{,` and below-threshold noop; Drizzle errors carry SQLSTATE on `cause`; oRPC encodeError is the one body; ports.ts (LogEvent) unowned
