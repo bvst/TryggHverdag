@@ -23,7 +23,9 @@
  *     with the event ID compared exactly, case and all; a heartbeat for an
  *     ENDED journey is answered `ended` and stores nothing; a heartbeat, a
  *     battery level or a position outside the contract's rules is refused, as
- *     the check constraints refuse it; last contact never moves backwards;
+ *     the check constraints refuse it, and so is a phone time outside the
+ *     years 0001 to 9999 in UTC, as `timestamptz` refuses it; last contact
+ *     never moves backwards;
  *   - IDs are UUIDs, matched as PostgreSQL's `uuid` type matches them: the
  *     same ID in upper or lower case is one ID, and every ID the fake holds
  *     or hands back is lower-case, as the database returns it.
@@ -38,6 +40,7 @@
  * called, so a test can say "the handler never ran". Matches the server's
  * JourneyStore port by shape, so the test kit needs no import from the server.
  */
+import { EVENT_ID_PATTERN, MAX_EVENT_ID_LENGTH } from '@trygghverdag/contracts';
 import { syntheticUuid } from './synthetic-ids.ts';
 
 /**
@@ -236,15 +239,31 @@ function asStored(id: string): string {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * The rules the `heartbeats` and `positions` tables hold by check
- * constraints, which are the contract's (LOST-01's spec, approach items 3 and
- * 7). Written out here because the test kit does not depend on the server;
- * the fake's own tests hold the event ID rule to the contract's constants.
+ * The event ID rule the `heartbeats` table holds by a check constraint: the
+ * contract's own, read from the contract rather than copied (LOST-01's spec,
+ * approach items 3 and 7). The test kit depends on the contracts package, not
+ * on the server.
  */
-const EVENT_ID = /^[A-Za-z0-9-]{1,64}$/;
+function isEventId(eventId: string): boolean {
+  return eventId.length <= MAX_EVENT_ID_LENGTH && EVENT_ID_PATTERN.test(eventId);
+}
 
 function isWithin(value: number, low: number, high: number): boolean {
   return Number.isFinite(value) && value >= low && value <= high;
+}
+
+/**
+ * Whether `timestamptz` takes this moment as the adapter writes it. The
+ * adapter writes a Date with `toISOString()`, which gives year 0 as `0000-…`,
+ * a year PostgreSQL does not have, and year 10000 as `+010000-…`. PostgreSQL
+ * 16 refuses the first with SQLSTATE 22008 ("date/time field value out of
+ * range") and the second with 22009 ("time zone displacement out of range"),
+ * read on PostgreSQL 16.13. So only an instant in the years 0001 to 9999 in
+ * UTC is stored, as the contract now requires of the phone's time.
+ */
+function isStorableMoment(moment: Date): boolean {
+  const year = moment.getUTCFullYear();
+  return year >= 1 && year <= 9999;
 }
 
 /** What a check constraint would refuse, worded as PostgreSQL words it. */
@@ -420,7 +439,7 @@ export function fakeJourneyStore(): FakeJourneyStore {
         }
         // The heartbeat row's own constraints come before its conflict, as
         // PostgreSQL checks a row before it looks for a duplicate.
-        if (!EVENT_ID.test(eventId)) {
+        if (!isEventId(eventId)) {
           throw checkViolation('heartbeats', 'event_id');
         }
         if (batteryLevel !== null && !isWithin(batteryLevel, 0, 1)) {
@@ -444,6 +463,9 @@ export function fakeJourneyStore(): FakeJourneyStore {
           }
           if (Number.isNaN(position.recordedAt.getTime())) {
             throw new Error('invalid input syntax for type timestamp with time zone: recorded_at');
+          }
+          if (!isStorableMoment(position.recordedAt)) {
+            throw new Error('date/time field value out of range: recorded_at');
           }
         }
         arrivals += 1;

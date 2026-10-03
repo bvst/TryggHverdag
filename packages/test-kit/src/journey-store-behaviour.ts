@@ -114,7 +114,11 @@ export interface JourneyStoreUnderTest {
   };
   /** A new user, by the store's own means: a row in the real table, an entry in the fake. */
   addUser(): Promise<string>;
-  /** A new device of this user, by the store's own means; resolves to its ID (D-101). */
+  /**
+   * A new device of this user, by the store's own means; resolves to its ID.
+   * Every start and every seeded journey names the device it came from, as
+   * `journeys.device_id` is not null and references `devices` (D-101).
+   */
   addDevice(userId: string): Promise<string>;
   /** A journey put in directly, in any state, started from this device; resolves to its ID. */
   seedJourney(journey: {
@@ -193,15 +197,6 @@ async function users(subject: JourneyStoreUnderTest, count: number): Promise<str
   return made;
 }
 
-/**
- * A device for this walker, as the start needs one (D-101). Every start and
- * every seeded journey names the device it came from, as `journeys.device_id`
- * is not null and references `devices`.
- */
-function deviceFor(subject: JourneyStoreUnderTest, walkerId: string): Promise<string> {
-  return subject.addDevice(walkerId);
-}
-
 function insertedId(result: InsertStartedResult): string {
   if (!result.inserted) {
     throw new Error(
@@ -232,7 +227,7 @@ async function journeyFor(
   }: { state?: FakeJourneyState; lastHeartbeatAt?: Date | null } = {},
 ): Promise<{ walkerId: string; deviceId: string; journeyId: string }> {
   const [walkerId = '', responderId = ''] = await users(subject, 2);
-  const deviceId = await deviceFor(subject, walkerId);
+  const deviceId = await subject.addDevice(walkerId);
   const journeyId = await subject.seedJourney({
     walkerId,
     deviceId,
@@ -289,6 +284,25 @@ const RECORDED: RecordHeartbeatResult = { outcome: 'recorded' };
 const DUPLICATE: RecordHeartbeatResult = { outcome: 'duplicate' };
 const ENDED: RecordHeartbeatResult = { outcome: 'ended' };
 
+/**
+ * Phone times whose instant in UTC is outside the years 0001 to 9999: year
+ * 0, which PostgreSQL does not have, and year 10000, which the adapter's
+ * `toISOString()` writes as `+010000-…`. PostgreSQL 16 refuses the first with
+ * SQLSTATE 22008 and the second with 22009 (safety-reviewer, LOST-01; the
+ * codes read on PostgreSQL 16.13). Each is written as the contract
+ * would have taken it, so the second and third show that the offset, not the
+ * year as written, decides: `9999-12-31` at -14:00 is already year 10000 in
+ * UTC, and `0001-01-01` at +01:00 still year 0.
+ */
+const PHONE_TIMES_OUT_OF_RANGE = [
+  '0000-01-01T00:00:00Z',
+  '9999-12-31T23:59:59-14:00',
+  '0001-01-01T00:30:00+01:00',
+] as const;
+
+/** The first and the last whole second of the years 0001 to 9999, in UTC. */
+const PHONE_TIMES_AT_THE_EDGES = ['0001-01-01T00:00:00Z', '9999-12-31T23:59:59Z'] as const;
+
 export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
   {
     name: 'a walker with no journey has no unended journey',
@@ -303,7 +317,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     name: 'a start is stored ACTIVE, with exactly its responders and the moment it was given',
     async run(subject) {
       const [walkerId = '', first = '', second = ''] = await users(subject, 3);
-      const deviceId = await deviceFor(subject, walkerId);
+      const deviceId = await subject.addDevice(walkerId);
 
       const result = await subject.store.insertStarted({
         walkerId,
@@ -336,7 +350,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     async run(subject) {
       for (const state of UNENDED) {
         const [walkerId = '', responderId = ''] = await users(subject, 2);
-        const deviceId = await deviceFor(subject, walkerId);
+        const deviceId = await subject.addDevice(walkerId);
         const journeyId = await subject.seedJourney({
           walkerId,
           deviceId,
@@ -358,7 +372,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       const [walkerId = '', responderId = ''] = await users(subject, 2);
       await subject.seedJourney({
         walkerId,
-        deviceId: await deviceFor(subject, walkerId),
+        deviceId: await subject.addDevice(walkerId),
         state: 'ENDED',
         responderIds: [responderId],
         startedAt: EARLIER,
@@ -372,7 +386,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     async run(subject) {
       for (const state of UNENDED) {
         const [walkerId = '', earlier = '', later = ''] = await users(subject, 3);
-        const deviceId = await deviceFor(subject, walkerId);
+        const deviceId = await subject.addDevice(walkerId);
         const journeyId = await subject.seedJourney({
           walkerId,
           deviceId,
@@ -398,7 +412,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     name: 'an ENDED journey does not block a new one, and stays exactly as it was',
     async run(subject) {
       const [walkerId = '', earlier = '', later = ''] = await users(subject, 3);
-      const deviceId = await deviceFor(subject, walkerId);
+      const deviceId = await subject.addDevice(walkerId);
       const endedId = await subject.seedJourney({
         walkerId,
         deviceId,
@@ -436,7 +450,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       const [first = '', second = '', responderId = ''] = await users(subject, 3);
       await subject.seedJourney({
         walkerId: first,
-        deviceId: await deviceFor(subject, first),
+        deviceId: await subject.addDevice(first),
         state: 'ACTIVE',
         responderIds: [responderId],
         startedAt: EARLIER,
@@ -444,7 +458,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
 
       const result = await subject.store.insertStarted({
         walkerId: second,
-        deviceId: await deviceFor(subject, second),
+        deviceId: await subject.addDevice(second),
         responderIds: [responderId],
         startedAt: STARTED_AT,
       });
@@ -457,7 +471,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     async run(subject) {
       for (let round = 0; round < RACE_ROUNDS; round += 1) {
         const [walkerId = '', responderId = ''] = await users(subject, 2);
-        const deviceId = await deviceFor(subject, walkerId);
+        const deviceId = await subject.addDevice(walkerId);
 
         // Promise.all rejects if any start fails outright, which is the
         // "no unhandled error" half of the rule.
@@ -521,7 +535,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       const journeyId = insertedId(
         await subject.store.insertStarted({
           walkerId: walkerId.toUpperCase(),
-          deviceId: await deviceFor(subject, walkerId),
+          deviceId: await subject.addDevice(walkerId),
           responderIds: [responderId.toUpperCase()],
           startedAt: STARTED_AT,
         }),
@@ -549,7 +563,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     name: 'a responder who is not a user is refused whole: the store rejects, and leaves no journey',
     async run(subject) {
       const [walkerId = '', responderId = ''] = await users(subject, 2);
-      const deviceId = await deviceFor(subject, walkerId);
+      const deviceId = await subject.addDevice(walkerId);
 
       await expect(
         subject.store.insertStarted({
@@ -579,7 +593,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       const stranger = syntheticUuid();
       // A device that exists, so the walker is the only thing wrong here
       // (D-101): a device that did not exist would be refused on its own.
-      const deviceId = await deviceFor(subject, responderId);
+      const deviceId = await subject.addDevice(responderId);
 
       await expect(
         subject.store.insertStarted({
@@ -605,7 +619,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       // insert and the transaction rolls back, which with the store's own
       // refusal deleted would otherwise pass here unseen.
       const [walkerId = '', responderId = ''] = await users(subject, 2);
-      const deviceId = await deviceFor(subject, walkerId);
+      const deviceId = await subject.addDevice(walkerId);
 
       await expect(
         subject.store.insertStarted({
@@ -641,7 +655,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       // would answer before Drizzle ever sees the empty list.
       for (const state of UNENDED) {
         const [walkerId = '', responderId = ''] = await users(subject, 2);
-        const deviceId = await deviceFor(subject, walkerId);
+        const deviceId = await subject.addDevice(walkerId);
         const journeyId = await subject.seedJourney({
           walkerId,
           deviceId,
@@ -673,8 +687,8 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     name: 'LOST-01-AC10: a start stores the device it was given, and no other (D-101)',
     async run(subject) {
       const [walkerId = '', responderId = ''] = await users(subject, 2);
-      const phone = await deviceFor(subject, walkerId);
-      const tablet = await deviceFor(subject, walkerId);
+      const phone = await subject.addDevice(walkerId);
+      const tablet = await subject.addDevice(walkerId);
 
       const journeyId = insertedId(
         await subject.store.insertStarted({
@@ -1153,6 +1167,55 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       expect(byEvent(await subject.heartbeatsOf(journeyId))).toEqual(
         byEvent(accepted.map(storedAs)),
       );
+      expect(byEvent(await subject.positionsOf(journeyId))).toEqual(
+        byEvent(positionsCarried(accepted)),
+      );
+    },
+  },
+  {
+    name: 'LOST-01-AC18: a phone time whose instant in UTC falls outside the years 0001 to 9999 is refused by the store, as PostgreSQL refuses it, and nothing is stored; the same event with a phone time inside them is then recorded',
+    async run(subject) {
+      const { journeyId } = await journeyFor(subject, { lastHeartbeatAt: EARLIER });
+      const refused = PHONE_TIMES_OUT_OF_RANGE.map((recordedAt) =>
+        heartbeatFor(journeyId, { position: { ...position(), recordedAt: new Date(recordedAt) } }),
+      );
+
+      for (const heartbeat of refused) {
+        const recordedAt = heartbeat.position?.recordedAt ?? new Date(Number.NaN);
+        // Each is a real instant, so a refusal is the range's doing, not an invalid date's.
+        expect(Number.isNaN(recordedAt.getTime()), recordedAt.toISOString()).toBe(false);
+        await expect(
+          subject.store.recordHeartbeat(heartbeat),
+          recordedAt.toISOString(),
+        ).rejects.toThrow();
+      }
+
+      expect(await subject.heartbeatsOf(journeyId)).toEqual([]);
+      expect(await subject.positionsOf(journeyId)).toEqual([]);
+      expect(await subject.lastHeartbeatAt(journeyId)).toEqual(EARLIER);
+
+      const [first] = refused;
+      const retried = { ...(first ?? heartbeatFor(journeyId)), position: position() };
+      expect(await subject.store.recordHeartbeat(retried)).toEqual(RECORDED);
+      expect(await subject.heartbeatsOf(journeyId)).toEqual([storedAs(retried)]);
+      expect(await subject.positionsOf(journeyId)).toEqual(positionsCarried([retried]));
+    },
+  },
+  {
+    name: 'LOST-01-AC18: the first and the last instant of the years 0001 to 9999 in UTC are accepted as phone times, and stored exactly as given',
+    async run(subject) {
+      const { journeyId } = await journeyFor(subject);
+      const accepted = PHONE_TIMES_AT_THE_EDGES.map((recordedAt) =>
+        heartbeatFor(journeyId, { position: { ...position(), recordedAt: new Date(recordedAt) } }),
+      );
+
+      for (const heartbeat of accepted) {
+        expect(
+          await subject.store.recordHeartbeat(heartbeat),
+          heartbeat.position?.recordedAt.toISOString(),
+        ).toEqual(RECORDED);
+      }
+
       expect(byEvent(await subject.positionsOf(journeyId))).toEqual(
         byEvent(positionsCarried(accepted)),
       );

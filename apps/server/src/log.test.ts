@@ -14,6 +14,7 @@
 // see: then every "nothing was written" test would pass while proving nothing.
 import { syntheticCoordinate, syntheticUuid } from '@trygghverdag/test-kit';
 import process from 'node:process';
+import { inspect } from 'node:util';
 import { describe, expect, test, vi } from 'vitest';
 import { createLog } from './log.ts';
 import type { Log, LogEvent } from './ports.ts';
@@ -183,6 +184,323 @@ describe('PRIV-07: the log writes closed events, one JSON line each', () => {
 
     expect(refused).toHaveLength(7);
     expect(typeof port).toBe('function');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Closed fields, at run time too (privacy and code reviews, LOST-01).
+//
+// The type keeps a caller from handing the log anything else (L1, above). A
+// caller that got past the type, with a cast or with data typed `any`, must
+// still get nothing of it written: each field is written only when its value
+// is one the field allows, and as null otherwise. The free text below is
+// what such a caller could hold: a coordinate, a pair of them, and a message
+// that quotes them. All of it is synthetic, generated at run time (RG-07).
+// ---------------------------------------------------------------------------
+
+/** Free text a caller might hand the log in a field not meant for it. */
+function freeText(): { what: string; value: string; markers: string[] }[] {
+  const latitude = String(syntheticCoordinate());
+  const longitude = String(syntheticCoordinate());
+  return [
+    { what: 'a coordinate', value: latitude, markers: [latitude] },
+    {
+      what: 'a coordinate pair',
+      value: `${latitude}, ${longitude}`,
+      markers: [latitude, longitude],
+    },
+    {
+      what: 'a message quoting the position',
+      value: `Failing row contains (${latitude}, ${longitude})`,
+      markers: [latitude, longitude, 'Failing row'],
+    },
+  ];
+}
+
+const UPPER_UUID = syntheticUuid().toUpperCase();
+const BRACED_UUID = syntheticUuid();
+const TRAILED_UUID = syntheticUuid();
+const TRAILING_COORDINATE = String(syntheticCoordinate());
+const UNHYPHENATED_UUID = syntheticUuid().replaceAll('-', '');
+const LISTED_UUID = syntheticUuid();
+
+/** Values that are not a journey ID as the log writes one: a UUID, in lower case. */
+const NOT_JOURNEY_IDS: { what: string; journeyId: () => unknown; markers: () => string[] }[] = [
+  ...freeText().map(({ what, value, markers }) => ({
+    what,
+    journeyId: () => value,
+    markers: () => markers,
+  })),
+  {
+    what: 'a UUID in upper case',
+    journeyId: () => UPPER_UUID,
+    markers: () => [UPPER_UUID],
+  },
+  {
+    what: 'a UUID in braces',
+    journeyId: () => `{${BRACED_UUID}}`,
+    markers: () => [BRACED_UUID],
+  },
+  {
+    what: 'a UUID followed by a coordinate',
+    journeyId: () => `${TRAILED_UUID} ${TRAILING_COORDINATE}`,
+    markers: () => [TRAILED_UUID, TRAILING_COORDINATE],
+  },
+  {
+    what: 'a UUID without its hyphens',
+    journeyId: () => UNHYPHENATED_UUID,
+    markers: () => [UNHYPHENATED_UUID],
+  },
+  { what: 'empty text', journeyId: () => '', markers: () => [] },
+  {
+    what: 'a list holding a UUID, which prints as one',
+    journeyId: () => [LISTED_UUID],
+    markers: () => [LISTED_UUID],
+  },
+  { what: 'a number', journeyId: () => 1234567, markers: () => ['1234567'] },
+];
+
+/** Values that are not the reason heartbeat_ignored allows: JOURNEY_ENDED, as written. */
+const NOT_REASONS: { what: string; reason: unknown; markers: string[] }[] = [
+  ...freeText().map(({ what, value, markers }) => ({ what, reason: value, markers })),
+  {
+    what: 'another code of the route',
+    reason: 'JOURNEY_NOT_FOUND',
+    markers: ['JOURNEY_NOT_FOUND'],
+  },
+  { what: 'the reason in lower case', reason: 'journey_ended', markers: ['journey_ended'] },
+  { what: 'empty text', reason: '', markers: [] },
+  { what: 'a number', reason: 409, markers: ['409'] },
+];
+
+/** Values that are not a stage heartbeat_failed allows: clock, read or store, as written. */
+const NOT_STAGES: { what: string; stage: unknown; markers: string[] }[] = [
+  ...freeText().map(({ what, value, markers }) => ({ what, stage: value, markers })),
+  { what: 'a stage in upper case', stage: 'STORE', markers: ['STORE'] },
+  { what: 'another word', stage: 'database', markers: ['database'] },
+  { what: 'empty text', stage: '', markers: [] },
+  { what: 'a list holding a stage, which prints as one', stage: ['clock'], markers: ['clock'] },
+];
+
+/** Codes that are not text but print as a SQLSTATE: each is written as null all the same. */
+const CODES_NOT_TEXT: { what: string; code: unknown }[] = [
+  { what: 'a number', code: 23505 },
+  { what: 'a list holding a SQLSTATE', code: ['23505'] },
+];
+
+/** Writes this one value, got past the type, and returns the line, parsed, and the text written. */
+function writtenThroughACast(event: Record<string, unknown>): { line: unknown; text: string } {
+  const writer = recordingWriter();
+  createLog({ write: writer.write }).write(event as unknown as LogEvent);
+  const lines = writer.lines();
+  expect(lines, 'one line, whatever the event held').toHaveLength(1);
+  return { line: JSON.parse(lines[0] ?? 'null'), text: writer.chunks.join('') };
+}
+
+/** The markers found in this text: none, if nothing of them was written. */
+function markersIn(text: string, markers: readonly string[]): string[] {
+  return markers.filter((marker) => text.includes(marker));
+}
+
+describe('PRIV-07: each field of a line is written only when its value is one the field allows', () => {
+  test.each(NOT_JOURNEY_IDS)(
+    'LOST-01-AC16: a heartbeat_ignored journeyId that is not a lower-case UUID is written as null, and none of it is written — $what',
+    ({ journeyId, markers }) => {
+      const given = journeyId();
+
+      const { line, text } = writtenThroughACast({
+        event: 'heartbeat_ignored',
+        reason: 'JOURNEY_ENDED',
+        journeyId: given,
+      });
+
+      expect(line).toEqual({
+        event: 'heartbeat_ignored',
+        reason: 'JOURNEY_ENDED',
+        journeyId: null,
+      });
+      expect(markersIn(text, markers())).toEqual([]);
+    },
+  );
+
+  test('LOST-01-AC16: a lower-case UUID is written as it is, so the null above is the value’s doing', () => {
+    const journeyId = syntheticUuid();
+
+    const { line } = writtenThroughACast({
+      event: 'heartbeat_ignored',
+      reason: 'JOURNEY_ENDED',
+      journeyId,
+    });
+
+    expect(journeyId).toBe(journeyId.toLowerCase());
+    expect(line).toEqual({ event: 'heartbeat_ignored', reason: 'JOURNEY_ENDED', journeyId });
+  });
+
+  test.each(NOT_REASONS)(
+    'LOST-01-AC16: a heartbeat_ignored reason outside its closed set is written as null, and none of it is written — $what',
+    ({ reason, markers }) => {
+      const journeyId = syntheticUuid();
+
+      const { line, text } = writtenThroughACast({ event: 'heartbeat_ignored', reason, journeyId });
+
+      expect(line).toEqual({ event: 'heartbeat_ignored', reason: null, journeyId });
+      expect(markersIn(text, markers)).toEqual([]);
+    },
+  );
+
+  test.each(NOT_STAGES)(
+    'LOST-01-AC16: a heartbeat_failed stage outside its closed set is written as null, and none of it is written — $what',
+    ({ stage, markers }) => {
+      const { line, text } = writtenThroughACast({
+        event: 'heartbeat_failed',
+        stage,
+        code: '57P01',
+      });
+
+      expect(line).toEqual({ event: 'heartbeat_failed', stage: null, code: '57P01' });
+      expect(markersIn(text, markers)).toEqual([]);
+    },
+  );
+
+  test.each(['clock', 'read', 'store'])(
+    'LOST-01-AC16: the stage %s is written as it is, so the null above is the value’s doing',
+    (stage) => {
+      const { line } = writtenThroughACast({ event: 'heartbeat_failed', stage, code: null });
+
+      expect(line).toEqual({ event: 'heartbeat_failed', stage, code: null });
+    },
+  );
+
+  test.each(CODES_NOT_TEXT)(
+    'LOST-01-AC16: a code that is not text is written as null, though it prints as a SQLSTATE — $what',
+    ({ code }) => {
+      const { line } = writtenThroughACast({ event: 'heartbeat_failed', stage: 'store', code });
+
+      expect(line).toEqual({ event: 'heartbeat_failed', stage: 'store', code: null });
+    },
+  );
+
+  test('LOST-01-AC16: fields the event does not have, got past the type, are not written: a position, a message, an error', () => {
+    const latitude = String(syntheticCoordinate());
+    const longitude = String(syntheticCoordinate());
+    const journeyId = syntheticUuid();
+    const extra = {
+      latitude: Number(latitude),
+      longitude: Number(longitude),
+      position: { latitude: Number(latitude), longitude: Number(longitude) },
+      message: `Failing row contains (${latitude}, ${longitude})`,
+      err: new Error(`Failing row contains (${latitude}, ${longitude})`),
+      msg: latitude,
+    };
+
+    const ignored = writtenThroughACast({
+      event: 'heartbeat_ignored',
+      reason: 'JOURNEY_ENDED',
+      journeyId,
+      ...extra,
+    });
+    const failed = writtenThroughACast({
+      event: 'heartbeat_failed',
+      stage: 'store',
+      code: '23514',
+      ...extra,
+    });
+
+    expect(ignored.line).toEqual({
+      event: 'heartbeat_ignored',
+      reason: 'JOURNEY_ENDED',
+      journeyId,
+    });
+    expect(failed.line).toEqual({ event: 'heartbeat_failed', stage: 'store', code: '23514' });
+    expect(
+      markersIn(`${ignored.text}${failed.text}`, [latitude, longitude, 'Failing row']),
+    ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Loud, not silent (code review, LOST-01): an event the log does not list is
+// a fault in the caller. Writing nothing would hide it, and the one line that
+// says a heartbeat failed is exactly the line that must not go missing. So
+// `write` throws, writes nothing, and its error holds nothing of what it was
+// handed, which may be anything (PRIV-07): whoever catches it may print it.
+// ---------------------------------------------------------------------------
+
+const UNLISTED_LATITUDE = String(syntheticCoordinate());
+const UNLISTED_LONGITUDE = String(syntheticCoordinate());
+
+/** Values handed to `write` past the type, none of them an event LogEvent lists. */
+const UNLISTED_EVENTS: { what: string; event: unknown; markers: string[] }[] = [
+  {
+    what: 'an event of another name, holding a position',
+    event: {
+      event: 'position_seen',
+      latitude: Number(UNLISTED_LATITUDE),
+      longitude: Number(UNLISTED_LONGITUDE),
+    },
+    markers: [UNLISTED_LATITUDE, UNLISTED_LONGITUDE],
+  },
+  {
+    what: 'an event whose name holds a coordinate',
+    event: { event: `moved to ${UNLISTED_LATITUDE}` },
+    markers: [UNLISTED_LATITUDE],
+  },
+  {
+    what: 'a listed event’s name in upper case',
+    event: { event: 'HEARTBEAT_FAILED', stage: 'store', code: null },
+    markers: [],
+  },
+  {
+    what: 'an object with no event',
+    event: { reason: 'JOURNEY_ENDED', latitude: Number(UNLISTED_LATITUDE) },
+    markers: [UNLISTED_LATITUDE],
+  },
+  {
+    what: 'a bare listed name, as text',
+    event: 'heartbeat_failed',
+    markers: [],
+  },
+  {
+    what: 'text holding a coordinate pair',
+    event: `${UNLISTED_LATITUDE}, ${UNLISTED_LONGITUDE}`,
+    markers: [UNLISTED_LATITUDE, UNLISTED_LONGITUDE],
+  },
+];
+
+describe('PRIV-07: an event the log does not list is a loud fault, never a silent nothing', () => {
+  test.each(UNLISTED_EVENTS)(
+    'LOST-01-AC16: write throws for $what, writes nothing, and its error holds nothing of what it was handed',
+    ({ event, markers }) => {
+      const writer = recordingWriter();
+      const log = createLog({ write: writer.write });
+
+      let thrown: unknown;
+      try {
+        log.write(event as LogEvent);
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown, 'write threw').toBeInstanceOf(Error);
+      expect(writer.chunks).toEqual([]);
+      const failure = thrown as Error;
+      const everything = [
+        String(failure),
+        failure.stack ?? '',
+        inspect(failure, { depth: Infinity, showHidden: true }),
+      ].join('\n');
+      expect(markersIn(everything, markers)).toEqual([]);
+    },
+  );
+
+  test('LOST-01-AC16: (control) a listed event is written, not thrown on, by the same log', () => {
+    const writer = recordingWriter();
+    const log = createLog({ write: writer.write });
+
+    expect(() => {
+      log.write({ event: 'heartbeat_failed', stage: 'store', code: null });
+    }).not.toThrow();
+    expect(writer.lines()).toHaveLength(1);
   });
 });
 

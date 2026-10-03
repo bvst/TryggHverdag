@@ -45,12 +45,12 @@ import {
   type SyntheticPosition,
 } from '@trygghverdag/test-kit';
 import process from 'node:process';
-import { inspect } from 'node:util';
 import { describe, expect, test, vi } from 'vitest';
 import { createApi } from './api.ts';
+import { captured, markersIn, markersOf } from './capture.test.ts';
 import { createHealthService } from './modules/health/service.ts';
 import { createJourneyService } from './modules/journeys/service.ts';
-import type { Log } from './ports.ts';
+import type { Log, LogEvent } from './ports.ts';
 
 const NOW = new Date('2026-10-01T21:40:00.000Z');
 const EARLIER = new Date('2026-10-01T21:10:00.000Z');
@@ -813,45 +813,9 @@ describe('SEC-07: the walker is the device’s own user, and the body is checked
 // The credential is never written, and a failed check is never a 401.
 // ---------------------------------------------------------------------------
 
-/**
- * Everything written to stdout, stderr or the console while `run` runs.
- * Vitest routes the console through its own streams, not through
- * process.stdout, so both are watched.
- */
-async function captured<T>(run: () => Promise<T>): Promise<{ result: T; written: string }> {
-  const pieces: string[] = [];
-  const keep = (value: unknown): void => {
-    if (typeof value === 'string') {
-      pieces.push(value);
-    } else if (value instanceof Uint8Array) {
-      pieces.push(Buffer.from(value).toString('utf8'));
-    } else {
-      pieces.push(inspect(value, { depth: 10 }));
-    }
-  };
-  const spies = [
-    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
-      keep(chunk);
-      return true;
-    }),
-    vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
-      keep(chunk);
-      return true;
-    }),
-    ...(['log', 'info', 'warn', 'error', 'debug', 'trace'] as const).map((name) =>
-      vi.spyOn(console, name).mockImplementation((...args: unknown[]) => {
-        args.forEach(keep);
-      }),
-    ),
-  ];
-  try {
-    return { result: await run(), written: pieces.join('\n') };
-  } finally {
-    for (const spy of spies) {
-      spy.mockRestore();
-    }
-  }
-}
+// `captured(run)`, everything written to stdout, stderr or the console while
+// `run` runs and a turn after it, comes from capture.test.ts, which the L3
+// test shares and which holds the controls that prove it sees what it must.
 
 /** All the bytes a response carries back: its status line aside, the headers and the body. */
 async function everythingSentBack(response: Response): Promise<string> {
@@ -1694,6 +1658,31 @@ const REFUSED_HEARTBEATS: { what: string; text: (valid: FullHeartbeat) => string
         position: { ...b.position, recordedAt: b.position.recordedAt.replace(/Z$/, '') },
       }),
   },
+  // RG-03: the three below were added after LOST-01's reviews (safety and
+  // code review, D-100): a phone time whose instant in UTC is outside the
+  // years 0001 to 9999 is one PostgreSQL refuses (22008, 22009), so the contract
+  // refuses it as a 400 rather than let it reach the database as a 500.
+  {
+    what: 'has a recordedAt in year 0 in UTC',
+    text: (b) =>
+      JSON.stringify({ ...b, position: { ...b.position, recordedAt: '0000-01-01T00:00:00Z' } }),
+  },
+  {
+    what: 'has a recordedAt written as 9999 at -14:00, already year 10000 in UTC',
+    text: (b) =>
+      JSON.stringify({
+        ...b,
+        position: { ...b.position, recordedAt: '9999-12-31T23:59:59-14:00' },
+      }),
+  },
+  {
+    what: 'has a recordedAt written as 0001 at +01:00, still year 0 in UTC',
+    text: (b) =>
+      JSON.stringify({
+        ...b,
+        position: { ...b.position, recordedAt: '0001-01-01T00:30:00+01:00' },
+      }),
+  },
   {
     what: 'has a position without its latitude',
     text: (b) => JSON.stringify({ ...b, position: without(b.position, 'latitude') }),
@@ -1823,6 +1812,50 @@ describe('§4.5: no answer carries a background_geolocation key, or anything of 
     expect(Object.keys(parsed)).not.toContain('data');
   });
 
+  test('LOST-01-AC12: the start route’s 400 is the heartbeat route’s fixed body exactly, for a body that fails the schema and for one that is not JSON', async () => {
+    // One fixed 400 on every route (code review): the start route's own 400
+    // used to carry the validator's issues in `data`, which name the keys
+    // and values a request held.
+    const w = world();
+    const device = w.walker();
+    const journeyId = w.journeyOf(device);
+    const startText = async (text: string): Promise<Answer> =>
+      answerOf(
+        await w.api.request(JOURNEYS, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${device.credential}`,
+            'content-type': 'application/json',
+          },
+          body: text,
+        }),
+      );
+    const fixed = await answerOf(
+      await w.heartbeatText(
+        device.credential,
+        JSON.stringify({ ...fullHeartbeat(journeyId), background_geolocation: {} }),
+      ),
+    );
+    expect(fixed.status).toBe(400);
+    const notAUser = `${syntheticUuid()}-background_geolocation`;
+
+    const failsTheSchema = await startText(
+      JSON.stringify({ responderIds: [notAUser], background_geolocation: { url: 'synthetic' } }),
+    );
+    const notJson = await startText(`{"responderIds": ["${notAUser}"], "background_geolocation": `);
+
+    for (const [what, answer] of [
+      ['a body that fails the schema', failsTheSchema],
+      ['a body that is not JSON', notJson],
+    ] as const) {
+      expect(answer.status, what).toBe(400);
+      expect(answer.text, what).toBe(fixed.text);
+      expect(answer.text, what).not.toContain(notAUser);
+      expect(answer.text, what).not.toMatch(ECHO);
+    }
+    expect(w.store.calls).not.toContain('insertStarted');
+  });
+
   test('LOST-01-AC12: across every answer the route gives — 200, 400, 401, 403, 404, 409 and 500 — with the key in the request, no header or body matches it, and each 200 body is exactly { outcome }', async () => {
     // `background-geolocation` in any case is a valid event ID: letters and
     // `-`. So it reaches every outcome, the stored ones included.
@@ -1888,6 +1921,43 @@ const FAILURES = [
   },
 ] as const;
 
+/**
+ * A database failure as Drizzle throws it: its own error, whose message
+ * names the query, with PostgreSQL's error, which carries the SQLSTATE, as
+ * its cause. Nothing on the outer error says which code it was.
+ */
+function wrappedDatabaseError(code: string): Error {
+  return new Error('Failed query: select … (a test’s stand-in for Drizzle’s DrizzleQueryError)', {
+    cause: Object.assign(new Error('terminating connection due to administrator command'), {
+      code,
+    }),
+  });
+}
+
+/**
+ * Each stage, rejecting with a value that is not an error: JavaScript lets a
+ * promise reject with anything. The line that says a heartbeat failed must
+ * still be written, and the answer must still be a 500 (LOST-01-AC13).
+ */
+const NOT_ERRORS = FAILURES.flatMap(({ stage }) =>
+  [undefined, null].map((value) => ({ stage, value, what: String(value) })),
+);
+
+/** Makes one stage reject with this value, whatever it is. */
+function rejectWith(w: World, stage: (typeof FAILURES)[number]['stage'], value: unknown): void {
+  switch (stage) {
+    case 'clock':
+      vi.spyOn(w.clock, 'now').mockRejectedValue(value);
+      return;
+    case 'read':
+      vi.spyOn(w.store, 'journeyForHeartbeat').mockRejectedValue(value);
+      return;
+    case 'store':
+      vi.spyOn(w.store, 'recordHeartbeat').mockRejectedValue(value);
+      return;
+  }
+}
+
 describe('LOST-01: a heartbeat is stored whole or not at all, and a failure is a loud 500', () => {
   test.each(FAILURES)(
     'LOST-01-AC13: when the $stage fails, the answer is 500, nothing is stored, last contact is unchanged, and exactly one heartbeat_failed event names the stage',
@@ -1928,6 +1998,44 @@ describe('LOST-01: a heartbeat is stored whole or not at all, and a failure is a
     },
   );
 
+  test.each(FAILURES)(
+    'LOST-01-AC13: when the $stage fails with the SQLSTATE on the error’s cause, as Drizzle wraps PostgreSQL’s error, heartbeat_failed carries that SQLSTATE and nothing of either message',
+    async ({ stage, fail }) => {
+      const w = world();
+      const device = w.walker();
+      const journeyId = w.journeyOf(device, { lastHeartbeatAt: EARLIER });
+      const failure = wrappedDatabaseError('57P01');
+      expect((failure as { code?: unknown }).code, 'no code on the error itself').toBeUndefined();
+      fail(w, failure);
+
+      const answer = await answerOf(await w.heartbeat(device.credential, fullHeartbeat(journeyId)));
+
+      expect(answer.status).toBe(500);
+      expect(w.log.events).toEqual([{ event: 'heartbeat_failed', stage, code: '57P01' }]);
+      expect(JSON.stringify(w.log.events)).not.toMatch(/Failed query|terminating connection/);
+      expect(w.store.heartbeats()).toEqual([]);
+      expect(w.store.lastHeartbeatAt(journeyId)).toEqual(EARLIER);
+    },
+  );
+
+  test.each(NOT_ERRORS)(
+    'LOST-01-AC13: when the $stage rejects with $what, not an error at all, the answer is 500 and exactly one heartbeat_failed names the stage, with no code',
+    async ({ stage, value }) => {
+      const w = world();
+      const device = w.walker();
+      const journeyId = w.journeyOf(device, { lastHeartbeatAt: EARLIER });
+      rejectWith(w, stage, value);
+
+      const answer = await answerOf(await w.heartbeat(device.credential, fullHeartbeat(journeyId)));
+
+      expect(answer.status).toBe(500);
+      expect(codeOf(answer)).not.toBe('UNAUTHORIZED');
+      expect(w.log.events).toEqual([{ event: 'heartbeat_failed', stage, code: null }]);
+      expect(w.store.heartbeats()).toEqual([]);
+      expect(w.store.lastHeartbeatAt(journeyId)).toEqual(EARLIER);
+    },
+  );
+
   test('LOST-01-AC13: a store failure carrying a SQLSTATE is logged with that code, and nothing of its message', async () => {
     const w = world();
     const device = w.walker();
@@ -1960,36 +2068,22 @@ describe('LOST-01: a heartbeat is stored whole or not at all, and a failure is a
 // None of it reaches a log: PRIV-07, and LOST-01's "none of it".
 // ---------------------------------------------------------------------------
 
-/**
- * Every text a careless line could print of this heartbeat: each coordinate
- * in full and rounded to 3, 4, 5, 6 and 7 decimals, the accuracy, the battery
- * level, the phone's time as sent and as a number, and the event ID.
- */
-function markersOf(body: SyntheticHeartbeat): string[] {
-  const { position } = body;
-  const coordinates = position === null ? [] : [position.latitude, position.longitude];
-  return [
-    ...new Set([
-      ...coordinates.flatMap((value) => [
-        String(value),
-        ...[3, 4, 5, 6, 7].map((decimals) => value.toFixed(decimals)),
-      ]),
-      ...(position === null
-        ? []
-        : [
-            String(position.accuracyMeters),
-            position.recordedAt,
-            String(Date.parse(position.recordedAt)),
-          ]),
-      ...(body.batteryLevel === null ? [] : [String(body.batteryLevel)]),
-      body.eventId,
-    ]),
-  ];
-}
+// `markersOf(heartbeat)`, every text a careless line could print of a
+// heartbeat, and `markersIn(text, markers)`, the ones a text holds, come from
+// capture.test.ts with `captured`. Since they were made one, the phone's time
+// is also looked for as ISO and as PostgreSQL prints it, as the L3 test's
+// copy already did.
 
-/** The markers found in this text: none, if nothing of the heartbeat is in it. */
-function markersIn(text: string, markers: readonly string[]): string[] {
-  return markers.filter((marker) => text.includes(marker));
+/** The log lines in this text: each line that is JSON with an `event`, parsed, in order. */
+function logLinesIn(text: string): unknown[] {
+  return text.split('\n').flatMap((line) => {
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      return typeof parsed === 'object' && parsed !== null && 'event' in parsed ? [parsed] : [];
+    } catch {
+      return [];
+    }
+  });
 }
 
 interface PrivateRun {
@@ -2139,6 +2233,48 @@ describe('PRIV-07: nothing of a heartbeat is written, whatever the outcome', () 
         // finding none of them above means they were kept out, not absent.
         expect(markersIn(result.thrown.message, markers)).toEqual(markers);
         expect(w.log.events).toHaveLength(1);
+      }
+    },
+  );
+
+  test.each(OUTCOMES)(
+    'LOST-01-AC14: $outcome, with the production log writing beside the recording one: pino’s own lines are in the capture, exactly the events the module logged, and nothing of the heartbeat is',
+    async ({ run, status, answered }) => {
+      // The rows above read what the module chose to log. These run the same
+      // outcomes through the log the API process uses as well, so pino's own
+      // line, as it reaches stdout, sits under the capture beside the
+      // markers (privacy review, LOST-01).
+      const { createLog } = await import('./log.ts');
+      const recorded = fakeLog();
+      const production = createLog();
+      const w = world({
+        log: {
+          write: (event: LogEvent) => {
+            recorded.write(event);
+            production.write(event);
+          },
+        },
+      });
+
+      const { result, written } = await captured(() => run(w));
+
+      expect(result.answer.status).toBe(status);
+      const body = result.answer.body as { code?: unknown; outcome?: unknown } | null;
+      expect(status === 200 ? body?.outcome : body?.code).toBe(answered);
+      const markers = markersOf(result.sent);
+      expect(markers.length).toBeGreaterThan(0);
+      expect(markersIn(written, markers), 'written to stdout, stderr or the console').toEqual([]);
+      expect(markersIn(JSON.stringify(recorded.events), markers), 'in the log').toEqual([]);
+      expect(
+        markersIn(`${result.answer.headers}\n${result.answer.text}`, markers),
+        'in the answer',
+      ).toEqual([]);
+      // The control: each event the module logged is in the capture as
+      // pino's own line, and the capture holds no other log line.
+      expect(logLinesIn(written)).toEqual(recorded.events);
+      if (result.thrown !== undefined) {
+        expect(markersIn(result.thrown.message, markers)).toEqual(markers);
+        expect(recorded.events).toHaveLength(1);
       }
     },
   );

@@ -25,9 +25,11 @@ import { describe, expect, test } from 'vitest';
 import {
   EVENT_ID_PATTERN,
   MAX_EVENT_ID_LENGTH,
+  badRequestError,
   heartbeatErrors,
   heartbeatRequestSchema,
   heartbeatResponseSchema,
+  startJourneyErrors,
   type HeartbeatErrorCode,
   type HeartbeatRequest,
   type HeartbeatResponse,
@@ -77,6 +79,47 @@ function withPosition(body: Body, change: (position: Position) => unknown): unkn
 function accepts(body: unknown): boolean {
   return heartbeatRequestSchema.safeParse(body).success;
 }
+
+/**
+ * Phone times the contract refuses: their instant in UTC is outside the years
+ * 0001 to 9999. PostgreSQL has no year 0, and the server's adapter writes
+ * year 10000 as `+010000-…`; PostgreSQL 16 refuses them with SQLSTATE 22008
+ * and 22009 (safety-reviewer, LOST-01). Accepted here, such a time would reach the
+ * database and be answered 500, again on every retry. The offset, not the
+ * year as written, decides, so two of them are written in a year the range
+ * holds.
+ */
+const PHONE_TIMES_OUT_OF_RANGE = [
+  { what: 'the first moment of year 0, in UTC', recordedAt: '0000-01-01T00:00:00Z' },
+  { what: 'the last moment of year 0, in UTC', recordedAt: '0000-12-31T23:59:59.999Z' },
+  {
+    what: 'the last second of 9999 at -14:00, already year 10000 in UTC',
+    recordedAt: '9999-12-31T23:59:59-14:00',
+  },
+  {
+    what: 'half past midnight on 1 January 0001 at +01:00, still year 0 in UTC',
+    recordedAt: '0001-01-01T00:30:00+01:00',
+  },
+];
+
+/** Phone times at the edges of the years 0001 to 9999 in UTC, each accepted. */
+const PHONE_TIMES_IN_RANGE = [
+  { what: 'the first second of 0001, in UTC', recordedAt: '0001-01-01T00:00:00Z' },
+  { what: 'the last second of 9999, in UTC', recordedAt: '9999-12-31T23:59:59Z' },
+  { what: 'the last millisecond of 9999, in UTC', recordedAt: '9999-12-31T23:59:59.999Z' },
+  {
+    what: 'one in the morning on 1 January 0001 at +01:00, the first moment of 0001 in UTC',
+    recordedAt: '0001-01-01T01:00:00+01:00',
+  },
+  {
+    what: 'half past eleven on 31 December 0000 at -01:00, already 0001 in UTC',
+    recordedAt: '0000-12-31T23:30:00-01:00',
+  },
+  {
+    what: 'the last second of 9999 at +14:00, still 9999 in UTC',
+    recordedAt: '9999-12-31T23:59:59+14:00',
+  },
+];
 
 describe('SEC-07: the heartbeat request holds four fields, each checked', () => {
   test('LOST-01-AC11: MAX_EVENT_ID_LENGTH is 64, the spike receiver’s bound', () => {
@@ -170,6 +213,30 @@ describe('SEC-07: the heartbeat request holds four fields, each checked', () => 
       expect(accepts(withPosition(body, (p) => ({ ...p, recordedAt }))), recordedAt).toBe(true);
     }
   });
+
+  test.each(PHONE_TIMES_OUT_OF_RANGE)(
+    'LOST-01-AC11: a phone time whose instant in UTC falls outside the years 0001 to 9999 is refused, as PostgreSQL could not store it — $what',
+    ({ recordedAt }) => {
+      // A real instant, so the refusal is the range's doing, not an unreadable time's.
+      expect(Number.isNaN(Date.parse(recordedAt))).toBe(false);
+
+      expect(accepts(withPosition(heartbeat(), (p) => ({ ...p, recordedAt })))).toBe(false);
+    },
+  );
+
+  test.each(PHONE_TIMES_IN_RANGE)(
+    'LOST-01-AC11: a phone time whose instant in UTC is inside the years 0001 to 9999 is accepted, at the edges too — $what',
+    ({ recordedAt }) => {
+      const parsed = heartbeatRequestSchema.parse(
+        withPosition(heartbeat(), (p) => ({ ...p, recordedAt })),
+      );
+
+      // As text or as a Date, the same instant: the phone's time as given.
+      expect(new Date(parsed.position?.recordedAt ?? Number.NaN).getTime()).toBe(
+        Date.parse(recordedAt),
+      );
+    },
+  );
 });
 
 /** Bodies the request schema must refuse, by what is wrong with them. */
@@ -314,6 +381,19 @@ describe('the heartbeat answers', () => {
       JOURNEY_NOT_FOUND: { status: 404 },
       JOURNEY_ENDED: { status: 409 },
     });
+  });
+
+  test('LOST-01-AC12: both device routes declare their 400 as one definition, badRequestError: status 400, a fixed message, and no data', () => {
+    // One definition, so the start route's 400 and the heartbeat route's
+    // cannot drift apart: the server answers every 400 with one fixed body,
+    // and both routes describe that body in the published contract.
+    expect(badRequestError, 'badRequestError is exported').toBeDefined();
+    expect(startJourneyErrors.BAD_REQUEST).toBe(badRequestError);
+    expect(heartbeatErrors.BAD_REQUEST).toBe(badRequestError);
+    expect(Object.keys(badRequestError).sort()).toEqual(['message', 'status']);
+    expect(badRequestError.status).toBe(400);
+    expect(typeof badRequestError.message).toBe('string');
+    expect(badRequestError.message).not.toBe('');
   });
 
   test('LOST-01-AC12: no declared answer names background_geolocation, in any spelling', () => {

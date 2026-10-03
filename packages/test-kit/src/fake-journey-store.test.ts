@@ -7,7 +7,6 @@
 // make those tests pass whatever the server did. The shared behaviour suite
 // below is the same one the real adapter runs against PostgreSQL, so the two
 // cannot drift apart.
-import { EVENT_ID_PATTERN, MAX_EVENT_ID_LENGTH } from '@trygghverdag/contracts';
 import { describe, expect, test } from 'vitest';
 import {
   fakeJourneyStore,
@@ -118,6 +117,12 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       'LOST-01-AC13: a heartbeat whose position is refused leaves nothing behind: no heartbeat, no position, last contact unchanged; and the same event is then recorded, not a duplicate',
       'LOST-01-AC18: a latitude, longitude, accuracy, battery level or event ID outside the contract’s rules is refused by the store, and nothing is stored',
       'LOST-01-AC18: the boundaries are accepted: latitude ±90, longitude ±180, accuracy 0, battery 0 and 1, and an event ID of 64 characters',
+      // RG-03: the two below were added after LOST-01's reviews (safety and
+      // code review): the contract now bounds the phone's time to the years
+      // 0001 to 9999 in UTC, as PostgreSQL does, and the fake refuses what
+      // the database refuses (D-100). Nothing was removed from this list.
+      'LOST-01-AC18: a phone time whose instant in UTC falls outside the years 0001 to 9999 is refused by the store, as PostgreSQL refuses it, and nothing is stored; the same event with a phone time inside them is then recorded',
+      'LOST-01-AC18: the first and the last instant of the years 0001 to 9999 in UTC are accepted as phone times, and stored exactly as given',
       'a heartbeat for a journey that does not exist is refused: the store rejects, and stores nothing',
     ]);
     expect(RACERS).toBeGreaterThanOrEqual(10);
@@ -602,38 +607,15 @@ describe('fakeJourneyStore: the device a journey starts from (D-101) and its hea
     expect(store.heartbeats()).toEqual([]);
   });
 
-  test('its event ID rule is the contract’s: EVENT_ID_PATTERN, at most MAX_EVENT_ID_LENGTH characters', async () => {
-    // The fake writes the rule out, as the database's check constraint does;
-    // this holds the copy to the contract it copies.
-    const pattern = new RegExp(EVENT_ID_PATTERN);
-    const { store, walkerId, deviceId } = withWalker();
-    const journeyId = store.seed({
-      walkerId,
-      deviceId,
-      state: 'ACTIVE',
-      responderIds: [],
-      startedAt: AT,
-    });
-    const longest = syntheticEventId().padEnd(MAX_EVENT_ID_LENGTH, 'f');
-
-    expect(MAX_EVENT_ID_LENGTH).toBe(64);
-    for (const eventId of [longest, 'A-z-0-9', '-']) {
-      expect(pattern.test(eventId), eventId).toBe(true);
-      await expect(
-        store.recordHeartbeat({ ...heartbeat(journeyId), eventId }),
-        eventId,
-      ).resolves.toEqual({ outcome: 'recorded' });
-    }
-    for (const eventId of ['', `${longest}f`, 'a_b', 'a.b', 'a b', 'a\u00f8']) {
-      await expect(
-        store.recordHeartbeat({ ...heartbeat(journeyId), eventId }),
-        eventId,
-      ).rejects.toThrow(/check constraint/);
-    }
-    for (const eventId of ['a_b', 'a.b', 'a b', 'a\u00f8']) {
-      expect(pattern.test(eventId), eventId).toBe(false);
-    }
-  });
+  // RG-03: the test "its event ID rule is the contract’s" was deleted here
+  // after LOST-01's code review. It held the fake's written-out copy of the
+  // event ID rule to the contract's constants. The fake now imports
+  // EVENT_ID_PATTERN and MAX_EVENT_ID_LENGTH from the contract, so there is
+  // no copy left to hold. What it also checked stays checked: the shared
+  // behaviour suite's two AC18 behaviours refuse an empty ID, 65 characters,
+  // `_`, `.`, a space and a non-ASCII letter, and accept 64 characters,
+  // against this fake and against PostgreSQL; the contract's own tests pin
+  // the pattern and the length.
 
   test('the test kit hands out the heartbeat builders beside the fake', () => {
     expect(kit.syntheticEventId).toBe(syntheticEventId);

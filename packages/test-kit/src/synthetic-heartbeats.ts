@@ -20,23 +20,17 @@
  * `Math.random`, not a CSPRNG: these values guard nothing. The test kit has
  * no Node types (see synthetic-ids.ts).
  */
+import type { HeartbeatRequest } from '@trygghverdag/contracts';
 import type { HeartbeatPosition } from './fake-journey-store.ts';
 
-/** A position as the phone sends it: the phone's own time is RFC 3339 text with an offset. */
-export interface SyntheticPosition {
-  latitude: number;
-  longitude: number;
-  accuracyMeters: number;
-  recordedAt: string;
-}
+/**
+ * A position as the phone sends it, typed by the contract itself rather than
+ * a copy of it: the phone's own time is RFC 3339 text with an offset.
+ */
+export type SyntheticPosition = NonNullable<HeartbeatRequest['position']>;
 
-/** A heartbeat request body, as the phone sends it to `POST /v1/heartbeats`. */
-export interface SyntheticHeartbeat {
-  journeyId: string;
-  eventId: string;
-  batteryLevel: number | null;
-  position: SyntheticPosition | null;
-}
+/** A heartbeat request body, as the phone sends it to `POST /v1/heartbeats`: the contract's own type. */
+export type SyntheticHeartbeat = HeartbeatRequest;
 
 /** What every synthetic event ID starts with, so one is recognisable in any output. */
 export const SYNTHETIC_EVENT_ID_PREFIX = 'synthetic-event-';

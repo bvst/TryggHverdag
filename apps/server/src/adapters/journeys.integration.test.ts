@@ -50,11 +50,11 @@ import {
   type SyntheticHeartbeat,
 } from '@trygghverdag/test-kit';
 import { sql } from 'drizzle-orm';
-import process from 'node:process';
 import { inspect } from 'node:util';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createApi } from '../api.ts';
+import { captured, markersIn, markersOf } from '../capture.test.ts';
 import { JOURNEY_STATES, type JourneyState } from '../domain/journey.ts';
 import { createHealthService } from '../modules/health/service.ts';
 import { createJourneyService } from '../modules/journeys/service.ts';
@@ -832,42 +832,12 @@ function storeHeartbeat(
   };
 }
 
-/**
- * Every text of a heartbeat a careless line could print: each coordinate in
- * full and rounded to 3–7 decimals, the accuracy, the battery level, the
- * phone's time (as sent, as the database prints it, and as a number), and the
- * event ID.
- */
-function markersOf(heartbeat: HeartbeatToRecord): string[] {
-  const { position } = heartbeat;
-  return [
-    ...new Set([
-      ...(position === null
-        ? []
-        : [position.latitude, position.longitude].flatMap((value) => [
-            String(value),
-            ...[3, 4, 5, 6, 7].map((decimals) => value.toFixed(decimals)),
-          ])),
-      ...(position === null
-        ? []
-        : [
-            String(position.accuracyMeters),
-            position.recordedAt.toISOString(),
-            position.recordedAt
-              .toISOString()
-              .replace('T', ' ')
-              .replace(/\.\d+Z$/, ''),
-            String(position.recordedAt.getTime()),
-          ]),
-      ...(heartbeat.batteryLevel === null ? [] : [String(heartbeat.batteryLevel)]),
-      heartbeat.eventId,
-    ]),
-  ];
-}
-
-function markersIn(text: string, markers: readonly string[]): string[] {
-  return markers.filter((marker) => text.includes(marker));
-}
+// `markersOf(heartbeat)`, every text a careless line could print of a
+// heartbeat, `markersIn(text, markers)`, and `captured(run)`, everything
+// written to stdout, stderr or the console while `run` runs and a turn
+// after it, come from ../capture.test.ts. The system tests use the same
+// copy, and its controls run here too, so the capture this file relies on
+// is proven in this file's own run.
 
 /** A heartbeat body for the API from a store-shaped one: the phone's time as RFC 3339. */
 function bodyOf(heartbeat: HeartbeatToRecord): SyntheticHeartbeat {
@@ -880,45 +850,6 @@ function bodyOf(heartbeat: HeartbeatToRecord): SyntheticHeartbeat {
         ? null
         : { ...heartbeat.position, recordedAt: heartbeat.position.recordedAt.toISOString() },
   };
-}
-
-/**
- * Everything written to stdout, stderr or the console while `run` runs, as
- * the system tests capture it (SM-01-AC11's capture).
- */
-async function captured<T>(run: () => Promise<T>): Promise<{ result: T; written: string }> {
-  const pieces: string[] = [];
-  const keep = (value: unknown): void => {
-    pieces.push(
-      typeof value === 'string'
-        ? value
-        : value instanceof Uint8Array
-          ? Buffer.from(value).toString('utf8')
-          : inspect(value, { depth: 10 }),
-    );
-  };
-  const spies = [
-    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
-      keep(chunk);
-      return true;
-    }),
-    vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
-      keep(chunk);
-      return true;
-    }),
-    ...(['log', 'info', 'warn', 'error', 'debug', 'trace'] as const).map((name) =>
-      vi.spyOn(console, name).mockImplementation((...args: unknown[]) => {
-        args.forEach(keep);
-      }),
-    ),
-  ];
-  try {
-    return { result: await run(), written: pieces.join('\n') };
-  } finally {
-    for (const spy of spies) {
-      spy.mockRestore();
-    }
-  }
 }
 
 /** All of an error, as deep as it goes: its own properties, hidden ones included, and every cause. */
