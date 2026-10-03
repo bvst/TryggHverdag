@@ -18,6 +18,7 @@
  */
 import type { HeartbeatRequest, StartJourneyResponse } from '@trygghverdag/contracts';
 import { transition, type HeartbeatRefusal, type StartRefusal } from '../../domain/journey.ts';
+import { sqlstateOf } from '../../domain/sqlstate.ts';
 import type { Clock, JourneyStore, Log, LogEvent } from '../../ports.ts';
 
 /** A start, as the API hands it over: the walker is the device's own user, and the device is the one that sent it. */
@@ -47,16 +48,6 @@ export interface JourneyService {
 /** Where a heartbeat failed, as `heartbeat_failed` names it. */
 type Stage = Extract<LogEvent, { event: 'heartbeat_failed' }>['stage'];
 
-/**
- * The code a failure carries, for the log: the error's own `code` when it is
- * text, else null. Never its message, which can hold what the request held.
- * The log writes a code only when it is a SQLSTATE.
- */
-function codeOf(error: unknown): string | null {
-  const code = (error as { code?: unknown } | null | undefined)?.code;
-  return typeof code === 'string' ? code : null;
-}
-
 export function createJourneyService({
   clock,
   journeys,
@@ -68,14 +59,16 @@ export function createJourneyService({
 }): JourneyService {
   /**
    * Runs one stage of a heartbeat. A failure is written as one line naming
-   * the stage, then thrown on, so the API answers 500: never a 2xx, and never
-   * a 401.
+   * the stage and its SQLSTATE, found on the error or down its causes as
+   * Drizzle wraps PostgreSQL's, and never its message, which can hold what
+   * the request held. Then it is thrown on, so the API answers 500: never a
+   * 2xx, and never a 401.
    */
   async function stage<T>(name: Stage, run: () => Promise<T>): Promise<T> {
     try {
       return await run();
     } catch (error) {
-      log.write({ event: 'heartbeat_failed', stage: name, code: codeOf(error) });
+      log.write({ event: 'heartbeat_failed', stage: name, code: sqlstateOf(error) });
       throw error;
     }
   }

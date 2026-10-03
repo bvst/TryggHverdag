@@ -507,7 +507,7 @@
                           "recordedAt": {
                             "type": "string",
                             "format": "date-time",
-                            "description": "When the phone recorded the position, by the phone’s clock, as RFC 3339 with an offset. Any such time is accepted: it labels the position and decides nothing (REL-01)."
+                            "description": "When the phone recorded the position, by the phone’s clock, as RFC 3339 with an offset, whose instant in UTC falls in the years 0001 to 9999. Within those years, any time is accepted, however far from the server’s clock: it labels the position and decides nothing (REL-01)."
                           }
                         },
                         "required": [

@@ -17,10 +17,19 @@
  * A heartbeat is written in one transaction that first locks its journey's
  * row. That lock is where racing heartbeats meet: copies of one event are
  * stored once (SM-08), last contact only ever moves forward (SM-09), and a
- * journey that has ended takes nothing (SM-07). It is also where the watchdog
- * will meet them: its `for update skip locked` skips a journey whose heartbeat
- * is being written, which is right, because that phone is alive. No clock is
- * read inside the transaction, so it stays short.
+ * journey that has ended takes nothing (SM-07).
+ *
+ * It is also where the watchdog will meet them (the lost-contact story, task
+ * 3): its `for update skip locked` skips a journey whose heartbeat is being
+ * written. That is right only while the transaction is short. No clock is
+ * read inside it, so it is short as written, but nothing yet bounds it: the
+ * API's pool sets no `idle_in_transaction_session_timeout` or
+ * `lock_timeout`. An API instance that froze mid-transaction would hold the
+ * row until PostgreSQL noticed the dead connection, and the watchdog would
+ * skip that journey the whole time: a missed alert that shows up nowhere.
+ * Task 3 (LOST-02) must bound the lock before it merges, or must not let
+ * `skip locked` skip a journey indefinitely (LOST-01's spec, approach item
+ * 6; docs/progress/m2.md).
  *
  * Any failure while storing a heartbeat is replaced by a `HeartbeatStoreError`
  * holding PostgreSQL's SQLSTATE and nothing else. PostgreSQL's own error can
@@ -39,6 +48,7 @@ import {
   users,
 } from '../db/schema.ts';
 import type { JourneyForHeartbeat, UnendedJourney } from '../domain/journey.ts';
+import { sqlstateOf } from '../domain/sqlstate.ts';
 import type {
   HeartbeatToRecord,
   InsertStartedResult,
@@ -51,12 +61,6 @@ import type { Database } from './db.ts';
 
 /** A database, or a transaction on one: both can read. */
 type Reader = Pick<Database, 'select'>;
-
-/** PostgreSQL's error codes: exactly five of 0-9 and A-Z. */
-const SQLSTATE = /^[0-9A-Z]{5}$/;
-
-/** How many causes deep a SQLSTATE is looked for: Drizzle wraps PostgreSQL's error once. */
-const CAUSE_DEPTH = 5;
 
 /**
  * Storing a heartbeat failed. A fixed message, the SQLSTATE when there is one,
@@ -71,19 +75,6 @@ export class HeartbeatStoreError extends Error {
     this.name = 'HeartbeatStoreError';
     this.code = code;
   }
-}
-
-/** The first SQLSTATE in an error or its causes, or null. Only the code is read, never a message. */
-function sqlstateOf(error: unknown): string | null {
-  let current = error;
-  for (let depth = 0; depth < CAUSE_DEPTH && current instanceof Error; depth += 1) {
-    const code = (current as { code?: unknown }).code;
-    if (typeof code === 'string' && SQLSTATE.test(code)) {
-      return code;
-    }
-    current = current.cause;
-  }
-  return null;
 }
 
 async function unendedJourneyOf(db: Reader, walkerId: string): Promise<UnendedJourney | null> {
@@ -223,12 +214,13 @@ export function databaseJourneyStore(db: Database): JourneyStore {
           }
 
           // Never backwards, even when two heartbeats take the lock in the
-          // reverse order of their receive times (SM-09).
+          // reverse order of their receive times (SM-09). GREATEST ignores
+          // NULLs, so the first heartbeat sets it.
           const at = receivedAt.toISOString();
           await tx
             .update(journeys)
             .set({
-              lastHeartbeatAt: sql`greatest(coalesce(${journeys.lastHeartbeatAt}, ${at}::timestamptz), ${at}::timestamptz)`,
+              lastHeartbeatAt: sql`greatest(${journeys.lastHeartbeatAt}, ${at}::timestamptz)`,
             })
             .where(eq(journeys.id, journeyId));
 

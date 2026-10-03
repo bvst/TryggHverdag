@@ -16,6 +16,7 @@
  */
 
 export { API_PREFIX, API_VERSION } from './api-version.ts';
+export { badRequestError } from './bad-request.ts';
 export { contract } from './contract.ts';
 export { deviceCredentialErrors } from './device-credential.ts';
 export { health, healthResponseSchema, WORKER_STALE_AFTER_MS } from './health.ts';

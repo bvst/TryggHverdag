@@ -24,6 +24,7 @@
  * so nothing a request held may ever come back (04b-spike-results.md §4.5).
  */
 import { z } from 'zod';
+import { badRequestError } from './bad-request.ts';
 import { deviceRoute } from './device-credential.ts';
 
 /** The longest event ID: the spike receiver's bound, which every SDK record in 40 runs met. */
@@ -42,12 +43,25 @@ export const heartbeatPositionSchema = z
     latitude: z.number().min(-90).max(90).describe('Degrees, from -90 to 90.'),
     longitude: z.number().min(-180).max(180).describe('Degrees, from -180 to 180.'),
     accuracyMeters: z.number().min(0).describe('The position’s accuracy in metres, 0 or more.'),
+    // The years are the instant's in UTC, not as written: the server hands
+    // PostgreSQL the UTC instant, and `timestamptz` has no year 0 and no year
+    // 10000. Refused here as a 400, such a time cannot reach the database as
+    // a 500 the phone would resend for ever. Within the years, no bound: a
+    // bound on the phone's clock would be a decision made on it (REL-01).
     recordedAt: z.iso
       .datetime({ offset: true })
+      .refine(
+        (text) => {
+          const year = new Date(text).getUTCFullYear();
+          return year >= 1 && year <= 9999;
+        },
+        { message: 'The time is outside the years 0001 to 9999 in UTC.' },
+      )
       .describe(
         'When the phone recorded the position, by the phone’s clock, as RFC 3339 with an ' +
-          'offset. Any such time is accepted: it labels the position and decides nothing ' +
-          '(REL-01).',
+          'offset, whose instant in UTC falls in the years 0001 to 9999. Within those years, ' +
+          'any time is accepted, however far from the server’s clock: it labels the position ' +
+          'and decides nothing (REL-01).',
       ),
   })
   .describe('Where the phone was, as the phone recorded it.');
@@ -98,13 +112,11 @@ export type HeartbeatResponse = z.infer<typeof heartbeatResponseSchema>;
 
 /** Every refusal a heartbeat can meet besides the 401, by its code. */
 export const heartbeatErrors = {
-  // A body that is not JSON, or not a heartbeat. One fixed answer, the same
-  // words as the start route's 400, and never a `data` holding the
-  // validator's issues: those name the keys and values the request held.
-  BAD_REQUEST: {
-    status: 400,
-    message: 'Input validation failed',
-  },
+  // A body that is not JSON, or not a heartbeat: the one fixed 400 every
+  // route with a body declares, the start route's too, and never a `data`
+  // holding the validator's issues: those name the keys and values the
+  // request held.
+  BAD_REQUEST: badRequestError,
   NOT_THE_JOURNEYS_DEVICE: {
     status: 403,
     message: 'Only the device that started this journey can send its heartbeats.',

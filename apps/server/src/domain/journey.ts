@@ -61,6 +61,11 @@ export interface JourneyForHeartbeat {
 /**
  * What an event meets, as the module read it. A journey handed in without its
  * walker belongs to nobody a heartbeat can name, so it is not found.
+ *
+ * The walker and the device are optional for the transition test's table,
+ * not for any caller: the table asks every (situation, event) pair through
+ * the third `transition` overload, with one situation type for every event.
+ * The module hands a heartbeat a `JourneyForHeartbeat`, which has both.
  */
 type Situation = WalkersJourney & Partial<Pick<JourneyForHeartbeat, 'walkerId' | 'deviceId'>>;
 
@@ -112,6 +117,12 @@ export type TransitionOutcome = StartOutcome | HeartbeatOutcome;
  *   is none: an ENDED journey frees the walker, so one handed in is treated as
  *   none. For a heartbeat, the journey it names in any state, or null when no
  *   journey has that ID.
+ *
+ * The first two overloads are the ones callers use: each event with the
+ * situation it needs, and the outcome it can have. The third, any situation
+ * with any event, exists for the transition test's table, which reads its
+ * types with `Parameters<typeof transition>` (the last overload) so that it
+ * can ask every pair the lists create, a new event's included.
  */
 export function transition(current: WalkersJourney | null, event: StartEvent): StartOutcome;
 export function transition(
@@ -142,7 +153,7 @@ export function transition(current: Situation | null, event: JourneyEvent): Tran
  * already has a journey learns that first, whatever the list says, so a start
  * retried after its answer was lost always learns which journey it already has.
  */
-function start(current: WalkersJourney | null, event: StartEvent): TransitionOutcome {
+function start(current: WalkersJourney | null, event: StartEvent): StartOutcome {
   if (current !== null && current.state !== 'ENDED') {
     return { type: 'refused', reason: 'ALREADY_ON_A_JOURNEY', journeyId: current.id };
   }

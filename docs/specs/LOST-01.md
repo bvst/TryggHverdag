@@ -361,8 +361,9 @@ These halves remain:
         nothing else. A duplicate does not even advance last contact (reading
         3).
      3. Insert the position, if there is one.
-     4. `update journeys set last_heartbeat_at = greatest(coalesce(last_heartbeat_at,
-        $t), $t) where id = $1`. Last contact never moves backwards, even when
+     4. `update journeys set last_heartbeat_at = greatest(last_heartbeat_at, $t)
+        where id = $1` (PostgreSQL's GREATEST ignores NULLs, so the first
+        heartbeat sets it; review loop 1). Last contact never moves backwards, even when
         two heartbeats take the lock in the reverse order of their receive
         times (SM-09).
    - `latestHeartbeatOf(journeyId)` → `{ receivedAt, hasPosition, batteryLevel }
