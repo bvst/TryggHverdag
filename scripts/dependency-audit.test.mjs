@@ -25,8 +25,8 @@
  *     GHSA-86w9-cpqp-85rv and GHSA-vfj7-8cjw-p6xm (the reproductions: without
  *     either, the audit fails every pull request);
  *   - `ignoreGhsas` holds exactly those two, each named by its own owner's
- *     decision, D-093 and D-104. A third needs its own decision and its own
- *     premise test in this file, so this pin fails until both exist;
+ *     decision, D-093 and D-104. A third fails this pin until the ID is added
+ *     to `DECIDED_IGNORES`, beside which its premise test belongs;
  *   - every ID in `ignoreGhsas` or `ignoreCves` is named by an entry in
  *     docs/plan/decisions.md whose status starts "Accepted (owner," or
  *     "Accepted (owner)", D-093's form. Delegated, partly accepted, accepted in
@@ -57,16 +57,36 @@
  *     depends on `braces` directly, and every locked `braces` is at most
  *     3.0.3. A patched version reaching the lockfile, `braces` leaving it, or
  *     any new dependent fails it: D-104's prompt to remove the ignore or look
- *     again, made loud.
+ *     again, made loud;
+ *   - D-104's "Only `apps/mobile` reaches `braces`", read from pnpm-lock.yaml
+ *     as a walk: upward from every locked `braces`, through every snapshot
+ *     that depends on what was reached, to the workspace packages (the
+ *     importers), and on through every `link:` from one importer to another.
+ *     The importers reached are exactly `apps/mobile`. Every dependency field
+ *     counts, dev ones too, because the ignore hides the advisory on every
+ *     path, not only on a production one. The premise above cannot see this:
+ *     `braces`' only dependent is `micromatch`, which almost every glob
+ *     library goes through, so the server depending on `micromatch`, or on
+ *     `jest-message-util`, which reaches it, left every other test here green.
  *
- * Not pinned: the audit's result; a `run:` written as a YAML folded scalar that
- * puts `pnpm` and `audit` on different lines; pnpm settings outside the
- * repository (a runner's own user or global config); the spike's own
- * lockfile, spikes/background-safety/app/pnpm-lock.yaml, which D-093 names as
- * not covered; and what depends on `micromatch`. D-104's context reads that
- * nothing reaches `braces` from the server, and that no app source imports
- * `micromatch` or `braces`, but its premise as decided pins neither: a new
- * path to `braces` through `micromatch` passes here.
+ * Not pinned:
+ *   - the audit's result;
+ *   - a `run:` written as a YAML folded scalar that puts `pnpm` and `audit` on
+ *     different lines;
+ *   - pnpm settings outside the repository (a runner's own user or global
+ *     config);
+ *   - the spike's own lockfile, spikes/background-safety/app/pnpm-lock.yaml,
+ *     which D-093 names as not covered;
+ *   - whether app source imports `micromatch` or `braces`. D-104's context
+ *     reads that none does; nothing here reads the source;
+ *   - a later decision that supersedes D-093 or D-104. The lookup finds the
+ *     owner's acceptance, and does not read whether a later entry withdrew it
+ *     (BUG-11's open gap). Removing the ID from `ignoreGhsas` is the loud
+ *     path: the tests here then fail until they change with it;
+ *   - copies of `braces` bundled inside other packages, which neither the
+ *     lockfile nor the audit can see: those in Vite's bundled chokidar, tsx,
+ *     prettier and `resolve-workspace-root`. All are tooling; the server runs
+ *     under Node's type stripping, not tsx.
  *
  * What pnpm does with these settings was read in pnpm 10.33.0's own bundle
  * (dist/pnpm.cjs), not assumed:
@@ -660,6 +680,295 @@ snapshots:
 
 const D104_PREMISE_CHANGED = "D-104's premise changed: decide again, or remove the ignore";
 
+// --- What reaches braces -----------------------------------------------------
+
+/**
+ * The importer a `link:` dependency points at. The path is relative to the
+ * importer that names it: `link:packages/config` from the root (`.`),
+ * `link:../../packages/config` from `apps/server`.
+ */
+function linkedImporter(from, version) {
+  return path.posix.join(from, version.slice('link:'.length));
+}
+
+/**
+ * The snapshot a dependency resolves to, by its key. `name: version(peers)`
+ * resolves to `name@version(peers)`, and an alias, `alias: name@version(peers)`,
+ * to what it names. The peer suffix is stripped before the alias check, or
+ * `react-native: 0.86.3(@babel/core@7.29.7)` reads as an alias of a package
+ * named `0.86.3(`.
+ */
+function snapshotKey({ name, version }) {
+  const written = version.replace(/^npm:/, '');
+  const bare = written.replace(/\(.*$/, '');
+  const at = bare.indexOf('@', 1);
+  return at > 0 && !bare.includes(':') ? written : `${name}@${written}`;
+}
+
+/** A node of the lockfile's graph: a snapshot by its key, or an importer by its path. */
+const snapshotNode = (key) => `snapshot ${key}`;
+const importerNode = (at) => `importer ${at}`;
+const nodeName = (node) => node.replace(/^(?:snapshot|importer) /, '');
+
+/**
+ * For every snapshot and importer, what depends on it: the snapshots and
+ * importers that list it in any of `readLockfile`'s dependency fields, and the
+ * importers that `link:` to an importer. A dependency that resolves to no
+ * snapshot or importer the lockfile holds throws, because a dependency the
+ * walk could not place would read as "nothing reaches it this way".
+ */
+function dependentsIndex(lock) {
+  const index = new Map();
+  const add = (target, dependent) => {
+    if (!index.has(target)) index.set(target, []);
+    index.get(target).push(dependent);
+  };
+  for (const [key, dependencies] of lock.snapshots) {
+    for (const dependency of dependencies) {
+      const target = snapshotKey(dependency);
+      if (!lock.snapshots.has(target)) {
+        throw new Error(
+          `pnpm-lock.yaml: ${key} depends on ${dependency.name}: ${dependency.version}, which resolves to no snapshot (${target})`,
+        );
+      }
+      add(snapshotNode(target), snapshotNode(key));
+    }
+  }
+  for (const [at, dependencies] of lock.importers) {
+    for (const dependency of dependencies) {
+      if (dependency.version.startsWith('link:')) {
+        const target = linkedImporter(at, dependency.version);
+        if (!lock.importers.has(target)) {
+          throw new Error(
+            `pnpm-lock.yaml: importer ${at} links ${dependency.name} to ${target}, which is no importer`,
+          );
+        }
+        add(importerNode(target), importerNode(at));
+        continue;
+      }
+      const target = snapshotKey(dependency);
+      if (!lock.snapshots.has(target)) {
+        throw new Error(
+          `pnpm-lock.yaml: importer ${at} depends on ${dependency.name}: ${dependency.version || '(no version)'}, which resolves to no snapshot (${target})`,
+        );
+      }
+      add(snapshotNode(target), importerNode(at));
+    }
+  }
+  return index;
+}
+
+/**
+ * Every importer from which a locked version of `name` is reached, with one
+ * shortest chain from it down to that version. The walk goes upward, from every
+ * snapshot of `name`, through what depends on it, until nothing new is
+ * reached; a `link:` between importers is followed like any other dependency.
+ *
+ * Every dependency field `readLockfile` reads counts (`dependencies`,
+ * `devDependencies`, `optionalDependencies`), so this is not
+ * `pnpm why braces --prod`. `--prod` does not mean "what runs in production"
+ * anyway: in pnpm it includes peers (D-104's context, from BUG-15's
+ * `privacy-security-reviewer`). And a path through a dev dependency still
+ * installs `braces`, whose advisory the ignore then hides there too: pnpm
+ * drops it by `ignoreGhsas.includes(github_advisory_id)`, wherever it turns
+ * up. So the claim pinned is the stronger one: no path at all.
+ */
+function importersReaching(lock, name) {
+  const index = dependentsIndex(lock);
+  const queue = [...lock.snapshots.keys()]
+    .filter((key) => packageName(key) === name)
+    .map(snapshotNode);
+  const below = new Map(queue.map((node) => [node, null]));
+  for (let i = 0; i < queue.length; i += 1) {
+    for (const dependent of index.get(queue[i]) ?? []) {
+      if (below.has(dependent)) continue;
+      below.set(dependent, queue[i]);
+      queue.push(dependent);
+    }
+  }
+  const reached = new Map();
+  for (const node of queue.filter((n) => n.startsWith('importer ')).sort()) {
+    const chain = [];
+    for (let at = node; at !== null; at = below.get(at)) chain.push(nodeName(at));
+    reached.set(nodeName(node), chain);
+  }
+  return reached;
+}
+
+/**
+ * The importers D-104 leaves `braces` reachable from: the app's, by its test
+ * runner and Expo's tooling. "Only `apps/mobile` reaches `braces`."
+ */
+const D104_REACHED_FROM = ['apps/mobile'];
+
+/** How the importers that reach braces differ from D-104's context; empty when only apps/mobile does. */
+function bracesReachChanges(lock) {
+  const reached = importersReaching(lock, 'braces');
+  const importers = [...reached.keys()];
+  if (importers.join() === D104_REACHED_FROM.join()) return [];
+  return [
+    `the workspace packages that reach braces are [${importers.join(', ')}], not [${D104_REACHED_FROM.join(', ')}]`,
+    ...importers
+      .filter((at) => !D104_REACHED_FROM.includes(at))
+      .map((at) => `${at} reaches braces: ${reached.get(at).join(' > ')}`),
+  ];
+}
+
+/**
+ * A synthetic lockfile in v9's form, in the shape D-104 was decided on:
+ * apps/mobile reaches braces through its test runner (jest, then micromatch),
+ * and nothing else does. The server links the test kit, the root and the
+ * packages link the shared config, and the app's react-native carries a peer
+ * suffix with an `@` in it, the form that reads as an alias if the suffix is
+ * not stripped first.
+ */
+const REACH_SAMPLE_LOCK = `lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+
+importers:
+
+  .:
+    devDependencies:
+      '@trygghverdag/config':
+        specifier: workspace:*
+        version: link:packages/config
+      vitest:
+        specifier: ^5.0.1
+        version: 5.0.1
+
+  apps/mobile:
+    dependencies:
+      react-native:
+        specifier: 0.86.3
+        version: 0.86.3(@babel/core@7.29.7)
+    devDependencies:
+      '@trygghverdag/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      jest:
+        specifier: ^29.7.0
+        version: 29.7.0(@types/node@26.6.2)
+
+  apps/server:
+    dependencies:
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@trygghverdag/test-kit':
+        specifier: workspace:*
+        version: link:../../packages/test-kit
+
+  packages/config:
+    dependencies:
+      globals:
+        specifier: ^17.12.0
+        version: 17.12.0
+
+  packages/test-kit:
+    dependencies:
+      fast-check:
+        specifier: ^4.10.2
+        version: 4.10.2
+    devDependencies:
+      '@trygghverdag/config':
+        specifier: workspace:*
+        version: link:../config
+
+packages:
+
+  '@babel/core@7.29.7':
+    resolution: {integrity: sha512-synthetic}
+
+  '@types/node@26.6.2':
+    resolution: {integrity: sha512-synthetic}
+
+  braces@3.0.3:
+    resolution: {integrity: sha512-synthetic}
+
+  fast-check@4.10.2:
+    resolution: {integrity: sha512-synthetic}
+
+  fill-range@7.1.1:
+    resolution: {integrity: sha512-synthetic}
+
+  globals@17.12.0:
+    resolution: {integrity: sha512-synthetic}
+
+  jest-message-util@29.7.0:
+    resolution: {integrity: sha512-synthetic}
+
+  jest@29.7.0:
+    resolution: {integrity: sha512-synthetic}
+    peerDependencies:
+      node-notifier: ^8.0.1
+
+  micromatch@4.0.8:
+    resolution: {integrity: sha512-synthetic}
+
+  picomatch@2.3.2:
+    resolution: {integrity: sha512-synthetic}
+
+  react-native@0.86.3:
+    resolution: {integrity: sha512-synthetic}
+    peerDependencies:
+      '@babel/core': '*'
+
+  vitest@5.0.1:
+    resolution: {integrity: sha512-synthetic}
+
+  zod@4.6.5:
+    resolution: {integrity: sha512-synthetic}
+
+snapshots:
+
+  '@babel/core@7.29.7': {}
+
+  '@types/node@26.6.2': {}
+
+  braces@3.0.3:
+    dependencies:
+      fill-range: 7.1.1
+
+  fast-check@4.10.2: {}
+
+  fill-range@7.1.1: {}
+
+  globals@17.12.0: {}
+
+  jest-message-util@29.7.0:
+    dependencies:
+      micromatch: 4.0.8
+
+  jest@29.7.0(@types/node@26.6.2):
+    dependencies:
+      '@types/node': 26.6.2
+      jest-message-util: 29.7.0
+      micromatch: 4.0.8
+    transitivePeerDependencies:
+      - node-notifier
+
+  micromatch@4.0.8:
+    dependencies:
+      braces: 3.0.3
+      picomatch: 2.3.2
+
+  picomatch@2.3.2: {}
+
+  react-native@0.86.3(@babel/core@7.29.7):
+    dependencies:
+      '@babel/core': 7.29.7
+
+  vitest@5.0.1: {}
+
+  zod@4.6.5: {}
+`;
+
+const D104_REACH_CHANGED =
+  'D-104\'s "Only apps/mobile reaches braces" no longer holds: decide again, or remove the ignore';
+
 describe('the dependency audit ignores what the owner accepted, and nothing else', () => {
   test('BUG-11: GHSA-86w9-cpqp-85rv is ignored by the dependency audit', () => {
     expect(
@@ -690,8 +999,8 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
   test('BUG-15: the audit ignores exactly the two accepted advisories, each named by its own decision (D-093, D-104)', () => {
     // Sorted, because pnpm reads the list as a set; a duplicate still shows,
     // as a longer list. A third advisory, even one an owner's decision names,
-    // fails here until its premise is pinned in this file as D-093's and
-    // D-104's are.
+    // fails here until the ID is added to DECIDED_IGNORES, beside which its
+    // premise test belongs.
     expect(
       [...(auditConfig?.ignoreGhsas ?? [])].sort(),
       "pnpm.auditConfig.ignoreGhsas is not exactly D-093's and D-104's advisories",
@@ -1050,6 +1359,180 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
     expect(bracesPremiseChanges(readLockfile(directAlias))).toEqual([
       'workspace packages depend on braces directly: apps/mobile',
     ]);
+  });
+
+  test('BUG-15: only apps/mobile reaches braces in the lockfile', () => {
+    const lock = readLockfile(read('pnpm-lock.yaml'));
+
+    expect(
+      lock.lockfileVersion,
+      'pnpm-lock.yaml is not lockfile v9, the form this reader knows',
+    ).toMatch(/^9\./);
+    // The walk reaches the server where the server does depend on something,
+    // and through a link: fast-check is the test kit's, and apps/server links
+    // the test kit. So "the server does not reach braces" is walked, not
+    // assumed.
+    expect(
+      [...importersReaching(lock, 'fast-check').keys()],
+      'the walk did not reach apps/server through its link to packages/test-kit',
+    ).toEqual(expect.arrayContaining(['apps/server', 'packages/test-kit']));
+    expect(
+      importersReaching(lock, 'fast-check').get('apps/server')?.[1],
+      'the walk reached apps/server other than through packages/test-kit',
+    ).toBe('packages/test-kit');
+    expect(bracesReachChanges(lock), D104_REACH_CHANGED).toEqual([]);
+  });
+
+  test('BUG-15: the walk to braces fails when the server or the root reaches it, through micromatch, jest-message-util, an alias or a link', () => {
+    // The shape D-104 was decided on: apps/mobile > jest > micromatch > braces.
+    const sample = readLockfile(REACH_SAMPLE_LOCK);
+    expect(sample.lockfileVersion).toBe('9.0');
+    expect([...importersReaching(sample, 'braces')]).toEqual([
+      [
+        'apps/mobile',
+        ['apps/mobile', 'jest@29.7.0(@types/node@26.6.2)', 'micromatch@4.0.8', 'braces@3.0.3'],
+      ],
+    ]);
+    expect(bracesReachChanges(sample)).toEqual([]);
+    // The premise test above passes on every case below: braces' only
+    // dependent stays micromatch, and no importer depends on braces directly.
+    expect(bracesPremiseChanges(sample)).toEqual([]);
+
+    // A peer suffix with an `@` in it is not an alias; an alias is.
+    expect(snapshotKey({ name: 'react-native', version: '0.86.3(@babel/core@7.29.7)' })).toBe(
+      'react-native@0.86.3(@babel/core@7.29.7)',
+    );
+    expect(snapshotKey({ name: 'glob-match', version: 'micromatch@4.0.8' })).toBe(
+      'micromatch@4.0.8',
+    );
+    expect(snapshotKey({ name: '@scope/x', version: '1.0.0(@scope/y@2.0.0)' })).toBe(
+      '@scope/x@1.0.0(@scope/y@2.0.0)',
+    );
+    // A link is relative to the importer that names it.
+    expect(linkedImporter('.', 'link:packages/config')).toBe('packages/config');
+    expect(linkedImporter('apps/server', 'link:../../packages/test-kit')).toBe('packages/test-kit');
+    expect(linkedImporter('packages/test-kit', 'link:../config')).toBe('packages/config');
+
+    const serverDev =
+      "      '@trygghverdag/test-kit':\n        specifier: workspace:*\n        version: link:../../packages/test-kit\n";
+    const serverDeps = '      zod:\n        specifier: ^4.6.5\n        version: 4.6.5\n';
+    const rootDev =
+      "      '@trygghverdag/config':\n        specifier: workspace:*\n        version: link:packages/config\n";
+    const testKitDeps = '      fast-check:\n        specifier: ^4.10.2\n        version: 4.10.2\n';
+    const reachedBy = (text) => bracesReachChanges(readLockfile(text));
+
+    // The server depends on micromatch, as a dependency.
+    const serverMicromatch = edited(REACH_SAMPLE_LOCK, [
+      `  apps/server:\n    dependencies:\n${serverDeps}`,
+      `  apps/server:\n    dependencies:\n      micromatch:\n        specifier: ^4.0.8\n        version: 4.0.8\n${serverDeps}`,
+    ]);
+    expect(reachedBy(serverMicromatch)).toEqual([
+      'the workspace packages that reach braces are [apps/mobile, apps/server], not [apps/mobile]',
+      'apps/server reaches braces: apps/server > micromatch@4.0.8 > braces@3.0.3',
+    ]);
+
+    // The server depends on jest-message-util, which reaches micromatch: as a
+    // dev dependency, which counts as much as any other.
+    const serverJestMessageUtil = edited(REACH_SAMPLE_LOCK, [
+      serverDev,
+      `${serverDev}      jest-message-util:\n        specifier: ^29.7.0\n        version: 29.7.0\n`,
+    ]);
+    expect(reachedBy(serverJestMessageUtil)).toEqual([
+      'the workspace packages that reach braces are [apps/mobile, apps/server], not [apps/mobile]',
+      'apps/server reaches braces: apps/server > jest-message-util@29.7.0 > micromatch@4.0.8 > braces@3.0.3',
+    ]);
+
+    // The server reaches micromatch through an alias, as an optional dependency.
+    const serverAlias = edited(REACH_SAMPLE_LOCK, [
+      serverDev,
+      `${serverDev}    optionalDependencies:\n      glob-match:\n        specifier: npm:micromatch@^4.0.8\n        version: micromatch@4.0.8\n`,
+    ]);
+    expect(reachedBy(serverAlias)).toEqual([
+      'the workspace packages that reach braces are [apps/mobile, apps/server], not [apps/mobile]',
+      'apps/server reaches braces: apps/server > micromatch@4.0.8 > braces@3.0.3',
+    ]);
+
+    // The root depends on micromatch.
+    const rootMicromatch = edited(REACH_SAMPLE_LOCK, [
+      rootDev,
+      `${rootDev}      micromatch:\n        specifier: ^4.0.8\n        version: 4.0.8\n`,
+    ]);
+    expect(reachedBy(rootMicromatch)).toEqual([
+      'the workspace packages that reach braces are [., apps/mobile], not [apps/mobile]',
+      '. reaches braces: . > micromatch@4.0.8 > braces@3.0.3',
+    ]);
+
+    // The server links an importer that reaches braces: the app itself, so
+    // only the link shows it.
+    const serverLinksMobile = edited(REACH_SAMPLE_LOCK, [
+      serverDev,
+      `${serverDev}      '@trygghverdag/mobile':\n        specifier: workspace:*\n        version: link:../mobile\n`,
+    ]);
+    expect(reachedBy(serverLinksMobile)).toEqual([
+      'the workspace packages that reach braces are [apps/mobile, apps/server], not [apps/mobile]',
+      'apps/server reaches braces: apps/server > apps/mobile > jest@29.7.0(@types/node@26.6.2) > micromatch@4.0.8 > braces@3.0.3',
+    ]);
+
+    // The test kit depends on micromatch, and the server links the test kit.
+    const testKitMicromatch = edited(REACH_SAMPLE_LOCK, [
+      testKitDeps,
+      `${testKitDeps}      micromatch:\n        specifier: ^4.0.8\n        version: 4.0.8\n`,
+    ]);
+    expect(reachedBy(testKitMicromatch)).toEqual([
+      'the workspace packages that reach braces are [apps/mobile, apps/server, packages/test-kit], not [apps/mobile]',
+      'apps/server reaches braces: apps/server > packages/test-kit > micromatch@4.0.8 > braces@3.0.3',
+      'packages/test-kit reaches braces: packages/test-kit > micromatch@4.0.8 > braces@3.0.3',
+    ]);
+
+    // The premise test passes on every one of these; only the walk sees them.
+    for (const text of [
+      serverMicromatch,
+      serverJestMessageUtil,
+      serverAlias,
+      rootMicromatch,
+      serverLinksMobile,
+      testKitMicromatch,
+    ]) {
+      expect(bracesPremiseChanges(readLockfile(text))).toEqual([]);
+    }
+
+    // The app no longer reaches braces: "exactly apps/mobile" fails too.
+    const mobileWithout = edited(REACH_SAMPLE_LOCK, [
+      '      jest-message-util: 29.7.0\n      micromatch: 4.0.8\n',
+      '      jest-message-util: 29.7.0\n',
+    ]);
+    const unreached = edited(mobileWithout, [
+      '  jest-message-util@29.7.0:\n    dependencies:\n      micromatch: 4.0.8\n',
+      '  jest-message-util@29.7.0: {}\n',
+    ]);
+    expect(reachedBy(unreached)).toEqual([
+      'the workspace packages that reach braces are [], not [apps/mobile]',
+    ]);
+
+    // A dependency the walk cannot place throws, instead of reading as
+    // "nothing reaches it this way": one that resolves to no snapshot, and a
+    // link to no importer.
+    const unplaced = edited(REACH_SAMPLE_LOCK, [
+      '      jest-message-util: 29.7.0\n      micromatch: 4.0.8\n',
+      '      jest-message-util: 29.7.0\n      micromatch: 4.0.9\n',
+    ]);
+    expect(() => importersReaching(readLockfile(unplaced), 'braces')).toThrow(
+      /jest@29\.7\.0\(@types\/node@26\.6\.2\) depends on micromatch: 4\.0\.9, which resolves to no snapshot/,
+    );
+    const noVersion = edited(REACH_SAMPLE_LOCK, [
+      serverDeps,
+      '      zod:\n        specifier: ^4.6.5\n',
+    ]);
+    expect(() => importersReaching(readLockfile(noVersion), 'braces')).toThrow(
+      /importer apps\/server depends on zod: \(no version\), which resolves to no snapshot/,
+    );
+    const linkNowhere = edited(REACH_SAMPLE_LOCK, [
+      'version: link:../../packages/test-kit',
+      'version: link:../../packages/testkit',
+    ]);
+    expect(() => importersReaching(readLockfile(linkNowhere), 'braces')).toThrow(
+      /importer apps\/server links @trygghverdag\/test-kit to packages\/testkit, which is no importer/,
+    );
   });
 
   test("BUG-11: the decision lookup reads the log as it is written: only an owner's acceptance counts, not a delegated, bare, partial, in-principle or proposed one, nor no status at all", () => {
