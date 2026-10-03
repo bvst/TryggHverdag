@@ -1028,6 +1028,61 @@ describe("this repository's own workflows", () => {
     expect(tests.length).toBeGreaterThan(0);
     expect(tests.filter((file) => entries.some((glob) => requires(glob, file)))).toEqual([]);
   });
+
+  // BUG-18 (D-105): apps/server/src/adapters/db.ts creates every process's
+  // PostgreSQL pool and decides how many connections each may hold. LOST-02
+  // adds to it the session limits that stop a frozen server instance from
+  // holding a journey's row lock, which the watchdog's `for update skip
+  // locked` would otherwise skip with no sign anywhere, and the pools' error
+  // listeners (D-068). A change to it needed no owner and, made alone, did not
+  // summon safety-reviewer. The owner decided it needs both.
+  //
+  // The general tests above tie the lists together, the /apps/ owner paths to
+  // the filter and back, but a file in none of them passes both. These pin
+  // db.ts in each list by name. Unlike log.ts (D-102), it is not a named
+  // exception: safety-reviewer runs only when the filter matches.
+  const DB = '/apps/server/src/adapters/db.ts';
+
+  test('BUG-18: the database connection, apps/server/src/adapters/db.ts, is tracked by git and is a path the owner must approve (D-105)', () => {
+    const listed = spawnSync('git', ['ls-files', '--', DB.slice(1)], { encoding: 'utf8' });
+
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      listed.stdout.split('\n').filter((file) => file !== ''),
+      `${DB} is not a file git tracks`,
+    ).toEqual([DB.slice(1)]);
+    expect(OWNER_APPROVAL_PATHS, `${DB} is not in OWNER_APPROVAL_PATHS`).toContain(DB);
+  });
+
+  test("BUG-18: under GitHub's last-match rule, the line of .github/CODEOWNERS that matches apps/server/src/adapters/db.ts names @bvst @urso-agent, and gate:integrity finds every owner-approval path owned (D-105)", () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    // The reading is checked on an owned adapter beside it first.
+    expect(ownersOf('apps/server/src/adapters/clock.ts')).toEqual(OWNERS);
+    expect(
+      ownersOf(DB.slice(1)),
+      `the owners the last line of .github/CODEOWNERS matching ${DB.slice(1)} gives it`,
+    ).toEqual(OWNERS);
+  });
+
+  test('BUG-18: the safety filter in ai-review.yml lists apps/server/src/adapters/db.ts as an entry of its own, so a change to the database connection alone summons safety-reviewer (D-105)', () => {
+    // Read as the tests above read it: a path in a comment, or under the ui
+    // filter, is not a safety entry, and an owner path's entry is its
+    // filterGlob, written out.
+    const safety = filterEntries(readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8'), 'safety');
+
+    expect(safety.headers, 'how many filters are named safety').toBe(1);
+    expect(safety.unreadable).toEqual([]);
+    expect(safety.entries, 'the safety filter has no entries').toContain(
+      'apps/server/src/adapters/clock.ts',
+    );
+    expect(
+      safety.entries,
+      `${filterGlob(DB)} is not an entry of the safety filter in ai-review.yml`,
+    ).toContain(filterGlob(DB));
+  });
 });
 
 describe('the ruleset the owner imports', () => {

@@ -273,3 +273,25 @@ describe("BUG-14: safety-reviewer's brief has something to check in the mutation
     }),
   );
 });
+
+describe("BUG-18: safety-reviewer's brief has something to check in the database connection (D-105)", () => {
+  // D-105 puts apps/server/src/adapters/db.ts in the safety filter: the pools,
+  // how many connections each process may hold, and, with LOST-02, the
+  // session limits that keep a frozen instance from holding a journey's row
+  // lock past the watchdog. A change to it now brings safety-reviewer, and a
+  // brief that does not name it leaves that review nothing to check (D-045),
+  // as BUG-14 found for D-100's files. Loose on purpose, as the test above:
+  // the citation and the path, none of the wording around them.
+  test(
+    "BUG-18: safety-reviewer's brief cites D-105 and names apps/server/src/adapters/db.ts",
+    explained(() => {
+      const brief = agentNamed('safety-reviewer.md')?.text ?? '';
+
+      expect(brief, 'no safety-reviewer.md with a verdict line in .claude/agents').not.toBe('');
+      expect(
+        ['D-105', 'apps/server/src/adapters/db.ts'].filter((named) => !brief.includes(named)),
+        "what safety-reviewer's brief does not name",
+      ).toEqual([]);
+    }),
+  );
+});
