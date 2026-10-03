@@ -3430,3 +3430,42 @@ any other path is work, not a candidate for the same treatment.
     repository", GitHub's API, 2026-10-03), against the setup guide in
     `merge-rules.md`. Turning them on is the owner's (A-31); D-093 has the
     same gap.
+
+## D-105 — The database connection needs the owner and the safety review (BUG-18)
+- **Date:** 2026-10-03 · **Status:** Accepted (owner, 2026-10-03). Asked in
+  session with Claude's recommendation, "Yours + safety review, small PR
+  first". The alternatives offered were "Yours, like log.ts (no safety
+  trigger)", which was the planner's recommendation, and "Leave it
+  unowned" · **Section:** 5 (AR-06; extends D-092, D-100 and D-102)
+- **Context:**
+  - `apps/server/src/adapters/db.ts` creates every process's PostgreSQL pool.
+    It already decides how many connections each process may hold. Its own
+    comment says that a pool that quietly runs out "would take the watchdog
+    down with it".
+  - LOST-02 (the lost-contact alert) adds to it:
+    - session limits that stop a frozen server instance from holding a
+      journey's row lock indefinitely. The watchdog's `for update skip locked`
+      would otherwise skip that journey, a missed alert that shows up nowhere
+      (LOST-01's "Left for later tasks");
+    - the pools' `error` listeners (D-068).
+  - Nothing makes a change to `db.ts` need the owner today, and a change to it
+    alone does not summon `safety-reviewer`.
+  - D-102 kept `log.ts` out of the ai-review `safety` filter, because
+    `privacy-security-reviewer` runs on every pull request and logging is in
+    its brief. That reason does not carry over: `safety-reviewer` runs only
+    when the filter matches a changed file.
+- **Decision:**
+  - `apps/server/src/adapters/db.ts` joins `.github/CODEOWNERS`,
+    `OWNER_APPROVAL_PATHS` in `scripts/lib/merge-rules.mjs` and the ai-review
+    `safety` filter.
+  - `safety-reviewer`'s brief gains a line for it. A review the file triggers
+    must have something to check (D-045, as BUG-14 found for D-100's files).
+  - This lands in its own small pull request, BUG-18, before LOST-02. It edits
+    `ai-review.yml`, so the owner merges it by hand (D-075). LOST-02's own
+    pull request then does not touch `ai-review.yml`, so CI's AI reviewers can
+    run on it.
+- **Consequences:**
+  - Every later change to `db.ts` needs the owner and gets the safety review.
+  - `scripts/gate.test.mjs`'s named exception stays exactly `log.ts` (D-102,
+    amended). `db.ts` is an `/apps/` owner path, and it is in the filter.
+  - LOST-02 must not merge before BUG-18.
