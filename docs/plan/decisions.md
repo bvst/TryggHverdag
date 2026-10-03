@@ -3249,7 +3249,7 @@ any other path is work, not a candidate for the same treatment.
     "8 vulnerabilities found · Severity: 6 moderate | 2 high (1 ignored)",
     exit 1. The new high one is
     [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)
-    (CVE-2026-93687; CVSS 4.0 8.7 on the advisory page, 7.5 under CVSS 3.1 in npm's audit data, which is what `pnpm audit` reads): "braces vulnerable to stack-exhaustion denial
+    (CVE-2026-93687; CVSS 4.0 8.7 on the advisory page, read by the orchestrating session on 2026-10-03; 7.5 under CVSS 3.1 in npm's audit data, which is what `pnpm audit` reads): "braces vulnerable to stack-exhaustion denial
     of service through deeply nested patterns". The advisory page, read
     2026-10-03, says published 2026-09-18, updated 2026-10-02, affected
     "through 3.0.3", and patched versions "None available". A crafted,
@@ -3279,8 +3279,11 @@ any other path is work, not a candidate for the same treatment.
     - No file under `apps/mobile/src` names `micromatch` or `braces`.
     - **The app's bundles hold none of it.** `privacy-security-reviewer`
       built them with `expo export` for Android (1,218 modules) and iOS
-      (1,126): no `braces`, `micromatch`, `picomatch`, Jest or Metro, by
-      module path or by source content.
+      (1,126): no `braces`, `micromatch`, `picomatch`, Jest, or Metro's
+      bundler and file watcher (`metro`, `metro-file-map`), by module path or
+      by source content. They hold only Metro's runtime
+      (`@expo/metro-runtime` and Metro's `require` polyfill), as every Expo
+      bundle does.
     - **`braces` is loaded but never called.** In micromatch 4.0.8 it runs
       only from `.parse`, `.braces` and `.braceExpand`; all eight callers use
       picomatch-only functions. Their patterns come from Jest's and Metro's
@@ -3312,8 +3315,19 @@ any other path is work, not a candidate for the same treatment.
     nothing.
   - The list of ignored IDs is pinned to exactly D-093's and D-104's, so a
     third ID fails until it is added beside its own decision.
-  - **Not pinned:** a later decision superseding this one (removing the ID is
-    the loud path), and the copies under "Not covered" above.
+  - **Not pinned:**
+    - a later decision superseding this one (removing the ID is the loud
+      path);
+    - the copies under "Not covered" above;
+    - a new path to `braces` *inside* `apps/mobile`: a new app dependency
+      that uses `micromatch`, or the app depending on `micromatch` directly.
+      The walk allows `apps/mobile`, so either passes. Pinning `micromatch`'s
+      exact dependents would catch it, but would also fail on routine Jest and
+      Metro updates; `test-auditor` judged that a cost for the owner to
+      choose, and it is not pinned (BUG-15's review loop,
+      `privacy-security-reviewer` preferring the pin);
+    - whether app source imports `micromatch` or `braces` (read, not
+      tested).
   - **Revisit** when `braces` publishes a fix, or when the advisory changes.
     Nothing tells the project when that happens today: Dependabot alerts are
     off for the repository ("Dependabot alerts are disabled for this
