@@ -26,3 +26,7 @@ pinned, but the fact the risk rests on ("nothing reaches it from the server") sa
 decision's *Consequences* premise from the *Context* facts its "at worst" sentence relies on; when the lockfile can show a
 Context fact offline (an importer's closure), recommend pinning it in the same PR without a new decision. Do not recommend
 pinning a fast-churning dependent set (micromatch's jest/metro/expo dependents): that is a cost the owner chooses.
+Graph-walk pins (BUG-15 loop 1): plant faults at every edge kind (direct, dev, optional, alias, peer-suffixed key, link,
+injected file:, deep transitive, new unlinked importer) plus a must-survive control inside the allowed importer; cross-check
+the real result with `pnpm why -r <pkg> --depth Infinity --json`. Probe the start set with two source versions, and look for
+sanity anchors that pin an incidental edge (a shortest-chain index) which a routine dependency change would break.

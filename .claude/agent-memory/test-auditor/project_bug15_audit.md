@@ -35,3 +35,18 @@ disclosed in the commit). PASS.
 - IDs: D-101..D-103 are LOST-01's (claude/busy-faraday-40n2zl); D-104 free; LOST-01's m2.md names BUG-15 as this PR and
   says it will be "ported here" (not yet at 7311e81). Both append after D-100 in decisions.md: a trivial order conflict.
 Related: [[config-pinning-tests]], [[in-memory-mutation]], [[gate-integrity-local]]
+
+**Loop-1 re-check (2026-10-03), PASS at a7423d9; HEAD moved to 7ad98a7 mid-audit (docs only: decisions.md, m2.md).**
+Should-fix met: `BUG-15: only apps/mobile reaches braces in the lockfile` walks upward from braces snapshots through every
+dependency field and `link:` edges; D104_REACHED_FROM = ['apps/mobile'] exact. Cross-checked with pnpm's own
+`pnpm why -r braces --depth Infinity --json` (inverted tree; leaves with `depField` are importers): only @trygghverdag/mobile.
+Faults (scratchpad/ta-bug15/mutants-loop1.mjs, same harness): 14/14 real-lockfile faults killed (server dep/dev/optional alias,
+root, test-kit, contracts, link to mobile, hono/graphile-worker/fast-check snapshot gaining micromatch incl. optional, new
+unlinked importer, injected file: package, second braces 3.0.2 via micromatch@4.0.5, peer-suffixed snapshot); control
+"mobile gains micromatch" survives by design (D-104 now lists it as Not pinned). Helpers 13/14 killed; survivor H8 = walk
+starts from the first braces snapshot only (both lockfiles hold one braces; any second in-range version sorts before 3.0.3,
+so H8 would drop mobile and fail loud: near-equivalent). Notes given: sanity check `.get('apps/server')?.[1] ===
+'packages/test-kit'` false-reds if the server adds fast-check directly; test header Not-pinned lacks "paths inside apps/mobile".
+RG-03: 13 removed lines 0ccd0f5..a7423d9, all comments; the exact-pin comment was corrected from an overclaim ("fails until
+decision and premise test exist") to the truth (compares against DECIDED_IGNORES). Live ruleset via gh api: 13 required
+contexts; no PR, check-runs total_count 0.
