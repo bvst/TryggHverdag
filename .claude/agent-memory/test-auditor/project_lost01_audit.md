@@ -29,3 +29,21 @@ Audited 2026-10-03 (cloud session), branch claude/busy-faraday-40n2zl. Tests d21
 - RG-04: coverage-baseline.json untouched since INF-10 (c24d725): no M2 file is ratcheted; domain/ and
   modules/journeys/ have the 95 % floor, log.ts and contracts/heartbeats.ts have neither.
 Related: [[in-memory-mutation]], [[bug14-audit]], [[baseline-vs-main]]
+
+**Loop-1 re-check (2026-10-03), PASS at 19db407 (HEAD moved to ac1c85a mid-audit: agent memory + spec prose, no new AC).**
+Tests 601e528 == HEAD's; code 16a9514; 19db407 rewords two LOST-02 mentions (comment + spec) so req:coverage stops reading them as
+claims (m2.md still ties the row-lock obligation to LOST-02 by ID). Harness: scratchpad/ta-lost01/mutants-loop1.mjs over replay3.mjs
+(extraProd adds sqlstate.ts, fake, capture.test.ts); 43 faults, about 6 min in the background.
+- RG-02 replay (tests at HEAD, prod at 44e73d5): log 32 red, sqlstate.test file error, contract 5, system 10: exactly the commit's
+  claim. NOT_ERRORS rows pass at base by design (they kill the `?.` mutant, V1/V2).
+- KILLED: capture C1-C5, C7, C9, C10 (no wait: 4 controls fail in capture.test AND 4 in the system file, so imported controls
+  really run in the importer); log L2-L11; sqlstate Q1, Q3 (instanceof Error: 18 log tests, log.ts feeds it a plain object),
+  Q4, Q5; service V1-V3; contract H1, H2, H4; fake F1-F5, F7; api A1 (start route keeps data); gate G1 (log.ts dropped from
+  OWNER_APPROVAL_PATHS; the old `length - length <= n` check would have passed it).
+- SURVIVED: **L1 `^` dropped from log.ts CANONICAL_UUID** (Should fix: no NOT_JOURNEY_IDS row puts text BEFORE a UUID; log.ts is
+  outside Stryker; upstream z.uuid() makes it defence in depth); **H3 getFullYear for getUTCFullYear** survives under TZ=UTC (CI,
+  cloud), killed under TZ=Europe/Oslo (Note); C8 markersOf "as sent" (synthetic times are ISO, Note); F6 fake refusing a lone '-'
+  (the deleted fake test's residual loss, Note); Q2 MAX_LINKS 3 (depth unpinned, Note); C6 and A2 equivalent.
+- RG-05: no PR, check-runs total_count 0. Local reports/mutation sources == HEAD: journey 72/73, sqlstate 25/26 (`<=` at 38),
+  service 61/62 (line 103 start race `'refused'` literal, SM-01 code from main), worker 53/55. RG-04: 7 new 100 % entries, none
+  lowered vs origin/main. tests:changes --base origin/main: 17 files, none weakened.
