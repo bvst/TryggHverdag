@@ -77,6 +77,12 @@
  *     config);
  *   - the spike's own lockfile, spikes/background-safety/app/pnpm-lock.yaml,
  *     which D-093 names as not covered;
+ *   - a new path to `braces` *inside* `apps/mobile`: a new app dependency that
+ *     uses `micromatch`, or the app depending on `micromatch` directly. The
+ *     walk allows `apps/mobile`, so either passes. Pinning `micromatch`'s exact
+ *     dependents would catch it, but would also fail on routine Jest and Metro
+ *     updates; D-104 leaves that cost for the owner to choose, and it is not
+ *     pinned;
  *   - whether app source imports `micromatch` or `braces`. D-104's context
  *     reads that none does; nothing here reads the source;
  *   - a later decision that supersedes D-093 or D-104. The lookup finds the
@@ -1368,22 +1374,26 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
       lock.lockfileVersion,
       'pnpm-lock.yaml is not lockfile v9, the form this reader knows',
     ).toMatch(/^9\./);
-    // The walk reaches the server where the server does depend on something,
-    // and through a link: fast-check is the test kit's, and apps/server links
-    // the test kit. So "the server does not reach braces" is walked, not
-    // assumed.
+    // The walk reaches the server where the server does depend on something:
+    // fast-check is the test kit's. And the reader found the link from
+    // apps/server to packages/test-kit as an edge the walk follows. So "the
+    // server does not reach braces" is walked, not assumed. The edge is checked
+    // on its own, not as the walk's chain to fast-check: if apps/server ever
+    // depends on fast-check directly, as the testing conventions recommend,
+    // the shortest chain skips the test kit, and this test must not go red
+    // over something that has nothing to do with braces.
     expect(
       [...importersReaching(lock, 'fast-check').keys()],
-      'the walk did not reach apps/server through its link to packages/test-kit',
+      'the walk did not reach apps/server and packages/test-kit from fast-check',
     ).toEqual(expect.arrayContaining(['apps/server', 'packages/test-kit']));
     expect(
-      importersReaching(lock, 'fast-check').get('apps/server')?.[1],
-      'the walk reached apps/server other than through packages/test-kit',
-    ).toBe('packages/test-kit');
+      dependentsIndex(lock).get(importerNode('packages/test-kit')) ?? [],
+      'the lockfile reader did not find the link from apps/server to packages/test-kit',
+    ).toContain(importerNode('apps/server'));
     expect(bracesReachChanges(lock), D104_REACH_CHANGED).toEqual([]);
   });
 
-  test('BUG-15: the walk to braces fails when the server or the root reaches it, through micromatch, jest-message-util, an alias or a link', () => {
+  test('BUG-15: the walk to braces fails when the server or the root reaches it, through micromatch, jest-message-util, an alias, a link or a second braces', () => {
     // The shape D-104 was decided on: apps/mobile > jest > micromatch > braces.
     const sample = readLockfile(REACH_SAMPLE_LOCK);
     expect(sample.lockfileVersion).toBe('9.0');
@@ -1484,6 +1494,54 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
       'packages/test-kit reaches braces: packages/test-kit > micromatch@4.0.8 > braces@3.0.3',
     ]);
 
+    // A second braces, inside the advisory's range, that only the server
+    // reaches, through a second micromatch. Its key comes after braces@3.0.3,
+    // in the order pnpm writes keys (by code unit, so a pre-release of 3.0.3
+    // follows 3.0.3), so a walk that started from the first locked braces
+    // alone would find only apps/mobile and pass. "Upward from every locked
+    // braces" is what catches it.
+    const secondBraces = edited(
+      REACH_SAMPLE_LOCK,
+      [
+        `  apps/server:\n    dependencies:\n${serverDeps}`,
+        `  apps/server:\n    dependencies:\n      micromatch:\n        specifier: 4.0.7\n        version: 4.0.7\n${serverDeps}`,
+      ],
+      [
+        '  braces@3.0.3:\n    resolution: {integrity: sha512-synthetic}\n',
+        '  braces@3.0.3:\n    resolution: {integrity: sha512-synthetic}\n\n  braces@3.0.3-rc.1:\n    resolution: {integrity: sha512-synthetic}\n',
+      ],
+      [
+        '  micromatch@4.0.8:\n    resolution: {integrity: sha512-synthetic}\n',
+        '  micromatch@4.0.7:\n    resolution: {integrity: sha512-synthetic}\n\n  micromatch@4.0.8:\n    resolution: {integrity: sha512-synthetic}\n',
+      ],
+      [
+        '  braces@3.0.3:\n    dependencies:\n      fill-range: 7.1.1\n',
+        '  braces@3.0.3:\n    dependencies:\n      fill-range: 7.1.1\n\n  braces@3.0.3-rc.1:\n    dependencies:\n      fill-range: 7.1.1\n',
+      ],
+      [
+        '  micromatch@4.0.8:\n    dependencies:\n',
+        '  micromatch@4.0.7:\n    dependencies:\n      braces: 3.0.3-rc.1\n      picomatch: 2.3.2\n\n  micromatch@4.0.8:\n    dependencies:\n',
+      ],
+    );
+    const secondLock = readLockfile(secondBraces);
+    // The sample is what it says: two braces, both in range, the server's after
+    // the app's, and the app reaching only the first.
+    expect(lockedVersions(secondLock, 'braces')).toEqual(['3.0.3', '3.0.3-rc.1']);
+    expect(lockedVersions(secondLock, 'braces').every(inBracesRange)).toBe(true);
+    expect([...secondLock.snapshots.keys()].filter((key) => packageName(key) === 'braces')).toEqual(
+      ['braces@3.0.3', 'braces@3.0.3-rc.1'],
+    );
+    expect(importersReaching(secondLock, 'braces').get('apps/mobile')).toEqual([
+      'apps/mobile',
+      'jest@29.7.0(@types/node@26.6.2)',
+      'micromatch@4.0.8',
+      'braces@3.0.3',
+    ]);
+    expect(reachedBy(secondBraces)).toEqual([
+      'the workspace packages that reach braces are [apps/mobile, apps/server], not [apps/mobile]',
+      'apps/server reaches braces: apps/server > micromatch@4.0.7 > braces@3.0.3-rc.1',
+    ]);
+
     // The premise test passes on every one of these; only the walk sees them.
     for (const text of [
       serverMicromatch,
@@ -1492,6 +1550,7 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
       rootMicromatch,
       serverLinksMobile,
       testKitMicromatch,
+      secondBraces,
     ]) {
       expect(bracesPremiseChanges(readLockfile(text))).toEqual([]);
     }
