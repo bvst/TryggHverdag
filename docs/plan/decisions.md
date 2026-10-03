@@ -3430,3 +3430,86 @@ any other path is work, not a candidate for the same treatment.
     repository", GitHub's API, 2026-10-03), against the setup guide in
     `merge-rules.md`. Turning them on is the owner's (A-31); D-093 has the
     same gap.
+
+## D-106 — The alert's details are read in M3, with the alert screen (LOST-02)
+- **Date:** 2026-10-03 · **Status:** Accepted (owner, 2026-10-03). Asked in
+  session with Claude's recommendation, "M3, with the alert screen". The
+  alternative offered was "Build it now in LOST-02" · **Section:** 5 (D-086,
+  D-091). D-105 is taken by BUG-18's open branch, so LOST-02's decisions start
+  at D-106.
+- **Context:**
+  - A lost-contact push carries no personal detail: no name, position,
+    battery or time (D-086). A responder's app has to read those from the
+    server once the push arrives.
+  - That read needs a check that only the journey's responders may use it. No
+    responder phone can hold a credential before login (D-091), so nothing
+    could call the route before M3.
+  - Neither M2's nor M3's roadmap row named the route (LOST-02's spec).
+- **Decision:**
+  - LOST-02 builds no read route.
+  - LOST-02 stores when the silence began (`silent_since`), which is what the
+    read needs.
+  - The route, `GET /v1/alerts/{alertId}` or whatever M3 names it, comes with
+    the alert screen in M3, together with its responders-only access check.
+- **Consequences:**
+  - LOST-02 changes no API contract.
+  - The first place a stored location is read back out of the server arrives
+    in M3, with its own privacy review.
+
+## D-107 — The watchdog runs every 10 seconds (LOST-02)
+- **Date:** 2026-10-03 · **Status:** Accepted (owner, 2026-10-03). Asked in
+  session with Claude's recommendation, "Every 10 seconds". The alternative
+  offered was "Every 15 seconds" · **Section:** 5 (AR-06, D-021)
+- **Context:** AR-06 allows 10 to 15 seconds. An alert goes out 5 minutes
+  after the last contact (D-021), plus at most one interval, plus the time to
+  send it, against a 60 s alert-time target.
+- **Decision:** `WATCHDOG_INTERVAL_MS` is 10 000.
+- **Consequences:**
+  - At most about 20 s of extra delay after the 5 minutes: one interval, plus
+    the 10 s idle limit when a frozen holder has the row (D-108).
+  - LOST-02-AC17's budget test pins the value.
+
+## D-108 — The lost-contact alert's own outbox, the watchdog feeding the beat, and the session limits (LOST-02)
+- **Date:** 2026-10-03 · **Status:** Accepted (delegated, D-031) ·
+  **Section:** 5 and 8 (AR-05, AR-06, D-032, D-068, D-079)
+- **Context:**
+  - D-032 named Graphile Worker for "jobs and outbox", and says any swap is
+    recorded as a new decision.
+  - D-079's first follow-up leaves it to the watchdog's task to decide whether
+    the watchdog checks in, or feeds the worker's beat.
+  - LOST-01 left the heartbeat's row lock unbounded. A frozen holder would
+    hide a journey from the watchdog's `for update skip locked`.
+  - LOST-02's spec has the full reasoning; this records the choices.
+- **Decision:**
+  - **The outbox is a table of our own** (`outbox`), written in the same
+    transaction as the alert and the journey's change to `LOST_CONTACT`
+    (AR-05).
+    - The worker's loop delivers it: claim due rows with `for update skip
+      locked` and a 30 s lease, send outside any transaction, then mark each
+      as sent or failed.
+    - A message counts as sent only when the push port accepted it. Retries
+      start at 10 s and double, capped at 60 s.
+    - It is not Graphile jobs. A row per message keeps each responder's
+      delivery state in the database (attempts, the last failure, when it was
+      sent), where later tasks and the owner can read it. Graphile Worker
+      keeps the minute check-in.
+  - **The watchdog feeds the beat.** The worker's `worker_heartbeat` row moves
+    only when a sweep completes, so a broken watchdog stops the check-in and
+    pages the owner (D-079's first follow-up). An ACTIVE journey still not
+    alerted 30 s after its 5 minutes is logged, and stops the beat too.
+  - **The session limits** (inherited from LOST-01):
+    - The API pool sets `idle_in_transaction_session_timeout` to 10 s and
+      `lock_timeout` to 5 s.
+    - The worker pool sets `idle_in_transaction_session_timeout` to 10 s and
+      no lock timeout, because its sweeps never wait for a row.
+    - The migrations' pool is unchanged.
+    - Both process pools get `error` listeners that write the pool's name and
+      the SQLSTATE only (D-068).
+- **Consequences:**
+  - `log.ts` gains closed event types for the watchdog, the outbox and pool
+    errors (owner-approved, D-102).
+  - Some of the worker check-in's existing tests change by design. Their
+    reasons are written beside them (RG-03).
+  - The first deploy's job log is the evidence that Clever Cloud's PostgreSQL
+    accepts the startup settings. If it does not, a `SET` on connect is the
+    fallback.
