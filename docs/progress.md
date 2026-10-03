@@ -35,7 +35,7 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | | BUG-14 | The test kit needs the owner, and the mutation check's own files and the test kit join the ai-review `safety` filter (D-100, the owner's answer of 2026-10-02 to CI's `code-reviewer` and `test-auditor` on #57) | ✅ **Done** — 2026-10-02, [#58](https://github.com/bvst/TryggHverdag/pull/58), merged by the owner by hand (D-075) as `34bc460` after `urso-agent` approved. D-100 and its amendment: `/packages/test-kit/` needs the owner; the mutation check's own files, the test kit and the three Vitest configs are in the safety filter. All four session reviewers PASS; CI's four AI reviewers skipped, as expected for a pull request that edits `ai-review.yml` (read in each job log). On #58, the new filter matched `gate-decisions.mjs` and started the safety review, and `mutation` ran fresh, identical to BUG-12 (job 110964175819). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37058587754), and `deploy-staging` passed with its smoke test (run 37058587803). Record: `progress/m2.md` |
 | | BUG-15 | CI's required `security` check (`pnpm audit --audit-level high`) fails on `main` and every pull request since 2026-10-02: braces GHSA-vfj7-8cjw-p6xm, no patched version, reached only through Jest and Metro tooling (D-104) | 🟡 **Reviewed, pull request opening.** Branch `fix/BUG-15-braces-advisory`. D-104 `0d331f6` (owner, 2026-10-03: accept this one, recorded); test `1bfaa23`; fix `0ccd0f5`, one ID in `ignoreGhsas`. Reviews PASS (privacy and security, test audit, code); their should-fixes in loop 1: a test that only `apps/mobile` reaches braces, and D-104 made exact. Also ported into LOST-01's branch so its `security` check is green |
 | | BUG-11 | The dependency audit accepts one advisory, GHSA-86w9-cpqp-85rv in `node-forge` (D-093) | ✅ **Done** — merged with SM-01 in [#53](https://github.com/bvst/TryggHverdag/pull/53) (`2db7046`). Its own pull request, [#54](https://github.com/bvst/TryggHverdag/pull/54), was closed as superseded: every file it held was already on `main` |
-| 2 | LOST-01 | Heartbeat, with or without position | 🟡 **In progress** — started 2026-10-02 on `claude/busy-faraday-40n2zl`, from `main` at `34bc460`; the spec first |
+| 2 | LOST-01 | Heartbeat, with or without position | 🟡 **Reviewed, pull request opening.** Branch `claude/busy-faraday-40n2zl`. D-101 to D-103 (D-102 amended); 20 acceptance criteria; tests `d21afbd` then code `01de08b`; review loop 1 tests `601e528` then code `16a9514`, plus `14351d4`. All four reviewers PASS, and the three blocking ones PASS again after loop 1. `gate:full`: 11 passed, the one failure `gate:integrity`'s API checks; fresh mutation every safety file ≥ 96 %, 0 timeouts. BUG-15 merged in (`386b474`) so its `security` check is green. Record: `progress/m2.md` |
 | 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ⚪ Not started |
 | 4 | LOST-03 | Back in contact | ⚪ Not started |
 | 5 | LOST-06 | "I'm on it" | ⚪ Not started |
@@ -161,6 +161,22 @@ UptimeRobot app ("it is enough for now").
 ## Live gotchas
 
 The things that still bite, and cost a session hours the first time.
+
+- **Naming a requirement that has no test yet, in a changed spec or source
+  file, fails `req:coverage --fail-on-uncovered-changed`** (and with it
+  `gate:full` and CI's `traceability`). LOST-01's loop 1 wrote "task 3
+  (LOST-02)" in a code comment and in its spec; LOST-02 went to 📝 and the gate
+  stopped at that step. Name a later task in words ("task 3, the lost-contact
+  watchdog"). Docs under `progress/` are not read for this.
+- **Don't run two gates at once in one checkout.** The drill test INF-10-AC11
+  compares `git status` before and after, so a background `gate:full`
+  rewriting `docs/requirements-status.md` fails a concurrent `gate:quick`;
+  and a `gate:quick` (or the stop hook) during a mutation run lints Stryker's
+  `.stryker-tmp/sandbox-*` copy, which carries `@ts-nocheck`. Let one finish.
+- **A git worktree outside the project gets no post-edit checks.** The
+  post-edit hook runs in `$CLAUDE_PROJECT_DIR`, so edits in a scratchpad
+  worktree are checked against the main checkout (reporting its errors, or
+  "No test files found"). Run the gates in the worktree yourself (BUG-15).
 
 - **On the Mac, hooks run with the PATH Claude Code started with.** A stop
   hook that fails with no output, or with `git init -b` refused, is this
@@ -318,8 +334,14 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**LOST-01** (M2 task 2 of 8, the heartbeat) is in progress, from the spec.
-BUG-14 is done (#58). Still open from its reviews, for the owner:
+**LOST-01** (M2 task 2 of 8, the heartbeat) is reviewed and its pull request
+is opening. **BUG-15** ([#59](https://github.com/bvst/TryggHverdag/pull/59),
+D-104) is green and waits on the owner's approval; LOST-01 carries it. **A-31**
+(Dependabot alerts are off) is the owner's. LOST-01's reviews leave items for
+later tasks, listed in `progress/m2.md` ("Left for later tasks"); the first is
+that task 3 must bound the heartbeat's row lock before it merges.
+
+Still open from BUG-14's reviews, for the owner:
 - nothing pins what `package.json`'s `mutation` script runs (`safety-reviewer`
   on BUG-14, for the owner): changed to `echo`, CI's required check would pass
   with only the owner's approval in the way;
