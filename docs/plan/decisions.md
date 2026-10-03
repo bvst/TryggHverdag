@@ -3249,7 +3249,7 @@ any other path is work, not a candidate for the same treatment.
     "8 vulnerabilities found · Severity: 6 moderate | 2 high (1 ignored)",
     exit 1. The new high one is
     [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)
-    (CVE-2026-93687, CVSS 8.7): "braces vulnerable to stack-exhaustion denial
+    (CVE-2026-93687; CVSS 4.0 8.7 on the advisory page, 7.5 under CVSS 3.1 in npm's audit data, which is what `pnpm audit` reads): "braces vulnerable to stack-exhaustion denial
     of service through deeply nested patterns". The advisory page, read
     2026-10-03, says published 2026-09-18, updated 2026-10-02, affected
     "through 3.0.3", and patched versions "None available". A crafted,
@@ -3259,20 +3259,38 @@ any other path is work, not a candidate for the same treatment.
     2026-10-02 at 20:08 UTC (run 37058587754), so the advisory reached npm's
     audit data after that. Every pull request fails the check until it is
     handled, as with D-093.
-  - **Where `braces` is used** (read on 2026-10-03). The lockfile holds one
-    version, 3.0.3, and its only dependent is `micromatch`. The audit's
-    reported path is `apps__mobile>@jest/globals>…>micromatch>braces`, the
-    app's test runner. `pnpm why braces --prod` adds Expo's tooling:
-    `@expo/cli` and `@expo/metro-file-map`, the bundler's file watcher.
-    - Both expand glob patterns from this repository's own configuration,
-      never a pattern a user or the network supplies.
-    - Nothing reaches it from the server: `pnpm why braces --prod` in
-      `@trygghverdag/server` finds no path.
-    - No file in `apps/mobile/src` or `apps/mobile/app` imports `micromatch`
-      or `braces`, and the runtime packages checked (`expo-router`,
-      `expo-modules-core`, `react-native`) do not mention `micromatch`.
-      Whether a bundler could ever pull it into the app's JavaScript was not
-      tested by building a bundle.
+  - **Where `braces` is used** (read on 2026-10-03; corrected and extended by
+    BUG-15's reviews the same day). The lockfile holds one version, 3.0.3,
+    and its only dependent is `micromatch@4.0.8`. `micromatch`'s eight
+    dependents are all Jest or Metro packages: `@jest/core`,
+    `@jest/transform`, `jest-config`, `jest-haste-map`, `jest-message-util`,
+    Metro's own `metro-file-map` (0.84.5 and 0.84.6) and Expo's
+    `@expo/metro-file-map`. The audit's reported path is
+    `apps__mobile>@jest/globals>…>micromatch>braces`, the app's test runner.
+    - `pnpm why braces --prod` in `apps/mobile` lists them all. In pnpm,
+      `--prod` includes peers, so it does not mean runtime: React Native
+      0.86 reaches Jest through its optional peer `@react-native/jest-preset`,
+      and `expo-router` reaches `@expo/cli` through `expo`. Their own
+      package.json and source do not name `micromatch`.
+    - Only `apps/mobile` reaches `braces`: `pnpm -r why braces` names no
+      other workspace package, and a walk of the lockfile from the server
+      (461 packages, dev dependencies included) finds neither `braces` nor
+      `micromatch` (`test-auditor`).
+    - No file under `apps/mobile/src` names `micromatch` or `braces`.
+    - **The app's bundles hold none of it.** `privacy-security-reviewer`
+      built them with `expo export` for Android (1,218 modules) and iOS
+      (1,126): no `braces`, `micromatch`, `picomatch`, Jest or Metro, by
+      module path or by source content.
+    - **`braces` is loaded but never called.** In micromatch 4.0.8 it runs
+      only from `.parse`, `.braces` and `.braceExpand`; all eight callers use
+      picomatch-only functions. Their patterns come from Jest's and Metro's
+      configuration, never from a user or the network.
+    - **Not covered:** copies of `braces` built into other packages, which
+      the lockfile and the audit cannot see: Vite 8.3.0's bundled chokidar
+      (its dev server turns globbing off), tsx 4.23.15 (watch mode only),
+      prettier 3.9.8 (its command-line globs) and `resolve-workspace-root`
+      2.0.1 (the repository's own workspace globs). All are tooling; the
+      server runs under Node's own type stripping, not tsx.
   - At worst, a crafted pattern in our own configuration would crash a
     developer's or CI's test or bundler run. That fails loudly and touches
     no one's data or safety.
@@ -3283,8 +3301,22 @@ any other path is work, not a candidate for the same treatment.
   - The `security` job goes green again on `main` and on every pull request.
   - The test that pins D-093's exception pins this one too, with its premise
     read from `pnpm-lock.yaml`: `braces`' only dependent is `micromatch`, no
-    workspace package depends on `braces` directly, and every locked `braces`
-    is at most 3.0.3. A patched `braces` reaching the lockfile, or a new
-    dependent, fails the test: the prompt to remove the exception, or to look
-    again.
+    workspace package depends on `braces` directly, every locked `braces` is
+    at most 3.0.3, and **only `apps/mobile` reaches `braces`**, by any path.
+    A patched `braces` reaching the lockfile, a new dependent, or the server
+    (or any other workspace package) reaching it through `micromatch` fails
+    the test: the prompt to remove the exception, or to look again. The last
+    check was added at BUG-15's review (`test-auditor`,
+    `privacy-security-reviewer`): `micromatch` sits under almost every glob
+    library, so pinning `braces`' direct dependents alone caught almost
+    nothing.
+  - The list of ignored IDs is pinned to exactly D-093's and D-104's, so a
+    third ID fails until it is added beside its own decision.
+  - **Not pinned:** a later decision superseding this one (removing the ID is
+    the loud path), and the copies under "Not covered" above.
   - **Revisit** when `braces` publishes a fix, or when the advisory changes.
+    Nothing tells the project when that happens today: Dependabot alerts are
+    off for the repository ("Dependabot alerts are disabled for this
+    repository", GitHub's API, 2026-10-03), against the setup guide in
+    `merge-rules.md`. Turning them on is the owner's (A-31); D-093 has the
+    same gap.
