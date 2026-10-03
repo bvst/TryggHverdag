@@ -3237,3 +3237,78 @@ any other path is work, not a candidate for the same treatment.
     - The test kit feeds the mutation check rather than judging it.
     - Of D-100's four filter entries, only the first three already needed the
       owner. The test kit is what the decision gives an owner.
+
+## D-101 — A journey's heartbeats come only from the device that started it (LOST-01)
+- **Date:** 2026-10-03 · **Status:** Accepted (owner, 2026-10-03; asked in
+  session with Claude's recommendation, the recommended option chosen)
+  · **Section:** 5 (SM-03, SEC-07; extends SM-01)
+- **Context:**
+  - SM-01 stores a journey's walker, but not the device that started it.
+  - Every request is authenticated per device (SEC-07), and a walker may have
+    more than one device.
+  - If any device of the walker's could send a journey's heartbeats, a second
+    device could keep the journey "in contact" while the phone that is
+    actually walking has gone silent. A tablet left at home is one example.
+    The lost-contact alert (LOST-02) would then never fire. That is the
+    failure this app exists to prevent.
+- **Decision:**
+  - A journey records the device that started it (`journeys.device_id`).
+  - A heartbeat for that journey from any other device of the same walker is
+    refused with 403 `NOT_THE_JOURNEYS_DEVICE` and changes nothing.
+  - A heartbeat for another walker's journey stays 404, as if it did not
+    exist (LOST-01's spec).
+- **Consequences:**
+  - LOST-01 changes SM-01's start path: the journey row stores the starting
+    device. The migration must be safe with journeys that already exist.
+  - A walker who changes phone mid-journey cannot carry on from the new
+    phone; the journey goes quiet and LOST-02 alerts. That is the safe
+    direction. Moving a journey to another device is not in scope; if it is
+    ever wanted, it needs a decision of its own.
+  - LOST-01-AC10 tests the refusal at L2, L3 and L6.
+
+## D-102 — The server's log adapter needs the owner (LOST-01)
+- **Date:** 2026-10-03 · **Status:** Accepted (owner, 2026-10-03; asked in
+  session with Claude's recommendation, the recommended option chosen)
+  · **Section:** 5/8 (PRIV-07, AR-11; extends D-092 to D-100)
+- **Context:**
+  - LOST-01 adds `apps/server/src/log.ts`, the server's one log adapter
+    (pino, D-032). It accepts only closed event types, so a location or a
+    phone number has no field to travel in. It is what keeps heartbeat data
+    out of logs (PRIV-07).
+  - A later change to it could open that door with no one but its author and
+    the AI reviewers seeing it.
+- **Decision:**
+  - `apps/server/src/log.ts` joins CODEOWNERS and `OWNER_APPROVAL_PATHS`.
+  - It does not join the ai-review `safety` filter. `privacy-security-reviewer`
+    already runs on every pull request (`applies: always`), and logging is in
+    its brief. Leaving the filter alone means LOST-01 does not edit
+    `ai-review.yml`, so CI's reviewers can run on it and it needs no hand
+    merge (D-075).
+- **Consequences:**
+  - LOST-01 changes `.github/CODEOWNERS` and `scripts/lib/merge-rules.mjs`,
+    both already owner-approved, and their tests.
+  - Every later change to the log adapter needs the owner.
+
+## D-103 — Starting a journey meets SM-08 without an event ID (LOST-01)
+- **Date:** 2026-10-03 · **Status:** Accepted (owner, 2026-10-03; asked in
+  session with Claude's recommendation, the recommended option chosen)
+  · **Section:** 5 (SM-08; D-090 item 2)
+- **Context:**
+  - SM-08 says: "Every event carries an ID. Duplicates have no effect."
+  - SM-01's start request carries no event ID. SM-01's spec left "an ID on
+    every event" to LOST-01, while D-090 and the roadmap scope LOST-01's
+    SM-08 work to heartbeats.
+  - A repeated start already has no effect. A walker has at most one unended
+    journey (SM-01), so a second start is refused with 409
+    `ALREADY_ON_A_JOURNEY` and the ID of the journey they already have.
+- **Decision:**
+  - The start request needs no event ID. Its duplicate is already harmless,
+    which is what SM-08 protects.
+  - SM-08 is read as: every event must be safe to receive twice. An event ID
+    is how heartbeats, and later events with no natural key, get there.
+  - Each later event (LOST-03, LOST-06, LOST-08) decides in its own task
+    whether it needs an ID.
+- **Consequences:**
+  - SM-01's route, its contract and its tests are unchanged.
+  - LOST-01 stays within D-090's scope: heartbeats carry an event ID, and a
+    repeated one has no effect.
