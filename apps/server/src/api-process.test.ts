@@ -17,12 +17,14 @@ import {
   apiPath,
   fakePostgres,
   syntheticCredential,
+  syntheticHeartbeat,
   syntheticUuid,
   type FakePostgresHandler,
   type FakePostgresQuery,
 } from '@trygghverdag/test-kit';
 import { createServer, type AddressInfo, type Socket } from 'node:net';
-import { describe, expect, test } from 'vitest';
+import process from 'node:process';
+import { describe, expect, test, vi } from 'vitest';
 import { startApiProcess } from './api-process.ts';
 
 /** A socket directory that does not exist: every query fails in milliseconds, offline. */
@@ -257,6 +259,187 @@ describe('BUG-12: what the process hands the API, seen from the database', () =>
       );
       expect(JSON.stringify(database.queries)).not.toContain(credential);
     } finally {
+      await api.stop();
+      await database.close();
+    }
+  });
+});
+
+describe('LOST-01: what the process hands the journey module for a heartbeat, seen from the database and from stdout', () => {
+  // The spec's process wiring (LOST-01, "The process wiring"): an empty
+  // store, a stand-in clock or a log that writes nowhere fail a heartbeat the
+  // same way a missing database does, so they are told apart here by what the
+  // fake database was asked, and what reached the process's own stdout.
+  const DATABASE_NOW = '2031-02-03 04:05:06.789+00';
+  const DATABASE_NOW_MS = Date.parse('2031-02-03T04:05:06.789Z');
+
+  /**
+   * The column names a select or a returning clause asks for, in order, as
+   * PostgreSQL names its answer's columns: an alias if there is one, else the
+   * column. Drizzle reads a select's row by position, so the fake answers by
+   * name, in the order asked, whatever order the adapter lists its fields in.
+   */
+  function askedFor(text: string): string[] {
+    const list =
+      /^\s*select\s+([\s\S]+?)\s+from\s/i.exec(text)?.[1] ??
+      /\sreturning\s+([\s\S]+)$/i.exec(text)?.[1];
+    if (list === undefined) {
+      return [];
+    }
+    const items: string[] = [];
+    let depth = 0;
+    let current = '';
+    for (const character of list) {
+      if (character === '(') depth += 1;
+      if (character === ')') depth -= 1;
+      if (character === ',' && depth === 0) {
+        items.push(current);
+        current = '';
+      } else {
+        current += character;
+      }
+    }
+    items.push(current);
+    return items.map((item) => {
+      const named = /("?)(\w+)\1\s*$/.exec(item.trim());
+      return named?.[2] ?? item.trim();
+    });
+  }
+
+  /** A row of these values, in the order the query asked for them. */
+  function rowOf(text: string, values: Record<string, string | null>) {
+    const columns = askedFor(text);
+    const missing = columns.filter((column) => !(column in values));
+    if (missing.length > 0) {
+      throw new Error(`the fake database has no ${missing.join(', ')} for: ${text}`);
+    }
+    return { columns, rows: [columns.map((column) => values[column] ?? null)] };
+  }
+
+  /** The fake database for one heartbeat, its journey in `state`. Every query not listed is refused. */
+  function heartbeatDatabase(state: 'ACTIVE' | 'ENDED') {
+    const device = { id: syntheticUuid(), userId: syntheticUuid() };
+    const journeyId = syntheticUuid();
+    const journey = {
+      id: journeyId,
+      walker_id: device.userId,
+      device_id: device.id,
+      state,
+      started_at: '2031-02-03 03:00:00+00',
+      last_heartbeat_at: null,
+    };
+    const handler: FakePostgresHandler = ({ text }) => {
+      if (/^(begin|commit|rollback)\b/i.test(text)) {
+        return { columns: [], rows: [] };
+      }
+      if (/\bfrom "?devices"?/i.test(text)) {
+        return { columns: ['id', 'user_id'], rows: [[device.id, device.userId]] };
+      }
+      if (/^insert into "?heartbeats"?/i.test(text)) {
+        return rowOf(text, { id: '1', journey_id: journeyId });
+      }
+      if (/^insert into "?positions"?/i.test(text)) {
+        return askedFor(text).length > 0
+          ? rowOf(text, { heartbeat_id: '1' })
+          : { columns: [], rows: [] };
+      }
+      if (/^update "?journeys"?/i.test(text)) {
+        return askedFor(text).length > 0 ? rowOf(text, journey) : { columns: [], rows: [] };
+      }
+      if (/\bfrom "?journeys"?/i.test(text)) {
+        return rowOf(text, journey);
+      }
+      if (/\bnow\(\)/i.test(text)) {
+        return { columns: ['now'], rows: [[DATABASE_NOW]] };
+      }
+      throw new Error(`the fake database has no answer for: ${text}`);
+    };
+    return { device, journeyId, handler };
+  }
+
+  async function sendHeartbeat(port: number, credential: string, body: unknown) {
+    return fetch(`http://127.0.0.1:${String(port)}${apiPath('heartbeats')}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  test('LOST-01-AC1: through the process, a heartbeat is timed by the database’s now() and written by the database store, in one begin…commit holding the journey’s row for update', async () => {
+    const credential = syntheticCredential();
+    const { journeyId, handler } = heartbeatDatabase('ACTIVE');
+    const database = await listeningFakePostgres(handler);
+    const api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+    const body = syntheticHeartbeat({ journeyId });
+
+    try {
+      const response = await sendHeartbeat(api.port, credential, body);
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ outcome: 'RECORDED' });
+      const texts = database.queries.map(({ text }) => text);
+      const index = (pattern: RegExp) => texts.findIndex((text) => pattern.test(text));
+      expect(texts.filter((text) => /\bnow\(\)/i.test(text))).toHaveLength(1);
+      // REL-01: the receive time is the database's, read before the journey is.
+      expect(index(/\bnow\(\)/i)).toBeLessThan(index(/\bfrom "?journeys"?/i));
+      const begin = index(/^begin\b/i);
+      const commit = index(/^commit\b/i);
+      const locked = index(/\bfrom "?journeys"?[\s\S]*\bfor update\b/i);
+      const inserted = index(/^insert into "?heartbeats"?/i);
+      expect(begin).toBeGreaterThan(-1);
+      expect(locked).toBeGreaterThan(begin);
+      expect(inserted).toBeGreaterThan(locked);
+      expect(index(/^insert into "?positions"?/i)).toBeGreaterThan(inserted);
+      expect(index(/^update "?journeys"?/i)).toBeGreaterThan(inserted);
+      expect(commit).toBeGreaterThan(index(/^update "?journeys"?/i));
+      // The heartbeat is written with the database's time, not this machine's.
+      const insert = database.queries[inserted];
+      expect(
+        insert?.values.some((value) => value !== null && Date.parse(value) === DATABASE_NOW_MS),
+      ).toBe(true);
+      expect(insert?.values).toContain(body.eventId);
+      expect(JSON.stringify(database.queries)).not.toContain(credential);
+    } finally {
+      await api.stop();
+      await database.close();
+    }
+  });
+
+  test('LOST-01-AC7: through the process, an ignored heartbeat’s line reaches the process’s own stdout, naming the journey and nothing of the heartbeat; nothing is written to the database', async () => {
+    const credential = syntheticCredential();
+    const { journeyId, handler } = heartbeatDatabase('ENDED');
+    const database = await listeningFakePostgres(handler);
+    // The log is made at start-up, as in production; the capture comes after.
+    const api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+    const body = syntheticHeartbeat({ journeyId });
+    const seen: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      seen.push(String(chunk));
+      return true;
+    });
+
+    try {
+      const response = await sendHeartbeat(api.port, credential, body);
+      spy.mockRestore();
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: 'JOURNEY_ENDED' });
+      const lines = seen
+        .join('')
+        .split('\n')
+        .filter((line) => line.includes('heartbeat_ignored'));
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0] ?? 'null')).toMatchObject({
+        event: 'heartbeat_ignored',
+        reason: 'JOURNEY_ENDED',
+        journeyId,
+      });
+      expect(seen.join('')).not.toContain(body.eventId);
+      expect(
+        database.queries.map(({ text }) => text).filter((text) => /^insert\b/i.test(text)),
+      ).toEqual([]);
+    } finally {
+      spy.mockRestore();
       await api.stop();
       await database.close();
     }

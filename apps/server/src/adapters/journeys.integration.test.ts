@@ -11,7 +11,15 @@
 // The users, devices and journeys a test needs are inserted directly, as the
 // spec says to: nothing in this task can create a user or a device, and
 // nothing can end a journey. Device rows hold hashCredential(credential), so
-// the real authenticator finds them.
+// the real authenticator finds them. Since D-101 every journey row names the
+// device that started it, so a journey inserted directly needs a device row.
+//
+// LOST-01 adds the heartbeat: the same shared behaviour suite runs its
+// heartbeat rules here, and the tests below prove what only the real tables
+// can: the database's own time, the row lock and the unique index that let
+// racing copies leave one, a heartbeat stored whole or not at all, the
+// constraints, the one place coordinates live, and an error cleaned of the
+// position before anything can print it (PRIV-07).
 //
 // PostgreSQL 15, staging's version, as deploy.integration.test.ts explains.
 // Needs Docker, like every *.integration.test.ts: CI's integration job runs
@@ -24,14 +32,28 @@ import {
   RACERS,
   apiPath,
   endTestPool,
+  fakeLog,
+  syntheticBatteryLevel,
   syntheticCredential,
+  syntheticEventId,
+  syntheticHeartbeat,
+  syntheticPosition,
   syntheticUuid,
+  toStoredPosition,
   type FakeJourneyState,
+  type FakeLog,
+  type HeartbeatAsStored,
+  type HeartbeatToRecord,
   type JourneyAsStored,
   type JourneyStoreUnderTest,
+  type PositionAsStored,
+  type SyntheticHeartbeat,
 } from '@trygghverdag/test-kit';
+import { sql } from 'drizzle-orm';
+import process from 'node:process';
+import { inspect } from 'node:util';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { createApi } from '../api.ts';
 import { JOURNEY_STATES, type JourneyState } from '../domain/journey.ts';
 import { createHealthService } from '../modules/health/service.ts';
@@ -39,7 +61,7 @@ import { createJourneyService } from '../modules/journeys/service.ts';
 import { databaseClock } from './clock.ts';
 import { createDatabase, createPool, type Database } from './db.ts';
 import { databaseDeviceAuthenticator, hashCredential } from './device-credentials.ts';
-import { databaseJourneyStore } from './journeys.ts';
+import { HeartbeatStoreError, databaseJourneyStore } from './journeys.ts';
 import { migrateDatabase } from './migrations.ts';
 import { databaseWorkerHeartbeats } from './worker-heartbeats.ts';
 
@@ -111,37 +133,50 @@ async function addUser(): Promise<string> {
   return id;
 }
 
-/** A user with a device, and the credential that device would send. */
-async function walker(): Promise<{ userId: string; deviceId: string; credential: string }> {
-  const userId = await addUser();
+/** A device of this user, and the credential it would send. */
+async function addDevice(userId: string): Promise<{ deviceId: string; credential: string }> {
   const deviceId = syntheticUuid();
   const credential = syntheticCredential();
   await connection().query(
     'insert into devices (id, user_id, credential_hash) values ($1, $2, $3)',
     [deviceId, userId, hashCredential(credential)],
   );
-  return { userId, deviceId, credential };
+  return { deviceId, credential };
 }
 
-/** A journey written straight into the tables, in any state, with its responders. */
+/** A user with a device, and the credential that device would send. */
+async function walker(): Promise<{ userId: string; deviceId: string; credential: string }> {
+  const userId = await addUser();
+  return { userId, ...(await addDevice(userId)) };
+}
+
+/**
+ * A journey written straight into the tables, in any state, with its
+ * responders, started from this device (D-101: `device_id` is not null).
+ */
 async function seedJourney({
   walkerId,
+  deviceId,
   state,
   responderIds,
   startedAt,
+  lastHeartbeatAt = null,
 }: {
   walkerId: string;
+  deviceId: string;
   state: FakeJourneyState;
   responderIds: readonly string[];
   startedAt: Date;
+  lastHeartbeatAt?: Date | null;
 }): Promise<string> {
   const id = syntheticUuid();
   const client = await connection().connect();
   try {
     await client.query('begin');
     await client.query(
-      'insert into journeys (id, walker_id, state, started_at) values ($1, $2, $3, $4)',
-      [id, walkerId, state, startedAt],
+      'insert into journeys (id, walker_id, device_id, state, started_at, last_heartbeat_at) ' +
+        'values ($1, $2, $3, $4, $5, $6)',
+      [id, walkerId, deviceId, state, startedAt, lastHeartbeatAt],
     );
     for (const responderId of responderIds) {
       await client.query(
@@ -191,6 +226,83 @@ async function journeysOf(walkerId: string): Promise<JourneyAsStored[]> {
   }));
 }
 
+/** Ends a journey directly: nothing in the code can end one yet. */
+async function endJourney(journeyId: string): Promise<void> {
+  await connection().query("update journeys set state = 'ENDED' where id = $1", [journeyId]);
+}
+
+/** The device `journeys.device_id` names for this journey, or null if there is no such journey. */
+async function deviceOf(journeyId: string): Promise<string | null> {
+  const result = await connection().query<{ device_id: string }>(
+    'select device_id::text as device_id from journeys where id = $1',
+    [journeyId],
+  );
+  return result.rows[0]?.device_id ?? null;
+}
+
+async function stateOf(journeyId: string): Promise<string | null> {
+  const result = await connection().query<{ state: string }>(
+    'select state::text as state from journeys where id = $1',
+    [journeyId],
+  );
+  return result.rows[0]?.state ?? null;
+}
+
+/** A moment as milliseconds since the epoch, in SQL, floored as a Date floors it. */
+const MS = (column: string) => `floor(extract(epoch from ${column}) * 1000)::bigint::text`;
+
+async function lastHeartbeatAt(journeyId: string): Promise<Date | null> {
+  const result = await connection().query<{ ms: string | null }>(
+    `select ${MS('last_heartbeat_at')} as ms from journeys where id = $1`,
+    [journeyId],
+  );
+  const ms = result.rows[0]?.ms;
+  return ms === undefined || ms === null ? null : new Date(Number(ms));
+}
+
+/** Every heartbeat of the journey, as the table holds it. Numbers read as double precision. */
+async function heartbeatsOf(journeyId: string): Promise<HeartbeatAsStored[]> {
+  const result = await connection().query<{
+    event_id: string;
+    received_ms: string;
+    battery_level: number | null;
+  }>(
+    `select event_id, ${MS('received_at')} as received_ms,
+            battery_level::float8 as battery_level
+       from heartbeats where journey_id = $1 order by id`,
+    [journeyId],
+  );
+  return result.rows.map((row) => ({
+    eventId: row.event_id,
+    receivedAt: new Date(Number(row.received_ms)),
+    batteryLevel: row.battery_level,
+  }));
+}
+
+/** Every position the journey's heartbeats carried, named by the heartbeat's event ID. */
+async function positionsOf(journeyId: string): Promise<PositionAsStored[]> {
+  const result = await connection().query<{
+    event_id: string;
+    latitude: number;
+    longitude: number;
+    accuracy_m: number;
+    recorded_ms: string;
+  }>(
+    `select h.event_id, p.latitude::float8 as latitude, p.longitude::float8 as longitude,
+            p.accuracy_m::float8 as accuracy_m, ${MS('p.recorded_at')} as recorded_ms
+       from positions p join heartbeats h on h.id = p.heartbeat_id
+      where h.journey_id = $1 order by h.id`,
+    [journeyId],
+  );
+  return result.rows.map((row) => ({
+    eventId: row.event_id,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    accuracyMeters: row.accuracy_m,
+    recordedAt: new Date(Number(row.recorded_ms)),
+  }));
+}
+
 /** The database's own now, to the millisecond, floored as a Date floors it. */
 async function databaseNowMs(): Promise<number> {
   const result = await connection().query<{ ms: string }>(
@@ -203,11 +315,11 @@ async function databaseNowMs(): Promise<number> {
 // The API, with every real adapter.
 // ---------------------------------------------------------------------------
 
-function realApi() {
+function realApi(log: FakeLog = fakeLog()) {
   const clock = databaseClock(database());
   return createApi({
     health: createHealthService({ clock, heartbeats: databaseWorkerHeartbeats(database()) }),
-    journeys: createJourneyService({ clock, journeys: databaseJourneyStore(database()) }),
+    journeys: createJourneyService({ clock, journeys: databaseJourneyStore(database()), log }),
     devices: databaseDeviceAuthenticator(database()),
   });
 }
@@ -253,8 +365,17 @@ describe('databaseJourneyStore, against the behaviour every journey store shares
   const underTest = (): JourneyStoreUnderTest => ({
     store: databaseJourneyStore(database()),
     addUser,
+    addDevice: async (userId) => (await addDevice(userId)).deviceId,
     seedJourney,
     journeysOf,
+    endJourney,
+    deviceOf,
+    stateOf,
+    lastHeartbeatAt,
+    heartbeatsOf,
+    positionsOf,
+    // Each run writes real rows, so fewer than against the fake.
+    propertyRuns: 15,
   });
 
   test.each(JOURNEY_STORE_BEHAVIOUR)(
@@ -305,6 +426,7 @@ describe('SM-01: starting a journey, on the real tables', () => {
     const later = await addUser();
     const journeyId = await seedJourney({
       walkerId: device.userId,
+      deviceId: device.deviceId,
       state: 'LOST_CONTACT',
       responderIds: [earlier],
       startedAt: EARLIER,
@@ -371,17 +493,23 @@ describe('SM-01: starting a journey, on the real tables', () => {
       // Every state the module lists but ENDED, read from the list rather
       // than written out, so a state added later is tried here the day it is
       // added, on both sides of the pair.
-      const walkerId = await addUser();
-      await seedJourney({ walkerId, state: existing, responderIds: [], startedAt: EARLIER });
+      const { userId: walkerId, deviceId } = await walker();
+      await seedJourney({
+        walkerId,
+        deviceId,
+        state: existing,
+        responderIds: [],
+        startedAt: EARLIER,
+      });
 
       for (const second of UNENDED_STATES) {
         await expect(
-          seedJourney({ walkerId, state: second, responderIds: [], startedAt: EARLIER }),
+          seedJourney({ walkerId, deviceId, state: second, responderIds: [], startedAt: EARLIER }),
           `${existing} then ${second}`,
         ).rejects.toMatchObject({ code: '23505', constraint: ONE_UNENDED_INDEX });
       }
       await expect(
-        seedJourney({ walkerId, state: 'ENDED', responderIds: [], startedAt: EARLIER }),
+        seedJourney({ walkerId, deviceId, state: 'ENDED', responderIds: [], startedAt: EARLIER }),
       ).resolves.toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
     },
   );
@@ -410,6 +538,7 @@ describe('SM-01: starting a journey, on the real tables', () => {
     const later = await addUser();
     const endedId = await seedJourney({
       walkerId: device.userId,
+      deviceId: device.deviceId,
       state: 'ENDED',
       responderIds: [earlier],
       startedAt: EARLIER,
@@ -620,25 +749,643 @@ describe('AR-04: the database and the state machine agree on the states', () => 
   });
 
   test('SM-01-AC15: every listed state is accepted by the database, and a state outside the list is refused', async () => {
+    // Each row names a device that exists (D-101), so the state is the only
+    // thing a refused row can be refused for.
     for (const state of JOURNEY_STATES) {
-      const walkerId = await addUser();
+      const { userId: walkerId, deviceId } = await walker();
       await expect(
         connection().query(
-          'insert into journeys (id, walker_id, state, started_at) values ($1, $2, $3, now())',
-          [syntheticUuid(), walkerId, state],
+          'insert into journeys (id, walker_id, device_id, state, started_at) ' +
+            'values ($1, $2, $3, $4, now())',
+          [syntheticUuid(), walkerId, deviceId, state],
         ),
         state,
       ).resolves.toBeDefined();
     }
     for (const state of ['PAUSED', 'ended', 'active', '']) {
-      const walkerId = await addUser();
+      const { userId: walkerId, deviceId } = await walker();
       await expect(
         connection().query(
-          'insert into journeys (id, walker_id, state, started_at) values ($1, $2, $3, now())',
-          [syntheticUuid(), walkerId, state],
+          'insert into journeys (id, walker_id, device_id, state, started_at) ' +
+            'values ($1, $2, $3, $4, now())',
+          [syntheticUuid(), walkerId, deviceId, state],
         ),
         state,
       ).rejects.toThrow();
     }
+  });
+});
+
+// ===========================================================================
+// LOST-01: the heartbeat, on the real tables.
+// ===========================================================================
+
+const HEARTBEAT_AT = new Date('2026-10-01T21:40:00.000Z');
+const HOUR = 3_600_000;
+
+/** A heartbeat sent through the API with every real adapter, as the phone sends it. */
+async function heartbeatThroughApi(
+  credential: string,
+  body: unknown,
+  api = realApi(),
+): Promise<{ status: number; body: unknown; text: string; headers: string }> {
+  const response = await api.request(apiPath('heartbeats'), {
+    method: 'POST',
+    headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  return {
+    status: response.status,
+    body: parsedOrNull(text),
+    text,
+    headers: [...response.headers].map(([name, value]) => `${name}: ${value}`).join('\n'),
+  };
+}
+
+/** A walker with a device, and an ACTIVE journey of theirs started from it, put in directly. */
+async function walking(lastHeartbeatAt: Date | null = null) {
+  const device = await walker();
+  const journeyId = await seedJourney({
+    walkerId: device.userId,
+    deviceId: device.deviceId,
+    state: 'ACTIVE',
+    responderIds: [await addUser()],
+    startedAt: EARLIER,
+    lastHeartbeatAt,
+  });
+  return { device, journeyId };
+}
+
+/** A heartbeat as the store takes it, received at HEARTBEAT_AT unless given. */
+function storeHeartbeat(
+  journeyId: string,
+  given: Partial<HeartbeatToRecord> = {},
+): HeartbeatToRecord {
+  return {
+    journeyId,
+    eventId: syntheticEventId(),
+    receivedAt: HEARTBEAT_AT,
+    batteryLevel: syntheticBatteryLevel(),
+    position: toStoredPosition(syntheticPosition()),
+    ...given,
+  };
+}
+
+/**
+ * Every text of a heartbeat a careless line could print: each coordinate in
+ * full and rounded to 3–7 decimals, the accuracy, the battery level, the
+ * phone's time (as sent, as the database prints it, and as a number), and the
+ * event ID.
+ */
+function markersOf(heartbeat: HeartbeatToRecord): string[] {
+  const { position } = heartbeat;
+  return [
+    ...new Set([
+      ...(position === null
+        ? []
+        : [position.latitude, position.longitude].flatMap((value) => [
+            String(value),
+            ...[3, 4, 5, 6, 7].map((decimals) => value.toFixed(decimals)),
+          ])),
+      ...(position === null
+        ? []
+        : [
+            String(position.accuracyMeters),
+            position.recordedAt.toISOString(),
+            position.recordedAt
+              .toISOString()
+              .replace('T', ' ')
+              .replace(/\.\d+Z$/, ''),
+            String(position.recordedAt.getTime()),
+          ]),
+      ...(heartbeat.batteryLevel === null ? [] : [String(heartbeat.batteryLevel)]),
+      heartbeat.eventId,
+    ]),
+  ];
+}
+
+function markersIn(text: string, markers: readonly string[]): string[] {
+  return markers.filter((marker) => text.includes(marker));
+}
+
+/** A heartbeat body for the API from a store-shaped one: the phone's time as RFC 3339. */
+function bodyOf(heartbeat: HeartbeatToRecord): SyntheticHeartbeat {
+  return {
+    journeyId: heartbeat.journeyId,
+    eventId: heartbeat.eventId,
+    batteryLevel: heartbeat.batteryLevel,
+    position:
+      heartbeat.position === null
+        ? null
+        : { ...heartbeat.position, recordedAt: heartbeat.position.recordedAt.toISOString() },
+  };
+}
+
+/**
+ * Everything written to stdout, stderr or the console while `run` runs, as
+ * the system tests capture it (SM-01-AC11's capture).
+ */
+async function captured<T>(run: () => Promise<T>): Promise<{ result: T; written: string }> {
+  const pieces: string[] = [];
+  const keep = (value: unknown): void => {
+    pieces.push(
+      typeof value === 'string'
+        ? value
+        : value instanceof Uint8Array
+          ? Buffer.from(value).toString('utf8')
+          : inspect(value, { depth: 10 }),
+    );
+  };
+  const spies = [
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      keep(chunk);
+      return true;
+    }),
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      keep(chunk);
+      return true;
+    }),
+    ...(['log', 'info', 'warn', 'error', 'debug', 'trace'] as const).map((name) =>
+      vi.spyOn(console, name).mockImplementation((...args: unknown[]) => {
+        args.forEach(keep);
+      }),
+    ),
+  ];
+  try {
+    return { result: await run(), written: pieces.join('\n') };
+  } finally {
+    for (const spy of spies) {
+      spy.mockRestore();
+    }
+  }
+}
+
+/** All of an error, as deep as it goes: its own properties, hidden ones included, and every cause. */
+function everythingIn(error: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; current !== undefined && current !== null && depth < 20; depth += 1) {
+    parts.push(inspect(current, { depth: Infinity, showHidden: true }));
+    if (current instanceof Error) {
+      // A const, so the narrowing to Error holds inside the callback below.
+      const failure = current;
+      parts.push(String(failure), failure.stack ?? '');
+      parts.push(
+        JSON.stringify(
+          Object.fromEntries(
+            Object.getOwnPropertyNames(failure).map((name) => [
+              name,
+              String(Reflect.get(failure, name) as unknown),
+            ]),
+          ),
+        ),
+      );
+      current = failure.cause;
+    } else {
+      current = undefined;
+    }
+  }
+  return parts.join('\n');
+}
+
+describe('SM-08, SM-09 and REL-01: a heartbeat stored once, in database-time order, on the real tables', () => {
+  test('LOST-01-AC1: a heartbeat through the API with every real adapter is 200 RECORDED: one heartbeat and one position as sent, received at the database’s time between two readings of now(), and last contact that same time', async () => {
+    const device = await walker();
+    const started = await start(device.credential, { responderIds: [await addUser()] });
+    expect(started.status).toBe(201);
+    const { journeyId } = started.body as StartedBody;
+    const body = syntheticHeartbeat({ journeyId, position: syntheticPosition() });
+
+    const before = await databaseNowMs();
+    const answer = await heartbeatThroughApi(device.credential, body);
+    const after = await databaseNowMs();
+
+    expect(answer.status).toBe(200);
+    expect(answer.body).toEqual({ outcome: 'RECORDED' });
+    const stored = await heartbeatsOf(journeyId);
+    expect(stored.map(({ eventId, batteryLevel }) => ({ eventId, batteryLevel }))).toEqual([
+      { eventId: body.eventId, batteryLevel: body.batteryLevel },
+    ]);
+    const receivedAt = stored[0]?.receivedAt.getTime() ?? Number.NaN;
+    expect(receivedAt).toBeGreaterThanOrEqual(before);
+    expect(receivedAt).toBeLessThanOrEqual(after);
+    expect((await lastHeartbeatAt(journeyId))?.getTime()).toBe(receivedAt);
+    expect(await positionsOf(journeyId)).toEqual(
+      body.position === null
+        ? []
+        : [
+            {
+              eventId: body.eventId,
+              latitude: body.position.latitude,
+              longitude: body.position.longitude,
+              accuracyMeters: body.position.accuracyMeters,
+              recordedAt: new Date(body.position.recordedAt),
+            },
+          ],
+    );
+    expect(await stateOf(journeyId)).toBe('ACTIVE');
+  });
+
+  test(`LOST-01-AC4: ${String(RACERS)} copies of one heartbeat at once through the API, on separate connections, ${String(RACE_ROUNDS)} times over: one RECORDED, every other DUPLICATE, none an error; one heartbeat and one position`, async () => {
+    const api = realApi();
+
+    for (let round = 0; round < RACE_ROUNDS; round += 1) {
+      const { device, journeyId } = await walking();
+      const body = syntheticHeartbeat({ journeyId, position: syntheticPosition() });
+
+      const answers = await Promise.all(
+        Array.from({ length: RACERS }, () => heartbeatThroughApi(device.credential, body, api)),
+      );
+
+      expect(
+        answers.map((answer) => answer.status),
+        `round ${String(round)}`,
+      ).toEqual(answers.map(() => 200));
+      expect(
+        answers.map((answer) => (answer.body as { outcome?: string } | null)?.outcome).sort(),
+        `round ${String(round)}`,
+      ).toEqual(['RECORDED', ...Array.from({ length: RACERS - 1 }, () => 'DUPLICATE')].sort());
+      expect(await heartbeatsOf(journeyId), `round ${String(round)}`).toHaveLength(1);
+      expect(await positionsOf(journeyId), `round ${String(round)}`).toHaveLength(1);
+    }
+  }, 120_000);
+
+  test(`LOST-01-AC5: ${String(RACE_ROUNDS)} times over, 20 heartbeats written at once on separate connections, started in an order unrelated to their receive times: last contact is the greatest receive time, each is stored once, and the latest is the greatest`, async () => {
+    const store = databaseJourneyStore(database());
+
+    for (let round = 0; round < RACE_ROUNDS; round += 1) {
+      const { journeyId } = await walking();
+      // 0, 7, 14, 1, 8, … seconds: every offset once, out of step with the
+      // order the writes start in, and more writes than connections.
+      const heartbeats = Array.from({ length: 20 }, (_, index) =>
+        storeHeartbeat(journeyId, {
+          receivedAt: new Date(HEARTBEAT_AT.getTime() + ((index * 7) % 20) * 1_000),
+        }),
+      );
+
+      const results = await Promise.all(
+        heartbeats.map((heartbeat) => store.recordHeartbeat(heartbeat)),
+      );
+
+      expect(results, `round ${String(round)}`).toEqual(
+        heartbeats.map(() => ({ outcome: 'recorded' })),
+      );
+      const greatest = new Date(HEARTBEAT_AT.getTime() + 19_000);
+      expect(await lastHeartbeatAt(journeyId), `round ${String(round)}`).toEqual(greatest);
+      expect(new Set((await heartbeatsOf(journeyId)).map((stored) => stored.eventId)).size).toBe(
+        20,
+      );
+      expect(await store.latestHeartbeatOf(journeyId)).toMatchObject({ receivedAt: greatest });
+    }
+  }, 120_000);
+
+  test('LOST-01-AC6: phone times hours ahead of the database clock, hours behind it, and with another offset are stored as given, beside their positions only; last contact is the database’s time', async () => {
+    const { device, journeyId } = await walking();
+    const databaseNow = await databaseNowMs();
+    const phoneTimes = [
+      new Date(databaseNow + 9 * HOUR).toISOString(),
+      new Date(databaseNow - 9 * HOUR).toISOString(),
+      '2001-02-03T07:08:09.123+02:00',
+    ];
+    const sent: SyntheticHeartbeat[] = [];
+
+    for (const recordedAt of phoneTimes) {
+      const body = syntheticHeartbeat({ journeyId, position: syntheticPosition({ recordedAt }) });
+      const answer = await heartbeatThroughApi(device.credential, body);
+      expect(answer.status, recordedAt).toBe(200);
+      sent.push(body);
+    }
+
+    expect((await positionsOf(journeyId)).map((position) => position.recordedAt)).toEqual(
+      phoneTimes.map((recordedAt) => new Date(recordedAt)),
+    );
+    const latest = (await heartbeatsOf(journeyId)).at(-1)?.receivedAt;
+    expect(await lastHeartbeatAt(journeyId)).toEqual(latest);
+    expect(Math.abs((latest?.getTime() ?? 0) - (await databaseNowMs()))).toBeLessThan(HOUR);
+    expect(sent).toHaveLength(3);
+  });
+});
+
+describe('SM-07: an ended journey, on the real tables', () => {
+  test('LOST-01-AC7: recordHeartbeat called directly with the journey ENDED in the table answers ended: no heartbeat, no position, last contact unchanged', async () => {
+    // The race the module cannot see: the journey ended after it was read.
+    const device = await walker();
+    const journeyId = await seedJourney({
+      walkerId: device.userId,
+      deviceId: device.deviceId,
+      state: 'ENDED',
+      responderIds: [],
+      startedAt: EARLIER,
+      lastHeartbeatAt: EARLIER,
+    });
+
+    const result = await databaseJourneyStore(database()).recordHeartbeat(
+      storeHeartbeat(journeyId),
+    );
+
+    expect(result).toEqual({ outcome: 'ended' });
+    expect(await heartbeatsOf(journeyId)).toEqual([]);
+    expect(await positionsOf(journeyId)).toEqual([]);
+    expect(await lastHeartbeatAt(journeyId)).toEqual(EARLIER);
+  });
+
+  test('LOST-01-AC7: through the API, a heartbeat for an ENDED journey is 409 JOURNEY_ENDED, stores nothing, and logs only the journey and the reason', async () => {
+    const device = await walker();
+    const journeyId = await seedJourney({
+      walkerId: device.userId,
+      deviceId: device.deviceId,
+      state: 'ENDED',
+      responderIds: [],
+      startedAt: EARLIER,
+    });
+    const log = fakeLog();
+
+    const answer = await heartbeatThroughApi(
+      device.credential,
+      syntheticHeartbeat({ journeyId }),
+      realApi(log),
+    );
+
+    expect(answer.status).toBe(409);
+    expect((answer.body as ErrorBody).code).toBe('JOURNEY_ENDED');
+    expect(await heartbeatsOf(journeyId)).toEqual([]);
+    expect(log.events).toEqual([
+      { event: 'heartbeat_ignored', reason: 'JOURNEY_ENDED', journeyId },
+    ]);
+  });
+});
+
+describe('SEC-07 and D-101: the device that started the journey, on the real tables', () => {
+  test('LOST-01-AC10: a journey started through the API stores the device that sent the start in journeys.device_id, and no other', async () => {
+    const phone = await walker();
+    const tablet = await addDevice(phone.userId);
+
+    const started = await start(phone.credential, { responderIds: [await addUser()] });
+
+    expect(started.status).toBe(201);
+    const { journeyId } = started.body as StartedBody;
+    expect(await deviceOf(journeyId)).toBe(phone.deviceId);
+    expect(await deviceOf(journeyId)).not.toBe(tablet.deviceId);
+  });
+
+  test('LOST-01-AC10: a heartbeat from the walker’s second device is 403 NOT_THE_JOURNEYS_DEVICE, stores nothing and leaves last contact; the phone’s next one is RECORDED', async () => {
+    const { device: phone, journeyId } = await walking(EARLIER);
+    const tablet = await addDevice(phone.userId);
+
+    const refused = await heartbeatThroughApi(tablet.credential, syntheticHeartbeat({ journeyId }));
+    const recorded = await heartbeatThroughApi(phone.credential, syntheticHeartbeat({ journeyId }));
+
+    expect(refused.status).toBe(403);
+    expect((refused.body as ErrorBody).code).toBe('NOT_THE_JOURNEYS_DEVICE');
+    expect(recorded.status).toBe(200);
+    expect(await heartbeatsOf(journeyId)).toHaveLength(1);
+    expect(await lastHeartbeatAt(journeyId)).not.toEqual(EARLIER);
+  });
+});
+
+describe('LOST-01: a heartbeat is stored whole or not at all, on the real tables', () => {
+  test('LOST-01-AC13: when writing the position fails, the answer is 500, no heartbeat row is left and last contact is unchanged; with the fault gone, the same event is RECORDED, not DUPLICATE', async () => {
+    const { device, journeyId } = await walking(EARLIER);
+    const body = syntheticHeartbeat({ journeyId, position: syntheticPosition() });
+    // A trigger this test creates and removes again, so the failure falls
+    // exactly between the heartbeat row and its position: the moment a
+    // missing transaction would show.
+    await connection().query(
+      `create function refuse_position_rows() returns trigger language plpgsql as $$
+         begin
+           raise exception 'position rows refused by a test trigger';
+         end
+       $$`,
+    );
+    await connection().query(
+      'create trigger refuse_position_rows before insert on positions ' +
+        'for each row execute function refuse_position_rows()',
+    );
+
+    try {
+      const answer = await heartbeatThroughApi(device.credential, body);
+
+      expect(answer.status).toBe(500);
+      expect(answer.text).not.toContain('refused by a test trigger');
+      expect(await heartbeatsOf(journeyId)).toEqual([]);
+      expect(await positionsOf(journeyId)).toEqual([]);
+      expect(await lastHeartbeatAt(journeyId)).toEqual(EARLIER);
+    } finally {
+      await connection().query('drop trigger if exists refuse_position_rows on positions');
+      await connection().query('drop function if exists refuse_position_rows()');
+    }
+
+    const again = await heartbeatThroughApi(device.credential, body);
+    expect(again.status).toBe(200);
+    expect(again.body).toEqual({ outcome: 'RECORDED' });
+    expect(await heartbeatsOf(journeyId)).toHaveLength(1);
+  });
+});
+
+describe('PRIV-07: not even when the database’s own error holds the position', () => {
+  test('LOST-01-AC15: controls first, then the adapter, then the API: the raw error holds the coordinates; the adapter’s HeartbeatStoreError holds a SQLSTATE and nothing of the heartbeat; the 500, the capture and the log hold none of it either', async () => {
+    const { device, journeyId } = await walking(EARLIER);
+    const heartbeat = storeHeartbeat(journeyId);
+    const position = heartbeat.position;
+    if (position === null) {
+      throw new Error('this test needs a heartbeat with a position');
+    }
+    const markers = markersOf(heartbeat);
+    // A check constraint every positions insert breaks. NOT VALID, so the
+    // rows other tests left do not stop it being added.
+    await connection().query(
+      'alter table positions add constraint refuse_every_position ' +
+        'check (latitude > 1000) not valid',
+    );
+
+    try {
+      // The control: the same insert through Drizzle without the adapter
+      // fails with an error whose message, or whose cause's detail, holds
+      // the coordinates. Without it, a clean error below would prove nothing.
+      const controlHeartbeat = await connection().query<{ id: string }>(
+        'insert into heartbeats (journey_id, event_id, received_at, battery_level) ' +
+          'values ($1, $2, now(), $3) returning id::text as id',
+        [journeyId, syntheticEventId(), heartbeat.batteryLevel],
+      );
+      let raw: unknown;
+      try {
+        await database().execute(
+          sql`insert into positions (heartbeat_id, latitude, longitude, accuracy_m, recorded_at)
+              values (${controlHeartbeat.rows[0]?.id}, ${position.latitude}, ${position.longitude},
+                      ${position.accuracyMeters}, ${position.recordedAt.toISOString()})`,
+        );
+      } catch (error) {
+        raw = error;
+      }
+      expect(raw, 'the control insert did not fail').toBeInstanceOf(Error);
+      // Drizzle puts the parameters in its own message, and PostgreSQL the
+      // row in its error's detail: on the error itself, or on its cause.
+      const rawError = raw as Error & { detail?: string; cause?: { detail?: string } };
+      const rawText = [rawError.message, rawError.detail, rawError.cause?.detail].join('\n');
+      expect(markersIn(rawText, [String(position.latitude), String(position.longitude)])).toEqual([
+        String(position.latitude),
+        String(position.longitude),
+      ]);
+      await connection().query('delete from heartbeats where id = $1', [
+        controlHeartbeat.rows[0]?.id,
+      ]);
+
+      // The adapter: a HeartbeatStoreError with the SQLSTATE, no cause, no
+      // other property, and nothing of the heartbeat however deep one looks.
+      let rejection: unknown;
+      try {
+        await databaseJourneyStore(database()).recordHeartbeat(heartbeat);
+      } catch (error) {
+        rejection = error;
+      }
+      expect(rejection).toBeInstanceOf(HeartbeatStoreError);
+      expect((rejection as { code?: unknown }).code).toBe('23514');
+      expect((rejection as Error).cause).toBeUndefined();
+      expect(
+        Object.getOwnPropertyNames(rejection).filter(
+          (name) => !['stack', 'message', 'code', 'name'].includes(name),
+        ),
+      ).toEqual([]);
+      expect(markersIn(everythingIn(rejection), markers)).toEqual([]);
+      expect(await heartbeatsOf(journeyId)).toEqual([]);
+
+      // The API: a 500 holding none of it, nothing captured holding any of
+      // it, and the one heartbeat_failed line carrying the SQLSTATE.
+      const log = fakeLog();
+      const { result: answer, written } = await captured(() =>
+        heartbeatThroughApi(device.credential, bodyOf(heartbeat), realApi(log)),
+      );
+
+      expect(answer.status).toBe(500);
+      expect(markersIn(`${answer.headers}\n${answer.text}`, markers)).toEqual([]);
+      expect(markersIn(written, markers)).toEqual([]);
+      expect(log.events).toEqual([{ event: 'heartbeat_failed', stage: 'store', code: '23514' }]);
+      expect(await heartbeatsOf(journeyId)).toEqual([]);
+      expect(await lastHeartbeatAt(journeyId)).toEqual(EARLIER);
+    } finally {
+      await connection().query(
+        'alter table positions drop constraint if exists refuse_every_position',
+      );
+    }
+  });
+});
+
+describe('the database agrees: one place for coordinates, and the rules held by constraints', () => {
+  test('LOST-01-AC18: the only columns named like a coordinate, in every table, are positions.latitude and positions.longitude', async () => {
+    const result = await connection().query<{ found: string }>(
+      `select table_schema || '.' || table_name || '.' || column_name as found
+         from information_schema.columns
+        where table_schema not in ('pg_catalog', 'information_schema')
+          and column_name ~* '(lat|lng|lon|coords|position|location)'
+        order by 1`,
+    );
+
+    expect(result.rows.map((row) => row.found)).toEqual([
+      'public.positions.latitude',
+      'public.positions.longitude',
+    ]);
+  });
+
+  test('LOST-01-AC18: journeys.last_heartbeat_at exists, and is null for a journey just started', async () => {
+    const device = await walker();
+    const started = await start(device.credential, { responderIds: [await addUser()] });
+    const { journeyId } = started.body as StartedBody;
+
+    const column = await connection().query<{ data_type: string }>(
+      `select data_type from information_schema.columns
+        where table_name = 'journeys' and column_name = 'last_heartbeat_at'`,
+    );
+    expect(column.rows.map((row) => row.data_type)).toEqual(['timestamp with time zone']);
+    expect(await lastHeartbeatAt(journeyId)).toBeNull();
+  });
+
+  test('LOST-01-AC18: a second heartbeat with the same (journey_id, event_id) is refused by the database itself', async () => {
+    const { journeyId } = await walking();
+    const eventId = syntheticEventId();
+    const insert = () =>
+      connection().query(
+        'insert into heartbeats (journey_id, event_id, received_at) values ($1, $2, now())',
+        [journeyId, eventId],
+      );
+    await insert();
+
+    await expect(insert()).rejects.toMatchObject({ code: '23505' });
+  });
+
+  test('LOST-01-AC18: a latitude, longitude, accuracy, battery level or event ID outside the contract’s rules is refused by the database itself', async () => {
+    const { journeyId } = await walking();
+    const heartbeatRow = (eventId: string, batteryLevel: number | string | null) =>
+      connection().query<{ id: string }>(
+        'insert into heartbeats (journey_id, event_id, received_at, battery_level) ' +
+          'values ($1, $2, now(), $3) returning id::text as id',
+        [journeyId, eventId, batteryLevel],
+      );
+    const { rows } = await heartbeatRow(syntheticEventId(), null);
+    const heartbeatId = rows[0]?.id;
+    const positionRow = (
+      latitude: number | string,
+      longitude: number | string,
+      accuracy: number | string,
+    ) =>
+      connection().query(
+        'insert into positions (heartbeat_id, latitude, longitude, accuracy_m, recorded_at) ' +
+          'values ($1, $2, $3, $4, now())',
+        [heartbeatId, latitude, longitude, accuracy],
+      );
+    // A data error (class 22) or a constraint (class 23): the database refused it.
+    const REFUSED = { code: expect.stringMatching(/^2[23]/) as unknown };
+
+    for (const [what, row] of [
+      ['latitude above 90', () => positionRow(90.0000001, 0, 1)],
+      ['latitude below -90', () => positionRow(-90.0000001, 0, 1)],
+      ['latitude not a number', () => positionRow('NaN', 0, 1)],
+      ['latitude infinite', () => positionRow('Infinity', 0, 1)],
+      ['longitude above 180', () => positionRow(0, 180.0000001, 1)],
+      ['longitude below -180', () => positionRow(0, -180.0000001, 1)],
+      ['longitude not a number', () => positionRow(0, 'NaN', 1)],
+      ['longitude infinite', () => positionRow(0, '-Infinity', 1)],
+      ['accuracy below 0', () => positionRow(0, 0, -0.125)],
+      ['accuracy not a number', () => positionRow(0, 0, 'NaN')],
+      ['accuracy infinite', () => positionRow(0, 0, 'Infinity')],
+      ['battery above 1', () => heartbeatRow(syntheticEventId(), 1.015625)],
+      ['battery below 0', () => heartbeatRow(syntheticEventId(), -0.015625)],
+      ['battery not a number', () => heartbeatRow(syntheticEventId(), 'NaN')],
+      ['an empty event ID', () => heartbeatRow('', null)],
+      ['an event ID of 65 characters', () => heartbeatRow('e'.repeat(65), null)],
+      ['an event ID with an underscore', () => heartbeatRow('synthetic_event', null)],
+      ['an event ID with a dot', () => heartbeatRow('synthetic.event', null)],
+      ['an event ID with a space', () => heartbeatRow('synthetic event', null)],
+      ['an event ID with a letter outside ASCII', () => heartbeatRow('synthetic-ø', null)],
+    ] as const) {
+      await expect(row(), what).rejects.toMatchObject(REFUSED);
+    }
+
+    // And the boundaries are accepted, so the refusals above are the rule's.
+    for (const [what, row] of [
+      ['latitude 90, longitude 180, accuracy 0', () => positionRow(90, 180, 0)],
+      ['battery 0', () => heartbeatRow(syntheticEventId(), 0)],
+      ['battery 1', () => heartbeatRow(syntheticEventId(), 1)],
+      ['an event ID of 64 characters', () => heartbeatRow('e'.repeat(64), null)],
+    ] as const) {
+      await expect(row(), what).resolves.toBeDefined();
+    }
+  });
+
+  test('LOST-01-AC18: journeys.device_id is not null and references devices (D-101)', async () => {
+    const column = await connection().query<{ is_nullable: string }>(
+      `select is_nullable from information_schema.columns
+        where table_name = 'journeys' and column_name = 'device_id'`,
+    );
+    const references = await connection().query<{ target: string }>(
+      `select confrelid::regclass::text as target
+         from pg_constraint
+        where conrelid = 'journeys'::regclass and contype = 'f'
+          and conkey = array[(select attnum from pg_attribute
+                               where attrelid = 'journeys'::regclass and attname = 'device_id')]`,
+    );
+
+    expect(column.rows).toEqual([{ is_nullable: 'NO' }]);
+    expect(references.rows).toEqual([{ target: 'devices' }]);
   });
 });
