@@ -1,42 +1,38 @@
 ---
 name: lost01-heartbeat-review
-description: LOST-01 review 2026-10-03 (PASS at ff583fb) — heartbeat route, D-101 device rule, AC20 migration refusal; open: phone-time range contract/fake vs PostgreSQL, unbounded row lock vs task 3 skip locked, no behavioural lock test
+description: LOST-01 review 2026-10-03 (PASS ff583fb, loop-1 re-check PASS 19db407) — heartbeat route, D-101 device rule, phone-time range, row lock deferred to task 3; open: 400 resent by SDK (spec says otherwise), lock bound + race test due in task 3
 metadata:
   type: project
 ---
 
-Reviewed origin/main...ff583fb on claude/busy-faraday-40n2zl. PASS (no Blocking).
+Reviewed origin/main...ff583fb on claude/busy-faraday-40n2zl. PASS. Loop-1 re-check at 19db407: PASS.
 
-Verified myself:
-- Fresh Stryker: domain 141/142 (journey.ts 72/73, survivor :134 unreachable-throw message), journeys 66/68
-  (service.ts :56 optional chaining for a null rejection, :110 `type: 'refused'` in start race — api.ts reads
-  reason not type), api-process 8/8. 0 timeouts, 0 kills by Vitest timeout (statusReason grep).
-- L2/L6: 361 + 179 tests green. eslint clean; modules/ clock rule fires on new Date() and Date.now().
-- PostgreSQL 16 refuses '0000-01-01T00:00:00.000Z' (22008) and '+010000-…' (JS toISOString of
-  9999-12-31T23:59:59-14:00). zod z.iso.datetime({offset:true}) accepts both inputs; fakeJourneyStore records them.
-- api-process.test.ts:387-394 pins `for update` inside begin…commit by SQL text; DATABASE_NOW is 2031, so a
-  process-clock mutant fails.
-- drizzle-orm 0.45.3 pg-core/dialect.js:60 runs all pending migrations in one transaction (AC20 is whole).
-- Only writer of last_heartbeat_at: adapters/journeys.ts recordHeartbeat, reached only via service after the
-  domain's walker/ENDED/device checks. api.ts is now in CODEOWNERS (closes BUG-10's open item).
+Loop 1 (verified myself at 19db407):
+- recordedAt refine: UTC year 1..9999 (heartbeats.ts), fake isStorableMoment mirrors it, behaviour suite has
+  out-of-range + edges, L6 REFUSED_HEARTBEATS has 3 new 400 rows asserting nothing stored, last contact unchanged.
+  Probed the schema: zod already refuses +0100, +01, :60, Feb 30, lower-case t/z; NaN year is refused by refine.
+- SQL is now greatest(last_heartbeat_at, $t): relies on PostgreSQL GREATEST ignoring NULLs; behaviour AC1 starts
+  from null last contact, so L3 holds it (CI only; no check runs existed at 19db407, no PR open yet).
+- sqlstateOf in domain/sqlstate.ts (owned, safety path, mutated), MAX_LINKS 8, used by adapter, service, log.ts.
+- log.ts throws on unlisted event (type-impossible today); journeyId null unless lower-case UUID, but the contract
+  lowercases journeyId (z.uuid().toLowerCase()) so SM-07's line keeps the ID.
+- Mutation reports: journey.ts 72/73 (:145 throw text), sqlstate.ts 25/26 (:38 < to <=), service.ts 61/62
+  (:103 'refused' literal in start race; api.ts switches on reason). 0 Timeout, 0 "timed out" kills.
+- Live ruleset 23864486: active, bypass_actors [], 13 required checks. gate:integrity fails locally only because
+  the script cannot read the API without a token; gh api through the proxy can.
 
-NOT verified: L3 (no Docker; local PG run killed, see reviewer-sandbox-limits), CI deploy-staging on AC20.
+Open (check before repeating):
+1. Spec LOST-01 line ~277 says the 400 avoids "a 500 the phone would resend for ever", but its own F8/item-3 text
+   says the SDK keeps ANY refused record and resends it; M3's 4xx list (403, 404, 409) omits 400. A 400 is also
+   unlogged server-side, where the 500 left heartbeat_failed 22008. Safe direction (false alarm), should-fix docs.
+2. Task 3 (LOST-02 watchdog): must bound the heartbeat row lock (idle_in_transaction_session_timeout /
+   lock_timeout, or no indefinite skip locked) with an L3 test, plus the L3 race test (heartbeat waits on an
+   uncommitted ENDED, answers ended, stores nothing). Recorded in spec item 6, adapters/journeys.ts header,
+   docs/progress/m2.md "Left for later tasks".
 
-Open should-fixes (check before repeating):
-1. Contract + fake accept phone times PostgreSQL refuses (year 0000; UTC year 10000): contract-valid body ->
-   500 loop -> SDK queue wedged -> false alarm. D-100 parity. Fix: bound recordedAt's UTC instant to years
-   0001-9999 in heartbeats.ts, mirror in fake-journey-store.ts, add both strings to tests.
-2. Journey row lock has no bound (createPool: no idle_in_transaction_session_timeout/lock_timeout). With task
-   3's `for update skip locked`, a frozen/partitioned API instance mid-heartbeat hides the journey from the
-   watchdog until TCP keepalive (~2 h Linux default) = missed alert. Spec item 6 claims skipping is "correct:
-   that phone is alive". Must be settled before task 3's watchdog merges.
-3. No behavioural L3 test of a heartbeat racing a concurrent state change (only text pin). Due with task 3 or
-   the first task that ends a journey.
+Earlier notes still true: reading 7 (LOST_CONTACT + heartbeat stays LOST_CONTACT) safe direction; migrate-then-start
+overlap (M5); credential rotation must keep device ID (D-101). capture.test.ts (PRIV-07 capture helper) is unowned.
 
-Notes: reading 7 (LOST_CONTACT + heartbeat stays LOST_CONTACT) deviates from 05-architecture's draft table,
-documented, safe direction; 400 encoder keys on status not code; migrate-then-start overlap breaks old code
-on NOT NULL adds (M5); credential rotation must keep device ID (D-101) for the login task.
-
-**How to apply:** on task 3 (LOST-02 watchdog) check items 2 and 3 first; on any timestamp field from the
-phone, check the PostgreSQL/JS range edge. Related: [[bug10-journey-safety-paths-review]],
-[[reviewer-sandbox-limits]].
+**How to apply:** on task 3 check item 2 first; on any phone-sent timestamp check the PostgreSQL/JS range edge;
+on M3's upload task check that the app handles 400 (drop + tell walker), not just 403/404/409.
+Related: [[bug10-journey-safety-paths-review]], [[reviewer-sandbox-limits]].

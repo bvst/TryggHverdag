@@ -274,7 +274,7 @@ These halves remain:
    | `position.latitude` | Finite, −90 to 90 |
    | `position.longitude` | Finite, −180 to 180 |
    | `position.accuracyMeters` | Finite, ≥ 0 |
-   | `position.recordedAt` | RFC 3339 with an offset, whose instant in UTC falls in the years 0001 to 9999. Any such time is accepted, however far it is from the database clock. Outside that range PostgreSQL's `timestamptz` refuses it (22008 for year 0; 22009, "time zone displacement out of range", for year 10000, read on PostgreSQL 16.13 by `test-author`), so the contract refuses it first, with a 400, rather than letting it become a 500 the phone would resend for ever (review loop 1, `safety-reviewer`) |
+   | `position.recordedAt` | RFC 3339 with an offset, whose instant in UTC falls in the years 0001 to 9999. Any such time is accepted, however far it is from the database clock. Outside that range PostgreSQL's `timestamptz` refuses it (22008 for year 0; 22009, "time zone displacement out of range", for year 10000, read on PostgreSQL 16.13 by `test-author`), so the contract refuses it first, with a 400 (review loop 1). What that gains is a truthful contract, which M3's L5 check of the real upload can test against, and no database error in the path. It does **not** stop the resending: the SDK keeps a refused record and resends it whatever the status (risk F8), so a 400 blocks that phone's queue until the M3 app acts on it, and it leaves no server log line where the 500 left `heartbeat_failed`. No realistic phone clock reaches year 0 or 10000, and from task 3 a blocked queue is a loud false alarm, which is the safe direction (`safety-reviewer`, loop 1 re-check) |
 
    - **Why that event-ID pattern:** it is the spike receiver's `RECORD_ID`
      (`spikes/background-safety/receiver/receiver.mjs`). Every SDK record in
@@ -1175,8 +1175,8 @@ holds it.
   - That is loud, not silent, but it would be a mass false alarm. M3 checks
     the app's real upload against `heartbeatRequestSchema` at L5 before it
     ships.
-  - Every 4xx (403, 404, 409) is one the app must act on, not retry for ever.
-    That is M3's.
+  - Every 4xx (400, 403, 404, 409) is one the app must act on, not retry for
+    ever: drop the record and tell the walker. That is M3's.
   - **A deploy to a database that holds journeys stops at the migration**
     (LOST-01-AC20). That is loud and leaves the database as it was, by
     design: no journey's device is guessed. None is expected on staging, and
