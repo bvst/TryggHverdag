@@ -26,4 +26,12 @@ scratchpad harness (`node <scratch>/mutate.mjs <mutants.mjs>`), written via Bash
   unless exactly 1. A mis-indented pattern once showed as "SURVIVED" before that check existed.
 - Report the assertion line, not the first line: tests that pass `output` as the expect message put it first.
 
+- **Code that does not exist yet:** a Vite plugin `resolveId` returning a scratch implementation's real
+  path (not a `\0` virtual id: those skip TS stripping) runs the new tests against a reference and against
+  wrong versions. A walk-the-chain test built from counting getters fails, not hangs, on an unbounded loop.
+- **Waits:** one `setImmediate` turn does not catch a write put off with `setTimeout(fn, 0)` (3 of 3 runs);
+  a timer turn then a check turn catches both (LOST-01 `captured()`).
+- **L3 without Docker:** test-auditor's PG16 stand-in (scratchpad `ta-lost01/`: `vitest.l3.config.mjs`,
+  `local-postgres.ts`, `pg/`), started with `unshare --user --map-user=1000 --map-group=1000 pg_ctl …`.
+
 Related: [[hook-quirks-for-test-author]], [[main-checkout-shared]]

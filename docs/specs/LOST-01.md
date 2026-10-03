@@ -274,7 +274,7 @@ These halves remain:
    | `position.latitude` | Finite, −90 to 90 |
    | `position.longitude` | Finite, −180 to 180 |
    | `position.accuracyMeters` | Finite, ≥ 0 |
-   | `position.recordedAt` | RFC 3339 with an offset, whose instant in UTC falls in the years 0001 to 9999. Any such time is accepted, however far it is from the database clock. Outside that range PostgreSQL's `timestamptz` refuses it (22008, or "time zone displacement out of range"), so the contract refuses it first, with a 400, rather than letting it become a 500 the phone would resend for ever (review loop 1, `safety-reviewer`) |
+   | `position.recordedAt` | RFC 3339 with an offset, whose instant in UTC falls in the years 0001 to 9999. Any such time is accepted, however far it is from the database clock. Outside that range PostgreSQL's `timestamptz` refuses it (22008 for year 0; 22009, "time zone displacement out of range", for year 10000, read on PostgreSQL 16.13 by `test-author`), so the contract refuses it first, with a 400, rather than letting it become a 500 the phone would resend for ever (review loop 1, `safety-reviewer`) |
 
    - **Why that event-ID pattern:** it is the spike receiver's `RECORD_ID`
      (`spikes/background-safety/receiver/receiver.mjs`). Every SDK record in
