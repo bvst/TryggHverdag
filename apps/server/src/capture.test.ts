@@ -24,8 +24,10 @@
 // controls in its own run as well, so each file that relies on the capture
 // proves it where it relies on it, L3 included. The name also keeps it among
 // the files the no-test-weakened check (RG-03) and test-auditor watch.
+import { heartbeatRequestSchema } from '@trygghverdag/contracts';
 import {
   syntheticHeartbeat,
+  syntheticPhoneTime,
   syntheticPosition,
   syntheticUuid,
   toStoredPosition,
@@ -268,6 +270,47 @@ describe('PRIV-07: the markers are every text a careless line could print of a h
       position.recordedAt,
       instant.toISOString(),
       instant.toISOString().replace('T', ' ').slice(0, 19),
+      String(instant.getTime()),
+      String(body.batteryLevel),
+      body.eventId,
+    ];
+    expect([...markers].sort()).toEqual([...new Set(expected)].sort());
+  });
+
+  test('LOST-01-AC14: a phone time written with an offset is a marker as sent, beside its ISO form, so a line that printed the body’s own text is found too', () => {
+    // The synthetic phone times are ISO already, where "as sent" and "as ISO"
+    // are one text, so a markersOf that dropped the as-sent form passed the
+    // test above (test-auditor, LOST-01 loop 1). Here the two differ: the
+    // same instant, written as a phone set to Norwegian summer time writes it.
+    const iso = syntheticPhoneTime();
+    const asSent = new Date(Date.parse(iso) + 2 * 3_600_000).toISOString().replace('Z', '+02:00');
+    const position = syntheticPosition({ recordedAt: asSent });
+    const body = syntheticHeartbeat({ journeyId: syntheticUuid(), position });
+    const instant = new Date(asSent);
+
+    // Controls: one instant in two texts, neither inside the other, and a body the contract takes.
+    expect(instant.toISOString()).toBe(iso);
+    expect(asSent).not.toBe(iso);
+    expect(asSent.includes(iso) || iso.includes(asSent)).toBe(false);
+    expect(heartbeatRequestSchema.safeParse(body).success).toBe(true);
+
+    const markers = markersOf(body);
+
+    expect(markers).toContain(asSent);
+    expect(markers).toContain(iso);
+    const expected = [
+      ...[position.latitude, position.longitude].flatMap((value) => [
+        String(value),
+        value.toFixed(3),
+        value.toFixed(4),
+        value.toFixed(5),
+        value.toFixed(6),
+        value.toFixed(7),
+      ]),
+      String(position.accuracyMeters),
+      asSent,
+      iso,
+      iso.replace('T', ' ').slice(0, 19),
       String(instant.getTime()),
       String(body.batteryLevel),
       body.eventId,

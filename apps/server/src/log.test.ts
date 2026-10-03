@@ -223,8 +223,21 @@ const TRAILED_UUID = syntheticUuid();
 const TRAILING_COORDINATE = String(syntheticCoordinate());
 const UNHYPHENATED_UUID = syntheticUuid().replaceAll('-', '');
 const LISTED_UUID = syntheticUuid();
+const SPACED_UUID = syntheticUuid();
+const LED_UUID = syntheticUuid();
+const LEADING_COORDINATE = String(syntheticCoordinate());
+const MESSAGED_UUID = syntheticUuid();
+const MESSAGE_LATITUDE = String(syntheticCoordinate());
+const MESSAGE_LONGITUDE = String(syntheticCoordinate());
 
-/** Values that are not a journey ID as the log writes one: a UUID, in lower case. */
+/**
+ * Values that are not a journey ID as the log writes one: a UUID, in lower case.
+ *
+ * Text after a UUID and text before one each have rows, so dropping either
+ * anchor of the log's pattern turns a row red: without its `^`, a value that
+ * only ends in a UUID would be written whole, and whatever came before the
+ * UUID with it (test-auditor, LOST-01 loop 1).
+ */
 const NOT_JOURNEY_IDS: { what: string; journeyId: () => unknown; markers: () => string[] }[] = [
   ...freeText().map(({ what, value, markers }) => ({
     what,
@@ -245,6 +258,22 @@ const NOT_JOURNEY_IDS: { what: string; journeyId: () => unknown; markers: () => 
     what: 'a UUID followed by a coordinate',
     journeyId: () => `${TRAILED_UUID} ${TRAILING_COORDINATE}`,
     markers: () => [TRAILED_UUID, TRAILING_COORDINATE],
+  },
+  {
+    what: 'a UUID after a space',
+    journeyId: () => ` ${SPACED_UUID}`,
+    markers: () => [SPACED_UUID],
+  },
+  {
+    what: 'a coordinate followed by a UUID',
+    journeyId: () => `${LEADING_COORDINATE} ${LED_UUID}`,
+    markers: () => [LEADING_COORDINATE, LED_UUID],
+  },
+  {
+    what: 'a failing-row message followed by a UUID',
+    journeyId: () =>
+      `Failing row contains (${MESSAGE_LATITUDE}, ${MESSAGE_LONGITUDE}): ${MESSAGED_UUID}`,
+    markers: () => [MESSAGE_LATITUDE, MESSAGE_LONGITUDE, 'Failing row', MESSAGED_UUID],
   },
   {
     what: 'a UUID without its hyphens',

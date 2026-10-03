@@ -1158,6 +1158,10 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         heartbeatFor(journeyId, { batteryLevel: 0 }),
         heartbeatFor(journeyId, { batteryLevel: 1 }),
         heartbeatFor(journeyId, { eventId: syntheticEventId().padEnd(64, 'f') }),
+        // The shortest event ID, and the one character allowed that is not a
+        // letter or a digit: a store, or a check constraint, that wanted one
+        // of those would refuse it (test-auditor, LOST-01 loop 1).
+        heartbeatFor(journeyId, { eventId: '-' }),
       ];
 
       for (const heartbeat of accepted) {

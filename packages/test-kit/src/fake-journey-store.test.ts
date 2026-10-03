@@ -134,6 +134,101 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
   });
 });
 
+// ---------------------------------------------------------------------------
+// The phone-time range, under zones other than UTC (test-auditor, LOST-01
+// loop 1). CI and the cloud session run in UTC, where a year read in local
+// time and one read in UTC are the same, so a fake that read the local year
+// passed the two range behaviours above. Run again under a zone east of UTC
+// and one west of it, an edge moves either way:
+//   - Europe/Oslo, the app's own: +01:00 at the end of 9999, and +00:53, its
+//     local mean time, in year 0, so both ends move forward a year;
+//   - Etc/GMT+12, twelve hours behind UTC at every date (the sign is POSIX's,
+//     the opposite of ISO's), so the start of 0001 moves back into year 0.
+// A zone Node does not know is taken as UTC without a word, so each run first
+// checks that its zone moved its edge. The test kit has no Node types, so the
+// process's environment is reached through globalThis, typed by what is used.
+// ---------------------------------------------------------------------------
+
+const ZONES_THAT_MOVE_AN_EDGE = [
+  { zone: 'Europe/Oslo', edge: '9999-12-31T23:59:59Z', utcYear: 9999, yearInZone: 10000 },
+  { zone: 'Etc/GMT+12', edge: '0001-01-01T00:00:00Z', utcYear: 1, yearInZone: 0 },
+];
+
+/** The process's environment: the one variable these tests change. */
+const environment = (globalThis as unknown as { process: { env: { TZ?: string } } }).process.env;
+
+/**
+ * Runs `run` with the process in this time zone, then puts the zone back as
+ * it was, whether `run` resolved or rejected. Node applies a change to TZ at
+ * once, to every Date read after it.
+ */
+async function inTimeZone(zone: string, run: () => Promise<void>): Promise<void> {
+  const before = environment.TZ;
+  environment.TZ = zone;
+  try {
+    await run();
+  } finally {
+    if (before === undefined) {
+      delete environment.TZ;
+    } else {
+      environment.TZ = before;
+    }
+  }
+}
+
+/** What the range behaviours' names start with: the criterion they hold. */
+const RANGE_CRITERION = 'LOST-01-AC18: ';
+
+/** The shared behaviours about the phone-time range: the ones a zone could change. */
+const PHONE_TIME_RANGE = JOURNEY_STORE_BEHAVIOUR.filter(({ name }) =>
+  name.includes('the years 0001 to 9999'),
+);
+
+describe('fakeJourneyStore reads the phone-time range in UTC, whatever zone the process runs in', () => {
+  test('LOST-01-AC18: (control) the range behaviours are found, both of them, so the runs below are not empty', () => {
+    expect(PHONE_TIME_RANGE.map(({ name }) => name)).toEqual([
+      'LOST-01-AC18: a phone time whose instant in UTC falls outside the years 0001 to 9999 is refused by the store, as PostgreSQL refuses it, and nothing is stored; the same event with a phone time inside them is then recorded',
+      'LOST-01-AC18: the first and the last instant of the years 0001 to 9999 in UTC are accepted as phone times, and stored exactly as given',
+    ]);
+  });
+
+  test.each(
+    ZONES_THAT_MOVE_AN_EDGE.flatMap((zone) =>
+      PHONE_TIME_RANGE.map(({ name, run }) => ({
+        ...zone,
+        behaviour: name.slice(RANGE_CRITERION.length),
+        run,
+      })),
+    ),
+  )(
+    'LOST-01-AC18: under $zone, as in UTC: $behaviour',
+    async ({ zone, edge, utcYear, yearInZone, run }) => {
+      await inTimeZone(zone, async () => {
+        // Control: the zone is in effect, and the year read in it differs at this edge.
+        expect(new Date(edge).getUTCFullYear(), edge).toBe(utcYear);
+        expect(new Date(edge).getFullYear(), `${edge} in ${zone}`).toBe(yearInZone);
+
+        await run(underTest());
+      });
+    },
+  );
+
+  test('LOST-01-AC18: (control) each zone is put back afterwards, whether the run passed or failed, so no other test runs in it', async () => {
+    const before = environment.TZ;
+    const yearBefore = new Date('9999-12-31T23:59:59Z').getFullYear();
+
+    for (const { zone } of ZONES_THAT_MOVE_AN_EDGE) {
+      await inTimeZone(zone, () => Promise.resolve());
+      await expect(
+        inTimeZone(zone, () => Promise.reject(new Error('the run failed'))),
+      ).rejects.toThrow('the run failed');
+    }
+
+    expect(environment.TZ).toBe(before);
+    expect(new Date('9999-12-31T23:59:59Z').getFullYear()).toBe(yearBefore);
+  });
+});
+
 describe('fakeJourneyStore, beyond the shared suite', () => {
   test('seeds a journey in any state, and hands back what it stored', () => {
     const { store, walkerId, deviceId } = withWalker();
@@ -613,9 +708,9 @@ describe('fakeJourneyStore: the device a journey starts from (D-101) and its hea
   // EVENT_ID_PATTERN and MAX_EVENT_ID_LENGTH from the contract, so there is
   // no copy left to hold. What it also checked stays checked: the shared
   // behaviour suite's two AC18 behaviours refuse an empty ID, 65 characters,
-  // `_`, `.`, a space and a non-ASCII letter, and accept 64 characters,
-  // against this fake and against PostgreSQL; the contract's own tests pin
-  // the pattern and the length.
+  // `_`, `.`, a space and a non-ASCII letter, and accept 64 characters and a
+  // lone `-`, against this fake and against PostgreSQL; the contract's own
+  // tests pin the pattern and the length.
 
   test('the test kit hands out the heartbeat builders beside the fake', () => {
     expect(kit.syntheticEventId).toBe(syntheticEventId);

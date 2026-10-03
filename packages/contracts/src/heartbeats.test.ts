@@ -21,6 +21,7 @@
 // kit's: positions inside 1° of 0° 0′, open sea, seven decimals, generated at
 // run time (RG-07). IDs come from node:crypto.
 import { randomInt, randomUUID } from 'node:crypto';
+import process from 'node:process';
 import { describe, expect, test } from 'vitest';
 import {
   EVENT_ID_PATTERN,
@@ -120,6 +121,45 @@ const PHONE_TIMES_IN_RANGE = [
     recordedAt: '9999-12-31T23:59:59+14:00',
   },
 ];
+
+/**
+ * Zones other than UTC, each with an edge of the years 0001 to 9999 that it
+ * moves: an instant whose year read in the zone is not its year in UTC.
+ *
+ * CI and the cloud session run in UTC, where a year read in local time and
+ * one read in UTC are the same, so reading the local year in place of the UTC
+ * year passed every range test (test-auditor, LOST-01 loop 1). Under these
+ * zones the two differ at an edge, so the same rows catch it. One zone east
+ * of UTC and one west of it, so an edge moves either way:
+ *   - Europe/Oslo, the app's own: +01:00 at the end of 9999, and +00:53, its
+ *     local mean time, in year 0, so both ends move forward a year;
+ *   - Etc/GMT+12, twelve hours behind UTC at every date (the sign is POSIX's,
+ *     the opposite of ISO's), so the start of 0001 moves back into year 0.
+ * A zone Node does not know is taken as UTC without a word, so each test
+ * first checks that its zone moved its edge, and fails if it did not.
+ */
+const ZONES_THAT_MOVE_AN_EDGE = [
+  { zone: 'Europe/Oslo', edge: '9999-12-31T23:59:59Z', utcYear: 9999, yearInZone: 10000 },
+  { zone: 'Etc/GMT+12', edge: '0001-01-01T00:00:00Z', utcYear: 1, yearInZone: 0 },
+];
+
+/**
+ * Runs `run` with the process in this time zone, then puts the zone back as
+ * it was. Node applies a change to TZ at once, to every Date read after it.
+ */
+function inTimeZone(zone: string, run: () => void): void {
+  const before = process.env['TZ'];
+  process.env['TZ'] = zone;
+  try {
+    run();
+  } finally {
+    if (before === undefined) {
+      delete process.env['TZ'];
+    } else {
+      process.env['TZ'] = before;
+    }
+  }
+}
 
 describe('SEC-07: the heartbeat request holds four fields, each checked', () => {
   test('LOST-01-AC11: MAX_EVENT_ID_LENGTH is 64, the spike receiver’s bound', () => {
@@ -237,6 +277,52 @@ describe('SEC-07: the heartbeat request holds four fields, each checked', () => 
       );
     },
   );
+
+  test.each(ZONES_THAT_MOVE_AN_EDGE)(
+    'LOST-01-AC11: the years are read in UTC, whatever zone the process runs in: under $zone, every phone time outside 0001 to 9999 in UTC is still refused',
+    ({ zone, edge, utcYear, yearInZone }) => {
+      inTimeZone(zone, () => {
+        // Control: the zone is in effect, and the year read in it differs at this edge.
+        expect(new Date(edge).getUTCFullYear(), edge).toBe(utcYear);
+        expect(new Date(edge).getFullYear(), `${edge} in ${zone}`).toBe(yearInZone);
+
+        for (const { what, recordedAt } of PHONE_TIMES_OUT_OF_RANGE) {
+          expect(accepts(withPosition(heartbeat(), (p) => ({ ...p, recordedAt }))), what).toBe(
+            false,
+          );
+        }
+      });
+    },
+  );
+
+  test.each(ZONES_THAT_MOVE_AN_EDGE)(
+    'LOST-01-AC11: the years are read in UTC, whatever zone the process runs in: under $zone, every phone time inside 0001 to 9999 in UTC is still accepted, at the edges too',
+    ({ zone, edge, utcYear, yearInZone }) => {
+      inTimeZone(zone, () => {
+        // Control: the zone is in effect, and the year read in it differs at this edge.
+        expect(new Date(edge).getUTCFullYear(), edge).toBe(utcYear);
+        expect(new Date(edge).getFullYear(), `${edge} in ${zone}`).toBe(yearInZone);
+
+        for (const { what, recordedAt } of PHONE_TIMES_IN_RANGE) {
+          expect(accepts(withPosition(heartbeat(), (p) => ({ ...p, recordedAt }))), what).toBe(
+            true,
+          );
+        }
+      });
+    },
+  );
+
+  test('LOST-01-AC11: (control) each zone above is put back afterwards, so no other test runs in it', () => {
+    const before = process.env['TZ'];
+    const yearBefore = new Date('9999-12-31T23:59:59Z').getFullYear();
+
+    for (const { zone } of ZONES_THAT_MOVE_AN_EDGE) {
+      inTimeZone(zone, () => undefined);
+    }
+
+    expect(process.env['TZ']).toBe(before);
+    expect(new Date('9999-12-31T23:59:59Z').getFullYear()).toBe(yearBefore);
+  });
 });
 
 /** Bodies the request schema must refuse, by what is wrong with them. */
