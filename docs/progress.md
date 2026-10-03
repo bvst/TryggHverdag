@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-03 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 in review** (task 2 of 8, [#60](https://github.com/bvst/TryggHverdag/pull/60)) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-03 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **LOST-02 in progress** (task 3 of 8) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -37,8 +37,8 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | | BUG-16 | `req:coverage` counts a requirement as tested when any test file names its ID, in a comment too: `mentions()` in `scripts/lib/requirements.mjs` searches the file's whole text. Found by CI's `test-auditor` on #60, which checked LOST-01's 20 criteria by hand and found a real test behind each | ⚪ **Queued**, for the owner to schedule. On `main` |
 | | BUG-17 | `android-e2e` fails before the app is installed: the emulator still reports `en-rUS` 120 s after the switch to nb-NO. Twice so far: #57 (job 110875720264) and #60 (job 111180346250). A re-run passed on #57 | ⚪ **Queued**, for the owner to schedule. `progress/m2.md` said a second time would make it a bug of its own |
 | | BUG-11 | The dependency audit accepts one advisory, GHSA-86w9-cpqp-85rv in `node-forge` (D-093) | ✅ **Done** — merged with SM-01 in [#53](https://github.com/bvst/TryggHverdag/pull/53) (`2db7046`). Its own pull request, [#54](https://github.com/bvst/TryggHverdag/pull/54), was closed as superseded: every file it held was already on `main` |
-| 2 | LOST-01 | Heartbeat, with or without position | 🟡 **In review**, [#60](https://github.com/bvst/TryggHverdag/pull/60), waits on the owner. Branch `claude/busy-faraday-40n2zl`. D-101 to D-103 (D-102 amended); 20 acceptance criteria; tests `d21afbd` then code `01de08b`; review loop 1 tests `601e528` then code `16a9514`, plus `14351d4`. All four session reviewers PASS, and the three blocking ones PASS again after loop 1. In CI on `f7a008d`: all five AI reviewers PASS; `integration` 103 of 103 on PostgreSQL 15; `mutation` every safety file ≥ 96 %, 0 timed out; `android-e2e` failed before the app was installed (BUG-17). `main`, with BUG-15, is merged in (`b6514af`). Record: `progress/m2.md` |
-| 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ⚪ Not started |
+| 2 | LOST-01 | Heartbeat, with or without position | ✅ **Done** — 2026-10-03, [#60](https://github.com/bvst/TryggHverdag/pull/60), merged as `fe384c5` after `urso-agent` approved; `main`'s tree is the reviewed head `5aa074c`. D-101 to D-103 (D-102 amended); 20 acceptance criteria. Reviews PASS in the session (all four, and the three blocking ones again after loop 1) and in CI (all five AI reviewers). In CI before the merge: `integration` 103 of 103 on PostgreSQL 15; `mutation` every safety file ≥ 96 %, 0 timed out. On `main` after the merge: `ci` 10 of 10 jobs passed (run 37144094720), and `deploy-staging` ran migration `0002` and passed its smoke test (run 37144094724). Record: `progress/m2.md` |
+| 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | 🟡 **Spec in progress.** Branch `claude/busy-faraday-40n2zl`. It must first bound the heartbeat's row lock (LOST-01's "Left for later tasks") |
 | 4 | LOST-03 | Back in contact | ⚪ Not started |
 | 5 | LOST-06 | "I'm on it" | ⚪ Not started |
 | 6 | LOST-07 | SMS escalation at 2 minutes | ⚪ Not started |
@@ -336,14 +336,13 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**LOST-01** (M2 task 2 of 8, the heartbeat) is in review as
-[#60](https://github.com/bvst/TryggHverdag/pull/60) and waits on the owner. On
-`f7a008d` every check passed except `android-e2e`, which failed before the app
-was installed (BUG-17). **BUG-15** is done
+**LOST-02** (M2 task 3 of 8, the lost-contact alert) is being specified.
+**LOST-01** is done ([#60](https://github.com/bvst/TryggHverdag/pull/60),
+`fe384c5`), and so is **BUG-15**
 ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`). **A-31**
 (Dependabot alerts are off) is the owner's. LOST-01's reviews leave items for
 later tasks, listed in `progress/m2.md` ("Left for later tasks"); the first is
-that task 3 must bound the heartbeat's row lock before it merges.
+that LOST-02 must bound the heartbeat's row lock before it merges.
 
 **For the owner, from CI's `test-auditor` on #60:** should
 `apps/server/src/log.ts` be mutation-tested? It is the one place that keeps

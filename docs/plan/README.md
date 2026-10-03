@@ -1,17 +1,21 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-02 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12 and BUG-14 done, LOST-01 in progress (D-090)
+**Last updated:** 2026-10-03 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15 and LOST-01 done, LOST-02 in progress (D-090)
 
-**Current section:** milestone M2, started 2026-10-01 with SM-01; LOST-01,
-the heartbeat, is task 2 of 8 and in progress
-(D-090; the task list is in [10-roadmap.md](10-roadmap.md)). SM-01 is done
+**Current section:** milestone M2, started 2026-10-01 with SM-01; LOST-02,
+the lost-contact alert, is task 3 of 8 and in progress
+(D-090; the task list is in [10-roadmap.md](10-roadmap.md)). LOST-01, the
+heartbeat, is done (#60, 2026-10-03; D-101 to D-103), and so is BUG-15, the
+dependency audit's braces advisory (#59, 2026-10-03; D-104). SM-01 is done
 (#53, 2026-10-02). BUG-10, the journey files under the owner's approval and the
 safety review (D-092, D-094 to D-097), is done (#56, 2026-10-02); so are
 BUG-12, the mutation gate's silent false green (D-098, D-099; #57), and
 BUG-14, the test kit and the mutation check's own files under the owner and
 the safety review (D-100; #58), both 2026-10-02. BUG-13 (`gate:full` miscounts
 the steps that did not run after a failure) is queued for the owner to
-schedule. M1 closed with all four roadmap items done:
+schedule, and so are BUG-16 (`req:coverage` counts an ID named in a comment)
+and BUG-17 (the Android emulator sometimes stays in English past the wait).
+M1 closed with all four roadmap items done:
 SPIKE-01 (S1–S8), Section 4 closed with a conditional GO for the location SDK
 (D-086, full results in [04b-spike-results.md](04b-spike-results.md)), and the
 Critical Alerts entitlement request drafted
