@@ -23,7 +23,7 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | JRN-05 | "I'm home" | must | ⚪ | 0 |
 | JRN-06 | Journeys never run forever | must | ⚪ | 0 |
 | JRN-07 | Automatic arrival | ⛔ parked | ⚪ | 0 |
-| LOST-01 | Heartbeat | must | 🟢 | 11 |
+| LOST-01 | Heartbeat | must | 🟢 | 13 |
 | LOST-02 | Lost-contact alert | must | ⚪ | 0 |
 | LOST-03 | Back in contact | must | ⚪ | 0 |
 | LOST-04 | Low battery warning | must | ⚪ | 0 |
@@ -57,13 +57,13 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | PRIV-04 | Retention: precise positions deleted ⚙️ 24 hours after a journey ends; alert records (who was alerted, when,… | must | ⚪ | 0 |
 | PRIV-05 | Personal data is stored inside the EEA, with a provider and region chosen in Section 4 (D-016). | must | ⚪ | 0 |
 | PRIV-06 | No third-party analytics or advertising SDKs. | must | ⚪ | 0 |
-| PRIV-07 | Logs and error reports never contain precise locations or phone numbers. | must | 🟢 | 3 |
+| PRIV-07 | Logs and error reports never contain precise locations or phone numbers. | must | 🟢 | 5 |
 | PRIV-08 | Encryption in transit and at rest. | must | ⚪ | 0 |
 | PRIV-09 | Users can see, export and delete their own data from within the app. | must | ⚪ | 0 |
 | PRIV-10 | A plain-language privacy notice in bokmål, shown before the first journey. | must | ⚪ | 0 |
 | PRIV-11 | A DPIA is written and kept in `docs/` before the private group starts. | must | ⚪ | 0 |
 | PRIV-12 | Members under 18 (D-017): the admin records only an age band at invitation (under 15 / 15–17 / 18+), never a… | must | ⚪ | 0 |
-| SM-01 | One active journey per walker. | must | 🟢 | 8 |
+| SM-01 | One active journey per walker. | must | 🟢 | 9 |
 | SM-02 | A journey needs at least one responder to start. | must | 🟢 | 4 |
 | SM-03 | Heartbeats keep a journey ACTIVE even without a position; "location unavailable" is a flag (REL-05). | must | 🟢 | 2 |
 | SM-04 | LOST_CONTACT → ENDED (home) is allowed, e.g. | must | ⚪ | 0 |

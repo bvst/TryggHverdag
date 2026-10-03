@@ -393,7 +393,7 @@ These halves remain:
      instance that froze mid-transaction would hold the row until PostgreSQL
      noticed the dead connection, and the watchdog would skip that journey
      the whole time: a missed alert that shows up nowhere. Nothing goes wrong
-     in this task, which has no watchdog. **Task 3 (LOST-02) must bound the
+     in this task, which has no watchdog. **Task 3, the lost-contact watchdog, must bound the
      lock before it merges**, with an L3 test that a stalled heartbeat
      transaction is ended and the row freed, or must not let `skip locked`
      skip a journey indefinitely (`safety-reviewer`, review loop 1; AR-06).

@@ -27,7 +27,7 @@
  * `lock_timeout`. An API instance that froze mid-transaction would hold the
  * row until PostgreSQL noticed the dead connection, and the watchdog would
  * skip that journey the whole time: a missed alert that shows up nowhere.
- * Task 3 (LOST-02) must bound the lock before it merges, or must not let
+ * Task 3, the lost-contact watchdog, must bound the lock before it merges, or must not let
  * `skip locked` skip a journey indefinitely (LOST-01's spec, approach item
  * 6; docs/progress/m2.md).
  *
