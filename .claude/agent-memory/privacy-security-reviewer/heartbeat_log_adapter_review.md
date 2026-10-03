@@ -29,3 +29,11 @@ First seen on LOST-01 (2026-10-03, head ff583fb). Verdict PASS with should-fixes
 **How to apply:** for any later task that binds a location or phone number: (1) run the probe above against the new route; (2) check every new error path is cleaned at its source or never printed; (3) check the capture tests wire the production log on the failure outcomes, or that a log.test pins exact lines; (4) check new free-string fields in LogEvent are shape-checked in log.ts.
 
 Related: [[merge-rules-codeowners-review]], [[reviewer-sandbox-quirks]], [[dependency-audit-ignore-review]]
+
+**Loop-1 re-check (2026-10-03, head 19db407): PASS, no findings above Notes.** What closed the should-fixes, and what to look at next time a similar loop lands:
+- log.ts now rebuilds each line from named fields, each through an allow-check (`journeyIdOf` canonical lower-case UUID, `reasonOf`, `stageOf`, `sqlstateOf({ code })` so only `code` of a fresh wrapper is read). The object handed to pino is fresh and holds only strings/null, so no `toJSON` or getter of the caller's event reaches pino. Unlisted event: fixed-text throw.
+- The shared `sqlstateOf` moved to `domain/sqlstate.ts`, which is under the owned `/apps/server/src/domain/` rule, so the log's code gate stayed owner-gated. Check this whenever log.ts delegates a check to a new file: the delegate must be owned too, or the D-102 choke point leaks.
+- api.ts's error-body encoder changed from `status === 400` to `code === 'BAD_REQUEST'`. Equivalent today: oRPC's default code table maps only BAD_REQUEST to 400, and no contract error map declares another 400. A future route-defined 400 with its own code would keep its own body (including any `data` the handler passes), so grep contract error maps for `status: 400` on later routes.
+- The service's `codeOf` became `sqlstateOf(error)`, walking the cause chain (bounded at 8 links, any object, not only Error), reading `code`/`cause` only. Drizzle-wrapped read failures now log their SQLSTATE instead of null.
+- The contract lower-cases `journeyId` (`z.uuid().toLowerCase()`), so the log's lower-case-only rule never nulls a real journey's ID.
+- Local `gate:integrity` in the cloud session reports 3 of 5: rulesets unreadable without a token. That is "could not run here", not a rule gap; do not report it as a finding.
