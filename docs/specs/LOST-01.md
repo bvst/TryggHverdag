@@ -5,9 +5,10 @@ half), SM-03, SM-07 (for heartbeats), SM-08 (for heartbeats), SM-09 (for
 heartbeats), PRIV-07 (for locations in the API process); SEC-07's heartbeat half
 · **Decisions:** D-021, D-030, D-031, D-032, D-033, D-036, D-042, D-068, D-075,
 D-077, D-086, D-089, D-090, D-091, D-092, D-094, D-095, D-096, D-097, D-098,
-D-099, D-100 · **Written:** 2026-10-02 · **Status:** 📝 Spec — three questions
-for the owner at the end. Q1 changes one criterion (LOST-01-AC10) and one
-column; Q2 and Q3 change no criterion.
+D-099, D-100, D-101, D-102, D-103 · **Written:** 2026-10-02 · **Finalised:**
+2026-10-03, with the owner's answers (D-101, D-102, D-103) · **Status:** 📝 Spec.
+One confirmation remains for the owner: how D-102 meets an existing gate test
+(see "Settled by the owner", at the end).
 
 ## Requirement
 
@@ -101,7 +102,8 @@ when:**
 - **SM-01's spec**, "Out of scope", sent four items here: validating
   heartbeats, the duplicate-event and arrival-order rules, the after-ended rule,
   and "whether a journey accepts heartbeats only from the device that started
-  it. Task 2 adds a column if so." The last one is Q1.
+  it. Task 2 adds a column if so." **D-101 answers it: yes,** only the device
+  that started the journey.
 
 ### Readings this spec makes
 
@@ -125,7 +127,9 @@ Each is stated so the reviewers can check it, not assumed quietly.
 3. **"No effect" (SM-08) includes not advancing last contact.** A resent event
    proves the phone can reach the server. It still changes nothing: SM-08 says
    no effect, and that is also what stops a replayed request from faking
-   contact (SEC-07). The cost is under "Risks".
+   contact (SEC-07). The cost is under "Risks". D-103 reads SM-08 as "every
+   event must be safe to receive twice"; for a heartbeat, which has no
+   natural key, the event ID is how it gets there.
 4. **"Database-time order" (SM-09) means three things:**
    - the receive time comes from the injected clock, which in the API is the
      database's;
@@ -158,7 +162,8 @@ Each is stated so the reviewers can check it, not assumed quietly.
 8. **SEC-07's heartbeat half:**
    - the existing credential middleware covers the new route;
    - the walker is always the device's own user;
-   - a device can only report on its own walker's journey;
+   - a device can only report on its own walker's journey, and only if it is
+     the device that started that journey (D-101);
    - the body is validated strictly.
 
    SM-01-AC9's test reads routes from the contract, so it calls the new route
@@ -235,7 +240,7 @@ These halves remain:
    | 200 | `{ "outcome": "DUPLICATE" }` | This journey already has this event ID; nothing changed (SM-08) |
    | 400 | `BAD_REQUEST`, fixed message, **no `data`** | The body fails the schema |
    | 401 | `UNAUTHORIZED` (unchanged, D-091) | No valid device credential |
-   | 403 | `NOT_THE_JOURNEYS_DEVICE` | **Pending Q1:** another device of the same walker |
+   | 403 | `NOT_THE_JOURNEYS_DEVICE` | Another device of the same walker (D-101). Nothing stored |
    | 404 | `JOURNEY_NOT_FOUND` | No such journey, or another walker's. One body for both, so it says nothing about other walkers |
    | 409 | `JOURNEY_ENDED` | The journey has ended (SM-07). Nothing stored |
    | 500 | unchanged | The clock, the read or the write failed. Nothing stored |
@@ -315,8 +320,8 @@ These halves remain:
      2. `ENDED` → ignored, `JOURNEY_ENDED` (SM-07). An ended journey is
         reported before anything else the heartbeat holds, as SM-01 reports an
         unended journey first.
-     3. **Pending Q1:** `deviceId` is not the journey's → refused,
-        `NOT_THE_JOURNEYS_DEVICE`.
+     3. `deviceId` is not the journey's starting device → refused,
+        `NOT_THE_JOURNEYS_DEVICE` (D-101).
      4. Otherwise → recorded. The state is unchanged: `ACTIVE` stays `ACTIVE`
         (SM-03), and `LOST_CONTACT` stays `LOST_CONTACT` until task 4
         (reading 7).
@@ -390,7 +395,7 @@ These halves remain:
 
    | Table | Columns | Constraints |
    |---|---|---|
-   | `journeys` (changed) | + `last_heartbeat_at` (database time, null until the first heartbeat); + **pending Q1:** `device_id` | `device_id` not null, references `devices` |
+   | `journeys` (changed) | + `last_heartbeat_at` (database time, null until the first heartbeat); + `device_id`, the device that started the journey (D-101) | `device_id` not null, no default, references `devices` |
    | `heartbeats` (new) | `id` (bigint identity: the arrival order), `journey_id`, `event_id`, `received_at` (database time), `battery_level` (null = unknown) | `journey_id` references `journeys`; **unique (`journey_id`, `event_id`)**; `event_id` matches the contract's pattern; `battery_level` from 0 to 1; an index on (`journey_id`, `received_at` desc, `id` desc) for the latest |
    | `positions` (new) | `heartbeat_id`, `latitude`, `longitude` (double precision), `accuracy_m`, `recorded_at` (**the phone's clock**, a label only) | `heartbeat_id` is the primary key and references `heartbeats`; latitude, longitude and accuracy are bounded as in the contract |
 
@@ -402,9 +407,55 @@ These halves remain:
      exactly that.
    - **Battery is on `heartbeats`, not `positions` (as the data-model sketch
      has it).** A heartbeat without a position still reports its battery.
-   - **Staging holds no journeys** (D-091, SM-01-AC13), so adding a not-null
-     `device_id` is safe there. If a row did exist, the migration would fail
-     in the pre-run hook, and the deploy would stop loudly (D-077, item 12).
+   - **The start path records its device (D-101).** `api.ts` hands the
+     module `context.device.deviceId` beside the walker, and
+     `JourneyService.start` hands it to `insertStarted`, which writes it in the
+     same transaction as the journey and its responders. SM-01's request,
+     answers and contract do not change (D-103). The device is never read from
+     the body.
+
+   **What the migration does with journeys that already exist (D-101: "the
+   migration must be safe with journeys that already exist").** It refuses to
+   run. Nothing is backfilled, ended or deleted:
+   - `device_id` is added `not null`, with **no default and no `update`**.
+     PostgreSQL then refuses the `alter` if any journey row exists
+     (`not_null_violation`, SQLSTATE 23502, naming `device_id`).
+   - **Read, not run:** drizzle-orm 0.45.3 applies every pending migration in
+     one transaction (`pg-core/dialect.js`, line 60, `session.transaction`).
+     So the refusal rolls back the whole of `0002`: no `device_id`, no
+     `heartbeats`, no `positions`, and the migrations journal still ends at
+     `0001`. The database is left exactly as it was.
+   - On Clever Cloud the migration is the pre-run hook, so the deploy stops
+     there (D-077, item 12) and the `deploy-staging` job goes red. New code
+     never starts against the old schema.
+
+   **Why refuse rather than fill in.** No record says which device started an
+   existing journey: SM-01 stores the walker, not the device. Any value written
+   in would be a guess, and a wrong guess is exactly D-101's failure:
+   - a device that is not walking would be accepted, and could hide the
+     walking phone's silence (a missed alert);
+   - or the walking phone would be refused, and its journey would go silent (a
+     false alarm).
+
+   Even "the walker's only device" is a guess: rows put in by hand or by a
+   test cannot be told apart from rows the API wrote. The other two ways out
+   are worse:
+   - **ending** existing journeys would silently stop protection for someone
+     who believes they are being watched;
+   - **deleting** them would destroy records without anyone deciding to.
+
+   **What is expected, and what is not known.** No journey can exist on
+   staging: nobody can hold a credential before the login task (D-091), the
+   migrations create empty tables (SM-01-AC13), and staging's only caller is
+   the health smoke test. So the migration is expected to pass there. That
+   cannot be checked from a session (sessions never reach
+   `api.clever-cloud.com`); the first deploy's job log is the evidence.
+   Production does not exist yet (M5). If the migration ever does refuse,
+   what to do with those journeys is a decision for the owner, not a default
+   in the code.
+
+   LOST-01-AC20 proves both halves: the refusal, whole, with a journey present,
+   and a clean run without one.
 
 8. **The log: the first log lines this server writes about a request.**
    - **A `Log` port** (`ports.ts`) takes a **closed union of events**, and
@@ -432,6 +483,11 @@ These halves remain:
      - It lives at `src/` beside `redact.ts`, not in `adapters/`. That way
        `vitest.coverage.config.mjs` measures it; it excludes `adapters/` by
        design.
+     - **It needs the owner's approval (D-102).** This pull request adds
+       `/apps/server/src/log.ts` to `.github/CODEOWNERS` and to
+       `OWNER_APPROVAL_PATHS` in `scripts/lib/merge-rules.mjs`. It does
+       **not** add it to the ai-review `safety` filter, so `ai-review.yml` is
+       not edited. See "Owner approval for the log adapter" in the test plan.
    - **A recording `fakeLog()`** goes in the test kit.
    - **The module** takes `log` from `createJourneyService({ clock, journeys,
      log })`. `api-process.ts` wires the real one. `createApi`'s dependencies
@@ -480,10 +536,11 @@ refine a name only with `test-author`, before the tests are written.
     'JOURNEY_ENDED' }`, and `{ type: 'refused', reason: 'JOURNEY_NOT_FOUND' |
     'NOT_THE_JOURNEYS_DEVICE' }`.
 - **`ports.ts`:** `JourneyStore` gains `journeyForHeartbeat`, `recordHeartbeat`
-  and `latestHeartbeatOf`. Pending Q1, `insertStarted` gains `deviceId`. `Log`
+  and `latestHeartbeatOf`. `insertStarted` gains `deviceId` (D-101). `Log`
   and `LogEvent` are new.
 - **`modules/journeys/`:** `createJourneyService({ clock, journeys, log })`,
-  with `heartbeat({ walkerId, deviceId, heartbeat })`.
+  with `heartbeat({ walkerId, deviceId, heartbeat })`, and `start({ walkerId,
+  deviceId, responderIds })` (D-101).
 - **`adapters/journeys.ts`:** `HeartbeatStoreError`.
 - **`log.ts`:** `createLog({ write? })`.
 - **The test kit:**
@@ -599,7 +656,7 @@ location, and reported first.** *(SM-07)*
   `{ event: 'heartbeat_ignored', reason: 'JOURNEY_ENDED', journeyId: J }`. It
   holds nothing of the heartbeat (LOST-01-AC14)
 - **And** the answer is the same whatever else the heartbeat holds: an event ID
-  J already has, or (pending Q1) another device of W's
+  J already has, or another device of W's (D-101)
 - **And when** J ends between the module's read and the store's write (L3: the
   store is called directly with J `ENDED` in the table; L2: the fake answers
   `ended`), the outcome, the log line and "nothing stored" are the same.
@@ -621,15 +678,17 @@ location, and reported first.** *(SM-07)*
 - **And** nothing is stored, and K's heartbeats and last contact are unchanged.
 
 **LOST-01-AC10 — Only from the device that started the journey.** *(SEC-07;
-pending Q1. If the owner chooses "any device of the walker", this criterion is
-removed before the tests are written.)*
+D-101)*
 - **Given** W has a second device D2, and J was started from D
 - **When** D2 sends a heartbeat for J
 - **Then** the answer is 403 `NOT_THE_JOURNEYS_DEVICE`, and nothing is stored
 - **And** J's last contact is unchanged, so a device that is not the walking
   phone can never hide that phone's silence
-- **And** a journey started through the API records its starting device. This
-  is checked at L6 and at L3.
+- **And** a journey started through the API records the device that sent the
+  start, and no other: at L6 in the fake store, and at L3 in
+  `journeys.device_id`
+- **And** D2's refusal holds whatever D2's heartbeat holds, while D's next
+  heartbeat for J is `RECORDED`.
 
 ### Validated, and nothing echoed (SEC-07, §4.5)
 
@@ -661,8 +720,8 @@ or value from the request.** *(LOST-01, §4.5's warning)*
   - inside a body that is not JSON;
   - in its spelling variants (`backgroundGeolocation`,
     `BACKGROUND-GEOLOCATION`)
-- **When** each is sent, and when the route answers 200, 400, 401, 403
-  (pending Q1), 404, 409 and 500
+- **When** each is sent, and when the route answers 200, 400, 401, 403, 404,
+  409 and 500
 - **Then** no answer's headers or body match `/background[_-]?geolocation/i`
 - **And** every 400 body is exactly the fixed `BAD_REQUEST` body, with no
   `data`, whatever the request held
@@ -701,7 +760,7 @@ a 500, never a 2xx, reported in one line.** *(LOST-01)*
   - duplicate;
   - ended;
   - not found;
-  - 403 (pending Q1);
+  - another device's 403;
   - each 400 of LOST-01-AC11;
   - 401;
   - a store failure whose error message holds the markers;
@@ -745,7 +804,7 @@ heartbeat included.** *(SM-03, SM-07; extends SM-01-AC14)*
 - **Then** the transition table holds an expectation for each pair:
   - none, `ACTIVE`, `LOST_CONTACT` and `ENDED`, each with `heartbeat`;
   - another walker's journey;
-  - (pending Q1) another device.
+  - another device of the same walker (D-101).
 
   Each pair returns exactly that outcome, with the order of approach item 4
 - **And** a pair the lists create but the table lacks fails, naming the pair
@@ -774,12 +833,32 @@ rules held by constraints.** *(SM-08, SM-09, PRIV-07)*
 authentication.** *(LOST-01)*
 - **Given** the generated OpenAPI document
 - **Then** it has `POST /heartbeats` under the `/v1` server, with responses
-  200, 400, 401, 404, 409 and (pending Q1) 403
+  200, 400, 401, 403, 404 and 409
 - **And** it requires the bearer scheme on the route
 - **And** the committed `openapi.json` equals what the contract generates
 - **And** `pnpm run api:diff` is run. With `packages/contracts/released/` empty
   it compares nothing, and the pull request records that as "not compared",
   never as "passed".
+
+### The migration (D-101)
+
+**LOST-01-AC20 — A database that already holds a journey refuses the
+migration, whole, rather than guess its device.** *(LOST-01; D-101)*
+- **Given** a PostgreSQL 15 database (staging's version) migrated up to
+  `0001` only, holding one synthetic user, one device and one journey
+- **When** the migrations are run, as the pre-run hook runs them
+- **Then** they reject, and the error, or the PostgreSQL error in its cause
+  chain, carries SQLSTATE 23502 and names `device_id`
+- **And** the database is exactly as it was: the journey row unchanged, no
+  `journeys.device_id`, no `heartbeats` or `positions` table, and the
+  migrations journal still ending at `0001`
+- **And** no journey has been ended, deleted or given a device
+- **And**, as the control: the same database without the journey migrates
+  cleanly, and `journeys.device_id` is then `not null` and references
+  `devices`
+- **And** the committed `0002_*.sql` adds `device_id` with no `default` and
+  holds no `update` of `journeys` (read from the file, so a backfill added
+  later fails here).
 
 ## Test plan
 
@@ -794,7 +873,7 @@ authentication.** *(LOST-01)*
 | AC7 | L2, L6, L3 | domain test; system test with `fakeLog()`; behaviour suite | `ENDED` seeded; the race through the store directly. **Names SM-07** |
 | AC8 | L2, L6 | domain test; system test | `LOST_CONTACT` seeded. **Names SM-03** |
 | AC9 | L2, L6 | domain test; system test | **Names SEC-07** |
-| AC10 | L2, L6, L3 | domain test; system test; integration test | Pending Q1. **Names SEC-07** |
+| AC10 | L2, L6, L3 | domain test; system test; integration test | A second device registered for the same walker; the starting device read back. **Names SEC-07** |
 | AC11 | L2, L6 | `packages/contracts/src/heartbeats.test.ts` (new); system test | Each refused form and each boundary. **Names SEC-07** |
 | AC12 | L6 | system test | Every outcome, with the marker in each position |
 | AC13 | L3, L6 | integration test (a trigger the test creates and removes, as SM-01-AC8's does); system test (`failWith`) | |
@@ -804,6 +883,7 @@ authentication.** *(LOST-01)*
 | AC17 | L1, L2 | `tsc`; domain test | Table typed with `satisfies` over the lists, plus a run-time check over them |
 | AC18 | L3 | integration test | `information_schema` and inserts that break each constraint |
 | AC19 | L2, L4 | `packages/contracts/src/openapi.test.ts`; `pnpm run api:diff` | L4 compares nothing today and says so |
+| AC20 | L3 | `apps/server/src/deploy.integration.test.ts` (PostgreSQL 15) | Migrate a copy of the migrations folder trimmed to `0000`–`0001`, insert the journey directly, then run the real folder. The SQL check reads `0002_*.sql` |
 
 **The process wiring** (no separate criterion). `api-process.test.ts` gains a
 heartbeat through `startApiProcess` against the test kit's fake PostgreSQL
@@ -815,6 +895,41 @@ server. It shows three things:
 
 That is what kills the mutants of the new wiring in `api-process.ts` (BUG-12's
 lesson: an empty service fails with the same 500 as a missing database).
+
+### Owner approval for the log adapter (D-102): in the test plan, not an AC
+
+**Decided: not an acceptance criterion.** It is a rule about who approves a
+change, not a behaviour of the heartbeat. The tests that hold it are gate tests
+in `scripts/`, which `.claude/rules/tests.md` exempts from naming a
+requirement. A `LOST-01-ACn` for it would make `req:coverage` count a
+CODEOWNERS line as heartbeat coverage, which is the decorative traceability
+D-074 warns against. BUG-10 and BUG-14 held D-092 to D-100 the same way. So
+the count stays at twenty.
+
+**What changes:**
+- `.github/CODEOWNERS`: a line `/apps/server/src/log.ts @bvst @urso-agent`,
+  with a comment citing D-102.
+- `scripts/lib/merge-rules.mjs`: `'/apps/server/src/log.ts'` in
+  `OWNER_APPROVAL_PATHS`, with the same comment.
+- `scripts/gate.test.mjs` (test-author), following BUG-10's `D097_FILES`
+  tests:
+  - `log.ts` is tracked by git and is in `OWNER_APPROVAL_PATHS`;
+  - under GitHub's last-match rule, the line of `.github/CODEOWNERS` that
+    matches it names `@bvst @urso-agent`, and `reviewCodeowners` finds every
+    owner-approval path owned (`gate:integrity`'s check, CI-01);
+  - it is **not** in the ai-review `safety` filter, which pins D-102's choice
+    so a later change has to show itself in a test.
+- **Not changed:** `.github/workflows/ai-review.yml`. CI's reviewers can run on
+  this pull request, and no hand merge is needed (D-075).
+
+**An existing gate test conflicted with D-102 as first written; D-102's
+amendment settles it.** `scripts/gate.test.mjs`, "the safety filter in
+ai-review.yml matches the paths the owner must approve" (lines 503–521, read
+2026-10-03), requires every `/apps/` entry of `OWNER_APPROVAL_PATHS` to be in
+the `safety` filter. With `log.ts` owned and left out of the filter, that test
+would fail. The owner chose a named exception, pinned exactly to
+`['/apps/server/src/log.ts']` (D-102, amended 2026-10-03; "Settled by the
+owner", item 4).
 
 ### How "none of it reaches a log" is proven
 
@@ -858,11 +973,20 @@ lesson: an empty service fails with the same 500 as a missing database).
   - `openapi.test.ts`'s pinned path list, `['/health', '/journeys']`;
   - the domain test's `JOURNEY_EVENTS` (exactly `start`), which SM-01-AC14
     holds;
-  - the behaviour-name pin in `fake-journey-store.test.ts`.
+  - the behaviour-name pin in `fake-journey-store.test.ts`;
+  - **D-101's device on the start path:** `insertStarted` gains `deviceId`.
+    The SM-01 tests that call it or seed a journey give it one: the behaviour
+    suite, the fake's tests, and the L3 tests that insert journey rows
+    directly, which now need a `devices` row too. SM-01's HTTP-level tests
+    keep their requests and their assertions (D-103: the start route is
+    unchanged). One SM-01 test gains a check: the stored device is the one
+    that sent the start (LOST-01-AC10);
+  - **D-102's exception** in `scripts/gate.test.mjs`, lines 503–521, pinned
+    exactly to `['/apps/server/src/log.ts']` (D-102, amended 2026-10-03).
 
-  **Pending Q1**, more change: `insertStarted` gains `deviceId`, and the
-  SM-01 tests and the behaviour suite that call it gain the device. None of
-  these changes loosens anything.
+  None of these changes loosens what a test proves, except the last, which
+  narrows one gate test by one named file. The owner decided that in D-102's
+  amendment.
 - **Synthetic data only** (RG-07, D-089):
   - positions come from `syntheticPosition()`, open sea near 0° 0′;
   - IDs and credentials come from the existing builders;
@@ -914,20 +1038,27 @@ Read in `scripts/lib/gate-decisions.mjs` on 2026-10-02.
 
 Owner approval and the safety filter were read in `.github/CODEOWNERS`,
 `scripts/lib/merge-rules.mjs` (`OWNER_APPROVAL_PATHS`) and
-`.github/workflows/ai-review.yml` on 2026-10-02, at `main` after BUG-14.
+`.github/workflows/ai-review.yml` on 2026-10-02, at `main` after BUG-14. The
+"Owner approval" column is the state after this pull request: `log.ts` is
+owned by D-102.
 
 | File | Change | Owner approval | Safety filter | Mutation |
 |------|--------|:--:|:--:|:--:|
 | `apps/server/src/domain/journey.ts` | `heartbeat` event, its rule, the `switch` | **yes** | **yes** | `domain` |
 | `apps/server/src/domain/journey.test.ts` | L2 (test-author) | **yes** | **yes** | (its tests) |
-| `apps/server/src/modules/journeys/service.ts` (or a new file there) | `heartbeat` | **yes** | **yes** | `journeys` |
+| `apps/server/src/modules/journeys/service.ts` (or a new file there) | `heartbeat`; `start` passes the device on (D-101) | **yes** | **yes** | `journeys` |
 | `apps/server/src/ports.ts` | `JourneyStore` methods; `Log`, `LogEvent` | no | no | — |
-| `apps/server/src/adapters/journeys.ts` | Three methods, `HeartbeatStoreError` | **yes** | **yes** | no (D-095) |
+| `apps/server/src/adapters/journeys.ts` | Three methods, `HeartbeatStoreError`; `insertStarted` writes the device (D-101) | **yes** | **yes** | no (D-095) |
 | `apps/server/src/db/schema.ts` | Two tables, two columns | **yes** | **yes** | no |
-| `apps/server/src/db/migrations/0002_*.sql`, `meta/*` | Generated with `pnpm --filter @trygghverdag/server db:generate` | **yes** | **yes** | no |
-| `apps/server/src/api.ts` | The heartbeat handler; the fixed 400 | **yes** | **yes** | no (D-097) |
+| `apps/server/src/db/migrations/0002_*.sql`, `meta/*` | Generated with `pnpm --filter @trygghverdag/server db:generate`; `device_id` with no default and no backfill (LOST-01-AC20) | **yes** | **yes** | no |
+| `apps/server/src/api.ts` | The heartbeat handler; the fixed 400; the start hands on the device (D-101) | **yes** | **yes** | no (D-097) |
 | `apps/server/src/api-process.ts` | Wires `createLog()` | **yes** | **yes** | `api-process` |
-| `apps/server/src/log.ts` (new), `log.test.ts` (new) | The log adapter; L2 | **no — Q2** | no | no |
+| `apps/server/src/log.ts` (new) | The log adapter | **yes** (D-102) | no (D-102) | no |
+| `apps/server/src/log.test.ts` (new) | L2 (test-author) | no | no | — |
+| `.github/CODEOWNERS` | `/apps/server/src/log.ts @bvst @urso-agent` (D-102) | **yes** | — | — |
+| `scripts/lib/merge-rules.mjs` | `/apps/server/src/log.ts` in `OWNER_APPROVAL_PATHS` (D-102) | **yes** | no | — |
+| `scripts/gate.test.mjs` | D-102's ownership pinned; the filter test's named exception, pinned to `log.ts` (D-102, amended; test-author) | **yes** | no | — |
+| `apps/server/src/deploy.integration.test.ts` | LOST-01-AC20 (test-author) | no | no | — |
 | `apps/server/package.json`, `pnpm-lock.yaml` | `pino` | no | no | — |
 | `apps/server/src/journeys.system.test.ts` | L6 (test-author) | no | no | the `journeys` group's tests |
 | `apps/server/src/adapters/journeys.integration.test.ts` | L3 (test-author) | no | no | — |
@@ -943,8 +1074,8 @@ Owner approval and the safety filter were read in `.github/CODEOWNERS`,
   - `worker.ts`, `bin/*`, `process.ts`, `redact.ts`;
   - `adapters/clock.ts`, `db.ts`, `device-credentials.ts`, `healthchecks.ts`,
     `migrations.ts`;
-  - `.github/` (CODEOWNERS and `ai-review.yml` included) and `scripts/` (unless
-    Q2's answer adds `log.ts`);
+  - `.github/workflows/`, `ai-review.yml` included (D-102), and every file
+    under `scripts/` but the three in the table;
   - `stryker.config.mjs`, the Vitest configurations and `packages/config`;
   - `infra/` and `apps/mobile/`.
 - **No edit to `ai-review.yml`,** so CI's AI reviewers can run on this pull
@@ -954,9 +1085,9 @@ Owner approval and the safety filter were read in `.github/CODEOWNERS`,
   `privacy-security-reviewer` and `test-auditor` always run.
 - **The pull request needs the owner's approval** (D-042), as every M2 task
   does through `domain/`.
-- **No new decision number is needed** unless an answer below makes one. If
-  one is, check the open pull requests' `decisions.md` first, and again before
-  each push (live gotcha).
+- **The owner's answers are D-101, D-102 (with its amendment) and D-103.**
+  No further decision is needed. If one becomes needed, check the open pull
+  requests' `decisions.md` first, and again before each push (live gotcha).
 
 ## Contract changes
 
@@ -976,9 +1107,9 @@ holds it.
 - **Exports from `@trygghverdag/contracts`:** the schemas, their types,
   `MAX_EVENT_ID_LENGTH`, `EVENT_ID_PATTERN` and the error codes. The app (M3)
   reads them from here, never from a copy.
-- **Unchanged:** `/v1/health` and `POST /v1/journeys`. **Pending Q1:** the start
-  route's request and answers stay as they are. Only what is stored changes:
-  the starting device.
+- **Unchanged:** `/v1/health` and `POST /v1/journeys`. The start route's
+  request, answers and contract stay as they are, with no event ID (D-103).
+  Only what the server stores changes: the starting device (D-101).
 - **Not checked in this session, for M3, before `released/` holds anything:**
   - **whether the SDK's native uploader sends `Authorization: Bearer`;**
   - **whether it can produce this body**: its body template or per-record
@@ -997,8 +1128,8 @@ holds it.
   alert.** The worst failure here is contact counted when the phone is
   silent. Every way this task could count it is closed:
   - **another walker's journey:** LOST-01-AC9;
-  - **another device of the walker**, such as a tablet left at home: Q1 and
-    LOST-01-AC10;
+  - **another device of the walker**, such as a tablet left at home: D-101
+    and LOST-01-AC10;
   - **a replayed or resent request:** duplicates never advance contact
     (LOST-01-AC3);
   - **a phone clock running ahead:** if the phone's time ever became last
@@ -1037,6 +1168,14 @@ holds it.
     ships.
   - Every 4xx (403, 404, 409) is one the app must act on, not retry for ever.
     That is M3's.
+  - **A deploy to a database that holds journeys stops at the migration**
+    (LOST-01-AC20). That is loud and leaves the database as it was, by
+    design: no journey's device is guessed. None is expected on staging, and
+    that cannot be checked from a session.
+- **D-101's own cost.** A walker whose phone is swapped mid-journey cannot
+  carry on from the new one. The journey goes quiet and, from task 3, alerts.
+  That is the safe direction, and D-101 accepts it. Moving a journey to
+  another device would need its own decision.
 - **[F9](../plan/03-safety-reliability-security.md#failure-modes), an
   inaccurate position.** Accuracy is stored with every position, ready for the
   accuracy-and-age rule.
@@ -1101,8 +1240,11 @@ holds it.
   built.
 - **The status fields of §4.5** (`moving`, the queue count, the permission, the
   exemption) and the platform: not accepted (approach item 3).
-- **Event IDs for other events:** "I'm home", "I'm on it" and "They're safe"
-  each carry one from their own task. For the start route, see Q3.
+- **Event IDs for other events.** The start route needs none (D-103). "I'm
+  home", "I'm on it" and "They're safe" each decide in their own task whether
+  they need one, to be safe to receive twice (D-103).
+- **Moving a journey to another device** (D-101: it would need its own
+  decision).
 - **Rate limiting and a body-size limit;** checking the bearer value's shape
   before the lookup (the reviewers' optional idea).
 - **The dependency-cruiser import rule** (needs the owner; it lives in
@@ -1110,11 +1252,9 @@ holds it.
 - **D-068's pool handler** (task 3) and **heartbeat-gap monitoring** (L10).
 - **Ending a journey for any reason.** Tests put `ENDED` in directly.
 
-## Questions for the owner
+## Settled by the owner
 
-Three. Each needs the owner because it is scope, safety or who approves what.
-The plan and the decisions already settle these, so they are not asked:
-
+Already settled by the plan and the decisions, so never asked:
 - **How long heartbeat positions are kept:** the retention rule, 24 hours
   after the journey ends. The job is M4's.
 - **Whether to store the battery level:** yes. The heartbeat story's own text
@@ -1125,52 +1265,32 @@ The plan and the decisions already settle these, so they are not asked:
 - **What a heartbeat for an ended journey gets:** a distinct non-2xx, per the
   reviewers' note in `progress/m2.md` and SM-07's "ignored".
 
-1. **Which device may send a journey's heartbeats?** *(safety)*
-   - **Why it matters:** a walker can have two devices: SM-01's test
-     already shows two devices of one user meeting one journey. If any of
-     them may send heartbeats, a tablet left at home with the app open keeps
-     the journey "in contact" while the phone in the walker's pocket is dead.
-     That is a missed alert, the worst failure.
-   - **Recommendation: only the device that started the journey.** The
-     journey stores its starting device (a `device_id` column, which SM-01's
-     spec said this task would add "if so"). Another device of the walker
-     gets 403 `NOT_THE_JOURNEYS_DEVICE`, and it counts as nothing.
-     LOST-01-AC10 holds this.
-   - **Cost:** a walker who switches phones mid-journey must end the journey
-     and start a new one. Before the login task nobody has two devices except
-     in tests.
-   - **Alternative:** any device of the walker. Simpler, with no column and no
-     403, and with the tablet risk above. LOST-01-AC10 is then removed.
+Answered by the owner on 2026-10-03, each with Claude's recommendation:
+1. **D-101: only the device that started a journey may send its
+   heartbeats.** The journey stores `device_id`. Another device of the same
+   walker gets 403 `NOT_THE_JOURNEYS_DEVICE` and changes nothing. Another
+   walker's journey stays 404. The migration refuses to guess the device of
+   journeys that already exist (approach item 7). Held by LOST-01-AC10 and
+   LOST-01-AC20.
+2. **D-102: `apps/server/src/log.ts` needs the owner's approval.** It joins
+   CODEOWNERS and `OWNER_APPROVAL_PATHS`, but not the ai-review `safety`
+   filter, so `ai-review.yml` is not edited and no hand merge is needed. Held
+   by gate tests in the test plan, not by an acceptance criterion.
+3. **D-103: the start request needs no event ID.** SM-08 is read as "every
+   event must be safe to receive twice", and a repeated start already is.
+   SM-01's route and contract are unchanged.
 
-2. **Should the server's log module need your approval?** *(who approves
-   what, D-042)*
-   - **Why it matters:** `apps/server/src/log.ts` is the one place the server
-     writes request log lines, so it is where PRIV-07 is kept. A later change
-     there could start writing more. Today it would need no owner approval.
-     The tests would still catch it, because `implementer` cannot edit them.
-   - **Recommendation: yes.** Add `/apps/server/src/log.ts` to CODEOWNERS and
-     `OWNER_APPROVAL_PATHS`, in this pull request. Do not add it to the
-     ai-review `safety` filter: `privacy-security-reviewer` already runs on
-     every pull request, and editing `ai-review.yml` would force a merge by
-     hand (D-075). The precedent is D-092 and D-097.
-   - **Cost:** two owned files change (`.github/CODEOWNERS` and
-     `scripts/lib/merge-rules.mjs`), plus the test that pins the list. Every M2
-     pull request needs you anyway.
-   - **Alternative:** leave it unowned, guarded by its tests and the privacy
-     review.
+Found while finalising, and answered by the owner on 2026-10-03 with
+Claude's recommendation:
 
-3. **Does the start request need an event ID?** *(scope: SM-08 against what
-   SM-01 shipped)*
-   - **Why it matters:** SM-08 says "Every event carries an ID." The start
-     request (`POST /v1/journeys`, SM-01) carries none. SM-01's spec, under
-     F2, said "an ID on every event, is the duplicate-event rule's (task 2)".
-     D-090 and the roadmap scope this task to the heartbeat.
-   - **Recommendation: no change to the start route.** SM-08's purpose, "no
-     effect" for a duplicate, already holds for a start: a repeated start
-     changes nothing and answers 409 with the walker's journey (SM-01-AC2 and
-     SM-01-AC7). Each later event route ("I'm home", "I'm on it", "They're
-     safe") carries an event ID from its own task. Record that reading as a
-     decision, so SM-08's text and the start route stop disagreeing.
-   - **Alternative:** add an `eventId` to the start request in this task.
-     That widens D-090's scope and changes SM-01's contract and tests. It
-     breaks nothing while `released/` is empty.
+4. **D-102, amended: a named exception in the gate test that ties owner paths
+   to the safety filter.** `scripts/gate.test.mjs`, "the safety filter in
+   ai-review.yml matches the paths the owner must approve" (lines 503–521),
+   requires every `/apps/` path in `OWNER_APPROVAL_PATHS` to be in the
+   `safety` filter. That test gets one exception, pinned exactly to
+   `['/apps/server/src/log.ts']` and citing D-102. `test-author` writes it
+   with its reason (RG-03), and `test-auditor` reviews it. Every other path
+   still has to be in the filter, and a second exception would have to show
+   itself in a test. Rejected: adding `log.ts` to the filter (an
+   `ai-review.yml` edit, so no CI review of LOST-01 and a hand merge), and
+   owning it later.

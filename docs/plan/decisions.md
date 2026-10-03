@@ -3288,6 +3288,22 @@ any other path is work, not a candidate for the same treatment.
   - LOST-01 changes `.github/CODEOWNERS` and `scripts/lib/merge-rules.mjs`,
     both already owner-approved, and their tests.
   - Every later change to the log adapter needs the owner.
+- **Amended 2026-10-03 (owner, asked in session with Claude's
+  recommendation, the recommended option chosen):**
+  - **Why:** the planner found that D-102 as first written breaks an existing
+    gate test. `scripts/gate.test.mjs`, "the safety filter in ai-review.yml
+    matches the paths the owner must approve", requires every `/apps/` entry
+    in `OWNER_APPROVAL_PATHS` to be in the `safety` filter as well. D-102
+    owns `log.ts` without adding it to the filter. Claude wrote D-102 without
+    checking that test.
+  - **Decision:** that test gets one named exception, pinned exactly to
+    `['/apps/server/src/log.ts']` and citing D-102. `test-author` writes it,
+    with the reason beside it (RG-03). Every other `/apps/` path the owner
+    must approve still has to be in the safety filter.
+  - **Rejected:** adding `log.ts` to the filter (LOST-01 would edit
+    `ai-review.yml`, so CI's AI reviewers could not run on a safety-critical
+    pull request, and it would be merged by hand), and owning `log.ts` later
+    (it would be unowned until then).
 
 ## D-103 — Starting a journey meets SM-08 without an event ID (LOST-01)
 - **Date:** 2026-10-03 · **Status:** Accepted (owner, 2026-10-03; asked in
@@ -3310,5 +3326,10 @@ any other path is work, not a candidate for the same treatment.
     whether it needs an ID.
 - **Consequences:**
   - SM-01's route, its contract and its tests are unchanged.
+- **Correction (2026-10-03, LOST-01's spec):** SM-01's HTTP-level tests are
+  unchanged, but its store-level tests are not. D-101 makes the start store
+  the device that sent it, so `insertStarted` takes a device. The behaviour
+  suite, the fake's tests and the L3 tests that insert journey rows directly
+  change with it (RG-03 reasons in LOST-01's pull request).
   - LOST-01 stays within D-090's scope: heartbeats carry an event ID, and a
     repeated one has no effect.
