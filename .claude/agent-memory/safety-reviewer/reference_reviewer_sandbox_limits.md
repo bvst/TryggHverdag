@@ -67,3 +67,8 @@ Write memory text with a quoted heredoc (`node --input-type=module - <<'EOF'` or
 pg_control: Permission denied") a few seconds into a test run. Holding the permission open was refused by the
 permission system as weakening security, so do not attempt it: report L3 as not verified by you, and say so.
 Point checks that need only a few seconds of psql before the reset may still work, but are not dependable.
+
+**2026-10-04 (BUG-18 loop 1): CODEOWNERS last-match with git's own gitignore matcher, file-free.** For each
+non-comment CODEOWNERS line run `git ls-files -c -i -x '<pattern>'`; the highest line that lists a file decides
+its owners. Directory patterns work (/scripts/ listed all 81 files). A process-substituted file as
+core.excludesFile does NOT work: git reads a pipe as size 0 and matches nothing ("::" for every path).

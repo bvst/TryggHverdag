@@ -78,3 +78,18 @@ Notes kept between reviews. Newest section last.
 - RG-03's detector (`test-strength.mjs`) only counts tests, assertions and
   skips. It is blind to a loosened *expectation* at a constant count. That case
   is this agent's job, not the script's.
+
+## Found in BUG-18 (2026-10-04)
+- **The CODEOWNERS last-match helper in gate.test.mjs is a model of GitHub,
+  so probe it with GitHub's own syntax.** It escapes `?`, but GitHub keeps
+  gitignore's `?` (only `\#`, `!` and `[ ]` are excluded, per the docs), so a
+  later `d?.ts` line with no owners un-owns a file while every last-match test
+  says it is owned. Probe each wildcard form against the documented
+  exceptions, not just `*` and `**`.
+- **HEAD can move under a long fault run.** Reviewers and the coordinator
+  commit during the audit. Serve every file from `git show <rev>` rather than
+  the disk, and write mutants that find their target in the text handed in, so
+  one list runs at both the briefed head and the new one.
+- A loop commit can amend the decision ahead of its code ("its lines and tests
+  follow"). Scope the verdict to what exists and name the missing half as a
+  merge condition, rather than passing the decision as a whole.

@@ -15,6 +15,10 @@
 /apps/server/src/process.ts       @bvst @urso-agent
 # The one file that can ping Healthchecks.io: an unasked ping keeps a dead worker's check green (D-079).
 /apps/server/src/adapters/healthchecks.ts       @bvst @urso-agent
+# Every process's database pool: one that uses up the database's few connections takes the watchdog down with it (D-105).
+/apps/server/src/adapters/db.ts                 @bvst @urso-agent
+# The worker's check-in row: a fault here can show a dead watchdog as alive (D-105).
+/apps/server/src/adapters/worker-heartbeats.ts  @bvst @urso-agent
 # Where the journey guarantees live: the responder insert and its transaction,
 # the one-unended-journey index, the device-credential check, and where the
 # database clock is wired into the API's services (D-092, D-094, D-095).
@@ -23,6 +27,8 @@
 /apps/server/src/db/schema.ts     @bvst @urso-agent
 /apps/server/src/db/migrations/   @bvst @urso-agent
 /apps/server/src/modules/journeys/ @bvst @urso-agent
+# The health wiring: it turns the worker's last check-in into /v1/health's answer (D-105).
+/apps/server/src/modules/health/   @bvst @urso-agent
 /apps/server/src/api-process.ts   @bvst @urso-agent
 # The device-credential middleware and the walker always the device's own user,
 # the database clock itself, and where the migrations are read from and written
