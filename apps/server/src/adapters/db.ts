@@ -135,10 +135,13 @@ const MS_PER_UNIT: Readonly<Record<string, number>> = { ms: 1, s: 1_000, min: 60
 /**
  * A setting's value as pg_settings reported it, in its text and in
  * milliseconds, or null when it is not digits with one of those units: it is
- * then written as `unreadable`, never echoed.
+ * then written as `unreadable`, never echoed. A unit is one of the table's
+ * own keys, so a name every object has (`constructor`, `toString`,
+ * `__proto__`) is no unit.
  */
 function durationOf(setting: unknown, unit: unknown): { text: string; ms: number } | null {
-  const perUnit = typeof unit === 'string' ? MS_PER_UNIT[unit] : undefined;
+  const perUnit =
+    typeof unit === 'string' && Object.hasOwn(MS_PER_UNIT, unit) ? MS_PER_UNIT[unit] : undefined;
   if (typeof setting !== 'string' || !/^\d+$/.test(setting) || perUnit === undefined) {
     return null;
   }

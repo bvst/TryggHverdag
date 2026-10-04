@@ -117,6 +117,9 @@ async function unendedJourneyOf(db: Reader, walkerId: string): Promise<UnendedJo
 /** SQLSTATE lock_not_available: a wait for a row ran past its lock_timeout. */
 const LOCK_NOT_AVAILABLE = '55P03';
 
+/** The longest lock_timeout PostgreSQL takes, in milliseconds. */
+const LOCK_TIMEOUT_MAX_MS = 2_147_483_647;
+
 /** A number of milliseconds as an interval, in SQL. */
 const milliseconds = (ms: number) => sql`(${ms}::double precision * interval '1 millisecond')`;
 
@@ -409,6 +412,19 @@ export function databaseJourneyStore(db: Database): JourneyStore & WatchdogStore
     },
 
     async openLostContactAlert(request: OpenRequest): Promise<OpenLostContactAlertResult> {
+      // Refused before the transaction, so nothing is written and no lock is
+      // taken. PostgreSQL reads a lock_timeout of 0 as no limit at all, which
+      // a wait must never quietly become.
+      const { lockWaitMs } = request;
+      if (
+        lockWaitMs !== undefined &&
+        !(Number.isInteger(lockWaitMs) && lockWaitMs >= 1 && lockWaitMs <= LOCK_TIMEOUT_MAX_MS)
+      ) {
+        throw new Error(
+          `lockWaitMs must be a whole number of milliseconds from 1 to ${String(LOCK_TIMEOUT_MAX_MS)}, ` +
+            `not ${String(lockWaitMs)}: PostgreSQL reads a lock_timeout of 0 as no limit at all.`,
+        );
+      }
       const progress = { rowTaken: false };
       try {
         return await db.transaction((tx) => openInside(tx, request, progress));

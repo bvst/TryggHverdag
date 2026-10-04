@@ -175,6 +175,8 @@ export interface WatchdogStore {
    * most that long for the journey's row, and answers `held` when that wait
    * runs out. Rejects, having written nothing, on any other failure: a wait
    * for any other lock that ran out (55P03), or a journey with no responder.
+   * Rejects before taking any lock when `lockWaitMs` is given and is not a
+   * whole number from 1 to 2147483647: PostgreSQL reads 0 as no limit.
    */
   openLostContactAlert(request: OpenRequest): Promise<OpenLostContactAlertResult>;
 }
