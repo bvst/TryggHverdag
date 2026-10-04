@@ -3,7 +3,8 @@
 **Milestone:** M2, task 3 of 8 (D-090) · **Delivers:** LOST-02 (its server
 half); AR-05 and AR-06, untracked; the bound on LOST-01's row lock; D-079's
 two watchdog follow-ups; D-068's pool revisit; one way to the database
-(AR-10) · **Decisions:** D-007, D-019,
+(AR-10); import rules that see installed packages (AR-02, AR-09, AR-10) ·
+**Decisions:** D-007, D-019,
 D-021, D-031, D-032, D-033, D-036, D-042, D-065, D-068, D-075, D-079, D-086,
 D-087, D-089, D-090, D-091, D-092, D-095, D-098, D-099, D-100, D-101, D-102,
 D-105, D-106, D-107, D-108 · **Written:** 2026-10-03, on `main` at `fe384c5`
@@ -328,7 +329,25 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
          ever happens, the journey stays `ACTIVE` and overdue, and item 6
          turns it into a page.
       5. Commit.
-   4. **Record the beat, if the sweep succeeded** (item 6).
+   4. **Try once more, waiting, for each journey that was skipped and is past
+      the stuck threshold** (5 min + `STUCK_AFTER_MS`, item 6). This is step
+      3 again, with one difference. The `select` takes the row with a bounded
+      wait instead of `skip locked`: `for update`, with `SET LOCAL
+      lock_timeout` of `LOCK_WAIT_LIMIT_MS` (⚙️ 5 s) in that transaction only.
+      The worker's pool keeps no lock limit of its own (item 7). There are
+      three outcomes:
+      - **opened:** the holder let go within the wait and the journey was
+        still overdue;
+      - **skipped:** the holder let go and the journey no longer matches. A
+        concurrent sweeper had opened its alert, or contact arrived.
+        PostgreSQL checks the `WHERE` again against the row the holder
+        committed.
+      - **held:** the wait ran out (SQLSTATE 55P03). The store answers
+        `held` rather than throwing.
+
+      Journeys under the stuck threshold are not retried. The next sweep, 10
+      s later, tries them again, as it always has.
+   5. **Record the beat, if the sweep succeeded** (item 6).
    - Any database error is logged as `watchdog_failed`, with the stage and
      the SQLSTATE only. The sweep carries on with the next journey and counts
      as failed.
@@ -403,14 +422,50 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
      `/v1/health` keeps its rule: degraded after 3 minutes without a beat
      (D-065). So a watchdog that cannot sweep pages the owner through the
      monitors that exist now (D-079).
-   - **A stuck journey** is an `ACTIVE` journey still overdue ⚙️ 30 s past
-     the 5 minutes (`STUCK_AFTER_MS`) that this sweep did not move: it was
-     skipped, or opening it failed. Each one gets a `watchdog_overdue` line
-     naming its ID. So `skip locked` can skip a journey, but **not
-     silently**: a lock this code does not control has the same effect. Two
-     examples are a person's `psql` session and a frozen process with no
-     limit. The sweep counts as failed, the beat stops, and the owner is
-     paged.
+   - **A stuck journey** is an `ACTIVE` journey silent ⚙️ 30 s or more past
+     the 5 minutes (`STUCK_AFTER_MS`) that this sweep could not move. There
+     are two ways that happens:
+     - its waiting attempt (item 3, step 4) answered `held`;
+     - opening it failed with an error, in either attempt.
+
+     A journey skipped only because it no longer matched is not stuck. Each
+     stuck journey gets one `watchdog_overdue` line naming its ID. So `skip
+     locked` can skip a journey, but **not silently**. A lock this code does
+     not control causes the same: a person's `psql` session, or a frozen
+     process with no limit. The sweep counts as failed, the beat stops, and
+     the owner is paged.
+   - **How it tells a healthy sweeper from a frozen holder: it waits for the
+     holder, briefly.** Two sweepers can race on a journey already past the
+     stuck threshold, as in a deploy overlap after the worker was down. The
+     loser's `skip locked` skips the row the winner holds and has not yet
+     committed.
+     - Counted then and there, that journey would be "stuck", and the
+       healthy race AC7 calls harmless would write a `watchdog_overdue` line
+       and fail a sweep.
+     - The waiting attempt asks the holder instead. A healthy sweeper commits
+       within milliseconds, and the loser then finds the journey
+       `LOST_CONTACT`: skipped, not stuck. A heartbeat in flight is the same:
+       last contact has moved, so the journey is skipped.
+     - A holder on one of this code's pools that has frozen is ended by the
+       idle limit within 10 s. A wait that runs out first makes one sweep
+       stuck. The beat tolerates that, because a page needs 30 s with no good
+       sweep (`BEAT_FRESH_MS`). The next sweep after the session ends opens
+       the alert, at most 10 s idle limit plus one interval past the
+       threshold: 20 s, inside the 60 s budget.
+     - A holder that no limit reaches holds through every wait. That is the
+       case to page for, and it does. Every sweep is stuck, the beat goes
+       stale, and the monitors page as for a stopped worker (REL-08, D-079).
+       No watchdog can alert that journey while the row is held. The page
+       is what turns it from silent to loud.
+   - **Why waiting, and not "stuck in two consecutive sweeps".** Two sweeps
+     would also let a healthy race pass, but they need memory across sweeps
+     in each worker. Two workers would each keep their own. It would also
+     delay the page by an interval for nothing gained. Waiting asks the one
+     party that knows, the holder, and it settles within the sweep that
+     asked.
+   - **The cost:** a sweep spends at most `LOCK_WAIT_LIMIT_MS` (5 s) on each
+     stuck journey. That happens only past the stuck threshold, and only
+     after every other journey in the sweep has had its first attempt.
    - **Why 30 s:** it is more than one interval plus the idle limit (10 +
      10 s), so a stall the limit already ends never pages anyone. And it is
      well inside the 60 s budget.
@@ -585,6 +640,70 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
       packages that can open a connection (`apps/server/package.json`). pnpm
       does not let a package import what it has not declared, so `pg-pool` is
       not reachable from the server.
+    - **The import rules must see installed packages, and today they cannot**
+      (found by `test-author` in the red phase; LOST-02-AC25). Read in
+      `packages/config/dependency-cruiser.cjs` on 2026-10-04:
+      - `options.exclude.path` holds
+        `(^|/)(node_modules|dist|build|coverage|\.turbo|\.expo)/`.
+        depcruise resolves an installed package to its real path under
+        pnpm's store (`node_modules/.pnpm/<name>@<version>…/node_modules/<name>/…`).
+        The `node_modules` segment excludes that path, and an excluded module
+        is not a target any rule can match.
+      - The `dist` segment hides some packages a second way. graphile-worker
+        0.18.0 resolves to `dist/index.js` (its `package.json`: `"main":
+        "dist/index.js"`).
+      - So no rule fires on a package that resolves. AC24's rule could not
+        work.
+      - Neither can the npm half of `domain-has-no-io`. Its `node:` half still
+        works, because built-ins are not under `node_modules`.
+      - Neither can `location-sdk-only-in-the-safety-core` (AR-09). It matches
+        only the bare name `^react-native-background-geolocation`. That
+        matches today only because the SDK is not installed and nothing
+        imports it. Once M3 installs it, the rule goes blind.
+
+      The change:
+      1. **`exclude` no longer matches anything inside `node_modules`.** The
+         `node_modules` segment goes, and the build-output folders (`dist`,
+         `build`, `coverage`, `.turbo`, `.expo`) match only in paths that do
+         not run through `node_modules`. `^apps/mobile/(android|ios)/` stays.
+         `doNotFollow: { path: 'node_modules' }` stays: a package is a target
+         rules can match, and its own imports are not cruised.
+      2. **Every rule that names a package matches it in both forms.** One is
+         the bare name depcruise reports when it cannot resolve the import.
+         The other is the path it resolves to in this repository, under
+         pnpm's layout. That covers:
+         - AC24's rule;
+         - `location-sdk-only-in-the-safety-core`;
+         - `domain-has-no-io`'s allow-list (`zod`, `@trygghverdag/contracts`),
+           which today names bare forms only. Without the change, a domain
+           file importing `zod`, which the rule's own comment allows, would be
+           refused once packages are visible.
+
+         Not checked here: the exact path depcruise resolves each name to
+         under this configuration. Its `mainFields` put `types` first, so
+         `pg` may resolve to `@types/pg`. A control test against the
+         repository itself settles it (LOST-02-AC25).
+      3. **Test-file exemptions** (`\.(test|spec)\.[cm]?[jt]sx?$` on `from`):
+         - `domain-has-no-io` gains one. Domain tests import `vitest` and the
+           test kit, and with packages visible the rule fires on them
+           (`test-author` saw it fire). Domain test files are never shipped,
+           so the exemption takes nothing from AR-02.
+         - AC24's rule is written with one.
+         - `only-the-process-wires-the-log` and `test-kit-belongs-in-tests`
+           already have one.
+         - `location-sdk-only-in-the-safety-core` gets none. Nothing imports
+           the SDK today, and M3's tests of the safety core sit inside the
+           safety core.
+      4. **`pnpm run imports:check` stays clean over the repository**
+         (`.claude/hooks apps packages scripts`).
+         - Packages becoming visible may reveal violations no rule could see
+           before. `no-undeclared-dependencies` is the likely one: a package
+           importing what it never declared.
+         - Each one is listed in the pull request and fixed where it starts.
+           A missing dependency is declared.
+         - A rule is never loosened, and no exemption is widened, to make the
+           check pass. If a rule turns out to be wrong, it is changed with a
+           test that shows why.
 
 14. **A decision to record: D-108** (delegated, D-031). `plan-keeper` writes
     it in this pull request. The owner's answers are D-106 and D-107, and
@@ -595,13 +714,17 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
       decision". Graphile Worker keeps the minute check-in.
     - **The watchdog feeds the beat.** This answers D-079's first follow-up,
       which leaves that choice to this task, and changes how D-065 item 4 is
-      met.
+      met. A stuck journey stops the beat. A skipped journey past the stuck
+      threshold gets one attempt that waits at most 5 s for its holder, so a
+      healthy concurrent sweeper is never counted as stuck (item 6).
     - **The two session limits,** their values, and the pools they are on.
     - **One way to the database** (item 13, LOST-02-AC24): only `db.ts`
       imports `pg` and `drizzle-orm/node-postgres`, with `migrations.ts`'s
       migrator as the one exception, and only `worker.ts` imports
       `graphile-worker`, so every pool is made by `createPool`, with the
-      limits and listeners on it.
+      limits and listeners on it. The import check stops excluding
+      `node_modules` so that rule, and every rule naming a package, can see
+      an installed one (item 13, LOST-02-AC25).
 
     The interval is the owner's (D-107), not part of D-108. D-108 was given
     to this task by the coordinating session; as the live gotcha says,
@@ -625,7 +748,11 @@ the tests are written.
 - **`ports.ts`:**
   - `WatchdogStore`:
     - `overdueJourneys(afterMs)` → `{ now, journeys: { id, state, silentSince }[] }`;
-    - `openLostContactAlert({ journeyId, afterMs })` → `{ outcome: 'opened', alertId, messages } | { outcome: 'skipped' }`.
+    - `openLostContactAlert({ journeyId, afterMs, lockWaitMs? })` → `{ outcome: 'opened', alertId, messages } | { outcome: 'skipped' } | { outcome: 'held' }`.
+      - With no `lockWaitMs` it takes the row with `skip locked`, and never
+        answers `held`.
+      - With `lockWaitMs` it waits at most that long. It answers `held` when
+        the wait runs out (55P03, mapped, not thrown).
   - `OutboxStore`:
     - `claimDue({ limit, leaseMs })` → `{ now, messages: { messageId, recipientId, kind, attempts }[] }`;
     - `markSent(messageId)`;
@@ -650,7 +777,11 @@ the tests are written.
     with:
     - inspection: `alerts()`, `outbox()`;
     - `hold(journeyId)` and `release(journeyId)`, which stand in for a row
-      another transaction holds;
+      another transaction holds. A held row is skipped by an attempt without
+      a wait, and answers `held` to one with a wait.
+    - A way to hold a row that lets go during a waiting attempt, running a
+      test's action first, such as moving the journey to `LOST_CONTACT` as a
+      concurrent sweeper would. Its name is test-author's.
     - `failWith` and `beforeNext` for the new calls.
   - The shared behaviour suite gains the watchdog and outbox behaviours, run
     against the fake (L2) and the adapter (L3).
@@ -746,11 +877,20 @@ message per responder.** *(LOST-02)*
 - **Then** each overdue journey has exactly one alert, and exactly one message
   per responder
 - **And** no sweep fails. The losers skip, or find nothing overdue.
+- **And** this holds for journeys silent past the stuck threshold too:
+  5 min 30 s, 10 minutes and an hour, as after a worker that was down.
+  - Every sweep reports `ok: true` and `stuck: 0`.
+  - No sweeper writes `watchdog_overdue`.
+  - The beat is recorded.
+
+  A loser that skipped such a journey waits for the winner's commit, finds
+  the journey `LOST_CONTACT`, and skips it (approach item 6).
 
 **LOST-02-AC8 — A held row is skipped, not waited for, and alerted once it is
 free.** *(LOST-02)*
-- **Given** overdue journeys J and K, and another transaction holding J's
-  row `for update`
+- **Given** overdue journeys J and K, both silent less than 5 min 30 s, and
+  another transaction holding J's row `for update`. Past 5 min 30 s a held
+  row is waited for, briefly: that is AC20.
 - **When** the watchdog sweeps
 - **Then** the sweep finishes without waiting, K's alert is opened, and J is
   untouched
@@ -923,15 +1063,30 @@ the credential.** *(LOST-02, SEC-03; D-068)*
 
 **LOST-02-AC20 — A journey the watchdog cannot move is reported, and stops
 the beat.** *(LOST-02, REL-08)*
-- **Given** J `ACTIVE`, with its row held by a session outside both pools
-  (L3), or by the fake's `hold` (L6)
+- **Given** J `ACTIVE`, with its row held by a session that never lets go: a
+  plain client outside both pools at L3, or the fake's `hold` at L6
 - **When** the watchdog sweeps at 5 min + 29.999 s of silence
-- **Then** J is skipped, nothing is written, and the beat is recorded
+- **Then** J is skipped at once, with no waiting attempt, nothing is written,
+  and the beat is recorded
 - **And when** it sweeps at 5 min + 30 s and later
-- **Then** each sweep writes one `watchdog_overdue` line naming J, and records
-  no beat
+- **Then** each sweep waits for J's row at most the lock wait limit (5 s; at
+  L3 the sweep takes at least that long, and finishes within it plus a
+  margin)
+- **And** each such sweep writes one `watchdog_overdue` line naming J, and
+  records no beat
+- **And** another overdue journey in the same sweep is still opened
 - **And** the first sweep after the hold ends opens J's alert, and records the
-  beat again.
+  beat again
+- **And when** J, silent 5 min 30 s or more, is held by a transaction that
+  lets go within the wait, then J is not stuck. There are two cases:
+  - the holder commits without changing J: the waiting attempt opens J's
+    alert;
+  - the holder moves J to `LOST_CONTACT` with its alert, as a concurrent
+    sweeper does: the waiting attempt skips J.
+
+  Either way the sweep reports `ok: true` and `stuck: 0`, writes no
+  `watchdog_overdue`, and records the beat. In the second case J has exactly
+  one alert.
 
 **LOST-02-AC21 — The loops run, keep running and stop cleanly.** *(LOST-02,
 REL-08; D-079)*
@@ -1010,9 +1165,52 @@ Graphile Worker.** *(LOST-02; D-108)*
   pnpm's layout (`node_modules/.pnpm/<name>@<version>/node_modules/<name>/…`,
   written into the fixture) and as a name it cannot resolve. A rule that
   matched only one form would pass its fixture and miss the other in the
-  repository.
+  repository. The resolved form can only fire once the configuration stops
+  excluding `node_modules` (LOST-02-AC25).
 - **And** `pnpm run imports:check` passes on the repository itself (L1). That
   is the control that the rule leaves today's three importers alone.
+
+**LOST-02-AC25 — Installed packages reach the import rules, the location
+SDK's rule included.** *(LOST-02; D-108)*
+- **Given** the repository's `.dependency-cruiser.cjs`, run with the real
+  depcruise over a fixture, as in AC24
+- **And** in the fixture, each package an import names is installed as pnpm
+  installs it: its real folder at
+  `node_modules/.pnpm/<name>@<version>/node_modules/<name>/` (a
+  `package.json` with `main` under `dist/`, and that file), and
+  `node_modules/<name>` as a link to it
+- **And** the fixture's own `package.json` declares every package it
+  installs. Then "passes" means no violation at all, and a refusal names only
+  the rule under test. An import of a package that is not installed is also
+  refused by `not-to-unresolvable`. The test checks that the rule under test
+  fires beside it, not that it fires alone.
+- **Then** these are refused, each naming its rule:
+  - a file outside `apps/mobile/src/safety-core/` importing
+    `react-native-background-geolocation`, when it is installed (resolved)
+    and when it is not (unresolved). The control: a file inside the safety
+    core importing it passes, in both forms.
+  - a domain production file (`apps/server/src/domain/x.ts`) importing an
+    installed package other than `zod`, through `domain-has-no-io`;
+  - AC24's three packages, installed, from the files AC24 refuses.
+- **And** these pass:
+  - a domain test file (`apps/server/src/domain/x.test.ts`) importing
+    installed `vitest`;
+  - a domain production file importing installed `zod`.
+- **And** a package whose entry point is under `dist/` is still a target
+  rules can match. An `exclude` that still hid `node_modules` or a `dist/`
+  inside it fails here.
+- **And** run against the repository itself, with the repository's options
+  and a probe rule using AC24's and the SDK rule's `to` patterns, the probe
+  fires on:
+  - `apps/server/src/adapters/db.ts`'s import of `pg`;
+  - `apps/server/src/worker.ts`'s import of `graphile-worker`.
+
+  This proves the patterns match what depcruise really resolves those
+  packages to here, whether `@types/pg`, a `dist/` entry or another path.
+  The probe is a configuration the test builds in its temporary folder. The
+  repository's files are not touched.
+- **And** `pnpm run imports:check` is clean over the repository (L1), with
+  no new exemption beyond `domain-has-no-io`'s test files.
 
 ## Test plan
 
@@ -1024,7 +1222,7 @@ Graphile Worker.** *(LOST-02; D-108)*
 | AC4 | L3, L1, L6 | integration test; lint in `gate:static`; system test | Timestamps relative to `now()`; brackets. **Names REL-01** |
 | AC5 | L2, L6, L3 | domain test; system test; behaviour suite | **Names SM-03** |
 | AC6 | L1, L2 | `tsc`; domain test | `satisfies` over the lists, and a run-time check |
-| AC7 | L6, L3 | system test; integration test | At least 2 sweepers on separate pool connections, at least 5 rounds |
+| AC7 | L6, L3 | system test; integration test | At least 2 sweepers on separate pool connections, at least 5 rounds; silences under and past 5 min 30 s (the tests below) |
 | AC8 | L3, L6 | integration test; system test (`hold`) | |
 | AC9 | L2, L3 | behaviour suite (`beforeNext`); integration test | **Names SM-09** |
 | AC10 | L3 | integration test | Two connections; the order forced by holding transactions open. **Names SM-03, SM-09** |
@@ -1037,11 +1235,12 @@ Graphile Worker.** *(LOST-02; D-108)*
 | AC17 | L3, L2, in-process | `database.integration.test.ts`; `domain/watchdog.test.ts` (new); `api-process.test.ts` and `worker.test.ts` with `fakePostgres` | Limits set short for the test; the production values read from the startup parameters |
 | AC18 | In-process, L3 | `api-process.test.ts`, `worker.test.ts`; `database.integration.test.ts` | Marker password in the URL; `console.warn` captured. **Names SEC-03** |
 | AC19 | L6, L2 | system test; `worker.test.ts` | **Names REL-08** |
-| AC20 | L3, L6 | integration test (an unbounded `psql`-like session from the test's own client); system test | **Names REL-08** |
+| AC20 | L3, L6 | integration test (an unbounded `psql`-like session from the test's own client, and a holder that lets go within the wait); system test (the fake's two kinds of hold) | **Names REL-08** |
 | AC21 | L2 | `worker.test.ts`, `healthchecks.test.ts` | Fake timers; stub loops; the abort signal observed. **Names REL-08** |
 | AC22 | L1, L2, L6 | `tsc`; `log.test.ts`; system test (`captured()`) | **Names PRIV-07** |
 | AC23 | L3 | `journeys.integration.test.ts`; `deploy.integration.test.ts` (PostgreSQL 15) | |
 | AC24 | L1, L2 | `imports:check` in `gate:static`; `packages/config/database-imports.test.mjs` (new) | The real depcruise over a fixture, as `dependency-cruiser.test.mjs` does. **Not in that file:** see the note below |
+| AC25 | L1, L2 | `imports:check`; `packages/config/database-imports.test.mjs` | Packages installed in the fixture as pnpm installs them; a probe against the repository itself |
 
 ### Notes
 
@@ -1055,7 +1254,7 @@ Graphile Worker.** *(LOST-02; D-108)*
   join `JOURNEY_STORE_BEHAVIOUR`, and `fake-journey-store.test.ts` pins their
   names. A fake more lenient than the adapter would make the L6 tests prove
   the fake (D-100).
-- **AC24's tests go in a new, counted file,
+- **AC24's and AC25's tests go in a new, counted file,
   `packages/config/database-imports.test.mjs`, not in
   `dependency-cruiser.test.mjs`.**
   - That file opens with `// req-coverage: fixtures-only`, and `req:coverage`
@@ -1085,6 +1284,63 @@ Graphile Worker.** *(LOST-02; D-108)*
   req:coverage`. LOST-02 goes from ⚪ to 📝 with this spec, and to 🟢 with the
   tests.
 
+### Tests added after the red phase (settled 2026-10-04)
+
+Two findings from `test-author`'s red phase changed the spec. These are the
+tests that pin each side. The names are exact, and `test-author` may adjust
+wording only, keeping the criterion and the assertions.
+
+**Two sweepers past the stuck threshold** (AC7 against AC20; approach item 6):
+1. L3, `apps/server/src/alerts.integration.test.ts`: `LOST-02-AC7: watchdogs
+   sweeping at once on separate connections, on journeys silent 5 min 30 s,
+   10 min and an hour, 5 times over: one alert and one message per responder
+   each, every sweep ok with nothing stuck, no watchdog_overdue line, and the
+   beat recorded`. At least `RACERS` sweepers, at least `RACE_ROUNDS`
+   rounds.
+2. L3, the same file: `LOST-02-AC20: a journey silent 5 min 30 s whose row
+   is held by a transaction that commits within the lock wait without
+   changing it is not stuck: the waiting attempt opens its alert, the sweep
+   is ok and the beat recorded`. The holder lets go about 1 s after the
+   sweep starts.
+3. L3, the same file: `LOST-02-AC20: a journey silent 5 min 30 s whose row
+   is held by a transaction that moves it to LOST_CONTACT with its alert and
+   commits within the lock wait, as a concurrent sweeper does, is skipped,
+   not stuck: exactly one alert, the sweep ok, no watchdog_overdue line`.
+4. L3, the same file: `LOST-02-AC20: a journey silent 5 min 30 s held by a
+   session that never lets go is stuck after the lock wait: the sweep takes
+   at least LOCK_WAIT_LIMIT_MS and less than it plus a margin, another
+   overdue journey in the same sweep is opened, one watchdog_overdue line
+   names it, and no beat is recorded`. test-author's red AC20 test in that
+   file ("with J's row held by a session outside both pools …") may become
+   this one, with the timing assertions added.
+5. L6, `apps/server/src/alerts.system.test.ts`: the same three cases (2, 3
+   and 4), using the fake's two kinds of hold. One more case pins that
+   under 5 min 30 s a held journey gets no waiting attempt: the fake records
+   no attempt with `lockWaitMs`.
+6. The shared behaviour suite: `LOST-02-AC20: an open with a lock wait
+   answers held when the row stays held, opened when it is let go
+   unchanged, and skipped when it is let go no longer overdue`. It runs
+   against the fake (L2) and the adapter (L3, with a short `lockWaitMs`).
+
+**The import rules see installed packages** (AC25; approach item 13), all in
+`packages/config/database-imports.test.mjs`:
+7. `LOST-02-AC25: an installed package whose entry is under dist/ is still a
+   target the rules match; the repository's exclude hides nothing inside
+   node_modules`.
+8. `LOST-02-AC25: the location SDK, installed and not installed, is refused
+   outside the safety core and allowed inside it`. Four cases.
+9. `LOST-02-AC25: a domain file importing an installed package other than
+   zod is refused by domain-has-no-io; a domain file importing installed zod,
+   and a domain test importing installed vitest, are not`.
+10. `LOST-02-AC25: AC24's three packages, installed as pnpm installs them,
+    are refused from a module, a domain file and another adapter`. AC24's
+    existing cases, repeated with the packages installed.
+11. `LOST-02-AC25: (control) against the repository itself, a probe rule with
+    the real to-patterns fires on db.ts importing pg and on worker.ts
+    importing graphile-worker`.
+12. AC24's existing control (`imports:check` passes over the repository)
+    stays as written, and now also proves that no new exemption was needed.
+
 ### Existing assertions that change by design (RG-03)
 
 `test-author` changes each, with the written reason RG-03 asks for in the
@@ -1106,7 +1362,10 @@ pull request. None loosens what a test proves.
   where its fixtures describe "the whole-suite run as it is today" (lines
   69–72 and 396–409). `test-author` says which of them are sample data.
 - `packages/config/dependency-cruiser.test.mjs`: the log-import rule admits
-  `worker.ts`.
+  `worker.ts`. The configuration change of approach item 13 should change
+  none of its other tests: its fixtures install no package, and
+  `^apps/mobile/(android|ios)/` stays excluded (INF-06-AC1's case). If one
+  does change, the reason is written down as RG-03 asks.
 - `log.test.ts`, `healthchecks.test.ts`, `fake-check-in.test.ts`,
   `fake-postgres.test.ts` and `db.test.ts`: where they pin the event list,
   the check-in's signature, the fakes' abilities, or `createPool`'s
@@ -1167,9 +1426,9 @@ filter, lines 54–80). `adapters/db.ts`'s row shows the state after BUG-18
 | `apps/server/src/worker.ts` | The loops, the beat, the check-in rule, the default push, the pool's options | **yes** | **yes** | `process` |
 | `apps/server/src/api-process.ts` | The pool's options and log | **yes** | **yes** | `api-process` |
 | `apps/server/src/log.ts` | Five events | **yes** (D-102) | no (D-102) | no |
-| `packages/config/dependency-cruiser.cjs` | `worker.ts` may import `log.ts`; the new rule of LOST-02-AC24 (one way to the database) | **yes** | no | — |
+| `packages/config/dependency-cruiser.cjs` | `worker.ts` may import `log.ts`; the new rule of LOST-02-AC24 (one way to the database); LOST-02-AC25: `exclude` hides nothing inside `node_modules`, the package rules match both forms, and `domain-has-no-io` exempts test files | **yes** | no | — |
 | `packages/config/dependency-cruiser.test.mjs` | The log-import rule admits `worker.ts` (test-author) | **yes** | no | — |
-| `packages/config/database-imports.test.mjs` (new) | LOST-02-AC24, counted by `req:coverage` (test-author) | **yes** | no | — |
+| `packages/config/database-imports.test.mjs` (new) | LOST-02-AC24 and AC25, counted by `req:coverage` (test-author) | **yes** | no | — |
 | `scripts/lib/gate-decisions.mjs` | The `alerts` group | **yes** | **yes** | input (D-098) |
 | `scripts/lib/gate-decisions.test.mjs`, `scripts/stryker-config.test.mjs`, `scripts/mutation.test.mjs` | Pins (test-author) | **yes** | no | — |
 | `packages/test-kit/src/` (`fakePush`, the store's new methods, the behaviour suite, `fakeCheckIn`, `fakePostgres`, their tests, `index.ts`) | Fakes (test-author) | **yes** (D-100) | **yes** | input (D-098) |
@@ -1285,6 +1544,13 @@ compared", never as "passed".
 - **A legitimate transaction ended by the limit** on a starved instance (D-077
   notes reduced CPU on small plans). A heartbeat gets a 500 and the phone
   resends; a sweep is retried in 10 s. Loud, and nothing is lost.
+- **The import check sees more than it did** (approach item 13, AC25). Until
+  now no rule could see an installed package, so
+  `no-undeclared-dependencies` and `domain-has-no-io`'s npm half have
+  checked nothing for installed packages since M0. Making them see may
+  surface violations in code this task does not touch. Each is fixed at its
+  cause and listed in the pull request. If there are many, that is reported
+  to the owner, not silenced.
 - **Duplicate pushes.** Delivery is at least once. The per-message ID makes a
   resend collapse on the phone, but only once M3's adapter sets it as the
   collapse ID. That is a flag for M3's adapter (D-087).
