@@ -1,43 +1,46 @@
 ---
 name: lost02-alert-review
-description: LOST-02 review 2026-10-04 (PASS 6f27b80, loop-1 PASS 3539d4f) — watchdog, own outbox, beat fed by the sweep, session limits + read-back (D-109), per-open lock_timeout; open: read-back evidence step untracked, per-journey 5 s cost, lockWaitMs 0
+description: LOST-02 review 2026-10-04 (PASS 6f27b80, loop-1 PASS 3539d4f, loop-2 PASS 25f5ccf) — watchdog, own outbox, beat fed by the sweep, session limits + read-back (D-109), per-open lock_timeout, lockWaitMs refused outside 1..2^31-1; open: read-back search key, per-journey cost wording, pool limits accept 0
 metadata:
   type: project
 ---
 
-Reviewed origin/main(7e05c8e)...6f27b80 on claude/busy-faraday-40n2zl. PASS. Loop 1 re-check at 3539d4f: PASS.
+Reviewed origin/main(7e05c8e)...6f27b80 on claude/busy-faraday-40n2zl. PASS. Loop 1 at 3539d4f: PASS. Loop 2 (delta
+3539d4f..25f5ccf): PASS.
 
 Loop 0 facts still useful:
 - Drizzle emits 'for update' / 'for update skip locked'. pg 8.23.0 sends lock_timeout / idle_in_transaction_session_timeout
   as startup params (client.js 561-565), BUT connection-parameters.js:60 lets URL query fields override them.
-- watchdog.ts:87/:89 survivors were EQUIVALENT (SQL filters too). graphile 0.18 gracefulShutdownAbortTimeout maps (lib.js:92).
-- Healthchecks.io worker check: Period 1 min, Grace 2 min (monitoring-setup.md:42), page about 3 min after last ping.
-- Experiment: a hung delivery is fully silent (beat fresh, zero lines). Now documented as such (loop 1).
+- graphile 0.18 gracefulShutdownAbortTimeout maps (lib.js:92). Healthchecks.io worker check: Period 1 min, Grace 2 min,
+  page about 3 min after last ping. A hung delivery is fully silent (beat fresh): documented, task 8 canary owns it.
 
-Loop 1 (verified myself at 3539d4f):
-- Should-fix 1 CLOSED: worker.ts header, spec item 9, D-108 amendment, README say only the sweep loop is watched;
-  task 8 canary + M3 per-send bound are in the spec's "Left for later tasks" (not yet in progress/m2.md: copy at merge).
-- Should-fix 2 CLOSED: db.ts sessionLimitsLines reads pg_settings (name, setting, unit) once per process, fixed lines,
-  never rejects; API not awaited (stop waits for it), worker via readLimitsBack() in runWorkerProcess. Dropped params read
-  as 0ms, so a pooler shows. Lines hold only process name, constant setting names, digits+unit, SQLSTATE or none.
-  Quirk: MS_PER_UNIT is a plain object, so unit 'constructor'/'__proto__' passes and is echoed (harmless).
-- Open note 3 CLOSED: openInside always runs set_config('lock_timeout', lockWaitMs ?? 5000, true). progress.rowTaken set
-  after the journey-row select, so held only for the waiting attempt's own-row wait; users-row 55P03 is thrown, the watchdog
-  catches per journey (watchdog_failed open 55P03; stuck past 5:30). Healthy race (AC7) unaffected: loser skip-locks first,
-  never reaches users/alerts index. FOR KEY SHARE conflicts only with FOR UPDATE (DELETE, key-column UPDATE, explicit).
-- runNow stopping guard + untilStopped awaits the whole stop (pool end). Migration 0003_true_sir_ram = old 0003 + outbox
-  partial index; prevId chain OK; old 0003 never on main; no 0004. PUSH_FAILURE_REASONS/MESSAGE_KINDS in domain/journey.ts
-  feed ports, schema check, log; test-kit keeps its own copy (pinned in fake-push.test.ts; tsc guards a shrink).
-- 550/550 unit (worker, api-process, db, log, healthchecks, domain, test-kit fakes, alerts module), 49/49 alerts.system.
-  Mutation reports == HEAD: watchdog 87/87, outbox 37/38, worker.ts 140 killed, 4 survived (159 equivalent, 183 leak,
-  427/430 build strings), 2 Timeout (170, 187: infinite-again mutants). No check runs at 3539d4f, no open PR (gh api).
-- Guard hook blocks a grep whose pattern holds the Clever deploy command phrase: use Grep/Read tools on workflows.
+Loop 1 facts: openInside always runs set_config('lock_timeout', lockWaitMs ?? 5000, true); progress.rowTaken set after the
+journey-row select; users-row 55P03 is thrown (failed open). Only the watchdog calls openLostContactAlert, first attempt
+lockWaitMs undefined, second pass LOCK_WAIT_LIMIT_MS (watchdog.ts:100, :117).
+
+Loop 2 (verified myself at 25f5ccf):
+- journeys.ts refuses lockWaitMs not integer 1..2147483647 BEFORE the try/transaction (so never answered held). Emulated
+  with a stub db {transaction} + the real adapter: 0,-1,0.5,NaN,+-Infinity,2^31,null,"5000" refused, tx never reached;
+  1, 5000, 2^31-1 reach it. Real watchdog with fake store held row + second attempt routed to the real adapter with 0:
+  sweep {ok:false,opened:0,stuck:1}, watchdog_failed open code null, watchdog_overdue, beat null. Loud.
+- db.ts durationOf Object.hasOwn: stricter only (constructor/__proto__ were NaN, never in force; now "unreadable", no echo).
+  createPool, POOL_SIZE, listeners, read-back logic unchanged. Fake now refuses the same range (D-100 parity).
+- Ran: worker, api-process, fake-postgres-server, fake-journey-store, database-imports, db tests 443/443; alerts.system
+  49/49. Mutation reports all == HEAD source (watchdog 87/87, outbox 37/38, worker.ts 97.3 %, sqlstate 96.2 %).
+  adapters/journeys.ts is not in SAFETY_PATHS (L3 only), so the refusal's bounds are proved by the shared suite at L3.
+- No Docker daemon (client only), so L3 (11a, 13a, 14a, 15a at L3) not run by me; no check runs at 25f5ccf, no open PR.
+- Orchestrator committed 56efb8a (records) on top DURING the review: outside the range; read only its left-for-later block.
 
 Open (check before repeating):
-1. D-109 says reading the read-back line after the first deploy is the check, but no owner to-do / merge checklist names
-   who reads it or where (stderr: Clever Cloud app log; whether the deploy job log shows it is unverified). Should fix.
-2. One held users row costs 5 s per overdue journey naming that responder, every sweep (read has no ORDER BY). Note.
-3. lockWaitMs 0 = no limit in PostgreSQL; adapter passes it through, fake answers held. Only caller passes 5000. Note.
-4. progress.md row still "Red phase, 24 criteria" (spec has 25). Fix at merge record.
-5. sessionLimitsLines is in db.ts (not SAFETY_PATHS): no mutation run; 2b tests catch "mismatch read as in force".
-L3 not run by me (no Docker). Related: [[lost01-heartbeat-review]], [[bug18-db-owned-review]], [[reviewer-sandbox-limits]].
+1. Should fix (loop 2): spec's read-back step (cad3fa4) and progress.md (56efb8a) say find "api: session limits" lines:
+   the API's mismatch lines start "api: session limit <name> is ..." (singular), so the key misses them; and "no line
+   found" is not named as a finding. Fix: prefix "api: session limit" / "worker: session limit", expect the two exact
+   in-force lines, anything else or nothing opens a bug.
+2. Note: per-journey-cost entry says "each such journey is stuck and pages (AC20)": before 5:30 it is a failed open
+   (AC19, watchdog_failed open 55P03), stuck only past 5:30; the page is the owner's via the stopped beat, the journey's
+   responders hear nothing until the users row is free.
+3. Note: createPool lockTimeoutMs/idleInTransactionMs 0 would be sent and read back as "in force" (0 = no limit). Today
+   pinned by literal lines in api-process.test/worker.test (5000/10000). Same refusal belongs in createPool later.
+4. progress.md row 3 still "Red phase, 24 acceptance criteria" (spec has AC25), even after 56efb8a. Fix at merge record.
+5. db.ts not in SAFETY_PATHS: now an owner question in spec + progress.md (with log.ts's).
+Related: [[lost01-heartbeat-review]], [[bug18-db-owned-review]], [[reviewer-sandbox-limits]].

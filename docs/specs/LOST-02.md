@@ -1929,10 +1929,16 @@ compared", never as "passed".
     application log, and the deploy job's log only if it streams the app's
     output, which is not verified. It is where the evidence is expected,
     not where it has been seen. **After the first staging deploy that
-    carries LOST-02, the orchestrating session finds the `api: session
-    limits` and `worker: session limit` lines and quotes them in
-    `docs/progress/m2.md`; a mismatch or "could not be read" line opens a
-    bug** (safety-reviewer, loop-1 re-check).
+    carries LOST-02, the orchestrating session finds every line starting
+    `api: session limit` or `worker: session limit` and quotes them in
+    `docs/progress/m2.md`.** The search is for the singular prefix, which
+    also finds the plural "limits in force" line. It expects exactly these
+    two lines:
+    - `api: session limits in force: idle_in_transaction_session_timeout=10000ms lock_timeout=5000ms`
+    - `worker: session limit in force: idle_in_transaction_session_timeout=10000ms`
+
+    Any other line, or no line at all, opens a bug (`safety-reviewer`,
+    loop-1 and loop-2 re-checks).
   - A `SET` on connect is the fallback for a pooler that rejects the
     parameters.
 - **A legitimate transaction ended by the limit** on a starved instance (D-077
@@ -2082,9 +2088,20 @@ owner's to schedule:
     `from` production code skips those folders.
 - **One held users row costs a sweep up to 5 s per overdue journey naming
   that responder** (`safety-reviewer`). The opens run one after another and
-  the overdue read has no order, so the journeys behind them wait. Each such
-  journey is stuck and pages (AC20), so this is loud, not silent. Ordering
-  the read, or opening in parallel, is for a later task.
+  the overdue read has no order, so the journeys behind them wait.
+  - Each such open fails (AC19), and past 5 min 30 s the journey is stuck
+    (AC20).
+  - The owner is paged through the stopped beat. That journey's responders
+    hear nothing until the row is free.
+  - So it is loud, not silent. Ordering the read, or opening in parallel, is
+    for a later task.
+- **The pools' own limits would take 0 too** (`safety-reviewer`, loop 2).
+  `createPool` would send a `lockTimeoutMs` or `idleInTransactionMs` of 0,
+  and the read-back would call `lock_timeout=0ms` in force, though PostgreSQL
+  reads 0 as no limit. Today's values (5000 and 10000) are pinned by the
+  exact start-up lines, so this cannot happen without a red test. A later
+  task should refuse anything outside 1 to 2147483647 in `createPool`, as the
+  open now does.
 - **graphile-worker's own LISTEN connection logs its error object**
   (`privacy-security-reviewer`). When that one connection drops, Graphile's
   logger prints the message and the whole error object to the console. It

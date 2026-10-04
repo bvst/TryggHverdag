@@ -348,10 +348,10 @@ and **BUG-15** ([#59](https://github.com/bvst/TryggHverdag/pull/59),
 LOST-02's reviews leave items for later tasks, listed in `progress/m2.md`
 ("Left for later tasks").
 
-**After LOST-02's first staging deploy,** this session finds the worker's and
-the API's session-limit lines (`worker: session limit …`, `api: session limits
-…`) and quotes them in `progress/m2.md`. A mismatch, or "could not be read",
-opens a bug (D-109).
+**After LOST-02's first staging deploy,** this session finds every line
+starting `api: session limit` or `worker: session limit` and quotes them in
+`progress/m2.md`. It expects exactly two, both "in force" (the spec's Risks
+section lists them). Any other line, or none at all, opens a bug (D-109).
 
 **For the owner, from CI's `test-auditor` on #60:** should
 `apps/server/src/log.ts` be mutation-tested? It is the one place that keeps
