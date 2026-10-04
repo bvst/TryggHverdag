@@ -37,6 +37,8 @@ export const OWNER_APPROVAL_PATHS = [
   '/apps/server/src/db/schema.ts',
   '/apps/server/src/db/migrations/',
   '/apps/server/src/modules/journeys/',
+  // The health wiring: it turns the worker's last check-in into /v1/health's answer (D-105).
+  '/apps/server/src/modules/health/',
   '/apps/server/src/api-process.ts',
   // The device-credential middleware and the walker always the device's own
   // user, the database clock itself, and where the migrations are read from

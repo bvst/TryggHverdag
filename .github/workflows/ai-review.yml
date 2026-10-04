@@ -63,6 +63,7 @@ jobs:
               - 'apps/server/src/db/schema.ts'
               - 'apps/server/src/db/migrations/**'
               - 'apps/server/src/modules/journeys/**'
+              - 'apps/server/src/modules/health/**'
               - 'apps/server/src/api-process.ts'
               - 'apps/server/src/api.ts'
               - 'apps/server/src/adapters/clock.ts'

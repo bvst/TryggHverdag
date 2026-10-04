@@ -50,6 +50,10 @@ For the diff (`git diff origin/main...HEAD`), check:
   (`apps/server/src/adapters/worker-heartbeats.ts`) still records the time it
   was given and reads back the latest one, so a watchdog that stopped cannot
   look alive to `/v1/health` or Healthchecks.io (D-079, D-105);
+- a change to the health wiring (`apps/server/src/modules/health/`) still
+  passes the stored last check-in and the database clock's now to
+  `domain/health.ts`, never one for the other or a default, so a stopped
+  watchdog reads as stopped (D-105);
 - tests exist at L6 for any change in alert behaviour.
 
 
