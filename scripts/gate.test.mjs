@@ -620,6 +620,16 @@ describe("this repository's own workflows", () => {
   // CODEOWNERS reads its patterns as .gitignore does, and the last line that
   // matches a file decides its owners: a later line with none un-owns it,
   // as the reviewer-memory line at the end of the file does on purpose.
+  //
+  // RG-03 (BUG-18, test-auditor): ? was escaped here as a literal. In
+  // gitignore syntax, which GitHub reads CODEOWNERS with (leaving out only \#,
+  // ! and [ ]), ? is one character other than /. So a later ownerless line
+  // like /apps/server/src/adapters/d?.ts un-owned db.ts on GitHub while every
+  // last-match test stayed green. It is now read as GitHub reads it, and . is
+  // still literal. Every verdict this changes is one where the helper and
+  // GitHub disagreed: the last-match tests (INF-10-AC18, BUG-8, BUG-10,
+  // BUG-14, LOST-01, BUG-18) get stricter, never looser. No line in today's
+  // CODEOWNERS has a ?, so none of their results moves.
   const matches = (pattern, file) => {
     const directory = pattern.endsWith('/');
     const bare = pattern.replace(/^\//, '').replace(/\/$/, '');
@@ -629,7 +639,7 @@ describe("this repository's own workflows", () => {
       .map((part) =>
         part
           .split('*')
-          .map((piece) => piece.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+          .map((piece) => piece.replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('?', '[^/]'))
           .join('[^/]*'),
       )
       .join('.*');
@@ -643,6 +653,21 @@ describe("this repository's own workflows", () => {
     const rules = codeownersRules(text);
     return (file) => rules.filter((rule) => matches(rule.pattern, file)).at(-1)?.owners ?? [];
   };
+
+  test('BUG-18: the CODEOWNERS reader the last-match tests share reads ? as GitHub does, one character other than /, and . as itself', () => {
+    // An ownerless line like this one, last in the file, un-owns db.ts on
+    // GitHub, so the reader must see it match too (test-auditor, BUG-18).
+    expect(matches('/apps/server/src/adapters/d?.ts', 'apps/server/src/adapters/db.ts')).toBe(true);
+    expect(matches('/apps/server/src/adapters/d?.ts', 'apps/server/src/adapters/dbx.ts')).toBe(
+      false,
+    );
+    expect(matches('/apps/server/src/adapters/d?.ts', 'apps/server/src/adapters/d/.ts')).toBe(
+      false,
+    );
+    expect(matches('/apps/server/src/adapters/d?.ts', 'apps/server/src/adapters/dbxts')).toBe(
+      false,
+    );
+  });
 
   test('INF-10-AC18: the three root Vitest configurations, which decide whether the drills run at all, are paths the owner must approve', () => {
     for (const file of VITEST_CONFIGS) {
@@ -1037,52 +1062,54 @@ describe("this repository's own workflows", () => {
   // listeners (D-068). A change to it needed no owner and, made alone, did not
   // summon safety-reviewer. The owner decided it needs both.
   //
+  // D-105's amendment (2026-10-04): apps/server/src/adapters/worker-heartbeats.ts
+  // stores the worker's check-in row. The worker writes it, and /v1/health
+  // reads it to say whether anything is still watching the journeys (D-077,
+  // D-079). Once LOST-02 feeds it from the watchdog's sweeps, a fault there
+  // could show a dead watchdog as alive. It needs both too.
+  //
   // The general tests above tie the lists together, the /apps/ owner paths to
   // the filter and back, but a file in none of them passes both. These pin
-  // db.ts in each list by name. Unlike log.ts (D-102), it is not a named
-  // exception: safety-reviewer runs only when the filter matches.
-  const DB = '/apps/server/src/adapters/db.ts';
+  // both files by name, each with the same assertions db.ts had alone. Unlike
+  // log.ts (D-102), neither is a named exception: safety-reviewer runs only
+  // when the filter matches.
+  const D105_FILES = [
+    '/apps/server/src/adapters/db.ts',
+    '/apps/server/src/adapters/worker-heartbeats.ts',
+  ];
 
-  test('BUG-18: the database connection, apps/server/src/adapters/db.ts, is tracked by git and is a path the owner must approve (D-105)', () => {
-    const listed = spawnSync('git', ['ls-files', '--', DB.slice(1)], { encoding: 'utf8' });
+  test("BUG-18: the database connection, apps/server/src/adapters/db.ts, and the worker's check-in row, apps/server/src/adapters/worker-heartbeats.ts, are each tracked by git and a path the owner must approve (D-105 and its amendment)", () => {
+    for (const owned of D105_FILES) {
+      const listed = spawnSync('git', ['ls-files', '--', owned.slice(1)], { encoding: 'utf8' });
 
-    expect(listed.status, listed.stderr).toBe(0);
-    expect(
-      listed.stdout.split('\n').filter((file) => file !== ''),
-      `${DB} is not a file git tracks`,
-    ).toEqual([DB.slice(1)]);
-    expect(OWNER_APPROVAL_PATHS, `${DB} is not in OWNER_APPROVAL_PATHS`).toContain(DB);
+      expect(listed.status, listed.stderr).toBe(0);
+      expect(
+        listed.stdout.split('\n').filter((file) => file !== ''),
+        `${owned} is not a file git tracks`,
+      ).toEqual([owned.slice(1)]);
+      expect(OWNER_APPROVAL_PATHS, `${owned} is not in OWNER_APPROVAL_PATHS`).toContain(owned);
+    }
   });
 
-  test("BUG-18: under GitHub's last-match rule, the line of .github/CODEOWNERS that matches apps/server/src/adapters/db.ts names @bvst @urso-agent, and gate:integrity finds every owner-approval path owned (D-105)", () => {
+  test("BUG-18: under GitHub's last-match rule, the line of .github/CODEOWNERS that matches each of apps/server/src/adapters/db.ts and apps/server/src/adapters/worker-heartbeats.ts names @bvst @urso-agent, and gate:integrity finds every owner-approval path owned (D-105 and its amendment)", () => {
     const text = readFileSync('.github/CODEOWNERS', 'utf8');
     const ownersOf = lastMatchOwners(text);
 
     expect(reviewCodeowners(text)).toEqual([]);
-    // The reading is checked on an owned adapter beside it first.
+    // The reading is checked on an owned adapter beside them first.
     expect(ownersOf('apps/server/src/adapters/clock.ts')).toEqual(OWNERS);
-    expect(
-      ownersOf(DB.slice(1)),
-      `the owners the last line of .github/CODEOWNERS matching ${DB.slice(1)} gives it`,
-    ).toEqual(OWNERS);
+    for (const owned of D105_FILES) {
+      expect(
+        ownersOf(owned.slice(1)),
+        `the owners the last line of .github/CODEOWNERS matching ${owned.slice(1)} gives it`,
+      ).toEqual(OWNERS);
+    }
   });
 
-  test('BUG-18: the safety filter in ai-review.yml lists apps/server/src/adapters/db.ts as an entry of its own, so a change to the database connection alone summons safety-reviewer (D-105)', () => {
-    // Read as the tests above read it: a path in a comment, or under the ui
-    // filter, is not a safety entry, and an owner path's entry is its
-    // filterGlob, written out.
-    const safety = filterEntries(readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8'), 'safety');
-
-    expect(safety.headers, 'how many filters are named safety').toBe(1);
-    expect(safety.unreadable).toEqual([]);
-    expect(safety.entries, 'the safety filter has no entries').toContain(
-      'apps/server/src/adapters/clock.ts',
-    );
-    expect(
-      safety.entries,
-      `${filterGlob(DB)} is not an entry of the safety filter in ai-review.yml`,
-    ).toContain(filterGlob(DB));
-  });
+  // The safety filter is held through the general filter test above, as D-097's block is.
+  // RG-03 (BUG-18, code-reviewer): a per-file filter test for db.ts, added on this branch and
+  // never on main, was removed. The general test already fails for either file missing from
+  // the filter once it is in OWNER_APPROVAL_PATHS, which the first test above pins.
 });
 
 describe('the ruleset the owner imports', () => {
