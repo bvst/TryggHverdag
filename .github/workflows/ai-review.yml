@@ -67,6 +67,7 @@ jobs:
               - 'apps/server/src/api.ts'
               - 'apps/server/src/adapters/clock.ts'
               - 'apps/server/src/adapters/migrations.ts'
+              - 'apps/server/src/adapters/db.ts'
               - 'apps/server/drizzle.config.ts'
               - 'apps/mobile/src/safety-core/**'
               - 'apps/mobile/app.config.ts'

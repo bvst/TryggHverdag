@@ -35,6 +35,9 @@
 # keeps heartbeat data out of logs (PRIV-07). Not in the ai-review safety
 # filter, by the owner's decision (D-102).
 /apps/server/src/log.ts                    @bvst @urso-agent
+# Every process's database pool: its size, and the session limits that keep a
+# frozen server from hiding a journey from the watchdog (D-105).
+/apps/server/src/adapters/db.ts            @bvst @urso-agent
 /apps/mobile/src/safety-core/     @bvst @urso-agent
 # Where the app's permissions, background modes, backup and deep links are set;
 # background location is what the safety core stands on (D-084).
