@@ -30,3 +30,13 @@ e36a384 (requirements-status regenerated) then 4a2f128 (reviewers' memory) mid-a
   SERVE_ALL, PASS_RE. Counts v.state.getUnhandledErrors() (D9 `client.once` only dies as an unhandled error). L3 config
   ta-lost02/vitest.l3.config.mjs (PG16 on 55432, fresh db per start; ~25 s per L3 run).
 Related: [[lost01-audit]], [[in-memory-mutation]], [[second-path-isolation]]
+
+## Loop 1 re-audit (2026-10-04, PASS at 3539d4f)
+- B1 (AC19, waiting attempt that throws is stuck) and B2 (AC12, one failure holds up no other) closed: A4 and A15 killed at L6; B2 also at L3 by 1b.
+- Should-fix: 1a's "worker connection's lock_timeout still 0 afterwards" is vacuous — the open fails and the rollback undoes even a session-level set_config. J3b (first attempt session-level only) survives; fix = a committed first-attempt open on a max-1 pool, then lockTimeoutOf(single) === '0'.
+- Survivors (notes): K11/P1 stop does not await the read-back; P2 read-back stdout vs stderr (captured() merges); R12 missing pg_settings row reads "in force"; R5 digits regex unanchored; JN2/JN3 progress.rowTaken untested; J11 claim without skip locked; I8 `.*/node_modules/` branch of OUTSIDE_NODE_MODULES.
+- J4 (no lock limit at all) hangs L3 (holder and waiter deadlock, 180 s hook timeouts) rather than failing — a kill, but CI would show a timeout.
+- RG-02: 6cdf7d5 vs bb96877 → 53 red unit/imports/system (45 AC24, 6 read-back, 2 cancelled message), L3 3 red (1a, 1b, AC23). RG-03 for 8fd8466 accepted (BUG-12 health test skips pg_settings; loop-name errors without the names).
+- 8fd8466 (a test commit) also deleted 0003_left_lyja.sql while _journal.json still named it — intermediate commit broken; squash-only merging makes it moot.
+- RG-05 at b1dbfa4: watchdog 87/87, outbox 37/38, worker 140/146 (+2 timeouts), api-process 16/16, domain/watchdog 12/12, healthchecks 55/55.
+- 145 faults total, each run with a passing unmutated control.
