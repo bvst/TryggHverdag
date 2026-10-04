@@ -308,9 +308,36 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
       `now()` comes back even when no journey is overdue, because the beat
       needs it.
    2. **Ask the domain about each one.** Only a `lost_contact` outcome goes
-      on.
+      on. This is defence in depth. The read's SQL already filters, and the
+      domain decides again with the `now()` and `silent_since` the read
+      returned, so an SQL predicate that drifted toward alerting early is
+      caught there. It is pinned at L2 by a stub store whose read returns a
+      journey silent 4:59.999: no open is attempted (review loop 1,
+      `test-auditor`).
    3. **Open each journey's alert in its own transaction**, so one journey's
-      failure holds up no other:
+      failure holds up no other. **Every open, the first attempt included,
+      starts with a lock limit of its own, local to that transaction:**
+      `select set_config('lock_timeout', <LOCK_WAIT_LIMIT_MS>, true)`, ⚙️ 5 s
+      (review loop 1, `safety-reviewer`). `skip locked` covers only the
+      journey's row, and the open takes other locks:
+      - each new `outbox` row references its responder's `users` row, so the
+        insert takes a key-share lock on that row;
+      - the alert's insert can wait on the one-unresolved-alert index.
+
+      Without a limit, one `users` row held by anything (an account change,
+      a person's `psql` session) would stop the whole sweep, and every sweep
+      after it, for ever. That is loud (the beat stops), but it alerts
+      nobody.
+      - **Why 5 s,** the same value as the API's lock limit
+        (`LOCK_WAIT_LIMIT_MS`): it is above any wait this code causes
+        (milliseconds), and it caps what one held row can cost a sweep.
+      - **A 55P03 in the first attempt is a failed open.** The transaction
+        rolls back, and the journey stays `ACTIVE`. One `watchdog_failed`
+        line is written, with stage `open` and code `55P03`. The sweep carries
+        on with the next journey and counts as failed. Past 5 min 30 s the
+        journey also counts as stuck (item 6).
+
+      The steps:
       1. `select … where id = $1 and state = 'ACTIVE' and coalesce(…) <=
          now() − threshold for update skip locked`. No row means **skipped**:
          another transaction holds it (a heartbeat being written, another
@@ -331,19 +358,24 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
       5. Commit.
    4. **Try once more, waiting, for each journey that was skipped and is past
       the stuck threshold** (5 min + `STUCK_AFTER_MS`, item 6). This is step
-      3 again, with one difference. The `select` takes the row with a bounded
-      wait instead of `skip locked`: `for update`, with `SET LOCAL
-      lock_timeout` of `LOCK_WAIT_LIMIT_MS` (⚙️ 5 s) in that transaction only.
-      The worker's pool keeps no lock limit of its own (item 7). There are
-      three outcomes:
+      3 again, with the same transaction-local lock limit, and one
+      difference: the `select` takes the journey's row with `for update`,
+      without `skip locked`, so it waits for the holder, for at most the
+      limit. The worker's pool keeps no lock limit of its own (item 7).
+      There are three outcomes:
       - **opened:** the holder let go within the wait and the journey was
         still overdue;
       - **skipped:** the holder let go and the journey no longer matches. A
         concurrent sweeper had opened its alert, or contact arrived.
         PostgreSQL checks the `WHERE` again against the row the holder
         committed.
-      - **held:** the wait ran out (SQLSTATE 55P03). The store answers
-        `held` rather than throwing.
+      - **held:** the wait for the journey's row ran out (SQLSTATE 55P03).
+        The store answers `held` rather than throwing.
+
+      A row whose committed version no longer matches the `WHERE` is not
+      waited for. PostgreSQL never locks it, so the answer is `skipped` at
+      once, even while another session holds the row (`test-author`'s probe,
+      review loop 1). The fake answers the same.
 
       Journeys under the stuck threshold are not retried. The next sweep, 10
       s later, tries them again, as it always has.
@@ -369,6 +401,14 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
    - **No index for the watchdog's read.** At the private group's scale, a
      dozen or so journeys at most, a scan is cheaper than an index to keep.
      Revisit with L10's numbers.
+   - **A partial index for the outbox claim:** `outbox (next_attempt_at, id)
+     where sent_at is null` (review loop 1, `code-reviewer`).
+     - The claim runs every 10 s against a table that only grows: sent rows
+       stay until retention removes them (M4).
+     - The index holds only the unsent rows, in the claim's own order.
+     - It goes into migration `0003`, which has not merged, regenerated with
+       `pnpm --filter @trygghverdag/server db:generate`. It is not a new
+       `0004`.
    - The migration changes no existing row and is safe with journeys present.
      Unlike `0002`, it has nothing to guess.
 
@@ -428,7 +468,9 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
      - its waiting attempt (item 3, step 4) answered `held`;
      - opening it failed with an error, in either attempt.
 
-     A journey skipped only because it no longer matched is not stuck. Each
+     A failed open includes a 55P03 in the first attempt, from a lock other
+     than the journey's row (item 3). A journey skipped only because it no
+     longer matched is not stuck. Each
      stuck journey gets one `watchdog_overdue` line naming its ID. So `skip
      locked` can skip a journey, but **not silently**. A lock this code does
      not control causes the same: a person's `psql` session, or a frozen
@@ -464,8 +506,9 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
      party that knows, the holder, and it settles within the sweep that
      asked.
    - **The cost:** a sweep spends at most `LOCK_WAIT_LIMIT_MS` (5 s) on each
-     stuck journey. That happens only past the stuck threshold, and only
-     after every other journey in the sweep has had its first attempt.
+     lock it cannot get. For the journey's own row, that happens only past
+     the stuck threshold, after every other journey in the sweep has had its
+     first attempt. For a held `users` row, it can happen in a first attempt.
    - **Why 30 s:** it is more than one interval plus the idle limit (10 +
      10 s), so a stall the limit already ends never pages anyone. And it is
      well inside the 60 s budget.
@@ -496,10 +539,17 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
      resend from the phone. That is loud, and nothing is lost. 5 s is above
      any wait this code causes, which is milliseconds, or the 10 s limit for a
      frozen holder.
-   - **Why none on the worker.** The sweep and the claim take rows with `skip
-     locked`, so they never wait for a row. Graphile Worker's own statements
-     share this pool, and a lock limit there could fail its start-up for
-     reasons this task cannot see.
+   - **Why no pool-level limit on the worker.** Corrected in review loop 1
+     (`code-reviewer`): the sweep's statements do wait. The waiting attempt
+     waits for the journey's row, and an open can wait for a `users` row.
+     Each open bounds its own waits with the transaction-local limit of item
+     3, so the sweep never waits unbounded.
+     - A pool-level limit would add nothing for the sweep.
+     - It would reach Graphile Worker's own statements, which share this
+       pool, and could fail its start-up for reasons this task cannot see.
+     - The claim takes rows with `skip locked`. The delivery's marks set no
+       limit; a mark that waits for ever stalls delivery only (item 9, which
+       says that loop is not watched).
    - **Why not the migrations' pool.** A deploy that waits is visible in its
      own job. A lock limit there could fail a deploy, and that is a choice for
      the task that brings expand-then-contract migrations (M5).
@@ -508,6 +558,39 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
      121–123 and `client.js` lines 558–566, which send them at startup), or a
      `SET` on connect. Either way the values come from `domain/watchdog.ts`,
      whose L2 test holds the budget (LOST-02-AC17).
+   - **Each process reads its limits back once at start, and says what is in
+     force** (review loop 1, `safety-reviewer`).
+     - Asking is not the same as getting. A connection pooler that silently
+       drops startup parameters would leave the limits absent with every
+       check green.
+     - "The first deploy's job log is the evidence" overstated what that log
+       showed, until now.
+     - **What is read:** once, at start, on one pooled connection, with
+       `select name, setting, unit from pg_settings where name in (…)`. The
+       API reads `idle_in_transaction_session_timeout` and `lock_timeout`;
+       the worker reads `idle_in_transaction_session_timeout`.
+     - **One line on stderr, of a fixed shape:**
+       - `api: session limits in force: idle_in_transaction_session_timeout=10000ms lock_timeout=5000ms`
+       - `worker: session limit in force: idle_in_transaction_session_timeout=10000ms`
+
+       Each value is written only if it is digits with the unit `ms`, `s` or
+       `min`; anything else is written as `unreadable`. The line holds no
+       URL, host, user, password or error message.
+     - **A value other than the one asked for** gives one fixed line instead,
+       per setting. For example: `api: session limit idle_in_transaction_session_timeout is 0ms, not 10000ms: a stalled transaction will not be ended.`
+       The lock limit's line ends `a heartbeat may wait for a lock without
+       end`.
+     - **A read that fails** gives `<process>: session limits could not be
+       read (<SQLSTATE or none>).`
+     - **The process starts anyway, in every case.**
+       - A worker that refused to start would watch no journey at all,
+         which is the worst failure. The stuck check (item 6) already turns
+         a row held for ever into a page.
+       - An API that refused to start would refuse every heartbeat. Five
+         minutes later every journey would alert.
+       - So the line is the evidence, and the stuck check is the alarm.
+       - Refusing to start trades a missing safety limit for an outage. The
+         owner chose to start anyway, loudly (D-109, 2026-10-04).
    - **The limit makes a new error path, so it lands with item 8.** Read in
      `pg-pool` 3.14.0, `index.js` line 344: a client handed out loses the
      pool's `error` listener. A session that PostgreSQL ends while it is
@@ -549,20 +632,37 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
      only, and no sweep waits behind it. A send that hangs is the adapter's
      to time out (M3; Healthchecks.io's adapter already has 10 s).
    - **A run that throws is logged, and the next run happens.** Nothing that
-     goes wrong in a run can stop a loop. The beat shows a loop that has
-     stopped.
+     goes wrong in a run can stop a loop.
+   - **Only the sweep loop is watched** (corrected in review loop 1). A sweep
+     loop that stopped anyway shows as a beat that stopped. The delivery loop
+     has no such signal: a delivery that is wedged, or fails every time,
+     pages nobody.
+     - That is harmless until M3, because `UNCONFIGURED_PUSH` answers at once
+       and nothing is delivered for real.
+     - From M3 it is not harmless. "Left for later tasks" gives task 8 and M3
+       the checks that close it.
    - **The worker pool's budget.** graphile-worker keeps one of the worker's
      two connections for `LISTEN` (read in `dist/main.js`: `pgPool.connect`
      for "a client dedicated to listening", line 367). The two loops and
      Graphile's job fetching share the other one, one statement at a time.
      That is enough at this scale, and `POOL_SIZE` is unchanged.
    - **`stop()`, in this order:**
-     1. no new run starts;
-     2. a running one is awaited;
+     1. no new run starts, **of either loop, whichever loop is in flight**.
+        `runNow` has its own stopping guard. A call to it after `stop()`
+        began starts nothing: from a sweep that opened an alert, from an
+        `again` left by a run in flight, or from a timer that had already
+        fired (review loop 1, `test-auditor` and `safety-reviewer`);
+     2. the runs in flight are awaited;
      3. the runner stops, which aborts the check-in through Graphile's
         `helpers.abortSignal`, now handed to `CheckIn.checkIn(signal)`, so a
         hung Healthchecks.io no longer delays a stop;
      4. the pool is ended.
+   - **A check-in that the stop aborted fails with a fixed message of its
+     own:** `Healthchecks.io check-in cancelled: the worker is stopping.`
+     (review loop 1, `code-reviewer`). It is not "Healthchecks.io could not
+     be reached.", which would send whoever reads the log looking for a
+     network fault. A timeout keeps its own message, and so does an
+     unreachable host.
    - **On Clever Cloud's build machine nothing starts,** loops included, as
      BUG-3 has it.
    - **Why not Graphile jobs for the sweep.** Its cron is minute-granular
@@ -634,12 +734,39 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
         `createDatabase`) and opens no connection of its own;
       - only `apps/server/src/worker.ts` may import `graphile-worker`. It is
         handed `db.ts`'s pool, and would otherwise build its own from a
-        connection string.
+        connection string;
+      - **`drizzle-kit` is refused in production code** (review loop 1,
+        `privacy-security-reviewer`). Its `api` entry builds a `pg.Pool`:
+        read in `drizzle-kit` 0.31.11, `api.js` line 72389, `new
+        pg.Pool({ connectionString: …, max: 1 })`. It is a dev dependency of
+        the server, which pnpm still resolves from production files during
+        development and testing.
+        - **One named exception:** `apps/server/drizzle.config.ts` may import
+          `drizzle-kit`. It is the only file that does today (grep,
+          2026-10-04). It imports `defineConfig`, and the drizzle-kit command
+          reads it to generate migrations; it opens no connection itself;
+      - **production code may not import a file named like a test**
+        (`\.(test|spec)\.[cm]?[jt]sx?$`; review loop 1,
+        `privacy-security-reviewer`). Every rule that exempts tests would
+        otherwise exempt that file's own imports too. A production file
+        could reach `pg` through a helper it imports from a `.test.ts`. Today
+        only test files import test-named files (grep, 2026-10-04).
 
-      `pg`, `drizzle-orm` and `graphile-worker` are the server's only declared
-      packages that can open a connection (`apps/server/package.json`). pnpm
-      does not let a package import what it has not declared, so `pg-pool` is
-      not reachable from the server.
+      **Which packages can open a connection** (corrected in review loop 1).
+      Of the server's declared packages (`apps/server/package.json`), these
+      can:
+      - `pg`;
+      - `drizzle-orm`, through `node-postgres`;
+      - `graphile-worker`, from a connection string;
+      - `drizzle-kit`, through its `api` entry (a dev dependency).
+
+      `@testcontainers/postgresql` (a dev dependency) starts a database for L3
+      tests, and is imported only by test files. A general rule refusing every
+      dev dependency in production code was considered and not taken: the
+      configuration files and the test kit import dev dependencies by design,
+      and would each need an exception. pnpm does not let a package import
+      what it has not declared, so `pg-pool` is not reachable from the
+      server.
     - **The import rules must see installed packages, and today they cannot**
       (found by `test-author` in the red phase; LOST-02-AC25). Read in
       `packages/config/dependency-cruiser.cjs` on 2026-10-04:
@@ -718,13 +845,19 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
       threshold gets one attempt that waits at most 5 s for its holder, so a
       healthy concurrent sweeper is never counted as stuck (item 6).
     - **The two session limits,** their values, and the pools they are on.
+      Every open also sets a 5 s lock limit local to its transaction (item
+      3). Each process reads its limits back at start, and starts with a loud
+      line rather than refusing when they are not in force (item 7).
     - **One way to the database** (item 13, LOST-02-AC24): only `db.ts`
       imports `pg` and `drizzle-orm/node-postgres`, with `migrations.ts`'s
       migrator as the one exception, and only `worker.ts` imports
       `graphile-worker`, so every pool is made by `createPool`, with the
-      limits and listeners on it. The import check stops excluding
-      `node_modules` so that rule, and every rule naming a package, can see
-      an installed one (item 13, LOST-02-AC25).
+      limits and listeners on it. `drizzle-kit` is refused outside
+      `drizzle.config.ts`, and production code imports no test-named file.
+      The import check stops excluding `node_modules` so that rule, and every
+      rule naming a package, can see an installed one (item 13,
+      LOST-02-AC25).
+    - **The outbox claim's partial index** (item 4).
 
     The interval is the owner's (D-107), not part of D-108. D-108 was given
     to this task by the coordinating session; as the live gotcha says,
@@ -749,10 +882,14 @@ the tests are written.
   - `WatchdogStore`:
     - `overdueJourneys(afterMs)` → `{ now, journeys: { id, state, silentSince }[] }`;
     - `openLostContactAlert({ journeyId, afterMs, lockWaitMs? })` → `{ outcome: 'opened', alertId, messages } | { outcome: 'skipped' } | { outcome: 'held' }`.
-      - With no `lockWaitMs` it takes the row with `skip locked`, and never
-        answers `held`.
+      - Every call sets the transaction-local lock limit (item 3).
+      - With no `lockWaitMs` it takes the journey's row with `skip locked`,
+        and never answers `held`. A 55P03 from any other lock is thrown: a
+        failed open.
       - With `lockWaitMs` it waits at most that long. It answers `held` when
-        the wait runs out (55P03, mapped, not thrown).
+        the wait for the journey's row runs out (55P03, mapped, not thrown).
+      - A row whose committed version no longer matches is `skipped`, never
+        `held`, held or not.
   - `OutboxStore`:
     - `claimDue({ limit, leaseMs })` → `{ now, messages: { messageId, recipientId, kind, attempts }[] }`;
     - `markSent(messageId)`;
@@ -778,7 +915,9 @@ the tests are written.
     - inspection: `alerts()`, `outbox()`;
     - `hold(journeyId)` and `release(journeyId)`, which stand in for a row
       another transaction holds. A held row is skipped by an attempt without
-      a wait, and answers `held` to one with a wait.
+      a wait, and answers `held` to one with a wait. **The exception, as in
+      PostgreSQL: a held row that no longer matches** (no longer `ACTIVE`, or
+      no longer overdue) **answers `skipped` to both** (review loop 1).
     - A way to hold a row that lets go during a waiting attempt, running a
       test's action first, such as moving the journey to `LOST_CONTACT` as a
       concurrent sweeper would. Its name is test-author's.
@@ -788,6 +927,10 @@ the tests are written.
   - `fakeCheckIn` records the signal it was given.
   - `fakePostgres` records each connection's startup parameters, and can end
     a connection with a fatal error carrying a SQLSTATE and a message.
+    Review loop 1 adds one more thing: it answers the start-up read of
+    `pg_settings` with values the test chooses. That covers values as
+    asked, a pooler that dropped them, text that is not a duration, and a
+    failure with a SQLSTATE.
 
 ## Acceptance criteria
 
@@ -822,6 +965,13 @@ the tests are written.
   silent that long never is. This is `06-testing-strategy.md`'s L2 example.
 - **And** the property runs in the shared behaviour suite: against the fake
   (L2), and against the real tables with fewer runs (L3).
+- **And** the domain decides again, whatever the store's read says.
+  - A stub store's read returns a journey silent 4:59.999, with the `now()`
+    it read. The watchdog attempts no open for it, and the sweep is ok.
+  - A journey silent exactly 5:00 is opened, as the control.
+
+  This is approach item 3, step 2: defence in depth against an SQL
+  predicate that drifts.
 
 **LOST-02-AC3 — A journey that never sent a heartbeat is timed from its
 start.** *(LOST-02)*
@@ -1028,6 +1178,29 @@ alerted, and a heartbeat never waits for long.** *(LOST-02)*
   IDLE_IN_TRANSACTION_LIMIT_MS < STUCK_AFTER_MS`, and `STUCK_AFTER_MS +
   WATCHDOG_INTERVAL_MS ≤ ALERT_TIME_SLACK_MS`. The values are pinned,
   `WATCHDOG_INTERVAL_MS` at 10 000 (D-107).
+- **And** every open, the first attempt included, sets `lock_timeout` to
+  `LOCK_WAIT_LIMIT_MS` local to its own transaction.
+  - At L3: while a session outside the pools holds a responder's `users`
+    row `for update`, a first-attempt open of that responder's journey
+    rejects within the limit plus a margin with code 55P03, and writes
+    nothing. It does not wait for ever.
+  - Past the transaction, the worker connection's `lock_timeout` is still 0,
+    so the limit was local (L3).
+- **And** each process reads its limits back once at start, and writes one
+  line of approach item 7's fixed shape on stderr (in-process, through the
+  fake PostgreSQL server's answer to the `pg_settings` read):
+  - with the values asked for, the API's line names both values, and the
+    worker's names its idle limit;
+  - with a value that differs, as a pooler that dropped the startup
+    parameters would leave it, one fixed mismatch line names the setting,
+    the value read and the value asked for. The process still starts and
+    serves: the API answers `/v1/health`, and the worker sweeps;
+  - a value that is not digits with a unit is written as `unreadable`,
+    never echoed;
+  - a read that fails gives one line with its SQLSTATE, or none, and the
+    process still starts;
+  - no line holds the connection URL, its password marker or an error's
+    message.
 
 ### Loud when the watchdog cannot work (F7)
 
@@ -1087,6 +1260,16 @@ the beat.** *(LOST-02, REL-08)*
   Either way the sweep reports `ok: true` and `stuck: 0`, writes no
   `watchdog_overdue`, and records the beat. In the second case J has exactly
   one alert.
+- **And** a held row whose committed version no longer matches gets no
+  wait: the open answers `skipped` at once, not `held`. Examples are a row
+  already `LOST_CONTACT`, or one whose last contact has moved. This holds
+  against the fake and the adapter alike (shared behaviour suite, D-100).
+- **And** a journey whose open fails because a responder's `users` row is
+  held for ever (55P03 in the first attempt; AC17):
+  - under 5 min 30 s, the sweep fails, with one `watchdog_failed` line,
+    stage `open`, code `55P03`, and no beat. Other journeys in the sweep
+    are still opened.
+  - from 5 min 30 s, the same, plus one `watchdog_overdue` line naming it.
 
 **LOST-02-AC21 — The loops run, keep running and stop cleanly.** *(LOST-02,
 REL-08; D-079)*
@@ -1098,7 +1281,17 @@ REL-08; D-079)*
 - **And** a delivery that never settles delays no sweep
 - **And** `stop()` starts no further run, waits for one in flight, aborts the
   check-in's signal, and only then ends the pool
+- **And** "no further run" holds for both loops, whichever is in flight
+  when `stop()` is called. `stop()` comes while a sweep that will open an
+  alert is in flight, while a delivery with an `again` pending is in
+  flight, and while both are in flight. In each case no run of either loop
+  starts after `stop()` began, and no timer is left set.
+- **And** a call to `runNow` after `stop()` began starts nothing, on either
+  loop
 - **And** a check-in that hangs no longer delays the exit after SIGTERM
+- **And** a check-in aborted by the stop fails with exactly `Healthchecks.io
+  check-in cancelled: the worker is stopping.`. A timeout still fails with
+  its own message, and an unreachable host with "could not be reached".
 - **And** on the build machine (`INSTANCE_TYPE=build`) no loop runs (BUG-3).
 
 ### Nothing personal in a log (PRIV-07)
@@ -1131,6 +1324,9 @@ a SQLSTATE only.** *(LOST-02, PRIV-07)*
 - **And** a second outbox row for the same (alert, recipient, kind) is
   refused by the database itself
 - **And** an outbox row naming no alert, or no user, is refused
+- **And** `outbox` has the claim's partial index. `pg_get_indexdef` reads
+  its columns as `(next_attempt_at, id)` and its predicate as `sent_at IS
+  NULL`. It is created by `0003_*.sql` itself, and no `0004_*.sql` exists.
 - **And** the only columns named like a coordinate, in every table, are still
   `positions.latitude` and `positions.longitude`
 - **And** on PostgreSQL 15, migration `0003` runs over a database holding
@@ -1167,8 +1363,27 @@ Graphile Worker.** *(LOST-02; D-108)*
   matched only one form would pass its fixture and miss the other in the
   repository. The resolved form can only fire once the configuration stops
   excluding `node_modules` (LOST-02-AC25).
+- **And `drizzle-kit` is refused in production code** (review loop 1):
+  - a module, a domain file and an adapter importing `drizzle-kit`, and
+    `drizzle-kit/api`, are refused, installed and not installed, each naming
+    the rule;
+  - `apps/server/drizzle.config.ts` importing `drizzle-kit` passes;
+  - a file only named `drizzle.config.ts` in another folder is refused;
+  - test files importing it pass.
+- **And production code imports no file named like a test** (review loop 1):
+  - a module, a domain file, an adapter, `api-process.ts` and `worker.ts`
+    importing `./helper.test.ts` are refused, by static import and by
+    `import()`, each naming the rule;
+  - so is `x.spec.ts`, and a `.test.mjs`;
+  - a test file importing a test-named helper passes, as `capture.test.ts`
+    and `fake-postgres-server.test.ts` are imported today;
+  - the control: a production file that imports a test-named helper, which
+    imports `pg`, is refused by this rule. Without it, the helper's own
+    import of `pg` would escape AC24's rule, which exempts test files.
 - **And** `pnpm run imports:check` passes on the repository itself (L1). That
-  is the control that the rule leaves today's three importers alone.
+  is the control that the rules leave today's importers alone: `db.ts`,
+  `migrations.ts`, `worker.ts`, `drizzle.config.ts`, and the test files that
+  import `capture.test.ts` and `fake-postgres-server.test.ts`.
 
 **LOST-02-AC25 — Installed packages reach the import rules, the location
 SDK's rule included.** *(LOST-02; D-108)*
@@ -1217,7 +1432,7 @@ SDK's rule included.** *(LOST-02; D-108)*
 | AC | Level | Where | How |
 |----|-------|-------|-----|
 | AC1 | L6, L3 | `apps/server/src/alerts.system.test.ts` (new); `apps/server/src/alerts.integration.test.ts` (new) | L6: `createApi` with the journey service, plus `createWatchdog` and `createPushSender`, all over one `fakeJourneyStore({ clock })`, with `fakePush()`, `fakeLog()` and `fakeWorkerHeartbeats()`. L3: the real adapter and modules, and `fakePush()` |
-| AC2 | L2, L3 | `domain/journey.test.ts`; behaviour suite, run by `fake-journey-store.test.ts` and `journeys.integration.test.ts` | fast-check over heartbeat schedules and sweep times |
+| AC2 | L2, L3 | `domain/journey.test.ts`; behaviour suite, run by `fake-journey-store.test.ts` and `journeys.integration.test.ts`; `alerts.system.test.ts` (the stub-store case) | fast-check over heartbeat schedules and sweep times. The stub-store case is in the `alerts` group's own file, so the mutation run sees it |
 | AC3 | L2, L6, L3 | domain test; system test; behaviour suite | |
 | AC4 | L3, L1, L6 | integration test; lint in `gate:static`; system test | Timestamps relative to `now()`; brackets. **Names REL-01** |
 | AC5 | L2, L6, L3 | domain test; system test; behaviour suite | **Names SM-03** |
@@ -1232,14 +1447,14 @@ SDK's rule included.** *(LOST-02; D-108)*
 | AC14 | L6 | system test | |
 | AC15 | L6, L2 | system test; `worker.test.ts` | The fake clock moved across each retry |
 | AC16 | L6, L3 | system test; integration test | A push that resolves after the idle limit |
-| AC17 | L3, L2, in-process | `database.integration.test.ts`; `domain/watchdog.test.ts` (new); `api-process.test.ts` and `worker.test.ts` with `fakePostgres` | Limits set short for the test; the production values read from the startup parameters |
+| AC17 | L3, L2, in-process | `database.integration.test.ts`; `alerts.integration.test.ts` (an open's own lock limit); `domain/watchdog.test.ts` (new); `api-process.test.ts` and `worker.test.ts` with `fakePostgres` | Limits set short for the test; the production values read from the startup parameters; the read-back line, through the fake's answer to `pg_settings` |
 | AC18 | In-process, L3 | `api-process.test.ts`, `worker.test.ts`; `database.integration.test.ts` | Marker password in the URL; `console.warn` captured. **Names SEC-03** |
 | AC19 | L6, L2 | system test; `worker.test.ts` | **Names REL-08** |
-| AC20 | L3, L6 | integration test (an unbounded `psql`-like session from the test's own client, and a holder that lets go within the wait); system test (the fake's two kinds of hold) | **Names REL-08** |
-| AC21 | L2 | `worker.test.ts`, `healthchecks.test.ts` | Fake timers; stub loops; the abort signal observed. **Names REL-08** |
+| AC20 | L3, L6, L2 | integration test (an unbounded `psql`-like session from the test's own client, a holder that lets go within the wait, and a held `users` row); system test (the fake's two kinds of hold); behaviour suite (a held row that no longer matches) | **Names REL-08** |
+| AC21 | L2 | `worker.test.ts`, `healthchecks.test.ts` | Fake timers; stub loops; stop with either or both loops in flight; the abort signal and its fixed message observed. **Names REL-08** |
 | AC22 | L1, L2, L6 | `tsc`; `log.test.ts`; system test (`captured()`) | **Names PRIV-07** |
-| AC23 | L3 | `journeys.integration.test.ts`; `deploy.integration.test.ts` (PostgreSQL 15) | |
-| AC24 | L1, L2 | `imports:check` in `gate:static`; `packages/config/database-imports.test.mjs` (new) | The real depcruise over a fixture, as `dependency-cruiser.test.mjs` does. **Not in that file:** see the note below |
+| AC23 | L3 | `journeys.integration.test.ts`; `deploy.integration.test.ts` (PostgreSQL 15) | The claim's partial index read with `pg_get_indexdef` |
+| AC24 | L1, L2 | `imports:check` in `gate:static`; `packages/config/database-imports.test.mjs` (new) | The real depcruise over a fixture, as `dependency-cruiser.test.mjs` does; the `drizzle-kit` and test-named-file rules too. **Not in that file:** see the note below |
 | AC25 | L1, L2 | `imports:check`; `packages/config/database-imports.test.mjs` | Packages installed in the fixture as pnpm installs them; a probe against the repository itself |
 
 ### Notes
@@ -1341,6 +1556,106 @@ wording only, keeping the criterion and the assertions.
 12. AC24's existing control (`imports:check` passes over the repository)
     stays as written, and now also proves that no new exemption was needed.
 
+### Tests added in review loop 1 (settled 2026-10-04)
+
+From `safety-reviewer`, `privacy-security-reviewer`, `code-reviewer` and
+`test-auditor` on `d71feff`. The names are exact. `test-author` may adjust
+wording only, keeping the criterion and the assertions. The numbers follow
+the coordinator's list of review findings.
+
+**1. Every open sets its own lock limit** (approach item 3; AC17, AC20):
+- 1a. L3, `apps/server/src/alerts.integration.test.ts`: `LOST-02-AC17: with
+  a responder’s users row held for update by a session outside both pools, a
+  first-attempt open of that journey fails within LOCK_WAIT_LIMIT_MS plus a
+  margin with code 55P03, writes nothing, and the worker connection’s own
+  lock_timeout is still 0 afterwards`.
+- 1b. L3, same file: `LOST-02-AC20: a journey whose responder’s users row is
+  held for ever: under 5 min 30 s the sweep fails with one watchdog_failed
+  line, stage open, code 55P03, still opens the other overdue journeys and
+  records no beat; from 5 min 30 s it also writes one watchdog_overdue line
+  naming the journey`.
+
+**2. Each process reads its limits back at start** (approach item 7; AC17):
+- 2a. In-process, `apps/server/src/api-process.test.ts`: `LOST-02-AC17: at
+  start the API reads idle_in_transaction_session_timeout and lock_timeout
+  back from pg_settings and writes exactly one line: api: session limits in
+  force: idle_in_transaction_session_timeout=10000ms lock_timeout=5000ms`.
+- 2b. Same file: `LOST-02-AC17: when the database reports a limit other than
+  the one asked for, as a pooler that dropped the startup parameters would,
+  the API writes the fixed mismatch line for each such setting, and still
+  starts and answers /v1/health`.
+- 2c. Same file: `LOST-02-AC17: a limit that is not digits and a unit is
+  written as unreadable, a failed read gives one line with its SQLSTATE, and
+  no start-up line holds the connection URL, its password marker or an error
+  message`.
+- 2d. In-process, `apps/server/src/worker.test.ts`: the same three for the
+  worker's one setting. In 2b's case the worker still sweeps.
+
+**3. The outbox claim's partial index** (approach item 4; AC23):
+- 3a. L3, `apps/server/src/adapters/journeys.integration.test.ts`:
+  `LOST-02-AC23: outbox has a partial index on (next_attempt_at, id) where
+  sent_at is null, created by migration 0003 itself, and no migration 0004
+  exists`.
+
+**4. Two more import rules** (approach item 13; AC24), in
+`packages/config/database-imports.test.mjs`:
+- 4a. `LOST-02-AC24: drizzle-kit and drizzle-kit/api, installed and not
+  installed, are refused from a module, a domain file and an adapter, naming
+  the rule`.
+- 4b. `LOST-02-AC24: apps/server/drizzle.config.ts may import drizzle-kit; a
+  file only named drizzle.config.ts in another folder may not; test files
+  may`.
+- 4c. `LOST-02-AC24: production code importing a file named like a test
+  (.test.ts, .spec.ts, .test.mjs), by static import or import(), is refused,
+  naming the rule; a test file importing one is not`.
+- 4d. `LOST-02-AC24: (control) a production file that imports a test-named
+  helper which imports pg is refused by the test-file rule, so the helper’s
+  pg cannot escape the database rule`.
+- 4e. AC24's repository control (`imports:check` passes over the repository)
+  now also covers `drizzle.config.ts` and today's test-named helpers.
+
+**5. `stop()` starts no further run of either loop** (approach item 9;
+AC21), in `apps/server/src/worker.test.ts`:
+- 5a. `LOST-02-AC21: stop() while a sweep that will open an alert is in
+  flight: no delivery starts after stop() began, and no timer is left set`.
+- 5b. `LOST-02-AC21: stop() while a delivery is in flight with another run
+  pending: it does not run again, and no timer is left set`.
+- 5c. `LOST-02-AC21: stop() while both loops are in flight: neither starts
+  another run`.
+- 5d. `LOST-02-AC21: runNow on either loop after stop() began starts
+  nothing`.
+
+**7. A check-in aborted by the stop has its own message** (approach item 9;
+AC21):
+- 7a. `apps/server/src/adapters/healthchecks.test.ts`: `LOST-02-AC21: a
+  check-in aborted through the caller’s signal fails with exactly
+  “Healthchecks.io check-in cancelled: the worker is stopping.”; a timeout
+  and an unreachable host keep their own messages`.
+- 7b. `apps/server/src/worker.test.ts`: `LOST-02-AC21: stopping the worker
+  during a hung check-in writes the cancelled message, not “could not be
+  reached”`.
+
+**8. A held row that no longer matches is `skipped`** (approach item 3;
+AC20):
+- 8a. The shared behaviour suite (`packages/test-kit/src/journey-store-behaviour.ts`,
+  run by `fake-journey-store.test.ts` at L2 and `journeys.integration.test.ts`
+  at L3): `LOST-02-AC20: a held row that no longer matches answers skipped at
+  once to an open with a lock wait, never held: one already LOST_CONTACT, and
+  one whose last contact has moved`. The pinned list of behaviour names in
+  `fake-journey-store.test.ts` grows with it, by design.
+
+**9. The domain filter is defence in depth** (approach item 3, step 2;
+AC2):
+- 9a. `apps/server/src/alerts.system.test.ts`: `LOST-02-AC2: with a stub
+  store whose read returns a journey silent 4 min 59.999 s, the watchdog
+  attempts no open and the sweep is ok; a journey silent exactly 5 min is
+  opened`.
+  - It lives in the `alerts` mutation group's own file: a test elsewhere
+    would leave the mutant that drops the domain check alive.
+
+Items 6 and 10 change no test in this task. They are corrections, and
+entries under "Left for later tasks".
+
 ### Existing assertions that change by design (RG-03)
 
 `test-author` changes each, with the written reason RG-03 asks for in the
@@ -1420,13 +1735,13 @@ filter, lines 54–80). `adapters/db.ts`'s row shows the state after BUG-18
 | `apps/server/src/ports.ts` | Two store ports, `Push`, `CheckIn`'s signal, five `LogEvent`s | no | no | — |
 | `apps/server/src/adapters/journeys.ts` | The sweep's and the outbox's SQL | **yes** | **yes** | no (D-095) |
 | `apps/server/src/adapters/db.ts` | Session limits and listeners in `createPool` | **yes**, through BUG-18 (D-105) | **yes**, through BUG-18 (D-105) | no |
-| `apps/server/src/adapters/healthchecks.ts` | Takes the abort signal | **yes** | **yes** | `healthchecks` |
-| `apps/server/src/db/schema.ts` | `alerts`, `outbox`, two enums | **yes** | **yes** | no |
-| `apps/server/src/db/migrations/0003_*.sql`, `meta/*` | Generated with `pnpm --filter @trygghverdag/server db:generate` | **yes** | **yes** | no |
-| `apps/server/src/worker.ts` | The loops, the beat, the check-in rule, the default push, the pool's options | **yes** | **yes** | `process` |
-| `apps/server/src/api-process.ts` | The pool's options and log | **yes** | **yes** | `api-process` |
+| `apps/server/src/adapters/healthchecks.ts` | Takes the abort signal; a check-in the signal aborts gets its own fixed message | **yes** | **yes** | `healthchecks` |
+| `apps/server/src/db/schema.ts` | `alerts`, `outbox`, two enums; the claim's partial index on `outbox` | **yes** | **yes** | no |
+| `apps/server/src/db/migrations/0003_*.sql`, `meta/*` | Generated with `pnpm --filter @trygghverdag/server db:generate`; regenerated in review loop 1 to hold the claim's partial index (no `0004`) | **yes** | **yes** | no |
+| `apps/server/src/worker.ts` | The loops (with `runNow`'s stopping guard), the beat, the check-in rule, the default push, the pool's options, the start-up read-back line | **yes** | **yes** | `process` |
+| `apps/server/src/api-process.ts` | The pool's options and log; the start-up read-back line | **yes** | **yes** | `api-process` |
 | `apps/server/src/log.ts` | Five events | **yes** (D-102) | no (D-102) | no |
-| `packages/config/dependency-cruiser.cjs` | `worker.ts` may import `log.ts`; the new rule of LOST-02-AC24 (one way to the database); LOST-02-AC25: `exclude` hides nothing inside `node_modules`, the package rules match both forms, and `domain-has-no-io` exempts test files | **yes** | no | — |
+| `packages/config/dependency-cruiser.cjs` | `worker.ts` may import `log.ts`; the rules of LOST-02-AC24 (one way to the database; `drizzle-kit` only in `drizzle.config.ts`; no test-named file imported by production code); LOST-02-AC25: `exclude` hides nothing inside `node_modules`, the package rules match both forms, and `domain-has-no-io` exempts test files | **yes** | no | — |
 | `packages/config/dependency-cruiser.test.mjs` | The log-import rule admits `worker.ts` (test-author) | **yes** | no | — |
 | `packages/config/database-imports.test.mjs` (new) | LOST-02-AC24 and AC25, counted by `req:coverage` (test-author) | **yes** | no | — |
 | `scripts/lib/gate-decisions.mjs` | The `alerts` group | **yes** | **yes** | input (D-098) |
@@ -1535,12 +1850,18 @@ compared", never as "passed".
 - **[F9](../plan/03-safety-reliability-security.md#failure-modes) and
   [F10](../plan/03-safety-reliability-security.md#failure-modes):** not
   touched.
-- **The platform may refuse the startup parameters.** A connection pooler in
-  front of Clever Cloud's PostgreSQL could reject them, and then every
-  connection would fail. That would show at once: the deploy's smoke test and
-  `/v1/health` go red. Whether there is one was **not checked**: sessions never
-  reach `api.clever-cloud.com`. The first deploy's job log is the evidence. A
-  `SET` on connect is the fallback (approach item 7).
+- **The platform may refuse the startup parameters, or drop them.** Whether
+  a connection pooler sits in front of Clever Cloud's PostgreSQL was **not
+  checked**: sessions never reach `api.clever-cloud.com`.
+  - A pooler that rejected the parameters would fail every connection. The
+    deploy's smoke test and `/v1/health` would go red at once.
+  - One that silently dropped them would leave the limits absent, with every
+    check green. Since review loop 1, each process reads its limits back at
+    start and says what is in force, or that they differ (approach item 7).
+    So the first deploy's log shows the values really in force, which is
+    the evidence. Before, it showed only that the process started.
+  - A `SET` on connect is the fallback for a pooler that rejects the
+    parameters.
 - **A legitimate transaction ended by the limit** on a starved instance (D-077
   notes reduced CPU on small plans). A heartbeat gets a 500 and the phone
   resends; a sweep is retried in 10 s. Loud, and nothing is lost.
@@ -1631,6 +1952,48 @@ compared", never as "passed".
   `test-auditor` on #60.
 - **Telling the walker that their group was alerted.** It is not in the
   story.
+
+### Left for later tasks (from review loop 1)
+
+Each is named here so the task that owns it finds it. None blocks this task.
+
+- **Task 8, the canary, must go red when delivery is wedged or always
+  failing** (`safety-reviewer`). The beat watches the sweep loop only.
+  Nothing watches the delivery loop (approach item 9). An alert that opens
+  and is never pushed pages nobody until the canary checks that its test
+  responder was actually pushed to.
+- **M3's push adapter must bound each send with a time limit of its own,**
+  as the Healthchecks.io adapter does. A send that never answers would
+  otherwise wedge the delivery loop, unseen until task 8's check exists.
+- **M3's adapter test must check what reaches Apple and Google**
+  (`privacy-security-reviewer`). For every message, the payload, the request
+  headers and the collapse ID must carry neither `recipientId` nor any
+  personal detail, and the collapse ID must be the `messageId`. This task
+  checks the port's message (AC14). What the adapter sends from it is M3's.
+- **M4, retention: account deletion and the outbox** (`privacy-security-reviewer`).
+  - The new foreign keys are `on delete no action`, as SM-01's are.
+  - So deleting a user is refused while any `outbox` row names them as
+    recipient, and deleting a journey while an alert references it.
+  - M4 decides the order of deletion, or a cascade, with the retention job
+    (the M2 log already lists account deletion for the login task).
+- **M4, retention: "last known position" in the alert record**
+  (`privacy-security-reviewer`).
+  - The retention rule lists "who was alerted, when, last known position"
+    among alert records kept 30 days.
+  - `alerts` copies no position: coordinates live in `positions` alone, by
+    LOST-01's design.
+  - Positions are deleted 24 hours after a journey ends, so from then on an
+    alert record has no last known position.
+  - M4 decides which way to go, and writes it into the DPIA:
+    - keep a position with the alert for 30 days, which would mean a second
+      place for coordinates;
+    - or read the rule's "last known position" as lasting only as long as
+      the positions do.
+  - This is a privacy decision, so it is the owner's.
+- **Settled by the owner (D-109, 2026-10-04): a process whose session limits
+  are not in force starts anyway, with a loud line** (approach item 7). A
+  worker that refused would watch nothing, and the stuck check pages for the
+  one harm a missing limit can cause, a row held for ever.
 
 ## Settled by the plan, so not asked
 

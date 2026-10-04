@@ -3606,3 +3606,29 @@ any other path is work, not a candidate for the same treatment.
   parameters; `runWorkerProcess` always uses the unconfigured push until M3,
   and only `startWorker` takes a `push`; Graphile Worker's own stop wait is set
   to 0 so a stop is not delayed 5 s.
+
+## D-109 — A process whose database time limits were ignored starts anyway, loudly (LOST-02)
+- **Date:** 2026-10-04 · **Status:** Accepted (owner, 2026-10-04). Asked in
+  session with Claude's recommendation, "Start anyway, loud line". The
+  alternative offered was "Refuse to start" · **Section:** 5 and 8 (AR-06,
+  REL-08; D-108)
+- **Context:**
+  - D-108 bounds how long a frozen server can hold a journey's row: an idle
+    limit of 10 s on both process pools and a lock limit of 5 s on the API's,
+    sent when each connection starts. A connection pooler could silently drop
+    those startup settings, leaving every check green and the limits absent.
+  - LOST-02's review loop 1 makes each process read its limits back once at
+    start and write them on one fixed line.
+- **Decision:**
+  - When a limit reads back other than asked, or cannot be read, the process
+    writes a fixed line saying so on stderr and **starts anyway**.
+  - A worker that refused to start would watch nobody. An API that refused
+    would turn away every heartbeat, so every active journey would alert after
+    5 minutes. The harm a missing limit can cause, a journey hidden by a held
+    row, is still caught: the watchdog's stuck check stops the worker's
+    check-in, and Healthchecks.io pages the owner (D-108, REL-08).
+- **Rejected:** refusing to start. It fails a deploy visibly, but on a restart
+  there is no old version to fall back to.
+- **Consequences:** the read-back line, not the absence of an error, is what
+  shows the limits are in force. Reading it after the first deploy is the
+  check (LOST-02-AC17).
