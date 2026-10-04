@@ -2,7 +2,8 @@
 
 **Milestone:** M2, task 3 of 8 (D-090) · **Delivers:** LOST-02 (its server
 half); AR-05 and AR-06, untracked; the bound on LOST-01's row lock; D-079's
-two watchdog follow-ups; D-068's pool revisit · **Decisions:** D-007, D-019,
+two watchdog follow-ups; D-068's pool revisit; one way to the database
+(AR-10) · **Decisions:** D-007, D-019,
 D-021, D-031, D-032, D-033, D-036, D-042, D-065, D-068, D-075, D-079, D-086,
 D-087, D-089, D-090, D-091, D-092, D-095, D-098, D-099, D-100, D-101, D-102,
 D-105, D-106, D-107, D-108 · **Written:** 2026-10-03, on `main` at `fe384c5`
@@ -558,7 +559,32 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
 13. **Import boundaries** (AR-10).
     - `modules/alerts/` gets ports only.
     - `worker.ts` and `api-process.ts` wire the adapters and the log.
-    - The dependency-cruiser rule above is the one change.
+    - The log-import rule admits `worker.ts` (item 10).
+    - **One way to the database: a new rule in
+      `packages/config/dependency-cruiser.cjs`** (LOST-02-AC24; from BUG-18's
+      privacy and security review). The limits of item 7 and the listeners of
+      item 8 hold only for pools made by `createPool`. Today nothing stops a new
+      file from opening a pool of its own. Such a pool would sit outside the
+      connection budget (`POOL_SIZE`), outside the session limits and outside
+      the error listeners, so it could hold a journey's row for ever or print
+      the connection string. In production code, `apps/` and `packages/`, test
+      files exempt:
+      - only `apps/server/src/adapters/db.ts` may import `pg` or
+        `drizzle-orm/node-postgres`, any subpath included;
+      - **one named exception:** `apps/server/src/adapters/migrations.ts` may
+        import `drizzle-orm/node-postgres/migrator`, and nothing else from
+        that list. It is the only production file that imports any of them
+        today besides `db.ts` and `worker.ts` (checked by grep on 2026-10-04).
+        The migrator takes the database `db.ts` built (`createPool`,
+        `createDatabase`) and opens no connection of its own;
+      - only `apps/server/src/worker.ts` may import `graphile-worker`. It is
+        handed `db.ts`'s pool, and would otherwise build its own from a
+        connection string.
+
+      `pg`, `drizzle-orm` and `graphile-worker` are the server's only declared
+      packages that can open a connection (`apps/server/package.json`). pnpm
+      does not let a package import what it has not declared, so `pg-pool` is
+      not reachable from the server.
 
 14. **A decision to record: D-108** (delegated, D-031). `plan-keeper` writes
     it in this pull request. The owner's answers are D-106 and D-107, and
@@ -571,6 +597,11 @@ and its level (M3); acknowledgement and SMS (tasks 5 and 6); back in contact
       which leaves that choice to this task, and changes how D-065 item 4 is
       met.
     - **The two session limits,** their values, and the pools they are on.
+    - **One way to the database** (item 13, LOST-02-AC24): only `db.ts`
+      imports `pg` and `drizzle-orm/node-postgres`, with `migrations.ts`'s
+      migrator as the one exception, and only `worker.ts` imports
+      `graphile-worker`, so every pool is made by `createPool`, with the
+      limits and listeners on it.
 
     The interval is the owner's (D-107), not part of D-108. D-108 was given
     to this task by the coordinating session; as the live gotcha says,
@@ -951,6 +982,38 @@ a SQLSTATE only.** *(LOST-02, PRIV-07)*
   journeys in every state with heartbeats and positions, and changes none of
   their rows (`deploy.integration.test.ts`).
 
+### One way to the database (AR-10)
+
+**LOST-02-AC24 — Only `db.ts` opens the database, and only `worker.ts` uses
+Graphile Worker.** *(LOST-02; D-108)*
+- **Given** the repository's import rules, run as `pnpm run imports:check`
+  runs them (the real depcruise binary, the repository's
+  `.dependency-cruiser.cjs`), over a small server written for each case in a
+  temporary folder. This is how LOST-01's log-import rule is tested
+  (`b28d859`, tests `a00a309`).
+- **When** a module (`modules/…`), a domain file (`domain/…`) and an adapter
+  other than `db.ts` (`adapters/…`) each import `pg`, then
+  `drizzle-orm/node-postgres`, then `graphile-worker`, with a static import
+  and with `import()`
+- **Then** each is refused, naming the new rule
+- **And** a file only named like one of the allowed files, in another folder,
+  is refused
+- **And** `adapters/migrations.ts` importing `pg` or
+  `drizzle-orm/node-postgres` itself is refused
+- **And** these pass:
+  - `adapters/db.ts` importing `pg` and `drizzle-orm/node-postgres`;
+  - `adapters/migrations.ts` importing `drizzle-orm/node-postgres/migrator`;
+  - `worker.ts` importing `graphile-worker`;
+  - test files importing any of the three, an integration test and a system
+    test among them.
+- **And** the rule matches each package both as depcruise resolves it under
+  pnpm's layout (`node_modules/.pnpm/<name>@<version>/node_modules/<name>/…`,
+  written into the fixture) and as a name it cannot resolve. A rule that
+  matched only one form would pass its fixture and miss the other in the
+  repository.
+- **And** `pnpm run imports:check` passes on the repository itself (L1). That
+  is the control that the rule leaves today's three importers alone.
+
 ## Test plan
 
 | AC | Level | Where | How |
@@ -978,6 +1041,7 @@ a SQLSTATE only.** *(LOST-02, PRIV-07)*
 | AC21 | L2 | `worker.test.ts`, `healthchecks.test.ts` | Fake timers; stub loops; the abort signal observed. **Names REL-08** |
 | AC22 | L1, L2, L6 | `tsc`; `log.test.ts`; system test (`captured()`) | **Names PRIV-07** |
 | AC23 | L3 | `journeys.integration.test.ts`; `deploy.integration.test.ts` (PostgreSQL 15) | |
+| AC24 | L1, L2 | `imports:check` in `gate:static`; `packages/config/database-imports.test.mjs` (new) | The real depcruise over a fixture, as `dependency-cruiser.test.mjs` does. **Not in that file:** see the note below |
 
 ### Notes
 
@@ -991,6 +1055,24 @@ a SQLSTATE only.** *(LOST-02, PRIV-07)*
   join `JOURNEY_STORE_BEHAVIOUR`, and `fake-journey-store.test.ts` pins their
   names. A fake more lenient than the adapter would make the L6 tests prove
   the fake (D-100).
+- **AC24's tests go in a new, counted file,
+  `packages/config/database-imports.test.mjs`, not in
+  `dependency-cruiser.test.mjs`.**
+  - That file opens with `// req-coverage: fixtures-only`, and `req:coverage`
+    counts no test in a file marked so (`countedTests` in
+    `scripts/lib/requirements.mjs`, read 2026-10-04).
+  - A `LOST-02-AC24` named only there would leave the criterion uncounted,
+    and the `traceability` job would refuse this pull request
+    (`uncoveredCriteria`).
+  - The marker is right for that file: its header says its tests "prove an
+    import rule, not a LOST-01 criterion". AC24 is a criterion of this
+    task, so its tests must count.
+  - The new file reuses the same approach, the real depcruise over a
+    temporary fixture, and carries no marker.
+  - It must name no other tracked requirement as sample data, or that
+    requirement would count too.
+  - Where the shared fixture code lives, copied or moved into a helper both
+    files import, is `test-author`'s choice.
 - **Test names** start with `LOST-02-ACn:`. Files holding the criteria above
   also name the covered IDs the table marks. The criteria do not need those
   names, because those IDs are already covered.
@@ -1085,7 +1167,9 @@ filter, lines 54–80). `adapters/db.ts`'s row shows the state after BUG-18
 | `apps/server/src/worker.ts` | The loops, the beat, the check-in rule, the default push, the pool's options | **yes** | **yes** | `process` |
 | `apps/server/src/api-process.ts` | The pool's options and log | **yes** | **yes** | `api-process` |
 | `apps/server/src/log.ts` | Five events | **yes** (D-102) | no (D-102) | no |
-| `packages/config/dependency-cruiser.cjs`, its test | `worker.ts` may import `log.ts` | **yes** | no | — |
+| `packages/config/dependency-cruiser.cjs` | `worker.ts` may import `log.ts`; the new rule of LOST-02-AC24 (one way to the database) | **yes** | no | — |
+| `packages/config/dependency-cruiser.test.mjs` | The log-import rule admits `worker.ts` (test-author) | **yes** | no | — |
+| `packages/config/database-imports.test.mjs` (new) | LOST-02-AC24, counted by `req:coverage` (test-author) | **yes** | no | — |
 | `scripts/lib/gate-decisions.mjs` | The `alerts` group | **yes** | **yes** | input (D-098) |
 | `scripts/lib/gate-decisions.test.mjs`, `scripts/stryker-config.test.mjs`, `scripts/mutation.test.mjs` | Pins (test-author) | **yes** | no | — |
 | `packages/test-kit/src/` (`fakePush`, the store's new methods, the behaviour suite, `fakeCheckIn`, `fakePostgres`, their tests, `index.ts`) | Fakes (test-author) | **yes** (D-100) | **yes** | input (D-098) |

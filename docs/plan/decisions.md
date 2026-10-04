@@ -3513,3 +3513,12 @@ any other path is work, not a candidate for the same treatment.
   - The first deploy's job log is the evidence that Clever Cloud's PostgreSQL
     accepts the startup settings. If it does not, a `SET` on connect is the
     fallback.
+- **Amended 2026-10-04 (delegated, D-031), from BUG-18's privacy and security
+  review:** one way to the database. In production code only
+  `apps/server/src/adapters/db.ts` may import `pg` or
+  `drizzle-orm/node-postgres`, and only `apps/server/src/worker.ts` may import
+  `graphile-worker`. `adapters/migrations.ts` may import the migrator subpath
+  alone, because it opens no connection of its own. A dependency-cruiser rule
+  enforces it, with tests in `packages/config/database-imports.test.mjs`
+  (LOST-02-AC24). Without it, a new module could open a pool outside the
+  connection budget, the session limits and the error listeners.
