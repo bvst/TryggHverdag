@@ -738,6 +738,11 @@ describe('LOST-02-AC25: installed packages reach the import rules', () => {
       'node_modules/.pnpm/react-native-background-geolocation@4.18.0/node_modules/react-native-background-geolocation/dist/index.js',
       'node_modules/.pnpm/zod@4.1.0/node_modules/zod/build/index.js',
       'apps/server/node_modules/zod/dist/index.js',
+      // RG-03 (LOST-02, review loop 2, test-auditor): added. Every path above
+      // with a dist/ or build/ in it also runs through a node_modules folder
+      // further down, so the exclude's alternative for the root node_modules
+      // could be dropped and nothing failed. This one is in the root's only.
+      'node_modules/zod/dist/index.js',
     ]) {
       expect(hidden(inside), inside).toBe(false);
     }

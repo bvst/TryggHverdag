@@ -2142,9 +2142,31 @@ describe('SEC-03 and LOST-02: the worker reads its session limit back at start (
   test('LOST-02-AC17: the read-back lines go to stderr and nothing goes to stdout, through the writer bin/worker.ts gives it', async () => {
     // bin/worker.ts gives the worker no writer of its own, so the worker
     // writes through its default, which is what this test runs.
+    //
+    // RG-03 (LOST-02, review loop 2, test-auditor): the pattern was
+    // /\bwrite\s*[:,]/, which missed `{ …, write }` as the last property and
+    // a `write(text) {…}` method. It now finds a property named write in any
+    // of the three shapes, and still not a member such as
+    // process.stderr.write(…) or the word in a comment. Held below, both ways.
+    const passesAWriter = /(?<![.\w$])write\s*(?:[:,}]|\([^)]*\)\s*\{)/;
+    for (const shape of [
+      'runWorkerProcess(url, { write: (text) => undefined })',
+      'runWorkerProcess(url, { healthchecks, write })',
+      'runWorkerProcess(url, { write, healthchecks })',
+      'runWorkerProcess(url, { write(text) { log(text); } })',
+    ]) {
+      expect(shape, shape).toMatch(passesAWriter);
+    }
+    for (const other of [
+      'process.stderr.write(text);',
+      '// what the worker would write to stderr',
+      'const writeToStderr = () => undefined;',
+    ]) {
+      expect(other, other).not.toMatch(passesAWriter);
+    }
     const entry = readFileSync(new URL('bin/worker.ts', import.meta.url), 'utf8');
     expect(entry).toMatch(/runWorkerProcess\(/);
-    expect(entry).not.toMatch(/\bwrite\s*[:,]/);
+    expect(entry).not.toMatch(passesAWriter);
 
     const database = await listeningFakePostgres(
       (query) => pgSettingsAnswer(query, IDLE_AS_ASKED) ?? quietDatabase(query),

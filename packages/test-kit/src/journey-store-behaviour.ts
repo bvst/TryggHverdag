@@ -1963,7 +1963,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     },
   },
   {
-    name: 'LOST-02-AC20: an open given a lockWaitMs that is not a whole number from 1 to 2147483647 (0, -1, 0.5, NaN, 2147483648) is refused, naming lockWaitMs, and writes nothing',
+    name: 'LOST-02-AC20: an open given a lockWaitMs that is not a whole number from 1 to 2147483647 (0, -1, 0.5, 1.5, NaN, 2147483648) is refused, naming lockWaitMs, and writes nothing',
     async run(subject) {
       const now = await subject.now();
       const overdue = () =>
@@ -1973,8 +1973,10 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         });
       const { journeyId } = await overdue();
 
-      // PostgreSQL reads a lock_timeout of 0 as no limit at all.
-      for (const lockWaitMs of [0, -1, 0.5, Number.NaN, 2_147_483_648]) {
+      // PostgreSQL reads a lock_timeout of 0 as no limit at all. 1.5 is
+      // there for the whole-number rule alone: every other fraction is also
+      // below 1, so a store that checked only the range would refuse them.
+      for (const lockWaitMs of [0, -1, 0.5, 1.5, Number.NaN, 2_147_483_648]) {
         await expect(
           subject.store.openLostContactAlert({
             journeyId,

@@ -234,8 +234,10 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       // unchanged; this one is added.
       // RG-03 (LOST-02, review loop 2): a lock wait PostgreSQL would read as no
       // limit is refused (approach item 3; spec item 15a). Every other name is
-      // unchanged; this one is added.
-      'LOST-02-AC20: an open given a lockWaitMs that is not a whole number from 1 to 2147483647 (0, -1, 0.5, NaN, 2147483648) is refused, naming lockWaitMs, and writes nothing',
+      // unchanged; this one is added. Renamed in loop 2's last round, adding
+      // 1.5 to the values (test-auditor): with 0.5 alone, a store that checked
+      // only the range, and not that it is a whole number, still passed.
+      'LOST-02-AC20: an open given a lockWaitMs that is not a whole number from 1 to 2147483647 (0, -1, 0.5, 1.5, NaN, 2147483648) is refused, naming lockWaitMs, and writes nothing',
       'LOST-02-AC20: a held row that no longer matches answers skipped at once to an open with a lock wait, never held: one already LOST_CONTACT, and one whose last contact has moved',
       'LOST-02-AC7: 10 opens racing for one overdue journey, 5 times over: exactly one opens and every other skips, none an error; one alert, and one message per responder',
       'LOST-02-AC14: a claim hands out each due message once: one attempt counted, leased until the claim’s now plus the lease, and not handed out again while the lease runs',
