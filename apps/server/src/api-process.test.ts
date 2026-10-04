@@ -135,7 +135,13 @@ describe('BUG-12: what the process hands the API, seen from the database', () =>
 
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ checkedAt: DATABASE_NOW_ISO });
-      expect(database.queries[0]?.text).toMatch(/\bnow\(\)/i);
+      // RG-03 (LOST-02, review loop 1, approach item 7, D-109): the API now
+      // reads its session limits back from pg_settings once at start, and
+      // that read can be the first query the database sees. So this takes the
+      // first query other than that read: the health check's own, which must
+      // still be the database's now(). What it proves is unchanged.
+      const asked = database.queries.filter(({ text }) => !/\bpg_settings\b/i.test(text));
+      expect(asked[0]?.text).toMatch(/\bnow\(\)/i);
     } finally {
       await api.stop();
       await database.close();

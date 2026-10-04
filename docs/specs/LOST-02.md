@@ -1685,6 +1685,11 @@ pull request. None loosens what a test proves.
   `fake-postgres.test.ts` and `db.test.ts`: where they pin the event list,
   the check-in's signature, the fakes' abilities, or `createPool`'s
   signature.
+- `api-process.test.ts`, BUG-12's "the health check reads the time from the
+  database…" (review loop 1): the API now reads its limits back from
+  `pg_settings` at start (approach item 7, D-109), and that read can be the
+  first query. The test takes the first query other than that read, which
+  must still be the health check's `now()`.
 
 ## Mutation (D-036, D-095, D-098, D-099)
 

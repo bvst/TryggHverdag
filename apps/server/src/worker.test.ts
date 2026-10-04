@@ -1556,18 +1556,30 @@ describe('REL-08 and LOST-02: the sweep loop and the delivery loop', () => {
   });
 
   test('LOST-02-AC21: a run that throws is said in one line naming its loop: the sweep’s names the sweep, and the delivery’s the delivery', async () => {
+    // RG-03 (LOST-02, review loop 1): the errors said "synthetic sweep
+    // failure" and "synthetic delivery failure", so each line held its loop's
+    // name through the error text alone, and a failure line that named no loop
+    // still passed (the implementer's mutants survived). The errors now name
+    // neither loop, and the name must stand before the error, in the line's
+    // own words: the same two lines, held more tightly.
     const { watchdog, sender, written } = await looping();
+    const firstError = 'synthetic failure number one';
+    const secondError = 'synthetic failure number two';
 
-    watchdog.fail(new Error('synthetic sweep failure'));
+    watchdog.fail(new Error(firstError));
     await vi.advanceTimersByTimeAsync(0);
-    sender.fail(new Error('synthetic delivery failure'));
+    sender.fail(new Error(secondError));
     await vi.advanceTimersByTimeAsync(0);
 
     const [sweepLine = '', deliveryLine = ''] = linesOf(written);
     expect(linesOf(written)).toHaveLength(2);
-    expect(sweepLine).toMatch(/^worker: .*\bsweep\b/);
+    // Each line: the worker, the loop it is about, and only then the error.
+    const ownWords = (line: string, error: string) => line.slice(0, line.indexOf(error));
+    expect(sweepLine).toContain(firstError);
+    expect(ownWords(sweepLine, firstError)).toMatch(/^worker: .*\bsweep\b/);
     expect(sweepLine).not.toMatch(/\bdelivery\b/);
-    expect(deliveryLine).toMatch(/^worker: .*\bdelivery\b/);
+    expect(deliveryLine).toContain(secondError);
+    expect(ownWords(deliveryLine, secondError)).toMatch(/^worker: .*\bdelivery\b/);
     expect(deliveryLine).not.toMatch(/\bsweep\b/);
   });
 
