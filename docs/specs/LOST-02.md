@@ -1656,6 +1656,68 @@ AC2):
 Items 6 and 10 change no test in this task. They are corrections, and
 entries under "Left for later tasks".
 
+### Tests added in review loop 2 (settled 2026-10-04)
+
+From `test-auditor`'s re-audit of `3539d4f` (its should-fix and the mutants
+it found alive) and the safety and privacy re-checks' notes. The names are
+exact. `test-author` may adjust wording only, keeping the criterion and the
+assertions. Test 1a stays as it is: its last clause cannot fail after a
+rollback, and 11a is what proves it.
+
+**11. The lock limit is the transaction's own** (approach item 3; AC17):
+- 11a. L3, `apps/server/src/alerts.integration.test.ts`: `LOST-02-AC17: a
+  first-attempt open and a waiting open that each commit, on a pool of one
+  connection, leave that connection’s lock_timeout at 0 afterwards`.
+
+**12. The read-back** (approach item 7; AC17), in
+`apps/server/src/api-process.test.ts` and `apps/server/src/worker.test.ts`,
+each for its own process:
+- 12a. `LOST-02-AC17: stop() waits for a read-back still in flight: its line
+  is written before stop() resolves, and the pool ends after it`.
+- 12b. `LOST-02-AC17: the read-back lines go to stderr and nothing goes to
+  stdout`. For the worker, through the writer `bin/worker.ts` gives it.
+- 12c. `LOST-02-AC17: a limit pg_settings returns no row for is written as
+  unreadable, not in force`.
+- 12d. `LOST-02-AC17: a setting with anything around its digits (10000x,
+  x10000, 10 000) is written as unreadable`.
+- 12e. `LOST-02-AC17: a unit other than ms, s and min, including names every
+  object has (constructor, toString, __proto__), is written as unreadable`.
+- The API tests that do not test the read-back no longer print its line:
+  their database answers pg_settings, or their stderr is captured.
+
+**13. A waiting open that took the row and then ran out of time on another
+lock is a failed open** (approach item 3; AC20):
+- 13a. L3, `apps/server/src/adapters/journeys.integration.test.ts`:
+  `LOST-02-AC20: a waiting open that takes the journey’s row within the
+  wait, then runs out of time on a responder’s users row, fails with 55P03
+  and writes nothing; it never answers held`.
+
+**14. A claim never waits for a held message** (approach item 4; AC14):
+- 14a. L3, `apps/server/src/adapters/journeys.integration.test.ts`:
+  `LOST-02-AC14: a due message whose row another session holds is passed
+  over at once, not waited for, and the claim returns the other due
+  messages`.
+
+**15. A lock wait PostgreSQL would read as no limit is refused** (approach
+item 3; D-100):
+- 15a. The shared behaviour suite (`journey-store-behaviour.ts`, at L2 and
+  L3): `LOST-02-AC20: an open given a lockWaitMs that is not a whole number
+  from 1 to 2147483647 (0, -1, 0.5, NaN, 2147483648) is refused, naming
+  lockWaitMs, and writes nothing`. PostgreSQL reads a `lock_timeout` of 0 as
+  no limit at all. The pinned list of behaviour names in
+  `fake-journey-store.test.ts` grows with it, by design.
+
+**16. The exclude hides nothing in a nested node_modules** (approach item
+13; AC25):
+- 16a. `packages/config/database-imports.test.mjs`: `LOST-02-AC25: the
+  repository’s exclude matches no path inside a node_modules folder further
+  down (apps/server/node_modules/<package>/dist/), and still matches the
+  repository’s own dist/`.
+
+Two code changes go with them, in `apps/server/src/adapters/db.ts` (a unit
+is looked up with `Object.hasOwn`) and `apps/server/src/adapters/journeys.ts`
+(the lock wait is checked before the transaction starts).
+
 ### Existing assertions that change by design (RG-03)
 
 `test-author` changes each, with the written reason RG-03 asks for in the
@@ -2005,6 +2067,36 @@ Each is named here so the task that owns it finds it. None blocks this task.
   are not in force starts anyway, with a loud line** (approach item 7). A
   worker that refused would watch nothing, and the stuck check pages for the
   one harm a missing limit can cause, a row held for ever.
+
+From the loop-1 re-checks (`safety-reviewer` and `privacy-security-reviewer`
+on `3539d4f`). Notes, not findings; none has a task yet, so each is the
+owner's to schedule:
+- **Two routes still get past AC24's rules** (`privacy-security-reviewer`,
+  probed in a copy of the repository):
+  - a production file may import `apps/server/drizzle.config.ts`, because
+    the drizzle-kit exception covers that whole file, not only its config
+    entry (the file is owned, by D-097);
+  - a file in a folder outside `apps/` and `packages/`, such as `scripts/`,
+    can import a package by a relative path into a workspace's
+    `node_modules`, and a production file can import that file: every rule
+    `from` production code skips those folders.
+- **One held users row costs a sweep up to 5 s per overdue journey naming
+  that responder** (`safety-reviewer`). The opens run one after another and
+  the overdue read has no order, so the journeys behind them wait. Each such
+  journey is stuck and pages (AC20), so this is loud, not silent. Ordering
+  the read, or opening in parallel, is for a later task.
+- **graphile-worker's own LISTEN connection logs its error object**
+  (`privacy-security-reviewer`). When that one connection drops, Graphile's
+  logger prints the message and the whole error object to the console. It
+  runs only `LISTEN` and `UNLISTEN`, so nothing personal or secret is in it,
+  and it was the same before this task. But for that connection, "one
+  `database_error` line per lost connection" (AC18) is not the only line.
+  Passing Graphile a logger that writes closed events would close it.
+- **For the owner: should `adapters/db.ts` be mutation-tested?**
+  (`safety-reviewer`). The read-back (`sessionLimitsLines`) lives there,
+  and `db.ts` is not in `SAFETY_PATHS`, so no mutation run measures its
+  tests. Test 2b and loop 2's tests 12a to 12e catch the harms named so
+  far. The same question as `log.ts`'s, still open from LOST-01.
 
 ## Settled by the plan, so not asked
 
