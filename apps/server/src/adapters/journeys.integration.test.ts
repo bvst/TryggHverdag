@@ -59,7 +59,13 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createApi } from '../api.ts';
 import { captured, markersIn, markersOf } from '../capture.test.ts';
-import { ALERT_STATES, JOURNEY_STATES, type JourneyState } from '../domain/journey.ts';
+import {
+  ALERT_STATES,
+  JOURNEY_STATES,
+  LOST_CONTACT_AFTER_MS,
+  type JourneyState,
+} from '../domain/journey.ts';
+import { sqlstateOf } from '../domain/sqlstate.ts';
 import { createHealthService } from '../modules/health/service.ts';
 import { createJourneyService } from '../modules/journeys/service.ts';
 import { databaseClock } from './clock.ts';
@@ -1590,6 +1596,141 @@ function insertMessage({
 
 /** A data error (class 22) or a constraint (class 23): the database refused it itself. */
 const REFUSED_BY_THE_DATABASE = { code: expect.stringMatching(/^2[23]/) as unknown };
+
+// ---------------------------------------------------------------------------
+// LOST-02, review loop 2: the waits of an open after it took its row, and a
+// claim that never waits (test-auditor's re-audit).
+// ---------------------------------------------------------------------------
+
+/** Settles as `promise` does, or as `still waiting` once `ms` have passed: a wait with no end fails here, not by hanging. */
+async function bounded<T>(promise: Promise<T>, ms: number): Promise<T | 'still waiting'> {
+  promise.catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<'still waiting'>((resolve) => {
+    timer = setTimeout(() => {
+      resolve('still waiting');
+    }, ms);
+  });
+  try {
+    return await Promise.race([promise, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** A psql-like session of the test's own: its own connection, outside every pool, holding one row `for update`. */
+async function sessionHolding(table: 'journeys' | 'users' | 'outbox', id: string) {
+  const session = new pg.Client({ connectionString: connectionUri() });
+  await session.connect();
+  await session.query('begin');
+  await session.query(`select id from ${table} where id = $1 for update`, [id]);
+  const pid = (await session.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]?.pid;
+  return {
+    /** Whether another session is waiting for a lock this one holds. */
+    waitedFor: async () => {
+      const waiting = await connection().query<{ n: number }>(
+        'select count(*)::int as n from pg_stat_activity where $1 = any(pg_blocking_pids(pid))',
+        [pid],
+      );
+      return (waiting.rows[0]?.n ?? 0) > 0;
+    },
+    commit: () => session.query('commit'),
+    end: async () => {
+      await session.query('rollback').catch(() => undefined);
+      await session.end();
+    },
+  };
+}
+
+/** An overdue ACTIVE journey of a new walker, silent since EARLIER, with these many new responders. */
+async function overdueWith(responders: number) {
+  const device = await walker();
+  const responderIds: string[] = [];
+  for (let i = 0; i < responders; i += 1) {
+    responderIds.push(await addUser());
+  }
+  const journeyId = await seedJourney({
+    walkerId: device.userId,
+    deviceId: device.deviceId,
+    state: 'ACTIVE',
+    responderIds,
+    startedAt: EARLIER,
+    lastHeartbeatAt: null,
+  });
+  return { journeyId, responderIds };
+}
+
+describe('LOST-02: what an open waits for after it took its row, and what a claim never waits for', () => {
+  test('LOST-02-AC20: a waiting open that takes the journey’s row within the wait, then runs out of time on a responder’s users row, fails with 55P03 and writes nothing; it never answers held', async () => {
+    const { journeyId, responderIds } = await overdueWith(1);
+    const rowHolder = await sessionHolding('journeys', journeyId);
+    const userHolder = await sessionHolding('users', responderIds[0] ?? '');
+    const lockWaitMs = 1_000;
+    let outcome: unknown;
+    try {
+      const opening = databaseJourneyStore(database())
+        .openLostContactAlert({ journeyId, afterMs: LOST_CONTACT_AFTER_MS, lockWaitMs })
+        .then(
+          (answer) => ({ answer }),
+          (error: unknown) => ({ error }),
+        );
+      // The open waits for the journey's row; its holder lets go within the
+      // wait, and the open takes it, then waits for the users row its
+      // message references, which is held for good.
+      expect(await eventually(() => rowHolder.waitedFor())).toBe(true);
+      await rowHolder.commit();
+      outcome = await bounded(opening, 3 * lockWaitMs + 2_000);
+    } finally {
+      await rowHolder.end();
+      await userHolder.end();
+    }
+
+    expect(outcome).not.toEqual({ answer: { outcome: 'held' } });
+    const failed = outcome as { error?: unknown };
+    expect(failed.error, JSON.stringify(outcome)).toBeInstanceOf(Error);
+    expect(sqlstateOf(failed.error)).toBe('55P03');
+    expect(await stateOf(journeyId)).toBe('ACTIVE');
+    expect(await alertsOf(journeyId)).toEqual([]);
+    expect(await messagesOf(journeyId)).toEqual([]);
+  }, 30_000);
+
+  test('LOST-02-AC14: a due message whose row another session holds is passed over at once, not waited for, and the claim returns the other due messages', async () => {
+    const store = databaseJourneyStore(database());
+    const { journeyId } = await overdueWith(3);
+    const opened = await store.openLostContactAlert({ journeyId, afterMs: LOST_CONTACT_AFTER_MS });
+    if (opened.outcome !== 'opened') {
+      throw new Error(`expected the journey to be opened, but it was ${opened.outcome}`);
+    }
+    // Only this alert's messages are due: every other test's are put out of reach.
+    await connection().query(
+      'update outbox set sent_at = now() where sent_at is null and alert_id <> $1',
+      [opened.alertId],
+    );
+    const [held, ...others] = opened.messages;
+    if (held === undefined) {
+      throw new Error('expected three messages');
+    }
+    const holder = await sessionHolding('outbox', held.messageId);
+    let claim: Awaited<ReturnType<typeof store.claimDue>> | 'still waiting';
+    let tookMs: number;
+    try {
+      const started = performance.now();
+      // The worker's pool keeps no lock limit, so a claim that waited would
+      // wait for ever: bounded, it fails here instead.
+      claim = await bounded(store.claimDue({ limit: 50, leaseMs: 30_000 }), 2_000);
+      tookMs = performance.now() - started;
+    } finally {
+      await holder.end();
+    }
+
+    expect(claim).not.toBe('still waiting');
+    const claimed =
+      claim === 'still waiting' ? [] : claim.messages.map(({ messageId }) => messageId);
+    expect([...claimed].sort()).toEqual(others.map(({ messageId }) => messageId).sort());
+    expect(claimed).not.toContain(held.messageId);
+    expect(tookMs).toBeLessThan(2_000);
+  }, 30_000);
+});
 
 describe('LOST-02: the database agrees on alerts and their messages', () => {
   test('LOST-02-AC23: alert_state’s values are exactly ALERT_STATES, in order, and alerts.state is of that type', async () => {

@@ -23,7 +23,7 @@ import {
   type FakePostgresHandler,
 } from '@trygghverdag/test-kit';
 import process from 'node:process';
-import { describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { startApiProcess } from './api-process.ts';
 import { captured, markersIn } from './capture.test.ts';
 // The test kit's fake PostgreSQL server on a local port, for a process to
@@ -42,6 +42,36 @@ import {
 
 /** A socket directory that does not exist: every query fails in milliseconds, offline. */
 const NO_DATABASE = 'postgres:///db?host=/nonexistent-socket-dir';
+
+/** A line the API's start-up read-back of its session limits writes (approach item 7). */
+const READ_BACK_LINE = /^api: session limits?\b/;
+
+// LOST-02, review loop 2: since loop 1 every API this file starts reads its
+// session limits back and writes a line about them on stderr (D-109). Only
+// the tests that test that line look at it, through their own capture; for
+// every other test it would be output left over in the run. So, around each
+// test, a chunk of stderr that is nothing but read-back lines is kept back,
+// and everything else passes. A plain replacement rather than a spy: a test's
+// own spy, or captured(), goes over it, sees every line, and restores to it.
+type StderrWrite = (chunk: unknown, ...rest: unknown[]) => boolean;
+const stderrWrite = process.stderr as unknown as { write: StderrWrite };
+let realStderrWrite: StderrWrite | undefined;
+beforeEach(() => {
+  const write = stderrWrite.write;
+  realStderrWrite = write;
+  stderrWrite.write = (chunk, ...rest) => {
+    const lines = typeof chunk === 'string' ? chunk.split('\n').filter((line) => line !== '') : [];
+    if (lines.length > 0 && lines.every((line) => READ_BACK_LINE.test(line))) {
+      return true;
+    }
+    return write.call(process.stderr, chunk, ...rest);
+  };
+});
+afterEach(() => {
+  if (realStderrWrite !== undefined) {
+    stderrWrite.write = realStderrWrite;
+  }
+});
 
 describe('startApiProcess, and the journey route it serves', () => {
   test('SM-01-AC12: credentials are checked against the database, so with none reachable a credential is a 500, not a 401', async () => {
@@ -540,6 +570,124 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
       ]),
     ).toEqual([]);
   });
+
+  // LOST-02, review loop 2 (approach item 7): the read-back's own edges.
+
+  test('LOST-02-AC17: stop() waits for a read-back still in flight: its line is written before stop() resolves, and the pool ends after it', async () => {
+    const database = await listeningFakePostgres(
+      (query) => pgSettingsAnswer(query, AS_ASKED) ?? healthDatabase(query),
+    );
+    const read = database.holdAnswer(/\bpg_settings\b/);
+    const order: string[] = [];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      if (READ_BACK_LINE.test(String(chunk))) {
+        order.push(`line, with ${String(database.closed().length)} connections closed`);
+      }
+      return true;
+    });
+    try {
+      const api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+      expect(await eventually(() => read.arrived())).toBe(true);
+      // A health check meanwhile, on the pool's other connection, which is
+      // then idle: a pool ended before the read's line would close it then.
+      expect(await health(api.port)).toBe(200);
+      expect(database.connections()).toHaveLength(2);
+
+      const stopping = api.stop().then(() => order.push('stopped'));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Still waiting for the read: nothing written, and stop() not done.
+      expect(order).toEqual([]);
+      read.release();
+      await stopping;
+
+      expect(order).toEqual(['line, with 0 connections closed', 'stopped']);
+      expect(
+        await eventually(() => database.closed().length === database.connections().length),
+      ).toBe(true);
+    } finally {
+      stderr.mockRestore();
+      await database.close();
+    }
+  });
+
+  test('LOST-02-AC17: the read-back lines go to stderr and nothing goes to stdout', async () => {
+    const database = await listeningFakePostgres(
+      (query) => pgSettingsAnswer(query, AS_ASKED) ?? healthDatabase(query),
+    );
+    const toStdout: string[] = [];
+    const toStderr: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      toStdout.push(String(chunk));
+      return true;
+    });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      toStderr.push(String(chunk));
+      return true;
+    });
+    try {
+      const api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+      await eventually(() => toStderr.join('').includes('session limits'));
+      await api.stop();
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+      await database.close();
+    }
+
+    expect(limitLines(toStderr.join(''))).toEqual([
+      'api: session limits in force: idle_in_transaction_session_timeout=10000ms lock_timeout=5000ms',
+    ]);
+    expect(toStdout.join('')).not.toMatch(/\bsession limits?\b/);
+  });
+
+  test('LOST-02-AC17: a limit pg_settings returns no row for is written as unreadable, not in force', async () => {
+    const { written } = await startedReadingBack(
+      (query) =>
+        pgSettingsAnswer(query, {
+          idle_in_transaction_session_timeout: { setting: '10000', unit: 'ms' },
+        }) ?? healthDatabase(query),
+    );
+
+    expect(limitLines(written)).toEqual([
+      'api: session limit lock_timeout is unreadable, not 5000ms: a heartbeat may wait for a lock without end.',
+    ]);
+  });
+
+  test.each(['10000x', 'x10000', '10 000'])(
+    'LOST-02-AC17: a setting with anything around its digits (10000x, x10000, 10 000) is written as unreadable — %s',
+    async (setting) => {
+      const { written } = await startedReadingBack(
+        (query) =>
+          pgSettingsAnswer(query, {
+            ...AS_ASKED,
+            idle_in_transaction_session_timeout: { setting, unit: 'ms' },
+          }) ?? healthDatabase(query),
+      );
+
+      expect(limitLines(written)).toEqual([
+        'api: session limit idle_in_transaction_session_timeout is unreadable, not 10000ms: a stalled transaction will not be ended.',
+      ]);
+      expect(written).not.toContain(setting);
+    },
+  );
+
+  test.each(['h', 'us', 'constructor', 'toString', '__proto__'])(
+    'LOST-02-AC17: a unit other than ms, s and min, including names every object has (constructor, toString, __proto__), is written as unreadable — %s',
+    async (unit) => {
+      const { written } = await startedReadingBack(
+        (query) =>
+          pgSettingsAnswer(query, {
+            ...AS_ASKED,
+            idle_in_transaction_session_timeout: { setting: '10000', unit },
+          }) ?? healthDatabase(query),
+      );
+
+      expect(limitLines(written)).toEqual([
+        'api: session limit idle_in_transaction_session_timeout is unreadable, not 10000ms: a stalled transaction will not be ended.',
+      ]);
+      expect(written).not.toContain(`10000${unit}`);
+    },
+  );
 
   test('LOST-02-AC17: the API’s pool asks, for every connection it makes, idle_in_transaction_session_timeout 10 000 ms and lock_timeout 5 000 ms', async () => {
     const database = await listeningFakePostgres(healthDatabase);

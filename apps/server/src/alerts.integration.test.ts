@@ -1147,6 +1147,36 @@ describe('LOST-02: every open bounds its own waits, the first attempt included',
     }
   }, 60_000);
 
+  test('LOST-02-AC17: a first-attempt open and a waiting open that each commit, on a pool of one connection, leave that connection’s lock_timeout at 0 afterwards', async () => {
+    // After a commit, not a rollback (review loop 2, test-auditor): a
+    // rollback undoes a session-level set_config too, so only a committed
+    // open shows that its limit was the transaction's own.
+    const first = await overdue();
+    const waiting = await overdue();
+    const single = oneConnectionWorkerPool();
+    const journeys = databaseJourneyStore(createDatabase(single));
+    try {
+      const firstAttempt = await journeys.openLostContactAlert({
+        journeyId: first.journeyId,
+        afterMs: LOST_CONTACT_AFTER_MS,
+      });
+      expect(firstAttempt.outcome).toBe('opened');
+      expect(await stateOf(first.journeyId)).toBe('LOST_CONTACT');
+      expect(await lockTimeoutOf(single)).toBe('0');
+
+      const waitingAttempt = await journeys.openLostContactAlert({
+        journeyId: waiting.journeyId,
+        afterMs: LOST_CONTACT_AFTER_MS,
+        lockWaitMs: 300,
+      });
+      expect(waitingAttempt.outcome).toBe('opened');
+      expect(await stateOf(waiting.journeyId)).toBe('LOST_CONTACT');
+      expect(await lockTimeoutOf(single)).toBe('0');
+    } finally {
+      await endTestPool(single);
+    }
+  }, 60_000);
+
   test('LOST-02-AC17: a waiting attempt’s lock limit is local to its transaction too: on a pool of one connection, lock_timeout is still 0 after an attempt that answered held, and after one that opened', async () => {
     const { journeyId } = await overdue({ silentForMs: STUCK_SILENCE });
     const single = oneConnectionWorkerPool();

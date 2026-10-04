@@ -760,6 +760,32 @@ describe('LOST-02-AC25: installed packages reach the import rules', () => {
     ).toBe(true);
   }, 60_000);
 
+  test('LOST-02-AC25: the repository’s exclude matches no path inside a node_modules folder further down (apps/server/node_modules/<package>/dist/), and still matches the repository’s own dist/', () => {
+    // Straight on the exported patterns (review loop 2): the alternative that
+    // keeps a node_modules folder further down visible, not only the one at
+    // the root.
+    const hidden = (modulePath) =>
+      patternsOf(repositoryOptions().exclude).some((pattern) =>
+        new RegExp(pattern).test(modulePath),
+      );
+    for (const nested of [
+      'apps/server/node_modules/graphile-worker/dist/index.js',
+      'apps/server/node_modules/.pnpm/graphile-worker@0.18.0/node_modules/graphile-worker/dist/index.js',
+      'apps/server/node_modules/pg/build/index.js',
+      'apps/mobile/node_modules/react-native-background-geolocation/dist/index.js',
+      'packages/contracts/node_modules/zod/dist/index.js',
+    ]) {
+      expect(hidden(nested), nested).toBe(false);
+    }
+    for (const own of [
+      'apps/server/dist/index.js',
+      'packages/contracts/dist/index.js',
+      'packages/test-kit/dist/index.js',
+    ]) {
+      expect(hidden(own), own).toBe(true);
+    }
+  });
+
   describe('the location SDK', () => {
     const OUTSIDE = 'apps/mobile/src/features/map/locate.ts';
     const INSIDE = 'apps/mobile/src/safety-core/location.ts';

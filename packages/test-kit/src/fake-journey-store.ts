@@ -791,8 +791,18 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       );
       return answer('openLostContactAlert', async (): Promise<OpenLostContactAlertResult> => {
         const threshold = millisecondsOf('openLostContactAlert', 'afterMs', afterMs);
-        if (lockWaitMs !== undefined) {
-          millisecondsOf('openLostContactAlert', 'lockWaitMs', lockWaitMs);
+        // As lock_timeout takes it (LOST-02, review loop 2): a whole number of
+        // milliseconds from 1 to 2147483647. PostgreSQL reads 0 as no limit
+        // at all, which a wait must never quietly become.
+        if (
+          lockWaitMs !== undefined &&
+          !(Number.isInteger(lockWaitMs) && lockWaitMs >= 1 && lockWaitMs <= 2_147_483_647)
+        ) {
+          throw new Error(
+            'fakeJourneyStore.openLostContactAlert: lockWaitMs must be a whole number of ' +
+              `milliseconds from 1 to 2147483647, not ${String(lockWaitMs)}: PostgreSQL reads ` +
+              'a lock_timeout of 0 as no limit at all',
+          );
         }
         const found = journeyNamed(journeyId);
         // A row whose committed version no longer matches is never locked,

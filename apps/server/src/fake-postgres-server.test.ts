@@ -55,6 +55,16 @@ export interface ListeningFakePostgres {
    * the client still holds it.
    */
   endAfter: (pattern: RegExp, fatal: FakePostgresFatal) => void;
+  /**
+   * From now on, the answer to the first query matching `pattern` is held
+   * back (LOST-02, review loop 2): the query is recorded and answered, but
+   * the bytes reach the client only once `release()` is called, with
+   * everything else its connection was answered meanwhile, in order. So a
+   * test can do something while a process waits for that answer.
+   */
+  holdAnswer: (pattern: RegExp) => { arrived: () => boolean; release: () => void };
+  /** The connections whose sockets have closed, in the order they closed. */
+  closed: () => readonly FakePostgresConnection[];
   /** Resolves once every socket is closed; rejects if the fake threw. */
   close: () => Promise<void>;
   /** The fake behind it. */
@@ -69,6 +79,9 @@ export async function listeningFakePostgres(
   const sockets = new Map<FakePostgresConnection, Socket>();
   const thrown: unknown[] = [];
   const pending: { pattern: RegExp; fatal: FakePostgresFatal }[] = [];
+  const holds: { pattern: RegExp; socket: Socket | undefined }[] = [];
+  const heldBack = new Map<Socket, Uint8Array[]>();
+  const closed: FakePostgresConnection[] = [];
 
   const end = (connection: FakePostgresConnection, fatal: FakePostgresFatal) => {
     const socket = sockets.get(connection);
@@ -81,7 +94,10 @@ export async function listeningFakePostgres(
   const server = createServer((socket) => {
     const connection = database.connect();
     sockets.set(connection, socket);
-    socket.on('close', () => sockets.delete(connection));
+    socket.on('close', () => {
+      sockets.delete(connection);
+      closed.push(connection);
+    });
     socket.on('error', () => undefined);
     socket.on('data', (chunk) => {
       const before = connection.queries.length;
@@ -93,10 +109,20 @@ export async function listeningFakePostgres(
         socket.destroy();
         return;
       }
-      if (reply.length > 0) {
+      const answered = connection.queries.slice(before);
+      const hold = holds.find(
+        (each) => each.socket === undefined && answered.some(({ text }) => each.pattern.test(text)),
+      );
+      if (hold !== undefined) {
+        hold.socket = socket;
+        heldBack.set(socket, []);
+      }
+      const waiting = heldBack.get(socket);
+      if (waiting !== undefined) {
+        waiting.push(reply);
+      } else if (reply.length > 0) {
         socket.write(reply);
       }
-      const answered = connection.queries.slice(before);
       const due = pending.findIndex(({ pattern }) =>
         answered.some(({ text }) => pattern.test(text)),
       );
@@ -119,6 +145,27 @@ export async function listeningFakePostgres(
     endAfter: (pattern, fatal) => {
       pending.push({ pattern, fatal });
     },
+    holdAnswer: (pattern) => {
+      const hold: { pattern: RegExp; socket: Socket | undefined } = { pattern, socket: undefined };
+      holds.push(hold);
+      return {
+        arrived: () => hold.socket !== undefined,
+        release: () => {
+          const { socket } = hold;
+          const waiting = socket === undefined ? undefined : heldBack.get(socket);
+          if (socket === undefined || waiting === undefined) {
+            return;
+          }
+          heldBack.delete(socket);
+          for (const bytes of waiting) {
+            if (bytes.length > 0 && !socket.destroyed) {
+              socket.write(bytes);
+            }
+          }
+        },
+      };
+    },
+    closed: () => [...closed],
     database,
     close: () =>
       new Promise<void>((resolve, reject) => {
@@ -308,6 +355,38 @@ describe('the fake PostgreSQL server on a port', () => {
       await client.end().catch(() => undefined);
       await server.close();
     }
+  });
+
+  test('holdAnswer() keeps the matching query’s answer from the client until release(), records the query meanwhile, and closed() lists a connection once its socket closes', async () => {
+    const server = await listeningFakePostgres(() => ({ columns: ['answer'], rows: [['42']] }));
+    const held = server.holdAnswer(/pg_settings/);
+    const client = new pg.Client({ connectionString: server.url });
+    try {
+      await client.connect();
+      let answered = false;
+      const asking = client
+        .query<{ answer: string }>('select 42 as answer from pg_settings')
+        .then((result) => {
+          answered = true;
+          return result.rows;
+        });
+
+      expect(await eventually(() => held.arrived())).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(answered).toBe(false);
+      expect(server.queries.map(({ text }) => text)).toEqual([
+        'select 42 as answer from pg_settings',
+      ]);
+
+      held.release();
+      expect(await asking).toEqual([{ answer: '42' }]);
+      expect(await client.query('select 1')).toMatchObject({ rows: [{ answer: '42' }] });
+      expect(server.closed()).toEqual([]);
+    } finally {
+      await client.end();
+    }
+    expect(await eventually(() => server.closed().length === 1)).toBe(true);
+    await server.close();
   });
 
   test('a password given is in the URL and nowhere on the wire: the fake never asks for one', async () => {

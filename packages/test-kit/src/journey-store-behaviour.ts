@@ -1963,6 +1963,44 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     },
   },
   {
+    name: 'LOST-02-AC20: an open given a lockWaitMs that is not a whole number from 1 to 2147483647 (0, -1, 0.5, NaN, 2147483648) is refused, naming lockWaitMs, and writes nothing',
+    async run(subject) {
+      const now = await subject.now();
+      const overdue = () =>
+        watched(subject, {
+          startedAt: ago(now, 2 * HOUR),
+          lastHeartbeatAt: ago(now, HOUR),
+        });
+      const { journeyId } = await overdue();
+
+      // PostgreSQL reads a lock_timeout of 0 as no limit at all.
+      for (const lockWaitMs of [0, -1, 0.5, Number.NaN, 2_147_483_648]) {
+        await expect(
+          subject.store.openLostContactAlert({
+            journeyId,
+            afterMs: LOST_CONTACT_AFTER_MS,
+            lockWaitMs,
+          }),
+          String(lockWaitMs),
+        ).rejects.toThrow(/lockWaitMs/);
+      }
+      expect(await subject.stateOf(journeyId)).toBe('ACTIVE');
+      expect(await subject.alertsOf(journeyId)).toEqual([]);
+      expect(await subject.messagesOf(journeyId)).toEqual([]);
+
+      // The bounds themselves are taken.
+      for (const lockWaitMs of [1, 2_147_483_647]) {
+        const { journeyId: another } = await overdue();
+        const opened = await subject.store.openLostContactAlert({
+          journeyId: another,
+          afterMs: LOST_CONTACT_AFTER_MS,
+          lockWaitMs,
+        });
+        expect(opened.outcome, String(lockWaitMs)).toBe('opened');
+      }
+    },
+  },
+  {
     name: 'LOST-02-AC20: a held row that no longer matches answers skipped at once to an open with a lock wait, never held: one already LOST_CONTACT, and one whose last contact has moved',
     async run(subject) {
       const now = await subject.now();

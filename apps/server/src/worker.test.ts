@@ -38,6 +38,7 @@ import {
   type FakePostgresHandler,
 } from '@trygghverdag/test-kit';
 import { EventEmitter, once } from 'node:events';
+import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { healthchecksCheckIn } from './adapters/healthchecks.ts';
@@ -2085,6 +2086,140 @@ async function workerReadingBack(
 }
 
 describe('SEC-03 and LOST-02: the worker reads its session limit back at start (D-109)', () => {
+  // LOST-02, review loop 2 (approach item 7): the read-back's own edges.
+
+  /** The line the worker writes when its idle limit is anything but a duration it can read. */
+  const IDLE_UNREADABLE =
+    'worker: session limit idle_in_transaction_session_timeout is unreadable, not 10000ms: a stalled transaction will not be ended.';
+
+  test('LOST-02-AC17: stop() waits for a read-back still in flight: its line is written before stop() resolves, and the pool ends after it', async () => {
+    const database = await listeningFakePostgres(
+      (query) => pgSettingsAnswer(query, IDLE_AS_ASKED) ?? quietDatabase(query),
+    );
+    const read = database.holdAnswer(/\bpg_settings\b/);
+    const events: string[] = [];
+    const runner = recordingRunner(events);
+    const signals = new EventEmitter();
+    const running = runWorkerProcess(database.url, {
+      runWorker: runner.run,
+      signals,
+      ...quietLoops(),
+      write: (text) => {
+        if (/\bsession limits?\b/.test(text)) {
+          events.push(`line, with ${String(database.closed().length)} connections closed`);
+        }
+      },
+      exit: (code) => {
+        events.push(`exit ${String(code)}`);
+      },
+    });
+    try {
+      expect(await eventually(() => read.arrived())).toBe(true);
+      // A query meanwhile, on the pool's other connection, which is then
+      // idle: a pool ended before the read's line would close it then.
+      await runner.options()?.pgPool?.query('select 1');
+      expect(database.connections()).toHaveLength(2);
+
+      signals.emit('SIGTERM');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Still waiting for the read: nothing written, the pool open, no exit.
+      expect(events.filter((event) => event !== 'runner stopped')).toEqual([]);
+      read.release();
+      expect(await eventually(() => events.includes('exit 0'))).toBe(true);
+      await running;
+
+      expect(events.filter((event) => event !== 'runner stopped')).toEqual([
+        'line, with 0 connections closed',
+        'pool ended',
+        'exit 0',
+      ]);
+    } finally {
+      read.release();
+      await database.close();
+    }
+  });
+
+  test('LOST-02-AC17: the read-back lines go to stderr and nothing goes to stdout, through the writer bin/worker.ts gives it', async () => {
+    // bin/worker.ts gives the worker no writer of its own, so the worker
+    // writes through its default, which is what this test runs.
+    const entry = readFileSync(new URL('bin/worker.ts', import.meta.url), 'utf8');
+    expect(entry).toMatch(/runWorkerProcess\(/);
+    expect(entry).not.toMatch(/\bwrite\s*[:,]/);
+
+    const database = await listeningFakePostgres(
+      (query) => pgSettingsAnswer(query, IDLE_AS_ASKED) ?? quietDatabase(query),
+    );
+    const toStdout: string[] = [];
+    const toStderr: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      toStdout.push(String(chunk));
+      return true;
+    });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      toStderr.push(String(chunk));
+      return true;
+    });
+    const signals = new EventEmitter();
+    try {
+      const running = runWorkerProcess(database.url, {
+        runWorker: recordingRunner().run,
+        signals,
+        ...quietLoops(),
+        exit: () => undefined,
+      });
+      await eventually(() => toStderr.join('').includes('session limit'));
+      signals.emit('SIGTERM');
+      await running;
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+      await database.close();
+    }
+
+    expect(limitLines(toStderr)).toEqual([
+      'worker: session limit in force: idle_in_transaction_session_timeout=10000ms',
+    ]);
+    expect(toStdout.join('')).not.toMatch(/\bsession limits?\b/);
+  });
+
+  test('LOST-02-AC17: a limit pg_settings returns no row for is written as unreadable, not in force', async () => {
+    const { written } = await workerReadingBack(
+      (query) => pgSettingsAnswer(query, {}) ?? quietDatabase(query),
+    );
+
+    expect(limitLines(written)).toEqual([IDLE_UNREADABLE]);
+  });
+
+  test.each(['10000x', 'x10000', '10 000'])(
+    'LOST-02-AC17: a setting with anything around its digits (10000x, x10000, 10 000) is written as unreadable — %s',
+    async (setting) => {
+      const { written } = await workerReadingBack(
+        (query) =>
+          pgSettingsAnswer(query, {
+            idle_in_transaction_session_timeout: { setting, unit: 'ms' },
+          }) ?? quietDatabase(query),
+      );
+
+      expect(limitLines(written)).toEqual([IDLE_UNREADABLE]);
+      expect(written.join('')).not.toContain(setting);
+    },
+  );
+
+  test.each(['h', 'us', 'constructor', 'toString', '__proto__'])(
+    'LOST-02-AC17: a unit other than ms, s and min, including names every object has (constructor, toString, __proto__), is written as unreadable — %s',
+    async (unit) => {
+      const { written } = await workerReadingBack(
+        (query) =>
+          pgSettingsAnswer(query, {
+            idle_in_transaction_session_timeout: { setting: '10000', unit },
+          }) ?? quietDatabase(query),
+      );
+
+      expect(limitLines(written)).toEqual([IDLE_UNREADABLE]);
+      expect(written.join('')).not.toContain(`10000${unit}`);
+    },
+  );
+
   test('LOST-02-AC17: at start the worker reads idle_in_transaction_session_timeout back from pg_settings and writes exactly one line: worker: session limit in force: idle_in_transaction_session_timeout=10000ms', async () => {
     const { database, written } = await workerReadingBack(
       (query) => pgSettingsAnswer(query, IDLE_AS_ASKED) ?? quietDatabase(query),
