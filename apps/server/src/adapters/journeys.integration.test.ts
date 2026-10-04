@@ -52,6 +52,8 @@ import {
   type SyntheticHeartbeat,
 } from '@trygghverdag/test-kit';
 import { sql } from 'drizzle-orm';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 import { inspect } from 'node:util';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -511,6 +513,11 @@ describe('databaseJourneyStore, against the behaviour every journey store shares
     holdUntilWaited,
     // Short, so the open of a row held throughout costs a behaviour a second.
     lockWaitMs: 1_000,
+    // The database's now() moves on by itself: the behaviour waits.
+    letTimePass: (ms) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }),
     // now() moves on while a behaviour runs: a silence this close to the
     // threshold could fall either side of it by the time the store asks.
     timeMarginMs: 2_000,
@@ -1620,6 +1627,33 @@ describe('LOST-02: the database agrees on alerts and their messages', () => {
     await insertAlert(other.journeyId, 'RESOLVED');
     await insertAlert(other.journeyId, 'RESOLVED');
     await expect(insertAlert(other.journeyId, 'OPEN')).resolves.toBeDefined();
+  });
+
+  test('LOST-02-AC23: outbox has a partial index on (next_attempt_at, id) where sent_at is null, created by migration 0003 itself, and no migration 0004 exists', async () => {
+    // The claim's own order, over the unsent rows only (approach item 4,
+    // review loop 1): sent rows stay until retention removes them.
+    const indexes = await connection().query<{ definition: string }>(
+      `select pg_get_indexdef(indexrelid) as definition from pg_index
+        where indrelid = 'outbox'::regclass and indpred is not null`,
+    );
+    expect(
+      indexes.rows.filter(
+        ({ definition }) =>
+          definition.includes('(next_attempt_at, id)') &&
+          definition.includes('WHERE (sent_at IS NULL)'),
+      ),
+      JSON.stringify(indexes.rows),
+    ).toHaveLength(1);
+
+    const folder = path.join(import.meta.dirname, '..', 'db', 'migrations');
+    const files = readdirSync(folder);
+    expect(files.filter((file) => file.startsWith('0004_'))).toEqual([]);
+    const migration0003 = files.filter((file) => /^0003_.*\.sql$/.test(file));
+    expect(migration0003).toHaveLength(1);
+    const text = readFileSync(path.join(folder, migration0003[0] ?? ''), 'utf8');
+    expect(text).toMatch(
+      /create index\s+"?\w+"?\s+on\s+"?outbox"?[^;]*\(\s*"?next_attempt_at"?[^,()]*,\s*"?id"?[^()]*\)[^;]*where[^;]*"?sent_at"?\s+is\s+null/i,
+    );
   });
 
   test('LOST-02-AC23: a second outbox message for the same alert, recipient and kind is refused by the database itself', async () => {

@@ -54,7 +54,9 @@ import { databaseWorkerHeartbeats } from './adapters/worker-heartbeats.ts';
 import { createApi } from './api.ts';
 import { createPushSender } from './modules/alerts/outbox.ts';
 import { createWatchdog } from './modules/alerts/watchdog.ts';
-import { LOCK_WAIT_LIMIT_MS } from './domain/watchdog.ts';
+import { LOST_CONTACT_AFTER_MS } from './domain/journey.ts';
+import { sqlstateOf } from './domain/sqlstate.ts';
+import { IDLE_IN_TRANSACTION_LIMIT_MS, LOCK_WAIT_LIMIT_MS } from './domain/watchdog.ts';
 import { createHealthService } from './modules/health/service.ts';
 import { createJourneyService } from './modules/journeys/service.ts';
 
@@ -1049,4 +1051,181 @@ describe('REL-08 and LOST-02: a journey the watchdog cannot move is reported, an
     expect((await beats.lastBeat())?.getTime()).toBeGreaterThan(beatBeforeStuck ?? Number.NaN);
     expect(log.events).toHaveLength(1);
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// LOST-02, review loop 1 (approach item 3): every open, the first attempt
+// included, bounds its own waits with a lock limit local to its transaction.
+// `skip locked` covers only the journey's row; an open also waits for a
+// responder's users row (each outbox row references it), and without a limit
+// one such row held for ever would stop every sweep.
+// ---------------------------------------------------------------------------
+
+/** Settles as `promise` does, or as `still waiting` once `ms` have passed: a wait with no end fails here, not by hanging. */
+async function bounded<T>(promise: Promise<T>, ms: number): Promise<T | 'still waiting'> {
+  promise.catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<'still waiting'>((resolve) => {
+    timer = setTimeout(() => {
+      resolve('still waiting');
+    }, ms);
+  });
+  try {
+    return await Promise.race([promise, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** A psql-like session: its own connection, outside every pool, with no limit, holding a row `for update`. */
+async function sessionHolding(table: 'users' | 'journeys', id: string) {
+  const { default: pgModule } = await import('pg');
+  const session = new pgModule.Client({ connectionString: connectionUri() });
+  await session.connect();
+  await session.query('begin');
+  await session.query(`select id from ${table} where id = $1 for update`, [id]);
+  return {
+    letGo: async () => {
+      await session.query('rollback').catch(() => undefined);
+      await session.end();
+    },
+  };
+}
+
+/** A pool of one connection, made as the worker makes its pool: so a later query runs on the very connection an open used. */
+function oneConnectionWorkerPool() {
+  return createPool(connectionUri(), 1, {
+    name: 'worker',
+    log: fakeLog(),
+    idleInTransactionMs: IDLE_IN_TRANSACTION_LIMIT_MS,
+  });
+}
+
+async function lockTimeoutOf(single: pg.Pool): Promise<string | undefined> {
+  const result = await single.query<{ value: string }>(
+    "select current_setting('lock_timeout') as value",
+  );
+  return result.rows[0]?.value;
+}
+
+describe('LOST-02: every open bounds its own waits, the first attempt included', () => {
+  test('LOST-02-AC17: with a responder’s users row held for update by a session outside both pools, a first-attempt open of that journey fails within LOCK_WAIT_LIMIT_MS plus a margin with code 55P03, writes nothing, and the worker connection’s own lock_timeout is still 0 afterwards', async () => {
+    const { journeyId, responderIds } = await overdue();
+    const holder = await sessionHolding('users', responderIds[0] ?? '');
+    const single = oneConnectionWorkerPool();
+    let outcome: unknown;
+    let tookMs: number | undefined;
+    try {
+      const started = performance.now();
+      outcome = await bounded(
+        databaseJourneyStore(createDatabase(single))
+          .openLostContactAlert({ journeyId, afterMs: LOST_CONTACT_AFTER_MS })
+          .then(
+            (answer) => ({ answer }),
+            (error: unknown) => ({ error }),
+          ),
+        LOCK_WAIT_LIMIT_MS + MARGIN,
+      );
+      tookMs = performance.now() - started;
+    } finally {
+      await holder.letGo();
+    }
+
+    try {
+      const failed = outcome as { error?: unknown };
+      expect(failed.error, JSON.stringify(outcome)).toBeInstanceOf(Error);
+      expect(sqlstateOf(failed.error)).toBe('55P03');
+      expect(tookMs).toBeGreaterThanOrEqual(LOCK_WAIT_LIMIT_MS);
+      expect(tookMs).toBeLessThan(LOCK_WAIT_LIMIT_MS + MARGIN);
+      expect(await stateOf(journeyId)).toBe('ACTIVE');
+      expect(await alertsOf(journeyId)).toEqual([]);
+      expect(await messagesOf(journeyId)).toEqual([]);
+      // Local to the open's transaction: the connection itself keeps none.
+      expect(await lockTimeoutOf(single)).toBe('0');
+    } finally {
+      await endTestPool(single);
+    }
+  }, 60_000);
+
+  test('LOST-02-AC17: a waiting attempt’s lock limit is local to its transaction too: on a pool of one connection, lock_timeout is still 0 after an attempt that answered held, and after one that opened', async () => {
+    const { journeyId } = await overdue({ silentForMs: STUCK_SILENCE });
+    const single = oneConnectionWorkerPool();
+    const journeys = databaseJourneyStore(createDatabase(single));
+    try {
+      const holder = await sessionHolding('journeys', journeyId);
+      let held: unknown;
+      try {
+        held = await bounded(
+          journeys.openLostContactAlert({
+            journeyId,
+            afterMs: LOST_CONTACT_AFTER_MS,
+            lockWaitMs: 300,
+          }),
+          300 + MARGIN,
+        );
+      } finally {
+        await holder.letGo();
+      }
+      expect(held).toEqual({ outcome: 'held' });
+      expect(await lockTimeoutOf(single)).toBe('0');
+
+      const opened = await journeys.openLostContactAlert({
+        journeyId,
+        afterMs: LOST_CONTACT_AFTER_MS,
+        lockWaitMs: 300,
+      });
+      expect(opened.outcome).toBe('opened');
+      expect(await lockTimeoutOf(single)).toBe('0');
+    } finally {
+      await endTestPool(single);
+    }
+  }, 60_000);
+
+  test('LOST-02-AC20: a journey whose responder’s users row is held for ever: under 5 min 30 s the sweep fails with one watchdog_failed line, stage open, code 55P03, still opens the other overdue journeys and records no beat; from 5 min 30 s it also writes one watchdog_overdue line naming the journey', async () => {
+    const j = await overdue({ silentForMs: 5 * MINUTE + 22 * SECOND });
+    const k = await overdue();
+    const beats = databaseWorkerHeartbeats(database());
+    const holder = await sessionHolding('users', j.responderIds[0] ?? '');
+    try {
+      const beatBefore = (await beats.lastBeat())?.getTime() ?? null;
+
+      // Under 5 min 30 s: failed, and the sweep goes on.
+      const underLog = fakeLog();
+      const under = await bounded(
+        watchdogFor({ log: underLog }).sweep(),
+        LOCK_WAIT_LIMIT_MS + MARGIN,
+      );
+      expect(under).toEqual({ ok: false, opened: 1, stuck: 0 });
+      expect(underLog.events).toEqual([{ event: 'watchdog_failed', stage: 'open', code: '55P03' }]);
+      expect(await stateOf(k.journeyId)).toBe('LOST_CONTACT');
+      expect(await stateOf(j.journeyId)).toBe('ACTIVE');
+      expect(await alertsOf(j.journeyId)).toEqual([]);
+      expect((await beats.lastBeat())?.getTime() ?? null).toBe(beatBefore);
+
+      // From 5 min 30 s: stuck as well.
+      const silence = await connection().query<{ ms: string }>(
+        `select floor(extract(epoch from now() - last_heartbeat_at) * 1000)::bigint::text as ms
+           from journeys where id = $1`,
+        [j.journeyId],
+      );
+      await sleep(Math.max(0, STUCK_SILENCE + 500 - Number(silence.rows[0]?.ms)));
+      const pastLog = fakeLog();
+      const past = await bounded(
+        watchdogFor({ log: pastLog }).sweep(),
+        LOCK_WAIT_LIMIT_MS + MARGIN,
+      );
+      expect(past).toEqual({ ok: false, opened: 0, stuck: 1 });
+      expect(pastLog.events).toHaveLength(2);
+      expect(pastLog.events).toEqual(
+        expect.arrayContaining([
+          { event: 'watchdog_failed', stage: 'open', code: '55P03' },
+          { event: 'watchdog_overdue', journeyId: j.journeyId },
+        ]),
+      );
+      expect(await stateOf(j.journeyId)).toBe('ACTIVE');
+      expect((await beats.lastBeat())?.getTime() ?? null).toBe(beatBefore);
+    } finally {
+      await holder.letGo();
+    }
+  }, 90_000);
 });

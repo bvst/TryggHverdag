@@ -117,6 +117,10 @@ function underTest(): JourneyStoreUnderTest {
     },
     // The fake waits for nothing, so any wait does.
     lockWaitMs: 5_000,
+    letTimePass: (ms) => {
+      clock.advance(ms);
+      return Promise.resolve();
+    },
     timeMarginMs: 0,
     store,
     addUser: () => Promise.resolve(store.addUser()),
@@ -225,11 +229,19 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       // a held row joins the shared suite (approach item 3, step 4; AC20).
       // Every other name is unchanged; this one is added.
       'LOST-02-AC20: an open with a lock wait answers held when the row stays held, opened when it is let go unchanged, and skipped when it is let go no longer overdue',
+      // RG-03 (LOST-02, review loop 1): a held row that no longer matches
+      // (approach item 3, step 4; spec item 8a). Every other name is
+      // unchanged; this one is added.
+      'LOST-02-AC20: a held row that no longer matches answers skipped at once to an open with a lock wait, never held: one already LOST_CONTACT, and one whose last contact has moved',
       'LOST-02-AC7: 10 opens racing for one overdue journey, 5 times over: exactly one opens and every other skips, none an error; one alert, and one message per responder',
       'LOST-02-AC14: a claim hands out each due message once: one attempt counted, leased until the claim’s now plus the lease, and not handed out again while the lease runs',
       'LOST-02-AC14: a claim takes at most its limit, and the next claim takes the rest',
       'LOST-02-AC7: 10 claims racing: each due message is handed to exactly one of them',
       'LOST-02-AC15: a failed message keeps its reason and is due again after the delay given, with the same ID and one more attempt; a sent one is marked at the store’s now, and never handed out again',
+      // RG-03 (LOST-02, review loop 1, test-auditor, D-100): moved here from
+      // this file's own test of the fake, so the adapter is held to it at L3
+      // as well. Every other name is unchanged; this one is added.
+      'LOST-02-AC16: a message marked sent again, as one sent again after its lease passed is, keeps the time it was first marked',
       'LOST-02-AC15: a failure reason outside the push port’s four is refused, and the message is left as it was',
       'LOST-02-AC13: the heartbeat received at the alert’s silent_since is the journey’s latest, with its battery level and whether it had a position',
     ]);
@@ -1035,6 +1047,36 @@ describe('fakeJourneyStore: the watchdog and the outbox (LOST-02)', () => {
     ).toEqual({ outcome: 'skipped' });
   });
 
+  test('a held row that no longer matches is skipped by both opens, waiting or not, and a holder that would let go is not asked to', async () => {
+    // Already alerted, and held.
+    const alerted = watchedStore({ silentForMs: 60 * FIVE_MINUTES });
+    alerted.store.setState(alerted.journeyId, 'LOST_CONTACT');
+    alerted.store.hold(alerted.journeyId);
+    // Contact came, and held by a holder that would let go.
+    const heard = watchedStore();
+    expect(
+      await heard.store.recordHeartbeat(heartbeat(heard.journeyId, new Date(CLOCK_AT.getTime()))),
+    ).toEqual({ outcome: 'recorded' });
+    const asked: string[] = [];
+    heard.store.holdUntilWaited(heard.journeyId, () => {
+      asked.push('let go');
+    });
+
+    for (const { store, journeyId } of [alerted, heard]) {
+      for (const lockWaitMs of [undefined, 5_000]) {
+        expect(
+          await store.openLostContactAlert(
+            lockWaitMs === undefined
+              ? { journeyId, afterMs: FIVE_MINUTES }
+              : { journeyId, afterMs: FIVE_MINUTES, lockWaitMs },
+          ),
+        ).toEqual({ outcome: 'skipped' });
+      }
+      expect(store.alerts()).toEqual([]);
+    }
+    expect(asked).toEqual([]);
+  });
+
   test('a heartbeat for a row held until waited for waits, as for any held row, and goes on when the hold ends', async () => {
     const { store, journeyId } = watchedStore();
     store.holdUntilWaited(journeyId);
@@ -1126,8 +1168,14 @@ describe('fakeJourneyStore: the watchdog and the outbox (LOST-02)', () => {
     await expect(store.claimDue({ limit: -1, leaseMs: 30_000 })).rejects.toThrow();
   });
 
-  test('a message counts as sent only once markSent has settled, and keeps the first time it was marked', async () => {
-    const { clock, store, journeyId } = watchedStore({ responders: 1 });
+  // RG-03 (LOST-02, review loop 1, test-auditor, D-100): this test also
+  // held "and keeps the first time it was marked": a second markSent five
+  // seconds later left the first time. That half moved to the shared suite,
+  // as "LOST-02-AC16: a message marked sent again … keeps the time it was
+  // first marked", which runs against this fake and against the adapter, with
+  // the same assertion. What stays here is the fake's own turn-later answer.
+  test('a message counts as sent only once markSent has settled', async () => {
+    const { store, journeyId } = watchedStore({ responders: 1 });
     const opened = await store.openLostContactAlert({ journeyId, afterMs: FIVE_MINUTES });
     if (opened.outcome !== 'opened') {
       throw new Error('expected the journey to be opened');
@@ -1140,10 +1188,6 @@ describe('fakeJourneyStore: the watchdog and the outbox (LOST-02)', () => {
     const marking = store.markSent(message.messageId);
     expect(store.outbox()[0]?.sentAt).toBeNull();
     await marking;
-    expect(store.outbox()[0]?.sentAt).toEqual(CLOCK_AT);
-
-    clock.advance(5_000);
-    await store.markSent(message.messageId);
     expect(store.outbox()[0]?.sentAt).toEqual(CLOCK_AT);
   });
 

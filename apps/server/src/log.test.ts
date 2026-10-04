@@ -657,6 +657,50 @@ const CODED_EVENTS: Record<string, unknown>[] = [
 ];
 
 describe('PRIV-07 and LOST-02: the five new events are closed, at the type and at run time', () => {
+  test('LOST-02-AC22: (L1) each of the five is exactly its fields, no more and no fewer: a field added to one, an optional one included, or a set widened, fails typecheck', () => {
+    // An exact pin per event (review loop 1, test-auditor). The test below
+    // tries fields one at a time; this holds the whole shape, so even
+    // `watchdog_overdue` gaining an optional `latitude?` fails `tsc`. The
+    // check is the compiler's: each entry below is `true` only when each type
+    // is assignable to the other and both have the same keys, an optional
+    // one included, and the array is typed to hold only `true`.
+    type Exactly<A, B> = [A] extends [B]
+      ? [B] extends [A]
+        ? [keyof A] extends [keyof B]
+          ? [keyof B] extends [keyof A]
+            ? true
+            : false
+          : false
+        : false
+      : false;
+    type EventOf<Name extends LogEvent['event']> = Extract<LogEvent, { event: Name }>;
+    const pinned: [
+      Exactly<
+        EventOf<'watchdog_failed'>,
+        { event: 'watchdog_failed'; stage: 'read' | 'open' | 'beat'; code: string | null }
+      >,
+      Exactly<EventOf<'watchdog_overdue'>, { event: 'watchdog_overdue'; journeyId: string }>,
+      Exactly<
+        EventOf<'push_failed'>,
+        {
+          event: 'push_failed';
+          reason: 'NO_TARGET' | 'REFUSED' | 'UNAVAILABLE' | 'NOT_CONFIGURED';
+          messageId: string;
+        }
+      >,
+      Exactly<
+        EventOf<'delivery_failed'>,
+        { event: 'delivery_failed'; stage: 'claim' | 'mark'; code: string | null }
+      >,
+      Exactly<
+        EventOf<'database_error'>,
+        { event: 'database_error'; pool: 'api' | 'worker'; code: string | null }
+      >,
+    ] = [true, true, true, true, true];
+
+    expect(pinned).toEqual([true, true, true, true, true]);
+  });
+
   test('LOST-02-AC22: (L1) none of the five holds another field: a latitude, a message, the recipient, the connection string, or another stage, reason or pool does not type-check', () => {
     // As above: each @ts-expect-error fails the type check (gate:static) the
     // day the property under it stops being an error. Values only; none is

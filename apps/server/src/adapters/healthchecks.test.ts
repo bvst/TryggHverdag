@@ -552,6 +552,38 @@ describe('REL-08 and LOST-02: a check-in ends when the signal it was given abort
     expect(String(failure)).toBe('Error: Healthchecks.io did not answer within 50 ms.');
   }, 2_000);
 
+  test('LOST-02-AC21: a check-in aborted through the caller’s signal fails with exactly “Healthchecks.io check-in cancelled: the worker is stopping.”; a timeout and an unreachable host keep their own messages', async () => {
+    const { fetchNever } = neverAnswering();
+    const controller = new AbortController();
+    const cancelling = failureOf(() =>
+      healthchecksCheckIn({ url: PING_URL, fetch: fetchNever }).checkIn(controller.signal),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort();
+
+    expect(String(await cancelling)).toBe(
+      'Error: Healthchecks.io check-in cancelled: the worker is stopping.',
+    );
+
+    // A caller's signal that does not abort changes neither of the others.
+    const timedOut = await failureOf(() =>
+      healthchecksCheckIn({
+        url: PING_URL,
+        fetch: neverAnswering().fetchNever,
+        timeoutMs: 50,
+      }).checkIn(new AbortController().signal),
+    );
+    expect(String(timedOut)).toBe('Error: Healthchecks.io did not answer within 50 ms.');
+
+    const port = await closedPort();
+    const unreachable = await failureOf(() =>
+      healthchecksCheckIn({ url: `http://127.0.0.1:${String(port)}/${CHECK}` }).checkIn(
+        new AbortController().signal,
+      ),
+    );
+    expect(String(unreachable)).toBe('Error: Healthchecks.io could not be reached (ECONNREFUSED).');
+  }, 5_000);
+
   test('LOST-02-AC21: against a stand-in that never answers, a check-in aborted by its signal ends at once, after exactly one request', async () => {
     const healthchecks = await standIn('never');
     const controller = new AbortController();

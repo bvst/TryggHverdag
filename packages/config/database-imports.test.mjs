@@ -116,6 +116,24 @@ const PNPM_LAYOUT = {
     }),
     'dist/index.js': 'module.exports = {};\n',
   },
+  // RG-03 (LOST-02, review loop 1): drizzle-kit joins the layout, as 0.31.11
+  // lays itself out (its root and its api entry, types first), for the rule
+  // that refuses it in production code (approach item 13). Added only: every
+  // package above is as it was, and no case above imports drizzle-kit.
+  'drizzle-kit@0.31.11/node_modules/drizzle-kit': {
+    'package.json': JSON.stringify({
+      name: 'drizzle-kit',
+      version: '0.31.11',
+      exports: {
+        '.': { types: './index.d.mts', default: './index.mjs' },
+        './api': { types: './api.d.mts', default: './api.mjs' },
+      },
+    }),
+    'index.mjs': 'export const x = 1;\n',
+    'index.d.mts': 'export declare const x: number;\n',
+    'api.mjs': 'export const x = 1;\n',
+    'api.d.mts': 'export declare const x: number;\n',
+  },
 };
 
 /** A static import of `from`, or one loaded with import(); `n` keeps the names apart in one file. */
@@ -345,19 +363,223 @@ describe.each([
 );
 
 describe('pnpm run imports:check, on the repository itself', () => {
-  test('LOST-02-AC24: (control) passes: the rule leaves today’s three importers alone, db.ts, migrations.ts and worker.ts', () => {
+  // RG-03 (LOST-02, review loop 1, spec item 4e): the control now also
+  // names, and checks it covers, the importers the two new rules leave alone:
+  // drizzle.config.ts, which imports drizzle-kit, and the test files that
+  // import today's test-named helpers. The check that the run passes is
+  // unchanged; what was added only makes "passes" mean those were looked at.
+  test('LOST-02-AC24: (control) passes: the rules leave today’s importers alone, db.ts, migrations.ts, worker.ts and drizzle.config.ts, and the test files that import capture.test.ts and fake-postgres-server.test.ts', () => {
     const scripts = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).scripts;
     const [program, ...args] = scripts['imports:check'].split(/\s+/);
 
     expect(program).toBe('depcruise');
-    const result = spawnSync(path.join(ROOT, 'node_modules', '.bin', program), args, {
-      cwd: ROOT,
-      encoding: 'utf8',
-      env: { PATH: process.env.PATH, HOME: process.env.HOME },
-    });
+    const run = (extra) =>
+      spawnSync(path.join(ROOT, 'node_modules', '.bin', program), [...args, ...extra], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH, HOME: process.env.HOME },
+        maxBuffer: 64 * 1024 * 1024,
+      });
+    const result = run([]);
 
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+
+    // The same run, as JSON: what it looked at.
+    const { modules } = JSON.parse(run(['--output-type', 'json']).stdout);
+    const dependenciesOf = (source) =>
+      (modules.find((module) => module.source === source)?.dependencies ?? []).map(
+        (dependency) => dependency.module,
+      );
+    expect(dependenciesOf('apps/server/drizzle.config.ts')).toContain('drizzle-kit');
+    for (const helper of ['./capture.test.ts', './fake-postgres-server.test.ts']) {
+      expect(
+        modules.filter(
+          (module) =>
+            /\.test\.ts$/.test(module.source) &&
+            module.dependencies.some((dependency) => dependency.module === helper),
+        ).length,
+        helper,
+      ).toBeGreaterThan(0);
+    }
   }, 120_000);
+});
+
+// ===========================================================================
+// LOST-02-AC24, review loop 1 (approach item 13): drizzle-kit, whose api
+// entry builds a pg.Pool, is refused in production code but for
+// drizzle.config.ts; and production code imports no file named like a test,
+// whose own imports every test exemption would otherwise let through.
+// ===========================================================================
+
+const DRIZZLE_KIT = 'drizzle-kit';
+const DRIZZLE_KIT_API = 'drizzle-kit/api';
+
+/** How `importer` imports `target`, both repository paths: a relative specifier. */
+function specifierFor(importer, target) {
+  const relative = path.posix.relative(path.posix.dirname(importer), target);
+  return relative.startsWith('.') ? relative : `./${relative}`;
+}
+
+describe.each([
+  { layout: 'installed under pnpm’s layout', pnpm: true },
+  { layout: 'not installed', pnpm: false },
+])('drizzle-kit in production code — $layout', ({ pnpm }) => {
+  const REFUSED_KIT = [
+    ...everyWay('apps/server/src/modules/alerts', [DRIZZLE_KIT, DRIZZLE_KIT_API]),
+    ...everyWay('apps/server/src/domain', [DRIZZLE_KIT, DRIZZLE_KIT_API]),
+    ...everyWay('apps/server/src/adapters', [DRIZZLE_KIT, DRIZZLE_KIT_API]),
+  ];
+  const CONFIG_CASES = [
+    { ...caseOf('apps/server/drizzle.config.ts', DRIZZLE_KIT), verdict: 'allowed' },
+    { ...caseOf('apps/other/drizzle.config.ts', DRIZZLE_KIT), verdict: 'refused' },
+    { ...caseOf('apps/server/src/drizzle.config.ts', DRIZZLE_KIT), verdict: 'refused' },
+    { ...caseOf('packages/contracts/drizzle.config.ts', DRIZZLE_KIT), verdict: 'refused' },
+    { ...caseOf('apps/server/src/db/schema.test.ts', DRIZZLE_KIT), verdict: 'allowed' },
+    {
+      ...caseOf(
+        'apps/server/src/adapters/migrations.integration.test.ts',
+        DRIZZLE_KIT_API,
+        'dynamic',
+      ),
+      verdict: 'allowed',
+    },
+  ];
+  const runs = new Map();
+  beforeAll(() => {
+    for (const { cases, files } of runsOf([...REFUSED_KIT, ...CONFIG_CASES])) {
+      const check = importCheck(files, { pnpm });
+      for (const each of cases) {
+        runs.set(each, check);
+      }
+    }
+  }, 120_000);
+
+  const refusals = (each) => {
+    const names = databaseRules().map((rule) => rule.name);
+    return runs
+      .get(each)
+      .violations.filter(
+        (violation) =>
+          names.includes(violation.rule) &&
+          violation.from === each.file &&
+          aims(violation.to, each.from),
+      );
+  };
+
+  test.each(REFUSED_KIT)(
+    'LOST-02-AC24: drizzle-kit and drizzle-kit/api, installed and not installed, are refused from a module, a domain file and an adapter, naming the rule — $file importing $from ($form)',
+    (each) => {
+      const check = runs.get(each);
+
+      expect(refusals(each), check.output).toHaveLength(1);
+      expect(check.status, check.output).not.toBe(0);
+    },
+  );
+
+  test.each(CONFIG_CASES)(
+    'LOST-02-AC24: apps/server/drizzle.config.ts may import drizzle-kit; a file only named drizzle.config.ts in another folder may not; test files may — $file importing $from ($form): $verdict',
+    (each) => {
+      expect(refusals(each), runs.get(each).output).toHaveLength(
+        each.verdict === 'refused' ? 1 : 0,
+      );
+    },
+  );
+});
+
+describe('production code imports no file named like a test', () => {
+  const HELPER = 'apps/server/src/helper.test.ts';
+  const SPEC = 'apps/server/src/helper.spec.ts';
+  const TOOLING = 'apps/server/src/tooling.test.mjs';
+  const TARGETS = {
+    [HELPER]: 'export default 1;\n',
+    [SPEC]: 'export default 1;\n',
+    [TOOLING]: 'export default 1;\n',
+  };
+  const PRODUCTION = [
+    'apps/server/src/modules/alerts/uses-helper.ts',
+    'apps/server/src/domain/uses-helper.ts',
+    'apps/server/src/adapters/uses-helper.ts',
+    'apps/server/src/api-process.ts',
+    'apps/server/src/worker.ts',
+  ];
+  const importing = (file, target, form, verdict) => ({
+    ...caseOf(file, specifierFor(file, target), form),
+    target,
+    verdict,
+  });
+  const CASES = [
+    ...PRODUCTION.flatMap((file) =>
+      ['static', 'dynamic'].map((form) => importing(file, HELPER, form, 'refused')),
+    ),
+    ...[SPEC, TOOLING].flatMap((target) =>
+      ['static', 'dynamic'].map((form) => importing(PRODUCTION[0], target, form, 'refused')),
+    ),
+    importing('apps/server/src/alerts.system.test.ts', HELPER, 'static', 'allowed'),
+    importing('apps/server/src/worker.test.ts', HELPER, 'dynamic', 'allowed'),
+    importing('apps/server/src/adapters/journeys.integration.test.ts', SPEC, 'static', 'allowed'),
+  ];
+  const runs = new Map();
+  beforeAll(() => {
+    for (const { cases, files } of runsOf(CASES)) {
+      const check = importCheck({ ...TARGETS, ...files }, { pnpm: false });
+      for (const each of cases) {
+        runs.set(each, check);
+      }
+    }
+  }, 120_000);
+
+  const refusals = (each) => {
+    const names = databaseRules().map((rule) => rule.name);
+    return runs
+      .get(each)
+      .violations.filter(
+        (violation) =>
+          names.includes(violation.rule) &&
+          violation.from === each.file &&
+          violation.to === each.target,
+      );
+  };
+
+  test.each(CASES)(
+    'LOST-02-AC24: production code importing a file named like a test (.test.ts, .spec.ts, .test.mjs), by static import or import(), is refused, naming the rule; a test file importing one is not — $file importing $from ($form): $verdict',
+    (each) => {
+      const check = runs.get(each);
+
+      expect(refusals(each), check.output).toHaveLength(each.verdict === 'refused' ? 1 : 0);
+      // The target is there, so nothing but the rule under test refuses it.
+      expect(
+        check.violations.filter(
+          ({ rule, from }) => from === each.file && rule === 'not-to-unresolvable',
+        ),
+        check.output,
+      ).toEqual([]);
+    },
+  );
+
+  test('LOST-02-AC24: (control) a production file that imports a test-named helper which imports pg is refused by the test-file rule, so the helper’s pg cannot escape the database rule', () => {
+    const production = 'apps/server/src/modules/alerts/sneaky.ts';
+    const helper = 'apps/server/src/pool.test.ts';
+    const check = importCheck(
+      {
+        [production]: FORMS.static(specifierFor(production, helper), 0),
+        [helper]: FORMS.static(PG, 0),
+      },
+      { pnpm: true },
+    );
+    const names = databaseRules().map((rule) => rule.name);
+    const byTheRules = check.violations.filter(({ rule }) => names.includes(rule));
+
+    // The helper's own pg is a test file's, which the database rule exempts…
+    expect(
+      byTheRules.filter(({ from }) => from === helper),
+      check.output,
+    ).toEqual([]);
+    // …so what stops it reaching production is the refusal of the import itself.
+    expect(
+      byTheRules.filter(({ from, to }) => from === production && to === helper),
+      check.output,
+    ).toHaveLength(1);
+  }, 60_000);
 });
 
 // ===========================================================================

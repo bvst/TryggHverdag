@@ -30,16 +30,21 @@ import {
   fakeLog,
   fakeWorkerHeartbeats,
   fc,
+  pgSettingsAnswer,
   syntheticCredential,
+  syntheticUuid,
   type FakeLog,
+  type FakePgSetting,
+  type FakePostgresHandler,
 } from '@trygghverdag/test-kit';
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import process from 'node:process';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { healthchecksCheckIn } from './adapters/healthchecks.ts';
 import { captured, markersIn } from './capture.test.ts';
 import { readHealthchecksSetting, type HealthchecksSetting } from './config.ts';
 import {
+  askedFor,
   eventually,
   listeningFakePostgres,
   quietDatabase,
@@ -181,7 +186,12 @@ describe('startWorker', () => {
       return Promise.resolve({} as never);
     }) as Parameters<typeof startWorker>[1];
 
-    await startWorker('postgres://example/db', fakeRunner);
+    // RG-03 (LOST-02, review loop 1, safety-reviewer): quiet loops. LOST-02 starts a watchdog
+    // and a sender with the worker; left real here, they swept a database that does not exist
+    // every 10 s for as long as the file ran, as nothing stops this worker, printing closed
+    // watchdog_failed and delivery_failed lines into the unit run's output. This test is not
+    // about the loops: it asserts what it did before.
+    await startWorker('postgres://example/db', fakeRunner, { ...quietLoops() });
 
     expect(options?.crontab).toBe(HEARTBEAT_CRONTAB);
     expect(HEARTBEAT_CRONTAB).toContain('heartbeat');
@@ -207,7 +217,14 @@ describe('startWorker', () => {
       return Promise.resolve({} as never);
     }) as Parameters<typeof startWorker>[1];
 
-    await startWorker('postgres:///db?host=/nonexistent-socket-dir', fakeRunner);
+    // RG-03 (LOST-02, review loop 1, safety-reviewer): quiet loops. LOST-02 starts a watchdog
+    // and a sender with the worker; left real here, they swept a database that does not exist
+    // every 10 s for as long as the file ran, as nothing stops this worker, printing closed
+    // watchdog_failed and delivery_failed lines into the unit run's output. This test is not
+    // about the loops: it asserts what it did before.
+    await startWorker('postgres:///db?host=/nonexistent-socket-dir', fakeRunner, {
+      ...quietLoops(),
+    });
     const { heartbeat } = options?.taskList ?? {};
 
     await expect(heartbeat?.(null, {} as never)).rejects.toThrow(/select now\(\)/);
@@ -309,7 +326,12 @@ describe('stopping the worker', () => {
     // itself. Left open, every restart of the process would leak connections
     // against a database that allows five in total.
     const runner = recordingRunner();
-    const worker = await startWorker('postgres://example/db', runner.run);
+    // RG-03 (LOST-02, review loop 1, safety-reviewer): quiet loops. LOST-02 starts a watchdog
+    // and a sender with the worker; left real here, they swept a database that does not exist
+    // every 10 s, and stop() waited for the one in flight, printing closed watchdog_failed and
+    // delivery_failed lines into the unit run's output. This test is not about the loops: it
+    // asserts what it did before.
+    const worker = await startWorker('postgres://example/db', runner.run, { ...quietLoops() });
 
     await worker.stop();
 
@@ -330,7 +352,12 @@ describe('stopping the worker', () => {
 
   test('stopping on request ends quietly', async () => {
     const runner = recordingRunner();
-    const worker = await startWorker('postgres://example/db', runner.run);
+    // RG-03 (LOST-02, review loop 1, safety-reviewer): quiet loops. LOST-02 starts a watchdog
+    // and a sender with the worker; left real here, they swept a database that does not exist
+    // every 10 s, and stop() waited for the one in flight, printing closed watchdog_failed and
+    // delivery_failed lines into the unit run's output. This test is not about the loops: it
+    // asserts what it did before.
+    const worker = await startWorker('postgres://example/db', runner.run, { ...quietLoops() });
 
     const stopped = worker.untilStopped();
     await worker.stop();
@@ -342,7 +369,12 @@ describe('stopping the worker', () => {
     // A worker process that exits with 0 is one the platform does not restart,
     // and a worker that is not running is a watchdog that is not watching.
     const runner = recordingRunner();
-    const worker = await startWorker('postgres://example/db', runner.run);
+    // RG-03 (LOST-02, review loop 1, safety-reviewer): quiet loops. LOST-02 starts a watchdog
+    // and a sender with the worker; left real here, they swept a database that does not exist
+    // every 10 s for as long as the file ran, as nothing stops this worker, printing closed
+    // watchdog_failed and delivery_failed lines into the unit run's output. This test is not
+    // about the loops: it asserts what it did before.
+    const worker = await startWorker('postgres://example/db', runner.run, { ...quietLoops() });
 
     runner.endsOnItsOwn();
 
@@ -351,7 +383,12 @@ describe('stopping the worker', () => {
 
   test('a runner that crashes passes the crash on, so the process can say what happened', async () => {
     const runner = recordingRunner();
-    const worker = await startWorker('postgres://example/db', runner.run);
+    // RG-03 (LOST-02, review loop 1, safety-reviewer): quiet loops. LOST-02 starts a watchdog
+    // and a sender with the worker; left real here, they swept a database that does not exist
+    // every 10 s for as long as the file ran, as nothing stops this worker, printing closed
+    // watchdog_failed and delivery_failed lines into the unit run's output. This test is not
+    // about the loops: it asserts what it did before.
+    const worker = await startWorker('postgres://example/db', runner.run, { ...quietLoops() });
 
     runner.crashes(new Error('lost the database'));
 
@@ -367,7 +404,12 @@ describe('who owns the stop signal', () => {
     // happen against a real PostgreSQL on INF-07.
     const runner = recordingRunner();
 
-    await startWorker('postgres://example/db', runner.run);
+    // RG-03 (LOST-02, review loop 1, safety-reviewer): quiet loops. LOST-02 starts a watchdog
+    // and a sender with the worker; left real here, they swept a database that does not exist
+    // every 10 s for as long as the file ran, as nothing stops this worker, printing closed
+    // watchdog_failed and delivery_failed lines into the unit run's output. This test is not
+    // about the loops: it asserts what it did before.
+    await startWorker('postgres://example/db', runner.run, { ...quietLoops() });
 
     expect(runner.options()?.noHandleSignals).toBe(true);
   });
@@ -389,6 +431,12 @@ describe('runWorkerProcess', () => {
       exit: (code) => {
         exits.push(code);
       },
+      // RG-03 (LOST-02, review loop 1, safety-reviewer): quiet loops. LOST-02 starts a watchdog
+      // and a sender with the worker; left real here, they swept a database that does not exist
+      // every 10 s, and stop() waited for the one in flight, printing closed watchdog_failed
+      // and delivery_failed lines into the unit run's output. This test is not about the loops:
+      // it asserts what it did before.
+      ...quietLoops(),
     });
     await settle();
     signals.emit('SIGTERM');
@@ -408,6 +456,12 @@ describe('runWorkerProcess', () => {
       signals,
       write: () => undefined,
       exit: () => undefined,
+      // RG-03 (LOST-02, review loop 1, safety-reviewer): quiet loops. LOST-02 starts a watchdog
+      // and a sender with the worker; left real here, they swept a database that does not exist
+      // every 10 s for as long as the file ran, as nothing stops this worker once its runner
+      // ends, printing closed watchdog_failed and delivery_failed lines into the unit run's
+      // output. This test is not about the loops: it asserts what it did before.
+      ...quietLoops(),
     });
     await settle();
     runner.endsOnItsOwn();
@@ -505,6 +559,12 @@ describe("runWorkerProcess on Clever Cloud's build machine", () => {
       instanceType: 'production',
       write: () => undefined,
       exit: () => undefined,
+      // RG-03 (LOST-02, review loop 1, safety-reviewer): quiet loops. LOST-02 starts a watchdog
+      // and a sender with the worker; left real here, they swept a database that does not exist
+      // every 10 s for as long as the file ran, as nothing stops this worker once its runner
+      // ends, printing closed watchdog_failed and delivery_failed lines into the unit run's
+      // output. This test is not about the loops: it asserts what it did before.
+      ...quietLoops(),
     });
     await settle();
 
@@ -1031,8 +1091,11 @@ describe('REL-08: the minute task startWorker schedules checks in through the ch
 
     await expect(runHeartbeat(runner)).resolves.toBeUndefined();
 
-    expect([...events].sort()).toEqual([BEAT_READ, CHECKED_IN, TIME_READ].sort());
-    expect(events.at(-1)).toBe(CHECKED_IN);
+    // RG-03 (LOST-02, review loop 1, test-auditor): the order, pinned whole
+    // now that the code exists: the database time, then the beat, then the
+    // check-in. It held the three in any order, with the check-in last; it
+    // holds that still, and the reads' order besides.
+    expect(events).toEqual([TIME_READ, BEAT_READ, CHECKED_IN]);
   });
 
   test('INF-08-AC3: when the beat cannot be read, it does not check in, and fails as before', async () => {
@@ -1492,6 +1555,96 @@ describe('REL-08 and LOST-02: the sweep loop and the delivery loop', () => {
     expect(sender.count).toBe(1);
   });
 
+  test('LOST-02-AC21: a run that throws is said in one line naming its loop: the sweep’s names the sweep, and the delivery’s the delivery', async () => {
+    const { watchdog, sender, written } = await looping();
+
+    watchdog.fail(new Error('synthetic sweep failure'));
+    await vi.advanceTimersByTimeAsync(0);
+    sender.fail(new Error('synthetic delivery failure'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const [sweepLine = '', deliveryLine = ''] = linesOf(written);
+    expect(linesOf(written)).toHaveLength(2);
+    expect(sweepLine).toMatch(/^worker: .*\bsweep\b/);
+    expect(sweepLine).not.toMatch(/\bdelivery\b/);
+    expect(deliveryLine).toMatch(/^worker: .*\bdelivery\b/);
+    expect(deliveryLine).not.toMatch(/\bsweep\b/);
+  });
+
+  test('LOST-02-AC21: stop() while a sweep that will open an alert is in flight: no delivery starts after stop() began, and no timer is left set', async () => {
+    const { watchdog, sender, worker } = await looping();
+    sender.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sender.count).toBe(1);
+
+    const stopping = worker.stop();
+    watchdog.finish({ ok: true, opened: 1, stuck: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    await stopping;
+
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60 * SECOND);
+    expect(sender.count).toBe(1);
+    expect(watchdog.count).toBe(1);
+  });
+
+  test('LOST-02-AC21: stop() while a delivery is in flight with another run pending: it does not run again, and no timer is left set', async () => {
+    const { watchdog, sender, worker } = await looping();
+    // A sweep that opened an alert while the first delivery is in flight
+    // leaves another delivery pending, to follow it at once.
+    watchdog.finish({ ok: true, opened: 1, stuck: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sender.count).toBe(1);
+
+    const stopping = worker.stop();
+    sender.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    await stopping;
+
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60 * SECOND);
+    expect(sender.count).toBe(1);
+    expect(watchdog.count).toBe(1);
+  });
+
+  test('LOST-02-AC21: stop() while both loops are in flight: neither starts another run', async () => {
+    const { watchdog, sender, worker } = await looping();
+
+    const stopping = worker.stop();
+    watchdog.finish({ ok: true, opened: 1, stuck: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    sender.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    await stopping;
+
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60 * SECOND);
+    expect(watchdog.count).toBe(1);
+    expect(sender.count).toBe(1);
+  });
+
+  test('LOST-02-AC21: runNow on either loop after stop() began starts nothing', async () => {
+    // Every way a loop is asked to run, after stop() began: the delivery's
+    // timer comes due, the sweep in flight finishes having opened an alert
+    // (which asks the delivery loop to run now), and the sweep's own timer
+    // would come due after it.
+    const { watchdog, sender, worker } = await looping();
+    sender.finish();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const stopping = worker.stop();
+    await vi.advanceTimersByTimeAsync(10 * SECOND);
+    expect(sender.count).toBe(1);
+    watchdog.finish({ ok: true, opened: 3, stuck: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    await stopping;
+    await vi.advanceTimersByTimeAsync(60 * SECOND);
+
+    expect(watchdog.count).toBe(1);
+    expect(sender.count).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   test('LOST-02-AC21: on the build machine no loop runs (BUG-3)', async () => {
     const watchdog = stubWatchdog();
     const sender = stubSender();
@@ -1559,6 +1712,54 @@ describe('REL-08 and LOST-02: a stop that no longer waits for Healthchecks.io (D
       'pool ended',
       'exit 0',
     ]);
+    await running;
+  });
+});
+
+describe('REL-08 and LOST-02: a check-in the stop cancelled says so', () => {
+  test('LOST-02-AC21: stopping the worker during a hung check-in writes the cancelled message, not “could not be reached”', async () => {
+    const events: string[] = [];
+    const runner = recordingRunner(events);
+    const signals = new EventEmitter();
+    const written: string[] = [];
+    let requests = 0;
+    // A Healthchecks.io that never answers, through the real adapter: the
+    // request ends only when its signal aborts, as Node's fetch does.
+    const neverAnswers: typeof fetch = async (_input, init) => {
+      requests += 1;
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error('the adapter sent no signal, so nothing could ever end this request');
+      }
+      await once(signal, 'abort');
+      throw signal.reason;
+    };
+
+    const running = runWorkerProcess('postgres://example/db', {
+      runWorker: runner.run,
+      signals,
+      healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: PING_URL }),
+      createCheckIn: (url) => healthchecksCheckIn({ url, fetch: neverAnswers }),
+      ...quietLoops(),
+      write: (text) => {
+        written.push(text);
+      },
+      exit: (code) => {
+        events.push(`exit ${String(code)}`);
+      },
+    });
+    await settle();
+    answerLikePostgres(runner, []);
+    void runHeartbeat(runner).catch(() => undefined);
+    expect(await eventually(() => requests === 1)).toBe(true);
+
+    signals.emit('SIGTERM');
+    expect(await eventually(() => events.includes('exit 0'), 500)).toBe(true);
+
+    const failed = linesOf(written).filter((line) => line.includes('check-in failed'));
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toContain('Healthchecks.io check-in cancelled: the worker is stopping.');
+    expect(written.join('')).not.toContain('could not be reached');
     await running;
   });
 });
@@ -1738,6 +1939,48 @@ describe('SEC-03 and LOST-02: the worker’s pool, seen from the database', () =
   });
 });
 
+describe('SEC-03 and LOST-02: every connection of a pool has its listener', () => {
+  test('LOST-02-AC18: two idle connections of the worker’s pool, each ended with a fatal error, are two database_error events, one each, so a listener added once for the pool fails here; the pool then serves the next query', async () => {
+    const database = await listeningFakePostgres(quietDatabase);
+    const loops = quietLoops();
+    const runner = recordingRunner();
+    const worker = await startWorker(database.url, runner.run, {
+      ...loops,
+      write: () => undefined,
+    });
+    const pool = runner.options()?.pgPool;
+    if (pool === undefined) {
+      throw new Error('the runner was never given a pool');
+    }
+
+    try {
+      const first = await pool.connect();
+      const second = await pool.connect();
+      first.release();
+      second.release();
+      const connections = database.connections().filter((connection) => !connection.ended);
+      expect(connections).toHaveLength(2);
+      for (const connection of connections) {
+        database.end(connection, {
+          code: '57P01',
+          message: 'terminating connection due to administrator command',
+        });
+      }
+      await eventually(() => loops.log.events.length >= 2);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(loops.log.events).toEqual([
+        { event: 'database_error', pool: 'worker', code: '57P01' },
+        { event: 'database_error', pool: 'worker', code: '57P01' },
+      ]);
+      expect((await pool.query('select 1')).rows).toEqual([]);
+    } finally {
+      await worker.stop();
+      await database.close();
+    }
+  });
+});
+
 describe('REL-08 and LOST-02: by default, the real watchdog and sender, and the real log', () => {
   test('LOST-02-AC19: by default the worker sweeps and delivers at once, with the real watchdog and sender over its own pool, and their failures reach stdout through the production log, as closed events naming the stage and the SQLSTATE only', async () => {
     const refusal = 'this synthetic database answers nothing';
@@ -1776,4 +2019,220 @@ describe('REL-08 and LOST-02: by default, the real watchdog and sender, and the 
       await database.close();
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// LOST-02, review loop 1: the worker reads its session limit back at start
+// (approach item 7, D-109), and the running worker's push is the
+// unconfigured one (privacy-security-reviewer).
+// ---------------------------------------------------------------------------
+
+/** What the worker asks for, as pg_settings reports it when the startup parameter arrived. */
+const IDLE_AS_ASKED: Record<string, FakePgSetting> = {
+  idle_in_transaction_session_timeout: { setting: '10000', unit: 'ms' },
+};
+
+/** The lines a worker wrote about its session limits. */
+const limitLines = (written: string[]) =>
+  linesOf(written).filter((line) => /\bsession limits?\b/.test(line));
+
+/**
+ * The worker process over the fake PostgreSQL server, answering the start-up
+ * read of pg_settings through `settings`, with loops that count their runs.
+ * Resolves once a line about the session limits has been written, or the
+ * wait ran out; then stops it.
+ */
+async function workerReadingBack(
+  handler: FakePostgresHandler,
+  { password }: { password?: string } = {},
+) {
+  const database = await listeningFakePostgres(handler, password === undefined ? {} : { password });
+  const signals = new EventEmitter();
+  const written: string[] = [];
+  const watchdog = stubWatchdog();
+  const sender = stubSender();
+  const running = runWorkerProcess(database.url, {
+    runWorker: recordingRunner().run,
+    signals,
+    watchdog,
+    sender,
+    log: fakeLog(),
+    write: (text) => {
+      written.push(text);
+    },
+    exit: () => undefined,
+  });
+  await eventually(() => limitLines(written).length > 0);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  watchdog.finish();
+  sender.finish();
+  signals.emit('SIGTERM');
+  await running;
+  await database.close();
+  return { database, written, watchdog };
+}
+
+describe('SEC-03 and LOST-02: the worker reads its session limit back at start (D-109)', () => {
+  test('LOST-02-AC17: at start the worker reads idle_in_transaction_session_timeout back from pg_settings and writes exactly one line: worker: session limit in force: idle_in_transaction_session_timeout=10000ms', async () => {
+    const { database, written } = await workerReadingBack(
+      (query) => pgSettingsAnswer(query, IDLE_AS_ASKED) ?? quietDatabase(query),
+    );
+
+    expect(
+      database.queries.filter(
+        ({ text, values }) =>
+          /\bpg_settings\b/.test(text) &&
+          `${text} ${values.join(' ')}`.includes('idle_in_transaction_session_timeout'),
+      ),
+    ).toHaveLength(1);
+    expect(limitLines(written)).toEqual([
+      'worker: session limit in force: idle_in_transaction_session_timeout=10000ms',
+    ]);
+  });
+
+  test('LOST-02-AC17: when the database reports an idle limit other than the one asked for, as a pooler that dropped the startup parameters would, the worker writes the fixed mismatch line, and still sweeps', async () => {
+    const { written, watchdog } = await workerReadingBack(
+      (query) =>
+        pgSettingsAnswer(query, {
+          idle_in_transaction_session_timeout: { setting: '0', unit: 'ms' },
+        }) ?? quietDatabase(query),
+    );
+
+    expect(limitLines(written)).toEqual([
+      'worker: session limit idle_in_transaction_session_timeout is 0ms, not 10000ms: a stalled transaction will not be ended.',
+    ]);
+    expect(watchdog.count).toBeGreaterThan(0);
+  });
+
+  test('LOST-02-AC17: a limit that is not digits and a unit is written as unreadable, a failed read gives one line with its SQLSTATE, and no start-up line holds the connection URL, its password marker or an error message', async () => {
+    const marker = syntheticCredential();
+    const unreadable = await workerReadingBack(
+      (query) =>
+        pgSettingsAnswer(query, {
+          idle_in_transaction_session_timeout: { setting: 'eleventy', unit: 'fortnights' },
+        }) ?? quietDatabase(query),
+      { password: marker },
+    );
+    const refusal = `the settings are not for you, ${marker}`;
+    const failed = await workerReadingBack(
+      (query) => {
+        if (/\bpg_settings\b/.test(query.text)) {
+          throw Object.assign(new Error(refusal), { code: '57014' });
+        }
+        return quietDatabase(query);
+      },
+      { password: marker },
+    );
+
+    const [line] = limitLines(unreadable.written);
+    expect(limitLines(unreadable.written)).toHaveLength(1);
+    expect(line).toContain('idle_in_transaction_session_timeout');
+    expect(line).toContain('unreadable');
+    expect(limitLines(failed.written)).toEqual([
+      'worker: session limits could not be read (57014).',
+    ]);
+    const startLines = [...unreadable.written, ...failed.written].join('');
+    expect(
+      markersIn(startLines, [
+        'eleventy',
+        'fortnights',
+        marker,
+        unreadable.database.url,
+        failed.database.url,
+        refusal,
+      ]),
+    ).toEqual([]);
+  });
+});
+
+describe('LOST-02: the running worker pushes through the unconfigured push', () => {
+  const DATABASE_NOW = '2031-02-03 04:05:06.789+00';
+
+  /**
+   * A database holding one due message and nothing overdue. It answers the
+   * worker's own statements as the adapter shapes them (their column names
+   * are the adapter's), and records the rest: the claim hands out the
+   * message once, and a mark answers with its ID.
+   */
+  function oneDueMessage(messageId: string, recipientId: string): FakePostgresHandler {
+    let claimed = false;
+    return (query) => {
+      const settings = pgSettingsAnswer(query, IDLE_AS_ASKED);
+      if (settings !== undefined) {
+        return settings;
+      }
+      if (/\bleft join "?journeys"?/i.test(query.text)) {
+        return {
+          columns: ['now', 'id', 'state', 'silent_since'],
+          rows: [[DATABASE_NOW, null, null, null]],
+        };
+      }
+      if (/"?outbox"?[\s\S]*for update skip locked/i.test(query.text)) {
+        const rows = claimed
+          ? [[DATABASE_NOW, null, null, null, null]]
+          : [[DATABASE_NOW, messageId, recipientId, 'LOST_CONTACT', '1']];
+        claimed = true;
+        return { columns: ['now', 'id', 'recipient_id', 'kind', 'attempts'], rows };
+      }
+      if (/^\s*update "?outbox"?/i.test(query.text)) {
+        return { columns: askedFor(query.text), rows: [[messageId]] };
+      }
+      return quietDatabase(query);
+    };
+  }
+
+  test.each(['runWorkerProcess', 'startWorker with no push'] as const)(
+    'LOST-02-AC15: the running worker, started by %s, answers a claimed message NOT_CONFIGURED: the mark sets last_failure NOT_CONFIGURED and never sent_at, and one push_failed line names the reason and the message',
+    async (how) => {
+      const messageId = syntheticUuid();
+      const recipientId = syntheticUuid();
+      const database = await listeningFakePostgres(oneDueMessage(messageId, recipientId));
+      const log = fakeLog();
+      const signals = new EventEmitter();
+      let stop: () => Promise<void>;
+      if (how === 'runWorkerProcess') {
+        const running = runWorkerProcess(database.url, {
+          runWorker: recordingRunner().run,
+          signals,
+          log,
+          write: () => undefined,
+          exit: () => undefined,
+        });
+        stop = async () => {
+          signals.emit('SIGTERM');
+          await running;
+        };
+      } else {
+        const worker = await startWorker(database.url, recordingRunner().run, {
+          log,
+          write: () => undefined,
+        });
+        stop = () => worker.stop();
+      }
+
+      const marks = () =>
+        database.queries.filter(({ text }) => /^\s*update "?outbox"?/i.test(text));
+      try {
+        expect(await eventually(() => marks().length > 0)).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      } finally {
+        await stop();
+        await database.close();
+      }
+
+      expect(marks()).toHaveLength(1);
+      const [mark] = marks();
+      expect(mark?.text).toMatch(/\blast_failure\b/);
+      expect(mark?.values).toContain('NOT_CONFIGURED');
+      expect(mark?.values).toContain(messageId);
+      expect(
+        database.queries.filter(
+          ({ text }) => /\boutbox\b/i.test(text) && /\bsent_at"?\s*=/i.test(text),
+        ),
+      ).toEqual([]);
+      expect(log.events.filter(({ event }) => event === 'push_failed')).toEqual([
+        { event: 'push_failed', reason: 'NOT_CONFIGURED', messageId },
+      ]);
+    },
+  );
 });

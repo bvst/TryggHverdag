@@ -15,9 +15,11 @@
 // it cannot be reached.
 import {
   apiPath,
+  pgSettingsAnswer,
   syntheticCredential,
   syntheticHeartbeat,
   syntheticUuid,
+  type FakePgSetting,
   type FakePostgresHandler,
 } from '@trygghverdag/test-kit';
 import process from 'node:process';
@@ -413,6 +415,125 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
   async function health(port: number): Promise<number> {
     return (await fetch(`http://127.0.0.1:${String(port)}${apiPath('health')}`)).status;
   }
+
+  // LOST-02, review loop 1 (approach item 7, D-109): asking is not getting.
+  // The API reads both limits back once at start, from pg_settings, and says
+  // on one fixed line what is in force, or which one is not; it starts anyway.
+
+  /** What the API asks for, as pg_settings reports it when the startup parameters arrived. */
+  const AS_ASKED: Record<string, FakePgSetting> = {
+    idle_in_transaction_session_timeout: { setting: '10000', unit: 'ms' },
+    lock_timeout: { setting: '5000', unit: 'ms' },
+  };
+
+  /** The lines written about the session limits. */
+  const limitLines = (written: string) =>
+    written.split('\n').filter((line) => /\bsession limits?\b/.test(line));
+
+  /**
+   * Starts the API over the fake server, waits for its read of pg_settings to
+   * be answered and a moment more, asks for /v1/health, and stops it: what it
+   * wrote meanwhile, and what health answered.
+   */
+  async function startedReadingBack(
+    handler: FakePostgresHandler,
+    { password }: { password?: string } = {},
+  ) {
+    const database = await listeningFakePostgres(
+      handler,
+      password === undefined ? {} : { password },
+    );
+    const { result: status, written } = await captured(async () => {
+      const api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+      try {
+        await eventually(() => database.queries.some(({ text }) => /\bpg_settings\b/.test(text)));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return await health(api.port);
+      } finally {
+        await api.stop();
+      }
+    });
+    await database.close();
+    return { database, status, written };
+  }
+
+  test('LOST-02-AC17: at start the API reads idle_in_transaction_session_timeout and lock_timeout back from pg_settings and writes exactly one line: api: session limits in force: idle_in_transaction_session_timeout=10000ms lock_timeout=5000ms', async () => {
+    const { database, written } = await startedReadingBack(
+      (query) => pgSettingsAnswer(query, AS_ASKED) ?? healthDatabase(query),
+    );
+
+    const reads = database.queries.filter(({ text }) => /\bpg_settings\b/.test(text));
+    expect(reads).toHaveLength(1);
+    const read = `${reads[0]?.text ?? ''} ${(reads[0]?.values ?? []).join(' ')}`;
+    expect(read).toContain('idle_in_transaction_session_timeout');
+    expect(read).toContain('lock_timeout');
+    expect(limitLines(written)).toEqual([
+      'api: session limits in force: idle_in_transaction_session_timeout=10000ms lock_timeout=5000ms',
+    ]);
+  });
+
+  test('LOST-02-AC17: when the database reports a limit other than the one asked for, as a pooler that dropped the startup parameters would, the API writes the fixed mismatch line for each such setting, and still starts and answers /v1/health', async () => {
+    const dropped: Record<string, FakePgSetting> = {
+      idle_in_transaction_session_timeout: { setting: '0', unit: 'ms' },
+      lock_timeout: { setting: '0', unit: 'ms' },
+    };
+    const { status, written } = await startedReadingBack(
+      (query) => pgSettingsAnswer(query, dropped) ?? healthDatabase(query),
+    );
+
+    const lines = limitLines(written);
+    expect(lines).toHaveLength(2);
+    expect(lines).toContain(
+      'api: session limit idle_in_transaction_session_timeout is 0ms, not 10000ms: a stalled transaction will not be ended.',
+    );
+    expect(
+      lines.filter((line) =>
+        /^api: session limit lock_timeout is 0ms, not 5000ms: a heartbeat may wait for a lock without end\.?$/.test(
+          line,
+        ),
+      ),
+    ).toHaveLength(1);
+    expect(status).toBe(200);
+  });
+
+  test('LOST-02-AC17: a limit that is not digits and a unit is written as unreadable, a failed read gives one line with its SQLSTATE, and no start-up line holds the connection URL, its password marker or an error message', async () => {
+    const marker = syntheticCredential();
+    const unreadable = await startedReadingBack(
+      (query) =>
+        pgSettingsAnswer(query, {
+          ...AS_ASKED,
+          lock_timeout: { setting: 'eleventy', unit: 'fortnights' },
+        }) ?? healthDatabase(query),
+      { password: marker },
+    );
+    const refusal = `the settings are not for you, ${marker}`;
+    const failed = await startedReadingBack(
+      (query) => {
+        if (/\bpg_settings\b/.test(query.text)) {
+          throw Object.assign(new Error(refusal), { code: '57014' });
+        }
+        return healthDatabase(query);
+      },
+      { password: marker },
+    );
+
+    const unreadableLines = limitLines(unreadable.written);
+    expect(unreadableLines).toHaveLength(1);
+    expect(unreadableLines[0]).toContain('lock_timeout');
+    expect(unreadableLines[0]).toContain('unreadable');
+    expect(limitLines(failed.written)).toEqual(['api: session limits could not be read (57014).']);
+    expect([unreadable.status, failed.status]).toEqual([200, 200]);
+    expect(
+      markersIn(`${unreadable.written}\n${failed.written}`, [
+        'eleventy',
+        'fortnights',
+        marker,
+        unreadable.database.url,
+        failed.database.url,
+        refusal,
+      ]),
+    ).toEqual([]);
+  });
 
   test('LOST-02-AC17: the API’s pool asks, for every connection it makes, idle_in_transaction_session_timeout 10 000 ms and lock_timeout 5 000 ms', async () => {
     const database = await listeningFakePostgres(healthDatabase);

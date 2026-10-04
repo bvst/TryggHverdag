@@ -1,10 +1,21 @@
+// req-coverage: fixtures-only — this tests the test kit, not a requirement.
+//
+// (The marker came with LOST-02's review loop 1, as its siblings carry it:
+// the LOST-02 names below are the fake's abilities that task added, not
+// proofs of its criteria, so req:coverage must not count them.)
+//
 // The fake PostgreSQL server, checked byte by byte against the protocol's
 // own message layouts (PostgreSQL's "Message Formats" chapter). The test that
 // matters more is the one where a real `pg` client talks to it, through the
 // API process: apps/server/src/api-process.test.ts. This one holds the
 // framing, so that a failure there is never the fake misreading a message.
 import { describe, expect, test } from 'vitest';
-import { fakePostgres, type FakePostgresHandler } from './fake-postgres.ts';
+import {
+  fakePostgres,
+  pgSettingsAnswer,
+  type FakePostgresHandler,
+  type FakePostgresQuery,
+} from './fake-postgres.ts';
 
 const bytesOf = (text: string): number[] => Array.from(text, (char) => char.charCodeAt(0));
 const int16 = (value: number): number[] => [(value >> 8) & 0xff, value & 0xff];
@@ -388,5 +399,80 @@ describe('fakePostgres: startup parameters and a fatal end (LOST-02)', () => {
 
   test('a connection not ended says so', () => {
     expect(started(noRows).connection.ended).toBe(false);
+  });
+
+  test('a handler that throws an error with a SQLSTATE as its code answers with that SQLSTATE; one with none, or with a code that is not one, answers XX000', () => {
+    const codes: unknown[] = ['57014', undefined, 'not a sqlstate', 57014];
+    let call = 0;
+    const { connection } = started(() => {
+      const code = codes[call];
+      call += 1;
+      throw Object.assign(new Error('synthetic refusal'), { code });
+    });
+
+    const sent = codes.map((_code, n) =>
+      messages(connection.receive(Uint8Array.from(frame('Q', cstring(`query ${String(n)}`))))),
+    );
+
+    const sqlstates = sent.map((answer) => {
+      const body = answer.find(({ type }) => type === 'E')?.body ?? [];
+      const at = body.indexOf('C'.charCodeAt(0));
+      return String.fromCharCode(...body.slice(at + 1, body.indexOf(0, at)));
+    });
+    expect(sqlstates).toEqual(['57014', 'XX000', 'XX000', 'XX000']);
+  });
+});
+
+describe('pgSettingsAnswer (LOST-02, review loop 1)', () => {
+  const query = (text: string, values: readonly (string | null)[] = []): FakePostgresQuery => ({
+    text,
+    values,
+  });
+  const SETTINGS = {
+    idle_in_transaction_session_timeout: { setting: '10000', unit: 'ms' },
+    lock_timeout: { setting: '0', unit: 'ms' },
+  } as const;
+
+  test('answers a read of pg_settings with one row per setting it names, in the columns and the order it asks for', () => {
+    expect(
+      pgSettingsAnswer(
+        query(
+          "select name, setting, unit from pg_settings where name in ('idle_in_transaction_session_timeout', 'lock_timeout')",
+        ),
+        SETTINGS,
+      ),
+    ).toEqual({
+      columns: ['name', 'setting', 'unit'],
+      rows: [
+        ['idle_in_transaction_session_timeout', '10000', 'ms'],
+        ['lock_timeout', '0', 'ms'],
+      ],
+    });
+    expect(
+      pgSettingsAnswer(
+        query('select "unit", "setting", "name" from "pg_settings" where "name" = any($1)', [
+          '{lock_timeout}',
+        ]),
+        SETTINGS,
+      ),
+    ).toEqual({ columns: ['unit', 'setting', 'name'], rows: [['ms', '0', 'lock_timeout']] });
+  });
+
+  test('names given as parameters count; a setting the test chose no value for is no row; any other query is left to the handler', () => {
+    expect(
+      pgSettingsAnswer(
+        query('select name, setting, unit from pg_settings where name = $1', [
+          'idle_in_transaction_session_timeout',
+        ]),
+        { lock_timeout: { setting: '5000', unit: 'ms' } },
+      ),
+    ).toEqual({ columns: ['name', 'setting', 'unit'], rows: [] });
+    expect(pgSettingsAnswer(query('select now()'), SETTINGS)).toBeUndefined();
+  });
+
+  test('a read asking for a column it does not answer throws, rather than guessing', () => {
+    expect(() =>
+      pgSettingsAnswer(query('select name, setting, source from pg_settings'), SETTINGS),
+    ).toThrow(/source/);
   });
 });

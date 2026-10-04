@@ -76,8 +76,9 @@ export {
 export type { SyntheticHeartbeat, SyntheticPosition } from './synthetic-heartbeats.ts';
 export { ADMIN_SHUTDOWN, endTestPool } from './end-test-pool.ts';
 export type { EndablePool } from './end-test-pool.ts';
-export { fakePostgres } from './fake-postgres.ts';
+export { fakePostgres, pgSettingsAnswer } from './fake-postgres.ts';
 export type {
+  FakePgSetting,
   FakePostgres,
   FakePostgresAnswer,
   FakePostgresConnection,

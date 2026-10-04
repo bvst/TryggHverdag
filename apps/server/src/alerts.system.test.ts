@@ -56,7 +56,7 @@ import { createPushSender } from './modules/alerts/outbox.ts';
 import { createWatchdog } from './modules/alerts/watchdog.ts';
 import { createHealthService } from './modules/health/service.ts';
 import { createJourneyService } from './modules/journeys/service.ts';
-import type { Log } from './ports.ts';
+import type { Log, WatchdogStore } from './ports.ts';
 
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
@@ -324,6 +324,39 @@ describe('LOST-02: every responder is alerted after five minutes of silence', ()
 });
 
 describe('LOST-02: five minutes, never before, on the database’s clock', () => {
+  test('LOST-02-AC2: with a stub store whose read returns a journey silent 4 min 59.999 s, the watchdog attempts no open and the sweep is ok; a journey silent exactly 5 min is opened', async () => {
+    // Defence in depth (approach item 3, step 2): the domain decides again,
+    // with the now() and silent_since the read returned, so a read whose SQL
+    // drifted toward alerting early alerts nobody early.
+    const w = world();
+    const early = overdue(w, 1, FIVE_MINUTES - 1);
+    const due = overdue(w, 1, FIVE_MINUTES);
+    const now = await w.clock.now();
+    const drifted: WatchdogStore = {
+      overdueJourneys: () =>
+        Promise.resolve({
+          now,
+          journeys: [early, due].map(({ journeyId }) => ({
+            id: journeyId,
+            state: 'ACTIVE' as const,
+            silentSince: new Date(
+              START.getTime() - (journeyId === early.journeyId ? FIVE_MINUTES - 1 : FIVE_MINUTES),
+            ),
+          })),
+        }),
+      openLostContactAlert: (request) => w.store.openLostContactAlert(request),
+    };
+
+    const result = await createWatchdog({ journeys: drifted, beats: w.beats, log: w.log }).sweep();
+
+    expect(result).toEqual({ ok: true, opened: 1, stuck: 0 });
+    expect(w.store.openRequests().map(({ journeyId }) => journeyId)).toEqual([due.journeyId]);
+    expect(w.stateOf(early.journeyId)).toBe('ACTIVE');
+    expect(w.stateOf(due.journeyId)).toBe('LOST_CONTACT');
+    expect(w.log.events).toEqual([]);
+    expect(await w.beats.lastBeat()).toEqual(now);
+  });
+
   test('LOST-02-AC3: a journey started through the API that never sends a heartbeat: nothing at 4:59.999 after its start; its alert at 5:00, silent since its start', async () => {
     const w = world();
     const walker = w.walker();
@@ -483,6 +516,28 @@ describe('LOST-02: a held row is skipped, not waited for, and alerted once it is
 });
 
 describe('LOST-02: the move, the alert and its messages, all or nothing (AR-05)', () => {
+  test('LOST-02-AC12: one journey whose open fails holds up no other: the next overdue journey in the same sweep is opened, the failed one stays ACTIVE, and the sweep fails with one watchdog_failed line', async () => {
+    // Each journey's alert opens in its own transaction (approach item 3.3).
+    const w = world();
+    const j = overdue(w, 1, UNDER_STUCK);
+    const k = overdue(w, 1, UNDER_STUCK);
+    w.store.beforeNext('openLostContactAlert', () => {
+      w.store.failWith(databaseError('23514'), 'openLostContactAlert');
+    });
+    w.store.beforeNext('openLostContactAlert', () => {
+      w.store.recover();
+    });
+
+    const result = await w.watchdog.sweep();
+
+    expect(w.stateOf(j.journeyId)).toBe('ACTIVE');
+    expect(w.alertsOf(j.journeyId)).toEqual([]);
+    expect(w.stateOf(k.journeyId)).toBe('LOST_CONTACT');
+    expect(result).toEqual({ ok: false, opened: 1, stuck: 0 });
+    expect(w.log.events).toEqual([{ event: 'watchdog_failed', stage: 'open', code: '23514' }]);
+    expect(await w.beats.lastBeat()).toBeNull();
+  });
+
   test('LOST-02-AC12: with the store failing the open, J stays ACTIVE with no alert and no message, one watchdog_failed line names the stage and the SQLSTATE, and no beat is recorded; once it answers again, the next sweep opens J’s alert with every message', async () => {
     const w = world();
     // Under 5 min 30 s: a failed open past it is also reported as stuck (AC20).
@@ -836,6 +891,33 @@ describe('REL-08 and LOST-02: the watchdog feeds the beat', () => {
 });
 
 describe('REL-08 and LOST-02: a journey the watchdog cannot move is reported, and stops the beat', () => {
+  test('LOST-02-AC19: a waiting attempt that fails with an error, past 5 min 30 s, makes the journey stuck: the sweep fails, one watchdog_failed line with stage open and its SQLSTATE, one watchdog_overdue line naming the journey, and no beat', async () => {
+    const w = world();
+    const { journeyId } = overdue(w, 1, FIVE_MINUTES + STUCK_AFTER);
+    w.store.hold(journeyId);
+    // The first attempt is skipped, as the row is held; the waiting one fails.
+    w.store.beforeNext('openLostContactAlert', () => undefined);
+    w.store.beforeNext('openLostContactAlert', () => {
+      w.store.failWith(databaseError('40P01'), 'openLostContactAlert');
+    });
+
+    const result = await w.watchdog.sweep();
+
+    expect(result).toEqual({ ok: false, opened: 0, stuck: 1 });
+    expect(w.store.openRequests()).toEqual([
+      { journeyId, afterMs: FIVE_MINUTES },
+      { journeyId, afterMs: FIVE_MINUTES, lockWaitMs: LOCK_WAIT },
+    ]);
+    expect(w.log.events).toHaveLength(2);
+    expect(w.log.events).toEqual(
+      expect.arrayContaining([
+        { event: 'watchdog_failed', stage: 'open', code: '40P01' },
+        { event: 'watchdog_overdue', journeyId },
+      ]),
+    );
+    expect(await w.beats.lastBeat()).toBeNull();
+  });
+
   test('LOST-02-AC20: J held elsewhere: at 5 min 29.999 s it is skipped, nothing is written and the beat is recorded; from 5 min 30 s each sweep writes one watchdog_overdue line naming J and records no beat; the first sweep after the hold ends opens J’s alert and records the beat again', async () => {
     const w = world();
     const walker = w.walker();

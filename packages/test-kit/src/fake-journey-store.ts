@@ -38,8 +38,10 @@
  *     counted from last contact, or from its start when it has none;
  *   - opening an alert checks all of that again, and skips a journey that is
  *     no longer overdue, no longer ACTIVE, not there, or held by another
- *     transaction (`hold`, as `for update skip locked` skips it). An open
- *     given a `lockWaitMs` waits for a held row instead: a row held by `hold`
+ *     transaction (`hold`, as `for update skip locked` skips it). A held row
+ *     that no longer matches is skipped at once by either kind of open, as
+ *     PostgreSQL never locks it. An open given a `lockWaitMs` waits for a
+ *     held row that still matches instead: a row held by `hold`
  *     never lets go, so the open answers `held`, as a lock wait that runs out
  *     does (55P03); a row held by `holdUntilWaited` is let go, after the
  *     holder's own action, and the open then checks it as it stands. Otherwise
@@ -194,7 +196,7 @@ export type OpenLostContactAlertResult =
 export interface OpenRequest {
   journeyId: string;
   afterMs: number;
-  lockWaitMs?: number;
+  lockWaitMs?: number | undefined;
 }
 
 /** A message as a claim hands it out: what the push needs, and how many attempts it has had. */
@@ -332,7 +334,9 @@ export interface FakeJourneyStore {
    * Stands in for a transaction elsewhere holding this journey's row, one
    * that never lets go by itself: the watchdog's open skips it, an open that
    * waits for it answers `held`, and a heartbeat for it waits, until
-   * `release`. Throws for a journey not stored.
+   * `release`. A held row that no longer matches (no longer ACTIVE, or no
+   * longer overdue) answers `skipped` to both opens, as PostgreSQL never
+   * locks it. Throws for a journey not stored.
    */
   hold(journeyId: string): void;
   /** The row is free again: what waited for it goes on. */
@@ -791,7 +795,16 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
           millisecondsOf('openLostContactAlert', 'lockWaitMs', lockWaitMs);
         }
         const found = journeyNamed(journeyId);
-        if (found !== undefined && held.has(found.id)) {
+        // A row whose committed version no longer matches is never locked,
+        // so never waited for, held or not, as in PostgreSQL: skipped at once,
+        // and its holder is not asked to let go (LOST-02, review loop 1).
+        if (
+          found === undefined ||
+          !isOverdue(found, await nowFor('openLostContactAlert'), threshold)
+        ) {
+          return { outcome: 'skipped' };
+        }
+        if (held.has(found.id)) {
           // Without a wait: `for update skip locked` skips a held row.
           if (lockWaitMs === undefined) {
             return { outcome: 'skipped' };

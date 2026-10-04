@@ -133,7 +133,7 @@ export interface JourneyStoreUnderTest {
     openLostContactAlert(request: {
       journeyId: string;
       afterMs: number;
-      lockWaitMs?: number;
+      lockWaitMs?: number | undefined;
     }): Promise<OpenLostContactAlertResult>;
     claimDue(request: { limit: number; leaseMs: number }): Promise<ClaimedMessages>;
     markSent(messageId: string): Promise<void>;
@@ -215,6 +215,11 @@ export interface JourneyStoreUnderTest {
    * database, where a row held throughout costs the test that long.
    */
   lockWaitMs: number;
+  /**
+   * Lets this much of the store's time pass: the fake's clock is moved on;
+   * the database's moves on by itself, so the test waits that long.
+   */
+  letTimePass(ms: number): Promise<void>;
   /**
    * How far from the five-minute threshold a silence must be for this store
    * to be sure which side it is on: 0 for the fake, whose clock stands still;
@@ -1958,6 +1963,46 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     },
   },
   {
+    name: 'LOST-02-AC20: a held row that no longer matches answers skipped at once to an open with a lock wait, never held: one already LOST_CONTACT, and one whose last contact has moved',
+    async run(subject) {
+      const now = await subject.now();
+      const silentForAnHour = {
+        startedAt: ago(now, 2 * HOUR),
+        lastHeartbeatAt: ago(now, HOUR),
+      };
+      // Already alerted, silent for an hour.
+      const alerted = await watched(subject, { ...silentForAnHour, state: 'LOST_CONTACT' });
+      // Overdue, until contact came.
+      const heard = await watched(subject, silentForAnHour);
+      expect(
+        await subject.store.recordHeartbeat(heartbeatFor(heard.journeyId, { receivedAt: now })),
+      ).toEqual({ outcome: 'recorded' });
+
+      for (const { journeyId } of [alerted, heard]) {
+        const holder = await subject.hold(journeyId);
+        let answer: OpenLostContactAlertResult;
+        try {
+          answer = await within(
+            Math.min(500, subject.lockWaitMs / 2),
+            subject.store.openLostContactAlert({
+              journeyId,
+              afterMs: LOST_CONTACT_AFTER_MS,
+              lockWaitMs: subject.lockWaitMs,
+            }),
+            'the waiting open of a held row that no longer matches',
+          );
+        } finally {
+          await holder.release();
+        }
+        expect(answer, journeyId).toEqual({ outcome: 'skipped' });
+        expect(await subject.alertsOf(journeyId), journeyId).toEqual([]);
+        expect(await subject.messagesOf(journeyId), journeyId).toEqual([]);
+      }
+      expect(await subject.stateOf(alerted.journeyId)).toBe('LOST_CONTACT');
+      expect(await subject.stateOf(heard.journeyId)).toBe('ACTIVE');
+    },
+  },
+  {
     name: `LOST-02-AC7: ${String(RACERS)} opens racing for one overdue journey, ${String(RACE_ROUNDS)} times over: exactly one opens and every other skips, none an error; one alert, and one message per responder`,
     async run(subject) {
       for (let round = 0; round < RACE_ROUNDS; round += 1) {
@@ -2053,7 +2098,11 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         throw new Error('expected two messages');
       }
       const mine = [failing.messageId, sending.messageId];
-      await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS });
+      // RG-03 (LOST-02, review loop 1, test-auditor): claimed with no lease,
+      // so both messages are due again at once, and only being sent keeps
+      // the sent one from the retry's claim below. With a lease, the lease
+      // alone kept it out, and a store that handed out sent messages passed.
+      await subject.store.claimDue({ limit: BATCH, leaseMs: 0 });
 
       const before = await subject.now();
       await subject.store.markFailed({
@@ -2094,6 +2143,27 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       );
       expect(waiting?.lastFailure).toBe('UNAVAILABLE');
       expect(waiting?.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(before.getTime() + HOUR);
+    },
+  },
+  {
+    name: 'LOST-02-AC16: a message marked sent again, as one sent again after its lease passed is, keeps the time it was first marked',
+    async run(subject) {
+      const { journeyId, messages } = await openedWith(subject, 1);
+      const [message] = messages;
+      if (message === undefined) {
+        throw new Error('expected one message');
+      }
+
+      await subject.store.markSent(message.messageId);
+      const [first] = await subject.messagesOf(journeyId);
+      const firstSentAt = first?.sentAt?.getTime();
+      expect(firstSentAt).toBeDefined();
+      await subject.letTimePass(50);
+      expect((await subject.now()).getTime()).toBeGreaterThan(firstSentAt ?? Number.NaN);
+      await subject.store.markSent(message.messageId);
+
+      const [again] = await subject.messagesOf(journeyId);
+      expect(again?.sentAt?.getTime()).toBe(firstSentAt);
     },
   },
   {
