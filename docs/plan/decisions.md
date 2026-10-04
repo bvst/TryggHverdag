@@ -3606,6 +3606,28 @@ any other path is work, not a candidate for the same treatment.
   parameters; `runWorkerProcess` always uses the unconfigured push until M3,
   and only `startWorker` takes a `push`; Graphile Worker's own stop wait is set
   to 0 so a stop is not delayed 5 s.
+- **Amended 2026-10-04 (delegated, D-031), LOST-02's review loop 1:**
+  - **Correction:** the worker pool's missing lock limit is not "because its
+    sweeps never wait for a row". The waiting attempt does wait, and every
+    open's outbox insert locks the responder's `users` row. So **every open
+    sets its own transaction-local `lock_timeout` of 5 s**. A pool-level limit
+    is still not used, because it would reach Graphile Worker's statements.
+  - **Each process reads its session limits back once at start** and writes
+    one fixed line. A pooler that silently dropped the startup parameters
+    would otherwise leave every check green. What a process does when they
+    differ is D-109.
+  - **A partial index** on the outbox's due messages, `(next_attempt_at, id)
+    where sent_at is null`, in migration `0003`.
+  - **Two more import rules:** `drizzle-kit`, whose `api` entry opens a pool,
+    is refused in production code apart from `drizzle.config.ts`; and
+    production code may not import a test-named file, whose own imports would
+    otherwise escape every rule that exempts tests.
+  - **Only the sweep loop is watched.** A wedged or always-failing delivery
+    pages nobody. That is harmless until M3, because the unconfigured push
+    answers at once. Task 8's canary must catch it, and M3's push adapter must
+    bound each send.
+  - **One list** of push failure reasons and message kinds, in the domain,
+    from which the port, the table's check and the log are all derived.
 
 ## D-109 — A process whose database time limits were ignored starts anyway, loudly (LOST-02)
 - **Date:** 2026-10-04 · **Status:** Accepted (owner, 2026-10-04). Asked in

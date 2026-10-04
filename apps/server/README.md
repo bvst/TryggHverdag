@@ -5,7 +5,7 @@ Two processes from one codebase (AR-01):
 | Entry point | What it is |
 |-------------|------------|
 | `src/api.ts` | The HTTP API. Hono, with oRPC serving the contract from `packages/contracts` |
-| `src/worker.ts` | Graphile Worker. Owns the watchdog, the outbox sender, retention and the canary |
+| `src/worker.ts` | The worker process. Runs the watchdog's sweep and the outbox's delivery on its own loops, and Graphile Worker for the minute check-in (D-108). Retention and the canary come later |
 
 `createApi` and `startWorker` take their dependencies, so tests can build them
 against fakes. The processes that run on a server are in `src/bin/` (INF-07):
