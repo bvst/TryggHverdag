@@ -1719,6 +1719,23 @@ Two code changes go with them, in `apps/server/src/adapters/db.ts` (a unit
 is looked up with `Object.hasOwn`) and `apps/server/src/adapters/journeys.ts`
 (the lock wait is checked before the transaction starts).
 
+### Tests added after the pull request opened (settled 2026-10-04)
+
+From CI's `safety-reviewer` on #63: a should-fix that the session's own
+`safety-reviewer` had left as a note in loop 2. The name is exact.
+
+**17. A pool's session limit PostgreSQL would read as no limit is refused**
+(approach item 7; AC17):
+- 17a. `apps/server/src/adapters/db.test.ts`: `LOST-02-AC17: createPool
+  refuses an idleInTransactionMs or lockTimeoutMs that is not a whole number
+  from 1 to 2147483647 (0, -1, 0.5, 1.5, NaN, 2147483648), naming the
+  option, and takes 1 and 2147483647`. PostgreSQL reads 0 as no limit for
+  both settings. A refusal stops the process at start, which is loud; the
+  limits the processes ask for today (10000 and 5000) are taken.
+
+The code change goes with it, in `apps/server/src/adapters/db.ts`, as the
+open's own lock wait does in `adapters/journeys.ts`.
+
 ### Existing assertions that change by design (RG-03)
 
 `test-author` changes each, with the written reason RG-03 asks for in the
@@ -2096,7 +2113,8 @@ owner's to schedule:
     hear nothing until the row is free.
   - So it is loud, not silent. Ordering the read, or opening in parallel, is
     for a later task.
-- **The pools' own limits would take 0 too** (`safety-reviewer`, loop 2).
+- **Done after the pull request opened (test 17a).** The pools' own limits
+  would take 0 too (`safety-reviewer`, loop 2).
   `createPool` would send a `lockTimeoutMs` or `idleInTransactionMs` of 0,
   and the read-back would call `lock_timeout=0ms` in force, though PostgreSQL
   reads 0 as no limit. Today's values (5000 and 10000) are pinned by the
