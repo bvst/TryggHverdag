@@ -716,6 +716,11 @@ describe("this repository's own workflows", () => {
     expect(matches(anywhere, 'apps/xvitest.config.mjs')).toBe(false);
     expect(matches('**/db.ts', 'apps/server/src/adapters/db.ts')).toBe(true);
     expect(matches('**/db.ts', 'apps/server/src/adapters/xdb.ts')).toBe(false);
+    // A leading / before the **/, and a / after it, still mean any folder
+    // (test-auditor's H4h, BUG-18). Both pass with this reader and fail with
+    // one that anchors a leading **/ pattern at the root.
+    expect(matches('/**/db.ts', 'apps/server/src/adapters/db.ts')).toBe(true);
+    expect(matches('**/adapters/db.ts', 'apps/server/src/adapters/db.ts')).toBe(true);
     // An ownerless line like this one, last in the file, un-owns the root's
     // own vitest.config.mjs on GitHub (test-author, BUG-18).
     expect(matches(anywhere, 'vitest.config.mjs')).toBe(true);
@@ -1208,10 +1213,51 @@ describe("this repository's own workflows", () => {
     }
   });
 
+  // D-105's second amendment (2026-10-04): /apps/server/src/modules/health/,
+  // whose one file turns the worker's last check-in into /v1/health's answer,
+  // between worker-heartbeats.ts and domain/health.ts. A slip there, such as
+  // passing the current time as the last check-in, would show a stopped
+  // watchdog as alive. It needs both too.
+  //
+  // It is a folder, so it is pinned as BUG-10's journey folders are: its own
+  // entry in OWNER_APPROVAL_PATHS, and every file git tracks under it owned
+  // under the last-match rule. Asking ownersOf about the folder's own path
+  // would pass on the folder line, and miss a later ownerless line for one
+  // file inside it (test-auditor, BUG-18).
+  const HEALTH = '/apps/server/src/modules/health/';
+
+  test("BUG-18: the health wiring, apps/server/src/modules/health/, holds a file git tracks and is a path the owner must approve (D-105's second amendment)", () => {
+    const listed = spawnSync('git', ['ls-files', '--', HEALTH.slice(1)], { encoding: 'utf8' });
+
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      listed.stdout.split('\n').filter((file) => file !== '').length,
+      `${HEALTH} holds no file git tracks`,
+    ).toBeGreaterThan(0);
+    expect(OWNER_APPROVAL_PATHS, `${HEALTH} is not in OWNER_APPROVAL_PATHS`).toContain(HEALTH);
+  });
+
+  test("BUG-18: under GitHub's last-match rule, every file git tracks in apps/server/src/modules/health/ belongs to @bvst @urso-agent, and gate:integrity finds every owner-approval path owned (D-105's second amendment)", () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+    const listed = spawnSync('git', ['ls-files', '--', HEALTH.slice(1)], { encoding: 'utf8' });
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(files.length, `${HEALTH} holds no file git tracks`).toBeGreaterThan(0);
+    expect(
+      files.filter((file) => ownersOf(file).join(' ') !== OWNERS.join(' ')),
+      `files in ${HEALTH} not owned by ${OWNERS.join(' ')}`,
+    ).toEqual([]);
+  });
+
   // The safety filter is held through the general filter test above, as D-097's block is.
   // RG-03 (BUG-18, code-reviewer): a per-file filter test for db.ts, added on this branch and
   // never on main, was removed. The general test already fails for either file missing from
-  // the filter once it is in OWNER_APPROVAL_PATHS, which the first test above pins.
+  // the filter once it is in OWNER_APPROVAL_PATHS, which the first test above pins. The same
+  // holds for the health folder, whose entry the general test reads through filterGlob, as
+  // apps/server/src/modules/health/**.
 });
 
 describe('the ruleset the owner imports', () => {
