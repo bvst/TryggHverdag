@@ -36,12 +36,16 @@ For the diff (`git diff origin/main...HEAD`), check:
   earlier result instead of a fresh run, let a run that measured nothing pass,
   or let a test-kit fake accept what the real adapter or database refuses
   (D-098, D-099, D-100);
-- a change to the database pools (`apps/server/src/adapters/db.ts`) does not
-  loosen or remove their size budget, the session limits that end a stalled
-  transaction or a long lock wait (a frozen server holding a journey's row
-  would hide it from the watchdog's `skip locked`), or their error listeners,
-  and those listeners write nothing but the pool's name and the SQLSTATE
-  (D-068, D-105);
+- a change to the database pools (`apps/server/src/adapters/db.ts`, and the
+  `createPool` calls in `api-process.ts`, `worker.ts` and
+  `adapters/migrations.ts`) does not loosen their size budget (`POOL_SIZE`).
+  LOST-02 adds session limits that end a stalled transaction or a long lock
+  wait, and pool error listeners; until then the API pool has no listener, by
+  D-068. Once they exist, a change must not loosen or remove the limits (a
+  frozen server holding a journey's row would hide it from the watchdog's
+  `skip locked`), the idle limit plus one sweep must stay inside the alert
+  budget, and a listener must never log the error object or make the failure
+  quiet (D-068, D-105);
 - tests exist at L6 for any change in alert behaviour.
 
 

@@ -24,7 +24,7 @@ export const OWNER_APPROVAL_PATHS = [
   '/apps/server/src/process.ts',
   // The one file that can ping Healthchecks.io: an unasked ping keeps a dead worker's check green (D-079).
   '/apps/server/src/adapters/healthchecks.ts',
-  // Every process's database pool: one that runs out takes the watchdog down with it (D-105).
+  // Every process's database pool: one that uses up the database's few connections takes the watchdog down with it (D-105).
   '/apps/server/src/adapters/db.ts',
   // Where the journey guarantees live: the responder insert and its
   // transaction, the one-unended-journey index, the device-credential check,

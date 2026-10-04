@@ -15,6 +15,8 @@
 /apps/server/src/process.ts       @bvst @urso-agent
 # The one file that can ping Healthchecks.io: an unasked ping keeps a dead worker's check green (D-079).
 /apps/server/src/adapters/healthchecks.ts       @bvst @urso-agent
+# Every process's database pool: one that uses up the database's few connections takes the watchdog down with it (D-105).
+/apps/server/src/adapters/db.ts                 @bvst @urso-agent
 # Where the journey guarantees live: the responder insert and its transaction,
 # the one-unended-journey index, the device-credential check, and where the
 # database clock is wired into the API's services (D-092, D-094, D-095).
@@ -35,9 +37,6 @@
 # keeps heartbeat data out of logs (PRIV-07). Not in the ai-review safety
 # filter, by the owner's decision (D-102).
 /apps/server/src/log.ts                    @bvst @urso-agent
-# Every process's database pool: its size, and the session limits that keep a
-# frozen server from hiding a journey from the watchdog (D-105).
-/apps/server/src/adapters/db.ts            @bvst @urso-agent
 /apps/mobile/src/safety-core/     @bvst @urso-agent
 # Where the app's permissions, background modes, backup and deep links are set;
 # background location is what the safety core stands on (D-084).
