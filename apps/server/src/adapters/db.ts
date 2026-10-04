@@ -37,6 +37,22 @@ export interface PoolOptions {
   lockTimeoutMs?: number;
 }
 
+/** The longest idle_in_transaction_session_timeout or lock_timeout PostgreSQL takes, in milliseconds. */
+const SESSION_LIMIT_MAX_MS = 2_147_483_647;
+
+/**
+ * Throws, naming the option, when a session limit is given and is not a whole
+ * number of milliseconds from 1 to SESSION_LIMIT_MAX_MS.
+ */
+function checkSessionLimit(option: string, setting: string, ms: number | undefined): void {
+  if (ms !== undefined && !(Number.isInteger(ms) && ms >= 1 && ms <= SESSION_LIMIT_MAX_MS)) {
+    throw new Error(
+      `${option} must be a whole number of milliseconds from 1 to ${String(SESSION_LIMIT_MAX_MS)}, ` +
+        `not ${String(ms)}: PostgreSQL reads 0 as no ${setting} at all.`,
+    );
+  }
+}
+
 /**
  * The connection pool. Close it with `pool.end()` when a process shuts down.
  *
@@ -51,7 +67,10 @@ export interface PoolOptions {
  * session left idle inside a transaction, and `lockTimeoutMs` refuses a wait
  * for a row that lasts longer, with SQLSTATE 55P03. They travel as startup
  * parameters, so every connection has them before its first statement. A
- * limit not given is not sent, and the server's own setting stands.
+ * limit not given is not sent, and the server's own setting stands. A limit
+ * given must be a whole number of milliseconds from 1 to 2147483647: PostgreSQL
+ * reads 0 as no limit at all, so anything else throws, naming the option,
+ * before the pool is made. That stops the process at start, which is loud.
  *
  * The listeners (D-068), given a `name` and a `log`, both attached before
  * the pool is returned, so nothing that is handed the pool, Graphile Worker
@@ -79,6 +98,12 @@ export function createPool(
   max: number,
   { name, log, idleInTransactionMs, lockTimeoutMs }: PoolOptions = {},
 ): pg.Pool {
+  checkSessionLimit(
+    'idleInTransactionMs',
+    'idle_in_transaction_session_timeout',
+    idleInTransactionMs,
+  );
+  checkSessionLimit('lockTimeoutMs', 'lock_timeout', lockTimeoutMs);
   const pool = new pg.Pool({
     connectionString,
     max,
