@@ -36,3 +36,25 @@ its own replay + fault run when it lands.
   NOT APPLIED rows when de724d8 landed). mutants3.mjs finds targets in the text it is given, so one list works across revisions.
   ~7 s per fault; two revs in parallel on 4 cores. Do not `pkill -f` a pattern that also appears in your own Bash command line.
 Related: [[bug14-audit]], [[in-memory-mutation]], [[gate-integrity-local]], [[config-pinning-tests]]
+
+**Loop-1 re-audit (2026-10-04, briefed at 25589a5; HEAD moved to 2482f64 then 0136951, memory/docs only). PASS, scoped.**
+- Should-fixes closed: worker-heartbeats.ts in CODEOWNERS/MR/filter/brief (e7d0ddc) and pinned via D105_FILES (9ef8c0b); `?` read as
+  `[^/]` in `matches` (9ef8c0b) and in `globCovers` (25589a5), plus `/**/` = zero or more folders and leading `**/` at the root.
+- RG-02 replay (tests 9ef8c0b, config de724d8): exactly 3 red, each on worker-heartbeats.ts (MR, last-match [], brief). One file at a
+  time: MR -> test 1 + BUG-10 reverse; CO -> 8 (reviewCodeowners siblings, path hidden as before); filter -> general filter test only
+  (names the file); brief -> brief test. Tests de724d8 (with the per-file filter test) on HEAD config: green.
+- Helpers: fuzz 400k pairs, new is a superset of old for both readers (0 old-true/new-false); today's owners identical for all 536
+  paths; 18 matches pairs agree with git check-ignore 2.43, 10 globCovers pairs with picomatch 2.3.2 and 4.0.7 (dot: true).
+- 158 faults at 25589a5 (scratchpad ta-bug18/loop1/mutants4.mjs via ../ta-harness2.mjs): 135 killed, 23 survived, 0 not applied.
+  db.ts and worker-heartbeats.ts identical row for row (59 each). Every filter fault (comment, ui:, removed, slash, typo, space, !,
+  broadened, ?) is killed by the general filter test without the removed per-file test. Survivors: 3 controls, 17 by design (dir-only,
+  case, moved, [ ], duplicate, HTML comment, moved bullet), and 3 real: H4h (`anchored = !leading &&` unpinned: no `/**/x` or
+  `**/a/b` self-check), H4i (never-anchored, pre-existing), K6 (ownerless `/?ackage.json` last: no last-match test covers
+  /package.json; last-match pins are per file family since BUG-8, a general "every OWNER_APPROVAL_PATH file" test would close it).
+- 0136951 amends D-105 AGAIN: /apps/server/src/modules/health/ (one file, service.ts) joins in BUG-18. Not in any list or test at
+  0136951; PASS excludes it. D105_FILES's loop cannot take a folder (ls-files exact equality; ownersOf on the folder string passes
+  vacuously) - pin it like BUG-10's journey test (every tracked file under it).
+- gate:integrity 3 of 5 locally; gh api: 13 contexts, code-owner review true, bypass [] / never. No PR, check-runs total_count 0.
+  decideMutation: skip. coverage-baseline.json untouched. tests:changes none weakened (count-based: blind to the per-file test's
+  removal vs de724d8, net +5 tests). req:coverage 13 of 63, report unchanged.
+- Waiting on a background harness: `timeout N tail --pid=<pid> -f /dev/null` blocks without `sleep`.
