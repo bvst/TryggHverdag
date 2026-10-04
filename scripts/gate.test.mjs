@@ -630,19 +630,40 @@ describe("this repository's own workflows", () => {
   // GitHub disagreed: the last-match tests (INF-10-AC18, BUG-8, BUG-10,
   // BUG-14, LOST-01, BUG-18) get stricter, never looser. No line in today's
   // CODEOWNERS has a ?, so none of their results moves.
+  //
+  // RG-03 (BUG-18, test-author): ** was read as .* wherever it stood. So
+  // /a/**/b needed a folder between a and b, and **/b needed one before b. In
+  // gitignore syntax, as git check-ignore confirms, a /**/ is zero or more
+  // folders, and a leading **/ matches in every folder, the root among them.
+  // So a later ownerless /apps/server/src/adapters/**/db.ts un-owned db.ts on
+  // GitHub, and a later ownerless **/vitest.config.mjs un-owned the root's
+  // vitest.config.mjs, while every last-match test stayed green. Both are now
+  // read as GitHub reads them. A trailing /** reads as before. As with ?,
+  // every verdict this changes is one where the helper and GitHub disagreed,
+  // and no line in today's CODEOWNERS has a **, so none of the last-match
+  // tests' results moves. For ?, /**/ and a leading **/ alike, the one kind
+  // of verdict that can turn green is a later line with owners that now
+  // matches a file. GitHub gives that file the same owners.
   const matches = (pattern, file) => {
     const directory = pattern.endsWith('/');
-    const bare = pattern.replace(/^\//, '').replace(/\/$/, '');
-    const anchored = pattern.startsWith('/') || bare.includes('/');
+    const trimmed = pattern.replace(/^\//, '').replace(/\/$/, '');
+    const leading = trimmed.startsWith('**/');
+    const bare = leading ? trimmed.slice('**/'.length) : trimmed;
+    const anchored = !leading && (pattern.startsWith('/') || bare.includes('/'));
     const body = bare
-      .split('**')
-      .map((part) =>
-        part
-          .split('*')
-          .map((piece) => piece.replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('?', '[^/]'))
-          .join('[^/]*'),
+      .split('/**/')
+      .map((between) =>
+        between
+          .split('**')
+          .map((part) =>
+            part
+              .split('*')
+              .map((piece) => piece.replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('?', '[^/]'))
+              .join('[^/]*'),
+          )
+          .join('.*'),
       )
-      .join('.*');
+      .join('/(?:.*/)?');
     return new RegExp(
       `^${anchored ? '' : '(?:.*/)?'}${body}${directory ? '/.*' : '(?:/.*)?'}$`,
     ).test(file);
@@ -667,6 +688,38 @@ describe("this repository's own workflows", () => {
     expect(matches('/apps/server/src/adapters/d?.ts', 'apps/server/src/adapters/dbxts')).toBe(
       false,
     );
+  });
+
+  test('BUG-18: the CODEOWNERS reader the last-match tests share reads /**/ as GitHub does, zero or more folders, and a trailing /** as before', () => {
+    // Each pair below is read the same way by git check-ignore (git 2.43).
+    // A trailing /** first: these held before /**/ changed.
+    const inside = '/apps/server/src/adapters/**';
+    expect(matches(inside, 'apps/server/src/adapters/db.ts')).toBe(true);
+    expect(matches(inside, 'apps/server/src/adapters/pools/db.ts')).toBe(true);
+    expect(matches(inside, 'apps/server/src/adaptersx/db.ts')).toBe(false);
+    // An ownerless line like this one, last in the file, un-owns db.ts on
+    // GitHub: /**/ is zero folders as well as one or more (test-auditor,
+    // BUG-18).
+    const nested = '/apps/server/src/adapters/**/db.ts';
+    expect(matches(nested, 'apps/server/src/adapters/db.ts')).toBe(true);
+    expect(matches(nested, 'apps/server/src/adapters/pools/db.ts')).toBe(true);
+    expect(matches(nested, 'apps/server/src/adapters/a/b/db.ts')).toBe(true);
+    expect(matches(nested, 'apps/server/src/adapters/xdb.ts')).toBe(false);
+  });
+
+  test('BUG-18: the CODEOWNERS reader the last-match tests share reads a leading **/ as GitHub does, in every folder and at the root', () => {
+    // Each pair below is read the same way by git check-ignore (git 2.43).
+    // In a folder first: these held before a leading **/ changed.
+    const anywhere = '**/vitest.config.mjs';
+    expect(matches(anywhere, 'apps/vitest.config.mjs')).toBe(true);
+    expect(matches(anywhere, 'apps/mobile/vitest.config.mjs')).toBe(true);
+    expect(matches(anywhere, 'apps/xvitest.config.mjs')).toBe(false);
+    expect(matches('**/db.ts', 'apps/server/src/adapters/db.ts')).toBe(true);
+    expect(matches('**/db.ts', 'apps/server/src/adapters/xdb.ts')).toBe(false);
+    // An ownerless line like this one, last in the file, un-owns the root's
+    // own vitest.config.mjs on GitHub (test-author, BUG-18).
+    expect(matches(anywhere, 'vitest.config.mjs')).toBe(true);
+    expect(matches(anywhere, 'xvitest.config.mjs')).toBe(false);
   });
 
   test('INF-10-AC18: the three root Vitest configurations, which decide whether the drills run at all, are paths the owner must approve', () => {
@@ -981,19 +1034,68 @@ describe("this repository's own workflows", () => {
   // ai-review safety filter, pinned with D102_FILES (declared above the
   // safety filter test, which uses it as its one named exception).
 
-  /** Whether a paths-filter glob covers a file: `**` any path, `*` within one segment. */
+  // RG-03 (BUG-18, test-author): ? was escaped here as a literal. paths-filter
+  // matches with picomatch, where ? is one character other than /. So a safety
+  // filter entry like ?pps/server/src/log.ts put the log adapter in the filter
+  // against D-102 with every test green. (An entry under apps/, such as
+  // apps/server/src/l?g.ts, was already caught by BUG-10's test that every
+  // /apps/ entry is an owner path.) It is now read as picomatch reads it, and
+  // . is still literal. The reader is used only to find entries that cover
+  // the log adapter, a list that must be empty, so reading more matches can
+  // only turn that check red, never green. No entry in today's filter has a
+  // ?, so its result does not move.
+  //
+  // RG-03 (BUG-18, test-author): ** was read as .* wherever it stood, so
+  // a/**/b needed a folder between a and b. picomatch, with the { dot: true }
+  // paths-filter gives it, reads a /**/ as zero or more folders. So a safety
+  // filter entry like */server/src/**/log.ts put the log adapter in the
+  // filter with every test green. A /**/ now also matches no folder. For the
+  // same reason as ?, this can only turn the check red, never green, and no
+  // safety entry today has a /**/, so its result does not move.
+  /** Whether a paths-filter glob covers a file: `**` any path (between two slashes, zero or more folders), `*` within one segment, `?` one character. */
   const globCovers = (glob, file) =>
     new RegExp(
       `^${glob
-        .split('**')
-        .map((part) =>
-          part
-            .split('*')
-            .map((piece) => piece.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
-            .join('[^/]*'),
+        .split('/**/')
+        .map((between) =>
+          between
+            .split('**')
+            .map((part) =>
+              part
+                .split('*')
+                .map((piece) => piece.replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('?', '[^/]'))
+                .join('[^/]*'),
+            )
+            .join('.*'),
         )
-        .join('.*')}$`,
+        .join('/(?:.*/)?')}$`,
     ).test(file);
+
+  test('BUG-18: the paths-filter glob reader the log adapter check uses reads ? as picomatch does, one character other than /, and . as itself', () => {
+    // A safety filter entry like either of the first two puts the log adapter
+    // in the filter (paths-filter matches with picomatch), so the reader must
+    // see it cover log.ts too. Each pair is read the same way by picomatch
+    // 2.3.2 and 4.0.7 with { dot: true }, the versions in node_modules.
+    expect(globCovers('apps/server/src/l?g.ts', 'apps/server/src/log.ts')).toBe(true);
+    expect(globCovers('?pps/server/src/log.ts', 'apps/server/src/log.ts')).toBe(true);
+    expect(globCovers('apps/server/src/l?g.ts', 'apps/server/src/loog.ts')).toBe(false);
+    expect(globCovers('apps/server/src/l?g.ts', 'apps/server/src/l/g.ts')).toBe(false);
+    expect(globCovers('apps/server/src/l?g.ts', 'apps/server/src/logxts')).toBe(false);
+  });
+
+  test('BUG-18: the paths-filter glob reader the log adapter check uses reads /**/ as picomatch does, zero or more folders', () => {
+    // Each pair is read the same way by picomatch 2.3.2 and 4.0.7 with
+    // { dot: true }, the versions in node_modules. One and two folders deep
+    // first: these held before /**/ changed.
+    const nested = 'apps/server/src/**/log.ts';
+    expect(globCovers(nested, 'apps/server/src/a/log.ts')).toBe(true);
+    expect(globCovers(nested, 'apps/server/src/a/b/log.ts')).toBe(true);
+    expect(globCovers(nested, 'apps/server/src/xlog.ts')).toBe(false);
+    // A safety filter entry like the second one puts the log adapter in the
+    // filter, so the reader must see it cover log.ts too (test-author, BUG-18).
+    expect(globCovers(nested, 'apps/server/src/log.ts')).toBe(true);
+    expect(globCovers('*/server/src/**/log.ts', 'apps/server/src/log.ts')).toBe(true);
+  });
 
   test("LOST-01 (D-102): the server's log adapter is tracked by git and is a path the owner must approve", () => {
     const listed = spawnSync(
