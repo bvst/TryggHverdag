@@ -24,13 +24,36 @@
  *     it (D-101), and otherwise recorded with the state unchanged (SM-03). The
  *     rule never sees the position, the battery or the event ID, so whether a
  *     heartbeat carried a position cannot change its outcome.
+ *   - Silence (the lost-contact story): the watchdog's question, asked with two
+ *     database times the store read, when the journey's silence began and
+ *     now. An ACTIVE journey silent for LOST_CONTACT_AFTER_MS or more (D-021,
+ *     "or more") moves to LOST_CONTACT and opens an alert. Every other
+ *     situation is unchanged: ACTIVE under the threshold, LOST_CONTACT, which
+ *     is alerted once per silence, ENDED, and no journey. The rule reads no
+ *     clock: both times are handed in, and a time that is not one (an invalid
+ *     Date) never alerts, because no comparison with it holds.
  */
 
 /** Every state a journey can be in (D-033). The database admits exactly these. */
 export const JOURNEY_STATES = ['ACTIVE', 'LOST_CONTACT', 'ENDED'] as const;
 
 /** Every event a journey can meet. */
-export const JOURNEY_EVENTS = ['start', 'heartbeat'] as const;
+export const JOURNEY_EVENTS = ['start', 'heartbeat', 'silence'] as const;
+
+/**
+ * Every state an alert can be in (D-033), in order. The database admits
+ * exactly these. This module opens alerts OPEN only; the other three belong
+ * to the tasks that acknowledge, escalate and resolve them.
+ */
+export const ALERT_STATES = ['OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED'] as const;
+
+export type AlertState = (typeof ALERT_STATES)[number];
+
+/**
+ * How long a journey may be silent before its responders are alerted: five
+ * minutes, counted "or more" (D-021). Changing it needs the owner.
+ */
+export const LOST_CONTACT_AFTER_MS = 300_000;
 
 export type JourneyState = (typeof JOURNEY_STATES)[number];
 export type JourneyEventType = (typeof JOURNEY_EVENTS)[number];
@@ -90,7 +113,18 @@ export interface HeartbeatEvent {
   deviceId: string;
 }
 
-export type JourneyEvent = StartEvent | HeartbeatEvent;
+/**
+ * The watchdog asks about a journey's silence: when it began (last contact,
+ * or the start when there has been none) and now, both read from the
+ * database by the store, never from this process's clock (REL-01).
+ */
+export interface SilenceEvent {
+  type: 'silence';
+  silentSince: Date;
+  now: Date;
+}
+
+export type JourneyEvent = StartEvent | HeartbeatEvent | SilenceEvent;
 
 /** Why a start was refused. */
 export type StartRefusal =
@@ -107,7 +141,11 @@ export type HeartbeatRefusal =
 
 export type HeartbeatOutcome = { type: 'recorded'; state: UnendedJourneyState } | HeartbeatRefusal;
 
-export type TransitionOutcome = StartOutcome | HeartbeatOutcome;
+/** Silent long enough: the journey is lost, and its alert opens. Or nothing changes. */
+export type SilenceOutcome =
+  { type: 'lost_contact'; state: 'LOST_CONTACT'; alert: 'OPEN' } | { type: 'unchanged' };
+
+export type TransitionOutcome = StartOutcome | HeartbeatOutcome | SilenceOutcome;
 
 /**
  * What an event does. Every outcome, a refusal included, is a value; only an
@@ -116,10 +154,11 @@ export type TransitionOutcome = StartOutcome | HeartbeatOutcome;
  * @param current for a start, the walker's unended journey, or null when there
  *   is none: an ENDED journey frees the walker, so one handed in is treated as
  *   none. For a heartbeat, the journey it names in any state, or null when no
- *   journey has that ID.
+ *   journey has that ID. For silence, the journey the watchdog read, by its
+ *   ID and state, or null.
  *
- * The first two overloads are the ones callers use: each event with the
- * situation it needs, and the outcome it can have. The third, any situation
+ * The first three overloads are the ones callers use: each event with the
+ * situation it needs, and the outcome it can have. The fourth, any situation
  * with any event, exists for the transition test's table, which reads its
  * types with `Parameters<typeof transition>` (the last overload) so that it
  * can ask every pair the lists create, a new event's included.
@@ -129,6 +168,7 @@ export function transition(
   current: JourneyForHeartbeat | null,
   event: HeartbeatEvent,
 ): HeartbeatOutcome;
+export function transition(current: WalkersJourney | null, event: SilenceEvent): SilenceOutcome;
 export function transition(current: Situation | null, event: JourneyEvent): TransitionOutcome;
 export function transition(current: Situation | null, event: JourneyEvent): TransitionOutcome {
   switch (event.type) {
@@ -136,6 +176,8 @@ export function transition(current: Situation | null, event: JourneyEvent): Tran
       return start(current, event);
     case 'heartbeat':
       return heartbeat(current, event);
+    case 'silence':
+      return silence(current, event);
     default: {
       // A type error the day an event joins JourneyEvent without a case. And
       // a throw, never a value: a value handed back for an event nobody
@@ -195,4 +237,22 @@ function heartbeat(journey: Situation | null, event: HeartbeatEvent): HeartbeatO
     return { type: 'refused', reason: 'NOT_THE_JOURNEYS_DEVICE' };
   }
   return { type: 'recorded', state: journey.state };
+}
+
+/**
+ * The silence rule (D-021). Only an ACTIVE journey is alerted, and only once
+ * it has been silent for the threshold or more by the database's clock. A
+ * journey already LOST_CONTACT is never alerted again for the same silence:
+ * moving it back is the back-in-contact task's, and until then its one alert
+ * stays open. A comparison with a time that is not one never holds, so an
+ * invalid moment changes nothing rather than alerting on a guess.
+ */
+function silence(journey: Situation | null, event: SilenceEvent): SilenceOutcome {
+  if (journey?.state !== 'ACTIVE') {
+    return { type: 'unchanged' };
+  }
+  if (event.now.getTime() - event.silentSince.getTime() >= LOST_CONTACT_AFTER_MS) {
+    return { type: 'lost_contact', state: 'LOST_CONTACT', alert: 'OPEN' };
+  }
+  return { type: 'unchanged' };
 }

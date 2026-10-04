@@ -59,6 +59,46 @@ assertWorkspaceListsAgree();
 const DOMAIN = '^apps/server/src/domain/';
 /** The narrow interface the UI talks to; everything behind it is off limits (AR-09). */
 const SAFETY_CORE = '^apps/mobile/src/safety-core/';
+/** Test files, of every kind: unit, integration and system. Never shipped. */
+const TEST_FILE = '\\.(test|spec)\\.[cm]?[jt]sx?$';
+/** Production code: the apps and the packages, test files aside. */
+const PRODUCTION = '^(apps|packages)/';
+
+/**
+ * A package, or a subpath of it, in both forms a rule can meet it (D-108,
+ * LOST-02-AC25):
+ *   - the bare name, which is what depcruise reports for an import it cannot
+ *     resolve, such as a package that is not installed yet;
+ *   - the path it resolves an installed one to: pnpm's store,
+ *     `node_modules/.pnpm/<name>@<version and peers>/node_modules/<name>/…`,
+ *     or a flat `node_modules/<name>/…`. A subpath is matched as a folder or
+ *     as a file of that name (`node-postgres/index.d.ts`,
+ *     `node-postgres.js`), whatever entry the package's exports name.
+ * pnpm writes a scoped name's slash as `+` in its store folder. No group with
+ * `+` or `*` in it carries a quantifier, so depcruise's check for slow
+ * patterns accepts every one.
+ */
+function packagePatterns(name, subpath) {
+  const escape = (text) => text.replace(/[.+]/g, '\\$&');
+  const store = escape(name.replace('/', '+'));
+  const tail = subpath === undefined ? '' : `${escape(subpath)}(/|\\.)`;
+  const bare = subpath === undefined ? escape(name) : `${escape(name)}/${escape(subpath)}`;
+  return [
+    `^${bare}(/|$)`,
+    `(^|/)node_modules/\\.pnpm/${store}@[^/]+/node_modules/${escape(name)}/${tail}`,
+    `(^|/)node_modules/${escape(name)}/${tail}`,
+  ];
+}
+
+/** The packages that can open a connection to the database (D-108). */
+const PG = [...packagePatterns('pg'), ...packagePatterns('@types/pg')];
+const DRIZZLE_NODE_POSTGRES = packagePatterns('drizzle-orm', 'node-postgres');
+const DRIZZLE_MIGRATOR = packagePatterns('drizzle-orm', 'node-postgres/migrator');
+const GRAPHILE_WORKER = packagePatterns('graphile-worker');
+/** The one file that opens connections, the one that migrates through it, and the worker. */
+const DATABASE_ADAPTER = '^apps/server/src/adapters/db\\.ts$';
+const MIGRATIONS = '^apps/server/src/adapters/migrations\\.ts$';
+const WORKER = '^apps/server/src/worker\\.ts$';
 
 /** @type {import('dependency-cruiser').IConfiguration} */
 module.exports = {
@@ -83,20 +123,52 @@ module.exports = {
       name: 'domain-has-no-io',
       severity: 'error',
       comment:
-        'AR-02: domain code must not reach the outside world. Node built-ins and third-party packages belong in adapters; zod is allowed because contracts are shared with the domain.',
-      from: { path: DOMAIN },
+        'AR-02: domain code must not reach the outside world. Node built-ins and third-party packages belong in adapters; zod is allowed because contracts are shared with the domain. Domain tests are not shipped, so they may import their test runner and the test kit (LOST-02-AC25).',
+      from: { path: DOMAIN, pathNot: TEST_FILE },
       to: {
         dependencyTypes: ['core', 'npm', 'npm-dev', 'npm-optional', 'npm-peer', 'npm-bundled'],
-        pathNot: ['^zod(/|$)', '^@trygghverdag/contracts(/|$)'],
+        // Both forms of each: the bare name, and where it resolves. The
+        // contracts resolve to the workspace's own folder.
+        pathNot: [
+          ...packagePatterns('zod'),
+          '^@trygghverdag/contracts(/|$)',
+          '^packages/contracts/',
+        ],
       },
     },
     {
       name: 'only-the-process-wires-the-log',
       severity: 'error',
       comment:
-        "AR-10, D-102: apps/server/src/log.ts is the server's one log adapter. Only api-process.ts, which wires the real log, and tests may import it. Every module gets the Log port, so nothing can write to the log past its closed event types (PRIV-07).",
-      from: { pathNot: ['^apps/server/src/api-process\\.ts$', '\\.(test|spec)\\.[cm]?[jt]sx?$'] },
+        "AR-10, D-102: apps/server/src/log.ts is the server's one log adapter. Only the two processes, api-process.ts and worker.ts, which wire the real log, and tests may import it. Every module gets the Log port, so nothing can write to the log past its closed event types (PRIV-07).",
+      from: {
+        pathNot: ['^apps/server/src/api-process\\.ts$', '^apps/server/src/worker\\.ts$', TEST_FILE],
+      },
       to: { path: '^apps/server/src/log\\.ts$' },
+    },
+    {
+      name: 'only-db-ts-opens-the-database',
+      severity: 'error',
+      comment:
+        "AR-10, D-108: only apps/server/src/adapters/db.ts imports pg or drizzle-orm/node-postgres, so every pool is made by createPool, inside the connection budget and with the session limits and the error listeners. A pool made anywhere else could hold a journey's row for ever, or print the connection string. Tests are exempt.",
+      from: { path: PRODUCTION, pathNot: [DATABASE_ADAPTER, MIGRATIONS, TEST_FILE] },
+      to: { path: [...PG, ...DRIZZLE_NODE_POSTGRES] },
+    },
+    {
+      name: 'migrations-take-only-the-migrator',
+      severity: 'error',
+      comment:
+        'AR-10, D-108: apps/server/src/adapters/migrations.ts may import drizzle-orm/node-postgres/migrator, which runs over the database db.ts built and opens no connection of its own, and nothing else that opens one.',
+      from: { path: MIGRATIONS },
+      to: { path: [...PG, ...DRIZZLE_NODE_POSTGRES], pathNot: DRIZZLE_MIGRATOR },
+    },
+    {
+      name: 'only-the-worker-runs-graphile-worker',
+      severity: 'error',
+      comment:
+        "AR-10, D-108: only apps/server/src/worker.ts imports graphile-worker, and hands it db.ts's pool. Anywhere else it would build a pool of its own from a connection string. Tests are exempt.",
+      from: { path: PRODUCTION, pathNot: [WORKER, TEST_FILE] },
+      to: { path: GRAPHILE_WORKER },
     },
     {
       name: 'ui-cannot-reach-the-safety-core',
@@ -115,7 +187,14 @@ module.exports = {
       comment:
         'AR-09: only the safety core may import the background-location SDK, so it stays replaceable (the D-023 fallback).',
       from: { pathNot: SAFETY_CORE },
-      to: { path: '^react-native-background-geolocation' },
+      // Both forms: the bare name, while the SDK is not installed, and the
+      // path it resolves to once it is (LOST-02-AC25).
+      to: {
+        path: [
+          '^react-native-background-geolocation',
+          ...packagePatterns('react-native-background-geolocation'),
+        ],
+      },
     },
     {
       name: 'no-cross-feature-internals',
@@ -141,7 +220,7 @@ module.exports = {
       severity: 'error',
       comment:
         'RG-07: fakes and synthetic data are for tests. Shipping code must never import them.',
-      from: { pathNot: ['\\.(test|spec)\\.[cm]?[jt]sx?$', '^packages/test-kit/'] },
+      from: { pathNot: [TEST_FILE, '^packages/test-kit/'] },
       to: { path: '^packages/test-kit/' },
     },
     {
@@ -176,12 +255,20 @@ module.exports = {
     },
   ],
   options: {
+    // An installed package is a target every rule can match, but its own
+    // imports are not cruised.
     doNotFollow: { path: 'node_modules' },
-    // apps/mobile/android and ios are what `expo prebuild` generates: on disk
-    // after a local build, never committed, and not ours to check (INF-06).
+    // Build output is not ours to check, outside node_modules only. Nothing
+    // inside node_modules is excluded: depcruise resolves an installed
+    // package to its real path under pnpm's store, and an excluded module is
+    // not a target any rule can match, so a rule naming a package would see
+    // nothing, and a package whose entry is under dist/ would be hidden too
+    // (LOST-02-AC25, D-108). apps/mobile/android and ios are what `expo
+    // prebuild` generates: on disk after a local build, never committed, and
+    // not ours to check (INF-06).
     exclude: {
       path: [
-        '(^|/)(node_modules|dist|build|coverage|\\.turbo|\\.expo)/',
+        '^(?!(^|.*/)node_modules/).*(^|/)(dist|build|coverage|\\.turbo|\\.expo)/',
         '^apps/mobile/(android|ios)/',
       ],
     },

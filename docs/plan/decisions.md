@@ -3592,3 +3592,17 @@ any other path is work, not a candidate for the same treatment.
   enforces it, with tests in `packages/config/database-imports.test.mjs`
   (LOST-02-AC24). Without it, a new module could open a pool outside the
   connection budget, the session limits and the error listeners.
+- **Amended again 2026-10-04 (delegated, D-031), from LOST-02's red phase:**
+  installed packages reach the import rules (LOST-02-AC25). Until now
+  `options.exclude` matched `node_modules` (and `dist/`), so a package that
+  resolved through pnpm's layout was dropped before any rule saw it: the
+  location-SDK rule (AR-09) would have gone blind once the SDK was installed.
+  The exclude now hides nothing inside `node_modules`, `doNotFollow` stays,
+  every rule that names a package matches both the bare name and the resolved
+  path, and `domain-has-no-io` exempts test files and accepts both forms of
+  `zod`. `imports:check` stays clean over the repository; the change revealed
+  no violation elsewhere.
+- **Implementation notes (LOST-02):** the session limits are sent as startup
+  parameters; `runWorkerProcess` always uses the unconfigured push until M3,
+  and only `startWorker` takes a `push`; Graphile Worker's own stop wait is set
+  to 0 so a stop is not delayed 5 s.

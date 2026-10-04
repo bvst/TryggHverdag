@@ -13,6 +13,7 @@ import { databaseJourneyStore } from './adapters/journeys.ts';
 import { databaseWorkerHeartbeats } from './adapters/worker-heartbeats.ts';
 import { createApi } from './api.ts';
 import type { ServerConfig } from './config.ts';
+import { IDLE_IN_TRANSACTION_LIMIT_MS, LOCK_WAIT_LIMIT_MS } from './domain/watchdog.ts';
 import { listen } from './http.ts';
 import { createLog } from './log.ts';
 import { createHealthService } from './modules/health/service.ts';
@@ -25,20 +26,28 @@ export interface ApiProcess {
 }
 
 export async function startApiProcess(config: ServerConfig): Promise<ApiProcess> {
-  const pool = createPool(config.databaseUrl, POOL_SIZE.api);
+  // The one place the API's real log is made: modules get the Log port
+  // (AR-10). It writes to this process's stdout, where the platform collects
+  // it.
+  const log = createLog();
+  // The session limits bound how long a journey's row can be held (D-108): a
+  // session idle inside a transaction is ended, and a heartbeat waits at most
+  // LOCK_WAIT_LIMIT_MS for a row, then fails as a 500 the phone resends.
+  // Without the lock limit, two such waits would hold both connections, and
+  // every route, health included, would wait with them.
+  const pool = createPool(config.databaseUrl, POOL_SIZE.api, {
+    name: 'api',
+    log,
+    idleInTransactionMs: IDLE_IN_TRANSACTION_LIMIT_MS,
+    lockTimeoutMs: LOCK_WAIT_LIMIT_MS,
+  });
   const db = createDatabase(pool);
   // One clock for every route: the database's, so a journey's start and the
   // watchdog's "how long since" are read from the same now.
   const clock = databaseClock(db);
   const app = createApi({
     health: createHealthService({ clock, heartbeats: databaseWorkerHeartbeats(db) }),
-    // The one place the real log is made: modules get the Log port (AR-10).
-    // It writes to this process's stdout, where the platform collects it.
-    journeys: createJourneyService({
-      clock,
-      journeys: databaseJourneyStore(db),
-      log: createLog(),
-    }),
+    journeys: createJourneyService({ clock, journeys: databaseJourneyStore(db), log }),
     devices: databaseDeviceAuthenticator(db),
   });
 

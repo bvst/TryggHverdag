@@ -75,10 +75,20 @@ export const MUTATION_GROUPS = [
     config: 'vitest.system.config.mjs',
   },
   {
+    // The watchdog's sweep and the outbox's sender (LOST-02). Their tests are
+    // one file of their own, kept apart from journeys.system.test.ts so each
+    // mutant here stays cheap, under the system tests' configuration.
+    name: 'alerts',
+    paths: ['apps/server/src/modules/alerts/'],
+    tests: ['apps/server/src/alerts.system.test.ts'],
+    config: 'vitest.system.config.mjs',
+  },
+  {
     // Whether the worker runs, says it is alive, and is restarted when it
-    // stops (D-077). worker.ts is the worker process: it starts the runner,
-    // records a heartbeat once a minute and checks in with Healthchecks.io,
-    // stops on the platform's signal, and fails if it ends any other way.
+    // stops (D-077). worker.ts is the worker process: it starts the runner
+    // and the sweep and delivery loops, checks in with Healthchecks.io once a
+    // minute when the watchdog's beat is fresh, stops on the platform's
+    // signal, and fails if it ends any other way.
     // bin/worker.ts starts it, and process.ts chooses its exit code.
     // bin.test.ts is the only test that runs the real worker process, so it
     // goes with these three wherever they are mutated (D-066's amendment).

@@ -21,14 +21,17 @@ import { z } from 'zod';
 /**
  * How long the worker may be silent before this stops calling itself healthy.
  *
- * Three minutes, because the worker checks in once a minute — Graphile Worker's
- * cron is minute-granular — so two missed beats are tolerated before anyone is
- * woken. A threshold equal to the beat interval would page on ordinary jitter,
- * and a monitor that cries wolf is a monitor people mute.
+ * The worker's beat follows each good sweep of the watchdog (D-108), every
+ * 10 seconds while the watchdog works, and stops when a sweep fails or finds a
+ * journey it cannot move. Three minutes was chosen when the beat came once a
+ * minute, so that ordinary jitter never pages; a monitor that cries wolf is a
+ * monitor people mute. Since the beat follows the sweep, a stale beat means
+ * the watchdog has not swept successfully for three minutes, which pages as a
+ * stopped worker does (D-065, D-079). The minute check-in with
+ * Healthchecks.io notices sooner: it stops once the beat is 30 seconds old.
  *
- * This is not the watchdog's cadence. The watchdog sweeps every 10-15 seconds
- * (AR-06) and arrives with the safety loop in M2; this is only how long the
- * API waits before reporting that the worker has stopped.
+ * This is not the watchdog's cadence; it is only how long the API waits
+ * before reporting that nothing is watching the journeys.
  */
 export const WORKER_STALE_AFTER_MS = 180_000;
 

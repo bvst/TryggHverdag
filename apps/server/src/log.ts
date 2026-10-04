@@ -11,9 +11,13 @@
  * is one the field allows, and as null otherwise. So even a caller that got
  * past the type, with a cast or with data typed `any`, cannot have anything
  * else written:
- *   - `journeyId` only as a lower-case canonical UUID;
- *   - `reason` only as JOURNEY_ENDED;
- *   - `stage` only as clock, read or store;
+ *   - `journeyId` and `messageId` only as a lower-case canonical UUID;
+ *   - `reason` only from its event's set: JOURNEY_ENDED for an ignored
+ *     heartbeat, the push port's four for a failed push;
+ *   - `stage` only from its event's set: clock, read or store for a
+ *     heartbeat; read, open or beat for the watchdog; claim or mark for the
+ *     sender;
+ *   - `pool` only as api or worker;
  *   - `code` only as text that is a SQLSTATE, read by `sqlstateOf`, so no
  *     message can travel as a code.
  * An event the log does not list is a fault in the caller: `write` throws,
@@ -34,7 +38,8 @@
  * captures `process.stdout.write`, so a test that found nothing written would
  * prove nothing; with this, the capture sees every line (LOST-01-AC14).
  *
- * Only `api-process.ts` and tests import this file. Modules get the `Log` port.
+ * Only the two processes, `api-process.ts` and `worker.ts`, and tests import
+ * this file. Modules get the `Log` port.
  * Changing it needs the owner's approval (D-102).
  */
 import process from 'node:process';
@@ -53,6 +58,11 @@ type EventName = LogEvent['event'];
 const EVENT_LEVELS = {
   heartbeat_ignored: 30,
   heartbeat_failed: 50,
+  push_failed: 51,
+  delivery_failed: 52,
+  watchdog_failed: 53,
+  watchdog_overdue: 54,
+  database_error: 55,
 } as const satisfies Record<EventName, number>;
 
 /**
@@ -80,21 +90,49 @@ const STAGES: readonly unknown[] = ['clock', 'read', 'store'] satisfies Extract<
   { event: 'heartbeat_failed' }
 >['stage'][];
 
+/** The stages `watchdog_failed` may name. */
+const WATCHDOG_STAGES: readonly unknown[] = ['read', 'open', 'beat'] satisfies Extract<
+  LogEvent,
+  { event: 'watchdog_failed' }
+>['stage'][];
+
+/** The stages `delivery_failed` may name. */
+const DELIVERY_STAGES: readonly unknown[] = ['claim', 'mark'] satisfies Extract<
+  LogEvent,
+  { event: 'delivery_failed' }
+>['stage'][];
+
+/** The reasons `push_failed` may give: the push port's four. */
+const PUSH_REASONS: readonly unknown[] = [
+  'NO_TARGET',
+  'REFUSED',
+  'UNAVAILABLE',
+  'NOT_CONFIGURED',
+] satisfies Extract<LogEvent, { event: 'push_failed' }>['reason'][];
+
+/** The pools `database_error` may name: each process's own. */
+const POOLS: readonly unknown[] = ['api', 'worker'] satisfies Extract<
+  LogEvent,
+  { event: 'database_error' }
+>['pool'][];
+
 /**
  * Each field's value as it is written: the value when it is one the field
  * allows, else null. Each takes `unknown`, because a caller that got past the
  * type can hand in anything.
  */
-function reasonOf(value: unknown): string | null {
-  return REASONS.includes(value) ? (value as string) : null;
+function oneOf(allowed: readonly unknown[], value: unknown): string | null {
+  return allowed.includes(value) ? (value as string) : null;
 }
 
-function journeyIdOf(value: unknown): string | null {
+/** A journey's or a message's ID, as the database writes one. */
+function uuidOf(value: unknown): string | null {
   return typeof value === 'string' && CANONICAL_UUID.test(value) ? value : null;
 }
 
-function stageOf(value: unknown): string | null {
-  return STAGES.includes(value) ? (value as string) : null;
+/** Only text that is a SQLSTATE, read as the store's error is read. */
+function codeOf(value: unknown): string | null {
+  return sqlstateOf({ code: value });
 }
 
 /** Where a line goes: given whole, newline included. */
@@ -124,16 +162,36 @@ export function createLog({
       switch (event.event) {
         case 'heartbeat_ignored':
           logger.heartbeat_ignored({
-            reason: reasonOf(event.reason),
-            journeyId: journeyIdOf(event.journeyId),
+            reason: oneOf(REASONS, event.reason),
+            journeyId: uuidOf(event.journeyId),
           });
           return;
         case 'heartbeat_failed':
-          logger.heartbeat_failed({
-            stage: stageOf(event.stage),
-            // Only text that is a SQLSTATE, read as the store's error is read.
-            code: sqlstateOf({ code: event.code }),
+          logger.heartbeat_failed({ stage: oneOf(STAGES, event.stage), code: codeOf(event.code) });
+          return;
+        case 'watchdog_failed':
+          logger.watchdog_failed({
+            stage: oneOf(WATCHDOG_STAGES, event.stage),
+            code: codeOf(event.code),
           });
+          return;
+        case 'watchdog_overdue':
+          logger.watchdog_overdue({ journeyId: uuidOf(event.journeyId) });
+          return;
+        case 'push_failed':
+          logger.push_failed({
+            reason: oneOf(PUSH_REASONS, event.reason),
+            messageId: uuidOf(event.messageId),
+          });
+          return;
+        case 'delivery_failed':
+          logger.delivery_failed({
+            stage: oneOf(DELIVERY_STAGES, event.stage),
+            code: codeOf(event.code),
+          });
+          return;
+        case 'database_error':
+          logger.database_error({ pool: oneOf(POOLS, event.pool), code: codeOf(event.code) });
           return;
         default:
           // A type error the day an event joins LogEvent without a case. And

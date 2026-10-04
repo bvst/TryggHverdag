@@ -1,6 +1,7 @@
 /**
- * The worker's check-in with Healthchecks.io (INF-08, REL-08): one ping after
- * each recorded beat. A check that stops getting pings pages the owner.
+ * The worker's check-in with Healthchecks.io (INF-08, REL-08): one ping each
+ * minute the watchdog's beat is fresh. A check that stops getting pings pages
+ * the owner.
  *
  * One request, no body, no retry: the next minute's beat is the retry, and a
  * retry loop is how a worker would reach Healthchecks.io's rate limit. Only a
@@ -30,7 +31,11 @@ export function healthchecksCheckIn({
   // would do it at start-up, where a monitoring setting must never stop the
   // worker.
   return {
-    async checkIn(): Promise<void> {
+    async checkIn(signal?: AbortSignal): Promise<void> {
+      // Its own timeout, and the caller's signal when there is one: the
+      // worker hands on Graphile's, which aborts when the worker stops, so a
+      // stop never waits for a Healthchecks.io that does not answer (D-079).
+      const timeout = AbortSignal.timeout(timeoutMs);
       let response: Response;
       try {
         // HEAD: Healthchecks.io counts it as a ping, and there is no body to
@@ -43,7 +48,7 @@ export function healthchecksCheckIn({
         response = await send(url, {
           method: 'HEAD',
           redirect: 'manual',
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: signal === undefined ? timeout : AbortSignal.any([signal, timeout]),
         });
       } catch (error: unknown) {
         throw notReached(error, timeoutMs);
