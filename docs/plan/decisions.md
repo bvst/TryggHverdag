@@ -3487,3 +3487,16 @@ any other path is work, not a candidate for the same treatment.
     `SAFETY_PATHS`, as `db.ts` does not.
   - **Rejected:** leaving it unowned. Owning it later would need another
     hand-merged pull request, because it edits `ai-review.yml` again.
+- **Amended again 2026-10-04 (owner, asked in session with Claude's
+  recommendation, the recommended option chosen):**
+  - **Why:** BUG-18's safety and privacy re-checks both found
+    `apps/server/src/modules/health/` unowned. Its one file turns the worker's
+    last check-in into `/v1/health`'s answer, between `worker-heartbeats.ts`
+    and `domain/health.ts` (owned). A slip there, such as passing the current
+    time as the last check-in, would show a stopped watchdog as alive.
+  - **Decision:** `/apps/server/src/modules/health/` joins CODEOWNERS,
+    `OWNER_APPROVAL_PATHS` and the ai-review `safety` filter in BUG-18, with a
+    line in `safety-reviewer`'s brief. It does not join `SAFETY_PATHS`.
+  - **Not included:** `WORKER_STALE_AFTER_MS` in `packages/contracts`, which
+    is already in the safety filter. Owning the contracts beyond
+    `released/` is a wider question.

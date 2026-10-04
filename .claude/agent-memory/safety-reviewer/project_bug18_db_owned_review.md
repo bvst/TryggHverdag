@@ -1,6 +1,6 @@
 ---
 name: bug18-db-owned-review
-description: BUG-18 / D-105 review 2026-10-04 (PASS at 3fdca02) — adapters/db.ts owned, in the ai-review safety filter, brief line added; open: brief line names db.ts only though sizes and limits are passed at call sites; its SQLSTATE rule is D-108 (LOST-02), not D-068/D-105
+description: BUG-18 / D-105 review 2026-10-04 — PASS at 3fdca02, loop 1 PASS at 25589a5 (db.ts + worker-heartbeats.ts owned, in filter, brief bullets); both loop-0 should-fixes closed; open notes for LOST-02
 metadata:
   type: project
 ---
@@ -32,3 +32,26 @@ comment lines 27-31). LOST-02 may add L2 tests via fakePostgres; whether it then
 
 **How to apply:** on LOST-02's review, check items 1-3 in the brief and that D-105 still precedes D-106 in
 decisions.md after main is merged in. Related: [[bug14-gate-files-owned-review]], [[lost01-heartbeat-review]].
+
+**Loop 1 (25589a5), PASS.** Loop-0 items 1 and 2 CLOSED: the brief line names the createPool callers
+(api-process.ts, worker.ts, adapters/migrations.ts; all three in the filter and owned) and the logging rule is
+D-068's own ("never the error object", "never make the failure quiet"). D-105 amended (owner 2026-10-04):
+adapters/worker-heartbeats.ts joins CODEOWNERS, OWNER_APPROVAL_PATHS, filter and brief.
+Verified: ai-review.yml numstat 2/0, safety 26 -> 28 (db.ts, worker-heartbeats.ts only), ui and rest
+deep-equal. Last-match with git's OWN matcher (`git ls-files -c -i -x <pattern>` per CODEOWNERS line, highest
+line wins) over 532 tracked files: only those two change owners, [] -> [@bvst @urso-agent]. 210/210 in
+gate.test.mjs + ai-review.test.mjs. gh api: ruleset active, bypass_actors [], code-owner review true, 13 checks.
+LOST-02's design is on origin/claude/busy-faraday-40n2zl (da808ef): D-107 (10 s sweep), D-108 (own outbox,
+watchdog feeds the beat, idle_in_transaction 10 s both pools, lock_timeout 5 s API only, listeners log pool
+name + SQLSTATE and carry on); spec item 6: the minute cron pings Healthchecks.io only when lastBeat is at most
+30 s old (BEAT_FRESH_MS), so lastBeat then decides Healthchecks.io too.
+Open notes (check on LOST-02 before repeating):
+4. worker-heartbeats bullet: today the Healthchecks.io link is that record() REJECTS when it wrote nothing
+   (worker.ts:48-53 pings after record resolves); the bullet says "records the time it was given" only.
+   Suggested adding "and record rejects when it wrote nothing". No L3 test pins a rejection.
+5. modules/health/service.ts (turns lastBeat into /v1/health's answer) is unowned and not in the filter;
+   WORKER_STALE_AFTER_MS in packages/contracts is in the filter but unowned (only released/ owned).
+   privacy-security-reviewer raised the same as a Note. Owner's call.
+6. progress.md BUG-18 row names db.ts only; fix when the merge is recorded.
+7. LOST-02's limit values live in domain/watchdog.ts (owned, filter, SAFETY_PATHS) — not named in the brief
+   line but reached through domain/**.
