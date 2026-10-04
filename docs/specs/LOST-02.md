@@ -2103,12 +2103,19 @@ owner's to schedule:
   task should refuse anything outside 1 to 2147483647 in `createPool`, as the
   open now does.
 - **graphile-worker's own LISTEN connection logs its error object**
-  (`privacy-security-reviewer`). When that one connection drops, Graphile's
-  logger prints the message and the whole error object to the console. It
-  runs only `LISTEN` and `UNLISTEN`, so nothing personal or secret is in it,
-  and it was the same before this task. But for that connection, "one
-  `database_error` line per lost connection" (AC18) is not the only line.
-  Passing Graphile a logger that writes closed events would close it.
+  (`privacy-security-reviewer`, loops 1 and 2).
+  - When that connection drops, or cannot connect (at start, and at every
+    retry, backing off up to 60 s, for as long as the database is out of
+    reach), Graphile's logger prints the message and the whole error object
+    to the console.
+  - That object can name the database's host and port, or, in PostgreSQL's
+    login errors, the database user. It never holds personal data or the
+    password: the reviewer checked with a marker password. The connection
+    runs only `LISTEN` and `UNLISTEN`.
+  - It was the same before this task. But for that connection, "one
+    `database_error` line per lost connection" (AC18) is not the only line.
+  - Passing Graphile a logger that writes closed events only would close
+    both cases.
 - **For the owner: should `adapters/db.ts` be mutation-tested?**
   (`safety-reviewer`). The read-back (`sessionLimitsLines`) lives there,
   and `db.ts` is not in `SAFETY_PATHS`, so no mutation run measures its
