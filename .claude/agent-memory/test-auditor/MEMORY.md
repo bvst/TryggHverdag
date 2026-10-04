@@ -18,3 +18,4 @@
 - [LOST-01 audit](project_lost01_audit.md) — PASS 7ddcd72 and loop-1 19db407 (43 faults; L1 log `^` anchor and H3 UTC-in-CI survive); RG-02 replay via load hook
 - [BUG-15 audit](project_bug15_audit.md) — PASS 0ccd0f5 and loop-1 a7423d9 (walk: 14/14 lockfile faults, H8 near-equivalent survivor); supersession gap open
 - [Allowlist anchors and TZ](feedback_allowlist_anchor_tz.md) — plant `^` and `$` removal separately; getUTC* -> local survives in UTC CI, re-run with TZ=Europe/Oslo
+- [BUG-18 audit](project_bug18_audit.md) — D-105 db.ts owned; PASS scoped to db.ts; CODEOWNERS matcher treats `?` literally (since BUG-8); HEAD moved mid-audit, harness reads a fixed rev
