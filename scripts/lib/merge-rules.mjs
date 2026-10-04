@@ -24,6 +24,10 @@ export const OWNER_APPROVAL_PATHS = [
   '/apps/server/src/process.ts',
   // The one file that can ping Healthchecks.io: an unasked ping keeps a dead worker's check green (D-079).
   '/apps/server/src/adapters/healthchecks.ts',
+  // Every process's database pool: one that uses up the database's few connections takes the watchdog down with it (D-105).
+  '/apps/server/src/adapters/db.ts',
+  // The worker's check-in row: a fault here can show a dead watchdog as alive (D-105).
+  '/apps/server/src/adapters/worker-heartbeats.ts',
   // Where the journey guarantees live: the responder insert and its
   // transaction, the one-unended-journey index, the device-credential check,
   // and where the database clock is wired into the API's services (D-092,
@@ -33,6 +37,8 @@ export const OWNER_APPROVAL_PATHS = [
   '/apps/server/src/db/schema.ts',
   '/apps/server/src/db/migrations/',
   '/apps/server/src/modules/journeys/',
+  // The health wiring: it turns the worker's last check-in into /v1/health's answer (D-105).
+  '/apps/server/src/modules/health/',
   '/apps/server/src/api-process.ts',
   // The device-credential middleware and the walker always the device's own
   // user, the database clock itself, and where the migrations are read from

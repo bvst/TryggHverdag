@@ -18,3 +18,5 @@
 - [LOST-01 audit](project_lost01_audit.md) — PASS 7ddcd72 and loop-1 19db407 (43 faults; L1 log `^` anchor and H3 UTC-in-CI survive); RG-02 replay via load hook
 - [BUG-15 audit](project_bug15_audit.md) — PASS 0ccd0f5 and loop-1 a7423d9 (walk: 14/14 lockfile faults, H8 near-equivalent survivor); supersession gap open
 - [Allowlist anchors and TZ](feedback_allowlist_anchor_tz.md) — plant `^` and `$` removal separately; getUTC* -> local survives in UTC CI, re-run with TZ=Europe/Oslo
+- [BUG-18 audit](project_bug18_audit.md) — D-105 db.ts + worker-heartbeats.ts; PASS 25589a5 (158 faults, 3 real survivors); loop 2: modules/health/ pinned BUG-10 way, PASS at 06fc91c (64 faults, 56 killed, 0 real survivors)
+- [Matcher helper changes](feedback_matcher_helper_changes.md) — audit "stricter, never looser" glob-reader rewrites: fuzz superset, diff verdicts, check pairs vs git/picomatch, fault each new branch

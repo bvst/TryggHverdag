@@ -273,3 +273,35 @@ describe("BUG-14: safety-reviewer's brief has something to check in the mutation
     }),
   );
 });
+
+describe("BUG-18: safety-reviewer's brief has something to check in the database connection, the worker's check-in row and the health wiring (D-105 and its two amendments)", () => {
+  // D-105 puts apps/server/src/adapters/db.ts in the safety filter: the pools,
+  // how many connections each process may hold, and, with LOST-02, the
+  // session limits that keep a frozen instance from holding a journey's row
+  // lock past the watchdog. Its amendment adds
+  // apps/server/src/adapters/worker-heartbeats.ts, the worker's check-in row
+  // that /v1/health reads to say whether anything is still watching the
+  // journeys. Its second amendment adds apps/server/src/modules/health/, which
+  // turns that check-in into /v1/health's answer. A change to any of them now
+  // brings safety-reviewer, and a brief that does not name it leaves that
+  // review nothing to check (D-045), as BUG-14 found for D-100's files. Loose
+  // on purpose, as the test above: the citation and the paths, none of the
+  // wording around them.
+  test(
+    "BUG-18: safety-reviewer's brief cites D-105 and names apps/server/src/adapters/db.ts, apps/server/src/adapters/worker-heartbeats.ts and apps/server/src/modules/health/",
+    explained(() => {
+      const brief = agentNamed('safety-reviewer.md')?.text ?? '';
+
+      expect(brief, 'no safety-reviewer.md with a verdict line in .claude/agents').not.toBe('');
+      expect(
+        [
+          'D-105',
+          'apps/server/src/adapters/db.ts',
+          'apps/server/src/adapters/worker-heartbeats.ts',
+          'apps/server/src/modules/health/',
+        ].filter((named) => !brief.includes(named)),
+        "what safety-reviewer's brief does not name",
+      ).toEqual([]);
+    }),
+  );
+});

@@ -3430,3 +3430,73 @@ any other path is work, not a candidate for the same treatment.
     repository", GitHub's API, 2026-10-03), against the setup guide in
     `merge-rules.md`. Turning them on is the owner's (A-31); D-093 has the
     same gap.
+
+## D-105 — The database connection needs the owner and the safety review (BUG-18)
+- **Date:** 2026-10-03 · **Status:** Accepted (owner, 2026-10-03). Asked in
+  session, the recommended option chosen: "Yours + safety review, small PR
+  first". LOST-02's planner had recommended "Yours, like log.ts (no safety
+  trigger)"; the session recommended against it, because D-102's reason does
+  not carry over (below). The third option was "Leave it unowned" ·
+  **Section:** 5 (AR-06; extends D-092, D-100 and D-102)
+- **Context:**
+  - `apps/server/src/adapters/db.ts` creates every process's PostgreSQL pool.
+    It already decides how many connections each process may hold. Its own
+    comment says that a pool that quietly uses up the database's few
+    connections "would take the watchdog down with it".
+  - LOST-02 (the lost-contact alert) is to add to it:
+    - session limits that stop a frozen server instance from holding a
+      journey's row lock indefinitely. The watchdog's `for update skip locked`
+      would otherwise skip that journey, a missed alert that shows up nowhere
+      ("Left for later tasks" in `docs/progress/m2.md`);
+    - the pools' `error` listeners (D-068).
+  - Nothing makes a change to `db.ts` need the owner today, and a change to it
+    alone does not summon `safety-reviewer`.
+  - D-102 kept `log.ts` out of the ai-review `safety` filter, because
+    `privacy-security-reviewer` runs on every pull request and logging is in
+    its brief. That reason does not carry over: `safety-reviewer` runs only
+    when the filter matches a changed file.
+- **Decision:**
+  - `apps/server/src/adapters/db.ts` joins `.github/CODEOWNERS`,
+    `OWNER_APPROVAL_PATHS` in `scripts/lib/merge-rules.mjs` and the ai-review
+    `safety` filter.
+  - `safety-reviewer`'s brief gains a line for it. A review the file triggers
+    must have something to check (D-045, as BUG-14 found for D-100's files).
+  - This lands in its own small pull request, BUG-18, before LOST-02. It edits
+    `ai-review.yml`, so the owner merges it by hand (D-075). LOST-02's own
+    pull request then does not touch `ai-review.yml`, so CI's AI reviewers can
+    run on it. Shipping one filter line alone is a deliberate exception to
+    D-075's batching, chosen by the owner.
+- **Consequences:**
+  - Every later change to `db.ts` needs the owner and gets the safety review.
+  - `scripts/gate.test.mjs`'s named exception stays exactly `log.ts` (D-102,
+    amended). `db.ts` is an `/apps/` owner path, and it is in the filter.
+  - `db.ts` does not join `SAFETY_PATHS`: no mutation run and no 95 %
+    branch floor, like the other adapters tested only at L3 (D-095).
+  - LOST-02 must not merge before BUG-18.
+- **Amended 2026-10-04 (owner, asked in session with Claude's
+  recommendation, the recommended option chosen):**
+  - **Why:** BUG-18's code review found
+    `apps/server/src/adapters/worker-heartbeats.ts` unowned. It stores the
+    worker's check-in row: the worker writes it, and `/v1/health` reads it to
+    say whether anything is still watching the journeys (D-077, D-079). Once
+    LOST-02 makes the watchdog's sweeps feed that check-in (D-108 on LOST-02's
+    branch), a fault here could show a dead watchdog as alive.
+  - **Decision:** `worker-heartbeats.ts` joins CODEOWNERS,
+    `OWNER_APPROVAL_PATHS` and the ai-review `safety` filter in BUG-18 too,
+    with a line in `safety-reviewer`'s brief. It does not join
+    `SAFETY_PATHS`, as `db.ts` does not.
+  - **Rejected:** leaving it unowned. Owning it later would need another
+    hand-merged pull request, because it edits `ai-review.yml` again.
+- **Amended again 2026-10-04 (owner, asked in session with Claude's
+  recommendation, the recommended option chosen):**
+  - **Why:** BUG-18's safety and privacy re-checks both found
+    `apps/server/src/modules/health/` unowned. Its one file turns the worker's
+    last check-in into `/v1/health`'s answer, between `worker-heartbeats.ts`
+    and `domain/health.ts` (owned). A slip there, such as passing the current
+    time as the last check-in, would show a stopped watchdog as alive.
+  - **Decision:** `/apps/server/src/modules/health/` joins CODEOWNERS,
+    `OWNER_APPROVAL_PATHS` and the ai-review `safety` filter in BUG-18, with a
+    line in `safety-reviewer`'s brief. It does not join `SAFETY_PATHS`.
+  - **Not included:** `WORKER_STALE_AFTER_MS` in `packages/contracts`, which
+    is already in the safety filter. Owning the contracts beyond
+    `released/` is a wider question.
