@@ -1863,8 +1863,14 @@ compared", never as "passed".
   - One that silently dropped them would leave the limits absent, with every
     check green. Since review loop 1, each process reads its limits back at
     start and says what is in force, or that they differ (approach item 7).
-    So the first deploy's log shows the values really in force, which is
-    the evidence. Before, it showed only that the process started.
+    The processes write that line to their own log at start: Clever Cloud's
+    application log, and the deploy job's log only if it streams the app's
+    output, which is not verified. It is where the evidence is expected,
+    not where it has been seen. **After the first staging deploy that
+    carries LOST-02, the orchestrating session finds the `api: session
+    limits` and `worker: session limit` lines and quotes them in
+    `docs/progress/m2.md`; a mismatch or "could not be read" line opens a
+    bug** (safety-reviewer, loop-1 re-check).
   - A `SET` on connect is the fallback for a pooler that rejects the
     parameters.
 - **A legitimate transaction ended by the limit** on a starved instance (D-077
