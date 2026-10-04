@@ -1702,8 +1702,9 @@ lock is a failed open** (approach item 3; AC20):
 item 3; D-100):
 - 15a. The shared behaviour suite (`journey-store-behaviour.ts`, at L2 and
   L3): `LOST-02-AC20: an open given a lockWaitMs that is not a whole number
-  from 1 to 2147483647 (0, -1, 0.5, NaN, 2147483648) is refused, naming
-  lockWaitMs, and writes nothing`. PostgreSQL reads a `lock_timeout` of 0 as
+  from 1 to 2147483647 (0, -1, 0.5, 1.5, NaN, 2147483648) is refused,
+  naming lockWaitMs, and writes nothing`. 1.5 is there for the whole-number
+  rule alone: every other fraction is also below 1 (`test-auditor`, loop 2). PostgreSQL reads a `lock_timeout` of 0 as
   no limit at all. The pinned list of behaviour names in
   `fake-journey-store.test.ts` grows with it, by design.
 

@@ -40,3 +40,21 @@ Related: [[lost01-audit]], [[in-memory-mutation]], [[second-path-isolation]]
 - 8fd8466 (a test commit) also deleted 0003_left_lyja.sql while _journal.json still named it — intermediate commit broken; squash-only merging makes it moot.
 - RG-05 at b1dbfa4: watchdog 87/87, outbox 37/38, worker 140/146 (+2 timeouts), api-process 16/16, domain/watchdog 12/12, healthchecks 55/55.
 - 145 faults total, each run with a passing unmutated control.
+
+## Loop 2 delta re-audit (2026-10-04, PASS at 25f5ccf; HEAD moved to 637b5cd, docs/memory only)
+- 53 faults planted in memory (specs ta-lost02/loop2-{unit,unit2,l3,filter,idle,entry,replay}.mjs): every loop-1 survivor now killed by
+  its loop-2 test: J3b/J3c/J3 (11a, '5s'/'300ms'), K11 no-wait and pool-ended-first (12a api+worker), P2 (12b), R12/R12b (12c), R5
+  four anchor variants (12d), U1-U4 incl. pre-fix lookup (12e), JN2/JN3/JN4 (13a), J11 + nowait (14a), I8/I8c/I8d (16a), V1-V8 bar V3.
+- Survivors: F2/V3 `Number.isInteger` dropped (fake and adapter): 0.5 is refused by `>= 1`, no value isolates "whole number". PG rounds
+  half-even (0.5 -> 0 = no limit, 1.5 -> 2ms), so harmless; should-fix = add 1.5. I8b root `node_modules/` alternative: near-equivalent
+  (pnpm isolated + resolved symlinks never give a flat root path). Worker 12b bin shape regex misses `{ ..., write }` and `write(t) {}`.
+- api-process stderr filter: T2 (swallow every chunk) leaves all 44 green and LK1 leak still killed => every stderr assertion sits above it.
+- 12a idle second connection is necessary for the API (without it no-wait and pool-ended-first both survive: pg Pool.end() waits for
+  checked-out clients, closes idle ones at once); in the worker test the recordingRunner 'pool ended' marker already catches it.
+- RG-02 replay vs 179b911 code: exactly 7 red (12e constructor/toString/__proto__ x api,worker: old line echoed "10000constructor";
+  15a L3: lockWaitMs 0 opened), 21 green.
+- RG-05 local reports == 25f5ccf sources; mutated sources unchanged since b1dbfa4. Worker timeouts #86 170:15 `again = false`->true and
+  #97 187:15 `if (again)`->true (endless re-run by construction); loop-1 report overwritten, so identity unverified by artifact.
+  Delta's code (adapters/db.ts, adapters/journeys.ts) is in no mutation run.
+- Harness trap: Vitest truncates `test.each('$name')` titles to ~40 chars ("LOST-02-AC20: an open given a lockWaitM…"); a -t pattern on the
+  full name matches nothing (fail 0 pass 0 looks like a survivor). Use the truncated prefix; check pass > 0 in a control.
