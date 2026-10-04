@@ -44,6 +44,7 @@
  */
 import process from 'node:process';
 import pino from 'pino';
+import { PUSH_FAILURE_REASONS } from './domain/journey.ts';
 import { sqlstateOf } from './domain/sqlstate.ts';
 import type { Log, LogEvent } from './ports.ts';
 
@@ -53,7 +54,9 @@ type EventName = LogEvent['event'];
  * Each event's name, as the pino level it is written at. The numbers exist
  * only for pino, which ranks its levels by number; nothing of ours reads
  * them, no line holds them, and failures rank above an ignored heartbeat only
- * so the order reads sensibly.
+ * so the order reads sensibly. Each number must be unique: pino finds a
+ * level's name by its number, so two events sharing one would be written
+ * under the same name.
  */
 const EVENT_LEVELS = {
   heartbeat_ignored: 30,
@@ -101,14 +104,6 @@ const DELIVERY_STAGES: readonly unknown[] = ['claim', 'mark'] satisfies Extract<
   LogEvent,
   { event: 'delivery_failed' }
 >['stage'][];
-
-/** The reasons `push_failed` may give: the push port's four. */
-const PUSH_REASONS: readonly unknown[] = [
-  'NO_TARGET',
-  'REFUSED',
-  'UNAVAILABLE',
-  'NOT_CONFIGURED',
-] satisfies Extract<LogEvent, { event: 'push_failed' }>['reason'][];
 
 /** The pools `database_error` may name: each process's own. */
 const POOLS: readonly unknown[] = ['api', 'worker'] satisfies Extract<
@@ -180,7 +175,7 @@ export function createLog({
           return;
         case 'push_failed':
           logger.push_failed({
-            reason: oneOf(PUSH_REASONS, event.reason),
+            reason: oneOf(PUSH_FAILURE_REASONS, event.reason),
             messageId: uuidOf(event.messageId),
           });
           return;

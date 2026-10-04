@@ -6,7 +6,16 @@
  * shape without depending on the implementation, and so that the test kit can
  * satisfy them structurally without importing any server code.
  */
-import type { JourneyForHeartbeat, JourneyState, UnendedJourney } from './domain/journey.ts';
+import type {
+  JourneyForHeartbeat,
+  JourneyState,
+  MessageKind,
+  PushFailureReason,
+  UnendedJourney,
+} from './domain/journey.ts';
+
+/** The domain's lists, as the types the ports are written in. */
+export type { MessageKind, PushFailureReason };
 
 /**
  * The time, from the database (REL-01).
@@ -130,9 +139,6 @@ export interface OpenRequest {
   lockWaitMs?: number | undefined;
 }
 
-/** The kinds of message the outbox holds. Only the lost-contact alert, for now. */
-export type MessageKind = 'LOST_CONTACT';
-
 /** A message an alert's opening wrote: an opaque ID of its own, who it is for, and what kind. */
 export interface AlertMessage {
   messageId: string;
@@ -162,11 +168,13 @@ export interface WatchdogStore {
   /**
    * In one transaction: takes the journey's row if it is still ACTIVE and
    * overdue, moves it to LOST_CONTACT, opens its alert and writes one message
-   * per responder, all of it or none of it. Without `lockWaitMs` a held row
-   * is skipped (`skip locked`) and `held` is never answered; with it, the
-   * open waits at most that long, and answers `held` when the wait runs out.
-   * Rejects, having written nothing, on any other failure, a journey with no
-   * responder included.
+   * per responder, all of it or none of it. Every open bounds its waits with
+   * a lock limit of its own, local to its transaction: `lockWaitMs`, or
+   * LOCK_WAIT_LIMIT_MS without it. Without `lockWaitMs` a held row is skipped
+   * (`skip locked`) and `held` is never answered; with it, the open waits at
+   * most that long for the journey's row, and answers `held` when that wait
+   * runs out. Rejects, having written nothing, on any other failure: a wait
+   * for any other lock that ran out (55P03), or a journey with no responder.
    */
   openLostContactAlert(request: OpenRequest): Promise<OpenLostContactAlertResult>;
 }
@@ -181,9 +189,6 @@ export interface ClaimedMessages {
   now: Date;
   messages: ClaimedMessage[];
 }
-
-/** Why the push port did not accept a message. */
-export type PushFailureReason = 'NO_TARGET' | 'REFUSED' | 'UNAVAILABLE' | 'NOT_CONFIGURED';
 
 /** What the sender needs of the outbox (LOST-02, AR-05). */
 export interface OutboxStore {

@@ -111,3 +111,102 @@ export function createPool(
 export function createDatabase(pool: pg.Pool) {
   return drizzle(pool, { schema });
 }
+
+/**
+ * Each session limit a process pool can ask for: PostgreSQL's name for it,
+ * the option that asks, and what goes wrong while it is not in force.
+ */
+const SESSION_LIMITS = [
+  {
+    setting: 'idle_in_transaction_session_timeout',
+    option: 'idleInTransactionMs',
+    without: 'a stalled transaction will not be ended',
+  },
+  {
+    setting: 'lock_timeout',
+    option: 'lockTimeoutMs',
+    without: 'a heartbeat may wait for a lock without end',
+  },
+] as const;
+
+/** How many milliseconds one of pg_settings' units holds: the units a time limit is reported in. */
+const MS_PER_UNIT: Readonly<Record<string, number>> = { ms: 1, s: 1_000, min: 60_000 };
+
+/**
+ * A setting's value as pg_settings reported it, in its text and in
+ * milliseconds, or null when it is not digits with one of those units: it is
+ * then written as `unreadable`, never echoed.
+ */
+function durationOf(setting: unknown, unit: unknown): { text: string; ms: number } | null {
+  const perUnit = typeof unit === 'string' ? MS_PER_UNIT[unit] : undefined;
+  if (typeof setting !== 'string' || !/^\d+$/.test(setting) || perUnit === undefined) {
+    return null;
+  }
+  return { text: `${setting}${String(unit)}`, ms: Number(setting) * perUnit };
+}
+
+/**
+ * Asking is not getting (D-109). Reads back once, on one of the pool's
+ * connections, the session limits the pool asked for, and says on one line
+ * which are in force, or, one line each, which are not. A connection pooler
+ * that silently dropped the startup parameters would otherwise leave the
+ * limits absent with every check green. The read-back line, not the absence
+ * of an error, is what shows they are in force.
+ *
+ * Never rejects: the process starts whatever it reads (D-109). A worker that
+ * refused would watch nobody, and the watchdog's stuck check pages for the
+ * harm a missing limit can cause. A read that fails is said with its
+ * SQLSTATE, or `none`. No line holds the connection string, a host, a user,
+ * a password or an error's message: only the process's name, the settings'
+ * names, digits with a unit, and a SQLSTATE.
+ */
+export async function sessionLimitsLines(
+  pool: pg.Pool,
+  {
+    name,
+    ...asked
+  }: {
+    /** The process whose pool it is: the word each line starts with. */
+    name: 'api' | 'worker';
+    /** What the pool asked for, as it was given to createPool. */
+    idleInTransactionMs?: number;
+    lockTimeoutMs?: number;
+  },
+): Promise<string[]> {
+  const limits = SESSION_LIMITS.flatMap((limit) => {
+    const ms = asked[limit.option];
+    return ms === undefined ? [] : [{ ...limit, ms }];
+  });
+  if (limits.length === 0) {
+    return [];
+  }
+  let rows: { name: unknown; setting: unknown; unit: unknown }[];
+  try {
+    ({ rows } = await pool.query<{ name: unknown; setting: unknown; unit: unknown }>(
+      'select name, setting, unit from pg_settings where name = any($1)',
+      [limits.map(({ setting }) => setting)],
+    ));
+  } catch (error) {
+    return [`${name}: session limits could not be read (${sqlstateOf(error) ?? 'none'}).`];
+  }
+  const read = limits.map((limit) => {
+    const row = rows.find((candidate) => candidate.name === limit.setting);
+    return { ...limit, value: row === undefined ? null : durationOf(row.setting, row.unit) };
+  });
+  const inForce = read.flatMap(({ setting, ms, value }) =>
+    value?.ms === ms ? [`${setting}=${value.text}`] : [],
+  );
+  if (inForce.length === read.length) {
+    return [
+      `${name}: session ${read.length === 1 ? 'limit' : 'limits'} in force: ${inForce.join(' ')}`,
+    ];
+  }
+  // One line for each limit not in force, and none for those that are.
+  return read.flatMap(({ setting, ms, value, without }) =>
+    value?.ms === ms
+      ? []
+      : [
+          `${name}: session limit ${setting} is ${value?.text ?? 'unreadable'}, not ${String(ms)}ms: ${without}.`,
+        ],
+  );
+}

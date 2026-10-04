@@ -57,6 +57,7 @@ import {
 import { databaseTime } from '../domain/database-time.ts';
 import type { JourneyForHeartbeat, JourneyState, UnendedJourney } from '../domain/journey.ts';
 import { sqlstateOf } from '../domain/sqlstate.ts';
+import { LOCK_WAIT_LIMIT_MS } from '../domain/watchdog.ts';
 import type {
   AlertMessage,
   ClaimedMessages,
@@ -138,17 +139,26 @@ const asMessage = (row: MessageRow): AlertMessage => ({
 
 /**
  * The open, inside its transaction. Throws to roll back: a move that changed
- * no row, or a journey with nobody to tell, is never half-written.
+ * no row, or a journey with nobody to tell, is never half-written. Marks
+ * `progress.rowTaken` once the journey's row is taken, so a lock that ran out
+ * after that is known to be another one.
  */
 async function openInside(
   tx: Pick<Database, 'execute' | 'select' | 'update'>,
   { journeyId, afterMs, lockWaitMs }: OpenRequest,
+  progress: { rowTaken: boolean },
 ): Promise<OpenLostContactAlertResult> {
-  if (lockWaitMs !== undefined) {
-    // SET LOCAL, for this transaction only: the pool's own setting stands
-    // for every other statement. set_config takes parameters; SET does not.
-    await tx.execute(sql`select set_config('lock_timeout', ${String(lockWaitMs)}, true)`);
-  }
+  // Every open bounds its own waits (D-108): `skip locked` covers only the
+  // journey's row, and the open takes other locks. Each outbox row's insert
+  // takes a key-share lock on its responder's users row, and the alert's
+  // insert can wait on the one-unresolved-alert index. Without a limit, one
+  // users row held by anything would stop this sweep, and every sweep after
+  // it. A waiting open waits that long for the journey's row too. SET LOCAL,
+  // for this transaction only: the pool keeps no lock limit of its own.
+  // set_config takes parameters; SET does not.
+  await tx.execute(
+    sql`select set_config('lock_timeout', ${String(lockWaitMs ?? LOCK_WAIT_LIMIT_MS)}, true)`,
+  );
   // The row, taken again under the lock with this transaction's now(): a
   // heartbeat committed after the read moved last contact, and a sweep that
   // got here first moved the state, and either one means no row. Without a
@@ -165,6 +175,7 @@ async function openInside(
       ),
     )
     .for('update', lockWaitMs === undefined ? { skipLocked: true } : {});
+  progress.rowTaken = true;
   if (locked === undefined) {
     return { outcome: 'skipped' };
   }
@@ -398,13 +409,19 @@ export function databaseJourneyStore(db: Database): JourneyStore & WatchdogStore
     },
 
     async openLostContactAlert(request: OpenRequest): Promise<OpenLostContactAlertResult> {
+      const progress = { rowTaken: false };
       try {
-        return await db.transaction((tx) => openInside(tx, request));
+        return await db.transaction((tx) => openInside(tx, request, progress));
       } catch (error) {
-        // Only an open that asked to wait can run out of wait. Answered, not
-        // thrown: the watchdog reports a held journey, and that is not a
-        // failure of the database.
-        if (request.lockWaitMs !== undefined && sqlstateOf(error) === LOCK_NOT_AVAILABLE) {
+        // Only a waiting open's wait for the journey's own row is answered,
+        // as held, not thrown: the watchdog reports that journey, and a row
+        // someone holds is not a failure of the database. Any other lock that
+        // ran out, in either attempt, is a failed open, and is thrown.
+        if (
+          request.lockWaitMs !== undefined &&
+          !progress.rowTaken &&
+          sqlstateOf(error) === LOCK_NOT_AVAILABLE
+        ) {
           return { outcome: 'held' };
         }
         throw error;

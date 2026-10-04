@@ -34,8 +34,12 @@ import {
   uuid,
   type PgColumn,
 } from 'drizzle-orm/pg-core';
-import { ALERT_STATES, JOURNEY_STATES } from '../domain/journey.ts';
-import type { MessageKind, PushFailureReason } from '../ports.ts';
+import {
+  ALERT_STATES,
+  JOURNEY_STATES,
+  MESSAGE_KINDS,
+  PUSH_FAILURE_REASONS,
+} from '../domain/journey.ts';
 
 /**
  * A single row saying when the worker last checked in.
@@ -243,18 +247,8 @@ export const alerts = pgTable(
   ],
 );
 
-/** The kinds of message there are. Only the lost-contact alert, for now. */
-export const messageKind = pgEnum('message_kind', [
-  'LOST_CONTACT',
-] as const satisfies readonly MessageKind[]);
-
-/** Why the push port did not accept a message: its four reasons, and nothing else. */
-const PUSH_FAILURE_REASONS = [
-  'NO_TARGET',
-  'REFUSED',
-  'UNAVAILABLE',
-  'NOT_CONFIGURED',
-] as const satisfies readonly PushFailureReason[];
+/** The kinds of message there are, exactly as the domain lists them. Only the lost-contact alert, for now. */
+export const messageKind = pgEnum('message_kind', MESSAGE_KINDS);
 
 /**
  * The outbox (LOST-02, AR-05, D-108): one row per message an alert causes,
@@ -296,5 +290,11 @@ export const outbox = pgTable(
       'outbox_last_failure_check',
       sql`${table.lastFailure} in (${sql.raw(PUSH_FAILURE_REASONS.map((reason) => `'${reason}'`).join(', '))})`,
     ),
+    // The claim's: the unsent messages, in the order the claim takes them.
+    // It runs every 10 s against a table that only grows, since a sent row
+    // stays until retention removes it (M4), and this holds the unsent alone.
+    index('outbox_unsent_due_index')
+      .on(table.nextAttemptAt, table.id)
+      .where(sql`${table.sentAt} is null`),
   ],
 );

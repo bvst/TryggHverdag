@@ -9,8 +9,7 @@
  *     AR-06's 10 to 15 s (D-107);
  *   - a session idle inside a transaction is ended after
  *     IDLE_IN_TRANSACTION_LIMIT_MS, and the API waits at most
- *     LOCK_WAIT_LIMIT_MS for a row, as does the sweep's one waiting attempt
- *     (D-108);
+ *     LOCK_WAIT_LIMIT_MS for a row, as does every open of an alert (D-108);
  *   - a journey still ACTIVE STUCK_AFTER_MS past the threshold, that a sweep
  *     could not move, is reported, and stops the beat. That is more than one
  *     interval plus the idle limit, so a stall the limit already ends is
@@ -39,9 +38,10 @@ export const IDLE_IN_TRANSACTION_LIMIT_MS = 10_000;
 
 /**
  * How long a statement waits for a row another session holds (lock_timeout):
- * on the API's pool for every statement, and in the sweep's one waiting
- * attempt for a journey past STUCK_AFTER_MS. Above any wait this code
- * causes, and under the idle limit that ends a frozen holder.
+ * on the API's pool for every statement, and in every open of a journey's
+ * alert, for its own transaction, the sweep's one waiting attempt for a
+ * journey past STUCK_AFTER_MS included. Above any wait this code causes, and
+ * under the idle limit that ends a frozen holder.
  */
 export const LOCK_WAIT_LIMIT_MS = 5_000;
 

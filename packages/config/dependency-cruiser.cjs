@@ -95,10 +95,21 @@ const PG = [...packagePatterns('pg'), ...packagePatterns('@types/pg')];
 const DRIZZLE_NODE_POSTGRES = packagePatterns('drizzle-orm', 'node-postgres');
 const DRIZZLE_MIGRATOR = packagePatterns('drizzle-orm', 'node-postgres/migrator');
 const GRAPHILE_WORKER = packagePatterns('graphile-worker');
+/** A dev dependency, and its `api` entry builds a pg.Pool of its own: any subpath. */
+const DRIZZLE_KIT = packagePatterns('drizzle-kit');
 /** The one file that opens connections, the one that migrates through it, and the worker. */
 const DATABASE_ADAPTER = '^apps/server/src/adapters/db\\.ts$';
 const MIGRATIONS = '^apps/server/src/adapters/migrations\\.ts$';
 const WORKER = '^apps/server/src/worker\\.ts$';
+/** What the drizzle-kit command reads to generate migrations. */
+const DRIZZLE_CONFIG = '^apps/server/drizzle\\.config\\.ts$';
+
+// A path that does not run through `node_modules`: neither starting with it
+// nor holding it as a folder further down. Written as two alternatives, not
+// as one optional group (`(.*/)?node_modules/`), because depcruise refuses to
+// run a pattern whose quantified group holds a `*`, as one that could run
+// very slowly.
+const OUTSIDE_NODE_MODULES = '^(?!node_modules/|.*/node_modules/)';
 
 /** @type {import('dependency-cruiser').IConfiguration} */
 module.exports = {
@@ -171,6 +182,22 @@ module.exports = {
       to: { path: GRAPHILE_WORKER },
     },
     {
+      name: 'drizzle-kit-only-in-its-config',
+      severity: 'error',
+      comment:
+        "AR-10, D-108: drizzle-kit's api entry builds a pg.Pool of its own, outside createPool's connection budget, session limits and error listeners. Only apps/server/drizzle.config.ts imports it, for defineConfig, which the drizzle-kit command reads to generate migrations; that file opens no connection. Tests are exempt.",
+      from: { path: PRODUCTION, pathNot: [DRIZZLE_CONFIG, TEST_FILE] },
+      to: { path: DRIZZLE_KIT },
+    },
+    {
+      name: 'production-imports-no-test-file',
+      severity: 'error',
+      comment:
+        "AR-10, D-108: production code imports no file named like a test. Every rule that exempts tests exempts that file's own imports too, so a production file could otherwise reach pg, graphile-worker or the test kit through a helper it imports from a .test.ts.",
+      from: { path: PRODUCTION, pathNot: TEST_FILE },
+      to: { path: TEST_FILE },
+    },
+    {
       name: 'ui-cannot-reach-the-safety-core',
       severity: 'error',
       comment:
@@ -188,7 +215,11 @@ module.exports = {
         'AR-09: only the safety core may import the background-location SDK, so it stays replaceable (the D-023 fallback).',
       from: { pathNot: SAFETY_CORE },
       // Both forms: the bare name, while the SDK is not installed, and the
-      // path it resolves to once it is (LOST-02-AC25).
+      // path it resolves to once it is (LOST-02-AC25). The first pattern,
+      // with no end after the name, stays on purpose: it also catches, by
+      // name, a sibling package whose name begins the same, such as a
+      // platform's or a licence's own variant of the SDK. packagePatterns
+      // ends the name, so it matches the SDK alone.
       to: {
         path: [
           '^react-native-background-geolocation',
@@ -258,17 +289,19 @@ module.exports = {
     // An installed package is a target every rule can match, but its own
     // imports are not cruised.
     doNotFollow: { path: 'node_modules' },
-    // Build output is not ours to check, outside node_modules only. Nothing
-    // inside node_modules is excluded: depcruise resolves an installed
-    // package to its real path under pnpm's store, and an excluded module is
-    // not a target any rule can match, so a rule naming a package would see
-    // nothing, and a package whose entry is under dist/ would be hidden too
-    // (LOST-02-AC25, D-108). apps/mobile/android and ios are what `expo
-    // prebuild` generates: on disk after a local build, never committed, and
-    // not ours to check (INF-06).
+    // What is not ours to check:
+    //   - build output (dist, build, coverage, .turbo, .expo), but only where
+    //     the path does not run through node_modules;
+    //   - apps/mobile/android and ios, which `expo prebuild` generates: on
+    //     disk after a local build, and never committed (INF-06).
+    // Nothing inside node_modules is excluded (LOST-02-AC25, D-108).
+    // depcruise resolves an installed package to its real path under pnpm's
+    // store, and an excluded module is not a target any rule can match. So
+    // excluding node_modules, or a dist/ inside it, would leave every rule
+    // that names a package matching nothing.
     exclude: {
       path: [
-        '^(?!(^|.*/)node_modules/).*(^|/)(dist|build|coverage|\\.turbo|\\.expo)/',
+        `${OUTSIDE_NODE_MODULES}.*(^|/)(dist|build|coverage|\\.turbo|\\.expo)/`,
         '^apps/mobile/(android|ios)/',
       ],
     },

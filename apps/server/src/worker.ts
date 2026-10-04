@@ -16,10 +16,13 @@
  *     push does not wait for the interval.
  * Two loops, not one, so a push provider that never answers stalls delivery
  * only, and no sweep waits behind it. A run that throws is said in one line,
- * and the next run happens: nothing that goes wrong in a run stops a loop,
- * and a loop that stopped anyway would show as a beat that stopped. The loops
- * keep time with timers here, in the process, and every due time stays in the
- * database, so a restart loses nothing.
+ * and the next run happens: nothing that goes wrong in a run stops a loop.
+ * Only the sweep loop is watched: it feeds the beat, so a sweep loop that
+ * stopped anyway shows as a beat that stopped. The delivery loop has no such
+ * signal, and a delivery that is wedged, or fails every time, pages nobody
+ * until task 8's canary checks that its test responder was pushed to. The
+ * loops keep time with timers here, in the process, and every due time stays
+ * in the database, so a restart loses nothing.
  *
  * And a minute task, on Graphile Worker's cron, that checks in with
  * Healthchecks.io when the watchdog's beat is fresh: at most BEAT_FRESH_MS old
@@ -34,7 +37,7 @@
 import { run, type Runner, type TaskList } from 'graphile-worker';
 import process from 'node:process';
 import { databaseClock } from './adapters/clock.ts';
-import { POOL_SIZE, createDatabase, createPool } from './adapters/db.ts';
+import { POOL_SIZE, createDatabase, createPool, sessionLimitsLines } from './adapters/db.ts';
 import { healthchecksCheckIn } from './adapters/healthchecks.ts';
 import { databaseJourneyStore } from './adapters/journeys.ts';
 import { databaseWorkerHeartbeats } from './adapters/worker-heartbeats.ts';
@@ -127,34 +130,37 @@ interface Loops {
 
 /**
  * Starts the sweep loop and the delivery loop. Each runs at once, and then
- * again `intervalMs` after its previous run finished. A sweep that opened an
- * alert wakes the delivery loop: at once, or, with a delivery in flight, as
- * soon as that one finishes.
+ * again WATCHDOG_INTERVAL_MS after its previous run finished. A sweep that
+ * opened an alert wakes the delivery loop: at once, or, with a delivery in
+ * flight, as soon as that one finishes.
  */
 function startLoops({
   watchdog,
   sender,
   write,
-  intervalMs = WATCHDOG_INTERVAL_MS,
 }: {
   watchdog: Watchdog;
   sender: PushSender;
   write: (text: string) => void;
-  intervalMs?: number;
 }): Loops {
   let stopping = false;
   const inFlight = new Set<Promise<void>>();
 
   /**
    * One loop: `runNow` starts a run unless one is in flight, in which case
-   * another follows it at once. Once stopping, a run that finishes starts
-   * nothing and sets no timer, and `stop` has cleared the one that was set.
+   * another follows it at once. Once stopping, `runNow` starts nothing,
+   * whoever calls it: a sweep that opened an alert, an `again` left by a run
+   * in flight, or a timer that had already fired. A run that finishes then
+   * sets no timer, and `stop` has cleared the one that was set.
    */
   const loop = (what: string, work: () => Promise<unknown>) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let running = false;
     let again = false;
     const runNow = (): void => {
+      if (stopping) {
+        return;
+      }
       if (running) {
         again = true;
         return;
@@ -167,7 +173,7 @@ function startLoops({
           () => undefined,
           (error: unknown) => {
             write(
-              `worker: the ${what} failed, and runs again in ${String(intervalMs)} ms: ` +
+              `worker: the ${what} failed, and runs again in ${String(WATCHDOG_INTERVAL_MS)} ms: ` +
                 `${describeFailure(error)}\n`,
             );
           },
@@ -181,7 +187,7 @@ function startLoops({
           if (again) {
             runNow();
           } else {
-            timer = setTimeout(runNow, intervalMs);
+            timer = setTimeout(runNow, WATCHDOG_INTERVAL_MS);
           }
         });
       inFlight.add(run);
@@ -197,8 +203,8 @@ function startLoops({
   const deliveries = loop('delivery', () => sender.deliverDue());
   const sweeps = loop('sweep', async () => {
     const { opened } = await watchdog.sweep();
-    // Not once stopping: a stop starts no further run.
-    if (opened > 0 && !stopping) {
+    // Once stopping, runNow starts nothing: a stop starts no further run.
+    if (opened > 0) {
       deliveries.runNow();
     }
   });
@@ -226,19 +232,27 @@ export type RunWorker = typeof run;
 export interface Worker {
   /**
    * Starts no further sweep or delivery, waits for the ones in flight, stops
-   * the runner, which aborts a check-in in flight, then ends the connection
-   * pool. Graphile Worker only ends pools it created itself, and this one was
-   * handed to it — left open, every restart would leak connections against a
-   * database that allows five (D-068).
+   * the runner, which aborts a check-in in flight, waits for the limits'
+   * read-back if one is in flight, then ends the connection pool. Graphile
+   * Worker only ends pools it created itself, and this one was handed to it —
+   * left open, every restart would leak connections against a database that
+   * allows five (D-068).
    */
   stop: () => Promise<void>;
   /**
-   * Settles when the runner does: quietly after `stop()`, and as a failure if
-   * it ended any other way. A worker process that exits with 0 is one the
-   * platform does not restart, and a worker that is not running is a watchdog
-   * that is not watching.
+   * Settles when the runner does: quietly after `stop()`, once the stop has
+   * finished, and as a failure if it ended any other way. A worker process
+   * that exits with 0 is one the platform does not restart, and a worker that
+   * is not running is a watchdog that is not watching.
    */
   untilStopped: () => Promise<void>;
+  /**
+   * Reads back, once, the session limit the pool asked for, and writes one
+   * line saying whether it is in force (D-109). Never rejects: the worker
+   * runs whatever it reads. The worker process calls it at start, and
+   * `stop()` waits for it before it ends the pool.
+   */
+  readLimitsBack: () => Promise<void>;
 }
 
 /** What a worker is started with. Each is injectable for tests; production takes the defaults. */
@@ -272,15 +286,12 @@ export async function startWorker(
   }: WorkerOptions = {},
 ): Promise<Worker> {
   // The idle limit (D-108): a sweep holds a journey's row for milliseconds,
-  // and a session frozen with one is ended. No lock limit: the sweep and the
-  // claim take rows with `skip locked`, the one waiting attempt sets its own
-  // for its transaction, and Graphile Worker's statements share this pool.
-  // The listeners are on the pool before Graphile Worker is handed it.
-  const pool = createPool(connectionString, POOL_SIZE.worker, {
-    name: 'worker',
-    log,
-    idleInTransactionMs: IDLE_IN_TRANSACTION_LIMIT_MS,
-  });
+  // and a session frozen with one is ended. No lock limit on the pool: every
+  // open sets its own for its transaction, the claim takes rows with `skip
+  // locked`, and Graphile Worker's statements share this pool. The listeners
+  // are on the pool before Graphile Worker is handed it.
+  const limits = { idleInTransactionMs: IDLE_IN_TRANSACTION_LIMIT_MS };
+  const pool = createPool(connectionString, POOL_SIZE.worker, { name: 'worker', log, ...limits });
   const db = createDatabase(pool);
   const heartbeats = databaseWorkerHeartbeats(db);
   const journeys = databaseJourneyStore(db);
@@ -314,12 +325,26 @@ export async function startWorker(
   });
 
   let stopRequested = false;
+  let stopped = Promise.resolve();
+  let limitsRead = Promise.resolve();
   return {
-    async stop() {
+    readLimitsBack() {
+      limitsRead = sessionLimitsLines(pool, { name: 'worker', ...limits }).then((lines) => {
+        for (const line of lines) {
+          write(`${line}\n`);
+        }
+      });
+      return limitsRead;
+    },
+    stop() {
       stopRequested = true;
-      await loops.stop();
-      await runner.stop();
-      await pool.end();
+      stopped = (async () => {
+        await loops.stop();
+        await runner.stop();
+        await limitsRead;
+        await pool.end();
+      })();
+      return stopped;
     },
     async untilStopped() {
       // With Graphile Worker 0.18 this promise never rejects: a runner that
@@ -330,6 +355,11 @@ export async function startWorker(
       if (!stopRequested) {
         throw new Error('The worker stopped without being asked to, so nothing is watching.');
       }
+      // Asked to stop: settled once the whole stop has finished, its pool
+      // ended, not only its runner. A query still in flight, such as the
+      // limits' read-back, holds the pool's end, and whoever awaits this,
+      // the worker process, is done only when the worker is.
+      await stopped;
     },
   };
 }
@@ -359,11 +389,13 @@ function keepProcessAlive(): void {
  * does not exit: CC_WORKER_RESTART is "always", and an exit would be
  * restarted every few seconds for as long as the build lasts.
  *
- * It checks in with Healthchecks.io after each fresh beat when
- * HEALTHCHECKS_WORKER_URL allows it (INF-08), and says at start whether it
- * does and, if not, why. Never where: the ping URL is a secret. Left out, the
- * setting counts as unset. It also says at start that no push provider is
- * configured: its push is UNCONFIGURED_PUSH until M3.
+ * It checks in with Healthchecks.io once a minute while the watchdog's beat
+ * is fresh, when HEALTHCHECKS_WORKER_URL allows it (INF-08), and says at
+ * start whether it does and, if not, why. Never where: the ping URL is a
+ * secret. Left out, the setting counts as unset. It also says at start that
+ * no push provider is configured: its push is UNCONFIGURED_PUSH until M3.
+ * And once it has started, it reads back the session limit its pool asked
+ * for, and says whether it is in force (D-109).
  */
 export async function runWorkerProcess(
   connectionString: string,
@@ -400,7 +432,9 @@ export async function runWorkerProcess(
   }
   let checkIn: CheckIn | undefined;
   if (healthchecks.checkingIn) {
-    write('worker: checking in with Healthchecks.io after every fresh beat.\n');
+    write(
+      "worker: checking in with Healthchecks.io once a minute while the watchdog's beat is fresh.\n",
+    );
     checkIn = createCheckIn(healthchecks.url);
   } else {
     write(`worker: not checking in with Healthchecks.io: ${healthchecks.reason}\n`);
@@ -419,6 +453,10 @@ export async function runWorkerProcess(
     watchdog,
     sender,
   });
+  // Asking is not getting (D-109): the limit read back once, and said. Not
+  // awaited, and never a reason not to run: a worker that refused to start
+  // would watch nobody. The stop waits for it.
+  void worker.readLimitsBack();
   exitOnSignal({ name: 'worker', signals, stop: worker.stop, ...reporting });
   await worker.untilStopped();
 }

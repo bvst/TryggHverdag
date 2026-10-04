@@ -51,7 +51,7 @@ export function healthchecksCheckIn({
           signal: signal === undefined ? timeout : AbortSignal.any([signal, timeout]),
         });
       } catch (error: unknown) {
-        throw notReached(error, timeoutMs);
+        throw notReached(error, timeoutMs, signal);
       }
       if (!response.ok) {
         throw new Error(`Healthchecks.io answered ${String(response.status)}.`);
@@ -60,7 +60,16 @@ export function healthchecksCheckIn({
   };
 }
 
-function notReached(error: unknown, timeoutMs: number): Error {
+/**
+ * Why a check-in got no answer, in words chosen here. Ended by the caller's
+ * signal, it was the worker stopping, and is said as that, so whoever reads
+ * the log does not go looking for a network fault. Otherwise a timeout, or an
+ * address that could not be reached.
+ */
+function notReached(error: unknown, timeoutMs: number, signal: AbortSignal | undefined): Error {
+  if (signal?.aborted === true) {
+    return new Error('Healthchecks.io check-in cancelled: the worker is stopping.');
+  }
   if (error instanceof DOMException && error.name === 'TimeoutError') {
     return new Error(`Healthchecks.io did not answer within ${String(timeoutMs)} ms.`);
   }

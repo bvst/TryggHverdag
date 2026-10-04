@@ -50,6 +50,27 @@ export const ALERT_STATES = ['OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED'] as
 export type AlertState = (typeof ALERT_STATES)[number];
 
 /**
+ * Every kind of message an alert causes: only the lost-contact alert, for
+ * now. The database admits exactly these.
+ */
+export const MESSAGE_KINDS = ['LOST_CONTACT'] as const;
+
+export type MessageKind = (typeof MESSAGE_KINDS)[number];
+
+/**
+ * Every reason the push port gives for not accepting a message, and no
+ * others: one list, which the port, the outbox's check and the log all take.
+ */
+export const PUSH_FAILURE_REASONS = [
+  'NO_TARGET',
+  'REFUSED',
+  'UNAVAILABLE',
+  'NOT_CONFIGURED',
+] as const;
+
+export type PushFailureReason = (typeof PUSH_FAILURE_REASONS)[number];
+
+/**
  * How long a journey may be silent before its responders are alerted: five
  * minutes, counted "or more" (D-021). Changing it needs the owner.
  */
