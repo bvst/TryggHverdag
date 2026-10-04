@@ -15,89 +15,31 @@
 // it cannot be reached.
 import {
   apiPath,
-  fakePostgres,
   syntheticCredential,
   syntheticHeartbeat,
   syntheticUuid,
   type FakePostgresHandler,
-  type FakePostgresQuery,
 } from '@trygghverdag/test-kit';
-import { createServer, type AddressInfo, type Socket } from 'node:net';
 import process from 'node:process';
 import { describe, expect, test, vi } from 'vitest';
 import { startApiProcess } from './api-process.ts';
+import { captured, markersIn } from './capture.test.ts';
+// The test kit's fake PostgreSQL server on a local port, for a process to
+// connect to by URL. It lived here until LOST-02, whose worker tests need it
+// too; it moved, unchanged in what it does, to fake-postgres-server.test.ts,
+// which also holds its controls and the two abilities LOST-02 added: a
+// connection's startup parameters, and ending a connection as PostgreSQL ends
+// a session. No assertion of this file changed with the move.
+import {
+  askedFor,
+  eventually,
+  listeningFakePostgres,
+  quietDatabase,
+  sessionSetting,
+} from './fake-postgres-server.test.ts';
 
 /** A socket directory that does not exist: every query fails in milliseconds, offline. */
 const NO_DATABASE = 'postgres:///db?host=/nonexistent-socket-dir';
-
-/**
- * The test kit's fake PostgreSQL server on a local port, for a process to
- * connect to by URL. It records what it is asked and answers through
- * `handler`. No password: the fake lets anyone in, so none is ever written
- * here.
- *
- * The fake throws on anything it would otherwise have to guess at (a message
- * it does not speak, an answer it cannot encode). Thrown inside the socket's
- * data handler, that was an uncaught exception, and the request waited for a
- * reply until the test timed out (test audit, test-auditor). So the throw is
- * caught, the connection is closed, which fails the request at once, and
- * `close()` rejects with what the fake said. Every test awaits `close()` in
- * its `finally`, so it fails with the fake's own message, in place of
- * whatever the failed request made it assert, and even when the request
- * somehow succeeded.
- */
-async function listeningFakePostgres(handler: FakePostgresHandler): Promise<{
-  url: string;
-  queries: readonly FakePostgresQuery[];
-  close: () => Promise<void>;
-}> {
-  const database = fakePostgres(handler);
-  const sockets = new Set<Socket>();
-  const thrown: unknown[] = [];
-  const server = createServer((socket) => {
-    sockets.add(socket);
-    socket.on('close', () => sockets.delete(socket));
-    const connection = database.connect();
-    socket.on('data', (chunk) => {
-      let reply: Uint8Array;
-      try {
-        reply = connection.receive(chunk);
-      } catch (error) {
-        thrown.push(error);
-        socket.destroy();
-        return;
-      }
-      socket.write(reply);
-    });
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const { port } = server.address() as AddressInfo;
-  return {
-    url: `postgres://synthetic@127.0.0.1:${String(port)}/synthetic`,
-    queries: database.queries,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        for (const socket of sockets) socket.destroy();
-        server.close(() => {
-          if (thrown.length === 0) {
-            resolve();
-            return;
-          }
-          const said = thrown.map((error) =>
-            error instanceof Error ? error.message : String(error),
-          );
-          reject(
-            new Error(
-              `The fake PostgreSQL server threw, and closed the connection: ${said.join(' | ')}`,
-              { cause: thrown[0] },
-            ),
-          );
-        });
-      }),
-  };
-}
 
 describe('startApiProcess, and the journey route it serves', () => {
   test('SM-01-AC12: credentials are checked against the database, so with none reachable a credential is a 500, not a 401', async () => {
@@ -440,6 +382,145 @@ describe('LOST-01: what the process hands the journey module for a heartbeat, se
       ).toEqual([]);
     } finally {
       spy.mockRestore();
+      await api.stop();
+      await database.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LOST-02: the API's pool. Its session limits (approach item 7), and its
+// listeners for a connection PostgreSQL ends (approach item 8, D-068).
+// ---------------------------------------------------------------------------
+
+describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from the process’s output', () => {
+  const DATABASE_NOW = '2031-02-03 04:05:06.789+00';
+
+  /** Health's two queries: the time, and no worker beat yet. Anything a pool sends on connect is answered. */
+  const healthDatabase: FakePostgresHandler = (query) =>
+    /\bnow\(\)/i.test(query.text)
+      ? { columns: ['now'], rows: [[DATABASE_NOW]] }
+      : quietDatabase(query);
+
+  /** The lines a capture saw that are the given log event, parsed. */
+  function eventLines(written: string, event: string): unknown[] {
+    return written
+      .split('\n')
+      .filter((line) => line.includes(`"event":"${event}"`))
+      .map((line) => JSON.parse(line.slice(line.indexOf('{'))) as unknown);
+  }
+
+  async function health(port: number): Promise<number> {
+    return (await fetch(`http://127.0.0.1:${String(port)}${apiPath('health')}`)).status;
+  }
+
+  test('LOST-02-AC17: the API’s pool asks, for every connection it makes, idle_in_transaction_session_timeout 10 000 ms and lock_timeout 5 000 ms', async () => {
+    const database = await listeningFakePostgres(healthDatabase);
+    const api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+
+    try {
+      expect(await health(api.port)).toBe(200);
+
+      const connections = database.connections();
+      expect(connections.length).toBeGreaterThan(0);
+      for (const connection of connections) {
+        expect(sessionSetting(connection, 'idle_in_transaction_session_timeout')).toBe(10_000);
+        expect(sessionSetting(connection, 'lock_timeout')).toBe(5_000);
+      }
+    } finally {
+      await api.stop();
+      await database.close();
+    }
+  });
+
+  test('LOST-02-AC18: an idle connection ended with a fatal error is exactly one database_error line, pool api and its SQLSTATE; nothing written holds the password, the URL or the message; and the pool serves the next request', async () => {
+    const marker = syntheticCredential();
+    const database = await listeningFakePostgres(healthDatabase, { password: marker });
+    const message = `terminating connection due to administrator command for ${database.url}`;
+    const api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+
+    try {
+      const { result: statuses, written } = await captured(async () => {
+        const before = await health(api.port);
+        const [connection] = database.connections();
+        if (connection === undefined) {
+          throw new Error('the health check made no connection');
+        }
+        database.end(connection, { code: '57P01', message });
+        await eventually(() => database.connections().length === 1 && connection.ended);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return [before, await health(api.port)];
+      });
+
+      expect(statuses).toEqual([200, 200]);
+      expect(database.connections().length).toBe(2);
+      expect(eventLines(written, 'database_error')).toEqual([
+        { event: 'database_error', pool: 'api', code: '57P01' },
+      ]);
+      expect(markersIn(written, [marker, database.url, message, 'administrator command'])).toEqual(
+        [],
+      );
+    } finally {
+      await api.stop();
+      await database.close();
+    }
+  });
+
+  test('LOST-02-AC18: a connection ended while a heartbeat holds it, between two queries, is exactly one database_error line, pool api and its SQLSTATE; the heartbeat is a 500, nothing written holds the password or the message, and the pool serves the next request', async () => {
+    const marker = syntheticCredential();
+    const credential = syntheticCredential();
+    const device = { id: syntheticUuid(), userId: syntheticUuid() };
+    const journeyId = syntheticUuid();
+    const journey: Record<string, string | null> = {
+      id: journeyId,
+      walker_id: device.userId,
+      device_id: device.id,
+      state: 'ACTIVE',
+      started_at: '2031-02-03 03:00:00+00',
+      last_heartbeat_at: null,
+    };
+    const database = await listeningFakePostgres(
+      (query) => {
+        const { text } = query;
+        if (/\bfrom "?devices"?/i.test(text)) {
+          return { columns: ['id', 'user_id'], rows: [[device.id, device.userId]] };
+        }
+        if (/\bfrom "?journeys"?/i.test(text)) {
+          const columns = askedFor(text);
+          return { columns, rows: [columns.map((column) => journey[column] ?? null)] };
+        }
+        return healthDatabase(query);
+      },
+      { password: marker },
+    );
+    const message = `terminating connection due to idle-in-transaction timeout ${marker}`;
+    // Right after the heartbeat's row lock is answered: the client still holds the connection.
+    database.endAfter(/\bfor update\b/i, { code: '25P03', message });
+    const api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+
+    try {
+      const { result: statuses, written } = await captured(async () => {
+        const heartbeat = await fetch(
+          `http://127.0.0.1:${String(api.port)}${apiPath('heartbeats')}`,
+          {
+            method: 'POST',
+            headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' },
+            body: JSON.stringify(syntheticHeartbeat({ journeyId })),
+          },
+        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return [heartbeat.status, await health(api.port)];
+      });
+
+      expect(statuses).toEqual([500, 200]);
+      expect(database.connections().some((connection) => connection.ended)).toBe(true);
+      expect(eventLines(written, 'database_error')).toEqual([
+        { event: 'database_error', pool: 'api', code: '25P03' },
+      ]);
+      expect(markersIn(written, [marker, database.url, message, 'idle-in-transaction'])).toEqual(
+        [],
+      );
+    } finally {
       await api.stop();
       await database.close();
     }

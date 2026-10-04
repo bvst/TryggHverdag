@@ -13,7 +13,13 @@
 // Needs Docker, like every *.integration.test.ts: CI runs it, a cloud session
 // cannot.
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { syntheticCredential, syntheticUuid } from '@trygghverdag/test-kit';
+import {
+  syntheticBatteryLevel,
+  syntheticCredential,
+  syntheticEventId,
+  syntheticPosition,
+  syntheticUuid,
+} from '@trygghverdag/test-kit';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { addJobAdhoc } from 'graphile-worker';
 import { spawn } from 'node:child_process';
@@ -378,6 +384,171 @@ describe('D-101: the migration refuses to guess the device of a journey that alr
     expect(addsDevice[0]).not.toMatch(/\bdefault\b/i);
     expect(text).not.toMatch(/\bupdate\s+("?public"?\.)?"?journeys"?/i);
     expect(text).not.toMatch(/\bdelete\s+from\s+("?public"?\.)?"?journeys"?/i);
+    expect(text).not.toMatch(/\btruncate\b/i);
+  });
+});
+
+// LOST-02's migration, 0003, adds the alerts and the outbox. Unlike 0002 it
+// has nothing to guess, so it must run over a database that already holds
+// journeys, in every state, with their heartbeats and positions, and change
+// none of those rows. Staging's PostgreSQL, as everything in this file.
+
+/** A copy of the migrations folder holding `0000` to `0002` only: the schema before LOST-02. */
+function migrationsUpTo0002(): string {
+  const folder = mkdtempSync(path.join(tmpdir(), 'migrations-0002-'));
+  mkdirSync(path.join(folder, 'meta'));
+  const real = journal(MIGRATIONS);
+  const kept = real.entries.filter((entry) => /^000[012]_/.test(entry.tag));
+  expect(kept.map((entry) => entry.idx)).toEqual([0, 1, 2]);
+  for (const entry of kept) {
+    copyFileSync(path.join(MIGRATIONS, `${entry.tag}.sql`), path.join(folder, `${entry.tag}.sql`));
+  }
+  writeFileSync(
+    path.join(folder, 'meta', '_journal.json'),
+    JSON.stringify({ ...real, entries: kept }, null, 2),
+  );
+  return folder;
+}
+
+/** A fresh database in the PostgreSQL 15 container, migrated up to `0002` only, and dropped afterwards. */
+async function databaseAt0002(
+  use: (uri: string, client: pg.Client) => Promise<void>,
+): Promise<void> {
+  const name = `lost02_${syntheticUuid().replaceAll('-', '')}`;
+  const admin = new pg.Client({ connectionString: databaseUrl() });
+  await admin.connect();
+  await admin.query(`create database ${name}`);
+  const uri = withDatabase(databaseUrl(), name);
+  const folder = migrationsUpTo0002();
+  const client = new pg.Client({ connectionString: uri });
+  try {
+    const pool = createPool(uri, 1);
+    try {
+      await migrate(createDatabase(pool), { migrationsFolder: folder });
+    } finally {
+      await pool.end();
+    }
+    await client.connect();
+    await use(uri, client);
+  } finally {
+    await client.end().catch(() => undefined);
+    rmSync(folder, { recursive: true, force: true });
+    await admin.query(`drop database if exists ${name}`);
+    await admin.end();
+  }
+}
+
+/** A journey in `state`, with two responders, a heartbeat with a position and one without. */
+async function journeyIn(client: pg.Client, state: string): Promise<void> {
+  const { userId, deviceId } = await userWithDevice(client);
+  const responderIds = [syntheticUuid(), syntheticUuid()];
+  for (const responderId of responderIds) {
+    await client.query('insert into users (id) values ($1)', [responderId]);
+  }
+  const journeyId = syntheticUuid();
+  await client.query(
+    `insert into journeys (id, walker_id, device_id, state, started_at, last_heartbeat_at)
+     values ($1, $2, $3, $4, now() - interval '20 minutes', now() - interval '7 minutes')`,
+    [journeyId, userId, deviceId, state],
+  );
+  for (const responderId of responderIds) {
+    await client.query(
+      'insert into journey_responders (journey_id, responder_id) values ($1, $2)',
+      [journeyId, responderId],
+    );
+  }
+  const position = syntheticPosition();
+  const withPosition = await client.query<{ id: string }>(
+    `insert into heartbeats (journey_id, event_id, received_at, battery_level)
+     values ($1, $2, now() - interval '8 minutes', $3) returning id::text as id`,
+    [journeyId, syntheticEventId(), syntheticBatteryLevel()],
+  );
+  await client.query(
+    `insert into positions (heartbeat_id, latitude, longitude, accuracy_m, recorded_at)
+     values ($1, $2, $3, $4, $5)`,
+    [
+      withPosition.rows[0]?.id,
+      position.latitude,
+      position.longitude,
+      position.accuracyMeters,
+      position.recordedAt,
+    ],
+  );
+  await client.query(
+    `insert into heartbeats (journey_id, event_id, received_at, battery_level)
+     values ($1, $2, now() - interval '7 minutes', null)`,
+    [journeyId, syntheticEventId()],
+  );
+}
+
+/** Every row of every table 0003 could touch, as text, in a fixed order. */
+async function rowsBefore0003(client: pg.Client) {
+  const rows = async (table: string, order: string) =>
+    (
+      await client.query<{ value: string }>(
+        `select row_to_json(t)::text as value from ${table} t order by ${order}`,
+      )
+    ).rows.map((row) => row.value);
+  return {
+    users: await rows('users', 't.id'),
+    devices: await rows('devices', 't.id'),
+    journeys: await rows('journeys', 't.id'),
+    responders: await rows('journey_responders', 't.journey_id, t.responder_id'),
+    heartbeats: await rows('heartbeats', 't.id'),
+    positions: await rows('positions', 't.heartbeat_id'),
+    workerHeartbeat: await rows('worker_heartbeat', 't.id'),
+  };
+}
+
+describe('LOST-02: the alerts migration changes no row that is already there', () => {
+  test('LOST-02-AC23: a PostgreSQL 15 database at 0002, holding journeys in every state with heartbeats and positions, migrates through 0003 as the pre-run hook runs it; every existing row is unchanged, and alerts and outbox exist and are empty', async () => {
+    await databaseAt0002(async (uri, client) => {
+      const states = (
+        await client.query<{ state: string }>(
+          'select unnest(enum_range(null::journey_state))::text as state',
+        )
+      ).rows.map((row) => row.state);
+      expect(states).toEqual(['ACTIVE', 'LOST_CONTACT', 'ENDED']);
+      for (const state of states) {
+        await journeyIn(client, state);
+      }
+      await client.query(
+        "insert into worker_heartbeat (id, beat_at) values ('worker', now() - interval '1 minute')",
+      );
+      const before = await rowsBefore0003(client);
+      expect(before.journeys).toHaveLength(states.length);
+      expect(before.positions).toHaveLength(states.length);
+
+      await expect(migrateDatabase(uri)).resolves.toBeUndefined();
+
+      const tables = (
+        await client.query<{ name: string }>(
+          "select table_name as name from information_schema.tables where table_schema = 'public'",
+        )
+      ).rows.map((row) => row.name);
+      expect(tables).toEqual(expect.arrayContaining(['alerts', 'outbox']));
+      expect(await rowsBefore0003(client)).toEqual(before);
+      const counts = await client.query<{ alerts: number; outbox: number }>(
+        'select (select count(*)::int from alerts) as alerts, (select count(*)::int from outbox) as outbox',
+      );
+      expect(counts.rows).toEqual([{ alerts: 0, outbox: 0 }]);
+      const applied = await client.query<{ n: number }>(
+        'select count(*)::int as n from drizzle.__drizzle_migrations',
+      );
+      expect(applied.rows).toEqual([{ n: journal(MIGRATIONS).entries.length }]);
+    });
+  }, 120_000);
+
+  test('LOST-02-AC23: there is exactly one committed 0003 migration, it is in the journal, and it holds no update, delete or truncate', () => {
+    const files = readdirSync(MIGRATIONS).filter((file) => /^0003_.*\.sql$/.test(file));
+    expect(files, 'exactly one 0003 migration').toHaveLength(1);
+    expect(journal(MIGRATIONS).entries.map((entry) => `${entry.tag}.sql`)).toContain(files[0]);
+    const text = readFileSync(path.join(MIGRATIONS, files[0] ?? ''), 'utf8');
+
+    expect(text).toMatch(/\bcreate table\s+("?public"?\.)?"?alerts"?/i);
+    expect(text).toMatch(/\bcreate table\s+("?public"?\.)?"?outbox"?/i);
+    expect(text).not.toMatch(/\bupdate\s+("?public"?\.)?"?[a-z_]+"?\s+set\b/i);
+    expect(text).not.toMatch(/\bdelete\s+from\b/i);
     expect(text).not.toMatch(/\btruncate\b/i);
   });
 });

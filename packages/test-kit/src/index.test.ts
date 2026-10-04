@@ -21,6 +21,14 @@ describe('the test kit', () => {
     expect(typeof kit.fc.asyncProperty).toBe('function');
   });
 
+  test('hands out the push fake beside the store fake and the shared suite, which now hold the watchdog’s and the outbox’s side', () => {
+    expect(typeof kit.fakePush).toBe('function');
+    expect(typeof kit.fakeJourneyStore).toBe('function');
+    expect(kit.JOURNEY_STORE_BEHAVIOUR.some(({ name }) => name.includes('the overdue read'))).toBe(
+      true,
+    );
+  });
+
   test('hands out a synthetic ping URL that cannot reach anything, and cannot name a real check', () => {
     // Every INF-08 test that could fetch it relies on this: https, so the
     // worker accepts it, but port 1 on the loopback address, which fetch

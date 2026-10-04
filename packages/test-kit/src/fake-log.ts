@@ -18,10 +18,24 @@
  * writes anywhere itself. Matches the server's Log port by shape.
  */
 
-/** Every event the server may log, and nothing else. */
+/**
+ * Every event the server may log, and nothing else. LOST-02 adds the last
+ * five: the watchdog's and the sender's failures, a journey the watchdog
+ * cannot move, and a connection's error, each with a stage, a reason, a pool
+ * or a SQLSTATE, and never a message.
+ */
 export type FakeLogEvent =
   | { event: 'heartbeat_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
-  | { event: 'heartbeat_failed'; stage: 'clock' | 'read' | 'store'; code: string | null };
+  | { event: 'heartbeat_failed'; stage: 'clock' | 'read' | 'store'; code: string | null }
+  | { event: 'watchdog_failed'; stage: 'read' | 'open' | 'beat'; code: string | null }
+  | { event: 'watchdog_overdue'; journeyId: string }
+  | {
+      event: 'push_failed';
+      reason: 'NO_TARGET' | 'REFUSED' | 'UNAVAILABLE' | 'NOT_CONFIGURED';
+      messageId: string;
+    }
+  | { event: 'delivery_failed'; stage: 'claim' | 'mark'; code: string | null }
+  | { event: 'database_error'; pool: 'api' | 'worker'; code: string | null };
 
 export interface FakeLog {
   /** Records the event. */

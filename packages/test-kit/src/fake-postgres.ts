@@ -48,14 +48,39 @@ export interface FakePostgresAnswer {
 /** Answers a query, or throws to make the database answer it with an error. */
 export type FakePostgresHandler = (query: FakePostgresQuery) => FakePostgresAnswer;
 
+/** A fatal error that ends a connection, as PostgreSQL sends one: a SQLSTATE and a message. */
+export interface FakePostgresFatal {
+  readonly code: string;
+  readonly message: string;
+}
+
 /** One client connection: the bytes the client sent in, the bytes to send back. */
 export interface FakePostgresConnection {
   receive(chunk: Uint8Array): Uint8Array;
+  /**
+   * The parameters the client sent at startup (LOST-02-AC17), such as `user`,
+   * `database`, `idle_in_transaction_session_timeout` and `lock_timeout`, as
+   * text. Empty until the startup has arrived.
+   */
+  readonly parameters: Readonly<Record<string, string>>;
+  /** The queries this connection sent, in the order they arrived. */
+  readonly queries: readonly FakePostgresQuery[];
+  /**
+   * Ends the connection as PostgreSQL ends a session it terminates (LOST-02-AC18):
+   * the bytes of one ErrorResponse of severity FATAL, carrying this SQLSTATE
+   * and message, for the test to send before it closes the socket. From then
+   * on the connection answers nothing.
+   */
+  end(fatal: FakePostgresFatal): Uint8Array;
+  /** Whether `end` was called. */
+  readonly ended: boolean;
 }
 
 export interface FakePostgres {
   /** Every query any connection sent, in the order they arrived. */
   readonly queries: readonly FakePostgresQuery[];
+  /** Every connection made, in the order they were made. */
+  readonly connections: readonly FakePostgresConnection[];
   /** A new connection's protocol state, for a socket the test accepted. */
   connect(): FakePostgresConnection;
 }
@@ -135,14 +160,17 @@ function rowsAndTag(answer: FakePostgresAnswer): number[] {
   return [...rows, ...message('C', cstring(`SELECT ${String(answer.rows.length)}`))];
 }
 
-function errorResponse(text: string): number[] {
+function errorResponse(
+  text: string,
+  { severity = 'ERROR', code = 'XX000' }: { severity?: 'ERROR' | 'FATAL'; code?: string } = {},
+): number[] {
   return message('E', [
     ...ascii('S'),
-    ...cstring('ERROR'),
+    ...cstring(severity),
     ...ascii('V'),
-    ...cstring('ERROR'),
+    ...cstring(severity),
     ...ascii('C'),
-    ...cstring('XX000'),
+    ...cstring(code),
     ...ascii('M'),
     ...cstring(text),
     0,
@@ -200,11 +228,26 @@ interface Portal {
   answer?: FakePostgresAnswer;
 }
 
+/**
+ * The parameters of a startup message, after its length and protocol: pairs
+ * of names and values, each ended by a zero byte, the list ended by one more.
+ */
+function startupParameters(frame: Uint8Array): Record<string, string> {
+  const read = reader(frame.subarray(8));
+  const parameters: Record<string, string> = {};
+  for (let name = read.cstring(); name !== ''; name = read.cstring()) {
+    parameters[name] = read.cstring();
+  }
+  return parameters;
+}
+
 export function fakePostgres(handler: FakePostgresHandler): FakePostgres {
   const queries: FakePostgresQuery[] = [];
+  const connections: FakePostgresConnection[] = [];
 
-  function ask(query: FakePostgresQuery): Outcome {
+  function ask(query: FakePostgresQuery, mine: FakePostgresQuery[]): Outcome {
     queries.push(query);
+    mine.push(query);
     try {
       return { answer: handler(query) };
     } catch (error) {
@@ -215,6 +258,9 @@ export function fakePostgres(handler: FakePostgresHandler): FakePostgres {
   function connect(): FakePostgresConnection {
     let pending: Uint8Array = new Uint8Array(0);
     let started = false;
+    let ended = false;
+    let parameters: Record<string, string> = {};
+    const mine: FakePostgresQuery[] = [];
     // After an error in an extended query, PostgreSQL ignores every message
     // up to the next Sync, and so does this.
     let skippingToSync = false;
@@ -231,10 +277,11 @@ export function fakePostgres(handler: FakePostgresHandler): FakePostgres {
       return portal;
     }
 
-    function startup(code: number): number[] {
+    function startup(code: number, frame: Uint8Array): number[] {
       if (code !== PROTOCOL_3) {
         throw new Error(`The fake PostgreSQL server does not speak protocol ${String(code)}.`);
       }
+      parameters = startupParameters(frame);
       started = true;
       // Trust: no password asked for, so none is ever written in a test.
       return [...message('R', int32(0)), ...readyForQuery()];
@@ -244,7 +291,7 @@ export function fakePostgres(handler: FakePostgresHandler): FakePostgres {
       const read = reader(body);
       switch (type) {
         case 'Q': {
-          const outcome = ask({ text: read.cstring(), values: [] });
+          const outcome = ask({ text: read.cstring(), values: [] }, mine);
           if ('error' in outcome) {
             return [...errorResponse(outcome.error), ...readyForQuery()];
           }
@@ -301,7 +348,7 @@ export function fakePostgres(handler: FakePostgresHandler): FakePostgres {
             throw new Error('The fake PostgreSQL server describes portals only, not statements.');
           }
           const portal = portalNamed(read.cstring());
-          const outcome = ask(portal.query);
+          const outcome = ask(portal.query, mine);
           if ('error' in outcome) {
             skippingToSync = true;
             return errorResponse(outcome.error);
@@ -334,8 +381,13 @@ export function fakePostgres(handler: FakePostgresHandler): FakePostgres {
       }
     }
 
-    return {
+    const connection: FakePostgresConnection = {
       receive(chunk: Uint8Array): Uint8Array {
+        if (ended) {
+          // PostgreSQL has ended the session: whatever the client still
+          // sends, such as its Terminate, is answered with nothing.
+          return new Uint8Array(0);
+        }
         pending = concat([pending, chunk]);
         const out: number[] = [];
         for (;;) {
@@ -348,13 +400,28 @@ export function fakePostgres(handler: FakePostgresHandler): FakePostgres {
           pending = pending.subarray(length);
           const reply = started
             ? handle(String.fromCharCode(frame[0] ?? 0), frame.subarray(5))
-            : startup(view.getInt32(4));
+            : startup(view.getInt32(4), frame);
           for (const byte of reply) out.push(byte);
         }
         return Uint8Array.from(out);
       },
+      get parameters() {
+        return { ...parameters };
+      },
+      get queries() {
+        return [...mine];
+      },
+      end({ code, message: text }: FakePostgresFatal): Uint8Array {
+        ended = true;
+        return Uint8Array.from(errorResponse(text, { severity: 'FATAL', code }));
+      },
+      get ended() {
+        return ended;
+      },
     };
+    connections.push(connection);
+    return connection;
   }
 
-  return { queries, connect };
+  return { queries, connections, connect };
 }

@@ -47,6 +47,28 @@
  *     same event can be sent again (AC13); values outside the contract's
  *     rules are refused (AC18).
  *
+ * And when a journey goes silent (LOST-02), the watchdog's and the outbox's
+ * side of the store:
+ *   - the overdue read returns exactly the ACTIVE journeys silent for five
+ *     minutes or more, counted from last contact or from the start, with the
+ *     store's own now (AC2, AC3), for any journeys and any sequence of
+ *     heartbeats and sweeps (fast-check);
+ *   - opening an alert moves the journey, opens one OPEN alert and writes one
+ *     message per responder, all of it or none of it, and only for a journey
+ *     still ACTIVE and overdue under the lock: contact that came after the
+ *     read wins (AC9), a held row is skipped and never waited for (AC8), a
+ *     journey with no responder is refused (AC12), and opens that race leave
+ *     one alert (AC7); an open told to wait for a held row answers `held`
+ *     when the row stays held, and otherwise checks the row as its holder
+ *     left it (AC20);
+ *   - a claim hands each due message to one claimer, once, leased; a failure
+ *     keeps its reason and is due again after its delay; a sent message is
+ *     never handed out again (AC14, AC15).
+ * Times are the store's own: the fake's clock, or the database's now(). The
+ * database's moves on while a test runs, so a subject says how far from the
+ * threshold a time must be to be sure of its side (`timeMarginMs`); the fake's
+ * stands still, and is asked about the threshold itself.
+ *
  * Each behaviour is a value — a name and a function — rather than a test of
  * its own, so a runner file states it with `test.each(JOURNEY_STORE_BEHAVIOUR)`
  * and the fake's test file can pin the list of names. Removing one then
@@ -56,13 +78,17 @@
 import * as fc from 'fast-check';
 import { expect } from 'vitest';
 import type {
+  ClaimedMessages,
   FakeJourneyState,
   HeartbeatToRecord,
   InsertStartedResult,
   LatestHeartbeat,
+  OpenLostContactAlertResult,
+  OverdueJourneys,
   RecordHeartbeatResult,
   StartedJourney,
 } from './fake-journey-store.ts';
+import type { PushFailureReason } from './fake-push.ts';
 import {
   syntheticBatteryLevel,
   syntheticEventId,
@@ -103,6 +129,19 @@ export interface PositionAsStored {
  */
 export interface JourneyStoreUnderTest {
   store: {
+    overdueJourneys(afterMs: number): Promise<OverdueJourneys>;
+    openLostContactAlert(request: {
+      journeyId: string;
+      afterMs: number;
+      lockWaitMs?: number;
+    }): Promise<OpenLostContactAlertResult>;
+    claimDue(request: { limit: number; leaseMs: number }): Promise<ClaimedMessages>;
+    markSent(messageId: string): Promise<void>;
+    markFailed(request: {
+      messageId: string;
+      reason: PushFailureReason;
+      retryAfterMs: number;
+    }): Promise<void>;
     unendedJourneyOf(walkerId: string): Promise<{ id: string; state: string } | null>;
     existingUsers(ids: readonly string[]): Promise<ReadonlySet<string>>;
     insertStarted(journey: StartedJourney): Promise<InsertStartedResult>;
@@ -148,6 +187,60 @@ export interface JourneyStoreUnderTest {
    * fewer against a real database, where each run writes real rows.
    */
   propertyRuns: number;
+  /** The store's own now: the fake's clock, or the database's `now()` (LOST-02). */
+  now(): Promise<Date>;
+  /** The alerts this journey has, as stored, in any order. */
+  alertsOf(journeyId: string): Promise<AlertAsStored[]>;
+  /** The outbox messages of this journey's alerts, as stored, in any order. */
+  messagesOf(journeyId: string): Promise<MessageAsStored[]>;
+  /**
+   * Holds the journey's row in a transaction of its own, as a heartbeat being
+   * written or another worker's sweep would, until `release` (LOST-02-AC8).
+   */
+  hold(journeyId: string): Promise<{ release(): Promise<void> }>;
+  /**
+   * Holds the journey's row as `hold` does, and lets it go once an open is
+   * waiting for it: a healthy transaction that commits within the lock wait
+   * (LOST-02-AC20). With `contact`, the holder first moves the journey's last
+   * contact to the store's now, as a heartbeat in flight does, so the
+   * journey is no longer overdue when it lets go; with `unchanged`, it
+   * changes nothing. `release` lets go at once if no open came.
+   */
+  holdUntilWaited(
+    journeyId: string,
+    change: 'unchanged' | 'contact',
+  ): Promise<{ release(): Promise<void> }>;
+  /**
+   * The wait an open is given for a held row here: short against the
+   * database, where a row held throughout costs the test that long.
+   */
+  lockWaitMs: number;
+  /**
+   * How far from the five-minute threshold a silence must be for this store
+   * to be sure which side it is on: 0 for the fake, whose clock stands still;
+   * a second or two for the database, whose `now()` moves on while a test runs.
+   */
+  timeMarginMs: number;
+}
+
+/** An alert as a store under test holds it (LOST-02). */
+export interface AlertAsStored {
+  id: string;
+  state: string;
+  openedAt: Date;
+  silentSince: Date;
+}
+
+/** An outbox message as a store under test holds it (LOST-02). */
+export interface MessageAsStored {
+  messageId: string;
+  alertId: string;
+  recipientId: string;
+  kind: string;
+  attempts: number;
+  nextAttemptAt: Date;
+  sentAt: Date | null;
+  lastFailure: string | null;
 }
 
 export interface JourneyStoreBehaviour {
@@ -302,6 +395,149 @@ const PHONE_TIMES_OUT_OF_RANGE = [
 
 /** The first and the last whole second of the years 0001 to 9999, in UTC. */
 const PHONE_TIMES_AT_THE_EDGES = ['0001-01-01T00:00:00Z', '9999-12-31T23:59:59Z'] as const;
+
+// ---------------------------------------------------------------------------
+// LOST-02: silence, alerts and the outbox.
+// ---------------------------------------------------------------------------
+
+/**
+ * Five minutes (D-021): the server's LOST_CONTACT_AFTER_MS, written out
+ * because the test kit imports nothing from the server.
+ */
+const LOST_CONTACT_AFTER_MS = 300_000;
+
+/** The claim's lease: the server's CLAIM_LEASE_MS, written out for the same reason. */
+const LEASE_MS = 30_000;
+
+/** The claim's batch: the server's CLAIM_BATCH. */
+const BATCH = 50;
+
+/** A canonical UUID, as the database writes one: lower-case. */
+const LOWER_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** A moment this long before `now`. */
+function ago(now: Date, ms: number): Date {
+  return new Date(now.getTime() - ms);
+}
+
+/** A walker, `responders` users following them, and a journey of theirs put in directly. */
+async function watched(
+  subject: JourneyStoreUnderTest,
+  {
+    state = 'ACTIVE',
+    startedAt,
+    lastHeartbeatAt = null,
+    responders = 1,
+  }: {
+    state?: FakeJourneyState;
+    startedAt: Date;
+    lastHeartbeatAt?: Date | null;
+    responders?: number;
+  },
+): Promise<{ walkerId: string; deviceId: string; journeyId: string; responderIds: string[] }> {
+  const [walkerId = '', ...responderIds] = await users(subject, 1 + responders);
+  const deviceId = await subject.addDevice(walkerId);
+  const journeyId = await subject.seedJourney({
+    walkerId,
+    deviceId,
+    state,
+    responderIds,
+    startedAt,
+    lastHeartbeatAt,
+  });
+  return { walkerId, deviceId, journeyId, responderIds };
+}
+
+/**
+ * One sweep at the store's level, over these journeys only: the overdue
+ * read, then an open for each of them it returned. The read is of the whole
+ * store, and at L3 other tests' journeys are in it.
+ */
+async function sweepOf(
+  subject: JourneyStoreUnderTest,
+  journeyIds: readonly string[],
+): Promise<OpenLostContactAlertResult[]> {
+  const read = await subject.store.overdueJourneys(LOST_CONTACT_AFTER_MS);
+  const results: OpenLostContactAlertResult[] = [];
+  for (const journey of read.journeys.filter(({ id }) => journeyIds.includes(id))) {
+    results.push(
+      await subject.store.openLostContactAlert({
+        journeyId: journey.id,
+        afterMs: LOST_CONTACT_AFTER_MS,
+      }),
+    );
+  }
+  return results;
+}
+
+/** An overdue journey, opened: its alert and its messages. */
+async function openedWith(
+  subject: JourneyStoreUnderTest,
+  responders: number,
+): Promise<{
+  journeyId: string;
+  alertId: string;
+  messages: { messageId: string; recipientId: string; kind: string }[];
+}> {
+  const now = await subject.now();
+  const { journeyId } = await watched(subject, {
+    startedAt: ago(now, 2 * HOUR),
+    lastHeartbeatAt: ago(now, HOUR),
+    responders,
+  });
+  const opened = await subject.store.openLostContactAlert({
+    journeyId,
+    afterMs: LOST_CONTACT_AFTER_MS,
+  });
+  if (opened.outcome !== 'opened') {
+    throw new Error('expected the overdue journey to be opened, but it was skipped');
+  }
+  return { journeyId, alertId: opened.alertId, messages: opened.messages };
+}
+
+/** The recipients of these messages, sorted. */
+function recipientsOf(messages: readonly { recipientId: string }[]): string[] {
+  return messages.map(({ recipientId }) => recipientId).sort();
+}
+
+/** Sorted by message ID, so stores that hand rows back in any order compare equal. */
+function byMessage<T extends { messageId: string }>(rows: readonly T[]): T[] {
+  return [...rows].sort((a, b) =>
+    a.messageId < b.messageId ? -1 : a.messageId > b.messageId ? 1 : 0,
+  );
+}
+
+/** The timers, by shape: the test kit has no DOM or Node types (see synthetic-ids.ts). */
+const timers = globalThis as unknown as {
+  setTimeout(run: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+};
+
+/**
+ * Settles as `promise` does, or rejects once `ms` have passed, saying what
+ * waited: "skipped, not waited for" is checked as an answer that came at once.
+ */
+function within<T>(ms: number, promise: Promise<T>, what: string): Promise<T> {
+  let handle: unknown;
+  const late = new Promise<never>((_resolve, reject) => {
+    handle = timers.setTimeout(() => {
+      reject(new Error(`${what} did not answer within ${String(ms)} ms: it waited`));
+    }, ms);
+  });
+  return Promise.race([promise, late]).finally(() => {
+    timers.clearTimeout(handle);
+  });
+}
+
+/** Silences, in milliseconds, around the threshold and far from it: those a margin cannot judge left out. */
+function silences(margin: number): fc.Arbitrary<number> {
+  return fc
+    .oneof(
+      fc.integer({ min: 0, max: 2 * HOUR }),
+      fc.constantFrom(LOST_CONTACT_AFTER_MS - 1, LOST_CONTACT_AFTER_MS, LOST_CONTACT_AFTER_MS + 1),
+    )
+    .filter((ms) => margin === 0 || Math.abs(ms - LOST_CONTACT_AFTER_MS) > margin);
+}
 
 export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
   {
@@ -1233,6 +1469,677 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       await expect(subject.store.recordHeartbeat(heartbeatFor(missing))).rejects.toThrow();
 
       expect(await subject.heartbeatsOf(missing)).toEqual([]);
+    },
+  },
+  {
+    name: 'LOST-02-AC2: the overdue read returns exactly the ACTIVE journeys silent for five minutes or more, counted from last contact, or from the start when there is none, each with when its silence began, and the store’s now; and now when nothing is overdue',
+    async run(subject) {
+      const margin = subject.timeMarginMs;
+      const now = await subject.now();
+      // At the threshold itself against the fake; a margin either side of it
+      // against the database, whose now() moves on while this runs.
+      const over = LOST_CONTACT_AFTER_MS + margin;
+      const under = LOST_CONTACT_AFTER_MS - Math.max(1, margin);
+      const lastOver = await watched(subject, {
+        startedAt: ago(now, HOUR),
+        lastHeartbeatAt: ago(now, over),
+      });
+      const lastUnder = await watched(subject, {
+        startedAt: ago(now, HOUR),
+        lastHeartbeatAt: ago(now, under),
+      });
+      const startOver = await watched(subject, { startedAt: ago(now, over) });
+      const startUnder = await watched(subject, { startedAt: ago(now, under) });
+      const lost = await watched(subject, {
+        state: 'LOST_CONTACT',
+        startedAt: ago(now, 2 * HOUR),
+        lastHeartbeatAt: ago(now, HOUR),
+      });
+      const ended = await watched(subject, {
+        state: 'ENDED',
+        startedAt: ago(now, 2 * HOUR),
+        lastHeartbeatAt: ago(now, HOUR),
+      });
+      const mine = [lastOver, lastUnder, startOver, startUnder, lost, ended].map(
+        ({ journeyId }) => journeyId,
+      );
+
+      const before = await subject.now();
+      const read = await subject.store.overdueJourneys(LOST_CONTACT_AFTER_MS);
+      const after = await subject.now();
+
+      expect(read.now.getTime()).toBeGreaterThanOrEqual(before.getTime());
+      expect(read.now.getTime()).toBeLessThanOrEqual(after.getTime());
+      const found = read.journeys
+        .filter(({ id }) => mine.includes(id))
+        .sort((a, b) => a.id.localeCompare(b.id));
+      expect(found).toEqual(
+        [
+          { id: lastOver.journeyId, state: 'ACTIVE', silentSince: ago(now, over) },
+          { id: startOver.journeyId, state: 'ACTIVE', silentSince: ago(now, over) },
+        ].sort((a, b) => a.id.localeCompare(b.id)),
+      );
+
+      // Nothing has been silent for a century: no journey, and now all the same.
+      const none = await subject.store.overdueJourneys(100 * 365 * 24 * HOUR);
+      expect(none.journeys).toEqual([]);
+      expect(none.now.getTime()).toBeGreaterThanOrEqual(before.getTime());
+    },
+  },
+  {
+    name: 'LOST-02-AC2: for any journeys, in any state, silent for any time, with or without a heartbeat, one sweep moves exactly the ACTIVE ones silent five minutes or more to LOST_CONTACT, each with one OPEN alert silent since its silence began, and leaves every other one as it was',
+    async run(subject) {
+      const margin = subject.timeMarginMs;
+      const journey = fc.record({
+        state: fc.constantFrom(...STATES),
+        silentForMs: silences(margin),
+        heartbeat: fc.boolean(),
+        startedBeforeMs: fc.integer({ min: 0, max: HOUR }),
+      });
+
+      await fc.assert(
+        fc.asyncProperty(fc.array(journey, { minLength: 1, maxLength: 4 }), async (given) => {
+          const now = await subject.now();
+          const seeded = [];
+          for (const one of given) {
+            const silentSince = ago(now, one.silentForMs);
+            const { journeyId } = await watched(subject, {
+              state: one.state,
+              startedAt: one.heartbeat
+                ? ago(now, one.silentForMs + one.startedBeforeMs)
+                : silentSince,
+              lastHeartbeatAt: one.heartbeat ? silentSince : null,
+            });
+            seeded.push({ ...one, journeyId, silentSince });
+          }
+
+          await sweepOf(
+            subject,
+            seeded.map(({ journeyId }) => journeyId),
+          );
+
+          for (const one of seeded) {
+            const moved = one.state === 'ACTIVE' && one.silentForMs >= LOST_CONTACT_AFTER_MS;
+            expect(await subject.stateOf(one.journeyId)).toBe(moved ? 'LOST_CONTACT' : one.state);
+            expect(
+              (await subject.alertsOf(one.journeyId)).map(({ state, silentSince }) => ({
+                state,
+                silentSince,
+              })),
+            ).toEqual(moved ? [{ state: 'OPEN', silentSince: one.silentSince }] : []);
+          }
+        }),
+        { numRuns: subject.propertyRuns },
+      );
+    },
+  },
+  {
+    name: 'LOST-02-AC2: for any sequence of heartbeats, received in any order, and sweeps between them, a journey is LOST_CONTACT after a sweep exactly when some sweep so far found it silent five minutes or more, and a heartbeat after that does not move it back',
+    async run(subject) {
+      const margin = subject.timeMarginMs;
+      const step = fc.oneof(
+        fc.record({ kind: fc.constant('heartbeat' as const), agoMs: silences(margin) }),
+        fc.record({ kind: fc.constant('sweep' as const) }),
+      );
+
+      await fc.assert(
+        fc.asyncProperty(
+          silences(margin),
+          fc.array(step, { maxLength: 8 }),
+          async (startedAgoMs, steps) => {
+            const now = await subject.now();
+            const { journeyId } = await watched(subject, { startedAt: ago(now, startedAgoMs) });
+            let lastContactAgoMs: number | null = null;
+            let lost = false;
+
+            for (const next of steps) {
+              if (next.kind === 'heartbeat') {
+                // Never before the start: contact comes after a journey began.
+                const agoMs = Math.min(next.agoMs, startedAgoMs);
+                await subject.store.recordHeartbeat(
+                  heartbeatFor(journeyId, { receivedAt: ago(now, agoMs), position: null }),
+                );
+                lastContactAgoMs =
+                  lastContactAgoMs === null ? agoMs : Math.min(lastContactAgoMs, agoMs);
+              } else {
+                await sweepOf(subject, [journeyId]);
+                lost ||= (lastContactAgoMs ?? startedAgoMs) >= LOST_CONTACT_AFTER_MS;
+                expect(await subject.stateOf(journeyId)).toBe(lost ? 'LOST_CONTACT' : 'ACTIVE');
+                expect(await subject.alertsOf(journeyId)).toHaveLength(lost ? 1 : 0);
+              }
+            }
+          },
+        ),
+        { numRuns: subject.propertyRuns },
+      );
+    },
+  },
+  {
+    name: 'LOST-02-AC3: a journey that never sent a heartbeat is timed from its start: not overdue a moment before five minutes have passed since it, overdue at five minutes, and its alert is silent since its start',
+    async run(subject) {
+      const margin = subject.timeMarginMs;
+      const now = await subject.now();
+      const under = await watched(subject, {
+        startedAt: ago(now, LOST_CONTACT_AFTER_MS - Math.max(1, margin)),
+      });
+      const at = await watched(subject, { startedAt: ago(now, LOST_CONTACT_AFTER_MS + margin) });
+
+      const read = await subject.store.overdueJourneys(LOST_CONTACT_AFTER_MS);
+
+      expect(
+        read.journeys
+          .filter(({ id }) => id === under.journeyId || id === at.journeyId)
+          .map(({ id }) => id),
+      ).toEqual([at.journeyId]);
+      expect(
+        await subject.store.openLostContactAlert({
+          journeyId: under.journeyId,
+          afterMs: LOST_CONTACT_AFTER_MS,
+        }),
+      ).toEqual({ outcome: 'skipped' });
+      expect(
+        (
+          await subject.store.openLostContactAlert({
+            journeyId: at.journeyId,
+            afterMs: LOST_CONTACT_AFTER_MS,
+          })
+        ).outcome,
+      ).toBe('opened');
+      expect(await subject.stateOf(under.journeyId)).toBe('ACTIVE');
+      expect(await subject.alertsOf(under.journeyId)).toEqual([]);
+      expect((await subject.alertsOf(at.journeyId)).map(({ silentSince }) => silentSince)).toEqual([
+        ago(now, LOST_CONTACT_AFTER_MS + margin),
+      ]);
+    },
+  },
+  {
+    name: 'LOST-02-AC9: opening moves an overdue ACTIVE journey to LOST_CONTACT, with one OPEN alert opened at the store’s now and silent since its last contact, and one LOST_CONTACT message per responder, each with a fresh ID, not sent and due at once; the walker gets none',
+    async run(subject) {
+      const now = await subject.now();
+      const silentSince = ago(now, LOST_CONTACT_AFTER_MS + MINUTE);
+      const journey = await watched(subject, {
+        startedAt: ago(now, HOUR),
+        lastHeartbeatAt: silentSince,
+        responders: 3,
+      });
+
+      const before = await subject.now();
+      const result = await subject.store.openLostContactAlert({
+        journeyId: journey.journeyId,
+        afterMs: LOST_CONTACT_AFTER_MS,
+      });
+      const after = await subject.now();
+
+      if (result.outcome !== 'opened') {
+        throw new Error('expected the overdue journey to be opened, but it was skipped');
+      }
+      expect(result.alertId).toMatch(LOWER_UUID);
+      expect(result.messages.map(({ recipientId }) => recipientId).sort()).toEqual(
+        [...journey.responderIds].sort(),
+      );
+      expect(result.messages.map(({ kind }) => kind)).toEqual([
+        'LOST_CONTACT',
+        'LOST_CONTACT',
+        'LOST_CONTACT',
+      ]);
+      const messageIds = result.messages.map(({ messageId }) => messageId);
+      expect(new Set(messageIds).size).toBe(3);
+      for (const messageId of messageIds) {
+        expect(messageId).toMatch(LOWER_UUID);
+      }
+      const others = [
+        journey.journeyId,
+        result.alertId,
+        journey.walkerId,
+        journey.deviceId,
+        ...journey.responderIds,
+      ];
+      expect(messageIds.filter((messageId) => others.includes(messageId))).toEqual([]);
+
+      expect(await subject.stateOf(journey.journeyId)).toBe('LOST_CONTACT');
+      const alerts = await subject.alertsOf(journey.journeyId);
+      expect(
+        alerts.map(({ id, state, silentSince: since }) => ({ id, state, silentSince: since })),
+      ).toEqual([{ id: result.alertId, state: 'OPEN', silentSince }]);
+      const openedAt = alerts[0]?.openedAt.getTime() ?? Number.NaN;
+      expect(openedAt).toBeGreaterThanOrEqual(before.getTime());
+      expect(openedAt).toBeLessThanOrEqual(after.getTime());
+
+      const messages = await subject.messagesOf(journey.journeyId);
+      expect(
+        byMessage(
+          messages.map(
+            ({ messageId, alertId, recipientId, kind, attempts, sentAt, lastFailure }) => ({
+              messageId,
+              alertId,
+              recipientId,
+              kind,
+              attempts,
+              sentAt,
+              lastFailure,
+            }),
+          ),
+        ),
+      ).toEqual(
+        byMessage(
+          result.messages.map((message) => ({
+            ...message,
+            alertId: result.alertId,
+            attempts: 0,
+            sentAt: null,
+            lastFailure: null,
+          })),
+        ),
+      );
+      for (const message of messages) {
+        expect(message.nextAttemptAt.getTime()).toBeLessThanOrEqual(after.getTime());
+      }
+      expect(messages.filter(({ recipientId }) => recipientId === journey.walkerId)).toEqual([]);
+    },
+  },
+  {
+    name: 'LOST-02-AC9: opening skips, and writes nothing, for a journey not yet overdue, already LOST_CONTACT, ENDED, or not there at all',
+    async run(subject) {
+      const now = await subject.now();
+      const recent = await watched(subject, {
+        startedAt: ago(now, HOUR),
+        lastHeartbeatAt: ago(now, 4 * MINUTE),
+      });
+      const lost = await watched(subject, {
+        state: 'LOST_CONTACT',
+        startedAt: ago(now, 2 * HOUR),
+        lastHeartbeatAt: ago(now, HOUR),
+      });
+      const ended = await watched(subject, {
+        state: 'ENDED',
+        startedAt: ago(now, 2 * HOUR),
+        lastHeartbeatAt: ago(now, HOUR),
+      });
+      const cases = [
+        { journeyId: recent.journeyId, state: 'ACTIVE' },
+        { journeyId: lost.journeyId, state: 'LOST_CONTACT' },
+        { journeyId: ended.journeyId, state: 'ENDED' },
+        { journeyId: syntheticUuid(), state: null },
+      ];
+
+      for (const { journeyId, state } of cases) {
+        expect(
+          await subject.store.openLostContactAlert({ journeyId, afterMs: LOST_CONTACT_AFTER_MS }),
+          String(state),
+        ).toEqual({ outcome: 'skipped' });
+        expect(await subject.stateOf(journeyId), String(state)).toBe(state);
+        expect(await subject.alertsOf(journeyId), String(state)).toEqual([]);
+        expect(await subject.messagesOf(journeyId), String(state)).toEqual([]);
+      }
+    },
+  },
+  {
+    name: 'LOST-02-AC9: contact stored between the overdue read and the open wins: the open skips and writes nothing, and the journey stays ACTIVE; and a journey whose state changed in between is skipped too',
+    async run(subject) {
+      const now = await subject.now();
+      const silent = await watched(subject, {
+        startedAt: ago(now, HOUR),
+        lastHeartbeatAt: ago(now, LOST_CONTACT_AFTER_MS + MINUTE),
+      });
+      const ending = await watched(subject, {
+        startedAt: ago(now, HOUR),
+        lastHeartbeatAt: ago(now, LOST_CONTACT_AFTER_MS + MINUTE),
+      });
+
+      const read = await subject.store.overdueJourneys(LOST_CONTACT_AFTER_MS);
+      expect(read.journeys.map(({ id }) => id)).toEqual(
+        expect.arrayContaining([silent.journeyId, ending.journeyId]),
+      );
+      // Contact arrives, received at the store's now, after the read.
+      expect(
+        await subject.store.recordHeartbeat(
+          heartbeatFor(silent.journeyId, { receivedAt: await subject.now() }),
+        ),
+      ).toEqual(RECORDED);
+      await subject.endJourney(ending.journeyId);
+
+      for (const { journeyId, state } of [
+        { journeyId: silent.journeyId, state: 'ACTIVE' },
+        { journeyId: ending.journeyId, state: 'ENDED' },
+      ]) {
+        expect(
+          await subject.store.openLostContactAlert({ journeyId, afterMs: LOST_CONTACT_AFTER_MS }),
+          state,
+        ).toEqual({ outcome: 'skipped' });
+        expect(await subject.stateOf(journeyId), state).toBe(state);
+        expect(await subject.alertsOf(journeyId), state).toEqual([]);
+        expect(await subject.messagesOf(journeyId), state).toEqual([]);
+      }
+    },
+  },
+  {
+    name: 'LOST-02-AC5: a journey already alerted is never opened again: a second open skips, and it keeps its one alert and its messages as they were',
+    async run(subject) {
+      const { journeyId, alertId } = await openedWith(subject, 2);
+      const alerts = await subject.alertsOf(journeyId);
+      const messages = byMessage(await subject.messagesOf(journeyId));
+
+      expect(
+        await subject.store.openLostContactAlert({ journeyId, afterMs: LOST_CONTACT_AFTER_MS }),
+      ).toEqual({ outcome: 'skipped' });
+      expect(await sweepOf(subject, [journeyId])).toEqual([]);
+
+      expect(await subject.alertsOf(journeyId)).toEqual(alerts);
+      expect(alerts.map(({ id }) => id)).toEqual([alertId]);
+      expect(byMessage(await subject.messagesOf(journeyId))).toEqual(messages);
+      expect(await subject.stateOf(journeyId)).toBe('LOST_CONTACT');
+    },
+  },
+  {
+    name: 'LOST-02-AC12: a journey with no responder rows is never moved: the open rejects, and it stays ACTIVE with no alert and no message',
+    async run(subject) {
+      const now = await subject.now();
+      const { journeyId } = await watched(subject, {
+        startedAt: ago(now, HOUR),
+        lastHeartbeatAt: ago(now, LOST_CONTACT_AFTER_MS + MINUTE),
+        responders: 0,
+      });
+
+      await expect(
+        subject.store.openLostContactAlert({ journeyId, afterMs: LOST_CONTACT_AFTER_MS }),
+      ).rejects.toThrow();
+
+      expect(await subject.stateOf(journeyId)).toBe('ACTIVE');
+      expect(await subject.alertsOf(journeyId)).toEqual([]);
+      expect(await subject.messagesOf(journeyId)).toEqual([]);
+      // Still overdue, so the next sweep tries again, and the watchdog reports it.
+      const read = await subject.store.overdueJourneys(LOST_CONTACT_AFTER_MS);
+      expect(read.journeys.map(({ id }) => id)).toContain(journeyId);
+    },
+  },
+  {
+    name: 'LOST-02-AC8: a journey whose row another transaction holds is skipped at once, not waited for, and changes nothing; once released, it is opened',
+    async run(subject) {
+      const now = await subject.now();
+      const { journeyId } = await watched(subject, {
+        startedAt: ago(now, HOUR),
+        lastHeartbeatAt: ago(now, LOST_CONTACT_AFTER_MS + MINUTE),
+      });
+      const holder = await subject.hold(journeyId);
+
+      try {
+        expect(
+          await within(
+            2_000,
+            subject.store.openLostContactAlert({ journeyId, afterMs: LOST_CONTACT_AFTER_MS }),
+            'the open of a held journey',
+          ),
+        ).toEqual({ outcome: 'skipped' });
+        // The plain read is not blocked by the hold either.
+        const read = await within(
+          2_000,
+          subject.store.overdueJourneys(LOST_CONTACT_AFTER_MS),
+          'the overdue read',
+        );
+        expect(read.journeys.map(({ id }) => id)).toContain(journeyId);
+      } finally {
+        await holder.release();
+      }
+
+      expect(await subject.stateOf(journeyId)).toBe('ACTIVE');
+      expect(await subject.alertsOf(journeyId)).toEqual([]);
+      expect(
+        (await subject.store.openLostContactAlert({ journeyId, afterMs: LOST_CONTACT_AFTER_MS }))
+          .outcome,
+      ).toBe('opened');
+      expect(await subject.alertsOf(journeyId)).toHaveLength(1);
+    },
+  },
+  {
+    name: 'LOST-02-AC20: an open with a lock wait answers held when the row stays held, opened when it is let go unchanged, and skipped when it is let go no longer overdue',
+    async run(subject) {
+      const now = await subject.now();
+      const overdue = () =>
+        watched(subject, {
+          startedAt: ago(now, HOUR),
+          lastHeartbeatAt: ago(now, LOST_CONTACT_AFTER_MS + MINUTE),
+          responders: 2,
+        });
+      const waitingOpen = (journeyId: string) =>
+        subject.store.openLostContactAlert({
+          journeyId,
+          afterMs: LOST_CONTACT_AFTER_MS,
+          lockWaitMs: subject.lockWaitMs,
+        });
+
+      // Held throughout: the wait runs out. The open answers, rather than
+      // throwing, and writes nothing.
+      const stays = await overdue();
+      const holder = await subject.hold(stays.journeyId);
+      let held: OpenLostContactAlertResult;
+      try {
+        held = await within(
+          subject.lockWaitMs + 5_000,
+          waitingOpen(stays.journeyId),
+          'the waiting open of a row held throughout',
+        );
+      } finally {
+        await holder.release();
+      }
+      expect(held).toEqual({ outcome: 'held' });
+      expect(await subject.stateOf(stays.journeyId)).toBe('ACTIVE');
+      expect(await subject.alertsOf(stays.journeyId)).toEqual([]);
+      expect(await subject.messagesOf(stays.journeyId)).toEqual([]);
+
+      // Let go unchanged within the wait: still overdue, so opened.
+      const unchanged = await overdue();
+      const lettingGo = await subject.holdUntilWaited(unchanged.journeyId, 'unchanged');
+      let opened: OpenLostContactAlertResult;
+      try {
+        opened = await waitingOpen(unchanged.journeyId);
+      } finally {
+        await lettingGo.release();
+      }
+      expect(opened.outcome).toBe('opened');
+      expect(await subject.stateOf(unchanged.journeyId)).toBe('LOST_CONTACT');
+      expect(await subject.alertsOf(unchanged.journeyId)).toHaveLength(1);
+      expect(recipientsOf(await subject.messagesOf(unchanged.journeyId))).toEqual(
+        [...unchanged.responderIds].sort(),
+      );
+
+      // Let go after contact came: no longer overdue, so skipped, and nothing written.
+      const heard = await overdue();
+      const lettingGoAfterContact = await subject.holdUntilWaited(heard.journeyId, 'contact');
+      let skipped: OpenLostContactAlertResult;
+      try {
+        skipped = await waitingOpen(heard.journeyId);
+      } finally {
+        await lettingGoAfterContact.release();
+      }
+      expect(skipped).toEqual({ outcome: 'skipped' });
+      expect(await subject.stateOf(heard.journeyId)).toBe('ACTIVE');
+      expect(await subject.alertsOf(heard.journeyId)).toEqual([]);
+      expect(await subject.messagesOf(heard.journeyId)).toEqual([]);
+    },
+  },
+  {
+    name: `LOST-02-AC7: ${String(RACERS)} opens racing for one overdue journey, ${String(RACE_ROUNDS)} times over: exactly one opens and every other skips, none an error; one alert, and one message per responder`,
+    async run(subject) {
+      for (let round = 0; round < RACE_ROUNDS; round += 1) {
+        const now = await subject.now();
+        const { journeyId, responderIds } = await watched(subject, {
+          startedAt: ago(now, HOUR),
+          lastHeartbeatAt: ago(now, LOST_CONTACT_AFTER_MS + MINUTE),
+          responders: 2,
+        });
+
+        const results = await Promise.all(
+          Array.from({ length: RACERS }, () =>
+            subject.store.openLostContactAlert({ journeyId, afterMs: LOST_CONTACT_AFTER_MS }),
+          ),
+        );
+
+        expect(results.map(({ outcome }) => outcome).sort(), `round ${String(round)}`).toEqual(
+          ['opened', ...Array.from({ length: RACERS - 1 }, () => 'skipped')].sort(),
+        );
+        expect(await subject.alertsOf(journeyId), `round ${String(round)}`).toHaveLength(1);
+        expect(
+          (await subject.messagesOf(journeyId)).map(({ recipientId }) => recipientId).sort(),
+          `round ${String(round)}`,
+        ).toEqual([...responderIds].sort());
+      }
+    },
+  },
+  {
+    name: 'LOST-02-AC14: a claim hands out each due message once: one attempt counted, leased until the claim’s now plus the lease, and not handed out again while the lease runs',
+    async run(subject) {
+      const { journeyId, messages } = await openedWith(subject, 3);
+      const mine = messages.map(({ messageId }) => messageId);
+
+      const before = await subject.now();
+      const claim = await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS });
+      const after = await subject.now();
+
+      expect(claim.now.getTime()).toBeGreaterThanOrEqual(before.getTime());
+      expect(claim.now.getTime()).toBeLessThanOrEqual(after.getTime());
+      expect(byMessage(claim.messages.filter(({ messageId }) => mine.includes(messageId)))).toEqual(
+        byMessage(messages.map((message) => ({ ...message, attempts: 1 }))),
+      );
+      for (const stored of await subject.messagesOf(journeyId)) {
+        expect(stored.attempts).toBe(1);
+        expect(stored.nextAttemptAt.getTime()).toBe(claim.now.getTime() + LEASE_MS);
+        expect(stored.sentAt).toBeNull();
+      }
+
+      const again = await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS });
+      expect(again.messages.filter(({ messageId }) => mine.includes(messageId))).toEqual([]);
+    },
+  },
+  {
+    name: 'LOST-02-AC14: a claim takes at most its limit, and the next claim takes the rest',
+    async run(subject) {
+      const { messages } = await openedWith(subject, 3);
+      const mine = messages.map(({ messageId }) => messageId);
+
+      const first = await subject.store.claimDue({ limit: 2, leaseMs: LEASE_MS });
+      const second = await subject.store.claimDue({ limit: 2, leaseMs: LEASE_MS });
+
+      expect(first.messages).toHaveLength(2);
+      const claimed = [...first.messages, ...second.messages]
+        .map(({ messageId }) => messageId)
+        .filter((messageId) => mine.includes(messageId));
+      expect([...claimed].sort()).toEqual([...mine].sort());
+    },
+  },
+  {
+    name: `LOST-02-AC7: ${String(RACERS)} claims racing: each due message is handed to exactly one of them`,
+    async run(subject) {
+      const { messages } = await openedWith(subject, 3);
+      const mine = messages.map(({ messageId }) => messageId);
+
+      const claims = await Promise.all(
+        Array.from({ length: RACERS }, () =>
+          subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS }),
+        ),
+      );
+
+      const handedOut = claims
+        .flatMap((claim) => claim.messages.map(({ messageId }) => messageId))
+        .filter((messageId) => mine.includes(messageId));
+      expect([...handedOut].sort()).toEqual([...mine].sort());
+    },
+  },
+  {
+    name: 'LOST-02-AC15: a failed message keeps its reason and is due again after the delay given, with the same ID and one more attempt; a sent one is marked at the store’s now, and never handed out again',
+    async run(subject) {
+      const { journeyId, messages } = await openedWith(subject, 2);
+      const [failing, sending] = byMessage(messages);
+      if (failing === undefined || sending === undefined) {
+        throw new Error('expected two messages');
+      }
+      const mine = [failing.messageId, sending.messageId];
+      await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS });
+
+      const before = await subject.now();
+      await subject.store.markFailed({
+        messageId: failing.messageId,
+        reason: 'NO_TARGET',
+        retryAfterMs: 0,
+      });
+      await subject.store.markSent(sending.messageId);
+      const after = await subject.now();
+
+      const stored = byMessage(await subject.messagesOf(journeyId));
+      const [failed, sent] = stored;
+      expect(failed).toMatchObject({
+        messageId: failing.messageId,
+        lastFailure: 'NO_TARGET',
+        sentAt: null,
+      });
+      expect(failed?.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(before.getTime());
+      expect(failed?.nextAttemptAt.getTime()).toBeLessThanOrEqual(after.getTime());
+      expect(sent?.messageId).toBe(sending.messageId);
+      expect(sent?.sentAt?.getTime()).toBeGreaterThanOrEqual(before.getTime());
+      expect(sent?.sentAt?.getTime()).toBeLessThanOrEqual(after.getTime());
+
+      const retried = await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS });
+      expect(retried.messages.filter(({ messageId }) => mine.includes(messageId))).toEqual([
+        { ...failing, attempts: 2 },
+      ]);
+
+      await subject.store.markFailed({
+        messageId: failing.messageId,
+        reason: 'UNAVAILABLE',
+        retryAfterMs: HOUR,
+      });
+      const later = await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS });
+      expect(later.messages.filter(({ messageId }) => mine.includes(messageId))).toEqual([]);
+      const waiting = (await subject.messagesOf(journeyId)).find(
+        ({ messageId }) => messageId === failing.messageId,
+      );
+      expect(waiting?.lastFailure).toBe('UNAVAILABLE');
+      expect(waiting?.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(before.getTime() + HOUR);
+    },
+  },
+  {
+    name: 'LOST-02-AC15: a failure reason outside the push port’s four is refused, and the message is left as it was',
+    async run(subject) {
+      const { journeyId, messages } = await openedWith(subject, 1);
+      const [message] = messages;
+      if (message === undefined) {
+        throw new Error('expected one message');
+      }
+      const before = await subject.messagesOf(journeyId);
+
+      for (const reason of ['TIMEOUT', 'no_target', '']) {
+        await expect(
+          subject.store.markFailed({
+            messageId: message.messageId,
+            reason: reason as PushFailureReason,
+            retryAfterMs: MINUTE,
+          }),
+          reason,
+        ).rejects.toThrow();
+      }
+
+      expect(await subject.messagesOf(journeyId)).toEqual(before);
+    },
+  },
+  {
+    name: 'LOST-02-AC13: the heartbeat received at the alert’s silent_since is the journey’s latest, with its battery level and whether it had a position',
+    async run(subject) {
+      const now = await subject.now();
+      const { journeyId } = await watched(subject, { startedAt: ago(now, HOUR), responders: 2 });
+      const earlier = heartbeatFor(journeyId, { receivedAt: ago(now, 10 * MINUTE) });
+      const last = heartbeatFor(journeyId, { receivedAt: ago(now, 6 * MINUTE) });
+      for (const heartbeat of [last, earlier]) {
+        expect(await subject.store.recordHeartbeat(heartbeat)).toEqual(RECORDED);
+      }
+
+      await sweepOf(subject, [journeyId]);
+
+      const [alert] = await subject.alertsOf(journeyId);
+      expect(alert?.silentSince).toEqual(last.receivedAt);
+      expect(await subject.store.latestHeartbeatOf(journeyId)).toEqual({
+        receivedAt: alert?.silentSince,
+        hasPosition: true,
+        batteryLevel: last.batteryLevel,
+      });
     },
   },
 ];

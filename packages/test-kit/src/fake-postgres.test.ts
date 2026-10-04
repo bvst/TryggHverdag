@@ -299,3 +299,94 @@ describe('fakePostgres', () => {
     expect(database.queries).toEqual([]);
   });
 });
+
+// LOST-02: the startup parameters a pool asks for (AC17: the session limits
+// travel there), and a session ended the way PostgreSQL ends one (AC18: a
+// FATAL error with a SQLSTATE, then nothing). The process tests read the
+// first and use the second; a fake that dropped a parameter, or ended a
+// connection with an ERROR the client survives, would make them pass whatever
+// the pool did.
+describe('fakePostgres: startup parameters and a fatal end (LOST-02)', () => {
+  /** A startup holding these parameters, as pg sends one: name, value, …, then a zero byte. */
+  function startupWith(parameters: Record<string, string>): number[] {
+    const body = [
+      ...int32(196_608),
+      ...Object.entries(parameters).flatMap(([name, value]) => [
+        ...cstring(name),
+        ...cstring(value),
+      ]),
+      0,
+    ];
+    return [...int32(body.length + 4), ...body];
+  }
+
+  test('records each connection’s startup parameters, by name, as text', () => {
+    const database = fakePostgres(noRows);
+    const connection = database.connect();
+    expect(connection.parameters).toEqual({});
+
+    connection.receive(
+      Uint8Array.from(
+        startupWith({
+          user: 'synthetic',
+          database: 'synthetic',
+          idle_in_transaction_session_timeout: '10000',
+          lock_timeout: '5000',
+        }),
+      ),
+    );
+
+    expect(connection.parameters).toEqual({
+      user: 'synthetic',
+      database: 'synthetic',
+      idle_in_transaction_session_timeout: '10000',
+      lock_timeout: '5000',
+    });
+  });
+
+  test('lists every connection made, in order, each with only its own queries', () => {
+    const database = fakePostgres(noRows);
+    const first = database.connect();
+    const second = database.connect();
+    first.receive(Uint8Array.from(STARTUP));
+    second.receive(Uint8Array.from(STARTUP));
+
+    first.receive(Uint8Array.from(frame('Q', cstring('select 1'))));
+    second.receive(Uint8Array.from(frame('Q', cstring('select 2'))));
+
+    expect(database.connections).toEqual([first, second]);
+    expect(first.queries).toEqual([{ text: 'select 1', values: [] }]);
+    expect(second.queries).toEqual([{ text: 'select 2', values: [] }]);
+    expect(database.queries).toHaveLength(2);
+  });
+
+  test('ends a connection with one ErrorResponse of severity FATAL, carrying the SQLSTATE and the message, and answers nothing after it', () => {
+    const { connection } = started(noRows);
+
+    const fatal = connection.end({ code: '57P01', message: 'terminating connection' });
+
+    expect(connection.ended).toBe(true);
+    const [error, ...rest] = messages(fatal);
+    expect(rest).toEqual([]);
+    expect(error?.type).toBe('E');
+    expect(error?.body).toEqual([
+      ...bytesOf('S'),
+      ...cstring('FATAL'),
+      ...bytesOf('V'),
+      ...cstring('FATAL'),
+      ...bytesOf('C'),
+      ...cstring('57P01'),
+      ...bytesOf('M'),
+      ...cstring('terminating connection'),
+      0,
+    ]);
+    expect(connection.receive(Uint8Array.from(frame('Q', cstring('select 1'))))).toEqual(
+      new Uint8Array(0),
+    );
+    expect(connection.queries).toEqual([]);
+  });
+
+  test('a connection not ended says so', () => {
+    expect(started(noRows).connection.ended).toBe(false);
+  });
+});

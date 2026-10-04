@@ -62,6 +62,23 @@ describe('fakeLog', () => {
     expect(log.events).toEqual([event]);
   });
 
+  test('records the watchdog’s, the sender’s and the pools’ events too, each exactly as given (LOST-02)', () => {
+    const log = fakeLog();
+    const written: FakeLogEvent[] = [
+      { event: 'watchdog_failed', stage: 'open', code: '40P01' },
+      { event: 'watchdog_overdue', journeyId: syntheticUuid() },
+      { event: 'push_failed', reason: 'NO_TARGET', messageId: syntheticUuid() },
+      { event: 'delivery_failed', stage: 'claim', code: null },
+      { event: 'database_error', pool: 'worker', code: '25P03' },
+    ];
+
+    for (const event of written) {
+      log.write(event);
+    }
+
+    expect(log.events).toEqual(written);
+  });
+
   test('the test kit hands it out', () => {
     expect(kit.fakeLog).toBe(fakeLog);
   });

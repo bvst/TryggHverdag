@@ -1,24 +1,54 @@
 // The worker is a safety path (AR-06): what it does, and how often, is what
 // turns silence from a phone into an alert. So its wiring is asserted here
 // rather than left to be discovered in production.
+//
+// LOST-02 changes what the worker's beat means (D-079's first follow-up, the
+// spec's approach item 6): the watchdog's sweep records it, at the now() its
+// read returned, and only a sweep that succeeded does. The minute task no
+// longer writes the beat. It checks in with Healthchecks.io only when the
+// beat is at most 30 s old by the database clock, and otherwise says why in
+// one line. So the minute task's tests below changed by design (RG-03, the
+// spec's "Existing assertions that change by design"): every property they
+// held is held again. The beat is the database's time (REL-01: now proved
+// for the sweep, in alerts.system.test.ts, and for the task's judgement of
+// the beat's age, below), and there is no check-in without a fresh beat
+// (INF-08-AC2 and AC3, below).
+//
+// LOST-02 also adds the worker's two loops, the sweep and the delivery, each
+// run again 10 s after its last run finished (D-107); its default push, which
+// answers NOT_CONFIGURED until M3; its pool's session limit and listeners;
+// and a stop that waits for a run in flight and no longer waits for a
+// Healthchecks.io that never answers (D-079's second follow-up).
 import {
   BEAT_RECORDED,
   CHECKED_IN,
+  CHECK_IN_ABORTED,
   SYNTHETIC_CHECK_UUID as CHECK,
   SYNTHETIC_PING_URL as PING_URL,
   fakeCheckIn,
   fakeClock,
+  fakeLog,
   fakeWorkerHeartbeats,
   fc,
+  syntheticCredential,
+  type FakeLog,
 } from '@trygghverdag/test-kit';
 import { EventEmitter } from 'node:events';
 import process from 'node:process';
-import { describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { healthchecksCheckIn } from './adapters/healthchecks.ts';
+import { captured, markersIn } from './capture.test.ts';
 import { readHealthchecksSetting, type HealthchecksSetting } from './config.ts';
+import {
+  eventually,
+  listeningFakePostgres,
+  quietDatabase,
+  sessionSetting,
+} from './fake-postgres-server.test.ts';
 import type { CheckIn } from './ports.ts';
 import {
   HEARTBEAT_CRONTAB,
+  UNCONFIGURED_PUSH,
   createTaskList,
   runWorkerProcess,
   startWorker,
@@ -26,31 +56,117 @@ import {
 } from './worker.ts';
 
 const NOW = new Date('2026-09-23T22:15:00.000Z');
+const SECOND = 1_000;
+/** A beat at most this old is fresh: three sweeps (LOST-02, approach item 6). */
+const BEAT_FRESH = 30 * SECOND;
+
+/** What a sweep and a delivery resolve to (the spec's interfaces). */
+interface SweepResult {
+  ok: boolean;
+  opened: number;
+  stuck: number;
+}
+interface DeliveryResult {
+  sent: number;
+  failed: number;
+}
+
+/**
+ * A loop's work, driven by the test: each run waits until the test settles
+ * it, and counts. `finish` and `fail` settle the latest run.
+ */
+function stubRuns<T>(fallback: T) {
+  const runs: { resolve: (result: T) => void; reject: (error: Error) => void }[] = [];
+  return {
+    run: () =>
+      new Promise<T>((resolve, reject) => {
+        runs.push({ resolve, reject });
+      }),
+    get count() {
+      return runs.length;
+    },
+    finish(result: T = fallback) {
+      runs.at(-1)?.resolve(result);
+    },
+    fail(error = new Error('the run threw')) {
+      runs.at(-1)?.reject(error);
+    },
+  };
+}
+
+/** A watchdog whose sweeps the test settles by hand. */
+function stubWatchdog() {
+  const runs = stubRuns<SweepResult>({ ok: true, opened: 0, stuck: 0 });
+  return Object.assign(runs, { sweep: runs.run });
+}
+
+/** A sender whose deliveries the test settles by hand. */
+function stubSender() {
+  const runs = stubRuns<DeliveryResult>({ sent: 0, failed: 0 });
+  return Object.assign(runs, { deliverDue: runs.run });
+}
+
+/**
+ * Loops that do nothing and succeed at once: for the tests about something
+ * else, so the real watchdog and sender never reach for a database there.
+ */
+function quietLoops(): {
+  watchdog: { sweep: () => Promise<SweepResult> };
+  sender: { deliverDue: () => Promise<DeliveryResult> };
+  log: FakeLog;
+} {
+  return {
+    watchdog: { sweep: () => Promise.resolve({ ok: true, opened: 0, stuck: 0 }) },
+    sender: { deliverDue: () => Promise.resolve({ sent: 0, failed: 0 }) },
+    log: fakeLog(),
+  };
+}
+
+/** The minute task's Graphile helpers, as far as the task reads them: the abort signal. */
+function helpersWith(signal: AbortSignal = new AbortController().signal) {
+  return { abortSignal: signal } as never;
+}
 
 describe('createTaskList', () => {
-  test('REL-01: the heartbeat records the time the database gave, not this process', async () => {
-    // The API compares this stamp against its own reading of now. If the worker
-    // ever stamped it from its own clock, two machines drifting apart would be
-    // read as the worker having stopped — a page in the night for nothing.
+  test('REL-01: the minute task judges the beat’s age by the time the database gave, not this process', async () => {
+    // RG-03 (LOST-02): this test said "the heartbeat records the time the
+    // database gave". The minute task no longer records the beat; the sweep
+    // does, at its read's now(), proved in alerts.system.test.ts
+    // (LOST-02-AC4, AC19). What this task still decides on a clock is whether
+    // the beat is fresh, so the same rule is held here: NOW is days before
+    // this machine's clock, and a beat 20 s before NOW is fresh only on the
+    // database's time.
     const clock = fakeClock(NOW);
-    const heartbeats = fakeWorkerHeartbeats(null);
-    const { heartbeat } = createTaskList({ clock, heartbeats });
+    const heartbeats = fakeWorkerHeartbeats(new Date(NOW.getTime() - 20 * SECOND));
+    const checkIn = fakeCheckIn();
+    const { heartbeat } = createTaskList({ clock, heartbeats, checkIn, write: () => undefined });
 
-    await heartbeat?.(null, {} as never);
+    await heartbeat?.(null, helpersWith());
 
-    expect((await heartbeats.lastBeat())?.toISOString()).toBe(NOW.toISOString());
+    expect(checkIn.calls).toBe(1);
+    expect((await heartbeats.lastBeat())?.toISOString()).toBe(
+      new Date(NOW.getTime() - 20 * SECOND).toISOString(),
+    );
   });
 
-  test('beating twice moves the recorded time forward', async () => {
+  test('the minute task records no beat: a minute later, with no new beat from a sweep, it does not check in again', async () => {
+    // RG-03 (LOST-02): this test said "beating twice moves the recorded time
+    // forward". The task no longer beats. Its replacement holds the other
+    // side: a minute on, the beat it was given is 80 s old, and the task
+    // neither moves it nor checks in on it.
+    const events: string[] = [];
     const clock = fakeClock(NOW);
-    const heartbeats = fakeWorkerHeartbeats(null);
-    const { heartbeat } = createTaskList({ clock, heartbeats });
+    const heartbeats = fakeWorkerHeartbeats(new Date(NOW.getTime() - 20 * SECOND), { events });
+    const checkIn = fakeCheckIn({ events });
+    const { heartbeat } = createTaskList({ clock, heartbeats, checkIn, write: () => undefined });
 
-    await heartbeat?.(null, {} as never);
+    await heartbeat?.(null, helpersWith());
     clock.advance(60_000);
-    await heartbeat?.(null, {} as never);
+    await heartbeat?.(null, helpersWith());
 
-    expect((await heartbeats.lastBeat())?.getTime()).toBe(NOW.getTime() + 60_000);
+    expect(events).toEqual([CHECKED_IN]);
+    expect(events).not.toContain(BEAT_RECORDED);
+    expect((await heartbeats.lastBeat())?.getTime()).toBe(NOW.getTime() - 20 * SECOND);
   });
 });
 
@@ -101,12 +217,26 @@ describe('startWorker', () => {
 type RunnerOptions = Parameters<Parameters<typeof startWorker>[1] & object>[0];
 
 /**
+ * Graphile Worker 0.18's default `gracefulShutdownAbortTimeout`: how long its
+ * graceful shutdown waits before it aborts the `helpers.abortSignal` of the
+ * jobs still running (read in its dist/config.js, line 53, and dist/main.js,
+ * lines 662–666: the abort comes on a timer after the shutdown begins).
+ */
+const GRAPHILE_ABORT_TIMEOUT_MS = 5_000;
+
+/**
  * A runner that records what happens to it. `ends` settles the promise that
  * Graphile Worker's own runner settles when it stops or crashes.
+ *
+ * LOST-02: it runs a task as Graphile does, with `helpers.abortSignal`, and
+ * its stop does what Graphile's graceful shutdown does with running jobs: it
+ * waits for them, and aborts their signal once `gracefulShutdownAbortTimeout`
+ * has passed (Graphile's default unless the worker sets it). It also notes
+ * how many `error` and `connect` listeners the pool had when it was handed in.
  */
-function recordingRunner() {
-  const events: string[] = [];
+function recordingRunner(events: string[] = []) {
   let options: RunnerOptions | undefined;
+  let listenersAtStart: { error: number; connect: number } | undefined;
   let settle: { resolve: () => void; reject: (error: Error) => void } = {
     resolve: () => undefined,
     reject: () => undefined,
@@ -114,10 +244,16 @@ function recordingRunner() {
   const promise = new Promise<void>((resolve, reject) => {
     settle = { resolve, reject };
   });
+  const controller = new AbortController();
+  const running = new Set<Promise<unknown>>();
   const run = ((given: RunnerOptions) => {
     options = given;
     const pool = given.pgPool;
     if (pool !== undefined) {
+      listenersAtStart = {
+        error: pool.listenerCount('error'),
+        connect: pool.listenerCount('connect'),
+      };
       const end = pool.end.bind(pool);
       pool.end = () => {
         events.push('pool ended');
@@ -126,10 +262,17 @@ function recordingRunner() {
     }
     return Promise.resolve({
       promise,
-      stop: () => {
+      stop: async () => {
+        const abortAfter =
+          (given as { gracefulShutdownAbortTimeout?: number }).gracefulShutdownAbortTimeout ??
+          GRAPHILE_ABORT_TIMEOUT_MS;
+        const timer = setTimeout(() => {
+          controller.abort();
+        }, abortAfter);
+        await Promise.allSettled([...running]);
+        clearTimeout(timer);
         events.push('runner stopped');
         settle.resolve();
-        return Promise.resolve();
       },
     } as never);
   }) as RunWorker;
@@ -137,6 +280,20 @@ function recordingRunner() {
     run,
     events,
     options: () => options,
+    listenersAtStart: () => listenersAtStart,
+    /** Runs the named task as Graphile Worker would: with its abort signal, tracked until it settles. */
+    runTask: (name: string): Promise<void> => {
+      const task = options?.taskList?.[name];
+      if (task === undefined) {
+        return Promise.reject(new Error(`No ${name} task was scheduled.`));
+      }
+      const job = Promise.resolve(task(null, { abortSignal: controller.signal } as never)).then(
+        () => undefined,
+      );
+      running.add(job);
+      void job.finally(() => running.delete(job)).catch(() => undefined);
+      return job;
+    },
     endsOnItsOwn: () => {
       settle.resolve();
     },
@@ -377,6 +534,15 @@ describe('runWorkerProcess, when stopping fails', () => {
       exit: (code) => {
         exits.push(code);
       },
+      // RG-03 (LOST-02): quiet loops, as the other runWorkerProcess tests
+      // have. LOST-02 starts a watchdog and a sender with the worker, and
+      // stop() waits for a sweep in flight before it stops the runner (AC21).
+      // Left real, the first sweep looks up the host "example" and fails a
+      // few milliseconds later, after this test has asserted. This test is
+      // about a stop that fails, not about the loops: it asserts the same
+      // exit code and the same line as before, and only keeps the loops it
+      // is not about from starting.
+      ...quietLoops(),
     });
     await settle();
     signals.emit('SIGTERM');
@@ -389,10 +555,17 @@ describe('runWorkerProcess, when stopping fails', () => {
 
 // INF-08, serving REL-08: the worker checks in with Healthchecks.io, and a
 // check that stops getting pings pages the owner. So the one thing that must
-// never happen is a ping without a beat: Healthchecks.io would report a worker
-// alive that is not recording anything, and nobody would be paged. And the
-// ping URL must never be written anywhere: anyone who has it can keep the check
-// green while the worker is dead.
+// never happen is a ping without a fresh beat: Healthchecks.io would report a
+// worker alive whose watchdog is not sweeping, and nobody would be paged.
+// And the ping URL must never be written anywhere: anyone who has it can keep
+// the check green while the worker is dead.
+//
+// Since LOST-02 the beat is the watchdog's (D-079: "the watchdog feeds the
+// beat"), so "only after a recorded beat" became "only when the beat is at
+// most 30 s old by the database clock" (RG-03, by design, the spec's
+// "Existing assertions that change by design"). The tests below held the
+// first; they hold the second, with the same strength: every way a minute
+// can go, and the order of what happens in it.
 //
 // Nothing below sends anything to hc-ping.com, and nothing could, even in a
 // worker that ignored the fake it was handed: a ping from a test would tell a
@@ -407,9 +580,13 @@ describe('runWorkerProcess, when stopping fails', () => {
 const CHECKING_IN = /^worker: checking in with Healthchecks\.io\b/;
 const NOT_CHECKING_IN = /^worker: not checking in with Healthchecks\.io\b/;
 const CHECK_IN_FAILED = 'worker: Healthchecks.io check-in failed: ';
+/** The line the worker says at start until M3 brings a push provider (LOST-02, approach item 5). */
+const NO_PUSH = /^worker: .*\bno push provider\b/i;
 
-/** What the fake database adds to `events` when the heartbeat reads its time. */
+/** What the fake database adds to `events` when the minute task reads its time. */
 const TIME_READ = 'time read';
+/** What the fake database adds to `events` when the minute task reads the beat. */
+const BEAT_READ = 'beat read';
 
 /** What was written, as lines. */
 const linesOf = (written: string[]) =>
@@ -417,6 +594,10 @@ const linesOf = (written: string[]) =>
     .join('')
     .split('\n')
     .filter((line) => line !== '');
+
+/** The lines about Healthchecks.io: the start line, and each check-in that failed or did not happen. */
+const healthchecksLines = (written: string[]) =>
+  linesOf(written).filter((line) => line.includes('Healthchecks.io'));
 
 /** The reason a setting gives for not checking in. Fails the test if it would check in. */
 function reasonOf(setting: HealthchecksSetting): string {
@@ -449,20 +630,27 @@ const fetchThatRepeatsTheUrl: typeof fetch = (input) =>
 
 /** `select now()` as PostgreSQL writes it, and as Drizzle hands it back from a raw query. */
 const NOW_AS_POSTGRES_WRITES_IT = '2026-09-23 22:15:00+00';
+/** A beat 20 s before that, as the worker_heartbeat row holds it: fresh. */
+const FRESH_BEAT_AS_POSTGRES_WRITES_IT = '2026-09-23 22:14:40+00';
 
 /**
- * Makes the pool startWorker handed to the runner answer the heartbeat's two
- * queries as PostgreSQL would, so the heartbeat startWorker built — with the
- * real database clock and the real heartbeat table behind it — can run to the
- * end with no database. Each query joins `events` only once it has been
- * answered. Set `failing` to make one of them fail instead.
+ * Makes the pool startWorker handed to the runner answer the minute task's
+ * two reads as PostgreSQL would: the time, and the watchdog's beat. So the
+ * task startWorker built — with the real database clock and the real
+ * heartbeat table behind it — can run to the end with no database. Each read
+ * joins `events` only once it has been answered. Set `failing` to make one of
+ * them fail, and `beatAt` to the beat's time as text, or null for none. Any
+ * other query fails: the minute task writes nothing (LOST-02).
  */
 function answerLikePostgres(runner: ReturnType<typeof recordingRunner>, events: string[]) {
   const pool = runner.options()?.pgPool;
   if (pool === undefined) {
     throw new Error('The runner was never given a pool.');
   }
-  const database: { failing: 'time' | 'record' | null } = { failing: null };
+  const database: { failing: 'time' | 'beat' | null; beatAt: string | null } = {
+    failing: null,
+    beatAt: FRESH_BEAT_AS_POSTGRES_WRITES_IT,
+  };
   const answer = (config: string | { text: string }) => {
     const text = typeof config === 'string' ? config : config.text;
     return Promise.resolve().then(() => {
@@ -473,14 +661,15 @@ function answerLikePostgres(runner: ReturnType<typeof recordingRunner>, events: 
         events.push(TIME_READ);
         return { rows: [{ now: NOW_AS_POSTGRES_WRITES_IT }], rowCount: 1 };
       }
-      if (text.startsWith('insert into "worker_heartbeat"')) {
-        if (database.failing === 'record') {
+      if (/^select\b[\s\S]*\bfrom "worker_heartbeat"/.test(text)) {
+        if (database.failing === 'beat') {
           throw new Error('Connection terminated unexpectedly');
         }
-        events.push(BEAT_RECORDED);
-        return { rows: [], rowCount: 1 };
+        events.push(BEAT_READ);
+        const rows = database.beatAt === null ? [] : [[database.beatAt]];
+        return { rows, rowCount: rows.length };
       }
-      throw new Error(`The heartbeat asked the database something unexpected: ${text}`);
+      throw new Error(`The minute task asked the database something unexpected: ${text}`);
     });
   };
   pool.query = answer as never;
@@ -489,18 +678,14 @@ function answerLikePostgres(runner: ReturnType<typeof recordingRunner>, events: 
 
 /** Runs the heartbeat task the runner was given, as Graphile Worker's cron would. */
 function runHeartbeat(runner: ReturnType<typeof recordingRunner>): Promise<void> {
-  const { heartbeat } = runner.options()?.taskList ?? {};
-  if (heartbeat === undefined) {
-    return Promise.reject(new Error('No heartbeat task was scheduled.'));
-  }
-  return Promise.resolve(heartbeat(null, {} as never)).then(() => undefined);
+  return runner.runTask('heartbeat');
 }
 
 /**
  * runWorkerProcess with everything it reaches replaced: a recording runner,
- * signals the test sends, and — unless `createCheckIn` is 'default' — a
- * check-in the test owns. Returns what it wrote, how it exited, and every URL
- * it asked a check-in to be made for.
+ * signals the test sends, loops that do nothing, and — unless `createCheckIn`
+ * is 'default' — a check-in the test owns. Returns what it wrote, how it
+ * exited, and every URL it asked a check-in to be made for.
  */
 function workerProcess({
   healthchecks,
@@ -524,6 +709,7 @@ function workerProcess({
     signals,
     instanceType,
     healthchecks,
+    ...quietLoops(),
     ...(make === 'default'
       ? {}
       : {
@@ -551,13 +737,16 @@ async function stopCleanly(worker: ReturnType<typeof workerProcess>) {
   expect(worker.exits).toEqual([0]);
 }
 
-describe('REL-08: the heartbeat checks in with Healthchecks.io only after a recorded beat', () => {
-  /** A task list over fakes that share one list of what happened, in order. */
-  function heartbeatOverFakes() {
+describe('REL-08: the minute task checks in with Healthchecks.io only after a fresh beat', () => {
+  /** A task list over fakes that share one list of what happened, in order; the beat `ageMs` old, or none. */
+  function heartbeatOverFakes(ageMs: number | null = 20 * SECOND) {
     const events: string[] = [];
     const written: string[] = [];
     const clock = fakeClock(NOW);
-    const heartbeats = fakeWorkerHeartbeats(null, { events });
+    const heartbeats = fakeWorkerHeartbeats(
+      ageMs === null ? null : new Date(NOW.getTime() - ageMs),
+      { events },
+    );
     const checkIn = fakeCheckIn({ events });
     const { heartbeat } = createTaskList({
       clock,
@@ -567,68 +756,87 @@ describe('REL-08: the heartbeat checks in with Healthchecks.io only after a reco
         written.push(text);
       },
     });
-    const run = () => Promise.resolve(heartbeat?.(null, {} as never));
+    const run = (signal?: AbortSignal) => Promise.resolve(heartbeat?.(null, helpersWith(signal)));
     return { events, written, clock, heartbeats, checkIn, run };
   }
 
-  test('INF-08-AC2: a recorded beat is followed by exactly one check-in, and nothing is written', async () => {
-    const { events, written, heartbeats, checkIn, run } = heartbeatOverFakes();
+  test('INF-08-AC2: a fresh beat is followed by exactly one check-in, and nothing is written', async () => {
+    // RG-03 (LOST-02): "a recorded beat" became "a fresh beat", and the task
+    // records none of its own: the events hold the check-in alone.
+    const { events, written, checkIn, run } = heartbeatOverFakes();
 
     await expect(run()).resolves.toBeUndefined();
 
-    expect(events).toEqual([BEAT_RECORDED, CHECKED_IN]);
+    expect(events).toEqual([CHECKED_IN]);
     expect(checkIn.calls).toBe(1);
-    expect((await heartbeats.lastBeat())?.toISOString()).toBe(NOW.toISOString());
     expect(written).toEqual([]);
   });
 
-  test('INF-08-AC2: for any run of heartbeats, check-ins equal recorded beats, and each follows its own', async () => {
-    // The ordering rule, over every mix of outcomes a minute can have. The
-    // fakes add to `events` only once a beat has actually been recorded, so a
-    // check-in sent alongside the write rather than after it shows up here as
-    // the wrong order, not as a pass.
-    const OUTCOMES = ['beats', 'the clock fails', 'recording fails', 'the check-in fails'] as const;
+  test('INF-08-AC2: for any run of minutes, check-ins equal the minutes whose beat was fresh, and each comes after its own minute’s reads', async () => {
+    // RG-03 (LOST-02): the ordering rule, over every mix of outcomes a minute
+    // can have, now that the sweep, not this task, records the beat. A
+    // minute's beat is set by recording it, as a sweep would, before the
+    // task runs; the fake adds to `events` only once the beat is recorded,
+    // and the check-in comes after it or not at all.
+    const OUTCOMES = [
+      'a fresh beat',
+      'a stale beat',
+      'the clock fails',
+      'the check-in fails',
+    ] as const;
 
     await fc.assert(
       fc.asyncProperty(
         fc.array(fc.constantFrom(...OUTCOMES), { maxLength: 25 }),
-        async (outcomes) => {
-          const { events, written, clock, heartbeats, checkIn, run } = heartbeatOverFakes();
+        fc.integer({ min: 0, max: BEAT_FRESH }),
+        fc.integer({ min: BEAT_FRESH + 1, max: 10 * BEAT_FRESH }),
+        async (outcomes, freshAgeMs, staleAgeMs) => {
+          const { events, written, clock, heartbeats, checkIn, run } = heartbeatOverFakes(null);
           const expected: string[] = [];
-          let lastRecorded: Date | null = null;
+          let failedCheckIns = 0;
+          let staleMinutes = 0;
 
           for (const outcome of outcomes) {
             clock.recover();
-            heartbeats.recover();
             checkIn.recover();
+            const now = (await clock.now()).getTime();
+            await heartbeats.record(
+              new Date(now - (outcome === 'a stale beat' ? staleAgeMs : freshAgeMs)),
+            );
+            expected.push(BEAT_RECORDED);
             const failure = new Error(`${outcome}, on purpose`);
             if (outcome === 'the clock fails') {
               clock.failWith(failure);
-            } else if (outcome === 'recording fails') {
-              heartbeats.failWith(failure);
             } else if (outcome === 'the check-in fails') {
               checkIn.failWith(failure);
             }
 
-            if (outcome === 'the clock fails' || outcome === 'recording fails') {
+            if (outcome === 'the clock fails') {
               await expect(run()).rejects.toBe(failure);
             } else {
               await expect(run()).resolves.toBeUndefined();
-              expected.push(BEAT_RECORDED, CHECKED_IN);
-              clock.recover();
-              lastRecorded = await clock.now();
+              if (outcome === 'a stale beat') {
+                staleMinutes += 1;
+              } else {
+                expected.push(CHECKED_IN);
+                if (outcome === 'the check-in fails') {
+                  failedCheckIns += 1;
+                }
+              }
             }
+            clock.recover();
             clock.advance(60_000);
           }
 
           expect(events).toEqual(expected);
-          expect(checkIn.calls).toBe(expected.length / 2);
-          expect(await heartbeats.lastBeat()).toEqual(lastRecorded);
-          const failedCheckIns = outcomes.filter((outcome) => outcome === 'the check-in fails');
-          expect(linesOf(written)).toHaveLength(failedCheckIns.length);
-          for (const line of linesOf(written)) {
-            expect(line.startsWith(CHECK_IN_FAILED)).toBe(true);
-          }
+          expect(checkIn.calls).toBe(expected.filter((event) => event === CHECKED_IN).length);
+          expect(linesOf(written)).toHaveLength(failedCheckIns + staleMinutes);
+          expect(linesOf(written).filter((line) => line.startsWith(CHECK_IN_FAILED))).toHaveLength(
+            failedCheckIns,
+          );
+          expect(linesOf(written).filter((line) => NOT_CHECKING_IN.test(line))).toHaveLength(
+            staleMinutes,
+          );
         },
       ),
       { numRuns: 200 },
@@ -650,21 +858,24 @@ describe('REL-08: the heartbeat checks in with Healthchecks.io only after a reco
     // above is the failure's doing and not a check-in that was never wired.
     clock.recover();
     await run();
-    expect(events).toEqual([BEAT_RECORDED, CHECKED_IN]);
+    expect(events).toEqual([CHECKED_IN]);
   });
 
-  test('INF-08-AC3: when the beat cannot be recorded, there is no check-in, and the task fails as before', async () => {
-    const { events, written, heartbeats, checkIn, run } = heartbeatOverFakes();
-    const failure = new Error('Connection terminated unexpectedly');
-    heartbeats.failWith(failure);
+  test('INF-08-AC3: when the beat is more than 30 s old, there is no check-in, and one line says so, naming the beat; a fresh beat then checks in', async () => {
+    // RG-03 (LOST-02): this test was "when the beat cannot be recorded".
+    // The task no longer records it; a sweep that failed records none, which
+    // leaves the beat to age. So a stale beat is that case now.
+    const { events, written, heartbeats, checkIn, run } = heartbeatOverFakes(BEAT_FRESH + 1);
 
-    await expect(run()).rejects.toBe(failure);
+    await expect(run()).resolves.toBeUndefined();
 
     expect(checkIn.calls).toBe(0);
     expect(events).toEqual([]);
-    expect(written).toEqual([]);
+    expect(linesOf(written)).toHaveLength(1);
+    expect(linesOf(written)[0]).toMatch(NOT_CHECKING_IN);
+    expect(linesOf(written)[0]).toMatch(/\bbeat\b/);
 
-    heartbeats.recover();
+    await heartbeats.record(NOW);
     await run();
     expect(events).toEqual([BEAT_RECORDED, CHECKED_IN]);
   });
@@ -674,15 +885,17 @@ describe('REL-08: the heartbeat checks in with Healthchecks.io only after a reco
     ['no answer in time', 'The operation was aborted due to timeout'],
     ['no connection', 'fetch failed'],
   ])(
-    'INF-08-AC4: a check-in that fails with %s does not fail the beat: recorded once, one line with the reason',
+    'INF-08-AC4: a check-in that fails with %s does not fail the task: one line with the reason',
     async (_what, reason) => {
+      // RG-03 (LOST-02): the task records no beat, so the events hold the
+      // check-in alone, and the beat it was given is unchanged.
       const { events, written, heartbeats, checkIn, run } = heartbeatOverFakes();
       checkIn.failWith(new Error(reason));
 
       await expect(run()).resolves.toBeUndefined();
 
-      expect(events).toEqual([BEAT_RECORDED, CHECKED_IN]);
-      expect((await heartbeats.lastBeat())?.toISOString()).toBe(NOW.toISOString());
+      expect(events).toEqual([CHECKED_IN]);
+      expect((await heartbeats.lastBeat())?.getTime()).toBe(NOW.getTime() - 20 * SECOND);
       const text = written.join('');
       expect(text.startsWith(CHECK_IN_FAILED)).toBe(true);
       expect(text).toContain(reason);
@@ -694,11 +907,13 @@ describe('REL-08: the heartbeat checks in with Healthchecks.io only after a reco
   test('INF-08-AC4: a failed check-in is written again every minute it fails, one line each', async () => {
     // The line is the only trace in the platform's log of a check that is
     // not being pinged, so it must not be written once and then fall silent.
-    const { written, checkIn, clock, run } = heartbeatOverFakes();
+    const { written, checkIn, clock, heartbeats, run } = heartbeatOverFakes();
     checkIn.failWith(new Error('Healthchecks.io answered 500'));
 
     await run();
     clock.advance(60_000);
+    // A sweep in between keeps the beat fresh (LOST-02).
+    await heartbeats.record(await clock.now());
     await run();
 
     expect(checkIn.calls).toBe(2);
@@ -712,11 +927,11 @@ describe('REL-08: the heartbeat checks in with Healthchecks.io only after a reco
       checkIn.failWith(new Error('Healthchecks.io answered 500'));
       const { heartbeat } = createTaskList({
         clock: fakeClock(NOW),
-        heartbeats: fakeWorkerHeartbeats(null),
+        heartbeats: fakeWorkerHeartbeats(new Date(NOW.getTime() - 20 * SECOND)),
         checkIn,
       });
 
-      await heartbeat?.(null, {} as never);
+      await heartbeat?.(null, helpersWith());
 
       const lines = linesOf(stderr.mock.calls.map(([text]) => String(text)));
       expect(lines.filter((line) => line.startsWith(CHECK_IN_FAILED))).toHaveLength(1);
@@ -725,56 +940,148 @@ describe('REL-08: the heartbeat checks in with Healthchecks.io only after a reco
       stderr.mockRestore();
     }
   });
+
+  test('LOST-02-AC19: by the database clock, a beat exactly 30 s old is checked in on, and one 30.001 s old is not: one line says the beat is too old', async () => {
+    const atLimit = heartbeatOverFakes(BEAT_FRESH);
+    await atLimit.run();
+    expect(atLimit.checkIn.calls).toBe(1);
+    expect(atLimit.written).toEqual([]);
+
+    const pastIt = heartbeatOverFakes(BEAT_FRESH + 1);
+    await pastIt.run();
+    expect(pastIt.checkIn.calls).toBe(0);
+    expect(linesOf(pastIt.written)).toHaveLength(1);
+    expect(linesOf(pastIt.written)[0]).toMatch(NOT_CHECKING_IN);
+  });
+
+  test('LOST-02-AC19: with no beat at all, there is no check-in, and one line says so', async () => {
+    const { checkIn, written, run } = heartbeatOverFakes(null);
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(checkIn.calls).toBe(0);
+    expect(linesOf(written)).toHaveLength(1);
+    expect(linesOf(written)[0]).toMatch(NOT_CHECKING_IN);
+    expect(linesOf(written)[0]).toMatch(/\bbeat\b/);
+  });
+
+  test('LOST-02-AC19: for any age of the beat, the task checks in exactly when it is at most 30 s old, and otherwise writes one line; it never records a beat', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 0, max: 10 * 60 * SECOND }), async (ageMs) => {
+        const { events, checkIn, written, run } = heartbeatOverFakes(ageMs);
+
+        await run();
+
+        expect(checkIn.calls).toBe(ageMs <= BEAT_FRESH ? 1 : 0);
+        expect(linesOf(written)).toHaveLength(ageMs <= BEAT_FRESH ? 0 : 1);
+        expect(events).not.toContain(BEAT_RECORDED);
+      }),
+    );
+  });
+
+  test('LOST-02-AC21: the minute task hands Graphile’s abort signal to the check-in, the very one it was given', async () => {
+    const { checkIn, run } = heartbeatOverFakes();
+    const controller = new AbortController();
+
+    await run(controller.signal);
+
+    expect(checkIn.signals).toHaveLength(1);
+    expect(checkIn.signals[0]).toBe(controller.signal);
+  });
+
+  test('LOST-02-AC21: a check-in that hangs ends when that signal aborts: the task completes, and says the check-in failed in one line', async () => {
+    const { events, checkIn, written, run } = heartbeatOverFakes();
+    checkIn.hang();
+    const controller = new AbortController();
+    const settled: string[] = [];
+
+    const task = run(controller.signal).then(
+      () => settled.push('completed'),
+      () => settled.push('failed'),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(settled).toEqual([]);
+
+    controller.abort();
+    // A task that never handed the signal on would hang here for good: a
+    // second is far longer than an abort takes.
+    await Promise.race([task, new Promise((resolve) => setTimeout(resolve, 1_000))]);
+
+    expect(settled).toEqual(['completed']);
+    expect(events).toEqual([CHECKED_IN, CHECK_IN_ABORTED]);
+    expect(linesOf(written)).toHaveLength(1);
+    expect(linesOf(written)[0]?.startsWith(CHECK_IN_FAILED)).toBe(true);
+  });
 });
 
-describe('REL-08: the heartbeat startWorker schedules checks in through the check-in it was given', () => {
-  test('INF-08-AC2: it reads the database time, records the beat, and only then checks in', async () => {
+describe('REL-08: the minute task startWorker schedules checks in through the check-in it was given', () => {
+  test('INF-08-AC2: it reads the database time and the beat, and only then checks in; it writes nothing', async () => {
+    // RG-03 (LOST-02): it "reads the database time, records the beat, and
+    // only then checks in". The beat is the sweep's now, so the task reads
+    // it instead of writing it; answerLikePostgres refuses any write.
     const events: string[] = [];
     const runner = recordingRunner();
     const checkIn = fakeCheckIn({ events });
-    await startWorker('postgres://example/db', runner.run, { checkIn, write: () => undefined });
+    await startWorker('postgres://example/db', runner.run, {
+      checkIn,
+      write: () => undefined,
+      ...quietLoops(),
+    });
     answerLikePostgres(runner, events);
 
     await expect(runHeartbeat(runner)).resolves.toBeUndefined();
 
-    expect(events).toEqual([TIME_READ, BEAT_RECORDED, CHECKED_IN]);
+    expect([...events].sort()).toEqual([BEAT_READ, CHECKED_IN, TIME_READ].sort());
+    expect(events.at(-1)).toBe(CHECKED_IN);
   });
 
-  test('INF-08-AC3: when recording the beat fails, it does not check in, and fails as before', async () => {
+  test('INF-08-AC3: when the beat cannot be read, it does not check in, and fails as before', async () => {
+    // RG-03 (LOST-02): this was "when recording the beat fails". Reading it is
+    // what the task does with the beat now.
     const events: string[] = [];
     const runner = recordingRunner();
     const checkIn = fakeCheckIn({ events });
-    await startWorker('postgres://example/db', runner.run, { checkIn, write: () => undefined });
+    await startWorker('postgres://example/db', runner.run, {
+      checkIn,
+      write: () => undefined,
+      ...quietLoops(),
+    });
     const database = answerLikePostgres(runner, events);
-    database.failing = 'record';
+    database.failing = 'beat';
 
-    await expect(runHeartbeat(runner)).rejects.toThrow(/insert into "worker_heartbeat"/);
-    expect(events).toEqual([TIME_READ]);
+    await expect(runHeartbeat(runner)).rejects.toThrow(/"worker_heartbeat"/);
+    expect(events).not.toContain(CHECKED_IN);
     expect(checkIn.calls).toBe(0);
 
     database.failing = null;
     await runHeartbeat(runner);
-    expect(events).toEqual([TIME_READ, TIME_READ, BEAT_RECORDED, CHECKED_IN]);
+    expect(events.filter((event) => event === CHECKED_IN)).toHaveLength(1);
+    expect(events.at(-1)).toBe(CHECKED_IN);
   });
 
   test('INF-08-AC3: when the database time cannot be read, it does not check in', async () => {
     const events: string[] = [];
     const runner = recordingRunner();
     const checkIn = fakeCheckIn({ events });
-    await startWorker('postgres://example/db', runner.run, { checkIn, write: () => undefined });
+    await startWorker('postgres://example/db', runner.run, {
+      checkIn,
+      write: () => undefined,
+      ...quietLoops(),
+    });
     const database = answerLikePostgres(runner, events);
     database.failing = 'time';
 
     await expect(runHeartbeat(runner)).rejects.toThrow(/select now\(\)/);
-    expect(events).toEqual([]);
+    expect(events).not.toContain(CHECKED_IN);
     expect(checkIn.calls).toBe(0);
 
     database.failing = null;
     await runHeartbeat(runner);
-    expect(events).toEqual([TIME_READ, BEAT_RECORDED, CHECKED_IN]);
+    expect(events.at(-1)).toBe(CHECKED_IN);
+    expect(events).toContain(TIME_READ);
   });
 
-  test('INF-08-AC3: a heartbeat wired to a database it cannot reach sends no check-in', async () => {
+  test('INF-08-AC3: a minute task wired to a database it cannot reach sends no check-in', async () => {
     // The same unreachable database as the AR-06 wiring test above: the
     // attempt fails in milliseconds, with no network involved.
     const events: string[] = [];
@@ -783,9 +1090,10 @@ describe('REL-08: the heartbeat startWorker schedules checks in through the chec
     await startWorker('postgres:///db?host=/nonexistent-socket-dir', runner.run, {
       checkIn,
       write: () => undefined,
+      ...quietLoops(),
     });
 
-    await expect(runHeartbeat(runner)).rejects.toThrow(/select now\(\)/);
+    await expect(runHeartbeat(runner)).rejects.toThrow(/select now\(\)|"worker_heartbeat"/);
     expect(checkIn.calls).toBe(0);
 
     answerLikePostgres(runner, events);
@@ -804,15 +1112,38 @@ describe('REL-08: the heartbeat startWorker schedules checks in through the chec
       write: (text) => {
         written.push(text);
       },
+      ...quietLoops(),
     });
     answerLikePostgres(runner, events);
 
     await expect(runHeartbeat(runner)).resolves.toBeUndefined();
 
-    expect(events).toEqual([TIME_READ, BEAT_RECORDED, CHECKED_IN]);
+    expect(events.at(-1)).toBe(CHECKED_IN);
     expect(linesOf(written)).toHaveLength(1);
     expect(linesOf(written)[0]?.startsWith(CHECK_IN_FAILED)).toBe(true);
     expect(linesOf(written)[0]).toContain('Healthchecks.io answered 429');
+  });
+
+  test('LOST-02-AC19: with the watchdog’s beat older than 30 s in the table, the minute task startWorker schedules does not check in, and says so in one line', async () => {
+    const events: string[] = [];
+    const written: string[] = [];
+    const runner = recordingRunner();
+    const checkIn = fakeCheckIn({ events });
+    await startWorker('postgres://example/db', runner.run, {
+      checkIn,
+      write: (text) => {
+        written.push(text);
+      },
+      ...quietLoops(),
+    });
+    const database = answerLikePostgres(runner, events);
+    database.beatAt = '2026-09-23 22:14:29.999+00';
+
+    await expect(runHeartbeat(runner)).resolves.toBeUndefined();
+
+    expect(checkIn.calls).toBe(0);
+    expect(linesOf(written)).toHaveLength(1);
+    expect(linesOf(written)[0]).toMatch(NOT_CHECKING_IN);
   });
 });
 
@@ -823,10 +1154,15 @@ describe('REL-08: runWorkerProcess and HEALTHCHECKS_WORKER_URL', () => {
     ['an http: address', `http://127.0.0.1:1/${CHECK}`],
     ['not an address at all', `hc-ping.com/${CHECK}`],
   ])(
-    'INF-08-AC6: with HEALTHCHECKS_WORKER_URL %s it starts, beats and stays up, never checks in, and says why once',
+    'INF-08-AC6: with HEALTHCHECKS_WORKER_URL %s it starts, runs its minute task and stays up, never checks in, and says why once',
     async (_what, value) => {
       // A monitoring setting must never stop the watchdog it watches, or put
       // it in a crash loop.
+      //
+      // RG-03 (LOST-02): the beat is the sweep's, so the minute task no longer
+      // writes one here, and the worker's start lines now include one about
+      // push (approach item 5). So the Healthchecks.io lines are counted
+      // apart, and that one is still said exactly once.
       const healthchecks = readHealthchecksSetting(
         value === undefined ? {} : { HEALTHCHECKS_WORKER_URL: value },
       );
@@ -836,10 +1172,11 @@ describe('REL-08: runWorkerProcess and HEALTHCHECKS_WORKER_URL', () => {
       expect(worker.runner.options()?.crontab).toBe(HEARTBEAT_CRONTAB);
       answerLikePostgres(worker.runner, worker.events);
       await expect(runHeartbeat(worker.runner)).resolves.toBeUndefined();
-      expect(worker.events).toEqual([TIME_READ, BEAT_RECORDED]);
+      expect(worker.events).not.toContain(CHECKED_IN);
+      expect(worker.events).not.toContain(BEAT_RECORDED);
       expect(worker.created).toEqual([]);
 
-      const lines = linesOf(worker.written);
+      const lines = healthchecksLines(worker.written);
       expect(lines).toHaveLength(1);
       expect(lines[0]).toMatch(NOT_CHECKING_IN);
       expect(lines[0]).toContain('HEALTHCHECKS_WORKER_URL');
@@ -851,22 +1188,22 @@ describe('REL-08: runWorkerProcess and HEALTHCHECKS_WORKER_URL', () => {
     },
   );
 
-  test('INF-08-AC6: with a usable https: address it says it is checking in, without saying where, and checks in after each beat', async () => {
+  test('INF-08-AC6: with a usable https: address it says it is checking in, without saying where, and checks in after each fresh beat', async () => {
     const worker = workerProcess({
       healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: PING_URL }),
     });
     await settle();
 
     expect(worker.created).toEqual([PING_URL]);
-    expect(linesOf(worker.written)).toHaveLength(1);
-    expect(linesOf(worker.written)[0]).toMatch(CHECKING_IN);
+    expect(healthchecksLines(worker.written)).toHaveLength(1);
+    expect(healthchecksLines(worker.written)[0]).toMatch(CHECKING_IN);
 
     answerLikePostgres(worker.runner, worker.events);
     await expect(runHeartbeat(worker.runner)).resolves.toBeUndefined();
 
-    expect(worker.events).toEqual([TIME_READ, BEAT_RECORDED, CHECKED_IN]);
+    expect(worker.events.at(-1)).toBe(CHECKED_IN);
     expect(worker.checkIn.calls).toBe(1);
-    expect(linesOf(worker.written)).toHaveLength(1);
+    expect(healthchecksLines(worker.written)).toHaveLength(1);
     expect(worker.written.join('')).not.toContain(CHECK);
     expect(worker.exits).toEqual([]);
 
@@ -886,7 +1223,7 @@ describe('REL-08: runWorkerProcess and HEALTHCHECKS_WORKER_URL', () => {
 
     await expect(runHeartbeat(worker.runner)).resolves.toBeUndefined();
 
-    const lines = linesOf(worker.written);
+    const lines = healthchecksLines(worker.written);
     expect(lines).toHaveLength(2);
     expect(lines[0]).toMatch(CHECKING_IN);
     expect(lines[1]?.startsWith(CHECK_IN_FAILED)).toBe(true);
@@ -896,7 +1233,7 @@ describe('REL-08: runWorkerProcess and HEALTHCHECKS_WORKER_URL', () => {
     await stopCleanly(worker);
   });
 
-  test('INF-08-AC4: by default it checks in through the Healthchecks.io adapter, and a check-in that fails is one line, not a failed beat', async () => {
+  test('INF-08-AC4: by default it checks in through the Healthchecks.io adapter, and a check-in that fails is one line, not a failed task', async () => {
     // No check-in is injected here, so this is the adapter production uses,
     // and PING_URL's port 1 is what makes its fetch fail.
     const worker = workerProcess({
@@ -908,8 +1245,8 @@ describe('REL-08: runWorkerProcess and HEALTHCHECKS_WORKER_URL', () => {
 
     await expect(runHeartbeat(worker.runner)).resolves.toBeUndefined();
 
-    expect(worker.events).toEqual([TIME_READ, BEAT_RECORDED]);
-    const lines = linesOf(worker.written);
+    expect([...worker.events].sort()).toEqual([BEAT_READ, TIME_READ].sort());
+    const lines = healthchecksLines(worker.written);
     expect(lines).toHaveLength(2);
     expect(lines[0]).toMatch(CHECKING_IN);
     // The whole line, not its start: fetch refuses port 1 with a "bad port"
@@ -931,6 +1268,7 @@ describe('REL-08: runWorkerProcess and HEALTHCHECKS_WORKER_URL', () => {
     const running = runWorkerProcess('postgres://example/db', {
       runWorker: runner.run,
       signals,
+      ...quietLoops(),
       write: (text) => {
         written.push(text);
       },
@@ -939,9 +1277,9 @@ describe('REL-08: runWorkerProcess and HEALTHCHECKS_WORKER_URL', () => {
     await settle();
 
     expect(runner.options()?.crontab).toBe(HEARTBEAT_CRONTAB);
-    expect(linesOf(written)).toHaveLength(1);
-    expect(linesOf(written)[0]).toMatch(NOT_CHECKING_IN);
-    expect(linesOf(written)[0]).toContain('HEALTHCHECKS_WORKER_URL');
+    expect(healthchecksLines(written)).toHaveLength(1);
+    expect(healthchecksLines(written)[0]).toMatch(NOT_CHECKING_IN);
+    expect(healthchecksLines(written)[0]).toContain('HEALTHCHECKS_WORKER_URL');
 
     signals.emit('SIGTERM');
     await expect(running).resolves.toBeUndefined();
@@ -963,6 +1301,7 @@ describe('REL-08: runWorkerProcess and HEALTHCHECKS_WORKER_URL', () => {
         signals,
         healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: PING_URL }),
         createCheckIn: () => checkIn,
+        ...quietLoops(),
         exit: () => undefined,
       });
       await settle();
@@ -987,8 +1326,8 @@ describe("REL-08: runWorkerProcess on Clever Cloud's build machine, with Healthc
     const healthchecks = readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: PING_URL });
 
     // The machine that runs the app first, as the control: the same setting
-    // checks in after a beat there. Without it, "nothing checked in" below
-    // would pass just as well for a worker that never checks in anywhere.
+    // checks in after a fresh beat there. Without it, "nothing checked in"
+    // below would pass just as well for a worker that never checks in anywhere.
     const app = workerProcess({ healthchecks, instanceType: 'production' });
     await settle();
     answerLikePostgres(app.runner, app.events);
@@ -1010,5 +1349,431 @@ describe("REL-08: runWorkerProcess on Clever Cloud's build machine, with Healthc
     await stopCleanly(build);
     expect(build.created).toEqual([]);
     expect(build.checkIn.calls).toBe(0);
+  });
+});
+
+// ===========================================================================
+// LOST-02: the loops, the default push, the pool, and a stop that no longer
+// waits for Healthchecks.io.
+// ===========================================================================
+
+describe('REL-08 and LOST-02: the sweep loop and the delivery loop', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A worker whose loops run the stubs, on fake timers: only setTimeout, which the loops keep time with. */
+  async function looping() {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const watchdog = stubWatchdog();
+    const sender = stubSender();
+    const written: string[] = [];
+    const runner = recordingRunner();
+    const worker = await startWorker('postgres://example/db', runner.run, {
+      watchdog,
+      sender,
+      log: fakeLog(),
+      write: (text) => {
+        written.push(text);
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    return { watchdog, sender, written, runner, worker };
+  }
+
+  test('LOST-02-AC21: a sweep and a delivery run at start, and again 10 s after each previous run finished; a run that takes longer than that is never overlapped', async () => {
+    const { watchdog, sender } = await looping();
+
+    expect(watchdog.count).toBe(1);
+    expect(sender.count).toBe(1);
+
+    // The first sweep takes a minute: nothing else starts meanwhile.
+    await vi.advanceTimersByTimeAsync(60 * SECOND);
+    expect(watchdog.count).toBe(1);
+    watchdog.finish();
+    await vi.advanceTimersByTimeAsync(10 * SECOND - 1);
+    expect(watchdog.count).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(watchdog.count).toBe(2);
+
+    // The first delivery, still running all this time, is not overlapped either.
+    expect(sender.count).toBe(1);
+    sender.finish();
+    await vi.advanceTimersByTimeAsync(10 * SECOND - 1);
+    expect(sender.count).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sender.count).toBe(2);
+  });
+
+  test('LOST-02-AC21: a sweep that throws, and a delivery that throws, are each written as one line, and the next run still happens 10 s later', async () => {
+    const { watchdog, sender, written } = await looping();
+
+    watchdog.fail(new Error('the sweep threw'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(linesOf(written)).toHaveLength(1);
+    expect(linesOf(written)[0]).toMatch(/^worker: /);
+    await vi.advanceTimersByTimeAsync(10 * SECOND);
+    expect(watchdog.count).toBe(2);
+
+    sender.fail(new Error('the delivery threw'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(linesOf(written)).toHaveLength(2);
+    expect(linesOf(written)[1]).toMatch(/^worker: /);
+    await vi.advanceTimersByTimeAsync(10 * SECOND);
+    expect(sender.count).toBe(2);
+  });
+
+  test('LOST-02-AC21: a sweep that opened an alert starts a delivery at once, without waiting for the interval; one that opened none does not', async () => {
+    const { watchdog, sender } = await looping();
+    sender.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sender.count).toBe(1);
+
+    watchdog.finish({ ok: true, opened: 1, stuck: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sender.count).toBe(2);
+    sender.finish();
+
+    await vi.advanceTimersByTimeAsync(10 * SECOND);
+    expect(watchdog.count).toBe(2);
+    const deliveries = sender.count;
+    sender.finish();
+    watchdog.finish({ ok: true, opened: 0, stuck: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sender.count).toBe(deliveries);
+  });
+
+  test('LOST-02-AC21: a sweep that opens an alert while a delivery is in flight gets a delivery as soon as that one finishes, not 10 s later', async () => {
+    const { watchdog, sender } = await looping();
+
+    watchdog.finish({ ok: true, opened: 2, stuck: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sender.count).toBe(1);
+
+    sender.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sender.count).toBe(2);
+  });
+
+  test('LOST-02-AC21: a delivery that never settles delays no sweep', async () => {
+    const { watchdog, sender } = await looping();
+
+    for (let sweep = 1; sweep <= 3; sweep += 1) {
+      expect(watchdog.count).toBe(sweep);
+      watchdog.finish();
+      await vi.advanceTimersByTimeAsync(10 * SECOND);
+    }
+    expect(watchdog.count).toBe(4);
+    expect(sender.count).toBe(1);
+  });
+
+  test('LOST-02-AC21: stop() starts no further run, waits for the one in flight, and only then stops the runner and ends the pool', async () => {
+    const { watchdog, sender, runner, worker } = await looping();
+    sender.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    const stopped: string[] = [];
+
+    const stopping = worker.stop().then(() => stopped.push('stopped'));
+    await vi.advanceTimersByTimeAsync(60 * SECOND);
+
+    expect(stopped).toEqual([]);
+    expect(runner.events).toEqual([]);
+    expect(watchdog.count).toBe(1);
+    expect(sender.count).toBe(1);
+
+    watchdog.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    await stopping;
+
+    expect(stopped).toEqual(['stopped']);
+    expect(runner.events).toEqual(['runner stopped', 'pool ended']);
+    await vi.advanceTimersByTimeAsync(60 * SECOND);
+    expect(watchdog.count).toBe(1);
+    expect(sender.count).toBe(1);
+  });
+
+  test('LOST-02-AC21: on the build machine no loop runs (BUG-3)', async () => {
+    const watchdog = stubWatchdog();
+    const sender = stubSender();
+
+    const running = runWorkerProcess('postgres://example/db', {
+      runWorker: recordingRunner().run,
+      signals: new EventEmitter(),
+      instanceType: 'build',
+      keepAlive: () => undefined,
+      watchdog,
+      sender,
+      log: fakeLog(),
+      write: () => undefined,
+      exit: () => undefined,
+    });
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(watchdog.count).toBe(0);
+    expect(sender.count).toBe(0);
+    await running;
+  });
+});
+
+describe('REL-08 and LOST-02: a stop that no longer waits for Healthchecks.io (D-079)', () => {
+  test('LOST-02-AC21: on SIGTERM with a check-in hung, the worker exits with 0 within a second: the check-in’s signal is aborted, then the runner stops, then the pool ends', async () => {
+    // Before LOST-02 the check-in had no signal, and a Healthchecks.io that
+    // never answered held the stop for its 10 s timeout (safety-reviewer
+    // measured an exit 6.8 s after SIGTERM). The runner here does what
+    // Graphile does on stop: it waits for running jobs and aborts their
+    // signal after its gracefulShutdownAbortTimeout. A hung check-in that was
+    // never handed that signal, or a signal aborted only after Graphile's
+    // default 5 s, would hold the exit past a second.
+    const events: string[] = [];
+    const runner = recordingRunner(events);
+    const signals = new EventEmitter();
+    const checkIn = fakeCheckIn({ events });
+    checkIn.hang();
+
+    const running = runWorkerProcess('postgres://example/db', {
+      runWorker: runner.run,
+      signals,
+      healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: PING_URL }),
+      createCheckIn: () => checkIn,
+      ...quietLoops(),
+      write: () => undefined,
+      exit: (code) => {
+        events.push(`exit ${String(code)}`);
+      },
+    });
+    await settle();
+    answerLikePostgres(runner, []);
+    void runHeartbeat(runner).catch(() => undefined);
+    expect(await eventually(() => checkIn.calls === 1)).toBe(true);
+
+    const signalled = performance.now();
+    signals.emit('SIGTERM');
+    const exited = await eventually(() => events.includes('exit 0'), 500);
+
+    expect(exited).toBe(true);
+    expect(performance.now() - signalled).toBeLessThan(1_000);
+    expect(events.filter((event) => event !== CHECKED_IN)).toEqual([
+      CHECK_IN_ABORTED,
+      'runner stopped',
+      'pool ended',
+      'exit 0',
+    ]);
+    await running;
+  });
+});
+
+describe('LOST-02: the worker’s push until M3', () => {
+  test('LOST-02-AC15: the worker’s default push answers NOT_CONFIGURED to every message, and accepts none', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.uuid(), fc.uuid(), async (messageId, recipientId) => {
+        expect(
+          await UNCONFIGURED_PUSH.send({ messageId, recipientId, kind: 'LOST_CONTACT' }),
+        ).toEqual({ outcome: 'failed', reason: 'NOT_CONFIGURED' });
+      }),
+    );
+  });
+
+  test('LOST-02-AC15: the worker says once at start that no push provider is configured, through the write it was given, beside its Healthchecks.io line', async () => {
+    const worker = workerProcess({ healthchecks: readHealthchecksSetting({}) });
+    await settle();
+
+    expect(linesOf(worker.written).filter((line) => NO_PUSH.test(line))).toHaveLength(1);
+    expect(healthchecksLines(worker.written)).toHaveLength(1);
+
+    await stopCleanly(worker);
+    expect(linesOf(worker.written).filter((line) => NO_PUSH.test(line))).toHaveLength(1);
+  });
+
+  test('LOST-02-AC15: by default the worker says on stderr that no push provider is configured', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const signals = new EventEmitter();
+      const running = runWorkerProcess('postgres://example/db', {
+        runWorker: recordingRunner().run,
+        signals,
+        ...quietLoops(),
+        exit: () => undefined,
+      });
+      await settle();
+
+      const lines = linesOf(stderr.mock.calls.map(([text]) => String(text)));
+      expect(lines.filter((line) => NO_PUSH.test(line))).toHaveLength(1);
+
+      signals.emit('SIGTERM');
+      await expect(running).resolves.toBeUndefined();
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+});
+
+describe('SEC-03 and LOST-02: the worker’s pool, seen from the database', () => {
+  test('LOST-02-AC17: the worker’s pool asks every connection for idle_in_transaction_session_timeout 10 000 ms, and for no lock_timeout', async () => {
+    const database = await listeningFakePostgres(quietDatabase);
+    const runner = recordingRunner();
+    const worker = await startWorker(database.url, runner.run, {
+      ...quietLoops(),
+      write: () => undefined,
+    });
+
+    try {
+      await runner.options()?.pgPool?.query('select 1');
+
+      const connections = database.connections();
+      expect(connections.length).toBeGreaterThan(0);
+      for (const connection of connections) {
+        expect(sessionSetting(connection, 'idle_in_transaction_session_timeout')).toBe(10_000);
+        expect(sessionSetting(connection, 'lock_timeout')).toBeUndefined();
+      }
+    } finally {
+      await worker.stop();
+      await database.close();
+    }
+  });
+
+  test('LOST-02-AC18: the pool has its error listener and its connect listener before the runner is handed it, so graphile-worker neither warns nor installs its own', async () => {
+    const runner = recordingRunner();
+    const worker = await startWorker('postgres://example/db', runner.run, {
+      ...quietLoops(),
+      write: () => undefined,
+    });
+
+    try {
+      expect(runner.listenersAtStart()?.error).toBeGreaterThan(0);
+      expect(runner.listenersAtStart()?.connect).toBeGreaterThan(0);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  test('LOST-02-AC18: an idle connection ended with a fatal error is exactly one database_error event, pool worker and its SQLSTATE; nothing written holds the password, the URL or the message; nothing is thrown, and the pool serves the next query', async () => {
+    const marker = syntheticCredential();
+    const database = await listeningFakePostgres(quietDatabase, { password: marker });
+    const message = `terminating connection due to administrator command for ${database.url}`;
+    const loops = quietLoops();
+    const runner = recordingRunner();
+    const worker = await startWorker(database.url, runner.run, {
+      ...loops,
+      write: () => undefined,
+    });
+    const pool = runner.options()?.pgPool;
+
+    try {
+      const { result, written } = await captured(async () => {
+        await pool?.query('select 1');
+        const [connection] = database.connections();
+        if (connection === undefined) {
+          throw new Error('the query made no connection');
+        }
+        database.end(connection, { code: '57P01', message });
+        await eventually(() => loops.log.events.length > 0);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return (await pool?.query('select 1'))?.rows;
+      });
+
+      expect(result).toEqual([]);
+      expect(loops.log.events).toEqual([
+        { event: 'database_error', pool: 'worker', code: '57P01' },
+      ]);
+      expect(
+        markersIn(`${written}\n${JSON.stringify(loops.log.events)}`, [
+          marker,
+          database.url,
+          message,
+          'administrator command',
+        ]),
+      ).toEqual([]);
+    } finally {
+      await worker.stop();
+      await database.close();
+    }
+  });
+
+  test('LOST-02-AC18: a checked-out connection ended between two queries is exactly one database_error event too; the client’s next query rejects, and the pool serves the next query', async () => {
+    const marker = syntheticCredential();
+    const database = await listeningFakePostgres(quietDatabase, { password: marker });
+    const message = `terminating connection due to idle-in-transaction timeout ${marker}`;
+    const loops = quietLoops();
+    const runner = recordingRunner();
+    const worker = await startWorker(database.url, runner.run, {
+      ...loops,
+      write: () => undefined,
+    });
+    const pool = runner.options()?.pgPool;
+    if (pool === undefined) {
+      throw new Error('the runner was never given a pool');
+    }
+
+    try {
+      const { written } = await captured(async () => {
+        const client = await pool.connect();
+        await client.query('begin');
+        const connection = database.connections().at(-1);
+        if (connection === undefined) {
+          throw new Error('the client made no connection');
+        }
+        database.end(connection, { code: '25P03', message });
+        await eventually(() => loops.log.events.length > 0);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        await expect(client.query('select 1')).rejects.toThrow();
+        client.release(true);
+        expect((await pool.query('select 1')).rows).toEqual([]);
+      });
+
+      expect(loops.log.events).toEqual([
+        { event: 'database_error', pool: 'worker', code: '25P03' },
+      ]);
+      expect(
+        markersIn(`${written}\n${JSON.stringify(loops.log.events)}`, [
+          marker,
+          database.url,
+          message,
+        ]),
+      ).toEqual([]);
+    } finally {
+      await worker.stop();
+      await database.close();
+    }
+  });
+});
+
+describe('REL-08 and LOST-02: by default, the real watchdog and sender, and the real log', () => {
+  test('LOST-02-AC19: by default the worker sweeps and delivers at once, with the real watchdog and sender over its own pool, and their failures reach stdout through the production log, as closed events naming the stage and the SQLSTATE only', async () => {
+    const refusal = 'this synthetic database answers nothing';
+    const database = await listeningFakePostgres((query) => {
+      if (/^\s*set\s/i.test(query.text) || /set_config\(/i.test(query.text)) {
+        return quietDatabase(query);
+      }
+      throw new Error(refusal);
+    });
+    const runner = recordingRunner();
+
+    try {
+      const { written } = await captured(async () => {
+        const worker = await startWorker(database.url, runner.run, { write: () => undefined });
+        await eventually(
+          () =>
+            database.queries.some(({ text }) => /\bjourneys\b/.test(text)) &&
+            database.queries.some(({ text }) => /\boutbox\b/.test(text)),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        await worker.stop();
+      });
+
+      const lines = written
+        .split('\n')
+        .filter((line) => line.includes('"event":'))
+        .map((line) => JSON.parse(line.slice(line.indexOf('{'))) as unknown);
+      expect(lines).toEqual(
+        expect.arrayContaining([
+          { event: 'watchdog_failed', stage: 'read', code: 'XX000' },
+          { event: 'delivery_failed', stage: 'claim', code: 'XX000' },
+        ]),
+      );
+      expect(markersIn(written, [refusal])).toEqual([]);
+    } finally {
+      await database.close();
+    }
   });
 });

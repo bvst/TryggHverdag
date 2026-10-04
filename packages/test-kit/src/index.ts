@@ -13,8 +13,16 @@ export { fakeClock } from './fake-clock.ts';
 export type { FakeClock } from './fake-clock.ts';
 export { BEAT_RECORDED, fakeWorkerHeartbeats } from './fake-worker-heartbeats.ts';
 export type { FakeWorkerHeartbeats } from './fake-worker-heartbeats.ts';
-export { CHECKED_IN, fakeCheckIn } from './fake-check-in.ts';
-export type { FakeCheckIn } from './fake-check-in.ts';
+export { CHECKED_IN, CHECK_IN_ABORTED, fakeCheckIn } from './fake-check-in.ts';
+export type { AbortSignalLike, FakeCheckIn } from './fake-check-in.ts';
+export { PUSH_FAILURE_REASONS, fakePush } from './fake-push.ts';
+export type {
+  FakePush,
+  MessageKind,
+  PushFailureReason,
+  PushMessage,
+  PushResult,
+} from './fake-push.ts';
 export { SYNTHETIC_CHECK_UUID, SYNTHETIC_PING_URL } from './ping-url.ts';
 export { CREDENTIAL_BYTES, syntheticCredential, syntheticUuid } from './synthetic-ids.ts';
 export { fakeDeviceAuthenticator } from './fake-device-authenticator.ts';
@@ -25,6 +33,10 @@ export type {
 } from './fake-device-authenticator.ts';
 export { fakeJourneyStore } from './fake-journey-store.ts';
 export type {
+  AlertMessage,
+  ClaimedMessage,
+  ClaimedMessages,
+  FakeAlertState,
   FakeJourneyState,
   FakeJourneyStore,
   HeartbeatPosition,
@@ -33,10 +45,17 @@ export type {
   JourneyForHeartbeat,
   JourneyStoreCall,
   LatestHeartbeat,
+  OpenLostContactAlertResult,
+  OpenRequest,
+  OverdueJourney,
+  OverdueJourneys,
   RecordHeartbeatResult,
   StartedJourney,
+  StoreClock,
+  StoredAlert,
   StoredHeartbeat,
   StoredJourney,
+  StoredMessage,
   StoredPosition,
   UnendedJourneyState,
 } from './fake-journey-store.ts';
@@ -62,12 +81,15 @@ export type {
   FakePostgres,
   FakePostgresAnswer,
   FakePostgresConnection,
+  FakePostgresFatal,
   FakePostgresHandler,
   FakePostgresQuery,
 } from './fake-postgres.ts';
 export type {
+  AlertAsStored,
   HeartbeatAsStored,
   JourneyAsStored,
+  MessageAsStored,
   JourneyStoreBehaviour,
   JourneyStoreUnderTest,
   PositionAsStored,

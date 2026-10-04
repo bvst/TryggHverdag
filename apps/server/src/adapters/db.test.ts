@@ -8,8 +8,9 @@
 //
 // A pool that exhausts the ceiling takes the watchdog with it, and the watchdog
 // is what turns a silent phone into an alert. So the arithmetic is a test.
+import { fakeLog } from '@trygghverdag/test-kit';
 import { describe, expect, test } from 'vitest';
-import { DEV_PLAN_CONNECTION_LIMIT, POOL_SIZE } from './db.ts';
+import { DEV_PLAN_CONNECTION_LIMIT, POOL_SIZE, createPool } from './db.ts';
 
 describe('the connection budget', () => {
   test('the two processes and the spare fit inside what the plan allows', () => {
@@ -33,5 +34,40 @@ describe('the connection budget', () => {
     // If Clever Cloud's limit changes, this is the line to change, and the
     // first test above then re-checks the budget against it.
     expect(DEV_PLAN_CONNECTION_LIMIT).toBe(5);
+  });
+});
+
+// LOST-02 (approach item 8, D-068): each process pool gets an `error`
+// listener and a `connect` listener when it is made, before anything else
+// sees it; the migrations' pool gets none, so a connection lost during a
+// deploy still fails that deploy loudly. Nothing here connects: listeners are
+// counted, which is all createPool can have done by the time it returns.
+describe('the pool listeners, where each pool is made', () => {
+  test.each(['api', 'worker'] as const)(
+    'LOST-02-AC18: a pool made for the %s process, with its name and a log, has an error listener and a connect listener when createPool returns',
+    async (name) => {
+      const pool = createPool('postgres://synthetic@127.0.0.1:1/synthetic', 1, {
+        name,
+        log: fakeLog(),
+      });
+
+      try {
+        expect(pool.listenerCount('error')).toBeGreaterThan(0);
+        expect(pool.listenerCount('connect')).toBeGreaterThan(0);
+      } finally {
+        await pool.end();
+      }
+    },
+  );
+
+  test('LOST-02-AC18: the migrations’ pool, made with neither a name nor a log, gets no listener', async () => {
+    const pool = createPool('postgres://synthetic@127.0.0.1:1/synthetic', 1);
+
+    try {
+      expect(pool.listenerCount('error')).toBe(0);
+      expect(pool.listenerCount('connect')).toBe(0);
+    } finally {
+      await pool.end();
+    }
   });
 });

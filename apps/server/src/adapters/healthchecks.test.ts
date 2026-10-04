@@ -483,3 +483,89 @@ describe('REL-08: a failed fetch is described only in words chosen here', () => 
     expect(String(failure)).toBe(NOT_REACHED);
   });
 });
+
+// LOST-02 (D-079's second follow-up): the worker hands the check-in Graphile's
+// `helpers.abortSignal`, so a stop no longer waits for a Healthchecks.io that
+// never answers. Before, only the adapter's own 10 s timeout could end it,
+// and a stop waited for it (safety-reviewer measured an exit 6.8 s after
+// SIGTERM during a hung check-in).
+describe('REL-08 and LOST-02: a check-in ends when the signal it was given aborts', () => {
+  /** A fetch that never answers, and rejects with its signal's reason when that signal aborts, as Node's does. */
+  function neverAnswering() {
+    const signals: (AbortSignal | null | undefined)[] = [];
+    const fetchNever: typeof fetch = async (_input, init) => {
+      const signal = init?.signal;
+      signals.push(signal);
+      if (!signal) {
+        throw new Error('the adapter sent no signal, so nothing could ever end this request');
+      }
+      await once(signal, 'abort');
+      throw signal.reason;
+    };
+    return { fetchNever, signals };
+  }
+
+  test('LOST-02-AC21: a check-in whose signal aborts fails at once, long before its own 10 s timeout, and its error names nothing of the check', async () => {
+    const { fetchNever } = neverAnswering();
+    const controller = new AbortController();
+    const started = performance.now();
+
+    const checking = failureOf(() =>
+      healthchecksCheckIn({ url: PING_URL, fetch: fetchNever }).checkIn(controller.signal),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort();
+    const failure = await checking;
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(performance.now() - started).toBeLessThan(CHECK_IN_TIMEOUT_MS / 10);
+    expect(everything(failure)).not.toContain(CHECK);
+    expect(everything(failure)).not.toContain(PING_URL);
+  }, 2_000);
+
+  test('LOST-02-AC21: the signal fetch is handed aborts when the caller’s does, and not before', async () => {
+    const { fetchNever, signals } = neverAnswering();
+    const controller = new AbortController();
+
+    const checking = failureOf(() =>
+      healthchecksCheckIn({ url: PING_URL, fetch: fetchNever }).checkIn(controller.signal),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(false);
+
+    controller.abort();
+    await checking;
+
+    expect(signals[0]?.aborted).toBe(true);
+  }, 2_000);
+
+  test('LOST-02-AC21: with a signal that never aborts, the adapter’s own timeout still ends the check-in, described as before', async () => {
+    const { fetchNever } = neverAnswering();
+
+    const failure = await failureOf(() =>
+      healthchecksCheckIn({ url: PING_URL, fetch: fetchNever, timeoutMs: 50 }).checkIn(
+        new AbortController().signal,
+      ),
+    );
+
+    expect(String(failure)).toBe('Error: Healthchecks.io did not answer within 50 ms.');
+  }, 2_000);
+
+  test('LOST-02-AC21: against a stand-in that never answers, a check-in aborted by its signal ends at once, after exactly one request', async () => {
+    const healthchecks = await standIn('never');
+    const controller = new AbortController();
+
+    const checking = failureOf(() =>
+      healthchecksCheckIn({ url: healthchecks.url }).checkIn(controller.signal),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    controller.abort();
+    const failure = await checking;
+    await aMoment();
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(healthchecks.received).toHaveLength(1);
+    expect(everything(failure)).not.toContain(CHECK);
+  }, 2_000);
+});
