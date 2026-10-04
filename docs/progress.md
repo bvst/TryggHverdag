@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-04 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 in progress** (task 3 of 8) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-04 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 in review** (task 3 of 8) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -338,13 +338,20 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**LOST-02** (M2 task 3 of 8, the lost-contact alert) is being specified.
-**LOST-01** is done ([#60](https://github.com/bvst/TryggHverdag/pull/60),
-`fe384c5`), and so is **BUG-15**
-([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`). **A-31**
-(Dependabot alerts are off) is the owner's. LOST-01's reviews leave items for
-later tasks, listed in `progress/m2.md` ("Left for later tasks"); the first is
-that LOST-02 must bound the heartbeat's row lock before it merges.
+**LOST-02** (M2 task 3 of 8, the lost-contact alert) is in review, with its
+pull request open from `claude/busy-faraday-40n2zl`. It bounds the heartbeat's
+row lock, as LOST-01's reviews asked. **BUG-18** is done
+([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`), and so are
+**LOST-01** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`)
+and **BUG-15** ([#59](https://github.com/bvst/TryggHverdag/pull/59),
+`c46b3b3`). **A-31** (Dependabot alerts are off) is the owner's. LOST-01's and
+LOST-02's reviews leave items for later tasks, listed in `progress/m2.md`
+("Left for later tasks").
+
+**After LOST-02's first staging deploy,** this session finds the worker's and
+the API's session-limit lines (`worker: session limit …`, `api: session limits
+…`) and quotes them in `progress/m2.md`. A mismatch, or "could not be read",
+opens a bug (D-109).
 
 **For the owner, from CI's `test-auditor` on #60:** should
 `apps/server/src/log.ts` be mutation-tested? It is the one place that keeps
@@ -353,6 +360,12 @@ locations and phone numbers out of the server's logs (PRIV-07), and
 Claude recommends a mutation group for it on every pull request, under a new
 decision, as its own task after LOST-01. The alternative is to wait for D-036's
 nightly run, which does not exist yet.
+
+**For the owner, from `safety-reviewer` on LOST-02:** the same question for
+`apps/server/src/adapters/db.ts`. It holds every pool's session limits and
+the start-up read-back that says whether they are in force (D-109), and it is
+not in `SAFETY_PATHS`, so no mutation run measures its tests. Claude would
+answer both questions in one decision.
 
 Still open from BUG-14's reviews, for the owner:
 - nothing pins what `package.json`'s `mutation` script runs (`safety-reviewer`
