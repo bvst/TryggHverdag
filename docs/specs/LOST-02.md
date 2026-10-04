@@ -2104,7 +2104,8 @@ owner's to schedule:
   task should refuse anything outside 1 to 2147483647 in `createPool`, as the
   open now does.
 - **graphile-worker's own LISTEN connection logs its error object**
-  (`privacy-security-reviewer`, loops 1 and 2).
+  (`privacy-security-reviewer`, loops 1 and 2, and CI's on #63). Now
+  **BUG-20**, queued for the owner to schedule.
   - When that connection drops, or cannot connect (at start, and at every
     retry, backing off up to 60 s, for as long as the database is out of
     reach), Graphile's logger prints the message and the whole error object
