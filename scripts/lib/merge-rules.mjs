@@ -26,6 +26,8 @@ export const OWNER_APPROVAL_PATHS = [
   '/apps/server/src/adapters/healthchecks.ts',
   // Every process's database pool: one that uses up the database's few connections takes the watchdog down with it (D-105).
   '/apps/server/src/adapters/db.ts',
+  // The worker's check-in row: a fault here can show a dead watchdog as alive (D-105).
+  '/apps/server/src/adapters/worker-heartbeats.ts',
   // Where the journey guarantees live: the responder insert and its
   // transaction, the one-unended-journey index, the device-credential check,
   // and where the database clock is wired into the API's services (D-092,

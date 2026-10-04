@@ -46,6 +46,10 @@ For the diff (`git diff origin/main...HEAD`), check:
   `skip locked`), the idle limit plus one sweep must stay inside the alert
   budget, and a listener must never log the error object or make the failure
   quiet (D-068, D-105);
+- a change to how the worker's check-in is stored or read
+  (`apps/server/src/adapters/worker-heartbeats.ts`) still records the time it
+  was given and reads back the latest one, so a watchdog that stopped cannot
+  look alive to `/v1/health` or Healthchecks.io (D-079, D-105);
 - tests exist at L6 for any change in alert behaviour.
 
 
