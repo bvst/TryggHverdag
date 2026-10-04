@@ -58,3 +58,17 @@ Related: [[bug14-audit]], [[in-memory-mutation]], [[gate-integrity-local]], [[co
   decideMutation: skip. coverage-baseline.json untouched. tests:changes none weakened (count-based: blind to the per-file test's
   removal vs de724d8, net +5 tests). req:coverage 13 of 63, report unchanged.
 - Waiting on a background harness: `timeout N tail --pid=<pid> -f /dev/null` blocks without `sleep`.
+
+**Loop-2 re-audit (2026-10-04, briefed at 06fc91c; HEAD moved to 9d6dc53, docs only). PASS.**
+- modules/health/ pinned the BUG-10 way (2ec8256 tests, 06fc91c config): MR entry + tracked file + every `git ls-files` file
+  last-match owned. Brief test requires `apps/server/src/modules/health/`. H4h self-checks `/**/db.ts`, `**/adapters/db.ts` (both
+  match in git check-ignore 2.43).
+- RG-02 (loop2/mutants5.mjs via ../ta-harness2.mjs 06fc91c): tests HEAD + config 87fca3c -> exactly 3 BUG-18 red, each naming
+  modules/health/ (MR toContain, last-match Array(1), brief); 271 green. One file at a time: MR -> test 1 + BUG-10 reverse; CO ->
+  test 2 + reviewCodeowners siblings (9); filter -> general filter test only; brief -> brief test. Old tests on new config: 272 green.
+- 64 faults: 56 killed, 8 survived (3 controls; filter moved; brief in HTML comment, file path instead of folder, D-105 dropped from
+  bullet only; H4i pre-existing). Every later un-owning line (19 forms incl. ?, **, /**/, bare, no-slash, 1/3 owners) killed by the
+  per-folder last-match test; scratch index without service.ts (T1) kills both. H4h now killed. False red: brief path without `/`.
+- tests:changes none weakened; req:coverage 13 of 63; coverage-baseline untouched; decideMutation skip (evaluated inline);
+  gate:integrity 3 of 5 locally (no rules token); gh api: 13 contexts incl. mutation/traceability, code-owner review true,
+  bypass []/never. No PR; check-runs total_count 0.

@@ -52,8 +52,9 @@ For the diff (`git diff origin/main...HEAD`), check:
   look alive to `/v1/health` or Healthchecks.io (D-079, D-105);
 - a change to the health wiring (`apps/server/src/modules/health/`) still
   passes the stored last check-in and the database clock's now to
-  `domain/health.ts`, never one for the other or a default, so a stopped
-  watchdog reads as stopped (D-105);
+  `domain/health.ts`, never one in place of the other or a stand-in for a
+  missing check-in, with `WORKER_STALE_AFTER_MS` as the threshold, so a
+  stopped watchdog reads as stopped (D-105);
 - tests exist at L6 for any change in alert behaviour.
 
 

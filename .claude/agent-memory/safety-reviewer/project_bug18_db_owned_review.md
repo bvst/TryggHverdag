@@ -55,3 +55,18 @@ Open notes (check on LOST-02 before repeating):
 6. progress.md BUG-18 row names db.ts only; fix when the merge is recorded.
 7. LOST-02's limit values live in domain/watchdog.ts (owned, filter, SAFETY_PATHS) — not named in the brief
    line but reached through domain/**.
+
+**Loop 2 (06fc91c), PASS.** Open note 5 CLOSED for modules/health/: D-105 second amendment (0136951, owner)
+adds /apps/server/src/modules/health/ to CODEOWNERS, OWNER_APPROVAL_PATHS, the safety filter
+(apps/server/src/modules/health/**) and the brief. WORKER_STALE_AFTER_MS (contracts) kept out by the owner.
+Verified: ai-review.yml vs origin/main (fe384c5, = merge base) numstat 3/0 two- and three-dot; js-yaml parse:
+safety 26 -> 29, only db.ts, worker-heartbeats.ts, modules/health/**; order of the rest kept; ui and rest of the
+workflow deep-equal. picomatch {dot:true}: health/** matches service.ts only (one tracked file). Last-match with
+git ls-files -c -i -x per CODEOWNERS line, 533 tracked files: exactly those three files change owners,
+[] -> [@bvst @urso-agent]. 212/212 in gate.test.mjs + ai-review.test.mjs. No apps/ or mutation-gate file changed.
+Brief bullet matches service.ts (clock.now() and heartbeats.lastBeat() passed as nowMs / lastBeatMs, null kept
+as null) and api-process.ts:32-34 (databaseClock(db), databaseWorkerHeartbeats(db)).
+New open note 8: the bullet does not name the threshold. service.ts defaults staleAfterMs to
+WORKER_STALE_AFTER_MS; a change raising that default or passing a big value would sit in an owned file but
+the bullet would not prompt the check, and its "never ... a default" could be misread as about staleAfterMs.
+Suggested: "...and WORKER_STALE_AFTER_MS as the threshold". Note only.

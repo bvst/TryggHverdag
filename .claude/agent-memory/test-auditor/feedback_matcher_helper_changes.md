@@ -23,3 +23,5 @@ helper is shared by every last-match test, so a loosening there loosens all of t
 Folder entries in a per-file pin loop: `git ls-files -- <dir>` != `[dir]`, and `ownersOf('<dir>/')` passes against the folder
 string while a later ownerless line for a file inside goes unseen. Pin folders as BUG-10's journey test does (every tracked file).
 Related: [[bug18-audit]], [[config-pinning-tests]], [[in-memory-mutation]]
+Folder pins verified (BUG-18 loop 2): the BUG-10 shape (MR toContain + `git ls-files` non-empty + every file last-match owned) killed
+all 19 later un-owning line forms and a scratch-index removal (`cp .git/index X; GIT_INDEX_FILE=X git rm --cached -q <file>`).

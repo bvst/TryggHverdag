@@ -1,4 +1,4 @@
-- [BUG-18 review](project_bug18_db_owned_review.md) — PASS 3fdca02, loop-1 PASS 25589a5; loop-0 should-fixes closed; open notes: record() must reject (brief), health/service.ts unowned, progress row, LOST-02 baseline
+- [BUG-18 review](project_bug18_db_owned_review.md) — PASS 3fdca02, 25589a5, loop-2 PASS 06fc91c (modules/health/ owned); open notes: record() must reject, health bullet omits threshold, progress row, LOST-02 baseline
 - [LOST-01 review](project_lost01_heartbeat_review.md) — PASS ff583fb, loop-1 PASS 19db407; open: spec says 400 not resent (SDK resends any refusal), task 3 must bound row lock + L3 race test
 - [BUG-14 review](project_bug14_gate_files_owned_review.md) — PASS ef0c1cf; open: Vitest configs not in safety filter, group tests in no list, package.json mutation script unpinned
 - [BUG-12 review](project_bug12_mutation_gate_review.md) — PASS 7f6c3a7; open: --incremental reuses all, vanished safety file passes, RuntimeError/Ignored unnamed, journey clock unproven in api-process
