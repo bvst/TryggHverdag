@@ -72,3 +72,9 @@ Point checks that need only a few seconds of psql before the reset may still wor
 non-comment CODEOWNERS line run `git ls-files -c -i -x '<pattern>'`; the highest line that lists a file decides
 its owners. Directory patterns work (/scripts/ listed all 81 files). A process-substituted file as
 core.excludesFile does NOT work: git reads a pipe as size 0 and matches nothing ("::" for every path).
+
+**2026-10-04 (LOST-02 loop 2):** the guard was not blocking: a quoted heredoc into
+`node --experimental-strip-types --no-warnings --input-type=module -` run from apps/server imports
+`@trygghverdag/test-kit` and real src/*.ts, so a watchdog + fake store + real adapter (with a stub `{ transaction }`
+db) emulation needs no files. A cloud session has the docker CLI but no daemon (`docker info` Server: failed to
+connect), so L3 stays unverified. The orchestrating session may commit on the branch mid-review: pin the reviewed SHA.

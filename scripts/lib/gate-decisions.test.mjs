@@ -523,6 +523,17 @@ describe('the mutation runs of this repository', () => {
         paths: ['apps/server/src/modules/journeys/'],
         tests: ['apps/server/src/journeys.system.test.ts'],
       }),
+      // LOST-02 (RG-03): modules/alerts/ gets its first files, the watchdog
+      // and the sender, and with them a group of its own (D-098), as the test
+      // below asks the day a safety path holds a file. Its tests are one
+      // file, kept apart from the journeys group's so each alerts mutant
+      // stays cheap, under the system tests' configuration (the spec's
+      // Mutation section). Nothing above or below changed.
+      expect.objectContaining({
+        name: 'alerts',
+        paths: ['apps/server/src/modules/alerts/'],
+        tests: ['apps/server/src/alerts.system.test.ts'],
+      }),
       {
         name: 'process',
         paths: [

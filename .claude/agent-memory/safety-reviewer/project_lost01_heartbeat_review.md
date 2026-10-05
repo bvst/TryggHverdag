@@ -36,3 +36,7 @@ overlap (M5); credential rotation must keep device ID (D-101). capture.test.ts (
 **How to apply:** on task 3 check item 2 first; on any phone-sent timestamp check the PostgreSQL/JS range edge;
 on M3's upload task check that the app handles 400 (drop + tell walker), not just 403/404/409.
 Related: [[bug10-journey-safety-paths-review]], [[reviewer-sandbox-limits]].
+
+**2026-10-04 (LOST-02, 6f27b80): open item 2 CLOSED.** API pool idle 10 s + lock_timeout 5 s, worker pool idle
+10 s, as startup parameters; L3 AC17 (25P03 end, 55P03 refusal) and AC11 (heartbeat waits on uncommitted ENDED,
+pg_stat_activity Lock) exist. See [[lost02-alert-review]].

@@ -3500,3 +3500,157 @@ any other path is work, not a candidate for the same treatment.
   - **Not included:** `WORKER_STALE_AFTER_MS` in `packages/contracts`, which
     is already in the safety filter. Owning the contracts beyond
     `released/` is a wider question.
+
+## D-106 — The alert's details are read in M3, with the alert screen (LOST-02)
+- **Date:** 2026-10-03 · **Status:** Accepted (owner, 2026-10-03). Asked in
+  session with Claude's recommendation, "M3, with the alert screen". The
+  alternative offered was "Build it now in LOST-02" · **Section:** 5 (D-086,
+  D-091). D-105 is taken by BUG-18's open branch, so LOST-02's decisions start
+  at D-106.
+- **Context:**
+  - A lost-contact push carries no personal detail: no name, position,
+    battery or time (D-086). A responder's app has to read those from the
+    server once the push arrives.
+  - That read needs a check that only the journey's responders may use it. No
+    responder phone can hold a credential before login (D-091), so nothing
+    could call the route before M3.
+  - Neither M2's nor M3's roadmap row named the route (LOST-02's spec).
+- **Decision:**
+  - LOST-02 builds no read route.
+  - LOST-02 stores when the silence began (`silent_since`), which is what the
+    read needs.
+  - The route, `GET /v1/alerts/{alertId}` or whatever M3 names it, comes with
+    the alert screen in M3, together with its responders-only access check.
+- **Consequences:**
+  - LOST-02 changes no API contract.
+  - The first place a stored location is read back out of the server arrives
+    in M3, with its own privacy review.
+
+## D-107 — The watchdog runs every 10 seconds (LOST-02)
+- **Date:** 2026-10-03 · **Status:** Accepted (owner, 2026-10-03). Asked in
+  session with Claude's recommendation, "Every 10 seconds". The alternative
+  offered was "Every 15 seconds" · **Section:** 5 (AR-06, D-021)
+- **Context:** AR-06 allows 10 to 15 seconds. An alert goes out 5 minutes
+  after the last contact (D-021), plus at most one interval, plus the time to
+  send it, against a 60 s alert-time target.
+- **Decision:** `WATCHDOG_INTERVAL_MS` is 10 000.
+- **Consequences:**
+  - At most about 20 s of extra delay after the 5 minutes: one interval, plus
+    the 10 s idle limit when a frozen holder has the row (D-108).
+  - LOST-02-AC17's budget test pins the value.
+
+## D-108 — The lost-contact alert's own outbox, the watchdog feeding the beat, and the session limits (LOST-02)
+- **Date:** 2026-10-03 · **Status:** Accepted (delegated, D-031) ·
+  **Section:** 5 and 8 (AR-05, AR-06, D-032, D-068, D-079)
+- **Context:**
+  - D-032 named Graphile Worker for "jobs and outbox", and says any swap is
+    recorded as a new decision.
+  - D-079's first follow-up leaves it to the watchdog's task to decide whether
+    the watchdog checks in, or feeds the worker's beat.
+  - LOST-01 left the heartbeat's row lock unbounded. A frozen holder would
+    hide a journey from the watchdog's `for update skip locked`.
+  - LOST-02's spec has the full reasoning; this records the choices.
+- **Decision:**
+  - **The outbox is a table of our own** (`outbox`), written in the same
+    transaction as the alert and the journey's change to `LOST_CONTACT`
+    (AR-05).
+    - The worker's loop delivers it: claim due rows with `for update skip
+      locked` and a 30 s lease, send outside any transaction, then mark each
+      as sent or failed.
+    - A message counts as sent only when the push port accepted it. Retries
+      start at 10 s and double, capped at 60 s.
+    - It is not Graphile jobs. A row per message keeps each responder's
+      delivery state in the database (attempts, the last failure, when it was
+      sent), where later tasks and the owner can read it. Graphile Worker
+      keeps the minute check-in.
+  - **The watchdog feeds the beat.** The worker's `worker_heartbeat` row moves
+    only when a sweep completes, so a broken watchdog stops the check-in and
+    pages the owner (D-079's first follow-up). An ACTIVE journey still not
+    alerted 30 s after its 5 minutes is logged, and stops the beat too.
+  - **The session limits** (inherited from LOST-01):
+    - The API pool sets `idle_in_transaction_session_timeout` to 10 s and
+      `lock_timeout` to 5 s.
+    - The worker pool sets `idle_in_transaction_session_timeout` to 10 s and
+      no lock timeout, because its sweeps never wait for a row.
+    - The migrations' pool is unchanged.
+    - Both process pools get `error` listeners that write the pool's name and
+      the SQLSTATE only (D-068).
+- **Consequences:**
+  - `log.ts` gains closed event types for the watchdog, the outbox and pool
+    errors (owner-approved, D-102).
+  - Some of the worker check-in's existing tests change by design. Their
+    reasons are written beside them (RG-03).
+  - The first deploy's job log is the evidence that Clever Cloud's PostgreSQL
+    accepts the startup settings. If it does not, a `SET` on connect is the
+    fallback.
+- **Amended 2026-10-04 (delegated, D-031), from BUG-18's privacy and security
+  review:** one way to the database. In production code only
+  `apps/server/src/adapters/db.ts` may import `pg` or
+  `drizzle-orm/node-postgres`, and only `apps/server/src/worker.ts` may import
+  `graphile-worker`. `adapters/migrations.ts` may import the migrator subpath
+  alone, because it opens no connection of its own. A dependency-cruiser rule
+  enforces it, with tests in `packages/config/database-imports.test.mjs`
+  (LOST-02-AC24). Without it, a new module could open a pool outside the
+  connection budget, the session limits and the error listeners.
+- **Amended again 2026-10-04 (delegated, D-031), from LOST-02's red phase:**
+  installed packages reach the import rules (LOST-02-AC25). Until now
+  `options.exclude` matched `node_modules` (and `dist/`), so a package that
+  resolved through pnpm's layout was dropped before any rule saw it: the
+  location-SDK rule (AR-09) would have gone blind once the SDK was installed.
+  The exclude now hides nothing inside `node_modules`, `doNotFollow` stays,
+  every rule that names a package matches both the bare name and the resolved
+  path, and `domain-has-no-io` exempts test files and accepts both forms of
+  `zod`. `imports:check` stays clean over the repository; the change revealed
+  no violation elsewhere.
+- **Implementation notes (LOST-02):** the session limits are sent as startup
+  parameters; `runWorkerProcess` always uses the unconfigured push until M3,
+  and only `startWorker` takes a `push`; Graphile Worker's own stop wait is set
+  to 0 so a stop is not delayed 5 s.
+- **Amended 2026-10-04 (delegated, D-031), LOST-02's review loop 1:**
+  - **Correction:** the worker pool's missing lock limit is not "because its
+    sweeps never wait for a row". The waiting attempt does wait, and every
+    open's outbox insert locks the responder's `users` row. So **every open
+    sets its own transaction-local `lock_timeout` of 5 s**. A pool-level limit
+    is still not used, because it would reach Graphile Worker's statements.
+  - **Each process reads its session limits back once at start** and writes
+    one fixed line. A pooler that silently dropped the startup parameters
+    would otherwise leave every check green. What a process does when they
+    differ is D-109.
+  - **A partial index** on the outbox's due messages, `(next_attempt_at, id)
+    where sent_at is null`, in migration `0003`.
+  - **Two more import rules:** `drizzle-kit`, whose `api` entry opens a pool,
+    is refused in production code apart from `drizzle.config.ts`; and
+    production code may not import a test-named file, whose own imports would
+    otherwise escape every rule that exempts tests.
+  - **Only the sweep loop is watched.** A wedged or always-failing delivery
+    pages nobody. That is harmless until M3, because the unconfigured push
+    answers at once. Task 8's canary must catch it, and M3's push adapter must
+    bound each send.
+  - **One list** of push failure reasons and message kinds, in the domain,
+    from which the port, the table's check and the log are all derived.
+
+## D-109 — A process whose database time limits were ignored starts anyway, loudly (LOST-02)
+- **Date:** 2026-10-04 · **Status:** Accepted (owner, 2026-10-04). Asked in
+  session with Claude's recommendation, "Start anyway, loud line". The
+  alternative offered was "Refuse to start" · **Section:** 5 and 8 (AR-06,
+  REL-08; D-108)
+- **Context:**
+  - D-108 bounds how long a frozen server can hold a journey's row: an idle
+    limit of 10 s on both process pools and a lock limit of 5 s on the API's,
+    sent when each connection starts. A connection pooler could silently drop
+    those startup settings, leaving every check green and the limits absent.
+  - LOST-02's review loop 1 makes each process read its limits back once at
+    start and write them on one fixed line.
+- **Decision:**
+  - When a limit reads back other than asked, or cannot be read, the process
+    writes a fixed line saying so on stderr and **starts anyway**.
+  - A worker that refused to start would watch nobody. An API that refused
+    would turn away every heartbeat, so every active journey would alert after
+    5 minutes. The harm a missing limit can cause, a journey hidden by a held
+    row, is still caught: the watchdog's stuck check stops the worker's
+    check-in, and Healthchecks.io pages the owner (D-108, REL-08).
+- **Rejected:** refusing to start. It fails a deploy visibly, but on a restart
+  there is no old version to fall back to.
+- **Consequences:** the read-back line, not the absence of an error, is what
+  shows the limits are in force. Reading it after the first deploy is the
+  check (LOST-02-AC17).

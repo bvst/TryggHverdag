@@ -229,6 +229,21 @@ describe('stryker.config.mjs', () => {
     expect(filesRunWith(args)).toEqual(['apps/server/src/journeys.system.test.ts']);
   });
 
+  test("LOST-02: the alerts run mutates modules/alerts/ and runs alerts.system.test.ts alone, under the system tests' configuration", async () => {
+    // As the journeys run: the root configuration leaves *.system.test.ts
+    // out, so the command is asked what it would run, not only read. One
+    // file, kept apart from journeys.system.test.ts so each alerts mutant
+    // stays cheap (the spec's Mutation section).
+    const config = await configFor('alerts');
+
+    expect(config.mutate).toEqual(['apps/server/src/modules/alerts/**/*.ts', ...EXCLUSIONS]);
+    expect(config.commandRunner.command).toMatch(/^pnpm exec vitest run /);
+    expect(config.incrementalFile).toBeUndefined();
+    const args = vitestArgs(config.commandRunner.command);
+    expect(configNamedIn(args)).toBe('vitest.system.config.mjs');
+    expect(filesRunWith(args)).toEqual(['apps/server/src/alerts.system.test.ts']);
+  });
+
   test('BUG-12: the process run mutates worker.ts, bin/worker.ts and process.ts, against bin.test.ts and the worker and process tests', async () => {
     // D-098 gives the three files of #53's timed-out whole-suite run a group.
     // bin.test.ts is the only test that runs the real worker process (D-066's
@@ -271,10 +286,14 @@ describe('stryker.config.mjs', () => {
     // gives worker.ts a group, and every other safety file that exists, so
     // what is left is pinned exactly: the two safety paths that hold no file
     // yet.
+    //
+    // LOST-02 (RG-03): modules/alerts/ now holds files and has its own group,
+    // as the spec's Mutation section says, so what is left is the one safety
+    // path that holds no file yet. Still pinned exactly.
     const config = await configFor('whole-suite');
     const left = mutationRuns().find((run) => run.name === 'whole-suite')?.paths ?? [];
 
-    expect(left).toEqual(['apps/server/src/modules/alerts/', 'apps/mobile/src/safety-core/']);
+    expect(left).toEqual(['apps/mobile/src/safety-core/']);
     expect(config.mutate).toEqual([...globs(left), ...EXCLUSIONS]);
     expect(withoutMutationOptions(config.commandRunner.command)).toBe(
       'pnpm exec vitest run apps packages',
@@ -294,10 +313,13 @@ describe('stryker.config.mjs', () => {
       mutated.push(...config.mutate.filter((glob) => !glob.startsWith('!')));
     }
 
+    // LOST-02 (RG-03): the alerts group joins the runs, after journeys; the
+    // others keep their names and their order.
     expect(mutationRuns().map((run) => run.name)).toEqual([
       'domain',
       'healthchecks',
       'journeys',
+      'alerts',
       'process',
       'api-process',
       'whole-suite',

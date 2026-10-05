@@ -16,8 +16,10 @@
  * with no listener at all. It is attached in the teardown, after every test
  * has run, so it hides nothing from a test.
  *
- * Tests only. The production pool has no `error` listener on purpose (D-068):
- * there, an idle connection's error exits the process, which is loud.
+ * Tests only. A pool made by `createPool` without a name and a log, as most
+ * tests' pools are, has no `error` listener. The process pools are made with
+ * both (LOST-02, approach item 8): there, a connection's error is one
+ * `database_error` line, and this listener only joins it at teardown.
  */
 
 /** The part of a `pg.Pool` this needs, by shape: the test kit does not depend on pg. */

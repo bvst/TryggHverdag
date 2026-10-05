@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-03 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 in review** (task 2 of 8, [#60](https://github.com/bvst/TryggHverdag/pull/60)) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-04 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 in review** (task 3 of 8) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -36,11 +36,12 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | | BUG-15 | CI's required `security` check (`pnpm audit --audit-level high`) failed on `main` and every pull request from 2026-10-02: braces GHSA-vfj7-8cjw-p6xm, no patched version, reached only through Jest and Metro tooling (D-104) | ✅ **Done** — 2026-10-03, [#59](https://github.com/bvst/TryggHverdag/pull/59), merged as `c46b3b3` after `urso-agent` approved; `main`'s tree is the reviewed head `10a1af4`. D-104 (owner, 2026-10-03: accept this one, recorded): one ID in `ignoreGhsas`, and a lockfile test that only `apps/mobile` reaches braces. Reviews PASS in the session (privacy and security, test audit, code) and in CI (all five AI reviewers). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37125357152), and `deploy-staging` passed with its smoke test (run 37125357148). Record: `progress/m2.md` |
 | | BUG-16 | `req:coverage` counts a requirement as tested when any test file names its ID, in a comment too: `mentions()` in `scripts/lib/requirements.mjs` searches the file's whole text. Found by CI's `test-auditor` on #60, which checked LOST-01's 20 criteria by hand and found a real test behind each | ⚪ **Queued**, for the owner to schedule. On `main` |
 | | BUG-17 | `android-e2e` fails before the app is installed: the emulator still reports `en-rUS` 120 s after the switch to nb-NO. Twice so far: #57 (job 110875720264) and #60 (job 111180346250). A re-run passed on #57 | ⚪ **Queued**, for the owner to schedule. `progress/m2.md` said a second time would make it a bug of its own |
-| | BUG-18 | Three files that decide whether a missed alert or a stopped watchdog can go unseen need the owner and the safety review (D-105 and its two amendments, the owner's answers of 2026-10-03 and 2026-10-04): `apps/server/src/adapters/db.ts` (every pool's size, and LOST-02's session limits), `adapters/worker-heartbeats.ts` (the worker's check-in row) and `modules/health/` (which turns it into `/v1/health`'s answer) | 🟡 **Reviewed, pull request opening.** Branch `fix/BUG-18-db-owned`. Each joins CODEOWNERS, `OWNER_APPROVAL_PATHS` and the ai-review `safety` filter, with a line in `safety-reviewer`'s brief. All four session reviewers PASS; review loop 1 also fixed the CODEOWNERS and filter readers in `gate.test.mjs` (`?`, `/**/`, a leading `**/`). It edits `ai-review.yml`, so the owner merges it by hand (D-075). LOST-02 merges after it |
+| | BUG-18 | Three files that decide whether a missed alert or a stopped watchdog can go unseen need the owner and the safety review (D-105 and its two amendments, the owner's answers of 2026-10-03 and 2026-10-04): `apps/server/src/adapters/db.ts` (every pool's size, and LOST-02's session limits), `adapters/worker-heartbeats.ts` (the worker's check-in row) and `modules/health/` (which turns it into `/v1/health`'s answer) | ✅ **Done** — 2026-10-04, [#61](https://github.com/bvst/TryggHverdag/pull/61), merged by the owner by hand (D-075) as `7e05c8e` at 11:48 UTC, with no review on the pull request; `main`'s tree is the reviewed head `974e6e8`. The merge rules were updated at 11:49 UTC and read active with no bypass actors. All four session reviewers PASS; CI's three AI reviewers that apply skipped, as expected (read in each job log). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37199989215), `gate-integrity` among them, and `deploy-staging` passed (run 37199989255). Record: `progress/m2.md` |
 | | BUG-19 | No test checks that every file git tracks under every owner-approval path still has owners under CODEOWNERS' last-match rule. Pins exist per file family (since BUG-8), so an ownerless later line for another owned file (for example `/?ackage.json`) un-owns it with every test green. Found by `test-auditor` on BUG-18; replacing the hand-written glob readers with real matchers (`git check-ignore`, picomatch) would also fit here | ⚪ **Queued**, for the owner to schedule. `/.github/` needs the owner, so such a line needs the owner's approval anyway |
+| | BUG-20 | graphile-worker's own LISTEN connection prints its error object to the console when it drops or cannot connect (`@graphile/logger` prints meta with `%O`), at start and at every retry while the database is out of reach. The object can name the database's host, port or user, never personal data or the password; it bypasses `log.ts`'s closed events, so for that one connection AC18's "one `database_error` line" is not the only line. Pre-existing (the same on `main` before LOST-02). Found by `privacy-security-reviewer` in LOST-02's reviews and raised again by CI's on [#63](https://github.com/bvst/TryggHverdag/pull/63). The fix the spec names: give Graphile a logger that writes closed events only, without dropping the lines that make a stopped worker loud | ⚪ **Queued**, for the owner to schedule. Claude recommends it before M3, as its own small task |
 | | BUG-11 | The dependency audit accepts one advisory, GHSA-86w9-cpqp-85rv in `node-forge` (D-093) | ✅ **Done** — merged with SM-01 in [#53](https://github.com/bvst/TryggHverdag/pull/53) (`2db7046`). Its own pull request, [#54](https://github.com/bvst/TryggHverdag/pull/54), was closed as superseded: every file it held was already on `main` |
-| 2 | LOST-01 | Heartbeat, with or without position | 🟡 **In review**, [#60](https://github.com/bvst/TryggHverdag/pull/60), waits on the owner. Branch `claude/busy-faraday-40n2zl`. D-101 to D-103 (D-102 amended); 20 acceptance criteria; tests `d21afbd` then code `01de08b`; review loop 1 tests `601e528` then code `16a9514`, plus `14351d4`. All four session reviewers PASS, and the three blocking ones PASS again after loop 1. In CI on `f7a008d`: all five AI reviewers PASS; `integration` 103 of 103 on PostgreSQL 15; `mutation` every safety file ≥ 96 %, 0 timed out; `android-e2e` failed before the app was installed (BUG-17). `main`, with BUG-15, is merged in (`b6514af`). Record: `progress/m2.md` |
-| 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ⚪ Not started |
+| 2 | LOST-01 | Heartbeat, with or without position | ✅ **Done** — 2026-10-03, [#60](https://github.com/bvst/TryggHverdag/pull/60), merged as `fe384c5` after `urso-agent` approved; `main`'s tree is the reviewed head `5aa074c`. D-101 to D-103 (D-102 amended); 20 acceptance criteria. Reviews PASS in the session (all four, and the three blocking ones again after loop 1) and in CI (all five AI reviewers). In CI before the merge: `integration` 103 of 103 on PostgreSQL 15; `mutation` every safety file ≥ 96 %, 0 timed out. On `main` after the merge: `ci` 10 of 10 jobs passed (run 37144094720), and `deploy-staging` ran migration `0002` and passed its smoke test (run 37144094724). Record: `progress/m2.md` |
+| 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | 🟡 **In review** — pull request open from `claude/busy-faraday-40n2zl`. 25 acceptance criteria; D-106, D-107 and D-109 (owner), D-108 (delegated, amended). Session reviews: `test-auditor` blocked the first round (two untested watchdog clauses), fixed in loop 1; all three blocking reviewers PASS after loop 1 (`3539d4f`) and loop 2 (`25f5ccf`). `gate:full` 11 passed, the one failure `gate:integrity`'s API checks; mutation: every safety file ≥ 95.9 %, kills only (`worker.ts` 140 of 146). L3 ran on a PostgreSQL 16 stand-in only, so CI's `integration` job is the real run. Record: `progress/m2.md` |
 | 4 | LOST-03 | Back in contact | ⚪ Not started |
 | 5 | LOST-06 | "I'm on it" | ⚪ Not started |
 | 6 | LOST-07 | SMS escalation at 2 minutes | ⚪ Not started |
@@ -306,7 +307,7 @@ The things that still bite, and cost a session hours the first time.
   `.claude/` gaps). M2's narrative is [`progress/m2.md`](progress/m2.md) and
   M1's is [`progress/m1.md`](progress/m1.md), so a bug's next `BUG-<n>` has to
   be looked for in all three files, in this one and in `decisions.md`. The
-  next one is **BUG-20** (BUG-13 to BUG-19 are taken). The last paragraph of
+  next one is **BUG-21** (BUG-13 to BUG-20 are taken). The last paragraph of
   `progress/m1.md` says why.
 - **The write-time sensitive-data hook catches only `+47`/`0047` phone
   numbers, on Write and Edit.** `scan-sensitive.mjs` does not look for 8-digit
@@ -338,14 +339,20 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**LOST-01** (M2 task 2 of 8, the heartbeat) is in review as
-[#60](https://github.com/bvst/TryggHverdag/pull/60) and waits on the owner. On
-`f7a008d` every check passed except `android-e2e`, which failed before the app
-was installed (BUG-17). **BUG-15** is done
-([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`). **A-31**
-(Dependabot alerts are off) is the owner's. LOST-01's reviews leave items for
-later tasks, listed in `progress/m2.md` ("Left for later tasks"); the first is
-that task 3 must bound the heartbeat's row lock before it merges.
+**LOST-02** (M2 task 3 of 8, the lost-contact alert) is in review, with its
+pull request open from `claude/busy-faraday-40n2zl`. It bounds the heartbeat's
+row lock, as LOST-01's reviews asked. **BUG-18** is done
+([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`), and so are
+**LOST-01** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`)
+and **BUG-15** ([#59](https://github.com/bvst/TryggHverdag/pull/59),
+`c46b3b3`). **A-31** (Dependabot alerts are off) is the owner's. LOST-01's and
+LOST-02's reviews leave items for later tasks, listed in `progress/m2.md`
+("Left for later tasks").
+
+**After LOST-02's first staging deploy,** this session finds every line
+starting `api: session limit` or `worker: session limit` and quotes them in
+`progress/m2.md`. It expects exactly two, both "in force" (the spec's Risks
+section lists them). Any other line, or none at all, opens a bug (D-109).
 
 **For the owner, from CI's `test-auditor` on #60:** should
 `apps/server/src/log.ts` be mutation-tested? It is the one place that keeps
@@ -354,6 +361,12 @@ locations and phone numbers out of the server's logs (PRIV-07), and
 Claude recommends a mutation group for it on every pull request, under a new
 decision, as its own task after LOST-01. The alternative is to wait for D-036's
 nightly run, which does not exist yet.
+
+**For the owner, from `safety-reviewer` on LOST-02:** the same question for
+`apps/server/src/adapters/db.ts`. It holds every pool's session limits and
+the start-up read-back that says whether they are in force (D-109), and it is
+not in `SAFETY_PATHS`, so no mutation run measures its tests. Claude would
+answer both questions in one decision.
 
 Still open from BUG-14's reviews, for the owner:
 - nothing pins what `package.json`'s `mutation` script runs (`safety-reviewer`
@@ -368,7 +381,7 @@ Still open from D-098's consequences (BUG-12, done):
 - the whole-suite run is now unreachable, and removing it needs a decision;
 - mobile `.tsx` safety files will need a jest-expo group.
 
-**BUG-13**, **BUG-16** and **BUG-17** are queued for the owner to schedule (the rows under M2, above).
+**BUG-13**, **BUG-16**, **BUG-17**, **BUG-19** and **BUG-20** are queued for the owner to schedule (the rows under M2, above).
 
 **D-085's loose ends** (the pull request merged, [#43](https://github.com/bvst/TryggHverdag/pull/43)).
 - **Verified:** `deploy-staging` on `ubuntu-26.04`. Run 36621209842, for

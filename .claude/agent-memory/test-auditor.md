@@ -93,3 +93,10 @@ Notes kept between reviews. Newest section last.
 - A loop commit can amend the decision ahead of its code ("its lines and tests
   follow"). Scope the verdict to what exists and name the missing half as a
   merge condition, rather than passing the decision as a whole.
+
+## Found in LOST-02 (2026-10-04)
+- **A high Stryker score says nothing about "either path" and "no other item" clauses.** The watchdog scored 97 % and still let
+  a throwing second attempt count as fine, and a `break` after one failure starve the rest. Plant those two by hand on any loop
+  with a retry or a per-item failure branch (see feedback_second_path_isolation.md).
+- **Count Vitest's unhandled errors as kills.** A listener changed to `once` crashes only through an unhandled `error`, which
+  fails the run without failing a test; a harness reading only test states reports it as a survivor.

@@ -19,17 +19,23 @@
  * stored once (SM-08), last contact only ever moves forward (SM-09), and a
  * journey that has ended takes nothing (SM-07).
  *
- * It is also where the watchdog will meet them (the lost-contact story, task
- * 3): its `for update skip locked` skips a journey whose heartbeat is being
- * written. That is right only while the transaction is short. No clock is
- * read inside it, so it is short as written, but nothing yet bounds it: the
- * API's pool sets no `idle_in_transaction_session_timeout` or
- * `lock_timeout`. An API instance that froze mid-transaction would hold the
- * row until PostgreSQL noticed the dead connection, and the watchdog would
- * skip that journey the whole time: a missed alert that shows up nowhere.
- * Task 3, the lost-contact watchdog, must bound the lock before it merges, or must not let
- * `skip locked` skip a journey indefinitely (LOST-01's spec, approach item
- * 6; docs/progress/m2.md).
+ * It is also where the watchdog meets them (LOST-02): its `for update skip
+ * locked` skips a journey whose heartbeat is being written, and a heartbeat
+ * that arrives while a sweep holds the row waits, and is then stored against
+ * LOST_CONTACT. That is right only while every transaction on the row is
+ * short. No clock is read and no network is called inside one, so they are
+ * short as written, and the process pools bound them anyway (D-108, in
+ * db.ts): a session idle inside a transaction is ended after 10 s, and the
+ * API's statements wait at most 5 s for a row. A journey skipped past
+ * 5 min 30 s gets one attempt that waits for its holder, and one held through
+ * that wait is reported by the watchdog, not skipped silently.
+ *
+ * The watchdog's open is one transaction: the journey's row, taken again only
+ * if it is still ACTIVE and overdue by that transaction's now(); the move to
+ * LOST_CONTACT, which must change exactly that row; the alert; and one outbox
+ * message per responder, at least one. Any of it failing writes none of it
+ * (AR-05). The outbox's claim, its marks and the read of what is overdue are
+ * single statements, each timed by the database's now() (REL-01).
  *
  * Any failure while storing a heartbeat is replaced by a `HeartbeatStoreError`
  * holding PostgreSQL's SQLSTATE and nothing else. PostgreSQL's own error can
@@ -43,19 +49,31 @@ import {
   heartbeats,
   journeyResponders,
   journeys,
+  outbox,
   positions,
   unended,
   users,
 } from '../db/schema.ts';
-import type { JourneyForHeartbeat, UnendedJourney } from '../domain/journey.ts';
+import { databaseTime } from '../domain/database-time.ts';
+import type { JourneyForHeartbeat, JourneyState, UnendedJourney } from '../domain/journey.ts';
 import { sqlstateOf } from '../domain/sqlstate.ts';
+import { LOCK_WAIT_LIMIT_MS } from '../domain/watchdog.ts';
 import type {
+  AlertMessage,
+  ClaimedMessages,
   HeartbeatToRecord,
   InsertStartedResult,
   JourneyStore,
   LatestHeartbeat,
+  MessageKind,
+  OpenLostContactAlertResult,
+  OpenRequest,
+  OutboxStore,
+  OverdueJourneys,
+  PushFailureReason,
   RecordHeartbeatResult,
   StartedJourney,
+  WatchdogStore,
 } from '../ports.ts';
 import type { Database } from './db.ts';
 
@@ -96,7 +114,115 @@ async function unendedJourneyOf(db: Reader, walkerId: string): Promise<UnendedJo
   return { id: row.id, state: row.state };
 }
 
-export function databaseJourneyStore(db: Database): JourneyStore {
+/** SQLSTATE lock_not_available: a wait for a row ran past its lock_timeout. */
+const LOCK_NOT_AVAILABLE = '55P03';
+
+/** The longest lock_timeout PostgreSQL takes, in milliseconds. */
+const LOCK_TIMEOUT_MAX_MS = 2_147_483_647;
+
+/** A number of milliseconds as an interval, in SQL. */
+const milliseconds = (ms: number) => sql`(${ms}::double precision * interval '1 millisecond')`;
+
+/** When a journey's silence began: its last contact, or its start when it has had none. */
+const silentSince = sql`coalesce(${journeys.lastHeartbeatAt}, ${journeys.startedAt})`;
+
+/** A message as the outbox's statements return it: a row, so any column may be read. */
+interface MessageRow {
+  [column: string]: unknown;
+  id: string;
+  recipient_id: string;
+  kind: MessageKind;
+}
+
+const asMessage = (row: MessageRow): AlertMessage => ({
+  messageId: row.id,
+  recipientId: row.recipient_id,
+  kind: row.kind,
+});
+
+/**
+ * The open, inside its transaction. Throws to roll back: a move that changed
+ * no row, or a journey with nobody to tell, is never half-written. Marks
+ * `progress.rowTaken` once the journey's row is taken, so a lock that ran out
+ * after that is known to be another one.
+ */
+async function openInside(
+  tx: Pick<Database, 'execute' | 'select' | 'update'>,
+  { journeyId, afterMs, lockWaitMs }: OpenRequest,
+  progress: { rowTaken: boolean },
+): Promise<OpenLostContactAlertResult> {
+  // Every open bounds its own waits (D-108): `skip locked` covers only the
+  // journey's row, and the open takes other locks. Each outbox row's insert
+  // takes a key-share lock on its responder's users row, and the alert's
+  // insert can wait on the one-unresolved-alert index. Without a limit, one
+  // users row held by anything would stop this sweep, and every sweep after
+  // it. A waiting open waits that long for the journey's row too. SET LOCAL,
+  // for this transaction only: the pool keeps no lock limit of its own.
+  // set_config takes parameters; SET does not.
+  await tx.execute(
+    sql`select set_config('lock_timeout', ${String(lockWaitMs ?? LOCK_WAIT_LIMIT_MS)}, true)`,
+  );
+  // The row, taken again under the lock with this transaction's now(): a
+  // heartbeat committed after the read moved last contact, and a sweep that
+  // got here first moved the state, and either one means no row. Without a
+  // wait a row someone holds is no row either; with one, PostgreSQL checks
+  // the row its holder left.
+  const [locked] = await tx
+    .select({ id: journeys.id })
+    .from(journeys)
+    .where(
+      and(
+        eq(journeys.id, journeyId),
+        eq(journeys.state, 'ACTIVE'),
+        sql`${silentSince} <= now() - ${milliseconds(afterMs)}`,
+      ),
+    )
+    .for('update', lockWaitMs === undefined ? { skipLocked: true } : {});
+  progress.rowTaken = true;
+  if (locked === undefined) {
+    return { outcome: 'skipped' };
+  }
+
+  const moved = await tx
+    .update(journeys)
+    .set({ state: 'LOST_CONTACT' })
+    .where(and(eq(journeys.id, journeyId), eq(journeys.state, 'ACTIVE')))
+    .returning({ id: journeys.id });
+  if (moved.length !== 1) {
+    throw new Error('The move to LOST_CONTACT changed no row, so nothing of the alert is kept.');
+  }
+
+  // Silent since the journey's own last contact, copied in SQL so it keeps
+  // the database's precision.
+  const alert = await tx.execute<{ id: string }>(sql`
+    insert into "alerts" ("journey_id", "state", "opened_at", "silent_since")
+    select ${journeys.id}, 'OPEN', now(), ${silentSince} from ${journeys}
+     where ${journeys.id} = ${journeyId}
+    returning "id"`);
+  const alertId = alert.rows[0]?.id;
+  if (alertId === undefined) {
+    throw new Error('The alert was not written, so nothing of it is kept.');
+  }
+
+  // One message per responder, each with a new random ID, due at once.
+  const messages = await tx.execute<MessageRow>(sql`
+    insert into "outbox" ("alert_id", "recipient_id", "kind", "created_at", "attempts",
+                          "next_attempt_at")
+    select ${alertId}, ${journeyResponders.responderId}, 'LOST_CONTACT', now(), 0, now()
+      from ${journeyResponders}
+     where ${journeyResponders.journeyId} = ${journeyId}
+    returning "id", "recipient_id", "kind"`);
+  if (messages.rows.length === 0) {
+    // The start rule makes this unreachable. If it happens, the journey
+    // stays ACTIVE and overdue, and the watchdog reports it, rather than
+    // moving it with nobody told.
+    throw new Error('The journey has no responder to tell, so it is not moved.');
+  }
+
+  return { outcome: 'opened', alertId, messages: messages.rows.map(asMessage) };
+}
+
+export function databaseJourneyStore(db: Database): JourneyStore & WatchdogStore & OutboxStore {
   return {
     unendedJourneyOf(walkerId: string): Promise<UnendedJourney | null> {
       return unendedJourneyOf(db, walkerId);
@@ -252,6 +378,148 @@ export function databaseJourneyStore(db: Database): JourneyStore {
             hasPosition: latest.positionOf !== null,
             batteryLevel: latest.batteryLevel,
           };
+    },
+
+    async overdueJourneys(afterMs: number): Promise<OverdueJourneys> {
+      // One statement, no lock: now() and the journeys silent for afterMs or
+      // more by it. The left join keeps now() when none is.
+      const result = await db.execute<{
+        now: unknown;
+        id: string | null;
+        state: JourneyState | null;
+        silent_since: unknown;
+      }>(sql`
+        select clock.now, ${journeys.id}, ${journeys.state}, ${silentSince} as silent_since
+          from (select now() as now) as clock
+          left join ${journeys}
+            on ${journeys.state} = 'ACTIVE'
+           and ${silentSince} <= clock.now - ${milliseconds(afterMs)}`);
+      const [first] = result.rows;
+      if (first === undefined) {
+        // The left join always returns a row; none means the read is not
+        // what this code thinks it is, and a guess would be a guess about
+        // whether someone is being watched.
+        throw new Error('The overdue read returned no row, not even the time.');
+      }
+      return {
+        now: databaseTime(first.now, 'The overdue read'),
+        journeys: result.rows.flatMap(({ id, state, silent_since }) =>
+          id === null || state === null
+            ? []
+            : [{ id, state, silentSince: databaseTime(silent_since, 'The overdue read') }],
+        ),
+      };
+    },
+
+    async openLostContactAlert(request: OpenRequest): Promise<OpenLostContactAlertResult> {
+      // Refused before the transaction, so nothing is written and no lock is
+      // taken. PostgreSQL reads a lock_timeout of 0 as no limit at all, which
+      // a wait must never quietly become.
+      const { lockWaitMs } = request;
+      if (
+        lockWaitMs !== undefined &&
+        !(Number.isInteger(lockWaitMs) && lockWaitMs >= 1 && lockWaitMs <= LOCK_TIMEOUT_MAX_MS)
+      ) {
+        throw new Error(
+          `lockWaitMs must be a whole number of milliseconds from 1 to ${String(LOCK_TIMEOUT_MAX_MS)}, ` +
+            `not ${String(lockWaitMs)}: PostgreSQL reads a lock_timeout of 0 as no limit at all.`,
+        );
+      }
+      const progress = { rowTaken: false };
+      try {
+        return await db.transaction((tx) => openInside(tx, request, progress));
+      } catch (error) {
+        // Only a waiting open's wait for the journey's own row is answered,
+        // as held, not thrown: the watchdog reports that journey, and a row
+        // someone holds is not a failure of the database. Any other lock that
+        // ran out, in either attempt, is a failed open, and is thrown.
+        if (
+          request.lockWaitMs !== undefined &&
+          !progress.rowTaken &&
+          sqlstateOf(error) === LOCK_NOT_AVAILABLE
+        ) {
+          return { outcome: 'held' };
+        }
+        throw error;
+      }
+    },
+
+    async claimDue({ limit, leaseMs }): Promise<ClaimedMessages> {
+      // One statement: the due messages no other claim holds, one attempt
+      // more each, leased until now() plus the lease; and now(), even when
+      // nothing is due.
+      const result = await db.execute<{
+        now: unknown;
+        id: string | null;
+        recipient_id: string | null;
+        kind: MessageKind | null;
+        attempts: number | null;
+      }>(sql`
+        with due as (
+          select ${outbox.id} from ${outbox}
+           where ${outbox.sentAt} is null and ${outbox.nextAttemptAt} <= now()
+           order by ${outbox.nextAttemptAt}, ${outbox.id}
+           limit ${limit}
+           for update skip locked
+        ), claimed as (
+          update ${outbox}
+             set "attempts" = ${outbox.attempts} + 1,
+                 "next_attempt_at" = now() + ${milliseconds(leaseMs)}
+            from due
+           where ${outbox.id} = due."id"
+          returning ${outbox.id}, ${outbox.recipientId}, ${outbox.kind}, ${outbox.attempts}
+        )
+        select clock.now, claimed."id", claimed."recipient_id", claimed."kind",
+               claimed."attempts"
+          from (select now() as now) as clock
+          left join claimed on true`);
+      const [first] = result.rows;
+      if (first === undefined) {
+        throw new Error('The claim returned no row, not even the time.');
+      }
+      return {
+        now: databaseTime(first.now, 'The claim'),
+        messages: result.rows.flatMap(({ id, recipient_id, kind, attempts }) =>
+          id === null || recipient_id === null || kind === null || attempts === null
+            ? []
+            : [{ ...asMessage({ id, recipient_id, kind }), attempts }],
+        ),
+      };
+    },
+
+    async markSent(messageId: string): Promise<void> {
+      // Sent once: a message marked again keeps its first time.
+      const marked = await db
+        .update(outbox)
+        .set({ sentAt: sql`coalesce(${outbox.sentAt}, now())` })
+        .where(eq(outbox.id, messageId))
+        .returning({ id: outbox.id });
+      if (marked.length !== 1) {
+        throw new Error('No message by that ID was in the outbox to mark as sent.');
+      }
+    },
+
+    async markFailed({
+      messageId,
+      reason,
+      retryAfterMs,
+    }: {
+      messageId: string;
+      reason: PushFailureReason;
+      retryAfterMs: number;
+    }): Promise<void> {
+      // A reason outside the port's four is refused by the table's check.
+      const marked = await db
+        .update(outbox)
+        .set({
+          lastFailure: reason,
+          nextAttemptAt: sql`now() + ${milliseconds(retryAfterMs)}`,
+        })
+        .where(eq(outbox.id, messageId))
+        .returning({ id: outbox.id });
+      if (marked.length !== 1) {
+        throw new Error('No message by that ID was in the outbox to mark as failed.');
+      }
     },
   };
 }

@@ -584,3 +584,293 @@ describe('PRIV-07: the log’s default destination is one a capture can see', ()
     expect(seen).toEqual([]);
   });
 });
+
+// ===========================================================================
+// LOST-02: the watchdog's, the sender's and the pools' five events (approach
+// item 10). Closed, like the first two: a stage, a reason or a pool from its
+// set, a UUID, or a SQLSTATE, and nothing a location, a phone number, an
+// error's message or the connection string could travel in.
+// ===========================================================================
+
+const LOST_02_EVENTS: LogEvent[] = [
+  { event: 'watchdog_failed', stage: 'read', code: '57P01' },
+  { event: 'watchdog_failed', stage: 'open', code: null },
+  { event: 'watchdog_failed', stage: 'beat', code: '53300' },
+  { event: 'watchdog_overdue', journeyId: syntheticUuid() },
+  { event: 'push_failed', reason: 'NO_TARGET', messageId: syntheticUuid() },
+  { event: 'push_failed', reason: 'REFUSED', messageId: syntheticUuid() },
+  { event: 'push_failed', reason: 'UNAVAILABLE', messageId: syntheticUuid() },
+  { event: 'push_failed', reason: 'NOT_CONFIGURED', messageId: syntheticUuid() },
+  { event: 'delivery_failed', stage: 'claim', code: '08006' },
+  { event: 'delivery_failed', stage: 'mark', code: null },
+  { event: 'database_error', pool: 'api', code: '25P03' },
+  { event: 'database_error', pool: 'worker', code: null },
+];
+
+/** For each new event with a field closed to a set: a valid event, the field, and values outside the set. */
+const CLOSED_SETS: {
+  what: string;
+  event: Record<string, unknown>;
+  field: string;
+  outside: unknown[];
+}[] = [
+  {
+    what: 'a watchdog_failed stage',
+    event: { event: 'watchdog_failed', stage: 'read', code: '57P01' },
+    field: 'stage',
+    outside: ['claim', 'mark', 'store', 'clock', 'READ', '', ['read'], 3],
+  },
+  {
+    what: 'a delivery_failed stage',
+    event: { event: 'delivery_failed', stage: 'claim', code: '57P01' },
+    field: 'stage',
+    outside: ['read', 'open', 'beat', 'send', 'CLAIM', '', ['claim']],
+  },
+  {
+    what: 'a push_failed reason',
+    event: { event: 'push_failed', reason: 'NO_TARGET', messageId: syntheticUuid() },
+    field: 'reason',
+    outside: ['JOURNEY_ENDED', 'TIMEOUT', 'no_target', '', ['NO_TARGET'], 500],
+  },
+  {
+    what: 'a database_error pool',
+    event: { event: 'database_error', pool: 'api', code: '57P01' },
+    field: 'pool',
+    outside: ['migrations', 'API', 'graphile', '', ['worker']],
+  },
+];
+
+/** The new events with a field that holds an ID: written only as a lower-case canonical UUID. */
+const ID_FIELDS: { event: Record<string, unknown>; field: string }[] = [
+  { event: { event: 'watchdog_overdue', journeyId: syntheticUuid() }, field: 'journeyId' },
+  {
+    event: { event: 'push_failed', reason: 'REFUSED', messageId: syntheticUuid() },
+    field: 'messageId',
+  },
+];
+
+/** The new events with a code: written only as a SQLSTATE. */
+const CODED_EVENTS: Record<string, unknown>[] = [
+  { event: 'watchdog_failed', stage: 'open', code: '23505' },
+  { event: 'delivery_failed', stage: 'mark', code: '23505' },
+  { event: 'database_error', pool: 'worker', code: '23505' },
+];
+
+describe('PRIV-07 and LOST-02: the five new events are closed, at the type and at run time', () => {
+  test('LOST-02-AC22: (L1) each of the five is exactly its fields, no more and no fewer: a field added to one, an optional one included, or a set widened, fails typecheck', () => {
+    // An exact pin per event (review loop 1, test-auditor). The test below
+    // tries fields one at a time; this holds the whole shape, so even
+    // `watchdog_overdue` gaining an optional `latitude?` fails `tsc`. The
+    // check is the compiler's: each entry below is `true` only when each type
+    // is assignable to the other and both have the same keys, an optional
+    // one included, and the array is typed to hold only `true`.
+    type Exactly<A, B> = [A] extends [B]
+      ? [B] extends [A]
+        ? [keyof A] extends [keyof B]
+          ? [keyof B] extends [keyof A]
+            ? true
+            : false
+          : false
+        : false
+      : false;
+    type EventOf<Name extends LogEvent['event']> = Extract<LogEvent, { event: Name }>;
+    const pinned: [
+      Exactly<
+        EventOf<'watchdog_failed'>,
+        { event: 'watchdog_failed'; stage: 'read' | 'open' | 'beat'; code: string | null }
+      >,
+      Exactly<EventOf<'watchdog_overdue'>, { event: 'watchdog_overdue'; journeyId: string }>,
+      Exactly<
+        EventOf<'push_failed'>,
+        {
+          event: 'push_failed';
+          reason: 'NO_TARGET' | 'REFUSED' | 'UNAVAILABLE' | 'NOT_CONFIGURED';
+          messageId: string;
+        }
+      >,
+      Exactly<
+        EventOf<'delivery_failed'>,
+        { event: 'delivery_failed'; stage: 'claim' | 'mark'; code: string | null }
+      >,
+      Exactly<
+        EventOf<'database_error'>,
+        { event: 'database_error'; pool: 'api' | 'worker'; code: string | null }
+      >,
+    ] = [true, true, true, true, true];
+
+    expect(pinned).toEqual([true, true, true, true, true]);
+  });
+
+  test('LOST-02-AC22: (L1) none of the five holds another field: a latitude, a message, the recipient, the connection string, or another stage, reason or pool does not type-check', () => {
+    // As above: each @ts-expect-error fails the type check (gate:static) the
+    // day the property under it stops being an error. Values only; none is
+    // handed to the log.
+    const journeyId = syntheticUuid();
+    const messageId = syntheticUuid();
+    const refused: unknown[] = [
+      {
+        event: 'watchdog_failed',
+        stage: 'read',
+        code: null,
+        // @ts-expect-error -- a latitude has no field to travel in
+        latitude: 0,
+      } satisfies LogEvent,
+      {
+        event: 'watchdog_failed',
+        stage: 'open',
+        code: null,
+        // @ts-expect-error -- nor an error's message
+        message: 'Failing row contains (…)',
+      } satisfies LogEvent,
+      {
+        event: 'watchdog_failed',
+        // @ts-expect-error -- nor a stage of another event
+        stage: 'store',
+        code: null,
+      } satisfies LogEvent,
+      {
+        event: 'watchdog_overdue',
+        journeyId,
+        // @ts-expect-error -- nor a position
+        position: { latitude: 0, longitude: 0 },
+      } satisfies LogEvent,
+      {
+        event: 'push_failed',
+        reason: 'NO_TARGET',
+        messageId,
+        // @ts-expect-error -- nor who the message was for
+        recipientId: journeyId,
+      } satisfies LogEvent,
+      {
+        event: 'push_failed',
+        // @ts-expect-error -- nor a reason the push port does not give
+        reason: 'TIMEOUT',
+        messageId,
+      } satisfies LogEvent,
+      {
+        event: 'delivery_failed',
+        stage: 'claim',
+        code: null,
+        // @ts-expect-error -- nor a message
+        message: 'connection refused',
+      } satisfies LogEvent,
+      {
+        event: 'delivery_failed',
+        // @ts-expect-error -- nor another stage
+        stage: 'send',
+        code: null,
+      } satisfies LogEvent,
+      {
+        event: 'database_error',
+        pool: 'api',
+        code: null,
+        // @ts-expect-error -- nor the connection string
+        connectionString: 'postgres://synthetic@127.0.0.1:1/synthetic',
+      } satisfies LogEvent,
+      {
+        event: 'database_error',
+        // @ts-expect-error -- nor a pool that is neither process's
+        pool: 'migrations',
+        code: null,
+      } satisfies LogEvent,
+      {
+        event: 'database_error',
+        pool: 'worker',
+        // @ts-expect-error -- and a code is text or null, never the error itself
+        code: new Error('terminating connection'),
+      } satisfies LogEvent,
+    ];
+
+    expect(refused).toHaveLength(11);
+  });
+
+  test.each(LOST_02_EVENTS)(
+    'LOST-02-AC22: createLog writes $event as one JSON line, holding exactly that event’s fields',
+    (event) => {
+      const writer = recordingWriter();
+
+      createLog({ write: writer.write }).write(event);
+
+      const lines = writer.lines();
+      expect(lines).toHaveLength(1);
+      expect(writer.chunks.join('').endsWith('\n')).toBe(true);
+      expect(JSON.parse(lines[0] ?? 'null')).toEqual(event);
+    },
+  );
+
+  test.each(CLOSED_SETS)(
+    'LOST-02-AC22: $what outside its set is written as null, and none of it is written',
+    ({ event, field, outside }) => {
+      for (const value of outside) {
+        const { line, text } = writtenThroughACast({ ...event, [field]: value });
+
+        expect(line, JSON.stringify(value)).toEqual({ ...event, [field]: null });
+        if (typeof value === 'string' && value !== '') {
+          expect(text, value).not.toContain(`"${value}"`);
+        }
+      }
+    },
+  );
+
+  test.each(CLOSED_SETS)(
+    'LOST-02-AC22: $what inside its set is written as it is, so the null above is the value’s doing',
+    ({ event }) => {
+      expect(writtenThroughACast(event).line).toEqual(event);
+    },
+  );
+
+  test.each(ID_FIELDS)(
+    'LOST-02-AC22: a $event.event $field that is not a lower-case UUID is written as null, and none of it is written',
+    ({ event, field }) => {
+      for (const { what, journeyId: value, markers } of NOT_JOURNEY_IDS) {
+        const given = value();
+        const { line, text } = writtenThroughACast({ ...event, [field]: given });
+
+        expect(line, what).toEqual({ ...event, [field]: null });
+        expect(markersIn(text, markers()), what).toEqual([]);
+      }
+      expect(writtenThroughACast(event).line).toEqual(event);
+    },
+  );
+
+  test.each(CODED_EVENTS)(
+    'LOST-02-AC22: a $event code that is not a SQLSTATE is written as null, and a SQLSTATE as it is',
+    (event) => {
+      for (const { what, code } of [...NOT_SQLSTATES, ...CODES_NOT_TEXT]) {
+        const { line, text } = writtenThroughACast({ ...event, code });
+
+        expect(line, what).toEqual({ ...event, code: null });
+        if (typeof code === 'string' && code !== '') {
+          expect(text, what).not.toContain(code);
+        }
+      }
+      expect(writtenThroughACast(event).line).toEqual(event);
+    },
+  );
+
+  test('LOST-02-AC22: fields the five events do not have, got past the type, are not written: a position, a message, an error, a recipient, a connection string', () => {
+    const latitude = String(syntheticCoordinate());
+    const longitude = String(syntheticCoordinate());
+    const recipientId = syntheticUuid();
+    const connectionString = `postgres://synthetic:${syntheticUuid()}@127.0.0.1:1/synthetic`;
+    const extra = {
+      latitude: Number(latitude),
+      longitude: Number(longitude),
+      position: { latitude: Number(latitude), longitude: Number(longitude) },
+      message: `Failing row contains (${latitude}, ${longitude})`,
+      err: new Error(`could not connect to ${connectionString}`),
+      recipientId,
+      connectionString,
+    };
+
+    for (const event of LOST_02_EVENTS) {
+      const { line, text } = writtenThroughACast({ ...event, ...extra });
+
+      expect(line, event.event).toEqual(event);
+      expect(
+        markersIn(text, [latitude, longitude, 'Failing row', recipientId, connectionString]),
+        event.event,
+      ).toEqual([]);
+    }
+  });
+});

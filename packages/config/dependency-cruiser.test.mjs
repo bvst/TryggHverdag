@@ -74,6 +74,11 @@ const SERVER = {
   // Named like the two exemptions without being either.
   'apps/server/src/modules/journeys/service.test-helpers.ts': usesTheLog('../../log.ts'),
   'apps/server/src/modules/journeys/api-process.ts': usesTheLog('../../log.ts'),
+  // RG-03 (LOST-02, approach item 10): the worker is the other process that
+  // wires the real log, so the rule admits worker.ts too, and only that one.
+  // These two entries are added; every one above is unchanged.
+  'apps/server/src/worker.ts': usesTheLog('./log.ts'),
+  'apps/server/src/modules/alerts/worker.ts': usesTheLog('../../log.ts'),
 };
 
 const made = [];
@@ -190,6 +195,16 @@ describe('only the process wiring and tests import the log adapter; modules get 
 
   test('LOST-01 (AR-10, D-102): a module that takes the Log port is not refused', () => {
     expect(refused('apps/server/src/modules/health/service.ts')).toEqual([]);
+  });
+
+  test('LOST-02 (AR-10, D-102): worker.ts, which wires the real log in the worker, may import it', () => {
+    expect(refused('apps/server/src/worker.ts')).toEqual([]);
+  });
+
+  test('LOST-02 (AR-10, D-102): a file only named like worker.ts, in another folder, is still refused', () => {
+    expect(refused('apps/server/src/modules/alerts/worker.ts')).toEqual([
+      { rule: LOG_RULE, from: 'apps/server/src/modules/alerts/worker.ts', to: LOG },
+    ]);
   });
 });
 

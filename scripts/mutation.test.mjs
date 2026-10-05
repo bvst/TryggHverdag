@@ -66,7 +66,12 @@ const RUNS = [
   },
 ];
 
-/** The whole-suite run as it is today: the two safety paths that hold no file yet. */
+/**
+ * Sample data: the whole-suite run as it was before LOST-02, when two safety
+ * paths held no file yet. modules/alerts/ now has files and a group of its
+ * own; the runner under test is handed these runs, so they still describe a
+ * run whose paths hold nothing, which is what the tests below need.
+ */
 const EMPTY_WHOLE_SUITE = {
   name: 'whole-suite',
   paths: ['apps/server/src/modules/alerts/', 'apps/mobile/src/safety-core/'],
@@ -383,8 +388,9 @@ describe('runMutationGroups', () => {
   });
 
   test('BUG-12: a run whose paths hold no source file yet is not started, says so by name, and does not decide the gate', async () => {
-    // modules/alerts/ and safety-core/ today: safety paths with nothing in
-    // them, which only the whole-suite run takes. Started anyway, Stryker 10
+    // modules/alerts/ and safety-core/ before LOST-02 (sample data since:
+    // the runs and the empty paths are handed in): safety paths with nothing
+    // in them, which only the whole-suite run takes. Started anyway, Stryker 10
     // finds no file to mutate, scores NaN, and exits 0, since NaN is not
     // below the break threshold; the judge then fails the run as having
     // measured nothing, which would block every pull request for code that

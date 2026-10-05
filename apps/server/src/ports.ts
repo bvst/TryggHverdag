@@ -6,7 +6,16 @@
  * shape without depending on the implementation, and so that the test kit can
  * satisfy them structurally without importing any server code.
  */
-import type { JourneyForHeartbeat, UnendedJourney } from './domain/journey.ts';
+import type {
+  JourneyForHeartbeat,
+  JourneyState,
+  MessageKind,
+  PushFailureReason,
+  UnendedJourney,
+} from './domain/journey.ts';
+
+/** The domain's lists, as the types the ports are written in. */
+export type { MessageKind, PushFailureReason };
 
 /**
  * The time, from the database (REL-01).
@@ -29,12 +38,16 @@ export interface WorkerHeartbeats {
 
 /**
  * The worker's "I am still here", told to an outside monitor (INF-08). The
- * monitor pages the owner when these stop, so it must only ever follow a beat
- * that was recorded.
+ * monitor pages the owner when these stop, so it must only ever follow a
+ * fresh beat: one a sweep recorded at most BEAT_FRESH_MS ago.
  */
 export interface CheckIn {
-  /** Resolves when the monitor accepted it; rejects on anything else. */
-  checkIn(): Promise<void>;
+  /**
+   * Resolves when the monitor accepted it; rejects on anything else, and as
+   * soon as `signal` aborts, so a stop never waits for a monitor that does
+   * not answer (D-079).
+   */
+  checkIn(signal?: AbortSignal): Promise<void>;
 }
 
 /** Who a device credential belongs to. */
@@ -105,6 +118,122 @@ export interface LatestHeartbeat {
   batteryLevel: number | null;
 }
 
+/** An ACTIVE journey the watchdog found silent, and when its silence began, in database time. */
+export interface OverdueJourney {
+  id: string;
+  state: JourneyState;
+  silentSince: Date;
+}
+
+/** The overdue journeys, and the database's now() from the same statement: there even when none is. */
+export interface OverdueJourneys {
+  now: Date;
+  journeys: OverdueJourney[];
+}
+
+/** An open as the watchdog asks for it: with `lockWaitMs`, it waits that long for a held row. */
+export interface OpenRequest {
+  journeyId: string;
+  afterMs: number;
+  /** How long to wait for a held row; undefined, or left out, skips it. */
+  lockWaitMs?: number | undefined;
+}
+
+/** A message an alert's opening wrote: an opaque ID of its own, who it is for, and what kind. */
+export interface AlertMessage {
+  messageId: string;
+  recipientId: string;
+  kind: MessageKind;
+}
+
+/**
+ * Opened: the journey moved to LOST_CONTACT, with its alert and one message
+ * per responder. Skipped: nothing written, because the row was held (without
+ * a wait), or the journey was no longer ACTIVE and overdue. Held: an open
+ * that waited for the row ran out of wait (55P03), and nothing was written.
+ */
+export type OpenLostContactAlertResult =
+  | { outcome: 'opened'; alertId: string; messages: AlertMessage[] }
+  | { outcome: 'skipped' }
+  | { outcome: 'held' };
+
+/** What the watchdog needs of the journeys (LOST-02, AR-06). */
+export interface WatchdogStore {
+  /**
+   * The ACTIVE journeys silent for `afterMs` or more by the database's now(),
+   * counted from last contact or from the start, read without locking, and
+   * that now().
+   */
+  overdueJourneys(afterMs: number): Promise<OverdueJourneys>;
+  /**
+   * In one transaction: takes the journey's row if it is still ACTIVE and
+   * overdue, moves it to LOST_CONTACT, opens its alert and writes one message
+   * per responder, all of it or none of it. Every open bounds its waits with
+   * a lock limit of its own, local to its transaction: `lockWaitMs`, or
+   * LOCK_WAIT_LIMIT_MS without it. Without `lockWaitMs` a held row is skipped
+   * (`skip locked`) and `held` is never answered; with it, the open waits at
+   * most that long for the journey's row, and answers `held` when that wait
+   * runs out. Rejects, having written nothing, on any other failure: a wait
+   * for any other lock that ran out (55P03), or a journey with no responder.
+   * Rejects before taking any lock when `lockWaitMs` is given and is not a
+   * whole number from 1 to 2147483647: PostgreSQL reads 0 as no limit.
+   */
+  openLostContactAlert(request: OpenRequest): Promise<OpenLostContactAlertResult>;
+}
+
+/** A message as a claim hands it out: what the push needs, and how many attempts it has had, this one included. */
+export interface ClaimedMessage extends AlertMessage {
+  attempts: number;
+}
+
+/** The messages a claim took, and the database's now() from the same statement. */
+export interface ClaimedMessages {
+  now: Date;
+  messages: ClaimedMessage[];
+}
+
+/** What the sender needs of the outbox (LOST-02, AR-05). */
+export interface OutboxStore {
+  /**
+   * In one statement: at most `limit` due messages (not sent, and due at or
+   * before now()), skipping any another claim holds, each with one attempt
+   * more and leased until now() plus `leaseMs`.
+   */
+  claimDue(request: { limit: number; leaseMs: number }): Promise<ClaimedMessages>;
+  /** The port accepted it: sent at now(). */
+  markSent(messageId: string): Promise<void>;
+  /** The port did not accept it: this reason, and due again `retryAfterMs` after now(). */
+  markFailed(request: {
+    messageId: string;
+    reason: PushFailureReason;
+    retryAfterMs: number;
+  }): Promise<void>;
+}
+
+/**
+ * A message as the push port takes it, and nothing more: no name, journey,
+ * position, battery or time (D-086). `messageId` is opaque and new for each
+ * message, never a person's, a journey's or an alert's ID (D-087), and is
+ * what the platform collapses a resend by. `recipientId` is for the adapter
+ * to find the device; it is never sent to Apple or Google.
+ */
+export type PushMessage = AlertMessage;
+
+/** Why one message was not accepted. */
+export interface PushFailure {
+  outcome: 'failed';
+  reason: PushFailureReason;
+}
+
+/** Accepted, or not, and why. Only `accepted` ever counts as sent. */
+export type PushResult = { outcome: 'accepted' } | PushFailure;
+
+/** The push notification port: APNs and FCM in M3, a recording fake in tests. */
+export interface Push {
+  /** Answers; a rejection counts as UNAVAILABLE. */
+  send(message: PushMessage): Promise<PushResult>;
+}
+
 /** Journeys, their responders, their heartbeats, and the users all of them must be (SM-01, LOST-01). */
 export interface JourneyStore {
   /** The walker's journey in any state but ENDED, or null. */
@@ -138,7 +267,12 @@ export interface JourneyStore {
  */
 export type LogEvent =
   | { event: 'heartbeat_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
-  | { event: 'heartbeat_failed'; stage: 'clock' | 'read' | 'store'; code: string | null };
+  | { event: 'heartbeat_failed'; stage: 'clock' | 'read' | 'store'; code: string | null }
+  | { event: 'watchdog_failed'; stage: 'read' | 'open' | 'beat'; code: string | null }
+  | { event: 'watchdog_overdue'; journeyId: string }
+  | { event: 'push_failed'; reason: PushFailureReason; messageId: string }
+  | { event: 'delivery_failed'; stage: 'claim' | 'mark'; code: string | null }
+  | { event: 'database_error'; pool: 'api' | 'worker'; code: string | null };
 
 /** Where the server writes what happened, one event at a time. */
 export interface Log {

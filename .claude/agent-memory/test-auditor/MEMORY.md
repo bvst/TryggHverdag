@@ -20,3 +20,7 @@
 - [Allowlist anchors and TZ](feedback_allowlist_anchor_tz.md) — plant `^` and `$` removal separately; getUTC* -> local survives in UTC CI, re-run with TZ=Europe/Oslo
 - [BUG-18 audit](project_bug18_audit.md) — D-105 db.ts + worker-heartbeats.ts; PASS 25589a5 (158 faults, 3 real survivors); loop 2: modules/health/ pinned BUG-10 way, PASS at 06fc91c (64 faults, 56 killed, 0 real survivors)
 - [Matcher helper changes](feedback_matcher_helper_changes.md) — audit "stricter, never looser" glob-reader rewrites: fuzz superset, diff verdicts, check pairs vs git/picomatch, fault each new branch
+- [LOST-02 audit](project_lost02_audit.md) — BLOCK 6f27b80; loop 1 PASS 3539d4f (J3b); loop 2 PASS 25f5ccf, 53 faults, F2/V3 isInteger + I8b survive; harness ta-lost02
+- [Second path and isolation](feedback_second_path_isolation.md) — mutate second-attempt outcome mapping and break-after-failure; lease-vacuous shared checks; count unhandled errors
+- [Rollback and hangs](feedback_rollback_and_hangs.md) — rollback undoes session set_config (check after commit); no-limit faults hang L3; line-buffered harness
+- [Isolating values](feedback_isolating_values.md) — one value per refusal clause that only it refuses; Vitest truncates each.$name titles (-t on full name runs nothing)

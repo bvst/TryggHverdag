@@ -40,9 +40,11 @@ import {
   syntheticPosition,
   syntheticUuid,
   toStoredPosition,
+  type AlertAsStored,
   type FakeJourneyState,
   type FakeLog,
   type HeartbeatAsStored,
+  type MessageAsStored,
   type HeartbeatToRecord,
   type JourneyAsStored,
   type JourneyStoreUnderTest,
@@ -50,12 +52,20 @@ import {
   type SyntheticHeartbeat,
 } from '@trygghverdag/test-kit';
 import { sql } from 'drizzle-orm';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 import { inspect } from 'node:util';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createApi } from '../api.ts';
 import { captured, markersIn, markersOf } from '../capture.test.ts';
-import { JOURNEY_STATES, type JourneyState } from '../domain/journey.ts';
+import {
+  ALERT_STATES,
+  JOURNEY_STATES,
+  LOST_CONTACT_AFTER_MS,
+  type JourneyState,
+} from '../domain/journey.ts';
+import { sqlstateOf } from '../domain/sqlstate.ts';
 import { createHealthService } from '../modules/health/service.ts';
 import { createJourneyService } from '../modules/journeys/service.ts';
 import { databaseClock } from './clock.ts';
@@ -311,6 +321,130 @@ async function databaseNowMs(): Promise<number> {
   return Number(result.rows[0]?.ms);
 }
 
+/** A moment read back to the millisecond, floored as a Date floors it, or null. */
+const momentOf = (ms: string | null | undefined): Date | null =>
+  ms === null || ms === undefined ? null : new Date(Number(ms));
+
+/** The journey's alerts, as the `alerts` table holds them (LOST-02). */
+async function alertsOf(journeyId: string): Promise<AlertAsStored[]> {
+  const result = await connection().query<{
+    id: string;
+    state: string;
+    opened_ms: string;
+    silent_ms: string;
+  }>(
+    `select id::text as id, state::text as state, ${MS('opened_at')} as opened_ms,
+            ${MS('silent_since')} as silent_ms
+       from alerts where journey_id = $1 order by opened_at, id`,
+    [journeyId],
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    state: row.state,
+    openedAt: new Date(Number(row.opened_ms)),
+    silentSince: new Date(Number(row.silent_ms)),
+  }));
+}
+
+/** The outbox messages of the journey's alerts, as the `outbox` table holds them (LOST-02). */
+async function messagesOf(journeyId: string): Promise<MessageAsStored[]> {
+  const result = await connection().query<{
+    message_id: string;
+    alert_id: string;
+    recipient_id: string;
+    kind: string;
+    attempts: number;
+    next_ms: string;
+    sent_ms: string | null;
+    last_failure: string | null;
+  }>(
+    `select o.id::text as message_id, o.alert_id::text as alert_id,
+            o.recipient_id::text as recipient_id, o.kind::text as kind,
+            o.attempts::int as attempts, ${MS('o.next_attempt_at')} as next_ms,
+            ${MS('o.sent_at')} as sent_ms, o.last_failure::text as last_failure
+       from outbox o join alerts a on a.id = o.alert_id
+      where a.journey_id = $1 order by o.id`,
+    [journeyId],
+  );
+  return result.rows.map((row) => ({
+    messageId: row.message_id,
+    alertId: row.alert_id,
+    recipientId: row.recipient_id,
+    kind: row.kind,
+    attempts: row.attempts,
+    nextAttemptAt: new Date(Number(row.next_ms)),
+    sentAt: momentOf(row.sent_ms),
+    lastFailure: row.last_failure,
+  }));
+}
+
+/**
+ * Holds the journey's row `for update` in a transaction of its own, on a
+ * connection of its own, until released: a heartbeat being written, or
+ * another worker's sweep (LOST-02-AC8).
+ */
+async function holdRow(journeyId: string): Promise<{ release: () => Promise<void> }> {
+  const client = await connection().connect();
+  await client.query('begin');
+  await client.query('select id from journeys where id = $1 for update', [journeyId]);
+  return {
+    release: async () => {
+      try {
+        await client.query('commit');
+      } finally {
+        client.release();
+      }
+    },
+  };
+}
+
+/**
+ * Holds the journey's row as holdRow does, and lets it go once another
+ * session is waiting for it: a healthy transaction that commits within the
+ * lock wait (LOST-02-AC20). With 'contact', the holder first moves the
+ * journey's last contact to its own now(), as a heartbeat in flight does.
+ * `release` lets go at once if no one came to wait.
+ */
+async function holdUntilWaited(
+  journeyId: string,
+  change: 'unchanged' | 'contact',
+): Promise<{ release: () => Promise<void> }> {
+  const client = await connection().connect();
+  await client.query('begin');
+  await client.query('select id from journeys where id = $1 for update', [journeyId]);
+  const pid = (await client.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]?.pid;
+  // An object, so the loop reads the flag release() sets, not a narrowed copy.
+  const state = { stopped: false };
+  const lettingGo = (async () => {
+    try {
+      while (!state.stopped) {
+        const waiting = await connection().query<{ n: number }>(
+          'select count(*)::int as n from pg_stat_activity where $1 = any(pg_blocking_pids(pid))',
+          [pid],
+        );
+        if ((waiting.rows[0]?.n ?? 0) > 0) {
+          if (change === 'contact') {
+            await client.query('update journeys set last_heartbeat_at = now() where id = $1', [
+              journeyId,
+            ]);
+          }
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await client.query('commit');
+    } finally {
+      client.release();
+    }
+  })();
+  return {
+    release: async () => {
+      state.stopped = true;
+      await lettingGo;
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The API, with every real adapter.
 // ---------------------------------------------------------------------------
@@ -376,11 +510,35 @@ describe('databaseJourneyStore, against the behaviour every journey store shares
     positionsOf,
     // Each run writes real rows, so fewer than against the fake.
     propertyRuns: 15,
+    // LOST-02: the watchdog's and the outbox's side, read straight from the
+    // tables, and the database's own now().
+    now: async () => new Date(await databaseNowMs()),
+    alertsOf,
+    messagesOf,
+    hold: holdRow,
+    holdUntilWaited,
+    // Short, so the open of a row held throughout costs a behaviour a second.
+    lockWaitMs: 1_000,
+    // The database's now() moves on by itself: the behaviour waits.
+    letTimePass: (ms) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }),
+    // now() moves on while a behaviour runs: a silence this close to the
+    // threshold could fall either side of it by the time the store asks.
+    timeMarginMs: 2_000,
   });
 
   test.each(JOURNEY_STORE_BEHAVIOUR)(
     '$name',
-    async ({ run }) => {
+    async ({ name, run }) => {
+      // LOST-02: a claim takes the due messages of the whole table, and other
+      // behaviours leave theirs due. So before each of the outbox's
+      // behaviours, every message already there is put out of reach, as sent;
+      // only LOST-02's behaviours touch the outbox, and only they need it.
+      if (name.startsWith('LOST-02-')) {
+        await connection().query('update outbox set sent_at = now() where sent_at is null');
+      }
       await run(underTest());
     },
     120_000,
@@ -1318,5 +1476,423 @@ describe('the database agrees: one place for coordinates, and the rules held by 
 
     expect(column.rows).toEqual([{ is_nullable: 'NO' }]);
     expect(references.rows).toEqual([{ target: 'devices' }]);
+  });
+});
+
+// ===========================================================================
+// LOST-02: the row lock a heartbeat takes, proved by the lock's effect; and
+// the two tables an alert writes, as the database holds them.
+// ===========================================================================
+
+/** This URI with a query parameter added: here, a name its sessions show in pg_stat_activity. */
+function withParameter(uri: string, name: string, value: string): string {
+  const url = new URL(uri);
+  url.searchParams.set(name, value);
+  return url.toString();
+}
+
+/** How many sessions of this application are waiting on a lock right now. */
+async function waitingOnALock(applicationName: string): Promise<number> {
+  const result = await connection().query<{ n: number }>(
+    `select count(*)::int as n from pg_stat_activity
+      where application_name = $1 and wait_event_type = 'Lock'`,
+    [applicationName],
+  );
+  return result.rows[0]?.n ?? 0;
+}
+
+/** Waits, in short sleeps rather than by a clock, until `check` holds or the attempts run out. */
+async function eventually(check: () => Promise<boolean>, attempts = 200): Promise<boolean> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await check()) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return check();
+}
+
+describe('SM-07 and LOST-02: a heartbeat waits for an uncommitted ENDED, on the real tables', () => {
+  test.each(['commit', 'rollback'] as const)(
+    'LOST-02-AC11: with another transaction ending J and not yet committed, recordHeartbeat for J waits on J’s row lock; once that transaction ends with %s, it answers ended and stores nothing, or, rolled back, is recorded',
+    async (ending) => {
+      const { journeyId } = await walking(EARLIER);
+      const applicationName = `lost02_ac11_${ending}`;
+      const heartbeatPool = createPool(
+        withParameter(connectionUri(), 'application_name', applicationName),
+        1,
+      );
+      const ender = await connection().connect();
+      try {
+        await ender.query('begin');
+        await ender.query("update journeys set state = 'ENDED' where id = $1", [journeyId]);
+        const heartbeat = storeHeartbeat(journeyId);
+        let answer: unknown;
+        const recording = databaseJourneyStore(createDatabase(heartbeatPool))
+          .recordHeartbeat(heartbeat)
+          .then((result) => {
+            answer = result;
+          });
+
+        // Waiting on J's row lock, as pg_stat_activity shows it: not merely slow.
+        expect(await eventually(async () => (await waitingOnALock(applicationName)) === 1)).toBe(
+          true,
+        );
+        expect(answer).toBeUndefined();
+
+        await ender.query(ending);
+        await recording;
+
+        if (ending === 'commit') {
+          expect(answer).toEqual({ outcome: 'ended' });
+          expect(await heartbeatsOf(journeyId)).toEqual([]);
+          expect(await positionsOf(journeyId)).toEqual([]);
+          expect(await lastHeartbeatAt(journeyId)).toEqual(EARLIER);
+        } else {
+          expect(answer).toEqual({ outcome: 'recorded' });
+          expect(await heartbeatsOf(journeyId)).toHaveLength(1);
+          expect(await lastHeartbeatAt(journeyId)).toEqual(heartbeat.receivedAt);
+        }
+      } finally {
+        ender.release();
+        await endTestPool(heartbeatPool);
+      }
+    },
+  );
+});
+
+/** An alert put in directly for this journey, in this state; resolves to its ID. */
+async function insertAlert(journeyId: string, state: string): Promise<string> {
+  const id = syntheticUuid();
+  await connection().query(
+    `insert into alerts (id, journey_id, state, opened_at, silent_since)
+     values ($1, $2, $3, now(), now())`,
+    [id, journeyId, state],
+  );
+  return id;
+}
+
+/** An outbox message put in directly; every column given, so no default is relied on. */
+function insertMessage({
+  alertId,
+  recipientId,
+  kind = 'LOST_CONTACT',
+  attempts = 0,
+  lastFailure = null,
+}: {
+  alertId: string;
+  recipientId: string;
+  kind?: string;
+  attempts?: number;
+  lastFailure?: string | null;
+}) {
+  return connection().query(
+    `insert into outbox (id, alert_id, recipient_id, kind, created_at, attempts,
+                         next_attempt_at, sent_at, last_failure)
+     values ($1, $2, $3, $4, now(), $5, now(), null, $6)`,
+    [syntheticUuid(), alertId, recipientId, kind, attempts, lastFailure],
+  );
+}
+
+/** A data error (class 22) or a constraint (class 23): the database refused it itself. */
+const REFUSED_BY_THE_DATABASE = { code: expect.stringMatching(/^2[23]/) as unknown };
+
+// ---------------------------------------------------------------------------
+// LOST-02, review loop 2: the waits of an open after it took its row, and a
+// claim that never waits (test-auditor's re-audit).
+// ---------------------------------------------------------------------------
+
+/** Settles as `promise` does, or as `still waiting` once `ms` have passed: a wait with no end fails here, not by hanging. */
+async function bounded<T>(promise: Promise<T>, ms: number): Promise<T | 'still waiting'> {
+  promise.catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<'still waiting'>((resolve) => {
+    timer = setTimeout(() => {
+      resolve('still waiting');
+    }, ms);
+  });
+  try {
+    return await Promise.race([promise, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** A psql-like session of the test's own: its own connection, outside every pool, holding one row `for update`. */
+async function sessionHolding(table: 'journeys' | 'users' | 'outbox', id: string) {
+  const session = new pg.Client({ connectionString: connectionUri() });
+  await session.connect();
+  await session.query('begin');
+  await session.query(`select id from ${table} where id = $1 for update`, [id]);
+  const pid = (await session.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]?.pid;
+  return {
+    /** Whether another session is waiting for a lock this one holds. */
+    waitedFor: async () => {
+      const waiting = await connection().query<{ n: number }>(
+        'select count(*)::int as n from pg_stat_activity where $1 = any(pg_blocking_pids(pid))',
+        [pid],
+      );
+      return (waiting.rows[0]?.n ?? 0) > 0;
+    },
+    commit: () => session.query('commit'),
+    end: async () => {
+      await session.query('rollback').catch(() => undefined);
+      await session.end();
+    },
+  };
+}
+
+/** An overdue ACTIVE journey of a new walker, silent since EARLIER, with these many new responders. */
+async function overdueWith(responders: number) {
+  const device = await walker();
+  const responderIds: string[] = [];
+  for (let i = 0; i < responders; i += 1) {
+    responderIds.push(await addUser());
+  }
+  const journeyId = await seedJourney({
+    walkerId: device.userId,
+    deviceId: device.deviceId,
+    state: 'ACTIVE',
+    responderIds,
+    startedAt: EARLIER,
+    lastHeartbeatAt: null,
+  });
+  return { journeyId, responderIds };
+}
+
+describe('LOST-02: what an open waits for after it took its row, and what a claim never waits for', () => {
+  test('LOST-02-AC20: a waiting open that takes the journey’s row within the wait, then runs out of time on a responder’s users row, fails with 55P03 and writes nothing; it never answers held', async () => {
+    const { journeyId, responderIds } = await overdueWith(1);
+    const rowHolder = await sessionHolding('journeys', journeyId);
+    const userHolder = await sessionHolding('users', responderIds[0] ?? '');
+    const lockWaitMs = 1_000;
+    let outcome: unknown;
+    try {
+      const opening = databaseJourneyStore(database())
+        .openLostContactAlert({ journeyId, afterMs: LOST_CONTACT_AFTER_MS, lockWaitMs })
+        .then(
+          (answer) => ({ answer }),
+          (error: unknown) => ({ error }),
+        );
+      // The open waits for the journey's row; its holder lets go within the
+      // wait, and the open takes it, then waits for the users row its
+      // message references, which is held for good.
+      expect(await eventually(() => rowHolder.waitedFor())).toBe(true);
+      await rowHolder.commit();
+      outcome = await bounded(opening, 3 * lockWaitMs + 2_000);
+    } finally {
+      await rowHolder.end();
+      await userHolder.end();
+    }
+
+    expect(outcome).not.toEqual({ answer: { outcome: 'held' } });
+    const failed = outcome as { error?: unknown };
+    expect(failed.error, JSON.stringify(outcome)).toBeInstanceOf(Error);
+    expect(sqlstateOf(failed.error)).toBe('55P03');
+    expect(await stateOf(journeyId)).toBe('ACTIVE');
+    expect(await alertsOf(journeyId)).toEqual([]);
+    expect(await messagesOf(journeyId)).toEqual([]);
+  }, 30_000);
+
+  test('LOST-02-AC14: a due message whose row another session holds is passed over at once, not waited for, and the claim returns the other due messages', async () => {
+    const store = databaseJourneyStore(database());
+    const { journeyId } = await overdueWith(3);
+    const opened = await store.openLostContactAlert({ journeyId, afterMs: LOST_CONTACT_AFTER_MS });
+    if (opened.outcome !== 'opened') {
+      throw new Error(`expected the journey to be opened, but it was ${opened.outcome}`);
+    }
+    // Only this alert's messages are due: every other test's are put out of reach.
+    await connection().query(
+      'update outbox set sent_at = now() where sent_at is null and alert_id <> $1',
+      [opened.alertId],
+    );
+    const [held, ...others] = opened.messages;
+    if (held === undefined) {
+      throw new Error('expected three messages');
+    }
+    const holder = await sessionHolding('outbox', held.messageId);
+    let claim: Awaited<ReturnType<typeof store.claimDue>> | 'still waiting';
+    let tookMs: number;
+    try {
+      const started = performance.now();
+      // The worker's pool keeps no lock limit, so a claim that waited would
+      // wait for ever: bounded, it fails here instead.
+      claim = await bounded(store.claimDue({ limit: 50, leaseMs: 30_000 }), 2_000);
+      tookMs = performance.now() - started;
+    } finally {
+      await holder.end();
+    }
+
+    expect(claim).not.toBe('still waiting');
+    const claimed =
+      claim === 'still waiting' ? [] : claim.messages.map(({ messageId }) => messageId);
+    expect([...claimed].sort()).toEqual(others.map(({ messageId }) => messageId).sort());
+    expect(claimed).not.toContain(held.messageId);
+    expect(tookMs).toBeLessThan(2_000);
+  }, 30_000);
+});
+
+describe('LOST-02: the database agrees on alerts and their messages', () => {
+  test('LOST-02-AC23: alert_state’s values are exactly ALERT_STATES, in order, and alerts.state is of that type', async () => {
+    const labels = await connection().query<{ label: string }>(
+      `select e.enumlabel as label from pg_enum e join pg_type t on t.oid = e.enumtypid
+        where t.typname = 'alert_state' order by e.enumsortorder`,
+    );
+    const column = await connection().query<{ udt_name: string }>(
+      `select udt_name from information_schema.columns
+        where table_name = 'alerts' and column_name = 'state'`,
+    );
+
+    expect(labels.rows.map(({ label }) => label)).toEqual([...ALERT_STATES]);
+    expect(column.rows).toEqual([{ udt_name: 'alert_state' }]);
+  });
+
+  test('LOST-02-AC23: a second alert for a journey whose alert is not RESOLVED is refused by the database itself, whatever its state; the index’s predicate reads <> RESOLVED; RESOLVED alerts block nothing', async () => {
+    const { journeyId } = await walking();
+    await insertAlert(journeyId, 'OPEN');
+
+    // Every state the index covers: all but RESOLVED, which frees the journey.
+    for (const state of ALERT_STATES.filter((each) => each !== 'RESOLVED')) {
+      await expect(insertAlert(journeyId, state), state).rejects.toMatchObject({ code: '23505' });
+    }
+
+    const indexes = await connection().query<{ definition: string }>(
+      `select pg_get_indexdef(indexrelid) as definition from pg_index
+        where indrelid = 'alerts'::regclass and indisunique and indpred is not null`,
+    );
+    expect(indexes.rows).toHaveLength(1);
+    expect(indexes.rows[0]?.definition).toMatch(/\(journey_id\)/);
+    expect(indexes.rows[0]?.definition).toMatch(/WHERE \(state <> 'RESOLVED'::alert_state\)/);
+
+    const other = await walking();
+    await insertAlert(other.journeyId, 'RESOLVED');
+    await insertAlert(other.journeyId, 'RESOLVED');
+    await expect(insertAlert(other.journeyId, 'OPEN')).resolves.toBeDefined();
+  });
+
+  test('LOST-02-AC23: outbox has a partial index on (next_attempt_at, id) where sent_at is null, created by migration 0003 itself, and no migration 0004 exists', async () => {
+    // The claim's own order, over the unsent rows only (approach item 4,
+    // review loop 1): sent rows stay until retention removes them.
+    const indexes = await connection().query<{ definition: string }>(
+      `select pg_get_indexdef(indexrelid) as definition from pg_index
+        where indrelid = 'outbox'::regclass and indpred is not null`,
+    );
+    expect(
+      indexes.rows.filter(
+        ({ definition }) =>
+          definition.includes('(next_attempt_at, id)') &&
+          definition.includes('WHERE (sent_at IS NULL)'),
+      ),
+      JSON.stringify(indexes.rows),
+    ).toHaveLength(1);
+
+    const folder = path.join(import.meta.dirname, '..', 'db', 'migrations');
+    const files = readdirSync(folder);
+    expect(files.filter((file) => file.startsWith('0004_'))).toEqual([]);
+    const migration0003 = files.filter((file) => /^0003_.*\.sql$/.test(file));
+    expect(migration0003).toHaveLength(1);
+    const text = readFileSync(path.join(folder, migration0003[0] ?? ''), 'utf8');
+    expect(text).toMatch(
+      /create index\s+"?\w+"?\s+on\s+"?outbox"?[^;]*\(\s*"?next_attempt_at"?[^,()]*,\s*"?id"?[^()]*\)[^;]*where[^;]*"?sent_at"?\s+is\s+null/i,
+    );
+  });
+
+  test('LOST-02-AC23: a second outbox message for the same alert, recipient and kind is refused by the database itself', async () => {
+    const { journeyId } = await walking();
+    const alertId = await insertAlert(journeyId, 'OPEN');
+    const recipientId = await addUser();
+    await insertMessage({ alertId, recipientId });
+
+    await expect(insertMessage({ alertId, recipientId })).rejects.toMatchObject({ code: '23505' });
+    await expect(insertMessage({ alertId, recipientId: await addUser() })).resolves.toBeDefined();
+  });
+
+  test('LOST-02-AC23: an outbox message naming no alert, or no user, is refused', async () => {
+    const { journeyId } = await walking();
+    const alertId = await insertAlert(journeyId, 'OPEN');
+
+    await expect(
+      insertMessage({ alertId: syntheticUuid(), recipientId: await addUser() }),
+    ).rejects.toMatchObject({ code: '23503' });
+    await expect(insertMessage({ alertId, recipientId: syntheticUuid() })).rejects.toMatchObject({
+      code: '23503',
+    });
+  });
+
+  test('LOST-02-AC23: a negative number of attempts, a failure reason outside the push port’s four, and a kind other than LOST_CONTACT are refused by the database itself; the four reasons are accepted', async () => {
+    const { journeyId } = await walking();
+    const alertId = await insertAlert(journeyId, 'OPEN');
+
+    await expect(
+      insertMessage({ alertId, recipientId: await addUser(), attempts: -1 }),
+    ).rejects.toMatchObject(REFUSED_BY_THE_DATABASE);
+    for (const lastFailure of ['TIMEOUT', 'no_target', '']) {
+      await expect(
+        insertMessage({ alertId, recipientId: await addUser(), lastFailure }),
+        lastFailure,
+      ).rejects.toMatchObject(REFUSED_BY_THE_DATABASE);
+    }
+    await expect(
+      insertMessage({ alertId, recipientId: await addUser(), kind: 'LOW_BATTERY' }),
+    ).rejects.toMatchObject(REFUSED_BY_THE_DATABASE);
+    for (const lastFailure of ['NO_TARGET', 'REFUSED', 'UNAVAILABLE', 'NOT_CONFIGURED']) {
+      await expect(
+        insertMessage({ alertId, recipientId: await addUser(), lastFailure }),
+        lastFailure,
+      ).resolves.toBeDefined();
+    }
+  });
+
+  test('LOST-02-AC23: with alerts and outbox in place, the only columns named like a coordinate, in every table, are still positions.latitude and positions.longitude', async () => {
+    const tables = await connection().query<{ alerts: string | null; outbox: string | null }>(
+      "select to_regclass('alerts')::text as alerts, to_regclass('outbox')::text as outbox",
+    );
+    const result = await connection().query<{ found: string }>(
+      `select table_schema || '.' || table_name || '.' || column_name as found
+         from information_schema.columns
+        where table_schema not in ('pg_catalog', 'information_schema')
+          and column_name ~* '(lat|lng|lon|coords|position|location)'
+        order by 1`,
+    );
+
+    expect(tables.rows).toEqual([{ alerts: 'alerts', outbox: 'outbox' }]);
+    expect(result.rows.map((row) => row.found)).toEqual([
+      'public.positions.latitude',
+      'public.positions.longitude',
+    ]);
+  });
+
+  test('LOST-02-AC13: alerts and outbox hold exactly the spec’s columns, and none holds a coordinate, an accuracy, a phone time, a battery level, a name or a phone number', async () => {
+    const columnsOf = async (table: string) =>
+      (
+        await connection().query<{ column_name: string }>(
+          `select column_name from information_schema.columns
+            where table_schema = 'public' and table_name = $1 order by column_name`,
+          [table],
+        )
+      ).rows.map(({ column_name }) => column_name);
+
+    const alerts = await columnsOf('alerts');
+    const outbox = await columnsOf('outbox');
+
+    expect(alerts).toEqual(['id', 'journey_id', 'opened_at', 'silent_since', 'state'].sort());
+    expect(outbox).toEqual(
+      [
+        'id',
+        'alert_id',
+        'recipient_id',
+        'kind',
+        'created_at',
+        'attempts',
+        'next_attempt_at',
+        'sent_at',
+        'last_failure',
+      ].sort(),
+    );
+    expect(
+      [...alerts, ...outbox].filter((column) =>
+        /lat|lng|lon|coord|position|location|accuracy|recorded|battery|phone|name/i.test(column),
+      ),
+    ).toEqual([]);
   });
 });

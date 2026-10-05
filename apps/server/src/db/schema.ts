@@ -23,6 +23,7 @@ import {
   doublePrecision,
   foreignKey,
   index,
+  integer,
   pgEnum,
   pgTable,
   primaryKey,
@@ -33,7 +34,12 @@ import {
   uuid,
   type PgColumn,
 } from 'drizzle-orm/pg-core';
-import { JOURNEY_STATES } from '../domain/journey.ts';
+import {
+  ALERT_STATES,
+  JOURNEY_STATES,
+  MESSAGE_KINDS,
+  PUSH_FAILURE_REASONS,
+} from '../domain/journey.ts';
 
 /**
  * A single row saying when the worker last checked in.
@@ -202,5 +208,93 @@ export const positions = pgTable(
       'positions_accuracy_m_check',
       sql`${table.accuracyMeters} >= 0 and ${table.accuracyMeters} < 'Infinity'::double precision`,
     ),
+  ],
+);
+
+/** The alert states, exactly as the state machine lists them, in order, and no others (D-033). */
+export const alertState = pgEnum('alert_state', ALERT_STATES);
+
+/**
+ * "Not resolved": the predicate of the one-open-alert index below, written
+ * once, as `unended` is. It names the one state that frees the journey, so a
+ * state added later counts as an alert still going by default.
+ */
+export const unresolved = (state: PgColumn) => sql`${state} <> 'RESOLVED'`;
+
+/**
+ * Alerts (LOST-02): one per silence. `opened_at` is the database's now() in
+ * the transaction that opened it, and `silent_since` the journey's last
+ * contact then, or its start if it had none: the heartbeat received at that
+ * moment holds the battery level and the position a responder's app reads,
+ * so nothing of them is copied here.
+ */
+export const alerts = pgTable(
+  'alerts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    journeyId: uuid('journey_id').notNull(),
+    state: alertState('state').notNull(),
+    openedAt: moment('opened_at').notNull(),
+    silentSince: moment('silent_since').notNull(),
+  },
+  (table) => [
+    foreignKey({ columns: [table.journeyId], foreignColumns: [journeys.id] }),
+    // One alert per journey that is not RESOLVED, held by the database: two
+    // sweepers that both got past every check are stopped here.
+    uniqueIndex('alerts_one_unresolved_per_journey')
+      .on(table.journeyId)
+      .where(unresolved(table.state)),
+  ],
+);
+
+/** The kinds of message there are, exactly as the domain lists them. Only the lost-contact alert, for now. */
+export const messageKind = pgEnum('message_kind', MESSAGE_KINDS);
+
+/**
+ * The outbox (LOST-02, AR-05, D-108): one row per message an alert causes,
+ * written in the transaction that opens the alert, and delivered by the
+ * worker's sender with retries. `id` is the message's own ID, opaque and
+ * random, never a person's, a journey's or an alert's (D-087).
+ *
+ * `next_attempt_at` is when it is next due, in database time: at once when
+ * written, the end of a claim's lease while it is being sent, and the retry
+ * delay after a failure. `sent_at` stays null until the push port accepted
+ * it, and `last_failure` holds the port's last reason, if any.
+ */
+export const outbox = pgTable(
+  'outbox',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    alertId: uuid('alert_id').notNull(),
+    recipientId: uuid('recipient_id').notNull(),
+    kind: messageKind('kind').notNull(),
+    createdAt: moment('created_at').notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: moment('next_attempt_at').notNull(),
+    sentAt: moment('sent_at'),
+    lastFailure: text('last_failure', { enum: PUSH_FAILURE_REASONS }),
+  },
+  (table) => [
+    foreignKey({ columns: [table.alertId], foreignColumns: [alerts.id] }),
+    foreignKey({ columns: [table.recipientId], foreignColumns: [users.id] }),
+    // One message per recipient for each kind an alert causes.
+    unique('outbox_alert_id_recipient_id_kind_unique').on(
+      table.alertId,
+      table.recipientId,
+      table.kind,
+    ),
+    check('outbox_attempts_check', sql`${table.attempts} >= 0`),
+    // Null, or one of the port's reasons: the list above, written into the
+    // constraint as literals, since DDL takes no parameters.
+    check(
+      'outbox_last_failure_check',
+      sql`${table.lastFailure} in (${sql.raw(PUSH_FAILURE_REASONS.map((reason) => `'${reason}'`).join(', '))})`,
+    ),
+    // The claim's: the unsent messages, in the order the claim takes them.
+    // It runs every 10 s against a table that only grows, since a sent row
+    // stays until retention removes it (M4), and this holds the unsent alone.
+    index('outbox_unsent_due_index')
+      .on(table.nextAttemptAt, table.id)
+      .where(sql`${table.sentAt} is null`),
   ],
 );

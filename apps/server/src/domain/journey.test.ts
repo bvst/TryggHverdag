@@ -32,16 +32,27 @@
 // The domain never sees the position, the battery or the event ID, so
 // whether a heartbeat carried a position changes no outcome: SM-03, held by
 // construction, and checked below as a property.
+//
+// LOST-02 adds the third event, silence (approach item 2 of its spec): the
+// watchdog's question, asked with two database times the store read, when the
+// journey's silence began and now. An ACTIVE journey silent for
+// LOST_CONTACT_AFTER_MS or more (D-021, "or more") moves to LOST_CONTACT and
+// opens an alert; every other situation is unchanged: ACTIVE under the
+// threshold, LOST_CONTACT (once per silence), ENDED, and no journey. The rule
+// reads no clock: both times are handed in.
 import { fc, syntheticPosition, syntheticUuid } from '@trygghverdag/test-kit';
 import { describe, expect, test } from 'vitest';
 import {
+  ALERT_STATES,
   JOURNEY_EVENTS,
   JOURNEY_STATES,
+  LOST_CONTACT_AFTER_MS,
   transition,
   type HeartbeatEvent,
   type JourneyEventType,
   type JourneyForHeartbeat,
   type JourneyState,
+  type SilenceEvent,
 } from './journey.ts';
 
 /** What `transition` is asked about: the walker's unended journey, or null. */
@@ -121,6 +132,21 @@ const JOURNEY_ENDED: Outcome = { type: 'ignored', reason: 'JOURNEY_ENDED' };
 const JOURNEY_NOT_FOUND: Outcome = { type: 'refused', reason: 'JOURNEY_NOT_FOUND' };
 const NOT_THE_JOURNEYS_DEVICE: Outcome = { type: 'refused', reason: 'NOT_THE_JOURNEYS_DEVICE' };
 
+/** When the silence of the table's rows began: a synthetic night, in database time. */
+const SILENT_SINCE = new Date('2026-10-01T21:30:00.000Z');
+
+/** The watchdog asks about a silence that began at `silentSince` and has lasted `silentForMs`. */
+function silence(silentForMs: number, silentSince: Date = SILENT_SINCE): SilenceEvent {
+  return {
+    type: 'silence',
+    silentSince,
+    now: new Date(silentSince.getTime() + silentForMs),
+  };
+}
+
+const LOST_CONTACT: Outcome = { type: 'lost_contact', state: 'LOST_CONTACT', alert: 'OPEN' };
+const UNCHANGED: Outcome = { type: 'unchanged' };
+
 // ---------------------------------------------------------------------------
 // The transition table.
 // ---------------------------------------------------------------------------
@@ -143,6 +169,9 @@ type Row = { outcome: Outcome } | { notASituation: string };
 const EVENT_FOR = {
   start: () => start([RESPONDER]),
   heartbeat: () => heartbeat(),
+  // LOST-02: at the threshold exactly, so the situation decides. The rows
+  // under the threshold are SILENCE_UNDER_THE_THRESHOLD, below the table.
+  silence: () => silence(LOST_CONTACT_AFTER_MS),
 } satisfies { [E in JourneyEventType]: () => Extract<JourneyEvent, { type: E }> };
 
 const TRANSITIONS = {
@@ -172,12 +201,35 @@ const TRANSITIONS = {
     LOST_CONTACT: { outcome: RECORDED_IN('LOST_CONTACT') },
     ENDED: { outcome: JOURNEY_ENDED },
   },
+  // LOST-02: silence, five minutes of it exactly (D-021, "or more"). Only an
+  // ACTIVE journey is alerted. LOST_CONTACT is never alerted again: once per
+  // silence (reading 7 of the spec). ENDED and no journey have nobody to
+  // watch.
+  silence: {
+    none: { outcome: UNCHANGED },
+    ACTIVE: { outcome: LOST_CONTACT },
+    LOST_CONTACT: { outcome: UNCHANGED },
+    ENDED: { outcome: UNCHANGED },
+  },
 } satisfies Record<JourneyEventType, Record<Situation, Row>>;
 
-/** Which test ID each event's rows prove: the start's are SM-01's, the heartbeat's LOST-01's. */
+/**
+ * LOST-02-AC6: silence one millisecond under the threshold, in every
+ * situation: nothing changes, ACTIVE included. Typed over the situations, so
+ * a state added later needs its row here too.
+ */
+const SILENCE_UNDER_THE_THRESHOLD = {
+  none: UNCHANGED,
+  ACTIVE: UNCHANGED,
+  LOST_CONTACT: UNCHANGED,
+  ENDED: UNCHANGED,
+} satisfies Record<Situation, Outcome>;
+
+/** Which test ID each event's rows prove: the start's are SM-01's, the heartbeat's LOST-01's, silence's LOST-02's. */
 const ROW_ID = {
   start: 'SM-01-AC14',
   heartbeat: 'LOST-01-AC17',
+  silence: 'LOST-02-AC6',
 } satisfies Record<JourneyEventType, string>;
 
 /**
@@ -262,17 +314,24 @@ function decide(event: JourneyEventType, situation: string): Outcome {
       return transition(situationFor(situation), EVENT_FOR.start());
     case 'heartbeat':
       return transition(heartbeatSituationFor(situation), EVENT_FOR.heartbeat());
+    case 'silence':
+      // The watchdog's situation is the journey it read, by its ID and state.
+      return transition(situationFor(situation), EVENT_FOR.silence());
   }
 }
 
 describe('AR-04: the journey state machine is one module, total over its own lists', () => {
-  test('SM-01-AC14: the states are exactly ACTIVE, LOST_CONTACT and ENDED, and the events exactly start and heartbeat', () => {
+  test('SM-01-AC14: the states are exactly ACTIVE, LOST_CONTACT and ENDED, and the events exactly start, heartbeat and silence', () => {
     // The events were exactly ['start'] until LOST-01 added the heartbeat
     // (RG-03: an event added by design, LOST-01-AC17 and its spec's approach
     // item 4). The list is still exact, so an event added later has to be
     // named here on purpose.
+    //
+    // RG-03 (LOST-02): silence joins by design, the watchdog's event
+    // (LOST-02-AC6, its spec's approach item 2, and "Existing assertions that
+    // change by design"). The list is still pinned exactly, in order.
     expect([...JOURNEY_STATES].sort()).toEqual(['ACTIVE', 'ENDED', 'LOST_CONTACT']);
-    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat']);
+    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence']);
   });
 
   test('SM-01-AC14: every pair of situation and event the module’s lists create has a row here, and no row is stale', () => {
@@ -289,10 +348,13 @@ describe('AR-04: the journey state machine is one module, total over its own lis
     ).toEqual([]);
   });
 
-  test('SM-01-AC14: the pairs with an outcome are exactly none, ACTIVE, LOST_CONTACT and ENDED, each with start and with heartbeat', () => {
+  test('SM-01-AC14: the pairs with an outcome are exactly none, ACTIVE, LOST_CONTACT and ENDED, each with start, with heartbeat and with silence', () => {
     // ENDED × start joined the three in review: an ENDED journey handed in
     // is "no journey", see its row above. The four heartbeat pairs joined
     // with LOST-01 (RG-03: an event added by design, LOST-01-AC17).
+    //
+    // RG-03 (LOST-02): the four silence pairs join by design (LOST-02-AC6).
+    // Every pair that was here still is, with the same outcome.
     expect(OUTCOME_ROWS.map(({ situation, event }) => `${situation} × ${event}`).sort()).toEqual(
       [
         'ACTIVE × start',
@@ -303,6 +365,10 @@ describe('AR-04: the journey state machine is one module, total over its own lis
         'ENDED × heartbeat',
         'LOST_CONTACT × heartbeat',
         'none × heartbeat',
+        'ACTIVE × silence',
+        'ENDED × silence',
+        'LOST_CONTACT × silence',
+        'none × silence',
       ].sort(),
     );
   });
@@ -649,8 +715,10 @@ function asSent(
 }
 
 describe('LOST-01: a heartbeat for the journey it names, in the rule’s order', () => {
-  test('LOST-01-AC17: JOURNEY_EVENTS is exactly start and heartbeat', () => {
-    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat']);
+  test('LOST-01-AC17: JOURNEY_EVENTS is exactly start and heartbeat, and then silence', () => {
+    // RG-03 (LOST-02): silence is added after the heartbeat by design
+    // (LOST-02-AC6). Start and heartbeat keep their places; the pin is exact.
+    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence']);
   });
 
   test.each(ELSEWHERE_ROWS)(
@@ -870,4 +938,237 @@ describe('SEC-07: a heartbeat only for the walker’s own journey, from the devi
       expect(transition(named(state), heartbeat())).toEqual(RECORDED_IN(state));
     },
   );
+});
+
+// ===========================================================================
+// LOST-02: silence. The watchdog's question, on the database's clock.
+// ===========================================================================
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+
+/** Every situation silence can meet, as `transition` takes it: no journey, or one in any state. */
+const SITUATIONS: readonly Situation[] = ['none', ...JOURNEY_STATES];
+
+/** A silence event that began at `silentSince` and is asked about at `now`, both any moment. */
+function silenceBetween(silentSince: Date, now: Date): SilenceEvent {
+  return { type: 'silence', silentSince, now };
+}
+
+/** Any moment, an invalid one included: no input may escape the rule (LOST-02-AC6). */
+const anyMoment: fc.Arbitrary<Date> = fc.oneof(
+  { weight: 9, arbitrary: fc.date({ noInvalidDate: true }) },
+  { weight: 1, arbitrary: fc.constant(new Date(Number.NaN)) },
+);
+
+/** The silence outcomes, with exactly their fields and nothing else. */
+function isOneOfTheSilenceOutcomes(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const outcome = value as Record<string, unknown>;
+  const keys = Object.keys(outcome).sort().join(',');
+  if (outcome['type'] === 'unchanged') {
+    return keys === 'type';
+  }
+  return (
+    outcome['type'] === 'lost_contact' &&
+    keys === 'alert,state,type' &&
+    outcome['state'] === 'LOST_CONTACT' &&
+    outcome['alert'] === 'OPEN'
+  );
+}
+
+describe('LOST-02: every pair, silence included, has a tested outcome', () => {
+  test('LOST-02-AC6: JOURNEY_EVENTS is exactly start, heartbeat and silence, and ALERT_STATES exactly OPEN, ESCALATED, ACKNOWLEDGED and RESOLVED, in order (D-033)', () => {
+    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence']);
+    expect([...ALERT_STATES]).toEqual(['OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED']);
+  });
+
+  test('LOST-02-AC6: the module’s lists create a silence pair for none and for every state, and the table holds each one; a pair it lacked would be named', () => {
+    const created = pairsTheModuleCreates().filter((pair) => pair.endsWith('× silence'));
+    const held = pairsThisTableHolds();
+
+    expect([...created].sort()).toEqual(
+      ['none × silence', 'ACTIVE × silence', 'LOST_CONTACT × silence', 'ENDED × silence'].sort(),
+    );
+    expect(created.filter((pair) => !held.includes(pair))).toEqual([]);
+    expect(Object.keys(SILENCE_UNDER_THE_THRESHOLD).sort()).toEqual([...SITUATIONS].sort());
+  });
+
+  test.each(SITUATIONS)(
+    'LOST-02-AC6: %s × silence one millisecond under the threshold gives exactly its outcome: unchanged',
+    (situation) => {
+      expect(transition(situationFor(situation), silence(LOST_CONTACT_AFTER_MS - 1))).toEqual(
+        SILENCE_UNDER_THE_THRESHOLD[situation],
+      );
+    },
+  );
+
+  test('LOST-02-AC6: for any situation and any silence, any moments, an invalid one included, transition answers one of the two outcomes: never a throw, never undefined', () => {
+    const anySituation = fc.option(
+      fc.record({ id: fc.uuid(), state: fc.constantFrom(...JOURNEY_STATES) }),
+      { nil: null },
+    );
+
+    fc.assert(
+      fc.property(anySituation, anyMoment, anyMoment, (current, silentSince, now) => {
+        let outcome: unknown;
+        expect(() => {
+          outcome = transition(asCurrent(current), silenceBetween(silentSince, now));
+        }).not.toThrow();
+        expect(outcome).toBeDefined();
+        expect(outcome).toSatisfy(isOneOfTheSilenceOutcomes);
+      }),
+    );
+  });
+
+  test('LOST-02-AC6: for any situation and any event of the three kinds, transition answers with a value: never a throw, never undefined', () => {
+    const anySilence = fc
+      .record({ silentSince: anyMoment, now: anyMoment })
+      .map(({ silentSince, now }) => silenceBetween(silentSince, now));
+    const anyEvent: fc.Arbitrary<JourneyEvent> = fc.oneof(
+      fc.constant(start([RESPONDER])),
+      anyHeartbeat,
+      anySilence,
+    );
+
+    fc.assert(
+      fc.property(anyJourney, anyEvent, (journey, event) => {
+        let outcome: unknown;
+        expect(() => {
+          outcome = transition(journey, event);
+        }).not.toThrow();
+        expect(outcome).toBeDefined();
+      }),
+    );
+  });
+
+  test('LOST-02-AC6: deciding about silence changes neither the journey nor the event handed in', () => {
+    const journey = { id: JOURNEY, state: 'ACTIVE' as const };
+    const event = silence(LOST_CONTACT_AFTER_MS);
+    const before = {
+      journey: { ...journey },
+      silentSince: event.silentSince.getTime(),
+      now: event.now.getTime(),
+    };
+
+    transition(journey, event);
+
+    expect(journey).toEqual(before.journey);
+    expect(event.silentSince.getTime()).toBe(before.silentSince);
+    expect(event.now.getTime()).toBe(before.now);
+    expect(event.type).toBe('silence');
+  });
+});
+
+describe('LOST-02: five minutes of silence, or more, by the database clock', () => {
+  test('LOST-02-AC2: LOST_CONTACT_AFTER_MS is five minutes (D-021)', () => {
+    expect(LOST_CONTACT_AFTER_MS).toBe(5 * MINUTE);
+  });
+
+  test('LOST-02-AC2: an ACTIVE journey silent for exactly five minutes is lost, and one millisecond less is not: five minutes or more', () => {
+    const active = asCurrent({ id: JOURNEY, state: 'ACTIVE' });
+
+    expect(transition(active, silence(LOST_CONTACT_AFTER_MS - 1))).toEqual(UNCHANGED);
+    expect(transition(active, silence(LOST_CONTACT_AFTER_MS))).toEqual(LOST_CONTACT);
+    expect(transition(active, silence(LOST_CONTACT_AFTER_MS + 1))).toEqual(LOST_CONTACT);
+    expect(transition(active, silence(10 * HOUR))).toEqual(LOST_CONTACT);
+  });
+
+  test('LOST-02-AC2: for any moment silence began and any moment it is asked about, an ACTIVE journey is lost exactly when the second is five minutes or more after the first, a clock that ran backwards included', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: -HOUR, max: 3 * HOUR }),
+        fc.integer({ min: 0, max: 400 * 24 * HOUR }),
+        (silentForMs, offsetMs) => {
+          const silentSince = new Date(SILENT_SINCE.getTime() + offsetMs);
+          const outcome = transition(
+            asCurrent({ id: JOURNEY, state: 'ACTIVE' }),
+            silence(silentForMs, silentSince),
+          );
+
+          expect(outcome).toEqual(silentForMs >= LOST_CONTACT_AFTER_MS ? LOST_CONTACT : UNCHANGED);
+        },
+      ),
+    );
+  });
+
+  test('LOST-02-AC2: for any sequence of heartbeats and sweeps, a journey silent for five minutes is LOST_CONTACT after the next sweep, one never silent that long never is, and a heartbeat never moves it back (the testing strategy’s L2 example)', () => {
+    // A timeline: each step comes some time after the one before. A
+    // heartbeat is decided by the heartbeat rule and moves last contact to
+    // its time; a sweep asks about the silence since last contact, or since
+    // the start when there has been none, and applies what it is told.
+    const step = fc.record({
+      afterMs: fc.oneof(
+        fc.integer({ min: 0, max: 7 * MINUTE }),
+        fc.constantFrom(LOST_CONTACT_AFTER_MS - 1, LOST_CONTACT_AFTER_MS),
+      ),
+      kind: fc.constantFrom('heartbeat' as const, 'sweep' as const),
+    });
+
+    fc.assert(
+      fc.property(fc.array(step, { maxLength: 40 }), (steps) => {
+        let elapsedMs = 0;
+        let lastContactMs = 0;
+        let state: Unended = 'ACTIVE';
+        let silentLongEnough = false;
+
+        for (const { afterMs, kind } of steps) {
+          elapsedMs += afterMs;
+          if (kind === 'heartbeat') {
+            expect(transition(named(state), heartbeat())).toEqual(RECORDED_IN(state));
+            lastContactMs = elapsedMs;
+            continue;
+          }
+          const outcome = transition(
+            asCurrent({ id: JOURNEY, state }),
+            silenceBetween(
+              new Date(SILENT_SINCE.getTime() + lastContactMs),
+              new Date(SILENT_SINCE.getTime() + elapsedMs),
+            ),
+          );
+          const due = state === 'ACTIVE' && elapsedMs - lastContactMs >= LOST_CONTACT_AFTER_MS;
+          expect(outcome).toEqual(due ? LOST_CONTACT : UNCHANGED);
+          if (due) {
+            state = 'LOST_CONTACT';
+          }
+          silentLongEnough ||= elapsedMs - lastContactMs >= LOST_CONTACT_AFTER_MS;
+          expect(state).toBe(silentLongEnough ? 'LOST_CONTACT' : 'ACTIVE');
+        }
+      }),
+    );
+  });
+
+  test('LOST-02-AC3: a journey that never sent a heartbeat is timed from its start: at 4:59.999 after it nothing changes, at 5:00 it is lost', () => {
+    // The store hands in the start as silentSince when there is no last
+    // contact: coalesce(last_heartbeat_at, started_at). The rule only sees
+    // the moment, so the start counts exactly as last contact would.
+    const startedAt = new Date('2026-10-01T21:05:00.000Z');
+    const active = asCurrent({ id: JOURNEY, state: 'ACTIVE' });
+
+    expect(transition(active, silence(LOST_CONTACT_AFTER_MS - 1, startedAt))).toEqual(UNCHANGED);
+    expect(transition(active, silence(LOST_CONTACT_AFTER_MS, startedAt))).toEqual(LOST_CONTACT);
+  });
+});
+
+describe('SM-03 and LOST-02: only an ACTIVE journey is alerted, once per silence', () => {
+  test('LOST-02-AC5: a journey already LOST_CONTACT, an ENDED one, and no journey at all are never alerted, however long the silence', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom<Situation>('none', 'LOST_CONTACT', 'ENDED'),
+        fc.integer({ min: -HOUR, max: 48 * HOUR }),
+        (situation, silentForMs) => {
+          expect(transition(situationFor(situation), silence(silentForMs))).toEqual(UNCHANGED);
+        },
+      ),
+    );
+  });
+
+  test('LOST-02-AC5: a heartbeat for a journey in LOST_CONTACT is recorded and leaves it LOST_CONTACT, and the next silence alerts it no more: moving it back is the back-in-contact task’s', () => {
+    expect(transition(named('LOST_CONTACT'), heartbeat())).toEqual(RECORDED_IN('LOST_CONTACT'));
+    expect(
+      transition(asCurrent({ id: JOURNEY, state: 'LOST_CONTACT' }), silence(10 * HOUR)),
+    ).toEqual(UNCHANGED);
+  });
 });

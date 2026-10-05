@@ -5,6 +5,21 @@ Newest first.
 
 ## Patterns worth checking every time
 
+### A liveness signal covers only the loop that feeds it (LOST-02)
+When a beat is fed by one loop (the sweep), every other loop or consumer beside it (the outbox sender) is
+unmonitored: a hung or always-failing run there leaves the beat fresh and every monitor green. Prove it
+in-process with the real modules and a fake that never answers (fakePush.holdAnswers), and check comments that
+claim "a stopped loop shows as a stopped beat". Ask which monitor (canary, REL-10) covers each other loop.
+
+### Startup parameters: a deploy log shows refusal, not application
+A pooler can refuse an unknown startup parameter (loud) or silently ignore it (connections fine, limit absent).
+Only a read-back (show <setting>) proves a session limit is in force. Also pg 8.x: URL query fields override
+Pool options (connection-parameters.js Object.assign order).
+
+### skip locked on the parent row does not make a transaction wait-free
+Inserting a child row runs the FK check as SELECT ... FOR KEY SHARE on the referenced row, which waits on
+FOR UPDATE / DELETE holders. A pool with no lock_timeout can wedge there; check every FK the transaction writes.
+
 ### An unset GitHub secret is an empty TF_VAR, not a missing one (INF-08)
 `${{ secrets.X }}` for a secret that does not exist is `""`, and Terraform takes
 `TF_VAR_x=""` as a value: the plan fails on the variable's *validation*
