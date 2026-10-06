@@ -74,3 +74,23 @@ exactly one test each (truncated $name): 'LOST-03-AC16: recordHome decides' (2a)
   adapters/journeys.ts and the fake are not mutated (D-095): the in-memory faults are the only mutation evidence for loop 2.
 - BUG-21 (INF-06-AC9 askedFor 639 < 700): span >= deadline - first stamp's node start-up - last read's tail (node exit + the
   unstamped `service check package` spawn); waitForLocale never stops early, so all 300 ms is spawn slack, not 200 as commented.
+
+**Loop 3 re-audit (2026-10-06, cloud), PASS at 155a6e4** (last loop allowed). Tests 4257b46 (== HEAD's; fake in it), code 155a6e4
+(open withdraws only for recipients in journey_responders of locked.id; kind in ALERT_RESOLUTIONS). Base == origin/main 5cd5d24.
+No open PR for the branch, check-runs total_count 0 (not 403); gate:integrity 3 of 5 locally; gh api: 13 contexts incl.
+mutation/traceability, code-owner true, bypass [] never. Harness: scratchpad/ta-lost03/loop3/{faults-l3,rg02-l3}.mjs via
+../../ta-lost02/harness.mjs (no Write tool; heredoc into scratchpad worked). New isolated -t: 'LOST-03-AC8: an open withdraws an ea'
+(19a), '...withdraws the jou' (1b); L6 'J1 has responders A and B' (19b).
+- 29 faults, controls 10 iso + 611 wide green. Recipient: R1 dropped / R2 walker's journeys' responders / R3 any responder / R4
+  notInArray all killed by 19a alone at L3; FR1/FR2/FR3 killed by 19a at L2, FR1/FR2 by 19b alone at L6 (FR1 against all 313 L6:
+  only 19b). R1 survives contact.integration AC8 (19a is the only L3 holder). Kind: K0/FK0 killed by 17a; K2/FK2 (HOME only) by
+  1b+17a; K3/FK3 (BACK_IN_CONTACT only) by 14b+19a; K1/FK1 (`<> LOST_CONTACT`) EQUIVALENT (pgEnum = MESSAGE_KINDS, 3 values;
+  spec carries the task-6 note). Loop-2 faults WJ1/WJ2/WJ5/W1/W4/W6/FWJ1(14a L6, 14b L2)/FWJ2 all still killed; 14b's other
+  walker shares J2's responders, so the recipient clause does not shadow the walker clause there (it does in 1b). W5 survives.
+- RG-02: L3 exactly 1 red (19a "A's HOME: expected <date> to be null"); unit 262 / system 313 green (fake in test commit).
+- RG-03: shared suite HEAD == 59fe06f + 19a + 1b rename/comment + 4x `.rejects.toThrow(/refused/)` (both stores' messages carry
+  lowercase "refused"); stricter. Loop-1 refusals at 2a (another walker own device, another device) still bare toThrow(): note.
+  tests:changes "2 files, none weakened" never saw journey-store-behaviour.ts (TEST_GLOBS is *.test.* + mobile e2e only).
+- RG-05: reports 13:41-13:55 == 155a6e4 sources; journey 134/135, service 122/123, worker 140/146 (+2 Timeout).
+- Notes: fake STAND_DOWN_KINDS is a literal copy, unpinned against ALERT_RESOLUTIONS (only the domain's exact-pin guards it);
+  spec writes 19a/19b names with straight apostrophes (code has ’).

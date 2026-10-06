@@ -1651,6 +1651,9 @@ does instead.
 - **Review loop 3:** test 1b in the shared suite is renamed "… every other
   walker's journeys' messages …", with its pinned name; its assertions are
   unchanged (item 21).
+- **Review loop 3:** 2a's loop-2 cases and 15a match `.rejects.toThrow(/refused/)`
+  instead of a bare `.rejects.toThrow()`: stricter, as both stores' messages
+  carry the word (item 22).
 
 **Read and found unchanged** (2026-10-06), so nobody has to wonder:
 - `domain/journey.test.ts`, "LOST-01-AC8: a journey in LOST_CONTACT takes the
