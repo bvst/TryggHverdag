@@ -12,7 +12,7 @@ no shell, so the commits were not checked; every file named below was read
 at the state the branch holds · **Finalised:** 2026-10-06, with the owner's
 answers to Q1 and Q2 (D-110, D-111; "Answered by the owner", at the end of
 this file), as the coordinating session relayed them · **Status:** 📝 Spec,
-settled.
+settled; red phase and review loop 1 applied (2026-10-06).
 
 ## Requirement
 
@@ -437,6 +437,31 @@ language; the notification level of the new kinds (M3, D-087); the app's
       - **The order holds only while a send ends within its lease.** M3's
         push adapter must bound every send under `CLAIM_LEASE_MS` (LOST-02
         already asks it to bound each send).
+   5. **A new alert withdraws the earlier alerts' unsent stand-downs**
+      (review loop 1, `safety-reviewer`). A stand-down that cannot be
+      delivered is retried for ever (item 7). Without this, an earlier
+      alert's "back in contact" could reach a responder after a later
+      alert's lost-contact push, while the later alert is open: a false
+      all-clear in the middle of a real alert. `safety-reviewer` reproduced
+      it in-process: a failing push, alert A1 opens, a heartbeat resolves
+      A1, about seven minutes of silence, A2 opens, the push recovers. The
+      port then got `LOST_CONTACT` for A2 and then `BACK_IN_CONTACT` for A1.
+      - **The fix is in the open's transaction** (`openInside`, LOST-02's
+        code): `update outbox set withdrawn_at = now()` on every message of
+        an earlier alert of the same journey whose kind is not
+        `LOST_CONTACT`, still unsent and not yet withdrawn. The earlier
+        alerts' unsent lost-contact messages were already withdrawn when
+        those alerts resolved (step 2).
+      - It runs before the new alert's messages are written, in the same
+        transaction, so it is all or nothing with them (LOST-02-AC12): an
+        open that rolls back withdraws nothing.
+      - One already in the port's hands was handed over before the new
+        alert opened, so it reaches the port before the new lost-contact
+        push, from one sender. Two senders at once are the deploy overlap
+        ("Left for later tasks").
+      - It extends what LOST-02-AC9 says an open writes; the criterion that
+        proves it is AC8, and its tests are in "Tests added in review loop
+        1".
    - **Why withdraw, and why every responder, sent or not** (D-111): a
      critical alert about a silence that is already over is a false alarm,
      and nobody who may have heard of the loss is left un-told. The
@@ -472,28 +497,54 @@ language; the notification level of the new kinds (M3, D-087); the app's
    - **The module:** `home({ walkerId, deviceId, journeyId })` reads the
      journey (`journeyForHeartbeat`, which already returns its walker, device
      and state), asks the `home` rule, returns a refusal as it is, and
-     otherwise calls `recordHome`. A store answer `ended` (the journey ended
-     after the read) is the same refusal, `JOURNEY_ENDED`. Each
+     otherwise calls `recordHome` with the journey, the walker and the
+     device. A store answer `already_ended` (the journey ended after the
+     read) is the same refusal, `JOURNEY_ENDED`. Each
      `JOURNEY_ENDED` writes one `home_ignored` line (SM-07). A store answer
      `home` from `LOST_CONTACT` with `alertId` null (no unresolved alert was
      found) writes one `alert_missing` line naming the journey, as the
      heartbeat's path does (reading 11). It reads no clock: the end time is
      the transaction's `now()`.
-   - **The store:** `recordHome(journeyId)`, one transaction:
-     1. lock the journey's row (`for update`; the API's 5 s lock limit
-        bounds the wait). `ENDED` → answer `ended`;
-     2. `update journeys set state = 'ENDED', ended_at = now(), end_reason =
-        'HOME' where id = $1 and state = <the locked state>`, exactly one row
-        or roll back;
-     3. if the locked state was `LOST_CONTACT`, resolve the alert (item 4)
-        with resolution `HOME`;
-     4. answer `{ outcome: 'home', from: <the locked state>, alertId,
+   - **The store:** `recordHome({ journeyId, walkerId, deviceId })`, one
+     transaction. **It asks the domain under the lock** (AR-04; review loop
+     1, `code-reviewer`), so the `home` rule's decision is the one written,
+     not a copy of it:
+     1. lock the journey's row, reading its `walkerId`, `deviceId` and
+        `state` (`for update`; the API's 5 s lock limit bounds the wait);
+     2. ask `transition(locked, { type: 'home', walkerId, deviceId })`:
+        - `ignored` (`JOURNEY_ENDED`) → answer `{ outcome: 'already_ended' }`
+          and write nothing;
+        - `refused` cannot happen under the lock (the module asked the same
+          rule about the same journey, and neither its walker nor its device
+          changes), so it throws: a 500 and one `home_failed` line, never a
+          guess;
+        - `ended` → go on;
+     3. `update journeys set state = <decision.state>, ended_at = now(),
+        end_reason = <decision.reason> where id = $1 and state = <the locked
+        state>`, exactly one row or roll back;
+     4. resolve the alert (item 4) with resolution `HOME` **only when
+        `decision.resolvesAlert`**;
+     5. answer `{ outcome: 'home', from: <the locked state>, alertId,
         messages }`.
 
      The store applies the locked state, not the module's read: a journey
      the watchdog moved to `LOST_CONTACT` after the read is ended as SM-04
      says, and one a heartbeat brought back is ended from `ACTIVE`, its
      alert already resolved.
+   - **`already_ended`, not `ended`** (review loop 1, `code-reviewer`). The
+     store's answer for a journey already ended is named for what it means.
+     In the domain and the module, `ended` means "ended now"; one word for
+     both would read the wrong way in one of the layers.
+     `RecordHeartbeatResult` keeps its `ended`, which LOST-01 named and which
+     means the same there as `already_ended` here.
+   - **A 400's error object holds the request's headers** (review loop 1,
+     `privacy-security-reviewer`). With detailed input, oRPC puts
+     `request.headers`, the device credential among them, into the
+     validation error's `cause.data` on any 400. Nothing prints that object
+     today: the answer is the one fixed body (`BAD_REQUEST_BODY` in
+     `api.ts`), and no log event has a field for it. A comment beside
+     `BAD_REQUEST_BODY` says so, so a later change that logs or echoes the
+     error knows what it would leak; a capture test (AC19) holds it.
    - **Failures:** one `home_failed` line, stage `read` or `store`, with the
      SQLSTATE, then a 500. `recordHome` binds no location and no phone
      number, so no error of its can carry one; its errors are not rewritten
@@ -576,6 +627,18 @@ language; the notification level of the new kinds (M3, D-087); the app's
      new outbox row's foreign key locks. A wait that runs out is 55P03: a
      500, one failure line, and the phone resends. A frozen holder on either
      pool is ended by the 10 s idle limit (D-108).
+   - **The worker's marks can now wait on the API** (review loop 1,
+     `safety-reviewer`). A mark updates one outbox row, and the API's
+     withdrawal (item 4, step 2) may hold that row; the worker's pool has no
+     lock limit of its own. The wait is bounded all the same, by the API's
+     limits: each of the API transaction's statements waits at most 5 s for
+     a lock, and a frozen API transaction is ended after 10 s idle. The
+     same holds for the open's withdrawal of earlier stand-downs (item 4,
+     step 5), on the worker's own pool, under the open's transaction-local
+     5 s lock limit and the 10 s idle limit. A mark that waits stalls
+     delivery only, as LOST-02 said of its marks; it is never part of a
+     cycle, because a mark holds one row for one statement and waits for
+     nothing else. The adapter's header comment says this too.
    - **The watchdog is unchanged.** A heartbeat or an "I'm home" holding the
      row makes a sweep skip it. When they commit, the journey is `ACTIVE`
      and no longer overdue, or `ENDED`, so the sweep's check under the lock
@@ -627,7 +690,10 @@ language; the notification level of the new kinds (M3, D-087); the app's
       safe direction for the two states the code never makes, on fresh
       contact and on "I'm home" alike (reading 11); no check tying a state
       to its time; the `journeys` mutation group running
-      `journeys.system.test.ts`, then `contact.system.test.ts`.
+      `journeys.system.test.ts`, then `contact.system.test.ts`. Amended in
+      review loop 1: a new alert withdraws the earlier alerts' unsent
+      stand-downs; "I'm home" asks the domain under the lock; the store's
+      already-ended answer is `already_ended`.
 
     D-110 was the next free number in `decisions.md` when they were written.
     As the live gotcha says, check the open pull requests' `decisions.md`
@@ -655,9 +721,12 @@ the tests are written.
   - `RecordHeartbeatResult` becomes `{ outcome: 'recorded' | 'duplicate' |
     'ended' } | { outcome: 'back_in_contact'; alertId: string | null;
     messages: AlertMessage[] }`;
-  - `JourneyStore.recordHome(journeyId)` → `{ outcome: 'home'; from:
-    'ACTIVE' | 'LOST_CONTACT'; alertId: string | null; messages:
-    AlertMessage[] } | { outcome: 'ended' }`;
+  - `JourneyStore.recordHome({ journeyId, walkerId, deviceId })` → `{
+    outcome: 'home'; from: 'ACTIVE' | 'LOST_CONTACT'; alertId: string |
+    null; messages: AlertMessage[] } | { outcome: 'already_ended' }`
+    (`RecordHomeResult`). The walker and the device are what the domain's
+    `home` rule is asked with under the lock (approach item 5); the store
+    rejects when the rule refuses there;
   - the three `LogEvent` members.
 - **`modules/journeys/`:** `JourneyService.home({ walkerId, deviceId,
   journeyId })` → `{ type: 'ended' } | HeartbeatRefusal`. `heartbeat()`'s
@@ -678,7 +747,10 @@ the tests are written.
   - `fakeJourneyStore({ clock })`:
     - `recordHeartbeat` brings a `LOST_CONTACT` journey back as approach
       items 3 and 4 say, with the clock's now as the transaction's;
-    - `recordHome`;
+    - `recordHome({ journeyId, walkerId, deviceId })`, deciding by the
+      same rule under its own "lock", as the adapter does;
+    - an open withdraws the journey's earlier alerts' unsent stand-downs
+      (approach item 4, step 5);
     - the claim skips withdrawn messages;
     - inspection: alerts with `resolvedAt` and `resolution`, and messages
       with `withdrawnAt` (today's tests read alerts and messages field by
@@ -693,7 +765,9 @@ the tests are written.
     - `failWith` and `beforeNext` for `recordHome`;
     - without a clock, it throws when asked whether contact is back or to
       end a journey.
-  - `fakePush()`: `MessageKind` gains the two kinds.
+  - `fakePush()`: `MessageKind` gains the two kinds, and the test kit's
+    `MESSAGE_KINDS` (`fake-push.ts`) is held equal to the domain's by one
+    test (review loop 1), since the test kit cannot import the server.
   - `fakeLog()`: the three events.
   - **The shared behaviour suite** gains the store's side of every criterion
     marked "behaviour suite" below, run against the fake (L2) and the
@@ -866,7 +940,18 @@ lost-contact push it stands down.** *(LOST-03)*
   message was handed over, it comes before their stand-down
 - **And** a responder whose lost-contact message failed and was due again
   later gets the stand-down no later than that due time; one whose message
-  was sent, or never handed over, gets it at the first delivery
+  was sent, or never handed over, gets it at the first delivery. One whose
+  failed message's retry time had already passed when contact came back is
+  not held at all: the stand-down is due at the alert's `resolved_at`
+- **And** across alerts (review loop 1): once a later alert opens on the
+  same journey, an earlier alert's stand-down that has not been accepted is
+  never handed to the port again. With a failing push, alert A1 opens, a
+  heartbeat resolves it, the journey goes silent about seven minutes, A2
+  opens, and the push recovers: the port never accepts A1's
+  `BACK_IN_CONTACT` after A2's `LOST_CONTACT`. The open withdraws it, in the
+  open's own transaction (approach item 4, step 5, extending what
+  LOST-02-AC9 says an open writes); a stand-down already sent is left as it
+  was
 - **And** at L2 (`domain/watchdog.test.ts`), the longest hold, the larger of
   `CLAIM_LEASE_MS` and the longest retry delay, is 60 s, pinned so a change
   to either shows
@@ -1012,6 +1097,9 @@ answer changes nothing.** *(SM-04, SM-07, SM-08, SEC-07; D-110, D-112)*
 - **And** a repeat "I'm home" after the first succeeded, its answer lost, is
   409 `JOURNEY_ENDED` and changes nothing (SM-08, with no event ID: reading
   10)
+- **And** the journey's ID in upper case names the same journey: "I'm home"
+  with it is 200 `ENDED`, and sent again it is 409 `JOURNEY_ENDED`, with a
+  `home_ignored` line naming the ID in lower case
 - **And** when the store fails, the answer is 500, nothing changes, and one
   `home_failed` line carries the stage and the SQLSTATE; never a 2xx, never a
   401
@@ -1051,6 +1139,8 @@ heartbeat on the row.** *(SM-04, SM-09; AR-05; D-110)*
   JSON is byte-identical, pinned by its sha256
 - **And** the route's only parameter is `journeyId`, in the path, required,
   a UUID; nothing is in the query or a header
+- **And** the request schema lower-cases the journey's ID, as the other
+  routes' IDs are
 - **And** `pnpm run api:diff` is run. With `packages/contracts/released/`
   empty it compares nothing, and the pull request records that as "not
   compared", never as "passed".
@@ -1070,6 +1160,11 @@ log.** *(LOST-03, PRIV-07)*
   errors whose messages hold markers (a synthetic coordinate, a
   credential-like string and a responder's ID), nothing written to stdout,
   stderr or the console holds a marker (L6)
+- **And** a request to the "I'm home" route that is refused with the fixed
+  400, carrying a synthetic marker as its device credential, writes nothing
+  to stdout, stderr or the console that holds the marker (L6; review loop
+  1). oRPC keeps the request's headers in the validation error
+  (approach item 5); nothing may print them
 - **And** as controls, the capture sees a line written through the
   production `createLog`, and the thrown errors do hold the markers.
 
@@ -1174,6 +1269,156 @@ only, keeping the criterion and the assertions.
    from LOST_CONTACT, with no alert and no messages`. The log line is the
    module's, so the store's test checks only the store's answer and what it
    wrote. The pinned list of behaviour names grows with it, by design.
+
+### Tests added in review loop 1 (settled 2026-10-06)
+
+All four reviewers passed the first round: `safety-reviewer`,
+`privacy-security-reviewer`, `code-reviewer` (advisory) and `test-auditor`.
+Their should-fixes and notes go into this one loop. The names are exact;
+`test-author` may adjust wording only, keeping the criterion and the
+assertions. The numbers follow the coordinator's list of findings.
+
+**Code changes, each with the test that proves it:**
+
+**1. No overtaking across alerts** (`safety-reviewer`, should-fix; approach
+item 4, step 5; AC8; D-112). The open (`openInside`, LOST-02's code) also
+withdraws the journey's earlier alerts' unsent stand-downs, in its own
+transaction. This extends what LOST-02-AC9 says an open writes, and stays
+inside LOST-02-AC12's all or nothing.
+- 1a. L6, `apps/server/src/contact.system.test.ts`: `LOST-03-AC8: with a
+  failing push, alert A1 opens, a heartbeat resolves it, the journey stays
+  silent until A2 opens, and then the push recovers: the port never accepts
+  A1’s BACK_IN_CONTACT after A2’s LOST_CONTACT, because A2’s open withdrew
+  it`. The scenario `safety-reviewer` reproduced. It also names LOST-02.
+- 1b. The shared behaviour suite (`journey-store-behaviour.ts`, at L2 and
+  L3): `LOST-03-AC8: an open withdraws the journey’s earlier alerts’ unsent
+  stand-downs at the store’s now, and leaves alone those already sent, every
+  other journey’s messages and its own new ones; an open that skips
+  withdraws nothing`.
+- 1c. L3, `apps/server/src/contact.integration.test.ts`: `LOST-03-AC8: an
+  open rolled back by a test-only trigger on its second message withdraws
+  no earlier stand-down`.
+
+**2. "I'm home" asks the domain under the lock** (`code-reviewer`,
+should-fix; AR-04; approach item 5; D-112). Today `recordHome` writes
+`ENDED` and `HOME` as literals and branches on its own reading of the state,
+so the `home` rule's decision is computed and tested but never read in
+production. `recordHome({ journeyId, walkerId, deviceId })` now reads the
+walker, the device and the state under the lock, asks `transition`, writes
+`decision.state` and `decision.reason`, and resolves only when
+`decision.resolvesAlert`.
+- 2a. The shared behaviour suite: `LOST-03-AC16: recordHome decides by the
+  home rule under the lock: a walker or a device that is not the journey’s
+  makes it reject and write nothing; an ENDED journey answers
+  already_ended and writes nothing; an ACTIVE one is ended without
+  resolving anything; a LOST_CONTACT one is ended and its alert resolved
+  with resolution HOME`. It also names SM-04.
+
+**3. `already_ended`, not `ended`** (`code-reviewer`, should-fix; approach
+item 5). `RecordHomeResult`'s answer for a journey already ended is renamed.
+`RecordHeartbeatResult` keeps `ended`. Held by typecheck (L1) and by test
+2a.
+
+**4. A 400's error object holds the credential** (`privacy-security-reviewer`,
+note; approach item 5; AC19). A comment in `api.ts` beside
+`BAD_REQUEST_BODY` says that oRPC keeps `request.headers`, the device
+credential included, in the validation error's `cause.data`, and that
+nothing may print it.
+- 4a. L6, `apps/server/src/contact.system.test.ts`: `LOST-03-AC19: a 400
+  from the “I’m home” route, for a known device whose credential is a
+  run-time marker and a body holding a key, writes nothing to stdout,
+  stderr or the console that holds the credential; the capture sees the
+  production log’s lines`. It also names PRIV-07.
+
+**5. The worker's marks can wait on the API** (`safety-reviewer`, note;
+approach item 8). One sentence in the adapter's header comment, and the
+same in approach item 8. No test: it describes a bound the existing limits
+already set.
+
+**6. Coverage baseline** (`test-auditor`, RG-04). `coverage-baseline.json`
+gains entries, written by hand and not with `--update` (so no other entry
+moves), for `packages/contracts/src/home.ts` and for LOST-02's
+`apps/server/src/modules/alerts/watchdog.ts` and `outbox.ts`, each at the
+value `test:coverage` measures on this branch. The file needs the owner's
+approval (CODEOWNERS).
+
+**Test-only changes (`test-author`):**
+
+**7. The home route lower-cases the journey's ID** (`test-auditor`,
+should-fix; AC16, AC18):
+- 7a. `packages/contracts/src/home.test.ts`: `LOST-03-AC18: the request
+  schema lower-cases a journey ID given in upper case`. It asserts
+  `homeRequestSchema.parse({ params: { journeyId: <upper case> } }).params.journeyId`
+  equals the ID in lower case.
+- 7b. L6, `apps/server/src/contact.system.test.ts`: `LOST-03-AC16: “I’m
+  home” with the journey’s ID in upper case is 200 ENDED; sent again it is
+  409 JOURNEY_ENDED, and the home_ignored line names the ID in lower case`.
+
+**8. The model property must reach the move back at L3** (`test-auditor`,
+note; AC5). The behaviour "LOST-02-AC2 and LOST-03-AC5: for any sequence of
+heartbeats, fresh or stale, … one stand-down per responder for each
+resolved alert, and none for an unresolved one" passed at L3 against an
+adapter that never brought a journey back. Its 2 s margin filters out the
+silences near the threshold, and few runs are drawn there.
+- `silences` gains a third branch, below `LOST_CONTACT_AFTER_MS` minus the
+  margin, so heartbeats that bring a journey back are drawn at L3 too.
+- The property's `examples` gain one fixed sequence that brings a journey
+  back, so even the L3 run's few runs exercise the move.
+- The name stays. `test-author` checks once, by hand, that the property
+  now fails against an adapter with the move back removed, and says so in
+  the pull request.
+
+This is preferred to raising the L3 runs, which costs every run of the
+integration job and still only makes the case likely.
+
+**9. A retry time already passed holds nothing back** (`test-auditor`,
+note; AC8). The hold's `next_attempt_at > now()` condition survived in both
+the adapter and the fake.
+- 9a. The shared behaviour suite: `LOST-03-AC8: a responder whose
+  lost-contact message failed and whose retry time had already passed when
+  contact came back is not held: their stand-down is due at the alert’s
+  resolved_at`.
+
+**10. Stale prose in tests** (`code-reviewer`, should-fix). Comments and one
+title still say that no journey can end, or that moving back is a later
+task's. Lines as the review gives them:
+- `packages/test-kit/src/journey-store-behaviour.ts`, line 179, and
+  `apps/server/src/adapters/journeys.integration.test.ts`, line 245: the
+  `endJourney` helpers' comments ("nothing in the code can end one yet")
+  say instead that they end a journey directly, as a test's own setup,
+  without the route or any rule;
+- `apps/server/src/domain/journey.test.ts`, lines 30–31 and 254–257: the
+  comments that leave moving back to a later task say it is the `contact`
+  rule's;
+- the same file's title at line 1297, "LOST-02-AC5: a heartbeat for a
+  journey in LOST_CONTACT is recorded and leaves it LOST_CONTACT, and the
+  next silence alerts it no more: moving it back is the back-in-contact
+  task’s", becomes `LOST-02-AC5: a heartbeat for a journey in LOST_CONTACT
+  is recorded and leaves it LOST_CONTACT under the heartbeat rule, and the
+  next silence alerts it no more; moving it back is the contact rule’s`.
+  RG-03 for the title: no assertion changes.
+
+**11. The test kit's message kinds are the domain's** (`code-reviewer`,
+note; AC3):
+- 11a. `apps/server/src/domain/journey.test.ts`: `LOST-03-AC3: the test
+  kit’s MESSAGE_KINDS equals the domain’s, in order`. One `toEqual`, since
+  the test kit cannot import the server.
+
+**Docs, in this pull request:**
+
+**12. Retention, for M4** (`privacy-security-reviewer`, should-fix).
+`docs/plan/README.md`'s "Open for M4" paragraph says that `journeys.ended_at`
+is what the retention rule's 24-hour positions clock counts from; that an
+`ENDED` journey with a null `ended_at` (put in directly) must be handled
+loudly by the retention job; and that stand-downs, withdrawn messages and
+`alerts.resolved_at` and `resolution` are alert records under the 30-day
+rule. Written with this loop.
+
+**13. The state table points at the contact rule** (`safety-reviewer`,
+note). `docs/plan/05-architecture.md`'s row "LOST_CONTACT | Heartbeat |
+ACTIVE" says that only a fresh heartbeat brings a journey back, and names
+D-112. Written with this loop. The row stays binding under D-033; the note
+says how D-112 reads it, and changes nothing it says.
 
 ### Existing assertions that change by design (RG-03)
 
@@ -1281,9 +1526,9 @@ does instead.
   heartbeat and stays LOST_CONTACT …" and "LOST-02-AC5: a heartbeat for a
   journey in LOST_CONTACT is recorded and leaves it LOST_CONTACT …". The
   heartbeat event's rule is unchanged, and the move back is the `contact`
-  event's (approach item 2), so both assertions hold. Their wording about
-  "the back-in-contact task" may be brought up to date; no assertion
-  changes.
+  event's (approach item 2), so both assertions hold. The second's title is
+  brought up to date in review loop 1 (item 10, RG-03 for the title); no
+  assertion changes.
 - `alerts.integration.test.ts`'s other LOST-02-AC10 test (a heartbeat holding
   the row as a sweep runs): the journey is `ACTIVE` there.
 - The tests that compare stored alerts and messages: each reads them field
@@ -1339,8 +1584,9 @@ which lists the same paths) and `.github/workflows/ai-review.yml` (the
 | `apps/server/src/domain/*.test.ts` | L2 (test-author) | **yes** | **yes** | (its tests) |
 | `apps/server/src/modules/journeys/service.ts` | `home()`; `heartbeat()` maps `back_in_contact`; `alert_missing` | **yes** | **yes** | `journeys` |
 | `apps/server/src/ports.ts` | `RecordHeartbeatResult`, `recordHome`, three `LogEvent`s | no | no | — |
-| `apps/server/src/adapters/journeys.ts` | Back in contact in `recordHeartbeat`; `recordHome`; the resolve helper; the claim skips withdrawn messages; `insertStarted`'s comment updated (reachable now, left for task 7) | **yes** | **yes** | no (D-095) |
-| `apps/server/src/api.ts` | The "I'm home" route (D-110) | **yes** (D-097) | **yes** | no |
+| `apps/server/src/adapters/journeys.ts` | Back in contact in `recordHeartbeat`; `recordHome`, asking the domain under the lock; the resolve helper; the open withdraws earlier alerts' unsent stand-downs; the claim skips withdrawn messages; the header comment on the marks' bounded wait; `insertStarted`'s comment updated (reachable now, left for task 7) | **yes** | **yes** | no (D-095) |
+| `apps/server/src/api.ts` | The "I'm home" route (D-110); the comment beside `BAD_REQUEST_BODY` on the headers a 400's error holds | **yes** (D-097) | **yes** | no |
+| `coverage-baseline.json` | Entries for `home.ts`, `modules/alerts/watchdog.ts` and `outbox.ts`, by hand, at their measured values (review loop 1, item 6) | **yes** | no | — |
 | `apps/server/src/db/schema.ts` | Two enums, the new columns and checks, `message_kind`'s values | **yes** | **yes** | no |
 | `apps/server/src/db/migrations/0004_*.sql`, `meta/*` | Generated with `db:generate` | **yes** | **yes** | no |
 | `apps/server/src/log.ts` | Three events | **yes** (D-102) | no (D-102) | no |
@@ -1354,6 +1600,7 @@ which lists the same paths) and `.github/workflows/ai-review.yml` (the
 | `apps/server/src/journeys.system.test.ts`, `alerts.system.test.ts`, `log.test.ts` | RG-03 changes and L2 (test-author) | no | no | groups' tests |
 | `docs/plan/decisions.md` | D-110 to D-112 (approach item 12), written with this spec on 2026-10-06 | **yes** | no | — |
 | `docs/requirements-status.md` | Regenerated | no | no | — |
+| `docs/plan/README.md`, `docs/plan/05-architecture.md` | "Open for M4" on retention; the state table's contact row points at D-112 (review loop 1, items 12 and 13) | no | no | — |
 | `docs/progress.md`, `docs/progress/m2.md` | Status (plan-keeper) | no | no | — |
 
 - **Files needing the owner's approval:** every row marked **yes**. The pull
@@ -1560,6 +1807,34 @@ Each is named here so the task that owns it finds it. None blocks this task.
   whether withdrawn messages are alert records like any other.
 - **M6 / L10:** flapping alerts for patchy coverage (F2, above); the claim's
   partial index holding withdrawn rows.
+
+From review loop 1 (2026-10-06). None blocks this task:
+- **M3's push task: the deploy overlap.** While a deploy overlaps, the old
+  worker still runs its old claim, which has no `withdrawn_at` condition.
+  So a withdrawn message, a stale lost-contact alert among them, could be
+  sent by the old worker during a zero-downtime overlap. Today nothing is
+  really sent (`UNCONFIGURED_PUSH`), so the harm starts with M3's push
+  adapter, which must close it: an expand-then-contract change to the
+  claim, or a deploy that stops the old worker first (`safety-reviewer`).
+- **Task 6: nothing pins that the withdrawal leaves other kinds alone.** The
+  resolve's withdrawal (approach item 4, step 2) touches `LOST_CONTACT`
+  messages only, and no test holds that a message of another kind is left
+  as it was. Once task 6 adds its SMS kind, its tests should pin which kinds
+  each withdrawal touches (`test-auditor`).
+- **A code note: the fake store's threshold.** `fakeJourneyStore` keeps its
+  own copy of D-021's 300 000 ms instead of being given it, because the test
+  kit cannot import the domain. A change to the threshold would need both
+  changed; the behaviour suite runs against both stores, so a mismatch would
+  fail, but only at the boundary it tests (`code-reviewer`).
+- **A code note: `lockedStateOf`.** A helper that takes a journey's row and
+  returns its state, for D-112's "the journey's row first" rule, would keep
+  the three paths that lock it (heartbeat, "I'm home", the open) from
+  drifting apart (`code-reviewer`).
+- **The owner's call: three files with no code owner.** `ports.ts`,
+  `packages/contracts/src/home.ts` and `contact.system.test.ts` need no
+  owner's approval to change. `ports.ts` was raised after LOST-01 and
+  LOST-02 too. The review list ties the last to an existing item from
+  BUG-14's reviews; that was not re-read here (`code-reviewer`).
 
 ## Settled by the plan, so not asked
 

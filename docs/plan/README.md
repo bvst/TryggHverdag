@@ -96,7 +96,13 @@ records, 30 days after it ends. **Since LOST-01, the same question covers the
 a timeline of the walker's activity that fits none of the retention rule's
 three categories (positions, alert records, account data). Positions already
 fall under the rule (24 hours after the journey ends). Decide it in M4, and
-write it into the DPIA.
+write it into the DPIA. **Since LOST-03** (D-110, D-112), a journey that ends
+records when, in `journeys.ended_at`: that is what the retention rule's
+24-hour clock for positions (PRIV-04) counts from. An `ENDED` journey whose
+`ended_at` is null (one put in directly, never by the code) must be handled
+loudly by the retention job, never skipped or deleted on a guess. The
+stand-down messages, the withdrawn lost-contact messages and each alert's
+`resolved_at` and `resolution` are alert records under the 30-day rule.
 
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every

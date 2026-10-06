@@ -3817,3 +3817,33 @@ any other path is work, not a candidate for the same treatment.
   - Left for later: when an undeliverable stand-down is given up, and
     whether the claim takes alerts before stand-downs (M3); who is stood down
     once responders can change during a journey.
+- **Amended 2026-10-06 (delegated, D-031), LOST-03's review loop 1:**
+  - **No overtaking across alerts** (`safety-reviewer`, should-fix). A
+    stand-down that cannot be delivered is retried for ever, so an earlier
+    alert's "back in contact" could reach a responder after a later alert's
+    lost-contact push, while the later alert is open: a false all-clear in
+    the middle of a real alert. The reviewer reproduced it in-process. **An
+    open now also withdraws the journey's earlier alerts' unsent
+    stand-downs** (every unsent, not yet withdrawn message of an earlier
+    alert whose kind is not `LOST_CONTACT`), in the open's own transaction,
+    so it is all or nothing with the new alert. This extends what LOST-02's
+    open writes (D-108). One already in the push port's hands was handed
+    over before the new alert opened.
+  - **"I'm home" asks the domain under the lock** (`code-reviewer`,
+    should-fix; AR-04). `recordHome` takes the journey, the walker and the
+    device, reads the walker, the device and the state under the lock, and
+    writes what the domain's `home` rule decides: its state, its reason, and
+    a resolution only when the rule says the alert resolves. A refusal there
+    cannot happen, and throws.
+  - **The store's already-ended answer is `already_ended`** (`code-reviewer`,
+    should-fix), so that `ended` means "ended now" in every layer of the
+    "I'm home" path. The heartbeat store keeps its `ended`, which LOST-01
+    named.
+  - **The worker's marks can wait on the API's withdrawal** (`safety-reviewer`,
+    note), because the worker's pool has no lock limit of its own. The wait
+    is bounded by the API's limits: 5 s per lock wait, 10 s idle. A mark
+    that waits stalls delivery only.
+  - **A 400's error object holds the request's headers**, the device
+    credential among them (`privacy-security-reviewer`, note). Nothing
+    prints it; a comment in `api.ts` says so, and a capture test holds it
+    (LOST-03-AC19).
