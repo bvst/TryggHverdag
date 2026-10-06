@@ -1052,6 +1052,11 @@ does instead.
   as a GET, where the contract puts it": the exact path list gains
   `/alerts/{alertId}/acknowledgement`. Its own comment asks for exactly
   this.
+- **`packages/contracts/src/home.test.ts`**, "LOST-03-AC18: reportHome is in
+  the contract beside health, start and heartbeat …": the exact list of the
+  contract's keys gains `acknowledgeAlert`, the same set AC15 pins. Missed
+  when this list was first written; `implementer` found it in the green
+  phase, because no contract could pass both tests.
 - **`scripts/lib/gate-decisions.test.mjs`**, the `MUTATION_GROUPS` pin: the
   `alerts` group's tests become `[alerts.system.test.ts,
   acknowledgement.system.test.ts]`, in that order.

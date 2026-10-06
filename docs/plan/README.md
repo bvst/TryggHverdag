@@ -109,6 +109,11 @@ records when, in `journeys.ended_at`: that is what the retention rule's
 loudly by the retention job, never skipped or deleted on a guess. The
 stand-down messages, the withdrawn lost-contact messages and each alert's
 `resolved_at` and `resolution` are alert records under the 30-day rule.
+**Since LOST-06** (D-113, D-114), so are `alerts.acknowledged_by` and
+`acknowledged_at` (who helped whom, and when) and the `ACKNOWLEDGED` notices.
+`acknowledged_by` references `users`, so deleting a member who acknowledged
+an alert that is still kept must deal with that reference first, as LOST-02
+found for outbox rows.
 
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every
