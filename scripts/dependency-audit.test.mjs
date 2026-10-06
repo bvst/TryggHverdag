@@ -133,12 +133,17 @@
  *     packages, which neither the lockfile nor the audit can see, nor the
  *     overrides reach (read in node_modules on 2026-10-06): magicast 0.5.5's
  *     `dist/builders-*.js` (source-map-js 1.2.1, unfixed); Vite 8.3.0's
- *     `dist/node/chunks/node.js` (shell-quote 1.8.4, the vulnerable form, of
- *     which it calls only `parse`, never `quote`); react-devtools-core 6.1.5's
+ *     `dist/node/chunks/node.js` (shell-quote 1.8.4, inside
+ *     GHSA-pqg4-j6r4-53mv and GHSA-395f-4hp3-45gv, whose function is
+ *     `parse`. Vite never calls `parse` with request input: it mounts
+ *     `launchEditorMiddleware()` with no editor, so `guessEditor` never
+ *     reaches `shellQuote.parse`); react-devtools-core 6.1.5's
  *     `dist/standalone.js` (an old copy; the package's main is
  *     `dist/backend.js`, and nothing here loads the standalone build); and
  *     drizzle-kit 0.31.11's `bin.cjs` and @drizzle-team/brocli 0.10.2's
- *     `index.js` (shell-quote 1.8.1, older than the 1.8.4 form). All are
+ *     `index.js` (shell-quote 1.8.1, older than the 1.8.4 form. drizzle-kit's
+ *     copy calls neither `quote` nor `parse`; brocli calls `parse` only from
+ *     its exported `test()` helper, which nothing here loads). All are
  *     tooling or unloaded; none is among the server's production
  *     dependencies (drizzle-kit is a server dev dependency).
  *
@@ -1049,10 +1054,12 @@ const PATCHED = [
     name: 'shell-quote',
     advisory: 'GHSA-pqg4-j6r4-53mv',
     // GHSA-pqg4-j6r4-53mv covers >=1.8.4 <1.11.0, and other advisories cover
-    // everything below it: GHSA-w7jw-789q-3m8p (critical, >=1.1.0 <=1.8.3),
-    // GHSA-395f-4hp3-45gv (high, <=1.8.4) and GHSA-qg8p-v9q4-gh34 (critical,
-    // <1.6.1). So every shell-quote below 1.11.0 counts, as the override's
-    // `shell-quote@<1.11.0` does.
+    // everything below it: GHSA-w7jw-789q-3m8p (critical, >=1.1.0 <=1.8.3:
+    // `quote()` does not escape newlines in object `.op` values),
+    // GHSA-395f-4hp3-45gv (high, <=1.8.4: a quadratic-complexity denial of
+    // service in `parse()`) and GHSA-qg8p-v9q4-gh34 (critical, <1.6.1: a
+    // potential command injection). So every shell-quote below 1.11.0
+    // counts, as the override's `shell-quote@<1.11.0` does.
     vulnerableFrom: null,
     fixedAt: '1.11.0',
     lockedBefore: '1.10.0',
