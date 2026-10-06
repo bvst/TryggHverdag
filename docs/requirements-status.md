@@ -28,7 +28,7 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | LOST-03 | Back in contact | must | 🟢 | 14 |
 | LOST-04 | Low battery warning | must | ⚪ | 0 |
 | LOST-05 | The walker knows when they're offline | must | ⚪ | 0 |
-| LOST-06 | "I'm on it" | must | ⚪ | 0 |
+| LOST-06 | "I'm on it" | must | 📝 | 0 |
 | LOST-07 | SMS escalation | must | ⚪ | 0 |
 | LOST-08 | "They're safe" | must | ⚪ | 0 |
 | HELP-01 | What to do | must | ⚪ | 0 |

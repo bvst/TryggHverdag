@@ -1,11 +1,13 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-06 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18 and LOST-02 done, LOST-03 in review (D-090)
+**Last updated:** 2026-10-06 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23 and BUG-24 done, LOST-06 in progress (D-090)
 
-**Current section:** milestone M2, started 2026-10-01 with SM-01; LOST-03,
-back in contact and "I'm home", is task 4 of 8 and in review, with its pull
-request open (D-090, D-110 to D-112; the task list is in
-[10-roadmap.md](10-roadmap.md)). LOST-02, the lost-contact alert, is done
+**Current section:** milestone M2, started 2026-10-01 with SM-01; LOST-06,
+"I'm on it", is task 5 of 8 and in progress: its spec is settled (D-090,
+D-113, D-114; the task list is in [10-roadmap.md](10-roadmap.md)). LOST-03,
+back in contact and "I'm home", is done (#64, 2026-10-06; D-110 to D-112),
+with BUG-23 and BUG-24, two new advisories that failed the dependency audit,
+in it. LOST-02, the lost-contact alert, is done
 (#63, 2026-10-05; D-106 to D-109). BUG-18, three files that decide whether a
 stopped watchdog is seen under the owner's approval and the safety review, is
 done (#61, 2026-10-04; D-105). LOST-01, the
@@ -21,11 +23,9 @@ schedule, and so are BUG-16 (`req:coverage` counts an ID named in a comment),
 BUG-17 (the Android emulator sometimes stays in English past the wait),
 BUG-19 (no test checks every owner-approval path keeps its owners), BUG-20
 (graphile-worker's own logger prints its error object, past `log.ts`) and
-BUG-21 (an Android script test's timing margin fails under full-suite load)
+BUG-21 (an Android script test's timing margin fails under full-suite load),
 BUG-22 (the test-weakening check does not see the shared behaviour suites) and
 BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an advisory).
-BUG-23 and BUG-24, two new advisories that failed the dependency audit, are
-fixed in their own pull request (#65), merged into LOST-03's branch.
 M1 closed with all four roadmap items done:
 SPIKE-01 (S1–S8), Section 4 closed with a conditional GO for the location SDK
 (D-086, full results in [04b-spike-results.md](04b-spike-results.md)), and the

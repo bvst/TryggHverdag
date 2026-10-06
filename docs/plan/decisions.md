@@ -3875,3 +3875,110 @@ any other path is work, not a candidate for the same treatment.
     `MESSAGE_KINDS` is never withdrawn by the open; a new resolution opts its
     stand-down in. A future stand-down kind that is not a resolution (an SMS
     stand-down in task 6, say) must opt in deliberately: task 6 decides.
+
+## D-113 — "I'm on it" is recorded on the alert, and every other responder is told now (LOST-06)
+- **Date:** 2026-10-06 · **Status:** Accepted (owner, 2026-10-06). Asked with
+  Claude's recommendation, "record it and tell the other responders". The
+  alternatives offered were "record it only, and M3's alert screen shows it"
+  and "record it, and tell the other responders and the walker" ·
+  **Section:** 3 and 5 (LOST-06; D-019, D-086, D-087, D-090 item 5, D-106,
+  D-111)
+- **Context:**
+  - The roadmap's "done when" for D-090's item 5 is "a responder's answer is
+    recorded and shown, at L6". L6 runs through the real API with recording
+    fakes for push and SMS.
+  - D-106 put the route that reads an alert in M3, with the alert screen, so
+    no responder can read anything in M2.
+  - The story's point is that other responders know someone is handling it,
+    so that each does not assume someone else will call.
+- **Decision:**
+  - The alert records who acknowledged it and when, by the database's clock.
+  - Every responder of the journey except the one who acknowledged gets one
+    content-free push of a new kind, `ACKNOWLEDGED`, written in the
+    acknowledgement's own transaction (AR-05). It is never at the critical
+    level (D-087). Who it is, by name, is the app's to read in M3 (D-086,
+    D-106).
+  - The walker is not told: no story asks for it, and a phone that has lost
+    contact cannot be told anything now.
+  - A notice not yet accepted by the push port when the alert resolves is
+    withdrawn with the alert's unsent lost-contact pushes, by D-111's
+    reasoning. Every responder, the acknowledger included, still gets the
+    stand-down.
+- **Why:** a responder who has seen the critical alert and not yet opened the
+  app learns that someone is on it only from a notification. It costs
+  nothing, since push is free and the notice does not break through silent
+  mode, and it meets the roadmap as written.
+- **Rejected:**
+  - Recording only. It leaves a responder who saw the alert unsure, the
+    effect the story exists to reduce, and the roadmap's row would need
+    rewording.
+  - Telling the walker too. No story asks for it.
+- **Consequences:**
+  - `MESSAGE_KINDS` gains `ACKNOWLEDGED`; resolving an alert now withdraws two
+    kinds, so the resolve helper's hold becomes per responder (D-114).
+  - LOST-06-AC1, AC2, AC7, AC8 and AC12 prove it. D-090's order and the
+    roadmap are unchanged.
+
+## D-114 — "I'm on it": one acknowledger per alert, named by the alert's ID, the journey's row first, and the resolve helper's per-responder hold (LOST-06)
+- **Date:** 2026-10-06 · **Status:** Accepted (delegated, D-031) ·
+  **Section:** 5 (AR-03, AR-04, AR-05, AR-06; D-033, D-091, D-100, D-103,
+  D-108, D-112)
+- **Context:** LOST-06's spec (`docs/specs/LOST-06.md`) has the full
+  reasoning. This records the choices it makes within the owner's answer
+  (D-113) and the binding rules.
+- **Decision:**
+  - **The route:** `POST /v1/alerts/{alertId}/acknowledgement`, on the device
+    credential (D-091), with detailed input as the "I'm home" route's
+    (D-112): the alert comes from the path only, and a body with any key is
+    the fixed 400. Answers: 200 `ACKNOWLEDGED` (recorded now, or already the
+    caller's); 404 `ALERT_NOT_FOUND` (no such alert, or the caller does not
+    follow its journey, the walker included: one body for all); 409
+    `ALREADY_ACKNOWLEDGED`; 409 `ALERT_RESOLVED`. None says who is on it.
+  - **"A responder"** is a user with a row in `journey_responders` for the
+    alert's journey, from any of their devices: a responder is a person, and
+    no silence is at stake, which is why D-101 binds a walker's events to one
+    device.
+  - **The alert's ID, never "the journey's current alert"**, so a late or
+    retried acknowledgement can never reach a later alert, which task 6 would
+    then stop escalating.
+  - **The rule** (`alertTransition`, in `domain/journey.ts`, AR-04), in this
+    order: not found or not a responder; resolved; already the sender's
+    (unchanged, 200); someone else's (409); otherwise `ACKNOWLEDGED`. `OPEN`,
+    `ESCALATED`, and `ACKNOWLEDGED` with nobody recorded can be acknowledged.
+  - **One acknowledger per alert.** The plan says it in the singular four
+    times. The first time is kept.
+  - **No event ID** (D-103): the pair (alert, responder) makes every repeat
+    harmless.
+  - **Read first, then the journey's row** (D-112's lock order), and the
+    rule is asked again under the lock. A refusal that cannot change is
+    answered without a lock.
+  - **`ACKNOWLEDGED` notices are due at once**, not held behind the
+    recipient's lost-contact push: a notice stands nobody down.
+  - **Two withdrawal lists, every kind in exactly one:** the resolution
+    withdraws `WITHDRAWN_WHEN_RESOLVED` (`LOST_CONTACT`, `ACKNOWLEDGED`) from
+    its own alert; the open withdraws `ALERT_RESOLUTIONS` (D-112, loop 3). A
+    test names any kind placed in neither or both.
+  - **The resolve helper's hold is per responder** (extends D-112): a
+    stand-down is due at the latest due time among that responder's
+    withdrawn messages that were handed over and are due later, at most
+    60 s on. With two kinds withdrawn, the old join by recipient would write
+    two stand-downs for one responder, and the unique key would roll back
+    every heartbeat and "I'm home" on that journey.
+  - **The data:** `alerts` gains `acknowledged_by` (references `users`) and
+    `acknowledged_at`, both null or both set; `message_kind` gains
+    `ACKNOWLEDGED`. No check ties the state to the columns, since the
+    resumed-escalation rule will move a state back (task 6).
+  - **The code:** `modules/alerts/acknowledgement.ts` (owned, safety-filtered,
+    mutated in the `alerts` group, which then runs `alerts.system.test.ts`
+    and `acknowledgement.system.test.ts`). Two closed log events,
+    `acknowledgement_ignored` and `acknowledgement_failed`, with the alert's
+    ID only and no user ID (PRIV-07).
+- **Consequences:**
+  - Task 6 reads `alerts.state`, `acknowledged_at` and `acknowledged_by`, and
+    adds the withdrawal of an acknowledged alert's unsent SMS and its own
+    kinds to the withdrawal lists. It also decides the outbox's unique key
+    for a second acknowledgement after the resumed-escalation rule.
+  - D-033's alert states draw no edge back from `ACKNOWLEDGED`, nor from
+    `ESCALATED` or `ACKNOWLEDGED` to `RESOLVED`; the plan needs both, and this
+    decision relies on D-112's "whatever its state".
+  - Supersedes nothing.
