@@ -141,3 +141,23 @@ describe('LOST-02: a message the port did not accept is tried again, later and l
     );
   });
 });
+
+describe('LOST-03: a stand-down never overtakes the lost-contact push it stands down', () => {
+  // The hold (LOST-03, approach item 4, step 4): a responder's stand-down is
+  // due no earlier than the next_attempt_at of their withdrawn lost-contact
+  // message, when that message was handed over and is not due yet. That
+  // time is the end of a claim's lease, or a retry's due time, so the
+  // longest a stand-down waits is the larger of CLAIM_LEASE_MS and the
+  // longest retry delay. Pinned here so a change to either shows.
+  test('LOST-03-AC8: the longest a stand-down is held, the larger of CLAIM_LEASE_MS and the longest retry delay, is 60 s', () => {
+    expect(Math.max(CLAIM_LEASE_MS, retryDelayMs(Number.MAX_SAFE_INTEGER))).toBe(60 * SECOND);
+  });
+
+  test('LOST-03-AC8: for any number of attempts a withdrawn message had, the hold it can cause, its lease or its retry, is never over 60 s', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 1_000_000 }), (attempts) => {
+        expect(Math.max(CLAIM_LEASE_MS, retryDelayMs(attempts))).toBeLessThanOrEqual(60 * SECOND);
+      }),
+    );
+  });
+});

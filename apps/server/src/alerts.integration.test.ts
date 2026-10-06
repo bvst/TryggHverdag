@@ -682,8 +682,14 @@ describe('SM-03, SM-09 and LOST-02: a heartbeat and the watchdog meet on the row
     expect(await alertsOf(journeyId)).toEqual([]);
   });
 
-  test('LOST-02-AC10: while a sweep’s transaction holds J’s row before commit, a heartbeat for J waits; then it is stored, last contact advances, and J stays LOST_CONTACT with its one alert unchanged', async () => {
-    const { journeyId } = await overdue();
+  // RG-03 (LOST-03, the spec's "Existing assertions that change by design"):
+  // this ended "…and J stays LOST_CONTACT with its one alert unchanged". A
+  // fresh heartbeat now brings J back in contact (LOST-03-AC1), so the end is
+  // LOST-03-AC11's second order: J ACTIVE, its one alert RESOLVED with
+  // resolution BACK_IN_CONTACT, and one BACK_IN_CONTACT for its responder
+  // beside the lost-contact message. The wait and the store are unchanged.
+  test('LOST-02-AC10: while a sweep’s transaction holds J’s row before commit, a heartbeat for J waits; then it is stored and last contact advances, and J comes back in contact (LOST-03-AC11): ACTIVE, with its one alert RESOLVED', async () => {
+    const { journeyId, responderIds } = await overdue();
     const key = Math.floor(Math.random() * 1_000_000_000);
     const tag = 'lost02_ac10_heartbeat';
     const heartbeatUrl = new URL(connectionUri());
@@ -757,10 +763,19 @@ describe('SM-03, SM-09 and LOST-02: a heartbeat and the watchdog meet on the row
             const [alert] = await alertsOf(journeyId);
             await recording;
 
-            expect(answer).toEqual({ outcome: 'recorded' });
+            expect(answer).toMatchObject({ outcome: 'back_in_contact', alertId: alert?.id });
             expect(await lastHeartbeatAt(journeyId)).toBe(receivedAt.getTime());
-            expect(await stateOf(journeyId)).toBe('LOST_CONTACT');
-            expect(await alertsOf(journeyId)).toEqual([alert]);
+            expect(await stateOf(journeyId)).toBe('ACTIVE');
+            expect(alert).toBeDefined();
+            expect(await alertsOf(journeyId)).toEqual([{ ...alert, state: 'RESOLVED' }]);
+            // One recipient, two kinds: sorted by kind, as messagesOf orders by recipient only.
+            const messages = (await messagesOf(journeyId))
+              .map(({ recipientId, kind }) => ({ recipientId, kind }))
+              .sort((a, b) => a.kind.localeCompare(b.kind));
+            expect(messages).toEqual([
+              { recipientId: responderIds[0], kind: 'BACK_IN_CONTACT' },
+              { recipientId: responderIds[0], kind: 'LOST_CONTACT' },
+            ]);
           } finally {
             // Before the trigger is dropped: dropping it waits for the sweep,
             // and the sweep waits for this lock.

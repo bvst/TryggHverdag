@@ -33,8 +33,15 @@ export const PUSH_FAILURE_REASONS: readonly PushFailureReason[] = [
   'NOT_CONFIGURED',
 ];
 
-/** The kinds of message there are. Only the lost-contact alert, for now. */
-export type MessageKind = 'LOST_CONTACT';
+/**
+ * The kinds of message there are: the lost-contact alert (LOST-02), and the
+ * two stand-downs LOST-03 adds, "back in contact" and "is home", each named
+ * after the resolution of the alert it stands down.
+ */
+export type MessageKind = 'LOST_CONTACT' | 'BACK_IN_CONTACT' | 'HOME';
+
+/** Every kind, in the server's order (`MESSAGE_KINDS`), written out: the test kit imports nothing from the server. */
+export const MESSAGE_KINDS: readonly MessageKind[] = ['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME'];
 
 /** A message as the sender hands it to the port: no personal detail, only who and what kind. */
 export interface PushMessage {

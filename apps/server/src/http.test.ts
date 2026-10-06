@@ -16,9 +16,13 @@ function api() {
     // These tests are about the port; they start no journey, so the journey
     // service fails loudly if anything calls it. RG-03: `heartbeat` added
     // because LOST-01 made it part of the journey service; it rejects too.
+    // RG-03 (LOST-03): `home` added because "I'm home" (D-110) made it part
+    // of the journey service too; it rejects as well, and these tests never
+    // call it, so nothing they assert changes.
     journeys: {
       start: () => Promise.reject(new Error('the port tests start no journey')),
       heartbeat: () => Promise.reject(new Error('the port tests send no heartbeat')),
+      home: () => Promise.reject(new Error('the port tests end no journey')),
     },
     devices: fakeDeviceAuthenticator(),
   });

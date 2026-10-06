@@ -15,7 +15,7 @@ export { BEAT_RECORDED, fakeWorkerHeartbeats } from './fake-worker-heartbeats.ts
 export type { FakeWorkerHeartbeats } from './fake-worker-heartbeats.ts';
 export { CHECKED_IN, CHECK_IN_ABORTED, fakeCheckIn } from './fake-check-in.ts';
 export type { AbortSignalLike, FakeCheckIn } from './fake-check-in.ts';
-export { PUSH_FAILURE_REASONS, fakePush } from './fake-push.ts';
+export { MESSAGE_KINDS, PUSH_FAILURE_REASONS, fakePush } from './fake-push.ts';
 export type {
   FakePush,
   MessageKind,
@@ -36,12 +36,15 @@ export type {
   AlertMessage,
   ClaimedMessage,
   ClaimedMessages,
+  FakeAlertResolution,
   FakeAlertState,
+  FakeJourneyEndReason,
   FakeJourneyState,
   FakeJourneyStore,
   HeartbeatPosition,
   HeartbeatToRecord,
   InsertStartedResult,
+  JourneyEnd,
   JourneyForHeartbeat,
   JourneyStoreCall,
   LatestHeartbeat,
@@ -50,6 +53,7 @@ export type {
   OverdueJourney,
   OverdueJourneys,
   RecordHeartbeatResult,
+  RecordHomeResult,
   StartedJourney,
   StoreClock,
   StoredAlert,
@@ -90,10 +94,13 @@ export type {
   AlertAsStored,
   HeartbeatAsStored,
   JourneyAsStored,
+  JourneyEndAsStored,
   MessageAsStored,
   JourneyStoreBehaviour,
   JourneyStoreUnderTest,
   PositionAsStored,
+  ResolutionAsStored,
+  WithdrawalAsStored,
 } from './journey-store-behaviour.ts';
 
 /**

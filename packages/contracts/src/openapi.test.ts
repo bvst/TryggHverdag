@@ -2,6 +2,7 @@
 // running old versions of the app (AR-08) — so the question these tests answer
 // is not "does the server work" but "is the shape we published still the shape
 // we serve".
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -18,7 +19,13 @@ describe('the generated OpenAPI description', () => {
     // ['/health', '/journeys'] until LOST-01 added the heartbeat route (RG-03:
     // a route added by design, LOST-01's spec, approach item 1). The list is
     // still exact, so a route added later has to be named here on purpose.
-    expect(Object.keys(paths).sort()).toEqual(['/health', '/heartbeats', '/journeys']);
+    //
+    // RG-03 (LOST-03): the "I'm home" route is added by design (D-110, its
+    // spec's approach item 5 and "Existing assertions that change by
+    // design"), named here on purpose. The list is still exact.
+    expect(Object.keys(paths).sort()).toEqual(
+      ['/health', '/heartbeats', '/journeys', '/journeys/{journeyId}/home'].sort(),
+    );
     expect(paths['/health']).toHaveProperty('get');
   });
 
@@ -199,5 +206,101 @@ describe('LOST-01: the heartbeat route, as published', () => {
     expect(JSON.stringify(paths['/heartbeats']?.['post'] ?? {})).not.toMatch(
       /"in":\s*"(path|query|header)"/,
     );
+  });
+});
+
+/** The route LOST-03 adds (D-110), as the document names it under the /v1 server. */
+const HOME = '/journeys/{journeyId}/home';
+
+/** A JSON schema, by the parts these tests read. */
+interface JsonSchema {
+  type?: string;
+  const?: unknown;
+  enum?: unknown[];
+  format?: string;
+  properties?: Record<string, JsonSchema>;
+  required?: string[];
+}
+
+/** A parameter of an operation, by the parts these tests read. */
+interface Parameter {
+  name?: string;
+  in?: string;
+  required?: boolean;
+  schema?: JsonSchema;
+}
+
+/**
+ * The published shape of the start and heartbeat routes before LOST-03, as
+ * the committed openapi.json held it at 39f1beb: a SHA-256 of each path
+ * item's JSON. LOST-03 adds a route and changes neither of these, so a
+ * change to either shows here, and is made on purpose.
+ */
+const UNCHANGED_PATH_ITEMS = {
+  '/journeys': '4b736a3f8275081700131fa40eec6c01df6f2a797210cbb35c168526b77945a3',
+  '/heartbeats': '5bda3e10bfe01676c134acee502bb6e549f33d168a81a2ae5a1d753b8f7d1f53',
+};
+
+describe('SM-04: the "I’m home" route, as published (D-110)', () => {
+  test('LOST-03-AC18: POST /journeys/{journeyId}/home is described under the /v1 server, as a POST and nothing else', async () => {
+    const { paths } = await described();
+    const document = await openApiDocument();
+
+    expect(document['servers']).toEqual([{ url: API_PREFIX }]);
+    expect(API_PREFIX).toBe('/v1');
+    expect(paths[HOME]?.['post']).toBeDefined();
+    expect(Object.keys(paths[HOME] ?? {}).filter((key) => HTTP_METHODS.includes(key))).toEqual([
+      'post',
+    ]);
+  });
+
+  test('LOST-03-AC18: its answers are 200, 400, 401, 403, 404 and 409', async () => {
+    const { paths } = await described();
+    const responses = Object.keys(paths[HOME]?.['post']?.responses ?? {});
+
+    expect(responses).toEqual(expect.arrayContaining(['200', '400', '401', '403', '404', '409']));
+  });
+
+  test('LOST-03-AC18: it requires the bearer scheme', async () => {
+    const { paths, securitySchemes, securityOf } = await described();
+    const [bearerName] = Object.entries(securitySchemes)
+      .filter(([, scheme]) => scheme.type === 'http' && scheme.scheme?.toLowerCase() === 'bearer')
+      .map(([name]) => name);
+
+    expect(bearerName).toBeDefined();
+    expect(securityOf(paths[HOME]?.['post'])).toContainEqual({ [bearerName ?? '']: [] });
+  });
+
+  test('LOST-03-AC18: its 200 body is exactly { "outcome": "ENDED" }', async () => {
+    const { paths } = await described();
+    const ok = paths[HOME]?.['post']?.responses?.['200'] as
+      { content?: Record<string, { schema?: JsonSchema }> } | undefined;
+    const schema = ok?.content?.['application/json']?.schema;
+    const outcome = schema?.properties?.['outcome'];
+
+    expect(Object.keys(schema?.properties ?? {})).toEqual(['outcome']);
+    expect(schema?.required).toEqual(['outcome']);
+    expect(outcome?.const === undefined ? outcome?.enum : [outcome.const]).toEqual(['ENDED']);
+  });
+
+  test('LOST-03-AC18: the journey is its one parameter: in the path, required, a UUID; nothing in the query or a header', async () => {
+    const { paths } = await described();
+    const parameters =
+      (paths[HOME]?.['post'] as { parameters?: Parameter[] } | undefined)?.parameters ?? [];
+
+    expect(parameters.map(({ name, in: where, required }) => ({ name, where, required }))).toEqual([
+      { name: 'journeyId', where: 'path', required: true },
+    ]);
+    expect(parameters[0]?.schema?.format).toBe('uuid');
+  });
+
+  test('LOST-03-AC18: the heartbeat and start routes are published exactly as before', async () => {
+    const { paths } = await described();
+
+    for (const [route, digest] of Object.entries(UNCHANGED_PATH_ITEMS)) {
+      expect(createHash('sha256').update(JSON.stringify(paths[route])).digest('hex'), route).toBe(
+        digest,
+      );
+    }
   });
 });

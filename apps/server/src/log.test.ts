@@ -874,3 +874,191 @@ describe('PRIV-07 and LOST-02: the five new events are closed, at the type and a
     }
   });
 });
+
+// ===========================================================================
+// LOST-03: "I'm home"'s two events and the missing alert (approach item 10).
+// Closed, like the rest: a journey ID only as a canonical UUID, a reason and
+// a stage only from their sets, a code only as a SQLSTATE, and nothing a
+// location, a phone number or an error's message could travel in.
+// ===========================================================================
+
+const LOST_03_EVENTS: LogEvent[] = [
+  { event: 'home_ignored', reason: 'JOURNEY_ENDED', journeyId: syntheticUuid() },
+  { event: 'home_failed', stage: 'read', code: '57P01' },
+  { event: 'home_failed', stage: 'store', code: null },
+  { event: 'alert_missing', journeyId: syntheticUuid() },
+];
+
+describe('PRIV-07 and LOST-03: the three new events are closed, at the type and at run time', () => {
+  test('LOST-03-AC19: (L1) each of the three is exactly its fields, no more and no fewer: a field added to one, an optional one included, or a set widened, fails typecheck', () => {
+    // As LOST-02-AC22's pin: each entry is `true` only when each type is
+    // assignable to the other and both have the same keys.
+    type Exactly<A, B> = [A] extends [B]
+      ? [B] extends [A]
+        ? [keyof A] extends [keyof B]
+          ? [keyof B] extends [keyof A]
+            ? true
+            : false
+          : false
+        : false
+      : false;
+    type EventOf<Name extends LogEvent['event']> = Extract<LogEvent, { event: Name }>;
+    const pinned: [
+      Exactly<
+        EventOf<'home_ignored'>,
+        { event: 'home_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
+      >,
+      Exactly<
+        EventOf<'home_failed'>,
+        { event: 'home_failed'; stage: 'read' | 'store'; code: string | null }
+      >,
+      Exactly<EventOf<'alert_missing'>, { event: 'alert_missing'; journeyId: string }>,
+    ] = [true, true, true];
+
+    expect(pinned).toEqual([true, true, true]);
+  });
+
+  test('LOST-03-AC19: (L1) none of the three holds another field: a latitude, a message, a position, the walker, or another reason or stage does not type-check', () => {
+    // Each @ts-expect-error fails the type check (gate:static) the day the
+    // property under it stops being an error. Values only; none is handed to
+    // the log.
+    const journeyId = syntheticUuid();
+    const refused: unknown[] = [
+      {
+        event: 'home_ignored',
+        reason: 'JOURNEY_ENDED',
+        journeyId,
+        // @ts-expect-error -- a latitude has no field to travel in
+        latitude: 0,
+      } satisfies LogEvent,
+      {
+        event: 'home_ignored',
+        // @ts-expect-error -- nor a reason the rule does not give
+        reason: 'NOT_THE_JOURNEYS_DEVICE',
+        journeyId,
+      } satisfies LogEvent,
+      {
+        event: 'home_failed',
+        stage: 'store',
+        code: null,
+        // @ts-expect-error -- nor an error's message
+        message: 'Failing row contains (…)',
+      } satisfies LogEvent,
+      {
+        event: 'home_failed',
+        // @ts-expect-error -- nor a stage "I'm home" does not have
+        stage: 'clock',
+        code: null,
+      } satisfies LogEvent,
+      {
+        event: 'alert_missing',
+        journeyId,
+        // @ts-expect-error -- nor a position
+        position: { latitude: 0, longitude: 0 },
+      } satisfies LogEvent,
+      {
+        event: 'alert_missing',
+        journeyId,
+        // @ts-expect-error -- nor who was walking
+        walkerId: journeyId,
+      } satisfies LogEvent,
+    ];
+
+    expect(refused).toHaveLength(6);
+  });
+
+  test.each(LOST_03_EVENTS)(
+    'LOST-03-AC19: createLog writes $event as one JSON line, holding exactly that event’s fields',
+    (event) => {
+      const writer = recordingWriter();
+
+      createLog({ write: writer.write }).write(event);
+
+      const lines = writer.lines();
+      expect(lines).toHaveLength(1);
+      expect(writer.chunks.join('').endsWith('\n')).toBe(true);
+      expect(JSON.parse(lines[0] ?? 'null')).toEqual(event);
+    },
+  );
+
+  test.each([
+    {
+      what: 'a home_ignored reason',
+      event: { event: 'home_ignored', reason: 'JOURNEY_ENDED', journeyId: syntheticUuid() },
+      field: 'reason',
+      outside: ['JOURNEY_NOT_FOUND', 'NOT_THE_JOURNEYS_DEVICE', 'journey_ended', '', 409],
+    },
+    {
+      what: 'a home_failed stage',
+      event: { event: 'home_failed', stage: 'read', code: '57P01' },
+      field: 'stage',
+      outside: ['clock', 'open', 'claim', 'STORE', '', ['store']],
+    },
+  ])(
+    'LOST-03-AC19: $what outside its set is written as null, and none of it is written; inside it, as it is',
+    ({ event, field, outside }) => {
+      for (const value of [...outside, ...freeText().map(({ value: text }) => text)]) {
+        const { line, text } = writtenThroughACast({ ...event, [field]: value });
+
+        expect(line, JSON.stringify(value)).toEqual({ ...event, [field]: null });
+        if (typeof value === 'string' && value !== '') {
+          expect(text, value).not.toContain(`"${value}"`);
+        }
+      }
+      expect(writtenThroughACast(event).line).toEqual(event);
+    },
+  );
+
+  test.each([
+    { event: { event: 'home_ignored', reason: 'JOURNEY_ENDED', journeyId: syntheticUuid() } },
+    { event: { event: 'alert_missing', journeyId: syntheticUuid() } },
+  ])(
+    'LOST-03-AC19: in the $event.event line, a journeyId that is not a lower-case canonical UUID is written as null, and none of it is written',
+    ({ event }) => {
+      for (const { what, journeyId: value, markers } of NOT_JOURNEY_IDS) {
+        const { line, text } = writtenThroughACast({ ...event, journeyId: value() });
+
+        expect(line, what).toEqual({ ...event, journeyId: null });
+        expect(markersIn(text, markers()), what).toEqual([]);
+      }
+      expect(writtenThroughACast(event).line).toEqual(event);
+    },
+  );
+
+  test('LOST-03-AC19: a home_failed code that is not a SQLSTATE is written as null, and a SQLSTATE as it is', () => {
+    const event = { event: 'home_failed', stage: 'store', code: '23505' };
+
+    for (const { what, code } of [...NOT_SQLSTATES, ...CODES_NOT_TEXT]) {
+      const { line, text } = writtenThroughACast({ ...event, code });
+
+      expect(line, what).toEqual({ ...event, code: null });
+      if (typeof code === 'string' && code !== '') {
+        expect(text, what).not.toContain(code);
+      }
+    }
+    expect(writtenThroughACast(event).line).toEqual(event);
+  });
+
+  test('LOST-03-AC19: fields the three events do not have, got past the type, are not written: a position, a message, an error, a walker', () => {
+    const latitude = String(syntheticCoordinate());
+    const longitude = String(syntheticCoordinate());
+    const walkerId = syntheticUuid();
+    const extra = {
+      latitude: Number(latitude),
+      longitude: Number(longitude),
+      position: { latitude: Number(latitude), longitude: Number(longitude) },
+      message: `Failing row contains (${latitude}, ${longitude})`,
+      err: new Error(`Failing row contains (${latitude}, ${longitude})`),
+      walkerId,
+    };
+
+    for (const event of LOST_03_EVENTS) {
+      const { line, text } = writtenThroughACast({ ...event, ...extra });
+
+      expect(line, event.event).toEqual(event);
+      expect(markersIn(text, [latitude, longitude, 'Failing row', walkerId]), event.event).toEqual(
+        [],
+      );
+    }
+  });
+});

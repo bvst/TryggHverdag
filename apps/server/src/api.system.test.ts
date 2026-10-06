@@ -23,9 +23,13 @@ function noJourneys() {
   return {
     // RG-03: `heartbeat` added because LOST-01 made it part of the journey
     // service. It rejects, as `start` does: the health tests call neither.
+    // RG-03 (LOST-03): `home` added because "I'm home" (D-110) made it part
+    // of the journey service too. It rejects as well; these tests never call
+    // it, so nothing they assert changes.
     journeys: {
       start: () => Promise.reject(new Error('the health tests start no journey')),
       heartbeat: () => Promise.reject(new Error('the health tests send no heartbeat')),
+      home: () => Promise.reject(new Error('the health tests end no journey')),
     },
     devices: fakeDeviceAuthenticator(),
   };

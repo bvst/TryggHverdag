@@ -1269,6 +1269,13 @@ does instead.
   and `fake-push.test.ts` gain the new events and kinds; nothing they assert
   today changes.
 
+- **`apps/server/src/api.system.test.ts`** (`noJourneys()`) **and
+  `apps/server/src/http.test.ts`**: their `JourneyService` stand-ins gain a
+  `home` stub that rejects, as LOST-01 gave them a `heartbeat` one. The
+  service now has `home`, so a stand-in without it no longer type-checks.
+  These tests call neither, so nothing they assert changes (found by
+  `implementer`'s typecheck, 2026-10-06).
+
 **Read and found unchanged** (2026-10-06), so nobody has to wonder:
 - `domain/journey.test.ts`, "LOST-01-AC8: a journey in LOST_CONTACT takes the
   heartbeat and stays LOST_CONTACT …" and "LOST-02-AC5: a heartbeat for a

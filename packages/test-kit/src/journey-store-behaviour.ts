@@ -78,7 +78,10 @@
 import * as fc from 'fast-check';
 import { expect } from 'vitest';
 import type {
+  AlertMessage,
   ClaimedMessages,
+  FakeAlertResolution,
+  FakeAlertState,
   FakeJourneyState,
   HeartbeatToRecord,
   InsertStartedResult,
@@ -86,9 +89,10 @@ import type {
   OpenLostContactAlertResult,
   OverdueJourneys,
   RecordHeartbeatResult,
+  RecordHomeResult,
   StartedJourney,
 } from './fake-journey-store.ts';
-import type { PushFailureReason } from './fake-push.ts';
+import type { MessageKind, PushFailureReason } from './fake-push.ts';
 import {
   syntheticBatteryLevel,
   syntheticEventId,
@@ -150,6 +154,8 @@ export interface JourneyStoreUnderTest {
     ): Promise<{ id: string; walkerId: string; deviceId: string; state: string } | null>;
     recordHeartbeat(heartbeat: HeartbeatToRecord): Promise<RecordHeartbeatResult>;
     latestHeartbeatOf(journeyId: string): Promise<LatestHeartbeat | null>;
+    /** "I'm home" (LOST-03, D-110). */
+    recordHome(journeyId: string): Promise<RecordHomeResult>;
   };
   /** A new user, by the store's own means: a row in the real table, an entry in the fake. */
   addUser(): Promise<string>;
@@ -226,6 +232,62 @@ export interface JourneyStoreUnderTest {
    * a second or two for the database, whose `now()` moves on while a test runs.
    */
   timeMarginMs: number;
+  /**
+   * LOST-03: each alert of this journey's resolution, read by a reader of its
+   * own so that `alertsOf` keeps its shape: when it resolved and how, both
+   * null until it is. In any order.
+   */
+  resolutionsOf(journeyId: string): Promise<ResolutionAsStored[]>;
+  /** LOST-03: each outbox message of this journey's alerts, when it was written and when withdrawn. In any order. */
+  withdrawalsOf(journeyId: string): Promise<WithdrawalAsStored[]>;
+  /** LOST-03: how the journey ended, by a reader of its own, or null if there is no such journey. */
+  endOf(journeyId: string): Promise<JourneyEndAsStored | null>;
+  /**
+   * LOST-03-AC4: an alert put in directly, in any state, as a test's own
+   * setup: nothing in the code writes ESCALATED or ACKNOWLEDGED yet.
+   * Resolves to its ID.
+   */
+  seedAlert(alert: {
+    journeyId: string;
+    state: FakeAlertState;
+    openedAt: Date;
+    silentSince: Date;
+    resolvedAt?: Date | null;
+    resolution?: FakeAlertResolution | null;
+  }): Promise<string>;
+  /** LOST-03: an outbox message put in directly, never withdrawn, as a test's own setup. Resolves to its ID. */
+  seedMessage(message: {
+    alertId: string;
+    recipientId: string;
+    kind: MessageKind;
+    createdAt: Date;
+    nextAttemptAt: Date;
+    attempts?: number;
+    sentAt?: Date | null;
+    lastFailure?: PushFailureReason | null;
+  }): Promise<string>;
+  /** LOST-03-AC4: every responder row of the journey removed directly: nothing in the code removes one yet. */
+  removeResponders(journeyId: string): Promise<void>;
+}
+
+/** An alert's resolution, as a store under test holds it (LOST-03). */
+export interface ResolutionAsStored {
+  alertId: string;
+  resolvedAt: Date | null;
+  resolution: string | null;
+}
+
+/** When an outbox message was written, and when it was withdrawn, null if never (LOST-03). */
+export interface WithdrawalAsStored {
+  messageId: string;
+  createdAt: Date;
+  withdrawnAt: Date | null;
+}
+
+/** How a journey ended, as a store under test holds it: both null until it ends through the store (LOST-03). */
+export interface JourneyEndAsStored {
+  endedAt: Date | null;
+  endReason: string | null;
 }
 
 /** An alert as a store under test holds it (LOST-02). */
@@ -542,6 +604,139 @@ function silences(margin: number): fc.Arbitrary<number> {
       fc.constantFrom(LOST_CONTACT_AFTER_MS - 1, LOST_CONTACT_AFTER_MS, LOST_CONTACT_AFTER_MS + 1),
     )
     .filter((ms) => margin === 0 || Math.abs(ms - LOST_CONTACT_AFTER_MS) > margin);
+}
+
+// ---------------------------------------------------------------------------
+// LOST-03: back in contact, and "I'm home".
+// ---------------------------------------------------------------------------
+
+const SECONDS = SECOND;
+
+/**
+ * How long before the store's now a heartbeat may be received and still
+ * leave the silence under five minutes when the store writes it: 4 min
+ * 59.999 s against the fake, whose clock stands still, and a margin under
+ * five minutes against the database, whose now() moves on.
+ */
+function freshAgoMs(subject: JourneyStoreUnderTest): number {
+  return LOST_CONTACT_AFTER_MS - Math.max(1, subject.timeMarginMs);
+}
+
+/** A heartbeat for this journey, received at the store's now: as fresh as contact gets. */
+async function freshHeartbeat(
+  subject: JourneyStoreUnderTest,
+  journeyId: string,
+  given: Partial<HeartbeatToRecord> = {},
+): Promise<HeartbeatToRecord> {
+  return heartbeatFor(journeyId, { receivedAt: await subject.now(), ...given });
+}
+
+/** A LOST_CONTACT journey opened by the store's own open, silent an hour: its people, its alert and its lost-contact messages. */
+async function lostWith(
+  subject: JourneyStoreUnderTest,
+  responders: number,
+): Promise<{
+  walkerId: string;
+  deviceId: string;
+  journeyId: string;
+  responderIds: string[];
+  alertId: string;
+  messages: AlertMessage[];
+}> {
+  const now = await subject.now();
+  const journey = await watched(subject, {
+    startedAt: ago(now, 2 * HOUR),
+    lastHeartbeatAt: ago(now, HOUR),
+    responders,
+  });
+  const opened = await subject.store.openLostContactAlert({
+    journeyId: journey.journeyId,
+    afterMs: LOST_CONTACT_AFTER_MS,
+  });
+  if (opened.outcome !== 'opened') {
+    throw new Error(`expected the silent journey to be opened, but it was ${opened.outcome}`);
+  }
+  return { ...journey, alertId: opened.alertId, messages: opened.messages };
+}
+
+/** The answer of a heartbeat that brought a journey back, or a failed expectation saying what it was instead. */
+function backInContact(result: RecordHeartbeatResult): {
+  alertId: string | null;
+  messages: AlertMessage[];
+} {
+  expect(result.outcome, 'the heartbeat brought the journey back in contact').toBe(
+    'back_in_contact',
+  );
+  if (result.outcome !== 'back_in_contact') {
+    throw new Error(`the heartbeat was answered ${result.outcome}`);
+  }
+  return result;
+}
+
+/** The answer of an "I'm home" that ended a journey, or a failed expectation saying what it was instead. */
+function endedHome(result: RecordHomeResult): {
+  from: string;
+  alertId: string | null;
+  messages: AlertMessage[];
+} {
+  expect(result.outcome, '"I’m home" ended the journey').toBe('home');
+  if (result.outcome !== 'home') {
+    throw new Error(`"I’m home" was answered ${result.outcome}`);
+  }
+  return result;
+}
+
+/** This alert's resolution, as the store under test holds it. */
+async function resolutionOf(
+  subject: JourneyStoreUnderTest,
+  journeyId: string,
+  alertId: string,
+): Promise<ResolutionAsStored | undefined> {
+  return (await subject.resolutionsOf(journeyId)).find((each) => each.alertId === alertId);
+}
+
+/** When each of these messages was withdrawn, by message ID. */
+async function withdrawnAtOf(
+  subject: JourneyStoreUnderTest,
+  journeyId: string,
+): Promise<Map<string, Date | null>> {
+  return new Map(
+    (await subject.withdrawalsOf(journeyId)).map(({ messageId, withdrawnAt }) => [
+      messageId,
+      withdrawnAt,
+    ]),
+  );
+}
+
+/** The messages of one kind, for one alert, sorted by recipient. */
+function ofKind<T extends { alertId: string; kind: string; recipientId: string }>(
+  messages: readonly T[],
+  alertId: string,
+  kind: string,
+): T[] {
+  return messages
+    .filter((message) => message.alertId === alertId && message.kind === kind)
+    .sort((a, b) => (a.recipientId < b.recipientId ? -1 : a.recipientId > b.recipientId ? 1 : 0));
+}
+
+/** Sorted by recipient, so stores that hand rows back in any order compare equal. */
+function byRecipient<T extends { recipientId: string }>(rows: readonly T[]): T[] {
+  return [...rows].sort((a, b) =>
+    a.recipientId < b.recipientId ? -1 : a.recipientId > b.recipientId ? 1 : 0,
+  );
+}
+
+/** Everything a store holds of one journey's alerts and messages, to compare before and after. */
+async function alertRecordOf(subject: JourneyStoreUnderTest, journeyId: string) {
+  return {
+    state: await subject.stateOf(journeyId),
+    alerts: [...(await subject.alertsOf(journeyId))].sort((a, b) => a.id.localeCompare(b.id)),
+    resolutions: [...(await subject.resolutionsOf(journeyId))].sort((a, b) =>
+      a.alertId.localeCompare(b.alertId),
+    ),
+    messages: byMessage(await subject.messagesOf(journeyId)),
+    withdrawals: byMessage(await subject.withdrawalsOf(journeyId)),
+  };
 }
 
 export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
@@ -1283,13 +1478,23 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     },
   },
   {
-    name: 'LOST-01-AC8: a heartbeat for a journey in LOST_CONTACT is recorded and advances last contact, and the journey stays LOST_CONTACT',
+    // RG-03 (LOST-03, the spec's "Existing assertions that change by
+    // design"): this was "…and the journey stays LOST_CONTACT", for any
+    // heartbeat. Since LOST-03 a heartbeat that leaves the silence under five
+    // minutes brings the journey back (LOST-03-AC2), so "stays LOST_CONTACT"
+    // holds only for one received five minutes or more before the store's
+    // now. The heartbeat here was always that stale, by accident of the fixed
+    // RECEIVED_AT against the stores' clocks; its times are now written
+    // relative to the store's own now, so it is stale on purpose. Every
+    // assertion is the one it had.
+    name: 'LOST-01-AC8: a heartbeat for a journey in LOST_CONTACT is recorded and advances last contact; received five minutes or more before the store’s now, it brings nothing back, and the journey stays LOST_CONTACT (LOST-03-AC2)',
     async run(subject) {
+      const now = await subject.now();
       const { journeyId } = await journeyFor(subject, {
         state: 'LOST_CONTACT',
-        lastHeartbeatAt: EARLIER,
+        lastHeartbeatAt: ago(now, 2 * HOUR),
       });
-      const heartbeat = heartbeatFor(journeyId);
+      const heartbeat = heartbeatFor(journeyId, { receivedAt: ago(now, HOUR) });
 
       expect(await subject.store.recordHeartbeat(heartbeat)).toEqual(RECORDED);
 
@@ -1579,7 +1784,17 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     },
   },
   {
-    name: 'LOST-02-AC2: for any sequence of heartbeats, received in any order, and sweeps between them, a journey is LOST_CONTACT after a sweep exactly when some sweep so far found it silent five minutes or more, and a heartbeat after that does not move it back',
+    // RG-03 (LOST-03, the spec's "Existing assertions that change by
+    // design"): this was "…a journey is LOST_CONTACT after a sweep exactly
+    // when some sweep so far found it silent five minutes or more, and a
+    // heartbeat after that does not move it back". LOST-03-AC5's property
+    // replaces that last clause: a heartbeat that leaves the silence under
+    // five minutes now moves the journey back, and resolves its alert. The
+    // rest stands, stated step by step: a sweep still moves the journey to
+    // LOST_CONTACT exactly when it has been silent five minutes or more, with
+    // one alert; and every step is now checked, a heartbeat's answer
+    // included, where only sweeps were.
+    name: 'LOST-02-AC2 and LOST-03-AC5: for any sequence of heartbeats, fresh or stale, received in any order, and sweeps between them, after every step the store agrees with the rules applied step by step: a sweep moves the journey to LOST_CONTACT exactly when it has been silent five minutes or more, and a heartbeat that leaves its silence under five minutes moves it back; exactly one unresolved alert while it is LOST_CONTACT and none while it is ACTIVE; one stand-down per responder for each resolved alert, and none for an unresolved one',
     async run(subject) {
       const margin = subject.timeMarginMs;
       const step = fc.oneof(
@@ -1593,24 +1808,60 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
           fc.array(step, { maxLength: 8 }),
           async (startedAgoMs, steps) => {
             const now = await subject.now();
-            const { journeyId } = await watched(subject, { startedAt: ago(now, startedAgoMs) });
-            let lastContactAgoMs: number | null = null;
-            let lost = false;
+            const { journeyId, responderIds } = await watched(subject, {
+              startedAt: ago(now, startedAgoMs),
+              responders: 2,
+            });
+            // The rules, applied step by step: the silence at `now`, counted
+            // from last contact or from the start, and what it has made of
+            // the journey so far.
+            let silentForMs = startedAgoMs;
+            let state: 'ACTIVE' | 'LOST_CONTACT' = 'ACTIVE';
+            let opened = 0;
+            let resolved = 0;
 
             for (const next of steps) {
               if (next.kind === 'heartbeat') {
                 // Never before the start: contact comes after a journey began.
                 const agoMs = Math.min(next.agoMs, startedAgoMs);
-                await subject.store.recordHeartbeat(
+                const result = await subject.store.recordHeartbeat(
                   heartbeatFor(journeyId, { receivedAt: ago(now, agoMs), position: null }),
                 );
-                lastContactAgoMs =
-                  lastContactAgoMs === null ? agoMs : Math.min(lastContactAgoMs, agoMs);
+                silentForMs = Math.min(silentForMs, agoMs);
+                const back = state === 'LOST_CONTACT' && silentForMs < LOST_CONTACT_AFTER_MS;
+                expect(result.outcome, 'the heartbeat’s answer').toBe(
+                  back ? 'back_in_contact' : 'recorded',
+                );
+                if (back) {
+                  state = 'ACTIVE';
+                  resolved += 1;
+                }
               } else {
                 await sweepOf(subject, [journeyId]);
-                lost ||= (lastContactAgoMs ?? startedAgoMs) >= LOST_CONTACT_AFTER_MS;
-                expect(await subject.stateOf(journeyId)).toBe(lost ? 'LOST_CONTACT' : 'ACTIVE');
-                expect(await subject.alertsOf(journeyId)).toHaveLength(lost ? 1 : 0);
+                if (state === 'ACTIVE' && silentForMs >= LOST_CONTACT_AFTER_MS) {
+                  state = 'LOST_CONTACT';
+                  opened += 1;
+                }
+              }
+
+              expect(await subject.stateOf(journeyId)).toBe(state);
+              const alerts = await subject.alertsOf(journeyId);
+              expect(alerts).toHaveLength(opened);
+              expect(alerts.filter((alert) => alert.state !== 'RESOLVED')).toHaveLength(
+                state === 'LOST_CONTACT' ? 1 : 0,
+              );
+              expect(alerts.filter((alert) => alert.state === 'RESOLVED')).toHaveLength(resolved);
+              const messages = await subject.messagesOf(journeyId);
+              for (const alert of alerts) {
+                const standDowns = messages.filter(
+                  ({ alertId, kind }) => alertId === alert.id && kind !== 'LOST_CONTACT',
+                );
+                expect(recipientsOf(standDowns), alert.state).toEqual(
+                  alert.state === 'RESOLVED' ? [...responderIds].sort() : [],
+                );
+                expect(standDowns.map(({ kind }) => kind)).toEqual(
+                  standDowns.map(() => 'BACK_IN_CONTACT'),
+                );
               }
             }
           },
@@ -2250,6 +2501,759 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         hasPosition: true,
         batteryLevel: last.batteryLevel,
       });
+    },
+  },
+
+  // -------------------------------------------------------------------------
+  // LOST-03: back in contact, resolving an alert, and "I'm home" (the spec's
+  // test plan: "The store's side of AC2, AC4 to AC8, AC12 and AC14 to AC16
+  // joins JOURNEY_STORE_BEHAVIOUR").
+  // -------------------------------------------------------------------------
+  {
+    name: 'LOST-03-AC2: a heartbeat that leaves a LOST_CONTACT journey’s silence under five minutes by the store’s now brings it back in one step: the heartbeat stored and last contact moved; the journey ACTIVE; its alert RESOLVED at that now, resolution BACK_IN_CONTACT; each unsent lost-contact message withdrawn at that now, keeping its attempts; and one BACK_IN_CONTACT message per responder, written and due at that now, with an ID of its own; the answer names the alert and those messages',
+    async run(subject) {
+      const lost = await lostWith(subject, 3);
+      // 4 min 59.999 s before the store's now against the fake, and a margin
+      // under five minutes against the database.
+      const heartbeat = heartbeatFor(lost.journeyId, {
+        receivedAt: ago(await subject.now(), freshAgoMs(subject)),
+      });
+
+      const before = await subject.now();
+      const result = await subject.store.recordHeartbeat(heartbeat);
+      const after = await subject.now();
+
+      const back = backInContact(result);
+      expect(back.alertId).toBe(lost.alertId);
+      expect(await subject.heartbeatsOf(lost.journeyId)).toEqual([storedAs(heartbeat)]);
+      expect(await subject.lastHeartbeatAt(lost.journeyId)).toEqual(heartbeat.receivedAt);
+      expect(await subject.stateOf(lost.journeyId)).toBe('ACTIVE');
+      expect(
+        (await subject.alertsOf(lost.journeyId)).map(({ id, state }) => ({ id, state })),
+      ).toEqual([{ id: lost.alertId, state: 'RESOLVED' }]);
+      const resolution = await resolutionOf(subject, lost.journeyId, lost.alertId);
+      expect(resolution?.resolution).toBe('BACK_IN_CONTACT');
+      const resolvedAt = resolution?.resolvedAt ?? new Date(Number.NaN);
+      expect(resolvedAt.getTime()).toBeGreaterThanOrEqual(before.getTime());
+      expect(resolvedAt.getTime()).toBeLessThanOrEqual(after.getTime());
+
+      const messages = await subject.messagesOf(lost.journeyId);
+      const withdrawnAt = await withdrawnAtOf(subject, lost.journeyId);
+      const created = new Map(
+        (await subject.withdrawalsOf(lost.journeyId)).map(({ messageId, createdAt }) => [
+          messageId,
+          createdAt,
+        ]),
+      );
+      // The lost-contact messages: the same three, withdrawn at that now, unsent, attempts kept.
+      const lostContact = ofKind(messages, lost.alertId, 'LOST_CONTACT');
+      expect(lostContact.map(({ messageId }) => messageId).sort()).toEqual(
+        lost.messages.map(({ messageId }) => messageId).sort(),
+      );
+      for (const message of lostContact) {
+        expect(message).toMatchObject({ attempts: 0, sentAt: null, lastFailure: null });
+        expect(withdrawnAt.get(message.messageId)).toEqual(resolvedAt);
+      }
+      // The stand-downs: one per responder, never the walker, due at once.
+      const standDowns = ofKind(messages, lost.alertId, 'BACK_IN_CONTACT');
+      expect(recipientsOf(standDowns)).toEqual([...lost.responderIds].sort());
+      expect(messages).toHaveLength(lostContact.length + standDowns.length);
+      for (const message of standDowns) {
+        expect(message).toMatchObject({ attempts: 0, sentAt: null, lastFailure: null });
+        expect(message.nextAttemptAt).toEqual(resolvedAt);
+        expect(created.get(message.messageId)).toEqual(resolvedAt);
+        expect(withdrawnAt.get(message.messageId)).toBeNull();
+        expect(message.messageId).toMatch(LOWER_UUID);
+      }
+      const ids = standDowns.map(({ messageId }) => messageId);
+      expect(new Set(ids).size).toBe(ids.length);
+      const everyOtherId = [
+        ...lost.messages.map(({ messageId }) => messageId),
+        lost.alertId,
+        lost.journeyId,
+        lost.walkerId,
+        lost.deviceId,
+        ...lost.responderIds,
+      ];
+      expect(ids.filter((id) => everyOtherId.includes(id))).toEqual([]);
+      expect(byRecipient(back.messages)).toEqual(
+        standDowns.map(({ messageId, recipientId, kind }) => ({ messageId, recipientId, kind })),
+      );
+    },
+  },
+  {
+    name: 'LOST-03-AC2: a heartbeat that leaves the silence at five minutes or more brings nothing back: it is stored and moves last contact, and the journey stays LOST_CONTACT with its alert OPEN and unresolved, no message withdrawn and none written; at the threshold itself against the fake, a margin past it against the database',
+    async run(subject) {
+      const lost = await lostWith(subject, 2);
+      const before = await alertRecordOf(subject, lost.journeyId);
+      const now = await subject.now();
+      // Received five minutes (and a margin) before the store's now, as from
+      // an API process that froze between reading the time and taking the
+      // row; and one received later still before, which moves nothing.
+      const atTheThreshold = heartbeatFor(lost.journeyId, {
+        receivedAt: ago(now, LOST_CONTACT_AFTER_MS + subject.timeMarginMs),
+      });
+      const older = heartbeatFor(lost.journeyId, { receivedAt: ago(now, 10 * MINUTE) });
+
+      expect(await subject.store.recordHeartbeat(atTheThreshold)).toEqual(RECORDED);
+      expect(await subject.store.recordHeartbeat(older)).toEqual(RECORDED);
+
+      expect(byEvent(await subject.heartbeatsOf(lost.journeyId))).toEqual(
+        byEvent([storedAs(atTheThreshold), storedAs(older)]),
+      );
+      expect(await subject.lastHeartbeatAt(lost.journeyId)).toEqual(atTheThreshold.receivedAt);
+      expect(await alertRecordOf(subject, lost.journeyId)).toEqual(before);
+      expect(before.state).toBe('LOST_CONTACT');
+      expect(before.alerts.map(({ state }) => state)).toEqual(['OPEN']);
+      expect(
+        before.resolutions.map(({ resolvedAt, resolution }) => [resolvedAt, resolution]),
+      ).toEqual([[null, null]]);
+      expect(before.withdrawals.map(({ withdrawnAt }) => withdrawnAt)).toEqual([null, null]);
+    },
+  },
+  {
+    name: 'LOST-03-AC4: whatever state the journey’s unresolved alert is in — OPEN, ESCALATED or ACKNOWLEDGED — fresh contact resolves exactly that alert, its time and its resolution set together; an older RESOLVED alert of the journey, with its times and its messages, and another journey’s open alert, with its messages, are untouched',
+    async run(subject) {
+      for (const state of ['OPEN', 'ESCALATED', 'ACKNOWLEDGED'] as const) {
+        const now = await subject.now();
+        const journey = await watched(subject, {
+          state: 'LOST_CONTACT',
+          startedAt: ago(now, 3 * HOUR),
+          lastHeartbeatAt: ago(now, HOUR),
+          responders: 2,
+        });
+        // An earlier silence, already over: its alert RESOLVED, its messages sent.
+        const older = await subject.seedAlert({
+          journeyId: journey.journeyId,
+          state: 'RESOLVED',
+          openedAt: ago(now, 2 * HOUR + 10 * MINUTE),
+          silentSince: ago(now, 2 * HOUR + 15 * MINUTE),
+          resolvedAt: ago(now, 2 * HOUR),
+          resolution: 'BACK_IN_CONTACT',
+        });
+        for (const recipientId of journey.responderIds) {
+          for (const [kind, at] of [
+            ['LOST_CONTACT', ago(now, 2 * HOUR + 10 * MINUTE)],
+            ['BACK_IN_CONTACT', ago(now, 2 * HOUR)],
+          ] as const) {
+            await subject.seedMessage({
+              alertId: older,
+              recipientId,
+              kind,
+              createdAt: at,
+              nextAttemptAt: at,
+              attempts: 1,
+              sentAt: at,
+            });
+          }
+        }
+        // This silence's alert, in `state`, with a lost-contact message per responder, unsent.
+        const current = await subject.seedAlert({
+          journeyId: journey.journeyId,
+          state,
+          openedAt: ago(now, 55 * MINUTE),
+          silentSince: ago(now, HOUR),
+        });
+        for (const recipientId of journey.responderIds) {
+          await subject.seedMessage({
+            alertId: current,
+            recipientId,
+            kind: 'LOST_CONTACT',
+            createdAt: ago(now, 55 * MINUTE),
+            nextAttemptAt: ago(now, 55 * MINUTE),
+          });
+        }
+        const other = await lostWith(subject, 1);
+        const otherBefore = await alertRecordOf(subject, other.journeyId);
+        const before = await alertRecordOf(subject, journey.journeyId);
+
+        const back = backInContact(
+          await subject.store.recordHeartbeat(await freshHeartbeat(subject, journey.journeyId)),
+        );
+
+        expect(back.alertId, state).toBe(current);
+        expect(await subject.stateOf(journey.journeyId), state).toBe('ACTIVE');
+        const after = await alertRecordOf(subject, journey.journeyId);
+        const olderOf = (record: typeof before) => ({
+          alerts: record.alerts.filter(({ id }) => id === older),
+          resolutions: record.resolutions.filter(({ alertId }) => alertId === older),
+          messages: record.messages.filter(({ alertId }) => alertId === older),
+          withdrawals: record.withdrawals.filter(({ messageId }) =>
+            record.messages.some(
+              (message) => message.messageId === messageId && message.alertId === older,
+            ),
+          ),
+        });
+        expect(olderOf(after), state).toEqual(olderOf(before));
+        expect(after.alerts.find(({ id }) => id === current)?.state, state).toBe('RESOLVED');
+        const resolved = after.resolutions.find(({ alertId }) => alertId === current);
+        expect(resolved?.resolution, state).toBe('BACK_IN_CONTACT');
+        expect(resolved?.resolvedAt, state).toBeInstanceOf(Date);
+        expect(
+          after.alerts.filter(({ state: each }) => each !== 'RESOLVED'),
+          state,
+        ).toEqual([]);
+        expect(await alertRecordOf(subject, other.journeyId), state).toEqual(otherBefore);
+      }
+    },
+  },
+  {
+    name: 'LOST-03-AC4: a LOST_CONTACT journey with no unresolved alert — none at all, or only a RESOLVED one — still moves back to ACTIVE on fresh contact, writes no message and touches no alert, and the answer names no alert',
+    async run(subject) {
+      const now = await subject.now();
+      const lostWithout = () =>
+        watched(subject, {
+          state: 'LOST_CONTACT',
+          startedAt: ago(now, 2 * HOUR),
+          lastHeartbeatAt: ago(now, HOUR),
+          responders: 2,
+        });
+      const none = await lostWithout();
+      const onlyResolved = await lostWithout();
+      await subject.seedAlert({
+        journeyId: onlyResolved.journeyId,
+        state: 'RESOLVED',
+        openedAt: ago(now, 90 * MINUTE),
+        silentSince: ago(now, 95 * MINUTE),
+        resolvedAt: ago(now, 70 * MINUTE),
+        resolution: 'BACK_IN_CONTACT',
+      });
+
+      for (const { journeyId } of [none, onlyResolved]) {
+        const before = await alertRecordOf(subject, journeyId);
+
+        expect(
+          await subject.store.recordHeartbeat(await freshHeartbeat(subject, journeyId)),
+          journeyId,
+        ).toEqual({ outcome: 'back_in_contact', alertId: null, messages: [] });
+
+        expect(await subject.stateOf(journeyId)).toBe('ACTIVE');
+        expect(await alertRecordOf(subject, journeyId)).toEqual({ ...before, state: 'ACTIVE' });
+        expect(await subject.messagesOf(journeyId)).toEqual([]);
+      }
+    },
+  },
+  {
+    // Added after the red phase (the spec's "Tests added after the red
+    // phase", reading 11, D-112). The alert_missing line is the module's, so
+    // this checks only the store's answer and what it wrote.
+    name: 'LOST-03-AC4: recordHome on a LOST_CONTACT journey with no unresolved alert ends it ENDED with end reason HOME, and answers home, from LOST_CONTACT, with no alert and no messages',
+    async run(subject) {
+      const now = await subject.now();
+      const lostWithout = () =>
+        watched(subject, {
+          state: 'LOST_CONTACT',
+          startedAt: ago(now, 2 * HOUR),
+          lastHeartbeatAt: ago(now, HOUR),
+          responders: 2,
+        });
+      // None at all, and only a RESOLVED one with its sent message: neither
+      // is an unresolved alert, so neither is touched.
+      const none = await lostWithout();
+      const onlyResolved = await lostWithout();
+      const resolved = await subject.seedAlert({
+        journeyId: onlyResolved.journeyId,
+        state: 'RESOLVED',
+        openedAt: ago(now, 90 * MINUTE),
+        silentSince: ago(now, 95 * MINUTE),
+        resolvedAt: ago(now, 70 * MINUTE),
+        resolution: 'BACK_IN_CONTACT',
+      });
+      await subject.seedMessage({
+        alertId: resolved,
+        recipientId: onlyResolved.responderIds[0] ?? '',
+        kind: 'LOST_CONTACT',
+        createdAt: ago(now, 90 * MINUTE),
+        nextAttemptAt: ago(now, 90 * MINUTE),
+        attempts: 1,
+        sentAt: ago(now, 90 * MINUTE),
+      });
+
+      for (const { journeyId } of [none, onlyResolved]) {
+        const record = await alertRecordOf(subject, journeyId);
+        const resolutions = await subject.resolutionsOf(journeyId);
+        const withdrawals = await subject.withdrawalsOf(journeyId);
+        const before = await subject.now();
+
+        expect(await subject.store.recordHome(journeyId), journeyId).toEqual({
+          outcome: 'home',
+          from: 'LOST_CONTACT',
+          alertId: null,
+          messages: [],
+        });
+
+        const after = await subject.now();
+        expect(await subject.stateOf(journeyId)).toBe('ENDED');
+        const end = await subject.endOf(journeyId);
+        expect(end?.endReason).toBe('HOME');
+        expect(end?.endedAt?.getTime()).toBeGreaterThanOrEqual(before.getTime());
+        expect(end?.endedAt?.getTime()).toBeLessThanOrEqual(after.getTime());
+        // No alert opened, resolved or changed, and no message written or withdrawn.
+        expect(await alertRecordOf(subject, journeyId)).toEqual({ ...record, state: 'ENDED' });
+        expect(await subject.resolutionsOf(journeyId)).toEqual(resolutions);
+        expect(await subject.withdrawalsOf(journeyId)).toEqual(withdrawals);
+      }
+    },
+  },
+  {
+    name: 'LOST-03-AC4: a LOST_CONTACT journey whose responder rows are gone still moves back on fresh contact and resolves its alert, withdrawing its unsent lost-contact messages, and writes no stand-down',
+    async run(subject) {
+      const lost = await lostWith(subject, 2);
+      await subject.removeResponders(lost.journeyId);
+
+      const back = backInContact(
+        await subject.store.recordHeartbeat(await freshHeartbeat(subject, lost.journeyId)),
+      );
+
+      expect(back).toEqual({ outcome: 'back_in_contact', alertId: lost.alertId, messages: [] });
+      expect(await subject.stateOf(lost.journeyId)).toBe('ACTIVE');
+      expect((await subject.alertsOf(lost.journeyId)).map(({ state }) => state)).toEqual([
+        'RESOLVED',
+      ]);
+      const resolution = await resolutionOf(subject, lost.journeyId, lost.alertId);
+      expect(resolution?.resolution).toBe('BACK_IN_CONTACT');
+      const messages = await subject.messagesOf(lost.journeyId);
+      expect(messages.map(({ kind }) => kind)).toEqual(['LOST_CONTACT', 'LOST_CONTACT']);
+      const withdrawnAt = await withdrawnAtOf(subject, lost.journeyId);
+      for (const { messageId } of messages) {
+        expect(withdrawnAt.get(messageId)).toEqual(resolution?.resolvedAt);
+      }
+    },
+  },
+  {
+    name: 'LOST-03-AC6: every responder is stood down once, whatever became of their lost-contact message — accepted, failed and due again, or never claimed; a second fresh heartbeat, a sweep and a claim add none, and one message per (alert, recipient, kind) holds a second stand-down out',
+    async run(subject) {
+      const lost = await lostWith(subject, 3);
+      const mine = lost.messages.map(({ messageId }) => messageId);
+      // A claim of two: one is accepted, one fails; the third is never claimed.
+      const claim = await subject.store.claimDue({ limit: 2, leaseMs: LEASE_MS });
+      const [accepted, refused] = claim.messages.filter(({ messageId }) =>
+        mine.includes(messageId),
+      );
+      if (accepted === undefined || refused === undefined) {
+        throw new Error('expected the claim to take two of this alert’s messages');
+      }
+      await subject.store.markSent(accepted.messageId);
+      await subject.store.markFailed({
+        messageId: refused.messageId,
+        reason: 'NO_TARGET',
+        retryAfterMs: 10 * SECONDS,
+      });
+
+      backInContact(
+        await subject.store.recordHeartbeat(await freshHeartbeat(subject, lost.journeyId)),
+      );
+
+      const standDowns = () =>
+        subject
+          .messagesOf(lost.journeyId)
+          .then((messages) => ofKind(messages, lost.alertId, 'BACK_IN_CONTACT'));
+      const first = await standDowns();
+      expect(recipientsOf(first)).toEqual([...lost.responderIds].sort());
+      expect(recipientsOf(first)).not.toContain(lost.walkerId);
+
+      expect(
+        await subject.store.recordHeartbeat(await freshHeartbeat(subject, lost.journeyId)),
+      ).toEqual(RECORDED);
+      expect(await sweepOf(subject, [lost.journeyId])).toEqual([]);
+      await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS });
+      expect((await standDowns()).map(({ messageId }) => messageId).sort()).toEqual(
+        first.map(({ messageId }) => messageId).sort(),
+      );
+      expect(await subject.alertsOf(lost.journeyId)).toHaveLength(1);
+
+      // The one-per-(alert, recipient, kind) rule: a stand-down for someone
+      // else is taken, so the refusal below is that rule's, not the kind's.
+      const now = await subject.now();
+      const bystander = await subject.addUser();
+      await expect(
+        subject.seedMessage({
+          alertId: lost.alertId,
+          recipientId: bystander,
+          kind: 'BACK_IN_CONTACT',
+          createdAt: now,
+          nextAttemptAt: now,
+        }),
+      ).resolves.toEqual(expect.any(String));
+      await expect(
+        subject.seedMessage({
+          alertId: lost.alertId,
+          recipientId: lost.responderIds[0] ?? '',
+          kind: 'BACK_IN_CONTACT',
+          createdAt: now,
+          nextAttemptAt: now,
+        }),
+      ).rejects.toThrow();
+    },
+  },
+  {
+    name: 'LOST-03-AC7: when contact comes back, a lost-contact message not yet accepted is withdrawn at the store’s now, keeping its attempts and its last failure, and a claim never hands it out again, whatever its due time and whatever a later mark says; one accepted is left as it was, sent and not withdrawn',
+    async run(subject) {
+      const lost = await lostWith(subject, 3);
+      const mine = lost.messages.map(({ messageId }) => messageId);
+      // Claimed with no lease, so both claimed messages are due again at once:
+      // only the withdrawal keeps them from the claims below.
+      const claim = await subject.store.claimDue({ limit: 2, leaseMs: 0 });
+      const [accepted, refused] = claim.messages.filter(({ messageId }) =>
+        mine.includes(messageId),
+      );
+      const never = lost.messages.find(
+        ({ messageId }) => !claim.messages.some((claimed) => claimed.messageId === messageId),
+      );
+      if (accepted === undefined || refused === undefined || never === undefined) {
+        throw new Error('expected a claim of two of this alert’s three messages');
+      }
+      await subject.store.markSent(accepted.messageId);
+      await subject.store.markFailed({
+        messageId: refused.messageId,
+        reason: 'NO_TARGET',
+        retryAfterMs: 0,
+      });
+      const sentAt = (await subject.messagesOf(lost.journeyId)).find(
+        ({ messageId }) => messageId === accepted.messageId,
+      )?.sentAt;
+
+      backInContact(
+        await subject.store.recordHeartbeat(await freshHeartbeat(subject, lost.journeyId)),
+      );
+
+      const resolvedAt = (await resolutionOf(subject, lost.journeyId, lost.alertId))?.resolvedAt;
+      const withdrawnAt = await withdrawnAtOf(subject, lost.journeyId);
+      const stored = new Map(
+        (await subject.messagesOf(lost.journeyId)).map((message) => [message.messageId, message]),
+      );
+      expect(withdrawnAt.get(refused.messageId)).toEqual(resolvedAt);
+      expect(withdrawnAt.get(never.messageId)).toEqual(resolvedAt);
+      expect(withdrawnAt.get(accepted.messageId)).toBeNull();
+      expect(stored.get(refused.messageId)).toMatchObject({
+        attempts: 1,
+        lastFailure: 'NO_TARGET',
+        sentAt: null,
+      });
+      expect(stored.get(never.messageId)).toMatchObject({ attempts: 0, sentAt: null });
+      expect(stored.get(accepted.messageId)?.sentAt).toEqual(sentAt);
+
+      const handedOut = async () =>
+        (await subject.store.claimDue({ limit: BATCH, leaseMs: 0 })).messages
+          .map(({ messageId }) => messageId)
+          .filter((messageId) => mine.includes(messageId));
+      expect(await handedOut()).toEqual([]);
+      // The port answers late for the refused one: failed again with no
+      // delay, then accepted. Each mark is kept, and neither brings it back.
+      await subject.store.markFailed({
+        messageId: refused.messageId,
+        reason: 'UNAVAILABLE',
+        retryAfterMs: 0,
+      });
+      expect(await handedOut()).toEqual([]);
+      await subject.store.markSent(refused.messageId);
+      expect(await handedOut()).toEqual([]);
+      const marked = (await subject.messagesOf(lost.journeyId)).find(
+        ({ messageId }) => messageId === refused.messageId,
+      );
+      expect(marked?.lastFailure).toBe('UNAVAILABLE');
+      expect(marked?.sentAt).toBeInstanceOf(Date);
+      expect((await withdrawnAtOf(subject, lost.journeyId)).get(refused.messageId)).toEqual(
+        resolvedAt,
+      );
+    },
+  },
+  {
+    name: 'LOST-03-AC8: a responder’s stand-down waits for their lost-contact message when it was handed over and is not due yet — until its lease ends while it may be in the port’s hands, until its retry once it failed — and is due at the store’s now for one sent or never handed over; a claim hands out each stand-down only once it is due',
+    async run(subject) {
+      const lost = await lostWith(subject, 4);
+      const mine = lost.messages.map(({ messageId }) => messageId);
+      // Short times, so the database's own clock can pass them in a test.
+      const lease = 4 * SECONDS;
+      const retry = 1 * SECONDS;
+      const claim = await subject.store.claimDue({ limit: 3, leaseMs: lease });
+      const [inThePortsHands, failing, sending] = claim.messages.filter(({ messageId }) =>
+        mine.includes(messageId),
+      );
+      const never = lost.messages.find(
+        ({ messageId }) => !claim.messages.some((claimed) => claimed.messageId === messageId),
+      );
+      if (
+        inThePortsHands === undefined ||
+        failing === undefined ||
+        sending === undefined ||
+        never === undefined
+      ) {
+        throw new Error('expected a claim of three of this alert’s four messages');
+      }
+      await subject.store.markFailed({
+        messageId: failing.messageId,
+        reason: 'UNAVAILABLE',
+        retryAfterMs: retry,
+      });
+      await subject.store.markSent(sending.messageId);
+      const dueOf = new Map(
+        (await subject.messagesOf(lost.journeyId)).map(({ messageId, nextAttemptAt }) => [
+          messageId,
+          nextAttemptAt,
+        ]),
+      );
+
+      const back = backInContact(
+        await subject.store.recordHeartbeat(await freshHeartbeat(subject, lost.journeyId)),
+      );
+
+      const resolvedAt = (await resolutionOf(subject, lost.journeyId, lost.alertId))?.resolvedAt;
+      const standDowns = ofKind(
+        await subject.messagesOf(lost.journeyId),
+        lost.alertId,
+        'BACK_IN_CONTACT',
+      );
+      const standDownOf = (recipientId: string) =>
+        standDowns.find((message) => message.recipientId === recipientId);
+      expect(standDownOf(inThePortsHands.recipientId)?.nextAttemptAt).toEqual(
+        dueOf.get(inThePortsHands.messageId),
+      );
+      expect(standDownOf(failing.recipientId)?.nextAttemptAt).toEqual(dueOf.get(failing.messageId));
+      expect(standDownOf(sending.recipientId)?.nextAttemptAt).toEqual(resolvedAt);
+      expect(standDownOf(never.recipientId)?.nextAttemptAt).toEqual(resolvedAt);
+
+      const standDownIds = back.messages.map(({ messageId }) => messageId);
+      const claimed = async () =>
+        recipientsOf(
+          (await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS })).messages.filter(
+            ({ messageId }) => standDownIds.includes(messageId),
+          ),
+        );
+      expect(await claimed()).toEqual([sending.recipientId, never.recipientId].sort());
+      await subject.letTimePass(retry + 500);
+      expect(await claimed()).toEqual([failing.recipientId]);
+      await subject.letTimePass(lease - retry);
+      expect(await claimed()).toEqual([inThePortsHands.recipientId]);
+    },
+  },
+  {
+    name: `LOST-03-AC12: a heartbeat a LOST_CONTACT journey already has, sent again later, is a duplicate and changes nothing; and ${String(RACERS)} different fresh heartbeats at once, ${String(RACE_ROUNDS)} times over, are each stored, exactly one bringing the journey back and every other recorded, with one resolution and one stand-down per responder; the one that brought it back, sent again, is a duplicate and writes nothing`,
+    async run(subject) {
+      for (let round = 0; round < RACE_ROUNDS; round += 1) {
+        const at = `round ${String(round)}`;
+        const now = await subject.now();
+        const { journeyId, responderIds } = await watched(subject, {
+          startedAt: ago(now, 2 * HOUR),
+          responders: 2,
+        });
+        // Its last heartbeat before the silence, whose answer was lost.
+        const beforeTheSilence = heartbeatFor(journeyId, { receivedAt: ago(now, HOUR) });
+        expect(await subject.store.recordHeartbeat(beforeTheSilence), at).toEqual(RECORDED);
+        const opened = await subject.store.openLostContactAlert({
+          journeyId,
+          afterMs: LOST_CONTACT_AFTER_MS,
+        });
+        expect(opened.outcome, at).toBe('opened');
+        const record = await alertRecordOf(subject, journeyId);
+
+        expect(
+          await subject.store.recordHeartbeat({
+            ...beforeTheSilence,
+            receivedAt: await subject.now(),
+          }),
+          at,
+        ).toEqual(DUPLICATE);
+        expect(await alertRecordOf(subject, journeyId), at).toEqual(record);
+        expect(await subject.lastHeartbeatAt(journeyId), at).toEqual(beforeTheSilence.receivedAt);
+
+        const receivedAt = await subject.now();
+        const racers = Array.from({ length: RACERS }, () =>
+          heartbeatFor(journeyId, { receivedAt, position: null }),
+        );
+        // Promise.all rejects if any heartbeat fails outright: none may.
+        const results = await Promise.all(
+          racers.map((heartbeat) => subject.store.recordHeartbeat(heartbeat)),
+        );
+
+        expect(results.map(({ outcome }) => outcome).sort(), at).toEqual(
+          ['back_in_contact', ...Array.from({ length: RACERS - 1 }, () => 'recorded')].sort(),
+        );
+        expect(await subject.heartbeatsOf(journeyId), at).toHaveLength(RACERS + 1);
+        expect(await subject.stateOf(journeyId), at).toBe('ACTIVE');
+        expect(
+          (await subject.alertsOf(journeyId)).map(({ state }) => state),
+          at,
+        ).toEqual(['RESOLVED']);
+        const after = await subject.messagesOf(journeyId);
+        expect(recipientsOf(after.filter(({ kind }) => kind === 'BACK_IN_CONTACT')), at).toEqual(
+          [...responderIds].sort(),
+        );
+
+        const winner = racers[results.findIndex(({ outcome }) => outcome === 'back_in_contact')];
+        if (winner === undefined) {
+          throw new Error('no heartbeat brought the journey back');
+        }
+        expect(
+          await subject.store.recordHeartbeat({ ...winner, receivedAt: await subject.now() }),
+          at,
+        ).toEqual(DUPLICATE);
+        expect(byMessage(await subject.messagesOf(journeyId)), at).toEqual(byMessage(after));
+      }
+    },
+  },
+  {
+    name: 'LOST-03-AC14: "I’m home" (recordHome) on a LOST_CONTACT journey ends it in one step: ENDED, end reason HOME at the store’s now; its alert RESOLVED at that now, resolution HOME; each unsent lost-contact message withdrawn, a stand-down held for one in the port’s hands; one HOME message per responder; the answer says it came from LOST_CONTACT and names the alert and the messages. Afterwards a heartbeat is answered ended and stores nothing, the overdue read never returns it, and the walker can start again (SM-04)',
+    async run(subject) {
+      const lost = await lostWith(subject, 3);
+      const mine = lost.messages.map(({ messageId }) => messageId);
+      const claim = await subject.store.claimDue({ limit: 1, leaseMs: LEASE_MS });
+      const [inThePortsHands] = claim.messages.filter(({ messageId }) => mine.includes(messageId));
+      if (inThePortsHands === undefined) {
+        throw new Error('expected the claim to take one of this alert’s messages');
+      }
+      const leaseEnd = (await subject.messagesOf(lost.journeyId)).find(
+        ({ messageId }) => messageId === inThePortsHands.messageId,
+      )?.nextAttemptAt;
+
+      const before = await subject.now();
+      const result = await subject.store.recordHome(lost.journeyId);
+      const after = await subject.now();
+
+      const home = endedHome(result);
+      expect(home.from).toBe('LOST_CONTACT');
+      expect(home.alertId).toBe(lost.alertId);
+      expect(await subject.stateOf(lost.journeyId)).toBe('ENDED');
+      const end = await subject.endOf(lost.journeyId);
+      expect(end?.endReason).toBe('HOME');
+      const endedAt = end?.endedAt ?? new Date(Number.NaN);
+      expect(endedAt.getTime()).toBeGreaterThanOrEqual(before.getTime());
+      expect(endedAt.getTime()).toBeLessThanOrEqual(after.getTime());
+      expect(await resolutionOf(subject, lost.journeyId, lost.alertId)).toEqual({
+        alertId: lost.alertId,
+        resolvedAt: endedAt,
+        resolution: 'HOME',
+      });
+      expect((await subject.alertsOf(lost.journeyId)).map(({ state }) => state)).toEqual([
+        'RESOLVED',
+      ]);
+      const messages = await subject.messagesOf(lost.journeyId);
+      const withdrawnAt = await withdrawnAtOf(subject, lost.journeyId);
+      for (const { messageId } of ofKind(messages, lost.alertId, 'LOST_CONTACT')) {
+        expect(withdrawnAt.get(messageId), messageId).toEqual(endedAt);
+      }
+      const standDowns = ofKind(messages, lost.alertId, 'HOME');
+      expect(recipientsOf(standDowns)).toEqual([...lost.responderIds].sort());
+      expect(messages.filter(({ kind }) => kind === 'BACK_IN_CONTACT')).toEqual([]);
+      for (const message of standDowns) {
+        expect(message.nextAttemptAt, message.recipientId).toEqual(
+          message.recipientId === inThePortsHands.recipientId ? leaseEnd : endedAt,
+        );
+      }
+      expect(byRecipient(home.messages)).toEqual(
+        standDowns.map(({ messageId, recipientId, kind }) => ({ messageId, recipientId, kind })),
+      );
+
+      expect(
+        await subject.store.recordHeartbeat(await freshHeartbeat(subject, lost.journeyId)),
+      ).toEqual(ENDED);
+      expect(await subject.heartbeatsOf(lost.journeyId)).toEqual([]);
+      const read = await subject.store.overdueJourneys(LOST_CONTACT_AFTER_MS);
+      expect(read.journeys.map(({ id }) => id)).not.toContain(lost.journeyId);
+      expect(await subject.store.unendedJourneyOf(lost.walkerId)).toBeNull();
+      const again = await subject.store.insertStarted({
+        walkerId: lost.walkerId,
+        deviceId: lost.deviceId,
+        responderIds: lost.responderIds,
+        startedAt: STARTED_AT,
+      });
+      expect(again.inserted).toBe(true);
+    },
+  },
+  {
+    name: 'LOST-03-AC15: "I’m home" (recordHome) on an ACTIVE journey ends it, end reason HOME at the store’s now, from ACTIVE, and touches no alert and writes no message — with no alert, and with only resolved ones; the overdue read and the open then never take it, and the walker can start again (SM-04)',
+    async run(subject) {
+      const now = await subject.now();
+      const silent = () =>
+        watched(subject, {
+          startedAt: ago(now, 2 * HOUR),
+          lastHeartbeatAt: ago(now, HOUR),
+          responders: 2,
+        });
+      const plain = await silent();
+      const withResolved = await silent();
+      const resolved = await subject.seedAlert({
+        journeyId: withResolved.journeyId,
+        state: 'RESOLVED',
+        openedAt: ago(now, 90 * MINUTE),
+        silentSince: ago(now, 95 * MINUTE),
+        resolvedAt: ago(now, 70 * MINUTE),
+        resolution: 'BACK_IN_CONTACT',
+      });
+      for (const recipientId of withResolved.responderIds) {
+        await subject.seedMessage({
+          alertId: resolved,
+          recipientId,
+          kind: 'LOST_CONTACT',
+          createdAt: ago(now, 90 * MINUTE),
+          nextAttemptAt: ago(now, 90 * MINUTE),
+          attempts: 1,
+          sentAt: ago(now, 90 * MINUTE),
+        });
+      }
+
+      for (const journey of [plain, withResolved]) {
+        const record = await alertRecordOf(subject, journey.journeyId);
+        const before = await subject.now();
+
+        expect(await subject.store.recordHome(journey.journeyId), journey.journeyId).toEqual({
+          outcome: 'home',
+          from: 'ACTIVE',
+          alertId: null,
+          messages: [],
+        });
+
+        const after = await subject.now();
+        expect(await subject.stateOf(journey.journeyId)).toBe('ENDED');
+        const end = await subject.endOf(journey.journeyId);
+        expect(end?.endReason).toBe('HOME');
+        expect(end?.endedAt?.getTime()).toBeGreaterThanOrEqual(before.getTime());
+        expect(end?.endedAt?.getTime()).toBeLessThanOrEqual(after.getTime());
+        expect(await alertRecordOf(subject, journey.journeyId)).toEqual({
+          ...record,
+          state: 'ENDED',
+        });
+        const read = await subject.store.overdueJourneys(LOST_CONTACT_AFTER_MS);
+        expect(read.journeys.map(({ id }) => id)).not.toContain(journey.journeyId);
+        expect(
+          await subject.store.openLostContactAlert({
+            journeyId: journey.journeyId,
+            afterMs: LOST_CONTACT_AFTER_MS,
+          }),
+        ).toEqual({ outcome: 'skipped' });
+        const again = await subject.store.insertStarted({
+          walkerId: journey.walkerId,
+          deviceId: journey.deviceId,
+          responderIds: journey.responderIds,
+          startedAt: STARTED_AT,
+        });
+        expect(again.inserted).toBe(true);
+      }
+    },
+  },
+  {
+    name: 'LOST-03-AC16: "I’m home" (recordHome) on a journey already ENDED — by an earlier "I’m home", or set directly — is answered ended and changes nothing: its end, its alerts and its messages stay as they were; for a journey that does not exist the store rejects (SM-04, SM-07, SM-08)',
+    async run(subject) {
+      const lost = await lostWith(subject, 2);
+      endedHome(await subject.store.recordHome(lost.journeyId));
+      const now = await subject.now();
+      const direct = await watched(subject, {
+        state: 'ENDED',
+        startedAt: ago(now, 2 * HOUR),
+        lastHeartbeatAt: ago(now, HOUR),
+      });
+
+      for (const journeyId of [lost.journeyId, direct.journeyId]) {
+        const record = await alertRecordOf(subject, journeyId);
+        const end = await subject.endOf(journeyId);
+
+        expect(await subject.store.recordHome(journeyId), journeyId).toEqual({ outcome: 'ended' });
+
+        expect(await alertRecordOf(subject, journeyId)).toEqual(record);
+        expect(await subject.endOf(journeyId)).toEqual(end);
+      }
+      expect(await subject.endOf(direct.journeyId)).toEqual({ endedAt: null, endReason: null });
+      await expect(subject.store.recordHome(syntheticUuid())).rejects.toThrow();
     },
   },
 ];
