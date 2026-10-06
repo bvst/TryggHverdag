@@ -68,9 +68,12 @@
  *     to the store's now. Under five minutes, the journey moves back to
  *     ACTIVE and its alert is resolved, all in the heartbeat's one step; five
  *     minutes or more, the heartbeat is recorded and nothing else changes;
- *   - "I'm home" (`recordHome`) ends an ACTIVE or LOST_CONTACT journey, HOME,
- *     at the store's now, and from LOST_CONTACT resolves its alert; a journey
- *     already ENDED is answered `ended` and nothing changes;
+ *   - "I'm home" (`recordHome`) decides by the home rule under the journey's
+ *     "lock", as the adapter asks the domain there (review loop 1, AR-04): a
+ *     walker or a device that is not the journey's makes it reject and write
+ *     nothing; a journey already ENDED is answered `already_ended` and
+ *     nothing changes; an ACTIVE or LOST_CONTACT journey is ended, HOME, at
+ *     the store's now, and from LOST_CONTACT its alert is resolved;
  *   - resolving is one step: the journey's one unresolved alert, whatever its
  *     state, goes to RESOLVED at now with the resolution; every lost-contact
  *     message of it not sent and not withdrawn is withdrawn at now, keeping
@@ -82,6 +85,11 @@
  *     move stands. No responder row: no stand-down, and the resolution
  *     stands. A second stand-down of a kind for (alert, recipient) is refused,
  *     as the unique index refuses it, and nothing of the step is kept;
+ *   - an open also withdraws, at its now, every unsent and not yet withdrawn
+ *     message of the journey's earlier alerts whose kind is not LOST_CONTACT
+ *     (their stand-downs), in the same step as the new alert: so an earlier
+ *     alert's "back in contact" never reaches the port after the new alert's
+ *     lost-contact push (review loop 1, approach item 4, step 5);
  *   - a fake given no clock throws when asked whether contact is back, or to
  *     end a journey, as it throws when asked about silence.
  *
@@ -170,7 +178,8 @@ export type RecordHeartbeatResult =
 /**
  * "I'm home" (LOST-03, D-110): ended now, from the state the journey's row was
  * in, with the alert it resolved, null when none, and the stand-downs
- * written; or the journey had already ENDED, and nothing changed.
+ * written; or the journey had already ENDED, and nothing changed
+ * (`already_ended`, review loop 1: `ended` stays the heartbeat's word).
  */
 export type RecordHomeResult =
   | {
@@ -179,7 +188,14 @@ export type RecordHomeResult =
       alertId: string | null;
       messages: AlertMessage[];
     }
-  | { outcome: 'ended' };
+  | { outcome: 'already_ended' };
+
+/** "I'm home" as the store takes it: the journey, and who asks, for the home rule under the lock. */
+export interface HomeToRecord {
+  journeyId: string;
+  walkerId: string;
+  deviceId: string;
+}
 
 /** A journey's latest heartbeat: no coordinates, only whether it carried a position. */
 export interface LatestHeartbeat {
@@ -340,11 +356,14 @@ export interface FakeJourneyStore {
   /** The heartbeat with the greatest receive time, a tie to the one stored last; null if none. */
   latestHeartbeatOf(journeyId: string): Promise<LatestHeartbeat | null>;
   /**
-   * "I'm home" (LOST-03, D-110): ends the journey, HOME, at now, from the state
-   * its row is in, resolving its alert when that is LOST_CONTACT; answers
-   * `ended` for a journey already ENDED. Needs a clock to end one.
+   * "I'm home" (LOST-03, D-110): decides by the home rule under the row's
+   * lock. Ends the journey, HOME, at now, from the state its row is in,
+   * resolving its alert when that is LOST_CONTACT; answers `already_ended`
+   * for a journey already ENDED; rejects, writing nothing, for a walker or a
+   * device that is not the journey's, or a journey that does not exist.
+   * Needs a clock to end one.
    */
-  recordHome(journeyId: string): Promise<RecordHomeResult>;
+  recordHome(home: HomeToRecord): Promise<RecordHomeResult>;
 
   /** The ACTIVE journeys silent for `afterMs` or more, without locking, and now. Needs a clock. */
   overdueJourneys(afterMs: number): Promise<OverdueJourneys>;
@@ -1046,26 +1065,55 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
             };
       });
     },
-    recordHome(journeyId) {
+    recordHome(home) {
+      if (typeof home !== 'object' || (home as unknown) === null) {
+        // The interface changed in review loop 1: the walker and the device
+        // come too, for the home rule under the lock. A caller still passing
+        // the ID alone is told so, not guessed for.
+        return Promise.reject(
+          new Error(
+            'fakeJourneyStore.recordHome takes { journeyId, walkerId, deviceId }, not a journey ID alone',
+          ),
+        );
+      }
+      const { journeyId, walkerId, deviceId } = home;
       // As a heartbeat: the journey's row first, waited for while held.
       const waitForRow = () => untilReleased(journeyId.toLowerCase());
       const step = (now: Date | null): RecordHomeResult | typeof NEEDS_NOW => {
         const journey = journeyNamed(journeyId);
+        // The home rule, in its order, asked under the "lock" (approach item
+        // 5, review loop 1): the module asked the same rule about the same
+        // journey, so a refusal here cannot happen, and is thrown, never
+        // guessed past.
         if (journey === undefined) {
           throw new Error(
             `fakeJourneyStore.recordHome: no journey ${journeyId}; nothing deletes a journey, so ` +
               'one that was read and is gone is an error, not a guess',
           );
         }
+        if (journey.walkerId !== asStored(walkerId)) {
+          throw new Error(
+            'fakeJourneyStore.recordHome: the home rule refused under the lock ' +
+              '(JOURNEY_NOT_FOUND: not the walker’s journey); nothing is written',
+          );
+        }
         if (journey.state === 'ENDED') {
-          return { outcome: 'ended' };
+          return { outcome: 'already_ended' };
+        }
+        if (journey.deviceId !== asStored(deviceId)) {
+          throw new Error(
+            'fakeJourneyStore.recordHome: the home rule refused under the lock ' +
+              '(NOT_THE_JOURNEYS_DEVICE); nothing is written',
+          );
         }
         if (now === null) {
           return NEEDS_NOW;
         }
-        // The locked state decides, not the module's read (approach item 5).
+        // The locked state decides, not the module's read (approach item 5):
+        // the rule resolves the alert only from LOST_CONTACT.
         const from = journey.state;
-        const resolution = from === 'LOST_CONTACT' ? planResolution(journey, 'HOME', now) : null;
+        const resolvesAlert = from === 'LOST_CONTACT';
+        const resolution = resolvesAlert ? planResolution(journey, 'HOME', now) : null;
         journey.state = 'ENDED';
         journey.endedAt = new Date(now.getTime());
         journey.endReason = 'HOME';
@@ -1188,6 +1236,25 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
           lastFailure: null,
           withdrawnAt: null,
         }));
+        // Review loop 1 (approach item 4, step 5): the journey's earlier
+        // alerts' stand-downs not yet sent nor withdrawn are withdrawn at this
+        // now, in this same step, before the new alert's messages: an
+        // earlier "back in contact" must never reach the port after this
+        // alert's lost-contact push. Their lost-contact messages were
+        // withdrawn when those alerts resolved.
+        const earlierAlertIds = new Set(
+          alerts.filter((alert) => alert.journeyId === journey.id).map(({ id }) => id),
+        );
+        for (const message of outbox) {
+          if (
+            earlierAlertIds.has(message.alertId) &&
+            message.kind !== 'LOST_CONTACT' &&
+            message.sentAt === null &&
+            message.withdrawnAt === null
+          ) {
+            message.withdrawnAt = new Date(now.getTime());
+          }
+        }
         journey.state = 'LOST_CONTACT';
         alerts.push({
           id: alertId,

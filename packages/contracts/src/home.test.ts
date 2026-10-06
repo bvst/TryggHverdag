@@ -11,6 +11,7 @@
 // What the route does with each request is proven through the API, at L6
 // (contact.system.test.ts); this holds what the contract publishes. The
 // published OpenAPI description is openapi.test.ts's.
+import { randomUUID } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
 import {
   badRequestError,
@@ -97,6 +98,17 @@ describe('SM-04: the "I’m home" route, as the contract holds it', () => {
     }
     expect(Object.keys(errorMap).sort()).toEqual([...codes, 'UNAUTHORIZED'].sort());
     expect(errorMap['UNAUTHORIZED']).toBe(deviceCredentialErrors.UNAUTHORIZED);
+  });
+
+  // Review loop 1 (the spec's item 7a; test-auditor): the route
+  // lower-cases the journey's ID at the edge, as the other routes do, so
+  // the same journey is named in either case.
+  test('LOST-03-AC18: the request schema lower-cases a journey ID given in upper case', () => {
+    const journeyId = randomUUID();
+
+    expect(
+      homeRequestSchema.parse({ params: { journeyId: journeyId.toUpperCase() } }).params.journeyId,
+    ).toBe(journeyId.toLowerCase());
   });
 
   test('LOST-03-AC18: its description says it needs a device credential, that only the device that started the journey may end it, and that a 200 and a 409 both mean the journey is over', () => {

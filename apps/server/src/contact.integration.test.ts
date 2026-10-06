@@ -950,6 +950,61 @@ describe('LOST-03 and AR-05: the heartbeat, the move, the resolution, the withdr
       [...responderIds].sort(),
     );
   });
+
+  // Review loop 1 (the spec's item 1c; D-112 amended; LOST-02-AC12): the
+  // open's withdrawal of earlier stand-downs is part of the open's one
+  // transaction, so an open that rolls back withdraws nothing.
+  test('LOST-03-AC8: an open rolled back by a test-only trigger on its second message withdraws no earlier stand-down', async () => {
+    const { journeyId, responderIds } = await lost({ responders: 2 });
+    const back = await store().recordHeartbeat({
+      journeyId,
+      eventId: syntheticEventId(),
+      receivedAt: new Date(await databaseNowMs()),
+      batteryLevel: null,
+      position: null,
+    });
+    expect(back.outcome).toBe('back_in_contact');
+    // Silent again, ten minutes, put there directly: overdue for A2.
+    await connection().query(
+      "update journeys set last_heartbeat_at = now() - interval '10 minutes' where id = $1",
+      [journeyId],
+    );
+    const standDowns = () =>
+      messagesOf(journeyId).then((messages) => ofKind(messages, 'BACK_IN_CONTACT'));
+    expect(recipientsOf(await standDowns())).toEqual([...responderIds].sort());
+    expect((await standDowns()).map(({ withdrawnAt }) => withdrawnAt)).toEqual([null, null]);
+    const before = await recordOf(journeyId);
+    const { create, drop } = refuseASecondStandDown('LOST_CONTACT');
+
+    await withTrigger(create, drop, async () => {
+      await expect(
+        store().openLostContactAlert({ journeyId, afterMs: LOST_CONTACT_AFTER_MS }),
+      ).rejects.toThrow();
+
+      expect(await recordOf(journeyId)).toEqual(before);
+    });
+    expect(before.journey.state).toBe('ACTIVE');
+    expect(before.alerts.map(({ state }) => state)).toEqual(['RESOLVED']);
+
+    // Control: without the trigger, the same open opens A2 and withdraws
+    // both stand-downs, at its own now().
+    const opened = await store().openLostContactAlert({
+      journeyId,
+      afterMs: LOST_CONTACT_AFTER_MS,
+    });
+    if (opened.outcome !== 'opened') {
+      throw new Error(`expected the journey to be opened again, but it was ${opened.outcome}`);
+    }
+    const openedAt = await connection().query<{ ms: string }>(
+      `select ${MS('opened_at')} as ms from alerts where id = $1`,
+      [opened.alertId],
+    );
+    const openedMs = Number(openedAt.rows[0]?.ms);
+    expect((await standDowns()).map(({ withdrawnAt }) => withdrawnAt)).toEqual([
+      openedMs,
+      openedMs,
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

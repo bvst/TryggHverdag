@@ -307,10 +307,17 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       'LOST-03-AC6: every responder is stood down once, whatever became of their lost-contact message — accepted, failed and due again, or never claimed; a second fresh heartbeat, a sweep and a claim add none, and one message per (alert, recipient, kind) holds a second stand-down out',
       'LOST-03-AC7: when contact comes back, a lost-contact message not yet accepted is withdrawn at the store’s now, keeping its attempts and its last failure, and a claim never hands it out again, whatever its due time and whatever a later mark says; one accepted is left as it was, sent and not withdrawn',
       'LOST-03-AC8: a responder’s stand-down waits for their lost-contact message when it was handed over and is not due yet — until its lease ends while it may be in the port’s hands, until its retry once it failed — and is due at the store’s now for one sent or never handed over; a claim hands out each stand-down only once it is due',
+      // Joined in review loop 1 (the spec's items 9a and 1b).
+      'LOST-03-AC8: a responder whose lost-contact message failed and whose retry time had already passed when contact came back is not held: their stand-down is due at the alert’s resolved_at',
+      'LOST-03-AC8: an open withdraws the journey’s earlier alerts’ unsent stand-downs at the store’s now, and leaves alone those already sent, every other journey’s messages and its own new ones; an open that skips withdraws nothing',
       'LOST-03-AC12: a heartbeat a LOST_CONTACT journey already has, sent again later, is a duplicate and changes nothing; and 10 different fresh heartbeats at once, 5 times over, are each stored, exactly one bringing the journey back and every other recorded, with one resolution and one stand-down per responder; the one that brought it back, sent again, is a duplicate and writes nothing',
       'LOST-03-AC14: "I’m home" (recordHome) on a LOST_CONTACT journey ends it in one step: ENDED, end reason HOME at the store’s now; its alert RESOLVED at that now, resolution HOME; each unsent lost-contact message withdrawn, a stand-down held for one in the port’s hands; one HOME message per responder; the answer says it came from LOST_CONTACT and names the alert and the messages. Afterwards a heartbeat is answered ended and stores nothing, the overdue read never returns it, and the walker can start again (SM-04)',
       'LOST-03-AC15: "I’m home" (recordHome) on an ACTIVE journey ends it, end reason HOME at the store’s now, from ACTIVE, and touches no alert and writes no message — with no alert, and with only resolved ones; the overdue read and the open then never take it, and the walker can start again (SM-04)',
-      'LOST-03-AC16: "I’m home" (recordHome) on a journey already ENDED — by an earlier "I’m home", or set directly — is answered ended and changes nothing: its end, its alerts and its messages stay as they were; for a journey that does not exist the store rejects (SM-04, SM-07, SM-08)',
+      // RG-03 (review loop 1, the spec's item 3): renamed with its answer,
+      // already_ended, not ended.
+      'LOST-03-AC16: "I’m home" (recordHome) on a journey already ENDED — by an earlier "I’m home", or set directly — is answered already_ended and changes nothing: its end, its alerts and its messages stay as they were; for a journey that does not exist the store rejects (SM-04, SM-07, SM-08)',
+      // Joined in review loop 1 (the spec's item 2a).
+      'LOST-03-AC16: recordHome decides by the home rule under the lock: a walker or a device that is not the journey’s makes it reject and write nothing; an ENDED journey answers already_ended and writes nothing; an ACTIVE one is ended without resolving anything; a LOST_CONTACT one is ended and its alert resolved with resolution HOME',
     ]);
     expect(RACERS).toBeGreaterThanOrEqual(10);
     expect(RACE_ROUNDS).toBeGreaterThanOrEqual(5);
@@ -1323,6 +1330,21 @@ async function lostStore(responders = 2) {
   return { ...watched, alertId: opened.alertId };
 }
 
+/**
+ * "I'm home" for this journey as the store takes it since review loop 1:
+ * from the journey's own walker and the device that started it, as read.
+ */
+async function homeFor(
+  store: ReturnType<typeof fakeJourneyStore>,
+  journeyId: string,
+): Promise<{ journeyId: string; walkerId: string; deviceId: string }> {
+  const journey = await store.journeyForHeartbeat(journeyId);
+  if (journey === null) {
+    throw new Error(`no journey ${journeyId} to say "I’m home" for`);
+  }
+  return { journeyId, walkerId: journey.walkerId, deviceId: journey.deviceId };
+}
+
 describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
   test('a store given no clock refuses, loudly and naming the clock, to say whether contact is back or to end a journey, and changes nothing; a heartbeat it needs no time for is answered without one', async () => {
     const store = fakeJourneyStore();
@@ -1344,18 +1366,27 @@ describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
       startedAt: AT,
     });
 
+    // Review loop 1: recordHome takes the walker and the device too.
     await expect(store.recordHeartbeat(heartbeat(lost))).rejects.toThrow(/clock/);
-    await expect(store.recordHome(lost)).rejects.toThrow(/clock/);
-    await expect(store.recordHome(active)).rejects.toThrow(/clock/);
+    await expect(store.recordHome({ journeyId: lost, walkerId, deviceId })).rejects.toThrow(
+      /clock/,
+    );
+    const activeHome = await homeFor(store, active);
+    await expect(store.recordHome(activeHome)).rejects.toThrow(/clock/);
     expect(store.heartbeats()).toEqual([]);
     expect(store.journeys().map(({ state }) => state)).toEqual(['LOST_CONTACT', 'ACTIVE']);
     expect(store.endOf(lost)).toEqual({ endedAt: null, endReason: null });
 
     // An ACTIVE journey's heartbeat asks nothing about contact.
     expect(await store.recordHeartbeat(heartbeat(active))).toEqual({ outcome: 'recorded' });
-    // An ended journey is answered ended, before any time is needed.
+    // An ended journey is answered already_ended, before any time is needed.
+    // RG-03 (review loop 1, the spec's item 3): this expected { outcome:
+    // 'ended' }; the store's answer is now already_ended. The heartbeat's
+    // answer below keeps `ended`.
     store.setState(lost, 'ENDED');
-    expect(await store.recordHome(lost)).toEqual({ outcome: 'ended' });
+    expect(await store.recordHome({ journeyId: lost, walkerId, deviceId })).toEqual({
+      outcome: 'already_ended',
+    });
     expect(await store.recordHeartbeat(heartbeat(lost))).toEqual({ outcome: 'ended' });
   });
 
@@ -1409,7 +1440,7 @@ describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
     const outbox = store.outbox();
 
     await expect(store.recordHeartbeat(heartbeat(journeyId, CLOCK_AT))).rejects.toThrow(/unique/);
-    await expect(store.recordHome(journeyId)).rejects.toThrow(/unique/);
+    await expect(store.recordHome(await homeFor(store, journeyId))).rejects.toThrow(/unique/);
 
     expect(store.heartbeats()).toEqual([]);
     expect(store.journeys()[0]?.state).toBe('LOST_CONTACT');
@@ -1423,14 +1454,14 @@ describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
     const error = new Error('the database went away');
     store.failWith(error, 'recordHome');
 
-    await expect(store.recordHome(journeyId)).rejects.toBe(error);
+    await expect(store.recordHome(await homeFor(store, journeyId))).rejects.toBe(error);
     expect(store.journeys()[0]?.state).toBe('LOST_CONTACT');
 
     store.recover();
     store.beforeNext('recordHome', () => {
       clock.advance(1_000);
     });
-    expect((await store.recordHome(journeyId)).outcome).toBe('home');
+    expect((await store.recordHome(await homeFor(store, journeyId))).outcome).toBe('home');
     expect(store.endOf(journeyId)).toEqual({
       endedAt: new Date(CLOCK_AT.getTime() + 1_000),
       endReason: 'HOME',
@@ -1459,7 +1490,9 @@ describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
 
     store.hold(journeyId);
     let home: unknown = null;
-    const homeAnswer = store.recordHome(journeyId).then((answer) => (home = answer));
+    const homeAnswer = store
+      .recordHome(await homeFor(store, journeyId))
+      .then((answer) => (home = answer));
     await settled();
     expect(home).toBeNull();
     store.release(journeyId);
@@ -1526,7 +1559,7 @@ describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
 
   test('what alerts(), outbox() and endOf() hand back cannot change what it holds, the new times included; and journeys() keeps its shape, with no end in it', async () => {
     const { store, journeyId } = await lostStore(1);
-    await store.recordHome(journeyId);
+    await store.recordHome(await homeFor(store, journeyId));
 
     const [alert] = store.alerts();
     const [message] = store.outbox();
@@ -1563,5 +1596,91 @@ describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
 
   test('the test kit hands out the message kinds, in the server’s order', () => {
     expect(kit.MESSAGE_KINDS).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME']);
+  });
+});
+
+describe('fakeJourneyStore: review loop 1 of back in contact and "I’m home" (LOST-03)', () => {
+  test('recordHome given a journey ID alone, as before review loop 1, is refused and names what it takes, writing nothing', async () => {
+    const { store, journeyId } = await lostStore(1);
+    const outbox = store.outbox();
+
+    await expect(
+      store.recordHome(journeyId as unknown as Parameters<typeof store.recordHome>[0]),
+    ).rejects.toThrow(/\{ journeyId, walkerId, deviceId \}/);
+
+    expect(store.journeys()[0]?.state).toBe('LOST_CONTACT');
+    expect(store.outbox()).toEqual(outbox);
+  });
+
+  test('a refusal of the home rule under the lock rejects naming the rule’s reason, with the walker’s ID in any case read as the stored one', async () => {
+    const { store, journeyId, walkerId, deviceId } = await lostStore(1);
+    const stranger = store.addUser();
+
+    await expect(
+      store.recordHome({ journeyId, walkerId: stranger, deviceId: store.addDevice(stranger) }),
+    ).rejects.toThrow(/JOURNEY_NOT_FOUND/);
+    await expect(
+      store.recordHome({ journeyId, walkerId, deviceId: store.addDevice(walkerId) }),
+    ).rejects.toThrow(/NOT_THE_JOURNEYS_DEVICE/);
+    expect(store.endOf(journeyId)).toEqual({ endedAt: null, endReason: null });
+
+    const upper = {
+      journeyId: journeyId.toUpperCase(),
+      walkerId: walkerId.toUpperCase(),
+      deviceId: deviceId.toUpperCase(),
+    };
+    expect((await store.recordHome(upper)).outcome).toBe('home');
+  });
+
+  test('an open that fails, its journey having no responder rows, withdraws no earlier stand-down: the withdrawal is part of the open, all or nothing', async () => {
+    const { clock, store, journeyId } = await lostStore(2);
+    await store.recordHeartbeat(heartbeat(journeyId, CLOCK_AT));
+    const standDowns = store.outbox().filter(({ kind }) => kind === 'BACK_IN_CONTACT');
+    expect(standDowns).toHaveLength(2);
+    clock.advance(FIVE_MINUTES);
+    store.removeResponders(journeyId);
+    const outbox = store.outbox();
+
+    await expect(store.openLostContactAlert({ journeyId, afterMs: FIVE_MINUTES })).rejects.toThrow(
+      /no responder/,
+    );
+
+    expect(store.outbox()).toEqual(outbox);
+    expect(store.alerts()).toHaveLength(1);
+    expect(store.journeys()[0]?.state).toBe('ACTIVE');
+  });
+
+  test('an open withdraws only the journey’s earlier stand-downs: an unsent lost-contact message of an earlier alert, which the code never leaves, is left as it is', async () => {
+    const { store, journeyId, responderIds } = watchedStore({ silentForMs: FIVE_MINUTES });
+    const earlier = store.seedAlert({
+      journeyId,
+      state: 'RESOLVED',
+      openedAt: CLOCK_AT,
+      silentSince: CLOCK_AT,
+      resolvedAt: CLOCK_AT,
+      resolution: 'BACK_IN_CONTACT',
+    });
+    const lostContact = store.seedMessage({
+      alertId: earlier,
+      recipientId: responderIds[0] ?? '',
+      kind: 'LOST_CONTACT',
+      createdAt: CLOCK_AT,
+      nextAttemptAt: CLOCK_AT,
+    });
+    const standDown = store.seedMessage({
+      alertId: earlier,
+      recipientId: responderIds[0] ?? '',
+      kind: 'BACK_IN_CONTACT',
+      createdAt: CLOCK_AT,
+      nextAttemptAt: CLOCK_AT,
+    });
+
+    expect((await store.openLostContactAlert({ journeyId, afterMs: FIVE_MINUTES })).outcome).toBe(
+      'opened',
+    );
+
+    const withdrawnAt = new Map(store.outbox().map((m) => [m.messageId, m.withdrawnAt]));
+    expect(withdrawnAt.get(standDown)).toEqual(CLOCK_AT);
+    expect(withdrawnAt.get(lostContact)).toBeNull();
   });
 });

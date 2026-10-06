@@ -817,6 +817,87 @@ describe('LOST-03: at the push port, a stand-down never overtakes the lost-conta
   });
 });
 
+describe('LOST-03 and LOST-02: no overtaking across alerts — a new alert withdraws the earlier alert’s unsent stand-downs', () => {
+  // Review loop 1 (the spec's item 1a; D-112 amended): the scenario
+  // safety-reviewer reproduced. A stand-down that cannot be delivered is
+  // retried for ever, so without the open's withdrawal an earlier alert's
+  // "back in contact" could reach a responder after a later alert's
+  // lost-contact push, while that alert is open: a false all-clear in the
+  // middle of a real alert. The open is LOST-02's code; what it now
+  // withdraws extends what LOST-02-AC9 says it writes.
+  test('LOST-03-AC8: with a failing push, alert A1 opens, a heartbeat resolves it, the journey stays silent until A2 opens, and then the push recovers: the port never accepts A1’s BACK_IN_CONTACT after A2’s LOST_CONTACT, because A2’s open withdrew it', async () => {
+    const w = world();
+    const walker = w.walker();
+    const responders = [w.user(), w.user()];
+    const journeyId = await w.start(walker, responders);
+    await w.heartbeat(walker, journeyId);
+    for (const responder of responders) {
+      w.push.failFor(responder, 'UNAVAILABLE');
+    }
+
+    // A1 opens at five minutes; its lost-contact pushes fail.
+    await w.runUntil(new Date(START.getTime() + FIVE_MINUTES));
+    const [a1] = w.alertsOf(journeyId);
+    expect(a1?.state).toBe('OPEN');
+    // A minute later the phone is back: A1 resolved, its stand-downs written,
+    // and every push still failing.
+    await w.runUntil(new Date(START.getTime() + FIVE_MINUTES + MINUTE));
+    await w.heartbeat(walker, journeyId);
+    const backAt = await w.clock.now();
+    expect(w.alertsOf(journeyId).map(({ state }) => state)).toEqual(['RESOLVED']);
+    // Then silence again, until A2 opens five minutes after that heartbeat.
+    await w.runUntil(new Date(backAt.getTime() + FIVE_MINUTES));
+    expect(w.stateOf(journeyId)).toBe('LOST_CONTACT');
+    const a2 = w.alertsOf(journeyId).find(({ id }) => id !== a1?.id);
+    expect(a2?.state).toBe('OPEN');
+
+    // The push recovers, and the loops run on.
+    w.push.recover();
+    await w.runUntil(new Date(backAt.getTime() + FIVE_MINUTES + 5 * MINUTE));
+
+    const alertOf = new Map(w.store.outbox().map(({ messageId, alertId }) => [messageId, alertId]));
+    const labelled = (
+      messages: readonly { messageId: string; recipientId: string; kind: string }[],
+    ) =>
+      messages.map(({ messageId, recipientId, kind }) => ({
+        alertId: alertOf.get(messageId),
+        recipientId,
+        kind,
+      }));
+    const accepted = labelled(w.push.accepted);
+    for (const responder of responders) {
+      const theirs = accepted.filter(({ recipientId }) => recipientId === responder);
+      const a2Lost = theirs.findIndex(
+        ({ alertId, kind }) => alertId === a2?.id && kind === 'LOST_CONTACT',
+      );
+      expect(a2Lost, `${responder}: A2’s LOST_CONTACT was accepted`).toBeGreaterThanOrEqual(0);
+      expect(
+        theirs
+          .slice(a2Lost)
+          .filter(({ alertId, kind }) => alertId === a1?.id && kind === 'BACK_IN_CONTACT'),
+        `${responder}: A1’s BACK_IN_CONTACT after A2’s LOST_CONTACT`,
+      ).toEqual([]);
+    }
+    // Because A2's open withdrew A1's stand-downs, at its own now, and none
+    // was handed to the port again once A2 had opened.
+    const a1StandDowns = w
+      .messagesOf(journeyId)
+      .filter(({ alertId, kind }) => alertId === a1?.id && kind === 'BACK_IN_CONTACT');
+    expect(recipientsOf(a1StandDowns)).toEqual([...responders].sort());
+    for (const standDown of a1StandDowns) {
+      expect(standDown).toMatchObject({ sentAt: null, withdrawnAt: a2?.openedAt });
+    }
+    const handed = labelled(w.push.messages);
+    const firstOfA2 = handed.findIndex(({ alertId }) => alertId === a2?.id);
+    expect(firstOfA2).toBeGreaterThanOrEqual(0);
+    expect(
+      handed
+        .slice(firstOfA2)
+        .filter(({ alertId, kind }) => alertId === a1?.id && kind === 'BACK_IN_CONTACT'),
+    ).toEqual([]);
+  });
+});
+
 describe('LOST-03 and SM-04: every message is content-free, with an opaque ID of its own (D-086, D-087)', () => {
   test('LOST-03-AC9: every message the push port receives — the lost-contact alerts, and the stand-downs of each kind, BACK_IN_CONTACT and HOME — has exactly messageId, recipientId and kind, its kind one of MESSAGE_KINDS; every messageId a UUID of its own, equal to no user’s, walker’s, journey’s, alert’s or device’s ID', async () => {
     const w = world();
@@ -1331,6 +1412,30 @@ describe('SM-04, SM-07, SM-08 and SEC-07: only the journey’s own device ends i
       expect(w.log.events).toEqual([{ event: 'home_failed', stage, code }]);
     },
   );
+
+  // Review loop 1 (the spec's item 7b; test-auditor): the route lower-cases
+  // the journey's ID at the edge, so the ID in upper case names the same
+  // journey, and the line names it as the database writes it.
+  test('LOST-03-AC16: “I’m home” with the journey’s ID in upper case is 200 ENDED; sent again it is 409 JOURNEY_ENDED, and the home_ignored line names the ID in lower case', async () => {
+    const w = world();
+    const { walker, journeyId } = await lost(w, 2);
+    expect(journeyId).toMatch(LOWER_UUID);
+    const upper = journeyId.toUpperCase();
+
+    const first = await w.home(walker, upper);
+    expect({ status: first.status, body: first.body }).toEqual({ status: 200, body: ENDED });
+    expect(w.stateOf(journeyId)).toBe('ENDED');
+    expect(w.store.endOf(journeyId).endReason).toBe('HOME');
+    const lines = w.log.events.length;
+
+    const again = await w.home(walker, upper);
+
+    expect(again.status).toBe(409);
+    expect(codeOf(again)).toBe('JOURNEY_ENDED');
+    expect(w.log.events.slice(lines)).toEqual([
+      { event: 'home_ignored', reason: 'JOURNEY_ENDED', journeyId },
+    ]);
+  });
 });
 
 describe('SM-04 and SM-09: "I’m home" is all or nothing, and meets the watchdog and the heartbeat on the row', () => {
@@ -1491,6 +1596,38 @@ describe('PRIV-07 and LOST-03: nothing personal reaches a log', () => {
 
     expect(markersIn(written, markers)).toEqual([]);
     for (const answer of result) {
+      expect(markersIn(`${answer.text}\n${answer.headers}`, markers)).toEqual([]);
+    }
+  });
+
+  // Review loop 1 (the spec's item 4a; privacy-security-reviewer): with the
+  // route's detailed input, oRPC keeps the request's headers, the device
+  // credential among them, in a validation error's cause.data. Nothing may
+  // print that error. The registered device's credential is generated at run
+  // time, so it is the marker.
+  test('LOST-03-AC19: a 400 from the “I’m home” route, for a known device whose credential is a run-time marker and a body holding a key, writes nothing to stdout, stderr or the console that holds the credential; the capture sees the production log’s lines', async () => {
+    const w = world({ log: createLog() });
+    const { walker, journeyId } = await lost(w, 1);
+    const markers = [walker.credential];
+
+    const { written, result } = await captured(async () => {
+      const refused = [
+        await w.home(walker, journeyId, { body: { note: 'synthetic' } }),
+        await w.home(walker, journeyId, { body: { journeyId } }),
+        await w.home(walker, 'not-a-uuid', { body: { note: 'synthetic' } }),
+      ];
+      // Control: a line through the production log, in the same capture.
+      const ended = await w.home(walker, journeyId);
+      const again = await w.home(walker, journeyId);
+      return { refused, ended, again };
+    });
+
+    expect(result.refused.map(({ status }) => status)).toEqual([400, 400, 400]);
+    expect(result.ended.status).toBe(200);
+    expect(result.again.status).toBe(409);
+    expect(written).toContain('"event":"home_ignored"');
+    expect(markersIn(written, markers)).toEqual([]);
+    for (const answer of [...result.refused, result.ended, result.again]) {
       expect(markersIn(`${answer.text}\n${answer.headers}`, markers)).toEqual([]);
     }
   });

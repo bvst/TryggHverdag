@@ -242,7 +242,11 @@ async function journeysOf(walkerId: string): Promise<JourneyAsStored[]> {
   }));
 }
 
-/** Ends a journey directly: nothing in the code can end one yet. */
+/**
+ * Ends a journey directly, as a test's own setup, without the "I'm home"
+ * route or any rule: no end time and no end reason, as a journey ended by
+ * hand in the database has neither.
+ */
 async function endJourney(journeyId: string): Promise<void> {
   await connection().query("update journeys set state = 'ENDED' where id = $1", [journeyId]);
 }

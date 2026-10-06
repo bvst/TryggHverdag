@@ -154,8 +154,15 @@ export interface JourneyStoreUnderTest {
     ): Promise<{ id: string; walkerId: string; deviceId: string; state: string } | null>;
     recordHeartbeat(heartbeat: HeartbeatToRecord): Promise<RecordHeartbeatResult>;
     latestHeartbeatOf(journeyId: string): Promise<LatestHeartbeat | null>;
-    /** "I'm home" (LOST-03, D-110). */
-    recordHome(journeyId: string): Promise<RecordHomeResult>;
+    /**
+     * "I'm home" (LOST-03, D-110): the journey, and the walker and device
+     * the home rule is asked with under the lock (review loop 1).
+     */
+    recordHome(home: {
+      journeyId: string;
+      walkerId: string;
+      deviceId: string;
+    }): Promise<RecordHomeResult>;
   };
   /** A new user, by the store's own means: a row in the real table, an entry in the fake. */
   addUser(): Promise<string>;
@@ -176,7 +183,11 @@ export interface JourneyStoreUnderTest {
   }): Promise<string>;
   /** Every journey the walker has, as stored, in any order. */
   journeysOf(walkerId: string): Promise<JourneyAsStored[]>;
-  /** Ends the journey directly, as a test's own setup: nothing in the code can end one yet. */
+  /**
+   * Ends the journey directly, as a test's own setup, without the "I'm home"
+   * route or any rule: no end time and no end reason, as a journey ended by
+   * hand in the database has neither.
+   */
   endJourney(journeyId: string): Promise<void>;
   /** The device the journey records as the one that started it, or null if there is no such journey. */
   deviceOf(journeyId: string): Promise<string | null>;
@@ -596,12 +607,20 @@ function within<T>(ms: number, promise: Promise<T>, what: string): Promise<T> {
   });
 }
 
-/** Silences, in milliseconds, around the threshold and far from it: those a margin cannot judge left out. */
+/**
+ * Silences, in milliseconds, around the threshold and far from it: those a
+ * margin cannot judge left out. The third branch (LOST-03 review loop 1, the
+ * spec's item 8) draws only silences under the threshold by more than the
+ * margin, so heartbeats that bring a journey back are drawn against the
+ * database too, where the margin filters out the ones near the threshold
+ * and few runs are drawn.
+ */
 function silences(margin: number): fc.Arbitrary<number> {
   return fc
     .oneof(
       fc.integer({ min: 0, max: 2 * HOUR }),
       fc.constantFrom(LOST_CONTACT_AFTER_MS - 1, LOST_CONTACT_AFTER_MS, LOST_CONTACT_AFTER_MS + 1),
+      fc.integer({ min: 0, max: LOST_CONTACT_AFTER_MS - margin - 1 }),
     )
     .filter((ms) => margin === 0 || Math.abs(ms - LOST_CONTACT_AFTER_MS) > margin);
 }
@@ -671,6 +690,19 @@ function backInContact(result: RecordHeartbeatResult): {
     throw new Error(`the heartbeat was answered ${result.outcome}`);
   }
   return result;
+}
+
+/**
+ * "I'm home" as the store takes it, for this journey: from its own walker and
+ * the device that started it (review loop 1: the store asks the home rule
+ * with them under the lock).
+ */
+function homeOf(journey: { journeyId: string; walkerId: string; deviceId: string }): {
+  journeyId: string;
+  walkerId: string;
+  deviceId: string;
+} {
+  return { journeyId: journey.journeyId, walkerId: journey.walkerId, deviceId: journey.deviceId };
 }
 
 /** The answer of an "I'm home" that ended a journey, or a failed expectation saying what it was instead. */
@@ -1866,7 +1898,17 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
             }
           },
         ),
-        { numRuns: subject.propertyRuns },
+        {
+          numRuns: subject.propertyRuns,
+          // LOST-03 review loop 1 (the spec's item 8): one fixed sequence
+          // that brings the journey back, run first, so even the database's
+          // few runs reach the move: silent two hours, swept (opened), a
+          // heartbeat received at now (back in contact), swept again
+          // (nothing opens).
+          examples: [
+            [2 * HOUR, [{ kind: 'sweep' }, { kind: 'heartbeat', agoMs: 0 }, { kind: 'sweep' }]],
+          ],
+        },
       );
     },
   },
@@ -2769,13 +2811,15 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         sentAt: ago(now, 90 * MINUTE),
       });
 
-      for (const { journeyId } of [none, onlyResolved]) {
+      for (const journey of [none, onlyResolved]) {
+        const { journeyId } = journey;
         const record = await alertRecordOf(subject, journeyId);
         const resolutions = await subject.resolutionsOf(journeyId);
         const withdrawals = await subject.withdrawalsOf(journeyId);
         const before = await subject.now();
 
-        expect(await subject.store.recordHome(journeyId), journeyId).toEqual({
+        // Review loop 1: recordHome takes the walker and the device too.
+        expect(await subject.store.recordHome(homeOf(journey)), journeyId).toEqual({
           outcome: 'home',
           from: 'LOST_CONTACT',
           alertId: null,
@@ -3028,6 +3072,188 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     },
   },
   {
+    // Review loop 1 (the spec's item 9a; test-auditor): the hold's "still
+    // after now" condition. Only a message handed over and due later than
+    // now holds its stand-down back; one whose retry time has passed holds
+    // nothing.
+    name: 'LOST-03-AC8: a responder whose lost-contact message failed and whose retry time had already passed when contact came back is not held: their stand-down is due at the alert’s resolved_at',
+    async run(subject) {
+      const now = await subject.now();
+      const journey = await watched(subject, {
+        state: 'LOST_CONTACT',
+        startedAt: ago(now, 2 * HOUR),
+        lastHeartbeatAt: ago(now, HOUR),
+        responders: 2,
+      });
+      const [passed = '', toCome = ''] = journey.responderIds;
+      const alertId = await subject.seedAlert({
+        journeyId: journey.journeyId,
+        state: 'OPEN',
+        openedAt: ago(now, 55 * MINUTE),
+        silentSince: ago(now, HOUR),
+      });
+      // Each handed over once and refused: one's retry time already passed,
+      // the other's still to come when contact comes back.
+      const passedRetry = ago(now, 30 * SECONDS);
+      const retryToCome = ago(now, -50 * SECONDS);
+      for (const [recipientId, nextAttemptAt] of [
+        [passed, passedRetry],
+        [toCome, retryToCome],
+      ] as const) {
+        await subject.seedMessage({
+          alertId,
+          recipientId,
+          kind: 'LOST_CONTACT',
+          createdAt: ago(now, 55 * MINUTE),
+          nextAttemptAt,
+          attempts: 1,
+          lastFailure: 'UNAVAILABLE',
+        });
+      }
+
+      backInContact(
+        await subject.store.recordHeartbeat(await freshHeartbeat(subject, journey.journeyId)),
+      );
+
+      const resolvedAt = (await resolutionOf(subject, journey.journeyId, alertId))?.resolvedAt;
+      expect(resolvedAt).toBeInstanceOf(Date);
+      expect(resolvedAt?.getTime()).toBeGreaterThan(passedRetry.getTime());
+      const standDowns = ofKind(
+        await subject.messagesOf(journey.journeyId),
+        alertId,
+        'BACK_IN_CONTACT',
+      );
+      const dueOf = (recipientId: string) =>
+        standDowns.find((message) => message.recipientId === recipientId)?.nextAttemptAt;
+      expect(dueOf(passed)).toEqual(resolvedAt);
+      // The contrast: a retry still to come holds its stand-down until then.
+      expect(dueOf(toCome)).toEqual(retryToCome);
+    },
+  },
+  {
+    // Review loop 1 (the spec's item 1b; safety-reviewer; approach item 4,
+    // step 5): no overtaking across alerts. A new alert's open withdraws the
+    // journey's earlier alerts' stand-downs that are not sent, in its own
+    // transaction, so an earlier "back in contact" can never reach the port
+    // after the new alert's lost-contact push.
+    name: 'LOST-03-AC8: an open withdraws the journey’s earlier alerts’ unsent stand-downs at the store’s now, and leaves alone those already sent, every other journey’s messages and its own new ones; an open that skips withdraws nothing',
+    async run(subject) {
+      const now = await subject.now();
+      // A journey whose earlier alert was resolved 70 minutes ago, with its
+      // lost-contact messages sent and three stand-downs: one sent, one
+      // failing and due again later, one never handed over.
+      const withEarlierAlert = async (lastHeartbeatAt: Date) => {
+        const journey = await watched(subject, {
+          startedAt: ago(now, 2 * HOUR),
+          lastHeartbeatAt,
+          responders: 3,
+        });
+        const earlier = await subject.seedAlert({
+          journeyId: journey.journeyId,
+          state: 'RESOLVED',
+          openedAt: ago(now, 90 * MINUTE),
+          silentSince: ago(now, 95 * MINUTE),
+          resolvedAt: ago(now, 70 * MINUTE),
+          resolution: 'BACK_IN_CONTACT',
+        });
+        for (const recipientId of journey.responderIds) {
+          await subject.seedMessage({
+            alertId: earlier,
+            recipientId,
+            kind: 'LOST_CONTACT',
+            createdAt: ago(now, 90 * MINUTE),
+            nextAttemptAt: ago(now, 90 * MINUTE),
+            attempts: 1,
+            sentAt: ago(now, 90 * MINUTE),
+          });
+        }
+        const [sent = '', failing = '', never = ''] = journey.responderIds;
+        const standDown = (
+          recipientId: string,
+          extra: {
+            attempts?: number;
+            nextAttemptAt?: Date;
+            sentAt?: Date;
+            lastFailure?: 'UNAVAILABLE';
+          },
+        ) =>
+          subject.seedMessage({
+            alertId: earlier,
+            recipientId,
+            kind: 'BACK_IN_CONTACT',
+            createdAt: ago(now, 70 * MINUTE),
+            nextAttemptAt: ago(now, 70 * MINUTE),
+            ...extra,
+          });
+        const standDowns = {
+          sent: await standDown(sent, { attempts: 1, sentAt: ago(now, 69 * MINUTE) }),
+          failing: await standDown(failing, {
+            attempts: 3,
+            nextAttemptAt: ago(now, -30 * SECONDS),
+            lastFailure: 'UNAVAILABLE',
+          }),
+          never: await standDown(never, {}),
+        };
+        return { ...journey, earlier, standDowns };
+      };
+      const j = await withEarlierAlert(ago(now, 70 * MINUTE));
+      // Overdue as well, and never opened here: none of its messages moves.
+      const other = await withEarlierAlert(ago(now, 70 * MINUTE));
+      // In contact a minute ago: its open skips, and withdraws nothing.
+      const quiet = await withEarlierAlert(ago(now, MINUTE));
+      const earlierOf = async (journey: { journeyId: string; earlier: string }) =>
+        byMessage(
+          (await subject.messagesOf(journey.journeyId)).filter(
+            ({ alertId }) => alertId === journey.earlier,
+          ),
+        );
+      const earlierBefore = await earlierOf(j);
+      const otherBefore = await alertRecordOf(subject, other.journeyId);
+      const quietBefore = await alertRecordOf(subject, quiet.journeyId);
+
+      const opened = await subject.store.openLostContactAlert({
+        journeyId: j.journeyId,
+        afterMs: LOST_CONTACT_AFTER_MS,
+      });
+      expect(
+        await subject.store.openLostContactAlert({
+          journeyId: quiet.journeyId,
+          afterMs: LOST_CONTACT_AFTER_MS,
+        }),
+      ).toEqual({ outcome: 'skipped' });
+
+      if (opened.outcome !== 'opened') {
+        throw new Error(`expected the journey to be opened again, but it was ${opened.outcome}`);
+      }
+      const openedAt = (await subject.alertsOf(j.journeyId)).find(
+        ({ id }) => id === opened.alertId,
+      )?.openedAt;
+      expect(openedAt).toBeInstanceOf(Date);
+      const withdrawnAt = await withdrawnAtOf(subject, j.journeyId);
+      // The unsent ones, withdrawn at the open's own now: due later or due already.
+      expect(withdrawnAt.get(j.standDowns.failing), 'failing').toEqual(openedAt);
+      expect(withdrawnAt.get(j.standDowns.never), 'never handed over').toEqual(openedAt);
+      // The sent one, the earlier lost-contact messages and the new alert's own: untouched.
+      expect(withdrawnAt.get(j.standDowns.sent), 'sent').toBeNull();
+      for (const message of earlierBefore.filter(({ kind }) => kind === 'LOST_CONTACT')) {
+        expect(withdrawnAt.get(message.messageId), 'an earlier lost-contact').toBeNull();
+      }
+      for (const { messageId } of opened.messages) {
+        expect(withdrawnAt.get(messageId), 'the new alert’s own').toBeNull();
+      }
+      // Withdrawing keeps everything else: attempts, last failure, sent and due times.
+      expect(await earlierOf(j)).toEqual(earlierBefore);
+      expect(await alertRecordOf(subject, other.journeyId)).toEqual(otherBefore);
+      expect(await alertRecordOf(subject, quiet.journeyId)).toEqual(quietBefore);
+      // And a claim never hands the withdrawn ones out.
+      const claimed = (
+        await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS })
+      ).messages.map(({ messageId }) => messageId);
+      expect(claimed).not.toContain(j.standDowns.never);
+      expect(claimed).not.toContain(j.standDowns.failing);
+    },
+  },
+  {
     name: `LOST-03-AC12: a heartbeat a LOST_CONTACT journey already has, sent again later, is a duplicate and changes nothing; and ${String(RACERS)} different fresh heartbeats at once, ${String(RACE_ROUNDS)} times over, are each stored, exactly one bringing the journey back and every other recorded, with one resolution and one stand-down per responder; the one that brought it back, sent again, is a duplicate and writes nothing`,
     async run(subject) {
       for (let round = 0; round < RACE_ROUNDS; round += 1) {
@@ -3107,7 +3333,8 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       )?.nextAttemptAt;
 
       const before = await subject.now();
-      const result = await subject.store.recordHome(lost.journeyId);
+      // Review loop 1: recordHome takes the walker and the device too.
+      const result = await subject.store.recordHome(homeOf(lost));
       const after = await subject.now();
 
       const home = endedHome(result);
@@ -3196,7 +3423,8 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         const record = await alertRecordOf(subject, journey.journeyId);
         const before = await subject.now();
 
-        expect(await subject.store.recordHome(journey.journeyId), journey.journeyId).toEqual({
+        // Review loop 1: recordHome takes the walker and the device too.
+        expect(await subject.store.recordHome(homeOf(journey)), journey.journeyId).toEqual({
           outcome: 'home',
           from: 'ACTIVE',
           alertId: null,
@@ -3232,10 +3460,15 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     },
   },
   {
-    name: 'LOST-03-AC16: "I’m home" (recordHome) on a journey already ENDED — by an earlier "I’m home", or set directly — is answered ended and changes nothing: its end, its alerts and its messages stay as they were; for a journey that does not exist the store rejects (SM-04, SM-07, SM-08)',
+    // RG-03 (LOST-03 review loop 1, the spec's item 3): this was "…is
+    // answered ended…", and expected { outcome: 'ended' }. The store's answer
+    // for a journey already ended is now already_ended (`ended` stays the
+    // heartbeat's word), and recordHome takes the walker and the device too
+    // (item 2). What the behaviour holds, nothing changes, is unchanged.
+    name: 'LOST-03-AC16: "I’m home" (recordHome) on a journey already ENDED — by an earlier "I’m home", or set directly — is answered already_ended and changes nothing: its end, its alerts and its messages stay as they were; for a journey that does not exist the store rejects (SM-04, SM-07, SM-08)',
     async run(subject) {
       const lost = await lostWith(subject, 2);
-      endedHome(await subject.store.recordHome(lost.journeyId));
+      endedHome(await subject.store.recordHome(homeOf(lost)));
       const now = await subject.now();
       const direct = await watched(subject, {
         state: 'ENDED',
@@ -3243,17 +3476,105 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         lastHeartbeatAt: ago(now, HOUR),
       });
 
-      for (const journeyId of [lost.journeyId, direct.journeyId]) {
+      for (const journey of [lost, direct]) {
+        const { journeyId } = journey;
         const record = await alertRecordOf(subject, journeyId);
         const end = await subject.endOf(journeyId);
 
-        expect(await subject.store.recordHome(journeyId), journeyId).toEqual({ outcome: 'ended' });
+        expect(await subject.store.recordHome(homeOf(journey)), journeyId).toEqual({
+          outcome: 'already_ended',
+        });
 
         expect(await alertRecordOf(subject, journeyId)).toEqual(record);
         expect(await subject.endOf(journeyId)).toEqual(end);
       }
       expect(await subject.endOf(direct.journeyId)).toEqual({ endedAt: null, endReason: null });
-      await expect(subject.store.recordHome(syntheticUuid())).rejects.toThrow();
+      await expect(
+        subject.store.recordHome(homeOf({ ...lost, journeyId: syntheticUuid() })),
+      ).rejects.toThrow();
+    },
+  },
+  {
+    // Review loop 1 (the spec's item 2a; code-reviewer; AR-04; SM-04): the
+    // store asks the home rule under the lock, with the walker and the
+    // device, and writes what it decided. The module asked the same rule
+    // first, so a refusal here means something changed that cannot, and the
+    // store rejects rather than guess.
+    name: 'LOST-03-AC16: recordHome decides by the home rule under the lock: a walker or a device that is not the journey’s makes it reject and write nothing; an ENDED journey answers already_ended and writes nothing; an ACTIVE one is ended without resolving anything; a LOST_CONTACT one is ended and its alert resolved with resolution HOME',
+    async run(subject) {
+      const now = await subject.now();
+      const lost = await lostWith(subject, 2);
+      const active = await watched(subject, {
+        startedAt: ago(now, 2 * HOUR),
+        lastHeartbeatAt: ago(now, MINUTE),
+      });
+      const ended = await watched(subject, {
+        state: 'ENDED',
+        startedAt: ago(now, 2 * HOUR),
+        lastHeartbeatAt: ago(now, HOUR),
+      });
+      const [stranger = ''] = await users(subject, 1);
+      const strangersDevice = await subject.addDevice(stranger);
+      const snapshot = async (journeyId: string) => ({
+        record: await alertRecordOf(subject, journeyId),
+        end: await subject.endOf(journeyId),
+      });
+
+      for (const journey of [lost, active]) {
+        const before = await snapshot(journey.journeyId);
+        const anotherOfTheirs = await subject.addDevice(journey.walkerId);
+        // Another walker, from their own device: JOURNEY_NOT_FOUND under the lock.
+        await expect(
+          subject.store.recordHome({
+            journeyId: journey.journeyId,
+            walkerId: stranger,
+            deviceId: strangersDevice,
+          }),
+          'another walker',
+        ).rejects.toThrow();
+        // The walker's other device: NOT_THE_JOURNEYS_DEVICE under the lock.
+        await expect(
+          subject.store.recordHome({ ...homeOf(journey), deviceId: anotherOfTheirs }),
+          'another device',
+        ).rejects.toThrow();
+        expect(await snapshot(journey.journeyId)).toEqual(before);
+      }
+
+      // ENDED: already_ended, from any of the walker's devices, as the rule
+      // reports the end before it looks at the device.
+      const endedBefore = await snapshot(ended.journeyId);
+      expect(await subject.store.recordHome(homeOf(ended))).toEqual({ outcome: 'already_ended' });
+      expect(
+        await subject.store.recordHome({
+          ...homeOf(ended),
+          deviceId: await subject.addDevice(ended.walkerId),
+        }),
+      ).toEqual({ outcome: 'already_ended' });
+      expect(await snapshot(ended.journeyId)).toEqual(endedBefore);
+
+      // ACTIVE: ended, HOME, and nothing resolved.
+      const activeRecord = await alertRecordOf(subject, active.journeyId);
+      expect(await subject.store.recordHome(homeOf(active))).toEqual({
+        outcome: 'home',
+        from: 'ACTIVE',
+        alertId: null,
+        messages: [],
+      });
+      expect((await subject.endOf(active.journeyId))?.endReason).toBe('HOME');
+      expect(await alertRecordOf(subject, active.journeyId)).toEqual({
+        ...activeRecord,
+        state: 'ENDED',
+      });
+
+      // LOST_CONTACT: ended, HOME, its alert resolved HOME, one HOME per responder.
+      const home = endedHome(await subject.store.recordHome(homeOf(lost)));
+      expect(home.from).toBe('LOST_CONTACT');
+      expect(home.alertId).toBe(lost.alertId);
+      expect(recipientsOf(home.messages)).toEqual([...lost.responderIds].sort());
+      expect(home.messages.map(({ kind }) => kind)).toEqual(['HOME', 'HOME']);
+      expect(await subject.stateOf(lost.journeyId)).toBe('ENDED');
+      expect((await subject.endOf(lost.journeyId))?.endReason).toBe('HOME');
+      expect((await resolutionOf(subject, lost.journeyId, lost.alertId))?.resolution).toBe('HOME');
     },
   },
 ];

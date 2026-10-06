@@ -43,6 +43,7 @@ export type {
   FakeJourneyStore,
   HeartbeatPosition,
   HeartbeatToRecord,
+  HomeToRecord,
   InsertStartedResult,
   JourneyEnd,
   JourneyForHeartbeat,

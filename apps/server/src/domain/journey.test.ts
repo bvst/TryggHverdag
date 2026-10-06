@@ -27,8 +27,9 @@
 //      NOT_THE_JOURNEYS_DEVICE (D-101), so a tablet left at home can never
 //      hide the walking phone's silence;
 //   4. otherwise → recorded, and the state stays as it was: ACTIVE stays
-//      ACTIVE (SM-03), and LOST_CONTACT stays LOST_CONTACT until the
-//      back-in-contact task moves it (reading 7 of the spec).
+//      ACTIVE (SM-03), and LOST_CONTACT stays LOST_CONTACT under this rule;
+//      moving it back is the contact rule's (LOST-03, D-112), asked by the
+//      store under the row's lock once the heartbeat is stored.
 // The domain never sees the position, the battery or the event ID, so
 // whether a heartbeat carried a position changes no outcome: SM-03, held by
 // construction, and checked below as a property.
@@ -54,7 +55,12 @@
 //     alert; LOST_CONTACT ends, HOME, resolving its alert (SM-04).
 // The heartbeat's own rule does not change: a LOST_CONTACT journey's
 // heartbeat is recorded and the state stays; the move back is contact's.
-import { fc, syntheticPosition, syntheticUuid } from '@trygghverdag/test-kit';
+import {
+  MESSAGE_KINDS as KIT_MESSAGE_KINDS,
+  fc,
+  syntheticPosition,
+  syntheticUuid,
+} from '@trygghverdag/test-kit';
 import { describe, expect, test } from 'vitest';
 import {
   ALERT_RESOLUTIONS,
@@ -249,10 +255,11 @@ const TRANSITIONS = {
   heartbeat: {
     none: { outcome: JOURNEY_NOT_FOUND },
     ACTIVE: { outcome: RECORDED_IN('ACTIVE') },
-    // Contact while LOST_CONTACT is recorded, and the state stays: the move
-    // back to ACTIVE resolves the alert and tells the responders, which is
-    // the back-in-contact task's. Until then an open alert stays open, a
-    // false alarm that stays loud rather than one closed silently.
+    // Contact while LOST_CONTACT is recorded, and the state stays under the
+    // heartbeat rule: the move back to ACTIVE, which resolves the alert and
+    // stands the responders down, is the contact rule's (LOST-03, D-112),
+    // in the contact rows below, asked by the store once the heartbeat is
+    // stored.
     LOST_CONTACT: { outcome: RECORDED_IN('LOST_CONTACT') },
     ENDED: { outcome: JOURNEY_ENDED },
   },
@@ -1294,7 +1301,10 @@ describe('SM-03 and LOST-02: only an ACTIVE journey is alerted, once per silence
     );
   });
 
-  test('LOST-02-AC5: a heartbeat for a journey in LOST_CONTACT is recorded and leaves it LOST_CONTACT, and the next silence alerts it no more: moving it back is the back-in-contact task’s', () => {
+  // RG-03 (LOST-03 review loop 1, the spec's item 10): the title only. It
+  // said moving back was "the back-in-contact task’s", which is now the
+  // contact rule's. No assertion changes.
+  test('LOST-02-AC5: a heartbeat for a journey in LOST_CONTACT is recorded and leaves it LOST_CONTACT under the heartbeat rule, and the next silence alerts it no more; moving it back is the contact rule’s', () => {
     expect(transition(named('LOST_CONTACT'), heartbeat())).toEqual(RECORDED_IN('LOST_CONTACT'));
     expect(
       transition(asCurrent({ id: JOURNEY, state: 'LOST_CONTACT' }), silence(10 * HOUR)),
@@ -1663,6 +1673,12 @@ describe('SM-04, SM-07 and D-110: "I’m home", in the heartbeat rule’s order'
 describe('LOST-03: the lists that are the one source for the table, the type and the database', () => {
   test('LOST-03-AC3: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT and HOME, in order', () => {
     expect([...MESSAGE_KINDS]).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME']);
+  });
+
+  // Review loop 1 (the spec's item 11a): the test kit cannot import the
+  // server, so its own list (fake-push.ts) is held to the domain's here.
+  test('LOST-03-AC3: the test kit’s MESSAGE_KINDS equals the domain’s, in order', () => {
+    expect([...KIT_MESSAGE_KINDS]).toEqual([...MESSAGE_KINDS]);
   });
 
   test('LOST-03-AC3: ALERT_RESOLUTIONS is exactly BACK_IN_CONTACT and HOME, each a message kind: a stand-down’s kind is its resolution’s own name (also held at typecheck)', () => {
