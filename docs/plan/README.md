@@ -18,8 +18,9 @@ the safety review (D-100; #58), both 2026-10-02. BUG-13 (`gate:full` miscounts
 the steps that did not run after a failure) is queued for the owner to
 schedule, and so are BUG-16 (`req:coverage` counts an ID named in a comment),
 BUG-17 (the Android emulator sometimes stays in English past the wait),
-BUG-19 (no test checks every owner-approval path keeps its owners) and BUG-20
-(graphile-worker's own logger prints its error object, past `log.ts`).
+BUG-19 (no test checks every owner-approval path keeps its owners), BUG-20
+(graphile-worker's own logger prints its error object, past `log.ts`) and
+BUG-21 (an Android script test's timing margin fails under full-suite load).
 M1 closed with all four roadmap items done:
 SPIKE-01 (S1–S8), Section 4 closed with a conditional GO for the location SDK
 (D-086, full results in [04b-spike-results.md](04b-spike-results.md)), and the
