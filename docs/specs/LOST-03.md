@@ -1521,6 +1521,16 @@ does instead.
   These tests call neither, so nothing they assert changes (found by
   `implementer`'s typecheck, 2026-10-06).
 
+- **Review loop 1:** the shared behaviour LOST-03-AC16 for an ENDED journey
+  is renamed "… is answered already_ended", and its assertion reads
+  `already_ended` instead of `ended`, as approach item 5 renames the store's
+  answer (D-112, amended). Its pinned name in `fake-journey-store.test.ts`
+  changes with it.
+- **Review loop 1:** every `recordHome` call in the shared behaviour suite
+  and in `fake-journey-store.test.ts` now passes the walker and the device
+  beside the journey ID, as `recordHome` asks the domain under the lock. The
+  assertions are unchanged.
+
 **Read and found unchanged** (2026-10-06), so nobody has to wonder:
 - `domain/journey.test.ts`, "LOST-01-AC8: a journey in LOST_CONTACT takes the
   heartbeat and stays LOST_CONTACT …" and "LOST-02-AC5: a heartbeat for a
