@@ -3859,3 +3859,15 @@ any other path is work, not a candidate for the same treatment.
     resolves them concurrently, and the lock order is unchanged.
   - **The test kit's fake compares the walker and the device exactly**, as
     the domain's rule does (D-100; `safety-reviewer` and `test-auditor`).
+- **Amended 2026-10-06 (delegated, D-031), LOST-03's review loop 3:**
+  - **Only what the new alert's responders would be told is withdrawn**
+    (`safety-reviewer`, should-fix). Loop 2's walker-wide withdrawal also
+    withdrew an earlier journey's stand-down for a responder who is not on
+    the new journey, who was then never stood down: against D-111. An open
+    now withdraws an earlier stand-down only when its recipient is a
+    responder of the journey being opened. This keeps D-111 whole: every
+    responder told of a loss is stood down, unless a later alert to that
+    same responder supersedes it.
+  - **The withdrawal names the kinds it withdraws** (`BACK_IN_CONTACT`,
+    `HOME`) instead of sparing `LOST_CONTACT`, so a kind added later is never
+    withdrawn by default.

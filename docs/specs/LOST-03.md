@@ -1481,6 +1481,50 @@ The header's sentence on the worker's marks waiting names the API's
 withdrawal; the open's own withdrawal, on the worker's pool, is the second.
 A comment only; approach item 8 already says both.
 
+### Tests added in review loop 3 (settled 2026-10-06)
+
+Both re-checkers passed loop 2 (`safety-reviewer`, `test-auditor`). The safety
+reviewer found that loop 2's widened withdrawal goes too far; this loop
+narrows it back to the people it protects. The names are exact.
+
+**19. Withdraw only what the new alert's responders would be told**
+(`safety-reviewer`, should-fix; D-111, D-112 amended again). Responders are
+chosen per start, so a walker's two journeys can have different responders.
+Loop 2 withdrew an earlier journey's unsent stand-downs for every recipient,
+so a responder who heard of J1's loss, and is not a responder of J2, was
+never stood down: against D-111's "every responder is stood down", and
+against its reason (a responder who heard of the loss "may still be calling
+112 or out looking"). The reviewer reproduced it in the fake world and on the
+real adapter. **The open now withdraws an earlier stand-down only when its
+recipient is a responder of the journey being opened**: overtaking matters
+only for someone who will receive the new lost-contact push.
+- 19a. The shared behaviour suite: `LOST-03-AC8: an open withdraws an earlier
+  journey's unsent stand-down only for a responder of the new journey, and
+  leaves another responder's to be sent`.
+- 19b. L6, `apps/server/src/contact.system.test.ts`: `LOST-03-AC8: J1 has
+  responders A and B and its alert reaches both; with a failing push, "I'm
+  home" ends J1; J2 starts with B alone and its alert opens; when the push
+  recovers, A is still told J1's HOME, and B is never told J1's HOME after
+  J2's LOST_CONTACT`.
+
+**20. Withdraw only the kinds that stand a responder down** (`safety-reviewer`,
+note; D-111). The open's clause `kind <> 'LOST_CONTACT'` spared one kind and
+withdrew every other, so a kind added later (task 6's SMS kinds) would be
+withdrawn by default. The clause becomes `kind in ('BACK_IN_CONTACT',
+'HOME')`, so each new kind must opt in. Test 17a still holds it; the fake
+follows (D-100).
+
+**21. A stale name** (`test-auditor`, should-fix; RG-03). Test 1b's name
+says the open leaves "every other journey's messages" alone; since loop 2
+the walker's own earlier journeys are not left alone. Its `other` journey
+belongs to another walker, so its assertions hold. It is renamed "… every
+other walker's journeys' messages …" in the shared suite, in the pinned
+list in `fake-journey-store.test.ts` and in item 1b above.
+
+**22. The refusal's reason** (`test-auditor`, note). 2a's new cases and 15a
+check `.rejects.toThrow()` with no reason; they match `/refused/`, which both
+stores' messages carry.
+
 ### Existing assertions that change by design (RG-03)
 
 `test-author` changes each, with the written reason RG-03 asks for in the
@@ -1602,6 +1646,10 @@ does instead.
   journey's earlier stand-downs" is renamed "an open withdraws only
   stand-downs: …", since the withdrawal now reaches the walker's other
   journeys (item 14). Its assertions are unchanged.
+
+- **Review loop 3:** test 1b in the shared suite is renamed "… every other
+  walker's journeys' messages …", with its pinned name; its assertions are
+  unchanged (item 21).
 
 **Read and found unchanged** (2026-10-06), so nobody has to wonder:
 - `domain/journey.test.ts`, "LOST-01-AC8: a journey in LOST_CONTACT takes the
