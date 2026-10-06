@@ -113,9 +113,21 @@ export type RecordHeartbeatResult =
   | { outcome: 'back_in_contact'; alertId: string | null; messages: AlertMessage[] };
 
 /**
+ * "I'm home" as the store takes it (D-110): the journey, and the walker and
+ * the device the domain's home rule is asked with under the row's lock.
+ */
+export interface HomeToRecord {
+  journeyId: string;
+  walkerId: string;
+  deviceId: string;
+}
+
+/**
  * "I'm home" (D-110): ended now, from the state the journey's row was in when
  * taken, with the alert it resolved, null when none, and the stand-downs it
- * wrote; or the journey had already ENDED, and nothing changed.
+ * wrote; or the journey had already ENDED, and nothing changed. Named
+ * `already_ended`, not `ended`: on the "I'm home" path `ended` means "ended
+ * now", in the domain and the module alike.
  */
 export type RecordHomeResult =
   | {
@@ -124,7 +136,7 @@ export type RecordHomeResult =
       alertId: string | null;
       messages: AlertMessage[];
     }
-  | { outcome: 'ended' };
+  | { outcome: 'already_ended' };
 
 /**
  * A journey's latest heartbeat: the greatest receive time, a tie to the one
@@ -185,8 +197,9 @@ export interface WatchdogStore {
   overdueJourneys(afterMs: number): Promise<OverdueJourneys>;
   /**
    * In one transaction: takes the journey's row if it is still ACTIVE and
-   * overdue, moves it to LOST_CONTACT, opens its alert and writes one message
-   * per responder, all of it or none of it. Every open bounds its waits with
+   * overdue, moves it to LOST_CONTACT, withdraws the journey's earlier alerts'
+   * unsent stand-downs (LOST-03), opens its alert and writes one message per
+   * responder, all of it or none of it. Every open bounds its waits with
    * a lock limit of its own, local to its transaction: `lockWaitMs`, or
    * LOCK_WAIT_LIMIT_MS without it. Without `lockWaitMs` a held row is skipped
    * (`skip locked`) and `held` is never answered; with it, the open waits at
@@ -280,12 +293,16 @@ export interface JourneyStore {
    */
   recordHeartbeat(heartbeat: HeartbeatToRecord): Promise<RecordHeartbeatResult>;
   /**
-   * "I'm home" (D-110), in one transaction: ends the journey, HOME, at the
-   * database's now(), from the state its row is in when taken, and from
-   * LOST_CONTACT resolves its alert as a heartbeat that brings it back does
-   * (SM-04). A journey already ENDED is answered `ended`, and nothing changes.
+   * "I'm home" (D-110), in one transaction, deciding by the domain's home rule
+   * asked under the journey's row lock with this walker and device (AR-04):
+   * ends the journey, HOME, at the database's now(), from the state its row is
+   * in when taken, and from LOST_CONTACT resolves its alert as a heartbeat
+   * that brings it back does (SM-04). A journey already ENDED is answered
+   * `already_ended`, and nothing changes. A refusal under the lock (no such
+   * journey, another walker's, or another device) rejects, writing nothing:
+   * the module asked the same rule first, so it cannot happen.
    */
-  recordHome(journeyId: string): Promise<RecordHomeResult>;
+  recordHome(home: HomeToRecord): Promise<RecordHomeResult>;
   /** The journey's latest heartbeat, or null when it has none. */
   latestHeartbeatOf(journeyId: string): Promise<LatestHeartbeat | null>;
 }

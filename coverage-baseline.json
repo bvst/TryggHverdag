@@ -109,6 +109,18 @@
       "coveredLines": 11,
       "totalLines": 11
     },
+    "apps/server/src/modules/alerts/outbox.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 27,
+      "totalLines": 27
+    },
+    "apps/server/src/modules/alerts/watchdog.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 44,
+      "totalLines": 44
+    },
     "apps/server/src/modules/health/service.ts": {
       "lines": 100,
       "branches": 100,
@@ -150,6 +162,12 @@
       "branches": 100,
       "coveredLines": 9,
       "totalLines": 9
+    },
+    "packages/contracts/src/home.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 4,
+      "totalLines": 4
     },
     "packages/contracts/src/index.ts": {
       "lines": 100,

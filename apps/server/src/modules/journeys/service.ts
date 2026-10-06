@@ -217,12 +217,14 @@ export function createJourneyService({
         return decision.type === 'ignored' ? ended() : decision;
       }
 
+      // The store asks the same rule again under the row's lock, with the same
+      // walker and device, and writes what it decides (AR-04).
       const stored = await stage({ event: 'home_failed', stage: 'store' }, () =>
-        journeys.recordHome(journeyId),
+        journeys.recordHome({ journeyId, walkerId, deviceId }),
       );
       // The journey ended between the read above and the write: the same
       // answer, and the same line, as an ended journey read above.
-      if (stored.outcome === 'ended') {
+      if (stored.outcome === 'already_ended') {
         return ended();
       }
       // The store ended it from the state its row was in, which decides

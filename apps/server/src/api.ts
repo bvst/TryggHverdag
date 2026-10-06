@@ -71,6 +71,15 @@ const BEARER = /^Bearer (\S+)$/i;
  * Built from the contract's `badRequestError`, the one object the error map
  * of every route with a body declares as its 400, so this body and the
  * published contract cannot drift apart.
+ *
+ * A 400's error object holds the device credential (LOST-03). With detailed
+ * input, as the "I'm home" route has, oRPC puts the whole input it validated
+ * in the validation error's `cause.data`, `request.headers` included, so the
+ * `Authorization` header is there (read in @orpc/openapi 1.15.3's detailed
+ * decode and @orpc/server 1.15.3's `validateInput`). Nothing prints that
+ * object today: the answer is this fixed body, and no log event has a field
+ * for it. So nothing may log, echo or rethrow outward a 400's error or its
+ * cause (PRIV-07, SEC-07).
  */
 const BAD_REQUEST_BODY = new ORPCError('BAD_REQUEST', {
   defined: true,

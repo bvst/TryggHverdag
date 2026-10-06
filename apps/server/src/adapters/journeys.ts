@@ -34,10 +34,11 @@
  *
  * The watchdog's open is one transaction: the journey's row, taken again only
  * if it is still ACTIVE and overdue by that transaction's now(); the move to
- * LOST_CONTACT, which must change exactly that row; the alert; and one outbox
- * message per responder, at least one. Any of it failing writes none of it
- * (AR-05). The outbox's claim, its marks and the read of what is overdue are
- * single statements, each timed by the database's now() (REL-01).
+ * LOST_CONTACT, which must change exactly that row; the withdrawal of the
+ * journey's earlier alerts' unsent stand-downs (LOST-03); the alert; and one
+ * outbox message per responder, at least one. Any of it failing writes none
+ * of it (AR-05). The outbox's claim, its marks and the read of what is
+ * overdue are single statements, each timed by the database's now() (REL-01).
  *
  * Back in contact and "I'm home" (LOST-03) take the journey's row first too,
  * so no two of these can wait for each other in a cycle: the claim never
@@ -47,8 +48,10 @@
  *     the transaction's now(). Back in contact, the journey moves to ACTIVE
  *     and its alert is resolved, in the heartbeat's own transaction: a
  *     failure anywhere rolls back the heartbeat too, and the phone resends.
- *   - "I'm home" ends the journey from the state its row is in when taken,
- *     and from LOST_CONTACT resolves its alert, in one transaction.
+ *   - "I'm home" asks the domain's home rule under the row's lock, with the
+ *     walker and the device, and writes what it decides: the journey ended
+ *     from the state its row is in when taken, and its alert resolved only
+ *     when the rule says so (from LOST_CONTACT), in one transaction (AR-04).
  *   - Resolving is one helper (`resolveInside`), for every path that resolves
  *     an alert: the journey's one unresolved alert goes to RESOLVED; its
  *     lost-contact messages not yet sent are withdrawn, so no claim hands them
@@ -57,6 +60,11 @@
  *     message may still be in the push port's hands is due only once that
  *     message's lease or retry time has passed, so it never overtakes it.
  *
+ * The worker's marks can now wait on the API's withdrawal transaction, and the
+ * worker's pool has no lock limit of its own, but the wait is bounded by the
+ * API's limits (each statement waits at most 5 s for a lock, and a frozen
+ * transaction is ended after 10 s idle), and it stalls delivery only.
+ *
  * Any failure while storing a heartbeat is replaced by a `HeartbeatStoreError`
  * holding PostgreSQL's SQLSTATE and nothing else. PostgreSQL's own error can
  * hold the row it refused ("Failing row contains (…)"), and Drizzle's names
@@ -64,7 +72,7 @@
  * printed the error. Cleaned here, where it starts, it cannot reach any of
  * them (PRIV-07).
  */
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import {
   alerts,
   heartbeats,
@@ -91,6 +99,7 @@ import type {
   AlertMessage,
   ClaimedMessages,
   HeartbeatToRecord,
+  HomeToRecord,
   InsertStartedResult,
   JourneyStore,
   LatestHeartbeat,
@@ -221,6 +230,29 @@ async function openInside(
   if (moved.length !== 1) {
     throw new Error('The move to LOST_CONTACT changed no row, so nothing of the alert is kept.');
   }
+
+  // No overtaking across alerts (LOST-03, D-112 amended): the journey's
+  // earlier alerts' stand-downs not yet sent are withdrawn at this now(), so
+  // an earlier "back in contact", retried for ever, never reaches a responder
+  // after this alert's lost-contact push. Before the new alert is written, so
+  // every alert of the journey is an earlier one; their unsent lost-contact
+  // messages were withdrawn when they resolved. In this transaction, so an
+  // open that rolls back withdraws nothing. One already in the port's hands
+  // was handed over before this alert opened.
+  await tx
+    .update(outbox)
+    .set({ withdrawnAt: sql`now()` })
+    .where(
+      and(
+        inArray(
+          outbox.alertId,
+          tx.select({ id: alerts.id }).from(alerts).where(eq(alerts.journeyId, journeyId)),
+        ),
+        ne(outbox.kind, 'LOST_CONTACT'),
+        isNull(outbox.sentAt),
+        isNull(outbox.withdrawnAt),
+      ),
+    );
 
   // Silent since the journey's own last contact, copied in SQL so it keeps
   // the database's precision.
@@ -494,42 +526,60 @@ export function databaseJourneyStore(db: Database): JourneyStore & WatchdogStore
       }
     },
 
-    recordHome(journeyId: string): Promise<RecordHomeResult> {
+    recordHome({ journeyId, walkerId, deviceId }: HomeToRecord): Promise<RecordHomeResult> {
       // Not rewritten as the heartbeat's errors are: nothing here binds a
       // location or a phone number, so no error of this can carry one. The
       // module logs the SQLSTATE alone.
       return db.transaction(async (tx): Promise<RecordHomeResult> => {
-        // The journey's row first, as a heartbeat and the watchdog take it.
-        const [journey] = await tx
-          .select({ state: journeys.state })
+        // The journey's row first, as a heartbeat and the watchdog take it,
+        // with what the home rule reads: whose it is, its device, its state.
+        const [locked] = await tx
+          .select({
+            id: journeys.id,
+            walkerId: journeys.walkerId,
+            deviceId: journeys.deviceId,
+            state: journeys.state,
+          })
           .from(journeys)
           .where(eq(journeys.id, journeyId))
           .for('update');
-        if (journey === undefined) {
-          // Nothing deletes a journey before the retention work, so one that
-          // was read and is gone is an error, not a guess.
-          throw new Error('The journey "I’m home" names was not found to lock.');
+
+        // The domain decides under the lock, and its decision is what is
+        // written (AR-04). The state the row is in now decides, not the
+        // module's read: a journey the watchdog moved to LOST_CONTACT since
+        // is ended as SM-04 says, and one a heartbeat brought back is ended
+        // from ACTIVE.
+        const decision = transition(locked ?? null, { type: 'home', walkerId, deviceId });
+        if (decision.type === 'ignored') {
+          return { outcome: 'already_ended' };
         }
-        if (journey.state === 'ENDED') {
-          return { outcome: 'ended' };
+        if (decision.type === 'refused') {
+          // The module asked the same rule about the same journey, and
+          // nothing deletes a journey or changes its walker or device, so
+          // this cannot happen; if it does, the read is not what this code
+          // thinks it is, and a guess would end, or keep, the wrong journey.
+          throw new Error(
+            `The home rule refused "I’m home" under the journey’s lock (${decision.reason}), ` +
+              'though the module’s read allowed it; nothing is written.',
+          );
+        }
+        const from = locked?.state;
+        if (from === undefined || from === 'ENDED') {
+          // The rule ends only a journey that is there and not ENDED.
+          throw new Error('The home rule ended a journey that is not there to end.');
         }
 
-        // The state the row is in now decides, not the module's read: a
-        // journey the watchdog moved to LOST_CONTACT since is ended as SM-04
-        // says, and one a heartbeat brought back is ended from ACTIVE.
-        const from = journey.state;
         const ended = await tx
           .update(journeys)
-          .set({ state: 'ENDED', endedAt: sql`now()`, endReason: 'HOME' })
+          .set({ state: decision.state, endedAt: sql`now()`, endReason: decision.reason })
           .where(and(eq(journeys.id, journeyId), eq(journeys.state, from)))
           .returning({ id: journeys.id });
         if (ended.length !== 1) {
           throw new Error('The end changed no row, so nothing of it is kept.');
         }
-        const resolved: Resolved =
-          from === 'LOST_CONTACT'
-            ? await resolveInside(tx, journeyId, 'HOME')
-            : { alertId: null, messages: [] };
+        const resolved: Resolved = decision.resolvesAlert
+          ? await resolveInside(tx, journeyId, 'HOME')
+          : { alertId: null, messages: [] };
         return { outcome: 'home', from, ...resolved };
       });
     },
