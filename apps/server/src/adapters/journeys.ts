@@ -22,13 +22,15 @@
  * It is also where the watchdog meets them (LOST-02): its `for update skip
  * locked` skips a journey whose heartbeat is being written, and a heartbeat
  * that arrives while a sweep holds the row waits, and is then stored against
- * LOST_CONTACT. That is right only while every transaction on the row is
- * short. No clock is read and no network is called inside one, so they are
- * short as written, and the process pools bound them anyway (D-108, in
- * db.ts): a session idle inside a transaction is ended after 10 s, and the
- * API's statements wait at most 5 s for a row. A journey skipped past
- * 5 min 30 s gets one attempt that waits for its holder, and one held through
- * that wait is reported by the watchdog, not skipped silently.
+ * LOST_CONTACT, which it brings back if it is fresh (below). That is right
+ * only while every transaction on the row is short. No clock is read and no
+ * network is called inside one, so they are short as written, and the
+ * process pools bound them anyway (D-108, in db.ts): a session idle inside a
+ * transaction is ended after 10 s, and the API's statements wait at most 5 s
+ * for a row, the outbox's and the users' rows the new paths touch included.
+ * A journey skipped past 5 min 30 s gets one attempt that waits for its
+ * holder, and one held through that wait is reported by the watchdog, not
+ * skipped silently.
  *
  * The watchdog's open is one transaction: the journey's row, taken again only
  * if it is still ACTIVE and overdue by that transaction's now(); the move to
@@ -36,6 +38,24 @@
  * message per responder, at least one. Any of it failing writes none of it
  * (AR-05). The outbox's claim, its marks and the read of what is overdue are
  * single statements, each timed by the database's now() (REL-01).
+ *
+ * Back in contact and "I'm home" (LOST-03) take the journey's row first too,
+ * so no two of these can wait for each other in a cycle: the claim never
+ * waits (`skip locked`), and a mark holds one outbox row for one statement.
+ *   - A heartbeat stored for a journey LOST_CONTACT when its row was taken
+ *     asks the domain's contact rule, with the silence counted with it and
+ *     the transaction's now(). Back in contact, the journey moves to ACTIVE
+ *     and its alert is resolved, in the heartbeat's own transaction: a
+ *     failure anywhere rolls back the heartbeat too, and the phone resends.
+ *   - "I'm home" ends the journey from the state its row is in when taken,
+ *     and from LOST_CONTACT resolves its alert, in one transaction.
+ *   - Resolving is one helper (`resolveInside`), for every path that resolves
+ *     an alert: the journey's one unresolved alert goes to RESOLVED; its
+ *     lost-contact messages not yet sent are withdrawn, so no claim hands them
+ *     out again (D-111); and every responder row gets one stand-down of the
+ *     resolution's own kind. A stand-down for a responder whose lost-contact
+ *     message may still be in the push port's hands is due only once that
+ *     message's lease or retry time has passed, so it never overtakes it.
  *
  * Any failure while storing a heartbeat is replaced by a `HeartbeatStoreError`
  * holding PostgreSQL's SQLSTATE and nothing else. PostgreSQL's own error can
@@ -46,16 +66,25 @@
  */
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import {
+  alerts,
   heartbeats,
   journeyResponders,
   journeys,
+  messageKind,
   outbox,
   positions,
   unended,
+  unresolved,
   users,
 } from '../db/schema.ts';
 import { databaseTime } from '../domain/database-time.ts';
-import type { JourneyForHeartbeat, JourneyState, UnendedJourney } from '../domain/journey.ts';
+import {
+  transition,
+  type AlertResolution,
+  type JourneyForHeartbeat,
+  type JourneyState,
+  type UnendedJourney,
+} from '../domain/journey.ts';
 import { sqlstateOf } from '../domain/sqlstate.ts';
 import { LOCK_WAIT_LIMIT_MS } from '../domain/watchdog.ts';
 import type {
@@ -72,6 +101,7 @@ import type {
   OverdueJourneys,
   PushFailureReason,
   RecordHeartbeatResult,
+  RecordHomeResult,
   StartedJourney,
   WatchdogStore,
 } from '../ports.ts';
@@ -222,6 +252,75 @@ async function openInside(
   return { outcome: 'opened', alertId, messages: messages.rows.map(asMessage) };
 }
 
+/** What resolving an alert came to: the alert, null when there was none unresolved, and the stand-downs. */
+interface Resolved {
+  alertId: string | null;
+  messages: AlertMessage[];
+}
+
+/**
+ * Resolves the journey's one unresolved alert, inside the transaction that
+ * moved the journey, whose row it holds (LOST-03, approach item 4). Every
+ * path that resolves an alert calls this, and nothing else does it.
+ *
+ *   1. The alert, whatever its state, goes to RESOLVED at now(), with the
+ *      resolution. LOST-02's index allows at most one; none is answered with
+ *      no alert and no messages, and the move stands (reading 11).
+ *   2. Its lost-contact messages not sent and not withdrawn are withdrawn at
+ *      now() (D-111). The update takes each row's lock, so a claim or a mark
+ *      in progress finishes first, and the row is checked again as it left
+ *      it: one marked sent meanwhile is not withdrawn, and one claimed comes
+ *      back with its new attempt count and lease. Attempts and the last
+ *      failure are kept.
+ *   3. One stand-down per responder row, of the resolution's own kind, with a
+ *      new random ID, due at now(), unless that responder's lost-contact
+ *      message was withdrawn having been handed to the port (attempts ≥ 1)
+ *      and is due after now(): then at that time, the end of its lease or its
+ *      retry, at most 60 s on. So a stand-down is never handed to the port
+ *      while the push it stands down may still be in the port's hands. The
+ *      unique (alert, recipient, kind) refuses a second one. Steps 2 and 3
+ *      are one statement, so the hold copies the time at the database's own
+ *      precision.
+ */
+async function resolveInside(
+  tx: Pick<Database, 'execute' | 'update'>,
+  journeyId: string,
+  resolution: AlertResolution,
+): Promise<Resolved> {
+  const [alert] = await tx
+    .update(alerts)
+    .set({ state: 'RESOLVED', resolvedAt: sql`now()`, resolution })
+    .where(and(eq(alerts.journeyId, journeyId), unresolved(alerts.state)))
+    .returning({ id: alerts.id });
+  if (alert === undefined) {
+    return { alertId: null, messages: [] };
+  }
+
+  const standDowns = await tx.execute<MessageRow>(sql`
+    with withdrawn as (
+      update ${outbox} set "withdrawn_at" = now()
+       where ${outbox.alertId} = ${alert.id}
+         and ${outbox.kind} = 'LOST_CONTACT'
+         and ${outbox.sentAt} is null
+         and ${outbox.withdrawnAt} is null
+      returning ${outbox.recipientId}, ${outbox.attempts}, ${outbox.nextAttemptAt}
+    )
+    insert into "outbox" ("alert_id", "recipient_id", "kind", "created_at", "attempts",
+                          "next_attempt_at")
+    select ${alert.id}, ${journeyResponders.responderId},
+           ${resolution}::${sql.identifier(messageKind.enumName)}, now(), 0,
+           case when withdrawn."attempts" >= 1 and withdrawn."next_attempt_at" > now()
+                then withdrawn."next_attempt_at"
+                else now()
+           end
+      from ${journeyResponders}
+      left join withdrawn on withdrawn."recipient_id" = ${journeyResponders.responderId}
+     where ${journeyResponders.journeyId} = ${journeyId}
+    returning "id", "recipient_id", "kind"`);
+
+  return { alertId: alert.id, messages: standDowns.rows.map(asMessage) };
+}
+
 export function databaseJourneyStore(db: Database): JourneyStore & WatchdogStore & OutboxStore {
   return {
     unendedJourneyOf(walkerId: string): Promise<UnendedJourney | null> {
@@ -260,10 +359,13 @@ export function databaseJourneyStore(db: Database): JourneyStore & WatchdogStore
           // snapshot cannot see raises 40001 instead.
           const winner = await unendedJourneyOf(tx, walkerId);
           if (winner === null) {
-            // Unreachable while no journey can end: the conflicting journey
-            // is still unended when this reads it. Once one can end (tasks 4
-            // and 7), it may end between the conflict and this read; then the
-            // start should retry the insert once rather than answer 500.
+            // Reachable now that "I'm home" ends journeys: the conflicting
+            // journey may end between the conflict and this read. Only the
+            // walker's own phone ends one yet, so it is their start racing
+            // their own end: answered 500, loudly, and the app's retry then
+            // starts. Retrying the insert once here is left for the task that
+            // lets someone else end a journey ("They're safe", and the
+            // 24-hour rule), where a start can meet an end by chance.
             throw new Error(
               'A start was refused as a second unended journey, and no unended journey was found.',
             );
@@ -343,18 +445,93 @@ export function databaseJourneyStore(db: Database): JourneyStore & WatchdogStore
           // reverse order of their receive times (SM-09). GREATEST ignores
           // NULLs, so the first heartbeat sets it.
           const at = receivedAt.toISOString();
-          await tx
+          const lastContact = tx
             .update(journeys)
             .set({
               lastHeartbeatAt: sql`greatest(${journeys.lastHeartbeatAt}, ${at}::timestamptz)`,
             })
             .where(eq(journeys.id, journeyId));
+          if (journey.state !== 'LOST_CONTACT') {
+            await lastContact;
+            return { outcome: 'recorded' };
+          }
 
-          return { outcome: 'recorded' };
+          // LOST-03: the locked state was LOST_CONTACT, so the same statement
+          // returns the silence's start, counted with this heartbeat, and
+          // this transaction's now(); whether contact is back is the
+          // domain's, asked with the database's times (REL-01).
+          const [contact] = await lastContact.returning({
+            silentSince: sql<unknown>`${silentSince}`,
+            now: sql<unknown>`now()`,
+          });
+          if (contact === undefined) {
+            throw new Error('The locked journey’s last contact was not moved.');
+          }
+          const decision = transition(
+            { id: journeyId, state: journey.state },
+            {
+              type: 'contact',
+              silentSince: databaseTime(contact.silentSince, 'The heartbeat’s write'),
+              now: databaseTime(contact.now, 'The heartbeat’s write'),
+            },
+          );
+          if (decision.type === 'unchanged') {
+            return { outcome: 'recorded' };
+          }
+          const moved = await tx
+            .update(journeys)
+            .set({ state: decision.state })
+            .where(and(eq(journeys.id, journeyId), eq(journeys.state, 'LOST_CONTACT')))
+            .returning({ id: journeys.id });
+          if (moved.length !== 1) {
+            throw new Error('The move back to ACTIVE changed no row, so nothing of it is kept.');
+          }
+          const resolved = await resolveInside(tx, journeyId, 'BACK_IN_CONTACT');
+          return { outcome: 'back_in_contact', ...resolved };
         });
       } catch (error) {
         throw new HeartbeatStoreError(sqlstateOf(error));
       }
+    },
+
+    recordHome(journeyId: string): Promise<RecordHomeResult> {
+      // Not rewritten as the heartbeat's errors are: nothing here binds a
+      // location or a phone number, so no error of this can carry one. The
+      // module logs the SQLSTATE alone.
+      return db.transaction(async (tx): Promise<RecordHomeResult> => {
+        // The journey's row first, as a heartbeat and the watchdog take it.
+        const [journey] = await tx
+          .select({ state: journeys.state })
+          .from(journeys)
+          .where(eq(journeys.id, journeyId))
+          .for('update');
+        if (journey === undefined) {
+          // Nothing deletes a journey before the retention work, so one that
+          // was read and is gone is an error, not a guess.
+          throw new Error('The journey "I’m home" names was not found to lock.');
+        }
+        if (journey.state === 'ENDED') {
+          return { outcome: 'ended' };
+        }
+
+        // The state the row is in now decides, not the module's read: a
+        // journey the watchdog moved to LOST_CONTACT since is ended as SM-04
+        // says, and one a heartbeat brought back is ended from ACTIVE.
+        const from = journey.state;
+        const ended = await tx
+          .update(journeys)
+          .set({ state: 'ENDED', endedAt: sql`now()`, endReason: 'HOME' })
+          .where(and(eq(journeys.id, journeyId), eq(journeys.state, from)))
+          .returning({ id: journeys.id });
+        if (ended.length !== 1) {
+          throw new Error('The end changed no row, so nothing of it is kept.');
+        }
+        const resolved: Resolved =
+          from === 'LOST_CONTACT'
+            ? await resolveInside(tx, journeyId, 'HOME')
+            : { alertId: null, messages: [] };
+        return { outcome: 'home', from, ...resolved };
+      });
     },
 
     async latestHeartbeatOf(journeyId: string): Promise<LatestHeartbeat | null> {
@@ -447,7 +624,8 @@ export function databaseJourneyStore(db: Database): JourneyStore & WatchdogStore
     async claimDue({ limit, leaseMs }): Promise<ClaimedMessages> {
       // One statement: the due messages no other claim holds, one attempt
       // more each, leased until now() plus the lease; and now(), even when
-      // nothing is due.
+      // nothing is due. A withdrawn message is never due again, whatever its
+      // time and whatever a later mark wrote (D-111).
       const result = await db.execute<{
         now: unknown;
         id: string | null;
@@ -457,7 +635,8 @@ export function databaseJourneyStore(db: Database): JourneyStore & WatchdogStore
       }>(sql`
         with due as (
           select ${outbox.id} from ${outbox}
-           where ${outbox.sentAt} is null and ${outbox.nextAttemptAt} <= now()
+           where ${outbox.sentAt} is null and ${outbox.withdrawnAt} is null
+             and ${outbox.nextAttemptAt} <= now()
            order by ${outbox.nextAttemptAt}, ${outbox.id}
            limit ${limit}
            for update skip locked

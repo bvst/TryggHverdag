@@ -31,6 +31,8 @@ export {
   recordHeartbeat,
 } from './heartbeats.ts';
 export type { HeartbeatErrorCode, HeartbeatRequest, HeartbeatResponse } from './heartbeats.ts';
+export { homeErrors, homeRequestSchema, homeResponseSchema, reportHome } from './home.ts';
+export type { HomeErrorCode, HomeRequest, HomeResponse } from './home.ts';
 export {
   MAX_RESPONDERS,
   startJourney,

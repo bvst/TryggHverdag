@@ -152,6 +152,27 @@ export function createApi({ health, journeys, devices }: ApiDependencies): Hono 
           throw errors[result.reason]();
       }
     }),
+
+    // "I'm home" (SM-04, D-110). The journey is the path's, and only the
+    // path's: the input is detailed, so the body cannot name another. Only the
+    // device that started it may end it. A 200 and a 409 both mean the
+    // journey is over.
+    reportHome: fromKnownDevice.reportHome.handler(async ({ input, context, errors }) => {
+      const result = await journeys.home({
+        walkerId: context.device.userId,
+        deviceId: context.device.deviceId,
+        journeyId: input.params.journeyId,
+      });
+      switch (result.type) {
+        case 'ended':
+          return { outcome: 'ENDED' };
+        case 'ignored':
+        case 'refused':
+          // As for a heartbeat: JOURNEY_ENDED (409), JOURNEY_NOT_FOUND (404)
+          // and NOT_THE_JOURNEYS_DEVICE (403).
+          throw errors[result.reason]();
+      }
+    }),
   });
 
   const handler = new OpenAPIHandler(router, {

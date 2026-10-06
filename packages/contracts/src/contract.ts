@@ -5,6 +5,7 @@
  */
 import { health } from './health.ts';
 import { recordHeartbeat } from './heartbeats.ts';
+import { reportHome } from './home.ts';
 import { startJourney } from './journeys.ts';
 
-export const contract = { health, startJourney, recordHeartbeat };
+export const contract = { health, startJourney, recordHeartbeat, reportHome };

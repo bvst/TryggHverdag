@@ -12,6 +12,7 @@ import type {
   MessageKind,
   PushFailureReason,
   UnendedJourney,
+  UnendedJourneyState,
 } from './domain/journey.ts';
 
 /** The domain's lists, as the types the ports are written in. */
@@ -102,11 +103,28 @@ export interface HeartbeatToRecord {
 
 /**
  * Stored; already there, so nothing changed (SM-08); or the journey had ENDED
- * by the time it was written, so nothing was stored (SM-07).
+ * by the time it was written, so nothing was stored (SM-07). Or stored, and
+ * the journey, LOST_CONTACT when its row was taken, is back in contact
+ * (LOST-03): the alert it resolved, null when it found none unresolved, and
+ * the stand-downs it wrote, one per responder.
  */
-export interface RecordHeartbeatResult {
-  outcome: 'recorded' | 'duplicate' | 'ended';
-}
+export type RecordHeartbeatResult =
+  | { outcome: 'recorded' | 'duplicate' | 'ended' }
+  | { outcome: 'back_in_contact'; alertId: string | null; messages: AlertMessage[] };
+
+/**
+ * "I'm home" (D-110): ended now, from the state the journey's row was in when
+ * taken, with the alert it resolved, null when none, and the stand-downs it
+ * wrote; or the journey had already ENDED, and nothing changed.
+ */
+export type RecordHomeResult =
+  | {
+      outcome: 'home';
+      from: UnendedJourneyState;
+      alertId: string | null;
+      messages: AlertMessage[];
+    }
+  | { outcome: 'ended' };
 
 /**
  * A journey's latest heartbeat: the greatest receive time, a tie to the one
@@ -253,9 +271,21 @@ export interface JourneyStore {
    * Stores the heartbeat and its position, if any, once per (journey, event
    * ID), and moves last contact forward to its receive time, never back: all
    * of it or none of it. A duplicate changes nothing, last contact included,
-   * and a journey ENDED by the time of the write takes nothing.
+   * and a journey ENDED by the time of the write takes nothing. A journey
+   * LOST_CONTACT when its row is taken, whose silence counted with this
+   * heartbeat is under five minutes by the database's now(), is brought back
+   * to ACTIVE in the same transaction: its alert resolved, its unsent
+   * lost-contact messages withdrawn, and one stand-down per responder written
+   * (LOST-03, AR-05).
    */
   recordHeartbeat(heartbeat: HeartbeatToRecord): Promise<RecordHeartbeatResult>;
+  /**
+   * "I'm home" (D-110), in one transaction: ends the journey, HOME, at the
+   * database's now(), from the state its row is in when taken, and from
+   * LOST_CONTACT resolves its alert as a heartbeat that brings it back does
+   * (SM-04). A journey already ENDED is answered `ended`, and nothing changes.
+   */
+  recordHome(journeyId: string): Promise<RecordHomeResult>;
   /** The journey's latest heartbeat, or null when it has none. */
   latestHeartbeatOf(journeyId: string): Promise<LatestHeartbeat | null>;
 }
@@ -272,7 +302,10 @@ export type LogEvent =
   | { event: 'watchdog_overdue'; journeyId: string }
   | { event: 'push_failed'; reason: PushFailureReason; messageId: string }
   | { event: 'delivery_failed'; stage: 'claim' | 'mark'; code: string | null }
-  | { event: 'database_error'; pool: 'api' | 'worker'; code: string | null };
+  | { event: 'database_error'; pool: 'api' | 'worker'; code: string | null }
+  | { event: 'home_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
+  | { event: 'home_failed'; stage: 'read' | 'store'; code: string | null }
+  | { event: 'alert_missing'; journeyId: string };
 
 /** Where the server writes what happened, one event at a time. */
 export interface Log {

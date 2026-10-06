@@ -1,7 +1,7 @@
 /**
- * Starting a journey, and the heartbeats that keep it in contact: read the
- * situation, ask the state machine, write what it decided (SM-01, SM-02,
- * LOST-01).
+ * Starting a journey, the heartbeats that keep it in contact, and "I'm home":
+ * read the situation, ask the state machine, write what it decided (SM-01,
+ * SM-02, LOST-01, LOST-03, SM-04).
  *
  * Thin on purpose, like every module. The decision is the domain's, where it
  * is tested in milliseconds; the one-unended-journey rule, the heartbeat
@@ -12,9 +12,12 @@
  * The time comes from the injected clock, which in the API is the database
  * clock, never from this process (AR-03, REL-01).
  *
- * The log takes closed events only, and the one line about a heartbeat that
- * this module writes names the journey and the reason, nothing of what the
- * heartbeat held (PRIV-07).
+ * "I'm home" reads no clock: it ends the journey at the database's now(), in
+ * the store's transaction (REL-01).
+ *
+ * The log takes closed events only, and the lines this module writes name the
+ * journey and the reason, or the stage and the SQLSTATE, never anything a
+ * request held (PRIV-07).
  */
 import type { HeartbeatRequest, StartJourneyResponse } from '@trygghverdag/contracts';
 import { transition, type HeartbeatRefusal, type StartRefusal } from '../../domain/journey.ts';
@@ -40,13 +43,26 @@ export interface HeartbeatCall {
 /** Stored now; already stored, so nothing changed (SM-08); or not stored, and why. */
 export type HeartbeatResult = { type: 'recorded' } | { type: 'duplicate' } | HeartbeatRefusal;
 
+/** "I'm home", as the API hands it over: the walker is the device's own user, and the device is the one that sent it (D-110). */
+export interface HomeCall {
+  walkerId: string;
+  deviceId: string;
+  journeyId: string;
+}
+
+/** Ended now; or not, and why, as for a heartbeat. */
+export type HomeResult = { type: 'ended' } | HeartbeatRefusal;
+
 export interface JourneyService {
   start(request: StartRequest): Promise<StartResult>;
   heartbeat(call: HeartbeatCall): Promise<HeartbeatResult>;
+  home(call: HomeCall): Promise<HomeResult>;
 }
 
-/** Where a heartbeat failed, as `heartbeat_failed` names it. */
-type Stage = Extract<LogEvent, { event: 'heartbeat_failed' }>['stage'];
+/** Where a heartbeat or an "I'm home" failed, as its failure line names it, without the code. */
+type Failure =
+  | Omit<Extract<LogEvent, { event: 'heartbeat_failed' }>, 'code'>
+  | Omit<Extract<LogEvent, { event: 'home_failed' }>, 'code'>;
 
 export function createJourneyService({
   clock,
@@ -58,18 +74,29 @@ export function createJourneyService({
   log: Log;
 }): JourneyService {
   /**
-   * Runs one stage of a heartbeat. A failure is written as one line naming
-   * the stage and its SQLSTATE, found on the error or down its causes as
-   * Drizzle wraps PostgreSQL's, and never its message, which can hold what
-   * the request held. Then it is thrown on, so the API answers 500: never a
-   * 2xx, and never a 401.
+   * Runs one stage of a heartbeat or an "I'm home". A failure is written as
+   * one line naming the stage and its SQLSTATE, found on the error or down
+   * its causes as Drizzle wraps PostgreSQL's, and never its message, which
+   * can hold what the request held. Then it is thrown on, so the API answers
+   * 500: never a 2xx, and never a 401.
    */
-  async function stage<T>(name: Stage, run: () => Promise<T>): Promise<T> {
+  async function stage<T>(failure: Failure, run: () => Promise<T>): Promise<T> {
     try {
       return await run();
     } catch (error) {
-      log.write({ event: 'heartbeat_failed', stage: name, code: sqlstateOf(error) });
+      log.write({ ...failure, code: sqlstateOf(error) });
       throw error;
+    }
+  }
+
+  /**
+   * A LOST_CONTACT journey moved with no unresolved alert to resolve: a state
+   * nothing in the code makes, met in the safe direction, and said out loud
+   * rather than passed over (LOST-03, reading 11).
+   */
+  function alertMissing(journeyId: string, resolved: { alertId: string | null }): void {
+    if (resolved.alertId === null) {
+      log.write({ event: 'alert_missing', journeyId });
     }
   }
 
@@ -129,8 +156,12 @@ export function createJourneyService({
 
       // The moment it arrived, read first: a slow read of the journey must
       // not make a heartbeat look later than it came (SM-09).
-      const receivedAt = await stage('clock', () => clock.now());
-      const journey = await stage('read', () => journeys.journeyForHeartbeat(heartbeat.journeyId));
+      const receivedAt = await stage({ event: 'heartbeat_failed', stage: 'clock' }, () =>
+        clock.now(),
+      );
+      const journey = await stage({ event: 'heartbeat_failed', stage: 'read' }, () =>
+        journeys.journeyForHeartbeat(heartbeat.journeyId),
+      );
 
       const decision = transition(journey, { type: 'heartbeat', walkerId, deviceId });
       if (decision.type !== 'recorded') {
@@ -138,7 +169,7 @@ export function createJourneyService({
       }
 
       const { position } = heartbeat;
-      const stored = await stage('store', () =>
+      const stored = await stage({ event: 'heartbeat_failed', stage: 'store' }, () =>
         journeys.recordHeartbeat({
           journeyId: heartbeat.journeyId,
           eventId: heartbeat.eventId,
@@ -161,7 +192,45 @@ export function createJourneyService({
       if (stored.outcome === 'ended') {
         return ended();
       }
+      // Back in contact (LOST-03) is a stored heartbeat to the phone: the
+      // journey moved, the alert resolved and the stand-downs written are the
+      // store's record, and need no line, unless there was no alert at all.
+      if (stored.outcome === 'back_in_contact') {
+        alertMissing(heartbeat.journeyId, stored);
+        return { type: 'recorded' };
+      }
       return { type: stored.outcome };
+    },
+
+    async home({ walkerId, deviceId, journeyId }: HomeCall): Promise<HomeResult> {
+      // SM-07: one line, naming the journey and the reason, and nothing else.
+      const ended = (): HomeResult => {
+        log.write({ event: 'home_ignored', reason: 'JOURNEY_ENDED', journeyId });
+        return { type: 'ignored', reason: 'JOURNEY_ENDED' };
+      };
+
+      const journey = await stage({ event: 'home_failed', stage: 'read' }, () =>
+        journeys.journeyForHeartbeat(journeyId),
+      );
+      const decision = transition(journey, { type: 'home', walkerId, deviceId });
+      if (decision.type !== 'ended') {
+        return decision.type === 'ignored' ? ended() : decision;
+      }
+
+      const stored = await stage({ event: 'home_failed', stage: 'store' }, () =>
+        journeys.recordHome(journeyId),
+      );
+      // The journey ended between the read above and the write: the same
+      // answer, and the same line, as an ended journey read above.
+      if (stored.outcome === 'ended') {
+        return ended();
+      }
+      // The store ended it from the state its row was in, which decides
+      // whether there was an alert to resolve, not the read above.
+      if (stored.from === 'LOST_CONTACT') {
+        alertMissing(journeyId, stored);
+      }
+      return { type: 'ended' };
     },
   };
 }

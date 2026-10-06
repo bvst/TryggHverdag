@@ -35,7 +35,9 @@ import {
   type PgColumn,
 } from 'drizzle-orm/pg-core';
 import {
+  ALERT_RESOLUTIONS,
   ALERT_STATES,
+  JOURNEY_END_REASONS,
   JOURNEY_STATES,
   MESSAGE_KINDS,
   PUSH_FAILURE_REASONS,
@@ -88,6 +90,18 @@ export const devices = pgTable(
 /** The journey states, exactly as the state machine lists them, and no others. */
 export const journeyState = pgEnum('journey_state', JOURNEY_STATES);
 
+/** Why a journey ended, exactly as the state machine lists the reasons (LOST-03). */
+export const journeyEndReason = pgEnum('journey_end_reason', JOURNEY_END_REASONS);
+
+/**
+ * Both null, or both set: a time and its reason are written together. No
+ * check ties them to a state (ENDED, RESOLVED): rows put in directly before
+ * they existed have the state without the time, and the migration would
+ * refuse them (LOST-03, D-112). The code sets them together.
+ */
+const togetherOrNeither = (time: PgColumn, reason: PgColumn) =>
+  sql`(${time} is null) = (${reason} is null)`;
+
 /**
  * "Not ended": the predicate of the one-unended-journey index below. Written
  * once, because the adapter names the index by it when it inserts, and an
@@ -109,6 +123,10 @@ export const unended = (state: PgColumn) => sql`${state} <> 'ENDED'`;
  *
  * `last_heartbeat_at` is last contact, in database time: null until the first
  * heartbeat, and never moved backwards (SM-09).
+ *
+ * `ended_at` and `end_reason` say when and why a journey ended through the
+ * code (LOST-03): the database's now() in the transaction that ended it, and
+ * HOME for "I'm home". Both null until then, and set together.
  */
 export const journeys = pgTable(
   'journeys',
@@ -119,6 +137,8 @@ export const journeys = pgTable(
     state: journeyState('state').notNull(),
     startedAt: moment('started_at').notNull(),
     lastHeartbeatAt: moment('last_heartbeat_at'),
+    endedAt: moment('ended_at'),
+    endReason: journeyEndReason('end_reason'),
   },
   (table) => [
     foreignKey({ columns: [table.walkerId], foreignColumns: [users.id] }),
@@ -126,6 +146,7 @@ export const journeys = pgTable(
     // One unended journey per walker, held by the database: two starts that
     // race past the read are stopped here.
     uniqueIndex('journeys_one_unended_per_walker').on(table.walkerId).where(unended(table.state)),
+    check('journeys_ended_at_end_reason_check', togetherOrNeither(table.endedAt, table.endReason)),
   ],
 );
 
@@ -214,6 +235,9 @@ export const positions = pgTable(
 /** The alert states, exactly as the state machine lists them, in order, and no others (D-033). */
 export const alertState = pgEnum('alert_state', ALERT_STATES);
 
+/** How an alert resolved, exactly as the state machine lists the resolutions (LOST-03). */
+export const alertResolution = pgEnum('alert_resolution', ALERT_RESOLUTIONS);
+
 /**
  * "Not resolved": the predicate of the one-open-alert index below, written
  * once, as `unended` is. It names the one state that frees the journey, so a
@@ -227,6 +251,10 @@ export const unresolved = (state: PgColumn) => sql`${state} <> 'RESOLVED'`;
  * contact then, or its start if it had none: the heartbeat received at that
  * moment holds the battery level and the position a responder's app reads,
  * so nothing of them is copied here.
+ *
+ * `resolved_at` and `resolution` say when and how it resolved (LOST-03): the
+ * database's now() in the transaction that resolved it, and BACK_IN_CONTACT
+ * or HOME. Both null until then, and set together.
  */
 export const alerts = pgTable(
   'alerts',
@@ -236,6 +264,8 @@ export const alerts = pgTable(
     state: alertState('state').notNull(),
     openedAt: moment('opened_at').notNull(),
     silentSince: moment('silent_since').notNull(),
+    resolvedAt: moment('resolved_at'),
+    resolution: alertResolution('resolution'),
   },
   (table) => [
     foreignKey({ columns: [table.journeyId], foreignColumns: [journeys.id] }),
@@ -244,10 +274,14 @@ export const alerts = pgTable(
     uniqueIndex('alerts_one_unresolved_per_journey')
       .on(table.journeyId)
       .where(unresolved(table.state)),
+    check(
+      'alerts_resolved_at_resolution_check',
+      togetherOrNeither(table.resolvedAt, table.resolution),
+    ),
   ],
 );
 
-/** The kinds of message there are, exactly as the domain lists them. Only the lost-contact alert, for now. */
+/** The kinds of message there are, exactly as the domain lists them: the lost-contact alert and its stand-downs. */
 export const messageKind = pgEnum('message_kind', MESSAGE_KINDS);
 
 /**
@@ -260,6 +294,12 @@ export const messageKind = pgEnum('message_kind', MESSAGE_KINDS);
  * written, the end of a claim's lease while it is being sent, and the retry
  * delay after a failure. `sent_at` stays null until the push port accepted
  * it, and `last_failure` holds the port's last reason, if any.
+ *
+ * `withdrawn_at` is when a message was withdrawn because its alert resolved
+ * before the port accepted it (LOST-03, D-111): from then on no claim hands
+ * it out again. A stand-down (BACK_IN_CONTACT, HOME) is written in the
+ * transaction that resolves the alert, as its alert's messages are written
+ * in the one that opens it.
  */
 export const outbox = pgTable(
   'outbox',
@@ -273,6 +313,7 @@ export const outbox = pgTable(
     nextAttemptAt: moment('next_attempt_at').notNull(),
     sentAt: moment('sent_at'),
     lastFailure: text('last_failure', { enum: PUSH_FAILURE_REASONS }),
+    withdrawnAt: moment('withdrawn_at'),
   },
   (table) => [
     foreignKey({ columns: [table.alertId], foreignColumns: [alerts.id] }),
@@ -293,6 +334,8 @@ export const outbox = pgTable(
     // The claim's: the unsent messages, in the order the claim takes them.
     // It runs every 10 s against a table that only grows, since a sent row
     // stays until retention removes it (M4), and this holds the unsent alone.
+    // Withdrawn rows stay in it, unsent, until retention removes them too: at
+    // the private group's scale that is nothing (LOST-03, approach item 6).
     index('outbox_unsent_due_index')
       .on(table.nextAttemptAt, table.id)
       .where(sql`${table.sentAt} is null`),

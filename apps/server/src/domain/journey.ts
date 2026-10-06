@@ -32,30 +32,59 @@
  *     is alerted once per silence, ENDED, and no journey. The rule reads no
  *     clock: both times are handed in, and a time that is not one (an invalid
  *     Date) never alerts, because no comparison with it holds.
+ *   - Contact (the back-in-contact story): the store's question once it has
+ *     stored a heartbeat, under the journey's row lock, with two database
+ *     times: when the silence began, counted with that heartbeat, and the
+ *     transaction's now. A LOST_CONTACT journey whose silence is under
+ *     LOST_CONTACT_AFTER_MS is back in contact: ACTIVE again, its alert
+ *     resolved. It is the silence rule asked the other way, at the same
+ *     threshold, so the two can never disagree at the boundary. Every other
+ *     situation is unchanged, and so is a time that is not one.
+ *   - "I'm home" (D-110): heard on exactly the heartbeat's terms, in its order
+ *     (not found, ended, not the journey's device), and then the journey ends,
+ *     HOME. From LOST_CONTACT it also resolves the alert (SM-04).
  */
 
 /** Every state a journey can be in (D-033). The database admits exactly these. */
 export const JOURNEY_STATES = ['ACTIVE', 'LOST_CONTACT', 'ENDED'] as const;
 
 /** Every event a journey can meet. */
-export const JOURNEY_EVENTS = ['start', 'heartbeat', 'silence'] as const;
+export const JOURNEY_EVENTS = ['start', 'heartbeat', 'silence', 'contact', 'home'] as const;
 
 /**
  * Every state an alert can be in (D-033), in order. The database admits
- * exactly these. This module opens alerts OPEN only; the other three belong
- * to the tasks that acknowledge, escalate and resolve them.
+ * exactly these. Alerts open OPEN, and contact or "I'm home" resolves them;
+ * ESCALATED and ACKNOWLEDGED belong to the tasks that escalate and
+ * acknowledge them.
  */
 export const ALERT_STATES = ['OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED'] as const;
 
 export type AlertState = (typeof ALERT_STATES)[number];
 
 /**
- * Every kind of message an alert causes: only the lost-contact alert, for
- * now. The database admits exactly these.
+ * Every kind of message an alert causes: the lost-contact alert, and the
+ * stand-down for each way it resolves. The database admits exactly these.
  */
-export const MESSAGE_KINDS = ['LOST_CONTACT'] as const;
+export const MESSAGE_KINDS = ['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME'] as const;
 
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
+
+/**
+ * Every way an alert resolves. Each is also the kind of the stand-down it
+ * sends every responder, by its own name: held here at typecheck. The
+ * database admits exactly these.
+ */
+export const ALERT_RESOLUTIONS = [
+  'BACK_IN_CONTACT',
+  'HOME',
+] as const satisfies readonly MessageKind[];
+
+export type AlertResolution = (typeof ALERT_RESOLUTIONS)[number];
+
+/** Every reason a journey ends. The database admits exactly these. */
+export const JOURNEY_END_REASONS = ['HOME'] as const;
+
+export type JourneyEndReason = (typeof JOURNEY_END_REASONS)[number];
 
 /**
  * Every reason the push port gives for not accepting a message, and no
@@ -145,7 +174,25 @@ export interface SilenceEvent {
   now: Date;
 }
 
-export type JourneyEvent = StartEvent | HeartbeatEvent | SilenceEvent;
+/**
+ * The store asks, once it has stored a heartbeat for a journey whose row it
+ * holds, whether contact is back: when the silence began, counted with that
+ * heartbeat, and the transaction's now, both database times (REL-01).
+ */
+export interface ContactEvent {
+  type: 'contact';
+  silentSince: Date;
+  now: Date;
+}
+
+/** "I'm home" for the journey it names, from the device's own user and the device (D-110). */
+export interface HomeEvent {
+  type: 'home';
+  walkerId: string;
+  deviceId: string;
+}
+
+export type JourneyEvent = StartEvent | HeartbeatEvent | SilenceEvent | ContactEvent | HomeEvent;
 
 /** Why a start was refused. */
 export type StartRefusal =
@@ -166,7 +213,16 @@ export type HeartbeatOutcome = { type: 'recorded'; state: UnendedJourneyState } 
 export type SilenceOutcome =
   { type: 'lost_contact'; state: 'LOST_CONTACT'; alert: 'OPEN' } | { type: 'unchanged' };
 
-export type TransitionOutcome = StartOutcome | HeartbeatOutcome | SilenceOutcome;
+/** Back in contact: ACTIVE again, and the alert resolved. Or nothing changes. */
+export type ContactOutcome =
+  { type: 'back_in_contact'; state: 'ACTIVE'; alert: 'RESOLVED' } | { type: 'unchanged' };
+
+/** Ended, HOME, resolving the alert when there is one to resolve; or not, and why, as for a heartbeat. */
+export type HomeOutcome =
+  { type: 'ended'; state: 'ENDED'; reason: 'HOME'; resolvesAlert: boolean } | HeartbeatRefusal;
+
+export type TransitionOutcome =
+  StartOutcome | HeartbeatOutcome | SilenceOutcome | ContactOutcome | HomeOutcome;
 
 /**
  * What an event does. Every outcome, a refusal included, is a value; only an
@@ -176,10 +232,12 @@ export type TransitionOutcome = StartOutcome | HeartbeatOutcome | SilenceOutcome
  *   is none: an ENDED journey frees the walker, so one handed in is treated as
  *   none. For a heartbeat, the journey it names in any state, or null when no
  *   journey has that ID. For silence, the journey the watchdog read, by its
- *   ID and state, or null.
+ *   ID and state, or null. For contact, the journey whose row the store
+ *   holds, by its ID and state. For "I'm home", the journey it names, as for
+ *   a heartbeat.
  *
- * The first three overloads are the ones callers use: each event with the
- * situation it needs, and the outcome it can have. The fourth, any situation
+ * The first five overloads are the ones callers use: each event with the
+ * situation it needs, and the outcome it can have. The last, any situation
  * with any event, exists for the transition test's table, which reads its
  * types with `Parameters<typeof transition>` (the last overload) so that it
  * can ask every pair the lists create, a new event's included.
@@ -190,6 +248,8 @@ export function transition(
   event: HeartbeatEvent,
 ): HeartbeatOutcome;
 export function transition(current: WalkersJourney | null, event: SilenceEvent): SilenceOutcome;
+export function transition(current: WalkersJourney | null, event: ContactEvent): ContactOutcome;
+export function transition(current: JourneyForHeartbeat | null, event: HomeEvent): HomeOutcome;
 export function transition(current: Situation | null, event: JourneyEvent): TransitionOutcome;
 export function transition(current: Situation | null, event: JourneyEvent): TransitionOutcome {
   switch (event.type) {
@@ -199,6 +259,10 @@ export function transition(current: Situation | null, event: JourneyEvent): Tran
       return heartbeat(current, event);
     case 'silence':
       return silence(current, event);
+    case 'contact':
+      return contact(current, event);
+    case 'home':
+      return home(current, event);
     default: {
       // A type error the day an event joins JourneyEvent without a case. And
       // a throw, never a value: a value handed back for an event nobody
@@ -234,7 +298,9 @@ function start(current: WalkersJourney | null, event: StartEvent): StartOutcome 
 }
 
 /**
- * The heartbeat rule, in its order. The order is part of the rule:
+ * The heartbeat rule, in its order, which "I'm home" is heard by too: it
+ * reads only who sent the event, the walker and the device. The order is part
+ * of the rule:
  *   1. no journey by that ID, or another walker's: not found, one answer for
  *      both, so it says nothing about other walkers or their journeys (SEC-07);
  *   2. ENDED: ignored (SM-07), reported before anything else the heartbeat
@@ -242,19 +308,22 @@ function start(current: WalkersJourney | null, event: StartEvent): StartOutcome 
  *   3. not the device that started the journey: refused, so a device that is
  *      not walking can never hide the walking phone's silence (D-101);
  *   4. otherwise recorded, and the state stays as it is: ACTIVE stays ACTIVE
- *      (SM-03), and LOST_CONTACT stays LOST_CONTACT until the back-in-contact
- *      task moves it. An open alert stays open: a false alarm that stays loud,
- *      never one closed silently.
+ *      (SM-03), and LOST_CONTACT stays LOST_CONTACT. Whether contact is back
+ *      is the contact rule's, asked by the store once the heartbeat is stored,
+ *      because it depends on times this read cannot know.
  */
-function heartbeat(journey: Situation | null, event: HeartbeatEvent): HeartbeatOutcome {
+function heartbeat(
+  journey: Situation | null,
+  sender: Pick<HeartbeatEvent, 'walkerId' | 'deviceId'>,
+): HeartbeatOutcome {
   // No journey has no walker, so it is not the sender's either.
-  if (journey?.walkerId !== event.walkerId) {
+  if (journey?.walkerId !== sender.walkerId) {
     return { type: 'refused', reason: 'JOURNEY_NOT_FOUND' };
   }
   if (journey.state === 'ENDED') {
     return { type: 'ignored', reason: 'JOURNEY_ENDED' };
   }
-  if (journey.deviceId !== event.deviceId) {
+  if (journey.deviceId !== sender.deviceId) {
     return { type: 'refused', reason: 'NOT_THE_JOURNEYS_DEVICE' };
   }
   return { type: 'recorded', state: journey.state };
@@ -264,9 +333,9 @@ function heartbeat(journey: Situation | null, event: HeartbeatEvent): HeartbeatO
  * The silence rule (D-021). Only an ACTIVE journey is alerted, and only once
  * it has been silent for the threshold or more by the database's clock. A
  * journey already LOST_CONTACT is never alerted again for the same silence:
- * moving it back is the back-in-contact task's, and until then its one alert
- * stays open. A comparison with a time that is not one never holds, so an
- * invalid moment changes nothing rather than alerting on a guess.
+ * moving it back is the contact rule's, and until then its one alert stays
+ * open. A comparison with a time that is not one never holds, so an invalid
+ * moment changes nothing rather than alerting on a guess.
  */
 function silence(journey: Situation | null, event: SilenceEvent): SilenceOutcome {
   if (journey?.state !== 'ACTIVE') {
@@ -276,4 +345,43 @@ function silence(journey: Situation | null, event: SilenceEvent): SilenceOutcome
     return { type: 'lost_contact', state: 'LOST_CONTACT', alert: 'OPEN' };
   }
   return { type: 'unchanged' };
+}
+
+/**
+ * The contact rule: the silence rule asked the other way, at the same
+ * threshold. Only a LOST_CONTACT journey is brought back, and only when its
+ * silence, counted with the heartbeat just stored, is under
+ * LOST_CONTACT_AFTER_MS by the database's clock. So a journey brought back is
+ * never already overdue, and one whose heartbeat was received five minutes or
+ * more before it was stored stays lost, its alert open. A comparison with a
+ * time that is not one never holds, so an invalid moment resolves nothing.
+ */
+function contact(journey: Situation | null, event: ContactEvent): ContactOutcome {
+  if (journey?.state !== 'LOST_CONTACT') {
+    return { type: 'unchanged' };
+  }
+  if (event.now.getTime() - event.silentSince.getTime() < LOST_CONTACT_AFTER_MS) {
+    return { type: 'back_in_contact', state: 'ACTIVE', alert: 'RESOLVED' };
+  }
+  return { type: 'unchanged' };
+}
+
+/**
+ * The "I'm home" rule (D-110). Heard on exactly the heartbeat's terms, in its
+ * order, because ending a journey stops all protection: not found for no
+ * journey or another walker's, ignored once ENDED (SM-07), refused from a
+ * device that did not start it (D-101). Otherwise the journey ends, HOME, and
+ * from LOST_CONTACT its alert is resolved too (SM-04).
+ */
+function home(journey: Situation | null, event: HomeEvent): HomeOutcome {
+  const heard = heartbeat(journey, event);
+  if (heard.type !== 'recorded') {
+    return heard;
+  }
+  return {
+    type: 'ended',
+    state: 'ENDED',
+    reason: 'HOME',
+    resolvesAlert: heard.state === 'LOST_CONTACT',
+  };
 }
