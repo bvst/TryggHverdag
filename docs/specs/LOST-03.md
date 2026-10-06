@@ -1293,8 +1293,8 @@ inside LOST-02-AC12's all or nothing.
 - 1b. The shared behaviour suite (`journey-store-behaviour.ts`, at L2 and
   L3): `LOST-03-AC8: an open withdraws the journey’s earlier alerts’ unsent
   stand-downs at the store’s now, and leaves alone those already sent, every
-  other journey’s messages and its own new ones; an open that skips
-  withdraws nothing`.
+  other walker’s journeys’ messages and its own new ones; an open that skips
+  withdraws nothing` (renamed in loop 3, item 21).
 - 1c. L3, `apps/server/src/contact.integration.test.ts`: `LOST-03-AC8: an
   open rolled back by a test-only trigger on its second message withdraws
   no earlier stand-down`.
