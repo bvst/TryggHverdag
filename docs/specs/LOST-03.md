@@ -1666,7 +1666,7 @@ which lists the same paths) and `.github/workflows/ai-review.yml` (the
 | `apps/server/src/domain/*.test.ts` | L2 (test-author) | **yes** | **yes** | (its tests) |
 | `apps/server/src/modules/journeys/service.ts` | `home()`; `heartbeat()` maps `back_in_contact`; `alert_missing` | **yes** | **yes** | `journeys` |
 | `apps/server/src/ports.ts` | `RecordHeartbeatResult`, `recordHome`, three `LogEvent`s | no | no | — |
-| `apps/server/src/adapters/journeys.ts` | Back in contact in `recordHeartbeat`; `recordHome`, asking the domain under the lock; the resolve helper; the open withdraws earlier alerts' unsent stand-downs; the claim skips withdrawn messages; the header comment on the marks' bounded wait; `insertStarted`'s comment updated (reachable now, left for task 7) | **yes** | **yes** | no (D-095) |
+| `apps/server/src/adapters/journeys.ts` | Back in contact in `recordHeartbeat`; `recordHome`, asking the domain under the lock; the resolve helper; the open withdraws the unsent stand-downs of every alert of the walker's journeys (loop 2); the claim skips withdrawn messages; the header comment on the marks' bounded wait; `insertStarted`'s comment updated (reachable now, left for task 7) | **yes** | **yes** | no (D-095) |
 | `apps/server/src/api.ts` | The "I'm home" route (D-110); the comment beside `BAD_REQUEST_BODY` on the headers a 400's error holds | **yes** (D-097) | **yes** | no |
 | `coverage-baseline.json` | Entries for `home.ts`, `modules/alerts/watchdog.ts` and `outbox.ts`, by hand, at their measured values (review loop 1, item 6) | **yes** | no | — |
 | `apps/server/src/db/schema.ts` | Two enums, the new columns and checks, `message_kind`'s values | **yes** | **yes** | no |
@@ -1917,6 +1917,17 @@ From review loop 1 (2026-10-06). None blocks this task:
   owner's approval to change. `ports.ts` was raised after LOST-01 and
   LOST-02 too. The review list ties the last to an existing item from
   BUG-14's reviews; that was not re-read here (`code-reviewer`).
+- **Scale: the open's withdrawal is not indexed by walker** (`implementer`,
+  loop 2). Since loop 2 it joins alerts to journeys by `walker_id`, and only
+  the partial unique index on unended journeys covers that column. At a
+  private group's scale this costs nothing measurable; it belongs with the
+  M6/L10 load work, and an index needs a migration. Not measured.
+- **A test-output note: shortened behaviour names.** `test.each` over the
+  shared behaviour suite cuts `$name` at about 40 characters, so a `-t`
+  filter and the report see only the start, and two behaviours that start
+  alike look the same in the output (`implementer`, loop 2;
+  `test-author` saw it in the red phase). Requirement coverage reads the
+  source, so it is unaffected. For whoever next changes the suite's runner.
 
 ## Settled by the plan, so not asked
 

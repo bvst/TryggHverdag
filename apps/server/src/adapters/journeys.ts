@@ -35,10 +35,11 @@
  * The watchdog's open is one transaction: the journey's row, taken again only
  * if it is still ACTIVE and overdue by that transaction's now(); the move to
  * LOST_CONTACT, which must change exactly that row; the withdrawal of the
- * journey's earlier alerts' unsent stand-downs (LOST-03); the alert; and one
- * outbox message per responder, at least one. Any of it failing writes none
- * of it (AR-05). The outbox's claim, its marks and the read of what is
- * overdue are single statements, each timed by the database's now() (REL-01).
+ * unsent stand-downs of every alert of the walker's journeys, and of no other
+ * walker's (LOST-03); the alert; and one outbox message per responder, at
+ * least one. Any of it failing writes none of it (AR-05). The outbox's claim,
+ * its marks and the read of what is overdue are single statements, each timed
+ * by the database's now() (REL-01).
  *
  * Back in contact and "I'm home" (LOST-03) take the journey's row first too,
  * so no two of these can wait for each other in a cycle: the claim never
@@ -60,10 +61,14 @@
  *     message may still be in the push port's hands is due only once that
  *     message's lease or retry time has passed, so it never overtakes it.
  *
- * The worker's marks can now wait on the API's withdrawal transaction, and the
- * worker's pool has no lock limit of its own, but the wait is bounded by the
- * API's limits (each statement waits at most 5 s for a lock, and a frozen
- * transaction is ended after 10 s idle), and it stalls delivery only.
+ * The worker's marks can now wait on two withdrawals, and the worker's pool
+ * has no lock limit of its own. The first is the API's, when it resolves an
+ * alert: that wait is bounded by the API's limits (each statement waits at
+ * most 5 s for a lock, and a frozen transaction is ended after 10 s idle).
+ * The second is the open's own, on the worker's pool: a mark waits for the
+ * open to commit, and each lock the open waits for after its withdrawal is
+ * bounded by the open's own 5 s lock limit (and a frozen open by the worker's
+ * 10 s idle limit). Either wait stalls delivery only.
  *
  * Any failure while storing a heartbeat is replaced by a `HeartbeatStoreError`
  * holding PostgreSQL's SQLSTATE and nothing else. PostgreSQL's own error can
@@ -207,7 +212,7 @@ async function openInside(
   // wait a row someone holds is no row either; with one, PostgreSQL checks
   // the row its holder left.
   const [locked] = await tx
-    .select({ id: journeys.id })
+    .select({ id: journeys.id, walkerId: journeys.walkerId })
     .from(journeys)
     .where(
       and(
@@ -231,14 +236,20 @@ async function openInside(
     throw new Error('The move to LOST_CONTACT changed no row, so nothing of the alert is kept.');
   }
 
-  // No overtaking across alerts (LOST-03, D-112 amended): the journey's
-  // earlier alerts' stand-downs not yet sent are withdrawn at this now(), so
-  // an earlier "back in contact", retried for ever, never reaches a responder
-  // after this alert's lost-contact push. Before the new alert is written, so
-  // every alert of the journey is an earlier one; their unsent lost-contact
-  // messages were withdrawn when they resolved. In this transaction, so an
-  // open that rolls back withdraws nothing. One already in the port's hands
-  // was handed over before this alert opened.
+  // No overtaking (LOST-03, D-112 as amended in review loops 1 and 2): the
+  // stand-downs not yet sent of every alert of this walker's journeys, this
+  // journey's earlier alerts and the walker's earlier journeys' alike, are
+  // withdrawn at this now(), so an earlier "back in contact" or "home",
+  // retried for ever, never reaches a responder after this alert's
+  // lost-contact push. The walker is the locked row's. Another walker's are
+  // left alone: their stand-down is no all-clear for this one. The walker's
+  // other journeys are all ENDED (one unended journey per walker), so nothing
+  // resolves them meanwhile, and the journey's row is still the first lock
+  // taken. Before the new alert is written, so every alert matched is an
+  // earlier one; their unsent lost-contact messages were withdrawn when they
+  // resolved. In this transaction, so an open that rolls back withdraws
+  // nothing. One already in the port's hands was handed over before this
+  // alert opened.
   await tx
     .update(outbox)
     .set({ withdrawnAt: sql`now()` })
@@ -246,7 +257,11 @@ async function openInside(
       and(
         inArray(
           outbox.alertId,
-          tx.select({ id: alerts.id }).from(alerts).where(eq(alerts.journeyId, journeyId)),
+          tx
+            .select({ id: alerts.id })
+            .from(alerts)
+            .innerJoin(journeys, eq(journeys.id, alerts.journeyId))
+            .where(eq(journeys.walkerId, locked.walkerId)),
         ),
         ne(outbox.kind, 'LOST_CONTACT'),
         isNull(outbox.sentAt),

@@ -197,17 +197,18 @@ export interface WatchdogStore {
   overdueJourneys(afterMs: number): Promise<OverdueJourneys>;
   /**
    * In one transaction: takes the journey's row if it is still ACTIVE and
-   * overdue, moves it to LOST_CONTACT, withdraws the journey's earlier alerts'
-   * unsent stand-downs (LOST-03), opens its alert and writes one message per
-   * responder, all of it or none of it. Every open bounds its waits with
-   * a lock limit of its own, local to its transaction: `lockWaitMs`, or
-   * LOCK_WAIT_LIMIT_MS without it. Without `lockWaitMs` a held row is skipped
-   * (`skip locked`) and `held` is never answered; with it, the open waits at
-   * most that long for the journey's row, and answers `held` when that wait
-   * runs out. Rejects, having written nothing, on any other failure: a wait
-   * for any other lock that ran out (55P03), or a journey with no responder.
-   * Rejects before taking any lock when `lockWaitMs` is given and is not a
-   * whole number from 1 to 2147483647: PostgreSQL reads 0 as no limit.
+   * overdue, moves it to LOST_CONTACT, withdraws the unsent stand-downs of
+   * every alert of the walker's journeys, and of no other walker's (LOST-03),
+   * opens its alert and writes one message per responder, all of it or none
+   * of it. Every open bounds its waits with a lock limit of its own, local to
+   * its transaction: `lockWaitMs`, or LOCK_WAIT_LIMIT_MS without it. Without
+   * `lockWaitMs` a held row is skipped (`skip locked`) and `held` is never
+   * answered; with it, the open waits at most that long for the journey's
+   * row, and answers `held` when that wait runs out. Rejects, having written
+   * nothing, on any other failure: a wait for any other lock that ran out
+   * (55P03), or a journey with no responder. Rejects before taking any lock
+   * when `lockWaitMs` is given and is not a whole number from 1 to
+   * 2147483647: PostgreSQL reads 0 as no limit.
    */
   openLostContactAlert(request: OpenRequest): Promise<OpenLostContactAlertResult>;
 }
