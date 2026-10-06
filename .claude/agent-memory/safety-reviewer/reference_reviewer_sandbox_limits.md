@@ -78,3 +78,9 @@ core.excludesFile does NOT work: git reads a pipe as size 0 and matches nothing 
 `@trygghverdag/test-kit` and real src/*.ts, so a watchdog + fake store + real adapter (with a stub `{ transaction }`
 db) emulation needs no files. A cloud session has the docker CLI but no daemon (`docker info` Server: failed to
 connect), so L3 stays unverified. The orchestrating session may commit on the branch mid-review: pin the reviewed SHA.
+
+**2026-10-06 (LOST-03): L3 IS runnable when the implementer left its PG16 stand-in up.** Check `pg_isready -h 127.0.0.1
+-p 55432`; then `pnpm exec vitest run --config <scratchpad>/l3/vitest.l3.config.mjs <files>` (their shim aliases
+@testcontainers/postgresql to a fresh database per start). Read-only reuse, 185 tests in ~60 s. Say it is PG16, not CI's 15.
+In-process L6 probes: heredoc into `node --experimental-strip-types --no-warnings --input-type=module -` from apps/server,
+importing test-kit + src/api.ts, modules; fakePush.failFor/recover/holdAnswers script provider outages.

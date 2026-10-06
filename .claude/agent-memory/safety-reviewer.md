@@ -5,6 +5,16 @@ Newest first.
 
 ## Patterns worth checking every time
 
+### "No overtaking" inside one alert says nothing about the NEXT alert (LOST-03)
+A per-alert ordering rule (hold the stand-down behind its own alert's push) leaves an earlier alert's retrying
+stand-down free to reach the port after a newer alert's LOST_CONTACT on the same journey: false reassurance while an
+alert is open. Probe: provider failing for a responder across resolve -> new open -> recover; read push.accepted order.
+Ask who withdraws or orders messages of an older alert when a new one opens.
+
+### Once the API writes outbox rows, the worker's marks can wait on the API
+The worker pool has no lock_timeout; a mark on a row the API's transaction holds waits until the API's idle/lock
+limits end it. Check every new cross-process row lock against the pool that has no lock limit.
+
 ### A liveness signal covers only the loop that feeds it (LOST-02)
 When a beat is fed by one loop (the sweep), every other loop or consumer beside it (the outbox sender) is
 unmonitored: a hung or always-failing run there leaves the beat fresh and every monitor green. Prove it
