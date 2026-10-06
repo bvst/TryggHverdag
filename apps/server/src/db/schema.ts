@@ -295,11 +295,16 @@ export const messageKind = pgEnum('message_kind', MESSAGE_KINDS);
  * delay after a failure. `sent_at` stays null until the push port accepted
  * it, and `last_failure` holds the port's last reason, if any.
  *
- * `withdrawn_at` is when a message was withdrawn because its alert resolved
- * before the port accepted it (LOST-03, D-111): from then on no claim hands
- * it out again. A stand-down (BACK_IN_CONTACT, HOME) is written in the
- * transaction that resolves the alert, as its alert's messages are written
- * in the one that opens it.
+ * `withdrawn_at` is when a message was withdrawn before the port accepted it
+ * (LOST-03): from then on no claim hands it out again. A message is withdrawn
+ * in one of two ways:
+ *   - when its alert resolves, its unsent LOST_CONTACT messages (D-111);
+ *   - when a later open on any of the same walker's journeys withdraws an
+ *     earlier alert's unsent stand-downs, so none reaches a responder after
+ *     the new alert's lost-contact push (D-112, amended).
+ * A stand-down (BACK_IN_CONTACT, HOME) is written in the transaction that
+ * resolves the alert, as its alert's messages are written in the one that
+ * opens it.
  */
 export const outbox = pgTable(
   'outbox',
