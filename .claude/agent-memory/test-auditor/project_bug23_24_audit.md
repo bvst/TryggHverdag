@@ -28,3 +28,21 @@ Audited 2026-10-06 (cloud), branch fix/BUG-23-source-map-js from main 5cd5d24; h
 - The planned merge into #64's branch: code, test and lockfile apply cleanly (`GIT_INDEX_FILE=<scratch> git read-tree` +
   `git apply --cached --check`); docs/progress.md and m2.md conflict (both add rows after BUG-20, both bump "next BUG-n").
 Related: [[config-pinning-tests]], [[bug15-audit]], [[in-memory-mutation]], [[gate-integrity-local]], [[allowlist-anchor-tz]]
+
+**Delta re-audit (2026-10-06), PASS at c7975fe; HEAD moved to 6524611 (docs + memory only).** e40265e merged the helpers into one
+`PATCHED` table + `placeAgainst`/`shortOfFix`, reproductions as `test.each(PATCHED)` rows, controls into one loop test + one
+boundary test; c7975fe made the overrides floors (`^1.2.2`, `^1.11.0`, selector `source-map-js@>=1.0.0 <1.2.2`).
+- Count drop explained by runtime numbers, not regex: the harness appends `afterEach((ctx) => { ctx.task.meta.taCount =
+  expect.getState().assertionCalls })` (imports hoist, so appending an `import` works) and reads `t.meta.taCount`. BUG-23/24
+  `expect` calls went 32 to 57 while the regex count fell 138 to 128; 21 runtime tests both sides. `tests:changes --base
+  <old head>` flags "went down" (the loop view); `--base origin/main` (what CI runs) says none weakened.
+- One loosened expectation: source-map-js 0.6.2 went red to green ("before range"). Justified: npm's bulk endpoint
+  (`curl -X POST https://registry.npmjs.org/-/npm/v1/security/advisories/bulk -d '{"pkg":["v",...]}'`, works through the proxy
+  when `gh api /advisories` is 403) gives GHSA-68fv `>=1.0.0 <1.2.2` and no other source-map-js advisory; shell-quote's four
+  advisories cover all of <1.11.0, so its `vulnerableFrom: null` is right.
+- "Floors change nothing the tests read": parse both lockfiles with the test's own `readLockfile` (sliced from
+  `const DEPENDENCY_FIELDS` to `/** The package name of a`) and compare; diff package.json minus `pnpm.overrides`.
+- 51 faults: all killed except `<=` (equivalent), SEMVER `$` (near-equivalent), and T08 `test.each(fixes.slice(0, 1))`, which
+  silently drops BUG-24's reproduction (20/20 green). PATCHED rows are pinned by `PATCHED.map(rangeOf)` and
+  `controls.map(c => c.fix)`, but a filter between PATCHED and the table is not: a test.each table moves RG-03 protection
+  from the detector's count to a human reading the diff.
