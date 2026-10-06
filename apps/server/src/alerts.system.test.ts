@@ -430,7 +430,14 @@ describe('LOST-02: five minutes, never before, on the database’s clock', () =>
 });
 
 describe('SM-03 and LOST-02: only an ACTIVE journey is alerted, and once per silence', () => {
-  test('LOST-02-AC5: swept every 10 s for an hour, with a heartbeat from its phone in between, a journey alerted once keeps its one alert, gets no further message and stays LOST_CONTACT; an ENDED journey silent for an hour never gets an alert', async () => {
+  test('LOST-02-AC5: swept every 10 s for an hour, a journey alerted once keeps its one alert, gets no further message and stays LOST_CONTACT; an ENDED journey silent for an hour never gets an alert', async () => {
+    // RG-03 (LOST-03, the spec's "Existing assertions that change by
+    // design"): this was "…with a heartbeat from its phone in between, …
+    // stays LOST_CONTACT". That heartbeat, at 30 minutes, now brings the
+    // journey back and resolves its alert (LOST-03-AC1, AC5), so it is taken
+    // out. "Once per silence" is still held without it: an hour of sweeps
+    // opens no second alert and sends no second message. The move back is
+    // contact.system.test.ts's.
     const w = world();
     const walker = w.walker();
     const responders = [w.user(), w.user()];
@@ -444,7 +451,6 @@ describe('SM-03 and LOST-02: only an ACTIVE journey is alerted, and once per sil
     expect(recipientsOf(w.push.accepted)).toEqual([...responders].sort());
 
     await w.runUntil(new Date(START.getTime() + 30 * MINUTE));
-    await w.heartbeat(walker, journeyId);
     expect(w.stateOf(journeyId)).toBe('LOST_CONTACT');
     await w.runUntil(new Date(START.getTime() + HOUR + FIVE_MINUTES));
 

@@ -12,6 +12,7 @@ import type {
   MessageKind,
   PushFailureReason,
   UnendedJourney,
+  UnendedJourneyState,
 } from './domain/journey.ts';
 
 /** The domain's lists, as the types the ports are written in. */
@@ -102,11 +103,40 @@ export interface HeartbeatToRecord {
 
 /**
  * Stored; already there, so nothing changed (SM-08); or the journey had ENDED
- * by the time it was written, so nothing was stored (SM-07).
+ * by the time it was written, so nothing was stored (SM-07). Or stored, and
+ * the journey, LOST_CONTACT when its row was taken, is back in contact
+ * (LOST-03): the alert it resolved, null when it found none unresolved, and
+ * the stand-downs it wrote, one per responder.
  */
-export interface RecordHeartbeatResult {
-  outcome: 'recorded' | 'duplicate' | 'ended';
+export type RecordHeartbeatResult =
+  | { outcome: 'recorded' | 'duplicate' | 'ended' }
+  | { outcome: 'back_in_contact'; alertId: string | null; messages: AlertMessage[] };
+
+/**
+ * "I'm home" as the store takes it (D-110): the journey, and the walker and
+ * the device the domain's home rule is asked with under the row's lock.
+ */
+export interface HomeToRecord {
+  journeyId: string;
+  walkerId: string;
+  deviceId: string;
 }
+
+/**
+ * "I'm home" (D-110): ended now, from the state the journey's row was in when
+ * taken, with the alert it resolved, null when none, and the stand-downs it
+ * wrote; or the journey had already ENDED, and nothing changed. Named
+ * `already_ended`, not `ended`: on the "I'm home" path `ended` means "ended
+ * now", in the domain and the module alike.
+ */
+export type RecordHomeResult =
+  | {
+      outcome: 'home';
+      from: UnendedJourneyState;
+      alertId: string | null;
+      messages: AlertMessage[];
+    }
+  | { outcome: 'already_ended' };
 
 /**
  * A journey's latest heartbeat: the greatest receive time, a tie to the one
@@ -167,16 +197,19 @@ export interface WatchdogStore {
   overdueJourneys(afterMs: number): Promise<OverdueJourneys>;
   /**
    * In one transaction: takes the journey's row if it is still ACTIVE and
-   * overdue, moves it to LOST_CONTACT, opens its alert and writes one message
-   * per responder, all of it or none of it. Every open bounds its waits with
-   * a lock limit of its own, local to its transaction: `lockWaitMs`, or
-   * LOCK_WAIT_LIMIT_MS without it. Without `lockWaitMs` a held row is skipped
-   * (`skip locked`) and `held` is never answered; with it, the open waits at
-   * most that long for the journey's row, and answers `held` when that wait
-   * runs out. Rejects, having written nothing, on any other failure: a wait
-   * for any other lock that ran out (55P03), or a journey with no responder.
-   * Rejects before taking any lock when `lockWaitMs` is given and is not a
-   * whole number from 1 to 2147483647: PostgreSQL reads 0 as no limit.
+   * overdue, moves it to LOST_CONTACT, withdraws the unsent stand-downs
+   * (BACK_IN_CONTACT, HOME) of every alert of the walker's journeys, and of no
+   * other walker's, whose recipient is a responder of this journey (LOST-03),
+   * opens its alert and writes one message per responder, all of it or none
+   * of it. Every open bounds its waits with a lock limit of its own, local to
+   * its transaction: `lockWaitMs`, or LOCK_WAIT_LIMIT_MS without it. Without
+   * `lockWaitMs` a held row is skipped (`skip locked`) and `held` is never
+   * answered; with it, the open waits at most that long for the journey's
+   * row, and answers `held` when that wait runs out. Rejects, having written
+   * nothing, on any other failure: a wait for any other lock that ran out
+   * (55P03), or a journey with no responder. Rejects before taking any lock
+   * when `lockWaitMs` is given and is not a whole number from 1 to
+   * 2147483647: PostgreSQL reads 0 as no limit.
    */
   openLostContactAlert(request: OpenRequest): Promise<OpenLostContactAlertResult>;
 }
@@ -253,9 +286,25 @@ export interface JourneyStore {
    * Stores the heartbeat and its position, if any, once per (journey, event
    * ID), and moves last contact forward to its receive time, never back: all
    * of it or none of it. A duplicate changes nothing, last contact included,
-   * and a journey ENDED by the time of the write takes nothing.
+   * and a journey ENDED by the time of the write takes nothing. A journey
+   * LOST_CONTACT when its row is taken, whose silence counted with this
+   * heartbeat is under five minutes by the database's now(), is brought back
+   * to ACTIVE in the same transaction: its alert resolved, its unsent
+   * lost-contact messages withdrawn, and one stand-down per responder written
+   * (LOST-03, AR-05).
    */
   recordHeartbeat(heartbeat: HeartbeatToRecord): Promise<RecordHeartbeatResult>;
+  /**
+   * "I'm home" (D-110), in one transaction, deciding by the domain's home rule
+   * asked under the journey's row lock with this walker and device (AR-04):
+   * ends the journey, HOME, at the database's now(), from the state its row is
+   * in when taken, and from LOST_CONTACT resolves its alert as a heartbeat
+   * that brings it back does (SM-04). A journey already ENDED is answered
+   * `already_ended`, and nothing changes. A refusal under the lock (no such
+   * journey, another walker's, or another device) rejects, writing nothing:
+   * the module asked the same rule first, so it cannot happen.
+   */
+  recordHome(home: HomeToRecord): Promise<RecordHomeResult>;
   /** The journey's latest heartbeat, or null when it has none. */
   latestHeartbeatOf(journeyId: string): Promise<LatestHeartbeat | null>;
 }
@@ -272,7 +321,10 @@ export type LogEvent =
   | { event: 'watchdog_overdue'; journeyId: string }
   | { event: 'push_failed'; reason: PushFailureReason; messageId: string }
   | { event: 'delivery_failed'; stage: 'claim' | 'mark'; code: string | null }
-  | { event: 'database_error'; pool: 'api' | 'worker'; code: string | null };
+  | { event: 'database_error'; pool: 'api' | 'worker'; code: string | null }
+  | { event: 'home_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
+  | { event: 'home_failed'; stage: 'read' | 'store'; code: string | null }
+  | { event: 'alert_missing'; journeyId: string };
 
 /** Where the server writes what happened, one event at a time. */
 export interface Log {

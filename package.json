@@ -67,6 +67,10 @@
         }
       }
     },
+    "overrides": {
+      "source-map-js@>=1.0.0 <1.2.2": "^1.2.2",
+      "shell-quote@<1.11.0": "^1.11.0"
+    },
     "auditConfig": {
       "ignoreGhsas": [
         "GHSA-86w9-cpqp-85rv",

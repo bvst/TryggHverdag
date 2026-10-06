@@ -6,7 +6,7 @@
 // tidied what it was handed, or could not fail would make those tests pass
 // whatever the sender did.
 import { describe, expect, test } from 'vitest';
-import { PUSH_FAILURE_REASONS, fakePush, type PushMessage } from './fake-push.ts';
+import { MESSAGE_KINDS, PUSH_FAILURE_REASONS, fakePush, type PushMessage } from './fake-push.ts';
 import * as kit from './index.ts';
 import { syntheticUuid } from './synthetic-ids.ts';
 
@@ -153,6 +153,20 @@ describe('fakePush', () => {
 
     expect(push.messages).toEqual([original]);
     expect(push.accepted).toEqual([original]);
+  });
+
+  test('records and accepts a message of every kind, the two stand-downs included, each exactly as given (LOST-03)', async () => {
+    const push = fakePush();
+    const sent = MESSAGE_KINDS.map((kind) => ({ ...message(), kind }));
+
+    for (const each of sent) {
+      expect(await push.send(each)).toEqual({ outcome: 'accepted' });
+    }
+
+    expect(MESSAGE_KINDS).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME']);
+    expect(push.messages).toEqual(sent);
+    expect(push.accepted).toEqual(sent);
+    expect(kit.MESSAGE_KINDS).toBe(MESSAGE_KINDS);
   });
 
   test('the reasons are the push port’s four, and the test kit hands the fake out', () => {

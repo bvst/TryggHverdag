@@ -24,3 +24,6 @@
 - [Second path and isolation](feedback_second_path_isolation.md) — mutate second-attempt outcome mapping and break-after-failure; lease-vacuous shared checks; count unhandled errors
 - [Rollback and hangs](feedback_rollback_and_hangs.md) — rollback undoes session set_config (check after commit); no-limit faults hang L3; line-buffered harness
 - [Isolating values](feedback_isolating_values.md) — one value per refusal clause that only it refuses; Vitest truncates each.$name titles (-t on full name runs nothing)
+- [LOST-03 audit](project_lost03_audit.md) — PASS 3471859; loop 1 2aa23f4; loop 2 db97856; loop 3 PASS 155a6e4 (29 faults, kind `<>` clause equivalent); harness ta-lost03/loop3
+- [Shared suite RG-03 blind spot](feedback_shared_suite_rg03_blind.md) — tests:changes/test-weakening hook only see *.test.*; journey-store-behaviour.ts diffs need a by-hand byte proof
+- [BUG-23/24 audit](project_bug23_24_audit.md) — PASS 68b675c and delta c7975fe; override floors + lockfile pin; runtime assertion counts via afterEach meta; npm bulk advisory endpoint; test.each row filter survives

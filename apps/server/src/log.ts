@@ -13,10 +13,10 @@
  * else written:
  *   - `journeyId` and `messageId` only as a lower-case canonical UUID;
  *   - `reason` only from its event's set: JOURNEY_ENDED for an ignored
- *     heartbeat, the push port's four for a failed push;
+ *     heartbeat or "I'm home", the push port's four for a failed push;
  *   - `stage` only from its event's set: clock, read or store for a
- *     heartbeat; read, open or beat for the watchdog; claim or mark for the
- *     sender;
+ *     heartbeat; read or store for "I'm home"; read, open or beat for the
+ *     watchdog; claim or mark for the sender;
  *   - `pool` only as api or worker;
  *   - `code` only as text that is a SQLSTATE, read by `sqlstateOf`, so no
  *     message can travel as a code.
@@ -60,12 +60,15 @@ type EventName = LogEvent['event'];
  */
 const EVENT_LEVELS = {
   heartbeat_ignored: 30,
+  home_ignored: 31,
+  alert_missing: 40,
   heartbeat_failed: 50,
   push_failed: 51,
   delivery_failed: 52,
   watchdog_failed: 53,
   watchdog_overdue: 54,
   database_error: 55,
+  home_failed: 56,
 } as const satisfies Record<EventName, number>;
 
 /**
@@ -81,16 +84,22 @@ const [THRESHOLD] = (Object.keys(EVENT_LEVELS) as [EventName, ...EventName[]]).s
 /** A UUID as the database writes one: lower-case hex, in groups of 8, 4, 4, 4 and 12. */
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-/** The reasons `heartbeat_ignored` may give. */
+/** The reasons `heartbeat_ignored` and `home_ignored` may give. */
 const REASONS: readonly unknown[] = ['JOURNEY_ENDED'] satisfies Extract<
   LogEvent,
-  { event: 'heartbeat_ignored' }
+  { event: 'heartbeat_ignored' | 'home_ignored' }
 >['reason'][];
 
 /** The stages `heartbeat_failed` may name. */
 const STAGES: readonly unknown[] = ['clock', 'read', 'store'] satisfies Extract<
   LogEvent,
   { event: 'heartbeat_failed' }
+>['stage'][];
+
+/** The stages `home_failed` may name. */
+const HOME_STAGES: readonly unknown[] = ['read', 'store'] satisfies Extract<
+  LogEvent,
+  { event: 'home_failed' }
 >['stage'][];
 
 /** The stages `watchdog_failed` may name. */
@@ -187,6 +196,21 @@ export function createLog({
           return;
         case 'database_error':
           logger.database_error({ pool: oneOf(POOLS, event.pool), code: codeOf(event.code) });
+          return;
+        case 'home_ignored':
+          logger.home_ignored({
+            reason: oneOf(REASONS, event.reason),
+            journeyId: uuidOf(event.journeyId),
+          });
+          return;
+        case 'home_failed':
+          logger.home_failed({
+            stage: oneOf(HOME_STAGES, event.stage),
+            code: codeOf(event.code),
+          });
+          return;
+        case 'alert_missing':
+          logger.alert_missing({ journeyId: uuidOf(event.journeyId) });
           return;
         default:
           // A type error the day an event joins LogEvent without a case. And

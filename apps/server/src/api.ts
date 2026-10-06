@@ -71,6 +71,15 @@ const BEARER = /^Bearer (\S+)$/i;
  * Built from the contract's `badRequestError`, the one object the error map
  * of every route with a body declares as its 400, so this body and the
  * published contract cannot drift apart.
+ *
+ * A 400's error object holds the device credential (LOST-03). With detailed
+ * input, as the "I'm home" route has, oRPC puts the whole input it validated
+ * in the validation error's `cause.data`, `request.headers` included, so the
+ * `Authorization` header is there (read in @orpc/openapi 1.15.3's detailed
+ * decode and @orpc/server 1.15.3's `validateInput`). Nothing prints that
+ * object today: the answer is this fixed body, and no log event has a field
+ * for it. So nothing may log, echo or rethrow outward a 400's error or its
+ * cause (PRIV-07, SEC-07).
  */
 const BAD_REQUEST_BODY = new ORPCError('BAD_REQUEST', {
   defined: true,
@@ -149,6 +158,27 @@ export function createApi({ health, journeys, devices }: ApiDependencies): Hono 
           // Each reason the rule gives is the contract's code for it:
           // JOURNEY_ENDED (409), JOURNEY_NOT_FOUND (404) and
           // NOT_THE_JOURNEYS_DEVICE (403).
+          throw errors[result.reason]();
+      }
+    }),
+
+    // "I'm home" (SM-04, D-110). The journey is the path's, and only the
+    // path's: the input is detailed, so the body cannot name another. Only the
+    // device that started it may end it. A 200 and a 409 both mean the
+    // journey is over.
+    reportHome: fromKnownDevice.reportHome.handler(async ({ input, context, errors }) => {
+      const result = await journeys.home({
+        walkerId: context.device.userId,
+        deviceId: context.device.deviceId,
+        journeyId: input.params.journeyId,
+      });
+      switch (result.type) {
+        case 'ended':
+          return { outcome: 'ENDED' };
+        case 'ignored':
+        case 'refused':
+          // As for a heartbeat: JOURNEY_ENDED (409), JOURNEY_NOT_FOUND (404)
+          // and NOT_THE_JOURNEYS_DEVICE (403).
           throw errors[result.reason]();
       }
     }),

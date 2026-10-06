@@ -115,3 +115,10 @@ Stop it with the same unshare + `pg_ctl stop`.
 file, served with `git show`) and `f[path](text, rep)`, where `rep(text, from, to, n=1)` throws NotApplied unless the count is n.
 It overrides readFileSync for package.json, decisions.md and pnpm-lock.yaml and can rewrite the test file itself (helper faults).
 58 mutants took about 3 minutes.
+
+**LOST-03 (2026-10-06).** ta-lost02/harness.mjs applies a mutant's edits to `served[file] ?? show(REV, file)`: with REV a base
+commit, an edit to a TEST file (MIGRATIONS const, COMMITTED_SPEC) silently runs the OLD test. Seed edited test files from disk via
+`STUBS` (spec module reads them with readFileSync), then edit. Same SQL clause can sit in two statements (the open's insert and
+the resolve's both end `where journey_id = ... returning`): include a distinctive neighbour line, or NOT APPLIED. A property test
+whose L3 run passed at base: estimate its odds offline by fc.assert-ing only the model (no DB) with the same arbitraries, runs and
+margin, across ~2000 seeds.

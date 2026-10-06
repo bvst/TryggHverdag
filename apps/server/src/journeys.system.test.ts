@@ -83,10 +83,13 @@ async function send(
  * One API, its fakes, and the people a test needs. The journey module logs to
  * the recording fake, `log`, unless a test hands it another log.
  */
-function world({ log }: { log?: Log } = {}) {
+function world({ log, storeKeepsTime = false }: { log?: Log; storeKeepsTime?: boolean } = {}) {
   const clock = fakeClock(NOW);
   const devices = fakeDeviceAuthenticator();
-  const store = fakeJourneyStore();
+  // LOST-03: a store asked whether contact is back reads the time, as the
+  // database's now() is read; given none, it refuses. Only the test that asks
+  // it gives it the clock, so every other test's world is as it was.
+  const store = storeKeepsTime ? fakeJourneyStore({ clock }) : fakeJourneyStore();
   const recorded = fakeLog();
   const api = createApi({
     health: createHealthService({ clock, heartbeats: fakeWorkerHeartbeats(NOW) }),
@@ -1420,12 +1423,24 @@ describe('SM-07: a heartbeat for an ended journey is refused, stores nothing, an
 });
 
 describe('SM-03: a heartbeat for a journey that has lost contact', () => {
-  test('LOST-01-AC8: a heartbeat for a journey in LOST_CONTACT, put there directly, is 200 RECORDED, stored, and advances last contact; the journey stays LOST_CONTACT', async () => {
-    const w = world();
+  test('LOST-01-AC8: a heartbeat for a journey in LOST_CONTACT, put there directly, is 200 RECORDED, stored, and advances last contact; written five minutes after it arrived, it brings nothing back, and the journey stays LOST_CONTACT (LOST-03-AC2)', async () => {
+    // RG-03 (LOST-03, the spec's "Existing assertions that change by
+    // design"): this was "…the journey stays LOST_CONTACT" for any heartbeat.
+    // Since LOST-03 a heartbeat that leaves the silence under five minutes
+    // brings the journey back (LOST-03-AC2, and AC4 for this journey, which
+    // has no alert). The spec offers two ways; this keeps the test's
+    // assertion, with a stale heartbeat: the store writes it five minutes
+    // after the module read the time it arrived, as an API process that froze
+    // would. The fresh case is contact.system.test.ts's. Every assertion is
+    // the one it had.
+    const w = world({ storeKeepsTime: true });
     const device = w.walker();
     const journeyId = w.journeyOf(device, { state: 'LOST_CONTACT', lastHeartbeatAt: EARLIER });
     w.clock.advance(MINUTE);
     const body = fullHeartbeat(journeyId);
+    w.store.beforeNext('recordHeartbeat', () => {
+      w.clock.advance(5 * MINUTE);
+    });
 
     const answer = await answerOf(await w.heartbeat(device.credential, body));
 

@@ -78,3 +78,30 @@ core.excludesFile does NOT work: git reads a pipe as size 0 and matches nothing 
 `@trygghverdag/test-kit` and real src/*.ts, so a watchdog + fake store + real adapter (with a stub `{ transaction }`
 db) emulation needs no files. A cloud session has the docker CLI but no daemon (`docker info` Server: failed to
 connect), so L3 stays unverified. The orchestrating session may commit on the branch mid-review: pin the reviewed SHA.
+
+**2026-10-06 (LOST-03): L3 IS runnable when the implementer left its PG16 stand-in up.** Check `pg_isready -h 127.0.0.1
+-p 55432`; then `pnpm exec vitest run --config <scratchpad>/l3/vitest.l3.config.mjs <files>` (their shim aliases
+@testcontainers/postgresql to a fresh database per start). Read-only reuse, 185 tests in ~60 s. Say it is PG16, not CI's 15.
+In-process L6 probes: heredoc into `node --experimental-strip-types --no-warnings --input-type=module -` from apps/server,
+importing test-kit + src/api.ts, modules; fakePush.failFor/recover/holdAnswers script provider outages.
+
+**2026-10-06 (LOST-03 loop 2):** guard not blocking again (heredoc `cat >` into the scratchpad worked). Mutants
+without touching the repo: a scratch vitest config that spreads the repo's config and adds an `enforce: 'pre'`
+plugin whose `transform(code, id)` string-replaces an anchor in one source file (throw if the anchor is
+missing). `*.system.test.ts` need `--config vitest.system.config.mjs`; the plain config runs none of them
+silently. A real-adapter L3 probe needs no test file: node strip-types from apps/server, create a db on
+55432, `migrateDatabase(uri)`, `createDatabase(createPool(uri, 2))`, `databaseJourneyStore(db)`, insert users
+and devices by SQL, then drop the db `with (force)` in `finally`.
+
+**2026-10-06 (LOST-03 loop 3):** guard not blocking (mkdir and heredoc writes to the scratchpad worked).
+- A .ts probe file in the scratchpad cannot import pg (resolves from its own dir). Pipe it instead:
+  cat probe.ts | node --experimental-strip-types --no-warnings --input-type=module-typescript - (from
+  apps/server). Plain --input-type=module does NOT strip types on stdin (SyntaxError at the first annotation).
+- Row-lock probe without test hooks: hold a row the transaction needs later (users FOR UPDATE blocks the
+  outbox insert's FK key-share), call the store with lockWaitMs, poll pg_stat_activity for wait_event_type
+  Lock, then FOR UPDATE NOWAIT from a third session on each row (55P03 = held); pg_locks by pid gives
+  relation-level modes.
+- gh api works through the session proxy now: repos/bvst/TryggHverdag/rulesets/<id> shows bypass_actors,
+  required checks and pull_request params. Local gate:integrity cannot read rules (no token) and says so.
+- One mutant plugin file with MUTANT env selecting anchor/replacement, plus thin configs spreading
+  vitest.config.mjs, vitest.system.config.mjs or the l3 shim config, runs many mutants without repo writes.

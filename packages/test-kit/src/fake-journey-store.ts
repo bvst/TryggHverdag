@@ -51,13 +51,51 @@
  *     responder is refused, and left as it was;
  *   - one alert per journey that is not RESOLVED, and one message per
  *     (alert, recipient, kind), as the unique indexes hold them;
- *   - a claim takes at most its limit of the due messages (not sent, and due
- *     at or before now), counts one attempt on each, and leases them until
- *     now plus the lease; a message is marked sent at now, or failed with one
- *     of the push port's reasons and due again after the delay given. A reason
- *     outside that set is refused, as the check constraint refuses it;
+ *   - a claim takes at most its limit of the due messages (not sent, not
+ *     withdrawn, and due at or before now), counts one attempt on each, and
+ *     leases them until now plus the lease; a message is marked sent at now,
+ *     or failed with one of the push port's reasons and due again after the
+ *     delay given. A reason outside that set is refused, as the check
+ *     constraint refuses it;
  *   - a heartbeat for a journey another transaction holds waits until it is
  *     released, as a row lock with no limit makes it wait.
+ *
+ * And for back in contact and "I'm home" (LOST-03, its spec's approach items
+ * 3, 4, 5 and 9):
+ *   - a stored heartbeat, not a duplicate, for a journey that was
+ *     LOST_CONTACT when its row was taken asks whether contact is back: the
+ *     journey's silence, counted with this heartbeat, from its last contact
+ *     to the store's now. Under five minutes, the journey moves back to
+ *     ACTIVE and its alert is resolved, all in the heartbeat's one step; five
+ *     minutes or more, the heartbeat is recorded and nothing else changes;
+ *   - "I'm home" (`recordHome`) decides by the home rule under the journey's
+ *     "lock", as the adapter asks the domain there (review loop 1, AR-04): a
+ *     walker or a device that is not the journey's makes it reject and write
+ *     nothing; a journey already ENDED is answered `already_ended` and
+ *     nothing changes; an ACTIVE or LOST_CONTACT journey is ended, HOME, at
+ *     the store's now, and from LOST_CONTACT its alert is resolved;
+ *   - resolving is one step: the journey's one unresolved alert, whatever its
+ *     state, goes to RESOLVED at now with the resolution; every lost-contact
+ *     message of it not sent and not withdrawn is withdrawn at now, keeping
+ *     its attempts and last failure; and one stand-down per responder row of
+ *     the journey is written, of the resolution's own kind, due at now, or,
+ *     for a responder whose lost-contact message was withdrawn having been
+ *     handed over at least once and due later than now, at that due time (the
+ *     hold). No unresolved alert: no withdrawal and no stand-down, and the
+ *     move stands. No responder row: no stand-down, and the resolution
+ *     stands. A second stand-down of a kind for (alert, recipient) is refused,
+ *     as the unique index refuses it, and nothing of the step is kept;
+ *   - an open also withdraws, at its now, every unsent and not yet withdrawn
+ *     stand-down (kind BACK_IN_CONTACT or HOME) of every alert of the
+ *     walker's journeys, this one's earlier alerts and the walker's earlier
+ *     journeys' alike, whose recipient is a responder of the journey being
+ *     opened, in the same step as the new alert: so an earlier "back in
+ *     contact" or "home" never reaches the port after the new alert's
+ *     lost-contact push. Another walker's are left alone, and so is a
+ *     stand-down for someone the new alert will not tell, who is still stood
+ *     down (approach item 4, step 5; review loops 1 to 3; D-111);
+ *   - a fake given no clock throws when asked whether contact is back, or to
+ *     end a journey, as it throws when asked about silence.
  *
  * The shared behaviour suite (`journey-store-behaviour.ts`) runs the same
  * expectations against this fake and against the real adapter, which is
@@ -72,6 +110,12 @@
 import { EVENT_ID_PATTERN, MAX_EVENT_ID_LENGTH } from '@trygghverdag/contracts';
 import { PUSH_FAILURE_REASONS, type MessageKind, type PushFailureReason } from './fake-push.ts';
 import { syntheticUuid } from './synthetic-ids.ts';
+
+/**
+ * The kinds that stand a responder down, which an open withdraws (review loop
+ * 3): listed, so a kind added later is withdrawn only if it opts in.
+ */
+const STAND_DOWN_KINDS: readonly MessageKind[] = ['BACK_IN_CONTACT', 'HOME'];
 
 /**
  * The journey states, as the server's state machine lists them. Written out
@@ -131,9 +175,36 @@ export interface HeartbeatToRecord {
   position: HeartbeatPosition | null;
 }
 
-/** Stored; already there, so nothing changed (SM-08); or the journey has ENDED, so nothing stored (SM-07). */
-export interface RecordHeartbeatResult {
-  outcome: 'recorded' | 'duplicate' | 'ended';
+/**
+ * Stored; already there, so nothing changed (SM-08); or the journey has ENDED,
+ * so nothing stored (SM-07). Or (LOST-03) stored, and the journey, LOST_CONTACT
+ * when its row was taken, is back in contact: its alert, null when it had
+ * none, and the stand-downs written.
+ */
+export type RecordHeartbeatResult =
+  | { outcome: 'recorded' | 'duplicate' | 'ended' }
+  | { outcome: 'back_in_contact'; alertId: string | null; messages: AlertMessage[] };
+
+/**
+ * "I'm home" (LOST-03, D-110): ended now, from the state the journey's row was
+ * in, with the alert it resolved, null when none, and the stand-downs
+ * written; or the journey had already ENDED, and nothing changed
+ * (`already_ended`, review loop 1: `ended` stays the heartbeat's word).
+ */
+export type RecordHomeResult =
+  | {
+      outcome: 'home';
+      from: UnendedJourneyState;
+      alertId: string | null;
+      messages: AlertMessage[];
+    }
+  | { outcome: 'already_ended' };
+
+/** "I'm home" as the store takes it: the journey, and who asks, for the home rule under the lock. */
+export interface HomeToRecord {
+  journeyId: string;
+  walkerId: string;
+  deviceId: string;
 }
 
 /** A journey's latest heartbeat: no coordinates, only whether it carried a position. */
@@ -175,7 +246,7 @@ export interface OverdueJourneys {
   journeys: OverdueJourney[];
 }
 
-/** One message an alert's opening wrote, as the open hands it back. */
+/** One message an alert's opening, or its resolution, wrote, as the store hands it back. */
 export interface AlertMessage {
   messageId: string;
   recipientId: string;
@@ -213,16 +284,32 @@ export interface ClaimedMessages {
 /** The alert states, as the server's state machine lists them (D-033). */
 export type FakeAlertState = 'OPEN' | 'ESCALATED' | 'ACKNOWLEDGED' | 'RESOLVED';
 
-/** An alert as stored: no position, no battery, no phone time (LOST-02-AC13). */
+/** How an alert was resolved (LOST-03): the server's `ALERT_RESOLUTIONS`, each a message kind. */
+export type FakeAlertResolution = Extract<MessageKind, 'BACK_IN_CONTACT' | 'HOME'>;
+
+/** Why a journey ended (LOST-03): the server's `JOURNEY_END_REASONS`. */
+export type FakeJourneyEndReason = 'HOME';
+
+/**
+ * An alert as stored: no position, no battery, no phone time (LOST-02-AC13).
+ * `resolvedAt` and `resolution` are null until it is resolved, and set
+ * together (LOST-03).
+ */
 export interface StoredAlert {
   id: string;
   journeyId: string;
   state: FakeAlertState;
   openedAt: Date;
   silentSince: Date;
+  resolvedAt: Date | null;
+  resolution: FakeAlertResolution | null;
 }
 
-/** An outbox message as stored. Its ID is opaque: never a user's, a journey's or an alert's. */
+/**
+ * An outbox message as stored. Its ID is opaque: never a user's, a journey's
+ * or an alert's. `withdrawnAt` is when it was withdrawn, null if never
+ * (LOST-03, D-111): a withdrawn message is never handed out again.
+ */
 export interface StoredMessage {
   messageId: string;
   alertId: string;
@@ -233,6 +320,13 @@ export interface StoredMessage {
   nextAttemptAt: Date;
   sentAt: Date | null;
   lastFailure: PushFailureReason | null;
+  withdrawnAt: Date | null;
+}
+
+/** How a journey ended: both null until it ends through the store, and set together (LOST-03). */
+export interface JourneyEnd {
+  endedAt: Date | null;
+  endReason: FakeJourneyEndReason | null;
 }
 
 /** The port methods, which `calls` records. */
@@ -247,7 +341,8 @@ export type JourneyStoreCall =
   | 'openLostContactAlert'
   | 'claimDue'
   | 'markSent'
-  | 'markFailed';
+  | 'markFailed'
+  | 'recordHome';
 
 export interface FakeJourneyStore {
   /** The walker's journey in any state but ENDED, or null. */
@@ -263,11 +358,22 @@ export interface FakeJourneyStore {
   journeyForHeartbeat(journeyId: string): Promise<JourneyForHeartbeat | null>;
   /**
    * Stores a heartbeat and its position, if any, and moves last contact
-   * forward to its receive time, never back: all of it or none of it.
+   * forward to its receive time, never back: all of it or none of it. For a
+   * journey LOST_CONTACT when its row is taken, asks whether contact is back
+   * (LOST-03), which needs a clock.
    */
   recordHeartbeat(heartbeat: HeartbeatToRecord): Promise<RecordHeartbeatResult>;
   /** The heartbeat with the greatest receive time, a tie to the one stored last; null if none. */
   latestHeartbeatOf(journeyId: string): Promise<LatestHeartbeat | null>;
+  /**
+   * "I'm home" (LOST-03, D-110): decides by the home rule under the row's
+   * lock. Ends the journey, HOME, at now, from the state its row is in,
+   * resolving its alert when that is LOST_CONTACT; answers `already_ended`
+   * for a journey already ENDED; rejects, writing nothing, for a walker or a
+   * device that is not the journey's, or a journey that does not exist.
+   * Needs a clock to end one.
+   */
+  recordHome(home: HomeToRecord): Promise<RecordHomeResult>;
 
   /** The ACTIVE journeys silent for `afterMs` or more, without locking, and now. Needs a clock. */
   overdueJourneys(afterMs: number): Promise<OverdueJourneys>;
@@ -312,12 +418,48 @@ export interface FakeJourneyStore {
     id?: string;
   }): string;
   /**
-   * Puts a stored journey in another state directly, as a test's own setup:
-   * nothing in the code can end a journey yet. Keeps the one-unended rule.
+   * Puts a stored journey in another state directly, as a test's own setup.
+   * Keeps the one-unended rule. Sets no end time or reason: a journey ended
+   * this way has neither, as one ended by hand in the database has neither.
    */
   setState(journeyId: string, state: FakeJourneyState): void;
+  /**
+   * Puts an alert in directly, as a test's own setup (LOST-03-AC4): in any
+   * state, for a journey that is stored. Keeps the database's rules: one
+   * alert per journey that is not RESOLVED, and a resolution and its time
+   * both set or both null. Returns the alert's ID.
+   */
+  seedAlert(alert: {
+    journeyId: string;
+    state: FakeAlertState;
+    openedAt: Date;
+    silentSince: Date;
+    resolvedAt?: Date | null;
+    resolution?: FakeAlertResolution | null;
+  }): string;
+  /**
+   * Puts an outbox message in directly, as a test's own setup. Keeps the
+   * database's rules: the alert is stored, the recipient is a user, the
+   * attempts are not negative, and one message per (alert, recipient, kind).
+   * Returns the message's ID.
+   */
+  seedMessage(message: {
+    alertId: string;
+    recipientId: string;
+    kind: MessageKind;
+    createdAt: Date;
+    nextAttemptAt: Date;
+    attempts?: number;
+    sentAt?: Date | null;
+    lastFailure?: PushFailureReason | null;
+    withdrawnAt?: Date | null;
+  }): string;
+  /** Removes every responder row of the journey, as a test's own setup: nothing in the code does. */
+  removeResponders(journeyId: string): void;
   /** Every journey stored, in the order stored. Copies: changing them changes nothing. */
   journeys(): StoredJourney[];
+  /** How this journey ended: its end time and reason, both null until it ends through the store. Throws for a journey not stored. */
+  endOf(journeyId: string): JourneyEnd;
   /** The device that started this journey (D-101). Throws for a journey not stored. */
   deviceOf(journeyId: string): string;
   /** This journey's last contact, null until its first heartbeat. Throws for a journey not stored. */
@@ -326,21 +468,31 @@ export interface FakeJourneyStore {
   heartbeats(): StoredHeartbeat[];
   /** Every position stored, in arrival order. Copies. */
   positions(): StoredPosition[];
-  /** Every alert opened, in the order opened. Copies. */
+  /** Every alert opened or put in, in that order. Copies. */
   alerts(): StoredAlert[];
   /** Every outbox message written, in the order written. Copies. */
   outbox(): StoredMessage[];
   /**
    * Stands in for a transaction elsewhere holding this journey's row, one
    * that never lets go by itself: the watchdog's open skips it, an open that
-   * waits for it answers `held`, and a heartbeat for it waits, until
-   * `release`. A held row that no longer matches (no longer ACTIVE, or no
-   * longer overdue) answers `skipped` to both opens, as PostgreSQL never
-   * locks it. Throws for a journey not stored.
+   * waits for it answers `held`, and a heartbeat or an "I'm home" for it
+   * waits, until `release` or `commitHold`. A held row that no longer
+   * matches (no longer ACTIVE, or no longer overdue) answers `skipped` to
+   * both opens, as PostgreSQL never locks it. Throws for a journey not
+   * stored.
    */
   hold(journeyId: string): void;
   /** The row is free again: what waited for it goes on. */
   release(journeyId: string): void;
+  /**
+   * The holder does its own work on the row, then commits (LOST-03-AC11 and
+   * AC17's second order: the sweep's open holding the row as a heartbeat or
+   * an "I'm home" arrives). The row is the holder's while `holderAction`
+   * runs, so the action is not held up by its own hold, and what waited for
+   * the row goes on only once the action has finished. Throws for a journey
+   * not stored.
+   */
+  commitHold(journeyId: string, holderAction: () => Promise<unknown>): Promise<void>;
   /**
    * Holds the journey's row as `hold` does, for a holder that lets go when an
    * open is waiting for it (LOST-02-AC20): a healthy transaction that commits
@@ -370,10 +522,20 @@ export interface FakeJourneyStore {
   beforeNext(call: JourneyStoreCall, action: () => void): void;
 }
 
-/** A journey as this fake keeps it: what SM-01 reads, and what D-101 and LOST-01 added. */
+/**
+ * Five minutes (D-021): the server's LOST_CONTACT_AFTER_MS, written out
+ * because the test kit imports nothing from the server. Contact is back when
+ * the silence is under it, the watchdog's rule asked the other way (LOST-03,
+ * reading 1).
+ */
+const LOST_CONTACT_AFTER_MS = 300_000;
+
+/** A journey as this fake keeps it: what SM-01 reads, and what D-101, LOST-01 and LOST-03 added. */
 interface KeptJourney extends StoredJourney {
   deviceId: string;
   lastHeartbeatAt: Date | null;
+  endedAt: Date | null;
+  endReason: FakeJourneyEndReason | null;
 }
 
 function copy(journey: KeptJourney): StoredJourney {
@@ -384,6 +546,11 @@ function copy(journey: KeptJourney): StoredJourney {
     startedAt: new Date(journey.startedAt.getTime()),
     responderIds: [...journey.responderIds],
   };
+}
+
+/** A moment, or null, copied. */
+function copyOf(moment: Date | null): Date | null {
+  return moment === null ? null : new Date(moment.getTime());
 }
 
 /**
@@ -431,6 +598,16 @@ function checkViolation(table: string, what: string): Error {
   return new Error(`new row for relation "${table}" violates check constraint: ${what}`);
 }
 
+/** What a unique index would refuse, worded as PostgreSQL words it. */
+function uniqueViolation(what: string): Error {
+  return new Error(
+    `duplicate key value violates unique constraint: ${what}; the transaction is rolled back`,
+  );
+}
+
+/** The answer of a step that has not read the store's now yet, and needs it to go on. */
+const NEEDS_NOW = Symbol('needs the store’s now');
+
 export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJourneyStore {
   const users = new Set<string>();
   /** Device ID → its user. */
@@ -455,8 +632,9 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     if (clock === undefined) {
       throw new Error(
         `fakeJourneyStore.${call}: this fake was given no clock, so it cannot tell how long a ` +
-          'journey has been silent or when a message is due. Make it with fakeJourneyStore({ clock }); ' +
-          'a fake that guessed the time would prove nothing.',
+          'journey has been silent, whether contact is back, when a journey ended or when a ' +
+          'message is due. Make it with fakeJourneyStore({ clock }); a fake that guessed the ' +
+          'time would prove nothing.',
       );
     }
     return new Date((await clock.now()).getTime());
@@ -487,12 +665,14 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     ...alert,
     openedAt: new Date(alert.openedAt.getTime()),
     silentSince: new Date(alert.silentSince.getTime()),
+    resolvedAt: copyOf(alert.resolvedAt),
   });
   const copyMessage = (message: StoredMessage): StoredMessage => ({
     ...message,
     createdAt: new Date(message.createdAt.getTime()),
     nextAttemptAt: new Date(message.nextAttemptAt.getTime()),
-    sentAt: message.sentAt === null ? null : new Date(message.sentAt.getTime()),
+    sentAt: copyOf(message.sentAt),
+    withdrawnAt: copyOf(message.withdrawnAt),
   });
 
   /** When a journey's silence began: last contact, or its start when it has none. */
@@ -501,6 +681,14 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
 
   const isOverdue = (journey: KeptJourney, now: Date, afterMs: number): boolean =>
     journey.state === 'ACTIVE' && now.getTime() - silentSinceOf(journey).getTime() >= afterMs;
+
+  /**
+   * Whether contact is back (LOST-03, reading 1): the silence, counted from
+   * this moment, is under five minutes at now. No comparison with a time
+   * that is not one holds, so an invalid moment brings nothing back.
+   */
+  const isInContact = (silentSince: Date, now: Date): boolean =>
+    now.getTime() - silentSince.getTime() < LOST_CONTACT_AFTER_MS;
 
   /** The message this ID names, which must be stored: an update of nothing is a sender's bug. */
   const messageNamed = (call: JourneyStoreCall, messageId: string): StoredMessage => {
@@ -563,6 +751,85 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       throw new Error(`fakeJourneyStore.${helper}: no journey ${journeyId} is stored`);
     }
     return journey;
+  };
+
+  /**
+   * Resolving an alert (LOST-03, approach item 4), worked out without
+   * changing anything: the journey's one unresolved alert, the lost-contact
+   * messages to withdraw, and one stand-down per responder row, each due as
+   * the hold says. Throws, having changed nothing, for anything the database
+   * would refuse. `apply` then writes all of it in one go.
+   */
+  const planResolution = (
+    journey: KeptJourney,
+    resolution: FakeAlertResolution,
+    now: Date,
+  ): { alertId: string | null; messages: AlertMessage[]; apply: () => void } => {
+    const alert = alerts.find((kept) => kept.journeyId === journey.id && kept.state !== 'RESOLVED');
+    if (alert === undefined) {
+      // Reading 11: nothing to resolve, withdraw or stand down; the move stands.
+      return { alertId: null, messages: [], apply: () => undefined };
+    }
+    const withdrawn = outbox.filter(
+      (message) =>
+        message.alertId === alert.id &&
+        message.kind === 'LOST_CONTACT' &&
+        message.sentAt === null &&
+        message.withdrawnAt === null,
+    );
+    if (new Set(journey.responderIds).size !== journey.responderIds.length) {
+      throw uniqueViolation('one outbox message per (alert, recipient, kind)');
+    }
+    const standDowns: StoredMessage[] = journey.responderIds.map((recipientId) => {
+      if (
+        outbox.some(
+          (message) =>
+            message.alertId === alert.id &&
+            message.recipientId === recipientId &&
+            message.kind === resolution,
+        )
+      ) {
+        throw uniqueViolation('one outbox message per (alert, recipient, kind)');
+      }
+      // The hold (reading 7): a responder whose lost-contact message was
+      // handed over and is not due yet may still have it in the port's hands.
+      const theirs = withdrawn.find((message) => message.recipientId === recipientId);
+      const due =
+        theirs !== undefined &&
+        theirs.attempts >= 1 &&
+        theirs.nextAttemptAt.getTime() > now.getTime()
+          ? theirs.nextAttemptAt
+          : now;
+      return {
+        messageId: syntheticUuid(),
+        alertId: alert.id,
+        recipientId,
+        kind: resolution,
+        createdAt: new Date(now.getTime()),
+        attempts: 0,
+        nextAttemptAt: new Date(due.getTime()),
+        sentAt: null,
+        lastFailure: null,
+        withdrawnAt: null,
+      };
+    });
+    return {
+      alertId: alert.id,
+      messages: standDowns.map(({ messageId, recipientId, kind }) => ({
+        messageId,
+        recipientId,
+        kind,
+      })),
+      apply: () => {
+        alert.state = 'RESOLVED';
+        alert.resolvedAt = new Date(now.getTime());
+        alert.resolution = resolution;
+        for (const message of withdrawn) {
+          message.withdrawnAt = new Date(now.getTime());
+        }
+        outbox.push(...standDowns);
+      },
+    };
   };
 
   /**
@@ -648,6 +915,8 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
           responderIds: [...responderIds],
           deviceId,
           lastHeartbeatAt: null,
+          endedAt: null,
+          endReason: null,
         };
         stored.push(journey);
         return { inserted: true, journeyId: journey.id };
@@ -670,77 +939,116 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       // A row another transaction holds makes the heartbeat wait for it, as
       // its `for update` waits in the database.
       const waitForRow = () => untilReleased(journeyId.toLowerCase());
+      /**
+       * The heartbeat's one step, worked out and written at once. Without the
+       * store's now it stops before writing anything, as soon as it needs
+       * it: only a stored heartbeat for a LOST_CONTACT journey asks whether
+       * contact is back.
+       */
+      const step = (now: Date | null): RecordHeartbeatResult | typeof NEEDS_NOW => {
+        const journey = journeyNamed(journeyId);
+        if (journey === undefined) {
+          // Nothing deletes journeys before the retention work, so a journey
+          // that was read and is now gone is an error, not a guess.
+          throw new Error(
+            `fakeJourneyStore.recordHeartbeat: no journey ${journeyId}; a heartbeat for a ` +
+              'journey that does not exist is never stored',
+          );
+        }
+        if (journey.state === 'ENDED') {
+          return { outcome: 'ended' };
+        }
+        // The heartbeat row's own constraints come before its conflict, as
+        // PostgreSQL checks a row before it looks for a duplicate.
+        if (!isEventId(eventId)) {
+          throw checkViolation('heartbeats', 'event_id');
+        }
+        if (batteryLevel !== null && !isWithin(batteryLevel, 0, 1)) {
+          throw checkViolation('heartbeats', 'battery_level');
+        }
+        if (Number.isNaN(receivedAt.getTime())) {
+          throw new Error('invalid input syntax for type timestamp with time zone: received_at');
+        }
+        if (heartbeats.some((kept) => kept.journeyId === journey.id && kept.eventId === eventId)) {
+          return { outcome: 'duplicate' };
+        }
+        if (position !== null) {
+          if (!isWithin(position.latitude, -90, 90)) {
+            throw checkViolation('positions', 'latitude');
+          }
+          if (!isWithin(position.longitude, -180, 180)) {
+            throw checkViolation('positions', 'longitude');
+          }
+          if (!isWithin(position.accuracyMeters, 0, Number.MAX_VALUE)) {
+            throw checkViolation('positions', 'accuracy_m');
+          }
+          if (Number.isNaN(position.recordedAt.getTime())) {
+            throw new Error('invalid input syntax for type timestamp with time zone: recorded_at');
+          }
+          if (!isStorableMoment(position.recordedAt)) {
+            throw new Error('date/time field value out of range: recorded_at');
+          }
+        }
+        // greatest(coalesce(last_heartbeat_at, $t), $t): never backwards.
+        const last = journey.lastHeartbeatAt?.getTime() ?? receivedAt.getTime();
+        const lastContact = new Date(Math.max(last, receivedAt.getTime()));
+
+        // LOST-03: the locked state was LOST_CONTACT, so ask whether contact
+        // is back, with the silence counted with this heartbeat.
+        let resolution: ReturnType<typeof planResolution> | null = null;
+        if (journey.state === 'LOST_CONTACT') {
+          if (now === null) {
+            return NEEDS_NOW;
+          }
+          if (isInContact(lastContact, now)) {
+            resolution = planResolution(journey, 'BACK_IN_CONTACT', now);
+          }
+        }
+
+        arrivals += 1;
+        heartbeats.push({
+          id: arrivals,
+          journeyId: journey.id,
+          eventId,
+          receivedAt: new Date(receivedAt.getTime()),
+          batteryLevel,
+        });
+        if (position !== null) {
+          positions.push({
+            heartbeatId: arrivals,
+            latitude: position.latitude,
+            longitude: position.longitude,
+            accuracyMeters: position.accuracyMeters,
+            recordedAt: new Date(position.recordedAt.getTime()),
+          });
+        }
+        journey.lastHeartbeatAt = lastContact;
+        if (resolution === null) {
+          return { outcome: 'recorded' };
+        }
+        journey.state = 'ACTIVE';
+        resolution.apply();
+        return {
+          outcome: 'back_in_contact',
+          alertId: resolution.alertId,
+          messages: resolution.messages,
+        };
+      };
       return answer(
         'recordHeartbeat',
-        (): RecordHeartbeatResult => {
-          const journey = journeyNamed(journeyId);
-          if (journey === undefined) {
-            // Nothing deletes journeys before the retention work, so a journey
-            // that was read and is now gone is an error, not a guess.
-            throw new Error(
-              `fakeJourneyStore.recordHeartbeat: no journey ${journeyId}; a heartbeat for a ` +
-                'journey that does not exist is never stored',
-            );
+        async (): Promise<RecordHeartbeatResult> => {
+          const first = step(null);
+          if (first !== NEEDS_NOW) {
+            return first;
           }
-          if (journey.state === 'ENDED') {
-            return { outcome: 'ended' };
+          // Read now, then work the whole step out again from the start, as
+          // the row stands after the read: racing heartbeats meet here as
+          // they meet on the row lock.
+          const again = step(await nowFor('recordHeartbeat'));
+          if (again === NEEDS_NOW) {
+            throw new Error('fakeJourneyStore.recordHeartbeat: the store’s now was not used');
           }
-          // The heartbeat row's own constraints come before its conflict, as
-          // PostgreSQL checks a row before it looks for a duplicate.
-          if (!isEventId(eventId)) {
-            throw checkViolation('heartbeats', 'event_id');
-          }
-          if (batteryLevel !== null && !isWithin(batteryLevel, 0, 1)) {
-            throw checkViolation('heartbeats', 'battery_level');
-          }
-          if (Number.isNaN(receivedAt.getTime())) {
-            throw new Error('invalid input syntax for type timestamp with time zone: received_at');
-          }
-          if (
-            heartbeats.some((kept) => kept.journeyId === journey.id && kept.eventId === eventId)
-          ) {
-            return { outcome: 'duplicate' };
-          }
-          if (position !== null) {
-            if (!isWithin(position.latitude, -90, 90)) {
-              throw checkViolation('positions', 'latitude');
-            }
-            if (!isWithin(position.longitude, -180, 180)) {
-              throw checkViolation('positions', 'longitude');
-            }
-            if (!isWithin(position.accuracyMeters, 0, Number.MAX_VALUE)) {
-              throw checkViolation('positions', 'accuracy_m');
-            }
-            if (Number.isNaN(position.recordedAt.getTime())) {
-              throw new Error(
-                'invalid input syntax for type timestamp with time zone: recorded_at',
-              );
-            }
-            if (!isStorableMoment(position.recordedAt)) {
-              throw new Error('date/time field value out of range: recorded_at');
-            }
-          }
-          arrivals += 1;
-          heartbeats.push({
-            id: arrivals,
-            journeyId: journey.id,
-            eventId,
-            receivedAt: new Date(receivedAt.getTime()),
-            batteryLevel,
-          });
-          if (position !== null) {
-            positions.push({
-              heartbeatId: arrivals,
-              latitude: position.latitude,
-              longitude: position.longitude,
-              accuracyMeters: position.accuracyMeters,
-              recordedAt: new Date(position.recordedAt.getTime()),
-            });
-          }
-          // greatest(coalesce(last_heartbeat_at, $t), $t): never backwards.
-          const last = journey.lastHeartbeatAt?.getTime() ?? receivedAt.getTime();
-          journey.lastHeartbeatAt = new Date(Math.max(last, receivedAt.getTime()));
-          return { outcome: 'recorded' };
+          return again;
         },
         waitForRow,
       );
@@ -766,6 +1074,85 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
               batteryLevel: latest.batteryLevel,
             };
       });
+    },
+    recordHome(home) {
+      if (typeof home !== 'object' || (home as unknown) === null) {
+        // The interface changed in review loop 1: the walker and the device
+        // come too, for the home rule under the lock. A caller still passing
+        // the ID alone is told so, not guessed for.
+        return Promise.reject(
+          new Error(
+            'fakeJourneyStore.recordHome takes { journeyId, walkerId, deviceId }, not a journey ID alone',
+          ),
+        );
+      }
+      const { journeyId, walkerId, deviceId } = home;
+      // As a heartbeat: the journey's row first, waited for while held.
+      const waitForRow = () => untilReleased(journeyId.toLowerCase());
+      const step = (now: Date | null): RecordHomeResult | typeof NEEDS_NOW => {
+        const journey = journeyNamed(journeyId);
+        // The home rule, in its order, asked under the "lock" (approach item
+        // 5, review loop 1): the module asked the same rule about the same
+        // journey, so a refusal here cannot happen, and is thrown, never
+        // guessed past.
+        if (journey === undefined) {
+          throw new Error(
+            `fakeJourneyStore.recordHome: no journey ${journeyId}; nothing deletes a journey, so ` +
+              'one that was read and is gone is an error, not a guess',
+          );
+        }
+        // Compared exactly, as the domain's rule compares them (review loop
+        // 2, D-100): an ID in another case than the stored one is not the
+        // journey's walker or device, and is refused here as at the adapter.
+        if (journey.walkerId !== walkerId) {
+          throw new Error(
+            'fakeJourneyStore.recordHome: the home rule refused under the lock ' +
+              '(JOURNEY_NOT_FOUND: not the walker’s journey); nothing is written',
+          );
+        }
+        if (journey.state === 'ENDED') {
+          return { outcome: 'already_ended' };
+        }
+        if (journey.deviceId !== deviceId) {
+          throw new Error(
+            'fakeJourneyStore.recordHome: the home rule refused under the lock ' +
+              '(NOT_THE_JOURNEYS_DEVICE); nothing is written',
+          );
+        }
+        if (now === null) {
+          return NEEDS_NOW;
+        }
+        // The locked state decides, not the module's read (approach item 5):
+        // the rule resolves the alert only from LOST_CONTACT.
+        const from = journey.state;
+        const resolvesAlert = from === 'LOST_CONTACT';
+        const resolution = resolvesAlert ? planResolution(journey, 'HOME', now) : null;
+        journey.state = 'ENDED';
+        journey.endedAt = new Date(now.getTime());
+        journey.endReason = 'HOME';
+        resolution?.apply();
+        return {
+          outcome: 'home',
+          from,
+          alertId: resolution?.alertId ?? null,
+          messages: resolution?.messages ?? [],
+        };
+      };
+      return answer(
+        'recordHome',
+        async (): Promise<RecordHomeResult> => {
+          const first = step(null);
+          if (first !== NEEDS_NOW) {
+            return first;
+          }
+          const again = step(await nowFor('recordHome'));
+          if (again === NEEDS_NOW) {
+            throw new Error('fakeJourneyStore.recordHome: the store’s now was not used');
+          }
+          return again;
+        },
+        waitForRow,
+      );
     },
 
     overdueJourneys(afterMs) {
@@ -844,16 +1231,10 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
           );
         }
         if (new Set(journey.responderIds).size !== journey.responderIds.length) {
-          throw new Error(
-            'duplicate key value violates unique constraint: one outbox message per ' +
-              '(alert, recipient, kind); the transaction is rolled back',
-          );
+          throw uniqueViolation('one outbox message per (alert, recipient, kind)');
         }
         if (alerts.some((alert) => alert.journeyId === journey.id && alert.state !== 'RESOLVED')) {
-          throw new Error(
-            'duplicate key value violates unique constraint: one alert per journey that is not ' +
-              'RESOLVED; the transaction is rolled back',
-          );
+          throw uniqueViolation('one alert per journey that is not RESOLVED');
         }
         const alertId = syntheticUuid();
         const messages: StoredMessage[] = journey.responderIds.map((recipientId) => ({
@@ -866,7 +1247,35 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
           nextAttemptAt: new Date(now.getTime()),
           sentAt: null,
           lastFailure: null,
+          withdrawnAt: null,
         }));
+        // Review loops 1 to 3 (approach item 4, step 5): the stand-downs not
+        // yet sent nor withdrawn of every alert of the walker's journeys,
+        // this journey's and the walker's earlier ones, are withdrawn at this
+        // now, in this same step, before the new alert's messages: an earlier
+        // "back in contact" or "home" must never reach the port after this
+        // alert's lost-contact push. Only for a responder of this journey,
+        // who will receive that push (loop 3, D-111): anyone else is still
+        // stood down. Another walker's are left alone. Only the kinds that
+        // stand a responder down, each opting in (loop 3): the lost-contact
+        // messages of an alert that resolved were withdrawn then.
+        const walkersJourneyIds = new Set(
+          stored.filter((kept) => kept.walkerId === journey.walkerId).map(({ id }) => id),
+        );
+        const earlierAlertIds = new Set(
+          alerts.filter((alert) => walkersJourneyIds.has(alert.journeyId)).map(({ id }) => id),
+        );
+        for (const message of outbox) {
+          if (
+            earlierAlertIds.has(message.alertId) &&
+            STAND_DOWN_KINDS.includes(message.kind) &&
+            journey.responderIds.includes(message.recipientId) &&
+            message.sentAt === null &&
+            message.withdrawnAt === null
+          ) {
+            message.withdrawnAt = new Date(now.getTime());
+          }
+        }
         journey.state = 'LOST_CONTACT';
         alerts.push({
           id: alertId,
@@ -874,6 +1283,8 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
           state: 'OPEN',
           openedAt: new Date(now.getTime()),
           silentSince: silentSinceOf(journey),
+          resolvedAt: null,
+          resolution: null,
         });
         outbox.push(...messages);
         return {
@@ -899,7 +1310,11 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         const due = outbox
           .filter(
             (message) =>
-              message.sentAt === null && message.nextAttemptAt.getTime() <= now.getTime(),
+              message.sentAt === null &&
+              // LOST-03 (D-111): a withdrawn message is never handed out again,
+              // whatever its due time.
+              message.withdrawnAt === null &&
+              message.nextAttemptAt.getTime() <= now.getTime(),
           )
           .sort((a, b) => a.nextAttemptAt.getTime() - b.nextAttemptAt.getTime())
           .slice(0, limit);
@@ -988,6 +1403,8 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         responderIds,
         deviceId,
         lastHeartbeatAt: lastHeartbeatAt === null ? null : new Date(lastHeartbeatAt.getTime()),
+        endedAt: null,
+        endReason: null,
       });
       return id;
     },
@@ -1002,15 +1419,96 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       }
       journey.state = state;
     },
+    seedAlert({ journeyId, state, openedAt, silentSince, resolvedAt = null, resolution = null }) {
+      const journey = storedJourney('seedAlert', journeyId);
+      if ((resolvedAt === null) !== (resolution === null)) {
+        throw checkViolation('alerts', 'resolved_at and resolution, both set or both null');
+      }
+      if (
+        state !== 'RESOLVED' &&
+        alerts.some((alert) => alert.journeyId === journey.id && alert.state !== 'RESOLVED')
+      ) {
+        throw uniqueViolation('one alert per journey that is not RESOLVED');
+      }
+      const id = syntheticUuid();
+      alerts.push({
+        id,
+        journeyId: journey.id,
+        state,
+        openedAt: new Date(openedAt.getTime()),
+        silentSince: new Date(silentSince.getTime()),
+        resolvedAt: copyOf(resolvedAt),
+        resolution,
+      });
+      return id;
+    },
+    seedMessage({
+      alertId: givenAlertId,
+      recipientId: givenRecipientId,
+      kind,
+      createdAt,
+      nextAttemptAt,
+      attempts = 0,
+      sentAt = null,
+      lastFailure = null,
+      withdrawnAt = null,
+    }) {
+      const alertId = asStored(givenAlertId);
+      const recipientId = asStored(givenRecipientId);
+      if (!alerts.some((alert) => alert.id === alertId)) {
+        throw new Error(
+          `insert violates foreign key constraint: the alert ${alertId} is not an alert`,
+        );
+      }
+      if (!users.has(recipientId)) {
+        throw notAUser('recipient', recipientId);
+      }
+      if (!Number.isInteger(attempts) || attempts < 0) {
+        throw checkViolation('outbox', 'attempts');
+      }
+      if (lastFailure !== null && !PUSH_FAILURE_REASONS.includes(lastFailure)) {
+        throw checkViolation('outbox', 'last_failure');
+      }
+      if (
+        outbox.some(
+          (message) =>
+            message.alertId === alertId &&
+            message.recipientId === recipientId &&
+            message.kind === kind,
+        )
+      ) {
+        throw uniqueViolation('one outbox message per (alert, recipient, kind)');
+      }
+      const messageId = syntheticUuid();
+      outbox.push({
+        messageId,
+        alertId,
+        recipientId,
+        kind,
+        createdAt: new Date(createdAt.getTime()),
+        attempts,
+        nextAttemptAt: new Date(nextAttemptAt.getTime()),
+        sentAt: copyOf(sentAt),
+        lastFailure,
+        withdrawnAt: copyOf(withdrawnAt),
+      });
+      return messageId;
+    },
+    removeResponders(journeyId) {
+      storedJourney('removeResponders', journeyId).responderIds = [];
+    },
     journeys() {
       return stored.map(copy);
+    },
+    endOf(journeyId) {
+      const journey = storedJourney('endOf', journeyId);
+      return { endedAt: copyOf(journey.endedAt), endReason: journey.endReason };
     },
     deviceOf(journeyId) {
       return storedJourney('deviceOf', journeyId).deviceId;
     },
     lastHeartbeatAt(journeyId) {
-      const last = storedJourney('lastHeartbeatAt', journeyId).lastHeartbeatAt;
-      return last === null ? null : new Date(last.getTime());
+      return copyOf(storedJourney('lastHeartbeatAt', journeyId).lastHeartbeatAt);
     },
     heartbeats() {
       return heartbeats.map((kept) => ({
@@ -1038,6 +1536,19 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     },
     release(journeyId) {
       letGo(storedJourney('release', journeyId).id);
+    },
+    async commitHold(journeyId, holderAction) {
+      const id = storedJourney('commitHold', journeyId).id;
+      const waiting = held.get(id) ?? [];
+      held.delete(id);
+      lettingGo.delete(id);
+      try {
+        await holderAction();
+      } finally {
+        for (const go of waiting) {
+          go();
+        }
+      }
     },
     holdUntilWaited(journeyId, holderAction = () => undefined) {
       const journey = storedJourney('holdUntilWaited', journeyId);

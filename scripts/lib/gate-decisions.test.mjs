@@ -518,10 +518,18 @@ describe('the mutation runs of this repository', () => {
         paths: ['apps/server/src/adapters/healthchecks.ts'],
         tests: ['apps/server/src/adapters/healthchecks.test.ts', 'apps/server/src/worker.test.ts'],
       },
+      // LOST-03 (RG-03, the spec's "Existing assertions that change by
+      // design" and its Mutation section, D-112): the journeys group also
+      // runs contact.system.test.ts, the L6 file that proves back in contact
+      // and "I'm home", whose code lives in modules/journeys/. A mutant there
+      // is caught only by a test the group runs. Nothing else changed.
       expect.objectContaining({
         name: 'journeys',
         paths: ['apps/server/src/modules/journeys/'],
-        tests: ['apps/server/src/journeys.system.test.ts'],
+        tests: [
+          'apps/server/src/journeys.system.test.ts',
+          'apps/server/src/contact.system.test.ts',
+        ],
       }),
       // LOST-02 (RG-03): modules/alerts/ gets its first files, the watchdog
       // and the sender, and with them a group of its own (D-098), as the test
@@ -765,6 +773,10 @@ describe('BUG-10: the journey files, split by test level (D-095)', () => {
     // Those are the tests that drive the module through the API in-process.
     // Which Vitest configuration the run uses is pinned in
     // stryker-config.test.mjs, where the command is built.
+    //
+    // RG-03 (LOST-03, D-112): the journey system tests are now two files,
+    // journeys.system.test.ts and contact.system.test.ts, the second holding
+    // back in contact and "I'm home". Still one run, its own.
     const runs = mutationRuns().filter((run) =>
       run.paths.includes('apps/server/src/modules/journeys/'),
     );
@@ -773,7 +785,10 @@ describe('BUG-10: the journey files, split by test level (D-095)', () => {
       expect.objectContaining({
         name: 'journeys',
         paths: ['apps/server/src/modules/journeys/'],
-        tests: ['apps/server/src/journeys.system.test.ts'],
+        tests: [
+          'apps/server/src/journeys.system.test.ts',
+          'apps/server/src/contact.system.test.ts',
+        ],
       }),
     ]);
   });

@@ -15,3 +15,9 @@ clause's removal separately at both the fake and the adapter. Also: Vitest rende
 truncation, so `-t '<full name>'` selects nothing; a harness run with pass 0 fail 0 is not a survivor, it ran nothing. Always print
 the pass count and run a control per pattern.
 Related: [[lost02-audit]], [[second-path-isolation]], [[allowlist-anchor-tz]]
+LOST-03 loop 1 (2026-10-06): same trap on a re-check under a lock. "A walker or a device that is not the journey's makes it reject"
+was tested with a stranger on the stranger's own device, which the device clause refuses too, so asking the rule with the row's own
+walker survived at L3. The isolating value is the stranger with the journey's own device. Also check that the fake normalises IDs
+the way the adapter does at that exact comparison: the fake lower-cased (asStored) where the adapter hands strings to a domain that
+compares exactly. A one-behaviour probe appended in memory to the shared suite, always failing to print the outcome, shows both
+stores' answers in one run.

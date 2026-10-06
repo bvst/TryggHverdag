@@ -164,7 +164,7 @@ state.
 | — | Walker starts a journey, or calls #1 (CALL-03) | ACTIVE | "Journey started" to responders (JRN-04) |
 | ACTIVE | Heartbeat | ACTIVE | — |
 | ACTIVE | Watchdog: no heartbeat for 5 min (D-021) | LOST_CONTACT | Open an alert; push to responders (LOST-02) |
-| LOST_CONTACT | Heartbeat | ACTIVE | Resolve the alert; "back in contact" (LOST-03) |
+| LOST_CONTACT | Heartbeat | ACTIVE | Resolve the alert; "back in contact" (LOST-03). Only a fresh heartbeat: one that, counted, leaves the silence under 5 min by the database clock (D-112) |
 | ACTIVE | "I'm home" | ENDED (home) | "<name> is home" (JRN-05) |
 | ACTIVE | 2 h reached and no answer for 10 min | ENDED (auto) | "Ended without confirmation" (JRN-06) |
 

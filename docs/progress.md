@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-04 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 in review** (task 3 of 8) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-06 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 done** ([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`; D-106 to D-109); **LOST-03 in review** (task 4 of 8) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -39,10 +39,15 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | | BUG-18 | Three files that decide whether a missed alert or a stopped watchdog can go unseen need the owner and the safety review (D-105 and its two amendments, the owner's answers of 2026-10-03 and 2026-10-04): `apps/server/src/adapters/db.ts` (every pool's size, and LOST-02's session limits), `adapters/worker-heartbeats.ts` (the worker's check-in row) and `modules/health/` (which turns it into `/v1/health`'s answer) | ✅ **Done** — 2026-10-04, [#61](https://github.com/bvst/TryggHverdag/pull/61), merged by the owner by hand (D-075) as `7e05c8e` at 11:48 UTC, with no review on the pull request; `main`'s tree is the reviewed head `974e6e8`. The merge rules were updated at 11:49 UTC and read active with no bypass actors. All four session reviewers PASS; CI's three AI reviewers that apply skipped, as expected (read in each job log). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37199989215), `gate-integrity` among them, and `deploy-staging` passed (run 37199989255). Record: `progress/m2.md` |
 | | BUG-19 | No test checks that every file git tracks under every owner-approval path still has owners under CODEOWNERS' last-match rule. Pins exist per file family (since BUG-8), so an ownerless later line for another owned file (for example `/?ackage.json`) un-owns it with every test green. Found by `test-auditor` on BUG-18; replacing the hand-written glob readers with real matchers (`git check-ignore`, picomatch) would also fit here | ⚪ **Queued**, for the owner to schedule. `/.github/` needs the owner, so such a line needs the owner's approval anyway |
 | | BUG-20 | graphile-worker's own LISTEN connection prints its error object to the console when it drops or cannot connect (`@graphile/logger` prints meta with `%O`), at start and at every retry while the database is out of reach. The object can name the database's host, port or user, never personal data or the password; it bypasses `log.ts`'s closed events, so for that one connection AC18's "one `database_error` line" is not the only line. Pre-existing (the same on `main` before LOST-02). Found by `privacy-security-reviewer` in LOST-02's reviews and raised again by CI's on [#63](https://github.com/bvst/TryggHverdag/pull/63). The fix the spec names: give Graphile a logger that writes closed events only, without dropping the lines that make a stopped worker loud | ⚪ **Queued**, for the owner to schedule. Claude recommends it before M3, as its own small task |
+| | BUG-21 | `scripts/e2e-android.test.mjs`, "INF-06-AC9: when the emulator never applies bokmål, it stops after the deadline …", is load-sensitive: it measures `askedFor`, the span between the first and last device readings, each stamped by a stand-in the test spawns, and allows three 100 ms intervals (`WAITED_OUT` = 700 ms) for start-up. Under `gate:full`'s full-suite load on 2026-10-06 (84 workers) it measured 639 ms and failed; alone it passed 3 of 3, and the same gate passed on its re-run. The script itself said "Waited 1 s". Found while running LOST-03's checks; this file is not in LOST-03's diff | ⚪ **Queued**, for the owner to schedule. Claude recommends taking the span from the script's own clock, or widening the margin with a written reason, so a slow spawn cannot read as a wait that stopped early |
+| | BUG-22 | The test-weakening check (RG-03) does not see the shared behaviour suites. `TEST_GLOBS` in `scripts/lib/test-strength.mjs` and `.claude/hooks/test-weakening.mjs` match `*.test.*` files and `apps/mobile/e2e/**`, so `packages/test-kit/src/journey-store-behaviour.ts`, which holds every L2/L3 journey-store behaviour, the alert and outbox ones among them, is never checked; it also uses `{ name, run }` entries, not `test(` calls. In LOST-03's loop 3, `tests:changes` reported "2 changed test file(s), none weakened" while the real edits were in that suite. Ownership is fine: `implementer` cannot edit `packages/test-kit/`. Found by `test-auditor` on LOST-03 | ⚪ **Queued**, for the owner to schedule. Claude recommends adding the shared suites to the check's files and teaching it the `{ name, run }` form |
+| | BUG-23 | `pnpm audit --audit-level high` failed on `main` and every pull request on a new advisory, GHSA-68fv-2mgg-jv7q: `source-map-js` before 1.2.2, an event-loop denial of service, reached only through dev tooling (`@vitest/coverage-v8` › `magicast`, and `postcss`). Found on LOST-03's pull request (#64), 2026-10-06 | 🟡 **In review** — its own pull request from `fix/BUG-23-source-map-js` (the owner's choice, 2026-10-06), then merged into #64's branch. A patched version exists, so it is fixed, not accepted: a root `pnpm.overrides` entry raises the advisory's range (`>=1.0.0 <1.2.2`) to `^1.2.2`; with BUG-24's, the lockfile changes only the two overridden packages, reproduced byte for byte from `main` by `code-reviewer` |
+| | BUG-24 | The same audit also failed on GHSA-pqg4-j6r4-53mv, published 2026-10-06: `shell-quote` before 1.11.0, critical, command injection through `quote()`, reached only through the mobile app's dev tooling (`react-native` › `react-devtools-core`) | 🟡 **In review** — in BUG-23's pull request, by the owner's choice (2026-10-06), so one merge turns `main`'s `security` check green. Fixed the same way: an override to `^1.11.0`, within `react-devtools-core`'s `^1.6.1`. Each override stops applying once no dependent's range reaches its selector, and should then be removed |
+| | BUG-25 | An override in a file nobody owns can hide an advisory from the audit: pnpm 10.33 also reads `overrides:` from `pnpm-workspace.yaml`, which has no CODEOWNERS entry, and `privacy-security-reviewer` showed (in a probe project) that an override to a `link:` copy makes `pnpm audit` report nothing. BUG-11's audit-settings test does not look for `overrides`, `packageExtensions` or `patchedDependencies` there, nor for `link:`/`file:` resolutions in the lockfile. Found while reviewing BUG-23/24; predates them | ⚪ **Queued**, for the owner to schedule. Claude recommends a test that keeps those keys in the owned root `package.json` and refuses non-workspace `link:`/`file:` resolutions, or a CODEOWNERS line for `/pnpm-workspace.yaml` |
 | | BUG-11 | The dependency audit accepts one advisory, GHSA-86w9-cpqp-85rv in `node-forge` (D-093) | ✅ **Done** — merged with SM-01 in [#53](https://github.com/bvst/TryggHverdag/pull/53) (`2db7046`). Its own pull request, [#54](https://github.com/bvst/TryggHverdag/pull/54), was closed as superseded: every file it held was already on `main` |
 | 2 | LOST-01 | Heartbeat, with or without position | ✅ **Done** — 2026-10-03, [#60](https://github.com/bvst/TryggHverdag/pull/60), merged as `fe384c5` after `urso-agent` approved; `main`'s tree is the reviewed head `5aa074c`. D-101 to D-103 (D-102 amended); 20 acceptance criteria. Reviews PASS in the session (all four, and the three blocking ones again after loop 1) and in CI (all five AI reviewers). In CI before the merge: `integration` 103 of 103 on PostgreSQL 15; `mutation` every safety file ≥ 96 %, 0 timed out. On `main` after the merge: `ci` 10 of 10 jobs passed (run 37144094720), and `deploy-staging` ran migration `0002` and passed its smoke test (run 37144094724). Record: `progress/m2.md` |
-| 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | 🟡 **In review** — pull request open from `claude/busy-faraday-40n2zl`. 25 acceptance criteria; D-106, D-107 and D-109 (owner), D-108 (delegated, amended). Session reviews: `test-auditor` blocked the first round (two untested watchdog clauses), fixed in loop 1; all three blocking reviewers PASS after loop 1 (`3539d4f`) and loop 2 (`25f5ccf`). `gate:full` 11 passed, the one failure `gate:integrity`'s API checks; mutation: every safety file ≥ 95.9 %, kills only (`worker.ts` 140 of 146). L3 ran on a PostgreSQL 16 stand-in only, so CI's `integration` job is the real run. Record: `progress/m2.md` |
-| 4 | LOST-03 | Back in contact | ⚪ Not started |
+| 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ✅ **Done** — 2026-10-05, [#63](https://github.com/bvst/TryggHverdag/pull/63), merged as `5cd5d24` at 06:50 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `6527e38`. 25 acceptance criteria; D-106, D-107 and D-109 (owner), D-108 (delegated, amended). Session reviews: `test-auditor` blocked the first round, fixed in loop 1; all three blocking reviewers PASS after loops 1 and 2. In CI on `6527e38`: all 16 checks passed, all five AI reviewers PASS; `integration` on PostgreSQL 15; `mutation` every run passed (`watchdog.ts` 87 of 87, `outbox.ts` 37 of 38, `worker.ts` 140 of 146). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37274508925), and `deploy-staging` passed (run 37274508942), with both session-limit lines in force. Record: `progress/m2.md` |
+| 4 | LOST-03 | Back in contact | 🟡 **In review** — pull request open from `claude/busy-faraday-40n2zl`. 20 acceptance criteria; D-110 and D-111 (owner), D-112 (delegated, amended in three review loops). Session reviews: all four reviewers PASS in the first round; the three blocking ones PASS after loops 1, 2 and 3 (the process's limit), each loop closing their should-fixes. `gate:full` 11 passed, the one failure `gate:integrity`'s API checks; mutation: every safety file ≥ 95.9 %, kills only (`service.ts` 122 of 123, `journey.ts` 134 of 135). L3 ran on a PostgreSQL 16 stand-in only, so CI's `integration` job is the real run. Record: `progress/m2.md` |
 | 5 | LOST-06 | "I'm on it" | ⚪ Not started |
 | 6 | LOST-07 | SMS escalation at 2 minutes | ⚪ Not started |
 | 7 | LOST-08 | "They're safe" | ⚪ Not started |
@@ -307,7 +312,7 @@ The things that still bite, and cost a session hours the first time.
   `.claude/` gaps). M2's narrative is [`progress/m2.md`](progress/m2.md) and
   M1's is [`progress/m1.md`](progress/m1.md), so a bug's next `BUG-<n>` has to
   be looked for in all three files, in this one and in `decisions.md`. The
-  next one is **BUG-21** (BUG-13 to BUG-20 are taken). The last paragraph of
+  next one is **BUG-26** (BUG-13 to BUG-25 are taken). The last paragraph of
   `progress/m1.md` says why.
 - **The write-time sensitive-data hook catches only `+47`/`0047` phone
   numbers, on Write and Edit.** `scan-sensitive.mjs` does not look for 8-digit
@@ -339,20 +344,17 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**LOST-02** (M2 task 3 of 8, the lost-contact alert) is in review, with its
-pull request open from `claude/busy-faraday-40n2zl`. It bounds the heartbeat's
-row lock, as LOST-01's reviews asked. **BUG-18** is done
-([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`), and so are
-**LOST-01** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`)
-and **BUG-15** ([#59](https://github.com/bvst/TryggHverdag/pull/59),
-`c46b3b3`). **A-31** (Dependabot alerts are off) is the owner's. LOST-01's and
-LOST-02's reviews leave items for later tasks, listed in `progress/m2.md`
-("Left for later tasks").
-
-**After LOST-02's first staging deploy,** this session finds every line
-starting `api: session limit` or `worker: session limit` and quotes them in
-`progress/m2.md`. It expects exactly two, both "in force" (the spec's Risks
-section lists them). Any other line, or none at all, opens a bug (D-109).
+**LOST-02** (M2 task 3 of 8, the lost-contact alert) is done
+([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`). Its first
+staging deploy shows both processes' session limits in force (quoted in
+`progress/m2.md`). **LOST-03** (task 4, back in contact, and "I'm home") is
+in review, with its pull request open (D-110 to D-112). **BUG-18**
+([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`), **LOST-01**
+([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`) and **BUG-15**
+([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`) are done too.
+**A-31** (Dependabot alerts are off) is the owner's. LOST-01's, LOST-02's and
+LOST-03's reviews leave items for later tasks, listed in `progress/m2.md` ("Left for
+later tasks").
 
 **For the owner, from CI's `test-auditor` on #60:** should
 `apps/server/src/log.ts` be mutation-tested? It is the one place that keeps
@@ -381,7 +383,7 @@ Still open from D-098's consequences (BUG-12, done):
 - the whole-suite run is now unreachable, and removing it needs a decision;
 - mobile `.tsx` safety files will need a jest-expo group.
 
-**BUG-13**, **BUG-16**, **BUG-17**, **BUG-19** and **BUG-20** are queued for the owner to schedule (the rows under M2, above).
+**BUG-13**, **BUG-16**, **BUG-17**, **BUG-19**, **BUG-20**, **BUG-21**, **BUG-22** and **BUG-25** are queued for the owner to schedule (the rows under M2, above).
 
 **D-085's loose ends** (the pull request merged, [#43](https://github.com/bvst/TryggHverdag/pull/43)).
 - **Verified:** `deploy-staging` on `ubuntu-26.04`. Run 36621209842, for

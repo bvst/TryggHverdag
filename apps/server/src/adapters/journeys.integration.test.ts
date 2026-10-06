@@ -47,9 +47,12 @@ import {
   type MessageAsStored,
   type HeartbeatToRecord,
   type JourneyAsStored,
+  type JourneyEndAsStored,
   type JourneyStoreUnderTest,
   type PositionAsStored,
+  type ResolutionAsStored,
   type SyntheticHeartbeat,
+  type WithdrawalAsStored,
 } from '@trygghverdag/test-kit';
 import { sql } from 'drizzle-orm';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -60,9 +63,12 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createApi } from '../api.ts';
 import { captured, markersIn, markersOf } from '../capture.test.ts';
 import {
+  ALERT_RESOLUTIONS,
   ALERT_STATES,
+  JOURNEY_END_REASONS,
   JOURNEY_STATES,
   LOST_CONTACT_AFTER_MS,
+  MESSAGE_KINDS,
   type JourneyState,
 } from '../domain/journey.ts';
 import { sqlstateOf } from '../domain/sqlstate.ts';
@@ -236,7 +242,11 @@ async function journeysOf(walkerId: string): Promise<JourneyAsStored[]> {
   }));
 }
 
-/** Ends a journey directly: nothing in the code can end one yet. */
+/**
+ * Ends a journey directly, as a test's own setup, without the "I'm home"
+ * route or any rule: no end time and no end reason, as a journey ended by
+ * hand in the database has neither.
+ */
 async function endJourney(journeyId: string): Promise<void> {
   await connection().query("update journeys set state = 'ENDED' where id = $1", [journeyId]);
 }
@@ -376,6 +386,123 @@ async function messagesOf(journeyId: string): Promise<MessageAsStored[]> {
     sentAt: momentOf(row.sent_ms),
     lastFailure: row.last_failure,
   }));
+}
+
+/** LOST-03: each alert of the journey's resolution, as the `alerts` table holds it. */
+async function resolutionsOf(journeyId: string): Promise<ResolutionAsStored[]> {
+  const result = await connection().query<{
+    id: string;
+    resolved_ms: string | null;
+    resolution: string | null;
+  }>(
+    `select id::text as id, ${MS('resolved_at')} as resolved_ms, resolution::text as resolution
+       from alerts where journey_id = $1 order by opened_at, id`,
+    [journeyId],
+  );
+  return result.rows.map((row) => ({
+    alertId: row.id,
+    resolvedAt: momentOf(row.resolved_ms),
+    resolution: row.resolution,
+  }));
+}
+
+/** LOST-03: when each message of the journey's alerts was written, and withdrawn. */
+async function withdrawalsOf(journeyId: string): Promise<WithdrawalAsStored[]> {
+  const result = await connection().query<{
+    message_id: string;
+    created_ms: string;
+    withdrawn_ms: string | null;
+  }>(
+    `select o.id::text as message_id, ${MS('o.created_at')} as created_ms,
+            ${MS('o.withdrawn_at')} as withdrawn_ms
+       from outbox o join alerts a on a.id = o.alert_id
+      where a.journey_id = $1 order by o.id`,
+    [journeyId],
+  );
+  return result.rows.map((row) => ({
+    messageId: row.message_id,
+    createdAt: new Date(Number(row.created_ms)),
+    withdrawnAt: momentOf(row.withdrawn_ms),
+  }));
+}
+
+/** LOST-03: how the journey ended, as the `journeys` table holds it, or null if there is no such journey. */
+async function endOf(journeyId: string): Promise<JourneyEndAsStored | null> {
+  const result = await connection().query<{ ended_ms: string | null; end_reason: string | null }>(
+    `select ${MS('ended_at')} as ended_ms, end_reason::text as end_reason
+       from journeys where id = $1`,
+    [journeyId],
+  );
+  const row = result.rows[0];
+  return row === undefined ? null : { endedAt: momentOf(row.ended_ms), endReason: row.end_reason };
+}
+
+/** LOST-03-AC4: an alert put in directly; the resolution's columns only when it has one. */
+async function seedAlert({
+  journeyId,
+  state,
+  openedAt,
+  silentSince,
+  resolvedAt = null,
+  resolution = null,
+}: {
+  journeyId: string;
+  state: string;
+  openedAt: Date;
+  silentSince: Date;
+  resolvedAt?: Date | null;
+  resolution?: string | null;
+}): Promise<string> {
+  const id = syntheticUuid();
+  if (resolvedAt === null && resolution === null) {
+    await connection().query(
+      `insert into alerts (id, journey_id, state, opened_at, silent_since)
+       values ($1, $2, $3, $4, $5)`,
+      [id, journeyId, state, openedAt, silentSince],
+    );
+  } else {
+    await connection().query(
+      `insert into alerts (id, journey_id, state, opened_at, silent_since, resolved_at, resolution)
+       values ($1, $2, $3, $4, $5, $6, $7)`,
+      [id, journeyId, state, openedAt, silentSince, resolvedAt, resolution],
+    );
+  }
+  return id;
+}
+
+/** LOST-03: an outbox message put in directly, never withdrawn; every column but that one given. */
+async function seedMessage({
+  alertId,
+  recipientId,
+  kind,
+  createdAt,
+  nextAttemptAt,
+  attempts = 0,
+  sentAt = null,
+  lastFailure = null,
+}: {
+  alertId: string;
+  recipientId: string;
+  kind: string;
+  createdAt: Date;
+  nextAttemptAt: Date;
+  attempts?: number;
+  sentAt?: Date | null;
+  lastFailure?: string | null;
+}): Promise<string> {
+  const id = syntheticUuid();
+  await connection().query(
+    `insert into outbox (id, alert_id, recipient_id, kind, created_at, attempts,
+                         next_attempt_at, sent_at, last_failure)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [id, alertId, recipientId, kind, createdAt, attempts, nextAttemptAt, sentAt, lastFailure],
+  );
+  return id;
+}
+
+/** LOST-03-AC4: every responder row of the journey removed directly. */
+async function removeResponders(journeyId: string): Promise<void> {
+  await connection().query('delete from journey_responders where journey_id = $1', [journeyId]);
 }
 
 /**
@@ -527,6 +654,15 @@ describe('databaseJourneyStore, against the behaviour every journey store shares
     // now() moves on while a behaviour runs: a silence this close to the
     // threshold could fall either side of it by the time the store asks.
     timeMarginMs: 2_000,
+    // LOST-03: an alert's resolution, a message's withdrawal and a journey's
+    // end, each read by a reader of its own; and the rows a behaviour puts in
+    // directly.
+    resolutionsOf,
+    withdrawalsOf,
+    endOf,
+    seedAlert,
+    seedMessage,
+    removeResponders,
   });
 
   test.each(JOURNEY_STORE_BEHAVIOUR)(
@@ -536,7 +672,9 @@ describe('databaseJourneyStore, against the behaviour every journey store shares
       // behaviours leave theirs due. So before each of the outbox's
       // behaviours, every message already there is put out of reach, as sent;
       // only LOST-02's behaviours touch the outbox, and only they need it.
-      if (name.startsWith('LOST-02-')) {
+      // LOST-03's behaviours claim too, and write stand-downs that are due,
+      // so they get the same start (added, not changed).
+      if (name.startsWith('LOST-02-') || name.startsWith('LOST-03-')) {
         await connection().query('update outbox set sent_at = now() where sent_at is null');
       }
       await run(underTest());
@@ -1770,7 +1908,12 @@ describe('LOST-02: the database agrees on alerts and their messages', () => {
     await expect(insertAlert(other.journeyId, 'OPEN')).resolves.toBeDefined();
   });
 
-  test('LOST-02-AC23: outbox has a partial index on (next_attempt_at, id) where sent_at is null, created by migration 0003 itself, and no migration 0004 exists', async () => {
+  // RG-03 (LOST-03, the spec's "Existing assertions that change by design"):
+  // this was "…created by migration 0003 itself, and no migration 0004
+  // exists". 0004 now exists, for LOST-03's own columns. The test's point,
+  // that the index is created by 0003 and by no separate migration, is kept:
+  // no later migration names it, so none creates it again or drops it.
+  test('LOST-02-AC23: outbox has a partial index on (next_attempt_at, id) where sent_at is null, created by migration 0003 itself, and no later migration creates or drops it', async () => {
     // The claim's own order, over the unsent rows only (approach item 4,
     // review loop 1): sent rows stay until retention removes them.
     const indexes = await connection().query<{ definition: string }>(
@@ -1788,7 +1931,12 @@ describe('LOST-02: the database agrees on alerts and their messages', () => {
 
     const folder = path.join(import.meta.dirname, '..', 'db', 'migrations');
     const files = readdirSync(folder);
-    expect(files.filter((file) => file.startsWith('0004_'))).toEqual([]);
+    const later = files.filter((file) => /^\d{4}_.*\.sql$/.test(file) && file > '0004');
+    for (const file of later) {
+      expect(readFileSync(path.join(folder, file), 'utf8'), file).not.toMatch(
+        /outbox_unsent_due_index/i,
+      );
+    }
     const migration0003 = files.filter((file) => /^0003_.*\.sql$/.test(file));
     expect(migration0003).toHaveLength(1);
     const text = readFileSync(path.join(folder, migration0003[0] ?? ''), 'utf8');
@@ -1875,7 +2023,21 @@ describe('LOST-02: the database agrees on alerts and their messages', () => {
     const alerts = await columnsOf('alerts');
     const outbox = await columnsOf('outbox');
 
-    expect(alerts).toEqual(['id', 'journey_id', 'opened_at', 'silent_since', 'state'].sort());
+    // RG-03 (LOST-03, the spec's "Existing assertions that change by
+    // design"): the exact lists gain alerts.resolved_at and
+    // alerts.resolution, and outbox.withdrawn_at (LOST-03's approach item 6).
+    // Still exact; the scan below covers the new columns as it stands.
+    expect(alerts).toEqual(
+      [
+        'id',
+        'journey_id',
+        'opened_at',
+        'silent_since',
+        'state',
+        'resolved_at',
+        'resolution',
+      ].sort(),
+    );
     expect(outbox).toEqual(
       [
         'id',
@@ -1887,6 +2049,7 @@ describe('LOST-02: the database agrees on alerts and their messages', () => {
         'next_attempt_at',
         'sent_at',
         'last_failure',
+        'withdrawn_at',
       ].sort(),
     );
     expect(
@@ -1894,5 +2057,177 @@ describe('LOST-02: the database agrees on alerts and their messages', () => {
         /lat|lng|lon|coord|position|location|accuracy|recorded|battery|phone|name/i.test(column),
       ),
     ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LOST-03-AC20: the database agrees with the domain's lists, and holds the
+// rule that a resolution and an end each come with their time (SM-04).
+// ---------------------------------------------------------------------------
+
+/** An enum's labels, in the database's order (pg_enum). */
+async function labelsOf(typeName: string): Promise<string[]> {
+  const labels = await connection().query<{ label: string }>(
+    `select e.enumlabel as label from pg_enum e join pg_type t on t.oid = e.enumtypid
+      where t.typname = $1 order by e.enumsortorder`,
+    [typeName],
+  );
+  return labels.rows.map(({ label }) => label);
+}
+
+/** A column's type as information_schema names it, with its type's own name. */
+async function typeOf(
+  table: string,
+  column: string,
+): Promise<{ data_type: string; udt_name: string; is_nullable: string } | undefined> {
+  const result = await connection().query<{
+    data_type: string;
+    udt_name: string;
+    is_nullable: string;
+  }>(
+    `select data_type, udt_name, is_nullable from information_schema.columns
+      where table_schema = 'public' and table_name = $1 and column_name = $2`,
+    [table, column],
+  );
+  return result.rows[0];
+}
+
+/** A RESOLVED alert put in directly with these two columns, so the unresolved index never interferes. */
+async function insertResolvedAlert(
+  journeyId: string,
+  { resolvedAt, resolution }: { resolvedAt: boolean; resolution: string | null },
+): Promise<string> {
+  const id = syntheticUuid();
+  await connection().query(
+    `insert into alerts (id, journey_id, state, opened_at, silent_since, resolved_at, resolution)
+     values ($1, $2, 'RESOLVED', now(), now(), case when $3::boolean then now() end, $4)`,
+    [id, journeyId, resolvedAt, resolution],
+  );
+  return id;
+}
+
+/** Sets a journey's end time and end reason directly, as given. */
+function setJourneyEnd(
+  journeyId: string,
+  { endedAt, endReason }: { endedAt: boolean; endReason: string | null },
+) {
+  return connection().query(
+    `update journeys set ended_at = case when $2::boolean then now() end, end_reason = $3
+      where id = $1`,
+    [journeyId, endedAt, endReason],
+  );
+}
+
+describe('LOST-03 and SM-04: the database agrees on resolutions, ends and the new message kinds', () => {
+  test('LOST-03-AC20: message_kind’s values are exactly MESSAGE_KINDS, alert_resolution’s exactly ALERT_RESOLUTIONS, and journey_end_reason’s exactly JOURNEY_END_REASONS, each in order (pg_enum); outbox.kind, alerts.resolution and journeys.end_reason are of those types', async () => {
+    const messageKinds = await labelsOf('message_kind');
+    const alertResolutions = await labelsOf('alert_resolution');
+    const journeyEndReasons = await labelsOf('journey_end_reason');
+
+    // The spec's own lists first, so a domain list that drifted with the
+    // database cannot carry both along (approach item 1).
+    expect(messageKinds).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME']);
+    expect(alertResolutions).toEqual(['BACK_IN_CONTACT', 'HOME']);
+    expect(journeyEndReasons).toEqual(['HOME']);
+    expect(messageKinds).toEqual(MESSAGE_KINDS);
+    expect(alertResolutions).toEqual(ALERT_RESOLUTIONS);
+    expect(journeyEndReasons).toEqual(JOURNEY_END_REASONS);
+
+    expect(await typeOf('outbox', 'kind')).toMatchObject({ udt_name: 'message_kind' });
+    expect(await typeOf('alerts', 'resolution')).toEqual({
+      data_type: 'USER-DEFINED',
+      udt_name: 'alert_resolution',
+      is_nullable: 'YES',
+    });
+    expect(await typeOf('journeys', 'end_reason')).toEqual({
+      data_type: 'USER-DEFINED',
+      udt_name: 'journey_end_reason',
+      is_nullable: 'YES',
+    });
+  });
+
+  test('LOST-03-AC20: alerts.resolved_at, journeys.ended_at and outbox.withdrawn_at are database times (timestamp with time zone), null until set', async () => {
+    for (const [table, column] of [
+      ['alerts', 'resolved_at'],
+      ['journeys', 'ended_at'],
+      ['outbox', 'withdrawn_at'],
+    ] as const) {
+      expect(await typeOf(table, column), `${table}.${column}`).toEqual({
+        data_type: 'timestamp with time zone',
+        udt_name: 'timestamptz',
+        is_nullable: 'YES',
+      });
+    }
+  });
+
+  test('LOST-03-AC20: the database itself refuses an alert with resolved_at and no resolution, or a resolution and no resolved_at; both, or neither, are taken', async () => {
+    const { journeyId } = await walking();
+
+    await expect(
+      insertResolvedAlert(journeyId, { resolvedAt: true, resolution: null }),
+    ).rejects.toMatchObject({ code: '23514' });
+    for (const resolution of ['BACK_IN_CONTACT', 'HOME']) {
+      await expect(
+        insertResolvedAlert(journeyId, { resolvedAt: false, resolution }),
+        resolution,
+      ).rejects.toMatchObject({ code: '23514' });
+      await expect(
+        insertResolvedAlert(journeyId, { resolvedAt: true, resolution }),
+        resolution,
+      ).resolves.toBeDefined();
+    }
+    await expect(
+      insertResolvedAlert(journeyId, { resolvedAt: false, resolution: null }),
+    ).resolves.toBeDefined();
+
+    // And on an update of a row already there, not only on an insert.
+    const alertId = await insertResolvedAlert(journeyId, { resolvedAt: true, resolution: 'HOME' });
+    await expect(
+      connection().query('update alerts set resolution = null where id = $1', [alertId]),
+    ).rejects.toMatchObject({ code: '23514' });
+    await expect(
+      connection().query('update alerts set resolved_at = null where id = $1', [alertId]),
+    ).rejects.toMatchObject({ code: '23514' });
+  });
+
+  test('LOST-03-AC20: the database itself refuses a journey with ended_at and no end_reason, or an end_reason and no ended_at; both, or neither, are taken', async () => {
+    const { journeyId } = await walking();
+
+    await expect(
+      setJourneyEnd(journeyId, { endedAt: true, endReason: null }),
+    ).rejects.toMatchObject({ code: '23514' });
+    await expect(
+      setJourneyEnd(journeyId, { endedAt: false, endReason: 'HOME' }),
+    ).rejects.toMatchObject({ code: '23514' });
+    await expect(
+      setJourneyEnd(journeyId, { endedAt: true, endReason: 'HOME' }),
+    ).resolves.toMatchObject({ rowCount: 1 });
+    await expect(
+      setJourneyEnd(journeyId, { endedAt: false, endReason: null }),
+    ).resolves.toMatchObject({ rowCount: 1 });
+  });
+
+  test('LOST-03-AC20: a resolution or an end reason outside the lists is refused by the database itself', async () => {
+    const { journeyId } = await walking();
+
+    await expect(
+      insertResolvedAlert(journeyId, { resolvedAt: true, resolution: 'LOST_CONTACT' }),
+    ).rejects.toMatchObject(REFUSED_BY_THE_DATABASE);
+    await expect(
+      setJourneyEnd(journeyId, { endedAt: true, endReason: 'BACK_IN_CONTACT' }),
+    ).rejects.toMatchObject(REFUSED_BY_THE_DATABASE);
+  });
+
+  test('LOST-03-AC20: the claim’s partial index still reads (next_attempt_at, id) with the predicate sent_at IS NULL (pg_get_indexdef)', async () => {
+    // Unchanged by design (approach item 6): withdrawn rows stay in it,
+    // unsent, until the retention work removes them.
+    const index = await connection().query<{ definition: string }>(
+      `select pg_get_indexdef(indexrelid) as definition from pg_index
+        where indexrelid = to_regclass('outbox_unsent_due_index')`,
+    );
+
+    expect(index.rows.map(({ definition }) => definition)).toEqual([
+      'CREATE INDEX outbox_unsent_due_index ON public.outbox USING btree (next_attempt_at, id) WHERE (sent_at IS NULL)',
+    ]);
   });
 });

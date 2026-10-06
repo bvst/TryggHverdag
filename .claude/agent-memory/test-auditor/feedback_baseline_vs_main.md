@@ -32,3 +32,6 @@ Also watch for the opposite drift: an entry whose measured value is now higher t
 lib/e2e-android.mjs was measured at 95.16/85.71 and committed as 92.85/82.22). The gain is not locked in. It is a
 Note, and the fix is a hand raise, not `--update`.
 Related: [[stale-base]], [[entry-script-wiring]]
+**Vacuous ratchetDrops (LOST-03, 2026-10-06).** `summarize(coverage-summary.json)` keys are ABSOLUTE paths; `changed` from git and
+the baseline are relative. Called as-is, ratchetDrops returns [] and floorBreaches says "none exists yet" — a false green. Strip
+`<checkout>/` from the keys first, and print how many changed files were actually compared (10 at LOST-03) before trusting [].

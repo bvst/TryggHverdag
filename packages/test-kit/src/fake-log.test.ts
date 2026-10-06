@@ -79,6 +79,22 @@ describe('fakeLog', () => {
     expect(log.events).toEqual(written);
   });
 
+  test('records the "I’m home" events and the missing alert too, each exactly as given (LOST-03)', () => {
+    const log = fakeLog();
+    const written: FakeLogEvent[] = [
+      { event: 'home_ignored', reason: 'JOURNEY_ENDED', journeyId: syntheticUuid() },
+      { event: 'home_failed', stage: 'read', code: '57P01' },
+      { event: 'home_failed', stage: 'store', code: null },
+      { event: 'alert_missing', journeyId: syntheticUuid() },
+    ];
+
+    for (const event of written) {
+      log.write(event);
+    }
+
+    expect(log.events).toEqual(written);
+  });
+
   test('the test kit hands it out', () => {
     expect(kit.fakeLog).toBe(fakeLog);
   });

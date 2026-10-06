@@ -219,6 +219,10 @@ describe('stryker.config.mjs', () => {
     // does not run an excluded file even when it is named: under that
     // configuration this run would find no test file at all. So the command
     // is asked what it would run, not only read for what it says.
+    //
+    // RG-03 (LOST-03, D-112): the journey system tests are two files now:
+    // contact.system.test.ts joins the group, as the spec's Mutation section
+    // says. The run still mutates the same files, under the same config.
     const config = await configFor('journeys');
 
     expect(config.mutate).toEqual(['apps/server/src/modules/journeys/**/*.ts', ...EXCLUSIONS]);
@@ -226,7 +230,10 @@ describe('stryker.config.mjs', () => {
     expect(config.incrementalFile).toBeUndefined();
     const args = vitestArgs(config.commandRunner.command);
     expect(configNamedIn(args)).toBe('vitest.system.config.mjs');
-    expect(filesRunWith(args)).toEqual(['apps/server/src/journeys.system.test.ts']);
+    // Compared in any order: `vitest list` reports the files in its own.
+    expect([...filesRunWith(args)].sort()).toEqual(
+      ['apps/server/src/journeys.system.test.ts', 'apps/server/src/contact.system.test.ts'].sort(),
+    );
   });
 
   test("LOST-02: the alerts run mutates modules/alerts/ and runs alerts.system.test.ts alone, under the system tests' configuration", async () => {

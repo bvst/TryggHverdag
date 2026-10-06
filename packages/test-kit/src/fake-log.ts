@@ -19,10 +19,12 @@
  */
 
 /**
- * Every event the server may log, and nothing else. LOST-02 adds the last
- * five: the watchdog's and the sender's failures, a journey the watchdog
- * cannot move, and a connection's error, each with a stage, a reason, a pool
- * or a SQLSTATE, and never a message.
+ * Every event the server may log, and nothing else. LOST-02 adds the
+ * watchdog's and the sender's failures, a journey the watchdog cannot move,
+ * and a connection's error, each with a stage, a reason, a pool or a
+ * SQLSTATE, and never a message. LOST-03 adds the last three: an "I'm home"
+ * for a journey already ended (SM-07), an "I'm home" that failed, and a
+ * journey brought back in contact with no alert to resolve.
  */
 export type FakeLogEvent =
   | { event: 'heartbeat_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
@@ -35,7 +37,10 @@ export type FakeLogEvent =
       messageId: string;
     }
   | { event: 'delivery_failed'; stage: 'claim' | 'mark'; code: string | null }
-  | { event: 'database_error'; pool: 'api' | 'worker'; code: string | null };
+  | { event: 'database_error'; pool: 'api' | 'worker'; code: string | null }
+  | { event: 'home_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
+  | { event: 'home_failed'; stage: 'read' | 'store'; code: string | null }
+  | { event: 'alert_missing'; journeyId: string };
 
 export interface FakeLog {
   /** Records the event. */

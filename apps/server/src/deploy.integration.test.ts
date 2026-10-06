@@ -500,6 +500,40 @@ async function rowsBefore0003(client: pg.Client) {
   };
 }
 
+/** The journal's entries `0000` to `0003`: the schema LOST-02 left. */
+function entriesThrough0003(): JournalEntry[] {
+  const kept = journal(MIGRATIONS).entries.filter((entry) => /^000[0-3]_/.test(entry.tag));
+  expect(kept.map((entry) => entry.idx)).toEqual([0, 1, 2, 3]);
+  return kept;
+}
+
+/** A copy of the migrations folder holding `0000` to `0003` only: the schema before LOST-03. */
+function migrationsUpTo0003(): string {
+  const folder = mkdtempSync(path.join(tmpdir(), 'migrations-0003-'));
+  mkdirSync(path.join(folder, 'meta'));
+  const kept = entriesThrough0003();
+  for (const entry of kept) {
+    copyFileSync(path.join(MIGRATIONS, `${entry.tag}.sql`), path.join(folder, `${entry.tag}.sql`));
+  }
+  writeFileSync(
+    path.join(folder, 'meta', '_journal.json'),
+    JSON.stringify({ ...journal(MIGRATIONS), entries: kept }, null, 2),
+  );
+  return folder;
+}
+
+/** Drizzle's migrate on one connection, as migrateDatabase runs it, over the migrations up to `0003` only. */
+async function migrateThrough0003(uri: string): Promise<void> {
+  const folder = migrationsUpTo0003();
+  const pool = createPool(uri, 1);
+  try {
+    await migrate(createDatabase(pool), { migrationsFolder: folder });
+  } finally {
+    await pool.end();
+    rmSync(folder, { recursive: true, force: true });
+  }
+}
+
 describe('LOST-02: the alerts migration changes no row that is already there', () => {
   test('LOST-02-AC23: a PostgreSQL 15 database at 0002, holding journeys in every state with heartbeats and positions, migrates through 0003 as the pre-run hook runs it; every existing row is unchanged, and alerts and outbox exist and are empty', async () => {
     await databaseAt0002(async (uri, client) => {
@@ -519,7 +553,16 @@ describe('LOST-02: the alerts migration changes no row that is already there', (
       expect(before.journeys).toHaveLength(states.length);
       expect(before.positions).toHaveLength(states.length);
 
-      await expect(migrateDatabase(uri)).resolves.toBeUndefined();
+      // RG-03 (LOST-03, the spec's "Existing assertions that change by
+      // design"): this ran every migration (migrateDatabase), so it would now
+      // run 0004 too, and row_to_json of each journey would then hold
+      // ended_at and end_reason, both null: the comparison below would fail
+      // though no row changed. It keeps its point by migrating through 0003
+      // only, with drizzle's migrate on one connection, as migrateDatabase
+      // runs it, over a copy of the folder up to 0003 (as migrationsUpTo0002
+      // does for 0002). The applied count is the journal's entries up to
+      // 0003. LOST-03-AC20's test below takes a database at 0003 through 0004.
+      await expect(migrateThrough0003(uri)).resolves.toBeUndefined();
 
       const tables = (
         await client.query<{ name: string }>(
@@ -535,7 +578,7 @@ describe('LOST-02: the alerts migration changes no row that is already there', (
       const applied = await client.query<{ n: number }>(
         'select count(*)::int as n from drizzle.__drizzle_migrations',
       );
-      expect(applied.rows).toEqual([{ n: journal(MIGRATIONS).entries.length }]);
+      expect(applied.rows).toEqual([{ n: entriesThrough0003().length }]);
     });
   }, 120_000);
 
@@ -550,5 +593,212 @@ describe('LOST-02: the alerts migration changes no row that is already there', (
     expect(text).not.toMatch(/\bupdate\s+("?public"?\.)?"?[a-z_]+"?\s+set\b/i);
     expect(text).not.toMatch(/\bdelete\s+from\b/i);
     expect(text).not.toMatch(/\btruncate\b/i);
+  });
+});
+
+// LOST-03's migration, 0004, adds an alert's resolution, a journey's end and
+// a message's withdrawal, and two message kinds. Like 0003 it has nothing to
+// guess, so it must run over a database that already holds journeys, alerts
+// and messages in every state, and change none of those rows. It adds enum
+// values inside drizzle's one transaction, which PostgreSQL accepts only if
+// the transaction does not use them (approach item 6): staging's
+// PostgreSQL 15 is the evidence, here and in the empty database above.
+
+/** A fresh database in the PostgreSQL 15 container, migrated up to `0003` only, and dropped afterwards. */
+async function databaseAt0003(
+  use: (uri: string, client: pg.Client) => Promise<void>,
+): Promise<void> {
+  const name = `lost03_${syntheticUuid().replaceAll('-', '')}`;
+  const admin = new pg.Client({ connectionString: databaseUrl() });
+  await admin.connect();
+  await admin.query(`create database ${name}`);
+  const uri = withDatabase(databaseUrl(), name);
+  const client = new pg.Client({ connectionString: uri });
+  try {
+    await migrateThrough0003(uri);
+    await client.connect();
+    await use(uri, client);
+  } finally {
+    await client.end().catch(() => undefined);
+    await admin.query(`drop database if exists ${name}`);
+    await admin.end();
+  }
+}
+
+/**
+ * A LOST_CONTACT journey with two responders, and its alert in `alertState`
+ * with two lost-contact messages: one sent after a failure, one unsent and
+ * due again in 30 s after two failures.
+ */
+async function journeyWithAlert(client: pg.Client, alertState: string): Promise<void> {
+  const { userId, deviceId } = await userWithDevice(client);
+  const responderIds = [syntheticUuid(), syntheticUuid()];
+  for (const responderId of responderIds) {
+    await client.query('insert into users (id) values ($1)', [responderId]);
+  }
+  const journeyId = syntheticUuid();
+  await client.query(
+    `insert into journeys (id, walker_id, device_id, state, started_at, last_heartbeat_at)
+     values ($1, $2, $3, 'LOST_CONTACT', now() - interval '30 minutes', now() - interval '12 minutes')`,
+    [journeyId, userId, deviceId],
+  );
+  for (const responderId of responderIds) {
+    await client.query(
+      'insert into journey_responders (journey_id, responder_id) values ($1, $2)',
+      [journeyId, responderId],
+    );
+  }
+  const alertId = syntheticUuid();
+  await client.query(
+    `insert into alerts (id, journey_id, state, opened_at, silent_since)
+     values ($1, $2, $3, now() - interval '7 minutes', now() - interval '12 minutes')`,
+    [alertId, journeyId, alertState],
+  );
+  await client.query(
+    `insert into outbox (id, alert_id, recipient_id, kind, created_at, attempts,
+                         next_attempt_at, sent_at, last_failure)
+     values ($1, $2, $3, 'LOST_CONTACT', now() - interval '7 minutes', 2,
+             now() - interval '6 minutes', now() - interval '6 minutes', 'UNAVAILABLE')`,
+    [syntheticUuid(), alertId, responderIds[0]],
+  );
+  await client.query(
+    `insert into outbox (id, alert_id, recipient_id, kind, created_at, attempts,
+                         next_attempt_at, sent_at, last_failure)
+     values ($1, $2, $3, 'LOST_CONTACT', now() - interval '7 minutes', 2,
+             now() + interval '30 seconds', null, 'REFUSED')`,
+    [syntheticUuid(), alertId, responderIds[1]],
+  );
+}
+
+/** Every row of every table 0004 could touch, as objects, in a fixed order. */
+async function rowsBefore0004(client: pg.Client) {
+  const rows = async (table: string, order: string) =>
+    (
+      await client.query<{ value: Record<string, unknown> }>(
+        `select row_to_json(t) as value from ${table} t order by ${order}`,
+      )
+    ).rows.map((row) => row.value);
+  return {
+    users: await rows('users', 't.id'),
+    devices: await rows('devices', 't.id'),
+    journeys: await rows('journeys', 't.id'),
+    responders: await rows('journey_responders', 't.journey_id, t.responder_id'),
+    heartbeats: await rows('heartbeats', 't.id'),
+    positions: await rows('positions', 't.heartbeat_id'),
+    workerHeartbeat: await rows('worker_heartbeat', 't.id'),
+    alerts: await rows('alerts', 't.id'),
+    outbox: await rows('outbox', 't.id'),
+  };
+}
+
+/** An enum's labels, in the database's order (pg_enum). */
+async function labelsIn(client: pg.Client, typeName: string): Promise<string[]> {
+  const labels = await client.query<{ label: string }>(
+    `select e.enumlabel as label from pg_enum e join pg_type t on t.oid = e.enumtypid
+      where t.typname = $1 order by e.enumsortorder`,
+    [typeName],
+  );
+  return labels.rows.map(({ label }) => label);
+}
+
+describe('LOST-03 and SM-04: the resolution migration changes no row that is already there', () => {
+  test('LOST-03-AC20: a PostgreSQL 15 database at 0003, holding journeys in every state, alerts in every state and outbox messages sent and unsent, migrates through 0004 as the pre-run hook runs it; every existing row is unchanged, and every new column is null on them', async () => {
+    await databaseAt0003(async (uri, client) => {
+      const journeyStates = (
+        await client.query<{ state: string }>(
+          'select unnest(enum_range(null::journey_state))::text as state',
+        )
+      ).rows.map((row) => row.state);
+      const alertStates = (
+        await client.query<{ state: string }>(
+          'select unnest(enum_range(null::alert_state))::text as state',
+        )
+      ).rows.map((row) => row.state);
+      expect(journeyStates).toEqual(['ACTIVE', 'LOST_CONTACT', 'ENDED']);
+      expect(alertStates).toEqual(['OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED']);
+      for (const state of journeyStates) {
+        await journeyIn(client, state);
+      }
+      for (const state of alertStates) {
+        await journeyWithAlert(client, state);
+      }
+      await client.query(
+        "insert into worker_heartbeat (id, beat_at) values ('worker', now() - interval '1 minute')",
+      );
+      const before = await rowsBefore0004(client);
+      expect(before.journeys).toHaveLength(journeyStates.length + alertStates.length);
+      expect(before.alerts).toHaveLength(alertStates.length);
+      expect(before.outbox).toHaveLength(2 * alertStates.length);
+      expect(before.outbox.filter((row) => row['sent_at'] === null)).toHaveLength(
+        alertStates.length,
+      );
+
+      await expect(migrateDatabase(uri)).resolves.toBeUndefined();
+
+      // Every row as it was, column for column, with the new columns, and
+      // only those, beside it, null (approach item 6).
+      expect(await rowsBefore0004(client)).toEqual({
+        ...before,
+        journeys: before.journeys.map((row) => ({ ...row, ended_at: null, end_reason: null })),
+        alerts: before.alerts.map((row) => ({ ...row, resolved_at: null, resolution: null })),
+        outbox: before.outbox.map((row) => ({ ...row, withdrawn_at: null })),
+      });
+      expect(await labelsIn(client, 'message_kind')).toEqual([
+        'LOST_CONTACT',
+        'BACK_IN_CONTACT',
+        'HOME',
+      ]);
+      expect(await labelsIn(client, 'alert_resolution')).toEqual(['BACK_IN_CONTACT', 'HOME']);
+      expect(await labelsIn(client, 'journey_end_reason')).toEqual(['HOME']);
+      const applied = await client.query<{ n: number }>(
+        'select count(*)::int as n from drizzle.__drizzle_migrations',
+      );
+      expect(applied.rows).toEqual([{ n: journal(MIGRATIONS).entries.length }]);
+
+      // The values added inside the migration's transaction are usable once
+      // it has committed.
+      const [message] = before.outbox;
+      await expect(
+        client.query(
+          `insert into outbox (id, alert_id, recipient_id, kind, created_at, attempts,
+                               next_attempt_at, sent_at, last_failure)
+           values ($1, $2, $3, 'BACK_IN_CONTACT', now(), 0, now(), null, null)`,
+          [syntheticUuid(), message?.['alert_id'], message?.['recipient_id']],
+        ),
+      ).resolves.toMatchObject({ rowCount: 1 });
+    });
+  }, 120_000);
+
+  test('LOST-03-AC20: there is exactly one committed 0004 migration, it is in the journal, it holds no update, delete or truncate, and it names neither new message_kind value but in its add value statements and the new enums’ own definitions', () => {
+    const files = readdirSync(MIGRATIONS).filter((file) => /^0004_.*\.sql$/.test(file));
+    expect(files, 'exactly one 0004 migration').toHaveLength(1);
+    expect(journal(MIGRATIONS).entries.map((entry) => `${entry.tag}.sql`)).toContain(files[0]);
+    const text = readFileSync(path.join(MIGRATIONS, files[0] ?? ''), 'utf8');
+    const statements = text
+      .split(/--> statement-breakpoint|;/)
+      .map((statement) => statement.trim())
+      .filter((statement) => statement !== '');
+
+    expect(text).not.toMatch(/\bupdate\s+("?public"?\.)?"?[a-z_]+"?\s+set\b/i);
+    expect(text).not.toMatch(/\bdelete\s+from\b/i);
+    expect(text).not.toMatch(/\btruncate\b/i);
+
+    const addsValue = statements.filter((statement) =>
+      /^alter type\s+("?public"?\.)?"?message_kind"?\s+add value\b/i.test(statement),
+    );
+    expect(addsValue).toHaveLength(2);
+    expect(addsValue.join('\n')).toMatch(/'BACK_IN_CONTACT'/);
+    expect(addsValue.join('\n')).toMatch(/'HOME'/);
+    // alert_resolution and journey_end_reason are new types whose own values
+    // carry the same names (approach item 6); their definitions name them,
+    // and use nothing of message_kind.
+    const definesNewEnum = (statement: string) =>
+      /^create type\s+("?public"?\.)?"?(alert_resolution|journey_end_reason)"?\s+as enum\s*\(/i.test(
+        statement,
+      );
+    const naming = statements.filter(
+      (statement) => /'(BACK_IN_CONTACT|HOME)'/.test(statement) && !addsValue.includes(statement),
+    );
+    expect(naming.filter((statement) => !definesNewEnum(statement))).toEqual([]);
   });
 });

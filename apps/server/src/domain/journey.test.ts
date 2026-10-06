@@ -27,8 +27,9 @@
 //      NOT_THE_JOURNEYS_DEVICE (D-101), so a tablet left at home can never
 //      hide the walking phone's silence;
 //   4. otherwise → recorded, and the state stays as it was: ACTIVE stays
-//      ACTIVE (SM-03), and LOST_CONTACT stays LOST_CONTACT until the
-//      back-in-contact task moves it (reading 7 of the spec).
+//      ACTIVE (SM-03), and LOST_CONTACT stays LOST_CONTACT under this rule;
+//      moving it back is the contact rule's (LOST-03, D-112), asked by the
+//      store under the row's lock once the heartbeat is stored.
 // The domain never sees the position, the battery or the event ID, so
 // whether a heartbeat carried a position changes no outcome: SM-03, held by
 // construction, and checked below as a property.
@@ -40,18 +41,45 @@
 // opens an alert; every other situation is unchanged: ACTIVE under the
 // threshold, LOST_CONTACT (once per silence), ENDED, and no journey. The rule
 // reads no clock: both times are handed in.
-import { fc, syntheticPosition, syntheticUuid } from '@trygghverdag/test-kit';
+//
+// LOST-03 adds the fourth and fifth events (approach item 2 of its spec):
+//   - contact, the store's question under the row lock, after it stored a
+//     heartbeat: with the journey's silence counted with that heartbeat and
+//     the transaction's now, a LOST_CONTACT journey is back in contact
+//     exactly when the silence is under LOST_CONTACT_AFTER_MS, the silence
+//     rule asked the other way at the same threshold. Every other situation
+//     is unchanged, and so is any time that is not one;
+//   - home (D-110), "I'm home", in the heartbeat rule's order: no journey or
+//     another walker's is not found; ENDED is ignored (SM-07); another device
+//     of the walker's is refused (D-101); ACTIVE ends, HOME, resolving no
+//     alert; LOST_CONTACT ends, HOME, resolving its alert (SM-04).
+// The heartbeat's own rule does not change: a LOST_CONTACT journey's
+// heartbeat is recorded and the state stays; the move back is contact's.
+import {
+  MESSAGE_KINDS as KIT_MESSAGE_KINDS,
+  fc,
+  syntheticPosition,
+  syntheticUuid,
+} from '@trygghverdag/test-kit';
 import { describe, expect, test } from 'vitest';
 import {
+  ALERT_RESOLUTIONS,
   ALERT_STATES,
+  JOURNEY_END_REASONS,
   JOURNEY_EVENTS,
   JOURNEY_STATES,
   LOST_CONTACT_AFTER_MS,
+  MESSAGE_KINDS,
   transition,
+  type AlertResolution,
+  type ContactEvent,
   type HeartbeatEvent,
+  type HomeEvent,
+  type JourneyEndReason,
   type JourneyEventType,
   type JourneyForHeartbeat,
   type JourneyState,
+  type MessageKind,
   type SilenceEvent,
 } from './journey.ts';
 
@@ -147,6 +175,32 @@ function silence(silentForMs: number, silentSince: Date = SILENT_SINCE): Silence
 const LOST_CONTACT: Outcome = { type: 'lost_contact', state: 'LOST_CONTACT', alert: 'OPEN' };
 const UNCHANGED: Outcome = { type: 'unchanged' };
 
+/**
+ * LOST-03: the store asks, after it stored a heartbeat, whether contact is
+ * back: the journey's silence, counted with that heartbeat, began at
+ * `silentSince` and has lasted `silentForMs` by the transaction's now.
+ */
+function contact(silentForMs: number, silentSince: Date = SILENT_SINCE): ContactEvent {
+  return {
+    type: 'contact',
+    silentSince,
+    now: new Date(silentSince.getTime() + silentForMs),
+  };
+}
+
+/** LOST-03 (D-110): "I'm home", from this walker's device: the walker's own one unless a test says otherwise. */
+function home(deviceId = DEVICE, walkerId = WALKER): HomeEvent {
+  return { type: 'home', walkerId, deviceId };
+}
+
+const BACK_IN_CONTACT: Outcome = { type: 'back_in_contact', state: 'ACTIVE', alert: 'RESOLVED' };
+const ENDED_HOME = (resolvesAlert: boolean): Outcome => ({
+  type: 'ended',
+  state: 'ENDED',
+  reason: 'HOME',
+  resolvesAlert,
+});
+
 // ---------------------------------------------------------------------------
 // The transition table.
 // ---------------------------------------------------------------------------
@@ -172,6 +226,13 @@ const EVENT_FOR = {
   // LOST-02: at the threshold exactly, so the situation decides. The rows
   // under the threshold are SILENCE_UNDER_THE_THRESHOLD, below the table.
   silence: () => silence(LOST_CONTACT_AFTER_MS),
+  // LOST-03: contact at the threshold exactly, where nothing is back in
+  // contact: five minutes is lost, by the watchdog's own rule. The rows one
+  // millisecond under it are CONTACT_UNDER_THE_THRESHOLD, below the table.
+  contact: () => contact(LOST_CONTACT_AFTER_MS),
+  // LOST-03 (D-110): "I'm home" from the walker's own device, so the
+  // situation decides. The other senders are HOME_FROM_ELSEWHERE, below.
+  home: () => home(),
 } satisfies { [E in JourneyEventType]: () => Extract<JourneyEvent, { type: E }> };
 
 const TRANSITIONS = {
@@ -194,10 +255,11 @@ const TRANSITIONS = {
   heartbeat: {
     none: { outcome: JOURNEY_NOT_FOUND },
     ACTIVE: { outcome: RECORDED_IN('ACTIVE') },
-    // Contact while LOST_CONTACT is recorded, and the state stays: the move
-    // back to ACTIVE resolves the alert and tells the responders, which is
-    // the back-in-contact task's. Until then an open alert stays open, a
-    // false alarm that stays loud rather than one closed silently.
+    // Contact while LOST_CONTACT is recorded, and the state stays under the
+    // heartbeat rule: the move back to ACTIVE, which resolves the alert and
+    // stands the responders down, is the contact rule's (LOST-03, D-112),
+    // in the contact rows below, asked by the store once the heartbeat is
+    // stored.
     LOST_CONTACT: { outcome: RECORDED_IN('LOST_CONTACT') },
     ENDED: { outcome: JOURNEY_ENDED },
   },
@@ -211,7 +273,50 @@ const TRANSITIONS = {
     LOST_CONTACT: { outcome: UNCHANGED },
     ENDED: { outcome: UNCHANGED },
   },
+  // LOST-03: contact, five minutes of silence exactly. Nothing is back: five
+  // minutes is the watchdog's "lost", so the two rules never disagree at the
+  // boundary. Under it, LOST_CONTACT moves back (the table below this one).
+  contact: {
+    none: { outcome: UNCHANGED },
+    ACTIVE: { outcome: UNCHANGED },
+    LOST_CONTACT: { outcome: UNCHANGED },
+    ENDED: { outcome: UNCHANGED },
+  },
+  // LOST-03 (D-110): "I'm home" from the walker's own device. ACTIVE ends
+  // with no alert to resolve; LOST_CONTACT ends and resolves it (SM-04); an
+  // ENDED journey is ignored (SM-07); no journey is not found.
+  home: {
+    none: { outcome: JOURNEY_NOT_FOUND },
+    ACTIVE: { outcome: ENDED_HOME(false) },
+    LOST_CONTACT: { outcome: ENDED_HOME(true) },
+    ENDED: { outcome: JOURNEY_ENDED },
+  },
 } satisfies Record<JourneyEventType, Record<Situation, Row>>;
+
+/**
+ * LOST-03-AC3: contact one millisecond under the threshold, in every
+ * situation: only LOST_CONTACT moves, back to ACTIVE, resolving its alert.
+ * Typed over the situations, so a state added later needs its row here too.
+ */
+const CONTACT_UNDER_THE_THRESHOLD = {
+  none: UNCHANGED,
+  ACTIVE: UNCHANGED,
+  LOST_CONTACT: BACK_IN_CONTACT,
+  ENDED: UNCHANGED,
+} satisfies Record<Situation, Outcome>;
+
+/**
+ * LOST-03-AC3: "I'm home" from elsewhere, for every state (D-101, D-110):
+ * another walker's journey is not found, whatever its state; the walker's own
+ * from another of their devices is refused, unless it has ENDED, which is
+ * reported first. Typed over the states, so a state added later needs its
+ * rows here too.
+ */
+const HOME_FROM_ELSEWHERE = {
+  ACTIVE: { anotherWalkers: JOURNEY_NOT_FOUND, anotherDevice: NOT_THE_JOURNEYS_DEVICE },
+  LOST_CONTACT: { anotherWalkers: JOURNEY_NOT_FOUND, anotherDevice: NOT_THE_JOURNEYS_DEVICE },
+  ENDED: { anotherWalkers: JOURNEY_NOT_FOUND, anotherDevice: JOURNEY_ENDED },
+} satisfies Record<JourneyState, { anotherWalkers: Outcome; anotherDevice: Outcome }>;
 
 /**
  * LOST-02-AC6: silence one millisecond under the threshold, in every
@@ -230,6 +335,8 @@ const ROW_ID = {
   start: 'SM-01-AC14',
   heartbeat: 'LOST-01-AC17',
   silence: 'LOST-02-AC6',
+  contact: 'LOST-03-AC3',
+  home: 'LOST-03-AC3',
 } satisfies Record<JourneyEventType, string>;
 
 /**
@@ -317,11 +424,17 @@ function decide(event: JourneyEventType, situation: string): Outcome {
     case 'silence':
       // The watchdog's situation is the journey it read, by its ID and state.
       return transition(situationFor(situation), EVENT_FOR.silence());
+    case 'contact':
+      // The store's situation is the journey whose row it locked, by its ID and state.
+      return transition(situationFor(situation), EVENT_FOR.contact());
+    case 'home':
+      // "I'm home" names a journey, as a heartbeat does (D-110).
+      return transition(heartbeatSituationFor(situation), EVENT_FOR.home());
   }
 }
 
 describe('AR-04: the journey state machine is one module, total over its own lists', () => {
-  test('SM-01-AC14: the states are exactly ACTIVE, LOST_CONTACT and ENDED, and the events exactly start, heartbeat and silence', () => {
+  test('SM-01-AC14: the states are exactly ACTIVE, LOST_CONTACT and ENDED, and the events exactly start, heartbeat, silence, contact and home', () => {
     // The events were exactly ['start'] until LOST-01 added the heartbeat
     // (RG-03: an event added by design, LOST-01-AC17 and its spec's approach
     // item 4). The list is still exact, so an event added later has to be
@@ -330,8 +443,13 @@ describe('AR-04: the journey state machine is one module, total over its own lis
     // RG-03 (LOST-02): silence joins by design, the watchdog's event
     // (LOST-02-AC6, its spec's approach item 2, and "Existing assertions that
     // change by design"). The list is still pinned exactly, in order.
+    //
+    // RG-03 (LOST-03): contact and home join by design (LOST-03-AC3, its
+    // spec's approach item 2, and "Existing assertions that change by
+    // design", which names this file's JOURNEY_EVENTS pin). The states do not
+    // change; the list is still pinned exactly, in order.
     expect([...JOURNEY_STATES].sort()).toEqual(['ACTIVE', 'ENDED', 'LOST_CONTACT']);
-    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence']);
+    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence', 'contact', 'home']);
   });
 
   test('SM-01-AC14: every pair of situation and event the module’s lists create has a row here, and no row is stale', () => {
@@ -348,13 +466,17 @@ describe('AR-04: the journey state machine is one module, total over its own lis
     ).toEqual([]);
   });
 
-  test('SM-01-AC14: the pairs with an outcome are exactly none, ACTIVE, LOST_CONTACT and ENDED, each with start, with heartbeat and with silence', () => {
+  test('SM-01-AC14: the pairs with an outcome are exactly none, ACTIVE, LOST_CONTACT and ENDED, each with start, with heartbeat, with silence, with contact and with home', () => {
     // ENDED × start joined the three in review: an ENDED journey handed in
     // is "no journey", see its row above. The four heartbeat pairs joined
     // with LOST-01 (RG-03: an event added by design, LOST-01-AC17).
     //
     // RG-03 (LOST-02): the four silence pairs join by design (LOST-02-AC6).
     // Every pair that was here still is, with the same outcome.
+    //
+    // RG-03 (LOST-03): the four contact pairs and the four home pairs join by
+    // design (LOST-03-AC3: "the transition table holds an expectation for
+    // every pair"). Every pair that was here still is, with the same outcome.
     expect(OUTCOME_ROWS.map(({ situation, event }) => `${situation} × ${event}`).sort()).toEqual(
       [
         'ACTIVE × start',
@@ -369,6 +491,14 @@ describe('AR-04: the journey state machine is one module, total over its own lis
         'ENDED × silence',
         'LOST_CONTACT × silence',
         'none × silence',
+        'ACTIVE × contact',
+        'ENDED × contact',
+        'LOST_CONTACT × contact',
+        'none × contact',
+        'ACTIVE × home',
+        'ENDED × home',
+        'LOST_CONTACT × home',
+        'none × home',
       ].sort(),
     );
   });
@@ -715,10 +845,13 @@ function asSent(
 }
 
 describe('LOST-01: a heartbeat for the journey it names, in the rule’s order', () => {
-  test('LOST-01-AC17: JOURNEY_EVENTS is exactly start and heartbeat, and then silence', () => {
+  test('LOST-01-AC17: JOURNEY_EVENTS is exactly start and heartbeat, and then silence, contact and home', () => {
     // RG-03 (LOST-02): silence is added after the heartbeat by design
     // (LOST-02-AC6). Start and heartbeat keep their places; the pin is exact.
-    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence']);
+    //
+    // RG-03 (LOST-03): contact and home are added after silence by design
+    // (LOST-03-AC3). Start and heartbeat keep their places; the pin is exact.
+    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence', 'contact', 'home']);
   });
 
   test.each(ELSEWHERE_ROWS)(
@@ -980,8 +1113,11 @@ function isOneOfTheSilenceOutcomes(value: unknown): boolean {
 }
 
 describe('LOST-02: every pair, silence included, has a tested outcome', () => {
-  test('LOST-02-AC6: JOURNEY_EVENTS is exactly start, heartbeat and silence, and ALERT_STATES exactly OPEN, ESCALATED, ACKNOWLEDGED and RESOLVED, in order (D-033)', () => {
-    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence']);
+  test('LOST-02-AC6: JOURNEY_EVENTS is exactly start, heartbeat, silence, contact and home, and ALERT_STATES exactly OPEN, ESCALATED, ACKNOWLEDGED and RESOLVED, in order (D-033)', () => {
+    // RG-03 (LOST-03, the spec's "Existing assertions that change by
+    // design"): JOURNEY_EVENTS gains contact and home, after silence. The
+    // alert states do not change. Both lists are still pinned exactly.
+    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence', 'contact', 'home']);
     expect([...ALERT_STATES]).toEqual(['OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED']);
   });
 
@@ -1165,10 +1301,401 @@ describe('SM-03 and LOST-02: only an ACTIVE journey is alerted, once per silence
     );
   });
 
-  test('LOST-02-AC5: a heartbeat for a journey in LOST_CONTACT is recorded and leaves it LOST_CONTACT, and the next silence alerts it no more: moving it back is the back-in-contact task’s', () => {
+  // RG-03 (LOST-03 review loop 1, the spec's item 10): the title only. It
+  // said moving back was "the back-in-contact task’s", which is now the
+  // contact rule's. No assertion changes.
+  test('LOST-02-AC5: a heartbeat for a journey in LOST_CONTACT is recorded and leaves it LOST_CONTACT under the heartbeat rule, and the next silence alerts it no more; moving it back is the contact rule’s', () => {
     expect(transition(named('LOST_CONTACT'), heartbeat())).toEqual(RECORDED_IN('LOST_CONTACT'));
     expect(
       transition(asCurrent({ id: JOURNEY, state: 'LOST_CONTACT' }), silence(10 * HOUR)),
     ).toEqual(UNCHANGED);
+  });
+});
+
+// ===========================================================================
+// LOST-03: contact, the store's question once a heartbeat is stored, and
+// "I'm home" (SM-04, D-110).
+// ===========================================================================
+
+/** The contact outcomes, with exactly their fields and nothing else. */
+function isOneOfTheContactOutcomes(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const outcome = value as Record<string, unknown>;
+  const keys = Object.keys(outcome).sort().join(',');
+  if (outcome['type'] === 'unchanged') {
+    return keys === 'type';
+  }
+  return (
+    outcome['type'] === 'back_in_contact' &&
+    keys === 'alert,state,type' &&
+    outcome['state'] === 'ACTIVE' &&
+    outcome['alert'] === 'RESOLVED'
+  );
+}
+
+/** The "I'm home" outcomes, with exactly their fields and nothing else. */
+function isOneOfTheHomeOutcomes(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const outcome = value as Record<string, unknown>;
+  const keys = Object.keys(outcome).sort().join(',');
+  if (outcome['type'] === 'ended') {
+    return (
+      keys === 'reason,resolvesAlert,state,type' &&
+      outcome['state'] === 'ENDED' &&
+      outcome['reason'] === 'HOME' &&
+      typeof outcome['resolvesAlert'] === 'boolean'
+    );
+  }
+  if (outcome['type'] === 'ignored') {
+    return keys === 'reason,type' && outcome['reason'] === 'JOURNEY_ENDED';
+  }
+  return (
+    outcome['type'] === 'refused' &&
+    keys === 'reason,type' &&
+    (outcome['reason'] === 'JOURNEY_NOT_FOUND' || outcome['reason'] === 'NOT_THE_JOURNEYS_DEVICE')
+  );
+}
+
+/** Approach item 2 of LOST-03's spec, the home rule, written out once more, independently. */
+function expectedHomeOutcome(journey: JourneyForHeartbeat | null, event: HomeEvent): Outcome {
+  if (journey?.walkerId !== event.walkerId) {
+    return JOURNEY_NOT_FOUND;
+  }
+  if (journey.state === 'ENDED') {
+    return JOURNEY_ENDED;
+  }
+  if (journey.deviceId !== event.deviceId) {
+    return NOT_THE_JOURNEYS_DEVICE;
+  }
+  return ENDED_HOME(journey.state === 'LOST_CONTACT');
+}
+
+const anyHome: fc.Arbitrary<HomeEvent> = fc
+  .record({ walkerId: someWalker, deviceId: someDevice })
+  .map(({ walkerId, deviceId }) => home(deviceId, walkerId));
+
+const anyContact: fc.Arbitrary<ContactEvent> = fc
+  .record({ silentSince: anyMoment, now: anyMoment })
+  .map(({ silentSince, now }) => ({ type: 'contact' as const, silentSince, now }));
+
+const HOME_ROWS = Object.entries(HOME_FROM_ELSEWHERE).flatMap(([state, rows]) => [
+  {
+    state,
+    whose: 'another walker’s',
+    journey: named(state as JourneyState, {
+      walkerId: OTHER_WALKER,
+      deviceId: OTHER_WALKERS_DEVICE,
+    }),
+    expected: rows.anotherWalkers,
+  },
+  {
+    state,
+    whose: 'the walker’s own, started from another of their devices',
+    journey: named(state as JourneyState, { deviceId: OTHER_DEVICE }),
+    expected: rows.anotherDevice,
+  },
+]);
+
+describe('LOST-03: every pair, contact and "I’m home" included, has a tested outcome', () => {
+  test('LOST-03-AC3: JOURNEY_EVENTS is exactly start, heartbeat, silence, contact and home, in order', () => {
+    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence', 'contact', 'home']);
+  });
+
+  test('LOST-03-AC3: the module’s lists create a contact pair and a home pair for none and for every state, and the table holds each one; a pair it lacked would be named', () => {
+    const created = pairsTheModuleCreates().filter(
+      (pair) => pair.endsWith('× contact') || pair.endsWith('× home'),
+    );
+    const held = pairsThisTableHolds();
+
+    expect([...created].sort()).toEqual(
+      SITUATIONS.flatMap((situation) => [`${situation} × contact`, `${situation} × home`]).sort(),
+    );
+    expect(created.filter((pair) => !held.includes(pair))).toEqual([]);
+    expect(Object.keys(CONTACT_UNDER_THE_THRESHOLD).sort()).toEqual([...SITUATIONS].sort());
+    expect(Object.keys(HOME_FROM_ELSEWHERE).sort()).toEqual([...JOURNEY_STATES].sort());
+  });
+
+  test.each(SITUATIONS)(
+    'LOST-03-AC3: %s × contact one millisecond under the threshold gives exactly its outcome',
+    (situation) => {
+      expect(transition(situationFor(situation), contact(LOST_CONTACT_AFTER_MS - 1))).toEqual(
+        CONTACT_UNDER_THE_THRESHOLD[situation],
+      );
+    },
+  );
+
+  test.each(HOME_ROWS)(
+    'LOST-03-AC3: "I’m home" for an $state journey that is $whose gives exactly its expected outcome (SM-04)',
+    ({ journey, expected }) => {
+      expect(transition(journey, home())).toEqual(expected);
+    },
+  );
+
+  test('LOST-03-AC3: the heartbeat’s own rows are unchanged: a LOST_CONTACT journey’s heartbeat is recorded and it stays LOST_CONTACT; the move back is the contact event’s', () => {
+    expect(transition(named('LOST_CONTACT'), heartbeat())).toEqual(RECORDED_IN('LOST_CONTACT'));
+    expect(
+      transition(
+        asCurrent({ id: JOURNEY, state: 'LOST_CONTACT' }),
+        contact(LOST_CONTACT_AFTER_MS - 1),
+      ),
+    ).toEqual(BACK_IN_CONTACT);
+  });
+
+  test('LOST-03-AC3: for any situation and any event of the five kinds, any moments, an invalid one included, transition answers with a value of its event’s kind: never a throw, never undefined', () => {
+    const anyEvent: fc.Arbitrary<JourneyEvent> = fc.oneof(
+      fc.constant(start([RESPONDER])),
+      anyHeartbeat,
+      fc
+        .record({ silentSince: anyMoment, now: anyMoment })
+        .map(({ silentSince, now }) => silenceBetween(silentSince, now)),
+      anyContact,
+      anyHome,
+    );
+
+    fc.assert(
+      fc.property(anyJourney, anyEvent, (journey, event) => {
+        let outcome: unknown;
+        expect(() => {
+          outcome = transition(journey, event);
+        }).not.toThrow();
+        expect(outcome).toBeDefined();
+        if (event.type === 'contact') {
+          expect(outcome).toSatisfy(isOneOfTheContactOutcomes);
+        }
+        if (event.type === 'home') {
+          expect(outcome).toSatisfy(isOneOfTheHomeOutcomes);
+        }
+      }),
+    );
+  });
+
+  test('LOST-03-AC3: deciding about contact or "I’m home" changes neither the journey nor the event handed in', () => {
+    const lost = { id: JOURNEY, state: 'LOST_CONTACT' as const };
+    const event = contact(LOST_CONTACT_AFTER_MS - 1);
+    const before = { since: event.silentSince.getTime(), now: event.now.getTime() };
+    const journey = named('LOST_CONTACT');
+    const homeEvent = home();
+    const homeBefore = { journey: { ...journey }, event: { ...homeEvent } };
+
+    transition(lost, event);
+    transition(journey, homeEvent);
+
+    expect(lost).toEqual({ id: JOURNEY, state: 'LOST_CONTACT' });
+    expect([event.silentSince.getTime(), event.now.getTime()]).toEqual([before.since, before.now]);
+    expect({ journey, event: homeEvent }).toEqual(homeBefore);
+  });
+});
+
+describe('LOST-03 and REL-01: contact is back only when the silence is under five minutes, by the database clock', () => {
+  test('LOST-03-AC2: a LOST_CONTACT journey whose silence, counted with the heartbeat just stored, is 4 min 59.999 s is back in contact; at exactly five minutes, or more, it is not', () => {
+    const lost = asCurrent({ id: JOURNEY, state: 'LOST_CONTACT' });
+
+    expect(transition(lost, contact(0))).toEqual(BACK_IN_CONTACT);
+    expect(transition(lost, contact(LOST_CONTACT_AFTER_MS - 1))).toEqual(BACK_IN_CONTACT);
+    expect(transition(lost, contact(LOST_CONTACT_AFTER_MS))).toEqual(UNCHANGED);
+    expect(transition(lost, contact(LOST_CONTACT_AFTER_MS + 1))).toEqual(UNCHANGED);
+    expect(transition(lost, contact(10 * HOUR))).toEqual(UNCHANGED);
+  });
+
+  test('LOST-03-AC2: for any moment the silence began and any moment it is asked about, a LOST_CONTACT journey is back exactly when the second is under five minutes after the first, a clock that ran backwards included', () => {
+    fc.assert(
+      fc.property(
+        fc.oneof(
+          fc.integer({ min: -HOUR, max: 3 * HOUR }),
+          fc.constantFrom(LOST_CONTACT_AFTER_MS - 1, LOST_CONTACT_AFTER_MS),
+        ),
+        fc.integer({ min: 0, max: 400 * 24 * HOUR }),
+        (silentForMs, offsetMs) => {
+          const silentSince = new Date(SILENT_SINCE.getTime() + offsetMs);
+
+          expect(
+            transition(
+              asCurrent({ id: JOURNEY, state: 'LOST_CONTACT' }),
+              contact(silentForMs, silentSince),
+            ),
+          ).toEqual(silentForMs < LOST_CONTACT_AFTER_MS ? BACK_IN_CONTACT : UNCHANGED);
+        },
+      ),
+    );
+  });
+
+  test('LOST-03-AC2: for any silence start and any now, contact moves a LOST_CONTACT journey back exactly when silence would not alert an ACTIVE one: the watchdog’s rule asked the other way, at the same threshold', () => {
+    fc.assert(
+      fc.property(fc.date({ noInvalidDate: true }), fc.date({ noInvalidDate: true }), (a, b) => {
+        const back =
+          transition(asCurrent({ id: JOURNEY, state: 'LOST_CONTACT' }), {
+            type: 'contact',
+            silentSince: a,
+            now: b,
+          }).type === 'back_in_contact';
+        const alerted =
+          transition(asCurrent({ id: JOURNEY, state: 'ACTIVE' }), silenceBetween(a, b)).type ===
+          'lost_contact';
+
+        expect(back).toBe(!alerted);
+      }),
+    );
+  });
+
+  test('LOST-03-AC2: a time that is not one moves nothing: an invalid silence start, an invalid now, or both, leave a LOST_CONTACT journey unchanged', () => {
+    const invalid = new Date(Number.NaN);
+    const valid = SILENT_SINCE;
+    const lost = asCurrent({ id: JOURNEY, state: 'LOST_CONTACT' });
+
+    for (const [silentSince, now] of [
+      [invalid, valid],
+      [valid, invalid],
+      [invalid, invalid],
+    ] as const) {
+      expect(transition(lost, { type: 'contact', silentSince, now })).toEqual(UNCHANGED);
+    }
+  });
+
+  test('LOST-03-AC2: only a LOST_CONTACT journey is ever brought back: ACTIVE, ENDED and no journey are unchanged, whatever the silence', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom<Situation>('none', 'ACTIVE', 'ENDED'),
+        fc.integer({ min: -HOUR, max: 48 * HOUR }),
+        (situation, silentForMs) => {
+          expect(transition(situationFor(situation), contact(silentForMs))).toEqual(UNCHANGED);
+        },
+      ),
+    );
+  });
+
+  test('LOST-03-AC5: for any sequence of heartbeats and sweeps, step by step, a sweep loses the journey after five minutes of silence and contact under five minutes brings it back; the heartbeat rule alone never moves it', () => {
+    // The testing strategy's L2 example, extended: a heartbeat is decided by
+    // the heartbeat rule (recorded, the state unchanged), moves last contact
+    // to its time, and is then asked about by the contact rule, as the store
+    // asks it under the row lock.
+    const step = fc.record({
+      afterMs: fc.oneof(
+        fc.integer({ min: 0, max: 7 * MINUTE }),
+        fc.constantFrom(LOST_CONTACT_AFTER_MS - 1, LOST_CONTACT_AFTER_MS),
+      ),
+      kind: fc.constantFrom('heartbeat' as const, 'sweep' as const),
+      // How long before it was stored the heartbeat was received.
+      receivedBeforeMs: fc.oneof(
+        fc.constant(0),
+        fc.integer({ min: 0, max: 10 * MINUTE }),
+        fc.constantFrom(LOST_CONTACT_AFTER_MS - 1, LOST_CONTACT_AFTER_MS),
+      ),
+    });
+
+    fc.assert(
+      fc.property(fc.array(step, { maxLength: 40 }), (steps) => {
+        let elapsedMs = 0;
+        let lastContactMs = 0;
+        let state: Unended = 'ACTIVE';
+
+        for (const { afterMs, kind, receivedBeforeMs } of steps) {
+          elapsedMs += afterMs;
+          const now = new Date(SILENT_SINCE.getTime() + elapsedMs);
+          if (kind === 'heartbeat') {
+            expect(transition(named(state), heartbeat())).toEqual(RECORDED_IN(state));
+            lastContactMs = Math.max(lastContactMs, elapsedMs - receivedBeforeMs);
+            const asked = transition(asCurrent({ id: JOURNEY, state }), {
+              type: 'contact',
+              silentSince: new Date(SILENT_SINCE.getTime() + lastContactMs),
+              now,
+            });
+            const back =
+              state === 'LOST_CONTACT' && elapsedMs - lastContactMs < LOST_CONTACT_AFTER_MS;
+            expect(asked).toEqual(back ? BACK_IN_CONTACT : UNCHANGED);
+            if (back) {
+              state = 'ACTIVE';
+            }
+            continue;
+          }
+          const swept = transition(
+            asCurrent({ id: JOURNEY, state }),
+            silenceBetween(new Date(SILENT_SINCE.getTime() + lastContactMs), now),
+          );
+          const lost = state === 'ACTIVE' && elapsedMs - lastContactMs >= LOST_CONTACT_AFTER_MS;
+          expect(swept).toEqual(lost ? LOST_CONTACT : UNCHANGED);
+          if (lost) {
+            state = 'LOST_CONTACT';
+          }
+          // After a sweep the state is exactly what the silence says.
+          expect(state).toBe(
+            elapsedMs - lastContactMs >= LOST_CONTACT_AFTER_MS ? 'LOST_CONTACT' : 'ACTIVE',
+          );
+        }
+      }),
+    );
+  });
+});
+
+describe('SM-04, SM-07 and D-110: "I’m home", in the heartbeat rule’s order', () => {
+  test('LOST-03-AC14: "I’m home" from the journey’s own device ends a LOST_CONTACT journey, HOME, and says its alert is to be resolved (SM-04)', () => {
+    expect(transition(named('LOST_CONTACT'), home())).toEqual(ENDED_HOME(true));
+  });
+
+  test('LOST-03-AC15: "I’m home" from the journey’s own device ends an ACTIVE journey, HOME, with no alert to resolve (SM-04)', () => {
+    expect(transition(named('ACTIVE'), home())).toEqual(ENDED_HOME(false));
+  });
+
+  test('LOST-03-AC16: an ENDED journey is ignored, JOURNEY_ENDED, from its own device and from another of the walker’s, before the device is looked at (SM-07)', () => {
+    expect(transition(named('ENDED'), home())).toEqual(JOURNEY_ENDED);
+    expect(transition(named('ENDED'), home(OTHER_DEVICE))).toEqual(JOURNEY_ENDED);
+  });
+
+  test.each(UNENDED)(
+    'LOST-03-AC16: the walker’s %s journey, from another of their devices, is refused NOT_THE_JOURNEYS_DEVICE (D-101, D-110)',
+    (state) => {
+      expect(transition(named(state), home(OTHER_DEVICE))).toEqual(NOT_THE_JOURNEYS_DEVICE);
+    },
+  );
+
+  test.each(JOURNEY_STATES)(
+    'LOST-03-AC16: another walker’s %s journey, or none, is JOURNEY_NOT_FOUND, one answer for both (SEC-07)',
+    (state) => {
+      expect(transition(named(state, { walkerId: OTHER_WALKER }), home())).toEqual(
+        JOURNEY_NOT_FOUND,
+      );
+      expect(transition(null, home())).toEqual(JOURNEY_NOT_FOUND);
+    },
+  );
+
+  test('LOST-03-AC16: for any situation and any "I’m home", the outcome is the rule’s, in its order', () => {
+    fc.assert(
+      fc.property(anyJourney, anyHome, (journey, event) => {
+        expect(transition(journey, event)).toEqual(expectedHomeOutcome(journey, event));
+      }),
+    );
+  });
+});
+
+describe('LOST-03: the lists that are the one source for the table, the type and the database', () => {
+  test('LOST-03-AC3: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT and HOME, in order', () => {
+    expect([...MESSAGE_KINDS]).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME']);
+  });
+
+  // Review loop 1 (the spec's item 11a): the test kit cannot import the
+  // server, so its own list (fake-push.ts) is held to the domain's here.
+  test('LOST-03-AC3: the test kit’s MESSAGE_KINDS equals the domain’s, in order', () => {
+    expect([...KIT_MESSAGE_KINDS]).toEqual([...MESSAGE_KINDS]);
+  });
+
+  test('LOST-03-AC3: ALERT_RESOLUTIONS is exactly BACK_IN_CONTACT and HOME, each a message kind: a stand-down’s kind is its resolution’s own name (also held at typecheck)', () => {
+    // L1: assignable only while every resolution is a message kind.
+    const asKinds: readonly MessageKind[] = ALERT_RESOLUTIONS;
+    const resolution: AlertResolution = 'HOME';
+
+    expect([...ALERT_RESOLUTIONS]).toEqual(['BACK_IN_CONTACT', 'HOME']);
+    expect(asKinds.filter((kind) => !(MESSAGE_KINDS as readonly string[]).includes(kind))).toEqual(
+      [],
+    );
+    expect(MESSAGE_KINDS).toContain(resolution);
+  });
+
+  test('LOST-03-AC3: JOURNEY_END_REASONS is exactly HOME', () => {
+    const reason: JourneyEndReason = 'HOME';
+
+    expect([...JOURNEY_END_REASONS]).toEqual([reason]);
   });
 });

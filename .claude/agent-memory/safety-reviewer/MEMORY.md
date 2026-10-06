@@ -1,3 +1,4 @@
+- [LOST-03 review](project_lost03_contact_review.md) — PASS 3471859, loop-1 2aa23f4, loop-2 59fe06f, loop-3 PASS 155a6e4 (recipient scope + kind IN ALERT_RESOLUTIONS, both closed); open notes: no MESSAGE_KINDS classification tripwire for task 6 SMS stand-downs, fake STAND_DOWN_KINDS unpinned
 - [LOST-02 review](project_lost02_alert_review.md) — PASS 6f27b80, loop-1 PASS 3539d4f, loop-2 PASS 25f5ccf; open: read-back search key misses api mismatch lines, per-journey-cost wording, pool limits accept 0, progress row 24 vs 25
 - [BUG-18 review](project_bug18_db_owned_review.md) — PASS 3fdca02, 25589a5, loop-2 PASS 06fc91c (modules/health/ owned); open notes: record() must reject, health bullet omits threshold, progress row, LOST-02 baseline
 - [LOST-01 review](project_lost01_heartbeat_review.md) — PASS ff583fb, loop-1 PASS 19db407; open: spec says 400 not resent (SDK resends any refusal), task 3 must bound row lock + L3 race test
