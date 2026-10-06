@@ -1,9 +1,10 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-05 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18 and LOST-02 done, LOST-03 next (D-090)
+**Last updated:** 2026-10-06 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18 and LOST-02 done, LOST-03 in review (D-090)
 
 **Current section:** milestone M2, started 2026-10-01 with SM-01; LOST-03,
-back in contact, is task 4 of 8 and next (D-090; the task list is in
+back in contact and "I'm home", is task 4 of 8 and in review, with its pull
+request open (D-090, D-110 to D-112; the task list is in
 [10-roadmap.md](10-roadmap.md)). LOST-02, the lost-contact alert, is done
 (#63, 2026-10-05; D-106 to D-109). BUG-18, three files that decide whether a
 stopped watchdog is seen under the owner's approval and the safety review, is

@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-05 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 done** ([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`; D-106 to D-109); LOST-03 next (task 4 of 8) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-06 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 done** ([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`; D-106 to D-109); **LOST-03 in review** (task 4 of 8) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -44,7 +44,7 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | | BUG-11 | The dependency audit accepts one advisory, GHSA-86w9-cpqp-85rv in `node-forge` (D-093) | ✅ **Done** — merged with SM-01 in [#53](https://github.com/bvst/TryggHverdag/pull/53) (`2db7046`). Its own pull request, [#54](https://github.com/bvst/TryggHverdag/pull/54), was closed as superseded: every file it held was already on `main` |
 | 2 | LOST-01 | Heartbeat, with or without position | ✅ **Done** — 2026-10-03, [#60](https://github.com/bvst/TryggHverdag/pull/60), merged as `fe384c5` after `urso-agent` approved; `main`'s tree is the reviewed head `5aa074c`. D-101 to D-103 (D-102 amended); 20 acceptance criteria. Reviews PASS in the session (all four, and the three blocking ones again after loop 1) and in CI (all five AI reviewers). In CI before the merge: `integration` 103 of 103 on PostgreSQL 15; `mutation` every safety file ≥ 96 %, 0 timed out. On `main` after the merge: `ci` 10 of 10 jobs passed (run 37144094720), and `deploy-staging` ran migration `0002` and passed its smoke test (run 37144094724). Record: `progress/m2.md` |
 | 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ✅ **Done** — 2026-10-05, [#63](https://github.com/bvst/TryggHverdag/pull/63), merged as `5cd5d24` at 06:50 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `6527e38`. 25 acceptance criteria; D-106, D-107 and D-109 (owner), D-108 (delegated, amended). Session reviews: `test-auditor` blocked the first round, fixed in loop 1; all three blocking reviewers PASS after loops 1 and 2. In CI on `6527e38`: all 16 checks passed, all five AI reviewers PASS; `integration` on PostgreSQL 15; `mutation` every run passed (`watchdog.ts` 87 of 87, `outbox.ts` 37 of 38, `worker.ts` 140 of 146). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37274508925), and `deploy-staging` passed (run 37274508942), with both session-limit lines in force. Record: `progress/m2.md` |
-| 4 | LOST-03 | Back in contact | ⚪ Not started |
+| 4 | LOST-03 | Back in contact | 🟡 **In review** — pull request open from `claude/busy-faraday-40n2zl`. 20 acceptance criteria; D-110 and D-111 (owner), D-112 (delegated, amended in three review loops). Session reviews: all four reviewers PASS in the first round; the three blocking ones PASS after loops 1, 2 and 3 (the process's limit), each loop closing their should-fixes. `gate:full` 11 passed, the one failure `gate:integrity`'s API checks; mutation: every safety file ≥ 95.9 %, kills only (`service.ts` 122 of 123, `journey.ts` 134 of 135). L3 ran on a PostgreSQL 16 stand-in only, so CI's `integration` job is the real run. Record: `progress/m2.md` |
 | 5 | LOST-06 | "I'm on it" | ⚪ Not started |
 | 6 | LOST-07 | SMS escalation at 2 minutes | ⚪ Not started |
 | 7 | LOST-08 | "They're safe" | ⚪ Not started |
@@ -344,12 +344,13 @@ The things that still bite, and cost a session hours the first time.
 **LOST-02** (M2 task 3 of 8, the lost-contact alert) is done
 ([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`). Its first
 staging deploy shows both processes' session limits in force (quoted in
-`progress/m2.md`). **LOST-03** (task 4, back in contact) is next. **BUG-18**
+`progress/m2.md`). **LOST-03** (task 4, back in contact, and "I'm home") is
+in review, with its pull request open (D-110 to D-112). **BUG-18**
 ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`), **LOST-01**
 ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`) and **BUG-15**
 ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`) are done too.
-**A-31** (Dependabot alerts are off) is the owner's. LOST-01's and LOST-02's
-reviews leave items for later tasks, listed in `progress/m2.md` ("Left for
+**A-31** (Dependabot alerts are off) is the owner's. LOST-01's, LOST-02's and
+LOST-03's reviews leave items for later tasks, listed in `progress/m2.md` ("Left for
 later tasks").
 
 **For the owner, from CI's `test-auditor` on #60:** should
