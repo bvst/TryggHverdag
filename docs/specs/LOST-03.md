@@ -1510,8 +1510,9 @@ only for someone who will receive the new lost-contact push.
 **20. Withdraw only the kinds that stand a responder down** (`safety-reviewer`,
 note; D-111). The open's clause `kind <> 'LOST_CONTACT'` spared one kind and
 withdrew every other, so a kind added later (task 6's SMS kinds) would be
-withdrawn by default. The clause becomes `kind in ('BACK_IN_CONTACT',
-'HOME')`, so each new kind must opt in. Test 17a still holds it; the fake
+withdrawn by default. The clause becomes `kind in ALERT_RESOLUTIONS`
+(`BACK_IN_CONTACT`, `HOME`: each resolution is the kind of the stand-down it
+sends), so each new kind must opt in. Test 17a still holds it; the fake
 follows (D-100).
 
 **21. A stale name** (`test-auditor`, should-fix; RG-03). Test 1b's name

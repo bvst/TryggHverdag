@@ -197,8 +197,9 @@ export interface WatchdogStore {
   overdueJourneys(afterMs: number): Promise<OverdueJourneys>;
   /**
    * In one transaction: takes the journey's row if it is still ACTIVE and
-   * overdue, moves it to LOST_CONTACT, withdraws the unsent stand-downs of
-   * every alert of the walker's journeys, and of no other walker's (LOST-03),
+   * overdue, moves it to LOST_CONTACT, withdraws the unsent stand-downs
+   * (BACK_IN_CONTACT, HOME) of every alert of the walker's journeys, and of no
+   * other walker's, whose recipient is a responder of this journey (LOST-03),
    * opens its alert and writes one message per responder, all of it or none
    * of it. Every open bounds its waits with a lock limit of its own, local to
    * its transaction: `lockWaitMs`, or LOCK_WAIT_LIMIT_MS without it. Without

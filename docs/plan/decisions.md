@@ -3868,6 +3868,9 @@ any other path is work, not a candidate for the same treatment.
     responder of the journey being opened. This keeps D-111 whole: every
     responder told of a loss is stood down, unless a later alert to that
     same responder supersedes it.
-  - **The withdrawal names the kinds it withdraws** (`BACK_IN_CONTACT`,
-    `HOME`) instead of sparing `LOST_CONTACT`, so a kind added later is never
-    withdrawn by default.
+  - **The withdrawal names the kinds it withdraws** instead of sparing
+    `LOST_CONTACT`: the stand-down kinds, which are the domain's
+    `ALERT_RESOLUTIONS` (`BACK_IN_CONTACT`, `HOME`; each resolution is also
+    the kind of the stand-down it sends). A kind added only to
+    `MESSAGE_KINDS`, such as task 6's, is never withdrawn; a new resolution
+    opts its stand-down in.

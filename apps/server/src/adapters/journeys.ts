@@ -35,11 +35,12 @@
  * The watchdog's open is one transaction: the journey's row, taken again only
  * if it is still ACTIVE and overdue by that transaction's now(); the move to
  * LOST_CONTACT, which must change exactly that row; the withdrawal of the
- * unsent stand-downs of every alert of the walker's journeys, and of no other
- * walker's (LOST-03); the alert; and one outbox message per responder, at
- * least one. Any of it failing writes none of it (AR-05). The outbox's claim,
- * its marks and the read of what is overdue are single statements, each timed
- * by the database's now() (REL-01).
+ * unsent stand-downs (BACK_IN_CONTACT, HOME) of every alert of the walker's
+ * journeys, and of no other walker's, for recipients who are responders of
+ * this journey only (LOST-03); the alert; and one outbox message per
+ * responder, at least one. Any of it failing writes none of it (AR-05). The
+ * outbox's claim, its marks and the read of what is overdue are single
+ * statements, each timed by the database's now() (REL-01).
  *
  * Back in contact and "I'm home" (LOST-03) take the journey's row first too,
  * so no two of these can wait for each other in a cycle: the claim never
@@ -77,7 +78,7 @@
  * printed the error. Cleaned here, where it starts, it cannot reach any of
  * them (PRIV-07).
  */
-import { and, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
   alerts,
   heartbeats,
@@ -92,6 +93,7 @@ import {
 } from '../db/schema.ts';
 import { databaseTime } from '../domain/database-time.ts';
 import {
+  ALERT_RESOLUTIONS,
   transition,
   type AlertResolution,
   type JourneyForHeartbeat,
@@ -236,20 +238,24 @@ async function openInside(
     throw new Error('The move to LOST_CONTACT changed no row, so nothing of the alert is kept.');
   }
 
-  // No overtaking (LOST-03, D-112 as amended in review loops 1 and 2): the
+  // No overtaking (LOST-03, D-112 as amended in review loops 1 to 3): the
   // stand-downs not yet sent of every alert of this walker's journeys, this
   // journey's earlier alerts and the walker's earlier journeys' alike, are
   // withdrawn at this now(), so an earlier "back in contact" or "home",
   // retried for ever, never reaches a responder after this alert's
   // lost-contact push. The walker is the locked row's. Another walker's are
-  // left alone: their stand-down is no all-clear for this one. The walker's
-  // other journeys are all ENDED (one unended journey per walker), so nothing
-  // resolves them meanwhile, and the journey's row is still the first lock
-  // taken. Before the new alert is written, so every alert matched is an
-  // earlier one; their unsent lost-contact messages were withdrawn when they
-  // resolved. In this transaction, so an open that rolls back withdraws
-  // nothing. One already in the port's hands was handed over before this
-  // alert opened.
+  // left alone: their stand-down is no all-clear for this one. Only for a
+  // recipient who is a responder of this journey, whom this alert's push will
+  // reach (loop 3): anyone else heard of the earlier loss and is still stood
+  // down (D-111). A plain read of the responders, so no new lock. Only the
+  // stand-down kinds, the domain's resolutions, each opting in (loop 3): a
+  // kind added later is not withdrawn by default. The walker's other journeys
+  // are all ENDED (one unended journey per walker), so nothing resolves them
+  // meanwhile, and the journey's row is still the first lock taken. Before the
+  // new alert is written, so every alert matched is an earlier one; their
+  // unsent lost-contact messages were withdrawn when they resolved. In this
+  // transaction, so an open that rolls back withdraws nothing. One already in
+  // the port's hands was handed over before this alert opened.
   await tx
     .update(outbox)
     .set({ withdrawnAt: sql`now()` })
@@ -263,7 +269,14 @@ async function openInside(
             .innerJoin(journeys, eq(journeys.id, alerts.journeyId))
             .where(eq(journeys.walkerId, locked.walkerId)),
         ),
-        ne(outbox.kind, 'LOST_CONTACT'),
+        inArray(
+          outbox.recipientId,
+          tx
+            .select({ id: journeyResponders.responderId })
+            .from(journeyResponders)
+            .where(eq(journeyResponders.journeyId, locked.id)),
+        ),
+        inArray(outbox.kind, ALERT_RESOLUTIONS),
         isNull(outbox.sentAt),
         isNull(outbox.withdrawnAt),
       ),
