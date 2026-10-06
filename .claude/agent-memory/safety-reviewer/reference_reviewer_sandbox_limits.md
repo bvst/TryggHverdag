@@ -84,3 +84,11 @@ connect), so L3 stays unverified. The orchestrating session may commit on the br
 @testcontainers/postgresql to a fresh database per start). Read-only reuse, 185 tests in ~60 s. Say it is PG16, not CI's 15.
 In-process L6 probes: heredoc into `node --experimental-strip-types --no-warnings --input-type=module -` from apps/server,
 importing test-kit + src/api.ts, modules; fakePush.failFor/recover/holdAnswers script provider outages.
+
+**2026-10-06 (LOST-03 loop 2):** guard not blocking again (heredoc `cat >` into the scratchpad worked). Mutants
+without touching the repo: a scratch vitest config that spreads the repo's config and adds an `enforce: 'pre'`
+plugin whose `transform(code, id)` string-replaces an anchor in one source file (throw if the anchor is
+missing). `*.system.test.ts` need `--config vitest.system.config.mjs`; the plain config runs none of them
+silently. A real-adapter L3 probe needs no test file: node strip-types from apps/server, create a db on
+55432, `migrateDatabase(uri)`, `createDatabase(createPool(uri, 2))`, `databaseJourneyStore(db)`, insert users
+and devices by SQL, then drop the db `with (force)` in `finally`.
