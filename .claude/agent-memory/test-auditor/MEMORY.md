@@ -24,3 +24,4 @@
 - [Second path and isolation](feedback_second_path_isolation.md) — mutate second-attempt outcome mapping and break-after-failure; lease-vacuous shared checks; count unhandled errors
 - [Rollback and hangs](feedback_rollback_and_hangs.md) — rollback undoes session set_config (check after commit); no-limit faults hang L3; line-buffered harness
 - [Isolating values](feedback_isolating_values.md) — one value per refusal clause that only it refuses; Vitest truncates each.$name titles (-t on full name runs nothing)
+- [LOST-03 audit](project_lost03_audit.md) — PASS 3471859; RG-02 clean (L3 AC5 property ~66 % catch); 79 faults, 66 killed; K5 home journeyId lower-casing unpinned; harness ta-lost03
