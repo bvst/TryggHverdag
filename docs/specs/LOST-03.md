@@ -231,10 +231,15 @@ Each is stated so the reviewers can check it, not assumed quietly.
       and the module writes one `alert_missing` line naming it. Refusing
       would leave it `LOST_CONTACT` for good, and the watchdog never sweeps a
       `LOST_CONTACT` journey: nobody would watch it again.
+    - **"I'm home" on such a journey** ends it, `ENDED` with reason `HOME`,
+      writes no message, and writes the same one `alert_missing` line. It
+      goes through the same resolving helper, so it meets the same missing
+      alert, and says so rather than ending quietly (fail loudly). Refusing
+      would leave the walker unable to end a journey nobody watches.
     - A journey with no responder rows left still moves back and resolves
       its alert, writing no stand-down. Nothing in the code removes a
-      responder yet. The open refuses a journey with nobody to tell, because moving
-      it would hide the silence; the resolve does not refuse, because
+      responder yet. The open refuses a journey with nobody to tell, because
+      moving it would hide the silence; the resolve does not refuse, because
       refusing would hide the journey.
 12. **A queued "I'm home"** (D-110) arrives as any "I'm home" does, through
     the route built here: the server cannot tell a queued one from a fresh
@@ -442,6 +447,13 @@ language; the notification level of the new kinds (M3, D-087); the app's
      `/journeys/{journeyId}/home`), built on `deviceRoute`. The journey is in
      the path, and the request holds nothing else; a body with any key is
      refused with the fixed 400 (SEC-07: strict).
+   - **The input is detailed, not compact** (`inputStructure: 'detailed'`):
+     `params` is a strict object holding `journeyId` alone, and `body` is an
+     empty strict object, optional. The journey's ID therefore comes from the
+     path and nowhere else, and any key in the body is a 400. **Why:** oRPC's
+     default, compact input merges the path's parameters with the body, and
+     the body wins, so with one strict object `{ journeyId }` a body naming
+     another journey would pass validation and override the path.
    - **The answers.** Each is a fixed shape; none carries anything of the
      request.
 
@@ -462,8 +474,11 @@ language; the notification level of the new kinds (M3, D-087); the app's
      and state), asks the `home` rule, returns a refusal as it is, and
      otherwise calls `recordHome`. A store answer `ended` (the journey ended
      after the read) is the same refusal, `JOURNEY_ENDED`. Each
-     `JOURNEY_ENDED` writes one `home_ignored` line (SM-07). It reads no
-     clock: the end time is the transaction's `now()`.
+     `JOURNEY_ENDED` writes one `home_ignored` line (SM-07). A store answer
+     `home` from `LOST_CONTACT` with `alertId` null (no unresolved alert was
+     found) writes one `alert_missing` line naming the journey, as the
+     heartbeat's path does (reading 11). It reads no clock: the end time is
+     the transaction's `now()`.
    - **The store:** `recordHome(journeyId)`, one transaction:
      1. lock the journey's row (`for update`; the API's 5 s lock limit
         bounds the wait). `ENDED` → answer `ended`;
@@ -508,7 +523,11 @@ language; the notification level of the new kinds (M3, D-087); the app's
      read in drizzle-orm 0.45.3). PostgreSQL 12 and later accept `ALTER TYPE
      … ADD VALUE` there, but the new value cannot be used until the
      transaction commits. So `0004` must not use either new value: in no
-     check, default or index predicate. On an empty database every
+     check, default or index predicate. The same two strings are also the
+     values of the two new types, `alert_resolution` and
+     `journey_end_reason`; their `create type` statements are the only other
+     place `0004` names them, and those are values of other types, not a use
+     of `message_kind`'s (AC20). On an empty database every
      migration runs in that one transaction, so `0003` creates
      `message_kind` and `0004` adds to it before either commits. This is
      recalled from PostgreSQL's documentation and **not checked here**; the
@@ -602,11 +621,13 @@ language; the notification level of the new kinds (M3, D-087); the app's
     - **D-112** (delegated, D-031): the two new message kinds and the
       resolutions; the contact rule at the threshold (reading 1); no
       overtaking at the push port, with `withdrawn_at`, the claim's
-      condition and the hold's 60 s bound; the route's 409 for any ended
+      condition and the hold's 60 s bound; the route's detailed input
+      (the journey's ID from the path only) and its 409 for any ended
       journey, a repeat included; the lock order; `alert_missing` and the
-      safe direction for the two states the code never makes (reading 11);
-      no check tying a state to its time; the `journeys` mutation group
-      gaining `contact.system.test.ts`.
+      safe direction for the two states the code never makes, on fresh
+      contact and on "I'm home" alike (reading 11); no check tying a state
+      to its time; the `journeys` mutation group running
+      `journeys.system.test.ts`, then `contact.system.test.ts`.
 
     D-110 was the next free number in `decisions.md` when they were written.
     As the live gotcha says, check the open pull requests' `decisions.md`
@@ -644,6 +665,15 @@ the tests are written.
 - **`@trygghverdag/contracts`**: `reportHome` (the route, in
   `contract`), `homeRequestSchema`, `homeResponseSchema`, `homeErrors`, and
   the types `HomeResponse` and `HomeErrorCode`.
+  - **The route's input is detailed:** `inputStructure: 'detailed'`, and
+    `homeRequestSchema` is `{ params: z.strictObject({ journeyId }), body:
+    <an empty strict object>, optional }`, with `journeyId` a UUID,
+    lower-cased at the contract as the other routes' IDs are.
+  - So the journey's ID comes from the path only, and any key in the body,
+    a `journeyId` included, is the fixed 400 (AC16). With oRPC's default
+    compact input, the path's parameters and the body are merged and the
+    body wins, so a body naming another journey would override the path
+    (approach item 5).
 - **The test kit** (owned, D-100):
   - `fakeJourneyStore({ clock })`:
     - `recordHeartbeat` brings a `LOST_CONTACT` journey back as approach
@@ -742,7 +772,7 @@ and "I'm home" included.** *(LOST-03, SM-04; extends LOST-02-AC6)*
   situation and event (fast-check); typecheck fails if an event has no case.
 
 **LOST-03-AC4 — The journey's one unresolved alert is resolved, whatever its
-state, and nothing else is.** *(LOST-03)*
+state, and nothing else is.** *(LOST-03, SM-04; D-112)*
 - **Given** J `LOST_CONTACT`, its unresolved alert put in as `OPEN`,
   `ESCALATED` or `ACKNOWLEDGED` in turn, an older alert of J's already
   `RESOLVED` from an earlier silence, and another journey with an open alert
@@ -754,6 +784,10 @@ state, and nothing else is.** *(LOST-03)*
   directly; nothing in the code makes one), fresh contact still moves J back
   to `ACTIVE` and writes no message, and the module writes one
   `alert_missing` line naming J
+- **And given** the same J, "I'm home" from its device instead is answered
+  200 `ENDED`: J is `ENDED` with end reason `HOME`, no message is written,
+  and the module writes the same one `alert_missing` line naming J. The
+  store answers `home`, from `LOST_CONTACT`, with no alert and no messages
 - **And given** J's responder rows are gone (removed directly; nothing in the
   code removes one yet), fresh contact still moves J back and resolves its
   alert, and writes no stand-down. A journey is never left `LOST_CONTACT`
@@ -969,8 +1003,9 @@ answer changes nothing.** *(SM-04, SM-07, SM-08, SEC-07; D-110, D-112)*
     `JOURNEY_NOT_FOUND`, the two bodies identical;
   - with no credential, or an unknown one: 401 (the existing test that calls
     every route in the contract covers the new one);
-  - with a journey ID that is not a UUID, or a body holding any key: the
-    fixed 400, with no `data`
+  - with a journey ID that is not a UUID, or a body holding any key, a
+    `journeyId` naming another journey included: the fixed 400, with no
+    `data` (the detailed input of approach item 5)
 - **And** for an `ENDED` journey, whatever ended it, the answer is 409
   `JOURNEY_ENDED`, nothing changes, and one `home_ignored` line names the
   journey and the reason (SM-07)
@@ -1012,7 +1047,10 @@ heartbeat on the row.** *(SM-04, SM-09; AR-05; D-110)*
   scheme
 - **And** its 200 body is exactly `{ "outcome": "ENDED" }`
 - **And** the committed `openapi.json` equals what the contract generates
-- **And** the heartbeat and start routes are unchanged
+- **And** the heartbeat and start routes are unchanged: each path item's
+  JSON is byte-identical, pinned by its sha256
+- **And** the route's only parameter is `journeyId`, in the path, required,
+  a UUID; nothing is in the query or a header
 - **And** `pnpm run api:diff` is run. With `packages/contracts/released/`
   empty it compares nothing, and the pull request records that as "not
   compared", never as "passed".
@@ -1051,8 +1089,11 @@ existing row.** *(LOST-03, SM-04)*
   through `0004` as the pre-run hook runs it; every existing row is
   unchanged, and every new column is null on them
 - **And** the committed `0004_*.sql` holds no `update`, `delete` or
-  `truncate`, and names neither new `message_kind` value anywhere but in its
-  `add value` statements (read from the file).
+  `truncate`. The strings `BACK_IN_CONTACT` and `HOME` appear in it only in
+  `message_kind`'s two `add value` statements and in the two `create type`
+  statements that make `alert_resolution` and `journey_end_reason`, and
+  nowhere else: in no check, default or index predicate (read from the
+  file; approach item 6).
 
 ## Test plan
 
@@ -1061,7 +1102,7 @@ existing row.** *(LOST-03, SM-04)*
 | AC1 | L6, L3 | `apps/server/src/contact.system.test.ts` (new); `apps/server/src/contact.integration.test.ts` (new) | L6: `createApi` with the journey service, `createWatchdog` and `createPushSender`, over one `fakeJourneyStore({ clock })`, with `fakePush()`, `fakeLog()` and `fakeWorkerHeartbeats()`. L3: the real adapter and modules with `fakePush()` |
 | AC2 | L2, L6, L3 | `domain/journey.test.ts`; behaviour suite (`fake-journey-store.test.ts`, `journeys.integration.test.ts`); system test | fast-check over silence starts and nows; `beforeNext` moves the clock. **Names REL-01** |
 | AC3 | L1, L2 | `tsc`; `domain/journey.test.ts` | The table over the lists, `satisfies` and a run-time check |
-| AC4 | L2, L3, L6 | behaviour suite; system test (the `alert_missing` line) | Alerts put in directly in each unresolved state |
+| AC4 | L2, L3, L6 | behaviour suite; system test (the `alert_missing` lines, for contact and for "I'm home") | Alerts put in directly in each unresolved state. **Names SM-04** |
 | AC5 | L6, L2, L3 | system test; behaviour suite | fast-check: the store follows the domain's rules step by step |
 | AC6 | L6, L3 | system test; behaviour suite; integration test (the unique constraint) | |
 | AC7 | L6, L2, L3 | system test (`holdAnswers`); behaviour suite; integration test (a claim in progress held open on another connection) | |
@@ -1094,7 +1135,8 @@ existing row.** *(LOST-03, SM-04)*
   criteria prove lives in `modules/journeys/` (the `journeys` mutation
   group), not in `modules/alerts/`, which this task does not change. A
   mutant there is caught only by a test the group runs, so
-  `contact.system.test.ts` joins the group's tests (Mutation, below). It is a
+  `contact.system.test.ts` joins the group's tests, after
+  `journeys.system.test.ts` (Mutation, below). It is a
   file of its own, not a part of `journeys.system.test.ts`, so its setup (the
   watchdog, the sender and the push fake) stays out of the start and
   heartbeat tests.
@@ -1109,6 +1151,29 @@ existing row.** *(LOST-03, SM-04)*
 - **`docs/requirements-status.md`** is regenerated with `pnpm run
   req:coverage`: LOST-03 and SM-04 go from ⚪ to 📝 with this spec, and to 🟢
   with the tests.
+
+### Tests added after the red phase (settled 2026-10-06)
+
+`test-author`'s red phase found five things to settle. Four changed this
+spec's text only: AC20's wording, the route's detailed input (approach item
+5, Interfaces, AC16), the `journeys` group's order, and the RG-03 list
+below. One adds tests. The names are exact; `test-author` may adjust wording
+only, keeping the criterion and the assertions.
+
+**"I'm home" on a `LOST_CONTACT` journey with no unresolved alert** (reading
+11, approach item 5; AC4; D-112):
+1. L6, `apps/server/src/contact.system.test.ts`: `LOST-03-AC4: "I'm home" on
+   a LOST_CONTACT journey with no unresolved alert, put there directly, is
+   200 ENDED: the journey is ENDED with end reason HOME, no message is
+   written, and one alert_missing line names it`. The test also names
+   SM-04.
+2. The shared behaviour suite (`journey-store-behaviour.ts`, run by
+   `fake-journey-store.test.ts` at L2 and `journeys.integration.test.ts` at
+   L3): `LOST-03-AC4: recordHome on a LOST_CONTACT journey with no
+   unresolved alert ends it ENDED with end reason HOME, and answers home,
+   from LOST_CONTACT, with no alert and no messages`. The log line is the
+   module's, so the store's test checks only the store's answer and what it
+   wrote. The pinned list of behaviour names grows with it, by design.
 
 ### Existing assertions that change by design (RG-03)
 
@@ -1127,22 +1192,37 @@ does instead.
   stands.
 - **`apps/server/src/journeys.system.test.ts`**, "LOST-01-AC8: a heartbeat for
   a journey in LOST_CONTACT, put there directly, is 200 RECORDED, stored, and
-  advances last contact; the journey stays LOST_CONTACT". The journey has no
-  alert, so it now moves back with one `alert_missing` line (AC4), or the
-  test uses a stale heartbeat to keep its assertion.
-- **`apps/server/src/alerts.system.test.ts`**, "LOST-02-AC5: … with a
-  heartbeat from its phone in between, … stays LOST_CONTACT". The heartbeat
-  in between now resolves the alert. "Once per silence" is still held
-  without it; the move back is AC1's and AC5's.
+  advances last contact; the journey stays LOST_CONTACT". **It becomes the
+  stale variant:** the heartbeat is received, then the store's clock moves
+  five minutes on before it is written, so the journey stays `LOST_CONTACT`
+  (AC2) and the test keeps every assertion it had. Its world's fake store is
+  given a clock, because a fake with none now throws when asked whether
+  contact is back (approach item 9). A fresh heartbeat for the same journey,
+  which has no alert, is AC4's case (one `alert_missing` line).
+- **`apps/server/src/alerts.system.test.ts`**, "LOST-02-AC5: swept every 10 s
+  for an hour, with a heartbeat from its phone in between, … stays
+  LOST_CONTACT …". The heartbeat in between is fresh, so it now resolves the
+  alert and stands the responders down. What the test is for, one alert per
+  silence however often the watchdog sweeps, is still held without that
+  heartbeat; the move back is AC1's and AC5's.
 - **`apps/server/src/alerts.integration.test.ts`**, "LOST-02-AC10: while a
   sweep's transaction holds J's row before commit, a heartbeat for J waits;
   then it is stored, last contact advances, and J stays LOST_CONTACT with its
   one alert unchanged". The wait and the store still hold; the end is AC11's
   second order.
-- **`apps/server/src/domain/journey.test.ts`**, "LOST-02-AC6: JOURNEY_EVENTS
-  is exactly start, heartbeat and silence …": `JOURNEY_EVENTS` gains
-  `contact` and `home`, and the table, `EVENT_FOR` and `ROW_ID` gain their
-  rows. The heartbeat rows do not change.
+- **`apps/server/src/domain/journey.test.ts`**: every test that pins
+  `JOURNEY_EVENTS` gains `contact` and `home`, because the two events join
+  the list (approach item 2). The heartbeat rows do not change.
+  - SM-01-AC14's events test ("the states are exactly ACTIVE, LOST_CONTACT
+    and ENDED, and the events exactly …");
+  - SM-01-AC14's pairs test ("the pairs with an outcome are exactly …"),
+    which gains eight pairs: `contact` and `home`, each with none, `ACTIVE`,
+    `LOST_CONTACT` and `ENDED`;
+  - LOST-01-AC17's "JOURNEY_EVENTS is exactly start and heartbeat, and then
+    …";
+  - LOST-02-AC6's "JOURNEY_EVENTS is exactly …, and ALERT_STATES exactly …";
+  - and the table, `EVENT_FOR` and `ROW_ID`, which gain the two events'
+    rows.
 - **`apps/server/src/adapters/journeys.integration.test.ts`**,
   "LOST-02-AC23: outbox has a partial index … created by migration 0003
   itself, and no migration 0004 exists". `0004` now exists for other
@@ -1170,10 +1250,21 @@ does instead.
   '/heartbeats', '/journeys']` gains `/journeys/{journeyId}/home`. Its own
   comment asks for exactly this: "a route added later has to be named here
   on purpose".
-- **`scripts/lib/gate-decisions.test.mjs`**: the `MUTATION_GROUPS` pin, where
-  the `journeys` group gains `contact.system.test.ts`.
+- **`scripts/lib/gate-decisions.test.mjs`**, in two tests, because the
+  `journeys` group's tests become `[journeys.system.test.ts,
+  contact.system.test.ts]`, in that order (Mutation, below):
+  - the `MUTATION_GROUPS` pin;
+  - BUG-10's "modules/journeys/ is mutated in one run, its own, against the
+    journey system tests", which pins the same group's run.
+- **`scripts/stryker-config.test.mjs`**, BUG-10's "the journeys run mutates
+  modules/journeys/ and runs the journey system tests, under the system
+  tests' configuration": the files the run's command runs (`filesRunWith`)
+  are now both files, compared sorted, because `vitest list` reports files
+  in an order of its own. The files it mutates and its configuration do not
+  change.
 - **`packages/test-kit/src/fake-journey-store.test.ts`**: the pinned list of
-  behaviour names (the two renamed above, and the new ones).
+  behaviour names. The two behaviours renamed above change their names, and
+  the new behaviours of this task join the list, as each task's do.
 - **Added to, not changed:** `log.test.ts`'s `EVENTS` list, `fake-log.test.ts`
   and `fake-push.test.ts` gain the new events and kinds; nothing they assert
   today changes.
@@ -1204,11 +1295,13 @@ Read in `scripts/lib/gate-decisions.mjs` on 2026-10-06.
 | New or changed code | Group | Tests the group runs | Configuration |
 |---|---|---|---|
 | `domain/journey.ts` | `domain` | `apps/server/src/domain` | root |
-| `modules/journeys/service.ts` | `journeys` | `journeys.system.test.ts` and, new, `contact.system.test.ts` | `vitest.system.config.mjs` |
+| `modules/journeys/service.ts` | `journeys` | `journeys.system.test.ts`, then `contact.system.test.ts` (new) | `vitest.system.config.mjs` |
 
-- **`MUTATION_GROUPS`' `journeys` group gains `contact.system.test.ts`.**
-  `gate-decisions.mjs` is owned and in the ai-review `safety` filter
-  (D-100), so no `ai-review.yml` edit is needed.
+- **`MUTATION_GROUPS`' `journeys` group gains `contact.system.test.ts`.** Its
+  `tests` become exactly `['apps/server/src/journeys.system.test.ts',
+  'apps/server/src/contact.system.test.ts']`, in that order: the existing
+  file first, the new one after it. `gate-decisions.mjs` is owned and in the
+  ai-review `safety` filter (D-100), so no `ai-review.yml` edit is needed.
 - **Each file must reach 80 % killed on its own** (D-098). Every run is fresh
   (D-099).
 - **Not mutated on a pull request:**
@@ -1247,8 +1340,8 @@ which lists the same paths) and `.github/workflows/ai-review.yml` (the
 | `packages/contracts/src/home.ts` (new), `contract.ts`, `index.ts`, `openapi.json` | The route (D-110); `openapi.json` regenerated with `api:spec` | no (D-094) | **yes** | — |
 | `packages/contracts/src/home.test.ts` (new), `openapi.test.ts`, `index.test.ts` | L2 (test-author) | no | **yes** | — |
 | `packages/test-kit/src/` (the store, the behaviour suite, `fakePush`, `fakeLog`, their tests, `index.ts`) | Fakes (test-author) | **yes** (D-100) | **yes** | input (D-098) |
-| `scripts/lib/gate-decisions.mjs` | The `journeys` group gains `contact.system.test.ts` | **yes** | **yes** | input (D-098) |
-| `scripts/lib/gate-decisions.test.mjs` | The pin (test-author) | **yes** | no | — |
+| `scripts/lib/gate-decisions.mjs` | The `journeys` group's tests become `journeys.system.test.ts`, then `contact.system.test.ts` | **yes** | **yes** | input (D-098) |
+| `scripts/lib/gate-decisions.test.mjs`, `scripts/stryker-config.test.mjs` | The group's pins: two tests in the first, one in the second (test-author) | **yes** | no | — |
 | `apps/server/src/contact.system.test.ts` (new) | L6 (test-author) | no | no | the `journeys` group's tests |
 | `apps/server/src/contact.integration.test.ts` (new); `adapters/journeys.integration.test.ts`, `deploy.integration.test.ts`, `alerts.integration.test.ts` | L3 (test-author) | no | no | — |
 | `apps/server/src/journeys.system.test.ts`, `alerts.system.test.ts`, `log.test.ts` | RG-03 changes and L2 (test-author) | no | no | groups' tests |
@@ -1282,12 +1375,20 @@ still change before the first app release (M3) at no compatibility cost.
 
 - **New:** `POST /v1/journeys/{journeyId}/home` (contract path
   `/journeys/{journeyId}/home`, route `reportHome`), with the answers of
-  approach item 5. Its description says: it needs a device credential; only
-  the device that started the journey may end it; a 200 `ENDED` and a 409
+  approach item 5 and its detailed input: the journey in the path, an empty
+  body or none. Its description says: it needs a device credential; only the
+  device that started the journey may end it; a 200 `ENDED` and a 409
   `JOURNEY_ENDED` both mean the journey is over.
 - **Unchanged:** `/v1/health`, `POST /v1/journeys` and `POST /v1/heartbeats`.
   A heartbeat that brings a journey back is answered `RECORDED`, as any
   stored heartbeat is.
+- **`openapi.json` is regenerated with the code** (`pnpm run api:spec`), not
+  by hand. The test that the committed file is what the contract generates
+  holds it to the code.
+- **The start and heartbeat path items stay byte-identical.** Test-author's
+  AC18 test "the heartbeat and start routes are published exactly as
+  before" pins each one's JSON by its sha256 (`openapi.test.ts`, read
+  2026-10-06). So adding the route cannot quietly change a published route.
 
 ## Risks and failure modes
 

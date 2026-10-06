@@ -3781,6 +3781,12 @@ any other path is work, not a candidate for the same treatment.
     any ended journey, whatever ended it, a repeat included; 403, 404 and the
     fixed 400 as for heartbeats. A 200 and a 409 both mean the journey is
     over.
+  - **The "I'm home" route's input is detailed** (`inputStructure:
+    'detailed'`): `params` holds `journeyId` alone, and `body` is an empty
+    strict object, optional. The journey's ID comes from the path only, and
+    any key in the body is a 400. oRPC's default, compact input merges the
+    path's parameters with the body, and the body wins, so a body naming
+    another journey would override the path.
   - **The lock order:** the journey's row first, always. The API's 5 s lock
     limit bounds every wait the new paths add.
   - **Two states the code never makes are met in the safe direction:** a
@@ -3788,11 +3794,18 @@ any other path is work, not a candidate for the same treatment.
     left, still moves back on fresh contact, with one `alert_missing` line
     for the first. Refusing would leave it unwatched, because the watchdog
     never sweeps a `LOST_CONTACT` journey.
+    - **"I'm home" on a `LOST_CONTACT` journey with no unresolved alert**
+      ends it, `ENDED` with reason `HOME`, writes no message, and writes the
+      same one `alert_missing` line. It goes through the same resolving
+      helper and meets the same missing alert, so it says so rather than
+      ending quietly (fail loudly). Added 2026-10-06, from test-author's red
+      phase (LOST-03-AC4).
   - **No database check ties a state to its time** (`RESOLVED` to
     `resolved_at`, `ENDED` to `ended_at`): rows already put in directly
     would make the migration refuse. Each time and its reason are checked
     as a pair.
-  - **Mutation:** the `journeys` group also runs `contact.system.test.ts`.
+  - **Mutation:** the `journeys` group's tests become exactly
+    `journeys.system.test.ts`, then `contact.system.test.ts`, in that order.
 - **Consequences:**
   - `log.ts` gains three closed events: `home_ignored`, `home_failed` and
     `alert_missing` (owner-approved, D-102).
