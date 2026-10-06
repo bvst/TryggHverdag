@@ -1,18 +1,18 @@
 # LOST-03 · Back in contact: a heartbeat, or a queued "I'm home", after an alert resolves it and stands every responder down
 
 **Milestone:** M2, task 4 of 8 (D-090) · **Delivers:** LOST-03 (its server
-half); SM-04 (its server half, under Q1); stopping a resolved alert's
-retries, left here by LOST-02 · **Decisions:** D-011, D-014, D-021, D-031,
-D-033, D-036, D-042, D-074, D-075, D-086, D-087, D-090, D-091, D-092, D-095,
-D-097, D-098, D-099, D-100, D-101, D-102, D-103, D-105, D-106, D-107, D-108,
-D-109 · **Written:** 2026-10-06, against `main` at `5cd5d24` (LOST-02 merged)
-plus the record commit `33bdf1c` on this branch, as the coordinating session
-reported them. This session has no shell, so the commits were not checked;
-every file named below was read at the state the branch holds ·
-**Status:** 📝 Spec, **waiting for the owner's answers to Q1 and Q2** (the
-end of this file). Criteria marked *(Q1)* or *(Q2)* are written under Claude's
-recommendation, and change with the answer. Nothing is built before the
-answers.
+half); SM-04 (its server half), with the server's "I'm home" route; stopping
+a resolved alert's retries, left here by LOST-02 · **Decisions:** D-011,
+D-014, D-021, D-031, D-033, D-036, D-042, D-074, D-075, D-086, D-087, D-090,
+D-091, D-092, D-095, D-097, D-098, D-099, D-100, D-101, D-102, D-103, D-105,
+D-106, D-107, D-108, D-109, D-110, D-111, D-112 · **Written:** 2026-10-06,
+against `main` at `5cd5d24` (LOST-02 merged) plus the record commit `33bdf1c`
+on this branch, as the coordinating session reported them. This session has
+no shell, so the commits were not checked; every file named below was read
+at the state the branch holds · **Finalised:** 2026-10-06, with the owner's
+answers to Q1 and Q2 (D-110, D-111; "Answered by the owner", at the end of
+this file), as the coordinating session relayed them · **Status:** 📝 Spec,
+settled.
 
 ## Requirement
 
@@ -112,8 +112,8 @@ Each is met here, and the criterion that proves it is named.
 | "Retries go on while the alert is open. Stopping them when an alert resolves is task 4's." | LOST-02's spec, approach item 5 | Approach item 4; AC7 |
 | The five-minute race: a heartbeat received just before 5:00 and committed just after the open "is stored against `LOST_CONTACT` … and task 4 then sends 'back in contact'" | LOST-02's spec, risks (F2) | Approach item 3; AC11 |
 | "Back in contact and resolving the alert (task 4), including stopping retries for a resolved alert" | LOST-02's spec, out of scope | The whole task |
-| "Ending a journey for any reason: the back-in-contact end rule (task 4) … and the end time and reason columns" | SM-01's spec, out of scope | Approach items 5 and 6; AC14 to AC17, AC20 *(Q1)* |
-| "Nothing in M2 ends a journey until task 4 or 7 … the canary (task 8) will need an end" | SM-01's spec, risks | Approach item 5 *(Q1)* |
+| "Ending a journey for any reason: the back-in-contact end rule (task 4) … and the end time and reason columns" | SM-01's spec, out of scope | Approach items 5 and 6; AC14 to AC17, AC20 (D-110) |
+| "Nothing in M2 ends a journey until task 4 or 7 … the canary (task 8) will need an end" | SM-01's spec, risks | Approach item 5 (D-110) |
 | Whether this task's events need an event ID | D-103 | Reading 10 |
 | `insertStarted`'s comment: once a journey can end, "it may end between the conflict and this read; then the start should retry the insert once rather than answer 500" | `adapters/journeys.ts` | "Left for later tasks", with the reason |
 
@@ -149,9 +149,9 @@ Read on 2026-10-06, in the files themselves:
 - **The worker's delivery loop** runs every 10 s, and is woken at once only by
   a sweep that opened an alert (`worker.ts`).
 
-So "a queued 'I'm home'" cannot arrive today. How it arrives in this task is
-**Q1**. The spec is written under the recommended answer: the server's
-"I'm home" route is built here, its server half only.
+So "a queued 'I'm home'" could not arrive. The owner chose, on 2026-10-06,
+to build the server half of the "I'm home" route in this task (Q1, **D-110**):
+`POST /v1/journeys/{journeyId}/home`. From `ACTIVE` it tells nobody until M3.
 
 ### Readings this spec makes
 
@@ -185,14 +185,14 @@ Each is stated so the reviewers can check it, not assumed quietly.
    (LOST-02's index holds at most one). Older resolved alerts are untouched.
 3. **The journey afterwards:** `ACTIVE` after a heartbeat (D-033's row), and
    watched again as any journey is: a new silence opens a new alert.
-   `ENDED`, end reason `HOME`, with `ended_at`, after "I'm home" *(Q1)*.
+   `ENDED`, end reason `HOME`, with `ended_at`, after "I'm home" (D-110).
 4. **"Responders get"** means: every responder stored with the journey
    (`journey_responders`) gets one stand-down message for that alert,
-   `BACK_IN_CONTACT` or `HOME`, written in the same transaction. These are
-   exactly the people the open told: it wrote one `LOST_CONTACT` message per
-   responder row, and nothing changes that list during a journey before M3.
-   Whether someone whose lost-contact push never went out still gets the
-   stand-down is **Q2**; the recommendation is yes.
+   `BACK_IN_CONTACT` or `HOME`, written in the same transaction, **whether or
+   not their own lost-contact push went out** (the owner's answer to Q2,
+   **D-111**). These are exactly the people the open told: it wrote one
+   `LOST_CONTACT` message per responder row, and nothing in the code changes
+   that list during a journey yet.
 5. **"<name> is back in contact" with the current position** is app text and
    an app read. The push is content-free (D-086): it carries the message's
    ID, its recipient and its kind, and nothing else. The name is filled in on
@@ -201,7 +201,7 @@ Each is stated so the reviewers can check it, not assumed quietly.
    access-checked route (D-106). This task stores what that read needs: the
    alert's `resolved_at` and resolution; the heartbeats are already stored.
 6. **A lost-contact push not yet accepted when contact comes back is never
-   sent again** *(Q2)*. It is withdrawn in the transaction that resolves the
+   sent again** (D-111). It is withdrawn in the transaction that resolves the
    alert. A critical, break-through alert about a silence that is already
    over is a false alarm (F2), and every false alarm teaches a responder to
    trust the next one less (F6). One that is already in the push port's
@@ -222,7 +222,7 @@ Each is stated so the reviewers can check it, not assumed quietly.
    `JOURNEY_ENDED`, nothing stored, one line without location.
 10. **Duplicates.** A heartbeat already has an event ID (LOST-01), and a
     duplicate changes nothing, so it never brings contact back (LOST-01,
-    reading 3). **"I'm home" needs no event ID** *(Q1)*, by D-103's reading:
+    reading 3). **"I'm home" needs no event ID** (D-110), by D-103's reading:
     a second one finds the journey `ENDED`, is answered 409, and changes
     nothing, as a second start finds the first journey.
 11. **Two states the code never makes are met in the safe direction.**
@@ -232,11 +232,11 @@ Each is stated so the reviewers can check it, not assumed quietly.
       would leave it `LOST_CONTACT` for good, and the watchdog never sweeps a
       `LOST_CONTACT` journey: nobody would watch it again.
     - A journey with no responder rows left still moves back and resolves
-      its alert, writing no stand-down. Nothing removes a responder before
-      task 6. The open refuses a journey with nobody to tell, because moving
+      its alert, writing no stand-down. Nothing in the code removes a
+      responder yet. The open refuses a journey with nobody to tell, because moving
       it would hide the silence; the resolve does not refuse, because
       refusing would hide the journey.
-12. **A queued "I'm home"** *(Q1)* arrives as any "I'm home" does, through
+12. **A queued "I'm home"** (D-110) arrives as any "I'm home" does, through
     the route built here: the server cannot tell a queued one from a fresh
     one, and need not. From `LOST_CONTACT` it ends the journey, resolves the
     alert and tells every responder "is home" (SM-04). From `ACTIVE` it ends
@@ -294,8 +294,8 @@ language; the notification level of the new kinds (M3, D-087); the app's
 ## Approach (technical choices delegated to Claude, D-031)
 
 1. **Where the code goes, and why there.**
-   - **The rules:** `domain/journey.ts` gains the `contact` event and *(Q1)*
-     the `home` event, and three lists. Owned, filtered and mutation-tested
+   - **The rules:** `domain/journey.ts` gains the `contact` event, the
+     `home` event, and three lists. Owned, filtered and mutation-tested
      (`domain`).
    - **The SQL:** `adapters/journeys.ts`. The back-in-contact path lives
      inside `recordHeartbeat`'s transaction, because it must be one
@@ -303,10 +303,10 @@ language; the notification level of the new kinds (M3, D-087); the app's
      the same store. Both use one internal helper that resolves an alert
      (item 4), so later tasks that resolve alerts (5 to 7) have one place to
      call. The file is owned and filtered (D-092).
-   - **The module:** `modules/journeys/service.ts` gains `home()` *(Q1)*, and
+   - **The module:** `modules/journeys/service.ts` gains `home()`, and
      `heartbeat()` maps the store's new answer. Owned, filtered,
      mutation-tested (`journeys`).
-   - **The route** *(Q1)*: `api.ts` (owned, filtered, D-097) and
+   - **The route** (D-110): `api.ts` (owned, filtered, D-097) and
      `packages/contracts` (filtered).
    - **Unchanged:** `modules/alerts/` (the watchdog and the sender),
      `worker.ts`, `api-process.ts`, `adapters/db.ts`, `domain/watchdog.ts`.
@@ -315,7 +315,7 @@ language; the notification level of the new kinds (M3, D-087); the app's
 
 2. **The rules (`domain/journey.ts`).**
    - `JOURNEY_EVENTS` becomes `['start', 'heartbeat', 'silence', 'contact',
-     'home']` (`home` under Q1).
+     'home']`.
    - **The heartbeat rule is unchanged.** It decides, on a read without a
      lock, whether this device may be heard: not found, ended, not the
      journey's device, or recorded. Its `LOST_CONTACT` row stays `{ type:
@@ -335,7 +335,7 @@ language; the notification level of the new kinds (M3, D-087); the app's
      `contact` is `silence` asked the other way, so the boundary is written
      once (`LOST_CONTACT_AFTER_MS`) and the transition table holds both
      sides.
-   - **`home`** *(Q1)*: `{ type: 'home', walkerId, deviceId }` on the journey
+   - **`home`** (D-110): `{ type: 'home', walkerId, deviceId }` on the journey
      it names (`JourneyForHeartbeat`), in the heartbeat rule's order, which
      is part of the rule:
      1. no journey, or another walker's → refused, `JOURNEY_NOT_FOUND`;
@@ -350,7 +350,7 @@ language; the notification level of the new kinds (M3, D-087); the app's
      - `ALERT_RESOLUTIONS = ['BACK_IN_CONTACT', 'HOME']`. A stand-down's kind
        is its resolution's own name, held at typecheck (`satisfies` against
        `MessageKind`);
-     - `JOURNEY_END_REASONS = ['HOME']` *(Q1)*. The automatic stop, "They're
+     - `JOURNEY_END_REASONS = ['HOME']`. The automatic stop, "They're
        safe" and the 24-hour rule add theirs in their own tasks.
    - Pure, total, and no clock. The `switch` and its `never` default make a
      missing case a type error, as today.
@@ -389,7 +389,7 @@ language; the notification level of the new kinds (M3, D-087); the app's
       now(), resolution = $r where journey_id = $j and state <> 'RESOLVED'
       returning id`. At most one row, by LOST-02's index. None → no
       withdrawal and no stand-down; the move stands (reading 11).
-   2. **Withdraw** *(Q2)*. `update outbox set withdrawn_at = now() where
+   2. **Withdraw** (D-111). `update outbox set withdrawn_at = now() where
       alert_id = $a and kind = 'LOST_CONTACT' and sent_at is null and
       withdrawn_at is null returning recipient_id, attempts,
       next_attempt_at`.
@@ -432,10 +432,12 @@ language; the notification level of the new kinds (M3, D-087); the app's
       - **The order holds only while a send ends within its lease.** M3's
         push adapter must bound every send under `CLAIM_LEASE_MS` (LOST-02
         already asks it to bound each send).
-   - **Why every responder, sent or not, and why withdraw** *(Q2)*: Q2's
-     recommendation, at the end of this file.
+   - **Why withdraw, and why every responder, sent or not** (D-111): a
+     critical alert about a silence that is already over is a false alarm,
+     and nobody who may have heard of the loss is left un-told. The
+     reasons are in "Answered by the owner", Q2, at the end of this file.
 
-5. **"I'm home"** *(Q1)*.
+5. **"I'm home"** (D-110).
    - **The route:** `POST /v1/journeys/{journeyId}/home` (contract path
      `/journeys/{journeyId}/home`), built on `deviceRoute`. The journey is in
      the path, and the request holds nothing else; a body with any key is
@@ -497,8 +499,8 @@ language; the notification level of the new kinds (M3, D-087); the app's
    | enum `message_kind` | + `BACK_IN_CONTACT`, `HOME` | Equals `MESSAGE_KINDS`, in order |
    | enum `alert_resolution` (new) | `BACK_IN_CONTACT`, `HOME` | Equals `ALERT_RESOLUTIONS` |
    | `alerts` | + `resolved_at` (database time), + `resolution` | Both null, or both set (a check) |
-   | enum `journey_end_reason` (new, Q1) | `HOME` | Equals `JOURNEY_END_REASONS` |
-   | `journeys` (Q1) | + `ended_at` (database time), + `end_reason` | Both null, or both set (a check) |
+   | enum `journey_end_reason` (new) | `HOME` | Equals `JOURNEY_END_REASONS` |
+   | `journeys` | + `ended_at` (database time), + `end_reason` | Both null, or both set (a check) |
    | `outbox` | + `withdrawn_at` (database time) | — |
 
    - **Adding enum values inside the migration's transaction.** drizzle-orm
@@ -506,9 +508,12 @@ language; the notification level of the new kinds (M3, D-087); the app's
      read in drizzle-orm 0.45.3). PostgreSQL 12 and later accept `ALTER TYPE
      … ADD VALUE` there, but the new value cannot be used until the
      transaction commits. So `0004` must not use either new value: in no
-     check, default or index predicate. This is recalled from PostgreSQL's
-     documentation and **not checked here**; the L3 run on PostgreSQL 15
-     (`deploy.integration.test.ts`) is the evidence.
+     check, default or index predicate. On an empty database every
+     migration runs in that one transaction, so `0003` creates
+     `message_kind` and `0004` adds to it before either commits. This is
+     recalled from PostgreSQL's documentation and **not checked here**; the
+     L3 runs on PostgreSQL 15 (`deploy.integration.test.ts`: the empty
+     database, and the database at `0003` holding rows) are the evidence.
    - **No check ties a state to its time** (`RESOLVED` to `resolved_at`,
      `ENDED` to `ended_at`). Existing rows put in directly, by tests and by
      hand, have the state without the time, and a database holding one
@@ -584,24 +589,28 @@ language; the notification level of the new kinds (M3, D-087); the app's
       canonical UUID, `reason` and `stage` only from their sets, `code` only
       as a SQLSTATE. An unlisted event still throws.
     - A back-in-contact writes no line. The alert's row is its record.
-    - `home_ignored` and `home_failed` exist only under Q1.
 
 11. **No new dependency** (SEC-06), and **no new import route** (AR-10).
     `api.ts` wires the new route to the module; the module gets ports only.
     `packages/config/dependency-cruiser.cjs` is unchanged.
 
-12. **Decisions to record** (`plan-keeper`, in this pull request):
-    - the owner's answers to Q1 and Q2, one decision each;
-    - **one delegated decision (D-031)**: the contact rule at the
-      threshold (reading 1); `withdrawn_at` and the claim's condition; the
-      hold and its 60 s bound; the lock order; `alert_missing` and the safe
-      direction for the two states the code never makes (reading 11); no
-      check tying a state to its time; the `journeys` mutation group gaining
-      `contact.system.test.ts`.
+12. **Decisions recorded** (in `docs/plan/decisions.md`, 2026-10-06):
+    - **D-110** (owner): the server half of the "I'm home" route is built in
+      this task (Q1);
+    - **D-111** (owner): unsent lost-contact pushes are withdrawn, and every
+      responder is stood down (Q2);
+    - **D-112** (delegated, D-031): the two new message kinds and the
+      resolutions; the contact rule at the threshold (reading 1); no
+      overtaking at the push port, with `withdrawn_at`, the claim's
+      condition and the hold's 60 s bound; the route's 409 for any ended
+      journey, a repeat included; the lock order; `alert_missing` and the
+      safe direction for the two states the code never makes (reading 11);
+      no check tying a state to its time; the `journeys` mutation group
+      gaining `contact.system.test.ts`.
 
-    The next free number is D-110 on `main` as read on 2026-10-06. As the
-    live gotcha says, check the open pull requests' `decisions.md` before
-    taking a number, and again before each push.
+    D-110 was the next free number in `decisions.md` when they were written.
+    As the live gotcha says, check the open pull requests' `decisions.md`
+    again before each push.
 
 ### Interfaces the tests are written against (RG-02: tests first)
 
@@ -610,7 +619,7 @@ the tests are written.
 
 - **`domain/journey.ts`:**
   - `JOURNEY_EVENTS` is exactly `['start', 'heartbeat', 'silence', 'contact',
-    'home']` (without `home` if Q1 is answered (c));
+    'home']`;
   - `MESSAGE_KINDS`, `ALERT_RESOLUTIONS`, `JOURNEY_END_REASONS`, and their
     types `MessageKind`, `AlertResolution`, `JourneyEndReason`;
   - `ContactEvent` and its outcomes `{ type: 'back_in_contact', state:
@@ -632,17 +641,25 @@ the tests are written.
 - **`modules/journeys/`:** `JourneyService.home({ walkerId, deviceId,
   journeyId })` → `{ type: 'ended' } | HeartbeatRefusal`. `heartbeat()`'s
   result type is unchanged.
-- **`@trygghverdag/contracts`** *(Q1)*: `reportHome` (the route, in
+- **`@trygghverdag/contracts`**: `reportHome` (the route, in
   `contract`), `homeRequestSchema`, `homeResponseSchema`, `homeErrors`, and
   the types `HomeResponse` and `HomeErrorCode`.
 - **The test kit** (owned, D-100):
   - `fakeJourneyStore({ clock })`:
     - `recordHeartbeat` brings a `LOST_CONTACT` journey back as approach
       items 3 and 4 say, with the clock's now as the transaction's;
-    - `recordHome` *(Q1)*;
+    - `recordHome`;
     - the claim skips withdrawn messages;
-    - inspection: alerts with `resolvedAt` and `resolution`, messages with
-      `withdrawnAt`, journeys with `endedAt` and `endReason`;
+    - inspection: alerts with `resolvedAt` and `resolution`, and messages
+      with `withdrawnAt` (today's tests read alerts and messages field by
+      field, or compare one reading with another, so the new fields break
+      none of them);
+    - a journey's end, `endedAt` and `endReason`, read through an
+      inspection of its own. `StoredJourney` (`journeys()`) and the suite's
+      `JourneyAsStored` keep their shape: several tests compare them with
+      exact literals (`journeys.system.test.ts`,
+      `fake-journey-store.test.ts`), and a new field would fail them for no
+      reason;
     - `failWith` and `beforeNext` for `recordHome`;
     - without a clock, it throws when asked whether contact is back or to
       end a journey.
@@ -651,8 +668,9 @@ the tests are written.
   - **The shared behaviour suite** gains the store's side of every criterion
     marked "behaviour suite" below, run against the fake (L2) and the
     adapter (L3). `JourneyStoreUnderTest` gains whatever reading back needs
-    (an alert's resolution, a message's `withdrawnAt`, a journey's end); the
-    names are `test-author`'s.
+    (an alert's resolution, a message's `withdrawnAt`, a journey's end, the
+    last through a reader of its own, as above); the names are
+    `test-author`'s.
 
 ## Acceptance criteria
 
@@ -708,7 +726,7 @@ under five minutes, by the database clock.** *(LOST-03, REL-01)*
 **LOST-03-AC3 — Every (situation, event) pair has a tested outcome, contact
 and "I'm home" included.** *(LOST-03, SM-04; extends LOST-02-AC6)*
 - **Given** `JOURNEY_EVENTS` is exactly `start`, `heartbeat`, `silence`,
-  `contact` and `home` (`home` under Q1)
+  `contact` and `home`
 - **Then** the transition table holds an expectation for every pair: none,
   `ACTIVE`, `LOST_CONTACT` and `ENDED`, with `contact` at the threshold and
   one millisecond under it, and with `home` from the walker's own device,
@@ -718,7 +736,7 @@ and "I'm home" included.** *(LOST-03, SM-04; extends LOST-02-AC6)*
   is the `contact` event's
 - **And** `MESSAGE_KINDS` is exactly `LOST_CONTACT`, `BACK_IN_CONTACT`, `HOME`;
   `ALERT_RESOLUTIONS` exactly `BACK_IN_CONTACT`, `HOME`, each of them a
-  message kind (typecheck); `JOURNEY_END_REASONS` exactly `HOME` (Q1)
+  message kind (typecheck); `JOURNEY_END_REASONS` exactly `HOME`
 - **And** a pair the lists create but the table lacks fails, naming the pair;
   `transition` never throws and never returns `undefined` for any generated
   situation and event (fast-check); typecheck fails if an event has no case.
@@ -766,7 +784,7 @@ other, and a new silence is a new alert.** *(LOST-03, LOST-02)*
 ### The messages
 
 **LOST-03-AC6 — Every responder on the journey is stood down once, whether or
-not their lost-contact push went out.** *(LOST-03; Q2)*
+not their lost-contact push went out.** *(LOST-03; D-111)*
 - **Given** J's alert opened with a message for each of R1, R2 and R3; the
   fake push accepted R1's, answered `NO_TARGET` for R2's, and R3's was never
   claimed (contact comes back before the next delivery)
@@ -779,7 +797,7 @@ not their lost-contact push went out.** *(LOST-03; Q2)*
   alert and recipient (L3).
 
 **LOST-03-AC7 — A lost-contact push not yet accepted when contact comes back
-is never sent again.** *(LOST-03; Q2)*
+is never sent again.** *(LOST-03; D-111)*
 - **Given** J's alert, with R1's lost-contact message accepted, R2's failed
   (`NO_TARGET`, due again in 10 s) and R3's never claimed
 - **When** contact comes back, the fake push recovers, and the clock runs on
@@ -824,7 +842,7 @@ lost-contact push it stands down.** *(LOST-03)*
 **LOST-03-AC9 — Every message is content-free, with an opaque ID of its
 own.** *(LOST-03, SM-04; D-086, D-087)*
 - **Given** J's alert with its lost-contact messages, and its stand-downs of
-  each kind (`BACK_IN_CONTACT`; `HOME` under Q1)
+  each kind, `BACK_IN_CONTACT` and `HOME`
 - **When** the sender delivers them
 - **Then** every message the fake receives has exactly the keys `messageId`,
   `recipientId` and `kind`, and `kind` is one of `MESSAGE_KINDS`
@@ -897,7 +915,7 @@ the alert once.** *(LOST-03, SM-08)*
 **LOST-03-AC13 — Resolved on the database's clock.** *(LOST-03, REL-01)*
 - **Given** a real PostgreSQL
 - **Then** `resolved_at`, every `withdrawn_at`, every stand-down's
-  `created_at`, and `ended_at` (Q1) lie between two `select now()` readings
+  `created_at`, and `ended_at` lie between two `select now()` readings
   taken before and after the call
 - **And** a position whose phone time is hours behind or ahead changes
   neither whether contact is back nor any of those times
@@ -906,18 +924,19 @@ the alert once.** *(LOST-03, SM-08)*
 
 ### "I'm home" after an alert (SM-04)
 
-Every criterion in this section is written under Q1's recommended answer.
+The owner chose to build the server half of the "I'm home" route in this
+task (Q1, D-110). These criteria prove it.
 
 **LOST-03-AC14 — A queued "I'm home" after an alert ends the journey,
-resolves the alert and tells every responder.** *(SM-04, LOST-03; Q1)*
+resolves the alert and tells every responder.** *(SM-04, LOST-03; D-110)*
 - **Given** J's alert opened at five minutes of silence, and the sender has
   delivered a `LOST_CONTACT` message to each of R1, R2 and R3
 - **When** D, reconnecting, sends its queued "I'm home" through the API
   before any heartbeat
 - **Then** it is answered 200 `ENDED`, and J is `ENDED`, end reason `HOME`,
   `ended_at` the store's now
-- **And** J's alert is `RESOLVED` with resolution `HOME`, and its unsent
-  lost-contact messages are withdrawn (AC7)
+- **And** J's alert is `RESOLVED` with resolution `HOME`, and any of its
+  lost-contact messages still unsent is withdrawn (AC7, D-111)
 - **And** the sender delivers exactly one `HOME` message to each of R1, R2
   and R3, each after their `LOST_CONTACT` message (AC8), and none to W
 - **And** D's queued heartbeats that follow are answered 409 `JOURNEY_ENDED`,
@@ -930,7 +949,7 @@ resolves the alert and tells every responder.** *(SM-04, LOST-03; Q1)*
 - **And** at L3 the same flow runs through the real adapter.
 
 **LOST-03-AC15 — "I'm home" on an `ACTIVE` journey ends it, and tells nobody
-yet.** *(SM-04; Q1)*
+yet.** *(SM-04; D-110)*
 - **Given** J `ACTIVE`, with no alert, or with only resolved ones
 - **When** D sends "I'm home"
 - **Then** it is answered 200 `ENDED`; J is `ENDED`, end reason `HOME`,
@@ -940,7 +959,7 @@ yet.** *(SM-04; Q1)*
 - **And** later sweeps never alert J, and W can start again.
 
 **LOST-03-AC16 — Only the journey's own device ends it, and every other
-answer changes nothing.** *(SM-04, SM-07, SM-08, SEC-07; Q1)*
+answer changes nothing.** *(SM-04, SM-07, SM-08, SEC-07; D-110, D-112)*
 - **Given** J, `ACTIVE` in one run and `LOST_CONTACT` with its open alert in
   another
 - **Then** "I'm home" is answered, and in each case J, its alert and its
@@ -964,7 +983,7 @@ answer changes nothing.** *(SM-04, SM-07, SM-08, SEC-07; Q1)*
 - **And** no answer carries anything of the request.
 
 **LOST-03-AC17 — "I'm home" is all or nothing, and meets the watchdog and the
-heartbeat on the row.** *(SM-04, SM-09; AR-05; Q1)*
+heartbeat on the row.** *(SM-04, SM-09; AR-05; D-110)*
 - **Given** a real PostgreSQL, where a test-only trigger makes inserting the
   second `HOME` message fail
 - **When** "I'm home" arrives for `LOST_CONTACT` J
@@ -986,7 +1005,7 @@ heartbeat on the row.** *(SM-04, SM-09; AR-05; Q1)*
 - **And when** two "I'm home" requests for J arrive at once: one is 200 and
   the other 409, with one resolution.
 
-**LOST-03-AC18 — The contract describes the route.** *(SM-04; AR-07; Q1)*
+**LOST-03-AC18 — The contract describes the route.** *(SM-04; AR-07; D-110)*
 - **Given** the generated OpenAPI document
 - **Then** it has `POST /journeys/{journeyId}/home` under the `/v1` server,
   with responses 200, 400, 401, 403, 404 and 409, and requires the bearer
@@ -1021,10 +1040,10 @@ existing row.** *(LOST-03, SM-04)*
 - **Given** a freshly migrated database
 - **Then** `message_kind`'s values equal `MESSAGE_KINDS`, `alert_resolution`'s
   equal `ALERT_RESOLUTIONS`, and `journey_end_reason`'s equal
-  `JOURNEY_END_REASONS` (Q1), each in order (`pg_enum`)
+  `JOURNEY_END_REASONS`, each in order (`pg_enum`)
 - **And** the database itself refuses an alert with `resolved_at` and no
   resolution, or a resolution and no `resolved_at`; and the same for a
-  journey's `ended_at` and `end_reason` (Q1)
+  journey's `ended_at` and `end_reason`
 - **And** the claim's partial index still reads `(next_attempt_at, id)` with
   the predicate `sent_at IS NULL` (`pg_get_indexdef`)
 - **And** on PostgreSQL 15, a database at `0003` holding journeys in every
@@ -1120,21 +1139,63 @@ does instead.
   then it is stored, last contact advances, and J stays LOST_CONTACT with its
   one alert unchanged". The wait and the store still hold; the end is AC11's
   second order.
-- **`apps/server/src/domain/journey.test.ts`**: `JOURNEY_EVENTS` and the
-  lists gain their new members (LOST-02-AC6's pin), and the table gains the
-  `contact` and `home` rows. The heartbeat rows do not change.
+- **`apps/server/src/domain/journey.test.ts`**, "LOST-02-AC6: JOURNEY_EVENTS
+  is exactly start, heartbeat and silence …": `JOURNEY_EVENTS` gains
+  `contact` and `home`, and the table, `EVENT_FOR` and `ROW_ID` gain their
+  rows. The heartbeat rows do not change.
 - **`apps/server/src/adapters/journeys.integration.test.ts`**,
   "LOST-02-AC23: outbox has a partial index … created by migration 0003
   itself, and no migration 0004 exists". `0004` now exists for other
   reasons. The test's point, that the index is created by `0003` and by no
   separate migration, is kept by checking that no later migration creates
   or drops it.
+- **The same file**, "LOST-02-AC13: alerts and outbox hold exactly the
+  spec's columns, and none holds a coordinate, …": the exact lists gain
+  `resolved_at` and `resolution` (alerts) and `withdrawn_at` (outbox). Its
+  scan for a coordinate, an accuracy, a phone time, a battery level, a name
+  or a phone number covers the new columns as it stands, and none of their
+  names matches it.
+- **`apps/server/src/deploy.integration.test.ts`**, "LOST-02-AC23: a
+  PostgreSQL 15 database at 0002, holding journeys in every state …,
+  migrates through 0003 …; every existing row is unchanged". It runs every
+  migration (`migrateDatabase`), so it now runs `0004` too. Its
+  `row_to_json` of each journey then holds `ended_at` and `end_reason`, both
+  null, and the before-and-after comparison fails, though no row changed.
+  The test keeps its point by migrating only through `0003` (a copy of the
+  folder up to `0003`, as `migrationsUpTo0002()` already does for `0002`),
+  or by comparing the columns that existed before. AC20's test for `0004`
+  is a new one.
+- **`packages/contracts/src/openapi.test.ts`**, "describes the health route
+  as a GET, where the contract puts it": the exact path list `['/health',
+  '/heartbeats', '/journeys']` gains `/journeys/{journeyId}/home`. Its own
+  comment asks for exactly this: "a route added later has to be named here
+  on purpose".
 - **`scripts/lib/gate-decisions.test.mjs`**: the `MUTATION_GROUPS` pin, where
   the `journeys` group gains `contact.system.test.ts`.
-- **`log.test.ts`, `fake-log.test.ts`, `fake-push.test.ts`,
-  `fake-journey-store.test.ts`** and the contracts' route-list tests, where
-  they pin the event list, the message kinds, the fakes' abilities or the
-  contract's routes.
+- **`packages/test-kit/src/fake-journey-store.test.ts`**: the pinned list of
+  behaviour names (the two renamed above, and the new ones).
+- **Added to, not changed:** `log.test.ts`'s `EVENTS` list, `fake-log.test.ts`
+  and `fake-push.test.ts` gain the new events and kinds; nothing they assert
+  today changes.
+
+**Read and found unchanged** (2026-10-06), so nobody has to wonder:
+- `domain/journey.test.ts`, "LOST-01-AC8: a journey in LOST_CONTACT takes the
+  heartbeat and stays LOST_CONTACT …" and "LOST-02-AC5: a heartbeat for a
+  journey in LOST_CONTACT is recorded and leaves it LOST_CONTACT …". The
+  heartbeat event's rule is unchanged, and the move back is the `contact`
+  event's (approach item 2), so both assertions hold. Their wording about
+  "the back-in-contact task" may be brought up to date; no assertion
+  changes.
+- `alerts.integration.test.ts`'s other LOST-02-AC10 test (a heartbeat holding
+  the row as a sweep runs): the journey is `ACTIVE` there.
+- The tests that compare stored alerts and messages: each reads them field
+  by field, or compares one reading with another, so the new fields break
+  none of them. The tests that compare `journeys()` and `journeysOf` with
+  exact literals are protected by keeping the journey's end out of those
+  shapes (Interfaces, above).
+- `deploy.integration.test.ts`'s LOST-01-AC20 pair: the refusal rolls back
+  every pending migration, `0004` included, and the control counts the
+  journal's entries from the file.
 
 ## Mutation (D-036, D-095, D-098, D-099)
 
@@ -1179,11 +1240,11 @@ which lists the same paths) and `.github/workflows/ai-review.yml` (the
 | `apps/server/src/modules/journeys/service.ts` | `home()`; `heartbeat()` maps `back_in_contact`; `alert_missing` | **yes** | **yes** | `journeys` |
 | `apps/server/src/ports.ts` | `RecordHeartbeatResult`, `recordHome`, three `LogEvent`s | no | no | — |
 | `apps/server/src/adapters/journeys.ts` | Back in contact in `recordHeartbeat`; `recordHome`; the resolve helper; the claim skips withdrawn messages; `insertStarted`'s comment updated (reachable now, left for task 7) | **yes** | **yes** | no (D-095) |
-| `apps/server/src/api.ts` | The "I'm home" route (Q1) | **yes** (D-097) | **yes** | no |
+| `apps/server/src/api.ts` | The "I'm home" route (D-110) | **yes** (D-097) | **yes** | no |
 | `apps/server/src/db/schema.ts` | Two enums, the new columns and checks, `message_kind`'s values | **yes** | **yes** | no |
 | `apps/server/src/db/migrations/0004_*.sql`, `meta/*` | Generated with `db:generate` | **yes** | **yes** | no |
 | `apps/server/src/log.ts` | Three events | **yes** (D-102) | no (D-102) | no |
-| `packages/contracts/src/home.ts` (new), `contract.ts`, `index.ts`, `openapi.json` | The route (Q1); `openapi.json` regenerated with `api:spec` | no (D-094) | **yes** | — |
+| `packages/contracts/src/home.ts` (new), `contract.ts`, `index.ts`, `openapi.json` | The route (D-110); `openapi.json` regenerated with `api:spec` | no (D-094) | **yes** | — |
 | `packages/contracts/src/home.test.ts` (new), `openapi.test.ts`, `index.test.ts` | L2 (test-author) | no | **yes** | — |
 | `packages/test-kit/src/` (the store, the behaviour suite, `fakePush`, `fakeLog`, their tests, `index.ts`) | Fakes (test-author) | **yes** (D-100) | **yes** | input (D-098) |
 | `scripts/lib/gate-decisions.mjs` | The `journeys` group gains `contact.system.test.ts` | **yes** | **yes** | input (D-098) |
@@ -1191,7 +1252,7 @@ which lists the same paths) and `.github/workflows/ai-review.yml` (the
 | `apps/server/src/contact.system.test.ts` (new) | L6 (test-author) | no | no | the `journeys` group's tests |
 | `apps/server/src/contact.integration.test.ts` (new); `adapters/journeys.integration.test.ts`, `deploy.integration.test.ts`, `alerts.integration.test.ts` | L3 (test-author) | no | no | — |
 | `apps/server/src/journeys.system.test.ts`, `alerts.system.test.ts`, `log.test.ts` | RG-03 changes and L2 (test-author) | no | no | groups' tests |
-| `docs/plan/decisions.md` | Three decisions (approach item 12; plan-keeper) | **yes** | no | — |
+| `docs/plan/decisions.md` | D-110 to D-112 (approach item 12), written with this spec on 2026-10-06 | **yes** | no | — |
 | `docs/requirements-status.md` | Regenerated | no | no | — |
 | `docs/progress.md`, `docs/progress/m2.md` | Status (plan-keeper) | no | no | — |
 
@@ -1214,7 +1275,7 @@ which lists the same paths) and `.github/workflows/ai-review.yml` (the
 
 ## Contract changes
 
-**Under Q1's recommended answer: one route, additive.**
+**One route, additive** (D-110).
 `packages/contracts/released/` is empty, so nothing on a phone can break, and
 nothing is added there: that is `release-engineer`'s alone. The shape can
 still change before the first app release (M3) at no compatibility cost.
@@ -1227,7 +1288,6 @@ still change before the first app release (M3) at no compatibility cost.
 - **Unchanged:** `/v1/health`, `POST /v1/journeys` and `POST /v1/heartbeats`.
   A heartbeat that brings a journey back is answered `RECORDED`, as any
   stored heartbeat is.
-- **Under Q1 (c):** no contract change at all.
 
 ## Risks and failure modes
 
@@ -1252,7 +1312,7 @@ still change before the first app release (M3) at no compatibility cost.
   whole, leaving the alert open (AC10, AC17). **Not covered, and stated:**
   the phone itself, in someone else's hands (next item).
 - **[F10](../plan/03-safety-reliability-security.md#failure-modes), someone
-  else taps "I'm home"** *(Q1)*. With this route, an "I'm home" from the
+  else taps "I'm home"** (D-110). With this route, an "I'm home" from the
   walker's unlocked phone, during an alert, ends the journey and tells the
   responders the walker is home. That is F10's case exactly: a known
   limitation of the MVP, documented, and now reachable on the server. It was
@@ -1287,18 +1347,18 @@ still change before the first app release (M3) at no compatibility cost.
   `NOT_CONFIGURED` (and no journey exists there before the canary). At scale
   they would also share each claim's 50 places with fresh alerts. "Left for
   later tasks" sends both to M3.
-- **A stand-down for a silence nobody heard of** *(Q2)*. In the five-minute
+- **A stand-down for a silence nobody heard of** (D-111). In the five-minute
   race, contact can come back before any lost-contact push went out; every
   responder then gets "back in contact" for an alert they never saw. It is a
-  non-critical notice, and the app shows what happened. Q2 (b) is the
-  alternative.
+  non-critical notice, and the app shows what happened. The owner accepted
+  this cost over standing down only those whose push was handed over.
 - **Adding enum values inside the migration's transaction** (approach item
   6). Recalled, not checked here: the L3 run on PostgreSQL 15 is the
   evidence (AC20). If PostgreSQL refused it, the deploy's pre-run hook would
   fail and the `deploy-staging` job would go red: loud, and the old version
   keeps running.
 - **A start racing an end** (`insertStarted`'s comment). Reachable from this
-  task under Q1: a walker's start that conflicts with their own journey as it
+  task now that a journey can end: a walker's start that conflicts with their own journey as it
   ends answers 500, and the app's retry then starts. Loud, nothing is lost,
   and no journey goes unwatched. Left for task 7, whose ends come from a
   responder or the worker rather than the walker's own phone, so a walker's
@@ -1322,8 +1382,8 @@ still change before the first app release (M3) at no compatibility cost.
   message keeps its own opaque ID. Whether a stand-down should replace the
   lost-contact notification on the phone (a shared collapse ID or a thread)
   is M3's adapter design, against D-087's per-message rule.
-- **D-101:** extended in reading to ending a journey *(Q1)*.
-- **D-103:** "I'm home" needs no event ID *(Q1)*; the heartbeat has one.
+- **D-101:** extended to ending a journey, by the owner's answer (D-110).
+- **D-103:** "I'm home" needs no event ID (D-110); the heartbeat has one.
 - **D-106:** no read route here.
 - **D-108:** the outbox stays our own table; retries unchanged; LOST-02's
   "stopping them when an alert resolves" is met by withdrawal.
@@ -1341,7 +1401,7 @@ still change before the first app release (M3) at no compatibility cost.
 - **The app's "I'm home" button, its offline queue, stopping the phone's
   sharing, and what the app does with a 409** (the I'm-home story, M3).
 - **Telling responders that an `ACTIVE` journey ended** (the start-and-end
-  story, M3) *(Q1)*.
+  story, M3; D-110).
 - **Telling the walker that their group was alerted, or stood down.** Not in
   any story.
 - **"I'm on it", escalation to SMS, "They're safe", the 24-hour rule and the
@@ -1377,7 +1437,7 @@ Each is named here so the task that owns it finds it. None blocks this task.
   - the start that races an end (`insertStarted`'s comment): retry the
     insert once, as the comment says.
 - **Task 8 (the canary):** end its journeys through the "I'm home" route
-  *(Q1)*, and go red if a stand-down is never delivered, as LOST-02 asked of
+  (D-110), and go red if a stand-down is never delivered, as LOST-02 asked of
   lost-contact messages.
 - **M3, the push adapter:** bound every send under `CLAIM_LEASE_MS` (the
   order of AC8 rests on it); decide when an undeliverable message is given
@@ -1398,8 +1458,8 @@ Each is named here so the task that owns it finds it. None blocks this task.
 - **A heartbeat moves a `LOST_CONTACT` journey back to `ACTIVE` and resolves
   the alert** (D-033, the state table).
 - **"I'm home" from `LOST_CONTACT` ends the journey (home), resolves the
-  alert, and tells responders "is home"** (SM-04). Whether the route is built
-  in this task is Q1.
+  alert, and tells responders "is home"** (SM-04). That the route is built in
+  this task is the owner's answer (D-110, below).
 - **The alert goes to `RESOLVED`, from `OPEN` or any later state** (D-033,
   the alert states).
 - **Contact is decided on the database's clock** (REL-01), at D-021's
@@ -1412,10 +1472,13 @@ Each is named here so the task that owns it finds it. None blocks this task.
 - **The state change and every message it causes in one transaction**
   (AR-05); **the watchdog lock-safe** (AR-06).
 
-## Questions for the owner
+## Answered by the owner (2026-10-06)
 
-Two questions. Everything else is settled by the plan or is Claude's to
-choose (D-031), and approach item 12 records those choices.
+Each was asked with Claude's recommendation and two or more options, and the
+owner chose the recommendation both times. The answers were relayed to this
+session by the coordinating session; they are recorded as D-110 and D-111.
+Claude's own technical choices in this spec are D-112 (delegated, D-031;
+approach item 12).
 
 ### Q1 — How does a queued "I'm home" reach the server in this task?
 
@@ -1450,9 +1513,12 @@ journey too.
 **Recommendation: (a).** It delivers what D-090 and the roadmap ask, at L6,
 with the smallest server surface that makes sense: a route that refused
 `ACTIVE` journeys would be nonsense to any caller. It leaves the end notice
-and everything on the phone to M3, where they are planned. Under (b) or (c),
-criteria AC14 to AC18 and parts of AC3, AC9, AC13 and AC20 change with the
-answer.
+and everything on the phone to M3, where they are planned.
+
+**Answer: (a)**, the recommendation. Build the server half of the "I'm home"
+route now, `POST /v1/journeys/{journeyId}/home`, as specified; from `ACTIVE`
+it tells nobody until M3. **D-110.** AC14 to AC18, and the "I'm home" parts
+of AC3, AC9, AC13 and AC20, prove it.
 
 ### Q2 — Once contact is back, what happens to lost-contact pushes that have not gone out, and who gets the stand-down?
 
@@ -1489,10 +1555,6 @@ is the owner's.
 - (b) avoids that notice, but leaves a gap that task 6's SMS would have to
   close again.
 
-Under (b), AC6 changes to "only those whose lost-contact push was handed
-over"; under (c), AC7 is dropped and AC8's hold covers every responder.
-
-## Answered by the owner
-
-None yet. Each answer is recorded as a decision (approach item 12), and this
-section quotes it.
+**Answer: (a)**, the recommendation. Withdraw every unsent lost-contact push
+for the alert, and send the stand-down to every responder. **D-111.** AC6
+and AC7 prove it, and AC14 holds it for "I'm home".

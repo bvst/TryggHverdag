@@ -3654,3 +3654,153 @@ any other path is work, not a candidate for the same treatment.
 - **Consequences:** the read-back line, not the absence of an error, is what
   shows the limits are in force. Reading it after the first deploy is the
   check (LOST-02-AC17).
+
+## D-110 — The server's "I'm home" route is built with back in contact (LOST-03)
+- **Date:** 2026-10-06 · **Status:** Accepted (owner, 2026-10-06). Asked with
+  Claude's recommendation, "build the server half of the 'I'm home' route
+  now"; relayed to the spec's session by the coordinating session. The
+  alternatives offered were "also tell responders when an ACTIVE journey
+  ends" and "only the heartbeat half now, SM-04 moves to M3" ·
+  **Section:** 5 and 10 (SM-04; D-090 item 4; D-011, D-101, D-103)
+- **Context:**
+  - D-090's item 4 is "LOST-03 — Back in contact; SM-04". The roadmap's "done
+    when" asks for "a heartbeat, or a queued 'I'm home', after an alert
+    resolves it and tells the responders, at L6", and L6 runs through the
+    real API.
+  - No route ends a journey: the contract holds health, start and heartbeat
+    (read 2026-10-06). The "I'm home" story itself, the app's button and its
+    queue, is M3's.
+  - SM-01's spec noted that task 8's canary will need a way to end its
+    journeys.
+- **Decision:**
+  - LOST-03 builds the server half of the "I'm home" route,
+    `POST /v1/journeys/{journeyId}/home`.
+  - It ends an `ACTIVE` or `LOST_CONTACT` journey: state `ENDED`, end reason
+    `HOME`, and the end time, the database's `now()`.
+  - From `LOST_CONTACT` it resolves the alert and tells every responder "is
+    home" (SM-04), as D-111 says. From `ACTIVE` it tells nobody until M3's
+    start-and-end notice.
+  - Only the device that started the journey may send it; another device of
+    the walker's gets 403. D-101's reasoning carries over: ending a journey
+    stops all protection, and the threat model protects "the ability to end
+    journeys and to silence alerts".
+  - It takes no event ID, by D-103's reading: a repeat finds the journey
+    ended, gets 409 `JOURNEY_ENDED`, and changes nothing.
+- **Consequences:**
+  - `journeys` gains `ended_at` and `end_reason` (an enum, `HOME` only for
+    now). The contract gains one additive route, and `openapi.json` is
+    regenerated. `released/` is empty, so nothing on a phone can break.
+  - Task 8's canary ends its journeys through this route.
+  - A walker's start that races their own journey's end can now answer 500
+    (`insertStarted`'s comment): loud, and left for task 7.
+  - F10, someone else tapping "I'm home" on an unlocked phone, is now
+    reachable on the server, during an alert too. It stays the MVP's
+    documented known limitation.
+  - LOST-03-AC14 to AC18 prove it. Supersedes nothing; D-090's order and the
+    roadmap are unchanged.
+
+## D-111 — When contact comes back, unsent lost-contact pushes are withdrawn and every responder is stood down (LOST-03)
+- **Date:** 2026-10-06 · **Status:** Accepted (owner, 2026-10-06). Asked with
+  Claude's recommendation, "never send them; stand down every responder";
+  relayed to the spec's session by the coordinating session. The
+  alternatives offered were "never send them; stand down only those whose
+  push was handed over at least once" and "send them anyway, then stand
+  everyone down" · **Section:** 3 and 5 (LOST-03, SM-04; AR-05; D-087,
+  D-108)
+- **Context:**
+  - When contact comes back seconds after an alert opened, some lost-contact
+    pushes may not have gone out yet: never tried, or failed and waiting to
+    retry. LOST-02's spec left "stopping them when an alert resolves" to this
+    task.
+  - Who may have heard of the loss cannot be known exactly. A push the
+    provider reported as failed may still have reached the phone, and once
+    SMS escalation exists (task 6), responders are told by SMS too.
+- **Decision:**
+  - In the transaction that resolves the alert, every lost-contact message
+    of that alert not yet accepted by the push port is withdrawn: it is never
+    handed to the port again. One already in the port's hands finishes, is
+    marked as the port answers, and is never retried.
+  - Every responder on the journey gets one stand-down, "back in contact" or
+    "is home", whether or not their own lost-contact push went out.
+- **Why:**
+  - A critical, break-through alert about a silence that is already over is
+    a false alarm, and false alarms teach responders to ignore the real one.
+  - A responder who heard of the loss and is never stood down may still be
+    calling 112 or out looking.
+- **Rejected:**
+  - Standing down only those whose push was handed over. It saves one
+    notice in a rare case, and leaves a gap that SMS escalation would have
+    to close again.
+  - Sending the unsent pushes anyway. That is the stale critical alert this
+    decision exists to prevent.
+- **Consequences:**
+  - In the five-minute race, a responder can get "back in contact" for an
+    alert they never saw: one non-critical notice, and the app (M3) shows
+    what happened.
+  - Task 6's SMS messages are withdrawn the same way when an alert
+    resolves.
+  - LOST-03-AC6 and AC7 prove it, and AC14 holds it for "I'm home".
+
+## D-112 — Back in contact: two new message kinds, the contact rule at the threshold, no overtaking, and the "I'm home" route's answers (LOST-03)
+- **Date:** 2026-10-06 · **Status:** Accepted (delegated, D-031) ·
+  **Section:** 5 (AR-04, AR-05, AR-06; D-021, D-033, D-086, D-087, D-108)
+- **Context:** LOST-03's spec (`docs/specs/LOST-03.md`) has the full
+  reasoning. This records the choices it makes within the owner's answers
+  (D-110, D-111) and the binding rules.
+- **Decision:**
+  - **Message kinds and resolutions** (D-108's "one list"):
+    - `MESSAGE_KINDS` becomes `LOST_CONTACT`, `BACK_IN_CONTACT` and `HOME`.
+      A stand-down's kind is its resolution's own name.
+    - Alerts gain a resolution (`BACK_IN_CONTACT` or `HOME`) and its time;
+      outbox messages gain `withdrawn_at`. All are database times.
+    - Neither new kind uses the critical level (D-087); M3's adapter maps
+      the level from the kind. Every push stays content-free (D-086): its
+      ID, its recipient and its kind.
+  - **The contact rule** (a `contact` event in the domain): a stored,
+    non-duplicate heartbeat from the journey's own device brings a
+    `LOST_CONTACT` journey back to `ACTIVE` only when, counted with it, the
+    journey's silence is under five minutes by the transaction's `now()`.
+    - It is the watchdog's rule asked the other way, at the same threshold
+      (D-021), so a journey moved back is never already overdue.
+    - A heartbeat received five minutes or more before it is stored, as from
+      an API process that froze, is stored and brings nothing back. The
+      five-minute race, a heartbeat received just before the open and stored
+      just after, resolves at once.
+  - **Resolving** is one helper, in the transaction that moved the journey
+    (AR-05): the journey's one unresolved alert, whatever its state, goes to
+    `RESOLVED`; unsent lost-contact messages are withdrawn (D-111); one
+    stand-down per responder row. Anything that fails rolls back all of it,
+    the heartbeat included, and the phone resends.
+  - **No overtaking at the push port.** A responder's stand-down is due at
+    once, unless their lost-contact message was handed to the port and not
+    yet accepted. Then it waits until that message's lease ends or its retry
+    is due: at most 60 s. The claim never hands out a withdrawn message.
+    Past the port, APNs and FCM promise no order, so the app (M3) shows the
+    alert's current state.
+  - **The "I'm home" route's answers:** 200 `ENDED`; 409 `JOURNEY_ENDED` for
+    any ended journey, whatever ended it, a repeat included; 403, 404 and the
+    fixed 400 as for heartbeats. A 200 and a 409 both mean the journey is
+    over.
+  - **The lock order:** the journey's row first, always. The API's 5 s lock
+    limit bounds every wait the new paths add.
+  - **Two states the code never makes are met in the safe direction:** a
+    `LOST_CONTACT` journey with no unresolved alert, or with no responder
+    left, still moves back on fresh contact, with one `alert_missing` line
+    for the first. Refusing would leave it unwatched, because the watchdog
+    never sweeps a `LOST_CONTACT` journey.
+  - **No database check ties a state to its time** (`RESOLVED` to
+    `resolved_at`, `ENDED` to `ended_at`): rows already put in directly
+    would make the migration refuse. Each time and its reason are checked
+    as a pair.
+  - **Mutation:** the `journeys` group also runs `contact.system.test.ts`.
+- **Consequences:**
+  - `log.ts` gains three closed events: `home_ignored`, `home_failed` and
+    `alert_missing` (owner-approved, D-102).
+  - Migration `0004` adds enum values inside the migration's transaction, and
+    must not use them there.
+  - Existing tests that pinned "stays `LOST_CONTACT`", the exact column
+    lists, the route list, or "no migration 0004" change by design. Their
+    reasons are in the spec's RG-03 list.
+  - Left for later: when an undeliverable stand-down is given up, and
+    whether the claim takes alerts before stand-downs (M3); who is stood down
+    once responders can change during a journey.
