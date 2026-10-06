@@ -16,6 +16,14 @@
  *     (D-104, BUG-15).
  * Each is ignored by its ID in the root package.json.
  *
+ * BUG-23 is the other kind: a high advisory with a patched version, which is
+ * fixed, not ignored. GHSA-68fv-2mgg-jv7q (`source-map-js` before 1.2.2, an
+ * event-loop denial of service through indexed source-map section offsets)
+ * failed the audit on `main` and every pull request: the lockfile held 1.2.1,
+ * through `@vitest/coverage-v8 > magicast` and through `postcss`, both
+ * declaring `^1.2.1`. The root package.json overrides it to 1.2.2. Ignoring it
+ * instead fails BUG-15's pin of exactly two ignored advisories.
+ *
  * An ignore list is a quiet way to stop a gate from seeing anything, so these
  * tests read files instead of running the audit: a `pnpm audit` run reads the
  * registry's advisory data, which changes whenever an advisory is published, and
@@ -67,7 +75,15 @@
  *     path, not only on a production one. The premise above cannot see this:
  *     `braces`' only dependent is `micromatch`, which almost every glob
  *     library goes through, so the server depending on `micromatch`, or on
- *     `jest-message-util`, which reaches it, left every other test here green.
+ *     `jest-message-util`, which reaches it, left every other test here green;
+ *   - BUG-23's fix, read from pnpm-lock.yaml: every `source-map-js` the
+ *     lockfile resolves, by a `packages` or a `snapshots` key, is 1.2.2 or
+ *     later. A version below it fails, named, 1.2.2's own pre-releases
+ *     included; so does one that is not plain semver (a git or tarball
+ *     source), which cannot be compared and so cannot be called fixed. The
+ *     lockfile's `overrides` section, where the fix writes
+ *     `source-map-js@<1.2.2`, holds a range, not a resolved version, and is
+ *     not read.
  *
  * Not pinned:
  *   - the audit's result;
@@ -92,7 +108,12 @@
  *   - copies of `braces` bundled inside other packages, which neither the
  *     lockfile nor the audit can see: those in Vite's bundled chokidar, tsx,
  *     prettier and `resolve-workspace-root`. All are tooling; the server runs
- *     under Node's type stripping, not tsx.
+ *     under Node's type stripping, not tsx;
+ *   - how BUG-23's fix reaches the lockfile: the root package.json's override
+ *     is not read, only what the lockfile resolves. `source-map-js` leaving the
+ *     lockfile passes, because nothing then resolves below 1.2.2;
+ *   - `source-map-js` in the spike's lockfile, which holds 1.2.1 and which the
+ *     audit does not read (D-093 names it as not covered).
  *
  * What pnpm does with these settings was read in pnpm 10.33.0's own bundle
  * (dist/pnpm.cjs), not assumed:
@@ -975,6 +996,125 @@ snapshots:
 const D104_REACH_CHANGED =
   'D-104\'s "Only apps/mobile reaches braces" no longer holds: decide again, or remove the ignore';
 
+// --- What fixes source-map-js ------------------------------------------------
+
+/** The advisory BUG-23 fixes: source-map-js's, before 1.2.2. */
+const SOURCE_MAP_ADVISORY = 'GHSA-68fv-2mgg-jv7q';
+
+/** The first source-map-js GHSA-68fv-2mgg-jv7q does not cover: 1.2.2, as [major, minor, patch]. */
+const SOURCE_MAP_FIXED = [1, 2, 2];
+
+/**
+ * Where a source-map-js version stands against 1.2.2, the one that fixes
+ * GHSA-68fv-2mgg-jv7q: 'below' (1.2.2's own pre-releases included, as semver
+ * orders them), 'fixed', or 'unplaced' when it is not plain semver (a git or
+ * tarball source) and cannot be compared.
+ */
+function againstSourceMapFix(version) {
+  const parts = /^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.exec(version);
+  if (parts === null) return 'unplaced';
+  const numbers = parts.slice(1, 4).map(Number);
+  const first = numbers.findIndex((n, i) => n !== SOURCE_MAP_FIXED[i]);
+  if (first !== -1) return numbers[first] < SOURCE_MAP_FIXED[first] ? 'below' : 'fixed';
+  return parts[4] === undefined ? 'fixed' : 'below';
+}
+
+/**
+ * How the lockfile falls short of BUG-23's fix; empty when every source-map-js
+ * it resolves, by a `packages` or a `snapshots` key, is 1.2.2 or later. A
+ * version that cannot be placed counts against it: one this check cannot
+ * compare is one it cannot call fixed.
+ */
+function sourceMapUnfixed(lock) {
+  const fixed = SOURCE_MAP_FIXED.join('.');
+  const versions = lockedVersions(lock, 'source-map-js');
+  const below = versions.filter((v) => againstSourceMapFix(v) === 'below');
+  const unplaced = versions.filter((v) => againstSourceMapFix(v) === 'unplaced');
+  const unfixed = [];
+  if (below.length > 0) {
+    unfixed.push(
+      `source-map-js ${below.join(', ')} is locked, below ${fixed}, the version that fixes ${SOURCE_MAP_ADVISORY}`,
+    );
+  }
+  if (unplaced.length > 0) {
+    unfixed.push(
+      `source-map-js ${unplaced.join(', ')} is locked, a version that cannot be compared with ${fixed}`,
+    );
+  }
+  return unfixed;
+}
+
+/**
+ * A synthetic lockfile in v9's form, as BUG-23's fix leaves it: the override in
+ * the form pnpm 10.33.0 writes it (read from a scratch install, 2026-10-06),
+ * and source-map-js 1.2.2 through both of today's paths, magicast under the
+ * coverage tool and postcss, reached here from vitest.
+ */
+const SOURCE_MAP_SAMPLE_LOCK = `lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+overrides:
+  source-map-js@<1.2.2: 1.2.2
+
+importers:
+
+  .:
+    devDependencies:
+      '@vitest/coverage-v8':
+        specifier: ^5.0.1
+        version: 5.0.1(vitest@5.0.1)
+      vitest:
+        specifier: ^5.0.1
+        version: 5.0.1
+
+packages:
+
+  '@vitest/coverage-v8@5.0.1':
+    resolution: {integrity: sha512-synthetic}
+    peerDependencies:
+      vitest: 5.0.1
+
+  magicast@0.5.5:
+    resolution: {integrity: sha512-synthetic}
+
+  postcss@8.5.28:
+    resolution: {integrity: sha512-synthetic}
+
+  source-map-js@1.2.2:
+    resolution: {integrity: sha512-synthetic}
+    engines: {node: '>=0.10.0'}
+
+  vitest@5.0.1:
+    resolution: {integrity: sha512-synthetic}
+
+snapshots:
+
+  '@vitest/coverage-v8@5.0.1(vitest@5.0.1)':
+    dependencies:
+      magicast: 0.5.5
+      vitest: 5.0.1
+
+  magicast@0.5.5:
+    dependencies:
+      source-map-js: 1.2.2
+
+  postcss@8.5.28:
+    dependencies:
+      source-map-js: 1.2.2
+
+  source-map-js@1.2.2: {}
+
+  vitest@5.0.1:
+    dependencies:
+      postcss: 8.5.28
+`;
+
+const SOURCE_MAP_UNFIXED =
+  'the lockfile resolves a source-map-js below 1.2.2: GHSA-68fv-2mgg-jv7q fails the audit on every pull request';
+
 describe('the dependency audit ignores what the owner accepted, and nothing else', () => {
   test('BUG-11: GHSA-86w9-cpqp-85rv is ignored by the dependency audit', () => {
     expect(
@@ -1676,5 +1816,102 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
     expect(whyNotAccepted(synthetic, 'GHSA-jjjj-mmmm-pppp')).toBe(
       'GHSA-jjjj-mmmm-pppp: no decision names it',
     );
+  });
+});
+
+describe('the dependency audit passes on a patched version where there is one, not on an ignore', () => {
+  test('BUG-23: the lockfile holds no source-map-js below 1.2.2, the version that fixes GHSA-68fv-2mgg-jv7q', () => {
+    const lock = readLockfile(read('pnpm-lock.yaml'));
+
+    expect(
+      lock.lockfileVersion,
+      'pnpm-lock.yaml is not lockfile v9, the form this reader knows',
+    ).toMatch(/^9\./);
+    // The reader found keys in both sections, so "none below 1.2.2" is read,
+    // not assumed: vitest, the runner of this very file, is locked in each.
+    expect(
+      lock.packages.filter((key) => packageName(key) === 'vitest'),
+      'the lockfile reader found no vitest among the packages keys',
+    ).not.toEqual([]);
+    expect(
+      [...lock.snapshots.keys()].filter((key) => packageName(key) === 'vitest'),
+      'the lockfile reader found no vitest among the snapshots keys',
+    ).not.toEqual([]);
+    expect(sourceMapUnfixed(lock), SOURCE_MAP_UNFIXED).toEqual([]);
+  });
+
+  test('BUG-23: the source-map-js check fails on a lockfile holding 1.2.1, in either section, and passes on one holding only 1.2.2', () => {
+    // The fixed form passes, and the override's `source-map-js@<1.2.2` is not
+    // read as a version.
+    const sample = readLockfile(SOURCE_MAP_SAMPLE_LOCK);
+    expect(sample.lockfileVersion).toBe('9.0');
+    expect(lockedVersions(sample, 'source-map-js')).toEqual(['1.2.2']);
+    expect(sourceMapUnfixed(sample)).toEqual([]);
+
+    // Today's lockfile: 1.2.1 on both paths, and no override.
+    const unfixed = edited(
+      SOURCE_MAP_SAMPLE_LOCK,
+      ['overrides:\n  source-map-js@<1.2.2: 1.2.2\n\n', ''],
+      ['source-map-js@1.2.2', 'source-map-js@1.2.1'],
+      ['source-map-js: 1.2.2', 'source-map-js: 1.2.1'],
+    );
+    expect(sourceMapUnfixed(readLockfile(unfixed))).toEqual([
+      'source-map-js 1.2.1 is locked, below 1.2.2, the version that fixes GHSA-68fv-2mgg-jv7q',
+    ]);
+
+    // 1.2.1 beside 1.2.2: one path fixed, magicast's not. Every locked
+    // source-map-js must be fixed, not just one.
+    const beside = edited(
+      SOURCE_MAP_SAMPLE_LOCK,
+      [
+        '  magicast@0.5.5:\n    dependencies:\n      source-map-js: 1.2.2\n',
+        '  magicast@0.5.5:\n    dependencies:\n      source-map-js: 1.2.1\n',
+      ],
+      [
+        '  source-map-js@1.2.2:\n    resolution:',
+        "  source-map-js@1.2.1:\n    resolution: {integrity: sha512-synthetic}\n    engines: {node: '>=0.10.0'}\n\n  source-map-js@1.2.2:\n    resolution:",
+      ],
+      ['  source-map-js@1.2.2: {}\n', '  source-map-js@1.2.1: {}\n\n  source-map-js@1.2.2: {}\n'],
+    );
+    expect(lockedVersions(readLockfile(beside), 'source-map-js')).toEqual(['1.2.1', '1.2.2']);
+    expect(sourceMapUnfixed(readLockfile(beside))).toEqual([
+      'source-map-js 1.2.1 is locked, below 1.2.2, the version that fixes GHSA-68fv-2mgg-jv7q',
+    ]);
+
+    // Each section is read on its own: 1.2.1 in only the packages keys, or
+    // only the snapshots keys, still fails.
+    const inPackages = edited(SOURCE_MAP_SAMPLE_LOCK, [
+      '  source-map-js@1.2.2:\n    resolution:',
+      '  source-map-js@1.2.1:\n    resolution:',
+    ]);
+    const inSnapshots = edited(SOURCE_MAP_SAMPLE_LOCK, [
+      '  source-map-js@1.2.2: {}\n',
+      '  source-map-js@1.2.1: {}\n',
+    ]);
+    for (const text of [inPackages, inSnapshots]) {
+      expect(sourceMapUnfixed(readLockfile(text))).toEqual([
+        'source-map-js 1.2.1 is locked, below 1.2.2, the version that fixes GHSA-68fv-2mgg-jv7q',
+      ]);
+    }
+
+    // A source that is not plain semver cannot be called fixed.
+    const tarball = edited(SOURCE_MAP_SAMPLE_LOCK, [
+      '  source-map-js@1.2.2: {}\n',
+      '  source-map-js@1.2.2: {}\n\n  source-map-js@https://example.invalid/source-map-js-1.2.2.tgz: {}\n',
+    ]);
+    expect(sourceMapUnfixed(readLockfile(tarball))).toEqual([
+      'source-map-js https://example.invalid/source-map-js-1.2.2.tgz is locked, a version that cannot be compared with 1.2.2',
+    ]);
+
+    // Where the line falls: below 1.2.2, its pre-releases included; at or above it.
+    const below = ['0.6.2', '1.0.0', '1.2.0', '1.2.1', '1.2.1+build.7', '1.2.2-beta.0'];
+    const fixed = ['1.2.2', '1.2.2+build.7', '1.2.3', '1.2.10', '1.3.0', '1.10.0', '2.0.0'];
+    expect(below.map(againstSourceMapFix)).toEqual(below.map(() => 'below'));
+    expect(fixed.map(againstSourceMapFix)).toEqual(fixed.map(() => 'fixed'));
+    expect(['github:synthetic/source-map-js', '1.2', ''].map(againstSourceMapFix)).toEqual([
+      'unplaced',
+      'unplaced',
+      'unplaced',
+    ]);
   });
 });
