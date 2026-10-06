@@ -10,3 +10,4 @@
 - [Mutation gate since D-098](project_mutation_gate_d098.md) — per-run JSON report, only kills count; Stryker 10 exits 0 on zero mutants; pg wire facts for fake-postgres; audit kills by FAIL file; trigger gaps
 - [LOST-01 library facts](project_lost01_library_facts.md) — pino `{,` and below-threshold noop; Drizzle errors carry SQLSTATE on `cause`; oRPC encodeError is the one body; ports.ts (LogEvent) unowned
 - [Advisory checks from a session](reference_advisory_checks_from_session.md) — npm bulk advisory endpoint works; `pnpm why --prod` in apps/mobile includes jest and Metro; check what an allowlist pin compares
+- [pnpm overrides review](project_pnpm_overrides_review.md) — pnpm 10 override selector = semver.intersects + replace (exact targets freeze); query advisory ranges; reproduce lockfile/red-first in scratch; half-generalised helpers
