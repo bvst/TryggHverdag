@@ -310,6 +310,9 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       // Joined in review loop 1 (the spec's items 9a and 1b).
       'LOST-03-AC8: a responder whose lost-contact message failed and whose retry time had already passed when contact came back is not held: their stand-down is due at the alert’s resolved_at',
       'LOST-03-AC8: an open withdraws the journey’s earlier alerts’ unsent stand-downs at the store’s now, and leaves alone those already sent, every other journey’s messages and its own new ones; an open that skips withdraws nothing',
+      // Joined in review loop 2 (the spec's items 14b and 17a).
+      'LOST-03-AC8: an open withdraws the unsent stand-downs of the walker’s earlier journeys, and leaves another walker’s alone',
+      'LOST-03-AC8: an open leaves an earlier alert’s unsent LOST_CONTACT message alone',
       'LOST-03-AC12: a heartbeat a LOST_CONTACT journey already has, sent again later, is a duplicate and changes nothing; and 10 different fresh heartbeats at once, 5 times over, are each stored, exactly one bringing the journey back and every other recorded, with one resolution and one stand-down per responder; the one that brought it back, sent again, is a duplicate and writes nothing',
       'LOST-03-AC14: "I’m home" (recordHome) on a LOST_CONTACT journey ends it in one step: ENDED, end reason HOME at the store’s now; its alert RESOLVED at that now, resolution HOME; each unsent lost-contact message withdrawn, a stand-down held for one in the port’s hands; one HOME message per responder; the answer says it came from LOST_CONTACT and names the alert and the messages. Afterwards a heartbeat is answered ended and stores nothing, the overdue read never returns it, and the walker can start again (SM-04)',
       'LOST-03-AC15: "I’m home" (recordHome) on an ACTIVE journey ends it, end reason HOME at the store’s now, from ACTIVE, and touches no alert and writes no message — with no alert, and with only resolved ones; the overdue read and the open then never take it, and the walker can start again (SM-04)',
@@ -318,6 +321,8 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       'LOST-03-AC16: "I’m home" (recordHome) on a journey already ENDED — by an earlier "I’m home", or set directly — is answered already_ended and changes nothing: its end, its alerts and its messages stay as they were; for a journey that does not exist the store rejects (SM-04, SM-07, SM-08)',
       // Joined in review loop 1 (the spec's item 2a).
       'LOST-03-AC16: recordHome decides by the home rule under the lock: a walker or a device that is not the journey’s makes it reject and write nothing; an ENDED journey answers already_ended and writes nothing; an ACTIVE one is ended without resolving anything; a LOST_CONTACT one is ended and its alert resolved with resolution HOME',
+      // Joined in review loop 2 (the spec's item 15a).
+      'LOST-03-AC16: recordHome with the walker’s or the device’s ID in another case than the stored one is refused by the rule under the lock, and changes nothing',
     ]);
     expect(RACERS).toBeGreaterThanOrEqual(10);
     expect(RACE_ROUNDS).toBeGreaterThanOrEqual(5);
@@ -1612,9 +1617,19 @@ describe('fakeJourneyStore: review loop 1 of back in contact and "I’m home" (L
     expect(store.outbox()).toEqual(outbox);
   });
 
-  test('a refusal of the home rule under the lock rejects naming the rule’s reason, with the walker’s ID in any case read as the stored one', async () => {
+  // RG-03 (LOST-03 review loop 2, the spec's item 15 and its RG-03 list):
+  // this was "…, with the walker’s ID in any case read as the stored one",
+  // and ended with the walker's and the device's IDs in upper case answered
+  // home. The fake compared them lower-cased, where the adapter hands them to
+  // the domain's rule, which compares them exactly and refuses: the fake was
+  // more lenient than the adapter (D-100). It now compares them exactly, and
+  // the case is in the shared suite too (15a), so both stores answer it. The
+  // journey's own ID still names it in any case, as a uuid column does.
+  test('a refusal of the home rule under the lock rejects naming the rule’s reason; the walker’s and the device’s IDs are compared exactly, as the rule compares them, so either in another case than the stored one is refused, while the journey’s ID names it in any case', async () => {
     const { store, journeyId, walkerId, deviceId } = await lostStore(1);
     const stranger = store.addUser();
+    expect(walkerId.toUpperCase()).not.toBe(walkerId);
+    expect(deviceId.toUpperCase()).not.toBe(deviceId);
 
     await expect(
       store.recordHome({ journeyId, walkerId: stranger, deviceId: store.addDevice(stranger) }),
@@ -1622,14 +1637,17 @@ describe('fakeJourneyStore: review loop 1 of back in contact and "I’m home" (L
     await expect(
       store.recordHome({ journeyId, walkerId, deviceId: store.addDevice(walkerId) }),
     ).rejects.toThrow(/NOT_THE_JOURNEYS_DEVICE/);
+    await expect(
+      store.recordHome({ journeyId, walkerId: walkerId.toUpperCase(), deviceId }),
+    ).rejects.toThrow(/JOURNEY_NOT_FOUND/);
+    await expect(
+      store.recordHome({ journeyId, walkerId, deviceId: deviceId.toUpperCase() }),
+    ).rejects.toThrow(/NOT_THE_JOURNEYS_DEVICE/);
     expect(store.endOf(journeyId)).toEqual({ endedAt: null, endReason: null });
 
-    const upper = {
-      journeyId: journeyId.toUpperCase(),
-      walkerId: walkerId.toUpperCase(),
-      deviceId: deviceId.toUpperCase(),
-    };
-    expect((await store.recordHome(upper)).outcome).toBe('home');
+    expect(
+      (await store.recordHome({ journeyId: journeyId.toUpperCase(), walkerId, deviceId })).outcome,
+    ).toBe('home');
   });
 
   test('an open that fails, its journey having no responder rows, withdraws no earlier stand-down: the withdrawal is part of the open, all or nothing', async () => {
@@ -1650,7 +1668,10 @@ describe('fakeJourneyStore: review loop 1 of back in contact and "I’m home" (L
     expect(store.journeys()[0]?.state).toBe('ACTIVE');
   });
 
-  test('an open withdraws only the journey’s earlier stand-downs: an unsent lost-contact message of an earlier alert, which the code never leaves, is left as it is', async () => {
+  // Review loop 2: renamed only. It said "only the journey’s earlier
+  // stand-downs"; an open now withdraws the walker's (item 14), and what this
+  // holds, that lost-contact messages are left alone, is unchanged.
+  test('an open withdraws only stand-downs: an unsent lost-contact message of an earlier alert, which the code never leaves, is left as it is', async () => {
     const { store, journeyId, responderIds } = watchedStore({ silentForMs: FIVE_MINUTES });
     const earlier = store.seedAlert({
       journeyId,

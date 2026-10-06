@@ -896,6 +896,82 @@ describe('LOST-03 and LOST-02: no overtaking across alerts — a new alert withd
         .filter(({ alertId, kind }) => alertId === a1?.id && kind === 'BACK_IN_CONTACT'),
     ).toEqual([]);
   });
+
+  // Review loop 2 (the spec's item 14a; D-112 amended again): the scenario
+  // safety-reviewer reproduced across a walker's journeys. J1, ended by
+  // "I'm home" while the push failed, holds unsent HOME messages to the same
+  // responders, retried for ever; J2's open withdraws them, so J1's "home"
+  // can never follow J2's lost-contact push. SM-04's HOME, and LOST-02's open.
+  test('LOST-03-AC8: with a failing push, J1’s alert opens and "I’m home" ends J1; the same walker starts J2 with the same responders, J2 goes silent until its alert opens, and then the push recovers: the port never accepts J1’s HOME after J2’s LOST_CONTACT', async () => {
+    const w = world();
+    const walker = w.walker();
+    const responders = [w.user(), w.user()];
+    const j1 = await w.start(walker, responders);
+    await w.heartbeat(walker, j1);
+    for (const responder of responders) {
+      w.push.failFor(responder, 'UNAVAILABLE');
+    }
+
+    // J1's alert opens at five minutes; its lost-contact pushes fail.
+    await w.runUntil(new Date(START.getTime() + FIVE_MINUTES));
+    const [a1] = w.alertsOf(j1);
+    expect(a1?.state).toBe('OPEN');
+    // A minute later the walker is home: J1 ended, its alert resolved HOME,
+    // one HOME message per responder, and every push still failing.
+    await w.runUntil(new Date(START.getTime() + FIVE_MINUTES + MINUTE));
+    const ended = await w.home(walker, j1);
+    expect({ status: ended.status, body: ended.body }).toEqual({ status: 200, body: ENDED });
+    // The same walker starts J2 with the same responders, and it goes silent
+    // until its alert opens.
+    const j2 = await w.start(walker, responders);
+    await w.heartbeat(walker, j2);
+    const startedAt = await w.clock.now();
+    await w.runUntil(new Date(startedAt.getTime() + FIVE_MINUTES));
+    expect(w.stateOf(j2)).toBe('LOST_CONTACT');
+    const [a2] = w.alertsOf(j2);
+    expect(a2?.state).toBe('OPEN');
+
+    // The push recovers, and the loops run on.
+    w.push.recover();
+    await w.runUntil(new Date(startedAt.getTime() + FIVE_MINUTES + 5 * MINUTE));
+
+    const alertOf = new Map(w.store.outbox().map(({ messageId, alertId }) => [messageId, alertId]));
+    const labelled = (
+      messages: readonly { messageId: string; recipientId: string; kind: string }[],
+    ) =>
+      messages.map(({ messageId, recipientId, kind }) => ({
+        alertId: alertOf.get(messageId),
+        recipientId,
+        kind,
+      }));
+    const accepted = labelled(w.push.accepted);
+    for (const responder of responders) {
+      const theirs = accepted.filter(({ recipientId }) => recipientId === responder);
+      const j2Lost = theirs.findIndex(
+        ({ alertId, kind }) => alertId === a2?.id && kind === 'LOST_CONTACT',
+      );
+      expect(j2Lost, `${responder}: J2’s LOST_CONTACT was accepted`).toBeGreaterThanOrEqual(0);
+      expect(
+        theirs.slice(j2Lost).filter(({ alertId, kind }) => alertId === a1?.id && kind === 'HOME'),
+        `${responder}: J1’s HOME after J2’s LOST_CONTACT`,
+      ).toEqual([]);
+    }
+    // Because J2's open withdrew J1's HOME messages, at its own now, and none
+    // was handed to the port again once J2's alert had opened.
+    const j1Homes = w
+      .messagesOf(j1)
+      .filter(({ alertId, kind }) => alertId === a1?.id && kind === 'HOME');
+    expect(recipientsOf(j1Homes)).toEqual([...responders].sort());
+    for (const message of j1Homes) {
+      expect(message).toMatchObject({ sentAt: null, withdrawnAt: a2?.openedAt });
+    }
+    const handed = labelled(w.push.messages);
+    const firstOfJ2 = handed.findIndex(({ alertId }) => alertId === a2?.id);
+    expect(firstOfJ2).toBeGreaterThanOrEqual(0);
+    expect(
+      handed.slice(firstOfJ2).filter(({ alertId, kind }) => alertId === a1?.id && kind === 'HOME'),
+    ).toEqual([]);
+  });
 });
 
 describe('LOST-03 and SM-04: every message is content-free, with an opaque ID of its own (D-086, D-087)', () => {

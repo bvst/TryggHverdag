@@ -86,10 +86,12 @@
  *     stands. A second stand-down of a kind for (alert, recipient) is refused,
  *     as the unique index refuses it, and nothing of the step is kept;
  *   - an open also withdraws, at its now, every unsent and not yet withdrawn
- *     message of the journey's earlier alerts whose kind is not LOST_CONTACT
- *     (their stand-downs), in the same step as the new alert: so an earlier
- *     alert's "back in contact" never reaches the port after the new alert's
- *     lost-contact push (review loop 1, approach item 4, step 5);
+ *     message whose kind is not LOST_CONTACT (a stand-down) of every alert
+ *     of the walker's journeys, this one's earlier alerts and the walker's
+ *     earlier journeys' alike, in the same step as the new alert: so an
+ *     earlier "back in contact" or "home" never reaches the port after the
+ *     new alert's lost-contact push. Another walker's are left alone
+ *     (approach item 4, step 5; review loops 1 and 2);
  *   - a fake given no clock throws when asked whether contact is back, or to
  *     end a journey, as it throws when asked about silence.
  *
@@ -1091,7 +1093,10 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
               'one that was read and is gone is an error, not a guess',
           );
         }
-        if (journey.walkerId !== asStored(walkerId)) {
+        // Compared exactly, as the domain's rule compares them (review loop
+        // 2, D-100): an ID in another case than the stored one is not the
+        // journey's walker or device, and is refused here as at the adapter.
+        if (journey.walkerId !== walkerId) {
           throw new Error(
             'fakeJourneyStore.recordHome: the home rule refused under the lock ' +
               '(JOURNEY_NOT_FOUND: not the walker’s journey); nothing is written',
@@ -1100,7 +1105,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         if (journey.state === 'ENDED') {
           return { outcome: 'already_ended' };
         }
-        if (journey.deviceId !== asStored(deviceId)) {
+        if (journey.deviceId !== deviceId) {
           throw new Error(
             'fakeJourneyStore.recordHome: the home rule refused under the lock ' +
               '(NOT_THE_JOURNEYS_DEVICE); nothing is written',
@@ -1236,14 +1241,19 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
           lastFailure: null,
           withdrawnAt: null,
         }));
-        // Review loop 1 (approach item 4, step 5): the journey's earlier
-        // alerts' stand-downs not yet sent nor withdrawn are withdrawn at this
-        // now, in this same step, before the new alert's messages: an
-        // earlier "back in contact" must never reach the port after this
-        // alert's lost-contact push. Their lost-contact messages were
-        // withdrawn when those alerts resolved.
+        // Review loops 1 and 2 (approach item 4, step 5): the stand-downs not
+        // yet sent nor withdrawn of every alert of the walker's journeys,
+        // this journey's and the walker's earlier ones, are withdrawn at this
+        // now, in this same step, before the new alert's messages: an earlier
+        // "back in contact" or "home" must never reach the port after this
+        // alert's lost-contact push. Another walker's are left alone. The
+        // lost-contact messages are left alone too: those of an alert that
+        // resolved were withdrawn then.
+        const walkersJourneyIds = new Set(
+          stored.filter((kept) => kept.walkerId === journey.walkerId).map(({ id }) => id),
+        );
         const earlierAlertIds = new Set(
-          alerts.filter((alert) => alert.journeyId === journey.id).map(({ id }) => id),
+          alerts.filter((alert) => walkersJourneyIds.has(alert.journeyId)).map(({ id }) => id),
         );
         for (const message of outbox) {
           if (

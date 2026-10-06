@@ -1598,6 +1598,10 @@ does instead.
 - **Review loop 2:** the fake's own test "… with the walker's ID in any case
   read as the stored one" is reversed: the fake now compares as the domain
   does (item 15), and the case moves into the shared suite (15a).
+- **Review loop 2:** the fake's own test "an open withdraws only the
+  journey's earlier stand-downs" is renamed "an open withdraws only
+  stand-downs: …", since the withdrawal now reaches the walker's other
+  journeys (item 14). Its assertions are unchanged.
 
 **Read and found unchanged** (2026-10-06), so nobody has to wonder:
 - `domain/journey.test.ts`, "LOST-01-AC8: a journey in LOST_CONTACT takes the
