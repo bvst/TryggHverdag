@@ -24,6 +24,12 @@
  * declaring `^1.2.1`. The root package.json overrides it to 1.2.2. Ignoring it
  * instead fails BUG-15's pin of exactly two ignored advisories.
  *
+ * BUG-24 is the same kind, the same day: GHSA-pqg4-j6r4-53mv (critical:
+ * command injection through `quote()` in `shell-quote` from 1.8.4 and before
+ * 1.11.0). The lockfile held 1.10.0, through
+ * `apps/mobile > react-native > react-devtools-core`, which declares `^1.6.1`.
+ * The root package.json overrides it to 1.11.0.
+ *
  * An ignore list is a quiet way to stop a gate from seeing anything, so these
  * tests read files instead of running the audit: a `pnpm audit` run reads the
  * registry's advisory data, which changes whenever an advisory is published, and
@@ -83,7 +89,10 @@
  *     source), which cannot be compared and so cannot be called fixed. The
  *     lockfile's `overrides` section, where the fix writes
  *     `source-map-js@<1.2.2`, holds a range, not a resolved version, and is
- *     not read.
+ *     not read;
+ *   - BUG-24's fix, read the same way: every `shell-quote` the lockfile
+ *     resolves is 1.11.0 or later. Anything below 1.11.0 fails, not only the
+ *     advisory's 1.8.4 onward, as the override's `shell-quote@<1.11.0` does.
  *
  * Not pinned:
  *   - the audit's result;
@@ -109,11 +118,13 @@
  *     lockfile nor the audit can see: those in Vite's bundled chokidar, tsx,
  *     prettier and `resolve-workspace-root`. All are tooling; the server runs
  *     under Node's type stripping, not tsx;
- *   - how BUG-23's fix reaches the lockfile: the root package.json's override
- *     is not read, only what the lockfile resolves. `source-map-js` leaving the
- *     lockfile passes, because nothing then resolves below 1.2.2;
- *   - `source-map-js` in the spike's lockfile, which holds 1.2.1 and which the
- *     audit does not read (D-093 names it as not covered).
+ *   - how BUG-23's and BUG-24's fixes reach the lockfile: the root
+ *     package.json's overrides are not read, only what the lockfile resolves.
+ *     `source-map-js` or `shell-quote` leaving the lockfile passes, because
+ *     nothing then resolves below the fix;
+ *   - `source-map-js` and `shell-quote` in the spike's lockfile, which holds
+ *     1.2.1 and 1.10.0 and which the audit does not read (D-093 names it as
+ *     not covered).
  *
  * What pnpm does with these settings was read in pnpm 10.33.0's own bundle
  * (dist/pnpm.cjs), not assumed:
@@ -996,6 +1007,49 @@ snapshots:
 const D104_REACH_CHANGED =
   'D-104\'s "Only apps/mobile reaches braces" no longer holds: decide again, or remove the ignore';
 
+// --- What fixes an advisory with a patched version --------------------------
+
+/**
+ * Where a version stands against `fixedAt`, the first version that fixes an
+ * advisory, as [major, minor, patch]: 'below' (`fixedAt`'s own pre-releases
+ * included, as semver orders them), 'fixed', or 'unplaced' when it is not
+ * plain semver (a git or tarball source) and cannot be compared. Each part is
+ * compared as a number, so 1.10.0 is below 1.11.0 and 1.9.9 is too.
+ */
+function againstFix(version, fixedAt) {
+  const parts = /^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.exec(version);
+  if (parts === null) return 'unplaced';
+  const numbers = parts.slice(1, 4).map(Number);
+  const first = numbers.findIndex((n, i) => n !== fixedAt[i]);
+  if (first !== -1) return numbers[first] < fixedAt[first] ? 'below' : 'fixed';
+  return parts[4] === undefined ? 'fixed' : 'below';
+}
+
+/**
+ * How the lockfile falls short of a fix (`{ name, fixedAt, advisory }`); empty
+ * when every version of `name` it resolves, by a `packages` or a `snapshots`
+ * key, is `fixedAt` or later. A version that cannot be placed counts against
+ * it: one this check cannot compare is one it cannot call fixed.
+ */
+function unfixedVersions(lock, { name, fixedAt, advisory }) {
+  const fixed = fixedAt.join('.');
+  const versions = lockedVersions(lock, name);
+  const below = versions.filter((v) => againstFix(v, fixedAt) === 'below');
+  const unplaced = versions.filter((v) => againstFix(v, fixedAt) === 'unplaced');
+  const unfixed = [];
+  if (below.length > 0) {
+    unfixed.push(
+      `${name} ${below.join(', ')} is locked, below ${fixed}, the version that fixes ${advisory}`,
+    );
+  }
+  if (unplaced.length > 0) {
+    unfixed.push(
+      `${name} ${unplaced.join(', ')} is locked, a version that cannot be compared with ${fixed}`,
+    );
+  }
+  return unfixed;
+}
+
 // --- What fixes source-map-js ------------------------------------------------
 
 /** The advisory BUG-23 fixes: source-map-js's, before 1.2.2. */
@@ -1004,44 +1058,18 @@ const SOURCE_MAP_ADVISORY = 'GHSA-68fv-2mgg-jv7q';
 /** The first source-map-js GHSA-68fv-2mgg-jv7q does not cover: 1.2.2, as [major, minor, patch]. */
 const SOURCE_MAP_FIXED = [1, 2, 2];
 
-/**
- * Where a source-map-js version stands against 1.2.2, the one that fixes
- * GHSA-68fv-2mgg-jv7q: 'below' (1.2.2's own pre-releases included, as semver
- * orders them), 'fixed', or 'unplaced' when it is not plain semver (a git or
- * tarball source) and cannot be compared.
- */
+/** Where a source-map-js version stands against 1.2.2, the one that fixes GHSA-68fv-2mgg-jv7q. */
 function againstSourceMapFix(version) {
-  const parts = /^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.exec(version);
-  if (parts === null) return 'unplaced';
-  const numbers = parts.slice(1, 4).map(Number);
-  const first = numbers.findIndex((n, i) => n !== SOURCE_MAP_FIXED[i]);
-  if (first !== -1) return numbers[first] < SOURCE_MAP_FIXED[first] ? 'below' : 'fixed';
-  return parts[4] === undefined ? 'fixed' : 'below';
+  return againstFix(version, SOURCE_MAP_FIXED);
 }
 
-/**
- * How the lockfile falls short of BUG-23's fix; empty when every source-map-js
- * it resolves, by a `packages` or a `snapshots` key, is 1.2.2 or later. A
- * version that cannot be placed counts against it: one this check cannot
- * compare is one it cannot call fixed.
- */
+/** How the lockfile falls short of BUG-23's fix; empty when every source-map-js it resolves is 1.2.2 or later. */
 function sourceMapUnfixed(lock) {
-  const fixed = SOURCE_MAP_FIXED.join('.');
-  const versions = lockedVersions(lock, 'source-map-js');
-  const below = versions.filter((v) => againstSourceMapFix(v) === 'below');
-  const unplaced = versions.filter((v) => againstSourceMapFix(v) === 'unplaced');
-  const unfixed = [];
-  if (below.length > 0) {
-    unfixed.push(
-      `source-map-js ${below.join(', ')} is locked, below ${fixed}, the version that fixes ${SOURCE_MAP_ADVISORY}`,
-    );
-  }
-  if (unplaced.length > 0) {
-    unfixed.push(
-      `source-map-js ${unplaced.join(', ')} is locked, a version that cannot be compared with ${fixed}`,
-    );
-  }
-  return unfixed;
+  return unfixedVersions(lock, {
+    name: 'source-map-js',
+    fixedAt: SOURCE_MAP_FIXED,
+    advisory: SOURCE_MAP_ADVISORY,
+  });
 }
 
 /**
@@ -1114,6 +1142,93 @@ snapshots:
 
 const SOURCE_MAP_UNFIXED =
   'the lockfile resolves a source-map-js below 1.2.2: GHSA-68fv-2mgg-jv7q fails the audit on every pull request';
+
+// --- What fixes shell-quote --------------------------------------------------
+
+/** The advisory BUG-24 fixes: shell-quote's, from 1.8.4 and before 1.11.0. */
+const SHELL_QUOTE_ADVISORY = 'GHSA-pqg4-j6r4-53mv';
+
+/** The first shell-quote GHSA-pqg4-j6r4-53mv does not cover: 1.11.0, as [major, minor, patch]. */
+const SHELL_QUOTE_FIXED = [1, 11, 0];
+
+/**
+ * Where a shell-quote version stands against 1.11.0, the one that fixes
+ * GHSA-pqg4-j6r4-53mv. Everything below 1.11.0 counts, not only the
+ * advisory's 1.8.4 onward: the fix's override is `shell-quote@<1.11.0`.
+ */
+function againstShellQuoteFix(version) {
+  return againstFix(version, SHELL_QUOTE_FIXED);
+}
+
+/** How the lockfile falls short of BUG-24's fix; empty when every shell-quote it resolves is 1.11.0 or later. */
+function shellQuoteUnfixed(lock) {
+  return unfixedVersions(lock, {
+    name: 'shell-quote',
+    fixedAt: SHELL_QUOTE_FIXED,
+    advisory: SHELL_QUOTE_ADVISORY,
+  });
+}
+
+/**
+ * A synthetic lockfile in v9's form, as BUG-24's fix leaves it: both overrides
+ * in the form and order pnpm 10.33.0 writes them (read from a scratch install,
+ * 2026-10-06), and shell-quote 1.11.0 through today's one path, the app's
+ * react-native and its react-devtools-core.
+ */
+const SHELL_QUOTE_SAMPLE_LOCK = `lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+overrides:
+  source-map-js@<1.2.2: 1.2.2
+  shell-quote@<1.11.0: 1.11.0
+
+importers:
+
+  apps/mobile:
+    dependencies:
+      react-native:
+        specifier: 0.86.3
+        version: 0.86.3
+
+packages:
+
+  react-devtools-core@6.1.5:
+    resolution: {integrity: sha512-synthetic}
+
+  react-native@0.86.3:
+    resolution: {integrity: sha512-synthetic}
+
+  shell-quote@1.11.0:
+    resolution: {integrity: sha512-synthetic}
+    engines: {node: '>= 0.4'}
+
+  ws@7.5.13:
+    resolution: {integrity: sha512-synthetic}
+
+snapshots:
+
+  react-devtools-core@6.1.5:
+    dependencies:
+      shell-quote: 1.11.0
+      ws: 7.5.13
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
+  react-native@0.86.3:
+    dependencies:
+      react-devtools-core: 6.1.5
+
+  shell-quote@1.11.0: {}
+
+  ws@7.5.13: {}
+`;
+
+const SHELL_QUOTE_UNFIXED =
+  'the lockfile resolves a shell-quote below 1.11.0: GHSA-pqg4-j6r4-53mv fails the audit on every pull request';
 
 describe('the dependency audit ignores what the owner accepted, and nothing else', () => {
   test('BUG-11: GHSA-86w9-cpqp-85rv is ignored by the dependency audit', () => {
@@ -1909,6 +2024,103 @@ describe('the dependency audit passes on a patched version where there is one, n
     expect(below.map(againstSourceMapFix)).toEqual(below.map(() => 'below'));
     expect(fixed.map(againstSourceMapFix)).toEqual(fixed.map(() => 'fixed'));
     expect(['github:synthetic/source-map-js', '1.2', ''].map(againstSourceMapFix)).toEqual([
+      'unplaced',
+      'unplaced',
+      'unplaced',
+    ]);
+  });
+
+  test('BUG-24: the lockfile holds no shell-quote below 1.11.0, the version that fixes GHSA-pqg4-j6r4-53mv', () => {
+    const lock = readLockfile(read('pnpm-lock.yaml'));
+
+    expect(
+      lock.lockfileVersion,
+      'pnpm-lock.yaml is not lockfile v9, the form this reader knows',
+    ).toMatch(/^9\./);
+    // The reader found keys in both sections, so "none below 1.11.0" is read,
+    // not assumed: vitest, the runner of this very file, is locked in each.
+    expect(
+      lock.packages.filter((key) => packageName(key) === 'vitest'),
+      'the lockfile reader found no vitest among the packages keys',
+    ).not.toEqual([]);
+    expect(
+      [...lock.snapshots.keys()].filter((key) => packageName(key) === 'vitest'),
+      'the lockfile reader found no vitest among the snapshots keys',
+    ).not.toEqual([]);
+    expect(shellQuoteUnfixed(lock), SHELL_QUOTE_UNFIXED).toEqual([]);
+  });
+
+  test('BUG-24: the shell-quote check fails on a lockfile holding 1.10.0, in either section, and passes on one holding only 1.11.0', () => {
+    // The fixed form passes, and the override's `shell-quote@<1.11.0` is not
+    // read as a version.
+    const sample = readLockfile(SHELL_QUOTE_SAMPLE_LOCK);
+    expect(sample.lockfileVersion).toBe('9.0');
+    expect(lockedVersions(sample, 'shell-quote')).toEqual(['1.11.0']);
+    expect(shellQuoteUnfixed(sample)).toEqual([]);
+
+    // Today's lockfile: 1.10.0 through react-devtools-core, and no override.
+    const unfixed = edited(
+      SHELL_QUOTE_SAMPLE_LOCK,
+      ['  shell-quote@<1.11.0: 1.11.0\n', ''],
+      ['shell-quote@1.11.0', 'shell-quote@1.10.0'],
+      ['shell-quote: 1.11.0', 'shell-quote: 1.10.0'],
+    );
+    expect(shellQuoteUnfixed(readLockfile(unfixed))).toEqual([
+      'shell-quote 1.10.0 is locked, below 1.11.0, the version that fixes GHSA-pqg4-j6r4-53mv',
+    ]);
+
+    // 1.10.0 beside 1.11.0: a second path, not overridden. Every locked
+    // shell-quote must be fixed, not just one.
+    const beside = edited(
+      SHELL_QUOTE_SAMPLE_LOCK,
+      [
+        '  react-native@0.86.3:\n    dependencies:\n      react-devtools-core: 6.1.5\n',
+        '  react-native@0.86.3:\n    dependencies:\n      react-devtools-core: 6.1.5\n      shell-quote: 1.10.0\n',
+      ],
+      [
+        '  shell-quote@1.11.0:\n    resolution:',
+        "  shell-quote@1.10.0:\n    resolution: {integrity: sha512-synthetic}\n    engines: {node: '>= 0.4'}\n\n  shell-quote@1.11.0:\n    resolution:",
+      ],
+      ['  shell-quote@1.11.0: {}\n', '  shell-quote@1.10.0: {}\n\n  shell-quote@1.11.0: {}\n'],
+    );
+    expect(lockedVersions(readLockfile(beside), 'shell-quote')).toEqual(['1.10.0', '1.11.0']);
+    expect(shellQuoteUnfixed(readLockfile(beside))).toEqual([
+      'shell-quote 1.10.0 is locked, below 1.11.0, the version that fixes GHSA-pqg4-j6r4-53mv',
+    ]);
+
+    // Each section is read on its own: 1.10.0 in only the packages keys, or
+    // only the snapshots keys, still fails.
+    const inPackages = edited(SHELL_QUOTE_SAMPLE_LOCK, [
+      '  shell-quote@1.11.0:\n    resolution:',
+      '  shell-quote@1.10.0:\n    resolution:',
+    ]);
+    const inSnapshots = edited(SHELL_QUOTE_SAMPLE_LOCK, [
+      '  shell-quote@1.11.0: {}\n',
+      '  shell-quote@1.10.0: {}\n',
+    ]);
+    for (const text of [inPackages, inSnapshots]) {
+      expect(shellQuoteUnfixed(readLockfile(text))).toEqual([
+        'shell-quote 1.10.0 is locked, below 1.11.0, the version that fixes GHSA-pqg4-j6r4-53mv',
+      ]);
+    }
+
+    // A source that is not plain semver cannot be called fixed.
+    const tarball = edited(SHELL_QUOTE_SAMPLE_LOCK, [
+      '  shell-quote@1.11.0: {}\n',
+      '  shell-quote@1.11.0: {}\n\n  shell-quote@https://example.invalid/shell-quote-1.11.0.tgz: {}\n',
+    ]);
+    expect(shellQuoteUnfixed(readLockfile(tarball))).toEqual([
+      'shell-quote https://example.invalid/shell-quote-1.11.0.tgz is locked, a version that cannot be compared with 1.11.0',
+    ]);
+
+    // Where the line falls, each part compared as a number: 1.10.0 and 1.9.9
+    // are below 1.11.0, though "1.9.9" sorts after "1.11.0" as text. Below
+    // the advisory's 1.8.4 counts too, as the override's range does.
+    const below = ['1.6.1', '1.8.3', '1.8.4', '1.9.9', '1.10.0', '1.10.9', '1.11.0-rc.1'];
+    const fixed = ['1.11.0', '1.11.0+build.7', '1.11.1', '1.12.0', '1.100.0', '2.0.0'];
+    expect(below.map(againstShellQuoteFix)).toEqual(below.map(() => 'below'));
+    expect(fixed.map(againstShellQuoteFix)).toEqual(fixed.map(() => 'fixed'));
+    expect(['github:synthetic/shell-quote', '1.11', ''].map(againstShellQuoteFix)).toEqual([
       'unplaced',
       'unplaced',
       'unplaced',
