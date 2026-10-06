@@ -24,3 +24,4 @@
 - [Second path and isolation](feedback_second_path_isolation.md) — mutate second-attempt outcome mapping and break-after-failure; lease-vacuous shared checks; count unhandled errors
 - [Rollback and hangs](feedback_rollback_and_hangs.md) — rollback undoes session set_config (check after commit); no-limit faults hang L3; line-buffered harness
 - [Isolating values](feedback_isolating_values.md) — one value per refusal clause that only it refuses; Vitest truncates each.$name titles (-t on full name runs nothing)
+- [BUG-23/24 audit](project_bug23_24_audit.md) — PASS 68b675c; override + lockfile pin; 49 faults, regex `^` drop survives (`file:` key); `unshare -n` proves no network

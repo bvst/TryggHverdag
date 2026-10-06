@@ -56,3 +56,4 @@ file, traceability's cheap steps and decideMutation inline instead.
 2026-10-03 cloud (LOST-01 loop 1 at 19db407): 3 of 5 again; `gh api` showed the same 13 contexts (mutation, traceability among them), code-owner review true. Branch pushed at 19db407, no open PR (only #59 BUG-15), check-runs total_count 0, so RG-05 was read from the local reports, not CI.
 2026-10-04 cloud (LOST-02 at 6f27b80/e36a384): 3 of 5; gh api: 13 contexts incl. mutation and traceability, code-owner review true,
 bypass_actors [], current_user_can_bypass never. Branch pushed (e36a384), no open PR, check-runs total_count 0 on both commits.
+2026-10-06 cloud (BUG-23/24 at 68b675c): 3 of 5; gh api: 13 contexts incl. mutation and traceability, code-owner review true, bypass_actors [], current_user_can_bypass never. Pushed, no PR, check-runs total_count 0. Main's ai-review.yml grants the review job `checks: read` (line 109), so the brief's 403 premise is stale.
