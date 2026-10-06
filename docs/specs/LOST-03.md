@@ -1420,6 +1420,67 @@ ACTIVE" says that only a fresh heartbeat brings a journey back, and names
 D-112. Written with this loop. The row stays binding under D-033; the note
 says how D-112 reads it, and changes nothing it says.
 
+### Tests added in review loop 2 (settled 2026-10-06)
+
+All three blocking reviewers passed loop 1 (`safety-reviewer`,
+`privacy-security-reviewer`, `test-auditor`). Their should-fixes and two notes
+go into this loop. The names are exact; `test-author` may adjust wording only,
+keeping the criterion and the assertions.
+
+**14. No overtaking across a walker's journeys** (`safety-reviewer`,
+should-fix; approach item 4, step 5; AC8; D-112, amended). The open's
+withdrawal covered only this journey's earlier alerts. A walker's earlier
+journey, ended by "I'm home" while the push failed, can still hold unsent
+`HOME` or `BACK_IN_CONTACT` messages to the same responders, retried for
+ever. The reviewer reproduced it in-process: with the push failing, J1's alert
+opens, "I'm home" ends J1, the walker starts J2 with the same responders, J2
+goes silent and its alert opens, the push recovers, and each responder's port
+accepts J2's `LOST_CONTACT` and then J1's `HOME`, while J2 is `LOST_CONTACT`.
+**The open now withdraws the unsent, not yet withdrawn stand-downs of every
+alert of this walker's journeys**, in its own transaction. Another walker's
+messages are left alone: a stand-down for another walker is no all-clear for
+this one.
+- 14a. L6, `apps/server/src/contact.system.test.ts`: `LOST-03-AC8: with a
+  failing push, J1's alert opens and "I'm home" ends J1; the same walker
+  starts J2 with the same responders, J2 goes silent until its alert opens,
+  and then the push recovers: the port never accepts J1's HOME after J2's
+  LOST_CONTACT`.
+- 14b. The shared behaviour suite: `LOST-03-AC8: an open withdraws the unsent
+  stand-downs of the walker's earlier journeys, and leaves another walker's
+  alone`.
+
+**15. The fake compares the walker and the device exactly** (`safety-reviewer`
+and `test-auditor`, should-fix; D-100). The fake's `recordHome` lower-cased
+the walker's and the device's IDs before comparing them; the adapter hands
+them to the domain's rule, which compares them exactly, and refuses. The fake
+now compares them as given. The fake's own test that pinned the lower-casing
+changes with it (RG-03), and the case moves into the shared suite so both
+stores answer it.
+- 15a. The shared behaviour suite: `LOST-03-AC16: recordHome with the walker's
+  or the device's ID in another case than the stored one is refused by the
+  rule under the lock, and changes nothing`.
+
+**16. The walker check under the lock, on its own** (`test-auditor`,
+should-fix; AC16). Test 2a's "another walker" case sent the stranger's own
+device, which the device check refuses anyway, so an adapter that asked the
+rule with the locked row's own walker survived at L3.
+- 2a gains two cases: `recordHome` with a stranger's walker ID and the
+  journey's own device rejects; and a stranger on an `ENDED` journey rejects
+  rather than answering `already_ended`, which holds the rule's order (the
+  walker before `ENDED`) at both stores.
+
+**17. The open leaves lost-contact messages alone, at L3** (`safety-reviewer`
+and `test-auditor`, notes). The open's `kind <> 'LOST_CONTACT'` clause was
+held by the fake's own test only.
+- 17a. The shared behaviour suite: `LOST-03-AC8: an open leaves an earlier
+  alert's unsent LOST_CONTACT message alone`. The message is put there
+  directly; nothing in the code leaves one unsent past its resolution.
+
+**18. The adapter header names both withdrawals** (`safety-reviewer`, note).
+The header's sentence on the worker's marks waiting names the API's
+withdrawal; the open's own withdrawal, on the worker's pool, is the second.
+A comment only; approach item 8 already says both.
+
 ### Existing assertions that change by design (RG-03)
 
 `test-author` changes each, with the written reason RG-03 asks for in the
@@ -1530,6 +1591,13 @@ does instead.
   and in `fake-journey-store.test.ts` now passes the walker and the device
   beside the journey ID, as `recordHome` asks the domain under the lock. The
   assertions are unchanged.
+
+- **Review loop 1:** the fake's own no-clock test in
+  `fake-journey-store.test.ts` reads `already_ended` instead of `ended`,
+  with the rename (item 3). Equally strict.
+- **Review loop 2:** the fake's own test "… with the walker's ID in any case
+  read as the stored one" is reversed: the fake now compares as the domain
+  does (item 15), and the case moves into the shared suite (15a).
 
 **Read and found unchanged** (2026-10-06), so nobody has to wonder:
 - `domain/journey.test.ts`, "LOST-01-AC8: a journey in LOST_CONTACT takes the

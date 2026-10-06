@@ -3847,3 +3847,15 @@ any other path is work, not a candidate for the same treatment.
     credential among them (`privacy-security-reviewer`, note). Nothing
     prints it; a comment in `api.ts` says so, and a capture test holds it
     (LOST-03-AC19).
+- **Amended 2026-10-06 (delegated, D-031), LOST-03's review loop 2:**
+  - **No overtaking across a walker's journeys** (`safety-reviewer`,
+    should-fix). Loop 1's withdrawal covered only the journey's own earlier
+    alerts; an earlier journey of the same walker, ended by "I'm home" while
+    the push failed, could still deliver its `HOME` after the new journey's
+    `LOST_CONTACT`. The reviewer reproduced it in-process. **An open now
+    withdraws the unsent, not yet withdrawn stand-downs of every alert of
+    the walker's journeys**, in its own transaction. Another walker's are
+    left alone. The walker's other journeys are all `ENDED`, so nothing
+    resolves them concurrently, and the lock order is unchanged.
+  - **The test kit's fake compares the walker and the device exactly**, as
+    the domain's rule does (D-100; `safety-reviewer` and `test-auditor`).
