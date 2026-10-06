@@ -20,8 +20,8 @@ catalogs:
       version: 4.6.5
 
 overrides:
-  source-map-js@<1.2.2: 1.2.2
-  shell-quote@<1.11.0: 1.11.0
+  source-map-js@>=1.0.0 <1.2.2: ^1.2.2
+  shell-quote@<1.11.0: ^1.11.0
 
 packageExtensionsChecksum: sha256-yucxjBCEEEleMRdCSterOmma5oliL1xHpkU1vW5QBT0=
 
