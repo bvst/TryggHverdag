@@ -95,6 +95,21 @@ describe('fakeLog', () => {
     expect(log.events).toEqual(written);
   });
 
+  test('records the "I’m on it" events too, each exactly as given (LOST-06)', () => {
+    const log = fakeLog();
+    const written: FakeLogEvent[] = [
+      { event: 'acknowledgement_ignored', reason: 'ALERT_RESOLVED', alertId: syntheticUuid() },
+      { event: 'acknowledgement_failed', stage: 'read', code: '57P01' },
+      { event: 'acknowledgement_failed', stage: 'store', code: null },
+    ];
+
+    for (const event of written) {
+      log.write(event);
+    }
+
+    expect(log.events).toEqual(written);
+  });
+
   test('the test kit hands it out', () => {
     expect(kit.fakeLog).toBe(fakeLog);
   });

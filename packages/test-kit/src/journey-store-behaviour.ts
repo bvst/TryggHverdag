@@ -64,6 +64,21 @@
  *   - a claim hands each due message to one claimer, once, leased; a failure
  *     keeps its reason and is due again after its delay; a sent message is
  *     never handed out again (AC14, AC15).
+ *
+ * And when a responder says "I'm on it" (LOST-06, its spec's shared
+ * behaviours 1 to 11, D-100):
+ *   - the read is a plain read, of the alert's state, who is recorded on it
+ *     and its journey's responders (AC2); the write decides by the alert rule
+ *     under the journey's row, in its order, and writes the acknowledgement
+ *     and one notice per other responder, or nothing (AC2 to AC6);
+ *   - an acknowledged alert's resolution withdraws its unsent notices, keeps
+ *     who acknowledged it and when, and stands every responder down once
+ *     (AC7, a fast-check property among them); a responder with two
+ *     messages withdrawn still gets one stand-down, held until the later of
+ *     their due times (AC8), the case the fake once answered more leniently
+ *     than the adapter, with the first withdrawn message only;
+ *   - a resolution withdraws exactly the kinds withdrawn on resolution, of
+ *     its own alert, and nothing else (AC13).
  * Times are the store's own: the fake's clock, or the database's now(). The
  * database's moves on while a test runs, so a subject says how far from the
  * threshold a time must be to be sure of its side (`timeMarginMs`); the fake's
@@ -77,22 +92,25 @@
  */
 import * as fc from 'fast-check';
 import { expect } from 'vitest';
-import type {
-  AlertMessage,
-  ClaimedMessages,
-  FakeAlertResolution,
-  FakeAlertState,
-  FakeJourneyState,
-  HeartbeatToRecord,
-  InsertStartedResult,
-  LatestHeartbeat,
-  OpenLostContactAlertResult,
-  OverdueJourneys,
-  RecordHeartbeatResult,
-  RecordHomeResult,
-  StartedJourney,
+import {
+  WITHDRAWN_WHEN_RESOLVED,
+  type AlertForAcknowledgement,
+  type AlertMessage,
+  type ClaimedMessages,
+  type FakeAlertResolution,
+  type FakeAlertState,
+  type FakeJourneyState,
+  type HeartbeatToRecord,
+  type InsertStartedResult,
+  type LatestHeartbeat,
+  type OpenLostContactAlertResult,
+  type OverdueJourneys,
+  type RecordAcknowledgementResult,
+  type RecordHeartbeatResult,
+  type RecordHomeResult,
+  type StartedJourney,
 } from './fake-journey-store.ts';
-import type { MessageKind, PushFailureReason } from './fake-push.ts';
+import { MESSAGE_KINDS, type MessageKind, type PushFailureReason } from './fake-push.ts';
 import {
   syntheticBatteryLevel,
   syntheticEventId,
@@ -163,6 +181,13 @@ export interface JourneyStoreUnderTest {
       walkerId: string;
       deviceId: string;
     }): Promise<RecordHomeResult>;
+    /** "I'm on it" (LOST-06): the alert, its state, who is on it and its journey's responders, read without a lock; null for none. */
+    alertForAcknowledgement(alertId: string): Promise<AlertForAcknowledgement | null>;
+    /** "I'm on it" (LOST-06): decided by the alert rule under the journey's row, and written, or not. */
+    recordAcknowledgement(acknowledgement: {
+      alertId: string;
+      responderId: string;
+    }): Promise<RecordAcknowledgementResult>;
   };
   /** A new user, by the store's own means: a row in the real table, an entry in the fake. */
   addUser(): Promise<string>;
@@ -265,6 +290,9 @@ export interface JourneyStoreUnderTest {
     silentSince: Date;
     resolvedAt?: Date | null;
     resolution?: FakeAlertResolution | null;
+    /** LOST-06: who is on it and since when, both or neither; left out, neither. */
+    acknowledgedBy?: string | null;
+    acknowledgedAt?: Date | null;
   }): Promise<string>;
   /** LOST-03: an outbox message put in directly, never withdrawn, as a test's own setup. Resolves to its ID. */
   seedMessage(message: {
@@ -279,6 +307,19 @@ export interface JourneyStoreUnderTest {
   }): Promise<string>;
   /** LOST-03-AC4: every responder row of the journey removed directly: nothing in the code removes one yet. */
   removeResponders(journeyId: string): Promise<void>;
+  /**
+   * LOST-06: each alert of this journey's acknowledgement, read by a reader of
+   * its own so that `alertsOf` keeps its shape: who is on it and since when,
+   * both null until someone is. In any order.
+   */
+  acknowledgementsOf(journeyId: string): Promise<AcknowledgementAsStored[]>;
+}
+
+/** Who acknowledged an alert, and when, as a store under test holds it: both null until someone did (LOST-06). */
+export interface AcknowledgementAsStored {
+  alertId: string;
+  acknowledgedBy: string | null;
+  acknowledgedAt: Date | null;
 }
 
 /** An alert's resolution, as a store under test holds it (LOST-03). */
@@ -769,6 +810,69 @@ async function alertRecordOf(subject: JourneyStoreUnderTest, journeyId: string) 
     messages: byMessage(await subject.messagesOf(journeyId)),
     withdrawals: byMessage(await subject.withdrawalsOf(journeyId)),
   };
+}
+
+// ---------------------------------------------------------------------------
+// LOST-06: "I'm on it".
+// ---------------------------------------------------------------------------
+
+/** The kind of the notice that someone is on it (D-113). */
+const NOTICE = 'ACKNOWLEDGED';
+
+/** The rule's answers that write nothing, as the store hands them back (approach item 2). */
+const NOT_FOUND: RecordAcknowledgementResult = {
+  outcome: 'not_recorded',
+  decision: { type: 'refused', reason: 'ALERT_NOT_FOUND' },
+};
+const TAKEN: RecordAcknowledgementResult = {
+  outcome: 'not_recorded',
+  decision: { type: 'refused', reason: 'ALREADY_ACKNOWLEDGED' },
+};
+const YOURS: RecordAcknowledgementResult = {
+  outcome: 'not_recorded',
+  decision: { type: 'unchanged', reason: 'ALREADY_YOURS' },
+};
+const OVER: RecordAcknowledgementResult = {
+  outcome: 'not_recorded',
+  decision: { type: 'ignored', reason: 'ALERT_RESOLVED' },
+};
+
+/** The answer of an acknowledgement that was recorded, or a failed expectation saying what it was instead. */
+function acknowledged(
+  result: RecordAcknowledgementResult,
+  what = 'the acknowledgement',
+): {
+  messages: AlertMessage[];
+} {
+  expect(result.outcome, `${what} was recorded: ${JSON.stringify(result)}`).toBe('acknowledged');
+  if (result.outcome !== 'acknowledged') {
+    throw new Error(`${what} was answered ${JSON.stringify(result)}`);
+  }
+  return result;
+}
+
+/** This alert's acknowledgement, as the store under test holds it. */
+async function acknowledgementOf(
+  subject: JourneyStoreUnderTest,
+  journeyId: string,
+  alertId: string,
+): Promise<AcknowledgementAsStored | undefined> {
+  return (await subject.acknowledgementsOf(journeyId)).find((each) => each.alertId === alertId);
+}
+
+/** Everything a store holds of one journey's alerts and messages, who is on each alert included. */
+async function acknowledgedRecordOf(subject: JourneyStoreUnderTest, journeyId: string) {
+  return {
+    ...(await alertRecordOf(subject, journeyId)),
+    acknowledgements: [...(await subject.acknowledgementsOf(journeyId))].sort((a, b) =>
+      a.alertId.localeCompare(b.alertId),
+    ),
+  };
+}
+
+/** A message's fields as the store hands it back in an answer. */
+function asAnswered({ messageId, recipientId, kind }: AlertMessage | MessageAsStored) {
+  return { messageId, recipientId, kind };
 }
 
 export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
@@ -3883,6 +3987,951 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
 
         expect(await alertRecordOf(subject, journey.journeyId)).toEqual(record);
         expect(await subject.endOf(journey.journeyId)).toEqual(end);
+      }
+    },
+  },
+  // -------------------------------------------------------------------------
+  // LOST-06: "I'm on it" (its spec's shared behaviours 1 to 11, D-100).
+  // -------------------------------------------------------------------------
+  {
+    name: 'LOST-06-AC2: alertForAcknowledgement reads the alert’s state, who is recorded on it and its journey’s responders, in either case and without waiting for a held row; and null for an ID no alert has',
+    async run(subject) {
+      const readOf = async (alertId: string) => {
+        const read = await subject.store.alertForAcknowledgement(alertId);
+        return read === null ? null : { ...read, responderIds: [...read.responderIds].sort() };
+      };
+      const lost = await lostWith(subject, 3);
+      const [r1 = '', r2 = ''] = lost.responderIds;
+
+      expect(await readOf(lost.alertId)).toEqual({
+        id: lost.alertId,
+        state: 'OPEN',
+        acknowledgedBy: null,
+        responderIds: [...lost.responderIds].sort(),
+      });
+      expect(lost.alertId.toUpperCase(), 'an ID with a letter in it').not.toBe(lost.alertId);
+      expect(await readOf(lost.alertId.toUpperCase())).toEqual(await readOf(lost.alertId));
+      expect(await subject.store.alertForAcknowledgement(syntheticUuid())).toBeNull();
+
+      // A plain read: a row another transaction holds is read all the same,
+      // so nothing that refuses waits for a lock (AC3).
+      const held = await subject.hold(lost.journeyId);
+      try {
+        expect(
+          await within(2_000, readOf(lost.alertId), 'the read of a held journey’s alert'),
+        ).toMatchObject({ id: lost.alertId, state: 'OPEN' });
+      } finally {
+        await held.release();
+      }
+
+      // What the rule reads follows the alert: recorded, then resolved.
+      acknowledged(
+        await subject.store.recordAcknowledgement({ alertId: lost.alertId, responderId: r1 }),
+      );
+      expect(await readOf(lost.alertId)).toMatchObject({
+        state: 'ACKNOWLEDGED',
+        acknowledgedBy: r1,
+      });
+      backInContact(
+        await subject.store.recordHeartbeat(await freshHeartbeat(subject, lost.journeyId)),
+      );
+      expect(await readOf(lost.alertId)).toMatchObject({ state: 'RESOLVED', acknowledgedBy: r1 });
+
+      // Put in directly: ESCALATED with nobody recorded, and ACKNOWLEDGED with R2.
+      const now = await subject.now();
+      for (const [state, acknowledgedBy] of [
+        ['ESCALATED', null],
+        ['ACKNOWLEDGED', r2],
+      ] as const) {
+        // A new walker's journey; R2 follows it too when R2 is the one
+        // recorded, so whoever is on it is one of its responders.
+        const [walkerId = '', follower = ''] = await users(subject, 2);
+        const responderIds = acknowledgedBy === null ? [follower] : [follower, acknowledgedBy];
+        const journeyId = await subject.seedJourney({
+          walkerId,
+          deviceId: await subject.addDevice(walkerId),
+          state: 'LOST_CONTACT',
+          responderIds,
+          startedAt: ago(now, 2 * HOUR),
+          lastHeartbeatAt: ago(now, HOUR),
+        });
+        const alertId = await subject.seedAlert({
+          journeyId,
+          state,
+          openedAt: ago(now, 55 * MINUTE),
+          silentSince: ago(now, HOUR),
+          acknowledgedBy,
+          acknowledgedAt: acknowledgedBy === null ? null : ago(now, 50 * MINUTE),
+        });
+
+        expect(await readOf(alertId), state).toEqual({
+          id: alertId,
+          state,
+          acknowledgedBy,
+          responderIds: [...responderIds].sort(),
+        });
+      }
+    },
+  },
+  {
+    name: 'LOST-06-AC2: recordAcknowledgement by a responder of the journey moves its unresolved alert — OPEN, ESCALATED, or ACKNOWLEDGED with nobody recorded — to ACKNOWLEDGED, acknowledged by that responder at the store’s now, and writes one ACKNOWLEDGED message per other responder row, each with an ID of its own and due at that now; the journey, its other alerts, another journey’s alert and every lost-contact message are untouched',
+    async run(subject) {
+      for (const state of ['OPEN', 'ESCALATED', 'ACKNOWLEDGED'] as const) {
+        const now = await subject.now();
+        const journey = await watched(subject, {
+          state: 'LOST_CONTACT',
+          startedAt: ago(now, 3 * HOUR),
+          lastHeartbeatAt: ago(now, HOUR),
+          responders: 3,
+        });
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        // An earlier silence, already over: its alert RESOLVED, its messages sent.
+        const older = await subject.seedAlert({
+          journeyId: journey.journeyId,
+          state: 'RESOLVED',
+          openedAt: ago(now, 2 * HOUR + 10 * MINUTE),
+          silentSince: ago(now, 2 * HOUR + 15 * MINUTE),
+          resolvedAt: ago(now, 2 * HOUR),
+          resolution: 'BACK_IN_CONTACT',
+        });
+        for (const recipientId of journey.responderIds) {
+          await subject.seedMessage({
+            alertId: older,
+            recipientId,
+            kind: 'LOST_CONTACT',
+            createdAt: ago(now, 2 * HOUR + 10 * MINUTE),
+            nextAttemptAt: ago(now, 2 * HOUR + 10 * MINUTE),
+            attempts: 1,
+            sentAt: ago(now, 2 * HOUR + 10 * MINUTE),
+          });
+        }
+        // This silence's alert, in `state`, nobody recorded; its lost-contact
+        // messages: R1's accepted, R2's failed and due again, R3's never claimed.
+        const current = await subject.seedAlert({
+          journeyId: journey.journeyId,
+          state,
+          openedAt: ago(now, 55 * MINUTE),
+          silentSince: ago(now, HOUR),
+        });
+        for (const [recipientId, given] of [
+          [r1, { attempts: 1, sentAt: ago(now, 54 * MINUTE) }],
+          [r2, { attempts: 1, lastFailure: 'NO_TARGET', nextAttemptAt: ago(now, -10 * SECOND) }],
+          [r3, {}],
+        ] as const) {
+          await subject.seedMessage({
+            alertId: current,
+            recipientId,
+            kind: 'LOST_CONTACT',
+            createdAt: ago(now, 55 * MINUTE),
+            nextAttemptAt: ago(now, 55 * MINUTE),
+            ...given,
+          });
+        }
+        const other = await lostWith(subject, 1);
+        const otherBefore = await acknowledgedRecordOf(subject, other.journeyId);
+        const before = await acknowledgedRecordOf(subject, journey.journeyId);
+        const lastContact = await subject.lastHeartbeatAt(journey.journeyId);
+
+        const from = await subject.now();
+        const result = await subject.store.recordAcknowledgement({
+          alertId: current,
+          responderId: r1,
+        });
+        const to = await subject.now();
+
+        const recorded = acknowledged(result, state);
+        const after = await acknowledgedRecordOf(subject, journey.journeyId);
+        const acknowledgement = after.acknowledgements.find(({ alertId }) => alertId === current);
+        expect(acknowledgement?.acknowledgedBy, state).toBe(r1);
+        const at = acknowledgement?.acknowledgedAt ?? new Date(Number.NaN);
+        expect(at.getTime(), state).toBeGreaterThanOrEqual(from.getTime());
+        expect(at.getTime(), state).toBeLessThanOrEqual(to.getTime());
+        expect(after.alerts.find(({ id }) => id === current)?.state, state).toBe('ACKNOWLEDGED');
+
+        // The notices: one per responder row but R1's, due at that now.
+        const notices = ofKind(after.messages, current, NOTICE);
+        expect(recipientsOf(notices), state).toEqual([r2, r3].sort());
+        const written = new Map(after.withdrawals.map((each) => [each.messageId, each]));
+        for (const notice of notices) {
+          expect(notice, state).toMatchObject({ attempts: 0, sentAt: null, lastFailure: null });
+          expect(notice.nextAttemptAt, state).toEqual(at);
+          expect(written.get(notice.messageId)?.createdAt, state).toEqual(at);
+          expect(written.get(notice.messageId)?.withdrawnAt, state).toBeNull();
+          expect(notice.messageId, state).toMatch(LOWER_UUID);
+        }
+        const ids = notices.map(({ messageId }) => messageId);
+        expect(new Set(ids).size, state).toBe(ids.length);
+        const everyOtherId = [
+          ...before.messages.map(({ messageId }) => messageId),
+          current,
+          older,
+          journey.journeyId,
+          journey.walkerId,
+          journey.deviceId,
+          ...journey.responderIds,
+        ];
+        expect(
+          ids.filter((id) => everyOtherId.includes(id)),
+          state,
+        ).toEqual([]);
+        expect(byRecipient(recorded.messages), state).toEqual(notices.map(asAnswered));
+
+        // Untouched: the journey, its older alert, every lost-contact message
+        // (none withdrawn, none re-timed), and another journey's alert.
+        expect(after.state, state).toBe('LOST_CONTACT');
+        expect(await subject.lastHeartbeatAt(journey.journeyId), state).toEqual(lastContact);
+        expect(
+          after.messages.filter(({ kind }) => kind !== NOTICE),
+          state,
+        ).toEqual(before.messages);
+        expect(
+          after.withdrawals.filter(({ messageId }) => !ids.includes(messageId)),
+          state,
+        ).toEqual(before.withdrawals);
+        expect(
+          after.alerts.filter(({ id }) => id !== current),
+          state,
+        ).toEqual(before.alerts.filter(({ id }) => id !== current));
+        expect(after.resolutions, state).toEqual(before.resolutions);
+        expect(
+          after.acknowledgements.filter(({ alertId }) => alertId !== current),
+          state,
+        ).toEqual(before.acknowledgements.filter(({ alertId }) => alertId !== current));
+        expect(await acknowledgedRecordOf(subject, other.journeyId), state).toEqual(otherBefore);
+      }
+    },
+  },
+  {
+    name: 'LOST-06-AC3: recordAcknowledgement from a user who is not a responder of the alert’s journey — the walker, another walker, a responder of another journey — or for an alert ID no alert has, or with the responder’s own ID in another case, compared exactly, answers ALERT_NOT_FOUND and writes nothing',
+    async run(subject) {
+      const lost = await lostWith(subject, 2);
+      const [r1 = ''] = lost.responderIds;
+      const now = await subject.now();
+      const elsewhere = await watched(subject, {
+        state: 'LOST_CONTACT',
+        startedAt: ago(now, 2 * HOUR),
+        lastHeartbeatAt: ago(now, HOUR),
+        responders: 1,
+      });
+      const [theirs = ''] = elsewhere.responderIds;
+      expect(r1.toUpperCase(), 'an ID with a letter in it').not.toBe(r1);
+      const before = await acknowledgedRecordOf(subject, lost.journeyId);
+
+      for (const [who, asked] of [
+        ['the walker', { alertId: lost.alertId, responderId: lost.walkerId }],
+        ['another walker', { alertId: lost.alertId, responderId: elsewhere.walkerId }],
+        ['a responder of another journey only', { alertId: lost.alertId, responderId: theirs }],
+        ['an alert ID no alert has', { alertId: syntheticUuid(), responderId: r1 }],
+        ['R1’s own ID in upper case', { alertId: lost.alertId, responderId: r1.toUpperCase() }],
+      ] as const) {
+        expect(await subject.store.recordAcknowledgement(asked), who).toEqual(NOT_FOUND);
+      }
+
+      expect(await acknowledgedRecordOf(subject, lost.journeyId)).toEqual(before);
+      // The control: R1, a responder of the alert's journey, is recorded.
+      acknowledged(
+        await subject.store.recordAcknowledgement({ alertId: lost.alertId, responderId: r1 }),
+      );
+    },
+  },
+  {
+    name: 'LOST-06-AC4: recordAcknowledgement by the responder already recorded answers ALREADY_YOURS and writes nothing: acknowledged_at keeps its first time',
+    async run(subject) {
+      const lost = await lostWith(subject, 3);
+      const [r1 = ''] = lost.responderIds;
+      const first = acknowledged(
+        await subject.store.recordAcknowledgement({ alertId: lost.alertId, responderId: r1 }),
+      );
+      expect(first.messages).toHaveLength(2);
+      const before = await acknowledgedRecordOf(subject, lost.journeyId);
+      // The first answer lost, sent again once the clock has moved on.
+      await subject.letTimePass(1_100);
+
+      expect(
+        await subject.store.recordAcknowledgement({ alertId: lost.alertId, responderId: r1 }),
+      ).toEqual(YOURS);
+
+      expect(await acknowledgedRecordOf(subject, lost.journeyId)).toEqual(before);
+      expect(before.acknowledgements.map(({ acknowledgedBy }) => acknowledgedBy)).toEqual([r1]);
+    },
+  },
+  {
+    name: 'LOST-06-AC4: recordAcknowledgement by another responder, when someone is recorded, answers ALREADY_ACKNOWLEDGED and writes nothing',
+    async run(subject) {
+      const lost = await lostWith(subject, 3);
+      const [r1 = '', r2 = ''] = lost.responderIds;
+      acknowledged(
+        await subject.store.recordAcknowledgement({ alertId: lost.alertId, responderId: r1 }),
+      );
+      const before = await acknowledgedRecordOf(subject, lost.journeyId);
+
+      expect(
+        await subject.store.recordAcknowledgement({ alertId: lost.alertId, responderId: r2 }),
+      ).toEqual(TAKEN);
+      expect(await acknowledgedRecordOf(subject, lost.journeyId)).toEqual(before);
+
+      // The same for an alert put in ACKNOWLEDGED with someone recorded.
+      const now = await subject.now();
+      const journey = await watched(subject, {
+        state: 'LOST_CONTACT',
+        startedAt: ago(now, 2 * HOUR),
+        lastHeartbeatAt: ago(now, HOUR),
+        responders: 2,
+      });
+      const [onIt = '', other = ''] = journey.responderIds;
+      const alertId = await subject.seedAlert({
+        journeyId: journey.journeyId,
+        state: 'ACKNOWLEDGED',
+        openedAt: ago(now, 55 * MINUTE),
+        silentSince: ago(now, HOUR),
+        acknowledgedBy: onIt,
+        acknowledgedAt: ago(now, 50 * MINUTE),
+      });
+      const seeded = await acknowledgedRecordOf(subject, journey.journeyId);
+
+      expect(await subject.store.recordAcknowledgement({ alertId, responderId: other })).toEqual(
+        TAKEN,
+      );
+      expect(await subject.store.recordAcknowledgement({ alertId, responderId: onIt })).toEqual(
+        YOURS,
+      );
+      expect(await acknowledgedRecordOf(subject, journey.journeyId)).toEqual(seeded);
+    },
+  },
+  {
+    name: 'LOST-06-AC5: recordAcknowledgement of a RESOLVED alert answers ALERT_RESOLVED and writes nothing, whatever resolved it',
+    async run(subject) {
+      for (const [how, acknowledgedFirst] of [
+        ['a fresh heartbeat', false],
+        ['a fresh heartbeat', true],
+        ['"I’m home"', false],
+        ['"I’m home"', true],
+      ] as const) {
+        const at = `${how}${acknowledgedFirst ? ', after R1 acknowledged it' : ''}`;
+        const lost = await lostWith(subject, 2);
+        const [r1 = '', r2 = ''] = lost.responderIds;
+        if (acknowledgedFirst) {
+          acknowledged(
+            await subject.store.recordAcknowledgement({ alertId: lost.alertId, responderId: r1 }),
+            at,
+          );
+        }
+        if (how === 'a fresh heartbeat') {
+          backInContact(
+            await subject.store.recordHeartbeat(await freshHeartbeat(subject, lost.journeyId)),
+          );
+        } else {
+          endedHome(await subject.store.recordHome(homeOf(lost)));
+        }
+        const before = await acknowledgedRecordOf(subject, lost.journeyId);
+
+        for (const responderId of [r1, r2]) {
+          expect(
+            await subject.store.recordAcknowledgement({ alertId: lost.alertId, responderId }),
+            at,
+          ).toEqual(OVER);
+        }
+
+        expect(await acknowledgedRecordOf(subject, lost.journeyId), at).toEqual(before);
+      }
+
+      // An earlier alert's acknowledgement never reaches the journey's open
+      // one: J with A RESOLVED and A2 OPEN, both put in directly.
+      const now = await subject.now();
+      const journey = await watched(subject, {
+        state: 'LOST_CONTACT',
+        startedAt: ago(now, 3 * HOUR),
+        lastHeartbeatAt: ago(now, HOUR),
+        responders: 2,
+      });
+      const [r1 = ''] = journey.responderIds;
+      const earlier = await subject.seedAlert({
+        journeyId: journey.journeyId,
+        state: 'RESOLVED',
+        openedAt: ago(now, 2 * HOUR),
+        silentSince: ago(now, 2 * HOUR + 5 * MINUTE),
+        resolvedAt: ago(now, 90 * MINUTE),
+        resolution: 'BACK_IN_CONTACT',
+      });
+      const open = await subject.seedAlert({
+        journeyId: journey.journeyId,
+        state: 'OPEN',
+        openedAt: ago(now, 55 * MINUTE),
+        silentSince: ago(now, HOUR),
+      });
+      const before = await acknowledgedRecordOf(subject, journey.journeyId);
+
+      expect(
+        await subject.store.recordAcknowledgement({ alertId: earlier, responderId: r1 }),
+      ).toEqual(OVER);
+
+      expect(await acknowledgedRecordOf(subject, journey.journeyId)).toEqual(before);
+      expect(await acknowledgementOf(subject, journey.journeyId, open)).toEqual({
+        alertId: open,
+        acknowledgedBy: null,
+        acknowledgedAt: null,
+      });
+      expect(ofKind(await subject.messagesOf(journey.journeyId), open, NOTICE)).toEqual([]);
+    },
+  },
+  {
+    name: `LOST-06-AC6: ${String(RACERS)} different responders acknowledging one alert at once, ${String(RACE_ROUNDS)} times over: exactly one is recorded and every other answers ALREADY_ACKNOWLEDGED, none an error, with one set of notices; and ${String(RACERS)} copies of one responder’s at once record it once`,
+    async run(subject) {
+      for (let round = 0; round < RACE_ROUNDS; round += 1) {
+        const at = `round ${String(round)}`;
+        const lost = await lostWith(subject, RACERS);
+
+        // Promise.all rejects if any acknowledgement fails outright: none may.
+        const results = await Promise.all(
+          lost.responderIds.map((responderId) =>
+            subject.store.recordAcknowledgement({ alertId: lost.alertId, responderId }),
+          ),
+        );
+
+        const winners = lost.responderIds.filter(
+          (_, index) => results[index]?.outcome === 'acknowledged',
+        );
+        expect(winners, at).toHaveLength(1);
+        const [winner = ''] = winners;
+        expect(
+          results.filter(({ outcome }) => outcome !== 'acknowledged'),
+          at,
+        ).toEqual(Array.from({ length: RACERS - 1 }, () => TAKEN));
+        expect(
+          (await acknowledgementOf(subject, lost.journeyId, lost.alertId))?.acknowledgedBy,
+        ).toBe(winner);
+        expect(
+          recipientsOf(ofKind(await subject.messagesOf(lost.journeyId), lost.alertId, NOTICE)),
+          at,
+        ).toEqual(lost.responderIds.filter((id) => id !== winner).sort());
+
+        // Copies of one responder's, at once: one records, every other finds it theirs.
+        const copies = await lostWith(subject, 2);
+        const [r1 = '', r2 = ''] = copies.responderIds;
+        const answers = await Promise.all(
+          Array.from({ length: RACERS }, () =>
+            subject.store.recordAcknowledgement({ alertId: copies.alertId, responderId: r1 }),
+          ),
+        );
+        expect(
+          answers.filter(({ outcome }) => outcome === 'acknowledged'),
+          at,
+        ).toHaveLength(1);
+        expect(
+          answers.filter(({ outcome }) => outcome !== 'acknowledged'),
+          at,
+        ).toEqual(Array.from({ length: RACERS - 1 }, () => YOURS));
+        expect(
+          (await acknowledgementOf(subject, copies.journeyId, copies.alertId))?.acknowledgedBy,
+          at,
+        ).toBe(r1);
+        expect(
+          recipientsOf(ofKind(await subject.messagesOf(copies.journeyId), copies.alertId, NOTICE)),
+          at,
+        ).toEqual([r2]);
+      }
+    },
+  },
+  {
+    name: 'LOST-06-AC7: when contact comes back, or "I’m home" ends the journey, an ACKNOWLEDGED alert is resolved keeping who acknowledged it and when; its ACKNOWLEDGED messages not yet sent are withdrawn at the store’s now, keeping their attempts and last failure, and are never handed out again; sent ones are left as they were; every responder, the acknowledger included, gets one stand-down',
+    async run(subject) {
+      for (const how of ['heartbeat', 'home'] as const) {
+        for (const theirs of ['failed and due again', 'never claimed'] as const) {
+          const at = `${how}, R3’s notice ${theirs}`;
+          const lost = await lostWith(subject, 3);
+          const [r1 = '', r2 = '', r3 = ''] = lost.responderIds;
+          // Every lost-contact push accepted, so only the notices are left.
+          for (const { messageId } of lost.messages) {
+            await subject.store.markSent(messageId);
+          }
+          const recorded = acknowledged(
+            await subject.store.recordAcknowledgement({ alertId: lost.alertId, responderId: r1 }),
+            at,
+          );
+          const noticeOf = (recipientId: string): string =>
+            recorded.messages.find((message) => message.recipientId === recipientId)?.messageId ??
+            '';
+          const acknowledgement = await acknowledgementOf(subject, lost.journeyId, lost.alertId);
+          if (theirs === 'failed and due again') {
+            const claimed = (
+              await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS })
+            ).messages.map(({ messageId }) => messageId);
+            expect(claimed, at).toEqual(expect.arrayContaining([noticeOf(r2), noticeOf(r3)]));
+            await subject.store.markSent(noticeOf(r2));
+            await subject.store.markFailed({
+              messageId: noticeOf(r3),
+              reason: 'NO_TARGET',
+              retryAfterMs: SECOND,
+            });
+          } else {
+            await subject.store.markSent(noticeOf(r2));
+          }
+          const before = new Map(
+            (await subject.messagesOf(lost.journeyId)).map((message) => [
+              message.messageId,
+              message,
+            ]),
+          );
+
+          const result =
+            how === 'heartbeat'
+              ? backInContact(
+                  await subject.store.recordHeartbeat(
+                    await freshHeartbeat(subject, lost.journeyId),
+                  ),
+                )
+              : endedHome(await subject.store.recordHome(homeOf(lost)));
+
+          const kind = how === 'heartbeat' ? 'BACK_IN_CONTACT' : 'HOME';
+          expect(result.alertId, at).toBe(lost.alertId);
+          const resolution = await resolutionOf(subject, lost.journeyId, lost.alertId);
+          expect(resolution?.resolution, at).toBe(kind);
+          const resolvedAt = resolution?.resolvedAt ?? new Date(Number.NaN);
+          expect(
+            (await subject.alertsOf(lost.journeyId)).map(({ state }) => state),
+            at,
+          ).toEqual(['RESOLVED']);
+          expect(await acknowledgementOf(subject, lost.journeyId, lost.alertId), at).toEqual(
+            acknowledgement,
+          );
+          expect(acknowledgement?.acknowledgedBy, at).toBe(r1);
+
+          const withdrawnAt = await withdrawnAtOf(subject, lost.journeyId);
+          const stored = new Map(
+            (await subject.messagesOf(lost.journeyId)).map((message) => [
+              message.messageId,
+              message,
+            ]),
+          );
+          // R3's, unsent: withdrawn at the store's now, its attempts and last failure kept.
+          expect(withdrawnAt.get(noticeOf(r3)), at).toEqual(resolvedAt);
+          expect(stored.get(noticeOf(r3)), at).toEqual(before.get(noticeOf(r3)));
+          // R2's, sent: as it was.
+          expect(withdrawnAt.get(noticeOf(r2)), at).toBeNull();
+          expect(stored.get(noticeOf(r2)), at).toEqual(before.get(noticeOf(r2)));
+          // One stand-down each, the acknowledger included.
+          const standDowns = ofKind([...stored.values()], lost.alertId, kind);
+          expect(recipientsOf(standDowns), at).toEqual([r1, r2, r3].sort());
+          expect(byRecipient(result.messages), at).toEqual(standDowns.map(asAnswered));
+
+          // Never handed out again, whatever its due time.
+          await subject.letTimePass(1_500);
+          const handedOut = (
+            await subject.store.claimDue({ limit: BATCH, leaseMs: 0 })
+          ).messages.map(({ messageId }) => messageId);
+          expect(handedOut, at).not.toContain(noticeOf(r3));
+          expect(handedOut, at).not.toContain(noticeOf(r2));
+          for (const messageId of handedOut) {
+            await subject.store.markSent(messageId);
+          }
+        }
+      }
+    },
+  },
+  {
+    name: 'LOST-06-AC7: for any sequence of acknowledgements, heartbeats fresh or stale, sweeps and "I’m home", after every step an alert is ACKNOWLEDGED exactly when it is unresolved and someone is recorded on it, nobody but one responder is ever recorded, the notices are one per other responder of an acknowledged alert, and no RESOLVED alert has an ACKNOWLEDGED message neither sent nor withdrawn',
+    async run(subject) {
+      const margin = subject.timeMarginMs;
+      const step = fc.oneof(
+        fc.record({ kind: fc.constant('heartbeat' as const), agoMs: silences(margin) }),
+        fc.record({ kind: fc.constant('sweep' as const) }),
+        // Who: the first responder, the second, the walker, or a stranger.
+        fc.record({
+          kind: fc.constant('acknowledge' as const),
+          who: fc.integer({ min: 0, max: 3 }),
+        }),
+        fc.record({ kind: fc.constant('home' as const) }),
+      );
+
+      await fc.assert(
+        fc.asyncProperty(
+          silences(margin),
+          fc.array(step, { maxLength: 8 }),
+          async (startedAgoMs, steps) => {
+            const now = await subject.now();
+            const journey = await watched(subject, {
+              startedAt: ago(now, startedAgoMs),
+              responders: 2,
+            });
+            const { journeyId, responderIds } = journey;
+            const [stranger = ''] = await users(subject, 1);
+            const senders = [...responderIds, journey.walkerId, stranger];
+            // The rules, applied step by step: the journey's silence and
+            // state, and each alert opened so far, in order, with whether it
+            // resolved and who is on it.
+            let silentForMs = startedAgoMs;
+            let state: 'ACTIVE' | 'LOST_CONTACT' | 'ENDED' = 'ACTIVE';
+            const model: { id: string; resolved: boolean; acknowledgedBy: string | null }[] = [];
+
+            for (const next of steps) {
+              const current = model.at(-1);
+              if (next.kind === 'heartbeat') {
+                // Never before the start: contact comes after a journey began.
+                const agoMs = Math.min(next.agoMs, startedAgoMs);
+                const result = await subject.store.recordHeartbeat(
+                  heartbeatFor(journeyId, { receivedAt: ago(now, agoMs), position: null }),
+                );
+                if (state === 'ENDED') {
+                  expect(result.outcome, 'a heartbeat after the end').toBe('ended');
+                } else {
+                  silentForMs = Math.min(silentForMs, agoMs);
+                  const back = state === 'LOST_CONTACT' && silentForMs < LOST_CONTACT_AFTER_MS;
+                  expect(result.outcome, 'the heartbeat’s answer').toBe(
+                    back ? 'back_in_contact' : 'recorded',
+                  );
+                  if (back) {
+                    state = 'ACTIVE';
+                    if (current !== undefined) {
+                      current.resolved = true;
+                    }
+                  }
+                }
+              } else if (next.kind === 'sweep') {
+                const opened = await sweepOf(subject, [journeyId]);
+                if (state === 'ACTIVE' && silentForMs >= LOST_CONTACT_AFTER_MS) {
+                  state = 'LOST_CONTACT';
+                  const [result] = opened;
+                  if (result?.outcome !== 'opened') {
+                    throw new Error(
+                      `expected the sweep to open the alert: ${JSON.stringify(opened)}`,
+                    );
+                  }
+                  model.push({ id: result.alertId, resolved: false, acknowledgedBy: null });
+                }
+              } else if (next.kind === 'home') {
+                const result = await subject.store.recordHome(homeOf(journey));
+                if (state === 'ENDED') {
+                  expect(result).toEqual({ outcome: 'already_ended' });
+                } else {
+                  expect(result.outcome, '"I’m home"').toBe('home');
+                  if (state === 'LOST_CONTACT' && current !== undefined) {
+                    current.resolved = true;
+                  }
+                  state = 'ENDED';
+                }
+              } else {
+                const sender = senders[next.who] ?? stranger;
+                const result = await subject.store.recordAcknowledgement({
+                  alertId: current?.id ?? syntheticUuid(),
+                  responderId: sender,
+                });
+                if (current === undefined || !responderIds.includes(sender)) {
+                  expect(result, 'not a responder, or no alert').toEqual(NOT_FOUND);
+                } else if (current.resolved) {
+                  expect(result, 'a resolved alert').toEqual(OVER);
+                } else if (current.acknowledgedBy === sender) {
+                  expect(result, 'the sender’s own').toEqual(YOURS);
+                } else if (current.acknowledgedBy !== null) {
+                  expect(result, 'someone else’s').toEqual(TAKEN);
+                } else {
+                  acknowledged(result);
+                  current.acknowledgedBy = sender;
+                }
+              }
+
+              // After every step.
+              expect(await subject.stateOf(journeyId)).toBe(state);
+              const alerts = await subject.alertsOf(journeyId);
+              const acknowledgements = await subject.acknowledgementsOf(journeyId);
+              const messages = await subject.messagesOf(journeyId);
+              const withdrawnAt = await withdrawnAtOf(subject, journeyId);
+              expect(alerts.map(({ id }) => id).sort()).toEqual(model.map(({ id }) => id).sort());
+              for (const alert of alerts) {
+                const expected = model.find(({ id }) => id === alert.id);
+                const by =
+                  acknowledgements.find(({ alertId }) => alertId === alert.id)?.acknowledgedBy ??
+                  null;
+                expect(by, 'who is on it').toBe(expected?.acknowledgedBy ?? null);
+                expect(by === null || responderIds.includes(by), 'one of the responders').toBe(
+                  true,
+                );
+                expect(alert.state === 'RESOLVED', 'resolved').toBe(expected?.resolved);
+                expect(alert.state === 'ACKNOWLEDGED', 'ACKNOWLEDGED').toBe(
+                  alert.state !== 'RESOLVED' && by !== null,
+                );
+                const notices = ofKind(messages, alert.id, NOTICE);
+                expect(recipientsOf(notices), 'the notices').toEqual(
+                  by === null ? [] : responderIds.filter((id) => id !== by).sort(),
+                );
+                if (alert.state === 'RESOLVED') {
+                  expect(
+                    notices.filter(
+                      ({ messageId, sentAt }) =>
+                        sentAt === null && (withdrawnAt.get(messageId) ?? null) === null,
+                    ),
+                    'a resolved alert’s notices still to send',
+                  ).toEqual([]);
+                }
+              }
+            }
+          },
+        ),
+        {
+          numRuns: subject.propertyRuns,
+          // The spec's test plan, after LOST-03's review loop 1: fixed
+          // sequences run first, so even the database's few runs reach an
+          // acknowledgement that is recorded and a resolution after it.
+          examples: [
+            [
+              2 * HOUR,
+              [
+                { kind: 'sweep' },
+                { kind: 'acknowledge', who: 0 },
+                { kind: 'heartbeat', agoMs: 0 },
+                { kind: 'sweep' },
+              ],
+            ],
+            [
+              2 * HOUR,
+              [
+                { kind: 'sweep' },
+                { kind: 'acknowledge', who: 2 },
+                { kind: 'acknowledge', who: 1 },
+                { kind: 'acknowledge', who: 0 },
+                { kind: 'acknowledge', who: 1 },
+                { kind: 'home' },
+                { kind: 'acknowledge', who: 1 },
+              ],
+            ],
+          ],
+        },
+      );
+    },
+  },
+  {
+    name: 'LOST-06-AC8: a responder whose lost-contact message and ACKNOWLEDGED message are both unsent when the alert resolves gets exactly one stand-down, and the resolution is not refused; held until the later of their due times when both were handed over and are due later, and due at once otherwise',
+    async run(subject) {
+      for (const how of ['heartbeat', 'home'] as const) {
+        // Which of R2's two is due later: the later decides, whichever it is,
+        // so a store that held by the first message it found, or the last,
+        // fails one of the two.
+        for (const later of ['ACKNOWLEDGED', 'LOST_CONTACT'] as const) {
+          const at = `${how}, R2’s ${later} due later`;
+          const now = await subject.now();
+          const journey = await watched(subject, {
+            state: 'LOST_CONTACT',
+            startedAt: ago(now, 2 * HOUR),
+            lastHeartbeatAt: ago(now, HOUR),
+            responders: 4,
+          });
+          const [r1 = '', r2 = '', r3 = '', r4 = ''] = journey.responderIds;
+          const alertId = await subject.seedAlert({
+            journeyId: journey.journeyId,
+            state: 'ACKNOWLEDGED',
+            openedAt: ago(now, 55 * MINUTE),
+            silentSince: ago(now, HOUR),
+            acknowledgedBy: r1,
+            acknowledgedAt: ago(now, 50 * MINUTE),
+          });
+          const sooner = ago(now, -20 * SECOND);
+          const latest = ago(now, -40 * SECOND);
+          const seed = (
+            recipientId: string,
+            kind: 'LOST_CONTACT' | 'ACKNOWLEDGED',
+            given: {
+              attempts?: number;
+              nextAttemptAt?: Date;
+              sentAt?: Date;
+              lastFailure?: 'NO_TARGET';
+            },
+          ) =>
+            subject.seedMessage({
+              alertId,
+              recipientId,
+              kind,
+              createdAt: ago(now, kind === 'LOST_CONTACT' ? 55 * MINUTE : 50 * MINUTE),
+              nextAttemptAt: ago(now, 50 * MINUTE),
+              ...given,
+            });
+          // R1, who acknowledged: their lost-contact push never handed over.
+          await seed(r1, 'LOST_CONTACT', {});
+          // R2's phone has no push target: both handed over, refused
+          // NO_TARGET, and due again later. The lost-contact one first, as
+          // the code writes them.
+          await seed(r2, 'LOST_CONTACT', {
+            attempts: 2,
+            lastFailure: 'NO_TARGET',
+            nextAttemptAt: later === 'LOST_CONTACT' ? latest : sooner,
+          });
+          await seed(r2, 'ACKNOWLEDGED', {
+            attempts: 1,
+            lastFailure: 'NO_TARGET',
+            nextAttemptAt: later === 'ACKNOWLEDGED' ? latest : sooner,
+          });
+          // R3: both sent.
+          await seed(r3, 'LOST_CONTACT', { attempts: 1, sentAt: ago(now, 54 * MINUTE) });
+          await seed(r3, 'ACKNOWLEDGED', { attempts: 1, sentAt: ago(now, 49 * MINUTE) });
+          // R4: both handed over and refused, their retry times already past.
+          await seed(r4, 'LOST_CONTACT', {
+            attempts: 1,
+            lastFailure: 'NO_TARGET',
+            nextAttemptAt: ago(now, 30 * SECOND),
+          });
+          await seed(r4, 'ACKNOWLEDGED', {
+            attempts: 1,
+            lastFailure: 'NO_TARGET',
+            nextAttemptAt: ago(now, 20 * SECOND),
+          });
+
+          // Not refused: answered, not rejected (approach item 5).
+          const result =
+            how === 'heartbeat'
+              ? backInContact(
+                  await subject.store.recordHeartbeat(
+                    await freshHeartbeat(subject, journey.journeyId),
+                  ),
+                )
+              : endedHome(await subject.store.recordHome(homeOf(journey)));
+
+          const kind = how === 'heartbeat' ? 'BACK_IN_CONTACT' : 'HOME';
+          expect(result.alertId, at).toBe(alertId);
+          expect(await subject.stateOf(journey.journeyId), at).toBe(
+            how === 'heartbeat' ? 'ACTIVE' : 'ENDED',
+          );
+          const resolvedAt =
+            (await resolutionOf(subject, journey.journeyId, alertId))?.resolvedAt ??
+            new Date(Number.NaN);
+          expect(
+            (await subject.alertsOf(journey.journeyId)).map(({ state }) => state),
+            at,
+          ).toEqual(['RESOLVED']);
+          const messages = await subject.messagesOf(journey.journeyId);
+          const withdrawnAt = await withdrawnAtOf(subject, journey.journeyId);
+          const withdrawnOf = (recipientId: string) =>
+            messages
+              .filter((message) => message.recipientId === recipientId && message.kind !== kind)
+              .map(({ messageId }) => withdrawnAt.get(messageId) ?? null);
+          expect(withdrawnOf(r2), at).toEqual([resolvedAt, resolvedAt]);
+          expect(withdrawnOf(r4), at).toEqual([resolvedAt, resolvedAt]);
+          expect(withdrawnOf(r3), at).toEqual([null, null]);
+
+          const standDowns = ofKind(messages, alertId, kind);
+          expect(recipientsOf(standDowns), at).toEqual([r1, r2, r3, r4].sort());
+          expect(byRecipient(result.messages), at).toEqual(standDowns.map(asAnswered));
+          const standDownOf = (recipientId: string) =>
+            standDowns.find((message) => message.recipientId === recipientId);
+          expect(standDownOf(r2)?.nextAttemptAt, at).toEqual(latest);
+          expect(standDownOf(r1)?.nextAttemptAt, at).toEqual(resolvedAt);
+          expect(standDownOf(r3)?.nextAttemptAt, at).toEqual(resolvedAt);
+          expect(standDownOf(r4)?.nextAttemptAt, at).toEqual(resolvedAt);
+          for (const standDown of standDowns) {
+            expect(
+              standDown.nextAttemptAt.getTime() - resolvedAt.getTime(),
+              `${at}: no hold longer than 60 s`,
+            ).toBeLessThanOrEqual(60 * SECOND);
+          }
+
+          // R2's is not handed to the port before it is due; the others are.
+          const claimed = (
+            await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS })
+          ).messages.map(({ messageId }) => messageId);
+          expect(claimed, at).not.toContain(standDownOf(r2)?.messageId);
+          expect(claimed, at).toEqual(
+            expect.arrayContaining(
+              [r1, r3, r4].map((recipientId) => standDownOf(recipientId)?.messageId),
+            ),
+          );
+          for (const messageId of claimed) {
+            await subject.store.markSent(messageId);
+          }
+        }
+      }
+    },
+  },
+  {
+    name: 'LOST-06-AC13: a resolution withdraws exactly its own alert’s unsent messages of the kinds withdrawn on resolution, and leaves every other message alone',
+    async run(subject) {
+      const now = await subject.now();
+      const journey = await watched(subject, {
+        state: 'LOST_CONTACT',
+        startedAt: ago(now, 3 * HOUR),
+        lastHeartbeatAt: ago(now, HOUR),
+        responders: 2,
+      });
+      const [r1 = '', r2 = ''] = journey.responderIds;
+      const earlier = await subject.seedAlert({
+        journeyId: journey.journeyId,
+        state: 'RESOLVED',
+        openedAt: ago(now, 2 * HOUR),
+        silentSince: ago(now, 2 * HOUR + 5 * MINUTE),
+        resolvedAt: ago(now, 90 * MINUTE),
+        resolution: 'HOME',
+      });
+      const current = await subject.seedAlert({
+        journeyId: journey.journeyId,
+        state: 'ACKNOWLEDGED',
+        openedAt: ago(now, 55 * MINUTE),
+        silentSince: ago(now, HOUR),
+        acknowledgedBy: r1,
+        acknowledgedAt: ago(now, 50 * MINUTE),
+      });
+      const otherJourney = await watched(subject, {
+        state: 'LOST_CONTACT',
+        startedAt: ago(now, 2 * HOUR),
+        lastHeartbeatAt: ago(now, HOUR),
+        responders: 2,
+      });
+      const otherAlert = await subject.seedAlert({
+        journeyId: otherJourney.journeyId,
+        state: 'OPEN',
+        openedAt: ago(now, 55 * MINUTE),
+        silentSince: ago(now, HOUR),
+      });
+      // A message of every kind on each alert: unsent for one recipient,
+      // sent for the other. On this alert, every kind but the stand-down the
+      // resolution writes itself, which the unique (alert, recipient, kind)
+      // would refuse.
+      const seeded: { messageId: string; alertId: string; kind: MessageKind; unsent: boolean }[] =
+        [];
+      for (const [alertId, unsentFor, sentFor] of [
+        [earlier, r2, r1],
+        [current, r2, r1],
+        [otherAlert, otherJourney.responderIds[1] ?? '', otherJourney.responderIds[0] ?? ''],
+      ] as const) {
+        for (const kind of MESSAGE_KINDS) {
+          if (alertId === current && kind === 'BACK_IN_CONTACT') {
+            continue;
+          }
+          for (const [recipientId, unsent] of [
+            [unsentFor, true],
+            [sentFor, false],
+          ] as const) {
+            const messageId = await subject.seedMessage({
+              alertId,
+              recipientId,
+              kind,
+              createdAt: ago(now, 50 * MINUTE),
+              nextAttemptAt: ago(now, 50 * MINUTE),
+              attempts: 1,
+              lastFailure: unsent ? 'UNAVAILABLE' : null,
+              sentAt: unsent ? null : ago(now, 49 * MINUTE),
+            });
+            seeded.push({ messageId, alertId, kind, unsent });
+          }
+        }
+      }
+      const expected = seeded
+        .filter(
+          ({ alertId, kind, unsent }) =>
+            alertId === current && unsent && WITHDRAWN_WHEN_RESOLVED.includes(kind),
+        )
+        .map(({ messageId }) => messageId);
+      expect(expected, 'one unsent message of each kind withdrawn on resolution').toHaveLength(
+        WITHDRAWN_WHEN_RESOLVED.length,
+      );
+
+      backInContact(
+        await subject.store.recordHeartbeat(await freshHeartbeat(subject, journey.journeyId)),
+      );
+
+      const resolvedAt = (await resolutionOf(subject, journey.journeyId, current))?.resolvedAt;
+      const withdrawn = [
+        ...(await subject.withdrawalsOf(journey.journeyId)),
+        ...(await subject.withdrawalsOf(otherJourney.journeyId)),
+      ].filter(({ withdrawnAt }) => withdrawnAt !== null);
+      expect(withdrawn.map(({ messageId }) => messageId).sort()).toEqual([...expected].sort());
+      for (const { withdrawnAt } of withdrawn) {
+        expect(withdrawnAt).toEqual(resolvedAt);
       }
     },
   },

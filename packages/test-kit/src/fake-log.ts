@@ -22,9 +22,12 @@
  * Every event the server may log, and nothing else. LOST-02 adds the
  * watchdog's and the sender's failures, a journey the watchdog cannot move,
  * and a connection's error, each with a stage, a reason, a pool or a
- * SQLSTATE, and never a message. LOST-03 adds the last three: an "I'm home"
- * for a journey already ended (SM-07), an "I'm home" that failed, and a
- * journey brought back in contact with no alert to resolve.
+ * SQLSTATE, and never a message. LOST-03 adds three: an "I'm home" for a
+ * journey already ended (SM-07), an "I'm home" that failed, and a journey
+ * brought back in contact with no alert to resolve. LOST-06 adds the last
+ * two: an "I'm on it" for an alert already resolved, naming the alert and the
+ * reason only, and an "I'm on it" that failed, with its stage and SQLSTATE.
+ * Neither names a user (PRIV-07).
  */
 export type FakeLogEvent =
   | { event: 'heartbeat_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
@@ -40,7 +43,9 @@ export type FakeLogEvent =
   | { event: 'database_error'; pool: 'api' | 'worker'; code: string | null }
   | { event: 'home_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
   | { event: 'home_failed'; stage: 'read' | 'store'; code: string | null }
-  | { event: 'alert_missing'; journeyId: string };
+  | { event: 'alert_missing'; journeyId: string }
+  | { event: 'acknowledgement_ignored'; reason: 'ALERT_RESOLVED'; alertId: string }
+  | { event: 'acknowledgement_failed'; stage: 'read' | 'store'; code: string | null };
 
 export interface FakeLog {
   /** Records the event. */

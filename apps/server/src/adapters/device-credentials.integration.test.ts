@@ -122,6 +122,13 @@ function realApi() {
       log: fakeLog(),
     }),
     devices: databaseDeviceAuthenticator(database()),
+    // RG-03 (LOST-06, the spec's "Existing assertions that change by
+    // design"): `acknowledgements` added because "I'm on it" (D-114) made it
+    // part of what the API needs. These tests acknowledge nothing, so it
+    // rejects; they never call it, and nothing they assert changes.
+    acknowledgements: {
+      acknowledge: () => Promise.reject(new Error('these tests acknowledge nothing')),
+    },
   });
 }
 

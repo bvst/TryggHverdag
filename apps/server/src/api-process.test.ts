@@ -801,3 +801,264 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// LOST-06-AC1: what the process hands the acknowledgement module, seen from
+// the database and from stdout. An empty store, or a log that writes nowhere,
+// would fail "I'm on it" the way a missing database does; so the wiring is
+// told apart by what the fake database was asked, in what order, and by what
+// reached the process's own stdout (the spec's Mutation section: the wiring
+// line must be killed here).
+// ---------------------------------------------------------------------------
+
+describe('LOST-06: what the process hands the acknowledgement module, seen from the database and from stdout', () => {
+  /** One item of a select list or a returning clause: its table, if written before it, and its name. */
+  interface Item {
+    table: string | undefined;
+    name: string;
+  }
+
+  /**
+   * The items a select or a returning clause asks for, in order, as
+   * PostgreSQL names its answer's columns: an alias if there is one, else the
+   * column, with the table that qualifies it when it is written.
+   */
+  function itemsOf(text: string): Item[] {
+    const list =
+      /^\s*select\s+([\s\S]+?)\s+from\s/i.exec(text)?.[1] ??
+      /\sreturning\s+([\s\S]+)$/i.exec(text)?.[1];
+    if (list === undefined) {
+      return [];
+    }
+    const items: string[] = [];
+    let depth = 0;
+    let current = '';
+    for (const character of list) {
+      if (character === '(') depth += 1;
+      if (character === ')') depth -= 1;
+      if (character === ',' && depth === 0) {
+        items.push(current);
+        current = '';
+      } else {
+        current += character;
+      }
+    }
+    items.push(current);
+    return items.map((item) => {
+      const trimmed = item.trim();
+      const qualified = /^"?(\w+)"?\."?(\w+)"?$/.exec(trimmed);
+      if (qualified !== null) {
+        return { table: qualified[1], name: qualified[2] ?? '' };
+      }
+      const named = /("?)(\w+)\1\s*$/.exec(trimmed);
+      return { table: undefined, name: named?.[2] ?? trimmed };
+    });
+  }
+
+  /** The table a statement is about: the first after from, into or update. */
+  function tableOf(text: string): string | undefined {
+    return /\b(?:from|into|update)\s+"?(\w+)"?/i.exec(text)?.[1];
+  }
+
+  /** A column's name as the table holds it: an alias written in camelCase read as its column. */
+  const snake = (name: string) => name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+
+  /**
+   * The fake database for one "I'm on it": R1's device, J LOST_CONTACT, and
+   * its alert in `state` with R1, R2 and R3 its responders. It answers by
+   * table and column name, in the order asked, whatever SQL the store writes;
+   * a column it has no value for is refused, and named in `unanswered`, so a
+   * failure here says what the fake does not know rather than guessing.
+   */
+  function acknowledgementDatabase(state: 'OPEN' | 'RESOLVED') {
+    const device = { id: syntheticUuid(), userId: syntheticUuid() };
+    const journeyId = syntheticUuid();
+    const alertId = syntheticUuid();
+    const responderIds = [device.userId, syntheticUuid(), syntheticUuid()];
+    const tables: Record<string, Record<string, string | null>> = {
+      journeys: {
+        id: journeyId,
+        walker_id: syntheticUuid(),
+        device_id: syntheticUuid(),
+        state: 'LOST_CONTACT',
+        started_at: '2031-02-03 03:00:00+00',
+        last_heartbeat_at: '2031-02-03 03:55:00+00',
+        ended_at: null,
+        end_reason: null,
+      },
+      alerts: {
+        id: alertId,
+        journey_id: journeyId,
+        state,
+        opened_at: '2031-02-03 04:00:00+00',
+        silent_since: '2031-02-03 03:55:00+00',
+        resolved_at: state === 'RESOLVED' ? '2031-02-03 04:03:00+00' : null,
+        resolution: state === 'RESOLVED' ? 'BACK_IN_CONTACT' : null,
+        acknowledged_by: null,
+        acknowledged_at: null,
+      },
+      journey_responders: { journey_id: journeyId },
+      outbox: { alert_id: alertId, kind: 'ACKNOWLEDGED', attempts: '0' },
+    };
+    const unanswered: string[] = [];
+    /** The session limits the API reads back once at start (LOST-02-AC17), as in force. */
+    const inForce: Record<string, FakePgSetting> = {
+      idle_in_transaction_session_timeout: { setting: '10000', unit: 'ms' },
+      lock_timeout: { setting: String(LOCK_LIMIT_MS), unit: 'ms' },
+    };
+
+    const valueOf = (item: Item, main: string | undefined, recipient: string): string | null => {
+      const name = snake(item.name);
+      if (name === 'responder_id' || name === 'recipient_id') {
+        return recipient;
+      }
+      if (main === 'outbox' && name === 'id') {
+        return syntheticUuid();
+      }
+      for (const table of [item.table, main, 'alerts', 'journeys', 'outbox']) {
+        const row = table === undefined ? undefined : tables[table];
+        if (row !== undefined && name in row) {
+          return row[name] ?? null;
+        }
+      }
+      throw new Error(`no value for ${item.table ?? main ?? '?'}.${item.name}`);
+    };
+
+    const handler: FakePostgresHandler = (query) => {
+      // The read at start, whatever this test sends: answered here, so it is
+      // never what fails, nor what the order below counts.
+      const settings = pgSettingsAnswer(query, inForce);
+      if (settings !== undefined) {
+        return settings;
+      }
+      const { text } = query;
+      if (/^(begin|commit|rollback)\b/i.test(text)) {
+        return { columns: [], rows: [] };
+      }
+      if (/\bset_config\b/i.test(text)) {
+        return { columns: ['set_config'], rows: [[String(LOCK_LIMIT_MS)]] };
+      }
+      if (/\bfrom "?devices"?/i.test(text)) {
+        return { columns: ['id', 'user_id'], rows: [[device.id, device.userId]] };
+      }
+      const items = itemsOf(text);
+      const main = tableOf(text);
+      if (items.length === 0) {
+        // A write that returns nothing: one row changed.
+        return /^\s*(update|insert)\b/i.test(text)
+          ? { columns: [], rows: [[]] }
+          : { columns: [], rows: [] };
+      }
+      // One row per responder for a read of the responder rows, one per
+      // responder but R1 for the notices written, else one.
+      const notices = main === 'outbox' && /^\s*insert\b/i.test(text);
+      const recipients = notices
+        ? responderIds.slice(1)
+        : items.some(({ name }) => snake(name) === 'responder_id')
+          ? responderIds
+          : [device.userId];
+      try {
+        return {
+          columns: items.map(({ name }) => name),
+          rows: recipients.map((recipient) => items.map((item) => valueOf(item, main, recipient))),
+        };
+      } catch (error) {
+        unanswered.push(`${(error as Error).message} in: ${text}`);
+        throw error;
+      }
+    };
+    return { device, journeyId, alertId, responderIds, handler, unanswered };
+  }
+
+  /** The API's lock limit, which the fake answers a set_config with. */
+  const LOCK_LIMIT_MS = 5_000;
+
+  async function sendAcknowledgement(port: number, credential: string, alertId: string) {
+    return fetch(
+      `http://127.0.0.1:${String(port)}${apiPath(`alerts/${alertId}/acknowledgement`)}`,
+      { method: 'POST', headers: { authorization: `Bearer ${credential}` } },
+    );
+  }
+
+  test('LOST-06-AC1: through the process, "I’m on it" is read and written by the database store: the alert read, then one begin…commit that takes the journey’s row for update before it updates the alert, for the device’s own user, and writes the notices; the credential never reaches the database', async () => {
+    const credential = syntheticCredential();
+    const { device, alertId, handler, unanswered } = acknowledgementDatabase('OPEN');
+    const database = await listeningFakePostgres(handler);
+    const api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+
+    try {
+      const response = await sendAcknowledgement(api.port, credential, alertId);
+
+      expect(unanswered, 'queries the fake database could not answer').toEqual([]);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ outcome: 'ACKNOWLEDGED' });
+      const texts = database.queries.map(({ text }) => text);
+      const index = (pattern: RegExp) => texts.findIndex((text) => pattern.test(text));
+      const begin = index(/^begin\b/i);
+      const commit = index(/^commit\b/i);
+      const locked = index(/\bfrom "?journeys"?[\s\S]*\bfor update\b/i);
+      const updated = index(/^update "?alerts"?/i);
+      const notices = index(/^insert into "?outbox"?/i);
+      // The module's read, a plain one, before the transaction.
+      const read = index(/\bfrom "?alerts"?/i);
+      expect(read).toBeGreaterThan(-1);
+      expect(read).toBeLessThan(begin);
+      expect(begin).toBeGreaterThan(-1);
+      expect(locked).toBeGreaterThan(begin);
+      expect(updated).toBeGreaterThan(locked);
+      expect(notices).toBeGreaterThan(updated);
+      expect(commit).toBeGreaterThan(notices);
+      expect(texts.filter((text) => /^begin\b/i.test(text))).toHaveLength(1);
+      // For the device's own user, and the alert named in the path.
+      expect(JSON.stringify(database.queries.slice(begin, commit))).toContain(device.userId);
+      expect(JSON.stringify(database.queries.slice(begin, commit))).toContain(alertId);
+      expect(JSON.stringify(database.queries)).not.toContain(credential);
+    } finally {
+      await api.stop();
+      await database.close();
+    }
+  });
+
+  test('LOST-06-AC1: through the process, an ignored "I’m on it", its alert RESOLVED, is 409 ALERT_RESOLVED; its acknowledgement_ignored line reaches the process’s own stdout, naming the alert and the reason and nothing else; nothing is written to the database', async () => {
+    const credential = syntheticCredential();
+    const { device, alertId, handler, unanswered } = acknowledgementDatabase('RESOLVED');
+    const database = await listeningFakePostgres(handler);
+    // The log is made at start-up, as in production; the capture comes after.
+    const api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+    const seen: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      seen.push(String(chunk));
+      return true;
+    });
+
+    try {
+      const response = await sendAcknowledgement(api.port, credential, alertId);
+      spy.mockRestore();
+
+      expect(unanswered, 'queries the fake database could not answer').toEqual([]);
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: 'ALERT_RESOLVED' });
+      const lines = seen
+        .join('')
+        .split('\n')
+        .filter((line) => line.includes('acknowledgement_ignored'));
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0] ?? 'null')).toEqual({
+        event: 'acknowledgement_ignored',
+        reason: 'ALERT_RESOLVED',
+        alertId,
+      });
+      expect(seen.join('')).not.toContain(device.userId);
+      expect(seen.join('')).not.toContain(credential);
+      expect(
+        database.queries
+          .map(({ text }) => text)
+          .filter((text) => /^\s*(insert|update|delete)\b/i.test(text)),
+      ).toEqual([]);
+    } finally {
+      spy.mockRestore();
+      await api.stop();
+      await database.close();
+    }
+  });
+});

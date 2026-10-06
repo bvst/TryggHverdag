@@ -48,8 +48,13 @@ describe('SM-04: the "I’m home" route, as the contract holds it', () => {
     const { route } = definitionOf(reportHome);
 
     expect(contract.reportHome).toBe(reportHome);
+    // RG-03 (LOST-06): the "I'm on it" route, acknowledgeAlert, is added to
+    // the contract by design (D-114, its spec's approach item 6), so it is
+    // named here on purpose. This pin was missed by that spec's "Existing
+    // assertions that change by design"; alerts.test.ts pins the same five
+    // keys. The list is still exact, one key larger.
     expect(Object.keys(contract).sort()).toEqual(
-      ['health', 'recordHeartbeat', 'reportHome', 'startJourney'].sort(),
+      ['acknowledgeAlert', 'health', 'recordHeartbeat', 'reportHome', 'startJourney'].sort(),
     );
     expect(route.method).toBe('POST');
     expect(route.path).toBe('/journeys/{journeyId}/home');

@@ -191,6 +191,16 @@ function underTest(): JourneyStoreUnderTest {
       store.removeResponders(journeyId);
       return Promise.resolve();
     },
+    // LOST-06: who is on each alert and since when, through a reader of its
+    // own, so alertsOf keeps its shape.
+    acknowledgementsOf: (journeyId) =>
+      Promise.resolve(
+        alertsOf(journeyId).map(({ id, acknowledgedBy, acknowledgedAt }) => ({
+          alertId: id,
+          acknowledgedBy,
+          acknowledgedAt,
+        })),
+      ),
   };
 }
 
@@ -328,6 +338,25 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       'LOST-03-AC16: recordHome decides by the home rule under the lock: a walker or a device that is not the journey’s makes it reject and write nothing; an ENDED journey answers already_ended and writes nothing; an ACTIVE one is ended without resolving anything; a LOST_CONTACT one is ended and its alert resolved with resolution HOME',
       // Joined in review loop 2 (the spec's item 15a).
       'LOST-03-AC16: recordHome with the walker’s or the device’s ID in another case than the stored one is refused by the rule under the lock, and changes nothing',
+      // RG-03 (LOST-06, the spec's "Existing assertions that change by
+      // design": "the pinned list of behaviour names gains this task's
+      // behaviours, as each task's do"): "I'm on it" joins the shared suite,
+      // its spec's shared behaviours 1 to 11, so the fake and the adapter are
+      // held to them alike (D-100). Every name above is unchanged; these are
+      // added. The first and the third gained a clause each over the spec's
+      // wording (the read waits for no held row; a responder's own ID in
+      // another case is not theirs), which test-author may add.
+      'LOST-06-AC2: alertForAcknowledgement reads the alert’s state, who is recorded on it and its journey’s responders, in either case and without waiting for a held row; and null for an ID no alert has',
+      'LOST-06-AC2: recordAcknowledgement by a responder of the journey moves its unresolved alert — OPEN, ESCALATED, or ACKNOWLEDGED with nobody recorded — to ACKNOWLEDGED, acknowledged by that responder at the store’s now, and writes one ACKNOWLEDGED message per other responder row, each with an ID of its own and due at that now; the journey, its other alerts, another journey’s alert and every lost-contact message are untouched',
+      'LOST-06-AC3: recordAcknowledgement from a user who is not a responder of the alert’s journey — the walker, another walker, a responder of another journey — or for an alert ID no alert has, or with the responder’s own ID in another case, compared exactly, answers ALERT_NOT_FOUND and writes nothing',
+      'LOST-06-AC4: recordAcknowledgement by the responder already recorded answers ALREADY_YOURS and writes nothing: acknowledged_at keeps its first time',
+      'LOST-06-AC4: recordAcknowledgement by another responder, when someone is recorded, answers ALREADY_ACKNOWLEDGED and writes nothing',
+      'LOST-06-AC5: recordAcknowledgement of a RESOLVED alert answers ALERT_RESOLVED and writes nothing, whatever resolved it',
+      'LOST-06-AC6: 10 different responders acknowledging one alert at once, 5 times over: exactly one is recorded and every other answers ALREADY_ACKNOWLEDGED, none an error, with one set of notices; and 10 copies of one responder’s at once record it once',
+      'LOST-06-AC7: when contact comes back, or "I’m home" ends the journey, an ACKNOWLEDGED alert is resolved keeping who acknowledged it and when; its ACKNOWLEDGED messages not yet sent are withdrawn at the store’s now, keeping their attempts and last failure, and are never handed out again; sent ones are left as they were; every responder, the acknowledger included, gets one stand-down',
+      'LOST-06-AC7: for any sequence of acknowledgements, heartbeats fresh or stale, sweeps and "I’m home", after every step an alert is ACKNOWLEDGED exactly when it is unresolved and someone is recorded on it, nobody but one responder is ever recorded, the notices are one per other responder of an acknowledged alert, and no RESOLVED alert has an ACKNOWLEDGED message neither sent nor withdrawn',
+      'LOST-06-AC8: a responder whose lost-contact message and ACKNOWLEDGED message are both unsent when the alert resolves gets exactly one stand-down, and the resolution is not refused; held until the later of their due times when both were handed over and are due later, and due at once otherwise',
+      'LOST-06-AC13: a resolution withdraws exactly its own alert’s unsent messages of the kinds withdrawn on resolution, and leaves every other message alone',
     ]);
     expect(RACERS).toBeGreaterThanOrEqual(10);
     expect(RACE_ROUNDS).toBeGreaterThanOrEqual(5);
@@ -1605,7 +1634,10 @@ describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
   });
 
   test('the test kit hands out the message kinds, in the server’s order', () => {
-    expect(kit.MESSAGE_KINDS).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME']);
+    // RG-03 (LOST-06, the spec's "Existing assertions that change by
+    // design"): the list gains ACKNOWLEDGED, the "someone is on it" notice
+    // (D-113), last, as the server's MESSAGE_KINDS does. Still exact.
+    expect(kit.MESSAGE_KINDS).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED']);
   });
 });
 
@@ -1708,5 +1740,317 @@ describe('fakeJourneyStore: review loop 1 of back in contact and "I’m home" (L
     const withdrawnAt = new Map(store.outbox().map((m) => [m.messageId, m.withdrawnAt]));
     expect(withdrawnAt.get(standDown)).toEqual(CLOCK_AT);
     expect(withdrawnAt.get(lostContact)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LOST-06: "I'm on it", beyond the shared suite.
+//
+// The acknowledgement system tests prove "I'm on it" by what this fake read,
+// recorded, wrote and withdrew. A fake that guessed the time, took the
+// alert's journey's row without waiting for its holder, recorded half an
+// acknowledgement, or could not fail would make those tests pass whatever the
+// acknowledgement module did.
+// ---------------------------------------------------------------------------
+
+describe('fakeJourneyStore: "I’m on it" (LOST-06)', () => {
+  test('a store given no clock refuses, loudly and naming the clock, to record an acknowledgement, and changes nothing; a read, and a refusal it needs no time for, are answered without one', async () => {
+    const store = fakeJourneyStore();
+    const walkerId = store.addUser();
+    const [r1, r2] = [store.addUser(), store.addUser()];
+    const journeyId = store.seed({
+      walkerId,
+      deviceId: store.addDevice(walkerId),
+      state: 'LOST_CONTACT',
+      responderIds: [r1, r2],
+      startedAt: AT,
+    });
+    const alertId = store.seedAlert({
+      journeyId,
+      state: 'OPEN',
+      openedAt: AT,
+      silentSince: AT,
+    });
+
+    await expect(store.recordAcknowledgement({ alertId, responderId: r1 })).rejects.toThrow(
+      /clock/,
+    );
+    expect(store.alerts()[0]).toMatchObject({
+      state: 'OPEN',
+      acknowledgedBy: null,
+      acknowledgedAt: null,
+    });
+    expect(store.outbox()).toEqual([]);
+
+    expect(await store.alertForAcknowledgement(alertId)).toMatchObject({ id: alertId });
+    expect(await store.recordAcknowledgement({ alertId, responderId: walkerId })).toEqual({
+      outcome: 'not_recorded',
+      decision: { type: 'refused', reason: 'ALERT_NOT_FOUND' },
+    });
+  });
+
+  test('alertForAcknowledgement and recordAcknowledgement are port methods: recorded among the calls, failed when told to, alone or with every other, changing nothing, and their beforeNext actions run as they are called', async () => {
+    const { store, alertId, responderIds } = await lostStore();
+    const [r1 = ''] = responderIds;
+    const error = new Error('the database went away');
+
+    store.failWith(error, 'alertForAcknowledgement');
+    await expect(store.alertForAcknowledgement(alertId)).rejects.toBe(error);
+    expect(await store.recordAcknowledgement({ alertId, responderId: r1 })).toMatchObject({
+      outcome: 'acknowledged',
+    });
+    store.recover();
+
+    const { store: other, alertId: otherAlert, responderIds: others } = await lostStore();
+    other.failWith(error, 'recordAcknowledgement');
+    await expect(
+      other.recordAcknowledgement({ alertId: otherAlert, responderId: others[0] ?? '' }),
+    ).rejects.toBe(error);
+    expect(await other.alertForAcknowledgement(otherAlert)).toMatchObject({ state: 'OPEN' });
+    other.failWith(error);
+    await expect(other.alertForAcknowledgement(otherAlert)).rejects.toBe(error);
+    other.recover();
+    expect(other.alerts()[0]).toMatchObject({ state: 'OPEN', acknowledgedBy: null });
+    expect(other.outbox().map(({ kind }) => kind)).toEqual(['LOST_CONTACT', 'LOST_CONTACT']);
+    expect(other.calls).toEqual([
+      'openLostContactAlert',
+      'recordAcknowledgement',
+      'alertForAcknowledgement',
+      'alertForAcknowledgement',
+    ]);
+
+    // beforeNext: the alert resolves as the acknowledgement is asked for.
+    const {
+      store: third,
+      alertId: thirdAlert,
+      journeyId,
+      responderIds: theirs,
+    } = await lostStore();
+    let ran = 0;
+    third.beforeNext('recordAcknowledgement', () => {
+      ran += 1;
+      third.setState(journeyId, 'ACTIVE');
+    });
+    third.beforeNext('alertForAcknowledgement', () => {
+      ran += 10;
+    });
+    await third.alertForAcknowledgement(thirdAlert);
+    await third.recordAcknowledgement({ alertId: thirdAlert, responderId: theirs[0] ?? '' });
+    expect(ran).toBe(11);
+  });
+
+  test('recordAcknowledgement waits while the alert’s journey’s row is held, and decides as the row stands when the holder commits; alertForAcknowledgement does not wait', async () => {
+    const { store, clock, journeyId, alertId, responderIds } = await lostStore();
+    const [r1 = ''] = responderIds;
+    store.hold(journeyId);
+    let answer: unknown;
+    const answering = store.recordAcknowledgement({ alertId, responderId: r1 }).then((result) => {
+      answer = result;
+    });
+    await settled();
+    expect(answer).toBeUndefined();
+    expect(await store.alertForAcknowledgement(alertId)).toMatchObject({ state: 'OPEN' });
+
+    // The holder brings the journey back in contact, then commits.
+    await store.commitHold(journeyId, async () => {
+      await store.recordHeartbeat(heartbeat(journeyId, await clock.now()));
+    });
+    await answering;
+
+    expect(answer).toEqual({
+      outcome: 'not_recorded',
+      decision: { type: 'ignored', reason: 'ALERT_RESOLVED' },
+    });
+    expect(store.alerts()[0]).toMatchObject({ state: 'RESOLVED', acknowledgedBy: null });
+    expect(store.outbox().filter(({ kind }) => kind === 'ACKNOWLEDGED')).toEqual([]);
+
+    // Released with nothing changed, the waiting one is recorded.
+    const other = await lostStore();
+    other.store.hold(other.journeyId);
+    const recording = other.store.recordAcknowledgement({
+      alertId: other.alertId,
+      responderId: other.responderIds[0] ?? '',
+    });
+    await settled();
+    other.store.release(other.journeyId);
+    expect((await recording).outcome).toBe('acknowledged');
+  });
+
+  test('recording sets the alert ACKNOWLEDGED, with who and when, at the clock’s now, and writes one ACKNOWLEDGED message per other responder, due at that now; alerts() hands out copies, its new time included', async () => {
+    const { store, clock, journeyId, alertId, responderIds } = await lostStore(3);
+    const [r1 = '', r2 = '', r3 = ''] = responderIds;
+    clock.advance(60_000);
+    const at = await clock.now();
+
+    const result = await store.recordAcknowledgement({ alertId, responderId: r1 });
+
+    expect(result.outcome).toBe('acknowledged');
+    expect(store.alerts()[0]).toMatchObject({
+      id: alertId,
+      journeyId,
+      state: 'ACKNOWLEDGED',
+      acknowledgedBy: r1,
+      acknowledgedAt: at,
+      resolvedAt: null,
+    });
+    const notices = store.outbox().filter(({ kind }) => kind === 'ACKNOWLEDGED');
+    expect(notices.map(({ recipientId }) => recipientId).sort()).toEqual([r2, r3].sort());
+    for (const notice of notices) {
+      expect(notice).toMatchObject({
+        alertId,
+        createdAt: at,
+        nextAttemptAt: at,
+        attempts: 0,
+        sentAt: null,
+        lastFailure: null,
+        withdrawnAt: null,
+      });
+    }
+
+    const handedOut = store.alerts()[0];
+    handedOut?.acknowledgedAt?.setTime(0);
+    expect(store.alerts()[0]?.acknowledgedAt).toEqual(at);
+  });
+
+  test('seedAlert takes acknowledgedBy and acknowledgedAt, both or neither, the acknowledger a user, in any state; left out, both are null', () => {
+    const store = fakeJourneyStore();
+    const walkerId = store.addUser();
+    const responderId = store.addUser();
+    const journeyId = store.seed({
+      walkerId,
+      deviceId: store.addDevice(walkerId),
+      state: 'LOST_CONTACT',
+      responderIds: [responderId],
+      startedAt: AT,
+    });
+    const base = { journeyId, openedAt: AT, silentSince: AT };
+
+    expect(() =>
+      store.seedAlert({ ...base, state: 'RESOLVED', acknowledgedBy: responderId }),
+    ).toThrow(/check constraint/);
+    expect(() => store.seedAlert({ ...base, state: 'RESOLVED', acknowledgedAt: AT })).toThrow(
+      /check constraint/,
+    );
+    expect(() =>
+      store.seedAlert({
+        ...base,
+        state: 'RESOLVED',
+        acknowledgedBy: syntheticUuid(),
+        acknowledgedAt: AT,
+      }),
+    ).toThrow(/foreign key/);
+    expect(store.alerts()).toEqual([]);
+
+    // No check ties the state to them: ACKNOWLEDGED with nobody, and
+    // RESOLVED with someone, are both taken (approach item 7).
+    store.seedAlert({ ...base, state: 'ACKNOWLEDGED' });
+    store.seedAlert({
+      ...base,
+      state: 'RESOLVED',
+      resolvedAt: AT,
+      resolution: 'HOME',
+      acknowledgedBy: responderId.toUpperCase(),
+      acknowledgedAt: AT,
+    });
+    expect(
+      store
+        .alerts()
+        .map(({ state, acknowledgedBy, acknowledgedAt }) => [
+          state,
+          acknowledgedBy,
+          acknowledgedAt,
+        ]),
+    ).toEqual([
+      ['ACKNOWLEDGED', null, null],
+      ['RESOLVED', responderId, AT],
+    ]);
+  });
+
+  test('an alert ID that is not a UUID is refused by both, as a uuid parameter is; one in upper case names the alert', async () => {
+    const { store, alertId, responderIds } = await lostStore();
+
+    await expect(store.alertForAcknowledgement('not-a-uuid')).rejects.toThrow(/uuid/);
+    await expect(
+      store.recordAcknowledgement({ alertId: 'not-a-uuid', responderId: responderIds[0] ?? '' }),
+    ).rejects.toThrow(/uuid/);
+    expect((await store.alertForAcknowledgement(alertId.toUpperCase()))?.id).toBe(alertId);
+    expect(
+      (
+        await store.recordAcknowledgement({
+          alertId: alertId.toUpperCase(),
+          responderId: responderIds[0] ?? '',
+        })
+      ).outcome,
+    ).toBe('acknowledged');
+  });
+
+  test('a notice that cannot be written, a second ACKNOWLEDGED for the same alert and recipient, leaves nothing of the step: the alert as it was, no notice written', async () => {
+    const { store, alertId, responderIds } = await lostStore(3);
+    store.seedMessage({
+      alertId,
+      recipientId: responderIds[2] ?? '',
+      kind: 'ACKNOWLEDGED',
+      createdAt: CLOCK_AT,
+      nextAttemptAt: CLOCK_AT,
+    });
+    const outbox = store.outbox();
+
+    await expect(
+      store.recordAcknowledgement({ alertId, responderId: responderIds[0] ?? '' }),
+    ).rejects.toThrow(/unique/);
+
+    expect(store.alerts()[0]).toMatchObject({
+      state: 'OPEN',
+      acknowledgedBy: null,
+      acknowledgedAt: null,
+    });
+    expect(store.outbox()).toEqual(outbox);
+  });
+
+  test('recordAcknowledgement given an alert ID alone is refused, naming what it takes, and writes nothing', async () => {
+    const { store, alertId } = await lostStore();
+
+    await expect(
+      store.recordAcknowledgement(alertId as unknown as { alertId: string; responderId: string }),
+    ).rejects.toThrow(/alertId, responderId/);
+    expect(store.alerts()[0]?.acknowledgedBy).toBeNull();
+  });
+
+  test('the test kit hands out its two withdrawal lists: what a resolution withdraws and what an open withdraws, every message kind in exactly one', () => {
+    expect(kit.WITHDRAWN_WHEN_RESOLVED).toEqual(['LOST_CONTACT', 'ACKNOWLEDGED']);
+    expect(kit.WITHDRAWN_WHEN_OPENED).toEqual(['BACK_IN_CONTACT', 'HOME']);
+    expect(
+      kit.MESSAGE_KINDS.filter(
+        (kind) =>
+          Number(kit.WITHDRAWN_WHEN_RESOLVED.includes(kind)) +
+            Number(kit.WITHDRAWN_WHEN_OPENED.includes(kind)) !==
+          1,
+      ),
+    ).toEqual([]);
+  });
+
+  test('a resolution withdraws the unsent notices, and the open that follows leaves notices alone, as it leaves every kind it does not list', async () => {
+    const { store, clock, journeyId, alertId, responderIds } = await lostStore(2);
+    const [r1 = '', r2 = ''] = responderIds;
+    await store.recordAcknowledgement({ alertId, responderId: r1 });
+    const [notice] = store.outbox().filter(({ kind }) => kind === 'ACKNOWLEDGED');
+    clock.advance(1_000);
+    const resolvedAt = await clock.now();
+
+    await store.recordHeartbeat(heartbeat(journeyId, resolvedAt));
+
+    expect(store.outbox().find(({ messageId }) => messageId === notice?.messageId)).toMatchObject({
+      recipientId: r2,
+      withdrawnAt: resolvedAt,
+    });
+    // Silent again, past five minutes, and opened: the notice, withdrawn
+    // already, is not withdrawn a second time.
+    clock.advance(2 * FIVE_MINUTES);
+    expect((await store.openLostContactAlert({ journeyId, afterMs: FIVE_MINUTES })).outcome).toBe(
+      'opened',
+    );
+    expect(
+      store.outbox().find(({ messageId }) => messageId === notice?.messageId)?.withdrawnAt,
+    ).toEqual(resolvedAt);
   });
 });

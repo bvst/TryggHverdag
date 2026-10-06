@@ -12,7 +12,7 @@
 // looked up when a line is written. pino's own default destination writes to
 // file descriptor 1 directly, which a capture of process.stdout.write cannot
 // see: then every "nothing was written" test would pass while proving nothing.
-import { syntheticCoordinate, syntheticUuid } from '@trygghverdag/test-kit';
+import { syntheticCoordinate, syntheticCredential, syntheticUuid } from '@trygghverdag/test-kit';
 import process from 'node:process';
 import { inspect } from 'node:util';
 import { describe, expect, test, vi } from 'vitest';
@@ -44,6 +44,10 @@ const EVENTS: LogEvent[] = [
   { event: 'heartbeat_failed', stage: 'clock', code: null },
   { event: 'heartbeat_failed', stage: 'read', code: '57P01' },
   { event: 'heartbeat_failed', stage: 'store', code: '23514' },
+  // LOST-06 (the spec's "Added to, not changed"): "I'm on it" for an alert
+  // already over, and an "I'm on it" that failed.
+  { event: 'acknowledgement_ignored', reason: 'ALERT_RESOLVED', alertId: syntheticUuid() },
+  { event: 'acknowledgement_failed', stage: 'store', code: '40001' },
 ];
 
 /** Codes that are not a SQLSTATE: each is written as null, so no message can travel as a code. */
@@ -1059,6 +1063,216 @@ describe('PRIV-07 and LOST-03: the three new events are closed, at the type and 
       expect(markersIn(text, [latitude, longitude, 'Failing row', walkerId]), event.event).toEqual(
         [],
       );
+    }
+  });
+});
+
+// ===========================================================================
+// LOST-06's two events (its spec's approach item 11): an "I'm on it" for an
+// alert already over, naming the alert and the reason, and an "I'm on it"
+// that failed, with its stage and SQLSTATE. Closed, like the rest: an alert's
+// ID only as a canonical UUID, a reason and a stage only from their sets, a
+// code only as a SQLSTATE, and no user's ID, no location and no message.
+// ===========================================================================
+
+const LOST_06_EVENTS: LogEvent[] = [
+  { event: 'acknowledgement_ignored', reason: 'ALERT_RESOLVED', alertId: syntheticUuid() },
+  { event: 'acknowledgement_failed', stage: 'read', code: '57P01' },
+  { event: 'acknowledgement_failed', stage: 'store', code: null },
+];
+
+describe('PRIV-07 and LOST-06: the two new events are closed, at the type and at run time', () => {
+  test('LOST-06-AC16: (L1) each of the two is exactly its fields, no more and no fewer: a field added to one, an optional one included, or a set widened, fails typecheck', () => {
+    // As LOST-03-AC19's pin: each entry is `true` only when each type is
+    // assignable to the other and both have the same keys.
+    type Exactly<A, B> = [A] extends [B]
+      ? [B] extends [A]
+        ? [keyof A] extends [keyof B]
+          ? [keyof B] extends [keyof A]
+            ? true
+            : false
+          : false
+        : false
+      : false;
+    type EventOf<Name extends LogEvent['event']> = Extract<LogEvent, { event: Name }>;
+    const pinned: [
+      Exactly<
+        EventOf<'acknowledgement_ignored'>,
+        { event: 'acknowledgement_ignored'; reason: 'ALERT_RESOLVED'; alertId: string }
+      >,
+      Exactly<
+        EventOf<'acknowledgement_failed'>,
+        { event: 'acknowledgement_failed'; stage: 'read' | 'store'; code: string | null }
+      >,
+    ] = [true, true];
+
+    expect(pinned).toEqual([true, true]);
+  });
+
+  test('LOST-06-AC16: (L1) neither holds another field: a latitude, a message, a position, the responder, or another reason or stage does not type-check', () => {
+    // Each @ts-expect-error fails the type check (gate:static) the day the
+    // property under it stops being an error. Values only; none is handed to
+    // the log.
+    const alertId = syntheticUuid();
+    const refused: unknown[] = [
+      {
+        event: 'acknowledgement_ignored',
+        reason: 'ALERT_RESOLVED',
+        alertId,
+        // @ts-expect-error -- a latitude has no field to travel in
+        latitude: 0,
+      } satisfies LogEvent,
+      {
+        event: 'acknowledgement_ignored',
+        // @ts-expect-error -- nor a reason the route answers but does not log
+        reason: 'ALREADY_ACKNOWLEDGED',
+        alertId,
+      } satisfies LogEvent,
+      {
+        event: 'acknowledgement_ignored',
+        reason: 'ALERT_RESOLVED',
+        alertId,
+        // @ts-expect-error -- nor who sent it: no user's ID is logged
+        responderId: alertId,
+      } satisfies LogEvent,
+      {
+        event: 'acknowledgement_failed',
+        stage: 'store',
+        code: null,
+        // @ts-expect-error -- nor an error's message
+        message: 'Failing row contains (…)',
+      } satisfies LogEvent,
+      {
+        event: 'acknowledgement_failed',
+        // @ts-expect-error -- nor a stage "I'm on it" does not have
+        stage: 'clock',
+        code: null,
+      } satisfies LogEvent,
+      {
+        event: 'acknowledgement_failed',
+        stage: 'read',
+        code: null,
+        // @ts-expect-error -- nor a position
+        position: { latitude: 0, longitude: 0 },
+      } satisfies LogEvent,
+    ];
+
+    expect(refused).toHaveLength(6);
+  });
+
+  test.each(LOST_06_EVENTS)(
+    'LOST-06-AC16: createLog writes $event as one JSON line, holding exactly that event’s fields',
+    (event) => {
+      const writer = recordingWriter();
+
+      createLog({ write: writer.write }).write(event);
+
+      const lines = writer.lines();
+      expect(lines).toHaveLength(1);
+      expect(writer.chunks.join('').endsWith('\n')).toBe(true);
+      expect(JSON.parse(lines[0] ?? 'null')).toEqual(event);
+    },
+  );
+
+  test.each([
+    {
+      what: 'an acknowledgement_ignored reason',
+      event: {
+        event: 'acknowledgement_ignored',
+        reason: 'ALERT_RESOLVED',
+        alertId: syntheticUuid(),
+      },
+      field: 'reason',
+      outside: [
+        'ALERT_NOT_FOUND',
+        'ALREADY_ACKNOWLEDGED',
+        'JOURNEY_ENDED',
+        'alert_resolved',
+        '',
+        409,
+      ],
+    },
+    {
+      what: 'an acknowledgement_failed stage',
+      event: { event: 'acknowledgement_failed', stage: 'read', code: '57P01' },
+      field: 'stage',
+      outside: ['clock', 'open', 'claim', 'STORE', '', ['store']],
+    },
+  ])(
+    'LOST-06-AC16: $what outside its set is written as null, and none of it is written; inside it, as it is',
+    ({ event, field, outside }) => {
+      for (const value of [...outside, ...freeText().map(({ value: text }) => text)]) {
+        const { line, text } = writtenThroughACast({ ...event, [field]: value });
+
+        expect(line, JSON.stringify(value)).toEqual({ ...event, [field]: null });
+        if (typeof value === 'string' && value !== '') {
+          expect(text, value).not.toContain(`"${value}"`);
+        }
+      }
+      expect(writtenThroughACast(event).line).toEqual(event);
+    },
+  );
+
+  test('LOST-06-AC16: the stages read and store are each written as they are, so the null above is the value’s doing', () => {
+    for (const stage of ['read', 'store']) {
+      const event = { event: 'acknowledgement_failed', stage, code: null };
+      expect(writtenThroughACast(event).line, stage).toEqual(event);
+    }
+  });
+
+  test('LOST-06-AC16: in the acknowledgement_ignored line, an alertId that is not a lower-case canonical UUID is written as null, and none of it is written', () => {
+    const event = {
+      event: 'acknowledgement_ignored',
+      reason: 'ALERT_RESOLVED',
+      alertId: syntheticUuid(),
+    };
+
+    for (const { what, journeyId: value, markers } of NOT_JOURNEY_IDS) {
+      const { line, text } = writtenThroughACast({ ...event, alertId: value() });
+
+      expect(line, what).toEqual({ ...event, alertId: null });
+      expect(markersIn(text, markers()), what).toEqual([]);
+    }
+    expect(writtenThroughACast(event).line).toEqual(event);
+  });
+
+  test('LOST-06-AC16: an acknowledgement_failed code that is not a SQLSTATE is written as null, and a SQLSTATE as it is', () => {
+    const event = { event: 'acknowledgement_failed', stage: 'store', code: '23505' };
+
+    for (const { what, code } of [...NOT_SQLSTATES, ...CODES_NOT_TEXT]) {
+      const { line, text } = writtenThroughACast({ ...event, code });
+
+      expect(line, what).toEqual({ ...event, code: null });
+      if (typeof code === 'string' && code !== '') {
+        expect(text, what).not.toContain(code);
+      }
+    }
+    expect(writtenThroughACast(event).line).toEqual(event);
+  });
+
+  test('LOST-06-AC16: fields the two events do not have, got past the type, are not written: a position, a message, an error, the responder, a credential', () => {
+    const latitude = String(syntheticCoordinate());
+    const longitude = String(syntheticCoordinate());
+    const responderId = syntheticUuid();
+    const credential = syntheticCredential();
+    const extra = {
+      latitude: Number(latitude),
+      longitude: Number(longitude),
+      position: { latitude: Number(latitude), longitude: Number(longitude) },
+      message: `Failing row contains (${latitude}, ${longitude})`,
+      err: new Error(`Failing row contains (${latitude}, ${longitude}) for ${responderId}`),
+      responderId,
+      credential,
+    };
+
+    for (const event of LOST_06_EVENTS) {
+      const { line, text } = writtenThroughACast({ ...event, ...extra });
+
+      expect(line, event.event).toEqual(event);
+      expect(
+        markersIn(text, [latitude, longitude, 'Failing row', responderId, credential]),
+        event.event,
+      ).toEqual([]);
     }
   });
 });
