@@ -86,12 +86,14 @@
  *     stands. A second stand-down of a kind for (alert, recipient) is refused,
  *     as the unique index refuses it, and nothing of the step is kept;
  *   - an open also withdraws, at its now, every unsent and not yet withdrawn
- *     message whose kind is not LOST_CONTACT (a stand-down) of every alert
- *     of the walker's journeys, this one's earlier alerts and the walker's
- *     earlier journeys' alike, in the same step as the new alert: so an
- *     earlier "back in contact" or "home" never reaches the port after the
- *     new alert's lost-contact push. Another walker's are left alone
- *     (approach item 4, step 5; review loops 1 and 2);
+ *     stand-down (kind BACK_IN_CONTACT or HOME) of every alert of the
+ *     walker's journeys, this one's earlier alerts and the walker's earlier
+ *     journeys' alike, whose recipient is a responder of the journey being
+ *     opened, in the same step as the new alert: so an earlier "back in
+ *     contact" or "home" never reaches the port after the new alert's
+ *     lost-contact push. Another walker's are left alone, and so is a
+ *     stand-down for someone the new alert will not tell, who is still stood
+ *     down (approach item 4, step 5; review loops 1 to 3; D-111);
  *   - a fake given no clock throws when asked whether contact is back, or to
  *     end a journey, as it throws when asked about silence.
  *
@@ -108,6 +110,12 @@
 import { EVENT_ID_PATTERN, MAX_EVENT_ID_LENGTH } from '@trygghverdag/contracts';
 import { PUSH_FAILURE_REASONS, type MessageKind, type PushFailureReason } from './fake-push.ts';
 import { syntheticUuid } from './synthetic-ids.ts';
+
+/**
+ * The kinds that stand a responder down, which an open withdraws (review loop
+ * 3): listed, so a kind added later is withdrawn only if it opts in.
+ */
+const STAND_DOWN_KINDS: readonly MessageKind[] = ['BACK_IN_CONTACT', 'HOME'];
 
 /**
  * The journey states, as the server's state machine lists them. Written out
@@ -1241,14 +1249,16 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
           lastFailure: null,
           withdrawnAt: null,
         }));
-        // Review loops 1 and 2 (approach item 4, step 5): the stand-downs not
+        // Review loops 1 to 3 (approach item 4, step 5): the stand-downs not
         // yet sent nor withdrawn of every alert of the walker's journeys,
         // this journey's and the walker's earlier ones, are withdrawn at this
         // now, in this same step, before the new alert's messages: an earlier
         // "back in contact" or "home" must never reach the port after this
-        // alert's lost-contact push. Another walker's are left alone. The
-        // lost-contact messages are left alone too: those of an alert that
-        // resolved were withdrawn then.
+        // alert's lost-contact push. Only for a responder of this journey,
+        // who will receive that push (loop 3, D-111): anyone else is still
+        // stood down. Another walker's are left alone. Only the kinds that
+        // stand a responder down, each opting in (loop 3): the lost-contact
+        // messages of an alert that resolved were withdrawn then.
         const walkersJourneyIds = new Set(
           stored.filter((kept) => kept.walkerId === journey.walkerId).map(({ id }) => id),
         );
@@ -1258,7 +1268,8 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         for (const message of outbox) {
           if (
             earlierAlertIds.has(message.alertId) &&
-            message.kind !== 'LOST_CONTACT' &&
+            STAND_DOWN_KINDS.includes(message.kind) &&
+            journey.responderIds.includes(message.recipientId) &&
             message.sentAt === null &&
             message.withdrawnAt === null
           ) {

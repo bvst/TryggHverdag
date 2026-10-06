@@ -309,10 +309,15 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       'LOST-03-AC8: a responder’s stand-down waits for their lost-contact message when it was handed over and is not due yet — until its lease ends while it may be in the port’s hands, until its retry once it failed — and is due at the store’s now for one sent or never handed over; a claim hands out each stand-down only once it is due',
       // Joined in review loop 1 (the spec's items 9a and 1b).
       'LOST-03-AC8: a responder whose lost-contact message failed and whose retry time had already passed when contact came back is not held: their stand-down is due at the alert’s resolved_at',
-      'LOST-03-AC8: an open withdraws the journey’s earlier alerts’ unsent stand-downs at the store’s now, and leaves alone those already sent, every other journey’s messages and its own new ones; an open that skips withdraws nothing',
+      // Review loop 3 (the spec's item 21): renamed only, "every other
+      // journey’s messages" becoming "every other walker’s journeys’
+      // messages"; its assertions are unchanged.
+      'LOST-03-AC8: an open withdraws the journey’s earlier alerts’ unsent stand-downs at the store’s now, and leaves alone those already sent, every other walker’s journeys’ messages and its own new ones; an open that skips withdraws nothing',
       // Joined in review loop 2 (the spec's items 14b and 17a).
       'LOST-03-AC8: an open withdraws the unsent stand-downs of the walker’s earlier journeys, and leaves another walker’s alone',
       'LOST-03-AC8: an open leaves an earlier alert’s unsent LOST_CONTACT message alone',
+      // Joined in review loop 3 (the spec's item 19a).
+      'LOST-03-AC8: an open withdraws an earlier journey’s unsent stand-down only for a responder of the new journey, and leaves another responder’s to be sent',
       'LOST-03-AC12: a heartbeat a LOST_CONTACT journey already has, sent again later, is a duplicate and changes nothing; and 10 different fresh heartbeats at once, 5 times over, are each stored, exactly one bringing the journey back and every other recorded, with one resolution and one stand-down per responder; the one that brought it back, sent again, is a duplicate and writes nothing',
       'LOST-03-AC14: "I’m home" (recordHome) on a LOST_CONTACT journey ends it in one step: ENDED, end reason HOME at the store’s now; its alert RESOLVED at that now, resolution HOME; each unsent lost-contact message withdrawn, a stand-down held for one in the port’s hands; one HOME message per responder; the answer says it came from LOST_CONTACT and names the alert and the messages. Afterwards a heartbeat is answered ended and stores nothing, the overdue read never returns it, and the walker can start again (SM-04)',
       'LOST-03-AC15: "I’m home" (recordHome) on an ACTIVE journey ends it, end reason HOME at the store’s now, from ACTIVE, and touches no alert and writes no message — with no alert, and with only resolved ones; the overdue read and the open then never take it, and the walker can start again (SM-04)',

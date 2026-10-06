@@ -972,6 +972,69 @@ describe('LOST-03 and LOST-02: no overtaking across alerts — a new alert withd
       handed.slice(firstOfJ2).filter(({ alertId, kind }) => alertId === a1?.id && kind === 'HOME'),
     ).toEqual([]);
   });
+
+  // Review loop 3 (the spec's item 19b; D-111, D-112 amended): the open
+  // withdraws an earlier stand-down only for someone its own lost-contact
+  // push will reach. A, who heard of J1's loss and is not J2's responder,
+  // must still be told J1 is over; B, who is, must not hear J1's "home"
+  // after J2's lost-contact push.
+  test('LOST-03-AC8: J1 has responders A and B and its alert reaches both; with a failing push, "I’m home" ends J1; J2 starts with B alone and its alert opens; when the push recovers, A is still told J1’s HOME, and B is never told J1’s HOME after J2’s LOST_CONTACT', async () => {
+    const w = world();
+    const walker = w.walker();
+    const a = w.user();
+    const b = w.user();
+    const j1 = await w.start(walker, [a, b]);
+    await w.heartbeat(walker, j1);
+
+    // J1's alert opens at five minutes and reaches both.
+    await w.runUntil(new Date(START.getTime() + FIVE_MINUTES));
+    const [a1] = w.alertsOf(j1);
+    expect(recipientsOf(ofKind(w.push.accepted, 'LOST_CONTACT'))).toEqual([a, b].sort());
+    // Then the push fails, and "I'm home" ends J1: one HOME each, failing.
+    w.push.failFor(a, 'UNAVAILABLE');
+    w.push.failFor(b, 'UNAVAILABLE');
+    await w.runUntil(new Date(START.getTime() + FIVE_MINUTES + MINUTE));
+    const ended = await w.home(walker, j1);
+    expect({ status: ended.status, body: ended.body }).toEqual({ status: 200, body: ENDED });
+    // J2 starts with B alone, and goes silent until its alert opens.
+    const j2 = await w.start(walker, [b]);
+    await w.heartbeat(walker, j2);
+    const startedAt = await w.clock.now();
+    await w.runUntil(new Date(startedAt.getTime() + FIVE_MINUTES));
+    const [a2] = w.alertsOf(j2);
+    expect(a2?.state).toBe('OPEN');
+
+    // The push recovers, and the loops run on.
+    w.push.recover();
+    await w.runUntil(new Date(startedAt.getTime() + FIVE_MINUTES + 5 * MINUTE));
+
+    const alertOf = new Map(w.store.outbox().map(({ messageId, alertId }) => [messageId, alertId]));
+    const accepted = w.push.accepted.map(({ messageId, recipientId, kind }) => ({
+      alertId: alertOf.get(messageId),
+      recipientId,
+      kind,
+    }));
+    const isJ1Home = ({ alertId, kind }: { alertId: string | undefined; kind: string }) =>
+      alertId === a1?.id && kind === 'HOME';
+    // A, not J2's responder: still stood down from J1, once.
+    expect(accepted.filter((m) => m.recipientId === a && isJ1Home(m))).toHaveLength(1);
+    // B: J2's lost-contact push accepted, and J1's HOME never after it.
+    const theirs = accepted.filter(({ recipientId }) => recipientId === b);
+    const j2Lost = theirs.findIndex(
+      ({ alertId, kind }) => alertId === a2?.id && kind === 'LOST_CONTACT',
+    );
+    expect(j2Lost, 'B: J2’s LOST_CONTACT was accepted').toBeGreaterThanOrEqual(0);
+    expect(theirs.slice(j2Lost).filter(isJ1Home), 'B: J1’s HOME after J2’s LOST_CONTACT').toEqual(
+      [],
+    );
+    // In the store: B's J1 HOME withdrawn at J2's open, A's sent and never withdrawn.
+    const j1Homes = new Map(
+      ofKind(w.messagesOf(j1), 'HOME').map((message) => [message.recipientId, message]),
+    );
+    expect(j1Homes.get(b)).toMatchObject({ sentAt: null, withdrawnAt: a2?.openedAt });
+    expect(j1Homes.get(a)?.withdrawnAt).toBeNull();
+    expect(j1Homes.get(a)?.sentAt).not.toBeNull();
+  });
 });
 
 describe('LOST-03 and SM-04: every message is content-free, with an opaque ID of its own (D-086, D-087)', () => {

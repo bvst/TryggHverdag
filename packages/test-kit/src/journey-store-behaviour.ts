@@ -3136,7 +3136,11 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     // journey's earlier alerts' stand-downs that are not sent, in its own
     // transaction, so an earlier "back in contact" can never reach the port
     // after the new alert's lost-contact push.
-    name: 'LOST-03-AC8: an open withdraws the journey’s earlier alerts’ unsent stand-downs at the store’s now, and leaves alone those already sent, every other journey’s messages and its own new ones; an open that skips withdraws nothing',
+    // Review loop 3 (the spec's item 21): renamed only. It said "every other
+    // journey’s messages"; since loop 2 the walker's own earlier journeys
+    // are not left alone. Its `other` journey belongs to another walker, so
+    // every assertion holds as it was.
+    name: 'LOST-03-AC8: an open withdraws the journey’s earlier alerts’ unsent stand-downs at the store’s now, and leaves alone those already sent, every other walker’s journeys’ messages and its own new ones; an open that skips withdraws nothing',
     async run(subject) {
       const now = await subject.now();
       // A journey whose earlier alert was resolved 70 minutes ago, with its
@@ -3426,6 +3430,85 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       expect(withdrawnAt.get(standDown), 'the earlier stand-down, the control').toBeInstanceOf(
         Date,
       );
+    },
+  },
+  {
+    // Review loop 3 (the spec's item 19a; safety-reviewer; D-111, D-112
+    // amended): overtaking matters only for someone the new alert's
+    // lost-contact push will reach. A responder of the earlier journey who
+    // is not one of the new journey's heard of the earlier loss and must
+    // still be stood down: their stand-down stays, to be sent.
+    name: 'LOST-03-AC8: an open withdraws an earlier journey’s unsent stand-down only for a responder of the new journey, and leaves another responder’s to be sent',
+    async run(subject) {
+      const now = await subject.now();
+      // J2 has B alone; J1, the walker's earlier journey, had A and B.
+      const j2 = await watched(subject, {
+        startedAt: ago(now, 20 * MINUTE),
+        lastHeartbeatAt: ago(now, 10 * MINUTE),
+        responders: 1,
+      });
+      const [b = ''] = j2.responderIds;
+      const [a = ''] = await users(subject, 1);
+      const j1 = await subject.seedJourney({
+        walkerId: j2.walkerId,
+        deviceId: j2.deviceId,
+        state: 'ENDED',
+        responderIds: [a, b],
+        startedAt: ago(now, 3 * HOUR),
+        lastHeartbeatAt: ago(now, 95 * MINUTE),
+      });
+      const alertId = await subject.seedAlert({
+        journeyId: j1,
+        state: 'RESOLVED',
+        openedAt: ago(now, 90 * MINUTE),
+        silentSince: ago(now, 95 * MINUTE),
+        resolvedAt: ago(now, 70 * MINUTE),
+        resolution: 'HOME',
+      });
+      const homeFor = async (recipientId: string) => {
+        await subject.seedMessage({
+          alertId,
+          recipientId,
+          kind: 'LOST_CONTACT',
+          createdAt: ago(now, 90 * MINUTE),
+          nextAttemptAt: ago(now, 90 * MINUTE),
+          attempts: 1,
+          sentAt: ago(now, 90 * MINUTE),
+        });
+        return subject.seedMessage({
+          alertId,
+          recipientId,
+          kind: 'HOME',
+          createdAt: ago(now, 70 * MINUTE),
+          nextAttemptAt: ago(now, 70 * MINUTE),
+          attempts: 2,
+          lastFailure: 'UNAVAILABLE',
+        });
+      };
+      const homes = { a: await homeFor(a), b: await homeFor(b) };
+
+      const opened = await subject.store.openLostContactAlert({
+        journeyId: j2.journeyId,
+        afterMs: LOST_CONTACT_AFTER_MS,
+      });
+
+      if (opened.outcome !== 'opened') {
+        throw new Error(`expected the new journey to be opened, but it was ${opened.outcome}`);
+      }
+      expect(recipientsOf(opened.messages)).toEqual([b]);
+      const openedAt = (await subject.alertsOf(j2.journeyId)).find(
+        ({ id }) => id === opened.alertId,
+      )?.openedAt;
+      const withdrawnAt = await withdrawnAtOf(subject, j1);
+      // B, whom the new alert will tell: withdrawn at the open's now.
+      expect(withdrawnAt.get(homes.b), 'B’s HOME').toEqual(openedAt);
+      // A, whom it will not: left, and handed out by the next claim.
+      expect(withdrawnAt.get(homes.a), 'A’s HOME').toBeNull();
+      const claimed = (
+        await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS })
+      ).messages.map(({ messageId }) => messageId);
+      expect(claimed).toContain(homes.a);
+      expect(claimed).not.toContain(homes.b);
     },
   },
   {
@@ -3719,7 +3802,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         await expect(
           subject.store.recordHome({ ...homeOf(journey), walkerId: stranger }),
           'another walker, from the journey’s own device',
-        ).rejects.toThrow();
+        ).rejects.toThrow(/refused/);
         expect(await snapshot(journey.journeyId)).toEqual(before);
       }
 
@@ -3740,7 +3823,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         await expect(
           subject.store.recordHome({ journeyId: ended.journeyId, walkerId: stranger, deviceId }),
           'another walker, on an ENDED journey',
-        ).rejects.toThrow();
+        ).rejects.toThrow(/refused/);
       }
       expect(await snapshot(ended.journeyId)).toEqual(endedBefore);
 
@@ -3792,11 +3875,11 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         await expect(
           subject.store.recordHome({ ...homeOf(journey), walkerId: walkerId.toUpperCase() }),
           'the walker’s ID in upper case',
-        ).rejects.toThrow();
+        ).rejects.toThrow(/refused/);
         await expect(
           subject.store.recordHome({ ...homeOf(journey), deviceId: deviceId.toUpperCase() }),
           'the device’s ID in upper case',
-        ).rejects.toThrow();
+        ).rejects.toThrow(/refused/);
 
         expect(await alertRecordOf(subject, journey.journeyId)).toEqual(record);
         expect(await subject.endOf(journey.journeyId)).toEqual(end);
