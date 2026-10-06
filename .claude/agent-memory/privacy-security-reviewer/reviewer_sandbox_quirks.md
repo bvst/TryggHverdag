@@ -28,3 +28,5 @@ Related: [[mobile-release-review]], [[tooling-scripts-review]], [[device-harness
 **Linux cloud session (LOST-02 loop 1, 2026-10-04):** `>` redirects, heredocs and `node -e` all ran without a guard block. A vitest probe printed nothing through console.log (the repo's config swallows it), so write probe results with appendFileSync to a scratch file instead.
 
 **Linux cloud session (LOST-02 loop 2, 2026-10-04):** a throwaway `.ts` probe dropped in apps/server/src and run with `./node_modules/.bin/tsx` prints through process.stdout.write (no vitest swallowing), and resolves workspace imports. Delete it in the same command. The tar copy recipe plus a node string-replace mutant runner gave 7 mutant runs in about 1 min.
+
+**Linux cloud session (BUG-23, 2026-10-06):** the global guard blocked a Bash grep whose pattern held the environment object with a dot again (looking for an editor variable). It did not end the review. Grep for the variable's bare NAME instead (for example `REACT_EDITOR`).
