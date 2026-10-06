@@ -53,3 +53,24 @@ Harness: scratchpad/ta-lost03/loop1/{faults-l1,rg02-l1,probe-d100}.mjs via ../ta
 - RG-03: all on the spec's list except the fake no-clock test's ended->already_ended (reason written beside it, item 3). Note.
 - RG-04: 3 entries added, equal to coverage/coverage-summary.json (11:22, after HEAD); nothing else moved vs main.
 - RG-05: local reports == 2aa23f4 sources; service 122/123, journey 134/135, min worker.ts 140/146 (95.9 %, Timeouts not counted).
+
+**Loop 2 re-audit (2026-10-06, cloud), PASS at db97856** (59fe06f prod; db97856 = BUG-21 docs only). Tests 986c2b1 (== HEAD's),
+code bd55fea (open withdraws stand-downs of every alert of the walker's journeys) + 59fe06f (schema comment). Base == origin/main
+5cd5d24. Pushed, no PR, check-runs total_count 0; gate:integrity 3 of 5; gh api: 13 contexts, code-owner true, bypass [] never.
+Harness: scratchpad/ta-lost03/loop2/{faults-l2,rg02-l2}.mjs via ../../ta-lost02/harness.mjs. Isolated -t prefixes that select
+exactly one test each (truncated $name): 'LOST-03-AC16: recordHome decides' (2a), '...recordHome with the' (15a),
+'LOST-03-AC8: an open withdraws the uns' (14b), '...an open leaves an' (17a); L6 'with a failing push, J1' (14a).
+- 22 faults, controls 608 wide + 9 isolated green. H1w now killed by 2a alone at L3 (also by 15a); H9/FH9 (ENDED before walker)
+  killed by 2a's ENDED-stranger case; AK1/AK2 (adapter lower-cases before the rule) and FK1/FK2 killed by 15a alone. Scope:
+  WJ1 journey-only, WJ2 no walker filter, WJ3 by responders, WJ5 join on locked journey: all killed by 14b at L3; FWJ1 killed by
+  14a (on the real overtaking assertion) and 14b; FWJ2 (all walkers) killed by 14b at L2 only, survives all 312 L6 tests (14a has
+  one walker). W3/FW3 kind clause killed by 17a alone. W5 re-stamp still near-equivalent survivor.
+- RG-02: bd55fea^ == 986c2b1. Unit 267 / system 312 green (fake is in the test commit); L3 exactly 1 red: 14b ("failing: expected
+  null to deeply equal <openedAt>"). Loop-1 fake (2aa23f4) under HEAD tests: 4 red (14b L2, 15a L2, reversed own test, 14a L6).
+- RG-03: two existing tests changed, both on the spec list; tests:changes "none weakened". Should-fix raised: shared 1b's NAME
+  still says the open leaves "every other journey's messages" alone (its `other` is another walker via watched()), stale since
+  loop 2 widened the scope; the spec renamed the fake's own sibling for exactly that reason (lesson-not-applied-to-siblings).
+- RG-05: local reports at 12:41-12:55 == HEAD sources; service 122/123, journey 134/135, worker 140/146 (+2 Timeout).
+  adapters/journeys.ts and the fake are not mutated (D-095): the in-memory faults are the only mutation evidence for loop 2.
+- BUG-21 (INF-06-AC9 askedFor 639 < 700): span >= deadline - first stamp's node start-up - last read's tail (node exit + the
+  unstamped `service check package` spawn); waitForLocale never stops early, so all 300 ms is spawn slack, not 200 as commented.
