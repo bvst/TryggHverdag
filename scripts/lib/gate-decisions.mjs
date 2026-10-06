@@ -78,12 +78,18 @@ export const MUTATION_GROUPS = [
     config: 'vitest.system.config.mjs',
   },
   {
-    // The watchdog's sweep and the outbox's sender (LOST-02). Their tests are
-    // one file of their own, kept apart from journeys.system.test.ts so each
-    // mutant here stays cheap, under the system tests' configuration.
+    // The watchdog's sweep and the outbox's sender (LOST-02), then "I'm on
+    // it" (LOST-06, D-114). Their tests are files of their own, kept apart
+    // from journeys.system.test.ts so each mutant here stays cheap, under the
+    // system tests' configuration. A group claims a safety path only as it is
+    // listed, so acknowledgement.ts is mutated here, and a mutant anywhere in
+    // the folder is run by both files.
     name: 'alerts',
     paths: ['apps/server/src/modules/alerts/'],
-    tests: ['apps/server/src/alerts.system.test.ts'],
+    tests: [
+      'apps/server/src/alerts.system.test.ts',
+      'apps/server/src/acknowledgement.system.test.ts',
+    ],
     config: 'vitest.system.config.mjs',
   },
   {

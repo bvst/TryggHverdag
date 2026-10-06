@@ -17,6 +17,7 @@ import type { ServerConfig } from './config.ts';
 import { IDLE_IN_TRANSACTION_LIMIT_MS, LOCK_WAIT_LIMIT_MS } from './domain/watchdog.ts';
 import { listen } from './http.ts';
 import { createLog } from './log.ts';
+import { createAcknowledgementService } from './modules/alerts/acknowledgement.ts';
 import { createHealthService } from './modules/health/service.ts';
 import { createJourneyService } from './modules/journeys/service.ts';
 
@@ -45,10 +46,13 @@ export async function startApiProcess(config: ServerConfig): Promise<ApiProcess>
   // One clock for every route: the database's, so a journey's start and the
   // watchdog's "how long since" are read from the same now.
   const clock = databaseClock(db);
+  const store = databaseJourneyStore(db);
   const app = createApi({
     health: createHealthService({ clock, heartbeats: databaseWorkerHeartbeats(db) }),
-    journeys: createJourneyService({ clock, journeys: databaseJourneyStore(db), log }),
+    journeys: createJourneyService({ clock, journeys: store, log }),
     devices: databaseDeviceAuthenticator(db),
+    // "I'm on it" reads no clock: it records the database's now() (LOST-06).
+    acknowledgements: createAcknowledgementService({ alerts: store, log }),
   });
 
   let server;

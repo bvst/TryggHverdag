@@ -255,6 +255,13 @@ export const unresolved = (state: PgColumn) => sql`${state} <> 'RESOLVED'`;
  * `resolved_at` and `resolution` say when and how it resolved (LOST-03): the
  * database's now() in the transaction that resolved it, and BACK_IN_CONTACT
  * or HOME. Both null until then, and set together.
+ *
+ * `acknowledged_by` and `acknowledged_at` say who said "I'm on it", and when
+ * (LOST-06): a user, and the database's now() in the transaction that
+ * recorded it. Both null until then, and set together; a resolution keeps
+ * them. No check ties them to the state: rows put in directly have
+ * ACKNOWLEDGED with nobody recorded, and the resumed-escalation rule will
+ * move a state back (D-114).
  */
 export const alerts = pgTable(
   'alerts',
@@ -266,9 +273,12 @@ export const alerts = pgTable(
     silentSince: moment('silent_since').notNull(),
     resolvedAt: moment('resolved_at'),
     resolution: alertResolution('resolution'),
+    acknowledgedBy: uuid('acknowledged_by'),
+    acknowledgedAt: moment('acknowledged_at'),
   },
   (table) => [
     foreignKey({ columns: [table.journeyId], foreignColumns: [journeys.id] }),
+    foreignKey({ columns: [table.acknowledgedBy], foreignColumns: [users.id] }),
     // One alert per journey that is not RESOLVED, held by the database: two
     // sweepers that both got past every check are stopped here.
     uniqueIndex('alerts_one_unresolved_per_journey')
@@ -278,10 +288,14 @@ export const alerts = pgTable(
       'alerts_resolved_at_resolution_check',
       togetherOrNeither(table.resolvedAt, table.resolution),
     ),
+    check(
+      'alerts_acknowledged_at_acknowledged_by_check',
+      togetherOrNeither(table.acknowledgedAt, table.acknowledgedBy),
+    ),
   ],
 );
 
-/** The kinds of message there are, exactly as the domain lists them: the lost-contact alert and its stand-downs. */
+/** The kinds of message there are, exactly as the domain lists them: the lost-contact alert, its stand-downs and the notice that someone is on it. */
 export const messageKind = pgEnum('message_kind', MESSAGE_KINDS);
 
 /**
@@ -298,7 +312,8 @@ export const messageKind = pgEnum('message_kind', MESSAGE_KINDS);
  * `withdrawn_at` is when a message was withdrawn before the port accepted it
  * (LOST-03): from then on no claim hands it out again. A message is withdrawn
  * in one of two ways:
- *   - when its alert resolves, its unsent LOST_CONTACT messages (D-111);
+ *   - when its alert resolves, its unsent LOST_CONTACT messages (D-111) and
+ *     its unsent ACKNOWLEDGED notices (D-113);
  *   - when a later open on any of the same walker's journeys withdraws an
  *     earlier alert's unsent stand-downs, so none reaches a responder after
  *     the new alert's lost-contact push (D-112, amended).

@@ -11,12 +11,14 @@
  * is one the field allows, and as null otherwise. So even a caller that got
  * past the type, with a cast or with data typed `any`, cannot have anything
  * else written:
- *   - `journeyId` and `messageId` only as a lower-case canonical UUID;
+ *   - `journeyId`, `messageId` and `alertId` only as a lower-case canonical
+ *     UUID;
  *   - `reason` only from its event's set: JOURNEY_ENDED for an ignored
- *     heartbeat or "I'm home", the push port's four for a failed push;
+ *     heartbeat or "I'm home", the push port's four for a failed push,
+ *     ALERT_RESOLVED for an ignored "I'm on it";
  *   - `stage` only from its event's set: clock, read or store for a
- *     heartbeat; read or store for "I'm home"; read, open or beat for the
- *     watchdog; claim or mark for the sender;
+ *     heartbeat; read or store for "I'm home" and "I'm on it"; read, open or
+ *     beat for the watchdog; claim or mark for the sender;
  *   - `pool` only as api or worker;
  *   - `code` only as text that is a SQLSTATE, read by `sqlstateOf`, so no
  *     message can travel as a code.
@@ -61,6 +63,7 @@ type EventName = LogEvent['event'];
 const EVENT_LEVELS = {
   heartbeat_ignored: 30,
   home_ignored: 31,
+  acknowledgement_ignored: 32,
   alert_missing: 40,
   heartbeat_failed: 50,
   push_failed: 51,
@@ -69,6 +72,7 @@ const EVENT_LEVELS = {
   watchdog_overdue: 54,
   database_error: 55,
   home_failed: 56,
+  acknowledgement_failed: 57,
 } as const satisfies Record<EventName, number>;
 
 /**
@@ -102,6 +106,18 @@ const HOME_STAGES: readonly unknown[] = ['read', 'store'] satisfies Extract<
   { event: 'home_failed' }
 >['stage'][];
 
+/** The reasons `acknowledgement_ignored` may give. */
+const ACKNOWLEDGEMENT_REASONS: readonly unknown[] = ['ALERT_RESOLVED'] satisfies Extract<
+  LogEvent,
+  { event: 'acknowledgement_ignored' }
+>['reason'][];
+
+/** The stages `acknowledgement_failed` may name. */
+const ACKNOWLEDGEMENT_STAGES: readonly unknown[] = ['read', 'store'] satisfies Extract<
+  LogEvent,
+  { event: 'acknowledgement_failed' }
+>['stage'][];
+
 /** The stages `watchdog_failed` may name. */
 const WATCHDOG_STAGES: readonly unknown[] = ['read', 'open', 'beat'] satisfies Extract<
   LogEvent,
@@ -129,7 +145,7 @@ function oneOf(allowed: readonly unknown[], value: unknown): string | null {
   return allowed.includes(value) ? (value as string) : null;
 }
 
-/** A journey's or a message's ID, as the database writes one. */
+/** A journey's, a message's or an alert's ID, as the database writes one. */
 function uuidOf(value: unknown): string | null {
   return typeof value === 'string' && CANONICAL_UUID.test(value) ? value : null;
 }
@@ -211,6 +227,18 @@ export function createLog({
           return;
         case 'alert_missing':
           logger.alert_missing({ journeyId: uuidOf(event.journeyId) });
+          return;
+        case 'acknowledgement_ignored':
+          logger.acknowledgement_ignored({
+            reason: oneOf(ACKNOWLEDGEMENT_REASONS, event.reason),
+            alertId: uuidOf(event.alertId),
+          });
+          return;
+        case 'acknowledgement_failed':
+          logger.acknowledgement_failed({
+            stage: oneOf(ACKNOWLEDGEMENT_STAGES, event.stage),
+            code: codeOf(event.code),
+          });
           return;
         default:
           // A type error the day an event joins LogEvent without a case. And

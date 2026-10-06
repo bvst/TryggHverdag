@@ -7,6 +7,8 @@
  * satisfy them structurally without importing any server code.
  */
 import type {
+  AcknowledgeOutcome,
+  AlertForAcknowledgement,
   JourneyForHeartbeat,
   JourneyState,
   MessageKind,
@@ -309,6 +311,44 @@ export interface JourneyStore {
   latestHeartbeatOf(journeyId: string): Promise<LatestHeartbeat | null>;
 }
 
+/** "I'm on it" as the store takes it (LOST-06): the alert, by its ID, and the responder who sent it. */
+export interface AcknowledgementToRecord {
+  alertId: string;
+  responderId: string;
+}
+
+/**
+ * Recorded now, with the notices it wrote, one per other responder; or not
+ * recorded, with the alert rule's other outcome under the journey's lock, and
+ * nothing written.
+ */
+export type RecordAcknowledgementResult =
+  | { outcome: 'acknowledged'; messages: AlertMessage[] }
+  | {
+      outcome: 'not_recorded';
+      decision: Exclude<AcknowledgeOutcome, { type: 'acknowledged' }>;
+    };
+
+/** What "I'm on it" needs of the alerts (LOST-06, D-114). */
+export interface AlertStore {
+  /**
+   * The alert this ID names, with who is recorded on it and its journey's
+   * responders, read without a lock; or null when no alert has that ID.
+   */
+  alertForAcknowledgement(alertId: string): Promise<AlertForAcknowledgement | null>;
+  /**
+   * In one transaction: takes the alert's journey's row first (D-112), asks
+   * the domain's alert rule again under that lock (AR-04), and writes what it
+   * decides: the alert ACKNOWLEDGED, by this responder at the database's
+   * now(), and one ACKNOWLEDGED message per other responder row (AR-05); or
+   * nothing, with the rule's other outcome. Rejects, having written nothing,
+   * on any failure.
+   */
+  recordAcknowledgement(
+    acknowledgement: AcknowledgementToRecord,
+  ): Promise<RecordAcknowledgementResult>;
+}
+
 /**
  * Every line the server may log, and nothing else (PRIV-07). A closed union:
  * no event has a field a location, a phone number or an error's message
@@ -324,7 +364,9 @@ export type LogEvent =
   | { event: 'database_error'; pool: 'api' | 'worker'; code: string | null }
   | { event: 'home_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
   | { event: 'home_failed'; stage: 'read' | 'store'; code: string | null }
-  | { event: 'alert_missing'; journeyId: string };
+  | { event: 'alert_missing'; journeyId: string }
+  | { event: 'acknowledgement_ignored'; reason: 'ALERT_RESOLVED'; alertId: string }
+  | { event: 'acknowledgement_failed'; stage: 'read' | 'store'; code: string | null };
 
 /** Where the server writes what happened, one event at a time. */
 export interface Log {
