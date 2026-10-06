@@ -92,3 +92,16 @@ missing). `*.system.test.ts` need `--config vitest.system.config.mjs`; the plain
 silently. A real-adapter L3 probe needs no test file: node strip-types from apps/server, create a db on
 55432, `migrateDatabase(uri)`, `createDatabase(createPool(uri, 2))`, `databaseJourneyStore(db)`, insert users
 and devices by SQL, then drop the db `with (force)` in `finally`.
+
+**2026-10-06 (LOST-03 loop 3):** guard not blocking (mkdir and heredoc writes to the scratchpad worked).
+- A .ts probe file in the scratchpad cannot import pg (resolves from its own dir). Pipe it instead:
+  cat probe.ts | node --experimental-strip-types --no-warnings --input-type=module-typescript - (from
+  apps/server). Plain --input-type=module does NOT strip types on stdin (SyntaxError at the first annotation).
+- Row-lock probe without test hooks: hold a row the transaction needs later (users FOR UPDATE blocks the
+  outbox insert's FK key-share), call the store with lockWaitMs, poll pg_stat_activity for wait_event_type
+  Lock, then FOR UPDATE NOWAIT from a third session on each row (55P03 = held); pg_locks by pid gives
+  relation-level modes.
+- gh api works through the session proxy now: repos/bvst/TryggHverdag/rulesets/<id> shows bypass_actors,
+  required checks and pull_request params. Local gate:integrity cannot read rules (no token) and says so.
+- One mutant plugin file with MUTANT env selecting anchor/replacement, plus thin configs spreading
+  vitest.config.mjs, vitest.system.config.mjs or the l3 shim config, runs many mutants without repo writes.

@@ -5,6 +5,16 @@ Newest first.
 
 ## Patterns worth checking every time
 
+### Allowlist or denylist of message kinds: ask which way a forgotten kind fails (LOST-03 loop 3)
+For a withdrawal or suppression keyed on kind, a kind nobody classified either gets withdrawn (denylist) or
+sent (allowlist). Sending a stale all-clear after a new alert is the dangerous direction; withdrawing a
+resolved alert's message from someone about to get a fresh alert is mild. Prefer a list derived from the one
+producer of those kinds (resolveInside writes kind = resolution, so ALERT_RESOLUTIONS is self-maintaining), and
+ask for a tripwire test that makes every new kind be classified. Check the fake's copy of the list too (D-100).
+Also: when a fix widens what is withdrawn, list every recipient who loses a message and confirm each gets a
+superseding one (my loop-1 advice missed the recipient axis; loop 3 closed it).
+
+
 ### "No overtaking" inside one alert says nothing about the NEXT alert (LOST-03)
 A per-alert ordering rule (hold the stand-down behind its own alert's push) leaves an earlier alert's retrying
 stand-down free to reach the port after a newer alert's LOST_CONTACT on the same journey: false reassurance while an

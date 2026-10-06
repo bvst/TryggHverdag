@@ -3872,5 +3872,6 @@ any other path is work, not a candidate for the same treatment.
     `LOST_CONTACT`: the stand-down kinds, which are the domain's
     `ALERT_RESOLUTIONS` (`BACK_IN_CONTACT`, `HOME`; each resolution is also
     the kind of the stand-down it sends). A kind added only to
-    `MESSAGE_KINDS`, such as task 6's, is never withdrawn; a new resolution
-    opts its stand-down in.
+    `MESSAGE_KINDS` is never withdrawn by the open; a new resolution opts its
+    stand-down in. A future stand-down kind that is not a resolution (an SMS
+    stand-down in task 6, say) must opt in deliberately: task 6 decides.

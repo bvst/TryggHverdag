@@ -1952,6 +1952,18 @@ From review loop 1 (2026-10-06). None blocks this task:
   messages only, and no test holds that a message of another kind is left
   as it was. Once task 6 adds its SMS kind, its tests should pin which kinds
   each withdrawal touches (`test-auditor`).
+- **Task 6: a stand-down kind that is not a resolution must opt in to the
+  open's withdrawal** (`safety-reviewer`, loop 3). The open withdraws
+  `ALERT_RESOLUTIONS`' kinds. An SMS stand-down kind added only to
+  `MESSAGE_KINDS` would not be withdrawn, and a stale "is home" by SMS could
+  follow a new alert. A domain test that pins `MESSAGE_KINDS` to
+  `['LOST_CONTACT', ...ALERT_RESOLUTIONS]`, named for the withdrawal, would
+  make every new kind fail until someone decides.
+- **A code note: the fake's `STAND_DOWN_KINDS` is a copy** of
+  `ALERT_RESOLUTIONS` that nothing ties to it (`safety-reviewer`, loop 3).
+  Type it as the fake's resolution type, or pin it beside the existing
+  `MESSAGE_KINDS` pin, so a resolution added in task 7 cannot be forgotten
+  there (D-100).
 - **A code note: the fake store's threshold.** `fakeJourneyStore` keeps its
   own copy of D-021's 300 000 ms instead of being given it, because the test
   kit cannot import the domain. A change to the threshold would need both
