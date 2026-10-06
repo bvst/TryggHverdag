@@ -33,3 +33,23 @@ mutation/traceability, code-owner review true, bypass [] / never. PASS.
   (heartbeat route pins its own at L6 and contract level). Should fix, not blocking: regression only nulls journeyId in
   home_ignored/alert_missing lines.
 Related: [[lost02-audit]], [[in-memory-mutation]], [[isolating-values]], [[baseline-vs-main]]
+
+**Loop 1 re-audit (2026-10-06, cloud), PASS at 2aa23f4** (HEAD moved to 386ad80/39e838f: reviewers' memory only). Tests 58b37c9,
+code 2aa23f4, spec 6731463/f75ba38. No PR, check-runs total_count 0; gate:integrity 3 of 5; gh api: 13 contexts, bypass [] never.
+Harness: scratchpad/ta-lost03/loop1/{faults-l1,rg02-l1,probe-d100}.mjs via ../ta-lost02/harness.mjs, REV pinned to 2aa23f4.
+- Faults (52, controls 67 L3 + 453 fast green): every loop-1 test kills its fault. Withdrawal in openInside W1/W2/W4/W6/W7 (moved
+  before the lock check)/W8 (Proxy routing update(outbox) to db = outside the tx) killed by 1b/1c; fake FW1 kills 1a at L6 with
+  "A1's BACK_IN_CONTACT after A2's LOST_CONTACT". recordHome H1/H1d/H2/H5/H7/H8 killed by 2a. C1 and C2 (even plain
+  console.error(error.cause)) killed by 4a only. K5 now killed by 7a and 7b. A10/F5 killed by 9a. M1/M2 by 11a. P1 (never back)
+  killed at run 1 by the fixed example; without it 4/6, old shape 4/6.
+- Survivors: W3 kind clause (fake-only test pins FW3; equivalent in reachable states), W5/FW5 not-yet-withdrawn (re-stamp only),
+  H3 refusal falling through (backstop: journeys_ended_at_end_reason_check), H4 equivalent, A12 near-equivalent.
+  **H1w real (should fix):** 2a's "another walker" uses the stranger's own device, so the device check refuses anyway; the walker
+  clause under the lock is pinned only for the fake (FH1 killed by the fake's own message regex).
+  **D-100 (should fix):** fake recordHome lower-cases walker/device (asStored), adapter hands them to the domain (exact compare):
+  probe gave fake 'home', adapter rejects; the fake's own test pins the fake's side. Unreachable via the module.
+- RG-02 at 58b37c9 prod: unit 0 red (fake/domain/contract pins), system 18 red (all: service passes a bare ID to the new
+  recordHome, 500), L3 7 red (1b/1c on the missing withdrawal; 2a/AC16/AC4/14/15 on the interface). 1a green at base by design.
+- RG-03: all on the spec's list except the fake no-clock test's ended->already_ended (reason written beside it, item 3). Note.
+- RG-04: 3 entries added, equal to coverage/coverage-summary.json (11:22, after HEAD); nothing else moved vs main.
+- RG-05: local reports == 2aa23f4 sources; service 122/123, journey 134/135, min worker.ts 140/146 (95.9 %, Timeouts not counted).
