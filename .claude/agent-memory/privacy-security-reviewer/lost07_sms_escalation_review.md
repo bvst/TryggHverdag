@@ -26,3 +26,13 @@ First seen on LOST-07 (2026-10-07, HEAD 0b8c3c0, base e695e8a). Verdict PASS, th
 - gh api: environments/staging, its deployment-branch-policies and secrets, and actions/secrets are all 403. The staging branch policy and the secret's existence stay unverifiable.
 
 Related: [[lost06-acknowledgement-route-review]], [[lost03-home-route-review]], [[reviewer-sandbox-quirks]]
+
+**Loop 1 re-check (2026-10-07, 0b8c3c0..4d7f188): PASS, all three should-fixes met.**
+- X1/X2 (oracle.cjs) re-run on the escalation files ONLY: each "1 failed | 69 passed (70)" at L6 and "1 failed | 16 passed (17)" at L3, both by the new LOST-07-AC6 stranger test. Running only the file that holds the new test proves the new test is the killer.
+- Small copy that works (3.7 MB, not 273 MB): root-level `git ls-files` files + `tar` of apps/server and packages (minus apps/server/node_modules/.vite and coverage) + a symlink to the repo's root node_modules. The apps/server/node_modules workspace links are relative, so they resolve into the copy's packages. L6, L3, tsx bin/migrate.ts and tsx bin/worker.ts all ran from it.
+- End-to-end start-line probe: createdb on the stand-in, tsx bin/migrate.ts, then tsx bin/worker.ts with the two ping variables and `timeout -s TERM 9`. Keep the secret in a shell variable, `grep -c` for it BEFORE masking, and point every ping at https://127.0.0.1:1 so nothing leaves the machine. An 85 s background run reaches the check-in failure line and `sms_check_failed`.
+- Probe hygiene lessons: (1) real-fetch cases with an hc-ping.com host DID go out (an answer of 403, probably the agent proxy); use 127.0.0.1:1 hosts for those. (2) `http://%<uuid>` percent-decodes, so a recording fetch printed an unmasked chunk of the probe secret. Mask after normalisation, or print counts only.
+- Terraform scratch: `organisation` must match `^orga_[0-9a-f-]{36}$` (use orga_00000000-0000-4000-8000-000000000000), or every plan fails on it first and hides the validations under test (cost one run). Validation errors for the sensitive URLs print no value and no "is (sensitive value)" lines; a cross-variable `!=` works in 1.16.
+- Notes left for safety: config.ts and Terraform both take a URL ending in "/ " (trailing space), one ending in a backslash, and an upper-case or slug form of the same check, which gets past both `!=` checks.
+- config.ts is still unowned (D-079 says it is not a safety path); it now carries the refusal reasons for both secrets. Noted only, as the owner's decision.
+- A parallel reviewer's vitest JSON reporter left an untracked `.vitest/` in the repo root. Check its time and files before attributing; never delete another agent's output.
