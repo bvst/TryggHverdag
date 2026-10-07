@@ -2151,6 +2151,10 @@ async function dueStore(responders = 2) {
 }
 
 describe('fakeJourneyStore: escalation to SMS (LOST-07)', () => {
+  // RG-03 (LOST-07 review loop 1, `code-reviewer`): escalateAlert no longer
+  // takes afterMs, here or in what escalateRequests records. The store
+  // decides by its own two minutes, as the adapter does, so no caller hands it
+  // a threshold; what each test below asserts is otherwise unchanged.
   test('a store given no clock refuses, loudly and naming the clock, to read the due alerts, escalate, claim SMS or count them, and changes nothing', async () => {
     const store = fakeJourneyStore();
     const walkerId = store.addUser();
@@ -2166,7 +2170,7 @@ describe('fakeJourneyStore: escalation to SMS (LOST-07)', () => {
 
     for (const [what, asked] of [
       ['alertsDueForEscalation', () => store.alertsDueForEscalation(TWO_MINUTES)],
-      ['escalateAlert', () => store.escalateAlert({ alertId, afterMs: TWO_MINUTES })],
+      ['escalateAlert', () => store.escalateAlert({ alertId })],
       ['claimDueSms', () => store.claimDueSms({ limit: 50, leaseMs: 30_000 })],
       ['unsentSmsCount', () => store.unsentSmsCount(60_000)],
     ] as const) {
@@ -2181,7 +2185,7 @@ describe('fakeJourneyStore: escalation to SMS (LOST-07)', () => {
     const error = new Error('the database went away');
     const asks = {
       alertsDueForEscalation: () => store.alertsDueForEscalation(TWO_MINUTES),
-      escalateAlert: () => store.escalateAlert({ alertId, afterMs: TWO_MINUTES }),
+      escalateAlert: () => store.escalateAlert({ alertId }),
       claimDueSms: () => store.claimDueSms({ limit: 50, leaseMs: 30_000 }),
       unsentSmsCount: () => store.unsentSmsCount(60_000),
     } as const;
@@ -2222,17 +2226,14 @@ describe('fakeJourneyStore: escalation to SMS (LOST-07)', () => {
   test('escalateRequests records every escalation asked for, in order, with its wait only when it had one, as copies', async () => {
     const { store, alertId } = await dueStore();
 
-    await store.escalateAlert({ alertId, afterMs: TWO_MINUTES });
-    await store.escalateAlert({ alertId, afterMs: TWO_MINUTES, lockWaitMs: 5_000 });
+    await store.escalateAlert({ alertId });
+    await store.escalateAlert({ alertId, lockWaitMs: 5_000 });
     const handedOut = store.escalateRequests();
     if (handedOut[1] !== undefined) {
       handedOut[1].lockWaitMs = 1;
     }
 
-    expect(store.escalateRequests()).toEqual([
-      { alertId, afterMs: TWO_MINUTES },
-      { alertId, afterMs: TWO_MINUTES, lockWaitMs: 5_000 },
-    ]);
+    expect(store.escalateRequests()).toEqual([{ alertId }, { alertId, lockWaitMs: 5_000 }]);
   });
 
   test('an alert’s escalation time is null when opened, taken by seedAlert in any state, written at the clock’s now by an escalation, and handed out as a copy', async () => {
@@ -2240,9 +2241,7 @@ describe('fakeJourneyStore: escalation to SMS (LOST-07)', () => {
     expect(store.alerts()[0]?.smsRaisedAt).toBeNull();
 
     const at = await clock.now();
-    expect((await store.escalateAlert({ alertId, afterMs: TWO_MINUTES })).outcome).toBe(
-      'escalated',
-    );
+    expect((await store.escalateAlert({ alertId })).outcome).toBe('escalated');
     expect(store.alerts()[0]).toMatchObject({ state: 'ESCALATED', smsRaisedAt: at });
     store.alerts()[0]?.smsRaisedAt?.setTime(0);
     expect(store.alerts()[0]?.smsRaisedAt).toEqual(at);
@@ -2297,15 +2296,11 @@ describe('fakeJourneyStore: escalation to SMS (LOST-07)', () => {
     const { store, journeyId, alertId } = await dueStore();
     store.hold(journeyId);
 
-    expect(await store.escalateAlert({ alertId, afterMs: TWO_MINUTES, lockWaitMs: 5_000 })).toEqual(
-      { outcome: 'held' },
-    );
-    expect(await store.escalateAlert({ alertId, afterMs: TWO_MINUTES })).toEqual({
+    expect(await store.escalateAlert({ alertId, lockWaitMs: 5_000 })).toEqual({ outcome: 'held' });
+    expect(await store.escalateAlert({ alertId })).toEqual({
       outcome: 'skipped',
     });
     store.release(journeyId);
-    expect((await store.escalateAlert({ alertId, afterMs: TWO_MINUTES })).outcome).toBe(
-      'escalated',
-    );
+    expect((await store.escalateAlert({ alertId })).outcome).toBe('escalated');
   });
 });

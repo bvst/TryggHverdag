@@ -602,8 +602,10 @@ describe('SM-09 and LOST-02: contact that arrives during the sweep wins', () => 
       // the alerts due for escalation after its opens. This stand-in is cast,
       // so the type check cannot say it lacks them; without them every sweep
       // through it would fail. Both go to the real store, unchanged.
+      // RG-03 (LOST-07 review loop 1, `code-reviewer`): the escalation's
+      // request no longer carries afterMs, so neither does this type.
       alertsDueForEscalation: (afterMs: number) => real.alertsDueForEscalation(afterMs),
-      escalateAlert: (request: { alertId: string; afterMs: number; lockWaitMs?: number }) =>
+      escalateAlert: (request: { alertId: string; lockWaitMs?: number }) =>
         real.escalateAlert(request),
     } as unknown as ReturnType<typeof store>;
   }

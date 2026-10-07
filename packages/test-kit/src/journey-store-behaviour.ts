@@ -197,10 +197,16 @@ export interface JourneyStoreUnderTest {
     }): Promise<RecordAcknowledgementResult>;
     /** LOST-07: the alerts due for escalation, read without a lock, and the store's now. */
     alertsDueForEscalation(afterMs: number): Promise<DueAlerts>;
-    /** LOST-07: decided by the escalation rule under the journey's row, and written, or not. */
+    /**
+     * LOST-07: decided by the escalation rule under the journey's row, and
+     * written, or not. RG-03 (LOST-07 review loop 1, `code-reviewer`): no
+     * `afterMs`. The store decides by its own two minutes, so no caller can
+     * hand it another threshold; this suite holds the fake and the adapter to
+     * the same 120 000 (ESCALATE_AFTER_MS below), and L3 the adapter to the
+     * domain's. Every escalateAlert call below loses the field for that reason.
+     */
     escalateAlert(request: {
       alertId: string;
-      afterMs: number;
       lockWaitMs?: number | undefined;
     }): Promise<EscalateAlertResult>;
     /** LOST-07: the SMS claim, of the SMS kinds only. */
@@ -5195,7 +5201,34 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
               .sort((a, b) => a.id.localeCompare(b.id)),
           );
         }),
-        { numRuns: subject.propertyRuns },
+        {
+          numRuns: subject.propertyRuns,
+          // RG-03 (LOST-07 review loop 1, safety note): forced examples, run
+          // first on every run. The states a read narrowed to OPEN would
+          // miss: ESCALATED with no escalation time, and ACKNOWLEDGED with
+          // nobody recorded, both due (a missing half sends the SMS, D-114).
+          // Drawn at random they came up too rarely: a mutant narrowing the
+          // read to OPEN got through one run in seven. The property itself
+          // is unchanged.
+          examples: [
+            [
+              [
+                {
+                  state: 'ESCALATED',
+                  recorded: false,
+                  wasEscalated: false,
+                  openedAgoMs: 3 * MINUTE,
+                },
+                {
+                  state: 'ACKNOWLEDGED',
+                  recorded: false,
+                  wasEscalated: false,
+                  openedAgoMs: 3 * MINUTE,
+                },
+              ],
+            ],
+          ],
+        },
       );
     },
   },
@@ -5275,10 +5308,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         const lastContact = await subject.lastHeartbeatAt(journeyId);
 
         const from = await subject.now();
-        const result = escalated(
-          await subject.store.escalateAlert({ alertId, afterMs: ESCALATE_AFTER_MS }),
-          at,
-        );
+        const result = escalated(await subject.store.escalateAlert({ alertId }), at);
         const to = await subject.now();
 
         const after = await escalationRecordOf(subject, journeyId);
@@ -5387,7 +5417,6 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         expect(
           await subject.store.escalateAlert({
             alertId: journey.alertId,
-            afterMs: ESCALATE_AFTER_MS,
           }),
           at,
         ).toEqual(NOT_ESCALATED);
@@ -5428,7 +5457,6 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
           escalated(
             await subject.store.escalateAlert({
               alertId: journey.alertId,
-              afterMs: ESCALATE_AFTER_MS,
             }),
             change,
           );
@@ -5438,7 +5466,6 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         expect(
           await subject.store.escalateAlert({
             alertId: journey.alertId,
-            afterMs: ESCALATE_AFTER_MS,
           }),
           change,
         ).toEqual(NOT_ESCALATED);
@@ -5447,9 +5474,9 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       }
 
       // An ID no alert has: no row to take, and nothing written.
-      expect(
-        await subject.store.escalateAlert({ alertId: syntheticUuid(), afterMs: ESCALATE_AFTER_MS }),
-      ).toEqual(NOT_ESCALATED);
+      expect(await subject.store.escalateAlert({ alertId: syntheticUuid() })).toEqual(
+        NOT_ESCALATED,
+      );
     },
   },
   {
@@ -5465,7 +5492,6 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
             2_000,
             subject.store.escalateAlert({
               alertId: skipping.alertId,
-              afterMs: ESCALATE_AFTER_MS,
             }),
             'an escalation of a held row',
           ),
@@ -5477,7 +5503,6 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       escalated(
         await subject.store.escalateAlert({
           alertId: skipping.alertId,
-          afterMs: ESCALATE_AFTER_MS,
         }),
         'once released',
       );
@@ -5490,7 +5515,6 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         expect(
           await subject.store.escalateAlert({
             alertId: waiting.alertId,
-            afterMs: ESCALATE_AFTER_MS,
             lockWaitMs: subject.lockWaitMs,
           }),
         ).toEqual({ outcome: 'held' });
@@ -5512,7 +5536,6 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
           try {
             return await subject.store.escalateAlert({
               alertId: journey.alertId,
-              afterMs: ESCALATE_AFTER_MS,
               lockWaitMs: subject.lockWaitMs,
             });
           } finally {
@@ -5544,7 +5567,6 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         await expect(
           subject.store.escalateAlert({
             alertId: refused.alertId,
-            afterMs: ESCALATE_AFTER_MS,
             lockWaitMs,
           }),
           String(lockWaitMs),
@@ -5561,9 +5583,9 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       const before = await escalationRecordOf(subject, journey.journeyId);
 
       // In the store's own words, as the open's refusal is (LOST-02-AC12).
-      await expect(
-        subject.store.escalateAlert({ alertId: journey.alertId, afterMs: ESCALATE_AFTER_MS }),
-      ).rejects.toThrow(REFUSED_FOR_NO_RESPONDER);
+      await expect(subject.store.escalateAlert({ alertId: journey.alertId })).rejects.toThrow(
+        REFUSED_FOR_NO_RESPONDER,
+      );
 
       expect(await escalationRecordOf(subject, journey.journeyId)).toEqual(before);
       expect(await smsRaisedAtOf(subject, journey.journeyId, journey.alertId)).toBeNull();
@@ -5583,7 +5605,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         // Promise.all rejects if any escalation fails outright: none may.
         const results = await Promise.all(
           Array.from({ length: RACERS }, () =>
-            subject.store.escalateAlert({ alertId: journey.alertId, afterMs: ESCALATE_AFTER_MS }),
+            subject.store.escalateAlert({ alertId: journey.alertId }),
           ),
         );
 
@@ -5805,10 +5827,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
           });
         }
         // Escalated by the store's own escalation.
-        const written = escalated(
-          await subject.store.escalateAlert({ alertId, afterMs: ESCALATE_AFTER_MS }),
-          how,
-        );
+        const written = escalated(await subject.store.escalateAlert({ alertId }), how);
         const sms = (recipientId: string) =>
           written.messages.find((message) => message.recipientId === recipientId)?.messageId ?? '';
         const smsRaisedAt = await smsRaisedAtOf(subject, journeyId, alertId);
@@ -6305,9 +6324,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
                   .sort(),
               );
               for (const alertId of due) {
-                escalated(
-                  await subject.store.escalateAlert({ alertId, afterMs: ESCALATE_AFTER_MS }),
-                );
+                escalated(await subject.store.escalateAlert({ alertId }));
                 const alert = model.find(({ id }) => id === alertId);
                 if (alert !== undefined) {
                   alert.escalated = true;

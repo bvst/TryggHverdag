@@ -50,6 +50,7 @@ import {
   syntheticCoordinate,
   syntheticCredential,
   syntheticHeartbeat,
+  syntheticUuid,
   type FakeJourneyState,
   type RegisteredDevice,
   type SyntheticHeartbeat,
@@ -105,6 +106,8 @@ interface Answer {
   status: number;
   body: unknown;
   text: string;
+  /** Every header, as sent, one per line: so two answers can be compared byte for byte. */
+  headers: string;
 }
 
 function parsedOrNull(text: string): unknown {
@@ -117,7 +120,12 @@ function parsedOrNull(text: string): unknown {
 
 async function answerOf(response: Response): Promise<Answer> {
   const text = await response.text();
-  return { status: response.status, body: parsedOrNull(text), text };
+  return {
+    status: response.status,
+    body: parsedOrNull(text),
+    text,
+    headers: [...response.headers].map(([name, value]) => `${name}: ${value}`).join('\n'),
+  };
 }
 
 /** Waits, in turns of the event loop rather than by a clock, until `check` holds. */
@@ -619,14 +627,15 @@ describe('LOST-07 and REL-07: the escalation reads both halves of an acknowledge
         }),
       escalateAlert: (request) => w.store.escalateAlert(request),
     };
+    // RG-03 (LOST-07 review loop 1, `code-reviewer`): the requests recorded
+    // here, and in the AC16 test below, no longer carry afterMs; the store
+    // decides by its own two minutes, as the adapter does.
     const asked = w.store.escalateRequests().length;
 
     const result = await createWatchdog({ journeys: drifted, beats: w.beats, log: w.log }).sweep();
 
     expect(result).toEqual({ ...QUIET_SWEEP, escalated: 1 });
-    expect(w.store.escalateRequests().slice(asked)).toEqual([
-      { alertId: due.alertId, afterMs: TWO_MINUTES },
-    ]);
+    expect(w.store.escalateRequests().slice(asked)).toEqual([{ alertId: due.alertId }]);
     expect(w.smsOf(due.journeyId)).toHaveLength(3);
     for (const other of [early, onIt, already, over]) {
       expect(w.smsOf(other.journeyId)).toEqual([]);
@@ -848,6 +857,44 @@ describe('LOST-07 and LOST-06: "I’m on it" stops the escalation, withdrawing t
 
     expect(w.messagesOf(journeyId).filter(({ withdrawnAt }) => withdrawnAt !== null)).toEqual([]);
     expect(w.smsOf(journeyId)).toEqual([]);
+  });
+
+  test('LOST-07-AC6: a stranger learns nothing of an ESCALATED alert and stops nothing (SEC-02, PRIV-03): W’s own device, another walker and a responder of another journey only each get, status, body and headers byte for byte, the 404 an alert ID no alert has gets; no acknowledgement_ignored line is written; the alert and its messages are as they were, every SMS unwithdrawn, and then delivered', async () => {
+    // LOST-07 review loop 1 (privacy-security-reviewer): "not a responder"
+    // comes before every state, ESCALATED included, so neither the alert's
+    // existence nor its escalation can be learned by someone who does not
+    // follow the journey, and only a responder's "I'm on it" withdraws an SMS.
+    const w = world();
+    const { walker, journeyId, alertId, responders, responderIds } = await escalated(w, 3);
+    const [r1] = responders as [RegisteredDevice, RegisteredDevice, RegisteredDevice];
+    const otherWalker = w.walker();
+    const elsewhere = w.responder();
+    await w.seed(w.walker(), [elsewhere.userId], { silentForMs: MINUTE });
+    const noAlert = await w.acknowledge(r1, syntheticUuid());
+    expect(noAlert.status).toBe(404);
+    expect(noAlert.body).toMatchObject({ code: 'ALERT_NOT_FOUND' });
+    const before = { alerts: w.alertsOf(journeyId), messages: w.messagesOf(journeyId) };
+    const lines = w.log.events.length;
+
+    for (const [who, device] of [
+      ['W’s own device', walker],
+      ['another walker', otherWalker],
+      ['a responder of another journey only', elsewhere],
+    ] as const) {
+      const { status, text, headers } = await w.acknowledge(device, alertId);
+      expect({ status, text, headers }, who).toEqual({
+        status: noAlert.status,
+        text: noAlert.text,
+        headers: noAlert.headers,
+      });
+    }
+
+    expect(w.log.events.slice(lines)).toEqual([]);
+    expect(w.alertsOf(journeyId)).toEqual(before.alerts);
+    expect(w.messagesOf(journeyId)).toEqual(before.messages);
+    expect(w.smsOf(journeyId).map(({ withdrawnAt }) => withdrawnAt)).toEqual([null, null, null]);
+    expect(await w.smsSender.deliverDue()).toEqual({ sent: 3, failed: 0 });
+    expect(recipientsOf(w.sms.accepted)).toEqual([...responderIds].sort());
   });
 });
 
@@ -1315,6 +1362,24 @@ describe('LOST-07 and AR-05: an escalation that fails is a failed sweep, saying 
     expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
   });
 
+  test('LOST-07-AC1: with only the overdue read failing, a due alert is still escalated and every responder’s SMS written: the escalation runs whatever the read for new alerts came to; the sweep fails, with its one watchdog_failed line, and records no beat', async () => {
+    // LOST-07 review loop 1 (safety-reviewer and code-reviewer, REL-07): a
+    // read of journeys that fails says nothing about the alerts already open,
+    // and their two minutes go on. Skipping the escalation then would hold
+    // every SMS back for as long as that read keeps failing.
+    const w = world();
+    const { journeyId, responderIds } = await due(w, 3);
+    const beatBefore = await w.beats.lastBeat();
+    w.store.failWith(databaseError('57P01'), 'overdueJourneys');
+
+    expect(await w.watchdog.sweep()).toEqual({ ok: false, opened: 0, escalated: 1, stuck: 0 });
+
+    expect(w.alertsOf(journeyId).map(({ state }) => state)).toEqual(['ESCALATED']);
+    expect(recipientsOf(w.smsOf(journeyId))).toEqual([...responderIds].sort());
+    expect(w.log.events).toEqual([{ event: 'watchdog_failed', stage: 'read', code: '57P01' }]);
+    expect(await w.beats.lastBeat()).toEqual(beatBefore);
+  });
+
   test('LOST-07-AC15: with the store failing the escalation’s write, the sweep fails with one escalation_failed line, stage escalate, and its SQLSTATE; no beat; the alert as it was', async () => {
     const w = world();
     const { journeyId } = await due(w, 3);
@@ -1360,7 +1425,7 @@ describe('LOST-07, AR-06 and D-108: a held row never hides an escalation', () =>
     w.store.hold(journeyId);
 
     expect(await w.watchdog.sweep()).toEqual(QUIET_SWEEP);
-    expect(w.store.escalateRequests()).toEqual([{ alertId, afterMs: TWO_MINUTES }]);
+    expect(w.store.escalateRequests()).toEqual([{ alertId }]);
     w.clock.advance(STUCK_AFTER - 1);
     expect(await w.watchdog.sweep()).toEqual(QUIET_SWEEP);
     const beat = await w.beats.lastBeat();
@@ -1370,8 +1435,8 @@ describe('LOST-07, AR-06 and D-108: a held row never hides an escalation', () =>
     expect(await w.watchdog.sweep()).toEqual({ ok: false, opened: 0, escalated: 0, stuck: 1 });
 
     expect(w.store.escalateRequests().slice(2)).toEqual([
-      { alertId, afterMs: TWO_MINUTES },
-      { alertId, afterMs: TWO_MINUTES, lockWaitMs: 5 * SECOND },
+      { alertId },
+      { alertId, lockWaitMs: 5 * SECOND },
     ]);
     expect(w.log.events).toEqual([{ event: 'escalation_overdue', alertId }]);
     expect(await w.beats.lastBeat()).toEqual(beat);

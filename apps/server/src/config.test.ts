@@ -5,6 +5,7 @@
 import {
   SYNTHETIC_CHECK_UUID as CHECK,
   SYNTHETIC_PING_URL as PING_URL,
+  syntheticUuid,
 } from '@trygghverdag/test-kit';
 import { describe, expect, test } from 'vitest';
 import {
@@ -203,4 +204,56 @@ describe('readHealthchecksSmsSetting', () => {
       expect(reasonOf(readHealthchecksSmsSetting(env))).not.toContain('Healthchecks.io');
     }
   });
+});
+
+// LOST-07 review loop 1 (safety-reviewer, REL-07, D-079): the SMS check's
+// `failing` is its ping URL with /fail appended. A URL with a query, a
+// fragment or a trailing slash would put /fail in the wrong place
+// (`…?rid=x/fail`, `…#x/fail`, `…//fail`), and the failure would go to an
+// address Healthchecks.io does not read as one: a page that never comes. So
+// both settings refuse them at start, with a reason of their own; the
+// worker's too, so the two addresses are read by one rule.
+
+describe('LOST-07: a ping URL that would misplace /fail is refused at start', () => {
+  const RID = syntheticUuid();
+
+  test.each([
+    ['HEALTHCHECKS_SMS_URL', readHealthchecksSmsSetting],
+    ['HEALTHCHECKS_WORKER_URL', readHealthchecksSetting],
+  ] as const)(
+    'LOST-07-AC11: %s with a query, a fragment or a trailing slash is refused, each with a reason of its own that names the variable and never the value; the plain ping URL is still taken',
+    (variable, read) => {
+      const refused = {
+        query: [`https://hc-ping.com/${CHECK}?rid=${RID}`, `https://hc-ping.com/${CHECK}?`],
+        fragment: [`https://hc-ping.com/${CHECK}#${RID}`, `https://hc-ping.com/${CHECK}#`],
+        'trailing slash': [`https://hc-ping.com/${CHECK}/`],
+      };
+      const reasons = new Map<string, string>();
+      for (const [what, values] of Object.entries(refused)) {
+        for (const value of values) {
+          const setting = read({ [variable]: value });
+
+          expect(setting.checkingIn, value).toBe(false);
+          const reason = setting.checkingIn ? '' : setting.reason;
+          expect(reason, value).toContain(variable);
+          expect(JSON.stringify(setting), value).not.toContain(CHECK);
+          expect(JSON.stringify(setting), value).not.toContain(RID);
+          reasons.set(what, reason);
+        }
+      }
+      // Each its own reason, and none of the reasons for unset, not a URL or
+      // not https:.
+      const others = [
+        {},
+        { [variable]: `http://hc-ping.com/${CHECK}` },
+        { [variable]: `hc-ping.com/${CHECK}` },
+      ].map((env) => reasonOf(read(env)));
+      expect(new Set([...reasons.values(), ...others]).size).toBe(reasons.size + others.length);
+
+      expect(read({ [variable]: `https://hc-ping.com/${CHECK}` })).toEqual({
+        checkingIn: true,
+        url: `https://hc-ping.com/${CHECK}`,
+      });
+    },
+  );
 });

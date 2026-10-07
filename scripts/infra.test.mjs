@@ -252,3 +252,80 @@ describe('LOST-07: the ping URL the SMS check reports to', () => {
     }
   });
 });
+
+describe('LOST-07: the two ping URLs are each a plain check address, and never the same one', () => {
+  // LOST-07 review loop 1 (safety-reviewer and code-reviewer, REL-07,
+  // REL-08). The SMS check reports `failing` to its URL with /fail appended,
+  // so a query, a fragment or a trailing slash would misplace it and page
+  // nobody; the worker's URL is held to the same rule, so both are read
+  // alike. And the two must differ: one check behind both would make "worker
+  // down" and "SMS failing" one page, and an ok from one would clear the
+  // other's failing.
+  const variables = read('infra/staging/variables.tf');
+  const RID = '0f0e0d0c';
+
+  /** The variable's block, from its header to the closing brace at the start of a line. */
+  function variableBlock(name) {
+    const match = new RegExp(`^variable "${name}" \\{\\n[\\s\\S]*?\\n\\}$`, 'm').exec(variables);
+    return match?.[0] ?? '';
+  }
+
+  /**
+   * Whether Terraform would take this value: every `can(regex(…))` condition
+   * in the variable's validation blocks matches it. Terraform's string escapes
+   * undone, as INF-08-AC8's test does; RE2 and JavaScript agree on patterns
+   * this simple.
+   */
+  function takes(name, value) {
+    const patterns = [
+      ...variableBlock(name).matchAll(
+        new RegExp(
+          `\\n\\s*condition\\s*=\\s*can\\(regex\\("((?:[^"\\\\]|\\\\.)*)", var\\.${name}\\)\\)\\n`,
+          'g',
+        ),
+      ),
+    ].map(([, pattern]) => new RegExp(String(pattern).replace(/\\\\/g, '\\')));
+    expect(patterns.length, name).toBeGreaterThan(0);
+    return patterns.every((pattern) => pattern.test(value));
+  }
+
+  test.each(['healthchecks_sms_url', 'healthchecks_worker_url'])(
+    'LOST-07-AC20: %s refuses an address with a query, a fragment or a trailing slash, and still takes the plain ping URL',
+    (name) => {
+      expect(takes(name, `https://hc-ping.com/${CHECK}`)).toBe(true);
+      for (const refused of [
+        `https://hc-ping.com/${CHECK}/`,
+        `https://hc-ping.com/${CHECK}?rid=${RID}`,
+        `https://hc-ping.com/${CHECK}?`,
+        `https://hc-ping.com/${CHECK}#${RID}`,
+        `https://hc-ping.com/${CHECK}#`,
+      ]) {
+        expect({ value: refused, accepted: takes(name, refused) }).toEqual({
+          value: refused,
+          accepted: false,
+        });
+      }
+    },
+  );
+
+  test('LOST-07-AC20: a validation refuses the SMS check’s URL when it is the worker’s, and its error message names both secrets', () => {
+    const blocks = [
+      variableBlock('healthchecks_sms_url'),
+      variableBlock('healthchecks_worker_url'),
+    ];
+    const validations = blocks.flatMap((block) =>
+      [...block.matchAll(/\n {2}validation \{\n([\s\S]*?)\n {2}\}/g)].map(([, body]) => body ?? ''),
+    );
+    const differing = validations.filter((body) =>
+      /\n?\s*condition\s*=\s*(var\.healthchecks_sms_url\s*!=\s*var\.healthchecks_worker_url|var\.healthchecks_worker_url\s*!=\s*var\.healthchecks_sms_url)\s*(\n|$)/.test(
+        body,
+      ),
+    );
+
+    expect(differing).toHaveLength(1);
+    const message =
+      /\n?\s*error_message\s*=\s*"((?:[^"\\]|\\.)*)"/.exec(differing[0] ?? '')?.[1] ?? '';
+    expect(message).toContain('HEALTHCHECKS_SMS_URL');
+    expect(message).toContain('HEALTHCHECKS_WORKER_URL');
+  });
+});

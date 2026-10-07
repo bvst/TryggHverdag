@@ -760,6 +760,29 @@ describe('LOST-07 and D-079: the SMS check’s alarm reports to its own Healthch
     expect(everything(failure)).not.toContain(CHECK);
   }, 2_000);
 
+  test('LOST-07-AC11: failing goes to /fail on the check’s own path whatever the configured address ends in: for one with a trailing slash, to /<uuid>/fail, not //fail; for one with a query, to /<uuid>/fail with the query after it, not ?rid=…/fail; ok goes to the address as configured', async () => {
+    // LOST-07 review loop 1 (safety-reviewer, REL-07): the settings refuse
+    // such addresses at start; this is the adapter's own half, so an address
+    // that got past them still pages. A misplaced /fail is a ping to an
+    // address Healthchecks.io does not read as a failure: no page.
+    const RID = '0f0e0d0c';
+    const healthchecks = await standIn(200);
+
+    for (const configured of [`${healthchecks.url}/`, `${healthchecks.url}?rid=${RID}`]) {
+      const alarm = healthchecksAlarm({ url: configured });
+      await expect(alarm.report('failing'), configured).resolves.toBeUndefined();
+      await expect(alarm.report('ok'), configured).resolves.toBeUndefined();
+    }
+    await aMoment();
+
+    expect(healthchecks.received.map(({ method, path }) => ({ method, path }))).toEqual([
+      { method: 'HEAD', path: `/${CHECK}/fail` },
+      { method: 'HEAD', path: `/${CHECK}/` },
+      { method: 'HEAD', path: `/${CHECK}/fail?rid=${RID}` },
+      { method: 'HEAD', path: `/${CHECK}?rid=${RID}` },
+    ]);
+  });
+
   test('LOST-07-AC11: a report the caller’s signal aborts fails saying the report was cancelled because the worker is stopping, as the check-in says it of itself: not a check-in, not a timeout, and not the URL', async () => {
     // The worker hands on Graphile's signal, which aborts when it stops; the
     // line it writes should send nobody looking for a network fault, nor

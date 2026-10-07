@@ -578,6 +578,23 @@ function parsedOrNull(text: string): Record<string, unknown> | null {
 const acknowledge = (api: ReturnType<typeof realApi>, credential: string, alertId: string) =>
   post(api, credential, `alerts/${alertId}/acknowledgement`);
 
+/** "I'm on it" through the API, its answer as sent: status, body text and headers. */
+async function acknowledgeAsSent(
+  api: ReturnType<typeof realApi>,
+  credential: string,
+  alertId: string,
+): Promise<{ status: number; text: string; headers: string }> {
+  const response = await api.request(apiPath(`alerts/${alertId}/acknowledgement`), {
+    method: 'POST',
+    headers: { authorization: `Bearer ${credential}` },
+  });
+  return {
+    status: response.status,
+    text: await response.text(),
+    headers: [...response.headers].map(([name, value]) => `${name}: ${value}`).join('\n'),
+  };
+}
+
 const recipientsOf = (messages: readonly { recipientId: string }[]) =>
   messages.map(({ recipientId }) => recipientId).sort();
 
@@ -703,6 +720,39 @@ describe('LOST-07, REL-07 and LOST-02: the escalation to SMS, on the real tables
       smsRaisedAt: null,
     });
     expect(escalationLines(log)).toEqual([]);
+  });
+
+  test('LOST-07-AC6: through the API on the real tables, a stranger learns nothing of an ESCALATED alert and stops nothing (SEC-02, PRIV-03): W’s own device, another walker and a responder of another journey only each get, status, body and headers byte for byte, the 404 an alert ID no alert has gets; no acknowledgement_ignored line is written; every SMS stays unwithdrawn, and is then delivered', async () => {
+    // LOST-07 review loop 1 (privacy-security-reviewer), as the L6 test holds
+    // it: "not a responder" comes before every state, ESCALATED included.
+    const { walker, journeyId, alertId, responders } = await due({ responders: 3 });
+    const [r1] = responders as [Person, Person, Person];
+    expect(await watchdogFor().sweep()).toEqual({ ...QUIET, escalated: 1 });
+    const otherWalker = await person();
+    const elsewhere = await silent({ responders: 1 });
+    const [theirResponder] = elsewhere.responders as [Person];
+    const log = fakeLog();
+    const api = realApi({ log });
+    const noAlert = await acknowledgeAsSent(api, r1.credential, syntheticUuid());
+    expect(noAlert.status).toBe(404);
+    expect(parsedOrNull(noAlert.text)).toMatchObject({ code: 'ALERT_NOT_FOUND' });
+    const before = await recordOf(journeyId);
+
+    for (const [who, credential] of [
+      ['W’s own device', walker.credential],
+      ['another walker', otherWalker.credential],
+      ['a responder of another journey only', theirResponder.credential],
+    ] as const) {
+      expect(await acknowledgeAsSent(api, credential, alertId), who).toEqual(noAlert);
+    }
+
+    expect(log.events).toEqual([]);
+    expect(await recordOf(journeyId)).toEqual(before);
+    const written = ofKind(await messagesOf(journeyId), SMS);
+    expect(written.map(({ withdrawnAt }) => withdrawnAt)).toEqual([null, null, null]);
+    const sms = fakeSms();
+    expect(await smsSenderFor({ sms }).deliverDue()).toEqual({ sent: 3, failed: 0 });
+    expect(recipientsOf(sms.accepted)).toEqual(idsOf(responders).sort());
   });
 });
 
@@ -1107,8 +1157,10 @@ describe('LOST-07, AR-06 and D-108: a held row never hides an escalation', () =>
     const lockWaitMs = 1_000;
     let outcome: unknown;
     try {
+      // RG-03 (LOST-07 review loop 1, `code-reviewer`): no afterMs; the
+      // adapter decides by the domain's two minutes, whoever asks.
       const escalating = store()
-        .escalateAlert({ alertId, afterMs: TWO_MINUTES, lockWaitMs })
+        .escalateAlert({ alertId, lockWaitMs })
         .then(
           (answer) => ({ answer }),
           (error: unknown) => ({ error }),

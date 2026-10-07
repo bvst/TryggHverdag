@@ -920,9 +920,16 @@ describe('REL-08 and LOST-02: the watchdog feeds the beat', () => {
     expect(health.status).toBe('degraded');
     expect(health.worker.lastBeatAt).toBe(lastGood.toISOString());
     expect(w.log.events.length).toBeGreaterThanOrEqual(18);
+    // RG-03 (LOST-07 review loop 1, safety-reviewer and code-reviewer,
+    // REL-07): the escalation now runs whatever the overdue read came to, so a
+    // sweep whose read failed still asks for the alerts due, and with the
+    // database gone that read fails too: each sweep gains one
+    // escalation_failed line, stage read, with the same SQLSTATE. The set is
+    // still exact; the health this test is about is unchanged.
     expect(new Set(w.log.events.map((event) => JSON.stringify(event)))).toEqual(
       new Set([
         JSON.stringify({ event: 'watchdog_failed', stage: 'read', code: '08006' }),
+        JSON.stringify({ event: 'escalation_failed', stage: 'read', code: '08006' }),
         JSON.stringify({ event: 'delivery_failed', stage: 'claim', code: '08006' }),
       ]),
     );

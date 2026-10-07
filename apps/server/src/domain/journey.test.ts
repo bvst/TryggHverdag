@@ -2384,6 +2384,58 @@ describe('LOST-07 and AR-04: the escalation is the alert rule’s second event, 
     );
   });
 
+  test('LOST-07-AC3: a missing half fails toward the SMS: an alert otherwise due whose escalation time or acknowledger is undefined, or missing altogether, rather than null, is escalated, never read as already escalated or as someone recorded', () => {
+    // The types forbid undefined, so these are built with a cast: what they
+    // stand for is a row a future reader maps wrongly, or a field a refactor
+    // drops (LOST-07 review loop 1, safety note; D-114: a missing half sends
+    // the SMS). A rule that read undefined as "already escalated" or as
+    // "someone is on it" would stay silent exactly when it cannot tell.
+    const asRead = (fields: Record<string, unknown>) =>
+      ({ id: ALERT, ...fields }) as unknown as AlertForEscalation;
+    const when = {
+      type: 'escalate',
+      openedAt: OPENED_AT,
+      now: new Date(OPENED_AT.getTime() + TWO_MINUTES),
+    } as const;
+
+    for (const [what, alert] of [
+      [
+        'OPEN, escalation time undefined',
+        asRead({ state: 'OPEN', acknowledgedBy: null, smsRaisedAt: undefined }),
+      ],
+      [
+        'ESCALATED, escalation time undefined',
+        asRead({ state: 'ESCALATED', acknowledgedBy: null, smsRaisedAt: undefined }),
+      ],
+      [
+        'ACKNOWLEDGED, acknowledger undefined',
+        asRead({ state: 'ACKNOWLEDGED', acknowledgedBy: undefined, smsRaisedAt: null }),
+      ],
+      [
+        'ACKNOWLEDGED, both undefined',
+        asRead({ state: 'ACKNOWLEDGED', acknowledgedBy: undefined, smsRaisedAt: undefined }),
+      ],
+      ['ACKNOWLEDGED, both missing', asRead({ state: 'ACKNOWLEDGED' })],
+      ['OPEN, both missing', asRead({ state: 'OPEN' })],
+    ] as const) {
+      expect(alertTransition(alert, when), what).toEqual(ESCALATED);
+    }
+    // The controls: a recorded acknowledger and a set escalation time still
+    // stop it, so the escalations above are the missing halves' doing.
+    expect(
+      alertTransition(
+        asRead({ state: 'ACKNOWLEDGED', acknowledgedBy: RESPONDER, smsRaisedAt: undefined }),
+        when,
+      ),
+    ).toEqual(NOT_ESCALATED);
+    expect(
+      alertTransition(
+        asRead({ state: 'OPEN', acknowledgedBy: undefined, smsRaisedAt: OPENED_AT }),
+        when,
+      ),
+    ).toEqual(NOT_ESCALATED);
+  });
+
   test('LOST-07-AC13: exactly two minutes escalates, and a millisecond under does not, counted from the opening the store read', () => {
     const due: AlertForEscalation = {
       id: ALERT,

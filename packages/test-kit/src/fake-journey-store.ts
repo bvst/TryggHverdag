@@ -76,17 +76,19 @@
  *     the store's now, and from LOST_CONTACT its alert is resolved;
  *   - resolving is one step: the journey's one unresolved alert, whatever its
  *     state, goes to RESOLVED at now with the resolution, keeping who is
- *     recorded on it and since when; every message of it of a kind in
- *     `WITHDRAWN_WHEN_RESOLVED` (the lost-contact pushes, and the notices that
- *     someone is on it) not sent and not withdrawn is withdrawn at now,
- *     keeping its attempts and last failure (D-111, D-113); and one
- *     stand-down per responder row of the journey is written, of the
- *     resolution's own kind, due at now, or, for a responder with withdrawn
- *     messages that were handed over at least once and are due later than
- *     now, at the latest of those due times (the hold, per responder:
- *     LOST-06's approach item 5, D-114). One stand-down per responder,
- *     however many of their messages were withdrawn. No unresolved alert: no
- *     withdrawal and no stand-down, and the move stands. No responder row: no
+ *     recorded on it and since when, and its escalation time; every message
+ *     of it of a kind in `WITHDRAWN_WHEN_RESOLVED` (the lost-contact pushes,
+ *     the notices that someone is on it, and the escalation SMS) not sent and
+ *     not withdrawn is withdrawn at now, keeping its attempts and last failure
+ *     (D-111, D-113, LOST-07); and one stand-down per responder row of the
+ *     journey is written, by push, of the resolution's own kind, due at now,
+ *     or, for a responder with withdrawn messages that were handed over at
+ *     least once and are due later than now, at the latest of those due times
+ *     (the hold, per responder: LOST-06's approach item 5, D-114), an SMS
+ *     still in the SMS port's hands holding it as a push does (LOST-07,
+ *     approach item 6). One stand-down per responder, however many of their
+ *     messages were withdrawn. No unresolved alert: no withdrawal and no
+ *     stand-down, and the move stands. No responder row: no
  *     stand-down, and the resolution stands. A second stand-down of a kind
  *     for (alert, recipient) is refused, as the unique index refuses it, and
  *     nothing of the step is kept;
@@ -134,20 +136,20 @@
  *   - `escalateAlert` takes the alert's journey's "row" first (D-112) and
  *     skips it while held, or, told to wait, answers `held` for a holder that
  *     never lets go and decides as a holder that lets go left the alert. Under
- *     that "lock" it decides again by the same rule, and either writes nothing
- *     (`skipped`) or moves the alert to ESCALATED with its escalation time at
- *     now and one LOST_CONTACT_SMS per responder row, each with a fresh ID,
- *     due at now, all of it or none of it. A journey with no responder row is
- *     refused, and the alert left as it was;
+ *     that "lock" it decides again by the same rule, with its own two minutes
+ *     (`ESCALATE_AFTER_MS`, as the adapter takes the domain's: no caller
+ *     hands it a threshold), and either writes nothing (`skipped`) or moves
+ *     the alert to ESCALATED with its escalation time at now and one
+ *     LOST_CONTACT_SMS per responder row, each with a fresh ID, due at now,
+ *     all of it or none of it. A journey with no responder row is refused,
+ *     and the alert left as it was;
  *   - the push claim (`claimDue`) takes the push kinds only, and the SMS claim
  *     (`claimDueSms`) the SMS kinds only, with the same limit, lease, attempt
  *     count and order; `unsentSmsCount` counts the SMS messages unsent, not
  *     withdrawn and written the given time or more before now;
  *   - "I'm on it", once recorded, withdraws its alert's unsent and not yet
  *     withdrawn messages of the kinds `WITHDRAWN_WHEN_ACKNOWLEDGED` lists (the
- *     escalation SMS) at its now, keeping their attempts and last failure; a
- *     resolution withdraws them with the rest of `WITHDRAWN_WHEN_RESOLVED`,
- *     its hold covering an SMS in the port's hands as it covers a push;
+ *     escalation SMS) at its now, keeping their attempts and last failure;
  *   - an alert's escalation time is null until it is escalated, put in
  *     directly or written by the escalation, and kept by every later step;
  *   - a fake given no clock throws when asked to escalate, claim or count.
@@ -165,6 +167,13 @@
 import { EVENT_ID_PATTERN, MAX_EVENT_ID_LENGTH } from '@trygghverdag/contracts';
 import { PUSH_FAILURE_REASONS, type MessageKind, type PushFailureReason } from './fake-push.ts';
 import { syntheticUuid } from './synthetic-ids.ts';
+
+/**
+ * The longest lock_timeout PostgreSQL takes, in milliseconds, as the adapter's
+ * LOCK_TIMEOUT_MAX_MS: a wait asked for beyond it is refused (LOST-02, review
+ * loop 2).
+ */
+const LOCK_TIMEOUT_MAX_MS = 2_147_483_647;
 
 /**
  * The kinds that stand a responder down, which an open withdraws (LOST-03
@@ -430,10 +439,13 @@ export interface DueAlerts {
   alerts: DueAlert[];
 }
 
-/** An escalation as the watchdog asks for it: `lockWaitMs` only when told to wait for the row. */
+/**
+ * An escalation as the watchdog asks for it: `lockWaitMs` only when told to
+ * wait for the row. No threshold: the store decides by its own two minutes
+ * (LOST-07 review loop 1, `code-reviewer`), as the adapter does.
+ */
 export interface EscalateRequest {
   alertId: string;
-  afterMs: number;
   lockWaitMs?: number | undefined;
 }
 
@@ -936,6 +948,14 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     now.getTime() - silentSince.getTime() < LOST_CONTACT_AFTER_MS;
 
   /**
+   * The escalation's two minutes (D-019): the server's ESCALATE_AFTER_MS,
+   * written out because the test kit imports nothing from the server. The
+   * shared behaviour suite holds the fake and the adapter to the same 120 000,
+   * and L3 holds the adapter to the domain's (LOST-07 review loop 1).
+   */
+  const ESCALATE_AFTER_MS = 120_000;
+
+  /**
    * The escalation rule (LOST-07, approach item 2), as the adapter's read and
    * its update hold it: unresolved; not acknowledged in D-114's sense (state
    * ACKNOWLEDGED and someone recorded), so a missing half escalates; never
@@ -1003,6 +1023,26 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
   };
 
   /** A number of milliseconds as an interval takes it. */
+  /**
+   * As lock_timeout takes a wait (LOST-02, review loop 2): a whole number of
+   * milliseconds from 1 to 2147483647. PostgreSQL reads 0 as no limit at all,
+   * which a wait must never quietly become. Checked before anything is taken
+   * or written, by the open and the escalation alike, as the adapter's
+   * `checkLockWait` checks it.
+   */
+  const checkLockWait = (call: JourneyStoreCall, lockWaitMs: number | undefined): void => {
+    if (
+      lockWaitMs !== undefined &&
+      !(Number.isInteger(lockWaitMs) && lockWaitMs >= 1 && lockWaitMs <= LOCK_TIMEOUT_MAX_MS)
+    ) {
+      throw new Error(
+        `fakeJourneyStore.${call}: lockWaitMs must be a whole number of milliseconds from 1 to ` +
+          `${String(LOCK_TIMEOUT_MAX_MS)}, not ${String(lockWaitMs)}: PostgreSQL reads a ` +
+          'lock_timeout of 0 as no limit at all',
+      );
+    }
+  };
+
   const millisecondsOf = (call: JourneyStoreCall, what: string, value: number): number => {
     if (!Number.isFinite(value)) {
       throw new Error(`fakeJourneyStore.${call}: ${what} must be a finite number of milliseconds`);
@@ -1647,19 +1687,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       );
       return answer('openLostContactAlert', async (): Promise<OpenLostContactAlertResult> => {
         const threshold = millisecondsOf('openLostContactAlert', 'afterMs', afterMs);
-        // As lock_timeout takes it (LOST-02, review loop 2): a whole number of
-        // milliseconds from 1 to 2147483647. PostgreSQL reads 0 as no limit
-        // at all, which a wait must never quietly become.
-        if (
-          lockWaitMs !== undefined &&
-          !(Number.isInteger(lockWaitMs) && lockWaitMs >= 1 && lockWaitMs <= 2_147_483_647)
-        ) {
-          throw new Error(
-            'fakeJourneyStore.openLostContactAlert: lockWaitMs must be a whole number of ' +
-              `milliseconds from 1 to 2147483647, not ${String(lockWaitMs)}: PostgreSQL reads ` +
-              'a lock_timeout of 0 as no limit at all',
-          );
-        }
+        checkLockWait('openLostContactAlert', lockWaitMs);
         const found = journeyNamed(journeyId);
         // A row whose committed version no longer matches is never locked,
         // so never waited for, held or not, as in PostgreSQL: skipped at once,
@@ -1818,24 +1846,13 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         };
       });
     },
-    escalateAlert({ alertId, afterMs, lockWaitMs }) {
-      escalateRequests.push(
-        lockWaitMs === undefined ? { alertId, afterMs } : { alertId, afterMs, lockWaitMs },
-      );
+    escalateAlert({ alertId, lockWaitMs }) {
+      escalateRequests.push(lockWaitMs === undefined ? { alertId } : { alertId, lockWaitMs });
       return answer('escalateAlert', async (): Promise<EscalateAlertResult> => {
-        const threshold = millisecondsOf('escalateAlert', 'afterMs', afterMs);
-        // As lock_timeout takes it, as the open checks it (LOST-02, review
-        // loop 2): PostgreSQL reads 0 as no limit at all.
-        if (
-          lockWaitMs !== undefined &&
-          !(Number.isInteger(lockWaitMs) && lockWaitMs >= 1 && lockWaitMs <= 2_147_483_647)
-        ) {
-          throw new Error(
-            'fakeJourneyStore.escalateAlert: lockWaitMs must be a whole number of ' +
-              `milliseconds from 1 to 2147483647, not ${String(lockWaitMs)}: PostgreSQL reads ` +
-              'a lock_timeout of 0 as no limit at all',
-          );
-        }
+        // The store's own two minutes (LOST-07 review loop 1): no caller
+        // chooses the threshold the escalation is decided by.
+        const threshold = ESCALATE_AFTER_MS;
+        checkLockWait('escalateAlert', lockWaitMs);
         // Without the store's now, nothing is decided: loudly, before any "lock".
         await nowFor('escalateAlert');
         // The journey's row first (D-112): no alert, no row to take.

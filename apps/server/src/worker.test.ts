@@ -3046,16 +3046,27 @@ describe('LOST-07: the SMS check, a minute task of its own', () => {
 
 describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
   /** runWorkerProcess with everything it reaches replaced, the SMS check's alarm included; what it wrote, and every URL an alarm was made for. */
-  function smsWorkerProcess({ healthchecksSms }: { healthchecksSms?: HealthchecksSetting }) {
+  function smsWorkerProcess({
+    healthchecks = readHealthchecksSetting({}),
+    healthchecksSms,
+  }: {
+    healthchecks?: HealthchecksSetting;
+    healthchecksSms?: HealthchecksSetting;
+  }) {
     const runner = recordingRunner();
     const signals = new EventEmitter();
     const written: string[] = [];
     const exits: number[] = [];
     const created: string[] = [];
+    const checkIns: string[] = [];
     const running = runWorkerProcess('postgres://example/db', {
       runWorker: runner.run,
       signals,
-      healthchecks: readHealthchecksSetting({}),
+      healthchecks,
+      createCheckIn: (url: string) => {
+        checkIns.push(url);
+        return fakeCheckIn();
+      },
       ...(healthchecksSms === undefined ? {} : { healthchecksSms }),
       createSmsAlarm: (url: string) => {
         created.push(url);
@@ -3070,7 +3081,7 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
         exits.push(code);
       },
     });
-    return { runner, signals, written, exits, created, running };
+    return { runner, signals, written, exits, created, checkIns, running };
   }
 
   async function stopSmsWorker(worker: ReturnType<typeof smsWorkerProcess>) {
@@ -3189,6 +3200,33 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
       server.close();
       await listening.close();
     }
+  });
+
+  test('LOST-07-AC11: with HEALTHCHECKS_SMS_URL set to the same address as HEALTHCHECKS_WORKER_URL, the worker checks in there but makes no SMS alarm for it, and says once at start that the SMS check does not report, naming both variables and neither value', async () => {
+    // Two faults behind one signal (D-115, REL-08): an SMS check reporting to
+    // the worker's own check would turn "worker down" and "SMS failing" into
+    // one page, and an "ok" from one would clear the other's "failing".
+    const worker = smsWorkerProcess({
+      healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: PING_URL }),
+      healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: PING_URL }),
+    });
+    await settle();
+
+    expect(worker.checkIns).toEqual([PING_URL]);
+    expect(worker.created).toEqual([]);
+    const lines = smsCheckLines(worker.written);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^worker: /);
+    expect(lines[0]).toContain('HEALTHCHECKS_SMS_URL');
+    expect(lines[0]).toContain('HEALTHCHECKS_WORKER_URL');
+    expect(lines[0]).not.toContain('Healthchecks.io');
+    expect(worker.written.join('')).not.toContain(CHECK);
+    expect(healthchecksLines(worker.written)).toHaveLength(1);
+    expect(healthchecksLines(worker.written)[0]).toMatch(CHECKING_IN);
+    expect(runTogether(worker.written)).toEqual([]);
+    expect(worker.exits).toEqual([]);
+
+    await stopSmsWorker(worker);
   });
 
   test('LOST-07-AC11: given no SMS check setting at all, it runs as though HEALTHCHECKS_SMS_URL were unset', async () => {
