@@ -260,8 +260,8 @@ Written so that task 6 reads this record and does not change it.
   escalation takes the journey's row and checks the alert's state under it,
   as the acknowledgement does (approach item 4). Whichever commits first
   wins:
-  - the acknowledgement first: the escalation finds `ACKNOWLEDGED` and
-    sends nothing;
+  - the acknowledgement first: the escalation finds it acknowledged (the
+    state and who) and sends nothing;
   - the escalation first: the alert is `ESCALATED` with its SMS written, and
     the acknowledgement then moves it to `ACKNOWLEDGED`. Task 6 adds the
     withdrawal of the alert's unsent SMS to the acknowledgement's write
@@ -1251,11 +1251,16 @@ release (M3) at no compatibility cost.
     could come back online to the non-critical notice instead, which does
     not break through silent mode; from task 6, no SMS follows if someone
     acknowledged. Sending the notice at once is still the safer order: a
-    notice sent before a responder's critical push is replaced by it. Not
+    notice sent before a responder's critical push is, in most cases,
+    replaced by it. Apple promises neither that ("in most cases", and not
+    always when several are stored in a short time) nor the order ("APNs may
+    reorder notifications"), and the reverse order is realistic: a critical
+    push waiting on a retry when someone taps. Google's page on collapsible
+    messages suggests the same on Android (an inference, not tested). Not
     live in M2, which sends no real pushes. M3's push task does not send the
-    notice to iOS until an L9 test on a real iPhone shows it never displaces
-    an undelivered critical alert (D-087's list; `critical-alerts-request.md`,
-    Part E, item 6).
+    notice on either platform until an L9 test on a real phone of each shows
+    it never displaces an undelivered critical alert, in either order
+    (D-087's list; `critical-alerts-request.md`, Part E, item 6).
 - **[F10](../plan/03-safety-reliability-security.md#failure-modes) and the
   abusive-member threat, on the responder's side.** Someone with a
   responder's unlocked phone, or a responder who means harm, can tap "I'm on
@@ -1263,8 +1268,9 @@ release (M3) at no compatibility cost.
   walker's phone; this is its counterpart, and the threat model protects
   "the ability to … silence alerts". What limits it: only a responder of the
   journey, with a per-device credential (SEC-07), can; the walker picks the
-  responders for each journey; and every other responder still gets the
-  critical push and is told who is on it. **Not covered**, and stated: like
+  responders for each journey; and every other responder's critical push
+  still reaches our push port, with a notice that someone is on it (at the
+  provider, see F6 and D-113's amendment; who it is, M3 reads). **Not covered**, and stated: like
   F10, a known limitation for the owner to see.
 - **[F7](../plan/03-safety-reliability-security.md#failure-modes), the
   watchdog.** Unchanged in code. The acknowledgement takes the journey's row
@@ -1384,12 +1390,16 @@ Each is named here so the task that owns it finds it. None blocks this task.
   helper, which then withdraws unsent notices too.
 - **Task 8 (the canary):** no change needed. If it ever acknowledges, its
   responder needs a credential (D-091).
-- **M3, the push task, before the notice goes to iOS** (D-113's amendment,
-  the owner, 2026-10-07): an L9 test on a real iPhone that a non-critical
-  push sent while an alert is open never displaces an undelivered critical
-  one, for example with `apns-expiration` 0. Until it passes, the notice is
-  not pushed on iOS; if it can't be shown, the app shows the acknowledgement
-  when opened. FCM's behaviour is checked in the same task.
+- **M3, the push task, before the notice is pushed at all** (D-113's
+  amendment, the owner, 2026-10-07, both platforms): an L9 test on a real phone of each platform (an iPhone, and an Android phone) that a
+  non-critical push sent while an alert is open never displaces an
+  undelivered critical one, in either order (the critical push accepted
+  first, and the notice accepted seconds before it). Candidates: on iOS,
+  `apns-expiration` 0; on Android, a critical message the notice cannot
+  collapse. Until it passes on a platform, the notice is off there by
+  default, and the app shows the acknowledgement when opened. Note that
+  D-087's opaque, per-message collapse ID, if used as FCM's `collapse_key`,
+  meets FCM's limit of four collapse keys per device.
 - **M3:** how the app learns the alert's ID (the read or a list of a
   responder's alerts, D-106); the "I'm on it" button and the alert screen,
   showing the alert's current state on open; the name of who is on it; the

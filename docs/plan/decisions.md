@@ -2686,8 +2686,9 @@ any other path is work, not a candidate for the same treatment.
   - no FCM and no Expo push token on iOS — an L1 rule, plus L5 or L6 that the
     iOS path registers the native APNs device token;
   - (added by D-113's amendment, the owner, 2026-10-07) no non-critical push
-    sent while an alert is open displaces an undelivered critical one — L9 on
-    a real iPhone; LOST-06's notice is not pushed on iOS until it passes
+    sent while an alert is open displaces an undelivered critical one, in
+    either order — L9 on a real phone of each platform; LOST-06's notice is
+    not pushed on a platform until it passes there
     (`critical-alerts-request.md`, Part E, item 6).
 
   **Tracked carriers:** REL-06, CALL-03, REL-04, LOST-02, REL-07, LOST-07,
@@ -3944,6 +3945,20 @@ any other path is work, not a candidate for the same treatment.
     when opened. FCM's behaviour is checked in the same task.
   - The test joins D-087's list and `critical-alerts-request.md`, Part E,
     item 6, so M3 finds it.
+  - **Extended to Android (owner, 2026-10-07, the same day).**
+    `safety-reviewer`'s re-check read Google's page on collapsible messages:
+    notification messages are always collapsible, the collapse key defaults
+    to the app's package name, and a device keeps at most four collapse
+    keys. So an offline Android phone may also keep only the later notice.
+    That is an inference, not tested. Asked with Claude's recommendation,
+    "gate both platforms"; the alternative offered was "iOS only, and check
+    Android". The notice is not pushed on Android either until the same
+    test passes on a real Android phone, or until the critical alert is sent
+    in a form the notice cannot collapse, shown by that test. M3 builds the
+    notice off by default, per platform. The test also covers the reverse
+    order, the notice accepted seconds before a critical push that was
+    waiting on a retry, since Apple does not promise to keep the latest or
+    to keep the order.
 
 ## D-114 — "I'm on it": one acknowledger per alert, named by the alert's ID, the journey's row first, and the resolve helper's per-responder hold (LOST-06)
 - **Date:** 2026-10-06 · **Status:** Accepted (delegated, D-031) ·

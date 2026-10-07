@@ -1,6 +1,6 @@
 ---
 name: lost06-ack-review
-description: LOST-06 "I'm on it" review 2026-10-06, PASS at 05f054a; should-fix APNs one-stored-notification displacement of the critical push by the ACKNOWLEDGED notice (M3 hand-off + owner), task 6 escalation key on state AND who
+description: LOST-06 "I'm on it" review 2026-10-06, PASS at 05f054a, loop-1 PASS 5d62a0a; should-fix APNs one-stored-notification displacement of the critical push by the ACKNOWLEDGED notice (M3 hand-off + owner), task 6 escalation key on state AND who
 metadata:
   type: project
 ---
@@ -32,3 +32,18 @@ Closed: LOST-03 loop-3 notes (tripwire AC13 at journey.test.ts:1996; fake lists 
 Open notes: CLAIM_BATCH 50 by due time, notices compete with a new alert's first push (spec hands to M3);
 acknowledgement.system.test.ts unowned like alerts.system.test.ts; progress rows still "red phase next".
 Related: [[lost03-contact-review]], [[reviewer-sandbox-limits]].
+
+## Loop 1: 05f054a..5d62a0a, PASS (2026-10-07)
+Owner chose "keep it, gate M3" (D-113 amendment, D-087 owed-test bullet, Part E item 6, spec). Task 6 rule now
+"escalate unless state=ACKNOWLEDGED AND acknowledged_by not null" (spec + D-114). Both met.
+5d62a0a: test-only (+2 L6 via test.each, +1 L3) plus a comment-only fake header (checked: every changed line is
+" *"). Verified: L6 53/53, L3 PG16 14/14; rule-order mutants (resolved-first, taken-first, injected before the
+responder check in domain/journey.ts via scratch transform plugin, scratchpad/lost06-loop1-safety/) killed ONLY by
+the new tests (L6 2 fail/51 pass, L3 1 fail/13 pass).
+Should-fix given (docs, non-blocking): (1) spec F10 bullet still says "every other responder still gets the
+critical push and is told who is on it"; (2) "a notice sent before a responder's critical push is replaced by it"
+overstates Apple ("in most cases", not in a short duration, may reorder); L9 procedure tests only critical-then-
+notice, add notice-then-critical; (3) FCM notification messages always collapsible, default key = package name, so
+Android likely has the same displacement; gate is iOS-only: ask owner to make it per platform.
+Open notes: "Where the two meet" says "finds ACKNOWLEDGED" (state only); L9 is M5/Test Lab per roadmap, the gate
+test needs offline/online control; progress row 52 still "Red phase next".
