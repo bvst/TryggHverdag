@@ -2840,6 +2840,9 @@ any other path is work, not a candidate for the same treatment.
   - A change to the order or the split goes back to the owner.
   - A bug fix (BUG-10, D-092) may run between tasks.
   - Supersedes nothing.
+- **Amended by D-115 (owner, 2026-10-07):** SM-10 and SM-02's last-responder
+  warning leave LOST-07 for a task of their own, after it and before LOST-08.
+  M2 has nine tasks.
 
 ## D-091 — Devices authenticate with a hashed per-device credential until login arrives
 - **Date:** 2026-10-01 · **Status:** Accepted (delegated to Claude, D-031) ·
@@ -4025,3 +4028,95 @@ any other path is work, not a candidate for the same treatment.
     `ESCALATED` or `ACKNOWLEDGED` to `RESOLVED`; the plan needs both, and this
     decision relies on D-112's "whatever its state".
   - Supersedes nothing.
+
+## D-115 — SMS escalation: the owner's five answers, and M2 gains a task for removing a responder (LOST-07)
+- **Date:** 2026-10-07 · **Status:** Accepted (owner, 2026-10-07). Each was
+  asked with Claude's recommendation, and the owner chose it each time ·
+  **Section:** 3, 5 and 10 (LOST-07, REL-07; D-016, D-019, D-079, D-086,
+  D-090, D-113, D-114)
+- **Context:** LOST-07's spec (`docs/specs/LOST-07.md`) asked five questions
+  that are scope, cost, privacy or safety. SMS goes through LINK Mobility
+  (D-086, Section 4's accepted defaults), so the provider was not asked.
+- **Decision:**
+  1. **The resumed-escalation rule and SM-02's last-responder warning get an
+     M2 task of their own,** after LOST-07 and before "They're safe". In M2
+     nothing can remove a responder from a journey, so neither can be
+     triggered yet; that task adds the removal with them. LOST-07 delivers
+     the 2-minute SMS only. This changes D-090's split: M2 now has nine
+     tasks.
+     - Rejected: all in LOST-07 (a bigger task, with two more questions
+       first); both to M3 (M2's exit would lose them).
+  2. **A failed SMS pages through a second Healthchecks.io check,** reported
+     each minute from the database. "Failed" means still unsent 60 s after it
+     was written. It is separate from the worker's check, so a stuck SMS
+     never reads as "worker down" and never hides a watchdog failure. Two
+     owner to-dos follow: A-32 (create the check) and A-33 (plan and apply
+     after the merge).
+     - Rejected: reusing the worker's check; turning `/v1/health` degraded.
+       Both put two faults behind one signal.
+  3. **No phone number exists in M2.** The SMS message names its recipient
+     by user ID, as push does. M3's real SMS adapter reads the number
+     confirmed in responder setup. Until then a real send has no target,
+     fails, and pages. Nothing personal is stored for it in M2.
+     - Rejected: a phone column on `users` now; a number copied into each
+       outbox row.
+  4. **The SMS says the walker's name, that contact was lost, and "open the
+     app"** — no location, no time, no link. Built in M3. An SMS is not
+     encrypted and can show on a locked screen, so the details stay in the
+     app.
+     - Rejected: no name (a responder with several walkers would not know
+       who); the time of last contact (one more personal detail in clear).
+  5. **No stand-down SMS.** When an escalated alert resolves, responders get
+     the push stand-down as today, and unsent escalation SMS are withdrawn.
+     - Rejected: an "all clear" SMS, which needs two more kinds and a list of
+       its own, and costs an SMS per responder.
+- **Consequences:**
+  - The roadmap's M2 table gains the new task, numbered before "They're
+    safe"; `docs/progress.md`'s M2 table follows.
+  - A-32 and A-33 join the owner's to-do list.
+  - Q4's text is M3's to build; this records what it may contain.
+
+## D-116 — SMS escalation: the kind, the escalation in the sweep, its own delivery loop, and how D-033's alert states are read (LOST-07)
+- **Date:** 2026-10-07 · **Status:** Accepted (delegated, D-031) ·
+  **Section:** 5 (AR-03 to AR-06; D-033, D-079, D-086, D-087, D-100, D-107,
+  D-108, D-111, D-112, D-114)
+- **Context:** LOST-07's spec has the full reasoning. This records the
+  choices it makes within the owner's answers (D-115) and the binding rules.
+- **Decision:**
+  - **The kind and the lists:** `LOST_CONTACT_SMS` joins `MESSAGE_KINDS`;
+    `SMS_KINDS` and `PUSH_KINDS` split the kinds by channel;
+    `WITHDRAWN_WHEN_RESOLVED` gains it; `WITHDRAWN_WHEN_ACKNOWLEDGED` holds
+    it, so an acknowledgement withdraws the alert's unsent SMS. The open's
+    list stays `ALERT_RESOLUTIONS` (no SMS stand-down, D-115).
+  - **The escalation is part of the watchdog's sweep, and feeds its beat.**
+    An alert opened at least `ESCALATE_AFTER_MS` (2 minutes) ago, unresolved,
+    not yet escalated, and not acknowledged in D-114's sense (state
+    `ACKNOWLEDGED` **and** someone recorded) is escalated. A missing half
+    sends the SMS. One that cannot be escalated counts as stuck, as an open
+    does.
+  - **The rule:** `alertTransition` gains `escalate` and returns to a
+    `switch` with a `never` default.
+  - **One transaction, the journey's row first** (D-112): `escalated_at` at
+    `now()`, state `ESCALATED`, and one SMS per responder.
+  - **`escalated_at`, with no check tying it to the state**, as for the
+    acknowledgement's columns.
+  - **SMS has its own claim and delivery loop,** so a hung push provider
+    never delays an SMS, nor the reverse. The SMS port is content-free (ID,
+    recipient, kind), shares the push port's failure reasons, and answers
+    `UNCONFIGURED_SMS` until M3.
+  - **The stand-down's hold is left as it is,** with the reason in the spec.
+  - **The page:** an SMS still unsent 60 s after it was written
+    (`SMS_UNSENT_LIMIT_MS`) stops the second check's report.
+  - **Six closed log events,** with no phone number and no user ID (PRIV-07).
+  - **The `alerts` mutation group** gains a third system test file.
+  - **How D-033's alert states are read:** `ESCALATED` → `RESOLVED` and
+    `ACKNOWLEDGED` → `RESOLVED` exist (D-112 resolves an alert "whatever its
+    state"), and an `ACKNOWLEDGED` alert with nobody recorded is escalated.
+    D-033 is itself delegated, so this is Claude's to record and the owner's
+    to reopen; `05-architecture.md`'s sentence is updated to draw those
+    edges. The binding rules are unchanged.
+- **Consequences:**
+  - The outbox's unique (alert, recipient, kind) after the resumed-escalation
+    rule's reset, and D-033's edge back from `ACKNOWLEDGED`, go with D-115's
+    new task.
+  - LOST-07-AC1 to AC20 prove it. Supersedes nothing.

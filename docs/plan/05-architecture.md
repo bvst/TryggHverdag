@@ -172,7 +172,13 @@ state.
 SMS sent, LOST-07) → `ACKNOWLEDGED` → `RESOLVED` (for example "They're safe",
 LOST-08). An `OPEN` alert can also go
 straight to `ACKNOWLEDGED` (other responders see who is on it) or `RESOLVED`
-(the phone is back in contact, or the journey ended).
+(the phone is back in contact, or the journey ended). An `ESCALATED` or
+`ACKNOWLEDGED` alert also goes to `RESOLVED` when the phone is back in contact
+or the journey ends (D-112 resolves an alert whatever its state). An alert
+reads as acknowledged only when it is `ACKNOWLEDGED` and someone is recorded on
+it; one marked `ACKNOWLEDGED` with nobody recorded is escalated (D-114,
+D-116). The edge back from `ACKNOWLEDGED`, when the acknowledging responder
+is removed, comes with SM-10's task (D-115).
 
 ### Edge-case rules (binding — D-033)
 

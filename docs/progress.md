@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-06 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, eight tasks, **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 done** ([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`; D-106 to D-109); **LOST-03 done** ([#64](https://github.com/bvst/TryggHverdag/pull/64), `57502b8`; D-110 to D-112), with BUG-23 and BUG-24 in it; **LOST-06 in progress** (task 5 of 8; D-113, D-114) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-06 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, nine tasks (D-115 added one), **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 done** ([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`; D-106 to D-109); **LOST-03 done** ([#64](https://github.com/bvst/TryggHverdag/pull/64), `57502b8`; D-110 to D-112), with BUG-23 and BUG-24 in it; **LOST-06 in progress** (task 5 of 8; D-113, D-114) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -19,7 +19,8 @@ The plan is in [`plan/README.md`](plan/README.md); the milestone task lists are 
 ## M2 at a glance
 
 **M2 started on 2026-10-01** (**D-090**). The core safety loop on the server,
-in eight tasks, one pull request each, SM-01 first. The owner chose this order;
+in eight tasks, one pull request each, SM-01 first; nine since D-115 (2026-10-07)
+gave SM-10 and the last-responder warning a task of their own. The owner chose this order;
 the alternative was seven tasks with LOST-01 first. Exit: L6 green; mutation
 ≥ 80 %; the staging canary on time for 24 hours. Until GRP-01 brings logins
 in M3, devices authenticate with a hashed per-device credential (**D-091**).
@@ -50,9 +51,10 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ✅ **Done** — 2026-10-05, [#63](https://github.com/bvst/TryggHverdag/pull/63), merged as `5cd5d24` at 06:50 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `6527e38`. 25 acceptance criteria; D-106, D-107 and D-109 (owner), D-108 (delegated, amended). Session reviews: `test-auditor` blocked the first round, fixed in loop 1; all three blocking reviewers PASS after loops 1 and 2. In CI on `6527e38`: all 16 checks passed, all five AI reviewers PASS; `integration` on PostgreSQL 15; `mutation` every run passed (`watchdog.ts` 87 of 87, `outbox.ts` 37 of 38, `worker.ts` 140 of 146). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37274508925), and `deploy-staging` passed (run 37274508942), with both session-limit lines in force. Record: `progress/m2.md` |
 | 4 | LOST-03 | Back in contact | ✅ **Done** — 2026-10-06, [#64](https://github.com/bvst/TryggHverdag/pull/64), merged as `57502b8` at 17:56 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `53bf338`. 20 acceptance criteria; D-110 and D-111 (owner), D-112 (delegated, amended in three review loops). Session reviews: all four PASS in the first round; the three blocking ones PASS after loops 1, 2 and 3 (the process's limit). In CI on `53bf338`, with BUG-23/24's fix merged in: all 16 checks passed, and the four AI reviewers that review its paths PASS; `integration` on PostgreSQL 15; `mutation` every run passed (`journey.ts` 134 of 135, `service.ts` 122 of 123, `outbox.ts` 37 of 38, `worker.ts` 140 of 146). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37507461460), and `deploy-staging` passed (run 37507461487), with both session-limit lines in force and migration 0004 applied. Record: `progress/m2.md` |
 | 5 | LOST-06 | "I'm on it" | 🟡 **In review** — pull request open from `claude/busy-faraday-40n2zl`. 17 acceptance criteria; D-113 (owner) with its amendment (owner, 2026-10-07: the notice is not pushed on a platform until a real-phone test shows it never displaces an undelivered critical alert), D-114 (delegated). All three reviewers PASS in the first round; two review loops; `test-auditor` PASS, then a delta audit PASS. `gate:full` at `07d9d0e` 11 passed, the one failure `gate:integrity`'s API checks; mutation: `acknowledgement.ts` 37 of 37, `journey.ts` 176 of 177. L3 on a PostgreSQL 16 stand-in, 245 of 245, so CI's `integration` job is the real run. Record: `progress/m2.md` |
-| 6 | LOST-07 | SMS escalation at 2 minutes | ⚪ Not started |
-| 7 | LOST-08 | "They're safe" | ⚪ Not started |
-| 8 | REL-10 | The staging canary | ⚪ Not started |
+| 6 | LOST-07 | SMS escalation at 2 minutes | 🟡 **In progress** — spec settled, 20 acceptance criteria; D-115 (owner, five answers, each Claude's recommendation), D-116 (delegated). Record: `progress/m2.md` |
+| 7 | SM-10 | Removing a responder: resumed escalation and the last-responder warning (D-115) | ⚪ Not started |
+| 8 | LOST-08 | "They're safe" | ⚪ Not started |
+| 9 | REL-10 | The staging canary | ⚪ Not started |
 
 ## M1 at a glance
 

@@ -157,8 +157,8 @@ If any drill *succeeds*, M0 is not done.
 
 ## M2 — Core safety loop in detail
 
-Eight tasks, one pull request each, each through `/feature <ID>` (D-090). The
-order is the owner's choice. Logins arrive with GRP-01 in M3, so until then
+Nine tasks, one pull request each, each through `/feature <ID>` (D-090; the
+ninth by D-115). The order is the owner's choice. Logins arrive with GRP-01 in M3, so until then
 device sessions come only from tests and, on staging, from the canary (D-091).
 
 | # | ID | Task | Done when |
@@ -168,9 +168,10 @@ device sessions come only from tests and, on staging, from the canary (D-091).
 | 3 | LOST-02 | Lost-contact alert: watchdog every 10–15 s (AR-06), alert and push in one transaction (AR-05) | "The most important test" passes at L6 against a recording push fake |
 | 4 | LOST-03 | Back in contact (SM-04) | A heartbeat, or a queued "I'm home", after an alert resolves it and tells the responders, at L6 |
 | 5 | LOST-06 | "I'm on it" | A responder's answer is recorded and shown, at L6 |
-| 6 | LOST-07 | SMS escalation at 2 minutes (REL-07); a failed SMS pages the owner; SM-10; SM-02's last-responder warning | The escalation and the page pass at L6 against a recording SMS fake |
-| 7 | LOST-08 | "They're safe" (SM-06, SM-05) | The acknowledging responder closes the alert, the journey ends and the others are told; the 2-hour stop never ends a lost-contact journey; both at L6 |
-| 8 | REL-10 | The staging canary every ⚙️ 15 minutes, paging the owner if late | The canary runs on staging, on time for 24 hours |
+| 6 | LOST-07 | SMS escalation at 2 minutes (REL-07); a failed SMS pages the owner | The escalation and the page pass at L6 against a recording SMS fake |
+| 7 | SM-10 | Removing a responder from a journey: escalation resumes when the acknowledging responder is removed (SM-10); SM-02's last-responder warning (D-115) | Both rules pass at L6 |
+| 8 | LOST-08 | "They're safe" (SM-06, SM-05) | The acknowledging responder closes the alert, the journey ends and the others are told; the 2-hour stop never ends a lost-contact journey; both at L6 |
+| 9 | REL-10 | The staging canary every ⚙️ 15 minutes, paging the owner if late | The canary runs on staging, on time for 24 hours |
 
 **BUG-10 runs after task 1 and before task 3** (D-092, D-094 to D-097): the
 journey files need the owner's approval and get the safety review; the journey
