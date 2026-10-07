@@ -4235,3 +4235,13 @@ any other path is work, not a candidate for the same treatment.
 - **Consequences:** the `MUTATION_GROUPS` pin and the Stryker config tests
   change, with their reasons (RG-03). If CI's next run still does not fit,
   the choice goes to the owner (D-098).
+- **The owner agreed, 2026-10-07,** after asking what the alternatives were.
+- **Measured after the change** (fresh, every group, the same 4-core machine,
+  otherwise quiet): **18:57 in all**, 6:03 under the budget. domain 4:39,
+  healthchecks 1:39, journeys 2:21, alerts 5:17, worker 3:34, process 0:51,
+  api-process 0:23. Every score is unchanged: `worker.ts` 183 killed, 4
+  survived, 2 timed out; `bin/worker.ts` 4 of 4; `process.ts` 25 of 25.
+  Before it, CI's run on the same tests took about 25:00 and ran out (job
+  112942878321: domain 6:08, healthchecks 1:45, journeys 2:26, alerts 6:42,
+  process 7:36, api-process cut off). CI's run on the fix is the measure of
+  record.
