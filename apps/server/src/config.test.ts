@@ -10,6 +10,7 @@ import { describe, expect, test } from 'vitest';
 import {
   DEFAULT_PORT,
   readHealthchecksSetting,
+  readHealthchecksSmsSetting,
   readServerConfig,
   type HealthchecksSetting,
 } from './config.ts';
@@ -135,5 +136,71 @@ describe('readHealthchecksSetting', () => {
     expect(
       readHealthchecksSetting({ DATABASE_URL: PING_URL, HEALTHCHECKS_URL: PING_URL }).checkingIn,
     ).toBe(false);
+  });
+});
+
+// LOST-07-AC11: where the SMS check reports. The same rules as the worker's
+// check-in (D-079): never a throw, a reason that names the variable and never
+// the value, and only https:. A setting of its own: the worker's check-in and
+// the SMS check are two checks, and one address must never stand in for the
+// other.
+
+describe('readHealthchecksSmsSetting', () => {
+  test('LOST-07-AC11: a usable https: address means reporting, at exactly that address', () => {
+    expect(readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: PING_URL })).toEqual({
+      checkingIn: true,
+      url: PING_URL,
+    });
+  });
+
+  test.each([
+    ['unset', {}],
+    ['empty', { HEALTHCHECKS_SMS_URL: '' }],
+    ['an http: address', { HEALTHCHECKS_SMS_URL: `http://hc-ping.com/${CHECK}` }],
+    ['not an address at all', { HEALTHCHECKS_SMS_URL: `hc-ping.com/${CHECK}` }],
+    ['another scheme', { HEALTHCHECKS_SMS_URL: `ftp://hc-ping.com/${CHECK}` }],
+  ])(
+    'LOST-07-AC11: %s means not reporting, with a reason that names the variable and never the value — never a throw',
+    (_what, env: Record<string, string>) => {
+      const setting = readHealthchecksSmsSetting(env);
+
+      expect(reasonOf(setting)).toContain('HEALTHCHECKS_SMS_URL');
+      expect(JSON.stringify(setting)).not.toContain(CHECK);
+    },
+  );
+
+  test('LOST-07-AC11: the reason says which is wrong: unset, not https:, or not an address', () => {
+    const [unset, http, notAnAddress] = [
+      {},
+      { HEALTHCHECKS_SMS_URL: `http://hc-ping.com/${CHECK}` },
+      { HEALTHCHECKS_SMS_URL: `hc-ping.com/${CHECK}` },
+    ].map((env) => reasonOf(readHealthchecksSmsSetting(env)));
+
+    expect(new Set([unset, http, notAnAddress]).size).toBe(3);
+    expect(http).toContain('https');
+  });
+
+  test('LOST-07-AC11: an empty value counts as unset', () => {
+    expect(readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: '' })).toEqual(
+      readHealthchecksSmsSetting({}),
+    );
+  });
+
+  test('LOST-07-AC11: reads HEALTHCHECKS_SMS_URL and nothing else: not the worker’s check-in address, and the worker’s setting does not read it either', () => {
+    expect(
+      readHealthchecksSmsSetting({ HEALTHCHECKS_WORKER_URL: PING_URL, HEALTHCHECKS_URL: PING_URL })
+        .checkingIn,
+    ).toBe(false);
+    expect(readHealthchecksSetting({ HEALTHCHECKS_SMS_URL: PING_URL }).checkingIn).toBe(false);
+  });
+
+  test('LOST-07-AC11: no reason says Healthchecks.io, so INF-08’s count of the worker’s lines that do keeps its meaning', () => {
+    for (const env of [
+      {},
+      { HEALTHCHECKS_SMS_URL: `http://hc-ping.com/${CHECK}` },
+      { HEALTHCHECKS_SMS_URL: `hc-ping.com/${CHECK}` },
+    ]) {
+      expect(reasonOf(readHealthchecksSmsSetting(env))).not.toContain('Healthchecks.io');
+    }
   });
 });

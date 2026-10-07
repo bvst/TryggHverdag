@@ -543,12 +543,19 @@ describe('the mutation runs of this repository', () => {
       // acknowledgement.ts, in modules/alerts/, and a group can only claim a
       // safety path exactly as it is listed, so the alerts group runs the
       // module's system tests too, after its own. Its paths do not change.
+      //
+      // RG-03 (LOST-07, the spec's "Existing assertions that change by
+      // design" and its Mutation section): the escalation, the SMS sender and
+      // the SMS check join modules/alerts/, and their system tests are a file
+      // of their own, escalation.system.test.ts, which the group runs after
+      // the two it runs today, in that order. Its paths do not change.
       expect.objectContaining({
         name: 'alerts',
         paths: ['apps/server/src/modules/alerts/'],
         tests: [
           'apps/server/src/alerts.system.test.ts',
           'apps/server/src/acknowledgement.system.test.ts',
+          'apps/server/src/escalation.system.test.ts',
         ],
       }),
       {

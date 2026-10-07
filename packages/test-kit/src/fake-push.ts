@@ -36,11 +36,15 @@ export const PUSH_FAILURE_REASONS: readonly PushFailureReason[] = [
 /**
  * The kinds of message there are: the lost-contact alert (LOST-02), the two
  * stand-downs LOST-03 adds, "back in contact" and "is home", each named after
- * the resolution of the alert it stands down, and the notice LOST-06 adds,
+ * the resolution of the alert it stands down, the notice LOST-06 adds,
  * "someone is on it", sent to every responder but the one who acknowledged
- * (D-113).
+ * (D-113), and the escalation SMS LOST-07 adds, sent to every responder of an
+ * alert nobody acknowledged within two minutes (D-019). The kind names its
+ * channel: the push claim never hands out the SMS kind, nor the SMS claim a
+ * push kind (LOST-07, approach item 2).
  */
-export type MessageKind = 'LOST_CONTACT' | 'BACK_IN_CONTACT' | 'HOME' | 'ACKNOWLEDGED';
+export type MessageKind =
+  'LOST_CONTACT' | 'BACK_IN_CONTACT' | 'HOME' | 'ACKNOWLEDGED' | 'LOST_CONTACT_SMS';
 
 /** Every kind, in the server's order (`MESSAGE_KINDS`), written out: the test kit imports nothing from the server. */
 export const MESSAGE_KINDS: readonly MessageKind[] = [
@@ -48,6 +52,7 @@ export const MESSAGE_KINDS: readonly MessageKind[] = [
   'BACK_IN_CONTACT',
   'HOME',
   'ACKNOWLEDGED',
+  'LOST_CONTACT_SMS',
 ];
 
 /** A message as the sender hands it to the port: no personal detail, only who and what kind. */

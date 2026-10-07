@@ -248,6 +248,12 @@ describe('stryker.config.mjs', () => {
     // one; "alone" leaves the title. Compared sorted, as the journeys run's
     // are: `vitest list` reports the files in an order of its own. What it
     // mutates and its configuration do not change.
+    //
+    // RG-03 (LOST-07, the spec's "Existing assertions that change by
+    // design"): the escalation, the SMS sender and the SMS check live in
+    // modules/alerts/, so the run's files gain escalation.system.test.ts,
+    // compared sorted as before. What it mutates and its configuration do not
+    // change.
     const config = await configFor('alerts');
 
     expect(config.mutate).toEqual(['apps/server/src/modules/alerts/**/*.ts', ...EXCLUSIONS]);
@@ -259,6 +265,7 @@ describe('stryker.config.mjs', () => {
       [
         'apps/server/src/alerts.system.test.ts',
         'apps/server/src/acknowledgement.system.test.ts',
+        'apps/server/src/escalation.system.test.ts',
       ].sort(),
     );
   });

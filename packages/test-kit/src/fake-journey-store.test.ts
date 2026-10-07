@@ -201,6 +201,44 @@ function underTest(): JourneyStoreUnderTest {
           acknowledgedAt,
         })),
       ),
+    // LOST-07: when each alert escalated, through a reader of its own, so
+    // alertsOf keeps its shape.
+    escalationsOf: (journeyId) =>
+      Promise.resolve(
+        alertsOf(journeyId).map(({ id, smsRaisedAt }) => ({ alertId: id, smsRaisedAt })),
+      ),
+    // LOST-07-AC16: a holder that lets go when an escalation waits for it,
+    // having first acknowledged the journey's unresolved alert, or brought the
+    // journey back in contact, as a transaction in flight commits, or with
+    // nothing changed.
+    holdUntilEscalationWaits: (journeyId, change) => {
+      store.holdUntilWaited(journeyId, async () => {
+        const id = journeyId.toLowerCase();
+        const alert = alertsOf(id).find(({ state }) => state !== 'RESOLVED');
+        if (alert === undefined || change === 'unchanged') {
+          return;
+        }
+        if (change === 'acknowledge') {
+          const [responderId = ''] =
+            store.journeys().find((journey) => journey.id === id)?.responderIds ?? [];
+          await store.recordAcknowledgement({ alertId: alert.id, responderId });
+          return;
+        }
+        await store.recordHeartbeat({
+          journeyId,
+          eventId: syntheticEventId(),
+          receivedAt: await clock.now(),
+          batteryLevel: null,
+          position: null,
+        });
+      });
+      return Promise.resolve({
+        release: () => {
+          store.release(journeyId);
+          return Promise.resolve();
+        },
+      });
+    },
   };
 }
 
@@ -357,6 +395,24 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       'LOST-06-AC7: for any sequence of acknowledgements, heartbeats fresh or stale, sweeps and "I’m home", after every step an alert is ACKNOWLEDGED exactly when it is unresolved and someone is recorded on it, nobody but one responder is ever recorded, the notices are one per other responder of an acknowledged alert, and no RESOLVED alert has an ACKNOWLEDGED message neither sent nor withdrawn',
       'LOST-06-AC8: a responder whose lost-contact message and ACKNOWLEDGED message are both unsent when the alert resolves gets exactly one stand-down, and the resolution is not refused; held until the later of their due times when both were handed over and are due later, and due at once otherwise',
       'LOST-06-AC13: a resolution withdraws exactly its own alert’s unsent messages of the kinds withdrawn on resolution, and leaves every other message alone',
+      // RG-03 (LOST-07, the spec's "Existing assertions that change by
+      // design": "the pinned list of behaviour names gains this task's"):
+      // escalation to SMS joins the shared suite, its spec's shared behaviours
+      // 1 to 12, so the fake and the adapter are held to them alike (D-100).
+      // Every name above is unchanged; these are added. The sixth names
+      // RACERS and RACE_ROUNDS by their values, as LOST-06-AC6 does.
+      'LOST-07-AC3: alertsDueForEscalation reads exactly the unresolved alerts with no escalation time, not acknowledged by someone, opened two minutes or more before the store’s now, with that now; none other, for any alerts in any state (fast-check)',
+      'LOST-07-AC1: escalateAlert moves a due alert to ESCALATED at the store’s now and writes one LOST_CONTACT_SMS per responder row, each with an ID of its own and due at that now; the journey, its other alerts, another journey’s alert and every push message are untouched',
+      'LOST-07-AC3: escalateAlert decides again under the journey’s row, and writes nothing for an alert no longer due there: acknowledged by someone, RESOLVED, already escalated, or under two minutes',
+      'LOST-07-AC16: escalateAlert skips a held row without waiting; told to wait, it answers held when the row stays held, and otherwise decides as the holder left it',
+      'LOST-07-AC15: escalateAlert refuses an alert whose journey has no responder row, writing nothing',
+      'LOST-07-AC4: 10 escalations of one alert at once, 5 times over: exactly one escalates, every other skips, none an error, with one set of SMS',
+      'LOST-07-AC6: recordAcknowledgement of an escalated alert withdraws its SMS not yet sent at the store’s now, keeping attempts and last failure, and leaves sent SMS and every push message alone; of an alert never escalated it withdraws nothing',
+      'LOST-07-AC7: when contact comes back, or "I’m home" ends the journey, an escalated alert is resolved keeping its escalation time; its SMS not yet sent are withdrawn with its lost-contact pushes; every responder gets one stand-down, held behind an SMS handed over and due later',
+      'LOST-07-AC8: the push claim hands out push kinds only and the SMS claim SMS kinds only, each one claimer per message, leased, with its attempts counted',
+      'LOST-07-AC10: unsentSmsCount counts exactly the SMS messages unsent, not withdrawn and written 60 s or more before the store’s now, with that now',
+      'LOST-07-AC7: for any sequence of acknowledgements, heartbeats fresh or stale, sweeps, time passing and "I’m home", after every step an alert is escalated exactly when a sweep found it due, holds one SMS per responder exactly when escalated, never has one when acknowledged before its two minutes, and no resolved or acknowledged alert has an SMS neither sent nor withdrawn',
+      'LOST-07-AC14: each withdrawal — the resolution, the acknowledgement, the open — withdraws exactly its own kinds’ unsent messages of the alerts it names, and leaves every other message alone',
     ]);
     expect(RACERS).toBeGreaterThanOrEqual(10);
     expect(RACE_ROUNDS).toBeGreaterThanOrEqual(5);
@@ -1637,7 +1693,16 @@ describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
     // RG-03 (LOST-06, the spec's "Existing assertions that change by
     // design"): the list gains ACKNOWLEDGED, the "someone is on it" notice
     // (D-113), last, as the server's MESSAGE_KINDS does. Still exact.
-    expect(kit.MESSAGE_KINDS).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED']);
+    // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
+    // fake-journey-store.test.ts line 1640): the list gains LOST_CONTACT_SMS,
+    // the escalation SMS (D-019), last, as the server's does. Still exact.
+    expect(kit.MESSAGE_KINDS).toEqual([
+      'LOST_CONTACT',
+      'BACK_IN_CONTACT',
+      'HOME',
+      'ACKNOWLEDGED',
+      'LOST_CONTACT_SMS',
+    ]);
   });
 });
 
@@ -2017,7 +2082,17 @@ describe('fakeJourneyStore: "I’m on it" (LOST-06)', () => {
   });
 
   test('the test kit hands out its two withdrawal lists: what a resolution withdraws and what an open withdraws, every message kind in exactly one', () => {
-    expect(kit.WITHDRAWN_WHEN_RESOLVED).toEqual(['LOST_CONTACT', 'ACKNOWLEDGED']);
+    // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
+    // fake-journey-store.test.ts line 2020): the resolution's list gains
+    // LOST_CONTACT_SMS (D-111: an escalated alert's unsent SMS are withdrawn
+    // when it resolves). The open's list, line 2021, is unchanged (D-115 item
+    // 5, no SMS stand-down), and the check below that every kind is in
+    // exactly one of the two covers the new kind as it stands.
+    expect(kit.WITHDRAWN_WHEN_RESOLVED).toEqual([
+      'LOST_CONTACT',
+      'ACKNOWLEDGED',
+      'LOST_CONTACT_SMS',
+    ]);
     expect(kit.WITHDRAWN_WHEN_OPENED).toEqual(['BACK_IN_CONTACT', 'HOME']);
     expect(
       kit.MESSAGE_KINDS.filter(
@@ -2052,5 +2127,185 @@ describe('fakeJourneyStore: "I’m on it" (LOST-06)', () => {
     expect(
       store.outbox().find(({ messageId }) => messageId === notice?.messageId)?.withdrawnAt,
     ).toEqual(resolvedAt);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LOST-07: escalation to SMS, beyond the shared suite.
+//
+// The escalation system tests prove the escalation, the SMS sender and the SMS
+// check by what this fake read, escalated, handed out, counted and withdrew. A
+// fake that guessed the time, could not fail, forgot what an escalation was
+// asked to wait, or lost an alert's escalation time would make those tests
+// pass whatever the modules did.
+// ---------------------------------------------------------------------------
+
+/** Two minutes (D-019): the server's ESCALATE_AFTER_MS, written out. */
+const TWO_MINUTES = 120_000;
+
+/** A store with a clock, and a LOST_CONTACT journey whose alert opened two minutes ago: due. */
+async function dueStore(responders = 2) {
+  const lost = await lostStore(responders);
+  lost.clock.advance(TWO_MINUTES);
+  return lost;
+}
+
+describe('fakeJourneyStore: escalation to SMS (LOST-07)', () => {
+  test('a store given no clock refuses, loudly and naming the clock, to read the due alerts, escalate, claim SMS or count them, and changes nothing', async () => {
+    const store = fakeJourneyStore();
+    const walkerId = store.addUser();
+    const responderId = store.addUser();
+    const journeyId = store.seed({
+      walkerId,
+      deviceId: store.addDevice(walkerId),
+      state: 'LOST_CONTACT',
+      responderIds: [responderId],
+      startedAt: AT,
+    });
+    const alertId = store.seedAlert({ journeyId, state: 'OPEN', openedAt: AT, silentSince: AT });
+
+    for (const [what, asked] of [
+      ['alertsDueForEscalation', () => store.alertsDueForEscalation(TWO_MINUTES)],
+      ['escalateAlert', () => store.escalateAlert({ alertId, afterMs: TWO_MINUTES })],
+      ['claimDueSms', () => store.claimDueSms({ limit: 50, leaseMs: 30_000 })],
+      ['unsentSmsCount', () => store.unsentSmsCount(60_000)],
+    ] as const) {
+      await expect(asked(), what).rejects.toThrow(/clock/);
+    }
+    expect(store.alerts()[0]).toMatchObject({ state: 'OPEN', smsRaisedAt: null });
+    expect(store.outbox()).toEqual([]);
+  });
+
+  test('the four are port methods: recorded among the calls, failed when told to, alone or with every other, changing nothing, and their beforeNext actions run as they are called', async () => {
+    const { store, alertId } = await dueStore();
+    const error = new Error('the database went away');
+    const asks = {
+      alertsDueForEscalation: () => store.alertsDueForEscalation(TWO_MINUTES),
+      escalateAlert: () => store.escalateAlert({ alertId, afterMs: TWO_MINUTES }),
+      claimDueSms: () => store.claimDueSms({ limit: 50, leaseMs: 30_000 }),
+      unsentSmsCount: () => store.unsentSmsCount(60_000),
+    } as const;
+
+    for (const [name, ask] of Object.entries(asks)) {
+      store.failWith(error, name as keyof typeof asks);
+      await expect(ask(), name).rejects.toBe(error);
+      store.recover();
+    }
+    store.failWith(error);
+    for (const [name, ask] of Object.entries(asks)) {
+      await expect(ask(), name).rejects.toBe(error);
+    }
+    store.recover();
+    expect(store.alerts()[0]).toMatchObject({ state: 'OPEN', smsRaisedAt: null });
+    expect(store.outbox().map(({ kind }) => kind)).toEqual(['LOST_CONTACT', 'LOST_CONTACT']);
+    expect(store.calls.filter((call) => call in asks)).toEqual([
+      ...Object.keys(asks),
+      ...Object.keys(asks),
+    ]);
+
+    let ran = '';
+    for (const name of Object.keys(asks)) {
+      store.beforeNext(name as keyof typeof asks, () => {
+        ran += `${name};`;
+      });
+    }
+    for (const ask of Object.values(asks)) {
+      await ask();
+    }
+    expect(ran).toBe(
+      Object.keys(asks)
+        .map((name) => `${name};`)
+        .join(''),
+    );
+  });
+
+  test('escalateRequests records every escalation asked for, in order, with its wait only when it had one, as copies', async () => {
+    const { store, alertId } = await dueStore();
+
+    await store.escalateAlert({ alertId, afterMs: TWO_MINUTES });
+    await store.escalateAlert({ alertId, afterMs: TWO_MINUTES, lockWaitMs: 5_000 });
+    const handedOut = store.escalateRequests();
+    if (handedOut[1] !== undefined) {
+      handedOut[1].lockWaitMs = 1;
+    }
+
+    expect(store.escalateRequests()).toEqual([
+      { alertId, afterMs: TWO_MINUTES },
+      { alertId, afterMs: TWO_MINUTES, lockWaitMs: 5_000 },
+    ]);
+  });
+
+  test('an alert’s escalation time is null when opened, taken by seedAlert in any state, written at the clock’s now by an escalation, and handed out as a copy', async () => {
+    const { store, clock, journeyId, alertId } = await dueStore();
+    expect(store.alerts()[0]?.smsRaisedAt).toBeNull();
+
+    const at = await clock.now();
+    expect((await store.escalateAlert({ alertId, afterMs: TWO_MINUTES })).outcome).toBe(
+      'escalated',
+    );
+    expect(store.alerts()[0]).toMatchObject({ state: 'ESCALATED', smsRaisedAt: at });
+    store.alerts()[0]?.smsRaisedAt?.setTime(0);
+    expect(store.alerts()[0]?.smsRaisedAt).toEqual(at);
+
+    // No check ties it to the state: OPEN with one, and ESCALATED without.
+    store.setState(journeyId, 'ENDED');
+    const otherWalker = store.addUser();
+    const other = store.seed({
+      walkerId: otherWalker,
+      deviceId: store.addDevice(otherWalker),
+      state: 'LOST_CONTACT',
+      responderIds: [store.addUser()],
+      startedAt: AT,
+    });
+    store.seedAlert({
+      journeyId: other,
+      state: 'RESOLVED',
+      openedAt: AT,
+      silentSince: AT,
+      resolvedAt: AT,
+      resolution: 'HOME',
+      smsRaisedAt: AT,
+    });
+    store.seedAlert({ journeyId: other, state: 'ESCALATED', openedAt: AT, silentSince: AT });
+    expect(
+      store
+        .alerts()
+        .slice(1)
+        .map(({ state, smsRaisedAt }) => [state, smsRaisedAt]),
+    ).toEqual([
+      ['RESOLVED', AT],
+      ['ESCALATED', null],
+    ]);
+  });
+
+  test('the test kit hands out its channel lists and its acknowledgement’s list: every kind in exactly one channel, and every kind an acknowledgement withdraws also withdrawn on resolution', () => {
+    expect(kit.SMS_KINDS).toEqual(['LOST_CONTACT_SMS']);
+    expect(kit.PUSH_KINDS).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED']);
+    expect(kit.WITHDRAWN_WHEN_ACKNOWLEDGED).toEqual(['LOST_CONTACT_SMS']);
+    expect(
+      kit.MESSAGE_KINDS.filter(
+        (kind) =>
+          Number(kit.SMS_KINDS.includes(kind)) + Number(kit.PUSH_KINDS.includes(kind)) !== 1,
+      ),
+    ).toEqual([]);
+    expect(
+      kit.WITHDRAWN_WHEN_ACKNOWLEDGED.filter((kind) => !kit.WITHDRAWN_WHEN_RESOLVED.includes(kind)),
+    ).toEqual([]);
+  });
+
+  test('an escalation with a lock wait answers held while the row is held, waiting for nothing, and a waiting heartbeat goes on once the row is released', async () => {
+    const { store, journeyId, alertId } = await dueStore();
+    store.hold(journeyId);
+
+    expect(await store.escalateAlert({ alertId, afterMs: TWO_MINUTES, lockWaitMs: 5_000 })).toEqual(
+      { outcome: 'held' },
+    );
+    expect(await store.escalateAlert({ alertId, afterMs: TWO_MINUTES })).toEqual({
+      outcome: 'skipped',
+    });
+    store.release(journeyId);
+    expect((await store.escalateAlert({ alertId, afterMs: TWO_MINUTES })).outcome).toBe(
+      'escalated',
+    );
   });
 });

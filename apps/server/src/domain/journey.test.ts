@@ -57,6 +57,9 @@
 // heartbeat is recorded and the state stays; the move back is contact's.
 import {
   MESSAGE_KINDS as KIT_MESSAGE_KINDS,
+  PUSH_KINDS as KIT_PUSH_KINDS,
+  SMS_KINDS as KIT_SMS_KINDS,
+  WITHDRAWN_WHEN_ACKNOWLEDGED as KIT_WITHDRAWN_WHEN_ACKNOWLEDGED,
   WITHDRAWN_WHEN_OPENED as KIT_WITHDRAWN_WHEN_OPENED,
   WITHDRAWN_WHEN_RESOLVED as KIT_WITHDRAWN_WHEN_RESOLVED,
   fc,
@@ -68,19 +71,26 @@ import {
   ALERT_EVENTS,
   ALERT_RESOLUTIONS,
   ALERT_STATES,
+  ESCALATE_AFTER_MS,
   JOURNEY_END_REASONS,
   JOURNEY_EVENTS,
   JOURNEY_STATES,
   LOST_CONTACT_AFTER_MS,
   MESSAGE_KINDS,
+  PUSH_KINDS,
+  SMS_KINDS,
+  WITHDRAWN_WHEN_ACKNOWLEDGED,
   WITHDRAWN_WHEN_RESOLVED,
   alertTransition,
   transition,
   type AcknowledgeEvent,
   type AcknowledgeRefusal,
   type AlertForAcknowledgement,
+  type AlertForEscalation,
   type AlertResolution,
   type AlertState,
+  type EscalateEvent,
+  type EscalateOutcome,
   type ContactEvent,
   type HeartbeatEvent,
   type HomeEvent,
@@ -1684,8 +1694,17 @@ describe('LOST-03: the lists that are the one source for the table, the type and
   // this was "…exactly LOST_CONTACT, BACK_IN_CONTACT and HOME, in order". The
   // list gains ACKNOWLEDGED, the "someone is on it" notice (D-113), last, and
   // the title with it. Still exact, in order; LOST-06-AC13 below pins it too.
-  test('LOST-03-AC3: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME and ACKNOWLEDGED, in order', () => {
-    expect([...MESSAGE_KINDS]).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED']);
+  // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
+  // line 1687): the list gains LOST_CONTACT_SMS, the escalation SMS (D-019),
+  // last, and the title with it. Still exact, in order.
+  test('LOST-03-AC3: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME, ACKNOWLEDGED and LOST_CONTACT_SMS, in order', () => {
+    expect([...MESSAGE_KINDS]).toEqual([
+      'LOST_CONTACT',
+      'BACK_IN_CONTACT',
+      'HOME',
+      'ACKNOWLEDGED',
+      'LOST_CONTACT_SMS',
+    ]);
   });
 
   // Review loop 1 (the spec's item 11a): the test kit cannot import the
@@ -1758,6 +1777,34 @@ const ON_IT = syntheticUuid();
 const ALERT = syntheticUuid();
 
 /**
+ * LOST-07: the escalation's situations (its spec's AC13): no alert, or each
+ * of the four states, with nobody and someone recorded, with and without an
+ * escalation time, under and at two minutes since it opened.
+ */
+const ESCALATION_RECORDED = ['nobody recorded', 'someone recorded'] as const;
+const ESCALATION_TIMES = ['no escalation time', 'an escalation time'] as const;
+const AGES = ['under two minutes', 'two minutes'] as const;
+type EscalationSituation =
+  | 'no alert'
+  | `${AlertState}; ${(typeof ESCALATION_RECORDED)[number]}; ${(typeof ESCALATION_TIMES)[number]}; ${(typeof AGES)[number]}`;
+
+/** The escalation's two outcomes, as the spec names them. */
+const ESCALATED: EscalateOutcome = { type: 'escalated', state: 'ESCALATED' };
+const NOT_ESCALATED: EscalateOutcome = { type: 'unchanged' };
+
+/** Two minutes (D-019), written out, so a wrong ESCALATE_AFTER_MS fails here too. */
+const TWO_MINUTES = 120_000;
+
+/** When the alert opened, in every escalation situation. */
+const OPENED_AT = new Date('2026-10-01T21:35:00.000Z');
+
+/** Each alert event's situations and outcomes: the table is typed one event at a time. */
+interface AlertTable {
+  acknowledge: Record<AlertSituation, AlertOutcome>;
+  escalate: Record<EscalationSituation, EscalateOutcome>;
+}
+
+/**
  * Every (alert situation, event) pair and its outcome, written out. Typed over
  * the lists, so a state or an event added later without rows is a type
  * error, and the run-time check below names the pair.
@@ -1796,7 +1843,60 @@ const ALERT_TRANSITIONS = {
     'RESOLVED; the sender on it; sent by a non-responder': ALERT_NOT_FOUND,
     'RESOLVED; another responder on it; sent by a non-responder': ALERT_NOT_FOUND,
   },
-} satisfies Record<AlertEventType, Record<AlertSituation, AlertOutcome>>;
+  // LOST-07-AC13: the escalation's rows (its spec's approach item 2), in the
+  // rule's order: no alert, RESOLVED, acknowledged in D-114's sense (state
+  // ACKNOWLEDGED and someone recorded), already escalated, and then two
+  // minutes or more since it opened. Only the five rows that reach the last
+  // step at two minutes escalate; a missing half of an acknowledgement does.
+  escalate: {
+    'no alert': NOT_ESCALATED,
+    'OPEN; nobody recorded; no escalation time; under two minutes': NOT_ESCALATED,
+    'OPEN; nobody recorded; no escalation time; two minutes': ESCALATED,
+    'OPEN; nobody recorded; an escalation time; under two minutes': NOT_ESCALATED,
+    'OPEN; nobody recorded; an escalation time; two minutes': NOT_ESCALATED,
+    // OPEN with someone recorded: a half-done reset, escalated.
+    'OPEN; someone recorded; no escalation time; under two minutes': NOT_ESCALATED,
+    'OPEN; someone recorded; no escalation time; two minutes': ESCALATED,
+    'OPEN; someone recorded; an escalation time; under two minutes': NOT_ESCALATED,
+    'OPEN; someone recorded; an escalation time; two minutes': NOT_ESCALATED,
+    // ESCALATED with no escalation time: put in directly, as from before
+    // migration 0006, and escalated.
+    'ESCALATED; nobody recorded; no escalation time; under two minutes': NOT_ESCALATED,
+    'ESCALATED; nobody recorded; no escalation time; two minutes': ESCALATED,
+    'ESCALATED; nobody recorded; an escalation time; under two minutes': NOT_ESCALATED,
+    'ESCALATED; nobody recorded; an escalation time; two minutes': NOT_ESCALATED,
+    'ESCALATED; someone recorded; no escalation time; under two minutes': NOT_ESCALATED,
+    'ESCALATED; someone recorded; no escalation time; two minutes': ESCALATED,
+    'ESCALATED; someone recorded; an escalation time; under two minutes': NOT_ESCALATED,
+    'ESCALATED; someone recorded; an escalation time; two minutes': NOT_ESCALATED,
+    // ACKNOWLEDGED with nobody recorded, a state the code never makes: the
+    // missing half sends the SMS (D-114).
+    'ACKNOWLEDGED; nobody recorded; no escalation time; under two minutes': NOT_ESCALATED,
+    'ACKNOWLEDGED; nobody recorded; no escalation time; two minutes': ESCALATED,
+    'ACKNOWLEDGED; nobody recorded; an escalation time; under two minutes': NOT_ESCALATED,
+    'ACKNOWLEDGED; nobody recorded; an escalation time; two minutes': NOT_ESCALATED,
+    // ACKNOWLEDGED with someone recorded: someone is on it. Never escalated.
+    'ACKNOWLEDGED; someone recorded; no escalation time; under two minutes': NOT_ESCALATED,
+    'ACKNOWLEDGED; someone recorded; no escalation time; two minutes': NOT_ESCALATED,
+    'ACKNOWLEDGED; someone recorded; an escalation time; under two minutes': NOT_ESCALATED,
+    'ACKNOWLEDGED; someone recorded; an escalation time; two minutes': NOT_ESCALATED,
+    // RESOLVED is over, whatever else it holds.
+    'RESOLVED; nobody recorded; no escalation time; under two minutes': NOT_ESCALATED,
+    'RESOLVED; nobody recorded; no escalation time; two minutes': NOT_ESCALATED,
+    'RESOLVED; nobody recorded; an escalation time; under two minutes': NOT_ESCALATED,
+    'RESOLVED; nobody recorded; an escalation time; two minutes': NOT_ESCALATED,
+    'RESOLVED; someone recorded; no escalation time; under two minutes': NOT_ESCALATED,
+    'RESOLVED; someone recorded; no escalation time; two minutes': NOT_ESCALATED,
+    'RESOLVED; someone recorded; an escalation time; under two minutes': NOT_ESCALATED,
+    'RESOLVED; someone recorded; an escalation time; two minutes': NOT_ESCALATED,
+  },
+  // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
+  // lines 1765 to 1799): the table is typed over ALERT_EVENTS, so it gains
+  // the escalate rows. Each event has situations of its own, so the type is
+  // now one entry per event, each typed over its own situations: an event
+  // added to ALERT_EVENTS without an entry here is still a type error. The
+  // acknowledgement's rows and their outcomes do not change.
+} satisfies { [E in AlertEventType]: AlertTable[E] };
 
 /** The alert a situation names: its state, who is on it, and its journey's responders. */
 function alertFor(situation: string): AlertForAcknowledgement | null {
@@ -1821,26 +1921,145 @@ function acknowledgeBy(responderId: string): AcknowledgeEvent {
   return { type: 'acknowledge', responderId };
 }
 
+/**
+ * Every situation an event of the alert lists meets, read at run time. An
+ * event listed later, with no situations written here, gets one pair that
+ * names it, and fails the check below until its rows are written.
+ */
+function alertSituationsOf(event: string): string[] {
+  if (event === 'acknowledge') {
+    return [
+      'no alert',
+      ...ALERT_STATES.flatMap((state) =>
+        RECORDED.flatMap((recorded) => SENDERS.map((sender) => `${state}; ${recorded}; ${sender}`)),
+      ),
+    ];
+  }
+  if (event === 'escalate') {
+    return [
+      'no alert',
+      ...ALERT_STATES.flatMap((state) =>
+        ESCALATION_RECORDED.flatMap((recorded) =>
+          ESCALATION_TIMES.flatMap((time) =>
+            AGES.map((age) => `${state}; ${recorded}; ${time}; ${age}`),
+          ),
+        ),
+      ),
+    ];
+  }
+  return [`(no situations written here for the event ${event})`];
+}
+
 /** Every pair the alert lists create, read at run time. */
 function alertPairsTheModuleCreates(): string[] {
-  const situations = [
-    'no alert',
-    ...ALERT_STATES.flatMap((state) =>
-      RECORDED.flatMap((recorded) => SENDERS.map((sender) => `${state}; ${recorded}; ${sender}`)),
-    ),
-  ];
+  // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
+  // the table's rows): each event now has situations of its own, so the
+  // pairs are built per event. The acknowledgement's are as they were.
   return [...ALERT_EVENTS].flatMap((event) =>
-    situations.map((situation) => `${situation} × ${event}`),
+    alertSituationsOf(event).map((situation) => `${situation} × ${event}`),
   );
 }
 
-const ALERT_ROWS = Object.entries(ALERT_TRANSITIONS).flatMap(([event, rows]) =>
-  Object.entries(rows).map(([situation, expected]: [string, AlertOutcome]) => ({
-    event,
+// RG-03 (LOST-07): the acknowledgement's rows, as before. They were every
+// row of the table, when the table held one event; the escalation's rows,
+// which ask a different event with a different situation, are
+// ESCALATION_ROWS below.
+const ALERT_ROWS = Object.entries(ALERT_TRANSITIONS.acknowledge).map(
+  ([situation, expected]: [string, AlertOutcome]) => ({
+    event: 'acknowledge',
     situation,
     expected,
-  })),
+  }),
 );
+
+/** LOST-07-AC13: the escalation's rows. */
+const ESCALATION_ROWS = Object.entries(ALERT_TRANSITIONS.escalate).map(
+  ([situation, expected]: [string, EscalateOutcome]) => ({
+    event: 'escalate',
+    situation,
+    expected,
+  }),
+);
+
+/** The alert an escalation situation names: its state, who is recorded, and its escalation time. */
+function escalationFor(situation: string): AlertForEscalation | null {
+  if (situation === 'no alert') {
+    return null;
+  }
+  const [state, recorded, time] = situation.split('; ');
+  return {
+    id: ALERT,
+    state: state as AlertState,
+    acknowledgedBy: recorded === 'someone recorded' ? ON_IT : null,
+    smsRaisedAt:
+      time === 'an escalation time' ? new Date(OPENED_AT.getTime() + TWO_MINUTES + 5_000) : null,
+  };
+}
+
+/** The escalation a situation is asked with: the alert's opening, and now, under or at two minutes after it. */
+function escalateIn(situation: string): EscalateEvent {
+  const ageMs = situation.endsWith('under two minutes') ? TWO_MINUTES - 1 : TWO_MINUTES;
+  return { type: 'escalate', openedAt: OPENED_AT, now: new Date(OPENED_AT.getTime() + ageMs) };
+}
+
+/** The escalation rule, in its order, as the spec writes it (approach item 2). */
+function expectedEscalation(
+  alert: AlertForEscalation | null,
+  { openedAt, now }: EscalateEvent,
+): EscalateOutcome {
+  if (alert === null) {
+    return NOT_ESCALATED;
+  }
+  if (alert.state === 'RESOLVED') {
+    return NOT_ESCALATED;
+  }
+  if (alert.state === 'ACKNOWLEDGED' && alert.acknowledgedBy !== null) {
+    return NOT_ESCALATED;
+  }
+  if (alert.smsRaisedAt !== null) {
+    return NOT_ESCALATED;
+  }
+  return now.getTime() - openedAt.getTime() >= TWO_MINUTES ? ESCALATED : NOT_ESCALATED;
+}
+
+/**
+ * Any alert, or none, and any two moments, a moment that is not one
+ * included: around the two minutes and far from them.
+ */
+const anyEscalation = fc.record({
+  alert: fc.option(
+    fc.record({
+      id: fc.uuid(),
+      state: fc.constantFrom(...ALERT_STATES),
+      acknowledgedBy: fc.option(fc.uuid(), { nil: null }),
+      smsRaisedAt: fc.option(fc.date({ noInvalidDate: false }), { nil: null }),
+    }),
+    { nil: null },
+  ),
+  openedAt: fc.date({ noInvalidDate: false }),
+  ageMs: fc.oneof(
+    fc.integer({ min: -TWO_MINUTES, max: 3 * TWO_MINUTES }),
+    fc.constantFrom(TWO_MINUTES - 1, TWO_MINUTES, TWO_MINUTES + 1),
+  ),
+  nowIsAMoment: fc.boolean(),
+});
+
+/** The escalation an arbitrary draws: now `ageMs` after the opening, or not a moment at all. */
+function escalationDrawn({
+  openedAt,
+  ageMs,
+  nowIsAMoment,
+}: {
+  openedAt: Date;
+  ageMs: number;
+  nowIsAMoment: boolean;
+}): EscalateEvent {
+  return {
+    type: 'escalate',
+    openedAt,
+    now: nowIsAMoment ? new Date(openedAt.getTime() + ageMs) : new Date(Number.NaN),
+  };
+}
 
 /** The rule, in its order, as the spec writes it. */
 function expectedAlertOutcome(
@@ -1893,15 +2112,25 @@ const anyAcknowledgement = fc
   });
 
 describe('LOST-06 and AR-04: the alert rule is one module, total over its own lists', () => {
+  // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
+  // line 1896): ALERT_EVENTS is exactly acknowledge and escalate, the second
+  // alert event (LOST-07-AC13). The JOURNEY_EVENTS half is unchanged.
   test('LOST-06-AC14: ALERT_EVENTS is exactly acknowledge; JOURNEY_EVENTS is unchanged, start, heartbeat, silence, contact and home, and none of them acknowledges', () => {
-    expect([...ALERT_EVENTS]).toEqual(['acknowledge']);
+    expect([...ALERT_EVENTS]).toEqual(['acknowledge', 'escalate']);
     expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence', 'contact', 'home']);
     expect(JOURNEY_EVENTS).not.toContain('acknowledge');
   });
 
+  // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
+  // line 1902): the pairs it counts were an acknowledgement's situations
+  // only; it counts the escalation's too, no alert and each of the four
+  // states with nobody and someone recorded, with and without an escalation
+  // time, under and at two minutes. The acknowledgement's are unchanged.
   test('LOST-06-AC14: every pair of alert situation and event the lists create has a row here, and no row is stale: no alert, and each of the four states with nobody, the sender and another on it, from a responder and from a non-responder', () => {
     const created = alertPairsTheModuleCreates();
-    const held = ALERT_ROWS.map(({ situation, event }) => `${situation} × ${event}`);
+    const held = [...ALERT_ROWS, ...ESCALATION_ROWS].map(
+      ({ situation, event }) => `${situation} × ${event}`,
+    );
 
     expect(
       created.filter((pair) => !held.includes(pair)),
@@ -1911,7 +2140,12 @@ describe('LOST-06 and AR-04: the alert rule is one module, total over its own li
       held.filter((pair) => !created.includes(pair)),
       'rows for pairs the lists no longer create',
     ).toEqual([]);
-    expect(held).toHaveLength(1 + ALERT_STATES.length * RECORDED.length * SENDERS.length);
+    expect(held).toHaveLength(
+      1 +
+        ALERT_STATES.length * RECORDED.length * SENDERS.length +
+        (1 +
+          ALERT_STATES.length * ESCALATION_RECORDED.length * ESCALATION_TIMES.length * AGES.length),
+    );
   });
 
   test.each(ALERT_ROWS)(
@@ -1969,7 +2203,11 @@ describe('LOST-06 and AR-04: the alert rule is one module, total over its own li
       // Control: in this situation the listed event is answered, with a value.
       expect(alertTransition(alertFor(situation), acknowledgeBy(SENDER)), situation).toBeDefined();
       for (const type of [
-        'escalate',
+        // RG-03 (LOST-07, the spec's "Existing assertions that change by
+        // design", line 1957): `escalate` was the unlisted example, and is
+        // listed now (LOST-07-AC13). Another name the module does not list
+        // takes its place; the rest, and the rule's own message, are unchanged.
+        'snooze',
         'constructor',
         'toString',
         '__proto__',
@@ -2005,16 +2243,34 @@ describe('LOST-06 and AR-04: the alert rule is one module, total over its own li
 });
 
 describe('LOST-06 and LOST-03: every message kind is withdrawn by exactly one rule, decided in one place', () => {
-  test('LOST-06-AC13: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME and ACKNOWLEDGED, in order', () => {
-    expect([...MESSAGE_KINDS]).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED']);
+  // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
+  // line 2008): the list gains LOST_CONTACT_SMS, last, and the title with
+  // it. Still exact, in order.
+  test('LOST-06-AC13: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME, ACKNOWLEDGED and LOST_CONTACT_SMS, in order', () => {
+    expect([...MESSAGE_KINDS]).toEqual([
+      'LOST_CONTACT',
+      'BACK_IN_CONTACT',
+      'HOME',
+      'ACKNOWLEDGED',
+      'LOST_CONTACT_SMS',
+    ]);
   });
 
-  test('LOST-06-AC13: WITHDRAWN_WHEN_RESOLVED is exactly LOST_CONTACT and ACKNOWLEDGED; the open’s list is ALERT_RESOLUTIONS; and every kind is in exactly one of the two, a kind in neither or in both named here until someone places it', () => {
+  // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
+  // line 2012): the resolution's list gains LOST_CONTACT_SMS (D-111: an
+  // escalated alert's unsent SMS are withdrawn when it resolves), and the
+  // title with it. The check that every kind is in exactly one of the two is
+  // unchanged, and covers the new kind.
+  test('LOST-06-AC13: WITHDRAWN_WHEN_RESOLVED is exactly LOST_CONTACT, ACKNOWLEDGED and LOST_CONTACT_SMS; the open’s list is ALERT_RESOLUTIONS; and every kind is in exactly one of the two, a kind in neither or in both named here until someone places it', () => {
     // L1: assignable only while every kind listed is a message kind.
     const resolvedWithdraws: readonly MessageKind[] = WITHDRAWN_WHEN_RESOLVED;
     const openWithdraws: readonly MessageKind[] = ALERT_RESOLUTIONS;
 
-    expect([...WITHDRAWN_WHEN_RESOLVED]).toEqual(['LOST_CONTACT', 'ACKNOWLEDGED']);
+    expect([...WITHDRAWN_WHEN_RESOLVED]).toEqual([
+      'LOST_CONTACT',
+      'ACKNOWLEDGED',
+      'LOST_CONTACT_SMS',
+    ]);
     expect([...openWithdraws]).toEqual(['BACK_IN_CONTACT', 'HOME']);
     expect(
       MESSAGE_KINDS.filter(
@@ -2036,5 +2292,245 @@ describe('LOST-06 and LOST-03: every message kind is withdrawn by exactly one ru
     expect([...KIT_MESSAGE_KINDS]).toEqual([...MESSAGE_KINDS]);
     expect([...KIT_WITHDRAWN_WHEN_RESOLVED]).toEqual([...WITHDRAWN_WHEN_RESOLVED]);
     expect([...KIT_WITHDRAWN_WHEN_OPENED]).toEqual([...ALERT_RESOLUTIONS]);
+    // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
+    // line 2033): added to, with the kit's three new copies. Nothing above
+    // changed.
+    expect([...KIT_SMS_KINDS]).toEqual([...SMS_KINDS]);
+    expect([...KIT_PUSH_KINDS]).toEqual([...PUSH_KINDS]);
+    expect([...KIT_WITHDRAWN_WHEN_ACKNOWLEDGED]).toEqual([...WITHDRAWN_WHEN_ACKNOWLEDGED]);
+  });
+});
+
+// ===========================================================================
+// LOST-07: escalation to SMS, the alert rule's second event (its spec's
+// approach item 2).
+//
+// The rule, in its order, which is part of the rule:
+//   1. no alert → unchanged;
+//   2. RESOLVED → unchanged;
+//   3. ACKNOWLEDGED with someone recorded → unchanged (D-114: both halves);
+//   4. an escalation time already set → unchanged (once per alert);
+//   5. two minutes or more since it opened (D-019, "or more") → escalated,
+//      ESCALATED;
+//   6. otherwise → unchanged.
+// Both times are the database's, handed in; a time that is not one never
+// escalates. The table above holds every pair; these hold the rest.
+// ===========================================================================
+
+describe('LOST-07 and AR-04: the escalation is the alert rule’s second event, total over its lists', () => {
+  test('LOST-07-AC13: ESCALATE_AFTER_MS is exactly 120 000 (D-019: changing it needs the owner); JOURNEY_EVENTS is unchanged and none of them escalates', () => {
+    expect(ESCALATE_AFTER_MS).toBe(120_000);
+    expect(ESCALATE_AFTER_MS).toBe(TWO_MINUTES);
+    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence', 'contact', 'home']);
+    expect(JOURNEY_EVENTS).not.toContain('escalate');
+  });
+
+  test.each(ESCALATION_ROWS)(
+    'LOST-07-AC13: $situation × $event gives exactly its expected outcome',
+    ({ situation, expected }) => {
+      expect(alertTransition(escalationFor(situation), escalateIn(situation))).toEqual(expected);
+    },
+  );
+
+  test('LOST-07-AC13: the five escalated rows, and only they, are the situations the rule escalates: OPEN, ESCALATED with no escalation time, ACKNOWLEDGED with nobody recorded, and OPEN or ESCALATED with someone recorded, each at two minutes', () => {
+    expect(
+      ESCALATION_ROWS.filter(({ expected }) => expected.type === 'escalated').map(
+        ({ situation }) => situation,
+      ),
+    ).toEqual([
+      'OPEN; nobody recorded; no escalation time; two minutes',
+      'OPEN; someone recorded; no escalation time; two minutes',
+      'ESCALATED; nobody recorded; no escalation time; two minutes',
+      'ESCALATED; someone recorded; no escalation time; two minutes',
+      'ACKNOWLEDGED; nobody recorded; no escalation time; two minutes',
+    ]);
+  });
+
+  test('LOST-07-AC13: for any alert and any two times, the escalation’s outcome is the rule’s, in its order — no alert, resolved, acknowledged by someone, already escalated, then two minutes or more — never a throw, never undefined', () => {
+    fc.assert(
+      fc.property(anyEscalation, ({ alert, ...times }) => {
+        const event = escalationDrawn(times);
+        let outcome: unknown;
+        expect(() => {
+          outcome = alertTransition(alert, event);
+        }).not.toThrow();
+        expect([ESCALATED, NOT_ESCALATED]).toContainEqual(outcome);
+        expect(outcome).toEqual(expectedEscalation(alert, event));
+      }),
+    );
+  });
+
+  test('LOST-07-AC13: a time that is not one never escalates: an invalid now or an invalid opening, for an alert otherwise due', () => {
+    const due: AlertForEscalation = {
+      id: ALERT,
+      state: 'OPEN',
+      acknowledgedBy: null,
+      smsRaisedAt: null,
+    };
+    const valid = new Date(OPENED_AT.getTime() + 10 * TWO_MINUTES);
+    const invalid = new Date(Number.NaN);
+
+    expect(alertTransition(due, { type: 'escalate', openedAt: OPENED_AT, now: valid })).toEqual(
+      ESCALATED,
+    );
+    expect(alertTransition(due, { type: 'escalate', openedAt: OPENED_AT, now: invalid })).toEqual(
+      NOT_ESCALATED,
+    );
+    expect(alertTransition(due, { type: 'escalate', openedAt: invalid, now: valid })).toEqual(
+      NOT_ESCALATED,
+    );
+    expect(alertTransition(due, { type: 'escalate', openedAt: invalid, now: invalid })).toEqual(
+      NOT_ESCALATED,
+    );
+  });
+
+  test('LOST-07-AC13: exactly two minutes escalates, and a millisecond under does not, counted from the opening the store read', () => {
+    const due: AlertForEscalation = {
+      id: ALERT,
+      state: 'OPEN',
+      acknowledgedBy: null,
+      smsRaisedAt: null,
+    };
+    const at = (ms: number): EscalateEvent => ({
+      type: 'escalate',
+      openedAt: OPENED_AT,
+      now: new Date(OPENED_AT.getTime() + ms),
+    });
+
+    expect(alertTransition(due, at(TWO_MINUTES - 1))).toEqual(NOT_ESCALATED);
+    expect(alertTransition(due, at(TWO_MINUTES))).toEqual(ESCALATED);
+    expect(alertTransition(due, at(TWO_MINUTES + 1))).toEqual(ESCALATED);
+    // Before the opening: never.
+    expect(alertTransition(due, at(-TWO_MINUTES))).toEqual(NOT_ESCALATED);
+  });
+
+  test('LOST-07-AC13: an event of a type the module does not list is thrown on in every escalation situation too, with the rule’s own message, never answered with a value: Object.prototype’s names included', () => {
+    for (const { situation } of ESCALATION_ROWS) {
+      // Control: in this situation the listed event is answered, with a value.
+      expect(
+        alertTransition(escalationFor(situation), escalateIn(situation)),
+        situation,
+      ).toBeDefined();
+      for (const type of [
+        'snooze',
+        'constructor',
+        'toString',
+        '__proto__',
+        'hasOwnProperty',
+        'valueOf',
+      ]) {
+        expect(
+          () =>
+            alertTransition(escalationFor(situation), {
+              ...escalateIn(situation),
+              type,
+            } as unknown as EscalateEvent),
+          `${situation}, ${type}`,
+        ).toThrow(new RegExp(`^The alert rule has no rule for an event of type ${type}\\.$`));
+      }
+    }
+  });
+
+  test('LOST-07-AC13: (L1) an event of a type the module does not list does not type-check: the overloads take an acknowledgement or an escalation, and nothing else', () => {
+    // Each @ts-expect-error fails the type check (gate:static) the day the
+    // call under it is accepted. The calls are made, so the throw is held too.
+    expect(() =>
+      // @ts-expect-error -- no alert event is a snooze
+      alertTransition(null, { type: 'snooze', openedAt: OPENED_AT, now: OPENED_AT }),
+    ).toThrow(/no rule for an event of type snooze/);
+    expect(() =>
+      // @ts-expect-error -- nor is an escalation without its two times
+      alertTransition(null, { type: 'escalating' }),
+    ).toThrow(/no rule for an event of type escalating/);
+  });
+
+  test('LOST-07-AC13: deciding changes neither the alert nor the event handed in', () => {
+    fc.assert(
+      fc.property(anyEscalation, ({ alert, ...times }) => {
+        const event = escalationDrawn(times);
+        const alertBefore = structuredClone(alert);
+        const eventBefore = structuredClone(event);
+
+        alertTransition(alert, event);
+
+        expect(alert).toEqual(alertBefore);
+        expect(event).toEqual(eventBefore);
+      }),
+    );
+  });
+
+  test('LOST-07-AC13: an ESCALATED alert can still be acknowledged, as LOST-06 built: the acknowledgement’s rows are unchanged', () => {
+    expect(
+      alertTransition(
+        { id: ALERT, state: 'ESCALATED', acknowledgedBy: null, responderIds: [SENDER] },
+        acknowledgeBy(SENDER),
+      ),
+    ).toEqual(ACKNOWLEDGED);
+    expect(ALERT_TRANSITIONS.acknowledge['ESCALATED; nobody on it; sent by a responder']).toEqual(
+      ACKNOWLEDGED,
+    );
+  });
+});
+
+describe('LOST-07, LOST-06 and LOST-03: every kind has one channel and one withdrawal, decided in one place', () => {
+  test('LOST-07-AC14: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME, ACKNOWLEDGED and LOST_CONTACT_SMS, in order', () => {
+    expect([...MESSAGE_KINDS]).toEqual([
+      'LOST_CONTACT',
+      'BACK_IN_CONTACT',
+      'HOME',
+      'ACKNOWLEDGED',
+      'LOST_CONTACT_SMS',
+    ]);
+  });
+
+  test('LOST-07-AC14: SMS_KINDS is exactly LOST_CONTACT_SMS, PUSH_KINDS exactly the other four in MESSAGE_KINDS’ order, and every kind is in exactly one of the two, a kind in neither or in both named here until someone places it', () => {
+    // L1: assignable only while every kind listed is a message kind.
+    const bySms: readonly MessageKind[] = SMS_KINDS;
+    const byPush: readonly MessageKind[] = PUSH_KINDS;
+
+    expect([...SMS_KINDS]).toEqual(['LOST_CONTACT_SMS']);
+    expect([...PUSH_KINDS]).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED']);
+    expect([...PUSH_KINDS]).toEqual(MESSAGE_KINDS.filter((kind) => byPush.includes(kind)));
+    expect(
+      MESSAGE_KINDS.filter((kind) => !bySms.includes(kind) && !byPush.includes(kind)),
+      'kinds no channel lists: place each in SMS_KINDS or PUSH_KINDS',
+    ).toEqual([]);
+    expect(
+      MESSAGE_KINDS.filter((kind) => bySms.includes(kind) && byPush.includes(kind)),
+      'kinds both channels list: each kind goes by exactly one',
+    ).toEqual([]);
+  });
+
+  test('LOST-07-AC14: the SMS kind is withdrawn on resolution and not on an open: every kind is still in exactly one of WITHDRAWN_WHEN_RESOLVED and the open’s list, ALERT_RESOLUTIONS', () => {
+    const resolvedWithdraws: readonly MessageKind[] = WITHDRAWN_WHEN_RESOLVED;
+    const openWithdraws: readonly MessageKind[] = ALERT_RESOLUTIONS;
+
+    expect(resolvedWithdraws).toContain('LOST_CONTACT_SMS');
+    expect(openWithdraws).not.toContain('LOST_CONTACT_SMS');
+    expect(
+      MESSAGE_KINDS.filter(
+        (kind) =>
+          Number(resolvedWithdraws.includes(kind)) + Number(openWithdraws.includes(kind)) !== 1,
+      ),
+      'kinds in neither withdrawal, or in both',
+    ).toEqual([]);
+  });
+
+  test('LOST-07-AC14: WITHDRAWN_WHEN_ACKNOWLEDGED is exactly LOST_CONTACT_SMS, and every kind in it is withdrawn on resolution too, a kind that is not named here', () => {
+    const acknowledgedWithdraws: readonly MessageKind[] = WITHDRAWN_WHEN_ACKNOWLEDGED;
+    const resolvedWithdraws: readonly MessageKind[] = WITHDRAWN_WHEN_RESOLVED;
+
+    expect([...WITHDRAWN_WHEN_ACKNOWLEDGED]).toEqual(['LOST_CONTACT_SMS']);
+    expect(
+      acknowledgedWithdraws.filter((kind) => !resolvedWithdraws.includes(kind)),
+      'kinds an acknowledgement withdraws that a resolution leaves',
+    ).toEqual([]);
+  });
+
+  test('LOST-07-AC14: the test kit’s copies equal the domain’s: SMS_KINDS, PUSH_KINDS, WITHDRAWN_WHEN_ACKNOWLEDGED and WITHDRAWN_WHEN_RESOLVED', () => {
+    expect([...KIT_SMS_KINDS]).toEqual([...SMS_KINDS]);
+    expect([...KIT_PUSH_KINDS]).toEqual([...PUSH_KINDS]);
+    expect([...KIT_WITHDRAWN_WHEN_ACKNOWLEDGED]).toEqual([...WITHDRAWN_WHEN_ACKNOWLEDGED]);
+    expect([...KIT_WITHDRAWN_WHEN_RESOLVED]).toEqual([...WITHDRAWN_WHEN_RESOLVED]);
   });
 });

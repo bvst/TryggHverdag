@@ -19,15 +19,26 @@
 // answers NOT_CONFIGURED until M3; its pool's session limit and listeners;
 // and a stop that waits for a run in flight and no longer waits for a
 // Healthchecks.io that never answers (D-079's second follow-up).
+//
+// LOST-07 adds a third loop, the SMS sender's, apart from the push loop and
+// woken by a sweep that escalated (AC1, AC9); the worker's SMS port, which
+// answers NOT_CONFIGURED until M3, said once at start (AC12); and the SMS
+// check, a second minute task that reports to its own Healthchecks.io check,
+// with its own setting and start line (AC10, AC11).
 import {
   BEAT_RECORDED,
   CHECKED_IN,
   CHECK_IN_ABORTED,
+  MESSAGE_KINDS,
+  PUSH_KINDS,
   SYNTHETIC_CHECK_UUID as CHECK,
   SYNTHETIC_PING_URL as PING_URL,
   fakeCheckIn,
   fakeClock,
   fakeLog,
+  fakePush,
+  fakeSms,
+  fakeSmsAlarm,
   fakeWorkerHeartbeats,
   fc,
   pgSettingsAnswer,
@@ -36,14 +47,21 @@ import {
   type FakeLog,
   type FakePgSetting,
   type FakePostgresHandler,
+  type FakePostgresQuery,
 } from '@trygghverdag/test-kit';
 import { EventEmitter, once } from 'node:events';
 import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import process from 'node:process';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { healthchecksCheckIn } from './adapters/healthchecks.ts';
 import { captured, markersIn } from './capture.test.ts';
-import { readHealthchecksSetting, type HealthchecksSetting } from './config.ts';
+import {
+  readHealthchecksSetting,
+  readHealthchecksSmsSetting,
+  type HealthchecksSetting,
+} from './config.ts';
 import {
   askedFor,
   eventually,
@@ -55,6 +73,7 @@ import type { CheckIn } from './ports.ts';
 import {
   HEARTBEAT_CRONTAB,
   UNCONFIGURED_PUSH,
+  UNCONFIGURED_SMS,
   createTaskList,
   runWorkerProcess,
   startWorker,
@@ -66,10 +85,19 @@ const SECOND = 1_000;
 /** A beat at most this old is fresh: three sweeps (LOST-02, approach item 6). */
 const BEAT_FRESH = 30 * SECOND;
 
-/** What a sweep and a delivery resolve to (the spec's interfaces). */
+/**
+ * What a sweep and a delivery resolve to (the spec's interfaces).
+ *
+ * RG-03 (LOST-07, the spec's "Every exact sweep result" and its
+ * `worker.test.ts` item): the sweep's result gains `escalated`, the alerts it
+ * escalated, so every sweep result this file writes gains it too: the stand-
+ * ins' and each `finish(…)` below, `escalated: 0` where the test is about
+ * opening. What each of those tests asserts is unchanged.
+ */
 interface SweepResult {
   ok: boolean;
   opened: number;
+  escalated: number;
   stuck: number;
 }
 interface DeliveryResult {
@@ -102,7 +130,7 @@ function stubRuns<T>(fallback: T) {
 
 /** A watchdog whose sweeps the test settles by hand. */
 function stubWatchdog() {
-  const runs = stubRuns<SweepResult>({ ok: true, opened: 0, stuck: 0 });
+  const runs = stubRuns<SweepResult>({ ok: true, opened: 0, escalated: 0, stuck: 0 });
   return Object.assign(runs, { sweep: runs.run });
 }
 
@@ -115,15 +143,25 @@ function stubSender() {
 /**
  * Loops that do nothing and succeed at once: for the tests about something
  * else, so the real watchdog and sender never reach for a database there.
+ *
+ * RG-03 (LOST-07, the spec's `worker.test.ts` item): the sweep's result gains
+ * `escalated: 0`, and quiet stand-ins join for the SMS sender and the SMS
+ * check's alarm, so that no test's worker runs a real SMS loop against a
+ * database that does not exist, for the reason LOST-02's review loop 1 gave
+ * for the quiet loops. Nothing any test asserts through them changes.
  */
 function quietLoops(): {
   watchdog: { sweep: () => Promise<SweepResult> };
   sender: { deliverDue: () => Promise<DeliveryResult> };
+  smsSender: { deliverDue: () => Promise<DeliveryResult> };
+  smsAlarm: { report: () => Promise<void> };
   log: FakeLog;
 } {
   return {
-    watchdog: { sweep: () => Promise.resolve({ ok: true, opened: 0, stuck: 0 }) },
+    watchdog: { sweep: () => Promise.resolve({ ok: true, opened: 0, escalated: 0, stuck: 0 }) },
     sender: { deliverDue: () => Promise.resolve({ sent: 0, failed: 0 }) },
+    smsSender: { deliverDue: () => Promise.resolve({ sent: 0, failed: 0 }) },
+    smsAlarm: { report: () => Promise.resolve() },
     log: fakeLog(),
   };
 }
@@ -1426,8 +1464,19 @@ describe('REL-08 and LOST-02: the sweep loop and the delivery loop', () => {
     vi.useRealTimers();
   });
 
-  /** A worker whose loops run the stubs, on fake timers: only setTimeout, which the loops keep time with. */
-  async function looping() {
+  /**
+   * A worker whose loops run the stubs, on fake timers: only setTimeout, which the loops keep time with.
+   *
+   * RG-03 (LOST-07; not in the spec's list, which names quietLoops() for the
+   * same reason): the worker gains a third loop, the SMS sender's. Left real
+   * here, it would claim from a database that does not exist every 10 s, and
+   * stop() would wait for that claim. So it gets a stand-in that succeeds at
+   * once, as quietLoops() gives one, unless a test hands in its own. The
+   * tests about the sweep and the delivery assert what they did before.
+   */
+  async function looping({
+    smsSender = { deliverDue: () => Promise.resolve({ sent: 0, failed: 0 }) },
+  }: { smsSender?: { deliverDue: () => Promise<DeliveryResult> } } = {}) {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const watchdog = stubWatchdog();
     const sender = stubSender();
@@ -1436,6 +1485,7 @@ describe('REL-08 and LOST-02: the sweep loop and the delivery loop', () => {
     const worker = await startWorker('postgres://example/db', runner.run, {
       watchdog,
       sender,
+      smsSender,
       log: fakeLog(),
       write: (text) => {
         written.push(text);
@@ -1493,7 +1543,7 @@ describe('REL-08 and LOST-02: the sweep loop and the delivery loop', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(sender.count).toBe(1);
 
-    watchdog.finish({ ok: true, opened: 1, stuck: 0 });
+    watchdog.finish({ ok: true, opened: 1, escalated: 0, stuck: 0 });
     await vi.advanceTimersByTimeAsync(0);
     expect(sender.count).toBe(2);
     sender.finish();
@@ -1502,7 +1552,7 @@ describe('REL-08 and LOST-02: the sweep loop and the delivery loop', () => {
     expect(watchdog.count).toBe(2);
     const deliveries = sender.count;
     sender.finish();
-    watchdog.finish({ ok: true, opened: 0, stuck: 0 });
+    watchdog.finish({ ok: true, opened: 0, escalated: 0, stuck: 0 });
     await vi.advanceTimersByTimeAsync(0);
     expect(sender.count).toBe(deliveries);
   });
@@ -1510,7 +1560,7 @@ describe('REL-08 and LOST-02: the sweep loop and the delivery loop', () => {
   test('LOST-02-AC21: a sweep that opens an alert while a delivery is in flight gets a delivery as soon as that one finishes, not 10 s later', async () => {
     const { watchdog, sender } = await looping();
 
-    watchdog.finish({ ok: true, opened: 2, stuck: 0 });
+    watchdog.finish({ ok: true, opened: 2, escalated: 0, stuck: 0 });
     await vi.advanceTimersByTimeAsync(0);
     expect(sender.count).toBe(1);
 
@@ -1591,7 +1641,7 @@ describe('REL-08 and LOST-02: the sweep loop and the delivery loop', () => {
     expect(sender.count).toBe(1);
 
     const stopping = worker.stop();
-    watchdog.finish({ ok: true, opened: 1, stuck: 0 });
+    watchdog.finish({ ok: true, opened: 1, escalated: 0, stuck: 0 });
     await vi.advanceTimersByTimeAsync(0);
     await stopping;
 
@@ -1605,7 +1655,7 @@ describe('REL-08 and LOST-02: the sweep loop and the delivery loop', () => {
     const { watchdog, sender, worker } = await looping();
     // A sweep that opened an alert while the first delivery is in flight
     // leaves another delivery pending, to follow it at once.
-    watchdog.finish({ ok: true, opened: 1, stuck: 0 });
+    watchdog.finish({ ok: true, opened: 1, escalated: 0, stuck: 0 });
     await vi.advanceTimersByTimeAsync(0);
     expect(sender.count).toBe(1);
 
@@ -1624,7 +1674,7 @@ describe('REL-08 and LOST-02: the sweep loop and the delivery loop', () => {
     const { watchdog, sender, worker } = await looping();
 
     const stopping = worker.stop();
-    watchdog.finish({ ok: true, opened: 1, stuck: 0 });
+    watchdog.finish({ ok: true, opened: 1, escalated: 0, stuck: 0 });
     await vi.advanceTimersByTimeAsync(0);
     sender.finish();
     await vi.advanceTimersByTimeAsync(0);
@@ -1648,7 +1698,7 @@ describe('REL-08 and LOST-02: the sweep loop and the delivery loop', () => {
     const stopping = worker.stop();
     await vi.advanceTimersByTimeAsync(10 * SECOND);
     expect(sender.count).toBe(1);
-    watchdog.finish({ ok: true, opened: 3, stuck: 0 });
+    watchdog.finish({ ok: true, opened: 3, escalated: 0, stuck: 0 });
     await vi.advanceTimersByTimeAsync(0);
     await stopping;
     await vi.advanceTimersByTimeAsync(60 * SECOND);
@@ -2337,6 +2387,18 @@ describe('LOST-02: the running worker pushes through the unconfigured push', () 
         };
       }
       if (/"?outbox"?[\s\S]*for update skip locked/i.test(query.text)) {
+        // RG-03 (LOST-07; not in the spec's list): the worker's SMS loop
+        // claims with a statement of the same shape, the SMS kind its only
+        // difference. The real database hands a LOST_CONTACT push to the push
+        // claim alone, by its kind; so does this one now, or the SMS loop could
+        // take the push and this test would see an sms_failed line in place
+        // of its push_failed. What the test asserts is unchanged.
+        if (claimsTheSmsKind(query)) {
+          return {
+            columns: ['now', 'id', 'recipient_id', 'kind', 'attempts'],
+            rows: [[DATABASE_NOW, null, null, null, null]],
+          };
+        }
         const rows = claimed
           ? [[DATABASE_NOW, null, null, null, null]]
           : [[DATABASE_NOW, messageId, recipientId, 'LOST_CONTACT', '1']];
@@ -2404,4 +2466,741 @@ describe('LOST-02: the running worker pushes through the unconfigured push', () 
       ]);
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// LOST-07: the SMS loop, the SMS check's minute task, and the worker's SMS
+// until M3 (AC1, AC9, AC10, AC11, AC12).
+// ---------------------------------------------------------------------------
+
+/** The line the worker says at start until M3 brings an SMS provider (LOST-07-AC12). */
+const NO_SMS = /^worker: .*\bno SMS provider\b/i;
+
+/** The SMS check's start line says "the SMS check", and never "Healthchecks.io" (approach item 8). */
+const SMS_CHECK = /\bSMS check\b/i;
+
+const smsCheckLines = (written: string[]) =>
+  linesOf(written).filter((line) => SMS_CHECK.test(line));
+
+/**
+ * The lines that are not one line of their own: a line written without its
+ * end runs on into the next one, and two lines read as one. Each start line
+ * begins "worker:" once, so a line holding it twice is two lines run together.
+ */
+const runTogether = (written: string[]) =>
+  linesOf(written).filter((line) => (line.match(/\bworker:/g) ?? []).length !== 1);
+
+/** The SMS kind (D-019). */
+const SMS = 'LOST_CONTACT_SMS';
+
+/** The message kinds a statement names, in its text or in its parameters, however it binds them. */
+function kindsNamedIn(query: FakePostgresQuery): string[] {
+  const found = new Set<string>();
+  for (const part of [query.text, ...query.values.map((value) => value ?? '')]) {
+    for (const [kind] of part.matchAll(
+      /\b(?:LOST_CONTACT_SMS|LOST_CONTACT|BACK_IN_CONTACT|HOME|ACKNOWLEDGED)\b/g,
+    )) {
+      found.add(kind);
+    }
+  }
+  return [...found].sort();
+}
+
+/** Whether a statement is an outbox claim: it takes due rows no other claim holds. */
+const isClaim = (query: FakePostgresQuery) =>
+  /"?outbox"?[\s\S]*for update skip locked/i.test(query.text);
+
+/** Whether a claim is the SMS loop's: the SMS kind is the one kind it names. */
+function claimsTheSmsKind(query: FakePostgresQuery): boolean {
+  const kinds = kindsNamedIn(query);
+  return kinds.length === 1 && kinds[0] === SMS;
+}
+
+/** Whether a statement is the SMS check's count of SMS waiting unsent. */
+const isSmsCount = (query: FakePostgresQuery) =>
+  /\boutbox\b/i.test(query.text) && /\bcount\s*\(/i.test(query.text) && !isClaim(query);
+
+/**
+ * A database for the worker's own statements, as the adapter shapes them
+ * (their column names are the adapter's): the overdue read answers its time
+ * and no journey; the SMS claim hands out `sms` once and the push claim
+ * nothing; a mark answers with the message's ID; the SMS check's count
+ * answers `state.count`, or fails while it is null. A statement that names
+ * sms_raised_at fails when `refuseEscalation` is set. The rest is answered as
+ * a quiet database answers it.
+ */
+function smsDatabase({
+  sms,
+  refuseEscalation = false,
+}: { sms?: { messageId: string; recipientId: string }; refuseEscalation?: boolean } = {}) {
+  const state: { count: number | null } = { count: 0 };
+  let claimed = false;
+  const handler: FakePostgresHandler = (query) => {
+    const settings = pgSettingsAnswer(query, IDLE_AS_ASKED);
+    if (settings !== undefined) {
+      return settings;
+    }
+    if (/\bleft join "?journeys"?/i.test(query.text)) {
+      return {
+        columns: ['now', 'id', 'state', 'silent_since'],
+        rows: [[NOW_AS_POSTGRES_WRITES_IT, null, null, null]],
+      };
+    }
+    if (refuseEscalation && /\bsms_raised_at\b/i.test(query.text)) {
+      throw new Error('this synthetic database refuses the escalation');
+    }
+    if (isClaim(query)) {
+      const columns = ['now', 'id', 'recipient_id', 'kind', 'attempts'];
+      if (claimsTheSmsKind(query) && sms !== undefined && !claimed) {
+        claimed = true;
+        return {
+          columns,
+          rows: [[NOW_AS_POSTGRES_WRITES_IT, sms.messageId, sms.recipientId, SMS, '1']],
+        };
+      }
+      return { columns, rows: [[NOW_AS_POSTGRES_WRITES_IT, null, null, null, null]] };
+    }
+    if (/^\s*update "?outbox"?/i.test(query.text)) {
+      return { columns: askedFor(query.text), rows: [[sms?.messageId ?? null]] };
+    }
+    if (isSmsCount(query)) {
+      if (state.count === null) {
+        throw new Error('this synthetic database cannot count');
+      }
+      // Named as the statement names them: its aliases, in order, when it
+      // has any (a count in a subselect hides its name from askedFor), else
+      // what it asks for. The time where a name says now, the count elsewhere.
+      const aliases = [...query.text.matchAll(/\bas\s+"?(\w+)"?/gi)]
+        .map(([, name = '']) => name)
+        .filter((name) => !/^(int|integer|bigint|text|numeric)$/i.test(name));
+      const asked = aliases.length > 0 ? aliases : askedFor(query.text);
+      const columns = asked.length > 0 ? asked : ['now', 'count'];
+      return {
+        columns,
+        rows: [
+          columns.map((column) =>
+            /now/i.test(column) ? NOW_AS_POSTGRES_WRITES_IT : String(state.count),
+          ),
+        ],
+      };
+    }
+    return quietDatabase(query);
+  };
+  return { handler, state };
+}
+
+/**
+ * The SMS check's minute task: the one task beside the heartbeat that the
+ * crontab schedules every minute, found by the crontab whatever its name, and
+ * in the task list.
+ */
+function smsCheckTaskOf(options: RunnerOptions | undefined): string {
+  const crontab = typeof options?.crontab === 'string' ? options.crontab : '';
+  const scheduled = crontab
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#'))
+    .map((line) => /^\* \* \* \* \* ([^\s?]+)/.exec(line)?.[1] ?? `not every minute: ${line}`);
+  expect(scheduled).toContain('heartbeat');
+  const others = scheduled.filter((name) => name !== 'heartbeat');
+  expect(others, 'one minute task beside the heartbeat').toHaveLength(1);
+  const [name = ''] = others;
+  expect(Object.keys(options?.taskList ?? {})).toContain(name);
+  return name;
+}
+
+describe('LOST-07: the worker’s SMS until M3', () => {
+  test('LOST-07-AC12: the worker’s default SMS port answers NOT_CONFIGURED to every message, of every kind, and accepts none', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.uuid(),
+        fc.uuid(),
+        fc.constantFrom(...MESSAGE_KINDS),
+        async (messageId, recipientId, kind) => {
+          expect(await UNCONFIGURED_SMS.send({ messageId, recipientId, kind })).toEqual({
+            outcome: 'failed',
+            reason: 'NOT_CONFIGURED',
+          });
+        },
+      ),
+    );
+  });
+
+  test('LOST-07-AC12: the worker says once at start that no SMS provider is configured, through the write it was given, beside its push line, each a line of its own', async () => {
+    const worker = workerProcess({ healthchecks: readHealthchecksSetting({}) });
+    await settle();
+
+    expect(linesOf(worker.written).filter((line) => NO_SMS.test(line))).toHaveLength(1);
+    expect(linesOf(worker.written).filter((line) => NO_PUSH.test(line))).toHaveLength(1);
+    // Two lines, not one: the push line is not the SMS line run on.
+    expect(
+      linesOf(worker.written).filter((line) => NO_PUSH.test(line) && NO_SMS.test(line)),
+    ).toEqual([]);
+    expect(runTogether(worker.written)).toEqual([]);
+
+    await stopCleanly(worker);
+    expect(linesOf(worker.written).filter((line) => NO_SMS.test(line))).toHaveLength(1);
+  });
+
+  test('LOST-07-AC12: by default the worker says on stderr that no SMS provider is configured', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const signals = new EventEmitter();
+      const running = runWorkerProcess('postgres://example/db', {
+        runWorker: recordingRunner().run,
+        signals,
+        ...quietLoops(),
+        exit: () => undefined,
+      });
+      await settle();
+
+      const lines = linesOf(stderr.mock.calls.map(([text]) => String(text)));
+      expect(lines.filter((line) => NO_SMS.test(line))).toHaveLength(1);
+
+      signals.emit('SIGTERM');
+      await expect(running).resolves.toBeUndefined();
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  test.each(['runWorkerProcess', 'startWorker with no sms'] as const)(
+    'LOST-07-AC12: the running worker, started by %s, answers a claimed SMS NOT_CONFIGURED: the mark sets last_failure NOT_CONFIGURED and never sent_at, and one sms_failed line names the reason and the message',
+    async (how) => {
+      const messageId = syntheticUuid();
+      const recipientId = syntheticUuid();
+      const { handler } = smsDatabase({ sms: { messageId, recipientId } });
+      const database = await listeningFakePostgres(handler);
+      const log = fakeLog();
+      const signals = new EventEmitter();
+      // The watchdog and the push sender are quiet: this is about the SMS loop.
+      const { watchdog, sender } = quietLoops();
+      let stop: () => Promise<void>;
+      if (how === 'runWorkerProcess') {
+        const running = runWorkerProcess(database.url, {
+          runWorker: recordingRunner().run,
+          signals,
+          watchdog,
+          sender,
+          log,
+          write: () => undefined,
+          exit: () => undefined,
+        });
+        stop = async () => {
+          signals.emit('SIGTERM');
+          await running;
+        };
+      } else {
+        const worker = await startWorker(database.url, recordingRunner().run, {
+          watchdog,
+          sender,
+          log,
+          write: () => undefined,
+        });
+        stop = () => worker.stop();
+      }
+
+      const marks = () =>
+        database.queries.filter(({ text }) => /^\s*update "?outbox"?/i.test(text));
+      try {
+        expect(await eventually(() => marks().length > 0)).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      } finally {
+        await stop();
+        await database.close();
+      }
+
+      expect(marks()).toHaveLength(1);
+      const [mark] = marks();
+      expect(mark?.text).toMatch(/\blast_failure\b/);
+      expect(mark?.values).toContain('NOT_CONFIGURED');
+      expect(mark?.values).toContain(messageId);
+      expect(
+        database.queries.filter(
+          ({ text }) => /\boutbox\b/i.test(text) && /\bsent_at"?\s*=/i.test(text),
+        ),
+      ).toEqual([]);
+      expect(log.events.filter(({ event }) => event === 'sms_failed')).toEqual([
+        { event: 'sms_failed', reason: 'NOT_CONFIGURED', messageId },
+      ]);
+      expect(log.events.filter(({ event }) => event === 'push_failed')).toEqual([]);
+    },
+  );
+});
+
+describe('LOST-07 and AR-05: the SMS loop, apart from the push loop', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A worker whose loops run the stubs, the SMS sender's included, on fake timers. */
+  async function smsLooping() {
+    const sms = stubSender();
+    const looped = await (async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const watchdog = stubWatchdog();
+      const sender = stubSender();
+      const written: string[] = [];
+      const runner = recordingRunner();
+      const worker = await startWorker('postgres://example/db', runner.run, {
+        watchdog,
+        sender,
+        smsSender: sms,
+        log: fakeLog(),
+        write: (text) => {
+          written.push(text);
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      return { watchdog, sender, written, runner, worker };
+    })();
+    return { ...looped, sms };
+  }
+
+  test('LOST-07-AC9: an SMS delivery runs at start, and again 10 s after the previous one finished; one that takes longer than that is never overlapped', async () => {
+    const { sms } = await smsLooping();
+
+    expect(sms.count).toBe(1);
+    await vi.advanceTimersByTimeAsync(60 * SECOND);
+    expect(sms.count).toBe(1);
+    sms.finish();
+    await vi.advanceTimersByTimeAsync(10 * SECOND - 1);
+    expect(sms.count).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sms.count).toBe(2);
+  });
+
+  test('LOST-07-AC9: a push delivery that never settles leaves the SMS loop running every 10 s', async () => {
+    const { sms, sender, watchdog } = await smsLooping();
+
+    for (let run = 1; run <= 3; run += 1) {
+      expect(sms.count).toBe(run);
+      sms.finish();
+      watchdog.finish();
+      await vi.advanceTimersByTimeAsync(10 * SECOND);
+    }
+    expect(sms.count).toBe(4);
+    expect(sender.count).toBe(1);
+  });
+
+  test('LOST-07-AC9: an SMS delivery that never settles leaves the push loop running every 10 s, and delays no sweep', async () => {
+    const { sms, sender, watchdog } = await smsLooping();
+
+    for (let run = 1; run <= 3; run += 1) {
+      expect(sender.count).toBe(run);
+      expect(watchdog.count).toBe(run);
+      sender.finish();
+      watchdog.finish();
+      await vi.advanceTimersByTimeAsync(10 * SECOND);
+    }
+    expect(sender.count).toBe(4);
+    expect(watchdog.count).toBe(4);
+    expect(sms.count).toBe(1);
+  });
+
+  test('LOST-07-AC1: a sweep that escalated an alert starts an SMS delivery at once, without waiting for the interval; one that escalated none does not', async () => {
+    const { sms, watchdog } = await smsLooping();
+    sms.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sms.count).toBe(1);
+
+    watchdog.finish({ ok: true, opened: 0, escalated: 1, stuck: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sms.count).toBe(2);
+    sms.finish();
+
+    await vi.advanceTimersByTimeAsync(10 * SECOND);
+    expect(watchdog.count).toBe(2);
+    const deliveries = sms.count;
+    sms.finish();
+    watchdog.finish({ ok: true, opened: 0, escalated: 0, stuck: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sms.count).toBe(deliveries);
+  });
+
+  test('LOST-07-AC1: a sweep that escalates while an SMS delivery is in flight gets another as soon as that one finishes, not 10 s later', async () => {
+    const { sms, watchdog } = await smsLooping();
+
+    watchdog.finish({ ok: true, opened: 0, escalated: 2, stuck: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sms.count).toBe(1);
+
+    sms.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sms.count).toBe(2);
+  });
+
+  test('LOST-07-AC9: an SMS delivery that throws is said in one line naming the SMS before the error, and the next runs 10 s later', async () => {
+    const { sms, written } = await smsLooping();
+    const error = 'synthetic failure number three';
+
+    sms.fail(new Error(error));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(linesOf(written)).toHaveLength(1);
+    const [line = ''] = linesOf(written);
+    expect(line).toContain(error);
+    expect(line.slice(0, line.indexOf(error))).toMatch(/^worker: .*\bSMS\b/);
+    await vi.advanceTimersByTimeAsync(10 * SECOND);
+    expect(sms.count).toBe(2);
+  });
+
+  test('LOST-07-AC9: stop() waits for an SMS delivery in flight, starts no further run of any loop, and leaves no timer set', async () => {
+    const { sms, sender, watchdog, runner, worker } = await smsLooping();
+    watchdog.finish();
+    sender.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    const stopped: string[] = [];
+
+    const stopping = worker.stop().then(() => stopped.push('stopped'));
+    await vi.advanceTimersByTimeAsync(60 * SECOND);
+
+    expect(stopped).toEqual([]);
+    expect(runner.events).toEqual([]);
+    expect(sms.count).toBe(1);
+
+    sms.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    await stopping;
+
+    expect(stopped).toEqual(['stopped']);
+    expect(runner.events).toEqual(['runner stopped', 'pool ended']);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60 * SECOND);
+    expect(sms.count).toBe(1);
+    expect(sender.count).toBe(1);
+    expect(watchdog.count).toBe(1);
+  });
+});
+
+describe('LOST-07, LOST-02 and D-086: by default, the escalation and the SMS loop over the worker’s own pool', () => {
+  test('LOST-07-AC1: by default the worker’s sweep reads the alerts due for escalation through its own pool, after the overdue read, and a read it cannot make is one escalation_failed line, stage read, with the SQLSTATE', async () => {
+    const { handler } = smsDatabase({ refuseEscalation: true });
+    const database = await listeningFakePostgres(handler);
+    const log = fakeLog();
+    const { sender, smsSender } = quietLoops();
+    const worker = await startWorker(database.url, recordingRunner().run, {
+      sender,
+      smsSender,
+      log,
+      write: () => undefined,
+    });
+
+    try {
+      expect(
+        await eventually(() => log.events.some(({ event }) => event === 'escalation_failed')),
+      ).toBe(true);
+    } finally {
+      await worker.stop();
+      await database.close();
+    }
+
+    expect(log.events.filter(({ event }) => event === 'escalation_failed')).toEqual([
+      { event: 'escalation_failed', stage: 'read', code: 'XX000' },
+    ]);
+    const texts = database.queries.map(({ text }) => text);
+    const overdueRead = texts.findIndex((text) => /\bleft join "?journeys"?/i.test(text));
+    const escalationRead = texts.findIndex(
+      (text) => /\balerts\b/i.test(text) && /\bsms_raised_at\b/i.test(text),
+    );
+    expect(overdueRead).toBeGreaterThanOrEqual(0);
+    expect(escalationRead).toBeGreaterThan(overdueRead);
+  });
+
+  test('LOST-07-AC1 and AC8: by default the SMS loop claims the SMS kind only and hands what it claims to the SMS port, exactly as claimed; the push loop claims the push kinds only, and its port is never handed an SMS', async () => {
+    const messageId = syntheticUuid();
+    const recipientId = syntheticUuid();
+    const { handler } = smsDatabase({ sms: { messageId, recipientId } });
+    const database = await listeningFakePostgres(handler);
+    const sms = fakeSms();
+    const push = fakePush();
+    const { watchdog } = quietLoops();
+    const worker = await startWorker(database.url, recordingRunner().run, {
+      watchdog,
+      push,
+      sms,
+      log: fakeLog(),
+      write: () => undefined,
+    });
+
+    try {
+      expect(await eventually(() => sms.messages.length > 0)).toBe(true);
+      expect(
+        await eventually(() =>
+          database.queries.filter(isClaim).some((query) => !claimsTheSmsKind(query)),
+        ),
+      ).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      await worker.stop();
+      await database.close();
+    }
+
+    expect(sms.messages).toEqual([{ messageId, recipientId, kind: SMS }]);
+    expect(push.messages).toEqual([]);
+    const claims = database.queries.filter(isClaim);
+    const smsClaims = claims.filter(claimsTheSmsKind);
+    const pushClaims = claims.filter((query) => !claimsTheSmsKind(query));
+    expect(smsClaims.length).toBeGreaterThan(0);
+    expect(pushClaims.length).toBeGreaterThan(0);
+    for (const claim of pushClaims) {
+      expect(kindsNamedIn(claim), claim.text).toEqual([...PUSH_KINDS].sort());
+    }
+  });
+});
+
+describe('LOST-07: the SMS check, a minute task of its own', () => {
+  /** A worker over a fake database whose minute tasks the test runs, with the SMS check's alarm given. */
+  async function checking(
+    database: ReturnType<typeof smsDatabase>,
+    { withAlarm = true }: { withAlarm?: boolean } = {},
+  ) {
+    const listening = await listeningFakePostgres(database.handler);
+    const runner = recordingRunner();
+    const alarm = fakeSmsAlarm();
+    const log = fakeLog();
+    const { watchdog, sender, smsSender } = quietLoops();
+    const worker = await startWorker(listening.url, runner.run, {
+      watchdog,
+      sender,
+      smsSender,
+      ...(withAlarm ? { smsAlarm: alarm } : {}),
+      log,
+      write: () => undefined,
+    });
+    const task = smsCheckTaskOf(runner.options());
+    return {
+      alarm,
+      log,
+      runCheck: () => runner.runTask(task),
+      stop: async () => {
+        await worker.stop();
+        await listening.close();
+      },
+    };
+  }
+
+  test('LOST-07-AC10: the worker schedules the SMS check every minute beside the heartbeat; it counts the SMS waiting through the worker’s own pool and reports failing to the alarm it was given, with one sms_unsent line holding the count, while any waits; ok once none does', async () => {
+    const database = smsDatabase();
+    const worker = await checking(database);
+    try {
+      database.state.count = 3;
+      await expect(worker.runCheck()).resolves.toBeUndefined();
+      expect(worker.alarm.statuses).toEqual(['failing']);
+      expect(worker.log.events).toEqual([{ event: 'sms_unsent', count: 3 }]);
+
+      database.state.count = 0;
+      await expect(worker.runCheck()).resolves.toBeUndefined();
+      expect(worker.alarm.statuses).toEqual(['failing', 'ok']);
+      expect(worker.log.events).toEqual([{ event: 'sms_unsent', count: 3 }]);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  test('LOST-07-AC11: with no alarm, as when HEALTHCHECKS_SMS_URL is unset, the SMS check’s task completes and writes nothing, however many SMS wait: never a thrown task, and no line for a report nobody is there to receive', async () => {
+    const database = smsDatabase();
+    const worker = await checking(database, { withAlarm: false });
+    try {
+      database.state.count = 3;
+      await expect(worker.runCheck()).resolves.toBeUndefined();
+      await expect(worker.runCheck()).resolves.toBeUndefined();
+      expect(worker.log.events).toEqual([]);
+      expect(worker.alarm.reports).toEqual([]);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  test('LOST-07-AC11: when the SMS check cannot read the database, it reports nothing, writes one sms_check_failed line, stage read, with the SQLSTATE, and the task completes', async () => {
+    const database = smsDatabase();
+    const worker = await checking(database);
+    try {
+      database.state.count = null;
+      await expect(worker.runCheck()).resolves.toBeUndefined();
+      expect(worker.alarm.reports).toEqual([]);
+      expect(worker.log.events).toEqual([
+        { event: 'sms_check_failed', stage: 'read', code: 'XX000' },
+      ]);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  test('LOST-07-AC11: when the report fails, the SMS check writes one sms_check_failed line, stage report, and the task completes: never a thrown task that Graphile retries in a loop', async () => {
+    const database = smsDatabase();
+    const worker = await checking(database);
+    try {
+      database.state.count = 3;
+      worker.alarm.failWith(new Error('the monitor answered 500'));
+      await expect(worker.runCheck()).resolves.toBeUndefined();
+      expect(worker.alarm.statuses).toEqual(['failing']);
+      expect(worker.log.events.filter(({ event }) => event === 'sms_check_failed')).toEqual([
+        expect.objectContaining({ event: 'sms_check_failed', stage: 'report' }),
+      ]);
+    } finally {
+      await worker.stop();
+    }
+  });
+});
+
+describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
+  /** runWorkerProcess with everything it reaches replaced, the SMS check's alarm included; what it wrote, and every URL an alarm was made for. */
+  function smsWorkerProcess({ healthchecksSms }: { healthchecksSms?: HealthchecksSetting }) {
+    const runner = recordingRunner();
+    const signals = new EventEmitter();
+    const written: string[] = [];
+    const exits: number[] = [];
+    const created: string[] = [];
+    const running = runWorkerProcess('postgres://example/db', {
+      runWorker: runner.run,
+      signals,
+      healthchecks: readHealthchecksSetting({}),
+      ...(healthchecksSms === undefined ? {} : { healthchecksSms }),
+      createSmsAlarm: (url: string) => {
+        created.push(url);
+        return fakeSmsAlarm();
+      },
+      ...quietLoops(),
+      keepAlive: () => undefined,
+      write: (text) => {
+        written.push(text);
+      },
+      exit: (code) => {
+        exits.push(code);
+      },
+    });
+    return { runner, signals, written, exits, created, running };
+  }
+
+  async function stopSmsWorker(worker: ReturnType<typeof smsWorkerProcess>) {
+    worker.signals.emit('SIGTERM');
+    await expect(worker.running).resolves.toBeUndefined();
+    await settle();
+    expect(worker.exits).toEqual([0]);
+  }
+
+  test.each([
+    ['unset', undefined],
+    ['empty', ''],
+    ['an http: address', `http://127.0.0.1:1/${CHECK}`],
+    ['not an address at all', `hc-ping.com/${CHECK}`],
+  ])(
+    'LOST-07-AC11: with HEALTHCHECKS_SMS_URL %s the worker starts and stays up, makes no alarm, and says once why the SMS check does not report, never the value, and not naming Healthchecks.io',
+    async (_what, value) => {
+      const healthchecksSms = readHealthchecksSmsSetting(
+        value === undefined ? {} : { HEALTHCHECKS_SMS_URL: value },
+      );
+      const worker = smsWorkerProcess({ healthchecksSms });
+      await settle();
+
+      const lines = smsCheckLines(worker.written);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/^worker: /);
+      expect(lines[0]).toContain('HEALTHCHECKS_SMS_URL');
+      expect(lines[0]).toContain(reasonOf(healthchecksSms));
+      expect(lines[0]).not.toContain('Healthchecks.io');
+      expect(worker.written.join('')).not.toContain(CHECK);
+      expect(worker.created).toEqual([]);
+      // INF-08's count of the lines that name Healthchecks.io keeps its meaning.
+      expect(healthchecksLines(worker.written)).toHaveLength(1);
+      expect(worker.exits).toEqual([]);
+
+      await stopSmsWorker(worker);
+    },
+  );
+
+  test('LOST-07-AC11: with a usable https: address the worker says once, on a line of its own, that the SMS check reports on SMS waiting 60 s, without saying where or naming Healthchecks.io, and makes its alarm for that address', async () => {
+    const worker = smsWorkerProcess({
+      healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: PING_URL }),
+    });
+    await settle();
+
+    expect(worker.created).toEqual([PING_URL]);
+    const lines = smsCheckLines(worker.written);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^worker: /);
+    expect(lines[0]).not.toContain('Healthchecks.io');
+    // Said to its end, and a line of its own: what it reports on is the 60 s
+    // an SMS may wait, and the line does not run on into the next.
+    expect(lines[0]).toMatch(/\b60 s\.$/);
+    expect(runTogether(worker.written)).toEqual([]);
+    expect(worker.written.join('')).not.toContain(CHECK);
+    expect(healthchecksLines(worker.written)).toHaveLength(1);
+    expect(worker.exits).toEqual([]);
+
+    await stopSmsWorker(worker);
+  });
+
+  test('LOST-07-AC11: by default the SMS check reports through the Healthchecks.io adapter, made for the address the setting holds: with SMS waiting unsent, its minute task sends that address with /fail appended exactly one HEAD, with no body', async () => {
+    // No alarm is injected here, so this is the adapter production uses, as
+    // INF-08-AC4's test does for the check-in. The setting is given as made,
+    // with a stand-in on the loopback address in place of hc-ping.com, so
+    // nothing leaves this machine.
+    const received: { method: string | undefined; path: string | undefined; bodyBytes: number }[] =
+      [];
+    const server = createServer((request, response) => {
+      let bodyBytes = 0;
+      request.on('data', (chunk: Buffer) => {
+        bodyBytes += chunk.length;
+      });
+      request.on('end', () => {
+        received.push({ method: request.method, path: request.url, bodyBytes });
+        response.writeHead(200);
+        response.end();
+      });
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const { port } = server.address() as AddressInfo;
+    const database = smsDatabase();
+    database.state.count = 3;
+    const listening = await listeningFakePostgres(database.handler);
+    const runner = recordingRunner();
+    const signals = new EventEmitter();
+    const log = fakeLog();
+    const { watchdog, sender, smsSender } = quietLoops();
+
+    try {
+      const running = runWorkerProcess(listening.url, {
+        runWorker: runner.run,
+        signals,
+        healthchecks: readHealthchecksSetting({}),
+        healthchecksSms: { checkingIn: true, url: `http://127.0.0.1:${String(port)}/${CHECK}` },
+        watchdog,
+        sender,
+        smsSender,
+        log,
+        keepAlive: () => undefined,
+        write: () => undefined,
+        exit: () => undefined,
+      });
+      await settle();
+
+      await expect(runner.runTask(smsCheckTaskOf(runner.options()))).resolves.toBeUndefined();
+
+      expect(received).toEqual([{ method: 'HEAD', path: `/${CHECK}/fail`, bodyBytes: 0 }]);
+      expect(log.events).toEqual([{ event: 'sms_unsent', count: 3 }]);
+
+      signals.emit('SIGTERM');
+      await expect(running).resolves.toBeUndefined();
+    } finally {
+      server.closeAllConnections();
+      server.close();
+      await listening.close();
+    }
+  });
+
+  test('LOST-07-AC11: given no SMS check setting at all, it runs as though HEALTHCHECKS_SMS_URL were unset', async () => {
+    const worker = smsWorkerProcess({});
+    await settle();
+
+    const lines = smsCheckLines(worker.written);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('HEALTHCHECKS_SMS_URL');
+    expect(lines[0]).toContain(reasonOf(readHealthchecksSmsSetting({})));
+    expect(worker.created).toEqual([]);
+
+    await stopSmsWorker(worker);
+  });
 });

@@ -182,3 +182,73 @@ describe('INF-08: the ping URL the worker checks in with', () => {
     }
   });
 });
+
+describe('LOST-07: the ping URL the SMS check reports to', () => {
+  // As the worker's (INF-08): anyone holding the URL can keep the SMS check
+  // green while every SMS fails, so it is a secret from the staging
+  // environment, never committed and never printed, and it must point at
+  // Healthchecks.io over https: a check reported from nowhere never pages.
+  const variables = read('infra/staging/variables.tf');
+
+  /** The variable's block, from its header to the closing brace at the start of a line. */
+  function variableBlock() {
+    const match = /^variable "healthchecks_sms_url" \{\n[\s\S]*?\n\}$/m.exec(variables);
+    return match?.[0] ?? '';
+  }
+
+  test('LOST-07-AC20: it is a required string variable, with no default to fall back on', () => {
+    const block = variableBlock();
+
+    expect(block).not.toBe('');
+    expect(block).toMatch(/\n\s*type\s*=\s*string\n/);
+    expect(block).not.toMatch(/\n\s*default\s*=/);
+  });
+
+  test('LOST-07-AC20: it is sensitive, so no plan shows it', () => {
+    expect(variableBlock()).toMatch(/\n\s*sensitive\s*=\s*true\n/);
+  });
+
+  test('LOST-07-AC20: its validation refuses anything that does not start https://hc-ping.com/, and its error message says where to set it', () => {
+    const block = variableBlock();
+    const condition =
+      /\n\s*condition\s*=\s*can\(regex\("((?:[^"\\]|\\.)*)", var\.healthchecks_sms_url\)\)\n/.exec(
+        block,
+      );
+    expect(condition).not.toBeNull();
+    const message = /\n\s*error_message\s*=\s*"((?:[^"\\]|\\.)*)"\n/.exec(block)?.[1] ?? '';
+    expect(message).toContain('HEALTHCHECKS_SMS_URL');
+    expect(message).toMatch(/\bstaging\b/);
+
+    // Terraform's string escapes undone, as INF-08-AC8's test does.
+    const pattern = new RegExp(String(condition?.[1]).replace(/\\\\/g, '\\'));
+
+    expect(pattern.test(`https://hc-ping.com/${CHECK}`)).toBe(true);
+    for (const refused of [
+      `http://hc-ping.com/${CHECK}`,
+      `https://hc-ping.com.example.invalid/${CHECK}`,
+      `https://hc-pingXcom/${CHECK}`,
+      `https://example.invalid/https://hc-ping.com/${CHECK}`,
+      ` https://hc-ping.com/${CHECK}`,
+      'https://hc-ping.com',
+      '',
+    ]) {
+      expect({ value: refused, accepted: pattern.test(refused) }).toEqual({
+        value: refused,
+        accepted: false,
+      });
+    }
+  });
+
+  test('LOST-07-AC20: the app gets it as HEALTHCHECKS_SMS_URL, from that variable, which main.tf names nowhere else', () => {
+    const environment = /\n {2}environment = \{\n([\s\S]*?)\n {2}\}\n/.exec(main)?.[1] ?? '';
+
+    expect(environment).toMatch(/^\s*HEALTHCHECKS_SMS_URL\s*=\s*var\.healthchecks_sms_url\s*$/m);
+    expect(main.match(/var\.healthchecks_sms_url\b/g)).toHaveLength(1);
+    // The worker's address and the SMS check's never stand in for each other.
+    expect(environment).not.toMatch(/^\s*HEALTHCHECKS_SMS_URL\s*=\s*var\.healthchecks_worker_url/m);
+    expect(read('infra/staging/staging.auto.tfvars')).not.toMatch(/healthchecks|hc-ping/i);
+    for (const file of ['main.tf', 'variables.tf', 'versions.tf', 'staging.auto.tfvars']) {
+      expect(read(`infra/staging/${file}`)).not.toMatch(/hc-ping\.com\/[0-9a-f]{8}-/i);
+    }
+  });
+});

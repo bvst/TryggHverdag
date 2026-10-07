@@ -15,6 +15,10 @@ export { BEAT_RECORDED, fakeWorkerHeartbeats } from './fake-worker-heartbeats.ts
 export type { FakeWorkerHeartbeats } from './fake-worker-heartbeats.ts';
 export { CHECKED_IN, CHECK_IN_ABORTED, fakeCheckIn } from './fake-check-in.ts';
 export type { AbortSignalLike, FakeCheckIn } from './fake-check-in.ts';
+export { fakeSms } from './fake-sms.ts';
+export type { FakeSms, SmsMessage, SmsResult } from './fake-sms.ts';
+export { SMS_ALARM_ABORTED, SMS_ALARM_REPORTED, fakeSmsAlarm } from './fake-sms-alarm.ts';
+export type { FakeSmsAlarm, SmsAlarmReport, SmsAlarmStatus } from './fake-sms-alarm.ts';
 export { MESSAGE_KINDS, PUSH_FAILURE_REASONS, fakePush } from './fake-push.ts';
 export type {
   FakePush,
@@ -32,6 +36,9 @@ export type {
   RegisteredDevice,
 } from './fake-device-authenticator.ts';
 export {
+  PUSH_KINDS,
+  SMS_KINDS,
+  WITHDRAWN_WHEN_ACKNOWLEDGED,
   WITHDRAWN_WHEN_OPENED,
   WITHDRAWN_WHEN_RESOLVED,
   fakeJourneyStore,
@@ -43,6 +50,11 @@ export type {
   AlertMessage,
   ClaimedMessage,
   ClaimedMessages,
+  DueAlert,
+  DueAlerts,
+  EscalateAlertResult,
+  EscalateRequest,
+  UnsentSmsCount,
   FakeAlertResolution,
   FakeAlertState,
   FakeJourneyEndReason,
@@ -102,6 +114,7 @@ export type {
 export type {
   AcknowledgementAsStored,
   AlertAsStored,
+  EscalationAsStored,
   HeartbeatAsStored,
   JourneyAsStored,
   JourneyEndAsStored,

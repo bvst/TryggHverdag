@@ -93,10 +93,17 @@
 import * as fc from 'fast-check';
 import { expect } from 'vitest';
 import {
+  PUSH_KINDS,
+  SMS_KINDS,
+  WITHDRAWN_WHEN_ACKNOWLEDGED,
+  WITHDRAWN_WHEN_OPENED,
   WITHDRAWN_WHEN_RESOLVED,
   type AlertForAcknowledgement,
   type AlertMessage,
   type ClaimedMessages,
+  type DueAlerts,
+  type EscalateAlertResult,
+  type UnsentSmsCount,
   type FakeAlertResolution,
   type FakeAlertState,
   type FakeJourneyState,
@@ -188,6 +195,18 @@ export interface JourneyStoreUnderTest {
       alertId: string;
       responderId: string;
     }): Promise<RecordAcknowledgementResult>;
+    /** LOST-07: the alerts due for escalation, read without a lock, and the store's now. */
+    alertsDueForEscalation(afterMs: number): Promise<DueAlerts>;
+    /** LOST-07: decided by the escalation rule under the journey's row, and written, or not. */
+    escalateAlert(request: {
+      alertId: string;
+      afterMs: number;
+      lockWaitMs?: number | undefined;
+    }): Promise<EscalateAlertResult>;
+    /** LOST-07: the SMS claim, of the SMS kinds only. */
+    claimDueSms(request: { limit: number; leaseMs: number }): Promise<ClaimedMessages>;
+    /** LOST-07: the SMS messages unsent, not withdrawn and written `olderThanMs` or more ago. */
+    unsentSmsCount(olderThanMs: number): Promise<UnsentSmsCount>;
   };
   /** A new user, by the store's own means: a row in the real table, an entry in the fake. */
   addUser(): Promise<string>;
@@ -293,8 +312,14 @@ export interface JourneyStoreUnderTest {
     /** LOST-06: who is on it and since when, both or neither; left out, neither. */
     acknowledgedBy?: string | null;
     acknowledgedAt?: Date | null;
+    /** LOST-07: when it was escalated to SMS; left out, never. */
+    smsRaisedAt?: Date | null;
   }): Promise<string>;
-  /** LOST-03: an outbox message put in directly, never withdrawn, as a test's own setup. Resolves to its ID. */
+  /**
+   * LOST-03: an outbox message put in directly, as a test's own setup.
+   * Resolves to its ID. LOST-07: withdrawn at `withdrawnAt` when given; left
+   * out, never withdrawn.
+   */
   seedMessage(message: {
     alertId: string;
     recipientId: string;
@@ -304,6 +329,7 @@ export interface JourneyStoreUnderTest {
     attempts?: number;
     sentAt?: Date | null;
     lastFailure?: PushFailureReason | null;
+    withdrawnAt?: Date | null;
   }): Promise<string>;
   /** LOST-03-AC4: every responder row of the journey removed directly: nothing in the code removes one yet. */
   removeResponders(journeyId: string): Promise<void>;
@@ -313,6 +339,24 @@ export interface JourneyStoreUnderTest {
    * both null until someone is. In any order.
    */
   acknowledgementsOf(journeyId: string): Promise<AcknowledgementAsStored[]>;
+  /**
+   * LOST-07: each alert of this journey's escalation time, read by a reader of
+   * its own so that `alertsOf` keeps its shape: null until it is escalated. In
+   * any order.
+   */
+  escalationsOf(journeyId: string): Promise<EscalationAsStored[]>;
+  /**
+   * LOST-07-AC16: holds the journey's row as `hold` does, and lets it go once
+   * an escalation is waiting for it, having first changed the journey's
+   * unresolved alert as a transaction in flight would: `acknowledge`, recorded
+   * by one of the journey's responders, as "I'm on it" committing; `resolve`,
+   * resolved with contact back, as a heartbeat committing; `unchanged`,
+   * nothing. `release` lets go at once if no escalation came.
+   */
+  holdUntilEscalationWaits(
+    journeyId: string,
+    change: 'unchanged' | 'acknowledge' | 'resolve',
+  ): Promise<{ release(): Promise<void> }>;
 }
 
 /** Who acknowledged an alert, and when, as a store under test holds it: both null until someone did (LOST-06). */
@@ -320,6 +364,12 @@ export interface AcknowledgementAsStored {
   alertId: string;
   acknowledgedBy: string | null;
   acknowledgedAt: Date | null;
+}
+
+/** When an alert was escalated to SMS, as a store under test holds it: null until it was (LOST-07). */
+export interface EscalationAsStored {
+  alertId: string;
+  smsRaisedAt: Date | null;
 }
 
 /** An alert's resolution, as a store under test holds it (LOST-03). */
@@ -873,6 +923,150 @@ async function acknowledgedRecordOf(subject: JourneyStoreUnderTest, journeyId: s
 /** A message's fields as the store hands it back in an answer. */
 function asAnswered({ messageId, recipientId, kind }: AlertMessage | MessageAsStored) {
   return { messageId, recipientId, kind };
+}
+
+// ---------------------------------------------------------------------------
+// LOST-07: escalation to SMS, its claim, the count of failing SMS, and the
+// three withdrawals (its spec's shared behaviours 1 to 12, D-100).
+// ---------------------------------------------------------------------------
+
+/**
+ * Two minutes (D-019): the server's ESCALATE_AFTER_MS, written out because the
+ * test kit imports nothing from the server.
+ */
+const ESCALATE_AFTER_MS = 120_000;
+
+/** Sixty seconds: the server's SMS_UNSENT_LIMIT_MS, written out for the same reason. */
+const SMS_UNSENT_LIMIT_MS = 60_000;
+
+/** The escalation SMS's kind (D-019). */
+const SMS = 'LOST_CONTACT_SMS';
+
+/** The escalation's answer when it writes nothing. */
+const NOT_ESCALATED: EscalateAlertResult = { outcome: 'skipped' };
+
+/**
+ * How long before the store's now an alert may have opened and still be under
+ * two minutes when the store decides: 1 min 59.999 s against the fake, whose
+ * clock stands still, and a margin under two minutes against the database,
+ * whose now() moves on.
+ */
+function underTwoMinutesMs(subject: JourneyStoreUnderTest): number {
+  return ESCALATE_AFTER_MS - Math.max(1, subject.timeMarginMs);
+}
+
+/** How an alert is put in for the escalation's behaviours. */
+interface AlertSeed {
+  state?: FakeAlertState;
+  /** Someone recorded on it, with a time: its journey's first responder. */
+  recorded?: boolean;
+  /** Escalated this long before the store's now; null, never. */
+  smsRaisedAgoMs?: number | null;
+  /** Opened this long before the store's now. */
+  openedAgoMs?: number;
+  responders?: number;
+}
+
+/**
+ * A LOST_CONTACT journey of a new walker, with `responders` responders, and
+ * its one alert put in directly as the seed says: opened `openedAgoMs` before
+ * the store's now (three minutes unless told otherwise, so due), silent five
+ * minutes before that. A RESOLVED one was resolved since, by contact back.
+ */
+async function alerted(
+  subject: JourneyStoreUnderTest,
+  {
+    state = 'OPEN',
+    recorded = false,
+    smsRaisedAgoMs = null,
+    openedAgoMs = 3 * MINUTE,
+    responders = 3,
+  }: AlertSeed = {},
+): Promise<{
+  walkerId: string;
+  deviceId: string;
+  journeyId: string;
+  responderIds: string[];
+  alertId: string;
+  openedAt: Date;
+  acknowledgedBy: string | null;
+}> {
+  const now = await subject.now();
+  const openedAt = ago(now, openedAgoMs);
+  const silentSince = ago(now, openedAgoMs + LOST_CONTACT_AFTER_MS);
+  const journey = await watched(subject, {
+    state: 'LOST_CONTACT',
+    startedAt: ago(now, 2 * HOUR),
+    lastHeartbeatAt: silentSince,
+    responders,
+  });
+  const [first = ''] = journey.responderIds;
+  const alertId = await subject.seedAlert({
+    journeyId: journey.journeyId,
+    state,
+    openedAt,
+    silentSince,
+    ...(state === 'RESOLVED'
+      ? {
+          resolvedAt: ago(now, Math.floor(openedAgoMs / 3)),
+          resolution: 'BACK_IN_CONTACT' as const,
+        }
+      : {}),
+    ...(recorded
+      ? { acknowledgedBy: first, acknowledgedAt: ago(now, Math.floor(openedAgoMs / 2)) }
+      : {}),
+    ...(smsRaisedAgoMs === null ? {} : { smsRaisedAt: ago(now, smsRaisedAgoMs) }),
+  });
+  return { ...journey, alertId, openedAt, acknowledgedBy: recorded ? first : null };
+}
+
+/** An escalation that escalated, or a failed expectation saying what it was instead. */
+function escalated(
+  result: EscalateAlertResult,
+  what = 'the escalation',
+): { messages: AlertMessage[] } {
+  expect(result.outcome, `${what} escalated: ${JSON.stringify(result)}`).toBe('escalated');
+  if (result.outcome !== 'escalated') {
+    throw new Error(`${what} was answered ${JSON.stringify(result)}`);
+  }
+  return result;
+}
+
+/** This alert's escalation time, as the store under test holds it; undefined for an alert it does not hold. */
+async function smsRaisedAtOf(
+  subject: JourneyStoreUnderTest,
+  journeyId: string,
+  alertId: string,
+): Promise<Date | null | undefined> {
+  return (await subject.escalationsOf(journeyId)).find((each) => each.alertId === alertId)
+    ?.smsRaisedAt;
+}
+
+/** Everything a store holds of one journey's alerts and messages, who is on each alert and when each escalated included. */
+async function escalationRecordOf(subject: JourneyStoreUnderTest, journeyId: string) {
+  return {
+    ...(await acknowledgedRecordOf(subject, journeyId)),
+    escalations: [...(await subject.escalationsOf(journeyId))].sort((a, b) =>
+      a.alertId.localeCompare(b.alertId),
+    ),
+  };
+}
+
+/** The IDs of what one SMS claim handed out. */
+async function smsClaimed(
+  subject: JourneyStoreUnderTest,
+  leaseMs: number = LEASE_MS,
+): Promise<string[]> {
+  return (await subject.store.claimDueSms({ limit: BATCH, leaseMs })).messages.map(
+    ({ messageId }) => messageId,
+  );
+}
+
+/** Marks every message sent: the tidy end of a behaviour that left some due. */
+async function allSent(subject: JourneyStoreUnderTest, messageIds: readonly string[]) {
+  for (const messageId of messageIds) {
+    await subject.store.markSent(messageId);
+  }
 }
 
 export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
@@ -4932,6 +5126,1548 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       expect(withdrawn.map(({ messageId }) => messageId).sort()).toEqual([...expected].sort());
       for (const { withdrawnAt } of withdrawn) {
         expect(withdrawnAt).toEqual(resolvedAt);
+      }
+    },
+  },
+  // -------------------------------------------------------------------------
+  // LOST-07: escalation to SMS (its spec's shared behaviours 1 to 12).
+  // -------------------------------------------------------------------------
+  {
+    name: 'LOST-07-AC3: alertsDueForEscalation reads exactly the unresolved alerts with no escalation time, not acknowledged by someone, opened two minutes or more before the store’s now, with that now; none other, for any alerts in any state (fast-check)',
+    async run(subject) {
+      const anAlert = fc.record({
+        state: fc.constantFrom<FakeAlertState>('OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED'),
+        recorded: fc.boolean(),
+        wasEscalated: fc.boolean(),
+        // Around the two minutes and far from them. Whether each is due is
+        // worked out from the read's own now and the time it opened, so the
+        // database's moving clock decides nothing here.
+        openedAgoMs: fc.oneof(
+          fc.integer({ min: 15 * SECOND, max: 10 * MINUTE }),
+          fc.constantFrom(ESCALATE_AFTER_MS - 1, ESCALATE_AFTER_MS, ESCALATE_AFTER_MS + 1),
+        ),
+      });
+
+      await fc.assert(
+        fc.asyncProperty(fc.array(anAlert, { minLength: 1, maxLength: 4 }), async (drawn) => {
+          const seeded = [];
+          for (const { state, recorded, wasEscalated, openedAgoMs } of drawn) {
+            const made = await alerted(subject, {
+              state,
+              recorded,
+              openedAgoMs,
+              smsRaisedAgoMs: wasEscalated ? Math.floor(openedAgoMs / 4) : null,
+              responders: 1,
+            });
+            seeded.push({ state, recorded, wasEscalated, ...made });
+          }
+
+          const from = await subject.now();
+          const read = await subject.store.alertsDueForEscalation(ESCALATE_AFTER_MS);
+          const to = await subject.now();
+
+          expect(read.now.getTime(), 'the read’s now is the store’s').toBeGreaterThanOrEqual(
+            from.getTime(),
+          );
+          expect(read.now.getTime(), 'the read’s now is the store’s').toBeLessThanOrEqual(
+            to.getTime(),
+          );
+          const ours = new Set(seeded.map(({ alertId }) => alertId));
+          const expected = seeded.filter(
+            (each) =>
+              each.state !== 'RESOLVED' &&
+              !(each.state === 'ACKNOWLEDGED' && each.recorded) &&
+              !each.wasEscalated &&
+              read.now.getTime() - each.openedAt.getTime() >= ESCALATE_AFTER_MS,
+          );
+          expect(
+            read.alerts.filter(({ id }) => ours.has(id)).sort((a, b) => a.id.localeCompare(b.id)),
+          ).toEqual(
+            expected
+              .map((each) => ({
+                id: each.alertId,
+                journeyId: each.journeyId,
+                state: each.state,
+                acknowledgedBy: each.acknowledgedBy,
+                smsRaisedAt: null,
+                openedAt: each.openedAt,
+              }))
+              .sort((a, b) => a.id.localeCompare(b.id)),
+          );
+        }),
+        { numRuns: subject.propertyRuns },
+      );
+    },
+  },
+  {
+    name: 'LOST-07-AC1: escalateAlert moves a due alert to ESCALATED at the store’s now and writes one LOST_CONTACT_SMS per responder row, each with an ID of its own and due at that now; the journey, its other alerts, another journey’s alert and every push message are untouched',
+    async run(subject) {
+      // Every situation the rule escalates (approach item 2, AC3): a missing
+      // half of an acknowledgement sends the SMS.
+      const due: [string, AlertSeed][] = [
+        ['OPEN, nobody recorded', { state: 'OPEN' }],
+        [
+          'ESCALATED with no escalation time, as from before migration 0006',
+          { state: 'ESCALATED' },
+        ],
+        [
+          'ACKNOWLEDGED with nobody recorded, a state the code never makes',
+          { state: 'ACKNOWLEDGED' },
+        ],
+        ['OPEN with someone recorded, a half-done reset', { state: 'OPEN', recorded: true }],
+        [
+          'ESCALATED with someone recorded, a half-done reset',
+          { state: 'ESCALATED', recorded: true },
+        ],
+        [
+          'OPEN, two minutes old: to the millisecond against the fake',
+          { state: 'OPEN', openedAgoMs: ESCALATE_AFTER_MS + subject.timeMarginMs },
+        ],
+      ];
+      for (const [at, seed] of due) {
+        const journey = await alerted(subject, { ...seed, responders: 3 });
+        const { journeyId, alertId, responderIds } = journey;
+        const [r1 = '', r2 = '', r3 = ''] = responderIds;
+        const now = await subject.now();
+        // An earlier silence of the journey, over: escalated then, its pushes
+        // and SMS sent.
+        const older = await subject.seedAlert({
+          journeyId,
+          state: 'RESOLVED',
+          openedAt: ago(now, HOUR + 30 * MINUTE),
+          silentSince: ago(now, HOUR + 35 * MINUTE),
+          resolvedAt: ago(now, HOUR),
+          resolution: 'BACK_IN_CONTACT',
+          smsRaisedAt: ago(now, HOUR + 28 * MINUTE),
+        });
+        for (const recipientId of responderIds) {
+          for (const kind of ['LOST_CONTACT', SMS] as const) {
+            await subject.seedMessage({
+              alertId: older,
+              recipientId,
+              kind,
+              createdAt: ago(now, HOUR + 28 * MINUTE),
+              nextAttemptAt: ago(now, HOUR + 28 * MINUTE),
+              attempts: 1,
+              sentAt: ago(now, HOUR + 27 * MINUTE),
+            });
+          }
+        }
+        // This alert's lost-contact pushes: R1's accepted, R2's refused and
+        // due again later, R3's never claimed.
+        for (const [recipientId, given] of [
+          [r1, { attempts: 1, sentAt: journey.openedAt }],
+          [r2, { attempts: 2, lastFailure: 'NO_TARGET', nextAttemptAt: ago(now, -20 * SECOND) }],
+          [r3, {}],
+        ] as const) {
+          await subject.seedMessage({
+            alertId,
+            recipientId,
+            kind: 'LOST_CONTACT',
+            createdAt: journey.openedAt,
+            nextAttemptAt: journey.openedAt,
+            ...given,
+          });
+        }
+        const other = await alerted(subject, { responders: 1 });
+        const otherBefore = await escalationRecordOf(subject, other.journeyId);
+        const before = await escalationRecordOf(subject, journeyId);
+        const lastContact = await subject.lastHeartbeatAt(journeyId);
+
+        const from = await subject.now();
+        const result = escalated(
+          await subject.store.escalateAlert({ alertId, afterMs: ESCALATE_AFTER_MS }),
+          at,
+        );
+        const to = await subject.now();
+
+        const after = await escalationRecordOf(subject, journeyId);
+        const smsRaisedAt =
+          after.escalations.find((each) => each.alertId === alertId)?.smsRaisedAt ??
+          new Date(Number.NaN);
+        expect(smsRaisedAt.getTime(), at).toBeGreaterThanOrEqual(from.getTime());
+        expect(smsRaisedAt.getTime(), at).toBeLessThanOrEqual(to.getTime());
+        expect(after.alerts.find(({ id }) => id === alertId)?.state, at).toBe('ESCALATED');
+        // Who is on it, if anyone, is not the escalation's to change.
+        expect(after.acknowledgements, at).toEqual(before.acknowledgements);
+
+        // One SMS per responder row, R2 whose push failed included, due at that now.
+        const sms = ofKind(after.messages, alertId, SMS);
+        expect(recipientsOf(sms), at).toEqual([...responderIds].sort());
+        const written = new Map(after.withdrawals.map((each) => [each.messageId, each]));
+        for (const message of sms) {
+          expect(message, at).toMatchObject({ attempts: 0, sentAt: null, lastFailure: null });
+          expect(message.nextAttemptAt, at).toEqual(smsRaisedAt);
+          expect(written.get(message.messageId)?.createdAt, at).toEqual(smsRaisedAt);
+          expect(written.get(message.messageId)?.withdrawnAt, at).toBeNull();
+          expect(message.messageId, at).toMatch(LOWER_UUID);
+        }
+        const ids = sms.map(({ messageId }) => messageId);
+        expect(new Set(ids).size, at).toBe(ids.length);
+        const everyOtherId = [
+          ...before.messages.map(({ messageId }) => messageId),
+          alertId,
+          older,
+          journeyId,
+          journey.walkerId,
+          journey.deviceId,
+          ...responderIds,
+          other.alertId,
+          other.journeyId,
+        ];
+        expect(
+          ids.filter((id) => everyOtherId.includes(id)),
+          at,
+        ).toEqual([]);
+        expect(byRecipient(result.messages), at).toEqual(sms.map(asAnswered));
+
+        // Untouched: the journey, its older alert, every push message (none
+        // withdrawn, none re-timed), and another journey's alert.
+        expect(after.state, at).toBe('LOST_CONTACT');
+        expect(await subject.lastHeartbeatAt(journeyId), at).toEqual(lastContact);
+        expect(
+          after.messages.filter(({ messageId }) => !ids.includes(messageId)),
+          at,
+        ).toEqual(before.messages);
+        expect(
+          after.withdrawals.filter(({ messageId }) => !ids.includes(messageId)),
+          at,
+        ).toEqual(before.withdrawals);
+        expect(
+          after.alerts.filter(({ id }) => id !== alertId),
+          at,
+        ).toEqual(before.alerts.filter(({ id }) => id !== alertId));
+        expect(after.resolutions, at).toEqual(before.resolutions);
+        expect(
+          after.escalations.filter((each) => each.alertId !== alertId),
+          at,
+        ).toEqual(before.escalations.filter((each) => each.alertId !== alertId));
+        expect(await escalationRecordOf(subject, other.journeyId), at).toEqual(otherBefore);
+      }
+    },
+  },
+  {
+    name: 'LOST-07-AC3: escalateAlert decides again under the journey’s row, and writes nothing for an alert no longer due there: acknowledged by someone, RESOLVED, already escalated, or under two minutes',
+    async run(subject) {
+      const under = underTwoMinutesMs(subject);
+      const notDue: [string, AlertSeed][] = [
+        ['ACKNOWLEDGED with someone recorded', { state: 'ACKNOWLEDGED', recorded: true }],
+        ['RESOLVED, nobody recorded', { state: 'RESOLVED' }],
+        ['RESOLVED, someone recorded', { state: 'RESOLVED', recorded: true }],
+        ['RESOLVED, escalated before it resolved', { state: 'RESOLVED', smsRaisedAgoMs: MINUTE }],
+        ['OPEN, already escalated', { state: 'OPEN', smsRaisedAgoMs: MINUTE }],
+        ['ESCALATED, already escalated', { state: 'ESCALATED', smsRaisedAgoMs: MINUTE }],
+        [
+          'ACKNOWLEDGED with nobody recorded, already escalated',
+          { state: 'ACKNOWLEDGED', smsRaisedAgoMs: MINUTE },
+        ],
+        [
+          'OPEN with someone recorded, already escalated',
+          { state: 'OPEN', recorded: true, smsRaisedAgoMs: MINUTE },
+        ],
+        ['OPEN, under two minutes old', { state: 'OPEN', openedAgoMs: under }],
+        [
+          'ESCALATED with no escalation time, under two minutes old',
+          { state: 'ESCALATED', openedAgoMs: under },
+        ],
+        [
+          'ACKNOWLEDGED with nobody recorded, under two minutes old',
+          { state: 'ACKNOWLEDGED', openedAgoMs: under },
+        ],
+      ];
+      for (const [at, seed] of notDue) {
+        const journey = await alerted(subject, { ...seed, responders: 2 });
+        const before = await escalationRecordOf(subject, journey.journeyId);
+
+        const read = await subject.store.alertsDueForEscalation(ESCALATE_AFTER_MS);
+        expect(
+          read.alerts.map(({ id }) => id),
+          `${at}: not read as due`,
+        ).not.toContain(journey.alertId);
+        expect(
+          await subject.store.escalateAlert({
+            alertId: journey.alertId,
+            afterMs: ESCALATE_AFTER_MS,
+          }),
+          at,
+        ).toEqual(NOT_ESCALATED);
+
+        expect(await escalationRecordOf(subject, journey.journeyId), at).toEqual(before);
+      }
+
+      // Read as due, then no longer due by the time the journey's row is
+      // taken: the rule is asked again there (AR-04), and writes nothing.
+      for (const change of [
+        'acknowledged by R1',
+        'resolved by contact back',
+        'ended by "I’m home"',
+        'escalated by another sweep',
+      ] as const) {
+        const journey = await alerted(subject, { responders: 2 });
+        const [r1 = ''] = journey.responderIds;
+        const read = await subject.store.alertsDueForEscalation(ESCALATE_AFTER_MS);
+        expect(
+          read.alerts.map(({ id }) => id),
+          `${change}: read as due first`,
+        ).toContain(journey.alertId);
+        if (change === 'acknowledged by R1') {
+          acknowledged(
+            await subject.store.recordAcknowledgement({
+              alertId: journey.alertId,
+              responderId: r1,
+            }),
+            change,
+          );
+        } else if (change === 'resolved by contact back') {
+          backInContact(
+            await subject.store.recordHeartbeat(await freshHeartbeat(subject, journey.journeyId)),
+          );
+        } else if (change === 'ended by "I’m home"') {
+          endedHome(await subject.store.recordHome(homeOf(journey)));
+        } else {
+          escalated(
+            await subject.store.escalateAlert({
+              alertId: journey.alertId,
+              afterMs: ESCALATE_AFTER_MS,
+            }),
+            change,
+          );
+        }
+        const before = await escalationRecordOf(subject, journey.journeyId);
+
+        expect(
+          await subject.store.escalateAlert({
+            alertId: journey.alertId,
+            afterMs: ESCALATE_AFTER_MS,
+          }),
+          change,
+        ).toEqual(NOT_ESCALATED);
+
+        expect(await escalationRecordOf(subject, journey.journeyId), change).toEqual(before);
+      }
+
+      // An ID no alert has: no row to take, and nothing written.
+      expect(
+        await subject.store.escalateAlert({ alertId: syntheticUuid(), afterMs: ESCALATE_AFTER_MS }),
+      ).toEqual(NOT_ESCALATED);
+    },
+  },
+  {
+    name: 'LOST-07-AC16: escalateAlert skips a held row without waiting; told to wait, it answers held when the row stays held, and otherwise decides as the holder left it',
+    async run(subject) {
+      // Without a wait: skipped at once, writing nothing; once released, escalated.
+      const skipping = await alerted(subject, { responders: 2 });
+      const held = await subject.hold(skipping.journeyId);
+      try {
+        const before = await escalationRecordOf(subject, skipping.journeyId);
+        expect(
+          await within(
+            2_000,
+            subject.store.escalateAlert({
+              alertId: skipping.alertId,
+              afterMs: ESCALATE_AFTER_MS,
+            }),
+            'an escalation of a held row',
+          ),
+        ).toEqual(NOT_ESCALATED);
+        expect(await escalationRecordOf(subject, skipping.journeyId)).toEqual(before);
+      } finally {
+        await held.release();
+      }
+      escalated(
+        await subject.store.escalateAlert({
+          alertId: skipping.alertId,
+          afterMs: ESCALATE_AFTER_MS,
+        }),
+        'once released',
+      );
+
+      // Told to wait, with the row held throughout: held, writing nothing.
+      const waiting = await alerted(subject, { responders: 2 });
+      const holding = await subject.hold(waiting.journeyId);
+      try {
+        const before = await escalationRecordOf(subject, waiting.journeyId);
+        expect(
+          await subject.store.escalateAlert({
+            alertId: waiting.alertId,
+            afterMs: ESCALATE_AFTER_MS,
+            lockWaitMs: subject.lockWaitMs,
+          }),
+        ).toEqual({ outcome: 'held' });
+        expect(await escalationRecordOf(subject, waiting.journeyId)).toEqual(before);
+      } finally {
+        await holding.release();
+      }
+
+      // Told to wait, with a holder that lets go within the wait: decided as
+      // the holder left the alert.
+      for (const [change, outcome] of [
+        ['unchanged', 'escalated'],
+        ['acknowledge', 'skipped'],
+        ['resolve', 'skipped'],
+      ] as const) {
+        const journey = await alerted(subject, { responders: 2 });
+        const holder = await subject.holdUntilEscalationWaits(journey.journeyId, change);
+        const result = await (async () => {
+          try {
+            return await subject.store.escalateAlert({
+              alertId: journey.alertId,
+              afterMs: ESCALATE_AFTER_MS,
+              lockWaitMs: subject.lockWaitMs,
+            });
+          } finally {
+            await holder.release();
+          }
+        })();
+
+        expect(result.outcome, change).toBe(outcome);
+        const sms = ofKind(await subject.messagesOf(journey.journeyId), journey.alertId, SMS);
+        const states = (await subject.alertsOf(journey.journeyId)).map(({ state }) => state);
+        if (change === 'unchanged') {
+          expect(states, change).toEqual(['ESCALATED']);
+          expect(recipientsOf(sms), change).toEqual([...journey.responderIds].sort());
+        } else {
+          expect(states, change).toEqual([change === 'acknowledge' ? 'ACKNOWLEDGED' : 'RESOLVED']);
+          expect(sms, change).toEqual([]);
+          expect(
+            await smsRaisedAtOf(subject, journey.journeyId, journey.alertId),
+            change,
+          ).toBeNull();
+        }
+      }
+
+      // A lock wait PostgreSQL would read as no limit at all is refused,
+      // naming lockWaitMs, before anything is taken or written.
+      const refused = await alerted(subject, { responders: 1 });
+      const before = await escalationRecordOf(subject, refused.journeyId);
+      for (const lockWaitMs of [0, -1, 0.5, 1.5, Number.NaN, 2_147_483_648]) {
+        await expect(
+          subject.store.escalateAlert({
+            alertId: refused.alertId,
+            afterMs: ESCALATE_AFTER_MS,
+            lockWaitMs,
+          }),
+          String(lockWaitMs),
+        ).rejects.toThrow(/lockWaitMs/);
+      }
+      expect(await escalationRecordOf(subject, refused.journeyId)).toEqual(before);
+    },
+  },
+  {
+    name: 'LOST-07-AC15: escalateAlert refuses an alert whose journey has no responder row, writing nothing',
+    async run(subject) {
+      const journey = await alerted(subject, { responders: 2 });
+      await subject.removeResponders(journey.journeyId);
+      const before = await escalationRecordOf(subject, journey.journeyId);
+
+      // In the store's own words, as the open's refusal is (LOST-02-AC12).
+      await expect(
+        subject.store.escalateAlert({ alertId: journey.alertId, afterMs: ESCALATE_AFTER_MS }),
+      ).rejects.toThrow(REFUSED_FOR_NO_RESPONDER);
+
+      expect(await escalationRecordOf(subject, journey.journeyId)).toEqual(before);
+      expect(await smsRaisedAtOf(subject, journey.journeyId, journey.alertId)).toBeNull();
+      expect(ofKind(await subject.messagesOf(journey.journeyId), journey.alertId, SMS)).toEqual([]);
+      expect((await subject.alertsOf(journey.journeyId)).map(({ state }) => state)).toEqual([
+        'OPEN',
+      ]);
+    },
+  },
+  {
+    name: `LOST-07-AC4: ${String(RACERS)} escalations of one alert at once, ${String(RACE_ROUNDS)} times over: exactly one escalates, every other skips, none an error, with one set of SMS`,
+    async run(subject) {
+      for (let round = 0; round < RACE_ROUNDS; round += 1) {
+        const at = `round ${String(round)}`;
+        const journey = await alerted(subject, { responders: 3 });
+
+        // Promise.all rejects if any escalation fails outright: none may.
+        const results = await Promise.all(
+          Array.from({ length: RACERS }, () =>
+            subject.store.escalateAlert({ alertId: journey.alertId, afterMs: ESCALATE_AFTER_MS }),
+          ),
+        );
+
+        expect(
+          results.filter(({ outcome }) => outcome === 'escalated'),
+          at,
+        ).toHaveLength(1);
+        expect(
+          results.filter(({ outcome }) => outcome !== 'escalated'),
+          at,
+        ).toEqual(Array.from({ length: RACERS - 1 }, () => NOT_ESCALATED));
+        expect(
+          recipientsOf(ofKind(await subject.messagesOf(journey.journeyId), journey.alertId, SMS)),
+          at,
+        ).toEqual([...journey.responderIds].sort());
+        expect(
+          (await subject.escalationsOf(journey.journeyId)).filter(
+            ({ smsRaisedAt }) => smsRaisedAt !== null,
+          ),
+          at,
+        ).toHaveLength(1);
+      }
+    },
+  },
+  {
+    name: 'LOST-07-AC6: recordAcknowledgement of an escalated alert withdraws its SMS not yet sent at the store’s now, keeping attempts and last failure, and leaves sent SMS and every push message alone; of an alert never escalated it withdraws nothing',
+    async run(subject) {
+      for (const theirs of [
+        'never claimed',
+        'in the port’s hands, then accepted',
+        'in the port’s hands, then refused',
+      ] as const) {
+        const at = `R3’s SMS ${theirs}`;
+        const journey = await alerted(subject, {
+          state: 'ESCALATED',
+          smsRaisedAgoMs: MINUTE,
+          responders: 3,
+        });
+        const { journeyId, alertId } = journey;
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        const now = await subject.now();
+        // Its lost-contact pushes: R1's accepted, R2's refused and due again
+        // later, R3's never claimed.
+        for (const [recipientId, given] of [
+          [r1, { attempts: 1, sentAt: journey.openedAt }],
+          [r2, { attempts: 2, lastFailure: 'NO_TARGET', nextAttemptAt: ago(now, -20 * SECOND) }],
+          [r3, {}],
+        ] as const) {
+          await subject.seedMessage({
+            alertId,
+            recipientId,
+            kind: 'LOST_CONTACT',
+            createdAt: journey.openedAt,
+            nextAttemptAt: journey.openedAt,
+            ...given,
+          });
+        }
+        // Its SMS: R1's accepted; R2's refused NO_TARGET and due again in a
+        // second; R3's as `theirs` says (in the port's hands: leased 30 s).
+        const seedSms = (
+          recipientId: string,
+          given: {
+            attempts?: number;
+            sentAt?: Date;
+            lastFailure?: 'NO_TARGET';
+            nextAttemptAt?: Date;
+          },
+        ) =>
+          subject.seedMessage({
+            alertId,
+            recipientId,
+            kind: SMS,
+            createdAt: ago(now, MINUTE),
+            nextAttemptAt: ago(now, MINUTE),
+            ...given,
+          });
+        const smsOf = new Map([
+          [r1, await seedSms(r1, { attempts: 1, sentAt: ago(now, MINUTE - SECOND) })],
+          [
+            r2,
+            await seedSms(r2, {
+              attempts: 1,
+              lastFailure: 'NO_TARGET',
+              nextAttemptAt: ago(now, -SECOND),
+            }),
+          ],
+          [
+            r3,
+            await seedSms(
+              r3,
+              theirs === 'never claimed' ? {} : { attempts: 1, nextAttemptAt: ago(now, -LEASE_MS) },
+            ),
+          ],
+        ]);
+        const sms = (recipientId: string) => smsOf.get(recipientId) ?? '';
+        const before = new Map(
+          (await subject.messagesOf(journeyId)).map((message) => [message.messageId, message]),
+        );
+        const escalatedBefore = await smsRaisedAtOf(subject, journeyId, alertId);
+
+        const recorded = acknowledged(
+          await subject.store.recordAcknowledgement({ alertId, responderId: r2 }),
+          at,
+        );
+
+        const acknowledgement = await acknowledgementOf(subject, journeyId, alertId);
+        expect(acknowledgement?.acknowledgedBy, at).toBe(r2);
+        const acknowledgedAt = acknowledgement?.acknowledgedAt ?? new Date(Number.NaN);
+        expect(
+          (await subject.alertsOf(journeyId)).map(({ state }) => state),
+          at,
+        ).toEqual(['ACKNOWLEDGED']);
+        // It keeps its escalation time.
+        expect(escalatedBefore, at).toBeInstanceOf(Date);
+        expect(await smsRaisedAtOf(subject, journeyId, alertId), at).toEqual(escalatedBefore);
+
+        const withdrawnAt = await withdrawnAtOf(subject, journeyId);
+        const stored = new Map(
+          (await subject.messagesOf(journeyId)).map((message) => [message.messageId, message]),
+        );
+        // R2's and R3's SMS: withdrawn at the store's now, attempts and last failure kept.
+        for (const recipientId of [r2, r3]) {
+          expect(withdrawnAt.get(sms(recipientId)), `${at}: withdrawn`).toEqual(acknowledgedAt);
+          expect(stored.get(sms(recipientId)), `${at}: as it was`).toEqual(
+            before.get(sms(recipientId)),
+          );
+        }
+        // R1's, sent, as it was.
+        expect(withdrawnAt.get(sms(r1)), at).toBeNull();
+        expect(stored.get(sms(r1)), at).toEqual(before.get(sms(r1)));
+        // Every push message as it was, sent or not; the notices as LOST-06 built them.
+        for (const [messageId, message] of before) {
+          if (message.kind !== SMS) {
+            expect(withdrawnAt.get(messageId), `${at}: ${message.kind}`).toBeNull();
+            expect(stored.get(messageId), `${at}: ${message.kind}`).toEqual(message);
+          }
+        }
+        const notices = ofKind([...stored.values()], alertId, NOTICE);
+        expect(recipientsOf(notices), at).toEqual([r1, r3].sort());
+        expect(byRecipient(recorded.messages), at).toEqual(notices.map(asAnswered));
+        for (const notice of notices) {
+          expect(withdrawnAt.get(notice.messageId), at).toBeNull();
+        }
+
+        // One in the port's hands finishes as the port answers.
+        if (theirs === 'in the port’s hands, then accepted') {
+          await subject.store.markSent(sms(r3));
+          expect(
+            (await subject.messagesOf(journeyId)).find(({ messageId }) => messageId === sms(r3))
+              ?.sentAt,
+            at,
+          ).toBeInstanceOf(Date);
+        } else if (theirs === 'in the port’s hands, then refused') {
+          await subject.store.markFailed({
+            messageId: sms(r3),
+            reason: 'UNAVAILABLE',
+            retryAfterMs: SECOND,
+          });
+          expect(
+            (await subject.messagesOf(journeyId)).find(({ messageId }) => messageId === sms(r3))
+              ?.lastFailure,
+            at,
+          ).toBe('UNAVAILABLE');
+        }
+        expect((await withdrawnAtOf(subject, journeyId)).get(sms(r3)), at).toEqual(acknowledgedAt);
+
+        // Never handed to the SMS port again, whatever its due time.
+        await subject.letTimePass(1_500);
+        const handedOut = await smsClaimed(subject, 0);
+        expect(handedOut, at).not.toContain(sms(r2));
+        expect(handedOut, at).not.toContain(sms(r3));
+        await allSent(subject, handedOut);
+        await allSent(
+          subject,
+          (await subject.store.claimDue({ limit: BATCH, leaseMs: 0 })).messages.map(
+            ({ messageId }) => messageId,
+          ),
+        );
+      }
+
+      // An alert never escalated: the acknowledgement withdraws nothing.
+      const lost = await lostWith(subject, 2);
+      const [r1 = ''] = lost.responderIds;
+      const before = await subject.withdrawalsOf(lost.journeyId);
+      acknowledged(
+        await subject.store.recordAcknowledgement({ alertId: lost.alertId, responderId: r1 }),
+        'never escalated',
+      );
+      const after = await subject.withdrawalsOf(lost.journeyId);
+      expect(after.filter(({ withdrawnAt }) => withdrawnAt !== null)).toEqual([]);
+      expect(
+        byMessage(
+          after.filter(({ messageId }) => before.some((each) => each.messageId === messageId)),
+        ),
+      ).toEqual(byMessage(before));
+      expect(ofKind(await subject.messagesOf(lost.journeyId), lost.alertId, SMS)).toEqual([]);
+    },
+  },
+  {
+    name: 'LOST-07-AC7: when contact comes back, or "I’m home" ends the journey, an escalated alert is resolved keeping its escalation time; its SMS not yet sent are withdrawn with its lost-contact pushes; every responder gets one stand-down, held behind an SMS handed over and due later',
+    async run(subject) {
+      for (const how of ['heartbeat', 'home'] as const) {
+        const journey = await alerted(subject, { responders: 3 });
+        const { journeyId, alertId } = journey;
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        // Its lost-contact pushes: R1's and R3's accepted, R2's never handed over.
+        for (const [recipientId, given] of [
+          [r1, { attempts: 1, sentAt: journey.openedAt }],
+          [r2, {}],
+          [r3, { attempts: 1, sentAt: journey.openedAt }],
+        ] as const) {
+          await subject.seedMessage({
+            alertId,
+            recipientId,
+            kind: 'LOST_CONTACT',
+            createdAt: journey.openedAt,
+            nextAttemptAt: journey.openedAt,
+            ...given,
+          });
+        }
+        // Escalated by the store's own escalation.
+        const written = escalated(
+          await subject.store.escalateAlert({ alertId, afterMs: ESCALATE_AFTER_MS }),
+          how,
+        );
+        const sms = (recipientId: string) =>
+          written.messages.find((message) => message.recipientId === recipientId)?.messageId ?? '';
+        const smsRaisedAt = await smsRaisedAtOf(subject, journeyId, alertId);
+        // One SMS claim takes all three, leased 3 s: R1's accepted; R2's
+        // refused NO_TARGET and due again in 2 s; R3's left in the port's hands.
+        const claimed = await smsClaimed(subject, 3 * SECOND);
+        const mine = [r1, r2, r3].map(sms);
+        expect(claimed, how).toEqual(expect.arrayContaining(mine));
+        await subject.store.markSent(sms(r1));
+        await subject.store.markFailed({
+          messageId: sms(r2),
+          reason: 'NO_TARGET',
+          retryAfterMs: 2 * SECOND,
+        });
+        await allSent(
+          subject,
+          claimed.filter((messageId) => !mine.includes(messageId)),
+        );
+        const before = new Map(
+          (await subject.messagesOf(journeyId)).map((message) => [message.messageId, message]),
+        );
+
+        const result =
+          how === 'heartbeat'
+            ? backInContact(
+                await subject.store.recordHeartbeat(await freshHeartbeat(subject, journeyId)),
+              )
+            : endedHome(await subject.store.recordHome(homeOf(journey)));
+
+        const kind = how === 'heartbeat' ? 'BACK_IN_CONTACT' : 'HOME';
+        expect(result.alertId, how).toBe(alertId);
+        const resolution = await resolutionOf(subject, journeyId, alertId);
+        expect(resolution?.resolution, how).toBe(kind);
+        const resolvedAt = resolution?.resolvedAt ?? new Date(Number.NaN);
+        expect(
+          (await subject.alertsOf(journeyId)).map(({ state }) => state),
+          how,
+        ).toEqual(['RESOLVED']);
+        // It keeps its escalation time.
+        expect(smsRaisedAt, how).toBeInstanceOf(Date);
+        expect(await smsRaisedAtOf(subject, journeyId, alertId), how).toEqual(smsRaisedAt);
+
+        const messages = await subject.messagesOf(journeyId);
+        const withdrawnAt = await withdrawnAtOf(subject, journeyId);
+        const stored = new Map(messages.map((message) => [message.messageId, message]));
+        const pushOf = (recipientId: string) =>
+          ofKind(messages, alertId, 'LOST_CONTACT').find(
+            (message) => message.recipientId === recipientId,
+          )?.messageId ?? '';
+        // R2's and R3's SMS, with R2's lost-contact push: withdrawn at the
+        // resolution's now, attempts and last failure kept.
+        for (const messageId of [sms(r2), sms(r3), pushOf(r2)]) {
+          expect(withdrawnAt.get(messageId), how).toEqual(resolvedAt);
+          expect(stored.get(messageId), how).toEqual(before.get(messageId));
+        }
+        // The sent ones as they were.
+        for (const messageId of [sms(r1), pushOf(r1), pushOf(r3)]) {
+          expect(withdrawnAt.get(messageId), how).toBeNull();
+          expect(stored.get(messageId), how).toEqual(before.get(messageId));
+        }
+        // One stand-down each, by push, and no SMS more (D-115 item 5).
+        expect(recipientsOf(ofKind(messages, alertId, SMS)), how).toEqual([r1, r2, r3].sort());
+        const standDowns = ofKind(messages, alertId, kind);
+        expect(recipientsOf(standDowns), how).toEqual([r1, r2, r3].sort());
+        expect(byRecipient(result.messages), how).toEqual(standDowns.map(asAnswered));
+        const standDownOf = (recipientId: string) =>
+          standDowns.find((message) => message.recipientId === recipientId);
+        // Held behind the SMS handed over and due later: R2's until its retry,
+        // R3's until its lease ends; R1's due at once. None longer than 60 s.
+        expect(standDownOf(r2)?.nextAttemptAt, how).toEqual(before.get(sms(r2))?.nextAttemptAt);
+        expect(standDownOf(r3)?.nextAttemptAt, how).toEqual(before.get(sms(r3))?.nextAttemptAt);
+        expect(standDownOf(r1)?.nextAttemptAt, how).toEqual(resolvedAt);
+        for (const standDown of standDowns) {
+          expect(
+            standDown.nextAttemptAt.getTime() - resolvedAt.getTime(),
+            `${how}: no hold longer than 60 s`,
+          ).toBeLessThanOrEqual(60 * SECOND);
+        }
+
+        // R1's stand-down is handed out now; R2's and R3's not before their SMS's due time.
+        const pushed = (
+          await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS })
+        ).messages.map(({ messageId }) => messageId);
+        expect(pushed, how).toContain(standDownOf(r1)?.messageId);
+        expect(pushed, how).not.toContain(standDownOf(r2)?.messageId);
+        expect(pushed, how).not.toContain(standDownOf(r3)?.messageId);
+        await allSent(subject, pushed);
+
+        // Once those times have passed, the two stand-downs go, and the SMS never do.
+        await subject.letTimePass(3_500);
+        const smsLater = await smsClaimed(subject, 0);
+        expect(smsLater, how).not.toContain(sms(r2));
+        expect(smsLater, how).not.toContain(sms(r3));
+        await allSent(subject, smsLater);
+        const pushedLater = (
+          await subject.store.claimDue({ limit: BATCH, leaseMs: 0 })
+        ).messages.map(({ messageId }) => messageId);
+        expect(pushedLater, how).toEqual(
+          expect.arrayContaining([standDownOf(r2)?.messageId, standDownOf(r3)?.messageId]),
+        );
+        await allSent(subject, pushedLater);
+      }
+    },
+  },
+  {
+    name: 'LOST-07-AC8: the push claim hands out push kinds only and the SMS claim SMS kinds only, each one claimer per message, leased, with its attempts counted',
+    async run(subject) {
+      const isPush = (kind: string) => (PUSH_KINDS as readonly string[]).includes(kind);
+      const isSms = (kind: string) => (SMS_KINDS as readonly string[]).includes(kind);
+      const now = await subject.now();
+      const journey = await alerted(subject, {
+        state: 'ESCALATED',
+        smsRaisedAgoMs: 5 * MINUTE,
+        openedAgoMs: 9 * MINUTE,
+        responders: 2,
+      });
+      const { journeyId, alertId } = journey;
+      // One message of every kind for each responder, all due, a second apart.
+      const seeded: { messageId: string; kind: string }[] = [];
+      let order = 0;
+      for (const recipientId of journey.responderIds) {
+        for (const kind of MESSAGE_KINDS) {
+          order += 1;
+          seeded.push({
+            kind,
+            messageId: await subject.seedMessage({
+              alertId,
+              recipientId,
+              kind,
+              createdAt: ago(now, 8 * MINUTE),
+              nextAttemptAt: ago(now, 8 * MINUTE - order * SECOND),
+            }),
+          });
+        }
+      }
+      const pushes = seeded.filter(({ kind }) => isPush(kind)).map(({ messageId }) => messageId);
+      const sms = seeded.filter(({ kind }) => isSms(kind)).map(({ messageId }) => messageId);
+      expect(sms, 'one SMS for each responder').toHaveLength(2);
+      expect(pushes.length + sms.length, 'every kind is push or SMS').toBe(seeded.length);
+      const ours = (claim: ClaimedMessages, ids: readonly string[]) =>
+        claim.messages.filter(({ messageId }) => ids.includes(messageId));
+
+      const pushClaim = await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS });
+      expect(
+        pushClaim.messages.filter(({ kind }) => !isPush(kind)),
+        'the push claim hands out no SMS',
+      ).toEqual([]);
+      expect(
+        ours(pushClaim, pushes)
+          .map(({ messageId }) => messageId)
+          .sort(),
+      ).toEqual([...pushes].sort());
+      expect(ours(pushClaim, sms)).toEqual([]);
+
+      const smsClaim = await subject.store.claimDueSms({ limit: BATCH, leaseMs: LEASE_MS });
+      expect(
+        smsClaim.messages.filter(({ kind }) => !isSms(kind)),
+        'the SMS claim hands out no push',
+      ).toEqual([]);
+      expect(
+        ours(smsClaim, sms)
+          .map(({ messageId }) => messageId)
+          .sort(),
+      ).toEqual([...sms].sort());
+      expect(ours(smsClaim, pushes)).toEqual([]);
+
+      // Each with one attempt counted, leased until its own claim's now plus the lease.
+      for (const claimed of [...ours(pushClaim, pushes), ...ours(smsClaim, sms)]) {
+        expect(claimed.attempts, claimed.kind).toBe(1);
+      }
+      const stored = new Map(
+        (await subject.messagesOf(journeyId)).map((message) => [message.messageId, message]),
+      );
+      for (const [ids, claim] of [
+        [pushes, pushClaim],
+        [sms, smsClaim],
+      ] as const) {
+        for (const messageId of ids) {
+          expect(stored.get(messageId)).toMatchObject({
+            attempts: 1,
+            nextAttemptAt: new Date(claim.now.getTime() + LEASE_MS),
+          });
+        }
+      }
+      // Leased: neither claim hands any of them out again while the lease runs.
+      const seededIds = seeded.map(({ messageId }) => messageId);
+      expect(
+        ours(await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS }), seededIds),
+      ).toEqual([]);
+      expect(
+        ours(await subject.store.claimDueSms({ limit: BATCH, leaseMs: LEASE_MS }), seededIds),
+      ).toEqual([]);
+
+      // In due order: told to take one, the SMS claim takes the earliest due.
+      const ordered = await alerted(subject, {
+        state: 'ESCALATED',
+        smsRaisedAgoMs: MINUTE,
+        responders: 2,
+      });
+      const [first = '', second = ''] = ordered.responderIds;
+      const at = await subject.now();
+      const later = await subject.seedMessage({
+        alertId: ordered.alertId,
+        recipientId: first,
+        kind: SMS,
+        createdAt: ago(at, MINUTE),
+        nextAttemptAt: ago(at, 30 * SECOND),
+      });
+      const earlier = await subject.seedMessage({
+        alertId: ordered.alertId,
+        recipientId: second,
+        kind: SMS,
+        createdAt: ago(at, MINUTE),
+        nextAttemptAt: ago(at, 50 * SECOND),
+      });
+      const one = await subject.store.claimDueSms({ limit: 1, leaseMs: LEASE_MS });
+      expect(one.messages.map(({ messageId }) => messageId)).toEqual([earlier]);
+      const next = await subject.store.claimDueSms({ limit: 1, leaseMs: LEASE_MS });
+      expect(next.messages.map(({ messageId }) => messageId)).toEqual([later]);
+
+      // One claimer per SMS: RACERS claims at once each take their own.
+      const raced = await alerted(subject, {
+        state: 'ESCALATED',
+        smsRaisedAgoMs: MINUTE,
+        responders: RACERS,
+      });
+      const racedAt = await subject.now();
+      const racedIds: string[] = [];
+      for (const recipientId of raced.responderIds) {
+        racedIds.push(
+          await subject.seedMessage({
+            alertId: raced.alertId,
+            recipientId,
+            kind: SMS,
+            createdAt: ago(racedAt, MINUTE),
+            nextAttemptAt: ago(racedAt, MINUTE),
+          }),
+        );
+      }
+      const claims = await Promise.all(
+        Array.from({ length: RACERS }, () =>
+          subject.store.claimDueSms({ limit: BATCH, leaseMs: LEASE_MS }),
+        ),
+      );
+      const handed = claims.flatMap((claim) =>
+        ours(claim, racedIds).map(({ messageId }) => messageId),
+      );
+      expect(handed.sort(), 'each SMS handed to exactly one claimer').toEqual([...racedIds].sort());
+
+      await allSent(subject, [...seededIds, later, earlier, ...racedIds]);
+    },
+  },
+  {
+    name: 'LOST-07-AC10: unsentSmsCount counts exactly the SMS messages unsent, not withdrawn and written 60 s or more before the store’s now, with that now',
+    async run(subject) {
+      const margin = Math.max(1, subject.timeMarginMs);
+      const journey = await alerted(subject, {
+        state: 'ESCALATED',
+        smsRaisedAgoMs: 10 * MINUTE + SECOND,
+        openedAgoMs: 15 * MINUTE,
+        responders: 6,
+      });
+      const { alertId } = journey;
+      const [r1 = '', r2 = '', r3 = '', r4 = '', r5 = '', r6 = ''] = journey.responderIds;
+      const now = await subject.now();
+      const seedSms = (
+        recipientId: string,
+        writtenAgoMs: number,
+        given: {
+          attempts?: number;
+          sentAt?: Date;
+          lastFailure?: 'NOT_CONFIGURED';
+          withdrawnAt?: Date;
+        } = {},
+      ) =>
+        subject.seedMessage({
+          alertId,
+          recipientId,
+          kind: SMS,
+          createdAt: ago(now, writtenAgoMs),
+          nextAttemptAt: ago(now, writtenAgoMs),
+          ...given,
+        });
+      // Counted: written 60 s before the store's now (to the millisecond
+      // against the fake), and ten minutes before, failing NOT_CONFIGURED.
+      await seedSms(r1, SMS_UNSENT_LIMIT_MS + (margin === 1 ? 0 : margin));
+      await seedSms(r5, 10 * MINUTE, { attempts: 4, lastFailure: 'NOT_CONFIGURED' });
+      await seedSms(r6, 10 * MINUTE);
+      // Not counted: written just under 60 s before; sent; withdrawn.
+      await seedSms(r2, SMS_UNSENT_LIMIT_MS - margin);
+      await seedSms(r3, 10 * MINUTE, { attempts: 1, sentAt: ago(now, 10 * MINUTE - SECOND) });
+      await seedSms(r4, 10 * MINUTE, { withdrawnAt: ago(now, 9 * MINUTE) });
+      // Nor a push of any kind, however long unsent.
+      for (const kind of PUSH_KINDS) {
+        await subject.seedMessage({
+          alertId,
+          recipientId: r1,
+          kind,
+          createdAt: ago(now, 10 * MINUTE),
+          nextAttemptAt: ago(now, 10 * MINUTE),
+        });
+      }
+
+      const from = await subject.now();
+      const counted = await subject.store.unsentSmsCount(SMS_UNSENT_LIMIT_MS);
+      const to = await subject.now();
+
+      expect(counted.count).toBe(3);
+      expect(counted.now.getTime(), 'the count’s now is the store’s').toBeGreaterThanOrEqual(
+        from.getTime(),
+      );
+      expect(counted.now.getTime(), 'the count’s now is the store’s').toBeLessThanOrEqual(
+        to.getTime(),
+      );
+
+      // Each that counts stops counting once it is sent or withdrawn.
+      const unsent = ofKind(await subject.messagesOf(journey.journeyId), alertId, SMS).filter(
+        ({ recipientId }) => [r1, r5, r6].includes(recipientId),
+      );
+      expect(unsent).toHaveLength(3);
+      await allSent(
+        subject,
+        unsent.map(({ messageId }) => messageId),
+      );
+      expect((await subject.store.unsentSmsCount(SMS_UNSENT_LIMIT_MS)).count).toBe(0);
+      await allSent(
+        subject,
+        (await subject.messagesOf(journey.journeyId)).map(({ messageId }) => messageId),
+      );
+    },
+  },
+  {
+    name: 'LOST-07-AC7: for any sequence of acknowledgements, heartbeats fresh or stale, sweeps, time passing and "I’m home", after every step an alert is escalated exactly when a sweep found it due, holds one SMS per responder exactly when escalated, never has one when acknowledged before its two minutes, and no resolved or acknowledged alert has an SMS neither sent nor withdrawn',
+    async run(subject) {
+      const margin = subject.timeMarginMs;
+      // The fake's clock is moved by hand. The database's moves on by
+      // itself, and a behaviour cannot wait minutes for it, so against the
+      // database a time step passes none: its runs reach two minutes through
+      // alerts opened in the past instead (the spec's test plan).
+      const passed = (ms: number) => (margin === 0 ? ms : 0);
+      const step = fc.oneof(
+        fc.record({ kind: fc.constant('heartbeat' as const), agoMs: silences(margin) }),
+        fc.record({ kind: fc.constant('sweep' as const) }),
+        // Who: the first responder, the second, the walker, or a stranger.
+        fc.record({
+          kind: fc.constant('acknowledge' as const),
+          who: fc.integer({ min: 0, max: 3 }),
+        }),
+        fc.record({
+          kind: fc.constant('time' as const),
+          ms: fc.integer({ min: 1, max: 4 * MINUTE }),
+        }),
+        fc.record({ kind: fc.constant('home' as const) }),
+      );
+      const start = fc.oneof(
+        // An ACTIVE journey silent this long, never heard from.
+        fc.record({ kind: fc.constant('active' as const), silentForMs: silences(margin) }),
+        // A LOST_CONTACT journey whose alert opened this long ago.
+        fc.record({
+          kind: fc.constant('lost' as const),
+          openedAgoMs: fc.integer({ min: 15 * SECOND, max: 6 * MINUTE }),
+        }),
+      );
+
+      await fc.assert(
+        fc.asyncProperty(start, fc.array(step, { maxLength: 8 }), async (begin, steps) => {
+          // The rules, applied step by step: the journey's state and last
+          // contact, and each alert opened so far, with whether it resolved,
+          // who is on it, whether a sweep escalated it, and whether someone
+          // took it on before it was escalated.
+          const model: {
+            id: string;
+            openedAt: Date;
+            resolved: boolean;
+            acknowledgedBy: string | null;
+            escalated: boolean;
+            acknowledgedBeforeEscalation: boolean;
+          }[] = [];
+          let state: 'ACTIVE' | 'LOST_CONTACT' | 'ENDED';
+          let lastContact: Date;
+          let journey: {
+            walkerId: string;
+            deviceId: string;
+            journeyId: string;
+            responderIds: string[];
+          };
+          if (begin.kind === 'active') {
+            const now = await subject.now();
+            journey = await watched(subject, {
+              startedAt: ago(now, begin.silentForMs),
+              responders: 2,
+            });
+            state = 'ACTIVE';
+            lastContact = ago(now, begin.silentForMs);
+          } else {
+            const made = await alerted(subject, { openedAgoMs: begin.openedAgoMs, responders: 2 });
+            journey = made;
+            state = 'LOST_CONTACT';
+            lastContact = new Date(made.openedAt.getTime() - LOST_CONTACT_AFTER_MS);
+            model.push({
+              id: made.alertId,
+              openedAt: made.openedAt,
+              resolved: false,
+              acknowledgedBy: null,
+              escalated: false,
+              acknowledgedBeforeEscalation: false,
+            });
+          }
+          const { journeyId, responderIds } = journey;
+          const [started] = await subject.journeysOf(journey.walkerId);
+          const startedAt = started?.startedAt ?? new Date(Number.NaN);
+          const [stranger = ''] = await users(subject, 1);
+          const senders = [...responderIds, journey.walkerId, stranger];
+
+          for (const next of steps) {
+            const current = model.at(-1);
+            if (next.kind === 'heartbeat') {
+              const at = await subject.now();
+              // Never before the start: contact comes after a journey began.
+              const receivedAt = ago(at, Math.min(next.agoMs, at.getTime() - startedAt.getTime()));
+              const result = await subject.store.recordHeartbeat(
+                heartbeatFor(journeyId, { receivedAt, position: null }),
+              );
+              if (state === 'ENDED') {
+                expect(result.outcome, 'a heartbeat after the end').toBe('ended');
+              } else {
+                lastContact = new Date(Math.max(lastContact.getTime(), receivedAt.getTime()));
+                const silenceMs = at.getTime() - lastContact.getTime();
+                // Against the database, a silence within the margin of five
+                // minutes could fall either side by the time the store
+                // decides: then the store's answer is taken as the rule's.
+                const sure = margin === 0 || Math.abs(silenceMs - LOST_CONTACT_AFTER_MS) > margin;
+                const back = sure
+                  ? state === 'LOST_CONTACT' && silenceMs < LOST_CONTACT_AFTER_MS
+                  : result.outcome === 'back_in_contact';
+                expect(result.outcome, 'the heartbeat’s answer').toBe(
+                  back ? 'back_in_contact' : 'recorded',
+                );
+                if (back) {
+                  state = 'ACTIVE';
+                  if (current !== undefined) {
+                    current.resolved = true;
+                  }
+                }
+              }
+            } else if (next.kind === 'sweep') {
+              // The watchdog's two jobs at the store's level, in its order:
+              // the open, then the escalation (approach item 3). Each is
+              // decided by its read's own now, as the sweep decides.
+              const overdue = await subject.store.overdueJourneys(LOST_CONTACT_AFTER_MS);
+              const isOverdue = overdue.journeys.some(({ id }) => id === journeyId);
+              expect(isOverdue, 'the overdue read').toBe(
+                state === 'ACTIVE' &&
+                  overdue.now.getTime() - lastContact.getTime() >= LOST_CONTACT_AFTER_MS,
+              );
+              if (isOverdue) {
+                const opened = await subject.store.openLostContactAlert({
+                  journeyId,
+                  afterMs: LOST_CONTACT_AFTER_MS,
+                });
+                if (opened.outcome !== 'opened') {
+                  throw new Error(
+                    `expected the sweep to open the alert: ${JSON.stringify(opened)}`,
+                  );
+                }
+                state = 'LOST_CONTACT';
+                const openedAt =
+                  (await subject.alertsOf(journeyId)).find(({ id }) => id === opened.alertId)
+                    ?.openedAt ?? new Date(Number.NaN);
+                model.push({
+                  id: opened.alertId,
+                  openedAt,
+                  resolved: false,
+                  acknowledgedBy: null,
+                  escalated: false,
+                  acknowledgedBeforeEscalation: false,
+                });
+              }
+              const read = await subject.store.alertsDueForEscalation(ESCALATE_AFTER_MS);
+              const due = read.alerts
+                .filter(({ id }) => model.some((alert) => alert.id === id))
+                .map(({ id }) => id)
+                .sort();
+              expect(due, 'the alerts read as due').toEqual(
+                model
+                  .filter(
+                    (alert) =>
+                      !alert.resolved &&
+                      alert.acknowledgedBy === null &&
+                      !alert.escalated &&
+                      read.now.getTime() - alert.openedAt.getTime() >= ESCALATE_AFTER_MS,
+                  )
+                  .map(({ id }) => id)
+                  .sort(),
+              );
+              for (const alertId of due) {
+                escalated(
+                  await subject.store.escalateAlert({ alertId, afterMs: ESCALATE_AFTER_MS }),
+                );
+                const alert = model.find(({ id }) => id === alertId);
+                if (alert !== undefined) {
+                  alert.escalated = true;
+                }
+              }
+            } else if (next.kind === 'time') {
+              const ms = passed(next.ms);
+              if (ms > 0) {
+                await subject.letTimePass(ms);
+              }
+            } else if (next.kind === 'home') {
+              const result = await subject.store.recordHome(homeOf(journey));
+              if (state === 'ENDED') {
+                expect(result).toEqual({ outcome: 'already_ended' });
+              } else {
+                expect(result.outcome, '"I’m home"').toBe('home');
+                if (state === 'LOST_CONTACT' && current !== undefined) {
+                  current.resolved = true;
+                }
+                state = 'ENDED';
+              }
+            } else {
+              const sender = senders[next.who] ?? stranger;
+              const result = await subject.store.recordAcknowledgement({
+                alertId: current?.id ?? syntheticUuid(),
+                responderId: sender,
+              });
+              if (current === undefined || !responderIds.includes(sender)) {
+                expect(result, 'not a responder, or no alert').toEqual(NOT_FOUND);
+              } else if (current.resolved) {
+                expect(result, 'a resolved alert').toEqual(OVER);
+              } else if (current.acknowledgedBy === sender) {
+                expect(result, 'the sender’s own').toEqual(YOURS);
+              } else if (current.acknowledgedBy !== null) {
+                expect(result, 'someone else’s').toEqual(TAKEN);
+              } else {
+                acknowledged(result);
+                current.acknowledgedBy = sender;
+                current.acknowledgedBeforeEscalation = !current.escalated;
+              }
+            }
+
+            // After every step.
+            expect(await subject.stateOf(journeyId)).toBe(state);
+            const alerts = await subject.alertsOf(journeyId);
+            const escalations = await subject.escalationsOf(journeyId);
+            const acknowledgements = await subject.acknowledgementsOf(journeyId);
+            const messages = await subject.messagesOf(journeyId);
+            const withdrawnAt = await withdrawnAtOf(subject, journeyId);
+            expect(alerts.map(({ id }) => id).sort()).toEqual(model.map(({ id }) => id).sort());
+            for (const alert of alerts) {
+              const expected = model.find(({ id }) => id === alert.id);
+              const by =
+                acknowledgements.find(({ alertId }) => alertId === alert.id)?.acknowledgedBy ??
+                null;
+              const smsRaisedAt =
+                escalations.find(({ alertId }) => alertId === alert.id)?.smsRaisedAt ?? null;
+              expect(alert.state === 'RESOLVED', 'resolved').toBe(expected?.resolved);
+              expect(by, 'who is on it').toBe(expected?.acknowledgedBy ?? null);
+              expect(
+                smsRaisedAt !== null,
+                'an escalation time exactly when a sweep found it due',
+              ).toBe(expected?.escalated);
+              const sms = ofKind(messages, alert.id, SMS);
+              expect(
+                recipientsOf(sms),
+                'one SMS per responder exactly when it has an escalation time',
+              ).toEqual(smsRaisedAt === null ? [] : [...responderIds].sort());
+              if (expected?.acknowledgedBeforeEscalation === true) {
+                expect(sms, 'taken on before it was due: never an SMS').toEqual([]);
+              }
+              if (alert.state === 'RESOLVED' || by !== null) {
+                expect(
+                  sms.filter(
+                    ({ messageId, sentAt }) =>
+                      sentAt === null && (withdrawnAt.get(messageId) ?? null) === null,
+                  ),
+                  'a resolved or acknowledged alert’s SMS still to send',
+                ).toEqual([]);
+              }
+            }
+          }
+        }),
+        {
+          numRuns: subject.propertyRuns,
+          // The spec's test plan, after LOST-03's review loop 1: fixed
+          // sequences run first, so even the database's few runs reach an
+          // escalation, then an acknowledgement, then a resolution.
+          examples: [
+            [
+              { kind: 'lost', openedAgoMs: 3 * MINUTE },
+              [
+                { kind: 'sweep' },
+                { kind: 'acknowledge', who: 0 },
+                { kind: 'heartbeat', agoMs: 0 },
+                { kind: 'sweep' },
+              ],
+            ],
+            [
+              { kind: 'lost', openedAgoMs: MINUTE },
+              [
+                { kind: 'acknowledge', who: 1 },
+                { kind: 'time', ms: 2 * MINUTE },
+                { kind: 'sweep' },
+                { kind: 'home' },
+              ],
+            ],
+            [
+              { kind: 'active', silentForMs: 6 * MINUTE },
+              [
+                { kind: 'sweep' },
+                { kind: 'time', ms: 2 * MINUTE },
+                { kind: 'sweep' },
+                { kind: 'heartbeat', agoMs: 0 },
+                { kind: 'sweep' },
+              ],
+            ],
+          ],
+        },
+      );
+    },
+  },
+  {
+    name: 'LOST-07-AC14: each withdrawal — the resolution, the acknowledgement, the open — withdraws exactly its own kinds’ unsent messages of the alerts it names, and leaves every other message alone',
+    async run(subject) {
+      /**
+       * A message of every kind on each alert given, unsent for one recipient
+       * and sent for another, but for the kinds `skip` says, which the step
+       * under test writes itself and the unique (alert, recipient, kind)
+       * would refuse a second of.
+       */
+      const seedEvery = async (
+        alerts: readonly [alertId: string, unsentFor: string, sentFor: string][],
+        skip: (alertId: string, kind: MessageKind) => boolean,
+      ) => {
+        const now = await subject.now();
+        const seeded: { messageId: string; alertId: string; kind: MessageKind; unsent: boolean }[] =
+          [];
+        for (const [alertId, unsentFor, sentFor] of alerts) {
+          for (const kind of MESSAGE_KINDS) {
+            if (skip(alertId, kind)) {
+              continue;
+            }
+            for (const [recipientId, unsent] of [
+              [unsentFor, true],
+              [sentFor, false],
+            ] as const) {
+              const messageId = await subject.seedMessage({
+                alertId,
+                recipientId,
+                kind,
+                createdAt: ago(now, 50 * MINUTE),
+                nextAttemptAt: ago(now, 50 * MINUTE),
+                attempts: 1,
+                lastFailure: unsent ? 'UNAVAILABLE' : null,
+                sentAt: unsent ? null : ago(now, 49 * MINUTE),
+              });
+              seeded.push({ messageId, alertId, kind, unsent });
+            }
+          }
+        }
+        return seeded;
+      };
+      const withdrawnOf = async (journeyIds: readonly string[]) =>
+        (await Promise.all(journeyIds.map((journeyId) => subject.withdrawalsOf(journeyId))))
+          .flat()
+          .filter(({ withdrawnAt }) => withdrawnAt !== null);
+
+      // The acknowledgement: its own alert's unsent messages of the kinds
+      // withdrawn on acknowledgement, and nothing else. R3 acknowledges, and
+      // its notices go to R1 and R2, so the alert's own ACKNOWLEDGED is seeded
+      // for R3 alone, unsent, and must stay.
+      {
+        const now = await subject.now();
+        const journey = await alerted(subject, {
+          state: 'ESCALATED',
+          smsRaisedAgoMs: MINUTE,
+          responders: 3,
+        });
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        const earlier = await subject.seedAlert({
+          journeyId: journey.journeyId,
+          state: 'RESOLVED',
+          openedAt: ago(now, HOUR + 30 * MINUTE),
+          silentSince: ago(now, HOUR + 35 * MINUTE),
+          resolvedAt: ago(now, HOUR),
+          resolution: 'HOME',
+          smsRaisedAt: ago(now, HOUR + 28 * MINUTE),
+        });
+        const other = await alerted(subject, {
+          state: 'ESCALATED',
+          smsRaisedAgoMs: MINUTE,
+          responders: 2,
+        });
+        const [o1 = '', o2 = ''] = other.responderIds;
+        const seeded = await seedEvery(
+          [
+            [earlier, r1, r2],
+            [journey.alertId, r1, r2],
+            [other.alertId, o2, o1],
+          ],
+          (alertId, kind) => alertId === journey.alertId && kind === NOTICE,
+        );
+        await subject.seedMessage({
+          alertId: journey.alertId,
+          recipientId: r3,
+          kind: NOTICE,
+          createdAt: ago(now, 50 * MINUTE),
+          nextAttemptAt: ago(now, 50 * MINUTE),
+          attempts: 1,
+          lastFailure: 'UNAVAILABLE',
+        });
+        const expected = seeded
+          .filter(
+            ({ alertId, kind, unsent }) =>
+              alertId === journey.alertId && unsent && WITHDRAWN_WHEN_ACKNOWLEDGED.includes(kind),
+          )
+          .map(({ messageId }) => messageId);
+        expect(
+          expected,
+          'one unsent message of each kind withdrawn on acknowledgement',
+        ).toHaveLength(WITHDRAWN_WHEN_ACKNOWLEDGED.length);
+
+        acknowledged(
+          await subject.store.recordAcknowledgement({
+            alertId: journey.alertId,
+            responderId: r3,
+          }),
+          'the acknowledgement',
+        );
+
+        const acknowledgedAt = (
+          await acknowledgementOf(subject, journey.journeyId, journey.alertId)
+        )?.acknowledgedAt;
+        const withdrawn = await withdrawnOf([journey.journeyId, other.journeyId]);
+        expect(withdrawn.map(({ messageId }) => messageId).sort(), 'the acknowledgement').toEqual(
+          [...expected].sort(),
+        );
+        for (const { withdrawnAt } of withdrawn) {
+          expect(withdrawnAt, 'the acknowledgement').toEqual(acknowledgedAt);
+        }
+      }
+
+      // The resolution: its own alert's unsent messages of the kinds
+      // withdrawn on resolution, the escalation SMS among them.
+      {
+        const now = await subject.now();
+        const journey = await alerted(subject, {
+          state: 'ESCALATED',
+          smsRaisedAgoMs: MINUTE,
+          responders: 2,
+        });
+        const [r1 = '', r2 = ''] = journey.responderIds;
+        const earlier = await subject.seedAlert({
+          journeyId: journey.journeyId,
+          state: 'RESOLVED',
+          openedAt: ago(now, HOUR + 30 * MINUTE),
+          silentSince: ago(now, HOUR + 35 * MINUTE),
+          resolvedAt: ago(now, HOUR),
+          resolution: 'HOME',
+        });
+        const other = await alerted(subject, {
+          state: 'ESCALATED',
+          smsRaisedAgoMs: MINUTE,
+          responders: 2,
+        });
+        const [o1 = '', o2 = ''] = other.responderIds;
+        const seeded = await seedEvery(
+          [
+            [earlier, r1, r2],
+            [journey.alertId, r1, r2],
+            [other.alertId, o2, o1],
+          ],
+          (alertId, kind) => alertId === journey.alertId && kind === 'BACK_IN_CONTACT',
+        );
+        const expected = seeded
+          .filter(
+            ({ alertId, kind, unsent }) =>
+              alertId === journey.alertId && unsent && WITHDRAWN_WHEN_RESOLVED.includes(kind),
+          )
+          .map(({ messageId }) => messageId);
+        expect(expected, 'one unsent message of each kind withdrawn on resolution').toHaveLength(
+          WITHDRAWN_WHEN_RESOLVED.length,
+        );
+
+        backInContact(
+          await subject.store.recordHeartbeat(await freshHeartbeat(subject, journey.journeyId)),
+        );
+
+        const resolvedAt = (await resolutionOf(subject, journey.journeyId, journey.alertId))
+          ?.resolvedAt;
+        const withdrawn = await withdrawnOf([journey.journeyId, other.journeyId]);
+        expect(withdrawn.map(({ messageId }) => messageId).sort(), 'the resolution').toEqual(
+          [...expected].sort(),
+        );
+        for (const { withdrawnAt } of withdrawn) {
+          expect(withdrawnAt, 'the resolution').toEqual(resolvedAt);
+        }
+      }
+
+      // The open: the unsent messages of the kinds withdrawn on an open, of
+      // the walker's earlier alerts, for this journey's responders.
+      {
+        const now = await subject.now();
+        const journey = await watched(subject, {
+          startedAt: ago(now, 3 * HOUR),
+          lastHeartbeatAt: ago(now, HOUR),
+          responders: 2,
+        });
+        const [r1 = '', r2 = ''] = journey.responderIds;
+        const earlier = await subject.seedAlert({
+          journeyId: journey.journeyId,
+          state: 'RESOLVED',
+          openedAt: ago(now, 2 * HOUR + 30 * MINUTE),
+          silentSince: ago(now, 2 * HOUR + 35 * MINUTE),
+          resolvedAt: ago(now, 2 * HOUR),
+          resolution: 'BACK_IN_CONTACT',
+          smsRaisedAt: ago(now, 2 * HOUR + 28 * MINUTE),
+        });
+        const other = await alerted(subject, {
+          state: 'ESCALATED',
+          smsRaisedAgoMs: MINUTE,
+          responders: 2,
+        });
+        const [o1 = '', o2 = ''] = other.responderIds;
+        const seeded = await seedEvery(
+          [
+            [earlier, r1, r2],
+            [other.alertId, o2, o1],
+          ],
+          () => false,
+        );
+        const expected = seeded
+          .filter(
+            ({ alertId, kind, unsent }) =>
+              alertId === earlier && unsent && WITHDRAWN_WHEN_OPENED.includes(kind),
+          )
+          .map(({ messageId }) => messageId);
+        expect(expected, 'one unsent message of each kind withdrawn on an open').toHaveLength(
+          WITHDRAWN_WHEN_OPENED.length,
+        );
+
+        const opened = await subject.store.openLostContactAlert({
+          journeyId: journey.journeyId,
+          afterMs: LOST_CONTACT_AFTER_MS,
+        });
+        if (opened.outcome !== 'opened') {
+          throw new Error(`expected the open to open the alert: ${JSON.stringify(opened)}`);
+        }
+
+        const openedAt = (await subject.alertsOf(journey.journeyId)).find(
+          ({ id }) => id === opened.alertId,
+        )?.openedAt;
+        const withdrawn = await withdrawnOf([journey.journeyId, other.journeyId]);
+        expect(withdrawn.map(({ messageId }) => messageId).sort(), 'the open').toEqual(
+          [...expected].sort(),
+        );
+        for (const { withdrawnAt } of withdrawn) {
+          expect(withdrawnAt, 'the open').toEqual(openedAt);
+        }
       }
     },
   },

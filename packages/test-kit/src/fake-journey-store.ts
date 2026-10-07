@@ -126,6 +126,32 @@
  *     as it throws when asked about silence; a refusal it needs no time for
  *     is answered without one.
  *
+ * And for SMS escalation (LOST-07, its spec's approach items 2 to 9):
+ *   - `alertsDueForEscalation` is a plain read of every alert unresolved,
+ *     never escalated, not acknowledged in D-114's sense (state ACKNOWLEDGED
+ *     and someone recorded: a missing half is due), and opened the threshold
+ *     or more before the store's now, with that now;
+ *   - `escalateAlert` takes the alert's journey's "row" first (D-112) and
+ *     skips it while held, or, told to wait, answers `held` for a holder that
+ *     never lets go and decides as a holder that lets go left the alert. Under
+ *     that "lock" it decides again by the same rule, and either writes nothing
+ *     (`skipped`) or moves the alert to ESCALATED with its escalation time at
+ *     now and one LOST_CONTACT_SMS per responder row, each with a fresh ID,
+ *     due at now, all of it or none of it. A journey with no responder row is
+ *     refused, and the alert left as it was;
+ *   - the push claim (`claimDue`) takes the push kinds only, and the SMS claim
+ *     (`claimDueSms`) the SMS kinds only, with the same limit, lease, attempt
+ *     count and order; `unsentSmsCount` counts the SMS messages unsent, not
+ *     withdrawn and written the given time or more before now;
+ *   - "I'm on it", once recorded, withdraws its alert's unsent and not yet
+ *     withdrawn messages of the kinds `WITHDRAWN_WHEN_ACKNOWLEDGED` lists (the
+ *     escalation SMS) at its now, keeping their attempts and last failure; a
+ *     resolution withdraws them with the rest of `WITHDRAWN_WHEN_RESOLVED`,
+ *     its hold covering an SMS in the port's hands as it covers a push;
+ *   - an alert's escalation time is null until it is escalated, put in
+ *     directly or written by the escalation, and kept by every later step;
+ *   - a fake given no clock throws when asked to escalate, claim or count.
+ *
  * The shared behaviour suite (`journey-store-behaviour.ts`) runs the same
  * expectations against this fake and against the real adapter, which is
  * what keeps the two from drifting apart.
@@ -151,11 +177,44 @@ export const WITHDRAWN_WHEN_OPENED: readonly MessageKind[] = ['BACK_IN_CONTACT',
 
 /**
  * The kinds an alert's resolution withdraws from its own alert, unsent (D-111,
- * D-113): its lost-contact pushes and its "someone is on it" notices. The
- * server's `WITHDRAWN_WHEN_RESOLVED`, written out for the same reason, and
- * held equal to it by the domain's test (LOST-06-AC13).
+ * D-113): its lost-contact pushes, its "someone is on it" notices, and
+ * (LOST-07) its escalation SMS. The server's `WITHDRAWN_WHEN_RESOLVED`,
+ * written out for the same reason, and held equal to it by the domain's test
+ * (LOST-06-AC13, LOST-07-AC14).
  */
-export const WITHDRAWN_WHEN_RESOLVED: readonly MessageKind[] = ['LOST_CONTACT', 'ACKNOWLEDGED'];
+export const WITHDRAWN_WHEN_RESOLVED: readonly MessageKind[] = [
+  'LOST_CONTACT',
+  'ACKNOWLEDGED',
+  'LOST_CONTACT_SMS',
+];
+
+/**
+ * The kinds "I'm on it" withdraws from its own alert, unsent (LOST-07,
+ * approach item 5): the escalation SMS, so escalation stops as soon as anyone
+ * acknowledges. Every one of them is also withdrawn on resolution. The
+ * server's `WITHDRAWN_WHEN_ACKNOWLEDGED`, held equal to it by the domain's
+ * test (LOST-07-AC14).
+ */
+export const WITHDRAWN_WHEN_ACKNOWLEDGED: readonly MessageKind[] = ['LOST_CONTACT_SMS'];
+
+/**
+ * The kinds that go by SMS, which only the SMS claim hands out (LOST-07,
+ * approach item 7). The server's `SMS_KINDS`, held equal to it by the domain's
+ * test (LOST-07-AC14).
+ */
+export const SMS_KINDS: readonly MessageKind[] = ['LOST_CONTACT_SMS'];
+
+/**
+ * The kinds that go by push, which only the push claim hands out: every other
+ * kind, in `MESSAGE_KINDS`' order. The server's `PUSH_KINDS`, held equal to it
+ * by the domain's test (LOST-07-AC14).
+ */
+export const PUSH_KINDS: readonly MessageKind[] = [
+  'LOST_CONTACT',
+  'BACK_IN_CONTACT',
+  'HOME',
+  'ACKNOWLEDGED',
+];
 
 /**
  * The journey states, as the server's state machine lists them. Written out
@@ -334,7 +393,9 @@ export type FakeJourneyEndReason = 'HOME';
  * An alert as stored: no position, no battery, no phone time (LOST-02-AC13).
  * `resolvedAt` and `resolution` are null until it is resolved, and set
  * together (LOST-03). `acknowledgedBy` and `acknowledgedAt` are null until a
- * responder says "I'm on it", and set together (LOST-06).
+ * responder says "I'm on it", and set together (LOST-06). `smsRaisedAt` is
+ * null until the alert is escalated to SMS, and kept when it resolves or is
+ * acknowledged (LOST-07); no check ties it to the state.
  */
 export interface StoredAlert {
   id: string;
@@ -346,6 +407,49 @@ export interface StoredAlert {
   resolution: FakeAlertResolution | null;
   acknowledgedBy: string | null;
   acknowledgedAt: Date | null;
+  smsRaisedAt: Date | null;
+}
+
+/**
+ * An alert as the escalation's read returns it (LOST-07): unresolved, never
+ * escalated, not acknowledged by someone, and opened two minutes or more
+ * before the store's now. The server's `DueAlert`, by shape.
+ */
+export interface DueAlert {
+  id: string;
+  journeyId: string;
+  state: FakeAlertState;
+  acknowledgedBy: string | null;
+  smsRaisedAt: Date | null;
+  openedAt: Date;
+}
+
+/** What the escalation's read returns: the due alerts, and the store's now, from the same read. */
+export interface DueAlerts {
+  now: Date;
+  alerts: DueAlert[];
+}
+
+/** An escalation as the watchdog asks for it: `lockWaitMs` only when told to wait for the row. */
+export interface EscalateRequest {
+  alertId: string;
+  afterMs: number;
+  lockWaitMs?: number | undefined;
+}
+
+/**
+ * Escalated: the alert ESCALATED, with one LOST_CONTACT_SMS per responder.
+ * Skipped: nothing written, because the row was held (without a wait), or the
+ * alert was no longer due under the journey's row. Held: an escalation that
+ * waited for the row ran out of wait, and nothing was written.
+ */
+export type EscalateAlertResult =
+  { outcome: 'escalated'; messages: AlertMessage[] } | { outcome: 'skipped' } | { outcome: 'held' };
+
+/** How many SMS messages are failing (LOST-07-AC10), and the store's now, from the same read. */
+export interface UnsentSmsCount {
+  now: Date;
+  count: number;
 }
 
 /**
@@ -424,7 +528,11 @@ export type JourneyStoreCall =
   | 'markFailed'
   | 'recordHome'
   | 'alertForAcknowledgement'
-  | 'recordAcknowledgement';
+  | 'recordAcknowledgement'
+  | 'alertsDueForEscalation'
+  | 'escalateAlert'
+  | 'claimDueSms'
+  | 'unsentSmsCount';
 
 export interface FakeJourneyStore {
   /** The walker's journey in any state but ENDED, or null. */
@@ -483,8 +591,36 @@ export interface FakeJourneyStore {
    * answers `held` if it is not let go. Needs a clock.
    */
   openLostContactAlert(request: OpenRequest): Promise<OpenLostContactAlertResult>;
-  /** Takes at most `limit` due messages, one attempt more each, leased for `leaseMs`. Needs a clock. */
+  /**
+   * Takes at most `limit` due messages of the push kinds (LOST-07: never an
+   * SMS), one attempt more each, leased for `leaseMs`. Needs a clock.
+   */
   claimDue(request: { limit: number; leaseMs: number }): Promise<ClaimedMessages>;
+  /**
+   * LOST-07: as `claimDue`, for the SMS kinds only, with the same limit, lease,
+   * attempt count and order. Needs a clock.
+   */
+  claimDueSms(request: { limit: number; leaseMs: number }): Promise<ClaimedMessages>;
+  /**
+   * LOST-07: how many SMS messages are unsent, not withdrawn, and were written
+   * `olderThanMs` or more before now; and now. Needs a clock.
+   */
+  unsentSmsCount(olderThanMs: number): Promise<UnsentSmsCount>;
+  /**
+   * LOST-07: every alert unresolved, never escalated, not acknowledged by
+   * someone (state ACKNOWLEDGED with someone recorded), and opened `afterMs` or
+   * more before now, read without locking; and now. Needs a clock.
+   */
+  alertsDueForEscalation(afterMs: number): Promise<DueAlerts>;
+  /**
+   * LOST-07: takes the alert's journey's "row" first, decides by the
+   * escalation rule under it, and writes what it decides: the alert ESCALATED
+   * at now, with one LOST_CONTACT_SMS per responder row, due at now; or
+   * nothing. A held row is skipped, unless `lockWaitMs` is given: then it waits
+   * for it, and answers `held` if it is not let go. A journey with no
+   * responder row is refused, writing nothing. Needs a clock.
+   */
+  escalateAlert(request: EscalateRequest): Promise<EscalateAlertResult>;
   /** The port accepted it: sent at now. Needs a clock. */
   markSent(messageId: string): Promise<void>;
   /** The port did not accept it: this reason, and due again `retryAfterMs` after now. Needs a clock. */
@@ -538,6 +674,8 @@ export interface FakeJourneyStore {
     resolution?: FakeAlertResolution | null;
     acknowledgedBy?: string | null;
     acknowledgedAt?: Date | null;
+    /** LOST-07: when it was escalated to SMS; left out, never. No check ties it to the state. */
+    smsRaisedAt?: Date | null;
   }): string;
   /**
    * Puts an outbox message in directly, as a test's own setup. Keeps the
@@ -607,6 +745,8 @@ export interface FakeJourneyStore {
   holdUntilWaited(journeyId: string, holderAction?: () => void | Promise<void>): void;
   /** Every open asked for so far, in order, with its wait if it had one. Copies. */
   openRequests(): OpenRequest[];
+  /** LOST-07: every escalation asked for so far, in order, with its wait if it had one. Copies. */
+  escalateRequests(): EscalateRequest[];
   /** The port methods called so far, in order. */
   readonly calls: readonly JourneyStoreCall[];
   /**
@@ -728,6 +868,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
   /** The held journeys whose holder lets go when an open waits for it, and what the holder does first. */
   const lettingGo = new Map<string, () => void | Promise<void>>();
   const openRequests: OpenRequest[] = [];
+  const escalateRequests: EscalateRequest[] = [];
 
   /** The store's now: the clock's, or a loud refusal when it was given none. */
   const nowFor = async (call: JourneyStoreCall): Promise<Date> => {
@@ -769,6 +910,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     silentSince: new Date(alert.silentSince.getTime()),
     resolvedAt: copyOf(alert.resolvedAt),
     acknowledgedAt: copyOf(alert.acknowledgedAt),
+    smsRaisedAt: copyOf(alert.smsRaisedAt),
   });
   const copyMessage = (message: StoredMessage): StoredMessage => ({
     ...message,
@@ -792,6 +934,63 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
    */
   const isInContact = (silentSince: Date, now: Date): boolean =>
     now.getTime() - silentSince.getTime() < LOST_CONTACT_AFTER_MS;
+
+  /**
+   * The escalation rule (LOST-07, approach item 2), as the adapter's read and
+   * its update hold it: unresolved; not acknowledged in D-114's sense (state
+   * ACKNOWLEDGED and someone recorded), so a missing half escalates; never
+   * escalated; and opened `afterMs` or more before now. No comparison with a
+   * time that is not one holds, so an invalid moment escalates nothing.
+   */
+  const isDueForEscalation = (alert: StoredAlert, now: Date, afterMs: number): boolean =>
+    alert.state !== 'RESOLVED' &&
+    !(alert.state === 'ACKNOWLEDGED' && alert.acknowledgedBy !== null) &&
+    alert.smsRaisedAt === null &&
+    now.getTime() - alert.openedAt.getTime() >= afterMs;
+
+  /**
+   * A claim of these kinds only (LOST-07, approach item 7): at most `limit` of
+   * the due messages (not sent, not withdrawn, and due at or before now), in
+   * due order, one attempt more each, leased until now plus the lease.
+   */
+  const claimOf = async (
+    call: JourneyStoreCall,
+    kinds: readonly MessageKind[],
+    { limit, leaseMs }: { limit: number; leaseMs: number },
+  ): Promise<ClaimedMessages> => {
+    const now = await nowFor(call);
+    if (!Number.isInteger(limit) || limit < 0) {
+      throw new Error(
+        `fakeJourneyStore.${call}: LIMIT must not be negative, and was ${String(limit)}`,
+      );
+    }
+    const lease = millisecondsOf(call, 'leaseMs', leaseMs);
+    const due = outbox
+      .filter(
+        (message) =>
+          kinds.includes(message.kind) &&
+          message.sentAt === null &&
+          // LOST-03 (D-111): a withdrawn message is never handed out again,
+          // whatever its due time.
+          message.withdrawnAt === null &&
+          message.nextAttemptAt.getTime() <= now.getTime(),
+      )
+      .sort((a, b) => a.nextAttemptAt.getTime() - b.nextAttemptAt.getTime())
+      .slice(0, limit);
+    for (const message of due) {
+      message.attempts += 1;
+      message.nextAttemptAt = new Date(now.getTime() + lease);
+    }
+    return {
+      now,
+      messages: due.map(({ messageId, recipientId, kind, attempts }) => ({
+        messageId,
+        recipientId,
+        kind,
+        attempts,
+      })),
+    };
+  };
 
   /** The message this ID names, which must be stored: an update of nothing is a sender's bug. */
   const messageNamed = (call: JourneyStoreCall, messageId: string): StoredMessage => {
@@ -1383,6 +1582,21 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         alert.state = 'ACKNOWLEDGED';
         alert.acknowledgedBy = responderId;
         alert.acknowledgedAt = new Date(now.getTime());
+        // LOST-07 (approach item 5): escalation stops as soon as anyone
+        // acknowledges. Every message of this alert of a kind withdrawn on
+        // acknowledgement (its escalation SMS) not yet sent nor withdrawn is
+        // withdrawn at this now, in the same step, keeping its attempts and
+        // last failure. One in the port's hands finishes as the port answers.
+        for (const message of outbox) {
+          if (
+            message.alertId === alert.id &&
+            WITHDRAWN_WHEN_ACKNOWLEDGED.includes(message.kind) &&
+            message.sentAt === null &&
+            message.withdrawnAt === null
+          ) {
+            message.withdrawnAt = new Date(now.getTime());
+          }
+        }
         outbox.push(...notices);
         return {
           outcome: 'acknowledged',
@@ -1542,6 +1756,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
           resolution: null,
           acknowledgedBy: null,
           acknowledgedAt: null,
+          smsRaisedAt: null,
         });
         outbox.push(...messages);
         return {
@@ -1555,37 +1770,152 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         };
       });
     },
-    claimDue({ limit, leaseMs }) {
-      return answer('claimDue', async (): Promise<ClaimedMessages> => {
-        const now = await nowFor('claimDue');
-        if (!Number.isInteger(limit) || limit < 0) {
-          throw new Error(
-            `fakeJourneyStore.claimDue: LIMIT must not be negative, and was ${String(limit)}`,
-          );
-        }
-        const lease = millisecondsOf('claimDue', 'leaseMs', leaseMs);
-        const due = outbox
-          .filter(
-            (message) =>
-              message.sentAt === null &&
-              // LOST-03 (D-111): a withdrawn message is never handed out again,
-              // whatever its due time.
-              message.withdrawnAt === null &&
-              message.nextAttemptAt.getTime() <= now.getTime(),
-          )
-          .sort((a, b) => a.nextAttemptAt.getTime() - b.nextAttemptAt.getTime())
-          .slice(0, limit);
-        for (const message of due) {
-          message.attempts += 1;
-          message.nextAttemptAt = new Date(now.getTime() + lease);
-        }
+    // LOST-07 (approach item 7): two claims, each of its own kinds, so the
+    // push claim can never hand an SMS to the push port, nor the SMS claim a
+    // push to the SMS port. The same limit, lease, attempt count and order.
+    claimDue(request) {
+      return answer('claimDue', () => claimOf('claimDue', PUSH_KINDS, request));
+    },
+    claimDueSms(request) {
+      return answer('claimDueSms', () => claimOf('claimDueSms', SMS_KINDS, request));
+    },
+    unsentSmsCount(olderThanMs) {
+      return answer('unsentSmsCount', async (): Promise<UnsentSmsCount> => {
+        const now = await nowFor('unsentSmsCount');
+        const olderThan = millisecondsOf('unsentSmsCount', 'olderThanMs', olderThanMs);
+        // LOST-07 (approach item 8): failing is unsent, not withdrawn, and
+        // written that long ago or more, whatever the cause.
         return {
           now,
-          messages: due.map(({ messageId, recipientId, kind, attempts }) => ({
+          count: outbox.filter(
+            (message) =>
+              SMS_KINDS.includes(message.kind) &&
+              message.sentAt === null &&
+              message.withdrawnAt === null &&
+              now.getTime() - message.createdAt.getTime() >= olderThan,
+          ).length,
+        };
+      });
+    },
+    alertsDueForEscalation(afterMs) {
+      return answer('alertsDueForEscalation', async (): Promise<DueAlerts> => {
+        const now = await nowFor('alertsDueForEscalation');
+        const threshold = millisecondsOf('alertsDueForEscalation', 'afterMs', afterMs);
+        // A plain read: an alert whose journey's row another transaction
+        // holds is read all the same.
+        return {
+          now,
+          alerts: alerts
+            .filter((alert) => isDueForEscalation(alert, now, threshold))
+            .map(({ id, journeyId, state, acknowledgedBy, smsRaisedAt, openedAt }) => ({
+              id,
+              journeyId,
+              state,
+              acknowledgedBy,
+              smsRaisedAt: copyOf(smsRaisedAt),
+              openedAt: new Date(openedAt.getTime()),
+            })),
+        };
+      });
+    },
+    escalateAlert({ alertId, afterMs, lockWaitMs }) {
+      escalateRequests.push(
+        lockWaitMs === undefined ? { alertId, afterMs } : { alertId, afterMs, lockWaitMs },
+      );
+      return answer('escalateAlert', async (): Promise<EscalateAlertResult> => {
+        const threshold = millisecondsOf('escalateAlert', 'afterMs', afterMs);
+        // As lock_timeout takes it, as the open checks it (LOST-02, review
+        // loop 2): PostgreSQL reads 0 as no limit at all.
+        if (
+          lockWaitMs !== undefined &&
+          !(Number.isInteger(lockWaitMs) && lockWaitMs >= 1 && lockWaitMs <= 2_147_483_647)
+        ) {
+          throw new Error(
+            'fakeJourneyStore.escalateAlert: lockWaitMs must be a whole number of ' +
+              `milliseconds from 1 to 2147483647, not ${String(lockWaitMs)}: PostgreSQL reads ` +
+              'a lock_timeout of 0 as no limit at all',
+          );
+        }
+        // Without the store's now, nothing is decided: loudly, before any "lock".
+        await nowFor('escalateAlert');
+        // The journey's row first (D-112): no alert, no row to take.
+        const found = alertNamed(alertId);
+        if (found === undefined) {
+          return { outcome: 'skipped' };
+        }
+        if (held.has(found.journeyId)) {
+          // Without a wait: `for update skip locked` skips a held row. The
+          // escalation's select names the journey by its ID alone, so a held
+          // row always matches, and is always waited for when told to.
+          if (lockWaitMs === undefined) {
+            return { outcome: 'skipped' };
+          }
+          // With one: a holder that never lets go outlasts it (55P03, held);
+          // one that lets go does its own work first, and the escalation then
+          // decides as the holder left the alert.
+          const holderAction = lettingGo.get(found.journeyId);
+          if (holderAction === undefined) {
+            return { outcome: 'held' };
+          }
+          letGo(found.journeyId);
+          await holderAction();
+        }
+        const now = await nowFor('escalateAlert');
+        const alert = alertNamed(alertId);
+        // The rule, decided again under the "lock", in its order (approach
+        // item 2): RESOLVED, acknowledged by someone, already escalated, or
+        // under the two minutes is left alone, and nothing is written.
+        if (
+          alert === undefined ||
+          held.has(alert.journeyId) ||
+          !isDueForEscalation(alert, now, threshold)
+        ) {
+          return { outcome: 'skipped' };
+        }
+        const journey = storedJourney('escalateAlert', alert.journeyId);
+        if (journey.responderIds.length === 0) {
+          throw new Error(
+            'fakeJourneyStore.escalateAlert: the alert’s journey has no responder rows, so not ' +
+              'one SMS could be written; the transaction is rolled back, and the alert stays as ' +
+              'it was rather than being escalated with nobody told',
+          );
+        }
+        if (new Set(journey.responderIds).size !== journey.responderIds.length) {
+          throw uniqueViolation('one outbox message per (alert, recipient, kind)');
+        }
+        const messages: StoredMessage[] = journey.responderIds.map((recipientId) => {
+          if (
+            outbox.some(
+              (message) =>
+                message.alertId === alert.id &&
+                message.recipientId === recipientId &&
+                message.kind === 'LOST_CONTACT_SMS',
+            )
+          ) {
+            throw uniqueViolation('one outbox message per (alert, recipient, kind)');
+          }
+          return {
+            messageId: syntheticUuid(),
+            alertId: alert.id,
+            recipientId,
+            kind: 'LOST_CONTACT_SMS',
+            createdAt: new Date(now.getTime()),
+            attempts: 0,
+            nextAttemptAt: new Date(now.getTime()),
+            sentAt: null,
+            lastFailure: null,
+            withdrawnAt: null,
+          };
+        });
+        alert.state = 'ESCALATED';
+        alert.smsRaisedAt = new Date(now.getTime());
+        outbox.push(...messages);
+        return {
+          outcome: 'escalated',
+          messages: messages.map(({ messageId, recipientId, kind }) => ({
             messageId,
             recipientId,
             kind,
-            attempts,
           })),
         };
       });
@@ -1685,6 +2015,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       resolution = null,
       acknowledgedBy: givenAcknowledgedBy = null,
       acknowledgedAt = null,
+      smsRaisedAt = null,
     }) {
       const journey = storedJourney('seedAlert', journeyId);
       if ((resolvedAt === null) !== (resolution === null)) {
@@ -1720,6 +2051,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         resolution,
         acknowledgedBy,
         acknowledgedAt: copyOf(acknowledgedAt),
+        smsRaisedAt: copyOf(smsRaisedAt),
       });
       return id;
     },
@@ -1840,6 +2172,9 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     },
     openRequests() {
       return openRequests.map((request) => ({ ...request }));
+    },
+    escalateRequests() {
+      return escalateRequests.map((request) => ({ ...request }));
     },
     get calls() {
       return [...calls];
