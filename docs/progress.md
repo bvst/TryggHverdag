@@ -368,6 +368,14 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
+**BUG-30 and BUG-31** (the agents' models and thinking levels, and the gates'
+speed; D-118, D-119) are being built on
+`fix/BUG-30-31-agent-models-and-gate-speed`, from the owner's "Yes. Do that"
+on 2026-10-07. Red phase: `test-author` is writing the failing tests. The two
+workflow lines (`--model` in `ai-review.yml` and `daily-status.yml`, and the
+review job's `TRYGGHVERDAG_REVIEW_JOB`) follow in their own pull request, merged by
+hand (D-075) and batched with Dependabot's #62.
+
 **LOST-07** (M2 task 6 of 9, SMS escalation) is in review, with its pull
 request open from `claude/busy-faraday-40n2zl` (D-115, D-116). **A-32** is
 done (the owner). **A-33** follows the merge: run it straight after the
