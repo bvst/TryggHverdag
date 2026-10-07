@@ -4160,9 +4160,12 @@ any other path is work, not a candidate for the same treatment.
     - **The worker** reads two settings as the same check when their UUIDs are
       equal.
     - The slug form is given up. Healthchecks.io shows the UUID form by
-      default, and A-23, A-32 and the error messages already ask for it. If a
-      saved secret uses the slug form, the next `infra-staging` plan refuses it
-      loudly.
+      default, and A-23, A-32 and the error messages already ask for it. A
+      saved secret in another form is refused loudly, but the deploy comes
+      first: on the merge, `deploy-staging` runs the new `config.ts` against
+      the worker's existing secret, applied under INF-08's prefix-only rule,
+      before A-33's plan. The worker then stops checking in and
+      `staging-worker` pages; the watchdog keeps running. A-33 says what to do.
   - **Three tests the code already passes** (`test-auditor`):
     - an escalation held past its limit whose retry then fails counts as stuck;
     - one alert's failed escalation stops no other;
@@ -4170,3 +4173,14 @@ any other path is work, not a candidate for the same treatment.
       is next due (D-100).
   - **A test of the configuration that will run:** both URLs set and
     different. Two mutants on the equal-URL guard survived without it.
+- **Amended in review loop 3 (2026-10-07), from `test-auditor` and
+  `safety-reviewer` (all three passed loop 2):**
+  - **The escalation's waiting loop gets its test:** two alerts past the stuck
+    threshold, the first held through the wait. A loop that stopped after the
+    first would lose the second's retry and its overdue line. The open's twin
+    loop on `main` has the same gap, queued as BUG-28.
+  - **`config.ts`'s tests refuse a UUID too short or too long, and pin the
+    trailing-slash reason against the general one.**
+  - **Terraform's error messages say why another spelling is refused:** so the
+    two URLs can be compared. The slug form and `/<uuid>/` do ping, so "would
+    ping nothing" was untrue for them.

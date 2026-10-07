@@ -29,7 +29,8 @@ BUG-22 (the test-weakening check does not see the shared behaviour suites),
 BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an advisory),
 BUG-26 (a lint run during a mutation run fails on Stryker's sandbox) and
 BUG-27 (whether the worker's session limits are in force on a deploy is seen
-only by chance).
+only by chance) and BUG-28 (no test holds two journeys past the watchdog's
+stuck threshold, so a loop that stops after the first goes unseen).
 M1 closed with all four roadmap items done:
 SPIKE-01 (S1–S8), Section 4 closed with a conditional GO for the location SDK
 (D-086, full results in [04b-spike-results.md](04b-spike-results.md)), and the
@@ -158,7 +159,7 @@ session.
 | A-30 | Send the Critical Alerts entitlement request ([`critical-alerts-request.md`](critical-alerts-request.md), Part D) once the Apple Developer account (A-02) exists | The app's lost-contact alert needs Apple's approval to break through a silenced iPhone (D-020, D-087, STORE-01) | ⬜ Open — due M4 at the latest |
 | A-31 | In GitHub, **Settings → Code security**: turn on **Dependabot alerts** and **Dependabot security updates** (the setup guide, [`merge-rules.md`](merge-rules.md), says they are on; GitHub's API said on 2026-10-03: "Dependabot alerts are disabled for this repository") | Between pull requests nothing else watches the dependencies, and the audit now ignores two advisories that have no fix yet (D-093, D-104): alerts are what will say when braces or node-forge ships one (found in BUG-15's privacy review) | ⬜ Open |
 | A-32 | In Healthchecks.io, add a check named `staging-sms`: **Period 1 minute, Grace 2 minutes**, alerts to the same place as the others. Save its ping URL as the `staging` environment secret `HEALTHCHECKS_SMS_URL` | A failed SMS pages you through its own check (D-115, LOST-07). Needed before LOST-07's `infra-staging` plan, which stops with "Invalid value for variable" without it | ✅ Done — the owner, 2026-10-07. Not verified from a session: the secrets API is refused here. LOST-07's `infra-staging` plan is the first real check |
-| A-33 | After LOST-07 merges: run `infra-staging` with `plan`, then `apply`, and check within about 3 minutes that `staging-sms` has left `new` and shows a ping every minute, and that the worker's check still gets one ping a minute, not two (the two URLs must differ). If the plan stops with "Invalid value for variable", a secret is not in the form `https://hc-ping.com/<uuid>`: re-copy it in the UUID form, which Healthchecks.io shows by default (D-116) | Puts the SMS check live. There is no live drill of a failing SMS in M2: staging has no journeys before task 9 (D-091) | ⬜ Open (D-115), after LOST-07 |
+| A-33 | After LOST-07 merges: run `infra-staging` with `plan`, then `apply`, and check within about 3 minutes that `staging-sms` has left `new` and shows a ping every minute, and that the worker's check still gets one ping a minute, not two (the two URLs must differ). **Do it straight after the merge's `deploy-staging` run:** the new code reads the worker's existing secret before any plan. If `staging-worker` pages first and the worker's start line says the URL "is not the check's address in its one spelling", the watchdog is running and only its check-in stopped: re-copy the secret in the UUID form Healthchecks.io shows (`https://hc-ping.com/<uuid>`), then plan and apply. If the plan stops with "Invalid value for variable", read the message under it: it names the secret and what is wrong (D-116) | Puts the SMS check live. There is no live drill of a failing SMS in M2: staging has no journeys before task 9 (D-091) | ⬜ Open (D-115), after LOST-07 |
 
 ## Why this order
 The specialised agents and skills (Section 7) are where your quality bar gets
