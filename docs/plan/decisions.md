@@ -4175,10 +4175,11 @@ any other path is work, not a candidate for the same treatment.
     different. Two mutants on the equal-URL guard survived without it.
 - **Amended in review loop 3 (2026-10-07), from `test-auditor` and
   `safety-reviewer` (all three passed loop 2):**
-  - **The escalation's waiting loop gets its test:** two alerts past the stuck
-    threshold, the first held through the wait. A loop that stopped after the
-    first would lose the second's retry and its overdue line. The open's twin
-    loop on `main` has the same gap, queued as BUG-28.
+  - **The escalation's waiting loop gets its tests:** two alerts past the
+    stuck threshold, one held through the wait and one let go within it, in
+    both orders, and both held. A loop that stopped early would lose the next
+    alert's retry and its overdue line. The open's twin loop on `main` has the
+    same gap, queued as BUG-28.
   - **`config.ts`'s tests refuse a UUID too short or too long, and pin the
     trailing-slash reason against the general one.**
   - **Terraform's error messages say why another spelling is refused:** so the

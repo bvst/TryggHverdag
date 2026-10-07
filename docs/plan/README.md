@@ -30,7 +30,7 @@ BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an advisory)
 BUG-26 (a lint run during a mutation run fails on Stryker's sandbox) and
 BUG-27 (whether the worker's session limits are in force on a deploy is seen
 only by chance) and BUG-28 (no test holds two journeys past the watchdog's
-stuck threshold, so a loop that stops after the first goes unseen).
+stuck threshold, so a waiting loop that stops early goes unseen).
 M1 closed with all four roadmap items done:
 SPIKE-01 (S1–S8), Section 4 closed with a conditional GO for the location SDK
 (D-086, full results in [04b-spike-results.md](04b-spike-results.md)), and the
