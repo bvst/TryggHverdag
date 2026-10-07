@@ -122,3 +122,9 @@ and INF-08 is not done until it passes.
 Add a new check in Healthchecks.io with the same settings, replace the
 `HEALTHCHECKS_WORKER_URL` secret, run `infra-staging` plan and apply, confirm
 the new check leaves `new`, then delete the old check.
+
+The same steps apply to the `staging-sms` check (A-32, LOST-07) and its
+`HEALTHCHECKS_SMS_URL` secret: Period 1 minute, Grace 2 minutes. Never give it
+the worker's URL: then the SMS check's ping every minute would keep the
+worker's check green while the watchdog is stopped. After the apply, confirm
+that each check shows one ping a minute, not two.

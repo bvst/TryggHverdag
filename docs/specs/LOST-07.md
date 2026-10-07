@@ -341,8 +341,11 @@ carriers; and the canary's use of all this (task 9).
      - `ALERT_EVENTS = ['acknowledge', 'escalate']`.
    - **`alertTransition` returns to a `switch` with a `never` default**, as
      `transition` has, now that two cases exist (LOST-06's approach item 2).
-     Overloads as `transition` has them: each event with the situation it
-     needs, and one general overload the table test reads.
+     One overload per event, each with the situation it needs. As built
+     (green phase) there is no general overload: no test reads one, and
+     with it a mismatched situation and event could reach a rule. A missing
+     half of the situation (`smsRaisedAt` or `acknowledgedBy` undefined)
+     fails toward the SMS (review loop 1, D-114).
    - **The escalation's situation and event:** `AlertForEscalation { id,
      state, acknowledgedBy, smsRaisedAt }`; `EscalateEvent { type: 'escalate',
      openedAt, now }`, both database times handed in, as the silence event

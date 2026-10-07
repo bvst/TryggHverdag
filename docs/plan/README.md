@@ -26,7 +26,7 @@ BUG-19 (no test checks every owner-approval path keeps its owners), BUG-20
 (graphile-worker's own logger prints its error object, past `log.ts`) and
 BUG-21 (an Android script test's timing margin fails under full-suite load),
 BUG-22 (the test-weakening check does not see the shared behaviour suites),
-BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an advisory)
+BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an advisory),
 BUG-26 (a lint run during a mutation run fails on Stryker's sandbox) and
 BUG-27 (whether the worker's session limits are in force on a deploy is seen
 only by chance).
@@ -117,7 +117,11 @@ stand-down messages, the withdrawn lost-contact messages and each alert's
 `acknowledged_at` (who helped whom, and when) and the `ACKNOWLEDGED` notices.
 `acknowledged_by` references `users`, so deleting a member who acknowledged
 an alert that is still kept must deal with that reference first, as LOST-02
-found for outbox rows.
+found for outbox rows. **Since LOST-07** (D-115, D-116), so are
+`alerts.sms_raised_at` and the `LOST_CONTACT_SMS` outbox rows (who was texted,
+and when); those rows reference `users` too. The DPIA must cover M3's SMS data
+flow: the walker's name in clear through LINK Mobility (D-115), walkers under
+18 included.
 
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every
@@ -154,7 +158,7 @@ session.
 | A-30 | Send the Critical Alerts entitlement request ([`critical-alerts-request.md`](critical-alerts-request.md), Part D) once the Apple Developer account (A-02) exists | The app's lost-contact alert needs Apple's approval to break through a silenced iPhone (D-020, D-087, STORE-01) | ⬜ Open — due M4 at the latest |
 | A-31 | In GitHub, **Settings → Code security**: turn on **Dependabot alerts** and **Dependabot security updates** (the setup guide, [`merge-rules.md`](merge-rules.md), says they are on; GitHub's API said on 2026-10-03: "Dependabot alerts are disabled for this repository") | Between pull requests nothing else watches the dependencies, and the audit now ignores two advisories that have no fix yet (D-093, D-104): alerts are what will say when braces or node-forge ships one (found in BUG-15's privacy review) | ⬜ Open |
 | A-32 | In Healthchecks.io, add a check named `staging-sms`: **Period 1 minute, Grace 2 minutes**, alerts to the same place as the others. Save its ping URL as the `staging` environment secret `HEALTHCHECKS_SMS_URL` | A failed SMS pages you through its own check (D-115, LOST-07). Needed before LOST-07's `infra-staging` plan, which stops with "Invalid value for variable" without it | ✅ Done — the owner, 2026-10-07. Not verified from a session: the secrets API is refused here. LOST-07's `infra-staging` plan is the first real check |
-| A-33 | After LOST-07 merges: run `infra-staging` with `plan`, then `apply`, and check within about 3 minutes that `staging-sms` has left `new` and shows a ping every minute | Puts the SMS check live. There is no live drill of a failing SMS in M2: staging has no journeys before task 9 (D-091) | ⬜ Open (D-115), after LOST-07 |
+| A-33 | After LOST-07 merges: run `infra-staging` with `plan`, then `apply`, and check within about 3 minutes that `staging-sms` has left `new` and shows a ping every minute, and that the worker's check still gets one ping a minute, not two (the two URLs must differ) | Puts the SMS check live. There is no live drill of a failing SMS in M2: staging has no journeys before task 9 (D-091) | ⬜ Open (D-115), after LOST-07 |
 
 ## Why this order
 The specialised agents and skills (Section 7) are where your quality bar gets

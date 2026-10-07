@@ -4124,3 +4124,19 @@ any other path is work, not a candidate for the same treatment.
     rule's reset, and D-033's edge back from `ACKNOWLEDGED`, go with D-115's
     new task.
   - LOST-07-AC1 to AC20 prove it. Supersedes nothing.
+- **Amended in review loop 1 (2026-10-07), from the three reviewers:**
+  - **The escalation runs whatever the overdue read came to.** The green phase
+    had a failed read skip it; responders whose push failed would then get no
+    SMS while the journeys read kept failing, which is the case SMS exists
+    for.
+  - **A missing half fails toward the SMS:** an alert whose `smsRaisedAt` or
+    `acknowledgedBy` is missing is escalated (D-114).
+  - **The escalation request carries no threshold.** The adapter decided by
+    `ESCALATE_AFTER_MS` while the fake obeyed a caller's `afterMs`; the field
+    goes, so the two cannot differ (D-100).
+  - **The ping URLs are well-formed and different.** A URL with a query, a
+    fragment or a trailing slash is refused (each would misplace `/fail`, and
+    a failing report could count as a success), the alarm builds `/fail` on
+    the URL's path, and `HEALTHCHECKS_SMS_URL` must differ from
+    `HEALTHCHECKS_WORKER_URL`, in Terraform and in the worker: one green ping
+    must never keep the other check green.
