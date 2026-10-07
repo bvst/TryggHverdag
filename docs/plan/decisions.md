@@ -2684,7 +2684,11 @@ any other path is work, not a candidate for the same treatment.
   - no push carries personal details in its payload or its request headers,
     over every push message type, with the collapse ID checked too — L6;
   - no FCM and no Expo push token on iOS — an L1 rule, plus L5 or L6 that the
-    iOS path registers the native APNs device token.
+    iOS path registers the native APNs device token;
+  - (added by D-113's amendment, the owner, 2026-10-07) no non-critical push
+    sent while an alert is open displaces an undelivered critical one — L9 on
+    a real iPhone; LOST-06's notice is not pushed on iOS until it passes
+    (`critical-alerts-request.md`, Part E, item 6).
 
   **Tracked carriers:** REL-06, CALL-03, REL-04, LOST-02, REL-07, LOST-07,
   SM-10, GRP-04. **Not tracked, and no gate enforces them:** AR-05 (the
@@ -3918,6 +3922,28 @@ any other path is work, not a candidate for the same treatment.
     kinds, so the resolve helper's hold becomes per responder (D-114).
   - LOST-06-AC1, AC2, AC7, AC8 and AC12 prove it. D-090's order and the
     roadmap are unchanged.
+- **Amendment (owner, 2026-10-07): the notice is pushed on iOS only once a
+  real-iPhone test shows it never displaces a critical alert.**
+  - **Found by `safety-reviewer`** in LOST-06's review: APNs stores only one
+    notification per app for a device that is offline, "in most cases the
+    latest" (Apple, "Sending notification requests to APNs", read
+    2026-10-06). A responder whose phone is offline when their critical
+    lost-contact push is accepted could come back online to the
+    non-critical "someone is on it" notice in its place, which does not
+    break through silent mode. "It costs nothing" holds at our push port,
+    not at Apple. M2 sends no real pushes, so it is not live.
+  - **Asked with Claude's recommendation, "keep it, and gate M3".** The
+    alternatives offered were "record only, now" and "keep it, and decide in
+    M3".
+  - **Decision:** the server records the acknowledgement and writes the
+    notices as built. M3's push task does not send the `ACKNOWLEDGED` notice
+    to iOS until an L9 test on a real iPhone shows that a non-critical push
+    sent while an alert is open never displaces an undelivered critical one
+    (for example, sent with `apns-expiration` 0). If that cannot be shown,
+    the notice is not pushed on iOS, and the app shows the acknowledgement
+    when opened. FCM's behaviour is checked in the same task.
+  - The test joins D-087's list and `critical-alerts-request.md`, Part E,
+    item 6, so M3 finds it.
 
 ## D-114 — "I'm on it": one acknowledger per alert, named by the alert's ID, the journey's row first, and the resolve helper's per-responder hold (LOST-06)
 - **Date:** 2026-10-06 · **Status:** Accepted (delegated, D-031) ·
@@ -3976,7 +4002,9 @@ any other path is work, not a candidate for the same treatment.
 - **Consequences:**
   - Task 6 reads `alerts.state`, `acknowledged_at` and `acknowledged_by`, and
     adds the withdrawal of an acknowledged alert's unsent SMS and its own
-    kinds to the withdrawal lists. It also decides the outbox's unique key
+    kinds to the withdrawal lists. It escalates an unresolved alert unless
+    `state = 'ACKNOWLEDGED'` and `acknowledged_by is not null`, so a missing
+    half fails toward sending the SMS (`safety-reviewer`, LOST-06's review). It also decides the outbox's unique key
     for a second acknowledgement after the resumed-escalation rule.
   - D-033's alert states draw no edge back from `ACKNOWLEDGED`, nor from
     `ESCALATED` or `ACKNOWLEDGED` to `RESOLVED`; the plan needs both, and this

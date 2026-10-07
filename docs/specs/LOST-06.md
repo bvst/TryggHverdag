@@ -212,7 +212,9 @@ Each is stated so the reviewers can check it, not assumed quietly.
 7. **An acknowledgement withdraws nothing and stands nobody down.** The
    other responders' lost-contact pushes, sent or not, go on as they were:
    the alert is still open, and each of them must still hear of it. Stopping
-   the SMS is task 6's, which reads this record.
+   the SMS is task 6's, which reads this record. That holds at our push port;
+   at Apple, a later notice can replace an undelivered critical push, which
+   D-113's amendment gates in M3 (Risks, F6).
 8. **A notice that has gone stale is withdrawn.** When the alert resolves,
    an `ACKNOWLEDGED` notice the port has not accepted is withdrawn with the
    alert's unsent lost-contact pushes, by D-111's reasoning.
@@ -235,12 +237,18 @@ Each is stated so the reviewers can check it, not assumed quietly.
 Written so that task 6 reads this record and does not change it.
 
 - **`alerts.state`.** `ACKNOWLEDGED` means someone is on it. Task 6
-  escalates an alert that is still `OPEN` two minutes after `opened_at`, and
-  never an `ACKNOWLEDGED` one.
+  escalates an unresolved alert two minutes after `opened_at` unless
+  `state = 'ACKNOWLEDGED'` **and** `acknowledged_by is not null`
+  (`safety-reviewer`). A state alone is not enough: reading 3 lets an
+  `ACKNOWLEDGED` alert with nobody recorded be acknowledged, because it
+  would stop the SMS for nobody's sake, and a half-done reset by the
+  resumed-escalation rule would do the same. A missing half fails toward
+  sending the SMS.
 - **`alerts.acknowledged_at`.** The first, and only, acknowledgement's time:
   the database's `now()` in the transaction that recorded it. A repeat does
   not move it. It is the record and the tests' evidence ("an acknowledgement
-  at 1 minute", AC9). The decision is the state, read under the lock.
+  at 1 minute", AC9). The decision is the state and who, read under the
+  lock.
 - **`alerts.acknowledged_by`.** Who. "They're safe" checks it. The
   resumed-escalation rule clears it, with `acknowledged_at` (the check takes
   both null), and moves the state back.
@@ -1234,8 +1242,20 @@ release (M3) at no compatibility cost.
     with only the critical push they already had and the notice that names
     who is on it. The backstops are the 24-hour rule (task 7) and M6's
     tuning. Not changed here; the owner may revisit it.
-  - **An acknowledgement withdraws nothing** (AC2): the other responders
-    still get the critical push.
+  - **An acknowledgement withdraws nothing** (AC2): the other responders'
+    critical pushes still reach our push port.
+  - **At Apple, the notice can replace a critical push not yet delivered**
+    (`safety-reviewer`; D-113's amendment, the owner, 2026-10-07). APNs
+    stores one notification per app for an offline device, "in most cases
+    the latest". A responder offline when their critical push is accepted
+    could come back online to the non-critical notice instead, which does
+    not break through silent mode; from task 6, no SMS follows if someone
+    acknowledged. Sending the notice at once is still the safer order: a
+    notice sent before a responder's critical push is replaced by it. Not
+    live in M2, which sends no real pushes. M3's push task does not send the
+    notice to iOS until an L9 test on a real iPhone shows it never displaces
+    an undelivered critical alert (D-087's list; `critical-alerts-request.md`,
+    Part E, item 6).
 - **[F10](../plan/03-safety-reliability-security.md#failure-modes) and the
   abusive-member threat, on the responder's side.** Someone with a
   responder's unlocked phone, or a responder who means harm, can tap "I'm on
@@ -1364,6 +1384,12 @@ Each is named here so the task that owns it finds it. None blocks this task.
   helper, which then withdraws unsent notices too.
 - **Task 8 (the canary):** no change needed. If it ever acknowledges, its
   responder needs a credential (D-091).
+- **M3, the push task, before the notice goes to iOS** (D-113's amendment,
+  the owner, 2026-10-07): an L9 test on a real iPhone that a non-critical
+  push sent while an alert is open never displaces an undelivered critical
+  one, for example with `apns-expiration` 0. Until it passes, the notice is
+  not pushed on iOS; if it can't be shown, the app shows the acknowledgement
+  when opened. FCM's behaviour is checked in the same task.
 - **M3:** how the app learns the alert's ID (the read or a list of a
   responder's alerts, D-106); the "I'm on it" button and the alert screen,
   showing the alert's current state on open; the name of who is on it; the
@@ -1452,7 +1478,9 @@ What a responder's phone does at night is a safety choice, so it is yours.
   the critical alert and not yet opened the app learns it only from a
   notification.
 - It costs nothing: push is free, and the notice is not critical, so it
-  does not break through silent mode.
+  does not break through silent mode. (At our push port. At Apple, the
+  review found it can replace an undelivered critical push; D-113's
+  amendment gates it in M3.)
 - It meets the roadmap at L6 as written.
 - (b) leaves a responder who saw the alert unsure, which is the effect the
   story exists to reduce. (c) adds a story nobody asked for.
