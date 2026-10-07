@@ -4096,17 +4096,21 @@ any other path is work, not a candidate for the same treatment.
     does.
   - **The rule:** `alertTransition` gains `escalate` and returns to a
     `switch` with a `never` default.
-  - **One transaction, the journey's row first** (D-112): `escalated_at` at
+  - **One transaction, the journey's row first** (D-112): `sms_raised_at` at
     `now()`, state `ESCALATED`, and one SMS per responder.
-  - **`escalated_at`, with no check tying it to the state**, as for the
-    acknowledgement's columns.
+  - **`sms_raised_at`, with no check tying it to the state**, as for the
+    acknowledgement's columns. Not `escalated_at`: every form of "escalate"
+    contains "lat", which the privacy scans of column names flag as a
+    coordinate (found by `test-author` in the red phase; the scans stay as
+    they are).
   - **SMS has its own claim and delivery loop,** so a hung push provider
     never delays an SMS, nor the reverse. The SMS port is content-free (ID,
     recipient, kind), shares the push port's failure reasons, and answers
     `UNCONFIGURED_SMS` until M3.
   - **The stand-down's hold is left as it is,** with the reason in the spec.
   - **The page:** an SMS still unsent 60 s after it was written
-    (`SMS_UNSENT_LIMIT_MS`) stops the second check's report.
+    (`SMS_UNSENT_LIMIT_MS`) turns the second check's minute report into a
+    failing one, sent to its `/fail` address.
   - **Six closed log events,** with no phone number and no user ID (PRIV-07).
   - **The `alerts` mutation group** gains a third system test file.
   - **How D-033's alert states are read:** `ESCALATED` → `RESOLVED` and

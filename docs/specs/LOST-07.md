@@ -344,14 +344,14 @@ carriers; and the canary's use of all this (task 9).
      Overloads as `transition` has them: each event with the situation it
      needs, and one general overload the table test reads.
    - **The escalation's situation and event:** `AlertForEscalation { id,
-     state, acknowledgedBy, escalatedAt }`; `EscalateEvent { type: 'escalate',
+     state, acknowledgedBy, smsRaisedAt }`; `EscalateEvent { type: 'escalate',
      openedAt, now }`, both database times handed in, as the silence event
      carries its two.
    - **The rule, in its order:**
      1. no alert → unchanged;
      2. `RESOLVED` → unchanged;
      3. `state === 'ACKNOWLEDGED'` and `acknowledgedBy !== null` → unchanged;
-     4. `escalatedAt !== null` → unchanged (already escalated);
+     4. `smsRaisedAt !== null` → unchanged (already escalated);
      5. `now − openedAt ≥ ESCALATE_AFTER_MS` → `{ type: 'escalated', state:
         'ESCALATED' }`;
      6. otherwise unchanged.
@@ -400,8 +400,8 @@ carriers; and the canary's use of all this (task 9).
    3. **under that lock**, read the alert's state, acknowledger, escalation
       time and opened time, with this transaction's now(), and ask the rule
       (AR-04); anything but `escalated` → `skipped`, writing nothing;
-   4. `update alerts set state = 'ESCALATED', escalated_at = now() where id =
-      $a and state <> 'RESOLVED' and escalated_at is null and not (state =
+   4. `update alerts set state = 'ESCALATED', sms_raised_at = now() where id =
+      $a and state <> 'RESOLVED' and sms_raised_at is null and not (state =
       'ACKNOWLEDGED' and acknowledged_by is not null)`: exactly one row, or the
       transaction is rolled back;
    5. one `LOST_CONTACT_SMS` per `journey_responders` row, a new random ID,
@@ -432,7 +432,7 @@ carriers; and the canary's use of all this (task 9).
    most 60 s. **An SMS the acknowledgement withdrew earlier does not hold it**
    (the item LOST-06 left): the two ports reach two providers, neither
    promises an order past itself, and the app shows the alert's current state
-   (M3). The alert keeps `escalated_at`. Every responder gets one push
+   (M3). The alert keeps `sms_raised_at`. Every responder gets one push
    stand-down and no SMS (Q5 (a)).
 
 7. **Delivery: a claim, a sender and a loop of its own.**
@@ -505,20 +505,27 @@ carriers; and the canary's use of all this (task 9).
    | Table | Change | Constraints |
    |---|---|---|
    | enum `message_kind` | + `LOST_CONTACT_SMS` | Equals `MESSAGE_KINDS`, in order |
-   | `alerts` | + `escalated_at` (database time) | None |
+   | `alerts` | + `sms_raised_at` (database time) | None |
+
+   - **Named `sms_raised_at`, not `escalated_at`** (found in the red phase).
+     Every form of "escalate" contains "lat", and the privacy scans of the
+     tables' column names (LOST-01-AC18, LOST-02-AC13 and AC23, LOST-03-AC9,
+     LOST-06-AC10) match "lat" anywhere in a name, as a coordinate. The new
+     name passes every scan as it stands, so no privacy test changes. The
+     state stays `ESCALATED`; enum labels are not scanned.
 
    - **The value is added inside the migration's transaction**, as `0004` and
      `0005` add theirs, so `0006` must not use it: `'LOST_CONTACT_SMS'`
      appears only in its `add value` statement. The L3 runs on PostgreSQL 15
      are the evidence (AC19).
-   - **No check ties `ESCALATED` to `escalated_at`**: rows put in directly
+   - **No check ties `ESCALATED` to `sms_raised_at`**: rows put in directly
      have the state without the time (D-112's reasoning), and the
      resumed-escalation rule will move a state back.
    - **No index.** The escalation's read filters unresolved alerts, a handful
      at the private group's scale; the failing-SMS count reads the claim's
      partial index (`sent_at is null`). M6 revisits both.
    - **No location, no phone number, no name.** The migration changes no
-     existing row; `escalated_at` is null on all of them.
+     existing row; `sms_raised_at` is null on all of them.
 
 10. **The lock order, and every wait bounded (AR-06).** The escalation takes
     the journey's row first, then the alert's row (the update), then the new
@@ -530,7 +537,7 @@ carriers; and the canary's use of all this (task 9).
     the worker's 10 s idle limit (D-108). The SMS claim never waits (`skip
     locked`); its marks hold one row for one statement.
 
-11. **Database time** (AR-03, REL-01). `escalated_at`, every SMS's
+11. **Database time** (AR-03, REL-01). `sms_raised_at`, every SMS's
     `created_at` and `next_attempt_at`, and the failing-SMS count's "60 s
     ago" are the database's `now()`. The fake store emulates `now()` with the
     fake clock it is given, and throws when asked to escalate, claim or count
@@ -566,7 +573,7 @@ carriers; and the canary's use of all this (task 9).
     - **one delegated decision (D-031)** for the rest: the kind's name and the
       two channel lists; `WITHDRAWN_WHEN_ACKNOWLEDGED`; the escalation in the
       sweep, feeding the beat, with its stuck check; the rule and its order;
-      `escalated_at` with no state check; the escalation's transaction and
+      `sms_raised_at` with no state check; the escalation's transaction and
       lock order; the separate claim and loop; the content-free SMS port and
       the shared reasons; `UNCONFIGURED_SMS`; the hold left as it is (approach
       item 6); the page's definition (60 s) and its check; the six log events;
@@ -600,7 +607,7 @@ the tests are written.
 - **`ports.ts`:**
   - `WatchdogStore` gains `alertsDueForEscalation(afterMs)` → `{ now: Date;
     alerts: DueAlert[] }` (`DueAlert`: `id`, `journeyId`, `state`,
-    `acknowledgedBy`, `escalatedAt`, `openedAt`) and `escalateAlert({ alertId,
+    `acknowledgedBy`, `smsRaisedAt`, `openedAt`) and `escalateAlert({ alertId,
     afterMs, lockWaitMs? })` → `{ outcome: 'escalated'; messages:
     AlertMessage[] } | { outcome: 'skipped' } | { outcome: 'held' }`, with
     `lockWaitMs` checked as the open checks it;
@@ -632,7 +639,7 @@ the tests are written.
   - `fakeJourneyStore({ clock })`: the four new store methods, deciding by the
     same rule under its own "lock" (`hold` and `holdUntilWaited` as the open
     meets them); `claimDue` takes push kinds only; `alerts()` and `seedAlert`
-    gain `escalatedAt`, null until set; its resolution and its
+    gain `smsRaisedAt`, null until set; its resolution and its
     acknowledgement withdraw their lists; `failWith` and `beforeNext` for the
     new methods; without a clock, it throws when asked to escalate, claim or
     count;
@@ -642,8 +649,8 @@ the tests are written.
   - `fakeLog()`: the six events;
   - **the shared behaviour suite:** `JourneyStoreUnderTest.store` gains the
     four methods; a reader of its own, `escalationsOf(journeyId)` (alert,
-    `escalatedAt`), keeps `AlertAsStored`'s shape; `seedAlert` gains
-    `escalatedAt`, optionally.
+    `smsRaisedAt`), keeps `AlertAsStored`'s shape; `seedAlert` gains
+    `smsRaisedAt`, optionally.
 
 ## Acceptance criteria
 
@@ -663,7 +670,7 @@ escalation … at L6".** *(LOST-07, REL-07, LOST-02)*
   fake holds nothing
 - **When** the clock reaches exactly 120 000 ms after `opened_at` and the loops
   run
-- **Then** the alert is `ESCALATED`, `escalated_at` the store's now; J is still
+- **Then** the alert is `ESCALATED`, `sms_raised_at` the store's now; J is still
   `LOST_CONTACT`, with one alert
 - **And** the SMS fake holds exactly one `LOST_CONTACT_SMS` for each of R1, R2
   and R3, R2 included, and none for W or anyone else
@@ -684,7 +691,7 @@ story's second test.** *(LOST-07, REL-07, LOST-06)*
 - **When** R1 says "I'm on it" through the API one minute after `opened_at`,
   and the loops run to ten minutes after it
 - **Then** no SMS is written or handed to the SMS fake, the alert stays
-  `ACKNOWLEDGED` by R1, and its `escalated_at` stays null
+  `ACKNOWLEDGED` by R1, and its `sms_raised_at` stays null
 - **And** the same with the acknowledgement at 119 999 ms
 - **And** at 120 000 ms with the sweep run first, the alert escalates, and the
   acknowledgement then meets AC6.
@@ -742,7 +749,7 @@ withdrawn, and nothing else is.** *(LOST-07, LOST-06)*
   R3's handed to the SMS port and not yet answered (the fake's
   `holdAnswers`)
 - **When** R2 says "I'm on it"
-- **Then** the alert is `ACKNOWLEDGED` by R2, and keeps its `escalated_at`
+- **Then** the alert is `ACKNOWLEDGED` by R2, and keeps its `sms_raised_at`
 - **And** R2's and R3's SMS are withdrawn at the store's now, keep their
   attempts and last failure, and are never handed to the SMS port again,
   whatever their due time; R1's is as it was
@@ -763,7 +770,7 @@ only.** *(LOST-07, LOST-03, SM-04)*
 - **When** contact comes back by a fresh heartbeat; in another run, by "I'm
   home"
 - **Then** the alert is `RESOLVED` with its resolution, and keeps
-  `escalated_at`
+  `sms_raised_at`
 - **And** R2's and R3's SMS are withdrawn at the store's now, keep their
   attempts and last failure, and are never handed to the SMS port again; sent
   ones are as they were
@@ -939,14 +946,14 @@ D-108)*
 **LOST-07-AC17 — The escalation's time is the database's.** *(LOST-07,
 REL-01)*
 - **Given** a real PostgreSQL
-- **Then** `escalated_at` lies between two `select now()` readings taken
+- **Then** `sms_raised_at` lies between two `select now()` readings taken
   before and after the sweep, never before `opened_at` plus 120 s, and each
   SMS's `created_at` and `next_attempt_at` equal it to the microsecond, in
   the same transaction (`xmin`)
-- **And** a resolution and an acknowledgement keep `escalated_at`
+- **And** a resolution and an acknowledgement keep `sms_raised_at`
 - **And** the modules and the domain read no clock (the lint rule, L1)
 - **And** at L6, swept exactly two minutes after the alert opened on the fake
-  clock, `escalated_at` minus `opened_at` is exactly 120 s.
+  clock, `sms_raised_at` minus `opened_at` is exactly 120 s.
 
 **LOST-07-AC18 — The new log events are closed, and nothing personal reaches
 a log.** *(LOST-07, PRIV-07)*
@@ -970,7 +977,7 @@ existing row.** *(LOST-07)*
 - **Given** a freshly migrated database
 - **Then** `message_kind`'s values equal `MESSAGE_KINDS`, in order
   (`pg_enum`)
-- **And** `alerts.escalated_at` is a database time (timestamp with time zone),
+- **And** `alerts.sms_raised_at` is a database time (timestamp with time zone),
   nullable; the database takes an `ESCALATED` alert without it
 - **And** the claim's partial index still reads `(next_attempt_at, id)` with
   the predicate `sent_at IS NULL`
@@ -978,7 +985,7 @@ existing row.** *(LOST-07)*
   state, alerts in every state with and without a resolution and an
   acknowledgement, and outbox messages of every kind, sent, unsent and
   withdrawn, migrates through `0006` as the pre-run hook runs it; every
-  existing row is unchanged, `escalated_at` is null on them, and
+  existing row is unchanged, `sms_raised_at` is null on them, and
   `LOST_CONTACT_SMS` can be used once the migration has committed
 - **And** there is exactly one committed `0006_*.sql`, in the journal, with no
   `update`, `delete` or `truncate`, which names `'LOST_CONTACT_SMS'` only in
@@ -1123,7 +1130,7 @@ the sweep's result and the `alerts` mutation group.
     `LOST_CONTACT_SMS`; the second's title no longer says "ACKNOWLEDGED last".
     The assertions against the domain's list are unchanged.
   - "LOST-02-AC13: alerts and outbox hold exactly the spec's columns, …" (line
-    2075): the `alerts` list gains `escalated_at`. Still exact; its scan for
+    2075): the `alerts` list gains `sms_raised_at`. Still exact; its scan for
     a coordinate, an accuracy, a phone time, a battery level, a name or a
     phone number covers it as it stands.
 - **`apps/server/src/deploy.integration.test.ts`**, "LOST-06-AC17: a
@@ -1240,7 +1247,7 @@ was not read here; LOST-03's and LOST-06's specs say it lists the same paths.
 | `apps/server/src/adapters/healthchecks.ts` | `healthchecksAlarm` | **yes** | **yes** | `healthchecks` |
 | `apps/server/src/worker.ts`, `bin/worker.ts` | The SMS loop, `UNCONFIGURED_SMS`, the minute task, the start lines; the setting | **yes** | **yes** | `process` |
 | `apps/server/src/config.ts` | `readHealthchecksSmsSetting` | no (D-079) | no | — |
-| `apps/server/src/db/schema.ts` | `escalated_at`, `message_kind`'s value | **yes** | **yes** | no |
+| `apps/server/src/db/schema.ts` | `sms_raised_at`, `message_kind`'s value | **yes** | **yes** | no |
 | `apps/server/src/db/migrations/0006_*.sql`, `meta/*` | Generated with `db:generate` | **yes** | **yes** | no |
 | `apps/server/src/log.ts` | Six events | **yes** (D-102) | no (D-102) | no |
 | `packages/test-kit/src/` (the store, the behaviour suite, `fakeSms`, the alarm fake, `fakePush`'s kinds, `fakeLog`, their tests, `index.ts`) | Fakes (test-author) | **yes** (D-100) | **yes** | input (D-098) |
@@ -1253,7 +1260,7 @@ was not read here; LOST-03's and LOST-06's specs say it lists the same paths.
 | `coverage-baseline.json` | Entries for `escalation.ts` and `sms-check.ts`, by hand, at their measured values (not `--update`) | **yes** | no | — |
 | `docs/plan/decisions.md` | Approach item 14 | **yes** | no | — |
 | `docs/plan/05-architecture.md` | The alert-state sentence draws the edges approach item 14 records | no | no | — |
-| `docs/plan/monitoring-setup.md`, `docs/plan/README.md` | A-32 and A-33; "Open for M4": `escalated_at` and the SMS rows are alert records | no | no | — |
+| `docs/plan/monitoring-setup.md`, `docs/plan/README.md` | A-32 and A-33; "Open for M4": `sms_raised_at` and the SMS rows are alert records | no | no | — |
 | `docs/requirements-status.md` | Regenerated | no | no | — |
 | `docs/progress.md`, `docs/progress/m2.md` | Status (plan-keeper) | no | no | — |
 
@@ -1402,7 +1409,7 @@ messageId, recipientId, kind }`, is what M3's adapter receives.
 - **Escalating again after an acknowledgement nobody follows up** (M6, the
   owner; LOST-06).
 - **Watching push delivery** (task 9's canary, D-108).
-- **Retention** of `escalated_at` and the SMS rows (the retention rule, M4),
+- **Retention** of `sms_raised_at` and the SMS rows (the retention rule, M4),
   and the DPIA.
 - **Any route or contract change.**
 
@@ -1460,7 +1467,7 @@ Each is named here so the task that owns it finds it. None blocks this task.
   that refuses a kind it does not map.
 - **M3, responder setup:** readiness shows a responder with no confirmed
   number, so the walker sees who would get no SMS.
-- **M4:** retention of `escalated_at` and the SMS rows (alert records); the
+- **M4:** retention of `sms_raised_at` and the SMS rows (alert records); the
   export rule's export of what a member was sent; the DPIA's SMS data flow.
 - **Go-live:** D-079's question, whether the owner's pages reach a phone at
   night (Healthchecks.io Business).
