@@ -105,3 +105,23 @@ and devices by SQL, then drop the db `with (force)` in `finally`.
   required checks and pull_request params. Local gate:integrity cannot read rules (no token) and says so.
 - One mutant plugin file with MUTANT env selecting anchor/replacement, plus thin configs spreading
   vitest.config.mjs, vitest.system.config.mjs or the l3 shim config, runs many mutants without repo writes.
+
+**2026-10-07 (LOST-07 loop 1):** guard not blocking (mkdir, heredoc writes worked). `vitest -t` cannot select the
+shared suite's test.each('$name') tests in journeys.integration.test.ts (list shows "$name"; -t skipped all 172):
+run the whole file (~37 s at L3). Real Terraform for validation checks: node_modules/.cache/terraform/1.16.4/
+linux_amd64/terraform; awk the variable blocks into a scratch dir, init, then plan -var ... ("No changes" = taken).
+raw.githubusercontent.com is reachable with curl; gh api for repos outside the session is 403.
+
+**2026-10-07 (LOST-07 loop 2): deleting only MY vitest /tmp/<id>/ssr folders while other reviewers run.** Each vitest run
+leaves /tmp/<21-char id>/ssr (file names are NOT content hashes; identical across runs). Attribute by: birth time
+(stat -c %W) against the mtime of the scratch files written in the same command as the run (marks its start), and by
+content: decode each module's inline sourceMappingURL base64, compare sourcesContent with the repo file of the same
+basename (all equal = unmutated run; one differing file = whose mutant). Others ran the very same mutants
+(test-auditor), so a mutant string alone is not proof. Check /proc/*/fd and cwd before rm. Don't touch ambiguous ones.
+
+**2026-10-07 (LOST-07 loop 3): avoid the /tmp ssr attribution problem entirely.** Prefix every vitest run with
+TMPDIR=<scratchpad>/tmp: the <id>/ssr folders land there, then rm -rf that one dir. Mutant without touching the repo:
+a scratch copy of the module with its relative imports sed'ed to absolute paths, and a scratch vitest config that is a
+plain `export default {root: <repo>, resolve: {alias: [{find: /^\.\/escalation\.ts$/, replacement: <copy>}]}, test:
+{include: [...]}}` (no `import 'vitest/config'`: it does not resolve from the scratchpad). Prove the alias took effect
+with a throwing probe appended to the copy. Terraform also at <scratchpad>/bin/terraform (1.16.4).

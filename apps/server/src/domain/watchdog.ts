@@ -13,12 +13,17 @@
  *   - a journey still ACTIVE STUCK_AFTER_MS past the threshold, that a sweep
  *     could not move, is reported, and stops the beat. That is more than one
  *     interval plus the idle limit, so a stall the limit already ends is
- *     never reported, and well inside the slack;
+ *     never reported, and well inside the slack. An alert still unescalated
+ *     STUCK_AFTER_MS past its two minutes is reported the same way (LOST-07);
  *   - the minute check-in follows a beat at most BEAT_FRESH_MS old: three
  *     sweeps, so two missed sweeps are tolerated and a third is not;
  *   - the sender claims at most CLAIM_BATCH messages at a time, each leased
  *     for CLAIM_LEASE_MS, and a message the push port did not accept waits
- *     `retryDelayMs(attempts)`: 10 s, doubling, capped at 60 s.
+ *     `retryDelayMs(attempts)`: 10 s, doubling, capped at 60 s;
+ *   - an escalation SMS still unsent SMS_UNSENT_LIMIT_MS after it was written
+ *     is failing, and the minute SMS check pages the owner (LOST-07). One run
+ *     of the SMS loop and two retries come within it, so a failure a retry
+ *     fixes is no page.
  *
  * Pure: no clock, no I/O. The times it compares are the database's, handed
  * in by the module that read them (REL-01, AR-03).
@@ -60,6 +65,14 @@ export const CLAIM_BATCH = 50;
 /** How long past the five minutes the reliability target gives an alert to reach the responders. */
 export const ALERT_TIME_SLACK_MS = 60_000;
 
+/**
+ * How long after it was written an escalation SMS still unsent, and not
+ * withdrawn, counts as failing, whatever the cause: the minute SMS check then
+ * reports failing, and the owner is paged (LOST-07, D-116). A monitoring
+ * threshold, delegated.
+ */
+export const SMS_UNSENT_LIMIT_MS = 60_000;
+
 /** The wait after a message's first failed attempt; each later one doubles it. */
 const FIRST_RETRY_DELAY_MS = 10_000;
 
@@ -81,5 +94,23 @@ export function retryDelayMs(attempts: number): number {
  * STUCK_AFTER_MS, or more. Both are database times.
  */
 export function isStuck({ silentSince, now }: { silentSince: Date; now: Date }): boolean {
-  return now.getTime() - silentSince.getTime() >= LOST_CONTACT_AFTER_MS + STUCK_AFTER_MS;
+  return isStuckPast({ since: silentSince, dueAfterMs: LOST_CONTACT_AFTER_MS, now });
+}
+
+/**
+ * Whether something due `dueAfterMs` after `since` is, at `now`, STUCK_AFTER_MS
+ * past it or more, so a sweep that cannot do it must say so: a journey's
+ * silence (`isStuck`), or an alert's two minutes before its SMS (LOST-07).
+ * All database times.
+ */
+export function isStuckPast({
+  since,
+  dueAfterMs,
+  now,
+}: {
+  since: Date;
+  dueAfterMs: number;
+  now: Date;
+}): boolean {
+  return now.getTime() - since.getTime() >= dueAfterMs + STUCK_AFTER_MS;
 }

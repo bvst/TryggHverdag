@@ -9,6 +9,7 @@
 import type {
   AcknowledgeOutcome,
   AlertForAcknowledgement,
+  AlertState,
   JourneyForHeartbeat,
   JourneyState,
   MessageKind,
@@ -51,6 +52,20 @@ export interface CheckIn {
    * not answer (D-079).
    */
   checkIn(signal?: AbortSignal): Promise<void>;
+}
+
+/**
+ * The SMS check's report, told to an outside monitor of its own (LOST-07,
+ * D-115): `ok` while no escalation SMS is failing, `failing` while any is.
+ * The monitor pages the owner on a failing report, and when the reports stop.
+ */
+export interface SmsAlarm {
+  /**
+   * Resolves when the monitor accepted it; rejects on anything else, and as
+   * soon as `signal` aborts, so a stop never waits for a monitor that does
+   * not answer.
+   */
+  report(status: 'ok' | 'failing', signal?: AbortSignal): Promise<void>;
 }
 
 /** Who a device credential belongs to. */
@@ -189,6 +204,45 @@ export type OpenLostContactAlertResult =
   | { outcome: 'skipped' }
   | { outcome: 'held' };
 
+/**
+ * An alert the escalation's read found due (LOST-07): what the escalation rule
+ * reads, its journey, and when it opened, in database time.
+ */
+export interface DueAlert {
+  id: string;
+  journeyId: string;
+  state: AlertState;
+  acknowledgedBy: string | null;
+  smsRaisedAt: Date | null;
+  openedAt: Date;
+}
+
+/** The alerts due for escalation, and the database's now() from the same statement: there even when none is. */
+export interface DueAlerts {
+  now: Date;
+  alerts: DueAlert[];
+}
+
+/**
+ * An escalation as the watchdog asks for it: with `lockWaitMs`, it waits that
+ * long for a held row. No threshold: the store decides by the domain's
+ * ESCALATE_AFTER_MS, so no caller can choose another (D-100, D-116).
+ */
+export interface EscalateRequest {
+  alertId: string;
+  /** How long to wait for a held row; undefined, or left out, skips it. */
+  lockWaitMs?: number | undefined;
+}
+
+/**
+ * Escalated: the alert ESCALATED, with one LOST_CONTACT_SMS per responder.
+ * Skipped: nothing written, because the row was held (without a wait), or the
+ * alert was no longer due under the journey's row. Held: an escalation that
+ * waited for the row ran out of wait (55P03), and nothing was written.
+ */
+export type EscalateAlertResult =
+  { outcome: 'escalated'; messages: AlertMessage[] } | { outcome: 'skipped' } | { outcome: 'held' };
+
 /** What the watchdog needs of the journeys (LOST-02, AR-06). */
 export interface WatchdogStore {
   /**
@@ -214,6 +268,28 @@ export interface WatchdogStore {
    * 2147483647: PostgreSQL reads 0 as no limit.
    */
   openLostContactAlert(request: OpenRequest): Promise<OpenLostContactAlertResult>;
+  /**
+   * LOST-07: every alert unresolved, never escalated, not acknowledged in
+   * D-114's sense (state ACKNOWLEDGED and someone recorded), and opened
+   * `afterMs` or more before the database's now(), read without locking, and
+   * that now().
+   */
+  alertsDueForEscalation(afterMs: number): Promise<DueAlerts>;
+  /**
+   * LOST-07, in one transaction: takes the alert's journey's row first
+   * (D-112), asks the domain's escalation rule again under that lock with the
+   * transaction's now() and its two minutes, ESCALATE_AFTER_MS (AR-04), and
+   * writes what it decides: the alert
+   * ESCALATED with its escalation time at now(), and one LOST_CONTACT_SMS per
+   * responder row, due at now() (AR-05); or nothing. Bounds its waits as an
+   * open does: `lockWaitMs`, or LOCK_WAIT_LIMIT_MS without it; without
+   * `lockWaitMs` a held row is skipped, with it the escalation waits at most
+   * that long for the journey's row and answers `held` when that wait runs
+   * out. Rejects, having written nothing, on any other failure, a journey
+   * with no responder row included; and before taking any lock when
+   * `lockWaitMs` is given and is not a whole number from 1 to 2147483647.
+   */
+  escalateAlert(request: EscalateRequest): Promise<EscalateAlertResult>;
 }
 
 /** A message as a claim hands it out: what the push needs, and how many attempts it has had, this one included. */
@@ -235,6 +311,17 @@ export interface OutboxStore {
    * more and leased until now() plus `leaseMs`.
    */
   claimDue(request: { limit: number; leaseMs: number }): Promise<ClaimedMessages>;
+  /**
+   * LOST-07: as `claimDue`, for the SMS kinds only (`SMS_KINDS`), with the same
+   * limit, lease, attempt count and order. `claimDue` takes the push kinds
+   * only (`PUSH_KINDS`), so no message ever reaches the other channel's port.
+   */
+  claimDueSms(request: { limit: number; leaseMs: number }): Promise<ClaimedMessages>;
+  /**
+   * LOST-07: how many SMS messages are unsent, not withdrawn, and were written
+   * `olderThanMs` or more before the database's now(); and that now().
+   */
+  unsentSmsCount(olderThanMs: number): Promise<{ now: Date; count: number }>;
   /** The port accepted it: sent at now(). */
   markSent(messageId: string): Promise<void>;
   /** The port did not accept it: this reason, and due again `retryAfterMs` after now(). */
@@ -267,6 +354,26 @@ export type PushResult = { outcome: 'accepted' } | PushFailure;
 export interface Push {
   /** Answers; a rejection counts as UNAVAILABLE. */
   send(message: PushMessage): Promise<PushResult>;
+}
+
+/**
+ * A message as the SMS port takes it, and nothing more, as the push port
+ * takes one (D-086, LOST-07): no text, no name, no number and no location.
+ * The text and the number it goes to are the M3 adapter's to find, by the
+ * recipient's ID (D-115).
+ */
+export type SmsMessage = AlertMessage;
+
+/**
+ * Accepted, or not, and why: the push port's four reasons, so the outbox's
+ * check and the log take one list. `NO_TARGET` is "no confirmed number".
+ */
+export type SmsResult = PushResult;
+
+/** The SMS port: LINK Mobility in M3 (D-086), a recording fake in tests. */
+export interface Sms {
+  /** Answers; a rejection counts as UNAVAILABLE. */
+  send(message: SmsMessage): Promise<SmsResult>;
 }
 
 /** Journeys, their responders, their heartbeats, and the users all of them must be (SM-01, LOST-01). */
@@ -366,7 +473,13 @@ export type LogEvent =
   | { event: 'home_failed'; stage: 'read' | 'store'; code: string | null }
   | { event: 'alert_missing'; journeyId: string }
   | { event: 'acknowledgement_ignored'; reason: 'ALERT_RESOLVED'; alertId: string }
-  | { event: 'acknowledgement_failed'; stage: 'read' | 'store'; code: string | null };
+  | { event: 'acknowledgement_failed'; stage: 'read' | 'store'; code: string | null }
+  | { event: 'escalation_failed'; stage: 'read' | 'escalate'; code: string | null }
+  | { event: 'escalation_overdue'; alertId: string }
+  | { event: 'sms_failed'; reason: PushFailureReason; messageId: string }
+  | { event: 'sms_delivery_failed'; stage: 'claim' | 'mark'; code: string | null }
+  | { event: 'sms_unsent'; count: number }
+  | { event: 'sms_check_failed'; stage: 'read' | 'report'; code: string | null };
 
 /** Where the server writes what happened, one event at a time. */
 export interface Log {

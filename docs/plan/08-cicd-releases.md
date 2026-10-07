@@ -234,6 +234,13 @@ reads the agent briefs and asserts on them, so editing one really can fail
       (A-23, INF-08, D-079). Rotating it means a new check, not a new value:
       the steps are under "If the ping URL ever leaks" in
       [monitoring-setup.md](monitoring-setup.md)
+    - `HEALTHCHECKS_SMS_URL` — the staging `staging-sms` check, which pages
+      when an SMS stays unsent (A-32, LOST-07, D-115). Stored in the same
+      three places as the worker's: a secret of the GitHub environment
+      `staging`, the staging app's environment on Clever Cloud (set by
+      Terraform), and in plain text in Terraform's state in Cellar. It must
+      differ from `HEALTHCHECKS_WORKER_URL`: one green ping must never keep the
+      other check green. Rotating it follows the same steps
   - Claude OAuth token
   - Claude's GitHub token (A-06)
   - `RULES_READ_TOKEN` — **normally not needed.** CI-01 reads the merge rules

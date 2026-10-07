@@ -31,6 +31,14 @@
 // code it proves lives in modules/journeys/. Times are written out (five
 // minutes, 10 s, the 30 s lease), not read from the domain's constants, so a
 // wrong constant fails here as well as in the domain's own tests.
+//
+// RG-03 (LOST-07, the spec's "Every exact sweep result"): the sweep's result
+// gains `escalated`, the alerts it escalated (LOST-07-AC1). Each of the 4
+// exact results here gains `escalated: 0`: each sweeps a journey whose alert
+// was resolved, or never opened. Still exact. The sweeps two minutes or more
+// after an alert opened (the spec's search) were run against a reference of
+// the escalation: an escalation there changes nothing these tests assert,
+// because the SMS go to the SMS port, which this file does not run.
 import {
   MESSAGE_KINDS,
   RACERS,
@@ -376,6 +384,13 @@ function senderOfTwo(w: World) {
     claimDue: (request) => w.store.claimDue({ ...request, limit: 2 }),
     markSent: (messageId) => w.store.markSent(messageId),
     markFailed: (request) => w.store.markFailed(request),
+    // RG-03 (LOST-07; not in the spec's list, found by type-checking this
+    // file against a reference of the spec's interfaces): OutboxStore gains
+    // the SMS claim and the count of SMS waiting, so this typed stand-in
+    // must have them. Both go to the fake unchanged; the push sender it is
+    // built for never calls them, and nothing this file asserts changes.
+    claimDueSms: (request: { limit: number; leaseMs: number }) => w.store.claimDueSms(request),
+    unsentSmsCount: (olderThanMs: number) => w.store.unsentSmsCount(olderThanMs),
   };
   return createPushSender({ outbox, push: w.push, log: w.log });
 }
@@ -1120,7 +1135,7 @@ describe('LOST-03 and SM-09: a heartbeat and the watchdog’s open meet on the r
       'the heartbeat reaching the store',
     );
 
-    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 0, stuck: 0 });
+    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 0, escalated: 0, stuck: 0 });
     w.store.release(journeyId);
     const answer = await answering;
 
@@ -1128,7 +1143,7 @@ describe('LOST-03 and SM-09: a heartbeat and the watchdog’s open meet on the r
     expect(w.stateOf(journeyId)).toBe('ACTIVE');
     expect(w.store.alerts()).toEqual([]);
     expect(w.store.outbox()).toEqual([]);
-    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 0, stuck: 0 });
+    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 0, escalated: 0, stuck: 0 });
   });
 
   test('LOST-03-AC11: the sweep’s open holding J’s row as a heartbeat for J arrives: the heartbeat waits, then brings J back: the alert RESOLVED, the lost-contact messages withdrawn, one BACK_IN_CONTACT per responder; J ACTIVE and not overdue, and the next sweep opens nothing', async () => {
@@ -1164,7 +1179,7 @@ describe('LOST-03 and SM-09: a heartbeat and the watchdog’s open meet on the r
     expect(recipientsOf(ofKind(w.messagesOf(journeyId), 'BACK_IN_CONTACT'))).toEqual(
       [...responderIds].sort(),
     );
-    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 0, stuck: 0 });
+    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 0, escalated: 0, stuck: 0 });
   });
 });
 
@@ -1614,7 +1629,7 @@ describe('SM-04 and SM-09: "I’m home" is all or nothing, and meets the watchdo
     const answering = w.home(walker, journeyId);
     await until(() => w.store.calls.includes('recordHome'), '"I’m home" reaching the store');
 
-    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 0, stuck: 0 });
+    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 0, escalated: 0, stuck: 0 });
     w.store.release(journeyId);
     const answer = await answering;
 

@@ -876,6 +876,61 @@ async function databaseAt0004(
   }
 }
 
+/** The journal's entries `0000` to `0005`: the schema LOST-06 left (LOST-07). */
+function entriesThrough0005(): JournalEntry[] {
+  const kept = journal(MIGRATIONS).entries.filter((entry) => /^000[0-5]_/.test(entry.tag));
+  expect(kept.map((entry) => entry.idx)).toEqual([0, 1, 2, 3, 4, 5]);
+  return kept;
+}
+
+/** A copy of the migrations folder holding `0000` to `0005` only: the schema before LOST-07. */
+function migrationsUpTo0005(): string {
+  const folder = mkdtempSync(path.join(tmpdir(), 'migrations-0005-'));
+  mkdirSync(path.join(folder, 'meta'));
+  const kept = entriesThrough0005();
+  for (const entry of kept) {
+    copyFileSync(path.join(MIGRATIONS, `${entry.tag}.sql`), path.join(folder, `${entry.tag}.sql`));
+  }
+  writeFileSync(
+    path.join(folder, 'meta', '_journal.json'),
+    JSON.stringify({ ...journal(MIGRATIONS), entries: kept }, null, 2),
+  );
+  return folder;
+}
+
+/** Drizzle's migrate on one connection, as migrateDatabase runs it, over the migrations up to `0005` only. */
+async function migrateThrough0005(uri: string): Promise<void> {
+  const folder = migrationsUpTo0005();
+  const pool = createPool(uri, 1);
+  try {
+    await migrate(createDatabase(pool), { migrationsFolder: folder });
+  } finally {
+    await pool.end();
+    rmSync(folder, { recursive: true, force: true });
+  }
+}
+
+/** A fresh database in the PostgreSQL 15 container, migrated up to `0005` only, and dropped afterwards (LOST-07). */
+async function databaseAt0005(
+  use: (uri: string, client: pg.Client) => Promise<void>,
+): Promise<void> {
+  const name = `lost07_${syntheticUuid().replaceAll('-', '')}`;
+  const admin = new pg.Client({ connectionString: databaseUrl() });
+  await admin.connect();
+  await admin.query(`create database ${name}`);
+  const uri = withDatabase(databaseUrl(), name);
+  const client = new pg.Client({ connectionString: uri });
+  try {
+    await migrateThrough0005(uri);
+    await client.connect();
+    await use(uri, client);
+  } finally {
+    await client.end().catch(() => undefined);
+    await admin.query(`drop database if exists ${name}`);
+    await admin.end();
+  }
+}
+
 describe('LOST-06: the acknowledgement migration changes no row that is already there', () => {
   test('LOST-06-AC17: a PostgreSQL 15 database at 0004, holding journeys in every state, alerts in every state with and without a resolution, and outbox messages sent, unsent and withdrawn, migrates through 0005 as the pre-run hook runs it; every existing row is unchanged, both new columns are null on them, and ACKNOWLEDGED can be used once the migration has committed', async () => {
     await databaseAt0004(async (uri, client) => {
@@ -930,7 +985,17 @@ describe('LOST-06: the acknowledgement migration changes no row that is already 
         alertStates.length + 1,
       );
 
-      await expect(migrateDatabase(uri)).resolves.toBeUndefined();
+      // RG-03 (LOST-07, the spec's "Existing assertions that change by
+      // design"): this ran every migration (migrateDatabase), so it would now
+      // run 0006 too, and each alert row would then hold sms_raised_at, null,
+      // and message_kind a fifth label: the comparisons below would fail
+      // though 0005 changed nothing. It keeps its point by migrating through
+      // 0005 only, with drizzle's migrate on one connection, as
+      // migrateDatabase runs it, over a copy of the folder up to 0005 (as
+      // migrationsUpTo0004 does for LOST-03-AC20). The applied count is that
+      // copy's journal's. LOST-07-AC19's test below takes a database at 0005
+      // through 0006.
+      await expect(migrateThrough0005(uri)).resolves.toBeUndefined();
 
       // Every row as it was, column for column, with the two new columns,
       // and only those, beside each alert, null (approach item 7).
@@ -951,7 +1016,8 @@ describe('LOST-06: the acknowledgement migration changes no row that is already 
       const applied = await client.query<{ n: number }>(
         'select count(*)::int as n from drizzle.__drizzle_migrations',
       );
-      expect(applied.rows).toEqual([{ n: journal(MIGRATIONS).entries.length }]);
+      // RG-03 (LOST-07): the copy's journal, 0000 to 0005, as above.
+      expect(applied.rows).toEqual([{ n: entriesThrough0005().length }]);
 
       // The value added inside the migration's transaction is usable once it
       // has committed, and so are the two columns, together.
@@ -1001,5 +1067,159 @@ describe('LOST-06: the acknowledgement migration changes no row that is already 
     ).toEqual([]);
     expect(text).toContain('acknowledged_by');
     expect(text).toContain('acknowledged_at');
+  });
+});
+
+// LOST-07's migration, 0006, adds when an alert was escalated, and the SMS's
+// message kind. Like 0005 it has nothing to guess, so it must run over a
+// database that already holds journeys, alerts and messages in every state,
+// and change none of those rows. It adds an enum value inside drizzle's one
+// transaction, which PostgreSQL accepts only if the transaction does not use
+// it (approach item 9): staging's PostgreSQL 15 is the evidence.
+
+describe('LOST-07: the escalation migration changes no row that is already there', () => {
+  test('LOST-07-AC19: a PostgreSQL 15 database at 0005, holding journeys in every state, alerts in every state with and without a resolution and an acknowledgement, and outbox messages of every kind, sent, unsent and withdrawn, migrates through 0006 as the pre-run hook runs it; every existing row is unchanged, sms_raised_at is null on them, and LOST_CONTACT_SMS can be used once the migration has committed', async () => {
+    await databaseAt0005(async (uri, client) => {
+      const journeyStates = (
+        await client.query<{ state: string }>(
+          'select unnest(enum_range(null::journey_state))::text as state',
+        )
+      ).rows.map((row) => row.state);
+      const alertStates = (
+        await client.query<{ state: string }>(
+          'select unnest(enum_range(null::alert_state))::text as state',
+        )
+      ).rows.map((row) => row.state);
+      expect(journeyStates).toEqual(['ACTIVE', 'LOST_CONTACT', 'ENDED']);
+      expect(alertStates).toEqual(['OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED']);
+      for (const state of journeyStates) {
+        await journeyIn(client, state);
+      }
+      for (const state of alertStates) {
+        await journeyWithAlert(client, state);
+      }
+      // A resolution on the RESOLVED alert, and an acknowledgement on it and
+      // on the ACKNOWLEDGED one: the columns 0004 and 0005 added, in use.
+      await client.query(
+        `update alerts set resolved_at = now() - interval '1 minute', resolution = 'HOME'
+          where state = 'RESOLVED'`,
+      );
+      await client.query(
+        `update alerts a
+            set acknowledged_at = now() - interval '3 minutes',
+                acknowledged_by = (select r.responder_id from journey_responders r
+                                    where r.journey_id = a.journey_id
+                                    order by r.responder_id limit 1)
+          where a.state in ('ACKNOWLEDGED', 'RESOLVED')`,
+      );
+      // Every kind 0005 knows beside the RESOLVED alert's lost-contact pushes:
+      // a stand-down sent, another unsent, a notice withdrawn; and its unsent
+      // lost-contact push withdrawn.
+      const resolved = await client.query<{ alert_id: string; recipient_id: string }>(
+        `select o.alert_id::text as alert_id, o.recipient_id::text as recipient_id
+           from outbox o join alerts a on a.id = o.alert_id
+          where a.state = 'RESOLVED' order by o.recipient_id`,
+      );
+      const [first, second] = resolved.rows;
+      await client.query(
+        "update outbox set withdrawn_at = now() - interval '1 minute' where alert_id = $1 and sent_at is null",
+        [first?.alert_id],
+      );
+      for (const [recipient, kind, sent, withdrawn] of [
+        [first, 'BACK_IN_CONTACT', true, false],
+        [second, 'HOME', false, false],
+        [second, 'ACKNOWLEDGED', false, true],
+      ] as const) {
+        await client.query(
+          `insert into outbox (id, alert_id, recipient_id, kind, created_at, attempts,
+                               next_attempt_at, sent_at, last_failure, withdrawn_at)
+           values ($1, $2, $3, $4, now() - interval '2 minutes', 1, now() - interval '1 minute',
+                   case when $5::boolean then now() - interval '1 minute' end, null,
+                   case when $6::boolean then now() - interval '30 seconds' end)`,
+          [syntheticUuid(), recipient?.alert_id, recipient?.recipient_id, kind, sent, withdrawn],
+        );
+      }
+      await client.query(
+        "insert into worker_heartbeat (id, beat_at) values ('worker', now() - interval '1 minute')",
+      );
+      const before = await rowsBefore0004(client);
+      expect(before.alerts).toHaveLength(alertStates.length);
+      expect(before.alerts.filter((row) => row['resolution'] !== null)).toHaveLength(1);
+      expect(before.alerts.filter((row) => row['acknowledged_by'] !== null)).toHaveLength(2);
+      expect(new Set(before.outbox.map((row) => row['kind']))).toEqual(
+        new Set(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED']),
+      );
+      expect(before.outbox.filter((row) => row['sent_at'] !== null).length).toBeGreaterThan(0);
+      expect(
+        before.outbox.filter((row) => row['sent_at'] === null && row['withdrawn_at'] === null)
+          .length,
+      ).toBeGreaterThan(0);
+      expect(before.outbox.filter((row) => row['withdrawn_at'] !== null)).toHaveLength(2);
+
+      await expect(migrateDatabase(uri)).resolves.toBeUndefined();
+
+      // Every row as it was, column for column, with the one new column, and
+      // only that, beside each alert, null (approach item 9).
+      expect(await rowsBefore0004(client)).toEqual({
+        ...before,
+        alerts: before.alerts.map((row) => ({ ...row, sms_raised_at: null })),
+      });
+      expect(await labelsIn(client, 'message_kind')).toEqual([
+        'LOST_CONTACT',
+        'BACK_IN_CONTACT',
+        'HOME',
+        'ACKNOWLEDGED',
+        'LOST_CONTACT_SMS',
+      ]);
+      const applied = await client.query<{ n: number }>(
+        'select count(*)::int as n from drizzle.__drizzle_migrations',
+      );
+      expect(applied.rows).toEqual([{ n: journal(MIGRATIONS).entries.length }]);
+
+      // The value added inside the migration's transaction is usable once it
+      // has committed, and so is the new column.
+      const [message] = before.outbox;
+      await expect(
+        client.query(
+          `insert into outbox (id, alert_id, recipient_id, kind, created_at, attempts,
+                               next_attempt_at, sent_at, last_failure)
+           values ($1, $2, $3, 'LOST_CONTACT_SMS', now(), 0, now(), null, null)`,
+          [syntheticUuid(), message?.['alert_id'], message?.['recipient_id']],
+        ),
+      ).resolves.toMatchObject({ rowCount: 1 });
+      await expect(
+        client.query("update alerts set state = 'ESCALATED', sms_raised_at = now() where id = $1", [
+          message?.['alert_id'],
+        ]),
+      ).resolves.toMatchObject({ rowCount: 1 });
+    });
+  }, 120_000);
+
+  test('LOST-07-AC19: there is exactly one committed 0006 migration, it is in the journal, it holds no update, delete or truncate, and it names LOST_CONTACT_SMS only in message_kind’s add value statement', () => {
+    const files = readdirSync(MIGRATIONS).filter((file) => /^0006_.*\.sql$/.test(file));
+    expect(files, 'exactly one 0006 migration').toHaveLength(1);
+    expect(journal(MIGRATIONS).entries.map((entry) => `${entry.tag}.sql`)).toContain(files[0]);
+    const text = readFileSync(path.join(MIGRATIONS, files[0] ?? ''), 'utf8');
+    const statements = text
+      .split(/--> statement-breakpoint|;/)
+      .map((statement) => statement.trim())
+      .filter((statement) => statement !== '');
+
+    expect(text).not.toMatch(/\bupdate\s+("?public"?\.)?"?[a-z_]+"?\s+set\b/i);
+    expect(text).not.toMatch(/\bdelete\s+from\b/i);
+    expect(text).not.toMatch(/\btruncate\b/i);
+    const addsValue = statements.filter((statement) =>
+      /^alter type\s+("?public"?\.)?"?message_kind"?\s+add value\b/i.test(statement),
+    );
+    expect(addsValue).toHaveLength(1);
+    expect(addsValue[0]).toMatch(/'LOST_CONTACT_SMS'/);
+    // 0006 names it nowhere else, so nothing in its transaction uses the new
+    // value.
+    expect(
+      statements.filter(
+        (statement) => statement.includes('LOST_CONTACT_SMS') && !addsValue.includes(statement),
+      ),
+    ).toEqual([]);
+    expect(text).toContain('sms_raised_at');
   });
 });

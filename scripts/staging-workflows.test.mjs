@@ -303,3 +303,76 @@ describe('INF-08: the Healthchecks.io ping URL reaches Terraform, and nothing el
     expect(reads).toEqual([`infra-staging.yml plan: ${LINE}`, `infra-staging.yml apply: ${LINE}`]);
   });
 });
+
+describe('LOST-07: the SMS check’s ping URL reaches Terraform, and nothing else', () => {
+  // As INF-08's: a secret of the staging environment, which only main can
+  // reach, handed to Terraform through each job's own env, plan and apply.
+  const LINE = 'TF_VAR_healthchecks_sms_url: ${{ secrets.HEALTHCHECKS_SMS_URL }}';
+
+  /** A job's own `env:` block — not a step's — as its trimmed lines, comments left out. */
+  function jobEnv(text, id) {
+    const lines = job(text, id).split('\n');
+    const at = lines.indexOf('    env:');
+    if (at === -1) {
+      return [];
+    }
+    const body = [];
+    for (const line of lines.slice(at + 1)) {
+      if (line.trim() === '' || line.trim().startsWith('#')) {
+        continue;
+      }
+      if (!line.startsWith('      ')) {
+        break;
+      }
+      body.push(line.trim());
+    }
+    return body;
+  }
+
+  /** The job a line belongs to, or "outside any job". */
+  function jobAt(lines, index) {
+    const jobsAt = lines.indexOf('jobs:');
+    for (let at = index; jobsAt !== -1 && at > jobsAt; at -= 1) {
+      const id = /^ {2}([\w-]+):\s*$/.exec(lines[at] ?? '')?.[1];
+      if (id !== undefined) {
+        return id;
+      }
+    }
+    return 'outside any job';
+  }
+
+  test.each(['plan', 'apply'])(
+    'LOST-07-AC20: the %s job sets TF_VAR_healthchecks_sms_url from the staging secret, in its own env',
+    (id) => {
+      expect(jobEnv(infra, id)).toContain(LINE);
+    },
+  );
+
+  test('LOST-07-AC20: those two lines are the only places any workflow reads the secret, by name, by index or through toJSON(secrets)', () => {
+    const reads = [];
+    const workflows = readdirSync(path.join(import.meta.dirname, '..', '.github', 'workflows'))
+      .filter((name) => /\.ya?ml$/.test(name))
+      .sort();
+    expect(workflows).toContain('infra-staging.yml');
+    for (const name of workflows) {
+      const lines = read(name).split('\n');
+      lines.forEach((line, index) => {
+        if (line.trim().startsWith('#')) {
+          return;
+        }
+        if (
+          /secrets\s*(\.\s*HEALTHCHECKS_SMS_URL\b|\[\s*['"]HEALTHCHECKS_SMS_URL['"]\s*\])/i.test(
+            line,
+          )
+        ) {
+          reads.push(`${name} ${jobAt(lines, index)}: ${line.trim()}`);
+        }
+        if (/toJSON\(\s*secrets\s*\)/i.test(line)) {
+          reads.push(`${name} ${jobAt(lines, index)}: every secret at once`);
+        }
+      });
+    }
+
+    expect(reads).toEqual([`infra-staging.yml plan: ${LINE}`, `infra-staging.yml apply: ${LINE}`]);
+  });
+});

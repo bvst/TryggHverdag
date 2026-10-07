@@ -46,7 +46,9 @@ the variable refuses anything that is not a Healthchecks.io ping URL.
      they reach your phone.
 2. Copy the check's **ping URL** (`https://hc-ping.com/…`). **Treat it as a
    password**: anyone who has it can keep the check green while the worker is
-   dead.
+   dead. Use the form with the check's UUID, which Healthchecks.io shows by
+   default, not the slug form: since LOST-07, the variable takes only
+   `https://hc-ping.com/<uuid>` (D-116).
 3. In GitHub: repository **Settings → Environments → `staging` → Add
    environment secret** (not a repository secret), named
    `HEALTHCHECKS_WORKER_URL`, with that ping URL as its value.
@@ -122,3 +124,11 @@ and INF-08 is not done until it passes.
 Add a new check in Healthchecks.io with the same settings, replace the
 `HEALTHCHECKS_WORKER_URL` secret, run `infra-staging` plan and apply, confirm
 the new check leaves `new`, then delete the old check.
+
+The same steps apply to the `staging-sms` check (A-32, LOST-07) and its
+`HEALTHCHECKS_SMS_URL` secret: Period 1 minute, Grace 2 minutes. Never give it
+the worker's URL: then the SMS check's ping every minute would keep the
+worker's check green while the watchdog is stopped. Give each secret the
+UUID form, exactly as Healthchecks.io shows it; the slug form of the same check
+would get past the "must differ" check (D-116). After the apply, confirm that
+each check shows one ping a minute, not two.

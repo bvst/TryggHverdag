@@ -19,13 +19,19 @@ import { createServer, type IncomingHttpHeaders } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { inspect } from 'node:util';
 import { afterEach, describe, expect, test } from 'vitest';
-import { CHECK_IN_TIMEOUT_MS, healthchecksCheckIn } from './healthchecks.ts';
+import { CHECK_IN_TIMEOUT_MS, healthchecksAlarm, healthchecksCheckIn } from './healthchecks.ts';
 
 // CHECK is the path of a ping URL, the check's UUID: all zeros, so it names no
 // real check. PING_URL is for the tests that hand the adapter a fetch of their
 // own: https, like a real ping URL, but port 1 on the loopback address, so
 // nothing leaves this machine even if the adapter reached past that fetch for
 // the real one. Both come from the test kit, where test data is built.
+//
+// LOST-07 adds the SMS check's alarm (AC11): its own check, the same rules.
+// `ok` is a HEAD to the check's ping URL and `failing` a HEAD to that URL with
+// /fail appended, Healthchecks.io's failure signal; only a 2xx counts, no
+// redirect is followed, a stop aborts a report in flight, and no error holds
+// the URL.
 
 /** How a stand-in Healthchecks.io answers: a status, never at all, or by hanging up. */
 type Answer = number | 'never' | 'hang up';
@@ -600,4 +606,245 @@ describe('REL-08 and LOST-02: a check-in ends when the signal it was given abort
     expect(healthchecks.received).toHaveLength(1);
     expect(everything(failure)).not.toContain(CHECK);
   }, 2_000);
+});
+
+// ---------------------------------------------------------------------------
+// LOST-07-AC11: the SMS check's alarm.
+// ---------------------------------------------------------------------------
+
+describe('LOST-07 and D-079: the SMS check’s alarm reports to its own Healthchecks.io check', () => {
+  test('LOST-07-AC11: ok is exactly one HEAD to the ping URL, and failing exactly one HEAD to the ping URL with /fail appended, each with no body', async () => {
+    const healthchecks = await standIn(200);
+    const alarm = healthchecksAlarm({ url: healthchecks.url });
+
+    await expect(alarm.report('ok')).resolves.toBeUndefined();
+    await expect(alarm.report('failing')).resolves.toBeUndefined();
+    await aMoment();
+
+    expect(
+      healthchecks.received.map(({ method, path, bodyBytes }) => ({ method, path, bodyBytes })),
+    ).toEqual([
+      { method: 'HEAD', path: `/${CHECK}`, bodyBytes: 0 },
+      { method: 'HEAD', path: `/${CHECK}/fail`, bodyBytes: 0 },
+    ]);
+    for (const request of healthchecks.received) {
+      expect(request.headers['content-length'] ?? '0').toBe('0');
+      expect(request.headers['transfer-encoding']).toBeUndefined();
+    }
+  });
+
+  test.each([201, 202, 204])(
+    'LOST-07-AC11: a %i answer counts, for ok and for failing',
+    async (status) => {
+      const healthchecks = await standIn(status);
+      const alarm = healthchecksAlarm({ url: healthchecks.url });
+
+      await expect(alarm.report('ok')).resolves.toBeUndefined();
+      await expect(alarm.report('failing')).resolves.toBeUndefined();
+      expect(healthchecks.received).toHaveLength(2);
+    },
+  );
+
+  test.each([404, 429, 500])(
+    'LOST-07-AC11: a %i answer is a failure that names the status, for ok and for failing, and is not retried',
+    async (status) => {
+      const healthchecks = await standIn(status);
+      const alarm = healthchecksAlarm({ url: healthchecks.url });
+
+      const failures = [
+        await failureOf(() => alarm.report('ok')),
+        await failureOf(() => alarm.report('failing')),
+      ];
+      await aMoment();
+
+      for (const failure of failures) {
+        expect(failure).toBeInstanceOf(Error);
+        expect((failure as Error).message).toContain(String(status));
+      }
+      expect(healthchecks.received).toHaveLength(2);
+    },
+  );
+
+  test.each([301, 302, 303, 307, 308])(
+    'LOST-07-AC11: a %i redirect is a failure that names the status, and is never followed',
+    async (status) => {
+      const elsewhere = await standIn(200);
+      const healthchecks = await standIn(status, { location: elsewhere.url });
+      const alarm = healthchecksAlarm({ url: healthchecks.url });
+
+      const failures = [
+        await failureOf(() => alarm.report('ok')),
+        await failureOf(() => alarm.report('failing')),
+      ];
+      await aMoment();
+
+      for (const failure of failures) {
+        expect(failure).toBeInstanceOf(Error);
+        expect((failure as Error).message).toContain(String(status));
+      }
+      expect(healthchecks.received).toHaveLength(2);
+      expect(elsewhere.received).toHaveLength(0);
+    },
+  );
+
+  test('LOST-07-AC11: a connection that cannot be made, a hang-up, and no answer within the timeout are each a failure, and none is retried', async () => {
+    const url = `http://127.0.0.1:${String(await closedPort())}/${CHECK}`;
+    await expect(healthchecksAlarm({ url }).report('failing')).rejects.toBeInstanceOf(Error);
+
+    const hangingUp = await standIn('hang up');
+    await expect(
+      healthchecksAlarm({ url: hangingUp.url }).report('failing'),
+    ).rejects.toBeInstanceOf(Error);
+
+    const silent = await standIn('never');
+    await expect(
+      healthchecksAlarm({ url: silent.url, timeoutMs: 50 }).report('failing'),
+    ).rejects.toBeInstanceOf(Error);
+    await aMoment();
+
+    expect(hangingUp.received).toHaveLength(1);
+    expect(silent.received).toHaveLength(1);
+  }, 2_000);
+
+  test('LOST-07-AC11: with an injected fetch each report asks exactly once, with HEAD, no body and redirects not followed: the ping URL for ok, the ping URL with /fail for failing', async () => {
+    const asked: { url: string; method: unknown; body: unknown; redirect: unknown }[] = [];
+    const fetchOnce: typeof fetch = (input, init) => {
+      asked.push({
+        url: urlOf(input),
+        method: init?.method,
+        body: init?.body ?? null,
+        redirect: init?.redirect,
+      });
+      return Promise.resolve(new Response(null, { status: 200 }));
+    };
+    const alarm = healthchecksAlarm({ url: PING_URL, fetch: fetchOnce });
+
+    await alarm.report('ok');
+    await alarm.report('failing');
+
+    expect(asked).toEqual([
+      { url: PING_URL, method: 'HEAD', body: null, redirect: 'manual' },
+      { url: `${PING_URL}/fail`, method: 'HEAD', body: null, redirect: 'manual' },
+    ]);
+  });
+
+  test('LOST-07-AC11: a stop aborts a report in flight: it fails at once, long before its own timeout, and the signal fetch was handed aborts with the caller’s and not before', async () => {
+    const signals: (AbortSignal | null | undefined)[] = [];
+    const fetchNever: typeof fetch = async (_input, init) => {
+      const signal = init?.signal;
+      signals.push(signal);
+      if (!signal) {
+        throw new Error('the adapter sent no signal, so nothing could ever end this request');
+      }
+      await once(signal, 'abort');
+      throw signal.reason;
+    };
+    const controller = new AbortController();
+    const started = performance.now();
+
+    const reporting = failureOf(() =>
+      healthchecksAlarm({ url: PING_URL, fetch: fetchNever, timeoutMs: 60_000 }).report(
+        'failing',
+        controller.signal,
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(false);
+    controller.abort();
+    const failure = await reporting;
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect(everything(failure)).not.toContain(CHECK);
+  }, 2_000);
+
+  test('LOST-07-AC11: failing goes to /fail on the check’s own path whatever the configured address ends in: for one with a trailing slash, to /<uuid>/fail, not //fail; for one with a query, to /<uuid>/fail with the query after it, not ?rid=…/fail; ok goes to the address as configured', async () => {
+    // LOST-07 review loop 1 (safety-reviewer, REL-07): the settings refuse
+    // such addresses at start; this is the adapter's own half, so an address
+    // that got past them still pages. A misplaced /fail is a ping to an
+    // address Healthchecks.io does not read as a failure: no page.
+    const RID = '0f0e0d0c';
+    const healthchecks = await standIn(200);
+
+    for (const configured of [`${healthchecks.url}/`, `${healthchecks.url}?rid=${RID}`]) {
+      const alarm = healthchecksAlarm({ url: configured });
+      await expect(alarm.report('failing'), configured).resolves.toBeUndefined();
+      await expect(alarm.report('ok'), configured).resolves.toBeUndefined();
+    }
+    await aMoment();
+
+    expect(healthchecks.received.map(({ method, path }) => ({ method, path }))).toEqual([
+      { method: 'HEAD', path: `/${CHECK}/fail` },
+      { method: 'HEAD', path: `/${CHECK}/` },
+      { method: 'HEAD', path: `/${CHECK}/fail?rid=${RID}` },
+      { method: 'HEAD', path: `/${CHECK}?rid=${RID}` },
+    ]);
+  });
+
+  test('LOST-07-AC11: a report the caller’s signal aborts fails saying the report was cancelled because the worker is stopping, as the check-in says it of itself: not a check-in, not a timeout, and not the URL', async () => {
+    // The worker hands on Graphile's signal, which aborts when it stops; the
+    // line it writes should send nobody looking for a network fault, nor
+    // mistake the SMS check for the worker's check-in.
+    const neverAnswering: typeof fetch = async (_input, init) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error('the adapter sent no signal, so nothing could ever end this request');
+      }
+      await once(signal, 'abort');
+      throw signal.reason;
+    };
+    const controller = new AbortController();
+
+    const reporting = failureOf(() =>
+      healthchecksAlarm({ url: PING_URL, fetch: neverAnswering }).report(
+        'failing',
+        controller.signal,
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort();
+    const message = String(await reporting);
+
+    expect(message).toMatch(/\breport\b/);
+    expect(message).toMatch(/\bcancelled: the worker is stopping\.$/);
+    expect(message).not.toMatch(/check-in|did not answer within|could not be reached/);
+    expect(message).not.toContain(CHECK);
+  }, 2_000);
+
+  test('LOST-07-AC11: no error a report throws holds the ping URL: not from a fetch whose error repeats it, not for a status, a timeout or a refused connection, for ok and for failing', async () => {
+    const repeatingFetch: typeof fetch = (input) =>
+      Promise.reject(
+        new TypeError(`Failed to parse URL from ${urlOf(input)}`, {
+          cause: Object.assign(new TypeError(`Invalid URL: ${urlOf(input)}`), {
+            code: 'ERR_INVALID_URL',
+            input: urlOf(input),
+          }),
+        }),
+      );
+    const answering500 = await standIn(500);
+    const silent = await standIn('never');
+    const refused = `http://127.0.0.1:${String(await closedPort())}/${CHECK}`;
+
+    const alarms = [
+      healthchecksAlarm({ url: PING_URL, fetch: repeatingFetch }),
+      healthchecksAlarm({ url: answering500.url }),
+      healthchecksAlarm({ url: silent.url, timeoutMs: 50 }),
+      healthchecksAlarm({ url: refused }),
+    ];
+    const failures: unknown[] = [];
+    for (const alarm of alarms) {
+      failures.push(await failureOf(() => alarm.report('ok')));
+      failures.push(await failureOf(() => alarm.report('failing')));
+    }
+
+    expect(failures).toHaveLength(8);
+    for (const failure of failures) {
+      expect(failure).toBeInstanceOf(Error);
+      expect(everything(failure)).not.toContain(CHECK);
+      expect(everything(failure)).not.toContain(PING_URL);
+      expect(everything(failure)).not.toContain('/fail');
+    }
+  }, 5_000);
 });

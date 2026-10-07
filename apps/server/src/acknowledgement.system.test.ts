@@ -354,6 +354,13 @@ function senderOf(w: World, limit: number) {
     claimDue: (request) => w.store.claimDue({ ...request, limit }),
     markSent: (messageId) => w.store.markSent(messageId),
     markFailed: (request) => w.store.markFailed(request),
+    // RG-03 (LOST-07; not in the spec's list, found by type-checking this
+    // file against a reference of the spec's interfaces): OutboxStore gains
+    // the SMS claim and the count of SMS waiting, so this typed stand-in
+    // must have them. Both go to the fake unchanged; the push sender it is
+    // built for never calls them, and nothing this file asserts changes.
+    claimDueSms: (request: { limit: number; leaseMs: number }) => w.store.claimDueSms(request),
+    unsentSmsCount: (olderThanMs: number) => w.store.unsentSmsCount(olderThanMs),
   };
   return createPushSender({ outbox, push: w.push, log: w.log });
 }

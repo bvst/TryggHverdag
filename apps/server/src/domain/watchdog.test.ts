@@ -30,6 +30,7 @@ import {
   CLAIM_LEASE_MS,
   IDLE_IN_TRANSACTION_LIMIT_MS,
   LOCK_WAIT_LIMIT_MS,
+  SMS_UNSENT_LIMIT_MS,
   STUCK_AFTER_MS,
   WATCHDOG_INTERVAL_MS,
   isStuck,
@@ -158,6 +159,22 @@ describe('LOST-03: a stand-down never overtakes the lost-contact push it stands 
       fc.property(fc.integer({ min: 1, max: 1_000_000 }), (attempts) => {
         expect(Math.max(CLAIM_LEASE_MS, retryDelayMs(attempts))).toBeLessThanOrEqual(60 * SECOND);
       }),
+    );
+  });
+});
+
+// LOST-07 (its spec's approach item 8): an escalation SMS still unsent and
+// not withdrawn this long after it was written counts as failing, whatever
+// the cause, and the minute check pages the owner. A monitoring threshold,
+// kept here beside the budget it belongs to.
+describe('LOST-07: the SMS check’s threshold, pinned beside the budget it belongs to', () => {
+  test('LOST-07-AC10: SMS_UNSENT_LIMIT_MS is exactly 60 s', () => {
+    expect(SMS_UNSENT_LIMIT_MS).toBe(60 * SECOND);
+  });
+
+  test('LOST-07-AC10: a failure a retry fixes is no page: one run of the SMS loop, then a first and a second retry, all come within the limit', () => {
+    expect(WATCHDOG_INTERVAL_MS + retryDelayMs(1) + retryDelayMs(2)).toBeLessThan(
+      SMS_UNSENT_LIMIT_MS,
     );
   });
 });

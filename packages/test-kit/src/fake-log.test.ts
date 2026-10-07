@@ -110,6 +110,27 @@ describe('fakeLog', () => {
     expect(log.events).toEqual(written);
   });
 
+  test('records the escalation’s, the SMS sender’s and the SMS check’s events too, each exactly as given (LOST-07)', () => {
+    const log = fakeLog();
+    const written: FakeLogEvent[] = [
+      { event: 'escalation_failed', stage: 'read', code: '57P01' },
+      { event: 'escalation_failed', stage: 'escalate', code: null },
+      { event: 'escalation_overdue', alertId: syntheticUuid() },
+      { event: 'sms_failed', reason: 'NO_TARGET', messageId: syntheticUuid() },
+      { event: 'sms_delivery_failed', stage: 'claim', code: '40P01' },
+      { event: 'sms_delivery_failed', stage: 'mark', code: null },
+      { event: 'sms_unsent', count: 3 },
+      { event: 'sms_check_failed', stage: 'read', code: '08006' },
+      { event: 'sms_check_failed', stage: 'report', code: null },
+    ];
+
+    for (const event of written) {
+      log.write(event);
+    }
+
+    expect(log.events).toEqual(written);
+  });
+
   test('the test kit hands it out', () => {
     expect(kit.fakeLog).toBe(fakeLog);
   });

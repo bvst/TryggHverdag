@@ -90,6 +90,17 @@ afterAll(async () => {
 beforeEach(async () => {
   await connection().query("update journeys set state = 'ENDED' where state <> 'ENDED'");
   await connection().query('update outbox set sent_at = now() where sent_at is null');
+  // RG-03 (LOST-07; not in the spec's list, found reading this setup against
+  // the escalation): the sweep now also escalates every unresolved alert two
+  // minutes old or more, across the whole table. Ending a journey by hand
+  // leaves its alert unresolved, so a later test's sweep would escalate an
+  // earlier test's alert and write SMS that no test here asked for. So the
+  // leftovers are resolved too, as "I'm home" would have resolved them.
+  // Nothing a test asserts about its own rows changes.
+  await connection().query(
+    "update alerts set state = 'RESOLVED', resolved_at = now(), resolution = 'HOME' " +
+      "where state <> 'RESOLVED'",
+  );
 });
 
 function connectionUri(): string {

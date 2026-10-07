@@ -166,7 +166,18 @@ describe('fakePush', () => {
     // RG-03 (LOST-06, the spec's "Existing assertions that change by
     // design"): the exact list gains ACKNOWLEDGED, the "someone is on it"
     // notice (D-113). Every kind is still sent, recorded and accepted as given.
-    expect(MESSAGE_KINDS).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED']);
+    // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
+    // fake-push.test.ts line 169): the list gains LOST_CONTACT_SMS, the
+    // escalation SMS (D-019), last. This test then hands the SMS kind to the
+    // push fake too, which records whatever it is given; keeping it off the
+    // push port is the push claim's job (LOST-07-AC8), not this fake's.
+    expect(MESSAGE_KINDS).toEqual([
+      'LOST_CONTACT',
+      'BACK_IN_CONTACT',
+      'HOME',
+      'ACKNOWLEDGED',
+      'LOST_CONTACT_SMS',
+    ]);
     expect(push.messages).toEqual(sent);
     expect(push.accepted).toEqual(sent);
     expect(kit.MESSAGE_KINDS).toBe(MESSAGE_KINDS);

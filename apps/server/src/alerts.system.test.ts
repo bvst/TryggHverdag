@@ -30,6 +30,12 @@
 // The times are written out (five minutes, 30 s, 10 s doubling to 60 s), not
 // read from the domain's constants, so a wrong constant fails here as well as
 // in the domain's own tests.
+//
+// RG-03 (LOST-07, the spec's "Every exact sweep result"): the sweep's result
+// gains `escalated`, the alerts it escalated (LOST-07-AC1). Each of the 19
+// exact results here gains `escalated: 0`: none of those sweeps comes two
+// minutes after an alert opened with nobody acknowledging it. Still exact.
+// The one test that does sweep that late says so where it changes.
 import {
   apiPath,
   fakeClock,
@@ -352,11 +358,19 @@ describe('LOST-02: five minutes, never before, on the database’s clock', () =>
           })),
         }),
       openLostContactAlert: (request) => w.store.openLostContactAlert(request),
+      // RG-03 (LOST-07: not in the spec's list, found by running this file
+      // against a reference of the escalation): the watchdog's store gains the
+      // escalation's read and write (the spec's interfaces), and the sweep
+      // asks for them after its opens. This stub hands both to the fake as
+      // its open does; nothing here is due for escalation, and nothing this
+      // test asserts changes.
+      alertsDueForEscalation: (afterMs) => w.store.alertsDueForEscalation(afterMs),
+      escalateAlert: (request) => w.store.escalateAlert(request),
     };
 
     const result = await createWatchdog({ journeys: drifted, beats: w.beats, log: w.log }).sweep();
 
-    expect(result).toEqual({ ok: true, opened: 1, stuck: 0 });
+    expect(result).toEqual({ ok: true, opened: 1, escalated: 0, stuck: 0 });
     expect(w.store.openRequests().map(({ journeyId }) => journeyId)).toEqual([due.journeyId]);
     expect(w.stateOf(early.journeyId)).toBe('ACTIVE');
     expect(w.stateOf(due.journeyId)).toBe('LOST_CONTACT');
@@ -428,7 +442,7 @@ describe('LOST-02: five minutes, never before, on the database’s clock', () =>
 
     const result = await w.watchdog.sweep();
 
-    expect(result).toEqual({ ok: true, opened: 1, stuck: 0 });
+    expect(result).toEqual({ ok: true, opened: 1, escalated: 0, stuck: 0 });
     expect(await w.beats.lastBeat()).toEqual(read);
     expect(w.alertsOf(journeyId).map(({ openedAt }) => openedAt)).toEqual([
       new Date(read.getTime() + 7 * SECOND),
@@ -461,7 +475,19 @@ describe('SM-03 and LOST-02: only an ACTIVE journey is alerted, and once per sil
     expect(w.stateOf(journeyId)).toBe('LOST_CONTACT');
     await w.runUntil(new Date(START.getTime() + HOUR + FIVE_MINUTES));
 
-    expect(w.alertsOf(journeyId)).toEqual([alert]);
+    // RG-03 (LOST-07, the spec's "Tests that sweep two minutes or more after
+    // an alert opened … now escalate it"): nobody acknowledges this alert, so
+    // the sweep two minutes after it opened escalates it (LOST-07-AC1). It is
+    // still the one alert, opened once, with the same ID and times; it is now
+    // ESCALATED, at seven minutes. Its SMS go to the SMS port, which this
+    // file does not run, so the push port still holds the two messages.
+    expect(w.alertsOf(journeyId)).toEqual([
+      {
+        ...alert,
+        state: 'ESCALATED',
+        smsRaisedAt: new Date(START.getTime() + FIVE_MINUTES + 2 * MINUTE),
+      },
+    ]);
     expect(w.push.messages).toHaveLength(2);
     expect(w.stateOf(journeyId)).toBe('LOST_CONTACT');
     expect(w.stateOf(endedId)).toBe('ENDED');
@@ -477,8 +503,8 @@ describe('LOST-02: once, however many sweep (AR-06)', () => {
     const first = await w.sweepAndDeliver();
     const second = await w.sweepAndDeliver();
 
-    expect(first.swept).toEqual({ ok: true, opened: 1, stuck: 0 });
-    expect(second.swept).toEqual({ ok: true, opened: 0, stuck: 0 });
+    expect(first.swept).toEqual({ ok: true, opened: 1, escalated: 0, stuck: 0 });
+    expect(second.swept).toEqual({ ok: true, opened: 0, escalated: 0, stuck: 0 });
     expect(w.alertsOf(journeyId)).toHaveLength(1);
     expect(recipientsOf(w.messagesOf(journeyId))).toEqual([...responderIds].sort());
     expect(recipientsOf(w.push.messages)).toEqual([...responderIds].sort());
@@ -513,7 +539,7 @@ describe('LOST-02: a held row is skipped, not waited for, and alerted once it is
 
     const held = await w.watchdog.sweep();
 
-    expect(held).toEqual({ ok: true, opened: 1, stuck: 0 });
+    expect(held).toEqual({ ok: true, opened: 1, escalated: 0, stuck: 0 });
     expect(w.stateOf(k.journeyId)).toBe('LOST_CONTACT');
     expect(w.stateOf(j.journeyId)).toBe('ACTIVE');
     expect(w.alertsOf(j.journeyId)).toEqual([]);
@@ -522,7 +548,7 @@ describe('LOST-02: a held row is skipped, not waited for, and alerted once it is
     w.store.release(j.journeyId);
     const freed = await w.watchdog.sweep();
 
-    expect(freed).toEqual({ ok: true, opened: 1, stuck: 0 });
+    expect(freed).toEqual({ ok: true, opened: 1, escalated: 0, stuck: 0 });
     expect(w.stateOf(j.journeyId)).toBe('LOST_CONTACT');
     expect(w.alertsOf(j.journeyId)).toHaveLength(1);
   });
@@ -546,7 +572,7 @@ describe('LOST-02: the move, the alert and its messages, all or nothing (AR-05)'
     expect(w.stateOf(j.journeyId)).toBe('ACTIVE');
     expect(w.alertsOf(j.journeyId)).toEqual([]);
     expect(w.stateOf(k.journeyId)).toBe('LOST_CONTACT');
-    expect(result).toEqual({ ok: false, opened: 1, stuck: 0 });
+    expect(result).toEqual({ ok: false, opened: 1, escalated: 0, stuck: 0 });
     expect(w.log.events).toEqual([{ event: 'watchdog_failed', stage: 'open', code: '23514' }]);
     expect(await w.beats.lastBeat()).toBeNull();
   });
@@ -570,7 +596,7 @@ describe('LOST-02: the move, the alert and its messages, all or nothing (AR-05)'
     w.store.recover();
     const next = await w.watchdog.sweep();
 
-    expect(next).toEqual({ ok: true, opened: 1, stuck: 0 });
+    expect(next).toEqual({ ok: true, opened: 1, escalated: 0, stuck: 0 });
     expect(w.stateOf(journeyId)).toBe('LOST_CONTACT');
     expect(recipientsOf(w.messagesOf(journeyId))).toEqual([...responderIds].sort());
     expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
@@ -840,7 +866,7 @@ describe('REL-08 and LOST-02: the watchdog feeds the beat', () => {
     const w = world();
     w.clock.advance(12_345);
 
-    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 0, stuck: 0 });
+    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 0, escalated: 0, stuck: 0 });
 
     expect(await w.beats.lastBeat()).toEqual(new Date(START.getTime() + 12_345));
     expect(w.log.events).toEqual([]);
@@ -894,9 +920,16 @@ describe('REL-08 and LOST-02: the watchdog feeds the beat', () => {
     expect(health.status).toBe('degraded');
     expect(health.worker.lastBeatAt).toBe(lastGood.toISOString());
     expect(w.log.events.length).toBeGreaterThanOrEqual(18);
+    // RG-03 (LOST-07 review loop 1, safety-reviewer and code-reviewer,
+    // REL-07): the escalation now runs whatever the overdue read came to, so a
+    // sweep whose read failed still asks for the alerts due, and with the
+    // database gone that read fails too: each sweep gains one
+    // escalation_failed line, stage read, with the same SQLSTATE. The set is
+    // still exact; the health this test is about is unchanged.
     expect(new Set(w.log.events.map((event) => JSON.stringify(event)))).toEqual(
       new Set([
         JSON.stringify({ event: 'watchdog_failed', stage: 'read', code: '08006' }),
+        JSON.stringify({ event: 'escalation_failed', stage: 'read', code: '08006' }),
         JSON.stringify({ event: 'delivery_failed', stage: 'claim', code: '08006' }),
       ]),
     );
@@ -916,7 +949,7 @@ describe('REL-08 and LOST-02: a journey the watchdog cannot move is reported, an
 
     const result = await w.watchdog.sweep();
 
-    expect(result).toEqual({ ok: false, opened: 0, stuck: 1 });
+    expect(result).toEqual({ ok: false, opened: 0, escalated: 0, stuck: 1 });
     expect(w.store.openRequests()).toEqual([
       { journeyId, afterMs: FIVE_MINUTES },
       { journeyId, afterMs: FIVE_MINUTES, lockWaitMs: LOCK_WAIT },
@@ -942,7 +975,7 @@ describe('REL-08 and LOST-02: a journey the watchdog cannot move is reported, an
     const early = await w.watchdog.sweep();
     const beatAt = await w.clock.now();
 
-    expect(early).toEqual({ ok: true, opened: 0, stuck: 0 });
+    expect(early).toEqual({ ok: true, opened: 0, escalated: 0, stuck: 0 });
     expect(w.log.events).toEqual([]);
     expect(await w.beats.lastBeat()).toEqual(beatAt);
 
@@ -951,8 +984,8 @@ describe('REL-08 and LOST-02: a journey the watchdog cannot move is reported, an
     w.clock.advance(INTERVAL);
     const stillStuck = await w.watchdog.sweep();
 
-    expect(stuck).toEqual({ ok: false, opened: 0, stuck: 1 });
-    expect(stillStuck).toEqual({ ok: false, opened: 0, stuck: 1 });
+    expect(stuck).toEqual({ ok: false, opened: 0, escalated: 0, stuck: 1 });
+    expect(stillStuck).toEqual({ ok: false, opened: 0, escalated: 0, stuck: 1 });
     expect(w.log.events).toEqual([
       { event: 'watchdog_overdue', journeyId },
       { event: 'watchdog_overdue', journeyId },
@@ -964,7 +997,7 @@ describe('REL-08 and LOST-02: a journey the watchdog cannot move is reported, an
     w.clock.advance(INTERVAL);
     const freed = await w.watchdog.sweep();
 
-    expect(freed).toEqual({ ok: true, opened: 1, stuck: 0 });
+    expect(freed).toEqual({ ok: true, opened: 1, escalated: 0, stuck: 0 });
     expect(w.stateOf(journeyId)).toBe('LOST_CONTACT');
     expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
     expect(w.log.events).toHaveLength(2);
@@ -977,7 +1010,7 @@ describe('REL-08 and LOST-02: a journey the watchdog cannot move is reported, an
 
     const result = await w.watchdog.sweep();
 
-    expect(result).toEqual({ ok: true, opened: 0, stuck: 0 });
+    expect(result).toEqual({ ok: true, opened: 0, escalated: 0, stuck: 0 });
     expect(w.store.openRequests()).toEqual([{ journeyId, afterMs: FIVE_MINUTES }]);
     expect(w.log.events).toEqual([]);
     expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
@@ -990,7 +1023,7 @@ describe('REL-08 and LOST-02: a journey the watchdog cannot move is reported, an
 
     const result = await w.watchdog.sweep();
 
-    expect(result).toEqual({ ok: true, opened: 1, stuck: 0 });
+    expect(result).toEqual({ ok: true, opened: 1, escalated: 0, stuck: 0 });
     expect(w.store.openRequests()).toEqual([
       { journeyId, afterMs: FIVE_MINUTES },
       { journeyId, afterMs: FIVE_MINUTES, lockWaitMs: LOCK_WAIT },
@@ -1015,7 +1048,7 @@ describe('REL-08 and LOST-02: a journey the watchdog cannot move is reported, an
     const result = await w.watchdog.sweep();
 
     expect(otherSweeper.opened).toBe(true);
-    expect(result).toEqual({ ok: true, opened: 0, stuck: 0 });
+    expect(result).toEqual({ ok: true, opened: 0, escalated: 0, stuck: 0 });
     expect(w.store.openRequests().filter((request) => request.lockWaitMs !== undefined)).toEqual([
       { journeyId, afterMs: FIVE_MINUTES, lockWaitMs: LOCK_WAIT },
     ]);
@@ -1036,7 +1069,7 @@ describe('REL-08 and LOST-02: a journey the watchdog cannot move is reported, an
 
     const result = await w.watchdog.sweep();
 
-    expect(result).toEqual({ ok: false, opened: 1, stuck: 1 });
+    expect(result).toEqual({ ok: false, opened: 1, escalated: 0, stuck: 1 });
     expect(w.stateOf(k.journeyId)).toBe('LOST_CONTACT');
     expect(w.stateOf(j.journeyId)).toBe('ACTIVE');
     expect(w.alertsOf(j.journeyId)).toEqual([]);
@@ -1063,7 +1096,7 @@ describe('REL-08 and LOST-02: a journey the watchdog cannot move is reported, an
 
     const result = await w.watchdog.sweep();
 
-    expect(result).toEqual({ ok: false, opened: 0, stuck: 1 });
+    expect(result).toEqual({ ok: false, opened: 0, escalated: 0, stuck: 1 });
     expect(w.log.events).toHaveLength(2);
     expect(w.log.events).toEqual(
       expect.arrayContaining([

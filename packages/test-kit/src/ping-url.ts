@@ -6,6 +6,7 @@
  * check the worker is alive. So tests never hold a real one, and this is the
  * one place their stand-in is defined.
  */
+import { syntheticUuid } from './synthetic-ids.ts';
 
 /** A check UUID of all zeros: well formed, and naming no real check. */
 export const SYNTHETIC_CHECK_UUID = '00000000-0000-0000-0000-000000000000';
@@ -17,3 +18,13 @@ export const SYNTHETIC_CHECK_UUID = '00000000-0000-0000-0000-000000000000';
  * leaves the machine.
  */
 export const SYNTHETIC_PING_URL = `https://127.0.0.1:1/${SYNTHETIC_CHECK_UUID}`;
+
+/**
+ * A ping URL as SYNTHETIC_PING_URL is, on the same unreachable loopback
+ * address and port, for a check of its own: the UUID given, or a fresh
+ * synthetic one (LOST-07). The worker's check and the SMS check are two
+ * checks, so a test that sets both needs two URLs whose UUIDs differ.
+ */
+export function syntheticPingUrl(checkUuid: string = syntheticUuid()): string {
+  return `https://127.0.0.1:1/${checkUuid}`;
+}

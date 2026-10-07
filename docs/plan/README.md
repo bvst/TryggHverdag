@@ -1,11 +1,12 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-06 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23 and BUG-24 done, LOST-06 in review (D-090)
+**Last updated:** 2026-10-07 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24 and LOST-06 done, LOST-07 in review (D-090, D-115)
 
-**Current section:** milestone M2, started 2026-10-01 with SM-01; LOST-06,
-"I'm on it", is task 5 of 8 and in review, with its pull request open (D-090,
-D-113 and its amendment, D-114; the task list is in
-[10-roadmap.md](10-roadmap.md)). LOST-03,
+**Current section:** milestone M2, started 2026-10-01 with SM-01; LOST-07,
+SMS escalation, is task 6 of 9 and in review, its pull request open (D-090,
+D-115, D-116; the task list is in [10-roadmap.md](10-roadmap.md)). A-33 runs
+straight after its merge's deploy. LOST-06,
+"I'm on it", is done (#66, 2026-10-07; D-113 and its amendment, D-114). LOST-03,
 back in contact and "I'm home", is done (#64, 2026-10-06; D-110 to D-112),
 with BUG-23 and BUG-24, two new advisories that failed the dependency audit,
 in it. LOST-02, the lost-contact alert, is done
@@ -26,8 +27,11 @@ BUG-19 (no test checks every owner-approval path keeps its owners), BUG-20
 (graphile-worker's own logger prints its error object, past `log.ts`) and
 BUG-21 (an Android script test's timing margin fails under full-suite load),
 BUG-22 (the test-weakening check does not see the shared behaviour suites),
-BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an advisory)
-and BUG-26 (a lint run during a mutation run fails on Stryker's sandbox).
+BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an advisory),
+BUG-26 (a lint run during a mutation run fails on Stryker's sandbox) and
+BUG-27 (whether the worker's session limits are in force on a deploy is seen
+only by chance) and BUG-28 (no test holds two journeys past the watchdog's
+stuck threshold, so a waiting loop that stops early goes unseen).
 M1 closed with all four roadmap items done:
 SPIKE-01 (S1–S8), Section 4 closed with a conditional GO for the location SDK
 (D-086, full results in [04b-spike-results.md](04b-spike-results.md)), and the
@@ -88,7 +92,7 @@ needing the owner's approval and an ID.
 
 **Milestone M2 is in progress** (D-090): the core safety loop on the server
 (state machine, watchdog, outbox, fake push and SMS; the staging canary), in
-eight tasks, SM-01 first. Devices authenticate with a hashed per-device
+nine tasks (eight by D-090, one more by D-115), SM-01 first. Devices authenticate with a hashed per-device
 credential until login arrives with GRP-01 (D-091). The journey files become
 safety paths in BUG-10 (D-092, done). What Claude needs
 from the owner: [../progress.md](../progress.md).
@@ -115,7 +119,11 @@ stand-down messages, the withdrawn lost-contact messages and each alert's
 `acknowledged_at` (who helped whom, and when) and the `ACKNOWLEDGED` notices.
 `acknowledged_by` references `users`, so deleting a member who acknowledged
 an alert that is still kept must deal with that reference first, as LOST-02
-found for outbox rows.
+found for outbox rows. **Since LOST-07** (D-115, D-116), so are
+`alerts.sms_raised_at` and the `LOST_CONTACT_SMS` outbox rows (who was texted,
+and when); those rows reference `users` too. The DPIA must cover M3's SMS data
+flow: the walker's name in clear through LINK Mobility (D-115), walkers under
+18 included.
 
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every
@@ -151,6 +159,8 @@ session.
 | A-29 | Request a 30-day trial key for the location SDK shortly before M3's demo (transistorsoft.com/shop/trials/new); owner's own phones only | M3's internal demo (TestFlight, Google Play internal testing) needs the SDK to run in a release build, without buying the $399 licence yet (D-086) | ⬜ Open — due M3 |
 | A-30 | Send the Critical Alerts entitlement request ([`critical-alerts-request.md`](critical-alerts-request.md), Part D) once the Apple Developer account (A-02) exists | The app's lost-contact alert needs Apple's approval to break through a silenced iPhone (D-020, D-087, STORE-01) | ⬜ Open — due M4 at the latest |
 | A-31 | In GitHub, **Settings → Code security**: turn on **Dependabot alerts** and **Dependabot security updates** (the setup guide, [`merge-rules.md`](merge-rules.md), says they are on; GitHub's API said on 2026-10-03: "Dependabot alerts are disabled for this repository") | Between pull requests nothing else watches the dependencies, and the audit now ignores two advisories that have no fix yet (D-093, D-104): alerts are what will say when braces or node-forge ships one (found in BUG-15's privacy review) | ⬜ Open |
+| A-32 | In Healthchecks.io, add a check named `staging-sms`: **Period 1 minute, Grace 2 minutes**, alerts to the same place as the others. Save its ping URL as the `staging` environment secret `HEALTHCHECKS_SMS_URL` | A failed SMS pages you through its own check (D-115, LOST-07). Needed before LOST-07's `infra-staging` plan, which stops with "Invalid value for variable" without it | ✅ Done — the owner, 2026-10-07. Not verified from a session: the secrets API is refused here. LOST-07's `infra-staging` plan is the first real check |
+| A-33 | After LOST-07 merges: run `infra-staging` with `plan`, then `apply`, and check within about 3 minutes that `staging-sms` has left `new` and shows a ping every minute, and that the worker's check still gets one ping a minute, not two (the two URLs must differ). **Do it straight after the merge's `deploy-staging` run:** the new code reads the worker's existing secret before any plan. If `staging-worker` pages first, read the worker's start lines in Clever Cloud's log for the staging app (the deploy job's log can end before them, BUG-27). A line beginning `worker: not checking in with Healthchecks.io: HEALTHCHECKS_WORKER_URL` means the watchdog is running and only its check-in stopped; the rest of the line says what is wrong with the secret. Re-copy it in the UUID form Healthchecks.io shows (`https://hc-ping.com/<uuid>`), then plan and apply. If the plan stops with "Invalid value for variable", read the message under it: it names the secret and what is wrong (D-116) | Puts the SMS check live. There is no live drill of a failing SMS in M2: staging has no journeys before task 9 (D-091) | ⬜ Open (D-115), after LOST-07 |
 
 ## Why this order
 The specialised agents and skills (Section 7) are where your quality bar gets

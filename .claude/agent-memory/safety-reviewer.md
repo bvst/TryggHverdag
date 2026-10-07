@@ -5,6 +5,35 @@ Newest first.
 
 ## Patterns worth checking every time
 
+### A guard moved into the adapter leaves its old reason behind (LOST-07 loop 3)
+When a later loop makes the adapter itself safe (e.g. /fail built on the URL's path), the earlier "why we refuse it"
+survives in TF error messages, test titles/comments, the PR body and decisions. Grep the old phrase across *.tf, tests,
+scripts and the PR draft, not just the file the implementer fixed. And for a runbook that quotes a start-up line: list
+every refusal the OLD rule let through and check the quote matches each one's actual line (quote the common prefix).
+
+### A stricter check of an existing secret ships with the deploy, before the plan that validates it (LOST-07 loop 2)
+deploy-staging runs on every merge; infra-staging (which re-validates TF variables and re-sets the app env) is a
+later manual owner step. So when config.ts starts refusing spellings an earlier, looser TF rule let through, the
+merged code reads the OLD applied value first. Ask: what rule applied the value now in the app env (git show
+origin/main:infra/...), what does the new code do with each spelling that rule took, and does the smoke test notice?
+(It reads /v1/health, never Healthchecks.io.) Usually a call-out in the PR body + owner to-do, not a code fix.
+I missed this in loop 1 (trailing slash, ?, #) and caught it in loop 2.
+
+### A second monitor URL: can it stand in for the first, and is its derived address built safely? (LOST-07)
+When a task adds a second ping URL beside the worker check, check (a) nothing refuses the same value for both (an ok
+ping each minute from the new check keeps the old check green while the beat is stale), and (b) any derived address
+(Healthchecks.io /fail) is built from the URL path, not appended to the string: a ?query URL turns failing into an ok
+ping. Prove it in-process: readXSetting + adapter with a stub fetch; the TF regex is usually prefix-only.
+
+### test.each titles from $name are truncated (~40 chars), so -t with a later phrase matches nothing
+The shared behaviour suite runs as test.each(...)('$name'): "-t <words from the middle>" gave 172 skipped, 0 run.
+Filter by the ID prefix ("LOST-07-AC3: alertsDue"). A "skipped" count is not a pass; read it.
+
+### Adapter SQL is not mutated on a PR (D-095): a 15-run L3 property may be its only guard
+Plant mutants at L3 for the safety corners of each new read; a property without examples can miss one (~1 in 7 here).
+Ask for fc examples that pin the corners (D-114 missing-half states).
+
+
 ### A later non-critical push can replace a stored critical one at the provider (LOST-06)
 APNs stores only ONE notification per bundle ID for an offline device, "in most cases the latest" (Apple,
 "Sending notification requests to APNs"; apns-expiration 0 means delivered once and not stored). So any

@@ -115,11 +115,23 @@
       "coveredLines": 18,
       "totalLines": 18
     },
+    "apps/server/src/modules/alerts/escalation.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 39,
+      "totalLines": 39
+    },
     "apps/server/src/modules/alerts/outbox.ts": {
       "lines": 100,
       "branches": 100,
       "coveredLines": 27,
       "totalLines": 27
+    },
+    "apps/server/src/modules/alerts/sms-check.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 12,
+      "totalLines": 12
     },
     "apps/server/src/modules/alerts/watchdog.ts": {
       "lines": 100,

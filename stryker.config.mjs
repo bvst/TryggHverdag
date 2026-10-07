@@ -123,7 +123,10 @@ export default {
     // The whole suite is apps and packages only. A mutant in safety code can
     // only be killed by a test of the product; the hook and script tests would
     // add seconds per mutant and could never fail because of one.
-    command: `pnpm exec vitest run ${vitestConfig}${vitestOptions}${run.tests.join(' ')}`,
+    //
+    // Vitest's own bin, started directly, because `pnpm exec` cost about 12 %
+    // of each mutant's CPU for nothing a run needs (D-117).
+    command: `node node_modules/vitest/vitest.mjs run ${vitestConfig}${vitestOptions}${run.tests.join(' ')}`,
   },
   timeoutMS: STRYKER_TIMEOUT_MS,
 

@@ -26,6 +26,7 @@
 // its incremental mode reused every earlier result in unchanged code whatever
 // happened to the tests: a gutted test file scored 100 %, and 0 % fresh.
 import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -35,9 +36,29 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const EXCLUSIONS = ['!**/*.test.ts', '!**/*.integration.test.ts', '!**/*.system.test.ts'];
 
-/** What a run's command hands Vitest: everything after `pnpm exec vitest run`. */
-const VITEST_RUN = 'pnpm exec vitest run ';
-const vitestArgs = (command) => command.slice(VITEST_RUN.length).trim().split(/\s+/);
+/**
+ * What a run's command hands Vitest: everything after
+ * `node node_modules/vitest/vitest.mjs run`.
+ *
+ * RG-03 (BUG-29, D-117): this was `pnpm exec vitest run `. D-117 starts
+ * Vitest by its own bin, because `pnpm exec` cost about 12 % of each mutant's
+ * CPU for nothing a run needs, and the mutation check ran out of its 25
+ * minutes on LOST-07's pull request. What follows the prefix, and what the
+ * tests below ask of it, is unchanged.
+ */
+const VITEST_RUN = 'node node_modules/vitest/vitest.mjs run ';
+
+/**
+ * BUG-29 (RG-03): this sliced VITEST_RUN's length off any command. A command
+ * that starts some other way would have been cut at the wrong place and read
+ * as other arguments, so it now throws, naming the command. Stricter.
+ */
+function vitestArgs(command) {
+  if (!command.startsWith(VITEST_RUN)) {
+    throw new Error(`the command does not start with "${VITEST_RUN}": ${command}`);
+  }
+  return command.slice(VITEST_RUN.length).trim().split(/\s+/);
+}
 
 /** The configuration file Vitest's arguments `args` name, by --config or -c, or undefined. */
 function configNamedIn(args) {
@@ -194,12 +215,21 @@ describe('stryker.config.mjs', () => {
   // none. The change only removes the reuse of earlier results, so the run is
   // stricter. The test after them holds the same for every run, and that
   // `incremental` is never switched on.
+  //
+  // RG-03 (BUG-29, D-117), for every run test that follows: each command
+  // started `pnpm exec vitest run `, and now starts
+  // `node node_modules/vitest/vitest.mjs run `, Vitest's own bin. On LOST-07's
+  // pull request the mutation check ran out of its 25 minutes, and
+  // `pnpm exec` cost about 12 % of each mutant's CPU for nothing a run needs.
+  // Only the prefix changes: what each run mutates, its configuration, its
+  // options and its tests are pinned as before. The worker run's test is new
+  // with BUG-29, so it is not one of the six above.
   test('the domain run mutates the domain and runs only the domain tests', async () => {
     const config = await configFor('domain');
 
     expect(config.mutate).toEqual(['apps/server/src/domain/**/*.ts', ...EXCLUSIONS]);
     expect(withoutMutationOptions(config.commandRunner.command)).toBe(
-      'pnpm exec vitest run apps/server/src/domain',
+      'node node_modules/vitest/vitest.mjs run apps/server/src/domain',
     );
     expect(config.incrementalFile).toBeUndefined();
   });
@@ -209,7 +239,7 @@ describe('stryker.config.mjs', () => {
 
     expect(config.mutate).toEqual(['apps/server/src/adapters/healthchecks.ts', ...EXCLUSIONS]);
     expect(withoutMutationOptions(config.commandRunner.command)).toBe(
-      'pnpm exec vitest run apps/server/src/adapters/healthchecks.test.ts apps/server/src/worker.test.ts',
+      'node node_modules/vitest/vitest.mjs run apps/server/src/adapters/healthchecks.test.ts apps/server/src/worker.test.ts',
     );
     expect(config.incrementalFile).toBeUndefined();
   });
@@ -226,7 +256,8 @@ describe('stryker.config.mjs', () => {
     const config = await configFor('journeys');
 
     expect(config.mutate).toEqual(['apps/server/src/modules/journeys/**/*.ts', ...EXCLUSIONS]);
-    expect(config.commandRunner.command).toMatch(/^pnpm exec vitest run /);
+    // RG-03 (BUG-29, D-117): was /^pnpm exec vitest run /.
+    expect(config.commandRunner.command).toMatch(/^node node_modules\/vitest\/vitest\.mjs run /);
     expect(config.incrementalFile).toBeUndefined();
     const args = vitestArgs(config.commandRunner.command);
     expect(configNamedIn(args)).toBe('vitest.system.config.mjs');
@@ -248,10 +279,17 @@ describe('stryker.config.mjs', () => {
     // one; "alone" leaves the title. Compared sorted, as the journeys run's
     // are: `vitest list` reports the files in an order of its own. What it
     // mutates and its configuration do not change.
+    //
+    // RG-03 (LOST-07, the spec's "Existing assertions that change by
+    // design"): the escalation, the SMS sender and the SMS check live in
+    // modules/alerts/, so the run's files gain escalation.system.test.ts,
+    // compared sorted as before. What it mutates and its configuration do not
+    // change.
     const config = await configFor('alerts');
 
     expect(config.mutate).toEqual(['apps/server/src/modules/alerts/**/*.ts', ...EXCLUSIONS]);
-    expect(config.commandRunner.command).toMatch(/^pnpm exec vitest run /);
+    // RG-03 (BUG-29, D-117): was /^pnpm exec vitest run /.
+    expect(config.commandRunner.command).toMatch(/^node node_modules\/vitest\/vitest\.mjs run /);
     expect(config.incrementalFile).toBeUndefined();
     const args = vitestArgs(config.commandRunner.command);
     expect(configNamedIn(args)).toBe('vitest.system.config.mjs');
@@ -259,25 +297,52 @@ describe('stryker.config.mjs', () => {
       [
         'apps/server/src/alerts.system.test.ts',
         'apps/server/src/acknowledgement.system.test.ts',
+        'apps/server/src/escalation.system.test.ts',
       ].sort(),
     );
   });
 
-  test('BUG-12: the process run mutates worker.ts, bin/worker.ts and process.ts, against bin.test.ts and the worker and process tests', async () => {
+  test('BUG-29: the worker run mutates worker.ts against worker.test.ts and process.test.ts, not bin.test.ts, under the root configuration (D-117)', async () => {
+    // On LOST-07's pull request the mutation check ran out of its 25 minutes
+    // inside the process run. bin.test.ts is about 8 s of CPU per mutant, and
+    // without it each of worker.ts's 189 mutants ended with the same status.
+    // As the process run: no --config, so it is asked what it would run.
+    const config = await configFor('worker');
+
+    expect(config.mutate).toEqual(['apps/server/src/worker.ts', ...EXCLUSIONS]);
+    expect(withoutMutationOptions(config.commandRunner.command)).toBe(
+      'node node_modules/vitest/vitest.mjs run apps/server/src/worker.test.ts apps/server/src/process.test.ts',
+    );
+    expect(config.incrementalFile).toBeUndefined();
+    const args = vitestArgs(config.commandRunner.command);
+    expect(configNamedIn(args)).toBeUndefined();
+    expect(filesRunWith(args).toSorted()).toEqual([
+      'apps/server/src/process.test.ts',
+      'apps/server/src/worker.test.ts',
+    ]);
+  });
+
+  test('BUG-12: the process run mutates bin/worker.ts and process.ts, against bin.test.ts and the worker and process tests', async () => {
     // D-098 gives the three files of #53's timed-out whole-suite run a group.
     // bin.test.ts is the only test that runs the real worker process (D-066's
     // amendment). Under the root configuration, so no --config: it is asked
     // what it would run, as the journeys run is.
+    //
+    // RG-03 (BUG-29, D-117): worker.ts leaves this run, and its title, for
+    // the worker run above. bin.test.ts killed none of worker.ts's mutants on
+    // its own, and cost every one of them about 8 s of CPU; the mutation
+    // check ran out of its 25 minutes in this run on LOST-07's pull request.
+    // What is left, bin/worker.ts and process.ts, runs the same three tests
+    // as before.
     const config = await configFor('process');
 
     expect(config.mutate).toEqual([
-      'apps/server/src/worker.ts',
       'apps/server/src/bin/worker.ts',
       'apps/server/src/process.ts',
       ...EXCLUSIONS,
     ]);
     expect(withoutMutationOptions(config.commandRunner.command)).toBe(
-      'pnpm exec vitest run apps/server/src/bin/bin.test.ts apps/server/src/worker.test.ts apps/server/src/process.test.ts',
+      'node node_modules/vitest/vitest.mjs run apps/server/src/bin/bin.test.ts apps/server/src/worker.test.ts apps/server/src/process.test.ts',
     );
     expect(config.incrementalFile).toBeUndefined();
     expect(filesRunWith(vitestArgs(config.commandRunner.command)).toSorted()).toEqual([
@@ -292,7 +357,7 @@ describe('stryker.config.mjs', () => {
 
     expect(config.mutate).toEqual(['apps/server/src/api-process.ts', ...EXCLUSIONS]);
     expect(withoutMutationOptions(config.commandRunner.command)).toBe(
-      'pnpm exec vitest run apps/server/src/api-process.test.ts',
+      'node node_modules/vitest/vitest.mjs run apps/server/src/api-process.test.ts',
     );
     expect(config.incrementalFile).toBeUndefined();
     expect(filesRunWith(vitestArgs(config.commandRunner.command))).toEqual([
@@ -315,7 +380,7 @@ describe('stryker.config.mjs', () => {
     expect(left).toEqual(['apps/mobile/src/safety-core/']);
     expect(config.mutate).toEqual([...globs(left), ...EXCLUSIONS]);
     expect(withoutMutationOptions(config.commandRunner.command)).toBe(
-      'pnpm exec vitest run apps packages',
+      'node node_modules/vitest/vitest.mjs run apps packages',
     );
     expect(config.incrementalFile).toBeUndefined();
   });
@@ -334,11 +399,18 @@ describe('stryker.config.mjs', () => {
 
     // LOST-02 (RG-03): the alerts group joins the runs, after journeys; the
     // others keep their names and their order.
+    //
+    // RG-03 (BUG-29, D-117): the worker group joins the runs, immediately
+    // before process, which gives it worker.ts: the mutation check ran out of
+    // its 25 minutes in the process run on LOST-07's pull request. The others
+    // keep their names and their order, and the union below is still every
+    // safety path, each once.
     expect(mutationRuns().map((run) => run.name)).toEqual([
       'domain',
       'healthchecks',
       'journeys',
       'alerts',
+      'worker',
       'process',
       'api-process',
       'whole-suite',
@@ -426,6 +498,59 @@ describe('stryker.config.mjs', () => {
           10_000,
       );
     }
+  });
+
+  test('BUG-29: every run starts Vitest by its own bin, `node node_modules/vitest/vitest.mjs run`, not by `pnpm exec` (D-117)', async () => {
+    // pnpm exec cost about 12 % of each mutant's CPU (3 % to 19 % by run),
+    // for nothing a run needs: no test depends on the PATH it sets, and
+    // bin.test.ts starts its processes with process.execPath. On LOST-07's
+    // pull request the mutation check ran out of its 25 minutes.
+    for (const run of mutationRuns()) {
+      const config = await configFor(run.name);
+
+      expect(config.commandRunner.command, run.name).toMatch(
+        /^node node_modules\/vitest\/vitest\.mjs run /,
+      );
+    }
+  });
+
+  test("BUG-29: the file each run's command starts is the bin.vitest node_modules/vitest/package.json declares, it exists, and it starts this Vitest (D-117)", async () => {
+    // So a Vitest upgrade that moves its bin fails here, by name, and not in
+    // CI's mutation job, where every mutant's run would fail to start.
+    const manifest = JSON.parse(
+      readFileSync(path.join(root, 'node_modules', 'vitest', 'package.json'), 'utf8'),
+    );
+    const declared = manifest.bin?.vitest;
+    expect(typeof declared, 'node_modules/vitest/package.json declares no bin.vitest').toBe(
+      'string',
+    );
+    const bin = path.posix.join('node_modules/vitest', declared);
+    expect(
+      existsSync(path.join(root, bin)) && statSync(path.join(root, bin)).isFile(),
+      `${bin}, Vitest's declared bin, is not a file`,
+    ).toBe(true);
+
+    for (const run of mutationRuns()) {
+      const config = await configFor(run.name);
+      const [interpreter, script, subcommand] = config.commandRunner.command.split(/\s+/);
+
+      expect({ interpreter, script, subcommand }, run.name).toEqual({
+        interpreter: 'node',
+        script: bin,
+        subcommand: 'run',
+      });
+    }
+
+    // Started as every command starts it, from the repository, with `node`
+    // found on the PATH: it answers with the installed version.
+    const version = spawnSync('node', [bin, '--version'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { PATH: process.env.PATH, HOME: process.env.HOME },
+    });
+    expect(version.error, `node ${bin} --version did not start`).toBeUndefined();
+    expect(version.status, version.stderr).toBe(0);
+    expect(version.stdout).toContain(`vitest/${String(manifest.version)}`);
   });
 
   test('an unknown run throws, naming it and the runs there are', async () => {

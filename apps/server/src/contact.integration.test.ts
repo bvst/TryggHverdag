@@ -88,6 +88,20 @@ afterAll(async () => {
 beforeEach(async () => {
   await connection().query("update journeys set state = 'ENDED' where state <> 'ENDED'");
   await connection().query('update outbox set sent_at = now() where sent_at is null');
+  // RG-03 (LOST-07; not in the spec's list, found reading this setup against
+  // the escalation): the sweep now also escalates every unresolved alert two
+  // minutes old or more, across the whole table. Ending a journey by hand
+  // leaves its alert unresolved, so a later test's sweep would escalate an
+  // earlier test's alert, and every `escalated: 0` below would depend on how
+  // long the file had run. So the leftovers are resolved too, as "I'm home"
+  // would have resolved them. Nothing a test asserts about its own rows
+  // changes. And every exact sweep result below gains `escalated: 0` (the
+  // spec's "Every exact sweep result"): these tests sweep within seconds of
+  // an alert opening, never two minutes, so none is escalated.
+  await connection().query(
+    "update alerts set state = 'RESOLVED', resolved_at = now(), resolution = 'HOME' " +
+      "where state <> 'RESOLVED'",
+  );
 });
 
 function connectionUri(): string {
@@ -1053,7 +1067,12 @@ describe('LOST-03 and SM-09: a heartbeat and the watchdog’s open meet on the r
         recording.catch(() => undefined);
         try {
           expect(await eventually(someoneAtTheGate)).toBe(true);
-          expect(await watchdogFor().sweep()).toEqual({ ok: true, opened: 0, stuck: 0 });
+          expect(await watchdogFor().sweep()).toEqual({
+            ok: true,
+            opened: 0,
+            escalated: 0,
+            stuck: 0,
+          });
         } finally {
           await held.open();
         }
@@ -1066,7 +1085,7 @@ describe('LOST-03 and SM-09: a heartbeat and the watchdog’s open meet on the r
     expect(await stateOf(journeyId)).toBe('ACTIVE');
     expect(await alertsOf(journeyId)).toEqual([]);
     expect(await messagesOf(journeyId)).toEqual([]);
-    expect(await watchdogFor().sweep()).toEqual({ ok: true, opened: 0, stuck: 0 });
+    expect(await watchdogFor().sweep()).toEqual({ ok: true, opened: 0, escalated: 0, stuck: 0 });
   });
 
   test('LOST-03-AC11: the sweep’s open holding J’s row before commit as a heartbeat for J arrives: the heartbeat waits for the row (pg_stat_activity), then brings J back: the alert RESOLVED, the lost-contact messages withdrawn, one BACK_IN_CONTACT per responder; J ACTIVE and not overdue, and the next sweep opens nothing', async () => {
@@ -1110,7 +1129,7 @@ describe('LOST-03 and SM-09: a heartbeat and the watchdog’s open meet on the r
       true,
     );
     expect(recipientsOf(ofKind(messages, 'BACK_IN_CONTACT'))).toEqual([...responderIds].sort());
-    expect(await watchdogFor().sweep()).toEqual({ ok: true, opened: 0, stuck: 0 });
+    expect(await watchdogFor().sweep()).toEqual({ ok: true, opened: 0, escalated: 0, stuck: 0 });
   }, 30_000);
 
   test(`LOST-03-AC11: a heartbeat and two sweepers starting at the same moment on separate connections, ${String(RACE_ROUNDS)} rounds and more: every round ends with J ACTIVE and not overdue, either with no alert and no message, or with its one alert RESOLVED and one BACK_IN_CONTACT per responder; never J LOST_CONTACT, never ACTIVE beside an unresolved alert, never more than one alert`, async () => {
@@ -1201,7 +1220,12 @@ describe('SM-04 and SM-09: "I’m home" meets the watchdog and the heartbeat on 
         ending.catch(() => undefined);
         try {
           expect(await eventually(someoneAtTheGate)).toBe(true);
-          expect(await watchdogFor().sweep()).toEqual({ ok: true, opened: 0, stuck: 0 });
+          expect(await watchdogFor().sweep()).toEqual({
+            ok: true,
+            opened: 0,
+            escalated: 0,
+            stuck: 0,
+          });
         } finally {
           await held.open();
         }
@@ -1213,7 +1237,7 @@ describe('SM-04 and SM-09: "I’m home" meets the watchdog and the heartbeat on 
 
     expect(await journeyOf(journeyId)).toMatchObject({ state: 'ENDED', endReason: 'HOME' });
     expect(await alertsOf(journeyId)).toEqual([]);
-    expect(await watchdogFor().sweep()).toEqual({ ok: true, opened: 0, stuck: 0 });
+    expect(await watchdogFor().sweep()).toEqual({ ok: true, opened: 0, escalated: 0, stuck: 0 });
   }, 30_000);
 
   test('LOST-03-AC17: the sweep’s open holding J’s row before commit as "I’m home" arrives: "I’m home" waits (pg_stat_activity), then does SM-04’s work: J ENDED, the alert RESOLVED with resolution HOME, a HOME message per responder, the unsent lost-contact messages withdrawn', async () => {

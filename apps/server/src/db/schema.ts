@@ -262,6 +262,13 @@ export const unresolved = (state: PgColumn) => sql`${state} <> 'RESOLVED'`;
  * them. No check ties them to the state: rows put in directly have
  * ACKNOWLEDGED with nobody recorded, and the resumed-escalation rule will
  * move a state back (D-114).
+ *
+ * `sms_raised_at` says when nobody having acknowledged it for two minutes
+ * escalated it to SMS (LOST-07): the database's now() in the transaction that
+ * moved it to ESCALATED and wrote every responder's SMS. Null until then, and
+ * kept by an acknowledgement and a resolution. No check ties it to the state,
+ * for the same reasons (D-116). Not `escalated_at`: every form of "escalate"
+ * contains "lat", which the scans for coordinate columns flag.
  */
 export const alerts = pgTable(
   'alerts',
@@ -275,6 +282,7 @@ export const alerts = pgTable(
     resolution: alertResolution('resolution'),
     acknowledgedBy: uuid('acknowledged_by'),
     acknowledgedAt: moment('acknowledged_at'),
+    smsRaisedAt: moment('sms_raised_at'),
   },
   (table) => [
     foreignKey({ columns: [table.journeyId], foreignColumns: [journeys.id] }),
@@ -295,7 +303,7 @@ export const alerts = pgTable(
   ],
 );
 
-/** The kinds of message there are, exactly as the domain lists them: the lost-contact alert, its stand-downs and the notice that someone is on it. */
+/** The kinds of message there are, exactly as the domain lists them: the lost-contact alert, its stand-downs, the notice that someone is on it, and the escalation SMS. */
 export const messageKind = pgEnum('message_kind', MESSAGE_KINDS);
 
 /**

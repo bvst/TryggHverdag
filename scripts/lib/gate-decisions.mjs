@@ -83,14 +83,21 @@ export const MUTATION_GROUPS = [
     // from journeys.system.test.ts so each mutant here stays cheap, under the
     // system tests' configuration. A group claims a safety path only as it is
     // listed, so acknowledgement.ts is mutated here, and a mutant anywhere in
-    // the folder is run by both files.
+    // the folder is run by both files. Then the escalation to SMS, the SMS
+    // sender and the SMS check (LOST-07, D-116), whose tests are a third file.
     name: 'alerts',
     paths: ['apps/server/src/modules/alerts/'],
     tests: [
       'apps/server/src/alerts.system.test.ts',
       'apps/server/src/acknowledgement.system.test.ts',
+      'apps/server/src/escalation.system.test.ts',
     ],
     config: 'vitest.system.config.mjs',
+  },
+  {
+    name: 'worker',
+    paths: ['apps/server/src/worker.ts'],
+    tests: ['apps/server/src/worker.test.ts', 'apps/server/src/process.test.ts'],
   },
   {
     // Whether the worker runs, says it is alive, and is restarted when it
@@ -100,13 +107,12 @@ export const MUTATION_GROUPS = [
     // signal, and fails if it ends any other way.
     // bin/worker.ts starts it, and process.ts chooses its exit code.
     // bin.test.ts is the only test that runs the real worker process, so it
-    // goes with these three wherever they are mutated (D-066's amendment).
+    // goes with these two, the files only a real process exercises, wherever
+    // they are mutated (D-066's amendment). worker.ts has the group before
+    // this one, because bin.test.ts kills none of its mutants on its own
+    // (D-117).
     name: 'process',
-    paths: [
-      'apps/server/src/worker.ts',
-      'apps/server/src/bin/worker.ts',
-      'apps/server/src/process.ts',
-    ],
+    paths: ['apps/server/src/bin/worker.ts', 'apps/server/src/process.ts'],
     tests: [
       'apps/server/src/bin/bin.test.ts',
       'apps/server/src/worker.test.ts',

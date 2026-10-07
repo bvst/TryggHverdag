@@ -122,3 +122,11 @@ commit, an edit to a TEST file (MIGRATIONS const, COMMITTED_SPEC) silently runs 
 the resolve's both end `where journey_id = ... returning`): include a distinctive neighbour line, or NOT APPLIED. A property test
 whose L3 run passed at base: estimate its odds offline by fc.assert-ing only the model (no DB) with the same arbitraries, runs and
 margin, across ~2000 seeds.
+**LOST-07 (2026-10-07).** Stryker's JSON statusReason holds Vitest's output: parse `Duration Ns (transform x%, import y%, tests z%)`
+per mutant to answer budget questions without running anything. Vitest leaves /tmp/<random>/ssr caches per startVitest; delete the
+ssr-only ones created in your own window (find -newermt) once no vitest runs. A test-kit behaviour file can be edited in memory
+like any served file (probe2 rewrote behaviour 10's seed).
+**Terraform files** (LOST-07 loop 2): infra.test.mjs reads .tf through `const read = (file) => readFileSync(...)`; rewrite that one
+line in the test's transform to return the mutated .tf text for the one path. It evaluates RE2 as JS RegExp, so an RE2-only
+construct like `(?i)` dies as a SyntaxError (loud, not a real kill). A mutant with pass=0 where its control had passes is
+usually my own syntax error: re-plant it before counting it.

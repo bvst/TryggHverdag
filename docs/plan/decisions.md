@@ -2840,6 +2840,9 @@ any other path is work, not a candidate for the same treatment.
   - A change to the order or the split goes back to the owner.
   - A bug fix (BUG-10, D-092) may run between tasks.
   - Supersedes nothing.
+- **Amended by D-115 (owner, 2026-10-07):** SM-10 and SM-02's last-responder
+  warning leave LOST-07 for a task of their own, after it and before LOST-08.
+  M2 has nine tasks.
 
 ## D-091 — Devices authenticate with a hashed per-device credential until login arrives
 - **Date:** 2026-10-01 · **Status:** Accepted (delegated to Claude, D-031) ·
@@ -4025,3 +4028,220 @@ any other path is work, not a candidate for the same treatment.
     `ESCALATED` or `ACKNOWLEDGED` to `RESOLVED`; the plan needs both, and this
     decision relies on D-112's "whatever its state".
   - Supersedes nothing.
+
+## D-115 — SMS escalation: the owner's five answers, and M2 gains a task for removing a responder (LOST-07)
+- **Date:** 2026-10-07 · **Status:** Accepted (owner, 2026-10-07). Each was
+  asked with Claude's recommendation, and the owner chose it each time ·
+  **Section:** 3, 5 and 10 (LOST-07, REL-07; D-016, D-019, D-079, D-086,
+  D-090, D-113, D-114)
+- **Context:** LOST-07's spec (`docs/specs/LOST-07.md`) asked five questions
+  that are scope, cost, privacy or safety. SMS goes through LINK Mobility
+  (D-086, Section 4's accepted defaults), so the provider was not asked.
+- **Decision:**
+  1. **The resumed-escalation rule and SM-02's last-responder warning get an
+     M2 task of their own,** after LOST-07 and before "They're safe". In M2
+     nothing can remove a responder from a journey, so neither can be
+     triggered yet; that task adds the removal with them. LOST-07 delivers
+     the 2-minute SMS only. This changes D-090's split: M2 now has nine
+     tasks.
+     - Rejected: all in LOST-07 (a bigger task, with two more questions
+       first); both to M3 (M2's exit would lose them).
+  2. **A failed SMS pages through a second Healthchecks.io check,** reported
+     each minute from the database. "Failed" means still unsent 60 s after it
+     was written. It is separate from the worker's check, so a stuck SMS
+     never reads as "worker down" and never hides a watchdog failure. Two
+     owner to-dos follow: A-32 (create the check) and A-33 (plan and apply
+     after the merge).
+     - Rejected: reusing the worker's check; turning `/v1/health` degraded.
+       Both put two faults behind one signal.
+  3. **No phone number exists in M2.** The SMS message names its recipient
+     by user ID, as push does. M3's real SMS adapter reads the number
+     confirmed in responder setup. Until then a real send has no target,
+     fails, and pages. Nothing personal is stored for it in M2.
+     - Rejected: a phone column on `users` now; a number copied into each
+       outbox row.
+  4. **The SMS says the walker's name, that contact was lost, and "open the
+     app"** — no location, no time, no link. Built in M3. An SMS is not
+     encrypted and can show on a locked screen, so the details stay in the
+     app.
+     - Rejected: no name (a responder with several walkers would not know
+       who); the time of last contact (one more personal detail in clear).
+  5. **No stand-down SMS.** When an escalated alert resolves, responders get
+     the push stand-down as today, and unsent escalation SMS are withdrawn.
+     - Rejected: an "all clear" SMS, which needs two more kinds and a list of
+       its own, and costs an SMS per responder.
+- **Consequences:**
+  - The roadmap's M2 table gains the new task, numbered before "They're
+    safe"; `docs/progress.md`'s M2 table follows.
+  - A-32 and A-33 join the owner's to-do list.
+  - Q4's text is M3's to build; this records what it may contain.
+
+## D-116 — SMS escalation: the kind, the escalation in the sweep, its own delivery loop, and how D-033's alert states are read (LOST-07)
+- **Date:** 2026-10-07 · **Status:** Accepted (delegated, D-031) ·
+  **Section:** 5 (AR-03 to AR-06; D-033, D-079, D-086, D-087, D-100, D-107,
+  D-108, D-111, D-112, D-114)
+- **Context:** LOST-07's spec has the full reasoning. This records the
+  choices it makes within the owner's answers (D-115) and the binding rules.
+- **Decision:**
+  - **The kind and the lists:** `LOST_CONTACT_SMS` joins `MESSAGE_KINDS`;
+    `SMS_KINDS` and `PUSH_KINDS` split the kinds by channel;
+    `WITHDRAWN_WHEN_RESOLVED` gains it; `WITHDRAWN_WHEN_ACKNOWLEDGED` holds
+    it, so an acknowledgement withdraws the alert's unsent SMS. The open's
+    list stays `ALERT_RESOLUTIONS` (no SMS stand-down, D-115).
+  - **The escalation is part of the watchdog's sweep, and feeds its beat.**
+    An alert opened at least `ESCALATE_AFTER_MS` (2 minutes) ago, unresolved,
+    not yet escalated, and not acknowledged in D-114's sense (state
+    `ACKNOWLEDGED` **and** someone recorded) is escalated. A missing half
+    sends the SMS. One that cannot be escalated counts as stuck, as an open
+    does.
+  - **The rule:** `alertTransition` gains `escalate` and returns to a
+    `switch` with a `never` default.
+  - **One transaction, the journey's row first** (D-112): `sms_raised_at` at
+    `now()`, state `ESCALATED`, and one SMS per responder.
+  - **`sms_raised_at`, with no check tying it to the state**, as for the
+    acknowledgement's columns. Not `escalated_at`: every form of "escalate"
+    contains "lat", which the privacy scans of column names flag as a
+    coordinate (found by `test-author` in the red phase; the scans stay as
+    they are).
+  - **SMS has its own claim and delivery loop,** so a hung push provider
+    never delays an SMS, nor the reverse. The SMS port is content-free (ID,
+    recipient, kind), shares the push port's failure reasons, and answers
+    `UNCONFIGURED_SMS` until M3.
+  - **The stand-down's hold is left as it is,** with the reason in the spec.
+  - **The page:** an SMS still unsent 60 s after it was written
+    (`SMS_UNSENT_LIMIT_MS`) turns the second check's minute report into a
+    failing one, sent to its `/fail` address.
+  - **Six closed log events,** with no phone number and no user ID (PRIV-07).
+  - **The `alerts` mutation group** gains a third system test file.
+  - **How D-033's alert states are read:** `ESCALATED` → `RESOLVED` and
+    `ACKNOWLEDGED` → `RESOLVED` exist (D-112 resolves an alert "whatever its
+    state"), and an `ACKNOWLEDGED` alert with nobody recorded is escalated.
+    D-033 is itself delegated, so this is Claude's to record and the owner's
+    to reopen; `05-architecture.md`'s sentence is updated to draw those
+    edges. The binding rules are unchanged.
+- **Consequences:**
+  - The outbox's unique (alert, recipient, kind) after the resumed-escalation
+    rule's reset, and D-033's edge back from `ACKNOWLEDGED`, go with D-115's
+    new task.
+  - LOST-07-AC1 to AC20 prove it. Supersedes nothing.
+- **Amended in review loop 1 (2026-10-07), from the three reviewers:**
+  - **The escalation runs whatever the overdue read came to.** The green phase
+    had a failed read skip it; responders whose push failed would then get no
+    SMS while the journeys read kept failing, which is the case SMS exists
+    for.
+  - **A missing half fails toward the SMS:** an alert whose `smsRaisedAt` or
+    `acknowledgedBy` is missing is escalated (D-114).
+  - **The escalation request carries no threshold.** The adapter decided by
+    `ESCALATE_AFTER_MS` while the fake obeyed a caller's `afterMs`; the field
+    goes, so the two cannot differ (D-100).
+  - **The ping URLs are well-formed and different.** A URL with a query, a
+    fragment or a trailing slash is refused (each would misplace `/fail`, and
+    a failing report could count as a success), the alarm builds `/fail` on
+    the URL's path, and `HEALTHCHECKS_SMS_URL` must differ from
+    `HEALTHCHECKS_WORKER_URL`, in Terraform and in the worker: one green ping
+    must never keep the other check green.
+- **Amended in review loop 2 (2026-10-07), from `safety-reviewer` and
+  `test-auditor`:**
+  - **One spelling per check.** `safety-reviewer` found that "different"
+    compared spellings, not checks. Healthchecks.io takes `/<uuid>` and
+    `/<uuid>/` as the same success ping, and the slug form
+    (`/<ping-key>/<slug>`) names a check its UUID also names. So the worker's
+    URL with a trailing slash, space, tab or backslash, a percent-encoded
+    character, or the slug form all passed both guards. As the SMS secret, any
+    of them would keep the worker's check green while the watchdog was down,
+    and `staging-sms` would never be pinged.
+    - **Terraform** takes each variable only as
+      `https://hc-ping.com/<uuid>`, the UUID in lower case, and nothing else.
+      `!=` then compares one spelling per check.
+    - **`config.ts`** takes a ping URL only when the value is exactly the
+      parsed URL's own spelling, and its path is `/` and a lower-case UUID.
+      Any https host stays allowed, as in INF-08, so tests keep their loopback
+      address.
+    - **The worker** reads two settings as the same check when their UUIDs are
+      equal.
+    - The slug form is given up. Healthchecks.io shows the UUID form by
+      default, and A-23, A-32 and the error messages already ask for it. A
+      saved secret in another form is refused loudly, but the deploy comes
+      first: on the merge, `deploy-staging` runs the new `config.ts` against
+      the worker's existing secret, applied under INF-08's prefix-only rule,
+      before A-33's plan. The worker then stops checking in and
+      `staging-worker` pages; the watchdog keeps running. A-33 says what to do.
+  - **Three tests the code already passes** (`test-auditor`):
+    - an escalation held past its limit whose retry then fails counts as stuck;
+    - one alert's failed escalation stops no other;
+    - the shared SMS count is held to the time an SMS was written, not when it
+      is next due (D-100).
+  - **A test of the configuration that will run:** both URLs set and
+    different. Two mutants on the equal-URL guard survived without it.
+- **Amended in review loop 3 (2026-10-07), from `test-auditor` and
+  `safety-reviewer` (all three passed loop 2):**
+  - **The escalation's waiting loop gets its tests:** two alerts past the
+    stuck threshold, one held through the wait and one let go within it, in
+    both orders, and both held. A loop that stopped early would lose the next
+    alert's retry and its overdue line. The open's twin loop on `main` has the
+    same gap, queued as BUG-28.
+  - **`config.ts`'s tests refuse a UUID too short or too long, and pin the
+    trailing-slash reason against the general one.**
+  - **Terraform's error messages say why another spelling is refused:** so the
+    two URLs can be compared. The slug form and `/<uuid>/` do ping, so "would
+    ping nothing" was untrue for them.
+
+## D-117 — `worker.ts` gets a mutation group of its own, and each mutant's run starts Vitest directly (BUG-29)
+- **Date:** 2026-10-07 · **Status:** Accepted (delegated, D-031). It
+  lowers no score and does not raise the budget · **Section:** 6 (amends
+  D-066's grouping; within D-036 and D-098)
+- **Context:** On LOST-07's pull request (#67), CI's required `mutation`
+  check ran out of its 25-minute budget (job 112914873757): `spawnSync pnpm
+  ETIMEDOUT`, the `process` group cut off after 7:23 and `api-process` never
+  started. Every group that finished passed. LOST-07 added about 170 mutants
+  (the `alerts` group from 161 to 291, `journey.ts` from 177 to 220). CI's
+  times, against LOST-06's (#66): domain 6:15 (4:59), healthchecks 1:50
+  (1:14), journeys 2:32 (2:21), alerts 6:53 (2:55), process over 7:23 (5:36),
+  api-process not run (0:24). D-036 and D-098 say to make each mutant's run
+  faster before raising the budget, which is the owner's (cost).
+- **What was measured** (2026-10-07, this session's 4-core machine):
+  - **`bin.test.ts` is most of the `process` group's cost:** about 8 s of CPU
+    per mutant, against 3.8 s for `worker.test.ts` and 0.8 s for
+    `process.test.ts`. Every one of `worker.ts`'s 189 mutants paid for it.
+  - **It kills none of `worker.ts`'s mutants on its own.** A fresh Stryker
+    run of `worker.ts` against `worker.test.ts` and `process.test.ts` only
+    gave 183 killed, 4 survived and 2 timed out, the same status for each of
+    the 189 mutants as the `process` group's run with `bin.test.ts`, mutant
+    by mutant. It took 4:04 instead of the group's 6:38.
+  - **`pnpm exec` costs about 12 % of each mutant's CPU** (3 % to 19 % by
+    group): about 0.3–0.9 s of user and system time per run, for nothing a
+    run needs. `bin.test.ts` starts its processes with `process.execPath`,
+    so no test depends on the PATH `pnpm exec` sets.
+- **Decision:**
+  - `worker.ts` is mutated in a group of its own, `worker`, against
+    `worker.test.ts` and `process.test.ts`. `bin/worker.ts` and `process.ts`
+    stay in `process`, with `bin.test.ts`, the only test that runs the real
+    worker process (D-066's reason, which applies to those two).
+  - Each mutant's command starts Vitest as `node node_modules/vitest/vitest.mjs
+    run`, Vitest's own bin, instead of `pnpm exec vitest run`. The options,
+    the tests and the configuration are unchanged.
+  - The budget stays at 25 minutes.
+- **Why this cannot hide a weak test:** a narrower test set can only score
+  lower, never falsely higher (D-066's amendment). A future `worker.ts`
+  mutant that only `bin.test.ts` could kill would survive, and the gate would
+  name it.
+- **Rejected:**
+  - Raising the budget: the owner's, and D-036 asks for speed first.
+  - `--pool=threads`: about 7 % more, but it changes how tests run (worker
+    threads, not processes), which `worker.test.ts` and `bin.test.ts` would
+    each need checking for.
+  - One CI job per group: shortest, but it changes the required checks,
+    which is the owner's ruleset.
+- **Consequences:** the `MUTATION_GROUPS` pin and the Stryker config tests
+  change, with their reasons (RG-03). If CI's next run still does not fit,
+  the choice goes to the owner (D-098).
+- **The owner agreed, 2026-10-07,** after asking what the alternatives were.
+- **Measured after the change** (fresh, every group, the same 4-core machine,
+  otherwise quiet): **18:57 in all**, 6:03 under the budget. domain 4:39,
+  healthchecks 1:39, journeys 2:21, alerts 5:17, worker 3:34, process 0:51,
+  api-process 0:23. Every score is unchanged: `worker.ts` 183 killed, 4
+  survived, 2 timed out; `bin/worker.ts` 4 of 4; `process.ts` 25 of 25.
+  Before it, CI's run on the same tests took about 25:00 and ran out (job
+  112942878321: domain 6:08, healthchecks 1:45, journeys 2:26, alerts 6:42,
+  process 7:36, api-process cut off). CI's run on the fix is the measure of
+  record.

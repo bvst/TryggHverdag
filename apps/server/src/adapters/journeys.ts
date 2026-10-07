@@ -56,21 +56,36 @@
  *     when the rule says so (from LOST_CONTACT), in one transaction (AR-04).
  *   - Resolving is one helper (`resolveInside`), for every path that resolves
  *     an alert: the journey's one unresolved alert goes to RESOLVED; its
- *     messages of the kinds withdrawn on resolution (lost-contact pushes, and
- *     the notices that someone is on it) not yet sent are withdrawn, so no
- *     claim hands them out again (D-111, D-113); and every responder row gets
- *     one stand-down of the resolution's own kind. A stand-down for a
- *     responder with a withdrawn message that may still be in the push port's
- *     hands is due only once the latest such lease or retry time has passed,
- *     so it never overtakes any of them (D-114).
+ *     messages of the kinds withdrawn on resolution (WITHDRAWN_WHEN_RESOLVED:
+ *     lost-contact pushes, the notices that someone is on it, and the
+ *     escalation SMS) not yet sent are withdrawn, so no claim hands them out
+ *     again (D-111, D-113, LOST-07); and every responder row gets one
+ *     stand-down, by push, of the resolution's own kind. A stand-down for a
+ *     responder with a withdrawn message that may still be in a port's hands,
+ *     the push port's or the SMS port's, is due only once the latest such
+ *     lease or retry time has passed, so it never overtakes any of them
+ *     (D-114).
  *
  * "I'm on it" (LOST-06) reads the alert first without a lock, so a refusal
  * never holds a row. One that would record takes the alert's journey's row
  * first too, asks the domain's alert rule again under it, and writes the
  * acknowledgement and one notice per other responder in one transaction
- * (AR-04, AR-05). It never holds an ACTIVE journey's row for more than the
- * moment it takes to find the alert resolved, so it cannot hide a journey
- * from the watchdog's open.
+ * (AR-04, AR-05), withdrawing the alert's escalation SMS not yet sent
+ * (LOST-07). It never holds an ACTIVE journey's row for more than the moment
+ * it takes to find the alert resolved, so it cannot hide a journey from the
+ * watchdog's open.
+ *
+ * The escalation to SMS (LOST-07) reads the alerts due without a lock, and
+ * escalates each in a transaction of its own, written as the open is: its own
+ * lock limit; the alert's journey's row first (D-112), skipped when held
+ * unless told to wait; the domain's escalation rule asked again under it with
+ * the transaction's now(); the alert ESCALATED at now(), and one
+ * LOST_CONTACT_SMS per responder row, all of it or none of it. It takes the
+ * journey's row, then the alert's, then the new outbox rows, the order "I'm
+ * on it" takes them, and only an unresolved alert's journey is LOST_CONTACT,
+ * which the open never takes. The two claims each take their own channel's
+ * kinds (PUSH_KINDS, SMS_KINDS), so no message ever reaches the other port,
+ * and the count of failing SMS is one statement, timed by now().
  *
  * The worker's marks can now wait on two withdrawals, and the worker's pool
  * has no lock limit of its own. The first is the API's, when it resolves an
@@ -104,11 +119,15 @@ import {
 import { databaseTime } from '../domain/database-time.ts';
 import {
   ALERT_RESOLUTIONS,
+  PUSH_KINDS,
+  SMS_KINDS,
+  WITHDRAWN_WHEN_ACKNOWLEDGED,
   WITHDRAWN_WHEN_RESOLVED,
   alertTransition,
   transition,
   type AlertForAcknowledgement,
   type AlertResolution,
+  type AlertState,
   type JourneyForHeartbeat,
   type JourneyState,
   type UnendedJourney,
@@ -120,6 +139,9 @@ import type {
   AlertMessage,
   AlertStore,
   ClaimedMessages,
+  DueAlerts,
+  EscalateAlertResult,
+  EscalateRequest,
   HeartbeatToRecord,
   HomeToRecord,
   InsertStartedResult,
@@ -359,6 +381,171 @@ async function openInside(
   return { outcome: 'opened', alertId, messages: messages.rows.map(asMessage) };
 }
 
+/**
+ * Refuses, before any transaction, a wait PostgreSQL would read as something
+ * else: a lock_timeout of 0 is no limit at all, which a wait must never
+ * quietly become.
+ */
+function checkLockWait(lockWaitMs: number | undefined): void {
+  if (
+    lockWaitMs !== undefined &&
+    !(Number.isInteger(lockWaitMs) && lockWaitMs >= 1 && lockWaitMs <= LOCK_TIMEOUT_MAX_MS)
+  ) {
+    throw new Error(
+      `lockWaitMs must be a whole number of milliseconds from 1 to ${String(LOCK_TIMEOUT_MAX_MS)}, ` +
+        `not ${String(lockWaitMs)}: PostgreSQL reads a lock_timeout of 0 as no limit at all.`,
+    );
+  }
+}
+
+/**
+ * Runs a transaction that takes a journey's row first, as the open and the
+ * escalation do. Only a waiting attempt's wait for that row is answered, as
+ * held, not thrown: the watchdog reports it, and a row someone holds is not a
+ * failure of the database. Any other lock that ran out, in either attempt, is
+ * a failure, and is thrown.
+ */
+async function takingTheRow<T>(
+  db: Database,
+  lockWaitMs: number | undefined,
+  inside: (
+    tx: Parameters<Parameters<Database['transaction']>[0]>[0],
+    progress: { rowTaken: boolean },
+  ) => Promise<T>,
+): Promise<T | { outcome: 'held' }> {
+  checkLockWait(lockWaitMs);
+  const progress = { rowTaken: false };
+  try {
+    return await db.transaction((tx) => inside(tx, progress));
+  } catch (error) {
+    if (
+      lockWaitMs !== undefined &&
+      !progress.rowTaken &&
+      sqlstateOf(error) === LOCK_NOT_AVAILABLE
+    ) {
+      return { outcome: 'held' };
+    }
+    throw error;
+  }
+}
+
+/** A database time that may be null, as null; any other value as `databaseTime` reads it. */
+function momentOrNull(value: unknown, what: string): Date | null {
+  return value === null ? null : databaseTime(value, what);
+}
+
+/** The kind the escalation writes, cast to the enum as `resolveInside` casts its own. */
+const ESCALATION_SMS = 'LOST_CONTACT_SMS' satisfies MessageKind;
+
+/**
+ * The escalation, inside its transaction (LOST-07). Throws to roll back: a
+ * move that changed no row, or an alert with nobody to text, is never
+ * half-written. Marks `progress.rowTaken` once the journey's row is taken, so
+ * a lock that ran out after that is known to be another one.
+ */
+async function escalateInside(
+  tx: Pick<Database, 'execute' | 'select' | 'update'>,
+  { alertId, lockWaitMs }: EscalateRequest,
+  progress: { rowTaken: boolean },
+): Promise<EscalateAlertResult> {
+  // Every escalation bounds its own waits, as every open does (D-108): the
+  // worker's pool has no lock limit, and the outbox's inserts take key-share
+  // locks on the responders' users rows. SET LOCAL, for this transaction.
+  await tx.execute(
+    sql`select set_config('lock_timeout', ${String(lockWaitMs ?? LOCK_WAIT_LIMIT_MS)}, true)`,
+  );
+  // The journey's row first (D-112), named by the alert, in any state: the
+  // alert decides, not the journey. Without a wait, a row someone holds is
+  // no row; with one, PostgreSQL waits at most the lock limit for it.
+  const [locked] = await tx
+    .select({ id: journeys.id })
+    .from(journeys)
+    .where(
+      eq(
+        journeys.id,
+        tx.select({ journeyId: alerts.journeyId }).from(alerts).where(eq(alerts.id, alertId)),
+      ),
+    )
+    .for('update', lockWaitMs === undefined ? { skipLocked: true } : {});
+  progress.rowTaken = true;
+  if (locked === undefined) {
+    return { outcome: 'skipped' };
+  }
+
+  // The rule, asked again under the lock with what the alert holds now and
+  // this transaction's now() (AR-04): an acknowledgement, a resolution or
+  // another sweep's escalation committed since the read is met here.
+  const read = await tx.execute<{
+    state: AlertState;
+    acknowledged_by: string | null;
+    sms_raised_at: unknown;
+    opened_at: unknown;
+    now: unknown;
+  }>(sql`
+    select ${alerts.state}, ${alerts.acknowledgedBy}, ${alerts.smsRaisedAt}, ${alerts.openedAt},
+           now() as now
+      from ${alerts}
+     where ${alerts.id} = ${alertId}`);
+  const [alert] = read.rows;
+  if (alert === undefined) {
+    // The row lock was found through this alert, and nothing deletes one.
+    throw new Error('The alert to escalate was not found under its journey’s lock.');
+  }
+  const decision = alertTransition(
+    {
+      id: alertId,
+      state: alert.state,
+      acknowledgedBy: alert.acknowledged_by,
+      smsRaisedAt: momentOrNull(alert.sms_raised_at, 'The escalation’s read'),
+    },
+    {
+      type: 'escalate',
+      openedAt: databaseTime(alert.opened_at, 'The escalation’s read'),
+      now: databaseTime(alert.now, 'The escalation’s read'),
+    },
+  );
+  if (decision.type === 'unchanged') {
+    return { outcome: 'skipped' };
+  }
+
+  // ESCALATED at this transaction's now(). It must change exactly the one
+  // row the rule read, or nothing is kept.
+  const moved = await tx
+    .update(alerts)
+    .set({ state: decision.state, smsRaisedAt: sql`now()` })
+    .where(
+      and(
+        eq(alerts.id, alertId),
+        unresolved(alerts.state),
+        isNull(alerts.smsRaisedAt),
+        sql`not (${alerts.state} = 'ACKNOWLEDGED' and ${alerts.acknowledgedBy} is not null)`,
+      ),
+    )
+    .returning({ id: alerts.id });
+  if (moved.length !== 1) {
+    throw new Error('The escalation changed no alert, so nothing of it is kept.');
+  }
+
+  // One SMS per responder row, whatever their push did, each with a new
+  // random ID, written and due at now(). The unique (alert, recipient, kind)
+  // refuses a second.
+  const messages = await tx.execute<MessageRow>(sql`
+    insert into "outbox" ("alert_id", "recipient_id", "kind", "created_at", "attempts",
+                          "next_attempt_at")
+    select ${alertId}, ${journeyResponders.responderId},
+           ${ESCALATION_SMS}::${sql.identifier(messageKind.enumName)}, now(), 0, now()
+      from ${journeyResponders}
+     where ${journeyResponders.journeyId} = ${locked.id}
+    returning "id", "recipient_id", "kind"`);
+  if (messages.rows.length === 0) {
+    // The start rule makes this unreachable, and nothing in M2 removes a
+    // responder. If it happens, the alert stays as it was and the sweep says
+    // so, rather than counting an escalation that told nobody.
+    throw new Error('The alert’s journey has no responder to text, so it is not escalated.');
+  }
+  return { outcome: 'escalated', messages: messages.rows.map(asMessage) };
+}
+
 /** What resolving an alert came to: the alert, null when there was none unresolved, and the stand-downs. */
 interface Resolved {
   alertId: string | null;
@@ -374,19 +561,21 @@ interface Resolved {
  *      resolution. LOST-02's index allows at most one; none is answered with
  *      no alert and no messages, and the move stands (reading 11).
  *   2. Its messages of the kinds withdrawn on resolution
- *      (WITHDRAWN_WHEN_RESOLVED: its lost-contact pushes, and its notices
- *      that someone is on it), not sent and not withdrawn, are withdrawn at
- *      now() (D-111, D-113). The update takes each row's lock, so a claim or
+ *      (WITHDRAWN_WHEN_RESOLVED: its lost-contact pushes, its notices that
+ *      someone is on it, and its escalation SMS), not sent and not
+ *      withdrawn, are withdrawn at now() (D-111, D-113, LOST-07). The update takes each row's lock, so a claim or
  *      a mark in progress finishes first, and the row is checked again as it
  *      left it: one marked sent meanwhile is not withdrawn, and one claimed
  *      comes back with its new attempt count and lease. Attempts and the last
  *      failure are kept.
  *   3. One stand-down per responder row, of the resolution's own kind, with a
  *      new random ID, due at now(), unless any of that responder's withdrawn
- *      messages was handed to the port (attempts ≥ 1) and is due after now():
+ *      messages was handed to a port (attempts ≥ 1) and is due after now():
  *      then at the latest such time, the end of a lease or a retry, at most
- *      60 s on. So a stand-down is never handed to the port while anything it
- *      stands down may still be in the port's hands. Held per responder, so a
+ *      60 s on. So a stand-down is never handed to the push port while
+ *      anything it stands down may still be in a port's hands, an SMS in the
+ *      SMS port's included. An SMS an acknowledgement withdrew earlier is not
+ *      withdrawn here, so it holds nothing (LOST-07, approach item 6). Held per responder, so a
  *      responder with two messages withdrawn still gets one stand-down: the
  *      unique (alert, recipient, kind) refuses a second, and would roll back
  *      the whole resolution (D-114). Steps 2 and 3 are one statement, so the
@@ -431,6 +620,59 @@ async function resolveInside(
     returning "id", "recipient_id", "kind"`);
 
   return { alertId: alert.id, messages: standDowns.rows.map(asMessage) };
+}
+
+/**
+ * A claim of these kinds only, in one statement: at most `limit` due messages
+ * (not sent, and due at or before now()) no other claim holds, one attempt
+ * more each, leased until now() plus `leaseMs`; and now(), even when nothing
+ * is due. A withdrawn message is never due again, whatever its time and
+ * whatever a later mark wrote (D-111).
+ */
+async function claim(
+  db: Database,
+  kinds: readonly MessageKind[],
+  { limit, leaseMs }: { limit: number; leaseMs: number },
+): Promise<ClaimedMessages> {
+  const result = await db.execute<{
+    now: unknown;
+    id: string | null;
+    recipient_id: string | null;
+    kind: MessageKind | null;
+    attempts: number | null;
+  }>(sql`
+    with due as (
+      select ${outbox.id} from ${outbox}
+       where ${outbox.sentAt} is null and ${outbox.withdrawnAt} is null
+         and ${inArray(outbox.kind, kinds)}
+         and ${outbox.nextAttemptAt} <= now()
+       order by ${outbox.nextAttemptAt}, ${outbox.id}
+       limit ${limit}
+       for update skip locked
+    ), claimed as (
+      update ${outbox}
+         set "attempts" = ${outbox.attempts} + 1,
+             "next_attempt_at" = now() + ${milliseconds(leaseMs)}
+        from due
+       where ${outbox.id} = due."id"
+      returning ${outbox.id}, ${outbox.recipientId}, ${outbox.kind}, ${outbox.attempts}
+    )
+    select clock.now, claimed."id", claimed."recipient_id", claimed."kind",
+           claimed."attempts"
+      from (select now() as now) as clock
+      left join claimed on true`);
+  const [first] = result.rows;
+  if (first === undefined) {
+    throw new Error('The claim returned no row, not even the time.');
+  }
+  return {
+    now: databaseTime(first.now, 'The claim'),
+    messages: result.rows.flatMap(({ id, recipient_id, kind, attempts }) =>
+      id === null || recipient_id === null || kind === null || attempts === null
+        ? []
+        : [{ ...asMessage({ id, recipient_id, kind }), attempts }],
+    ),
+  };
 }
 
 export function databaseJourneyStore(
@@ -739,6 +981,24 @@ export function databaseJourneyStore(
           throw new Error('The acknowledgement changed no alert, so nothing of it is kept.');
         }
 
+        // Escalation stops as soon as anyone acknowledges (LOST-07): the
+        // alert's SMS not yet sent are withdrawn at this now(), keeping their
+        // attempts and last failure, so no claim hands them out again. One in
+        // the port's hands finishes as the port answers. Push messages are
+        // left as they are. After the alert's row, the order the escalation
+        // takes its locks in.
+        await tx
+          .update(outbox)
+          .set({ withdrawnAt: sql`now()` })
+          .where(
+            and(
+              eq(outbox.alertId, alertId),
+              inArray(outbox.kind, WITHDRAWN_WHEN_ACKNOWLEDGED),
+              isNull(outbox.sentAt),
+              isNull(outbox.withdrawnAt),
+            ),
+          );
+
         // One notice per responder row but the acknowledger's (D-113), each
         // with a new random ID, due at once: a notice stands nobody down, so
         // nothing holds it. None when the acknowledger is the only responder.
@@ -786,82 +1046,96 @@ export function databaseJourneyStore(
       };
     },
 
-    async openLostContactAlert(request: OpenRequest): Promise<OpenLostContactAlertResult> {
-      // Refused before the transaction, so nothing is written and no lock is
-      // taken. PostgreSQL reads a lock_timeout of 0 as no limit at all, which
-      // a wait must never quietly become.
-      const { lockWaitMs } = request;
-      if (
-        lockWaitMs !== undefined &&
-        !(Number.isInteger(lockWaitMs) && lockWaitMs >= 1 && lockWaitMs <= LOCK_TIMEOUT_MAX_MS)
-      ) {
-        throw new Error(
-          `lockWaitMs must be a whole number of milliseconds from 1 to ${String(LOCK_TIMEOUT_MAX_MS)}, ` +
-            `not ${String(lockWaitMs)}: PostgreSQL reads a lock_timeout of 0 as no limit at all.`,
-        );
-      }
-      const progress = { rowTaken: false };
-      try {
-        return await db.transaction((tx) => openInside(tx, request, progress));
-      } catch (error) {
-        // Only a waiting open's wait for the journey's own row is answered,
-        // as held, not thrown: the watchdog reports that journey, and a row
-        // someone holds is not a failure of the database. Any other lock that
-        // ran out, in either attempt, is a failed open, and is thrown.
-        if (
-          request.lockWaitMs !== undefined &&
-          !progress.rowTaken &&
-          sqlstateOf(error) === LOCK_NOT_AVAILABLE
-        ) {
-          return { outcome: 'held' };
-        }
-        throw error;
-      }
+    openLostContactAlert(request: OpenRequest): Promise<OpenLostContactAlertResult> {
+      // The wait is checked before the transaction, so nothing is written and
+      // no lock is taken.
+      return takingTheRow(db, request.lockWaitMs, (tx, progress) =>
+        openInside(tx, request, progress),
+      );
     },
 
-    async claimDue({ limit, leaseMs }): Promise<ClaimedMessages> {
-      // One statement: the due messages no other claim holds, one attempt
-      // more each, leased until now() plus the lease; and now(), even when
-      // nothing is due. A withdrawn message is never due again, whatever its
-      // time and whatever a later mark wrote (D-111).
+    async alertsDueForEscalation(afterMs: number): Promise<DueAlerts> {
+      // One statement, no lock: now() and every alert unresolved, never
+      // escalated, not acknowledged in D-114's sense (ACKNOWLEDGED and someone
+      // recorded: a missing half is due), and opened afterMs or more before
+      // it (LOST-07). The left join keeps now() when none is.
       const result = await db.execute<{
         now: unknown;
         id: string | null;
-        recipient_id: string | null;
-        kind: MessageKind | null;
-        attempts: number | null;
+        journey_id: string | null;
+        state: AlertState | null;
+        acknowledged_by: string | null;
+        sms_raised_at: unknown;
+        opened_at: unknown;
       }>(sql`
-        with due as (
-          select ${outbox.id} from ${outbox}
-           where ${outbox.sentAt} is null and ${outbox.withdrawnAt} is null
-             and ${outbox.nextAttemptAt} <= now()
-           order by ${outbox.nextAttemptAt}, ${outbox.id}
-           limit ${limit}
-           for update skip locked
-        ), claimed as (
-          update ${outbox}
-             set "attempts" = ${outbox.attempts} + 1,
-                 "next_attempt_at" = now() + ${milliseconds(leaseMs)}
-            from due
-           where ${outbox.id} = due."id"
-          returning ${outbox.id}, ${outbox.recipientId}, ${outbox.kind}, ${outbox.attempts}
-        )
-        select clock.now, claimed."id", claimed."recipient_id", claimed."kind",
-               claimed."attempts"
+        select clock.now, ${alerts.id}, ${alerts.journeyId}, ${alerts.state},
+               ${alerts.acknowledgedBy}, ${alerts.smsRaisedAt}, ${alerts.openedAt}
           from (select now() as now) as clock
-          left join claimed on true`);
+          left join ${alerts}
+            on ${unresolved(alerts.state)}
+           and ${alerts.smsRaisedAt} is null
+           and not (${alerts.state} = 'ACKNOWLEDGED' and ${alerts.acknowledgedBy} is not null)
+           and ${alerts.openedAt} <= clock.now - ${milliseconds(afterMs)}`);
       const [first] = result.rows;
       if (first === undefined) {
-        throw new Error('The claim returned no row, not even the time.');
+        // The left join always returns a row; none means the read is not
+        // what this code thinks it is.
+        throw new Error('The escalation read returned no row, not even the time.');
       }
       return {
-        now: databaseTime(first.now, 'The claim'),
-        messages: result.rows.flatMap(({ id, recipient_id, kind, attempts }) =>
-          id === null || recipient_id === null || kind === null || attempts === null
+        now: databaseTime(first.now, 'The escalation read'),
+        alerts: result.rows.flatMap((row) =>
+          row.id === null || row.journey_id === null || row.state === null
             ? []
-            : [{ ...asMessage({ id, recipient_id, kind }), attempts }],
+            : [
+                {
+                  id: row.id,
+                  journeyId: row.journey_id,
+                  state: row.state,
+                  acknowledgedBy: row.acknowledged_by,
+                  smsRaisedAt: momentOrNull(row.sms_raised_at, 'The escalation read'),
+                  openedAt: databaseTime(row.opened_at, 'The escalation read'),
+                },
+              ],
         ),
       };
+    },
+
+    escalateAlert(request: EscalateRequest): Promise<EscalateAlertResult> {
+      // As the open: the wait checked before the transaction, and only a
+      // waiting attempt's wait for the journey's own row answered as held.
+      return takingTheRow(db, request.lockWaitMs, (tx, progress) =>
+        escalateInside(tx, request, progress),
+      );
+    },
+
+    claimDue(request): Promise<ClaimedMessages> {
+      // The push kinds only: the push port is never handed an SMS (LOST-07).
+      return claim(db, PUSH_KINDS, request);
+    },
+
+    claimDueSms(request): Promise<ClaimedMessages> {
+      // The SMS kinds only, with the same limit, lease and attempt count.
+      return claim(db, SMS_KINDS, request);
+    },
+
+    async unsentSmsCount(olderThanMs: number): Promise<{ now: Date; count: number }> {
+      // One statement: now(), and the SMS messages not sent, not withdrawn,
+      // and written olderThanMs or more before it, whatever the cause
+      // (LOST-07). It reads the claim's partial index (sent_at is null).
+      const result = await db.execute<{ now: unknown; count: unknown }>(sql`
+        select now() as now, count(*) as count
+          from ${outbox}
+         where ${inArray(outbox.kind, SMS_KINDS)}
+           and ${outbox.sentAt} is null and ${outbox.withdrawnAt} is null
+           and ${outbox.createdAt} <= now() - ${milliseconds(olderThanMs)}`);
+      const [row] = result.rows;
+      // count(*) is a bigint, which the driver hands over as text.
+      const count = Number(row?.count);
+      if (row === undefined || !Number.isSafeInteger(count) || count < 0) {
+        throw new Error('The count of SMS waiting returned no count.');
+      }
+      return { now: databaseTime(row.now, 'The count of SMS waiting'), count };
     },
 
     async markSent(messageId: string): Promise<void> {

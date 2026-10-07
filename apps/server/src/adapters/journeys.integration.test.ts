@@ -42,6 +42,7 @@ import {
   toStoredPosition,
   type AcknowledgementAsStored,
   type AlertAsStored,
+  type EscalationAsStored,
   type FakeJourneyState,
   type FakeLog,
   type HeartbeatAsStored,
@@ -452,6 +453,7 @@ async function seedAlert({
   resolution = null,
   acknowledgedBy = null,
   acknowledgedAt = null,
+  smsRaisedAt = null,
 }: {
   journeyId: string;
   state: string;
@@ -461,6 +463,47 @@ async function seedAlert({
   resolution?: string | null;
   acknowledgedBy?: string | null;
   acknowledgedAt?: Date | null;
+  smsRaisedAt?: Date | null;
+}): Promise<string> {
+  const id = await seedAlertRow({
+    journeyId,
+    state,
+    openedAt,
+    silentSince,
+    resolvedAt,
+    resolution,
+    acknowledgedBy,
+    acknowledgedAt,
+  });
+  // LOST-07: the escalation time, only when given, so the behaviours that give
+  // none write exactly the columns they wrote before.
+  if (smsRaisedAt !== null) {
+    await connection().query('update alerts set sms_raised_at = $2 where id = $1', [
+      id,
+      smsRaisedAt,
+    ]);
+  }
+  return id;
+}
+
+async function seedAlertRow({
+  journeyId,
+  state,
+  openedAt,
+  silentSince,
+  resolvedAt,
+  resolution,
+  acknowledgedBy,
+  acknowledgedAt,
+}: {
+  journeyId: string;
+  state: string;
+  openedAt: Date;
+  silentSince: Date;
+  resolvedAt: Date | null;
+  resolution: string | null;
+  acknowledgedBy: string | null;
+  acknowledgedAt: Date | null;
 }): Promise<string> {
   const id = syntheticUuid();
   if (acknowledgedBy !== null || acknowledgedAt !== null) {
@@ -498,7 +541,10 @@ async function seedAlert({
   return id;
 }
 
-/** LOST-03: an outbox message put in directly, never withdrawn; every column but that one given. */
+/**
+ * LOST-03: an outbox message put in directly, never withdrawn; every column
+ * but that one given. LOST-07: withdrawn at `withdrawnAt`, only when given.
+ */
 async function seedMessage({
   alertId,
   recipientId,
@@ -508,6 +554,7 @@ async function seedMessage({
   attempts = 0,
   sentAt = null,
   lastFailure = null,
+  withdrawnAt = null,
 }: {
   alertId: string;
   recipientId: string;
@@ -517,6 +564,7 @@ async function seedMessage({
   attempts?: number;
   sentAt?: Date | null;
   lastFailure?: string | null;
+  withdrawnAt?: Date | null;
 }): Promise<string> {
   const id = syntheticUuid();
   await connection().query(
@@ -525,7 +573,26 @@ async function seedMessage({
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [id, alertId, recipientId, kind, createdAt, attempts, nextAttemptAt, sentAt, lastFailure],
   );
+  if (withdrawnAt !== null) {
+    await connection().query('update outbox set withdrawn_at = $2 where id = $1', [
+      id,
+      withdrawnAt,
+    ]);
+  }
   return id;
+}
+
+/** LOST-07: each alert of the journey's escalation time, as the `alerts` table holds it. */
+async function escalationsOf(journeyId: string): Promise<EscalationAsStored[]> {
+  const result = await connection().query<{ id: string; sms_raised_ms: string | null }>(
+    `select id::text as id, ${MS('sms_raised_at')} as sms_raised_ms
+       from alerts where journey_id = $1 order by opened_at, id`,
+    [journeyId],
+  );
+  return result.rows.map((row) => ({
+    alertId: row.id,
+    smsRaisedAt: momentOf(row.sms_raised_ms),
+  }));
 }
 
 /** LOST-03-AC4: every responder row of the journey removed directly. */
@@ -601,6 +668,72 @@ async function holdUntilWaited(
             await client.query('update journeys set last_heartbeat_at = now() where id = $1', [
               journeyId,
             ]);
+          }
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await client.query('commit');
+    } finally {
+      client.release();
+    }
+  })();
+  return {
+    release: async () => {
+      state.stopped = true;
+      await lettingGo;
+    },
+  };
+}
+
+/**
+ * LOST-07-AC16: holds the journey's row as holdRow does, and lets it go once
+ * another session (the escalation) is waiting for it, having first changed
+ * the journey's unresolved alert in its own transaction, as one in flight
+ * would: 'acknowledge', recorded by the journey's first responder at its
+ * now(), as "I'm on it" committing; 'resolve', resolved with contact back and
+ * the journey ACTIVE again at its now(), as a heartbeat committing;
+ * 'unchanged', nothing. `release` lets go at once if no one came to wait.
+ */
+async function holdUntilEscalationWaits(
+  journeyId: string,
+  change: 'unchanged' | 'acknowledge' | 'resolve',
+): Promise<{ release: () => Promise<void> }> {
+  const client = await connection().connect();
+  await client.query('begin');
+  await client.query('select id from journeys where id = $1 for update', [journeyId]);
+  const pid = (await client.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]?.pid;
+  // An object, so the loop reads the flag release() sets, not a narrowed copy.
+  const state = { stopped: false };
+  const lettingGo = (async () => {
+    try {
+      while (!state.stopped) {
+        const waiting = await connection().query<{ n: number }>(
+          'select count(*)::int as n from pg_stat_activity where $1 = any(pg_blocking_pids(pid))',
+          [pid],
+        );
+        if ((waiting.rows[0]?.n ?? 0) > 0) {
+          if (change === 'acknowledge') {
+            await client.query(
+              `update alerts
+                  set state = 'ACKNOWLEDGED', acknowledged_at = now(),
+                      acknowledged_by = (select responder_id from journey_responders
+                                          where journey_id = $1 order by responder_id limit 1)
+                where journey_id = $1 and state <> 'RESOLVED'`,
+              [journeyId],
+            );
+          }
+          if (change === 'resolve') {
+            await client.query(
+              `update alerts
+                  set state = 'RESOLVED', resolved_at = now(), resolution = 'BACK_IN_CONTACT'
+                where journey_id = $1 and state <> 'RESOLVED'`,
+              [journeyId],
+            );
+            await client.query(
+              "update journeys set state = 'ACTIVE', last_heartbeat_at = now() where id = $1",
+              [journeyId],
+            );
           }
           break;
         }
@@ -719,6 +852,11 @@ describe('databaseJourneyStore, against the behaviour every journey store shares
     removeResponders,
     // LOST-06: who is on each alert, read by a reader of its own.
     acknowledgementsOf,
+    // LOST-07: when each alert escalated, read by a reader of its own; and a
+    // holder that changes the alert as an acknowledgement or a heartbeat
+    // committing would, once the escalation waits.
+    escalationsOf,
+    holdUntilEscalationWaits,
   });
 
   test.each(JOURNEY_STORE_BEHAVIOUR)(
@@ -732,10 +870,13 @@ describe('databaseJourneyStore, against the behaviour every journey store shares
       // so they get the same start (added, not changed).
       // LOST-06's claim as well, and write notices and stand-downs that are
       // due: the same start again (added, not changed).
+      // LOST-07's claim both channels and count the unsent SMS of the whole
+      // table: the same start again (added, not changed).
       if (
         name.startsWith('LOST-02-') ||
         name.startsWith('LOST-03-') ||
-        name.startsWith('LOST-06-')
+        name.startsWith('LOST-06-') ||
+        name.startsWith('LOST-07-')
       ) {
         await connection().query('update outbox set sent_at = now() where sent_at is null');
       }
@@ -2094,6 +2235,11 @@ describe('LOST-02: the database agrees on alerts and their messages', () => {
     // design"): the alerts list gains acknowledged_by and acknowledged_at
     // (LOST-06's approach item 7). Still exact; the scan below covers both as
     // it stands, and neither name matches it.
+    //
+    // RG-03 (LOST-07, the spec's "Existing assertions that change by
+    // design"): the alerts list gains sms_raised_at (LOST-07's approach item
+    // 9). Still exact; the scan below covers it as it stands, and the name
+    // matches none of it.
     expect(alerts).toEqual(
       [
         'id',
@@ -2105,6 +2251,7 @@ describe('LOST-02: the database agrees on alerts and their messages', () => {
         'resolution',
         'acknowledged_by',
         'acknowledged_at',
+        'sms_raised_at',
       ].sort(),
     );
     expect(outbox).toEqual(
@@ -2199,7 +2346,17 @@ describe('LOST-03 and SM-04: the database agrees on resolutions, ends and the ne
     // design"): the literal message_kind list gains ACKNOWLEDGED, the notice
     // (D-113), last, as migration 0005 adds it. The assertion against the
     // domain's MESSAGE_KINDS below is unchanged.
-    expect(messageKinds).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED']);
+    // RG-03 (LOST-07, the spec's "Existing assertions that change by
+    // design"): and gains LOST_CONTACT_SMS, the escalation's SMS (D-019),
+    // last, as migration 0006 adds it. The assertion against the domain's
+    // MESSAGE_KINDS below is unchanged.
+    expect(messageKinds).toEqual([
+      'LOST_CONTACT',
+      'BACK_IN_CONTACT',
+      'HOME',
+      'ACKNOWLEDGED',
+      'LOST_CONTACT_SMS',
+    ]);
     expect(alertResolutions).toEqual(['BACK_IN_CONTACT', 'HOME']);
     expect(journeyEndReasons).toEqual(['HOME']);
     expect(messageKinds).toEqual(MESSAGE_KINDS);
@@ -2382,12 +2539,23 @@ describe('LOST-06: the database agrees on who is on an alert, and on the notice'
     ]);
   });
 
-  test('LOST-06-AC17: message_kind’s values equal MESSAGE_KINDS, in order, ACKNOWLEDGED last (pg_enum); outbox.kind is of that type', async () => {
+  // RG-03 (LOST-07, the spec's "Existing assertions that change by design"):
+  // this was "…in order, ACKNOWLEDGED last (pg_enum)…". Migration 0006 adds
+  // LOST_CONTACT_SMS after it, so the literal list gains it and the title no
+  // longer says ACKNOWLEDGED is last. The assertion against the domain's
+  // MESSAGE_KINDS is unchanged.
+  test('LOST-06-AC17: message_kind’s values equal MESSAGE_KINDS, in order (pg_enum); outbox.kind is of that type', async () => {
     const messageKinds = await labelsOf('message_kind');
 
     // The spec's own list first, so a domain list that drifted with the
     // database cannot carry both along.
-    expect(messageKinds).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED']);
+    expect(messageKinds).toEqual([
+      'LOST_CONTACT',
+      'BACK_IN_CONTACT',
+      'HOME',
+      'ACKNOWLEDGED',
+      'LOST_CONTACT_SMS',
+    ]);
     expect(messageKinds).toEqual([...MESSAGE_KINDS]);
     expect(await typeOf('outbox', 'kind')).toMatchObject({ udt_name: 'message_kind' });
   });
@@ -2458,6 +2626,145 @@ describe('LOST-06: the database agrees on who is on an alert, and on the notice'
 
     expect(index.rows.map(({ definition }) => definition)).toEqual([
       'CREATE INDEX outbox_unsent_due_index ON public.outbox USING btree (next_attempt_at, id) WHERE (sent_at IS NULL)',
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LOST-07-AC4, AC8 and AC19: the database agrees with the escalation
+// (migration 0006, its spec's approach item 9): the SMS's kind, when an alert
+// was escalated, no check tying that time to the state, one SMS per alert
+// and recipient, and still no column that could hold a location or a number.
+// ---------------------------------------------------------------------------
+
+describe('LOST-07: the database agrees on the escalation and its SMS', () => {
+  test('LOST-07-AC19: message_kind’s values equal MESSAGE_KINDS, in order, LOST_CONTACT_SMS last (pg_enum); outbox.kind is of that type', async () => {
+    const messageKinds = await labelsOf('message_kind');
+
+    // The spec's own list first, so a domain list that drifted with the
+    // database cannot carry both along.
+    expect(messageKinds).toEqual([
+      'LOST_CONTACT',
+      'BACK_IN_CONTACT',
+      'HOME',
+      'ACKNOWLEDGED',
+      'LOST_CONTACT_SMS',
+    ]);
+    expect(messageKinds).toEqual([...MESSAGE_KINDS]);
+    expect(await typeOf('outbox', 'kind')).toMatchObject({ udt_name: 'message_kind' });
+  });
+
+  test('LOST-07-AC19: alerts.sms_raised_at is a database time (timestamp with time zone), null on an alert put in without it', async () => {
+    expect(await typeOf('alerts', 'sms_raised_at')).toEqual({
+      data_type: 'timestamp with time zone',
+      udt_name: 'timestamptz',
+      is_nullable: 'YES',
+    });
+
+    const { journeyId } = await walking();
+    const alertId = await insertAlert(journeyId, 'OPEN');
+    const fresh = await connection().query<{ at: string | null }>(
+      'select sms_raised_at::text as at from alerts where id = $1',
+      [alertId],
+    );
+    expect(fresh.rows).toEqual([{ at: null }]);
+  });
+
+  test('LOST-07-AC19: the database takes an ESCALATED alert without an escalation time, and an escalation time on an alert in any state, as no check ties the state to it', async () => {
+    // Rows put in directly are ESCALATED with none, and the resumed-escalation
+    // rule will move a state back (approach item 9).
+    const { journeyId } = await walking();
+    const escalatedWithout = await insertAlert(journeyId, 'ESCALATED');
+    const stored = await connection().query<{ state: string; at: string | null }>(
+      'select state::text as state, sms_raised_at::text as at from alerts where id = $1',
+      [escalatedWithout],
+    );
+    expect(stored.rows).toEqual([{ state: 'ESCALATED', at: null }]);
+
+    for (const state of ['OPEN', 'ESCALATED', 'ACKNOWLEDGED']) {
+      const alertId = await insertAlert((await walking()).journeyId, state);
+      await expect(
+        connection().query('update alerts set sms_raised_at = now() where id = $1', [alertId]),
+        state,
+      ).resolves.toMatchObject({ rowCount: 1 });
+    }
+    const resolved = await insertResolvedAlert((await walking()).journeyId, {
+      resolvedAt: true,
+      resolution: 'BACK_IN_CONTACT',
+    });
+    await expect(
+      connection().query('update alerts set sms_raised_at = now() where id = $1', [resolved]),
+    ).resolves.toMatchObject({ rowCount: 1 });
+  });
+
+  test('LOST-07-AC19: the claim’s partial index still reads (next_attempt_at, id) with the predicate sent_at IS NULL (pg_get_indexdef), and no partial index on outbox names a kind', async () => {
+    // One index for both claims: the SMS claim filters the same unsent rows
+    // by kind (approach item 9, "No index").
+    const index = await connection().query<{ definition: string }>(
+      `select pg_get_indexdef(indexrelid) as definition from pg_index
+        where indexrelid = to_regclass('outbox_unsent_due_index')`,
+    );
+    const partial = await connection().query<{ definition: string }>(
+      `select pg_get_indexdef(indexrelid) as definition from pg_index
+        where indrelid = 'outbox'::regclass and indpred is not null`,
+    );
+
+    expect(index.rows.map(({ definition }) => definition)).toEqual([
+      'CREATE INDEX outbox_unsent_due_index ON public.outbox USING btree (next_attempt_at, id) WHERE (sent_at IS NULL)',
+    ]);
+    expect(partial.rows.filter(({ definition }) => /kind/i.test(definition))).toEqual([]);
+  });
+
+  test('LOST-07-AC4: a second LOST_CONTACT_SMS for the same alert and recipient is refused by the database itself; one for another recipient, and the same recipient’s LOST_CONTACT push, are taken', async () => {
+    const { journeyId } = await walking();
+    const alertId = await insertAlert(journeyId, 'ESCALATED');
+    const recipientId = await addUser();
+
+    await expect(
+      insertMessage({ alertId, recipientId, kind: 'LOST_CONTACT_SMS' }),
+    ).resolves.toBeDefined();
+    await expect(
+      insertMessage({ alertId, recipientId, kind: 'LOST_CONTACT_SMS' }),
+    ).rejects.toMatchObject({ code: '23505' });
+    await expect(
+      insertMessage({ alertId, recipientId: await addUser(), kind: 'LOST_CONTACT_SMS' }),
+    ).resolves.toBeDefined();
+    await expect(
+      insertMessage({ alertId, recipientId, kind: 'LOST_CONTACT' }),
+    ).resolves.toBeDefined();
+  });
+
+  test('LOST-07-AC8: no column of alerts or outbox holds a coordinate, an accuracy, a phone time, a battery level, a name or a phone number; alerts.sms_raised_at is there; and the only columns named like a coordinate, in every table, are still positions.latitude and positions.longitude (information_schema)', async () => {
+    const columnsOf = async (table: string) =>
+      (
+        await connection().query<{ column_name: string }>(
+          `select column_name from information_schema.columns
+            where table_schema = 'public' and table_name = $1 order by column_name`,
+          [table],
+        )
+      ).rows.map(({ column_name }) => column_name);
+    const alerts = await columnsOf('alerts');
+    const outbox = await columnsOf('outbox');
+    const coordinates = await connection().query<{ found: string }>(
+      `select table_schema || '.' || table_name || '.' || column_name as found
+         from information_schema.columns
+        where table_schema not in ('pg_catalog', 'information_schema')
+          and column_name ~* '(lat|lng|lon|coords|position|location)'
+        order by 1`,
+    );
+
+    // There, so the scan below has read the table the migration changed.
+    expect(alerts).toContain('sms_raised_at');
+    expect(
+      [...alerts, ...outbox].filter((column) =>
+        /lat|lng|lon|coord|position|location|accuracy|recorded|battery|phone|msisdn|number|name/i.test(
+          column,
+        ),
+      ),
+    ).toEqual([]);
+    expect(coordinates.rows.map(({ found }) => found)).toEqual([
+      'public.positions.latitude',
+      'public.positions.longitude',
     ]);
   });
 });

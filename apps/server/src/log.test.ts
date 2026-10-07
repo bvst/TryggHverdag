@@ -48,6 +48,14 @@ const EVENTS: LogEvent[] = [
   // already over, and an "I'm on it" that failed.
   { event: 'acknowledgement_ignored', reason: 'ALERT_RESOLVED', alertId: syntheticUuid() },
   { event: 'acknowledgement_failed', stage: 'store', code: '40001' },
+  // LOST-07 (the spec's "Added to, not changed"): the escalation's, the SMS
+  // sender's and the SMS check's six.
+  { event: 'escalation_failed', stage: 'escalate', code: '40001' },
+  { event: 'escalation_overdue', alertId: syntheticUuid() },
+  { event: 'sms_failed', reason: 'NO_TARGET', messageId: syntheticUuid() },
+  { event: 'sms_delivery_failed', stage: 'claim', code: '57P01' },
+  { event: 'sms_unsent', count: 3 },
+  { event: 'sms_check_failed', stage: 'report', code: null },
 ];
 
 /** Codes that are not a SQLSTATE: each is written as null, so no message can travel as a code. */
@@ -1271,6 +1279,368 @@ describe('PRIV-07 and LOST-06: the two new events are closed, at the type and at
       expect(line, event.event).toEqual(event);
       expect(
         markersIn(text, [latitude, longitude, 'Failing row', responderId, credential]),
+        event.event,
+      ).toEqual([]);
+    }
+  });
+});
+
+// ===========================================================================
+// LOST-07's six events (its spec's approach item 12): the escalation that
+// failed or is overdue, the SMS not accepted, the SMS delivery and the SMS
+// check that failed, and the count of SMS waiting. Closed, like the rest: an
+// alert's or a message's ID only as a canonical UUID, a reason and a stage
+// only from their sets, a code only as a SQLSTATE, a count only as a
+// non-negative safe integer, and no field a phone number, a name, a location
+// or a message could travel in.
+// ===========================================================================
+
+const LOST_07_EVENTS: LogEvent[] = [
+  { event: 'escalation_failed', stage: 'read', code: '57P01' },
+  { event: 'escalation_failed', stage: 'escalate', code: null },
+  { event: 'escalation_overdue', alertId: syntheticUuid() },
+  { event: 'sms_failed', reason: 'NO_TARGET', messageId: syntheticUuid() },
+  { event: 'sms_failed', reason: 'REFUSED', messageId: syntheticUuid() },
+  { event: 'sms_failed', reason: 'UNAVAILABLE', messageId: syntheticUuid() },
+  { event: 'sms_failed', reason: 'NOT_CONFIGURED', messageId: syntheticUuid() },
+  { event: 'sms_delivery_failed', stage: 'claim', code: '08006' },
+  { event: 'sms_delivery_failed', stage: 'mark', code: null },
+  { event: 'sms_unsent', count: 0 },
+  { event: 'sms_unsent', count: 3 },
+  { event: 'sms_unsent', count: Number.MAX_SAFE_INTEGER },
+  { event: 'sms_check_failed', stage: 'read', code: '53300' },
+  { event: 'sms_check_failed', stage: 'report', code: null },
+];
+
+/** For each new event with a field closed to a set: a valid event, the field, and values outside the set. */
+const LOST_07_CLOSED_SETS: {
+  what: string;
+  event: Record<string, unknown>;
+  field: string;
+  outside: unknown[];
+}[] = [
+  {
+    what: 'an escalation_failed stage',
+    event: { event: 'escalation_failed', stage: 'read', code: '57P01' },
+    field: 'stage',
+    outside: ['open', 'beat', 'claim', 'store', 'ESCALATE', '', ['read'], 3],
+  },
+  {
+    what: 'an sms_failed reason',
+    event: { event: 'sms_failed', reason: 'NO_TARGET', messageId: syntheticUuid() },
+    field: 'reason',
+    outside: ['TIMEOUT', 'BLOCKED', 'no_target', '', ['NO_TARGET'], 500],
+  },
+  {
+    what: 'an sms_delivery_failed stage',
+    event: { event: 'sms_delivery_failed', stage: 'claim', code: '57P01' },
+    field: 'stage',
+    outside: ['send', 'read', 'report', 'CLAIM', '', ['mark']],
+  },
+  {
+    what: 'an sms_check_failed stage',
+    event: { event: 'sms_check_failed', stage: 'read', code: '57P01' },
+    field: 'stage',
+    outside: ['count', 'claim', 'escalate', 'REPORT', '', ['report']],
+  },
+];
+
+/** Counts that are not a non-negative safe integer: each is written as null. */
+const NOT_COUNTS: { what: string; count: unknown }[] = [
+  { what: 'a negative number', count: -1 },
+  { what: 'a fraction', count: 1.5 },
+  { what: 'not a number', count: Number.NaN },
+  { what: 'infinity', count: Number.POSITIVE_INFINITY },
+  { what: 'past the safe integers', count: Number.MAX_SAFE_INTEGER + 1 },
+  { what: 'a numeral in text', count: '3' },
+  { what: 'a count in a list', count: [3] },
+  { what: 'null', count: null },
+  { what: 'a coordinate', count: syntheticCoordinate() },
+];
+
+describe('PRIV-07 and LOST-07: the six new events are closed, at the type and at run time', () => {
+  test('LOST-07-AC18: (L1) each of the six is exactly its fields, no more and no fewer: a field added to one, an optional one included, or a set widened, fails typecheck', () => {
+    // As LOST-06-AC16's pin: each entry is `true` only when each type is
+    // assignable to the other and both have the same keys.
+    type Exactly<A, B> = [A] extends [B]
+      ? [B] extends [A]
+        ? [keyof A] extends [keyof B]
+          ? [keyof B] extends [keyof A]
+            ? true
+            : false
+          : false
+        : false
+      : false;
+    type EventOf<Name extends LogEvent['event']> = Extract<LogEvent, { event: Name }>;
+    const pinned: [
+      Exactly<
+        EventOf<'escalation_failed'>,
+        { event: 'escalation_failed'; stage: 'read' | 'escalate'; code: string | null }
+      >,
+      Exactly<EventOf<'escalation_overdue'>, { event: 'escalation_overdue'; alertId: string }>,
+      Exactly<
+        EventOf<'sms_failed'>,
+        {
+          event: 'sms_failed';
+          reason: 'NO_TARGET' | 'REFUSED' | 'UNAVAILABLE' | 'NOT_CONFIGURED';
+          messageId: string;
+        }
+      >,
+      Exactly<
+        EventOf<'sms_delivery_failed'>,
+        { event: 'sms_delivery_failed'; stage: 'claim' | 'mark'; code: string | null }
+      >,
+      Exactly<EventOf<'sms_unsent'>, { event: 'sms_unsent'; count: number }>,
+      Exactly<
+        EventOf<'sms_check_failed'>,
+        { event: 'sms_check_failed'; stage: 'read' | 'report'; code: string | null }
+      >,
+    ] = [true, true, true, true, true, true];
+
+    expect(pinned).toEqual([true, true, true, true, true, true]);
+  });
+
+  test('LOST-07-AC18: (L1) none of the six holds another field: a phone number, a latitude, a message, a recipient, a name, or another stage or reason does not type-check', () => {
+    // Each @ts-expect-error fails the type check (gate:static) the day the
+    // property under it stops being an error. Values only; none is handed to
+    // the log, and none is a phone number: the field's name is what is tried.
+    const alertId = syntheticUuid();
+    const messageId = syntheticUuid();
+    const refused: unknown[] = [
+      {
+        event: 'escalation_failed',
+        stage: 'escalate',
+        code: null,
+        // @ts-expect-error -- an error's message has no field to travel in
+        message: 'Failing row contains (…)',
+      } satisfies LogEvent,
+      {
+        event: 'escalation_failed',
+        // @ts-expect-error -- nor a stage the escalation does not have
+        stage: 'open',
+        code: null,
+      } satisfies LogEvent,
+      {
+        event: 'escalation_overdue',
+        alertId,
+        // @ts-expect-error -- nor a latitude
+        latitude: 0,
+      } satisfies LogEvent,
+      {
+        event: 'escalation_overdue',
+        alertId,
+        // @ts-expect-error -- nor the journey's responders
+        responderIds: [alertId],
+      } satisfies LogEvent,
+      {
+        event: 'sms_failed',
+        reason: 'NO_TARGET',
+        messageId,
+        // @ts-expect-error -- nor a phone number
+        phoneNumber: '',
+      } satisfies LogEvent,
+      {
+        event: 'sms_failed',
+        reason: 'NO_TARGET',
+        messageId,
+        // @ts-expect-error -- nor who the message was for
+        recipientId: alertId,
+      } satisfies LogEvent,
+      {
+        event: 'sms_failed',
+        // @ts-expect-error -- nor a reason the SMS port does not give
+        reason: 'TIMEOUT',
+        messageId,
+      } satisfies LogEvent,
+      {
+        event: 'sms_delivery_failed',
+        stage: 'mark',
+        code: null,
+        // @ts-expect-error -- nor the message's text
+        text: '',
+      } satisfies LogEvent,
+      {
+        event: 'sms_delivery_failed',
+        // @ts-expect-error -- nor another stage
+        stage: 'send',
+        code: null,
+      } satisfies LogEvent,
+      {
+        event: 'sms_unsent',
+        count: 3,
+        // @ts-expect-error -- nor which SMS, or for whom
+        messageIds: [messageId],
+      } satisfies LogEvent,
+      {
+        event: 'sms_unsent',
+        // @ts-expect-error -- and a count is a number, never text
+        count: '3',
+      } satisfies LogEvent,
+      {
+        event: 'sms_check_failed',
+        stage: 'report',
+        code: null,
+        // @ts-expect-error -- nor the check's ping URL
+        url: '',
+      } satisfies LogEvent,
+      {
+        event: 'sms_check_failed',
+        stage: 'read',
+        code: null,
+        // @ts-expect-error -- nor a name
+        name: '',
+      } satisfies LogEvent,
+      {
+        event: 'sms_check_failed',
+        // @ts-expect-error -- nor another stage
+        stage: 'count',
+        code: null,
+      } satisfies LogEvent,
+    ];
+
+    expect(refused).toHaveLength(14);
+  });
+
+  test.each(LOST_07_EVENTS)(
+    'LOST-07-AC18: createLog writes $event as one JSON line, holding exactly that event’s fields',
+    (event) => {
+      const writer = recordingWriter();
+
+      createLog({ write: writer.write }).write(event);
+
+      const lines = writer.lines();
+      expect(lines).toHaveLength(1);
+      expect(writer.chunks.join('').endsWith('\n')).toBe(true);
+      expect(JSON.parse(lines[0] ?? 'null')).toEqual(event);
+    },
+  );
+
+  test.each(LOST_07_CLOSED_SETS)(
+    'LOST-07-AC18: $what outside its set is written as null, and none of it is written; inside it, as it is',
+    ({ event, field, outside }) => {
+      for (const value of [...outside, ...freeText().map(({ value: text }) => text)]) {
+        const { line, text } = writtenThroughACast({ ...event, [field]: value });
+
+        expect(line, JSON.stringify(value)).toEqual({ ...event, [field]: null });
+        if (typeof value === 'string' && value !== '') {
+          expect(text, value).not.toContain(`"${value}"`);
+        }
+      }
+      expect(writtenThroughACast(event).line).toEqual(event);
+    },
+  );
+
+  test('LOST-07-AC18: every stage and reason in its set is written as it is, so the nulls above are the value’s doing', () => {
+    const inside: Record<string, unknown>[] = [
+      { event: 'escalation_failed', stage: 'read', code: null },
+      { event: 'escalation_failed', stage: 'escalate', code: null },
+      { event: 'sms_delivery_failed', stage: 'claim', code: null },
+      { event: 'sms_delivery_failed', stage: 'mark', code: null },
+      { event: 'sms_check_failed', stage: 'read', code: null },
+      { event: 'sms_check_failed', stage: 'report', code: null },
+      ...['NO_TARGET', 'REFUSED', 'UNAVAILABLE', 'NOT_CONFIGURED'].map((reason) => ({
+        event: 'sms_failed',
+        reason,
+        messageId: syntheticUuid(),
+      })),
+    ];
+    for (const event of inside) {
+      expect(writtenThroughACast(event).line, JSON.stringify(event)).toEqual(event);
+    }
+  });
+
+  test.each([
+    { event: { event: 'escalation_overdue', alertId: syntheticUuid() }, field: 'alertId' },
+    {
+      event: { event: 'sms_failed', reason: 'REFUSED', messageId: syntheticUuid() },
+      field: 'messageId',
+    },
+  ])(
+    'LOST-07-AC18: a $event.event $field that is not a lower-case canonical UUID is written as null, and none of it is written',
+    ({ event, field }) => {
+      for (const { what, journeyId: value, markers } of NOT_JOURNEY_IDS) {
+        const { line, text } = writtenThroughACast({ ...event, [field]: value() });
+
+        expect(line, what).toEqual({ ...event, [field]: null });
+        expect(markersIn(text, markers()), what).toEqual([]);
+      }
+      expect(writtenThroughACast(event).line).toEqual(event);
+    },
+  );
+
+  test.each([
+    { event: 'escalation_failed', stage: 'escalate', code: '23505' },
+    { event: 'sms_delivery_failed', stage: 'mark', code: '23505' },
+    { event: 'sms_check_failed', stage: 'read', code: '23505' },
+  ])(
+    'LOST-07-AC18: a $event code that is not a SQLSTATE is written as null, and a SQLSTATE as it is',
+    (event) => {
+      for (const { what, code } of [...NOT_SQLSTATES, ...CODES_NOT_TEXT]) {
+        const { line, text } = writtenThroughACast({ ...event, code });
+
+        expect(line, what).toEqual({ ...event, code: null });
+        if (typeof code === 'string' && code !== '') {
+          expect(text, what).not.toContain(code);
+        }
+      }
+      expect(writtenThroughACast(event).line).toEqual(event);
+    },
+  );
+
+  test('LOST-07-AC18: an sms_unsent count that is not a non-negative safe integer is written as null; 0, 3 and the largest safe integer as they are', () => {
+    const event = { event: 'sms_unsent', count: 3 };
+
+    for (const { what, count } of NOT_COUNTS) {
+      const { line, text } = writtenThroughACast({ ...event, count });
+
+      expect(line, what).toEqual({ ...event, count: null });
+      if (typeof count === 'number' && Number.isFinite(count) && count !== -1) {
+        expect(text, what).not.toContain(String(count));
+      }
+    }
+    for (const count of [0, 3, Number.MAX_SAFE_INTEGER]) {
+      expect(writtenThroughACast({ ...event, count }).line, String(count)).toEqual({
+        ...event,
+        count,
+      });
+    }
+  });
+
+  test('LOST-07-AC18: fields the six events do not have, got past the type, are not written: a position, a message, an error, a recipient, a phone-number-shaped value, a credential, the ping URL', () => {
+    const latitude = String(syntheticCoordinate());
+    const longitude = String(syntheticCoordinate());
+    const recipientId = syntheticUuid();
+    const credential = syntheticCredential();
+    // Phone-number-shaped, made at run time and never in +47 form: what an
+    // SMS provider's error could carry (the spec's synthetic-data note).
+    const numberShaped = `0${String(Math.floor(10_000_000 + Math.random() * 89_999_999))}`;
+    const pingUrl = `https://127.0.0.1:1/${syntheticUuid()}/fail`;
+    const extra = {
+      latitude: Number(latitude),
+      longitude: Number(longitude),
+      position: { latitude: Number(latitude), longitude: Number(longitude) },
+      message: `Failing row contains (${latitude}, ${longitude})`,
+      err: new Error(`could not send to ${numberShaped} for ${recipientId}`),
+      recipientId,
+      phoneNumber: numberShaped,
+      credential,
+      url: pingUrl,
+    };
+
+    for (const event of LOST_07_EVENTS) {
+      const { line, text } = writtenThroughACast({ ...event, ...extra });
+
+      expect(line, event.event).toEqual(event);
+      expect(
+        markersIn(text, [
+          latitude,
+          longitude,
+          'Failing row',
+          recipientId,
+          numberShaped,
+          credential,
+          pingUrl,
+        ]),
         event.event,
       ).toEqual([]);
     }

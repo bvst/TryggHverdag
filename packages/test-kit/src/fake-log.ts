@@ -27,7 +27,11 @@
  * brought back in contact with no alert to resolve. LOST-06 adds the last
  * two: an "I'm on it" for an alert already resolved, naming the alert and the
  * reason only, and an "I'm on it" that failed, with its stage and SQLSTATE.
- * Neither names a user (PRIV-07).
+ * Neither names a user (PRIV-07). LOST-07 adds six: an escalation that failed
+ * and one that is overdue, an SMS the port did not accept and an SMS delivery
+ * that failed, the count of SMS failing, and an SMS check that failed. None
+ * has a field a phone number, a name or a location could travel in, and none
+ * names a user.
  */
 export type FakeLogEvent =
   | { event: 'heartbeat_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
@@ -45,7 +49,17 @@ export type FakeLogEvent =
   | { event: 'home_failed'; stage: 'read' | 'store'; code: string | null }
   | { event: 'alert_missing'; journeyId: string }
   | { event: 'acknowledgement_ignored'; reason: 'ALERT_RESOLVED'; alertId: string }
-  | { event: 'acknowledgement_failed'; stage: 'read' | 'store'; code: string | null };
+  | { event: 'acknowledgement_failed'; stage: 'read' | 'store'; code: string | null }
+  | { event: 'escalation_failed'; stage: 'read' | 'escalate'; code: string | null }
+  | { event: 'escalation_overdue'; alertId: string }
+  | {
+      event: 'sms_failed';
+      reason: 'NO_TARGET' | 'REFUSED' | 'UNAVAILABLE' | 'NOT_CONFIGURED';
+      messageId: string;
+    }
+  | { event: 'sms_delivery_failed'; stage: 'claim' | 'mark'; code: string | null }
+  | { event: 'sms_unsent'; count: number }
+  | { event: 'sms_check_failed'; stage: 'read' | 'report'; code: string | null };
 
 export interface FakeLog {
   /** Records the event. */
