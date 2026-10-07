@@ -95,6 +95,11 @@ export const MUTATION_GROUPS = [
     config: 'vitest.system.config.mjs',
   },
   {
+    name: 'worker',
+    paths: ['apps/server/src/worker.ts'],
+    tests: ['apps/server/src/worker.test.ts', 'apps/server/src/process.test.ts'],
+  },
+  {
     // Whether the worker runs, says it is alive, and is restarted when it
     // stops (D-077). worker.ts is the worker process: it starts the runner
     // and the sweep and delivery loops, checks in with Healthchecks.io once a
@@ -102,13 +107,12 @@ export const MUTATION_GROUPS = [
     // signal, and fails if it ends any other way.
     // bin/worker.ts starts it, and process.ts chooses its exit code.
     // bin.test.ts is the only test that runs the real worker process, so it
-    // goes with these three wherever they are mutated (D-066's amendment).
+    // goes with these two, the files only a real process exercises, wherever
+    // they are mutated (D-066's amendment). worker.ts has the group before
+    // this one, because bin.test.ts kills none of its mutants on its own
+    // (D-117).
     name: 'process',
-    paths: [
-      'apps/server/src/worker.ts',
-      'apps/server/src/bin/worker.ts',
-      'apps/server/src/process.ts',
-    ],
+    paths: ['apps/server/src/bin/worker.ts', 'apps/server/src/process.ts'],
     tests: [
       'apps/server/src/bin/bin.test.ts',
       'apps/server/src/worker.test.ts',
