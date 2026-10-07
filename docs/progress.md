@@ -49,7 +49,7 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | 2 | LOST-01 | Heartbeat, with or without position | ✅ **Done** — 2026-10-03, [#60](https://github.com/bvst/TryggHverdag/pull/60), merged as `fe384c5` after `urso-agent` approved; `main`'s tree is the reviewed head `5aa074c`. D-101 to D-103 (D-102 amended); 20 acceptance criteria. Reviews PASS in the session (all four, and the three blocking ones again after loop 1) and in CI (all five AI reviewers). In CI before the merge: `integration` 103 of 103 on PostgreSQL 15; `mutation` every safety file ≥ 96 %, 0 timed out. On `main` after the merge: `ci` 10 of 10 jobs passed (run 37144094720), and `deploy-staging` ran migration `0002` and passed its smoke test (run 37144094724). Record: `progress/m2.md` |
 | 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ✅ **Done** — 2026-10-05, [#63](https://github.com/bvst/TryggHverdag/pull/63), merged as `5cd5d24` at 06:50 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `6527e38`. 25 acceptance criteria; D-106, D-107 and D-109 (owner), D-108 (delegated, amended). Session reviews: `test-auditor` blocked the first round, fixed in loop 1; all three blocking reviewers PASS after loops 1 and 2. In CI on `6527e38`: all 16 checks passed, all five AI reviewers PASS; `integration` on PostgreSQL 15; `mutation` every run passed (`watchdog.ts` 87 of 87, `outbox.ts` 37 of 38, `worker.ts` 140 of 146). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37274508925), and `deploy-staging` passed (run 37274508942), with both session-limit lines in force. Record: `progress/m2.md` |
 | 4 | LOST-03 | Back in contact | ✅ **Done** — 2026-10-06, [#64](https://github.com/bvst/TryggHverdag/pull/64), merged as `57502b8` at 17:56 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `53bf338`. 20 acceptance criteria; D-110 and D-111 (owner), D-112 (delegated, amended in three review loops). Session reviews: all four PASS in the first round; the three blocking ones PASS after loops 1, 2 and 3 (the process's limit). In CI on `53bf338`, with BUG-23/24's fix merged in: all 16 checks passed, and the four AI reviewers that review its paths PASS; `integration` on PostgreSQL 15; `mutation` every run passed (`journey.ts` 134 of 135, `service.ts` 122 of 123, `outbox.ts` 37 of 38, `worker.ts` 140 of 146). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37507461460), and `deploy-staging` passed (run 37507461487), with both session-limit lines in force and migration 0004 applied. Record: `progress/m2.md` |
-| 5 | LOST-06 | "I'm on it" | 🟡 **In progress** — spec settled, 17 acceptance criteria; D-113 (owner: recorded on the alert, and every other responder told by a non-critical push), D-114 (delegated). Red phase next. Record: `progress/m2.md` |
+| 5 | LOST-06 | "I'm on it" | 🟡 **In review** — pull request open from `claude/busy-faraday-40n2zl`. 17 acceptance criteria; D-113 (owner) with its amendment (owner, 2026-10-07: the notice is not pushed on a platform until a real-phone test shows it never displaces an undelivered critical alert), D-114 (delegated). All three reviewers PASS in the first round; two review loops; `test-auditor` PASS, then a delta audit PASS. `gate:full` at `07d9d0e` 11 passed, the one failure `gate:integrity`'s API checks; mutation: `acknowledgement.ts` 37 of 37, `journey.ts` 176 of 177. L3 on a PostgreSQL 16 stand-in, 245 of 245, so CI's `integration` job is the real run. Record: `progress/m2.md` |
 | 6 | LOST-07 | SMS escalation at 2 minutes | ⚪ Not started |
 | 7 | LOST-08 | "They're safe" | ⚪ Not started |
 | 8 | REL-10 | The staging canary | ⚪ Not started |
@@ -346,15 +346,21 @@ The things that still bite, and cost a session hours the first time.
   outside the repository, so a worktree elsewhere doesn't work for
   `test-author` or `implementer` either. Have `planner` write a draft to the
   scratchpad instead (LOST-06).
+- **The session's disk allowance runs out.** Reviewers' scratch copies of the
+  repository (about 280 MB to 1 GB each) pile up across tasks; one filled the
+  allowance during `gate:full`'s mutation step (ENOSPC). Delete finished
+  copies between tasks.
 - **A container restart stops background agents and loses uncommitted work.**
   One attempt at a records task was cut off before it wrote anything. Commit
   and push in small steps.
 
 ## In flight
 
-**LOST-06** (M2 task 5 of 8, "I'm on it") is in progress on
-`claude/busy-faraday-40n2zl`: its spec is settled (D-113, D-114), and the red
-phase is next. **LOST-03** (task 4, back in contact, and "I'm home") is done
+**LOST-06** (M2 task 5 of 8, "I'm on it") is in review, with its pull request
+open from `claude/busy-faraday-40n2zl` (D-113 and its amendment, D-114). Before
+M3 pushes its notice on either platform, a real-phone test must show the
+notice never displaces an undelivered critical alert (the owner,
+2026-10-07). **LOST-03** (task 4, back in contact, and "I'm home") is done
 ([#64](https://github.com/bvst/TryggHverdag/pull/64), `57502b8`), with
 **BUG-23** and **BUG-24** (the dependency audit's two new advisories) in it.
 **LOST-02** ([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`),
