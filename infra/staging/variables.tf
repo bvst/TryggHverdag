@@ -13,9 +13,11 @@ variable "healthchecks_worker_url" {
   type        = string
   sensitive   = true
 
+  # The check's address and nothing after it: no query, no fragment, no
+  # trailing slash, read by the same rule as the SMS check's URL (LOST-07).
   validation {
-    condition     = can(regex("^https://hc-ping\\.com/", var.healthchecks_worker_url))
-    error_message = "Expected the check's ping URL from Healthchecks.io, starting https://hc-ping.com/ and followed by the check's UUID. Anything else would ping nothing, and a check that is never pinged never pages (INF-08). Set it in GitHub: Settings → Environments → staging → the secret HEALTHCHECKS_WORKER_URL."
+    condition     = can(regex("^https://hc-ping\\.com/[^/?#]+(/[^/?#]+)?$", var.healthchecks_worker_url))
+    error_message = "Expected the check's ping URL from Healthchecks.io: https://hc-ping.com/ followed by the check's UUID, and nothing after it (no query, fragment or trailing slash). Anything else would ping nothing, and a check that is never pinged never pages (INF-08). Set it in GitHub: Settings → Environments → staging → the secret HEALTHCHECKS_WORKER_URL."
   }
 }
 
@@ -24,8 +26,18 @@ variable "healthchecks_sms_url" {
   type        = string
   sensitive   = true
 
+  # The check's address and nothing after it: the failure signal is this URL
+  # with /fail on its path, which a query, a fragment or a trailing slash would
+  # misplace, so a failing SMS would page nobody (LOST-07).
   validation {
-    condition     = can(regex("^https://hc-ping\\.com/", var.healthchecks_sms_url))
-    error_message = "Expected the staging-sms check's ping URL from Healthchecks.io, starting https://hc-ping.com/ and followed by the check's UUID. Anything else would report to nothing, and a failing SMS would page nobody (LOST-07). Set it in GitHub: Settings → Environments → staging → the secret HEALTHCHECKS_SMS_URL."
+    condition     = can(regex("^https://hc-ping\\.com/[^/?#]+(/[^/?#]+)?$", var.healthchecks_sms_url))
+    error_message = "Expected the staging-sms check's ping URL from Healthchecks.io: https://hc-ping.com/ followed by the check's UUID, and nothing after it (no query, fragment or trailing slash). Anything else would report to nothing, and a failing SMS would page nobody (LOST-07). Set it in GitHub: Settings → Environments → staging → the secret HEALTHCHECKS_SMS_URL."
+  }
+
+  # Two checks, never one: behind one address, "worker down" and "SMS failing"
+  # would be one page, and an ok from either would clear the other's failing.
+  validation {
+    condition     = var.healthchecks_sms_url != var.healthchecks_worker_url
+    error_message = "The SMS check needs a check of its own: the staging secrets HEALTHCHECKS_SMS_URL and HEALTHCHECKS_WORKER_URL hold the same ping URL. Set HEALTHCHECKS_SMS_URL to the staging-sms check's ping URL (A-32): Settings → Environments → staging."
   }
 }

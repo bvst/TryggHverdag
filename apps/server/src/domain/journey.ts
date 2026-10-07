@@ -608,17 +608,20 @@ function acknowledge(
  *   4. already escalated: unchanged, once per alert;
  *   5. open for ESCALATE_AFTER_MS or more by the database's clock: ESCALATED;
  *   6. otherwise unchanged.
- * A comparison with a time that is not one never holds, so an invalid moment
- * escalates nothing rather than texting on a guess.
+ * "Someone recorded" is a responder's ID, and "already escalated" a time:
+ * anything else read there, undefined or a field left out included, is a half
+ * that is missing, and fails toward the SMS too (D-114). A comparison with a
+ * time that is not one never holds, so an invalid moment of the opening or of
+ * now escalates nothing rather than texting on a guess.
  */
 function escalate(alert: AlertSituation | null, { openedAt, now }: EscalateEvent): EscalateOutcome {
   if (alert === null || alert.state === 'RESOLVED') {
     return { type: 'unchanged' };
   }
-  if (alert.state === 'ACKNOWLEDGED' && alert.acknowledgedBy !== null) {
+  if (alert.state === 'ACKNOWLEDGED' && typeof alert.acknowledgedBy === 'string') {
     return { type: 'unchanged' };
   }
-  if (alert.smsRaisedAt !== null) {
+  if (alert.smsRaisedAt instanceof Date) {
     return { type: 'unchanged' };
   }
   if (now.getTime() - openedAt.getTime() >= ESCALATE_AFTER_MS) {

@@ -463,11 +463,11 @@ function keepProcessAlive(): void {
  * start whether it does and, if not, why. Never where: the ping URL is a
  * secret. Left out, the setting counts as unset. It also says at start that
  * no push provider is configured: its push is UNCONFIGURED_PUSH until M3.
- * Likewise its SMS check reports when HEALTHCHECKS_SMS_URL allows it
- * (LOST-07), said at start without naming where; and it says that no SMS
- * provider is configured: its SMS is UNCONFIGURED_SMS until M3. And once it
- * has started, it reads back the session limit its pool asked for, and says
- * whether it is in force (D-109).
+ * Likewise its SMS check reports when HEALTHCHECKS_SMS_URL allows it and is
+ * not the worker's own address (LOST-07), said at start without naming
+ * where; and it says that no SMS provider is configured: its SMS is
+ * UNCONFIGURED_SMS until M3. And once it has started, it reads back the
+ * session limit its pool asked for, and says whether it is in force (D-109).
  */
 export async function runWorkerProcess(
   connectionString: string,
@@ -518,16 +518,24 @@ export async function runWorkerProcess(
     write(`worker: not checking in with Healthchecks.io: ${healthchecks.reason}\n`);
   }
   // The SMS check's line never says "Healthchecks.io", nor where: INF-08's
-  // lines are the ones that do, and the ping URL is a secret.
+  // lines are the ones that do, and the ping URL is a secret. Never the
+  // worker's own address: one check behind both would make "worker down" and
+  // "SMS failing" one page, and an ok from either would clear the other's
+  // failing (D-115, D-116).
   let smsAlarm: SmsAlarm | undefined;
-  if (healthchecksSms.checkingIn) {
+  if (!healthchecksSms.checkingIn) {
+    write(`worker: the SMS check is not reporting: ${healthchecksSms.reason}\n`);
+  } else if (healthchecks.checkingIn && healthchecks.url === healthchecksSms.url) {
+    write(
+      'worker: the SMS check is not reporting: HEALTHCHECKS_SMS_URL is the same address as ' +
+        'HEALTHCHECKS_WORKER_URL, and the SMS check needs a check of its own.\n',
+    );
+  } else {
     write(
       'worker: the SMS check reports once a minute whether any escalation SMS has waited ' +
         'unsent for 60 s.\n',
     );
     smsAlarm = createSmsAlarm(healthchecksSms.url);
-  } else {
-    write(`worker: the SMS check is not reporting: ${healthchecksSms.reason}\n`);
   }
   // No push provider can be configured until M3 brings one (A-11), with its
   // setting; until then the worker's push is UNCONFIGURED_PUSH, and it says so.

@@ -56,13 +56,15 @@
  *     when the rule says so (from LOST_CONTACT), in one transaction (AR-04).
  *   - Resolving is one helper (`resolveInside`), for every path that resolves
  *     an alert: the journey's one unresolved alert goes to RESOLVED; its
- *     messages of the kinds withdrawn on resolution (lost-contact pushes, and
- *     the notices that someone is on it) not yet sent are withdrawn, so no
- *     claim hands them out again (D-111, D-113); and every responder row gets
- *     one stand-down of the resolution's own kind. A stand-down for a
- *     responder with a withdrawn message that may still be in the push port's
- *     hands is due only once the latest such lease or retry time has passed,
- *     so it never overtakes any of them (D-114).
+ *     messages of the kinds withdrawn on resolution (WITHDRAWN_WHEN_RESOLVED:
+ *     lost-contact pushes, the notices that someone is on it, and the
+ *     escalation SMS) not yet sent are withdrawn, so no claim hands them out
+ *     again (D-111, D-113, LOST-07); and every responder row gets one
+ *     stand-down, by push, of the resolution's own kind. A stand-down for a
+ *     responder with a withdrawn message that may still be in a port's hands,
+ *     the push port's or the SMS port's, is due only once the latest such
+ *     lease or retry time has passed, so it never overtakes any of them
+ *     (D-114).
  *
  * "I'm on it" (LOST-06) reads the alert first without a lock, so a refusal
  * never holds a row. One that would record takes the alert's journey's row
@@ -559,19 +561,21 @@ interface Resolved {
  *      resolution. LOST-02's index allows at most one; none is answered with
  *      no alert and no messages, and the move stands (reading 11).
  *   2. Its messages of the kinds withdrawn on resolution
- *      (WITHDRAWN_WHEN_RESOLVED: its lost-contact pushes, and its notices
- *      that someone is on it), not sent and not withdrawn, are withdrawn at
- *      now() (D-111, D-113). The update takes each row's lock, so a claim or
+ *      (WITHDRAWN_WHEN_RESOLVED: its lost-contact pushes, its notices that
+ *      someone is on it, and its escalation SMS), not sent and not
+ *      withdrawn, are withdrawn at now() (D-111, D-113, LOST-07). The update takes each row's lock, so a claim or
  *      a mark in progress finishes first, and the row is checked again as it
  *      left it: one marked sent meanwhile is not withdrawn, and one claimed
  *      comes back with its new attempt count and lease. Attempts and the last
  *      failure are kept.
  *   3. One stand-down per responder row, of the resolution's own kind, with a
  *      new random ID, due at now(), unless any of that responder's withdrawn
- *      messages was handed to the port (attempts ≥ 1) and is due after now():
+ *      messages was handed to a port (attempts ≥ 1) and is due after now():
  *      then at the latest such time, the end of a lease or a retry, at most
- *      60 s on. So a stand-down is never handed to the port while anything it
- *      stands down may still be in the port's hands. Held per responder, so a
+ *      60 s on. So a stand-down is never handed to the push port while
+ *      anything it stands down may still be in a port's hands, an SMS in the
+ *      SMS port's included. An SMS an acknowledgement withdrew earlier is not
+ *      withdrawn here, so it holds nothing (LOST-07, approach item 6). Held per responder, so a
  *      responder with two messages withdrawn still gets one stand-down: the
  *      unique (alert, recipient, kind) refuses a second, and would roll back
  *      the whole resolution (D-114). Steps 2 and 3 are one statement, so the

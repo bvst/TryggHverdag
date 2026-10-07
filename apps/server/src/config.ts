@@ -72,7 +72,15 @@ export function readHealthchecksSmsSetting(
   return readPingSetting(env, 'HEALTHCHECKS_SMS_URL');
 }
 
-/** A ping URL from `variable`: usable only when set, a URL, and https:. */
+/**
+ * A ping URL from `variable`: usable only when set, a URL, https:, and the
+ * check's address with nothing after it. The SMS check's failure signal is
+ * its URL with /fail appended, so a query, a fragment or a trailing slash
+ * would put /fail where Healthchecks.io does not read it as a failure, and
+ * the page would never come (LOST-07, D-079). The worker's URL is read by the
+ * same rule, so the two are read alike. Each refusal names the variable,
+ * never the value.
+ */
 function readPingSetting(
   env: Record<string, string | undefined>,
   variable: string,
@@ -90,6 +98,26 @@ function readPingSetting(
     return {
       checkingIn: false,
       reason: `${variable} is not an https: URL, and the ping URL is never sent unencrypted.`,
+    };
+  }
+  // Read in the value itself: a bare "?" or "#" leaves no query or fragment
+  // in the parsed URL, and still misplaces /fail.
+  if (value.includes('?')) {
+    return {
+      checkingIn: false,
+      reason: `${variable} has a query ("?"); the ping URL is the check's address with nothing after it.`,
+    };
+  }
+  if (value.includes('#')) {
+    return {
+      checkingIn: false,
+      reason: `${variable} has a fragment ("#"); the ping URL is the check's address with nothing after it.`,
+    };
+  }
+  if (value.endsWith('/')) {
+    return {
+      checkingIn: false,
+      reason: `${variable} ends in a slash; the ping URL is the check's address with nothing after it.`,
     };
   }
   return { checkingIn: true, url: value };

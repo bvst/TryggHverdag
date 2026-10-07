@@ -19,8 +19,10 @@
  *      holder alerted it or heard from it. Only one that holds through the
  *      wait is stuck;
  *   5. escalates to SMS every alert nobody has acknowledged within two
- *      minutes (LOST-07, `escalation.ts`), whatever the opens came to, so an
- *      SMS never waits on an open that failed;
+ *      minutes (LOST-07, `escalation.ts`), whatever steps 1 to 4 came to, its
+ *      read included: a read of journeys that fails says nothing of the
+ *      alerts already open, whose two minutes go on, and an SMS never waits
+ *      on an open that failed (D-116);
  *   6. records the worker's beat at the now() its read returned, if all of
  *      it succeeded (D-108: the watchdog feeds the beat).
  *
@@ -28,11 +30,9 @@
  * finds a stuck journey: a journey past STUCK_AFTER_MS that it could not move,
  * because its row was held through the wait, or because its open failed. Each
  * stuck journey is one `watchdog_overdue` line naming it. It fails too when
- * the escalation fails or finds a stuck alert. A sweep whose read failed
- * stops there, before the escalation: the database it would ask is the one
- * that just failed. A failed sweep records no beat, so the minute check-in
- * stops and `/v1/health` goes degraded: a watchdog that cannot work pages the
- * owner, never silently.
+ * the escalation fails or finds a stuck alert. A failed sweep records no beat,
+ * so the minute check-in stops and `/v1/health` goes degraded: a watchdog
+ * that cannot work pages the owner, never silently.
  *
  * Failures are logged as their stage and SQLSTATE only (PRIV-07): the
  * watchdog sees journey and user IDs and nothing else, and never writes an
@@ -58,6 +58,11 @@ export interface SweepResult {
 export interface Watchdog {
   sweep(): Promise<SweepResult>;
 }
+
+/** What steps 1 to 4 came to: the read's now() when all of them succeeded, how many opened, and how many are stuck. */
+type Opens =
+  | { ok: true; now: Date; opened: number; stuck: number }
+  | { ok: false; opened: number; stuck: number };
 
 /** What one attempt to open a journey's alert came to; `failed` was logged where it happened. */
 type Attempt = 'opened' | 'skipped' | 'held' | 'failed';
@@ -87,74 +92,81 @@ export function createWatchdog({
     }
   };
 
+  /** Steps 1 to 4: every overdue journey's alert opened, or the journey said to be stuck. */
+  const openDue = async (): Promise<Opens> => {
+    let read;
+    try {
+      read = await journeys.overdueJourneys(LOST_CONTACT_AFTER_MS);
+    } catch (error) {
+      log.write({ event: 'watchdog_failed', stage: 'read', code: sqlstateOf(error) });
+      return { ok: false, opened: 0, stuck: 0 };
+    }
+    const { now } = read;
+    const lost = read.journeys.filter(
+      ({ id, state, silentSince }) =>
+        transition({ id, state }, { type: 'silence', silentSince, now }).type === 'lost_contact',
+    );
+    const pastStuck = ({ silentSince }: OverdueJourney) => isStuck({ silentSince, now });
+
+    let opened = 0;
+    let failed = false;
+    const stuck: string[] = [];
+    const waitFor: string[] = [];
+
+    // Every journey's first attempt, before any waits for a row.
+    for (const journey of lost) {
+      const outcome = await attempt(journey.id);
+      if (outcome === 'opened') {
+        opened += 1;
+      } else if (outcome === 'failed') {
+        failed = true;
+        if (pastStuck(journey)) {
+          stuck.push(journey.id);
+        }
+      } else if (pastStuck(journey)) {
+        waitFor.push(journey.id);
+      }
+    }
+
+    // Past the stuck threshold, a skipped journey is asked about once more,
+    // waiting for its holder: skipped then means its holder dealt with it.
+    // Held through the wait, or failed, it is stuck, which fails the sweep.
+    for (const journeyId of waitFor) {
+      const outcome = await attempt(journeyId, LOCK_WAIT_LIMIT_MS);
+      if (outcome === 'opened') {
+        opened += 1;
+      } else if (outcome !== 'skipped') {
+        stuck.push(journeyId);
+      }
+    }
+
+    for (const journeyId of stuck) {
+      log.write({ event: 'watchdog_overdue', journeyId });
+    }
+    return failed || stuck.length > 0
+      ? { ok: false, opened, stuck: stuck.length }
+      : { ok: true, now, opened, stuck: 0 };
+  };
+
   return {
     async sweep(): Promise<SweepResult> {
-      let read;
-      try {
-        read = await journeys.overdueJourneys(LOST_CONTACT_AFTER_MS);
-      } catch (error) {
-        log.write({ event: 'watchdog_failed', stage: 'read', code: sqlstateOf(error) });
-        return { ok: false, opened: 0, escalated: 0, stuck: 0 };
-      }
-      const { now } = read;
-      const lost = read.journeys.filter(
-        ({ id, state, silentSince }) =>
-          transition({ id, state }, { type: 'silence', silentSince, now }).type === 'lost_contact',
-      );
-      const pastStuck = ({ silentSince }: OverdueJourney) => isStuck({ silentSince, now });
-
-      let opened = 0;
-      let failed = false;
-      const stuck: string[] = [];
-      const waitFor: string[] = [];
-
-      // Every journey's first attempt, before any waits for a row.
-      for (const journey of lost) {
-        const outcome = await attempt(journey.id);
-        if (outcome === 'opened') {
-          opened += 1;
-        } else if (outcome === 'failed') {
-          failed = true;
-          if (pastStuck(journey)) {
-            stuck.push(journey.id);
-          }
-        } else if (pastStuck(journey)) {
-          waitFor.push(journey.id);
-        }
-      }
-
-      // Past the stuck threshold, a skipped journey is asked about once more,
-      // waiting for its holder: skipped then means its holder dealt with it.
-      // Held through the wait, or failed, it is stuck, which fails the sweep.
-      for (const journeyId of waitFor) {
-        const outcome = await attempt(journeyId, LOCK_WAIT_LIMIT_MS);
-        if (outcome === 'opened') {
-          opened += 1;
-        } else if (outcome !== 'skipped') {
-          stuck.push(journeyId);
-        }
-      }
-
-      for (const journeyId of stuck) {
-        log.write({ event: 'watchdog_overdue', journeyId });
-      }
-
-      // The watchdog's second job (LOST-07): an escalation that cannot be
-      // done fails the sweep, as an open does.
+      const opens = await openDue();
+      // The watchdog's second job (LOST-07), whatever the opens came to: an
+      // escalation that cannot be done fails the sweep, as an open does.
       const escalations = await escalation.escalateDue();
       const result = {
-        opened,
+        opened: opens.opened,
         escalated: escalations.escalated,
-        stuck: stuck.length + escalations.stuck,
+        stuck: opens.stuck + escalations.stuck,
       };
-      if (failed || stuck.length > 0 || !escalations.ok) {
+      if (!opens.ok || !escalations.ok) {
         return { ok: false, ...result };
       }
 
       try {
         // The database's now() as the read returned it: the API compares the
         // beat with its own reading of the same clock (REL-01).
-        await beats.record(now);
+        await beats.record(opens.now);
       } catch (error) {
         log.write({ event: 'watchdog_failed', stage: 'beat', code: sqlstateOf(error) });
         return { ok: false, ...result };

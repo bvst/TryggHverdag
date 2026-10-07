@@ -56,11 +56,7 @@ export function createEscalation({
 }): Escalation {
   const attempt = async (alertId: string, lockWaitMs?: number): Promise<Attempt> => {
     try {
-      const result = await journeys.escalateAlert({
-        alertId,
-        afterMs: ESCALATE_AFTER_MS,
-        lockWaitMs,
-      });
+      const result = await journeys.escalateAlert({ alertId, lockWaitMs });
       return result.outcome;
     } catch (error) {
       log.write({ event: 'escalation_failed', stage: 'escalate', code: sqlstateOf(error) });

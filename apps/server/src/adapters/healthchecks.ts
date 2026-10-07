@@ -4,9 +4,9 @@
  * the owner.
  *
  * And the SMS check's alarm (LOST-07, D-115), on a check of its own: `ok` is
- * a ping to its URL, `failing` a ping to that URL with `/fail` appended,
- * Healthchecks.io's failure signal, which pages the owner at once. Both are
- * sent exactly as the check-in is.
+ * a ping to its URL as configured, `failing` a ping to that URL with `/fail`
+ * added to its path, Healthchecks.io's failure signal, which pages the owner
+ * at once. Both are sent exactly as the check-in is.
  *
  * One request, no body, no retry: the next minute's beat is the retry, and a
  * retry loop is how a worker would reach Healthchecks.io's rate limit. Only a
@@ -36,13 +36,16 @@ export function healthchecksCheckIn({
   // would do it at start-up, where a monitoring setting must never stop the
   // worker.
   return {
-    checkIn: (signal?: AbortSignal) => ping({ url, send, timeoutMs, signal, what: 'check-in' }),
+    checkIn: (signal?: AbortSignal) =>
+      ping({ url, fail: false, send, timeoutMs, signal, what: 'check-in' }),
   };
 }
 
 /**
- * The SMS check's alarm (LOST-07): `ok` to the check's ping URL, `failing` to
- * the same URL with `/fail` appended. One request each, sent as a check-in is.
+ * The SMS check's alarm (LOST-07): `ok` to the check's ping URL as
+ * configured, `failing` to the same URL with `/fail` added to its path, so a
+ * query stays after it and a trailing slash is not doubled. One request
+ * each, sent as a check-in is.
  */
 export function healthchecksAlarm({
   url,
@@ -56,7 +59,8 @@ export function healthchecksAlarm({
   return {
     report: (status: 'ok' | 'failing', signal?: AbortSignal) =>
       ping({
-        url: status === 'failing' ? `${url}/fail` : url,
+        url,
+        fail: status === 'failing',
         send,
         timeoutMs,
         signal,
@@ -65,15 +69,21 @@ export function healthchecksAlarm({
   };
 }
 
-/** One ping: resolves when Healthchecks.io accepted it, and rejects, in words chosen here, on anything else. */
+/**
+ * One ping, to the URL or, with `fail`, to its failure signal: resolves when
+ * Healthchecks.io accepted it, and rejects, in words chosen here, on anything
+ * else.
+ */
 async function ping({
   url,
+  fail,
   send,
   timeoutMs,
   signal,
   what,
 }: {
   url: string;
+  fail: boolean;
   send: typeof fetch;
   timeoutMs: number;
   signal: AbortSignal | undefined;
@@ -92,7 +102,9 @@ async function ping({
     // followed redirect would count whatever answered elsewhere as a
     // ping, and could carry the URL there in clear; so a 3xx comes back as
     // it is and fails below, naming its status.
-    response = await send(url, {
+    // The failure address is built in here, so a URL that does not parse
+    // fails as any unreachable address does, in words chosen here.
+    response = await send(fail ? failureAddress(url) : url, {
       method: 'HEAD',
       redirect: 'manual',
       signal: signal === undefined ? timeout : AbortSignal.any([signal, timeout]),
@@ -103,6 +115,17 @@ async function ping({
   if (!response.ok) {
     throw new Error(`Healthchecks.io answered ${String(response.status)}.`);
   }
+}
+
+/**
+ * Healthchecks.io's failure signal for a check: /fail on the URL's own path,
+ * with any trailing slash dropped, before any query. Throws for a URL that is
+ * not one; `ping` rewords that.
+ */
+function failureAddress(url: string): string {
+  const address = new URL(url);
+  address.pathname = `${address.pathname.replace(/\/$/, '')}/fail`;
+  return address.href;
 }
 
 /**

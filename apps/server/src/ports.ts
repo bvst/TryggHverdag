@@ -223,10 +223,13 @@ export interface DueAlerts {
   alerts: DueAlert[];
 }
 
-/** An escalation as the watchdog asks for it: with `lockWaitMs`, it waits that long for a held row. */
+/**
+ * An escalation as the watchdog asks for it: with `lockWaitMs`, it waits that
+ * long for a held row. No threshold: the store decides by the domain's
+ * ESCALATE_AFTER_MS, so no caller can choose another (D-100, D-116).
+ */
 export interface EscalateRequest {
   alertId: string;
-  afterMs: number;
   /** How long to wait for a held row; undefined, or left out, skips it. */
   lockWaitMs?: number | undefined;
 }
@@ -275,7 +278,8 @@ export interface WatchdogStore {
   /**
    * LOST-07, in one transaction: takes the alert's journey's row first
    * (D-112), asks the domain's escalation rule again under that lock with the
-   * transaction's now() (AR-04), and writes what it decides: the alert
+   * transaction's now() and its two minutes, ESCALATE_AFTER_MS (AR-04), and
+   * writes what it decides: the alert
    * ESCALATED with its escalation time at now(), and one LOST_CONTACT_SMS per
    * responder row, due at now() (AR-05); or nothing. Bounds its waits as an
    * open does: `lockWaitMs`, or LOCK_WAIT_LIMIT_MS without it; without
