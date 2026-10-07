@@ -29,7 +29,7 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | LOST-04 | Low battery warning | must | ⚪ | 0 |
 | LOST-05 | The walker knows when they're offline | must | ⚪ | 0 |
 | LOST-06 | "I'm on it" | must | 🟢 | 20 |
-| LOST-07 | SMS escalation | must | 🟢 | 18 |
+| LOST-07 | SMS escalation | must | 🟢 | 19 |
 | LOST-08 | "They're safe" | must | ⚪ | 0 |
 | HELP-01 | What to do | must | ⚪ | 0 |
 | REL-01 | The lost-contact decision is made by the server, using the server's clock, never the phone's. | must | 🟢 | 14 |
@@ -38,8 +38,8 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | REL-04 | While a journey runs, the app keeps a local reminder scheduled ⚙️ 2 minutes ahead and keeps moving it forward. | must | ⚪ | 0 |
 | REL-05 | If location access is lost during a journey, the walker is warned at once and responders see "location unavai… | must | ⚪ | 0 |
 | REL-06 | Lost-contact and SOS-related alerts to responders use the strongest notification level the platform and the r… | must | ⚪ | 0 |
-| REL-07 | Alerts need acknowledgement ("I'm on it", LOST-06). | must | 🟢 | 2 |
-| REL-08 | External uptime monitoring checks the API and the watchdog every minute and alerts the owner within ⚙️ 5 minu… | must | 🟢 | 6 |
+| REL-07 | Alerts need acknowledgement ("I'm on it", LOST-06). | must | 🟢 | 6 |
+| REL-08 | External uptime monitoring checks the API and the watchdog every minute and alerts the owner within ⚙️ 5 minu… | must | 🟢 | 7 |
 | REL-09 | If the phone can't reach the safety service, the walker sees it straight away (extends LOST-05). | must | ⚪ | 0 |
 | REL-10 | A **canary journey** runs in production every ⚙️ 15 minutes: a test walker goes silent, and the system must a… | must | ⚪ | 0 |
 | REL-11 | Every position shown to responders includes its accuracy and age. | must | ⚪ | 0 |
