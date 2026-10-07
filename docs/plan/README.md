@@ -1,11 +1,11 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-06 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23 and BUG-24 done, LOST-06 in review (D-090)
+**Last updated:** 2026-10-06 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24 and LOST-06 done, LOST-07 in progress (D-090, D-115)
 
-**Current section:** milestone M2, started 2026-10-01 with SM-01; LOST-06,
-"I'm on it", is task 5 of 8 and in review, with its pull request open (D-090,
-D-113 and its amendment, D-114; the task list is in
-[10-roadmap.md](10-roadmap.md)). LOST-03,
+**Current section:** milestone M2, started 2026-10-01 with SM-01; LOST-07,
+SMS escalation, is task 6 of 9 and in progress, with its spec settled (D-090,
+D-115, D-116; the task list is in [10-roadmap.md](10-roadmap.md)). LOST-06,
+"I'm on it", is done (#66, 2026-10-07; D-113 and its amendment, D-114). LOST-03,
 back in contact and "I'm home", is done (#64, 2026-10-06; D-110 to D-112),
 with BUG-23 and BUG-24, two new advisories that failed the dependency audit,
 in it. LOST-02, the lost-contact alert, is done
@@ -27,7 +27,9 @@ BUG-19 (no test checks every owner-approval path keeps its owners), BUG-20
 BUG-21 (an Android script test's timing margin fails under full-suite load),
 BUG-22 (the test-weakening check does not see the shared behaviour suites),
 BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an advisory)
-and BUG-26 (a lint run during a mutation run fails on Stryker's sandbox).
+BUG-26 (a lint run during a mutation run fails on Stryker's sandbox) and
+BUG-27 (whether the worker's session limits are in force on a deploy is seen
+only by chance).
 M1 closed with all four roadmap items done:
 SPIKE-01 (S1–S8), Section 4 closed with a conditional GO for the location SDK
 (D-086, full results in [04b-spike-results.md](04b-spike-results.md)), and the
