@@ -14,14 +14,16 @@
  *   - `journeyId`, `messageId` and `alertId` only as a lower-case canonical
  *     UUID;
  *   - `reason` only from its event's set: JOURNEY_ENDED for an ignored
- *     heartbeat or "I'm home", the push port's four for a failed push,
+ *     heartbeat or "I'm home", the push port's four for a failed push or SMS,
  *     ALERT_RESOLVED for an ignored "I'm on it";
  *   - `stage` only from its event's set: clock, read or store for a
  *     heartbeat; read or store for "I'm home" and "I'm on it"; read, open or
- *     beat for the watchdog; claim or mark for the sender;
+ *     beat for the watchdog; read or escalate for the escalation; claim or
+ *     mark for each sender; read or report for the SMS check;
  *   - `pool` only as api or worker;
  *   - `code` only as text that is a SQLSTATE, read by `sqlstateOf`, so no
- *     message can travel as a code.
+ *     message can travel as a code;
+ *   - `count` only as a non-negative safe integer.
  * An event the log does not list is a fault in the caller: `write` throws,
  * writes nothing, and its error names nothing of what it was handed.
  *
@@ -73,6 +75,12 @@ const EVENT_LEVELS = {
   database_error: 55,
   home_failed: 56,
   acknowledgement_failed: 57,
+  sms_failed: 58,
+  sms_delivery_failed: 59,
+  escalation_failed: 60,
+  escalation_overdue: 61,
+  sms_unsent: 62,
+  sms_check_failed: 63,
 } as const satisfies Record<EventName, number>;
 
 /**
@@ -130,6 +138,24 @@ const DELIVERY_STAGES: readonly unknown[] = ['claim', 'mark'] satisfies Extract<
   { event: 'delivery_failed' }
 >['stage'][];
 
+/** The stages `escalation_failed` may name. */
+const ESCALATION_STAGES: readonly unknown[] = ['read', 'escalate'] satisfies Extract<
+  LogEvent,
+  { event: 'escalation_failed' }
+>['stage'][];
+
+/** The stages `sms_delivery_failed` may name: the SMS sender's, as the push sender's. */
+const SMS_DELIVERY_STAGES: readonly unknown[] = ['claim', 'mark'] satisfies Extract<
+  LogEvent,
+  { event: 'sms_delivery_failed' }
+>['stage'][];
+
+/** The stages `sms_check_failed` may name. */
+const SMS_CHECK_STAGES: readonly unknown[] = ['read', 'report'] satisfies Extract<
+  LogEvent,
+  { event: 'sms_check_failed' }
+>['stage'][];
+
 /** The pools `database_error` may name: each process's own. */
 const POOLS: readonly unknown[] = ['api', 'worker'] satisfies Extract<
   LogEvent,
@@ -148,6 +174,11 @@ function oneOf(allowed: readonly unknown[], value: unknown): string | null {
 /** A journey's, a message's or an alert's ID, as the database writes one. */
 function uuidOf(value: unknown): string | null {
   return typeof value === 'string' && CANONICAL_UUID.test(value) ? value : null;
+}
+
+/** A count: a whole number from 0 up to the largest safe integer. */
+function countOf(value: unknown): number | null {
+  return Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : null;
 }
 
 /** Only text that is a SQLSTATE, read as the store's error is read. */
@@ -237,6 +268,36 @@ export function createLog({
         case 'acknowledgement_failed':
           logger.acknowledgement_failed({
             stage: oneOf(ACKNOWLEDGEMENT_STAGES, event.stage),
+            code: codeOf(event.code),
+          });
+          return;
+        case 'escalation_failed':
+          logger.escalation_failed({
+            stage: oneOf(ESCALATION_STAGES, event.stage),
+            code: codeOf(event.code),
+          });
+          return;
+        case 'escalation_overdue':
+          logger.escalation_overdue({ alertId: uuidOf(event.alertId) });
+          return;
+        case 'sms_failed':
+          logger.sms_failed({
+            reason: oneOf(PUSH_FAILURE_REASONS, event.reason),
+            messageId: uuidOf(event.messageId),
+          });
+          return;
+        case 'sms_delivery_failed':
+          logger.sms_delivery_failed({
+            stage: oneOf(SMS_DELIVERY_STAGES, event.stage),
+            code: codeOf(event.code),
+          });
+          return;
+        case 'sms_unsent':
+          logger.sms_unsent({ count: countOf(event.count) });
+          return;
+        case 'sms_check_failed':
+          logger.sms_check_failed({
+            stage: oneOf(SMS_CHECK_STAGES, event.stage),
             code: codeOf(event.code),
           });
           return;

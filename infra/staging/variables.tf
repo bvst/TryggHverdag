@@ -18,3 +18,14 @@ variable "healthchecks_worker_url" {
     error_message = "Expected the check's ping URL from Healthchecks.io, starting https://hc-ping.com/ and followed by the check's UUID. Anything else would ping nothing, and a check that is never pinged never pages (INF-08). Set it in GitHub: Settings → Environments → staging → the secret HEALTHCHECKS_WORKER_URL."
   }
 }
+
+variable "healthchecks_sms_url" {
+  description = "The ping URL of the Healthchecks.io check staging-sms, which the worker's SMS check reports to each minute, ok or failing (LOST-07, A-32). A secret: anyone holding it can keep the check green while every SMS fails. Set by infra-staging.yml from the staging environment's secret HEALTHCHECKS_SMS_URL; never committed."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = can(regex("^https://hc-ping\\.com/", var.healthchecks_sms_url))
+    error_message = "Expected the staging-sms check's ping URL from Healthchecks.io, starting https://hc-ping.com/ and followed by the check's UUID. Anything else would report to nothing, and a failing SMS would page nobody (LOST-07). Set it in GitHub: Settings → Environments → staging → the secret HEALTHCHECKS_SMS_URL."
+  }
+}

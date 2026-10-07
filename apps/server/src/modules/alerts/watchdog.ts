@@ -18,15 +18,21 @@
  *      milliseconds, and the journey is then opened, or skipped because the
  *      holder alerted it or heard from it. Only one that holds through the
  *      wait is stuck;
- *   5. records the worker's beat at the now() its read returned, if it
- *      succeeded (D-108: the watchdog feeds the beat).
+ *   5. escalates to SMS every alert nobody has acknowledged within two
+ *      minutes (LOST-07, `escalation.ts`), whatever the opens came to, so an
+ *      SMS never waits on an open that failed;
+ *   6. records the worker's beat at the now() its read returned, if all of
+ *      it succeeded (D-108: the watchdog feeds the beat).
  *
  * A sweep fails when its read fails, when an alert fails to open, or when it
  * finds a stuck journey: a journey past STUCK_AFTER_MS that it could not move,
  * because its row was held through the wait, or because its open failed. Each
- * stuck journey is one `watchdog_overdue` line naming it. A failed sweep
- * records no beat, so the minute check-in stops and `/v1/health` goes
- * degraded: a watchdog that cannot work pages the owner, never silently.
+ * stuck journey is one `watchdog_overdue` line naming it. It fails too when
+ * the escalation fails or finds a stuck alert. A sweep whose read failed
+ * stops there, before the escalation: the database it would ask is the one
+ * that just failed. A failed sweep records no beat, so the minute check-in
+ * stops and `/v1/health` goes degraded: a watchdog that cannot work pages the
+ * owner, never silently.
  *
  * Failures are logged as their stage and SQLSTATE only (PRIV-07): the
  * watchdog sees journey and user IDs and nothing else, and never writes an
@@ -36,11 +42,16 @@ import { LOST_CONTACT_AFTER_MS, transition } from '../../domain/journey.ts';
 import { sqlstateOf } from '../../domain/sqlstate.ts';
 import { LOCK_WAIT_LIMIT_MS, isStuck } from '../../domain/watchdog.ts';
 import type { Log, OverdueJourney, WatchdogStore, WorkerHeartbeats } from '../../ports.ts';
+import { createEscalation } from './escalation.ts';
 
-/** What one sweep came to: whether it succeeded, how many alerts it opened, and how many journeys it could not move. */
+/**
+ * What one sweep came to: whether it succeeded, how many alerts it opened and
+ * escalated, and how many journeys and alerts it could not move.
+ */
 export interface SweepResult {
   ok: boolean;
   opened: number;
+  escalated: number;
   stuck: number;
 }
 
@@ -60,6 +71,8 @@ export function createWatchdog({
   beats: WorkerHeartbeats;
   log: Log;
 }): Watchdog {
+  const escalation = createEscalation({ journeys, log });
+
   const attempt = async (journeyId: string, lockWaitMs?: number): Promise<Attempt> => {
     try {
       const result = await journeys.openLostContactAlert({
@@ -81,7 +94,7 @@ export function createWatchdog({
         read = await journeys.overdueJourneys(LOST_CONTACT_AFTER_MS);
       } catch (error) {
         log.write({ event: 'watchdog_failed', stage: 'read', code: sqlstateOf(error) });
-        return { ok: false, opened: 0, stuck: 0 };
+        return { ok: false, opened: 0, escalated: 0, stuck: 0 };
       }
       const { now } = read;
       const lost = read.journeys.filter(
@@ -125,8 +138,17 @@ export function createWatchdog({
       for (const journeyId of stuck) {
         log.write({ event: 'watchdog_overdue', journeyId });
       }
-      if (failed || stuck.length > 0) {
-        return { ok: false, opened, stuck: stuck.length };
+
+      // The watchdog's second job (LOST-07): an escalation that cannot be
+      // done fails the sweep, as an open does.
+      const escalations = await escalation.escalateDue();
+      const result = {
+        opened,
+        escalated: escalations.escalated,
+        stuck: stuck.length + escalations.stuck,
+      };
+      if (failed || stuck.length > 0 || !escalations.ok) {
+        return { ok: false, ...result };
       }
 
       try {
@@ -135,9 +157,9 @@ export function createWatchdog({
         await beats.record(now);
       } catch (error) {
         log.write({ event: 'watchdog_failed', stage: 'beat', code: sqlstateOf(error) });
-        return { ok: false, opened, stuck: 0 };
+        return { ok: false, ...result };
       }
-      return { ok: true, opened, stuck: 0 };
+      return { ok: true, ...result };
     },
   };
 }

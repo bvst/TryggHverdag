@@ -73,5 +73,10 @@ resource "clevercloud_nodejs" "staging" {
     # so a stopped worker pages the owner (INF-08). Only the worker reads it. A
     # secret, so it comes from the staging environment and no plan shows it.
     HEALTHCHECKS_WORKER_URL = var.healthchecks_worker_url
+
+    # Where the worker's SMS check reports each minute whether any escalation
+    # SMS has waited 60 s unsent, so a failing SMS pages the owner (LOST-07).
+    # Its own check, apart from the worker's. A secret, as the one above.
+    HEALTHCHECKS_SMS_URL = var.healthchecks_sms_url
   }
 }

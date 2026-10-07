@@ -56,6 +56,9 @@ jobs:
       # The worker's Healthchecks.io ping URL (INF-08), which Terraform requires.
       # In the apply job too, because that job plans again.
       TF_VAR_healthchecks_worker_url: ${{ secrets.HEALTHCHECKS_WORKER_URL }}
+      # The SMS check's ping URL (LOST-07, A-32), likewise required, likewise
+      # in both jobs.
+      TF_VAR_healthchecks_sms_url: ${{ secrets.HEALTHCHECKS_SMS_URL }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # Nothing here pushes to GitHub, so the token checkout would leave in
@@ -105,6 +108,8 @@ jobs:
       # The worker's Healthchecks.io ping URL (INF-08), as in the plan job: this
       # job plans again, and Terraform refuses to plan without it.
       TF_VAR_healthchecks_worker_url: ${{ secrets.HEALTHCHECKS_WORKER_URL }}
+      # The SMS check's ping URL (LOST-07), as in the plan job.
+      TF_VAR_healthchecks_sms_url: ${{ secrets.HEALTHCHECKS_SMS_URL }}
     permissions:
       contents: read
       # To read the plan run the owner named: its details and its log.

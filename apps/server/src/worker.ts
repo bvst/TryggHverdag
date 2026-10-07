@@ -5,57 +5,77 @@
  * somebody made a request: the watchdog that notices a silent phone, the outbox
  * sender that delivers alerts, and later retention and the canary.
  *
- * Two loops (LOST-02), each running again WATCHDOG_INTERVAL_MS after its
- * previous run finished, so a run never overlaps itself, and both running
- * once at start:
+ * Three loops (LOST-02, LOST-07), each running again WATCHDOG_INTERVAL_MS
+ * after its previous run finished, so a run never overlaps itself, and each
+ * running once at start:
  *   - the sweep loop runs the watchdog, which moves every journey silent for
- *     five minutes to LOST_CONTACT with its alert and messages, and records
+ *     five minutes to LOST_CONTACT with its alert and messages, escalates
+ *     every alert nobody acknowledged within two minutes to SMS, and records
  *     the worker's beat when it succeeds (D-108);
- *   - the delivery loop runs the sender, which hands those messages to the
- *     push port. A sweep that opened an alert wakes it at once, so the first
- *     push does not wait for the interval.
- * Two loops, not one, so a push provider that never answers stalls delivery
- * only, and no sweep waits behind it. A run that throws is said in one line,
- * and the next run happens: nothing that goes wrong in a run stops a loop.
- * Only the sweep loop is watched: it feeds the beat, so a sweep loop that
- * stopped anyway shows as a beat that stopped. The delivery loop has no such
- * signal, and a delivery that is wedged, or fails every time, pages nobody
- * until task 8's canary checks that its test responder was pushed to. The
- * loops keep time with timers here, in the process, and every due time stays
- * in the database, so a restart loses nothing.
+ *   - the delivery loop runs the push sender, which hands the push messages
+ *     to the push port. A sweep that opened an alert wakes it at once, so the
+ *     first push does not wait for the interval;
+ *   - the SMS loop runs the SMS sender, which hands the escalation SMS to the
+ *     SMS port. A sweep that escalated an alert wakes it at once.
+ * Three loops, not one, so a push or SMS provider that never answers stalls
+ * its own delivery only: no sweep waits behind either, and the SMS, the
+ * backstop for exactly the night push is not working, never waits behind
+ * push, nor push behind SMS. A run that throws is said in one line, and the
+ * next run happens: nothing that goes wrong in a run stops a loop. The sweep
+ * loop feeds the beat, so a sweep loop that stopped anyway shows as a beat
+ * that stopped. The SMS loop is watched by the SMS check below. The delivery
+ * loop has no such signal, and a delivery that is wedged, or fails every
+ * time, pages nobody until the canary task checks that its test responder was
+ * pushed to. The loops keep time with timers here, in the process, and every
+ * due time stays in the database, so a restart loses nothing.
  *
- * And a minute task, on Graphile Worker's cron, that checks in with
+ * And two minute tasks, on Graphile Worker's cron. One checks in with
  * Healthchecks.io when the watchdog's beat is fresh: at most BEAT_FRESH_MS old
  * by the database clock. A watchdog that cannot sweep records no beat, so the
  * check-in stops, and the owner is paged (D-079), as `/v1/health` goes
- * degraded for the API's monitor.
+ * degraded for the API's monitor. The other is the SMS check (LOST-07): it
+ * reports to a check of its own whether any escalation SMS has waited 60 s
+ * unsent, whatever the beat says, so a failing SMS pages the owner.
  *
- * Until M3 brings APNs and FCM, the worker's push answers NOT_CONFIGURED to
- * every message, so no message ever counts as sent, and the worker says so at
- * start.
+ * Until M3 brings APNs, FCM and an SMS provider, the worker's push and SMS
+ * answer NOT_CONFIGURED to every message, so no message ever counts as sent,
+ * and the worker says so at start.
  */
 import { run, type Runner, type TaskList } from 'graphile-worker';
 import process from 'node:process';
 import { databaseClock } from './adapters/clock.ts';
 import { POOL_SIZE, createDatabase, createPool, sessionLimitsLines } from './adapters/db.ts';
-import { healthchecksCheckIn } from './adapters/healthchecks.ts';
+import { healthchecksAlarm, healthchecksCheckIn } from './adapters/healthchecks.ts';
 import { databaseJourneyStore } from './adapters/journeys.ts';
 import { databaseWorkerHeartbeats } from './adapters/worker-heartbeats.ts';
-import { readHealthchecksSetting, type HealthchecksSetting } from './config.ts';
+import {
+  readHealthchecksSetting,
+  readHealthchecksSmsSetting,
+  type HealthchecksSetting,
+} from './config.ts';
 import {
   BEAT_FRESH_MS,
   IDLE_IN_TRANSACTION_LIMIT_MS,
   WATCHDOG_INTERVAL_MS,
 } from './domain/watchdog.ts';
 import { createLog } from './log.ts';
-import { createPushSender, type PushSender } from './modules/alerts/outbox.ts';
+import {
+  createPushSender,
+  createSmsSender,
+  type PushSender,
+  type SmsSender,
+} from './modules/alerts/outbox.ts';
+import { createSmsCheck, type SmsCheck } from './modules/alerts/sms-check.ts';
 import { createWatchdog, type Watchdog } from './modules/alerts/watchdog.ts';
-import type { CheckIn, Clock, Log, Push, WorkerHeartbeats } from './ports.ts';
+import type { CheckIn, Clock, Log, Push, Sms, SmsAlarm, WorkerHeartbeats } from './ports.ts';
 import { exitOnSignal, type Reporting, type Signals } from './process.ts';
 import { describeFailure } from './redact.ts';
 
-/** Once a minute. Graphile Worker's cron does not go finer than that. */
-export const HEARTBEAT_CRONTAB = '* * * * * heartbeat';
+/**
+ * Once a minute each: the check-in, and the SMS check (LOST-07). Graphile
+ * Worker's cron does not go finer than that.
+ */
+export const HEARTBEAT_CRONTAB = '* * * * * heartbeat\n* * * * * sms_check';
 
 /**
  * The worker's push until M3 brings a provider (A-11): every message is
@@ -64,6 +84,17 @@ export const HEARTBEAT_CRONTAB = '* * * * * heartbeat';
  * `accepted` would be a silent miss.
  */
 export const UNCONFIGURED_PUSH: Push = {
+  send: () => Promise.resolve({ outcome: 'failed', reason: 'NOT_CONFIGURED' }),
+};
+
+/**
+ * The worker's SMS until M3 brings a provider (A-12): every SMS is answered
+ * NOT_CONFIGURED, so none is ever counted as sent, each is tried again, one
+ * `sms_failed` line at a time, and the SMS check pages the owner once it has
+ * waited 60 s (LOST-07). A default that answered `accepted` would be a silent
+ * miss.
+ */
+export const UNCONFIGURED_SMS: Sms = {
   send: () => Promise.resolve({ outcome: 'failed', reason: 'NOT_CONFIGURED' }),
 };
 
@@ -87,11 +118,14 @@ export function createTaskList({
   clock,
   heartbeats,
   checkIn,
+  smsCheck,
   write = writeToStderr,
 }: {
   clock: Clock;
   heartbeats: WorkerHeartbeats;
   checkIn?: CheckIn | undefined;
+  /** The SMS check, when the setting allows it to report. */
+  smsCheck?: SmsCheck | undefined;
   write?: ((text: string) => void) | undefined;
 }): TaskList {
   return {
@@ -119,28 +153,37 @@ export function createTaskList({
         }
       }
     },
+    // The SMS check (LOST-07), whatever the beat says. It never rejects, so
+    // Graphile never retries it in a loop; with Graphile's signal, a stop
+    // ends a report in flight.
+    sms_check: async (_payload, helpers) => {
+      await smsCheck?.check(helpers.abortSignal);
+    },
   };
 }
 
-/** The two loops, started. */
+/** The three loops, started. */
 interface Loops {
   /** Starts no further run, and settles once the runs in flight have. */
   stop: () => Promise<void>;
 }
 
 /**
- * Starts the sweep loop and the delivery loop. Each runs at once, and then
- * again WATCHDOG_INTERVAL_MS after its previous run finished. A sweep that
- * opened an alert wakes the delivery loop: at once, or, with a delivery in
- * flight, as soon as that one finishes.
+ * Starts the sweep loop, the delivery loop and the SMS loop. Each runs at
+ * once, and then again WATCHDOG_INTERVAL_MS after its previous run finished.
+ * A sweep that opened an alert wakes the delivery loop, and one that
+ * escalated an alert wakes the SMS loop: at once, or, with a run in flight,
+ * as soon as that one finishes.
  */
 function startLoops({
   watchdog,
   sender,
+  smsSender,
   write,
 }: {
   watchdog: Watchdog;
   sender: PushSender;
+  smsSender: SmsSender;
   write: (text: string) => void;
 }): Loops {
   let stopping = false;
@@ -201,21 +244,27 @@ function startLoops({
   };
 
   const deliveries = loop('delivery', () => sender.deliverDue());
+  const texts = loop('SMS delivery', () => smsSender.deliverDue());
   const sweeps = loop('sweep', async () => {
-    const { opened } = await watchdog.sweep();
+    const { opened, escalated } = await watchdog.sweep();
     // Once stopping, runNow starts nothing: a stop starts no further run.
     if (opened > 0) {
       deliveries.runNow();
     }
+    if (escalated > 0) {
+      texts.runNow();
+    }
   });
   sweeps.runNow();
   deliveries.runNow();
+  texts.runNow();
 
   return {
     async stop() {
       stopping = true;
       sweeps.cancel();
       deliveries.cancel();
+      texts.cancel();
       await Promise.all([...inFlight]);
     },
   };
@@ -269,6 +318,12 @@ export interface WorkerOptions {
   watchdog?: Watchdog | undefined;
   /** The delivery loop's work: the sender over this worker's pool by default. */
   sender?: PushSender | undefined;
+  /** The SMS port: UNCONFIGURED_SMS until M3. */
+  sms?: Sms | undefined;
+  /** The SMS loop's work: the SMS sender over this worker's pool by default. */
+  smsSender?: SmsSender | undefined;
+  /** Where the SMS check reports, when the setting allows it; without it, the check reports nothing. */
+  smsAlarm?: SmsAlarm | undefined;
 }
 
 export async function startWorker(
@@ -283,6 +338,9 @@ export async function startWorker(
     log = createLog(),
     watchdog,
     sender,
+    sms = UNCONFIGURED_SMS,
+    smsSender,
+    smsAlarm,
   }: WorkerOptions = {},
 ): Promise<Worker> {
   // The idle limit (D-108): a sweep holds a journey's row for milliseconds,
@@ -307,11 +365,21 @@ export async function startWorker(
       noHandleSignals: true,
       concurrency: 2,
       // On stop, a job's abort signal fires at once rather than after
-      // Graphile's default 5 s. The minute check-in is the only job, and it
-      // ends on that signal, so a stop never waits for Healthchecks.io.
+      // Graphile's default 5 s. The minute check-in and the SMS check are the
+      // only jobs, and each ends on that signal, so a stop never waits for
+      // Healthchecks.io.
       gracefulShutdownAbortTimeout: 0,
       crontab: HEARTBEAT_CRONTAB,
-      taskList: createTaskList({ clock: databaseClock(db), heartbeats, checkIn, write }),
+      taskList: createTaskList({
+        clock: databaseClock(db),
+        heartbeats,
+        checkIn,
+        smsCheck:
+          smsAlarm === undefined
+            ? undefined
+            : createSmsCheck({ outbox: journeys, alarm: smsAlarm, log }),
+        write,
+      }),
     });
   } catch (error) {
     await pool.end();
@@ -321,6 +389,7 @@ export async function startWorker(
   const loops = startLoops({
     watchdog: watchdog ?? createWatchdog({ journeys, beats: heartbeats, log }),
     sender: sender ?? createPushSender({ outbox: journeys, push, log }),
+    smsSender: smsSender ?? createSmsSender({ outbox: journeys, sms, log }),
     write,
   });
 
@@ -394,8 +463,11 @@ function keepProcessAlive(): void {
  * start whether it does and, if not, why. Never where: the ping URL is a
  * secret. Left out, the setting counts as unset. It also says at start that
  * no push provider is configured: its push is UNCONFIGURED_PUSH until M3.
- * And once it has started, it reads back the session limit its pool asked
- * for, and says whether it is in force (D-109).
+ * Likewise its SMS check reports when HEALTHCHECKS_SMS_URL allows it
+ * (LOST-07), said at start without naming where; and it says that no SMS
+ * provider is configured: its SMS is UNCONFIGURED_SMS until M3. And once it
+ * has started, it reads back the session limit its pool asked for, and says
+ * whether it is in force (D-109).
  */
 export async function runWorkerProcess(
   connectionString: string,
@@ -406,9 +478,12 @@ export async function runWorkerProcess(
     keepAlive = keepProcessAlive,
     healthchecks = readHealthchecksSetting({}),
     createCheckIn = (url) => healthchecksCheckIn({ url }),
+    healthchecksSms = readHealthchecksSmsSetting({}),
+    createSmsAlarm = (url) => healthchecksAlarm({ url }),
     log,
     watchdog,
     sender,
+    smsSender,
     ...reporting
   }: {
     runWorker?: RunWorker;
@@ -417,7 +492,10 @@ export async function runWorkerProcess(
     keepAlive?: () => void;
     healthchecks?: HealthchecksSetting;
     createCheckIn?: (url: string) => CheckIn;
-  } & Pick<WorkerOptions, 'log' | 'watchdog' | 'sender'> &
+    /** Where the SMS check reports (LOST-07): unset by default. */
+    healthchecksSms?: HealthchecksSetting;
+    createSmsAlarm?: (url: string) => SmsAlarm;
+  } & Pick<WorkerOptions, 'log' | 'watchdog' | 'sender' | 'smsSender'> &
     Reporting = {},
 ): Promise<void> {
   const write = reporting.write ?? writeToStderr;
@@ -439,19 +517,39 @@ export async function runWorkerProcess(
   } else {
     write(`worker: not checking in with Healthchecks.io: ${healthchecks.reason}\n`);
   }
+  // The SMS check's line never says "Healthchecks.io", nor where: INF-08's
+  // lines are the ones that do, and the ping URL is a secret.
+  let smsAlarm: SmsAlarm | undefined;
+  if (healthchecksSms.checkingIn) {
+    write(
+      'worker: the SMS check reports once a minute whether any escalation SMS has waited ' +
+        'unsent for 60 s.\n',
+    );
+    smsAlarm = createSmsAlarm(healthchecksSms.url);
+  } else {
+    write(`worker: the SMS check is not reporting: ${healthchecksSms.reason}\n`);
+  }
   // No push provider can be configured until M3 brings one (A-11), with its
   // setting; until then the worker's push is UNCONFIGURED_PUSH, and it says so.
   write(
     'worker: no push provider is configured, so no alert can reach a phone: every message ' +
       'is answered NOT_CONFIGURED, stays unsent, and is tried again.\n',
   );
+  // Nor an SMS provider until M3 (A-12): the worker's SMS is UNCONFIGURED_SMS.
+  write(
+    'worker: no SMS provider is configured, so no escalation SMS can reach a phone: every ' +
+      'SMS is answered NOT_CONFIGURED, stays unsent, and is tried again.\n',
+  );
   const worker = await startWorker(connectionString, runWorker, {
     checkIn,
     write,
     push: UNCONFIGURED_PUSH,
+    sms: UNCONFIGURED_SMS,
     log,
     watchdog,
     sender,
+    smsSender,
+    smsAlarm,
   });
   // Asking is not getting (D-109): the limit read back once, and said. Not
   // awaited, and never a reason not to run: a worker that refused to start

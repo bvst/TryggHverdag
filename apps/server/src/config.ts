@@ -7,8 +7,9 @@
  * from the outside that looks like a successful deploy.
  *
  * One exception: where the worker checks in with Healthchecks.io
- * (readHealthchecksSetting). A monitoring setting must never stop the watchdog
- * it watches, or put it in a crash loop.
+ * (readHealthchecksSetting), and where its SMS check reports
+ * (readHealthchecksSmsSetting). A monitoring setting must never stop the
+ * watchdog it watches, or put it in a crash loop.
  */
 
 /** The port Clever Cloud sends traffic to, and checks before a deploy counts as done. */
@@ -54,24 +55,41 @@ export function readServerConfig(env: Record<string, string | undefined>): Serve
 export type HealthchecksSetting =
   { checkingIn: true; url: string } | { checkingIn: false; reason: string };
 
-const HEALTHCHECKS_VARIABLE = 'HEALTHCHECKS_WORKER_URL';
-
 export function readHealthchecksSetting(
   env: Record<string, string | undefined>,
 ): HealthchecksSetting {
-  const value = present(env[HEALTHCHECKS_VARIABLE]);
+  return readPingSetting(env, 'HEALTHCHECKS_WORKER_URL');
+}
+
+/**
+ * Whether the worker's SMS check reports to its own Healthchecks.io check, and
+ * where (LOST-07, D-115): read by the same rules as the check-in's, from a
+ * variable of its own, so neither address can stand in for the other.
+ */
+export function readHealthchecksSmsSetting(
+  env: Record<string, string | undefined>,
+): HealthchecksSetting {
+  return readPingSetting(env, 'HEALTHCHECKS_SMS_URL');
+}
+
+/** A ping URL from `variable`: usable only when set, a URL, and https:. */
+function readPingSetting(
+  env: Record<string, string | undefined>,
+  variable: string,
+): HealthchecksSetting {
+  const value = present(env[variable]);
   if (value === undefined) {
-    return { checkingIn: false, reason: `${HEALTHCHECKS_VARIABLE} is not set.` };
+    return { checkingIn: false, reason: `${variable} is not set.` };
   }
   const url = URL.parse(value);
   if (url === null) {
-    return { checkingIn: false, reason: `${HEALTHCHECKS_VARIABLE} is not a URL.` };
+    return { checkingIn: false, reason: `${variable} is not a URL.` };
   }
   // The URL is the secret, so it is never sent in clear text.
   if (url.protocol !== 'https:') {
     return {
       checkingIn: false,
-      reason: `${HEALTHCHECKS_VARIABLE} is not an https: URL, and the ping URL is never sent unencrypted.`,
+      reason: `${variable} is not an https: URL, and the ping URL is never sent unencrypted.`,
     };
   }
   return { checkingIn: true, url: value };

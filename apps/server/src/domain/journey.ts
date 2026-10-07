@@ -47,6 +47,13 @@
  *     over its own events, `ALERT_EVENTS`, because its situation is an
  *     alert's, not a journey's. Only a responder of the alert's journey may
  *     acknowledge it; one responder is on it; a resolved alert is over.
+ *   - Escalation to SMS (LOST-07, D-116): the alert rule's second event, the
+ *     watchdog's question, asked with two database times the store read,
+ *     when the alert opened and now. An unresolved alert nobody is on, never
+ *     escalated, and open for ESCALATE_AFTER_MS or more (D-019, "or more")
+ *     is ESCALATED, and every responder gets an SMS. "Nobody is on it" is
+ *     D-114's: a missing half of an acknowledgement (the state, or who) sends
+ *     the SMS. A time that is not one never escalates.
  */
 
 /** Every state a journey can be in (D-033). The database admits exactly these. */
@@ -57,36 +64,71 @@ export const JOURNEY_EVENTS = ['start', 'heartbeat', 'silence', 'contact', 'home
 
 /**
  * Every state an alert can be in (D-033), in order. The database admits
- * exactly these. Alerts open OPEN, and contact or "I'm home" resolves them;
- * ESCALATED and ACKNOWLEDGED belong to the tasks that escalate and
- * acknowledge them.
+ * exactly these. Alerts open OPEN; nobody acknowledging within two minutes
+ * makes them ESCALATED (LOST-07), "I'm on it" ACKNOWLEDGED (LOST-06), and
+ * contact or "I'm home" resolves them, whatever their state (D-112, D-116).
  */
 export const ALERT_STATES = ['OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED'] as const;
 
 export type AlertState = (typeof ALERT_STATES)[number];
 
-/** Every event an alert can meet (LOST-06): its own list, apart from the journey's. */
-export const ALERT_EVENTS = ['acknowledge'] as const;
+/** Every event an alert can meet (LOST-06, LOST-07): its own list, apart from the journey's. */
+export const ALERT_EVENTS = ['acknowledge', 'escalate'] as const;
 
 /**
  * Every kind of message an alert causes: the lost-contact alert, the
- * stand-down for each way it resolves, and the notice that someone is on it
- * (D-113). The database admits exactly these.
+ * stand-down for each way it resolves, the notice that someone is on it
+ * (D-113), and the escalation SMS (D-019). The database admits exactly these.
  */
-export const MESSAGE_KINDS = ['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED'] as const;
+export const MESSAGE_KINDS = [
+  'LOST_CONTACT',
+  'BACK_IN_CONTACT',
+  'HOME',
+  'ACKNOWLEDGED',
+  'LOST_CONTACT_SMS',
+] as const;
 
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
 
 /**
+ * The kinds that go by SMS, and only the SMS claim hands them out (LOST-07,
+ * D-116). The kind names its channel, so the outbox's unique (alert,
+ * recipient, kind) allows one push and one SMS per responder per alert, and
+ * the push claim can never hand an SMS to the push port. Every kind is in
+ * exactly one of this and PUSH_KINDS, and a test names any kind placed in
+ * neither or both (LOST-07-AC14).
+ */
+export const SMS_KINDS = ['LOST_CONTACT_SMS'] as const satisfies readonly MessageKind[];
+
+/** The kinds that go by push: every other kind, in MESSAGE_KINDS' order. */
+export const PUSH_KINDS = [
+  'LOST_CONTACT',
+  'BACK_IN_CONTACT',
+  'HOME',
+  'ACKNOWLEDGED',
+] as const satisfies readonly MessageKind[];
+
+/**
  * The kinds an alert's resolution withdraws from its own alert while unsent
- * (D-111, D-113): its lost-contact pushes, and its notices that someone is on
- * it, which are stale once the alert is over. Every kind is withdrawn by
- * exactly one rule, this one or the open's (`ALERT_RESOLUTIONS`), and a test
- * names any kind placed in neither or both (LOST-06-AC13).
+ * (D-111, D-113, D-116): its lost-contact pushes, its notices that someone is
+ * on it, and its escalation SMS, all stale once the alert is over. Every kind
+ * is withdrawn by exactly one rule, this one or the open's
+ * (`ALERT_RESOLUTIONS`), and a test names any kind placed in neither or both
+ * (LOST-06-AC13, LOST-07-AC14).
  */
 export const WITHDRAWN_WHEN_RESOLVED = [
   'LOST_CONTACT',
   'ACKNOWLEDGED',
+  'LOST_CONTACT_SMS',
+] as const satisfies readonly MessageKind[];
+
+/**
+ * The kinds "I'm on it" withdraws from its own alert while unsent (LOST-07):
+ * its escalation SMS, so escalation stops as soon as anyone acknowledges.
+ * Each is also withdrawn on resolution, which a test holds (LOST-07-AC14).
+ */
+export const WITHDRAWN_WHEN_ACKNOWLEDGED = [
+  'LOST_CONTACT_SMS',
 ] as const satisfies readonly MessageKind[];
 
 /**
@@ -124,6 +166,13 @@ export type PushFailureReason = (typeof PUSH_FAILURE_REASONS)[number];
  * minutes, counted "or more" (D-021). Changing it needs the owner.
  */
 export const LOST_CONTACT_AFTER_MS = 300_000;
+
+/**
+ * How long an alert may go unacknowledged before every responder gets an SMS:
+ * two minutes from its opening, counted "or more" (D-019). Changing it needs
+ * the owner.
+ */
+export const ESCALATE_AFTER_MS = 120_000;
 
 export type JourneyState = (typeof JOURNEY_STATES)[number];
 export type JourneyEventType = (typeof JOURNEY_EVENTS)[number];
@@ -271,6 +320,45 @@ export type AcknowledgeOutcome =
   | { type: 'acknowledged'; state: 'ACKNOWLEDGED' }
   | { type: 'unchanged'; reason: 'ALREADY_YOURS' }
   | AcknowledgeRefusal;
+
+/**
+ * An alert as the escalation reads it (LOST-07): its state, who is recorded
+ * on it, null for nobody, and when it was escalated, null for never, as the
+ * store read them.
+ */
+export interface AlertForEscalation {
+  id: string;
+  state: AlertState;
+  acknowledgedBy: string | null;
+  smsRaisedAt: Date | null;
+}
+
+/**
+ * The watchdog asks whether an alert is escalated: when it opened and now,
+ * both read from the database by the store, never from this process's clock
+ * (REL-01).
+ */
+export interface EscalateEvent {
+  type: 'escalate';
+  openedAt: Date;
+  now: Date;
+}
+
+/** Nobody on it for two minutes: ESCALATED, and every responder gets an SMS. Or nothing changes. */
+export type EscalateOutcome = { type: 'escalated'; state: 'ESCALATED' } | { type: 'unchanged' };
+
+export type AlertEvent = AcknowledgeEvent | EscalateEvent;
+
+/**
+ * What an alert event meets, as the store read it. The responders and the
+ * escalation time are optional for the implementation, not for any caller:
+ * each overload of `alertTransition` pairs an event with the situation it
+ * needs, an acknowledgement with its journey's responders and an escalation
+ * with its escalation time.
+ */
+type AlertSituation = Pick<AlertForAcknowledgement, 'id' | 'state' | 'acknowledgedBy'> &
+  Partial<Pick<AlertForAcknowledgement, 'responderIds'>> &
+  Partial<Pick<AlertForEscalation, 'smsRaisedAt'>>;
 
 /**
  * What an event does. Every outcome, a refusal included, is a value; only an
@@ -435,21 +523,44 @@ function home(journey: Situation | null, event: HomeEvent): HomeOutcome {
 }
 
 /**
- * What an alert's event does (LOST-06). Every outcome, a refusal included, is
- * a value; only an event of a type this module does not list is thrown on.
+ * What an alert's event does (LOST-06, LOST-07). Every outcome, a refusal
+ * included, is a value; only an event of a type this module does not list is
+ * thrown on.
  *
- * @param alert the alert the event names, or null when no alert has that ID.
+ * @param alert the alert the event names, or null when no alert has that ID:
+ *   for "I'm on it", with its journey's responders; for the escalation, with
+ *   when it was escalated.
+ *
+ * Each overload is an event with the situation it needs, and the outcome it
+ * can have.
  */
 export function alertTransition(
   alert: AlertForAcknowledgement | null,
   event: AcknowledgeEvent,
-): AcknowledgeOutcome {
-  // A throw, never a value, for an event nobody handled: a value handed back
-  // for it is a silent miss for whatever reads the outcome.
-  if (!Object.hasOwn(ALERT_RULES, event.type)) {
-    throw new Error(`The alert rule has no rule for an event of type ${event.type}.`);
+): AcknowledgeOutcome;
+export function alertTransition(
+  alert: AlertForEscalation | null,
+  event: EscalateEvent,
+): EscalateOutcome;
+export function alertTransition(
+  alert: AlertSituation | null,
+  event: AlertEvent,
+): AcknowledgeOutcome | EscalateOutcome {
+  switch (event.type) {
+    case 'acknowledge':
+      return acknowledge(alert, event);
+    case 'escalate':
+      return escalate(alert, event);
+    default: {
+      // A type error the day an event joins AlertEvent without a case. And a
+      // throw, never a value, for an event nobody handled: a value handed
+      // back for it is a silent miss for whatever reads the outcome.
+      const unhandled: never = event;
+      throw new Error(
+        `The alert rule has no rule for an event of type ${(unhandled as AlertEvent).type}.`,
+      );
+    }
   }
-  return ALERT_RULES[event.type](alert, event);
 }
 
 /**
@@ -467,11 +578,12 @@ export function alertTransition(
  * IDs are compared exactly: the stores hand them back in lower case.
  */
 function acknowledge(
-  alert: AlertForAcknowledgement | null,
+  alert: AlertSituation | null,
   { responderId }: AcknowledgeEvent,
 ): AcknowledgeOutcome {
-  // No alert is no journey's either, so the sender follows it no more.
-  if (alert?.responderIds.includes(responderId) !== true) {
+  // No alert is no journey's either, so the sender follows it no more; nor
+  // does an alert handed in without its responders.
+  if (alert?.responderIds?.includes(responderId) !== true) {
     return { type: 'refused', reason: 'ALERT_NOT_FOUND' };
   }
   if (alert.state === 'RESOLVED') {
@@ -487,13 +599,30 @@ function acknowledge(
 }
 
 /**
- * Each alert event's rule, by the event's type. Typed over ALERT_EVENTS, so
- * an event listed there without a rule here is a type error (LOST-06-AC14).
- * A table, not a `switch` as `transition` has: with one event, a `case` would
- * compare a type with itself, which the lint refuses as a condition that
- * cannot fail.
+ * The escalation rule (LOST-07, D-114, D-116), in its order:
+ *   1. no alert: unchanged;
+ *   2. RESOLVED: unchanged, before anything else the alert holds;
+ *   3. ACKNOWLEDGED with someone recorded: unchanged, someone is on it. Both
+ *      halves are read, so a missing half (ACKNOWLEDGED with nobody, or
+ *      someone recorded on an alert in another state) fails toward the SMS;
+ *   4. already escalated: unchanged, once per alert;
+ *   5. open for ESCALATE_AFTER_MS or more by the database's clock: ESCALATED;
+ *   6. otherwise unchanged.
+ * A comparison with a time that is not one never holds, so an invalid moment
+ * escalates nothing rather than texting on a guess.
  */
-const ALERT_RULES = { acknowledge } satisfies Record<
-  (typeof ALERT_EVENTS)[number],
-  (alert: AlertForAcknowledgement | null, event: AcknowledgeEvent) => AcknowledgeOutcome
->;
+function escalate(alert: AlertSituation | null, { openedAt, now }: EscalateEvent): EscalateOutcome {
+  if (alert === null || alert.state === 'RESOLVED') {
+    return { type: 'unchanged' };
+  }
+  if (alert.state === 'ACKNOWLEDGED' && alert.acknowledgedBy !== null) {
+    return { type: 'unchanged' };
+  }
+  if (alert.smsRaisedAt !== null) {
+    return { type: 'unchanged' };
+  }
+  if (now.getTime() - openedAt.getTime() >= ESCALATE_AFTER_MS) {
+    return { type: 'escalated', state: 'ESCALATED' };
+  }
+  return { type: 'unchanged' };
+}
