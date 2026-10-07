@@ -4185,3 +4185,53 @@ any other path is work, not a candidate for the same treatment.
   - **Terraform's error messages say why another spelling is refused:** so the
     two URLs can be compared. The slug form and `/<uuid>/` do ping, so "would
     ping nothing" was untrue for them.
+
+## D-117 — `worker.ts` gets a mutation group of its own, and each mutant's run starts Vitest directly (BUG-29)
+- **Date:** 2026-10-07 · **Status:** Accepted (delegated, D-031). It
+  lowers no score and does not raise the budget · **Section:** 6 (amends
+  D-066's grouping; within D-036 and D-098)
+- **Context:** On LOST-07's pull request (#67), CI's required `mutation`
+  check ran out of its 25-minute budget (job 112914873757): `spawnSync pnpm
+  ETIMEDOUT`, the `process` group cut off after 7:23 and `api-process` never
+  started. Every group that finished passed. LOST-07 added about 170 mutants
+  (the `alerts` group from 161 to 291, `journey.ts` from 177 to 220). CI's
+  times, against LOST-06's (#66): domain 6:15 (4:59), healthchecks 1:50
+  (1:14), journeys 2:32 (2:21), alerts 6:53 (2:55), process over 7:23 (5:36),
+  api-process not run (0:24). D-036 and D-098 say to make each mutant's run
+  faster before raising the budget, which is the owner's (cost).
+- **What was measured** (2026-10-07, this session's 4-core machine):
+  - **`bin.test.ts` is most of the `process` group's cost:** about 8 s of CPU
+    per mutant, against 3.8 s for `worker.test.ts` and 0.8 s for
+    `process.test.ts`. Every one of `worker.ts`'s 189 mutants paid for it.
+  - **It kills none of `worker.ts`'s mutants on its own.** A fresh Stryker
+    run of `worker.ts` against `worker.test.ts` and `process.test.ts` only
+    gave 183 killed, 4 survived and 2 timed out, the same status for each of
+    the 189 mutants as the `process` group's run with `bin.test.ts`, mutant
+    by mutant. It took 4:04 instead of the group's 6:38.
+  - **`pnpm exec` costs about 12 % of each mutant's CPU** (3 % to 19 % by
+    group): about 0.3–0.9 s of user and system time per run, for nothing a
+    run needs. `bin.test.ts` starts its processes with `process.execPath`,
+    so no test depends on the PATH `pnpm exec` sets.
+- **Decision:**
+  - `worker.ts` is mutated in a group of its own, `worker`, against
+    `worker.test.ts` and `process.test.ts`. `bin/worker.ts` and `process.ts`
+    stay in `process`, with `bin.test.ts`, the only test that runs the real
+    worker process (D-066's reason, which applies to those two).
+  - Each mutant's command starts Vitest as `node node_modules/vitest/vitest.mjs
+    run`, Vitest's own bin, instead of `pnpm exec vitest run`. The options,
+    the tests and the configuration are unchanged.
+  - The budget stays at 25 minutes.
+- **Why this cannot hide a weak test:** a narrower test set can only score
+  lower, never falsely higher (D-066's amendment). A future `worker.ts`
+  mutant that only `bin.test.ts` could kill would survive, and the gate would
+  name it.
+- **Rejected:**
+  - Raising the budget: the owner's, and D-036 asks for speed first.
+  - `--pool=threads`: about 7 % more, but it changes how tests run (worker
+    threads, not processes), which `worker.test.ts` and `bin.test.ts` would
+    each need checking for.
+  - One CI job per group: shortest, but it changes the required checks,
+    which is the owner's ruleset.
+- **Consequences:** the `MUTATION_GROUPS` pin and the Stryker config tests
+  change, with their reasons (RG-03). If CI's next run still does not fit,
+  the choice goes to the owner (D-098).
