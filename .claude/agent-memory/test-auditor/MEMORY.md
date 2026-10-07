@@ -21,13 +21,13 @@
 - [BUG-18 audit](project_bug18_audit.md) — D-105 db.ts + worker-heartbeats.ts; PASS 25589a5 (158 faults, 3 real survivors); loop 2: modules/health/ pinned BUG-10 way, PASS at 06fc91c (64 faults, 56 killed, 0 real survivors)
 - [Matcher helper changes](feedback_matcher_helper_changes.md) — audit "stricter, never looser" glob-reader rewrites: fuzz superset, diff verdicts, check pairs vs git/picomatch, fault each new branch
 - [LOST-02 audit](project_lost02_audit.md) — BLOCK 6f27b80; loop 1 PASS 3539d4f (J3b); loop 2 PASS 25f5ccf, 53 faults, F2/V3 isInteger + I8b survive; harness ta-lost02
-- [Second path and isolation](feedback_second_path_isolation.md) — mutate second-attempt outcome mapping and break-after-failure; lease-vacuous shared checks; count unhandled errors
+- [Second path and isolation](feedback_second_path_isolation.md) — mutate second-attempt outcome mapping and break-after-failure in BOTH loops; lease-vacuous shared checks; count unhandled errors
 - [Rollback and hangs](feedback_rollback_and_hangs.md) — rollback undoes session set_config (check after commit); no-limit faults hang L3; line-buffered harness
 - [Isolating values](feedback_isolating_values.md) — one value per refusal clause that only it refuses; Vitest truncates each.$name titles (-t on full name runs nothing)
 - [LOST-03 audit](project_lost03_audit.md) — PASS 3471859; loop 1 2aa23f4; loop 2 db97856; loop 3 PASS 155a6e4 (29 faults, kind `<>` clause equivalent); harness ta-lost03/loop3
 - [Shared suite RG-03 blind spot](feedback_shared_suite_rg03_blind.md) — tests:changes/test-weakening hook only see *.test.*; journey-store-behaviour.ts diffs need a by-hand byte proof
 - [BUG-23/24 audit](project_bug23_24_audit.md) — PASS 68b675c and delta c7975fe; override floors + lockfile pin; runtime assertion counts via afterEach meta; npm bulk advisory endpoint; test.each row filter survives
 - [LOST-06 audit](project_lost06_audit.md) — PASS 5d62a0a; loop 2 PASS 07d9d0e (both should-fixes closed: AC14 message regex, AC9/AC11 µs text + xmin); harness ta-lost06
-- [LOST-07 audit](project_lost07_audit.md) — BLOCK 4d7f188: escalation loop M2 (failed waiting attempt not stuck) + M1 (break); count seeds created==next (U4/F7); worker.ts:528 test; req-status stale + SEC-02/PRIV-03
+- [LOST-07 audit](project_lost07_audit.md) — BLOCK 4d7f188 (M2, M1, equal count seeds); loop 2 PASS e9f1687: all kills confirmed; waiting-loop break E3 (and LOST-02 twin) survives, should-fix
 - [Equal seed columns](feedback_equal_seed_columns.md) — shared behaviour seeding two time columns equal cannot pin which one the adapter reads; plant column swaps
 - [Time-equality kills](feedback_time_equality_kills.md) — db-clock and tx-scope faults die only to a ms-floor equality; ask for µs text and xmin equality

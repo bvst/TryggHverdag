@@ -23,3 +23,6 @@ Related: [[lost02-audit]], [[bug-test-patterns]], [[shadowed-guards]]
 **LOST-07 (2026-10-07): the lesson did not carry to a copy.** escalation.ts copied the open's two-loop structure; LOST-02's A4
 (waiting attempt that throws not stuck) and A15 (break after a failure) both survived again at every level. When a module copies
 another's loop, plant the old loop's faults on the copy first.
+**Both loops (LOST-07 loop 2, 2026-10-07).** Plant the `break` in the second (waiting) loop as well as the first. In escalation.ts
+and in the open's watchdog.ts, a break after a stuck item survived L6 and L3: no test has two items past the stuck threshold
+where the first is held through the wait. Rate it by whether the run still fails: here it does (stuck >= 1), so it is should-fix.

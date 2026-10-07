@@ -26,3 +26,15 @@ extra,probe2,probe3,late,rg02}.mjs via ../ta-lost02/harness.mjs (REV 4d7f188); h
   from disk = 145 (claimed). RG-04: 2 hand entries == fresh measure (51/51, 18/18). RG-05 reports == HEAD; alerts 291/291.
 - Budget: alerts median 4.3 s/mutant, transform 57-72 %, import 19-25 %, tests 4-24 %; not test design.
 Related: [[lost06-audit]], [[second-path-isolation]], [[equal-seed-columns]], [[shared-suite-rg03-blind]]
+
+**Loop 2 (2026-10-07, e9f1687; HEAD e9653ce memory only): PASS.** Harness ta-lost07/loop2/{spec,spec2,spec3,spec4,rg02}.mjs via
+../harness2.mjs (REV e9f1687). 6 controls survive; every claimed kill confirmed, each by the new test only: M2 (E1) by AC16's
+failed-retry test, M1 (E2) by AC15 `first`, U4/U4b/U4c at L3 and F7/F7c at L2 ("expected 2 to be 3"), worker 528 `||`/`true`
+by the both-valid test, whole-string compare by the same-UUID test. config C1-C12 and infra I1-I7 killed. RG-02 replay (tests HEAD,
+config/worker/.tf at 8998079): 27 red (24/1/2), 193 green, as claimed. RG-03 by hand: two titles, r5 fixture, comment move only.
+- Should-fix: E3 `break` after a stuck alert in escalation's WAITING loop (escalation.ts:117) survives L6 + L3; the open's twin
+  (watchdog.ts:139, LOST-02, main) too. Not blocking: fires only after stuck.push, so the sweep still fails/pages; loses later
+  alerts' retry and overdue lines. Loop 1 never planted it (my miss).
+- Notes: C7 (line 133 trailing-slash check) equivalent, generic reason still distinct; C13 `[0-9a-f-]{36}` harmless (pings
+  nothing, check pages). REL-07 6 / REL-08 7 include loop-1 comment-only files, no status flip. process.json source==disk:
+  183/4/2, 525-540 all killed, 4 survivors on main.
