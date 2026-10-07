@@ -5,6 +5,12 @@ Newest first.
 
 ## Patterns worth checking every time
 
+### A guard moved into the adapter leaves its old reason behind (LOST-07 loop 3)
+When a later loop makes the adapter itself safe (e.g. /fail built on the URL's path), the earlier "why we refuse it"
+survives in TF error messages, test titles/comments, the PR body and decisions. Grep the old phrase across *.tf, tests,
+scripts and the PR draft, not just the file the implementer fixed. And for a runbook that quotes a start-up line: list
+every refusal the OLD rule let through and check the quote matches each one's actual line (quote the common prefix).
+
 ### A stricter check of an existing secret ships with the deploy, before the plan that validates it (LOST-07 loop 2)
 deploy-staging runs on every merge; infra-staging (which re-validates TF variables and re-sets the app env) is a
 later manual owner step. So when config.ts starts refusing spellings an earlier, looser TF rule let through, the

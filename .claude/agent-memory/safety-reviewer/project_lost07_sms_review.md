@@ -84,3 +84,19 @@ call-out in PR body + A-33 + D-116's "next plan refuses it" sentence, not a code
 Owner can pre-check the app's env in the Clever Cloud console (whitespace invisible).
 Notes: TF error "Anything else would ping nothing" untrue for slug and /<uuid>/; A-33's "Invalid value" also = `!=` or
 unset; guard skips when the worker URL is refused (TF-only writer makes it unreachable); no check runs, no open PR.
+
+## Loop 3: e9f1687..f7928e3, PASS (8e0b58d docs, 86996a9 tests, deda648 TF messages, f7928e3 config.ts comments)
+All four loop-2 items met. Verified myself: L6 escalation.system 75/75, config.test 68/68, infra.test 23/23. Scratch
+alias mutant (break after stuck.push in escalation.ts's WAITING loop): exactly the 2 new AC16 tests fail, 73 pass.
+Same break in the open's waiting loop (watchdog.ts:139 branch, :121 main) survives all 6 system files (457) = BUG-28's
+L6 claim true (L3 half unverified, no Docker). Real TF 1.16.4 (scratchpad/bin/terraform): both new messages print, a
+valid different pair plans clean, values never echoed. Code unchanged in loop 3 (comments/messages only).
+Should-fix given (no code): (1) A-33 quotes only "is not the check's address in its one spelling", but INF-08's
+prefix-only rule also let `/<uuid>/`, `?`, `#` through, whose start lines say "ends in a slash"/"has a query"/
+"has a fragment": quote the common prefix "not checking in with Healthchecks.io: HEALTHCHECKS_WORKER_URL" and say to
+read it in Clever Cloud's logs (deploy log can end first, BUG-27). (2) PR body bullet "A query, fragment or trailing
+slash could turn /fail into a success ping" untrue since loop 1's failureAddress (pathname + /fail, slash dropped,
+before query); and "so does the worker" overstates (worker checks path only, any https host).
+Notes: SMS TF message gives ?/# only the /fail reason (second guard); worker message lists them as other spellings.
+Stale "/fail appended ... misplace" rationale left in config.test.ts:219 title and infra.test.mjs:258-264 comment.
+PR body "about two minutes" vs A-33 "about 3"; L6 452 count predates loops 2-3.

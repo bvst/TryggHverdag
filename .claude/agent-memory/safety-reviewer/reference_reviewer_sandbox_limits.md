@@ -118,3 +118,10 @@ leaves /tmp/<21-char id>/ssr (file names are NOT content hashes; identical acros
 content: decode each module's inline sourceMappingURL base64, compare sourcesContent with the repo file of the same
 basename (all equal = unmutated run; one differing file = whose mutant). Others ran the very same mutants
 (test-auditor), so a mutant string alone is not proof. Check /proc/*/fd and cwd before rm. Don't touch ambiguous ones.
+
+**2026-10-07 (LOST-07 loop 3): avoid the /tmp ssr attribution problem entirely.** Prefix every vitest run with
+TMPDIR=<scratchpad>/tmp: the <id>/ssr folders land there, then rm -rf that one dir. Mutant without touching the repo:
+a scratch copy of the module with its relative imports sed'ed to absolute paths, and a scratch vitest config that is a
+plain `export default {root: <repo>, resolve: {alias: [{find: /^\.\/escalation\.ts$/, replacement: <copy>}]}, test:
+{include: [...]}}` (no `import 'vitest/config'`: it does not resolve from the scratchpad). Prove the alias took effect
+with a throwing probe appended to the copy. Terraform also at <scratchpad>/bin/terraform (1.16.4).
