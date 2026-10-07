@@ -798,7 +798,7 @@ new decision that supersedes it (see `00-working-agreement.md`).
   saying the worker has stopped.
 
 ## D-066 — Mutation testing runs Stryker's command runner, not its Vitest runner
-- **Date:** 2026-09-23 · **Status:** Accepted (delegated, D-031) · **Section:** 6
+- **Date:** 2026-09-23 · **Status:** Accepted (delegated, D-031); its grouping amended below, by D-098 and by D-117, and its `pnpm exec vitest run` command replaced by D-117 · **Section:** 6
 - **Context:** D-036 requires a mutation score on safety code. With
   `testRunner: 'vitest'`, Stryker reported **4.35 %** on the first run — which,
   taken at face value, says the domain tests are worthless.
@@ -4189,7 +4189,8 @@ any other path is work, not a candidate for the same treatment.
 ## D-117 — `worker.ts` gets a mutation group of its own, and each mutant's run starts Vitest directly (BUG-29)
 - **Date:** 2026-10-07 · **Status:** Accepted (delegated, D-031). It
   lowers no score and does not raise the budget · **Section:** 6 (amends
-  D-066's grouping; within D-036 and D-098)
+  D-066's grouping and replaces its `pnpm exec vitest run` command; within
+  D-036 and D-098)
 - **Context:** On LOST-07's pull request (#67), CI's required `mutation`
   check ran out of its 25-minute budget (job 112914873757): `spawnSync pnpm
   ETIMEDOUT`, the `process` group cut off after 7:23 and `api-process` never
@@ -4221,10 +4222,13 @@ any other path is work, not a candidate for the same treatment.
     run`, Vitest's own bin, instead of `pnpm exec vitest run`. The options,
     the tests and the configuration are unchanged.
   - The budget stays at 25 minutes.
-- **Why this cannot hide a weak test:** a narrower test set can only score
-  lower, never falsely higher (D-066's amendment). A future `worker.ts`
-  mutant that only `bin.test.ts` could kill would survive, and the gate would
-  name it.
+- **Why this cannot hide a weak test:** a narrower test set never scores
+  falsely higher (D-066's amendment). Dropping a test can turn a kill into a
+  survivor; the one way a score can rise is a mutant that made the dropped
+  test hang now failing fast in a kept test, which is still a real failure.
+  A future `worker.ts` mutant that only `bin.test.ts` could kill would
+  survive and be named in the log. It would block only below 80 %, so a few
+  such survivors could pass unseen in the score (`safety-reviewer`).
 - **Rejected:**
   - Raising the budget: the owner's, and D-036 asks for speed first.
   - `--pool=threads`: about 7 % more, but it changes how tests run (worker
@@ -4245,3 +4249,13 @@ any other path is work, not a candidate for the same treatment.
   112942878321: domain 6:08, healthchecks 1:45, journeys 2:26, alerts 6:42,
   process 7:36, api-process cut off). CI's run on the fix is the measure of
   record.
+- **CI's run on the fix** (#67, `2a65c3a`, job 112967666415): **21:07**,
+  3:53 under the budget, every file at 80 % or more and every score as
+  before. domain 5:31, healthchecks 1:38, journeys 2:13, alerts 6:15, worker
+  3:58, process 0:58, api-process 0:22. The margin is thin: the next task
+  that adds safety mutants may need more room, and the choice then is the
+  owner's (D-098). An overrun fails loudly, never green.
+- **Compared against:** the 189-mutant comparison was the scratch run
+  without `bin.test.ts` against the `process` group's JSON report from
+  `gate:full` at `ef8a8e4`. That report has since been overwritten; its log
+  shows the same 183/4/2 and the same four survivors (`test-auditor`).
