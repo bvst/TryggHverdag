@@ -521,11 +521,16 @@ export async function runWorkerProcess(
   // lines are the ones that do, and the ping URL is a secret. Never the
   // worker's own address: one check behind both would make "worker down" and
   // "SMS failing" one page, and an ok from either would clear the other's
-  // failing (D-115, D-116).
+  // failing (D-115, D-116). A check is its UUID, the URL's path, whatever host
+  // each URL is on: config.ts takes a ping URL only as "/" and a lower-case
+  // UUID, so equal paths are one check (D-116, review loop 2).
   let smsAlarm: SmsAlarm | undefined;
   if (!healthchecksSms.checkingIn) {
     write(`worker: the SMS check is not reporting: ${healthchecksSms.reason}\n`);
-  } else if (healthchecks.checkingIn && healthchecks.url === healthchecksSms.url) {
+  } else if (
+    healthchecks.checkingIn &&
+    new URL(healthchecks.url).pathname === new URL(healthchecksSms.url).pathname
+  ) {
     write(
       'worker: the SMS check is not reporting: HEALTHCHECKS_SMS_URL is the same address as ' +
         'HEALTHCHECKS_WORKER_URL, and the SMS check needs a check of its own.\n',

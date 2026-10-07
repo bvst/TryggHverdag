@@ -73,13 +73,29 @@ export function readHealthchecksSmsSetting(
 }
 
 /**
+ * The path of a check's ping URL: "/" and the check's UUID, in lower case, as
+ * Healthchecks.io shows it (D-116, review loop 2).
+ */
+const CHECK_PATH = /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
  * A ping URL from `variable`: usable only when set, a URL, https:, and the
  * check's address with nothing after it. The SMS check's failure signal is
  * its URL with /fail appended, so a query, a fragment or a trailing slash
  * would put /fail where Healthchecks.io does not read it as a failure, and
- * the page would never come (LOST-07, D-079). The worker's URL is read by the
- * same rule, so the two are read alike. Each refusal names the variable,
- * never the value.
+ * the page would never come (LOST-07, D-079).
+ *
+ * And one spelling per check, so the worker can compare the two settings
+ * (D-116, review loop 2): the value must be exactly its own parsed spelling,
+ * and its path "/" and a lower-case UUID. Healthchecks.io reads `/<uuid>` and
+ * `/<uuid>/` as one check, and the slug form names a check its UUID also
+ * names; the URL parser drops spaces, tabs and newlines, reads a backslash as
+ * a slash, and lower-cases the host. So two settings that differ as strings
+ * could still name one check, and a green ping to one would keep the other's
+ * check green. Any https: host is taken, as INF-08 takes it.
+ *
+ * The worker's URL is read by the same rule, so the two are read alike. Each
+ * refusal names the variable, never the value.
  */
 function readPingSetting(
   env: Record<string, string | undefined>,
@@ -118,6 +134,12 @@ function readPingSetting(
     return {
       checkingIn: false,
       reason: `${variable} ends in a slash; the ping URL is the check's address with nothing after it.`,
+    };
+  }
+  if (url.href !== value || !CHECK_PATH.test(url.pathname)) {
+    return {
+      checkingIn: false,
+      reason: `${variable} is not the check's address in its one spelling: expected https://, the host, "/" and the check's UUID in lower case, and nothing else.`,
     };
   }
   return { checkingIn: true, url: value };

@@ -15,9 +15,13 @@ variable "healthchecks_worker_url" {
 
   # The check's address and nothing after it: no query, no fragment, no
   # trailing slash, read by the same rule as the SMS check's URL (LOST-07).
+  # And one spelling per check: https://hc-ping.com/ and the UUID in lower
+  # case, as Healthchecks.io shows it. Healthchecks.io also reads /<uuid>/ and
+  # the slug form as the same check, so the `!=` on healthchecks_sms_url
+  # compares checks only when each has one spelling (D-116, review loop 2).
   validation {
-    condition     = can(regex("^https://hc-ping\\.com/[^/?#]+(/[^/?#]+)?$", var.healthchecks_worker_url))
-    error_message = "Expected the check's ping URL from Healthchecks.io: https://hc-ping.com/ followed by the check's UUID, and nothing after it (no query, fragment or trailing slash). Anything else would ping nothing, and a check that is never pinged never pages (INF-08). Set it in GitHub: Settings → Environments → staging → the secret HEALTHCHECKS_WORKER_URL."
+    condition     = can(regex("^https://hc-ping\\.com/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.healthchecks_worker_url))
+    error_message = "Expected the check's ping URL from Healthchecks.io: https://hc-ping.com/ followed by the check's UUID in lower case, as Healthchecks.io shows it, and nothing after it (no query, fragment or trailing slash). Anything else would ping nothing, and a check that is never pinged never pages (INF-08). Set it in GitHub: Settings → Environments → staging → the secret HEALTHCHECKS_WORKER_URL."
   }
 }
 
@@ -28,10 +32,14 @@ variable "healthchecks_sms_url" {
 
   # The check's address and nothing after it: the failure signal is this URL
   # with /fail on its path, which a query, a fragment or a trailing slash would
-  # misplace, so a failing SMS would page nobody (LOST-07).
+  # misplace, so a failing SMS would page nobody (LOST-07). And one spelling
+  # per check: https://hc-ping.com/ and the UUID in lower case, as
+  # Healthchecks.io shows it. Healthchecks.io also reads /<uuid>/ and the slug
+  # form as the same check, so the `!=` below compares checks only when each
+  # has one spelling (D-116, review loop 2).
   validation {
-    condition     = can(regex("^https://hc-ping\\.com/[^/?#]+(/[^/?#]+)?$", var.healthchecks_sms_url))
-    error_message = "Expected the staging-sms check's ping URL from Healthchecks.io: https://hc-ping.com/ followed by the check's UUID, and nothing after it (no query, fragment or trailing slash). Anything else would report to nothing, and a failing SMS would page nobody (LOST-07). Set it in GitHub: Settings → Environments → staging → the secret HEALTHCHECKS_SMS_URL."
+    condition     = can(regex("^https://hc-ping\\.com/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.healthchecks_sms_url))
+    error_message = "Expected the staging-sms check's ping URL from Healthchecks.io: https://hc-ping.com/ followed by the check's UUID in lower case, as Healthchecks.io shows it, and nothing after it (no query, fragment or trailing slash). Anything else would report to nothing, and a failing SMS would page nobody (LOST-07). Set it in GitHub: Settings → Environments → staging → the secret HEALTHCHECKS_SMS_URL."
   }
 
   # Two checks, never one: behind one address, "worker down" and "SMS failing"
