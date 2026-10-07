@@ -24,8 +24,9 @@ BUG-17 (the Android emulator sometimes stays in English past the wait),
 BUG-19 (no test checks every owner-approval path keeps its owners), BUG-20
 (graphile-worker's own logger prints its error object, past `log.ts`) and
 BUG-21 (an Android script test's timing margin fails under full-suite load),
-BUG-22 (the test-weakening check does not see the shared behaviour suites) and
-BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an advisory).
+BUG-22 (the test-weakening check does not see the shared behaviour suites),
+BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an advisory)
+and BUG-26 (a lint run during a mutation run fails on Stryker's sandbox).
 M1 closed with all four roadmap items done:
 SPIKE-01 (S1–S8), Section 4 closed with a conditional GO for the location SDK
 (D-086, full results in [04b-spike-results.md](04b-spike-results.md)), and the

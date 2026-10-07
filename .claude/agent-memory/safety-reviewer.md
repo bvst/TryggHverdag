@@ -5,6 +5,15 @@ Newest first.
 
 ## Patterns worth checking every time
 
+### A later non-critical push can replace a stored critical one at the provider (LOST-06)
+APNs stores only ONE notification per bundle ID for an offline device, "in most cases the latest" (Apple,
+"Sending notification requests to APNs"; apns-expiration 0 means delivered once and not stored). So any
+non-critical message sent to a responder WHILE an alert is open (a notice, a reminder) can evict the critical
+alert waiting for that offline phone. Stand-downs are fine (the alert is over); a later alert is fine (it is the
+latest). Ask, for every new kind: is it sent while an alert is open, to someone already sent the critical push?
+Server-side order cannot fix it; the push adapter (M3) and an L9 real-device test must. Spec claims like "the
+others still get the critical push" are true only at our port. FCM behaviour not checked.
+
 ### Allowlist or denylist of message kinds: ask which way a forgotten kind fails (LOST-03 loop 3)
 For a withdrawal or suppression keyed on kind, a kind nobody classified either gets withdrawn (denylist) or
 sent (allowlist). Sending a stale all-clear after a new alert is the dangerous direction; withdrawing a

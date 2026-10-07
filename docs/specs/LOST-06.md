@@ -318,8 +318,9 @@ acknowledges" (M3); and the SMS it stops (task 6).
      filter and in `SAFETY_PATHS`; a new folder would mean editing
      `ai-review.yml`, which only a hand merge can carry (D-075).
      Mutated in the `alerts` group (Mutation, below).
-   - **The SQL:** `adapters/journeys.ts`: the read, the write
-     (`acknowledgeInside`) and two changes to `resolveInside`. Owned,
+   - **The SQL:** `adapters/journeys.ts`: the read, the write (the
+     transaction in `recordAcknowledgement`) and two changes to
+     `resolveInside`. Owned,
      filtered, proven at L3 (D-095).
    - **The route:** `packages/contracts/src/alerts.ts` (new), `api.ts`
      (owned, D-097), and the wiring in `api-process.ts` (owned, mutated).
@@ -328,8 +329,14 @@ acknowledges" (M3); and the SMS it stops (task 6).
      `adapters/db.ts`, and the open (`openInside`).
 
 2. **The rule (`domain/journey.ts`).**
-   - `ALERT_EVENTS = ['acknowledge']`, with `alertTransition(alert, event)`,
-     a `switch` and a `never` default, as `transition` has.
+   - `ALERT_EVENTS = ['acknowledge']`, with `alertTransition(alert, event)`.
+     As built (green phase), it is a table of rules typed over
+     `ALERT_EVENTS` (`satisfies Record<…>`, so an event listed without a
+     rule is a type error), with a throw for an event type it does not
+     list. It is not the `switch` with a `never` default that `transition`
+     has: typescript-eslint's `no-unnecessary-condition` checks each `case`
+     against the discriminant, and refuses a one-case `switch`. It becomes a
+     `switch` with a `never` default once a second alert event exists.
    - The situation, `AlertForAcknowledgement`: the alert's `id`, `state`,
      `acknowledgedBy` (a user ID or null) and its journey's `responderIds`.
      The event: `{ type: 'acknowledge', responderId }`.
@@ -378,8 +385,8 @@ acknowledges" (M3); and the SMS it stops (task 6).
      holds a journey's row.
    - It reads no clock.
 
-4. **The store (`recordAcknowledgement`), one transaction, through
-   `acknowledgeInside`.**
+4. **The store (`recordAcknowledgement`), one transaction,** written inline
+   in the method.
    1. **The journey's row first** (D-112): `select … from journeys where id
       = (select journey_id from alerts where id = $a) for update`. No such
       alert: the rule's `ALERT_NOT_FOUND`.
@@ -1145,7 +1152,7 @@ was not read here; LOST-03's spec says it lists the same paths.
 | `apps/server/src/domain/*.test.ts` | L2 (test-author) | **yes** | **yes** | (its tests) |
 | `apps/server/src/modules/alerts/acknowledgement.ts` (new) | The service | **yes** | **yes** | `alerts` |
 | `apps/server/src/ports.ts` | `AlertStore`, its types, two `LogEvent`s | no | no | — |
-| `apps/server/src/adapters/journeys.ts` | `alertForAcknowledgement`, `recordAcknowledgement` (`acknowledgeInside`); `resolveInside` withdraws `WITHDRAWN_WHEN_RESOLVED` and holds per responder; the header comment | **yes** | **yes** | no (D-095) |
+| `apps/server/src/adapters/journeys.ts` | `alertForAcknowledgement`, `recordAcknowledgement` (one transaction, inline); `resolveInside` withdraws `WITHDRAWN_WHEN_RESOLVED` and holds per responder; the header comment | **yes** | **yes** | no (D-095) |
 | `apps/server/src/api.ts` | The route; `ApiDependencies.acknowledgements` | **yes** (D-097) | **yes** | no |
 | `apps/server/src/api-process.ts` | The wiring | **yes** | **yes** | `api-process` |
 | `apps/server/src/db/schema.ts` | The two columns, their check, the reference, `message_kind`'s value | **yes** | **yes** | no |
@@ -1334,7 +1341,24 @@ Each is named here so the task that owns it finds it. None blocks this task.
     row, or a notice kind of its own. AC4's "the database refuses a second
     `ACKNOWLEDGED` message" is the test that changes then;
   - once a responder can be removed, the store answers `ALERT_NOT_FOUND`
-    under the lock (approach item 4, step 3), and that branch gets its test.
+    under the lock (approach item 4, step 3), and that branch gets its test;
+  - **the open's withdrawal list is `ALERT_RESOLUTIONS`, an enum of
+    resolutions** (`code-reviewer`). An SMS stand-down that is not a
+    resolution can't join it without becoming an `alert_resolution` value,
+    so task 6 needs a domain list of its own (the fake already calls it
+    `WITHDRAWN_WHEN_OPENED`), with `openInside` and AC13's test changed to
+    match;
+  - **the stand-down's hold sees only what the resolution withdraws.** An
+    SMS the acknowledgement withdrew earlier (step 4), still in a port's
+    hands, would not hold a later stand-down; task 6 decides whether that
+    matters (`code-reviewer`);
+  - with a second alert event (`escalate`), `alertTransition` takes a
+    general alert situation and event, and returns to a `switch` with a
+    `never` default;
+  - `ACKNOWLEDGED` is now a label of both `alert_state` and `message_kind`.
+    Renaming the kind would need the owner (D-113), and is cheap only before
+    the first release. Task 6's SMS insert should use `resolveInside`'s
+    typed kind cast, not a hard-coded literal as the notice insert has.
 - **Task 7 ("They're safe"):** check `acknowledged_by` under the journey's
   lock (only the acknowledger may close); resolve through the resolve
   helper, which then withdraws unsent notices too.
