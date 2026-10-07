@@ -80,19 +80,20 @@ const CHECK_PATH = /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 /**
  * A ping URL from `variable`: usable only when set, a URL, https:, and the
- * check's address with nothing after it. The SMS check's failure signal is
- * its URL with /fail appended, so a query, a fragment or a trailing slash
- * would put /fail where Healthchecks.io does not read it as a failure, and
- * the page would never come (LOST-07, D-079).
+ * check's address in its one spelling, so the worker can compare the two
+ * settings (D-116, review loops 1 and 2): no query, no fragment, no trailing
+ * slash, the value exactly its own parsed spelling, and its path "/" and a
+ * lower-case UUID. Healthchecks.io reads `/<uuid>` and `/<uuid>/` as one
+ * check, a query or fragment leaves the check unchanged, and the slug form
+ * names a check its UUID also names; the URL parser drops spaces, tabs and
+ * newlines, reads a backslash as a slash, and lower-cases the host. So two
+ * settings that differ as strings could still name one check, and a green
+ * ping to one would keep the other's check green. Any https: host is taken,
+ * as INF-08 takes it.
  *
- * And one spelling per check, so the worker can compare the two settings
- * (D-116, review loop 2): the value must be exactly its own parsed spelling,
- * and its path "/" and a lower-case UUID. Healthchecks.io reads `/<uuid>` and
- * `/<uuid>/` as one check, and the slug form names a check its UUID also
- * names; the URL parser drops spaces, tabs and newlines, reads a backslash as
- * a slash, and lower-cases the host. So two settings that differ as strings
- * could still name one check, and a green ping to one would keep the other's
- * check green. Any https: host is taken, as INF-08 takes it.
+ * The SMS check's alarm builds /fail on the URL's path
+ * (adapters/healthchecks.ts), so for the failure signal this refusal is a
+ * second guard, not the only one (LOST-07, D-079).
  *
  * The worker's URL is read by the same rule, so the two are read alike. Each
  * refusal names the variable, never the value.
@@ -116,8 +117,9 @@ function readPingSetting(
       reason: `${variable} is not an https: URL, and the ping URL is never sent unencrypted.`,
     };
   }
-  // Read in the value itself: a bare "?" or "#" leaves no query or fragment
-  // in the parsed URL, and still misplaces /fail.
+  // Read in the value itself: a bare "?" or "#" leaves the parsed URL's search
+  // and hash empty, and the spelling check below takes any query or fragment,
+  // since the parser spells both back as given.
   if (value.includes('?')) {
     return {
       checkingIn: false,
