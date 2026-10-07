@@ -5,6 +5,21 @@ Newest first.
 
 ## Patterns worth checking every time
 
+### A second monitor URL: can it stand in for the first, and is its derived address built safely? (LOST-07)
+When a task adds a second ping URL beside the worker check, check (a) nothing refuses the same value for both (an ok
+ping each minute from the new check keeps the old check green while the beat is stale), and (b) any derived address
+(Healthchecks.io /fail) is built from the URL path, not appended to the string: a ?query URL turns failing into an ok
+ping. Prove it in-process: readXSetting + adapter with a stub fetch; the TF regex is usually prefix-only.
+
+### test.each titles from $name are truncated (~40 chars), so -t with a later phrase matches nothing
+The shared behaviour suite runs as test.each(...)('$name'): "-t <words from the middle>" gave 172 skipped, 0 run.
+Filter by the ID prefix ("LOST-07-AC3: alertsDue"). A "skipped" count is not a pass; read it.
+
+### Adapter SQL is not mutated on a PR (D-095): a 15-run L3 property may be its only guard
+Plant mutants at L3 for the safety corners of each new read; a property without examples can miss one (~1 in 7 here).
+Ask for fc examples that pin the corners (D-114 missing-half states).
+
+
 ### A later non-critical push can replace a stored critical one at the provider (LOST-06)
 APNs stores only ONE notification per bundle ID for an offline device, "in most cases the latest" (Apple,
 "Sending notification requests to APNs"; apns-expiration 0 means delivered once and not stored). So any
