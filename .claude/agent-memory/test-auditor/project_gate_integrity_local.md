@@ -62,3 +62,4 @@ Pushed, no open PR, check-runs total_count 0.
 2026-10-06 cloud (BUG-23/24 at 68b675c): 3 of 5; gh api: 13 contexts incl. mutation and traceability, code-owner review true, bypass_actors [], current_user_can_bypass never. Pushed, no PR, check-runs total_count 0. Main's ai-review.yml grants the review job `checks: read` (line 109), so the brief's 403 premise is stale.
 2026-10-07 cloud (LOST-06 at 5d62a0a/47510e7): 3 of 5; gh api: 13 contexts incl. mutation and traceability, code-owner review true,
 bypass_actors [], current_user_can_bypass never. Pushed, no open PR (only #62 dependabot), check-runs total_count 0.
+2026-10-07 cloud (LOST-07 at 4d7f188/37207ce): 3 of 5; gh api: 13 contexts incl. mutation/traceability, code-owner true, bypass [] never. Pushed, no PR (only #62 open), check-runs total_count 0. req:coverage rewrote docs/requirements-status.md (stale at HEAD); restored with node writeFileSync(git show HEAD:...).

@@ -19,3 +19,7 @@ Also: a shared behaviour that checks "never handed out again" inside a lease on 
 `sent_at is null` filter (use a zero lease), and a check that exists only in the fake's own test file binds the fake, not the
 adapter (D-100). Count Vitest unhandled errors as kills, or a crash-only fault (listener `once`) looks like a survivor.
 Related: [[lost02-audit]], [[bug-test-patterns]], [[shadowed-guards]]
+
+**LOST-07 (2026-10-07): the lesson did not carry to a copy.** escalation.ts copied the open's two-loop structure; LOST-02's A4
+(waiting attempt that throws not stuck) and A15 (break after a failure) both survived again at every level. When a module copies
+another's loop, plant the old loop's faults on the copy first.

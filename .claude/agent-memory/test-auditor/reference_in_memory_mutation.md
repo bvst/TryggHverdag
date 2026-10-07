@@ -122,3 +122,7 @@ commit, an edit to a TEST file (MIGRATIONS const, COMMITTED_SPEC) silently runs 
 the resolve's both end `where journey_id = ... returning`): include a distinctive neighbour line, or NOT APPLIED. A property test
 whose L3 run passed at base: estimate its odds offline by fc.assert-ing only the model (no DB) with the same arbitraries, runs and
 margin, across ~2000 seeds.
+**LOST-07 (2026-10-07).** Stryker's JSON statusReason holds Vitest's output: parse `Duration Ns (transform x%, import y%, tests z%)`
+per mutant to answer budget questions without running anything. Vitest leaves /tmp/<random>/ssr caches per startVitest; delete the
+ssr-only ones created in your own window (find -newermt) once no vitest runs. A test-kit behaviour file can be edited in memory
+like any served file (probe2 rewrote behaviour 10's seed).
