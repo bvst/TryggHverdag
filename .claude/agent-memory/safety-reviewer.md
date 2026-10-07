@@ -5,6 +5,14 @@ Newest first.
 
 ## Patterns worth checking every time
 
+### A stricter check of an existing secret ships with the deploy, before the plan that validates it (LOST-07 loop 2)
+deploy-staging runs on every merge; infra-staging (which re-validates TF variables and re-sets the app env) is a
+later manual owner step. So when config.ts starts refusing spellings an earlier, looser TF rule let through, the
+merged code reads the OLD applied value first. Ask: what rule applied the value now in the app env (git show
+origin/main:infra/...), what does the new code do with each spelling that rule took, and does the smoke test notice?
+(It reads /v1/health, never Healthchecks.io.) Usually a call-out in the PR body + owner to-do, not a code fix.
+I missed this in loop 1 (trailing slash, ?, #) and caught it in loop 2.
+
 ### A second monitor URL: can it stand in for the first, and is its derived address built safely? (LOST-07)
 When a task adds a second ping URL beside the worker check, check (a) nothing refuses the same value for both (an ok
 ping each minute from the new check keeps the old check green while the beat is stale), and (b) any derived address

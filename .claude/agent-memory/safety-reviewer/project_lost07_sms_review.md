@@ -64,3 +64,23 @@ groups; no check runs exist for 0b8c3c0/4d7f188 (gh api check-runs empty), CI ti
 checkLockWait in the fake (millisecondsOf lost its comment).
 Own slip: first adapter probe passed `send` (option is `fetch`), so two HEADs went to hc-ping.com with synthetic
 paths; proxy answered 403. Name stub options from the signature first.
+
+## Loop 2: 4d7f188..e9f1687, PASS (HEAD e9653ce after it = privacy reviewer's memory only)
+Code: config.ts readPingSetting adds `url.href !== value || !CHECK_PATH.test(url.pathname)` (CHECK_PATH = /^\/<lower-case
+uuid>$/, any https host); worker.ts compares `new URL(a).pathname === new URL(b).pathname` (only evaluated when both
+are taken); TF both vars ^https://hc-ping\.com/<lower uuid>$ + `!=`. Test-kit syntheticPingUrl(uuid?) builder.
+Verified myself: unit config+worker+infra+kit 226/226; L6 escalation.system 73/73; fake suite -t LOST-07 18/18; L3 PG16
+journeys.integration 172/172; L3 mutant unsentSmsCount by next_attempt_at killed (AC10). In-process 26 spellings: taken
+only with path /<uuid> (other port, userinfo, trailing-dot host, other host, ipv6), all caught by the pathname compare.
+Real TF 1.16.4: 19 pairs, only canonical+different taken. Scratch mutants: worker ||, href, ===, host, true, false, !==
+killed; config drop-href, drop-path, /i, no ^, no $, extra segment killed; `{11,12}` SURVIVES (no wrong-length case in
+config.test, only infra.test). Scratch Stryker report: config.ts 8 survivors (3 at :133 endsWith('/'), equivalent
+outcome; 5 on untouched :32 :41-42 :154-155), not "3".
+Should-fix given: the deploy precedes A-33's plan. INF-08 applied the worker URL under prefix-only ^https://hc-ping\.com/
+(main), so its form was never checked (pings since 09-25 exclude upper-case UUID only). The merge's deploy runs the new
+config.ts on it: a slug, /<uuid>/ or whitespace value -> "not checking in ... not the check's address in its one
+spelling", no ping, smoke still green (reads /v1/health), staging-worker pages ~3 min later. Loud, staging-only: a
+call-out in PR body + A-33 + D-116's "next plan refuses it" sentence, not a code fix (loosening reopens should-fix 1).
+Owner can pre-check the app's env in the Clever Cloud console (whitespace invisible).
+Notes: TF error "Anything else would ping nothing" untrue for slug and /<uuid>/; A-33's "Invalid value" also = `!=` or
+unset; guard skips when the worker URL is refused (TF-only writer makes it unreachable); no check runs, no open PR.
