@@ -105,3 +105,9 @@ and devices by SQL, then drop the db `with (force)` in `finally`.
   required checks and pull_request params. Local gate:integrity cannot read rules (no token) and says so.
 - One mutant plugin file with MUTANT env selecting anchor/replacement, plus thin configs spreading
   vitest.config.mjs, vitest.system.config.mjs or the l3 shim config, runs many mutants without repo writes.
+
+**2026-10-07 (LOST-07 loop 1):** guard not blocking (mkdir, heredoc writes worked). `vitest -t` cannot select the
+shared suite's test.each('$name') tests in journeys.integration.test.ts (list shows "$name"; -t skipped all 172):
+run the whole file (~37 s at L3). Real Terraform for validation checks: node_modules/.cache/terraform/1.16.4/
+linux_amd64/terraform; awk the variable blocks into a scratch dir, init, then plan -var ... ("No changes" = taken).
+raw.githubusercontent.com is reachable with curl; gh api for repos outside the session is 403.

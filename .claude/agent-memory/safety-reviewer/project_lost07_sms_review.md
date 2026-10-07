@@ -36,3 +36,31 @@ Notes: claim-to-send window (claimed SMS sent after an ack); escalate() treats u
 recorded; push stand-down held behind failed SMS retry (<= 60 s, by design); escalation.system.test.ts unowned;
 A-32 secret unverifiable (gh api environments/*/secrets is 403 through the proxy).
 Related: [[lost06-ack-review]], [[reviewer-sandbox-limits]].
+
+## Loop 1: 0b8c3c0..4d7f188, PASS (HEAD 83e80af after it = privacy reviewer's memory only)
+Code: config.ts refuses ?, #, trailing / (own reasons, both variables); healthchecks.ts failureAddress = new URL,
+pathname minus one trailing slash + /fail (query kept after); worker.ts:528 skips the SMS alarm when worker URL ===
+SMS URL; TF regex ^https://hc-ping\.com/[^/?#]+(/[^/?#]+)?$ on both + cross-variable != (TF 1.16); watchdog split into
+openDue() then escalateDue() always; domain escalate(): typeof acknowledgedBy === 'string', smsRaisedAt instanceof
+Date; EscalateRequest lost afterMs (adapter never used it; fake now const 120_000, pinned by shared suite + domain test).
+Adapter journeys.ts: comment-only. alerts.system LOST-02-AC19 set gained escalation_failed read (RG-03 reason written).
+Verified myself: L2 517/517 + worker 131/131; L6 4 system files 236/236; L3 PG16 escalation+alerts+journeys 211/211.
+Mutants (scratchpad/lost07-loop1-safety/mutant.mjs, multi-pair anchors): watchdog old order killed (escalation AC1 +
+alerts LOST-02-AC19); adapter read OPEN-only killed 3/3 at L3 (forced fast-check examples work); domain !== null x2,
+config x3, hc string-append, fake 60 s / 121 s, worker no-equal-check: all killed. worker `||` SURVIVES (131/131).
+Real TF plans: identical refused (message names both secrets, no value); leading space refused; TAKEN: "/ ", "\",
+trailing \n or \t, upper-case UUID, %-encoded char, ping-key/slug. UUID-only regex (lower-case 8-4-4-4-12) refuses all.
+Healthchecks.io hc/api/urls.py (raw.githubusercontent, 2026-10-07): ping/<uuid> and ping/<uuid>/ both success;
+<uuid>/fail fail; slug routes ping/<key>/<slug> + /fail, NO bare <key>/<slug>/; Django uuid converter lower-case only
+(upper-case UUID = 404, never-pinged check, sms_check_failed stage report each minute, stays new).
+Should-fix given: (1) alias spellings ("/ ", "\", whitespace, %xx, slug) of the worker's check pass config, the ===,
+and TF: SMS ok pings would keep the worker check green with the beat stale; staging-sms stays new. Fix = UUID-only
+pattern in TF + config.ts so != compares canonical forms; A-33 catches every alias at rollout (why not blocking).
+Relayed privacy note said ok to /<uuid>/ fails and pages: WRONG, /<uuid>/ is a success ping. (2) no runWorkerProcess
+test with both URLs set and different (production's config): `||` / `true` survivors at :528 turn the SMS check off
+whenever the worker checks in. Fix = one L2 test, checkIns [worker], created [sms], "reports once a minute" line.
+Notes: budget overrun = failed run (judgeMutationRun status null), never a pass; test-kit changed so CI runs all six
+groups; no check runs exist for 0b8c3c0/4d7f188 (gh api check-runs empty), CI time unmeasured. Stranded JSDoc above
+checkLockWait in the fake (millisecondsOf lost its comment).
+Own slip: first adapter probe passed `send` (option is `fetch`), so two HEADs went to hc-ping.com with synthetic
+paths; proxy answered 403. Name stub options from the signature first.
