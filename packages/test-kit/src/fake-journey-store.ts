@@ -75,16 +75,21 @@
  *     nothing changes; an ACTIVE or LOST_CONTACT journey is ended, HOME, at
  *     the store's now, and from LOST_CONTACT its alert is resolved;
  *   - resolving is one step: the journey's one unresolved alert, whatever its
- *     state, goes to RESOLVED at now with the resolution; every lost-contact
- *     message of it not sent and not withdrawn is withdrawn at now, keeping
- *     its attempts and last failure; and one stand-down per responder row of
- *     the journey is written, of the resolution's own kind, due at now, or,
- *     for a responder whose lost-contact message was withdrawn having been
- *     handed over at least once and due later than now, at that due time (the
- *     hold). No unresolved alert: no withdrawal and no stand-down, and the
- *     move stands. No responder row: no stand-down, and the resolution
- *     stands. A second stand-down of a kind for (alert, recipient) is refused,
- *     as the unique index refuses it, and nothing of the step is kept;
+ *     state, goes to RESOLVED at now with the resolution, keeping who is
+ *     recorded on it and since when; every message of it of a kind in
+ *     `WITHDRAWN_WHEN_RESOLVED` (the lost-contact pushes, and the notices that
+ *     someone is on it) not sent and not withdrawn is withdrawn at now,
+ *     keeping its attempts and last failure (D-111, D-113); and one
+ *     stand-down per responder row of the journey is written, of the
+ *     resolution's own kind, due at now, or, for a responder with withdrawn
+ *     messages that were handed over at least once and are due later than
+ *     now, at the latest of those due times (the hold, per responder:
+ *     LOST-06's approach item 5, D-114). One stand-down per responder,
+ *     however many of their messages were withdrawn. No unresolved alert: no
+ *     withdrawal and no stand-down, and the move stands. No responder row: no
+ *     stand-down, and the resolution stands. A second stand-down of a kind
+ *     for (alert, recipient) is refused, as the unique index refuses it, and
+ *     nothing of the step is kept;
  *   - an open also withdraws, at its now, every unsent and not yet withdrawn
  *     stand-down (kind BACK_IN_CONTACT or HOME) of every alert of the
  *     walker's journeys, this one's earlier alerts and the walker's earlier
@@ -117,12 +122,6 @@
  *   - an alert's `acknowledgedBy` and `acknowledgedAt` are both null, or both
  *     set, and `acknowledgedBy` must be a user, as the check and the foreign
  *     key hold them. No check ties the state to them (approach item 7);
- *   - resolving withdraws the unsent messages of every kind in
- *     `WITHDRAWN_WHEN_RESOLVED`, the notice included (reading 8), and holds a
- *     responder's stand-down until the latest due time among that
- *     responder's withdrawn messages that were handed over and are due later
- *     than now: one stand-down per responder, however many of their messages
- *     were withdrawn (approach item 5);
  *   - a fake given no clock throws when asked to record an acknowledgement,
  *     as it throws when asked about silence; a refusal it needs no time for
  *     is answered without one.

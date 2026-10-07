@@ -467,6 +467,23 @@ function parsedOrNull(text: string): Record<string, unknown> | null {
 const acknowledge = (api: ReturnType<typeof realApi>, credential: string, alertId: string) =>
   post(api, credential, `alerts/${alertId}/acknowledgement`);
 
+/** "I'm on it" through the API, its answer as sent: status, body text and headers. */
+async function acknowledgeAsSent(
+  api: ReturnType<typeof realApi>,
+  credential: string,
+  alertId: string,
+): Promise<{ status: number; text: string; headers: string }> {
+  const response = await api.request(apiPath(`alerts/${alertId}/acknowledgement`), {
+    method: 'POST',
+    headers: { authorization: `Bearer ${credential}` },
+  });
+  return {
+    status: response.status,
+    text: await response.text(),
+    headers: [...response.headers].map(([name, value]) => `${name}: ${value}`).join('\n'),
+  };
+}
+
 const home = (api: ReturnType<typeof realApi>, credential: string, journeyId: string) =>
   post(api, credential, `journeys/${journeyId}/home`);
 
@@ -611,6 +628,57 @@ describe('LOST-06 and SEC-07: nothing that refuses takes a lock, and what record
       await endTestPool(ackPool);
     }
     expect((await alertsOf(j.journeyId))[0]?.acknowledgedBy).toBe(r1.userId);
+  }, 30_000);
+
+  test('LOST-06-AC3: a stranger learns nothing of the alert’s state: with J’s alert OPEN, then ACKNOWLEDGED by R1 through the API, then RESOLVED by a fresh heartbeat, the walker, another walker, a responder of another journey only and an alert ID no alert has are each 404 ALERT_NOT_FOUND through the API, status, body and headers byte for byte the answer they got while it was OPEN; the tables are unchanged, and no line is written', async () => {
+    // SEC-07 and reading 5, on the real tables: "not a responder" comes
+    // before "resolved" and "taken", whatever the module reads first.
+    const log = fakeLog();
+    const api = realApi({ log });
+    const j = await lost({ responders: 2 });
+    const [r1] = j.responders as [Person, Person];
+    const otherWalker = await person();
+    const elsewhere = await silent({ responders: 1 });
+    const [theirResponder] = elsewhere.responders as [Person];
+    const strangers = [
+      ['the walker', j.walker.credential, j.alertId],
+      ['another walker', otherWalker.credential, j.alertId],
+      ['a responder of another journey only', theirResponder.credential, j.alertId],
+      ['an alert ID no alert has', r1.credential, syntheticUuid()],
+    ] as const;
+    const ask = async () => {
+      const answers: Awaited<ReturnType<typeof acknowledgeAsSent>>[] = [];
+      for (const [, credential, alertId] of strangers) {
+        answers.push(await acknowledgeAsSent(api, credential, alertId));
+      }
+      return answers;
+    };
+
+    const whileOpen = await ask();
+    // Control: what every stranger is told while the alert is OPEN.
+    for (const [index, [who]] of strangers.entries()) {
+      expect(whileOpen[index]?.status, who).toBe(404);
+      expect(parsedOrNull(whileOpen[index]?.text ?? '')?.['code'], who).toBe('ALERT_NOT_FOUND');
+      expect(whileOpen[index]?.text, who).toBe(whileOpen[0]?.text);
+    }
+
+    expect(await acknowledge(api, r1.credential, j.alertId)).toEqual({ status: 200, body: ON_IT });
+    const acknowledged = await recordOf(j.journeyId);
+    expect(acknowledged.alerts).toMatchObject([
+      { state: 'ACKNOWLEDGED', acknowledgedBy: r1.userId },
+    ]);
+
+    expect(await ask(), 'with the alert ACKNOWLEDGED').toEqual(whileOpen);
+    expect(await recordOf(j.journeyId)).toEqual(acknowledged);
+
+    const back = await store().recordHeartbeat(await freshHeartbeat(j.journeyId));
+    expect(back.outcome).toBe('back_in_contact');
+    const resolved = await recordOf(j.journeyId);
+    expect(resolved.alerts).toMatchObject([{ state: 'RESOLVED', acknowledgedBy: r1.userId }]);
+
+    expect(await ask(), 'with the alert RESOLVED').toEqual(whileOpen);
+    expect(await recordOf(j.journeyId)).toEqual(resolved);
+    expect(log.events).toEqual([]);
   }, 30_000);
 });
 

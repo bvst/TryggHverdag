@@ -557,6 +557,77 @@ describe('LOST-06 and SEC-07: only a responder of the alert’s journey can ackn
     }
   });
 
+  test.each(['a fresh heartbeat', '"I’m home"'] as const)(
+    'LOST-06-AC3: a stranger learns nothing of the alert’s state: with J’s alert OPEN, then ACKNOWLEDGED by R1, then RESOLVED by %s, W’s own device, another walker, a responder of another journey only and an alert ID no alert has are each 404 ALERT_NOT_FOUND, status, body and headers byte for byte the answer they got while it was OPEN; nothing changes, and no line is written',
+    async (how) => {
+      // SEC-07 and reading 5: "not a responder" comes before "resolved" and
+      // "taken", so neither state can be learned by someone who does not
+      // follow the journey, whatever the module reads first.
+      const w = world();
+      const { walker, journeyId, alertId, responders } = await lost(w, 2);
+      const [r1] = responders as [RegisteredDevice, RegisteredDevice];
+      const otherWalker = w.walker();
+      const elsewhere = w.responder();
+      await w.seed(w.walker(), [elsewhere.userId], { silentForMs: MINUTE });
+      const noAlert = syntheticUuid();
+      const strangers = [
+        ['W’s own device', walker, alertId],
+        ['another walker', otherWalker, alertId],
+        ['a responder of another journey only', elsewhere, alertId],
+        ['R1, for an alert ID no alert has', r1, noAlert],
+      ] as const;
+      /** Each stranger's "I'm on it", as sent: status, body text and headers. */
+      const ask = async () => {
+        const answers: Pick<Answer, 'status' | 'text' | 'headers'>[] = [];
+        for (const [, device, id] of strangers) {
+          const { status, text, headers } = await w.acknowledge(device, id);
+          answers.push({ status, text, headers });
+        }
+        return answers;
+      };
+
+      const whileOpen = await ask();
+      // Control: what every stranger is told while the alert is OPEN.
+      for (const [index, [who]] of strangers.entries()) {
+        expect(whileOpen[index]?.status, who).toBe(404);
+        expect(parsedOrNull(whileOpen[index]?.text ?? ''), who).toEqual({
+          defined: true,
+          code: 'ALERT_NOT_FOUND',
+          status: 404,
+          message: expect.any(String) as unknown,
+        });
+        expect(whileOpen[index]?.text, who).toBe(whileOpen[0]?.text);
+      }
+
+      expect((await w.acknowledge(r1, alertId)).status).toBe(200);
+      expect(w.alertsOf(journeyId)).toMatchObject([
+        { state: 'ACKNOWLEDGED', acknowledgedBy: r1.userId },
+      ]);
+      const acknowledged = w.recordOf(journeyId);
+      const linesBeforeAcknowledged = w.log.events.length;
+
+      expect(await ask(), 'with the alert ACKNOWLEDGED').toEqual(whileOpen);
+      expect(w.recordOf(journeyId)).toEqual(acknowledged);
+      expect(w.log.events.slice(linesBeforeAcknowledged)).toEqual([]);
+
+      if (how === 'a fresh heartbeat') {
+        await w.heartbeat(walker, journeyId);
+      } else {
+        expect((await w.home(walker, journeyId)).status).toBe(200);
+      }
+      expect(w.alertsOf(journeyId)).toMatchObject([
+        { state: 'RESOLVED', acknowledgedBy: r1.userId },
+      ]);
+      const resolved = w.recordOf(journeyId);
+      const linesBeforeResolved = w.log.events.length;
+
+      expect(await ask(), 'with the alert RESOLVED').toEqual(whileOpen);
+      expect(w.recordOf(journeyId)).toEqual(resolved);
+      expect(w.log.events.slice(linesBeforeResolved)).toEqual([]);
+      expect(w.acknowledgementLines()).toEqual([]);
+    },
+  );
+
   test('LOST-06-AC3: with no credential, or an unknown one, "I’m on it" is 401 UNAUTHORIZED and nothing changes', async () => {
     const w = world();
     const { journeyId, alertId, responders } = await lost(w, 2);
