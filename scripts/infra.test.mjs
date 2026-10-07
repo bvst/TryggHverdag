@@ -256,12 +256,14 @@ describe('LOST-07: the ping URL the SMS check reports to', () => {
 
 describe('LOST-07: the two ping URLs are each a plain check address, and never the same one', () => {
   // LOST-07 review loop 1 (safety-reviewer and code-reviewer, REL-07,
-  // REL-08). The SMS check reports `failing` to its URL with /fail appended,
-  // so a query, a fragment or a trailing slash would misplace it and page
-  // nobody; the worker's URL is held to the same rule, so both are read
-  // alike. And the two must differ: one check behind both would make "worker
-  // down" and "SMS failing" one page, and an ok from one would clear the
-  // other's failing.
+  // REL-08). A query, a fragment or a trailing slash still names the same
+  // check, so each is refused: each check then has one spelling, and the two
+  // URLs can be compared (D-116). The SMS check's alarm builds /fail on the
+  // URL's path, since loop 1, so none of them misplaces it; for the failure
+  // signal the refusal is a second guard. The worker's URL is held to the same
+  // rule, so both are read alike. And the two must differ: one check behind
+  // both would make "worker down" and "SMS failing" one page, and an ok from
+  // one would clear the other's failing.
   const variables = read('infra/staging/variables.tf');
   const RID = '0f0e0d0c';
 
@@ -341,6 +343,10 @@ describe('LOST-07: the two ping URLs are each a plain check address, and never t
         ['a path of two segments, the UUID second', `${host}/ping/${check}`],
         ['an empty path', host],
         ['a UUID too short', `${host}/${check.slice(0, -1)}`],
+        // Its last group one hex digit long (review loop 3), as config.ts's
+        // one-spelling test refuses it: a hex digit, so no other entry here
+        // stands in for it.
+        ['a UUID one hex digit too long', `${host}/${check}0`],
         ['not a UUID', `${host}/${pingKey}`],
       ];
 

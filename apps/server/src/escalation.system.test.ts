@@ -1641,6 +1641,48 @@ describe('LOST-07, AR-06 and D-108: a held row never hides an escalation', () =>
     expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
   });
 
+  // The test above in the other order (D-116, review loop 3: "in both
+  // orders"). There the alert the wait escalates is the last one asked about,
+  // so a loop that stopped once it had escalated an alert would lose nothing.
+  // Here it is the first, and such a loop would never wait for the second: no
+  // overdue line, no stuck alert, and a sweep that beats over an escalation
+  // nobody made.
+
+  test('LOST-07-AC16: of two alerts past 2 min 30 s, each with its journey’s row held, the waiting loop goes on past an alert it escalates: the first, read first, has its holder let go within its wait and is ESCALATED with an SMS for each of its responders; the second, held through its wait, is stuck, with one escalation_overdue line naming it; the sweep fails, escalating one and finding one stuck, and records no beat; let go, the next sweep escalates the second', async () => {
+    const w = world();
+    const first = await lost(w, 2);
+    const second = await lost(w, 3);
+    w.clock.advance(TWO_MINUTES + STUCK_AFTER);
+    const beat = await w.beats.lastBeat();
+    const asked = w.store.escalateRequests().length;
+    w.store.holdUntilWaited(first.journeyId);
+    w.store.hold(second.journeyId);
+
+    expect(await w.watchdog.sweep()).toEqual({ ok: false, opened: 0, escalated: 1, stuck: 1 });
+
+    // Both skipped without a wait, then both waited for, in the order read.
+    expect(w.store.escalateRequests().slice(asked)).toEqual([
+      { alertId: first.alertId },
+      { alertId: second.alertId },
+      { alertId: first.alertId, lockWaitMs: 5 * SECOND },
+      { alertId: second.alertId, lockWaitMs: 5 * SECOND },
+    ]);
+    expect(w.log.events).toEqual([{ event: 'escalation_overdue', alertId: second.alertId }]);
+    expect(w.alertsOf(first.journeyId).map(({ state }) => state)).toEqual(['ESCALATED']);
+    expect(recipientsOf(w.smsOf(first.journeyId))).toEqual([...first.responderIds].sort());
+    expect(
+      w.alertsOf(second.journeyId).map(({ state, smsRaisedAt }) => [state, smsRaisedAt]),
+    ).toEqual([['OPEN', null]]);
+    expect(w.smsOf(second.journeyId)).toEqual([]);
+    expect(await w.beats.lastBeat()).toEqual(beat);
+
+    // Let go, the next sweep escalates the second, and beats.
+    w.store.release(second.journeyId);
+    expect(await w.watchdog.sweep()).toEqual({ ...QUIET_SWEEP, escalated: 1 });
+    expect(recipientsOf(w.smsOf(second.journeyId))).toEqual([...second.responderIds].sort());
+    expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
+  });
+
   test('LOST-07-AC16: of two alerts past 2 min 30 s, both journeys’ rows held through the wait, each is waited for once, in the order read, and each is stuck: two escalation_overdue lines, one naming each alert; the sweep fails, escalating none and finding two stuck, and records no beat; let go, the next sweep escalates both', async () => {
     const w = world();
     const first = await lost(w, 2);

@@ -208,15 +208,16 @@ describe('readHealthchecksSmsSetting', () => {
   });
 });
 
-// LOST-07 review loop 1 (safety-reviewer, REL-07, D-079): the SMS check's
-// `failing` is its ping URL with /fail appended. A URL with a query, a
-// fragment or a trailing slash would put /fail in the wrong place
-// (`…?rid=x/fail`, `…#x/fail`, `…//fail`), and the failure would go to an
-// address Healthchecks.io does not read as one: a page that never comes. So
-// both settings refuse them at start, with a reason of their own; the
-// worker's too, so the two addresses are read by one rule.
+// LOST-07 review loop 1 (safety-reviewer, REL-07, D-079). A URL with a query,
+// a fragment or a trailing slash still names the same check, so each is
+// refused at start, with a reason of its own: each check then has one
+// spelling, and the two settings can be compared (D-116). Since loop 1 the SMS
+// check's alarm builds /fail on the URL's path (adapters/healthchecks.ts), so
+// none of them misplaces /fail any more; for the failure signal the refusal is
+// a second guard. The worker's setting is refused alike, so the two addresses
+// are read by one rule.
 
-describe('LOST-07: a ping URL that would misplace /fail is refused at start', () => {
+describe('LOST-07: a ping URL with a query, a fragment or a trailing slash is refused at start, so each check has one spelling', () => {
   const RID = syntheticUuid();
   /** A ping key as Healthchecks.io's slug form carries one: credential-like, never a real one (RG-07). */
   const PING_KEY = syntheticCredential().slice(0, 22);
