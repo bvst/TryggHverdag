@@ -496,8 +496,8 @@ carriers; and the canary's use of all this (task 9).
      "Healthchecks.io"**, so INF-08's tests, which count the lines that do,
      keep their meaning; it says "the SMS check".
    - **Infrastructure**, as INF-08's: a Terraform variable
-     `healthchecks_sms_url`, required, sensitive, validated as a
-     `https://hc-ping.com/` URL; the app's `HEALTHCHECKS_SMS_URL` from it and
+     `healthchecks_sms_url`, required, sensitive, validated as exactly
+     `https://hc-ping.com/<uuid>` (D-116, loop 2); the app's `HEALTHCHECKS_SMS_URL` from it and
      from nowhere else; `TF_VAR_healthchecks_sms_url` from the `staging`
      environment's secret in the plan and the apply jobs, and nowhere else.
      Owner to-dos A-32 and A-33 (Modules and files affected).
@@ -870,6 +870,13 @@ L6".** *(LOST-07)*
   worker says once at start why it is not reporting, never the value, and
   runs; with a valid one, it says once that it reports; neither line contains
   "Healthchecks.io".
+- **And** (D-116, review loops 1 and 2) a ping URL, the worker's or the SMS
+  check's, is taken only when the value is exactly its own parsed spelling and
+  its path is `/` and a lower-case UUID: a query, a fragment, a trailing slash,
+  a space, a backslash, a percent-encoded character or the slug form is
+  refused, each refusal naming the variable, never the value. Two settings
+  with the same UUID are the same check, and the worker makes no SMS alarm for
+  it and says so once at start.
 
 **LOST-07-AC12 — In M2 no SMS can be sent, and the worker says so.**
 *(LOST-07)*
@@ -997,8 +1004,10 @@ existing row.** *(LOST-07)*
 **LOST-07-AC20 — The SMS check's ping URL reaches the worker from the staging
 environment's secret, and from nowhere else.** *(LOST-07; D-079)*
 - **Then** `infra/staging/variables.tf` declares `healthchecks_sms_url`,
-  sensitive, required, and validated as a `https://hc-ping.com/` URL, with an
-  error message that says where to set it
+  sensitive, required, and validated as exactly `https://hc-ping.com/<uuid>`,
+  the UUID in lower case (as is `healthchecks_worker_url`, D-116's loop-2
+  amendment), and different from `healthchecks_worker_url`, with error
+  messages that say where to set it
 - **And** `main.tf` gives the app `HEALTHCHECKS_SMS_URL` from that variable,
   and names the variable nowhere else
 - **And** `infra-staging.yml`'s plan and apply jobs each set

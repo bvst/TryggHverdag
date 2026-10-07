@@ -4140,3 +4140,33 @@ any other path is work, not a candidate for the same treatment.
     the URL's path, and `HEALTHCHECKS_SMS_URL` must differ from
     `HEALTHCHECKS_WORKER_URL`, in Terraform and in the worker: one green ping
     must never keep the other check green.
+- **Amended in review loop 2 (2026-10-07), from `safety-reviewer` and
+  `test-auditor`:**
+  - **One spelling per check.** `safety-reviewer` found that "different"
+    compared spellings, not checks. Healthchecks.io takes `/<uuid>` and
+    `/<uuid>/` as the same success ping, and the slug form
+    (`/<ping-key>/<slug>`) names a check its UUID also names. So the worker's
+    URL with a trailing slash, space, tab or backslash, a percent-encoded
+    character, or the slug form all passed both guards. As the SMS secret, any
+    of them would keep the worker's check green while the watchdog was down,
+    and `staging-sms` would never be pinged.
+    - **Terraform** takes each variable only as
+      `https://hc-ping.com/<uuid>`, the UUID in lower case, and nothing else.
+      `!=` then compares one spelling per check.
+    - **`config.ts`** takes a ping URL only when the value is exactly the
+      parsed URL's own spelling, and its path is `/` and a lower-case UUID.
+      Any https host stays allowed, as in INF-08, so tests keep their loopback
+      address.
+    - **The worker** reads two settings as the same check when their UUIDs are
+      equal.
+    - The slug form is given up. Healthchecks.io shows the UUID form by
+      default, and A-23, A-32 and the error messages already ask for it. If a
+      saved secret uses the slug form, the next `infra-staging` plan refuses it
+      loudly.
+  - **Three tests the code already passes** (`test-auditor`):
+    - an escalation held past its limit whose retry then fails counts as stuck;
+    - one alert's failed escalation stops no other;
+    - the shared SMS count is held to the time an SMS was written, not when it
+      is next due (D-100).
+  - **A test of the configuration that will run:** both URLs set and
+    different. Two mutants on the equal-URL guard survived without it.
