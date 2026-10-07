@@ -28,6 +28,6 @@
 - [Shared suite RG-03 blind spot](feedback_shared_suite_rg03_blind.md) — tests:changes/test-weakening hook only see *.test.*; journey-store-behaviour.ts diffs need a by-hand byte proof
 - [BUG-23/24 audit](project_bug23_24_audit.md) — PASS 68b675c and delta c7975fe; override floors + lockfile pin; runtime assertion counts via afterEach meta; npm bulk advisory endpoint; test.each row filter survives
 - [LOST-06 audit](project_lost06_audit.md) — PASS 5d62a0a; loop 2 PASS 07d9d0e (both should-fixes closed: AC14 message regex, AC9/AC11 µs text + xmin); harness ta-lost06
-- [LOST-07 audit](project_lost07_audit.md) — BLOCK 4d7f188 (M2, M1, equal count seeds); loop 2 PASS e9f1687: all kills confirmed; waiting-loop break E3 (and LOST-02 twin) survives, should-fix
+- [LOST-07 audit](project_lost07_audit.md) — BLOCK 4d7f188 (M2, M1, equal count seeds); loop 2 PASS e9f1687; loop 3 PASS f7928e3: S3 killed, mirror break-after-escalated (E3c) survives, should-fix; BUG-28 confirmed on main at L6
 - [Equal seed columns](feedback_equal_seed_columns.md) — shared behaviour seeding two time columns equal cannot pin which one the adapter reads; plant column swaps
 - [Time-equality kills](feedback_time_equality_kills.md) — db-clock and tx-scope faults die only to a ms-floor equality; ask for µs text and xmin equality

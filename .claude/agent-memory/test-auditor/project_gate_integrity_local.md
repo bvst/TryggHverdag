@@ -64,3 +64,4 @@ Pushed, no open PR, check-runs total_count 0.
 bypass_actors [], current_user_can_bypass never. Pushed, no open PR (only #62 dependabot), check-runs total_count 0.
 2026-10-07 cloud (LOST-07 at 4d7f188/37207ce): 3 of 5; gh api: 13 contexts incl. mutation/traceability, code-owner true, bypass [] never. Pushed, no PR (only #62 open), check-runs total_count 0. req:coverage rewrote docs/requirements-status.md (stale at HEAD); restored with node writeFileSync(git show HEAD:...).
 2026-10-07 cloud (LOST-07 loop 2 at e9f1687): 3 of 5; gh api: same 13 contexts, code-owner true, bypass [] never, enforcement active. Pushed, no PR (only #62), check-runs total_count 0. req:coverage left the report unchanged (matches HEAD).
+2026-10-07 cloud (LOST-07 loop 3 at f7928e3): 3 of 5; gh api: same 13 contexts, code-owner true, bypass [] never, active. Pushed, no PR (only #62), check-runs total_count 0. req:coverage left the report unchanged.

@@ -38,3 +38,15 @@ config/worker/.tf at 8998079): 27 red (24/1/2), 193 green, as claimed. RG-03 by 
 - Notes: C7 (line 133 trailing-slash check) equivalent, generic reason still distinct; C13 `[0-9a-f-]{36}` harmless (pings
   nothing, check pages). REL-07 6 / REL-08 7 include loop-1 comment-only files, no status flip. process.json source==disk:
   183/4/2, 525-540 all killed, 4 survivors on main.
+
+**Loop 3 (2026-10-07, f7928e3; HEAD d4cb152 docs/memory only): PASS.** Harness ta-lost07/loop3/{spec,spec2,spec-main}.mjs via
+../harness2.mjs. Every claim confirmed, each kill by the new tests only: E3 and E3b (fail 2 of 75, the two new AC16 tests; 2 of 241
+across the four L6 suites), plus reverse order, first-only, last-only, wrong-alert overdue, double push. CHECK_PATH {11,12}/{12,13}
+killed by the too-short/too-long cases (and Stryker's {0,12}/{12,}); config.ts:133 false/emptied/startsWith killed ("expected 6
+to be 7"). Leak mutants (pathname, value in the general reason) killed 26/28. config.ts: 544 AST leaf tokens identical (skip JSDoc
+nodes; the raw ts scanner loses sync on backticks in comments), emit with removeComments identical.
+- Should-fix S4: E3c `break` after `escalated += 1` in the WAITING loop survives L6 x4 + L3 escalation: both new tests put the held
+  alert first. Mirror order (first let go, second held) kills it. Watchdog twin W8c (break after opened) survives too, on main.
+- BUG-28 replayed on MAIN at L6 (SERVE_ALL = git diff --name-only main..HEAD -- apps packages, served from e695e8a): break after
+  stuck survives main's 3 L6 alert suites (166); sanity (loop removed) killed 5. BUG-28's lines 137-139 and "four suites" are the
+  branch's. Notes: .tf too-long ({12,13}) survives infra.test.mjs; other UUID groups' quantifiers survive config.test.ts (harmless).
