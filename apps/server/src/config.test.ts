@@ -218,6 +218,8 @@ describe('readHealthchecksSmsSetting', () => {
 
 describe('LOST-07: a ping URL that would misplace /fail is refused at start', () => {
   const RID = syntheticUuid();
+  /** A ping key as Healthchecks.io's slug form carries one: credential-like, never a real one (RG-07). */
+  const PING_KEY = syntheticCredential().slice(0, 22);
 
   test.each([
     ['HEALTHCHECKS_SMS_URL', readHealthchecksSmsSetting],
@@ -244,11 +246,15 @@ describe('LOST-07: a ping URL that would misplace /fail is refused at start', ()
         }
       }
       // Each its own reason, and none of the reasons for unset, not a URL or
-      // not https:.
+      // not https:, nor the one-spelling rule's (review loop 2). The slug form
+      // has no query, no fragment and no trailing slash, so only that general
+      // rule refuses it (review loop 3): a trailing slash that fell through to
+      // the general rule would still be refused, but with its own reason gone.
       const others = [
         {},
         { [variable]: `http://hc-ping.com/${CHECK}` },
         { [variable]: `hc-ping.com/${CHECK}` },
+        { [variable]: `https://hc-ping.com/${PING_KEY}/staging-worker` },
       ].map((env) => reasonOf(read(env)));
       expect(new Set([...reasons.values(), ...others]).size).toBe(reasons.size + others.length);
 
@@ -290,6 +296,10 @@ describe('LOST-07: one spelling per check', () => {
     ['a leading space', ` ${HOST}/${check}`],
     ['an upper-case UUID', `${HOST}/${check.toUpperCase()}`],
     ['a percent-encoded character in the UUID', `${HOST}/%61${check.slice(1)}`],
+    // The UUID's length is part of its one spelling (review loop 3): its last
+    // group one hex digit short, or one long.
+    ['a UUID one hex digit too short', `${HOST}/${check.slice(0, -1)}`],
+    ['a UUID one hex digit too long', `${HOST}/${check}0`],
     ['the slug form, /<ping-key>/<slug>', `${HOST}/${pingKey}/staging-worker`],
     ['an upper-case host', `https://HC-PING.COM/${check}`],
     ['a path of two segments, the UUID first', `${HOST}/${check}/fail`],
@@ -298,9 +308,16 @@ describe('LOST-07: one spelling per check', () => {
     ['an empty path', `https://${check}.hc-ping.com`],
   ];
 
-  /** Whether `text` holds any marker: the UUID in any case or spelling, or the ping key. */
+  /**
+   * Whether `text` holds any marker: the UUID in any case or spelling, or the
+   * ping key. The UUID's marker leaves out its first digit, which the
+   * percent-encoded spelling changes, and its last, which the UUID one digit
+   * too short drops (review loop 3), so every refused value holds it.
+   */
   const holdsAMarker = (text: string) =>
-    [check.slice(1), pingKey].some((marker) => text.toLowerCase().includes(marker.toLowerCase()));
+    [check.slice(1, -1), pingKey].some((marker) =>
+      text.toLowerCase().includes(marker.toLowerCase()),
+    );
 
   describe.each([
     ['HEALTHCHECKS_WORKER_URL', readHealthchecksSetting],
