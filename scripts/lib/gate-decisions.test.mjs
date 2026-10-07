@@ -558,13 +558,25 @@ describe('the mutation runs of this repository', () => {
           'apps/server/src/escalation.system.test.ts',
         ],
       }),
+      // RG-03 (BUG-29, D-117): worker.ts leaves the process group for a group
+      // of its own, `worker`, just before it, against worker.test.ts and
+      // process.test.ts, in that order, under the root configuration. On
+      // LOST-07's pull request the mutation check ran out of its 25 minutes,
+      // and bin.test.ts, about 8 s of CPU per mutant, killed none of
+      // worker.ts's 189 mutants on its own: without it, each of them ended
+      // with the same status. The process group keeps bin/worker.ts and
+      // process.ts and its three tests, bin.test.ts first. Every other group
+      // is unchanged, and no path is claimed twice or left out (the next
+      // test). A narrower test set can only lower the score (D-066's
+      // amendment).
+      {
+        name: 'worker',
+        paths: ['apps/server/src/worker.ts'],
+        tests: ['apps/server/src/worker.test.ts', 'apps/server/src/process.test.ts'],
+      },
       {
         name: 'process',
-        paths: [
-          'apps/server/src/worker.ts',
-          'apps/server/src/bin/worker.ts',
-          'apps/server/src/process.ts',
-        ],
+        paths: ['apps/server/src/bin/worker.ts', 'apps/server/src/process.ts'],
         tests: [
           'apps/server/src/bin/bin.test.ts',
           'apps/server/src/worker.test.ts',
@@ -617,11 +629,14 @@ describe('the mutation runs of this repository', () => {
   // D-098 moves these three files to a group of their own, so the pin moved
   // with it: one run each still, now against the three tests that can kill
   // their mutants, bin.test.ts first among them.
-  test.each([
-    ['apps/server/src/worker.ts'],
-    ['apps/server/src/bin/worker.ts'],
-    ['apps/server/src/process.ts'],
-  ])(
+  //
+  // RG-03 (BUG-29, D-117): worker.ts leaves this table. D-117 mutates it in a
+  // run of its own, without bin.test.ts, which killed none of its mutants on
+  // its own; the test after this one pins that run exactly, so worker.ts is
+  // still held to one run. bin/worker.ts and process.ts keep this pin as it
+  // was: bin.test.ts is the only test that runs the real worker process, and
+  // these two are what it proves.
+  test.each([['apps/server/src/bin/worker.ts'], ['apps/server/src/process.ts']])(
     'BUG-12: %s is mutated in the process run, against bin.test.ts and the worker and process tests',
     (file) => {
       const runs = mutationRuns().filter((run) => run.paths.includes(file));
@@ -638,6 +653,31 @@ describe('the mutation runs of this repository', () => {
       ]);
     },
   );
+
+  test('BUG-29: worker.ts is mutated in one run, its own, worker, against worker.test.ts and process.test.ts and not bin.test.ts (D-117)', () => {
+    // On LOST-07's pull request the mutation check ran out of its 25 minutes
+    // inside the process group. bin.test.ts is about 8 s of CPU per mutant,
+    // and every one of worker.ts's 189 mutants paid for it; without it, each
+    // ended with the same status. The run is pinned whole: no Vitest
+    // configuration of its own, so the root one, as the process run.
+    const runs = mutationRuns().filter((run) => run.paths.includes('apps/server/src/worker.ts'));
+
+    expect(runs).toEqual([
+      {
+        name: 'worker',
+        paths: ['apps/server/src/worker.ts'],
+        tests: ['apps/server/src/worker.test.ts', 'apps/server/src/process.test.ts'],
+      },
+    ]);
+  });
+
+  test('BUG-29: the worker group runs immediately before the process group (D-117)', () => {
+    const names = MUTATION_GROUPS.map((group) => group.name);
+
+    expect(names, 'there is no worker group').toContain('worker');
+    expect(names, 'there is no process group').toContain('process');
+    expect(names.indexOf('process') - names.indexOf('worker')).toBe(1);
+  });
 
   test('BUG-12: api-process.ts is mutated in a run of its own, against its own tests', () => {
     // At 62.5 % it sat inside a pooled run that passed. Its own run, judged
