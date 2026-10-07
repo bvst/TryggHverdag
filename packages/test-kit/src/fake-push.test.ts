@@ -163,7 +163,10 @@ describe('fakePush', () => {
       expect(await push.send(each)).toEqual({ outcome: 'accepted' });
     }
 
-    expect(MESSAGE_KINDS).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME']);
+    // RG-03 (LOST-06, the spec's "Existing assertions that change by
+    // design"): the exact list gains ACKNOWLEDGED, the "someone is on it"
+    // notice (D-113). Every kind is still sent, recorded and accepted as given.
+    expect(MESSAGE_KINDS).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED']);
     expect(push.messages).toEqual(sent);
     expect(push.accepted).toEqual(sent);
     expect(kit.MESSAGE_KINDS).toBe(MESSAGE_KINDS);

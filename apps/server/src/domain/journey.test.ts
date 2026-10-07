@@ -57,12 +57,15 @@
 // heartbeat is recorded and the state stays; the move back is contact's.
 import {
   MESSAGE_KINDS as KIT_MESSAGE_KINDS,
+  WITHDRAWN_WHEN_OPENED as KIT_WITHDRAWN_WHEN_OPENED,
+  WITHDRAWN_WHEN_RESOLVED as KIT_WITHDRAWN_WHEN_RESOLVED,
   fc,
   syntheticPosition,
   syntheticUuid,
 } from '@trygghverdag/test-kit';
 import { describe, expect, test } from 'vitest';
 import {
+  ALERT_EVENTS,
   ALERT_RESOLUTIONS,
   ALERT_STATES,
   JOURNEY_END_REASONS,
@@ -70,8 +73,14 @@ import {
   JOURNEY_STATES,
   LOST_CONTACT_AFTER_MS,
   MESSAGE_KINDS,
+  WITHDRAWN_WHEN_RESOLVED,
+  alertTransition,
   transition,
+  type AcknowledgeEvent,
+  type AcknowledgeRefusal,
+  type AlertForAcknowledgement,
   type AlertResolution,
+  type AlertState,
   type ContactEvent,
   type HeartbeatEvent,
   type HomeEvent,
@@ -1671,8 +1680,12 @@ describe('SM-04, SM-07 and D-110: "I’m home", in the heartbeat rule’s order'
 });
 
 describe('LOST-03: the lists that are the one source for the table, the type and the database', () => {
-  test('LOST-03-AC3: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT and HOME, in order', () => {
-    expect([...MESSAGE_KINDS]).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME']);
+  // RG-03 (LOST-06, the spec's "Existing assertions that change by design"):
+  // this was "…exactly LOST_CONTACT, BACK_IN_CONTACT and HOME, in order". The
+  // list gains ACKNOWLEDGED, the "someone is on it" notice (D-113), last, and
+  // the title with it. Still exact, in order; LOST-06-AC13 below pins it too.
+  test('LOST-03-AC3: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME and ACKNOWLEDGED, in order', () => {
+    expect([...MESSAGE_KINDS]).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED']);
   });
 
   // Review loop 1 (the spec's item 11a): the test kit cannot import the
@@ -1697,5 +1710,331 @@ describe('LOST-03: the lists that are the one source for the table, the type and
     const reason: JourneyEndReason = 'HOME';
 
     expect([...JOURNEY_END_REASONS]).toEqual([reason]);
+  });
+});
+
+// ===========================================================================
+// LOST-06: "I'm on it", the alert's own rule (its spec's approach item 2).
+//
+// An acknowledgement's situation is an alert's, not a journey's, so it has an
+// event list of its own, ALERT_EVENTS, and a rule of its own,
+// alertTransition; JOURNEY_EVENTS and the journey's table are unchanged. The
+// rule, in its order, which is part of the rule:
+//   1. no alert, or a sender who is not a responder of its journey → refused,
+//      ALERT_NOT_FOUND, one answer for both (SEC-07);
+//   2. RESOLVED → ignored, ALERT_RESOLVED;
+//   3. the sender already recorded → unchanged, ALREADY_YOURS;
+//   4. someone else recorded → refused, ALREADY_ACKNOWLEDGED;
+//   5. otherwise → acknowledged, ACKNOWLEDGED.
+// IDs are compared exactly. The table below holds every pair the lists
+// create, so a state or an event added later fails here, naming the pair.
+// ===========================================================================
+
+/** The alert rule's outcomes, as the spec names them. */
+type AlertOutcome =
+  | { type: 'acknowledged'; state: 'ACKNOWLEDGED' }
+  | { type: 'unchanged'; reason: 'ALREADY_YOURS' }
+  | AcknowledgeRefusal;
+
+const ACKNOWLEDGED: AlertOutcome = { type: 'acknowledged', state: 'ACKNOWLEDGED' };
+const ALREADY_YOURS: AlertOutcome = { type: 'unchanged', reason: 'ALREADY_YOURS' };
+const ALREADY_ACKNOWLEDGED: AlertOutcome = { type: 'refused', reason: 'ALREADY_ACKNOWLEDGED' };
+const ALERT_NOT_FOUND: AlertOutcome = { type: 'refused', reason: 'ALERT_NOT_FOUND' };
+const ALERT_RESOLVED: AlertOutcome = { type: 'ignored', reason: 'ALERT_RESOLVED' };
+
+type AlertEventType = (typeof ALERT_EVENTS)[number];
+
+/** Who is recorded on the alert, seen from the sender. */
+const RECORDED = ['nobody on it', 'the sender on it', 'another responder on it'] as const;
+/** Whether the sender is a responder of the alert's journey. */
+const SENDERS = ['sent by a responder', 'sent by a non-responder'] as const;
+
+/** An alert's situation: none, or its state, who is on it, and who sends. */
+type AlertSituation =
+  'no alert' | `${AlertState}; ${(typeof RECORDED)[number]}; ${(typeof SENDERS)[number]}`;
+
+const SENDER = syntheticUuid();
+const ON_IT = syntheticUuid();
+const ALERT = syntheticUuid();
+
+/**
+ * Every (alert situation, event) pair and its outcome, written out. Typed over
+ * the lists, so a state or an event added later without rows is a type
+ * error, and the run-time check below names the pair.
+ */
+const ALERT_TRANSITIONS = {
+  acknowledge: {
+    'no alert': ALERT_NOT_FOUND,
+    'OPEN; nobody on it; sent by a responder': ACKNOWLEDGED,
+    'OPEN; the sender on it; sent by a responder': ALREADY_YOURS,
+    'OPEN; another responder on it; sent by a responder': ALREADY_ACKNOWLEDGED,
+    'OPEN; nobody on it; sent by a non-responder': ALERT_NOT_FOUND,
+    'OPEN; the sender on it; sent by a non-responder': ALERT_NOT_FOUND,
+    'OPEN; another responder on it; sent by a non-responder': ALERT_NOT_FOUND,
+    // ESCALATED (escalation to SMS writes it; put in here directly) is
+    // acknowledged as OPEN is: the SMS has gone, and someone is now on it.
+    'ESCALATED; nobody on it; sent by a responder': ACKNOWLEDGED,
+    'ESCALATED; the sender on it; sent by a responder': ALREADY_YOURS,
+    'ESCALATED; another responder on it; sent by a responder': ALREADY_ACKNOWLEDGED,
+    'ESCALATED; nobody on it; sent by a non-responder': ALERT_NOT_FOUND,
+    'ESCALATED; the sender on it; sent by a non-responder': ALERT_NOT_FOUND,
+    'ESCALATED; another responder on it; sent by a non-responder': ALERT_NOT_FOUND,
+    // ACKNOWLEDGED with nobody recorded, a state the code never makes, is met
+    // in the safe direction: someone can still take it (reading 3).
+    'ACKNOWLEDGED; nobody on it; sent by a responder': ACKNOWLEDGED,
+    'ACKNOWLEDGED; the sender on it; sent by a responder': ALREADY_YOURS,
+    'ACKNOWLEDGED; another responder on it; sent by a responder': ALREADY_ACKNOWLEDGED,
+    'ACKNOWLEDGED; nobody on it; sent by a non-responder': ALERT_NOT_FOUND,
+    'ACKNOWLEDGED; the sender on it; sent by a non-responder': ALERT_NOT_FOUND,
+    'ACKNOWLEDGED; another responder on it; sent by a non-responder': ALERT_NOT_FOUND,
+    // RESOLVED is final: ignored, whoever is on it, before anything else but
+    // whether the sender follows the journey at all.
+    'RESOLVED; nobody on it; sent by a responder': ALERT_RESOLVED,
+    'RESOLVED; the sender on it; sent by a responder': ALERT_RESOLVED,
+    'RESOLVED; another responder on it; sent by a responder': ALERT_RESOLVED,
+    'RESOLVED; nobody on it; sent by a non-responder': ALERT_NOT_FOUND,
+    'RESOLVED; the sender on it; sent by a non-responder': ALERT_NOT_FOUND,
+    'RESOLVED; another responder on it; sent by a non-responder': ALERT_NOT_FOUND,
+  },
+} satisfies Record<AlertEventType, Record<AlertSituation, AlertOutcome>>;
+
+/** The alert a situation names: its state, who is on it, and its journey's responders. */
+function alertFor(situation: string): AlertForAcknowledgement | null {
+  if (situation === 'no alert') {
+    return null;
+  }
+  const [state, recorded, sender] = situation.split('; ');
+  return {
+    id: ALERT,
+    state: state as AlertState,
+    acknowledgedBy:
+      recorded === 'the sender on it'
+        ? SENDER
+        : recorded === 'another responder on it'
+          ? ON_IT
+          : null,
+    responderIds: sender === 'sent by a responder' ? [ON_IT, SENDER] : [ON_IT],
+  };
+}
+
+function acknowledgeBy(responderId: string): AcknowledgeEvent {
+  return { type: 'acknowledge', responderId };
+}
+
+/** Every pair the alert lists create, read at run time. */
+function alertPairsTheModuleCreates(): string[] {
+  const situations = [
+    'no alert',
+    ...ALERT_STATES.flatMap((state) =>
+      RECORDED.flatMap((recorded) => SENDERS.map((sender) => `${state}; ${recorded}; ${sender}`)),
+    ),
+  ];
+  return [...ALERT_EVENTS].flatMap((event) =>
+    situations.map((situation) => `${situation} × ${event}`),
+  );
+}
+
+const ALERT_ROWS = Object.entries(ALERT_TRANSITIONS).flatMap(([event, rows]) =>
+  Object.entries(rows).map(([situation, expected]: [string, AlertOutcome]) => ({
+    event,
+    situation,
+    expected,
+  })),
+);
+
+/** The rule, in its order, as the spec writes it. */
+function expectedAlertOutcome(
+  alert: AlertForAcknowledgement | null,
+  { responderId }: AcknowledgeEvent,
+): AlertOutcome {
+  if (alert?.responderIds.includes(responderId) !== true) {
+    return ALERT_NOT_FOUND;
+  }
+  if (alert.state === 'RESOLVED') {
+    return ALERT_RESOLVED;
+  }
+  if (alert.acknowledgedBy === responderId) {
+    return ALREADY_YOURS;
+  }
+  if (alert.acknowledgedBy !== null) {
+    return ALREADY_ACKNOWLEDGED;
+  }
+  return ACKNOWLEDGED;
+}
+
+/** The five outcomes, with exactly their fields. */
+function isOneOfTheAlertOutcomes(value: unknown): boolean {
+  return [ACKNOWLEDGED, ALREADY_YOURS, ALREADY_ACKNOWLEDGED, ALERT_NOT_FOUND, ALERT_RESOLVED].some(
+    (outcome) => JSON.stringify(outcome) === JSON.stringify(value),
+  );
+}
+
+/**
+ * Any alert, or none, and any sender: IDs from a small pool, so a sender is
+ * often a responder and often the one recorded, in either case, since the
+ * rule compares IDs exactly.
+ */
+const anyAcknowledgement = fc
+  .uniqueArray(fc.uuid(), { minLength: 3, maxLength: 6 })
+  .chain((pool) => {
+    const someone = fc.constantFrom(...pool, ...pool.map((id) => id.toUpperCase()));
+    return fc.record({
+      alert: fc.option(
+        fc.record({
+          id: fc.uuid(),
+          state: fc.constantFrom(...ALERT_STATES),
+          acknowledgedBy: fc.option(someone, { nil: null }),
+          responderIds: fc.subarray(pool),
+        }),
+        { nil: null },
+      ),
+      sender: someone,
+    });
+  });
+
+describe('LOST-06 and AR-04: the alert rule is one module, total over its own lists', () => {
+  test('LOST-06-AC14: ALERT_EVENTS is exactly acknowledge; JOURNEY_EVENTS is unchanged, start, heartbeat, silence, contact and home, and none of them acknowledges', () => {
+    expect([...ALERT_EVENTS]).toEqual(['acknowledge']);
+    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence', 'contact', 'home']);
+    expect(JOURNEY_EVENTS).not.toContain('acknowledge');
+  });
+
+  test('LOST-06-AC14: every pair of alert situation and event the lists create has a row here, and no row is stale: no alert, and each of the four states with nobody, the sender and another on it, from a responder and from a non-responder', () => {
+    const created = alertPairsTheModuleCreates();
+    const held = ALERT_ROWS.map(({ situation, event }) => `${situation} × ${event}`);
+
+    expect(
+      created.filter((pair) => !held.includes(pair)),
+      'pairs with no expected outcome in this test: write their rows before the code',
+    ).toEqual([]);
+    expect(
+      held.filter((pair) => !created.includes(pair)),
+      'rows for pairs the lists no longer create',
+    ).toEqual([]);
+    expect(held).toHaveLength(1 + ALERT_STATES.length * RECORDED.length * SENDERS.length);
+  });
+
+  test.each(ALERT_ROWS)(
+    'LOST-06-AC14: $situation × $event gives exactly its expected outcome',
+    ({ situation, expected }) => {
+      expect(alertTransition(alertFor(situation), acknowledgeBy(SENDER))).toEqual(expected);
+    },
+  );
+
+  test('LOST-06-AC14: for any alert and any sender, the outcome is the rule’s, in its order — not found, then resolved, then the sender’s own, then taken, then acknowledged — never a throw, never undefined', () => {
+    fc.assert(
+      fc.property(anyAcknowledgement, ({ alert, sender }) => {
+        let outcome: unknown;
+        expect(() => {
+          outcome = alertTransition(alert, acknowledgeBy(sender));
+        }).not.toThrow();
+        expect(outcome).toSatisfy(isOneOfTheAlertOutcomes);
+        expect(outcome).toEqual(expectedAlertOutcome(alert, acknowledgeBy(sender)));
+      }),
+    );
+  });
+
+  test('LOST-06-AC14: IDs are compared exactly, as the stores hand them back lower-case: a responder’s ID in upper case is not that responder, and the sender recorded in upper case is someone else', () => {
+    const responder = syntheticUuid();
+    expect(responder.toUpperCase(), 'an ID with a letter in it').not.toBe(responder);
+    const open = {
+      id: ALERT,
+      state: 'OPEN' as const,
+      acknowledgedBy: null,
+      responderIds: [responder],
+    };
+
+    expect(alertTransition(open, acknowledgeBy(responder.toUpperCase()))).toEqual(ALERT_NOT_FOUND);
+    expect(alertTransition(open, acknowledgeBy(responder))).toEqual(ACKNOWLEDGED);
+    expect(
+      alertTransition(
+        { ...open, acknowledgedBy: responder.toUpperCase() },
+        acknowledgeBy(responder),
+      ),
+    ).toEqual(ALREADY_ACKNOWLEDGED);
+  });
+
+  test('LOST-06-AC14: an event of a type the module does not list is thrown on in every situation, with the rule’s own message, never answered with a value: Object.prototype’s names included', () => {
+    // RG-03 (LOST-06 review loop 2, test-auditor's should-fix): sharpened,
+    // and this comment corrected. The bare toThrow() took any throw, and the
+    // controls never made it "the rule's own": with the rule's Object.hasOwn
+    // guard gone, the table has no `escalate`, and calling what is not there
+    // throws a TypeError, which passed. So the rule's own message is asserted
+    // now, whole. And the types now include Object.prototype's names, which
+    // without that guard reach a member every object inherits and answer a
+    // value: `constructor` hands back an object, `toString` '[object Object]'.
+    // That is the silent miss the throw exists to prevent.
+    expect(alertTransition).toBeTypeOf('function');
+    for (const { situation } of ALERT_ROWS) {
+      // Control: in this situation the listed event is answered, with a value.
+      expect(alertTransition(alertFor(situation), acknowledgeBy(SENDER)), situation).toBeDefined();
+      for (const type of [
+        'escalate',
+        'constructor',
+        'toString',
+        '__proto__',
+        'hasOwnProperty',
+        'valueOf',
+      ]) {
+        expect(
+          () =>
+            alertTransition(alertFor(situation), {
+              type,
+              responderId: SENDER,
+            } as unknown as AcknowledgeEvent),
+          `${situation}, ${type}`,
+        ).toThrow(new RegExp(`^The alert rule has no rule for an event of type ${type}\\.$`));
+      }
+    }
+  });
+
+  test('LOST-06-AC14: deciding changes neither the alert nor the event handed in', () => {
+    fc.assert(
+      fc.property(anyAcknowledgement, ({ alert, sender }) => {
+        const event = acknowledgeBy(sender);
+        const alertBefore = structuredClone(alert);
+        const eventBefore = structuredClone(event);
+
+        alertTransition(alert, event);
+
+        expect(alert).toEqual(alertBefore);
+        expect(event).toEqual(eventBefore);
+      }),
+    );
+  });
+});
+
+describe('LOST-06 and LOST-03: every message kind is withdrawn by exactly one rule, decided in one place', () => {
+  test('LOST-06-AC13: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME and ACKNOWLEDGED, in order', () => {
+    expect([...MESSAGE_KINDS]).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED']);
+  });
+
+  test('LOST-06-AC13: WITHDRAWN_WHEN_RESOLVED is exactly LOST_CONTACT and ACKNOWLEDGED; the open’s list is ALERT_RESOLUTIONS; and every kind is in exactly one of the two, a kind in neither or in both named here until someone places it', () => {
+    // L1: assignable only while every kind listed is a message kind.
+    const resolvedWithdraws: readonly MessageKind[] = WITHDRAWN_WHEN_RESOLVED;
+    const openWithdraws: readonly MessageKind[] = ALERT_RESOLUTIONS;
+
+    expect([...WITHDRAWN_WHEN_RESOLVED]).toEqual(['LOST_CONTACT', 'ACKNOWLEDGED']);
+    expect([...openWithdraws]).toEqual(['BACK_IN_CONTACT', 'HOME']);
+    expect(
+      MESSAGE_KINDS.filter(
+        (kind) => !resolvedWithdraws.includes(kind) && !openWithdraws.includes(kind),
+      ),
+      'kinds no withdrawal lists: place each in WITHDRAWN_WHEN_RESOLVED or ALERT_RESOLUTIONS',
+    ).toEqual([]);
+    expect(
+      MESSAGE_KINDS.filter(
+        (kind) => resolvedWithdraws.includes(kind) && openWithdraws.includes(kind),
+      ),
+      'kinds both withdrawals list: each kind belongs to exactly one',
+    ).toEqual([]);
+  });
+
+  test('LOST-06-AC13: the test kit’s copies equal the domain’s: its MESSAGE_KINDS, the kinds its resolution withdraws, and the kinds its open withdraws', () => {
+    // The test kit cannot import the server (its own index.ts says why), so
+    // its copies are held to the domain's here, where both can be read.
+    expect([...KIT_MESSAGE_KINDS]).toEqual([...MESSAGE_KINDS]);
+    expect([...KIT_WITHDRAWN_WHEN_RESOLVED]).toEqual([...WITHDRAWN_WHEN_RESOLVED]);
+    expect([...KIT_WITHDRAWN_WHEN_OPENED]).toEqual([...ALERT_RESOLUTIONS]);
   });
 });

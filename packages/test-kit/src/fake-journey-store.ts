@@ -75,16 +75,21 @@
  *     nothing changes; an ACTIVE or LOST_CONTACT journey is ended, HOME, at
  *     the store's now, and from LOST_CONTACT its alert is resolved;
  *   - resolving is one step: the journey's one unresolved alert, whatever its
- *     state, goes to RESOLVED at now with the resolution; every lost-contact
- *     message of it not sent and not withdrawn is withdrawn at now, keeping
- *     its attempts and last failure; and one stand-down per responder row of
- *     the journey is written, of the resolution's own kind, due at now, or,
- *     for a responder whose lost-contact message was withdrawn having been
- *     handed over at least once and due later than now, at that due time (the
- *     hold). No unresolved alert: no withdrawal and no stand-down, and the
- *     move stands. No responder row: no stand-down, and the resolution
- *     stands. A second stand-down of a kind for (alert, recipient) is refused,
- *     as the unique index refuses it, and nothing of the step is kept;
+ *     state, goes to RESOLVED at now with the resolution, keeping who is
+ *     recorded on it and since when; every message of it of a kind in
+ *     `WITHDRAWN_WHEN_RESOLVED` (the lost-contact pushes, and the notices that
+ *     someone is on it) not sent and not withdrawn is withdrawn at now,
+ *     keeping its attempts and last failure (D-111, D-113); and one
+ *     stand-down per responder row of the journey is written, of the
+ *     resolution's own kind, due at now, or, for a responder with withdrawn
+ *     messages that were handed over at least once and are due later than
+ *     now, at the latest of those due times (the hold, per responder:
+ *     LOST-06's approach item 5, D-114). One stand-down per responder,
+ *     however many of their messages were withdrawn. No unresolved alert: no
+ *     withdrawal and no stand-down, and the move stands. No responder row: no
+ *     stand-down, and the resolution stands. A second stand-down of a kind
+ *     for (alert, recipient) is refused, as the unique index refuses it, and
+ *     nothing of the step is kept;
  *   - an open also withdraws, at its now, every unsent and not yet withdrawn
  *     stand-down (kind BACK_IN_CONTACT or HOME) of every alert of the
  *     walker's journeys, this one's earlier alerts and the walker's earlier
@@ -96,6 +101,30 @@
  *     down (approach item 4, step 5; review loops 1 to 3; D-111);
  *   - a fake given no clock throws when asked whether contact is back, or to
  *     end a journey, as it throws when asked about silence.
+ *
+ * And for "I'm on it" (LOST-06, its spec's approach items 2 to 5 and 10):
+ *   - `alertForAcknowledgement` is a plain read: the alert's state, who is
+ *     recorded on it, and its journey's responders, or null for an ID no
+ *     alert has. It never waits for a held row, as a read without a lock
+ *     never does;
+ *   - `recordAcknowledgement` takes the alert's journey's "row" first, and
+ *     waits while `hold` holds it, as the adapter's `for update` waits; then
+ *     decides by the alert rule, in its order, asked under that "lock": no
+ *     alert, or a sender who is not a responder of the alert's journey, is
+ *     ALERT_NOT_FOUND; a RESOLVED alert is ALERT_RESOLVED; the sender already
+ *     recorded is ALREADY_YOURS; someone else recorded is
+ *     ALREADY_ACKNOWLEDGED; each of these writes nothing. Otherwise the alert
+ *     becomes ACKNOWLEDGED, acknowledged by the sender at the store's now,
+ *     and one ACKNOWLEDGED message is written per responder row other than
+ *     the sender's, each with a fresh ID, due at that now, all of it or none
+ *     of it. IDs are compared exactly, as the rule compares them; the alert's
+ *     ID is matched as a `uuid` parameter is, in either case;
+ *   - an alert's `acknowledgedBy` and `acknowledgedAt` are both null, or both
+ *     set, and `acknowledgedBy` must be a user, as the check and the foreign
+ *     key hold them. No check ties the state to them (approach item 7);
+ *   - a fake given no clock throws when asked to record an acknowledgement,
+ *     as it throws when asked about silence; a refusal it needs no time for
+ *     is answered without one.
  *
  * The shared behaviour suite (`journey-store-behaviour.ts`) runs the same
  * expectations against this fake and against the real adapter, which is
@@ -112,10 +141,21 @@ import { PUSH_FAILURE_REASONS, type MessageKind, type PushFailureReason } from '
 import { syntheticUuid } from './synthetic-ids.ts';
 
 /**
- * The kinds that stand a responder down, which an open withdraws (review loop
- * 3): listed, so a kind added later is withdrawn only if it opts in.
+ * The kinds that stand a responder down, which an open withdraws (LOST-03
+ * review loop 3): listed, so a kind added later is withdrawn only if it opts
+ * in. The server's `ALERT_RESOLUTIONS`, written out because the test kit does
+ * not import the server; exported so the domain's test holds the two equal
+ * (LOST-06-AC13).
  */
-const STAND_DOWN_KINDS: readonly MessageKind[] = ['BACK_IN_CONTACT', 'HOME'];
+export const WITHDRAWN_WHEN_OPENED: readonly MessageKind[] = ['BACK_IN_CONTACT', 'HOME'];
+
+/**
+ * The kinds an alert's resolution withdraws from its own alert, unsent (D-111,
+ * D-113): its lost-contact pushes and its "someone is on it" notices. The
+ * server's `WITHDRAWN_WHEN_RESOLVED`, written out for the same reason, and
+ * held equal to it by the domain's test (LOST-06-AC13).
+ */
+export const WITHDRAWN_WHEN_RESOLVED: readonly MessageKind[] = ['LOST_CONTACT', 'ACKNOWLEDGED'];
 
 /**
  * The journey states, as the server's state machine lists them. Written out
@@ -293,7 +333,8 @@ export type FakeJourneyEndReason = 'HOME';
 /**
  * An alert as stored: no position, no battery, no phone time (LOST-02-AC13).
  * `resolvedAt` and `resolution` are null until it is resolved, and set
- * together (LOST-03).
+ * together (LOST-03). `acknowledgedBy` and `acknowledgedAt` are null until a
+ * responder says "I'm on it", and set together (LOST-06).
  */
 export interface StoredAlert {
   id: string;
@@ -303,7 +344,46 @@ export interface StoredAlert {
   silentSince: Date;
   resolvedAt: Date | null;
   resolution: FakeAlertResolution | null;
+  acknowledgedBy: string | null;
+  acknowledgedAt: Date | null;
 }
+
+/**
+ * An alert as "I'm on it" reads it (LOST-06): its state, who is recorded on
+ * it, null for nobody, and its journey's responders. The server's
+ * `AlertForAcknowledgement`, by shape.
+ */
+export interface AlertForAcknowledgement {
+  id: string;
+  state: FakeAlertState;
+  acknowledgedBy: string | null;
+  responderIds: readonly string[];
+}
+
+/** "I'm on it" as the store takes it: the alert, by its ID, and the responder who sent it. */
+export interface AcknowledgementToRecord {
+  alertId: string;
+  responderId: string;
+}
+
+/**
+ * The alert rule's outcomes other than "acknowledged" (LOST-06, approach item
+ * 2): the sender's own already, the alert over, no such alert for the
+ * sender, or someone else on it.
+ */
+export type AcknowledgementNotRecorded =
+  | { type: 'unchanged'; reason: 'ALREADY_YOURS' }
+  | { type: 'ignored'; reason: 'ALERT_RESOLVED' }
+  | { type: 'refused'; reason: 'ALERT_NOT_FOUND' | 'ALREADY_ACKNOWLEDGED' };
+
+/**
+ * Recorded now, with the notices written; or not recorded, with the rule's
+ * decision under the lock, and nothing written. The server's
+ * `RecordAcknowledgementResult`, by shape.
+ */
+export type RecordAcknowledgementResult =
+  | { outcome: 'acknowledged'; messages: AlertMessage[] }
+  | { outcome: 'not_recorded'; decision: AcknowledgementNotRecorded };
 
 /**
  * An outbox message as stored. Its ID is opaque: never a user's, a journey's
@@ -342,7 +422,9 @@ export type JourneyStoreCall =
   | 'claimDue'
   | 'markSent'
   | 'markFailed'
-  | 'recordHome';
+  | 'recordHome'
+  | 'alertForAcknowledgement'
+  | 'recordAcknowledgement';
 
 export interface FakeJourneyStore {
   /** The walker's journey in any state but ENDED, or null. */
@@ -374,6 +456,23 @@ export interface FakeJourneyStore {
    * Needs a clock to end one.
    */
   recordHome(home: HomeToRecord): Promise<RecordHomeResult>;
+
+  /**
+   * "I'm on it" (LOST-06): the alert this ID names, read without a lock, with
+   * its journey's responders; or null for an ID no alert has. A plain read:
+   * it never waits for a held row.
+   */
+  alertForAcknowledgement(alertId: string): Promise<AlertForAcknowledgement | null>;
+  /**
+   * "I'm on it" (LOST-06): waits for the alert's journey's row while it is
+   * held, then decides by the alert rule under that "lock" and writes what it
+   * decided: ACKNOWLEDGED, by this responder at now, with one ACKNOWLEDGED
+   * message per other responder row; or nothing, with the rule's other
+   * outcome. Needs a clock to record one.
+   */
+  recordAcknowledgement(
+    acknowledgement: AcknowledgementToRecord,
+  ): Promise<RecordAcknowledgementResult>;
 
   /** The ACTIVE journeys silent for `afterMs` or more, without locking, and now. Needs a clock. */
   overdueJourneys(afterMs: number): Promise<OverdueJourneys>;
@@ -426,8 +525,9 @@ export interface FakeJourneyStore {
   /**
    * Puts an alert in directly, as a test's own setup (LOST-03-AC4): in any
    * state, for a journey that is stored. Keeps the database's rules: one
-   * alert per journey that is not RESOLVED, and a resolution and its time
-   * both set or both null. Returns the alert's ID.
+   * alert per journey that is not RESOLVED, a resolution and its time both
+   * set or both null, and (LOST-06) who acknowledged it and when both set or
+   * both null, the acknowledger a user. Returns the alert's ID.
    */
   seedAlert(alert: {
     journeyId: string;
@@ -436,6 +536,8 @@ export interface FakeJourneyStore {
     silentSince: Date;
     resolvedAt?: Date | null;
     resolution?: FakeAlertResolution | null;
+    acknowledgedBy?: string | null;
+    acknowledgedAt?: Date | null;
   }): string;
   /**
    * Puts an outbox message in directly, as a test's own setup. Keeps the
@@ -666,6 +768,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     openedAt: new Date(alert.openedAt.getTime()),
     silentSince: new Date(alert.silentSince.getTime()),
     resolvedAt: copyOf(alert.resolvedAt),
+    acknowledgedAt: copyOf(alert.acknowledgedAt),
   });
   const copyMessage = (message: StoredMessage): StoredMessage => ({
     ...message,
@@ -754,6 +857,15 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
   };
 
   /**
+   * The alert this ID names (LOST-06), matched as a `uuid` parameter is: in
+   * either case, and refused, as PostgreSQL refuses it, unless it is a UUID.
+   */
+  const alertNamed = (alertId: string): StoredAlert | undefined => {
+    const id = journeyIdOf(alertId);
+    return alerts.find((alert) => alert.id === id);
+  };
+
+  /**
    * Resolving an alert (LOST-03, approach item 4), worked out without
    * changing anything: the journey's one unresolved alert, the lost-contact
    * messages to withdraw, and one stand-down per responder row, each due as
@@ -770,10 +882,12 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       // Reading 11: nothing to resolve, withdraw or stand down; the move stands.
       return { alertId: null, messages: [], apply: () => undefined };
     }
+    // LOST-06 (reading 8, approach item 5): every kind the resolution
+    // withdraws, the notice that someone is on it included.
     const withdrawn = outbox.filter(
       (message) =>
         message.alertId === alert.id &&
-        message.kind === 'LOST_CONTACT' &&
+        WITHDRAWN_WHEN_RESOLVED.includes(message.kind) &&
         message.sentAt === null &&
         message.withdrawnAt === null,
     );
@@ -791,15 +905,23 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       ) {
         throw uniqueViolation('one outbox message per (alert, recipient, kind)');
       }
-      // The hold (reading 7): a responder whose lost-contact message was
-      // handed over and is not due yet may still have it in the port's hands.
-      const theirs = withdrawn.find((message) => message.recipientId === recipientId);
-      const due =
-        theirs !== undefined &&
-        theirs.attempts >= 1 &&
-        theirs.nextAttemptAt.getTime() > now.getTime()
-          ? theirs.nextAttemptAt
-          : now;
+      // The hold (LOST-03 reading 7; LOST-06 approach item 5): a responder
+      // whose withdrawn message was handed over and is not due yet may still
+      // have it in the port's hands. Per responder, over everything withdrawn
+      // for them: the latest such due time, or now. One stand-down each,
+      // however many of their messages were withdrawn (D-114).
+      const due = withdrawn
+        .filter(
+          (message) =>
+            message.recipientId === recipientId &&
+            message.attempts >= 1 &&
+            message.nextAttemptAt.getTime() > now.getTime(),
+        )
+        .reduce<Date>(
+          (latest, message) =>
+            message.nextAttemptAt.getTime() > latest.getTime() ? message.nextAttemptAt : latest,
+          now,
+        );
       return {
         messageId: syntheticUuid(),
         alertId: alert.id,
@@ -1155,6 +1277,139 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       );
     },
 
+    alertForAcknowledgement(alertId) {
+      // A plain read, as the adapter's is: no lock, so a held row is read
+      // all the same (LOST-06, approach item 3).
+      return answer('alertForAcknowledgement', (): AlertForAcknowledgement | null => {
+        const alert = alertNamed(alertId);
+        if (alert === undefined) {
+          return null;
+        }
+        return {
+          id: alert.id,
+          state: alert.state,
+          acknowledgedBy: alert.acknowledgedBy,
+          responderIds: [...storedJourney('alertForAcknowledgement', alert.journeyId).responderIds],
+        };
+      });
+    },
+    recordAcknowledgement(acknowledgement) {
+      if (typeof acknowledgement !== 'object' || (acknowledgement as unknown) === null) {
+        return Promise.reject(
+          new Error(
+            'fakeJourneyStore.recordAcknowledgement takes { alertId, responderId }, not an ID alone',
+          ),
+        );
+      }
+      const { alertId, responderId } = acknowledgement;
+      // The alert's journey's row first, waited for while held, as the
+      // adapter's `for update` on the journey waits (D-112's lock order).
+      // No such alert: no row to wait for.
+      const waitForRow = (): Promise<void> => {
+        const alert = UUID.test(alertId) ? alerts.find(({ id }) => id === asStored(alertId)) : null;
+        return alert === undefined || alert === null
+          ? Promise.resolve()
+          : untilReleased(alert.journeyId);
+      };
+      /**
+       * The acknowledgement's one step, decided by the alert rule under the
+       * "lock" and written at once. Without the store's now it stops before
+       * writing anything, as soon as it needs it: only an acknowledgement
+       * that records needs the time.
+       */
+      const step = (now: Date | null): RecordAcknowledgementResult | typeof NEEDS_NOW => {
+        const alert = alertNamed(alertId);
+        const journey =
+          alert === undefined ? undefined : storedJourney('recordAcknowledgement', alert.journeyId);
+        // The rule, in its order (approach item 2), the IDs compared exactly.
+        if (alert === undefined || journey?.responderIds.includes(responderId) !== true) {
+          return {
+            outcome: 'not_recorded',
+            decision: { type: 'refused', reason: 'ALERT_NOT_FOUND' },
+          };
+        }
+        if (alert.state === 'RESOLVED') {
+          return {
+            outcome: 'not_recorded',
+            decision: { type: 'ignored', reason: 'ALERT_RESOLVED' },
+          };
+        }
+        if (alert.acknowledgedBy === responderId) {
+          return {
+            outcome: 'not_recorded',
+            decision: { type: 'unchanged', reason: 'ALREADY_YOURS' },
+          };
+        }
+        if (alert.acknowledgedBy !== null) {
+          return {
+            outcome: 'not_recorded',
+            decision: { type: 'refused', reason: 'ALREADY_ACKNOWLEDGED' },
+          };
+        }
+        if (now === null) {
+          return NEEDS_NOW;
+        }
+        // One notice per responder row other than the sender's (D-113). The
+        // unique (alert, recipient, kind) refuses a second, and nothing of
+        // the step is kept.
+        const recipients = journey.responderIds.filter((id) => id !== responderId);
+        if (new Set(recipients).size !== recipients.length) {
+          throw uniqueViolation('one outbox message per (alert, recipient, kind)');
+        }
+        const notices: StoredMessage[] = recipients.map((recipientId) => {
+          if (
+            outbox.some(
+              (message) =>
+                message.alertId === alert.id &&
+                message.recipientId === recipientId &&
+                message.kind === 'ACKNOWLEDGED',
+            )
+          ) {
+            throw uniqueViolation('one outbox message per (alert, recipient, kind)');
+          }
+          return {
+            messageId: syntheticUuid(),
+            alertId: alert.id,
+            recipientId,
+            kind: 'ACKNOWLEDGED',
+            createdAt: new Date(now.getTime()),
+            attempts: 0,
+            nextAttemptAt: new Date(now.getTime()),
+            sentAt: null,
+            lastFailure: null,
+            withdrawnAt: null,
+          };
+        });
+        alert.state = 'ACKNOWLEDGED';
+        alert.acknowledgedBy = responderId;
+        alert.acknowledgedAt = new Date(now.getTime());
+        outbox.push(...notices);
+        return {
+          outcome: 'acknowledged',
+          messages: notices.map(({ messageId, recipientId, kind }) => ({
+            messageId,
+            recipientId,
+            kind,
+          })),
+        };
+      };
+      return answer(
+        'recordAcknowledgement',
+        async (): Promise<RecordAcknowledgementResult> => {
+          const first = step(null);
+          if (first !== NEEDS_NOW) {
+            return first;
+          }
+          const again = step(await nowFor('recordAcknowledgement'));
+          if (again === NEEDS_NOW) {
+            throw new Error('fakeJourneyStore.recordAcknowledgement: the store’s now was not used');
+          }
+          return again;
+        },
+        waitForRow,
+      );
+    },
+
     overdueJourneys(afterMs) {
       return answer('overdueJourneys', async (): Promise<OverdueJourneys> => {
         const now = await nowFor('overdueJourneys');
@@ -1268,7 +1523,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         for (const message of outbox) {
           if (
             earlierAlertIds.has(message.alertId) &&
-            STAND_DOWN_KINDS.includes(message.kind) &&
+            WITHDRAWN_WHEN_OPENED.includes(message.kind) &&
             journey.responderIds.includes(message.recipientId) &&
             message.sentAt === null &&
             message.withdrawnAt === null
@@ -1285,6 +1540,8 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
           silentSince: silentSinceOf(journey),
           resolvedAt: null,
           resolution: null,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
         });
         outbox.push(...messages);
         return {
@@ -1419,10 +1676,32 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       }
       journey.state = state;
     },
-    seedAlert({ journeyId, state, openedAt, silentSince, resolvedAt = null, resolution = null }) {
+    seedAlert({
+      journeyId,
+      state,
+      openedAt,
+      silentSince,
+      resolvedAt = null,
+      resolution = null,
+      acknowledgedBy: givenAcknowledgedBy = null,
+      acknowledgedAt = null,
+    }) {
       const journey = storedJourney('seedAlert', journeyId);
       if ((resolvedAt === null) !== (resolution === null)) {
         throw checkViolation('alerts', 'resolved_at and resolution, both set or both null');
+      }
+      // LOST-06 (approach item 7): who and when, both set or both null, and
+      // whoever acknowledged a user, as the check and the foreign key hold.
+      // No check ties them to the state.
+      const acknowledgedBy = givenAcknowledgedBy === null ? null : asStored(givenAcknowledgedBy);
+      if ((acknowledgedBy === null) !== (acknowledgedAt === null)) {
+        throw checkViolation(
+          'alerts',
+          'acknowledged_by and acknowledged_at, both set or both null',
+        );
+      }
+      if (acknowledgedBy !== null && !users.has(acknowledgedBy)) {
+        throw notAUser('acknowledger', acknowledgedBy);
       }
       if (
         state !== 'RESOLVED' &&
@@ -1439,6 +1718,8 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         silentSince: new Date(silentSince.getTime()),
         resolvedAt: copyOf(resolvedAt),
         resolution,
+        acknowledgedBy,
+        acknowledgedAt: copyOf(acknowledgedAt),
       });
       return id;
     },

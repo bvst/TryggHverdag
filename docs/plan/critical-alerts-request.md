@@ -579,6 +579,23 @@ Listed so it is not lost.
      lost-contact text different from every routine notice's. L6, on the push
      adapter's payload builder, with the recording push fake; the sound's keys
      and volume are to verify (item 4). Carrier: REL-06.
+   - **No non-critical push sent while an alert is open displaces an
+     undelivered critical one** (D-113's amendment, the owner, 2026-10-07).
+     APNs stores one notification per app for an offline device, "in most
+     cases the latest", so LOST-06's "someone is on it" notice could replace
+     a responder's critical lost-contact push that has not yet arrived. M3's
+     push task does not send that notice on a platform until this passes
+     there: L9 on a real phone, offline when the critical push is accepted,
+     then sent the notice, then online; and the reverse order, the notice
+     accepted seconds before the critical push. Apple keeps the latest only
+     "in most cases" and "may reorder notifications". A candidate on iOS is
+     sending the notice with `apns-expiration` 0, which Apple says is
+     delivered once and not stored; whether it still removes a stored one is
+     what the device test decides. Android is gated the same way (the owner,
+     2026-10-07): FCM's notification messages are always collapsible, so the
+     test runs on a real Android phone too. If it can't be shown on a
+     platform, the app shows the acknowledgement when opened instead.
+     Carriers: LOST-06, REL-06.
 
    **"Instead of further alerts" is now a promise to Apple** (C8: no re-alert
    after the SMS). If the private phase shows that a single critical sound

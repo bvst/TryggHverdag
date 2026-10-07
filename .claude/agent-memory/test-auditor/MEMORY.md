@@ -27,3 +27,5 @@
 - [LOST-03 audit](project_lost03_audit.md) — PASS 3471859; loop 1 2aa23f4; loop 2 db97856; loop 3 PASS 155a6e4 (29 faults, kind `<>` clause equivalent); harness ta-lost03/loop3
 - [Shared suite RG-03 blind spot](feedback_shared_suite_rg03_blind.md) — tests:changes/test-weakening hook only see *.test.*; journey-store-behaviour.ts diffs need a by-hand byte proof
 - [BUG-23/24 audit](project_bug23_24_audit.md) — PASS 68b675c and delta c7975fe; override floors + lockfile pin; runtime assertion counts via afterEach meta; npm bulk advisory endpoint; test.each row filter survives
+- [LOST-06 audit](project_lost06_audit.md) — PASS 5d62a0a; loop 2 PASS 07d9d0e (both should-fixes closed: AC14 message regex, AC9/AC11 µs text + xmin); harness ta-lost06
+- [Time-equality kills](feedback_time_equality_kills.md) — db-clock and tx-scope faults die only to a ms-floor equality; ask for µs text and xmin equality

@@ -236,11 +236,18 @@ describe('stryker.config.mjs', () => {
     );
   });
 
-  test("LOST-02: the alerts run mutates modules/alerts/ and runs alerts.system.test.ts alone, under the system tests' configuration", async () => {
+  test("LOST-02: the alerts run mutates modules/alerts/ and runs alerts.system.test.ts, under the system tests' configuration", async () => {
     // As the journeys run: the root configuration leaves *.system.test.ts
-    // out, so the command is asked what it would run, not only read. One
-    // file, kept apart from journeys.system.test.ts so each alerts mutant
-    // stays cheap (the spec's Mutation section).
+    // out, so the command is asked what it would run, not only read. Kept
+    // apart from journeys.system.test.ts so each alerts mutant stays cheap
+    // (the spec's Mutation section).
+    //
+    // RG-03 (LOST-06, the spec's "Existing assertions that change by
+    // design"): "I'm on it" adds acknowledgement.ts to modules/alerts/, and
+    // with it its system tests to this run, so the run is two files, not
+    // one; "alone" leaves the title. Compared sorted, as the journeys run's
+    // are: `vitest list` reports the files in an order of its own. What it
+    // mutates and its configuration do not change.
     const config = await configFor('alerts');
 
     expect(config.mutate).toEqual(['apps/server/src/modules/alerts/**/*.ts', ...EXCLUSIONS]);
@@ -248,7 +255,12 @@ describe('stryker.config.mjs', () => {
     expect(config.incrementalFile).toBeUndefined();
     const args = vitestArgs(config.commandRunner.command);
     expect(configNamedIn(args)).toBe('vitest.system.config.mjs');
-    expect(filesRunWith(args)).toEqual(['apps/server/src/alerts.system.test.ts']);
+    expect([...filesRunWith(args)].sort()).toEqual(
+      [
+        'apps/server/src/alerts.system.test.ts',
+        'apps/server/src/acknowledgement.system.test.ts',
+      ].sort(),
+    );
   });
 
   test('BUG-12: the process run mutates worker.ts, bin/worker.ts and process.ts, against bin.test.ts and the worker and process tests', async () => {

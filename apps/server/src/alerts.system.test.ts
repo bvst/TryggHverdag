@@ -107,6 +107,13 @@ function world({ log: given }: { log?: Log } = {}) {
     health: createHealthService({ clock, heartbeats: beats }),
     journeys: createJourneyService({ clock, journeys: store, log }),
     devices,
+    // RG-03 (LOST-06, the spec's "Existing assertions that change by
+    // design"): `acknowledgements` added because "I'm on it" (D-114) made it
+    // part of what the API needs. These tests acknowledge nothing, so it
+    // rejects; they never call it, and nothing they assert changes.
+    acknowledgements: {
+      acknowledge: () => Promise.reject(new Error('these tests acknowledge nothing')),
+    },
   });
   const watchdog = createWatchdog({ journeys: store, beats, log });
   const sender = createPushSender({ outbox: store, push, log });

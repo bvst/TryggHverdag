@@ -109,6 +109,12 @@
       "coveredLines": 11,
       "totalLines": 11
     },
+    "apps/server/src/modules/alerts/acknowledgement.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 18,
+      "totalLines": 18
+    },
     "apps/server/src/modules/alerts/outbox.ts": {
       "lines": 100,
       "branches": 100,
@@ -132,6 +138,12 @@
       "branches": 100,
       "coveredLines": 29,
       "totalLines": 29
+    },
+    "packages/contracts/src/alerts.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 4,
+      "totalLines": 4
     },
     "packages/contracts/src/api-version.ts": {
       "lines": 100,

@@ -537,10 +537,19 @@ describe('the mutation runs of this repository', () => {
       // file, kept apart from the journeys group's so each alerts mutant
       // stays cheap, under the system tests' configuration (the spec's
       // Mutation section). Nothing above or below changed.
+      //
+      // RG-03 (LOST-06, the spec's "Existing assertions that change by
+      // design" and its Mutation section): "I'm on it" puts its module,
+      // acknowledgement.ts, in modules/alerts/, and a group can only claim a
+      // safety path exactly as it is listed, so the alerts group runs the
+      // module's system tests too, after its own. Its paths do not change.
       expect.objectContaining({
         name: 'alerts',
         paths: ['apps/server/src/modules/alerts/'],
-        tests: ['apps/server/src/alerts.system.test.ts'],
+        tests: [
+          'apps/server/src/alerts.system.test.ts',
+          'apps/server/src/acknowledgement.system.test.ts',
+        ],
       }),
       {
         name: 'process',

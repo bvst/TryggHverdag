@@ -43,6 +43,10 @@
  *   - "I'm home" (D-110): heard on exactly the heartbeat's terms, in its order
  *     (not found, ended, not the journey's device), and then the journey ends,
  *     HOME. From LOST_CONTACT it also resolves the alert (SM-04).
+ *   - "I'm on it" (LOST-06, D-114): an alert's own rule, `alertTransition`,
+ *     over its own events, `ALERT_EVENTS`, because its situation is an
+ *     alert's, not a journey's. Only a responder of the alert's journey may
+ *     acknowledge it; one responder is on it; a resolved alert is over.
  */
 
 /** Every state a journey can be in (D-033). The database admits exactly these. */
@@ -61,13 +65,29 @@ export const ALERT_STATES = ['OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED'] as
 
 export type AlertState = (typeof ALERT_STATES)[number];
 
+/** Every event an alert can meet (LOST-06): its own list, apart from the journey's. */
+export const ALERT_EVENTS = ['acknowledge'] as const;
+
 /**
- * Every kind of message an alert causes: the lost-contact alert, and the
- * stand-down for each way it resolves. The database admits exactly these.
+ * Every kind of message an alert causes: the lost-contact alert, the
+ * stand-down for each way it resolves, and the notice that someone is on it
+ * (D-113). The database admits exactly these.
  */
-export const MESSAGE_KINDS = ['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME'] as const;
+export const MESSAGE_KINDS = ['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED'] as const;
 
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
+
+/**
+ * The kinds an alert's resolution withdraws from its own alert while unsent
+ * (D-111, D-113): its lost-contact pushes, and its notices that someone is on
+ * it, which are stale once the alert is over. Every kind is withdrawn by
+ * exactly one rule, this one or the open's (`ALERT_RESOLUTIONS`), and a test
+ * names any kind placed in neither or both (LOST-06-AC13).
+ */
+export const WITHDRAWN_WHEN_RESOLVED = [
+  'LOST_CONTACT',
+  'ACKNOWLEDGED',
+] as const satisfies readonly MessageKind[];
 
 /**
  * Every way an alert resolves. Each is also the kind of the stand-down it
@@ -223,6 +243,34 @@ export type HomeOutcome =
 
 export type TransitionOutcome =
   StartOutcome | HeartbeatOutcome | SilenceOutcome | ContactOutcome | HomeOutcome;
+
+/**
+ * An alert as "I'm on it" reads it (LOST-06): its state, who is recorded on
+ * it, null for nobody, and its journey's responders, as the store read them.
+ */
+export interface AlertForAcknowledgement {
+  id: string;
+  state: AlertState;
+  acknowledgedBy: string | null;
+  responderIds: readonly string[];
+}
+
+/** A responder says "I'm on it" for the alert: the device's own user. */
+export interface AcknowledgeEvent {
+  type: 'acknowledge';
+  responderId: string;
+}
+
+/** Why an acknowledgement is not recorded: the alert is over, or refused. */
+export type AcknowledgeRefusal =
+  | { type: 'ignored'; reason: 'ALERT_RESOLVED' }
+  | { type: 'refused'; reason: 'ALERT_NOT_FOUND' | 'ALREADY_ACKNOWLEDGED' };
+
+/** Recorded now; already the sender's, so nothing changes; or not, and why. */
+export type AcknowledgeOutcome =
+  | { type: 'acknowledged'; state: 'ACKNOWLEDGED' }
+  | { type: 'unchanged'; reason: 'ALREADY_YOURS' }
+  | AcknowledgeRefusal;
 
 /**
  * What an event does. Every outcome, a refusal included, is a value; only an
@@ -385,3 +433,67 @@ function home(journey: Situation | null, event: HomeEvent): HomeOutcome {
     resolvesAlert: heard.state === 'LOST_CONTACT',
   };
 }
+
+/**
+ * What an alert's event does (LOST-06). Every outcome, a refusal included, is
+ * a value; only an event of a type this module does not list is thrown on.
+ *
+ * @param alert the alert the event names, or null when no alert has that ID.
+ */
+export function alertTransition(
+  alert: AlertForAcknowledgement | null,
+  event: AcknowledgeEvent,
+): AcknowledgeOutcome {
+  // A throw, never a value, for an event nobody handled: a value handed back
+  // for it is a silent miss for whatever reads the outcome.
+  if (!Object.hasOwn(ALERT_RULES, event.type)) {
+    throw new Error(`The alert rule has no rule for an event of type ${event.type}.`);
+  }
+  return ALERT_RULES[event.type](alert, event);
+}
+
+/**
+ * The acknowledgement rule (D-114), in its order, which is part of the rule:
+ *   1. no alert, or a sender who is not a responder of its journey: not
+ *      found, one answer for both, so it says nothing about alerts the sender
+ *      does not follow (SEC-07);
+ *   2. RESOLVED: ignored, before anything else the alert holds;
+ *   3. the sender already recorded: unchanged, so a repeat is safe (SM-08);
+ *   4. someone else recorded: refused, because one responder is on it;
+ *   5. otherwise ACKNOWLEDGED, by the sender. OPEN, ESCALATED, and
+ *      ACKNOWLEDGED with nobody recorded, which the code never makes, are
+ *      all acknowledged: a record with nobody on it is met in the safe
+ *      direction.
+ * IDs are compared exactly: the stores hand them back in lower case.
+ */
+function acknowledge(
+  alert: AlertForAcknowledgement | null,
+  { responderId }: AcknowledgeEvent,
+): AcknowledgeOutcome {
+  // No alert is no journey's either, so the sender follows it no more.
+  if (alert?.responderIds.includes(responderId) !== true) {
+    return { type: 'refused', reason: 'ALERT_NOT_FOUND' };
+  }
+  if (alert.state === 'RESOLVED') {
+    return { type: 'ignored', reason: 'ALERT_RESOLVED' };
+  }
+  if (alert.acknowledgedBy === responderId) {
+    return { type: 'unchanged', reason: 'ALREADY_YOURS' };
+  }
+  if (alert.acknowledgedBy !== null) {
+    return { type: 'refused', reason: 'ALREADY_ACKNOWLEDGED' };
+  }
+  return { type: 'acknowledged', state: 'ACKNOWLEDGED' };
+}
+
+/**
+ * Each alert event's rule, by the event's type. Typed over ALERT_EVENTS, so
+ * an event listed there without a rule here is a type error (LOST-06-AC14).
+ * A table, not a `switch` as `transition` has: with one event, a `case` would
+ * compare a type with itself, which the lint refuses as a condition that
+ * cannot fail.
+ */
+const ALERT_RULES = { acknowledge } satisfies Record<
+  (typeof ALERT_EVENTS)[number],
+  (alert: AlertForAcknowledgement | null, event: AcknowledgeEvent) => AcknowledgeOutcome
+>;

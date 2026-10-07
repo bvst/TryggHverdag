@@ -12,3 +12,4 @@
 - [Advisory checks from a session](reference_advisory_checks_from_session.md) — npm bulk advisory endpoint works; `pnpm why --prod` in apps/mobile includes jest and Metro; check what an allowlist pin compares
 - [LOST-03 review](project_lost03_review.md) — grep non-test code for `decision.` reads (rule twice); one word, opposite meanings across layers; L3 on 55432 without Docker; test kit copying a server constant
 - [pnpm overrides review](project_pnpm_overrides_review.md) — pnpm 10 override selector = semver.intersects + replace (exact targets freeze); query advisory ranges; reproduce lockfile/red-first in scratch; half-generalised helpers
+- [LOST-06 review](project_lost06_review.md) — one-case switch fails no-unnecessary-condition; layered headers in the fake; grep tests before calling a guard dead; the open withdraws the resolution enum

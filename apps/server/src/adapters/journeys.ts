@@ -56,11 +56,21 @@
  *     when the rule says so (from LOST_CONTACT), in one transaction (AR-04).
  *   - Resolving is one helper (`resolveInside`), for every path that resolves
  *     an alert: the journey's one unresolved alert goes to RESOLVED; its
- *     lost-contact messages not yet sent are withdrawn, so no claim hands them
- *     out again (D-111); and every responder row gets one stand-down of the
- *     resolution's own kind. A stand-down for a responder whose lost-contact
- *     message may still be in the push port's hands is due only once that
- *     message's lease or retry time has passed, so it never overtakes it.
+ *     messages of the kinds withdrawn on resolution (lost-contact pushes, and
+ *     the notices that someone is on it) not yet sent are withdrawn, so no
+ *     claim hands them out again (D-111, D-113); and every responder row gets
+ *     one stand-down of the resolution's own kind. A stand-down for a
+ *     responder with a withdrawn message that may still be in the push port's
+ *     hands is due only once the latest such lease or retry time has passed,
+ *     so it never overtakes any of them (D-114).
+ *
+ * "I'm on it" (LOST-06) reads the alert first without a lock, so a refusal
+ * never holds a row. One that would record takes the alert's journey's row
+ * first too, asks the domain's alert rule again under it, and writes the
+ * acknowledgement and one notice per other responder in one transaction
+ * (AR-04, AR-05). It never holds an ACTIVE journey's row for more than the
+ * moment it takes to find the alert resolved, so it cannot hide a journey
+ * from the watchdog's open.
  *
  * The worker's marks can now wait on two withdrawals, and the worker's pool
  * has no lock limit of its own. The first is the API's, when it resolves an
@@ -94,7 +104,10 @@ import {
 import { databaseTime } from '../domain/database-time.ts';
 import {
   ALERT_RESOLUTIONS,
+  WITHDRAWN_WHEN_RESOLVED,
+  alertTransition,
   transition,
+  type AlertForAcknowledgement,
   type AlertResolution,
   type JourneyForHeartbeat,
   type JourneyState,
@@ -103,7 +116,9 @@ import {
 import { sqlstateOf } from '../domain/sqlstate.ts';
 import { LOCK_WAIT_LIMIT_MS } from '../domain/watchdog.ts';
 import type {
+  AcknowledgementToRecord,
   AlertMessage,
+  AlertStore,
   ClaimedMessages,
   HeartbeatToRecord,
   HomeToRecord,
@@ -116,6 +131,7 @@ import type {
   OutboxStore,
   OverdueJourneys,
   PushFailureReason,
+  RecordAcknowledgementResult,
   RecordHeartbeatResult,
   RecordHomeResult,
   StartedJourney,
@@ -158,6 +174,37 @@ async function unendedJourneyOf(db: Reader, walkerId: string): Promise<UnendedJo
     throw new Error(`An ended journey was read as unended: ${row.id}.`);
   }
   return { id: row.id, state: row.state };
+}
+
+/**
+ * The alert as "I'm on it" reads it (LOST-06): its state, who is on it, and
+ * its journey's responders, one row each; or null for an ID no alert has. A
+ * plain read, by the database or inside a transaction: it takes no lock.
+ */
+async function alertForAcknowledgement(
+  db: Reader,
+  alertId: string,
+): Promise<AlertForAcknowledgement | null> {
+  const rows = await db
+    .select({
+      id: alerts.id,
+      state: alerts.state,
+      acknowledgedBy: alerts.acknowledgedBy,
+      responderId: journeyResponders.responderId,
+    })
+    .from(alerts)
+    .leftJoin(journeyResponders, eq(journeyResponders.journeyId, alerts.journeyId))
+    .where(eq(alerts.id, alertId));
+  const [first] = rows;
+  if (first === undefined) {
+    return null;
+  }
+  return {
+    id: first.id,
+    state: first.state,
+    acknowledgedBy: first.acknowledgedBy,
+    responderIds: rows.flatMap(({ responderId }) => (responderId === null ? [] : [responderId])),
+  };
 }
 
 /** SQLSTATE lock_not_available: a wait for a row ran past its lock_timeout. */
@@ -326,21 +373,24 @@ interface Resolved {
  *   1. The alert, whatever its state, goes to RESOLVED at now(), with the
  *      resolution. LOST-02's index allows at most one; none is answered with
  *      no alert and no messages, and the move stands (reading 11).
- *   2. Its lost-contact messages not sent and not withdrawn are withdrawn at
- *      now() (D-111). The update takes each row's lock, so a claim or a mark
- *      in progress finishes first, and the row is checked again as it left
- *      it: one marked sent meanwhile is not withdrawn, and one claimed comes
- *      back with its new attempt count and lease. Attempts and the last
+ *   2. Its messages of the kinds withdrawn on resolution
+ *      (WITHDRAWN_WHEN_RESOLVED: its lost-contact pushes, and its notices
+ *      that someone is on it), not sent and not withdrawn, are withdrawn at
+ *      now() (D-111, D-113). The update takes each row's lock, so a claim or
+ *      a mark in progress finishes first, and the row is checked again as it
+ *      left it: one marked sent meanwhile is not withdrawn, and one claimed
+ *      comes back with its new attempt count and lease. Attempts and the last
  *      failure are kept.
  *   3. One stand-down per responder row, of the resolution's own kind, with a
- *      new random ID, due at now(), unless that responder's lost-contact
- *      message was withdrawn having been handed to the port (attempts ≥ 1)
- *      and is due after now(): then at that time, the end of its lease or its
- *      retry, at most 60 s on. So a stand-down is never handed to the port
- *      while the push it stands down may still be in the port's hands. The
- *      unique (alert, recipient, kind) refuses a second one. Steps 2 and 3
- *      are one statement, so the hold copies the time at the database's own
- *      precision.
+ *      new random ID, due at now(), unless any of that responder's withdrawn
+ *      messages was handed to the port (attempts ≥ 1) and is due after now():
+ *      then at the latest such time, the end of a lease or a retry, at most
+ *      60 s on. So a stand-down is never handed to the port while anything it
+ *      stands down may still be in the port's hands. Held per responder, so a
+ *      responder with two messages withdrawn still gets one stand-down: the
+ *      unique (alert, recipient, kind) refuses a second, and would roll back
+ *      the whole resolution (D-114). Steps 2 and 3 are one statement, so the
+ *      hold copies the time at the database's own precision.
  */
 async function resolveInside(
   tx: Pick<Database, 'execute' | 'update'>,
@@ -360,28 +410,32 @@ async function resolveInside(
     with withdrawn as (
       update ${outbox} set "withdrawn_at" = now()
        where ${outbox.alertId} = ${alert.id}
-         and ${outbox.kind} = 'LOST_CONTACT'
+         and ${inArray(outbox.kind, WITHDRAWN_WHEN_RESOLVED)}
          and ${outbox.sentAt} is null
          and ${outbox.withdrawnAt} is null
       returning ${outbox.recipientId}, ${outbox.attempts}, ${outbox.nextAttemptAt}
+    ), held as (
+      select withdrawn."recipient_id", max(withdrawn."next_attempt_at") as "hold_until"
+        from withdrawn
+       where withdrawn."attempts" >= 1 and withdrawn."next_attempt_at" > now()
+       group by withdrawn."recipient_id"
     )
     insert into "outbox" ("alert_id", "recipient_id", "kind", "created_at", "attempts",
                           "next_attempt_at")
     select ${alert.id}, ${journeyResponders.responderId},
            ${resolution}::${sql.identifier(messageKind.enumName)}, now(), 0,
-           case when withdrawn."attempts" >= 1 and withdrawn."next_attempt_at" > now()
-                then withdrawn."next_attempt_at"
-                else now()
-           end
+           coalesce(held."hold_until", now())
       from ${journeyResponders}
-      left join withdrawn on withdrawn."recipient_id" = ${journeyResponders.responderId}
+      left join held on held."recipient_id" = ${journeyResponders.responderId}
      where ${journeyResponders.journeyId} = ${journeyId}
     returning "id", "recipient_id", "kind"`);
 
   return { alertId: alert.id, messages: standDowns.rows.map(asMessage) };
 }
 
-export function databaseJourneyStore(db: Database): JourneyStore & WatchdogStore & OutboxStore {
+export function databaseJourneyStore(
+  db: Database,
+): JourneyStore & WatchdogStore & OutboxStore & AlertStore {
   return {
     unendedJourneyOf(walkerId: string): Promise<UnendedJourney | null> {
       return unendedJourneyOf(db, walkerId);
@@ -633,6 +687,72 @@ export function databaseJourneyStore(db: Database): JourneyStore & WatchdogStore
             hasPosition: latest.positionOf !== null,
             batteryLevel: latest.batteryLevel,
           };
+    },
+
+    alertForAcknowledgement(alertId: string): Promise<AlertForAcknowledgement | null> {
+      return alertForAcknowledgement(db, alertId);
+    },
+
+    recordAcknowledgement({
+      alertId,
+      responderId,
+    }: AcknowledgementToRecord): Promise<RecordAcknowledgementResult> {
+      // Not rewritten as the heartbeat's errors are: nothing here binds a
+      // location or a phone number, so no error of this can carry one. The
+      // module logs the SQLSTATE alone.
+      return db.transaction(async (tx): Promise<RecordAcknowledgementResult> => {
+        // The journey's row first, as every path that moves a journey or its
+        // alert takes it (D-112). No row: no alert by that ID.
+        const [locked] = await tx
+          .select({ id: journeys.id })
+          .from(journeys)
+          .where(
+            eq(
+              journeys.id,
+              tx.select({ journeyId: alerts.journeyId }).from(alerts).where(eq(alerts.id, alertId)),
+            ),
+          )
+          .for('update');
+
+        // The domain decides under the lock, from what the alert holds now,
+        // and its decision is what is written (AR-04): another responder's
+        // acknowledgement, a copy of this one, or a resolution committed
+        // since the module's read is answered here, writing nothing.
+        const decision = alertTransition(
+          locked === undefined ? null : await alertForAcknowledgement(tx, alertId),
+          { type: 'acknowledge', responderId },
+        );
+        if (decision.type !== 'acknowledged') {
+          return { outcome: 'not_recorded', decision };
+        }
+
+        // Who and when, at this transaction's now() (AR-03, SM-09). It must
+        // change exactly the one row the rule read, or nothing is kept.
+        const [moved] = await tx
+          .update(alerts)
+          .set({ state: decision.state, acknowledgedBy: responderId, acknowledgedAt: sql`now()` })
+          .where(
+            and(eq(alerts.id, alertId), unresolved(alerts.state), isNull(alerts.acknowledgedBy)),
+          )
+          .returning({ journeyId: alerts.journeyId });
+        if (moved === undefined) {
+          throw new Error('The acknowledgement changed no alert, so nothing of it is kept.');
+        }
+
+        // One notice per responder row but the acknowledger's (D-113), each
+        // with a new random ID, due at once: a notice stands nobody down, so
+        // nothing holds it. None when the acknowledger is the only responder.
+        // The unique (alert, recipient, kind) refuses a second one.
+        const notices = await tx.execute<MessageRow>(sql`insert into "outbox" ("alert_id",
+            "recipient_id", "kind", "created_at", "attempts", "next_attempt_at")
+          select ${alertId}, ${journeyResponders.responderId}, 'ACKNOWLEDGED', now(), 0, now()
+            from ${journeyResponders}
+           where ${journeyResponders.journeyId} = ${moved.journeyId}
+             and ${journeyResponders.responderId} <> ${responderId}
+          returning "id", "recipient_id", "kind"`);
+
+        return { outcome: 'acknowledged', messages: notices.rows.map(asMessage) };
+      });
     },
 
     async overdueJourneys(afterMs: number): Promise<OverdueJourneys> {

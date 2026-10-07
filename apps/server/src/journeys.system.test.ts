@@ -95,6 +95,15 @@ function world({ log, storeKeepsTime = false }: { log?: Log; storeKeepsTime?: bo
     health: createHealthService({ clock, heartbeats: fakeWorkerHeartbeats(NOW) }),
     journeys: createJourneyService({ clock, journeys: store, log: log ?? recorded }),
     devices,
+    // RG-03 (LOST-06, the spec's "Existing assertions that change by
+    // design"): `acknowledgements` added because "I'm on it" (D-114) made it
+    // part of what the API needs. These tests acknowledge nothing, so it
+    // rejects. The route tests that call every route get their 401 before
+    // any handler runs, and SM-01-AC9's valid-credential call is answered
+    // with something other than 401 either way; nothing they assert changes.
+    acknowledgements: {
+      acknowledge: () => Promise.reject(new Error('these tests acknowledge nothing')),
+    },
   });
 
   return {

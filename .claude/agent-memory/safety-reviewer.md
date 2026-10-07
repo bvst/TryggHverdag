@@ -5,6 +5,23 @@ Newest first.
 
 ## Patterns worth checking every time
 
+### A later non-critical push can replace a stored critical one at the provider (LOST-06)
+APNs stores only ONE notification per bundle ID for an offline device, "in most cases the latest" (Apple,
+"Sending notification requests to APNs"; apns-expiration 0 means delivered once and not stored). So any
+non-critical message sent to a responder WHILE an alert is open (a notice, a reminder) can evict the critical
+alert waiting for that offline phone. Stand-downs are fine (the alert is over); a later alert is fine (it is the
+latest). Ask, for every new kind: is it sent while an alert is open, to someone already sent the critical push?
+Server-side order cannot fix it; the push adapter (M3) and an L9 real-device test must. Spec claims like "the
+others still get the critical push" are true only at our port.
+More of Apple's page (fetched 2026-10-07): "isn't always guaranteed when multiple notifications are stored in a
+short duration" and "APNs may reorder notifications you send to the same device token", so "the later one is
+kept" is NOT a certainty either way, and any port-side ordering promise (holds, withdrawals) stops at our port.
+FCM (firebase.google.com/docs/cloud-messaging/customize-messages/collapsible-message-types): "By default, the
+collapse key is the app package name"; "Notification messages are always collapsible and will ignore the
+collapse_key parameter"; at most 4 collapse keys stored per device, "no determining factor on which keys are
+kept"; non-collapsible: 100 stored, then all discarded. So Android notification messages likely displace too
+(inference). Ask that any displacement gate covers BOTH platforms, and both send orders.
+
 ### Allowlist or denylist of message kinds: ask which way a forgotten kind fails (LOST-03 loop 3)
 For a withdrawal or suppression keyed on kind, a kind nobody classified either gets withdrawn (denylist) or
 sent (allowlist). Sending a stale all-clear after a new alert is the dangerous direction; withdrawing a

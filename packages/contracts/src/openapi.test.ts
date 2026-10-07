@@ -23,8 +23,18 @@ describe('the generated OpenAPI description', () => {
     // RG-03 (LOST-03): the "I'm home" route is added by design (D-110, its
     // spec's approach item 5 and "Existing assertions that change by
     // design"), named here on purpose. The list is still exact.
+    //
+    // RG-03 (LOST-06): the "I'm on it" route is added by design (D-114, its
+    // spec's approach item 6 and "Existing assertions that change by
+    // design"), named here on purpose, as this comment asks. Still exact.
     expect(Object.keys(paths).sort()).toEqual(
-      ['/health', '/heartbeats', '/journeys', '/journeys/{journeyId}/home'].sort(),
+      [
+        '/health',
+        '/heartbeats',
+        '/journeys',
+        '/journeys/{journeyId}/home',
+        '/alerts/{alertId}/acknowledgement',
+      ].sort(),
     );
     expect(paths['/health']).toHaveProperty('get');
   });
@@ -298,6 +308,88 @@ describe('SM-04: the "I’m home" route, as published (D-110)', () => {
     const { paths } = await described();
 
     for (const [route, digest] of Object.entries(UNCHANGED_PATH_ITEMS)) {
+      expect(createHash('sha256').update(JSON.stringify(paths[route])).digest('hex'), route).toBe(
+        digest,
+      );
+    }
+  });
+});
+
+/** The route LOST-06 adds (D-114), as the document names it under the /v1 server. */
+const ACKNOWLEDGEMENT = '/alerts/{alertId}/acknowledgement';
+
+/**
+ * The published shape of the start, heartbeat and "I'm home" routes before
+ * LOST-06, as the committed openapi.json held it at 91acb06: a SHA-256 of
+ * each path item's JSON, computed the way the LOST-03 pins above are (the
+ * first two equal theirs). LOST-06 adds a route and changes none of these.
+ */
+const PATH_ITEMS_BEFORE_LOST_06 = {
+  '/journeys': '4b736a3f8275081700131fa40eec6c01df6f2a797210cbb35c168526b77945a3',
+  '/heartbeats': '5bda3e10bfe01676c134acee502bb6e549f33d168a81a2ae5a1d753b8f7d1f53',
+  '/journeys/{journeyId}/home': '3d82eac138f0aa845ac50a7fc433526deef890275b8a43a2ac22db9fc6569e26',
+};
+
+describe('LOST-06 and SEC-07: the "I’m on it" route, as published (D-114)', () => {
+  test('LOST-06-AC15: POST /alerts/{alertId}/acknowledgement is described under the /v1 server, as a POST and nothing else', async () => {
+    const { paths } = await described();
+    const document = await openApiDocument();
+
+    expect(document['servers']).toEqual([{ url: API_PREFIX }]);
+    expect(API_PREFIX).toBe('/v1');
+    expect(paths[ACKNOWLEDGEMENT]?.['post']).toBeDefined();
+    expect(
+      Object.keys(paths[ACKNOWLEDGEMENT] ?? {}).filter((key) => HTTP_METHODS.includes(key)),
+    ).toEqual(['post']);
+  });
+
+  test('LOST-06-AC15: its answers are 200, 400, 401, 404 and 409, and no other', async () => {
+    const { paths } = await described();
+    const responses = Object.keys(paths[ACKNOWLEDGEMENT]?.['post']?.responses ?? {});
+
+    expect([...responses].sort()).toEqual(['200', '400', '401', '404', '409']);
+  });
+
+  test('LOST-06-AC15: it requires the bearer scheme', async () => {
+    const { paths, securitySchemes, securityOf } = await described();
+    const [bearerName] = Object.entries(securitySchemes)
+      .filter(([, scheme]) => scheme.type === 'http' && scheme.scheme?.toLowerCase() === 'bearer')
+      .map(([name]) => name);
+
+    expect(bearerName).toBeDefined();
+    expect(securityOf(paths[ACKNOWLEDGEMENT]?.['post'])).toContainEqual({ [bearerName ?? '']: [] });
+  });
+
+  test('LOST-06-AC15: its 200 body is exactly { "outcome": "ACKNOWLEDGED" }', async () => {
+    const { paths } = await described();
+    const ok = paths[ACKNOWLEDGEMENT]?.['post']?.responses?.['200'] as
+      { content?: Record<string, { schema?: JsonSchema }> } | undefined;
+    const schema = ok?.content?.['application/json']?.schema;
+    const outcome = schema?.properties?.['outcome'];
+
+    expect(Object.keys(schema?.properties ?? {})).toEqual(['outcome']);
+    expect(schema?.required).toEqual(['outcome']);
+    expect(outcome?.const === undefined ? outcome?.enum : [outcome.const]).toEqual([
+      'ACKNOWLEDGED',
+    ]);
+  });
+
+  test('LOST-06-AC15: the alert is its one parameter: in the path, required, a UUID; nothing in the query or a header', async () => {
+    const { paths } = await described();
+    const parameters =
+      (paths[ACKNOWLEDGEMENT]?.['post'] as { parameters?: Parameter[] } | undefined)?.parameters ??
+      [];
+
+    expect(parameters.map(({ name, in: where, required }) => ({ name, where, required }))).toEqual([
+      { name: 'alertId', where: 'path', required: true },
+    ]);
+    expect(parameters[0]?.schema?.format).toBe('uuid');
+  });
+
+  test('LOST-06-AC15: the start, heartbeat and "I’m home" routes are published exactly as before, each pinned by its sha256', async () => {
+    const { paths } = await described();
+
+    for (const [route, digest] of Object.entries(PATH_ITEMS_BEFORE_LOST_06)) {
       expect(createHash('sha256').update(JSON.stringify(paths[route])).digest('hex'), route).toBe(
         digest,
       );

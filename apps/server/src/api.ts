@@ -33,6 +33,7 @@ import {
   deviceCredentialErrors,
 } from '@trygghverdag/contracts';
 import { Hono } from 'hono';
+import type { AcknowledgementService } from './modules/alerts/acknowledgement.ts';
 import type { HealthService } from './modules/health/service.ts';
 import type { JourneyService } from './modules/journeys/service.ts';
 import type { DeviceAuthenticator } from './ports.ts';
@@ -41,6 +42,7 @@ export interface ApiDependencies {
   health: HealthService;
   journeys: JourneyService;
   devices: DeviceAuthenticator;
+  acknowledgements: AcknowledgementService;
 }
 
 /** What a request brings in besides its body: only what the credential check reads. */
@@ -73,7 +75,8 @@ const BEARER = /^Bearer (\S+)$/i;
  * published contract cannot drift apart.
  *
  * A 400's error object holds the device credential (LOST-03). With detailed
- * input, as the "I'm home" route has, oRPC puts the whole input it validated
+ * input, as the "I'm home" and "I'm on it" routes have, oRPC puts the whole
+ * input it validated
  * in the validation error's `cause.data`, `request.headers` included, so the
  * `Authorization` header is there (read in @orpc/openapi 1.15.3's detailed
  * decode and @orpc/server 1.15.3's `validateInput`). Nothing prints that
@@ -87,7 +90,7 @@ const BAD_REQUEST_BODY = new ORPCError('BAD_REQUEST', {
   message: badRequestError.message,
 }).toJSON();
 
-export function createApi({ health, journeys, devices }: ApiDependencies): Hono {
+export function createApi({ health, journeys, devices, acknowledgements }: ApiDependencies): Hono {
   const os = implement(contract).$context<RequestContext>();
 
   /**
@@ -182,6 +185,26 @@ export function createApi({ health, journeys, devices }: ApiDependencies): Hono 
           throw errors[result.reason]();
       }
     }),
+
+    // "I'm on it" (LOST-06, D-114). The responder is the device's own user,
+    // from any of their devices; the alert is the path's, and only the
+    // path's, as the input is detailed. A 200 means the caller is the one on
+    // it. No answer says who is.
+    acknowledgeAlert: fromKnownDevice.acknowledgeAlert.handler(
+      async ({ input, context, errors }) => {
+        const result = await acknowledgements.acknowledge({
+          responderId: context.device.userId,
+          alertId: input.params.alertId,
+        });
+        if (result.type === 'acknowledged') {
+          return { outcome: 'ACKNOWLEDGED' };
+        }
+        // Each reason the rule gives is the contract's code for it:
+        // ALERT_NOT_FOUND (404), ALREADY_ACKNOWLEDGED (409) and
+        // ALERT_RESOLVED (409).
+        throw errors[result.reason]();
+      },
+    ),
   });
 
   const handler = new OpenAPIHandler(router, {

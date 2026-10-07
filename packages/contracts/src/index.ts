@@ -15,6 +15,17 @@
  * `no-circular` is what catches the next one.
  */
 
+export {
+  acknowledgeAlert,
+  acknowledgementErrors,
+  acknowledgementRequestSchema,
+  acknowledgementResponseSchema,
+} from './alerts.ts';
+export type {
+  AcknowledgementErrorCode,
+  AcknowledgementRequest,
+  AcknowledgementResponse,
+} from './alerts.ts';
 export { API_PREFIX, API_VERSION } from './api-version.ts';
 export { badRequestError } from './bad-request.ts';
 export { contract } from './contract.ts';

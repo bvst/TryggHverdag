@@ -31,8 +31,15 @@ export type {
   FakeDeviceAuthenticator,
   RegisteredDevice,
 } from './fake-device-authenticator.ts';
-export { fakeJourneyStore } from './fake-journey-store.ts';
+export {
+  WITHDRAWN_WHEN_OPENED,
+  WITHDRAWN_WHEN_RESOLVED,
+  fakeJourneyStore,
+} from './fake-journey-store.ts';
 export type {
+  AcknowledgementNotRecorded,
+  AcknowledgementToRecord,
+  AlertForAcknowledgement,
   AlertMessage,
   ClaimedMessage,
   ClaimedMessages,
@@ -53,6 +60,7 @@ export type {
   OpenRequest,
   OverdueJourney,
   OverdueJourneys,
+  RecordAcknowledgementResult,
   RecordHeartbeatResult,
   RecordHomeResult,
   StartedJourney,
@@ -92,6 +100,7 @@ export type {
   FakePostgresQuery,
 } from './fake-postgres.ts';
 export type {
+  AcknowledgementAsStored,
   AlertAsStored,
   HeartbeatAsStored,
   JourneyAsStored,
