@@ -29,3 +29,8 @@ Related: [[bug12-mutation-gate-review]], [[reviewer-sandbox-limits]].
 each group's tests, but `vitest list --filesOnly --exclude 'apps/server/src/bin/**' <bin.test.ts> <others>` lists
 only the others, exit 0, no warning. So the root Vitest config (include in vitest.shared.mjs, exclude in
 vitest.config.mjs) decides a group's real test set. CLI --exclude is a file-free way to emulate a config change.
+
+**Narrowing a group's tests (2026-10-07, BUG-29).** "Test X kills none of file F's mutants on its own" is checked by:
+(a) mapping each assertion X makes about F to an in-process test; (b) planting F mutants only X's real process would
+show and running them without X; (c) a ranged Stryker run of F's process-facing lines without X, comparing survivors
+with the old group's. Removing a test cannot turn Survived into Killed (isolated forks), only Timeout into an honest Kill.
