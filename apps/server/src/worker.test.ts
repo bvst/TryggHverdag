@@ -43,6 +43,7 @@ import {
   fc,
   pgSettingsAnswer,
   syntheticCredential,
+  syntheticPingUrl,
   syntheticUuid,
   type FakeLog,
   type FakePgSetting,
@@ -3227,6 +3228,76 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
     expect(worker.exits).toEqual([]);
 
     await stopSmsWorker(worker);
+  });
+
+  test('LOST-07-AC11: with both URLs set, valid and different, as staging runs, the worker checks in at the worker’s, makes its SMS alarm for the SMS check’s, and says once that the SMS check reports once a minute, with no line about the same address', async () => {
+    // LOST-07 review loop 2 (test-auditor S2, safety-reviewer should-fix 2):
+    // the configuration that will run. The tests above set one URL, or both
+    // to one address; two mutants of the equal-address guard survived them.
+    // Two synthetic UUIDs on the loopback address, as SYNTHETIC_PING_URL is.
+    const [workerCheck, smsCheck] = [syntheticUuid(), syntheticUuid()];
+    const [workerUrl, smsUrl] = [syntheticPingUrl(workerCheck), syntheticPingUrl(smsCheck)];
+    const worker = smsWorkerProcess({
+      healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: workerUrl }),
+      healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: smsUrl }),
+    });
+    await settle();
+
+    expect(worker.checkIns).toEqual([workerUrl]);
+    expect(worker.created).toEqual([smsUrl]);
+    const lines = smsCheckLines(worker.written);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^worker: /);
+    expect(lines[0]).toMatch(/\breports once a minute\b/);
+    expect(lines[0]).not.toMatch(/\bsame\b/);
+    expect(lines[0]).not.toContain('Healthchecks.io');
+    expect(worker.written.join('')).not.toContain(workerCheck);
+    expect(worker.written.join('')).not.toContain(smsCheck);
+    expect(healthchecksLines(worker.written)).toHaveLength(1);
+    expect(healthchecksLines(worker.written)[0]).toMatch(CHECKING_IN);
+    expect(runTogether(worker.written)).toEqual([]);
+    expect(worker.exits).toEqual([]);
+
+    await stopSmsWorker(worker);
+  });
+
+  test('LOST-07-AC11: two settings with the same UUID are one check, however each is spelled: with the worker’s URL on one host and the SMS check’s on another, the worker checks in at the worker’s but makes no SMS alarm, and says once at start the line it says for the same address, naming both variables and neither value', async () => {
+    // LOST-07 review loop 2 (safety-reviewer should-fix 1, D-116): a check is
+    // its UUID, so "different" compares UUIDs, not spellings. Config refuses
+    // most other spellings of one URL, and takes any https: host, so the two
+    // here differ in their host alone: the loopback address, and localhost.
+    // Both on port 1, so nothing could leave this machine.
+    const check = syntheticUuid();
+    const workerUrl = syntheticPingUrl(check);
+    const smsUrl = `https://localhost:1/${check}`;
+    const worker = smsWorkerProcess({
+      healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: workerUrl }),
+      healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: smsUrl }),
+    });
+    // The line the worker says when the two are the very same address.
+    const sameAddress = smsWorkerProcess({
+      healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: PING_URL }),
+      healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: PING_URL }),
+    });
+    await settle();
+
+    expect(worker.checkIns).toEqual([workerUrl]);
+    expect(worker.created).toEqual([]);
+    const lines = smsCheckLines(worker.written);
+    expect(lines).toHaveLength(1);
+    expect(lines).toEqual(smsCheckLines(sameAddress.written));
+    expect(lines[0]).toContain('HEALTHCHECKS_SMS_URL');
+    expect(lines[0]).toContain('HEALTHCHECKS_WORKER_URL');
+    expect(lines[0]).not.toContain('Healthchecks.io');
+    expect(worker.written.join('')).not.toContain(check);
+    expect(worker.written.join('')).not.toContain('localhost');
+    expect(healthchecksLines(worker.written)).toHaveLength(1);
+    expect(healthchecksLines(worker.written)[0]).toMatch(CHECKING_IN);
+    expect(runTogether(worker.written)).toEqual([]);
+    expect(worker.exits).toEqual([]);
+
+    await stopSmsWorker(worker);
+    await stopSmsWorker(sameAddress);
   });
 
   test('LOST-07-AC11: given no SMS check setting at all, it runs as though HEALTHCHECKS_SMS_URL were unset', async () => {

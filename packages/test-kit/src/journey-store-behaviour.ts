@@ -6101,6 +6101,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
           sentAt?: Date;
           lastFailure?: 'NOT_CONFIGURED';
           withdrawnAt?: Date;
+          nextAttemptAt?: Date;
         } = {},
       ) =>
         subject.seedMessage({
@@ -6113,8 +6114,16 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         });
       // Counted: written 60 s before the store's now (to the millisecond
       // against the fake), and ten minutes before, failing NOT_CONFIGURED.
+      // That one is due again 40 s from now, as a refused SMS is after its
+      // retry delay: the count is held to when an SMS was written, never to
+      // when it is next due (D-100, LOST-07 review loop 2), so a count read
+      // by next_attempt_at would miss it and say 2.
       await seedSms(r1, SMS_UNSENT_LIMIT_MS + (margin === 1 ? 0 : margin));
-      await seedSms(r5, 10 * MINUTE, { attempts: 4, lastFailure: 'NOT_CONFIGURED' });
+      await seedSms(r5, 10 * MINUTE, {
+        attempts: 4,
+        lastFailure: 'NOT_CONFIGURED',
+        nextAttemptAt: new Date(now.getTime() + 40 * SECOND),
+      });
       await seedSms(r6, 10 * MINUTE);
       // Not counted: written just under 60 s before; sent; withdrawn.
       await seedSms(r2, SMS_UNSENT_LIMIT_MS - margin);

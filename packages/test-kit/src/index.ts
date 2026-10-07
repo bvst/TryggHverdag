@@ -27,7 +27,7 @@ export type {
   PushMessage,
   PushResult,
 } from './fake-push.ts';
-export { SYNTHETIC_CHECK_UUID, SYNTHETIC_PING_URL } from './ping-url.ts';
+export { SYNTHETIC_CHECK_UUID, SYNTHETIC_PING_URL, syntheticPingUrl } from './ping-url.ts';
 export { CREDENTIAL_BYTES, syntheticCredential, syntheticUuid } from './synthetic-ids.ts';
 export { fakeDeviceAuthenticator } from './fake-device-authenticator.ts';
 export type {

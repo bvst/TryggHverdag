@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { SYNTHETIC_CHECK_UUID as CHECK } from '../packages/test-kit/src/ping-url.ts';
+import { syntheticCredential, syntheticUuid } from '../packages/test-kit/src/synthetic-ids.ts';
 import { terraformDirs } from './infra-check.mjs';
 import { readOrganisation } from './lib/staging-deploy.mjs';
 import { STAGING_APP_NAME, STAGING_URL } from './lib/staging.mjs';
@@ -305,6 +306,46 @@ describe('LOST-07: the two ping URLs are each a plain check address, and never t
           accepted: false,
         });
       }
+    },
+  );
+
+  // LOST-07 review loop 2 (safety-reviewer should-fix 1, D-116 amended): one
+  // spelling per check, so the `!=` below compares checks. Healthchecks.io
+  // reads /<uuid> and /<uuid>/ as the same check, and the slug form
+  // (/<ping-key>/<slug>) names a check its UUID also names, so either secret
+  // could name the other's check by a spelling of its own, and `!=` would
+  // pass. Each variable is taken only as https://hc-ping.com/ and the UUID in
+  // lower case. The UUID starts with a letter, so it has an upper-case
+  // spelling and a percent-encoded one; fresh each run (RG-07).
+  test.each(['healthchecks_sms_url', 'healthchecks_worker_url'])(
+    'LOST-07-AC20: %s takes https://hc-ping.com/ and a lower-case UUID, and no other spelling of a check: no trailing or leading character, no upper case, no percent-encoding, no slug form, one path segment',
+    (name) => {
+      const check = `a${syntheticUuid().slice(1)}`;
+      const pingKey = syntheticCredential().slice(0, 22);
+      const host = 'https://hc-ping.com';
+
+      expect(takes(name, `${host}/${check}`)).toBe(true);
+      expect(takes(name, `${host}/${CHECK}`)).toBe(true);
+      const refused = [
+        ['a trailing slash', `${host}/${check}/`],
+        ['a trailing space', `${host}/${check} `],
+        ['a trailing tab', `${host}/${check}\t`],
+        ['a trailing newline', `${host}/${check}\n`],
+        ['a trailing backslash', `${host}/${check}\\`],
+        ['a leading space', ` ${host}/${check}`],
+        ['an upper-case UUID', `${host}/${check.toUpperCase()}`],
+        ['a percent-encoded character in the UUID', `${host}/%61${check.slice(1)}`],
+        ['the slug form', `${host}/${pingKey}/staging-worker`],
+        ['an upper-case host', `https://HC-PING.COM/${check}`],
+        ['a path of two segments, the UUID first', `${host}/${check}/fail`],
+        ['a path of two segments, the UUID second', `${host}/ping/${check}`],
+        ['an empty path', host],
+        ['a UUID too short', `${host}/${check.slice(0, -1)}`],
+        ['not a UUID', `${host}/${pingKey}`],
+      ];
+
+      // Every spelling Terraform would take, by what it is, so a failure names them all.
+      expect(refused.filter(([, value]) => takes(name, value)).map(([what]) => what)).toEqual([]);
     },
   );
 

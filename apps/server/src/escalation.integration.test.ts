@@ -722,7 +722,7 @@ describe('LOST-07, REL-07 and LOST-02: the escalation to SMS, on the real tables
     expect(escalationLines(log)).toEqual([]);
   });
 
-  test('LOST-07-AC6: through the API on the real tables, a stranger learns nothing of an ESCALATED alert and stops nothing (SEC-02, PRIV-03): W’s own device, another walker and a responder of another journey only each get, status, body and headers byte for byte, the 404 an alert ID no alert has gets; no acknowledgement_ignored line is written; every SMS stays unwithdrawn, and is then delivered', async () => {
+  test('LOST-07-AC6: through the API on the real tables, a stranger learns nothing of an ESCALATED alert and stops nothing, since only the journey’s own responders may see it or stop it: W’s own device, another walker and a responder of another journey only each get, status, body and headers byte for byte, the 404 an alert ID no alert has gets; no acknowledgement_ignored line is written; every SMS stays unwithdrawn, and is then delivered', async () => {
     // LOST-07 review loop 1 (privacy-security-reviewer), as the L6 test holds
     // it: "not a responder" comes before every state, ESCALATED included.
     const { walker, journeyId, alertId, responders } = await due({ responders: 3 });

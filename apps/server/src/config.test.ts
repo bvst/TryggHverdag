@@ -5,6 +5,8 @@
 import {
   SYNTHETIC_CHECK_UUID as CHECK,
   SYNTHETIC_PING_URL as PING_URL,
+  syntheticCredential,
+  syntheticPingUrl,
   syntheticUuid,
 } from '@trygghverdag/test-kit';
 import { describe, expect, test } from 'vitest';
@@ -256,4 +258,76 @@ describe('LOST-07: a ping URL that would misplace /fail is refused at start', ()
       });
     },
   );
+});
+
+// LOST-07 review loop 2 (safety-reviewer should-fix 1, D-116 amended): one
+// spelling per check. "Different" compared spellings, not checks.
+// Healthchecks.io reads /<uuid> and /<uuid>/ as one success ping, and the slug
+// form (/<ping-key>/<slug>) names a check its UUID also names; and the URL
+// parser drops a leading or trailing space, a tab or a newline, reads a
+// backslash as a slash, and lower-cases the host, so a value and the address
+// fetched can differ. Any of them as the SMS secret could keep the worker's
+// check green while the watchdog was down, and the SMS check would never be
+// pinged. So a ping URL is taken only when the value is exactly its own parsed
+// spelling and its path is / and a lower-case UUID. Any https: host stays
+// allowed, as in INF-08, so tests keep their loopback address.
+
+describe('LOST-07: one spelling per check', () => {
+  // Fresh each run (RG-07), and the markers no refusal may hold. The UUID
+  // starts with a letter, so it has an upper-case spelling, and a percent-
+  // encoded one of that letter; the ping key is credential-like, as a real
+  // one is.
+  const check = `a${syntheticUuid().slice(1)}`;
+  const pingKey = syntheticCredential().slice(0, 22);
+  const HOST = 'https://hc-ping.com';
+
+  const refused: readonly (readonly [string, string])[] = [
+    ['a trailing slash', `${HOST}/${check}/`],
+    ['a trailing space', `${HOST}/${check} `],
+    ['a trailing tab', `${HOST}/${check}\t`],
+    ['a trailing newline', `${HOST}/${check}\n`],
+    ['a trailing backslash', `${HOST}/${check}\\`],
+    ['a leading space', ` ${HOST}/${check}`],
+    ['an upper-case UUID', `${HOST}/${check.toUpperCase()}`],
+    ['a percent-encoded character in the UUID', `${HOST}/%61${check.slice(1)}`],
+    ['the slug form, /<ping-key>/<slug>', `${HOST}/${pingKey}/staging-worker`],
+    ['an upper-case host', `https://HC-PING.COM/${check}`],
+    ['a path of two segments, the UUID first', `${HOST}/${check}/fail`],
+    ['a path of two segments, the UUID second', `${HOST}/ping/${check}`],
+    // The marker in the host here, as the path is empty: any https: host is taken.
+    ['an empty path', `https://${check}.hc-ping.com`],
+  ];
+
+  /** Whether `text` holds any marker: the UUID in any case or spelling, or the ping key. */
+  const holdsAMarker = (text: string) =>
+    [check.slice(1), pingKey].some((marker) => text.toLowerCase().includes(marker.toLowerCase()));
+
+  describe.each([
+    ['HEALTHCHECKS_WORKER_URL', readHealthchecksSetting],
+    ['HEALTHCHECKS_SMS_URL', readHealthchecksSmsSetting],
+  ] as const)('%s', (variable, read) => {
+    test.each(refused)(
+      `LOST-07-AC11: ${variable} with %s is refused, with a reason that names the variable and never the value`,
+      (_what, value) => {
+        expect(holdsAMarker(value), 'the value holds a marker').toBe(true);
+
+        const setting = read({ [variable]: value });
+
+        expect(setting.checkingIn).toBe(false);
+        expect(setting.checkingIn ? '' : setting.reason).toContain(variable);
+        expect(holdsAMarker(JSON.stringify(setting))).toBe(false);
+      },
+    );
+
+    test(`LOST-07-AC11: ${variable} takes a ping URL on any https: host whose path is / and a lower-case UUID, at exactly that address: hc-ping.com, the test kit’s loopback address and localhost`, () => {
+      for (const value of [
+        `${HOST}/${check}`,
+        PING_URL,
+        syntheticPingUrl(check),
+        `https://localhost:1/${check}`,
+      ]) {
+        expect(read({ [variable]: value }), value).toEqual({ checkingIn: true, url: value });
+      }
+    });
+  });
 });

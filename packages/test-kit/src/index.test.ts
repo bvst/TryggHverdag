@@ -37,4 +37,18 @@ describe('the test kit', () => {
     expect(kit.SYNTHETIC_PING_URL).toBe(`https://127.0.0.1:1/${kit.SYNTHETIC_CHECK_UUID}`);
     expect(kit.SYNTHETIC_CHECK_UUID).toBe('00000000-0000-0000-0000-000000000000');
   });
+
+  test('hands out a synthetic ping URL for a check of its own: the same unreachable address, with the UUID given, or a fresh synthetic one each time', () => {
+    // LOST-07: the worker's check and the SMS check are two checks, so a test
+    // setting both needs two URLs, each as unreachable as SYNTHETIC_PING_URL.
+    const uuid = kit.syntheticUuid();
+    expect(kit.syntheticPingUrl(uuid)).toBe(`https://127.0.0.1:1/${uuid}`);
+    expect(kit.syntheticPingUrl(kit.SYNTHETIC_CHECK_UUID)).toBe(kit.SYNTHETIC_PING_URL);
+
+    const [one, two] = [kit.syntheticPingUrl(), kit.syntheticPingUrl()];
+    expect(one).toMatch(
+      /^https:\/\/127\.0\.0\.1:1\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(two).not.toBe(one);
+  });
 });

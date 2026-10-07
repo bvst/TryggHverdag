@@ -859,7 +859,7 @@ describe('LOST-07 and LOST-06: "I’m on it" stops the escalation, withdrawing t
     expect(w.smsOf(journeyId)).toEqual([]);
   });
 
-  test('LOST-07-AC6: a stranger learns nothing of an ESCALATED alert and stops nothing (SEC-02, PRIV-03): W’s own device, another walker and a responder of another journey only each get, status, body and headers byte for byte, the 404 an alert ID no alert has gets; no acknowledgement_ignored line is written; the alert and its messages are as they were, every SMS unwithdrawn, and then delivered', async () => {
+  test('LOST-07-AC6: a stranger learns nothing of an ESCALATED alert and stops nothing, since only the journey’s own responders may see it or stop it: W’s own device, another walker and a responder of another journey only each get, status, body and headers byte for byte, the 404 an alert ID no alert has gets; no acknowledgement_ignored line is written; the alert and its messages are as they were, every SMS unwithdrawn, and then delivered', async () => {
     // LOST-07 review loop 1 (privacy-security-reviewer): "not a responder"
     // comes before every state, ESCALATED included, so neither the alert's
     // existence nor its escalation can be learned by someone who does not
@@ -1410,6 +1410,52 @@ describe('LOST-07 and AR-05: an escalation that fails is a failed sweep, saying 
     ]);
     expect(w.smsOf(journeyId)).toEqual([]);
   });
+
+  test.each(['first', 'second'] as const)(
+    'LOST-07-AC15: one alert’s failed escalation stops no other, the failing alert read %s: of two alerts due, the one whose journey has no responder row is refused whole, and the other is still ESCALATED with an SMS for every one of its responders, each then sent; the sweep fails, escalating one and finding none stuck, with exactly one escalation_failed line',
+    async (failingRead) => {
+      // LOST-07 review loop 2 (test-auditor): the escalation's own promise,
+      // "each in a transaction of its own, so one alert's failure holds up no
+      // other". The escalation's read has no ORDER BY, so both orders are
+      // tried, arranged through the fake: it reads the alerts due in the
+      // order they were opened, and each `lost` below sweeps its own
+      // journey's alert open, one after the other. So `first` is read first,
+      // and which journey loses its responder rows decides whether the
+      // failing alert comes before the other or after it. Two responders on
+      // one journey and three on the other, so neither's SMS can pass for
+      // the other's.
+      const w = world();
+      const first = await lost(w, 2);
+      const second = await lost(w, 3);
+      w.clock.advance(TWO_MINUTES);
+      const [failing, other] = failingRead === 'first' ? [first, second] : [second, first];
+      w.store.removeResponders(failing.journeyId);
+      const beat = await w.beats.lastBeat();
+      const asked = w.store.escalateRequests().length;
+
+      expect(await w.watchdog.sweep()).toEqual({ ok: false, opened: 0, escalated: 1, stuck: 0 });
+
+      // Both were asked about, in the order arranged.
+      expect(w.store.escalateRequests().slice(asked)).toEqual([
+        { alertId: first.alertId },
+        { alertId: second.alertId },
+      ]);
+      expect(w.alertsOf(other.journeyId).map(({ state }) => state)).toEqual(['ESCALATED']);
+      expect(recipientsOf(w.smsOf(other.journeyId))).toEqual([...other.responderIds].sort());
+      expect(
+        w.alertsOf(failing.journeyId).map(({ state, smsRaisedAt }) => [state, smsRaisedAt]),
+      ).toEqual([['OPEN', null]]);
+      expect(w.smsOf(failing.journeyId)).toEqual([]);
+      expect(w.log.events).toEqual([{ event: 'escalation_failed', stage: 'escalate', code: null }]);
+      expect(await w.beats.lastBeat()).toEqual(beat);
+      // And the other alert's SMS go out, one to each of its responders.
+      expect(await w.smsSender.deliverDue()).toEqual({
+        sent: other.responderIds.length,
+        failed: 0,
+      });
+      expect(recipientsOf(w.sms.accepted)).toEqual([...other.responderIds].sort());
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1499,6 +1545,49 @@ describe('LOST-07, AR-06 and D-108: a held row never hides an escalation', () =>
     expect(w.smsOf(journeyId)).toEqual([]);
 
     // The store answering again, the next sweep escalates and beats.
+    w.store.recover();
+    expect(await w.watchdog.sweep()).toEqual({ ...QUIET_SWEEP, escalated: 1 });
+    expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
+    expect(w.smsOf(journeyId)).toHaveLength(3);
+  });
+
+  test('LOST-07-AC16: an alert whose row is held past 2 min 30 s, and whose waiting retry then fails, counts as stuck, never as skipped: the first attempt skips the held row, the retry throws a 55P03 from a lock that is not the row’s, and the sweep fails with one escalation_failed line, stage escalate, code 55P03, and one escalation_overdue line naming the alert, and records no beat; let go, the next sweep escalates', async () => {
+    // LOST-07 review loop 2 (test-auditor; the spec's approach 3.4: "held
+    // through the wait, or failed, it is stuck … and the sweep fails"). The
+    // test above holds a first attempt that fails; this one the retry, which
+    // only a first attempt skipped past the stuck threshold reaches. A 55P03
+    // thrown is a failed escalation, not `held` (AC16's L3 half): only the
+    // store answers `held`, and only for the journey's own row.
+    const w = world();
+    const { journeyId, alertId } = await lost(w, 3);
+    w.clock.advance(TWO_MINUTES + STUCK_AFTER);
+    const beat = await w.beats.lastBeat();
+    const before = w.alertsOf(journeyId);
+    const asked = w.store.escalateRequests().length;
+    w.store.hold(journeyId);
+    // The first attempt goes as the hold has it go, skipped without a wait;
+    // the second, the retry that waits, meets the database's error.
+    w.store.beforeNext('escalateAlert', () => undefined);
+    w.store.beforeNext('escalateAlert', () => {
+      w.store.failWith(databaseError('55P03'), 'escalateAlert');
+    });
+
+    expect(await w.watchdog.sweep()).toEqual({ ok: false, opened: 0, escalated: 0, stuck: 1 });
+
+    expect(w.store.escalateRequests().slice(asked)).toEqual([
+      { alertId },
+      { alertId, lockWaitMs: 5 * SECOND },
+    ]);
+    expect(w.log.events).toEqual([
+      { event: 'escalation_failed', stage: 'escalate', code: '55P03' },
+      { event: 'escalation_overdue', alertId },
+    ]);
+    expect(await w.beats.lastBeat()).toEqual(beat);
+    expect(w.alertsOf(journeyId)).toEqual(before);
+    expect(w.smsOf(journeyId)).toEqual([]);
+
+    // The row let go and the store answering again, the next sweep escalates and beats.
+    w.store.release(journeyId);
     w.store.recover();
     expect(await w.watchdog.sweep()).toEqual({ ...QUIET_SWEEP, escalated: 1 });
     expect(await w.beats.lastBeat()).toEqual(await w.clock.now());

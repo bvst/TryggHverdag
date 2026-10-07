@@ -1022,7 +1022,6 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     return message;
   };
 
-  /** A number of milliseconds as an interval takes it. */
   /**
    * As lock_timeout takes a wait (LOST-02, review loop 2): a whole number of
    * milliseconds from 1 to 2147483647. PostgreSQL reads 0 as no limit at all,
@@ -1043,6 +1042,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     }
   };
 
+  /** A number of milliseconds as an interval takes it. */
   const millisecondsOf = (call: JourneyStoreCall, what: string, value: number): number => {
     if (!Number.isFinite(value)) {
       throw new Error(`fakeJourneyStore.${call}: ${what} must be a finite number of milliseconds`);
