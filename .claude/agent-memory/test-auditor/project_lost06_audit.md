@@ -27,3 +27,12 @@ bypass [] / never. PASS.
   L6/L3 files fail at import, journeys L3 LOST-06 12 red/4 green. Test commit made after green phase (39 s before code).
 - RG-03: shared suite diff = import lines only; all else on the spec list. RG-04: 2 entries = measured. RG-05: reports == HEAD.
 Related: [[lost03-audit]], [[time-equality-kills]], [[in-memory-mutation]]
+
+**Loop 2 delta (2026-10-07, PASS at 07d9d0e, test-only).** Only the AC14 test changed (bare toThrow -> whole-message regex over
+escalate + 5 Object.prototype names, reason beside it); the rest is added. Harness ta-lost06/loop2.mjs (REV 07d9d0e; old-file variants
+serve 5d62a0a's test via git show). 23 runs: controls green (L3 file 3x, AC9/AC11/AC3-lock 10x more); G1-G5 guard faults killed by
+AC14 alone; F1-F6 (new Date, statement_timestamp, clock_timestamp, db-for-tx, notice created_at/next_attempt_at off now()) killed
+by AC9 and AC11's µs text checks, F4 by AC11's xmin check alone; O3 (resolved-with-nobody pre-check) killed by the new L6 test and the
+L3 lock test, survives both old files; O6 (strangers at non-OPEN alerts via the lock) killed only by the L3 lock test's new rows.
+xmin: raw xmin is kept since 9.4 and no savepoint is used, so it is stable on PG15; a future nested tx.transaction would make it a loud
+false red. Local domain report 176/177 (line 320, LOST-01's own bare toThrow).
