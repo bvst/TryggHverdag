@@ -261,6 +261,7 @@ async function messagesOf(journeyId: string) {
     kind: string;
     attempts: number;
     created_ms: string;
+    created_text: string;
     next_ms: string;
     next_text: string;
     sent_ms: string | null;
@@ -270,6 +271,7 @@ async function messagesOf(journeyId: string) {
     `select o.id::text as message_id, o.alert_id::text as alert_id,
             o.recipient_id::text as recipient_id, o.kind::text as kind,
             o.attempts::int as attempts, ${MS('o.created_at')} as created_ms,
+            o.created_at::text as created_text,
             ${MS('o.next_attempt_at')} as next_ms, o.next_attempt_at::text as next_text,
             ${MS('o.sent_at')} as sent_ms, ${MS('o.withdrawn_at')} as withdrawn_ms,
             o.last_failure::text as last_failure
@@ -284,6 +286,8 @@ async function messagesOf(journeyId: string) {
     kind: row.kind,
     attempts: row.attempts,
     createdAt: Number(row.created_ms),
+    /** created_at as PostgreSQL prints it, to the microsecond. */
+    createdText: row.created_text,
     nextAttemptAt: Number(row.next_ms),
     /** next_attempt_at as PostgreSQL prints it, to the microsecond. */
     nextAttemptText: row.next_text,
@@ -596,6 +600,19 @@ describe('LOST-06 and SEC-07: nothing that refuses takes a lock, and what record
         ['another walker', otherWalker.credential, j.alertId],
         ['a responder of another journey', theirResponder.credential, j.alertId],
         ['an alert ID no alert has', r1.credential, syntheticUuid()],
+        // RG-03 (LOST-06 review loop 2, privacy-security-reviewer's note):
+        // added. Strangers at the resolved alert too, whose journey's row is
+        // held as well: a stranger sent down the locking path for an alert
+        // that is not OPEN would still get 404, but only after waiting on
+        // the row, a timing signal and a wait the watchdog would share.
+        ['its own walker, at the resolved alert', resolved.walker.credential, resolved.alertId],
+        ['another walker, at the resolved alert', otherWalker.credential, resolved.alertId],
+        [
+          'a responder of another journey, at the resolved alert',
+          theirResponder.credential,
+          resolved.alertId,
+        ],
+        ['a responder of J, at the resolved alert', r1.credential, resolved.alertId],
       ] as const) {
         const answer = await bounded(acknowledge(api, credential, alertId), 2 * SECOND);
         expect(answer, who).toMatchObject({ status: 404, body: { code: 'ALERT_NOT_FOUND' } });
@@ -829,6 +846,17 @@ describe('LOST-06, SM-08 and SM-09: the database holds one acknowledger, one set
     expect(first?.acknowledgedAt).toBeGreaterThanOrEqual(
       first?.openedAt ?? Number.POSITIVE_INFINITY,
     );
+    // RG-03 (LOST-06 review loop 2, test-auditor's should-fix): added. The
+    // bracket above cannot tell the transaction's now() from the app's clock,
+    // statement_timestamp() or clock_timestamp(): app and database share one
+    // host clock. Inside the one transaction now() is a single reading, so the
+    // record and its notice hold the same moment, to the microsecond.
+    const notices = ofKind(await messagesOf(journeyId), 'ACKNOWLEDGED');
+    expect(notices.map(({ recipientId }) => recipientId)).toEqual([r2.userId]);
+    for (const notice of notices) {
+      expect(notice.createdText, 'the notice’s created_at').toBe(first?.acknowledgedText);
+      expect(notice.nextAttemptText, 'the notice’s next_attempt_at').toBe(first?.acknowledgedText);
+    }
     const recorded = { by: first?.acknowledgedBy, at: first?.acknowledgedText };
 
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -868,6 +896,24 @@ function refuseASecondNotice() {
     ],
     drop: [`drop trigger if exists ${name} on outbox`, `drop function if exists ${name}()`],
   };
+}
+
+/**
+ * The transaction that wrote the alert's row as it stands, and each of its
+ * ACKNOWLEDGED messages' (PostgreSQL's xmin): one transaction writes them all,
+ * or they show different ones.
+ */
+async function writersOf(alertId: string) {
+  const alert = await connection().query<{ xmin: string }>(
+    'select xmin::text as xmin from alerts where id = $1',
+    [alertId],
+  );
+  const notices = await connection().query<{ xmin: string }>(
+    `select xmin::text as xmin from outbox where alert_id = $1 and kind = 'ACKNOWLEDGED'
+      order by recipient_id`,
+    [alertId],
+  );
+  return { alert: alert.rows[0]?.xmin, notices: notices.rows.map(({ xmin }) => xmin) };
 }
 
 describe('LOST-06 and AR-05: the acknowledgement and its notices are one transaction', () => {
@@ -912,6 +958,23 @@ describe('LOST-06 and AR-05: the acknowledgement and its notices are one transac
     expect(recipientsOf(ofKind(await messagesOf(journeyId), 'ACKNOWLEDGED'))).toEqual(
       idsOf([r2, r3]).sort(),
     );
+
+    // RG-03 (LOST-06 review loop 2, test-auditor's should-fix): added. The
+    // trigger above cannot tell notices written outside the acknowledgement's
+    // transaction: it fails their one multi-row insert, which rolls back as
+    // one statement wherever it runs. Written in the same transaction, the
+    // alert's row and every notice's carry the same xmin, and the same now(),
+    // to the microsecond.
+    const writers = await writersOf(alertId);
+    expect(writers.alert).toBeDefined();
+    expect(writers.notices).toEqual([writers.alert, writers.alert]);
+    const [acknowledged] = await alertsOf(journeyId);
+    for (const notice of ofKind(await messagesOf(journeyId), 'ACKNOWLEDGED')) {
+      expect(notice.createdText, 'the notice’s created_at').toBe(acknowledged?.acknowledgedText);
+      expect(notice.nextAttemptText, 'the notice’s next_attempt_at').toBe(
+        acknowledged?.acknowledgedText,
+      );
+    }
   });
 });
 

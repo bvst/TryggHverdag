@@ -1954,21 +1954,37 @@ describe('LOST-06 and AR-04: the alert rule is one module, total over its own li
     ).toEqual(ALREADY_ACKNOWLEDGED);
   });
 
-  test('LOST-06-AC14: an event of a type the module does not list is thrown on in every situation, never answered with a value', () => {
-    // Controls: the rule exists, and in each situation the listed event is
-    // answered, not thrown on; so the throw below is the rule's own, never a
-    // missing function's.
+  test('LOST-06-AC14: an event of a type the module does not list is thrown on in every situation, with the rule’s own message, never answered with a value: Object.prototype’s names included', () => {
+    // RG-03 (LOST-06 review loop 2, test-auditor's should-fix): sharpened,
+    // and this comment corrected. The bare toThrow() took any throw, and the
+    // controls never made it "the rule's own": with the rule's Object.hasOwn
+    // guard gone, the table has no `escalate`, and calling what is not there
+    // throws a TypeError, which passed. So the rule's own message is asserted
+    // now, whole. And the types now include Object.prototype's names, which
+    // without that guard reach a member every object inherits and answer a
+    // value: `constructor` hands back an object, `toString` '[object Object]'.
+    // That is the silent miss the throw exists to prevent.
     expect(alertTransition).toBeTypeOf('function');
     for (const { situation } of ALERT_ROWS) {
+      // Control: in this situation the listed event is answered, with a value.
       expect(alertTransition(alertFor(situation), acknowledgeBy(SENDER)), situation).toBeDefined();
-      expect(
-        () =>
-          alertTransition(alertFor(situation), {
-            type: 'escalate',
-            responderId: SENDER,
-          } as unknown as AcknowledgeEvent),
-        situation,
-      ).toThrow();
+      for (const type of [
+        'escalate',
+        'constructor',
+        'toString',
+        '__proto__',
+        'hasOwnProperty',
+        'valueOf',
+      ]) {
+        expect(
+          () =>
+            alertTransition(alertFor(situation), {
+              type,
+              responderId: SENDER,
+            } as unknown as AcknowledgeEvent),
+          `${situation}, ${type}`,
+        ).toThrow(new RegExp(`^The alert rule has no rule for an event of type ${type}\\.$`));
+      }
     }
   });
 

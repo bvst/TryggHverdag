@@ -628,6 +628,59 @@ describe('LOST-06 and SEC-07: only a responder of the alert’s journey can ackn
     },
   );
 
+  test('LOST-06-AC3: a stranger learns nothing of an alert resolved with nobody on it: J’s alert OPEN, then RESOLVED straight away by a fresh heartbeat, W’s own device, another walker, a responder of another journey only and an alert ID no alert has are each 404 ALERT_NOT_FOUND, status, body and headers byte for byte the answer they got while it was OPEN; nothing changes, and no line is written', async () => {
+    // LOST-06 review loop 2 (privacy-security-reviewer's note): the common
+    // case, the walker back before anyone taps. The test above reaches
+    // RESOLVED only through ACKNOWLEDGED, so a check keyed on "resolved with
+    // nobody recorded" would pass it.
+    const w = world();
+    const { walker, journeyId, alertId, responders } = await lost(w, 2);
+    const [r1] = responders as [RegisteredDevice, RegisteredDevice];
+    const otherWalker = w.walker();
+    const elsewhere = w.responder();
+    await w.seed(w.walker(), [elsewhere.userId], { silentForMs: MINUTE });
+    const strangers = [
+      ['W’s own device', walker, alertId],
+      ['another walker', otherWalker, alertId],
+      ['a responder of another journey only', elsewhere, alertId],
+      ['R1, for an alert ID no alert has', r1, syntheticUuid()],
+    ] as const;
+    /** Each stranger's "I'm on it", as sent: status, body text and headers. */
+    const ask = async () => {
+      const answers: Pick<Answer, 'status' | 'text' | 'headers'>[] = [];
+      for (const [, device, id] of strangers) {
+        const { status, text, headers } = await w.acknowledge(device, id);
+        answers.push({ status, text, headers });
+      }
+      return answers;
+    };
+
+    const whileOpen = await ask();
+    // Control: what every stranger is told while the alert is OPEN.
+    for (const [index, [who]] of strangers.entries()) {
+      expect(whileOpen[index]?.status, who).toBe(404);
+      expect(parsedOrNull(whileOpen[index]?.text ?? ''), who).toEqual({
+        defined: true,
+        code: 'ALERT_NOT_FOUND',
+        status: 404,
+        message: expect.any(String) as unknown,
+      });
+      expect(whileOpen[index]?.text, who).toBe(whileOpen[0]?.text);
+    }
+
+    await w.heartbeat(walker, journeyId);
+    expect(w.alertsOf(journeyId)).toMatchObject([
+      { state: 'RESOLVED', acknowledgedBy: null, acknowledgedAt: null },
+    ]);
+    const resolved = w.recordOf(journeyId);
+    const lines = w.log.events.length;
+
+    expect(await ask(), 'with the alert RESOLVED, nobody on it').toEqual(whileOpen);
+    expect(w.recordOf(journeyId)).toEqual(resolved);
+    expect(w.log.events.slice(lines)).toEqual([]);
+    expect(w.acknowledgementLines()).toEqual([]);
+  });
+
   test('LOST-06-AC3: with no credential, or an unknown one, "I’m on it" is 401 UNAUTHORIZED and nothing changes', async () => {
     const w = world();
     const { journeyId, alertId, responders } = await lost(w, 2);
