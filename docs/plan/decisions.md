@@ -4264,6 +4264,16 @@ any other path is work, not a candidate for the same treatment.
     reviewers use `model: inherit`, so the three blocking reviewers ran on
     Sonnet 5 in CI while they run on Opus 5.5 locally. D-045 meant them to
     use the strong model.
+  - claude-code-action v1.0.235, the version CI pins, installs Claude Code
+    2.1.283 (`const claudeCodeVersion = "2.1.283"` in src/entrypoints/run.ts
+    at commit 756cc22). In that version `opus` already means Opus 5.5, but
+    `sonnet` still means Sonnet 5 — Sonnet 5.5 arrived in 2.1.284. The action
+    sets no model of its own; with no `--model`, Claude Code's account default
+    applies, which the job log shows as `claude-sonnet-5`. That version
+    honours `effort:` in agent files (Claude Code fixed it being ignored in
+    2.1.267) and has accepted full model IDs there since 2.1.74 (the Claude
+    Code changelog). Dependabot's #62 moves the action to v1.0.239, which
+    installs Claude Code 2.1.287.
   - No agent or skill sets a thinking level (effort). In Claude Code, Opus
     5.5 and Sonnet 5.5 default to `medium`, so every agent thinks at
     `medium`. Agent files can now set `effort:` (low, medium, high, xhigh,
@@ -4280,13 +4290,17 @@ any other path is work, not a candidate for the same treatment.
   - `safety-reviewer`, `privacy-security-reviewer`, `test-auditor` and
     `planner` think at `effort: high`. The others set no effort and get
     Claude Code's default (`medium` on Opus 5.5 and Sonnet 5.5).
-  - `code-reviewer` (advisory) moves to `model: sonnet` at `effort: medium`.
-    `plan-keeper` and `a11y-i18n-reviewer` stay on `sonnet`.
+  - `code-reviewer` (advisory) moves to Sonnet 5.5 at `effort: medium`.
+    `plan-keeper` and `a11y-i18n-reviewer` stay on Sonnet, now 5.5. All three
+    name it by its full ID, `model: claude-sonnet-5-5`, not the alias: the
+    alias is resolved by whichever Claude Code runs the agent, and CI's
+    2.1.283 resolves `sonnet` to Sonnet 5.
   - CI names its model by full ID: `ai-review.yml` passes `--model
     claude-opus-5-5`, so the reviewers that inherit get Opus 5.5 in CI too;
     `daily-status.yml` passes `--model claude-sonnet-5-5`. A full ID, not an
     alias, because CI's alias is resolved by the Claude Code version the
-    pinned action installs, which this decision does not check.
+    pinned action installs (2.1.283, above), in which `sonnet` is still
+    Sonnet 5.
   - No agent uses fast mode: it is a main-session setting, Opus only, at
     twice the price.
 - **Why:** the three blocking reviewers decide merges, and the planner's spec
@@ -4307,8 +4321,11 @@ any other path is work, not a candidate for the same treatment.
     it merges, CI reviews keep running on Sonnet 5.
   - A test pins each agent's model and effort, so a change to them is a
     decision, not drift.
-  - At the next model release: the aliases follow by themselves locally;
-    CI's full IDs and their test need a new decision.
+  - At the next model release: the agents that inherit follow the session's
+    model by themselves locally; CI's full IDs and their test need a new
+    decision.
+  - At the next Sonnet release, the three Sonnet agents' full ID changes by a
+    new decision, like CI's.
   - Agent files changed in a pull request reach the reviewers only after it
     merges: a reviewer reads the pull request against the agent files on
     `main` (progress.md, "`.claude/**` and `CLAUDE.md` are reverted in a
@@ -4327,6 +4344,19 @@ any other path is work, not a candidate for the same treatment.
     18.6 s after one edit to a domain file. Formatting took 0.8 s, lint 3.6 s,
     types (the monorepo typecheck) 7.0 s, import rules 1.5 s, related tests
     5.7 s.
+  - The project's hooks do run in CI's review jobs. Claude Code's docs:
+    "Without `--bare`, a `-p` session runs the hooks in a project's
+    `.claude/settings.json`" (code.claude.com/docs/en/headless), and the Agent
+    SDK runs settings-file hooks when `settingSources` includes `project`
+    (code.claude.com/docs/en/agent-sdk/hooks). claude-code-action defaults
+    `settingSources` to user, project and local
+    (base-action/src/parse-sdk-options.ts at 756cc22), and job
+    112942356368's log prints `"settingSources": ["user", "project",
+    "local"]`. The hooks' own output is not in the job log, so a run of them
+    was not observed. A review job's branch differs from main, so the stop
+    gate runs `gate:quick` at its end (88–112 s here); and if that or the
+    progress check fails there, the hook tells a read-only reviewer to fix
+    work it cannot touch.
 - **Decision:**
   - The stop gate remembers the last green run in `.claude/state/` (never
     committed): which gate ran and a fingerprint of everything it checked,
@@ -4335,11 +4365,22 @@ any other path is work, not a candidate for the same treatment.
     matches does not run the gate again. A failed run is never remembered.
   - The per-edit gate starts its steps at the same time and waits for all of
     them. It still reports every failing step, in the same order as before.
+  - In CI's review jobs, the stop gate and the progress gate stand down.
+    ai-review.yml sets `TRYGGHVERDAG_REVIEW_JOB=1` on the review step, and
+    both hooks exit at once when that is set together with
+    `GITHUB_ACTIONS=true`. Neither alone is enough, so the hooks' own tests,
+    which run in GitHub Actions too, are unaffected, and a local session
+    cannot trip it by accident. The variable is set in the manual-merge pull
+    request with D-118's model lines (D-075); until then the hook side does
+    nothing.
 - **Why this weakens nothing:** the same input to the same checks gives the
   same result; CI runs every check again on every push.
-- **Not decided here:** the project's hooks may also run inside CI's review
-  jobs (the job log shows the action loads the project's settings), which
-  would add the stop gate's time to every review. That is not established,
-  and is recorded in progress.md as a follow-up.
+- **Why the review jobs stand down:** a review job changes no code. The stop
+  gate and the progress gate judge a session's own work, and CI's required
+  checks run the same gates on the same commit.
+- **Rejected:**
+  - `--setting-sources user`, which the action's source suggests for avoiding
+    in-repo configuration: it would also drop the reviewer agents themselves.
+  - `disableAllHooks`: it would also drop the reviewers' read-only guard.
 - **Consequences:** measured after the change (to be filled in by this task
   before its pull request).
