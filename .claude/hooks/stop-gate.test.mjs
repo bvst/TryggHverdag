@@ -442,6 +442,154 @@ describe('BUG-31: what git cannot vouch for never skips the gate (HK-06, D-119)'
   );
 });
 
+// BUG-31, review loop 2 (D-119): a change git normalises away is still a
+// change. With core.autocrlf set, `git diff` cleans a file's line endings back
+// to LF before it compares, so a tracked file changed only from LF to CRLF has
+// an empty diff, though `git status` lists it as modified. The fingerprint is
+// built from that diff, so it stayed the same and the second stop skipped the
+// gate — while the gate's tools read the file's raw bytes (prettier wants LF)
+// and could fail on exactly that change. code-reviewer found it on #68.
+describe('BUG-31: a change git normalises away is still a change (HK-06, D-119)', () => {
+  test.each([{ autocrlf: 'input' }, { autocrlf: 'true' }])(
+    'BUG-31: with core.autocrlf=$autocrlf, a tracked file changed only from LF to CRLF after a green run runs the gate again',
+    ({ autocrlf }) => {
+      const file = 'apps/server/src/api.ts';
+      const dir = branchRepo({ 'gate:quick': PASSES });
+      git(dir, 'config', 'core.autocrlf', autocrlf);
+      expect(stop(dir).status).toBe(ALLOWED);
+      expect(runs(dir, 'gate:quick')).toBe(1);
+
+      // The same text as the branch committed, with CRLF line endings.
+      write(dir, { [file]: 'export const a = 2;\r\n' });
+      // The condition itself: git lists the file as modified, and its diff
+      // against HEAD — the view of the work the fingerprint is built from — is
+      // empty.
+      expect(git(dir, 'status', '--short', '--', file)).toBe(` M ${file}\n`);
+      expect(git(dir, 'diff', 'HEAD', '--binary', '--no-ext-diff', '--no-textconv')).toBe('');
+      expect(stop(dir).status).toBe(ALLOWED);
+
+      expect(runs(dir, 'gate:quick')).toBe(2);
+    },
+  );
+});
+
+// BUG-31, review loop 3 (D-119): the same blind spot, one question earlier.
+// Before any fingerprint, the hook asks whether any code has changed at all,
+// from `git diff --name-only HEAD`, the untracked files and the diff from the
+// merge base with origin/main. That diff normalises line endings just as the
+// fingerprint's did, so with core.autocrlf set a tracked file changed only
+// from LF to CRLF is not listed. When that is the only change — nothing
+// untracked, no origin/main — the hook decides nothing changed and exits
+// before any gate runs. test-auditor found it on #70.
+describe('BUG-31: the check for any code change sees a change git normalises away (HK-06, D-119)', () => {
+  test.each([{ autocrlf: 'input' }, { autocrlf: 'true' }])(
+    'BUG-31: with core.autocrlf=$autocrlf, a tracked code file changed only from LF to CRLF, and nothing else, runs the gate',
+    ({ autocrlf }) => {
+      const file = 'apps/server/src/api.ts';
+      // Everything committed, the .gitignore for the fake gate's ran.txt too:
+      // an untracked .gitignore is not under docs/, so on its own it counts as
+      // a code change and the gate would run for that reason instead.
+      const dir = makeRepo({
+        ...fakeScripts({ 'gate:quick': FAILS }),
+        '.gitignore': 'ran.txt\n',
+        [file]: 'export const a = 1;\n',
+      });
+      repos.push(dir);
+      git(dir, 'config', 'core.autocrlf', autocrlf);
+
+      // The same text as committed, with CRLF line endings.
+      write(dir, { [file]: 'export const a = 1;\r\n' });
+      // The condition itself: git lists the file as modified and nothing else,
+      // yet every list of changed paths the early check reads is empty —
+      // the diff against HEAD, the untracked files, and no origin/main to
+      // take a merge base from.
+      expect(git(dir, 'status', '--short')).toBe(` M ${file}\n`);
+      expect(git(dir, 'diff', '--name-only', '--no-renames', 'HEAD')).toBe('');
+      expect(git(dir, 'ls-files', '--others', '--exclude-standard')).toBe('');
+      expect(
+        spawnSync('git', ['rev-parse', '--verify', '-q', 'refs/remotes/origin/main'], { cwd: dir })
+          .status,
+      ).not.toBe(0);
+
+      const result = stop(dir);
+
+      expect(ranLog(dir)).toContain('gate:quick');
+      expect(result.status).toBe(BLOCKED);
+      expect(result.stderr).toContain('2 tests failed');
+    },
+  );
+});
+
+// BUG-31, review loop 4 (D-119): the amendment's known limit, held by a test.
+// A `text` or `eol` attribute (such as `* text=auto`) normalises line endings
+// out of `git diff` whatever core.autocrlf says, so the hook's
+// `-c core.autocrlf=false` does not undo it: a tracked file changed only from
+// LF to CRLF would leave the fingerprint the same, and the next stop would
+// skip the gate, as in loop 2. The amendment records that the repository sets
+// no such attribute, and that adding one needs the fingerprint to hash the
+// changed tracked files' contents as well — but nothing held the repository to
+// that. CI's test-auditor found it on #70. This test reads the real
+// repository, not a fixture, and passes today on purpose: it is the tripwire
+// that fails the pull request which adds such an attribute.
+const LINE_ENDING_ATTRIBUTES = ['text', 'eol', 'crlf'];
+
+describe("BUG-31: the fingerprint's known limit still holds for this repository (HK-06, D-119)", () => {
+  test('BUG-31: no line-ending attribute is set for any tracked file, since the fingerprint cannot see a change one would normalise away (HK-06, D-119)', () => {
+    // Only the repository's own attribute files decide, not this machine's:
+    // no system-wide attributes file, no global core.attributesFile. A
+    // .git/info/attributes is still read; one that sets these attributes
+    // blinds the fingerprint on that machine too.
+    const env = { ...process.env, GIT_ATTR_NOSYSTEM: '1' };
+    const gitHere = (args, options) =>
+      spawnSync(
+        'git',
+        ['-c', 'core.attributesFile=/dev/null', '-c', 'core.autocrlf=false', ...args],
+        { encoding: 'utf8', env, maxBuffer: 64 * 1024 * 1024, ...options },
+      );
+    const top = gitHere(['rev-parse', '--show-toplevel'], { cwd: HOOKS_DIR });
+    expect(top.status, top.stderr).toBe(0);
+    const root = top.stdout.trim();
+
+    const listed = gitHere(['ls-files', '-z'], { cwd: root });
+    expect(listed.status, listed.stderr).toBe(0);
+    const files = listed.stdout.split('\0').filter((file) => file !== '');
+    expect(files.length).toBeGreaterThan(0);
+
+    const checked = gitHere(['check-attr', '--stdin', '-z', ...LINE_ENDING_ATTRIBUTES], {
+      cwd: root,
+      input: files.join('\0'),
+    });
+    expect(checked.status, checked.stderr).toBe(0);
+    // `path\0attribute\0value\0` for each file and attribute, in the order
+    // asked; the final NUL leaves one empty field at the end.
+    const fields = checked.stdout.split('\0');
+    expect(fields.pop()).toBe('');
+    const triples = [];
+    for (let i = 0; i < fields.length; i += 3) {
+      triples.push(fields.slice(i, i + 3));
+    }
+    // Not vacuous: an answer for every listed file and every attribute.
+    expect(triples.length).toBe(files.length * LINE_ENDING_ATTRIBUTES.length);
+    expect(triples.map(([file, attribute]) => `${file} ${attribute}`)).toEqual(
+      files.flatMap((file) => LINE_ENDING_ATTRIBUTES.map((attribute) => `${file} ${attribute}`)),
+    );
+
+    // `-text` and `-crlf` read as `unset`: they turn conversion off, which is
+    // safe. Anything else (`set`, `auto`, `lf`, `crlf`, …) turns it on.
+    const offending = triples
+      .filter(([, , value]) => value !== 'unspecified' && value !== 'unset')
+      .map(([file, attribute, value]) => `${file} ${attribute}=${value}`);
+    expect(
+      offending,
+      'A line-ending attribute is set for these tracked files. git diff normalises their ' +
+        "line endings whatever core.autocrlf says, so the stop gate's fingerprint " +
+        '(.claude/hooks/stop-gate.mjs) would not see a change only from LF to CRLF and ' +
+        'would skip the gate. Before adding such an attribute, make the fingerprint hash ' +
+        "the changed tracked files' contents as well (D-119 amendment, known limit; BUG-31).",
+    ).toEqual([]);
+  });
+});
+
 // BUG-31, part 2 (D-119): the AI reviews in CI load the project's settings, so
 // the stop gate ran gate:quick inside every review job. With both
 // GITHUB_ACTIONS=true and TRYGGHVERDAG_REVIEW_JOB=1 the hook stands down at

@@ -4408,3 +4408,31 @@ any other path is work, not a candidate for the same treatment.
     on `pnpm run gate:file` leaves the running tools to finish by themselves
     (the hooks are unaffected: a step's 160 s timer fires before the hook's
     own limits).
+- **Amendment (delegated, D-031, 2026-10-08): the fingerprint reads line
+  endings as they are on disk, and the review-job rule lives in one place.**
+  - **Found by CI's `code-reviewer`** on #68 after it was approved: with
+    `core.autocrlf` set to `input` or `true`, a tracked file changed only from
+    LF to CRLF shows as modified in `git status`, but `git diff HEAD` prints
+    nothing, so the fingerprint did not change and the stop gate skipped. The
+    gate's tools read the raw bytes (Prettier wants LF), so they could fail
+    where the skip said pass. Reproduced in a scratch repository: 0 bytes of
+    diff, and 108 with `-c core.autocrlf=false`.
+  - **The fix:** every git call the stop gate makes — the early check for any
+    change, and the fingerprint — runs with `-c core.autocrlf=false` (the early
+    check found by CI's `test-auditor` on #70). `ls-files` and
+    `hash-object --no-filters` give the same output with it.
+  - **And:** the stand-down condition, which both hooks carried word for word,
+    is now `inReviewJob()` in `.claude/hooks/lib.mjs`, tested on its own.
+  - **Known limit, added:** a `text` or `eol` attribute (such as
+    `* text=auto`) would still normalise line endings out of the diff,
+    whatever `core.autocrlf` says, from any of git's attribute sources: a
+    `.gitattributes` in the repository, a machine's own `.git/info/attributes`,
+    or a global `core.attributesFile` (found by CI's `code-reviewer` on this
+    amendment's pull request). The repository has no `.gitattributes`, and the
+    other two are local to one machine, where CI's required checks still run
+    every gate. If one is added, the fingerprint should hash the changed
+    tracked files' contents as well. A test in `stop-gate.test.mjs` fails
+    when the repository sets `text`, `eol` or `crlf` for any tracked file, so
+    that cannot happen unnoticed (found missing by CI's `test-auditor` on #70).
+  - #68 merged before this was pushed; it ships in its own pull request
+    (BUG-31's review loop 2).

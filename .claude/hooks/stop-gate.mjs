@@ -7,19 +7,15 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
-import { readInput, hasFlag, block, tail } from './lib.mjs';
+import { readInput, hasFlag, block, tail, inReviewJob } from './lib.mjs';
 
 const input = await readInput();
-
-// D-119: a CI review job changes no code, and CI's required checks run the
-// same gates on the same commit. Both variables, so neither another CI job nor
-// a local session can turn the gate off by accident.
-if (process.env.GITHUB_ACTIONS === 'true' && process.env.TRYGGHVERDAG_REVIEW_JOB === '1') {
-  process.exit(0);
-}
+if (inReviewJob()) process.exit(0);
 
 const cwd = input.cwd || process.cwd();
-const git = (...a) => spawnSync('git', a, { cwd, encoding: 'utf8' });
+// The gate's tools read the raw bytes, so this check must too: no CRLF normalising.
+const git = (...a) =>
+  spawnSync('git', ['-c', 'core.autocrlf=false', ...a], { cwd, encoding: 'utf8' });
 
 // --no-renames: a moved file counts under the path it left too, so code moved
 // to docs/ still runs the gate (BUG-7).
@@ -53,7 +49,12 @@ const script = red ? 'gate:static' : 'gate:quick';
 // make two different contents look the same.
 const WORK = [':/', ':(exclude).claude/state'];
 const raw = (args, stdin) => {
-  const r = spawnSync('git', args, { cwd, input: stdin, maxBuffer: Infinity });
+  // The gate's tools read the raw bytes, so the fingerprint must too: no CRLF normalising.
+  const r = spawnSync('git', ['-c', 'core.autocrlf=false', ...args], {
+    cwd,
+    input: stdin,
+    maxBuffer: Infinity,
+  });
   return r.status === 0 ? r.stdout : null;
 };
 function fingerprintOf(gate) {
