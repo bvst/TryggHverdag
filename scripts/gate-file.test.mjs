@@ -1,8 +1,12 @@
 // req-coverage: fixtures-only — the IDs below are sample data for testing the gates.
 // HK-04 runs after every single edit, so what it decides to check — and what it
 // leaves alone — shapes how the whole project feels to work in.
-import { describe, expect, test } from 'vitest';
-import { filesToCheck, stepsFor } from './gate-file.mjs';
+import { afterEach, describe, expect, test } from 'vitest';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import process from 'node:process';
+import { filesToCheck, runSteps, stepsFor } from './gate-file.mjs';
 
 const names = (files) => stepsFor(files).map((step) => step.name);
 
@@ -125,5 +129,165 @@ describe('stepsFor, for the app', () => {
     expect(names(['apps/mobile/src/app/index.tsx'])).toEqual(
       expect.arrayContaining(['formatting', 'lint', 'types', 'import rules (AR-10)']),
     );
+  });
+});
+
+// HK-04 (D-119): the per-edit gate ran its steps one after another — 18.6 s
+// after one edit to a domain file, measured, most of it one step waiting for
+// the one before. runSteps starts every step at once and waits for all of
+// them. Each step here is a small node script in place of a real tool, so the
+// tests pin what runSteps does with processes, not what prettier or eslint
+// print. None of them reads a clock in the test: the timing that matters is
+// decided inside the steps, by which files exist.
+describe('runSteps', () => {
+  const dirs = [];
+  function tempDir() {
+    const dir = mkdtempSync(path.join(tmpdir(), 'gate-file-test-'));
+    dirs.push(dir);
+    return dir;
+  }
+
+  afterEach(() => {
+    while (dirs.length > 0) {
+      rmSync(dirs.pop(), { recursive: true, force: true });
+    }
+  });
+
+  /** A step whose command is a node script, in the shape stepsFor returns. */
+  const nodeStep = (name, script) => ({ name, command: [process.execPath, '-e', script] });
+
+  /**
+   * Step `index` of `count`: it says it has started, then waits up to 5 s for
+   * every other step to have said so too. It passes only if they all did.
+   */
+  const rendezvous = (dir, index, count) =>
+    [
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      `const dir = ${JSON.stringify(dir)};`,
+      `fs.writeFileSync(path.join(dir, '${String(index)}.started'), '');`,
+      `const all = () => [...Array(${String(count)}).keys()].every((i) => fs.existsSync(path.join(dir, i + '.started')));`,
+      'const giveUp = Date.now() + 5000;',
+      'const wait = () => {',
+      '  if (all()) process.exit(0);',
+      `  if (Date.now() > giveUp) { console.log('step ${String(index)} gave up: not every step had started'); process.exit(1); }`,
+      '  setTimeout(wait, 20);',
+      '};',
+      'wait();',
+    ].join('\n');
+
+  test('HK-04: the steps run at the same time, not one after another', async () => {
+    // A rendezvous, so the test needs no stopwatch. Run one after another,
+    // the first step waits alone for the other two, gives up and fails; run
+    // together, all three meet and pass.
+    const dir = tempDir();
+    const steps = [0, 1, 2].map((index) =>
+      nodeStep(`step ${String(index)}`, rendezvous(dir, index, 3)),
+    );
+
+    const results = await runSteps(steps, { cwd: dir, timeout: 30_000 });
+
+    expect(results).toMatchObject([
+      { name: 'step 0', ok: true },
+      { name: 'step 1', ok: true },
+      { name: 'step 2', ok: true },
+    ]);
+  });
+
+  test('HK-04: results come back in the order of the steps, whichever finishes first', async () => {
+    // The report lists failures in the order of stepsFor, as it did when the
+    // steps ran one by one; the order they happen to finish in must not
+    // reshuffle it from one edit to the next.
+    const dir = tempDir();
+
+    const results = await runSteps(
+      [
+        nodeStep('slow', "setTimeout(() => console.log('slow finished'), 300);"),
+        nodeStep('fast', "console.log('fast finished');"),
+      ],
+      { cwd: dir, timeout: 30_000 },
+    );
+
+    expect(results).toMatchObject([
+      { name: 'slow', ok: true, output: expect.stringContaining('slow finished') },
+      { name: 'fast', ok: true, output: expect.stringContaining('fast finished') },
+    ]);
+  });
+
+  test('HK-04: a failing step is reported with its output, and the other steps still run to the end', async () => {
+    // Every failing check is reported after an edit, not only the first one:
+    // a gate that stopped the others at the first failure would hide the
+    // second problem until the first was fixed. The output is stdout and
+    // stderr both, because tools disagree about which one they complain on.
+    const dir = tempDir();
+    const finished = path.join(dir, 'tests.finished');
+
+    const results = await runSteps(
+      [
+        nodeStep(
+          'lint',
+          "console.log('lint said no'); console.error('api.ts:3 no-unused-vars'); process.exit(1);",
+        ),
+        nodeStep(
+          'tests',
+          `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(finished)}, 'done'), 500);`,
+        ),
+      ],
+      { cwd: dir, timeout: 30_000 },
+    );
+
+    expect(existsSync(finished)).toBe(true);
+    expect(results).toMatchObject([
+      { name: 'lint', ok: false, output: expect.stringContaining('lint said no') },
+      { name: 'tests', ok: true },
+    ]);
+    expect(results[0]?.output).toContain('no-unused-vars');
+  });
+
+  test('HK-04: a command that cannot start is a failure, not a pass', async () => {
+    // A tool that is missing checked nothing. Reported as a pass, every edit
+    // would look clean while no check ran at all.
+    const dir = tempDir();
+    const missing = 'trygghverdag-no-such-program';
+
+    const results = await runSteps(
+      [
+        { name: 'missing tool', command: [missing, '--check'] },
+        nodeStep('fine', "console.log('fine');"),
+      ],
+      { cwd: dir, timeout: 30_000 },
+    );
+
+    expect(results).toMatchObject([
+      { name: 'missing tool', ok: false, output: expect.stringContaining(missing) },
+      { name: 'fine', ok: true },
+    ]);
+  });
+
+  test('HK-04: a step that ends without an exit code — killed by a signal — is a failure', async () => {
+    // `ok` is true for exit code 0 and nothing else. A process killed by a
+    // signal has no exit code at all, and a check like `!code` would read
+    // that as a pass.
+    const dir = tempDir();
+
+    const results = await runSteps([nodeStep('killed', "process.kill(process.pid, 'SIGKILL');")], {
+      cwd: dir,
+      timeout: 30_000,
+    });
+
+    expect(results).toMatchObject([{ name: 'killed', ok: false }]);
+  });
+
+  test('HK-04: a step still running when the timeout ends is a failure', async () => {
+    // A hung tool must not hold the edit up for ever, and must not pass
+    // either. The step would exit 0 after 20 s; the timeout is 1 s.
+    const dir = tempDir();
+
+    const results = await runSteps(
+      [nodeStep('hung', 'setTimeout(() => process.exit(0), 20_000);')],
+      { cwd: dir, timeout: 1_000 },
+    );
+
+    expect(results).toMatchObject([{ name: 'hung', ok: false }]);
   });
 });

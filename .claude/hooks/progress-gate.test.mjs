@@ -2,9 +2,19 @@
 // HK-08: a session that changed code must say so in docs/progress.md. Without
 // this, the next session starts by guessing what the last one did.
 import { afterEach, describe, expect, test } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ALLOWED, BLOCKED, makeRepo, removeRepo, runHook, write } from './test-helpers.mjs';
+import process from 'node:process';
+import {
+  ALLOWED,
+  BLOCKED,
+  HOOKS_DIR,
+  makeRepo,
+  removeRepo,
+  runHook,
+  write,
+} from './test-helpers.mjs';
 
 const repos = [];
 function repoWith(files = {}) {
@@ -119,5 +129,81 @@ describe('HK-08: when blocking would cost more than it is worth', () => {
     write(dir, { 'docs/progress.md': '# Progress log\n\n- built the API\n' });
     expect(check(dir).status).toBe(ALLOWED);
     expect(existsSync(marker(dir))).toBe(false);
+  });
+});
+
+// BUG-31, part 2 (D-119): the AI reviews in CI load the project's settings, so
+// the progress gate ran inside every review job as well as the stop gate. With
+// both GITHUB_ACTIONS=true and TRYGGHVERDAG_REVIEW_JOB=1 the hook stands down
+// at once: it does not refuse, and it leaves no note. With only one of them it
+// behaves exactly as before. stop-gate.test.mjs holds the same tests for the
+// stop gate.
+
+/**
+ * Runs the progress gate with the two CI variables exactly as `ci` says.
+ * runHook passes this process's environment through and takes no env of its
+ * own, and these tests themselves run in GitHub Actions, where
+ * GITHUB_ACTIONS=true is already set — so both are removed first and only then
+ * set, in every case.
+ */
+function checkIn(dir, ci, { input = {}, args = [] } = {}) {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: dir };
+  delete env.GITHUB_ACTIONS;
+  delete env.TRYGGHVERDAG_REVIEW_JOB;
+  Object.assign(env, ci);
+  const result = spawnSync(process.execPath, [path.join(HOOKS_DIR, 'progress-gate.mjs'), ...args], {
+    input: JSON.stringify({ cwd: dir, ...input }),
+    encoding: 'utf8',
+    cwd: dir,
+    timeout: 120_000,
+    env,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+}
+
+const REVIEW_JOB = { GITHUB_ACTIONS: 'true', TRYGGHVERDAG_REVIEW_JOB: '1' };
+
+describe('BUG-31: the progress gate stands down in a CI review job (D-119)', () => {
+  // Each row is one of the three ways the hook can end today on unlogged code:
+  // refusing, or (with --warn-only, or once already asked to continue)
+  // writing .claude/state/progress-missing. In a review job none of them may
+  // happen.
+  test.each([
+    { how: 'at a stop', args: [], input: {} },
+    { how: 'with --warn-only', args: ['--warn-only'], input: {} },
+    { how: 'after being asked to continue once', args: [], input: { stop_hook_active: true } },
+  ])(
+    'BUG-31: with GITHUB_ACTIONS=true and TRYGGHVERDAG_REVIEW_JOB=1, $how, code changed without the progress log is not refused and no note is written',
+    ({ args, input }) => {
+      const dir = repoWith({ 'apps/server/src/api.ts': 'export const api = 1;' });
+
+      const result = checkIn(dir, REVIEW_JOB, { args, input });
+
+      expect(result.status).toBe(ALLOWED);
+      expect(existsSync(marker(dir))).toBe(false);
+    },
+  );
+
+  // Pass today, and are meant to: they are the guard that one variable alone —
+  // GITHUB_ACTIONS is set in every CI job, not only the reviews — never turns
+  // the gate off, and that the review-job switch has to say 1.
+  test.each([
+    { how: 'only GITHUB_ACTIONS=true', ci: { GITHUB_ACTIONS: 'true' } },
+    { how: 'only TRYGGHVERDAG_REVIEW_JOB=1', ci: { TRYGGHVERDAG_REVIEW_JOB: '1' } },
+    {
+      how: 'GITHUB_ACTIONS=true and TRYGGHVERDAG_REVIEW_JOB=0',
+      ci: { GITHUB_ACTIONS: 'true', TRYGGHVERDAG_REVIEW_JOB: '0' },
+    },
+  ])('BUG-31: with $how, code changed without the progress log is refused, as before', ({ ci }) => {
+    const dir = repoWith({ 'apps/server/src/api.ts': 'export const api = 1;' });
+
+    const result = checkIn(dir, ci);
+
+    expect(result.status).toBe(BLOCKED);
+    expect(result.stderr).toContain('HK-08');
+    expect(result.stderr).toContain('docs/progress.md');
   });
 });
