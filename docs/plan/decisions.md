@@ -4499,8 +4499,13 @@ any other path is work, not a candidate for the same treatment.
     covered: a flag on a nested `claude` call (`--settings`), and the user's
     own `~/.claude/settings.json`, which can also set `disableAllHooks`. The
     check reads the whole command, so a command whose text only quotes such
-    a redirect (a commit message in a heredoc) is refused too; put the text
-    in a file. Paths are judged from the repository
+    a redirect (a commit message in a heredoc) is refused too, and so is a
+    write command beside a mere mention of a protected path or of the
+    `.claude` folder (`ls .claude && rm foo`, `rg install .claude/state`);
+    put the text in a file. With `--global`, paths are compared without
+    regard to case, the main session's exemption for the phase file too
+    (the owner's Mac file system ignores case); the role guards keep exact
+    case. Paths are judged from the repository
     (`CLAUDE_PROJECT_DIR`, which Claude Code sets for every hook), so a
     session in a subfolder does not dodge the rules. Without that variable
     the hook command itself (`node "$CLAUDE_PROJECT_DIR/.claude/hooks/…"`)

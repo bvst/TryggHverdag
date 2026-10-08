@@ -27,7 +27,7 @@ export function repoRelPath(file, cwd = process.cwd(), env = process.env) {
   return relPath(file, cwd, env.CLAUDE_PROJECT_DIR || cwd);
 }
 
-export function globToRegExp(glob) {
+export function globToRegExp(glob, { ignoreCase = false } = {}) {
   let re = '';
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i];
@@ -45,11 +45,15 @@ export function globToRegExp(glob) {
     else if ('\\^$+.()|{}[]'.includes(c)) re += '\\' + c;
     else re += c;
   }
-  return new RegExp('^' + re + '$');
+  return new RegExp('^' + re + '$', ignoreCase ? 'i' : '');
 }
 
-export function matchesAny(rel, globs) {
-  return globs.some((g) => globToRegExp(g).test(rel));
+// BUG-36 review loop 1 (privacy-security-reviewer): the owner's Mac file
+// system ignores case, so there `.CLAUDE/settings.local.json` is the file
+// D-120 protects; the global guards pass ignoreCase. A role's guard does not:
+// on an --allow list, ignoring case would widen what the role may change.
+export function matchesAny(rel, globs, { ignoreCase = false } = {}) {
+  return globs.some((g) => globToRegExp(g, { ignoreCase }).test(rel));
 }
 
 export function argList(name) {
@@ -82,7 +86,12 @@ export function d120Refusal(rel) {
     `Blocked: this would change ${rel}, which D-120 protects. ` +
     `No tool call changes .claude/settings.local.json: the owner changes it by hand. ` +
     `The files in .claude/state/ are the hooks' own records, which the hooks write themselves; ` +
-    `the one exception is .claude/state/phase, which only the main session may change, never a subagent.`
+    `the one exception is .claude/state/phase, which only the main session may change, never a subagent. ` +
+    // BUG-36 review loop 1 (privacy-security-reviewer): the shell guard reads
+    // the whole command, so text that only quotes the path is refused too;
+    // say what to do, so a session does not hunt for a phrasing it misses.
+    `If the command only quotes the path in its text (a commit message, a search pattern), ` +
+    `pass that text from a file instead, for example git commit -F <file>.`
   );
 }
 

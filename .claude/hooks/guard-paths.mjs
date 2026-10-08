@@ -32,13 +32,18 @@ const rel = everySession ? repoRelPath(file, input.cwd) : relPath(file, input.cw
 const agent = argValue('--agent', 'this agent');
 const allow = argList('--allow');
 const deny = argList('--deny');
-const mainSessionMay = !isSubagent(input) && matchesAny(rel, argList('--allow-main-session'));
+// BUG-36 review loop 1 (the reviewer): the global guard ignores case, as the
+// owner's Mac file system does, in what it protects and in the main session's
+// exemption alike; a role's own guard, --allow included, keeps exact case.
+const ignoreCase = everySession;
+const mainSessionMay =
+  !isSubagent(input) && matchesAny(rel, argList('--allow-main-session'), { ignoreCase });
 
 // A role stays inside the repository. The global guard leaves the rest of the
 // disk alone: every session's scratchpad and plan files live outside it.
 if (!everySession && rel.startsWith('..'))
   block(`Blocked for ${agent}: ${file} is outside the repository.`);
-if (deny.length && matchesAny(rel, deny) && !mainSessionMay) {
+if (deny.length && matchesAny(rel, deny, { ignoreCase }) && !mainSessionMay) {
   block(
     everySession
       ? d120Refusal(rel)

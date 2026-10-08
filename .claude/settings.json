@@ -90,7 +90,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-bash.mjs\" --global --deny-write-glob '.claude/settings.local.json' --deny-write-glob '.claude/state/**' --deny-write-glob '.claude/state' --allow-main-session '.claude/state/phase'"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-bash.mjs\" --global --deny-write-glob '.claude/settings.local.json' --deny-write-glob '.claude/state/**' --deny-write-glob '.claude/state' --deny-write-glob '.claude' --allow-main-session '.claude/state/phase'"
           }
         ]
       }
