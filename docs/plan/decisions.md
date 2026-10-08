@@ -4487,34 +4487,46 @@ any other path is work, not a candidate for the same treatment.
     these files.
   - Asking Claude to change local settings (for example "allow X") is
     refused; the owner edits the file.
-  - **Known limits.** The shell check is the same heuristic RG-03's guards
-    use: a write command or a redirect that names the path. `test-author`
-    showed these get past it (each run against a reference guard, exit 0):
-    a path built from a variable (`"$CLAUDE_PROJECT_DIR"/.claude/state/…`),
-    a change of directory first (`cd .claude && rm -rf state`), removing a
-    parent (`rm -rf .claude`), `git clean -fdX` (which removes the ignored
-    `.claude/state/`), a redirect that overrides `noclobber` (`>|`), and a
-    program that writes the file itself (`node -e`, a script). A redirect
-    is judged by its target, with or without a space after `>`. Also not
-    covered: a flag on a nested `claude` call (`--settings`), and the user's
-    own `~/.claude/settings.json`, which can also set `disableAllHooks`. The
-    check reads the whole command, so a command whose text only quotes such
-    a redirect (a commit message in a heredoc) is refused too, and so is a
-    write command beside a mere mention of a protected path or of the
-    `.claude` folder (`ls .claude && rm foo`, `rg install .claude/state`);
-    put the text in a file. With `--global`, paths are compared without
-    regard to case, the main session's exemption for the phase file too
-    (the owner's Mac file system ignores case); the role guards keep exact
-    case. Paths are judged from the repository
-    (`CLAUDE_PROJECT_DIR`, which Claude Code sets for every hook), so a
-    session in a subfolder does not dodge the rules. Without that variable
-    the hook command itself (`node "$CLAUDE_PROJECT_DIR/.claude/hooks/…"`)
-    would not run, and Claude Code lets a call through when a hook fails to
-    run or crashes (exit other than 2), as it did before D-120. A shell
-    wildcard (`rm -rf .claude/stat?`) and a link from outside the
-    repository into `.claude/` are not seen either. The guard stops a slip,
-    not a determined session; CI's required checks never go through these
-    hooks and stay the gate (D-042).
+  - **What the shell check sees.** It reads a command as the shell splits it
+    (whitespace, quotes and punctuation such as `;`, `&&`, `|`, `(`, `<`, a
+    backtick), and refuses a write to a protected path: a redirect, judged by
+    its target with or without a space (`>`, `>>`, `2>`, `&>`, `>&`), or one
+    of the write commands it knows: `rm`, `mv`, `cp`, `truncate`, `tee`,
+    `touch`, `mkdir`, `chmod`, `chown`, `sed -i`,
+    `git checkout --`/`restore`/`rm`/`mv`, and, for the deny rules only and
+    only as the command word, `ln`, `install`, `dd` and `unlink`. The
+    `.claude` folder itself is protected too, so copying into it or removing
+    it is refused. With `--global`, paths are compared without regard to
+    case, the main session's exemption for the phase file too (the owner's
+    Mac file system ignores case); the role guards keep exact case. Paths
+    are judged from the repository (`CLAUDE_PROJECT_DIR`, which Claude Code
+    sets for every hook), and the stop gate and the progress gate keep their
+    records there too, so a session in a subfolder does not dodge the rules.
+  - **Known limits.** It is a heuristic, like RG-03's guards: it stops a
+    slip, not a determined session. Shown to get past it: any other writer
+    (`find … -delete`, `shred`, `rsync`, `tar`, `perl -pi`, `xargs rm` at
+    the end of a command, a writer behind `sudo`, `env` or `time`, a full
+    path to the binary such as `/bin/rm`, a program that writes the file
+    itself, `node -e`); `ln`, `install`, `dd` or `unlink` after `if`,
+    `elif`, `while`, `until`, `!`, `{`, a `VAR=value` prefix, `sudo` or
+    `xargs` (counting them only as the command word, in review loop 2, ended
+    the false positives that refused implementer's `pnpm install && …`, and
+    let these rarer forms through); a path the shell builds (`"$CLAUDE_PROJECT_DIR"/…`,
+    a wildcard `stat?`, brace expansion, quotes spliced inside the name);
+    `git clean -fdX` (which removes the ignored `.claude/state/`); a
+    redirect that overrides `noclobber` (`>|`); and a link from outside the
+    repository into `.claude/`. Also out of reach: a flag on a nested
+    `claude` call (`--settings`), and the user's own
+    `~/.claude/settings.json`, which can also set `disableAllHooks`. Without
+    `CLAUDE_PROJECT_DIR` the hook command itself would not run, and Claude
+    Code lets a call through when a hook fails to run or crashes (exit other
+    than 2), as before D-120. **False positives:** the check reads the whole
+    command, so a command whose text only mentions a protected path beside a
+    write (a commit message in a heredoc, `ls .claude && rm foo`,
+    `git diff -- .claude > /tmp/d.txt`) is refused; the refusal says to pass
+    such text from a file, or to name the subfolder meant. Moving a file
+    descriptor (`>&2-`) reads as a write to a file named `2-`. CI's required
+    checks never go through these hooks and stay the gate (D-042).
 
 ## D-121 — CI's reviewers keep running as subagents of a wrapper session, not as `claude --agent` (BUG-30 and BUG-31's follow-up)
 - **Date:** 2026-10-08 · **Status:** Accepted (delegated, D-031; the owner

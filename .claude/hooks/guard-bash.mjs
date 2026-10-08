@@ -62,10 +62,13 @@ function redirectTargets(c) {
   const out = [];
   // BUG-36 review loop 1: a target ends where the shell ends the word, at `<`
   // and a backtick too.
-  const re = /(\d?)>>?\s*(&?)([^\s;&|)<`]*)/g;
+  const re = /(\d?)>>?\s*(&?)\s*([^\s;&|)<`]*)/g;
   let m;
   while ((m = re.exec(c))) {
-    if (m[2] === '&') continue; // 2>&1 and similar
+    // BUG-36 review loop 2 (privacy-security-reviewer, test-auditor): `>&`
+    // only copies or closes a file descriptor when a number or `-` follows
+    // (2>&1, >&2, 1>&-); followed by anything else, bash writes that file.
+    if (m[2] === '&' && /^(\d+|-)$/.test(m[3])) continue;
     // BUG-36 review loop 1: quotes are the shell's, not the file's name, so a
     // refusal names the file (`> .claude/state/x"` in a quoted message).
     const target = m[3].replaceAll(/["']/g, '');
@@ -82,7 +85,13 @@ const WRITE_OPS =
 // the path they are given as surely as cp does. Counted only where deny-write
 // globs are judged, not in --readonly's list: a reviewer's `rg install docs`
 // only reads.
-const DENY_WRITE_OPS = /(^|[\s;&|(`])(ln|install|dd)\s/;
+// BUG-36 review loop 2 (privacy-security-reviewer): so does unlink. And each
+// counts only as the command word, where the shell runs it: at the start, or
+// after `;`, `&`, `|`, `(` (so `$(` too), a backtick or a newline, or after
+// `then`, `do` or `else` there. After mere whitespace it is an argument, as in
+// `pnpm install` or `grep -rn install`, and refusing those beside a protected
+// path refused commands that write nothing.
+const DENY_WRITE_OPS = /(^|[;&|(`\n])\s*((then|do|else)\s+)?(ln|install|dd|unlink)\s/;
 
 if (everySession) {
   for (const [re, msg] of GLOBAL) if (re.test(cmd)) block(`Blocked: ${msg}`);

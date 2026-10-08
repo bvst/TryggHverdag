@@ -91,7 +91,12 @@ export function d120Refusal(rel) {
     // the whole command, so text that only quotes the path is refused too;
     // say what to do, so a session does not hunt for a phrasing it misses.
     `If the command only quotes the path in its text (a commit message, a search pattern), ` +
-    `pass that text from a file instead, for example git commit -F <file>.`
+    `pass that text from a file instead, for example git commit -F <file>. ` +
+    // BUG-36 review loop 2 (privacy-security-reviewer): a command that only
+    // names the .claude folder, such as git diff -- .claude > /tmp/d.txt, is
+    // refused too, and a file does not help there; naming the subfolder does.
+    `If it only names a folder D-120 protects, such as .claude, name the subfolder you mean instead, ` +
+    `for example .claude/agents.`
   );
 }
 
