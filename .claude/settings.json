@@ -78,6 +78,10 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/scan-sensitive.mjs\""
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-paths.mjs\" --global --deny '.claude/settings.local.json' --deny '.claude/state/**' --allow-main-session '.claude/state/phase'"
           }
         ]
       },
@@ -86,7 +90,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-bash.mjs\" --global"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-bash.mjs\" --global --deny-write-glob '.claude/settings.local.json' --deny-write-glob '.claude/state/**' --deny-write-glob '.claude/state' --deny-write-glob '.claude' --allow-main-session '.claude/state/phase'"
           }
         ]
       }

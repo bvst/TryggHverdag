@@ -11,12 +11,23 @@ export async function readInput() {
   }
 }
 
-export function relPath(file, cwd = process.cwd()) {
+export function relPath(file, cwd = process.cwd(), root = cwd) {
   const abs = path.resolve(cwd, file);
-  return path.relative(cwd, abs).split(path.sep).join('/');
+  return path.relative(root, abs).split(path.sep).join('/');
 }
 
-export function globToRegExp(glob) {
+// BUG-36 (D-120): how the global guards name a path. A relative path starts
+// from the session's folder, where the write would land, and is then named
+// from the repository, CLAUDE_PROJECT_DIR, which Claude Code sets for every
+// hook (code.claude.com/docs/en/hooks): from apps/server, both
+// <repo>/.claude/state/gate-passed and ../../.claude/state/gate-passed are
+// .claude/state/gate-passed. If CLAUDE_PROJECT_DIR is unset, the session's
+// folder stands in for the repository, as it did before BUG-36.
+export function repoRelPath(file, cwd = process.cwd(), env = process.env) {
+  return relPath(file, cwd, env.CLAUDE_PROJECT_DIR || cwd);
+}
+
+export function globToRegExp(glob, { ignoreCase = false } = {}) {
   let re = '';
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i];
@@ -34,11 +45,15 @@ export function globToRegExp(glob) {
     else if ('\\^$+.()|{}[]'.includes(c)) re += '\\' + c;
     else re += c;
   }
-  return new RegExp('^' + re + '$');
+  return new RegExp('^' + re + '$', ignoreCase ? 'i' : '');
 }
 
-export function matchesAny(rel, globs) {
-  return globs.some((g) => globToRegExp(g).test(rel));
+// BUG-36 review loop 1 (privacy-security-reviewer): the owner's Mac file
+// system ignores case, so there `.CLAUDE/settings.local.json` is the file
+// D-120 protects; the global guards pass ignoreCase. A role's guard does not:
+// on an --allow list, ignoring case would widen what the role may change.
+export function matchesAny(rel, globs, { ignoreCase = false } = {}) {
+  return globs.some((g) => globToRegExp(g, { ignoreCase }).test(rel));
 }
 
 export function argList(name) {
@@ -54,6 +69,35 @@ export function argValue(name, fallback = '') {
 
 export function hasFlag(name) {
   return process.argv.includes(name);
+}
+
+// D-120: Claude Code puts agent_id in a hook's input only when a subagent made
+// the call (code.claude.com/docs/en/hooks, "Common input fields"), so only its
+// absence marks the main session. Any agent_id at all, even an empty one, is a
+// subagent: the exemption it decides is the main session's alone.
+export function isSubagent(input) {
+  return input?.agent_id !== undefined;
+}
+
+// D-120: what the global guards say when a tool call would change a path they
+// protect. One message for both guards and every such path.
+export function d120Refusal(rel) {
+  return (
+    `Blocked: this would change ${rel}, which D-120 protects. ` +
+    `No tool call changes .claude/settings.local.json: the owner changes it by hand. ` +
+    `The files in .claude/state/ are the hooks' own records, which the hooks write themselves; ` +
+    `the one exception is .claude/state/phase, which only the main session may change, never a subagent. ` +
+    // BUG-36 review loop 1 (privacy-security-reviewer): the shell guard reads
+    // the whole command, so text that only quotes the path is refused too;
+    // say what to do, so a session does not hunt for a phrasing it misses.
+    `If the command only quotes the path in its text (a commit message, a search pattern), ` +
+    `pass that text from a file instead, for example git commit -F <file>. ` +
+    // BUG-36 review loop 2 (privacy-security-reviewer): a command that only
+    // names the .claude folder, such as git diff -- .claude > /tmp/d.txt, is
+    // refused too, and a file does not help there; naming the subfolder does.
+    `If it only names a folder D-120 protects, such as .claude, name the subfolder you mean instead, ` +
+    `for example .claude/agents.`
+  );
 }
 
 // D-119: a CI review job changes no code, and CI's required checks run the

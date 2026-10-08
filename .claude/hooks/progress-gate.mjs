@@ -41,7 +41,12 @@ export function needsLogging(files) {
 const input = await readInput();
 if (inReviewJob()) process.exit(0);
 
-const cwd = input.cwd || process.cwd();
+// BUG-36 review loop 1 (privacy-security-reviewer): the repository is
+// CLAUDE_PROJECT_DIR, which Claude Code sets for every hook, as session-start
+// reads it, and this gate's note with it. So the note lands where
+// session-start looks, and git lists the whole repository's changes, not only
+// the folder a session has moved into. Without it, the input's cwd stands in.
+const cwd = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
 const marker = path.join(cwd, '.claude/state/progress-missing');
 
 const changed = changedFiles({ cwd });

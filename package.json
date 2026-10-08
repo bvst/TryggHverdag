@@ -15,6 +15,7 @@
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
     "doctor": "node scripts/doctor.mjs",
+    "decision": "node scripts/decision.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",

@@ -10,7 +10,8 @@ safety. Claude decides libraries and tools and records why (D-031).
 ## Before you do anything
 1. Read `docs/plan/README.md` (status, owner to-dos) and `docs/progress.md`.
 2. Decisions in `docs/plan/decisions.md` are binding. Never contradict one;
-   propose a new decision with `/decision` instead.
+   propose a new decision with `/decision` instead. The file is over 4,400
+   lines: read the ones you need with `pnpm run decision D-NNN [D-NNN ...]`.
 3. Find the requirement ID for the work (for example `LOST-02`, `SM-05`,
    `PRIV-07`). No ID means no work: ask the owner rather than inventing scope.
 
@@ -73,7 +74,7 @@ list that is actually true. Today:
 `pnpm run coverage:ratchet` · `pnpm run api:diff` · `pnpm run api:spec` ·
 `pnpm run mutation` · `pnpm run licenses:check` · `pnpm run gate:integrity` ·
 `pnpm run gate:drills` · `pnpm run doctor` · `pnpm run dev` ·
-`pnpm run e2e:android`
+`pnpm run e2e:android` · `pnpm run decision D-NNN`
 
 `gate:drills` (INF-10, D-082) tries a bad change against each gate and prints
 one row per drill: blocked, got through, or missing. `gate:full` runs it. The
