@@ -392,9 +392,10 @@ down: an inference from the timing, as the hooks' output is not in the log.
 `code-reviewer`'s job took 83 s (5 min 14 s at `c626578`) and its session
 cost $0.30, against $1.11 on Sonnet 5 on #68 (job 113210298189).
 Dependabot's #62 (claude-code-action v1.0.239, Claude Code 2.1.287) is still
-open. **Review loops 2 and 3** (D-119's amendment: the stop gate reads raw
-line endings, in its early check and its fingerprint, and the stand-down rule
-lives once in `inReviewJob()`) are
+open. **Review loops 2 to 4** (D-119's amendment: the stop gate reads raw
+line endings, in its early check and its fingerprint; the stand-down rule
+lives once in `inReviewJob()`; a guard test fails if the repository ever sets
+a line-ending attribute, which would blind the fingerprint again) are
 [#70](https://github.com/bvst/TryggHverdag/pull/70), from
 `fix/BUG-31-review-loop-2`.
 
@@ -431,6 +432,18 @@ and **BUG-15** ([#59](https://github.com/bvst/TryggHverdag/pull/59),
 `c46b3b3`) are done too. **A-31** (Dependabot alerts are off) is the owner's.
 LOST-01's to LOST-07's reviews leave items for later tasks, listed in
 `progress/m2.md` ("Left for later tasks").
+
+**For the owner, from #70's `integration` check:** the D-068 test
+("on SIGTERM the real worker exits with 0") failed once at `6ae6a68` with
+`{ code: null, signal: 'SIGTERM' }`, and passed at `271b99e`. Read from the
+code, not reproduced (no Docker here): `runWorkerProcess` in
+`apps/server/src/worker.ts` installs its signal handler only after
+`startWorker` returns, and Graphile Worker opens connections before that, so a
+SIGTERM in between kills the worker by the signal. The test waits for a
+connection, so it can land there; so can a real redeploy. Claude recommends
+**BUG-32**: install the handler before the start and let the stop wait for it
+(patch in #70's comment), with `safety-reviewer`. Not started: it needs the
+owner's go-ahead.
 
 **For the owner, from CI's `test-auditor` on #60:** should
 `apps/server/src/log.ts` be mutation-tested? It is the one place that keeps

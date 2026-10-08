@@ -4431,6 +4431,8 @@ any other path is work, not a candidate for the same treatment.
     amendment's pull request). The repository has no `.gitattributes`, and the
     other two are local to one machine, where CI's required checks still run
     every gate. If one is added, the fingerprint should hash the changed
-    tracked files' contents as well.
+    tracked files' contents as well. A test in `stop-gate.test.mjs` fails
+    when the repository sets `text`, `eol` or `crlf` for any tracked file, so
+    that cannot happen unnoticed (found missing by CI's `test-auditor` on #70).
   - #68 merged before this was pushed; it ships in its own pull request
     (BUG-31's review loop 2).
