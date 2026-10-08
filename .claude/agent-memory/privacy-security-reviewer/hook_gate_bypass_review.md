@@ -65,3 +65,27 @@ guards now refuse writes to the local-settings file and the hooks' state folder.
   count reviewer sessions. Job log blobs return 403 through the proxy; use
   check-runs/<job id>/annotations for the failure text (run 213 = Claude Code install
   failure, exit 22, not missing structured output).
+
+**BUG-36 review loop 1 (head 1f7ce47, 2026-10-08), PASS with should-fix.** All three earlier
+should-fixes verified closed by probe (punctuation split, copy into the folder, ln/install/dd,
+case-insensitive with --global, stop/progress gate rooted at CLAUDE_PROJECT_DIR).
+- **Probe kit:** scratchpad psr-l1/probe.mjs reads settings.json and extracts the guards'
+  exact args itself (no hand-copied args), cases JSON with placeholders (@L @S @D @R, plus
+  @CU @Cc @St @SU for case variants: a literal case variant in the heredoc was refused for
+  me because the guard ignores case now). No Write tool for this agent: heredoc only.
+  A JSON `\;` in a quoted heredoc came out as `\;` (fix with node, not sed). root.mjs: scratch
+  repo with root and subfolder package.json, red phase at root, input cwd = subfolder.
+- **Still open after loop 1 (each probed exit 0):** `>&file` (bash's other spelling of `&>`;
+  the regex skips any `&` after `>`), `xargs rm` at end of command (WRITE_OPS needs a
+  trailing space), unlink, shred, find -delete, rsync, tar -C, `git checkout HEAD -- path`,
+  `/bin/rm`, `\rm`, brace expansion, quote splice (`.cl'aude'`), backslash in a name.
+- **New false positive pattern:** ln/install/dd count as writes wherever --deny-write-glob is
+  judged, so the implementer's and test-author's ROLE guards gain them too:
+  `pnpm install && pnpm exec vitest run apps/server/src/x.test.ts` is refused for both, and
+  `grep -rn install <a test file>` for the implementer. Check whether a guard change scoped
+  "for the global check" really is scoped (look at which agent briefs pass the same flag).
+- **Docs drift to check every loop:** a new deny glob can make a listed "known limit" stale
+  (the folder glob now refuses `rm -rf` of the folder and `cd` into it first; D-120 still
+  lists both as getting past).
+- First /feature write of the phase file in a fresh clone: the state dir may not exist and
+  mkdir of it is refused for everyone; the Write tool creates it (Note only).
