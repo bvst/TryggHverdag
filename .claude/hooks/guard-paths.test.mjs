@@ -261,6 +261,98 @@ describe('BUG-36: the global guard-paths judges a path from the repository, not 
   );
 });
 
+// BUG-36, review loop 1, privacy-security-reviewer: the owner's Mac file
+// system ignores case, so `.CLAUDE/settings.local.json` there is the very file
+// D-120 protects, and the global guard let an Edit or a Write of it through.
+// The global guard matches its paths without regard to case. A role's own
+// guard, which has no --global, keeps matching case exactly: on an --allow
+// list, ignoring case would widen what the role may change.
+const CASE_VARIANTS = [
+  { file: '.CLAUDE/settings.local.json', main: 'refused', subagent: 'refused' },
+  { file: '.claude/Settings.Local.json', main: 'refused', subagent: 'refused' },
+  { file: '.Claude/State/gate-passed', main: 'refused', subagent: 'refused' },
+];
+
+describe('BUG-36, review loop 1: the global guard-paths ignores case in the paths D-120 protects', () => {
+  // Fails today: every row is allowed, for the main session and a subagent.
+  test.each(CASE_VARIANTS)(
+    'BUG-36: an Edit and a Write of $file — main session $main, subagent $subagent, naming D-120',
+    ({ file, main, subagent }) => {
+      for (const make of [edit, writeOf]) {
+        const call = make(`/repo/${file}`, 'synthetic\n');
+        const args = ['--global', ...d120];
+        const asMain = runHook('guard-paths.mjs', { args, input: call, cwd: '/repo' });
+        const asSubagent = runHook('guard-paths.mjs', {
+          args,
+          input: bySubagent(call),
+          cwd: '/repo',
+        });
+
+        expect({
+          tool: call.tool_name,
+          file,
+          main: d120VerdictOf(asMain),
+          subagent: d120VerdictOf(asSubagent),
+        }).toEqual({ tool: call.tool_name, file, main, subagent });
+      }
+    },
+  );
+
+  // Fails today: allowed. Only the subagent's verdict is held: whether the
+  // main session's exemption also ignores case is not what this is about.
+  test('BUG-36: a subagent may not Edit or Write .Claude/State/Phase: refused, naming D-120', () => {
+    for (const make of [edit, writeOf]) {
+      const result = runHook('guard-paths.mjs', {
+        args: ['--global', ...d120],
+        input: bySubagent(make('/repo/.Claude/State/Phase', 'red:BUG-1\n')),
+        cwd: '/repo',
+      });
+
+      expect({ tool: make('x').tool_name, subagent: d120VerdictOf(result) }).toEqual({
+        tool: make('x').tool_name,
+        subagent: 'refused',
+      });
+    }
+  });
+
+  // Passes today, on purpose: a role's guard keeps exact case, so test-author's
+  // `--allow '**/*.test.ts'` does not take in a file whose name only looks like
+  // a test to a file system that ignores case.
+  test('BUG-36: a role guard keeps matching case exactly: test-author may not change journey.TEST.ts', () => {
+    const result = runHook('guard-paths.mjs', {
+      args: testAuthor,
+      input: edit('/repo/apps/server/src/journey.TEST.ts'),
+      cwd: '/repo',
+    });
+
+    expect(result.status).toBe(BLOCKED);
+    expect(result.stderr).toContain('test-author');
+  });
+});
+
+// BUG-36, review loop 1, test-auditor: lib.mjs says any agent_id, even an
+// empty one, is a subagent, and no test held it: a guard that tested agent_id
+// for truth would hand the main session's exemption to a subagent whose
+// agent_id is "". Passes today, on purpose: it is the test that kills that
+// fault.
+describe('BUG-36, review loop 1: an empty agent_id is still a subagent (D-120)', () => {
+  test('BUG-36: with agent_id "", guard-paths refuses an Edit and a Write of .claude/state/phase, naming D-120', () => {
+    for (const make of [edit, writeOf]) {
+      const call = { ...make('/repo/.claude/state/phase', 'red:BUG-1\n'), agent_id: '' };
+      const result = runHook('guard-paths.mjs', {
+        args: ['--global', ...d120],
+        input: call,
+        cwd: '/repo',
+      });
+
+      expect({ tool: call.tool_name, verdict: d120VerdictOf(result) }).toEqual({
+        tool: call.tool_name,
+        verdict: 'refused',
+      });
+    }
+  });
+});
+
 describe('HK-02: tools that do not touch a file', () => {
   test('pass straight through', () => {
     const result = runHook('guard-paths.mjs', {

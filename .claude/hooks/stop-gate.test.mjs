@@ -3,7 +3,7 @@
 // without that being written down where the next session will see it.
 import { afterEach, describe, expect, test } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import {
@@ -704,5 +704,207 @@ describe("BUG-31: the hook tests do not inherit a CI review job's stand-down (D-
     expect(result.status).toBe(BLOCKED);
     expect(ranLog(dir)).toContain('gate:quick');
     expect(result.stderr).toContain('2 tests failed');
+  });
+});
+
+// BUG-36, review loop 1, privacy-security-reviewer: D-120's guards protect the
+// repository's .claude/state/, named from CLAUDE_PROJECT_DIR, which Claude
+// Code sets for every hook; session-start.mjs reads its notes from there too.
+// The stop gate took its records, and the repository it checks, from the
+// folder the session is in, the input's cwd. From apps/server, which has a
+// package.json of its own, it read apps/server/.claude/state/phase and
+// apps/server/.claude/state/gate-passed, which no guard protects, and checked
+// apps/server as if it were the repository. The stop gate uses
+// CLAUDE_PROJECT_DIR when it is set, else the input's cwd, for both.
+
+const SUBFOLDER = 'apps/server';
+
+/** `files` with each path put under apps/server, which gets a package.json of its own. */
+const inSubfolder = (files) =>
+  Object.fromEntries(Object.entries(files).map(([file, text]) => [`${SUBFOLDER}/${file}`, text]));
+
+/**
+ * Runs the stop gate as Claude Code does for a session whose folder is
+ * `folder`: the input's cwd, and the process's unless `processIn` says
+ * otherwise. CLAUDE_PROJECT_DIR is `project`, or unset when `project` is null.
+ */
+function stopFrom({ folder, project, processIn = folder, input = {}, args = [] }) {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: project ?? '' };
+  if (project === null) {
+    delete env.CLAUDE_PROJECT_DIR;
+  }
+  delete env.TRYGGHVERDAG_REVIEW_JOB;
+  const result = spawnSync(process.execPath, [path.join(HOOKS_DIR, 'stop-gate.mjs'), ...args], {
+    input: JSON.stringify({ cwd: folder, ...input }),
+    encoding: 'utf8',
+    cwd: processIn,
+    timeout: 120_000,
+    env,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  return { status: result.status, stderr: result.stderr ?? '' };
+}
+
+/** Every file called `name` anywhere in `dir`, as absolute paths. */
+const filesNamed = (dir, name) =>
+  readdirSync(dir, { recursive: true })
+    .map(String)
+    .filter((file) => path.basename(file) === name)
+    .map((file) => path.join(dir, file));
+
+describe('BUG-36, review loop 1: from a subfolder, the stop gate reads its records from the repository the guards protect (HK-06, D-120)', () => {
+  // Fails today: the gate reads apps/server's phase, runs apps/server's
+  // gate:static, which passes, and lets the session finish.
+  test("BUG-36: a red: phase planted under the subfolder's .claude/state/ is ignored: the repository has none, so gate:quick runs and refuses", () => {
+    const scripts = { 'gate:quick': FAILS, 'gate:static': PASSES };
+    const dir = branchRepo(scripts, inSubfolder(fakeScripts(scripts)));
+    const sub = path.join(dir, SUBFOLDER);
+    write(sub, { '.claude/state/phase': 'red:LOST-02' });
+
+    const result = stopFrom({ folder: sub, project: dir });
+
+    expect(result.status).toBe(BLOCKED);
+    expect(result.stderr).toContain('2 tests failed');
+    expect(runs(dir, 'gate:quick')).toBe(1);
+    expect(ranLog(sub)).toBe('');
+  });
+
+  // Fails today: no phase in apps/server, so its gate:quick runs, and fails.
+  test("BUG-36: the repository's red: phase is used: only the static checks run, in the repository", () => {
+    const scripts = { 'gate:quick': FAILS, 'gate:static': PASSES };
+    const dir = branchRepo(scripts, inSubfolder(fakeScripts(scripts)));
+    const sub = path.join(dir, SUBFOLDER);
+    write(dir, { '.claude/state/phase': 'red:LOST-02' });
+
+    const result = stopFrom({ folder: sub, project: dir });
+
+    expect(result.status, result.stderr).toBe(ALLOWED);
+    expect(runs(dir, 'gate:static')).toBe(1);
+    expect(runs(dir, 'gate:quick')).toBe(0);
+    expect(ranLog(sub)).toBe('');
+  });
+
+  // Fails today: the pass apps/server remembers for itself skips the gate.
+  test("BUG-36: a remembered pass planted under the subfolder's .claude/state/ is ignored: the repository's gate runs and refuses", () => {
+    const dir = branchRepo(
+      { 'gate:quick': FAILS },
+      inSubfolder(fakeScripts({ 'gate:quick': PASSES })),
+    );
+    const sub = path.join(dir, SUBFOLDER);
+    // The plant: a stop that takes apps/server for the project remembers a
+    // pass there, the same way before and after the fix.
+    expect(stopFrom({ folder: sub, project: sub }).status).toBe(ALLOWED);
+    expect(existsSync(path.join(sub, '.claude/state/gate-passed'))).toBe(true);
+    expect(runs(sub, 'gate:quick')).toBe(1);
+
+    const result = stopFrom({ folder: sub, project: dir });
+
+    expect(result.status).toBe(BLOCKED);
+    expect(result.stderr).toContain('2 tests failed');
+    expect(runs(dir, 'gate:quick')).toBe(1);
+    expect(runs(sub, 'gate:quick')).toBe(1);
+  });
+
+  // Fails today: the repository's pass is not looked at, and apps/server's
+  // gate:quick runs, and fails.
+  test("BUG-36: the repository's remembered pass is used: the gate it passed does not run again from the subfolder", () => {
+    const dir = branchRepo(
+      { 'gate:quick': PASSES },
+      inSubfolder(fakeScripts({ 'gate:quick': FAILS })),
+    );
+    const sub = path.join(dir, SUBFOLDER);
+    expect(stop(dir).status).toBe(ALLOWED);
+    expect(runs(dir, 'gate:quick')).toBe(1);
+
+    const result = stopFrom({ folder: sub, project: dir });
+
+    expect(result.status, result.stderr).toBe(ALLOWED);
+    expect(runs(dir, 'gate:quick')).toBe(1);
+    expect(ranLog(sub)).toBe('');
+  });
+
+  // Fails today: from apps/server, git lists only the untracked files under
+  // apps/server, so the gate decides nothing changed and does not run.
+  test('BUG-36: the repository is what is checked: an untracked code file outside the subfolder runs the gate', () => {
+    const dir = makeRepo({
+      ...fakeScripts({ 'gate:quick': FAILS }),
+      '.gitignore': 'ran.txt\n',
+      ...inSubfolder(fakeScripts({ 'gate:quick': PASSES })),
+    });
+    repos.push(dir);
+    const sub = path.join(dir, SUBFOLDER);
+    write(dir, { 'packages/contracts/src/journey.ts': 'export const c = 1;\n' });
+
+    const result = stopFrom({ folder: sub, project: dir });
+
+    expect(result.status).toBe(BLOCKED);
+    expect(result.stderr).toContain('2 tests failed');
+    expect(runs(dir, 'gate:quick')).toBe(1);
+  });
+
+  // Fails today: the stop gate remembers its pass under apps/server, and the
+  // guards, which name paths from the repository, have nothing to refuse there.
+  test('BUG-36: the stop gate and the global guards share one root: from a subfolder, the file the stop gate remembers its pass in is one the global guards refuse to a subagent, naming D-120', () => {
+    const dir = branchRepo(
+      { 'gate:quick': PASSES },
+      inSubfolder(fakeScripts({ 'gate:quick': PASSES })),
+    );
+    const sub = path.join(dir, SUBFOLDER);
+    expect(stopFrom({ folder: sub, project: dir }).status).toBe(ALLOWED);
+    const remembered = filesNamed(dir, 'gate-passed');
+    expect(remembered, 'where the stop gate remembered its pass').toHaveLength(1);
+    const [file] = remembered;
+
+    // D-120's deny arguments for the two global guards, as settings.json
+    // passes them; settings-hooks.test.mjs holds that it does.
+    const guardEnv = { ...process.env, CLAUDE_PROJECT_DIR: dir };
+    delete guardEnv.TRYGGHVERDAG_REVIEW_JOB;
+    const asSubagent = (hook, args, call) => {
+      const run = spawnSync(process.execPath, [path.join(HOOKS_DIR, hook), '--global', ...args], {
+        input: JSON.stringify({ cwd: sub, ...call, agent_id: 'synthetic-subagent-1' }),
+        encoding: 'utf8',
+        cwd: sub,
+        timeout: 120_000,
+        env: guardEnv,
+      });
+      if (run.error) {
+        throw run.error;
+      }
+      return run.status === BLOCKED && (run.stderr ?? '').includes('D-120')
+        ? 'refused'
+        : `exit ${String(run.status)}: ${(run.stderr ?? '').trim()}`;
+    };
+    const byWrite = asSubagent(
+      'guard-paths.mjs',
+      ['--deny', '.claude/settings.local.json', '--deny', '.claude/state/**'],
+      { tool_name: 'Write', tool_input: { file_path: file, content: 'synthetic\n' } },
+    );
+    const byShell = asSubagent(
+      'guard-bash.mjs',
+      ['--deny-write-glob', '.claude/state/**', '--deny-write-glob', '.claude/state'],
+      { tool_name: 'Bash', tool_input: { command: `printf x > ${file}` } },
+    );
+
+    expect(
+      { byWrite, byShell },
+      `the stop gate remembered its pass in ${path.relative(dir, file)}`,
+    ).toEqual({ byWrite: 'refused', byShell: 'refused' });
+  });
+
+  // Passes today, on purpose: without CLAUDE_PROJECT_DIR the input's cwd
+  // stands in, not the folder the hook's process happens to run in.
+  test("BUG-36: without CLAUDE_PROJECT_DIR, the input's cwd is the repository, not the process's folder", () => {
+    const scripts = { 'gate:quick': FAILS, 'gate:static': PASSES };
+    const dir = branchRepo(scripts, inSubfolder(fakeScripts({ 'gate:quick': FAILS })));
+    const sub = path.join(dir, SUBFOLDER);
+    write(dir, { '.claude/state/phase': 'red:LOST-02' });
+
+    const result = stopFrom({ folder: dir, project: null, processIn: sub });
+
+    expect(result.status, result.stderr).toBe(ALLOWED);
+    expect(runs(dir, 'gate:static')).toBe(1);
+    expect(ranLog(sub)).toBe('');
   });
 });

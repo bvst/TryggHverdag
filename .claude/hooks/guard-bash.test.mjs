@@ -480,3 +480,209 @@ describe('HK-03: an empty command', () => {
     expect(result.status).toBe(ALLOWED);
   });
 });
+
+// ---------------------------------------------------------------------------
+// BUG-36, review loop 1
+// ---------------------------------------------------------------------------
+
+// From review loop 1 on, settings.json also names the .claude folder itself,
+// exactly: a copy into it (`cp … .claude/`) and removing it (`rm -rf .claude`)
+// change what D-120 protects, and `.claude/state/**` matches neither.
+// settings-hooks.test.mjs holds that settings.json passes it.
+const D120_ARGS_WITH_FOLDER = [...D120_ARGS, '--deny-write-glob', '.claude'];
+
+/** guard-bash's D-120 verdict for the main session and a subagent, with loop 1's arguments. */
+const loop1VerdictsOf = (command) => {
+  const call = bash(command);
+  const main = runHook('guard-bash.mjs', { args: D120_ARGS_WITH_FOLDER, input: call });
+  const subagent = runHook('guard-bash.mjs', {
+    args: D120_ARGS_WITH_FOLDER,
+    input: { ...call, agent_id: 'synthetic-subagent-1', agent_type: 'implementer' },
+  });
+  return { command, main: d120VerdictOf(main), subagent: d120VerdictOf(subagent) };
+};
+
+// BUG-36, review loop 1, privacy-security-reviewer: guard-bash splits a
+// command only on whitespace, quotes and `=`, so shell punctuation stuck to a
+// path stays part of the token: `.claude/settings.local.json;` matches no
+// deny glob, and every row below got through, for a subagent too. The shell
+// ends a word at `;`, `&`, `|`, `<`, a bracket and a backtick, so the guard
+// must judge the word the shell would see. The last three rows are the same
+// class, added by test-author: a command substitution, a backtick and a
+// job sent to the background.
+const LOOP1_PUNCTUATION_REFUSED = [
+  'rm .claude/settings.local.json; echo done',
+  'rm .claude/settings.local.json&&echo done',
+  '(rm .claude/settings.local.json)',
+  'tee .claude/settings.local.json</tmp/e',
+  'rm -rf .claude/state; echo ok',
+  'cp /tmp/x .claude/settings.local.json; echo ok',
+  'rm .claude/settings.local.json||true',
+  'rm -rf .claude/state&&echo ok',
+  'rm -rf .claude;echo ok',
+  'echo $(rm .claude/settings.local.json)',
+  'echo `rm .claude/settings.local.json`',
+  'cp /tmp/x .claude/settings.local.json&',
+];
+
+// The other side of the same split: `.claude/state/**` takes the punctuation
+// in, so `.claude/state/phase;` is refused, while the main session's exemption
+// names phase exactly and does not reach it. The main session's own phase
+// step is refused today; a subagent must stay refused.
+const LOOP1_PUNCTUATION_MAIN_SESSION_ONLY = [
+  'rm .claude/state/phase; echo ok',
+  '(rm .claude/state/phase)',
+  "printf 'red:BUG-1\\n' > .claude/state/phase; echo ok",
+];
+
+// The folder itself: refused with loop 1's arguments, which the guard already
+// understands. These pass today, on purpose: they hold that the new argument
+// becomes a refusal for both callers, with or without a trailing slash.
+// settings-hooks.test.mjs holds the part that fails today, the wiring.
+const LOOP1_FOLDER_REFUSED = [
+  'cp /tmp/s/settings.local.json .claude/',
+  'cp /tmp/s/settings.local.json .claude',
+  'mv /tmp/s/settings.local.json .claude/',
+  'rm -rf .claude',
+  'rm -rf .claude/',
+];
+
+// Passes today, on purpose: a command that only names a path D-120 does not
+// protect is left alone, however its punctuation reads. Naming the folder
+// itself must not turn into refusing everything under it: agent memory and
+// the agents' own files are not D-120's.
+const LOOP1_UNPROTECTED = [
+  'rm .claude/agent-memory/x.md',
+  'rm .claude/agents/x.md',
+  'printf x > .claude/agent-memory/x.md',
+  'cp /tmp/x .claude/agents/x.md',
+  'mkdir -p .claude/agent-memory/test-author',
+  'rm .claude/agent-memory/x.md; echo done',
+  'cp /tmp/x .claude/agents/x.md&&echo ok',
+  '(rm .claude/agents/x.md)',
+];
+
+describe('BUG-36, review loop 1: guard-bash judges the word the shell sees, not a token with punctuation stuck to it (D-120)', () => {
+  // Fails today: every row is allowed, for the main session and a subagent.
+  test.each(LOOP1_PUNCTUATION_REFUSED)(
+    'BUG-36: refused for the main session and a subagent, naming D-120, with punctuation stuck to the path: %s',
+    (command) => {
+      expect(loop1VerdictsOf(command)).toEqual({ command, main: 'refused', subagent: 'refused' });
+    },
+  );
+
+  // Fails today on the main session, which is refused.
+  test.each(LOOP1_PUNCTUATION_MAIN_SESSION_ONLY)(
+    'BUG-36: allowed for the main session, refused for a subagent, with punctuation stuck to phase: %s',
+    (command) => {
+      expect(loop1VerdictsOf(command)).toEqual({ command, main: 'allowed', subagent: 'refused' });
+    },
+  );
+
+  test.each(LOOP1_FOLDER_REFUSED)(
+    'BUG-36: a write into or a removal of the .claude folder itself is refused for the main session and a subagent, naming D-120: %s',
+    (command) => {
+      expect(loop1VerdictsOf(command)).toEqual({ command, main: 'refused', subagent: 'refused' });
+    },
+  );
+
+  test.each(LOOP1_UNPROTECTED)(
+    'BUG-36: allowed for the main session and a subagent, because it names no path D-120 protects: %s',
+    (command) => {
+      expect(loop1VerdictsOf(command)).toEqual({ command, main: 'allowed', subagent: 'allowed' });
+    },
+  );
+});
+
+// BUG-36, review loop 1, privacy-security-reviewer: ln, install and dd write
+// the path they are given as surely as cp does, but the guard does not count
+// them as writes, so it never looks at the paths. Each row got through, for a
+// subagent too.
+const LOOP1_OTHER_WRITERS_REFUSED = [
+  'ln -sf /tmp/x .claude/settings.local.json',
+  'install /tmp/x .claude/settings.local.json',
+  'dd if=/tmp/x of=.claude/settings.local.json',
+  'ln -s /tmp/x .claude/state/gate-passed',
+  'dd if=/tmp/x of=.claude/state/gate-passed',
+];
+
+describe('BUG-36, review loop 1: guard-bash counts ln, install and dd as writes (D-120)', () => {
+  // Fails today: every row is allowed, for the main session and a subagent.
+  test.each(LOOP1_OTHER_WRITERS_REFUSED)(
+    'BUG-36: refused for the main session and a subagent, naming D-120: %s',
+    (command) => {
+      expect(loop1VerdictsOf(command)).toEqual({ command, main: 'refused', subagent: 'refused' });
+    },
+  );
+
+  // Fails today: allowed. Only the subagent's verdict is held: what the main
+  // session may do to its own phase file with install is not what this is about.
+  test('BUG-36: a subagent may not install a file over .claude/state/phase: refused, naming D-120', () => {
+    expect(loop1VerdictsOf('install /tmp/x .claude/state/phase').subagent).toBe('refused');
+  });
+});
+
+// BUG-36, review loop 1, privacy-security-reviewer: the owner's Mac file
+// system ignores case, so `.CLAUDE/settings.local.json` there is the very file
+// D-120 protects. The global guard matches its paths without regard to case;
+// a role's own guard, which has no --global, keeps matching case exactly, and
+// guard-paths.test.mjs holds that.
+const LOOP1_CASE_REFUSED = [
+  'rm .CLAUDE/settings.local.json',
+  'printf x > .claude/Settings.Local.json',
+  'rm .Claude/State/gate-passed',
+  'rm -rf .Claude/State',
+];
+
+describe('BUG-36, review loop 1: the global guard-bash ignores case in the paths D-120 protects', () => {
+  // Fails today: every row is allowed, for the main session and a subagent.
+  test.each(LOOP1_CASE_REFUSED)(
+    'BUG-36: refused for the main session and a subagent, naming D-120, whatever the case: %s',
+    (command) => {
+      expect(loop1VerdictsOf(command)).toEqual({ command, main: 'refused', subagent: 'refused' });
+    },
+  );
+
+  // Fails today: allowed. Only the subagent's verdict is held.
+  test('BUG-36: a subagent may not write .Claude/State/Phase: refused, naming D-120', () => {
+    expect(loop1VerdictsOf("printf 'red:BUG-1\\n' > .Claude/State/Phase").subagent).toBe('refused');
+  });
+});
+
+// BUG-36, review loop 1, privacy-security-reviewer: the guard reads the whole
+// command, so a command whose text only quotes a protected path next to a
+// write, such as a commit message, is refused too (D-120, known limits). The
+// refusal must say what to do then, pass the text from a file, so the session
+// does not go looking for a phrasing the guard misses.
+describe('BUG-36, review loop 1: the refusal tells a session that only quotes the path to pass the text from a file', () => {
+  // Fails today on the message: the refusal says nothing about a file.
+  test('BUG-36: a commit message that quotes a redirect into .claude/state/ is refused, and the refusal says to pass the text from a file', () => {
+    const message = ['note: printf x', '>', ['.claude', 'state', 'gate-passed'].join('/')].join(
+      ' ',
+    );
+    const result = runHook('guard-bash.mjs', {
+      args: D120_ARGS_WITH_FOLDER,
+      input: bash(`git commit -m "${message}"`),
+    });
+
+    expect(result.status).toBe(BLOCKED);
+    expect(result.stderr).toContain('D-120');
+    expect(result.stderr).toMatch(/git commit -F|from a file/);
+  });
+});
+
+// BUG-36, review loop 1, test-auditor: lib.mjs says any agent_id, even an
+// empty one, is a subagent, and no test held it: a guard that tested agent_id
+// for truth would hand the main session's exemption to a subagent whose
+// agent_id is "". Passes today, on purpose: it is the test that kills that
+// fault.
+describe('BUG-36, review loop 1: an empty agent_id is still a subagent (D-120)', () => {
+  test('BUG-36: with agent_id "", guard-bash refuses a change to .claude/state/phase, naming D-120', () => {
+    const result = runHook('guard-bash.mjs', {
+      args: D120_ARGS,
+      input: { ...bash("printf 'red:BUG-1\\n' > .claude/state/phase"), agent_id: '' },
+    });
+
+    expect(d120VerdictOf(result)).toBe('refused');
+  });
+});

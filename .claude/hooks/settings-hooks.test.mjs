@@ -331,6 +331,69 @@ describe('BUG-36: the Bash hooks in settings.json judge a redirect with no space
 });
 
 // ---------------------------------------------------------------------------
+// Review loop 1: the folder itself, and punctuation stuck to a path
+// ---------------------------------------------------------------------------
+
+// BUG-36, review loop 1, privacy-security-reviewer. A copy into the .claude
+// folder (`cp /tmp/s/settings.local.json .claude/`) lands on
+// settings.local.json without naming it, and `rm -rf .claude` removes both of
+// D-120's paths; neither matches a glob settings.json passes today. And the
+// guard keeps shell punctuation stuck to a path, so `rm
+// .claude/settings.local.json; echo done` names `.claude/settings.local.json;`,
+// which no glob matches either. guard-bash.test.mjs holds the guard's side;
+// these hold that settings.json, as Claude Code runs it, refuses them.
+const LOOP1_FOLDER_COMMANDS = ['cp /tmp/s/settings.local.json .claude/', 'rm -rf .claude'];
+const LOOP1_PUNCTUATION_COMMANDS = [
+  'rm .claude/settings.local.json; echo done',
+  '(rm .claude/settings.local.json)',
+  'rm -rf .claude/state; echo ok',
+];
+const LOOP1_UNPROTECTED_COMMANDS = [
+  'rm .claude/agent-memory/x.md',
+  'rm .claude/agents/x.md',
+  'cp /tmp/x .claude/agents/x.md; echo ok',
+];
+
+describe('BUG-36, review loop 1: the Bash hooks in settings.json refuse a write into the .claude folder itself and a path with punctuation stuck to it', () => {
+  // Fails today: no hook refuses it, for the main session or a subagent.
+  test.each(LOOP1_FOLDER_COMMANDS)(
+    'BUG-36: refused for the main session and a subagent, naming D-120: %s',
+    (command) => {
+      for (const { who, as } of CALLERS) {
+        const runs = runDeclared(as(bashOf(command)));
+
+        expect(refusal(runs), `by ${who}; the hooks answered:\n${said(runs)}`).toBeDefined();
+      }
+    },
+  );
+
+  // Fails today: no hook refuses it, for the main session or a subagent.
+  test.each(LOOP1_PUNCTUATION_COMMANDS)(
+    'BUG-36: with punctuation stuck to the path, refused for the main session and a subagent, naming D-120: %s',
+    (command) => {
+      for (const { who, as } of CALLERS) {
+        const runs = runDeclared(as(bashOf(command)));
+
+        expect(refusal(runs), `by ${who}; the hooks answered:\n${said(runs)}`).toBeDefined();
+      }
+    },
+  );
+
+  // Passes today, on purpose: naming the folder itself must not take agent
+  // memory or the agents' own files away from anyone. Those are not D-120's.
+  test.each(LOOP1_UNPROTECTED_COMMANDS)(
+    'BUG-36: allowed for the main session and a subagent, because it names no path D-120 protects: %s',
+    (command) => {
+      for (const { who, as } of CALLERS) {
+        const runs = runDeclared(as(bashOf(command)));
+
+        expect(allPass(runs), `by ${who}; the hooks answered:\n${said(runs)}`).toBe(true);
+      }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
 // From a subfolder
 // ---------------------------------------------------------------------------
 
@@ -533,7 +596,13 @@ describe('BUG-36: settings.json runs the two guards with the arguments D-120 giv
     },
   );
 
-  test('BUG-36: for Bash, guard-bash runs with --deny-write-glob for .claude/settings.local.json, .claude/state/** and .claude/state itself, and --allow-main-session .claude/state/phase alone', () => {
+  // RG-03, BUG-36 review loop 1: this test now also expects `.claude`, the
+  // folder itself, among the Bash guard's --deny-write-glob values, and its
+  // name says so. privacy-security-reviewer found that `cp … .claude/` and
+  // `rm -rf .claude` change what D-120 protects while matching none of the
+  // three globs; D-120's fix names the folder exactly. Stricter, not looser:
+  // the three globs it held before are all still required.
+  test('BUG-36: for Bash, guard-bash runs with --deny-write-glob for .claude/settings.local.json, .claude/state/**, .claude/state itself and the .claude folder itself, and --allow-main-session .claude/state/phase alone', () => {
     const found = guardsFor('Bash', 'guard-bash.mjs').map((argv) => ({
       denyWrite: valuesOf(argv, '--deny-write-glob'),
       allowMainSession: valuesOf(argv, '--allow-main-session'),
@@ -544,6 +613,7 @@ describe('BUG-36: settings.json runs the two guards with the arguments D-120 giv
         '.claude/settings.local.json',
         '.claude/state/**',
         '.claude/state',
+        '.claude',
       ]),
       allowMainSession: ['.claude/state/phase'],
     });
