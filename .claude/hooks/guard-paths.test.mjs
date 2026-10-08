@@ -1,8 +1,20 @@
 // req-coverage: fixtures-only — the IDs below are sample data for testing the gates.
 // HK-02: separation of duties. The agent that writes code cannot touch tests,
 // and the agent that writes tests cannot touch production code (RG-03).
-import { describe, expect, test } from 'vitest';
-import { ALLOWED, BLOCKED, edit, runHook } from './test-helpers.mjs';
+import { spawnSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import path from 'node:path';
+import process from 'node:process';
+import { afterAll, describe, expect, test } from 'vitest';
+import {
+  ALLOWED,
+  BLOCKED,
+  HOOKS_DIR,
+  edit,
+  makeDir,
+  removeRepo,
+  runHook,
+} from './test-helpers.mjs';
 
 const implementer = [
   '--agent',
@@ -160,6 +172,90 @@ describe('BUG-36: guard-paths exempts .claude/state/phase for the main session o
           },
           `main session said: ${asMain.stderr}\nsubagent said: ${asSubagent.stderr}`,
         ).toEqual({ tool: call.tool_name, file, main, subagent });
+      }
+    },
+  );
+});
+
+// BUG-36 (D-120): the global guard judges a path by where it is in the
+// repository, whatever folder the session is in. A session that has moved
+// into apps/server still has the repository's .claude/state/ to protect, but
+// relative to that folder <repo>/.claude/state/gate-passed is
+// ../../.claude/state/gate-passed, which no deny glob matches, and the global
+// guard no longer refuses a path outside its folder. The repository is
+// CLAUDE_PROJECT_DIR, which Claude Code sets for every hook
+// (code.claude.com/docs/en/hooks). Relative paths still start from the
+// session's folder: that is where the write would land.
+//
+// A real scratch project, so the guard's process can run in the subfolder as
+// Claude Code would run it, whether the guard reads the input's cwd or its own.
+const project = realpathSync(makeDir({ 'apps/server/.keep': '' }));
+const outside = realpathSync(makeDir());
+const subfolder = path.join(project, 'apps', 'server');
+afterAll(() => {
+  removeRepo(project);
+  removeRepo(outside);
+});
+
+/**
+ * Runs guard-paths as Claude Code does for a session that has moved into
+ * apps/server: that folder is the process's and the input's cwd, and
+ * CLAUDE_PROJECT_DIR is the project.
+ */
+function fromSubfolder(args, input) {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: project };
+  delete env.TRYGGHVERDAG_REVIEW_JOB;
+  const result = spawnSync(process.execPath, [path.join(HOOKS_DIR, 'guard-paths.mjs'), ...args], {
+    input: JSON.stringify({ cwd: subfolder, ...input }),
+    cwd: subfolder,
+    env,
+    encoding: 'utf8',
+    timeout: 120_000,
+  });
+  if (result.error) throw result.error;
+  return { status: result.status, stderr: result.stderr ?? '' };
+}
+
+/** A refusal counts only in D-120's words: any other block is shown as it is. */
+const d120VerdictOf = (result) => {
+  if (result.status === BLOCKED && result.stderr.includes('D-120')) return 'refused';
+  if (result.status === ALLOWED) return 'allowed';
+  return `exit ${String(result.status)}: ${result.stderr.trim()}`;
+};
+
+// <repo> is the project, <outside> a folder beside it; the rest is relative
+// to apps/server.
+const FROM_SUBFOLDER = [
+  { file: '<repo>/.claude/state/gate-passed', main: 'refused', subagent: 'refused' },
+  { file: '../../.claude/state/gate-passed', main: 'refused', subagent: 'refused' },
+  { file: '<repo>/.claude/settings.local.json', main: 'refused', subagent: 'refused' },
+  { file: '../../.claude/settings.local.json', main: 'refused', subagent: 'refused' },
+  { file: '<repo>/.claude/state/phase', main: 'allowed', subagent: 'refused' },
+  { file: '../../.claude/state/phase', main: 'allowed', subagent: 'refused' },
+  { file: 'src/worker.ts', main: 'allowed', subagent: 'allowed' },
+  { file: '<outside>/notes.md', main: 'allowed', subagent: 'allowed' },
+];
+
+describe('BUG-36: the global guard-paths judges a path from the repository, not from the folder the session is in (D-120)', () => {
+  // The four protected rows and both phase rows fail today: from apps/server
+  // every one of them is let through, for a subagent too. The last two pass
+  // on purpose: production code in the subfolder, and a path outside the
+  // repository, are still left alone.
+  test.each(FROM_SUBFOLDER)(
+    'BUG-36: from apps/server, an Edit and a Write of $file — main session $main, subagent $subagent',
+    ({ file, main, subagent }) => {
+      const target = file.replace('<repo>', project).replace('<outside>', outside);
+      for (const make of [edit, writeOf]) {
+        const call = make(target, 'synthetic\n');
+        const asMain = fromSubfolder(['--global', ...d120], call);
+        const asSubagent = fromSubfolder(['--global', ...d120], bySubagent(call));
+
+        expect({
+          tool: call.tool_name,
+          file,
+          main: d120VerdictOf(asMain),
+          subagent: d120VerdictOf(asSubagent),
+        }).toEqual({ tool: call.tool_name, file, main, subagent });
       }
     },
   );

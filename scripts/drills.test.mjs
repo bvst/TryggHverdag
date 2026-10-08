@@ -2023,11 +2023,22 @@ describe('HK-02 drill (5 of 9): implementer editing a test file', () => {
       const agent = read(IMPLEMENTER);
       const hooks = HK02.hooks();
 
-      for (const tool of ['Edit', 'Write', 'Bash']) {
+      // Changed for BUG-36 (RG-03, D-120): this held one settings.json hook per
+      // tool. D-120 adds the global path guard (guard-paths.mjs --global) beside
+      // scan-sensitive.mjs for Edit|Write|NotebookEdit, so Edit and Write now
+      // get two settings.json hooks before implementer's own; Bash keeps one,
+      // the global guard-bash.mjs. Still exact per tool, so a hook line dropped
+      // from or added to either file is noticed, as before.
+      const declared = {
+        Edit: [SETTINGS, SETTINGS, IMPLEMENTER],
+        Write: [SETTINGS, SETTINGS, IMPLEMENTER],
+        Bash: [SETTINGS, IMPLEMENTER],
+      };
+      for (const [tool, sources] of Object.entries(declared)) {
         expect(
           hooks.filter((hook) => picks(hook.matcher, tool)).map((hook) => hook.source),
           tool,
-        ).toEqual([SETTINGS, IMPLEMENTER]);
+        ).toEqual(sources);
       }
       for (const hook of hooks) {
         if (hook.source === SETTINGS) expect(settings).toContain(JSON.stringify(hook.command));

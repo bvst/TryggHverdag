@@ -63,8 +63,13 @@ function hookEnv(extra = {}) {
   return env;
 }
 
-/** Runs the hooks settings.json declares for the call's tool, as Claude Code runs them. */
-function runDeclared(call) {
+/**
+ * Runs the hooks settings.json declares for the call's tool, as Claude Code
+ * runs them, for a session whose folder is `from`: the repository unless a
+ * test moves the session into a subfolder. CLAUDE_PROJECT_DIR stays the
+ * repository either way, as Claude Code keeps it.
+ */
+function runDeclared(call, from = REPO) {
   const commands = declaredFor(call.tool_name);
   if (commands.length === 0) {
     throw new Error(`settings.json declares no PreToolUse hook for ${call.tool_name}.`);
@@ -72,14 +77,14 @@ function runDeclared(call) {
   const input = JSON.stringify({
     session_id: 'bug-36',
     transcript_path: '',
-    cwd: REPO,
+    cwd: from,
     permission_mode: 'default',
     hook_event_name: 'PreToolUse',
     ...call,
   });
   return commands.map((command) => {
     const run = spawnSync('sh', ['-c', command], {
-      cwd: REPO,
+      cwd: from,
       env: hookEnv(),
       input,
       encoding: 'utf8',
@@ -281,6 +286,144 @@ describe('BUG-36: the Bash hooks in settings.json hold D-120', () => {
       }
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// From a subfolder
+// ---------------------------------------------------------------------------
+
+// BUG-36 (D-120): a session that has moved into apps/server still has the
+// repository's .claude/state/ and settings.local.json to protect. Relative to
+// its folder those are ../../.claude/…, which no deny glob matches, and the
+// global guards leave a path outside their folder alone, so from there every
+// write below got through. The guards judge a path from the repository,
+// CLAUDE_PROJECT_DIR, whatever folder the session is in; a relative path
+// still starts from the session's folder, where the write would land.
+const SUBFOLDER = path.join(REPO, 'apps', 'server');
+
+/** `file` as the session in apps/server can name it: absolute, and relative to its folder. */
+const bothWays = (file) => [inRepo(file), path.relative(SUBFOLDER, inRepo(file))];
+
+/** A Write and an Edit of `target`, exactly as named. */
+const writeAndEditOf = (target) => [
+  { tool_name: 'Write', tool_input: { file_path: target, content: 'synthetic\n' } },
+  { tool_name: 'Edit', tool_input: { file_path: target, old_string: 'one', new_string: 'two' } },
+];
+
+/** `command` with <repo> put back as the repository's absolute path. */
+const inRepoCommand = (command) => command.replaceAll('<repo>', REPO);
+
+describe('BUG-36: from a subfolder, the Edit and Write hooks in settings.json still hold D-120', () => {
+  test('BUG-36: from apps/server, a Write and an Edit of .claude/state/gate-passed and .claude/settings.local.json, by absolute and by relative path, are refused for the main session and a subagent, naming D-120', () => {
+    for (const file of ['.claude/state/gate-passed', '.claude/settings.local.json']) {
+      for (const target of bothWays(file)) {
+        for (const call of writeAndEditOf(target)) {
+          for (const { who, as } of CALLERS) {
+            const runs = runDeclared(as(call), SUBFOLDER);
+
+            expect(
+              refusal(runs),
+              `${call.tool_name} of ${target} from apps/server by ${who}; the hooks answered:\n${said(runs)}`,
+            ).toBeDefined();
+          }
+        }
+      }
+    }
+  });
+
+  test('BUG-36: from apps/server, a subagent may not write .claude/state/phase by absolute or relative path: refused, naming D-120', () => {
+    for (const target of bothWays('.claude/state/phase')) {
+      for (const call of writeAndEditOf(target)) {
+        const runs = runDeclared(bySubagent(call), SUBFOLDER);
+
+        expect(
+          refusal(runs),
+          `${call.tool_name} of ${target} from apps/server; the hooks answered:\n${said(runs)}`,
+        ).toBeDefined();
+      }
+    }
+  });
+
+  test('BUG-36: from apps/server, the main session may write .claude/state/phase by absolute or relative path, and a file outside the repository is left alone for both: every hook lets it through', () => {
+    // Passes today, on purpose: it holds that judging from the repository
+    // keeps the main session's phase step, and takes nothing outside the
+    // repository away from anyone.
+    for (const target of bothWays('.claude/state/phase')) {
+      for (const call of writeAndEditOf(target)) {
+        const runs = runDeclared(call, SUBFOLDER);
+
+        expect(
+          allPass(runs),
+          `${call.tool_name} of ${target} from apps/server; the hooks answered:\n${said(runs)}`,
+        ).toBe(true);
+      }
+    }
+    const outside = path.join(tmpdir(), 'bug-36-scratchpad', 'notes.md');
+    for (const call of writeAndEditOf(outside)) {
+      for (const { who, as } of CALLERS) {
+        const runs = runDeclared(as(call), SUBFOLDER);
+
+        expect(
+          allPass(runs),
+          `${call.tool_name} of ${outside} from apps/server by ${who}; the hooks answered:\n${said(runs)}`,
+        ).toBe(true);
+      }
+    }
+  });
+});
+
+// <repo> is the repository's absolute path, put back when the test runs.
+const FROM_SUBFOLDER_REFUSED = [
+  'printf x > ../../.claude/state/gate-passed',
+  'printf x > <repo>/.claude/state/gate-passed',
+  `echo '{"disableAllHooks": true}' > ../../.claude/settings.local.json`,
+  `echo '{"disableAllHooks": true}' > <repo>/.claude/settings.local.json`,
+];
+const FROM_SUBFOLDER_PHASE = [
+  "printf 'red:BUG-1\\n' > ../../.claude/state/phase",
+  "printf 'red:BUG-1\\n' > <repo>/.claude/state/phase",
+];
+
+describe('BUG-36: from a subfolder, the Bash hooks in settings.json still hold D-120', () => {
+  test.each(FROM_SUBFOLDER_REFUSED)(
+    'BUG-36: from apps/server, refused for the main session and a subagent, naming D-120: %s',
+    (command) => {
+      for (const { who, as } of CALLERS) {
+        const runs = runDeclared(as(bashOf(inRepoCommand(command))), SUBFOLDER);
+
+        expect(refusal(runs), `by ${who}; the hooks answered:\n${said(runs)}`).toBeDefined();
+      }
+    },
+  );
+
+  test.each(FROM_SUBFOLDER_PHASE)(
+    'BUG-36: from apps/server, refused for a subagent, naming D-120: %s',
+    (command) => {
+      const runs = runDeclared(bySubagent(bashOf(inRepoCommand(command))), SUBFOLDER);
+
+      expect(refusal(runs), `the hooks answered:\n${said(runs)}`).toBeDefined();
+    },
+  );
+
+  // Passes today, on purpose: the main session keeps its phase step.
+  test.each(FROM_SUBFOLDER_PHASE)(
+    'BUG-36: from apps/server, allowed for the main session: %s',
+    (command) => {
+      const runs = runDeclared(bashOf(inRepoCommand(command)), SUBFOLDER);
+
+      expect(allPass(runs), `the hooks answered:\n${said(runs)}`).toBe(true);
+    },
+  );
+
+  // Passes today, on purpose: a path outside the repository is left alone.
+  test('BUG-36: from apps/server, a write outside the repository is allowed for the main session and a subagent', () => {
+    const outside = path.join(tmpdir(), 'bug-36-scratchpad', 'notes.md');
+    for (const { who, as } of CALLERS) {
+      const runs = runDeclared(as(bashOf(`printf x > ${outside}`)), SUBFOLDER);
+
+      expect(allPass(runs), `by ${who}; the hooks answered:\n${said(runs)}`).toBe(true);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

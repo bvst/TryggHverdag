@@ -2,10 +2,20 @@
 // HK-03: the shell is the way around every other guard, so it has its own.
 // Two independent layers protect the same rules: these checks and the deny list
 // in .claude/settings.json.
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
-import { describe, expect, test } from 'vitest';
-import { ALLOWED, BLOCKED, bash, runHook } from './test-helpers.mjs';
+import process from 'node:process';
+import { afterAll, describe, expect, test } from 'vitest';
+import {
+  ALLOWED,
+  BLOCKED,
+  HOOKS_DIR,
+  bash,
+  makeDir,
+  removeRepo,
+  runHook,
+} from './test-helpers.mjs';
 
 const guard = (command, args = ['--global']) =>
   runHook('guard-bash.mjs', { args, input: bash(command) });
@@ -235,6 +245,111 @@ describe('BUG-36: guard-bash exempts .claude/state/phase for the main session on
       subagent: ALLOWED,
     });
   });
+});
+
+// BUG-36 (D-120): the global guard judges a path by where it is in the
+// repository, whatever folder the session is in. A session that has run
+// `cd apps/server` still has the repository's .claude/state/ to protect, but
+// relative to that folder <repo>/.claude/state/gate-passed is
+// ../../.claude/state/gate-passed, which no deny glob matches. The repository
+// is CLAUDE_PROJECT_DIR, which Claude Code sets for every hook
+// (code.claude.com/docs/en/hooks). A relative path still starts from the
+// session's folder: that is where the shell would write.
+//
+// A real scratch project, so the guard's process can run in the subfolder as
+// Claude Code would run it, whether the guard reads the input's cwd or its own.
+const project = realpathSync(makeDir({ 'apps/server/.keep': '' }));
+const outside = realpathSync(makeDir());
+const subfolder = path.join(project, 'apps', 'server');
+afterAll(() => {
+  removeRepo(project);
+  removeRepo(outside);
+});
+
+/**
+ * Runs guard-bash with D-120's arguments as Claude Code does for a session
+ * that has moved into apps/server: that folder is the process's and the
+ * input's cwd, and CLAUDE_PROJECT_DIR is the project.
+ */
+function fromSubfolder(input) {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: project };
+  delete env.TRYGGHVERDAG_REVIEW_JOB;
+  const result = spawnSync(
+    process.execPath,
+    [path.join(HOOKS_DIR, 'guard-bash.mjs'), ...D120_ARGS],
+    {
+      input: JSON.stringify({ cwd: subfolder, ...input }),
+      cwd: subfolder,
+      env,
+      encoding: 'utf8',
+      timeout: 120_000,
+    },
+  );
+  if (result.error) throw result.error;
+  return { status: result.status, stderr: result.stderr ?? '' };
+}
+
+/** A refusal counts only in D-120's words: any other block is shown as it is. */
+const d120VerdictOf = (result) => {
+  if (result.status === BLOCKED && result.stderr.includes('D-120')) return 'refused';
+  if (result.status === ALLOWED) return 'allowed';
+  return `exit ${String(result.status)}: ${result.stderr.trim()}`;
+};
+
+// <repo> is the project, <outside> a folder beside it; the rest is relative
+// to apps/server.
+const BASH_FROM_SUBFOLDER = [
+  { command: 'printf x > ../../.claude/state/gate-passed', main: 'refused', subagent: 'refused' },
+  { command: 'printf x > <repo>/.claude/state/gate-passed', main: 'refused', subagent: 'refused' },
+  { command: 'rm ../../.claude/state/gate-passed', main: 'refused', subagent: 'refused' },
+  { command: 'rm -rf ../../.claude/state', main: 'refused', subagent: 'refused' },
+  {
+    command: `echo '{"disableAllHooks": true}' > ../../.claude/settings.local.json`,
+    main: 'refused',
+    subagent: 'refused',
+  },
+  {
+    command: `echo '{"disableAllHooks": true}' > <repo>/.claude/settings.local.json`,
+    main: 'refused',
+    subagent: 'refused',
+  },
+  {
+    command: "printf 'red:BUG-1\\n' > ../../.claude/state/phase",
+    main: 'allowed',
+    subagent: 'refused',
+  },
+  {
+    command: "printf 'red:BUG-1\\n' > <repo>/.claude/state/phase",
+    main: 'allowed',
+    subagent: 'refused',
+  },
+  { command: 'printf x > src/worker.ts', main: 'allowed', subagent: 'allowed' },
+  { command: 'printf x > <outside>/notes.md', main: 'allowed', subagent: 'allowed' },
+];
+
+describe('BUG-36: the global guard-bash judges a path from the repository, not from the folder the session is in (D-120)', () => {
+  // The six protected rows and both phase rows fail today: from apps/server
+  // every one of them is let through, for a subagent too. The last two pass
+  // on purpose: production code in the subfolder, and a path outside the
+  // repository, are still left alone.
+  test.each(BASH_FROM_SUBFOLDER)(
+    'BUG-36: from apps/server, $command — main session $main, subagent $subagent',
+    ({ command, main, subagent }) => {
+      const call = bash(command.replace('<repo>', project).replace('<outside>', outside));
+      const asMain = fromSubfolder(call);
+      const asSubagent = fromSubfolder({
+        ...call,
+        agent_id: 'synthetic-subagent-1',
+        agent_type: 'implementer',
+      });
+
+      expect({
+        command,
+        main: d120VerdictOf(asMain),
+        subagent: d120VerdictOf(asSubagent),
+      }).toEqual({ command, main, subagent });
+    },
+  );
 });
 
 describe('HK-03: an empty command', () => {
