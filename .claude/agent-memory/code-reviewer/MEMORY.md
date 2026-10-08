@@ -1,3 +1,4 @@
+- [Notes before the memory folders](reference_notes_before_memory_folders.md) — the older notes file Claude Code never loaded, moved here unchanged (BUG-38); recurring patterns and how to verify things here; check a note against the current code first
 - [Doctor false-green review angle](project_doctor_false_green.md) — scripts/doctor.mjs: look for OK branches that are inferred, and for exec calls that can hang
 - [Spawned-process tests](project_spawned_process_tests.md) — bin.test.ts style: flag fixed sleeps from spawn and kills outside finally (BUG-5)
 - [gate:file is silent on success](reference_gate_file_silent_success.md) — check its exit code; no GNU `timeout`; guard blocks any `>` (`=>`, `2>/dev/null`, python `>`), merge-base, zip/tee, a python var named `mv`
@@ -14,3 +15,4 @@
 - [pnpm overrides review](project_pnpm_overrides_review.md) — pnpm 10 override selector = semver.intersects + replace (exact targets freeze); query advisory ranges; reproduce lockfile/red-first in scratch; half-generalised helpers
 - [LOST-06 review](project_lost06_review.md) — one-case switch fails no-unnecessary-condition; layered headers in the fake; grep tests before calling a guard dead; the open withdraws the resolution enum
 - [LOST-07 review](project_lost07_review.md) — a request field one side ignores; a departure forced by an exact-set test; two monitoring URLs must differ; hand-added baselines vs measured; sqlstateOf accepts Node codes
+- [async spawn timeout orphans](project_async_spawn_timeout_orphans.md)

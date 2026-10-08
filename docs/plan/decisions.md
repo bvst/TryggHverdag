@@ -416,7 +416,8 @@ new decision that supersedes it (see `00-working-agreement.md`).
   limits are listed in the 07b README.
 
 ## D-045 — Claude plan: Max; how agents use it
-- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 7/8
+- **Date:** 2026-09-20 · **Status:** Accepted · first bullet superseded by
+  D-118 · **Section:** 7/8
 - **Context:** The owner uses a Claude Max subscription for Claude Code.
 - **Decision:**
   - Main sessions, `planner`, `implementer` and the three blocking reviewers
@@ -4259,3 +4260,325 @@ any other path is work, not a candidate for the same treatment.
   without `bin.test.ts` against the `process` group's JSON report from
   `gate:full` at `ef8a8e4`. That report has since been overwritten; its log
   shows the same 183/4/2 and the same four survivors (`test-auditor`).
+
+## D-118 — Which model and thinking level each agent uses, and CI names its model (BUG-30)
+- **Date:** 2026-10-07 · **Status:** Accepted (owner, 2026-10-07). The owner's
+  answer was "Yes. Do that", to the review in that session · **Section:** 7
+  (supersedes D-045's first bullet; its other bullets stand)
+- **Context** (facts, all checked 2026-10-07):
+  - Claude Sonnet 5.5 is out: $2 / $10 per million tokens, against Opus 5.5's
+    $4 / $20. In Claude Code, the alias `sonnet` means Sonnet 5.5 from
+    v2.1.284 and `opus` means Opus 5.5 from v2.1.280
+    (code.claude.com/docs/en/model-config). So `plan-keeper` and
+    `a11y-i18n-reviewer`, which say `sonnet`, already get Sonnet 5.5 in a
+    local session.
+  - The AI reviews in CI run on the previous Sonnet. The job log of
+    safety-reviewer on #67 (job 112942356368, run 37665127325) says
+    `"model": "claude-sonnet-5"`. `ai-review.yml` names no model, and the
+    reviewers use `model: inherit`, so the three blocking reviewers ran on
+    Sonnet 5 in CI while they run on Opus 5.5 locally. D-045 meant them to
+    use the strong model.
+  - claude-code-action v1.0.235, the version CI pins, installs Claude Code
+    2.1.283 (`const claudeCodeVersion = "2.1.283"` in src/entrypoints/run.ts
+    at commit 756cc22). In that version `opus` already means Opus 5.5, but
+    `sonnet` still means Sonnet 5 — Sonnet 5.5 arrived in 2.1.284. The action
+    sets no model of its own; with no `--model`, Claude Code's account default
+    applies, which the job log shows as `claude-sonnet-5`. That version
+    honours `effort:` in agent files (Claude Code fixed it being ignored in
+    2.1.267) and has accepted full model IDs there since 2.1.74 (the Claude
+    Code changelog). Dependabot's #62 moves the action to v1.0.239, which
+    installs Claude Code 2.1.287.
+  - No agent or skill sets a thinking level (effort). In Claude Code, Opus
+    5.5 and Sonnet 5.5 default to `medium`, so every agent thinks at
+    `medium`. Agent files can now set `effort:` (low, medium, high, xhigh,
+    max), which overrides the session's level
+    (code.claude.com/docs/en/sub-agents).
+  - Anthropic's guidance: at least `high` for work where correctness matters.
+    Opus 5.5 at `medium` matched or beat Opus 5 at `high` on multistep
+    coding, with about half the tokens. Opus 5.5 thinks more per level than
+    Opus 5, so `xhigh` and `max` are for a measured gain.
+- **Decision:**
+  - The session's model (`inherit`) stays for `planner`, `test-author`,
+    `implementer`, `safety-reviewer`, `privacy-security-reviewer`,
+    `test-auditor`, `infra-engineer` and `release-engineer`.
+  - `safety-reviewer`, `privacy-security-reviewer`, `test-auditor` and
+    `planner` think at `effort: high`. The others set no effort and get
+    Claude Code's default (`medium` on Opus 5.5 and Sonnet 5.5).
+  - `code-reviewer` (advisory) moves to Sonnet 5.5 at `effort: medium`.
+    `plan-keeper` and `a11y-i18n-reviewer` stay on Sonnet, now 5.5. All three
+    name it by its full ID, `model: claude-sonnet-5-5`, not the alias: the
+    alias is resolved by whichever Claude Code runs the agent, and CI's
+    2.1.283 resolves `sonnet` to Sonnet 5.
+  - CI names its model by full ID: `ai-review.yml` passes `--model
+    claude-opus-5-5`, so the reviewers that inherit get Opus 5.5 in CI too;
+    `daily-status.yml` passes `--model claude-sonnet-5-5`. A full ID, not an
+    alias, because CI's alias is resolved by the Claude Code version the
+    pinned action installs (2.1.283, above), in which `sonnet` is still
+    Sonnet 5.
+  - No agent uses fast mode: it is a main-session setting, Opus only, at
+    twice the price.
+- **Why:** the three blocking reviewers decide merges, and the planner's spec
+  drives everything after it; that is the work Anthropic says to run at
+  `high`. The implementer and test-author do the most work and their output
+  is checked by tests, gates and four reviewers, and Opus 5.5 at `medium`
+  already beat Opus 5 at `high` on that kind of work. `code-reviewer` is
+  advisory and reviews the same diff as three Opus reviewers, at half the
+  price on Sonnet.
+- **Rejected:**
+  - `xhigh` for the blocking reviewers: no measured gain yet, and longer
+    turns.
+  - Sonnet for `implementer`: it writes the safety-critical code.
+  - Haiku 5.5 for the daily report: it has to tell "not checked" from "fine".
+- **Consequences:**
+  - The two workflow lines go in their own pull request, merged by hand
+    (D-075), batched with Dependabot #62, which bumps the same action. Until
+    it merges, CI reviews keep running on Sonnet 5.
+  - A test pins each agent's model and effort, so a change to them is a
+    decision, not drift.
+  - At the next model release: the agents that inherit follow the session's
+    model by themselves locally; CI's full IDs and their test need a new
+    decision.
+  - At the next Sonnet release, the three Sonnet agents' full ID changes by a
+    new decision, like CI's.
+  - Agent files changed in a pull request reach the reviewers only after it
+    merges: a reviewer reads the pull request against the agent files on
+    `main` (progress.md, "`.claude/**` and `CLAUDE.md` are reverted in a
+    reviewer's working tree").
+
+## D-119 — The stop gate does not re-run a gate on unchanged work, and the per-edit checks run side by side (BUG-31, HK-04, HK-06)
+- **Date:** 2026-10-07 · **Status:** Accepted (delegated, D-031). It removes
+  no check · **Section:** 7
+- **Context** (measured in a cloud session, 2026-10-07):
+  - The stop gate (HK-06) runs `gate:quick` at the end of every turn whenever
+    the branch's code differs from `main`, whether or not anything changed
+    since it last passed: 112.5 s, then 88.0 s again with nothing changed. On
+    a feature branch that is about a minute and a half on every reply, even a
+    one-line answer.
+  - The per-edit gate (HK-04, `gate:file`) runs its steps one after another:
+    18.6 s after one edit to a domain file. Formatting took 0.8 s, lint 3.6 s,
+    types (the monorepo typecheck) 7.0 s, import rules 1.5 s, related tests
+    5.7 s.
+  - The project's hooks do run in CI's review jobs. Claude Code's docs:
+    "Without `--bare`, a `-p` session runs the hooks in a project's
+    `.claude/settings.json`" (code.claude.com/docs/en/headless), and the Agent
+    SDK runs settings-file hooks when `settingSources` includes `project`
+    (code.claude.com/docs/en/agent-sdk/hooks). claude-code-action defaults
+    `settingSources` to user, project and local
+    (base-action/src/parse-sdk-options.ts at 756cc22), and job
+    112942356368's log prints `"settingSources": ["user", "project",
+    "local"]`. The hooks' own output is not in the job log, so a run of them
+    was not observed. A review job's branch differs from main, so the stop
+    gate runs `gate:quick` at its end (88–112 s here); and if that or the
+    progress check fails there, the hook tells a read-only reviewer to fix
+    work it cannot touch.
+- **Decision:**
+  - The stop gate remembers the last green run in `.claude/state/` (never
+    committed): which gate ran and a fingerprint of everything it checked,
+    that is the commit, the merge base with `origin/main`, and every change
+    in the working tree, untracked files included. A stop whose fingerprint
+    matches does not run the gate again. A failed run is never remembered.
+  - The per-edit gate starts its steps at the same time and waits for all of
+    them. It still reports every failing step, in the same order as before.
+  - In CI's review jobs, the stop gate and the progress gate stand down.
+    ai-review.yml sets `TRYGGHVERDAG_REVIEW_JOB=1` on the review step, and
+    both hooks exit at once when that is set together with
+    `GITHUB_ACTIONS=true`. Neither alone is enough, so the hooks' own tests,
+    which run in GitHub Actions too, are unaffected, and a local session
+    cannot trip it by accident. The variable is set in the manual-merge pull
+    request with D-118's model lines (D-075); until then the hook side does
+    nothing.
+- **Why this weakens nothing:** the same input to the same checks gives the
+  same result; CI runs every check again on every push.
+- **Why the review jobs stand down:** a review job changes no code. The stop
+  gate and the progress gate judge a session's own work, and CI's required
+  checks run the same gates on the same commit.
+- **Rejected:**
+  - `--setting-sources user`, which the action's source suggests for avoiding
+    in-repo configuration: it would also drop the reviewer agents themselves.
+  - `disableAllHooks`: it would also drop the reviewers' read-only guard.
+- **Consequences:**
+  - Measured after the change (this cloud session, 2026-10-08). The per-edit
+    gate on `apps/server/src/domain/health.ts`, old and new scripts
+    alternating with a fresh edit before each run: 20.5, 20.2 and 19.5 s
+    before, 10.1, 9.9 and 9.7 s after; repeated after review loop 1 on a
+    busier machine: 25.7, 25.9 and 27.9 s before, 14.8, 14.6 and 15.1 s
+    after — about half, both times. The stop gate twice with nothing
+    changed: 96.9 s, then 0.12 s and 0.10 s.
+  - Review loop 1 (all three reviewers passed; these were their should-fix
+    findings): no fingerprint, so the gate runs, when a tracked file is
+    flagged assume-unchanged or skip-worktree (git hides its changes from the
+    diff); the fallback when git cannot read something (an untracked nested
+    repository) and a rename of an untracked file now have tests; a timed-out
+    step's whole process group is killed, not only `pnpm` (a reviewer
+    measured 8 s against a 1 s timeout before); the report the per-edit gate
+    prints is a tested function; both hooks read their input before standing
+    down.
+  - Known limits, accepted: gitignored files are not part of the fingerprint
+    (`node_modules`, generated files; a lockfile change is); the remembered
+    pass in `.claude/state/` could be written by anything that can write
+    there, as the red-phase marker already can — a guard on
+    `.claude/state/**` and `.claude/settings.local.json` needs its own
+    decision; each step now runs in its own process group, so a manual Ctrl-C
+    on `pnpm run gate:file` leaves the running tools to finish by themselves
+    (the hooks are unaffected: a step's 160 s timer fires before the hook's
+    own limits).
+- **Amendment (delegated, D-031, 2026-10-08): the fingerprint reads line
+  endings as they are on disk, and the review-job rule lives in one place.**
+  - **Found by CI's `code-reviewer`** on #68 after it was approved: with
+    `core.autocrlf` set to `input` or `true`, a tracked file changed only from
+    LF to CRLF shows as modified in `git status`, but `git diff HEAD` prints
+    nothing, so the fingerprint did not change and the stop gate skipped. The
+    gate's tools read the raw bytes (Prettier wants LF), so they could fail
+    where the skip said pass. Reproduced in a scratch repository: 0 bytes of
+    diff, and 108 with `-c core.autocrlf=false`.
+  - **The fix:** every git call the stop gate makes — the early check for any
+    change, and the fingerprint — runs with `-c core.autocrlf=false` (the early
+    check found by CI's `test-auditor` on #70). `ls-files` and
+    `hash-object --no-filters` give the same output with it.
+  - **And:** the stand-down condition, which both hooks carried word for word,
+    is now `inReviewJob()` in `.claude/hooks/lib.mjs`, tested on its own.
+  - **Known limit, added:** a `text` or `eol` attribute (such as
+    `* text=auto`) would still normalise line endings out of the diff,
+    whatever `core.autocrlf` says, from any of git's attribute sources: a
+    `.gitattributes` in the repository, a machine's own `.git/info/attributes`,
+    or a global `core.attributesFile` (found by CI's `code-reviewer` on this
+    amendment's pull request). The repository has no `.gitattributes`, and the
+    other two are local to one machine, where CI's required checks still run
+    every gate. If one is added, the fingerprint should hash the changed
+    tracked files' contents as well. A test in `stop-gate.test.mjs` fails
+    when the repository sets `text`, `eol` or `crlf` for any tracked file, so
+    that cannot happen unnoticed (found missing by CI's `test-auditor` on #70).
+  - #68 merged before this was pushed; it ships in its own pull request
+    (BUG-31's review loop 2).
+- **Amendment (owner, 2026-10-08): the guard test stays at `text`, `eol` and
+  `crlf`.** Three more attributes rewrite a file before `git diff` compares
+  it: `filter` (a clean driver), `ident` and `working-tree-encoding`. CI's
+  `test-author` and `privacy-security-reviewer` raised them on #70. Claude
+  recommended leaving them out: Git LFS works through `filter=lfs`, and its
+  pointer changes whenever the file does, so a guard on `filter` would fail a
+  pull request that adds LFS while hiding nothing. The owner agreed: "Leave
+  wider guard as is."
+
+## D-120 — No tool call changes `.claude/settings.local.json` or the hooks' records in `.claude/state/`, and only the main session sets the red phase (BUG-36)
+- **Date:** 2026-10-08 · **Status:** Accepted (the owner asked for it on
+  2026-10-08, "Do the follow ups"; the design delegated, D-031) ·
+  **Section:** 7
+- **Context:**
+  - CI's `privacy-security-reviewer` on #68: any agent can write both, and
+    either lets a session skip the stop gate (HK-06).
+    - `red:<ID>` in `.claude/state/phase` makes the main session's stop gate
+      run `gate:static` instead of `gate:quick`.
+    - `.claude/state/gate-passed` is the remembered pass (D-119): a matching
+      fingerprint written there skips the gate.
+    - `"disableAllHooks": true` in `.claude/settings.local.json` turns every
+      project hook off, and that file takes precedence over
+      `.claude/settings.json` (code.claude.com/docs/en/hooks, /settings).
+  - Claude Code's own protection is not a refusal in every mode. A write
+    under `.claude/` is never auto-approved: it is asked in `default` and
+    `acceptEdits`, left to a classifier in `auto`, refused in `dontAsk` and
+    allowed in `bypassPermissions`
+    (code.claude.com/docs/en/permission-modes#protected-paths).
+  - A hook's input carries `agent_id` only when the tool call comes from a
+    subagent (code.claude.com/docs/en/hooks, "Common input fields"; Claude
+    Code 2.1.69).
+  - `/feature` has the main session write `red:<ID>` to
+    `.claude/state/phase` in step 2 and delete it in step 3.
+- **Decision:**
+  - No tool call may change `.claude/settings.local.json`: not Edit, Write or
+    NotebookEdit, and not a shell command that writes to it. The owner
+    changes it by hand.
+  - No tool call may change anything in `.claude/state/` except
+    `.claude/state/phase`. The rest are the hooks' own records, which the
+    hooks write themselves.
+  - Only the main session may change `.claude/state/phase`, never a
+    subagent.
+  - The two existing guards enforce it from `.claude/settings.json`, so it
+    holds for every session and every subagent, in every permission mode:
+    `guard-paths.mjs` for the edit tools and `guard-bash.mjs --global` for
+    shell commands, each with a new `--allow-main-session <glob>` exception.
+- **Consequences:**
+  - A tool call can no longer turn the stop gate off or downgrade it through
+    these files.
+  - Asking Claude to change local settings (for example "allow X") is
+    refused; the owner edits the file.
+  - **What the shell check sees.** It reads a command as the shell splits it
+    (whitespace, quotes and punctuation such as `;`, `&&`, `|`, `(`, `<`, a
+    backtick), and refuses a write to a protected path: a redirect, judged by
+    its target with or without a space (`>`, `>>`, `2>`, `&>`, `>&`), or one
+    of the write commands it knows: `rm`, `mv`, `cp`, `truncate`, `tee`,
+    `touch`, `mkdir`, `chmod`, `chown`, `sed -i`,
+    `git checkout --`/`restore`/`rm`/`mv`, and, for the deny rules only and
+    only as the command word, `ln`, `install`, `dd` and `unlink`. The
+    `.claude` folder itself is protected too, so copying into it or removing
+    it is refused. With `--global`, paths are compared without regard to
+    case, the main session's exemption for the phase file too (the owner's
+    Mac file system ignores case); the role guards keep exact case. Paths
+    are judged from the repository (`CLAUDE_PROJECT_DIR`, which Claude Code
+    sets for every hook), and the stop gate and the progress gate keep their
+    records there too, so a session in a subfolder does not dodge the rules.
+  - **Known limits.** It is a heuristic, like RG-03's guards: it stops a
+    slip, not a determined session. Shown to get past it: any other writer
+    (`find … -delete`, `shred`, `rsync`, `tar`, `perl -pi`, `xargs rm` at
+    the end of a command, a writer behind `sudo`, `env` or `time`, a full
+    path to the binary such as `/bin/rm`, a program that writes the file
+    itself, `node -e`); `ln`, `install`, `dd` or `unlink` after `if`,
+    `elif`, `while`, `until`, `!`, `{`, a `VAR=value` prefix, `sudo` or
+    `xargs` (counting them only as the command word, in review loop 2, ended
+    the false positives that refused implementer's `pnpm install && …`, and
+    let these rarer forms through); a path the shell builds (`"$CLAUDE_PROJECT_DIR"/…`,
+    a wildcard `stat?`, brace expansion, quotes spliced inside the name);
+    `git clean -fdX` (which removes the ignored `.claude/state/`); a
+    redirect that overrides `noclobber` (`>|`); and a link from outside the
+    repository into `.claude/`. Also out of reach: a flag on a nested
+    `claude` call (`--settings`), and the user's own
+    `~/.claude/settings.json`, which can also set `disableAllHooks`. Without
+    `CLAUDE_PROJECT_DIR` the hook command itself would not run, and Claude
+    Code lets a call through when a hook fails to run or crashes (exit other
+    than 2), as before D-120. **False positives:** the check reads the whole
+    command, so a command whose text only mentions a protected path beside a
+    write (a commit message in a heredoc, `ls .claude && rm foo`,
+    `git diff -- .claude > /tmp/d.txt`) is refused; the refusal says to pass
+    such text from a file, or to name the subfolder meant. Moving a file
+    descriptor (`>&2-`) reads as a write to a file named `2-`. CI's required
+    checks never go through these hooks and stay the gate (D-042).
+
+## D-121 — CI's reviewers keep running as subagents of a wrapper session, not as `claude --agent` (BUG-30 and BUG-31's follow-up)
+- **Date:** 2026-10-08 · **Status:** Accepted (delegated, D-031; the owner
+  asked for the follow-up to be done, 2026-10-08) · **Section:** 7
+- **Context:**
+  - BUG-30 and BUG-31's follow-up: some reviews ended with no structured
+    output (`--json-schema was provided but Claude did not return
+    structured_output`, on #43, #67 and #68), so running each reviewer
+    directly as its agent was proposed.
+  - Measured in a cloud session with Claude Code 2.1.294: `claude -p` with
+    `GITHUB_ACTIONS=true` and `TRYGGHVERDAG_REVIEW_JOB=1`, in a clean
+    worktree of `main`, with the same schema as `ai-review.yml`:
+    - With `--agent code-reviewer` or `--agent safety-reviewer`, the run
+      succeeds with no structured output (`structured_output: null`). The
+      agent's `tools:` list (Read, Grep, Glob, Bash) leaves out the tool that
+      returns it, and naming it in `--allowedTools` does not bring it back.
+      The same request without `--agent` returns it.
+    - Neither agent was given its memory index (`MEMORY.md`): each was asked
+      to quote the first line of its memory index if it had one, and both
+      answered "none" (what the agent said, not a look at its prompt).
+    - `--model claude-opus-5-5` won over the agent's own `model:`:
+      `code-reviewer` ran on Opus 5.5, not D-118's Sonnet 5.5.
+    - The docs add that a `tools:` list leaves out MCP tools unless it names
+      them (code.claude.com/docs/en/sub-agents), so the comment tools would
+      go too.
+  - Since #69 (`2c9808f`) stood the hooks down in review jobs, every review
+    of a pull request that does not change `ai-review.yml` has returned its
+    structured output: runs 210 to 212 (#70), nine reviewer sessions. Run
+    213 (#71) has one failed review, `code-reviewer`, but it never started:
+    "Failed to install Claude Code after 3 attempts" (a 403 on the
+    download), not a missing structured output.
+- **Decision:** keep the wrapper session; CI's reviewers do not move to
+  `--agent`.
+- **Consequences:**
+  - Moving would mean naming the structured-output tool and the GitHub
+    comment tools in every reviewer's `tools:` (which locally would let a
+    reviewer post on a pull request), losing the reviewers' memory in CI, and
+    naming D-118's models per reviewer in the workflow. None of that is worth
+    it while the failure has not come back.
+  - Revisit if a review ends with no structured output again, or if a Claude
+    Code release changes how `--agent` treats tools, memory or `--model`.

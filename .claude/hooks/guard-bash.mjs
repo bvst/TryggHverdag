@@ -2,14 +2,31 @@
 // Shell command guard.
 //   --global                    rules for every session and agent
 //   --readonly                  for reviewer agents: no state-changing commands
-//   --deny-write-glob <glob>    block commands that write to matching paths (heuristic)
+//   --deny-write-glob <glob>    block commands that write to matching paths (heuristic);
+//                               with --global, refused in D-120's words
+//   --allow-main-session <glob> exempt from --deny-write-glob when the main session
+//                               asks (no agent_id in the input), never a subagent
 //   --agent <name>              used in messages
-import { readInput, relPath, matchesAny, argList, argValue, hasFlag, block } from './lib.mjs';
+import {
+  readInput,
+  relPath,
+  repoRelPath,
+  matchesAny,
+  argList,
+  argValue,
+  hasFlag,
+  isSubagent,
+  d120Refusal,
+  block,
+} from './lib.mjs';
 
 const input = await readInput();
 const cmd = String(input?.tool_input?.command ?? '');
 if (!cmd) process.exit(0);
 const agent = argValue('--agent', 'this session');
+// BUG-36 review loop 1 (code-reviewer): the global mode, named once, as
+// guard-paths names it.
+const everySession = hasFlag('--global');
 
 const GLOBAL = [
   [
@@ -43,19 +60,40 @@ const GLOBAL = [
 
 function redirectTargets(c) {
   const out = [];
-  const re = /(\d?)>>?\s*(&?)([^\s;&|)]*)/g;
+  // BUG-36 review loop 1: a target ends where the shell ends the word, at `<`
+  // and a backtick too.
+  const re = /(\d?)>>?\s*(&?)\s*([^\s;&|)<`]*)/g;
   let m;
   while ((m = re.exec(c))) {
-    if (m[2] === '&') continue; // 2>&1 and similar
-    if (!m[3] || m[3] === '/dev/null') continue;
-    out.push(m[3]);
+    // BUG-36 review loop 2 (privacy-security-reviewer, test-auditor): `>&`
+    // only copies or closes a file descriptor when a number or `-` follows
+    // (2>&1, >&2, 1>&-); followed by anything else, bash writes that file.
+    if (m[2] === '&' && /^(\d+|-)$/.test(m[3])) continue;
+    // BUG-36 review loop 1: quotes are the shell's, not the file's name, so a
+    // refusal names the file (`> .claude/state/x"` in a quoted message).
+    const target = m[3].replaceAll(/["']/g, '');
+    if (!target || target === '/dev/null') continue;
+    out.push(target);
   }
   return out;
 }
+// BUG-36 review loop 1 (test-author): a command right after a backtick is a
+// command too; `$(rm` is already seen at its `(`.
 const WRITE_OPS =
-  /(^|[\s;&|(])(rm|mv|cp|truncate|tee|touch|mkdir|chmod|chown)\s|\bsed\s+(-[a-zA-Z]*i|--in-place)|\bgit\s+(checkout\s+--|restore|rm|mv)\b/;
+  /(^|[\s;&|(`])(rm|mv|cp|truncate|tee|touch|mkdir|chmod|chown)\s|\bsed\s+(-[a-zA-Z]*i|--in-place)|\bgit\s+(checkout\s+--|restore|rm|mv)\b/;
+// BUG-36 review loop 1 (privacy-security-reviewer): ln, install and dd write
+// the path they are given as surely as cp does. Counted only where deny-write
+// globs are judged, not in --readonly's list: a reviewer's `rg install docs`
+// only reads.
+// BUG-36 review loop 2 (privacy-security-reviewer): so does unlink. And each
+// counts only as the command word, where the shell runs it: at the start, or
+// after `;`, `&`, `|`, `(` (so `$(` too), a backtick or a newline, or after
+// `then`, `do` or `else` there. After mere whitespace it is an argument, as in
+// `pnpm install` or `grep -rn install`, and refusing those beside a protected
+// path refused commands that write nothing.
+const DENY_WRITE_OPS = /(^|[;&|(`\n])\s*((then|do|else)\s+)?(ln|install|dd|unlink)\s/;
 
-if (hasFlag('--global')) {
+if (everySession) {
   for (const [re, msg] of GLOBAL) if (re.test(cmd)) block(`Blocked: ${msg}`);
 }
 
@@ -75,14 +113,37 @@ if (hasFlag('--readonly')) {
 }
 
 const denyGlobs = argList('--deny-write-glob');
-if (denyGlobs.length && (WRITE_OPS.test(cmd) || redirectTargets(cmd).length)) {
-  const tokens = cmd.split(/[\s'"=]+/).filter(Boolean);
-  for (const t of tokens) {
-    const rel = relPath(t, input.cwd);
-    if (matchesAny(rel, denyGlobs)) {
+if (
+  denyGlobs.length &&
+  (WRITE_OPS.test(cmd) || DENY_WRITE_OPS.test(cmd) || redirectTargets(cmd).length)
+) {
+  // Per path, not per command: a command that names an exempt path and a
+  // protected one is still refused.
+  const mainSessionGlobs = isSubagent(input) ? [] : argList('--allow-main-session');
+  // BUG-36 review loop 1 (privacy-security-reviewer): the shell ends a word at
+  // `;`, `&`, `|`, `<`, `>`, a bracket, a backtick and `$` too, so the guard
+  // splits there and judges the word the shell sees: in
+  // `rm .claude/settings.local.json; echo done` that is the file, not
+  // `.claude/settings.local.json;`. `=` splits `dd of=PATH`, so PATH is judged.
+  const tokens = cmd.split(/[\s'"=;&|()<>`$]+/).filter(Boolean);
+  // BUG-36: each redirect target is judged as a path too, and first, so a
+  // refusal names the file the shell would write.
+  // BUG-36 review loop 1 (the reviewer): with --global, case is ignored, as
+  // the owner's Mac file system ignores it; a role's guard keeps exact case.
+  const ignoreCase = everySession;
+  for (const t of [...redirectTargets(cmd), ...tokens]) {
+    // BUG-36: with --global, each path is named from the repository, not the
+    // session's folder, so a session in a subfolder cannot dodge D-120.
+    const rel = everySession ? repoRelPath(t, input.cwd) : relPath(t, input.cwd);
+    if (
+      matchesAny(rel, denyGlobs, { ignoreCase }) &&
+      !matchesAny(rel, mainSessionGlobs, { ignoreCase })
+    ) {
       block(
-        `Blocked for ${agent}: this command appears to change ${rel}, which is protected for this role (RG-03). ` +
-          `Run the command without writing to files, or stop and explain.`,
+        everySession
+          ? d120Refusal(rel)
+          : `Blocked for ${agent}: this command appears to change ${rel}, which is protected for this role (RG-03). ` +
+              `Run the command without writing to files, or stop and explain.`,
       );
     }
   }

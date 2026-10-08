@@ -274,6 +274,116 @@ describe("BUG-14: safety-reviewer's brief has something to check in the mutation
   );
 });
 
+// BUG-30 (D-118): which model each agent runs on, and how hard it thinks, is a
+// decision, not drift. Every agent file is read here, not only `AGENTS` above:
+// that list holds the reviewers whose brief has a verdict line, and the
+// implementer, the planner and plan-keeper have none.
+const ALL_AGENTS = readdirSync('.claude/agents')
+  .filter((name) => name.endsWith('.md'))
+  .map((name) => ({ name, text: readFileSync(`.claude/agents/${name}`, 'utf8') }));
+
+/**
+ * The frontmatter: the lines between the first two `---` lines. Empty when the
+ * file does not open with one, so a definition without frontmatter reads as
+ * declaring nothing rather than as declaring whatever its prose mentions.
+ */
+function frontmatter(text) {
+  const lines = text.split('\n');
+  if (lines[0]?.trim() !== '---') return [];
+  const end = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
+  return end === -1 ? [] : lines.slice(1, end);
+}
+
+/**
+ * Every value a top-level key is given, in order, quotes removed. A list, so
+ * a missing line reads as `[]` and a key written twice is seen as two values
+ * rather than as whichever one a parser happens to keep.
+ */
+function declared(text, key) {
+  const pattern = new RegExp(`^${key}:\\s*(?<value>.*?)\\s*$`);
+  return frontmatter(text).flatMap((line) => {
+    const value = pattern.exec(line)?.groups?.value;
+    return value === undefined ? [] : [value.replace(/^(["'])(?<inner>.*)\1$/, '$<inner>')];
+  });
+}
+
+/**
+ * D-118, as amended on 2026-10-07: the full ID for the Sonnet agents, not the
+ * `sonnet` alias, because the Claude Code CI installs (2.1.283) still resolves
+ * that alias to Sonnet 5. `effort: []` means no effort line at all, so the
+ * agent gets Claude Code's default.
+ */
+const DECIDED = [
+  { agent: 'safety-reviewer', model: ['inherit'], effort: ['high'] },
+  { agent: 'privacy-security-reviewer', model: ['inherit'], effort: ['high'] },
+  { agent: 'test-auditor', model: ['inherit'], effort: ['high'] },
+  { agent: 'planner', model: ['inherit'], effort: ['high'] },
+  { agent: 'code-reviewer', model: ['claude-sonnet-5-5'], effort: ['medium'] },
+  { agent: 'implementer', model: ['inherit'], effort: [] },
+  { agent: 'test-author', model: ['inherit'], effort: [] },
+  { agent: 'infra-engineer', model: ['inherit'], effort: [] },
+  { agent: 'release-engineer', model: ['inherit'], effort: [] },
+  { agent: 'plan-keeper', model: ['claude-sonnet-5-5'], effort: [] },
+  { agent: 'a11y-i18n-reviewer', model: ['claude-sonnet-5-5'], effort: [] },
+];
+
+/** The values Claude Code documents (code.claude.com/docs/en/sub-agents). */
+const MODEL_ALIASES = ['inherit', 'sonnet', 'opus', 'haiku', 'fable'];
+const FULL_MODEL_ID = /^claude-[a-z0-9-]+$/;
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+describe('BUG-30: the model and thinking level each agent declares (D-118)', () => {
+  test.each(DECIDED)(
+    'BUG-30: $agent declares the model and effort D-118 decided',
+    explained(({ agent, model, effort }) => {
+      const text = ALL_AGENTS.find((a) => a.name === `${agent}.md`)?.text;
+
+      expect(text, `no .claude/agents/${agent}.md`).toBeDefined();
+      expect({
+        agent,
+        model: declared(text ?? '', 'model'),
+        effort: declared(text ?? '', 'effort'),
+      }).toEqual({ agent, model, effort });
+    }),
+  );
+
+  test(
+    'BUG-30: the table above names every agent definition there is, and no other',
+    explained(() => {
+      // Passes today. It exists so that a new agent cannot arrive without a
+      // decided model and effort, and a removed one cannot leave a stale row.
+      expect(ALL_AGENTS.map((a) => a.name.replace(/\.md$/, '')).sort()).toEqual(
+        DECIDED.map((row) => row.agent).sort(),
+      );
+    }),
+  );
+
+  test.each(ALL_AGENTS.map((a) => a.name))(
+    'BUG-30: %s declares only a model and an effort Claude Code knows',
+    explained((name) => {
+      // Passes today, and is meant to. It exists so a typo is caught: Claude
+      // Code does not reject an unknown value, so `effort: hihg` or
+      // `model: sonet` would quietly run the agent on something nobody chose.
+      const text = ALL_AGENTS.find((a) => a.name === name)?.text ?? '';
+      const models = declared(text, 'model');
+      const efforts = declared(text, 'effort');
+
+      expect(models.length, `${name} has more than one model line`).toBeLessThanOrEqual(1);
+      expect(efforts.length, `${name} has more than one effort line`).toBeLessThanOrEqual(1);
+      for (const model of models) {
+        expect({
+          name,
+          model,
+          known: MODEL_ALIASES.includes(model) || FULL_MODEL_ID.test(model),
+        }).toMatchObject({ known: true });
+      }
+      for (const effort of efforts) {
+        expect({ name, effort, known: EFFORTS.includes(effort) }).toMatchObject({ known: true });
+      }
+    }),
+  );
+});
+
 describe("BUG-18: safety-reviewer's brief has something to check in the database connection, the worker's check-in row and the health wiring (D-105 and its two amendments)", () => {
   // D-105 puts apps/server/src/adapters/db.ts in the safety filter: the pools,
   // how many connections each process may hold, and, with LOST-02, the
@@ -304,4 +414,71 @@ describe("BUG-18: safety-reviewer's brief has something to check in the database
       ).toEqual([]);
     }),
   );
+});
+
+// BUG-37: the reviewer briefs still said "The gate reads that last line
+// literally and case-sensitively", and that a near-miss form is read as no
+// verdict at all. CI stopped reading the review's last line: the verdict comes
+// back through --json-schema, whose enum allows PASS and BLOCK only, and the
+// "Enforce the verdict" step in ai-review.yml checks that the pull request
+// comment names the same verdict. The review still ends with its verdict line,
+// which is what the invoking agent returns, so "last line" may stay in the
+// brief, which the test above holds. What must go is the gate as its reader.
+//
+// Read clause by clause, the brief's line breaks joined: a clause whose
+// subject is the gate, CI, the check or the workflow, reading the last line,
+// without saying it does not, is the stale claim. A rewrite that says the
+// invoking agent reads the last line and returns it to CI passes, and so does
+// one that says CI reads the structured output, not the last line.
+const clausesOf = (text) => text.replace(/\s+/g, ' ').split(/(?<=[.:;!?])\s/);
+const saysTheGateReadsTheLastLine = (clause) =>
+  /\b(gate|CI|check|workflow)\s+(only\s+)?reads?\b.*\blast line\b/i.test(clause) &&
+  !/\b(not|never|no longer)\b/i.test(clause);
+
+describe('BUG-37: the reviewer briefs describe the verdict CI reads now', () => {
+  test.each(names)(
+    'BUG-37: %s does not say the gate reads the last line of its review',
+    explained((name) => {
+      // The premise, read from the workflow rather than assumed: if CI went
+      // back to reading the last line, this test would be the stale one.
+      expect(WORKFLOW).toContain('steps.review.outputs.structured_output');
+
+      expect(
+        clausesOf(agentNamed(name)?.text ?? '').filter(saysTheGateReadsTheLastLine),
+        `what ${name} says about the gate reading its last line`,
+      ).toEqual([]);
+    }),
+  );
+
+  test.each(names)(
+    'BUG-37: %s still asks for exactly PASS or BLOCK, with every qualification kept in the findings',
+    explained((name) => {
+      // Passes today, on purpose: this is the half of the verdict section that
+      // stays true. It holds that rewriting the stale half opens no middle
+      // verdict.
+      const text = agentNamed(name)?.text ?? '';
+      const canonical = text
+        .split('\n')
+        .filter((line) => /^ {4}VERDICT:/.test(line))
+        .map((line) => line.trim());
+      const prose = text.replace(/\s+/g, ' ');
+
+      expect(canonical).toEqual(['VERDICT: PASS', 'VERDICT: BLOCK']);
+      expect(prose).toMatch(/\bexactly one\b/i);
+      expect(prose).toMatch(/\bqualifications?\b[^.]*\bfindings\b/i);
+    }),
+  );
+
+  test('BUG-37: the five reviewer briefs are the ones checked', () => {
+    // Passes today, on purpose: the tests above read only briefs with a
+    // verdict line, so a brief that lost its verdict line would drop out of
+    // them silently.
+    expect(names.toSorted()).toEqual([
+      'a11y-i18n-reviewer.md',
+      'code-reviewer.md',
+      'privacy-security-reviewer.md',
+      'safety-reviewer.md',
+      'test-auditor.md',
+    ]);
+  });
 });

@@ -5,4 +5,4 @@ description: "Architecture rules AR-01 to AR-12, repository layout and where cod
 
 # architecture-rules
 
-Read `docs/plan/05-architecture.md` (design principles, layout, state machine, library set) and `docs/plan/decisions.md` D-030 to D-033. Checklist: pure domain with no I/O and no clock reads · adapters behind interfaces, with fakes in the test kit · state machine transitions only · outbox written in the same transaction · lock-safe, idempotent watchdog · shared contracts · import boundaries · privacy by construction.
+Read `docs/plan/05-architecture.md` (design principles, layout, state machine, library set) and `pnpm run decision D-030 D-031 D-032 D-033`. Checklist: pure domain with no I/O and no clock reads · adapters behind interfaces, with fakes in the test kit · state machine transitions only · outbox written in the same transaction · lock-safe, idempotent watchdog · shared contracts · import boundaries · privacy by construction.

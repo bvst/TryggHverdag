@@ -68,3 +68,7 @@ bypass_actors [], current_user_can_bypass never. Pushed, no open PR (only #62 de
 2026-10-07 cloud (BUG-29 at 2a65c3a, PR #67 open): 3 of 5 locally; gh api: same 13 contexts incl. mutation/traceability/unit, code-owner
 true. First audit with a PR: `gh api .../commits/<sha>/check-runs` and `.../check-runs/<id>/annotations` answered (no 403), but
 `.../actions/jobs/<id>/logs` redirects to a blob host the built-in gh refuses, and annotations stop at 10 per step.
+2026-10-08 cloud (BUG-30/31 at 75ca5d1): 3 of 5; gh api: 13 contexts incl. mutation/traceability, code-owner true. Pushed, no PR (only #62), check-runs total_count 0. req:coverage left the report unchanged.
+2026-10-08 cloud (BUG-32 at 33e27ac/3c6b6ad): 3 of 5; gh api: 13 contexts incl. mutation/traceability, code-owner true. Pushed (remote at 3c6b6ad), no PR, check-runs total_count 0 on both. req:coverage left the report unchanged.
+2026-10-08 cloud (BUG-36..39 at 019e941): 3 of 5; gh api: same 13 contexts, code-owner true, bypass [] never, active. Pushed, no PR, check-runs total_count 0. req:coverage left the report unchanged.
+2026-10-08 cloud (BUG-36 loop 1 at 1f7ce47): 3 of 5; gh api: same 13 contexts incl. mutation/traceability, code-owner true. Pushed, no PR (REST pulls?head= empty), check-runs total_count 0. req:coverage left the report unchanged.

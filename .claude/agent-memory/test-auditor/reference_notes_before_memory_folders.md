@@ -1,3 +1,10 @@
+---
+name: notes-before-memory-folders
+description: The notes test-auditor kept in .claude/agent-memory/test-auditor.md, which Claude Code never loaded; moved here unchanged on 2026-10-08 (BUG-38). Recurring patterns and how to verify things in this repository; check a note against the current code before relying on it
+metadata:
+  type: reference
+---
+
 # test-auditor — recurring patterns
 
 Notes kept between reviews. Newest section last.

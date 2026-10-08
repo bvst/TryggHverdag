@@ -21,7 +21,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { changedFiles } from '../../scripts/lib/git.mjs';
-import { block, hasFlag, readInput } from './lib.mjs';
+import { block, hasFlag, inReviewJob, readInput } from './lib.mjs';
 
 const PROGRESS_CURRENT = 'docs/progress.md';
 const PROGRESS_ARCHIVE = /^docs\/progress\/[^/]+\.md$/;
@@ -39,7 +39,14 @@ export function needsLogging(files) {
 }
 
 const input = await readInput();
-const cwd = input.cwd || process.cwd();
+if (inReviewJob()) process.exit(0);
+
+// BUG-36 review loop 1 (privacy-security-reviewer): the repository is
+// CLAUDE_PROJECT_DIR, which Claude Code sets for every hook, as session-start
+// reads it, and this gate's note with it. So the note lands where
+// session-start looks, and git lists the whole repository's changes, not only
+// the folder a session has moved into. Without it, the input's cwd stands in.
+const cwd = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
 const marker = path.join(cwd, '.claude/state/progress-missing');
 
 const changed = changedFiles({ cwd });
