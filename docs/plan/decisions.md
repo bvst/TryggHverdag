@@ -4511,13 +4511,19 @@ any other path is work, not a candidate for the same treatment.
     `elif`, `while`, `until`, `!`, `{`, a `VAR=value` prefix, `sudo` or
     `xargs` (counting them only as the command word, in review loop 2, ended
     the false positives that refused implementer's `pnpm install && …`, and
-    let these rarer forms through); a path the shell builds (`"$CLAUDE_PROJECT_DIR"/…`,
+    let these rarer forms through), and after `command`, `nohup` or
+    `find … -exec`; a change of folder inside the command (`cd`, `pushd`,
+    `git -C`), since paths are judged from the session's folder as the call
+    gives it; a path the shell builds (`"$CLAUDE_PROJECT_DIR"/…`,
     a wildcard `stat?`, brace expansion, quotes spliced inside the name);
     `git clean -fdX` (which removes the ignored `.claude/state/`); a
-    redirect that overrides `noclobber` (`>|`); and a link from outside the
-    repository into `.claude/`. Also out of reach: a flag on a nested
-    `claude` call (`--settings`), and the user's own
-    `~/.claude/settings.json`, which can also set `disableAllHooks`. Without
+    redirect that overrides `noclobber` (`>|`); a link from outside the
+    repository into `.claude/`; and, not tried, a path that spells the
+    repository differently from `CLAUDE_PROJECT_DIR` (through a symlinked
+    folder), since paths are compared as written, never resolved. Also out
+    of reach: a flag on a nested `claude` call (`--settings`), and the
+    user's own `~/.claude/settings.json`, which can also set
+    `disableAllHooks`. Without
     `CLAUDE_PROJECT_DIR` the hook command itself would not run, and Claude
     Code lets a call through when a hook fails to run or crashes (exit other
     than 2), as before D-120. **False positives:** the check reads the whole
