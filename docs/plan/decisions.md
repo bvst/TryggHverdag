@@ -416,7 +416,8 @@ new decision that supersedes it (see `00-working-agreement.md`).
   limits are listed in the 07b README.
 
 ## D-045 — Claude plan: Max; how agents use it
-- **Date:** 2026-09-20 · **Status:** Accepted · **Section:** 7/8
+- **Date:** 2026-09-20 · **Status:** Accepted · first bullet superseded by
+  D-118 · **Section:** 7/8
 - **Context:** The owner uses a Claude Max subscription for Claude Code.
 - **Decision:**
   - Main sessions, `planner`, `implementer` and the three blocking reviewers
@@ -4245,3 +4246,165 @@ any other path is work, not a candidate for the same treatment.
   112942878321: domain 6:08, healthchecks 1:45, journeys 2:26, alerts 6:42,
   process 7:36, api-process cut off). CI's run on the fix is the measure of
   record.
+
+## D-118 — Which model and thinking level each agent uses, and CI names its model (BUG-30)
+- **Date:** 2026-10-07 · **Status:** Accepted (owner, 2026-10-07). The owner's
+  answer was "Yes. Do that", to the review in that session · **Section:** 7
+  (supersedes D-045's first bullet; its other bullets stand)
+- **Context** (facts, all checked 2026-10-07):
+  - Claude Sonnet 5.5 is out: $2 / $10 per million tokens, against Opus 5.5's
+    $4 / $20. In Claude Code, the alias `sonnet` means Sonnet 5.5 from
+    v2.1.284 and `opus` means Opus 5.5 from v2.1.280
+    (code.claude.com/docs/en/model-config). So `plan-keeper` and
+    `a11y-i18n-reviewer`, which say `sonnet`, already get Sonnet 5.5 in a
+    local session.
+  - The AI reviews in CI run on the previous Sonnet. The job log of
+    safety-reviewer on #67 (job 112942356368, run 37665127325) says
+    `"model": "claude-sonnet-5"`. `ai-review.yml` names no model, and the
+    reviewers use `model: inherit`, so the three blocking reviewers ran on
+    Sonnet 5 in CI while they run on Opus 5.5 locally. D-045 meant them to
+    use the strong model.
+  - claude-code-action v1.0.235, the version CI pins, installs Claude Code
+    2.1.283 (`const claudeCodeVersion = "2.1.283"` in src/entrypoints/run.ts
+    at commit 756cc22). In that version `opus` already means Opus 5.5, but
+    `sonnet` still means Sonnet 5 — Sonnet 5.5 arrived in 2.1.284. The action
+    sets no model of its own; with no `--model`, Claude Code's account default
+    applies, which the job log shows as `claude-sonnet-5`. That version
+    honours `effort:` in agent files (Claude Code fixed it being ignored in
+    2.1.267) and has accepted full model IDs there since 2.1.74 (the Claude
+    Code changelog). Dependabot's #62 moves the action to v1.0.239, which
+    installs Claude Code 2.1.287.
+  - No agent or skill sets a thinking level (effort). In Claude Code, Opus
+    5.5 and Sonnet 5.5 default to `medium`, so every agent thinks at
+    `medium`. Agent files can now set `effort:` (low, medium, high, xhigh,
+    max), which overrides the session's level
+    (code.claude.com/docs/en/sub-agents).
+  - Anthropic's guidance: at least `high` for work where correctness matters.
+    Opus 5.5 at `medium` matched or beat Opus 5 at `high` on multistep
+    coding, with about half the tokens. Opus 5.5 thinks more per level than
+    Opus 5, so `xhigh` and `max` are for a measured gain.
+- **Decision:**
+  - The session's model (`inherit`) stays for `planner`, `test-author`,
+    `implementer`, `safety-reviewer`, `privacy-security-reviewer`,
+    `test-auditor`, `infra-engineer` and `release-engineer`.
+  - `safety-reviewer`, `privacy-security-reviewer`, `test-auditor` and
+    `planner` think at `effort: high`. The others set no effort and get
+    Claude Code's default (`medium` on Opus 5.5 and Sonnet 5.5).
+  - `code-reviewer` (advisory) moves to Sonnet 5.5 at `effort: medium`.
+    `plan-keeper` and `a11y-i18n-reviewer` stay on Sonnet, now 5.5. All three
+    name it by its full ID, `model: claude-sonnet-5-5`, not the alias: the
+    alias is resolved by whichever Claude Code runs the agent, and CI's
+    2.1.283 resolves `sonnet` to Sonnet 5.
+  - CI names its model by full ID: `ai-review.yml` passes `--model
+    claude-opus-5-5`, so the reviewers that inherit get Opus 5.5 in CI too;
+    `daily-status.yml` passes `--model claude-sonnet-5-5`. A full ID, not an
+    alias, because CI's alias is resolved by the Claude Code version the
+    pinned action installs (2.1.283, above), in which `sonnet` is still
+    Sonnet 5.
+  - No agent uses fast mode: it is a main-session setting, Opus only, at
+    twice the price.
+- **Why:** the three blocking reviewers decide merges, and the planner's spec
+  drives everything after it; that is the work Anthropic says to run at
+  `high`. The implementer and test-author do the most work and their output
+  is checked by tests, gates and four reviewers, and Opus 5.5 at `medium`
+  already beat Opus 5 at `high` on that kind of work. `code-reviewer` is
+  advisory and reviews the same diff as three Opus reviewers, at half the
+  price on Sonnet.
+- **Rejected:**
+  - `xhigh` for the blocking reviewers: no measured gain yet, and longer
+    turns.
+  - Sonnet for `implementer`: it writes the safety-critical code.
+  - Haiku 5.5 for the daily report: it has to tell "not checked" from "fine".
+- **Consequences:**
+  - The two workflow lines go in their own pull request, merged by hand
+    (D-075), batched with Dependabot #62, which bumps the same action. Until
+    it merges, CI reviews keep running on Sonnet 5.
+  - A test pins each agent's model and effort, so a change to them is a
+    decision, not drift.
+  - At the next model release: the agents that inherit follow the session's
+    model by themselves locally; CI's full IDs and their test need a new
+    decision.
+  - At the next Sonnet release, the three Sonnet agents' full ID changes by a
+    new decision, like CI's.
+  - Agent files changed in a pull request reach the reviewers only after it
+    merges: a reviewer reads the pull request against the agent files on
+    `main` (progress.md, "`.claude/**` and `CLAUDE.md` are reverted in a
+    reviewer's working tree").
+
+## D-119 — The stop gate does not re-run a gate on unchanged work, and the per-edit checks run side by side (BUG-31, HK-04, HK-06)
+- **Date:** 2026-10-07 · **Status:** Accepted (delegated, D-031). It removes
+  no check · **Section:** 7
+- **Context** (measured in a cloud session, 2026-10-07):
+  - The stop gate (HK-06) runs `gate:quick` at the end of every turn whenever
+    the branch's code differs from `main`, whether or not anything changed
+    since it last passed: 112.5 s, then 88.0 s again with nothing changed. On
+    a feature branch that is about a minute and a half on every reply, even a
+    one-line answer.
+  - The per-edit gate (HK-04, `gate:file`) runs its steps one after another:
+    18.6 s after one edit to a domain file. Formatting took 0.8 s, lint 3.6 s,
+    types (the monorepo typecheck) 7.0 s, import rules 1.5 s, related tests
+    5.7 s.
+  - The project's hooks do run in CI's review jobs. Claude Code's docs:
+    "Without `--bare`, a `-p` session runs the hooks in a project's
+    `.claude/settings.json`" (code.claude.com/docs/en/headless), and the Agent
+    SDK runs settings-file hooks when `settingSources` includes `project`
+    (code.claude.com/docs/en/agent-sdk/hooks). claude-code-action defaults
+    `settingSources` to user, project and local
+    (base-action/src/parse-sdk-options.ts at 756cc22), and job
+    112942356368's log prints `"settingSources": ["user", "project",
+    "local"]`. The hooks' own output is not in the job log, so a run of them
+    was not observed. A review job's branch differs from main, so the stop
+    gate runs `gate:quick` at its end (88–112 s here); and if that or the
+    progress check fails there, the hook tells a read-only reviewer to fix
+    work it cannot touch.
+- **Decision:**
+  - The stop gate remembers the last green run in `.claude/state/` (never
+    committed): which gate ran and a fingerprint of everything it checked,
+    that is the commit, the merge base with `origin/main`, and every change
+    in the working tree, untracked files included. A stop whose fingerprint
+    matches does not run the gate again. A failed run is never remembered.
+  - The per-edit gate starts its steps at the same time and waits for all of
+    them. It still reports every failing step, in the same order as before.
+  - In CI's review jobs, the stop gate and the progress gate stand down.
+    ai-review.yml sets `TRYGGHVERDAG_REVIEW_JOB=1` on the review step, and
+    both hooks exit at once when that is set together with
+    `GITHUB_ACTIONS=true`. Neither alone is enough, so the hooks' own tests,
+    which run in GitHub Actions too, are unaffected, and a local session
+    cannot trip it by accident. The variable is set in the manual-merge pull
+    request with D-118's model lines (D-075); until then the hook side does
+    nothing.
+- **Why this weakens nothing:** the same input to the same checks gives the
+  same result; CI runs every check again on every push.
+- **Why the review jobs stand down:** a review job changes no code. The stop
+  gate and the progress gate judge a session's own work, and CI's required
+  checks run the same gates on the same commit.
+- **Rejected:**
+  - `--setting-sources user`, which the action's source suggests for avoiding
+    in-repo configuration: it would also drop the reviewer agents themselves.
+  - `disableAllHooks`: it would also drop the reviewers' read-only guard.
+- **Consequences:**
+  - Measured after the change (this cloud session, 2026-10-08). The per-edit
+    gate on `apps/server/src/domain/health.ts`, old and new scripts
+    alternating with a fresh edit before each run: 20.5, 20.2 and 19.5 s
+    before, 10.1, 9.9 and 9.7 s after; repeated after review loop 1 on a
+    busier machine: 25.7, 25.9 and 27.9 s before, 14.8, 14.6 and 15.1 s
+    after — about half, both times. The stop gate twice with nothing
+    changed: 96.9 s, then 0.12 s and 0.10 s.
+  - Review loop 1 (all three reviewers passed; these were their should-fix
+    findings): no fingerprint, so the gate runs, when a tracked file is
+    flagged assume-unchanged or skip-worktree (git hides its changes from the
+    diff); the fallback when git cannot read something (an untracked nested
+    repository) and a rename of an untracked file now have tests; a timed-out
+    step's whole process group is killed, not only `pnpm` (a reviewer
+    measured 8 s against a 1 s timeout before); the report the per-edit gate
+    prints is a tested function; both hooks read their input before standing
+    down.
+  - Known limits, accepted: gitignored files are not part of the fingerprint
+    (`node_modules`, generated files; a lockfile change is); the remembered
+    pass in `.claude/state/` could be written by anything that can write
+    there, as the red-phase marker already can — a guard on
+    `.claude/state/**` and `.claude/settings.local.json` needs its own
+    decision; each step now runs in its own process group, so a manual Ctrl-C
+    on `pnpm run gate:file` leaves the running tools to finish by themselves
+    (the hooks are unaffected: a step's 160 s timer fires before the hook's
+    own limits).

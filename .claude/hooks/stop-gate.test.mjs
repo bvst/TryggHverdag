@@ -2,12 +2,14 @@
 // HK-06: "done" means the gate passed. A session cannot finish on a red gate
 // without that being written down where the next session will see it.
 import { afterEach, describe, expect, test } from 'vitest';
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import process from 'node:process';
 import {
   ALLOWED,
   BLOCKED,
+  HOOKS_DIR,
   fakeScripts,
   makeRepo,
   removeRepo,
@@ -169,4 +171,390 @@ describe('HK-06: a move from code to docs/', () => {
       expect(result.stderr).toContain('2 tests failed');
     },
   );
+});
+
+// BUG-31 (HK-06, D-119): the stop gate ran gate:quick at every stop on a branch
+// with code changes, even when nothing had changed since it last passed —
+// 112 s, then 88 s again with nothing changed. After a green run it now
+// remembers which gate ran and a fingerprint of the work as it was before the
+// gate ran, and a stop with the same gate and the same fingerprint does not run
+// it again. Every test below that *passes* today does so because today's hook
+// always runs the gate; those tests are the other half of the change, the
+// guard that the memory never skips a gate it must run.
+
+const git = (dir, ...args) =>
+  execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: 'pipe' });
+
+/** How many times the fake `script` ran, from the log the fake scripts write. */
+const runs = (dir, script) =>
+  ranLog(dir)
+    .split('\n')
+    .filter((line) => line.split(' ')[0] === script).length;
+
+/**
+ * A feature branch whose committed code differs from origin/main, so the stop
+ * gate has work to check with a clean working tree.
+ *
+ * `ran.txt` is ignored: the fake gate appends its own log there, and without
+ * the ignore the gate's run would itself be a new untracked file, a change to
+ * the work. `.claude/state/` is deliberately *not* ignored, unlike in this
+ * repository, so the hook's own notes show up as untracked files and the tests
+ * cover their exclusion from the fingerprint.
+ */
+function branchRepo(scripts, files = {}) {
+  const dir = makeRepo({
+    ...fakeScripts(scripts),
+    '.gitignore': 'ran.txt\n',
+    'apps/server/src/api.ts': 'export const a = 1;\n',
+    ...files,
+  });
+  repos.push(dir);
+  git(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  git(dir, 'checkout', '-q', '-b', 'the-branch');
+  write(dir, { 'apps/server/src/api.ts': 'export const a = 2;\n' });
+  git(dir, 'commit', '-qam', 'work on the branch');
+  return dir;
+}
+
+describe('BUG-31: the stop gate does not re-run a gate on unchanged work (HK-06, D-119)', () => {
+  test('BUG-31: a second stop with nothing changed does not run the gate again', () => {
+    const dir = branchRepo({ 'gate:quick': PASSES });
+    write(dir, { 'apps/server/src/journey.ts': 'export const b = 1;\n' });
+
+    expect(stop(dir).status).toBe(ALLOWED);
+    expect(stop(dir).status).toBe(ALLOWED);
+
+    expect(runs(dir, 'gate:quick')).toBe(1);
+  });
+
+  // Each row: `before` sets up the work the first stop sees, `change` is what
+  // happens between the two stops. The rows that edit a file which already
+  // differs (a tracked file modified again, an untracked file rewritten) catch
+  // a fingerprint built from file names alone; the commit row catches one
+  // without HEAD, since the working tree is clean before and after it.
+  test.each([
+    {
+      how: "a tracked file's content changed again",
+      before: (dir) => write(dir, { 'apps/server/src/api.ts': 'export const a = 3;\n' }),
+      change: (dir) => write(dir, { 'apps/server/src/api.ts': 'export const a = 4;\n' }),
+    },
+    {
+      how: 'a new untracked file',
+      before: () => {},
+      change: (dir) => write(dir, { 'apps/server/src/journey.ts': 'export const b = 1;\n' }),
+    },
+    {
+      how: "an untracked file's content changed",
+      before: (dir) => write(dir, { 'apps/server/src/journey.ts': 'export const b = 1;\n' }),
+      change: (dir) => write(dir, { 'apps/server/src/journey.ts': 'export const b = 2;\n' }),
+    },
+    {
+      how: 'a new commit',
+      before: () => {},
+      change: (dir) => {
+        write(dir, { 'apps/server/src/api.ts': 'export const a = 5;\n' });
+        git(dir, 'commit', '-qam', 'more work');
+      },
+    },
+    {
+      // Passes today, as a guard: the contents hash the same before and after,
+      // so only the list of untracked paths tells the two apart. A test that
+      // becomes the code it tested is a different piece of work.
+      how: 'an untracked file renamed, its contents unchanged',
+      before: (dir) => write(dir, { 'apps/server/src/notes.test.ts': 'export const n = 1;\n' }),
+      change: (dir) =>
+        renameSync(
+          path.join(dir, 'apps/server/src/notes.test.ts'),
+          path.join(dir, 'apps/server/src/notes.ts'),
+        ),
+    },
+  ])('BUG-31: after a green run, $how runs the gate again', ({ before, change }) => {
+    const dir = branchRepo({ 'gate:quick': PASSES });
+    before(dir);
+    expect(stop(dir).status).toBe(ALLOWED);
+    expect(runs(dir, 'gate:quick')).toBe(1);
+
+    change(dir);
+    expect(stop(dir).status).toBe(ALLOWED);
+
+    expect(runs(dir, 'gate:quick')).toBe(2);
+  });
+
+  test('BUG-31: a failed run is never remembered', () => {
+    const dir = branchRepo({ 'gate:quick': FAILS });
+
+    // Already asked to continue once: the hook writes the failure down and
+    // lets the session go. That exit 0 must not be mistaken for a pass.
+    expect(stop(dir, { stop_hook_active: true }).status).toBe(ALLOWED);
+    expect(existsSync(path.join(dir, '.claude/state/gate-failed'))).toBe(true);
+
+    const second = stop(dir);
+
+    expect(runs(dir, 'gate:quick')).toBe(2);
+    expect(second.status).toBe(BLOCKED);
+    expect(second.stderr).toContain('2 tests failed');
+  });
+
+  test("BUG-31: the red phase's static gate and the quick gate are remembered separately", () => {
+    const dir = branchRepo({ 'gate:quick': FAILS, 'gate:static': PASSES });
+    write(dir, { '.claude/state/phase': 'red:LOST-02' });
+    expect(stop(dir).status).toBe(ALLOWED);
+    expect(runs(dir, 'gate:static')).toBe(1);
+
+    // The red phase ends; nothing else changes. gate:static passing on this
+    // work says nothing about gate:quick, which fails.
+    rmSync(path.join(dir, '.claude/state/phase'));
+    const result = stop(dir);
+
+    expect(runs(dir, 'gate:quick')).toBe(1);
+    expect(result.status).toBe(BLOCKED);
+    expect(result.stderr).toContain('2 tests failed');
+  });
+
+  test("BUG-31: the main session does not re-run what the implementer's stop just passed", () => {
+    const dir = branchRepo({ 'gate:quick': PASSES });
+
+    expect(stop(dir, {}, ['--subagent']).status).toBe(ALLOWED);
+    expect(stop(dir).status).toBe(ALLOWED);
+
+    expect(runs(dir, 'gate:quick')).toBe(1);
+  });
+
+  // The phase file only ever holds `red:<ID>` while it exists, so the rows that
+  // add or remove it give the hook a different gate unless the stop is a
+  // subagent's, which always faces gate:quick. Those rows stop as a subagent,
+  // so the gate stays the same and only the note changes.
+  test.each([
+    {
+      how: 'a failure note appears',
+      args: [],
+      change: (dir) => write(dir, { '.claude/state/gate-failed': 'an old failure\n' }),
+    },
+    {
+      how: 'a note of some other hook appears',
+      args: [],
+      change: (dir) => write(dir, { '.claude/state/progress-missing': 'nothing logged\n' }),
+    },
+    {
+      how: 'the phase marker appears',
+      args: ['--subagent'],
+      change: (dir) => write(dir, { '.claude/state/phase': 'red:LOST-02' }),
+    },
+    {
+      how: 'the phase marker disappears',
+      args: ['--subagent'],
+      before: (dir) => write(dir, { '.claude/state/phase': 'red:LOST-02' }),
+      change: (dir) => rmSync(path.join(dir, '.claude/state/phase')),
+    },
+  ])(
+    "BUG-31: the hooks' own notes under .claude/state/ are not a change to the work: $how",
+    ({ args, before, change }) => {
+      const dir = branchRepo({ 'gate:quick': PASSES });
+      before?.(dir);
+      expect(stop(dir, {}, args).status).toBe(ALLOWED);
+
+      change(dir);
+      expect(stop(dir, {}, args).status).toBe(ALLOWED);
+
+      expect(runs(dir, 'gate:quick')).toBe(1);
+    },
+  );
+
+  test('BUG-31: what is remembered is the work as it was before the gate ran', () => {
+    // A file that changes while the gate runs — an editor saving, another
+    // process writing — was not what the gate checked. A fingerprint taken
+    // after the run would record it as checked, and the next stop would skip
+    // the gate on code no gate has seen.
+    const dir = branchRepo(
+      { 'gate:quick': PASSES },
+      {
+        'fake-gate-quick.mjs': [
+          "import { appendFileSync } from 'node:fs';",
+          "appendFileSync('ran.txt', 'gate:quick \\n');",
+          "appendFileSync('apps/server/src/journey.ts', '// written while the gate ran\\n');",
+        ].join('\n'),
+      },
+    );
+
+    expect(stop(dir).status).toBe(ALLOWED);
+    expect(readFileSync(path.join(dir, 'apps/server/src/journey.ts'), 'utf8')).toContain(
+      'written while the gate ran',
+    );
+    expect(stop(dir).status).toBe(ALLOWED);
+
+    expect(runs(dir, 'gate:quick')).toBe(2);
+  });
+});
+
+// BUG-31, review loop 1 (D-119): the fingerprint stands for the work only as
+// far as git can see it. Whatever git cannot read, or has been told not to look
+// at, is something no fingerprint can vouch for, so the gate runs at every stop.
+describe('BUG-31: what git cannot vouch for never skips the gate (HK-06, D-119)', () => {
+  // Passes today, and is meant to: it is the guard. Today's hook gives up on
+  // the fingerprint when git cannot read part of the work, and runs the gate.
+  // A fingerprint that fell back to a constant instead would skip the gate for
+  // ever after one green run, and no other test here would notice.
+  test('BUG-31: an untracked nested repository, which git cannot hash, runs the gate at every stop', () => {
+    const dir = branchRepo({ 'gate:quick': PASSES });
+    const nested = path.join(dir, 'tools/scratch');
+    mkdirSync(nested, { recursive: true });
+    git(nested, 'init', '-q');
+    write(nested, { 'notes.ts': 'export const c = 1;\n' });
+    // The condition itself: git lists the nested repository as one untracked
+    // path, and cannot hash it.
+    expect(git(dir, 'ls-files', '--others', '--exclude-standard').split('\n')).toContain(
+      'tools/scratch/',
+    );
+    const hashed = spawnSync('git', ['hash-object', '--stdin-paths'], {
+      cwd: dir,
+      input: 'tools/scratch/\n',
+      encoding: 'utf8',
+    });
+    expect(hashed.status).not.toBe(0);
+    expect(hashed.stderr).toContain('Unable to hash');
+
+    expect(stop(dir).status).toBe(ALLOWED);
+    expect(stop(dir).status).toBe(ALLOWED);
+
+    expect(runs(dir, 'gate:quick')).toBe(2);
+  });
+
+  // A tracked file flagged assume-unchanged or skip-worktree is one git has
+  // been told not to look at: a change to it never reaches `git diff`, so a
+  // fingerprint built from git's view of the work stays the same while the
+  // file does not. With such a flag anywhere, the gate must run.
+  test.each([{ flag: '--assume-unchanged' }, { flag: '--skip-worktree' }])(
+    'BUG-31: with a tracked file flagged $flag, a change to that file after a green run runs the gate again',
+    ({ flag }) => {
+      const file = 'apps/server/src/api.ts';
+      const dir = branchRepo({ 'gate:quick': PASSES });
+      git(dir, 'update-index', flag, file);
+      expect(stop(dir).status).toBe(ALLOWED);
+      expect(runs(dir, 'gate:quick')).toBe(1);
+
+      write(dir, { [file]: 'export const a = 3;\n' });
+      // The condition itself: git does not report the change.
+      expect(git(dir, 'diff', '--name-only', 'HEAD')).toBe('');
+      expect(stop(dir).status).toBe(ALLOWED);
+
+      expect(runs(dir, 'gate:quick')).toBe(2);
+    },
+  );
+});
+
+// BUG-31, part 2 (D-119): the AI reviews in CI load the project's settings, so
+// the stop gate ran gate:quick inside every review job. With both
+// GITHUB_ACTIONS=true and TRYGGHVERDAG_REVIEW_JOB=1 the hook stands down at
+// once: no gate, no note. With only one of them it behaves exactly as before.
+
+/**
+ * Runs the stop gate with the two CI variables exactly as `ci` says. runHook
+ * passes this process's environment through, and these tests themselves run
+ * in GitHub Actions, where GITHUB_ACTIONS=true is already set — so both are
+ * removed first and only then set, in every case.
+ */
+function stopIn(dir, ci, input = {}) {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: dir };
+  delete env.GITHUB_ACTIONS;
+  delete env.TRYGGHVERDAG_REVIEW_JOB;
+  Object.assign(env, ci);
+  const result = spawnSync(process.execPath, [path.join(HOOKS_DIR, 'stop-gate.mjs')], {
+    input: JSON.stringify({ cwd: dir, ...input }),
+    encoding: 'utf8',
+    cwd: dir,
+    timeout: 120_000,
+    env,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  return { status: result.status, stderr: result.stderr ?? '' };
+}
+
+const REVIEW_JOB = { GITHUB_ACTIONS: 'true', TRYGGHVERDAG_REVIEW_JOB: '1' };
+
+describe('BUG-31: the stop gate stands down in a CI review job (D-119)', () => {
+  test.each([
+    { how: 'at a first stop', input: {} },
+    { how: 'after being asked to continue once', input: { stop_hook_active: true } },
+  ])(
+    'BUG-31: with GITHUB_ACTIONS=true and TRYGGHVERDAG_REVIEW_JOB=1, $how, a failing gate is not run and nothing is written',
+    ({ input }) => {
+      const dir = branchRepo({ 'gate:quick': FAILS });
+
+      const result = stopIn(dir, REVIEW_JOB, input);
+
+      expect(ranLog(dir)).toBe('');
+      expect(result.status).toBe(ALLOWED);
+      expect(existsSync(path.join(dir, '.claude/state'))).toBe(false);
+    },
+  );
+
+  // Pass today, and are meant to: they are the guard that one variable alone —
+  // GITHUB_ACTIONS is set in every CI job, not only the reviews — never turns
+  // the gate off, and that the review-job switch has to say 1.
+  test.each([
+    { how: 'only GITHUB_ACTIONS=true', ci: { GITHUB_ACTIONS: 'true' } },
+    { how: 'only TRYGGHVERDAG_REVIEW_JOB=1', ci: { TRYGGHVERDAG_REVIEW_JOB: '1' } },
+    {
+      how: 'GITHUB_ACTIONS=true and TRYGGHVERDAG_REVIEW_JOB=0',
+      ci: { GITHUB_ACTIONS: 'true', TRYGGHVERDAG_REVIEW_JOB: '0' },
+    },
+  ])('BUG-31: with $how, the failing gate runs and blocks, as before', ({ ci }) => {
+    const dir = branchRepo({ 'gate:quick': FAILS });
+
+    const result = stopIn(dir, ci);
+
+    expect(runs(dir, 'gate:quick')).toBe(1);
+    expect(result.status).toBe(BLOCKED);
+    expect(result.stderr).toContain('2 tests failed');
+  });
+});
+
+// BUG-31, part 3 (D-119): ai-review.yml sets TRYGGHVERDAG_REVIEW_JOB=1 on the
+// whole review step, so every command a CI reviewer runs inherits it, together
+// with GITHUB_ACTIONS=true. A reviewer that runs these tests there
+// (`pnpm run test:hooks`, `test:unit`) must see the same results as anywhere
+// else: if runHook passed the two variables on, the hook would stand down and
+// every test above that expects a refusal or a gate run would fail — a false
+// finding put in front of a blocking reviewer. The tests that want the
+// stand-down build their own environment (stopIn); runHook must not hand it to
+// the rest.
+
+/**
+ * Runs `run` with this process's environment as a CI review job has it, then
+ * puts both variables back exactly as they were — deleted if they were absent,
+ * because assigning `undefined` to process.env stores the string "undefined".
+ */
+function asInAReviewJob(run) {
+  const before = Object.fromEntries(
+    Object.keys(REVIEW_JOB).map((name) => [name, process.env[name]]),
+  );
+  Object.assign(process.env, REVIEW_JOB);
+  try {
+    return run();
+  } finally {
+    for (const [name, value] of Object.entries(before)) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  }
+}
+
+describe("BUG-31: the hook tests do not inherit a CI review job's stand-down (D-119)", () => {
+  test("BUG-31: the hook tests do not inherit a CI review job's stand-down: with the review job's variables in the test's own environment, a failing gate:quick with code changed is still run and refused", () => {
+    const dir = repoWith(
+      { 'gate:quick': FAILS },
+      { 'apps/server/src/api.ts': 'export const a = 1;' },
+    );
+
+    const result = asInAReviewJob(() => stop(dir));
+
+    expect(result.status).toBe(BLOCKED);
+    expect(ranLog(dir)).toContain('gate:quick');
+    expect(result.stderr).toContain('2 tests failed');
+  });
 });

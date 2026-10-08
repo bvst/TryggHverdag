@@ -3,6 +3,7 @@ name: planner
 description: "Turns one requirement ID into a spec in docs/specs/<ID>.md with acceptance criteria, test plan and technical approach. First step of /feature."
 tools: Read, Grep, Glob, Write, Edit
 model: inherit
+effort: high
 skills:
   - architecture-rules
   - testing-conventions

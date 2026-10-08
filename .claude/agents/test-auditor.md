@@ -3,6 +3,7 @@ name: test-auditor
 description: "Blocking audit of test quality on a branch: requirement traceability, no weakened tests, coverage ratchet and mutation score on safety code (RG-01 to RG-06, D-043)."
 tools: Read, Grep, Glob, Bash
 model: inherit
+effort: high
 skills:
   - testing-conventions
 memory: project
