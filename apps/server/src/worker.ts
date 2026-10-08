@@ -553,7 +553,7 @@ export async function runWorkerProcess(
     'worker: no SMS provider is configured, so no escalation SMS can reach a phone: every ' +
       'SMS is answered NOT_CONFIGURED, stays unsent, and is tried again.\n',
   );
-  const worker = await startWorker(connectionString, runWorker, {
+  const started = startWorker(connectionString, runWorker, {
     checkIn,
     write,
     push: UNCONFIGURED_PUSH,
@@ -564,10 +564,16 @@ export async function runWorkerProcess(
     smsSender,
     smsAlarm,
   });
+  // The handler goes on before the start has returned, and its stop waits for
+  // the start (BUG-32). Graphile Worker's run() opens the pool's connections
+  // before it returns, and a stop signal then would otherwise meet no listener
+  // and end the process by the signal: no runner stopped, no pool ended, no
+  // exit with 0. A start that fails fails the stop too, so it exits with 1.
+  exitOnSignal({ name: 'worker', signals, stop: async () => (await started).stop(), ...reporting });
+  const worker = await started;
   // Asking is not getting (D-109): the limit read back once, and said. Not
   // awaited, and never a reason not to run: a worker that refused to start
   // would watch nobody. The stop waits for it.
   void worker.readLimitsBack();
-  exitOnSignal({ name: 'worker', signals, stop: worker.stop, ...reporting });
   await worker.untilStopped();
 }
