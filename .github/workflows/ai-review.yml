@@ -161,7 +161,7 @@ jobs:
 
       - if: steps.applies.outputs.run == 'true'
         id: review
-        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790 # v1.0.235
+        uses: anthropics/claude-code-action@6c690188da61cf16ee7debb28383ba67f02abb4c # v1.0.242
         # Tells the project's stop gate and progress gate that this is a review
         # job, so they stand down (D-119): a review changes no code, and CI's
         # required checks run the same gates on this commit. On this step only —
