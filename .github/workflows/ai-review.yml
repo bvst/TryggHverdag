@@ -162,6 +162,12 @@ jobs:
       - if: steps.applies.outputs.run == 'true'
         id: review
         uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790 # v1.0.235
+        # Tells the project's stop gate and progress gate that this is a review
+        # job, so they stand down (D-119): a review changes no code, and CI's
+        # required checks run the same gates on this commit. On this step only —
+        # a test holds that (scripts/ci-models.test.mjs).
+        env:
+          TRYGGHVERDAG_REVIEW_JOB: '1'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -182,7 +188,14 @@ jobs:
           # The enum is the second half of the fix. A free-text last line let a
           # reviewer invent "VERDICT: APPROVE WITH COMMENTS" although its brief
           # forbade that form by name; a schema does not leave the choice open.
+          #
+          # Named in full (D-118): with no --model the action runs Claude Code's
+          # account default, which the job log showed as claude-sonnet-5; the
+          # reviewers that inherit then ran on Sonnet 5. An alias would be
+          # resolved by the Claude Code this pinned action installs (2.1.283),
+          # in which `sonnet` is still Sonnet 5.
           claude_args: >-
+            --model claude-opus-5-5
             --allowedTools
             "Read,Grep,Glob,Bash,mcp__github__add_issue_comment,mcp__github_inline_comment__create_inline_comment"
             --json-schema
