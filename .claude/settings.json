@@ -81,7 +81,7 @@
           },
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-paths.mjs\" --global --deny '.claude/settings.local.json' --deny '.claude/state/**' --allow-main-session '.claude/state/phase'"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-paths.mjs\" --global --deny '.claude/settings.local.json' --deny '.claude/state/**' --deny '.claude/state' --allow-main-session '.claude/state/phase'"
           }
         ]
       },

@@ -532,6 +532,45 @@ describe('BUG-36: from a subfolder, the Bash hooks in settings.json still hold D
 });
 
 // ---------------------------------------------------------------------------
+// BUG-36, review loop 3
+// ---------------------------------------------------------------------------
+
+// BUG-36, review loop 3, privacy-security-reviewer: settings.json gives
+// guard-paths `--deny '.claude/state/**'`, which does not match .claude/state
+// itself, so an Edit, a Write or a NotebookEdit of a file at that path gets
+// through, for a subagent too. In a fresh clone, where the folder does not
+// exist yet, that file would stop the hooks writing their records there.
+// settings.json's Bash guard denies the path itself already.
+describe('BUG-36, review loop 3: the hooks in settings.json refuse a file at .claude/state itself', () => {
+  // Fails today: every hook lets each call through.
+  test('BUG-36: an Edit, a Write and a NotebookEdit of .claude/state itself are refused for the main session and a subagent, naming D-120 (review loop 3, privacy-security-reviewer)', () => {
+    for (const make of [editOf, writeOf, notebookOf]) {
+      for (const { who, as } of CALLERS) {
+        const call = as(make('.claude/state'));
+        const runs = runDeclared(call);
+
+        expect(
+          refusal(runs),
+          `${call.tool_name} of .claude/state by ${who}; the hooks answered:\n${said(runs)}`,
+        ).toBeDefined();
+      }
+    }
+  });
+
+  // Passes today, on purpose: the shell side the reviewer compared against.
+  test.each(['printf x > .claude/state', 'touch .claude/state'])(
+    'BUG-36: the Bash hooks already refuse a file at .claude/state itself, for the main session and a subagent, naming D-120: %s (review loop 3, privacy-security-reviewer)',
+    (command) => {
+      for (const { who, as } of CALLERS) {
+        const runs = runDeclared(as(bashOf(command)));
+
+        expect(refusal(runs), `by ${who}; the hooks answered:\n${said(runs)}`).toBeDefined();
+      }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
 // The wiring: which guard settings.json runs, with which arguments
 // ---------------------------------------------------------------------------
 
@@ -581,8 +620,17 @@ const guardsFor = (tool, script) =>
     .filter((argv) => argv[0]?.endsWith(`/.claude/hooks/${script}`));
 
 describe('BUG-36: settings.json runs the two guards with the arguments D-120 gives them', () => {
+  // RG-03, BUG-36 review loop 3: this test now also expects `.claude/state`,
+  // the folder's own path, among guard-paths' --deny values, and its name says
+  // so. privacy-security-reviewer found that a subagent's Write of a file at
+  // .claude/state gets through: `.claude/state/**` does not match the folder
+  // itself, and in a fresh clone that file would stop the hooks writing their
+  // records. The Bash guard already denies it, and D-120's fix gives
+  // guard-paths the same --deny. Stricter, not looser: the two globs it held
+  // before are both still required, and so is the main session's exemption
+  // for the phase file alone.
   test.each(['Edit', 'Write', 'NotebookEdit'])(
-    'BUG-36: for %s, guard-paths runs with --deny .claude/settings.local.json, --deny .claude/state/** and --allow-main-session .claude/state/phase alone',
+    'BUG-36: for %s, guard-paths runs with --deny .claude/settings.local.json, --deny .claude/state/**, --deny .claude/state itself and --allow-main-session .claude/state/phase alone',
     (tool) => {
       const found = guardsFor(tool, 'guard-paths.mjs').map((argv) => ({
         deny: valuesOf(argv, '--deny'),
@@ -590,7 +638,11 @@ describe('BUG-36: settings.json runs the two guards with the arguments D-120 giv
       }));
 
       expect(found, `guard-paths as settings.json runs it for ${tool}`).toContainEqual({
-        deny: expect.arrayContaining(['.claude/settings.local.json', '.claude/state/**']),
+        deny: expect.arrayContaining([
+          '.claude/settings.local.json',
+          '.claude/state/**',
+          '.claude/state',
+        ]),
         allowMainSession: ['.claude/state/phase'],
       });
     },
