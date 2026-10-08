@@ -383,9 +383,14 @@ speed; D-118, D-119) are done: [#68](https://github.com/bvst/TryggHverdag/pull/6
 [#69](https://github.com/bvst/TryggHverdag/pull/69), `2c9808f`**, merged by
 the owner by hand (D-075): `--model claude-opus-5-5` for CI's reviews,
 `--model claude-sonnet-5-5` for the daily report, and `TRYGGHVERDAG_REVIEW_JOB=1`
-on the review step only. Still to check, on the first review run after it
-(#70's): that the reviewers' log says `claude-opus-5-5`, and that the variable
-reaches the hooks (the reviewer jobs end about a minute and a half sooner).
+on the review step only. **Checked on the first review run after it** (#70 at
+`6ae6a68`, job 113295185327): the log says `"model": "claude-opus-5-5"` (it
+said `claude-sonnet-5` before), with `claude-sonnet-5-5` for `code-reviewer`
+itself; the whole review session took 35 s (`duration_ms` 35428), which a
+`gate:quick` run at its end (88–112 s) could not fit in, so the stop gate stood
+down: an inference from the timing, as the hooks' output is not in the log.
+`code-reviewer`'s job took 83 s (5 min 14 s at `c626578`) and its session
+cost $0.30, against $1.11 on Sonnet 5 on #68 (job 113210298189).
 Dependabot's #62 (claude-code-action v1.0.239, Claude Code 2.1.287) is still
 open. **Review loops 2 and 3** (D-119's amendment: the stop gate reads raw
 line endings, in its early check and its fingerprint, and the stand-down rule
