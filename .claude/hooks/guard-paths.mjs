@@ -11,6 +11,7 @@
 import {
   readInput,
   relPath,
+  repoRelPath,
   matchesAny,
   argList,
   argValue,
@@ -24,9 +25,11 @@ const input = await readInput();
 const file = input?.tool_input?.file_path ?? input?.tool_input?.notebook_path;
 if (!file) process.exit(0);
 
-const rel = relPath(file, input.cwd);
-const agent = argValue('--agent', 'this agent');
 const everySession = hasFlag('--global');
+// BUG-36: the global guard names a path from the repository, not the session's
+// folder, so a session in a subfolder cannot dodge D-120.
+const rel = everySession ? repoRelPath(file, input.cwd) : relPath(file, input.cwd);
+const agent = argValue('--agent', 'this agent');
 const allow = argList('--allow');
 const deny = argList('--deny');
 const mainSessionMay = !isSubagent(input) && matchesAny(rel, argList('--allow-main-session'));

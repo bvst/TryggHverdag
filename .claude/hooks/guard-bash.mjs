@@ -10,6 +10,7 @@
 import {
   readInput,
   relPath,
+  repoRelPath,
   matchesAny,
   argList,
   argValue,
@@ -94,7 +95,9 @@ if (denyGlobs.length && (WRITE_OPS.test(cmd) || redirectTargets(cmd).length)) {
   const mainSessionGlobs = isSubagent(input) ? [] : argList('--allow-main-session');
   const tokens = cmd.split(/[\s'"=]+/).filter(Boolean);
   for (const t of tokens) {
-    const rel = relPath(t, input.cwd);
+    // BUG-36: with --global, each path is named from the repository, not the
+    // session's folder, so a session in a subfolder cannot dodge D-120.
+    const rel = hasFlag('--global') ? repoRelPath(t, input.cwd) : relPath(t, input.cwd);
     if (matchesAny(rel, denyGlobs) && !matchesAny(rel, mainSessionGlobs)) {
       block(
         hasFlag('--global')

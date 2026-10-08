@@ -11,9 +11,20 @@ export async function readInput() {
   }
 }
 
-export function relPath(file, cwd = process.cwd()) {
+export function relPath(file, cwd = process.cwd(), root = cwd) {
   const abs = path.resolve(cwd, file);
-  return path.relative(cwd, abs).split(path.sep).join('/');
+  return path.relative(root, abs).split(path.sep).join('/');
+}
+
+// BUG-36 (D-120): how the global guards name a path. A relative path starts
+// from the session's folder, where the write would land, and is then named
+// from the repository, CLAUDE_PROJECT_DIR, which Claude Code sets for every
+// hook (code.claude.com/docs/en/hooks): from apps/server, both
+// <repo>/.claude/state/gate-passed and ../../.claude/state/gate-passed are
+// .claude/state/gate-passed. If CLAUDE_PROJECT_DIR is unset, the session's
+// folder stands in for the repository, as it did before BUG-36.
+export function repoRelPath(file, cwd = process.cwd(), env = process.env) {
+  return relPath(file, cwd, env.CLAUDE_PROJECT_DIR || cwd);
 }
 
 export function globToRegExp(glob) {
