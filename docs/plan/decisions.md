@@ -4502,10 +4502,14 @@ any other path is work, not a candidate for the same treatment.
     a redirect (a commit message in a heredoc) is refused too; put the text
     in a file. Paths are judged from the repository
     (`CLAUDE_PROJECT_DIR`, which Claude Code sets for every hook), so a
-    session in a subfolder does not dodge the rules; were the variable unset,
-    the session's folder would stand in for it, as before. The guard stops a
-    slip, not a determined session; CI's required checks never go through
-    these hooks and stay the gate (D-042).
+    session in a subfolder does not dodge the rules. Without that variable
+    the hook command itself (`node "$CLAUDE_PROJECT_DIR/.claude/hooks/…"`)
+    would not run, and Claude Code lets a call through when a hook fails to
+    run or crashes (exit other than 2), as it did before D-120. A shell
+    wildcard (`rm -rf .claude/stat?`) and a link from outside the
+    repository into `.claude/` are not seen either. The guard stops a slip,
+    not a determined session; CI's required checks never go through these
+    hooks and stay the gate (D-042).
 
 ## D-121 — CI's reviewers keep running as subagents of a wrapper session, not as `claude --agent` (BUG-30 and BUG-31's follow-up)
 - **Date:** 2026-10-08 · **Status:** Accepted (delegated, D-031; the owner
@@ -4523,7 +4527,9 @@ any other path is work, not a candidate for the same treatment.
       agent's `tools:` list (Read, Grep, Glob, Bash) leaves out the tool that
       returns it, and naming it in `--allowedTools` does not bring it back.
       The same request without `--agent` returns it.
-    - Neither agent was given its memory index (`MEMORY.md`).
+    - Neither agent was given its memory index (`MEMORY.md`): each was asked
+      to quote the first line of its memory index if it had one, and both
+      answered "none" (what the agent said, not a look at its prompt).
     - `--model claude-opus-5-5` won over the agent's own `model:`:
       `code-reviewer` ran on Opus 5.5, not D-118's Sonnet 5.5.
     - The docs add that a `tools:` list leaves out MCP tools unless it names
@@ -4531,7 +4537,10 @@ any other path is work, not a candidate for the same treatment.
       go too.
   - Since #69 (`2c9808f`) stood the hooks down in review jobs, every review
     of a pull request that does not change `ai-review.yml` has returned its
-    structured output: runs 210 to 212 (#70), nine reviewer sessions.
+    structured output: runs 210 to 212 (#70), nine reviewer sessions. Run
+    213 (#71) has one failed review, `code-reviewer`, but it never started:
+    "Failed to install Claude Code after 3 attempts" (a 403 on the
+    download), not a missing structured output.
 - **Decision:** keep the wrapper session; CI's reviewers do not move to
   `--agent`.
 - **Consequences:**
