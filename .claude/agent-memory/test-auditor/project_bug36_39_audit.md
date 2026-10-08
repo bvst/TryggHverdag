@@ -19,3 +19,20 @@ Audited 2026-10-08 (cloud), branch fix/BUG-36-39-claude-follow-ups, head 019e941
 - privacy-security-reviewer's root mismatch: stop-gate roots records at input.cwd (apps/server has package.json), the guard
   at CLAUDE_PROJECT_DIR; the subfolder tests pin the guard's root only.
 Related: [[in-memory-mutation]], [[readonly-guard]], [[entry-script-wiring]], [[bug30-31-audit]]
+
+**Loop 1 (2026-10-08, cloud), 813a476 red / 1f7ce47 green (HEAD later 980318b, memory only). PASS.**
+- Replay: t-813a476 tree (the red commit touches tests only, so it is "813a476's tests on 813a476^'s hooks"): 47 red, all verdict or
+  message mismatches (46 "review loop 1" tests + the RG-03 wiring test); 21 new tests pass on purpose, each commented so. Tree copies need
+  `git init` + commit, else BUG-31's ls-files test fails (env, not a finding). test:hooks 6/6 green in the checkout (36 s each), 320/320.
+- 56 faults (+ a no-op that survived and one invalid paren drop): 42 killed, 14 survived. Killed: split whitespace-only and each of ; & | ) < backtick, WRITE_OPS backtick, DENY_WRITE_OPS unused and each of
+  ln/install/dd, every ignoreCase off, --allow made case-blind (journey.TEST.ts test), lib flag never/always, folder glob dropped, with a
+  trailing slash or with /**, refusal sentence dropped, empty agent_id (A1, my earlier survivor), both gates back to input.cwd, env/input
+  order swapped, process.cwd fallback, RAW_BYTES emptied or dropped per call, per-use input.cwd for git/phase/raw/passed/pnpm/marker/changed.
+- Survivors (all Notes or low should-fix): split without the gt, open-paren and dollar chars (near-equivalent except `path$(cmd)`),
+  DENY_WRITE_OPS backtick prefix, ln/install/dd leaking into --readonly (commit claims `rg install docs` stays allowed; no test), redirect
+  class lt/backtick and quote strip (message naming only), ignoreCase leak into role guards (stricter only: deny side), main session's
+  case-blind phase exemption (tests say "not what this is about"; D-120 claims it), stop-gate package.json check and gate-failed path from
+  input.cwd (S8, S13: from docs/ the pre-fix gate exited 0 without running; unpinned).
+- Found by probing: an ampersand right after the gt (`>& file`, `1>&file`) writes the file in bash but redirectTargets skips it; not in
+  D-120's known limits. D-120's known limits still list the cd-then-rm form and removing the dot-claude folder as getting past; both are
+  refused now (the new folder glob).

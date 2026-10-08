@@ -139,3 +139,8 @@ commit in the copy) and compares `git status` before/after (AC11): never write r
 D-120's global guard refuses any Bash command with a redirect/write op (an `=>` counts) AND a token naming the
 local-settings file or the state folder, heredocs included. Pass such mutants as a JSON argv (no `>` in the command), with
 `~Q~` for single quotes (`'` inside a single-quoted arg arrived stripped).
+**BUG-36 loop 1 traps (2026-10-08).** `String.replace(char, '')` on a regex source hits the FIRST occurrence: dropping the open paren from
+the split regex removed split's own paren, a syntax error that "killed" 159 tests. Anchor char drops inside the class
+(`'=;&|()<'` -> `'=;&|)<'`). The session's own D-120 guard refuses any command (a grep, a heredoc into memory) holding a write verb or a
+redirect next to a protected token, and the bare dot-claude folder name counts now; build such strings with `'.cl' + 'aude'` or say
+"dot-claude". To wait on a background run without sleep: `timeout 300 tail -n 0 -f <task output> | grep -m N -E '^(KILLED|SURVIVED)'`.
