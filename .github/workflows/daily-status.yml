@@ -92,7 +92,10 @@ jobs:
           # the report comes back through --json-schema and nowhere else. The
           # schema's enum is the headline, and scripts/lib/daily-status.mjs
           # turns it into ✅, ⚠️ or 🛑 — a test holds the two lists together.
+          #
+          # D-118: Sonnet 5.5, named in full for the reason ai-review.yml gives.
           claude_args: >-
+            --model claude-sonnet-5-5
             --allowedTools
             "Read,Grep,Glob,Bash(git log:*),Bash(git show:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(gh issue list:*),Bash(gh issue view:*),Bash(pnpm run req:coverage)"
             --json-schema
