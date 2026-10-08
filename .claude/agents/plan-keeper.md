@@ -2,7 +2,7 @@
 name: plan-keeper
 description: "Keeps docs/progress.md current and short, appends the narrative to docs/progress/m0.md, and keeps the plan status and decisions.md current after work is done or the owner decides something."
 tools: Read, Grep, Glob, Write, Edit, Bash
-model: sonnet
+model: claude-sonnet-5-5
 color: blue
 hooks:
   PreToolUse:

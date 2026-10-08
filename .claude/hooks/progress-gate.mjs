@@ -38,6 +38,13 @@ export function needsLogging(files) {
   );
 }
 
+// D-119: a CI review job changes no code, and CI's required checks run the
+// same gates on the same commit. Both variables, so neither another CI job nor
+// a local session can turn the check off by accident.
+if (process.env.GITHUB_ACTIONS === 'true' && process.env.TRYGGHVERDAG_REVIEW_JOB === '1') {
+  process.exit(0);
+}
+
 const input = await readInput();
 const cwd = input.cwd || process.cwd();
 const marker = path.join(cwd, '.claude/state/progress-missing');

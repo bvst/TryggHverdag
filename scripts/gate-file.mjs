@@ -6,8 +6,9 @@
  *
  * Usage: pnpm run gate:file <path>...
  */
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import process from 'node:process';
-import { run } from './lib/proc.mjs';
 import { matchesAnyGlob } from './lib/glob.mjs';
 import { TEST_GLOBS } from './lib/test-strength.mjs';
 
@@ -92,20 +93,54 @@ export function stepsFor(files) {
   return steps;
 }
 
-function main() {
+/**
+ * Runs every step at the same time and waits for all of them (D-119): after an
+ * edit, no check waits for the one before it. Never rejects. A step passes on
+ * exit code 0 and nothing else, so one that cannot start, is ended by a signal
+ * or is still running at `timeout` (and is then killed) is a failure.
+ *
+ * @param {{ name: string, command: string[] }[]} steps
+ * @param {{ cwd?: string, timeout?: number }} [options]
+ * @returns {Promise<{ name: string, ok: boolean, output: string }[]>} in the order of `steps`
+ */
+export async function runSteps(steps, { cwd = process.cwd(), timeout = 160_000 } = {}) {
+  return Promise.all(steps.map((step) => runStep(step, { cwd, timeout })));
+}
+
+/** One step, with the environment `run` in lib/proc.mjs gives a tool. Output is stdout, then stderr. */
+async function runStep({ name, command: [program, ...args] }, { cwd, timeout }) {
+  const child = spawn(program, args, {
+    cwd,
+    timeout,
+    env: { ...process.env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8').on('data', (chunk) => (stdout += chunk));
+  child.stderr.setEncoding('utf8').on('data', (chunk) => (stderr += chunk));
+  try {
+    const [code, signal] = await once(child, 'close');
+    let output = stdout + stderr;
+    if (child.killed) {
+      output += `\nStill running after ${String(timeout / 1000)} s, so it was stopped.`;
+    } else if (signal) {
+      output += `\nEnded by ${String(signal)}.`;
+    }
+    return { name, ok: code === 0, output };
+  } catch (error) {
+    return { name, ok: false, output: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function main() {
   const files = filesToCheck(process.argv.slice(2));
   if (files.length === 0) {
     return;
   }
 
-  const failures = [];
-  for (const step of stepsFor(files)) {
-    const [program, ...args] = step.command;
-    const result = run(program, args, { timeout: 160_000 });
-    if (!result.ok) {
-      failures.push({ ...step, output: result.output });
-    }
-  }
+  const results = await runSteps(stepsFor(files));
+  const failures = results.filter((result) => !result.ok);
 
   if (failures.length === 0) {
     return;
@@ -121,5 +156,5 @@ function main() {
 }
 
 if (import.meta.filename === process.argv[1]) {
-  main();
+  await main();
 }
