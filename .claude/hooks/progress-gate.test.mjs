@@ -252,3 +252,122 @@ describe("BUG-31: the hook tests do not inherit a CI review job's stand-down (D-
     expect(result.stderr).toContain('docs/progress.md');
   });
 });
+
+// BUG-36, review loop 1, privacy-security-reviewer: D-120's guards protect the
+// repository's .claude/state/, named from CLAUDE_PROJECT_DIR, which Claude
+// Code sets for every hook; session-start.mjs reads this gate's note from
+// there. The progress gate took its note's folder, and the repository it
+// checks, from the folder the session is in, the input's cwd: from
+// apps/server it wrote apps/server/.claude/state/progress-missing, which
+// session-start never reads, and saw only the untracked files under
+// apps/server. The progress gate uses CLAUDE_PROJECT_DIR when it is set, else
+// the input's cwd, for both. stop-gate.test.mjs holds the same for the stop gate.
+
+const SUBFOLDER = 'apps/server';
+
+/** A repository with a progress log and an apps/server package of its own, then `files` on top, uncommitted. */
+function projectWith(files = {}) {
+  const dir = makeRepo({
+    'docs/progress.md': '# Progress log\n',
+    [`${SUBFOLDER}/package.json`]: '{ "name": "server", "private": true }\n',
+  });
+  repos.push(dir);
+  write(dir, files);
+  return dir;
+}
+
+/**
+ * Runs the progress gate as Claude Code does for a session whose folder is
+ * `folder`: the input's cwd, and the process's unless `processIn` says
+ * otherwise. CLAUDE_PROJECT_DIR is `project`, or unset when `project` is null.
+ */
+function checkFrom({ folder, project, processIn = folder, input = {}, args = [] }) {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: project ?? '' };
+  if (project === null) {
+    delete env.CLAUDE_PROJECT_DIR;
+  }
+  delete env.TRYGGHVERDAG_REVIEW_JOB;
+  const result = spawnSync(process.execPath, [path.join(HOOKS_DIR, 'progress-gate.mjs'), ...args], {
+    input: JSON.stringify({ cwd: folder, ...input }),
+    encoding: 'utf8',
+    cwd: processIn,
+    timeout: 120_000,
+    env,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+}
+
+describe('BUG-36, review loop 1: from a subfolder, the progress gate keeps its note in the repository and checks the repository (HK-08, D-120)', () => {
+  // Fails today: the note goes to apps/server/.claude/state/.
+  test("BUG-36: from a subfolder, the note goes to the repository's .claude/state/, not the subfolder's", () => {
+    const dir = projectWith({ 'apps/server/src/api.ts': 'export const api = 1;' });
+    const sub = path.join(dir, SUBFOLDER);
+
+    const result = checkFrom({ folder: sub, project: dir, args: ['--warn-only'] });
+
+    expect(result.status).toBe(ALLOWED);
+    expect({ repository: existsSync(marker(dir)), subfolder: existsSync(marker(sub)) }).toEqual({
+      repository: true,
+      subfolder: false,
+    });
+  });
+
+  // Fails today: the gate clears apps/server's note, and the repository's stays.
+  test("BUG-36: from a subfolder, the repository's note is cleared once the log is written", () => {
+    const dir = projectWith({
+      'apps/server/src/api.ts': 'export const api = 1;',
+      '.claude/state/progress-missing': 'from last time',
+    });
+    write(dir, { 'docs/progress.md': '# Progress log\n\n- built the API\n' });
+    const sub = path.join(dir, SUBFOLDER);
+
+    const result = checkFrom({ folder: sub, project: dir });
+
+    expect(result.status, result.stderr).toBe(ALLOWED);
+    expect(existsSync(marker(dir))).toBe(false);
+  });
+
+  // Fails today: from apps/server, git lists only the untracked files under
+  // apps/server, so the new milestone log is not seen and the gate refuses.
+  test('BUG-36: from a subfolder, a new milestone log outside the subfolder counts as the work written down', () => {
+    const dir = projectWith({
+      'apps/server/src/api.ts': 'export const api = 1;',
+      'docs/progress/m1.md': '# M1 build log\n\n- built the API\n',
+    });
+    const sub = path.join(dir, SUBFOLDER);
+
+    const result = checkFrom({ folder: sub, project: dir });
+
+    expect(result.status, result.stderr).toBe(ALLOWED);
+  });
+
+  // Fails today: the code change outside apps/server is not seen, so nothing
+  // is refused.
+  test('BUG-36: from a subfolder, code changed outside the subfolder without a word about it is refused', () => {
+    const dir = projectWith({ 'packages/contracts/src/journey.ts': 'export const c = 1;' });
+    const sub = path.join(dir, SUBFOLDER);
+
+    const result = checkFrom({ folder: sub, project: dir });
+
+    expect(result.status).toBe(BLOCKED);
+    expect(result.stderr).toContain('HK-08');
+  });
+
+  // Passes today, on purpose: without CLAUDE_PROJECT_DIR the input's cwd
+  // stands in, not the folder the hook's process happens to run in.
+  test("BUG-36: without CLAUDE_PROJECT_DIR, the input's cwd is the repository, not the process's folder", () => {
+    const dir = projectWith({ 'packages/contracts/src/journey.ts': 'export const c = 1;' });
+    const sub = path.join(dir, SUBFOLDER);
+
+    const result = checkFrom({ folder: dir, project: null, processIn: sub, args: ['--warn-only'] });
+
+    expect(result.status).toBe(ALLOWED);
+    expect({ repository: existsSync(marker(dir)), subfolder: existsSync(marker(sub)) }).toEqual({
+      repository: true,
+      subfolder: false,
+    });
+  });
+});

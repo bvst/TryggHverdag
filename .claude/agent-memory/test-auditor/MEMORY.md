@@ -1,3 +1,4 @@
+- [Notes before the memory folders](reference_notes_before_memory_folders.md) — the older notes file Claude Code never loaded, moved here unchanged (BUG-38); recurring patterns and how to verify things here; check a note against the current code first
 - [In-memory mutation](reference_in_memory_mutation.md) — Vite plugin in startVitest; `--import` register file reaches spawned children; guard blocks `=>`
 - [gate:integrity locally](project_gate_integrity_local.md) — 3/5 locally; use `gh api .../rules/branches/main`; repo visibility changes (public 2026-10-01)
 - [Promised future tests](feedback_promised_future_tests.md) — "Mx will test X" needs a tracked ID or decision to land on; design-only promises escape RG-01
@@ -32,3 +33,4 @@
 - [Equal seed columns](feedback_equal_seed_columns.md) — shared behaviour seeding two time columns equal cannot pin which one the adapter reads; plant column swaps
 - [Time-equality kills](feedback_time_equality_kills.md) — db-clock and tx-scope faults die only to a ms-floor equality; ask for µs text and xmin equality
 - [BUG-30/31 audit](project_bug30_31_audit.md) — PASS 75ca5d1; stop-gate fingerprint null fallback -> constant survives; loader-in-NODE_OPTIONS for hook children; cache-skip mutant checklist
+- [BUG-36..39 audit](project_bug36_39_audit.md) — PASS 019e941/9191d49; loop 1 PASS 1f7ce47 (47 red for right reasons, 56 faults, 42 killed, empty agent_id now killed; gt-ampersand redirect bypass and stale known limits should-fix); affected.mjs INERT gap queued

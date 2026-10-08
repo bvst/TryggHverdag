@@ -415,3 +415,70 @@ describe("BUG-18: safety-reviewer's brief has something to check in the database
     }),
   );
 });
+
+// BUG-37: the reviewer briefs still said "The gate reads that last line
+// literally and case-sensitively", and that a near-miss form is read as no
+// verdict at all. CI stopped reading the review's last line: the verdict comes
+// back through --json-schema, whose enum allows PASS and BLOCK only, and the
+// "Enforce the verdict" step in ai-review.yml checks that the pull request
+// comment names the same verdict. The review still ends with its verdict line,
+// which is what the invoking agent returns, so "last line" may stay in the
+// brief, which the test above holds. What must go is the gate as its reader.
+//
+// Read clause by clause, the brief's line breaks joined: a clause whose
+// subject is the gate, CI, the check or the workflow, reading the last line,
+// without saying it does not, is the stale claim. A rewrite that says the
+// invoking agent reads the last line and returns it to CI passes, and so does
+// one that says CI reads the structured output, not the last line.
+const clausesOf = (text) => text.replace(/\s+/g, ' ').split(/(?<=[.:;!?])\s/);
+const saysTheGateReadsTheLastLine = (clause) =>
+  /\b(gate|CI|check|workflow)\s+(only\s+)?reads?\b.*\blast line\b/i.test(clause) &&
+  !/\b(not|never|no longer)\b/i.test(clause);
+
+describe('BUG-37: the reviewer briefs describe the verdict CI reads now', () => {
+  test.each(names)(
+    'BUG-37: %s does not say the gate reads the last line of its review',
+    explained((name) => {
+      // The premise, read from the workflow rather than assumed: if CI went
+      // back to reading the last line, this test would be the stale one.
+      expect(WORKFLOW).toContain('steps.review.outputs.structured_output');
+
+      expect(
+        clausesOf(agentNamed(name)?.text ?? '').filter(saysTheGateReadsTheLastLine),
+        `what ${name} says about the gate reading its last line`,
+      ).toEqual([]);
+    }),
+  );
+
+  test.each(names)(
+    'BUG-37: %s still asks for exactly PASS or BLOCK, with every qualification kept in the findings',
+    explained((name) => {
+      // Passes today, on purpose: this is the half of the verdict section that
+      // stays true. It holds that rewriting the stale half opens no middle
+      // verdict.
+      const text = agentNamed(name)?.text ?? '';
+      const canonical = text
+        .split('\n')
+        .filter((line) => /^ {4}VERDICT:/.test(line))
+        .map((line) => line.trim());
+      const prose = text.replace(/\s+/g, ' ');
+
+      expect(canonical).toEqual(['VERDICT: PASS', 'VERDICT: BLOCK']);
+      expect(prose).toMatch(/\bexactly one\b/i);
+      expect(prose).toMatch(/\bqualifications?\b[^.]*\bfindings\b/i);
+    }),
+  );
+
+  test('BUG-37: the five reviewer briefs are the ones checked', () => {
+    // Passes today, on purpose: the tests above read only briefs with a
+    // verdict line, so a brief that lost its verdict line would drop out of
+    // them silently.
+    expect(names.toSorted()).toEqual([
+      'a11y-i18n-reviewer.md',
+      'code-reviewer.md',
+      'privacy-security-reviewer.md',
+      'safety-reviewer.md',
+      'test-auditor.md',
+    ]);
+  });
+});

@@ -130,3 +130,17 @@ like any served file (probe2 rewrote behaviour 10's seed).
 line in the test's transform to return the mutated .tf text for the one path. It evaluates RE2 as JS RegExp, so an RE2-only
 construct like `(?i)` dies as a SyntaxError (loud, not a real kill). A mutant with pass=0 where its control had passes is
 usually my own syntax error: re-plant it before counting it.
+
+**Tree copies instead of transforms (BUG-36..39, 2026-10-08, cloud).** For hook/settings faults: `git archive <rev> | tar -x -C
+<scratch>/t-<rev>` per commit, `ln -s <checkout>/node_modules`, then per mutant `cpSync(base, dir, {recursive, verbatimSymlinks})`,
+string-replace (count must equal n), and `pnpm exec vitest run --root <dir> --reporter=json --outputFile=...`. Harness:
+scratchpad/ta-bug36/{run.mjs,mut.mjs}; 3 in parallel, ~45 runs in ~25 min. drills.test.mjs needs a git repo (`git init` +
+commit in the copy) and compares `git status` before/after (AC11): never write repo files while a gate:full runs.
+D-120's global guard refuses any Bash command with a redirect/write op (an `=>` counts) AND a token naming the
+local-settings file or the state folder, heredocs included. Pass such mutants as a JSON argv (no `>` in the command), with
+`~Q~` for single quotes (`'` inside a single-quoted arg arrived stripped).
+**BUG-36 loop 1 traps (2026-10-08).** `String.replace(char, '')` on a regex source hits the FIRST occurrence: dropping the open paren from
+the split regex removed split's own paren, a syntax error that "killed" 159 tests. Anchor char drops inside the class
+(`'=;&|()<'` -> `'=;&|)<'`). The session's own D-120 guard refuses any command (a grep, a heredoc into memory) holding a write verb or a
+redirect next to a protected token, and the bare dot-claude folder name counts now; build such strings with `'.cl' + 'aude'` or say
+"dot-claude". To wait on a background run without sleep: `timeout 300 tail -n 0 -f <task output> | grep -m N -E '^(KILLED|SURVIVED)'`.

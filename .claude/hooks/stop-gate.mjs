@@ -12,10 +12,17 @@ import { readInput, hasFlag, block, tail, inReviewJob } from './lib.mjs';
 const input = await readInput();
 if (inReviewJob()) process.exit(0);
 
-const cwd = input.cwd || process.cwd();
-// The gate's tools read the raw bytes, so this check must too: no CRLF normalising.
-const git = (...a) =>
-  spawnSync('git', ['-c', 'core.autocrlf=false', ...a], { cwd, encoding: 'utf8' });
+// BUG-36 review loop 1 (privacy-security-reviewer): the repository is
+// CLAUDE_PROJECT_DIR, which Claude Code sets for every hook, as session-start
+// reads it and D-120's guards name paths from it. So the records read and
+// written here are the ones the guards protect, and git and the gate look at
+// the whole repository, not the folder a session has moved into. Without it,
+// the input's cwd stands in.
+const cwd = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
+// The gate's tools read the raw bytes, so this check and the fingerprint must
+// too: no CRLF normalising.
+const RAW_BYTES = ['-c', 'core.autocrlf=false'];
+const git = (...a) => spawnSync('git', [...RAW_BYTES, ...a], { cwd, encoding: 'utf8' });
 
 // --no-renames: a moved file counts under the path it left too, so code moved
 // to docs/ still runs the gate (BUG-7).
@@ -49,8 +56,7 @@ const script = red ? 'gate:static' : 'gate:quick';
 // make two different contents look the same.
 const WORK = [':/', ':(exclude).claude/state'];
 const raw = (args, stdin) => {
-  // The gate's tools read the raw bytes, so the fingerprint must too: no CRLF normalising.
-  const r = spawnSync('git', ['-c', 'core.autocrlf=false', ...args], {
+  const r = spawnSync('git', [...RAW_BYTES, ...args], {
     cwd,
     input: stdin,
     maxBuffer: Infinity,

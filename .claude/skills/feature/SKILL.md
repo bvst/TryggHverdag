@@ -15,9 +15,10 @@ whenever a step can't be completed; never skip a step.
    them (one at a time, each with its recommendation). If the owner isn't in the
    session, open one GitHub issue per question with the `owner-question`
    template (D-051), and stop work on this ID.
-2. **Red** — write `red:$ARGUMENTS` to `.claude/state/phase`, then delegate to
-   `test-author`. Confirm every acceptance criterion has a failing test that
-   fails for the right reason.
+2. **Red** — write `red:$ARGUMENTS` to `.claude/state/phase` with the Write
+   tool, which creates the folder if a fresh clone has none yet (`mkdir` on it
+   is refused, D-120); then delegate to `test-author`. Confirm every acceptance
+   criterion has a failing test that fails for the right reason.
 3. **Green** — delegate to `implementer`. Its stop gate must pass. Then delete
    `.claude/state/phase`.
 4. **Full checks** — `pnpm gate:full` (includes `req:coverage` and `api:diff`;

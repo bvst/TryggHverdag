@@ -4436,3 +4436,135 @@ any other path is work, not a candidate for the same treatment.
     that cannot happen unnoticed (found missing by CI's `test-auditor` on #70).
   - #68 merged before this was pushed; it ships in its own pull request
     (BUG-31's review loop 2).
+- **Amendment (owner, 2026-10-08): the guard test stays at `text`, `eol` and
+  `crlf`.** Three more attributes rewrite a file before `git diff` compares
+  it: `filter` (a clean driver), `ident` and `working-tree-encoding`. CI's
+  `test-author` and `privacy-security-reviewer` raised them on #70. Claude
+  recommended leaving them out: Git LFS works through `filter=lfs`, and its
+  pointer changes whenever the file does, so a guard on `filter` would fail a
+  pull request that adds LFS while hiding nothing. The owner agreed: "Leave
+  wider guard as is."
+
+## D-120 — No tool call changes `.claude/settings.local.json` or the hooks' records in `.claude/state/`, and only the main session sets the red phase (BUG-36)
+- **Date:** 2026-10-08 · **Status:** Accepted (the owner asked for it on
+  2026-10-08, "Do the follow ups"; the design delegated, D-031) ·
+  **Section:** 7
+- **Context:**
+  - CI's `privacy-security-reviewer` on #68: any agent can write both, and
+    either lets a session skip the stop gate (HK-06).
+    - `red:<ID>` in `.claude/state/phase` makes the main session's stop gate
+      run `gate:static` instead of `gate:quick`.
+    - `.claude/state/gate-passed` is the remembered pass (D-119): a matching
+      fingerprint written there skips the gate.
+    - `"disableAllHooks": true` in `.claude/settings.local.json` turns every
+      project hook off, and that file takes precedence over
+      `.claude/settings.json` (code.claude.com/docs/en/hooks, /settings).
+  - Claude Code's own protection is not a refusal in every mode. A write
+    under `.claude/` is never auto-approved: it is asked in `default` and
+    `acceptEdits`, left to a classifier in `auto`, refused in `dontAsk` and
+    allowed in `bypassPermissions`
+    (code.claude.com/docs/en/permission-modes#protected-paths).
+  - A hook's input carries `agent_id` only when the tool call comes from a
+    subagent (code.claude.com/docs/en/hooks, "Common input fields"; Claude
+    Code 2.1.69).
+  - `/feature` has the main session write `red:<ID>` to
+    `.claude/state/phase` in step 2 and delete it in step 3.
+- **Decision:**
+  - No tool call may change `.claude/settings.local.json`: not Edit, Write or
+    NotebookEdit, and not a shell command that writes to it. The owner
+    changes it by hand.
+  - No tool call may change anything in `.claude/state/` except
+    `.claude/state/phase`. The rest are the hooks' own records, which the
+    hooks write themselves.
+  - Only the main session may change `.claude/state/phase`, never a
+    subagent.
+  - The two existing guards enforce it from `.claude/settings.json`, so it
+    holds for every session and every subagent, in every permission mode:
+    `guard-paths.mjs` for the edit tools and `guard-bash.mjs --global` for
+    shell commands, each with a new `--allow-main-session <glob>` exception.
+- **Consequences:**
+  - A tool call can no longer turn the stop gate off or downgrade it through
+    these files.
+  - Asking Claude to change local settings (for example "allow X") is
+    refused; the owner edits the file.
+  - **What the shell check sees.** It reads a command as the shell splits it
+    (whitespace, quotes and punctuation such as `;`, `&&`, `|`, `(`, `<`, a
+    backtick), and refuses a write to a protected path: a redirect, judged by
+    its target with or without a space (`>`, `>>`, `2>`, `&>`, `>&`), or one
+    of the write commands it knows: `rm`, `mv`, `cp`, `truncate`, `tee`,
+    `touch`, `mkdir`, `chmod`, `chown`, `sed -i`,
+    `git checkout --`/`restore`/`rm`/`mv`, and, for the deny rules only and
+    only as the command word, `ln`, `install`, `dd` and `unlink`. The
+    `.claude` folder itself is protected too, so copying into it or removing
+    it is refused. With `--global`, paths are compared without regard to
+    case, the main session's exemption for the phase file too (the owner's
+    Mac file system ignores case); the role guards keep exact case. Paths
+    are judged from the repository (`CLAUDE_PROJECT_DIR`, which Claude Code
+    sets for every hook), and the stop gate and the progress gate keep their
+    records there too, so a session in a subfolder does not dodge the rules.
+  - **Known limits.** It is a heuristic, like RG-03's guards: it stops a
+    slip, not a determined session. Shown to get past it: any other writer
+    (`find … -delete`, `shred`, `rsync`, `tar`, `perl -pi`, `xargs rm` at
+    the end of a command, a writer behind `sudo`, `env` or `time`, a full
+    path to the binary such as `/bin/rm`, a program that writes the file
+    itself, `node -e`); `ln`, `install`, `dd` or `unlink` after `if`,
+    `elif`, `while`, `until`, `!`, `{`, a `VAR=value` prefix, `sudo` or
+    `xargs` (counting them only as the command word, in review loop 2, ended
+    the false positives that refused implementer's `pnpm install && …`, and
+    let these rarer forms through); a path the shell builds (`"$CLAUDE_PROJECT_DIR"/…`,
+    a wildcard `stat?`, brace expansion, quotes spliced inside the name);
+    `git clean -fdX` (which removes the ignored `.claude/state/`); a
+    redirect that overrides `noclobber` (`>|`); and a link from outside the
+    repository into `.claude/`. Also out of reach: a flag on a nested
+    `claude` call (`--settings`), and the user's own
+    `~/.claude/settings.json`, which can also set `disableAllHooks`. Without
+    `CLAUDE_PROJECT_DIR` the hook command itself would not run, and Claude
+    Code lets a call through when a hook fails to run or crashes (exit other
+    than 2), as before D-120. **False positives:** the check reads the whole
+    command, so a command whose text only mentions a protected path beside a
+    write (a commit message in a heredoc, `ls .claude && rm foo`,
+    `git diff -- .claude > /tmp/d.txt`) is refused; the refusal says to pass
+    such text from a file, or to name the subfolder meant. Moving a file
+    descriptor (`>&2-`) reads as a write to a file named `2-`. CI's required
+    checks never go through these hooks and stay the gate (D-042).
+
+## D-121 — CI's reviewers keep running as subagents of a wrapper session, not as `claude --agent` (BUG-30 and BUG-31's follow-up)
+- **Date:** 2026-10-08 · **Status:** Accepted (delegated, D-031; the owner
+  asked for the follow-up to be done, 2026-10-08) · **Section:** 7
+- **Context:**
+  - BUG-30 and BUG-31's follow-up: some reviews ended with no structured
+    output (`--json-schema was provided but Claude did not return
+    structured_output`, on #43, #67 and #68), so running each reviewer
+    directly as its agent was proposed.
+  - Measured in a cloud session with Claude Code 2.1.294: `claude -p` with
+    `GITHUB_ACTIONS=true` and `TRYGGHVERDAG_REVIEW_JOB=1`, in a clean
+    worktree of `main`, with the same schema as `ai-review.yml`:
+    - With `--agent code-reviewer` or `--agent safety-reviewer`, the run
+      succeeds with no structured output (`structured_output: null`). The
+      agent's `tools:` list (Read, Grep, Glob, Bash) leaves out the tool that
+      returns it, and naming it in `--allowedTools` does not bring it back.
+      The same request without `--agent` returns it.
+    - Neither agent was given its memory index (`MEMORY.md`): each was asked
+      to quote the first line of its memory index if it had one, and both
+      answered "none" (what the agent said, not a look at its prompt).
+    - `--model claude-opus-5-5` won over the agent's own `model:`:
+      `code-reviewer` ran on Opus 5.5, not D-118's Sonnet 5.5.
+    - The docs add that a `tools:` list leaves out MCP tools unless it names
+      them (code.claude.com/docs/en/sub-agents), so the comment tools would
+      go too.
+  - Since #69 (`2c9808f`) stood the hooks down in review jobs, every review
+    of a pull request that does not change `ai-review.yml` has returned its
+    structured output: runs 210 to 212 (#70), nine reviewer sessions. Run
+    213 (#71) has one failed review, `code-reviewer`, but it never started:
+    "Failed to install Claude Code after 3 attempts" (a 403 on the
+    download), not a missing structured output.
+- **Decision:** keep the wrapper session; CI's reviewers do not move to
+  `--agent`.
+- **Consequences:**
+  - Moving would mean naming the structured-output tool and the GitHub
+    comment tools in every reviewer's `tools:` (which locally would let a
+    reviewer post on a pull request), losing the reviewers' memory in CI, and
+    naming D-118's models per reviewer in the workflow. None of that is worth
+    it while the failure has not come back.
+  - Revisit if a review ends with no structured output again, or if a Claude
+    Code release changes how `--agent` treats tools, memory or `--model`.
