@@ -32,3 +32,4 @@
 - [Equal seed columns](feedback_equal_seed_columns.md) — shared behaviour seeding two time columns equal cannot pin which one the adapter reads; plant column swaps
 - [Time-equality kills](feedback_time_equality_kills.md) — db-clock and tx-scope faults die only to a ms-floor equality; ask for µs text and xmin equality
 - [BUG-30/31 audit](project_bug30_31_audit.md) — PASS 75ca5d1; stop-gate fingerprint null fallback -> constant survives; loader-in-NODE_OPTIONS for hook children; cache-skip mutant checklist
+- [BUG-32 audit](project_bug32_audit.md) — PASS 33e27ac/3c6b6ad; 14 faults, read-back ordering M12 survives (note); test-author table file absent; local mutation gave no score (BUG-33, exit 144)
