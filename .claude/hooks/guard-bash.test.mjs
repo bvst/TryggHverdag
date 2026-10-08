@@ -157,6 +157,86 @@ describe('HK-03: the second layer, the deny list in .claude/settings.json', () =
   });
 });
 
+// BUG-36 (D-120): the shell is the other way to change
+// .claude/settings.local.json, where `"disableAllHooks": true` turns every
+// guard off, and the hooks' records in .claude/state/. These are the arguments
+// D-120 gives the global Bash guard in .claude/settings.json;
+// settings-hooks.test.mjs holds that settings.json passes them. The directory
+// itself is named too: `.claude/state/**` does not match `rm -rf .claude/state`.
+// Claude Code puts agent_id in a hook's input only when a subagent made the
+// call (code.claude.com/docs/en/hooks, "Common input fields").
+const D120_ARGS = [
+  '--global',
+  '--deny-write-glob',
+  '.claude/settings.local.json',
+  '--deny-write-glob',
+  '.claude/state/**',
+  '--deny-write-glob',
+  '.claude/state',
+  '--allow-main-session',
+  '.claude/state/phase',
+];
+
+const D120_REFUSED = [
+  `echo '{"disableAllHooks": true}' > .claude/settings.local.json`,
+  'tee .claude/settings.local.json',
+  'printf x > .claude/state/gate-passed',
+  'rm .claude/state/gate-passed',
+  'rm -rf .claude/state',
+  'rm -rf .claude/state/',
+  // The exemption is for the path it names, not for a command that also
+  // names it: phase is fine, gate-passed in the same command is not.
+  "printf 'red:BUG-1\\n' > .claude/state/phase && rm .claude/state/gate-passed",
+];
+const D120_MAIN_SESSION_ONLY = [
+  "printf 'red:BUG-1\\n' > .claude/state/phase",
+  'rm .claude/state/phase',
+];
+const D120_READS = ['cat .claude/state/phase', 'cat .claude/settings.local.json'];
+
+describe('BUG-36: guard-bash exempts .claude/state/phase for the main session only (D-120)', () => {
+  const asMain = (command) => runHook('guard-bash.mjs', { args: D120_ARGS, input: bash(command) });
+  const asSubagent = (command) =>
+    runHook('guard-bash.mjs', {
+      args: D120_ARGS,
+      input: { ...bash(command), agent_id: 'synthetic-subagent-1', agent_type: 'implementer' },
+    });
+
+  // Passes today, on purpose: --deny-write-glob already refuses these. It
+  // holds that the new exemption reaches no further than phase.
+  test.each(D120_REFUSED)('BUG-36: refused for the main session and a subagent: %s', (command) => {
+    const main = asMain(command);
+    const subagent = asSubagent(command);
+
+    expect({ main: main.status, subagent: subagent.status }).toEqual({
+      main: BLOCKED,
+      subagent: BLOCKED,
+    });
+  });
+
+  // Fails today: nothing exempts phase for the main session yet.
+  test.each(D120_MAIN_SESSION_ONLY)(
+    'BUG-36: allowed for the main session, refused for a subagent: %s',
+    (command) => {
+      const main = asMain(command);
+      const subagent = asSubagent(command);
+
+      expect(
+        { main: main.status, subagent: subagent.status },
+        `main session said: ${main.stderr}`,
+      ).toEqual({ main: ALLOWED, subagent: BLOCKED });
+    },
+  );
+
+  // Passes today, on purpose: reading stays allowed for everyone.
+  test.each(D120_READS)('BUG-36: allowed for both, because it only reads: %s', (command) => {
+    expect({ main: asMain(command).status, subagent: asSubagent(command).status }).toEqual({
+      main: ALLOWED,
+      subagent: ALLOWED,
+    });
+  });
+});
+
 describe('HK-03: an empty command', () => {
   test('passes through', () => {
     const result = runHook('guard-bash.mjs', { args: ['--global'], input: bash('') });
