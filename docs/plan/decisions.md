@@ -4495,9 +4495,12 @@ any other path is work, not a candidate for the same treatment.
     parent (`rm -rf .claude`), `git clean -fdX` (which removes the ignored
     `.claude/state/`), a redirect that overrides `noclobber` (`>|`), and a
     program that writes the file itself (`node -e`, a script). A redirect
-    is judged by its target, with or without a space after `>`. Neither is
-    a flag on a nested `claude` call (`--settings`) nor the user's own `~/.claude/settings.json`, which can
-    also set `disableAllHooks`. Paths are judged from the repository
+    is judged by its target, with or without a space after `>`. Also not
+    covered: a flag on a nested `claude` call (`--settings`), and the user's
+    own `~/.claude/settings.json`, which can also set `disableAllHooks`. The
+    check reads the whole command, so a command whose text only quotes such
+    a redirect (a commit message in a heredoc) is refused too; put the text
+    in a file. Paths are judged from the repository
     (`CLAUDE_PROJECT_DIR`, which Claude Code sets for every hook), so a
     session in a subfolder does not dodge the rules; were the variable unset,
     the session's folder would stand in for it, as before. The guard stops a
