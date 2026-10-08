@@ -4488,10 +4488,17 @@ any other path is work, not a candidate for the same treatment.
   - Asking Claude to change local settings (for example "allow X") is
     refused; the owner edits the file.
   - **Known limits.** The shell check is the same heuristic RG-03's guards
-    use: a write command or a redirect that names the path. A program that
-    writes the file itself (`node -e`, a script) is not seen, and neither is a
-    flag on a nested `claude` call (`--settings`). CI's required checks never
-    go through these hooks and stay the gate (D-042).
+    use: a write command or a redirect that names the path. `test-author`
+    showed these get past it (each run against a reference guard, exit 0):
+    a path built from a variable (`"$CLAUDE_PROJECT_DIR"/.claude/state/…`),
+    a change of directory first (`cd .claude && rm -rf state`), removing a
+    parent (`rm -rf .claude`), `git clean -fdX` (which removes the ignored
+    `.claude/state/`), and a program that writes the file itself
+    (`node -e`, a script). Neither is a flag on a nested `claude` call
+    (`--settings`) nor the user's own `~/.claude/settings.json`, which can
+    also set `disableAllHooks`. The guard stops a slip, not a determined
+    session; CI's required checks never go through these hooks and stay the
+    gate (D-042).
 
 ## D-121 — CI's reviewers keep running as subagents of a wrapper session, not as `claude --agent` (BUG-30 and BUG-31's follow-up)
 - **Date:** 2026-10-08 · **Status:** Accepted (delegated, D-031; the owner
