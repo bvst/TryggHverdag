@@ -686,3 +686,445 @@ describe('BUG-36, review loop 1: an empty agent_id is still a subagent (D-120)',
     expect(d120VerdictOf(result)).toBe('refused');
   });
 });
+
+// ---------------------------------------------------------------------------
+// BUG-36, review loop 2
+// ---------------------------------------------------------------------------
+
+// The paths D-120 protects, put together from their pieces, so that a shell
+// command which only quotes this file never names one beside a write.
+const LOCAL_SETTINGS = ['.claude', 'settings.local.json'].join('/');
+const STATE_DIR = ['.claude', 'state'].join('/');
+const GATE_PASSED = `${STATE_DIR}/gate-passed`;
+const PHASE = `${STATE_DIR}/phase`;
+
+const REPO = path.resolve(HOOKS_DIR, '..', '..');
+
+/** A frontmatter scalar with its quotes taken off, as scripts/drills.test.mjs reads one. */
+function unquoted(value) {
+  if (value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1).replaceAll("''", "'");
+  }
+  if (value.startsWith('"') && value.endsWith('"')) {
+    return JSON.parse(value);
+  }
+  return value;
+}
+
+/**
+ * The Bash hook a role's own frontmatter declares in .claude/agents/<agent>.md,
+ * read the way the drills in scripts/drills.test.mjs read implementer's: the
+ * hook command under the entry whose matcher is Bash.
+ */
+function roleBashHook(agent) {
+  const file = path.join(REPO, '.claude', 'agents', `${agent}.md`);
+  const front = /^---\n([\s\S]*?)\n---/.exec(readFileSync(file, 'utf8'))?.[1];
+  if (front === undefined) {
+    throw new Error(`${file} has no frontmatter, where the test reads the role's hooks.`);
+  }
+  const found = [];
+  let matcher = '';
+  for (const line of front.split('\n')) {
+    const matched = /^\s*-\s*matcher:\s*(.+?)\s*$/.exec(line);
+    if (matched !== null) {
+      matcher = unquoted(matched[1] ?? '');
+      continue;
+    }
+    const command = /^\s*command:\s*(.+?)\s*$/.exec(line);
+    if (command !== null && matcher === 'Bash') {
+      found.push(unquoted(command[1] ?? ''));
+    }
+  }
+  const [hook = ''] = found;
+  if (
+    found.length !== 1 ||
+    !hook.includes('guard-bash.mjs') ||
+    !hook.includes('--deny-write-glob')
+  ) {
+    throw new Error(
+      `${file} should declare one Bash hook, guard-bash with --deny-write-glob; it declares: ${found.join(' | ') || 'none'}`,
+    );
+  }
+  return hook;
+}
+
+/**
+ * What a role's own Bash guard answers its subagent, run as Claude Code runs a
+ * frontmatter hook: through the shell, from the repository, the call on
+ * stdin. A refusal counts only in the role guard's words, RG-03.
+ */
+function roleVerdictOf(agent, command) {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: REPO };
+  delete env.TRYGGHVERDAG_REVIEW_JOB;
+  const run = spawnSync('sh', ['-c', roleBashHook(agent)], {
+    cwd: REPO,
+    env,
+    input: JSON.stringify({
+      cwd: REPO,
+      ...bash(command),
+      agent_id: 'synthetic-subagent-1',
+      agent_type: agent,
+    }),
+    encoding: 'utf8',
+    timeout: 60_000,
+  });
+  if (run.error) throw run.error;
+  const stderr = run.stderr ?? '';
+  if (
+    run.status === BLOCKED &&
+    stderr.includes(`Blocked for ${agent}`) &&
+    stderr.includes('RG-03')
+  ) {
+    return 'refused';
+  }
+  if (run.status === ALLOWED) return 'allowed';
+  return `exit ${String(run.status)}: ${stderr.trim()}`;
+}
+
+// BUG-36, review loop 2, privacy-security-reviewer: since loop 1, ln, install
+// and dd count as writes wherever they stand in a command, for every guard
+// that passes --deny-write-glob. So a command that only mentions one of them
+// beside a path the guard protects is refused: a dependency install before a
+// test run, a search for the word. A word counts as a write only where the
+// shell would run it, as the command word. Each row below is refused today.
+const LOOP2_ROLE_MENTIONS = [
+  {
+    agent: 'implementer',
+    command: 'pnpm install && pnpm exec vitest run apps/server/src/x.test.ts',
+  },
+  {
+    agent: 'test-author',
+    command: 'pnpm install && pnpm exec vitest run apps/server/src/x.test.ts',
+  },
+  { agent: 'implementer', command: 'grep -rn install apps/mobile/src/features/x.test.tsx' },
+  { agent: 'implementer', command: 'grep -rn ln apps/server/src/x.test.ts' },
+  { agent: 'test-author', command: 'grep -rn dd apps/server/src/domain/journey.ts' },
+];
+
+// Passes today, on purpose: unlink is no write today, so this holds that
+// counting it as a command word does not refuse its mere mention.
+const LOOP2_ROLE_UNLINK_MENTION = [
+  { agent: 'implementer', command: 'grep -rn unlink apps/server/src/x.test.ts' },
+];
+
+// Pass today, on purpose: as the command word, after `;`, `&&`, `|`, a
+// bracket, `$(` and a backtick, ln, install and dd still write what they
+// are given, also when the same command mentions one first.
+const LOOP2_ROLE_WRITERS = [
+  { agent: 'implementer', command: 'install /tmp/x apps/server/src/x.test.ts' },
+  { agent: 'implementer', command: 'true; ln -sf /tmp/x apps/server/src/x.test.ts' },
+  { agent: 'implementer', command: 'true && install /tmp/x apps/server/src/x.test.ts' },
+  { agent: 'implementer', command: 'cat /tmp/x | dd of=apps/server/src/x.test.ts' },
+  { agent: 'implementer', command: '(ln -s /tmp/x apps/server/src/x.test.ts)' },
+  { agent: 'implementer', command: 'echo $(install /tmp/x apps/server/src/x.test.ts)' },
+  { agent: 'implementer', command: 'echo `install /tmp/x apps/server/src/x.test.ts`' },
+  {
+    agent: 'implementer',
+    command: 'pnpm install && install /tmp/x packages/test-kit/src/fake.ts',
+  },
+  {
+    agent: 'test-author',
+    command: 'pnpm install && dd if=/tmp/x of=apps/server/src/domain/journey.ts',
+  },
+];
+
+// BUG-36, review loop 2, privacy-security-reviewer: unlink removes the path it
+// is given as surely as rm does. Each row is allowed today.
+const LOOP2_ROLE_UNLINK = [
+  { agent: 'implementer', command: 'unlink apps/server/src/x.test.ts' },
+  { agent: 'implementer', command: 'true && unlink packages/test-kit/src/fake.ts' },
+  { agent: 'test-author', command: 'unlink packages/contracts/src/journey.ts' },
+];
+
+describe("BUG-36, review loop 2: a role's own guard counts ln, install, dd and unlink as writes only as the command word (RG-03)", () => {
+  // Fails today: refused, though nothing is written.
+  test.each(LOOP2_ROLE_MENTIONS)(
+    'BUG-36: allowed for $agent by its own frontmatter guard, because the word is only mentioned: $command (review loop 2, privacy-security-reviewer)',
+    ({ agent, command }) => {
+      expect({ agent, command, verdict: roleVerdictOf(agent, command) }).toEqual({
+        agent,
+        command,
+        verdict: 'allowed',
+      });
+    },
+  );
+
+  test.each(LOOP2_ROLE_UNLINK_MENTION)(
+    'BUG-36: allowed for $agent by its own frontmatter guard, because unlink is only mentioned: $command (review loop 2, privacy-security-reviewer)',
+    ({ agent, command }) => {
+      expect({ agent, command, verdict: roleVerdictOf(agent, command) }).toEqual({
+        agent,
+        command,
+        verdict: 'allowed',
+      });
+    },
+  );
+
+  test.each(LOOP2_ROLE_WRITERS)(
+    'BUG-36: refused for $agent by its own frontmatter guard, naming RG-03, because the command word writes: $command (review loop 2, test-auditor)',
+    ({ agent, command }) => {
+      expect({ agent, command, verdict: roleVerdictOf(agent, command) }).toEqual({
+        agent,
+        command,
+        verdict: 'refused',
+      });
+    },
+  );
+
+  // Fails today: allowed.
+  test.each(LOOP2_ROLE_UNLINK)(
+    'BUG-36: refused for $agent by its own frontmatter guard, naming RG-03, because unlink removes the path: $command (review loop 2, privacy-security-reviewer)',
+    ({ agent, command }) => {
+      expect({ agent, command, verdict: roleVerdictOf(agent, command) }).toEqual({
+        agent,
+        command,
+        verdict: 'refused',
+      });
+    },
+  );
+});
+
+// The same false positive in D-120's global guard. The reviewer's own example,
+// `echo "make install" | cat && ls .claude/agents`, is allowed today: the
+// guard wants whitespace after the word, and there a quote follows it, and
+// .claude/agents is no path D-120 protects. These rows, of the same kind, are
+// refused today: each mentions the word, then only reads or lists.
+const LOOP2_D120_MENTIONS = [
+  'echo "make install now" | cat && ls .claude',
+  `echo make install | cat && ls ${STATE_DIR}`,
+  `pnpm install && cat ${LOCAL_SETTINGS}`,
+];
+
+// Passes today, on purpose: the reviewer's own example, kept as written.
+const LOOP2_D120_REVIEWERS_EXAMPLE = ['echo "make install" | cat && ls .claude/agents'];
+
+// Pass today, on purpose: the command word still writes, however the command
+// reaches it. The newline, `then` and `do` rows go beyond the reviewers'
+// list: each makes the word the command word as surely as `;` does, and is
+// refused today, so a guard that looks only after punctuation would let them
+// through.
+const LOOP2_D120_WRITERS = [
+  `true; install /tmp/x ${LOCAL_SETTINGS}`,
+  `true;install /tmp/x ${LOCAL_SETTINGS}`,
+  `true && ln -sf /tmp/x ${LOCAL_SETTINGS}`,
+  `cat /tmp/x | dd of=${GATE_PASSED}`,
+  `(ln -s /tmp/x ${GATE_PASSED})`,
+  `echo $(install /tmp/x ${LOCAL_SETTINGS})`,
+  `echo \`install /tmp/x ${LOCAL_SETTINGS}\``,
+  `pnpm install && install /tmp/x ${LOCAL_SETTINGS}`,
+  `true\ninstall /tmp/x ${LOCAL_SETTINGS}`,
+  `if true; then install /tmp/x ${LOCAL_SETTINGS}; fi`,
+  `for f in a; do ln -sf /tmp/x ${GATE_PASSED}; done`,
+];
+
+// BUG-36, review loop 2, privacy-security-reviewer: unlink, as the command
+// word. Each row is allowed today, for the main session and a subagent.
+const LOOP2_D120_UNLINK = [
+  `unlink ${GATE_PASSED}`,
+  `true && unlink ${GATE_PASSED}`,
+  `(unlink ${GATE_PASSED})`,
+  `echo $(unlink ${LOCAL_SETTINGS})`,
+];
+
+describe('BUG-36, review loop 2: the global guard-bash counts ln, install, dd and unlink as writes only as the command word (D-120)', () => {
+  // Fails today: refused, for the main session and a subagent.
+  test.each(LOOP2_D120_MENTIONS)(
+    'BUG-36: allowed for the main session and a subagent, because the word is only mentioned: %s (review loop 2, privacy-security-reviewer)',
+    (command) => {
+      expect(loop1VerdictsOf(command)).toEqual({ command, main: 'allowed', subagent: 'allowed' });
+    },
+  );
+
+  test.each(LOOP2_D120_REVIEWERS_EXAMPLE)(
+    "BUG-36: the reviewer's own example stays allowed for the main session and a subagent: %s (review loop 2, privacy-security-reviewer)",
+    (command) => {
+      expect(loop1VerdictsOf(command)).toEqual({ command, main: 'allowed', subagent: 'allowed' });
+    },
+  );
+
+  test.each(LOOP2_D120_WRITERS)(
+    'BUG-36: refused for the main session and a subagent, naming D-120, because the command word writes: %s (review loop 2, test-auditor)',
+    (command) => {
+      expect(loop1VerdictsOf(command)).toEqual({ command, main: 'refused', subagent: 'refused' });
+    },
+  );
+
+  // Fails today: allowed, for the main session and a subagent.
+  test.each(LOOP2_D120_UNLINK)(
+    'BUG-36: refused for the main session and a subagent, naming D-120, because unlink removes the path: %s (review loop 2, privacy-security-reviewer)',
+    (command) => {
+      expect(loop1VerdictsOf(command)).toEqual({ command, main: 'refused', subagent: 'refused' });
+    },
+  );
+
+  // Fails today on the subagent, which is allowed.
+  test('BUG-36: unlink of the phase file is allowed for the main session, refused for a subagent, naming D-120 (review loop 2, privacy-security-reviewer)', () => {
+    const command = `unlink ${PHASE}`;
+
+    expect(loop1VerdictsOf(command)).toEqual({ command, main: 'allowed', subagent: 'refused' });
+  });
+});
+
+// BUG-36, review loop 2, both reviewers: `>& word` and `[n]>&word` write the
+// file `word` when it is not a number or `-`; bash does, test-auditor ran it.
+// redirectTargets passes over every target that starts with `&`, so each row
+// below gets through today, for a subagent too. `2>&1`, `>&2` and `1>&-` only
+// copy or close a file descriptor and stay no target.
+const LOOP2_D120_DUP_TO_FILE = [
+  { command: `printf x >& ${GATE_PASSED}`, target: GATE_PASSED },
+  { command: `printf x >&${GATE_PASSED}`, target: GATE_PASSED },
+  { command: `printf x 1>&${GATE_PASSED}`, target: GATE_PASSED },
+  { command: `echo '{"disableAllHooks": true}' >&${LOCAL_SETTINGS}`, target: LOCAL_SETTINGS },
+];
+const LOOP2_D120_DUP_TO_FD = [
+  `cat ${PHASE} >&2`,
+  `cat ${LOCAL_SETTINGS} >&2`,
+  `cat ${LOCAL_SETTINGS} 1>&-`,
+  `cat ${LOCAL_SETTINGS} 2>&1`,
+  `grep -c x ${GATE_PASSED} 1>&2`,
+];
+
+describe('BUG-36, review loop 2: guard-bash judges `>&` followed by a file name as a redirect into that file (D-120, RG-03)', () => {
+  // Fails today: allowed, for the main session and a subagent.
+  test.each(LOOP2_D120_DUP_TO_FILE)(
+    'BUG-36: refused for the main session and a subagent, naming D-120 and the file: $command (review loop 2, privacy-security-reviewer and test-auditor)',
+    ({ command, target }) => {
+      const verdicts = loop1VerdictsOf(command);
+      const main = runHook('guard-bash.mjs', { args: D120_ARGS_WITH_FOLDER, input: bash(command) });
+
+      expect(verdicts).toEqual({ command, main: 'refused', subagent: 'refused' });
+      expect(main.stderr).toContain(`this would change ${target},`);
+    },
+  );
+
+  // Fails today on the subagent, which is allowed.
+  test('BUG-36: `>&` into the phase file is allowed for the main session, refused for a subagent, naming D-120 (review loop 2, privacy-security-reviewer and test-auditor)', () => {
+    const command = `printf 'red:BUG-1\\n' >&${PHASE}`;
+
+    expect(loop1VerdictsOf(command)).toEqual({ command, main: 'allowed', subagent: 'refused' });
+  });
+
+  test.each(LOOP2_D120_DUP_TO_FD)(
+    'BUG-36: allowed for the main session and a subagent, because `>&` only copies or closes a file descriptor: %s (review loop 2, test-auditor)',
+    (command) => {
+      expect(loop1VerdictsOf(command)).toEqual({ command, main: 'allowed', subagent: 'allowed' });
+    },
+  );
+});
+
+const LOOP2_ROLE_DUP_TO_FILE = [
+  { agent: 'implementer', command: 'printf x >& apps/server/src/x.test.ts' },
+  { agent: 'implementer', command: 'printf x >&packages/test-kit/src/fake.ts' },
+  { agent: 'implementer', command: 'printf x 1>&apps/server/src/x.test.ts' },
+  { agent: 'test-author', command: 'printf x >&apps/server/src/domain/journey.ts' },
+];
+const LOOP2_ROLE_DUP_TO_FD = [
+  { agent: 'implementer', command: 'grep -c x apps/server/src/x.test.ts >&2' },
+  { agent: 'implementer', command: 'grep -c x apps/server/src/x.test.ts 1>&-' },
+  { agent: 'test-author', command: 'grep -c x apps/server/src/domain/journey.ts 2>&1' },
+];
+
+describe("BUG-36, review loop 2: a role's own guard judges `>&` followed by a file name as a redirect into that file (RG-03)", () => {
+  // Fails today: allowed.
+  test.each(LOOP2_ROLE_DUP_TO_FILE)(
+    'BUG-36: refused for $agent by its own frontmatter guard, naming RG-03: $command (review loop 2, privacy-security-reviewer and test-auditor)',
+    ({ agent, command }) => {
+      expect({ agent, command, verdict: roleVerdictOf(agent, command) }).toEqual({
+        agent,
+        command,
+        verdict: 'refused',
+      });
+    },
+  );
+
+  test.each(LOOP2_ROLE_DUP_TO_FD)(
+    'BUG-36: allowed for $agent by its own frontmatter guard, because `>&` only copies or closes a file descriptor: $command (review loop 2, test-auditor)',
+    ({ agent, command }) => {
+      expect({ agent, command, verdict: roleVerdictOf(agent, command) }).toEqual({
+        agent,
+        command,
+        verdict: 'allowed',
+      });
+    },
+  );
+});
+
+// A reviewer's guard, --readonly, counts `>&` followed by a file name as
+// output redirected to a file, and still lets a reviewer search for the word
+// install: --readonly never counted ln, install or dd, and no test held that.
+const LOOP2_READONLY_ARGS = ['--readonly', '--agent', 'safety-reviewer'];
+const LOOP2_READONLY_DUP_TO_FILE = [
+  'printf x >& verdict.txt',
+  'printf x >&verdict.txt',
+  'printf x 1>&verdict.txt',
+];
+const LOOP2_READONLY_READS = [
+  'rg install docs',
+  'git diff main 2>&1',
+  'git diff main >&2',
+  'git diff main 1>&-',
+];
+
+describe('BUG-36, review loop 2: a reviewer is refused `>&` into a file, and may still search for install (HK-03)', () => {
+  // Fails today: allowed.
+  test.each(LOOP2_READONLY_DUP_TO_FILE)(
+    'BUG-36: refused for a read-only reviewer as output redirection: %s (review loop 2, privacy-security-reviewer and test-auditor)',
+    (command) => {
+      const result = guard(command, LOOP2_READONLY_ARGS);
+
+      expect({ command, status: result.status }, `the guard said: ${result.stderr}`).toEqual({
+        command,
+        status: BLOCKED,
+      });
+      expect(result.stderr).toContain('redirection');
+    },
+  );
+
+  test.each(LOOP2_READONLY_READS)(
+    'BUG-36: allowed for a read-only reviewer, because it only reads: %s (review loop 2, test-auditor)',
+    (command) => {
+      const result = guard(command, LOOP2_READONLY_ARGS);
+
+      expect({ command, status: result.status }, `the guard said: ${result.stderr}`).toEqual({
+        command,
+        status: ALLOWED,
+      });
+    },
+  );
+});
+
+// BUG-36, review loop 2, test-auditor: D-120 says the global guards ignore
+// case in the main session's exemption for the phase file too, and no test
+// held it. Pass today, on purpose: a guard whose exemption kept exact case
+// would refuse the main session's own phase step on the owner's Mac, where
+// .Claude/State/Phase is the phase file.
+const LOOP2_CASE_PHASE = ["printf 'red:BUG-1\\n' > .Claude/State/Phase", 'rm .CLAUDE/STATE/PHASE'];
+
+describe("BUG-36, review loop 2: the global guard-bash ignores case in the main session's exemption too (D-120)", () => {
+  test.each(LOOP2_CASE_PHASE)(
+    'BUG-36: allowed for the main session, refused for a subagent, naming D-120, whatever the case: %s (review loop 2, test-auditor)',
+    (command) => {
+      expect(loop1VerdictsOf(command)).toEqual({ command, main: 'allowed', subagent: 'refused' });
+    },
+  );
+});
+
+// BUG-36, review loop 2, privacy-security-reviewer: with the .claude folder
+// itself among the deny globs, a command that only names the folder beside a
+// redirect is refused, though it changes nothing there. The refusal's advice,
+// pass the text from a file, does not help a session that meant a subfolder:
+// it must also say to name the subfolder meant.
+describe('BUG-36, review loop 2: when the .claude folder itself is what matched, the refusal says to name the subfolder meant (D-120)', () => {
+  // Fails today on the message, for the main session and a subagent.
+  test('BUG-36: `git diff origin/main...HEAD -- .claude > /tmp/d.txt` is refused, naming D-120 and the folder, and the refusal says to name the subfolder meant (review loop 2, privacy-security-reviewer)', () => {
+    const call = bash('git diff origin/main...HEAD -- .claude > /tmp/d.txt');
+    for (const input of [call, { ...call, agent_id: 'synthetic-subagent-1' }]) {
+      const result = runHook('guard-bash.mjs', { args: D120_ARGS_WITH_FOLDER, input });
+      const who = input.agent_id === undefined ? 'main session' : 'subagent';
+
+      expect({ who, verdict: d120VerdictOf(result) }).toEqual({ who, verdict: 'refused' });
+      expect(result.stderr).toContain('this would change .claude,');
+      expect(result.stderr, `the ${who} was told: ${result.stderr}`).toMatch(/subfolder/i);
+    }
+  });
+});

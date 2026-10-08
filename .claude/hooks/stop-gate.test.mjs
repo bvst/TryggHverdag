@@ -908,3 +908,49 @@ describe('BUG-36, review loop 1: from a subfolder, the stop gate reads its recor
     expect(ranLog(sub)).toBe('');
   });
 });
+
+// BUG-36, review loop 2, test-auditor: two of the stop gate's uses of the
+// repository had no test. Both pass today, on purpose: each is the guard that
+// fails if that one use goes back to the input's cwd, the folder the session
+// is in.
+//
+// - Whether there is a package.json to run a gate from. From docs/, which has
+//   none, the stop gate took the session's folder for the repository and
+//   exited 0, so a failing gate never ran.
+// - Where a failure is written down after one request to continue. From
+//   apps/server, that note landed in apps/server/.claude/state/, where neither
+//   session-start nor /status looks, and no guard protects it.
+describe("BUG-36, review loop 2: from a subfolder, the stop gate's other uses of the repository (HK-06, D-120)", () => {
+  test("BUG-36: from docs/, a subfolder with no package.json of its own, the repository's failing gate runs and refuses (review loop 2, test-auditor)", () => {
+    const dir = branchRepo({ 'gate:quick': FAILS }, { 'docs/notes.md': '# notes\n' });
+    const docs = path.join(dir, 'docs');
+    // The condition itself: the session's folder has no package.json, the
+    // repository does.
+    expect(existsSync(path.join(docs, 'package.json'))).toBe(false);
+    expect(existsSync(path.join(dir, 'package.json'))).toBe(true);
+
+    const result = stopFrom({ folder: docs, project: dir });
+
+    expect(result.status, result.stderr).toBe(BLOCKED);
+    expect(result.stderr).toContain('2 tests failed');
+    expect(runs(dir, 'gate:quick')).toBe(1);
+  });
+
+  test("BUG-36: from apps/server, a failing gate after one request to continue is written down in the repository's .claude/state/gate-failed, not the subfolder's (review loop 2, test-auditor)", () => {
+    const dir = branchRepo(
+      { 'gate:quick': FAILS },
+      inSubfolder(fakeScripts({ 'gate:quick': FAILS })),
+    );
+    const sub = path.join(dir, SUBFOLDER);
+
+    const result = stopFrom({ folder: sub, project: dir, input: { stop_hook_active: true } });
+
+    expect(result.status, result.stderr).toBe(ALLOWED);
+    expect(runs(dir, 'gate:quick')).toBe(1);
+    const note = path.join(dir, '.claude', 'state', 'gate-failed');
+    expect(filesNamed(dir, 'gate-failed'), 'where the stop gate wrote the failure down').toEqual([
+      note,
+    ]);
+    expect(readFileSync(note, 'utf8')).toContain('gate:quick failed');
+  });
+});

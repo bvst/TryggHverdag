@@ -353,6 +353,41 @@ describe('BUG-36, review loop 1: an empty agent_id is still a subagent (D-120)',
   });
 });
 
+// BUG-36, review loop 2, test-auditor: D-120 says the global guards ignore
+// case in the main session's exemption for the phase file too, and no test
+// held it. Pass today, on purpose: a guard whose exemption kept exact case
+// would refuse the main session's own phase step on the owner's Mac, where
+// .Claude/State/Phase is the phase file.
+const LOOP2_CASE_PHASE = ['.Claude/State/Phase', '.CLAUDE/STATE/PHASE'];
+
+describe("BUG-36, review loop 2: the global guard-paths ignores case in the main session's exemption too (D-120)", () => {
+  test.each(LOOP2_CASE_PHASE)(
+    'BUG-36: an Edit and a Write of %s — main session allowed, subagent refused, naming D-120 (review loop 2, test-auditor)',
+    (file) => {
+      for (const make of [edit, writeOf]) {
+        const call = make(`/repo/${file}`, 'red:BUG-1\n');
+        const args = ['--global', ...d120];
+        const asMain = runHook('guard-paths.mjs', { args, input: call, cwd: '/repo' });
+        const asSubagent = runHook('guard-paths.mjs', {
+          args,
+          input: bySubagent(call),
+          cwd: '/repo',
+        });
+
+        expect(
+          {
+            tool: call.tool_name,
+            file,
+            main: d120VerdictOf(asMain),
+            subagent: d120VerdictOf(asSubagent),
+          },
+          `main session said: ${asMain.stderr}`,
+        ).toEqual({ tool: call.tool_name, file, main: 'allowed', subagent: 'refused' });
+      }
+    },
+  );
+});
+
 describe('HK-02: tools that do not touch a file', () => {
   test('pass straight through', () => {
     const result = runHook('guard-paths.mjs', {
