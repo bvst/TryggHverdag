@@ -4422,10 +4422,14 @@ any other path is work, not a candidate for the same treatment.
     the same output with it.
   - **And:** the stand-down condition, which both hooks carried word for word,
     is now `inReviewJob()` in `.claude/hooks/lib.mjs`, tested on its own.
-  - **Known limit, added:** a `.gitattributes` with a `text` attribute (such
-    as `* text=auto`) would still normalise line endings out of the diff,
-    whatever `core.autocrlf` says. The repository has no `.gitattributes`; if
-    one is added, the fingerprint should hash the changed tracked files'
-    contents as well.
+  - **Known limit, added:** a `text` or `eol` attribute (such as
+    `* text=auto`) would still normalise line endings out of the diff,
+    whatever `core.autocrlf` says, from any of git's attribute sources: a
+    `.gitattributes` in the repository, a machine's own `.git/info/attributes`,
+    or a global `core.attributesFile` (found by CI's `code-reviewer` on this
+    amendment's pull request). The repository has no `.gitattributes`, and the
+    other two are local to one machine, where CI's required checks still run
+    every gate. If one is added, the fingerprint should hash the changed
+    tracked files' contents as well.
   - #68 merged before this was pushed; it ships in its own pull request
     (BUG-31's review loop 2).
