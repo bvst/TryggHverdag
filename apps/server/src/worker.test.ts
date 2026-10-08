@@ -562,6 +562,47 @@ function heldRunner() {
 // exit with 0.
 const STOP_SIGNALS = ['SIGTERM', 'SIGINT'] as const;
 
+/**
+ * BUG-32, review loop 1 (safety-reviewer, CI's blocking review of 33e27ac,
+ * should-fix): how long a stop signal that came during the start waits for
+ * the start to return, in ms, counted from the signal. The fix made the stop
+ * wait for the start with no limit, and a start that never returns (a
+ * database that accepts the connection and never answers) then held the
+ * SIGTERM in silence: the real worker was still running 15 s after it, and
+ * had written nothing after its four start-up lines. Before the fix the
+ * signal ended it at once.
+ *
+ * Why 10 s: the real worker's first connection came about 0.6 s after its
+ * start in BUG-32's reproduction (docs/progress/m2.md). Ten times that leaves
+ * a healthy start room, and ends a stuck one, loudly, well inside a
+ * platform's usual stop grace. The repository records no Clever Cloud stop
+ * timeout to take instead: neither docs/plan nor infra/ names one.
+ */
+const START_LIMIT_MS = 10_000;
+
+/**
+ * BUG-32, review loop 1: the line a stop signal during the start writes at
+ * once, so that whoever asked for the stop, often because the worker looks
+ * stuck, sees in the log that it arrived and what it waits for. Its words are
+ * the fix's to choose; what it must say is held here: a worker line, that a
+ * stop signal came, and that it came during the start.
+ */
+const saysSignalDuringStart = (line: string) =>
+  /^worker\b/.test(line) && /\bstop signal\b/i.test(line) && /\bstart/i.test(line);
+
+/**
+ * BUG-32, review loop 1: the line written when START_LIMIT_MS have passed
+ * since the stop signal and the start has still not returned. It says so,
+ * that it was the stop signal's wait, and names the limit in ms, as the
+ * worker's other lines name theirs ("runs again in 10000 ms").
+ */
+const saysStartNeverReturned = (line: string) =>
+  /^worker\b/.test(line) &&
+  /\bstop signal\b/i.test(line) &&
+  /\bstart/i.test(line) &&
+  /\b(?:not|never) return/i.test(line) &&
+  new RegExp(`\\b${String(START_LIMIT_MS)} ?ms\\b`).test(line);
+
 describe('runWorkerProcess, when the stop signal comes while the runner is starting', () => {
   test.each(STOP_SIGNALS)(
     'BUG-32: a %s sent while the runner is still starting is not lost: once started, it stops the runner, ends the pool, and exits with 0',
@@ -673,6 +714,274 @@ describe('runWorkerProcess, when the stop signal comes while the runner is start
     await expect(running).rejects.toThrow('could not connect');
     await settle();
     expect(exits).not.toContain(0);
+  });
+
+  // BUG-32, review loop 1 (safety-reviewer, CI's blocking review of 33e27ac,
+  // should-fix): the fix made a stop signal during the start wait for the
+  // start, and say nothing while it waits. Against a database that accepts
+  // the connection and never answers, the real worker was still running 15 s
+  // after SIGTERM, with nothing written after its four start-up lines. A stop
+  // the owner asks for, often because the worker looks stuck, must show in
+  // the log the moment it arrives.
+  test.each(STOP_SIGNALS)(
+    'BUG-32: a %s during the start is said at once, in one line, before the start has returned',
+    async (signal) => {
+      const runner = heldRunner();
+      const signals = new EventEmitter();
+      const written: string[] = [];
+      const exits: number[] = [];
+
+      const running = runWorkerProcess('postgres://example/db', {
+        runWorker: runner.run,
+        signals,
+        write: (text) => {
+          written.push(text);
+        },
+        exit: (code) => {
+          exits.push(code);
+        },
+        // Quiet loops, as the other runWorkerProcess tests have: this test is
+        // about the signal, not the loops.
+        ...quietLoops(),
+      });
+      await settle();
+      expect(runner.starting()).toBe(true);
+      signals.emit(signal);
+      await settle();
+
+      // At once: the start has not returned, nothing has stopped, no exit,
+      // and the line is there.
+      expect(runner.events).toEqual([]);
+      expect(exits).toEqual([]);
+      expect(
+        linesOf(written).filter(saysSignalDuringStart),
+        `nothing says the ${signal} arrived while the worker was starting`,
+      ).toHaveLength(1);
+
+      // Once the start returns, the stop runs as before, and the line is not
+      // said again.
+      runner.release();
+      await expect(running).resolves.toBeUndefined();
+      await settle();
+      expect(runner.events).toEqual(['runner stopped', 'pool ended']);
+      expect(exits).toEqual([0]);
+      expect(linesOf(written).filter(saysSignalDuringStart)).toHaveLength(1);
+    },
+  );
+
+  test('BUG-32: a stop signal after the start has returned does not write the during-the-start line', async () => {
+    // Passes before the fix, on purpose: there, no such line exists. It
+    // guards the fix's shape: the line says the worker is still starting, and
+    // once the start has returned that is false, a line that would send
+    // whoever reads the log after a hang that never happened.
+    const runner = heldRunner();
+    const signals = new EventEmitter();
+    const written: string[] = [];
+    const exits: number[] = [];
+
+    const running = runWorkerProcess('postgres://example/db', {
+      runWorker: runner.run,
+      signals,
+      write: (text) => {
+        written.push(text);
+      },
+      exit: (code) => {
+        exits.push(code);
+      },
+      // Quiet loops, as the other runWorkerProcess tests have: this test is
+      // about the signal, not the loops.
+      ...quietLoops(),
+    });
+    await settle();
+    runner.release();
+    await settle();
+    signals.emit('SIGTERM');
+
+    await expect(running).resolves.toBeUndefined();
+    await settle();
+    expect(exits).toEqual([0]);
+    expect(linesOf(written).filter(saysSignalDuringStart)).toEqual([]);
+  });
+
+  test('BUG-32: a stop signal during a start that never returns ends the worker 10 000 ms after the signal: one line says the start had not returned, then it exits with 1', async () => {
+    // BUG-32, review loop 1 (safety-reviewer): the stop waited for the start
+    // with no limit, so a start that never returns held the signal until the
+    // platform killed the process. Now the wait has a limit, counted from the
+    // signal, and running out of it is a failure: said, and an exit with 1,
+    // so the platform restarts the worker and the log says why.
+    //
+    // Only setTimeout and clearTimeout are faked, as in the loops' tests:
+    // settle() still turns on the real setImmediate. So the limit is held as
+    // measured on the global setTimeout; a timer from node:timers/promises
+    // would not be faked, and this test would wait for it in vain.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const runner = heldRunner();
+      const signals = new EventEmitter();
+      const output: string[] = [];
+      const exits: number[] = [];
+
+      void runWorkerProcess('postgres://example/db', {
+        runWorker: runner.run,
+        signals,
+        write: (text) => {
+          output.push(text);
+        },
+        exit: (code) => {
+          exits.push(code);
+          output.push(`exit ${String(code)}\n`);
+        },
+        // Quiet loops, as the other runWorkerProcess tests have: a start that
+        // never returns starts none, and this test is not about them.
+        ...quietLoops(),
+      });
+      await settle();
+      expect(runner.starting()).toBe(true);
+      // The start has hung a while before the stop comes: the limit counts
+      // from the signal, not from the start.
+      await vi.advanceTimersByTimeAsync(START_LIMIT_MS / 2);
+      signals.emit('SIGTERM');
+      await settle();
+
+      // Just under the limit: still waiting for the start, as a slow start
+      // deserves.
+      await vi.advanceTimersByTimeAsync(START_LIMIT_MS - 1);
+      await settle();
+      expect(exits, 'the worker gave up on its start before the limit').toEqual([]);
+      expect(linesOf(output).filter(saysStartNeverReturned)).toEqual([]);
+
+      const linesBefore = linesOf(output).length;
+      await vi.advanceTimersByTimeAsync(1);
+      await settle();
+      expect(
+        exits,
+        `still waiting for the start ${String(START_LIMIT_MS)} ms after the stop signal`,
+      ).toEqual([1]);
+      const linesAtLimit = linesOf(output).slice(linesBefore);
+      expect(
+        linesAtLimit.filter(saysStartNeverReturned),
+        'no one line says the start had not returned within the limit after the stop signal',
+      ).toHaveLength(1);
+      // Said before the exit, so a log that ends at the exit holds it.
+      expect(linesAtLimit.at(-1)).toBe('exit 1');
+      // The runner never started, so there was nothing to stop.
+      expect(runner.events).toEqual([]);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  test('BUG-32: a start that returns within the limit still stops cleanly with 0, and the limit never fires after it', async () => {
+    // Passes before the fix, on purpose: there is no limit yet. It guards the
+    // limit's shape: a limit whose timer writes and exits by itself, left
+    // running once the start has returned, would, 10 000 ms after the signal,
+    // write that the start had not returned and exit with 1 after a clean
+    // stop had exited with 0. The start here is slow, 1 s inside the limit,
+    // so such a timer would still be due.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const runner = heldRunner();
+      const signals = new EventEmitter();
+      const written: string[] = [];
+      const exits: number[] = [];
+
+      const running = runWorkerProcess('postgres://example/db', {
+        runWorker: runner.run,
+        signals,
+        write: (text) => {
+          written.push(text);
+        },
+        exit: (code) => {
+          exits.push(code);
+        },
+        // Quiet loops, as the other runWorkerProcess tests have: this test is
+        // about the signal and the limit, not the loops.
+        ...quietLoops(),
+      });
+      await settle();
+      signals.emit('SIGTERM');
+      await settle();
+      await vi.advanceTimersByTimeAsync(START_LIMIT_MS - SECOND);
+      runner.release();
+
+      await expect(running).resolves.toBeUndefined();
+      await settle();
+      expect(runner.events).toEqual(['runner stopped', 'pool ended']);
+      expect(exits).toEqual([0]);
+
+      const linesAtExit = linesOf(written).length;
+      await vi.advanceTimersByTimeAsync(2 * START_LIMIT_MS);
+      await settle();
+      expect(exits).toEqual([0]);
+      expect(linesOf(written).slice(linesAtExit), 'written after the exit with 0').toEqual([]);
+      expect(linesOf(written).filter(saysStartNeverReturned)).toEqual([]);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  test('BUG-32: with a stop signal during the start, the stop still waits for the limits read-back: it reaches the database and is answered before the pool ends (D-109)', async () => {
+    // BUG-32, review loop 1 (test-auditor, fault M12). Passes today, on
+    // purpose: a guard. D-109 says the stop waits for the read-back, and on
+    // this path that holds only by the order of two awaits of one promise:
+    // runWorkerProcess's `await started` was registered before the stop's, so
+    // its continuation starts the read-back first. Started one macrotask
+    // later, the stop begins first, finds no read-back to wait for, and ends
+    // the pool; the read-back then never reaches the database. Shown failing
+    // under that fault, applied in memory only (BUG-32 review loop 1's
+    // handoff).
+    //
+    // The read-back's answer is held, as in LOST-02-AC17's test above, so the
+    // stop is seen waiting for a read-back in flight, not merely after one.
+    const database = await listeningFakePostgres(
+      (query) => pgSettingsAnswer(query, IDLE_AS_ASKED) ?? quietDatabase(query),
+    );
+    const read = database.holdAnswer(/\bpg_settings\b/);
+    const runner = heldRunner();
+    const signals = new EventEmitter();
+    const running = runWorkerProcess(database.url, {
+      runWorker: runner.run,
+      signals,
+      ...quietLoops(),
+      write: (text) => {
+        if (/\bsession limits?\b/.test(text)) {
+          runner.events.push(text.trim());
+        }
+      },
+      exit: (code) => {
+        runner.events.push(`exit ${String(code)}`);
+      },
+    });
+    try {
+      await settle();
+      expect(runner.starting()).toBe(true);
+      signals.emit('SIGTERM');
+      await settle();
+      runner.release();
+
+      expect(
+        await eventually(() => read.arrived()),
+        'the limits read-back never reached the database: the stop ended the pool before it',
+      ).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Still waiting for the read-back: no line, the pool open, no exit.
+      expect(runner.events.filter((event) => event !== 'runner stopped')).toEqual([]);
+      read.release();
+      expect(await eventually(() => runner.events.includes('exit 0'))).toBe(true);
+      await running;
+
+      expect(runner.events).toContain('runner stopped');
+      expect(runner.events.filter((event) => event !== 'runner stopped')).toEqual([
+        'worker: session limit in force: idle_in_transaction_session_timeout=10000ms',
+        'pool ended',
+        'exit 0',
+      ]);
+    } finally {
+      read.release();
+      await database.close();
+    }
   });
 });
 
