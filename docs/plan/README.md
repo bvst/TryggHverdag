@@ -31,10 +31,8 @@ BUG-22 (the test-weakening check does not see the shared behaviour suites),
 BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an advisory),
 BUG-26 (a lint run during a mutation run fails on Stryker's sandbox) and
 BUG-27 (whether the worker's session limits are in force on a deploy is seen
-only by chance), BUG-28 (no test holds two journeys past the watchdog's
-stuck threshold, so a waiting loop that stops early goes unseen) and BUG-30
-(CI's AI review step sometimes ends with no verdict, turning a passed review
-red; a fix to `ai-review.yml`, merged by hand).
+only by chance) and BUG-28 (no test holds two journeys past the watchdog's
+stuck threshold, so a waiting loop that stops early goes unseen).
 M1 closed with all four roadmap items done:
 SPIKE-01 (S1–S8), Section 4 closed with a conditional GO for the location SDK
 (D-086, full results in [04b-spike-results.md](04b-spike-results.md)), and the
