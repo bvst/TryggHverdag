@@ -4496,9 +4496,12 @@ any other path is work, not a candidate for the same treatment.
     `.claude/state/`), and a program that writes the file itself
     (`node -e`, a script). Neither is a flag on a nested `claude` call
     (`--settings`) nor the user's own `~/.claude/settings.json`, which can
-    also set `disableAllHooks`. The guard stops a slip, not a determined
-    session; CI's required checks never go through these hooks and stay the
-    gate (D-042).
+    also set `disableAllHooks`. Paths are judged from the repository
+    (`CLAUDE_PROJECT_DIR`, which Claude Code sets for every hook), so a
+    session in a subfolder does not dodge the rules; were the variable unset,
+    the session's folder would stand in for it, as before. The guard stops a
+    slip, not a determined session; CI's required checks never go through
+    these hooks and stay the gate (D-042).
 
 ## D-121 — CI's reviewers keep running as subagents of a wrapper session, not as `claude --agent` (BUG-30 and BUG-31's follow-up)
 - **Date:** 2026-10-08 · **Status:** Accepted (delegated, D-031; the owner
