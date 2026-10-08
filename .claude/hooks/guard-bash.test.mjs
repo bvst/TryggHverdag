@@ -352,6 +352,128 @@ describe('BUG-36: the global guard-bash judges a path from the repository, not f
   );
 });
 
+// BUG-36 (D-120): guard-bash splits a command on whitespace, quotes and `=`,
+// so a redirect with no space after `>` leaves a token such as
+// `>.claude/state/gate-passed`, which no deny glob matches, and every write
+// below got through, for a subagent too. A write by redirect is judged on its
+// target, with or without a space; redirectTargets already finds that target
+// for --readonly. `2>&1` and /dev/null name no path D-120 protects, so a
+// command that only reads a protected file keeps them.
+const D120_NO_SPACE_REFUSED = [
+  'printf x >.claude/state/gate-passed',
+  `echo '{"disableAllHooks": true}' >.claude/settings.local.json`,
+  'printf x>>.claude/state/gate-passed',
+  'printf x>.claude/state/gate-passed',
+  'printf x 1>.claude/state/gate-passed',
+  'pnpm run gate:quick 2>.claude/state/gate-failed',
+  'printf x &>.claude/state/gate-passed',
+  // The exemption is for the path it names here too: phase is fine,
+  // gate-passed in the same command is not.
+  "printf 'red:BUG-1\\n' >.claude/state/phase && printf x >.claude/state/gate-passed",
+];
+const D120_NO_SPACE_MAIN_SESSION_ONLY = [
+  "printf 'red:BUG-1\\n' >.claude/state/phase",
+  "printf 'red:BUG-1\\n'>.claude/state/phase",
+];
+const D120_NO_PROTECTED_TARGET = [
+  'cat .claude/state/phase 2>&1',
+  'cat .claude/settings.local.json 2>/dev/null',
+  'grep -c x .claude/state/gate-passed >/dev/null',
+  'grep -c x .claude/state/gate-passed >/dev/null 2>&1',
+  'printf x >notes.md',
+];
+
+/** guard-bash with D-120's arguments from the repository, for the main session and a subagent. */
+const d120VerdictsOf = (command) => {
+  const call = bash(command);
+  const main = runHook('guard-bash.mjs', { args: D120_ARGS, input: call });
+  const subagent = runHook('guard-bash.mjs', {
+    args: D120_ARGS,
+    input: { ...call, agent_id: 'synthetic-subagent-1', agent_type: 'implementer' },
+  });
+  return { command, main: d120VerdictOf(main), subagent: d120VerdictOf(subagent) };
+};
+
+describe('BUG-36: the global guard-bash judges a redirect with no space by its target (D-120)', () => {
+  // Fails today: every row is allowed, for the main session and a subagent.
+  test.each(D120_NO_SPACE_REFUSED)(
+    'BUG-36: a redirect with no space is refused for the main session and a subagent, naming D-120: %s',
+    (command) => {
+      expect(d120VerdictsOf(command)).toEqual({ command, main: 'refused', subagent: 'refused' });
+    },
+  );
+
+  // Fails today on the subagent, which is allowed.
+  test.each(D120_NO_SPACE_MAIN_SESSION_ONLY)(
+    'BUG-36: a redirect with no space into phase is allowed for the main session, refused for a subagent: %s',
+    (command) => {
+      expect(d120VerdictsOf(command)).toEqual({ command, main: 'allowed', subagent: 'refused' });
+    },
+  );
+
+  // Passes today, on purpose: it holds that judging a redirect by its target
+  // does not make a file descriptor, /dev/null or an unprotected file one.
+  test.each(D120_NO_PROTECTED_TARGET)(
+    'BUG-36: allowed for both, because no redirect targets a path D-120 protects: %s',
+    (command) => {
+      expect(d120VerdictsOf(command)).toEqual({ command, main: 'allowed', subagent: 'allowed' });
+    },
+  );
+});
+
+// BUG-36 (RG-03): the role guards run the same deny-write loop, so the same
+// gap. implementer's `packages/test-kit/**` matches no token that starts with
+// `>`. `**/*.test.ts` refuses `>a.test.ts` only because its `*` takes the `>`
+// in, and then names `>a.test.ts`, not the file the shell would write.
+const IMPLEMENTER_ARGS = [
+  '--agent',
+  'implementer',
+  '--deny-write-glob',
+  '**/*.test.ts',
+  '--deny-write-glob',
+  'packages/test-kit/**',
+];
+const ROLE_NO_SPACE_TEST_FILE = ['echo x >a.test.ts', 'echo x>>a.test.ts'];
+const ROLE_READS_WITH_REDIRECTS = [
+  'grep -r "toBe(5)" apps/server/src/journey.test.ts 2>&1',
+  'grep -r "toBe(5)" apps/server/src/journey.test.ts >/dev/null',
+];
+
+describe('BUG-36: a role guard judges a redirect with no space by its target (RG-03)', () => {
+  // Fails today: allowed.
+  test('BUG-36: blocks writing over a file in the test kit by a redirect with no space', () => {
+    const result = guard(
+      'echo "export const x = 1" >packages/test-kit/src/fake.ts',
+      IMPLEMENTER_ARGS,
+    );
+
+    expect(result.status, `the guard said: ${result.stderr}`).toBe(BLOCKED);
+    expect(result.stderr).toContain('RG-03');
+    expect(result.stderr).toContain('packages/test-kit/src/fake.ts');
+  });
+
+  // Fails today on the path the refusal names: `>a.test.ts` and `x>>a.test.ts`.
+  test.each(ROLE_NO_SPACE_TEST_FILE)(
+    'BUG-36: blocks a redirect with no space into a test file, naming the file the shell would write: %s',
+    (command) => {
+      const result = guard(command, IMPLEMENTER_ARGS);
+
+      expect(result.status).toBe(BLOCKED);
+      expect(result.stderr).toContain('RG-03');
+      expect(result.stderr).toContain('a.test.ts');
+      expect(result.stderr).not.toContain('>a.test.ts');
+    },
+  );
+
+  // Passes today, on purpose: `2>&1` and /dev/null are not writes to a test.
+  test.each(ROLE_READS_WITH_REDIRECTS)(
+    'BUG-36: allows a command that only reads a test file, whatever it does with its output: %s',
+    (command) => {
+      expect(guard(command, IMPLEMENTER_ARGS).status).toBe(ALLOWED);
+    },
+  );
+});
+
 describe('HK-03: an empty command', () => {
   test('passes through', () => {
     const result = runHook('guard-bash.mjs', { args: ['--global'], input: bash('') });

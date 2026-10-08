@@ -288,6 +288,48 @@ describe('BUG-36: the Bash hooks in settings.json hold D-120', () => {
   );
 });
 
+// A redirect with no space after `>` writes to its target all the same. The
+// guard split the command on whitespace, so it saw `>.claude/state/gate-passed`,
+// which no deny glob matches, and let the write through for everyone.
+const NO_SPACE_COMMANDS = [
+  'printf x >.claude/state/gate-passed',
+  `echo '{"disableAllHooks": true}' >.claude/settings.local.json`,
+  'printf x>>.claude/state/gate-passed',
+];
+const NO_SPACE_PHASE_COMMANDS = ["printf 'red:BUG-1\\n' >.claude/state/phase"];
+
+describe('BUG-36: the Bash hooks in settings.json judge a redirect with no space by its target', () => {
+  test.each(NO_SPACE_COMMANDS)(
+    'BUG-36: a redirect with no space is refused for the main session and a subagent, naming D-120: %s',
+    (command) => {
+      for (const { who, as } of CALLERS) {
+        const runs = runDeclared(as(bashOf(command)));
+
+        expect(refusal(runs), `by ${who}; the hooks answered:\n${said(runs)}`).toBeDefined();
+      }
+    },
+  );
+
+  test.each(NO_SPACE_PHASE_COMMANDS)(
+    'BUG-36: a redirect with no space into phase is refused for a subagent, naming D-120: %s',
+    (command) => {
+      const runs = runDeclared(bySubagent(bashOf(command)));
+
+      expect(refusal(runs), `the hooks answered:\n${said(runs)}`).toBeDefined();
+    },
+  );
+
+  // Passes today, on purpose: the main session keeps its phase step.
+  test.each(NO_SPACE_PHASE_COMMANDS)(
+    'BUG-36: a redirect with no space into phase is allowed for the main session: %s',
+    (command) => {
+      const runs = runDeclared(bashOf(command));
+
+      expect(allPass(runs), `the hooks answered:\n${said(runs)}`).toBe(true);
+    },
+  );
+});
+
 // ---------------------------------------------------------------------------
 // From a subfolder
 // ---------------------------------------------------------------------------
@@ -438,6 +480,11 @@ describe('BUG-36: from a subfolder, the Bash hooks in settings.json still hold D
  * .claude/state/phase, as a session's folder does, so a glob left unquoted in
  * settings.json is expanded by the shell here too, rather than reaching the
  * guard as written.
+ *
+ * The stand-in reads no input, so it gets none: stdin is /dev/null. Sending
+ * it the hook's JSON raced the stand-in's exit, and when the stand-in won,
+ * spawnSync threw EPIPE (RG-06). What the shell hands to node does not
+ * depend on stdin.
  */
 function argvOf(command) {
   const dir = mkdtempSync(path.join(tmpdir(), 'bug-36-argv-'));
@@ -452,7 +499,7 @@ function argvOf(command) {
   const run = spawnSync('sh', ['-c', command], {
     cwd: folder,
     env: hookEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` }),
-    input: '{}',
+    stdio: ['ignore', 'pipe', 'pipe'],
     encoding: 'utf8',
     timeout: 10_000,
   });
