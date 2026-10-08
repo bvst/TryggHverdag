@@ -1,3 +1,4 @@
+- [Notes before the memory folders](reference_notes_before_memory_folders.md) — the older notes file Claude Code never loaded, moved here unchanged (BUG-38); recurring patterns and how to verify things here; check a note against the current code first
 - [Tooling scripts review](tooling_scripts_review.md) — checklist for scripts/ PRs shelling out to gh/git/ssh: no raw output, no shell, timeouts
 - [Mobile release review](mobile_release_review.md) — verify merged Android manifest, OTA, dev client, Expo/Maestro telemetry switches, audit baseline
 - [Device harness review](device_harness_review.md) — spikes/drivers: argv in execFile errors leaks positions; Firebase hosts vs platform; FIS attribution; results prose drifting from code

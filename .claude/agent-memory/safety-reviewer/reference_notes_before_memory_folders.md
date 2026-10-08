@@ -1,3 +1,10 @@
+---
+name: notes-before-memory-folders
+description: The notes safety-reviewer kept in .claude/agent-memory/safety-reviewer.md, which Claude Code never loaded; moved here unchanged on 2026-10-08 (BUG-38). Recurring patterns and how to verify things in this repository; check a note against the current code before relying on it
+metadata:
+  type: reference
+---
+
 # safety-reviewer — notes
 
 Recurring problems, so the next review starts where the last one ended.

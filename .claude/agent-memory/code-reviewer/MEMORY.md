@@ -1,3 +1,4 @@
+- [Notes before the memory folders](reference_notes_before_memory_folders.md) — the older notes file Claude Code never loaded, moved here unchanged (BUG-38); recurring patterns and how to verify things here; check a note against the current code first
 - [Doctor false-green review angle](project_doctor_false_green.md) — scripts/doctor.mjs: look for OK branches that are inferred, and for exec calls that can hang
 - [Spawned-process tests](project_spawned_process_tests.md) — bin.test.ts style: flag fixed sleeps from spawn and kills outside finally (BUG-5)
 - [gate:file is silent on success](reference_gate_file_silent_success.md) — check its exit code; no GNU `timeout`; guard blocks any `>` (`=>`, `2>/dev/null`, python `>`), merge-base, zip/tee, a python var named `mv`

@@ -1,3 +1,4 @@
+- [Notes before the memory folders](reference_notes_before_memory_folders.md) — the older notes file Claude Code never loaded, moved here unchanged (BUG-38); recurring patterns and how to verify things here; check a note against the current code first
 - [In-memory mutation](reference_in_memory_mutation.md) — Vite plugin in startVitest; `--import` register file reaches spawned children; guard blocks `=>`
 - [gate:integrity locally](project_gate_integrity_local.md) — 3/5 locally; use `gh api .../rules/branches/main`; repo visibility changes (public 2026-10-01)
 - [Promised future tests](feedback_promised_future_tests.md) — "Mx will test X" needs a tracked ID or decision to land on; design-only promises escape RG-01
