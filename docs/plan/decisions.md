@@ -4417,9 +4417,10 @@ any other path is work, not a candidate for the same treatment.
     gate's tools read the raw bytes (Prettier wants LF), so they could fail
     where the skip said pass. Reproduced in a scratch repository: 0 bytes of
     diff, and 108 with `-c core.autocrlf=false`.
-  - **The fix:** every git call the fingerprint makes runs with
-    `-c core.autocrlf=false`. `ls-files` and `hash-object --no-filters` give
-    the same output with it.
+  - **The fix:** every git call the stop gate makes — the early check for any
+    change, and the fingerprint — runs with `-c core.autocrlf=false` (the early
+    check found by CI's `test-auditor` on #70). `ls-files` and
+    `hash-object --no-filters` give the same output with it.
   - **And:** the stand-down condition, which both hooks carried word for word,
     is now `inReviewJob()` in `.claude/hooks/lib.mjs`, tested on its own.
   - **Known limit, added:** a `text` or `eol` attribute (such as

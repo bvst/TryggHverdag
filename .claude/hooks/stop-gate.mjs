@@ -13,7 +13,9 @@ const input = await readInput();
 if (inReviewJob()) process.exit(0);
 
 const cwd = input.cwd || process.cwd();
-const git = (...a) => spawnSync('git', a, { cwd, encoding: 'utf8' });
+// The gate's tools read the raw bytes, so this check must too: no CRLF normalising.
+const git = (...a) =>
+  spawnSync('git', ['-c', 'core.autocrlf=false', ...a], { cwd, encoding: 'utf8' });
 
 // --no-renames: a moved file counts under the path it left too, so code moved
 // to docs/ still runs the gate (BUG-7).
