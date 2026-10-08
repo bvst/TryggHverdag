@@ -442,3 +442,51 @@ describe('BUG-31: the stop gate stands down in a CI review job (D-119)', () => {
     expect(result.stderr).toContain('2 tests failed');
   });
 });
+
+// BUG-31, part 3 (D-119): ai-review.yml sets TRYGGHVERDAG_REVIEW_JOB=1 on the
+// whole review step, so every command a CI reviewer runs inherits it, together
+// with GITHUB_ACTIONS=true. A reviewer that runs these tests there
+// (`pnpm run test:hooks`, `test:unit`) must see the same results as anywhere
+// else: if runHook passed the two variables on, the hook would stand down and
+// every test above that expects a refusal or a gate run would fail — a false
+// finding put in front of a blocking reviewer. The tests that want the
+// stand-down build their own environment (stopIn); runHook must not hand it to
+// the rest.
+
+/**
+ * Runs `run` with this process's environment as a CI review job has it, then
+ * puts both variables back exactly as they were — deleted if they were absent,
+ * because assigning `undefined` to process.env stores the string "undefined".
+ */
+function asInAReviewJob(run) {
+  const before = Object.fromEntries(
+    Object.keys(REVIEW_JOB).map((name) => [name, process.env[name]]),
+  );
+  Object.assign(process.env, REVIEW_JOB);
+  try {
+    return run();
+  } finally {
+    for (const [name, value] of Object.entries(before)) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  }
+}
+
+describe("BUG-31: the hook tests do not inherit a CI review job's stand-down (D-119)", () => {
+  test("BUG-31: the hook tests do not inherit a CI review job's stand-down: with the review job's variables in the test's own environment, a failing gate:quick with code changed is still run and refused", () => {
+    const dir = repoWith(
+      { 'gate:quick': FAILS },
+      { 'apps/server/src/api.ts': 'export const a = 1;' },
+    );
+
+    const result = asInAReviewJob(() => stop(dir));
+
+    expect(result.status).toBe(BLOCKED);
+    expect(ranLog(dir)).toContain('gate:quick');
+    expect(result.stderr).toContain('2 tests failed');
+  });
+});
