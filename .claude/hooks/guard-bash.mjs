@@ -61,17 +61,30 @@ const GLOBAL = [
 function redirectTargets(c) {
   const out = [];
   // BUG-36 review loop 1: a target ends where the shell ends the word, at `<`
-  // and a backtick too.
-  const re = /(\d?)>>?\s*(&?)\s*([^\s;&|)<`]*)/g;
+  // and a backtick too. m[4] is the backtick the target stops at, if any.
+  const re = /(\d?)>>?\s*(&?)\s*([^\s;&|)<`]*)(`?)/g;
   let m;
   while ((m = re.exec(c))) {
+    // BUG-36 review loop 1: quotes are the shell's, not the file's name, so a
+    // refusal names the file (`> .claude/state/x"` in a quoted message).
+    // BUG-36 review loop 3 (test-auditor): stripped before the descriptor
+    // test too, so the closing quote of bash -c "… 2>&1" does not turn
+    // descriptor 1 into a file named `1"`.
+    const target = m[3].replaceAll(/["']/g, '');
     // BUG-36 review loop 2 (privacy-security-reviewer, test-auditor): `>&`
     // only copies or closes a file descriptor when a number or `-` follows
     // (2>&1, >&2, 1>&-); followed by anything else, bash writes that file.
-    if (m[2] === '&' && /^(\d+|-)$/.test(m[3])) continue;
-    // BUG-36 review loop 1: quotes are the shell's, not the file's name, so a
-    // refusal names the file (`> .claude/state/x"` in a quoted message).
-    const target = m[3].replaceAll(/["']/g, '');
+    if (m[2] === '&' && /^(\d+|-)$/.test(target)) continue;
+    // BUG-36 review loop 3 (privacy-security-reviewer): a target that starts
+    // with a backtick, quoted or not, is a command substitution, and bash
+    // writes the file it prints. It is still a redirect: --readonly refuses
+    // it and the deny-write check runs, judging the words inside it, which
+    // the tokens split at the backtick. The backtick stands for the target;
+    // no deny glob matches it.
+    if (!target && m[4]) {
+      out.push('`');
+      continue;
+    }
     if (!target || target === '/dev/null') continue;
     out.push(target);
   }

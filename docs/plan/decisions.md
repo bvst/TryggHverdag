@@ -4490,7 +4490,9 @@ any other path is work, not a candidate for the same treatment.
   - **What the shell check sees.** It reads a command as the shell splits it
     (whitespace, quotes and punctuation such as `;`, `&&`, `|`, `(`, `<`, a
     backtick), and refuses a write to a protected path: a redirect, judged by
-    its target with or without a space (`>`, `>>`, `2>`, `&>`, `>&`), or one
+    its target with or without a space (`>`, `>>`, `2>`, `&>`, `>&`; a
+    quoted descriptor such as `2>&1` is not a target, and a redirect into a
+    backtick command is judged by the words inside it), or one
     of the write commands it knows: `rm`, `mv`, `cp`, `truncate`, `tee`,
     `touch`, `mkdir`, `chmod`, `chown`, `sed -i`,
     `git checkout --`/`restore`/`rm`/`mv`, and, for the deny rules only and
