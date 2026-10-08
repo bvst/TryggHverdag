@@ -2,9 +2,22 @@
 // Shell command guard.
 //   --global                    rules for every session and agent
 //   --readonly                  for reviewer agents: no state-changing commands
-//   --deny-write-glob <glob>    block commands that write to matching paths (heuristic)
+//   --deny-write-glob <glob>    block commands that write to matching paths (heuristic);
+//                               with --global, refused in D-120's words
+//   --allow-main-session <glob> exempt from --deny-write-glob when the main session
+//                               asks (no agent_id in the input), never a subagent
 //   --agent <name>              used in messages
-import { readInput, relPath, matchesAny, argList, argValue, hasFlag, block } from './lib.mjs';
+import {
+  readInput,
+  relPath,
+  matchesAny,
+  argList,
+  argValue,
+  hasFlag,
+  isSubagent,
+  d120Refusal,
+  block,
+} from './lib.mjs';
 
 const input = await readInput();
 const cmd = String(input?.tool_input?.command ?? '');
@@ -76,13 +89,18 @@ if (hasFlag('--readonly')) {
 
 const denyGlobs = argList('--deny-write-glob');
 if (denyGlobs.length && (WRITE_OPS.test(cmd) || redirectTargets(cmd).length)) {
+  // Per path, not per command: a command that names an exempt path and a
+  // protected one is still refused.
+  const mainSessionGlobs = isSubagent(input) ? [] : argList('--allow-main-session');
   const tokens = cmd.split(/[\s'"=]+/).filter(Boolean);
   for (const t of tokens) {
     const rel = relPath(t, input.cwd);
-    if (matchesAny(rel, denyGlobs)) {
+    if (matchesAny(rel, denyGlobs) && !matchesAny(rel, mainSessionGlobs)) {
       block(
-        `Blocked for ${agent}: this command appears to change ${rel}, which is protected for this role (RG-03). ` +
-          `Run the command without writing to files, or stop and explain.`,
+        hasFlag('--global')
+          ? d120Refusal(rel)
+          : `Blocked for ${agent}: this command appears to change ${rel}, which is protected for this role (RG-03). ` +
+              `Run the command without writing to files, or stop and explain.`,
       );
     }
   }

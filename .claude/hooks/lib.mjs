@@ -56,6 +56,25 @@ export function hasFlag(name) {
   return process.argv.includes(name);
 }
 
+// D-120: Claude Code puts agent_id in a hook's input only when a subagent made
+// the call (code.claude.com/docs/en/hooks, "Common input fields"), so only its
+// absence marks the main session. Any agent_id at all, even an empty one, is a
+// subagent: the exemption it decides is the main session's alone.
+export function isSubagent(input) {
+  return input?.agent_id !== undefined;
+}
+
+// D-120: what the global guards say when a tool call would change a path they
+// protect. One message for both guards and every such path.
+export function d120Refusal(rel) {
+  return (
+    `Blocked: this would change ${rel}, which D-120 protects. ` +
+    `No tool call changes .claude/settings.local.json: the owner changes it by hand. ` +
+    `The files in .claude/state/ are the hooks' own records, which the hooks write themselves; ` +
+    `the one exception is .claude/state/phase, which only the main session may change, never a subagent.`
+  );
+}
+
 // D-119: a CI review job changes no code, and CI's required checks run the
 // same gates on the same commit, so the gates stand down there. Both variables,
 // so neither another CI job nor a local session can turn a gate off by accident.
