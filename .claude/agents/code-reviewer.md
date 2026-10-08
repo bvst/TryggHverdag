@@ -2,7 +2,8 @@
 name: code-reviewer
 description: "Read-only review of a branch diff for clarity, simplicity and the architecture rules AR-01 to AR-12. Advisory (D-043)."
 tools: Read, Grep, Glob, Bash
-model: inherit
+model: claude-sonnet-5-5
+effort: medium
 skills:
   - architecture-rules
 memory: project

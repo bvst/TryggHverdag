@@ -24,12 +24,16 @@ export function runHook(hook, { args = [], input = {}, cwd = process.cwd() } = {
   // without touching the disk. The hook still gets it as the session folder;
   // the process itself then runs where the test does.
   const spawnIn = existsSync(cwd) ? cwd : process.cwd();
+  // BUG-31 (D-119): the hook tests must not depend on whether they run inside a
+  // CI review job; the tests that want the stand-down build their own env.
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: cwd };
+  delete env.TRYGGHVERDAG_REVIEW_JOB;
   const result = spawnSync(process.execPath, [path.join(HOOKS_DIR, hook), ...args], {
     input: JSON.stringify({ cwd, ...input }),
     encoding: 'utf8',
     cwd: spawnIn,
     timeout: 120_000,
-    env: { ...process.env, CLAUDE_PROJECT_DIR: cwd },
+    env,
   });
   if (result.error) {
     throw result.error;

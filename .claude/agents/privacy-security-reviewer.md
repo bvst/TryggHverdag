@@ -3,6 +3,7 @@ name: privacy-security-reviewer
 description: "Blocking read-only review of changes touching personal data, auth, logging, storage, dependencies or providers, against PRIV and SEC rules (D-043)."
 tools: Read, Grep, Glob, Bash
 model: inherit
+effort: high
 skills:
   - privacy-rules
 memory: project

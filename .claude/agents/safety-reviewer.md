@@ -3,6 +3,7 @@ name: safety-reviewer
 description: "Blocking read-only review of any change to domain, alerts, worker or safety-core code against SM, REL and LOST rules and failure modes F1–F10 (D-043)."
 tools: Read, Grep, Glob, Bash
 model: inherit
+effort: high
 skills:
   - safety-rules
   - architecture-rules

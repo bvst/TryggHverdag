@@ -2,7 +2,7 @@
 name: a11y-i18n-reviewer
 description: "Read-only review of UI changes for accessibility, night use and complete bokmål and English text. Advisory (D-043)."
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: claude-sonnet-5-5
 skills:
   - ui-i18n-a11y
 memory: project

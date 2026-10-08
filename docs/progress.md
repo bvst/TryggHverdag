@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-07 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, nine tasks (D-115 added one), **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 done** ([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`; D-106 to D-109); **LOST-03 done** ([#64](https://github.com/bvst/TryggHverdag/pull/64), `57502b8`; D-110 to D-112), with BUG-23 and BUG-24 in it; **LOST-06 done** ([#66](https://github.com/bvst/TryggHverdag/pull/66), `e695e8a`; D-113, D-114); **LOST-07 in review** (task 6 of 9; D-115, D-116) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-08 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, nine tasks (D-115 added one), **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 done** ([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`; D-106 to D-109); **LOST-03 done** ([#64](https://github.com/bvst/TryggHverdag/pull/64), `57502b8`; D-110 to D-112), with BUG-23 and BUG-24 in it; **LOST-06 done** ([#66](https://github.com/bvst/TryggHverdag/pull/66), `e695e8a`; D-113, D-114); **LOST-07 done** ([#67](https://github.com/bvst/TryggHverdag/pull/67), `1c4bc8b`; D-115, D-116); **BUG-30 and BUG-31 in review** (D-118, D-119) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -54,7 +54,7 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | 3 | LOST-02 | Lost-contact alert: the watchdog, the outbox, a recording push fake | ✅ **Done** — 2026-10-05, [#63](https://github.com/bvst/TryggHverdag/pull/63), merged as `5cd5d24` at 06:50 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `6527e38`. 25 acceptance criteria; D-106, D-107 and D-109 (owner), D-108 (delegated, amended). Session reviews: `test-auditor` blocked the first round, fixed in loop 1; all three blocking reviewers PASS after loops 1 and 2. In CI on `6527e38`: all 16 checks passed, all five AI reviewers PASS; `integration` on PostgreSQL 15; `mutation` every run passed (`watchdog.ts` 87 of 87, `outbox.ts` 37 of 38, `worker.ts` 140 of 146). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37274508925), and `deploy-staging` passed (run 37274508942), with both session-limit lines in force. Record: `progress/m2.md` |
 | 4 | LOST-03 | Back in contact | ✅ **Done** — 2026-10-06, [#64](https://github.com/bvst/TryggHverdag/pull/64), merged as `57502b8` at 17:56 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `53bf338`. 20 acceptance criteria; D-110 and D-111 (owner), D-112 (delegated, amended in three review loops). Session reviews: all four PASS in the first round; the three blocking ones PASS after loops 1, 2 and 3 (the process's limit). In CI on `53bf338`, with BUG-23/24's fix merged in: all 16 checks passed, and the four AI reviewers that review its paths PASS; `integration` on PostgreSQL 15; `mutation` every run passed (`journey.ts` 134 of 135, `service.ts` 122 of 123, `outbox.ts` 37 of 38, `worker.ts` 140 of 146). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37507461460), and `deploy-staging` passed (run 37507461487), with both session-limit lines in force and migration 0004 applied. Record: `progress/m2.md` |
 | 5 | LOST-06 | "I'm on it" | ✅ **Done** — 2026-10-07, [#66](https://github.com/bvst/TryggHverdag/pull/66), merged as `e695e8a` at 08:42 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `5925938`. 17 acceptance criteria; D-113 (owner) with its amendment (the notice is not pushed on a platform until a real-phone test shows it never displaces an undelivered critical alert), D-114 (delegated). Session reviews: all three PASS in the first round; two review loops; `test-auditor` PASS, then a delta audit PASS. In CI on `5925938`: all 16 checks passed, all five AI reviewers PASS; `integration` on PostgreSQL 15, migration 0005 included; `mutation` every run passed (`acknowledgement.ts` 37 of 37, `journey.ts` 176 of 177). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37595559915), and `deploy-staging` passed (run 37595559908); the worker's session-limit line was not in the deploy's log (BUG-27). Record: `progress/m2.md` |
-| 6 | LOST-07 | SMS escalation at 2 minutes | 🟡 **In review** — pull request open from `claude/busy-faraday-40n2zl`. 20 acceptance criteria; D-115 (owner, five answers, each Claude's recommendation), D-116 (delegated) with three review-loop amendments. All three reviewers PASS in the first round; three review loops; `test-auditor` blocked loop 1's head (three safety clauses with no test) and passed loops 2 and 3. One spelling per check: both ping URLs only as `https://hc-ping.com/<uuid>`. `gate:full` at `ef8a8e4` 11 passed, the one failure `gate:integrity`'s API checks; mutation passed inside its budget, the `alerts` group 291 of 291. L3 282 of 282 on a PostgreSQL 16 stand-in; CI's PostgreSQL 15 run is the real one. **A-33 straight after the merge's deploy** (the stricter check reads the worker's existing secret first). Record: `progress/m2.md` |
+| 6 | LOST-07 | SMS escalation at 2 minutes | ✅ **Done** — 2026-10-07, [#67](https://github.com/bvst/TryggHverdag/pull/67), merged as `1c4bc8b` at 19:43 UTC. 20 acceptance criteria; D-115 (owner, five answers, each Claude's recommendation), D-116 (delegated) with three review-loop amendments. All three reviewers PASS in the first round; three review loops; `test-auditor` blocked loop 1's head (three safety clauses with no test) and passed loops 2 and 3. One spelling per check: both ping URLs only as `https://hc-ping.com/<uuid>`. `gate:full` at `ef8a8e4` 11 passed, the one failure `gate:integrity`'s API checks; mutation passed inside its budget, the `alerts` group 291 of 291. L3 282 of 282 on a PostgreSQL 16 stand-in locally. Every check run on `main`'s `1c4bc8b` that ran passed (16 passed, 2 skipped; read through the REST API), `integration`, `mutation` and `deploy` among them. **A-33 is the owner's next step, straight after the merge's `deploy-staging`** (the stricter check reads the worker's existing secret first). Record: `progress/m2.md` |
 | 7 | SM-10 | Removing a responder: resumed escalation and the last-responder warning (D-115) | ⚪ Not started |
 | 8 | LOST-08 | "They're safe" | ⚪ Not started |
 | 9 | REL-10 | The staging canary | ⚪ Not started |
@@ -298,6 +298,10 @@ The things that still bite, and cost a session hours the first time.
   Probe the asset, not the page.
 - **The Bash guard reads `rm -f` beside a `git push` as a force push.** Keep a
   push in a command of its own.
+- **The bash guard (`guard-bash.mjs --global`) reads the whole command.** A
+  `sed` pattern containing `main` in the same command as a `git push` was
+  refused as a push to main, and a pattern containing `.env` (as in
+  `process.env`) as reading an env file. Split such commands.
 - **Writing "close #19" in a pull request's description closes #19 when it
   merges.** GitHub reads close, fix and resolve, in any of their forms, as a
   closing keyword when an issue number follows, even inside advice to the
@@ -318,7 +322,7 @@ The things that still bite, and cost a session hours the first time.
   `.claude/` gaps). M2's narrative is [`progress/m2.md`](progress/m2.md) and
   M1's is [`progress/m1.md`](progress/m1.md), so a bug's next `BUG-<n>` has to
   be looked for in all three files, in this one and in `decisions.md`. The
-  next one is **BUG-30** (BUG-13 to BUG-29 are taken). The last paragraph of
+  next one is **BUG-32** (BUG-13 to BUG-31 are taken). The last paragraph of
   `progress/m1.md` says why.
 - **The write-time sensitive-data hook catches only `+47`/`0047` phone
   numbers, on Write and Edit.** `scan-sensitive.mjs` does not look for 8-digit
@@ -365,14 +369,44 @@ The things that still bite, and cost a session hours the first time.
 - **Run `gate:full` on a quiet machine.** Its mutation step runs the groups
   one after another inside a 25-minute budget. With reviewers running beside
   it, LOST-07's groups overran it; alone, they passed (LOST-07).
+- **Agents can sit for hours on an approval prompt.** Edits to `.claude/**`
+  and `docs/plan/decisions.md` always ask (`settings.json`), and a background
+  agent waiting on one shows no sign of it: no file changes, no processes. On
+  2026-10-07/08 `plan-keeper` and `test-author` each waited over four hours.
+  When an agent goes quiet, ask the owner about pending prompts first.
 
 ## In flight
 
-**LOST-07** (M2 task 6 of 9, SMS escalation) is in review, with its pull
-request open from `claude/busy-faraday-40n2zl` (D-115, D-116). **A-32** is
-done (the owner). **A-33** follows the merge: run it straight after the
-merge's `deploy-staging`, because the stricter ping-URL check reads the
-worker's existing secret before any plan. Next: task 7, SM-10 (D-115). **LOST-06** (task 5,
+**BUG-30 and BUG-31** (the agents' models and thinking levels, and the gates'
+speed; D-118, D-119) are in review, from
+`fix/BUG-30-31-agent-models-and-gate-speed`. All three reviewers passed in the
+first round, and their should-fix findings went into review loop 1. Next, the
+workflow half (D-118's `--model` lines in `ai-review.yml` and
+`daily-status.yml`, and `TRYGGHVERDAG_REVIEW_JOB=1` on the review step only,
+with a test that no other workflow sets it) is its own pull request, merged by
+the owner by hand (D-075), batched with Dependabot's #62. Until it merges,
+CI's reviews still run on Sonnet 5 and the hooks' stand-down does nothing.
+
+Left for later, from BUG-30 and BUG-31's reviews:
+- a guard on `.claude/state/**` and `.claude/settings.local.json` (needs a
+  decision; from `privacy-security-reviewer`);
+- the reviewer briefs still say CI reads the verdict's last line, while CI now
+  reads structured output and checks the comment;
+- four reviewers keep a second, stale memory file
+  (`.claude/agent-memory/<agent>.md`) next to the one Claude Code loads
+  (`<agent>/MEMORY.md`);
+- the skills send agents to `decisions.md`, over 4,000 lines, by D-number,
+  which invites reading all of it;
+- running each CI reviewer directly as its agent (`claude --agent`) instead of
+  through a wrapper session is worth a task of its own (the reviews that end
+  with no structured output).
+
+**LOST-07** (M2 task 6 of 9, SMS escalation) is done
+([#67](https://github.com/bvst/TryggHverdag/pull/67), `1c4bc8b`, 2026-10-07;
+D-115, D-116). **A-32** is done (the owner). **A-33** is the owner's next step:
+run it straight after the merge's `deploy-staging`, because the stricter
+ping-URL check reads the worker's existing secret before any plan. Next: task
+7, SM-10 (D-115). **LOST-06** (task 5,
 "I'm on it") is done ([#66](https://github.com/bvst/TryggHverdag/pull/66),
 `e695e8a`). Before M3 pushes its notice on either platform, a real-phone test
 must show the notice never displaces an undelivered critical alert (D-113's
@@ -384,7 +418,7 @@ amendment). **LOST-03** (task 4, back in contact, and "I'm home") is done
 **LOST-01** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`)
 and **BUG-15** ([#59](https://github.com/bvst/TryggHverdag/pull/59),
 `c46b3b3`) are done too. **A-31** (Dependabot alerts are off) is the owner's.
-LOST-01's to LOST-06's reviews leave items for later tasks, listed in
+LOST-01's to LOST-07's reviews leave items for later tasks, listed in
 `progress/m2.md` ("Left for later tasks").
 
 **For the owner, from CI's `test-auditor` on #60:** should
