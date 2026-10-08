@@ -473,6 +473,53 @@ describe('BUG-31: a change git normalises away is still a change (HK-06, D-119)'
   );
 });
 
+// BUG-31, review loop 3 (D-119): the same blind spot, one question earlier.
+// Before any fingerprint, the hook asks whether any code has changed at all,
+// from `git diff --name-only HEAD`, the untracked files and the diff from the
+// merge base with origin/main. That diff normalises line endings just as the
+// fingerprint's did, so with core.autocrlf set a tracked file changed only
+// from LF to CRLF is not listed. When that is the only change — nothing
+// untracked, no origin/main — the hook decides nothing changed and exits
+// before any gate runs. test-auditor found it on #70.
+describe('BUG-31: the check for any code change sees a change git normalises away (HK-06, D-119)', () => {
+  test.each([{ autocrlf: 'input' }, { autocrlf: 'true' }])(
+    'BUG-31: with core.autocrlf=$autocrlf, a tracked code file changed only from LF to CRLF, and nothing else, runs the gate',
+    ({ autocrlf }) => {
+      const file = 'apps/server/src/api.ts';
+      // Everything committed, the .gitignore for the fake gate's ran.txt too:
+      // an untracked .gitignore is not under docs/, so on its own it counts as
+      // a code change and the gate would run for that reason instead.
+      const dir = makeRepo({
+        ...fakeScripts({ 'gate:quick': FAILS }),
+        '.gitignore': 'ran.txt\n',
+        [file]: 'export const a = 1;\n',
+      });
+      repos.push(dir);
+      git(dir, 'config', 'core.autocrlf', autocrlf);
+
+      // The same text as committed, with CRLF line endings.
+      write(dir, { [file]: 'export const a = 1;\r\n' });
+      // The condition itself: git lists the file as modified and nothing else,
+      // yet every list of changed paths the early check reads is empty —
+      // the diff against HEAD, the untracked files, and no origin/main to
+      // take a merge base from.
+      expect(git(dir, 'status', '--short')).toBe(` M ${file}\n`);
+      expect(git(dir, 'diff', '--name-only', '--no-renames', 'HEAD')).toBe('');
+      expect(git(dir, 'ls-files', '--others', '--exclude-standard')).toBe('');
+      expect(
+        spawnSync('git', ['rev-parse', '--verify', '-q', 'refs/remotes/origin/main'], { cwd: dir })
+          .status,
+      ).not.toBe(0);
+
+      const result = stop(dir);
+
+      expect(ranLog(dir)).toContain('gate:quick');
+      expect(result.status).toBe(BLOCKED);
+      expect(result.stderr).toContain('2 tests failed');
+    },
+  );
+});
+
 // BUG-31, part 2 (D-119): the AI reviews in CI load the project's settings, so
 // the stop gate ran gate:quick inside every review job. With both
 // GITHUB_ACTIONS=true and TRYGGHVERDAG_REVIEW_JOB=1 the hook stands down at
