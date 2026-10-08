@@ -4398,10 +4398,7 @@ any other path is work, not a candidate for the same treatment.
     step's whole process group is killed, not only `pnpm` (a reviewer
     measured 8 s against a 1 s timeout before); the report the per-edit gate
     prints is a tested function; both hooks read their input before standing
-    down. Review loop 2 (CI's code-reviewer): the fingerprint reads files as
-    git stores them on disk, not as `core.autocrlf` would normalise them, so a
-    change of line endings alone is a change; the review-job rule lives once,
-    in `inReviewJob()` in `.claude/hooks/lib.mjs`.
+    down.
   - Known limits, accepted: gitignored files are not part of the fingerprint
     (`node_modules`, generated files; a lockfile change is); the remembered
     pass in `.claude/state/` could be written by anything that can write
@@ -4411,3 +4408,24 @@ any other path is work, not a candidate for the same treatment.
     on `pnpm run gate:file` leaves the running tools to finish by themselves
     (the hooks are unaffected: a step's 160 s timer fires before the hook's
     own limits).
+- **Amendment (delegated, D-031, 2026-10-08): the fingerprint reads line
+  endings as they are on disk, and the review-job rule lives in one place.**
+  - **Found by CI's `code-reviewer`** on #68 after it was approved: with
+    `core.autocrlf` set to `input` or `true`, a tracked file changed only from
+    LF to CRLF shows as modified in `git status`, but `git diff HEAD` prints
+    nothing, so the fingerprint did not change and the stop gate skipped. The
+    gate's tools read the raw bytes (Prettier wants LF), so they could fail
+    where the skip said pass. Reproduced in a scratch repository: 0 bytes of
+    diff, and 108 with `-c core.autocrlf=false`.
+  - **The fix:** every git call the fingerprint makes runs with
+    `-c core.autocrlf=false`. `ls-files` and `hash-object --no-filters` give
+    the same output with it.
+  - **And:** the stand-down condition, which both hooks carried word for word,
+    is now `inReviewJob()` in `.claude/hooks/lib.mjs`, tested on its own.
+  - **Known limit, added:** a `.gitattributes` with a `text` attribute (such
+    as `* text=auto`) would still normalise line endings out of the diff,
+    whatever `core.autocrlf` says. The repository has no `.gitattributes`; if
+    one is added, the fingerprint should hash the changed tracked files'
+    contents as well.
+  - #68 merged before this was pushed; it ships in its own pull request
+    (BUG-31's review loop 2).

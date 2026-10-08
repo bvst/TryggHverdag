@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-08 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, nine tasks (D-115 added one), **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 done** ([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`; D-106 to D-109); **LOST-03 done** ([#64](https://github.com/bvst/TryggHverdag/pull/64), `57502b8`; D-110 to D-112), with BUG-23 and BUG-24 in it; **LOST-06 done** ([#66](https://github.com/bvst/TryggHverdag/pull/66), `e695e8a`; D-113, D-114); **LOST-07 done** ([#67](https://github.com/bvst/TryggHverdag/pull/67), `1c4bc8b`; D-115, D-116); **BUG-30 and BUG-31 in review** (D-118, D-119) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-08 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, nine tasks (D-115 added one), **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 done** ([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`; D-106 to D-109); **LOST-03 done** ([#64](https://github.com/bvst/TryggHverdag/pull/64), `57502b8`; D-110 to D-112), with BUG-23 and BUG-24 in it; **LOST-06 done** ([#66](https://github.com/bvst/TryggHverdag/pull/66), `e695e8a`; D-113, D-114); **LOST-07 done** ([#67](https://github.com/bvst/TryggHverdag/pull/67), `1c4bc8b`; D-115, D-116); **BUG-30 and BUG-31 done** ([#68](https://github.com/bvst/TryggHverdag/pull/68), `5f4bdc1`; D-118, D-119), their workflow half (#69) waiting on the owner's hand merge and review loop 2 in its own pull request · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -378,14 +378,17 @@ The things that still bite, and cost a session hours the first time.
 ## In flight
 
 **BUG-30 and BUG-31** (the agents' models and thinking levels, and the gates'
-speed; D-118, D-119) are in review, from
-`fix/BUG-30-31-agent-models-and-gate-speed`. All three reviewers passed in the
-first round, and their should-fix findings went into review loop 1. Next, the
-workflow half (D-118's `--model` lines in `ai-review.yml` and
-`daily-status.yml`, and `TRYGGHVERDAG_REVIEW_JOB=1` on the review step only,
-with a test that no other workflow sets it) is its own pull request, merged by
-the owner by hand (D-075), batched with Dependabot's #62. Until it merges,
-CI's reviews still run on Sonnet 5 and the hooks' stand-down does nothing.
+speed; D-118, D-119) are done: [#68](https://github.com/bvst/TryggHverdag/pull/68),
+`5f4bdc1`, 2026-10-08. Two pieces are still open. **The workflow half,
+[#69](https://github.com/bvst/TryggHverdag/pull/69)** (D-118's `--model` lines
+in `ai-review.yml` and `daily-status.yml`, and `TRYGGHVERDAG_REVIEW_JOB=1` on
+the review step only, with a test that no other workflow sets it), waits on the
+owner's hand merge (D-075), batched with Dependabot's #62. Until it merges,
+CI's reviews still run on Sonnet 5 and the hooks' stand-down does nothing; the
+first review after it is the check that the variable reaches the hooks.
+**Review loop 2** (D-119's amendment: the fingerprint reads raw line endings,
+and the stand-down rule lives once in `inReviewJob()`) came after #68 was
+approved and is its own pull request, from `fix/BUG-31-review-loop-2`.
 
 Left for later, from BUG-30 and BUG-31's reviews:
 - a guard on `.claude/state/**` and `.claude/settings.local.json` (needs a
