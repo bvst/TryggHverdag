@@ -1128,3 +1128,282 @@ describe('BUG-36, review loop 2: when the .claude folder itself is what matched,
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// BUG-36, review loop 3
+// ---------------------------------------------------------------------------
+
+/** A backtick command substitution that prints `word`, the name bash then writes to. */
+const ticked = (word) => `\`printf ${word}\``;
+
+// BUG-36, review loop 3, privacy-security-reviewer: a regression. Loop 1 ends
+// a redirect target at a backtick, so in echo x >`printf FILE` the target
+// comes out empty and the guard sees no redirect at all. bash writes FILE, the
+// word the substitution prints, with or without a space before the backtick
+// and inside double quotes alike; test-author ran all three. main refused
+// these under --readonly and under test-author's guard, where its target was
+// the backtick word itself; at 1f7ce47 and at this branch's head each one is
+// allowed. A target in `$(…)` is refused on main and on the branch alike.
+const LOOP3_READONLY_TICKED = [
+  `echo x >${ticked('apps/server/src/a.ts')}`,
+  `echo x > ${ticked('apps/server/src/a.ts')}`,
+  `echo x >"${ticked('apps/server/src/a.ts')}"`,
+];
+const LOOP3_READONLY_DOLLAR = [
+  'echo x >$(printf apps/server/src/a.ts)',
+  'echo x > "$(printf apps/server/src/a.ts)"',
+];
+
+describe('BUG-36, review loop 3: a reviewer is refused a redirect into a command substitution, backtick or $( (HK-03)', () => {
+  // Fails today: allowed.
+  test.each(LOOP3_READONLY_TICKED)(
+    'BUG-36: refused for a read-only reviewer as output redirection, though the target is a backtick substitution: %s (review loop 3, privacy-security-reviewer)',
+    (command) => {
+      const result = guard(command, LOOP2_READONLY_ARGS);
+
+      expect({ command, status: result.status }, `the guard said: ${result.stderr}`).toEqual({
+        command,
+        status: BLOCKED,
+      });
+      expect(result.stderr).toContain('redirection');
+    },
+  );
+
+  // Passes today, on purpose: a fix for the backtick must keep `$(` a target.
+  test.each(LOOP3_READONLY_DOLLAR)(
+    'BUG-36: still refused for a read-only reviewer as output redirection when the target is a $( substitution: %s (review loop 3, privacy-security-reviewer)',
+    (command) => {
+      const result = guard(command, LOOP2_READONLY_ARGS);
+
+      expect({ command, status: result.status }, `the guard said: ${result.stderr}`).toEqual({
+        command,
+        status: BLOCKED,
+      });
+      expect(result.stderr).toContain('redirection');
+    },
+  );
+});
+
+// The same through the role guards, as their frontmatter runs them. On main
+// the implementer rows with no space and in quotes got through as well: the
+// backtick stuck to the test file's name, and no deny glob matched it. The
+// branch splits words at a backtick since loop 1, so once the redirect is
+// seen, the name the substitution prints is the word judged.
+const LOOP3_ROLE_TICKED = [
+  { agent: 'test-author', command: `echo x >${ticked('apps/server/src/a.ts')}` },
+  { agent: 'test-author', command: `echo x > ${ticked('apps/server/src/domain/journey.ts')}` },
+  { agent: 'test-author', command: `echo x >"${ticked('packages/contracts/src/journey.ts')}"` },
+  { agent: 'implementer', command: `echo x >${ticked('apps/server/src/x.test.ts')}` },
+  { agent: 'implementer', command: `echo x > ${ticked('packages/test-kit/src/fake.ts')}` },
+  { agent: 'implementer', command: `echo x >"${ticked('apps/server/src/x.test.ts')}"` },
+];
+const LOOP3_ROLE_DOLLAR = [
+  { agent: 'test-author', command: 'echo x >$(printf apps/server/src/a.ts)' },
+  { agent: 'implementer', command: 'echo x >$(printf packages/test-kit/src/fake.ts)' },
+];
+
+describe("BUG-36, review loop 3: a role's own guard judges a redirect into a command substitution by the path it names (RG-03)", () => {
+  // Fails today: allowed.
+  test.each(LOOP3_ROLE_TICKED)(
+    'BUG-36: refused for $agent by its own frontmatter guard, naming RG-03, though the target is a backtick substitution: $command (review loop 3, privacy-security-reviewer)',
+    ({ agent, command }) => {
+      expect({ agent, command, verdict: roleVerdictOf(agent, command) }).toEqual({
+        agent,
+        command,
+        verdict: 'refused',
+      });
+    },
+  );
+
+  // Passes today, on purpose.
+  test.each(LOOP3_ROLE_DOLLAR)(
+    'BUG-36: still refused for $agent by its own frontmatter guard, naming RG-03, when the target is a $( substitution: $command (review loop 3, privacy-security-reviewer)',
+    ({ agent, command }) => {
+      expect({ agent, command, verdict: roleVerdictOf(agent, command) }).toEqual({
+        agent,
+        command,
+        verdict: 'refused',
+      });
+    },
+  );
+});
+
+// And through D-120's global guard, when the substitution names a path it
+// protects. A substitution that names no such path is still left alone: the
+// global guard refuses a protected path, not a backtick.
+const LOOP3_D120_TICKED = [
+  { command: `printf x >${ticked(GATE_PASSED)}`, target: GATE_PASSED },
+  { command: `printf x > ${ticked(LOCAL_SETTINGS)}`, target: LOCAL_SETTINGS },
+  { command: `printf x >"${ticked(GATE_PASSED)}"`, target: GATE_PASSED },
+  {
+    command: `echo '{"disableAllHooks": true}' >${ticked(LOCAL_SETTINGS)}`,
+    target: LOCAL_SETTINGS,
+  },
+];
+const LOOP3_D120_DOLLAR = [
+  { command: `printf x >$(printf ${GATE_PASSED})`, target: GATE_PASSED },
+  { command: `printf x > "$(printf ${LOCAL_SETTINGS})"`, target: LOCAL_SETTINGS },
+];
+const LOOP3_D120_TICKED_UNPROTECTED = [
+  `printf x >${ticked('notes.md')}`,
+  `printf x > ${ticked('.claude/agents/x.md')}`,
+];
+
+describe('BUG-36, review loop 3: the global guard-bash judges a redirect into a command substitution by the path it names (D-120)', () => {
+  // Fails today: allowed, for the main session and a subagent.
+  test.each(LOOP3_D120_TICKED)(
+    'BUG-36: refused for the main session and a subagent, naming D-120 and the file, though the target is a backtick substitution: $command (review loop 3, privacy-security-reviewer)',
+    ({ command, target }) => {
+      const verdicts = loop1VerdictsOf(command);
+      const main = runHook('guard-bash.mjs', { args: D120_ARGS_WITH_FOLDER, input: bash(command) });
+
+      expect(verdicts).toEqual({ command, main: 'refused', subagent: 'refused' });
+      expect(main.stderr).toContain(`this would change ${target},`);
+    },
+  );
+
+  // Fails today: allowed. Only the subagent's verdict is held: what the main
+  // session may do to its own phase file this way is not what this is about.
+  test('BUG-36: a subagent may not redirect into a backtick substitution that names the phase file: refused, naming D-120 (review loop 3, privacy-security-reviewer)', () => {
+    expect(loop1VerdictsOf(`printf 'red:BUG-1\\n' >${ticked(PHASE)}`).subagent).toBe('refused');
+  });
+
+  // Passes today, on purpose.
+  test.each(LOOP3_D120_DOLLAR)(
+    'BUG-36: still refused for the main session and a subagent, naming D-120 and the file, when the target is a $( substitution: $command (review loop 3, privacy-security-reviewer)',
+    ({ command, target }) => {
+      const verdicts = loop1VerdictsOf(command);
+      const main = runHook('guard-bash.mjs', { args: D120_ARGS_WITH_FOLDER, input: bash(command) });
+
+      expect(verdicts).toEqual({ command, main: 'refused', subagent: 'refused' });
+      expect(main.stderr).toContain(`this would change ${target},`);
+    },
+  );
+
+  // Passes today, on purpose: seeing the redirect must not refuse every
+  // substitution, only one that names a path D-120 protects.
+  test.each(LOOP3_D120_TICKED_UNPROTECTED)(
+    'BUG-36: allowed for the main session and a subagent, because the substitution names no path D-120 protects: %s (review loop 3, privacy-security-reviewer)',
+    (command) => {
+      expect(loop1VerdictsOf(command)).toEqual({ command, main: 'allowed', subagent: 'allowed' });
+    },
+  );
+});
+
+// BUG-36, review loop 3, test-auditor: a false positive. Loop 2's `>&` rule
+// reads the target of a quoted 2>&1 with the closing quote stuck to it: in
+// bash -c "x 2>&1" the target is `1"`, not a number, so the guard counts a
+// write to a file. bash writes no file there: the quote only closes the
+// string, and the inner shell copies a file descriptor; test-author ran it.
+// So --readonly refuses bash -c "pnpm vitest run 2>&1" | tail, and D-120's
+// global guard refuses bash -c "git diff -- .claude 2>&1"; at 1f7ce47 both
+// were allowed. The `1>&-` row and the role rows go beyond the reviewer's
+// list: the same quote after a descriptor `-` or in a role's guard.
+const LOOP3_READONLY_QUOTED_DUP = [
+  'bash -c "pnpm vitest run 2>&1" | tail',
+  "bash -c 'pnpm vitest run 2>&1' | tail",
+  'bash -c "git diff main >&2"',
+  "bash -c 'git diff main >&2'",
+  'bash -c "git diff main 1>&-"',
+];
+const LOOP3_D120_QUOTED_DUP = [
+  'bash -c "git diff -- .claude 2>&1"',
+  "bash -c 'git diff -- .claude 2>&1'",
+  `bash -c "cat ${LOCAL_SETTINGS} >&2"`,
+  `bash -c 'cat ${GATE_PASSED} >&2'`,
+];
+const LOOP3_ROLE_QUOTED_DUP = [
+  { agent: 'implementer', command: 'bash -c "grep -c x apps/server/src/x.test.ts 2>&1"' },
+  { agent: 'test-author', command: "bash -c 'grep -c x apps/server/src/domain/journey.ts >&2'" },
+];
+
+// The other side: a quote does not turn a file into a file descriptor.
+const LOOP3_READONLY_QUOTED_DUP_TO_FILE = [
+  'bash -c "printf x >&verdict.txt"',
+  "bash -c 'printf x >&verdict.txt'",
+];
+const LOOP3_D120_QUOTED_DUP_TO_FILE = [
+  { command: `bash -c "printf x >&${GATE_PASSED}"`, target: GATE_PASSED },
+  { command: `bash -c 'printf x >&${LOCAL_SETTINGS}'`, target: LOCAL_SETTINGS },
+];
+
+// test-auditor: the `$` that ends loop 2's descriptor pattern was pinned by
+// no test. bash writes a file named 2file here, test-author ran it; a pattern
+// without the `$` reads 2file as descriptor 2 and lets the write through,
+// which test-author showed with a copy of the guard that drops it.
+const LOOP3_READONLY_DIGIT_FILE = ['printf x >&2file', 'bash -c "printf x >&2file"'];
+
+describe('BUG-36, review loop 3: a quote after `>&` and a file descriptor does not make a write to a file (HK-03, D-120, RG-03)', () => {
+  // Fails today: refused as output redirection.
+  test.each(LOOP3_READONLY_QUOTED_DUP)(
+    'BUG-36: allowed for a read-only reviewer, because the quoted `>&` only copies or closes a file descriptor: %s (review loop 3, test-auditor)',
+    (command) => {
+      const result = guard(command, LOOP2_READONLY_ARGS);
+
+      expect({ command, status: result.status }, `the guard said: ${result.stderr}`).toEqual({
+        command,
+        status: ALLOWED,
+      });
+    },
+  );
+
+  // Fails today: refused, for the main session and a subagent.
+  test.each(LOOP3_D120_QUOTED_DUP)(
+    'BUG-36: allowed for the main session and a subagent, because the quoted `>&` only copies a file descriptor: %s (review loop 3, test-auditor)',
+    (command) => {
+      expect(loop1VerdictsOf(command)).toEqual({ command, main: 'allowed', subagent: 'allowed' });
+    },
+  );
+
+  // Fails today: refused.
+  test.each(LOOP3_ROLE_QUOTED_DUP)(
+    'BUG-36: allowed for $agent by its own frontmatter guard, because the quoted `>&` only copies a file descriptor: $command (review loop 3, test-auditor)',
+    ({ agent, command }) => {
+      expect({ agent, command, verdict: roleVerdictOf(agent, command) }).toEqual({
+        agent,
+        command,
+        verdict: 'allowed',
+      });
+    },
+  );
+
+  // Passes today, on purpose.
+  test.each(LOOP3_READONLY_QUOTED_DUP_TO_FILE)(
+    'BUG-36: still refused for a read-only reviewer as output redirection when the quoted `>&` names a file: %s (review loop 3, test-auditor)',
+    (command) => {
+      const result = guard(command, LOOP2_READONLY_ARGS);
+
+      expect({ command, status: result.status }, `the guard said: ${result.stderr}`).toEqual({
+        command,
+        status: BLOCKED,
+      });
+      expect(result.stderr).toContain('redirection');
+    },
+  );
+
+  // Passes today, on purpose.
+  test.each(LOOP3_D120_QUOTED_DUP_TO_FILE)(
+    'BUG-36: still refused for the main session and a subagent, naming D-120 and the file, when the quoted `>&` names a file: $command (review loop 3, test-auditor)',
+    ({ command, target }) => {
+      const verdicts = loop1VerdictsOf(command);
+      const main = runHook('guard-bash.mjs', { args: D120_ARGS_WITH_FOLDER, input: bash(command) });
+
+      expect(verdicts).toEqual({ command, main: 'refused', subagent: 'refused' });
+      expect(main.stderr).toContain(`this would change ${target},`);
+    },
+  );
+
+  // Passes today, on purpose: it pins the `$`.
+  test.each(LOOP3_READONLY_DIGIT_FILE)(
+    'BUG-36: refused for a read-only reviewer as output redirection, because `>&2file` writes a file named 2file: %s (review loop 3, test-auditor)',
+    (command) => {
+      const result = guard(command, LOOP2_READONLY_ARGS);
+
+      expect({ command, status: result.status }, `the guard said: ${result.stderr}`).toEqual({
+        command,
+        status: BLOCKED,
+      });
+      expect(result.stderr).toContain('redirection');
+    },
+  );
+});
