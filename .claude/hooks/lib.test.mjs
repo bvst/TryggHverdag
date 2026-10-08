@@ -1,8 +1,8 @@
 // req-coverage: fixtures-only — the IDs below are sample data for testing the gates.
 // The shared helpers every hook is built on. If these are wrong, every gate is
 // wrong, so they are tested directly.
-import { describe, expect, test } from 'vitest';
-import { globToRegExp, matchesAny, relPath, tail } from './lib.mjs';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import { globToRegExp, inReviewJob, matchesAny, relPath, tail } from './lib.mjs';
 
 describe('globToRegExp', () => {
   test('** crosses folders, * does not', () => {
@@ -45,5 +45,56 @@ describe('tail', () => {
   test('keeps the end of long output, which is where failures are', () => {
     expect(tail('abcdef', 3)).toBe('…def');
     expect(tail('abc', 10)).toBe('abc');
+  });
+});
+
+// BUG-31, review loop 2 (D-119): the CI review job's stand-down was written out
+// twice, once in stop-gate.mjs and once in progress-gate.mjs, so the two could
+// drift apart — one hook standing down where the other does not. It is one
+// rule, in one place. Both variables, exactly: GITHUB_ACTIONS=true is set in
+// every CI job, not only the reviews, so neither variable alone may turn a gate
+// off, and the review-job switch has to say 1.
+describe('BUG-31: inReviewJob, the one rule for the CI review job stand-down (D-119)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test.each([
+    {
+      how: 'both variables set',
+      env: { GITHUB_ACTIONS: 'true', TRYGGHVERDAG_REVIEW_JOB: '1' },
+      expected: true,
+    },
+    { how: 'only GITHUB_ACTIONS=true', env: { GITHUB_ACTIONS: 'true' }, expected: false },
+    {
+      how: 'only TRYGGHVERDAG_REVIEW_JOB=1',
+      env: { TRYGGHVERDAG_REVIEW_JOB: '1' },
+      expected: false,
+    },
+    {
+      how: 'GITHUB_ACTIONS=true, REVIEW_JOB=0',
+      env: { GITHUB_ACTIONS: 'true', TRYGGHVERDAG_REVIEW_JOB: '0' },
+      expected: false,
+    },
+    {
+      how: 'GITHUB_ACTIONS=TRUE, REVIEW_JOB=1',
+      env: { GITHUB_ACTIONS: 'TRUE', TRYGGHVERDAG_REVIEW_JOB: '1' },
+      expected: false,
+    },
+    { how: 'neither variable', env: {}, expected: false },
+  ])('BUG-31: with $how, inReviewJob is $expected', ({ env, expected }) => {
+    expect(inReviewJob(env)).toBe(expected);
+  });
+
+  // The hooks call it without an argument, so the default has to be the
+  // process's own environment. Both directions, so a default that is constant
+  // either way is caught.
+  test("BUG-31: with no argument, inReviewJob reads the process's own environment", () => {
+    vi.stubEnv('GITHUB_ACTIONS', 'true');
+    vi.stubEnv('TRYGGHVERDAG_REVIEW_JOB', '1');
+    expect(inReviewJob()).toBe(true);
+
+    vi.stubEnv('TRYGGHVERDAG_REVIEW_JOB', '0');
+    expect(inReviewJob()).toBe(false);
   });
 });
