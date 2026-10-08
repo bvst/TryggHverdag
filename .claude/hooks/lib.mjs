@@ -56,6 +56,13 @@ export function hasFlag(name) {
   return process.argv.includes(name);
 }
 
+// D-119: a CI review job changes no code, and CI's required checks run the
+// same gates on the same commit, so the gates stand down there. Both variables,
+// so neither another CI job nor a local session can turn a gate off by accident.
+export function inReviewJob(env = process.env) {
+  return env.GITHUB_ACTIONS === 'true' && env.TRYGGHVERDAG_REVIEW_JOB === '1';
+}
+
 // Exit code 2 blocks the action (PreToolUse) or feeds the message back to Claude.
 export function block(message) {
   process.stderr.write(message.trim() + '\n');

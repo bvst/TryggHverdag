@@ -4398,7 +4398,10 @@ any other path is work, not a candidate for the same treatment.
     step's whole process group is killed, not only `pnpm` (a reviewer
     measured 8 s against a 1 s timeout before); the report the per-edit gate
     prints is a tested function; both hooks read their input before standing
-    down.
+    down. Review loop 2 (CI's code-reviewer): the fingerprint reads files as
+    git stores them on disk, not as `core.autocrlf` would normalise them, so a
+    change of line endings alone is a change; the review-job rule lives once,
+    in `inReviewJob()` in `.claude/hooks/lib.mjs`.
   - Known limits, accepted: gitignored files are not part of the fingerprint
     (`node_modules`, generated files; a lockfile change is); the remembered
     pass in `.claude/state/` could be written by anything that can write
