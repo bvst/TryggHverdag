@@ -94,7 +94,10 @@ if (denyGlobs.length && (WRITE_OPS.test(cmd) || redirectTargets(cmd).length)) {
   // protected one is still refused.
   const mainSessionGlobs = isSubagent(input) ? [] : argList('--allow-main-session');
   const tokens = cmd.split(/[\s'"=]+/).filter(Boolean);
-  for (const t of tokens) {
+  // BUG-36: a redirect needs no space (`>file`, `x>>file`, `2>file`), so the
+  // split above leaves `>file`; each redirect target is judged as a path too,
+  // and first, so a refusal names the file the shell would write.
+  for (const t of [...redirectTargets(cmd), ...tokens]) {
     // BUG-36: with --global, each path is named from the repository, not the
     // session's folder, so a session in a subfolder cannot dodge D-120.
     const rel = hasFlag('--global') ? repoRelPath(t, input.cwd) : relPath(t, input.cwd);
