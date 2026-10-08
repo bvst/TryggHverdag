@@ -4382,5 +4382,29 @@ any other path is work, not a candidate for the same treatment.
   - `--setting-sources user`, which the action's source suggests for avoiding
     in-repo configuration: it would also drop the reviewer agents themselves.
   - `disableAllHooks`: it would also drop the reviewers' read-only guard.
-- **Consequences:** measured after the change (to be filled in by this task
-  before its pull request).
+- **Consequences:**
+  - Measured after the change (this cloud session, 2026-10-08). The per-edit
+    gate on `apps/server/src/domain/health.ts`, old and new scripts
+    alternating with a fresh edit before each run: 20.5, 20.2 and 19.5 s
+    before, 10.1, 9.9 and 9.7 s after; repeated after review loop 1 on a
+    busier machine: 25.7, 25.9 and 27.9 s before, 14.8, 14.6 and 15.1 s
+    after — about half, both times. The stop gate twice with nothing
+    changed: 96.9 s, then 0.12 s and 0.10 s.
+  - Review loop 1 (all three reviewers passed; these were their should-fix
+    findings): no fingerprint, so the gate runs, when a tracked file is
+    flagged assume-unchanged or skip-worktree (git hides its changes from the
+    diff); the fallback when git cannot read something (an untracked nested
+    repository) and a rename of an untracked file now have tests; a timed-out
+    step's whole process group is killed, not only `pnpm` (a reviewer
+    measured 8 s against a 1 s timeout before); the report the per-edit gate
+    prints is a tested function; both hooks read their input before standing
+    down.
+  - Known limits, accepted: gitignored files are not part of the fingerprint
+    (`node_modules`, generated files; a lockfile change is); the remembered
+    pass in `.claude/state/` could be written by anything that can write
+    there, as the red-phase marker already can — a guard on
+    `.claude/state/**` and `.claude/settings.local.json` needs its own
+    decision; each step now runs in its own process group, so a manual Ctrl-C
+    on `pnpm run gate:file` leaves the running tools to finish by themselves
+    (the hooks are unaffected: a step's 160 s timer fires before the hook's
+    own limits).
