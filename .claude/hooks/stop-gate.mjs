@@ -9,6 +9,8 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node
 import path from 'node:path';
 import { readInput, hasFlag, block, tail } from './lib.mjs';
 
+const input = await readInput();
+
 // D-119: a CI review job changes no code, and CI's required checks run the
 // same gates on the same commit. Both variables, so neither another CI job nor
 // a local session can turn the gate off by accident.
@@ -16,7 +18,6 @@ if (process.env.GITHUB_ACTIONS === 'true' && process.env.TRYGGHVERDAG_REVIEW_JOB
   process.exit(0);
 }
 
-const input = await readInput();
 const cwd = input.cwd || process.cwd();
 const git = (...a) => spawnSync('git', a, { cwd, encoding: 'utf8' });
 
@@ -56,6 +57,10 @@ const raw = (args, stdin) => {
   return r.status === 0 ? r.stdout : null;
 };
 function fingerprintOf(gate) {
+  // A file flagged assume-unchanged (lowercase tag) or skip-worktree (S) has
+  // its changes hidden from git's diff, so the fingerprint cannot vouch for it.
+  const tags = raw(['ls-files', '-v', '-z', '--', ...WORK]);
+  if (tags === null || /(?:^|\0)(?:[a-z]|S) /.test(tags.toString())) return null;
   const untracked = raw(['ls-files', '-z', '--others', '--exclude-standard', '--', ...WORK]);
   const paths = untracked?.toString().replaceAll('\0', '\n');
   const parts = [
