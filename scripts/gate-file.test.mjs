@@ -3,7 +3,7 @@
 // leaves alone — shapes how the whole project feels to work in.
 import { afterEach, describe, expect, test } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -459,5 +459,116 @@ describe('report', () => {
         'Fix them before moving on — CI runs exactly the same checks.\n',
       exitCode: 1,
     });
+  });
+});
+
+// HK-04 (D-119), test-auditor's should-fix on #68: main() — filesToCheck, then
+// stepsFor, runSteps and report, then stdout and process.exitCode — was held by
+// no test. Each piece is tested above, but a main() that never wrote report's
+// text, left the exit code at 0, or was never reached would make every edit
+// look clean, and every test above would still pass. So these run the real
+// script the way `pnpm run gate:file` does (`node scripts/gate-file.mjs <path>`
+// from the repository root) on JSON files, whose only step is formatting (see
+// stepsFor), so a run takes about a second. The files are written to a
+// temporary directory outside the repository: Prettier finds no configuration
+// there and checks them with its defaults, and the well-formatted file below is
+// written to those (two-space JSON with a trailing newline). It passes the
+// repository's own .prettierrc.json too (checked with prettier when written).
+//
+// These pass today. They are guards, not tests of new behaviour. Each break
+// named above was planted in a scratch copy of the script, and each failed at
+// least one of them: report's text not written, the exit code left at 0, and
+// main() never called (or behind a check that is never true). One break no
+// run can see: main() called without `await`. The process stays alive while
+// its steps run, so it prints and exits the same; the two differ only if
+// main() waits on a promise that never settles, which today's main() cannot.
+describe('main(), run as the gate is run', () => {
+  const ROOT = path.resolve(import.meta.dirname, '..');
+  const dirs = [];
+  function tempDir() {
+    const dir = mkdtempSync(path.join(tmpdir(), 'gate-file-main-'));
+    dirs.push(dir);
+    return dir;
+  }
+
+  afterEach(() => {
+    while (dirs.length > 0) {
+      rmSync(dirs.pop(), { recursive: true, force: true });
+    }
+  });
+
+  /** Runs the per-edit gate on `file`, as a process of its own, from the repository root. */
+  const gate = (file, { env = process.env, timeout = 30_000 } = {}) =>
+    spawnSync(process.execPath, ['scripts/gate-file.mjs', file], {
+      cwd: ROOT,
+      env,
+      encoding: 'utf8',
+      timeout,
+    });
+
+  /** Everything a failed expectation needs to say what the gate actually did. */
+  const told = (run) =>
+    [
+      `exit code ${String(run.status)}, signal ${String(run.signal)}`,
+      run.error ? `error: ${run.error.message}` : '',
+      `stdout:\n${run.stdout ?? ''}`,
+      `stderr:\n${run.stderr ?? ''}`,
+    ].join('\n');
+
+  test('HK-04: a badly formatted file fails the gate: exit code 1, the formatting block and the count are printed', () => {
+    const file = path.join(tempDir(), 'unformatted.json');
+    writeFileSync(file, '{"name":"synthetic",   "items":[1,2]}');
+
+    const run = gate(file);
+
+    expect(run.status, told(run)).toBe(1);
+    const lines = run.stdout.split('\n');
+    expect(lines, told(run)).toContain('--- formatting ---');
+    expect(lines, told(run)).toContain(`1 check(s) failed for: ${file}`);
+  });
+
+  test('HK-04: a well-formatted file passes the gate: exit code 0 and nothing printed', () => {
+    const file = path.join(tempDir(), 'formatted.json');
+    writeFileSync(file, '{\n  "name": "synthetic",\n  "items": [1, 2]\n}\n');
+
+    const run = gate(file);
+
+    expect(run.status, told(run)).toBe(0);
+    expect(run.stdout).toBe('');
+  });
+
+  test('HK-04: a file the gate does not check (.md) runs no step: exit code 0 and nothing printed', () => {
+    // Such a run is quick because no step runs, and that cause is what this
+    // checks, rather than timing the run: a fake pnpm, first on PATH, writes
+    // down every call and fails. Every step is `pnpm …`, so a step started for
+    // the .md would leave a record and fail the gate. A real `prettier --check`
+    // would pass a tidy .md, so without the fake a gate that checked it anyway
+    // would look the same from outside, only slower.
+    const dir = tempDir();
+    const bin = path.join(dir, 'bin');
+    mkdirSync(bin);
+    const calls = path.join(bin, 'calls');
+    writeFileSync(
+      path.join(bin, 'pnpm'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$(dirname "$0")/calls"\nexit 1\n',
+      { mode: 0o755 },
+    );
+    const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` };
+    const notes = path.join(dir, 'notes.md');
+    writeFileSync(notes, '# Synthetic notes\n');
+
+    const run = gate(notes, { env, timeout: 10_000 });
+
+    expect(run.status, told(run)).toBe(0);
+    expect(run.stdout).toBe('');
+    expect(existsSync(calls), 'a step ran for a file the gate does not check').toBe(false);
+
+    // The control: a file the gate does check reaches the fake pnpm, so its
+    // silence above means no step ran, not that the fake was never on the path.
+    const checked = path.join(dir, 'checked.json');
+    writeFileSync(checked, '{}\n');
+    const control = gate(checked, { env, timeout: 10_000 });
+    expect(existsSync(calls), `the fake pnpm was never reached:\n${told(control)}`).toBe(true);
+    expect(readFileSync(calls, 'utf8')).toContain('prettier');
   });
 });
