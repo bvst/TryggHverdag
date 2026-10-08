@@ -2,11 +2,13 @@
 // HK-04 runs after every single edit, so what it decides to check — and what it
 // leaves alone — shapes how the whole project feels to work in.
 import { afterEach, describe, expect, test } from 'vitest';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { filesToCheck, runSteps, stepsFor } from './gate-file.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
+import { filesToCheck, report, runSteps, stepsFor } from './gate-file.mjs';
 
 const names = (files) => stepsFor(files).map((step) => step.name);
 
@@ -289,5 +291,173 @@ describe('runSteps', () => {
     );
 
     expect(results).toMatchObject([{ name: 'hung', ok: false }]);
+  });
+});
+
+// HK-04 (D-119), review loop 1: every real step is `pnpm exec <tool>`, so the
+// tool that hangs is the step's grandchild. Killing only the direct child at
+// the timeout leaves the tool running, holding the step's output pipes, and
+// runSteps waits until it lets go: a reviewer measured 8 s against a 1 s
+// timeout. A timed-out step has to be stopped together with what it started.
+describe('runSteps, when a step times out', () => {
+  const dirs = [];
+  const pidFiles = [];
+
+  /** The pid a grandchild wrote to `file`, or undefined if it never did. */
+  const pidIn = (file) => {
+    try {
+      const pid = Number(readFileSync(file, 'utf8').trim());
+      return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  /**
+   * Whether `pid` is still running. A process that has ended but has not yet
+   * been collected by its parent (a zombie) still answers signal 0. An orphaned
+   * grandchild is collected by whichever process adopts it, which in a cloud
+   * container took over a second (measured). A zombie runs nothing, so it counts
+   * as stopped. If `ps` cannot be asked, the process counts as running, so a
+   * test that cannot tell fails rather than passes.
+   */
+  const isRunning = (pid) => {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      return /** @type {NodeJS.ErrnoException} */ (error).code !== 'ESRCH';
+    }
+    const ps = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });
+    if (ps.error) {
+      return true;
+    }
+    const state = ps.stdout.trim();
+    return state !== '' && !state.startsWith('Z');
+  };
+
+  /** True once `pid` has stopped, polling for up to about 3 s. */
+  const stopsSoon = async (pid) => {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      if (!isRunning(pid)) {
+        return true;
+      }
+      await delay(50);
+    }
+    return !isRunning(pid);
+  };
+
+  const stopIfRunning = (file) => {
+    const pid = pidIn(file);
+    if (pid !== undefined && isRunning(pid)) {
+      process.kill(pid, 'SIGKILL');
+    }
+  };
+
+  // For a test that timed out: its own `finally` runs only once runSteps
+  // returns, which today is when the grandchild ends by itself, 20 s in.
+  afterEach(() => {
+    while (pidFiles.length > 0) {
+      stopIfRunning(pidFiles.pop());
+    }
+    while (dirs.length > 0) {
+      rmSync(dirs.pop(), { recursive: true, force: true });
+    }
+  });
+
+  /** Single-quoted for sh. */
+  const quoted = (text) => `'${text.replaceAll("'", `'\\''`)}'`;
+
+  test('HK-04: a step still running at the timeout is stopped together with the tool it started', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'gate-file-test-'));
+    dirs.push(dir);
+    const pidFile = path.join(dir, 'grandchild.pid');
+    pidFiles.push(pidFile);
+    // The step is a shell, the tool its child: it writes its own pid, then
+    // would run for 20 s. The shell waits for it, as pnpm waits for a tool.
+    const tool = [
+      "require('node:fs').writeFileSync(process.argv[1], String(process.pid));",
+      'setTimeout(() => {}, 20_000);',
+    ].join(' ');
+    const step = {
+      name: 'hung tool',
+      command: [
+        'sh',
+        '-c',
+        `${quoted(process.execPath)} -e ${quoted(tool)} ${quoted(pidFile)} & wait`,
+      ],
+    };
+
+    try {
+      const results = await runSteps([step], { cwd: dir, timeout: 1_000 });
+
+      expect(results).toMatchObject([{ name: 'hung tool', ok: false }]);
+      const pid = pidIn(pidFile);
+      expect(pid, 'the tool never wrote its pid, so nothing was checked').toBeDefined();
+      expect(await stopsSoon(/** @type {number} */ (pid))).toBe(true);
+    } finally {
+      stopIfRunning(pidFile);
+    }
+  }, 15_000);
+});
+
+// HK-04 (D-119), review loop 1: what main() prints after the steps have run
+// was not tested at all — a main() that dropped every failure would still pass
+// every test here. `report` decides it, so it is tested without running a tool:
+// the failures only, in the order of the steps, each with its output trimmed,
+// then the count and the files.
+describe('report', () => {
+  const files = ['apps/server/src/api.ts', 'apps/server/src/journey.ts'];
+
+  test('HK-04: when every step passes, nothing is printed and the exit code is 0', () => {
+    expect(
+      report(
+        [
+          { name: 'formatting', ok: true, output: 'All matched files use Prettier code style!\n' },
+          { name: 'lint', ok: true, output: '' },
+          { name: 'types', ok: true, output: 'Tasks: 6 successful, 6 total\n' },
+        ],
+        files,
+      ),
+    ).toEqual({ text: '', exitCode: 0 });
+  });
+
+  test('HK-04: one failing step among passing ones is the only one reported, with its output trimmed, and the count is 1', () => {
+    const results = [
+      { name: 'formatting', ok: true, output: 'All matched files use Prettier code style!\n' },
+      {
+        name: 'lint',
+        ok: false,
+        output: '\n  apps/server/src/api.ts\n    3:7  error  no-unused-vars\n\n',
+      },
+      { name: 'types', ok: true, output: 'Tasks: 6 successful, 6 total\n' },
+    ];
+
+    expect(report(results, ['apps/server/src/api.ts'])).toEqual({
+      text:
+        '\n--- lint ---\napps/server/src/api.ts\n    3:7  error  no-unused-vars\n' +
+        '\n1 check(s) failed for: apps/server/src/api.ts\n' +
+        'Fix them before moving on — CI runs exactly the same checks.\n',
+      exitCode: 1,
+    });
+  });
+
+  test('HK-04: two failing steps are both reported, in the order of the steps, and the count is 2', () => {
+    // `types` comes before `import rules (AR-10)` in the steps, but after it
+    // alphabetically: the report keeps the steps' order.
+    const results = [
+      { name: 'formatting', ok: true, output: '' },
+      { name: 'types', ok: false, output: "src/api.ts(3,7): error TS2322: Type 'string'.\n" },
+      { name: 'import rules (AR-10)', ok: false, output: '  error no-domain-io: api.ts\n' },
+      { name: 'tests that cover this file', ok: true, output: '1 passed\n' },
+    ];
+
+    expect(report(results, files)).toEqual({
+      text:
+        "\n--- types ---\nsrc/api.ts(3,7): error TS2322: Type 'string'.\n" +
+        '\n--- import rules (AR-10) ---\nerror no-domain-io: api.ts\n' +
+        '\n2 check(s) failed for: apps/server/src/api.ts, apps/server/src/journey.ts\n' +
+        'Fix them before moving on — CI runs exactly the same checks.\n',
+      exitCode: 1,
+    });
   });
 });

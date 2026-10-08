@@ -3,7 +3,7 @@
 // without that being written down where the next session will see it.
 import { afterEach, describe, expect, test } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import {
@@ -256,6 +256,18 @@ describe('BUG-31: the stop gate does not re-run a gate on unchanged work (HK-06,
         git(dir, 'commit', '-qam', 'more work');
       },
     },
+    {
+      // Passes today, as a guard: the contents hash the same before and after,
+      // so only the list of untracked paths tells the two apart. A test that
+      // becomes the code it tested is a different piece of work.
+      how: 'an untracked file renamed, its contents unchanged',
+      before: (dir) => write(dir, { 'apps/server/src/notes.test.ts': 'export const n = 1;\n' }),
+      change: (dir) =>
+        renameSync(
+          path.join(dir, 'apps/server/src/notes.test.ts'),
+          path.join(dir, 'apps/server/src/notes.ts'),
+        ),
+    },
   ])('BUG-31: after a green run, $how runs the gate again', ({ before, change }) => {
     const dir = branchRepo({ 'gate:quick': PASSES });
     before(dir);
@@ -372,6 +384,62 @@ describe('BUG-31: the stop gate does not re-run a gate on unchanged work (HK-06,
 
     expect(runs(dir, 'gate:quick')).toBe(2);
   });
+});
+
+// BUG-31, review loop 1 (D-119): the fingerprint stands for the work only as
+// far as git can see it. Whatever git cannot read, or has been told not to look
+// at, is something no fingerprint can vouch for, so the gate runs at every stop.
+describe('BUG-31: what git cannot vouch for never skips the gate (HK-06, D-119)', () => {
+  // Passes today, and is meant to: it is the guard. Today's hook gives up on
+  // the fingerprint when git cannot read part of the work, and runs the gate.
+  // A fingerprint that fell back to a constant instead would skip the gate for
+  // ever after one green run, and no other test here would notice.
+  test('BUG-31: an untracked nested repository, which git cannot hash, runs the gate at every stop', () => {
+    const dir = branchRepo({ 'gate:quick': PASSES });
+    const nested = path.join(dir, 'tools/scratch');
+    mkdirSync(nested, { recursive: true });
+    git(nested, 'init', '-q');
+    write(nested, { 'notes.ts': 'export const c = 1;\n' });
+    // The condition itself: git lists the nested repository as one untracked
+    // path, and cannot hash it.
+    expect(git(dir, 'ls-files', '--others', '--exclude-standard').split('\n')).toContain(
+      'tools/scratch/',
+    );
+    const hashed = spawnSync('git', ['hash-object', '--stdin-paths'], {
+      cwd: dir,
+      input: 'tools/scratch/\n',
+      encoding: 'utf8',
+    });
+    expect(hashed.status).not.toBe(0);
+    expect(hashed.stderr).toContain('Unable to hash');
+
+    expect(stop(dir).status).toBe(ALLOWED);
+    expect(stop(dir).status).toBe(ALLOWED);
+
+    expect(runs(dir, 'gate:quick')).toBe(2);
+  });
+
+  // A tracked file flagged assume-unchanged or skip-worktree is one git has
+  // been told not to look at: a change to it never reaches `git diff`, so a
+  // fingerprint built from git's view of the work stays the same while the
+  // file does not. With such a flag anywhere, the gate must run.
+  test.each([{ flag: '--assume-unchanged' }, { flag: '--skip-worktree' }])(
+    'BUG-31: with a tracked file flagged $flag, a change to that file after a green run runs the gate again',
+    ({ flag }) => {
+      const file = 'apps/server/src/api.ts';
+      const dir = branchRepo({ 'gate:quick': PASSES });
+      git(dir, 'update-index', flag, file);
+      expect(stop(dir).status).toBe(ALLOWED);
+      expect(runs(dir, 'gate:quick')).toBe(1);
+
+      write(dir, { [file]: 'export const a = 3;\n' });
+      // The condition itself: git does not report the change.
+      expect(git(dir, 'diff', '--name-only', 'HEAD')).toBe('');
+      expect(stop(dir).status).toBe(ALLOWED);
+
+      expect(runs(dir, 'gate:quick')).toBe(2);
+    },
+  );
 });
 
 // BUG-31, part 2 (D-119): the AI reviews in CI load the project's settings, so
