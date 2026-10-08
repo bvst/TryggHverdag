@@ -510,6 +510,172 @@ describe('runWorkerProcess', () => {
   });
 });
 
+/**
+ * BUG-32: a runner whose start the test holds, as Graphile Worker's `run()`
+ * holds its own while it opens the pool's first connections. `release` lets
+ * it start as recordingRunner's does, so what then happens to it is recorded
+ * the same way; `fail` makes the start reject, as one that cannot connect
+ * does. Either fails the test, loudly, if the worker never asked it to start.
+ */
+function heldRunner() {
+  const recording = recordingRunner();
+  let start: { release: () => void; fail: (error: Error) => void } | undefined;
+  const run = ((given: RunnerOptions) =>
+    new Promise<Awaited<ReturnType<RunWorker>>>((resolve, reject) => {
+      start = {
+        release: () => {
+          resolve(recording.run(given));
+        },
+        fail: reject,
+      };
+    })) as RunWorker;
+  const asked = () => {
+    if (start === undefined) {
+      throw new Error('The worker never asked the runner to start.');
+    }
+    return start;
+  };
+  return {
+    run,
+    events: recording.events,
+    /** Whether the worker has called the runner, so its start is under way. */
+    starting: () => start !== undefined,
+    release: () => {
+      asked().release();
+    },
+    fail: (error: Error) => {
+      asked().fail(error);
+    },
+  };
+}
+
+// BUG-32: CI's `integration` check on #70 (job 113295132594) saw the real
+// worker, sent SIGTERM once it held a connection, die by the signal
+// (`{ code: null, signal: 'SIGTERM' }`) rather than stop and exit with 0
+// (D-068). runWorkerProcess put its handler on the signals only once
+// startWorker had returned, and Graphile Worker's run() opens connections
+// before it returns. A process with no listener for a signal takes the
+// signal's default action and dies by it, so whether anything listens while
+// the runner is starting is what decides it, and the first test looks at
+// that before it sends the signal. On Clever Cloud this is a quick redeploy's
+// SIGTERM ending a worker that is still starting: no stop, no pool ended, no
+// exit with 0.
+const STOP_SIGNALS = ['SIGTERM', 'SIGINT'] as const;
+
+describe('runWorkerProcess, when the stop signal comes while the runner is starting', () => {
+  test.each(STOP_SIGNALS)(
+    'BUG-32: a %s sent while the runner is still starting is not lost: once started, it stops the runner, ends the pool, and exits with 0',
+    async (signal) => {
+      const runner = heldRunner();
+      const signals = new EventEmitter();
+      const written: string[] = [];
+      const exits: number[] = [];
+
+      const running = runWorkerProcess('postgres://example/db', {
+        runWorker: runner.run,
+        signals,
+        write: (text) => {
+          written.push(text);
+        },
+        exit: (code) => {
+          exits.push(code);
+        },
+        // Quiet loops, as the other runWorkerProcess tests have: this test is
+        // about the signal, not the loops.
+        ...quietLoops(),
+      });
+      await settle();
+      // The window: the runner has been called, and its start has not returned.
+      expect(runner.starting()).toBe(true);
+      expect(
+        signals.listenerCount(signal),
+        `nothing listens for ${signal} while the runner is starting, so a real process would die by it`,
+      ).toBeGreaterThan(0);
+      signals.emit(signal);
+      await settle();
+      // Not before the start has returned: an exit then would cut Graphile
+      // Worker's start in half and leave the pool it was handed open.
+      expect(exits).toEqual([]);
+      runner.release();
+
+      await expect(running).resolves.toBeUndefined();
+      await settle();
+      expect(runner.events).toEqual(['runner stopped', 'pool ended']);
+      expect(exits).toEqual([0]);
+      expect(written.join('')).not.toContain('worker failed');
+    },
+  );
+
+  test('BUG-32: a second signal after the start does not stop the worker twice', async () => {
+    // Passes before the fix, on purpose: there, the SIGTERM sent during the
+    // start is lost, and the SIGINT alone stops the worker. It guards the
+    // fix's shape. The platform sends SIGTERM and may follow with SIGINT
+    // (process.ts). A fix that took the early signal with a handler of its
+    // own, and added exitOnSignal's once the start had returned, would stop
+    // on both: the runner stopped twice, and the pool ended twice, which
+    // throws.
+    const runner = heldRunner();
+    const signals = new EventEmitter();
+    const exits: number[] = [];
+
+    const running = runWorkerProcess('postgres://example/db', {
+      runWorker: runner.run,
+      signals,
+      write: () => undefined,
+      exit: (code) => {
+        exits.push(code);
+      },
+      // Quiet loops, as the other runWorkerProcess tests have: this test is
+      // about the signals, not the loops.
+      ...quietLoops(),
+    });
+    await settle();
+    signals.emit('SIGTERM');
+    runner.release();
+    await settle();
+    signals.emit('SIGINT');
+
+    await expect(running).resolves.toBeUndefined();
+    await settle();
+    expect(runner.events).toEqual(['runner stopped', 'pool ended']);
+    expect(exits).toEqual([0]);
+  });
+
+  test('BUG-32: a start that fails after a SIGTERM still fails the worker, and never exits with 0', async () => {
+    // Passes before the fix, on purpose: there, nothing hears the SIGTERM,
+    // and the failed start rejects as it always has, which runMain turns into
+    // "worker failed: …" and an exit with 1 (bin/worker.ts). It guards the
+    // fix: a stop that waits for the start must not take a start that failed
+    // for a clean stop. An exit with 0 says the worker stopped cleanly, and
+    // one that never started watches nobody (process.ts: on any failure it
+    // exits with 1 and says what failed). Which line says it, runMain's or
+    // the stop's, is the fix's to choose; the rejection and the exit code are
+    // not.
+    const runner = heldRunner();
+    const signals = new EventEmitter();
+    const exits: number[] = [];
+
+    const running = runWorkerProcess('postgres://example/db', {
+      runWorker: runner.run,
+      signals,
+      write: () => undefined,
+      exit: (code) => {
+        exits.push(code);
+      },
+      // Quiet loops, as the other runWorkerProcess tests have: a start that
+      // fails starts none, and this test is not about them.
+      ...quietLoops(),
+    });
+    await settle();
+    signals.emit('SIGTERM');
+    runner.fail(new Error('could not connect'));
+
+    await expect(running).rejects.toThrow('could not connect');
+    await settle();
+    expect(exits).not.toContain(0);
+  });
+});
+
 describe("runWorkerProcess on Clever Cloud's build machine", () => {
   // BUG-3: Clever Cloud also starts CC_WORKER_COMMAND on the machine that
   // builds a deploy, which it marks INSTANCE_TYPE=build. Staging's first two
