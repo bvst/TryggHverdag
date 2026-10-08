@@ -21,7 +21,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { changedFiles } from '../../scripts/lib/git.mjs';
-import { block, hasFlag, readInput } from './lib.mjs';
+import { block, hasFlag, inReviewJob, readInput } from './lib.mjs';
 
 const PROGRESS_CURRENT = 'docs/progress.md';
 const PROGRESS_ARCHIVE = /^docs\/progress\/[^/]+\.md$/;
@@ -39,13 +39,7 @@ export function needsLogging(files) {
 }
 
 const input = await readInput();
-
-// D-119: a CI review job changes no code, and CI's required checks run the
-// same gates on the same commit. Both variables, so neither another CI job nor
-// a local session can turn the check off by accident.
-if (process.env.GITHUB_ACTIONS === 'true' && process.env.TRYGGHVERDAG_REVIEW_JOB === '1') {
-  process.exit(0);
-}
+if (inReviewJob()) process.exit(0);
 
 const cwd = input.cwd || process.cwd();
 const marker = path.join(cwd, '.claude/state/progress-missing');
