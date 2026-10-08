@@ -442,6 +442,37 @@ describe('BUG-31: what git cannot vouch for never skips the gate (HK-06, D-119)'
   );
 });
 
+// BUG-31, review loop 2 (D-119): a change git normalises away is still a
+// change. With core.autocrlf set, `git diff` cleans a file's line endings back
+// to LF before it compares, so a tracked file changed only from LF to CRLF has
+// an empty diff, though `git status` lists it as modified. The fingerprint is
+// built from that diff, so it stayed the same and the second stop skipped the
+// gate — while the gate's tools read the file's raw bytes (prettier wants LF)
+// and could fail on exactly that change. code-reviewer found it on #68.
+describe('BUG-31: a change git normalises away is still a change (HK-06, D-119)', () => {
+  test.each([{ autocrlf: 'input' }, { autocrlf: 'true' }])(
+    'BUG-31: with core.autocrlf=$autocrlf, a tracked file changed only from LF to CRLF after a green run runs the gate again',
+    ({ autocrlf }) => {
+      const file = 'apps/server/src/api.ts';
+      const dir = branchRepo({ 'gate:quick': PASSES });
+      git(dir, 'config', 'core.autocrlf', autocrlf);
+      expect(stop(dir).status).toBe(ALLOWED);
+      expect(runs(dir, 'gate:quick')).toBe(1);
+
+      // The same text as the branch committed, with CRLF line endings.
+      write(dir, { [file]: 'export const a = 2;\r\n' });
+      // The condition itself: git lists the file as modified, and its diff
+      // against HEAD — the view of the work the fingerprint is built from — is
+      // empty.
+      expect(git(dir, 'status', '--short', '--', file)).toBe(` M ${file}\n`);
+      expect(git(dir, 'diff', 'HEAD', '--binary', '--no-ext-diff', '--no-textconv')).toBe('');
+      expect(stop(dir).status).toBe(ALLOWED);
+
+      expect(runs(dir, 'gate:quick')).toBe(2);
+    },
+  );
+});
+
 // BUG-31, part 2 (D-119): the AI reviews in CI load the project's settings, so
 // the stop gate ran gate:quick inside every review job. With both
 // GITHUB_ACTIONS=true and TRYGGHVERDAG_REVIEW_JOB=1 the hook stands down at
