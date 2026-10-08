@@ -446,6 +446,40 @@ function keepProcessAlive(): void {
 }
 
 /**
+ * How long a stop signal that came while the worker was starting waits for
+ * the start to return, counted from the signal (BUG-32). Why 10 s: in
+ * BUG-32's reproduction the real worker's first connection came about 0.6 s
+ * after its start, so a healthy start has room many times over, and a stuck
+ * one ends loudly, with exit 1, well inside a platform's usual stop grace.
+ */
+const START_LIMIT_MS = 10_000;
+
+/**
+ * The worker once its start has returned, for a stop signal that came while
+ * it was starting. Rejects, saying so, if the start has not returned
+ * START_LIMIT_MS after the signal. The limit is the global setTimeout, and is
+ * cleared once either settles, so it never fires after a start that returned.
+ */
+async function startedWithinLimit(started: Promise<Worker>): Promise<Worker> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new Error(
+          'A stop signal came while the worker was starting, and the start had not returned ' +
+            `${String(START_LIMIT_MS)} ms after it, so the worker ends without stopping it.`,
+        ),
+      );
+    }, START_LIMIT_MS);
+  });
+  try {
+    return await Promise.race([started, limit]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * The worker process: start the runner and the loops, stop them cleanly on
  * the platform's signal, and fail if the runner ends any other way. Here
  * rather than in bin/worker.ts so that the part deciding whether a dead worker
@@ -553,6 +587,7 @@ export async function runWorkerProcess(
     'worker: no SMS provider is configured, so no escalation SMS can reach a phone: every ' +
       'SMS is answered NOT_CONFIGURED, stays unsent, and is tried again.\n',
   );
+  let startReturned = false;
   const started = startWorker(connectionString, runWorker, {
     checkIn,
     write,
@@ -569,8 +604,29 @@ export async function runWorkerProcess(
   // before it returns, and a stop signal then would otherwise meet no listener
   // and end the process by the signal: no runner stopped, no pool ended, no
   // exit with 0. A start that fails fails the stop too, so it exits with 1.
-  exitOnSignal({ name: 'worker', signals, stop: async () => (await started).stop(), ...reporting });
+  // A stop the owner asks for, often because the worker looks stuck, must not
+  // wait silently for a start that never ends: a signal during the start is
+  // said at once, and waits for the start at most START_LIMIT_MS, after which
+  // the stop fails, said in one line, and the worker exits with 1. The wait
+  // starts after runWorkerProcess's own, so the read-back below has begun
+  // before the stop, which waits for it (D-109).
+  exitOnSignal({
+    name: 'worker',
+    signals,
+    stop: async () => {
+      if (startReturned) {
+        return (await started).stop();
+      }
+      write(
+        'worker: a stop signal arrived while the worker was starting; it stops once the start ' +
+          `has returned, waiting at most ${String(START_LIMIT_MS)} ms.\n`,
+      );
+      return (await startedWithinLimit(started)).stop();
+    },
+    ...reporting,
+  });
   const worker = await started;
+  startReturned = true;
   // Asking is not getting (D-109): the limit read back once, and said. Not
   // awaited, and never a reason not to run: a worker that refused to start
   // would watch nobody. The stop waits for it.
