@@ -289,6 +289,63 @@ function underTest(): JourneyStoreUnderTest {
       });
       return Promise.resolve({ release: letGo });
     },
+    // LOST-08-AC4: a holder that lets go once a close waits for the row,
+    // having first changed the journey as a transaction in flight commits: a
+    // responder's row deleted, contact back, "I'm home", or the 24-hour end,
+    // each through the fake's own steps; or nothing. As the removal's holder,
+    // it lets go a few turns after the close is called, once it waits.
+    holdUntilClosureWaits: (journeyId, change) => {
+      store.hold(journeyId);
+      let done = false;
+      const letGo = async () => {
+        if (done) {
+          return;
+        }
+        done = true;
+        await store.commitHold(journeyId, async () => {
+          const id = journeyId.toLowerCase();
+          const journey = store.journeys().find((each) => each.id === id);
+          if (change === 'unchanged' || journey === undefined) {
+            return;
+          }
+          if (typeof change === 'object') {
+            store.removeResponderRow(journeyId, change.remove);
+          } else if (change === 'contact') {
+            await store.recordHeartbeat({
+              journeyId,
+              eventId: syntheticEventId(),
+              receivedAt: await clock.now(),
+              batteryLevel: null,
+              position: null,
+            });
+          } else if (change === 'home') {
+            await store.recordHome({
+              journeyId,
+              walkerId: journey.walkerId,
+              deviceId: store.deviceOf(journeyId),
+            });
+          } else {
+            const alert = alertsOf(id).find(({ state }) => state !== 'RESOLVED');
+            await store.expireAlert({ alertId: alert?.id ?? '' });
+          }
+        });
+      };
+      store.beforeNext('recordClosure', () => {
+        void settled().then(letGo);
+      });
+      return Promise.resolve({ release: letGo });
+    },
+    // LOST-08-AC21: the race placed in the fake's own two moments of a start:
+    // after its insert meets the walker's unended journey, and before its
+    // retry; the fake awaits each.
+    raceTheStart: ({ end, again }) => {
+      store.afterConflict(end);
+      if (again !== undefined) {
+        store.beforeRetry(again.before);
+        store.afterConflict(again.end);
+      }
+      return Promise.resolve({ done: () => Promise.resolve() });
+    },
   };
 }
 
@@ -490,6 +547,26 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       'SM-10-AC8: for any sequence of acknowledgements, removals, sweeps, time passing, heartbeats fresh or stale and "I’m home", after every step an acknowledger is a responder, each round’s SMS reach exactly that round’s responders, a due alert with a responder is escalated in its round by the next sweep, no removed responder has a message pending, and the walker holds one warning per time the last responder went (LOST-02, LOST-07)',
       'SM-10-AC17: each withdrawal — the resolution, the acknowledgement, the open, the reset, the removal — withdraws exactly its own kinds’ unsent messages, and the removal only the removed responder’s (LOST-06, LOST-07)',
       'SM-10-AC10: a removal before the open, the escalation or a resolution leaves the removed responder out of what each writes; after it, it withdraws what each wrote them that is still unsent (LOST-02, LOST-03, LOST-07, SM-04)',
+      // RG-03 (LOST-08, the spec's "Existing assertions that change by
+      // design": "the pinned list of behaviour names gains this task's"):
+      // "They're safe", the 24-hour end and the start that races an end join
+      // the shared suite, its spec's shared behaviours 1 to 11, so the fake
+      // and the adapter are held to them alike (D-100). Every name above is
+      // unchanged; these are added. Three gained a clause over the spec's
+      // wording, which test-author may add: the second its read (as LOST-06's
+      // did), the fourth names RACERS and RACE_ROUNDS by their values, and
+      // the eighth says what a removal and a held row come to.
+      'LOST-08-AC1: recordClosure by the acknowledger ends the LOST_CONTACT journey SAFE and resolves its alert SAFE at the store’s now, withdraws the alert’s unsent WITHDRAWN_WHEN_RESOLVED kinds, and writes one SAFE per responder row but the closer’s, in the alert’s round',
+      'LOST-08-AC2: alertForClosure reads the alert as "I’m on it" reads it, in either case and without waiting for a held row; recordClosure decides by the close rule under the journey’s row and writes nothing for a stranger, another responder, a half record, or a resolved alert',
+      'LOST-08-AC3: after a reset recordClosure refuses everyone until a second acknowledgement, then closes for the new acknowledger, telling the remaining responders only',
+      'LOST-08-AC4: recordClosure decides again under the journey’s row, as its holder left it; 10 closes at once, 5 times over: one closes, every other is ignored, none an error',
+      'LOST-08-AC7: a closed alert’s stand-down to a responder whose withdrawn message is in a port’s hands is due at that message’s lease or retry time, at most 60 s on; others at once',
+      'LOST-08-AC8: alertsDueForExpiry reads exactly the unresolved alerts opened 24 hours or more before the store’s now; expireAlert ends the journey EXPIRED, resolves the alert EXPIRED and writes one EXPIRED per responder row, the acknowledger’s included',
+      'LOST-08-AC9: expireAlert on a journey with no responder row resolves its alert with no message, and unheardAlertCount no longer counts it',
+      'LOST-08-AC11: expireAlert decides again under the journey’s row: it skips, writing nothing, an alert resolved, or a journey ended or back in contact, since the read; after a removal it expires all the same, telling the remaining responders only; a held row it skips without waiting, and told to wait, it decides as the holder left it',
+      'LOST-08-AC6: for any sequence of acknowledgements, closes, removals, sweeps, time passing beyond 24 hours, heartbeats fresh or stale and "I’m home", after every step an ENDED journey has its end reason and ended_at, an unresolved alert’s journey is LOST_CONTACT, no unresolved alert is 24 hours old after a sweep, and every SAFE alert names its acknowledger',
+      'LOST-08-AC15: the open withdraws an earlier journey’s unsent SAFE and EXPIRED for its own responders only; the removal and the resolution leave them alone',
+      'LOST-08-AC21: insertStarted retries once when the journey it conflicted with ended before its read, and throws when the race comes again',
     ]);
     expect(RACERS).toBeGreaterThanOrEqual(10);
     expect(RACE_ROUNDS).toBeGreaterThanOrEqual(5);
@@ -1807,6 +1884,10 @@ describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
     // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
     // fake-journey-store.test.ts line 1640): the list gains LOST_CONTACT_SMS,
     // the escalation SMS (D-019), last, as the server's does. Still exact.
+    // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+    // design", fake-journey-store.test.ts line 1810): the list gains SAFE and
+    // EXPIRED, the stand-downs of "They're safe" and the 24-hour end, after
+    // NO_RESPONDER, as the server's does. Still exact.
     expect(kit.MESSAGE_KINDS).toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
@@ -1814,6 +1895,8 @@ describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
       'NO_RESPONDER',
+      'SAFE',
+      'EXPIRED',
     ]);
   });
 });
@@ -2218,7 +2301,14 @@ describe('fakeJourneyStore: "I’m on it" (LOST-06)', () => {
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
     ]);
-    expect(kit.WITHDRAWN_WHEN_OPENED).toEqual(['BACK_IN_CONTACT', 'HOME']);
+    // RG-03 (LOST-08; not in the spec's list, which names the kit's
+    // stand-down copy among those "added to", found by test-author searching
+    // for exact pins of the open's list): the open's list is the domain's
+    // ALERT_RESOLUTIONS, which gains SAFE and EXPIRED (D-126; D-112, loop 3:
+    // a new resolution opts its stand-down in). Still exact, and the kit's own
+    // ALERT_RESOLUTIONS is held equal to it.
+    expect(kit.WITHDRAWN_WHEN_OPENED).toEqual(['BACK_IN_CONTACT', 'HOME', 'SAFE', 'EXPIRED']);
+    expect(kit.ALERT_RESOLUTIONS).toEqual(kit.WITHDRAWN_WHEN_OPENED);
     expect(
       kit.MESSAGE_KINDS.filter(
         (kind) =>
@@ -2407,6 +2497,10 @@ describe('fakeJourneyStore: escalation to SMS (LOST-07)', () => {
   // fake-journey-store.test.ts line 2280): PUSH_KINDS gains NO_RESPONDER, the
   // walker's warning, which goes by push (approach item 7). Still exact; every
   // kind is still in exactly one channel.
+  // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+  // design", fake-journey-store.test.ts line 2412): PUSH_KINDS gains SAFE and
+  // EXPIRED, the two new stand-downs, which go by push (D-087). Still exact;
+  // every kind is still in exactly one channel.
   test('the test kit hands out its channel lists and its acknowledgement’s list: every kind in exactly one channel, and every kind an acknowledgement withdraws also withdrawn on resolution', () => {
     expect(kit.SMS_KINDS).toEqual(['LOST_CONTACT_SMS']);
     expect(kit.PUSH_KINDS).toEqual([
@@ -2415,6 +2509,8 @@ describe('fakeJourneyStore: escalation to SMS (LOST-07)', () => {
       'HOME',
       'ACKNOWLEDGED',
       'NO_RESPONDER',
+      'SAFE',
+      'EXPIRED',
     ]);
     expect(kit.WITHDRAWN_WHEN_ACKNOWLEDGED).toEqual(['LOST_CONTACT_SMS']);
     expect(
@@ -2709,5 +2805,370 @@ describe('fakeJourneyStore: removing a responder (SM-10)', () => {
     expect(
       kit.WITHDRAWN_WHEN_RESET.filter((kind) => !kit.WITHDRAWN_WHEN_RESOLVED.includes(kind)),
     ).toEqual([]);
+  });
+});
+
+const DAY = 86_400_000;
+
+/**
+ * A journey lost and acknowledged by its first responder, the alert opened
+ * `openedAgoMs` before the clock's now (LOST-08): what "They're safe" and the
+ * 24-hour end meet.
+ */
+async function acknowledgedStore({
+  responders = 3,
+  openedAgoMs = 10 * 60_000,
+}: { responders?: number; openedAgoMs?: number } = {}) {
+  const lost = await lostStore(responders);
+  lost.clock.advance(openedAgoMs);
+  const [r1 = ''] = lost.responderIds;
+  const recorded = await lost.store.recordAcknowledgement({
+    alertId: lost.alertId,
+    responderId: r1,
+  });
+  if (recorded.outcome !== 'acknowledged') {
+    throw new Error(`expected R1’s acknowledgement to be recorded: ${JSON.stringify(recorded)}`);
+  }
+  return lost;
+}
+
+describe('fakeJourneyStore: "They’re safe" and the 24-hour end (LOST-08)', () => {
+  test('a store given no clock refuses, loudly and naming the clock, to close, to read the alerts due to end or to end one, and changes nothing; the read, and a refusal it needs no time for, are answered without one', async () => {
+    const store = fakeJourneyStore();
+    const walkerId = store.addUser();
+    const [r1, r2] = [store.addUser(), store.addUser()];
+    const journeyId = store.seed({
+      walkerId,
+      deviceId: store.addDevice(walkerId),
+      state: 'LOST_CONTACT',
+      responderIds: [r1, r2],
+      startedAt: AT,
+    });
+    const alertId = store.seedAlert({
+      journeyId,
+      state: 'ACKNOWLEDGED',
+      openedAt: AT,
+      silentSince: AT,
+      acknowledgedBy: r1,
+      acknowledgedAt: AT,
+    });
+
+    await expect(store.recordClosure({ alertId, responderId: r1 })).rejects.toThrow(/clock/);
+    await expect(store.alertsDueForExpiry()).rejects.toThrow(/clock/);
+    await expect(store.expireAlert({ alertId })).rejects.toThrow(/clock/);
+
+    expect(store.alerts()[0]).toMatchObject({ state: 'ACKNOWLEDGED', resolution: null });
+    expect(store.journeys()[0]?.state).toBe('LOST_CONTACT');
+    expect(store.endOf(journeyId)).toEqual({ endedAt: null, endReason: null });
+    expect(store.outbox()).toEqual([]);
+    expect(await store.alertForClosure(alertId)).toEqual({
+      id: alertId,
+      state: 'ACKNOWLEDGED',
+      acknowledgedBy: r1,
+      responderIds: [r1, r2],
+    });
+    expect(await store.recordClosure({ alertId, responderId: r2 })).toEqual({
+      outcome: 'not_closed',
+      decision: { type: 'refused', reason: 'NOT_THE_ACKNOWLEDGER' },
+    });
+    expect(await store.recordClosure({ alertId, responderId: walkerId })).toEqual({
+      outcome: 'not_closed',
+      decision: { type: 'refused', reason: 'ALERT_NOT_FOUND' },
+    });
+  });
+
+  test('the four are port methods: recorded among the calls, failed when told to, alone or with every other, changing nothing, and their beforeNext actions run as they are called', async () => {
+    const { store, alertId, responderIds, journeyId } = await acknowledgedStore({
+      openedAgoMs: DAY,
+    });
+    const [r1 = ''] = responderIds;
+    const asks = {
+      alertForClosure: () => store.alertForClosure(alertId),
+      recordClosure: () => store.recordClosure({ alertId, responderId: r1 }),
+      alertsDueForExpiry: () => store.alertsDueForExpiry(),
+      expireAlert: () => store.expireAlert({ alertId }),
+    } as const;
+    const error = new Error('the database is gone');
+
+    for (const call of Object.keys(asks) as (keyof typeof asks)[]) {
+      const ask = asks[call];
+      const before = { journeys: store.journeys(), alerts: store.alerts(), outbox: store.outbox() };
+      store.failWith(error, call);
+      await expect(ask(), call).rejects.toBe(error);
+      store.recover();
+      store.failWith(error);
+      await expect(ask(), `${call}, every method failing`).rejects.toBe(error);
+      store.recover();
+      // Failing, it changed nothing.
+      expect(
+        { journeys: store.journeys(), alerts: store.alerts(), outbox: store.outbox() },
+        call,
+      ).toEqual(before);
+      let ran = false;
+      store.beforeNext(call, () => {
+        ran = true;
+      });
+      const answer = ask();
+      expect(ran, `${call}: its action runs as it is called`).toBe(true);
+      await answer;
+    }
+    expect(store.calls.filter((call) => call in asks)).toEqual([
+      'alertForClosure',
+      'alertForClosure',
+      'alertForClosure',
+      'recordClosure',
+      'recordClosure',
+      'recordClosure',
+      'alertsDueForExpiry',
+      'alertsDueForExpiry',
+      'alertsDueForExpiry',
+      'expireAlert',
+      'expireAlert',
+      'expireAlert',
+    ]);
+    // The close went through, so the alert was over for the 24-hour end.
+    expect(store.endOf(journeyId).endReason).toBe('SAFE');
+  });
+
+  test('recordClosure waits while the alert’s journey’s row is held, and decides as the row stands when the holder commits; alertForClosure does not wait', async () => {
+    const { store, journeyId, alertId, responderIds } = await acknowledgedStore();
+    const [r1 = ''] = responderIds;
+    store.hold(journeyId);
+
+    expect((await store.alertForClosure(alertId))?.state).toBe('ACKNOWLEDGED');
+    let answered: unknown = null;
+    const closing = store
+      .recordClosure({ alertId, responderId: r1 })
+      .then((answer) => (answered = answer));
+    await settled();
+    expect(answered, 'still waiting for the row').toBeNull();
+    expect(store.journeys()[0]?.state).toBe('LOST_CONTACT');
+
+    // The holder removed R1's row, and commits: the waiting close finds R1
+    // following the journey no more.
+    await store.commitHold(journeyId, () => {
+      store.removeResponderRow(journeyId, r1);
+      return Promise.resolve();
+    });
+    await closing;
+    expect(answered).toEqual({
+      outcome: 'not_closed',
+      decision: { type: 'refused', reason: 'ALERT_NOT_FOUND' },
+    });
+    expect(store.alerts()[0]?.state).toBe('ACKNOWLEDGED');
+    expect(store.outbox().filter(({ kind }) => kind === 'SAFE')).toEqual([]);
+  });
+
+  test('a close writes at the clock’s now as it answers, the closer left out of the stand-downs; a 24-hour end at its own now, everyone told; endOf and alerts() hand out copies', async () => {
+    const closing = await acknowledgedStore();
+    const [r1 = '', r2 = '', r3 = ''] = closing.responderIds;
+    // Moved on as the close is asked: its now is the one it answers with.
+    closing.store.beforeNext('recordClosure', () => {
+      closing.clock.advance(1_000);
+    });
+    const closed = await closing.store.recordClosure({ alertId: closing.alertId, responderId: r1 });
+    const closedAt = await closing.clock.now();
+
+    expect(closed.outcome).toBe('closed');
+    expect(closing.store.endOf(closing.journeyId)).toEqual({
+      endedAt: closedAt,
+      endReason: 'SAFE',
+    });
+    expect(closing.store.alerts()[0]).toMatchObject({
+      state: 'RESOLVED',
+      resolution: 'SAFE',
+      resolvedAt: closedAt,
+      acknowledgedBy: r1,
+    });
+    const safe = closing.store.outbox().filter(({ kind }) => kind === 'SAFE');
+    expect(safe.map(({ recipientId }) => recipientId).sort()).toEqual([r2, r3].sort());
+    for (const message of safe) {
+      expect(message).toMatchObject({ createdAt: closedAt, nextAttemptAt: closedAt, attempts: 0 });
+    }
+    // Copies: changing what was handed out changes nothing kept.
+    const end = closing.store.endOf(closing.journeyId);
+    end.endedAt?.setTime(0);
+    closing.store.alerts()[0]?.resolvedAt?.setTime(0);
+    expect(closing.store.endOf(closing.journeyId).endedAt).toEqual(closedAt);
+    expect(closing.store.alerts()[0]?.resolvedAt).toEqual(closedAt);
+
+    const ending = await acknowledgedStore({ openedAgoMs: DAY });
+    ending.store.beforeNext('expireAlert', () => {
+      ending.clock.advance(1_000);
+    });
+    const expired = await ending.store.expireAlert({ alertId: ending.alertId });
+    const expiredAt = await ending.clock.now();
+
+    expect(expired.outcome).toBe('expired');
+    expect(ending.store.endOf(ending.journeyId)).toEqual({
+      endedAt: expiredAt,
+      endReason: 'EXPIRED',
+    });
+    expect(
+      ending.store
+        .outbox()
+        .filter(({ kind }) => kind === 'EXPIRED')
+        .map(({ recipientId }) => recipientId)
+        .sort(),
+    ).toEqual([...ending.responderIds].sort());
+  });
+
+  test('the 24-hour end is 86 400 000 ms by the clock: a millisecond under, it is neither read as due nor ended; at it, both', async () => {
+    const { store, clock, alertId, journeyId } = await lostStore(2);
+    clock.advance(DAY - 1);
+
+    expect((await store.alertsDueForExpiry()).alerts).toEqual([]);
+    expect(await store.expireAlert({ alertId })).toEqual({ outcome: 'skipped' });
+    expect(store.journeys()[0]?.state).toBe('LOST_CONTACT');
+
+    clock.advance(1);
+    const read = await store.alertsDueForExpiry();
+    expect(read).toEqual({
+      now: await clock.now(),
+      alerts: [
+        {
+          id: alertId,
+          journeyId,
+          journeyState: 'LOST_CONTACT',
+          openedAt: new Date((await clock.now()).getTime() - DAY),
+        },
+      ],
+    });
+    expect((await store.expireAlert({ alertId })).outcome).toBe('expired');
+  });
+
+  test('expireRequests records every 24-hour end asked for, in order, with its wait only when it had one, as copies; a waiting one answers held while the row is held, and a waiting heartbeat goes on once it is released', async () => {
+    const { store, clock, journeyId, alertId } = await lostStore(2);
+    clock.advance(DAY);
+    store.hold(journeyId);
+
+    expect(await store.expireAlert({ alertId })).toEqual({ outcome: 'skipped' });
+    expect(await store.expireAlert({ alertId, lockWaitMs: 5_000 })).toEqual({ outcome: 'held' });
+    const requests = store.expireRequests();
+    expect(requests).toEqual([{ alertId }, { alertId, lockWaitMs: 5_000 }]);
+    requests[0] = { alertId: syntheticUuid() };
+    expect(store.expireRequests()[0]).toEqual({ alertId });
+
+    let stored = false;
+    const writing = store
+      .recordHeartbeat({
+        journeyId,
+        eventId: syntheticEventId(),
+        receivedAt: await clock.now(),
+        batteryLevel: null,
+        position: null,
+      })
+      .then(() => (stored = true));
+    await settled();
+    expect(stored, 'the heartbeat waits for the row').toBe(false);
+    store.release(journeyId);
+    await writing;
+    expect(stored).toBe(true);
+    expect(store.alerts()[0]?.resolution).toBe('BACK_IN_CONTACT');
+  });
+
+  test('recordClosure given an alert ID alone is refused, naming what it takes, and writes nothing', async () => {
+    const { store, alertId } = await acknowledgedStore();
+
+    await expect(
+      store.recordClosure(alertId as unknown as { alertId: string; responderId: string }),
+    ).rejects.toThrow(/alertId, responderId/);
+    expect(store.alerts()[0]?.state).toBe('ACKNOWLEDGED');
+  });
+
+  test('a close of an unresolved alert whose journey is not LOST_CONTACT, put there directly, throws and writes nothing', async () => {
+    const { store, journeyId, alertId, responderIds } = await acknowledgedStore();
+    store.setState(journeyId, 'ACTIVE');
+
+    await expect(
+      store.recordClosure({ alertId, responderId: responderIds[0] ?? '' }),
+    ).rejects.toThrow(/LOST_CONTACT/);
+    expect(store.alerts()[0]?.state).toBe('ACKNOWLEDGED');
+    expect(store.endOf(journeyId)).toEqual({ endedAt: null, endReason: null });
+    expect(store.outbox().filter(({ kind }) => kind === 'SAFE')).toEqual([]);
+  });
+
+  test('afterConflict runs between a start’s conflict and its read, and beforeRetry before its retry, each once, in order; a start that meets no journey runs neither', async () => {
+    const { store, walkerId, deviceId, journeyId } = watchedStore({ responders: 1 });
+    const responderId = store.addUser();
+    const seen: string[] = [];
+    store.afterConflict(() => {
+      seen.push(`conflict, journey ${store.journeys()[0]?.state ?? ''}`);
+      store.setState(journeyId, 'ENDED');
+    });
+    store.beforeRetry(() => {
+      seen.push('retry');
+    });
+
+    const started = await store.insertStarted({
+      walkerId,
+      deviceId,
+      responderIds: [responderId],
+      startedAt: AT,
+    });
+
+    expect(started.inserted).toBe(true);
+    expect(seen).toEqual(['conflict, journey ACTIVE', 'retry']);
+    expect(store.calls.filter((call) => call === 'insertStarted')).toHaveLength(1);
+
+    // A start that meets nothing runs neither queued action.
+    const fresh = withWalker();
+    const responder = fresh.store.addUser();
+    let ran = false;
+    fresh.store.afterConflict(() => {
+      ran = true;
+    });
+    fresh.store.beforeRetry(() => {
+      ran = true;
+    });
+    expect(
+      (
+        await fresh.store.insertStarted({
+          walkerId: fresh.walkerId,
+          deviceId: fresh.deviceId,
+          responderIds: [responder],
+          startedAt: AT,
+        })
+      ).inserted,
+    ).toBe(true);
+    expect(ran).toBe(false);
+  });
+
+  test('a start that meets the walker’s unended journey, still unended at its read, names it and retries nothing, with no action queued', async () => {
+    const { store, walkerId, deviceId, journeyId } = watchedStore({ responders: 1 });
+
+    expect(
+      await store.insertStarted({
+        walkerId,
+        deviceId,
+        responderIds: [store.addUser()],
+        startedAt: AT,
+      }),
+    ).toEqual({ inserted: false, unendedJourneyId: journeyId });
+  });
+
+  test('the test kit hands out its resolutions and end reasons: ALERT_RESOLUTIONS equal to the open’s list, each a message kind, and JOURNEY_END_REASONS HOME, SAFE and EXPIRED', () => {
+    expect(kit.ALERT_RESOLUTIONS).toEqual(['BACK_IN_CONTACT', 'HOME', 'SAFE', 'EXPIRED']);
+    expect(kit.ALERT_RESOLUTIONS).toEqual(kit.WITHDRAWN_WHEN_OPENED);
+    expect(kit.ALERT_RESOLUTIONS.filter((kind) => !kit.MESSAGE_KINDS.includes(kind))).toEqual([]);
+    expect(kit.JOURNEY_END_REASONS).toEqual(['HOME', 'SAFE', 'EXPIRED']);
+    expect(kit.WITHDRAWN_WHEN_REMOVED).toEqual(expect.arrayContaining(['SAFE', 'EXPIRED']));
+  });
+
+  test('seedAlert takes a resolution of SAFE or EXPIRED, with its time', () => {
+    const { store, journeyId } = watchedStore({ responders: 1 });
+
+    for (const resolution of ['SAFE', 'EXPIRED'] as const) {
+      store.seedAlert({
+        journeyId,
+        state: 'RESOLVED',
+        openedAt: AT,
+        silentSince: AT,
+        resolvedAt: AT,
+        resolution,
+      });
+    }
+
+    expect(store.alerts().map(({ resolution }) => resolution)).toEqual(['SAFE', 'EXPIRED']);
   });
 });

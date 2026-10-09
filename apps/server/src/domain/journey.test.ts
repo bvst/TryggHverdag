@@ -69,7 +69,23 @@
 // The reset's, in its order: no unresolved alert, RESOLVED, or someone other
 // than the removed responder recorded (nobody included) → unchanged;
 // otherwise → reset, OPEN, whatever the state was.
+//
+// LOST-08 adds the journey's seventh event, expire, SM-06's 24-hour end (its
+// spec's approach item 6), and the alert rule's fourth, close, "They're safe"
+// (approach item 2), with two resolutions, kinds and end reasons, SAFE and
+// EXPIRED (approach item 3), and SM-05's guard (approach item 7). The close's
+// rule, in its order:
+//   1. no alert, or a sender who is not a responder → refused, ALERT_NOT_FOUND;
+//   2. RESOLVED → ignored, ALERT_RESOLVED, whatever resolved it;
+//   3. not ACKNOWLEDGED with the sender recorded → refused,
+//      NOT_THE_ACKNOWLEDGER: both halves read, a missing half refusing;
+//   4. otherwise → closed: the alert RESOLVED, SAFE, and the journey ENDED.
+// The 24-hour end's: a LOST_CONTACT journey whose alert opened 24 hours ago
+// or more by the database's now is expired, ENDED, EXPIRED, its alert
+// RESOLVED; everything else, no journey included, is unchanged.
 import {
+  ALERT_RESOLUTIONS as KIT_ALERT_RESOLUTIONS,
+  JOURNEY_END_REASONS as KIT_JOURNEY_END_REASONS,
   JOURNEY_MESSAGE_KINDS as KIT_JOURNEY_MESSAGE_KINDS,
   MESSAGE_KINDS as KIT_MESSAGE_KINDS,
   PUSH_KINDS as KIT_PUSH_KINDS,
@@ -86,6 +102,7 @@ import {
 import { describe, expect, test } from 'vitest';
 import {
   ALERT_EVENTS,
+  ALERT_EXPIRES_AFTER_MS,
   ALERT_RESOLUTIONS,
   ALERT_STATES,
   ESCALATE_AFTER_MS,
@@ -107,14 +124,20 @@ import {
   type AcknowledgeRefusal,
   type AcknowledgerRemovedEvent,
   type AlertForAcknowledgement,
+  type AlertForClosure,
   type AlertForEscalation,
   type AlertForReset,
   type AlertResolution,
   type AlertState,
+  type CloseEvent,
+  type CloseOutcome,
+  type CloseRefusal,
   type EscalateEvent,
   type EscalateOutcome,
   type ContactEvent,
   type HeartbeatEvent,
+  type ExpireEvent,
+  type ExpireOutcome,
   type HomeEvent,
   type JourneyEndReason,
   type JourneyEventType,
@@ -126,6 +149,7 @@ import {
   type RemoveOutcome,
   type ResetOutcome,
   type SilenceEvent,
+  type UnendedJourneyState,
 } from './journey.ts';
 
 /** What `transition` is asked about: the walker's unended journey, or null. */
@@ -261,6 +285,30 @@ const NOT_A_RESPONDER: RemoveOutcome = { type: 'unchanged', reason: 'NOT_A_RESPO
 const REMOVAL_IGNORED: RemoveOutcome = { type: 'ignored', reason: 'JOURNEY_ENDED' };
 const REMOVAL_REFUSED: RemoveOutcome = { type: 'refused', reason: 'JOURNEY_NOT_FOUND' };
 
+/** Twenty-four hours (SM-06, D-126), written out, so a wrong ALERT_EXPIRES_AFTER_MS fails here too. */
+const A_DAY = 86_400_000;
+
+/**
+ * LOST-08: the 24-hour end asks about a journey whose current alert opened at
+ * `alertOpenedAt` and is now `ageMs` old, both database times.
+ */
+function expireAt(ageMs: number, alertOpenedAt: Date = SILENT_SINCE): ExpireEvent {
+  return {
+    type: 'expire',
+    alertOpenedAt,
+    now: new Date(alertOpenedAt.getTime() + ageMs),
+  };
+}
+
+/** The 24-hour end's two outcomes, as the spec names them (approach item 6). */
+const EXPIRED: ExpireOutcome = {
+  type: 'expired',
+  state: 'ENDED',
+  reason: 'EXPIRED',
+  alert: 'RESOLVED',
+};
+const NOT_EXPIRED: ExpireOutcome = { type: 'unchanged' };
+
 // ---------------------------------------------------------------------------
 // The transition table.
 // ---------------------------------------------------------------------------
@@ -297,6 +345,9 @@ const EVENT_FOR = {
   // responders, so the situation decides. As the only responder, and not
   // named, are REMOVE_ROWS, below.
   remove: () => remove(RESPONDER),
+  // LOST-08: the 24-hour end at 24 hours exactly, so the situation decides.
+  // The rows a millisecond under it are EXPIRE_UNDER_A_DAY, below.
+  expire: () => expireAt(A_DAY),
 } satisfies { [E in JourneyEventType]: () => Extract<JourneyEvent, { type: E }> };
 
 const TRANSITIONS = {
@@ -366,7 +417,30 @@ const TRANSITIONS = {
     LOST_CONTACT: { outcome: REMOVED_FROM('LOST_CONTACT', false) },
     ENDED: { outcome: REMOVAL_IGNORED },
   },
+  // RG-03 (LOST-08, the spec's "Existing assertions that change by design":
+  // the transition tables typed over JOURNEY_EVENTS "gain the expire and
+  // close rows"): LOST-08-AC14, the 24-hour end at 24 hours exactly. Only a
+  // LOST_CONTACT journey is ended; no journey, ACTIVE and ENDED are
+  // unchanged. Every row above keeps its outcome.
+  expire: {
+    none: { outcome: NOT_EXPIRED },
+    ACTIVE: { outcome: NOT_EXPIRED },
+    LOST_CONTACT: { outcome: EXPIRED },
+    ENDED: { outcome: NOT_EXPIRED },
+  },
 } satisfies Record<JourneyEventType, Record<Situation, Row>>;
+
+/**
+ * LOST-08-AC14: the 24-hour end one millisecond under the 24 hours, in every
+ * situation: nothing changes, LOST_CONTACT included. Typed over the
+ * situations, so a state added later needs its row here too.
+ */
+const EXPIRE_UNDER_A_DAY = {
+  none: NOT_EXPIRED,
+  ACTIVE: NOT_EXPIRED,
+  LOST_CONTACT: NOT_EXPIRED,
+  ENDED: NOT_EXPIRED,
+} satisfies Record<Situation, Outcome>;
 
 /**
  * SM-10-AC16: the removal in every situation, the responder named as the only
@@ -470,6 +544,7 @@ const ROW_ID = {
   contact: 'LOST-03-AC3',
   home: 'LOST-03-AC3',
   remove: 'SM-10-AC16',
+  expire: 'LOST-08-AC14',
 } satisfies Record<JourneyEventType, string>;
 
 /**
@@ -570,11 +645,15 @@ function decide(event: JourneyEventType, situation: string): Outcome {
         situation === 'none' ? null : journeyForRemoval(situation as JourneyState, 'oneOfSeveral'),
         EVENT_FOR.remove(),
       );
+    case 'expire':
+      // LOST-08: the 24-hour end reads the journey by its ID and state, as
+      // the watchdog does.
+      return transition(situationFor(situation), EVENT_FOR.expire());
   }
 }
 
 describe('AR-04: the journey state machine is one module, total over its own lists', () => {
-  test('SM-01-AC14: the states are exactly ACTIVE, LOST_CONTACT and ENDED, and the events exactly start, heartbeat, silence, contact, home and remove', () => {
+  test('SM-01-AC14: the states are exactly ACTIVE, LOST_CONTACT and ENDED, and the events exactly start, heartbeat, silence, contact, home, remove and expire', () => {
     // The events were exactly ['start'] until LOST-01 added the heartbeat
     // (RG-03: an event added by design, LOST-01-AC17 and its spec's approach
     // item 4). The list is still exact, so an event added later has to be
@@ -593,6 +672,11 @@ describe('AR-04: the journey state machine is one module, total over its own lis
     // line 456): remove joins by design, the removal of a responder
     // (SM-10-AC16, its spec's approach item 2), last; the title gains it. The
     // states do not change; the list is still pinned exactly, in order.
+    //
+    // RG-03 (LOST-08, the spec's "Existing assertions that change by design":
+    // "the other exact event pins … gain them too"): expire joins by design,
+    // SM-06's 24-hour end (LOST-08-AC14, its spec's approach item 6), last;
+    // the title gains it. The states do not change; still exact, in order.
     expect([...JOURNEY_STATES].sort()).toEqual(['ACTIVE', 'ENDED', 'LOST_CONTACT']);
     expect([...JOURNEY_EVENTS]).toEqual([
       'start',
@@ -601,6 +685,7 @@ describe('AR-04: the journey state machine is one module, total over its own lis
       'contact',
       'home',
       'remove',
+      'expire',
     ]);
   });
 
@@ -623,7 +708,12 @@ describe('AR-04: the journey state machine is one module, total over its own lis
   // journey's transition table holds an expectation for remove in every
   // situation"), and the title with them. Every pair that was here still is,
   // with the same outcome.
-  test('SM-01-AC14: the pairs with an outcome are exactly none, ACTIVE, LOST_CONTACT and ENDED, each with start, with heartbeat, with silence, with contact, with home and with remove', () => {
+  // RG-03 (LOST-08, the spec's "Existing assertions that change by design":
+  // the tables "gain the expire and close rows, and their counts"): the four
+  // expire pairs join by design (LOST-08-AC14: "the journey rule's table
+  // holds one for expire in every state"), and the title with them. Every
+  // pair that was here still is, with the same outcome.
+  test('SM-01-AC14: the pairs with an outcome are exactly none, ACTIVE, LOST_CONTACT and ENDED, each with start, with heartbeat, with silence, with contact, with home, with remove and with expire', () => {
     // ENDED × start joined the three in review: an ENDED journey handed in
     // is "no journey", see its row above. The four heartbeat pairs joined
     // with LOST-01 (RG-03: an event added by design, LOST-01-AC17).
@@ -660,6 +750,10 @@ describe('AR-04: the journey state machine is one module, total over its own lis
         'ENDED × remove',
         'LOST_CONTACT × remove',
         'none × remove',
+        'ACTIVE × expire',
+        'ENDED × expire',
+        'LOST_CONTACT × expire',
+        'none × expire',
       ].sort(),
     );
   });
@@ -1006,7 +1100,7 @@ function asSent(
 }
 
 describe('LOST-01: a heartbeat for the journey it names, in the rule’s order', () => {
-  test('LOST-01-AC17: JOURNEY_EVENTS is exactly start and heartbeat, and then silence, contact, home and remove', () => {
+  test('LOST-01-AC17: JOURNEY_EVENTS is exactly start and heartbeat, and then silence, contact, home, remove and expire', () => {
     // RG-03 (LOST-02): silence is added after the heartbeat by design
     // (LOST-02-AC6). Start and heartbeat keep their places; the pin is exact.
     //
@@ -1016,6 +1110,11 @@ describe('LOST-01: a heartbeat for the journey it names, in the rule’s order',
     // RG-03 (SM-10, the spec's "Existing assertions that change by design",
     // line 867): remove is added after home by design (SM-10-AC16), and the
     // title with it. Start and heartbeat keep their places; the pin is exact.
+    //
+    // RG-03 (LOST-08, the spec's "Existing assertions that change by design",
+    // the exact event pin of LOST-01-AC17): expire is added after remove by
+    // design (LOST-08-AC14), and the title with it. Start and heartbeat keep
+    // their places; the pin is exact.
     expect([...JOURNEY_EVENTS]).toEqual([
       'start',
       'heartbeat',
@@ -1023,6 +1122,7 @@ describe('LOST-01: a heartbeat for the journey it names, in the rule’s order',
       'contact',
       'home',
       'remove',
+      'expire',
     ]);
   });
 
@@ -1285,7 +1385,7 @@ function isOneOfTheSilenceOutcomes(value: unknown): boolean {
 }
 
 describe('LOST-02: every pair, silence included, has a tested outcome', () => {
-  test('LOST-02-AC6: JOURNEY_EVENTS is exactly start, heartbeat, silence, contact, home and remove, and ALERT_STATES exactly OPEN, ESCALATED, ACKNOWLEDGED and RESOLVED, in order (D-033)', () => {
+  test('LOST-02-AC6: JOURNEY_EVENTS is exactly start, heartbeat, silence, contact, home, remove and expire, and ALERT_STATES exactly OPEN, ESCALATED, ACKNOWLEDGED and RESOLVED, in order (D-033)', () => {
     // RG-03 (LOST-03, the spec's "Existing assertions that change by
     // design"): JOURNEY_EVENTS gains contact and home, after silence. The
     // alert states do not change. Both lists are still pinned exactly.
@@ -1293,6 +1393,11 @@ describe('LOST-02: every pair, silence included, has a tested outcome', () => {
     // RG-03 (SM-10, the spec's "Existing assertions that change by design",
     // line 1135): JOURNEY_EVENTS gains remove, after home, and the title with
     // it (SM-10-AC16). The alert states do not change. Still exact.
+    //
+    // RG-03 (LOST-08, the spec's "Existing assertions that change by design",
+    // the exact event pin of LOST-02-AC6): JOURNEY_EVENTS gains expire, after
+    // remove, and the title with it (LOST-08-AC14). The alert states do not
+    // change. Still exact.
     expect([...JOURNEY_EVENTS]).toEqual([
       'start',
       'heartbeat',
@@ -1300,6 +1405,7 @@ describe('LOST-02: every pair, silence included, has a tested outcome', () => {
       'contact',
       'home',
       'remove',
+      'expire',
     ]);
     expect([...ALERT_STATES]).toEqual(['OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED']);
   });
@@ -1587,7 +1693,10 @@ describe('LOST-03: every pair, contact and "I’m home" included, has a tested o
   // RG-03 (SM-10, the spec's "Existing assertions that change by design",
   // line 1423): JOURNEY_EVENTS gains remove, after home, and the title with
   // it (SM-10-AC16). Still exact, in order.
-  test('LOST-03-AC3: JOURNEY_EVENTS is exactly start, heartbeat, silence, contact, home and remove, in order', () => {
+  // RG-03 (LOST-08, the spec's "Existing assertions that change by design",
+  // the exact event pin of LOST-03-AC3): JOURNEY_EVENTS gains expire, after
+  // remove, and the title with it (LOST-08-AC14). Still exact, in order.
+  test('LOST-03-AC3: JOURNEY_EVENTS is exactly start, heartbeat, silence, contact, home, remove and expire, in order', () => {
     expect([...JOURNEY_EVENTS]).toEqual([
       'start',
       'heartbeat',
@@ -1595,6 +1704,7 @@ describe('LOST-03: every pair, contact and "I’m home" included, has a tested o
       'contact',
       'home',
       'remove',
+      'expire',
     ]);
   });
 
@@ -1874,7 +1984,11 @@ describe('LOST-03: the lists that are the one source for the table, the type and
   // RG-03 (SM-10, the spec's "Existing assertions that change by design",
   // line 1700): the list gains NO_RESPONDER, the walker's warning (SM-02,
   // D-087), last, and the title with it. Still exact, in order.
-  test('LOST-03-AC3: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME, ACKNOWLEDGED, LOST_CONTACT_SMS and NO_RESPONDER, in order', () => {
+  // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+  // design", the MESSAGE_KINDS pin of LOST-03-AC3): the list gains SAFE and
+  // EXPIRED, the stand-downs of "They're safe" and the 24-hour end (D-126),
+  // last, and the title with them. Still exact, in order.
+  test('LOST-03-AC3: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME, ACKNOWLEDGED, LOST_CONTACT_SMS, NO_RESPONDER, SAFE and EXPIRED, in order', () => {
     expect([...MESSAGE_KINDS]).toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
@@ -1882,6 +1996,8 @@ describe('LOST-03: the lists that are the one source for the table, the type and
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
       'NO_RESPONDER',
+      'SAFE',
+      'EXPIRED',
     ]);
   });
 
@@ -1891,22 +2007,30 @@ describe('LOST-03: the lists that are the one source for the table, the type and
     expect([...KIT_MESSAGE_KINDS]).toEqual([...MESSAGE_KINDS]);
   });
 
-  test('LOST-03-AC3: ALERT_RESOLUTIONS is exactly BACK_IN_CONTACT and HOME, each a message kind: a stand-down’s kind is its resolution’s own name (also held at typecheck)', () => {
+  // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+  // design", line 1894): ALERT_RESOLUTIONS gains SAFE and EXPIRED, appended
+  // in that order (approach item 3), and the title with them. Still exact;
+  // each is still a message kind of its own name.
+  test('LOST-03-AC3: ALERT_RESOLUTIONS is exactly BACK_IN_CONTACT, HOME, SAFE and EXPIRED, each a message kind: a stand-down’s kind is its resolution’s own name (also held at typecheck)', () => {
     // L1: assignable only while every resolution is a message kind.
     const asKinds: readonly MessageKind[] = ALERT_RESOLUTIONS;
     const resolution: AlertResolution = 'HOME';
 
-    expect([...ALERT_RESOLUTIONS]).toEqual(['BACK_IN_CONTACT', 'HOME']);
+    expect([...ALERT_RESOLUTIONS]).toEqual(['BACK_IN_CONTACT', 'HOME', 'SAFE', 'EXPIRED']);
     expect(asKinds.filter((kind) => !(MESSAGE_KINDS as readonly string[]).includes(kind))).toEqual(
       [],
     );
     expect(MESSAGE_KINDS).toContain(resolution);
   });
 
-  test('LOST-03-AC3: JOURNEY_END_REASONS is exactly HOME', () => {
-    const reason: JourneyEndReason = 'HOME';
+  // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+  // design", line 1906): JOURNEY_END_REASONS gains SAFE and EXPIRED (approach
+  // item 3), and the title with them. Still exact. SM-05's pinned table below
+  // (LOST-08-AC12) is its companion.
+  test('LOST-03-AC3: JOURNEY_END_REASONS is exactly HOME, SAFE and EXPIRED', () => {
+    const reasons: JourneyEndReason[] = ['HOME', 'SAFE', 'EXPIRED'];
 
-    expect([...JOURNEY_END_REASONS]).toEqual([reason]);
+    expect([...JOURNEY_END_REASONS]).toEqual(reasons);
   });
 });
 
@@ -1995,11 +2119,24 @@ const NOT_RESET: ResetOutcome = { type: 'unchanged' };
 /** The responder removed, in every reset situation. */
 const REMOVED = syntheticUuid();
 
+/** LOST-08: the close's outcomes, as the spec names them (approach item 2). */
+const CLOSED: CloseOutcome = {
+  type: 'closed',
+  state: 'RESOLVED',
+  resolution: 'SAFE',
+  journey: 'ENDED',
+};
+const NOT_THE_ACKNOWLEDGER: CloseRefusal = { type: 'refused', reason: 'NOT_THE_ACKNOWLEDGER' };
+const CLOSE_NOT_FOUND: CloseRefusal = { type: 'refused', reason: 'ALERT_NOT_FOUND' };
+const CLOSE_RESOLVED: CloseRefusal = { type: 'ignored', reason: 'ALERT_RESOLVED' };
+
 /** Each alert event's situations and outcomes: the table is typed one event at a time. */
 interface AlertTable {
   acknowledge: Record<AlertSituation, AlertOutcome>;
   escalate: Record<EscalationSituation, EscalateOutcome>;
   acknowledger_removed: Record<ResetSituation, ResetOutcome>;
+  // LOST-08: the close meets the situations an acknowledgement meets.
+  close: Record<AlertSituation, CloseOutcome>;
 }
 
 /**
@@ -2123,7 +2260,55 @@ const ALERT_TRANSITIONS = {
     'RESOLVED; the removed responder recorded': NOT_RESET,
     'RESOLVED; another responder recorded': NOT_RESET,
   },
+  // RG-03 (LOST-08, the spec's "Existing assertions that change by design":
+  // ALERT_TRANSITIONS is typed over ALERT_EVENTS, so it "gains the close
+  // rows"): LOST-08-AC14, "They're safe" (its spec's approach item 2), in the
+  // rule's order: no alert or a non-responder, RESOLVED, then both halves of
+  // the acknowledgement read, and only the sender recorded on an
+  // ACKNOWLEDGED alert closes it. The rows of the other three events do not
+  // change.
+  close: {
+    'no alert': CLOSE_NOT_FOUND,
+    // OPEN and ESCALATED: nobody can close, whoever is recorded; a record of
+    // the sender on either, put in directly, is half of one, and refused.
+    'OPEN; nobody on it; sent by a responder': NOT_THE_ACKNOWLEDGER,
+    'OPEN; the sender on it; sent by a responder': NOT_THE_ACKNOWLEDGER,
+    'OPEN; another responder on it; sent by a responder': NOT_THE_ACKNOWLEDGER,
+    'OPEN; nobody on it; sent by a non-responder': CLOSE_NOT_FOUND,
+    'OPEN; the sender on it; sent by a non-responder': CLOSE_NOT_FOUND,
+    'OPEN; another responder on it; sent by a non-responder': CLOSE_NOT_FOUND,
+    'ESCALATED; nobody on it; sent by a responder': NOT_THE_ACKNOWLEDGER,
+    'ESCALATED; the sender on it; sent by a responder': NOT_THE_ACKNOWLEDGER,
+    'ESCALATED; another responder on it; sent by a responder': NOT_THE_ACKNOWLEDGER,
+    'ESCALATED; nobody on it; sent by a non-responder': CLOSE_NOT_FOUND,
+    'ESCALATED; the sender on it; sent by a non-responder': CLOSE_NOT_FOUND,
+    'ESCALATED; another responder on it; sent by a non-responder': CLOSE_NOT_FOUND,
+    // ACKNOWLEDGED: the acknowledger, and only they, closes; ACKNOWLEDGED
+    // with nobody recorded, a state the code never makes, nobody does.
+    'ACKNOWLEDGED; nobody on it; sent by a responder': NOT_THE_ACKNOWLEDGER,
+    'ACKNOWLEDGED; the sender on it; sent by a responder': CLOSED,
+    'ACKNOWLEDGED; another responder on it; sent by a responder': NOT_THE_ACKNOWLEDGER,
+    'ACKNOWLEDGED; nobody on it; sent by a non-responder': CLOSE_NOT_FOUND,
+    'ACKNOWLEDGED; the sender on it; sent by a non-responder': CLOSE_NOT_FOUND,
+    'ACKNOWLEDGED; another responder on it; sent by a non-responder': CLOSE_NOT_FOUND,
+    // RESOLVED is over, whatever resolved it and whoever is on it.
+    'RESOLVED; nobody on it; sent by a responder': CLOSE_RESOLVED,
+    'RESOLVED; the sender on it; sent by a responder': CLOSE_RESOLVED,
+    'RESOLVED; another responder on it; sent by a responder': CLOSE_RESOLVED,
+    'RESOLVED; nobody on it; sent by a non-responder': CLOSE_NOT_FOUND,
+    'RESOLVED; the sender on it; sent by a non-responder': CLOSE_NOT_FOUND,
+    'RESOLVED; another responder on it; sent by a non-responder': CLOSE_NOT_FOUND,
+  },
 } satisfies { [E in AlertEventType]: AlertTable[E] };
+
+/** LOST-08-AC14: the close's rows. */
+const CLOSE_ROWS = Object.entries(ALERT_TRANSITIONS.close).map(
+  ([situation, expected]: [string, CloseOutcome]) => ({
+    event: 'close',
+    situation,
+    expected,
+  }),
+);
 
 /** SM-10: the alert a reset situation names: its state and who is recorded on it. */
 function resetFor(situation: string): AlertForReset | null {
@@ -2203,6 +2388,16 @@ function alertSituationsOf(event: string): string[] {
             AGES.map((age) => `${state}; ${recorded}; ${time}; ${age}`),
           ),
         ),
+      ),
+    ];
+  }
+  // LOST-08 (RG-03, as the table above): the close meets the situations an
+  // acknowledgement meets.
+  if (event === 'close') {
+    return [
+      'no alert',
+      ...ALERT_STATES.flatMap((state) =>
+        RECORDED.flatMap((recorded) => SENDERS.map((sender) => `${state}; ${recorded}; ${sender}`)),
       ),
     ];
   }
@@ -2385,8 +2580,13 @@ describe('LOST-06 and AR-04: the alert rule is one module, total over its own li
   // line 2118): ALERT_EVENTS gains acknowledger_removed, the reset (approach
   // item 4), and JOURNEY_EVENTS gains remove (approach item 2), each last.
   // Both still exact; none of the journey's events acknowledges.
-  test('LOST-06-AC14: ALERT_EVENTS is exactly acknowledge, escalate and acknowledger_removed; JOURNEY_EVENTS is start, heartbeat, silence, contact, home and remove, and none of them acknowledges', () => {
-    expect([...ALERT_EVENTS]).toEqual(['acknowledge', 'escalate', 'acknowledger_removed']);
+  // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+  // design", line 2388): ALERT_EVENTS gains close, "They're safe" (approach
+  // item 2), and JOURNEY_EVENTS gains expire, the 24-hour end (approach item
+  // 6), each last, and the title with them. Both still exact; none of the
+  // journey's events acknowledges.
+  test('LOST-06-AC14: ALERT_EVENTS is exactly acknowledge, escalate, acknowledger_removed and close; JOURNEY_EVENTS is start, heartbeat, silence, contact, home, remove and expire, and none of them acknowledges', () => {
+    expect([...ALERT_EVENTS]).toEqual(['acknowledge', 'escalate', 'acknowledger_removed', 'close']);
     expect([...JOURNEY_EVENTS]).toEqual([
       'start',
       'heartbeat',
@@ -2394,6 +2594,7 @@ describe('LOST-06 and AR-04: the alert rule is one module, total over its own li
       'contact',
       'home',
       'remove',
+      'expire',
     ]);
     expect(JOURNEY_EVENTS).not.toContain('acknowledge');
   });
@@ -2410,7 +2611,12 @@ describe('LOST-06 and AR-04: the alert rule is one module, total over its own li
     // alert, and each of the four states with nobody, the removed responder
     // and another recorded. The acknowledgement's and the escalation's are
     // as they were.
-    const held = [...ALERT_ROWS, ...ESCALATION_ROWS, ...RESET_ROWS].map(
+    // RG-03 (LOST-08, the spec's "Existing assertions that change by
+    // design": the tables gain "the close rows, and their counts"): the rows
+    // held, and the count below, gain the close's: no alert, and each of the
+    // four states with nobody, the sender and another responder on it, from a
+    // responder and from a non-responder. The others are as they were.
+    const held = [...ALERT_ROWS, ...ESCALATION_ROWS, ...RESET_ROWS, ...CLOSE_ROWS].map(
       ({ situation, event }) => `${situation} × ${event}`,
     );
 
@@ -2430,7 +2636,8 @@ describe('LOST-06 and AR-04: the alert rule is one module, total over its own li
             ESCALATION_RECORDED.length *
             ESCALATION_TIMES.length *
             AGES.length) +
-        (1 + ALERT_STATES.length * RESET_RECORDED.length),
+        (1 + ALERT_STATES.length * RESET_RECORDED.length) +
+        (1 + ALERT_STATES.length * RECORDED.length * SENDERS.length),
     );
   });
 
@@ -2535,7 +2742,10 @@ describe('LOST-06 and LOST-03: every message kind is withdrawn by exactly one ru
   // RG-03 (SM-10, the spec's "Existing assertions that change by design",
   // line 2249): the list gains NO_RESPONDER, last, and the title with it.
   // Still exact, in order.
-  test('LOST-06-AC13: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME, ACKNOWLEDGED, LOST_CONTACT_SMS and NO_RESPONDER, in order', () => {
+  // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+  // design", the MESSAGE_KINDS pin of LOST-06-AC13): the list gains SAFE and
+  // EXPIRED, last, and the title with them. Still exact, in order.
+  test('LOST-06-AC13: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME, ACKNOWLEDGED, LOST_CONTACT_SMS, NO_RESPONDER, SAFE and EXPIRED, in order', () => {
     expect([...MESSAGE_KINDS]).toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
@@ -2543,6 +2753,8 @@ describe('LOST-06 and LOST-03: every message kind is withdrawn by exactly one ru
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
       'NO_RESPONDER',
+      'SAFE',
+      'EXPIRED',
     ]);
   });
 
@@ -2568,7 +2780,12 @@ describe('LOST-06 and LOST-03: every message kind is withdrawn by exactly one ru
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
     ]);
-    expect([...openWithdraws]).toEqual(['BACK_IN_CONTACT', 'HOME']);
+    // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+    // design": the partition tests "keep their three-way partition, with the
+    // new kinds in ALERT_RESOLUTIONS"): the open's list gains SAFE and
+    // EXPIRED, as ALERT_RESOLUTIONS does. Still exact, and the partition
+    // below is unchanged.
+    expect([...openWithdraws]).toEqual(['BACK_IN_CONTACT', 'HOME', 'SAFE', 'EXPIRED']);
     const places = (kind: MessageKind) =>
       Number(resolvedWithdraws.includes(kind)) +
       Number(openWithdraws.includes(kind)) +
@@ -2618,7 +2835,11 @@ describe('LOST-07 and AR-04: the escalation is the alert rule’s second event, 
   // RG-03 (SM-10, the spec's "Existing assertions that change by design",
   // line 2321): JOURNEY_EVENTS gains remove (SM-10-AC16), and the title no
   // longer says it is unchanged. Still exact; none of them escalates.
-  test('LOST-07-AC13: ESCALATE_AFTER_MS is exactly 120 000 (D-019: changing it needs the owner); JOURNEY_EVENTS is start, heartbeat, silence, contact, home and remove, and none of them escalates', () => {
+  // RG-03 (LOST-08, the spec's "Existing assertions that change by design",
+  // the exact event pin of LOST-07-AC13): JOURNEY_EVENTS gains expire
+  // (LOST-08-AC14), and the title with it. Still exact; none of them
+  // escalates.
+  test('LOST-07-AC13: ESCALATE_AFTER_MS is exactly 120 000 (D-019: changing it needs the owner); JOURNEY_EVENTS is start, heartbeat, silence, contact, home, remove and expire, and none of them escalates', () => {
     expect(ESCALATE_AFTER_MS).toBe(120_000);
     expect(ESCALATE_AFTER_MS).toBe(TWO_MINUTES);
     expect([...JOURNEY_EVENTS]).toEqual([
@@ -2628,6 +2849,7 @@ describe('LOST-07 and AR-04: the escalation is the alert rule’s second event, 
       'contact',
       'home',
       'remove',
+      'expire',
     ]);
     expect(JOURNEY_EVENTS).not.toContain('escalate');
   });
@@ -2835,7 +3057,10 @@ describe('LOST-07, LOST-06 and LOST-03: every kind has one channel and one withd
   // RG-03 (SM-10, the spec's "Existing assertions that change by design",
   // line 2528): the list gains NO_RESPONDER, last, and the title with it.
   // Still exact, in order.
-  test('LOST-07-AC14: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME, ACKNOWLEDGED, LOST_CONTACT_SMS and NO_RESPONDER, in order', () => {
+  // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+  // design", the MESSAGE_KINDS pin of LOST-07-AC14): the list gains SAFE and
+  // EXPIRED, last, and the title with them. Still exact, in order.
+  test('LOST-07-AC14: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME, ACKNOWLEDGED, LOST_CONTACT_SMS, NO_RESPONDER, SAFE and EXPIRED, in order', () => {
     expect([...MESSAGE_KINDS]).toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
@@ -2843,6 +3068,8 @@ describe('LOST-07, LOST-06 and LOST-03: every kind has one channel and one withd
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
       'NO_RESPONDER',
+      'SAFE',
+      'EXPIRED',
     ]);
   });
 
@@ -2850,7 +3077,11 @@ describe('LOST-07, LOST-06 and LOST-03: every kind has one channel and one withd
   // line 2538): PUSH_KINDS is the other five, NO_RESPONDER last, the
   // walker's warning going by push (approach item 7), and the title with it.
   // The channel partition is unchanged and covers the new kind.
-  test('LOST-07-AC14: SMS_KINDS is exactly LOST_CONTACT_SMS, PUSH_KINDS exactly the other five in MESSAGE_KINDS’ order, and every kind is in exactly one of the two, a kind in neither or in both named here until someone places it', () => {
+  // RG-03 (LOST-08, the spec's "Existing assertions that change by design":
+  // PUSH_KINDS "every kind but LOST_CONTACT_SMS, in that order"): the other
+  // seven, SAFE and EXPIRED last, both going by push (D-087), and the title
+  // with them. The channel partition is unchanged and covers the new kinds.
+  test('LOST-07-AC14: SMS_KINDS is exactly LOST_CONTACT_SMS, PUSH_KINDS exactly the other seven in MESSAGE_KINDS’ order, and every kind is in exactly one of the two, a kind in neither or in both named here until someone places it', () => {
     // L1: assignable only while every kind listed is a message kind.
     const bySms: readonly MessageKind[] = SMS_KINDS;
     const byPush: readonly MessageKind[] = PUSH_KINDS;
@@ -2862,6 +3093,8 @@ describe('LOST-07, LOST-06 and LOST-03: every kind has one channel and one withd
       'HOME',
       'ACKNOWLEDGED',
       'NO_RESPONDER',
+      'SAFE',
+      'EXPIRED',
     ]);
     expect([...PUSH_KINDS]).toEqual(MESSAGE_KINDS.filter((kind) => byPush.includes(kind)));
     expect(
@@ -2999,7 +3232,11 @@ const anyReset = fc.uniqueArray(fc.uuid(), { minLength: 2, maxLength: 4 }).chain
 });
 
 describe('SM-10, SM-02 and AR-04: the removal is the journey’s sixth event, total over its lists', () => {
-  test('SM-10-AC16: JOURNEY_EVENTS is exactly start, heartbeat, silence, contact, home and remove, and ALERT_EVENTS exactly acknowledge, escalate and acknowledger_removed, in order', () => {
+  // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+  // design", line 3002): JOURNEY_EVENTS gains expire and ALERT_EVENTS gains
+  // close, each last, and the title with them (LOST-08-AC14). Still exact, in
+  // order.
+  test('SM-10-AC16: JOURNEY_EVENTS is exactly start, heartbeat, silence, contact, home, remove and expire, and ALERT_EVENTS exactly acknowledge, escalate, acknowledger_removed and close, in order', () => {
     expect([...JOURNEY_EVENTS]).toEqual([
       'start',
       'heartbeat',
@@ -3007,8 +3244,9 @@ describe('SM-10, SM-02 and AR-04: the removal is the journey’s sixth event, to
       'contact',
       'home',
       'remove',
+      'expire',
     ]);
-    expect([...ALERT_EVENTS]).toEqual(['acknowledge', 'escalate', 'acknowledger_removed']);
+    expect([...ALERT_EVENTS]).toEqual(['acknowledge', 'escalate', 'acknowledger_removed', 'close']);
   });
 
   test.each(REMOVE_ROWS)(
@@ -3225,7 +3463,11 @@ describe('SM-10 and LOST-06: the reset is the alert rule’s third event, total 
 });
 
 describe('SM-10, LOST-06 and LOST-07: every kind has one channel and one place among the withdrawals, decided in one place', () => {
-  test('SM-10-AC17: MESSAGE_KINDS is exactly the six kinds, NO_RESPONDER last', () => {
+  // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+  // design", the MESSAGE_KINDS pin of SM-10-AC17): the list gains SAFE and
+  // EXPIRED after NO_RESPONDER, so NO_RESPONDER is no longer last; it keeps
+  // its place, after LOST_CONTACT_SMS, and the title says so. Still exact.
+  test('SM-10-AC17: MESSAGE_KINDS is exactly the eight kinds, NO_RESPONDER after LOST_CONTACT_SMS and before SAFE and EXPIRED', () => {
     expect([...MESSAGE_KINDS]).toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
@@ -3233,8 +3475,12 @@ describe('SM-10, LOST-06 and LOST-07: every kind has one channel and one place a
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
       'NO_RESPONDER',
+      'SAFE',
+      'EXPIRED',
     ]);
-    expect(MESSAGE_KINDS.at(-1)).toBe('NO_RESPONDER');
+    expect(MESSAGE_KINDS.indexOf('NO_RESPONDER')).toBe(
+      MESSAGE_KINDS.indexOf('LOST_CONTACT_SMS') + 1,
+    );
   });
 
   test('SM-10-AC17: JOURNEY_MESSAGE_KINDS is exactly NO_RESPONDER; WITHDRAWN_WHEN_RESET exactly ACKNOWLEDGED, each kind in it also withdrawn on resolution; WITHDRAWN_WHEN_REMOVED exactly every kind that is not a journey’s, in MESSAGE_KINDS’ order', () => {
@@ -3245,12 +3491,19 @@ describe('SM-10, LOST-06 and LOST-07: every kind has one channel and one place a
 
     expect(journeyKinds, 'JOURNEY_MESSAGE_KINDS').toEqual(['NO_RESPONDER']);
     expect(resetWithdraws, 'WITHDRAWN_WHEN_RESET').toEqual(['ACKNOWLEDGED']);
+    // RG-03 (LOST-08, the spec's "Existing assertions that change by design":
+    // WITHDRAWN_WHEN_REMOVED "every kind not in JOURNEY_MESSAGE_KINDS, in
+    // order"): SAFE and EXPIRED are alert kinds, so a removed responder's
+    // unsent ones are withdrawn too (D-122, item 2). Still exact, and still
+    // every kind that is not a journey's, as the assertion below holds.
     expect(removalWithdraws, 'WITHDRAWN_WHEN_REMOVED').toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
       'HOME',
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
+      'SAFE',
+      'EXPIRED',
     ]);
     expect(removalWithdraws).toEqual(MESSAGE_KINDS.filter((kind) => !journeyKinds.includes(kind)));
     expect(
@@ -3287,9 +3540,14 @@ describe('SM-10, LOST-06 and LOST-07: every kind has one channel and one place a
     expect(bySms).not.toContain('NO_RESPONDER');
   });
 
-  test('SM-10-AC17: PUSH_KINDS is exactly the five kinds other than LOST_CONTACT_SMS, in MESSAGE_KINDS’ order; SMS_KINDS, WITHDRAWN_WHEN_RESOLVED, WITHDRAWN_WHEN_ACKNOWLEDGED and ALERT_RESOLUTIONS are unchanged', () => {
+  // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+  // design", line 3290): PUSH_KINDS becomes the seven kinds other than
+  // LOST_CONTACT_SMS, and ALERT_RESOLUTIONS its four (approach item 3); the
+  // title says so. SMS_KINDS, WITHDRAWN_WHEN_RESOLVED and
+  // WITHDRAWN_WHEN_ACKNOWLEDGED are unchanged, as the interfaces say.
+  test('SM-10-AC17: PUSH_KINDS is exactly the seven kinds other than LOST_CONTACT_SMS, in MESSAGE_KINDS’ order, and ALERT_RESOLUTIONS its four; SMS_KINDS, WITHDRAWN_WHEN_RESOLVED and WITHDRAWN_WHEN_ACKNOWLEDGED are unchanged', () => {
     expect([...PUSH_KINDS]).toEqual(MESSAGE_KINDS.filter((kind) => kind !== 'LOST_CONTACT_SMS'));
-    expect([...PUSH_KINDS]).toHaveLength(5);
+    expect([...PUSH_KINDS]).toHaveLength(7);
     expect([...SMS_KINDS]).toEqual(['LOST_CONTACT_SMS']);
     expect([...WITHDRAWN_WHEN_RESOLVED]).toEqual([
       'LOST_CONTACT',
@@ -3297,7 +3555,7 @@ describe('SM-10, LOST-06 and LOST-07: every kind has one channel and one place a
       'LOST_CONTACT_SMS',
     ]);
     expect([...WITHDRAWN_WHEN_ACKNOWLEDGED]).toEqual(['LOST_CONTACT_SMS']);
-    expect([...ALERT_RESOLUTIONS]).toEqual(['BACK_IN_CONTACT', 'HOME']);
+    expect([...ALERT_RESOLUTIONS]).toEqual(['BACK_IN_CONTACT', 'HOME', 'SAFE', 'EXPIRED']);
   });
 
   test('SM-10-AC17: the test kit’s copies equal the domain’s: MESSAGE_KINDS, PUSH_KINDS, JOURNEY_MESSAGE_KINDS, WITHDRAWN_WHEN_RESET and WITHDRAWN_WHEN_REMOVED', () => {
@@ -3321,5 +3579,654 @@ describe('SM-10, LOST-06 and LOST-07: every kind has one channel and one place a
         Object.entries(domain).map(([name, list]) => [name, list === undefined ? list : [...list]]),
       ),
     );
+  });
+});
+
+// ===========================================================================
+// LOST-08: "They're safe", the alert rule's fourth event (its spec's approach
+// item 2), and the 24-hour end, the journey's seventh (approach item 6).
+//
+// The close, in its order: no alert or a sender who is not a responder →
+// refused, ALERT_NOT_FOUND (one answer for both, the walker included,
+// D-114); RESOLVED → ignored, ALERT_RESOLVED, whatever resolved it; not
+// ACKNOWLEDGED with the sender recorded → refused, NOT_THE_ACKNOWLEDGER (both
+// halves read: a missing half refuses, closing being the action that
+// silences everyone); otherwise → closed, the alert RESOLVED, SAFE, and the
+// journey ENDED. The 24-hour end: LOST_CONTACT and 24 hours or more since the
+// alert opened, by the database's now → expired; everything else unchanged.
+// The tables above hold every pair; these hold the rest.
+// ===========================================================================
+
+/** LOST-08: "They're safe" from this responder: the device's own user. */
+function closeBy(responderId: string): CloseEvent {
+  return { type: 'close', responderId };
+}
+
+/** The close rule, in its order, as the spec writes it (approach item 2). */
+function expectedClose(alert: AlertForClosure | null, { responderId }: CloseEvent): CloseOutcome {
+  if (alert?.responderIds.includes(responderId) !== true) {
+    return CLOSE_NOT_FOUND;
+  }
+  if (alert.state === 'RESOLVED') {
+    return CLOSE_RESOLVED;
+  }
+  if (alert.state !== 'ACKNOWLEDGED' || alert.acknowledgedBy !== responderId) {
+    return NOT_THE_ACKNOWLEDGER;
+  }
+  return CLOSED;
+}
+
+/** The 24-hour end's rule, as the spec writes it (approach item 6). */
+function expectedExpire(
+  journey: { id: string; state: JourneyState } | null,
+  { alertOpenedAt, now }: ExpireEvent,
+): ExpireOutcome {
+  return journey?.state === 'LOST_CONTACT' && now.getTime() - alertOpenedAt.getTime() >= A_DAY
+    ? EXPIRED
+    : NOT_EXPIRED;
+}
+
+/** Any journey, or none: its ID and state, as the watchdog reads it. */
+const anyJourneyRead = fc.option(
+  fc.record({ id: fc.uuid(), state: fc.constantFrom(...JOURNEY_STATES) }),
+  { nil: null },
+);
+
+/** Any 24-hour end: an opening, a moment or not, and now `ageMs` after it, or not a moment at all. */
+const anyExpire = fc
+  .record({
+    alertOpenedAt: fc.date({ noInvalidDate: false }),
+    ageMs: fc.oneof(
+      fc.integer({ min: -A_DAY, max: 3 * A_DAY }),
+      fc.constantFrom(A_DAY - 1, A_DAY, A_DAY + 1),
+    ),
+    nowIsAMoment: fc.boolean(),
+  })
+  .map(({ alertOpenedAt, ageMs, nowIsAMoment }): ExpireEvent => ({
+    type: 'expire',
+    alertOpenedAt,
+    now: nowIsAMoment ? new Date(alertOpenedAt.getTime() + ageMs) : new Date(Number.NaN),
+  }));
+
+describe('LOST-08, SM-06 and AR-04: "They’re safe" is the alert rule’s fourth event, total over its lists', () => {
+  test.each(CLOSE_ROWS)(
+    'LOST-08-AC14: $situation × $event gives exactly its expected outcome (SM-06)',
+    ({ situation, expected }) => {
+      expect(alertTransition(alertFor(situation), closeBy(SENDER))).toEqual(expected);
+    },
+  );
+
+  test('LOST-08-AC14: the close’s rows cover no alert and each of the four states with nobody, the sender and another responder on it, from a responder and from a non-responder; and the one that closes is the sender on an ACKNOWLEDGED alert (SM-06)', () => {
+    expect(CLOSE_ROWS.map(({ situation }) => situation).sort()).toEqual(
+      alertSituationsOf('close').sort(),
+    );
+    expect(CLOSE_ROWS).toHaveLength(1 + ALERT_STATES.length * RECORDED.length * SENDERS.length);
+    expect(
+      CLOSE_ROWS.filter(({ expected }) => expected.type === 'closed').map(
+        ({ situation }) => situation,
+      ),
+    ).toEqual(['ACKNOWLEDGED; the sender on it; sent by a responder']);
+  });
+
+  test('LOST-08-AC2: only the current acknowledger may close: the responder recorded on an ACKNOWLEDGED alert closes it, the alert RESOLVED, SAFE, and the journey ENDED; another responder is refused NOT_THE_ACKNOWLEDGER; the walker, a stranger and no alert at all are ALERT_NOT_FOUND, one answer for all (LOST-06, SEC-07)', () => {
+    const acknowledgedByR1: AlertForClosure = {
+      id: ALERT,
+      state: 'ACKNOWLEDGED',
+      acknowledgedBy: RESPONDER,
+      responderIds: [RESPONDER, OTHER_RESPONDER],
+    };
+
+    expect(alertTransition(acknowledgedByR1, closeBy(RESPONDER))).toEqual({
+      type: 'closed',
+      state: 'RESOLVED',
+      resolution: 'SAFE',
+      journey: 'ENDED',
+    });
+    expect(alertTransition(acknowledgedByR1, closeBy(OTHER_RESPONDER))).toEqual({
+      type: 'refused',
+      reason: 'NOT_THE_ACKNOWLEDGER',
+    });
+    for (const [who, alert, sender] of [
+      ['the walker', acknowledgedByR1, WALKER],
+      ['a stranger', acknowledgedByR1, STRANGER],
+      ['no alert', null, RESPONDER],
+    ] as const) {
+      expect(alertTransition(alert, closeBy(sender)), who).toEqual({
+        type: 'refused',
+        reason: 'ALERT_NOT_FOUND',
+      });
+    }
+  });
+
+  test('LOST-08-AC2: both halves are read: OPEN or ESCALATED with nobody recorded refuses every responder; OPEN or ESCALATED with the sender recorded, put in directly, and ACKNOWLEDGED with nobody recorded, refuse the sender NOT_THE_ACKNOWLEDGER (LOST-06)', () => {
+    const responderIds = [RESPONDER, OTHER_RESPONDER];
+    for (const state of ['OPEN', 'ESCALATED'] as const) {
+      for (const sender of responderIds) {
+        expect(
+          alertTransition(
+            { id: ALERT, state, acknowledgedBy: null, responderIds },
+            closeBy(sender),
+          ),
+          `${state}, nobody recorded`,
+        ).toEqual(NOT_THE_ACKNOWLEDGER);
+      }
+      expect(
+        alertTransition(
+          { id: ALERT, state, acknowledgedBy: RESPONDER, responderIds },
+          closeBy(RESPONDER),
+        ),
+        `${state}, the sender recorded`,
+      ).toEqual(NOT_THE_ACKNOWLEDGER);
+    }
+    expect(
+      alertTransition(
+        { id: ALERT, state: 'ACKNOWLEDGED', acknowledgedBy: null, responderIds },
+        closeBy(RESPONDER),
+      ),
+      'ACKNOWLEDGED, nobody recorded',
+    ).toEqual(NOT_THE_ACKNOWLEDGER);
+  });
+
+  test('LOST-08-AC2: a RESOLVED alert, whatever resolved it, is ALERT_RESOLVED for every responder, the one recorded on it included, a repeat of their own close among them; still ALERT_NOT_FOUND for someone who does not follow it (LOST-06)', () => {
+    const responderIds = [RESPONDER, OTHER_RESPONDER];
+    for (const acknowledgedBy of [RESPONDER, OTHER_RESPONDER, null]) {
+      const over: AlertForClosure = { id: ALERT, state: 'RESOLVED', acknowledgedBy, responderIds };
+      for (const sender of responderIds) {
+        expect(alertTransition(over, closeBy(sender))).toEqual(CLOSE_RESOLVED);
+      }
+      expect(alertTransition(over, closeBy(STRANGER))).toEqual(CLOSE_NOT_FOUND);
+    }
+  });
+
+  test('LOST-08-AC3: after a reset nobody is recorded, so nobody can close until someone acknowledges again, and then only they can; the removed responder, no longer among the responders, is not found first (SM-10)', () => {
+    const acknowledgedByR1: AlertForClosure = {
+      id: ALERT,
+      state: 'ACKNOWLEDGED',
+      acknowledgedBy: RESPONDER,
+      responderIds: [RESPONDER, OTHER_RESPONDER, STRANGER],
+    };
+    expect(alertTransition(acknowledgedByR1, acknowledgerRemoved(RESPONDER))).toEqual(RESET);
+    // As the store leaves it: OPEN, nobody recorded, R1's row gone.
+    const reset: AlertForClosure = {
+      id: ALERT,
+      state: 'OPEN',
+      acknowledgedBy: null,
+      responderIds: [OTHER_RESPONDER, STRANGER],
+    };
+
+    expect(alertTransition(reset, closeBy(RESPONDER)), 'the removed responder').toEqual(
+      CLOSE_NOT_FOUND,
+    );
+    for (const sender of [OTHER_RESPONDER, STRANGER]) {
+      expect(alertTransition(reset, closeBy(sender))).toEqual(NOT_THE_ACKNOWLEDGER);
+    }
+    expect(alertTransition(reset, acknowledgeBy(OTHER_RESPONDER))).toEqual(ACKNOWLEDGED);
+    const again: AlertForClosure = {
+      ...reset,
+      state: 'ACKNOWLEDGED',
+      acknowledgedBy: OTHER_RESPONDER,
+    };
+    expect(alertTransition(again, closeBy(OTHER_RESPONDER))).toEqual(CLOSED);
+    expect(alertTransition(again, closeBy(STRANGER))).toEqual(NOT_THE_ACKNOWLEDGER);
+  });
+
+  test('LOST-08-AC14: IDs are compared exactly, as the stores hand them back lower-case: the acknowledger’s ID in upper case is not a responder, and the acknowledger recorded in upper case is someone else (SM-06)', () => {
+    const responder = syntheticUuid();
+    expect(responder.toUpperCase(), 'an ID with a letter in it').not.toBe(responder);
+    const onIt: AlertForClosure = {
+      id: ALERT,
+      state: 'ACKNOWLEDGED',
+      acknowledgedBy: responder,
+      responderIds: [responder],
+    };
+
+    expect(alertTransition(onIt, closeBy(responder.toUpperCase()))).toEqual(CLOSE_NOT_FOUND);
+    expect(
+      alertTransition({ ...onIt, acknowledgedBy: responder.toUpperCase() }, closeBy(responder)),
+    ).toEqual(NOT_THE_ACKNOWLEDGER);
+    expect(alertTransition(onIt, closeBy(responder))).toEqual(CLOSED);
+  });
+
+  test('LOST-08-AC14: for any alert and any sender, the close’s outcome is the rule’s, in its order — not found, resolved, not the acknowledger, then closed — never a throw, never undefined; deciding changes neither the alert nor the event handed in (SM-06)', () => {
+    fc.assert(
+      fc.property(anyAcknowledgement, ({ alert, sender }) => {
+        const event = closeBy(sender);
+        const alertBefore = structuredClone(alert);
+        const eventBefore = structuredClone(event);
+        let outcome: unknown;
+        expect(() => {
+          outcome = alertTransition(alert, event);
+        }).not.toThrow();
+        expect([CLOSED, NOT_THE_ACKNOWLEDGER, CLOSE_NOT_FOUND, CLOSE_RESOLVED]).toContainEqual(
+          outcome,
+        );
+        expect(outcome).toEqual(expectedClose(alert, event));
+        expect(alert).toEqual(alertBefore);
+        expect(event).toEqual(eventBefore);
+      }),
+      // Forced first, so every run meets the one situation that closes, and
+      // the half records beside it.
+      {
+        examples: [
+          [
+            {
+              alert: {
+                id: ALERT,
+                state: 'ACKNOWLEDGED',
+                acknowledgedBy: SENDER,
+                responderIds: [SENDER, ON_IT],
+              },
+              sender: SENDER,
+            },
+          ],
+          [
+            {
+              alert: { id: ALERT, state: 'OPEN', acknowledgedBy: SENDER, responderIds: [SENDER] },
+              sender: SENDER,
+            },
+          ],
+          [
+            {
+              alert: {
+                id: ALERT,
+                state: 'ACKNOWLEDGED',
+                acknowledgedBy: null,
+                responderIds: [SENDER],
+              },
+              sender: SENDER,
+            },
+          ],
+        ],
+      },
+    );
+  });
+
+  test('LOST-08-AC14: an event of a type the module does not list is thrown on in every close situation too, with the rule’s own message, never answered with a value (SM-06)', () => {
+    for (const { situation } of CLOSE_ROWS) {
+      // Control: in this situation the listed event is answered, with a value.
+      expect(alertTransition(alertFor(situation), closeBy(SENDER)), situation).toBeDefined();
+      for (const type of ['closed', 'snooze', 'constructor', 'toString', '__proto__']) {
+        expect(
+          () =>
+            alertTransition(alertFor(situation), {
+              type,
+              responderId: SENDER,
+            } as unknown as CloseEvent),
+          `${situation}, ${type}`,
+        ).toThrow(new RegExp(`^The alert rule has no rule for an event of type ${type}\\.$`));
+      }
+    }
+  });
+
+  test('LOST-08-AC14: (L1) a close without the responder who sends it does not type-check, nor one naming the alert, a journey or a device beside it (SM-06)', () => {
+    // Each @ts-expect-error fails the type check (gate:static) the day the
+    // value under it is accepted. Values only; the calls are not made.
+    const refused: unknown[] = [
+      // @ts-expect-error -- a close names the responder who sends it
+      { type: 'close' } satisfies CloseEvent,
+      // @ts-expect-error -- and nothing else: not the alert, which the situation holds
+      { type: 'close', responderId: RESPONDER, alertId: ALERT } satisfies CloseEvent,
+      // @ts-expect-error -- nor the walker's device
+      { type: 'close', responderId: RESPONDER, deviceId: DEVICE } satisfies CloseEvent,
+    ];
+    expect(refused).toHaveLength(3);
+  });
+
+  test('LOST-08-AC14: the other three events’ rows are unchanged by the close’s: an ACKNOWLEDGED alert is still ALREADY_YOURS for its acknowledger, an OPEN one nobody is on is still escalated at two minutes, and the acknowledger’s removal still resets it (LOST-06, LOST-07, SM-10)', () => {
+    const onIt = {
+      id: ALERT,
+      state: 'ACKNOWLEDGED' as const,
+      acknowledgedBy: SENDER,
+      responderIds: [SENDER],
+    };
+    expect(alertTransition(onIt, acknowledgeBy(SENDER))).toEqual(ALREADY_YOURS);
+    expect(alertTransition(onIt, acknowledgerRemoved(SENDER))).toEqual(RESET);
+    expect(
+      alertTransition(
+        { id: ALERT, state: 'OPEN', acknowledgedBy: null, smsRaisedAt: null },
+        { type: 'escalate', openedAt: OPENED_AT, now: new Date(OPENED_AT.getTime() + TWO_MINUTES) },
+      ),
+    ).toEqual(ESCALATED);
+  });
+});
+
+describe('LOST-08, SM-06 and AR-04: the 24-hour end is the journey’s seventh event, total over its lists', () => {
+  test('LOST-08-AC8: ALERT_EXPIRES_AFTER_MS is exactly 86 400 000, 24 hours counted from the alert’s opening (SM-06: changing it needs the owner)', () => {
+    expect(ALERT_EXPIRES_AFTER_MS).toBe(86_400_000);
+    expect(ALERT_EXPIRES_AFTER_MS).toBe(A_DAY);
+  });
+
+  test('LOST-08-AC14: the module’s lists create an expire pair for none and for every state, and the table holds each one; a pair it lacked would be named (SM-06)', () => {
+    const created = pairsTheModuleCreates().filter((pair) => pair.endsWith('× expire'));
+    const held = pairsThisTableHolds();
+
+    expect([...created].sort()).toEqual(
+      SITUATIONS.map((situation) => `${situation} × expire`).sort(),
+    );
+    expect(created.filter((pair) => !held.includes(pair))).toEqual([]);
+    expect(Object.keys(EXPIRE_UNDER_A_DAY).sort()).toEqual([...SITUATIONS].sort());
+  });
+
+  test.each(SITUATIONS)(
+    'LOST-08-AC14: %s × expire one millisecond under the 24 hours gives exactly its outcome: unchanged (SM-06)',
+    (situation) => {
+      expect(transition(situationFor(situation), expireAt(A_DAY - 1))).toEqual(
+        EXPIRE_UNDER_A_DAY[situation],
+      );
+    },
+  );
+
+  test('LOST-08-AC8: a LOST_CONTACT journey whose alert opened exactly 24 hours ago is expired, ENDED, EXPIRED, its alert RESOLVED, and one a millisecond younger is not: 24 hours or more, counted from the alert’s opening (SM-06, REL-01)', () => {
+    const lost = asCurrent({ id: JOURNEY, state: 'LOST_CONTACT' });
+
+    expect(transition(lost, expireAt(A_DAY - 1))).toEqual(NOT_EXPIRED);
+    expect(transition(lost, expireAt(A_DAY))).toEqual({
+      type: 'expired',
+      state: 'ENDED',
+      reason: 'EXPIRED',
+      alert: 'RESOLVED',
+    });
+    expect(transition(lost, expireAt(A_DAY + 1))).toEqual(EXPIRED);
+    expect(transition(lost, expireAt(10 * A_DAY))).toEqual(EXPIRED);
+    // Before the opening, or a clock that ran backwards: never.
+    expect(transition(lost, expireAt(-A_DAY))).toEqual(NOT_EXPIRED);
+  });
+
+  test('LOST-08-AC8: a time that is not one expires nothing: an invalid now or an invalid opening, for a journey otherwise due (SM-06)', () => {
+    const lost = asCurrent({ id: JOURNEY, state: 'LOST_CONTACT' });
+    const invalid = new Date(Number.NaN);
+    const valid = new Date(SILENT_SINCE.getTime() + 2 * A_DAY);
+
+    for (const [alertOpenedAt, now] of [
+      [SILENT_SINCE, invalid],
+      [invalid, valid],
+      [invalid, invalid],
+    ] as const) {
+      expect(transition(lost, { type: 'expire', alertOpenedAt, now })).toEqual(NOT_EXPIRED);
+    }
+  });
+
+  test('LOST-08-AC14: for any situation and any two moments, an invalid one included, the 24-hour end’s outcome is the rule’s — LOST_CONTACT and 24 hours or more, else unchanged — never a throw, never undefined; deciding changes neither the journey nor the event handed in (SM-06)', () => {
+    fc.assert(
+      fc.property(anyJourneyRead, anyExpire, (journey, event) => {
+        const journeyBefore = structuredClone(journey);
+        const eventBefore = { opened: event.alertOpenedAt.getTime(), now: event.now.getTime() };
+        let outcome: unknown;
+        expect(() => {
+          outcome = transition(asCurrent(journey), event);
+        }).not.toThrow();
+        expect([EXPIRED, NOT_EXPIRED]).toContainEqual(outcome);
+        expect(outcome).toEqual(expectedExpire(journey, event));
+        expect(journey).toEqual(journeyBefore);
+        expect({ opened: event.alertOpenedAt.getTime(), now: event.now.getTime() }).toEqual(
+          eventBefore,
+        );
+      }),
+    );
+  });
+
+  test('LOST-08-AC14: an event of a type the module does not list is thrown on with the state machine’s own message, an expiry-shaped one in every state included (SM-06)', () => {
+    for (const situation of SITUATIONS) {
+      // Control: the listed event is answered, with a value.
+      expect(transition(situationFor(situation), expireAt(A_DAY)), situation).toBeDefined();
+      for (const type of ['expired', 'end', 'constructor', 'toString']) {
+        expect(
+          () =>
+            transition(situationFor(situation), {
+              ...expireAt(A_DAY),
+              type,
+            } as unknown as ExpireEvent),
+          `${situation}, ${type}`,
+        ).toThrow(new RegExp(`^The state machine has no rule for an event of type ${type}\\.$`));
+      }
+    }
+  });
+
+  test('LOST-08-AC14: (L1) a 24-hour end without its two database times does not type-check (SM-06)', () => {
+    const refused: unknown[] = [
+      // @ts-expect-error -- the 24-hour end is asked with when the alert opened and now
+      { type: 'expire' } satisfies ExpireEvent,
+      // @ts-expect-error -- and with both: the alert's opening alone is no answer
+      { type: 'expire', alertOpenedAt: SILENT_SINCE } satisfies ExpireEvent,
+    ];
+    expect(refused).toHaveLength(2);
+  });
+});
+
+/**
+ * SM-05's guard (LOST-08-AC12; Q1 (a), D-125, D-126): for each way a journey
+ * ends, which states it may end, by whom, and whether it is automatic. Typed
+ * over JOURNEY_END_REASONS, so the task that adds a reason (the two-hour
+ * stop's, in M3) meets a type error here, and the test below fails naming
+ * SM-05, until its row says it ends ACTIVE only and its own L6 test comes
+ * with it, under RG-03's written reason.
+ */
+const HOW_JOURNEYS_END = {
+  HOME: { ends: ['ACTIVE', 'LOST_CONTACT'], by: 'the walker', automatic: false },
+  SAFE: { ends: ['LOST_CONTACT'], by: 'the acknowledger', automatic: false },
+  EXPIRED: { ends: ['LOST_CONTACT'], by: 'the 24-hour end', automatic: true },
+} satisfies Record<
+  JourneyEndReason,
+  { ends: readonly UnendedJourneyState[]; by: string; automatic: boolean }
+>;
+
+describe('SM-05 and SM-06: nothing automatic ends a lost-contact journey before 24 hours, and the two-hour stop never ends one', () => {
+  test('LOST-08-AC12: (SM-05, SM-06) JOURNEY_END_REASONS is exactly HOME, SAFE and EXPIRED, each with its row: which states it ends, by whom, and whether it is automatic; SAFE and EXPIRED end only LOST_CONTACT, and only EXPIRED is automatic; a reason added without a row fails here', () => {
+    expect([...JOURNEY_END_REASONS]).toEqual(['HOME', 'SAFE', 'EXPIRED']);
+    expect(
+      Object.keys(HOW_JOURNEYS_END).sort(),
+      'SM-05: every way a journey ends has its row here, and no row is stale',
+    ).toEqual([...JOURNEY_END_REASONS].sort());
+    expect(HOW_JOURNEYS_END).toEqual({
+      HOME: { ends: ['ACTIVE', 'LOST_CONTACT'], by: 'the walker', automatic: false },
+      SAFE: { ends: ['LOST_CONTACT'], by: 'the acknowledger', automatic: false },
+      EXPIRED: { ends: ['LOST_CONTACT'], by: 'the 24-hour end', automatic: true },
+    });
+    expect(
+      Object.entries(HOW_JOURNEYS_END)
+        .filter(([, rule]) => rule.automatic)
+        .map(([reason]) => reason),
+      'the automatic ends',
+    ).toEqual(['EXPIRED']);
+    // SM-05: an automatic end that may end a LOST_CONTACT journey, other than
+    // the 24-hour end, is named here: the two-hour stop must end ACTIVE only.
+    expect(
+      Object.entries(HOW_JOURNEYS_END)
+        .filter(
+          ([reason, rule]) =>
+            rule.automatic &&
+            reason !== 'EXPIRED' &&
+            (rule.ends as readonly string[]).includes('LOST_CONTACT'),
+        )
+        .map(([reason]) => reason),
+      'SM-05: an automatic end of a lost-contact journey besides the 24-hour end',
+    ).toEqual([]);
+    // The test kit's copy is the same list.
+    expect([...KIT_JOURNEY_END_REASONS]).toEqual([...JOURNEY_END_REASONS]);
+  });
+
+  test('LOST-08-AC12: (SM-05) the table agrees with the rules: "I’m home" ends exactly the states its row names, and the 24-hour end exactly the states its row names, at 24 hours', () => {
+    for (const state of JOURNEY_STATES) {
+      expect(transition(named(state), home()).type === 'ended', `HOME, ${state}`).toBe(
+        (HOW_JOURNEYS_END.HOME.ends as readonly string[]).includes(state),
+      );
+      expect(
+        transition(asCurrent({ id: JOURNEY, state }), expireAt(A_DAY)).type === 'expired',
+        `EXPIRED, ${state}`,
+      ).toBe((HOW_JOURNEYS_END.EXPIRED.ends as readonly string[]).includes(state));
+    }
+    expect(CLOSED.journey, 'SAFE ends the journey the alert is on').toBe('ENDED');
+  });
+
+  test('LOST-08-AC12: (SM-05, SM-06) for any time under 24 hours after the alert opened, the 24-hour end leaves a LOST_CONTACT journey as it is (fast-check)', () => {
+    fc.assert(
+      fc.property(
+        fc.date({ noInvalidDate: true }),
+        fc.oneof(
+          fc.integer({ min: 0, max: A_DAY - 1 }),
+          fc.constantFrom(0, 2 * HOUR, 2 * HOUR + 10 * MINUTE, A_DAY - 1),
+        ),
+        (alertOpenedAt, ageMs) => {
+          expect(
+            transition(
+              asCurrent({ id: JOURNEY, state: 'LOST_CONTACT' }),
+              expireAt(ageMs, alertOpenedAt),
+            ),
+          ).toEqual(NOT_EXPIRED);
+        },
+      ),
+    );
+  });
+
+  test('LOST-08-AC12: (SM-05) for any times at all, the 24-hour end never ends an ACTIVE journey, an ENDED one or no journey (fast-check)', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom<Situation>('none', 'ACTIVE', 'ENDED'),
+        anyExpire,
+        (situation, event) => {
+          expect(transition(situationFor(situation), event)).toEqual(NOT_EXPIRED);
+        },
+      ),
+    );
+  });
+
+  test('LOST-08-AC12: (SM-05) at two hours, at two hours ten minutes, and at every hour after up to one millisecond short of 24 hours since the alert opened, a LOST_CONTACT journey is left as it is: the two-hour stop is no automatic end of a lost-contact journey', () => {
+    const lost = asCurrent({ id: JOURNEY, state: 'LOST_CONTACT' });
+    const ages = [2 * HOUR, 2 * HOUR + 10 * MINUTE];
+    for (let hours = 3; hours < 24; hours += 1) {
+      ages.push(hours * HOUR);
+    }
+    ages.push(A_DAY - 1);
+
+    for (const ageMs of ages) {
+      expect(transition(lost, expireAt(ageMs)), String(ageMs)).toEqual(NOT_EXPIRED);
+    }
+  });
+});
+
+describe('LOST-08, LOST-06, LOST-07 and SM-10: every kind has one channel and one place among the withdrawals, the two new stand-downs included', () => {
+  test('LOST-08-AC15: MESSAGE_KINDS, ALERT_RESOLUTIONS, PUSH_KINDS and WITHDRAWN_WHEN_REMOVED are exactly the interfaces’ lists; SMS_KINDS, JOURNEY_MESSAGE_KINDS, WITHDRAWN_WHEN_RESOLVED, WITHDRAWN_WHEN_ACKNOWLEDGED and WITHDRAWN_WHEN_RESET are unchanged (LOST-06, LOST-07, SM-10)', () => {
+    expect({
+      MESSAGE_KINDS: [...MESSAGE_KINDS],
+      ALERT_RESOLUTIONS: [...ALERT_RESOLUTIONS],
+      PUSH_KINDS: [...PUSH_KINDS],
+      WITHDRAWN_WHEN_REMOVED: [...WITHDRAWN_WHEN_REMOVED],
+      SMS_KINDS: [...SMS_KINDS],
+      JOURNEY_MESSAGE_KINDS: [...JOURNEY_MESSAGE_KINDS],
+      WITHDRAWN_WHEN_RESOLVED: [...WITHDRAWN_WHEN_RESOLVED],
+      WITHDRAWN_WHEN_ACKNOWLEDGED: [...WITHDRAWN_WHEN_ACKNOWLEDGED],
+      WITHDRAWN_WHEN_RESET: [...WITHDRAWN_WHEN_RESET],
+    }).toEqual({
+      MESSAGE_KINDS: [
+        'LOST_CONTACT',
+        'BACK_IN_CONTACT',
+        'HOME',
+        'ACKNOWLEDGED',
+        'LOST_CONTACT_SMS',
+        'NO_RESPONDER',
+        'SAFE',
+        'EXPIRED',
+      ],
+      ALERT_RESOLUTIONS: ['BACK_IN_CONTACT', 'HOME', 'SAFE', 'EXPIRED'],
+      PUSH_KINDS: [
+        'LOST_CONTACT',
+        'BACK_IN_CONTACT',
+        'HOME',
+        'ACKNOWLEDGED',
+        'NO_RESPONDER',
+        'SAFE',
+        'EXPIRED',
+      ],
+      WITHDRAWN_WHEN_REMOVED: [
+        'LOST_CONTACT',
+        'BACK_IN_CONTACT',
+        'HOME',
+        'ACKNOWLEDGED',
+        'LOST_CONTACT_SMS',
+        'SAFE',
+        'EXPIRED',
+      ],
+      SMS_KINDS: ['LOST_CONTACT_SMS'],
+      JOURNEY_MESSAGE_KINDS: ['NO_RESPONDER'],
+      WITHDRAWN_WHEN_RESOLVED: ['LOST_CONTACT', 'ACKNOWLEDGED', 'LOST_CONTACT_SMS'],
+      WITHDRAWN_WHEN_ACKNOWLEDGED: ['LOST_CONTACT_SMS'],
+      WITHDRAWN_WHEN_RESET: ['ACKNOWLEDGED'],
+    });
+    expect([...PUSH_KINDS]).toEqual(MESSAGE_KINDS.filter((kind) => kind !== 'LOST_CONTACT_SMS'));
+    expect([...WITHDRAWN_WHEN_REMOVED]).toEqual(
+      MESSAGE_KINDS.filter((kind) => !(JOURNEY_MESSAGE_KINDS as readonly string[]).includes(kind)),
+    );
+  });
+
+  test('LOST-08-AC15: every kind is in exactly one of SMS_KINDS and PUSH_KINDS, and in exactly one of WITHDRAWN_WHEN_RESOLVED, ALERT_RESOLUTIONS and JOURNEY_MESSAGE_KINDS; a kind in none or in two is named (LOST-06, LOST-07, SM-10)', () => {
+    const bySms: readonly MessageKind[] = SMS_KINDS;
+    const byPush: readonly MessageKind[] = PUSH_KINDS;
+    const resolvedWithdraws: readonly MessageKind[] = WITHDRAWN_WHEN_RESOLVED;
+    const openWithdraws: readonly MessageKind[] = ALERT_RESOLUTIONS;
+    const journeyKinds: readonly MessageKind[] = JOURNEY_MESSAGE_KINDS;
+    const channels = (kind: MessageKind) =>
+      Number(bySms.includes(kind)) + Number(byPush.includes(kind));
+    const places = (kind: MessageKind) =>
+      Number(resolvedWithdraws.includes(kind)) +
+      Number(openWithdraws.includes(kind)) +
+      Number(journeyKinds.includes(kind));
+
+    expect(
+      MESSAGE_KINDS.filter((kind) => channels(kind) === 0),
+      'kinds no channel lists',
+    ).toEqual([]);
+    expect(
+      MESSAGE_KINDS.filter((kind) => channels(kind) > 1),
+      'kinds both channels list',
+    ).toEqual([]);
+    expect(
+      MESSAGE_KINDS.filter((kind) => places(kind) === 0),
+      'kinds in no place among the withdrawals and the journey kinds',
+    ).toEqual([]);
+    expect(
+      MESSAGE_KINDS.filter((kind) => places(kind) > 1),
+      'kinds in two places',
+    ).toEqual([]);
+    for (const kind of ['SAFE', 'EXPIRED'] as const) {
+      expect(byPush, kind).toContain(kind);
+      expect(openWithdraws, kind).toContain(kind);
+      expect(resolvedWithdraws, kind).not.toContain(kind);
+    }
+  });
+
+  test('LOST-08-AC15: each resolution is a message kind of its own name, held at typecheck too: the two new ones are the stand-downs they send (LOST-06, LOST-07)', () => {
+    // L1: assignable only while every resolution is a message kind, and every
+    // new kind is a resolution.
+    const asKinds: readonly MessageKind[] = ALERT_RESOLUTIONS;
+    const safe: AlertResolution = 'SAFE';
+    const expired: AlertResolution = 'EXPIRED';
+    const reasons: readonly JourneyEndReason[] = ['SAFE', 'EXPIRED'];
+
+    expect(asKinds.filter((kind) => !(MESSAGE_KINDS as readonly string[]).includes(kind))).toEqual(
+      [],
+    );
+    expect(MESSAGE_KINDS).toContain(safe);
+    expect(MESSAGE_KINDS).toContain(expired);
+    expect(
+      reasons.filter((reason) => !(JOURNEY_END_REASONS as readonly string[]).includes(reason)),
+    ).toEqual([]);
+  });
+
+  test('LOST-08-AC15: the test kit’s copies equal the domain’s: MESSAGE_KINDS, PUSH_KINDS, ALERT_RESOLUTIONS and its stand-down copy (the open’s list), WITHDRAWN_WHEN_REMOVED and JOURNEY_END_REASONS (SM-10)', () => {
+    expect({
+      MESSAGE_KINDS: [...KIT_MESSAGE_KINDS],
+      PUSH_KINDS: [...KIT_PUSH_KINDS],
+      ALERT_RESOLUTIONS: [...KIT_ALERT_RESOLUTIONS],
+      WITHDRAWN_WHEN_OPENED: [...KIT_WITHDRAWN_WHEN_OPENED],
+      WITHDRAWN_WHEN_REMOVED: [...KIT_WITHDRAWN_WHEN_REMOVED],
+      JOURNEY_END_REASONS: [...KIT_JOURNEY_END_REASONS],
+    }).toEqual({
+      MESSAGE_KINDS: [...MESSAGE_KINDS],
+      PUSH_KINDS: [...PUSH_KINDS],
+      ALERT_RESOLUTIONS: [...ALERT_RESOLUTIONS],
+      WITHDRAWN_WHEN_OPENED: [...ALERT_RESOLUTIONS],
+      WITHDRAWN_WHEN_REMOVED: [...WITHDRAWN_WHEN_REMOVED],
+      JOURNEY_END_REASONS: [...JOURNEY_END_REASONS],
+    });
   });
 });

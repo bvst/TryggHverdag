@@ -831,6 +831,13 @@ retries once.** *(LOST-08, SM-01)*
   journey, its responders stored; J unchanged
 - **And** when the retry meets the same race again, the answer is 500 with
   nothing stored, as today.
+- *Noted 2026-10-09 in the red phase (`test-author`):* this race cannot happen
+  through the journey module as built. The start reads the walker's unended
+  journey first and refuses one that has it, so a journey that appears after
+  that read comes from a concurrent start: `ACTIVE`, with no alert, which
+  neither a close nor the 24-hour end can end. The retry is defence in depth,
+  and the tests reach it by hooks (`beforeNext('insertStarted')` at L6;
+  `insertStarted` called directly at L2 and L3).
 
 ## Test plan
 

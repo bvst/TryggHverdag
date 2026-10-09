@@ -337,6 +337,13 @@ describe('stryker.config.mjs', () => {
     // modules/alerts/, so the run's files gain escalation.system.test.ts,
     // compared sorted as before. What it mutates and its configuration do not
     // change.
+    //
+    // RG-03 (LOST-08, the spec's Mutation section and its "Modules and files
+    // affected", which lists this pin as test-author's): "They're safe" and
+    // the 24-hour end put closure.ts and expiry.ts in modules/alerts/, so the
+    // run's files gain closure.system.test.ts and expiry.system.test.ts,
+    // compared sorted as before. What it mutates and its configuration do not
+    // change.
     const config = await configFor('alerts');
 
     expect(config.mutate).toEqual(['apps/server/src/modules/alerts/**/*.ts', ...EXCLUSIONS]);
@@ -350,6 +357,8 @@ describe('stryker.config.mjs', () => {
         'apps/server/src/alerts.system.test.ts',
         'apps/server/src/acknowledgement.system.test.ts',
         'apps/server/src/escalation.system.test.ts',
+        'apps/server/src/closure.system.test.ts',
+        'apps/server/src/expiry.system.test.ts',
       ].sort(),
     );
   });

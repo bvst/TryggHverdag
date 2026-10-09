@@ -61,6 +61,12 @@ const EVENTS: LogEvent[] = [
   { event: 'removal_ignored', reason: 'JOURNEY_ENDED', journeyId: syntheticUuid() },
   { event: 'removal_failed', stage: 'store', code: '55P03' },
   { event: 'unheard_alerts', count: 1 },
+  // LOST-08 (the spec's "Added to, not changed"): the close's two and the
+  // 24-hour end's two.
+  { event: 'closure_ignored', reason: 'ALERT_RESOLVED', alertId: syntheticUuid() },
+  { event: 'closure_failed', stage: 'store', code: '40001' },
+  { event: 'expiry_failed', stage: 'expire', code: '55P03' },
+  { event: 'expiry_overdue', alertId: syntheticUuid() },
 ];
 
 /** Codes that are not a SQLSTATE: each is written as null, so no message can travel as a code. */
@@ -1897,6 +1903,295 @@ describe('PRIV-07 and SM-10: the three new events are closed, at the type and at
     };
 
     for (const event of SM_10_EVENTS) {
+      const { line, text } = writtenThroughACast({ ...event, ...extra });
+
+      expect(line, event.event).toEqual(event);
+      expect(
+        markersIn(text, [
+          latitude,
+          longitude,
+          'Failing row',
+          responderId,
+          walkerId,
+          numberShaped,
+          credential,
+        ]),
+        event.event,
+      ).toEqual([]);
+    }
+  });
+});
+
+// ===========================================================================
+// LOST-08-AC18: the close's and the 24-hour end's four events. Each is closed
+// as the earlier ones are: an alert's ID written only as a lower-case
+// canonical UUID, a reason and a stage only from their sets, a code only as a
+// SQLSTATE, and no field a user's ID, a phone number, a location or a message
+// could travel in. No event names the closer, another responder or the
+// walker (PRIV-07).
+// ===========================================================================
+
+const LOST_08_EVENTS: LogEvent[] = [
+  { event: 'closure_ignored', reason: 'ALERT_RESOLVED', alertId: syntheticUuid() },
+  { event: 'closure_failed', stage: 'read', code: '57P01' },
+  { event: 'closure_failed', stage: 'store', code: '40001' },
+  { event: 'closure_failed', stage: 'store', code: null },
+  { event: 'expiry_failed', stage: 'read', code: '57P01' },
+  { event: 'expiry_failed', stage: 'expire', code: '55P03' },
+  { event: 'expiry_failed', stage: 'expire', code: null },
+  { event: 'expiry_overdue', alertId: syntheticUuid() },
+];
+
+/** For each new event with a field closed to a set: a valid event, the field, and values outside the set. */
+const LOST_08_CLOSED_SETS: {
+  what: string;
+  event: Record<string, unknown>;
+  field: string;
+  outside: unknown[];
+}[] = [
+  {
+    what: 'a closure_ignored reason',
+    event: { event: 'closure_ignored', reason: 'ALERT_RESOLVED', alertId: syntheticUuid() },
+    field: 'reason',
+    outside: [
+      'NOT_THE_ACKNOWLEDGER',
+      'ALERT_NOT_FOUND',
+      'JOURNEY_ENDED',
+      'alert_resolved',
+      '',
+      ['ALERT_RESOLVED'],
+      409,
+    ],
+  },
+  {
+    what: 'a closure_failed stage',
+    event: { event: 'closure_failed', stage: 'store', code: '57P01' },
+    field: 'stage',
+    outside: ['clock', 'close', 'expire', 'escalate', 'STORE', '', ['read'], 3],
+  },
+  {
+    what: 'an expiry_failed stage',
+    event: { event: 'expiry_failed', stage: 'expire', code: '57P01' },
+    field: 'stage',
+    outside: ['store', 'escalate', 'open', 'clock', 'EXPIRE', '', ['read'], 3],
+  },
+];
+
+describe('PRIV-07 and LOST-08: the four new events are closed, at the type and at run time', () => {
+  test('LOST-08-AC18: (L1) each of the four is exactly its fields, no more and no fewer: a field added to one, an optional one included, or a set widened, fails typecheck', () => {
+    // As SM-10-AC20's pin: each entry is `true` only when each type is
+    // assignable to the other and both have the same keys.
+    type Exactly<A, B> = [A] extends [B]
+      ? [B] extends [A]
+        ? [keyof A] extends [keyof B]
+          ? [keyof B] extends [keyof A]
+            ? true
+            : false
+          : false
+        : false
+      : false;
+    type EventOf<Name extends LogEvent['event']> = Extract<LogEvent, { event: Name }>;
+    const pinned: [
+      Exactly<
+        EventOf<'closure_ignored'>,
+        { event: 'closure_ignored'; reason: 'ALERT_RESOLVED'; alertId: string }
+      >,
+      Exactly<
+        EventOf<'closure_failed'>,
+        { event: 'closure_failed'; stage: 'read' | 'store'; code: string | null }
+      >,
+      Exactly<
+        EventOf<'expiry_failed'>,
+        { event: 'expiry_failed'; stage: 'read' | 'expire'; code: string | null }
+      >,
+      Exactly<EventOf<'expiry_overdue'>, { event: 'expiry_overdue'; alertId: string }>,
+    ] = [true, true, true, true];
+
+    expect(pinned).toEqual([true, true, true, true]);
+  });
+
+  test('LOST-08-AC18: (L1) none of the four holds another field: a phone number, a latitude, a user’s ID, a message, or another reason or stage does not type-check', () => {
+    // Each @ts-expect-error fails the type check (gate:static) the day the
+    // property under it stops being an error. Values only; none is handed to
+    // the log, and none is a phone number: the field's name is what is tried.
+    const alertId = syntheticUuid();
+    const someone = syntheticUuid();
+    const refused: unknown[] = [
+      {
+        event: 'closure_ignored',
+        reason: 'ALERT_RESOLVED',
+        alertId,
+        // @ts-expect-error -- not the responder who closed it, or tried to
+        responderId: someone,
+      } satisfies LogEvent,
+      {
+        event: 'closure_ignored',
+        reason: 'ALERT_RESOLVED',
+        alertId,
+        // @ts-expect-error -- nor the walker
+        walkerId: someone,
+      } satisfies LogEvent,
+      {
+        event: 'closure_ignored',
+        // @ts-expect-error -- nor a refusal: refusals are not logged
+        reason: 'NOT_THE_ACKNOWLEDGER',
+        alertId,
+      } satisfies LogEvent,
+      {
+        event: 'closure_failed',
+        stage: 'store',
+        code: null,
+        // @ts-expect-error -- nor an error's message
+        message: 'Failing row contains (…)',
+      } satisfies LogEvent,
+      {
+        event: 'closure_failed',
+        stage: 'read',
+        code: null,
+        // @ts-expect-error -- nor a phone number
+        phoneNumber: '',
+      } satisfies LogEvent,
+      {
+        event: 'closure_failed',
+        // @ts-expect-error -- nor another stage
+        stage: 'close',
+        code: null,
+      } satisfies LogEvent,
+      {
+        event: 'expiry_failed',
+        stage: 'expire',
+        code: null,
+        // @ts-expect-error -- nor a latitude
+        latitude: 0,
+      } satisfies LogEvent,
+      {
+        event: 'expiry_failed',
+        stage: 'read',
+        code: null,
+        // @ts-expect-error -- nor which alert's responders were told
+        responderIds: [someone],
+      } satisfies LogEvent,
+      {
+        event: 'expiry_failed',
+        // @ts-expect-error -- nor another stage
+        stage: 'store',
+        code: null,
+      } satisfies LogEvent,
+      {
+        event: 'expiry_overdue',
+        alertId,
+        // @ts-expect-error -- nor the acknowledger
+        acknowledgedBy: someone,
+      } satisfies LogEvent,
+      {
+        event: 'expiry_overdue',
+        alertId,
+        // @ts-expect-error -- nor an error's message
+        message: 'canceling statement due to lock timeout',
+      } satisfies LogEvent,
+    ];
+
+    expect(refused).toHaveLength(11);
+  });
+
+  test.each(LOST_08_EVENTS)(
+    'LOST-08-AC18: createLog writes $event as one JSON line, holding exactly that event’s fields',
+    (event) => {
+      const writer = recordingWriter();
+
+      createLog({ write: writer.write }).write(event);
+
+      const lines = writer.lines();
+      expect(lines).toHaveLength(1);
+      expect(writer.chunks.join('').endsWith('\n')).toBe(true);
+      expect(JSON.parse(lines[0] ?? 'null')).toEqual(event);
+    },
+  );
+
+  test.each(LOST_08_CLOSED_SETS)(
+    'LOST-08-AC18: $what outside its set is written as null, and none of it is written; inside it, as it is',
+    ({ event, field, outside }) => {
+      for (const value of [...outside, ...freeText().map(({ value: text }) => text)]) {
+        const { line, text } = writtenThroughACast({ ...event, [field]: value });
+
+        expect(line, JSON.stringify(value)).toEqual({ ...event, [field]: null });
+        if (typeof value === 'string' && value !== '') {
+          expect(text, value).not.toContain(`"${value}"`);
+        }
+      }
+      expect(writtenThroughACast(event).line).toEqual(event);
+    },
+  );
+
+  test('LOST-08-AC18: the stages read, store and expire, and the reason ALERT_RESOLVED, are each written as they are, so the nulls above are the value’s doing', () => {
+    for (const event of [
+      { event: 'closure_failed', stage: 'read', code: null },
+      { event: 'closure_failed', stage: 'store', code: null },
+      { event: 'expiry_failed', stage: 'read', code: null },
+      { event: 'expiry_failed', stage: 'expire', code: null },
+      { event: 'closure_ignored', reason: 'ALERT_RESOLVED', alertId: syntheticUuid() },
+    ]) {
+      expect(writtenThroughACast(event).line, JSON.stringify(event)).toEqual(event);
+    }
+  });
+
+  test.each([
+    { event: { event: 'closure_ignored', reason: 'ALERT_RESOLVED', alertId: syntheticUuid() } },
+    { event: { event: 'expiry_overdue', alertId: syntheticUuid() } },
+  ])(
+    'LOST-08-AC18: in the $event.event line, an alertId that is not a lower-case canonical UUID is written as null, and none of it is written',
+    ({ event }) => {
+      for (const { what, journeyId: value, markers } of NOT_JOURNEY_IDS) {
+        const { line, text } = writtenThroughACast({ ...event, alertId: value() });
+
+        expect(line, what).toEqual({ ...event, alertId: null });
+        expect(markersIn(text, markers()), what).toEqual([]);
+      }
+      expect(writtenThroughACast(event).line).toEqual(event);
+    },
+  );
+
+  test.each([
+    { event: { event: 'closure_failed', stage: 'store', code: '23505' } },
+    { event: { event: 'expiry_failed', stage: 'expire', code: '23505' } },
+  ])(
+    'LOST-08-AC18: in the $event.event line, a code that is not a SQLSTATE is written as null, and a SQLSTATE as it is',
+    ({ event }) => {
+      for (const { what, code } of [...NOT_SQLSTATES, ...CODES_NOT_TEXT]) {
+        const { line, text } = writtenThroughACast({ ...event, code });
+
+        expect(line, what).toEqual({ ...event, code: null });
+        if (typeof code === 'string' && code !== '') {
+          expect(text, what).not.toContain(code);
+        }
+      }
+      expect(writtenThroughACast(event).line).toEqual(event);
+    },
+  );
+
+  test('LOST-08-AC18: fields the four events do not have, got past the type, are not written: a position, a message, an error, the closer’s ID, the walker’s ID, a phone-number-shaped value, a credential', () => {
+    const latitude = String(syntheticCoordinate());
+    const longitude = String(syntheticCoordinate());
+    const responderId = syntheticUuid();
+    const walkerId = syntheticUuid();
+    const credential = syntheticCredential();
+    // Phone-number-shaped, made at run time and never in +47 form: eight
+    // digits with a leading 0, which no Norwegian subscriber number has.
+    const numberShaped = `0${String(Math.floor(Math.random() * 10_000_000)).padStart(7, '0')}`;
+    const extra = {
+      latitude: Number(latitude),
+      longitude: Number(longitude),
+      position: { latitude: Number(latitude), longitude: Number(longitude) },
+      message: `Failing row contains (${latitude}, ${longitude})`,
+      err: new Error(`could not close ${walkerId}'s alert for ${responderId}`),
+      responderId,
+      acknowledgedBy: responderId,
+      walkerId,
+      phoneNumber: numberShaped,
+      credential,
+    };
+
+    for (const event of LOST_08_EVENTS) {
       const { line, text } = writtenThroughACast({ ...event, ...extra });
 
       expect(line, event.event).toEqual(event);

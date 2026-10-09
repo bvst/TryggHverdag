@@ -556,6 +556,15 @@ describe('the mutation runs of this repository', () => {
       // the SMS check join modules/alerts/, and their system tests are a file
       // of their own, escalation.system.test.ts, which the group runs after
       // the two it runs today, in that order. Its paths do not change.
+      //
+      // RG-03 (LOST-08, the spec's Mutation section and its "Modules and
+      // files affected": "`gate-decisions.mjs` gains the `alerts` group's two
+      // test files"; this pin is listed there as test-author's): "They're
+      // safe" and the 24-hour end put closure.ts and expiry.ts in
+      // modules/alerts/, and their system tests are files of their own,
+      // closure.system.test.ts and expiry.system.test.ts, which the group
+      // runs after the three it runs today, in that order. Its paths do not
+      // change.
       expect.objectContaining({
         name: 'alerts',
         paths: ['apps/server/src/modules/alerts/'],
@@ -563,6 +572,8 @@ describe('the mutation runs of this repository', () => {
           'apps/server/src/alerts.system.test.ts',
           'apps/server/src/acknowledgement.system.test.ts',
           'apps/server/src/escalation.system.test.ts',
+          'apps/server/src/closure.system.test.ts',
+          'apps/server/src/expiry.system.test.ts',
         ],
       }),
       // RG-03 (BUG-29, D-117): worker.ts leaves the process group for a group
