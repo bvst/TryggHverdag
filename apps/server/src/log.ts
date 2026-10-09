@@ -15,12 +15,13 @@
  *     UUID;
  *   - `reason` only from its event's set: JOURNEY_ENDED for an ignored
  *     heartbeat, "I'm home" or removal, the push port's four for a failed
- *     push or SMS, ALERT_RESOLVED for an ignored "I'm on it";
+ *     push or SMS, ALERT_RESOLVED for an ignored "I'm on it" or "They're
+ *     safe";
  *   - `stage` only from its event's set: clock, read or store for a
- *     heartbeat; read or store for "I'm home", "I'm on it" and a removal;
- *     read, open or beat for the watchdog; read or escalate for the
- *     escalation; claim or mark for each sender; read or report for the SMS
- *     check;
+ *     heartbeat; read or store for "I'm home", "I'm on it", a removal and
+ *     "They're safe"; read, open or beat for the watchdog; read or escalate
+ *     for the escalation; read or expire for the 24-hour end; claim or mark
+ *     for each sender; read or report for the SMS check;
  *   - `pool` only as api or worker;
  *   - `code` only as text that is a SQLSTATE, read by `sqlstateOf`, so no
  *     message can travel as a code;
@@ -68,6 +69,7 @@ const EVENT_LEVELS = {
   home_ignored: 31,
   acknowledgement_ignored: 32,
   removal_ignored: 33,
+  closure_ignored: 34,
   alert_missing: 40,
   heartbeat_failed: 50,
   push_failed: 51,
@@ -85,6 +87,9 @@ const EVENT_LEVELS = {
   sms_check_failed: 63,
   removal_failed: 64,
   unheard_alerts: 65,
+  closure_failed: 66,
+  expiry_failed: 67,
+  expiry_overdue: 68,
 } as const satisfies Record<EventName, number>;
 
 /**
@@ -164,6 +169,24 @@ const REMOVAL_STAGES: readonly unknown[] = ['read', 'store'] satisfies Extract<
 const SMS_CHECK_STAGES: readonly unknown[] = ['read', 'report'] satisfies Extract<
   LogEvent,
   { event: 'sms_check_failed' }
+>['stage'][];
+
+/** The reasons `closure_ignored` may give. */
+const CLOSURE_REASONS: readonly unknown[] = ['ALERT_RESOLVED'] satisfies Extract<
+  LogEvent,
+  { event: 'closure_ignored' }
+>['reason'][];
+
+/** The stages `closure_failed` may name. */
+const CLOSURE_STAGES: readonly unknown[] = ['read', 'store'] satisfies Extract<
+  LogEvent,
+  { event: 'closure_failed' }
+>['stage'][];
+
+/** The stages `expiry_failed` may name. */
+const EXPIRY_STAGES: readonly unknown[] = ['read', 'expire'] satisfies Extract<
+  LogEvent,
+  { event: 'expiry_failed' }
 >['stage'][];
 
 /** The pools `database_error` may name: each process's own. */
@@ -325,6 +348,27 @@ export function createLog({
           return;
         case 'unheard_alerts':
           logger.unheard_alerts({ count: countOf(event.count) });
+          return;
+        case 'closure_ignored':
+          logger.closure_ignored({
+            reason: oneOf(CLOSURE_REASONS, event.reason),
+            alertId: uuidOf(event.alertId),
+          });
+          return;
+        case 'closure_failed':
+          logger.closure_failed({
+            stage: oneOf(CLOSURE_STAGES, event.stage),
+            code: codeOf(event.code),
+          });
+          return;
+        case 'expiry_failed':
+          logger.expiry_failed({
+            stage: oneOf(EXPIRY_STAGES, event.stage),
+            code: codeOf(event.code),
+          });
+          return;
+        case 'expiry_overdue':
+          logger.expiry_overdue({ alertId: uuidOf(event.alertId) });
           return;
         default:
           // A type error the day an event joins LogEvent without a case. And

@@ -91,6 +91,24 @@
  * kinds (PUSH_KINDS, SMS_KINDS), so no message ever reaches the other port,
  * and the count of failing SMS is one statement, timed by now().
  *
+ * "They're safe" (LOST-08, D-126) reads the alert as "I'm on it" does, without
+ * a lock, so a refusal never holds a row. A close the rule allows takes the
+ * alert's journey's row first, waiting for it (a person's action, bounded by
+ * the API's lock limit), asks the domain's close rule again under it, and in
+ * one transaction ends the journey (ENDED, SAFE, at now(), guarded by
+ * LOST_CONTACT) and resolves its alert SAFE through `resolveInside`, which
+ * stands down every responder row but the closer's (AR-04, AR-05).
+ *
+ * The 24-hour end (SM-06, LOST-08) reads the unresolved alerts opened
+ * ALERT_EXPIRES_AFTER_MS or more before now(), without a lock, and ends each
+ * in a transaction of its own, written as the escalation is: its own lock
+ * limit; the alert's journey's row first, skipped when held unless told to
+ * wait; under it, the journey's state, its one unresolved alert, that alert's
+ * opening and now(); skipped when that alert is not the one named or the
+ * domain's 24-hour rule leaves the journey as it is; otherwise the journey
+ * ENDED, EXPIRED, at now(), and its alert resolved EXPIRED through
+ * `resolveInside`, every responder row stood down, all of it or none of it.
+ *
  * Removing a responder (SM-10, D-122, D-123) reads the journey and its
  * responders without a lock, and removes in one transaction with its own lock
  * limit, whichever pool runs it: the journey's row first, the domain's
@@ -107,15 +125,17 @@
  * refuses a second message of a kind in one round, and takes the next
  * round's.
  *
- * The worker's marks can now wait on three withdrawals, and the worker's pool
+ * The worker's marks can now wait on four withdrawals, and the worker's pool
  * has no lock limit of its own. The first is the API's, when it resolves an
- * alert: that wait is bounded by the API's limits (each statement waits at
- * most 5 s for a lock, and a frozen transaction is ended after 10 s idle).
- * The second is the open's own, on the worker's pool: a mark waits for the
- * open to commit, and each lock the open waits for after its withdrawal is
- * bounded by the open's own 5 s lock limit (and a frozen open by the worker's
- * 10 s idle limit). The third is the removal's, bounded by its own 5 s lock
- * limit and the pools' 10 s idle limit. Each wait stalls delivery only.
+ * alert, a close included: that wait is bounded by the API's limits (each
+ * statement waits at most 5 s for a lock, and a frozen transaction is ended
+ * after 10 s idle). The second is the open's own, on the worker's pool: a
+ * mark waits for the open to commit, and each lock the open waits for after
+ * its withdrawal is bounded by the open's own 5 s lock limit (and a frozen
+ * open by the worker's 10 s idle limit). The third is the removal's, bounded
+ * by its own 5 s lock limit and the pools' 10 s idle limit. The fourth is the
+ * 24-hour end's, on the worker's pool, bounded as the open's is. Each wait
+ * stalls delivery only.
  *
  * Any failure while storing a heartbeat is replaced by a `HeartbeatStoreError`
  * holding PostgreSQL's SQLSTATE and nothing else. PostgreSQL's own error can
@@ -139,6 +159,7 @@ import {
 } from '../db/schema.ts';
 import { databaseTime } from '../domain/database-time.ts';
 import {
+  ALERT_EXPIRES_AFTER_MS,
   ALERT_RESOLUTIONS,
   PUSH_KINDS,
   SMS_KINDS,
@@ -163,9 +184,14 @@ import type {
   AlertMessage,
   AlertStore,
   ClaimedMessages,
+  ClosureStore,
+  ClosureToRecord,
   DueAlerts,
   EscalateAlertResult,
   EscalateRequest,
+  ExpireAlertResult,
+  ExpireRequest,
+  ExpiringAlerts,
   HeartbeatToRecord,
   HomeToRecord,
   InsertStartedResult,
@@ -178,6 +204,7 @@ import type {
   OverdueJourneys,
   PushFailureReason,
   RecordAcknowledgementResult,
+  RecordClosureResult,
   RecordHeartbeatResult,
   RecordHomeResult,
   RemovalToRecord,
@@ -652,11 +679,17 @@ interface Resolved {
  *      unique (alert, recipient, kind, round) refuses a second, and would
  *      roll back the whole resolution (D-114). Steps 2 and 3 are one statement, so the
  *      hold copies the time at the database's own precision.
+ *
+ * `except` leaves one responder out of the stand-downs: "They're safe"'s
+ * closer, who has the 200, while every other responder is told (LOST-08,
+ * D-126). Every other caller passes none, and its statement is then the same
+ * as before.
  */
 async function resolveInside(
   tx: Pick<Database, 'execute' | 'update'>,
   journeyId: string,
   resolution: AlertResolution,
+  { except }: { except?: string } = {},
 ): Promise<Resolved> {
   const [alert] = await tx
     .update(alerts)
@@ -690,9 +723,169 @@ async function resolveInside(
       join ${alerts} on ${alerts.id} = ${alert.id}
       left join held on held."recipient_id" = ${journeyResponders.responderId}
      where ${journeyResponders.journeyId} = ${journeyId}
+     ${except === undefined ? sql`` : sql`and ${journeyResponders.responderId} <> ${except}`}
     returning "id", "recipient_id", "kind"`);
 
   return { alertId: alert.id, messages: standDowns.rows.map(asMessage) };
+}
+
+/**
+ * "They're safe", inside its transaction (LOST-08, D-126, approach item 4).
+ * Throws to roll back: an end or a resolution that changed other than the one
+ * row the rule read is never half-written.
+ *
+ *   1. The journey's row first (D-112), found through the alert, waited for,
+ *      as "I'm on it" waits: a person's action. The API's pool bounds the
+ *      wait with its lock limit (D-108).
+ *   2. Under that lock, the alert read again with its journey's responders
+ *      ("I'm on it"'s read), and the domain's close rule (AR-04). Anything but
+ *      closed writes nothing.
+ *   3. The journey ENDED, SAFE, at now(), guarded by LOST_CONTACT, which must
+ *      change exactly one row: an unresolved alert's journey is always
+ *      LOST_CONTACT, so one that is not means the read is not what this code
+ *      thinks it is.
+ *   4. The alert resolved SAFE by `resolveInside`, every responder row but
+ *      the closer's stood down; it must be the alert the call named.
+ * The closer stays recorded on the alert: who closed it is its
+ * `acknowledged_by` (D-126). Every time is this transaction's now().
+ */
+async function closeInside(
+  tx: Pick<Database, 'execute' | 'select' | 'update'>,
+  { alertId, responderId }: ClosureToRecord,
+): Promise<RecordClosureResult> {
+  const [locked] = await tx
+    .select({ id: journeys.id })
+    .from(journeys)
+    .where(
+      eq(
+        journeys.id,
+        tx.select({ journeyId: alerts.journeyId }).from(alerts).where(eq(alerts.id, alertId)),
+      ),
+    )
+    .for('update');
+
+  // The domain decides under the lock, from what the alert holds now (AR-04):
+  // contact back, "I'm home", a removal, another close or the 24-hour end
+  // committed since the module's read is answered here, writing nothing.
+  const decision = alertTransition(
+    locked === undefined ? null : await alertForAcknowledgement(tx, alertId),
+    { type: 'close', responderId },
+  );
+  if (decision.type !== 'closed') {
+    return { outcome: 'not_closed', decision };
+  }
+  if (locked === undefined) {
+    // The rule closes only an alert that is there.
+    throw new Error('The close rule closed an alert that is not there.');
+  }
+
+  const ended = await tx
+    .update(journeys)
+    .set({ state: decision.journey, endedAt: sql`now()`, endReason: decision.resolution })
+    .where(and(eq(journeys.id, locked.id), eq(journeys.state, 'LOST_CONTACT')))
+    .returning({ id: journeys.id });
+  if (ended.length !== 1) {
+    throw new Error('The close’s end changed no LOST_CONTACT journey, so nothing of it is kept.');
+  }
+  const resolved = await resolveInside(tx, locked.id, decision.resolution, {
+    except: responderId,
+  });
+  if (resolved.alertId !== alertId) {
+    throw new Error('The close resolved another alert than the one named, so nothing is kept.');
+  }
+  return { outcome: 'closed', messages: resolved.messages };
+}
+
+/**
+ * The 24-hour end, inside its transaction (SM-06, LOST-08, approach item 6).
+ * Throws to roll back: an end or a resolution that changed other than the one
+ * row the rule read is never half-written. Marks `progress.rowTaken` once the
+ * journey's row is taken, so a lock that ran out after that is known to be
+ * another one.
+ */
+async function expireInside(
+  tx: Pick<Database, 'execute' | 'select' | 'update'>,
+  { alertId, lockWaitMs }: ExpireRequest,
+  progress: { rowTaken: boolean },
+): Promise<ExpireAlertResult> {
+  // Every 24-hour end bounds its own waits, as every escalation does (D-108):
+  // the worker's pool has no lock limit, and the stand-downs' inserts take
+  // key-share locks on the responders' users rows. SET LOCAL, for this
+  // transaction.
+  await tx.execute(
+    sql`select set_config('lock_timeout', ${String(lockWaitMs ?? LOCK_WAIT_LIMIT_MS)}, true)`,
+  );
+  // The journey's row first (D-112), named by the alert, in any state: the
+  // rule decides under it. Without a wait, a row someone holds is no row;
+  // with one, PostgreSQL waits at most the lock limit for it.
+  const [locked] = await tx
+    .select({ id: journeys.id })
+    .from(journeys)
+    .where(
+      eq(
+        journeys.id,
+        tx.select({ journeyId: alerts.journeyId }).from(alerts).where(eq(alerts.id, alertId)),
+      ),
+    )
+    .for('update', lockWaitMs === undefined ? { skipLocked: true } : {});
+  progress.rowTaken = true;
+  if (locked === undefined) {
+    return { outcome: 'skipped' };
+  }
+
+  // Under the lock: the journey's state, its one unresolved alert and when
+  // that opened, and this transaction's now(). Contact back, "I'm home", a
+  // close or another sweep's end committed since the read is met here.
+  const read = await tx.execute<{
+    state: JourneyState;
+    alert_id: string | null;
+    opened_at: unknown;
+    now: unknown;
+  }>(sql`
+    select ${journeys.state}, ${alerts.id} as alert_id, ${alerts.openedAt}, now() as now
+      from ${journeys}
+      left join ${alerts}
+        on ${alerts.journeyId} = ${journeys.id} and ${unresolved(alerts.state)}
+     where ${journeys.id} = ${locked.id}`);
+  const [journey] = read.rows;
+  if (journey === undefined) {
+    // The row was just taken, and nothing deletes a journey.
+    throw new Error('The journey to end was not found under its own lock.');
+  }
+  if (journey.alert_id !== alertId) {
+    // Resolved since the read: whatever resolved it decided the journey.
+    return { outcome: 'skipped' };
+  }
+  const decision = transition(
+    { id: locked.id, state: journey.state },
+    {
+      type: 'expire',
+      alertOpenedAt: databaseTime(journey.opened_at, 'The 24-hour end’s read'),
+      now: databaseTime(journey.now, 'The 24-hour end’s read'),
+    },
+  );
+  if (decision.type === 'unchanged') {
+    return { outcome: 'skipped' };
+  }
+
+  const ended = await tx
+    .update(journeys)
+    .set({ state: decision.state, endedAt: sql`now()`, endReason: decision.reason })
+    .where(and(eq(journeys.id, locked.id), eq(journeys.state, 'LOST_CONTACT')))
+    .returning({ id: journeys.id });
+  if (ended.length !== 1) {
+    throw new Error('The 24-hour end changed no LOST_CONTACT journey, so nothing of it is kept.');
+  }
+  // Every responder row is stood down, the acknowledger included ("with
+  // responders told", D-111); none when the journey has none left, and the
+  // unheard alert is resolved all the same (D-122 item 3).
+  const resolved = await resolveInside(tx, locked.id, decision.reason);
+  if (resolved.alertId !== alertId) {
+    throw new Error(
+      'The 24-hour end resolved another alert than the one named, so nothing is kept.',
+    );
+  }
+  return { outcome: 'expired', messages: resolved.messages };
 }
 
 /** The walker's warning that the journey's last responder was removed (SM-02), cast to the enum as the escalation's kind is. */
@@ -908,9 +1101,15 @@ async function claim(
   };
 }
 
+/**
+ * A start's insert met the walker's unended journey, and the read after it
+ * found none: that journey ended in between (LOST-08, approach item 9).
+ */
+const ENDED_MEANWHILE = Symbol('the journey the start met ended before its read');
+
 export function databaseJourneyStore(
   db: Database,
-): JourneyStore & WatchdogStore & OutboxStore & AlertStore & ResponderStore {
+): JourneyStore & WatchdogStore & OutboxStore & AlertStore & ResponderStore & ClosureStore {
   return {
     unendedJourneyOf(walkerId: string): Promise<UnendedJourney | null> {
       return unendedJourneyOf(db, walkerId);
@@ -931,43 +1130,53 @@ export function databaseJourneyStore(
       if (responderIds.length === 0) {
         throw new Error('A journey needs at least one responder; none was given.');
       }
-      return db.transaction(async (tx): Promise<InsertStartedResult> => {
-        const [journey] = await tx
-          .insert(journeys)
-          .values({ walkerId, deviceId, state: 'ACTIVE', startedAt })
-          .onConflictDoNothing({ target: journeys.walkerId, where: unended(journeys.state) })
-          .returning({ id: journeys.id });
+      /** One try, in a transaction of its own: stored, refused, or ended meanwhile. */
+      const attempt = () =>
+        db.transaction(async (tx): Promise<InsertStartedResult | typeof ENDED_MEANWHILE> => {
+          const [journey] = await tx
+            .insert(journeys)
+            .values({ walkerId, deviceId, state: 'ACTIVE', startedAt })
+            .onConflictDoNothing({ target: journeys.walkerId, where: unended(journeys.state) })
+            .returning({ id: journeys.id });
 
-        if (journey === undefined) {
-          // The index refused it: the walker has an unended journey. Read in
-          // this transaction, after the conflict, so it sees the journey that
-          // won the race. That relies on READ COMMITTED, PostgreSQL's default:
-          // each statement takes a fresh snapshot, so this read sees the
-          // winner the insert waited for. Under REPEATABLE READ (or
-          // SERIALIZABLE), a conflict with a journey this transaction's
-          // snapshot cannot see raises 40001 instead.
-          const winner = await unendedJourneyOf(tx, walkerId);
-          if (winner === null) {
-            // Reachable now that "I'm home" ends journeys: the conflicting
-            // journey may end between the conflict and this read. Only the
-            // walker's own phone ends one yet, so it is their start racing
-            // their own end: answered 500, loudly, and the app's retry then
-            // starts. Retrying the insert once here is left for the task that
-            // lets someone else end a journey ("They're safe", and the
-            // 24-hour rule), where a start can meet an end by chance.
-            throw new Error(
-              'A start was refused as a second unended journey, and no unended journey was found.',
-            );
+          if (journey === undefined) {
+            // The index refused it: the walker has an unended journey. Read in
+            // this transaction, after the conflict, so it sees the journey
+            // that won the race. That relies on READ COMMITTED, PostgreSQL's
+            // default: each statement takes a fresh snapshot, so this read
+            // sees the winner the insert waited for. Under REPEATABLE READ (or
+            // SERIALIZABLE), a conflict with a journey this transaction's
+            // snapshot cannot see raises 40001 instead.
+            const winner = await unendedJourneyOf(tx, walkerId);
+            return winner === null
+              ? ENDED_MEANWHILE
+              : { inserted: false, unendedJourneyId: winner.id };
           }
-          return { inserted: false, unendedJourneyId: winner.id };
-        }
 
-        await tx
-          .insert(journeyResponders)
-          .values(responderIds.map((responderId) => ({ journeyId: journey.id, responderId })));
+          await tx
+            .insert(journeyResponders)
+            .values(responderIds.map((responderId) => ({ journeyId: journey.id, responderId })));
 
-        return { inserted: true, journeyId: journey.id };
-      });
+          return { inserted: true, journeyId: journey.id };
+        });
+
+      // The journey the insert met can end between the conflict and the read
+      // (LOST-08, approach item 9): "I'm home" from the walker's own phone,
+      // and now "They're safe" and the 24-hour end from outside it, which can
+      // meet a start by chance. The insert is then tried once more, in a new
+      // transaction. The same race a second time is answered 500, loudly,
+      // with nothing stored, and the app's retry then starts.
+      const first = await attempt();
+      if (first !== ENDED_MEANWHILE) {
+        return first;
+      }
+      const second = await attempt();
+      if (second !== ENDED_MEANWHILE) {
+        return second;
+      }
+      throw new Error(
+        'A start was refused as a second unended journey, and no unended journey was found, twice.',
+      );
     },
 
     async journeyForHeartbeat(journeyId: string): Promise<JourneyForHeartbeat | null> {
@@ -1252,6 +1461,18 @@ export function databaseJourneyStore(
       });
     },
 
+    alertForClosure(alertId: string): Promise<AlertForAcknowledgement | null> {
+      // "I'm on it"'s read: the close rule reads the same (LOST-08).
+      return alertForAcknowledgement(db, alertId);
+    },
+
+    recordClosure(closure: ClosureToRecord): Promise<RecordClosureResult> {
+      // Not rewritten as the heartbeat's errors are: nothing here binds a
+      // location or a phone number, so no error of this can carry one. The
+      // module logs the SQLSTATE alone.
+      return db.transaction((tx) => closeInside(tx, closure));
+    },
+
     journeyForRemoval(journeyId: string): Promise<JourneyForRemoval | null> {
       return journeyForRemoval(db, journeyId);
     },
@@ -1358,6 +1579,57 @@ export function databaseJourneyStore(
       // waiting attempt's wait for the journey's own row answered as held.
       return takingTheRow(db, request.lockWaitMs, (tx, progress) =>
         escalateInside(tx, request, progress),
+      );
+    },
+
+    async alertsDueForExpiry(): Promise<ExpiringAlerts> {
+      // One statement, no lock: now() and every unresolved alert opened
+      // ALERT_EXPIRES_AFTER_MS or more before it, whatever its state and
+      // whether its journey has a responder row (SM-06), with its journey's
+      // state. No threshold is passed in, so no caller can choose another.
+      // The left join keeps now() when none is.
+      const result = await db.execute<{
+        now: unknown;
+        id: string | null;
+        journey_id: string | null;
+        journey_state: JourneyState | null;
+        opened_at: unknown;
+      }>(sql`
+        select clock.now, ${alerts.id}, ${alerts.journeyId},
+               ${journeys.state} as journey_state, ${alerts.openedAt}
+          from (select now() as now) as clock
+          left join (${alerts} join ${journeys} on ${journeys.id} = ${alerts.journeyId})
+            on ${unresolved(alerts.state)}
+           and ${alerts.openedAt} <= clock.now - ${milliseconds(ALERT_EXPIRES_AFTER_MS)}
+         order by ${alerts.openedAt}, ${alerts.id}`);
+      const [first] = result.rows;
+      if (first === undefined) {
+        // The left join always returns a row; none means the read is not
+        // what this code thinks it is.
+        throw new Error('The 24-hour end’s read returned no row, not even the time.');
+      }
+      return {
+        now: databaseTime(first.now, 'The 24-hour end’s read'),
+        alerts: result.rows.flatMap((row) =>
+          row.id === null || row.journey_id === null || row.journey_state === null
+            ? []
+            : [
+                {
+                  id: row.id,
+                  journeyId: row.journey_id,
+                  journeyState: row.journey_state,
+                  openedAt: databaseTime(row.opened_at, 'The 24-hour end’s read'),
+                },
+              ],
+        ),
+      };
+    },
+
+    expireAlert(request: ExpireRequest): Promise<ExpireAlertResult> {
+      // As the escalation: the wait checked before the transaction, and only
+      // a waiting attempt's wait for the journey's own row answered as held.
+      return takingTheRow(db, request.lockWaitMs, (tx, progress) =>
+        expireInside(tx, request, progress),
       );
     },
 

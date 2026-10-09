@@ -90,7 +90,7 @@ export const devices = pgTable(
 /** The journey states, exactly as the state machine lists them, and no others. */
 export const journeyState = pgEnum('journey_state', JOURNEY_STATES);
 
-/** Why a journey ended, exactly as the state machine lists the reasons (LOST-03). */
+/** Why a journey ended, exactly as the state machine lists the reasons (LOST-03, LOST-08): "I'm home", "They're safe" and the 24-hour end. */
 export const journeyEndReason = pgEnum('journey_end_reason', JOURNEY_END_REASONS);
 
 /**
@@ -239,7 +239,7 @@ export const positions = pgTable(
 /** The alert states, exactly as the state machine lists them, in order, and no others (D-033). */
 export const alertState = pgEnum('alert_state', ALERT_STATES);
 
-/** How an alert resolved, exactly as the state machine lists the resolutions (LOST-03). */
+/** How an alert resolved, exactly as the state machine lists the resolutions (LOST-03, LOST-08): contact back, "I'm home", "They're safe" and the 24-hour end. */
 export const alertResolution = pgEnum('alert_resolution', ALERT_RESOLUTIONS);
 
 /**
@@ -317,7 +317,7 @@ export const alerts = pgTable(
   ],
 );
 
-/** The kinds of message there are, exactly as the domain lists them: the lost-contact alert, its stand-downs, the notice that someone is on it, the escalation SMS, and the walker's warning that the last responder was removed. */
+/** The kinds of message there are, exactly as the domain lists them: the lost-contact alert, its stand-downs (one per resolution, "They're safe" and the 24-hour end included), the notice that someone is on it, the escalation SMS, and the walker's warning that the last responder was removed. */
 export const messageKind = pgEnum('message_kind', MESSAGE_KINDS);
 
 /**

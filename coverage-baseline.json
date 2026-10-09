@@ -115,11 +115,23 @@
       "coveredLines": 18,
       "totalLines": 18
     },
+    "apps/server/src/modules/alerts/closure.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 15,
+      "totalLines": 15
+    },
     "apps/server/src/modules/alerts/escalation.ts": {
       "lines": 100,
       "branches": 100,
       "coveredLines": 39,
       "totalLines": 39
+    },
+    "apps/server/src/modules/alerts/expiry.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 37,
+      "totalLines": 37
     },
     "apps/server/src/modules/alerts/outbox.ts": {
       "lines": 100,

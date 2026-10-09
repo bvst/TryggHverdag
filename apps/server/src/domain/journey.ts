@@ -65,6 +65,18 @@
  *     unresolved alert the removed responder is recorded on goes back to OPEN,
  *     whatever its state, so escalation resumes; a RESOLVED alert keeps who
  *     helped on record.
+ *   - "They're safe" (LOST-08, SM-06, D-126): the alert rule's fourth event,
+ *     `close`. Only the responder recorded on an ACKNOWLEDGED alert may close
+ *     it, both halves read: closing silences everyone, so a missing half
+ *     refuses, the other way round from the escalation, which sends on one.
+ *     The alert is RESOLVED, SAFE, and its journey ENDED, SAFE.
+ *   - The 24-hour end (SM-06, D-126): a journey event, `expire`, the
+ *     watchdog's question, asked with two database times the store read, when
+ *     the journey's current alert opened and now. A LOST_CONTACT journey
+ *     whose alert opened ALERT_EXPIRES_AFTER_MS or more before now ("or
+ *     more") is ENDED, EXPIRED, its alert RESOLVED. Nothing else is: an
+ *     ACTIVE journey, an ENDED one and no journey are unchanged, so the only
+ *     automatic end never reaches a lost-contact journey early (SM-05).
  */
 
 /** Every state a journey can be in (D-033). The database admits exactly these. */
@@ -78,29 +90,33 @@ export const JOURNEY_EVENTS = [
   'contact',
   'home',
   'remove',
+  'expire',
 ] as const;
 
 /**
  * Every state an alert can be in (D-033), in order. The database admits
  * exactly these. Alerts open OPEN; nobody acknowledging within two minutes
  * makes them ESCALATED (LOST-07), "I'm on it" ACKNOWLEDGED (LOST-06), and
- * contact or "I'm home" resolves them, whatever their state (D-112, D-116).
- * Removing the responder recorded on an unresolved alert puts it back to OPEN,
- * whatever its state, and it escalates again in its next round (SM-10, D-123).
+ * contact, "I'm home" or the 24-hour end resolves them, whatever their state
+ * (D-112, D-116, D-126), and "They're safe" resolves an ACKNOWLEDGED one
+ * (LOST-08). Removing the responder recorded on an unresolved alert puts it
+ * back to OPEN, whatever its state, and it escalates again in its next round
+ * (SM-10, D-123).
  */
 export const ALERT_STATES = ['OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED'] as const;
 
 export type AlertState = (typeof ALERT_STATES)[number];
 
-/** Every event an alert can meet (LOST-06, LOST-07, SM-10): its own list, apart from the journey's. */
-export const ALERT_EVENTS = ['acknowledge', 'escalate', 'acknowledger_removed'] as const;
+/** Every event an alert can meet (LOST-06, LOST-07, SM-10, LOST-08): its own list, apart from the journey's. */
+export const ALERT_EVENTS = ['acknowledge', 'escalate', 'acknowledger_removed', 'close'] as const;
 
 /**
  * Every kind of message there is: those an alert causes, the lost-contact
  * alert, the stand-down for each way it resolves, the notice that someone is
- * on it (D-113) and the escalation SMS (D-019); and the walker's warning that
+ * on it (D-113) and the escalation SMS (D-019); the walker's warning that
  * the journey's last responder was removed (SM-02, D-123), a journey's
- * message. The database admits exactly these.
+ * message; and the stand-downs of "They're safe" and the 24-hour end
+ * (LOST-08, D-126). The database admits exactly these.
  */
 export const MESSAGE_KINDS = [
   'LOST_CONTACT',
@@ -109,6 +125,8 @@ export const MESSAGE_KINDS = [
   'ACKNOWLEDGED',
   'LOST_CONTACT_SMS',
   'NO_RESPONDER',
+  'SAFE',
+  'EXPIRED',
 ] as const;
 
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
@@ -125,7 +143,8 @@ export const SMS_KINDS = ['LOST_CONTACT_SMS'] as const satisfies readonly Messag
 
 /**
  * The kinds that go by push: every other kind, in MESSAGE_KINDS' order. The
- * walker's warning is one, never at the critical level (D-087).
+ * walker's warning is one, and so are the two stand-downs LOST-08 adds, none
+ * of them ever at the critical level (D-087).
  */
 export const PUSH_KINDS = [
   'LOST_CONTACT',
@@ -133,6 +152,8 @@ export const PUSH_KINDS = [
   'HOME',
   'ACKNOWLEDGED',
   'NO_RESPONDER',
+  'SAFE',
+  'EXPIRED',
 ] as const satisfies readonly MessageKind[];
 
 /**
@@ -187,22 +208,33 @@ export const WITHDRAWN_WHEN_REMOVED = [
   'HOME',
   'ACKNOWLEDGED',
   'LOST_CONTACT_SMS',
+  'SAFE',
+  'EXPIRED',
 ] as const satisfies readonly MessageKind[];
 
 /**
- * Every way an alert resolves. Each is also the kind of the stand-down it
- * sends every responder, by its own name: held here at typecheck. The
+ * Every way an alert resolves: contact back, "I'm home", "They're safe" and
+ * the 24-hour end (LOST-03, LOST-08). Each is also the kind of the stand-down
+ * it sends the responders, by its own name: held here at typecheck. The
  * database admits exactly these.
  */
 export const ALERT_RESOLUTIONS = [
   'BACK_IN_CONTACT',
   'HOME',
+  'SAFE',
+  'EXPIRED',
 ] as const satisfies readonly MessageKind[];
 
 export type AlertResolution = (typeof ALERT_RESOLUTIONS)[number];
 
-/** Every reason a journey ends. The database admits exactly these. */
-export const JOURNEY_END_REASONS = ['HOME'] as const;
+/**
+ * Every reason a journey ends: "I'm home", "They're safe" and the 24-hour end
+ * (SM-06). The database admits exactly these. Only EXPIRED is automatic, and
+ * it ends only a LOST_CONTACT journey 24 hours after its alert opened: SM-05's
+ * pinned table in the domain's test holds each reason to the states it may
+ * end, so a reason added later meets it.
+ */
+export const JOURNEY_END_REASONS = ['HOME', 'SAFE', 'EXPIRED'] as const;
 
 export type JourneyEndReason = (typeof JOURNEY_END_REASONS)[number];
 
@@ -231,6 +263,14 @@ export const LOST_CONTACT_AFTER_MS = 300_000;
  * the owner.
  */
 export const ESCALATE_AFTER_MS = 120_000;
+
+/**
+ * How long after its alert opened a lost-contact journey ends on its own:
+ * 24 hours, counted "or more" by the database's clock from the current
+ * alert's opening, not moved by a reset (SM-06, D-126). Changing it needs the
+ * owner.
+ */
+export const ALERT_EXPIRES_AFTER_MS = 86_400_000;
 
 export type JourneyState = (typeof JOURNEY_STATES)[number];
 export type JourneyEventType = (typeof JOURNEY_EVENTS)[number];
@@ -340,8 +380,19 @@ export interface RemoveEvent {
   responderId: string;
 }
 
+/**
+ * The watchdog asks whether a journey has reached its 24-hour end (SM-06):
+ * when its current alert opened and now, both read from the database by the
+ * store, never from this process's clock (REL-01).
+ */
+export interface ExpireEvent {
+  type: 'expire';
+  alertOpenedAt: Date;
+  now: Date;
+}
+
 export type JourneyEvent =
-  StartEvent | HeartbeatEvent | SilenceEvent | ContactEvent | HomeEvent | RemoveEvent;
+  StartEvent | HeartbeatEvent | SilenceEvent | ContactEvent | HomeEvent | RemoveEvent | ExpireEvent;
 
 /** Why a start was refused. */
 export type StartRefusal =
@@ -381,8 +432,18 @@ export type RemoveOutcome =
   | { type: 'ignored'; reason: 'JOURNEY_ENDED' }
   | { type: 'refused'; reason: 'JOURNEY_NOT_FOUND' };
 
+/** 24 hours since the alert opened: ENDED, EXPIRED, and the alert resolved. Or nothing changes. */
+export type ExpireOutcome =
+  { type: 'expired'; state: 'ENDED'; reason: 'EXPIRED'; alert: 'RESOLVED' } | { type: 'unchanged' };
+
 export type TransitionOutcome =
-  StartOutcome | HeartbeatOutcome | SilenceOutcome | ContactOutcome | HomeOutcome | RemoveOutcome;
+  | StartOutcome
+  | HeartbeatOutcome
+  | SilenceOutcome
+  | ContactOutcome
+  | HomeOutcome
+  | RemoveOutcome
+  | ExpireOutcome;
 
 /**
  * An alert as "I'm on it" reads it (LOST-06): its state, who is recorded on
@@ -457,7 +518,33 @@ export interface AcknowledgerRemovedEvent {
 /** Back to OPEN, nobody on it, so escalation resumes; or nothing changes. */
 export type ResetOutcome = { type: 'reset'; state: 'OPEN' } | { type: 'unchanged' };
 
-export type AlertEvent = AcknowledgeEvent | EscalateEvent | AcknowledgerRemovedEvent;
+/**
+ * An alert as "They're safe" reads it (LOST-08): the same read as "I'm on
+ * it"'s, its state, who is recorded on it, null for nobody, and its journey's
+ * responders, as the store read them.
+ */
+export type AlertForClosure = AlertForAcknowledgement;
+
+/** A responder says "They're safe" for the alert: the device's own user. */
+export interface CloseEvent {
+  type: 'close';
+  responderId: string;
+}
+
+/**
+ * Why a close changes nothing: the alert is over, whatever resolved it; or
+ * refused, for no such alert for the sender, or a sender who is not its
+ * current acknowledger.
+ */
+export type CloseRefusal =
+  | { type: 'ignored'; reason: 'ALERT_RESOLVED' }
+  | { type: 'refused'; reason: 'ALERT_NOT_FOUND' | 'NOT_THE_ACKNOWLEDGER' };
+
+/** Closed: the alert RESOLVED, SAFE, and its journey ENDED. Or not, and why. */
+export type CloseOutcome =
+  { type: 'closed'; state: 'RESOLVED'; resolution: 'SAFE'; journey: 'ENDED' } | CloseRefusal;
+
+export type AlertEvent = AcknowledgeEvent | EscalateEvent | AcknowledgerRemovedEvent | CloseEvent;
 
 /**
  * What an alert event meets, as the store read it. The responders and the
@@ -481,9 +568,10 @@ type AlertSituation = Pick<AlertForAcknowledgement, 'id' | 'state' | 'acknowledg
  *   ID and state, or null. For contact, the journey whose row the store
  *   holds, by its ID and state. For "I'm home", the journey it names, as for
  *   a heartbeat. For a removal, the journey it names, in any state, with its
- *   responders, or null when no journey has that ID.
+ *   responders, or null when no journey has that ID. For the 24-hour end, the
+ *   journey whose alert the watchdog read, by its ID and state, or null.
  *
- * The first six overloads are the ones callers use: each event with the
+ * The first seven overloads are the ones callers use: each event with the
  * situation it needs, and the outcome it can have. The last, any situation
  * with any event, exists for the transition test's table, which reads its
  * types with `Parameters<typeof transition>` (the last overload) so that it
@@ -498,6 +586,7 @@ export function transition(current: WalkersJourney | null, event: SilenceEvent):
 export function transition(current: WalkersJourney | null, event: ContactEvent): ContactOutcome;
 export function transition(current: JourneyForHeartbeat | null, event: HomeEvent): HomeOutcome;
 export function transition(current: JourneyForRemoval | null, event: RemoveEvent): RemoveOutcome;
+export function transition(current: WalkersJourney | null, event: ExpireEvent): ExpireOutcome;
 export function transition(current: Situation | null, event: JourneyEvent): TransitionOutcome;
 export function transition(current: Situation | null, event: JourneyEvent): TransitionOutcome {
   switch (event.type) {
@@ -513,6 +602,8 @@ export function transition(current: Situation | null, event: JourneyEvent): Tran
       return home(current, event);
     case 'remove':
       return remove(current, event);
+    case 'expire':
+      return expire(current, event);
     default: {
       // A type error the day an event joins JourneyEvent without a case. And
       // a throw, never a value: a value handed back for an event nobody
@@ -667,14 +758,35 @@ function remove(journey: Situation | null, { responderId }: RemoveEvent): Remove
 }
 
 /**
- * What an alert's event does (LOST-06, LOST-07, SM-10). Every outcome, a
+ * The 24-hour end (SM-06, D-126). Only a LOST_CONTACT journey ends on its
+ * own, and only once its current alert has been open for
+ * ALERT_EXPIRES_AFTER_MS or more by the database's clock: ENDED, EXPIRED, and
+ * its alert resolved. ACTIVE, ENDED and no journey are unchanged, whatever
+ * the times, so this end never reaches a journey still in contact, and never
+ * a lost-contact one early (SM-05). Both times come through `databaseTime`,
+ * which throws on one that is not a time, so the sweep fails and pages before
+ * this rule is asked. Were one to reach it, no comparison with it holds, so
+ * it would end nothing.
+ */
+function expire(journey: Situation | null, { alertOpenedAt, now }: ExpireEvent): ExpireOutcome {
+  if (journey?.state !== 'LOST_CONTACT') {
+    return { type: 'unchanged' };
+  }
+  if (now.getTime() - alertOpenedAt.getTime() >= ALERT_EXPIRES_AFTER_MS) {
+    return { type: 'expired', state: 'ENDED', reason: 'EXPIRED', alert: 'RESOLVED' };
+  }
+  return { type: 'unchanged' };
+}
+
+/**
+ * What an alert's event does (LOST-06, LOST-07, SM-10, LOST-08). Every outcome, a
  * refusal included, is a value; only an event of a type this module does not
  * list is thrown on.
  *
  * @param alert the alert the event names, or null when no alert has that ID:
- *   for "I'm on it", with its journey's responders; for the escalation, with
- *   when it was escalated. For a removal, the journey's one unresolved alert,
- *   or null when it has none.
+ *   for "I'm on it" and "They're safe", with its journey's responders; for the
+ *   escalation, with when it was escalated. For a removal, the journey's one
+ *   unresolved alert, or null when it has none.
  *
  * Each overload is an event with the situation it needs, and the outcome it
  * can have.
@@ -691,10 +803,11 @@ export function alertTransition(
   alert: AlertForReset | null,
   event: AcknowledgerRemovedEvent,
 ): ResetOutcome;
+export function alertTransition(alert: AlertForClosure | null, event: CloseEvent): CloseOutcome;
 export function alertTransition(
   alert: AlertSituation | null,
   event: AlertEvent,
-): AcknowledgeOutcome | EscalateOutcome | ResetOutcome {
+): AcknowledgeOutcome | EscalateOutcome | ResetOutcome | CloseOutcome {
   switch (event.type) {
     case 'acknowledge':
       return acknowledge(alert, event);
@@ -702,6 +815,8 @@ export function alertTransition(
       return escalate(alert, event);
     case 'acknowledger_removed':
       return reset(alert, event);
+    case 'close':
+      return close(alert, event);
     default: {
       // A type error the day an event joins AlertEvent without a case. And a
       // throw, never a value, for an event nobody handled: a value handed
@@ -808,4 +923,34 @@ function reset(
     return { type: 'unchanged' };
   }
   return { type: 'reset', state: 'OPEN' };
+}
+
+/**
+ * The close rule, "They're safe" (LOST-08, D-126), in its order, which is part
+ * of the rule:
+ *   1. no alert, or a sender who is not a responder of its journey: not found,
+ *      one answer for both, the walker included (D-114);
+ *   2. RESOLVED: ignored, whatever resolved it, the sender's own earlier close
+ *      included, so a repeat writes nothing;
+ *   3. not ACKNOWLEDGED with the sender recorded: refused. Both halves are
+ *      read, and a missing half refuses: closing silences everyone, so it goes
+ *      the other way from the escalation, which sends on a missing half. After
+ *      a reset (SM-10) nobody is recorded, so nobody can close until someone
+ *      acknowledges again;
+ *   4. otherwise closed: the alert RESOLVED, SAFE, and its journey ENDED.
+ * IDs are compared exactly: the stores hand them back in lower case.
+ */
+function close(alert: AlertSituation | null, { responderId }: CloseEvent): CloseOutcome {
+  // No alert is no journey's either, so the sender follows it no more; nor
+  // does an alert handed in without its responders.
+  if (alert?.responderIds?.includes(responderId) !== true) {
+    return { type: 'refused', reason: 'ALERT_NOT_FOUND' };
+  }
+  if (alert.state === 'RESOLVED') {
+    return { type: 'ignored', reason: 'ALERT_RESOLVED' };
+  }
+  if (alert.state !== 'ACKNOWLEDGED' || alert.acknowledgedBy !== responderId) {
+    return { type: 'refused', reason: 'NOT_THE_ACKNOWLEDGER' };
+  }
+  return { type: 'closed', state: 'RESOLVED', resolution: 'SAFE', journey: 'ENDED' };
 }

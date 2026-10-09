@@ -57,6 +57,13 @@
       "when": 1791527874245,
       "tag": "0007_pale_orphan",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791559973254,
+      "tag": "0008_mushy_vampiro",
+      "breakpoints": true
     }
   ]
 }
