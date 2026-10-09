@@ -126,7 +126,16 @@ export default {
     //
     // Vitest's own bin, started directly, because `pnpm exec` cost about 12 %
     // of each mutant's CPU for nothing a run needs (D-117).
-    command: `node node_modules/vitest/vitest.mjs run ${vitestConfig}${vitestOptions}${run.tests.join(' ')}`,
+    //
+    // Vitest's module cache (D-124). Stryker instruments every mutant into one
+    // copy of the code and picks the active one by an environment variable, so
+    // the transforms are the same for every mutant: the first test run fills
+    // the cache, and each mutant's run reads it. The path is relative, so the
+    // cache is made in the run's own sandbox and goes with it: every run
+    // starts with an empty one (D-099). One worker, because Stryker's runners
+    // already fill the cores, and --bail=1 then stops at the first test file
+    // that kills the mutant.
+    command: `node node_modules/vitest/vitest.mjs run --fsModuleCache --fsModuleCachePath=.vitest-fs-cache --maxWorkers=1 ${vitestConfig}${vitestOptions}${run.tests.join(' ')}`,
   },
   timeoutMS: STRYKER_TIMEOUT_MS,
 

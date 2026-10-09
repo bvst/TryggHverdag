@@ -18,6 +18,9 @@ coverage/
 .eslintcache
 .stryker-tmp/
 reports/
+# Vitest's module cache (D-124) is made inside Stryker's sandbox; this is the
+# backstop for a run ever made outside one.
+.vitest-fs-cache/
 
 # Expo / native build output (from INF-06)
 .expo/
