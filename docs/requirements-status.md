@@ -72,4 +72,4 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | SM-07 | Events that arrive after ENDED are ignored and logged without location; late positions are discarded. | must | 🟢 | 5 |
 | SM-08 | Every event carries an ID. | must | 🟢 | 6 |
 | SM-09 | Events are applied in the order the server receives them, using database time. | must | 🟢 | 9 |
-| SM-10 | If the responder who acknowledged an alert is removed, the alert goes back to unacknowledged and escalation r… | must | ⚪ | 0 |
+| SM-10 | If the responder who acknowledged an alert is removed, the alert goes back to unacknowledged and escalation r… | must | 📝 | 0 |

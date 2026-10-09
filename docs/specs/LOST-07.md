@@ -1236,7 +1236,9 @@ Read in `scripts/lib/gate-decisions.mjs` on 2026-10-07.
   the migration (D-095: L3, and D-036's nightly run, which does not exist
   yet); `log.ts` (the owner's open question from #60); `config.ts` and
   `ports.ts` (not safety paths; D-079 kept `config.ts` out on purpose).
-- **Not run, because unchanged:** `journeys`, `api-process`.
+- **Not run, because unchanged:** `journeys`, `api-process`. *Corrected
+  2026-10-09 (SM-10's spec):* not so. `scripts/mutation.mjs` runs every group
+  on every run, and D-117's CI times for this pull request include both.
 - **Cost.** The `alerts` group's mutants each run three files from here. D-098
   keeps the 25-minute budget; if an honest run does not fit, the owner decides
   (cost). Read the job's log for the time it took; do not estimate.

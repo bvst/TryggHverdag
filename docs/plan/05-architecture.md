@@ -177,8 +177,10 @@ straight to `ACKNOWLEDGED` (other responders see who is on it) or `RESOLVED`
 or the journey ends (D-112 resolves an alert whatever its state). An alert
 reads as acknowledged only when it is `ACKNOWLEDGED` and someone is recorded on
 it; one marked `ACKNOWLEDGED` with nobody recorded is escalated (D-114,
-D-116). The edge back from `ACKNOWLEDGED`, when the acknowledging responder
-is removed, comes with SM-10's task (D-115).
+D-116). When the responder recorded on an unresolved alert is removed, the
+alert goes back to `OPEN` (`ACKNOWLEDGED` → `OPEN`, SM-10), with nobody
+recorded, no escalation time and its round raised, and escalates again from
+`OPEN` → `ESCALATED` in its next round (D-122, D-123).
 
 ### Edge-case rules (binding — D-033)
 

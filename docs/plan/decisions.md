@@ -4590,3 +4590,144 @@ any other path is work, not a candidate for the same treatment.
     it while the failure has not come back.
   - Revisit if a review ends with no structured output again, or if a Claude
     Code release changes how `--agent` treats tools, memory or `--model`.
+
+## D-122 — Removing a responder: the owner's four answers, and the removal has no route in M2 (SM-10, SM-02)
+- **Date:** 2026-10-09 · **Status:** Accepted (owner, 2026-10-09). Each was
+  asked with Claude's recommendation, and the owner chose it each time ·
+  **Section:** 5 (SM-02, SM-10; D-019, D-024, D-033, D-079, D-087, D-111,
+  D-114, D-115, D-116)
+- **Context:** SM-10's spec (`docs/specs/SM-10.md`) asked four questions that
+  are scope, cost, privacy or safety. D-115 gave this task "the removal"; it
+  did not say how far.
+- **Decision:**
+  1. **When the acknowledger of an alert that already sent its SMS is
+     removed, every remaining responder gets a second SMS at once.** The
+     alert goes back to `OPEN`, with no escalation time and its round raised,
+     so the next sweep, within about 10 s, texts them again: its two minutes
+     from the opening have long passed. No push is sent again. An alert
+     never escalated escalates at two minutes from its opening, as before.
+     - Rejected: a fresh two minutes from the removal (a delay at the worst
+       moment, seven or more minutes after last contact, and a new time to
+       count from); no second SMS (the others' last word would be "someone is
+       on it").
+  2. **A removed responder receives nothing more.** At the removal every
+     unsent message of the journey's alerts to them is withdrawn, whatever its
+     kind, and nothing later is written to them, so no stand-down either. One
+     already in a provider's hands cannot be recalled. The removal is the
+     walker's or the admin's deliberate choice, and the remove-a-member rule
+     says "immediately"; a stand-down would tell a removed, possibly abusive,
+     member the walker's state. This reads D-111's "every responder … gets
+     one stand-down" as every responder still on the journey.
+     - Rejected: a stand-down after removal (writes to someone no longer on
+       the journey); nothing withdrawn (a member removed seconds into an
+       alert would still get the critical alert).
+  3. **A silent journey with no responder opens its alert with nobody to tell,
+     and the owner is paged through the SMS check.** The journey goes to
+     `LOST_CONTACT`, the watchdog's sweep stays healthy, and each minute
+     `staging-sms` reports failing while such an alert is unresolved, with a
+     line saying how many. It lasts until contact comes back, "I'm home", or
+     SM-06's 24-hour rule (task 8) resolves it. Nothing for the owner to set
+     up. While it lasts a failed SMS adds no new page, since the check is
+     already failing. The page arrives by email (A-08) until D-079's go-live
+     question. This changes LOST-02's refusal: the open no longer refuses a
+     journey with no responder, since SM-02 lets one run on.
+     - Rejected: a third Healthchecks.io check (two more owner to-dos and
+       more wiring; it can be added if the overlap ever matters); one log line
+       and no page (silence is the failure this app exists to prevent); as
+       today, the sweep failing until the journey ends (the worker's check
+       would stay down and hide any other watchdog failure).
+  4. **The removed responder's row in `journey_responders` is deleted.** Every
+     path that tells a responder already reads those rows, so a removed one is
+     left out of each, M3's included, by construction (AR-11). Nothing then
+     says they followed the journey, beyond messages already sent; how long
+     journey records are kept stays M4's question.
+     - Rejected: keeping the row, marked removed (every path must remember to
+       leave it out, and one that forgets keeps alerting a removed member).
+  5. **No route in M2.** The removal is a store operation and a module, with
+     no production caller until M3's route. LOST-07's spec described this
+     task's option as "a store operation and module with no route"; D-115's
+     own text did not carry the words, so they are recorded here.
+- **Consequences:**
+  - SM-10-AC1 to AC21 are written on these answers. D-123 records the
+    technical choices within them.
+  - Item 1 costs one SMS per remaining responder (about €0.05 each, D-024),
+    only when an acknowledger is removed during an escalated alert.
+  - SM-02 will read as covered while its screen half, the no-responder state
+    on the walker's journey screen (D-087), is M3's to build.
+  - Task numbers: LOST-06's spec and D-114 were written before D-115, so
+    their "task 7" for "They're safe" is task 8 today, and the
+    resumed-escalation rule they place in "task 6" is this task, task 7.
+    Supersedes nothing.
+
+## D-123 — Removing a responder: the removal and the reset as events, a round on alerts and messages, the walker's warning in the outbox, and how D-033's alert states are read (SM-10, SM-02)
+- **Date:** 2026-10-09 · **Status:** Accepted (delegated, D-031) ·
+  **Section:** 5 (AR-03 to AR-06, AR-11; D-033, D-086, D-087, D-100, D-102,
+  D-103, D-108, D-112, D-113, D-114, D-116, D-117, D-122)
+- **Context:** SM-10's spec has the full reasoning. This records the choices
+  it makes within the owner's answers (D-122) and the binding rules.
+- **Decision:**
+  - **The removal is a journey event,** `remove`, in `domain/journey.ts`'s
+    `transition` (AR-04). In order: no journey → refused,
+    `JOURNEY_NOT_FOUND`; `ENDED` → ignored, `JOURNEY_ENDED`; not a responder
+    → unchanged, `NOT_A_RESPONDER` (the walker included; IDs compared
+    exactly); else removed, saying whether it was the last. No event ID: a
+    repeat finds no row (D-103's reading).
+  - **The reset is an alert event,** `acknowledger_removed`, in
+    `alertTransition`. An unresolved alert whose recorded acknowledger is the
+    removed responder goes to `OPEN`, whatever its state; anything else is
+    unchanged, a `RESOLVED` alert's record included. The store clears
+    `acknowledged_by`, `acknowledged_at` and `sms_raised_at`, raises the
+    round, and withdraws the alert's unsent `ACKNOWLEDGED` notices
+    (`WITHDRAWN_WHEN_RESET`): "someone is on it" is false once nobody is.
+  - **`sms_raised_at` now means "this round's escalation".** Cleared by a
+    reset, so LOST-07's escalation, unchanged, writes the second round's SMS.
+    The first round's time stays on its SMS rows (LOST-07-AC17). Rejected: a
+    separate `sms_round` column, which changes the rule, the read and the
+    write on the path that pages, for no difference in behaviour.
+  - **A round on alerts and messages.** `alerts.round` starts at 1 and rises
+    with each reset; each message is written with its alert's round, in SQL.
+    The outbox's unique key becomes (alert, recipient, kind, round), so a
+    second round's SMS and notices are taken while a duplicate within a round
+    is still refused. Rejected: re-arming old rows (loses who was told what);
+    dropping the key (it guards the races LOST-02 to LOST-07 rely on); a kind
+    per round.
+  - **The walker's warning (SM-02) is an outbox message of a journey.** A new
+    kind `NO_RESPONDER`, last in `MESSAGE_KINDS` and in `PUSH_KINDS`,
+    non-critical (D-087). The outbox's `alert_id` becomes nullable and gains
+    `journey_id`, with a check that exactly one is set; the check names no
+    kind, since a value added to an enum cannot be used in the transaction
+    that adds it. `JOURNEY_MESSAGE_KINDS` lists the journey kinds; nothing
+    withdraws them in M2. Rejected: a table of its own (a second claim and
+    sender on the delivery path).
+  - **`WITHDRAWN_WHEN_REMOVED`** holds every alert kind (D-122, item 2).
+  - **One transaction, the journey's row first** (D-112), with its own
+    `lock_timeout` (`LOCK_WAIT_LIMIT_MS`) on whichever pool runs it: the
+    journey's row, the rule asked again under it, the responder row deleted
+    (exactly one), the alert's reset, the removed responder's withdrawals,
+    and the warning when it was the last. Database time throughout (AR-03).
+  - **A journey with no responder** (D-122, item 3): the open opens its
+    alert with no message; `alertsDueForEscalation` leaves such a journey's
+    alerts out, and under the lock the escalation skips one that has lost its
+    last responder; `unheardAlertCount()` counts unresolved alerts whose
+    journey has no responder, and the SMS check reports failing while it or
+    the unsent count is above zero.
+  - **Three closed log events** (PRIV-07, D-102): `removal_ignored`
+    (journey ID and reason), `removal_failed` (stage and SQLSTATE),
+    `unheard_alerts` (count). No event names a user.
+  - **The module** is `modules/journeys/removal.ts`, mutated in the
+    `journeys` group (D-117's budget; if a run does not fit, it gets a group
+    of its own). Migration `0007`.
+  - **`escalate()`'s comment** says that an unreadable time cannot reach the
+    rule (`databaseTime` throws first, so the sweep fails and pages), rather
+    than reading as a quiet failure.
+  - **How D-033's alert states are read now:** `ACKNOWLEDGED` → `OPEN` exists
+    when the acknowledger is removed (and `OPEN` or `ESCALATED` with that
+    responder recorded → `OPEN` too), and `OPEN` → `ESCALATED` again for the
+    next round. D-033 is itself delegated, so this is Claude's to record and
+    the owner's to reopen; `05-architecture.md`'s alert-state paragraph
+    draws the edge. The binding rules are unchanged.
+- **Consequences:**
+  - No new dependency (SEC-06), no new import route (AR-10). `api.ts`,
+    `worker.ts`, the contracts, Terraform and the workflows are unchanged.
+  - LOST-06-AC4's unique-key test stays as it is: the round defaults to 1.
+  - SM-10-AC1 to AC21 prove it. Supersedes nothing.
