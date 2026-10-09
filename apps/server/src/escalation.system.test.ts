@@ -355,6 +355,9 @@ function smsSenderOf(w: World, limit: number) {
     markSent: (messageId) => w.store.markSent(messageId),
     markFailed: (request) => w.store.markFailed(request),
     unsentSmsCount: (olderThanMs: number) => w.store.unsentSmsCount(olderThanMs),
+    // SM-10 (Q3 (a)): the port gains the unheard count. Added to, not changed:
+    // this sender never reads it.
+    unheardAlertCount: () => w.store.unheardAlertCount(),
   };
   return createSmsSender({ outbox, sms: w.sms, log: w.log });
 }
@@ -1397,23 +1400,52 @@ describe('LOST-07 and AR-05: an escalation that fails is a failed sweep, saying 
     expect(w.smsOf(journeyId)).toEqual([]);
   });
 
-  test('LOST-07-AC15: an alert whose journey has no responder row is not escalated: the escalation is refused whole, and the sweep fails, saying so in one escalation_failed line, stage escalate', async () => {
+  test('SM-10-AC15: an alert whose journey has no responder row is not escalated: never read as due, so skipped, writing nothing; the sweep ok, with its beat; and the SMS check counts it unheard, reporting failing with one unheard_alerts line, count 1 (LOST-07, SM-02)', async () => {
+    // RG-03, named in SM-10's spec ("Existing assertions that change by
+    // design", the no-responder refusals, on Q3 (a), D-122 item 3). This was
+    // "LOST-07-AC15: an alert whose journey has no responder row is not
+    // escalated: the escalation is refused whole, and the sweep fails, saying
+    // so in one escalation_failed line, stage escalate". A journey left with
+    // no responder is now a state the removal can reach, not a fault: a sweep
+    // failing on it every 10 s would hold the worker's check down and hide
+    // every later failure. So it is not escalated, the sweep stays healthy,
+    // and the owner is paged through the SMS check instead. What the old
+    // test held that still holds is kept: OPEN, no escalation time, no SMS.
     const w = world();
     const { journeyId } = await due(w, 2);
     w.store.removeResponders(journeyId);
+    const asked = w.store.escalateRequests().length;
 
-    expect(await w.watchdog.sweep()).toEqual({ ok: false, opened: 0, escalated: 0, stuck: 0 });
+    expect(await w.watchdog.sweep()).toEqual(QUIET_SWEEP);
 
-    expect(w.log.events).toEqual([{ event: 'escalation_failed', stage: 'escalate', code: null }]);
+    expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
+    expect(w.store.escalateRequests().slice(asked)).toEqual([]);
+    expect(w.log.events).toEqual([]);
     expect(w.alertsOf(journeyId).map(({ state, smsRaisedAt }) => [state, smsRaisedAt])).toEqual([
       ['OPEN', null],
     ]);
     expect(w.smsOf(journeyId)).toEqual([]);
+    expect(await w.smsCheck.check()).toBe('failing');
+    expect(w.alarm.statuses).toEqual(['failing']);
+    expect(w.log.events).toEqual([{ event: 'unheard_alerts', count: 1 }]);
   });
 
   test.each(['first', 'second'] as const)(
-    'LOST-07-AC15: one alert’s failed escalation stops no other, the failing alert read %s: of two alerts due, the one whose journey has no responder row is refused whole, and the other is still ESCALATED with an SMS for every one of its responders, each then sent; the sweep fails, escalating one and finding none stuck, with exactly one escalation_failed line',
+    'LOST-07-AC15: one alert’s failed escalation stops no other, the failing alert read %s: of two alerts due, the one whose escalation the store fails is refused whole, and the other is still ESCALATED with an SMS for every one of its responders, each then sent; the sweep fails, escalating one and finding none stuck, with exactly one escalation_failed line',
     async (failingRead) => {
+      // RG-03, named in SM-10's spec ("Existing assertions that change by
+      // design"): this test made one alert's escalation fail by removing its
+      // journey's responder rows, which on Q3 (a) (D-122 item 3) no longer
+      // fails: that alert is now never read as due. It keeps its point, both
+      // orders and every assertion by failing that one escalation another way
+      // the fake offers: the store fails the failing alert's call, and that
+      // call only (`beforeNext` arms the failure as that call is made and, in
+      // the first order, lifts it as the next call is made). The escalation
+      // asks one alert at a time, each in a transaction of its own. Were it
+      // ever to ask both at once, this arrangement would fail both or
+      // neither, and the test would go red rather than pass falsely. The
+      // error has no SQLSTATE, as the refusal it replaces had none, so the
+      // line's code is still null.
       // LOST-07 review loop 2 (test-auditor): the escalation's own promise,
       // "each in a transaction of its own, so one alert's failure holds up no
       // other". The escalation's read has no ORDER BY, so both orders are
@@ -1429,11 +1461,24 @@ describe('LOST-07 and AR-05: an escalation that fails is a failed sweep, saying 
       const second = await lost(w, 3);
       w.clock.advance(TWO_MINUTES);
       const [failing, other] = failingRead === 'first' ? [first, second] : [second, first];
-      w.store.removeResponders(failing.journeyId);
+      const failure = new Error('the escalation could not be written');
+      const failThisCall = () => {
+        w.store.failWith(failure, 'escalateAlert');
+      };
+      if (failingRead === 'first') {
+        w.store.beforeNext('escalateAlert', failThisCall);
+        w.store.beforeNext('escalateAlert', () => {
+          w.store.recover();
+        });
+      } else {
+        w.store.beforeNext('escalateAlert', () => undefined);
+        w.store.beforeNext('escalateAlert', failThisCall);
+      }
       const beat = await w.beats.lastBeat();
       const asked = w.store.escalateRequests().length;
 
       expect(await w.watchdog.sweep()).toEqual({ ok: false, opened: 0, escalated: 1, stuck: 0 });
+      w.store.recover();
 
       // Both were asked about, in the order arranged.
       expect(w.store.escalateRequests().slice(asked)).toEqual([
@@ -1456,6 +1501,130 @@ describe('LOST-07 and AR-05: an escalation that fails is a failed sweep, saying 
       expect(recipientsOf(w.sms.accepted)).toEqual([...other.responderIds].sort());
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// SM-10-AC15: an alert nobody can hear pages the owner through the SMS check
+// (Q3 (a)). In the `alerts` group's file, so sms-check.ts's mutants meet it.
+// ---------------------------------------------------------------------------
+
+describe('SM-10, SM-02 and LOST-07: an alert whose journey has no responder pages the owner through the SMS check (Q3 (a))', () => {
+  /** A journey of `count` responders, lost and then left with none, put there directly. */
+  async function unheard(w: World, count = 1) {
+    const alerted = await lost(w, count);
+    w.store.removeResponders(alerted.journeyId);
+    return alerted;
+  }
+
+  test('SM-10-AC15: with one unresolved alert whose journey has no responder row, every check reports failing to the recording alarm, each minute, with one unheard_alerts line holding the count, 1, and no sms_unsent; every sweep meanwhile is ok, with its beat (SM-02, LOST-07)', async () => {
+    const w = world();
+    const { journeyId } = await unheard(w);
+
+    for (let minute = 0; minute < 4; minute += 1) {
+      expect(await w.smsCheck.check(), `minute ${String(minute)}`).toBe('failing');
+      await w.runUntil((await w.clock.now()).getTime() + MINUTE);
+      expect(await w.beats.lastBeat(), `minute ${String(minute)}`).toEqual(await w.clock.now());
+    }
+
+    expect(w.alarm.statuses).toEqual(['failing', 'failing', 'failing', 'failing']);
+    expect(w.log.events).toEqual([
+      { event: 'unheard_alerts', count: 1 },
+      { event: 'unheard_alerts', count: 1 },
+      { event: 'unheard_alerts', count: 1 },
+      { event: 'unheard_alerts', count: 1 },
+    ]);
+    expect(w.alertsOf(journeyId).map(({ state, smsRaisedAt }) => [state, smsRaisedAt])).toEqual([
+      ['OPEN', null],
+    ]);
+    expect(w.smsOf(journeyId)).toEqual([]);
+  });
+
+  test.each(['contact comes back', 'W says "I’m home"'] as const)(
+    'SM-10-AC15: when %s, the unheard alert resolves with no stand-down, and the next check reports ok and writes no line (SM-02, LOST-07)',
+    async (how) => {
+      const w = world();
+      const { walker, journeyId } = await unheard(w);
+      expect(await w.smsCheck.check()).toBe('failing');
+      const messages = w.messagesOf(journeyId);
+
+      if (how === 'contact comes back') {
+        await w.heartbeat(walker, journeyId);
+      } else {
+        expect((await w.home(walker, journeyId)).status).toBe(200);
+      }
+
+      expect(w.alertsOf(journeyId).map(({ state }) => state)).toEqual(['RESOLVED']);
+      // The open's pushes, as they were: no stand-down was written for anyone.
+      expect(
+        w
+          .messagesOf(journeyId)
+          .filter(({ messageId }) => !messages.some((before) => before.messageId === messageId)),
+      ).toEqual([]);
+      const lines = w.log.events.length;
+      expect(await w.smsCheck.check()).toBe('ok');
+      expect(w.alarm.statuses).toEqual(['failing', 'ok']);
+      expect(w.log.events.slice(lines)).toEqual([]);
+    },
+  );
+
+  test('SM-10-AC15: the count is of unresolved alerts whose journey has no responder row, and only those: two such alerts count 2; a resolved one, and one whose journey has a responder, count nothing (SM-02, LOST-07)', async () => {
+    const w = world();
+    await unheard(w, 2);
+    await unheard(w, 1);
+    await lost(w, 2);
+    const resolved = await unheard(w, 1);
+    await w.heartbeat(resolved.walker, resolved.journeyId);
+    expect(w.alertsOf(resolved.journeyId).map(({ state }) => state)).toEqual(['RESOLVED']);
+
+    expect(await w.smsCheck.check()).toBe('failing');
+
+    expect(w.lines('unheard_alerts')).toEqual([{ event: 'unheard_alerts', count: 2 }]);
+  });
+
+  test('SM-10-AC15: with failing SMS and an unheard alert at once, one check reports failing once, with one sms_unsent line and one unheard_alerts line, each holding its own count (LOST-07)', async () => {
+    const w = world();
+    await escalated(w, 3);
+    w.sms.failAll('NO_TARGET');
+    await w.runUntil((await w.clock.now()).getTime() + SMS_UNSENT_LIMIT);
+    await unheard(w);
+    const lines = w.log.events.length;
+
+    expect(await w.smsCheck.check()).toBe('failing');
+
+    expect(w.alarm.statuses).toEqual(['failing']);
+    const written = w.log.events.slice(lines);
+    expect(written).toHaveLength(2);
+    expect(written).toEqual(
+      expect.arrayContaining([
+        { event: 'sms_unsent', count: 3 },
+        { event: 'unheard_alerts', count: 1 },
+      ]),
+    );
+  });
+
+  test('SM-10-AC15: when the unheard count cannot be read, the check reports nothing, writes one sms_check_failed line, stage read, with the SQLSTATE, and completes: the monitor’s silence pages (LOST-07)', async () => {
+    const w = world();
+    await unheard(w);
+    w.store.failWith(databaseError('08006'), 'unheardAlertCount');
+
+    expect(await w.smsCheck.check()).toBe('unread');
+
+    expect(w.alarm.reports).toEqual([]);
+    expect(w.log.events).toEqual([{ event: 'sms_check_failed', stage: 'read', code: '08006' }]);
+  });
+
+  test('SM-10-AC15: with no unheard alert and no failing SMS, the check still reports ok and writes no line: a journey with responders, lost and escalated with every SMS accepted, is not unheard (LOST-07)', async () => {
+    const w = world();
+    await escalated(w, 2);
+    await w.runLoops();
+
+    expect(await w.smsCheck.check()).toBe('ok');
+    w.clock.advance(SMS_UNSENT_LIMIT);
+    expect(await w.smsCheck.check()).toBe('ok');
+
+    expect(w.alarm.statuses).toEqual(['ok', 'ok']);
+    expect(w.lines('unheard_alerts', 'sms_unsent', 'sms_check_failed')).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

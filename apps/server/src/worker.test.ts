@@ -2973,8 +2973,13 @@ const SMS = 'LOST_CONTACT_SMS';
 function kindsNamedIn(query: FakePostgresQuery): string[] {
   const found = new Set<string>();
   for (const part of [query.text, ...query.values.map((value) => value ?? '')]) {
+    // RG-03 (SM-10; not in the spec's list, found by searching for pins of
+    // the kinds): NO_RESPONDER is a push kind now (SM-10-AC17), so the push
+    // claim names it, and the test below compares what this finds with the
+    // test kit's PUSH_KINDS, which has it. Without it here, a claim that left
+    // NO_RESPONDER out would look the same as one that named it.
     for (const [kind] of part.matchAll(
-      /\b(?:LOST_CONTACT_SMS|LOST_CONTACT|BACK_IN_CONTACT|HOME|ACKNOWLEDGED)\b/g,
+      /\b(?:LOST_CONTACT_SMS|LOST_CONTACT|BACK_IN_CONTACT|HOME|ACKNOWLEDGED|NO_RESPONDER)\b/g,
     )) {
       found.add(kind);
     }
@@ -2997,6 +3002,35 @@ const isSmsCount = (query: FakePostgresQuery) =>
   /\boutbox\b/i.test(query.text) && /\bcount\s*\(/i.test(query.text) && !isClaim(query);
 
 /**
+ * Whether a statement is the SMS check's count of unheard alerts (SM-10, Q3
+ * (a)): a count that reads no outbox. It is the only other count the worker
+ * makes, and it is matched before the overdue read, so a join of `journeys`
+ * in it cannot pass it off as that read.
+ */
+const isUnheardCount = (query: FakePostgresQuery) =>
+  /\bcount\s*\(/i.test(query.text) && !/\boutbox\b/i.test(query.text) && !isClaim(query);
+
+/**
+ * A count's one row, named as the statement names its columns: its aliases,
+ * in order, when it has any (a count in a subselect hides its name from
+ * askedFor), else what it asks for. The time where a name says now, the
+ * count elsewhere.
+ */
+function countAnswer(query: FakePostgresQuery, count: number) {
+  const aliases = [...query.text.matchAll(/\bas\s+"?(\w+)"?/gi)]
+    .map(([, name = '']) => name)
+    .filter((name) => !/^(int|integer|bigint|text|numeric)$/i.test(name));
+  const asked = aliases.length > 0 ? aliases : askedFor(query.text);
+  const columns = asked.length > 0 ? asked : ['now', 'count'];
+  return {
+    columns,
+    rows: [
+      columns.map((column) => (/now/i.test(column) ? NOW_AS_POSTGRES_WRITES_IT : String(count))),
+    ],
+  };
+}
+
+/**
  * A database for the worker's own statements, as the adapter shapes them
  * (their column names are the adapter's): the overdue read answers its time
  * and no journey; the SMS claim hands out `sms` once and the push claim
@@ -3004,17 +3038,26 @@ const isSmsCount = (query: FakePostgresQuery) =>
  * answers `state.count`, or fails while it is null. A statement that names
  * sms_raised_at fails when `refuseEscalation` is set. The rest is answered as
  * a quiet database answers it.
+ *
+ * RG-03, named in SM-10's spec ("`smsDatabase()` … on Q3 (a)"): the SMS check
+ * now also counts unheard alerts, a statement this handler did not answer.
+ * It answers `state.unheard`, zero unless a test says otherwise, so every
+ * LOST-07 test here keeps its assertions: with no unheard alert, the check
+ * reports as it did.
  */
 function smsDatabase({
   sms,
   refuseEscalation = false,
 }: { sms?: { messageId: string; recipientId: string }; refuseEscalation?: boolean } = {}) {
-  const state: { count: number | null } = { count: 0 };
+  const state: { count: number | null; unheard: number } = { count: 0, unheard: 0 };
   let claimed = false;
   const handler: FakePostgresHandler = (query) => {
     const settings = pgSettingsAnswer(query, IDLE_AS_ASKED);
     if (settings !== undefined) {
       return settings;
+    }
+    if (isUnheardCount(query)) {
+      return countAnswer(query, state.unheard);
     }
     if (/\bleft join "?journeys"?/i.test(query.text)) {
       return {
@@ -3043,22 +3086,7 @@ function smsDatabase({
       if (state.count === null) {
         throw new Error('this synthetic database cannot count');
       }
-      // Named as the statement names them: its aliases, in order, when it
-      // has any (a count in a subselect hides its name from askedFor), else
-      // what it asks for. The time where a name says now, the count elsewhere.
-      const aliases = [...query.text.matchAll(/\bas\s+"?(\w+)"?/gi)]
-        .map(([, name = '']) => name)
-        .filter((name) => !/^(int|integer|bigint|text|numeric)$/i.test(name));
-      const asked = aliases.length > 0 ? aliases : askedFor(query.text);
-      const columns = asked.length > 0 ? asked : ['now', 'count'];
-      return {
-        columns,
-        rows: [
-          columns.map((column) =>
-            /now/i.test(column) ? NOW_AS_POSTGRES_WRITES_IT : String(state.count),
-          ),
-        ],
-      };
+      return countAnswer(query, state.count);
     }
     return quietDatabase(query);
   };
@@ -3469,6 +3497,24 @@ describe('LOST-07: the SMS check, a minute task of its own', () => {
       await expect(worker.runCheck()).resolves.toBeUndefined();
       expect(worker.alarm.statuses).toEqual(['failing', 'ok']);
       expect(worker.log.events).toEqual([{ event: 'sms_unsent', count: 3 }]);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  test('SM-10-AC15: the worker’s SMS check also counts unheard alerts through the worker’s own pool: with no SMS waiting and one unheard alert it reports failing, with one unheard_alerts line holding the count, 1, and no sms_unsent; ok once none is (SM-02, LOST-07)', async () => {
+    const database = smsDatabase();
+    const worker = await checking(database);
+    try {
+      database.state.unheard = 1;
+      await expect(worker.runCheck()).resolves.toBeUndefined();
+      expect(worker.alarm.statuses).toEqual(['failing']);
+      expect(worker.log.events).toEqual([{ event: 'unheard_alerts', count: 1 }]);
+
+      database.state.unheard = 0;
+      await expect(worker.runCheck()).resolves.toBeUndefined();
+      expect(worker.alarm.statuses).toEqual(['failing', 'ok']);
+      expect(worker.log.events).toEqual([{ event: 'unheard_alerts', count: 1 }]);
     } finally {
       await worker.stop();
     }

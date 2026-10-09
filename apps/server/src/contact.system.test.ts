@@ -391,6 +391,11 @@ function senderOfTwo(w: World) {
     // built for never calls them, and nothing this file asserts changes.
     claimDueSms: (request: { limit: number; leaseMs: number }) => w.store.claimDueSms(request),
     unsentSmsCount: (olderThanMs: number) => w.store.unsentSmsCount(olderThanMs),
+    // SM-10 (Q3 (a); the spec names the SMS check's stand-ins, and this
+    // typed stand-in of the same port needs it too): OutboxStore gains the
+    // unheard count. Added to, not changed: it goes to the fake, the push
+    // sender never calls it, and nothing this file asserts changes.
+    unheardAlertCount: () => w.store.unheardAlertCount(),
   };
   return createPushSender({ outbox, push: w.push, log: w.log });
 }

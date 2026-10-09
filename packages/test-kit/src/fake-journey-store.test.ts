@@ -239,6 +239,56 @@ function underTest(): JourneyStoreUnderTest {
         },
       });
     },
+    // SM-10: an alert's round, a message's round and a journey's own
+    // messages, each through a reader of its own, so the readers above keep
+    // their shapes.
+    roundsOf: (journeyId) => {
+      const ids = new Set(alertsOf(journeyId).map(({ id }) => id));
+      return Promise.resolve(store.alertRounds().filter(({ alertId }) => ids.has(alertId)));
+    },
+    messageRoundsOf: (journeyId) => {
+      const ids = new Set(alertsOf(journeyId).map(({ id }) => id));
+      const messageIds = new Set(
+        store
+          .outbox()
+          .filter(({ alertId }) => ids.has(alertId))
+          .map(({ messageId }) => messageId),
+      );
+      return Promise.resolve(
+        store.messageRounds().filter(({ messageId }) => messageIds.has(messageId)),
+      );
+    },
+    journeyMessagesOf: (journeyId) =>
+      Promise.resolve(
+        store.journeyMessages().filter((message) => message.journeyId === journeyId.toLowerCase()),
+      ),
+    // SM-10-AC3: a holder that lets go once a removal waits for the row,
+    // having first deleted a responder's row or ended the journey, as a
+    // transaction in flight commits, or with nothing changed. The removal's
+    // call is made before it waits, so the holder lets go a few turns later,
+    // once the removal is waiting.
+    holdUntilRemovalWaits: (journeyId, change) => {
+      store.hold(journeyId);
+      let done = false;
+      const letGo = async () => {
+        if (done) {
+          return;
+        }
+        done = true;
+        await store.commitHold(journeyId, () => {
+          if (change === 'end') {
+            store.setState(journeyId, 'ENDED');
+          } else if (change !== 'unchanged') {
+            store.removeResponderRow(journeyId, change.remove);
+          }
+          return Promise.resolve();
+        });
+      };
+      store.beforeNext('removeResponder', () => {
+        void settled().then(letGo);
+      });
+      return Promise.resolve({ release: letGo });
+    },
   };
 }
 
@@ -312,7 +362,10 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       'LOST-02-AC9: opening skips, and writes nothing, for a journey not yet overdue, already LOST_CONTACT, ENDED, or not there at all',
       'LOST-02-AC9: contact stored between the overdue read and the open wins: the open skips and writes nothing, and the journey stays ACTIVE; and a journey whose state changed in between is skipped too',
       'LOST-02-AC5: a journey already alerted is never opened again: a second open skips, and it keeps its one alert and its messages as they were',
-      'LOST-02-AC12: a journey with no responder rows is never moved: the open rejects, and it stays ACTIVE with no alert and no message',
+      // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+      // "the no-responder refusals"): renamed with its behaviour, which D-122
+      // item 3 turns from a refusal into an open with no message.
+      'SM-10-AC15: a journey with no responder rows is moved all the same: the open opens it, LOST_CONTACT with one OPEN alert and no message, and it is no longer overdue (SM-02, LOST-02)',
       'LOST-02-AC8: a journey whose row another transaction holds is skipped at once, not waited for, and changes nothing; once released, it is opened',
       // RG-03 (LOST-02, settled after the red phase): an open that waits for
       // a held row joins the shared suite (approach item 3, step 4; AC20).
@@ -405,7 +458,9 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       'LOST-07-AC1: escalateAlert moves a due alert to ESCALATED at the store’s now and writes one LOST_CONTACT_SMS per responder row, each with an ID of its own and due at that now; the journey, its other alerts, another journey’s alert and every push message are untouched',
       'LOST-07-AC3: escalateAlert decides again under the journey’s row, and writes nothing for an alert no longer due there: acknowledged by someone, RESOLVED, already escalated, or under two minutes',
       'LOST-07-AC16: escalateAlert skips a held row without waiting; told to wait, it answers held when the row stays held, and otherwise decides as the holder left it',
-      'LOST-07-AC15: escalateAlert refuses an alert whose journey has no responder row, writing nothing',
+      // RG-03 (SM-10, as above): renamed with its behaviour; the escalation
+      // skips such an alert under the lock instead of refusing it.
+      'SM-10-AC15: escalateAlert skips an alert whose journey has no responder row, writing nothing, and alertsDueForEscalation never reads it (LOST-07)',
       'LOST-07-AC4: 10 escalations of one alert at once, 5 times over: exactly one escalates, every other skips, none an error, with one set of SMS',
       'LOST-07-AC6: recordAcknowledgement of an escalated alert withdraws its SMS not yet sent at the store’s now, keeping attempts and last failure, and leaves sent SMS and every push message alone; of an alert never escalated it withdraws nothing',
       'LOST-07-AC7: when contact comes back, or "I’m home" ends the journey, an escalated alert is resolved keeping its escalation time; its SMS not yet sent are withdrawn with its lost-contact pushes; every responder gets one stand-down, held behind an SMS handed over and due later',
@@ -413,6 +468,28 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       'LOST-07-AC10: unsentSmsCount counts exactly the SMS messages unsent, not withdrawn and written 60 s or more before the store’s now, with that now',
       'LOST-07-AC7: for any sequence of acknowledgements, heartbeats fresh or stale, sweeps, time passing and "I’m home", after every step an alert is escalated exactly when a sweep found it due, holds one SMS per responder exactly when escalated, never has one when acknowledged before its two minutes, and no resolved or acknowledged alert has an SMS neither sent nor withdrawn',
       'LOST-07-AC14: each withdrawal — the resolution, the acknowledgement, the open — withdraws exactly its own kinds’ unsent messages of the alerts it names, and leaves every other message alone',
+      // RG-03 (SM-10, the spec's "Existing assertions that change by design":
+      // "the pinned list of behaviour names gains this task's"): removing a
+      // responder joins the shared suite, its spec's shared behaviours 1 to
+      // 14, and one for AC10, so the fake and the adapter are held to them
+      // alike (D-100). Every name above is unchanged but the two renamed
+      // there; these are added. The third names RACERS and RACE_ROUNDS by
+      // their values, as LOST-07-AC4 does.
+      'SM-10-AC1: journeyForRemoval reads a journey’s state and its responder rows, without a lock; null for an ID no journey has',
+      'SM-10-AC1: removeResponder removes exactly the named responder’s row of an unended journey and nothing else of it; for an ended journey, a non-responder or no journey it answers not_removed with the rule’s decision and writes nothing (SM-02, SM-07, SM-08)',
+      'SM-10-AC3: removeResponder decides again under the journey’s row, as its holder left it; 10 removals of one responder at once, 5 times over: one removes, every other is unchanged, none an error (SM-09)',
+      'SM-10-AC4: removing the acknowledger of the journey’s unresolved alert clears who and when together, clears its escalation time, sets it OPEN and raises its round, and withdraws its unsent ACKNOWLEDGED notices; removing another responder, or an acknowledger of a resolved alert, changes no alert (LOST-06)',
+      'SM-10-AC6: after a reset of an escalated alert, alertsDueForEscalation reads it at once and escalateAlert writes one LOST_CONTACT_SMS per remaining responder in the new round, beside the earlier round’s (LOST-07, REL-07)',
+      'SM-10-AC7: after a reset, recordAcknowledgement records a second acknowledger, writes its notices in the new round, and withdraws the alert’s unsent SMS; one message per alert, recipient, kind and round (LOST-06, LOST-07)',
+      'SM-10-AC9: recordAcknowledgement from a responder removed after its read answers ALERT_NOT_FOUND under the lock and writes nothing (LOST-06, SM-09)',
+      'SM-10-AC11: removeResponder withdraws every unsent message of the journey’s alerts to the removed responder, whatever its kind, at the store’s now, keeping attempts and last failure; sent ones and other recipients’ are left alone, and a later resolution writes the removed responder no stand-down (LOST-03)',
+      'SM-10-AC12: removing the last responder of an unended journey writes one NO_RESPONDER to its walker, naming the journey and no alert, due at the store’s now; a removal that leaves a responder writes none (SM-02)',
+      'SM-10-AC13: the last two responders removed at once write one NO_RESPONDER between them (SM-02)',
+      'SM-10-AC14: the push claim hands out a NO_RESPONDER in its due order and the SMS claim never does; no withdrawal touches it (SM-02)',
+      'SM-10-AC15: a journey with no responder row opens with no message; its alert is never read as due and never escalated; unheardAlertCount counts exactly the unresolved alerts whose journey has no responder row, with the store’s now (SM-02, LOST-02, LOST-07)',
+      'SM-10-AC8: for any sequence of acknowledgements, removals, sweeps, time passing, heartbeats fresh or stale and "I’m home", after every step an acknowledger is a responder, each round’s SMS reach exactly that round’s responders, a due alert with a responder is escalated in its round by the next sweep, no removed responder has a message pending, and the walker holds one warning per time the last responder went (LOST-02, LOST-07)',
+      'SM-10-AC17: each withdrawal — the resolution, the acknowledgement, the open, the reset, the removal — withdraws exactly its own kinds’ unsent messages, and the removal only the removed responder’s (LOST-06, LOST-07)',
+      'SM-10-AC10: a removal before the open, the escalation or a resolution leaves the removed responder out of what each writes; after it, it withdraws what each wrote them that is still unsent (LOST-02, LOST-03, LOST-07, SM-04)',
     ]);
     expect(RACERS).toBeGreaterThanOrEqual(10);
     expect(RACE_ROUNDS).toBeGreaterThanOrEqual(5);
@@ -1598,7 +1675,14 @@ describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
     );
   });
 
-  test('seedAlert and seedMessage keep the database’s rules: one unresolved alert per journey, a resolution and its time together, the alert and the recipient existing, attempts not negative, and one message per (alert, recipient, kind)', () => {
+  // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+  // fake-journey-store.test.ts line 1601): this was "… and one message per
+  // (alert, recipient, kind)". The rule gains the round, as the database's
+  // unique key does (D-123): a second message of a kind in the same round is
+  // still refused, exactly as before; one in another round is taken, and a
+  // round under 1 is refused, as the check refuses it. That mirrors the key;
+  // it does not loosen the fake against it.
+  test('seedAlert and seedMessage keep the database’s rules: one unresolved alert per journey, a resolution and its time together, the alert and the recipient existing, attempts not negative, and one message per (alert, recipient, kind, round), each round from 1', () => {
     const { store, journeyId, responderIds } = watchedStore();
     const recipientId = responderIds[0] ?? '';
     const open = store.seedAlert({
@@ -1650,6 +1734,30 @@ describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
     store.seedMessage({ ...message, kind: 'HOME' });
     expect(store.alerts()).toHaveLength(1);
     expect(store.outbox().map(({ kind }) => kind)).toEqual(['LOST_CONTACT', 'HOME']);
+    // SM-10: the round, from 1, in the unique key.
+    expect(() => store.seedMessage({ ...message, kind: 'LOST_CONTACT', round: 1 })).toThrow(
+      /unique/,
+    );
+    const second = store.seedMessage({ ...message, kind: 'LOST_CONTACT', round: 2 });
+    expect(() => store.seedMessage({ ...message, kind: 'LOST_CONTACT', round: 2 })).toThrow(
+      /unique/,
+    );
+    for (const round of [0, -1, 1.5, Number.NaN]) {
+      expect(() => store.seedMessage({ ...message, kind: 'ACKNOWLEDGED', round })).toThrow(/check/);
+      expect(() =>
+        store.seedAlert({
+          journeyId,
+          state: 'RESOLVED',
+          openedAt: CLOCK_AT,
+          silentSince: CLOCK_AT,
+          resolvedAt: CLOCK_AT,
+          resolution: 'HOME',
+          round,
+        }),
+      ).toThrow(/check/);
+    }
+    expect(store.messageRounds().find(({ messageId }) => messageId === second)?.round).toBe(2);
+    expect(store.alertRounds()).toEqual([{ alertId: open, round: 1 }]);
   });
 
   test('what alerts(), outbox() and endOf() hand back cannot change what it holds, the new times included; and journeys() keeps its shape, with no end in it', async () => {
@@ -1689,6 +1797,9 @@ describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
     expect(() => store.endOf(syntheticUuid())).toThrow(/no journey/);
   });
 
+  // RG-03 (SM-10; not in the spec's list, found by test-author searching for
+  // exact pins of MESSAGE_KINDS): the list gains NO_RESPONDER, the walker's
+  // warning (SM-02, D-087), last, as the server's does. Still exact.
   test('the test kit hands out the message kinds, in the server’s order', () => {
     // RG-03 (LOST-06, the spec's "Existing assertions that change by
     // design"): the list gains ACKNOWLEDGED, the "someone is on it" notice
@@ -1702,6 +1813,7 @@ describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
       'HOME',
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
+      'NO_RESPONDER',
     ]);
   });
 });
@@ -1752,7 +1864,14 @@ describe('fakeJourneyStore: review loop 1 of back in contact and "I’m home" (L
     ).toBe('home');
   });
 
-  test('an open that fails, its journey having no responder rows, withdraws no earlier stand-down: the withdrawal is part of the open, all or nothing', async () => {
+  // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+  // fake-journey-store.test.ts line 1755): this was "an open that fails, its
+  // journey having no responder rows, withdraws no earlier stand-down: the
+  // withdrawal is part of the open, all or nothing", and expected the open to
+  // reject. D-122 item 3 removes the refusal, so the open opens. It keeps its
+  // point: the earlier stand-downs are withdrawn only for a recipient who is
+  // a responder of this journey, and it has none, so none is withdrawn.
+  test('an open of a journey with no responder rows withdraws no earlier stand-down: it has no recipient, so none is one of its responders', async () => {
     const { clock, store, journeyId } = await lostStore(2);
     await store.recordHeartbeat(heartbeat(journeyId, CLOCK_AT));
     const standDowns = store.outbox().filter(({ kind }) => kind === 'BACK_IN_CONTACT');
@@ -1761,13 +1880,12 @@ describe('fakeJourneyStore: review loop 1 of back in contact and "I’m home" (L
     store.removeResponders(journeyId);
     const outbox = store.outbox();
 
-    await expect(store.openLostContactAlert({ journeyId, afterMs: FIVE_MINUTES })).rejects.toThrow(
-      /no responder/,
-    );
+    const opened = await store.openLostContactAlert({ journeyId, afterMs: FIVE_MINUTES });
 
+    expect(opened).toMatchObject({ outcome: 'opened', messages: [] });
     expect(store.outbox()).toEqual(outbox);
-    expect(store.alerts()).toHaveLength(1);
-    expect(store.journeys()[0]?.state).toBe('ACTIVE');
+    expect(store.alerts()).toHaveLength(2);
+    expect(store.journeys()[0]?.state).toBe('LOST_CONTACT');
   });
 
   // Review loop 2: renamed only. It said "only the journey’s earlier
@@ -2081,7 +2199,14 @@ describe('fakeJourneyStore: "I’m on it" (LOST-06)', () => {
     expect(store.alerts()[0]?.acknowledgedBy).toBeNull();
   });
 
-  test('the test kit hands out its two withdrawal lists: what a resolution withdraws and what an open withdraws, every message kind in exactly one', () => {
+  // RG-03 (SM-10; not in the spec's list, found by test-author searching for
+  // the partition of MESSAGE_KINDS among the withdrawal lists): this was
+  // "…: what a resolution withdraws and what an open withdraws, every message
+  // kind in exactly one". NO_RESPONDER is a journey's message, which neither
+  // withdraws (D-123), so the partition is now one of three, with the kit's
+  // JOURNEY_MESSAGE_KINDS, as the domain's own test makes it (SM-10-AC17).
+  // Still exact; a kind in none or in two still fails here.
+  test('the test kit hands out its two withdrawal lists: what a resolution withdraws and what an open withdraws, every message kind in exactly one of them and the journey kinds', () => {
     // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
     // fake-journey-store.test.ts line 2020): the resolution's list gains
     // LOST_CONTACT_SMS (D-111: an escalated alert's unsent SMS are withdrawn
@@ -2098,7 +2223,8 @@ describe('fakeJourneyStore: "I’m on it" (LOST-06)', () => {
       kit.MESSAGE_KINDS.filter(
         (kind) =>
           Number(kit.WITHDRAWN_WHEN_RESOLVED.includes(kind)) +
-            Number(kit.WITHDRAWN_WHEN_OPENED.includes(kind)) !==
+            Number(kit.WITHDRAWN_WHEN_OPENED.includes(kind)) +
+            Number(kit.JOURNEY_MESSAGE_KINDS.includes(kind)) !==
           1,
       ),
     ).toEqual([]);
@@ -2277,9 +2403,19 @@ describe('fakeJourneyStore: escalation to SMS (LOST-07)', () => {
     ]);
   });
 
+  // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+  // fake-journey-store.test.ts line 2280): PUSH_KINDS gains NO_RESPONDER, the
+  // walker's warning, which goes by push (approach item 7). Still exact; every
+  // kind is still in exactly one channel.
   test('the test kit hands out its channel lists and its acknowledgement’s list: every kind in exactly one channel, and every kind an acknowledgement withdraws also withdrawn on resolution', () => {
     expect(kit.SMS_KINDS).toEqual(['LOST_CONTACT_SMS']);
-    expect(kit.PUSH_KINDS).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED']);
+    expect(kit.PUSH_KINDS).toEqual([
+      'LOST_CONTACT',
+      'BACK_IN_CONTACT',
+      'HOME',
+      'ACKNOWLEDGED',
+      'NO_RESPONDER',
+    ]);
     expect(kit.WITHDRAWN_WHEN_ACKNOWLEDGED).toEqual(['LOST_CONTACT_SMS']);
     expect(
       kit.MESSAGE_KINDS.filter(
@@ -2302,5 +2438,276 @@ describe('fakeJourneyStore: escalation to SMS (LOST-07)', () => {
     });
     store.release(journeyId);
     expect((await store.escalateAlert({ alertId })).outcome).toBe('escalated');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SM-10: removing a responder, beyond the shared suite.
+//
+// The removal system tests prove the resumed escalation and the walker's
+// warning by what this fake read, removed, reset, withdrew and wrote. A fake
+// that guessed the time, removed without waiting for the journey's row,
+// reset half an alert, changed the shapes the existing tests read, or could
+// not fail would make those tests pass whatever the removal module did.
+// ---------------------------------------------------------------------------
+
+const NOT_A_RESPONDER = {
+  outcome: 'not_removed',
+  decision: { type: 'unchanged', reason: 'NOT_A_RESPONDER' },
+} as const;
+
+describe('fakeJourneyStore: removing a responder (SM-10)', () => {
+  test('a store given no clock refuses, loudly and naming the clock, to remove a responder or count unheard alerts, and changes nothing; the read, and a refusal it needs no time for, are answered without one', async () => {
+    const store = fakeJourneyStore();
+    const walkerId = store.addUser();
+    const [r1, r2] = [store.addUser(), store.addUser()];
+    const journeyId = store.seed({
+      walkerId,
+      deviceId: store.addDevice(walkerId),
+      state: 'ACTIVE',
+      responderIds: [r1, r2],
+      startedAt: AT,
+    });
+
+    await expect(store.removeResponder({ journeyId, responderId: r1 })).rejects.toThrow(/clock/);
+    await expect(store.unheardAlertCount()).rejects.toThrow(/clock/);
+
+    expect(store.journeys()[0]?.responderIds).toEqual([r1, r2]);
+    expect(store.journeyMessages()).toEqual([]);
+    expect(await store.journeyForRemoval(journeyId)).toEqual({
+      id: journeyId,
+      state: 'ACTIVE',
+      responderIds: [r1, r2],
+    });
+    expect(await store.removeResponder({ journeyId, responderId: walkerId })).toEqual(
+      NOT_A_RESPONDER,
+    );
+    expect(await store.removeResponder({ journeyId: syntheticUuid(), responderId: r1 })).toEqual({
+      outcome: 'not_removed',
+      decision: { type: 'refused', reason: 'JOURNEY_NOT_FOUND' },
+    });
+  });
+
+  test('the three are port methods: recorded among the calls, failed when told to, alone or with every other, changing nothing, and their beforeNext actions run as they are called', async () => {
+    const { store, journeyId, responderIds } = watchedStore({ responders: 2 });
+    const [r1 = '', r2 = ''] = responderIds;
+    const asks = {
+      journeyForRemoval: () => store.journeyForRemoval(journeyId),
+      removeResponder: () => store.removeResponder({ journeyId, responderId: r1 }),
+      unheardAlertCount: () => store.unheardAlertCount(),
+    } as const;
+    const error = new Error('the database is gone');
+
+    for (const call of ['journeyForRemoval', 'removeResponder', 'unheardAlertCount'] as const) {
+      const ask = asks[call];
+      const before = store.journeys();
+      store.failWith(error, call);
+      await expect(ask(), call).rejects.toBe(error);
+      store.recover();
+      store.failWith(error);
+      await expect(ask(), `${call}, every method failing`).rejects.toBe(error);
+      store.recover();
+      // Failing, it changed nothing.
+      expect(store.journeys(), call).toEqual(before);
+      let ran = false;
+      store.beforeNext(call, () => {
+        ran = true;
+      });
+      const answer = ask();
+      expect(ran, `${call}: its action runs as it is called`).toBe(true);
+      await answer;
+      if (call === 'removeResponder') {
+        expect(store.journeys()[0]?.responderIds).toEqual([r2]);
+      }
+    }
+    expect(store.calls.filter((call) => call in asks)).toEqual([
+      'journeyForRemoval',
+      'journeyForRemoval',
+      'journeyForRemoval',
+      'removeResponder',
+      'removeResponder',
+      'removeResponder',
+      'unheardAlertCount',
+      'unheardAlertCount',
+      'unheardAlertCount',
+    ]);
+  });
+
+  test('removeResponder waits while the journey’s row is held, and decides as the row stands when the holder commits; journeyForRemoval does not wait', async () => {
+    const { store, journeyId, responderIds } = watchedStore({ responders: 3 });
+    const [r1 = '', r2 = '', r3 = ''] = responderIds;
+    store.hold(journeyId);
+
+    expect((await store.journeyForRemoval(journeyId))?.responderIds).toEqual([r1, r2, r3]);
+    let answered: unknown = null;
+    const removing = store
+      .removeResponder({ journeyId, responderId: r2 })
+      .then((answer) => (answered = answer));
+    await settled();
+    expect(answered, 'still waiting for the row').toBeNull();
+    expect(store.journeys()[0]?.responderIds).toEqual([r1, r2, r3]);
+
+    // The holder removed R2's row itself, and commits: the waiting removal
+    // finds R2 no longer a responder.
+    await store.commitHold(journeyId, () => {
+      store.removeResponderRow(journeyId, r2);
+      return Promise.resolve();
+    });
+    await removing;
+    expect(answered).toEqual(NOT_A_RESPONDER);
+    expect(store.journeys()[0]?.responderIds).toEqual([r1, r3]);
+  });
+
+  test('a removal writes at the clock’s now as the removal answers: the reset clears who, when and the escalation time and raises the round, the withdrawals keep attempts and last failure, and the warning is written and due then; alerts() and outbox() keep their shapes, and the rounds and the warning are read through readers of their own, as copies', async () => {
+    const { clock, store, walkerId, journeyId, alertId, responderIds } = await lostStore(2);
+    const [r1 = '', r2 = ''] = responderIds;
+    await store.recordAcknowledgement({ alertId, responderId: r1 });
+    clock.advance(TWO_MINUTES);
+    const failed = store.outbox().find(({ recipientId }) => recipientId === r2)?.messageId ?? '';
+    await store.markFailed({ messageId: failed, reason: 'NO_TARGET', retryAfterMs: 10_000 });
+    const alertKeys = Object.keys(store.alerts()[0] ?? {}).sort();
+    const messageKeys = Object.keys(store.outbox()[0] ?? {}).sort();
+    clock.advance(1_234);
+    const at = new Date(CLOCK_AT.getTime() + TWO_MINUTES + 1_234);
+    // The clock moves on as the removal is asked for, before it answers: its
+    // times are the clock's as it answers, never as it was asked.
+    store.beforeNext('removeResponder', () => {
+      clock.advance(1_000);
+    });
+
+    expect(await store.removeResponder({ journeyId, responderId: r1 })).toEqual({
+      outcome: 'removed',
+      resetAlertId: alertId,
+      messages: [],
+    });
+    const removedAt = new Date(at.getTime() + 1_000);
+
+    expect(store.alerts()[0]).toMatchObject({
+      state: 'OPEN',
+      acknowledgedBy: null,
+      acknowledgedAt: null,
+      smsRaisedAt: null,
+    });
+    expect(store.alertRounds()).toEqual([{ alertId, round: 2 }]);
+    // R1's lost-contact push withdrawn at that now, and R2's notice, unsent,
+    // withdrawn by the reset; R2's own push, failing, left to be sent.
+    for (const message of store.outbox()) {
+      if (message.recipientId === r1 || message.kind === 'ACKNOWLEDGED') {
+        expect(message.withdrawnAt, message.kind).toEqual(removedAt);
+      }
+    }
+    expect(store.outbox().find(({ messageId }) => messageId === failed)).toMatchObject({
+      lastFailure: 'NO_TARGET',
+      attempts: 0,
+      withdrawnAt: null,
+    });
+
+    // The last responder: the warning, at the clock's now.
+    const last = await store.removeResponder({ journeyId, responderId: r2 });
+    if (last.outcome !== 'removed') {
+      throw new Error(`expected R2 removed: ${JSON.stringify(last)}`);
+    }
+    const [warning] = store.journeyMessages();
+    expect(store.journeyMessages()).toEqual([
+      {
+        messageId: last.messages[0]?.messageId,
+        journeyId,
+        recipientId: walkerId,
+        kind: 'NO_RESPONDER',
+        round: 1,
+        createdAt: removedAt,
+        attempts: 0,
+        nextAttemptAt: removedAt,
+        sentAt: null,
+        lastFailure: null,
+        withdrawnAt: null,
+      },
+    ]);
+    // R2's push, failing, withdrawn with R2's removal, its failure kept.
+    expect(store.outbox().find(({ messageId }) => messageId === failed)).toMatchObject({
+      lastFailure: 'NO_TARGET',
+      attempts: 0,
+      withdrawnAt: removedAt,
+    });
+    // The shapes the existing tests read are unchanged: no round, no
+    // journey ID, and no journey's message among the alerts' messages.
+    expect(Object.keys(store.alerts()[0] ?? {}).sort()).toEqual(alertKeys);
+    expect(Object.keys(store.outbox()[0] ?? {}).sort()).toEqual(messageKeys);
+    expect(store.outbox().map(({ kind }) => kind)).not.toContain('NO_RESPONDER');
+    expect(store.messageRounds().map(({ messageId }) => messageId)).toContain(warning?.messageId);
+    // Copies: changing them changes nothing.
+    warning?.createdAt.setTime(0);
+    const [round] = store.alertRounds();
+    if (round !== undefined) {
+      round.round = 9;
+    }
+    expect(store.journeyMessages()[0]?.createdAt).toEqual(removedAt);
+    expect(store.alertRounds()).toEqual([{ alertId, round: 2 }]);
+    // The warning is a push kind: the push claim hands it out, and a mark
+    // finds it.
+    const claimed = await store.claimDue({ limit: 50, leaseMs: 30_000 });
+    expect(claimed.messages.map(({ kind }) => kind)).toContain('NO_RESPONDER');
+    await store.markSent(warning?.messageId ?? '');
+    expect(store.journeyMessages()[0]?.sentAt).toEqual(removedAt);
+  });
+
+  test('removeResponder given a journey ID alone is refused, naming what it takes, and writes nothing', async () => {
+    const { store, journeyId } = watchedStore({ responders: 2 });
+
+    await expect(
+      store.removeResponder(journeyId as unknown as Parameters<typeof store.removeResponder>[0]),
+    ).rejects.toThrow(/\{ journeyId, responderId \}/);
+    expect(store.journeys()[0]?.responderIds).toHaveLength(2);
+  });
+
+  test('removeResponderRow deletes one responder row and nothing else, as a test’s own setup, and refuses a journey never stored or a user who is not its responder', async () => {
+    const { store, walkerId, journeyId, alertId, responderIds } = await lostStore(2);
+    const [r1 = '', r2 = ''] = responderIds;
+    const outbox = store.outbox();
+    const alerts = store.alerts();
+
+    store.removeResponderRow(journeyId, r1.toUpperCase());
+
+    expect(store.journeys()[0]?.responderIds).toEqual([r2]);
+    expect(store.outbox()).toEqual(outbox);
+    expect(store.alerts()).toEqual(alerts);
+    expect(store.alertRounds()).toEqual([{ alertId, round: 1 }]);
+    expect(store.journeyMessages()).toEqual([]);
+    expect(store.calls).not.toContain('removeResponder');
+    expect(() => {
+      store.removeResponderRow(journeyId, walkerId);
+    }).toThrow(/not a responder/);
+    expect(() => {
+      store.removeResponderRow(syntheticUuid(), r2);
+    }).toThrow(/no journey/);
+  });
+
+  test('an open of a journey with no responder row writes no message, its alert is never read as due and its escalation is skipped, and unheardAlertCount counts it with the clock’s now', async () => {
+    const { clock, store, journeyId } = watchedStore({ responders: 1 });
+    store.removeResponders(journeyId);
+
+    const opened = await store.openLostContactAlert({ journeyId, afterMs: FIVE_MINUTES });
+    clock.advance(TWO_MINUTES);
+
+    expect(opened).toMatchObject({ outcome: 'opened', messages: [] });
+    const alertId = opened.outcome === 'opened' ? opened.alertId : '';
+    expect((await store.alertsDueForEscalation(TWO_MINUTES)).alerts).toEqual([]);
+    expect(await store.escalateAlert({ alertId })).toEqual({ outcome: 'skipped' });
+    expect(store.alerts()[0]?.smsRaisedAt).toBeNull();
+    expect(await store.unheardAlertCount()).toEqual({
+      now: new Date(CLOCK_AT.getTime() + TWO_MINUTES),
+      count: 1,
+    });
+  });
+
+  test('the test kit hands out its new lists: the journey kinds, what a reset withdraws and what a removal withdraws', () => {
+    expect(kit.JOURNEY_MESSAGE_KINDS).toEqual(['NO_RESPONDER']);
+    expect(kit.WITHDRAWN_WHEN_RESET).toEqual(['ACKNOWLEDGED']);
+    expect(kit.WITHDRAWN_WHEN_REMOVED).toEqual(
+      kit.MESSAGE_KINDS.filter((kind) => !kit.JOURNEY_MESSAGE_KINDS.includes(kind)),
+    );
+    expect(
+      kit.WITHDRAWN_WHEN_RESET.filter((kind) => !kit.WITHDRAWN_WHEN_RESOLVED.includes(kind)),
+    ).toEqual([]);
   });
 });

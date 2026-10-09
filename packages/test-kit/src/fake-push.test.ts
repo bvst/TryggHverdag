@@ -171,12 +171,18 @@ describe('fakePush', () => {
     // escalation SMS (D-019), last. This test then hands the SMS kind to the
     // push fake too, which records whatever it is given; keeping it off the
     // push port is the push claim's job (LOST-07-AC8), not this fake's.
+    // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+    // fake-push.test.ts line 158): the list gains NO_RESPONDER, the walker's
+    // warning that the last responder was removed (SM-02, D-087), last, as
+    // the server's does. Still exact. The fake records what it is given, so
+    // what it recorded and accepted is asserted as before.
     expect(MESSAGE_KINDS).toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
       'HOME',
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
+      'NO_RESPONDER',
     ]);
     expect(push.messages).toEqual(sent);
     expect(push.accepted).toEqual(sent);

@@ -31,7 +31,10 @@
  * and one that is overdue, an SMS the port did not accept and an SMS delivery
  * that failed, the count of SMS failing, and an SMS check that failed. None
  * has a field a phone number, a name or a location could travel in, and none
- * names a user.
+ * names a user. SM-10 adds three: a removal for a journey already ended,
+ * naming the journey and the reason; a removal that failed, with its stage
+ * and SQLSTATE; and the count of unresolved alerts whose journey has no
+ * responder (D-122, item 3). None names the removed responder or the walker.
  */
 export type FakeLogEvent =
   | { event: 'heartbeat_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
@@ -59,7 +62,10 @@ export type FakeLogEvent =
     }
   | { event: 'sms_delivery_failed'; stage: 'claim' | 'mark'; code: string | null }
   | { event: 'sms_unsent'; count: number }
-  | { event: 'sms_check_failed'; stage: 'read' | 'report'; code: string | null };
+  | { event: 'sms_check_failed'; stage: 'read' | 'report'; code: string | null }
+  | { event: 'removal_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
+  | { event: 'removal_failed'; stage: 'read' | 'store'; code: string | null }
+  | { event: 'unheard_alerts'; count: number };
 
 export interface FakeLog {
   /** Records the event. */

@@ -131,6 +131,22 @@ describe('fakeLog', () => {
     expect(log.events).toEqual(written);
   });
 
+  test('records the removal’s events and the count of unheard alerts too, each exactly as given (SM-10)', () => {
+    const log = fakeLog();
+    const written: FakeLogEvent[] = [
+      { event: 'removal_ignored', reason: 'JOURNEY_ENDED', journeyId: syntheticUuid() },
+      { event: 'removal_failed', stage: 'read', code: '57P01' },
+      { event: 'removal_failed', stage: 'store', code: null },
+      { event: 'unheard_alerts', count: 1 },
+    ];
+
+    for (const event of written) {
+      log.write(event);
+    }
+
+    expect(log.events).toEqual(written);
+  });
+
   test('the test kit hands it out', () => {
     expect(kit.fakeLog).toBe(fakeLog);
   });

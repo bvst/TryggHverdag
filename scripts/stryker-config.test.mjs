@@ -253,6 +253,11 @@ describe('stryker.config.mjs', () => {
     // RG-03 (LOST-03, D-112): the journey system tests are two files now:
     // contact.system.test.ts joins the group, as the spec's Mutation section
     // says. The run still mutates the same files, under the same config.
+    //
+    // RG-03 (SM-10, named in the spec's "Existing assertions that change by
+    // design" and its Mutation section): removal.system.test.ts joins the
+    // group too, as the removal module lives in modules/journeys/. The run
+    // still mutates the same files, under the same config.
     const config = await configFor('journeys');
 
     expect(config.mutate).toEqual(['apps/server/src/modules/journeys/**/*.ts', ...EXCLUSIONS]);
@@ -263,7 +268,11 @@ describe('stryker.config.mjs', () => {
     expect(configNamedIn(args)).toBe('vitest.system.config.mjs');
     // Compared in any order: `vitest list` reports the files in its own.
     expect([...filesRunWith(args)].sort()).toEqual(
-      ['apps/server/src/journeys.system.test.ts', 'apps/server/src/contact.system.test.ts'].sort(),
+      [
+        'apps/server/src/journeys.system.test.ts',
+        'apps/server/src/contact.system.test.ts',
+        'apps/server/src/removal.system.test.ts',
+      ].sort(),
     );
   });
 

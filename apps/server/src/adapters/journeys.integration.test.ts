@@ -42,6 +42,7 @@ import {
   toStoredPosition,
   type AcknowledgementAsStored,
   type AlertAsStored,
+  type AlertRound,
   type EscalationAsStored,
   type FakeJourneyState,
   type FakeLog,
@@ -50,7 +51,9 @@ import {
   type HeartbeatToRecord,
   type JourneyAsStored,
   type JourneyEndAsStored,
+  type JourneyMessageAsStored,
   type JourneyStoreUnderTest,
+  type MessageRound,
   type PositionAsStored,
   type ResolutionAsStored,
   type SyntheticHeartbeat,
@@ -454,6 +457,7 @@ async function seedAlert({
   acknowledgedBy = null,
   acknowledgedAt = null,
   smsRaisedAt = null,
+  round,
 }: {
   journeyId: string;
   state: string;
@@ -464,6 +468,7 @@ async function seedAlert({
   acknowledgedBy?: string | null;
   acknowledgedAt?: Date | null;
   smsRaisedAt?: Date | null;
+  round?: number;
 }): Promise<string> {
   const id = await seedAlertRow({
     journeyId,
@@ -482,6 +487,12 @@ async function seedAlert({
       id,
       smsRaisedAt,
     ]);
+  }
+  // SM-10: the round, only when given, so the behaviours that give none write
+  // exactly the columns they wrote before, and the column's default stands.
+  // A round under 1 is refused here by the table's check, as the fake refuses it.
+  if (round !== undefined) {
+    await connection().query('update alerts set round = $2 where id = $1', [id, round]);
   }
   return id;
 }
@@ -555,6 +566,7 @@ async function seedMessage({
   sentAt = null,
   lastFailure = null,
   withdrawnAt = null,
+  round,
 }: {
   alertId: string;
   recipientId: string;
@@ -565,14 +577,38 @@ async function seedMessage({
   sentAt?: Date | null;
   lastFailure?: string | null;
   withdrawnAt?: Date | null;
+  round?: number;
 }): Promise<string> {
   const id = syntheticUuid();
-  await connection().query(
-    `insert into outbox (id, alert_id, recipient_id, kind, created_at, attempts,
-                         next_attempt_at, sent_at, last_failure)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-    [id, alertId, recipientId, kind, createdAt, attempts, nextAttemptAt, sentAt, lastFailure],
-  );
+  if (round === undefined) {
+    await connection().query(
+      `insert into outbox (id, alert_id, recipient_id, kind, created_at, attempts,
+                           next_attempt_at, sent_at, last_failure)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [id, alertId, recipientId, kind, createdAt, attempts, nextAttemptAt, sentAt, lastFailure],
+    );
+  } else {
+    // SM-10: the round in the insert itself, only when given: a second
+    // message of a kind for the same alert and recipient is taken only in
+    // another round, so the unique key must see the round as it is written.
+    await connection().query(
+      `insert into outbox (id, alert_id, recipient_id, kind, created_at, attempts,
+                           next_attempt_at, sent_at, last_failure, round)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        id,
+        alertId,
+        recipientId,
+        kind,
+        createdAt,
+        attempts,
+        nextAttemptAt,
+        sentAt,
+        lastFailure,
+        round,
+      ],
+    );
+  }
   if (withdrawnAt !== null) {
     await connection().query('update outbox set withdrawn_at = $2 where id = $1', [
       id,
@@ -598,6 +634,115 @@ async function escalationsOf(journeyId: string): Promise<EscalationAsStored[]> {
 /** LOST-03-AC4: every responder row of the journey removed directly. */
 async function removeResponders(journeyId: string): Promise<void> {
   await connection().query('delete from journey_responders where journey_id = $1', [journeyId]);
+}
+
+/** SM-10: each alert of the journey's round, as the `alerts` table holds it. */
+async function roundsOf(journeyId: string): Promise<AlertRound[]> {
+  const result = await connection().query<{ id: string; round: number }>(
+    `select id::text as id, round::int as round
+       from alerts where journey_id = $1 order by opened_at, id`,
+    [journeyId],
+  );
+  return result.rows.map((row) => ({ alertId: row.id, round: row.round }));
+}
+
+/** SM-10: each message of the journey's alerts' round, as the `outbox` table holds it. */
+async function messageRoundsOf(journeyId: string): Promise<MessageRound[]> {
+  const result = await connection().query<{ message_id: string; round: number }>(
+    `select o.id::text as message_id, o.round::int as round
+       from outbox o join alerts a on a.id = o.alert_id
+      where a.journey_id = $1 order by o.id`,
+    [journeyId],
+  );
+  return result.rows.map((row) => ({ messageId: row.message_id, round: row.round }));
+}
+
+/** SM-10: the journey's own messages, naming it and no alert, as the `outbox` table holds them. */
+async function journeyMessagesOf(journeyId: string): Promise<JourneyMessageAsStored[]> {
+  const result = await connection().query<{
+    message_id: string;
+    journey_id: string;
+    recipient_id: string;
+    kind: string;
+    round: number;
+    created_ms: string;
+    attempts: number;
+    next_ms: string;
+    sent_ms: string | null;
+    last_failure: string | null;
+    withdrawn_ms: string | null;
+  }>(
+    `select id::text as message_id, journey_id::text as journey_id,
+            recipient_id::text as recipient_id, kind::text as kind, round::int as round,
+            ${MS('created_at')} as created_ms, attempts::int as attempts,
+            ${MS('next_attempt_at')} as next_ms, ${MS('sent_at')} as sent_ms,
+            last_failure::text as last_failure, ${MS('withdrawn_at')} as withdrawn_ms
+       from outbox where journey_id = $1 order by id`,
+    [journeyId],
+  );
+  return result.rows.map((row) => ({
+    messageId: row.message_id,
+    journeyId: row.journey_id,
+    recipientId: row.recipient_id,
+    kind: row.kind,
+    round: row.round,
+    createdAt: new Date(Number(row.created_ms)),
+    attempts: row.attempts,
+    nextAttemptAt: new Date(Number(row.next_ms)),
+    sentAt: momentOf(row.sent_ms),
+    lastFailure: row.last_failure,
+    withdrawnAt: momentOf(row.withdrawn_ms),
+  }));
+}
+
+/**
+ * SM-10-AC3: holds the journey's row as holdRow does, and lets it go once
+ * another session (the removal) is waiting for it, having first changed the
+ * journey in its own transaction, as one in flight would: `{ remove }`, that
+ * responder's row deleted and nothing else; 'end', the journey ENDED; or
+ * 'unchanged', nothing. `release` lets go at once if no one came to wait.
+ */
+async function holdUntilRemovalWaits(
+  journeyId: string,
+  change: 'unchanged' | 'end' | { remove: string },
+): Promise<{ release: () => Promise<void> }> {
+  const client = await connection().connect();
+  await client.query('begin');
+  await client.query('select id from journeys where id = $1 for update', [journeyId]);
+  const pid = (await client.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]?.pid;
+  // An object, so the loop reads the flag release() sets, not a narrowed copy.
+  const state = { stopped: false };
+  const lettingGo = (async () => {
+    try {
+      while (!state.stopped) {
+        const waiting = await connection().query<{ n: number }>(
+          'select count(*)::int as n from pg_stat_activity where $1 = any(pg_blocking_pids(pid))',
+          [pid],
+        );
+        if ((waiting.rows[0]?.n ?? 0) > 0) {
+          if (change === 'end') {
+            await client.query("update journeys set state = 'ENDED' where id = $1", [journeyId]);
+          } else if (change !== 'unchanged') {
+            await client.query(
+              'delete from journey_responders where journey_id = $1 and responder_id = $2',
+              [journeyId, change.remove],
+            );
+          }
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await client.query('commit');
+    } finally {
+      client.release();
+    }
+  })();
+  return {
+    release: async () => {
+      state.stopped = true;
+      await lettingGo;
+    },
+  };
 }
 
 /** LOST-06: who is on each alert of the journey, and since when, as the `alerts` table holds it. */
@@ -857,6 +1002,14 @@ describe('databaseJourneyStore, against the behaviour every journey store shares
     // committing would, once the escalation waits.
     escalationsOf,
     holdUntilEscalationWaits,
+    // SM-10: each alert's and message's round and the journey's own
+    // messages, each read by a reader of its own, so alertsOf and messagesOf
+    // keep their shapes; and a holder that changes the journey as a removal
+    // or an end committing would, once the removal waits.
+    roundsOf,
+    messageRoundsOf,
+    journeyMessagesOf,
+    holdUntilRemovalWaits,
   });
 
   test.each(JOURNEY_STORE_BEHAVIOUR)(
@@ -872,11 +1025,14 @@ describe('databaseJourneyStore, against the behaviour every journey store shares
       // due: the same start again (added, not changed).
       // LOST-07's claim both channels and count the unsent SMS of the whole
       // table: the same start again (added, not changed).
+      // SM-10's claim too (the warning, AC14), and write warnings, notices
+      // and SMS that are due: the same start again (added, not changed).
       if (
         name.startsWith('LOST-02-') ||
         name.startsWith('LOST-03-') ||
         name.startsWith('LOST-06-') ||
-        name.startsWith('LOST-07-')
+        name.startsWith('LOST-07-') ||
+        name.startsWith('SM-10-')
       ) {
         await connection().query('update outbox set sent_at = now() where sent_at is null');
       }
@@ -2240,6 +2396,11 @@ describe('LOST-02: the database agrees on alerts and their messages', () => {
     // design"): the alerts list gains sms_raised_at (LOST-07's approach item
     // 9). Still exact; the scan below covers it as it stands, and the name
     // matches none of it.
+    //
+    // RG-03 (SM-10, named in the spec's "Existing assertions that change by
+    // design"): alerts gains round, and outbox gains journey_id and round
+    // (SM-10's approach item 9). Still exact; the scan below covers all three
+    // as it stands, and none matches it.
     expect(alerts).toEqual(
       [
         'id',
@@ -2252,6 +2413,7 @@ describe('LOST-02: the database agrees on alerts and their messages', () => {
         'acknowledged_by',
         'acknowledged_at',
         'sms_raised_at',
+        'round',
       ].sort(),
     );
     expect(outbox).toEqual(
@@ -2266,6 +2428,8 @@ describe('LOST-02: the database agrees on alerts and their messages', () => {
         'sent_at',
         'last_failure',
         'withdrawn_at',
+        'journey_id',
+        'round',
       ].sort(),
     );
     expect(
@@ -2350,12 +2514,17 @@ describe('LOST-03 and SM-04: the database agrees on resolutions, ends and the ne
     // design"): and gains LOST_CONTACT_SMS, the escalation's SMS (D-019),
     // last, as migration 0006 adds it. The assertion against the domain's
     // MESSAGE_KINDS below is unchanged.
+    // RG-03 (SM-10, named in the spec's "Existing assertions that change by
+    // design"): and gains NO_RESPONDER, the walker's warning (SM-02), last,
+    // as migration 0007 adds it. The assertion against the domain's
+    // MESSAGE_KINDS below is unchanged.
     expect(messageKinds).toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
       'HOME',
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
+      'NO_RESPONDER',
     ]);
     expect(alertResolutions).toEqual(['BACK_IN_CONTACT', 'HOME']);
     expect(journeyEndReasons).toEqual(['HOME']);
@@ -2544,6 +2713,10 @@ describe('LOST-06: the database agrees on who is on an alert, and on the notice'
   // LOST_CONTACT_SMS after it, so the literal list gains it and the title no
   // longer says ACKNOWLEDGED is last. The assertion against the domain's
   // MESSAGE_KINDS is unchanged.
+  //
+  // RG-03 (SM-10, named in the spec's "Existing assertions that change by
+  // design"): migration 0007 adds NO_RESPONDER last, so the literal list
+  // gains it. The assertion against the domain's MESSAGE_KINDS is unchanged.
   test('LOST-06-AC17: message_kind’s values equal MESSAGE_KINDS, in order (pg_enum); outbox.kind is of that type', async () => {
     const messageKinds = await labelsOf('message_kind');
 
@@ -2555,6 +2728,7 @@ describe('LOST-06: the database agrees on who is on an alert, and on the notice'
       'HOME',
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
+      'NO_RESPONDER',
     ]);
     expect(messageKinds).toEqual([...MESSAGE_KINDS]);
     expect(await typeOf('outbox', 'kind')).toMatchObject({ udt_name: 'message_kind' });
@@ -2638,7 +2812,12 @@ describe('LOST-06: the database agrees on who is on an alert, and on the notice'
 // ---------------------------------------------------------------------------
 
 describe('LOST-07: the database agrees on the escalation and its SMS', () => {
-  test('LOST-07-AC19: message_kind’s values equal MESSAGE_KINDS, in order, LOST_CONTACT_SMS last (pg_enum); outbox.kind is of that type', async () => {
+  // RG-03 (SM-10, named in the spec's "Existing assertions that change by
+  // design"): this was "…in order, LOST_CONTACT_SMS last (pg_enum)…".
+  // Migration 0007 adds NO_RESPONDER after it, so the literal list gains it
+  // and the title no longer says LOST_CONTACT_SMS is last. The assertion
+  // against the domain's MESSAGE_KINDS is unchanged.
+  test('LOST-07-AC19: message_kind’s values equal MESSAGE_KINDS, in order (pg_enum); outbox.kind is of that type', async () => {
     const messageKinds = await labelsOf('message_kind');
 
     // The spec's own list first, so a domain list that drifted with the
@@ -2649,6 +2828,7 @@ describe('LOST-07: the database agrees on the escalation and its SMS', () => {
       'HOME',
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
+      'NO_RESPONDER',
     ]);
     expect(messageKinds).toEqual([...MESSAGE_KINDS]);
     expect(await typeOf('outbox', 'kind')).toMatchObject({ udt_name: 'message_kind' });
@@ -2765,6 +2945,202 @@ describe('LOST-07: the database agrees on the escalation and its SMS', () => {
     expect(coordinates.rows.map(({ found }) => found)).toEqual([
       'public.positions.latitude',
       'public.positions.longitude',
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SM-10-AC7, AC14 and AC21: the database agrees with the removal (migration
+// 0007, its spec's approach item 9): a round on every alert and message, in
+// the outbox's unique key; the walker's warning a journey's message, naming
+// exactly one of an alert and a journey; and NO_RESPONDER, last.
+// ---------------------------------------------------------------------------
+
+/** An outbox message put in directly, naming the alert, the journey, or both or neither, in a round if given. */
+function insertOwnedMessage({
+  alertId = null,
+  journeyId = null,
+  recipientId,
+  kind,
+  round,
+}: {
+  alertId?: string | null;
+  journeyId?: string | null;
+  recipientId: string;
+  kind: string;
+  round?: number;
+}) {
+  return round === undefined
+    ? connection().query(
+        `insert into outbox (id, alert_id, journey_id, recipient_id, kind, created_at, attempts,
+                             next_attempt_at)
+         values ($1, $2, $3, $4, $5, now(), 0, now())`,
+        [syntheticUuid(), alertId, journeyId, recipientId, kind],
+      )
+    : connection().query(
+        `insert into outbox (id, alert_id, journey_id, recipient_id, kind, created_at, attempts,
+                             next_attempt_at, round)
+         values ($1, $2, $3, $4, $5, now(), 0, now(), $6)`,
+        [syntheticUuid(), alertId, journeyId, recipientId, kind, round],
+      );
+}
+
+/** A table's column as information_schema describes it: its type, whether it takes null, and its default. */
+async function columnOf(table: string, column: string) {
+  const result = await connection().query<{
+    data_type: string;
+    is_nullable: string;
+    column_default: string | null;
+  }>(
+    `select data_type, is_nullable, column_default from information_schema.columns
+      where table_schema = 'public' and table_name = $1 and column_name = $2`,
+    [table, column],
+  );
+  return result.rows[0];
+}
+
+describe('SM-10 and SM-02: the database agrees on the round, the walker’s warning and its kind', () => {
+  test('SM-10-AC7: the database refuses a second message of one kind for the same alert, recipient and round (23505), and takes one in another round, and one of another kind; it refuses a round under 1 on outbox and on alerts (23514) (LOST-06, LOST-07)', async () => {
+    const { journeyId } = await walking();
+    const alertId = await insertAlert(journeyId, 'ESCALATED');
+    const recipientId = await addUser();
+    const sms = { alertId, recipientId, kind: 'LOST_CONTACT_SMS' };
+
+    await expect(insertOwnedMessage({ ...sms, round: 1 })).resolves.toBeDefined();
+    await expect(insertOwnedMessage({ ...sms, round: 1 })).rejects.toMatchObject({
+      code: '23505',
+    });
+    // The default round is 1: a message put in naming none is the same round.
+    await expect(insertOwnedMessage(sms)).rejects.toMatchObject({ code: '23505' });
+    await expect(insertOwnedMessage({ ...sms, round: 2 })).resolves.toBeDefined();
+    await expect(insertOwnedMessage({ ...sms, round: 2 })).rejects.toMatchObject({
+      code: '23505',
+    });
+    await expect(
+      insertOwnedMessage({ alertId, recipientId, kind: 'ACKNOWLEDGED', round: 2 }),
+    ).resolves.toBeDefined();
+
+    for (const round of [0, -1]) {
+      await expect(
+        insertOwnedMessage({ ...sms, round }),
+        `outbox, round ${String(round)}`,
+      ).rejects.toMatchObject({ code: '23514' });
+      await expect(
+        connection().query('update alerts set round = $2 where id = $1', [alertId, round]),
+        `alerts, round ${String(round)}`,
+      ).rejects.toMatchObject({ code: '23514' });
+    }
+    await expect(
+      connection().query('update alerts set round = 2 where id = $1', [alertId]),
+    ).resolves.toMatchObject({ rowCount: 1 });
+  });
+
+  test('SM-10-AC14: the database refuses an outbox row naming both an alert and a journey, or neither (23514); it takes one naming either alone; a journey ID no journey has is refused (23503) (SM-02)', async () => {
+    const { device, journeyId } = await walking();
+    const alertId = await insertAlert(journeyId, 'OPEN');
+    const walkerId = device.userId;
+
+    await expect(
+      insertOwnedMessage({ alertId, journeyId, recipientId: walkerId, kind: 'NO_RESPONDER' }),
+      'both',
+    ).rejects.toMatchObject({ code: '23514' });
+    await expect(
+      insertOwnedMessage({ recipientId: walkerId, kind: 'NO_RESPONDER' }),
+      'neither',
+    ).rejects.toMatchObject({ code: '23514' });
+    await expect(
+      insertOwnedMessage({
+        journeyId: syntheticUuid(),
+        recipientId: walkerId,
+        kind: 'NO_RESPONDER',
+      }),
+      'no such journey',
+    ).rejects.toMatchObject({ code: '23503' });
+    await expect(
+      insertOwnedMessage({ journeyId, recipientId: walkerId, kind: 'NO_RESPONDER' }),
+      'the journey alone',
+    ).resolves.toBeDefined();
+    await expect(
+      insertOwnedMessage({ alertId, recipientId: await addUser(), kind: 'LOST_CONTACT' }),
+      'the alert alone',
+    ).resolves.toBeDefined();
+  });
+
+  test('SM-10-AC21: message_kind’s values equal MESSAGE_KINDS, in order, NO_RESPONDER last (pg_enum); outbox.kind is of that type', async () => {
+    const messageKinds = await labelsOf('message_kind');
+
+    // The spec's own list first, so a domain list that drifted with the
+    // database cannot carry both along.
+    expect(messageKinds).toEqual([
+      'LOST_CONTACT',
+      'BACK_IN_CONTACT',
+      'HOME',
+      'ACKNOWLEDGED',
+      'LOST_CONTACT_SMS',
+      'NO_RESPONDER',
+    ]);
+    expect(messageKinds).toEqual([...MESSAGE_KINDS]);
+    expect(await typeOf('outbox', 'kind')).toMatchObject({ udt_name: 'message_kind' });
+  });
+
+  test('SM-10-AC21: alerts.round and outbox.round are integers, not null, default 1; outbox.alert_id is nullable; outbox.journey_id is a nullable uuid referencing journeys; an alert and a message put in naming no round read 1', async () => {
+    for (const table of ['alerts', 'outbox']) {
+      expect(await columnOf(table, 'round'), `${table}.round`).toEqual({
+        data_type: 'integer',
+        is_nullable: 'NO',
+        column_default: '1',
+      });
+    }
+    expect(await typeOf('outbox', 'alert_id')).toMatchObject({ is_nullable: 'YES' });
+    expect(await typeOf('outbox', 'journey_id')).toEqual({
+      data_type: 'uuid',
+      udt_name: 'uuid',
+      is_nullable: 'YES',
+    });
+    const references = await connection().query<{ referenced: string; columns: string[] }>(
+      `select c.confrelid::regclass::text as referenced,
+              array(select a.attname::text from unnest(c.conkey) as k(attnum)
+                      join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k.attnum)
+                as columns
+         from pg_constraint c
+        where c.conrelid = 'outbox'::regclass and c.contype = 'f'`,
+    );
+    expect(references.rows).toContainEqual({ referenced: 'journeys', columns: ['journey_id'] });
+
+    const { journeyId } = await walking();
+    const alertId = await insertAlert(journeyId, 'OPEN');
+    await insertMessage({ alertId, recipientId: await addUser() });
+    const rounds = await connection().query<{ alert: number; message: number }>(
+      `select a.round::int as alert, o.round::int as message
+         from alerts a join outbox o on o.alert_id = a.id where a.id = $1`,
+      [alertId],
+    );
+    expect(rounds.rows).toEqual([{ alert: 1, message: 1 }]);
+  });
+
+  test('SM-10-AC21: the outbox’s one unique key is outbox_alert_id_recipient_id_kind_round_unique, on (alert_id, recipient_id, kind, round), and the old key is gone; the claim’s partial index still reads (next_attempt_at, id) with the predicate sent_at IS NULL (pg_get_indexdef)', async () => {
+    const unique = await connection().query<{ name: string; columns: string[] }>(
+      `select c.conname::text as name,
+              array(select a.attname::text
+                      from unnest(c.conkey) with ordinality as k(attnum, ord)
+                      join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k.attnum
+                     order by k.ord) as columns
+         from pg_constraint c
+        where c.conrelid = 'outbox'::regclass and c.contype = 'u'`,
+    );
+    const index = await connection().query<{ definition: string }>(
+      `select pg_get_indexdef(indexrelid) as definition from pg_index
+        where indexrelid = to_regclass('outbox_unsent_due_index')`,
+    );
+
+    expect(unique.rows).toEqual([
+      {
+        name: 'outbox_alert_id_recipient_id_kind_round_unique',
+        columns: ['alert_id', 'recipient_id', 'kind', 'round'],
+      },
+    ]);
+    expect(index.rows.map(({ definition }) => definition)).toEqual([
+      'CREATE INDEX outbox_unsent_due_index ON public.outbox USING btree (next_attempt_at, id) WHERE (sent_at IS NULL)',
     ]);
   });
 });
