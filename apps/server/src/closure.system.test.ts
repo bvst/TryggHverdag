@@ -780,6 +780,55 @@ describe('LOST-08, LOST-06 and SEC-07: only the current acknowledger may close; 
     },
   );
 
+  test.each(['contact coming back', 'R1’s own close'] as const)(
+    'LOST-08-AC2: A acknowledged by R1 and resolved by %s: W’s own device, a user who follows only another journey and another walker each get the 404 ALERT_NOT_FOUND an alert ID no alert has gets, byte for byte, never the 409 a responder gets; no closure line, nothing changes, and the store is asked only to read (SEC-07, D-114)',
+    async (how) => {
+      // LOST-08 review loop 1 (privacy-security-reviewer). SEC-07's one 404
+      // (D-114): someone who does not follow the journey learns nothing of
+      // its alert, that it is over included. The tests above hold it for an
+      // alert still open; this one for an alert already resolved, where a
+      // check for "already over" put before the close rule's own first step
+      // would answer a stranger 409 and write a line about the alert.
+      const w = world();
+      const { walker, journeyId, alertId, r1 } = await acknowledged(w, 2);
+      const elsewhere = w.responder();
+      await w.seed(w.walker(), [elsewhere.userId], { silentForMs: MINUTE });
+      const otherWalker = w.walker();
+      if (how === 'contact coming back') {
+        await w.heartbeat(walker, journeyId);
+      } else {
+        expect((await w.close(r1, alertId)).status).toBe(200);
+      }
+      expect(w.alertOf(alertId)).toMatchObject({ state: 'RESOLVED', acknowledgedBy: r1.userId });
+      const unknown = await w.close(r1, syntheticUuid());
+      expect({ status: unknown.status, code: codeOf(unknown) }).toEqual({
+        status: 404,
+        code: 'ALERT_NOT_FOUND',
+      });
+      const before = w.recordOf(journeyId);
+      const lines = w.log.events.length;
+
+      for (const [who, device] of [
+        ['W’s own device', walker],
+        ['a user who follows only another journey', elsewhere],
+        ['another walker', otherWalker],
+      ] as const) {
+        const callsBefore = w.store.calls.length;
+        const answer = await w.close(device, alertId);
+
+        expect({ status: answer.status, text: answer.text, headers: answer.headers }, who).toEqual({
+          status: 404,
+          text: unknown.text,
+          headers: unknown.headers,
+        });
+        expect(w.store.calls.slice(callsBefore), who).toEqual(['alertForClosure']);
+      }
+      expect(w.log.events.slice(lines)).toEqual([]);
+      expect(w.closureLines()).toEqual([]);
+      expect(w.recordOf(journeyId)).toEqual(before);
+    },
+  );
+
   test('LOST-08-AC2: with no credential, or one no device has, the close is 401 UNAUTHORIZED, the store is never asked about the alert, and nothing changes', async () => {
     const w = world();
     const { journeyId, alertId, r1 } = await acknowledged(w, 2);
@@ -942,6 +991,46 @@ describe('LOST-08 and SM-10: after a reset, nobody can close until someone ackno
 
     expect(w.alertOf(alertId)).toMatchObject({ resolution: SAFE, acknowledgedBy: r3.userId });
     expect(recipientsOf(ofKind(w.messagesOf(journeyId), SAFE))).toEqual([r2.userId]);
+  });
+
+  test('LOST-08-AC3: R1 acknowledges A, contact comes back (A RESOLVED, BACK_IN_CONTACT, R1 still recorded on it; J ACTIVE), and R1 is removed through the removal module: R1’s close is the 404 ALERT_NOT_FOUND an alert ID no alert has gets, byte for byte, never a 409, though R1 is still A’s acknowledger; no closure line, nothing changes, and the store is asked only to read (SM-10, SEC-07, D-114)', async () => {
+    // LOST-08 review loop 1 (privacy-security-reviewer). A resolved alert
+    // keeps who acknowledged it (D-123), so the removed responder is still
+    // recorded on A after the removal. The close rule asks first whether the
+    // sender follows the journey: a check for "already over" or "the
+    // acknowledger" put before it would answer R1 409 and say A is over.
+    const w = world();
+    const { walker, journeyId, alertId, r1 } = await acknowledged(w, 3);
+    await w.heartbeat(walker, journeyId);
+    expect(w.stateOf(journeyId)).toBe('ACTIVE');
+    expect(w.alertOf(alertId)).toMatchObject({
+      state: 'RESOLVED',
+      resolution: 'BACK_IN_CONTACT',
+      acknowledgedBy: r1.userId,
+    });
+    expect(await w.remove(journeyId, r1.userId)).toEqual({ type: 'removed' });
+    expect(w.respondersOf(journeyId)).not.toContain(r1.userId);
+    expect(w.alertOf(alertId)).toMatchObject({ state: 'RESOLVED', acknowledgedBy: r1.userId });
+    const unknown = await w.close(r1, syntheticUuid());
+    expect({ status: unknown.status, code: codeOf(unknown) }).toEqual({
+      status: 404,
+      code: 'ALERT_NOT_FOUND',
+    });
+    const before = w.recordOf(journeyId);
+    const lines = w.log.events.length;
+    const callsBefore = w.store.calls.length;
+
+    const removed = await w.close(r1, alertId);
+
+    expect({ status: removed.status, text: removed.text, headers: removed.headers }).toEqual({
+      status: 404,
+      text: unknown.text,
+      headers: unknown.headers,
+    });
+    expect(w.store.calls.slice(callsBefore)).toEqual(['alertForClosure']);
+    expect(w.log.events.slice(lines)).toEqual([]);
+    expect(w.closureLines()).toEqual([]);
+    expect(w.recordOf(journeyId)).toEqual(before);
   });
 });
 

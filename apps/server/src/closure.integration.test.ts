@@ -566,6 +566,22 @@ const acknowledge = (api: ReturnType<typeof realApi>, credential: string, alertI
 const close = (api: ReturnType<typeof realApi>, credential: string, alertId: string) =>
   post(api, credential, `alerts/${alertId}/closure`);
 
+/**
+ * "They're safe" through the API, its answer as sent: the status, the body's
+ * text and every header, so two answers can be compared byte for byte.
+ */
+async function closeAsSent(api: ReturnType<typeof realApi>, credential: string, alertId: string) {
+  const response = await api.request(apiPath(`alerts/${alertId}/closure`), {
+    method: 'POST',
+    headers: { authorization: `Bearer ${credential}` },
+  });
+  return {
+    status: response.status,
+    text: await response.text(),
+    headers: [...response.headers].map(([name, value]) => `${name}: ${value}`).join('\n'),
+  };
+}
+
 /** "I'm home" through the API (D-110). */
 const home = (api: ReturnType<typeof realApi>, credential: string, journeyId: string) =>
   post(api, credential, `journeys/${journeyId}/home`);
@@ -712,6 +728,81 @@ describe('LOST-08 and SM-06: "They’re safe", on the real tables', () => {
     expect(await journeyOf(journeyId)).toMatchObject({ state: 'ENDED', endReason: 'SAFE' });
     const safe = ofKind(await messagesOf(journeyId), 'SAFE');
     expect(safe.map(({ recipientId, round }) => [recipientId, round])).toEqual([[r3.userId, 2]]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LOST-08-AC2 and AC3 at a resolved alert: SEC-07's one 404 (D-114). LOST-08
+// review loop 1 (privacy-security-reviewer): a check for "already over" put
+// before the close rule's first step, whether the sender follows the
+// journey, would answer these callers 409 and tell them the alert is over.
+// ---------------------------------------------------------------------------
+
+describe('LOST-08, SEC-07 and SM-10: at a resolved alert, a caller who does not follow the journey gets the one 404, on the real tables', () => {
+  test.each(['contact coming back', 'R1’s own close'] as const)(
+    'LOST-08-AC2: on the real tables, A acknowledged by R1 and resolved by %s: W, a user who follows only another journey and another walker each get the 404 ALERT_NOT_FOUND an alert ID no alert has gets, byte for byte, never a 409; no line, and nothing written (SEC-07, D-114)',
+    async (how) => {
+      const { walker, journeyId, alertId, r1 } = await acknowledged({ responders: 2 });
+      const [elsewhere] = (await silent({ responders: 1 })).responders as [Person];
+      const otherWalker = await person();
+      const log = fakeLog();
+      const api = realApi({ log });
+      if (how === 'contact coming back') {
+        await store().recordHeartbeat(await freshHeartbeat(journeyId));
+        expect((await journeyOf(journeyId)).state).toBe('ACTIVE');
+      } else {
+        expect((await close(api, r1.credential, alertId)).status).toBe(200);
+      }
+      expect((await alertsOf(journeyId))[0]).toMatchObject({
+        state: 'RESOLVED',
+        acknowledgedBy: r1.userId,
+      });
+      const unknown = await closeAsSent(api, r1.credential, syntheticUuid());
+      expect({ status: unknown.status, code: parsedOrNull(unknown.text)?.['code'] }).toEqual({
+        status: 404,
+        code: 'ALERT_NOT_FOUND',
+      });
+      const before = await recordOf(journeyId);
+      const lines = log.events.length;
+
+      for (const [who, caller] of [
+        ['W', walker],
+        ['a user who follows only another journey', elsewhere],
+        ['another walker', otherWalker],
+      ] as const) {
+        expect(await closeAsSent(api, caller.credential, alertId), who).toEqual(unknown);
+      }
+
+      expect(log.events.slice(lines)).toEqual([]);
+      expect(await recordOf(journeyId)).toEqual(before);
+    },
+  );
+
+  test('LOST-08-AC3: on the real tables, R1 acknowledges A, contact comes back (A RESOLVED, BACK_IN_CONTACT, acknowledged_by R1; J ACTIVE), and R1 is removed through the removal module: R1’s close is the 404 ALERT_NOT_FOUND an alert ID no alert has gets, byte for byte, never a 409, though R1 is still A’s acknowledger; no line, and nothing written (SM-10, SEC-07, D-114)', async () => {
+    const { journeyId, alertId, r1 } = await acknowledged({ responders: 3 });
+    await store().recordHeartbeat(await freshHeartbeat(journeyId));
+    expect((await journeyOf(journeyId)).state).toBe('ACTIVE');
+    expect(await removalFor().remove({ journeyId, responderId: r1.userId })).toEqual({
+      type: 'removed',
+    });
+    const before = await recordOf(journeyId);
+    expect(before.responders).not.toContain(r1.userId);
+    expect(before.alerts).toMatchObject([
+      { state: 'RESOLVED', resolution: 'BACK_IN_CONTACT', acknowledgedBy: r1.userId },
+    ]);
+    const log = fakeLog();
+    const api = realApi({ log });
+    const unknown = await closeAsSent(api, r1.credential, syntheticUuid());
+    expect({ status: unknown.status, code: parsedOrNull(unknown.text)?.['code'] }).toEqual({
+      status: 404,
+      code: 'ALERT_NOT_FOUND',
+    });
+
+    const removed = await closeAsSent(api, r1.credential, alertId);
+
+    expect(removed).toEqual(unknown);
+    expect(log.events).toEqual([]);
+    expect(await recordOf(journeyId)).toEqual(before);
   });
 });
 

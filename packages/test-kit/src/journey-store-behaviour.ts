@@ -9764,6 +9764,66 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         },
       );
 
+      // The read's order (LOST-08 review loop 1, code-reviewer; D-100): by
+      // opening, then by ID, as the adapter's `order by opened_at, id` gives
+      // it, so the 24-hour end goes through the alerts due oldest first.
+      // `dueAmong` above sorts what it compares, so it pins no order; this
+      // does. Put in out of that order: opened 26, 28 and 27 hours before
+      // one moment, then three or more opened at the same moment 29 hours
+      // before it, put in until the order they were put in is neither their
+      // IDs' order nor its reverse, so a store that keeps either is caught on
+      // every run, not on some. A `uuid` orders by its bytes, which is the
+      // order of its lower-case text.
+      const moment = await subject.now();
+      const lostAt = async (openedAt: Date) => {
+        const silentSince = ago(openedAt, LOST_CONTACT_AFTER_MS);
+        const { journeyId } = await watched(subject, {
+          state: 'LOST_CONTACT',
+          startedAt: ago(openedAt, HOUR),
+          lastHeartbeatAt: silentSince,
+        });
+        const alertId = await subject.seedAlert({
+          journeyId,
+          state: 'OPEN',
+          openedAt,
+          silentSince,
+        });
+        return { alertId, openedAt };
+      };
+      const putIn: { alertId: string; openedAt: Date }[] = [];
+      for (const hours of [26, 28, 27]) {
+        putIn.push(await lostAt(ago(moment, hours * HOUR)));
+      }
+      const tied: string[] = [];
+      const inIdOrderOrItsReverse = () =>
+        tied.every((id, index) => index === 0 || (tied[index - 1] ?? '') < id) ||
+        tied.every((id, index) => index === 0 || (tied[index - 1] ?? '') > id);
+      while (tied.length < 3 || inIdOrderOrItsReverse()) {
+        if (tied.length >= 12) {
+          throw new Error(
+            'twelve alerts put in at one moment came in ID order or its reverse: not believable',
+          );
+        }
+        const one = await lostAt(ago(moment, 29 * HOUR));
+        tied.push(one.alertId);
+        putIn.push(one);
+      }
+      const byOpeningThenId = [...putIn]
+        .sort(
+          (a, b) =>
+            a.openedAt.getTime() - b.openedAt.getTime() ||
+            (a.alertId < b.alertId ? -1 : a.alertId > b.alertId ? 1 : 0),
+        )
+        .map(({ alertId }) => alertId);
+      const ordered = putIn.map(({ alertId }) => alertId);
+      expect(byOpeningThenId, 'put in out of the read’s order').not.toEqual(ordered);
+      expect(
+        (await subject.store.alertsDueForExpiry()).alerts
+          .map(({ id }) => id)
+          .filter((id) => ordered.includes(id)),
+        'read by opening, then by ID',
+      ).toEqual(byOpeningThenId);
+
       // The write, in every state it ends: one EXPIRED per responder row, the
       // acknowledger told too, at the store's now, counted from the opening.
       for (const [what, seed] of [

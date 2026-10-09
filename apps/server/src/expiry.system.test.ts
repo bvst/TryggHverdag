@@ -758,6 +758,11 @@ describe('LOST-08, SM-06, LOST-02 and REL-08: the 24-hour end is part of the wat
     async (failingOne) => {
       const w = world();
       const first = await lost(w, 2);
+      // RG-03 (LOST-08 review loop 1, code-reviewer): the second opens a
+      // second after the first. The fake now reads the alerts due as the
+      // adapter does, by opening and then by ID, so two opened at the same
+      // moment would come in an order their random IDs decide.
+      w.clock.advance(SECOND);
       const second = await lost(w, 3);
       // Each on someone's hands, so the sweep escalates neither.
       for (const { responders, alertId } of [first, second]) {
@@ -859,11 +864,53 @@ describe('LOST-08, SM-06, LOST-02 and REL-08: the 24-hour end is part of the wat
     expect(w.stateOf(journeyId)).toBe('LOST_CONTACT');
   });
 
+  test('LOST-08-AC10: a first attempt that fails with the alert’s 24 hours passed 30 s ago or more counts as stuck, as the escalation’s does (D-116): the sweep fails with one expiry_failed line, stage expire, with its SQLSTATE, and one expiry_overdue line naming the alert, counts it stuck, never waits for its row, and records no beat; at 24 h 0 min 29.999 s the same failure fails the sweep but is not stuck; once the store answers, the next sweep ends J (SM-06, REL-08)', async () => {
+    // LOST-08 review loop 1 (safety-reviewer, should-fix 1). The escalation's
+    // own test of this is LOST-07-AC16's in escalation.system.test.ts: a
+    // first attempt that fails is not retried with a wait, and past the
+    // stuck threshold it is stuck, so the owner learns which alert, not only
+    // that a sweep failed.
+    const w = world();
+    const { walker, responders, journeyId, alertId, openedAt } = await lost(w, 3);
+    const [r1] = responders as [RegisteredDevice, RegisteredDevice, RegisteredDevice];
+    // On someone's hands, so the sweep escalates nothing on the way.
+    expect((await w.acknowledge(r1, alertId)).status).toBe(200);
+    await jumpTo(w, dayAfter(openedAt, STUCK_AFTER - 1));
+    const beat = await w.beats.lastBeat();
+    const before = snapshot(w, [journeyId]);
+    const asked = w.store.expireRequests().length;
+    w.store.failWith(databaseError('40001'), 'expireAlert');
+
+    expect(await w.watchdog.sweep()).toEqual({ ...QUIET_SWEEP, ok: false });
+    expect(w.log.events).toEqual([{ event: 'expiry_failed', stage: 'expire', code: '40001' }]);
+
+    w.clock.advance(1);
+    expect(await w.watchdog.sweep()).toEqual({ ...QUIET_SWEEP, ok: false, stuck: 1 });
+    expect(w.log.events.slice(1)).toEqual([
+      { event: 'expiry_failed', stage: 'expire', code: '40001' },
+      { event: 'expiry_overdue', alertId },
+    ]);
+    // One attempt each sweep, neither of them a wait: only a skip is retried.
+    expect(w.store.expireRequests().slice(asked)).toEqual([{ alertId }, { alertId }]);
+    expect(await w.beats.lastBeat()).toEqual(beat);
+    expect(snapshot(w, [journeyId])).toEqual(before);
+
+    // The store answering again, the next sweep ends J and beats.
+    w.store.recover();
+    const at = await w.clock.now();
+    expect(await w.watchdog.sweep()).toEqual(QUIET_SWEEP);
+    expect(await w.beats.lastBeat()).toEqual(at);
+    expectExpired(w, { journeyId, alertId, walker, told: responders, at });
+  });
+
   test.each(['first', 'second'] as const)(
     'LOST-08-AC10: of two alerts 30 s past their 24 hours, each with its journey’s row held, the %s one held through its wait and the other let go within it: each meets its own outcome — the held one stuck, with one expiry_overdue line naming it, the other ENDED EXPIRED; the sweep fails, counting one stuck, and records no beat (BUG-28’s lesson, D-116)',
     async (heldOne) => {
       const w = world();
       const first = await lost(w, 2);
+      // RG-03 (LOST-08 review loop 1): opened a second apart, as above, so
+      // "in the order read" is the order opened.
+      w.clock.advance(SECOND);
       const second = await lost(w, 3);
       for (const { responders, alertId } of [first, second]) {
         expect((await w.acknowledge(firstOf(responders), alertId)).status).toBe(200);
@@ -967,6 +1014,31 @@ describe('LOST-08, SM-06, LOST-02 and REL-08: the 24-hour end is part of the wat
     expect(w.store.endOf(first.journeyId).endReason).toBe(EXPIRED);
     expect(w.store.endOf(second.journeyId).endReason).toBe(EXPIRED);
     expect(w.stateOf(young.journeyId)).toBe('LOST_CONTACT');
+    expect(w.log.events).toEqual([]);
+  });
+
+  test('LOST-08-AC10: the expiry run on its own counts a journey ended on its waiting attempt among those it ended: of two alerts 30 s past their 24 hours, one ended at its first attempt and one whose row is let go within the wait, the run answers ok, expired 2, stuck 0, and writes no line (SM-06)', async () => {
+    // LOST-08 review loop 1 (safety-reviewer's note): nothing read the count
+    // the waiting attempts add to, so a run that dropped it, or took one
+    // away, answered as this one does.
+    const w = world();
+    const first = await lost(w, 2);
+    w.clock.advance(SECOND);
+    const second = await lost(w, 3);
+    await jumpTo(w, dayAfter(second.openedAt, STUCK_AFTER));
+    w.store.holdUntilWaited(second.journeyId);
+    const asked = w.store.expireRequests().length;
+    const expiry = createExpiry({ journeys: w.store, log: w.log });
+
+    expect(await expiry.expireDue()).toEqual({ ok: true, expired: 2, stuck: 0 });
+
+    expect(w.store.expireRequests().slice(asked)).toEqual([
+      { alertId: first.alertId },
+      { alertId: second.alertId },
+      { alertId: second.alertId, lockWaitMs: LOCK_WAIT },
+    ]);
+    expect(w.store.endOf(first.journeyId).endReason).toBe(EXPIRED);
+    expect(w.store.endOf(second.journeyId).endReason).toBe(EXPIRED);
     expect(w.log.events).toEqual([]);
   });
 

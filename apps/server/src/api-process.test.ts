@@ -802,6 +802,65 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
   });
 });
 
+// Reading the SQL a store sends, for the fake databases below: the select
+// list or returning clause of a statement, and the table it is about. Shared
+// by LOST-06's "I'm on it" and LOST-08's "They're safe"; moved here,
+// unchanged, from LOST-06's describe when LOST-08's joined it.
+
+/** One item of a select list or a returning clause: its table, if written before it, and its name. */
+interface Item {
+  table: string | undefined;
+  name: string;
+}
+
+/**
+ * The items a select or a returning clause asks for, in order, as
+ * PostgreSQL names its answer's columns: an alias if there is one, else the
+ * column, with the table that qualifies it when it is written.
+ */
+function itemsOf(text: string): Item[] {
+  const list =
+    /^\s*select\s+([\s\S]+?)\s+from\s/i.exec(text)?.[1] ??
+    /\sreturning\s+([\s\S]+)$/i.exec(text)?.[1];
+  if (list === undefined) {
+    return [];
+  }
+  const items: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const character of list) {
+    if (character === '(') depth += 1;
+    if (character === ')') depth -= 1;
+    if (character === ',' && depth === 0) {
+      items.push(current);
+      current = '';
+    } else {
+      current += character;
+    }
+  }
+  items.push(current);
+  return items.map((item) => {
+    const trimmed = item.trim();
+    const qualified = /^"?(\w+)"?\."?(\w+)"?$/.exec(trimmed);
+    if (qualified !== null) {
+      return { table: qualified[1], name: qualified[2] ?? '' };
+    }
+    const named = /("?)(\w+)\1\s*$/.exec(trimmed);
+    return { table: undefined, name: named?.[2] ?? trimmed };
+  });
+}
+
+/** The table a statement is about: the first after from, into or update. */
+function tableOf(text: string): string | undefined {
+  return /\b(?:from|into|update)\s+"?(\w+)"?/i.exec(text)?.[1];
+}
+
+/** A column's name as the table holds it: an alias written in camelCase read as its column. */
+const snake = (name: string) => name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+
+/** The API's lock limit, which the fake answers a set_config with. */
+const LOCK_LIMIT_MS = 5_000;
+
 // ---------------------------------------------------------------------------
 // LOST-06-AC1: what the process hands the acknowledgement module, seen from
 // the database and from stdout. An empty store, or a log that writes nowhere,
@@ -812,57 +871,6 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
 // ---------------------------------------------------------------------------
 
 describe('LOST-06: what the process hands the acknowledgement module, seen from the database and from stdout', () => {
-  /** One item of a select list or a returning clause: its table, if written before it, and its name. */
-  interface Item {
-    table: string | undefined;
-    name: string;
-  }
-
-  /**
-   * The items a select or a returning clause asks for, in order, as
-   * PostgreSQL names its answer's columns: an alias if there is one, else the
-   * column, with the table that qualifies it when it is written.
-   */
-  function itemsOf(text: string): Item[] {
-    const list =
-      /^\s*select\s+([\s\S]+?)\s+from\s/i.exec(text)?.[1] ??
-      /\sreturning\s+([\s\S]+)$/i.exec(text)?.[1];
-    if (list === undefined) {
-      return [];
-    }
-    const items: string[] = [];
-    let depth = 0;
-    let current = '';
-    for (const character of list) {
-      if (character === '(') depth += 1;
-      if (character === ')') depth -= 1;
-      if (character === ',' && depth === 0) {
-        items.push(current);
-        current = '';
-      } else {
-        current += character;
-      }
-    }
-    items.push(current);
-    return items.map((item) => {
-      const trimmed = item.trim();
-      const qualified = /^"?(\w+)"?\."?(\w+)"?$/.exec(trimmed);
-      if (qualified !== null) {
-        return { table: qualified[1], name: qualified[2] ?? '' };
-      }
-      const named = /("?)(\w+)\1\s*$/.exec(trimmed);
-      return { table: undefined, name: named?.[2] ?? trimmed };
-    });
-  }
-
-  /** The table a statement is about: the first after from, into or update. */
-  function tableOf(text: string): string | undefined {
-    return /\b(?:from|into|update)\s+"?(\w+)"?/i.exec(text)?.[1];
-  }
-
-  /** A column's name as the table holds it: an alias written in camelCase read as its column. */
-  const snake = (name: string) => name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-
   /**
    * The fake database for one "I'm on it": R1's device, J LOST_CONTACT, and
    * its alert in `state` with R1, R2 and R3 its responders. It answers by
@@ -970,9 +978,6 @@ describe('LOST-06: what the process hands the acknowledgement module, seen from 
     return { device, journeyId, alertId, responderIds, handler, unanswered };
   }
 
-  /** The API's lock limit, which the fake answers a set_config with. */
-  const LOCK_LIMIT_MS = 5_000;
-
   async function sendAcknowledgement(port: number, credential: string, alertId: string) {
     return fetch(
       `http://127.0.0.1:${String(port)}${apiPath(`alerts/${alertId}/acknowledgement`)}`,
@@ -1055,6 +1060,225 @@ describe('LOST-06: what the process hands the acknowledgement module, seen from 
           .map(({ text }) => text)
           .filter((text) => /^\s*(insert|update|delete)\b/i.test(text)),
       ).toEqual([]);
+    } finally {
+      spy.mockRestore();
+      await api.stop();
+      await database.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LOST-08-AC1 and AC2: what the process hands the closure module, seen from
+// the database and from stdout. LOST-08 review loop 1 (safety-reviewer,
+// should-fix 2; D-094): the closure service handed nothing, or a log that
+// writes nowhere, survived every test, since none sent a close through the
+// process (the mutant at api-process.ts's closure wiring). Told apart here as
+// LOST-06's wiring is above: by what the fake database was asked, in what
+// order, and by what reached the process's own stdout.
+// ---------------------------------------------------------------------------
+
+describe('LOST-08: what the process hands the closure module, seen from the database and from stdout', () => {
+  /**
+   * The fake database for one "They're safe": R1's device, J and its alert,
+   * R1, R2 and R3 its responders, R1 the alert's acknowledger. `ACKNOWLEDGED`:
+   * J LOST_CONTACT, so R1 can close it. `RESOLVED`: R1 closed it already, J
+   * ENDED, SAFE. It answers by table and column name, in the order asked,
+   * whatever SQL the store writes, as LOST-06's does; a column it has no value
+   * for is refused, and named in `unanswered`.
+   */
+  function closureDatabase(state: 'ACKNOWLEDGED' | 'RESOLVED') {
+    const device = { id: syntheticUuid(), userId: syntheticUuid() };
+    const journeyId = syntheticUuid();
+    const alertId = syntheticUuid();
+    const responderIds = [device.userId, syntheticUuid(), syntheticUuid()];
+    const closed = state === 'RESOLVED';
+    const tables: Record<string, Record<string, string | null>> = {
+      journeys: {
+        id: journeyId,
+        walker_id: syntheticUuid(),
+        device_id: syntheticUuid(),
+        state: closed ? 'ENDED' : 'LOST_CONTACT',
+        started_at: '2031-02-03 03:00:00+00',
+        last_heartbeat_at: '2031-02-03 03:55:00+00',
+        ended_at: closed ? '2031-02-03 04:20:00+00' : null,
+        end_reason: closed ? 'SAFE' : null,
+      },
+      alerts: {
+        id: alertId,
+        journey_id: journeyId,
+        state,
+        opened_at: '2031-02-03 04:00:00+00',
+        silent_since: '2031-02-03 03:55:00+00',
+        resolved_at: closed ? '2031-02-03 04:20:00+00' : null,
+        resolution: closed ? 'SAFE' : null,
+        acknowledged_by: device.userId,
+        acknowledged_at: '2031-02-03 04:01:00+00',
+      },
+      journey_responders: { journey_id: journeyId },
+      outbox: { alert_id: alertId, kind: 'SAFE', attempts: '0' },
+    };
+    const unanswered: string[] = [];
+    /** The session limits the API reads back once at start (LOST-02-AC17), as in force. */
+    const inForce: Record<string, FakePgSetting> = {
+      idle_in_transaction_session_timeout: { setting: '10000', unit: 'ms' },
+      lock_timeout: { setting: String(LOCK_LIMIT_MS), unit: 'ms' },
+    };
+
+    const valueOf = (item: Item, main: string | undefined, recipient: string): string | null => {
+      const name = snake(item.name);
+      if (name === 'responder_id' || name === 'recipient_id') {
+        return recipient;
+      }
+      if (main === 'outbox' && name === 'id') {
+        return syntheticUuid();
+      }
+      for (const table of [item.table, main, 'alerts', 'journeys', 'outbox']) {
+        const row = table === undefined ? undefined : tables[table];
+        if (row !== undefined && name in row) {
+          return row[name] ?? null;
+        }
+      }
+      throw new Error(`no value for ${item.table ?? main ?? '?'}.${item.name}`);
+    };
+
+    const handler: FakePostgresHandler = (query) => {
+      const settings = pgSettingsAnswer(query, inForce);
+      if (settings !== undefined) {
+        return settings;
+      }
+      const { text } = query;
+      if (/^(begin|commit|rollback)\b/i.test(text)) {
+        return { columns: [], rows: [] };
+      }
+      if (/\bset_config\b/i.test(text)) {
+        return { columns: ['set_config'], rows: [[String(LOCK_LIMIT_MS)]] };
+      }
+      if (/\bfrom "?devices"?/i.test(text)) {
+        return { columns: ['id', 'user_id'], rows: [[device.id, device.userId]] };
+      }
+      // A statement that begins with a `with` (the stand-downs, written
+      // after the withdrawal in one statement) is answered as its last
+      // returning clause names, for the table its insert writes into.
+      const withClause = /^\s*with\b/i.test(text);
+      const last = text.search(/\sreturning\s(?![\s\S]*\sreturning\s)/i);
+      const items = itemsOf(withClause && last >= 0 ? text.slice(last) : text);
+      const main = withClause
+        ? (/\binsert\s+into\s+"?(\w+)"?/i.exec(text)?.[1] ?? tableOf(text))
+        : tableOf(text);
+      if (items.length === 0) {
+        return /^\s*(update|insert)\b/i.test(text)
+          ? { columns: [], rows: [[]] }
+          : { columns: [], rows: [] };
+      }
+      // One row per responder for a read of the responder rows, one per
+      // responder but R1 for the stand-downs written, else one.
+      const standDowns = main === 'outbox' && /\binsert\s+into\b/i.test(text);
+      const recipients = standDowns
+        ? responderIds.slice(1)
+        : items.some(({ name }) => snake(name) === 'responder_id')
+          ? responderIds
+          : [device.userId];
+      try {
+        return {
+          columns: items.map(({ name }) => name),
+          rows: recipients.map((recipient) => items.map((item) => valueOf(item, main, recipient))),
+        };
+      } catch (error) {
+        unanswered.push(`${(error as Error).message} in: ${text}`);
+        throw error;
+      }
+    };
+    return { device, journeyId, alertId, responderIds, handler, unanswered };
+  }
+
+  async function sendClosure(port: number, credential: string, alertId: string) {
+    return fetch(`http://127.0.0.1:${String(port)}${apiPath(`alerts/${alertId}/closure`)}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${credential}` },
+    });
+  }
+
+  test('LOST-08-AC1: through the process, "They’re safe" is read and written by the database store: the alert read, then one begin…commit that takes the journey’s row for update, ends the journey SAFE, resolves the alert SAFE and writes the stand-downs, for the device’s own user; the credential never reaches the database', async () => {
+    const credential = syntheticCredential();
+    const { device, journeyId, alertId, handler, unanswered } = closureDatabase('ACKNOWLEDGED');
+    const database = await listeningFakePostgres(handler);
+    const api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+
+    try {
+      const response = await sendClosure(api.port, credential, alertId);
+
+      expect(unanswered, 'queries the fake database could not answer').toEqual([]);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ outcome: 'CLOSED' });
+      const texts = database.queries.map(({ text }) => text);
+      const index = (pattern: RegExp) => texts.findIndex((text) => pattern.test(text));
+      const begin = index(/^begin\b/i);
+      const commit = index(/^commit\b/i);
+      const locked = index(/\bfrom "?journeys"?[\s\S]*\bfor update\b/i);
+      const ended = index(/^update "?journeys"?/i);
+      const resolved = index(/^update "?alerts"?/i);
+      const standDowns = index(/\binsert into "?outbox"?/i);
+      // The module's read, a plain one, before the transaction.
+      const read = index(/\bfrom "?alerts"?/i);
+      expect(read).toBeGreaterThan(-1);
+      expect(read).toBeLessThan(begin);
+      expect(begin).toBeGreaterThan(-1);
+      expect(locked).toBeGreaterThan(begin);
+      expect(ended).toBeGreaterThan(locked);
+      expect(resolved).toBeGreaterThan(ended);
+      expect(standDowns).toBeGreaterThan(resolved);
+      expect(commit).toBeGreaterThan(standDowns);
+      expect(texts.filter((text) => /^begin\b/i.test(text))).toHaveLength(1);
+      // The journey ended SAFE and the alert resolved SAFE, as the store writes them.
+      expect(database.queries[ended]?.values).toEqual(
+        expect.arrayContaining(['ENDED', 'SAFE', journeyId]),
+      );
+      expect(database.queries[resolved]?.values).toEqual(expect.arrayContaining(['SAFE']));
+      // For the device's own user, and the alert named in the path.
+      expect(JSON.stringify(database.queries.slice(begin, commit))).toContain(device.userId);
+      expect(JSON.stringify(database.queries.slice(begin, commit))).toContain(alertId);
+      expect(JSON.stringify(database.queries)).not.toContain(credential);
+    } finally {
+      await api.stop();
+      await database.close();
+    }
+  });
+
+  test('LOST-08-AC2: through the process, a close of an alert already closed is 409 ALERT_RESOLVED; its closure_ignored line reaches the process’s own stdout, naming the alert and the reason and nothing else; nothing is written to the database', async () => {
+    const credential = syntheticCredential();
+    const { device, alertId, handler, unanswered } = closureDatabase('RESOLVED');
+    const database = await listeningFakePostgres(handler);
+    // The log is made at start-up, as in production; the capture comes after.
+    const api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+    const seen: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      seen.push(String(chunk));
+      return true;
+    });
+
+    try {
+      const response = await sendClosure(api.port, credential, alertId);
+      spy.mockRestore();
+
+      expect(unanswered, 'queries the fake database could not answer').toEqual([]);
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: 'ALERT_RESOLVED' });
+      const lines = seen
+        .join('')
+        .split('\n')
+        .filter((line) => line.includes('closure_ignored'));
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0] ?? 'null')).toEqual({
+        event: 'closure_ignored',
+        reason: 'ALERT_RESOLVED',
+        alertId,
+      });
+      expect(seen.join('')).not.toContain(device.userId);
+      expect(seen.join('')).not.toContain(credential);
+      const texts = database.queries.map(({ text }) => text);
+      expect(texts.filter((text) => /^begin\b/i.test(text))).toEqual([]);
+      expect(texts.filter((text) => /^\s*(with|insert|update|delete)\b/i.test(text))).toEqual([]);
     } finally {
       spy.mockRestore();
       await api.stop();

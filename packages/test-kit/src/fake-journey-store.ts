@@ -212,7 +212,8 @@
  *   - `alertsDueForExpiry` is a plain read of every unresolved alert opened
  *     24 hours or more before the store's now (ALERT_EXPIRES_AFTER_MS, written
  *     out: no caller hands it a threshold), with its journey and the journey's
- *     state, in the order the alerts were opened or put in, and that now;
+ *     state, ordered by opening and then by ID as the adapter orders them,
+ *     and that now;
  *   - `expireAlert` takes the alert's journey's "row" first, as the
  *     escalation does: skipped while held, or, told to wait, `held` for a
  *     holder that never lets go, and decided as a holder that lets go left it.
@@ -2400,8 +2401,14 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         // A plain read (LOST-08, approach item 6): an alert whose journey's
         // row another transaction holds is read all the same. Every
         // unresolved alert opened 24 hours or more before now, whatever its
-        // state and whether its journey has a responder, in the order opened
-        // or put in. No comparison with a time that is not one holds.
+        // state and whether its journey has a responder. No comparison with a
+        // time that is not one holds.
+        //
+        // In the adapter's order, `order by opened_at, id` (LOST-08 review
+        // loop 1, code-reviewer; D-100): by opening, then by ID, never in the
+        // order put in, so a test that leans on the order leans on the one
+        // the database gives. A `uuid` orders by its bytes, which is the
+        // order of its lower-case text, as every ID here is held.
         return {
           now,
           alerts: alerts
@@ -2409,6 +2416,11 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
               (alert) =>
                 alert.state !== 'RESOLVED' &&
                 now.getTime() - alert.openedAt.getTime() >= ALERT_EXPIRES_AFTER_MS,
+            )
+            .sort(
+              (a, b) =>
+                a.openedAt.getTime() - b.openedAt.getTime() ||
+                (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
             )
             .map(({ id, journeyId, openedAt }) => ({
               id,
