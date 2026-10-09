@@ -37,3 +37,5 @@
 - [BUG-30/31 audit](project_bug30_31_audit.md) — PASS 75ca5d1; stop-gate fingerprint null fallback -> constant survives; loader-in-NODE_OPTIONS for hook children; cache-skip mutant checklist
 - [BUG-32 audit](project_bug32_audit.md) — PASS 33e27ac/3c6b6ad; 14 faults, read-back ordering M12 survives (note); test-author table file absent; local mutation gave no score (BUG-33, exit 144)
 - [BUG-36..39 audit](project_bug36_39_audit.md) — PASS 019e941/9191d49; loop 1 PASS 1f7ce47 (47 red for right reasons, 56 faults, 42 killed, empty agent_id now killed; gt-ampersand redirect bypass and stale known limits should-fix); affected.mjs INERT gap queued
+- [SM-10 audit](project_sm10_audit.md) — BLOCK 3da9517: reset read without unresolved filter survives (A-R1, probe kills); W5/U2 should-fix; D-124 cache sound; gate:integrity 5/5 with NODE_USE_ENV_PROXY=1
+- [First-row reads](feedback_first_row_reads.md) — [first] of a parent-keyed filtered select needs a filtered-out sibling seeded first; plant the filter drop on both stores
