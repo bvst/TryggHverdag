@@ -1018,6 +1018,19 @@ describe('SM-10 and LOST-06: removing the acknowledger resets the journey’s un
       status: 200,
       body: ON_IT,
     });
+    // The read this test guards against has no filter on the state and no
+    // ORDER BY, so it meets J's alerts in storage order. Only while that
+    // order puts the RESOLVED alert first does a read of the first alert
+    // differ from the reset's read of the unresolved one (review loop 3,
+    // test-auditor's SF-1). Read here in the same shape, unordered.
+    const unordered = await connection().query<{ state: string }>(
+      'select state from alerts where journey_id = $1',
+      [journeyId],
+    );
+    expect(
+      unordered.rows.map(({ state }) => state)[0],
+      'an unordered read of J’s alerts must meet the RESOLVED one first; otherwise this test can no longer tell the reset’s read of the unresolved alert from a read of the first alert',
+    ).toBe('RESOLVED');
 
     expect(await remove(journeyId, r1.userId)).toEqual(REMOVED);
 

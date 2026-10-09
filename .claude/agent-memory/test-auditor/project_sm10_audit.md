@@ -25,3 +25,13 @@ l6all 5 s, L3 SM-10 slice 29 s. Probe test text in ta-sm10/probe-r1.ts.txt (appe
   already changed in the test commit; watchdog module unchanged), fine.
 - gate:integrity 5 of 5 with NODE_USE_ENV_PROXY=1 (first time); pushed, no PR, check-runs total_count 0.
 Related: [[lost07-audit]], [[equal-seed-columns]], [[first-row-reads]]
+
+**Loop 2, PASS at e7f082d** (2026-10-09; tests-only delta a172a67..e7f082d, numstat 0 deletions in all 3 test files; spec AC4 row +1 file).
+Harness ta-sm10/loop2/{spec,spec2}.mjs via ta-lost07/harness2.mjs: 18 faults, all killed for the right reason, controls green.
+B1 A-R1 dies at L3 shared (behaviour 4 new block) AND L3 flow (removal.integration); F-R1 (twin: first alert, reset only if
+unresolved) dies at L2 + new L6 flow. S1 A-W5/F-W5, reset's own withdrawal A-RW/F-RW (letTimePass 50 + "now moved on" assert,
+so not latency-luck), S2 OPEN-only / minus-ACK / minus-ESC / plus-RESOLVED on both sides, S3 stand-down round 1 both sides.
+Should-fix left: B1's L3 kill depends on heap order (faulty read = seq scan, no partial index). Shared-suite seeds landed
+(5,123)/(5,125) one run, (4,117)/(4,119) the next: ~10 tuples from a page end, with earlier pages part-filled (p1 34 lp, p2 8 lp)
+by racers and no autovacuum run. The flow test is on page 0 of a 1-page table (13 tuples), so it holds today. Asked for a
+precondition assert (unordered select puts the RESOLVED alert first) so it cannot go vacuous silently. Check runs on e7f082d: 0.
