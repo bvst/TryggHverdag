@@ -2978,8 +2978,15 @@ function kindsNamedIn(query: FakePostgresQuery): string[] {
     // claim names it, and the test below compares what this finds with the
     // test kit's PUSH_KINDS, which has it. Without it here, a claim that left
     // NO_RESPONDER out would look the same as one that named it.
+    // RG-03 (LOST-08; not in the spec's "Existing assertions that change by
+    // design", found by running this file against a throwaway reference of
+    // the spec's lists): SAFE and EXPIRED are push kinds now (LOST-08-AC15),
+    // so the push claim names them, and the test below compares what this
+    // finds with the test kit's PUSH_KINDS, which has them. Without them
+    // here, the claim's kinds could never equal that list, and a claim that
+    // left either out would look the same as one that named it.
     for (const [kind] of part.matchAll(
-      /\b(?:LOST_CONTACT_SMS|LOST_CONTACT|BACK_IN_CONTACT|HOME|ACKNOWLEDGED|NO_RESPONDER)\b/g,
+      /\b(?:LOST_CONTACT_SMS|LOST_CONTACT|BACK_IN_CONTACT|HOME|ACKNOWLEDGED|NO_RESPONDER|SAFE|EXPIRED)\b/g,
     )) {
       found.add(kind);
     }

@@ -43,7 +43,11 @@ export const PUSH_FAILURE_REASONS: readonly PushFailureReason[] = [
  * channel: the push claim never hands out the SMS kind, nor the SMS claim a
  * push kind (LOST-07, approach item 2). SM-10 adds the walker's warning that
  * the journey's last responder was removed (SM-02, D-087): a journey's
- * message, not an alert's, by push, and never at the critical level.
+ * message, not an alert's, by push, and never at the critical level. LOST-08
+ * adds the stand-downs of its two resolutions, each named after it (D-112):
+ * "they're safe", sent to every responder but the one who closed the alert,
+ * and the 24-hour end, sent to every responder (SM-06). Both by push, and
+ * never at the critical level (D-087).
  */
 export type MessageKind =
   | 'LOST_CONTACT'
@@ -51,7 +55,9 @@ export type MessageKind =
   | 'HOME'
   | 'ACKNOWLEDGED'
   | 'LOST_CONTACT_SMS'
-  | 'NO_RESPONDER';
+  | 'NO_RESPONDER'
+  | 'SAFE'
+  | 'EXPIRED';
 
 /** Every kind, in the server's order (`MESSAGE_KINDS`), written out: the test kit imports nothing from the server. */
 export const MESSAGE_KINDS: readonly MessageKind[] = [
@@ -61,6 +67,8 @@ export const MESSAGE_KINDS: readonly MessageKind[] = [
   'ACKNOWLEDGED',
   'LOST_CONTACT_SMS',
   'NO_RESPONDER',
+  'SAFE',
+  'EXPIRED',
 ];
 
 /** A message as the sender hands it to the port: no personal detail, only who and what kind. */

@@ -189,6 +189,52 @@
  *   - a fake given no clock throws when asked to remove, or to count unheard
  *     alerts; a refusal it needs no time for is answered without one.
  *
+ * And for "They're safe" and the 24-hour end (LOST-08, SM-06, its spec's
+ * approach items 2 to 10, D-125, D-126):
+ *   - `alertForClosure` is a plain read, the same as "I'm on it"'s: the
+ *     alert's state, who is recorded on it, and its journey's responders, or
+ *     null for an ID no alert has. It never waits for a held row;
+ *   - `recordClosure` takes the alert's journey's "row" first, and waits while
+ *     `hold` holds it, as the adapter's `for update` waits; then decides by
+ *     the close rule, in its order, under that "lock": no alert, or a sender
+ *     who is not a responder of the alert's journey, is ALERT_NOT_FOUND; a
+ *     RESOLVED alert, whatever resolved it, is ALERT_RESOLVED; an alert that
+ *     is not ACKNOWLEDGED with the sender recorded (both halves read) is
+ *     NOT_THE_ACKNOWLEDGER; each of these writes nothing. Otherwise, at the
+ *     store's now, in one step: the journey ENDED, end reason SAFE, its end
+ *     time that now (a journey that is not LOST_CONTACT then is a read this
+ *     fake does not expect, and it throws, writing nothing); and the alert
+ *     resolved as every resolution is, resolution SAFE, its unsent
+ *     WITHDRAWN_WHEN_RESOLVED kinds withdrawn, and one SAFE stand-down per
+ *     responder row but the closer's, each held per responder as today. The
+ *     closer stays recorded on the alert: who closed it is its
+ *     `acknowledgedBy` (D-126);
+ *   - `alertsDueForExpiry` is a plain read of every unresolved alert opened
+ *     24 hours or more before the store's now (ALERT_EXPIRES_AFTER_MS, written
+ *     out: no caller hands it a threshold), with its journey and the journey's
+ *     state, ordered by opening and then by ID as the adapter orders them,
+ *     and that now;
+ *   - `expireAlert` takes the alert's journey's "row" first, as the
+ *     escalation does: skipped while held, or, told to wait, `held` for a
+ *     holder that never lets go, and decided as a holder that lets go left it.
+ *     Under that "lock": skipped, writing nothing, when the journey's
+ *     unresolved alert is not the one named (resolved since the read), or
+ *     when the journey is not LOST_CONTACT or the alert is under its 24
+ *     hours by the store's now. Otherwise, in one step: the journey ENDED,
+ *     end reason EXPIRED, at that now, and the alert resolved EXPIRED, with
+ *     one EXPIRED stand-down per responder row, the acknowledger's included;
+ *     none when the journey has no responder row;
+ *   - a start whose insert meets the walker's unended journey reads which
+ *     journey won, as the adapter does after its conflict; one that finds the
+ *     journey ended meanwhile, by a close or the 24-hour end, retries its
+ *     insert once, and a second such race rejects, storing nothing (approach
+ *     item 9). `afterConflict` and `beforeRetry` place a test's action in
+ *     those two moments, which `beforeNext` cannot reach: it runs before the
+ *     insert meets anything;
+ *   - a fake given no clock throws when asked to close or expire, or to read
+ *     the alerts due to expire; a read, and a refusal it needs no time for,
+ *     are answered without one.
+ *
  * The shared behaviour suite (`journey-store-behaviour.ts`) runs the same
  * expectations against this fake and against the real adapter, which is
  * what keeps the two from drifting apart.
@@ -215,9 +261,36 @@ const LOCK_TIMEOUT_MAX_MS = 2_147_483_647;
  * review loop 3): listed, so a kind added later is withdrawn only if it opts
  * in. The server's `ALERT_RESOLUTIONS`, written out because the test kit does
  * not import the server; exported so the domain's test holds the two equal
- * (LOST-06-AC13).
+ * (LOST-06-AC13). LOST-08 adds "they're safe" and the 24-hour end, each a
+ * resolution and so a stand-down (D-112, loop 3).
  */
-export const WITHDRAWN_WHEN_OPENED: readonly MessageKind[] = ['BACK_IN_CONTACT', 'HOME'];
+export const WITHDRAWN_WHEN_OPENED: readonly MessageKind[] = [
+  'BACK_IN_CONTACT',
+  'HOME',
+  'SAFE',
+  'EXPIRED',
+];
+
+/**
+ * Every way an alert resolves (LOST-03, LOST-08): back in contact, "I'm home",
+ * "they're safe" and the 24-hour end, each also the kind of the stand-down it
+ * sends, by its own name (D-112). The server's `ALERT_RESOLUTIONS`, written
+ * out and held equal to it by the domain's test (LOST-08-AC15), as the open's
+ * list above is.
+ */
+export const ALERT_RESOLUTIONS: readonly FakeAlertResolution[] = [
+  'BACK_IN_CONTACT',
+  'HOME',
+  'SAFE',
+  'EXPIRED',
+];
+
+/**
+ * Every reason a journey ends (LOST-03, LOST-08): "I'm home", "they're safe"
+ * and the 24-hour end. The server's `JOURNEY_END_REASONS`, held equal to it by
+ * the domain's test (LOST-08-AC12).
+ */
+export const JOURNEY_END_REASONS: readonly FakeJourneyEndReason[] = ['HOME', 'SAFE', 'EXPIRED'];
 
 /**
  * The kinds an alert's resolution withdraws from its own alert, unsent (D-111,
@@ -252,7 +325,8 @@ export const SMS_KINDS: readonly MessageKind[] = ['LOST_CONTACT_SMS'];
  * The kinds that go by push, which only the push claim hands out: every other
  * kind, in `MESSAGE_KINDS`' order. The server's `PUSH_KINDS`, held equal to it
  * by the domain's test (LOST-07-AC14). SM-10 adds the walker's warning,
- * NO_RESPONDER, last (SM-10-AC17).
+ * NO_RESPONDER, last (SM-10-AC17); LOST-08 the two stand-downs SAFE and
+ * EXPIRED, after it (LOST-08-AC15).
  */
 export const PUSH_KINDS: readonly MessageKind[] = [
   'LOST_CONTACT',
@@ -260,6 +334,8 @@ export const PUSH_KINDS: readonly MessageKind[] = [
   'HOME',
   'ACKNOWLEDGED',
   'NO_RESPONDER',
+  'SAFE',
+  'EXPIRED',
 ];
 
 /**
@@ -281,7 +357,8 @@ export const WITHDRAWN_WHEN_RESET: readonly MessageKind[] = ['ACKNOWLEDGED'];
  * The kinds a removal withdraws from the removed responder, of any of the
  * journey's alerts, while unsent (SM-10, D-122 item 2): every kind that is not
  * a journey's. The server's `WITHDRAWN_WHEN_REMOVED`, held equal to it by the
- * domain's test (SM-10-AC17).
+ * domain's test (SM-10-AC17). LOST-08's two stand-downs are alert kinds, so
+ * they join it (LOST-08-AC15).
  */
 export const WITHDRAWN_WHEN_REMOVED: readonly MessageKind[] = [
   'LOST_CONTACT',
@@ -289,6 +366,8 @@ export const WITHDRAWN_WHEN_REMOVED: readonly MessageKind[] = [
   'HOME',
   'ACKNOWLEDGED',
   'LOST_CONTACT_SMS',
+  'SAFE',
+  'EXPIRED',
 ];
 
 /**
@@ -458,11 +537,17 @@ export interface ClaimedMessages {
 /** The alert states, as the server's state machine lists them (D-033). */
 export type FakeAlertState = 'OPEN' | 'ESCALATED' | 'ACKNOWLEDGED' | 'RESOLVED';
 
-/** How an alert was resolved (LOST-03): the server's `ALERT_RESOLUTIONS`, each a message kind. */
-export type FakeAlertResolution = Extract<MessageKind, 'BACK_IN_CONTACT' | 'HOME'>;
+/**
+ * How an alert was resolved (LOST-03, LOST-08): the server's
+ * `ALERT_RESOLUTIONS`, each a message kind.
+ */
+export type FakeAlertResolution = Extract<
+  MessageKind,
+  'BACK_IN_CONTACT' | 'HOME' | 'SAFE' | 'EXPIRED'
+>;
 
-/** Why a journey ended (LOST-03): the server's `JOURNEY_END_REASONS`. */
-export type FakeJourneyEndReason = 'HOME';
+/** Why a journey ended (LOST-03, LOST-08): the server's `JOURNEY_END_REASONS`. */
+export type FakeJourneyEndReason = 'HOME' | 'SAFE' | 'EXPIRED';
 
 /**
  * An alert as stored: no position, no battery, no phone time (LOST-02-AC13).
@@ -643,6 +728,76 @@ export type RecordAcknowledgementResult =
   | { outcome: 'not_recorded'; decision: AcknowledgementNotRecorded };
 
 /**
+ * An alert as "They're safe" reads it (LOST-08): its state, who is recorded on
+ * it, null for nobody, and its journey's responders. The server's
+ * `AlertForClosure`, by shape: "I'm on it"'s read.
+ */
+export type AlertForClosure = AlertForAcknowledgement;
+
+/** "They're safe" as the store takes it (LOST-08): the alert, by its ID, and the responder who sent it. */
+export interface ClosureToRecord {
+  alertId: string;
+  responderId: string;
+}
+
+/**
+ * The close rule's outcomes other than "closed" (LOST-08, approach item 2):
+ * the alert over, whatever resolved it; or refused, for no such alert for the
+ * sender, or a sender who is not the alert's current acknowledger. The
+ * server's `CloseRefusal`, by shape.
+ */
+export type CloseRefusal =
+  | { type: 'ignored'; reason: 'ALERT_RESOLVED' }
+  | { type: 'refused'; reason: 'ALERT_NOT_FOUND' | 'NOT_THE_ACKNOWLEDGER' };
+
+/**
+ * Closed now, with the stand-downs written, one per responder row but the
+ * closer's; or not closed, with the rule's decision under the lock, and
+ * nothing written. The server's `RecordClosureResult`, by shape.
+ */
+export type RecordClosureResult =
+  | { outcome: 'closed'; messages: AlertMessage[] }
+  | { outcome: 'not_closed'; decision: CloseRefusal };
+
+/**
+ * An alert as the 24-hour end's read returns it (LOST-08, SM-06): unresolved,
+ * opened 24 hours or more before the store's now, with its journey and the
+ * journey's state as read. The server's `ExpiringAlerts` entry, by shape.
+ */
+export interface ExpiringAlert {
+  id: string;
+  journeyId: string;
+  journeyState: FakeJourneyState;
+  openedAt: Date;
+}
+
+/** What the 24-hour end's read returns: the alerts due, and the store's now, from the same read. */
+export interface ExpiringAlerts {
+  now: Date;
+  alerts: ExpiringAlert[];
+}
+
+/**
+ * The 24-hour end as the watchdog asks for it (LOST-08): `lockWaitMs` only when
+ * told to wait for the row. No threshold: the store decides by its own 24
+ * hours, as the adapter does.
+ */
+export interface ExpireRequest {
+  alertId: string;
+  lockWaitMs?: number | undefined;
+}
+
+/**
+ * Expired: the journey ENDED (EXPIRED) and the alert resolved EXPIRED, with
+ * one EXPIRED stand-down per responder row. Skipped: nothing written, because
+ * the row was held (without a wait), or the alert was no longer due under the
+ * journey's row. Held: an expiry that waited for the row ran out of wait, and
+ * nothing was written. The server's `ExpireAlertResult`, by shape.
+ */
+export type ExpireAlertResult =
+  { outcome: 'expired'; messages: AlertMessage[] } | { outcome: 'skipped' } | { outcome: 'held' };
+
+/**
  * An outbox message as stored. Its ID is opaque: never a user's, a journey's
  * or an alert's. `withdrawnAt` is when it was withdrawn, null if never
  * (LOST-03, D-111): a withdrawn message is never handed out again.
@@ -688,7 +843,11 @@ export type JourneyStoreCall =
   | 'unsentSmsCount'
   | 'journeyForRemoval'
   | 'removeResponder'
-  | 'unheardAlertCount';
+  | 'unheardAlertCount'
+  | 'alertForClosure'
+  | 'recordClosure'
+  | 'alertsDueForExpiry'
+  | 'expireAlert';
 
 export interface FakeJourneyStore {
   /** The walker's journey in any state but ENDED, or null. */
@@ -797,6 +956,34 @@ export interface FakeJourneyStore {
    * clock to remove one.
    */
   removeResponder(removal: RemovalToRecord): Promise<RemoveResponderResult>;
+  /**
+   * LOST-08: the alert this ID names, read without a lock, with its journey's
+   * responders; or null for an ID no alert has. A plain read: it never waits
+   * for a held row.
+   */
+  alertForClosure(alertId: string): Promise<AlertForClosure | null>;
+  /**
+   * LOST-08: waits for the alert's journey's row while it is held, then
+   * decides by the close rule under that "lock" and writes what it decided:
+   * the journey ENDED, SAFE, and the alert resolved SAFE, with one SAFE
+   * stand-down per responder row but the closer's; or nothing, with the
+   * rule's other outcome. Needs a clock to close one.
+   */
+  recordClosure(closure: ClosureToRecord): Promise<RecordClosureResult>;
+  /**
+   * LOST-08, SM-06: every unresolved alert opened 24 hours or more before now,
+   * with its journey, read without locking; and now. Needs a clock.
+   */
+  alertsDueForExpiry(): Promise<ExpiringAlerts>;
+  /**
+   * LOST-08, SM-06: takes the alert's journey's "row" first, decides by the
+   * 24-hour rule under it, and writes what it decides: the journey ENDED,
+   * EXPIRED, and the alert resolved EXPIRED, with one EXPIRED stand-down per
+   * responder row; or nothing. A held row is skipped, unless `lockWaitMs` is
+   * given: then it waits for it, and answers `held` if it is not let go.
+   * Needs a clock.
+   */
+  expireAlert(request: ExpireRequest): Promise<ExpireAlertResult>;
   /** The port accepted it: sent at now. Needs a clock. */
   markSent(messageId: string): Promise<void>;
   /** The port did not accept it: this reason, and due again `retryAfterMs` after now. Needs a clock. */
@@ -945,6 +1132,23 @@ export interface FakeJourneyStore {
   openRequests(): OpenRequest[];
   /** LOST-07: every escalation asked for so far, in order, with its wait if it had one. Copies. */
   escalateRequests(): EscalateRequest[];
+  /** LOST-08: every 24-hour end asked for so far, in order, with its wait if it had one. Copies. */
+  expireRequests(): ExpireRequest[];
+  /**
+   * LOST-08-AC21: queues `action` for the next start whose insert meets the
+   * walker's unended journey, to run after that conflict and before the start
+   * reads which journey won: the moment a close or the 24-hour end, coming
+   * from outside the walker's phone, can end the journey it met. Awaited. One
+   * action per conflict, in order: a start's retry that meets a journey too
+   * takes the next one.
+   */
+  afterConflict(action: () => unknown): void;
+  /**
+   * LOST-08-AC21: queues `action` for the next start's retry, to run as the
+   * retry is made, before it meets the one-unended-journey rule: another start
+   * that wins, say. Awaited.
+   */
+  beforeRetry(action: () => unknown): void;
   /** The port methods called so far, in order. */
   readonly calls: readonly JourneyStoreCall[];
   /**
@@ -969,6 +1173,14 @@ export interface FakeJourneyStore {
  * reading 1).
  */
 const LOST_CONTACT_AFTER_MS = 300_000;
+
+/**
+ * Twenty-four hours (SM-06, D-126): the server's ALERT_EXPIRES_AFTER_MS,
+ * written out because the test kit imports nothing from the server. An
+ * unresolved alert opened this long ago or more, by the store's now, ends its
+ * journey. No caller hands the store a threshold, so none can choose another.
+ */
+const ALERT_EXPIRES_AFTER_MS = 86_400_000;
 
 /** A journey as this fake keeps it: what SM-01 reads, and what D-101, LOST-01 and LOST-03 added. */
 interface KeptJourney extends StoredJourney {
@@ -1083,6 +1295,10 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
   const lettingGo = new Map<string, () => void | Promise<void>>();
   const openRequests: OpenRequest[] = [];
   const escalateRequests: EscalateRequest[] = [];
+  const expireRequests: ExpireRequest[] = [];
+  /** LOST-08-AC21: what runs after a start's next conflicts, and before its next retries. */
+  const afterConflicts: (() => unknown)[] = [];
+  const beforeRetries: (() => unknown)[] = [];
 
   /** The store's now: the clock's, or a loud refusal when it was given none. */
   const nowFor = async (call: JourneyStoreCall): Promise<Date> => {
@@ -1363,6 +1579,10 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     journey: KeptJourney,
     resolution: FakeAlertResolution,
     now: Date,
+    // LOST-08 (approach item 4): the closer, who has the 200, gets no
+    // stand-down ("tells the other responders"); every other path leaves
+    // nobody out.
+    { except }: { except?: string } = {},
   ): { alertId: string | null; messages: AlertMessage[]; apply: () => void } => {
     const alert = alerts.find((kept) => kept.journeyId === journey.id && kept.state !== 'RESOLVED');
     if (alert === undefined) {
@@ -1381,7 +1601,8 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     if (new Set(journey.responderIds).size !== journey.responderIds.length) {
       throw uniqueViolation('one outbox message per (alert, recipient, kind, round)');
     }
-    const standDowns: KeptMessage[] = journey.responderIds.map((recipientId) => {
+    const told = journey.responderIds.filter((recipientId) => recipientId !== except);
+    const standDowns: KeptMessage[] = told.map((recipientId) => {
       // SM-10 (approach item 5): written in the alert's round, and one of a
       // kind per (alert, recipient, kind, round).
       if (taken(alert.id, recipientId, resolution, alert.round)) {
@@ -1484,7 +1705,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       responderIds: givenResponderIds,
       startedAt,
     }) {
-      return answer('insertStarted', (): InsertStartedResult => {
+      return answer('insertStarted', async (): Promise<InsertStartedResult> => {
         const walkerId = asStored(givenWalkerId);
         const deviceId = deviceIdOf(givenDeviceId);
         const responderIds = givenResponderIds.map(asStored);
@@ -1497,14 +1718,35 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
               'journey is ever stored with nobody to alert',
           );
         }
-        if (!users.has(walkerId)) {
-          throw notAUser('walker', walkerId);
-        }
-        const unended = unendedOf(walkerId);
-        if (unended !== undefined) {
+        // LOST-08 (approach item 9): an insert that meets the walker's
+        // unended journey, then reads which journey won, as the adapter does
+        // after its conflict. A close or the 24-hour end can end that journey
+        // in between, from outside the walker's phone; the read then finds
+        // none, and the insert is tried once more. A second such race
+        // rejects, storing nothing.
+        for (let attempt = 1; ; attempt += 1) {
+          if (attempt > 1) {
+            await beforeRetries.shift()?.();
+          }
+          if (!users.has(walkerId)) {
+            throw notAUser('walker', walkerId);
+          }
+          if (unendedOf(walkerId) === undefined) {
+            break;
+          }
           // As ON CONFLICT DO NOTHING: no row is inserted, so no foreign key
           // is checked either.
-          return { inserted: false, unendedJourneyId: unended.id };
+          await afterConflicts.shift()?.();
+          const winner = unendedOf(walkerId);
+          if (winner !== undefined) {
+            return { inserted: false, unendedJourneyId: winner.id };
+          }
+          if (attempt >= 2) {
+            throw new Error(
+              'fakeJourneyStore.insertStarted: a start was refused as a second unended journey, ' +
+                'and no unended journey was found, twice; nothing is stored',
+            );
+          }
         }
         if (!devices.has(deviceId)) {
           throw notADevice(deviceId);
@@ -2048,6 +2290,202 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         },
         waitForRow,
       );
+    },
+
+    alertForClosure(alertId) {
+      // A plain read, "I'm on it"'s own (LOST-08, approach item 4): no lock, so
+      // a held row is read all the same.
+      return answer('alertForClosure', (): AlertForClosure | null => {
+        const alert = alertNamed(alertId);
+        if (alert === undefined) {
+          return null;
+        }
+        return {
+          id: alert.id,
+          state: alert.state,
+          acknowledgedBy: alert.acknowledgedBy,
+          responderIds: [...storedJourney('alertForClosure', alert.journeyId).responderIds],
+        };
+      });
+    },
+    recordClosure(closure) {
+      if (typeof closure !== 'object' || (closure as unknown) === null) {
+        return Promise.reject(
+          new Error(
+            'fakeJourneyStore.recordClosure takes { alertId, responderId }, not an ID alone',
+          ),
+        );
+      }
+      const { alertId, responderId } = closure;
+      // The alert's journey's row first, waited for while held, as the
+      // adapter's `for update` on the journey waits (D-112): a person's
+      // action. No such alert: no row to wait for.
+      const waitForRow = (): Promise<void> => {
+        const alert = UUID.test(alertId) ? alerts.find(({ id }) => id === asStored(alertId)) : null;
+        return alert === undefined || alert === null
+          ? Promise.resolve()
+          : untilReleased(alert.journeyId);
+      };
+      /**
+       * The close's one step, decided by the close rule under the "lock" and
+       * written at once (LOST-08, approach items 2 and 4). Without the store's
+       * now it stops before writing anything, as soon as it needs it: only a
+       * close that closes needs the time.
+       */
+      const step = (now: Date | null): RecordClosureResult | typeof NEEDS_NOW => {
+        const alert = alertNamed(alertId);
+        const journey =
+          alert === undefined ? undefined : storedJourney('recordClosure', alert.journeyId);
+        // The rule, in its order, the IDs compared exactly.
+        if (alert === undefined || journey?.responderIds.includes(responderId) !== true) {
+          return {
+            outcome: 'not_closed',
+            decision: { type: 'refused', reason: 'ALERT_NOT_FOUND' },
+          };
+        }
+        if (alert.state === 'RESOLVED') {
+          return { outcome: 'not_closed', decision: { type: 'ignored', reason: 'ALERT_RESOLVED' } };
+        }
+        // Both halves are read (approach item 2): closing silences everyone,
+        // so a missing half refuses.
+        if (!(alert.state === 'ACKNOWLEDGED' && alert.acknowledgedBy === responderId)) {
+          return {
+            outcome: 'not_closed',
+            decision: { type: 'refused', reason: 'NOT_THE_ACKNOWLEDGER' },
+          };
+        }
+        if (now === null) {
+          return NEEDS_NOW;
+        }
+        // An unresolved alert's journey is always LOST_CONTACT. One that is
+        // not is a read this fake does not expect: it throws, as the
+        // adapter's guarded update throws, and nothing is written.
+        if (journey.state !== 'LOST_CONTACT') {
+          throw new Error(
+            `fakeJourneyStore.recordClosure: the alert ${alert.id} is unresolved, but its journey ` +
+              `is ${journey.state}, not LOST_CONTACT; nothing is written`,
+          );
+        }
+        const resolution = planResolution(journey, 'SAFE', now, { except: responderId });
+        if (resolution.alertId !== alert.id) {
+          throw new Error(
+            'fakeJourneyStore.recordClosure: the journey’s unresolved alert is not the one named; ' +
+              'nothing is written',
+          );
+        }
+        journey.state = 'ENDED';
+        journey.endedAt = new Date(now.getTime());
+        journey.endReason = 'SAFE';
+        resolution.apply();
+        return { outcome: 'closed', messages: resolution.messages };
+      };
+      return answer(
+        'recordClosure',
+        async (): Promise<RecordClosureResult> => {
+          const first = step(null);
+          if (first !== NEEDS_NOW) {
+            return first;
+          }
+          const again = step(await nowFor('recordClosure'));
+          if (again === NEEDS_NOW) {
+            throw new Error('fakeJourneyStore.recordClosure: the store’s now was not used');
+          }
+          return again;
+        },
+        waitForRow,
+      );
+    },
+    alertsDueForExpiry() {
+      return answer('alertsDueForExpiry', async (): Promise<ExpiringAlerts> => {
+        const now = await nowFor('alertsDueForExpiry');
+        // A plain read (LOST-08, approach item 6): an alert whose journey's
+        // row another transaction holds is read all the same. Every
+        // unresolved alert opened 24 hours or more before now, whatever its
+        // state and whether its journey has a responder. No comparison with a
+        // time that is not one holds.
+        //
+        // In the adapter's order, `order by opened_at, id` (LOST-08 review
+        // loop 1, code-reviewer; D-100): by opening, then by ID, never in the
+        // order put in, so a test that leans on the order leans on the one
+        // the database gives. A `uuid` orders by its bytes, which is the
+        // order of its lower-case text, as every ID here is held.
+        return {
+          now,
+          alerts: alerts
+            .filter(
+              (alert) =>
+                alert.state !== 'RESOLVED' &&
+                now.getTime() - alert.openedAt.getTime() >= ALERT_EXPIRES_AFTER_MS,
+            )
+            .sort(
+              (a, b) =>
+                a.openedAt.getTime() - b.openedAt.getTime() ||
+                (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+            )
+            .map(({ id, journeyId, openedAt }) => ({
+              id,
+              journeyId,
+              journeyState: storedJourney('alertsDueForExpiry', journeyId).state,
+              openedAt: new Date(openedAt.getTime()),
+            })),
+        };
+      });
+    },
+    expireAlert({ alertId, lockWaitMs }) {
+      expireRequests.push(lockWaitMs === undefined ? { alertId } : { alertId, lockWaitMs });
+      return answer('expireAlert', async (): Promise<ExpireAlertResult> => {
+        checkLockWait('expireAlert', lockWaitMs);
+        // Without the store's now, nothing is decided: loudly, before any "lock".
+        await nowFor('expireAlert');
+        // The journey's row first (D-112), as the escalation takes it: no
+        // alert, no row to take.
+        const found = alertNamed(alertId);
+        if (found === undefined) {
+          return { outcome: 'skipped' };
+        }
+        if (held.has(found.journeyId)) {
+          // Without a wait: `for update skip locked` skips a held row.
+          if (lockWaitMs === undefined) {
+            return { outcome: 'skipped' };
+          }
+          // With one: a holder that never lets go outlasts it (55P03, held);
+          // one that lets go does its own work first, and the 24-hour end
+          // then decides as the holder left the journey and its alert.
+          const holderAction = lettingGo.get(found.journeyId);
+          if (holderAction === undefined) {
+            return { outcome: 'held' };
+          }
+          letGo(found.journeyId);
+          await holderAction();
+        }
+        const now = await nowFor('expireAlert');
+        const alert = alertNamed(alertId);
+        if (alert === undefined || held.has(alert.journeyId)) {
+          return { outcome: 'skipped' };
+        }
+        const journey = storedJourney('expireAlert', alert.journeyId);
+        // Under the "lock" (approach item 6): the journey's one unresolved
+        // alert must be the one named, or it was resolved since the read; and
+        // the rule then asks for LOST_CONTACT and 24 hours or more, by now.
+        const unresolved = alerts.find(
+          (kept) => kept.journeyId === journey.id && kept.state !== 'RESOLVED',
+        );
+        if (
+          unresolved?.id !== alert.id ||
+          journey.state !== 'LOST_CONTACT' ||
+          !(now.getTime() - alert.openedAt.getTime() >= ALERT_EXPIRES_AFTER_MS)
+        ) {
+          return { outcome: 'skipped' };
+        }
+        // Every responder row is told, the acknowledger included ("with
+        // responders told", D-111); none when the journey has none left.
+        const resolution = planResolution(journey, 'EXPIRED', now);
+        journey.state = 'ENDED';
+        journey.endedAt = new Date(now.getTime());
+        journey.endReason = 'EXPIRED';
+        resolution.apply();
+        return { outcome: 'expired', messages: resolution.messages };
+      });
     },
 
     overdueJourneys(afterMs) {
@@ -2622,6 +3060,15 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     },
     escalateRequests() {
       return escalateRequests.map((request) => ({ ...request }));
+    },
+    expireRequests() {
+      return expireRequests.map((request) => ({ ...request }));
+    },
+    afterConflict(action) {
+      afterConflicts.push(action);
+    },
+    beforeRetry(action) {
+      beforeRetries.push(action);
     },
     get calls() {
       return [...calls];

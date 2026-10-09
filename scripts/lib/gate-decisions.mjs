@@ -91,12 +91,16 @@ export const MUTATION_GROUPS = [
     // listed, so acknowledgement.ts is mutated here, and a mutant anywhere in
     // the folder is run by both files. Then the escalation to SMS, the SMS
     // sender and the SMS check (LOST-07, D-116), whose tests are a third file.
+    // Then "They're safe" and the 24-hour end (LOST-08, D-126), whose tests
+    // are a fourth and a fifth.
     name: 'alerts',
     paths: ['apps/server/src/modules/alerts/'],
     tests: [
       'apps/server/src/alerts.system.test.ts',
       'apps/server/src/acknowledgement.system.test.ts',
       'apps/server/src/escalation.system.test.ts',
+      'apps/server/src/closure.system.test.ts',
+      'apps/server/src/expiry.system.test.ts',
     ],
     config: 'vitest.system.config.mjs',
   },

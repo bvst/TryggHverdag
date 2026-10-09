@@ -103,6 +103,23 @@
  *     message, is never escalated, and is counted unheard (AC15);
  *   - for any sequence of steps the rules hold, a fast-check property (AC8),
  *     and each of the five withdrawals takes exactly its own kinds (AC17).
+ *
+ * And when the acknowledging responder says "They're safe", and when an alert
+ * reaches its 24 hours (LOST-08, SM-06, its spec's shared behaviours 1 to 11,
+ * D-100, D-125, D-126):
+ *   - the close decides by the close rule under the journey's row, both halves
+ *     of the acknowledgement read, and ends the journey SAFE and resolves its
+ *     alert SAFE in one step, standing down every responder but the closer,
+ *     each held behind what may still be in a port's hands (AC1 to AC4, AC7);
+ *   - the 24-hour end reads exactly the unresolved alerts 24 hours old or
+ *     more, by the store's own clock and threshold, and ends the journey
+ *     EXPIRED, standing down every responder, the acknowledger included, or
+ *     nobody when none is left (AC8, AC9); it decides again under the
+ *     journey's row (AC11);
+ *   - for any sequence of steps the rules hold, a fast-check property (AC6,
+ *     AC14); an open withdraws an earlier journey's SAFE and EXPIRED for its
+ *     own responders only (AC15);
+ *   - a start that meets a journey ended meanwhile retries once (AC21).
  * Times are the store's own: the fake's clock, or the database's now(). The
  * database's moves on while a test runs, so a subject says how far from the
  * threshold a time must be to be sure of its side (`timeMarginMs`); the fake's
@@ -124,8 +141,12 @@ import {
   WITHDRAWN_WHEN_REMOVED,
   WITHDRAWN_WHEN_RESET,
   WITHDRAWN_WHEN_RESOLVED,
+  type AlertForClosure,
   type AlertRound,
+  type ExpireAlertResult,
+  type ExpiringAlerts,
   type JourneyForRemoval,
+  type RecordClosureResult,
   type MessageRound,
   type RemoveResponderResult,
   type UnheardAlertCount,
@@ -253,6 +274,21 @@ export interface JourneyStoreUnderTest {
     }): Promise<RemoveResponderResult>;
     /** SM-10 (D-122, item 3): the unresolved alerts whose journey has no responder row, and the store's now. */
     unheardAlertCount(): Promise<UnheardAlertCount>;
+    /** LOST-08: the alert, its state, who is on it and its journey's responders, read without a lock; null for none. */
+    alertForClosure(alertId: string): Promise<AlertForClosure | null>;
+    /** LOST-08: decided by the close rule under the journey's row, and written, or not. */
+    recordClosure(closure: { alertId: string; responderId: string }): Promise<RecordClosureResult>;
+    /**
+     * LOST-08, SM-06: the unresolved alerts opened 24 hours or more before the
+     * store's now, read without a lock, and that now. No threshold: the store
+     * decides by its own 24 hours, so no caller can choose another.
+     */
+    alertsDueForExpiry(): Promise<ExpiringAlerts>;
+    /** LOST-08, SM-06: decided by the 24-hour rule under the journey's row, and written, or not. */
+    expireAlert(request: {
+      alertId: string;
+      lockWaitMs?: number | undefined;
+    }): Promise<ExpireAlertResult>;
   };
   /** A new user, by the store's own means: a row in the real table, an entry in the fake. */
   addUser(): Promise<string>;
@@ -434,6 +470,36 @@ export interface JourneyStoreUnderTest {
     journeyId: string,
     change: 'unchanged' | 'end' | { remove: string },
   ): Promise<{ release(): Promise<void> }>;
+  /**
+   * LOST-08-AC4: holds the journey's row as `hold` does, and lets it go once a
+   * close is waiting for it, having first changed the journey as a
+   * transaction in flight would: `{ remove }`, that responder's row deleted
+   * and nothing else, as a removal committing; `contact`, its unresolved alert
+   * resolved BACK_IN_CONTACT and the journey ACTIVE, as a heartbeat
+   * committing; `home`, resolved HOME and the journey ENDED, HOME, as "I'm
+   * home" committing; `expire`, resolved EXPIRED and the journey ENDED,
+   * EXPIRED, as the 24-hour end committing (its alert is 24 hours old);
+   * `unchanged`, nothing. `release` lets go at once if no close came.
+   */
+  holdUntilClosureWaits(
+    journeyId: string,
+    change: 'unchanged' | 'contact' | 'home' | 'expire' | { remove: string },
+  ): Promise<{ release(): Promise<void> }>;
+  /**
+   * LOST-08-AC21: arranges the next start to race ends from outside the
+   * walker's phone. Its insert meets the walker's unended journey, and `end`
+   * runs between that conflict and the start's read of which journey won, as
+   * a close or the 24-hour end committing; with `again`, the start's retry
+   * meets the race once more: `again.before` runs before the retry meets the
+   * one-unended-journey rule (another unended journey of the walker's put
+   * in), and `again.end` between its conflict and its read. Each runs through
+   * the store under test, committed on its own. `done` waits for the
+   * arrangement to finish and drops it.
+   */
+  raceTheStart(race: {
+    end: () => Promise<unknown>;
+    again?: { before: () => Promise<unknown>; end: () => Promise<unknown> };
+  }): Promise<{ done(): Promise<void> }>;
 }
 
 /**
@@ -1391,6 +1457,150 @@ async function nextJourneyOf(
     lastHeartbeatAt,
   });
   return { ...walker, journeyId, responderIds };
+}
+
+// ---------------------------------------------------------------------------
+// LOST-08: "They're safe", the 24-hour end, and the start that races an end
+// (its spec's shared behaviours 1 to 11, D-100, D-125, D-126).
+// ---------------------------------------------------------------------------
+
+/**
+ * Twenty-four hours (SM-06, D-126): the server's ALERT_EXPIRES_AFTER_MS,
+ * written out because the test kit imports nothing from the server. This
+ * suite holds the fake and the adapter to the same 86 400 000, and L3 the
+ * adapter to the domain's.
+ */
+const ALERT_EXPIRES_AFTER_MS = 86_400_000;
+
+/** The close's resolution and stand-down, and the 24-hour end's (D-112: each its resolution's own name). */
+const SAFE = 'SAFE';
+const EXPIRED = 'EXPIRED';
+
+/** The kinds that stand a responder down: one per resolution (D-112), LOST-08's two included. */
+const STAND_DOWNS: readonly string[] = ['BACK_IN_CONTACT', 'HOME', SAFE, EXPIRED];
+
+/** The close rule's answers that write nothing, as the store hands them back (approach item 2). */
+const NO_ALERT_FOR_YOU: RecordClosureResult = {
+  outcome: 'not_closed',
+  decision: { type: 'refused', reason: 'ALERT_NOT_FOUND' },
+};
+const NOT_THE_ACKNOWLEDGER: RecordClosureResult = {
+  outcome: 'not_closed',
+  decision: { type: 'refused', reason: 'NOT_THE_ACKNOWLEDGER' },
+};
+const ALREADY_OVER: RecordClosureResult = {
+  outcome: 'not_closed',
+  decision: { type: 'ignored', reason: 'ALERT_RESOLVED' },
+};
+
+/** The 24-hour end's answer when it writes nothing. */
+const NOT_EXPIRED: ExpireAlertResult = { outcome: 'skipped' };
+
+/** A close that closed, or a failed expectation saying what it was instead. */
+function closedBy(result: RecordClosureResult, what = 'the close'): { messages: AlertMessage[] } {
+  expect(result.outcome, `${what} closed: ${JSON.stringify(result)}`).toBe('closed');
+  if (result.outcome !== 'closed') {
+    throw new Error(`${what} was answered ${JSON.stringify(result)}`);
+  }
+  return result;
+}
+
+/** A 24-hour end that ended the journey, or a failed expectation saying what it was instead. */
+function expiredWith(
+  result: ExpireAlertResult,
+  what = 'the 24-hour end',
+): { messages: AlertMessage[] } {
+  expect(result.outcome, `${what} expired: ${JSON.stringify(result)}`).toBe('expired');
+  if (result.outcome !== 'expired') {
+    throw new Error(`${what} was answered ${JSON.stringify(result)}`);
+  }
+  return result;
+}
+
+/**
+ * How long before the store's now an alert may have opened and still be under
+ * its 24 hours when the store decides: 23 h 59 min 59.999 s against the fake,
+ * whose clock stands still, and a margin under them against the database,
+ * whose now() moves on.
+ */
+function underADayMs(subject: JourneyStoreUnderTest): number {
+  return ALERT_EXPIRES_AFTER_MS - Math.max(1, subject.timeMarginMs);
+}
+
+/**
+ * A LOST_CONTACT journey of a new walker, with `responders` responders, and
+ * its one alert put in directly, opened `openedAgoMs` before the store's now
+ * (25 hours unless told otherwise, so past its 24 hours): the journey started
+ * an hour before the alert opened and silent since five minutes before it.
+ * In `state`; `recorded`, its first responder on it since half its age; in
+ * `round`; a RESOLVED one resolved since, with `resolution`.
+ */
+async function longLost(
+  subject: JourneyStoreUnderTest,
+  {
+    state = 'OPEN',
+    recorded = false,
+    openedAgoMs = 25 * HOUR,
+    responders = 3,
+    round,
+    resolution = 'BACK_IN_CONTACT',
+  }: {
+    state?: FakeAlertState;
+    recorded?: boolean;
+    openedAgoMs?: number;
+    responders?: number;
+    round?: number;
+    resolution?: FakeAlertResolution;
+  } = {},
+): Promise<{
+  walkerId: string;
+  deviceId: string;
+  journeyId: string;
+  responderIds: string[];
+  alertId: string;
+  openedAt: Date;
+  acknowledgedBy: string | null;
+}> {
+  const now = await subject.now();
+  const openedAt = ago(now, openedAgoMs);
+  const silentSince = ago(now, openedAgoMs + LOST_CONTACT_AFTER_MS);
+  const journey = await watched(subject, {
+    state: 'LOST_CONTACT',
+    startedAt: ago(now, openedAgoMs + HOUR),
+    lastHeartbeatAt: silentSince,
+    responders,
+  });
+  const [first = ''] = journey.responderIds;
+  const alertId = await subject.seedAlert({
+    journeyId: journey.journeyId,
+    state,
+    openedAt,
+    silentSince,
+    ...(state === 'RESOLVED'
+      ? { resolvedAt: ago(now, Math.floor(openedAgoMs / 3)), resolution }
+      : {}),
+    ...(recorded
+      ? { acknowledgedBy: first, acknowledgedAt: ago(now, Math.floor(openedAgoMs / 2)) }
+      : {}),
+    ...(round === undefined ? {} : { round }),
+  });
+  return { ...journey, alertId, openedAt, acknowledgedBy: recorded ? first : null };
+}
+
+/** Everything a store holds of one journey that a close or a 24-hour end could change, its end included. */
+async function closureRecordOf(
+  subject: JourneyStoreUnderTest,
+  journey: { walkerId: string; journeyId: string },
+) {
+  return {
+    ...(await removalRecordOf(subject, journey)),
+    end: await subject.endOf(journey.journeyId),
+  };
+}
+
+/** The alerts of this read that are among these, by ID: a store's read takes the whole table. */
+function dueAmong(read: ExpiringAlerts, ours: readonly string[]) {
+  return read.alerts.filter(({ id }) => ours.includes(id)).sort((a, b) => a.id.localeCompare(b.id));
 }
 
 export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
@@ -9000,6 +9210,1560 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         const before = await removalRecordOf(subject, journey);
         expect(await subject.store.removeResponder(removal(journey, r2))).toEqual(JOURNEY_OVER);
         expect(await removalRecordOf(subject, journey)).toEqual(before);
+      }
+    },
+  },
+  // -------------------------------------------------------------------------
+  // LOST-08: "They're safe", the 24-hour end, and the start that races an
+  // end (its spec's shared behaviours 1 to 11).
+  // -------------------------------------------------------------------------
+  {
+    name: 'LOST-08-AC1: recordClosure by the acknowledger ends the LOST_CONTACT journey SAFE and resolves its alert SAFE at the store’s now, withdraws the alert’s unsent WITHDRAWN_WHEN_RESOLVED kinds, and writes one SAFE per responder row but the closer’s, in the alert’s round',
+    async run(subject) {
+      for (const round of [1, 2]) {
+        const at = `round ${String(round)}`;
+        const journey = await longLost(subject, {
+          state: 'ACKNOWLEDGED',
+          recorded: true,
+          openedAgoMs: 10 * MINUTE,
+          round,
+        });
+        const { journeyId, alertId, responderIds } = journey;
+        const [r1 = '', r2 = '', r3 = ''] = responderIds;
+        // What the alert left, in its round: R1's lost-contact push never
+        // claimed; R2's push and notice accepted, R2's SMS refused and its
+        // retry passed; R3's push refused twice and its retry passed, R3's
+        // notice never claimed. None is in a port's hands, so nothing holds.
+        const unsent = [
+          await messageFor(subject, {
+            alertId,
+            recipientId: r1,
+            kind: 'LOST_CONTACT',
+            attempts: 0,
+            round,
+          }),
+          await messageFor(subject, {
+            alertId,
+            recipientId: r2,
+            kind: SMS,
+            lastFailure: 'NO_TARGET',
+            round,
+          }),
+          await messageFor(subject, {
+            alertId,
+            recipientId: r3,
+            kind: 'LOST_CONTACT',
+            attempts: 2,
+            lastFailure: 'REFUSED',
+            round,
+          }),
+          await messageFor(subject, { alertId, recipientId: r3, kind: NOTICE, attempts: 0, round }),
+        ];
+        const sent = [
+          await messageFor(subject, {
+            alertId,
+            recipientId: r2,
+            kind: 'LOST_CONTACT',
+            sentAgoMs: 9 * MINUTE,
+            round,
+          }),
+          await messageFor(subject, {
+            alertId,
+            recipientId: r2,
+            kind: NOTICE,
+            sentAgoMs: 4 * MINUTE,
+            round,
+          }),
+        ];
+        const other = await longLost(subject, {
+          state: 'ACKNOWLEDGED',
+          recorded: true,
+          openedAgoMs: 10 * MINUTE,
+          responders: 2,
+        });
+        await messageFor(subject, {
+          alertId: other.alertId,
+          recipientId: other.responderIds[1] ?? '',
+          kind: 'LOST_CONTACT',
+          attempts: 0,
+        });
+        const otherBefore = await closureRecordOf(subject, other);
+        const before = await closureRecordOf(subject, journey);
+        const acknowledgement = await acknowledgementOf(subject, journeyId, alertId);
+        expect(acknowledgement?.acknowledgedBy, at).toBe(r1);
+
+        const from = await subject.now();
+        const { messages } = closedBy(
+          await subject.store.recordClosure({ alertId, responderId: r1 }),
+          at,
+        );
+        const to = await subject.now();
+
+        const after = await closureRecordOf(subject, journey);
+        const resolution = await resolutionOf(subject, journeyId, alertId);
+        const resolvedAt = resolution?.resolvedAt ?? new Date(Number.NaN);
+        expect(resolution?.resolution, at).toBe(SAFE);
+        expect(between(resolvedAt, from, to), `${at}: resolved at the store’s now`).toBe(true);
+        expect(after.alerts.find(({ id }) => id === alertId)?.state, at).toBe('RESOLVED');
+        // The journey ENDED, SAFE, at the same now as the resolution.
+        expect(after.state, at).toBe('ENDED');
+        expect(after.end, at).toEqual({ endedAt: resolvedAt, endReason: SAFE });
+        // Who closed it stays on record, and since when (D-126).
+        expect(await acknowledgementOf(subject, journeyId, alertId), at).toEqual(acknowledgement);
+        // Each unsent message of a kind withdrawn on resolution is withdrawn
+        // at that now, the closer's own included, keeping its attempts and its
+        // last failure; the sent ones are left as they were.
+        const withdrawnAt = new Map(
+          after.withdrawals.map(({ messageId, withdrawnAt: when }) => [messageId, when]),
+        );
+        for (const messageId of unsent) {
+          expect(withdrawnAt.get(messageId), `${at}: ${messageId} withdrawn`).toEqual(resolvedAt);
+        }
+        for (const messageId of sent) {
+          expect(withdrawnAt.get(messageId), `${at}: ${messageId} left`).toBeNull();
+        }
+        const seeded = [...unsent, ...sent];
+        expect(
+          after.messages.filter(({ messageId }) => seeded.includes(messageId)),
+          at,
+        ).toEqual(before.messages.filter(({ messageId }) => seeded.includes(messageId)));
+
+        // One SAFE per responder row but the closer's, due at that now, in the
+        // alert's round, each with an ID of its own; nothing for the walker.
+        const safe = ofKind(after.messages, alertId, SAFE);
+        expect(recipientsOf(safe), at).toEqual([r2, r3].sort());
+        const rounds = await messageRoundsByIdOf(subject, journeyId);
+        const written = new Map(after.withdrawals.map((each) => [each.messageId, each]));
+        for (const message of safe) {
+          expect(message, at).toMatchObject({ attempts: 0, sentAt: null, lastFailure: null });
+          expect(message.nextAttemptAt, at).toEqual(resolvedAt);
+          expect(written.get(message.messageId)?.createdAt, at).toEqual(resolvedAt);
+          expect(written.get(message.messageId)?.withdrawnAt, at).toBeNull();
+          expect(rounds.get(message.messageId), at).toBe(round);
+          expect(message.messageId, at).toMatch(LOWER_UUID);
+        }
+        const ids = safe.map(({ messageId }) => messageId);
+        expect(new Set(ids).size, at).toBe(ids.length);
+        const everyOtherId = [
+          ...before.messages.map(({ messageId }) => messageId),
+          alertId,
+          journeyId,
+          journey.walkerId,
+          journey.deviceId,
+          ...responderIds,
+          other.alertId,
+          other.journeyId,
+        ];
+        expect(
+          ids.filter((id) => everyOtherId.includes(id)),
+          at,
+        ).toEqual([]);
+        expect(byRecipient(messages), at).toEqual(safe.map(asAnswered));
+        expect(
+          after.messages
+            .filter(
+              ({ messageId }) => !before.messages.some((each) => each.messageId === messageId),
+            )
+            .map(({ kind }) => kind),
+          `${at}: nothing written but the two SAFE`,
+        ).toEqual([SAFE, SAFE]);
+        expect(after.journeyMessages, `${at}: no message to the walker`).toEqual(
+          before.journeyMessages,
+        );
+        expect(await closureRecordOf(subject, other), at).toEqual(otherBefore);
+      }
+    },
+  },
+  {
+    name: 'LOST-08-AC2: alertForClosure reads the alert as "I’m on it" reads it, in either case and without waiting for a held row; recordClosure decides by the close rule under the journey’s row and writes nothing for a stranger, another responder, a half record, or a resolved alert',
+    async run(subject) {
+      const journey = await longLost(subject, {
+        state: 'ACKNOWLEDGED',
+        recorded: true,
+        openedAgoMs: 10 * MINUTE,
+      });
+      const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+
+      // The read: its state, who is on it and its journey's responders, read
+      // without a lock; null for an ID no alert has.
+      const held = await subject.hold(journey.journeyId);
+      try {
+        for (const id of [journey.alertId, journey.alertId.toUpperCase()]) {
+          const read = await within(
+            2_000,
+            subject.store.alertForClosure(id),
+            'the read of an alert whose journey’s row is held',
+          );
+          expect(
+            read === null ? null : { ...read, responderIds: [...read.responderIds].sort() },
+            id,
+          ).toEqual({
+            id: journey.alertId,
+            state: 'ACKNOWLEDGED',
+            acknowledgedBy: r1,
+            responderIds: [r1, r2, r3].sort(),
+          });
+        }
+        expect(await subject.store.alertForClosure(syntheticUuid())).toBeNull();
+      } finally {
+        await held.release();
+      }
+
+      // ALERT_NOT_FOUND, one answer for every caller who does not follow it:
+      // the walker included, and an ID compared exactly (D-114).
+      const elsewhere = await longLost(subject, { responders: 1, openedAgoMs: 10 * MINUTE });
+      const [stranger = ''] = await users(subject, 1);
+      expect(r1.toUpperCase(), 'an ID with a letter in it').not.toBe(r1);
+      const before = await closureRecordOf(subject, journey);
+      for (const [who, responderId, alertId] of [
+        ['the walker', journey.walkerId, journey.alertId],
+        ['a user who follows no journey', stranger, journey.alertId],
+        ['a responder of another journey only', elsewhere.responderIds[0] ?? '', journey.alertId],
+        ['the acknowledger, for an alert ID no alert has', r1, syntheticUuid()],
+        ['the acknowledger’s ID in upper case', r1.toUpperCase(), journey.alertId],
+      ] as const) {
+        expect(await subject.store.recordClosure({ alertId, responderId }), who).toEqual(
+          NO_ALERT_FOR_YOU,
+        );
+      }
+      // Another responder of the journey: refused, for the acknowledger is
+      // someone else.
+      for (const responderId of [r2, r3]) {
+        expect(
+          await subject.store.recordClosure({ alertId: journey.alertId, responderId }),
+        ).toEqual(NOT_THE_ACKNOWLEDGER);
+      }
+      expect(await closureRecordOf(subject, journey), 'nothing written').toEqual(before);
+
+      // A half record, each put in directly: both halves are read, and a
+      // missing half refuses, the other way round from the escalation.
+      for (const [what, seed] of [
+        ['OPEN, nobody recorded', { state: 'OPEN' }],
+        ['ESCALATED, nobody recorded', { state: 'ESCALATED' }],
+        ['OPEN with R1 recorded', { state: 'OPEN', recorded: true }],
+        ['ESCALATED with R1 recorded', { state: 'ESCALATED', recorded: true }],
+        ['ACKNOWLEDGED with nobody recorded', { state: 'ACKNOWLEDGED' }],
+      ] as const) {
+        const half = await longLost(subject, { ...seed, openedAgoMs: 10 * MINUTE });
+        const record = await closureRecordOf(subject, half);
+        for (const responderId of half.responderIds) {
+          expect(
+            await subject.store.recordClosure({ alertId: half.alertId, responderId }),
+            `${what}, ${responderId === half.responderIds[0] ? 'R1' : 'another responder'}`,
+          ).toEqual(NOT_THE_ACKNOWLEDGER);
+        }
+        expect(await closureRecordOf(subject, half), `${what}: nothing written`).toEqual(record);
+      }
+
+      // A RESOLVED alert, whatever resolved it: ALERT_RESOLVED for every
+      // responder, before who is recorded is looked at; still not found for
+      // a stranger. Nothing written.
+      for (const resolution of ['BACK_IN_CONTACT', 'HOME', SAFE, EXPIRED] as const) {
+        const over = await longLost(subject, {
+          state: 'RESOLVED',
+          recorded: true,
+          resolution,
+          openedAgoMs: 10 * MINUTE,
+        });
+        const record = await closureRecordOf(subject, over);
+        for (const responderId of over.responderIds) {
+          expect(
+            await subject.store.recordClosure({ alertId: over.alertId, responderId }),
+            `resolved ${resolution}`,
+          ).toEqual(ALREADY_OVER);
+        }
+        expect(
+          await subject.store.recordClosure({ alertId: over.alertId, responderId: stranger }),
+          `resolved ${resolution}, a stranger`,
+        ).toEqual(NO_ALERT_FOR_YOU);
+        expect(await closureRecordOf(subject, over), `resolved ${resolution}`).toEqual(record);
+      }
+
+      // The acknowledger's own close, repeated: ALERT_RESOLVED, writing nothing more.
+      closedBy(await subject.store.recordClosure({ alertId: journey.alertId, responderId: r1 }));
+      const closed = await closureRecordOf(subject, journey);
+      expect(
+        await subject.store.recordClosure({ alertId: journey.alertId, responderId: r1 }),
+        'a repeat',
+      ).toEqual(ALREADY_OVER);
+      expect(await closureRecordOf(subject, journey), 'a repeat writes nothing').toEqual(closed);
+    },
+  },
+  {
+    name: 'LOST-08-AC3: after a reset recordClosure refuses everyone until a second acknowledgement, then closes for the new acknowledger, telling the remaining responders only',
+    async run(subject) {
+      const journey = await longLost(subject, {
+        state: 'ACKNOWLEDGED',
+        recorded: true,
+        openedAgoMs: 10 * MINUTE,
+      });
+      const { journeyId, alertId } = journey;
+      const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+      const { resetAlertId } = removed(
+        await subject.store.removeResponder(removal(journey, r1)),
+        'R1’s removal',
+      );
+      expect(resetAlertId, 'the reset').toBe(alertId);
+      const before = await closureRecordOf(subject, journey);
+
+      // The removed acknowledger follows the journey no more; the others are
+      // not on it, and nobody is.
+      expect(await subject.store.recordClosure({ alertId, responderId: r1 }), 'R1').toEqual(
+        NO_ALERT_FOR_YOU,
+      );
+      for (const responderId of [r2, r3]) {
+        expect(await subject.store.recordClosure({ alertId, responderId })).toEqual(
+          NOT_THE_ACKNOWLEDGER,
+        );
+      }
+      expect(await closureRecordOf(subject, journey), 'nothing written').toEqual(before);
+
+      // R2 says "I'm on it", in the alert's second round, and then closes.
+      acknowledged(await subject.store.recordAcknowledgement({ alertId, responderId: r2 }));
+      const { messages } = closedBy(
+        await subject.store.recordClosure({ alertId, responderId: r2 }),
+      );
+
+      expect(recipientsOf(messages), 'R3 alone is told').toEqual([r3]);
+      expect(messages.map(({ kind }) => kind)).toEqual([SAFE]);
+      expect((await resolutionOf(subject, journeyId, alertId))?.resolution).toBe(SAFE);
+      expect((await acknowledgementOf(subject, journeyId, alertId))?.acknowledgedBy).toBe(r2);
+      expect((await subject.endOf(journeyId))?.endReason).toBe(SAFE);
+      expect(await subject.stateOf(journeyId)).toBe('ENDED');
+      const safe = ofKind(await subject.messagesOf(journeyId), alertId, SAFE);
+      expect(recipientsOf(safe), 'none for R1, removed, or R2, the closer').toEqual([r3]);
+      const rounds = await messageRoundsByIdOf(subject, journeyId);
+      expect(
+        safe.map(({ messageId }) => rounds.get(messageId)),
+        'in the second round',
+      ).toEqual([2]);
+    },
+  },
+  {
+    name: `LOST-08-AC4: recordClosure decides again under the journey’s row, as its holder left it; ${String(RACERS)} closes at once, ${String(RACE_ROUNDS)} times over: one closes, every other is ignored, none an error`,
+    async run(subject) {
+      for (const [what, change] of [
+        ['let go unchanged', 'unchanged'],
+        ['let go with R1’s row deleted', 'remove'],
+        ['let go with contact back', 'contact'],
+        ['let go ended "I’m home"', 'home'],
+        ['let go ended at 24 hours', 'expire'],
+      ] as const) {
+        const journey = await longLost(subject, {
+          state: 'ACKNOWLEDGED',
+          recorded: true,
+          openedAgoMs: change === 'expire' ? 25 * HOUR : 10 * MINUTE,
+        });
+        const { journeyId, alertId } = journey;
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        const holder = await subject.holdUntilClosureWaits(
+          journeyId,
+          change === 'remove' ? { remove: r1 } : change,
+        );
+        let result: RecordClosureResult;
+        try {
+          result = await within(
+            10_000,
+            subject.store.recordClosure({ alertId, responderId: r1 }),
+            `the close, ${what}`,
+          );
+        } finally {
+          await holder.release();
+        }
+
+        // Decided by what the holder left, never by what was there before it.
+        const resolution = (await resolutionOf(subject, journeyId, alertId))?.resolution;
+        const safe = ofKind(await subject.messagesOf(journeyId), alertId, SAFE);
+        if (change === 'unchanged') {
+          expect(recipientsOf(closedBy(result, what).messages), what).toEqual([r2, r3].sort());
+          expect(resolution, what).toBe(SAFE);
+          expect(recipientsOf(safe), what).toEqual([r2, r3].sort());
+          continue;
+        }
+        expect(result, what).toEqual(change === 'remove' ? NO_ALERT_FOR_YOU : ALREADY_OVER);
+        expect(safe, `${what}: no SAFE written`).toEqual([]);
+        expect(resolution, what).toBe(
+          change === 'remove'
+            ? null
+            : change === 'contact'
+              ? 'BACK_IN_CONTACT'
+              : change === 'home'
+                ? 'HOME'
+                : EXPIRED,
+        );
+        expect(await subject.stateOf(journeyId), what).toBe(
+          change === 'remove' ? 'LOST_CONTACT' : change === 'contact' ? 'ACTIVE' : 'ENDED',
+        );
+        expect((await subject.endOf(journeyId))?.endReason ?? null, what).toBe(
+          change === 'home' ? 'HOME' : change === 'expire' ? EXPIRED : null,
+        );
+      }
+
+      for (let round = 0; round < RACE_ROUNDS; round += 1) {
+        const at = `round ${String(round)}`;
+        const journey = await longLost(subject, {
+          state: 'ACKNOWLEDGED',
+          recorded: true,
+          openedAgoMs: 10 * MINUTE,
+        });
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+
+        // Promise.all rejects if any close fails outright: none may.
+        const results = await Promise.all(
+          Array.from({ length: RACERS }, () =>
+            subject.store.recordClosure({ alertId: journey.alertId, responderId: r1 }),
+          ),
+        );
+
+        expect(
+          results.filter(({ outcome }) => outcome === 'closed'),
+          at,
+        ).toHaveLength(1);
+        expect(
+          results.filter(({ outcome }) => outcome !== 'closed'),
+          at,
+        ).toEqual(Array.from({ length: RACERS - 1 }, () => ALREADY_OVER));
+        // One resolution, one end, and the stand-downs of that one resolution only.
+        expect(
+          (await subject.resolutionsOf(journey.journeyId)).map(({ resolution }) => resolution),
+          at,
+        ).toEqual([SAFE]);
+        expect((await subject.endOf(journey.journeyId))?.endReason, at).toBe(SAFE);
+        expect(
+          recipientsOf(ofKind(await subject.messagesOf(journey.journeyId), journey.alertId, SAFE)),
+          at,
+        ).toEqual([r2, r3].sort());
+      }
+    },
+  },
+  {
+    name: 'LOST-08-AC7: a closed alert’s stand-down to a responder whose withdrawn message is in a port’s hands is due at that message’s lease or retry time, at most 60 s on; others at once',
+    async run(subject) {
+      const journey = await longLost(subject, {
+        state: 'ACKNOWLEDGED',
+        recorded: true,
+        openedAgoMs: 10 * MINUTE,
+      });
+      const { journeyId, alertId } = journey;
+      const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+      const now = await subject.now();
+      const lease = ago(now, -30 * SECOND);
+      const retry = ago(now, -45 * SECOND);
+      const seed = (
+        recipientId: string,
+        kind: MessageKind,
+        given: { attempts: number; nextAttemptAt: Date; lastFailure?: PushFailureReason },
+      ) =>
+        subject.seedMessage({
+          alertId,
+          recipientId,
+          kind,
+          createdAt: ago(now, 5 * MINUTE),
+          ...given,
+        });
+      // R1, the closer: its push in the port's hands; it gets no stand-down.
+      await seed(r1, 'LOST_CONTACT', { attempts: 1, nextAttemptAt: ago(now, -20 * SECOND) });
+      // R2: refused NO_TARGET, its retry already passed: nothing of it in a port's hands.
+      await seed(r2, 'LOST_CONTACT', {
+        attempts: 2,
+        nextAttemptAt: ago(now, SECOND),
+        lastFailure: 'NO_TARGET',
+      });
+      // R3: its push handed to the port, leased 30 s more; its notice handed
+      // over, refused, and due again in 45 s.
+      await seed(r3, 'LOST_CONTACT', { attempts: 1, nextAttemptAt: lease });
+      await seed(r3, NOTICE, { attempts: 1, nextAttemptAt: retry, lastFailure: 'UNAVAILABLE' });
+
+      closedBy(await subject.store.recordClosure({ alertId, responderId: r1 }));
+
+      const resolvedAt =
+        (await resolutionOf(subject, journeyId, alertId))?.resolvedAt ?? new Date(Number.NaN);
+      const safe = ofKind(await subject.messagesOf(journeyId), alertId, SAFE);
+      expect(recipientsOf(safe)).toEqual([r2, r3].sort());
+      const dueOf = (recipientId: string) =>
+        safe.find((message) => message.recipientId === recipientId)?.nextAttemptAt;
+      // R2's at once; R3's at the later of its two, never before either.
+      expect(dueOf(r2), 'R2’s stand-down, due at once').toEqual(resolvedAt);
+      expect(dueOf(r3), 'R3’s stand-down, held behind both its messages').toEqual(retry);
+      expect(
+        (dueOf(r3)?.getTime() ?? Number.NaN) - resolvedAt.getTime(),
+        'held at most 60 s',
+      ).toBeLessThanOrEqual(LEASE_MS * 2);
+      // A claim now hands out R2's, and R3's only once it is due.
+      const claimed = (await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS })).messages
+        .filter(({ messageId }) => safe.some((message) => message.messageId === messageId))
+        .map(({ recipientId }) => recipientId);
+      expect(claimed, 'claimed now').toEqual([r2]);
+    },
+  },
+  {
+    name: 'LOST-08-AC8: alertsDueForExpiry reads exactly the unresolved alerts opened 24 hours or more before the store’s now; expireAlert ends the journey EXPIRED, resolves the alert EXPIRED and writes one EXPIRED per responder row, the acknowledger’s included',
+    async run(subject) {
+      const margin = subject.timeMarginMs;
+      // The read, for any alerts in any state (fast-check): whether each is
+      // due is worked out from the read's own now and the time it opened, so
+      // the database's moving clock decides nothing here.
+      const anAlert = fc.record({
+        state: fc.constantFrom<FakeAlertState>('OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED'),
+        recorded: fc.boolean(),
+        responders: fc.integer({ min: 0, max: 2 }),
+        openedAgoMs: fc.oneof(
+          fc.integer({ min: 10 * MINUTE, max: 30 * HOUR }),
+          fc.constantFrom(
+            ALERT_EXPIRES_AFTER_MS - 1,
+            ALERT_EXPIRES_AFTER_MS,
+            ALERT_EXPIRES_AFTER_MS + 1,
+          ),
+        ),
+      });
+      await fc.assert(
+        fc.asyncProperty(fc.array(anAlert, { minLength: 1, maxLength: 4 }), async (drawn) => {
+          const seeded = [];
+          for (const each of drawn) {
+            // Someone recorded only where there is someone to record.
+            const seed = { ...each, recorded: each.recorded && each.responders > 0 };
+            seeded.push({ ...seed, ...(await longLost(subject, seed)) });
+          }
+
+          const from = await subject.now();
+          const read = await subject.store.alertsDueForExpiry();
+          const to = await subject.now();
+
+          expect(between(read.now, from, to), 'the read’s now is the store’s').toBe(true);
+          const ours = seeded.map(({ alertId }) => alertId);
+          expect(dueAmong(read, ours)).toEqual(
+            seeded
+              .filter(
+                (each) =>
+                  each.state !== 'RESOLVED' &&
+                  read.now.getTime() - each.openedAt.getTime() >= ALERT_EXPIRES_AFTER_MS,
+              )
+              .map((each) => ({
+                id: each.alertId,
+                journeyId: each.journeyId,
+                journeyState: 'LOST_CONTACT',
+                openedAt: each.openedAt,
+              }))
+              .sort((a, b) => a.id.localeCompare(b.id)),
+          );
+        }),
+        {
+          numRuns: subject.propertyRuns,
+          // Forced first, so the database's few runs read each state the
+          // 24-hour end takes: an escalated alert with nobody left to tell,
+          // and an acknowledged one.
+          examples: [
+            [
+              [
+                { state: 'ESCALATED', recorded: false, responders: 0, openedAgoMs: 25 * HOUR },
+                { state: 'ACKNOWLEDGED', recorded: true, responders: 2, openedAgoMs: 25 * HOUR },
+                { state: 'OPEN', recorded: false, responders: 1, openedAgoMs: 23 * HOUR },
+              ],
+            ],
+          ],
+        },
+      );
+
+      // The read's order (LOST-08 review loop 1, code-reviewer; D-100): by
+      // opening, then by ID, as the adapter's `order by opened_at, id` gives
+      // it, so the 24-hour end goes through the alerts due oldest first.
+      // `dueAmong` above sorts what it compares, so it pins no order; this
+      // does. Put in out of that order: opened 26, 28 and 27 hours before
+      // one moment, then three or more opened at the same moment 29 hours
+      // before it, put in until the order they were put in is neither their
+      // IDs' order nor its reverse, so a store that keeps either is caught on
+      // every run, not on some. A `uuid` orders by its bytes, which is the
+      // order of its lower-case text.
+      const moment = await subject.now();
+      const lostAt = async (openedAt: Date) => {
+        const silentSince = ago(openedAt, LOST_CONTACT_AFTER_MS);
+        const { journeyId } = await watched(subject, {
+          state: 'LOST_CONTACT',
+          startedAt: ago(openedAt, HOUR),
+          lastHeartbeatAt: silentSince,
+        });
+        const alertId = await subject.seedAlert({
+          journeyId,
+          state: 'OPEN',
+          openedAt,
+          silentSince,
+        });
+        return { alertId, openedAt };
+      };
+      const putIn: { alertId: string; openedAt: Date }[] = [];
+      for (const hours of [26, 28, 27]) {
+        putIn.push(await lostAt(ago(moment, hours * HOUR)));
+      }
+      const tied: string[] = [];
+      const inIdOrderOrItsReverse = () =>
+        tied.every((id, index) => index === 0 || (tied[index - 1] ?? '') < id) ||
+        tied.every((id, index) => index === 0 || (tied[index - 1] ?? '') > id);
+      while (tied.length < 3 || inIdOrderOrItsReverse()) {
+        if (tied.length >= 12) {
+          throw new Error(
+            'twelve alerts put in at one moment came in ID order or its reverse: not believable',
+          );
+        }
+        const one = await lostAt(ago(moment, 29 * HOUR));
+        tied.push(one.alertId);
+        putIn.push(one);
+      }
+      const byOpeningThenId = [...putIn]
+        .sort(
+          (a, b) =>
+            a.openedAt.getTime() - b.openedAt.getTime() ||
+            (a.alertId < b.alertId ? -1 : a.alertId > b.alertId ? 1 : 0),
+        )
+        .map(({ alertId }) => alertId);
+      const ordered = putIn.map(({ alertId }) => alertId);
+      expect(byOpeningThenId, 'put in out of the read’s order').not.toEqual(ordered);
+      expect(
+        (await subject.store.alertsDueForExpiry()).alerts
+          .map(({ id }) => id)
+          .filter((id) => ordered.includes(id)),
+        'read by opening, then by ID',
+      ).toEqual(byOpeningThenId);
+
+      // The write, in every state it ends: one EXPIRED per responder row, the
+      // acknowledger told too, at the store's now, counted from the opening.
+      for (const [what, seed] of [
+        ['OPEN, nobody on it', { state: 'OPEN' }],
+        ['ESCALATED', { state: 'ESCALATED' }],
+        ['ACKNOWLEDGED by R1, who is told too', { state: 'ACKNOWLEDGED', recorded: true }],
+        ['reset into its second round, counted from its opening', { state: 'OPEN', round: 2 }],
+        [
+          '24 hours old: to the millisecond against the fake',
+          { state: 'OPEN', openedAgoMs: ALERT_EXPIRES_AFTER_MS + margin },
+        ],
+      ] as const) {
+        const journey = await longLost(subject, { ...seed, responders: 3 });
+        const { journeyId, alertId, responderIds } = journey;
+        const [r1 = '', r2 = '', r3 = ''] = responderIds;
+        const round = 'round' in seed ? seed.round : 1;
+        const unsent = [
+          await messageFor(subject, {
+            alertId,
+            recipientId: r1,
+            kind: 'LOST_CONTACT',
+            attempts: 0,
+            round,
+          }),
+          await messageFor(subject, {
+            alertId,
+            recipientId: r2,
+            kind: SMS,
+            lastFailure: 'NO_TARGET',
+            round,
+          }),
+        ];
+        const sent = await messageFor(subject, {
+          alertId,
+          recipientId: r3,
+          kind: 'LOST_CONTACT',
+          sentAgoMs: 24 * HOUR,
+          round,
+        });
+        const other = await longLost(subject, { openedAgoMs: underADayMs(subject), responders: 1 });
+        const otherBefore = await closureRecordOf(subject, other);
+        const before = await closureRecordOf(subject, journey);
+        const acknowledgement = await acknowledgementOf(subject, journeyId, alertId);
+
+        const read = await subject.store.alertsDueForExpiry();
+        expect(dueAmong(read, [alertId, other.alertId]), `${what}: read as due`).toEqual([
+          { id: alertId, journeyId, journeyState: 'LOST_CONTACT', openedAt: journey.openedAt },
+        ]);
+        const from = await subject.now();
+        const { messages } = expiredWith(await subject.store.expireAlert({ alertId }), what);
+        const to = await subject.now();
+
+        const after = await closureRecordOf(subject, journey);
+        const resolution = await resolutionOf(subject, journeyId, alertId);
+        const resolvedAt = resolution?.resolvedAt ?? new Date(Number.NaN);
+        expect(resolution?.resolution, what).toBe(EXPIRED);
+        expect(between(resolvedAt, from, to), `${what}: at the store’s now`).toBe(true);
+        expect(after.alerts.find(({ id }) => id === alertId)?.state, what).toBe('RESOLVED');
+        expect(after.state, what).toBe('ENDED');
+        expect(after.end, what).toEqual({ endedAt: resolvedAt, endReason: EXPIRED });
+        expect(await acknowledgementOf(subject, journeyId, alertId), what).toEqual(acknowledgement);
+        const withdrawnAt = new Map(
+          after.withdrawals.map(({ messageId, withdrawnAt: when }) => [messageId, when]),
+        );
+        for (const messageId of unsent) {
+          expect(withdrawnAt.get(messageId), `${what}: withdrawn`).toEqual(resolvedAt);
+        }
+        expect(withdrawnAt.get(sent), `${what}: the sent one left`).toBeNull();
+
+        const expired = ofKind(after.messages, alertId, EXPIRED);
+        expect(recipientsOf(expired), `${what}: every responder, the acknowledger too`).toEqual(
+          [...responderIds].sort(),
+        );
+        const rounds = await messageRoundsByIdOf(subject, journeyId);
+        const written = new Map(after.withdrawals.map((each) => [each.messageId, each]));
+        for (const message of expired) {
+          expect(message, what).toMatchObject({ attempts: 0, sentAt: null, lastFailure: null });
+          expect(message.nextAttemptAt, what).toEqual(resolvedAt);
+          expect(written.get(message.messageId)?.createdAt, what).toEqual(resolvedAt);
+          expect(rounds.get(message.messageId), what).toBe(round);
+          expect(message.messageId, what).toMatch(LOWER_UUID);
+          expect(
+            [alertId, journeyId, journey.walkerId, journey.deviceId, ...responderIds],
+            what,
+          ).not.toContain(message.messageId);
+        }
+        expect(byRecipient(messages), what).toEqual(expired.map(asAnswered));
+        expect(
+          after.messages
+            .filter(
+              ({ messageId }) => !before.messages.some((each) => each.messageId === messageId),
+            )
+            .map(({ kind }) => kind),
+          `${what}: nothing written but the EXPIRED`,
+        ).toEqual([EXPIRED, EXPIRED, EXPIRED]);
+        expect(after.journeyMessages, `${what}: no message to the walker`).toEqual(
+          before.journeyMessages,
+        );
+        expect(await closureRecordOf(subject, other), what).toEqual(otherBefore);
+      }
+
+      // Not due, and nothing written: under its 24 hours; resolved; an
+      // ACTIVE journey's alert, put in directly; and an ID no alert has.
+      const under = await longLost(subject, { openedAgoMs: underADayMs(subject) });
+      const resolved = await longLost(subject, { state: 'RESOLVED' });
+      const now = await subject.now();
+      const active = await watched(subject, {
+        startedAt: ago(now, 26 * HOUR),
+        lastHeartbeatAt: ago(now, MINUTE),
+        responders: 2,
+      });
+      const activeAlert = await subject.seedAlert({
+        journeyId: active.journeyId,
+        state: 'OPEN',
+        openedAt: ago(now, 25 * HOUR),
+        silentSince: ago(now, 25 * HOUR + LOST_CONTACT_AFTER_MS),
+      });
+      const read = await subject.store.alertsDueForExpiry();
+      expect(dueAmong(read, [under.alertId, resolved.alertId]), 'neither read as due').toEqual([]);
+      expect(
+        dueAmong(read, [activeAlert]).map(({ journeyState }) => journeyState),
+        'the ACTIVE journey’s alert is read, with its journey’s state',
+      ).toEqual(['ACTIVE']);
+      for (const [what, journey, alertId] of [
+        ['under its 24 hours', under, under.alertId],
+        ['RESOLVED', resolved, resolved.alertId],
+        ['an ACTIVE journey’s alert', active, activeAlert],
+      ] as const) {
+        const before = await closureRecordOf(subject, journey);
+        expect(await subject.store.expireAlert({ alertId }), what).toEqual(NOT_EXPIRED);
+        expect(await closureRecordOf(subject, journey), what).toEqual(before);
+      }
+      expect(await subject.store.expireAlert({ alertId: syntheticUuid() })).toEqual(NOT_EXPIRED);
+    },
+  },
+  {
+    name: 'LOST-08-AC9: expireAlert on a journey with no responder row resolves its alert with no message, and unheardAlertCount no longer counts it',
+    async run(subject) {
+      const journey = await longLost(subject, { state: 'ESCALATED', responders: 2 });
+      const { journeyId, alertId } = journey;
+      await subject.removeResponders(journeyId);
+      const counted = (await subject.store.unheardAlertCount()).count;
+      expect(counted, 'counted unheard').toBeGreaterThanOrEqual(1);
+      const before = await closureRecordOf(subject, journey);
+
+      expect(
+        dueAmong(await subject.store.alertsDueForExpiry(), [alertId]).map(({ id }) => id),
+        'read as due: the 24-hour end reads alerts nobody can hear too',
+      ).toEqual([alertId]);
+      const { messages } = expiredWith(await subject.store.expireAlert({ alertId }));
+
+      expect(messages, 'nobody to tell').toEqual([]);
+      const after = await closureRecordOf(subject, journey);
+      expect(after.messages, 'no message written').toEqual(before.messages);
+      expect(after.journeyMessages, 'none to the walker').toEqual(before.journeyMessages);
+      const resolution = await resolutionOf(subject, journeyId, alertId);
+      expect(resolution?.resolution).toBe(EXPIRED);
+      expect(after.state).toBe('ENDED');
+      expect(after.end).toEqual({ endedAt: resolution?.resolvedAt, endReason: EXPIRED });
+      expect((await subject.store.unheardAlertCount()).count, 'counted no more').toBe(counted - 1);
+    },
+  },
+  {
+    name: 'LOST-08-AC11: expireAlert decides again under the journey’s row: it skips, writing nothing, an alert resolved, or a journey ended or back in contact, since the read; after a removal it expires all the same, telling the remaining responders only; a held row it skips without waiting, and told to wait, it decides as the holder left it',
+    async run(subject) {
+      // Read as due, then changed before the journey's row is taken.
+      for (const change of [
+        'back in contact',
+        'ended by "I’m home"',
+        'closed by its acknowledger',
+        'R3 removed',
+      ] as const) {
+        const journey = await longLost(subject, { state: 'ACKNOWLEDGED', recorded: true });
+        const { journeyId, alertId } = journey;
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        expect(
+          dueAmong(await subject.store.alertsDueForExpiry(), [alertId]).map(({ id }) => id),
+          `${change}: read as due first`,
+        ).toEqual([alertId]);
+        if (change === 'back in contact') {
+          backInContact(
+            await subject.store.recordHeartbeat(await freshHeartbeat(subject, journeyId)),
+          );
+        } else if (change === 'ended by "I’m home"') {
+          endedHome(await subject.store.recordHome(homeOf(journey)));
+        } else if (change === 'closed by its acknowledger') {
+          closedBy(await subject.store.recordClosure({ alertId, responderId: r1 }), change);
+        } else {
+          removed(await subject.store.removeResponder(removal(journey, r3)), change);
+        }
+        const before = await closureRecordOf(subject, journey);
+
+        const result = await subject.store.expireAlert({ alertId });
+
+        if (change !== 'R3 removed') {
+          expect(result, change).toEqual(NOT_EXPIRED);
+          expect(await closureRecordOf(subject, journey), `${change}: nothing written`).toEqual(
+            before,
+          );
+          continue;
+        }
+        // A removal resolves nothing: the 24-hour end goes on, and the
+        // removed responder hears nothing of it (D-122, item 2).
+        expect(recipientsOf(expiredWith(result, change).messages), change).toEqual([r1, r2].sort());
+        expect((await subject.endOf(journeyId))?.endReason, change).toBe(EXPIRED);
+      }
+
+      // Without a wait: a held row is skipped at once, writing nothing; once
+      // released, the alert is expired.
+      const skipping = await longLost(subject, { responders: 2 });
+      const held = await subject.hold(skipping.journeyId);
+      try {
+        const before = await closureRecordOf(subject, skipping);
+        expect(
+          await within(
+            2_000,
+            subject.store.expireAlert({ alertId: skipping.alertId }),
+            'a 24-hour end of a held row',
+          ),
+        ).toEqual(NOT_EXPIRED);
+        expect(await closureRecordOf(subject, skipping)).toEqual(before);
+      } finally {
+        await held.release();
+      }
+      expiredWith(await subject.store.expireAlert({ alertId: skipping.alertId }), 'once released');
+
+      // Told to wait, with the row held throughout: held, writing nothing.
+      const waiting = await longLost(subject, { responders: 2 });
+      const holding = await subject.hold(waiting.journeyId);
+      try {
+        const before = await closureRecordOf(subject, waiting);
+        expect(
+          await subject.store.expireAlert({
+            alertId: waiting.alertId,
+            lockWaitMs: subject.lockWaitMs,
+          }),
+        ).toEqual({ outcome: 'held' });
+        expect(await closureRecordOf(subject, waiting)).toEqual(before);
+      } finally {
+        await holding.release();
+      }
+
+      // Told to wait, with a holder that lets go within the wait: decided as
+      // the holder left the journey. The escalation's holder serves any
+      // waiter on the journey's row.
+      for (const [change, outcome, state] of [
+        ['unchanged', 'expired', 'ENDED'],
+        ['acknowledge', 'expired', 'ENDED'],
+        ['resolve', 'skipped', 'ACTIVE'],
+      ] as const) {
+        const journey = await longLost(subject, { responders: 2 });
+        const holder = await subject.holdUntilEscalationWaits(journey.journeyId, change);
+        const result = await (async () => {
+          try {
+            return await subject.store.expireAlert({
+              alertId: journey.alertId,
+              lockWaitMs: subject.lockWaitMs,
+            });
+          } finally {
+            await holder.release();
+          }
+        })();
+
+        expect(result.outcome, change).toBe(outcome);
+        expect(await subject.stateOf(journey.journeyId), change).toBe(state);
+        expect(
+          ofKind(await subject.messagesOf(journey.journeyId), journey.alertId, EXPIRED).length,
+          change,
+        ).toBe(outcome === 'expired' ? 2 : 0);
+      }
+
+      // A lock wait PostgreSQL would read as no limit at all is refused,
+      // naming lockWaitMs, before anything is taken or written.
+      const refused = await longLost(subject, { responders: 1 });
+      const before = await closureRecordOf(subject, refused);
+      for (const lockWaitMs of [0, -1, 0.5, 1.5, Number.NaN, 2_147_483_648]) {
+        await expect(
+          subject.store.expireAlert({ alertId: refused.alertId, lockWaitMs }),
+          String(lockWaitMs),
+        ).rejects.toThrow(/lockWaitMs/);
+      }
+      expect(await closureRecordOf(subject, refused)).toEqual(before);
+    },
+  },
+  {
+    name: 'LOST-08-AC6: for any sequence of acknowledgements, closes, removals, sweeps, time passing beyond 24 hours, heartbeats fresh or stale and "I’m home", after every step an ENDED journey has its end reason and ended_at, an unresolved alert’s journey is LOST_CONTACT, no unresolved alert is 24 hours old after a sweep, and every SAFE alert names its acknowledger',
+    async run(subject) {
+      const margin = subject.timeMarginMs;
+      // As SM-10-AC8's property: the fake's clock is moved by hand; the
+      // database's moves on by itself, so against it a time step passes none,
+      // and its runs reach the 24 hours through alerts opened in the past.
+      const passed = (ms: number) => (margin === 0 ? ms : 0);
+      // Ages around the 24 hours and far from them; against the database,
+      // those a margin cannot judge left out.
+      const aroundADay = (min: number) =>
+        fc
+          .oneof(
+            fc.integer({ min, max: 26 * HOUR }),
+            fc.constantFrom(
+              ALERT_EXPIRES_AFTER_MS - 1,
+              ALERT_EXPIRES_AFTER_MS,
+              ALERT_EXPIRES_AFTER_MS + 1,
+            ),
+          )
+          .filter((ms) => margin === 0 || Math.abs(ms - ALERT_EXPIRES_AFTER_MS) > margin);
+      // Who: the first, second or third responder, the walker, or a stranger.
+      const who = fc.integer({ min: 0, max: 4 });
+      const step = fc.oneof(
+        fc.record({ kind: fc.constant('heartbeat' as const), agoMs: silences(margin) }),
+        fc.record({ kind: fc.constant('sweep' as const) }),
+        fc.record({ kind: fc.constant('acknowledge' as const), who }),
+        fc.record({ kind: fc.constant('close' as const), who }),
+        fc.record({ kind: fc.constant('remove' as const), who }),
+        fc.record({
+          kind: fc.constant('time' as const),
+          ms: fc.oneof(fc.integer({ min: 1, max: 4 * MINUTE }), aroundADay(HOUR)),
+        }),
+        fc.record({ kind: fc.constant('home' as const) }),
+      );
+      const start = fc.oneof(
+        // An ACTIVE journey silent this long, never heard from.
+        fc.record({ kind: fc.constant('active' as const), silentForMs: silences(margin) }),
+        // A LOST_CONTACT journey whose alert opened this long ago, its first
+        // responder on it or nobody.
+        fc.record({
+          kind: fc.constant('lost' as const),
+          openedAgoMs: aroundADay(15 * SECOND),
+          acknowledged: fc.boolean(),
+        }),
+      );
+
+      await fc.assert(
+        fc.asyncProperty(start, fc.array(step, { maxLength: 10 }), async (begin, steps) => {
+          // The rules, applied step by step: the journey's state and end
+          // reason, last contact and responders, and each alert opened so
+          // far: how it resolved, who is on it, its round, and who was stood
+          // down.
+          const model: {
+            id: string;
+            openedAt: Date;
+            resolution: string | null;
+            acknowledgedBy: string | null;
+            round: number;
+            stoodDown: string[];
+          }[] = [];
+          let state: 'ACTIVE' | 'LOST_CONTACT' | 'ENDED';
+          let endReason: string | null = null;
+          let lastContact: Date;
+          let journey: {
+            walkerId: string;
+            deviceId: string;
+            journeyId: string;
+            responderIds: string[];
+          };
+          if (begin.kind === 'active') {
+            const now = await subject.now();
+            journey = await watched(subject, {
+              startedAt: ago(now, begin.silentForMs),
+              responders: 3,
+            });
+            state = 'ACTIVE';
+            lastContact = ago(now, begin.silentForMs);
+          } else {
+            const made = await longLost(subject, {
+              state: begin.acknowledged ? 'ACKNOWLEDGED' : 'OPEN',
+              recorded: begin.acknowledged,
+              openedAgoMs: begin.openedAgoMs,
+            });
+            journey = made;
+            state = 'LOST_CONTACT';
+            lastContact = new Date(made.openedAt.getTime() - LOST_CONTACT_AFTER_MS);
+            model.push({
+              id: made.alertId,
+              openedAt: made.openedAt,
+              resolution: null,
+              acknowledgedBy: made.acknowledgedBy,
+              round: 1,
+              stoodDown: [],
+            });
+          }
+          const { journeyId } = journey;
+          let responders = [...journey.responderIds];
+          const [started] = await subject.journeysOf(journey.walkerId);
+          const startedAt = started?.startedAt ?? new Date(Number.NaN);
+          const [stranger = ''] = await users(subject, 1);
+          const people = [...journey.responderIds, journey.walkerId, stranger];
+          /** The current alert resolved this way, at the store's now, standing these down. */
+          const resolve = (resolution: string, messages: readonly AlertMessage[]) => {
+            const current = model.at(-1);
+            if (current?.resolution === null) {
+              current.resolution = resolution;
+              current.stoodDown = recipientsOf(messages);
+            }
+          };
+
+          for (const next of steps) {
+            const current = model.at(-1);
+            let swept: Date | null = null;
+            if (next.kind === 'heartbeat') {
+              const at = await subject.now();
+              // Never before the start: contact comes after a journey began.
+              const receivedAt = ago(at, Math.min(next.agoMs, at.getTime() - startedAt.getTime()));
+              const result = await subject.store.recordHeartbeat(
+                heartbeatFor(journeyId, { receivedAt, position: null }),
+              );
+              if (state === 'ENDED') {
+                expect(result.outcome, 'a heartbeat after the end').toBe('ended');
+              } else {
+                lastContact = new Date(Math.max(lastContact.getTime(), receivedAt.getTime()));
+                const silenceMs = at.getTime() - lastContact.getTime();
+                const sure = margin === 0 || Math.abs(silenceMs - LOST_CONTACT_AFTER_MS) > margin;
+                const back = sure
+                  ? state === 'LOST_CONTACT' && silenceMs < LOST_CONTACT_AFTER_MS
+                  : result.outcome === 'back_in_contact';
+                expect(result.outcome, 'the heartbeat’s answer').toBe(
+                  back ? 'back_in_contact' : 'recorded',
+                );
+                if (back && result.outcome === 'back_in_contact') {
+                  state = 'ACTIVE';
+                  expect(recipientsOf(result.messages), 'stood down').toEqual(
+                    current?.resolution === null ? [...responders].sort() : [],
+                  );
+                  resolve('BACK_IN_CONTACT', result.messages);
+                }
+              }
+            } else if (next.kind === 'sweep') {
+              // The watchdog's three jobs at the store's level, in its order:
+              // the open, the escalation, and the 24-hour end, each by its
+              // read's own now.
+              const overdue = await subject.store.overdueJourneys(LOST_CONTACT_AFTER_MS);
+              const isOverdue = overdue.journeys.some(({ id }) => id === journeyId);
+              expect(isOverdue, 'the overdue read').toBe(
+                state === 'ACTIVE' &&
+                  overdue.now.getTime() - lastContact.getTime() >= LOST_CONTACT_AFTER_MS,
+              );
+              if (isOverdue) {
+                const opened = await subject.store.openLostContactAlert({
+                  journeyId,
+                  afterMs: LOST_CONTACT_AFTER_MS,
+                });
+                if (opened.outcome !== 'opened') {
+                  throw new Error(
+                    `expected the sweep to open the alert: ${JSON.stringify(opened)}`,
+                  );
+                }
+                state = 'LOST_CONTACT';
+                const openedAt =
+                  (await subject.alertsOf(journeyId)).find(({ id }) => id === opened.alertId)
+                    ?.openedAt ?? new Date(Number.NaN);
+                model.push({
+                  id: opened.alertId,
+                  openedAt,
+                  resolution: null,
+                  acknowledgedBy: null,
+                  round: 1,
+                  stoodDown: [],
+                });
+              }
+              const ours = model.map(({ id }) => id);
+              const due = await subject.store.alertsDueForEscalation(ESCALATE_AFTER_MS);
+              for (const { id } of due.alerts.filter((alert) => ours.includes(alert.id))) {
+                escalated(await subject.store.escalateAlert({ alertId: id }), 'the escalation');
+              }
+              const read = await subject.store.alertsDueForExpiry();
+              const expiring = model.filter(
+                (alert) =>
+                  alert.resolution === null &&
+                  read.now.getTime() - alert.openedAt.getTime() >= ALERT_EXPIRES_AFTER_MS,
+              );
+              expect(
+                dueAmong(read, ours)
+                  .map(({ id }) => id)
+                  .sort(),
+                'the alerts read as due to expire',
+              ).toEqual(expiring.map(({ id }) => id).sort());
+              for (const { id } of expiring) {
+                const { messages } = expiredWith(await subject.store.expireAlert({ alertId: id }));
+                expect(recipientsOf(messages), 'every responder told').toEqual(
+                  [...responders].sort(),
+                );
+                resolve(EXPIRED, messages);
+                state = 'ENDED';
+                endReason = EXPIRED;
+              }
+              swept = read.now;
+            } else if (next.kind === 'time') {
+              const ms = passed(next.ms);
+              if (ms > 0) {
+                await subject.letTimePass(ms);
+              }
+            } else if (next.kind === 'home') {
+              const result = await subject.store.recordHome(homeOf(journey));
+              if (state === 'ENDED') {
+                expect(result).toEqual({ outcome: 'already_ended' });
+              } else {
+                const { messages } = endedHome(result);
+                if (state === 'LOST_CONTACT') {
+                  resolve('HOME', messages);
+                }
+                state = 'ENDED';
+                endReason = 'HOME';
+              }
+            } else if (next.kind === 'acknowledge') {
+              const sender = people[next.who] ?? stranger;
+              const result = await subject.store.recordAcknowledgement({
+                alertId: current?.id ?? syntheticUuid(),
+                responderId: sender,
+              });
+              if (current === undefined || !responders.includes(sender)) {
+                expect(result, 'not a responder, or no alert').toEqual(NOT_FOUND);
+              } else if (current.resolution !== null) {
+                expect(result, 'a resolved alert').toEqual(OVER);
+              } else if (current.acknowledgedBy === sender) {
+                expect(result, 'the sender’s own').toEqual(YOURS);
+              } else if (current.acknowledgedBy !== null) {
+                expect(result, 'someone else’s').toEqual(TAKEN);
+              } else {
+                acknowledged(result);
+                current.acknowledgedBy = sender;
+              }
+            } else if (next.kind === 'close') {
+              const sender = people[next.who] ?? stranger;
+              const result = await subject.store.recordClosure({
+                alertId: current?.id ?? syntheticUuid(),
+                responderId: sender,
+              });
+              if (current === undefined || !responders.includes(sender)) {
+                expect(result, 'not a responder, or no alert').toEqual(NO_ALERT_FOR_YOU);
+              } else if (current.resolution !== null) {
+                expect(result, 'a resolved alert').toEqual(ALREADY_OVER);
+              } else if (current.acknowledgedBy !== sender) {
+                expect(result, 'not the acknowledger').toEqual(NOT_THE_ACKNOWLEDGER);
+              } else {
+                const { messages } = closedBy(result);
+                expect(recipientsOf(messages), 'the others told').toEqual(
+                  responders.filter((id) => id !== sender).sort(),
+                );
+                resolve(SAFE, messages);
+                state = 'ENDED';
+                endReason = SAFE;
+              }
+            } else {
+              const removedOne = people[next.who] ?? stranger;
+              const result = await subject.store.removeResponder({
+                journeyId,
+                responderId: removedOne,
+              });
+              if (state === 'ENDED') {
+                expect(result, 'a removal from an ended journey').toEqual(JOURNEY_OVER);
+              } else if (!responders.includes(removedOne)) {
+                expect(result, 'not a responder').toEqual(NOT_A_RESPONDER);
+              } else {
+                responders = responders.filter((id) => id !== removedOne);
+                const resets =
+                  current?.resolution === null && current.acknowledgedBy === removedOne;
+                expect(removed(result).resetAlertId, 'the reset').toBe(resets ? current.id : null);
+                if (resets) {
+                  current.acknowledgedBy = null;
+                  current.round += 1;
+                }
+              }
+            }
+
+            // After every step.
+            expect(await subject.stateOf(journeyId), 'the state').toBe(state);
+            const end = await subject.endOf(journeyId);
+            // ENDED exactly when it has an end reason and an end time.
+            expect(end?.endReason ?? null, 'the end reason').toBe(
+              state === 'ENDED' ? endReason : null,
+            );
+            expect(end?.endedAt !== null, 'an end time exactly when ENDED').toBe(state === 'ENDED');
+            const alerts = await subject.alertsOf(journeyId);
+            const resolutions = await subject.resolutionsOf(journeyId);
+            const acknowledgements = await subject.acknowledgementsOf(journeyId);
+            const messages = await subject.messagesOf(journeyId);
+            const messageRounds = await messageRoundsByIdOf(subject, journeyId);
+            expect(alerts.map(({ id }) => id).sort()).toEqual(model.map(({ id }) => id).sort());
+            for (const alert of alerts) {
+              const expected = model.find(({ id }) => id === alert.id);
+              const resolution = resolutions.find(({ alertId }) => alertId === alert.id);
+              const by =
+                acknowledgements.find(({ alertId }) => alertId === alert.id)?.acknowledgedBy ??
+                null;
+              expect(resolution?.resolution ?? null, 'how it resolved').toBe(
+                expected?.resolution ?? null,
+              );
+              expect(resolution?.resolvedAt !== null, 'a resolution time with it').toBe(
+                expected?.resolution !== null,
+              );
+              expect(alert.state === 'RESOLVED', 'RESOLVED exactly when resolved').toBe(
+                expected?.resolution !== null,
+              );
+              // An unresolved alert's journey is LOST_CONTACT, and its
+              // acknowledger, if any, one of its responders.
+              if (alert.state !== 'RESOLVED') {
+                expect(state, 'an unresolved alert’s journey').toBe('LOST_CONTACT');
+                if (by !== null) {
+                  expect(responders, 'the acknowledger is a responder').toContain(by);
+                }
+              }
+              // Every SAFE alert names its acknowledger, the one who closed
+              // it, and its journey ended SAFE at the same now.
+              if (resolution?.resolution === SAFE) {
+                expect(by, 'a SAFE alert’s acknowledger').not.toBeNull();
+                expect(end, 'the journey a SAFE alert ended').toEqual({
+                  endedAt: resolution.resolvedAt,
+                  endReason: SAFE,
+                });
+              }
+              if (resolution?.resolution === EXPIRED) {
+                expect(end, 'the journey the 24-hour end ended').toEqual({
+                  endedAt: resolution.resolvedAt,
+                  endReason: EXPIRED,
+                });
+              }
+              // Stood down once, of its own resolution's kind, in its round:
+              // no responder holds two stand-downs for one alert in one round.
+              const standDowns = messages.filter(
+                ({ alertId, kind }) => alertId === alert.id && STAND_DOWNS.includes(kind),
+              );
+              expect(
+                standDowns.filter(({ kind }) => kind !== resolution?.resolution),
+                'a stand-down of another kind',
+              ).toEqual([]);
+              expect(recipientsOf(standDowns), 'who was stood down').toEqual(
+                expected?.stoodDown ?? [],
+              );
+              const keys = standDowns.map(
+                ({ messageId, recipientId }) =>
+                  `${recipientId} ${String(messageRounds.get(messageId))}`,
+              );
+              expect(new Set(keys).size, 'one stand-down per responder per round').toBe(
+                keys.length,
+              );
+            }
+            // No unresolved alert is 24 hours old after a sweep.
+            if (swept !== null) {
+              const at = swept;
+              expect(
+                model
+                  .filter(
+                    (alert) =>
+                      alert.resolution === null &&
+                      at.getTime() - alert.openedAt.getTime() >= ALERT_EXPIRES_AFTER_MS,
+                  )
+                  .map(({ id }) => id),
+                'an unresolved alert 24 hours old after the sweep',
+              ).toEqual([]);
+              expect(
+                alerts
+                  .filter(
+                    ({ state: alertState, openedAt }) =>
+                      alertState !== 'RESOLVED' &&
+                      at.getTime() - openedAt.getTime() >= ALERT_EXPIRES_AFTER_MS,
+                  )
+                  .map(({ id }) => id),
+                'as the store holds it',
+              ).toEqual([]);
+            }
+          }
+        }),
+        {
+          numRuns: subject.propertyRuns,
+          // The spec's test plan: fixed sequences run first, so even the
+          // database's few runs reach both ends: one that escalates,
+          // acknowledges, removes the acknowledger, acknowledges again and
+          // closes; one that opens, acknowledges and closes; and two that run
+          // to the 24-hour end, one with an acknowledger, one by time passing.
+          examples: [
+            [
+              { kind: 'lost', openedAgoMs: 3 * MINUTE, acknowledged: false },
+              [
+                { kind: 'sweep' },
+                { kind: 'acknowledge', who: 0 },
+                { kind: 'remove', who: 0 },
+                { kind: 'sweep' },
+                { kind: 'acknowledge', who: 1 },
+                { kind: 'close', who: 2 },
+                { kind: 'close', who: 1 },
+                { kind: 'close', who: 1 },
+                { kind: 'heartbeat', agoMs: 0 },
+                { kind: 'sweep' },
+              ],
+            ],
+            [
+              { kind: 'active', silentForMs: 6 * MINUTE },
+              [
+                { kind: 'sweep' },
+                { kind: 'close', who: 0 },
+                { kind: 'acknowledge', who: 1 },
+                { kind: 'close', who: 3 },
+                { kind: 'close', who: 1 },
+                { kind: 'home' },
+              ],
+            ],
+            [
+              { kind: 'lost', openedAgoMs: 25 * HOUR, acknowledged: true },
+              [
+                { kind: 'close', who: 1 },
+                { kind: 'remove', who: 2 },
+                { kind: 'sweep' },
+                { kind: 'close', who: 0 },
+                { kind: 'sweep' },
+              ],
+            ],
+            [
+              { kind: 'lost', openedAgoMs: MINUTE, acknowledged: false },
+              [
+                { kind: 'sweep' },
+                { kind: 'time', ms: 25 * HOUR },
+                { kind: 'sweep' },
+                { kind: 'acknowledge', who: 0 },
+              ],
+            ],
+          ],
+        },
+      );
+    },
+  },
+  {
+    name: 'LOST-08-AC15: the open withdraws an earlier journey’s unsent SAFE and EXPIRED for its own responders only; the removal and the resolution leave them alone',
+    async run(subject) {
+      // W's first journey, closed by R1: SAFE for R2 and R3.
+      const first = await longLost(subject, {
+        state: 'ACKNOWLEDGED',
+        recorded: true,
+        openedAgoMs: 30 * HOUR,
+      });
+      const [r1 = '', r2 = '', r3 = ''] = first.responderIds;
+      closedBy(
+        await subject.store.recordClosure({ alertId: first.alertId, responderId: r1 }),
+        'the first journey’s close',
+      );
+      // Its second, ended at 24 hours: EXPIRED for R2, R3 and R4.
+      const [r4 = '', r5 = ''] = await users(subject, 2);
+      const now = await subject.now();
+      const secondId = await subject.seedJourney({
+        walkerId: first.walkerId,
+        deviceId: first.deviceId,
+        state: 'LOST_CONTACT',
+        responderIds: [r2, r3, r4],
+        startedAt: ago(now, 27 * HOUR),
+        lastHeartbeatAt: ago(now, 25 * HOUR + LOST_CONTACT_AFTER_MS),
+      });
+      const secondAlert = await subject.seedAlert({
+        journeyId: secondId,
+        state: 'OPEN',
+        openedAt: ago(now, 25 * HOUR),
+        silentSince: ago(now, 25 * HOUR + LOST_CONTACT_AFTER_MS),
+      });
+      expiredWith(
+        await subject.store.expireAlert({ alertId: secondAlert }),
+        'the second journey’s 24-hour end',
+      );
+      const second = { walkerId: first.walkerId, journeyId: secondId };
+      const standDown = async (journeyId: string, alertId: string, kind: string, to: string) =>
+        ofKind(await subject.messagesOf(journeyId), alertId, kind).find(
+          ({ recipientId }) => recipientId === to,
+        )?.messageId ?? '';
+      const ids = {
+        safeR2: await standDown(first.journeyId, first.alertId, SAFE, r2),
+        safeR3: await standDown(first.journeyId, first.alertId, SAFE, r3),
+        expiredR2: await standDown(secondId, secondAlert, EXPIRED, r2),
+        expiredR3: await standDown(secondId, secondAlert, EXPIRED, r3),
+        expiredR4: await standDown(secondId, secondAlert, EXPIRED, r4),
+      };
+      expect(
+        Object.values(ids).filter((id) => id === ''),
+        'each stand-down written',
+      ).toEqual([]);
+      const withdrawn = async () => {
+        const all = new Map([
+          ...(await withdrawnAtOf(subject, first.journeyId)),
+          ...(await withdrawnAtOf(subject, secondId)),
+        ]);
+        return Object.fromEntries(
+          Object.entries(ids).map(([name, id]) => [name, all.get(id) ?? null]),
+        );
+      };
+      const nothingYet = Object.fromEntries(Object.keys(ids).map((name) => [name, null]));
+      expect(await withdrawn(), 'all unsent').toEqual(nothingYet);
+
+      // W's third journey, with R2, R3 and R5, ACTIVE and overdue. R3 is
+      // removed first: the removal withdraws only the third journey's
+      // messages to R3, and none of R3's earlier stand-downs.
+      const thirdId = await subject.seedJourney({
+        walkerId: first.walkerId,
+        deviceId: first.deviceId,
+        state: 'ACTIVE',
+        responderIds: [r2, r3, r5],
+        startedAt: ago(now, HOUR),
+        lastHeartbeatAt: ago(now, 10 * MINUTE),
+      });
+      const third = { ...first, journeyId: thirdId };
+      removed(await subject.store.removeResponder(removal(third, r3)), 'R3’s removal');
+      expect(await withdrawn(), 'the removal leaves them alone').toEqual(nothingYet);
+
+      // The open withdraws R2's SAFE and EXPIRED, R2 being one of its
+      // responders, at its now; R3's and R4's it leaves to be sent.
+      const before = await subject.now();
+      const opened = await subject.store.openLostContactAlert({
+        journeyId: thirdId,
+        afterMs: LOST_CONTACT_AFTER_MS,
+      });
+      const after = await subject.now();
+      expect(opened.outcome).toBe('opened');
+      const afterOpen = await withdrawn();
+      expect(between(afterOpen['safeR2'], before, after), 'R2’s SAFE withdrawn').toBe(true);
+      expect(between(afterOpen['expiredR2'], before, after), 'R2’s EXPIRED withdrawn').toBe(true);
+      expect({
+        safeR3: afterOpen['safeR3'],
+        expiredR3: afterOpen['expiredR3'],
+        expiredR4: afterOpen['expiredR4'],
+      }).toEqual({ safeR3: null, expiredR3: null, expiredR4: null });
+
+      // The third journey's alert resolves: that leaves them alone too.
+      backInContact(await subject.store.recordHeartbeat(await freshHeartbeat(subject, thirdId)));
+      expect(await withdrawn(), 'the resolution leaves them alone').toEqual(afterOpen);
+      expect(await subject.stateOf(second.journeyId)).toBe('ENDED');
+    },
+  },
+  {
+    name: 'LOST-08-AC21: insertStarted retries once when the journey it conflicted with ended before its read, and throws when the race comes again',
+    async run(subject) {
+      // The journey the start meets ends between its conflict and its read:
+      // by a close, or by the 24-hour end. The start retries once, and stores
+      // a new journey with its responders.
+      for (const how of ['closed by its acknowledger', 'ended at 24 hours'] as const) {
+        const journey = await longLost(subject, {
+          state: 'ACKNOWLEDGED',
+          recorded: true,
+          responders: 2,
+        });
+        const [r1 = '', r2 = ''] = journey.responderIds;
+        const before = await subject.journeysOf(journey.walkerId);
+        const race = await subject.raceTheStart({
+          end:
+            how === 'closed by its acknowledger'
+              ? () => subject.store.recordClosure({ alertId: journey.alertId, responderId: r1 })
+              : () => subject.store.expireAlert({ alertId: journey.alertId }),
+        });
+        let result: InsertStartedResult;
+        try {
+          result = await within(
+            20_000,
+            subject.store.insertStarted({
+              walkerId: journey.walkerId,
+              deviceId: journey.deviceId,
+              responderIds: [r2],
+              startedAt: STARTED_AT,
+            }),
+            `the start, its journey ${how}`,
+          );
+        } finally {
+          await race.done();
+        }
+
+        const journeyId = insertedId(result);
+        expect(normalised(await subject.journeysOf(journey.walkerId)), how).toEqual(
+          normalised([
+            ...before.map((each) => ({ ...each, state: 'ENDED' })),
+            {
+              id: journeyId,
+              walkerId: journey.walkerId,
+              state: 'ACTIVE',
+              startedAt: STARTED_AT,
+              responderIds: [r2],
+            },
+          ]),
+        );
+        expect(await subject.deviceOf(journeyId), how).toBe(journey.deviceId);
+        expect((await subject.endOf(journey.journeyId))?.endReason, how).toBe(
+          how === 'closed by its acknowledger' ? SAFE : EXPIRED,
+        );
+      }
+
+      // The race again: the retry meets another journey of the walker's,
+      // which ends between its conflict and its read too. The start rejects,
+      // storing nothing, as before this task.
+      const journey = await longLost(subject, {
+        state: 'ACKNOWLEDGED',
+        recorded: true,
+        responders: 2,
+      });
+      const [r1 = '', r2 = ''] = journey.responderIds;
+      let again: { journeyId: string; alertId: string } | undefined;
+      const race = await subject.raceTheStart({
+        end: () => subject.store.recordClosure({ alertId: journey.alertId, responderId: r1 }),
+        again: {
+          before: async () => {
+            const now = await subject.now();
+            const journeyId = await subject.seedJourney({
+              walkerId: journey.walkerId,
+              deviceId: journey.deviceId,
+              state: 'LOST_CONTACT',
+              responderIds: [r1, r2],
+              startedAt: ago(now, HOUR),
+              lastHeartbeatAt: ago(now, 30 * MINUTE),
+            });
+            const alertId = await subject.seedAlert({
+              journeyId,
+              state: 'ACKNOWLEDGED',
+              openedAt: ago(now, 25 * MINUTE),
+              silentSince: ago(now, 30 * MINUTE),
+              acknowledgedBy: r1,
+              acknowledgedAt: ago(now, 20 * MINUTE),
+            });
+            again = { journeyId, alertId };
+          },
+          end: () =>
+            subject.store.recordClosure({ alertId: again?.alertId ?? '', responderId: r1 }),
+        },
+      });
+      try {
+        await expect(
+          within(
+            20_000,
+            subject.store.insertStarted({
+              walkerId: journey.walkerId,
+              deviceId: journey.deviceId,
+              responderIds: [r2],
+              startedAt: STARTED_AT,
+            }),
+            'the start that meets the race twice',
+          ),
+        ).rejects.toThrow();
+      } finally {
+        await race.done();
+      }
+
+      // The retry was made, and met the second journey: both ENDED, SAFE,
+      // and nothing else stored.
+      expect(again, 'the retry met a second journey').toBeDefined();
+      const stored = await subject.journeysOf(journey.walkerId);
+      expect(stored.map(({ id }) => id).sort()).toEqual(
+        [journey.journeyId, again?.journeyId ?? ''].sort(),
+      );
+      expect(stored.map(({ state }) => state)).toEqual(['ENDED', 'ENDED']);
+      for (const { id } of stored) {
+        expect((await subject.endOf(id))?.endReason, id).toBe(SAFE);
       }
     },
   },

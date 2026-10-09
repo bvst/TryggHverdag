@@ -155,8 +155,9 @@ its tests are always easy to find together.
 
 ## Journey state machine — first draft
 
-**Journey states:** `ACTIVE`, `LOST_CONTACT`, `ENDED` (reason: `home` or
-`auto`). "Location unavailable" (REL-05) is a flag on `ACTIVE`, not a separate
+**Journey states:** `ACTIVE`, `LOST_CONTACT`, `ENDED` (reason: `HOME`,
+`SAFE` or `EXPIRED` since LOST-08, D-126; the two-hour stop's `auto` comes
+with it in M3). "Location unavailable" (REL-05) is a flag on `ACTIVE`, not a separate
 state.
 
 | From | Event | To | Messages written to the outbox |
@@ -167,6 +168,8 @@ state.
 | LOST_CONTACT | Heartbeat | ACTIVE | Resolve the alert; "back in contact" (LOST-03). Only a fresh heartbeat: one that, counted, leaves the silence under 5 min by the database clock (D-112) |
 | ACTIVE | "I'm home" | ENDED (home) | "<name> is home" (JRN-05) |
 | ACTIVE | 2 h reached and no answer for 10 min | ENDED (auto) | "Ended without confirmation" (JRN-06) |
+| LOST_CONTACT | The acknowledging responder: "They're safe" | ENDED (SAFE) | Resolve the alert; tell the other responders it is closed. The record names the closer as the alert's acknowledger; the message's words are M3's (LOST-08, D-125, D-126) |
+| LOST_CONTACT | Watchdog: 24 h after the alert opened | ENDED (EXPIRED) | Resolve the alert; tell every responder (SM-06, D-126) |
 
 **Alert states:** `OPEN` → `ESCALATED` (no acknowledgement within 2 minutes;
 SMS sent, LOST-07) → `ACKNOWLEDGED` → `RESOLVED` (for example "They're safe",

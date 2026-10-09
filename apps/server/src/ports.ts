@@ -9,7 +9,9 @@
 import type {
   AcknowledgeOutcome,
   AlertForAcknowledgement,
+  AlertForClosure,
   AlertState,
+  CloseRefusal,
   JourneyForHeartbeat,
   JourneyForRemoval,
   JourneyState,
@@ -247,6 +249,44 @@ export interface EscalateRequest {
 export type EscalateAlertResult =
   { outcome: 'escalated'; messages: AlertMessage[] } | { outcome: 'skipped' } | { outcome: 'held' };
 
+/**
+ * An alert the 24-hour end's read found due (LOST-08, SM-06): its journey, the
+ * journey's state as read, and when the alert opened, in database time.
+ */
+export interface ExpiringAlert {
+  id: string;
+  journeyId: string;
+  journeyState: JourneyState;
+  openedAt: Date;
+}
+
+/** The alerts due for their 24-hour end, and the database's now() from the same statement: there even when none is. */
+export interface ExpiringAlerts {
+  now: Date;
+  alerts: ExpiringAlert[];
+}
+
+/**
+ * A 24-hour end as the watchdog asks for it: with `lockWaitMs`, it waits that
+ * long for a held row. No threshold: the store decides by the domain's
+ * ALERT_EXPIRES_AFTER_MS, so no caller can choose another (D-116's reading).
+ */
+export interface ExpireRequest {
+  alertId: string;
+  /** How long to wait for a held row; undefined, or left out, skips it. */
+  lockWaitMs?: number | undefined;
+}
+
+/**
+ * Expired: the journey ENDED (EXPIRED) and its alert RESOLVED (EXPIRED), with
+ * one EXPIRED stand-down per responder row. Skipped: nothing written, because
+ * the row was held (without a wait), or the alert was no longer due under the
+ * journey's row. Held: an expiry that waited for the row ran out of wait
+ * (55P03), and nothing was written.
+ */
+export type ExpireAlertResult =
+  { outcome: 'expired'; messages: AlertMessage[] } | { outcome: 'skipped' } | { outcome: 'held' };
+
 /** What the watchdog needs of the journeys (LOST-02, AR-06). */
 export interface WatchdogStore {
   /**
@@ -299,6 +339,30 @@ export interface WatchdogStore {
    * 2147483647.
    */
   escalateAlert(request: EscalateRequest): Promise<EscalateAlertResult>;
+  /**
+   * LOST-08, SM-06: every unresolved alert opened ALERT_EXPIRES_AFTER_MS or
+   * more before the database's now(), whatever its state and whether its
+   * journey has a responder row, with its journey and the journey's state,
+   * read without locking, and that now(). No threshold is passed in.
+   */
+  alertsDueForExpiry(): Promise<ExpiringAlerts>;
+  /**
+   * LOST-08, SM-06, in one transaction: takes the alert's journey's row first
+   * (D-112); under that lock reads the journey's state, its one unresolved
+   * alert and that alert's opening, and the transaction's now(); skips,
+   * writing nothing, when that alert is not the one named (resolved since
+   * the read) or the domain's 24-hour rule leaves the journey unchanged
+   * (AR-04). Otherwise the journey ENDED, EXPIRED, at now(), and its alert
+   * resolved EXPIRED, with one EXPIRED stand-down per responder row, the
+   * acknowledger's included, none when there is no row (AR-05). Bounds its
+   * waits as an escalation does: `lockWaitMs`, or LOCK_WAIT_LIMIT_MS without
+   * it; without `lockWaitMs` a held row is skipped, with it the expiry waits
+   * at most that long for the journey's row and answers `held` when that
+   * wait runs out. Rejects, having written nothing, on any other failure; and
+   * before taking any lock when `lockWaitMs` is given and is not a whole
+   * number from 1 to 2147483647.
+   */
+  expireAlert(request: ExpireRequest): Promise<ExpireAlertResult>;
 }
 
 /** A message as a claim hands it out: what the push needs, and how many attempts it has had, this one included. */
@@ -401,7 +465,10 @@ export interface JourneyStore {
    * Stores the journey ACTIVE with its responders, all of it or none of it.
    * When the walker already has an unended journey, as when two starts race
    * past `unendedJourneyOf`, nothing is stored and that journey is named.
-   * Rejects a start with no responders, and stores nothing.
+   * When the journey it met has ended by the time it reads which one won (a
+   * close or the 24-hour end, from outside the walker's phone), the insert is
+   * tried once more; the same race a second time rejects, storing nothing
+   * (LOST-08). Rejects a start with no responders, and stores nothing.
    */
   insertStarted(journey: StartedJourney): Promise<InsertStartedResult>;
   /** The journey this ID names, in any state, ENDED included, or null. */
@@ -471,6 +538,41 @@ export interface AlertStore {
   ): Promise<RecordAcknowledgementResult>;
 }
 
+/** "They're safe" as the store takes it (LOST-08): the alert, by its ID, and the responder who sent it. */
+export interface ClosureToRecord {
+  alertId: string;
+  responderId: string;
+}
+
+/**
+ * Closed now, with the stand-downs it wrote, one per responder row but the
+ * closer's; or not closed, with the close rule's other outcome under the
+ * journey's lock, and nothing written.
+ */
+export type RecordClosureResult =
+  | { outcome: 'closed'; messages: AlertMessage[] }
+  | { outcome: 'not_closed'; decision: CloseRefusal };
+
+/** What "They're safe" needs of the alerts (LOST-08, D-126). */
+export interface ClosureStore {
+  /**
+   * The alert this ID names, with who is recorded on it and its journey's
+   * responders, read without a lock; or null when no alert has that ID. "I'm
+   * on it"'s read.
+   */
+  alertForClosure(alertId: string): Promise<AlertForClosure | null>;
+  /**
+   * In one transaction: takes the alert's journey's row first (D-112), waiting
+   * for it, asks the domain's close rule again under that lock (AR-04), and
+   * writes what it decides, all of it or none of it (AR-05), at the database's
+   * now(): the journey ENDED, SAFE; the alert RESOLVED, SAFE, its unsent
+   * WITHDRAWN_WHEN_RESOLVED kinds withdrawn, and one SAFE stand-down per
+   * responder row but the closer's. Or nothing, with the rule's other outcome.
+   * Rejects, having written nothing, on any failure.
+   */
+  recordClosure(closure: ClosureToRecord): Promise<RecordClosureResult>;
+}
+
 /** A removal as the store takes it (SM-10): the journey, and the responder to remove from it. */
 export interface RemovalToRecord {
   journeyId: string;
@@ -535,7 +637,11 @@ export type LogEvent =
   | { event: 'sms_check_failed'; stage: 'read' | 'report'; code: string | null }
   | { event: 'removal_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
   | { event: 'removal_failed'; stage: 'read' | 'store'; code: string | null }
-  | { event: 'unheard_alerts'; count: number };
+  | { event: 'unheard_alerts'; count: number }
+  | { event: 'closure_ignored'; reason: 'ALERT_RESOLVED'; alertId: string }
+  | { event: 'closure_failed'; stage: 'read' | 'store'; code: string | null }
+  | { event: 'expiry_failed'; stage: 'read' | 'expire'; code: string | null }
+  | { event: 'expiry_overdue'; alertId: string };
 
 /** Where the server writes what happened, one event at a time. */
 export interface Log {

@@ -1,12 +1,14 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-09 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24, LOST-06, LOST-07 and BUG-29 done (D-090, D-115)
+**Last updated:** 2026-10-09 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24, LOST-06, LOST-07, BUG-29, SM-10 and BUG-41 done (D-090, D-115)
 
-**Current section:** milestone M2, started 2026-10-01 with SM-01; task 7,
-SM-10 (removing a responder), is in review (D-090, D-115; the task list is in
-[10-roadmap.md](10-roadmap.md)): the owner answered its four questions on
-2026-10-09, each with the recommendation (D-122), D-123 records the delegated
-choices, and BUG-41's faster mutant runs (D-124) ride with it. LOST-07, SMS escalation, is done (#67,
+**Current section:** milestone M2, started 2026-10-01 with SM-01; task 8,
+LOST-08 ("They're safe"), is in review (D-090, D-115; the task list is in
+[10-roadmap.md](10-roadmap.md)): the owner answered its two questions on
+2026-10-09, each with the recommendation (D-125), and D-126 records the
+delegated choices. SM-10, removing a responder, is done (#74,
+2026-10-09; D-122 to D-124), with BUG-41, the mutation budget, in it.
+LOST-07, SMS escalation, is done (#67,
 2026-10-07; D-115 to D-117), with BUG-29, the mutation budget, in it.
 A-33 is done (the owner): the SMS check is live on staging. LOST-06,
 "I'm on it", is done (#66, 2026-10-07; D-113 and its amendment, D-114). LOST-03,
@@ -135,7 +137,12 @@ journey has their `journey_responders` row deleted at once, so the record of
 who followed a journey no longer holds anyone removed from it, with two
 exceptions that stay as alert records: messages already written to them, and
 `acknowledged_by` on a resolved alert they had acknowledged (SM-10 keeps who
-helped on record).
+helped on record). **Since LOST-08** (D-125, D-126), a journey can end
+`SAFE` (closed by the responder who acknowledged) or `EXPIRED` (24 hours after
+its alert opened), and its alert resolves the same way, with `SAFE` and
+`EXPIRED` stand-downs in the outbox: alert records under the 30-day rule. Who
+closed a journey is the `acknowledged_by` of its alert resolved `SAFE`, so
+that field is how the record names the closer.
 
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every

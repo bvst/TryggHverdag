@@ -20,11 +20,18 @@ export {
   acknowledgementErrors,
   acknowledgementRequestSchema,
   acknowledgementResponseSchema,
+  closeAlert,
+  closureErrors,
+  closureRequestSchema,
+  closureResponseSchema,
 } from './alerts.ts';
 export type {
   AcknowledgementErrorCode,
   AcknowledgementRequest,
   AcknowledgementResponse,
+  ClosureErrorCode,
+  ClosureRequest,
+  ClosureResponse,
 } from './alerts.ts';
 export { API_PREFIX, API_VERSION } from './api-version.ts';
 export { badRequestError } from './bad-request.ts';

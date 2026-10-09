@@ -18,6 +18,7 @@ import { IDLE_IN_TRANSACTION_LIMIT_MS, LOCK_WAIT_LIMIT_MS } from './domain/watch
 import { listen } from './http.ts';
 import { createLog } from './log.ts';
 import { createAcknowledgementService } from './modules/alerts/acknowledgement.ts';
+import { createClosureService } from './modules/alerts/closure.ts';
 import { createHealthService } from './modules/health/service.ts';
 import { createJourneyService } from './modules/journeys/service.ts';
 
@@ -53,6 +54,9 @@ export async function startApiProcess(config: ServerConfig): Promise<ApiProcess>
     devices: databaseDeviceAuthenticator(db),
     // "I'm on it" reads no clock: it records the database's now() (LOST-06).
     acknowledgements: createAcknowledgementService({ alerts: store, log }),
+    // "They're safe" reads no clock either: it ends the journey at the
+    // database's now() (LOST-08).
+    closures: createClosureService({ alerts: store, log }),
   });
 
   let server;

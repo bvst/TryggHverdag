@@ -34,6 +34,7 @@ import {
 } from '@trygghverdag/contracts';
 import { Hono } from 'hono';
 import type { AcknowledgementService } from './modules/alerts/acknowledgement.ts';
+import type { ClosureService } from './modules/alerts/closure.ts';
 import type { HealthService } from './modules/health/service.ts';
 import type { JourneyService } from './modules/journeys/service.ts';
 import type { DeviceAuthenticator } from './ports.ts';
@@ -43,6 +44,7 @@ export interface ApiDependencies {
   journeys: JourneyService;
   devices: DeviceAuthenticator;
   acknowledgements: AcknowledgementService;
+  closures: ClosureService;
 }
 
 /** What a request brings in besides its body: only what the credential check reads. */
@@ -75,8 +77,8 @@ const BEARER = /^Bearer (\S+)$/i;
  * published contract cannot drift apart.
  *
  * A 400's error object holds the device credential (LOST-03). With detailed
- * input, as the "I'm home" and "I'm on it" routes have, oRPC puts the whole
- * input it validated
+ * input, as the "I'm home", "I'm on it" and "They're safe" routes have, oRPC
+ * puts the whole input it validated
  * in the validation error's `cause.data`, `request.headers` included, so the
  * `Authorization` header is there (read in @orpc/openapi 1.15.3's detailed
  * decode and @orpc/server 1.15.3's `validateInput`). Nothing prints that
@@ -90,7 +92,13 @@ const BAD_REQUEST_BODY = new ORPCError('BAD_REQUEST', {
   message: badRequestError.message,
 }).toJSON();
 
-export function createApi({ health, journeys, devices, acknowledgements }: ApiDependencies): Hono {
+export function createApi({
+  health,
+  journeys,
+  devices,
+  acknowledgements,
+  closures,
+}: ApiDependencies): Hono {
   const os = implement(contract).$context<RequestContext>();
 
   /**
@@ -205,6 +213,24 @@ export function createApi({ health, journeys, devices, acknowledgements }: ApiDe
         throw errors[result.reason]();
       },
     ),
+
+    // "They're safe" (LOST-08, D-126). The responder is the device's own
+    // user, from any of their devices; the alert is the path's, and only the
+    // path's, as the input is detailed. A 200 means the caller closed it now;
+    // a 409 that it is over. No answer says who is on it or who closed it.
+    closeAlert: fromKnownDevice.closeAlert.handler(async ({ input, context, errors }) => {
+      const result = await closures.close({
+        responderId: context.device.userId,
+        alertId: input.params.alertId,
+      });
+      if (result.type === 'closed') {
+        return { outcome: 'CLOSED' };
+      }
+      // Each reason the rule gives is the contract's code for it:
+      // NOT_THE_ACKNOWLEDGER (403), ALERT_NOT_FOUND (404) and
+      // ALERT_RESOLVED (409).
+      throw errors[result.reason]();
+    }),
   });
 
   const handler = new OpenAPIHandler(router, {

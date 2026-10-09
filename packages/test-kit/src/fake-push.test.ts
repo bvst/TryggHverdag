@@ -176,6 +176,11 @@ describe('fakePush', () => {
     // warning that the last responder was removed (SM-02, D-087), last, as
     // the server's does. Still exact. The fake records what it is given, so
     // what it recorded and accepted is asserted as before.
+    // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+    // design", fake-push.test.ts line 179): the list gains SAFE and EXPIRED,
+    // the stand-downs of "They're safe" and the 24-hour end (D-126), after
+    // NO_RESPONDER, as the server's does. Still exact; what the fake recorded
+    // and accepted is asserted as before.
     expect(MESSAGE_KINDS).toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
@@ -183,6 +188,8 @@ describe('fakePush', () => {
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
       'NO_RESPONDER',
+      'SAFE',
+      'EXPIRED',
     ]);
     expect(push.messages).toEqual(sent);
     expect(push.accepted).toEqual(sent);

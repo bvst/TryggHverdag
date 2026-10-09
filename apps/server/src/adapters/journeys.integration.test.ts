@@ -897,6 +897,221 @@ async function holdUntilEscalationWaits(
   };
 }
 
+/**
+ * LOST-08-AC4: holds the journey's row as holdRow does, and lets it go once
+ * another session (the close) is waiting for it, having first changed the
+ * journey in its own transaction, as one in flight would: `{ remove }`, that
+ * responder's row deleted and nothing else, as a removal committing;
+ * 'contact', its unresolved alert resolved BACK_IN_CONTACT and the journey
+ * ACTIVE at its now(), as a heartbeat committing; 'home', resolved HOME and
+ * the journey ENDED, HOME, at its now(), as "I'm home" committing; 'expire',
+ * resolved EXPIRED and the journey ENDED, EXPIRED, as the 24-hour end
+ * committing; 'unchanged', nothing. `release` lets go at once if no one came
+ * to wait.
+ */
+async function holdUntilClosureWaits(
+  journeyId: string,
+  change: 'unchanged' | 'contact' | 'home' | 'expire' | { remove: string },
+): Promise<{ release: () => Promise<void> }> {
+  const client = await connection().connect();
+  await client.query('begin');
+  await client.query('select id from journeys where id = $1 for update', [journeyId]);
+  const pid = (await client.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]?.pid;
+  // An object, so the loop reads the flag release() sets, not a narrowed copy.
+  const state = { stopped: false };
+  const resolveAs = async (resolution: string) => {
+    await client.query(
+      `update alerts set state = 'RESOLVED', resolved_at = now(), resolution = $2
+        where journey_id = $1 and state <> 'RESOLVED'`,
+      [journeyId, resolution],
+    );
+  };
+  const lettingGo = (async () => {
+    try {
+      while (!state.stopped) {
+        const waiting = await connection().query<{ n: number }>(
+          'select count(*)::int as n from pg_stat_activity where $1 = any(pg_blocking_pids(pid))',
+          [pid],
+        );
+        if ((waiting.rows[0]?.n ?? 0) > 0) {
+          if (change === 'contact') {
+            await resolveAs('BACK_IN_CONTACT');
+            await client.query(
+              "update journeys set state = 'ACTIVE', last_heartbeat_at = now() where id = $1",
+              [journeyId],
+            );
+          } else if (change === 'home' || change === 'expire') {
+            const reason = change === 'home' ? 'HOME' : 'EXPIRED';
+            await resolveAs(reason);
+            await client.query(
+              "update journeys set state = 'ENDED', ended_at = now(), end_reason = $2 where id = $1",
+              [journeyId, reason],
+            );
+          } else if (change !== 'unchanged') {
+            await client.query(
+              'delete from journey_responders where journey_id = $1 and responder_id = $2',
+              [journeyId, change.remove],
+            );
+          }
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await client.query('commit');
+    } catch (error) {
+      await client.query('rollback').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  })();
+  // Its failure is the behaviour's, read through release(); never unhandled meanwhile.
+  lettingGo.catch(() => undefined);
+  return {
+    release: async () => {
+      state.stopped = true;
+      await lettingGo;
+    },
+  };
+}
+
+/** An advisory lock key of its own: one per arrangement, so two never share a turnstile. */
+const advisoryKey = () => Math.floor(Math.random() * 1_000_000_000) + 1;
+
+/** Whether a session is waiting for this advisory lock right now. */
+async function someoneWaitsOn(key: number): Promise<boolean> {
+  const result = await connection().query<{ n: number }>(
+    `select count(*)::int as n from pg_locks
+      where locktype = 'advisory' and classid = 0 and objid = $1 and objsubid = 1 and not granted`,
+    [key],
+  );
+  return (result.rows[0]?.n ?? 0) > 0;
+}
+
+/**
+ * LOST-08-AC21: arranges the next start to race ends from outside the
+ * walker's phone, on the real tables. Two test-only triggers on `journeys`
+ * make turnstiles a session of the test's own holds shut:
+ *   - after an insert statement that stored no row (the one-unended-journey
+ *     index refused it, `on conflict do nothing`), the start's transaction
+ *     waits at the conflict turnstile, before it reads which journey won;
+ *     `end` then runs through the store, on other connections, and commits;
+ *   - with `again`, before an ACTIVE row is inserted for a walker with no
+ *     unended journey (the retry, once the first journey has ended), it waits
+ *     at the retry turnstile; `again.before` then puts in another unended
+ *     journey of the walker's, and `again.end` ends it at the conflict
+ *     turnstile, as before.
+ * Each wait is seen in pg_locks, never guessed by a sleep. A start that never
+ * comes to a turnstile (the adapter before this task, which does not retry)
+ * leaves the arrangement waiting until `done`, which opens every turnstile,
+ * drops the triggers and reports any failure of the arrangement's own.
+ */
+async function raceTheStart(race: {
+  end: () => Promise<unknown>;
+  again?: { before: () => Promise<unknown>; end: () => Promise<unknown> };
+}): Promise<{ done: () => Promise<void> }> {
+  const conflict = advisoryKey();
+  const retry = advisoryKey();
+  const name = 'lost08_race_the_start';
+  const gateKeeper = await connection().connect();
+  await gateKeeper.query('select pg_advisory_lock($1)', [conflict]);
+  const create = [
+    `create function ${name}_conflict() returns trigger language plpgsql as $$
+       begin
+         if (select count(*) from inserted) = 0 then
+           perform pg_advisory_lock(${String(conflict)});
+           perform pg_advisory_unlock(${String(conflict)});
+         end if;
+         return null;
+       end
+     $$`,
+    `create trigger ${name}_conflict after insert on journeys
+       referencing new table as inserted for each statement
+       execute function ${name}_conflict()`,
+  ];
+  const drop = [
+    `drop trigger if exists ${name}_conflict on journeys`,
+    `drop function if exists ${name}_conflict()`,
+    `drop trigger if exists ${name}_retry on journeys`,
+    `drop function if exists ${name}_retry()`,
+  ];
+  if (race.again !== undefined) {
+    await gateKeeper.query('select pg_advisory_lock($1)', [retry]);
+    create.push(
+      `create function ${name}_retry() returns trigger language plpgsql as $$
+         begin
+           if not exists (select 1 from journeys
+                           where walker_id = new.walker_id and state <> 'ENDED') then
+             perform pg_advisory_lock(${String(retry)});
+             perform pg_advisory_unlock(${String(retry)});
+           end if;
+           return new;
+         end
+       $$`,
+      `create trigger ${name}_retry before insert on journeys for each row
+         when (new.state = 'ACTIVE') execute function ${name}_retry()`,
+    );
+  }
+  for (const statement of create) {
+    await connection().query(statement);
+  }
+  const state: { stopped: boolean; failure: unknown } = { stopped: false, failure: undefined };
+  const waitedOn = async (key: number): Promise<boolean> => {
+    while (!state.stopped) {
+      if (await someoneWaitsOn(key)) {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return false;
+  };
+  const driving = (async () => {
+    try {
+      if (!(await waitedOn(conflict))) {
+        return;
+      }
+      await race.end();
+      await gateKeeper.query('select pg_advisory_unlock($1)', [conflict]);
+      if (race.again === undefined) {
+        return;
+      }
+      // Shut again behind the start that just went through, for its retry.
+      await gateKeeper.query('select pg_advisory_lock($1)', [conflict]);
+      if (!(await waitedOn(retry))) {
+        return;
+      }
+      await race.again.before();
+      await gateKeeper.query('select pg_advisory_unlock($1)', [retry]);
+      if (!(await waitedOn(conflict))) {
+        return;
+      }
+      await race.again.end();
+      await gateKeeper.query('select pg_advisory_unlock($1)', [conflict]);
+    } catch (error) {
+      state.failure = error;
+    }
+  })();
+  return {
+    done: async () => {
+      state.stopped = true;
+      try {
+        await gateKeeper.query('select pg_advisory_unlock_all()');
+        await driving;
+      } finally {
+        gateKeeper.release();
+        for (const statement of drop) {
+          await connection().query(statement);
+        }
+      }
+      if (state.failure !== undefined) {
+        throw state.failure instanceof Error
+          ? state.failure
+          : new Error('the start’s race arrangement failed');
+      }
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The API, with every real adapter.
 // ---------------------------------------------------------------------------
@@ -913,6 +1128,15 @@ function realApi(log: FakeLog = fakeLog()) {
     // rejects; they never call it, and nothing they assert changes.
     acknowledgements: {
       acknowledge: () => Promise.reject(new Error('these tests acknowledge nothing')),
+    },
+    // RG-03 (LOST-08; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): `closures` added
+    // because "They're safe" (approach item 5; "Interfaces": ApiDependencies
+    // gains `closures`) made it part of what the API needs. These tests close
+    // nothing, so it rejects; they never call it, and nothing they assert
+    // changes.
+    closures: {
+      close: () => Promise.reject(new Error('these tests close nothing')),
     },
   });
 }
@@ -1010,6 +1234,12 @@ describe('databaseJourneyStore, against the behaviour every journey store shares
     messageRoundsOf,
     journeyMessagesOf,
     holdUntilRemovalWaits,
+    // LOST-08: a holder that changes the journey as a removal, a heartbeat,
+    // "I'm home" or the 24-hour end committing would, once the close waits;
+    // and the turnstiles that put a close or the 24-hour end between a
+    // start's conflict and its read.
+    holdUntilClosureWaits,
+    raceTheStart,
   });
 
   test.each(JOURNEY_STORE_BEHAVIOUR)(
@@ -1027,12 +1257,15 @@ describe('databaseJourneyStore, against the behaviour every journey store shares
       // table: the same start again (added, not changed).
       // SM-10's claim too (the warning, AC14), and write warnings, notices
       // and SMS that are due: the same start again (added, not changed).
+      // LOST-08's write stand-downs that are due, and the open's withdrawal
+      // reads the whole table: the same start again (added, not changed).
       if (
         name.startsWith('LOST-02-') ||
         name.startsWith('LOST-03-') ||
         name.startsWith('LOST-06-') ||
         name.startsWith('LOST-07-') ||
-        name.startsWith('SM-10-')
+        name.startsWith('SM-10-') ||
+        name.startsWith('LOST-08-')
       ) {
         await connection().query('update outbox set sent_at = now() where sent_at is null');
       }
@@ -2518,6 +2751,12 @@ describe('LOST-03 and SM-04: the database agrees on resolutions, ends and the ne
     // design"): and gains NO_RESPONDER, the walker's warning (SM-02), last,
     // as migration 0007 adds it. The assertion against the domain's
     // MESSAGE_KINDS below is unchanged.
+    // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+    // design"): the three literal lists gain SAFE and EXPIRED, the close's
+    // and the 24-hour end's (D-126), last, as migration 0008 adds them: as a
+    // message kind (each its resolution's stand-down, D-112), as a
+    // resolution, and as an end reason. The assertions against the domain's
+    // lists below are unchanged.
     expect(messageKinds).toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
@@ -2525,9 +2764,11 @@ describe('LOST-03 and SM-04: the database agrees on resolutions, ends and the ne
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
       'NO_RESPONDER',
+      'SAFE',
+      'EXPIRED',
     ]);
-    expect(alertResolutions).toEqual(['BACK_IN_CONTACT', 'HOME']);
-    expect(journeyEndReasons).toEqual(['HOME']);
+    expect(alertResolutions).toEqual(['BACK_IN_CONTACT', 'HOME', 'SAFE', 'EXPIRED']);
+    expect(journeyEndReasons).toEqual(['HOME', 'SAFE', 'EXPIRED']);
     expect(messageKinds).toEqual(MESSAGE_KINDS);
     expect(alertResolutions).toEqual(ALERT_RESOLUTIONS);
     expect(journeyEndReasons).toEqual(JOURNEY_END_REASONS);
@@ -2722,6 +2963,10 @@ describe('LOST-06: the database agrees on who is on an alert, and on the notice'
 
     // The spec's own list first, so a domain list that drifted with the
     // database cannot carry both along.
+    // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+    // design"): migration 0008 adds SAFE and EXPIRED after NO_RESPONDER, so
+    // the literal list gains them. The assertion against the domain's
+    // MESSAGE_KINDS is unchanged.
     expect(messageKinds).toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
@@ -2729,6 +2974,8 @@ describe('LOST-06: the database agrees on who is on an alert, and on the notice'
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
       'NO_RESPONDER',
+      'SAFE',
+      'EXPIRED',
     ]);
     expect(messageKinds).toEqual([...MESSAGE_KINDS]);
     expect(await typeOf('outbox', 'kind')).toMatchObject({ udt_name: 'message_kind' });
@@ -2822,6 +3069,10 @@ describe('LOST-07: the database agrees on the escalation and its SMS', () => {
 
     // The spec's own list first, so a domain list that drifted with the
     // database cannot carry both along.
+    // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+    // design"): migration 0008 adds SAFE and EXPIRED after NO_RESPONDER, so
+    // the literal list gains them. The assertion against the domain's
+    // MESSAGE_KINDS is unchanged.
     expect(messageKinds).toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
@@ -2829,6 +3080,8 @@ describe('LOST-07: the database agrees on the escalation and its SMS', () => {
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
       'NO_RESPONDER',
+      'SAFE',
+      'EXPIRED',
     ]);
     expect(messageKinds).toEqual([...MESSAGE_KINDS]);
     expect(await typeOf('outbox', 'kind')).toMatchObject({ udt_name: 'message_kind' });
@@ -3066,11 +3319,19 @@ describe('SM-10 and SM-02: the database agrees on the round, the walker’s warn
     ).resolves.toBeDefined();
   });
 
-  test('SM-10-AC21: message_kind’s values equal MESSAGE_KINDS, in order, NO_RESPONDER last (pg_enum); outbox.kind is of that type', async () => {
+  // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+  // design"): this was "…in order, NO_RESPONDER last (pg_enum)…". Migration
+  // 0008 adds SAFE and EXPIRED after it, so the title no longer says
+  // NO_RESPONDER is last, and says where it stands instead.
+  test('SM-10-AC21: message_kind’s values equal MESSAGE_KINDS, in order, NO_RESPONDER right after LOST_CONTACT_SMS (pg_enum); outbox.kind is of that type', async () => {
     const messageKinds = await labelsOf('message_kind');
 
     // The spec's own list first, so a domain list that drifted with the
     // database cannot carry both along.
+    // RG-03 (LOST-08, named in the spec's "Existing assertions that change by
+    // design"): migration 0008 adds SAFE and EXPIRED after NO_RESPONDER, so
+    // the literal list gains them. The assertion against the domain's
+    // MESSAGE_KINDS is unchanged.
     expect(messageKinds).toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
@@ -3078,6 +3339,8 @@ describe('SM-10 and SM-02: the database agrees on the round, the walker’s warn
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
       'NO_RESPONDER',
+      'SAFE',
+      'EXPIRED',
     ]);
     expect(messageKinds).toEqual([...MESSAGE_KINDS]);
     expect(await typeOf('outbox', 'kind')).toMatchObject({ udt_name: 'message_kind' });
@@ -3142,5 +3405,80 @@ describe('SM-10 and SM-02: the database agrees on the round, the walker’s warn
     expect(index.rows.map(({ definition }) => definition)).toEqual([
       'CREATE INDEX outbox_unsent_due_index ON public.outbox USING btree (next_attempt_at, id) WHERE (sent_at IS NULL)',
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LOST-08-AC20: the database agrees with the close's and the 24-hour end's
+// lists.
+// ---------------------------------------------------------------------------
+
+describe('LOST-08 and SM-06: the database agrees on the two new resolutions, end reasons and stand-downs', () => {
+  test('LOST-08-AC20: alert_resolution, message_kind and journey_end_reason hold exactly ALERT_RESOLUTIONS, MESSAGE_KINDS and JOURNEY_END_REASONS, in order (pg_enum), SAFE and EXPIRED last in each (SM-06)', async () => {
+    const alertResolutions = await labelsOf('alert_resolution');
+    const messageKinds = await labelsOf('message_kind');
+    const journeyEndReasons = await labelsOf('journey_end_reason');
+
+    // The spec's own lists first, so a domain list that drifted with the
+    // database cannot carry both along.
+    expect({ alertResolutions, messageKinds, journeyEndReasons }).toEqual({
+      alertResolutions: ['BACK_IN_CONTACT', 'HOME', 'SAFE', 'EXPIRED'],
+      messageKinds: [
+        'LOST_CONTACT',
+        'BACK_IN_CONTACT',
+        'HOME',
+        'ACKNOWLEDGED',
+        'LOST_CONTACT_SMS',
+        'NO_RESPONDER',
+        'SAFE',
+        'EXPIRED',
+      ],
+      journeyEndReasons: ['HOME', 'SAFE', 'EXPIRED'],
+    });
+    expect({ alertResolutions, messageKinds, journeyEndReasons }).toEqual({
+      alertResolutions: [...ALERT_RESOLUTIONS],
+      messageKinds: [...MESSAGE_KINDS],
+      journeyEndReasons: [...JOURNEY_END_REASONS],
+    });
+  });
+
+  test('LOST-08-AC20: SAFE and EXPIRED are taken as a resolution, as an end reason and as a message kind; a resolution or an end reason outside the lists is refused by the database itself (SM-06)', async () => {
+    for (const value of ['SAFE', 'EXPIRED']) {
+      const { journeyId } = await walking();
+      const alertId = await insertResolvedAlert(journeyId, { resolvedAt: true, resolution: value });
+      await expect(
+        setJourneyEnd(journeyId, { endedAt: true, endReason: value }),
+        `${value} as an end reason`,
+      ).resolves.toBeDefined();
+      await expect(
+        seedMessage({
+          alertId,
+          recipientId: await addUser(),
+          kind: value,
+          createdAt: EARLIER,
+          nextAttemptAt: EARLIER,
+        }),
+        `${value} as a message kind`,
+      ).resolves.toBeDefined();
+      expect(await resolutionsOf(journeyId), `${value} as a resolution`).toMatchObject([
+        { alertId, resolution: value },
+      ]);
+    }
+
+    const { journeyId } = await walking();
+    for (const outside of ['ACKNOWLEDGED', 'NO_RESPONDER', 'CLOSED', 'safe']) {
+      await expect(
+        insertResolvedAlert(journeyId, { resolvedAt: true, resolution: outside }),
+        `${outside} as a resolution`,
+      ).rejects.toMatchObject(REFUSED_BY_THE_DATABASE);
+      await expect(
+        setJourneyEnd(journeyId, { endedAt: true, endReason: outside }),
+        `${outside} as an end reason`,
+      ).rejects.toMatchObject(REFUSED_BY_THE_DATABASE);
+    }
+    await expect(
+      setJourneyEnd(journeyId, { endedAt: true, endReason: 'BACK_IN_CONTACT' }),
+      'a resolution that ends no journey',
+    ).rejects.toMatchObject(REFUSED_BY_THE_DATABASE);
   });
 });

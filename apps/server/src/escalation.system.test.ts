@@ -169,6 +169,15 @@ function world({ log: given }: { log?: Log } = {}) {
     journeys: createJourneyService({ clock, journeys: store, log }),
     devices,
     acknowledgements: createAcknowledgementService({ alerts: store, log }),
+    // RG-03 (LOST-08; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): `closures` added
+    // because "They're safe" (approach item 5; "Interfaces": ApiDependencies
+    // gains `closures`) made it part of what the API needs. These tests close
+    // nothing, so it rejects; they never call it, and nothing they assert
+    // changes.
+    closures: {
+      close: () => Promise.reject(new Error('these tests close nothing')),
+    },
   });
   const watchdog = createWatchdog({ journeys: store, beats, log });
   const sender = createPushSender({ outbox: store, push, log });
@@ -629,6 +638,15 @@ describe('LOST-07 and REL-07: the escalation reads both halves of an acknowledge
           alerts: [due, early, onIt, already, over].map(({ alertId }) => asRead(alertId)),
         }),
       escalateAlert: (request) => w.store.escalateAlert(request),
+      // RG-03 (LOST-08; not in the spec's "Existing assertions that change by
+      // design", found by type-checking and running this file against a
+      // throwaway reference of the spec's interfaces): the watchdog's store
+      // gains the 24-hour end's read and write ("Interfaces"), and the sweep
+      // asks for them after the escalation, whatever it came to. This stand-in
+      // hands both to the store as it hands the rest; nothing here is 24 hours
+      // old, and nothing this test asserts changes.
+      alertsDueForExpiry: () => w.store.alertsDueForExpiry(),
+      expireAlert: (request) => w.store.expireAlert(request),
     };
     // RG-03 (LOST-07 review loop 1, `code-reviewer`): the requests recorded
     // here, and in the AC16 test below, no longer carry afterMs; the store

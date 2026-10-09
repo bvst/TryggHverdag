@@ -440,6 +440,15 @@ function realApi({
     acknowledgements: {
       acknowledge: () => Promise.reject(new Error('these tests acknowledge nothing')),
     },
+    // RG-03 (LOST-08; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): `closures` added
+    // because "They're safe" (approach item 5; "Interfaces": ApiDependencies
+    // gains `closures`) made it part of what the API needs. These tests close
+    // nothing, so it rejects; they never call it, and nothing they assert
+    // changes.
+    closures: {
+      close: () => Promise.reject(new Error('these tests close nothing')),
+    },
   });
 }
 

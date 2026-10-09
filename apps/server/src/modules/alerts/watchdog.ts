@@ -23,16 +23,21 @@
  *      read included: a read of journeys that fails says nothing of the
  *      alerts already open, whose two minutes go on, and an SMS never waits
  *      on an open that failed (D-116);
- *   6. records the worker's beat at the now() its read returned, if all of
+ *   6. ends every lost-contact journey whose alert opened 24 hours ago or
+ *      more (SM-06, LOST-08, `expiry.ts`), whatever steps 1 to 5 came to, its
+ *      own read included, for the same reason;
+ *   7. records the worker's beat at the now() its read returned, if all of
  *      it succeeded (D-108: the watchdog feeds the beat).
  *
  * A sweep fails when its read fails, when an alert fails to open, or when it
  * finds a stuck journey: a journey past STUCK_AFTER_MS that it could not move,
  * because its row was held through the wait, or because its open failed. Each
  * stuck journey is one `watchdog_overdue` line naming it. It fails too when
- * the escalation fails or finds a stuck alert. A failed sweep records no beat,
- * so the minute check-in stops and `/v1/health` goes degraded: a watchdog
- * that cannot work pages the owner, never silently.
+ * the escalation or the 24-hour end fails or finds a stuck alert, whose
+ * alerts count in its `stuck`. How many journeys the 24-hour end ended is
+ * not in the sweep's result: the rows are its record. A failed sweep records
+ * no beat, so the minute check-in stops and `/v1/health` goes degraded: a
+ * watchdog that cannot work pages the owner, never silently.
  *
  * Failures are logged as their stage and SQLSTATE only (PRIV-07): the
  * watchdog sees journey and user IDs and nothing else, and never writes an
@@ -43,6 +48,7 @@ import { sqlstateOf } from '../../domain/sqlstate.ts';
 import { LOCK_WAIT_LIMIT_MS, isStuck } from '../../domain/watchdog.ts';
 import type { Log, OverdueJourney, WatchdogStore, WorkerHeartbeats } from '../../ports.ts';
 import { createEscalation } from './escalation.ts';
+import { createExpiry } from './expiry.ts';
 
 /**
  * What one sweep came to: whether it succeeded, how many alerts it opened and
@@ -77,6 +83,7 @@ export function createWatchdog({
   log: Log;
 }): Watchdog {
   const escalation = createEscalation({ journeys, log });
+  const expiry = createExpiry({ journeys, log });
 
   const attempt = async (journeyId: string, lockWaitMs?: number): Promise<Attempt> => {
     try {
@@ -154,12 +161,15 @@ export function createWatchdog({
       // The watchdog's second job (LOST-07), whatever the opens came to: an
       // escalation that cannot be done fails the sweep, as an open does.
       const escalations = await escalation.escalateDue();
+      // The third (SM-06), whatever the opens and the escalation came to: a
+      // 24-hour end that cannot be done fails the sweep too.
+      const expiries = await expiry.expireDue();
       const result = {
         opened: opens.opened,
         escalated: escalations.escalated,
-        stuck: opens.stuck + escalations.stuck,
+        stuck: opens.stuck + escalations.stuck + expiries.stuck,
       };
-      if (!opens.ok || !escalations.ok) {
+      if (!opens.ok || !escalations.ok || !expiries.ok) {
         return { ok: false, ...result };
       }
 

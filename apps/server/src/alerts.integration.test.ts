@@ -359,6 +359,15 @@ function realApi() {
     acknowledgements: {
       acknowledge: () => Promise.reject(new Error('these tests acknowledge nothing')),
     },
+    // RG-03 (LOST-08; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): `closures` added
+    // because "They're safe" (approach item 5; "Interfaces": ApiDependencies
+    // gains `closures`) made it part of what the API needs. These tests close
+    // nothing, so it rejects; they never call it, and nothing they assert
+    // changes.
+    closures: {
+      close: () => Promise.reject(new Error('these tests close nothing')),
+    },
   });
 }
 
@@ -607,6 +616,14 @@ describe('SM-09 and LOST-02: contact that arrives during the sweep wins', () => 
       alertsDueForEscalation: (afterMs: number) => real.alertsDueForEscalation(afterMs),
       escalateAlert: (request: { alertId: string; lockWaitMs?: number }) =>
         real.escalateAlert(request),
+      // RG-03 (LOST-08; not in the spec's "Existing assertions that change by
+      // design", found by test-author reading this stand-in against the
+      // spec's interfaces): the sweep asks for the alerts due for their
+      // 24-hour end after the escalation. This stand-in is cast, so the type
+      // check cannot say it lacks them; without them every sweep through it
+      // would fail its expiry's read. Both go to the real store, unchanged.
+      alertsDueForExpiry: () => real.alertsDueForExpiry(),
+      expireAlert: (request: { alertId: string; lockWaitMs?: number }) => real.expireAlert(request),
     } as unknown as ReturnType<typeof store>;
   }
 

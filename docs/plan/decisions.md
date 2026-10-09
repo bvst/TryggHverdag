@@ -4821,3 +4821,106 @@ any other path is work, not a candidate for the same treatment.
     with a misspelt flag). The cache holds transforms, not results, so it
     cannot make a score higher.
   - Supersedes nothing. D-117's command stays, with the three flags added.
+
+## D-125 — "They're safe": the owner's two answers (LOST-08, SM-05, SM-06)
+- **Date:** 2026-10-09 · **Status:** Accepted (owner, 2026-10-09). Each was
+  asked with Claude's recommendation, and the owner chose it each time ·
+  **Section:** 5 (LOST-08, SM-05, SM-06; D-033, D-034, D-090, D-113, D-122)
+- **Context:** LOST-08's spec (`docs/specs/LOST-08.md`) asked two questions
+  that are scope or safety. D-090's item 7 gives this task LOST-08, SM-06 and
+  SM-05, so the 24-hour end is in it, as D-122 item 3 already said.
+- **Decision:**
+  1. **SM-05 is guarded now; the two-hour stop brings its own test.** In M2
+     the only automatic end is the 24-hour end, which ends only a lost-contact
+     journey and only at 24 hours. This task holds that at L2 and L6, and pins
+     the list of ways a journey can end in a table typed over the list, named
+     for SM-05. When M3 adds the two-hour stop, that test fails until the stop
+     states it ends journeys still in contact only, with its own L6 test.
+     - Rejected: building the stop's server half now (a walker-facing
+       feature with no walker side, and a task's worth of work); moving
+       SM-05 to M3 (M2's exit would lose a rule the roadmap names).
+     - The cost: SM-05 reads as covered before the stop exists. The spec's
+       "Left for later" says so.
+  2. **The walker is not pushed when a responder closes the journey or the
+     24-hour end ends it.** The server records how, when and by whom the
+     journey ended. The walker's phone learns the journey is over from its
+     next heartbeat's 409, and M3's app shows what happened.
+     - Rejected: a push to the walker now (a kind M3's push task would hold
+       back anyway, until D-113's real-phone test); the heartbeat's 409
+       carrying how the journey ended (a contract change M3 can make with the
+       screen that uses it).
+- **Consequences:** LOST-08-AC1 to AC21 are written on these answers; D-126
+  records the technical choices. The roadmap's row 8 names the 24-hour end.
+  Supersedes nothing.
+
+## D-126 — "They're safe": the close rule, the 24-hour end in the sweep, the new end reasons, and how D-033's journey table is read (LOST-08, SM-05, SM-06)
+- **Date:** 2026-10-09 · **Status:** Accepted (delegated, D-031) ·
+  **Section:** 5 (AR-03 to AR-06, AR-08; D-033, D-034, D-091, D-102, D-103,
+  D-110 to D-116, D-122 to D-125)
+- **Context:** LOST-08's spec has the full reasoning. This records the
+  choices it makes within the owner's answers (D-125) and the binding rules.
+- **Decision:**
+  - **The close is an alert event,** `close`, in `alertTransition`. In order:
+    no alert, or the sender not a responder → refused, `ALERT_NOT_FOUND` (one
+    answer for both, D-114); `RESOLVED` → ignored, `ALERT_RESOLVED`; not
+    `ACKNOWLEDGED` with the sender recorded → refused,
+    `NOT_THE_ACKNOWLEDGER`; else closed. A missing half refuses: closing
+    silences everyone, so it goes the other way from the escalation, which
+    sends on a missing half (D-114, D-116). After a reset nobody can close
+    until someone acknowledges again.
+  - **The route** is `POST /v1/alerts/{alertId}/closure` (`closeAlert`), on
+    the device credential, shaped as "I'm on it"'s: 200 `CLOSED`; 403
+    `NOT_THE_ACKNOWLEDGER` (a responder follows the journey, so the alert's
+    existence is theirs to know); 404 `ALERT_NOT_FOUND`; 409 `ALERT_RESOLVED`
+    for a repeat, as "I'm home" answers one. Additive.
+  - **The close writes** in one transaction, the journey's row first
+    (D-112): the journey `ENDED` (`SAFE`) at `now()`, then the resolution
+    helper with the closer left out of the stand-downs ("tells the other
+    responders"; D-111 read with the story).
+  - **Who closed it** is the `acknowledged_by` of the alert resolved `SAFE`.
+    Only the acknowledger can close, and a resolved alert's record is never
+    cleared (D-123), so no new column is needed. A test holds the invariant.
+  - **`SAFE` and `EXPIRED`** join `ALERT_RESOLUTIONS`, `MESSAGE_KINDS`,
+    `PUSH_KINDS` (each also the stand-down's kind, D-112),
+    `WITHDRAWN_WHEN_REMOVED` and `JOURNEY_END_REASONS`. Migration 0008 adds
+    them to three enums. No stand-down SMS, for any resolution (D-115 item 5,
+    read as every resolution).
+  - **The 24-hour end** is part of the watchdog's sweep, after the
+    escalation, and feeds its beat, so a failed run pages. Its constant is
+    `ALERT_EXPIRES_AFTER_MS`, 24 hours counted "or more" by the database's
+    clock from the current alert's `opened_at`, not moved by a reset. A
+    journey event, `expire`, decides it. The read takes no threshold. The
+    write goes through `takingTheRow`, with the stuck handling the
+    escalation has. Every responder row gets an `EXPIRED` stand-down, the
+    acknowledger included. A journey with no responder gets none, and its
+    unheard alert is resolved, which clears the SMS check's page (D-122).
+    `SweepResult` keeps its four fields.
+  - **SM-05's guard:** the pinned table of end reasons, as D-125 says.
+  - **A start that races an end** retries its insert once (LOST-03's left
+    item): a close or the 24-hour end can now end a journey from outside the
+    walker's phone.
+  - **Four closed log events:** `closure_ignored`, `closure_failed`,
+    `expiry_failed`, `expiry_overdue`. No user ID (PRIV-07).
+  - **The modules** are `modules/alerts/closure.ts` and `expiry.ts`, mutated
+    in the `alerts` group with two new L6 files.
+  - **How D-033's journey table is read now:** `LOST_CONTACT` → `ENDED`
+    (`SAFE`) and `LOST_CONTACT` → `ENDED` (`EXPIRED`) exist, and the end
+    reasons are `HOME`, `SAFE`, `EXPIRED`. The two-hour stop's reason comes
+    with M3. D-033 is delegated, so this is Claude's to record and the
+    owner's to reopen; `05-architecture.md` draws the rows.
+- **Consequences:** no new dependency (SEC-06) and no new import route
+  (AR-10). LOST-08-AC1 to AC21 prove it. Supersedes nothing.
+- **Amended in review loop 1 (2026-10-09), from the three reviewers:**
+  - **A failed first expiry attempt past due is stuck,** as the escalation's
+    is: an alert already `STUCK_AFTER_MS` past its 24 hours whose first
+    attempt fails is counted in the sweep's `stuck`, with one
+    `expiry_overdue` line naming it (`safety-reviewer`). The green phase had
+    counted only a skipped one, so such a failure paged with no alert ID.
+  - **The fake's due read keeps the adapter's order** (`opened_at`, then
+    ID), and the shared suite pins it (`code-reviewer`, D-100).
+  - **Tests the code already passed:** strangers and a removed acknowledger
+    at a resolved alert get the unknown ID's 404 (`privacy-security-reviewer`);
+    a close through the real API process (`safety-reviewer`); the expiry
+    run's count.
+  - Left for a later change: one helper for the three due-alert loops (the
+    open, the escalation, the expiry), before a fourth copy.

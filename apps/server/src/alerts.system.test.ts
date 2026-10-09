@@ -124,6 +124,15 @@ function world({ log: given }: { log?: Log } = {}) {
     acknowledgements: {
       acknowledge: () => Promise.reject(new Error('these tests acknowledge nothing')),
     },
+    // RG-03 (LOST-08; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): `closures` added
+    // because "They're safe" (approach item 5; "Interfaces": ApiDependencies
+    // gains `closures`) made it part of what the API needs. These tests close
+    // nothing, so it rejects; they never call it, and nothing they assert
+    // changes.
+    closures: {
+      close: () => Promise.reject(new Error('these tests close nothing')),
+    },
   });
   const watchdog = createWatchdog({ journeys: store, beats, log });
   const sender = createPushSender({ outbox: store, push, log });
@@ -370,6 +379,15 @@ describe('LOST-02: five minutes, never before, on the database’s clock', () =>
       // test asserts changes.
       alertsDueForEscalation: (afterMs) => w.store.alertsDueForEscalation(afterMs),
       escalateAlert: (request) => w.store.escalateAlert(request),
+      // RG-03 (LOST-08; not in the spec's "Existing assertions that change by
+      // design", found by type-checking and running this file against a
+      // throwaway reference of the spec's interfaces): the watchdog's store
+      // gains the 24-hour end's read and write ("Interfaces"), and the sweep
+      // asks for them after the escalation, whatever it came to. This stand-in
+      // hands both to the store as it hands the rest; nothing here is 24 hours
+      // old, and nothing this test asserts changes.
+      alertsDueForExpiry: () => w.store.alertsDueForExpiry(),
+      expireAlert: (request) => w.store.expireAlert(request),
     };
 
     const result = await createWatchdog({ journeys: drifted, beats: w.beats, log: w.log }).sweep();
@@ -930,10 +948,19 @@ describe('REL-08 and LOST-02: the watchdog feeds the beat', () => {
     // database gone that read fails too: each sweep gains one
     // escalation_failed line, stage read, with the same SQLSTATE. The set is
     // still exact; the health this test is about is unchanged.
+    //
+    // RG-03 (LOST-08; not in the spec's "Existing assertions that change by
+    // design", found by test-author searching for exact pins of a sweep's
+    // lines): the 24-hour end now runs in every sweep after the escalation,
+    // "whatever they came to, its own read included" (approach item 6,
+    // LOST-08-AC10), so with the database gone its read fails too: each sweep
+    // gains one expiry_failed line, stage read, with the same SQLSTATE. The
+    // set is still exact; the health this test is about is unchanged.
     expect(new Set(w.log.events.map((event) => JSON.stringify(event)))).toEqual(
       new Set([
         JSON.stringify({ event: 'watchdog_failed', stage: 'read', code: '08006' }),
         JSON.stringify({ event: 'escalation_failed', stage: 'read', code: '08006' }),
+        JSON.stringify({ event: 'expiry_failed', stage: 'read', code: '08006' }),
         JSON.stringify({ event: 'delivery_failed', stage: 'claim', code: '08006' }),
       ]),
     );

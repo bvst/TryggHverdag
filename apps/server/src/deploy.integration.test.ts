@@ -1386,7 +1386,16 @@ describe('SM-10: the removal migration changes no row that is already there', ()
       ).toBeGreaterThan(0);
       expect(before.outbox.filter((row) => row['withdrawn_at'] !== null)).toHaveLength(2);
 
-      await expect(migrateDatabase(uri)).resolves.toBeUndefined();
+      // RG-03 (LOST-08, named in the spec's "Existing assertions that change
+      // by design"): this ran every migration (migrateDatabase), so it would
+      // now run 0008 too, and message_kind would then hold eight labels: the
+      // comparison below would fail though 0007 changed nothing. It keeps its
+      // point by migrating through 0007 only, with drizzle's migrate on one
+      // connection, as migrateDatabase runs it, over a copy of the folder up
+      // to 0007 (as migrationsUpTo0006 does for LOST-07-AC19). The applied
+      // count and the journal pin below are that copy's. LOST-08-AC20's test
+      // takes a database at 0007 through 0008.
+      await expect(migrateThrough0007(uri)).resolves.toBeUndefined();
 
       // Every row as it was, column for column, with the new columns, and
       // only those, beside it: round 1 on each alert and message, and
@@ -1407,10 +1416,11 @@ describe('SM-10: the removal migration changes no row that is already there', ()
       const applied = await client.query<{ n: number }>(
         'select count(*)::int as n from drizzle.__drizzle_migrations',
       );
-      expect(applied.rows).toEqual([{ n: journal(MIGRATIONS).entries.length }]);
-      expect(journal(MIGRATIONS).entries.map((entry) => entry.idx)).toEqual([
-        0, 1, 2, 3, 4, 5, 6, 7,
-      ]);
+      // RG-03 (LOST-08, as above): the copy's journal, 0000 to 0007, both
+      // for the applied count and for the indexes, which were the whole
+      // journal's and are now its first eight.
+      expect(applied.rows).toEqual([{ n: entriesThrough0007().length }]);
+      expect(entriesThrough0007().map((entry) => entry.idx)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
 
       // The value added inside the migration's transaction is usable once it
       // has committed, and so is a journey's message, naming the journey and
@@ -1464,5 +1474,308 @@ describe('SM-10: the removal migration changes no row that is already there', ()
     expect(text).toContain('round');
     expect(text).toContain('journey_id');
     expect(text).toContain('outbox_alert_id_recipient_id_kind_round_unique');
+  });
+});
+
+/** The journal's entries `0000` to `0007`: the schema SM-10 left (LOST-08). */
+function entriesThrough0007(): JournalEntry[] {
+  const kept = journal(MIGRATIONS).entries.filter((entry) => /^000[0-7]_/.test(entry.tag));
+  expect(kept.map((entry) => entry.idx)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  return kept;
+}
+
+/** A copy of the migrations folder holding `0000` to `0007` only: the schema before LOST-08. */
+function migrationsUpTo0007(): string {
+  const folder = mkdtempSync(path.join(tmpdir(), 'migrations-0007-'));
+  mkdirSync(path.join(folder, 'meta'));
+  const kept = entriesThrough0007();
+  for (const entry of kept) {
+    copyFileSync(path.join(MIGRATIONS, `${entry.tag}.sql`), path.join(folder, `${entry.tag}.sql`));
+  }
+  writeFileSync(
+    path.join(folder, 'meta', '_journal.json'),
+    JSON.stringify({ ...journal(MIGRATIONS), entries: kept }, null, 2),
+  );
+  return folder;
+}
+
+/** Drizzle's migrate on one connection, as migrateDatabase runs it, over the migrations up to `0007` only. */
+async function migrateThrough0007(uri: string): Promise<void> {
+  const folder = migrationsUpTo0007();
+  const pool = createPool(uri, 1);
+  try {
+    await migrate(createDatabase(pool), { migrationsFolder: folder });
+  } finally {
+    await pool.end();
+    rmSync(folder, { recursive: true, force: true });
+  }
+}
+
+/** A fresh database in the PostgreSQL 15 container, migrated up to `0007` only, and dropped afterwards (LOST-08). */
+async function databaseAt0007(
+  use: (uri: string, client: pg.Client) => Promise<void>,
+): Promise<void> {
+  const name = `lost08_${syntheticUuid().replaceAll('-', '')}`;
+  const admin = new pg.Client({ connectionString: databaseUrl() });
+  await admin.connect();
+  await admin.query(`create database ${name}`);
+  const uri = withDatabase(databaseUrl(), name);
+  const client = new pg.Client({ connectionString: uri });
+  try {
+    await migrateThrough0007(uri);
+    await client.connect();
+    await use(uri, client);
+  } finally {
+    await client.end().catch(() => undefined);
+    await admin.query(`drop database if exists ${name}`);
+    await admin.end();
+  }
+}
+
+// LOST-08's migration, 0008, adds SAFE and EXPIRED to alert_resolution,
+// message_kind and journey_end_reason: the close's and the 24-hour end's
+// resolutions, stand-downs and end reasons (D-126). It changes no column,
+// check or index, so it must run over a database that already holds
+// journeys, alerts and messages in every state and change none of those
+// rows. It adds enum values inside drizzle's one transaction, which
+// PostgreSQL accepts only if the transaction does not use them (approach item
+// 8): staging's PostgreSQL 15 is the evidence.
+
+describe('LOST-08: the close’s and the 24-hour end’s migration changes no row that is already there', () => {
+  test('LOST-08-AC20: a PostgreSQL 15 database at 0007, holding journeys in every state and end reason, alerts in every state with and without a resolution, and outbox messages of every kind, sent, unsent and withdrawn, migrates through 0008 as the pre-run hook runs it; every row is unchanged, column for column; the three enums then hold SAFE and EXPIRED last, and both can be used once the migration has committed', async () => {
+    await databaseAt0007(async (uri, client) => {
+      const journeyStates = (
+        await client.query<{ state: string }>(
+          'select unnest(enum_range(null::journey_state))::text as state',
+        )
+      ).rows.map((row) => row.state);
+      const alertStates = (
+        await client.query<{ state: string }>(
+          'select unnest(enum_range(null::alert_state))::text as state',
+        )
+      ).rows.map((row) => row.state);
+      expect(journeyStates).toEqual(['ACTIVE', 'LOST_CONTACT', 'ENDED']);
+      expect(alertStates).toEqual(['OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED']);
+      expect(await labelsIn(client, 'journey_end_reason')).toEqual(['HOME']);
+      expect(await labelsIn(client, 'alert_resolution')).toEqual(['BACK_IN_CONTACT', 'HOME']);
+      for (const state of journeyStates) {
+        await journeyIn(client, state);
+      }
+      // The ENDED journey ended "I'm home", with its time: the one end
+      // reason 0007 knows, in use.
+      await client.query(
+        `update journeys set ended_at = now() - interval '1 minute', end_reason = 'HOME'
+          where state = 'ENDED'`,
+      );
+      for (const state of alertStates) {
+        await journeyWithAlert(client, state);
+      }
+      // A second RESOLVED alert, so both resolutions 0007 knows are in use;
+      // an acknowledgement, an escalation time and a second round beside
+      // them: the columns 0005 to 0007 added, in use.
+      await journeyWithAlert(client, 'RESOLVED');
+      await client.query(
+        `update alerts set resolved_at = now() - interval '1 minute',
+                           resolution = case when id = (select id from alerts
+                                                          where state = 'RESOLVED'
+                                                          order by id limit 1)
+                                             then 'HOME'::alert_resolution
+                                             else 'BACK_IN_CONTACT'::alert_resolution end
+          where state = 'RESOLVED'`,
+      );
+      await client.query(
+        `update alerts a
+            set acknowledged_at = now() - interval '3 minutes',
+                acknowledged_by = (select r.responder_id from journey_responders r
+                                    where r.journey_id = a.journey_id
+                                    order by r.responder_id limit 1)
+          where a.state in ('ACKNOWLEDGED', 'RESOLVED')`,
+      );
+      await client.query(
+        `update alerts set sms_raised_at = now() - interval '4 minutes', round = 2
+          where state = 'ESCALATED'`,
+      );
+      // Every kind 0007 knows beside the lost-contact pushes: stand-downs,
+      // a notice, an SMS, sent, unsent and withdrawn, and the walker's
+      // warning, naming the journey and no alert.
+      const resolved = await client.query<{ alert_id: string; recipient_id: string }>(
+        `select o.alert_id::text as alert_id, o.recipient_id::text as recipient_id
+           from outbox o join alerts a on a.id = o.alert_id
+          where a.state = 'RESOLVED' order by o.alert_id, o.recipient_id`,
+      );
+      const [first, second] = resolved.rows;
+      await client.query(
+        "update outbox set withdrawn_at = now() - interval '1 minute' where alert_id = $1 and sent_at is null",
+        [first?.alert_id],
+      );
+      for (const [recipient, kind, sent, withdrawn] of [
+        [first, 'BACK_IN_CONTACT', true, false],
+        [second, 'HOME', false, false],
+        [second, 'ACKNOWLEDGED', false, true],
+        [first, 'LOST_CONTACT_SMS', false, false],
+      ] as const) {
+        await client.query(
+          `insert into outbox (id, alert_id, recipient_id, kind, created_at, attempts,
+                               next_attempt_at, sent_at, last_failure, withdrawn_at)
+           values ($1, $2, $3, $4, now() - interval '2 minutes', 1, now() - interval '1 minute',
+                   case when $5::boolean then now() - interval '1 minute' end, null,
+                   case when $6::boolean then now() - interval '30 seconds' end)`,
+          [syntheticUuid(), recipient?.alert_id, recipient?.recipient_id, kind, sent, withdrawn],
+        );
+      }
+      const walking = await client.query<{ id: string; walker_id: string }>(
+        "select id::text as id, walker_id::text as walker_id from journeys where state = 'ACTIVE' limit 1",
+      );
+      await client.query(
+        `insert into outbox (id, journey_id, recipient_id, kind, created_at, attempts,
+                             next_attempt_at)
+         values ($1, $2, $3, 'NO_RESPONDER', now() - interval '2 minutes', 0,
+                 now() - interval '2 minutes')`,
+        [syntheticUuid(), walking.rows[0]?.id, walking.rows[0]?.walker_id],
+      );
+      await client.query(
+        "insert into worker_heartbeat (id, beat_at) values ('worker', now() - interval '1 minute')",
+      );
+      const before = await rowsBefore0004(client);
+      expect(new Set(before.journeys.map((row) => row['state']))).toEqual(new Set(journeyStates));
+      expect(before.journeys.filter((row) => row['end_reason'] === 'HOME')).toHaveLength(1);
+      expect(new Set(before.alerts.map((row) => row['state']))).toEqual(new Set(alertStates));
+      expect(new Set(before.alerts.map((row) => row['resolution']))).toEqual(
+        new Set([null, 'BACK_IN_CONTACT', 'HOME']),
+      );
+      expect(new Set(before.outbox.map((row) => row['kind']))).toEqual(
+        new Set([
+          'LOST_CONTACT',
+          'BACK_IN_CONTACT',
+          'HOME',
+          'ACKNOWLEDGED',
+          'LOST_CONTACT_SMS',
+          'NO_RESPONDER',
+        ]),
+      );
+      expect(before.outbox.filter((row) => row['sent_at'] !== null).length).toBeGreaterThan(0);
+      expect(
+        before.outbox.filter((row) => row['sent_at'] === null && row['withdrawn_at'] === null)
+          .length,
+      ).toBeGreaterThan(0);
+      expect(before.outbox.filter((row) => row['withdrawn_at'] !== null).length).toBeGreaterThan(0);
+
+      await expect(migrateDatabase(uri)).resolves.toBeUndefined();
+
+      // Every row as it was, column for column: 0008 adds no column.
+      expect(await rowsBefore0004(client)).toEqual(before);
+      expect({
+        alertResolution: await labelsIn(client, 'alert_resolution'),
+        messageKind: await labelsIn(client, 'message_kind'),
+        journeyEndReason: await labelsIn(client, 'journey_end_reason'),
+      }).toEqual({
+        alertResolution: ['BACK_IN_CONTACT', 'HOME', 'SAFE', 'EXPIRED'],
+        messageKind: [
+          'LOST_CONTACT',
+          'BACK_IN_CONTACT',
+          'HOME',
+          'ACKNOWLEDGED',
+          'LOST_CONTACT_SMS',
+          'NO_RESPONDER',
+          'SAFE',
+          'EXPIRED',
+        ],
+        journeyEndReason: ['HOME', 'SAFE', 'EXPIRED'],
+      });
+      const applied = await client.query<{ n: number }>(
+        'select count(*)::int as n from drizzle.__drizzle_migrations',
+      );
+      expect(applied.rows).toEqual([{ n: journal(MIGRATIONS).entries.length }]);
+      expect(journal(MIGRATIONS).entries.map((entry) => entry.idx)).toEqual([
+        0, 1, 2, 3, 4, 5, 6, 7, 8,
+      ]);
+
+      // The values added inside the migration's transaction are usable once
+      // it has committed: as a resolution, as an end reason and as a kind.
+      const lost = before.alerts.find((row) => row['state'] === 'ACKNOWLEDGED');
+      await expect(
+        client.query(
+          `update alerts set state = 'RESOLVED', resolved_at = now(), resolution = 'SAFE'
+            where id = $1`,
+          [lost?.['id']],
+        ),
+      ).resolves.toMatchObject({ rowCount: 1 });
+      await expect(
+        client.query(
+          `update journeys set state = 'ENDED', ended_at = now(), end_reason = 'SAFE'
+            where id = $1`,
+          [lost?.['journey_id']],
+        ),
+      ).resolves.toMatchObject({ rowCount: 1 });
+      const open = before.alerts.find((row) => row['state'] === 'OPEN');
+      await expect(
+        client.query(
+          `update alerts set state = 'RESOLVED', resolved_at = now(), resolution = 'EXPIRED'
+            where id = $1`,
+          [open?.['id']],
+        ),
+      ).resolves.toMatchObject({ rowCount: 1 });
+      await expect(
+        client.query(
+          `update journeys set state = 'ENDED', ended_at = now(), end_reason = 'EXPIRED'
+            where id = $1`,
+          [open?.['journey_id']],
+        ),
+      ).resolves.toMatchObject({ rowCount: 1 });
+      const [message] = before.outbox;
+      for (const kind of ['SAFE', 'EXPIRED']) {
+        await expect(
+          client.query(
+            `insert into outbox (id, alert_id, recipient_id, kind, created_at, attempts,
+                                 next_attempt_at)
+             values ($1, $2, $3, $4, now(), 0, now())`,
+            [syntheticUuid(), message?.['alert_id'], message?.['recipient_id'], kind],
+          ),
+          kind,
+        ).resolves.toMatchObject({ rowCount: 1 });
+      }
+    });
+  }, 120_000);
+
+  test('LOST-08-AC20: there is exactly one committed 0008 migration, it is in the journal, it holds no update, delete or truncate, and it names SAFE and EXPIRED only in the add value statements of alert_resolution, message_kind and journey_end_reason', () => {
+    const files = readdirSync(MIGRATIONS).filter((file) => /^0008_.*\.sql$/.test(file));
+    expect(files, 'exactly one 0008 migration').toHaveLength(1);
+    expect(journal(MIGRATIONS).entries.map((entry) => `${entry.tag}.sql`)).toContain(files[0]);
+    const text = readFileSync(path.join(MIGRATIONS, files[0] ?? ''), 'utf8');
+    const statements = text
+      .split(/--> statement-breakpoint|;/)
+      .map((statement) => statement.trim())
+      .filter((statement) => statement !== '');
+
+    expect(text).not.toMatch(/\bupdate\s+("?public"?\.)?"?[a-z_]+"?\s+set\b/i);
+    expect(text).not.toMatch(/\bdelete\s+from\b/i);
+    expect(text).not.toMatch(/\btruncate\b/i);
+    const addsValue = (type: string) =>
+      statements.filter((statement) =>
+        new RegExp(`^alter type\\s+("?public"?\\.)?"?${type}"?\\s+add value\\b`, 'i').test(
+          statement,
+        ),
+      );
+    for (const type of ['alert_resolution', 'message_kind', 'journey_end_reason']) {
+      const added = addsValue(type);
+      expect(added, type).toHaveLength(2);
+      expect(
+        added.filter((statement) => statement.includes("'SAFE'")),
+        type,
+      ).toHaveLength(1);
+      expect(
+        added.filter((statement) => statement.includes("'EXPIRED'")),
+        type,
+      ).toHaveLength(1);
+    }
+    const everyAdd = ['alert_resolution', 'message_kind', 'journey_end_reason'].flatMap(addsValue);
+    // 0008 names them nowhere else, so nothing in its transaction uses a new
+    // value; and it changes nothing but the three enums.
+    expect(
+      statements.filter(
+        (statement) => /SAFE|EXPIRED/.test(statement) && !everyAdd.includes(statement),
+      ),
+    ).toEqual([]);
+    expect(statements.filter((statement) => !everyAdd.includes(statement))).toEqual([]);
   });
 });

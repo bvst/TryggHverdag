@@ -35,6 +35,10 @@
  * naming the journey and the reason; a removal that failed, with its stage
  * and SQLSTATE; and the count of unresolved alerts whose journey has no
  * responder (D-122, item 3). None names the removed responder or the walker.
+ * LOST-08 adds four: a close of an alert already over, naming the alert and
+ * the reason; a close that failed, with its stage and SQLSTATE; a 24-hour end
+ * that failed, with its stage and SQLSTATE; and an alert the 24-hour end could
+ * not move, naming the alert. None names a user (PRIV-07).
  */
 export type FakeLogEvent =
   | { event: 'heartbeat_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
@@ -65,7 +69,11 @@ export type FakeLogEvent =
   | { event: 'sms_check_failed'; stage: 'read' | 'report'; code: string | null }
   | { event: 'removal_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
   | { event: 'removal_failed'; stage: 'read' | 'store'; code: string | null }
-  | { event: 'unheard_alerts'; count: number };
+  | { event: 'unheard_alerts'; count: number }
+  | { event: 'closure_ignored'; reason: 'ALERT_RESOLVED'; alertId: string }
+  | { event: 'closure_failed'; stage: 'read' | 'store'; code: string | null }
+  | { event: 'expiry_failed'; stage: 'read' | 'expire'; code: string | null }
+  | { event: 'expiry_overdue'; alertId: string };
 
 export interface FakeLog {
   /** Records the event. */
