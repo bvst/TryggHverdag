@@ -1,12 +1,11 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-09 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24, LOST-06, LOST-07, BUG-29, SM-10 and BUG-41 done (D-090, D-115)
+**Last updated:** 2026-10-09 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24, LOST-06, LOST-07, BUG-29, SM-10, BUG-41 and LOST-08 done (D-090, D-115)
 
-**Current section:** milestone M2, started 2026-10-01 with SM-01; task 8,
-LOST-08 ("They're safe"), is in review (D-090, D-115; the task list is in
-[10-roadmap.md](10-roadmap.md)): the owner answered its two questions on
-2026-10-09, each with the recommendation (D-125), and D-126 records the
-delegated choices. SM-10, removing a responder, is done (#74,
+**Current section:** milestone M2, started 2026-10-01 with SM-01; task 9,
+REL-10 (the staging canary), the last of M2's tasks, is next (D-090, D-115;
+the task list is in [10-roadmap.md](10-roadmap.md)). LOST-08, "They're safe",
+is done (#75, 2026-10-09; D-125 and D-126). SM-10, removing a responder, is done (#74,
 2026-10-09; D-122 to D-124), with BUG-41, the mutation budget, in it.
 LOST-07, SMS escalation, is done (#67,
 2026-10-07; D-115 to D-117), with BUG-29, the mutation budget, in it.
