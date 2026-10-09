@@ -20,8 +20,9 @@
  *
  * It fails toward paging. A read that fails, of either count, reports
  * nothing, so the monitor's silence pages; a report that fails is one line,
- * never a thrown task that Graphile retries in a loop. It does not depend on the watchdog's beat: the
- * two say different things, and each has its own check.
+ * never a thrown task that Graphile retries in a loop. It does not depend on
+ * the watchdog's beat: the two say different things, and each has its own
+ * check.
  *
  * Its lines hold a count, a stage and a SQLSTATE, nothing else (PRIV-07). It
  * reads no clock: the limit is counted by the database's now() (AR-03).
