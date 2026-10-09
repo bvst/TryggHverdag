@@ -4800,7 +4800,11 @@ any other path is work, not a candidate for the same treatment.
     processes, which overlapped with the other files before. One setting for
     every group is kept anyway: simpler, and the total halves.
   - CI's run is the one of record. D-117's quiet local run took 18:57 and
-    CI's 21:07; by that ratio this is about 18 minutes on CI.
+    CI's 21:07; by that ratio this would be about 18 minutes on CI.
+  - **CI's run** (#74, `946f855`, job 113802883028): the mutation step took
+    **12:15** (11:42:34 to 11:54:49), 12:45 under the budget, and every run
+    passed (domain, healthchecks, journeys, alerts, worker, process,
+    api-process). LOST-07's run before this task took 21:07.
 - **Compared against:**
   - giving `removal.ts` a group of its own (SM-10's spec): about 40 s;
   - `--pool=threads`: about 7 % (D-117), and it changes how tests run;
