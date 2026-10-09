@@ -30,7 +30,7 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | LOST-05 | The walker knows when they're offline | must | ⚪ | 0 |
 | LOST-06 | "I'm on it" | must | 🟢 | 23 |
 | LOST-07 | SMS escalation | must | 🟢 | 24 |
-| LOST-08 | "They're safe" | must | 🟢 | 26 |
+| LOST-08 | "They're safe" | must | 🟢 | 27 |
 | HELP-01 | What to do | must | ⚪ | 0 |
 | REL-01 | The lost-contact decision is made by the server, using the server's clock, never the phone's. | must | 🟢 | 20 |
 | REL-02 | Positions recorded while offline are queued on the phone and sent in order when the connection returns. | must | ⚪ | 0 |
@@ -50,7 +50,7 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | SEC-04 | Leaked invitation | must | ⚪ | 0 |
 | SEC-05 | Admin (owner) account compromised | must | ⚪ | 0 |
 | SEC-06 | Vulnerable or malicious dependencies | must | 🟢 | 1 |
-| SEC-07 | Faked "I'm fine" heartbeats | must | 🟢 | 13 |
+| SEC-07 | Faked "I'm fine" heartbeats | must | 🟢 | 14 |
 | PRIV-01 | Location is collected only while a journey is running (including one started by CALL-03). | must | ⚪ | 0 |
 | PRIV-02 | Only the walker can start sharing their own location. | must | ⚪ | 0 |
 | PRIV-03 | Only the responders on a journey can see it, and only while it runs. | must | ⚪ | 0 |

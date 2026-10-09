@@ -67,7 +67,7 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | 5 | LOST-06 | "I'm on it" | ✅ **Done** — 2026-10-07, [#66](https://github.com/bvst/TryggHverdag/pull/66), merged as `e695e8a` at 08:42 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `5925938`. 17 acceptance criteria; D-113 (owner) with its amendment (the notice is not pushed on a platform until a real-phone test shows it never displaces an undelivered critical alert), D-114 (delegated). Session reviews: all three PASS in the first round; two review loops; `test-auditor` PASS, then a delta audit PASS. In CI on `5925938`: all 16 checks passed, all five AI reviewers PASS; `integration` on PostgreSQL 15, migration 0005 included; `mutation` every run passed (`acknowledgement.ts` 37 of 37, `journey.ts` 176 of 177). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37595559915), and `deploy-staging` passed (run 37595559908); the worker's session-limit line was not in the deploy's log (BUG-27). Record: `progress/m2.md` |
 | 6 | LOST-07 | SMS escalation at 2 minutes | ✅ **Done** — 2026-10-07, [#67](https://github.com/bvst/TryggHverdag/pull/67), merged as `1c4bc8b` at 19:43 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `2a65c3a`. 20 acceptance criteria; D-115 (owner, five answers), D-116 (delegated, three review-loop amendments), with BUG-29 in it (D-117). Session reviews: all three PASS in the first round; three review loops; `test-auditor` blocked loop 1's head and passed loops 2 and 3. In CI on `2a65c3a`: all 16 checks passed, all five AI reviewers PASS (the privacy reviewer after two re-runs: a review that ran but returned no structured verdict, explained by D-121); `integration` on PostgreSQL 15 with migration 0006; `mutation` 21:07 against 25:00. On `main` after the merge: `ci` passed (run 37676690823) and `deploy-staging` passed (run 37676690808); the smoke test saw the worker check in at 19:47:54 UTC, so the stricter ping-URL check accepted the existing `HEALTHCHECKS_WORKER_URL`. **A-33 done** (the owner, 2026-10-07; apply run 37678702578). Record: `progress/m2.md` |
 | 7 | SM-10 | Removing a responder: resumed escalation and the last-responder warning (D-115) | ✅ **Done** — 2026-10-09, [#74](https://github.com/bvst/TryggHverdag/pull/74), merged as `f4ded6d` at 13:36 UTC after `urso-agent` approved: D-122 (the owner's four answers), D-123, and BUG-41's faster mutant runs (D-124). Three review loops; every check and all five CI reviewers passed, mutation in 12:15 and 13:48. `main`'s CI and `deploy-staging` passed; migration 0007 ran in the pre-run hook |
-| 8 | LOST-08 | "They're safe" | 🟡 **In progress** on `claude/busy-faraday-40n2zl`: spec settled, the owner's two answers (D-125) and the delegated choices (D-126); tests next |
+| 8 | LOST-08 | "They're safe" | 🟡 **In review**, from `claude/busy-faraday-40n2zl`: the owner's two answers (D-125) and the delegated choices (D-126). One review loop; `safety-reviewer`, `privacy-security-reviewer` and `test-auditor` passed. Waiting on CI's run |
 | 9 | REL-10 | The staging canary | ⚪ Not started |
 
 ## M1 at a glance
@@ -427,10 +427,10 @@ ping-URL check reads the worker's existing secret before any plan; the
 merge's deploy showed the worker checking in, so that secret is already in
 the UUID form. **A-33 is done** (the owner, 2026-10-07: plan run 37678574920,
 apply run 37678702578, the app's environment changed), so the SMS check is
-live on staging. **Task 8, LOST-08** ("They're safe") is in progress on
+live on staging. **Task 8, LOST-08** ("They're safe") is in review from
 `claude/busy-faraday-40n2zl`: the owner answered its two questions on
 2026-10-09 with the recommendation each time (D-125), and D-126 records the
-delegated choices; the tests come next. **Task 7,
+delegated choices. The three blocking reviewers passed after one review loop. **Task 7,
 SM-10** (removing a responder, D-115) is done
 ([#74](https://github.com/bvst/TryggHverdag/pull/74), `f4ded6d`, 2026-10-09):
 the owner's four answers (D-122), the delegated choices (D-123), and BUG-41,
