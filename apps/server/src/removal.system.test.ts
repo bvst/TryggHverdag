@@ -557,6 +557,68 @@ describe('SM-10, LOST-02, LOST-03, LOST-06 and LOST-07: a removed responder is o
       r3.userId,
     ]);
   });
+
+  test('SM-10-AC2: a removed responder learns nothing of an alert they acknowledged before it resolved, since only the journey’s own responders may see it, and a member removed from it is no longer one: R1 says "I’m on it" through the API, contact comes back, so the alert is RESOLVED with R1 still recorded, and R1 is then removed; R1’s "I’m on it" for it is 404 ALERT_NOT_FOUND, status, body and headers byte for byte a stranger’s and those an alert ID no alert has gets, decided by the plain read alone, with no line written and nothing changed (LOST-06)', async () => {
+    // SM-10 review loop 1 (privacy-security-reviewer): before SM-10 an
+    // alert's recorded acknowledger was always a responder of its journey.
+    // AC4 now keeps a removed acknowledger recorded on a RESOLVED alert, on
+    // purpose. The removal is how a walker drops someone they no longer
+    // trust, so what that member gets back must say no more than a stranger's
+    // answer: not that the alert exists, nor that it is over, which a 409
+    // ALERT_RESOLVED, or an acknowledgement_ignored line, would say. The
+    // other removed-responder cases (the test above, and AC9's) use an alert
+    // still open.
+    const w = world();
+    const { walker, journeyId, alertId, openedAt, responders } = await startedAndLost(w, 3);
+    const [r1] = responders as [RegisteredDevice, RegisteredDevice, RegisteredDevice];
+    await w.runUntil(openedAt.getTime() + MINUTE);
+    const onIt = await w.acknowledge(r1, alertId);
+    expect({ status: onIt.status, body: onIt.body }).toEqual({ status: 200, body: ON_IT });
+    await w.heartbeat(walker, journeyId);
+    expect(await w.remove(journeyId, r1.userId)).toEqual(REMOVED);
+    expect(
+      w.alertsOf(journeyId).map(({ id, state, acknowledgedBy }) => [id, state, acknowledgedBy]),
+      'the alert RESOLVED, R1 still recorded on it (AC4)',
+    ).toEqual([[alertId, 'RESOLVED', r1.userId]]);
+    expect(w.respondersOf(journeyId)).not.toContain(r1.userId);
+
+    const stranger = w.responder();
+    await w.seed(w.walker(), [stranger.userId], { silentForMs: MINUTE });
+    const strangers = await w.acknowledge(stranger, alertId);
+    const noAlert = await w.acknowledge(r1, syntheticUuid());
+    const before = {
+      record: w.recordOf(journeyId),
+      alerts: w.store.alerts(),
+      outbox: w.store.outbox(),
+      journeyMessages: w.store.journeyMessages(),
+    };
+    const lines = w.log.events.length;
+    const callsBefore = w.store.calls.length;
+
+    const removedOnes = await w.acknowledge(r1, alertId);
+
+    expect(removedOnes.status).toBe(404);
+    expect((removedOnes.body as { code?: unknown }).code).toBe('ALERT_NOT_FOUND');
+    for (const [who, answer] of [
+      ['a stranger', strangers],
+      ['an alert ID no alert has', noAlert],
+    ] as const) {
+      expect(
+        { status: removedOnes.status, text: removedOnes.text, headers: removedOnes.headers },
+        who,
+      ).toEqual({ status: answer.status, text: answer.text, headers: answer.headers });
+    }
+    expect(w.log.events.slice(lines), 'no line').toEqual([]);
+    expect(w.store.calls.slice(callsBefore), 'the plain read alone').toEqual([
+      'alertForAcknowledgement',
+    ]);
+    expect({
+      record: w.recordOf(journeyId),
+      alerts: w.store.alerts(),
+      outbox: w.store.outbox(),
+      journeyMessages: w.store.journeyMessages(),
+    }).toEqual(before);
+  });
 });
 
 // ---------------------------------------------------------------------------

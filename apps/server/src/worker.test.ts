@@ -3656,7 +3656,14 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
     expect(lines[0]).not.toContain('Healthchecks.io');
     // Said to its end, and a line of its own: what it reports on is the 60 s
     // an SMS may wait, and the line does not run on into the next.
-    expect(lines[0]).toMatch(/\b60 s\.$/);
+    //
+    // RG-03 (SM-10 review loop 1, safety-reviewer; D-122's consequences): was
+    // /\b60 s\.$/. Since D-122, item 3, an open alert with no responder left
+    // to tell is paged through the SMS check alone, so the line goes on past
+    // the 60 s to say so, and ends there. Both things this held are held
+    // still: the 60 s an SMS may wait, and the full stop at the line's end.
+    // SM-10-AC15's tests below pin the new words on their own.
+    expect(lines[0]).toMatch(/\b60 s, or any open alert has no responder left to tell\.$/);
     expect(runTogether(worker.written)).toEqual([]);
     expect(worker.written.join('')).not.toContain(CHECK);
     expect(healthchecksLines(worker.written)).toHaveLength(1);
@@ -3833,4 +3840,110 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
 
     await stopSmsWorker(worker);
   });
+
+  // SM-10 review loop 1 (safety-reviewer; D-122, item 3, and its
+  // consequences): since SM-10 a silent journey with no responder left opens
+  // its alert with nobody to tell, and the owner is paged through the SMS
+  // check alone, no longer through the worker's own check. So the start line
+  // says what the SMS check covers when it reports, and, when it does not,
+  // what goes unpaged: fail loudly, never silently.
+
+  /** The sentence a not-reporting SMS check's start line ends with: what goes unpaged without it. */
+  const UNPAGED =
+    /\bNeither an SMS left unsent nor an alert with no responder left to tell is paged\.$/m;
+
+  test.each([
+    [
+      'only HEALTHCHECKS_SMS_URL set, to a usable https: address',
+      () => ({ healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: PING_URL }) }),
+    ],
+    [
+      'both URLs set, valid and different, as staging runs',
+      () => ({
+        healthchecks: readHealthchecksSetting({
+          HEALTHCHECKS_WORKER_URL: syntheticPingUrl(syntheticUuid()),
+        }),
+        healthchecksSms: readHealthchecksSmsSetting({
+          HEALTHCHECKS_SMS_URL: syntheticPingUrl(syntheticUuid()),
+        }),
+      }),
+    ],
+  ] as const)(
+    'SM-10-AC15: with %s, the SMS check’s start line says it reports whether any open alert has no responder left to tell, as well as an SMS waiting 60 s, and never that something goes unpaged (SM-02, LOST-07)',
+    async (_what, settings) => {
+      const worker = smsWorkerProcess(settings());
+      await settle();
+
+      expect(worker.created).toHaveLength(1);
+      const lines = smsCheckLines(worker.written);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/\bor any open alert has no responder left to tell\b/);
+      expect(lines[0]).not.toMatch(UNPAGED);
+      expect(runTogether(worker.written)).toEqual([]);
+
+      await stopSmsWorker(worker);
+    },
+  );
+
+  test.each([
+    ['HEALTHCHECKS_SMS_URL unset', () => ({ healthchecksSms: readHealthchecksSmsSetting({}) })],
+    [
+      'HEALTHCHECKS_SMS_URL empty',
+      () => ({ healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: '' }) }),
+    ],
+    [
+      'HEALTHCHECKS_SMS_URL an http: address',
+      () => ({
+        healthchecksSms: readHealthchecksSmsSetting({
+          HEALTHCHECKS_SMS_URL: `http://127.0.0.1:1/${CHECK}`,
+        }),
+      }),
+    ],
+    [
+      'HEALTHCHECKS_SMS_URL not an address at all',
+      () => ({
+        healthchecksSms: readHealthchecksSmsSetting({
+          HEALTHCHECKS_SMS_URL: `hc-ping.com/${CHECK}`,
+        }),
+      }),
+    ],
+    ['no SMS check setting at all', () => ({})],
+    [
+      'HEALTHCHECKS_SMS_URL the same address as HEALTHCHECKS_WORKER_URL',
+      () => ({
+        healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: PING_URL }),
+        healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: PING_URL }),
+      }),
+    ],
+    [
+      'HEALTHCHECKS_SMS_URL the same check as HEALTHCHECKS_WORKER_URL on another host',
+      () => {
+        const check = syntheticUuid();
+        return {
+          healthchecks: readHealthchecksSetting({
+            HEALTHCHECKS_WORKER_URL: syntheticPingUrl(check),
+          }),
+          healthchecksSms: readHealthchecksSmsSetting({
+            HEALTHCHECKS_SMS_URL: `https://localhost:1/${check}`,
+          }),
+        };
+      },
+    ],
+  ] as const)(
+    'SM-10-AC15: with %s, the SMS check’s start line says, after why it does not report, that neither an SMS left unsent nor an alert with no responder left to tell is paged, and the worker stays up (SM-02, LOST-07)',
+    async (_what, settings) => {
+      const worker = smsWorkerProcess(settings());
+      await settle();
+
+      expect(worker.created).toEqual([]);
+      const lines = smsCheckLines(worker.written);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/^worker: the SMS check is not reporting: /);
+      expect(lines[0]).toMatch(UNPAGED);
+      expect(runTogether(worker.written)).toEqual([]);
+      expect(worker.exits).toEqual([]);
+
+      await stopSmsWorker(worker);
+    },
+  );
 });

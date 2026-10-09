@@ -821,6 +821,62 @@ describe('SM-10, LOST-02, LOST-03, LOST-06 and LOST-07: a removed responder is o
     expect(recipientsOf(sms.accepted)).toEqual(idsOf([r1, r3]));
     expect(ofKind(messages, NOTICE)).toEqual([]);
   });
+
+  test('SM-10-AC2: a removed responder learns nothing of an alert they acknowledged before it resolved, since only the journey’s own responders may see it, and a member removed from it is no longer one, on the real tables: R1 says "I’m on it" through the API, contact comes back through the API, so the alert is RESOLVED with R1 still recorded, and R1 is then removed; R1’s "I’m on it" for it is 404 ALERT_NOT_FOUND, status and body byte for byte a stranger’s and those an alert ID no alert has gets, with no line written and no row changed (LOST-06)', async () => {
+    // SM-10 review loop 1 (privacy-security-reviewer), as the system test of
+    // the same name: AC4 keeps a removed acknowledger recorded on a RESOLVED
+    // alert, on purpose, so the adapter's read hands back an alert whose
+    // acknowledger is no longer a responder. What that member gets back must
+    // say no more than a stranger's answer: not that the alert exists, nor
+    // that it is over.
+    const log = fakeLog();
+    const api = realApi({ log });
+    const { walker, journeyId, alertId, r1 } = await acknowledgedBy(3);
+    expect(
+      await post(api, walker.credential, 'heartbeats', syntheticHeartbeat({ journeyId })),
+    ).toMatchObject({ status: 200, body: { outcome: 'RECORDED' } });
+    expect(await remove(journeyId, r1.userId)).toEqual(REMOVED);
+    expect(
+      (await alertsOf(journeyId)).map(({ id, state, acknowledgedBy }) => [
+        id,
+        state,
+        acknowledgedBy,
+      ]),
+      'the alert RESOLVED, R1 still recorded on it (AC4)',
+    ).toEqual([[alertId, 'RESOLVED', r1.userId]]);
+    expect(await respondersOf(journeyId)).not.toContain(r1.userId);
+
+    const stranger = await person();
+    const strangers = await acknowledge(api, stranger.credential, alertId);
+    const noAlert = await acknowledge(api, r1.credential, syntheticUuid());
+    const rowCounts = async () =>
+      (
+        await connection().query<{ alerts: number; outbox: number; responders: number }>(
+          `select (select count(*)::int from alerts) as alerts,
+                  (select count(*)::int from outbox) as outbox,
+                  (select count(*)::int from journey_responders) as responders`,
+        )
+      ).rows[0];
+    const before = { record: await recordOf(journeyId), counts: await rowCounts() };
+    const lines = log.events.length;
+
+    const removedOnes = await acknowledge(api, r1.credential, alertId);
+
+    expect(removedOnes.status).toBe(404);
+    expect(removedOnes.body?.['code']).toBe('ALERT_NOT_FOUND');
+    for (const [who, answer] of [
+      ['a stranger', strangers],
+      ['an alert ID no alert has', noAlert],
+    ] as const) {
+      expect({ status: removedOnes.status, text: removedOnes.text }, who).toEqual({
+        status: answer.status,
+        text: answer.text,
+      });
+    }
+    expect(log.events.slice(lines), 'no line').toEqual([]);
+    // xmin included: a row rewritten with the same values would differ here.
+    expect({ record: await recordOf(journeyId), counts: await rowCounts() }).toEqual(before);
+  });
 });
 
 // ---------------------------------------------------------------------------

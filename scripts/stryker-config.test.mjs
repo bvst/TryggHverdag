@@ -26,7 +26,8 @@
 // its incremental mode reused every earlier result in unchanged code whatever
 // happened to the tests: a gutted test file scored 100 %, and 0 % fresh.
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -73,27 +74,50 @@ function configNamedIn(args) {
   return undefined;
 }
 
+/** An argument naming where Vitest keeps its module cache (D-124), in either spelling, with its value after `=`. */
+const CACHE_PATH_ARG = /^--(?:fsModuleCachePath|fs-module-cache-path)=/;
+
 /**
  * The test files Vitest would run with the arguments `args`, as `vitest list`
  * reports them, relative to the repository. `--json` comes last on purpose:
  * followed by a path, it takes that path as a file to write the list into.
+ *
+ * RG-03 (BUG-41, D-124): the arguments are handed over as the command gives
+ * them, apart from the module cache's path, which is now a fresh directory of
+ * the test's own, removed afterwards. Every run's command gains
+ * `--fsModuleCache --fsModuleCachePath=.vitest-fs-cache`, a path relative to
+ * where Vitest starts. Stryker starts it in a run's sandbox, but this lists
+ * from the repository, and `vitest list` with those flags writes the cache
+ * there (measured with Vitest 5.0.1: `_metadata.json`): every unit run would
+ * leave a `.vitest-fs-cache/` in the repository's root. Which files Vitest
+ * collects does not depend on where it keeps transforms, and the flags still
+ * reach Vitest, so a Vitest that no longer takes them still fails here; what
+ * they must be is pinned by BUG-41's own tests below.
  */
 function filesRunWith(args) {
-  const result = spawnSync(
-    process.execPath,
-    [
-      path.join(root, 'node_modules', 'vitest', 'vitest.mjs'),
-      'list',
-      ...args,
-      '--filesOnly',
-      '--json',
-    ],
-    { cwd: root, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: process.env.HOME } },
-  );
-  if (result.status !== 0) {
-    throw new Error(`vitest list ${args.join(' ')} failed:\n${result.stderr}`);
+  const cache = mkdtempSync(path.join(os.tmpdir(), 'stryker-config-list-'));
+  try {
+    const listed = args.map((arg) =>
+      CACHE_PATH_ARG.test(arg) ? `--fsModuleCachePath=${cache}` : arg,
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(root, 'node_modules', 'vitest', 'vitest.mjs'),
+        'list',
+        ...listed,
+        '--filesOnly',
+        '--json',
+      ],
+      { cwd: root, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: process.env.HOME } },
+    );
+    if (result.status !== 0) {
+      throw new Error(`vitest list ${listed.join(' ')} failed:\n${result.stderr}`);
+    }
+    return JSON.parse(result.stdout).map((entry) => path.relative(root, entry.file));
+  } finally {
+    rmSync(cache, { recursive: true, force: true });
   }
-  return JSON.parse(result.stdout).map((entry) => path.relative(root, entry.file));
 }
 
 /** The rule the config has always used: a folder means every .ts file under it. */
@@ -130,15 +154,34 @@ function optionIn(command, option) {
 const testTimeoutIn = (command) => optionIn(command, 'testTimeout');
 
 /**
+ * The Vitest options D-124 adds to every run's command (BUG-41), each as
+ * Vitest accepts it, in camel or kebab case: the module cache, where it is
+ * kept, and one test file at a time. BUG-41's own tests pin what they are,
+ * where they stand, and that each is given once.
+ */
+const RUN_SPEED_OPTIONS = {
+  fsModuleCache: /\s--(?:fsModuleCache|fs-module-cache)(?=\s|$)/g,
+  fsModuleCachePath: /\s--(?:fsModuleCachePath|fs-module-cache-path)(?:=|\s+)\S+(?=\s|$)/g,
+  maxWorkers: /\s--(?:maxWorkers|max-workers)(?:=|\s+)\d+(?=\s|$)/g,
+};
+
+/**
  * A run's command without the options BUG-12 adds to every run: the per-test
  * and hook timeouts and `--bail`, which BUG-12's own tests pin. What is left
  * says which configuration the run uses and which tests it runs.
+ *
+ * RG-03 (BUG-41, D-124): it now also leaves out the three options D-124 adds
+ * to every run, `--fsModuleCache --fsModuleCachePath=.vitest-fs-cache
+ * --maxWorkers=1`, which BUG-41's own tests pin, as BUG-12's are. So each
+ * run's test still pins its configuration and its tests, exactly as before,
+ * and no run's expected command is written again. Nothing else is left out:
+ * an option of any other kind still fails every run's test.
  */
 const withoutMutationOptions = (command) =>
-  Object.values(MUTATION_OPTIONS).reduce(
-    (rest, flag) => rest.replace(optionPattern(flag, 'g'), ''),
-    command,
-  );
+  [
+    ...Object.values(MUTATION_OPTIONS).map((flag) => optionPattern(flag, 'g')),
+    ...Object.values(RUN_SPEED_OPTIONS),
+  ].reduce((rest, pattern) => rest.replace(pattern, ''), command);
 
 /**
  * The config with what a run is meant to change taken out: what it mutates,
@@ -560,6 +603,68 @@ describe('stryker.config.mjs', () => {
     expect(version.error, `node ${bin} --version did not start`).toBeUndefined();
     expect(version.status, version.stderr).toBe(0);
     expect(version.stdout).toContain(`vitest/${String(manifest.version)}`);
+  });
+
+  test('BUG-41: every run’s command gives Vitest `--fsModuleCache --fsModuleCachePath=.vitest-fs-cache --maxWorkers=1` right after `run`, in that order, and each of the three once (D-124)', async () => {
+    // SM-10's mutation run ran out of its 25 minutes, about 32 in all on a
+    // quiet machine. Each mutant's run spent most of its time transforming
+    // the same code again, and started one Vitest worker per test file
+    // beside Stryker's four runners. With Vitest's module cache, kept in the
+    // run's sandbox, and one worker, the same mutants took about 16 minutes,
+    // each with the status it had before (1,170 of 1,170).
+    //
+    // Once each, in any spelling: a second --maxWorkers, or a
+    // --no-fsModuleCache, later on the line would quietly undo the first.
+    const once = {
+      fsModuleCache: /^--(?:no-)?(?:fsModuleCache|fs-module-cache)(?:=.*)?$/,
+      fsModuleCachePath: /^--(?:fsModuleCachePath|fs-module-cache-path)(?:=.*)?$/,
+      maxWorkers: /^--(?:maxWorkers|max-workers)(?:=.*)?$/,
+    };
+    for (const run of mutationRuns()) {
+      const config = await configFor(run.name);
+      const args = vitestArgs(config.commandRunner.command);
+
+      expect(args.slice(0, 3), run.name).toEqual([
+        '--fsModuleCache',
+        '--fsModuleCachePath=.vitest-fs-cache',
+        '--maxWorkers=1',
+      ]);
+      for (const [option, pattern] of Object.entries(once)) {
+        expect(
+          args.filter((arg) => pattern.test(arg)),
+          `${run.name}: ${option} given once`,
+        ).toHaveLength(1);
+      }
+    }
+  });
+
+  test('BUG-41: every run’s module cache is a relative path, neither absolute nor under node_modules, so it is made in the run’s own Stryker sandbox and goes with it: every run starts with an empty cache, and none reads another’s (D-099, D-124)', async () => {
+    // Stryker starts each mutant's command in the run's sandbox,
+    // .stryker-tmp/sandbox-*, and removes the sandbox when the run ends. A
+    // relative path is made there. An absolute one would outlive the run and
+    // be read by the next, and node_modules in a sandbox is a link to the
+    // repository's own, so a cache under it would too. Every run is fresh
+    // (D-099): the cache may hold this run's transforms, never another's.
+    for (const run of mutationRuns()) {
+      const config = await configFor(run.name);
+      const given = vitestArgs(config.commandRunner.command)
+        .filter((arg) => CACHE_PATH_ARG.test(arg))
+        .map((arg) => arg.replace(CACHE_PATH_ARG, ''));
+
+      expect(given, `${run.name}: one --fsModuleCachePath=<path>`).toHaveLength(1);
+      const [cachePath = ''] = given;
+      expect(cachePath, `${run.name}: a path`).not.toBe('');
+      expect(
+        path.posix.isAbsolute(cachePath) || path.win32.isAbsolute(cachePath),
+        `${run.name}: ${cachePath} is absolute`,
+      ).toBe(false);
+      expect(cachePath.startsWith('~'), `${run.name}: ${cachePath} is in a home`).toBe(false);
+      const segments = path.posix.normalize(cachePath.replaceAll('\\', '/')).split('/');
+      expect(segments[0], `${run.name}: ${cachePath} leaves the sandbox`).not.toBe('..');
+      expect(segments, `${run.name}: ${cachePath} is under node_modules`).not.toContain(
+        'node_modules',
+      );
+    }
   });
 
   test('an unknown run throws, naming it and the runs there are', async () => {
