@@ -150,7 +150,11 @@ export const journeys = pgTable(
   ],
 );
 
-/** Who follows each journey (SM-02: at least one, written with the journey). */
+/**
+ * Who follows each journey (SM-02: at least one, written with the journey).
+ * Removing a responder deletes their row (SM-10, D-122 item 4), so every path
+ * that tells a responder, which reads these rows, leaves them out.
+ */
 export const journeyResponders = pgTable(
   'journey_responders',
   {
@@ -259,16 +263,24 @@ export const unresolved = (state: PgColumn) => sql`${state} <> 'RESOLVED'`;
  * `acknowledged_by` and `acknowledged_at` say who said "I'm on it", and when
  * (LOST-06): a user, and the database's now() in the transaction that
  * recorded it. Both null until then, and set together; a resolution keeps
- * them. No check ties them to the state: rows put in directly have
- * ACKNOWLEDGED with nobody recorded, and the resumed-escalation rule will
- * move a state back (D-114).
+ * them, and removing the responder recorded clears both (SM-10). No check
+ * ties them to the state: rows put in directly have ACKNOWLEDGED with nobody
+ * recorded, and the removal moves a state back (D-114, D-123).
  *
  * `sms_raised_at` says when nobody having acknowledged it for two minutes
- * escalated it to SMS (LOST-07): the database's now() in the transaction that
- * moved it to ESCALATED and wrote every responder's SMS. Null until then, and
- * kept by an acknowledgement and a resolution. No check ties it to the state,
- * for the same reasons (D-116). Not `escalated_at`: every form of "escalate"
- * contains "lat", which the scans for coordinate columns flag.
+ * escalated it to SMS in its current round (LOST-07, SM-10): the database's
+ * now() in the transaction that moved it to ESCALATED and wrote every
+ * responder's SMS. Null until then, kept by an acknowledgement and a
+ * resolution, and cleared by a reset, so the next round escalates; each
+ * round's time stays on its SMS rows. No check ties it to the state, for the
+ * same reasons (D-116). Not `escalated_at`: every form of "escalate" contains
+ * "lat", which the scans for coordinate columns flag.
+ *
+ * `round` counts the alert's rounds (SM-10, D-123): 1 when opened, one more
+ * each time the responder recorded on it is removed. Each message is written
+ * with its alert's round, so a second round's SMS and notices are taken by
+ * the outbox's unique key, and a second message of a kind in one round is
+ * still refused.
  */
 export const alerts = pgTable(
   'alerts',
@@ -283,6 +295,7 @@ export const alerts = pgTable(
     acknowledgedBy: uuid('acknowledged_by'),
     acknowledgedAt: moment('acknowledged_at'),
     smsRaisedAt: moment('sms_raised_at'),
+    round: integer('round').notNull().default(1),
   },
   (table) => [
     foreignKey({ columns: [table.journeyId], foreignColumns: [journeys.id] }),
@@ -300,10 +313,11 @@ export const alerts = pgTable(
       'alerts_acknowledged_at_acknowledged_by_check',
       togetherOrNeither(table.acknowledgedAt, table.acknowledgedBy),
     ),
+    check('alerts_round_check', sql`${table.round} >= 1`),
   ],
 );
 
-/** The kinds of message there are, exactly as the domain lists them: the lost-contact alert, its stand-downs, the notice that someone is on it, and the escalation SMS. */
+/** The kinds of message there are, exactly as the domain lists them: the lost-contact alert, its stand-downs, the notice that someone is on it, the escalation SMS, and the walker's warning that the last responder was removed. */
 export const messageKind = pgEnum('message_kind', MESSAGE_KINDS);
 
 /**
@@ -312,6 +326,13 @@ export const messageKind = pgEnum('message_kind', MESSAGE_KINDS);
  * worker's sender with retries. `id` is the message's own ID, opaque and
  * random, never a person's, a journey's or an alert's (D-087).
  *
+ * A message names its alert, or, for a journey's message, its journey and no
+ * alert: the walker's warning that the last responder was removed (SM-02,
+ * D-123). Exactly one of the two, held by a check that names no kind: a value
+ * added to an enum cannot be used in the migration's transaction that adds
+ * it. `round` is its alert's round when it was written, 1 for a journey's
+ * message, and is part of the unique key (SM-10).
+ *
  * `next_attempt_at` is when it is next due, in database time: at once when
  * written, the end of a claim's lease while it is being sent, and the retry
  * delay after a failure. `sent_at` stays null until the push port accepted
@@ -319,12 +340,17 @@ export const messageKind = pgEnum('message_kind', MESSAGE_KINDS);
  *
  * `withdrawn_at` is when a message was withdrawn before the port accepted it
  * (LOST-03): from then on no claim hands it out again. A message is withdrawn
- * in one of two ways:
- *   - when its alert resolves, its unsent LOST_CONTACT messages (D-111) and
- *     its unsent ACKNOWLEDGED notices (D-113);
+ * in one of these ways:
+ *   - when its alert resolves, its unsent LOST_CONTACT messages (D-111), its
+ *     unsent ACKNOWLEDGED notices (D-113) and its unsent SMS (LOST-07);
+ *   - when someone acknowledges its alert, its unsent SMS (LOST-07);
  *   - when a later open on any of the same walker's journeys withdraws an
  *     earlier alert's unsent stand-downs, so none reaches a responder after
- *     the new alert's lost-contact push (D-112, amended).
+ *     the new alert's lost-contact push (D-112, amended);
+ *   - when the responder recorded on its alert is removed, its unsent
+ *     ACKNOWLEDGED notices; and when its recipient is removed from the
+ *     journey, every unsent message of the journey's alerts to them (SM-10,
+ *     D-122 item 2).
  * A stand-down (BACK_IN_CONTACT, HOME) is written in the transaction that
  * resolves the alert, as its alert's messages are written in the one that
  * opens it.
@@ -333,7 +359,8 @@ export const outbox = pgTable(
   'outbox',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    alertId: uuid('alert_id').notNull(),
+    alertId: uuid('alert_id'),
+    journeyId: uuid('journey_id'),
     recipientId: uuid('recipient_id').notNull(),
     kind: messageKind('kind').notNull(),
     createdAt: moment('created_at').notNull(),
@@ -342,16 +369,26 @@ export const outbox = pgTable(
     sentAt: moment('sent_at'),
     lastFailure: text('last_failure', { enum: PUSH_FAILURE_REASONS }),
     withdrawnAt: moment('withdrawn_at'),
+    round: integer('round').notNull().default(1),
   },
   (table) => [
     foreignKey({ columns: [table.alertId], foreignColumns: [alerts.id] }),
+    foreignKey({ columns: [table.journeyId], foreignColumns: [journeys.id] }),
     foreignKey({ columns: [table.recipientId], foreignColumns: [users.id] }),
-    // One message per recipient for each kind an alert causes.
-    unique('outbox_alert_id_recipient_id_kind_unique').on(
+    // One message per recipient for each kind an alert causes, in each of
+    // its rounds (SM-10). A journey's message names no alert, and a null is
+    // equal to nothing under a unique key, so this key never holds one back.
+    unique('outbox_alert_id_recipient_id_kind_round_unique').on(
       table.alertId,
       table.recipientId,
       table.kind,
+      table.round,
     ),
+    check(
+      'outbox_alert_id_journey_id_check',
+      sql`num_nonnulls(${table.alertId}, ${table.journeyId}) = 1`,
+    ),
+    check('outbox_round_check', sql`${table.round} >= 1`),
     check('outbox_attempts_check', sql`${table.attempts} >= 0`),
     // Null, or one of the port's reasons: the list above, written into the
     // constraint as literals, since DDL takes no parameters.

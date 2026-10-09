@@ -50,6 +50,13 @@
       "when": 1791369997886,
       "tag": "0006_closed_skrulls",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791527874245,
+      "tag": "0007_pale_orphan",
+      "breakpoints": true
     }
   ]
 }
