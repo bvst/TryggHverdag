@@ -1,6 +1,6 @@
 ---
 name: sm10-removal-review
-description: SM-10 removing a responder review 2026-10-09, PASS at e3d8e42; reset/round/unheard design facts, 10 L3 adapter mutants all killed, real-worker probe recipe; should-fix: unheard alerts silent when HEALTHCHECKS_SMS_URL unset (worker start line + M3 hand-off)
+description: SM-10 removing a responder review 2026-10-09, PASS at e3d8e42, loop-1 PASS 3da9517 (BUG-41/D-124 fsModuleCache + maxWorkers=1 judged safe); reset/round/unheard design facts, 10 L3 adapter mutants all killed, real-worker probe recipe; should-fix: unheard alerts silent when HEALTHCHECKS_SMS_URL unset (worker start line + M3 hand-off)
 metadata:
   type: project
 ---
@@ -34,4 +34,24 @@ Notes: removal_ignored logs caller's journeyId (upper-case -> null; could log re
 names no kind, so an alert kind with journey_id escapes the unique key (single writer today; a later migration can tie
 kind to journey_id); ESCALATED+ack_by only from seeded data leaves round-1 unsent SMS beside round 2; journeys group now
 runs removal.system for every service.ts mutant, CI margin 3:53 unmeasured; group test files still unowned.
+## Loop 1: e3d8e42..3da9517, PASS
+worker.ts start lines now name unheard alerts; "not reporting" lines end "Neither an SMS left unsent nor an alert with no
+responder left to tell is paged." D-122 consequence + SM-10 Left-for-later: M3 route must not ship without SMS check,
+"refuse to start ... or say so loudly" -- should-fix given: a start line already "says so", so M3 could read it as met;
+require refuse-to-start / fail a paged check instead.
+BUG-41 / D-124 (stryker.config.mjs, D-100): command gains --fsModuleCache --fsModuleCachePath=.vitest-fs-cache
+--maxWorkers=1. Verified facts (Vitest 5.0.1, Stryker 10.0.0):
+- cache key = sha1(id (absolute path, so sandbox name) + file content + env hash incl. config file contents) -- a stale
+  or copied cache can never serve other code; writes are tmp+rename (atomicWriteFile); _metadata.json is plain
+  writeFile but parse errors are caught; clearCache (rm -rf) only when lockfile hash (node_modules/.pnpm/lock.yaml
+  content) changes -- only a pnpm install mid-run could race it.
+- Stryker instrumenter reads __STRYKER_ACTIVE_MUTANT__ from process.env at runtime, so transforms are mutant-independent.
+- command runner: exec(cmd, {cwd: sandbox}); dry run = same command, no env; timeout -> tree kill.
+- project-reader ALWAYS_IGNORE = node_modules,.git,*.tsbuildinfo,/stryker.log,.next,.nuxt,.svelte-kit + tempDir +
+  report files + ignorePatterns; .gitignore NOT consulted, so a root .vitest-fs-cache/ would be copied in (harmless).
+- isolate defaults true; unknown CLI flag exits 1 (checked).
+- Probe: 4 concurrent cold runs then 4 warm runs of domain tests on one cache dir: all exit 0, 313/313, transform
+  54% -> 4%.
+- Scratch nocache-*/fscache1-*.json: 1,170/1,170 same status; survivors only in domain(3), journeys(1), worker(6+2 TO),
+  so alerts/healthchecks/process/api-process equality alone cannot tell broken reads from kills.
 Related: [[lost07-sms-review]], [[lost06-ack-review]], [[reviewer-sandbox-limits]].

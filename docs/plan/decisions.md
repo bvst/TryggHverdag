@@ -4657,10 +4657,12 @@ any other path is work, not a candidate for the same treatment.
   - **M3's route must not ship where the SMS check is not running**
     (`safety-reviewer`, review loop 1): with `HEALTHCHECKS_SMS_URL` unset,
     item 3's page does not happen, where before this task the sweep failed
-    and the worker's check paged. No environment can reach it in M2. A
-    deployed worker must refuse to start without the URL, or say so loudly,
-    before the route ships; until then its start lines say what the SMS
-    check covers and what goes unpaged without it.
+    and the worker's check paged. No environment can reach it in M2. Before
+    the route ships, a deployed worker must refuse to start without
+    `HEALTHCHECKS_SMS_URL`, or make a check the owner is paged by fail (the
+    worker's own check, or `/v1/health`). A log line is not enough: it pages
+    nobody (`safety-reviewer`, loop-1 delta). Until then the start lines say
+    what the SMS check covers and what goes unpaged without it.
   - Task numbers: LOST-06's spec and D-114 were written before D-115, so
     their "task 7" for "They're safe" is task 8 today, and the
     resumed-escalation rule they place in "task 6" is this task, task 7.
@@ -4767,8 +4769,13 @@ any other path is work, not a candidate for the same treatment.
     fills the cache, and each mutant's run reads it.
   - **Inside the run's sandbox.** The path is relative, so it is created in
     Stryker's sandbox (`.stryker-tmp/sandbox-*/.vitest-fs-cache`) and removed
-    with it. Every run starts with an empty cache (D-099), and no run reads
-    another's.
+    with it. No run reads another's entries (D-099): each key includes the
+    module's absolute path, sandbox and all, with the file's content and the
+    config. Stryker does not read `.gitignore` when it builds the sandbox,
+    so a stray `.vitest-fs-cache/` in the repository root would be copied
+    in, but its keys could never match (`safety-reviewer`, loop-1 delta).
+    Entries are written to a temporary file and renamed, so a runner never
+    reads half of one.
   - **One test file at a time.** With one Vitest worker, Stryker's four
     runners use the four cores without a worker per file on top, and
     `--bail=1` stops at the first file that kills the mutant. Each file
