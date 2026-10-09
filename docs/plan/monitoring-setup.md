@@ -119,6 +119,22 @@ last ping (which is never later than T), UptimeRobot alerted (its time is
 recorded, not held to 5 minutes, D-079), and both recovered. A miss is a bug,
 and INF-08 is not done until it passes.
 
+## When `staging-sms` pages you
+
+The worker reports the SMS check each minute, and it reports failing for
+either of two reasons. The worker's line in the app's log on Clever Cloud says
+which, with a count and nothing personal:
+- **`sms_unsent`:** an SMS is still unsent 60 s after it was written (LOST-07,
+  D-115). Until M3 brings the SMS provider, every escalation on staging ends
+  here, so a page after a staging alert's two minutes is expected.
+- **`unheard_alerts`:** an alert is open on a journey that has no responder
+  left, so nobody can be told (SM-10, D-122). The walker was warned when the
+  last responder went. It lasts until contact comes back, "I'm home", or the
+  24-hour rule (SM-06, built in M2's task 8) ends the journey.
+
+While either holds the check stays failing, so the other adds no new page.
+Read the log for the second reason before deciding the first explains it.
+
 ## If the ping URL ever leaks
 
 Add a new check in Healthchecks.io with the same settings, replace the

@@ -126,7 +126,14 @@ found for outbox rows. **Since LOST-07** (D-115, D-116), so are
 `alerts.sms_raised_at` and the `LOST_CONTACT_SMS` outbox rows (who was texted,
 and when); those rows reference `users` too. The DPIA must cover M3's SMS data
 flow: the walker's name in clear through LINK Mobility (D-115), walkers under
-18 included.
+18 included. **Since SM-10** (D-122, D-123), `alerts.round` and
+`outbox.round` (how many times an alert went back to unacknowledged) are
+alert records too, and so are the walker's `NO_RESPONDER` warnings: outbox
+rows that name a journey (`outbox.journey_id`) and no alert, so a retention
+job that deletes by alert would miss them. A responder removed during a
+journey has their `journey_responders` row deleted at once, so the record of
+who followed a journey no longer holds anyone removed from it; messages
+already written to them stay as alert records.
 
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every
