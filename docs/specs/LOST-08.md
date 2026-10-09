@@ -366,6 +366,12 @@ two-hour stop itself, and SM-05's test against it (M3, Q1).
      through it, or failed, it is stuck: one `expiry_overdue` line. A read
      that fails, an expiry that fails, or a stuck alert fails the run. No
      line for a success: the rows are the record.
+     - *Review loop 1 (`safety-reviewer`):* a first attempt that fails when
+       the alert is already `STUCK_AFTER_MS` or more past its 24 hours is
+       counted stuck too, with its `expiry_overdue` line, as the escalation
+       counts one (D-116). The green phase had followed this item's first
+       wording, which counted only a skipped alert, so a failed one paged
+       with no alert ID to look up.
    - **In the sweep, after the escalation, whatever the opens and the
      escalation came to,** and feeding its beat: a run that fails fails the
      sweep, so the beat stops and the owner is paged, as for the escalation
@@ -1189,6 +1195,12 @@ M3's push adapter receives `SAFE` and `EXPIRED` as new kinds.
   retention rule, M4), and the DPIA.
 
 ### Left for later tasks
+
+- **One helper for the three due-alert loops** (`code-reviewer`, review loop
+  1): the open's loop in `watchdog.ts`, the escalation and the expiry share
+  one shape (read, re-check, first pass, waiting pass, overdue line). A
+  `sweepDue` helper in `modules/alerts/` would replace them; do it before a
+  fourth copy.
 
 Each is named so the task that owns it finds it. None blocks this task.
 

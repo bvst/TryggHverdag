@@ -4910,3 +4910,17 @@ any other path is work, not a candidate for the same treatment.
     owner's to reopen; `05-architecture.md` draws the rows.
 - **Consequences:** no new dependency (SEC-06) and no new import route
   (AR-10). LOST-08-AC1 to AC21 prove it. Supersedes nothing.
+- **Amended in review loop 1 (2026-10-09), from the three reviewers:**
+  - **A failed first expiry attempt past due is stuck,** as the escalation's
+    is: an alert already `STUCK_AFTER_MS` past its 24 hours whose first
+    attempt fails is counted in the sweep's `stuck`, with one
+    `expiry_overdue` line naming it (`safety-reviewer`). The green phase had
+    counted only a skipped one, so such a failure paged with no alert ID.
+  - **The fake's due read keeps the adapter's order** (`opened_at`, then
+    ID), and the shared suite pins it (`code-reviewer`, D-100).
+  - **Tests the code already passed:** strangers and a removed acknowledger
+    at a resolved alert get the unknown ID's 404 (`privacy-security-reviewer`);
+    a close through the real API process (`safety-reviewer`); the expiry
+    run's count.
+  - Left for a later change: one helper for the three due-alert loops (the
+    open, the escalation, the expiry), before a fourth copy.

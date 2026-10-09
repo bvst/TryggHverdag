@@ -168,7 +168,7 @@ state.
 | LOST_CONTACT | Heartbeat | ACTIVE | Resolve the alert; "back in contact" (LOST-03). Only a fresh heartbeat: one that, counted, leaves the silence under 5 min by the database clock (D-112) |
 | ACTIVE | "I'm home" | ENDED (home) | "<name> is home" (JRN-05) |
 | ACTIVE | 2 h reached and no answer for 10 min | ENDED (auto) | "Ended without confirmation" (JRN-06) |
-| LOST_CONTACT | The acknowledging responder: "They're safe" | ENDED (SAFE) | Resolve the alert; tell the other responders who closed it (LOST-08, D-125, D-126) |
+| LOST_CONTACT | The acknowledging responder: "They're safe" | ENDED (SAFE) | Resolve the alert; tell the other responders it is closed. The record names the closer as the alert's acknowledger; the message's words are M3's (LOST-08, D-125, D-126) |
 | LOST_CONTACT | Watchdog: 24 h after the alert opened | ENDED (EXPIRED) | Resolve the alert; tell every responder (SM-06, D-126) |
 
 **Alert states:** `OPEN` → `ESCALATED` (no acknowledgement within 2 minutes;
