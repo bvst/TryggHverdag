@@ -132,8 +132,10 @@ alert records too, and so are the walker's `NO_RESPONDER` warnings: outbox
 rows that name a journey (`outbox.journey_id`) and no alert, so a retention
 job that deletes by alert would miss them. A responder removed during a
 journey has their `journey_responders` row deleted at once, so the record of
-who followed a journey no longer holds anyone removed from it; messages
-already written to them stay as alert records.
+who followed a journey no longer holds anyone removed from it, with two
+exceptions that stay as alert records: messages already written to them, and
+`acknowledged_by` on a resolved alert they had acknowledged (SM-10 keeps who
+helped on record).
 
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every

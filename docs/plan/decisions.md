@@ -4654,6 +4654,13 @@ any other path is work, not a candidate for the same treatment.
     only when an acknowledger is removed during an escalated alert.
   - SM-02 will read as covered while its screen half, the no-responder state
     on the walker's journey screen (D-087), is M3's to build.
+  - **M3's route must not ship where the SMS check is not running**
+    (`safety-reviewer`, review loop 1): with `HEALTHCHECKS_SMS_URL` unset,
+    item 3's page does not happen, where before this task the sweep failed
+    and the worker's check paged. No environment can reach it in M2. A
+    deployed worker must refuse to start without the URL, or say so loudly,
+    before the route ships; until then its start lines say what the SMS
+    check covers and what goes unpaged without it.
   - Task numbers: LOST-06's spec and D-114 were written before D-115, so
     their "task 7" for "They're safe" is task 8 today, and the
     resumed-escalation rule they place in "task 6" is this task, task 7.
@@ -4731,3 +4738,75 @@ any other path is work, not a candidate for the same treatment.
     `worker.ts`, the contracts, Terraform and the workflows are unchanged.
   - LOST-06-AC4's unique-key test stays as it is: the round defaults to 1.
   - SM-10-AC1 to AC21 prove it. Supersedes nothing.
+
+## D-124 — Each mutant's run reuses Vitest's transforms from the run's first test run, and runs its test files one at a time (BUG-41)
+- **Date:** 2026-10-09 · **Status:** Accepted (delegated, D-031; D-036,
+  D-098 and D-117 say an overrun is fixed by faster per-mutant runs, not a
+  higher budget, which stays 25 minutes) · **Section:** 6 (D-036, D-066,
+  D-098, D-099, D-117)
+- **Context:** BUG-41. SM-10's mutation run ran out of its 25-minute budget
+  locally (`spawnSync pnpm ETIMEDOUT`), twice:
+  - in `gate:full`, with the three reviewers running tests beside it, cut
+    off in `alerts`;
+  - alone on the same 4-core machine: domain 9:29, healthchecks 2:01,
+    journeys 4:28 and alerts 8:15, 24:13 before `worker` started, which the
+    budget then cut off. About 32 minutes in all, against LOST-07's 18:57
+    on a quiet machine (D-117). Every group that finished passed.
+  - The cost is per mutant, and mostly not the tests: one run of a group's
+    tests is 2.5 to 4 s, of which Vitest reports transform 55 to 77 % and
+    tests 9 to 29 %. SM-10 grew the test kit (the behaviour suite from
+    6,700 to 8,714 lines), and the domain tests import it whole.
+  - Each mutant's Vitest also started one worker per test file, beside
+    Stryker's four runners: about 16 Node processes on 4 cores (load 11.8).
+- **Decision:** each mutant's command gains `--fsModuleCache
+  --fsModuleCachePath=.vitest-fs-cache --maxWorkers=1`.
+  - **The cache.** Vitest 5 can keep transformed modules on disk and reuse
+    them between runs. Stryker instruments every mutant into one copy of the
+    code and picks the active one by an environment variable, so the
+    transformed code is the same for every mutant: Stryker's first test run
+    fills the cache, and each mutant's run reads it.
+  - **Inside the run's sandbox.** The path is relative, so it is created in
+    Stryker's sandbox (`.stryker-tmp/sandbox-*/.vitest-fs-cache`) and removed
+    with it. Every run starts with an empty cache (D-099), and no run reads
+    another's.
+  - **One test file at a time.** With one Vitest worker, Stryker's four
+    runners use the four cores without a worker per file on top, and
+    `--bail=1` stops at the first file that kills the mutant. Each file
+    still runs isolated, as before. Stryker's timeout is measured on the
+    same command, so it scales with it.
+- **Measured** on the same machine and code (`f32ca8c`), mutant by mutant
+  against the run without either change: the same status for every mutant,
+  1,170 of 1,170, the 6 survivors and 2 timeouts of `worker.ts` included.
+
+  | Group | Before | Cache only | Cache and one worker |
+  |---|---|---|---|
+  | domain | 9:29 | 6:04 | 3:25 |
+  | healthchecks | 2:01 | 1:29 | 1:14 |
+  | journeys | 4:28 | 3:07 | 1:53 |
+  | alerts | 8:15 | 5:57 | 3:15 |
+  | worker | 6:09 | 4:01 | 4:10 |
+  | process | 1:08 | 0:52 | 1:37 |
+  | api-process | 0:32 | 0:26 | 0:27 |
+  | **All** | **≈ 32:02** | **≈ 21:56** | **≈ 16:11** |
+
+  - `process` is slower with one worker: `bin.test.ts` mostly waits on real
+    processes, which overlapped with the other files before. One setting for
+    every group is kept anyway: simpler, and the total halves.
+  - CI's run is the one of record. D-117's quiet local run took 18:57 and
+    CI's 21:07; by that ratio this is about 18 minutes on CI.
+- **Compared against:**
+  - giving `removal.ts` a group of its own (SM-10's spec): about 40 s;
+  - `--pool=threads`: about 7 % (D-117), and it changes how tests run;
+  - Stryker's vitest runner, which picks tests per mutant: it reported every
+    mutant covered and none killed against Vitest 5 (`stryker.config.mjs`);
+  - splitting CI's mutation job in two: the owner's (cost, and the required
+    checks). It stays the next step if the margin closes again.
+- **Consequences:**
+  - `stryker.config.mjs`, owned under D-100, so the owner and
+    `safety-reviewer` review it in SM-10's pull request; its tests in
+    `scripts/stryker-config.test.mjs` pin the command.
+  - A Vitest upgrade that drops `--fsModuleCache` fails Stryker's first test
+    run loudly: Vitest 5.0.1 refuses an unknown option and exits 1 (checked
+    with a misspelt flag). The cache holds transforms, not results, so it
+    cannot make a score higher.
+  - Supersedes nothing. D-117's command stays, with the three flags added.
