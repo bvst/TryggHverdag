@@ -7249,6 +7249,119 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
   {
     name: 'SM-10-AC4: removing the acknowledger of the journey’s unresolved alert clears who and when together, clears its escalation time, sets it OPEN and raises its round, and withdraws its unsent ACKNOWLEDGED notices; removing another responder, or an acknowledger of a resolved alert, changes no alert (LOST-06)',
     async run(subject) {
+      // The journey's unresolved alert, beside an earlier one R1 was on too
+      // (review loop 2, test-auditor's B1): J lost contact, R1 said "I'm on
+      // it", contact came back, so that alert is RESOLVED with R1 still
+      // recorded; J went silent again, and R1 is on the second alert as well.
+      // The earlier one is put in first and opened first, so a read of the
+      // journey's alerts that is not limited to the unresolved one finds it
+      // first. The rule then changes nothing, and the current alert stays
+      // ACKNOWLEDGED by someone no longer on the journey: nobody is ever
+      // texted, and nothing fails or says so. Removing R1 resets the current
+      // alert, and leaves the earlier one exactly as it was.
+      {
+        const now = await subject.now();
+        const journey = await watched(subject, {
+          state: 'LOST_CONTACT',
+          startedAt: ago(now, 3 * HOUR),
+          lastHeartbeatAt: ago(now, 3 * MINUTE + LOST_CONTACT_AFTER_MS),
+          responders: 3,
+        });
+        const { journeyId } = journey;
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        const earlier = await subject.seedAlert({
+          journeyId,
+          state: 'RESOLVED',
+          openedAt: ago(now, 2 * HOUR),
+          silentSince: ago(now, 2 * HOUR + LOST_CONTACT_AFTER_MS),
+          resolvedAt: ago(now, HOUR + 30 * MINUTE),
+          resolution: 'BACK_IN_CONTACT',
+          acknowledgedBy: r1,
+          acknowledgedAt: ago(now, 2 * HOUR - 3 * MINUTE),
+          smsRaisedAt: ago(now, 2 * HOUR - 2 * MINUTE),
+        });
+        const current = await subject.seedAlert({
+          journeyId,
+          state: 'ACKNOWLEDGED',
+          openedAt: ago(now, 3 * MINUTE),
+          silentSince: ago(now, 3 * MINUTE + LOST_CONTACT_AFTER_MS),
+          acknowledgedBy: r1,
+          acknowledgedAt: ago(now, 30 * SECOND),
+          smsRaisedAt: ago(now, MINUTE),
+        });
+        // R1's notices on the current alert: R2's sent, R3's not yet accepted.
+        const sent = await messageFor(subject, {
+          alertId: current,
+          recipientId: r2,
+          kind: NOTICE,
+          sentAgoMs: 20 * SECOND,
+        });
+        const unsent = await messageFor(subject, {
+          alertId: current,
+          recipientId: r3,
+          kind: NOTICE,
+          attempts: 2,
+          lastFailure: 'UNAVAILABLE',
+          dueAgoMs: -30 * SECOND,
+        });
+        /** The earlier alert as each reader holds it: its row, its resolution, who was on it, its escalation time and its round. */
+        const earlierRecord = async () => {
+          const record = await escalationRecordOf(subject, journeyId);
+          return {
+            alerts: record.alerts.filter(({ id }) => id === earlier),
+            resolutions: record.resolutions.filter(({ alertId }) => alertId === earlier),
+            acknowledgements: record.acknowledgements.filter(({ alertId }) => alertId === earlier),
+            escalations: record.escalations.filter(({ alertId }) => alertId === earlier),
+            rounds: (await subject.roundsOf(journeyId)).filter(
+              ({ alertId }) => alertId === earlier,
+            ),
+          };
+        };
+        const earlierBefore = await earlierRecord();
+        expect(
+          earlierBefore.acknowledgements.map(({ acknowledgedBy }) => acknowledgedBy),
+          'R1 recorded on the earlier, RESOLVED alert',
+        ).toEqual([r1]);
+        const currentBefore = (await subject.alertsOf(journeyId)).filter(
+          ({ id }) => id === current,
+        );
+        const messagesBefore = byMessage(await subject.messagesOf(journeyId));
+        const what = 'R1 removed, recorded on the current alert and on an earlier RESOLVED one';
+
+        const before = await subject.now();
+        const result = await subject.store.removeResponder(removal(journey, r1));
+        const after = await subject.now();
+
+        // The current alert reset: OPEN, nobody recorded, no escalation time,
+        // round 2.
+        expect(
+          (await subject.alertsOf(journeyId)).filter(({ id }) => id === current),
+          `${what}: the current alert is OPEN again`,
+        ).toEqual(currentBefore.map((alert) => ({ ...alert, state: 'OPEN' })));
+        expect(await acknowledgementOf(subject, journeyId, current), what).toEqual({
+          alertId: current,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+        });
+        expect(await smsRaisedAtOf(subject, journeyId, current), what).toBeNull();
+        expect(await roundOf(subject, journeyId, current), what).toBe(2);
+        expect(result, what).toEqual({ outcome: 'removed', resetAlertId: current, messages: [] });
+        // Its unsent notice withdrawn at the removal's now; the sent one, and
+        // every message's attempts and last failure, as they were.
+        const withdrawnAt = await withdrawnAtOf(subject, journeyId);
+        expect(
+          between(withdrawnAt.get(unsent), before, after),
+          `${what}: R3’s notice withdrawn at the removal’s now`,
+        ).toBe(true);
+        expect(withdrawnAt.get(sent), `${what}: R2’s sent notice`).toBeNull();
+        expect(byMessage(await subject.messagesOf(journeyId)), what).toEqual(messagesBefore);
+        // The earlier alert exactly as it was, who acknowledged it included.
+        expect(await earlierRecord(), `${what}: the earlier, RESOLVED alert`).toEqual(
+          earlierBefore,
+        );
+        expect(await subject.stateOf(journeyId), what).toBe('LOST_CONTACT');
+      }
+
       for (const [what, seed] of [
         ['ACKNOWLEDGED by R1', { state: 'ACKNOWLEDGED', recorded: true }],
         [
@@ -7330,6 +7443,83 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
 
         expect(await escalationRecordOf(subject, journey.journeyId), what).toEqual(before);
         expect(await subject.roundsOf(journey.journeyId), what).toEqual(rounds);
+      }
+
+      // The reset withdraws only what is not yet withdrawn (review loop 2:
+      // the reset's own withdrawal, found surviving beside test-auditor's S1).
+      // R1 is on the alert, so R2's and R3's notices are written and not yet
+      // accepted. R3 is removed, which withdraws R3's notice; time passes;
+      // then R1 is removed, which resets the alert. R2's notice is withdrawn
+      // at the reset's now, and R3's keeps the time of R3's removal, its
+      // attempts and its last failure.
+      {
+        const journey = await alerted(subject, {
+          state: 'ACKNOWLEDGED',
+          recorded: true,
+          responders: 3,
+        });
+        const { journeyId, alertId } = journey;
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        const r2Notice = await messageFor(subject, {
+          alertId,
+          recipientId: r2,
+          kind: NOTICE,
+          attempts: 1,
+          lastFailure: 'UNAVAILABLE',
+          dueAgoMs: -20 * SECOND,
+        });
+        const r3Notice = await messageFor(subject, {
+          alertId,
+          recipientId: r3,
+          kind: NOTICE,
+          attempts: 2,
+          lastFailure: 'UNAVAILABLE',
+          dueAgoMs: -30 * SECOND,
+        });
+        expect(
+          removed(await subject.store.removeResponder(removal(journey, r3)), 'R3’s removal')
+            .resetAlertId,
+          'R3’s removal resets nothing',
+        ).toBeNull();
+        const byR3sRemoval = (await withdrawnAtOf(subject, journeyId)).get(r3Notice) ?? null;
+        expect(byR3sRemoval, 'R3’s removal withdrew R3’s notice').toBeInstanceOf(Date);
+        const messagesBefore = byMessage(await subject.messagesOf(journeyId));
+        await subject.letTimePass(50);
+        expect(
+          (await subject.now()).getTime(),
+          'the store’s now has moved on since R3’s removal',
+        ).toBeGreaterThan(byR3sRemoval?.getTime() ?? Number.NaN);
+        const what = 'R1 removed after R3, whose notice R3’s removal withdrew';
+
+        const before = await subject.now();
+        expect(
+          removed(await subject.store.removeResponder(removal(journey, r1)), what).resetAlertId,
+          what,
+        ).toBe(alertId);
+        const after = await subject.now();
+
+        // The reset happened, so the block cannot pass for want of one.
+        expect(
+          (await subject.alertsOf(journeyId)).map(({ state }) => state),
+          what,
+        ).toEqual(['OPEN']);
+        expect(await roundOf(subject, journeyId, alertId), what).toBe(2);
+        const withdrawnAt = await withdrawnAtOf(subject, journeyId);
+        expect(
+          between(withdrawnAt.get(r2Notice), before, after),
+          `${what}: R2’s unsent notice withdrawn at the reset’s now`,
+        ).toBe(true);
+        expect(
+          withdrawnAt.get(r3Notice),
+          `${what}: R3’s notice keeps the time of R3’s removal`,
+        ).toEqual(byR3sRemoval);
+        expect(
+          (await subject.messagesOf(journeyId))
+            .filter(({ messageId }) => messageId === r3Notice)
+            .map(({ attempts, lastFailure, sentAt }) => ({ attempts, lastFailure, sentAt })),
+          `${what}: R3’s notice keeps its attempts and last failure, and is still unsent`,
+        ).toEqual([{ attempts: 2, lastFailure: 'UNAVAILABLE', sentAt: null }]);
+        expect(byMessage(await subject.messagesOf(journeyId)), what).toEqual(messagesBefore);
       }
     },
   },
@@ -7524,6 +7714,40 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       await expect(
         messageFor(subject, { alertId, recipientId: r1, kind: NOTICE, round: 0 }),
       ).rejects.toThrow();
+
+      // The stand-downs too are written in the alert's round, as every
+      // message is (approach item 5; review loop 2, test-auditor's S3): an
+      // alert reset into round 2 that then resolves stands each remaining
+      // responder down in round 2, whichever way it resolves.
+      for (const how of ['contact back', '"I’m home"'] as const) {
+        const reset = await alerted(subject, {
+          state: 'ACKNOWLEDGED',
+          recorded: true,
+          responders: 3,
+        });
+        const [acknowledger = '', second = '', third = ''] = reset.responderIds;
+        expect(
+          removed(await subject.store.removeResponder(removal(reset, acknowledger)), how)
+            .resetAlertId,
+          how,
+        ).toBe(reset.alertId);
+        expect(await roundOf(subject, reset.journeyId, reset.alertId), how).toBe(2);
+
+        const { messages: standDowns } =
+          how === 'contact back'
+            ? backInContact(
+                await subject.store.recordHeartbeat(await freshHeartbeat(subject, reset.journeyId)),
+              )
+            : endedHome(await subject.store.recordHome(homeOf(reset)));
+
+        expect(recipientsOf(standDowns), how).toEqual([second, third].sort());
+        const written = await messageRoundsByIdOf(subject, reset.journeyId);
+        expect(
+          standDowns.map(({ messageId }) => written.get(messageId)),
+          `${how}: each stand-down in the alert’s round, 2`,
+        ).toEqual([2, 2]);
+        expect(await roundOf(subject, reset.journeyId, reset.alertId), how).toBe(2);
+      }
     },
   },
   {
@@ -7598,6 +7822,26 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
           dueAgoMs: SECOND,
         }),
       ];
+      // And one of R2's withdrawn before the removal (review loop 2,
+      // test-auditor's S1): the earlier alert's SMS, failing NO_TARGET and
+      // withdrawn when that alert resolved. The removal withdraws only what
+      // is not yet withdrawn (approach item 6), so this one keeps its time,
+      // its attempts and its last failure.
+      const withdrawnEarlier = ago(now, HOUR);
+      const alreadyWithdrawn = await subject.seedMessage({
+        alertId: earlier,
+        recipientId: r2,
+        kind: SMS,
+        createdAt: ago(now, HOUR + 28 * MINUTE),
+        nextAttemptAt: ago(now, HOUR + 20 * MINUTE),
+        attempts: 2,
+        lastFailure: 'NO_TARGET',
+        withdrawnAt: withdrawnEarlier,
+      });
+      expect(
+        (await withdrawnAtOf(subject, journeyId)).get(alreadyWithdrawn),
+        'R2’s earlier SMS, withdrawn when its alert resolved',
+      ).toEqual(withdrawnEarlier);
       // Everyone else's, of every kind, unsent: none of them is R2's to lose.
       const others: string[] = [];
       for (const recipientId of [r1, r3]) {
@@ -7650,6 +7894,16 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       for (const messageId of others) {
         expect(withdrawnAt.get(messageId), messageId).toBeNull();
       }
+      expect(
+        withdrawnAt.get(alreadyWithdrawn),
+        'R2’s earlier SMS keeps the time it was withdrawn when its alert resolved',
+      ).toEqual(withdrawnEarlier);
+      expect(
+        (await subject.messagesOf(journeyId))
+          .filter(({ messageId }) => messageId === alreadyWithdrawn)
+          .map(({ attempts, lastFailure, sentAt }) => ({ attempts, lastFailure, sentAt })),
+        'R2’s earlier SMS keeps its attempts and last failure, and is still unsent',
+      ).toEqual([{ attempts: 2, lastFailure: 'NO_TARGET', sentAt: null }]);
       // Attempts, last failures, due and sent times all as they were.
       expect(byMessage(await subject.messagesOf(journeyId))).toEqual(messagesBefore);
       expect(await alertRecordOf(subject, elsewhere)).toEqual(elsewhereBefore);
@@ -7969,6 +8223,44 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         ).messages,
       ).toEqual([]);
       expect(await counted('J back in contact')).toBe(base + 1);
+
+      // Counted in every unresolved state, not OPEN alone (D-122, item 3;
+      // review loop 2, test-auditor's S2): an ESCALATED alert, and an
+      // ACKNOWLEDGED one, each of a journey whose responder rows are gone,
+      // put there directly. Nobody can be told of either. And a RESOLVED one
+      // whose journey has none is never counted, whatever it held before it
+      // resolved.
+      const escalatedUnheard = await alerted(subject, {
+        state: 'ESCALATED',
+        smsRaisedAgoMs: MINUTE,
+        responders: 1,
+      });
+      await subject.removeResponders(escalatedUnheard.journeyId);
+      expect(
+        await counted('an ESCALATED alert whose journey has no responder row'),
+        'an ESCALATED alert with nobody to tell is counted',
+      ).toBe(base + 2);
+      const acknowledgedUnheard = await alerted(subject, {
+        state: 'ACKNOWLEDGED',
+        recorded: true,
+        responders: 1,
+      });
+      await subject.removeResponders(acknowledgedUnheard.journeyId);
+      expect(
+        await counted('an ACKNOWLEDGED alert whose journey has no responder row'),
+        'an ACKNOWLEDGED alert with nobody to tell is counted',
+      ).toBe(base + 3);
+      const resolvedOver = await alerted(subject, {
+        state: 'RESOLVED',
+        recorded: true,
+        smsRaisedAgoMs: MINUTE,
+        responders: 1,
+      });
+      await subject.removeResponders(resolvedOver.journeyId);
+      expect(
+        await counted('a RESOLVED alert, acknowledged and escalated before, with no responder row'),
+        'a RESOLVED alert is never counted',
+      ).toBe(base + 3);
     },
   },
   {

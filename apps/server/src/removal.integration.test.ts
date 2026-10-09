@@ -980,6 +980,83 @@ describe('SM-10 and SM-09: the removal decides under the journey’s row, on the
 });
 
 // ---------------------------------------------------------------------------
+// SM-10-AC4: the reset takes the journey's unresolved alert, on the real
+// tables. The shared behaviour suite holds the store's side; this is the
+// flow, through the API, the removal module and the sweep.
+// ---------------------------------------------------------------------------
+
+describe('SM-10 and LOST-06: removing the acknowledger resets the journey’s unresolved alert, never an earlier one, on the real tables', () => {
+  test('SM-10-AC4: J lost, R1’s "I’m on it" through the API, contact back through the API, so the first alert is RESOLVED with R1 still recorded; silent again, the sweep opens a second alert and R1 says "I’m on it" for it too; R1 removed: the second is OPEN in round 2, nobody on it, no escalation time, and the first exactly as it was, its row unwritten; with its two minutes passed, the next sweep escalates the second in round 2, one LOST_CONTACT_SMS each for R2 and R3, none for R1, and the SMS sender hands exactly those two over (LOST-06, LOST-07)', async () => {
+    // Review loop 2 (test-auditor's B1): read as the first of the journey's
+    // alerts, the reset finds the RESOLVED one, changes nothing, and the
+    // second alert stays ACKNOWLEDGED by someone no longer on the journey:
+    // no SMS ever goes out, and nothing fails or says so.
+    const api = realApi();
+    const sms = fakeSms();
+    const { walker, journeyId, alertId: first, responders, r1 } = await acknowledgedBy(3);
+    const [, r2, r3] = responders as [Person, Person, Person];
+    expect(
+      await post(api, walker.credential, 'heartbeats', syntheticHeartbeat({ journeyId })),
+    ).toMatchObject({ status: 200, body: { outcome: 'RECORDED' } });
+    const [firstBefore] = await alertsOf(journeyId);
+    expect(firstBefore, 'the first alert RESOLVED, R1 still recorded on it').toMatchObject({
+      id: first,
+      state: 'RESOLVED',
+      acknowledgedBy: r1.userId,
+      round: 1,
+    });
+
+    // Silent again past five minutes, relative to the database's own now().
+    await connection().query(
+      `update journeys set last_heartbeat_at = now() - interval '5 minutes 1 second'
+        where id = $1`,
+      [journeyId],
+    );
+    expect(await watchdogFor().sweep()).toEqual({ ...QUIET, opened: 1 });
+    const second = (await alertsOf(journeyId)).find(({ id }) => id !== first)?.id ?? '';
+    expect(await acknowledge(api, r1.credential, second)).toMatchObject({
+      status: 200,
+      body: ON_IT,
+    });
+
+    expect(await remove(journeyId, r1.userId)).toEqual(REMOVED);
+
+    const after = await alertsOf(journeyId);
+    expect(
+      after
+        .filter(({ id }) => id === second)
+        .map(({ state, acknowledgedBy: by, acknowledgedAt, smsRaisedAt, round }) => [
+          state,
+          by,
+          acknowledgedAt,
+          smsRaisedAt,
+          round,
+        ]),
+      'the second alert, the unresolved one, reset',
+    ).toEqual([['OPEN', null, null, null, 2]]);
+    // xmin included: the first alert's row is not even rewritten.
+    expect(
+      after.filter(({ id }) => id === first),
+      'the first alert as it was',
+    ).toEqual([firstBefore]);
+
+    await openedAgo(second, TWO_MINUTES);
+    expect(await watchdogFor().sweep()).toEqual({ ...QUIET, escalated: 1 });
+    expect(
+      (await alertsOf(journeyId)).filter(({ id }) => id === second).map(({ state }) => state),
+    ).toEqual(['ESCALATED']);
+    const written = ofKind(await messagesOf(journeyId), SMS);
+    expect(recipientsOf(written)).toEqual(idsOf([r2, r3]));
+    expect(written.map(({ alertId, round }) => [alertId, round])).toEqual([
+      [second, 2],
+      [second, 2],
+    ]);
+    expect(await smsSenderFor({ sms }).deliverDue()).toEqual({ sent: 2, failed: 0 });
+    expect(recipientsOf(sms.accepted)).toEqual(idsOf([r2, r3]));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // SM-10-AC5 to AC7: escalation resumes, on the real tables.
 // ---------------------------------------------------------------------------
 

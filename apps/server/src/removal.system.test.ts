@@ -740,6 +740,81 @@ describe('SM-10 and LOST-06: removing the responder who acknowledged an alert pu
       expect(w.roundOf(alertId)).toBe(2);
     },
   );
+
+  test('SM-10-AC4: the reset takes the journey’s unresolved alert, never an earlier one: J lost, R1’s "I’m on it" through the API, contact back through the API, so the first alert is RESOLVED with R1 still recorded; J silent again, a second alert opens and R1 says "I’m on it" for it too; R1 removed: the second alert is OPEN in round 2, nobody on it, no escalation time, and the first exactly as it was, R1 included; at two minutes from the second’s opening the sweep escalates it in round 2, and the SMS fake receives one each for R2 and R3, none for R1 or W (LOST-06, LOST-07)', async () => {
+    // Review loop 2 (test-auditor's B1): read as the first of the journey's
+    // alerts, the reset finds the RESOLVED one, changes nothing, and the
+    // second alert stays ACKNOWLEDGED by someone no longer on the journey:
+    // no SMS ever goes out, and nothing fails or says so.
+    const w = world();
+    const { walker, journeyId, alertId: first, openedAt, responders } = await startedAndLost(w, 3);
+    const [r1, r2, r3] = responders as [RegisteredDevice, RegisteredDevice, RegisteredDevice];
+    await w.runUntil(openedAt.getTime() + MINUTE);
+    expect((await w.acknowledge(r1, first)).status).toBe(200);
+    await w.runUntil(openedAt.getTime() + 90 * SECOND);
+    await w.heartbeat(walker, journeyId);
+    const backAt = (await w.clock.now()).getTime();
+    const firstBefore = w.alertsOf(journeyId).filter(({ id }) => id === first);
+    expect(
+      firstBefore.map(({ state, acknowledgedBy }) => [state, acknowledgedBy]),
+      'the first alert RESOLVED, R1 still recorded on it',
+    ).toEqual([['RESOLVED', r1.userId]]);
+
+    // Silent again: the second alert opens at five minutes, and R1 is on it 60 s later.
+    await w.runUntil(backAt + FIVE_MINUTES);
+    const [opened] = w.alertsOf(journeyId).filter(({ id }) => id !== first);
+    const second = opened?.id ?? '';
+    const secondOpenedAt = backAt + FIVE_MINUTES;
+    expect(opened?.openedAt).toEqual(new Date(secondOpenedAt));
+    await w.runUntil(secondOpenedAt + MINUTE);
+    expect((await w.acknowledge(r1, second)).status).toBe(200);
+    await w.runUntil(secondOpenedAt + 90 * SECOND);
+    const secondBefore = w.alertsOf(journeyId).filter(({ id }) => id === second);
+    expect(secondBefore.map(({ state, acknowledgedBy }) => [state, acknowledgedBy])).toEqual([
+      ['ACKNOWLEDGED', r1.userId],
+    ]);
+
+    expect(await w.remove(journeyId, r1.userId)).toEqual(REMOVED);
+
+    expect(
+      w.alertsOf(journeyId).filter(({ id }) => id === second),
+      'the second alert, the unresolved one, reset',
+    ).toEqual(
+      secondBefore.map((alert) => ({
+        ...alert,
+        state: 'OPEN',
+        acknowledgedBy: null,
+        acknowledgedAt: null,
+        smsRaisedAt: null,
+      })),
+    );
+    expect(w.roundOf(second)).toBe(2);
+    expect(
+      w.alertsOf(journeyId).filter(({ id }) => id === first),
+      'the first alert as it was',
+    ).toEqual(firstBefore);
+    expect(w.roundOf(first)).toBe(1);
+
+    // Two minutes from the second's opening: escalated in round 2, R2 and R3 texted.
+    await w.runUntil(secondOpenedAt + TWO_MINUTES);
+    expect(
+      w
+        .alertsOf(journeyId)
+        .filter(({ id }) => id === second)
+        .map(({ state, smsRaisedAt }) => [state, smsRaisedAt]),
+    ).toEqual([['ESCALATED', new Date(secondOpenedAt + TWO_MINUTES)]]);
+    const texts = w.smsOf(journeyId);
+    expect(recipientsOf(texts)).toEqual(idsOf([r2, r3]));
+    const rounds = w.rounds();
+    expect(texts.map(({ alertId, messageId }) => [alertId, rounds.get(messageId)])).toEqual([
+      [second, 2],
+      [second, 2],
+    ]);
+    expect(recipientsOf(w.sms.accepted)).toEqual(idsOf([r2, r3]));
+    for (const nobody of [r1.userId, walker.userId]) {
+      expect(recipientsOf(w.sms.messages)).not.toContain(nobody);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
