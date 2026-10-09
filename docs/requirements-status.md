@@ -30,7 +30,7 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | LOST-05 | The walker knows when they're offline | must | ⚪ | 0 |
 | LOST-06 | "I'm on it" | must | 🟢 | 22 |
 | LOST-07 | SMS escalation | must | 🟢 | 21 |
-| LOST-08 | "They're safe" | must | ⚪ | 0 |
+| LOST-08 | "They're safe" | must | 📝 | 0 |
 | HELP-01 | What to do | must | ⚪ | 0 |
 | REL-01 | The lost-contact decision is made by the server, using the server's clock, never the phone's. | must | 🟢 | 16 |
 | REL-02 | Positions recorded while offline are queued on the phone and sent in order when the connection returns. | must | ⚪ | 0 |
@@ -67,8 +67,8 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | SM-02 | A journey needs at least one responder to start. | must | 🟢 | 11 |
 | SM-03 | Heartbeats keep a journey ACTIVE even without a position; "location unavailable" is a flag (REL-05). | must | 🟢 | 4 |
 | SM-04 | LOST_CONTACT → ENDED (home) is allowed, e.g. | must | 🟢 | 12 |
-| SM-05 | The 2-hour automatic stop (JRN-06) **never** ends a journey that is in LOST_CONTACT. | must | ⚪ | 0 |
-| SM-06 | A LOST_CONTACT journey ends when the phone reconnects and the walker ends it, or when the acknowledging respo… | must | ⚪ | 0 |
+| SM-05 | The 2-hour automatic stop (JRN-06) **never** ends a journey that is in LOST_CONTACT. | must | 📝 | 0 |
+| SM-06 | A LOST_CONTACT journey ends when the phone reconnects and the walker ends it, or when the acknowledging respo… | must | 📝 | 0 |
 | SM-07 | Events that arrive after ENDED are ignored and logged without location; late positions are discarded. | must | 🟢 | 7 |
 | SM-08 | Every event carries an ID. | must | 🟢 | 7 |
 | SM-09 | Events are applied in the order the server receives them, using database time. | must | 🟢 | 11 |

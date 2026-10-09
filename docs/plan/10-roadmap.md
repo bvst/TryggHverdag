@@ -170,7 +170,7 @@ device sessions come only from tests and, on staging, from the canary (D-091).
 | 5 | LOST-06 | "I'm on it" | A responder's answer is recorded and shown, at L6 |
 | 6 | LOST-07 | SMS escalation at 2 minutes (REL-07); a failed SMS pages the owner | The escalation and the page pass at L6 against a recording SMS fake |
 | 7 | SM-10 | Removing a responder from a journey: escalation resumes when the acknowledging responder is removed (SM-10); SM-02's last-responder warning (D-115) | Both rules pass at L6 |
-| 8 | LOST-08 | "They're safe" (SM-06, SM-05) | The acknowledging responder closes the alert, the journey ends and the others are told; the 2-hour stop never ends a lost-contact journey; both at L6 |
+| 8 | LOST-08 | "They're safe" (SM-06, SM-05) | The acknowledging responder closes the alert, the journey ends and the others are told; the 24-hour end (SM-06; D-125); the 2-hour stop never ends a lost-contact journey; all at L6 |
 | 9 | REL-10 | The staging canary every ⚙️ 15 minutes, paging the owner if late | The canary runs on staging, on time for 24 hours |
 
 **BUG-10 runs after task 1 and before task 3** (D-092, D-094 to D-097): the
