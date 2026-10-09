@@ -388,6 +388,75 @@ describe("BUG-36, review loop 2: the global guard-paths ignores case in the main
   );
 });
 
+// BUG-36, review loop 3, privacy-security-reviewer: `.claude/state/**` does
+// not match .claude/state itself, so the global guard lets an Edit, a Write or
+// a NotebookEdit of a file at that path through, for a subagent too; the
+// reviewer ran a subagent's Write of it, and it exited 0. In a fresh clone,
+// where the folder does not exist yet, that file would stop the hooks writing
+// their records there. The shell guard names the folder exactly already;
+// D-120's fix gives this guard the same --deny in settings.json.
+//
+// These pass today, on purpose: guard-paths already understands the
+// argument. They hold what it means once settings.json passes it, the part
+// settings-hooks.test.mjs holds and that fails today: the folder's own path is
+// refused whatever the case, and the main session's phase step still works.
+const d120WithStateItself = [...d120, '--deny', '.claude/state'];
+
+/** A NotebookEdit of `file`, as Claude Code reports it: the path is notebook_path. */
+const notebookOf = (file, content = '') => ({
+  tool_name: 'NotebookEdit',
+  tool_input: { notebook_path: file, new_source: content },
+});
+
+const LOOP3_STATE_ITSELF = ['.claude/state', '.Claude/State', '.CLAUDE/STATE'];
+
+describe('BUG-36, review loop 3: the global guard-paths refuses a file at .claude/state itself, whatever the case (D-120)', () => {
+  test.each(LOOP3_STATE_ITSELF)(
+    'BUG-36: an Edit, a Write and a NotebookEdit of %s are refused for the main session and a subagent, naming D-120 (review loop 3, privacy-security-reviewer)',
+    (file) => {
+      for (const make of [edit, writeOf, notebookOf]) {
+        const call = make(`/repo/${file}`, 'synthetic\n');
+        const args = ['--global', ...d120WithStateItself];
+        const asMain = runHook('guard-paths.mjs', { args, input: call, cwd: '/repo' });
+        const asSubagent = runHook('guard-paths.mjs', {
+          args,
+          input: bySubagent(call),
+          cwd: '/repo',
+        });
+
+        expect({
+          tool: call.tool_name,
+          file,
+          main: d120VerdictOf(asMain),
+          subagent: d120VerdictOf(asSubagent),
+        }).toEqual({ tool: call.tool_name, file, main: 'refused', subagent: 'refused' });
+      }
+    },
+  );
+
+  test('BUG-36: with .claude/state itself denied, the main session may still change .claude/state/phase and a subagent may not (review loop 3, privacy-security-reviewer)', () => {
+    for (const make of [edit, writeOf, notebookOf]) {
+      const call = make('/repo/.claude/state/phase', 'red:BUG-1\n');
+      const args = ['--global', ...d120WithStateItself];
+      const asMain = runHook('guard-paths.mjs', { args, input: call, cwd: '/repo' });
+      const asSubagent = runHook('guard-paths.mjs', {
+        args,
+        input: bySubagent(call),
+        cwd: '/repo',
+      });
+
+      expect(
+        {
+          tool: call.tool_name,
+          main: d120VerdictOf(asMain),
+          subagent: d120VerdictOf(asSubagent),
+        },
+        `main session said: ${asMain.stderr}`,
+      ).toEqual({ tool: call.tool_name, main: 'allowed', subagent: 'refused' });
+    }
+  });
+});
+
 describe('HK-02: tools that do not touch a file', () => {
   test('pass straight through', () => {
     const result = runHook('guard-paths.mjs', {
