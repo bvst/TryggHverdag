@@ -19,8 +19,10 @@
  *      STUCK_AFTER_MS ago or more, tries once more, waiting at most
  *      LOCK_WAIT_LIMIT_MS for the row. A healthy holder lets go within
  *      milliseconds, and the journey is then ended, or skipped because the
- *      holder resolved its alert. Only one held through the wait, or failed
- *      in it, is stuck: one `expiry_overdue` line naming it.
+ *      holder resolved its alert. One held through the wait, or failed in
+ *      it, is stuck, and so is one whose first attempt failed when its 24
+ *      hours had passed STUCK_AFTER_MS ago or more (never waited for, as
+ *      the escalation's is not): one `expiry_overdue` line naming it.
  * A run fails when its read fails, when an end fails (one `expiry_failed`
  * line each, whichever attempt it was), or when it finds a stuck alert. A
  * successful end writes no line: the rows are its record.
@@ -87,13 +89,17 @@ export function createExpiry({ journeys, log }: { journeys: WatchdogStore; log: 
       const waitFor: string[] = [];
 
       // Every alert's first attempt, before any waits for a row. One that
-      // failed fails the run, with its line; only one skipped is waited for.
+      // failed fails the run, with its line, and past the stuck threshold is
+      // stuck; only one skipped is waited for.
       for (const alert of due) {
         const outcome = await attempt(alert.id);
         if (outcome === 'expired') {
           expired += 1;
         } else if (outcome === 'failed') {
           failed = true;
+          if (pastStuck(alert)) {
+            stuck.push(alert.id);
+          }
         } else if (pastStuck(alert)) {
           waitFor.push(alert.id);
         }
