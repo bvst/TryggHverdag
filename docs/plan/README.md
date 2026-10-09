@@ -137,7 +137,12 @@ journey has their `journey_responders` row deleted at once, so the record of
 who followed a journey no longer holds anyone removed from it, with two
 exceptions that stay as alert records: messages already written to them, and
 `acknowledged_by` on a resolved alert they had acknowledged (SM-10 keeps who
-helped on record).
+helped on record). **Since LOST-08** (D-125, D-126), a journey can end
+`SAFE` (closed by the responder who acknowledged) or `EXPIRED` (24 hours after
+its alert opened), and its alert resolves the same way, with `SAFE` and
+`EXPIRED` stand-downs in the outbox: alert records under the 30-day rule. Who
+closed a journey is the `acknowledged_by` of its alert resolved `SAFE`, so
+that field is how the record names the closer.
 
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every
