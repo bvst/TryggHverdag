@@ -2973,8 +2973,13 @@ const SMS = 'LOST_CONTACT_SMS';
 function kindsNamedIn(query: FakePostgresQuery): string[] {
   const found = new Set<string>();
   for (const part of [query.text, ...query.values.map((value) => value ?? '')]) {
+    // RG-03 (SM-10; not in the spec's list, found by searching for pins of
+    // the kinds): NO_RESPONDER is a push kind now (SM-10-AC17), so the push
+    // claim names it, and the test below compares what this finds with the
+    // test kit's PUSH_KINDS, which has it. Without it here, a claim that left
+    // NO_RESPONDER out would look the same as one that named it.
     for (const [kind] of part.matchAll(
-      /\b(?:LOST_CONTACT_SMS|LOST_CONTACT|BACK_IN_CONTACT|HOME|ACKNOWLEDGED)\b/g,
+      /\b(?:LOST_CONTACT_SMS|LOST_CONTACT|BACK_IN_CONTACT|HOME|ACKNOWLEDGED|NO_RESPONDER)\b/g,
     )) {
       found.add(kind);
     }
@@ -2997,6 +3002,35 @@ const isSmsCount = (query: FakePostgresQuery) =>
   /\boutbox\b/i.test(query.text) && /\bcount\s*\(/i.test(query.text) && !isClaim(query);
 
 /**
+ * Whether a statement is the SMS check's count of unheard alerts (SM-10, Q3
+ * (a)): a count that reads no outbox. It is the only other count the worker
+ * makes, and it is matched before the overdue read, so a join of `journeys`
+ * in it cannot pass it off as that read.
+ */
+const isUnheardCount = (query: FakePostgresQuery) =>
+  /\bcount\s*\(/i.test(query.text) && !/\boutbox\b/i.test(query.text) && !isClaim(query);
+
+/**
+ * A count's one row, named as the statement names its columns: its aliases,
+ * in order, when it has any (a count in a subselect hides its name from
+ * askedFor), else what it asks for. The time where a name says now, the
+ * count elsewhere.
+ */
+function countAnswer(query: FakePostgresQuery, count: number) {
+  const aliases = [...query.text.matchAll(/\bas\s+"?(\w+)"?/gi)]
+    .map(([, name = '']) => name)
+    .filter((name) => !/^(int|integer|bigint|text|numeric)$/i.test(name));
+  const asked = aliases.length > 0 ? aliases : askedFor(query.text);
+  const columns = asked.length > 0 ? asked : ['now', 'count'];
+  return {
+    columns,
+    rows: [
+      columns.map((column) => (/now/i.test(column) ? NOW_AS_POSTGRES_WRITES_IT : String(count))),
+    ],
+  };
+}
+
+/**
  * A database for the worker's own statements, as the adapter shapes them
  * (their column names are the adapter's): the overdue read answers its time
  * and no journey; the SMS claim hands out `sms` once and the push claim
@@ -3004,17 +3038,26 @@ const isSmsCount = (query: FakePostgresQuery) =>
  * answers `state.count`, or fails while it is null. A statement that names
  * sms_raised_at fails when `refuseEscalation` is set. The rest is answered as
  * a quiet database answers it.
+ *
+ * RG-03, named in SM-10's spec ("`smsDatabase()` … on Q3 (a)"): the SMS check
+ * now also counts unheard alerts, a statement this handler did not answer.
+ * It answers `state.unheard`, zero unless a test says otherwise, so every
+ * LOST-07 test here keeps its assertions: with no unheard alert, the check
+ * reports as it did.
  */
 function smsDatabase({
   sms,
   refuseEscalation = false,
 }: { sms?: { messageId: string; recipientId: string }; refuseEscalation?: boolean } = {}) {
-  const state: { count: number | null } = { count: 0 };
+  const state: { count: number | null; unheard: number } = { count: 0, unheard: 0 };
   let claimed = false;
   const handler: FakePostgresHandler = (query) => {
     const settings = pgSettingsAnswer(query, IDLE_AS_ASKED);
     if (settings !== undefined) {
       return settings;
+    }
+    if (isUnheardCount(query)) {
+      return countAnswer(query, state.unheard);
     }
     if (/\bleft join "?journeys"?/i.test(query.text)) {
       return {
@@ -3043,22 +3086,7 @@ function smsDatabase({
       if (state.count === null) {
         throw new Error('this synthetic database cannot count');
       }
-      // Named as the statement names them: its aliases, in order, when it
-      // has any (a count in a subselect hides its name from askedFor), else
-      // what it asks for. The time where a name says now, the count elsewhere.
-      const aliases = [...query.text.matchAll(/\bas\s+"?(\w+)"?/gi)]
-        .map(([, name = '']) => name)
-        .filter((name) => !/^(int|integer|bigint|text|numeric)$/i.test(name));
-      const asked = aliases.length > 0 ? aliases : askedFor(query.text);
-      const columns = asked.length > 0 ? asked : ['now', 'count'];
-      return {
-        columns,
-        rows: [
-          columns.map((column) =>
-            /now/i.test(column) ? NOW_AS_POSTGRES_WRITES_IT : String(state.count),
-          ),
-        ],
-      };
+      return countAnswer(query, state.count);
     }
     return quietDatabase(query);
   };
@@ -3474,6 +3502,24 @@ describe('LOST-07: the SMS check, a minute task of its own', () => {
     }
   });
 
+  test('SM-10-AC15: the worker’s SMS check also counts unheard alerts through the worker’s own pool: with no SMS waiting and one unheard alert it reports failing, with one unheard_alerts line holding the count, 1, and no sms_unsent; ok once none is (SM-02, LOST-07)', async () => {
+    const database = smsDatabase();
+    const worker = await checking(database);
+    try {
+      database.state.unheard = 1;
+      await expect(worker.runCheck()).resolves.toBeUndefined();
+      expect(worker.alarm.statuses).toEqual(['failing']);
+      expect(worker.log.events).toEqual([{ event: 'unheard_alerts', count: 1 }]);
+
+      database.state.unheard = 0;
+      await expect(worker.runCheck()).resolves.toBeUndefined();
+      expect(worker.alarm.statuses).toEqual(['failing', 'ok']);
+      expect(worker.log.events).toEqual([{ event: 'unheard_alerts', count: 1 }]);
+    } finally {
+      await worker.stop();
+    }
+  });
+
   test('LOST-07-AC11: with no alarm, as when HEALTHCHECKS_SMS_URL is unset, the SMS check’s task completes and writes nothing, however many SMS wait: never a thrown task, and no line for a report nobody is there to receive', async () => {
     const database = smsDatabase();
     const worker = await checking(database, { withAlarm: false });
@@ -3610,7 +3656,14 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
     expect(lines[0]).not.toContain('Healthchecks.io');
     // Said to its end, and a line of its own: what it reports on is the 60 s
     // an SMS may wait, and the line does not run on into the next.
-    expect(lines[0]).toMatch(/\b60 s\.$/);
+    //
+    // RG-03 (SM-10 review loop 1, safety-reviewer; D-122's consequences): was
+    // /\b60 s\.$/. Since D-122, item 3, an open alert with no responder left
+    // to tell is paged through the SMS check alone, so the line goes on past
+    // the 60 s to say so, and ends there. Both things this held are held
+    // still: the 60 s an SMS may wait, and the full stop at the line's end.
+    // SM-10-AC15's tests below pin the new words on their own.
+    expect(lines[0]).toMatch(/\b60 s, or any open alert has no responder left to tell\.$/);
     expect(runTogether(worker.written)).toEqual([]);
     expect(worker.written.join('')).not.toContain(CHECK);
     expect(healthchecksLines(worker.written)).toHaveLength(1);
@@ -3787,4 +3840,110 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
 
     await stopSmsWorker(worker);
   });
+
+  // SM-10 review loop 1 (safety-reviewer; D-122, item 3, and its
+  // consequences): since SM-10 a silent journey with no responder left opens
+  // its alert with nobody to tell, and the owner is paged through the SMS
+  // check alone, no longer through the worker's own check. So the start line
+  // says what the SMS check covers when it reports, and, when it does not,
+  // what goes unpaged: fail loudly, never silently.
+
+  /** The sentence a not-reporting SMS check's start line ends with: what goes unpaged without it. */
+  const UNPAGED =
+    /\bNeither an SMS left unsent nor an alert with no responder left to tell is paged\.$/m;
+
+  test.each([
+    [
+      'only HEALTHCHECKS_SMS_URL set, to a usable https: address',
+      () => ({ healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: PING_URL }) }),
+    ],
+    [
+      'both URLs set, valid and different, as staging runs',
+      () => ({
+        healthchecks: readHealthchecksSetting({
+          HEALTHCHECKS_WORKER_URL: syntheticPingUrl(syntheticUuid()),
+        }),
+        healthchecksSms: readHealthchecksSmsSetting({
+          HEALTHCHECKS_SMS_URL: syntheticPingUrl(syntheticUuid()),
+        }),
+      }),
+    ],
+  ] as const)(
+    'SM-10-AC15: with %s, the SMS check’s start line says it reports whether any open alert has no responder left to tell, as well as an SMS waiting 60 s, and never that something goes unpaged (SM-02, LOST-07)',
+    async (_what, settings) => {
+      const worker = smsWorkerProcess(settings());
+      await settle();
+
+      expect(worker.created).toHaveLength(1);
+      const lines = smsCheckLines(worker.written);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/\bor any open alert has no responder left to tell\b/);
+      expect(lines[0]).not.toMatch(UNPAGED);
+      expect(runTogether(worker.written)).toEqual([]);
+
+      await stopSmsWorker(worker);
+    },
+  );
+
+  test.each([
+    ['HEALTHCHECKS_SMS_URL unset', () => ({ healthchecksSms: readHealthchecksSmsSetting({}) })],
+    [
+      'HEALTHCHECKS_SMS_URL empty',
+      () => ({ healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: '' }) }),
+    ],
+    [
+      'HEALTHCHECKS_SMS_URL an http: address',
+      () => ({
+        healthchecksSms: readHealthchecksSmsSetting({
+          HEALTHCHECKS_SMS_URL: `http://127.0.0.1:1/${CHECK}`,
+        }),
+      }),
+    ],
+    [
+      'HEALTHCHECKS_SMS_URL not an address at all',
+      () => ({
+        healthchecksSms: readHealthchecksSmsSetting({
+          HEALTHCHECKS_SMS_URL: `hc-ping.com/${CHECK}`,
+        }),
+      }),
+    ],
+    ['no SMS check setting at all', () => ({})],
+    [
+      'HEALTHCHECKS_SMS_URL the same address as HEALTHCHECKS_WORKER_URL',
+      () => ({
+        healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: PING_URL }),
+        healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: PING_URL }),
+      }),
+    ],
+    [
+      'HEALTHCHECKS_SMS_URL the same check as HEALTHCHECKS_WORKER_URL on another host',
+      () => {
+        const check = syntheticUuid();
+        return {
+          healthchecks: readHealthchecksSetting({
+            HEALTHCHECKS_WORKER_URL: syntheticPingUrl(check),
+          }),
+          healthchecksSms: readHealthchecksSmsSetting({
+            HEALTHCHECKS_SMS_URL: `https://localhost:1/${check}`,
+          }),
+        };
+      },
+    ],
+  ] as const)(
+    'SM-10-AC15: with %s, the SMS check’s start line says, after why it does not report, that neither an SMS left unsent nor an alert with no responder left to tell is paged, and the worker stays up (SM-02, LOST-07)',
+    async (_what, settings) => {
+      const worker = smsWorkerProcess(settings());
+      await settle();
+
+      expect(worker.created).toEqual([]);
+      const lines = smsCheckLines(worker.written);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/^worker: the SMS check is not reporting: /);
+      expect(lines[0]).toMatch(UNPAGED);
+      expect(runTogether(worker.written)).toEqual([]);
+      expect(worker.exits).toEqual([]);
+
+      await stopSmsWorker(worker);
+    },
+  );
 });

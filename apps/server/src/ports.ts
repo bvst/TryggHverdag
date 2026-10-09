@@ -11,9 +11,11 @@ import type {
   AlertForAcknowledgement,
   AlertState,
   JourneyForHeartbeat,
+  JourneyForRemoval,
   JourneyState,
   MessageKind,
   PushFailureReason,
+  RemoveOutcome,
   UnendedJourney,
   UnendedJourneyState,
 } from './domain/journey.ts';
@@ -56,8 +58,10 @@ export interface CheckIn {
 
 /**
  * The SMS check's report, told to an outside monitor of its own (LOST-07,
- * D-115): `ok` while no escalation SMS is failing, `failing` while any is.
- * The monitor pages the owner on a failing report, and when the reports stop.
+ * D-115): `ok` while no escalation SMS is failing and no alert is unheard,
+ * `failing` while any is (SM-10, D-122 item 3: an unresolved alert whose
+ * journey has no responder left to tell). The monitor pages the owner on a
+ * failing report, and when the reports stop.
  */
 export interface SmsAlarm {
   /**
@@ -257,22 +261,25 @@ export interface WatchdogStore {
    * (BACK_IN_CONTACT, HOME) of every alert of the walker's journeys, and of no
    * other walker's, whose recipient is a responder of this journey (LOST-03),
    * opens its alert and writes one message per responder, all of it or none
-   * of it. Every open bounds its waits with a lock limit of its own, local to
-   * its transaction: `lockWaitMs`, or LOCK_WAIT_LIMIT_MS without it. Without
-   * `lockWaitMs` a held row is skipped (`skip locked`) and `held` is never
-   * answered; with it, the open waits at most that long for the journey's
-   * row, and answers `held` when that wait runs out. Rejects, having written
-   * nothing, on any other failure: a wait for any other lock that ran out
-   * (55P03), or a journey with no responder. Rejects before taking any lock
-   * when `lockWaitMs` is given and is not a whole number from 1 to
-   * 2147483647: PostgreSQL reads 0 as no limit.
+   * of it. A journey with no responder row is opened all the same, with no
+   * message: its alert is counted unheard (`unheardAlertCount`, SM-10, D-122
+   * item 3). Every open bounds its waits with a lock limit of its own, local
+   * to its transaction: `lockWaitMs`, or LOCK_WAIT_LIMIT_MS without it.
+   * Without `lockWaitMs` a held row is skipped (`skip locked`) and `held` is
+   * never answered; with it, the open waits at most that long for the
+   * journey's row, and answers `held` when that wait runs out. Rejects,
+   * having written nothing, on any other failure, such as a wait for any
+   * other lock that ran out (55P03). Rejects before taking any lock when
+   * `lockWaitMs` is given and is not a whole number from 1 to 2147483647:
+   * PostgreSQL reads 0 as no limit.
    */
   openLostContactAlert(request: OpenRequest): Promise<OpenLostContactAlertResult>;
   /**
-   * LOST-07: every alert unresolved, never escalated, not acknowledged in
-   * D-114's sense (state ACKNOWLEDGED and someone recorded), and opened
-   * `afterMs` or more before the database's now(), read without locking, and
-   * that now().
+   * LOST-07: every alert unresolved, not escalated in its round, not
+   * acknowledged in D-114's sense (state ACKNOWLEDGED and someone recorded),
+   * opened `afterMs` or more before the database's now(), and whose journey
+   * has a responder row (SM-10: one with none is unheard, and counted
+   * instead), read without locking, and that now().
    */
   alertsDueForEscalation(afterMs: number): Promise<DueAlerts>;
   /**
@@ -281,13 +288,15 @@ export interface WatchdogStore {
    * transaction's now() and its two minutes, ESCALATE_AFTER_MS (AR-04), and
    * writes what it decides: the alert
    * ESCALATED with its escalation time at now(), and one LOST_CONTACT_SMS per
-   * responder row, due at now() (AR-05); or nothing. Bounds its waits as an
-   * open does: `lockWaitMs`, or LOCK_WAIT_LIMIT_MS without it; without
-   * `lockWaitMs` a held row is skipped, with it the escalation waits at most
-   * that long for the journey's row and answers `held` when that wait runs
-   * out. Rejects, having written nothing, on any other failure, a journey
-   * with no responder row included; and before taking any lock when
-   * `lockWaitMs` is given and is not a whole number from 1 to 2147483647.
+   * responder row, in the alert's round, due at now() (AR-05); or nothing. A
+   * journey with no responder row under the lock is skipped, writing nothing
+   * (SM-10, D-122 item 3). Bounds its waits as an open does: `lockWaitMs`,
+   * or LOCK_WAIT_LIMIT_MS without it; without `lockWaitMs` a held row is
+   * skipped, with it the escalation waits at most that long for the
+   * journey's row and answers `held` when that wait runs out. Rejects,
+   * having written nothing, on any other failure; and before taking any lock
+   * when `lockWaitMs` is given and is not a whole number from 1 to
+   * 2147483647.
    */
   escalateAlert(request: EscalateRequest): Promise<EscalateAlertResult>;
 }
@@ -322,6 +331,12 @@ export interface OutboxStore {
    * `olderThanMs` or more before the database's now(); and that now().
    */
   unsentSmsCount(olderThanMs: number): Promise<{ now: Date; count: number }>;
+  /**
+   * SM-10 (D-122, item 3): how many unresolved alerts have a journey with no
+   * responder row, so nobody can be told of them; and the database's now(),
+   * from the same statement.
+   */
+  unheardAlertCount(): Promise<{ now: Date; count: number }>;
   /** The port accepted it: sent at now(). */
   markSent(messageId: string): Promise<void>;
   /** The port did not accept it: this reason, and due again `retryAfterMs` after now(). */
@@ -456,6 +471,44 @@ export interface AlertStore {
   ): Promise<RecordAcknowledgementResult>;
 }
 
+/** A removal as the store takes it (SM-10): the journey, and the responder to remove from it. */
+export interface RemovalToRecord {
+  journeyId: string;
+  responderId: string;
+}
+
+/**
+ * Removed now, with the alert it reset, null when it reset none, and the
+ * walker's warning when it was the last responder (SM-02); or not removed,
+ * with the removal rule's other outcome under the journey's lock, and nothing
+ * written.
+ */
+export type RemoveResponderResult =
+  | { outcome: 'removed'; resetAlertId: string | null; messages: AlertMessage[] }
+  | { outcome: 'not_removed'; decision: Exclude<RemoveOutcome, { type: 'removed' }> };
+
+/** What removing a responder needs of the journeys (SM-10, D-122, D-123). */
+export interface ResponderStore {
+  /**
+   * The journey this ID names, in any state, with its responder rows, read
+   * without a lock; or null when no journey has that ID.
+   */
+  journeyForRemoval(journeyId: string): Promise<JourneyForRemoval | null>;
+  /**
+   * In one transaction, with a lock limit of its own (LOCK_WAIT_LIMIT_MS),
+   * whichever pool runs it: takes the journey's row first (D-112), asks the
+   * domain's removal rule again under that lock (AR-04), and writes what it
+   * decides, all of it or none of it (AR-05), at the database's now(): the
+   * responder's row deleted; the journey's unresolved alert they are recorded
+   * on reset to OPEN, nobody recorded, no escalation time, its round raised,
+   * and its unsent notices withdrawn; their unsent messages of the journey's
+   * alerts withdrawn, whatever the kind (D-122, item 2); and, when no
+   * responder is left, one NO_RESPONDER to the walker. Or nothing, with the
+   * rule's other outcome. Rejects, having written nothing, on any failure.
+   */
+  removeResponder(removal: RemovalToRecord): Promise<RemoveResponderResult>;
+}
+
 /**
  * Every line the server may log, and nothing else (PRIV-07). A closed union:
  * no event has a field a location, a phone number or an error's message
@@ -479,7 +532,10 @@ export type LogEvent =
   | { event: 'sms_failed'; reason: PushFailureReason; messageId: string }
   | { event: 'sms_delivery_failed'; stage: 'claim' | 'mark'; code: string | null }
   | { event: 'sms_unsent'; count: number }
-  | { event: 'sms_check_failed'; stage: 'read' | 'report'; code: string | null };
+  | { event: 'sms_check_failed'; stage: 'read' | 'report'; code: string | null }
+  | { event: 'removal_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
+  | { event: 'removal_failed'; stage: 'read' | 'store'; code: string | null }
+  | { event: 'unheard_alerts'; count: number };
 
 /** Where the server writes what happened, one event at a time. */
 export interface Log {

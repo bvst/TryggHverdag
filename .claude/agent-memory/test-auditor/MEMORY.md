@@ -32,6 +32,10 @@
 - [LOST-07 audit](project_lost07_audit.md) — BLOCK 4d7f188 (M2, M1, equal count seeds); loop 2 PASS e9f1687; loop 3 PASS f7928e3: S3 killed, mirror break-after-escalated (E3c) survives, should-fix; BUG-28 confirmed on main at L6
 - [Equal seed columns](feedback_equal_seed_columns.md) — shared behaviour seeding two time columns equal cannot pin which one the adapter reads; plant column swaps
 - [Time-equality kills](feedback_time_equality_kills.md) — db-clock and tx-scope faults die only to a ms-floor equality; ask for µs text and xmin equality
+- [BUG-29 audit](project_bug29_audit.md) — PASS 2a65c3a (D-117 worker group, node vitest bin); CI mutation 21:07 green; 31 faults killed; narrower-set check by per-mutant report diff; CI annotations cap at 10
+- [Narrowed mutation group](feedback_narrowed_mutation_group.md) — dropping a group's tests can't inflate (only Timeout->Killed goes up); diff per-mutant reports; old reports get overwritten
 - [BUG-30/31 audit](project_bug30_31_audit.md) — PASS 75ca5d1; stop-gate fingerprint null fallback -> constant survives; loader-in-NODE_OPTIONS for hook children; cache-skip mutant checklist
 - [BUG-32 audit](project_bug32_audit.md) — PASS 33e27ac/3c6b6ad; 14 faults, read-back ordering M12 survives (note); test-author table file absent; local mutation gave no score (BUG-33, exit 144)
 - [BUG-36..39 audit](project_bug36_39_audit.md) — PASS 019e941/9191d49; loop 1 PASS 1f7ce47 (47 red for right reasons, 56 faults, 42 killed, empty agent_id now killed; gt-ampersand redirect bypass and stale known limits should-fix); affected.mjs INERT gap queued
+- [SM-10 audit](project_sm10_audit.md) — BLOCK 3da9517 (A-R1 reset read w/o unresolved filter); loop 2 PASS e7f082d, 18 faults killed, B1 L3 kill heap-order dependent (should-fix precondition)
+- [First-row reads](feedback_first_row_reads.md) — [first] of a parent-keyed filtered select needs a filtered-out sibling seeded first; plant the filter drop on both stores

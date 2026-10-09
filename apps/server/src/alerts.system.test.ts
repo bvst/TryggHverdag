@@ -25,7 +25,11 @@
 //     a sender that stops mid-send (AC16);
 //   - the watchdog feeds the beat, so /v1/health and the minute check-in
 //     page the owner when it cannot sweep (AC19, REL-08);
-//   - nothing personal reaches stdout, stderr or the console (AC22, PRIV-07).
+//   - nothing personal reaches stdout, stderr or the console (AC22, PRIV-07);
+//   - and SM-10-AC15 (Q3 (a), D-122 item 3): a journey left with no
+//     responder that goes silent is opened as any other, with nobody to tell,
+//     and the sweep stays healthy, so the worker's check still says only
+//     whether the watchdog works (SM-02).
 //
 // The times are written out (five minutes, 30 s, 10 s doubling to 60 s), not
 // read from the domain's constants, so a wrong constant fails here as well as
@@ -1105,6 +1109,87 @@ describe('REL-08 and LOST-02: a journey the watchdog cannot move is reported, an
       ]),
     );
     expect(await w.beats.lastBeat()).toBeNull();
+  });
+});
+
+describe('SM-10, SM-02 and LOST-02: a journey with no responder that goes silent opens with nobody to tell, and the sweep stays healthy (Q3 (a))', () => {
+  test('SM-10-AC15: a journey whose responder rows are gone, removed directly, silent past five minutes: the sweep opens it, ok, counting it opened, and records the beat; J is LOST_CONTACT with one OPEN alert and no message; ten minutes of later sweeps are each ok, escalate nothing, write nothing, write no line, and record the beat; the sender hands nothing to the push port (SM-02, LOST-02)', async () => {
+    const w = world();
+    const { journeyId } = overdue(w, 2);
+    w.store.removeResponders(journeyId);
+
+    const swept = await w.watchdog.sweep();
+
+    expect(swept).toEqual({ ok: true, opened: 1, escalated: 0, stuck: 0 });
+    expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
+    expect(w.stateOf(journeyId)).toBe('LOST_CONTACT');
+    const [alert] = w.alertsOf(journeyId);
+    expect(w.alertsOf(journeyId).map(({ state }) => state)).toEqual(['OPEN']);
+    expect(w.store.outbox()).toEqual([]);
+
+    const later: unknown[] = [];
+    const end = (await w.clock.now()).getTime() + 10 * MINUTE;
+    while ((await w.clock.now()).getTime() < end) {
+      w.clock.advance(INTERVAL);
+      later.push((await w.sweepAndDeliver()).swept);
+      expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
+    }
+
+    expect(later).toEqual(later.map(() => ({ ok: true, opened: 0, escalated: 0, stuck: 0 })));
+    expect(w.alertsOf(journeyId)).toEqual([alert]);
+    expect(w.store.outbox()).toEqual([]);
+    expect(w.store.journeyMessages()).toEqual([]);
+    expect(w.push.messages).toEqual([]);
+    expect(w.log.events).toEqual([]);
+  });
+
+  test('SM-10-AC15: started through the API and silent: an open of a journey with no responder rows writes nothing for anyone, the walker included, and its alert opens at exactly five minutes, not a millisecond sooner (SM-02, LOST-02)', async () => {
+    const w = world();
+    const walker = w.walker();
+    const journeyId = await w.start(walker, [w.user()]);
+    await w.heartbeat(walker, journeyId);
+    const lastContact = await w.clock.now();
+    w.store.removeResponders(journeyId);
+
+    await w.runUntil(new Date(lastContact.getTime() + FIVE_MINUTES - 1));
+    expect(w.stateOf(journeyId)).toBe('ACTIVE');
+    w.clock.advance(1);
+    expect((await w.sweepAndDeliver()).swept).toEqual({
+      ok: true,
+      opened: 1,
+      escalated: 0,
+      stuck: 0,
+    });
+
+    expect(w.alertsOf(journeyId).map(({ state, openedAt }) => [state, openedAt])).toEqual([
+      ['OPEN', new Date(lastContact.getTime() + FIVE_MINUTES)],
+    ]);
+    expect(w.store.outbox()).toEqual([]);
+    expect(w.push.messages).toEqual([]);
+  });
+
+  test('SM-10-AC15: while that alert is unheard, another journey whose open fails still fails the sweep, with its one watchdog_failed line, and stops the beat: the worker’s check is not held down by the unheard one, nor hidden by it (LOST-02, REL-08)', async () => {
+    const w = world();
+    const unheard = overdue(w, 1);
+    w.store.removeResponders(unheard.journeyId);
+    expect((await w.watchdog.sweep()).ok).toBe(true);
+    const beat = await w.beats.lastBeat();
+    expect(beat).toEqual(await w.clock.now());
+    w.clock.advance(INTERVAL);
+    const other = w.seed(w.walker(), [w.user()], { silentForMs: FIVE_MINUTES - INTERVAL });
+    w.store.failWith(databaseError('40P01'), 'openLostContactAlert');
+
+    const failed = await w.watchdog.sweep();
+
+    expect(failed).toEqual({ ok: false, opened: 0, escalated: 0, stuck: 0 });
+    expect(w.log.events).toEqual([{ event: 'watchdog_failed', stage: 'open', code: '40P01' }]);
+    expect(await w.beats.lastBeat()).toEqual(beat);
+    expect(w.stateOf(other)).toBe('ACTIVE');
+
+    w.store.recover();
+    w.clock.advance(INTERVAL);
+    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 1, escalated: 0, stuck: 0 });
+    expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
   });
 });
 

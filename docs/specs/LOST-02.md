@@ -1103,6 +1103,11 @@ transaction.** *(LOST-02)*
 - **And** at L6, with the fake failing `openLostContactAlert`, the same holds
 - **And** a journey with no responder rows (put there directly, L3) is never
   moved. It stays `ACTIVE`, and the open fails.
+  - *Changed 2026-10-09 by D-122 item 3; see SM-10-AC15.* Since SM-10 a
+    journey can lose its last responder, so the open now moves such a journey
+    to `LOST_CONTACT` with an alert and no message, the sweep stays healthy,
+    and the SMS check pages the owner. The test that held this clause is now
+    an SM-10-AC15 test.
 
 **LOST-02-AC13 — The alert records what it was raised for, and copies no
 position.** *(LOST-02)*

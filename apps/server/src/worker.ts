@@ -480,6 +480,14 @@ async function startedWithinLimit(started: Promise<Worker>): Promise<Worker> {
 }
 
 /**
+ * How a "not reporting" line of the SMS check ends: what then goes unpaged.
+ * Since D-122, item 3, an alert with no responder left to tell is paged
+ * through the SMS check alone, as an escalation SMS left unsent is.
+ */
+const SMS_CHECK_UNPAGED =
+  'Neither an SMS left unsent nor an alert with no responder left to tell is paged.';
+
+/**
  * The worker process: start the runner and the loops, stop them cleanly on
  * the platform's signal, and fail if the runner ends any other way. Here
  * rather than in bin/worker.ts so that the part deciding whether a dead worker
@@ -558,21 +566,27 @@ export async function runWorkerProcess(
   // failing (D-115, D-116). A check is its UUID, the URL's path, whatever host
   // each URL is on: config.ts takes a ping URL only as "/" and a lower-case
   // UUID, so equal paths are one check (D-116, review loop 2).
+  // Since SM-10, an open alert with no responder left to tell is paged through
+  // this check alone (D-122, item 3). So the line says it covers that too, and
+  // a line saying it does not report ends by saying what then goes unpaged:
+  // fail loudly (SM-10-AC15, review loop 1).
   let smsAlarm: SmsAlarm | undefined;
   if (!healthchecksSms.checkingIn) {
-    write(`worker: the SMS check is not reporting: ${healthchecksSms.reason}\n`);
+    write(
+      `worker: the SMS check is not reporting: ${healthchecksSms.reason} ${SMS_CHECK_UNPAGED}\n`,
+    );
   } else if (
     healthchecks.checkingIn &&
     new URL(healthchecks.url).pathname === new URL(healthchecksSms.url).pathname
   ) {
     write(
       'worker: the SMS check is not reporting: HEALTHCHECKS_SMS_URL is the same address as ' +
-        'HEALTHCHECKS_WORKER_URL, and the SMS check needs a check of its own.\n',
+        `HEALTHCHECKS_WORKER_URL, and the SMS check needs a check of its own. ${SMS_CHECK_UNPAGED}\n`,
     );
   } else {
     write(
       'worker: the SMS check reports once a minute whether any escalation SMS has waited ' +
-        'unsent for 60 s.\n',
+        'unsent for 60 s, or any open alert has no responder left to tell.\n',
     );
     smsAlarm = createSmsAlarm(healthchecksSms.url);
   }

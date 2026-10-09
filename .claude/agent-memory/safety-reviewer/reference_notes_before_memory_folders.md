@@ -12,6 +12,12 @@ Newest first.
 
 ## Patterns worth checking every time
 
+### A mutation group narrowed for time: prove "that test kills none on its own" yourself (BUG-29)
+The claim rests on one machine's run. Map each assertion of the dropped test onto the mutated file, plant the mutants
+only a real process would show, run them without it, and compare survivor sets in a ranged Stryker run. Then check
+the budget margin on CI, not locally (local 4-core times ran 1.04-1.32x faster than CI's), and that the older
+decision naming the old command or grouping is pointed at the new one.
+
 ### A guard moved into the adapter leaves its old reason behind (LOST-07 loop 3)
 When a later loop makes the adapter itself safe (e.g. /fail built on the URL's path), the earlier "why we refuse it"
 survives in TF error messages, test titles/comments, the PR body and decisions. Grep the old phrase across *.tf, tests,

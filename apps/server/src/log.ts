@@ -14,12 +14,13 @@
  *   - `journeyId`, `messageId` and `alertId` only as a lower-case canonical
  *     UUID;
  *   - `reason` only from its event's set: JOURNEY_ENDED for an ignored
- *     heartbeat or "I'm home", the push port's four for a failed push or SMS,
- *     ALERT_RESOLVED for an ignored "I'm on it";
+ *     heartbeat, "I'm home" or removal, the push port's four for a failed
+ *     push or SMS, ALERT_RESOLVED for an ignored "I'm on it";
  *   - `stage` only from its event's set: clock, read or store for a
- *     heartbeat; read or store for "I'm home" and "I'm on it"; read, open or
- *     beat for the watchdog; read or escalate for the escalation; claim or
- *     mark for each sender; read or report for the SMS check;
+ *     heartbeat; read or store for "I'm home", "I'm on it" and a removal;
+ *     read, open or beat for the watchdog; read or escalate for the
+ *     escalation; claim or mark for each sender; read or report for the SMS
+ *     check;
  *   - `pool` only as api or worker;
  *   - `code` only as text that is a SQLSTATE, read by `sqlstateOf`, so no
  *     message can travel as a code;
@@ -66,6 +67,7 @@ const EVENT_LEVELS = {
   heartbeat_ignored: 30,
   home_ignored: 31,
   acknowledgement_ignored: 32,
+  removal_ignored: 33,
   alert_missing: 40,
   heartbeat_failed: 50,
   push_failed: 51,
@@ -81,6 +83,8 @@ const EVENT_LEVELS = {
   escalation_overdue: 61,
   sms_unsent: 62,
   sms_check_failed: 63,
+  removal_failed: 64,
+  unheard_alerts: 65,
 } as const satisfies Record<EventName, number>;
 
 /**
@@ -96,10 +100,10 @@ const [THRESHOLD] = (Object.keys(EVENT_LEVELS) as [EventName, ...EventName[]]).s
 /** A UUID as the database writes one: lower-case hex, in groups of 8, 4, 4, 4 and 12. */
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-/** The reasons `heartbeat_ignored` and `home_ignored` may give. */
+/** The reasons `heartbeat_ignored`, `home_ignored` and `removal_ignored` may give. */
 const REASONS: readonly unknown[] = ['JOURNEY_ENDED'] satisfies Extract<
   LogEvent,
-  { event: 'heartbeat_ignored' | 'home_ignored' }
+  { event: 'heartbeat_ignored' | 'home_ignored' | 'removal_ignored' }
 >['reason'][];
 
 /** The stages `heartbeat_failed` may name. */
@@ -148,6 +152,12 @@ const ESCALATION_STAGES: readonly unknown[] = ['read', 'escalate'] satisfies Ext
 const SMS_DELIVERY_STAGES: readonly unknown[] = ['claim', 'mark'] satisfies Extract<
   LogEvent,
   { event: 'sms_delivery_failed' }
+>['stage'][];
+
+/** The stages `removal_failed` may name. */
+const REMOVAL_STAGES: readonly unknown[] = ['read', 'store'] satisfies Extract<
+  LogEvent,
+  { event: 'removal_failed' }
 >['stage'][];
 
 /** The stages `sms_check_failed` may name. */
@@ -300,6 +310,21 @@ export function createLog({
             stage: oneOf(SMS_CHECK_STAGES, event.stage),
             code: codeOf(event.code),
           });
+          return;
+        case 'removal_ignored':
+          logger.removal_ignored({
+            reason: oneOf(REASONS, event.reason),
+            journeyId: uuidOf(event.journeyId),
+          });
+          return;
+        case 'removal_failed':
+          logger.removal_failed({
+            stage: oneOf(REMOVAL_STAGES, event.stage),
+            code: codeOf(event.code),
+          });
+          return;
+        case 'unheard_alerts':
+          logger.unheard_alerts({ count: countOf(event.count) });
           return;
         default:
           // A type error the day an event joins LogEvent without a case. And

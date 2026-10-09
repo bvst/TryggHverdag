@@ -523,12 +523,19 @@ describe('the mutation runs of this repository', () => {
       // runs contact.system.test.ts, the L6 file that proves back in contact
       // and "I'm home", whose code lives in modules/journeys/. A mutant there
       // is caught only by a test the group runs. Nothing else changed.
+      //
+      // RG-03 (SM-10, named in the spec's "Existing assertions that change by
+      // design" and its Mutation section): the removal module, removal.ts,
+      // lives in modules/journeys/, and its L6 file, removal.system.test.ts,
+      // joins the group third. What the group mutates and its configuration
+      // do not change.
       expect.objectContaining({
         name: 'journeys',
         paths: ['apps/server/src/modules/journeys/'],
         tests: [
           'apps/server/src/journeys.system.test.ts',
           'apps/server/src/contact.system.test.ts',
+          'apps/server/src/removal.system.test.ts',
         ],
       }),
       // LOST-02 (RG-03): modules/alerts/ gets its first files, the watchdog
@@ -833,6 +840,10 @@ describe('BUG-10: the journey files, split by test level (D-095)', () => {
     // RG-03 (LOST-03, D-112): the journey system tests are now two files,
     // journeys.system.test.ts and contact.system.test.ts, the second holding
     // back in contact and "I'm home". Still one run, its own.
+    //
+    // RG-03 (SM-10, named in the spec's "Existing assertions that change by
+    // design"): and removal.system.test.ts, third, holding the removal
+    // (removal.ts, in modules/journeys/). Still one run, its own.
     const runs = mutationRuns().filter((run) =>
       run.paths.includes('apps/server/src/modules/journeys/'),
     );
@@ -844,6 +855,7 @@ describe('BUG-10: the journey files, split by test level (D-095)', () => {
         tests: [
           'apps/server/src/journeys.system.test.ts',
           'apps/server/src/contact.system.test.ts',
+          'apps/server/src/removal.system.test.ts',
         ],
       }),
     ]);

@@ -145,6 +145,12 @@
       "coveredLines": 5,
       "totalLines": 5
     },
+    "apps/server/src/modules/journeys/removal.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 16,
+      "totalLines": 16
+    },
     "apps/server/src/modules/journeys/service.ts": {
       "lines": 100,
       "branches": 100,

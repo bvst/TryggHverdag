@@ -934,6 +934,10 @@ place.** *(LOST-07, LOST-06, LOST-03)*
   of AC1's work
 - **And** an alert whose journey has no responder row is not escalated: the
   escalation is refused whole and the sweep fails, saying so
+  - *Changed 2026-10-09 by D-122 item 3; see SM-10-AC15.* Such an alert is
+    still never escalated, but it is left out of the due read and skipped
+    under the lock, so the sweep stays healthy; the SMS check pages the owner
+    instead. The test that held this clause is now an SM-10-AC15 test.
 - **And** at L6, with the fake failing the escalation's read and then its
   write, each is a failed sweep with one line naming its stage, and no beat.
 
@@ -1052,6 +1056,8 @@ wording, keeping the criterion and the assertions.
 3. `LOST-07-AC3: escalateAlert decides again under the journey’s row, and writes nothing for an alert no longer due there: acknowledged by someone, RESOLVED, already escalated, or under two minutes`
 4. `LOST-07-AC16: escalateAlert skips a held row without waiting; told to wait, it answers held when the row stays held, and otherwise decides as the holder left it`
 5. `LOST-07-AC15: escalateAlert refuses an alert whose journey has no responder row, writing nothing`
+   (*changed 2026-10-09 by D-122 item 3:* now an SM-10-AC15 behaviour, where
+   the alert is never read as due and is skipped, not refused)
 6. `LOST-07-AC4: RACERS escalations of one alert at once, RACE_ROUNDS times over: exactly one escalates, every other skips, none an error, with one set of SMS`
 7. `LOST-07-AC6: recordAcknowledgement of an escalated alert withdraws its SMS not yet sent at the store’s now, keeping attempts and last failure, and leaves sent SMS and every push message alone; of an alert never escalated it withdraws nothing`
 8. `LOST-07-AC7: when contact comes back, or "I’m home" ends the journey, an escalated alert is resolved keeping its escalation time; its SMS not yet sent are withdrawn with its lost-contact pushes; every responder gets one stand-down, held behind an SMS handed over and due later`
@@ -1236,7 +1242,9 @@ Read in `scripts/lib/gate-decisions.mjs` on 2026-10-07.
   the migration (D-095: L3, and D-036's nightly run, which does not exist
   yet); `log.ts` (the owner's open question from #60); `config.ts` and
   `ports.ts` (not safety paths; D-079 kept `config.ts` out on purpose).
-- **Not run, because unchanged:** `journeys`, `api-process`.
+- **Not run, because unchanged:** `journeys`, `api-process`. *Corrected
+  2026-10-09 (SM-10's spec):* not so. `scripts/mutation.mjs` runs every group
+  on every run, and D-117's CI times for this pull request include both.
 - **Cost.** The `alerts` group's mutants each run three files from here. D-098
   keeps the 25-minute budget; if an honest run does not fit, the owner decides
   (cost). Read the job's log for the time it took; do not estimate.

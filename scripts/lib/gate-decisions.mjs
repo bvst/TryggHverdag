@@ -70,11 +70,17 @@ export const MUTATION_GROUPS = [
   },
   {
     // Starting a journey and its heartbeats (journeys.system.test.ts), then
-    // back in contact and "I'm home" (contact.system.test.ts, LOST-03, D-112):
-    // the module's code is proven by both, so a mutant here is run by both.
+    // back in contact and "I'm home" (contact.system.test.ts, LOST-03, D-112),
+    // then removing a responder (removal.system.test.ts, SM-10, D-123): the
+    // module's code is proven by all three, so a mutant here is run by all
+    // three.
     name: 'journeys',
     paths: ['apps/server/src/modules/journeys/'],
-    tests: ['apps/server/src/journeys.system.test.ts', 'apps/server/src/contact.system.test.ts'],
+    tests: [
+      'apps/server/src/journeys.system.test.ts',
+      'apps/server/src/contact.system.test.ts',
+      'apps/server/src/removal.system.test.ts',
+    ],
     config: 'vitest.system.config.mjs',
   },
   {

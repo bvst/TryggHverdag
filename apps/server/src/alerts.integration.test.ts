@@ -859,18 +859,47 @@ describe('LOST-02: the move, the alert and every message are one transaction (AR
     expect(recipientsOf(await messagesOf(journeyId))).toEqual([...responderIds].sort());
   });
 
-  test('LOST-02-AC12: a journey with no responder rows, put there directly, is never moved: it stays ACTIVE, the open fails, and the sweep says so', async () => {
+  test('SM-10-AC15: a journey with no responder rows, put there directly, is moved all the same: the sweep opens it, ok, counting it opened, and records the beat; it is LOST_CONTACT with one OPEN alert and no message, and nothing is logged (SM-02, LOST-02)', async () => {
+    // RG-03, named in SM-10's spec ("Existing assertions that change by
+    // design", the no-responder refusals, on Q3 (a), D-122 item 3). This was
+    // "LOST-02-AC12: a journey with no responder rows, put there directly, is
+    // never moved: it stays ACTIVE, the open fails, and the sweep says so".
+    // A journey left with nobody is now a state the removal can reach: the
+    // open opens it as any other, with nobody to tell, and the sweep stays
+    // healthy, so the worker's check still says only whether the watchdog
+    // works. The SMS check pages for the alert instead (AC15, in
+    // escalation.integration.test.ts).
     const { journeyId } = await overdue({ responders: 0 });
     const log = fakeLog();
 
+    const before = await databaseNowMs();
     const swept = await watchdogFor({ log }).sweep();
+    const after = await databaseNowMs();
 
-    expect(swept.ok).toBe(false);
-    expect(await stateOf(journeyId)).toBe('ACTIVE');
-    expect(await alertsOf(journeyId)).toEqual([]);
-    expect(log.events).toContainEqual(
-      expect.objectContaining({ event: 'watchdog_failed', stage: 'open' }),
+    expect(swept).toEqual({ ok: true, opened: 1, escalated: 0, stuck: 0 });
+    expect(await stateOf(journeyId)).toBe('LOST_CONTACT');
+    expect((await alertsOf(journeyId)).map(({ state }) => state)).toEqual(['OPEN']);
+    expect(await messagesOf(journeyId)).toEqual([]);
+    const beat = (await databaseWorkerHeartbeats(database()).lastBeat())?.getTime() ?? Number.NaN;
+    expect(beat).toBeGreaterThanOrEqual(before);
+    expect(beat).toBeLessThanOrEqual(after);
+    expect(log.events).toEqual([]);
+  });
+
+  test('SM-10-AC15: no outbox row of any kind, for anyone, is written for a journey with no responder rows when it opens: neither for the walker nor for a user who once followed it (SM-02, LOST-02)', async () => {
+    const { journeyId } = await overdue({ responders: 2 });
+    await connection().query('delete from journey_responders where journey_id = $1', [journeyId]);
+    const rowsBefore = await connection().query<{ n: number }>(
+      'select count(*)::int as n from outbox',
     );
+
+    expect((await watchdogFor().sweep()).opened).toBe(1);
+
+    const rowsAfter = await connection().query<{ n: number }>(
+      'select count(*)::int as n from outbox',
+    );
+    expect(rowsAfter.rows[0]?.n).toBe(rowsBefore.rows[0]?.n);
+    expect(await stateOf(journeyId)).toBe('LOST_CONTACT');
   });
 });
 

@@ -12,6 +12,11 @@ reads the same on `main` · **Status:** Spec, settled. The owner
 answered Q1 on 2026-10-06 with the recommended answer, (a) (D-113), so the
 criteria stand as written.
 
+*Task numbers (noted 2026-10-09):* this spec was written before D-115 gave M2
+a ninth task. Its "task 6" is LOST-07's SMS escalation, and the
+resumed-escalation rule it places there is task 7 (SM-10) today; its "task 7",
+"They're safe", is task 8 (D-122).
+
 ## Requirement
 
 ### The rule this task delivers

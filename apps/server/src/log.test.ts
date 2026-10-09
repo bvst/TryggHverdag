@@ -56,6 +56,11 @@ const EVENTS: LogEvent[] = [
   { event: 'sms_delivery_failed', stage: 'claim', code: '57P01' },
   { event: 'sms_unsent', count: 3 },
   { event: 'sms_check_failed', stage: 'report', code: null },
+  // SM-10 (the spec's "Added to, not changed"): the removal's two, and the
+  // count of unheard alerts.
+  { event: 'removal_ignored', reason: 'JOURNEY_ENDED', journeyId: syntheticUuid() },
+  { event: 'removal_failed', stage: 'store', code: '55P03' },
+  { event: 'unheard_alerts', count: 1 },
 ];
 
 /** Codes that are not a SQLSTATE: each is written as null, so no message can travel as a code. */
@@ -1640,6 +1645,270 @@ describe('PRIV-07 and LOST-07: the six new events are closed, at the type and at
           numberShaped,
           credential,
           pingUrl,
+        ]),
+        event.event,
+      ).toEqual([]);
+    }
+  });
+});
+
+// ===========================================================================
+// SM-10: the removal's two events, an ignored removal and a failed one, and
+// the SMS check's count of unheard alerts (its spec's approach item 11).
+// Closed, like the rest: a journey's ID only as a canonical UUID, a reason
+// and a stage only from their sets, a code only as a SQLSTATE, a count only
+// as a non-negative safe integer, and no field a user's ID, a phone number, a
+// location or a message could travel in. No event names the removed
+// responder or the walker (PRIV-07).
+// ===========================================================================
+
+const SM_10_EVENTS: LogEvent[] = [
+  { event: 'removal_ignored', reason: 'JOURNEY_ENDED', journeyId: syntheticUuid() },
+  { event: 'removal_failed', stage: 'read', code: '57P01' },
+  { event: 'removal_failed', stage: 'store', code: '55P03' },
+  { event: 'removal_failed', stage: 'store', code: null },
+  { event: 'unheard_alerts', count: 0 },
+  { event: 'unheard_alerts', count: 1 },
+  { event: 'unheard_alerts', count: Number.MAX_SAFE_INTEGER },
+];
+
+/** For each new event with a field closed to a set: a valid event, the field, and values outside the set. */
+const SM_10_CLOSED_SETS: {
+  what: string;
+  event: Record<string, unknown>;
+  field: string;
+  outside: unknown[];
+}[] = [
+  {
+    what: 'a removal_ignored reason',
+    event: { event: 'removal_ignored', reason: 'JOURNEY_ENDED', journeyId: syntheticUuid() },
+    field: 'reason',
+    outside: ['NOT_A_RESPONDER', 'JOURNEY_NOT_FOUND', 'journey_ended', '', ['JOURNEY_ENDED'], 409],
+  },
+  {
+    what: 'a removal_failed stage',
+    event: { event: 'removal_failed', stage: 'store', code: '57P01' },
+    field: 'stage',
+    outside: ['clock', 'remove', 'open', 'escalate', 'STORE', '', ['read'], 3],
+  },
+];
+
+describe('PRIV-07 and SM-10: the three new events are closed, at the type and at run time', () => {
+  test('SM-10-AC20: (L1) each of the three is exactly its fields, no more and no fewer: a field added to one, an optional one included, or a set widened, fails typecheck', () => {
+    // As LOST-07-AC18's pin: each entry is `true` only when each type is
+    // assignable to the other and both have the same keys.
+    type Exactly<A, B> = [A] extends [B]
+      ? [B] extends [A]
+        ? [keyof A] extends [keyof B]
+          ? [keyof B] extends [keyof A]
+            ? true
+            : false
+          : false
+        : false
+      : false;
+    type EventOf<Name extends LogEvent['event']> = Extract<LogEvent, { event: Name }>;
+    const pinned: [
+      Exactly<
+        EventOf<'removal_ignored'>,
+        { event: 'removal_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
+      >,
+      Exactly<
+        EventOf<'removal_failed'>,
+        { event: 'removal_failed'; stage: 'read' | 'store'; code: string | null }
+      >,
+      Exactly<EventOf<'unheard_alerts'>, { event: 'unheard_alerts'; count: number }>,
+    ] = [true, true, true];
+
+    expect(pinned).toEqual([true, true, true]);
+  });
+
+  test('SM-10-AC20: (L1) none of the three holds another field: a phone number, a latitude, a user’s ID, a message, or another reason or stage does not type-check', () => {
+    // Each @ts-expect-error fails the type check (gate:static) the day the
+    // property under it stops being an error. Values only; none is handed to
+    // the log, and none is a phone number: the field's name is what is tried.
+    const journeyId = syntheticUuid();
+    const someone = syntheticUuid();
+    const refused: unknown[] = [
+      {
+        event: 'removal_ignored',
+        reason: 'JOURNEY_ENDED',
+        journeyId,
+        // @ts-expect-error -- not the removed responder
+        responderId: someone,
+      } satisfies LogEvent,
+      {
+        event: 'removal_ignored',
+        reason: 'JOURNEY_ENDED',
+        journeyId,
+        // @ts-expect-error -- nor the walker
+        walkerId: someone,
+      } satisfies LogEvent,
+      {
+        event: 'removal_ignored',
+        // @ts-expect-error -- nor a reason the removal does not log
+        reason: 'NOT_A_RESPONDER',
+        journeyId,
+      } satisfies LogEvent,
+      {
+        event: 'removal_failed',
+        stage: 'store',
+        code: null,
+        // @ts-expect-error -- nor an error's message
+        message: 'Failing row contains (…)',
+      } satisfies LogEvent,
+      {
+        event: 'removal_failed',
+        stage: 'read',
+        code: null,
+        // @ts-expect-error -- nor a latitude
+        latitude: 0,
+      } satisfies LogEvent,
+      {
+        event: 'removal_failed',
+        // @ts-expect-error -- nor another stage
+        stage: 'clock',
+        code: null,
+      } satisfies LogEvent,
+      {
+        event: 'unheard_alerts',
+        count: 1,
+        // @ts-expect-error -- nor a phone number
+        phoneNumber: '',
+      } satisfies LogEvent,
+      {
+        event: 'unheard_alerts',
+        count: 1,
+        // @ts-expect-error -- nor which alerts, or whose
+        alertIds: [someone],
+      } satisfies LogEvent,
+      {
+        event: 'unheard_alerts',
+        // @ts-expect-error -- and a count is a number, never text
+        count: '1',
+      } satisfies LogEvent,
+    ];
+
+    expect(refused).toHaveLength(9);
+  });
+
+  test.each(SM_10_EVENTS)(
+    'SM-10-AC20: createLog writes $event as one JSON line, holding exactly that event’s fields',
+    (event) => {
+      const writer = recordingWriter();
+
+      createLog({ write: writer.write }).write(event);
+
+      const lines = writer.lines();
+      expect(lines).toHaveLength(1);
+      expect(writer.chunks.join('').endsWith('\n')).toBe(true);
+      expect(JSON.parse(lines[0] ?? 'null')).toEqual(event);
+    },
+  );
+
+  test.each(SM_10_CLOSED_SETS)(
+    'SM-10-AC20: $what outside its set is written as null, and none of it is written; inside it, as it is',
+    ({ event, field, outside }) => {
+      for (const value of [...outside, ...freeText().map(({ value: text }) => text)]) {
+        const { line, text } = writtenThroughACast({ ...event, [field]: value });
+
+        expect(line, JSON.stringify(value)).toEqual({ ...event, [field]: null });
+        if (typeof value === 'string' && value !== '') {
+          expect(text, value).not.toContain(`"${value}"`);
+        }
+      }
+      expect(writtenThroughACast(event).line).toEqual(event);
+    },
+  );
+
+  test('SM-10-AC20: the stages read and store, and the reason JOURNEY_ENDED, are each written as they are, so the nulls above are the value’s doing', () => {
+    for (const event of [
+      { event: 'removal_failed', stage: 'read', code: null },
+      { event: 'removal_failed', stage: 'store', code: null },
+      { event: 'removal_ignored', reason: 'JOURNEY_ENDED', journeyId: syntheticUuid() },
+    ]) {
+      expect(writtenThroughACast(event).line, JSON.stringify(event)).toEqual(event);
+    }
+  });
+
+  test('SM-10-AC20: in the removal_ignored line, a journeyId that is not a lower-case canonical UUID is written as null, and none of it is written', () => {
+    const event = { event: 'removal_ignored', reason: 'JOURNEY_ENDED', journeyId: syntheticUuid() };
+
+    for (const { what, journeyId, markers } of NOT_JOURNEY_IDS) {
+      const { line, text } = writtenThroughACast({ ...event, journeyId: journeyId() });
+
+      expect(line, what).toEqual({ ...event, journeyId: null });
+      expect(markersIn(text, markers()), what).toEqual([]);
+    }
+    expect(writtenThroughACast(event).line).toEqual(event);
+  });
+
+  test('SM-10-AC20: a removal_failed code that is not a SQLSTATE is written as null, and a SQLSTATE as it is', () => {
+    const event = { event: 'removal_failed', stage: 'store', code: '23505' };
+
+    for (const { what, code } of [...NOT_SQLSTATES, ...CODES_NOT_TEXT]) {
+      const { line, text } = writtenThroughACast({ ...event, code });
+
+      expect(line, what).toEqual({ ...event, code: null });
+      if (typeof code === 'string' && code !== '') {
+        expect(text, what).not.toContain(code);
+      }
+    }
+    expect(writtenThroughACast(event).line).toEqual(event);
+  });
+
+  test('SM-10-AC20: an unheard_alerts count that is not a non-negative safe integer is written as null; 0, 1 and the largest safe integer as they are', () => {
+    const event = { event: 'unheard_alerts', count: 1 };
+
+    for (const { what, count } of NOT_COUNTS) {
+      const { line, text } = writtenThroughACast({ ...event, count });
+
+      expect(line, what).toEqual({ ...event, count: null });
+      if (typeof count === 'number' && Number.isFinite(count) && count !== -1) {
+        expect(text, what).not.toContain(String(count));
+      }
+    }
+    for (const count of [0, 1, Number.MAX_SAFE_INTEGER]) {
+      expect(writtenThroughACast({ ...event, count }).line, String(count)).toEqual({
+        ...event,
+        count,
+      });
+    }
+  });
+
+  test('SM-10-AC20: fields the three events do not have, got past the type, are not written: a position, a message, an error, the removed responder’s ID, the walker’s ID, a phone-number-shaped value, a credential', () => {
+    const latitude = String(syntheticCoordinate());
+    const longitude = String(syntheticCoordinate());
+    const responderId = syntheticUuid();
+    const walkerId = syntheticUuid();
+    const credential = syntheticCredential();
+    // Phone-number-shaped, made at run time and never in +47 form: eight
+    // digits with a leading 0, which no Norwegian subscriber number has.
+    const numberShaped = `0${String(Math.floor(Math.random() * 10_000_000)).padStart(7, '0')}`;
+    const extra = {
+      latitude: Number(latitude),
+      longitude: Number(longitude),
+      position: { latitude: Number(latitude), longitude: Number(longitude) },
+      message: `Failing row contains (${latitude}, ${longitude})`,
+      err: new Error(`could not remove ${responderId} from ${walkerId}'s journey`),
+      responderId,
+      walkerId,
+      phoneNumber: numberShaped,
+      credential,
+    };
+
+    for (const event of SM_10_EVENTS) {
+      const { line, text } = writtenThroughACast({ ...event, ...extra });
+
+      expect(line, event.event).toEqual(event);
+      expect(
+        markersIn(text, [
+          latitude,
+          longitude,
+          'Failing row',
+          responderId,
+          walkerId,
+          numberShaped,
+          credential,
         ]),
         event.event,
       ).toEqual([]);

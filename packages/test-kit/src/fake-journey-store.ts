@@ -48,9 +48,10 @@
  *     it moves the journey to LOST_CONTACT, opens one OPEN alert at now with
  *     the silence's start, and writes one LOST_CONTACT message per responder,
  *     each with a fresh ID, all of it or none of it. A journey with no
- *     responder is refused, and left as it was;
+ *     responder is opened all the same, with no message (SM-10, D-122 item 3;
+ *     until then it was refused);
  *   - one alert per journey that is not RESOLVED, and one message per
- *     (alert, recipient, kind), as the unique indexes hold them;
+ *     (alert, recipient, kind, round), as the unique indexes hold them;
  *   - a claim takes at most its limit of the due messages (not sent, not
  *     withdrawn, and due at or before now), counts one attempt on each, and
  *     leases them until now plus the lease; a message is marked sent at now,
@@ -141,8 +142,9 @@
  *     hands it a threshold), and either writes nothing (`skipped`) or moves
  *     the alert to ESCALATED with its escalation time at now and one
  *     LOST_CONTACT_SMS per responder row, each with a fresh ID, due at now,
- *     all of it or none of it. A journey with no responder row is refused,
- *     and the alert left as it was;
+ *     all of it or none of it. A journey with no responder row is skipped
+ *     under the "lock", writing nothing (SM-10, D-122 item 3; until then it
+ *     was refused);
  *   - the push claim (`claimDue`) takes the push kinds only, and the SMS claim
  *     (`claimDueSms`) the SMS kinds only, with the same limit, lease, attempt
  *     count and order; `unsentSmsCount` counts the SMS messages unsent, not
@@ -153,6 +155,39 @@
  *   - an alert's escalation time is null until it is escalated, put in
  *     directly or written by the escalation, and kept by every later step;
  *   - a fake given no clock throws when asked to escalate, claim or count.
+ *
+ * And for removing a responder (SM-10, the last-responder half of SM-02, its
+ * spec's approach items 2 to 10, D-122, D-123):
+ *   - `journeyForRemoval` is a plain read of a journey's state and its
+ *     responder rows, or null for an ID no journey has; it never waits;
+ *   - `removeResponder` takes the journey's "row" first, and waits while
+ *     `hold` holds it, as the adapter's `for update` waits; then decides by
+ *     the removal rule, in its order, under that "lock": no journey is
+ *     JOURNEY_NOT_FOUND, an ENDED journey JOURNEY_ENDED, a user who is not a
+ *     responder of it (the walker included, IDs compared exactly)
+ *     NOT_A_RESPONDER, each writing nothing. Otherwise, at the store's now,
+ *     in one step: the responder's row is deleted; the journey's one
+ *     unresolved alert, when that responder is recorded on it, is reset to
+ *     OPEN, with who and when and its escalation time cleared and its round
+ *     raised by one, and its unsent `WITHDRAWN_WHEN_RESET` kinds withdrawn;
+ *     every unsent, not yet withdrawn message of the journey's alerts to the
+ *     removed responder, of a kind in `WITHDRAWN_WHEN_REMOVED`, is withdrawn,
+ *     keeping its attempts and last failure; and, when no responder is left,
+ *     one NO_RESPONDER is written to the walker, naming the journey and no
+ *     alert, in round 1, written and due at that now;
+ *   - every alert has a round, 1 when opened, and every message is written
+ *     with its alert's round at the time of writing; one message per (alert,
+ *     recipient, kind, round), as the unique key holds it (D-123);
+ *   - a journey with no responder row is opened as any other, with no
+ *     message (D-122, item 3); its alerts are never read as due for
+ *     escalation, and an escalation that finds no responder under the "lock"
+ *     writes nothing (`skipped`). `unheardAlertCount` counts the unresolved
+ *     alerts whose journey has no responder row, with the store's now;
+ *   - `alerts()` and `outbox()` keep their shapes: an alert's round, a
+ *     message's round and a journey's messages are read through readers of
+ *     their own (`alertRounds`, `messageRounds`, `journeyMessages`);
+ *   - a fake given no clock throws when asked to remove, or to count unheard
+ *     alerts; a refusal it needs no time for is answered without one.
  *
  * The shared behaviour suite (`journey-store-behaviour.ts`) runs the same
  * expectations against this fake and against the real adapter, which is
@@ -216,13 +251,44 @@ export const SMS_KINDS: readonly MessageKind[] = ['LOST_CONTACT_SMS'];
 /**
  * The kinds that go by push, which only the push claim hands out: every other
  * kind, in `MESSAGE_KINDS`' order. The server's `PUSH_KINDS`, held equal to it
- * by the domain's test (LOST-07-AC14).
+ * by the domain's test (LOST-07-AC14). SM-10 adds the walker's warning,
+ * NO_RESPONDER, last (SM-10-AC17).
  */
 export const PUSH_KINDS: readonly MessageKind[] = [
   'LOST_CONTACT',
   'BACK_IN_CONTACT',
   'HOME',
   'ACKNOWLEDGED',
+  'NO_RESPONDER',
+];
+
+/**
+ * The kinds a journey's messages carry, with no alert (SM-10, approach item
+ * 7): the walker's warning that the last responder was removed. Nothing
+ * withdraws them in M2. The server's `JOURNEY_MESSAGE_KINDS`, held equal to it
+ * by the domain's test (SM-10-AC17).
+ */
+export const JOURNEY_MESSAGE_KINDS: readonly MessageKind[] = ['NO_RESPONDER'];
+
+/**
+ * The kinds a reset withdraws from its own alert while unsent (SM-10, approach
+ * item 4): its "someone is on it" notices, stale once nobody is. The server's
+ * `WITHDRAWN_WHEN_RESET`, held equal to it by the domain's test (SM-10-AC17).
+ */
+export const WITHDRAWN_WHEN_RESET: readonly MessageKind[] = ['ACKNOWLEDGED'];
+
+/**
+ * The kinds a removal withdraws from the removed responder, of any of the
+ * journey's alerts, while unsent (SM-10, D-122 item 2): every kind that is not
+ * a journey's. The server's `WITHDRAWN_WHEN_REMOVED`, held equal to it by the
+ * domain's test (SM-10-AC17).
+ */
+export const WITHDRAWN_WHEN_REMOVED: readonly MessageKind[] = [
+  'LOST_CONTACT',
+  'BACK_IN_CONTACT',
+  'HOME',
+  'ACKNOWLEDGED',
+  'LOST_CONTACT_SMS',
 ];
 
 /**
@@ -465,6 +531,81 @@ export interface UnsentSmsCount {
 }
 
 /**
+ * How many unresolved alerts have a journey with no responder row (SM-10,
+ * D-122 item 3), and the store's now, from the same read.
+ */
+export interface UnheardAlertCount {
+  now: Date;
+  count: number;
+}
+
+/**
+ * A journey as the removal reads it (SM-10): its state and its responder rows.
+ * The server's `JourneyForRemoval`, by shape.
+ */
+export interface JourneyForRemoval {
+  id: string;
+  state: FakeJourneyState;
+  responderIds: readonly string[];
+}
+
+/** A removal as the store takes it (SM-10): the journey, and the responder to remove from it. */
+export interface RemovalToRecord {
+  journeyId: string;
+  responderId: string;
+}
+
+/**
+ * The removal rule's outcomes other than "removed" (SM-10, approach item 2):
+ * not a responder of the journey, the journey over, or no such journey.
+ */
+export type RemovalNotRemoved =
+  | { type: 'unchanged'; reason: 'NOT_A_RESPONDER' }
+  | { type: 'ignored'; reason: 'JOURNEY_ENDED' }
+  | { type: 'refused'; reason: 'JOURNEY_NOT_FOUND' };
+
+/**
+ * Removed now, with the alert it reset, null when it reset none, and the
+ * walker's warning when it was the last responder; or not removed, with the
+ * rule's decision under the lock, and nothing written. The server's
+ * `RemoveResponderResult`, by shape.
+ */
+export type RemoveResponderResult =
+  | { outcome: 'removed'; resetAlertId: string | null; messages: AlertMessage[] }
+  | { outcome: 'not_removed'; decision: RemovalNotRemoved };
+
+/** An alert's round (SM-10, approach item 5): 1 when opened, one more with each reset. */
+export interface AlertRound {
+  alertId: string;
+  round: number;
+}
+
+/** A message's round (SM-10): its alert's round when it was written; 1 for a journey's message. */
+export interface MessageRound {
+  messageId: string;
+  round: number;
+}
+
+/**
+ * A journey's message as stored (SM-10, approach item 7): the walker's
+ * warning, naming the journey and no alert. Its ID is opaque, as every
+ * message's is.
+ */
+export interface StoredJourneyMessage {
+  messageId: string;
+  journeyId: string;
+  recipientId: string;
+  kind: MessageKind;
+  round: number;
+  createdAt: Date;
+  attempts: number;
+  nextAttemptAt: Date;
+  sentAt: Date | null;
+  lastFailure: PushFailureReason | null;
+  withdrawnAt: Date | null;
+}
+
+/**
  * An alert as "I'm on it" reads it (LOST-06): its state, who is recorded on
  * it, null for nobody, and its journey's responders. The server's
  * `AlertForAcknowledgement`, by shape.
@@ -544,7 +685,10 @@ export type JourneyStoreCall =
   | 'alertsDueForEscalation'
   | 'escalateAlert'
   | 'claimDueSms'
-  | 'unsentSmsCount';
+  | 'unsentSmsCount'
+  | 'journeyForRemoval'
+  | 'removeResponder'
+  | 'unheardAlertCount';
 
 export interface FakeJourneyStore {
   /** The walker's journey in any state but ENDED, or null. */
@@ -630,9 +774,29 @@ export interface FakeJourneyStore {
    * at now, with one LOST_CONTACT_SMS per responder row, due at now; or
    * nothing. A held row is skipped, unless `lockWaitMs` is given: then it waits
    * for it, and answers `held` if it is not let go. A journey with no
-   * responder row is refused, writing nothing. Needs a clock.
+   * responder row is skipped, writing nothing (SM-10). Needs a clock.
    */
   escalateAlert(request: EscalateRequest): Promise<EscalateAlertResult>;
+  /**
+   * SM-10, D-122 item 3: how many unresolved alerts have a journey with no
+   * responder row; and now. Needs a clock.
+   */
+  unheardAlertCount(): Promise<UnheardAlertCount>;
+  /**
+   * SM-10: the journey this ID names, its state and its responder rows, read
+   * without a lock; or null for an ID no journey has. A plain read: it never
+   * waits for a held row.
+   */
+  journeyForRemoval(journeyId: string): Promise<JourneyForRemoval | null>;
+  /**
+   * SM-10: waits for the journey's row while it is held, then decides by the
+   * removal rule under that "lock" and writes what it decided: the
+   * responder's row deleted, the alert they are recorded on reset, their
+   * unsent messages of the journey's alerts withdrawn, and the walker warned
+   * when none is left; or nothing, with the rule's other outcome. Needs a
+   * clock to remove one.
+   */
+  removeResponder(removal: RemovalToRecord): Promise<RemoveResponderResult>;
   /** The port accepted it: sent at now. Needs a clock. */
   markSent(messageId: string): Promise<void>;
   /** The port did not accept it: this reason, and due again `retryAfterMs` after now. Needs a clock. */
@@ -688,12 +852,15 @@ export interface FakeJourneyStore {
     acknowledgedAt?: Date | null;
     /** LOST-07: when it was escalated to SMS; left out, never. No check ties it to the state. */
     smsRaisedAt?: Date | null;
+    /** SM-10: its round, a whole number from 1; left out, 1. */
+    round?: number;
   }): string;
   /**
    * Puts an outbox message in directly, as a test's own setup. Keeps the
    * database's rules: the alert is stored, the recipient is a user, the
-   * attempts are not negative, and one message per (alert, recipient, kind).
-   * Returns the message's ID.
+   * attempts are not negative, the round is a whole number from 1, and one
+   * message per (alert, recipient, kind, round) (SM-10). Returns the
+   * message's ID.
    */
   seedMessage(message: {
     alertId: string;
@@ -705,9 +872,28 @@ export interface FakeJourneyStore {
     sentAt?: Date | null;
     lastFailure?: PushFailureReason | null;
     withdrawnAt?: Date | null;
+    /** SM-10: its round; left out, 1. */
+    round?: number;
   }): string;
-  /** Removes every responder row of the journey, as a test's own setup: nothing in the code does. */
+  /**
+   * Removes every responder row of the journey, as a test's own setup, and
+   * nothing else: no reset, no withdrawal, no warning (SM-10's removal does
+   * those; this stays as setup).
+   */
   removeResponders(journeyId: string): void;
+  /**
+   * SM-10: deletes one responder row of the journey directly, as a test's own
+   * setup or as another transaction's work, and nothing else: no reset, no
+   * withdrawal, no warning. Throws for a journey not stored, or a user who is
+   * not one of its responders.
+   */
+  removeResponderRow(journeyId: string, responderId: string): void;
+  /** SM-10: every alert's round, in the order opened or put in. */
+  alertRounds(): AlertRound[];
+  /** SM-10: every message's round, alerts' and journeys' alike, in the order written. */
+  messageRounds(): MessageRound[];
+  /** SM-10: every journey's message (the walker's warnings), in the order written. Copies. */
+  journeyMessages(): StoredJourneyMessage[];
   /** Every journey stored, in the order stored. Copies: changing them changes nothing. */
   journeys(): StoredJourney[];
   /** How this journey ended: its end time and reason, both null until it ends through the store. Throws for a journey not stored. */
@@ -792,6 +978,22 @@ interface KeptJourney extends StoredJourney {
   endReason: FakeJourneyEndReason | null;
 }
 
+/** An alert as this fake keeps it: what `alerts()` hands out, and its round (SM-10). */
+interface KeptAlert extends StoredAlert {
+  round: number;
+}
+
+/**
+ * A message as this fake keeps it: an alert's, with `journeyId` null, or a
+ * journey's (SM-10), with `alertId` null; exactly one of the two, as the
+ * outbox's check holds it; and its round.
+ */
+interface KeptMessage extends Omit<StoredMessage, 'alertId'> {
+  alertId: string | null;
+  journeyId: string | null;
+  round: number;
+}
+
 function copy(journey: KeptJourney): StoredJourney {
   return {
     id: journey.id,
@@ -873,8 +1075,8 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
   const pending = new Map<JourneyStoreCall, (() => void)[]>();
   let failure: { error: Error; only: JourneyStoreCall | undefined } | null = null;
   let arrivals = 0;
-  const alerts: StoredAlert[] = [];
-  const outbox: StoredMessage[] = [];
+  const alerts: KeptAlert[] = [];
+  const outbox: KeptMessage[] = [];
   /** The journeys another transaction holds, and what waits for each to be released. */
   const held = new Map<string, (() => void)[]>();
   /** The held journeys whose holder lets go when an open waits for it, and what the holder does first. */
@@ -915,22 +1117,68 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         });
   };
 
-  /** Copies, so what a test reads cannot change what the fake holds. */
-  const copyAlert = (alert: StoredAlert): StoredAlert => ({
-    ...alert,
+  /**
+   * Copies, so what a test reads cannot change what the fake holds; in the
+   * shapes they had before SM-10, so no existing exact assertion changes: the
+   * round is read through `alertRounds` and `messageRounds`.
+   */
+  const copyAlert = (alert: KeptAlert): StoredAlert => ({
+    id: alert.id,
+    journeyId: alert.journeyId,
+    state: alert.state,
     openedAt: new Date(alert.openedAt.getTime()),
     silentSince: new Date(alert.silentSince.getTime()),
     resolvedAt: copyOf(alert.resolvedAt),
+    resolution: alert.resolution,
+    acknowledgedBy: alert.acknowledgedBy,
     acknowledgedAt: copyOf(alert.acknowledgedAt),
     smsRaisedAt: copyOf(alert.smsRaisedAt),
   });
-  const copyMessage = (message: StoredMessage): StoredMessage => ({
-    ...message,
+  const copyMessage = (message: KeptMessage & { alertId: string }): StoredMessage => ({
+    messageId: message.messageId,
+    alertId: message.alertId,
+    recipientId: message.recipientId,
+    kind: message.kind,
     createdAt: new Date(message.createdAt.getTime()),
+    attempts: message.attempts,
     nextAttemptAt: new Date(message.nextAttemptAt.getTime()),
     sentAt: copyOf(message.sentAt),
+    lastFailure: message.lastFailure,
     withdrawnAt: copyOf(message.withdrawnAt),
   });
+  const copyJourneyMessage = (
+    message: KeptMessage & { journeyId: string },
+  ): StoredJourneyMessage => ({
+    messageId: message.messageId,
+    journeyId: message.journeyId,
+    recipientId: message.recipientId,
+    kind: message.kind,
+    round: message.round,
+    createdAt: new Date(message.createdAt.getTime()),
+    attempts: message.attempts,
+    nextAttemptAt: new Date(message.nextAttemptAt.getTime()),
+    sentAt: copyOf(message.sentAt),
+    lastFailure: message.lastFailure,
+    withdrawnAt: copyOf(message.withdrawnAt),
+  });
+  const isAlertMessage = (message: KeptMessage): message is KeptMessage & { alertId: string } =>
+    message.alertId !== null;
+  const isJourneyMessage = (message: KeptMessage): message is KeptMessage & { journeyId: string } =>
+    message.journeyId !== null;
+
+  /**
+   * Whether the outbox already holds a message of this kind for this alert,
+   * recipient and round: the unique (alert, recipient, kind, round) the
+   * database holds (SM-10, approach item 5).
+   */
+  const taken = (alertId: string, recipientId: string, kind: MessageKind, round: number) =>
+    outbox.some(
+      (message) =>
+        message.alertId === alertId &&
+        message.recipientId === recipientId &&
+        message.kind === kind &&
+        message.round === round,
+    );
 
   /** When a journey's silence began: last contact, or its start when it has none. */
   const silentSinceOf = (journey: KeptJourney): Date =>
@@ -962,7 +1210,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
    * escalated; and opened `afterMs` or more before now. No comparison with a
    * time that is not one holds, so an invalid moment escalates nothing.
    */
-  const isDueForEscalation = (alert: StoredAlert, now: Date, afterMs: number): boolean =>
+  const isDueForEscalation = (alert: KeptAlert, now: Date, afterMs: number): boolean =>
     alert.state !== 'RESOLVED' &&
     !(alert.state === 'ACKNOWLEDGED' && alert.acknowledgedBy !== null) &&
     alert.smsRaisedAt === null &&
@@ -1012,8 +1260,8 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     };
   };
 
-  /** The message this ID names, which must be stored: an update of nothing is a sender's bug. */
-  const messageNamed = (call: JourneyStoreCall, messageId: string): StoredMessage => {
+  /** The message this ID names, an alert's or a journey's, which must be stored: an update of nothing is a sender's bug. */
+  const messageNamed = (call: JourneyStoreCall, messageId: string): KeptMessage => {
     const id = journeyIdOf(messageId);
     const message = outbox.find((kept) => kept.messageId === id);
     if (message === undefined) {
@@ -1099,7 +1347,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
    * The alert this ID names (LOST-06), matched as a `uuid` parameter is: in
    * either case, and refused, as PostgreSQL refuses it, unless it is a UUID.
    */
-  const alertNamed = (alertId: string): StoredAlert | undefined => {
+  const alertNamed = (alertId: string): KeptAlert | undefined => {
     const id = journeyIdOf(alertId);
     return alerts.find((alert) => alert.id === id);
   };
@@ -1131,18 +1379,13 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         message.withdrawnAt === null,
     );
     if (new Set(journey.responderIds).size !== journey.responderIds.length) {
-      throw uniqueViolation('one outbox message per (alert, recipient, kind)');
+      throw uniqueViolation('one outbox message per (alert, recipient, kind, round)');
     }
-    const standDowns: StoredMessage[] = journey.responderIds.map((recipientId) => {
-      if (
-        outbox.some(
-          (message) =>
-            message.alertId === alert.id &&
-            message.recipientId === recipientId &&
-            message.kind === resolution,
-        )
-      ) {
-        throw uniqueViolation('one outbox message per (alert, recipient, kind)');
+    const standDowns: KeptMessage[] = journey.responderIds.map((recipientId) => {
+      // SM-10 (approach item 5): written in the alert's round, and one of a
+      // kind per (alert, recipient, kind, round).
+      if (taken(alert.id, recipientId, resolution, alert.round)) {
+        throw uniqueViolation('one outbox message per (alert, recipient, kind, round)');
       }
       // The hold (LOST-03 reading 7; LOST-06 approach item 5): a responder
       // whose withdrawn message was handed over and is not due yet may still
@@ -1164,8 +1407,10 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       return {
         messageId: syntheticUuid(),
         alertId: alert.id,
+        journeyId: null,
         recipientId,
         kind: resolution,
+        round: alert.round,
         createdAt: new Date(now.getTime()),
         attempts: 0,
         nextAttemptAt: new Date(due.getTime()),
@@ -1593,24 +1838,21 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         // the step is kept.
         const recipients = journey.responderIds.filter((id) => id !== responderId);
         if (new Set(recipients).size !== recipients.length) {
-          throw uniqueViolation('one outbox message per (alert, recipient, kind)');
+          throw uniqueViolation('one outbox message per (alert, recipient, kind, round)');
         }
-        const notices: StoredMessage[] = recipients.map((recipientId) => {
-          if (
-            outbox.some(
-              (message) =>
-                message.alertId === alert.id &&
-                message.recipientId === recipientId &&
-                message.kind === 'ACKNOWLEDGED',
-            )
-          ) {
-            throw uniqueViolation('one outbox message per (alert, recipient, kind)');
+        const notices: KeptMessage[] = recipients.map((recipientId) => {
+          // SM-10 (approach item 5): a second acknowledgement, after a reset,
+          // writes its notices in the alert's new round.
+          if (taken(alert.id, recipientId, 'ACKNOWLEDGED', alert.round)) {
+            throw uniqueViolation('one outbox message per (alert, recipient, kind, round)');
           }
           return {
             messageId: syntheticUuid(),
             alertId: alert.id,
+            journeyId: null,
             recipientId,
             kind: 'ACKNOWLEDGED',
+            round: alert.round,
             createdAt: new Date(now.getTime()),
             attempts: 0,
             nextAttemptAt: new Date(now.getTime()),
@@ -1657,6 +1899,150 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
           const again = step(await nowFor('recordAcknowledgement'));
           if (again === NEEDS_NOW) {
             throw new Error('fakeJourneyStore.recordAcknowledgement: the store’s now was not used');
+          }
+          return again;
+        },
+        waitForRow,
+      );
+    },
+
+    journeyForRemoval(journeyId) {
+      // A plain read, as the adapter's is: no lock, so a held row is read all
+      // the same (SM-10, approach item 3).
+      return answer('journeyForRemoval', (): JourneyForRemoval | null => {
+        const journey = journeyNamed(journeyId);
+        return journey === undefined
+          ? null
+          : { id: journey.id, state: journey.state, responderIds: [...journey.responderIds] };
+      });
+    },
+    removeResponder(removal) {
+      if (typeof removal !== 'object' || (removal as unknown) === null) {
+        return Promise.reject(
+          new Error(
+            'fakeJourneyStore.removeResponder takes { journeyId, responderId }, not an ID alone',
+          ),
+        );
+      }
+      const { journeyId, responderId } = removal;
+      // The journey's row first, waited for while held, as the adapter's
+      // `for update` waits (D-112's lock order, approach item 6).
+      const waitForRow = () => untilReleased(journeyId.toLowerCase());
+      /**
+       * The removal's one step, decided by the removal rule under the "lock"
+       * and written at once. Without the store's now it stops before writing
+       * anything, as soon as it needs it: only a removal that removes needs
+       * the time.
+       */
+      const step = (now: Date | null): RemoveResponderResult | typeof NEEDS_NOW => {
+        const journey = journeyNamed(journeyId);
+        // The rule, in its order (approach item 2), the IDs compared exactly.
+        if (journey === undefined) {
+          return {
+            outcome: 'not_removed',
+            decision: { type: 'refused', reason: 'JOURNEY_NOT_FOUND' },
+          };
+        }
+        if (journey.state === 'ENDED') {
+          return {
+            outcome: 'not_removed',
+            decision: { type: 'ignored', reason: 'JOURNEY_ENDED' },
+          };
+        }
+        if (!journey.responderIds.includes(responderId)) {
+          return {
+            outcome: 'not_removed',
+            decision: { type: 'unchanged', reason: 'NOT_A_RESPONDER' },
+          };
+        }
+        if (now === null) {
+          return NEEDS_NOW;
+        }
+        const remaining = journey.responderIds.filter((id) => id !== responderId);
+        // The reset (approach item 4): the journey's one unresolved alert,
+        // when the removed responder is recorded on it, whatever its state.
+        const alert = alerts.find(
+          (kept) => kept.journeyId === journey.id && kept.state !== 'RESOLVED',
+        );
+        const reset = alert?.acknowledgedBy === responderId ? alert : null;
+        // The walker's warning (approach item 7): the last responder gone.
+        const warning: KeptMessage | null =
+          remaining.length === 0
+            ? {
+                messageId: syntheticUuid(),
+                alertId: null,
+                journeyId: journey.id,
+                recipientId: journey.walkerId,
+                kind: 'NO_RESPONDER',
+                round: 1,
+                createdAt: new Date(now.getTime()),
+                attempts: 0,
+                nextAttemptAt: new Date(now.getTime()),
+                sentAt: null,
+                lastFailure: null,
+                withdrawnAt: null,
+              }
+            : null;
+        const journeysAlerts = new Set(
+          alerts.filter((kept) => kept.journeyId === journey.id).map(({ id }) => id),
+        );
+
+        journey.responderIds = remaining;
+        if (reset !== null) {
+          reset.state = 'OPEN';
+          reset.acknowledgedBy = null;
+          reset.acknowledgedAt = null;
+          reset.smsRaisedAt = null;
+          reset.round += 1;
+        }
+        for (const message of outbox) {
+          if (message.sentAt !== null || message.withdrawnAt !== null) {
+            continue;
+          }
+          // The reset's withdrawal: the alert's "someone is on it" notices.
+          const byReset =
+            reset !== null &&
+            message.alertId === reset.id &&
+            WITHDRAWN_WHEN_RESET.includes(message.kind);
+          // The removal's (D-122, item 2): every unsent message of the
+          // journey's alerts to the removed responder, of any alert kind.
+          const byRemoval =
+            message.alertId !== null &&
+            journeysAlerts.has(message.alertId) &&
+            message.recipientId === responderId &&
+            WITHDRAWN_WHEN_REMOVED.includes(message.kind);
+          if (byReset || byRemoval) {
+            message.withdrawnAt = new Date(now.getTime());
+          }
+        }
+        if (warning !== null) {
+          outbox.push(warning);
+        }
+        return {
+          outcome: 'removed',
+          resetAlertId: reset?.id ?? null,
+          messages:
+            warning === null
+              ? []
+              : [
+                  {
+                    messageId: warning.messageId,
+                    recipientId: warning.recipientId,
+                    kind: warning.kind,
+                  },
+                ],
+        };
+      };
+      return answer(
+        'removeResponder',
+        async (): Promise<RemoveResponderResult> => {
+          const first = step(null);
+          if (first !== NEEDS_NOW) {
+            return first;
+          }
+          const again = step(await nowFor('removeResponder'));
+          if (again === NEEDS_NOW) {
+            throw new Error('fakeJourneyStore.removeResponder: the store’s now was not used');
           }
           return again;
         },
@@ -1720,25 +2106,22 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         if (journey === undefined || held.has(journey.id) || !isOverdue(journey, now, threshold)) {
           return { outcome: 'skipped' };
         }
-        if (journey.responderIds.length === 0) {
-          throw new Error(
-            'fakeJourneyStore.openLostContactAlert: the journey has no responder rows, so not one ' +
-              'outbox message could be written; the transaction is rolled back, and the journey ' +
-              'stays ACTIVE rather than being moved with nobody told',
-          );
-        }
+        // SM-10 (D-122, item 3): a journey with no responder row is opened as
+        // any other, with no message; the SMS check counts its alert unheard.
         if (new Set(journey.responderIds).size !== journey.responderIds.length) {
-          throw uniqueViolation('one outbox message per (alert, recipient, kind)');
+          throw uniqueViolation('one outbox message per (alert, recipient, kind, round)');
         }
         if (alerts.some((alert) => alert.journeyId === journey.id && alert.state !== 'RESOLVED')) {
           throw uniqueViolation('one alert per journey that is not RESOLVED');
         }
         const alertId = syntheticUuid();
-        const messages: StoredMessage[] = journey.responderIds.map((recipientId) => ({
+        const messages: KeptMessage[] = journey.responderIds.map((recipientId) => ({
           messageId: syntheticUuid(),
           alertId,
+          journeyId: null,
           recipientId,
           kind: 'LOST_CONTACT',
+          round: 1,
           createdAt: new Date(now.getTime()),
           attempts: 0,
           nextAttemptAt: new Date(now.getTime()),
@@ -1764,6 +2147,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         );
         for (const message of outbox) {
           if (
+            message.alertId !== null &&
             earlierAlertIds.has(message.alertId) &&
             WITHDRAWN_WHEN_OPENED.includes(message.kind) &&
             journey.responderIds.includes(message.recipientId) &&
@@ -1785,6 +2169,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
           acknowledgedBy: null,
           acknowledgedAt: null,
           smsRaisedAt: null,
+          round: 1,
         });
         outbox.push(...messages);
         return {
@@ -1806,6 +2191,21 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     },
     claimDueSms(request) {
       return answer('claimDueSms', () => claimOf('claimDueSms', SMS_KINDS, request));
+    },
+    unheardAlertCount() {
+      return answer('unheardAlertCount', async (): Promise<UnheardAlertCount> => {
+        const now = await nowFor('unheardAlertCount');
+        // SM-10 (D-122, item 3): every unresolved alert whose journey has no
+        // responder row, in whatever state the journey is.
+        return {
+          now,
+          count: alerts.filter(
+            (alert) =>
+              alert.state !== 'RESOLVED' &&
+              storedJourney('unheardAlertCount', alert.journeyId).responderIds.length === 0,
+          ).length,
+        };
+      });
     },
     unsentSmsCount(olderThanMs) {
       return answer('unsentSmsCount', async (): Promise<UnsentSmsCount> => {
@@ -1833,8 +2233,14 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         // holds is read all the same.
         return {
           now,
+          // SM-10 (D-122, item 3): only alerts whose journey has a responder
+          // row; one with none is counted unheard instead.
           alerts: alerts
-            .filter((alert) => isDueForEscalation(alert, now, threshold))
+            .filter(
+              (alert) =>
+                isDueForEscalation(alert, now, threshold) &&
+                storedJourney('alertsDueForEscalation', alert.journeyId).responderIds.length > 0,
+            )
             .map(({ id, journeyId, state, acknowledgedBy, smsRaisedAt, openedAt }) => ({
               id,
               journeyId,
@@ -1890,32 +2296,28 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
           return { outcome: 'skipped' };
         }
         const journey = storedJourney('escalateAlert', alert.journeyId);
+        // SM-10 (D-122, item 3): who to text is the write's to know. A journey
+        // that has lost its last responder since the read is skipped under
+        // the "lock", writing nothing; its alert is counted unheard.
         if (journey.responderIds.length === 0) {
-          throw new Error(
-            'fakeJourneyStore.escalateAlert: the alert’s journey has no responder rows, so not ' +
-              'one SMS could be written; the transaction is rolled back, and the alert stays as ' +
-              'it was rather than being escalated with nobody told',
-          );
+          return { outcome: 'skipped' };
         }
         if (new Set(journey.responderIds).size !== journey.responderIds.length) {
-          throw uniqueViolation('one outbox message per (alert, recipient, kind)');
+          throw uniqueViolation('one outbox message per (alert, recipient, kind, round)');
         }
-        const messages: StoredMessage[] = journey.responderIds.map((recipientId) => {
-          if (
-            outbox.some(
-              (message) =>
-                message.alertId === alert.id &&
-                message.recipientId === recipientId &&
-                message.kind === 'LOST_CONTACT_SMS',
-            )
-          ) {
-            throw uniqueViolation('one outbox message per (alert, recipient, kind)');
+        const messages: KeptMessage[] = journey.responderIds.map((recipientId) => {
+          // SM-10 (approach item 5): one SMS per responder per round, so a
+          // second round's SMS, after a reset, is taken.
+          if (taken(alert.id, recipientId, 'LOST_CONTACT_SMS', alert.round)) {
+            throw uniqueViolation('one outbox message per (alert, recipient, kind, round)');
           }
           return {
             messageId: syntheticUuid(),
             alertId: alert.id,
+            journeyId: null,
             recipientId,
             kind: 'LOST_CONTACT_SMS',
+            round: alert.round,
             createdAt: new Date(now.getTime()),
             attempts: 0,
             nextAttemptAt: new Date(now.getTime()),
@@ -2033,8 +2435,14 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       acknowledgedBy: givenAcknowledgedBy = null,
       acknowledgedAt = null,
       smsRaisedAt = null,
+      round = 1,
     }) {
       const journey = storedJourney('seedAlert', journeyId);
+      // SM-10 (approach item 9): `round >= 1`, a whole number, as the check
+      // and the integer column hold it.
+      if (!Number.isInteger(round) || round < 1) {
+        throw checkViolation('alerts', 'round');
+      }
       if ((resolvedAt === null) !== (resolution === null)) {
         throw checkViolation('alerts', 'resolved_at and resolution, both set or both null');
       }
@@ -2069,6 +2477,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         acknowledgedBy,
         acknowledgedAt: copyOf(acknowledgedAt),
         smsRaisedAt: copyOf(smsRaisedAt),
+        round,
       });
       return id;
     },
@@ -2082,6 +2491,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       sentAt = null,
       lastFailure = null,
       withdrawnAt = null,
+      round = 1,
     }) {
       const alertId = asStored(givenAlertId);
       const recipientId = asStored(givenRecipientId);
@@ -2099,22 +2509,21 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       if (lastFailure !== null && !PUSH_FAILURE_REASONS.includes(lastFailure)) {
         throw checkViolation('outbox', 'last_failure');
       }
-      if (
-        outbox.some(
-          (message) =>
-            message.alertId === alertId &&
-            message.recipientId === recipientId &&
-            message.kind === kind,
-        )
-      ) {
-        throw uniqueViolation('one outbox message per (alert, recipient, kind)');
+      // SM-10 (approach item 9): `round >= 1`, and the unique key gains it.
+      if (!Number.isInteger(round) || round < 1) {
+        throw checkViolation('outbox', 'round');
+      }
+      if (taken(alertId, recipientId, kind, round)) {
+        throw uniqueViolation('one outbox message per (alert, recipient, kind, round)');
       }
       const messageId = syntheticUuid();
       outbox.push({
         messageId,
         alertId,
+        journeyId: null,
         recipientId,
         kind,
+        round,
         createdAt: new Date(createdAt.getTime()),
         attempts,
         nextAttemptAt: new Date(nextAttemptAt.getTime()),
@@ -2126,6 +2535,25 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     },
     removeResponders(journeyId) {
       storedJourney('removeResponders', journeyId).responderIds = [];
+    },
+    removeResponderRow(journeyId, givenResponderId) {
+      const journey = storedJourney('removeResponderRow', journeyId);
+      const responderId = asStored(givenResponderId);
+      if (!journey.responderIds.includes(responderId)) {
+        throw new Error(
+          `fakeJourneyStore.removeResponderRow: ${responderId} is not a responder of journey ${journey.id}`,
+        );
+      }
+      journey.responderIds = journey.responderIds.filter((id) => id !== responderId);
+    },
+    alertRounds() {
+      return alerts.map(({ id, round }) => ({ alertId: id, round }));
+    },
+    messageRounds() {
+      return outbox.map(({ messageId, round }) => ({ messageId, round }));
+    },
+    journeyMessages() {
+      return outbox.filter(isJourneyMessage).map(copyJourneyMessage);
     },
     journeys() {
       return stored.map(copy);
@@ -2156,7 +2584,9 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       return alerts.map(copyAlert);
     },
     outbox() {
-      return outbox.map(copyMessage);
+      // An alert's messages, in the shape they had before SM-10; a journey's
+      // messages are read through journeyMessages().
+      return outbox.filter(isAlertMessage).map(copyMessage);
     },
     hold(journeyId) {
       const journey = storedJourney('hold', journeyId);

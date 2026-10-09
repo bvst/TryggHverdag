@@ -53,32 +53,54 @@
  *     escalated, and open for ESCALATE_AFTER_MS or more (D-019, "or more")
  *     is ESCALATED, and every responder gets an SMS. "Nobody is on it" is
  *     D-114's: a missing half of an acknowledgement (the state, or who) sends
- *     the SMS. A time that is not one never escalates.
+ *     the SMS. Both times come through `databaseTime`, which throws on one
+ *     that is not a time, so an unreadable time fails the sweep before this
+ *     rule is asked.
+ *   - Removing a responder (SM-10, and the last-responder half of SM-02,
+ *     D-122, D-123): a journey event, `remove`, heard for an unended journey
+ *     only (an ENDED one is ignored, SM-07), and only for one of its
+ *     responders, IDs compared exactly. It never changes the journey's state;
+ *     it says whether the responder removed was the last, so the walker is
+ *     warned. And the alert rule's third event, `acknowledger_removed`: the
+ *     unresolved alert the removed responder is recorded on goes back to OPEN,
+ *     whatever its state, so escalation resumes; a RESOLVED alert keeps who
+ *     helped on record.
  */
 
 /** Every state a journey can be in (D-033). The database admits exactly these. */
 export const JOURNEY_STATES = ['ACTIVE', 'LOST_CONTACT', 'ENDED'] as const;
 
 /** Every event a journey can meet. */
-export const JOURNEY_EVENTS = ['start', 'heartbeat', 'silence', 'contact', 'home'] as const;
+export const JOURNEY_EVENTS = [
+  'start',
+  'heartbeat',
+  'silence',
+  'contact',
+  'home',
+  'remove',
+] as const;
 
 /**
  * Every state an alert can be in (D-033), in order. The database admits
  * exactly these. Alerts open OPEN; nobody acknowledging within two minutes
  * makes them ESCALATED (LOST-07), "I'm on it" ACKNOWLEDGED (LOST-06), and
  * contact or "I'm home" resolves them, whatever their state (D-112, D-116).
+ * Removing the responder recorded on an unresolved alert puts it back to OPEN,
+ * whatever its state, and it escalates again in its next round (SM-10, D-123).
  */
 export const ALERT_STATES = ['OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED'] as const;
 
 export type AlertState = (typeof ALERT_STATES)[number];
 
-/** Every event an alert can meet (LOST-06, LOST-07): its own list, apart from the journey's. */
-export const ALERT_EVENTS = ['acknowledge', 'escalate'] as const;
+/** Every event an alert can meet (LOST-06, LOST-07, SM-10): its own list, apart from the journey's. */
+export const ALERT_EVENTS = ['acknowledge', 'escalate', 'acknowledger_removed'] as const;
 
 /**
- * Every kind of message an alert causes: the lost-contact alert, the
- * stand-down for each way it resolves, the notice that someone is on it
- * (D-113), and the escalation SMS (D-019). The database admits exactly these.
+ * Every kind of message there is: those an alert causes, the lost-contact
+ * alert, the stand-down for each way it resolves, the notice that someone is
+ * on it (D-113) and the escalation SMS (D-019); and the walker's warning that
+ * the journey's last responder was removed (SM-02, D-123), a journey's
+ * message. The database admits exactly these.
  */
 export const MESSAGE_KINDS = [
   'LOST_CONTACT',
@@ -86,6 +108,7 @@ export const MESSAGE_KINDS = [
   'HOME',
   'ACKNOWLEDGED',
   'LOST_CONTACT_SMS',
+  'NO_RESPONDER',
 ] as const;
 
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
@@ -100,13 +123,27 @@ export type MessageKind = (typeof MESSAGE_KINDS)[number];
  */
 export const SMS_KINDS = ['LOST_CONTACT_SMS'] as const satisfies readonly MessageKind[];
 
-/** The kinds that go by push: every other kind, in MESSAGE_KINDS' order. */
+/**
+ * The kinds that go by push: every other kind, in MESSAGE_KINDS' order. The
+ * walker's warning is one, never at the critical level (D-087).
+ */
 export const PUSH_KINDS = [
   'LOST_CONTACT',
   'BACK_IN_CONTACT',
   'HOME',
   'ACKNOWLEDGED',
+  'NO_RESPONDER',
 ] as const satisfies readonly MessageKind[];
+
+/**
+ * The kinds a journey's messages carry, with no alert (SM-02, D-123): the
+ * walker's warning that the last responder was removed. Every kind is in
+ * exactly one of this, WITHDRAWN_WHEN_RESOLVED and the open's list
+ * (`ALERT_RESOLUTIONS`), and a test names any kind placed in none or two
+ * (SM-10-AC17). Nothing withdraws a journey's message in M2: every withdrawal
+ * is by alert, and the removal's by a recipient who is never the walker.
+ */
+export const JOURNEY_MESSAGE_KINDS = ['NO_RESPONDER'] as const satisfies readonly MessageKind[];
 
 /**
  * The kinds an alert's resolution withdraws from its own alert while unsent
@@ -128,6 +165,27 @@ export const WITHDRAWN_WHEN_RESOLVED = [
  * Each is also withdrawn on resolution, which a test holds (LOST-07-AC14).
  */
 export const WITHDRAWN_WHEN_ACKNOWLEDGED = [
+  'LOST_CONTACT_SMS',
+] as const satisfies readonly MessageKind[];
+
+/**
+ * The kinds a reset withdraws from its own alert while unsent, when the
+ * responder recorded on it is removed (SM-10, D-113's reasoning): its notices
+ * that someone is on it, false once nobody is. Each is also withdrawn on
+ * resolution, which a test holds (SM-10-AC17).
+ */
+export const WITHDRAWN_WHEN_RESET = ['ACKNOWLEDGED'] as const satisfies readonly MessageKind[];
+
+/**
+ * The kinds a removal withdraws while unsent from the removed responder, of
+ * any of the journey's alerts (D-122, item 2: a removed responder receives
+ * nothing more): every kind that is not a journey's, in MESSAGE_KINDS' order.
+ */
+export const WITHDRAWN_WHEN_REMOVED = [
+  'LOST_CONTACT',
+  'BACK_IN_CONTACT',
+  'HOME',
+  'ACKNOWLEDGED',
   'LOST_CONTACT_SMS',
 ] as const satisfies readonly MessageKind[];
 
@@ -201,15 +259,30 @@ export interface JourneyForHeartbeat {
 }
 
 /**
- * What an event meets, as the module read it. A journey handed in without its
- * walker belongs to nobody a heartbeat can name, so it is not found.
- *
- * The walker and the device are optional for the transition test's table,
- * not for any caller: the table asks every (situation, event) pair through
- * the third `transition` overload, with one situation type for every event.
- * The module hands a heartbeat a `JourneyForHeartbeat`, which has both.
+ * The journey a removal names, in any state, and its responders as the store
+ * read them (SM-10).
  */
-type Situation = WalkersJourney & Partial<Pick<JourneyForHeartbeat, 'walkerId' | 'deviceId'>>;
+export interface JourneyForRemoval {
+  id: string;
+  state: JourneyState;
+  responderIds: readonly string[];
+}
+
+/**
+ * What an event meets, as the module read it. A journey handed in without its
+ * walker belongs to nobody a heartbeat can name, so it is not found; one
+ * handed in without its responders has none a removal can name.
+ *
+ * The walker, the device and the responders are optional for the transition
+ * test's table, not for any caller: the table asks every (situation, event)
+ * pair through the last `transition` overload, with one situation type for
+ * every event. The module hands a heartbeat a `JourneyForHeartbeat`, which
+ * has the walker and the device, and a removal a `JourneyForRemoval`, which
+ * has the responders.
+ */
+type Situation = WalkersJourney &
+  Partial<Pick<JourneyForHeartbeat, 'walkerId' | 'deviceId'>> &
+  Partial<Pick<JourneyForRemoval, 'responderIds'>>;
 
 /** A walker asks to start a journey, naming who should follow it. */
 export interface StartEvent {
@@ -261,7 +334,14 @@ export interface HomeEvent {
   deviceId: string;
 }
 
-export type JourneyEvent = StartEvent | HeartbeatEvent | SilenceEvent | ContactEvent | HomeEvent;
+/** A responder is removed from the journey (SM-10): who, and nothing else. */
+export interface RemoveEvent {
+  type: 'remove';
+  responderId: string;
+}
+
+export type JourneyEvent =
+  StartEvent | HeartbeatEvent | SilenceEvent | ContactEvent | HomeEvent | RemoveEvent;
 
 /** Why a start was refused. */
 export type StartRefusal =
@@ -290,8 +370,19 @@ export type ContactOutcome =
 export type HomeOutcome =
   { type: 'ended'; state: 'ENDED'; reason: 'HOME'; resolvesAlert: boolean } | HeartbeatRefusal;
 
+/**
+ * Removed, the journey's state as it was, saying whether no responder is left
+ * (SM-02's last responder); or not, and why: not one of its responders, the
+ * journey over (SM-07), or no such journey.
+ */
+export type RemoveOutcome =
+  | { type: 'removed'; state: UnendedJourneyState; lastResponder: boolean }
+  | { type: 'unchanged'; reason: 'NOT_A_RESPONDER' }
+  | { type: 'ignored'; reason: 'JOURNEY_ENDED' }
+  | { type: 'refused'; reason: 'JOURNEY_NOT_FOUND' };
+
 export type TransitionOutcome =
-  StartOutcome | HeartbeatOutcome | SilenceOutcome | ContactOutcome | HomeOutcome;
+  StartOutcome | HeartbeatOutcome | SilenceOutcome | ContactOutcome | HomeOutcome | RemoveOutcome;
 
 /**
  * An alert as "I'm on it" reads it (LOST-06): its state, who is recorded on
@@ -347,7 +438,26 @@ export interface EscalateEvent {
 /** Nobody on it for two minutes: ESCALATED, and every responder gets an SMS. Or nothing changes. */
 export type EscalateOutcome = { type: 'escalated'; state: 'ESCALATED' } | { type: 'unchanged' };
 
-export type AlertEvent = AcknowledgeEvent | EscalateEvent;
+/**
+ * An alert as the reset reads it (SM-10): its state, and who is recorded on
+ * it, null for nobody, as the store read them under the journey's row.
+ */
+export interface AlertForReset {
+  id: string;
+  state: AlertState;
+  acknowledgedBy: string | null;
+}
+
+/** A responder of the alert's journey is removed (SM-10): who, and nothing else. */
+export interface AcknowledgerRemovedEvent {
+  type: 'acknowledger_removed';
+  responderId: string;
+}
+
+/** Back to OPEN, nobody on it, so escalation resumes; or nothing changes. */
+export type ResetOutcome = { type: 'reset'; state: 'OPEN' } | { type: 'unchanged' };
+
+export type AlertEvent = AcknowledgeEvent | EscalateEvent | AcknowledgerRemovedEvent;
 
 /**
  * What an alert event meets, as the store read it. The responders and the
@@ -370,9 +480,10 @@ type AlertSituation = Pick<AlertForAcknowledgement, 'id' | 'state' | 'acknowledg
  *   journey has that ID. For silence, the journey the watchdog read, by its
  *   ID and state, or null. For contact, the journey whose row the store
  *   holds, by its ID and state. For "I'm home", the journey it names, as for
- *   a heartbeat.
+ *   a heartbeat. For a removal, the journey it names, in any state, with its
+ *   responders, or null when no journey has that ID.
  *
- * The first five overloads are the ones callers use: each event with the
+ * The first six overloads are the ones callers use: each event with the
  * situation it needs, and the outcome it can have. The last, any situation
  * with any event, exists for the transition test's table, which reads its
  * types with `Parameters<typeof transition>` (the last overload) so that it
@@ -386,6 +497,7 @@ export function transition(
 export function transition(current: WalkersJourney | null, event: SilenceEvent): SilenceOutcome;
 export function transition(current: WalkersJourney | null, event: ContactEvent): ContactOutcome;
 export function transition(current: JourneyForHeartbeat | null, event: HomeEvent): HomeOutcome;
+export function transition(current: JourneyForRemoval | null, event: RemoveEvent): RemoveOutcome;
 export function transition(current: Situation | null, event: JourneyEvent): TransitionOutcome;
 export function transition(current: Situation | null, event: JourneyEvent): TransitionOutcome {
   switch (event.type) {
@@ -399,6 +511,8 @@ export function transition(current: Situation | null, event: JourneyEvent): Tran
       return contact(current, event);
     case 'home':
       return home(current, event);
+    case 'remove':
+      return remove(current, event);
     default: {
       // A type error the day an event joins JourneyEvent without a case. And
       // a throw, never a value: a value handed back for an event nobody
@@ -523,13 +637,44 @@ function home(journey: Situation | null, event: HomeEvent): HomeOutcome {
 }
 
 /**
- * What an alert's event does (LOST-06, LOST-07). Every outcome, a refusal
- * included, is a value; only an event of a type this module does not list is
- * thrown on.
+ * The removal rule (SM-10, D-123), in its order, which is part of the rule:
+ *   1. no journey by that ID: refused, not found;
+ *   2. ENDED: ignored (SM-07), before anything else, as a heartbeat is;
+ *   3. not one of the journey's responders: unchanged, so a removal repeated
+ *      after its first answer was lost is safe with no event ID (D-103's
+ *      reading). The walker is never a responder, so the walker lands here.
+ *      IDs are compared exactly: the stores hand them back in lower case;
+ *   4. otherwise removed, the journey's state as it was, and the last
+ *      responder when no other responder is left (SM-02), so the walker is
+ *      warned.
+ */
+function remove(journey: Situation | null, { responderId }: RemoveEvent): RemoveOutcome {
+  if (journey === null) {
+    return { type: 'refused', reason: 'JOURNEY_NOT_FOUND' };
+  }
+  if (journey.state === 'ENDED') {
+    return { type: 'ignored', reason: 'JOURNEY_ENDED' };
+  }
+  // A journey handed in without its responders has none to remove.
+  if (journey.responderIds?.includes(responderId) !== true) {
+    return { type: 'unchanged', reason: 'NOT_A_RESPONDER' };
+  }
+  return {
+    type: 'removed',
+    state: journey.state,
+    lastResponder: journey.responderIds.every((id) => id === responderId),
+  };
+}
+
+/**
+ * What an alert's event does (LOST-06, LOST-07, SM-10). Every outcome, a
+ * refusal included, is a value; only an event of a type this module does not
+ * list is thrown on.
  *
  * @param alert the alert the event names, or null when no alert has that ID:
  *   for "I'm on it", with its journey's responders; for the escalation, with
- *   when it was escalated.
+ *   when it was escalated. For a removal, the journey's one unresolved alert,
+ *   or null when it has none.
  *
  * Each overload is an event with the situation it needs, and the outcome it
  * can have.
@@ -543,14 +688,20 @@ export function alertTransition(
   event: EscalateEvent,
 ): EscalateOutcome;
 export function alertTransition(
+  alert: AlertForReset | null,
+  event: AcknowledgerRemovedEvent,
+): ResetOutcome;
+export function alertTransition(
   alert: AlertSituation | null,
   event: AlertEvent,
-): AcknowledgeOutcome | EscalateOutcome {
+): AcknowledgeOutcome | EscalateOutcome | ResetOutcome {
   switch (event.type) {
     case 'acknowledge':
       return acknowledge(alert, event);
     case 'escalate':
       return escalate(alert, event);
+    case 'acknowledger_removed':
+      return reset(alert, event);
     default: {
       // A type error the day an event joins AlertEvent without a case. And a
       // throw, never a value, for an event nobody handled: a value handed
@@ -610,9 +761,13 @@ function acknowledge(
  *   6. otherwise unchanged.
  * "Someone recorded" is a responder's ID, and "already escalated" a time:
  * anything else read there, undefined or a field left out included, is a half
- * that is missing, and fails toward the SMS too (D-114). A comparison with a
- * time that is not one never holds, so an invalid moment of the opening or of
- * now escalates nothing rather than texting on a guess.
+ * that is missing, and fails toward the SMS too (D-114). "Already escalated"
+ * is this round's: a reset clears the time, so the next round escalates
+ * (SM-10, D-123).
+ * Both times are the database's, read through `databaseTime`, which throws on
+ * one that is not a time, so the sweep fails and pages before this rule is
+ * asked. Were one to reach it, no comparison with it holds, so it would
+ * escalate nothing: that is the throw's case, not a missing half.
  */
 function escalate(alert: AlertSituation | null, { openedAt, now }: EscalateEvent): EscalateOutcome {
   if (alert === null || alert.state === 'RESOLVED') {
@@ -628,4 +783,29 @@ function escalate(alert: AlertSituation | null, { openedAt, now }: EscalateEvent
     return { type: 'escalated', state: 'ESCALATED' };
   }
   return { type: 'unchanged' };
+}
+
+/**
+ * The reset rule (SM-10, D-123), in its order:
+ *   1. no unresolved alert: unchanged;
+ *   2. RESOLVED: unchanged. The alert is over, and who helped stays on record;
+ *   3. someone other than the removed responder recorded, or nobody:
+ *      unchanged. IDs are compared exactly, as the acknowledgement compares
+ *      them;
+ *   4. otherwise back to OPEN, whatever the state was, so escalation resumes.
+ *      A record with the removed responder on it in another state (OPEN or
+ *      ESCALATED with someone recorded, put in directly) is reset too: a
+ *      half-done record is met in the safe direction, as D-114 met one.
+ */
+function reset(
+  alert: AlertSituation | null,
+  { responderId }: AcknowledgerRemovedEvent,
+): ResetOutcome {
+  if (alert === null || alert.state === 'RESOLVED') {
+    return { type: 'unchanged' };
+  }
+  if (alert.acknowledgedBy !== responderId) {
+    return { type: 'unchanged' };
+  }
+  return { type: 'reset', state: 'OPEN' };
 }

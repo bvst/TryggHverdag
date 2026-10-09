@@ -57,8 +57,9 @@
  *     message per responder, all of it or none of it, and only for a journey
  *     still ACTIVE and overdue under the lock: contact that came after the
  *     read wins (AC9), a held row is skipped and never waited for (AC8), a
- *     journey with no responder is refused (AC12), and opens that race leave
- *     one alert (AC7); an open told to wait for a held row answers `held`
+ *     journey with no responder is opened with no message (SM-10-AC15, which
+ *     D-122 item 3 put in place of LOST-02-AC12's refusal), and opens that
+ *     race leave one alert (AC7); an open told to wait for a held row answers `held`
  *     when the row stays held, and otherwise checks the row as its holder
  *     left it (AC20);
  *   - a claim hands each due message to one claimer, once, leased; a failure
@@ -79,6 +80,29 @@
  *     than the adapter, with the first withdrawn message only;
  *   - a resolution withdraws exactly the kinds withdrawn on resolution, of
  *     its own alert, and nothing else (AC13).
+ *
+ * And when a responder is removed (SM-10 and the last-responder half of
+ * SM-02, its spec's shared behaviours 1 to 14 and AC10's, D-100, D-122,
+ * D-123):
+ *   - the read is a plain read of the journey's state and its responder rows
+ *     (AC1); the write decides by the removal rule under the journey's row,
+ *     as its holder left it, and racing removals of one responder leave one
+ *     removed (AC1, AC3);
+ *   - removing the acknowledger resets the alert: OPEN, who and when and the
+ *     escalation time cleared, the round raised, its unsent notices
+ *     withdrawn (AC4); the escalation then writes the next round's SMS beside
+ *     the earlier round's, and a second acknowledgement its notices in the
+ *     new round (AC6, AC7); an acknowledgement read before a removal is
+ *     ALERT_NOT_FOUND under the lock (AC9);
+ *   - the removed responder's unsent messages of the journey's alerts are
+ *     withdrawn, whatever their kind, and nothing later is written to them
+ *     (AC10, AC11);
+ *   - the last responder's removal writes one NO_RESPONDER to the walker,
+ *     a journey's message, which the push claim hands out and nothing
+ *     withdraws (AC12 to AC14); a journey with no responder opens with no
+ *     message, is never escalated, and is counted unheard (AC15);
+ *   - for any sequence of steps the rules hold, a fast-check property (AC8),
+ *     and each of the five withdrawals takes exactly its own kinds (AC17).
  * Times are the store's own: the fake's clock, or the database's now(). The
  * database's moves on while a test runs, so a subject says how far from the
  * threshold a time must be to be sure of its side (`timeMarginMs`); the fake's
@@ -97,7 +121,14 @@ import {
   SMS_KINDS,
   WITHDRAWN_WHEN_ACKNOWLEDGED,
   WITHDRAWN_WHEN_OPENED,
+  WITHDRAWN_WHEN_REMOVED,
+  WITHDRAWN_WHEN_RESET,
   WITHDRAWN_WHEN_RESOLVED,
+  type AlertRound,
+  type JourneyForRemoval,
+  type MessageRound,
+  type RemoveResponderResult,
+  type UnheardAlertCount,
   type AlertForAcknowledgement,
   type AlertMessage,
   type ClaimedMessages,
@@ -213,6 +244,15 @@ export interface JourneyStoreUnderTest {
     claimDueSms(request: { limit: number; leaseMs: number }): Promise<ClaimedMessages>;
     /** LOST-07: the SMS messages unsent, not withdrawn and written `olderThanMs` or more ago. */
     unsentSmsCount(olderThanMs: number): Promise<UnsentSmsCount>;
+    /** SM-10: the journey's state and its responder rows, read without a lock; null for none. */
+    journeyForRemoval(journeyId: string): Promise<JourneyForRemoval | null>;
+    /** SM-10: decided by the removal rule under the journey's row, and written, or not. */
+    removeResponder(removal: {
+      journeyId: string;
+      responderId: string;
+    }): Promise<RemoveResponderResult>;
+    /** SM-10 (D-122, item 3): the unresolved alerts whose journey has no responder row, and the store's now. */
+    unheardAlertCount(): Promise<UnheardAlertCount>;
   };
   /** A new user, by the store's own means: a row in the real table, an entry in the fake. */
   addUser(): Promise<string>;
@@ -320,6 +360,8 @@ export interface JourneyStoreUnderTest {
     acknowledgedAt?: Date | null;
     /** LOST-07: when it was escalated to SMS; left out, never. */
     smsRaisedAt?: Date | null;
+    /** SM-10: its round; left out, the column's default, 1. */
+    round?: number;
   }): Promise<string>;
   /**
    * LOST-03: an outbox message put in directly, as a test's own setup.
@@ -336,8 +378,14 @@ export interface JourneyStoreUnderTest {
     sentAt?: Date | null;
     lastFailure?: PushFailureReason | null;
     withdrawnAt?: Date | null;
+    /** SM-10: its round; left out, the column's default, 1. */
+    round?: number;
   }): Promise<string>;
-  /** LOST-03-AC4: every responder row of the journey removed directly: nothing in the code removes one yet. */
+  /**
+   * LOST-03-AC4: every responder row of the journey removed directly, as a
+   * test's own setup, and nothing else: no reset, no withdrawal, no warning
+   * (SM-10's removal does those).
+   */
   removeResponders(journeyId: string): Promise<void>;
   /**
    * LOST-06: each alert of this journey's acknowledgement, read by a reader of
@@ -363,6 +411,47 @@ export interface JourneyStoreUnderTest {
     journeyId: string,
     change: 'unchanged' | 'acknowledge' | 'resolve',
   ): Promise<{ release(): Promise<void> }>;
+  /**
+   * SM-10: each alert of this journey's round, read by a reader of its own so
+   * that `alertsOf` keeps its shape. In any order.
+   */
+  roundsOf(journeyId: string): Promise<AlertRound[]>;
+  /**
+   * SM-10: each message of this journey's alerts' round, read by a reader of
+   * its own so that `messagesOf` keeps its shape. In any order.
+   */
+  messageRoundsOf(journeyId: string): Promise<MessageRound[]>;
+  /** SM-10: the journey's own messages, naming it and no alert: the walker's warnings. In any order. */
+  journeyMessagesOf(journeyId: string): Promise<JourneyMessageAsStored[]>;
+  /**
+   * SM-10-AC3: holds the journey's row as `hold` does, and lets it go once a
+   * removal is waiting for it, having first changed the journey as a
+   * transaction in flight would: `{ remove }`, that responder's row deleted
+   * and nothing else; `end`, the journey ENDED; `unchanged`, nothing.
+   * `release` lets go at once if no removal came.
+   */
+  holdUntilRemovalWaits(
+    journeyId: string,
+    change: 'unchanged' | 'end' | { remove: string },
+  ): Promise<{ release(): Promise<void> }>;
+}
+
+/**
+ * A journey's message as a store under test holds it (SM-10): the walker's
+ * warning, naming the journey and no alert.
+ */
+export interface JourneyMessageAsStored {
+  messageId: string;
+  journeyId: string;
+  recipientId: string;
+  kind: string;
+  round: number;
+  createdAt: Date;
+  attempts: number;
+  nextAttemptAt: Date;
+  sentAt: Date | null;
+  lastFailure: string | null;
+  withdrawnAt: Date | null;
 }
 
 /** Who acknowledged an alert, and when, as a store under test holds it: both null until someone did (LOST-06). */
@@ -1073,6 +1162,235 @@ async function allSent(subject: JourneyStoreUnderTest, messageIds: readonly stri
   for (const messageId of messageIds) {
     await subject.store.markSent(messageId);
   }
+}
+
+// ---------------------------------------------------------------------------
+// SM-10: removing a responder, the reset, the round and the walker's warning
+// (its spec's shared behaviours 1 to 14, and AC10's, D-100).
+// ---------------------------------------------------------------------------
+
+/** The walker's warning that the last responder was removed (SM-02, D-087). */
+const WARNING = 'NO_RESPONDER';
+
+/** The removal rule's answers that write nothing, as the store hands them back (approach item 2). */
+const NOT_A_RESPONDER: RemoveResponderResult = {
+  outcome: 'not_removed',
+  decision: { type: 'unchanged', reason: 'NOT_A_RESPONDER' },
+};
+const NO_SUCH_JOURNEY: RemoveResponderResult = {
+  outcome: 'not_removed',
+  decision: { type: 'refused', reason: 'JOURNEY_NOT_FOUND' },
+};
+const JOURNEY_OVER: RemoveResponderResult = {
+  outcome: 'not_removed',
+  decision: { type: 'ignored', reason: 'JOURNEY_ENDED' },
+};
+
+/** A removal that removed, or a failed expectation saying what it was instead. */
+function removed(
+  result: RemoveResponderResult,
+  what = 'the removal',
+): { resetAlertId: string | null; messages: AlertMessage[] } {
+  expect(result.outcome, `${what} removed: ${JSON.stringify(result)}`).toBe('removed');
+  if (result.outcome !== 'removed') {
+    throw new Error(`${what} was answered ${JSON.stringify(result)}`);
+  }
+  return result;
+}
+
+/** A removal of this responder from this journey, as the store takes it. */
+function removal(
+  journey: { journeyId: string },
+  responderId: string,
+): { journeyId: string; responderId: string } {
+  return { journeyId: journey.journeyId, responderId };
+}
+
+/** This alert's round, as the store under test holds it; undefined for an alert it does not hold. */
+async function roundOf(
+  subject: JourneyStoreUnderTest,
+  journeyId: string,
+  alertId: string,
+): Promise<number | undefined> {
+  return (await subject.roundsOf(journeyId)).find((each) => each.alertId === alertId)?.round;
+}
+
+/** Each message of the journey's alerts' round, by message ID. */
+async function messageRoundsByIdOf(
+  subject: JourneyStoreUnderTest,
+  journeyId: string,
+): Promise<Map<string, number>> {
+  return new Map(
+    (await subject.messageRoundsOf(journeyId)).map(({ messageId, round }) => [messageId, round]),
+  );
+}
+
+/** The journey's responders as stored, sorted; undefined for a journey the walker does not have. */
+async function respondersOf(
+  subject: JourneyStoreUnderTest,
+  journey: { walkerId: string; journeyId: string },
+): Promise<string[] | undefined> {
+  const stored = (await subject.journeysOf(journey.walkerId)).find(
+    ({ id }) => id === journey.journeyId,
+  );
+  return stored === undefined ? undefined : [...stored.responderIds].sort();
+}
+
+/** Everything a store holds of one journey that a removal could change: its responders, its alerts and their rounds, and its messages, its alerts' and its own. */
+async function removalRecordOf(
+  subject: JourneyStoreUnderTest,
+  journey: { walkerId: string; journeyId: string },
+) {
+  return {
+    ...(await escalationRecordOf(subject, journey.journeyId)),
+    journeys: normalised(await subject.journeysOf(journey.walkerId)),
+    rounds: [...(await subject.roundsOf(journey.journeyId))].sort((a, b) =>
+      a.alertId.localeCompare(b.alertId),
+    ),
+    messageRounds: byMessage(await subject.messageRoundsOf(journey.journeyId)),
+    journeyMessages: byMessage(await subject.journeyMessagesOf(journey.journeyId)),
+  };
+}
+
+/** Whether a moment lies between two readings of the store's now, both included: the store's own now in between. */
+function between(moment: Date | null | undefined, before: Date, after: Date): boolean {
+  return (
+    moment instanceof Date &&
+    moment.getTime() >= before.getTime() &&
+    moment.getTime() <= after.getTime()
+  );
+}
+
+/** A journey's read, its responders sorted, so stores that hand rows back in any order compare equal. */
+function readSorted(read: JourneyForRemoval | null) {
+  return read === null ? null : { ...read, responderIds: [...read.responderIds].sort() };
+}
+
+/**
+ * A message put in directly for a behaviour: unsent and due `dueAgoMs`
+ * before now (or after, when negative), unless `sentAgoMs` or `withdrawnAgoMs`
+ * says otherwise. Resolves to its ID.
+ */
+async function messageFor(
+  subject: JourneyStoreUnderTest,
+  {
+    alertId,
+    recipientId,
+    kind,
+    attempts = 1,
+    lastFailure = null,
+    dueAgoMs = MINUTE,
+    sentAgoMs = null,
+    withdrawnAgoMs = null,
+    round,
+  }: {
+    alertId: string;
+    recipientId: string;
+    kind: MessageKind;
+    attempts?: number;
+    lastFailure?: PushFailureReason | null;
+    dueAgoMs?: number;
+    sentAgoMs?: number | null;
+    withdrawnAgoMs?: number | null;
+    round?: number;
+  },
+): Promise<string> {
+  const now = await subject.now();
+  return subject.seedMessage({
+    alertId,
+    recipientId,
+    kind,
+    createdAt: ago(now, 5 * MINUTE),
+    nextAttemptAt: ago(now, dueAgoMs),
+    attempts,
+    lastFailure,
+    ...(sentAgoMs === null ? {} : { sentAt: ago(now, sentAgoMs) }),
+    ...(withdrawnAgoMs === null ? {} : { withdrawnAt: ago(now, withdrawnAgoMs) }),
+    ...(round === undefined ? {} : { round }),
+  });
+}
+
+/**
+ * SM-10-AC17: a message of every kind on each alert given, unsent for each
+ * of `unsentFor` and sent for each of `sentFor`, in round 1, but for the
+ * kinds `skip` says, which the step under test writes itself.
+ */
+async function seedEveryKind(
+  subject: JourneyStoreUnderTest,
+  alerts: readonly { alertId: string; unsentFor: readonly string[]; sentFor: readonly string[] }[],
+  skip: (alertId: string, kind: MessageKind) => boolean = () => false,
+) {
+  const now = await subject.now();
+  const seeded: {
+    messageId: string;
+    alertId: string;
+    recipientId: string;
+    kind: MessageKind;
+    unsent: boolean;
+  }[] = [];
+  for (const { alertId, unsentFor, sentFor } of alerts) {
+    for (const kind of MESSAGE_KINDS) {
+      if (skip(alertId, kind)) {
+        continue;
+      }
+      for (const [recipients, unsent] of [
+        [unsentFor, true],
+        [sentFor, false],
+      ] as const) {
+        for (const recipientId of recipients) {
+          const messageId = await subject.seedMessage({
+            alertId,
+            recipientId,
+            kind,
+            createdAt: ago(now, 50 * MINUTE),
+            nextAttemptAt: ago(now, 50 * MINUTE),
+            attempts: 1,
+            lastFailure: unsent ? 'UNAVAILABLE' : null,
+            sentAt: unsent ? null : ago(now, 49 * MINUTE),
+          });
+          seeded.push({ messageId, alertId, recipientId, kind, unsent });
+        }
+      }
+    }
+  }
+  return seeded;
+}
+
+/** Every message of these journeys' alerts that is withdrawn, sorted by message ID. */
+async function withdrawnIn(subject: JourneyStoreUnderTest, journeyIds: readonly string[]) {
+  return byMessage(
+    (await Promise.all(journeyIds.map((journeyId) => subject.withdrawalsOf(journeyId))))
+      .flat()
+      .filter(({ withdrawnAt }) => withdrawnAt !== null),
+  );
+}
+
+/** A journey of this walker's, put in directly from their device: the walker's next journey. */
+async function nextJourneyOf(
+  subject: JourneyStoreUnderTest,
+  walker: { walkerId: string; deviceId: string },
+  {
+    state,
+    responders,
+    startedAt,
+    lastHeartbeatAt = null,
+  }: {
+    state: FakeJourneyState;
+    responders: number;
+    startedAt: Date;
+    lastHeartbeatAt?: Date | null;
+  },
+) {
+  const responderIds = await users(subject, responders);
+  const journeyId = await subject.seedJourney({
+    walkerId: walker.walkerId,
+    deviceId: walker.deviceId,
+    state,
+    responderIds,
+    startedAt,
+    lastHeartbeatAt,
+  });
+  return { ...walker, journeyId, responderIds };
 }
 
 export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
@@ -2433,7 +2751,17 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     },
   },
   {
-    name: 'LOST-02-AC12: a journey with no responder rows is never moved: the open rejects, and it stays ACTIVE with no alert and no message',
+    // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+    // "the no-responder refusals", journey-store-behaviour.ts line 2436): this
+    // was "LOST-02-AC12: a journey with no responder rows is never moved: the
+    // open rejects, and it stays ACTIVE with no alert and no message". D-122
+    // item 3 (the owner, Q3 (a)) removes the refusal: SM-02 lets a journey
+    // run on with no responder, so when it goes silent its alert opens with
+    // nobody to tell, and the SMS check pages the owner. So the open no
+    // longer rejects; it opens, writes no message, and the journey is no
+    // longer overdue. It keeps its point, that the open is decided on the
+    // responder rows as they stand, now in the other direction (SM-10-AC15).
+    name: 'SM-10-AC15: a journey with no responder rows is moved all the same: the open opens it, LOST_CONTACT with one OPEN alert and no message, and it is no longer overdue (SM-02, LOST-02)',
     async run(subject) {
       const now = await subject.now();
       const { journeyId } = await watched(subject, {
@@ -2442,16 +2770,22 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         responders: 0,
       });
 
-      await expect(
-        subject.store.openLostContactAlert({ journeyId, afterMs: LOST_CONTACT_AFTER_MS }),
-      ).rejects.toThrow();
+      const opened = await subject.store.openLostContactAlert({
+        journeyId,
+        afterMs: LOST_CONTACT_AFTER_MS,
+      });
 
-      expect(await subject.stateOf(journeyId)).toBe('ACTIVE');
-      expect(await subject.alertsOf(journeyId)).toEqual([]);
+      expect(opened).toEqual({
+        outcome: 'opened',
+        alertId: expect.stringMatching(LOWER_UUID) as unknown,
+        messages: [],
+      });
+      expect(await subject.stateOf(journeyId)).toBe('LOST_CONTACT');
+      expect((await subject.alertsOf(journeyId)).map(({ state }) => state)).toEqual(['OPEN']);
       expect(await subject.messagesOf(journeyId)).toEqual([]);
-      // Still overdue, so the next sweep tries again, and the watchdog reports it.
+      // No longer overdue, so no sweep tries it again.
       const read = await subject.store.overdueJourneys(LOST_CONTACT_AFTER_MS);
-      expect(read.journeys.map(({ id }) => id)).toContain(journeyId);
+      expect(read.journeys.map(({ id }) => id)).not.toContain(journeyId);
     },
   },
   {
@@ -5576,15 +5910,27 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     },
   },
   {
-    name: 'LOST-07-AC15: escalateAlert refuses an alert whose journey has no responder row, writing nothing',
+    // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+    // "the no-responder refusals", journey-store-behaviour.ts line 5579): this
+    // was "LOST-07-AC15: escalateAlert refuses an alert whose journey has no
+    // responder row, writing nothing", and expected a rejection in the
+    // store's own words. D-122 item 3 removes the refusal: an alert whose
+    // journey has no responder is unheard, counted for the SMS check's page,
+    // and its escalation is skipped under the lock, never a failure that
+    // holds the worker's check down. It keeps its point, that nothing is
+    // written for such an alert: the record unchanged, no escalation time and
+    // no SMS, and the due read never offers it.
+    name: 'SM-10-AC15: escalateAlert skips an alert whose journey has no responder row, writing nothing, and alertsDueForEscalation never reads it (LOST-07)',
     async run(subject) {
       const journey = await alerted(subject, { responders: 2 });
       await subject.removeResponders(journey.journeyId);
       const before = await escalationRecordOf(subject, journey.journeyId);
 
-      // In the store's own words, as the open's refusal is (LOST-02-AC12).
-      await expect(subject.store.escalateAlert({ alertId: journey.alertId })).rejects.toThrow(
-        REFUSED_FOR_NO_RESPONDER,
+      expect(
+        (await subject.store.alertsDueForEscalation(ESCALATE_AFTER_MS)).alerts.map(({ id }) => id),
+      ).not.toContain(journey.alertId);
+      expect(await subject.store.escalateAlert({ alertId: journey.alertId })).toEqual(
+        NOT_ESCALATED,
       );
 
       expect(await escalationRecordOf(subject, journey.journeyId)).toEqual(before);
@@ -6694,6 +7040,1966 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
         for (const { withdrawnAt } of withdrawn) {
           expect(withdrawnAt, 'the open').toEqual(openedAt);
         }
+      }
+    },
+  },
+  {
+    name: 'SM-10-AC1: journeyForRemoval reads a journey’s state and its responder rows, without a lock; null for an ID no journey has',
+    async run(subject) {
+      const now = await subject.now();
+      for (const state of STATES) {
+        const journey = await watched(subject, { state, startedAt: ago(now, HOUR), responders: 2 });
+        const expected = {
+          id: journey.journeyId,
+          state,
+          responderIds: [...journey.responderIds].sort(),
+        };
+
+        expect(readSorted(await subject.store.journeyForRemoval(journey.journeyId)), state).toEqual(
+          expected,
+        );
+        expect(
+          readSorted(await subject.store.journeyForRemoval(journey.journeyId.toUpperCase())),
+          `${state}, its ID in upper case`,
+        ).toEqual(expected);
+        // A plain read: a row another transaction holds is read all the same, at once.
+        const holder = await subject.hold(journey.journeyId);
+        try {
+          expect(
+            readSorted(
+              await within(
+                2_000,
+                subject.store.journeyForRemoval(journey.journeyId),
+                'the read of a held journey',
+              ),
+            ),
+            `${state}, held`,
+          ).toEqual(expected);
+        } finally {
+          await holder.release();
+        }
+      }
+
+      // The responder rows as they stand: none, once every row is gone.
+      const bare = await watched(subject, { startedAt: ago(now, HOUR), responders: 2 });
+      await subject.removeResponders(bare.journeyId);
+      expect(await subject.store.journeyForRemoval(bare.journeyId)).toEqual({
+        id: bare.journeyId,
+        state: 'ACTIVE',
+        responderIds: [],
+      });
+      expect(await subject.store.journeyForRemoval(syntheticUuid())).toBeNull();
+    },
+  },
+  {
+    name: 'SM-10-AC1: removeResponder removes exactly the named responder’s row of an unended journey and nothing else of it; for an ended journey, a non-responder or no journey it answers not_removed with the rule’s decision and writes nothing (SM-02, SM-07, SM-08)',
+    async run(subject) {
+      for (const state of UNENDED) {
+        const now = await subject.now();
+        const journey =
+          state === 'ACTIVE'
+            ? await watched(subject, {
+                startedAt: ago(now, HOUR),
+                lastHeartbeatAt: ago(now, MINUTE),
+                responders: 3,
+              })
+            : await alerted(subject, { responders: 3 });
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        expect(r1.toUpperCase(), 'an ID with a letter in it').not.toBe(r1);
+        // Another walker's journey, which R2 follows too, with R4.
+        const [otherWalker = '', r4 = ''] = await users(subject, 2);
+        const other = {
+          walkerId: otherWalker,
+          journeyId: await subject.seedJourney({
+            walkerId: otherWalker,
+            deviceId: await subject.addDevice(otherWalker),
+            state: 'ACTIVE',
+            responderIds: [r2, r4],
+            startedAt: ago(now, HOUR),
+          }),
+        };
+        const before = await removalRecordOf(subject, journey);
+        const otherBefore = await removalRecordOf(subject, other);
+
+        expect(await subject.store.removeResponder(removal(journey, r2)), state).toEqual({
+          outcome: 'removed',
+          resetAlertId: null,
+          messages: [],
+        });
+
+        // R2's row is gone and nothing else of J changed: its state, its
+        // start, its alert and every message as they were, and no warning,
+        // since two responders remain.
+        const after = await removalRecordOf(subject, journey);
+        expect(await respondersOf(subject, journey), state).toEqual([r1, r3].sort());
+        expect(after, state).toEqual({
+          ...before,
+          journeys: before.journeys.map((each) =>
+            each.id === journey.journeyId ? { ...each, responderIds: [r1, r3].sort() } : each,
+          ),
+        });
+        expect(await removalRecordOf(subject, other), `${state}: R2’s row elsewhere`).toEqual(
+          otherBefore,
+        );
+
+        // Safe twice, with no event ID (D-103's reading): R2 is no longer
+        // there. And nobody else who is not a responder of J, the walker
+        // included, IDs compared exactly.
+        for (const [who, responderId] of [
+          ['R2 again', r2],
+          ['the walker', journey.walkerId],
+          ['a user who follows only another journey', r4],
+          ['an ID that is no user’s', syntheticUuid()],
+          ['R1’s ID in upper case', r1.toUpperCase()],
+        ] as const) {
+          expect(
+            await subject.store.removeResponder(removal(journey, responderId)),
+            `${state}, ${who}`,
+          ).toEqual(NOT_A_RESPONDER);
+        }
+        expect(await removalRecordOf(subject, journey), state).toEqual(after);
+        expect(await removalRecordOf(subject, other), state).toEqual(otherBefore);
+      }
+
+      // An ENDED journey: ignored, and its responder rows stay (SM-07).
+      const ended = await watched(subject, { state: 'ENDED', startedAt: EARLIER, responders: 2 });
+      const [first = ''] = ended.responderIds;
+      const endedBefore = await removalRecordOf(subject, ended);
+      expect(await subject.store.removeResponder(removal(ended, first))).toEqual(JOURNEY_OVER);
+      expect(await removalRecordOf(subject, ended)).toEqual(endedBefore);
+      // No journey at all.
+      expect(
+        await subject.store.removeResponder({ journeyId: syntheticUuid(), responderId: first }),
+      ).toEqual(NO_SUCH_JOURNEY);
+      expect(await removalRecordOf(subject, ended)).toEqual(endedBefore);
+    },
+  },
+  {
+    name: `SM-10-AC3: removeResponder decides again under the journey’s row, as its holder left it; ${String(RACERS)} removals of one responder at once, ${String(RACE_ROUNDS)} times over: one removes, every other is unchanged, none an error (SM-09)`,
+    async run(subject) {
+      for (const [what, change] of [
+        ['let go unchanged', 'unchanged'],
+        ['let go with R2’s row deleted', 'remove'],
+        ['let go with J ended', 'end'],
+      ] as const) {
+        const now = await subject.now();
+        const journey = await watched(subject, {
+          startedAt: ago(now, HOUR),
+          lastHeartbeatAt: ago(now, MINUTE),
+          responders: 3,
+        });
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        const holder = await subject.holdUntilRemovalWaits(
+          journey.journeyId,
+          change === 'remove' ? { remove: r2 } : change,
+        );
+        let result: RemoveResponderResult;
+        try {
+          result = await within(
+            10_000,
+            subject.store.removeResponder(removal(journey, r2)),
+            `the removal, ${what}`,
+          );
+        } finally {
+          await holder.release();
+        }
+
+        // Decided by what the holder left, never by what was there before it.
+        expect(result, what).toEqual(
+          change === 'unchanged'
+            ? { outcome: 'removed', resetAlertId: null, messages: [] }
+            : change === 'remove'
+              ? NOT_A_RESPONDER
+              : JOURNEY_OVER,
+        );
+        expect(await respondersOf(subject, journey), what).toEqual(
+          change === 'end' ? [r1, r2, r3].sort() : [r1, r3].sort(),
+        );
+        expect(await subject.journeyMessagesOf(journey.journeyId), what).toEqual([]);
+      }
+
+      for (let round = 0; round < RACE_ROUNDS; round += 1) {
+        const at = `round ${String(round)}`;
+        const now = await subject.now();
+        const journey = await watched(subject, {
+          startedAt: ago(now, HOUR),
+          lastHeartbeatAt: ago(now, MINUTE),
+          responders: 3,
+        });
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+
+        // Promise.all rejects if any removal fails outright: none may.
+        const results = await Promise.all(
+          Array.from({ length: RACERS }, () => subject.store.removeResponder(removal(journey, r2))),
+        );
+
+        expect(
+          results.filter(({ outcome }) => outcome === 'removed'),
+          at,
+        ).toEqual([{ outcome: 'removed', resetAlertId: null, messages: [] }]);
+        expect(
+          results.filter(({ outcome }) => outcome !== 'removed'),
+          at,
+        ).toEqual(Array.from({ length: RACERS - 1 }, () => NOT_A_RESPONDER));
+        expect(await respondersOf(subject, journey), at).toEqual([r1, r3].sort());
+        expect(await subject.journeyMessagesOf(journey.journeyId), at).toEqual([]);
+      }
+    },
+  },
+  {
+    name: 'SM-10-AC4: removing the acknowledger of the journey’s unresolved alert clears who and when together, clears its escalation time, sets it OPEN and raises its round, and withdraws its unsent ACKNOWLEDGED notices; removing another responder, or an acknowledger of a resolved alert, changes no alert (LOST-06)',
+    async run(subject) {
+      // The journey's unresolved alert, beside an earlier one R1 was on too
+      // (review loop 2, test-auditor's B1): J lost contact, R1 said "I'm on
+      // it", contact came back, so that alert is RESOLVED with R1 still
+      // recorded; J went silent again, and R1 is on the second alert as well.
+      // The earlier one is put in first and opened first, so a read of the
+      // journey's alerts that is not limited to the unresolved one finds it
+      // first. The rule then changes nothing, and the current alert stays
+      // ACKNOWLEDGED by someone no longer on the journey: nobody is ever
+      // texted, and nothing fails or says so. Removing R1 resets the current
+      // alert, and leaves the earlier one exactly as it was.
+      {
+        const now = await subject.now();
+        const journey = await watched(subject, {
+          state: 'LOST_CONTACT',
+          startedAt: ago(now, 3 * HOUR),
+          lastHeartbeatAt: ago(now, 3 * MINUTE + LOST_CONTACT_AFTER_MS),
+          responders: 3,
+        });
+        const { journeyId } = journey;
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        const earlier = await subject.seedAlert({
+          journeyId,
+          state: 'RESOLVED',
+          openedAt: ago(now, 2 * HOUR),
+          silentSince: ago(now, 2 * HOUR + LOST_CONTACT_AFTER_MS),
+          resolvedAt: ago(now, HOUR + 30 * MINUTE),
+          resolution: 'BACK_IN_CONTACT',
+          acknowledgedBy: r1,
+          acknowledgedAt: ago(now, 2 * HOUR - 3 * MINUTE),
+          smsRaisedAt: ago(now, 2 * HOUR - 2 * MINUTE),
+        });
+        const current = await subject.seedAlert({
+          journeyId,
+          state: 'ACKNOWLEDGED',
+          openedAt: ago(now, 3 * MINUTE),
+          silentSince: ago(now, 3 * MINUTE + LOST_CONTACT_AFTER_MS),
+          acknowledgedBy: r1,
+          acknowledgedAt: ago(now, 30 * SECOND),
+          smsRaisedAt: ago(now, MINUTE),
+        });
+        // R1's notices on the current alert: R2's sent, R3's not yet accepted.
+        const sent = await messageFor(subject, {
+          alertId: current,
+          recipientId: r2,
+          kind: NOTICE,
+          sentAgoMs: 20 * SECOND,
+        });
+        const unsent = await messageFor(subject, {
+          alertId: current,
+          recipientId: r3,
+          kind: NOTICE,
+          attempts: 2,
+          lastFailure: 'UNAVAILABLE',
+          dueAgoMs: -30 * SECOND,
+        });
+        /** The earlier alert as each reader holds it: its row, its resolution, who was on it, its escalation time and its round. */
+        const earlierRecord = async () => {
+          const record = await escalationRecordOf(subject, journeyId);
+          return {
+            alerts: record.alerts.filter(({ id }) => id === earlier),
+            resolutions: record.resolutions.filter(({ alertId }) => alertId === earlier),
+            acknowledgements: record.acknowledgements.filter(({ alertId }) => alertId === earlier),
+            escalations: record.escalations.filter(({ alertId }) => alertId === earlier),
+            rounds: (await subject.roundsOf(journeyId)).filter(
+              ({ alertId }) => alertId === earlier,
+            ),
+          };
+        };
+        const earlierBefore = await earlierRecord();
+        expect(
+          earlierBefore.acknowledgements.map(({ acknowledgedBy }) => acknowledgedBy),
+          'R1 recorded on the earlier, RESOLVED alert',
+        ).toEqual([r1]);
+        const currentBefore = (await subject.alertsOf(journeyId)).filter(
+          ({ id }) => id === current,
+        );
+        const messagesBefore = byMessage(await subject.messagesOf(journeyId));
+        const what = 'R1 removed, recorded on the current alert and on an earlier RESOLVED one';
+
+        const before = await subject.now();
+        const result = await subject.store.removeResponder(removal(journey, r1));
+        const after = await subject.now();
+
+        // The current alert reset: OPEN, nobody recorded, no escalation time,
+        // round 2.
+        expect(
+          (await subject.alertsOf(journeyId)).filter(({ id }) => id === current),
+          `${what}: the current alert is OPEN again`,
+        ).toEqual(currentBefore.map((alert) => ({ ...alert, state: 'OPEN' })));
+        expect(await acknowledgementOf(subject, journeyId, current), what).toEqual({
+          alertId: current,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+        });
+        expect(await smsRaisedAtOf(subject, journeyId, current), what).toBeNull();
+        expect(await roundOf(subject, journeyId, current), what).toBe(2);
+        expect(result, what).toEqual({ outcome: 'removed', resetAlertId: current, messages: [] });
+        // Its unsent notice withdrawn at the removal's now; the sent one, and
+        // every message's attempts and last failure, as they were.
+        const withdrawnAt = await withdrawnAtOf(subject, journeyId);
+        expect(
+          between(withdrawnAt.get(unsent), before, after),
+          `${what}: R3’s notice withdrawn at the removal’s now`,
+        ).toBe(true);
+        expect(withdrawnAt.get(sent), `${what}: R2’s sent notice`).toBeNull();
+        expect(byMessage(await subject.messagesOf(journeyId)), what).toEqual(messagesBefore);
+        // The earlier alert exactly as it was, who acknowledged it included.
+        expect(await earlierRecord(), `${what}: the earlier, RESOLVED alert`).toEqual(
+          earlierBefore,
+        );
+        expect(await subject.stateOf(journeyId), what).toBe('LOST_CONTACT');
+      }
+
+      for (const [what, seed] of [
+        ['ACKNOWLEDGED by R1', { state: 'ACKNOWLEDGED', recorded: true }],
+        [
+          'ACKNOWLEDGED by R1 after it escalated',
+          { state: 'ACKNOWLEDGED', recorded: true, smsRaisedAgoMs: MINUTE },
+        ],
+        ['OPEN with R1 recorded, put in directly', { state: 'OPEN', recorded: true }],
+        [
+          'ESCALATED with R1 recorded, put in directly',
+          { state: 'ESCALATED', recorded: true, smsRaisedAgoMs: MINUTE },
+        ],
+      ] as const) {
+        const journey = await alerted(subject, { ...seed, responders: 3 });
+        const { journeyId, alertId } = journey;
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        expect(journey.acknowledgedBy, what).toBe(r1);
+        // R1's "someone is on it" notices: R2's sent, R3's not yet accepted.
+        const sent = await messageFor(subject, {
+          alertId,
+          recipientId: r2,
+          kind: NOTICE,
+          sentAgoMs: 50 * SECOND,
+        });
+        const unsent = await messageFor(subject, {
+          alertId,
+          recipientId: r3,
+          kind: NOTICE,
+          attempts: 2,
+          lastFailure: 'UNAVAILABLE',
+          dueAgoMs: -30 * SECOND,
+        });
+        const alertsBefore = await subject.alertsOf(journeyId);
+        const messagesBefore = byMessage(await subject.messagesOf(journeyId));
+        expect(await roundOf(subject, journeyId, alertId), what).toBe(1);
+
+        const before = await subject.now();
+        const result = await subject.store.removeResponder(removal(journey, r1));
+        const after = await subject.now();
+
+        expect(result, what).toEqual({ outcome: 'removed', resetAlertId: alertId, messages: [] });
+        expect(await subject.alertsOf(journeyId), what).toEqual(
+          alertsBefore.map((alert) => ({ ...alert, state: 'OPEN' })),
+        );
+        expect(await acknowledgementOf(subject, journeyId, alertId), what).toEqual({
+          alertId,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+        });
+        expect(await smsRaisedAtOf(subject, journeyId, alertId), what).toBeNull();
+        expect(await roundOf(subject, journeyId, alertId), what).toBe(2);
+        expect(await subject.stateOf(journeyId), what).toBe('LOST_CONTACT');
+        const withdrawnAt = await withdrawnAtOf(subject, journeyId);
+        expect(
+          between(withdrawnAt.get(unsent), before, after),
+          `${what}: R3’s notice withdrawn at the removal’s now`,
+        ).toBe(true);
+        expect(withdrawnAt.get(sent), `${what}: R2’s sent notice`).toBeNull();
+        // Attempts, last failures, due times and sent times as they were.
+        expect(byMessage(await subject.messagesOf(journeyId)), what).toEqual(messagesBefore);
+      }
+
+      // Another responder removed, an alert nobody is on, and a RESOLVED
+      // alert's acknowledger: no alert changes, who helped included.
+      for (const [what, seed, who] of [
+        ['R2 removed from an alert R1 is on', { state: 'ACKNOWLEDGED', recorded: true }, 1],
+        ['R1 removed from an OPEN alert nobody is on', { state: 'OPEN' }, 0],
+        ['R1 removed after the alert R1 was on RESOLVED', { state: 'RESOLVED', recorded: true }, 0],
+      ] as const) {
+        const journey = await alerted(subject, { ...seed, responders: 3 });
+        const responderId = journey.responderIds[who] ?? '';
+        const before = await escalationRecordOf(subject, journey.journeyId);
+        const rounds = await subject.roundsOf(journey.journeyId);
+
+        expect(await subject.store.removeResponder(removal(journey, responderId)), what).toEqual({
+          outcome: 'removed',
+          resetAlertId: null,
+          messages: [],
+        });
+
+        expect(await escalationRecordOf(subject, journey.journeyId), what).toEqual(before);
+        expect(await subject.roundsOf(journey.journeyId), what).toEqual(rounds);
+      }
+
+      // The reset withdraws only what is not yet withdrawn (review loop 2:
+      // the reset's own withdrawal, found surviving beside test-auditor's S1).
+      // R1 is on the alert, so R2's and R3's notices are written and not yet
+      // accepted. R3 is removed, which withdraws R3's notice; time passes;
+      // then R1 is removed, which resets the alert. R2's notice is withdrawn
+      // at the reset's now, and R3's keeps the time of R3's removal, its
+      // attempts and its last failure.
+      {
+        const journey = await alerted(subject, {
+          state: 'ACKNOWLEDGED',
+          recorded: true,
+          responders: 3,
+        });
+        const { journeyId, alertId } = journey;
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        const r2Notice = await messageFor(subject, {
+          alertId,
+          recipientId: r2,
+          kind: NOTICE,
+          attempts: 1,
+          lastFailure: 'UNAVAILABLE',
+          dueAgoMs: -20 * SECOND,
+        });
+        const r3Notice = await messageFor(subject, {
+          alertId,
+          recipientId: r3,
+          kind: NOTICE,
+          attempts: 2,
+          lastFailure: 'UNAVAILABLE',
+          dueAgoMs: -30 * SECOND,
+        });
+        expect(
+          removed(await subject.store.removeResponder(removal(journey, r3)), 'R3’s removal')
+            .resetAlertId,
+          'R3’s removal resets nothing',
+        ).toBeNull();
+        const byR3sRemoval = (await withdrawnAtOf(subject, journeyId)).get(r3Notice) ?? null;
+        expect(byR3sRemoval, 'R3’s removal withdrew R3’s notice').toBeInstanceOf(Date);
+        const messagesBefore = byMessage(await subject.messagesOf(journeyId));
+        await subject.letTimePass(50);
+        expect(
+          (await subject.now()).getTime(),
+          'the store’s now has moved on since R3’s removal',
+        ).toBeGreaterThan(byR3sRemoval?.getTime() ?? Number.NaN);
+        const what = 'R1 removed after R3, whose notice R3’s removal withdrew';
+
+        const before = await subject.now();
+        expect(
+          removed(await subject.store.removeResponder(removal(journey, r1)), what).resetAlertId,
+          what,
+        ).toBe(alertId);
+        const after = await subject.now();
+
+        // The reset happened, so the block cannot pass for want of one.
+        expect(
+          (await subject.alertsOf(journeyId)).map(({ state }) => state),
+          what,
+        ).toEqual(['OPEN']);
+        expect(await roundOf(subject, journeyId, alertId), what).toBe(2);
+        const withdrawnAt = await withdrawnAtOf(subject, journeyId);
+        expect(
+          between(withdrawnAt.get(r2Notice), before, after),
+          `${what}: R2’s unsent notice withdrawn at the reset’s now`,
+        ).toBe(true);
+        expect(
+          withdrawnAt.get(r3Notice),
+          `${what}: R3’s notice keeps the time of R3’s removal`,
+        ).toEqual(byR3sRemoval);
+        expect(
+          (await subject.messagesOf(journeyId))
+            .filter(({ messageId }) => messageId === r3Notice)
+            .map(({ attempts, lastFailure, sentAt }) => ({ attempts, lastFailure, sentAt })),
+          `${what}: R3’s notice keeps its attempts and last failure, and is still unsent`,
+        ).toEqual([{ attempts: 2, lastFailure: 'UNAVAILABLE', sentAt: null }]);
+        expect(byMessage(await subject.messagesOf(journeyId)), what).toEqual(messagesBefore);
+      }
+    },
+  },
+  {
+    name: 'SM-10-AC6: after a reset of an escalated alert, alertsDueForEscalation reads it at once and escalateAlert writes one LOST_CONTACT_SMS per remaining responder in the new round, beside the earlier round’s (LOST-07, REL-07)',
+    async run(subject) {
+      const journey = await alerted(subject, {
+        state: 'ACKNOWLEDGED',
+        recorded: true,
+        smsRaisedAgoMs: 2 * MINUTE,
+        openedAgoMs: 4 * MINUTE,
+        responders: 3,
+      });
+      const { journeyId, alertId } = journey;
+      const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+      // Round 1's SMS, as the escalation and R1's "I'm on it" left them: R1's
+      // and R2's accepted, R3's failing and withdrawn by the acknowledgement.
+      const firstRound = [
+        await messageFor(subject, {
+          alertId,
+          recipientId: r1,
+          kind: SMS,
+          dueAgoMs: 2 * MINUTE,
+          sentAgoMs: 2 * MINUTE - SECOND,
+        }),
+        await messageFor(subject, {
+          alertId,
+          recipientId: r2,
+          kind: SMS,
+          dueAgoMs: 2 * MINUTE,
+          sentAgoMs: 2 * MINUTE - SECOND,
+        }),
+        await messageFor(subject, {
+          alertId,
+          recipientId: r3,
+          kind: SMS,
+          lastFailure: 'NO_TARGET',
+          withdrawnAgoMs: MINUTE,
+        }),
+      ];
+      const firstRoundBefore = byMessage(await subject.messagesOf(journeyId));
+      const withdrawalsBefore = byMessage(await subject.withdrawalsOf(journeyId));
+      const dueIds = async () =>
+        (await subject.store.alertsDueForEscalation(ESCALATE_AFTER_MS)).alerts.map(({ id }) => id);
+      expect(await dueIds(), 'acknowledged by R1: not due').not.toContain(alertId);
+
+      expect(removed(await subject.store.removeResponder(removal(journey, r1))).resetAlertId).toBe(
+        alertId,
+      );
+
+      // Due at once: its two minutes from the opening have long passed.
+      const read = await subject.store.alertsDueForEscalation(ESCALATE_AFTER_MS);
+      expect(read.alerts.filter(({ id }) => id === alertId)).toEqual([
+        {
+          id: alertId,
+          journeyId,
+          state: 'OPEN',
+          acknowledgedBy: null,
+          smsRaisedAt: null,
+          openedAt: journey.openedAt,
+        },
+      ]);
+      const { messages } = escalated(await subject.store.escalateAlert({ alertId }));
+
+      expect(byRecipient(messages.map(({ recipientId, kind }) => ({ recipientId, kind })))).toEqual(
+        byRecipient([
+          { recipientId: r2, kind: SMS },
+          { recipientId: r3, kind: SMS },
+        ]),
+      );
+      expect(messages.filter(({ messageId }) => firstRound.includes(messageId))).toEqual([]);
+      const rounds = await messageRoundsByIdOf(subject, journeyId);
+      expect(firstRound.map((messageId) => rounds.get(messageId))).toEqual([1, 1, 1]);
+      expect(messages.map(({ messageId }) => rounds.get(messageId))).toEqual([2, 2]);
+      // The first round's rows exactly as they were.
+      expect(
+        byMessage(
+          (await subject.messagesOf(journeyId)).filter(({ messageId }) =>
+            firstRound.includes(messageId),
+          ),
+        ),
+      ).toEqual(firstRoundBefore);
+      expect(
+        byMessage(
+          (await subject.withdrawalsOf(journeyId)).filter(({ messageId }) =>
+            firstRound.includes(messageId),
+          ),
+        ),
+      ).toEqual(withdrawalsBefore);
+      expect((await subject.alertsOf(journeyId)).map(({ state }) => state)).toEqual(['ESCALATED']);
+      expect(await smsRaisedAtOf(subject, journeyId, alertId)).not.toBeNull();
+      expect(await roundOf(subject, journeyId, alertId)).toBe(2);
+
+      // Escalated in this round: neither due nor escalated again.
+      expect(await dueIds()).not.toContain(alertId);
+      expect(await subject.store.escalateAlert({ alertId })).toEqual(NOT_ESCALATED);
+      expect(ofKind(await subject.messagesOf(journeyId), alertId, SMS)).toHaveLength(5);
+    },
+  },
+  {
+    name: 'SM-10-AC7: after a reset, recordAcknowledgement records a second acknowledger, writes its notices in the new round, and withdraws the alert’s unsent SMS; one message per alert, recipient, kind and round (LOST-06, LOST-07)',
+    async run(subject) {
+      const journey = await alerted(subject, {
+        state: 'ACKNOWLEDGED',
+        recorded: true,
+        smsRaisedAgoMs: 2 * MINUTE,
+        openedAgoMs: 4 * MINUTE,
+        responders: 3,
+      });
+      const { journeyId, alertId } = journey;
+      const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+      // Round 1: R1's notices to R2 and R3, both accepted.
+      const firstNotices = [
+        await messageFor(subject, {
+          alertId,
+          recipientId: r2,
+          kind: NOTICE,
+          sentAgoMs: 2 * MINUTE,
+        }),
+        await messageFor(subject, {
+          alertId,
+          recipientId: r3,
+          kind: NOTICE,
+          sentAgoMs: 2 * MINUTE,
+        }),
+      ];
+      removed(await subject.store.removeResponder(removal(journey, r1)));
+      const secondRound = escalated(await subject.store.escalateAlert({ alertId })).messages;
+
+      const { messages: notices } = acknowledged(
+        await subject.store.recordAcknowledgement({ alertId, responderId: r2 }),
+        'R2’s acknowledgement after the reset',
+      );
+
+      expect(notices.map(({ recipientId, kind }) => ({ recipientId, kind }))).toEqual([
+        { recipientId: r3, kind: NOTICE },
+      ]);
+      const acknowledgement = await acknowledgementOf(subject, journeyId, alertId);
+      expect(acknowledgement?.acknowledgedBy).toBe(r2);
+      expect(acknowledgement?.acknowledgedAt).toBeInstanceOf(Date);
+      expect((await subject.alertsOf(journeyId)).map(({ state }) => state)).toEqual([
+        'ACKNOWLEDGED',
+      ]);
+      let rounds = await messageRoundsByIdOf(subject, journeyId);
+      expect(notices.map(({ messageId }) => rounds.get(messageId))).toEqual([2]);
+      expect(firstNotices.map((messageId) => rounds.get(messageId))).toEqual([1, 1]);
+      // The second round's SMS, unsent, withdrawn at the acknowledgement's now.
+      const withdrawnAt = await withdrawnAtOf(subject, journeyId);
+      expect(secondRound.map(({ messageId }) => withdrawnAt.get(messageId))).toEqual(
+        secondRound.map(() => acknowledgement?.acknowledgedAt),
+      );
+      // One message per alert, recipient, kind and round.
+      const keys = (await subject.messagesOf(journeyId)).map(
+        ({ messageId, alertId: of, recipientId, kind }) =>
+          `${of} ${recipientId} ${kind} ${String(rounds.get(messageId))}`,
+      );
+      expect(new Set(keys).size).toBe(keys.length);
+
+      // R2 removed too: reset again, its round raised again, R3's unsent
+      // notice withdrawn, and the next escalation texts R3 alone.
+      expect(removed(await subject.store.removeResponder(removal(journey, r2))).resetAlertId).toBe(
+        alertId,
+      );
+      expect(await roundOf(subject, journeyId, alertId)).toBe(3);
+      expect(await acknowledgementOf(subject, journeyId, alertId)).toEqual({
+        alertId,
+        acknowledgedBy: null,
+        acknowledgedAt: null,
+      });
+      expect(
+        (await withdrawnAtOf(subject, journeyId)).get(notices[0]?.messageId ?? ''),
+      ).toBeInstanceOf(Date);
+      const thirdRound = escalated(await subject.store.escalateAlert({ alertId })).messages;
+      expect(thirdRound.map(({ recipientId, kind }) => ({ recipientId, kind }))).toEqual([
+        { recipientId: r3, kind: SMS },
+      ]);
+      rounds = await messageRoundsByIdOf(subject, journeyId);
+      expect(thirdRound.map(({ messageId }) => rounds.get(messageId))).toEqual([3]);
+
+      // The store's own rule, as the unique key and the check hold it: a
+      // second message of one kind for the same alert, recipient and round is
+      // refused; one in another round is taken; a round under 1 is refused.
+      await expect(
+        messageFor(subject, { alertId, recipientId: r3, kind: NOTICE, round: 2 }),
+      ).rejects.toThrow();
+      await expect(
+        messageFor(subject, { alertId, recipientId: r3, kind: NOTICE, round: 4 }),
+      ).resolves.toMatch(LOWER_UUID);
+      await expect(
+        messageFor(subject, { alertId, recipientId: r3, kind: NOTICE, round: 4 }),
+      ).rejects.toThrow();
+      await expect(
+        messageFor(subject, { alertId, recipientId: r1, kind: NOTICE, round: 0 }),
+      ).rejects.toThrow();
+
+      // The stand-downs too are written in the alert's round, as every
+      // message is (approach item 5; review loop 2, test-auditor's S3): an
+      // alert reset into round 2 that then resolves stands each remaining
+      // responder down in round 2, whichever way it resolves.
+      for (const how of ['contact back', '"I’m home"'] as const) {
+        const reset = await alerted(subject, {
+          state: 'ACKNOWLEDGED',
+          recorded: true,
+          responders: 3,
+        });
+        const [acknowledger = '', second = '', third = ''] = reset.responderIds;
+        expect(
+          removed(await subject.store.removeResponder(removal(reset, acknowledger)), how)
+            .resetAlertId,
+          how,
+        ).toBe(reset.alertId);
+        expect(await roundOf(subject, reset.journeyId, reset.alertId), how).toBe(2);
+
+        const { messages: standDowns } =
+          how === 'contact back'
+            ? backInContact(
+                await subject.store.recordHeartbeat(await freshHeartbeat(subject, reset.journeyId)),
+              )
+            : endedHome(await subject.store.recordHome(homeOf(reset)));
+
+        expect(recipientsOf(standDowns), how).toEqual([second, third].sort());
+        const written = await messageRoundsByIdOf(subject, reset.journeyId);
+        expect(
+          standDowns.map(({ messageId }) => written.get(messageId)),
+          `${how}: each stand-down in the alert’s round, 2`,
+        ).toEqual([2, 2]);
+        expect(await roundOf(subject, reset.journeyId, reset.alertId), how).toBe(2);
+      }
+    },
+  },
+  {
+    name: 'SM-10-AC9: recordAcknowledgement from a responder removed after its read answers ALERT_NOT_FOUND under the lock and writes nothing (LOST-06, SM-09)',
+    async run(subject) {
+      const journey = await alerted(subject, { responders: 2 });
+      const { journeyId, alertId } = journey;
+      const [r1 = ''] = journey.responderIds;
+      // The read, as "I'm on it" makes it: R1 is a responder.
+      const read = await subject.store.alertForAcknowledgement(alertId);
+      expect(read?.responderIds).toContain(r1);
+      removed(await subject.store.removeResponder(removal(journey, r1)));
+      const before = await removalRecordOf(subject, journey);
+
+      expect(await subject.store.recordAcknowledgement({ alertId, responderId: r1 })).toEqual(
+        NOT_FOUND,
+      );
+
+      expect(await removalRecordOf(subject, journey)).toEqual(before);
+      expect(await acknowledgementOf(subject, journeyId, alertId)).toEqual({
+        alertId,
+        acknowledgedBy: null,
+        acknowledgedAt: null,
+      });
+      expect(ofKind(await subject.messagesOf(journeyId), alertId, NOTICE)).toEqual([]);
+    },
+  },
+  {
+    name: 'SM-10-AC11: removeResponder withdraws every unsent message of the journey’s alerts to the removed responder, whatever its kind, at the store’s now, keeping attempts and last failure; sent ones and other recipients’ are left alone, and a later resolution writes the removed responder no stand-down (LOST-03)',
+    async run(subject) {
+      const now = await subject.now();
+      const journey = await alerted(subject, {
+        state: 'ESCALATED',
+        smsRaisedAgoMs: MINUTE,
+        responders: 3,
+      });
+      const { journeyId, alertId } = journey;
+      const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+      const earlier = await subject.seedAlert({
+        journeyId,
+        state: 'RESOLVED',
+        openedAt: ago(now, HOUR + 30 * MINUTE),
+        silentSince: ago(now, HOUR + 35 * MINUTE),
+        resolvedAt: ago(now, HOUR),
+        resolution: 'HOME',
+      });
+      // R2's: the lost-contact push accepted; the SMS failing NO_TARGET and
+      // due again; a notice never claimed; an earlier alert's stand-down,
+      // unsent and failing.
+      const accepted = await messageFor(subject, {
+        alertId,
+        recipientId: r2,
+        kind: 'LOST_CONTACT',
+        sentAgoMs: 3 * MINUTE,
+      });
+      const r2Unsent = [
+        await messageFor(subject, {
+          alertId,
+          recipientId: r2,
+          kind: SMS,
+          attempts: 2,
+          lastFailure: 'NO_TARGET',
+          dueAgoMs: SECOND,
+        }),
+        await messageFor(subject, { alertId, recipientId: r2, kind: NOTICE, attempts: 0 }),
+        await messageFor(subject, {
+          alertId: earlier,
+          recipientId: r2,
+          kind: 'HOME',
+          attempts: 3,
+          lastFailure: 'UNAVAILABLE',
+          dueAgoMs: SECOND,
+        }),
+      ];
+      // And one of R2's withdrawn before the removal (review loop 2,
+      // test-auditor's S1): the earlier alert's SMS, failing NO_TARGET and
+      // withdrawn when that alert resolved. The removal withdraws only what
+      // is not yet withdrawn (approach item 6), so this one keeps its time,
+      // its attempts and its last failure.
+      const withdrawnEarlier = ago(now, HOUR);
+      const alreadyWithdrawn = await subject.seedMessage({
+        alertId: earlier,
+        recipientId: r2,
+        kind: SMS,
+        createdAt: ago(now, HOUR + 28 * MINUTE),
+        nextAttemptAt: ago(now, HOUR + 20 * MINUTE),
+        attempts: 2,
+        lastFailure: 'NO_TARGET',
+        withdrawnAt: withdrawnEarlier,
+      });
+      expect(
+        (await withdrawnAtOf(subject, journeyId)).get(alreadyWithdrawn),
+        'R2’s earlier SMS, withdrawn when its alert resolved',
+      ).toEqual(withdrawnEarlier);
+      // Everyone else's, of every kind, unsent: none of them is R2's to lose.
+      const others: string[] = [];
+      for (const recipientId of [r1, r3]) {
+        for (const [of, kind] of [
+          [alertId, 'LOST_CONTACT'],
+          [alertId, SMS],
+          [alertId, NOTICE],
+          [earlier, 'HOME'],
+        ] as const) {
+          others.push(await messageFor(subject, { alertId: of, recipientId, kind }));
+        }
+      }
+      // R2 follows another walker's journey too, with an unsent message there.
+      const [otherWalker = ''] = await users(subject, 1);
+      const elsewhere = await subject.seedJourney({
+        walkerId: otherWalker,
+        deviceId: await subject.addDevice(otherWalker),
+        state: 'LOST_CONTACT',
+        responderIds: [r2],
+        startedAt: ago(now, HOUR),
+        lastHeartbeatAt: ago(now, 10 * MINUTE),
+      });
+      const elsewhereAlert = await subject.seedAlert({
+        journeyId: elsewhere,
+        state: 'OPEN',
+        openedAt: ago(now, 4 * MINUTE),
+        silentSince: ago(now, 10 * MINUTE),
+      });
+      const theirs = await messageFor(subject, {
+        alertId: elsewhereAlert,
+        recipientId: r2,
+        kind: 'LOST_CONTACT',
+      });
+      const messagesBefore = byMessage(await subject.messagesOf(journeyId));
+      const elsewhereBefore = await alertRecordOf(subject, elsewhere);
+
+      const before = await subject.now();
+      expect(await subject.store.removeResponder(removal(journey, r2))).toEqual({
+        outcome: 'removed',
+        resetAlertId: null,
+        messages: [],
+      });
+      const after = await subject.now();
+
+      const withdrawnAt = await withdrawnAtOf(subject, journeyId);
+      for (const messageId of r2Unsent) {
+        expect(between(withdrawnAt.get(messageId), before, after), messageId).toBe(true);
+      }
+      expect(withdrawnAt.get(accepted)).toBeNull();
+      for (const messageId of others) {
+        expect(withdrawnAt.get(messageId), messageId).toBeNull();
+      }
+      expect(
+        withdrawnAt.get(alreadyWithdrawn),
+        'R2’s earlier SMS keeps the time it was withdrawn when its alert resolved',
+      ).toEqual(withdrawnEarlier);
+      expect(
+        (await subject.messagesOf(journeyId))
+          .filter(({ messageId }) => messageId === alreadyWithdrawn)
+          .map(({ attempts, lastFailure, sentAt }) => ({ attempts, lastFailure, sentAt })),
+        'R2’s earlier SMS keeps its attempts and last failure, and is still unsent',
+      ).toEqual([{ attempts: 2, lastFailure: 'NO_TARGET', sentAt: null }]);
+      // Attempts, last failures, due and sent times all as they were.
+      expect(byMessage(await subject.messagesOf(journeyId))).toEqual(messagesBefore);
+      expect(await alertRecordOf(subject, elsewhere)).toEqual(elsewhereBefore);
+      expect((await withdrawnAtOf(subject, elsewhere)).get(theirs)).toBeNull();
+      // Never handed to a port again.
+      const pushed = (await subject.store.claimDue({ limit: BATCH, leaseMs: LEASE_MS })).messages;
+      const texted = await smsClaimed(subject);
+      for (const messageId of r2Unsent) {
+        expect(pushed.map((message) => message.messageId)).not.toContain(messageId);
+        expect(texted).not.toContain(messageId);
+      }
+      await allSent(subject, [...pushed.map(({ messageId }) => messageId), ...texted]);
+
+      // The alert resolves: R1 and R3 are stood down, R2 is not.
+      const { messages } = backInContact(
+        await subject.store.recordHeartbeat(await freshHeartbeat(subject, journeyId)),
+      );
+      expect(recipientsOf(messages)).toEqual([r1, r3].sort());
+      expect(
+        recipientsOf(
+          (await subject.messagesOf(journeyId)).filter(
+            ({ alertId: of, kind }) => of === alertId && kind === 'BACK_IN_CONTACT',
+          ),
+        ),
+      ).toEqual([r1, r3].sort());
+    },
+  },
+  {
+    name: 'SM-10-AC12: removing the last responder of an unended journey writes one NO_RESPONDER to its walker, naming the journey and no alert, due at the store’s now; a removal that leaves a responder writes none (SM-02)',
+    async run(subject) {
+      for (const state of UNENDED) {
+        const now = await subject.now();
+        const journey =
+          state === 'ACTIVE'
+            ? await watched(subject, {
+                startedAt: ago(now, HOUR),
+                lastHeartbeatAt: ago(now, MINUTE),
+                responders: 2,
+              })
+            : await alerted(subject, { responders: 2 });
+        const [r1 = '', r2 = ''] = journey.responderIds;
+        const alertsBefore = await escalationRecordOf(subject, journey.journeyId);
+        const roundsBefore = await subject.roundsOf(journey.journeyId);
+
+        // A removal that leaves a responder warns nobody.
+        expect(await subject.store.removeResponder(removal(journey, r1)), state).toEqual({
+          outcome: 'removed',
+          resetAlertId: null,
+          messages: [],
+        });
+        expect(await subject.journeyMessagesOf(journey.journeyId), state).toEqual([]);
+
+        const before = await subject.now();
+        const result = removed(await subject.store.removeResponder(removal(journey, r2)), state);
+        const after = await subject.now();
+
+        expect(result.resetAlertId, state).toBeNull();
+        expect(
+          result.messages.map(({ recipientId, kind }) => ({ recipientId, kind })),
+          state,
+        ).toEqual([{ recipientId: journey.walkerId, kind: WARNING }]);
+        const [answered] = result.messages;
+        const messageId = answered?.messageId ?? '';
+        // An opaque ID of its own: no person's, journey's, alert's or device's.
+        expect(messageId, state).toMatch(LOWER_UUID);
+        expect(
+          [
+            journey.walkerId,
+            journey.deviceId,
+            journey.journeyId,
+            r1,
+            r2,
+            ...alertsBefore.alerts.map(({ id }) => id),
+          ],
+          state,
+        ).not.toContain(messageId);
+        const stored = await subject.journeyMessagesOf(journey.journeyId);
+        expect(stored, state).toEqual([
+          {
+            messageId,
+            journeyId: journey.journeyId,
+            recipientId: journey.walkerId,
+            kind: WARNING,
+            round: 1,
+            createdAt: expect.any(Date) as unknown,
+            attempts: 0,
+            nextAttemptAt: stored[0]?.createdAt,
+            sentAt: null,
+            lastFailure: null,
+            withdrawnAt: null,
+          },
+        ]);
+        expect(
+          between(stored[0]?.createdAt, before, after),
+          `${state}: due at the removal’s now`,
+        ).toBe(true);
+        // Nothing for anyone else, nothing on the alert, and the journey goes on.
+        expect(await escalationRecordOf(subject, journey.journeyId), state).toEqual(alertsBefore);
+        expect(await subject.roundsOf(journey.journeyId), state).toEqual(roundsBefore);
+        expect(await subject.stateOf(journey.journeyId), state).toBe(state);
+        expect(await respondersOf(subject, journey), state).toEqual([]);
+
+        // A removal answered unchanged warns nobody again.
+        expect(await subject.store.removeResponder(removal(journey, r2)), state).toEqual(
+          NOT_A_RESPONDER,
+        );
+        expect(await subject.journeyMessagesOf(journey.journeyId), state).toEqual(stored);
+      }
+
+      // An ENDED journey's last responder: ignored, and no warning.
+      const ended = await watched(subject, { state: 'ENDED', startedAt: EARLIER, responders: 1 });
+      expect(
+        await subject.store.removeResponder(removal(ended, ended.responderIds[0] ?? '')),
+      ).toEqual(JOURNEY_OVER);
+      expect(await subject.journeyMessagesOf(ended.journeyId)).toEqual([]);
+    },
+  },
+  {
+    name: 'SM-10-AC13: the last two responders removed at once write one NO_RESPONDER between them (SM-02)',
+    async run(subject) {
+      for (let round = 0; round < RACE_ROUNDS; round += 1) {
+        const at = `round ${String(round)}`;
+        const now = await subject.now();
+        const journey = await watched(subject, {
+          startedAt: ago(now, HOUR),
+          lastHeartbeatAt: ago(now, MINUTE),
+          responders: 2,
+        });
+        const [r1 = '', r2 = ''] = journey.responderIds;
+
+        // Promise.all rejects if either fails outright: neither may.
+        const results = await Promise.all([
+          subject.store.removeResponder(removal(journey, r1)),
+          subject.store.removeResponder(removal(journey, r2)),
+        ]);
+
+        const warned = results.map((result) => removed(result, at).messages);
+        expect(
+          warned.filter((messages) => messages.length > 0),
+          at,
+        ).toHaveLength(1);
+        expect(
+          warned.flat().map(({ recipientId, kind }) => ({ recipientId, kind })),
+          at,
+        ).toEqual([{ recipientId: journey.walkerId, kind: WARNING }]);
+        expect(
+          (await subject.journeyMessagesOf(journey.journeyId)).map(({ messageId }) => messageId),
+          at,
+        ).toEqual(warned.flat().map(({ messageId }) => messageId));
+        expect(await respondersOf(subject, journey), at).toEqual([]);
+      }
+    },
+  },
+  {
+    name: 'SM-10-AC14: the push claim hands out a NO_RESPONDER in its due order and the SMS claim never does; no withdrawal touches it (SM-02)',
+    async run(subject) {
+      const now = await subject.now();
+      // W's journey J, silent an hour, with one responder; and V's journey K,
+      // which W follows, with X, its alert open, and two messages due before
+      // the warning will be.
+      const journey = await watched(subject, {
+        startedAt: ago(now, 2 * HOUR),
+        lastHeartbeatAt: ago(now, HOUR),
+        responders: 1,
+      });
+      const [r1 = ''] = journey.responderIds;
+      const [v = '', x = ''] = await users(subject, 2);
+      const k = {
+        walkerId: v,
+        journeyId: await subject.seedJourney({
+          walkerId: v,
+          deviceId: await subject.addDevice(v),
+          state: 'LOST_CONTACT',
+          responderIds: [journey.walkerId, x],
+          startedAt: ago(now, 2 * HOUR),
+          lastHeartbeatAt: ago(now, 8 * MINUTE),
+        }),
+      };
+      const kAlert = await subject.seedAlert({
+        journeyId: k.journeyId,
+        state: 'OPEN',
+        openedAt: ago(now, 3 * MINUTE),
+        silentSince: ago(now, 8 * MINUTE),
+      });
+      const early = await messageFor(subject, {
+        alertId: kAlert,
+        recipientId: x,
+        kind: 'LOST_CONTACT',
+        attempts: 0,
+        dueAgoMs: 2 * MINUTE,
+      });
+      const middle = await messageFor(subject, {
+        alertId: kAlert,
+        recipientId: journey.walkerId,
+        kind: 'LOST_CONTACT',
+        attempts: 0,
+        dueAgoMs: MINUTE,
+      });
+
+      const [warning] = removed(await subject.store.removeResponder(removal(journey, r1))).messages;
+      const warningId = warning?.messageId ?? '';
+
+      // The SMS claim never hands it out.
+      expect(await smsClaimed(subject)).not.toContain(warningId);
+      // The push claim does, in its due order: after the two due before it.
+      const claimOne = () => subject.store.claimDue({ limit: 1, leaseMs: LEASE_MS });
+      expect((await claimOne()).messages.map(({ messageId }) => messageId)).toEqual([early]);
+      expect((await claimOne()).messages.map(({ messageId }) => messageId)).toEqual([middle]);
+      const claim = await claimOne();
+      expect(claim.messages).toEqual([
+        { messageId: warningId, recipientId: journey.walkerId, kind: WARNING, attempts: 1 },
+      ]);
+      // Leased, with its attempt counted, as every push kind's.
+      const [leased] = await subject.journeyMessagesOf(journey.journeyId);
+      expect(leased?.attempts).toBe(1);
+      expect(leased?.nextAttemptAt.getTime()).toBe(claim.now.getTime() + LEASE_MS);
+      expect((await claimOne()).messages).toEqual([]);
+      await allSent(subject, [early, middle]);
+
+      // No withdrawal touches it. W says "I'm on it" for K's alert, and is
+      // removed from K, which resets it and withdraws W's unsent messages of
+      // K's alerts: none of them is J's warning. Then J goes silent and is
+      // opened, which withdraws the walker's stand-downs, and contact comes
+      // back, which resolves J's alert.
+      acknowledged(
+        await subject.store.recordAcknowledgement({
+          alertId: kAlert,
+          responderId: journey.walkerId,
+        }),
+      );
+      expect(
+        removed(await subject.store.removeResponder(removal(k, journey.walkerId))).resetAlertId,
+      ).toBe(kAlert);
+      const opened = await subject.store.openLostContactAlert({
+        journeyId: journey.journeyId,
+        afterMs: LOST_CONTACT_AFTER_MS,
+      });
+      expect(opened.outcome).toBe('opened');
+      backInContact(
+        await subject.store.recordHeartbeat(await freshHeartbeat(subject, journey.journeyId)),
+      );
+
+      expect(await subject.journeyMessagesOf(journey.journeyId)).toEqual([leased]);
+      expect(await subject.journeyMessagesOf(k.journeyId)).toEqual([]);
+    },
+  },
+  {
+    name: 'SM-10-AC15: a journey with no responder row opens with no message; its alert is never read as due and never escalated; unheardAlertCount counts exactly the unresolved alerts whose journey has no responder row, with the store’s now (SM-02, LOST-02, LOST-07)',
+    async run(subject) {
+      // Read against the whole store, as the SMS check reads it: so each
+      // count is compared with the one before it.
+      const counted = async (what: string): Promise<number> => {
+        const before = await subject.now();
+        const read = await subject.store.unheardAlertCount();
+        const after = await subject.now();
+        expect(between(read.now, before, after), `${what}: the count’s now is the store’s`).toBe(
+          true,
+        );
+        expect(Number.isSafeInteger(read.count) && read.count >= 0, what).toBe(true);
+        return read.count;
+      };
+      const base = await counted('at the start');
+      const now = await subject.now();
+
+      // J, silent an hour, its last responder removed: no alert yet.
+      const journey = await watched(subject, {
+        startedAt: ago(now, 2 * HOUR),
+        lastHeartbeatAt: ago(now, HOUR),
+        responders: 1,
+      });
+      removed(await subject.store.removeResponder(removal(journey, journey.responderIds[0] ?? '')));
+      expect(await counted('J with no responder, still ACTIVE')).toBe(base);
+
+      // Opened, with nobody to tell.
+      const opened = await subject.store.openLostContactAlert({
+        journeyId: journey.journeyId,
+        afterMs: LOST_CONTACT_AFTER_MS,
+      });
+      expect(opened).toEqual({
+        outcome: 'opened',
+        alertId: expect.stringMatching(LOWER_UUID) as unknown,
+        messages: [],
+      });
+      expect(await subject.stateOf(journey.journeyId)).toBe('LOST_CONTACT');
+      expect((await subject.alertsOf(journey.journeyId)).map(({ state }) => state)).toEqual([
+        'OPEN',
+      ]);
+      expect(await subject.messagesOf(journey.journeyId)).toEqual([]);
+      expect(await counted('J opened with nobody to tell')).toBe(base + 1);
+
+      // An alert two minutes old or more is due while its journey has a
+      // responder (the control), and never once it has none.
+      const old = await alerted(subject, { openedAgoMs: 3 * MINUTE, responders: 2 });
+      const dueIds = async () =>
+        (await subject.store.alertsDueForEscalation(ESCALATE_AFTER_MS)).alerts.map(({ id }) => id);
+      expect(await dueIds()).toContain(old.alertId);
+      for (const responderId of old.responderIds) {
+        removed(await subject.store.removeResponder(removal(old, responderId)));
+      }
+      const oldBefore = await escalationRecordOf(subject, old.journeyId);
+      expect(await dueIds()).not.toContain(old.alertId);
+      expect(await subject.store.escalateAlert({ alertId: old.alertId })).toEqual(NOT_ESCALATED);
+      expect(await escalationRecordOf(subject, old.journeyId)).toEqual(oldBefore);
+      expect(await counted('two unheard alerts')).toBe(base + 2);
+
+      // Not counted: an alert whose journey has a responder, and a RESOLVED
+      // one whose journey has none.
+      await alerted(subject, { responders: 1 });
+      const over = await alerted(subject, { state: 'RESOLVED', responders: 1 });
+      await subject.removeResponders(over.journeyId);
+      expect(await counted('one heard, one over')).toBe(base + 2);
+
+      // Contact back resolves J's alert, with no stand-down: counted no more.
+      expect(
+        backInContact(
+          await subject.store.recordHeartbeat(await freshHeartbeat(subject, journey.journeyId)),
+        ).messages,
+      ).toEqual([]);
+      expect(await counted('J back in contact')).toBe(base + 1);
+
+      // Counted in every unresolved state, not OPEN alone (D-122, item 3;
+      // review loop 2, test-auditor's S2): an ESCALATED alert, and an
+      // ACKNOWLEDGED one, each of a journey whose responder rows are gone,
+      // put there directly. Nobody can be told of either. And a RESOLVED one
+      // whose journey has none is never counted, whatever it held before it
+      // resolved.
+      const escalatedUnheard = await alerted(subject, {
+        state: 'ESCALATED',
+        smsRaisedAgoMs: MINUTE,
+        responders: 1,
+      });
+      await subject.removeResponders(escalatedUnheard.journeyId);
+      expect(
+        await counted('an ESCALATED alert whose journey has no responder row'),
+        'an ESCALATED alert with nobody to tell is counted',
+      ).toBe(base + 2);
+      const acknowledgedUnheard = await alerted(subject, {
+        state: 'ACKNOWLEDGED',
+        recorded: true,
+        responders: 1,
+      });
+      await subject.removeResponders(acknowledgedUnheard.journeyId);
+      expect(
+        await counted('an ACKNOWLEDGED alert whose journey has no responder row'),
+        'an ACKNOWLEDGED alert with nobody to tell is counted',
+      ).toBe(base + 3);
+      const resolvedOver = await alerted(subject, {
+        state: 'RESOLVED',
+        recorded: true,
+        smsRaisedAgoMs: MINUTE,
+        responders: 1,
+      });
+      await subject.removeResponders(resolvedOver.journeyId);
+      expect(
+        await counted('a RESOLVED alert, acknowledged and escalated before, with no responder row'),
+        'a RESOLVED alert is never counted',
+      ).toBe(base + 3);
+    },
+  },
+  {
+    name: 'SM-10-AC8: for any sequence of acknowledgements, removals, sweeps, time passing, heartbeats fresh or stale and "I’m home", after every step an acknowledger is a responder, each round’s SMS reach exactly that round’s responders, a due alert with a responder is escalated in its round by the next sweep, no removed responder has a message pending, and the walker holds one warning per time the last responder went (LOST-02, LOST-07)',
+    async run(subject) {
+      const margin = subject.timeMarginMs;
+      // As LOST-07-AC7's property: the fake's clock is moved by hand; the
+      // database's moves on by itself, so against it a time step passes none,
+      // and its runs reach two minutes through alerts opened in the past.
+      const passed = (ms: number) => (margin === 0 ? ms : 0);
+      // Who: the first, second or third responder, the walker, or a stranger.
+      const who = fc.integer({ min: 0, max: 4 });
+      const step = fc.oneof(
+        fc.record({ kind: fc.constant('heartbeat' as const), agoMs: silences(margin) }),
+        fc.record({ kind: fc.constant('sweep' as const) }),
+        fc.record({ kind: fc.constant('acknowledge' as const), who }),
+        fc.record({ kind: fc.constant('remove' as const), who }),
+        fc.record({
+          kind: fc.constant('time' as const),
+          ms: fc.integer({ min: 1, max: 4 * MINUTE }),
+        }),
+        fc.record({ kind: fc.constant('home' as const) }),
+      );
+      const start = fc.oneof(
+        // An ACTIVE journey silent this long, never heard from.
+        fc.record({ kind: fc.constant('active' as const), silentForMs: silences(margin) }),
+        // A LOST_CONTACT journey whose alert opened this long ago.
+        fc.record({
+          kind: fc.constant('lost' as const),
+          openedAgoMs: fc.integer({ min: 15 * SECOND, max: 6 * MINUTE }),
+        }),
+      );
+
+      await fc.assert(
+        fc.asyncProperty(start, fc.array(step, { maxLength: 10 }), async (begin, steps) => {
+          // The rules, applied step by step: the journey's state, last
+          // contact and responders, who was removed, how many warnings the
+          // walker was written, and each alert opened so far: whether it
+          // resolved, who is on it, its round, who its lost-contact push was
+          // written for, and, for each round it escalated in, who was texted.
+          const model: {
+            id: string;
+            openedAt: Date;
+            resolved: boolean;
+            acknowledgedBy: string | null;
+            round: number;
+            pushedTo: string[];
+            texted: Map<number, string[]>;
+          }[] = [];
+          let state: 'ACTIVE' | 'LOST_CONTACT' | 'ENDED';
+          let lastContact: Date;
+          let journey: {
+            walkerId: string;
+            deviceId: string;
+            journeyId: string;
+            responderIds: string[];
+          };
+          if (begin.kind === 'active') {
+            const now = await subject.now();
+            journey = await watched(subject, {
+              startedAt: ago(now, begin.silentForMs),
+              responders: 3,
+            });
+            state = 'ACTIVE';
+            lastContact = ago(now, begin.silentForMs);
+          } else {
+            const made = await alerted(subject, { openedAgoMs: begin.openedAgoMs, responders: 3 });
+            journey = made;
+            state = 'LOST_CONTACT';
+            lastContact = new Date(made.openedAt.getTime() - LOST_CONTACT_AFTER_MS);
+            model.push({
+              id: made.alertId,
+              openedAt: made.openedAt,
+              resolved: false,
+              acknowledgedBy: null,
+              round: 1,
+              pushedTo: [],
+              texted: new Map(),
+            });
+          }
+          const { journeyId } = journey;
+          let responders = [...journey.responderIds];
+          const removedOnes = new Set<string>();
+          let warnings = 0;
+          const [started] = await subject.journeysOf(journey.walkerId);
+          const startedAt = started?.startedAt ?? new Date(Number.NaN);
+          const [stranger = ''] = await users(subject, 1);
+          const people = [...journey.responderIds, journey.walkerId, stranger];
+
+          for (const next of steps) {
+            const current = model.at(-1);
+            if (next.kind === 'heartbeat') {
+              const at = await subject.now();
+              // Never before the start: contact comes after a journey began.
+              const receivedAt = ago(at, Math.min(next.agoMs, at.getTime() - startedAt.getTime()));
+              const result = await subject.store.recordHeartbeat(
+                heartbeatFor(journeyId, { receivedAt, position: null }),
+              );
+              if (state === 'ENDED') {
+                expect(result.outcome, 'a heartbeat after the end').toBe('ended');
+              } else {
+                lastContact = new Date(Math.max(lastContact.getTime(), receivedAt.getTime()));
+                const silenceMs = at.getTime() - lastContact.getTime();
+                const sure = margin === 0 || Math.abs(silenceMs - LOST_CONTACT_AFTER_MS) > margin;
+                const back = sure
+                  ? state === 'LOST_CONTACT' && silenceMs < LOST_CONTACT_AFTER_MS
+                  : result.outcome === 'back_in_contact';
+                expect(result.outcome, 'the heartbeat’s answer').toBe(
+                  back ? 'back_in_contact' : 'recorded',
+                );
+                if (back) {
+                  state = 'ACTIVE';
+                  if (current !== undefined) {
+                    current.resolved = true;
+                    // Stood down: the responders still on the journey, and
+                    // nobody removed.
+                    const stoodDown = result.outcome === 'back_in_contact' ? result.messages : [];
+                    expect(recipientsOf(stoodDown), 'stood down').toEqual([...responders].sort());
+                  }
+                }
+              }
+            } else if (next.kind === 'sweep') {
+              // The watchdog's two jobs at the store's level, in its order:
+              // the open, then the escalation, each by its read's own now.
+              const overdue = await subject.store.overdueJourneys(LOST_CONTACT_AFTER_MS);
+              const isOverdue = overdue.journeys.some(({ id }) => id === journeyId);
+              expect(isOverdue, 'the overdue read').toBe(
+                state === 'ACTIVE' &&
+                  overdue.now.getTime() - lastContact.getTime() >= LOST_CONTACT_AFTER_MS,
+              );
+              if (isOverdue) {
+                const opened = await subject.store.openLostContactAlert({
+                  journeyId,
+                  afterMs: LOST_CONTACT_AFTER_MS,
+                });
+                if (opened.outcome !== 'opened') {
+                  throw new Error(
+                    `expected the sweep to open the alert: ${JSON.stringify(opened)}`,
+                  );
+                }
+                // One lost-contact push per responder still on the journey,
+                // and none at all when nobody is (D-122, item 3).
+                expect(recipientsOf(opened.messages), 'the open’s pushes').toEqual(
+                  [...responders].sort(),
+                );
+                state = 'LOST_CONTACT';
+                const openedAt =
+                  (await subject.alertsOf(journeyId)).find(({ id }) => id === opened.alertId)
+                    ?.openedAt ?? new Date(Number.NaN);
+                model.push({
+                  id: opened.alertId,
+                  openedAt,
+                  resolved: false,
+                  acknowledgedBy: null,
+                  round: 1,
+                  pushedTo: [...responders],
+                  texted: new Map(),
+                });
+              }
+              const isDue = (alert: (typeof model)[number], now: Date) =>
+                !alert.resolved &&
+                alert.acknowledgedBy === null &&
+                !alert.texted.has(alert.round) &&
+                responders.length > 0 &&
+                now.getTime() - alert.openedAt.getTime() >= ESCALATE_AFTER_MS;
+              const read = await subject.store.alertsDueForEscalation(ESCALATE_AFTER_MS);
+              const due = read.alerts
+                .filter(({ id }) => model.some((alert) => alert.id === id))
+                .map(({ id }) => id)
+                .sort();
+              expect(due, 'the alerts read as due').toEqual(
+                model
+                  .filter((alert) => isDue(alert, read.now))
+                  .map(({ id }) => id)
+                  .sort(),
+              );
+              for (const alertId of due) {
+                const { messages } = escalated(await subject.store.escalateAlert({ alertId }));
+                expect(recipientsOf(messages), 'texted').toEqual([...responders].sort());
+                const alert = model.find(({ id }) => id === alertId);
+                alert?.texted.set(alert.round, [...responders]);
+              }
+              // After the sweep, no alert is still due in its round.
+              expect(
+                model.filter((alert) => isDue(alert, read.now)).map(({ id }) => id),
+                'due and not escalated after the sweep',
+              ).toEqual([]);
+            } else if (next.kind === 'time') {
+              const ms = passed(next.ms);
+              if (ms > 0) {
+                await subject.letTimePass(ms);
+              }
+            } else if (next.kind === 'home') {
+              const result = await subject.store.recordHome(homeOf(journey));
+              if (state === 'ENDED') {
+                expect(result).toEqual({ outcome: 'already_ended' });
+              } else {
+                expect(result.outcome, '"I’m home"').toBe('home');
+                if (state === 'LOST_CONTACT' && current !== undefined) {
+                  current.resolved = true;
+                }
+                state = 'ENDED';
+              }
+            } else if (next.kind === 'acknowledge') {
+              const sender = people[next.who] ?? stranger;
+              const result = await subject.store.recordAcknowledgement({
+                alertId: current?.id ?? syntheticUuid(),
+                responderId: sender,
+              });
+              if (current === undefined || !responders.includes(sender)) {
+                expect(result, 'not a responder, or no alert').toEqual(NOT_FOUND);
+              } else if (current.resolved) {
+                expect(result, 'a resolved alert').toEqual(OVER);
+              } else if (current.acknowledgedBy === sender) {
+                expect(result, 'the sender’s own').toEqual(YOURS);
+              } else if (current.acknowledgedBy !== null) {
+                expect(result, 'someone else’s').toEqual(TAKEN);
+              } else {
+                acknowledged(result);
+                current.acknowledgedBy = sender;
+              }
+            } else {
+              const removedOne = people[next.who] ?? stranger;
+              const result = await subject.store.removeResponder({
+                journeyId,
+                responderId: removedOne,
+              });
+              if (state === 'ENDED') {
+                expect(result, 'a removal from an ended journey').toEqual(JOURNEY_OVER);
+              } else if (!responders.includes(removedOne)) {
+                expect(result, 'not a responder').toEqual(NOT_A_RESPONDER);
+              } else {
+                const resets =
+                  current !== undefined &&
+                  !current.resolved &&
+                  current.acknowledgedBy === removedOne;
+                responders = responders.filter((id) => id !== removedOne);
+                removedOnes.add(removedOne);
+                const { resetAlertId, messages } = removed(result);
+                expect(resetAlertId, 'the reset').toBe(resets ? current.id : null);
+                expect(
+                  messages.map(({ recipientId, kind }) => ({ recipientId, kind })),
+                  'the warning',
+                ).toEqual(
+                  responders.length === 0 ? [{ recipientId: journey.walkerId, kind: WARNING }] : [],
+                );
+                if (resets) {
+                  current.acknowledgedBy = null;
+                  current.round += 1;
+                }
+                if (responders.length === 0) {
+                  warnings += 1;
+                }
+              }
+            }
+
+            // After every step.
+            expect(await subject.stateOf(journeyId)).toBe(state);
+            expect(await respondersOf(subject, journey), 'the responders').toEqual(
+              [...responders].sort(),
+            );
+            const alerts = await subject.alertsOf(journeyId);
+            const escalations = await subject.escalationsOf(journeyId);
+            const acknowledgements = await subject.acknowledgementsOf(journeyId);
+            const rounds = await subject.roundsOf(journeyId);
+            const messages = await subject.messagesOf(journeyId);
+            const messageRounds = await messageRoundsByIdOf(subject, journeyId);
+            const withdrawnAt = await withdrawnAtOf(subject, journeyId);
+            const pending = (message: MessageAsStored) =>
+              message.sentAt === null && (withdrawnAt.get(message.messageId) ?? null) === null;
+            expect(alerts.map(({ id }) => id).sort()).toEqual(model.map(({ id }) => id).sort());
+            for (const alert of alerts) {
+              const expected = model.find(({ id }) => id === alert.id);
+              const by =
+                acknowledgements.find(({ alertId }) => alertId === alert.id)?.acknowledgedBy ??
+                null;
+              const smsRaisedAt =
+                escalations.find(({ alertId }) => alertId === alert.id)?.smsRaisedAt ?? null;
+              const round = rounds.find(({ alertId }) => alertId === alert.id)?.round;
+              expect(alert.state === 'RESOLVED', 'resolved').toBe(expected?.resolved);
+              expect(by, 'who is on it').toBe(expected?.acknowledgedBy ?? null);
+              expect(round, 'its round').toBe(expected?.round);
+              // An unresolved alert's acknowledger is a responder of its journey.
+              if (alert.state !== 'RESOLVED' && by !== null) {
+                expect(responders, 'the acknowledger is a responder').toContain(by);
+              }
+              expect(
+                smsRaisedAt !== null,
+                'an escalation time exactly when escalated in this round',
+              ).toBe(expected?.texted.has(expected.round));
+              // At most one lost-contact push per responder, written by the
+              // open: no reset and no escalation writes one.
+              expect(
+                recipientsOf(ofKind(messages, alert.id, 'LOST_CONTACT')),
+                'the lost-contact pushes',
+              ).toEqual([...(expected?.pushedTo ?? [])].sort());
+              // One SMS per round it escalated in, for the responders it had
+              // then; none for a round it did not escalate in.
+              const sms = ofKind(messages, alert.id, SMS);
+              const roundsTexted = new Set(
+                sms.map(({ messageId }) => messageRounds.get(messageId)),
+              );
+              expect([...roundsTexted].sort(), 'the rounds with SMS').toEqual(
+                [...(expected?.texted.keys() ?? [])].sort(),
+              );
+              for (const [textedRound, texted] of expected?.texted ?? []) {
+                expect(
+                  recipientsOf(
+                    sms.filter(({ messageId }) => messageRounds.get(messageId) === textedRound),
+                  ),
+                  `round ${String(textedRound)}’s SMS`,
+                ).toEqual([...texted].sort());
+              }
+              // Nobody on it, or over: no "someone is on it" still to send;
+              // and nothing to text while someone is on it, or once it is over.
+              if (alert.state === 'RESOLVED' || by === null) {
+                expect(
+                  ofKind(messages, alert.id, NOTICE).filter(pending),
+                  'a notice still to send for an alert nobody is on',
+                ).toEqual([]);
+              }
+              if (alert.state === 'RESOLVED' || by !== null) {
+                expect(sms.filter(pending), 'an SMS still to send').toEqual([]);
+              }
+            }
+            // No removed responder has a message of the journey's alerts
+            // pending (D-122, item 2).
+            expect(
+              messages.filter(
+                (message) => removedOnes.has(message.recipientId) && pending(message),
+              ),
+              'a removed responder’s message still to send',
+            ).toEqual([]);
+            // No two messages share an alert, a recipient, a kind and a round.
+            const keys = messages.map(
+              ({ messageId, alertId, recipientId, kind }) =>
+                `${alertId} ${recipientId} ${kind} ${String(messageRounds.get(messageId))}`,
+            );
+            expect(new Set(keys).size, 'one message per alert, recipient, kind and round').toBe(
+              keys.length,
+            );
+            // One warning for each time the last responder went.
+            expect(
+              (await subject.journeyMessagesOf(journeyId)).map(({ recipientId, kind }) => ({
+                recipientId,
+                kind,
+              })),
+              'the walker’s warnings',
+            ).toEqual(
+              Array.from({ length: warnings }, () => ({
+                recipientId: journey.walkerId,
+                kind: WARNING,
+              })),
+            );
+          }
+        }),
+        {
+          numRuns: subject.propertyRuns,
+          // The spec's test plan: fixed sequences run first, so even the
+          // database's few runs escalate, acknowledge, remove the
+          // acknowledger, escalate again and resolve; and lose every
+          // responder, warn the walker, and open with nobody to tell.
+          examples: [
+            [
+              { kind: 'lost', openedAgoMs: 3 * MINUTE },
+              [
+                { kind: 'sweep' },
+                { kind: 'acknowledge', who: 0 },
+                { kind: 'remove', who: 0 },
+                { kind: 'sweep' },
+                { kind: 'acknowledge', who: 1 },
+                { kind: 'remove', who: 1 },
+                { kind: 'sweep' },
+                { kind: 'heartbeat', agoMs: 0 },
+              ],
+            ],
+            [
+              { kind: 'active', silentForMs: 6 * MINUTE },
+              [
+                { kind: 'remove', who: 0 },
+                { kind: 'remove', who: 3 },
+                { kind: 'remove', who: 1 },
+                { kind: 'remove', who: 2 },
+                { kind: 'sweep' },
+                { kind: 'time', ms: 3 * MINUTE },
+                { kind: 'sweep' },
+                { kind: 'home' },
+                { kind: 'remove', who: 0 },
+              ],
+            ],
+            [
+              { kind: 'lost', openedAgoMs: MINUTE },
+              [
+                { kind: 'acknowledge', who: 1 },
+                { kind: 'remove', who: 1 },
+                { kind: 'time', ms: 2 * MINUTE },
+                { kind: 'sweep' },
+                { kind: 'remove', who: 0 },
+                { kind: 'acknowledge', who: 2 },
+                { kind: 'remove', who: 2 },
+                { kind: 'sweep' },
+                { kind: 'heartbeat', agoMs: 0 },
+              ],
+            ],
+          ],
+        },
+      );
+    },
+  },
+  {
+    name: 'SM-10-AC17: each withdrawal — the resolution, the acknowledgement, the open, the reset, the removal — withdraws exactly its own kinds’ unsent messages, and the removal only the removed responder’s (LOST-06, LOST-07)',
+    async run(subject) {
+      const sortedIds = (rows: readonly { messageId: string }[]) =>
+        rows.map(({ messageId }) => messageId).sort();
+
+      // The reset and the removal, together: R1, the acknowledger, removed.
+      // The reset takes the alert's unsent notices, whoever they are for;
+      // the removal takes R1's unsent messages of the journey's alerts, every
+      // alert kind, and of no other journey's. Then R2, nobody's acknowledger,
+      // removed: the removal alone.
+      {
+        const now = await subject.now();
+        const journey = await alerted(subject, {
+          state: 'ACKNOWLEDGED',
+          recorded: true,
+          responders: 3,
+        });
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        const earlier = await subject.seedAlert({
+          journeyId: journey.journeyId,
+          state: 'RESOLVED',
+          openedAt: ago(now, HOUR + 30 * MINUTE),
+          silentSince: ago(now, HOUR + 35 * MINUTE),
+          resolvedAt: ago(now, HOUR),
+          resolution: 'HOME',
+        });
+        // Another walker's journey that R1 follows too.
+        const [otherWalker = '', o2 = ''] = await users(subject, 2);
+        const other = await subject.seedJourney({
+          walkerId: otherWalker,
+          deviceId: await subject.addDevice(otherWalker),
+          state: 'LOST_CONTACT',
+          responderIds: [r1, o2],
+          startedAt: ago(now, HOUR),
+          lastHeartbeatAt: ago(now, 10 * MINUTE),
+        });
+        const otherAlert = await subject.seedAlert({
+          journeyId: other,
+          state: 'OPEN',
+          openedAt: ago(now, 5 * MINUTE),
+          silentSince: ago(now, 10 * MINUTE),
+        });
+        const seeded = await seedEveryKind(subject, [
+          { alertId: journey.alertId, unsentFor: [r1, r2], sentFor: [r3] },
+          { alertId: earlier, unsentFor: [r1, r2], sentFor: [r3] },
+          { alertId: otherAlert, unsentFor: [r1], sentFor: [o2] },
+        ]);
+        const journeysAlerts = [journey.alertId, earlier];
+        const byReset = seeded.filter(
+          ({ alertId, kind, unsent }) =>
+            unsent && alertId === journey.alertId && WITHDRAWN_WHEN_RESET.includes(kind),
+        );
+        const byRemovalOf = (responderId: string) =>
+          seeded.filter(
+            ({ alertId, recipientId, kind, unsent }) =>
+              unsent &&
+              journeysAlerts.includes(alertId) &&
+              recipientId === responderId &&
+              WITHDRAWN_WHEN_REMOVED.includes(kind),
+          );
+        expect(byReset, 'one unsent notice each for R1 and R2').toHaveLength(
+          2 * WITHDRAWN_WHEN_RESET.length,
+        );
+        expect(byRemovalOf(r1), 'every alert kind for R1, on both of J’s alerts').toHaveLength(
+          2 * WITHDRAWN_WHEN_REMOVED.length,
+        );
+        const first = [...new Set([...sortedIds(byReset), ...sortedIds(byRemovalOf(r1))])].sort();
+
+        const before = await subject.now();
+        expect(
+          removed(await subject.store.removeResponder(removal(journey, r1)), 'R1’s removal')
+            .resetAlertId,
+        ).toBe(journey.alertId);
+        const after = await subject.now();
+
+        let withdrawn = await withdrawnIn(subject, [journey.journeyId, other]);
+        expect(sortedIds(withdrawn), 'the reset and R1’s removal').toEqual(first);
+        for (const { messageId, withdrawnAt } of withdrawn) {
+          expect(between(withdrawnAt, before, after), messageId).toBe(true);
+        }
+
+        const second = [...new Set([...first, ...sortedIds(byRemovalOf(r2))])].sort();
+        expect(
+          removed(await subject.store.removeResponder(removal(journey, r2)), 'R2’s removal')
+            .resetAlertId,
+        ).toBeNull();
+        withdrawn = await withdrawnIn(subject, [journey.journeyId, other]);
+        expect(sortedIds(withdrawn), 'R2’s removal, with no reset').toEqual(second);
+
+        // R3, the last: the walker is warned, and R3's messages, all sent,
+        // are left as they were.
+        expect(
+          removed(await subject.store.removeResponder(removal(journey, r3)), 'R3’s removal')
+            .messages,
+        ).toHaveLength(1);
+        withdrawn = await withdrawnIn(subject, [journey.journeyId, other]);
+        expect(sortedIds(withdrawn), 'R3’s removal, every message of theirs sent').toEqual(second);
+        expect(
+          (await subject.journeyMessagesOf(journey.journeyId)).map(
+            ({ withdrawnAt }) => withdrawnAt,
+          ),
+        ).toEqual([null]);
+      }
+
+      // The resolution, the acknowledgement and the open, each on the
+      // walker's next journey, beside the walker's warning on the journey
+      // before it, which none of them withdraws (a journey's message).
+      for (const withdrawal of ['the resolution', 'the acknowledgement', 'the open'] as const) {
+        const now = await subject.now();
+        const first = await watched(subject, {
+          startedAt: ago(now, 5 * HOUR),
+          lastHeartbeatAt: ago(now, 4 * HOUR),
+          responders: 1,
+        });
+        removed(await subject.store.removeResponder(removal(first, first.responderIds[0] ?? '')));
+        await subject.endJourney(first.journeyId);
+        const [warningBefore] = await subject.journeyMessagesOf(first.journeyId);
+        const next = await nextJourneyOf(subject, first, {
+          state: withdrawal === 'the open' ? 'ACTIVE' : 'LOST_CONTACT',
+          responders: 3,
+          startedAt: ago(now, 3 * HOUR),
+          lastHeartbeatAt: ago(now, withdrawal === 'the open' ? HOUR : 10 * MINUTE),
+        });
+        const [r1 = '', r2 = '', r3 = ''] = next.responderIds;
+        const earlier = await subject.seedAlert({
+          journeyId: next.journeyId,
+          state: 'RESOLVED',
+          openedAt: ago(now, 2 * HOUR + 30 * MINUTE),
+          silentSince: ago(now, 2 * HOUR + 35 * MINUTE),
+          resolvedAt: ago(now, 2 * HOUR),
+          resolution: 'BACK_IN_CONTACT',
+        });
+        const current =
+          withdrawal === 'the open'
+            ? null
+            : await subject.seedAlert({
+                journeyId: next.journeyId,
+                state: 'ESCALATED',
+                openedAt: ago(now, 5 * MINUTE),
+                silentSince: ago(now, 10 * MINUTE),
+                smsRaisedAt: ago(now, 3 * MINUTE),
+              });
+        const seeded = await seedEveryKind(
+          subject,
+          [
+            { alertId: earlier, unsentFor: [r1], sentFor: [r2] },
+            ...(current === null ? [] : [{ alertId: current, unsentFor: [r1], sentFor: [r2] }]),
+          ],
+          // The kinds the step under test writes itself, for those it writes
+          // them for: the resolution's stand-down, and R3's notices.
+          (alertId, kind) =>
+            alertId === current &&
+            ((withdrawal === 'the resolution' && kind === 'BACK_IN_CONTACT') ||
+              (withdrawal === 'the acknowledgement' && kind === NOTICE)),
+        );
+        const expected = seeded
+          .filter(({ alertId, kind, unsent }) =>
+            withdrawal === 'the open'
+              ? unsent && alertId === earlier && WITHDRAWN_WHEN_OPENED.includes(kind)
+              : withdrawal === 'the resolution'
+                ? unsent && alertId === current && WITHDRAWN_WHEN_RESOLVED.includes(kind)
+                : unsent && alertId === current && WITHDRAWN_WHEN_ACKNOWLEDGED.includes(kind),
+          )
+          .map(({ messageId }) => messageId)
+          .sort();
+        expect(expected.length, withdrawal).toBeGreaterThan(0);
+
+        if (withdrawal === 'the resolution') {
+          backInContact(
+            await subject.store.recordHeartbeat(await freshHeartbeat(subject, next.journeyId)),
+          );
+        } else if (withdrawal === 'the acknowledgement') {
+          acknowledged(
+            await subject.store.recordAcknowledgement({
+              alertId: current ?? '',
+              responderId: r3,
+            }),
+          );
+        } else {
+          expect(
+            (
+              await subject.store.openLostContactAlert({
+                journeyId: next.journeyId,
+                afterMs: LOST_CONTACT_AFTER_MS,
+              })
+            ).outcome,
+            withdrawal,
+          ).toBe('opened');
+        }
+
+        expect(
+          sortedIds(await withdrawnIn(subject, [next.journeyId, first.journeyId])),
+          withdrawal,
+        ).toEqual(expected);
+        expect(await subject.journeyMessagesOf(first.journeyId), withdrawal).toEqual([
+          warningBefore,
+        ]);
+      }
+    },
+  },
+  {
+    name: 'SM-10-AC10: a removal before the open, the escalation or a resolution leaves the removed responder out of what each writes; after it, it withdraws what each wrote them that is still unsent (LOST-02, LOST-03, LOST-07, SM-04)',
+    async run(subject) {
+      const now = await subject.now();
+      const overdue = () =>
+        watched(subject, {
+          startedAt: ago(now, 2 * HOUR),
+          lastHeartbeatAt: ago(now, HOUR),
+          responders: 3,
+        });
+      /** R2's messages of the journey's alerts that are neither sent nor withdrawn. */
+      const pendingFor = async (journeyId: string, responderId: string) => {
+        const withdrawnAt = await withdrawnAtOf(subject, journeyId);
+        return (await subject.messagesOf(journeyId)).filter(
+          ({ messageId, recipientId, sentAt }) =>
+            recipientId === responderId &&
+            sentAt === null &&
+            (withdrawnAt.get(messageId) ?? null) === null,
+        );
+      };
+      /** Removes R2, and checks what it withdrew: R2's pending messages, at the removal's now. */
+      const removeAfter = async (
+        journey: { walkerId: string; journeyId: string },
+        r2: string,
+        what: string,
+      ) => {
+        const pending = (await pendingFor(journey.journeyId, r2)).map(({ messageId }) => messageId);
+        expect(pending.length, `${what}: R2 had something pending`).toBeGreaterThan(0);
+        const before = await subject.now();
+        removed(await subject.store.removeResponder(removal(journey, r2)), what);
+        const after = await subject.now();
+        const withdrawnAt = await withdrawnAtOf(subject, journey.journeyId);
+        for (const messageId of pending) {
+          expect(between(withdrawnAt.get(messageId), before, after), `${what}: ${messageId}`).toBe(
+            true,
+          );
+        }
+        expect(await pendingFor(journey.journeyId, r2), what).toEqual([]);
+      };
+
+      // The open.
+      {
+        const journey = await overdue();
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        removed(await subject.store.removeResponder(removal(journey, r2)));
+        const opened = await subject.store.openLostContactAlert({
+          journeyId: journey.journeyId,
+          afterMs: LOST_CONTACT_AFTER_MS,
+        });
+        expect(opened.outcome === 'opened' ? recipientsOf(opened.messages) : opened).toEqual(
+          [r1, r3].sort(),
+        );
+      }
+      {
+        const journey = await overdue();
+        const [, r2 = ''] = journey.responderIds;
+        const opened = await subject.store.openLostContactAlert({
+          journeyId: journey.journeyId,
+          afterMs: LOST_CONTACT_AFTER_MS,
+        });
+        expect(opened.outcome === 'opened' ? recipientsOf(opened.messages) : opened).toEqual(
+          [...journey.responderIds].sort(),
+        );
+        await removeAfter(journey, r2, 'a removal after the open');
+      }
+
+      // The escalation.
+      {
+        const journey = await alerted(subject, { responders: 3 });
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        removed(await subject.store.removeResponder(removal(journey, r2)));
+        const { messages } = escalated(
+          await subject.store.escalateAlert({ alertId: journey.alertId }),
+        );
+        expect(recipientsOf(messages)).toEqual([r1, r3].sort());
+      }
+      {
+        const journey = await alerted(subject, { responders: 3 });
+        const [, r2 = ''] = journey.responderIds;
+        const { messages } = escalated(
+          await subject.store.escalateAlert({ alertId: journey.alertId }),
+        );
+        expect(recipientsOf(messages)).toEqual([...journey.responderIds].sort());
+        await removeAfter(journey, r2, 'a removal after the escalation');
+      }
+
+      // Contact back.
+      {
+        const journey = await lostWith(subject, 3);
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        removed(await subject.store.removeResponder(removal(journey, r2)));
+        const { messages } = backInContact(
+          await subject.store.recordHeartbeat(await freshHeartbeat(subject, journey.journeyId)),
+        );
+        expect(recipientsOf(messages)).toEqual([r1, r3].sort());
+      }
+      {
+        const journey = await lostWith(subject, 3);
+        const [, r2 = ''] = journey.responderIds;
+        // R2's lost-contact push accepted first, so what is left pending of
+        // R2's after the resolution is the stand-down alone.
+        const r2Push = journey.messages.find(({ recipientId }) => recipientId === r2);
+        await allSent(subject, r2Push === undefined ? [] : [r2Push.messageId]);
+        const { messages } = backInContact(
+          await subject.store.recordHeartbeat(await freshHeartbeat(subject, journey.journeyId)),
+        );
+        expect(recipientsOf(messages)).toEqual([...journey.responderIds].sort());
+        await removeAfter(journey, r2, 'a removal after contact came back');
+      }
+
+      // "I'm home".
+      {
+        const journey = await lostWith(subject, 3);
+        const [r1 = '', r2 = '', r3 = ''] = journey.responderIds;
+        removed(await subject.store.removeResponder(removal(journey, r2)));
+        const { messages } = endedHome(await subject.store.recordHome(homeOf(journey)));
+        expect(recipientsOf(messages)).toEqual([r1, r3].sort());
+      }
+      {
+        // After "I'm home" the journey has ENDED, so a removal is ignored
+        // (SM-07, the spec's reading 2) and R2's stand-down is left to be
+        // sent: there is no removal to withdraw it.
+        const journey = await lostWith(subject, 3);
+        const [, r2 = ''] = journey.responderIds;
+        const { messages } = endedHome(await subject.store.recordHome(homeOf(journey)));
+        expect(recipientsOf(messages)).toEqual([...journey.responderIds].sort());
+        const before = await removalRecordOf(subject, journey);
+        expect(await subject.store.removeResponder(removal(journey, r2))).toEqual(JOURNEY_OVER);
+        expect(await removalRecordOf(subject, journey)).toEqual(before);
       }
     },
   },

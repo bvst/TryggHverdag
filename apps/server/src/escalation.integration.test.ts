@@ -7,8 +7,9 @@
 //   - sweeps racing on separate connections (AC4);
 //   - the escalation and "I'm on it" meeting on the journey's row, in each
 //     order and at the same moment (AC5);
-//   - all or nothing, with a test trigger that fails the second SMS, and a
-//     journey with no responder row (AC15);
+//   - all or nothing, with a test trigger that fails the second SMS (AC15);
+//     and (SM-10-AC15, on Q3 (a)) a journey with no responder row, not
+//     escalated, the sweep healthy, and counted unheard by the SMS check;
 //   - a held row skipped at once, waited for once the alert's two minutes
 //     passed 30 s ago, stuck when held through the wait, and a 55P03 on any
 //     other lock a failure, never `held` (AC16);
@@ -40,6 +41,7 @@ import {
   fakeLog,
   fakePush,
   fakeSms,
+  fakeSmsAlarm,
   syntheticCredential,
   syntheticEventId,
   syntheticHeartbeat,
@@ -62,6 +64,7 @@ import { sqlstateOf } from './domain/sqlstate.ts';
 import { LOCK_WAIT_LIMIT_MS } from './domain/watchdog.ts';
 import { createAcknowledgementService } from './modules/alerts/acknowledgement.ts';
 import { createPushSender, createSmsSender } from './modules/alerts/outbox.ts';
+import { createSmsCheck } from './modules/alerts/sms-check.ts';
 import { createWatchdog } from './modules/alerts/watchdog.ts';
 import { createHealthService } from './modules/health/service.ts';
 import { createJourneyService } from './modules/journeys/service.ts';
@@ -985,24 +988,114 @@ describe('LOST-07 and AR-05: an escalation is all or nothing', () => {
     expect(await lastBeatMs()).toBeGreaterThanOrEqual(beforeSweep);
   });
 
-  test('LOST-07-AC15: an alert whose journey has no responder row, put there directly, is not escalated: the escalation is refused whole, the sweep fails saying so in one escalation_failed line, stage escalate, and records no beat', async () => {
+  test('SM-10-AC15: an alert whose journey has no responder row, put there directly, is not escalated: never read as due, so skipped, writing nothing; the sweep ok, with its beat; and the SMS check counts it unheard, reporting failing with one unheard_alerts line, count 1 (LOST-07, SM-02)', async () => {
+    // RG-03, named in SM-10's spec ("Existing assertions that change by
+    // design", the no-responder refusals, on Q3 (a), D-122 item 3). This was
+    // "LOST-07-AC15: an alert whose journey has no responder row, put there
+    // directly, is not escalated: the escalation is refused whole, the sweep
+    // fails saying so in one escalation_failed line, stage escalate, and
+    // records no beat". The alert is still not escalated and nothing of it
+    // changes, as the old test held; but the sweep now stays healthy and
+    // records its beat, and the owner is paged through the SMS check.
     const { journeyId } = await due({ responders: 2 });
     await connection().query('delete from journey_responders where journey_id = $1', [journeyId]);
     const log = fakeLog();
+    const alarm = fakeSmsAlarm();
     const before = await recordOf(journeyId);
-    const beatBefore = await lastBeatMs();
 
+    const beforeSweep = await databaseNowMs();
     const swept = await watchdogFor({ log }).sweep();
 
-    expect(swept).toEqual({ ...QUIET, ok: false });
-    expect(log.events).toEqual([
-      expect.objectContaining({ event: 'escalation_failed', stage: 'escalate' }),
-    ]);
+    expect(swept).toEqual(QUIET);
+    expect(log.events).toEqual([]);
     expect(await recordOf(journeyId)).toEqual(before);
     expect(before.alerts.map(({ state, smsRaisedAt }) => [state, smsRaisedAt])).toEqual([
       ['OPEN', null],
     ]);
-    expect(await lastBeatMs()).toBe(beatBefore);
+    expect(await lastBeatMs()).toBeGreaterThanOrEqual(beforeSweep);
+
+    expect(await createSmsCheck({ outbox: store(), alarm, log }).check()).toBe('failing');
+    expect(alarm.statuses).toEqual(['failing']);
+    expect(log.events).toEqual([{ event: 'unheard_alerts', count: 1 }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SM-10-AC15: the unheard count, on the real tables (Q3 (a)).
+// ---------------------------------------------------------------------------
+
+describe('SM-10, SM-02 and LOST-07: the SMS check counts the alerts nobody can hear, on the real tables', () => {
+  /** A lost journey whose responder rows are then deleted, put there directly: its alert unheard. */
+  async function unheard({ state }: { state?: 'ACKNOWLEDGED' | 'ESCALATED' } = {}) {
+    const journey = await lost({ responders: 2 });
+    if (state === 'ESCALATED') {
+      await connection().query(
+        "update alerts set state = 'ESCALATED', sms_raised_at = now() where id = $1",
+        [journey.alertId],
+      );
+    }
+    if (state === 'ACKNOWLEDGED') {
+      await connection().query(
+        `update alerts set state = 'ACKNOWLEDGED', acknowledged_by = $2, acknowledged_at = now()
+          where id = $1`,
+        [journey.alertId, journey.responders[0]?.userId],
+      );
+    }
+    await connection().query('delete from journey_responders where journey_id = $1', [
+      journey.journeyId,
+    ]);
+    return journey;
+  }
+
+  test('SM-10-AC15: unheardAlertCount reads exactly the unresolved alerts whose journey has no responder row, whatever their state, with the database’s now() between two readings; an alert with a responder, and a resolved one with none, count nothing (SM-02, LOST-07)', async () => {
+    const count = async (what: string) => {
+      const before = await databaseNowMs();
+      const read = await store().unheardAlertCount();
+      const after = await databaseNowMs();
+      expect(read.now.getTime(), what).toBeGreaterThanOrEqual(before);
+      expect(read.now.getTime(), what).toBeLessThanOrEqual(after);
+      return read.count;
+    };
+    expect(await count('a quiet database')).toBe(0);
+
+    await unheard();
+    expect(await count('one OPEN')).toBe(1);
+    await unheard({ state: 'ESCALATED' });
+    await unheard({ state: 'ACKNOWLEDGED' });
+    expect(await count('one each of OPEN, ESCALATED and ACKNOWLEDGED')).toBe(3);
+
+    // Not counted: an alert whose journey has a responder, and a RESOLVED
+    // alert whose journey has none.
+    await lost({ responders: 1 });
+    const over = await unheard();
+    await connection().query(
+      "update alerts set state = 'RESOLVED', resolved_at = now(), resolution = 'BACK_IN_CONTACT' where id = $1",
+      [over.alertId],
+    );
+    expect(await count('one heard, one over')).toBe(3);
+  });
+
+  test('SM-10-AC15: the SMS check reports failing while an unheard alert is unresolved, with one unheard_alerts line holding the count; once contact brings it back, resolving it with no stand-down, the next check reports ok and writes no line (SM-02, LOST-07)', async () => {
+    const journey = await unheard();
+    const log = fakeLog();
+    const alarm = fakeSmsAlarm();
+    const check = createSmsCheck({ outbox: store(), alarm, log });
+
+    expect(await check.check()).toBe('failing');
+    expect(log.events).toEqual([{ event: 'unheard_alerts', count: 1 }]);
+
+    const recorded = await store().recordHeartbeat(await freshHeartbeat(journey.journeyId));
+    expect(recorded).toEqual({
+      outcome: 'back_in_contact',
+      alertId: journey.alertId,
+      messages: [],
+    });
+    expect((await alertsOf(journey.journeyId)).map(({ state }) => state)).toEqual(['RESOLVED']);
+    expect(ofKind(await messagesOf(journey.journeyId), 'BACK_IN_CONTACT')).toEqual([]);
+
+    expect(await check.check()).toBe('ok');
+    expect(alarm.statuses).toEqual(['failing', 'ok']);
+    expect(log.events).toEqual([{ event: 'unheard_alerts', count: 1 }]);
   });
 });
 

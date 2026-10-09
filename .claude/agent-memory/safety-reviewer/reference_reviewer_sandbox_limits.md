@@ -125,3 +125,11 @@ a scratch copy of the module with its relative imports sed'ed to absolute paths,
 plain `export default {root: <repo>, resolve: {alias: [{find: /^\.\/escalation\.ts$/, replacement: <copy>}]}, test:
 {include: [...]}}` (no `import 'vitest/config'`: it does not resolve from the scratchpad). Prove the alias took effect
 with a throwing probe appended to the copy. Terraform also at <scratchpad>/bin/terraform (1.16.4).
+
+**2026-10-07 (BUG-29):** the --global guard blocks any command containing the text ".env" ("Reading .env files is not
+allowed"), even a grep pattern for process-dot-env: grep 'process' ... | grep 'env' instead. gh api job logs are refused
+(redirect to a blob host): read job steps and times from repos/<o>/<r>/actions/jobs/<id> instead. A targeted Stryker run
+that leaves the implementer's reports alone: STRYKER_RUN=<g> pnpm exec stryker run --reporters clear-text --concurrency 2
+[--mutate 'file:a-b'] (Stryker removes only its own sandbox; .stryker-tmp goes when empty). Planting mutants file-free:
+a scratch config spreading /home/user/TryggHverdag/vitest.config.mjs with root set and an enforce:'pre' transform plugin
+keyed on a MUTANT env var (throw if the anchor is missing); run with node node_modules/vitest/vitest.mjs from the repo.

@@ -55,12 +55,29 @@
 //     alert; LOST_CONTACT ends, HOME, resolving its alert (SM-04).
 // The heartbeat's own rule does not change: a LOST_CONTACT journey's
 // heartbeat is recorded and the state stays; the move back is contact's.
+//
+// SM-10 adds the sixth event, remove (its spec's approach item 2), and the
+// alert rule's third, acknowledger_removed (approach item 4), with the kind
+// NO_RESPONDER and three lists (approach items 4, 6 and 7). The removal's
+// rule, in its order:
+//   1. no journey → refused, JOURNEY_NOT_FOUND;
+//   2. ENDED → ignored, JOURNEY_ENDED (SM-07);
+//   3. the responder not among the journey's → unchanged, NOT_A_RESPONDER,
+//      the walker included, IDs compared exactly;
+//   4. otherwise → removed, the state as it was, saying whether no responder
+//      is left (SM-02's last responder).
+// The reset's, in its order: no unresolved alert, RESOLVED, or someone other
+// than the removed responder recorded (nobody included) → unchanged;
+// otherwise → reset, OPEN, whatever the state was.
 import {
+  JOURNEY_MESSAGE_KINDS as KIT_JOURNEY_MESSAGE_KINDS,
   MESSAGE_KINDS as KIT_MESSAGE_KINDS,
   PUSH_KINDS as KIT_PUSH_KINDS,
   SMS_KINDS as KIT_SMS_KINDS,
   WITHDRAWN_WHEN_ACKNOWLEDGED as KIT_WITHDRAWN_WHEN_ACKNOWLEDGED,
   WITHDRAWN_WHEN_OPENED as KIT_WITHDRAWN_WHEN_OPENED,
+  WITHDRAWN_WHEN_REMOVED as KIT_WITHDRAWN_WHEN_REMOVED,
+  WITHDRAWN_WHEN_RESET as KIT_WITHDRAWN_WHEN_RESET,
   WITHDRAWN_WHEN_RESOLVED as KIT_WITHDRAWN_WHEN_RESOLVED,
   fc,
   syntheticPosition,
@@ -74,19 +91,24 @@ import {
   ESCALATE_AFTER_MS,
   JOURNEY_END_REASONS,
   JOURNEY_EVENTS,
+  JOURNEY_MESSAGE_KINDS,
   JOURNEY_STATES,
   LOST_CONTACT_AFTER_MS,
   MESSAGE_KINDS,
   PUSH_KINDS,
   SMS_KINDS,
   WITHDRAWN_WHEN_ACKNOWLEDGED,
+  WITHDRAWN_WHEN_REMOVED,
+  WITHDRAWN_WHEN_RESET,
   WITHDRAWN_WHEN_RESOLVED,
   alertTransition,
   transition,
   type AcknowledgeEvent,
   type AcknowledgeRefusal,
+  type AcknowledgerRemovedEvent,
   type AlertForAcknowledgement,
   type AlertForEscalation,
+  type AlertForReset,
   type AlertResolution,
   type AlertState,
   type EscalateEvent,
@@ -97,8 +119,12 @@ import {
   type JourneyEndReason,
   type JourneyEventType,
   type JourneyForHeartbeat,
+  type JourneyForRemoval,
   type JourneyState,
   type MessageKind,
+  type RemoveEvent,
+  type RemoveOutcome,
+  type ResetOutcome,
   type SilenceEvent,
 } from './journey.ts';
 
@@ -220,6 +246,21 @@ const ENDED_HOME = (resolvesAlert: boolean): Outcome => ({
   resolvesAlert,
 });
 
+/** SM-10: the removal of this responder, by its ID as given. */
+function remove(responderId: string): RemoveEvent {
+  return { type: 'remove', responderId };
+}
+
+/** SM-10: the removal's four outcomes, as the spec names them (approach item 2). */
+const REMOVED_FROM = (state: Unended, lastResponder: boolean): RemoveOutcome => ({
+  type: 'removed',
+  state,
+  lastResponder,
+});
+const NOT_A_RESPONDER: RemoveOutcome = { type: 'unchanged', reason: 'NOT_A_RESPONDER' };
+const REMOVAL_IGNORED: RemoveOutcome = { type: 'ignored', reason: 'JOURNEY_ENDED' };
+const REMOVAL_REFUSED: RemoveOutcome = { type: 'refused', reason: 'JOURNEY_NOT_FOUND' };
+
 // ---------------------------------------------------------------------------
 // The transition table.
 // ---------------------------------------------------------------------------
@@ -252,6 +293,10 @@ const EVENT_FOR = {
   // LOST-03 (D-110): "I'm home" from the walker's own device, so the
   // situation decides. The other senders are HOME_FROM_ELSEWHERE, below.
   home: () => home(),
+  // SM-10: the removal of RESPONDER, named as one of the journey's two
+  // responders, so the situation decides. As the only responder, and not
+  // named, are REMOVE_ROWS, below.
+  remove: () => remove(RESPONDER),
 } satisfies { [E in JourneyEventType]: () => Extract<JourneyEvent, { type: E }> };
 
 const TRANSITIONS = {
@@ -310,7 +355,75 @@ const TRANSITIONS = {
     LOST_CONTACT: { outcome: ENDED_HOME(true) },
     ENDED: { outcome: JOURNEY_ENDED },
   },
+  // SM-10 (RG-03, the spec's "Existing assertions that change by design":
+  // TRANSITIONS is typed over JOURNEY_EVENTS, so it gains the removal's
+  // rows): RESPONDER, one of two, removed from each situation. No journey is
+  // not found; an ENDED one is ignored (SM-07); an unended one keeps its
+  // state, and one responder is left. Every row above keeps its outcome.
+  remove: {
+    none: { outcome: REMOVAL_REFUSED },
+    ACTIVE: { outcome: REMOVED_FROM('ACTIVE', false) },
+    LOST_CONTACT: { outcome: REMOVED_FROM('LOST_CONTACT', false) },
+    ENDED: { outcome: REMOVAL_IGNORED },
+  },
 } satisfies Record<JourneyEventType, Record<Situation, Row>>;
+
+/**
+ * SM-10-AC16: the removal in every situation, the responder named as the only
+ * one, as one of several, and not named at all (the walker's own ID, which is
+ * never a responder's). Typed over the states, so a state added later needs
+ * its rows here too.
+ */
+const REMOVE_ROWS_BY_STATE = {
+  ACTIVE: {
+    theOnly: REMOVED_FROM('ACTIVE', true),
+    oneOfSeveral: REMOVED_FROM('ACTIVE', false),
+    notNamed: NOT_A_RESPONDER,
+  },
+  LOST_CONTACT: {
+    theOnly: REMOVED_FROM('LOST_CONTACT', true),
+    oneOfSeveral: REMOVED_FROM('LOST_CONTACT', false),
+    notNamed: NOT_A_RESPONDER,
+  },
+  ENDED: { theOnly: REMOVAL_IGNORED, oneOfSeveral: REMOVAL_IGNORED, notNamed: REMOVAL_IGNORED },
+} satisfies Record<
+  JourneyState,
+  { theOnly: RemoveOutcome; oneOfSeveral: RemoveOutcome; notNamed: RemoveOutcome }
+>;
+
+/** The journey a removal row is asked about, by how the responder stands on it. */
+function journeyForRemoval(
+  state: JourneyState,
+  named: 'theOnly' | 'oneOfSeveral' | 'notNamed',
+): JourneyForRemoval {
+  return {
+    id: JOURNEY,
+    state,
+    responderIds:
+      named === 'theOnly'
+        ? [RESPONDER]
+        : named === 'oneOfSeveral'
+          ? [OTHER_RESPONDER, RESPONDER]
+          : [OTHER_RESPONDER],
+  };
+}
+
+const REMOVE_ROWS = [
+  { situation: 'no journey', journey: null, expected: REMOVAL_REFUSED },
+  ...Object.entries(REMOVE_ROWS_BY_STATE).flatMap(([state, rows]) =>
+    (['theOnly', 'oneOfSeveral', 'notNamed'] as const).map((named) => ({
+      situation: `${state}, the responder ${
+        named === 'theOnly'
+          ? 'the only one'
+          : named === 'oneOfSeveral'
+            ? 'one of several'
+            : 'not named'
+      }`,
+      journey: journeyForRemoval(state as JourneyState, named),
+      expected: rows[named],
+    })),
+  ),
+];
 
 /**
  * LOST-03-AC3: contact one millisecond under the threshold, in every
@@ -356,6 +469,7 @@ const ROW_ID = {
   silence: 'LOST-02-AC6',
   contact: 'LOST-03-AC3',
   home: 'LOST-03-AC3',
+  remove: 'SM-10-AC16',
 } satisfies Record<JourneyEventType, string>;
 
 /**
@@ -449,11 +563,18 @@ function decide(event: JourneyEventType, situation: string): Outcome {
     case 'home':
       // "I'm home" names a journey, as a heartbeat does (D-110).
       return transition(heartbeatSituationFor(situation), EVENT_FOR.home());
+    case 'remove':
+      // SM-10: the removal reads the journey and its responders, RESPONDER
+      // one of the two.
+      return transition(
+        situation === 'none' ? null : journeyForRemoval(situation as JourneyState, 'oneOfSeveral'),
+        EVENT_FOR.remove(),
+      );
   }
 }
 
 describe('AR-04: the journey state machine is one module, total over its own lists', () => {
-  test('SM-01-AC14: the states are exactly ACTIVE, LOST_CONTACT and ENDED, and the events exactly start, heartbeat, silence, contact and home', () => {
+  test('SM-01-AC14: the states are exactly ACTIVE, LOST_CONTACT and ENDED, and the events exactly start, heartbeat, silence, contact, home and remove', () => {
     // The events were exactly ['start'] until LOST-01 added the heartbeat
     // (RG-03: an event added by design, LOST-01-AC17 and its spec's approach
     // item 4). The list is still exact, so an event added later has to be
@@ -467,8 +588,20 @@ describe('AR-04: the journey state machine is one module, total over its own lis
     // spec's approach item 2, and "Existing assertions that change by
     // design", which names this file's JOURNEY_EVENTS pin). The states do not
     // change; the list is still pinned exactly, in order.
+    //
+    // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+    // line 456): remove joins by design, the removal of a responder
+    // (SM-10-AC16, its spec's approach item 2), last; the title gains it. The
+    // states do not change; the list is still pinned exactly, in order.
     expect([...JOURNEY_STATES].sort()).toEqual(['ACTIVE', 'ENDED', 'LOST_CONTACT']);
-    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence', 'contact', 'home']);
+    expect([...JOURNEY_EVENTS]).toEqual([
+      'start',
+      'heartbeat',
+      'silence',
+      'contact',
+      'home',
+      'remove',
+    ]);
   });
 
   test('SM-01-AC14: every pair of situation and event the module’s lists create has a row here, and no row is stale', () => {
@@ -485,7 +618,12 @@ describe('AR-04: the journey state machine is one module, total over its own lis
     ).toEqual([]);
   });
 
-  test('SM-01-AC14: the pairs with an outcome are exactly none, ACTIVE, LOST_CONTACT and ENDED, each with start, with heartbeat, with silence, with contact and with home', () => {
+  // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+  // line 488): the four removal pairs join by design (SM-10-AC16: "the
+  // journey's transition table holds an expectation for remove in every
+  // situation"), and the title with them. Every pair that was here still is,
+  // with the same outcome.
+  test('SM-01-AC14: the pairs with an outcome are exactly none, ACTIVE, LOST_CONTACT and ENDED, each with start, with heartbeat, with silence, with contact, with home and with remove', () => {
     // ENDED × start joined the three in review: an ENDED journey handed in
     // is "no journey", see its row above. The four heartbeat pairs joined
     // with LOST-01 (RG-03: an event added by design, LOST-01-AC17).
@@ -518,6 +656,10 @@ describe('AR-04: the journey state machine is one module, total over its own lis
         'ENDED × home',
         'LOST_CONTACT × home',
         'none × home',
+        'ACTIVE × remove',
+        'ENDED × remove',
+        'LOST_CONTACT × remove',
+        'none × remove',
       ].sort(),
     );
   });
@@ -864,13 +1006,24 @@ function asSent(
 }
 
 describe('LOST-01: a heartbeat for the journey it names, in the rule’s order', () => {
-  test('LOST-01-AC17: JOURNEY_EVENTS is exactly start and heartbeat, and then silence, contact and home', () => {
+  test('LOST-01-AC17: JOURNEY_EVENTS is exactly start and heartbeat, and then silence, contact, home and remove', () => {
     // RG-03 (LOST-02): silence is added after the heartbeat by design
     // (LOST-02-AC6). Start and heartbeat keep their places; the pin is exact.
     //
     // RG-03 (LOST-03): contact and home are added after silence by design
     // (LOST-03-AC3). Start and heartbeat keep their places; the pin is exact.
-    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence', 'contact', 'home']);
+    //
+    // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+    // line 867): remove is added after home by design (SM-10-AC16), and the
+    // title with it. Start and heartbeat keep their places; the pin is exact.
+    expect([...JOURNEY_EVENTS]).toEqual([
+      'start',
+      'heartbeat',
+      'silence',
+      'contact',
+      'home',
+      'remove',
+    ]);
   });
 
   test.each(ELSEWHERE_ROWS)(
@@ -1132,11 +1285,22 @@ function isOneOfTheSilenceOutcomes(value: unknown): boolean {
 }
 
 describe('LOST-02: every pair, silence included, has a tested outcome', () => {
-  test('LOST-02-AC6: JOURNEY_EVENTS is exactly start, heartbeat, silence, contact and home, and ALERT_STATES exactly OPEN, ESCALATED, ACKNOWLEDGED and RESOLVED, in order (D-033)', () => {
+  test('LOST-02-AC6: JOURNEY_EVENTS is exactly start, heartbeat, silence, contact, home and remove, and ALERT_STATES exactly OPEN, ESCALATED, ACKNOWLEDGED and RESOLVED, in order (D-033)', () => {
     // RG-03 (LOST-03, the spec's "Existing assertions that change by
     // design"): JOURNEY_EVENTS gains contact and home, after silence. The
     // alert states do not change. Both lists are still pinned exactly.
-    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence', 'contact', 'home']);
+    //
+    // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+    // line 1135): JOURNEY_EVENTS gains remove, after home, and the title with
+    // it (SM-10-AC16). The alert states do not change. Still exact.
+    expect([...JOURNEY_EVENTS]).toEqual([
+      'start',
+      'heartbeat',
+      'silence',
+      'contact',
+      'home',
+      'remove',
+    ]);
     expect([...ALERT_STATES]).toEqual(['OPEN', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED']);
   });
 
@@ -1420,8 +1584,18 @@ const HOME_ROWS = Object.entries(HOME_FROM_ELSEWHERE).flatMap(([state, rows]) =>
 ]);
 
 describe('LOST-03: every pair, contact and "I’m home" included, has a tested outcome', () => {
-  test('LOST-03-AC3: JOURNEY_EVENTS is exactly start, heartbeat, silence, contact and home, in order', () => {
-    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence', 'contact', 'home']);
+  // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+  // line 1423): JOURNEY_EVENTS gains remove, after home, and the title with
+  // it (SM-10-AC16). Still exact, in order.
+  test('LOST-03-AC3: JOURNEY_EVENTS is exactly start, heartbeat, silence, contact, home and remove, in order', () => {
+    expect([...JOURNEY_EVENTS]).toEqual([
+      'start',
+      'heartbeat',
+      'silence',
+      'contact',
+      'home',
+      'remove',
+    ]);
   });
 
   test('LOST-03-AC3: the module’s lists create a contact pair and a home pair for none and for every state, and the table holds each one; a pair it lacked would be named', () => {
@@ -1697,13 +1871,17 @@ describe('LOST-03: the lists that are the one source for the table, the type and
   // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
   // line 1687): the list gains LOST_CONTACT_SMS, the escalation SMS (D-019),
   // last, and the title with it. Still exact, in order.
-  test('LOST-03-AC3: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME, ACKNOWLEDGED and LOST_CONTACT_SMS, in order', () => {
+  // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+  // line 1700): the list gains NO_RESPONDER, the walker's warning (SM-02,
+  // D-087), last, and the title with it. Still exact, in order.
+  test('LOST-03-AC3: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME, ACKNOWLEDGED, LOST_CONTACT_SMS and NO_RESPONDER, in order', () => {
     expect([...MESSAGE_KINDS]).toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
       'HOME',
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
+      'NO_RESPONDER',
     ]);
   });
 
@@ -1798,10 +1976,30 @@ const TWO_MINUTES = 120_000;
 /** When the alert opened, in every escalation situation. */
 const OPENED_AT = new Date('2026-10-01T21:35:00.000Z');
 
+/**
+ * SM-10: the reset's situations (its spec's AC16): no alert, or each of the
+ * four states with nobody, the removed responder, or another responder
+ * recorded on it.
+ */
+const RESET_RECORDED = [
+  'nobody recorded',
+  'the removed responder recorded',
+  'another responder recorded',
+] as const;
+type ResetSituation = 'no alert' | `${AlertState}; ${(typeof RESET_RECORDED)[number]}`;
+
+/** The reset's two outcomes, as the spec names them (approach item 4). */
+const RESET: ResetOutcome = { type: 'reset', state: 'OPEN' };
+const NOT_RESET: ResetOutcome = { type: 'unchanged' };
+
+/** The responder removed, in every reset situation. */
+const REMOVED = syntheticUuid();
+
 /** Each alert event's situations and outcomes: the table is typed one event at a time. */
 interface AlertTable {
   acknowledge: Record<AlertSituation, AlertOutcome>;
   escalate: Record<EscalationSituation, EscalateOutcome>;
+  acknowledger_removed: Record<ResetSituation, ResetOutcome>;
 }
 
 /**
@@ -1896,7 +2094,68 @@ const ALERT_TRANSITIONS = {
   // now one entry per event, each typed over its own situations: an event
   // added to ALERT_EVENTS without an entry here is still a type error. The
   // acknowledgement's rows and their outcomes do not change.
+  //
+  // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+  // line 2129: ALERT_TRANSITIONS is typed over ALERT_EVENTS, so it gains the
+  // reset's rows): SM-10-AC16, the reset (its spec's approach item 4), in
+  // the rule's order: no alert, RESOLVED, someone other than the removed
+  // responder recorded (nobody included), and then reset, OPEN, whatever the
+  // state. The acknowledgement's and the escalation's rows do not change.
+  acknowledger_removed: {
+    'no alert': NOT_RESET,
+    'OPEN; nobody recorded': NOT_RESET,
+    // A half-done record, the removed responder on an OPEN alert, put in
+    // directly: reset all the same, in the safe direction (reading 4).
+    'OPEN; the removed responder recorded': RESET,
+    'OPEN; another responder recorded': NOT_RESET,
+    'ESCALATED; nobody recorded': NOT_RESET,
+    'ESCALATED; the removed responder recorded': RESET,
+    'ESCALATED; another responder recorded': NOT_RESET,
+    // ACKNOWLEDGED with nobody recorded, a state the code never makes: there
+    // is no acknowledger to remove, and the escalation already reads it as
+    // nobody on it (D-114).
+    'ACKNOWLEDGED; nobody recorded': NOT_RESET,
+    // The rule's own case: the acknowledger removed, the alert back to OPEN.
+    'ACKNOWLEDGED; the removed responder recorded': RESET,
+    'ACKNOWLEDGED; another responder recorded': NOT_RESET,
+    // RESOLVED is over: who helped stays on record.
+    'RESOLVED; nobody recorded': NOT_RESET,
+    'RESOLVED; the removed responder recorded': NOT_RESET,
+    'RESOLVED; another responder recorded': NOT_RESET,
+  },
 } satisfies { [E in AlertEventType]: AlertTable[E] };
+
+/** SM-10: the alert a reset situation names: its state and who is recorded on it. */
+function resetFor(situation: string): AlertForReset | null {
+  if (situation === 'no alert') {
+    return null;
+  }
+  const [state, recorded] = situation.split('; ');
+  return {
+    id: ALERT,
+    state: state as AlertState,
+    acknowledgedBy:
+      recorded === 'the removed responder recorded'
+        ? REMOVED
+        : recorded === 'another responder recorded'
+          ? ON_IT
+          : null,
+  };
+}
+
+/** SM-10: the removal of this responder, as the alert rule hears it. */
+function acknowledgerRemoved(responderId: string): AcknowledgerRemovedEvent {
+  return { type: 'acknowledger_removed', responderId };
+}
+
+/** SM-10-AC16: the reset's rows. */
+const RESET_ROWS = Object.entries(ALERT_TRANSITIONS.acknowledger_removed).map(
+  ([situation, expected]: [string, ResetOutcome]) => ({
+    event: 'acknowledger_removed',
+    situation,
+    expected,
+  }),
+);
 
 /** The alert a situation names: its state, who is on it, and its journey's responders. */
 function alertFor(situation: string): AlertForAcknowledgement | null {
@@ -1945,6 +2204,13 @@ function alertSituationsOf(event: string): string[] {
           ),
         ),
       ),
+    ];
+  }
+  // SM-10 (RG-03, as the table above): the reset's situations.
+  if (event === 'acknowledger_removed') {
+    return [
+      'no alert',
+      ...ALERT_STATES.flatMap((state) => RESET_RECORDED.map((recorded) => `${state}; ${recorded}`)),
     ];
   }
   return [`(no situations written here for the event ${event})`];
@@ -2115,9 +2381,20 @@ describe('LOST-06 and AR-04: the alert rule is one module, total over its own li
   // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
   // line 1896): ALERT_EVENTS is exactly acknowledge and escalate, the second
   // alert event (LOST-07-AC13). The JOURNEY_EVENTS half is unchanged.
-  test('LOST-06-AC14: ALERT_EVENTS is exactly acknowledge; JOURNEY_EVENTS is unchanged, start, heartbeat, silence, contact and home, and none of them acknowledges', () => {
-    expect([...ALERT_EVENTS]).toEqual(['acknowledge', 'escalate']);
-    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence', 'contact', 'home']);
+  // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+  // line 2118): ALERT_EVENTS gains acknowledger_removed, the reset (approach
+  // item 4), and JOURNEY_EVENTS gains remove (approach item 2), each last.
+  // Both still exact; none of the journey's events acknowledges.
+  test('LOST-06-AC14: ALERT_EVENTS is exactly acknowledge, escalate and acknowledger_removed; JOURNEY_EVENTS is start, heartbeat, silence, contact, home and remove, and none of them acknowledges', () => {
+    expect([...ALERT_EVENTS]).toEqual(['acknowledge', 'escalate', 'acknowledger_removed']);
+    expect([...JOURNEY_EVENTS]).toEqual([
+      'start',
+      'heartbeat',
+      'silence',
+      'contact',
+      'home',
+      'remove',
+    ]);
     expect(JOURNEY_EVENTS).not.toContain('acknowledge');
   });
 
@@ -2128,7 +2405,12 @@ describe('LOST-06 and AR-04: the alert rule is one module, total over its own li
   // time, under and at two minutes. The acknowledgement's are unchanged.
   test('LOST-06-AC14: every pair of alert situation and event the lists create has a row here, and no row is stale: no alert, and each of the four states with nobody, the sender and another on it, from a responder and from a non-responder', () => {
     const created = alertPairsTheModuleCreates();
-    const held = [...ALERT_ROWS, ...ESCALATION_ROWS].map(
+    // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+    // line 2129): the rows held, and the count below, gain the reset's: no
+    // alert, and each of the four states with nobody, the removed responder
+    // and another recorded. The acknowledgement's and the escalation's are
+    // as they were.
+    const held = [...ALERT_ROWS, ...ESCALATION_ROWS, ...RESET_ROWS].map(
       ({ situation, event }) => `${situation} × ${event}`,
     );
 
@@ -2144,7 +2426,11 @@ describe('LOST-06 and AR-04: the alert rule is one module, total over its own li
       1 +
         ALERT_STATES.length * RECORDED.length * SENDERS.length +
         (1 +
-          ALERT_STATES.length * ESCALATION_RECORDED.length * ESCALATION_TIMES.length * AGES.length),
+          ALERT_STATES.length *
+            ESCALATION_RECORDED.length *
+            ESCALATION_TIMES.length *
+            AGES.length) +
+        (1 + ALERT_STATES.length * RESET_RECORDED.length),
     );
   });
 
@@ -2246,13 +2532,17 @@ describe('LOST-06 and LOST-03: every message kind is withdrawn by exactly one ru
   // RG-03 (LOST-07, the spec's "Existing assertions that change by design",
   // line 2008): the list gains LOST_CONTACT_SMS, last, and the title with
   // it. Still exact, in order.
-  test('LOST-06-AC13: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME, ACKNOWLEDGED and LOST_CONTACT_SMS, in order', () => {
+  // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+  // line 2249): the list gains NO_RESPONDER, last, and the title with it.
+  // Still exact, in order.
+  test('LOST-06-AC13: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME, ACKNOWLEDGED, LOST_CONTACT_SMS and NO_RESPONDER, in order', () => {
     expect([...MESSAGE_KINDS]).toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
       'HOME',
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
+      'NO_RESPONDER',
     ]);
   });
 
@@ -2261,28 +2551,35 @@ describe('LOST-06 and LOST-03: every message kind is withdrawn by exactly one ru
   // escalated alert's unsent SMS are withdrawn when it resolves), and the
   // title with it. The check that every kind is in exactly one of the two is
   // unchanged, and covers the new kind.
-  test('LOST-06-AC13: WITHDRAWN_WHEN_RESOLVED is exactly LOST_CONTACT, ACKNOWLEDGED and LOST_CONTACT_SMS; the open’s list is ALERT_RESOLUTIONS; and every kind is in exactly one of the two, a kind in neither or in both named here until someone places it', () => {
+  // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+  // line 2264): the partition becomes one of three, with
+  // JOURNEY_MESSAGE_KINDS: NO_RESPONDER is a journey's message, which
+  // neither the resolution nor the open withdraws (D-123). Still exact, and
+  // a kind placed in none, or in two, is still named; the title says so.
+  test('LOST-06-AC13: WITHDRAWN_WHEN_RESOLVED is exactly LOST_CONTACT, ACKNOWLEDGED and LOST_CONTACT_SMS; the open’s list is ALERT_RESOLUTIONS; and every kind is in exactly one of the two or of the journey kinds, a kind in none or in two named here until someone places it', () => {
     // L1: assignable only while every kind listed is a message kind.
     const resolvedWithdraws: readonly MessageKind[] = WITHDRAWN_WHEN_RESOLVED;
     const openWithdraws: readonly MessageKind[] = ALERT_RESOLUTIONS;
+    const journeyKinds: readonly MessageKind[] = JOURNEY_MESSAGE_KINDS;
 
+    expect(journeyKinds, 'JOURNEY_MESSAGE_KINDS').toEqual(['NO_RESPONDER']);
     expect([...WITHDRAWN_WHEN_RESOLVED]).toEqual([
       'LOST_CONTACT',
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
     ]);
     expect([...openWithdraws]).toEqual(['BACK_IN_CONTACT', 'HOME']);
+    const places = (kind: MessageKind) =>
+      Number(resolvedWithdraws.includes(kind)) +
+      Number(openWithdraws.includes(kind)) +
+      Number(journeyKinds.includes(kind));
     expect(
-      MESSAGE_KINDS.filter(
-        (kind) => !resolvedWithdraws.includes(kind) && !openWithdraws.includes(kind),
-      ),
-      'kinds no withdrawal lists: place each in WITHDRAWN_WHEN_RESOLVED or ALERT_RESOLUTIONS',
+      MESSAGE_KINDS.filter((kind) => places(kind) === 0),
+      'kinds placed nowhere: place each in WITHDRAWN_WHEN_RESOLVED, ALERT_RESOLUTIONS or JOURNEY_MESSAGE_KINDS',
     ).toEqual([]);
     expect(
-      MESSAGE_KINDS.filter(
-        (kind) => resolvedWithdraws.includes(kind) && openWithdraws.includes(kind),
-      ),
-      'kinds both withdrawals list: each kind belongs to exactly one',
+      MESSAGE_KINDS.filter((kind) => places(kind) > 1),
+      'kinds placed twice: each kind belongs to exactly one',
     ).toEqual([]);
   });
 
@@ -2318,10 +2615,20 @@ describe('LOST-06 and LOST-03: every message kind is withdrawn by exactly one ru
 // ===========================================================================
 
 describe('LOST-07 and AR-04: the escalation is the alert rule’s second event, total over its lists', () => {
-  test('LOST-07-AC13: ESCALATE_AFTER_MS is exactly 120 000 (D-019: changing it needs the owner); JOURNEY_EVENTS is unchanged and none of them escalates', () => {
+  // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+  // line 2321): JOURNEY_EVENTS gains remove (SM-10-AC16), and the title no
+  // longer says it is unchanged. Still exact; none of them escalates.
+  test('LOST-07-AC13: ESCALATE_AFTER_MS is exactly 120 000 (D-019: changing it needs the owner); JOURNEY_EVENTS is start, heartbeat, silence, contact, home and remove, and none of them escalates', () => {
     expect(ESCALATE_AFTER_MS).toBe(120_000);
     expect(ESCALATE_AFTER_MS).toBe(TWO_MINUTES);
-    expect([...JOURNEY_EVENTS]).toEqual(['start', 'heartbeat', 'silence', 'contact', 'home']);
+    expect([...JOURNEY_EVENTS]).toEqual([
+      'start',
+      'heartbeat',
+      'silence',
+      'contact',
+      'home',
+      'remove',
+    ]);
     expect(JOURNEY_EVENTS).not.toContain('escalate');
   });
 
@@ -2525,23 +2832,37 @@ describe('LOST-07 and AR-04: the escalation is the alert rule’s second event, 
 });
 
 describe('LOST-07, LOST-06 and LOST-03: every kind has one channel and one withdrawal, decided in one place', () => {
-  test('LOST-07-AC14: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME, ACKNOWLEDGED and LOST_CONTACT_SMS, in order', () => {
+  // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+  // line 2528): the list gains NO_RESPONDER, last, and the title with it.
+  // Still exact, in order.
+  test('LOST-07-AC14: MESSAGE_KINDS is exactly LOST_CONTACT, BACK_IN_CONTACT, HOME, ACKNOWLEDGED, LOST_CONTACT_SMS and NO_RESPONDER, in order', () => {
     expect([...MESSAGE_KINDS]).toEqual([
       'LOST_CONTACT',
       'BACK_IN_CONTACT',
       'HOME',
       'ACKNOWLEDGED',
       'LOST_CONTACT_SMS',
+      'NO_RESPONDER',
     ]);
   });
 
-  test('LOST-07-AC14: SMS_KINDS is exactly LOST_CONTACT_SMS, PUSH_KINDS exactly the other four in MESSAGE_KINDS’ order, and every kind is in exactly one of the two, a kind in neither or in both named here until someone places it', () => {
+  // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+  // line 2538): PUSH_KINDS is the other five, NO_RESPONDER last, the
+  // walker's warning going by push (approach item 7), and the title with it.
+  // The channel partition is unchanged and covers the new kind.
+  test('LOST-07-AC14: SMS_KINDS is exactly LOST_CONTACT_SMS, PUSH_KINDS exactly the other five in MESSAGE_KINDS’ order, and every kind is in exactly one of the two, a kind in neither or in both named here until someone places it', () => {
     // L1: assignable only while every kind listed is a message kind.
     const bySms: readonly MessageKind[] = SMS_KINDS;
     const byPush: readonly MessageKind[] = PUSH_KINDS;
 
     expect([...SMS_KINDS]).toEqual(['LOST_CONTACT_SMS']);
-    expect([...PUSH_KINDS]).toEqual(['LOST_CONTACT', 'BACK_IN_CONTACT', 'HOME', 'ACKNOWLEDGED']);
+    expect([...PUSH_KINDS]).toEqual([
+      'LOST_CONTACT',
+      'BACK_IN_CONTACT',
+      'HOME',
+      'ACKNOWLEDGED',
+      'NO_RESPONDER',
+    ]);
     expect([...PUSH_KINDS]).toEqual(MESSAGE_KINDS.filter((kind) => byPush.includes(kind)));
     expect(
       MESSAGE_KINDS.filter((kind) => !bySms.includes(kind) && !byPush.includes(kind)),
@@ -2553,18 +2874,27 @@ describe('LOST-07, LOST-06 and LOST-03: every kind has one channel and one withd
     ).toEqual([]);
   });
 
-  test('LOST-07-AC14: the SMS kind is withdrawn on resolution and not on an open: every kind is still in exactly one of WITHDRAWN_WHEN_RESOLVED and the open’s list, ALERT_RESOLUTIONS', () => {
+  // RG-03 (SM-10, the spec's "Existing assertions that change by design",
+  // line 2556): the partition becomes one of three, with
+  // JOURNEY_MESSAGE_KINDS, which neither withdrawal takes (D-123), and the
+  // title with it. Still exact; a kind in none, or in two, still fails here.
+  test('LOST-07-AC14: the SMS kind is withdrawn on resolution and not on an open: every kind is still in exactly one of WITHDRAWN_WHEN_RESOLVED, the open’s list, ALERT_RESOLUTIONS, and the journey kinds', () => {
     const resolvedWithdraws: readonly MessageKind[] = WITHDRAWN_WHEN_RESOLVED;
     const openWithdraws: readonly MessageKind[] = ALERT_RESOLUTIONS;
+    const journeyKinds: readonly MessageKind[] = JOURNEY_MESSAGE_KINDS;
 
+    expect(journeyKinds, 'JOURNEY_MESSAGE_KINDS').toEqual(['NO_RESPONDER']);
     expect(resolvedWithdraws).toContain('LOST_CONTACT_SMS');
     expect(openWithdraws).not.toContain('LOST_CONTACT_SMS');
     expect(
       MESSAGE_KINDS.filter(
         (kind) =>
-          Number(resolvedWithdraws.includes(kind)) + Number(openWithdraws.includes(kind)) !== 1,
+          Number(resolvedWithdraws.includes(kind)) +
+            Number(openWithdraws.includes(kind)) +
+            Number(journeyKinds.includes(kind)) !==
+          1,
       ),
-      'kinds in neither withdrawal, or in both',
+      'kinds in no withdrawal and no journey kind, or in two',
     ).toEqual([]);
   });
 
@@ -2584,5 +2914,412 @@ describe('LOST-07, LOST-06 and LOST-03: every kind has one channel and one withd
     expect([...KIT_PUSH_KINDS]).toEqual([...PUSH_KINDS]);
     expect([...KIT_WITHDRAWN_WHEN_ACKNOWLEDGED]).toEqual([...WITHDRAWN_WHEN_ACKNOWLEDGED]);
     expect([...KIT_WITHDRAWN_WHEN_RESOLVED]).toEqual([...WITHDRAWN_WHEN_RESOLVED]);
+  });
+});
+
+// ===========================================================================
+// SM-10: removing a responder (the removal, the journey's sixth event) and
+// the reset (the alert rule's third), and SM-02's last responder.
+//
+// The removal's rule, in its order (approach item 2): no journey → refused,
+// JOURNEY_NOT_FOUND; ENDED → ignored, JOURNEY_ENDED (SM-07); not among the
+// responders (the walker included, IDs compared exactly) → unchanged,
+// NOT_A_RESPONDER; otherwise → removed, the state as it was, and whether no
+// responder is left. The reset's (approach item 4): no unresolved alert,
+// RESOLVED, or someone other than the removed responder recorded, nobody
+// included → unchanged; otherwise → reset, OPEN, whatever the state was. The
+// tables above hold every pair; these hold the rest.
+// ===========================================================================
+
+/** The removal rule, in its order, as the spec writes it (approach item 2). */
+function expectedRemoval(
+  journey: JourneyForRemoval | null,
+  { responderId }: RemoveEvent,
+): RemoveOutcome {
+  if (journey === null) {
+    return REMOVAL_REFUSED;
+  }
+  if (journey.state === 'ENDED') {
+    return REMOVAL_IGNORED;
+  }
+  if (!journey.responderIds.includes(responderId)) {
+    return NOT_A_RESPONDER;
+  }
+  return REMOVED_FROM(
+    journey.state,
+    journey.responderIds.every((id) => id === responderId),
+  );
+}
+
+/** The reset rule, in its order, as the spec writes it (approach item 4). */
+function expectedReset(
+  alert: AlertForReset | null,
+  { responderId }: AcknowledgerRemovedEvent,
+): ResetOutcome {
+  if (alert === null || alert.state === 'RESOLVED') {
+    return NOT_RESET;
+  }
+  return alert.acknowledgedBy === responderId ? RESET : NOT_RESET;
+}
+
+/**
+ * Any journey, or none, and any responder to remove: IDs from a small pool, so
+ * the one removed is often a responder, often the only one, and sometimes
+ * named in another case, since the rule compares IDs exactly.
+ */
+const anyRemoval = fc.uniqueArray(fc.uuid(), { minLength: 2, maxLength: 5 }).chain((pool) => {
+  const someone = fc.constantFrom(...pool, ...pool.map((id) => id.toUpperCase()));
+  return fc.record({
+    journey: fc.option(
+      fc.record({
+        id: fc.uuid(),
+        state: fc.constantFrom(...JOURNEY_STATES),
+        responderIds: fc.subarray(pool),
+      }),
+      { nil: null },
+    ),
+    responderId: someone,
+  });
+});
+
+/** Any alert, or none, and any responder removed, from a small pool as above. */
+const anyReset = fc.uniqueArray(fc.uuid(), { minLength: 2, maxLength: 4 }).chain((pool) => {
+  const someone = fc.constantFrom(...pool, ...pool.map((id) => id.toUpperCase()));
+  return fc.record({
+    alert: fc.option(
+      fc.record({
+        id: fc.uuid(),
+        state: fc.constantFrom(...ALERT_STATES),
+        acknowledgedBy: fc.option(someone, { nil: null }),
+      }),
+      { nil: null },
+    ),
+    responderId: someone,
+  });
+});
+
+describe('SM-10, SM-02 and AR-04: the removal is the journey’s sixth event, total over its lists', () => {
+  test('SM-10-AC16: JOURNEY_EVENTS is exactly start, heartbeat, silence, contact, home and remove, and ALERT_EVENTS exactly acknowledge, escalate and acknowledger_removed, in order', () => {
+    expect([...JOURNEY_EVENTS]).toEqual([
+      'start',
+      'heartbeat',
+      'silence',
+      'contact',
+      'home',
+      'remove',
+    ]);
+    expect([...ALERT_EVENTS]).toEqual(['acknowledge', 'escalate', 'acknowledger_removed']);
+  });
+
+  test.each(REMOVE_ROWS)(
+    'SM-10-AC16: remove for $situation gives exactly its expected outcome (SM-02)',
+    ({ journey, expected }) => {
+      expect(transition(journey, remove(RESPONDER))).toEqual(expected);
+    },
+  );
+
+  test('SM-10-AC16: the removal’s rows cover no journey and every state, each with the responder as the only one, as one of several, and not named; and the table’s rows agree with them', () => {
+    expect(Object.keys(REMOVE_ROWS_BY_STATE).sort()).toEqual([...JOURNEY_STATES].sort());
+    expect(REMOVE_ROWS).toHaveLength(1 + 3 * JOURNEY_STATES.length);
+    for (const state of JOURNEY_STATES) {
+      expect(TRANSITIONS.remove[state], state).toEqual({
+        outcome: REMOVE_ROWS_BY_STATE[state].oneOfSeveral,
+      });
+    }
+    expect(TRANSITIONS.remove.none).toEqual({ outcome: REMOVAL_REFUSED });
+  });
+
+  test('SM-10-AC1: the last responder is the one whose removal leaves no responder: removing either of two leaves one, and removing the only one leaves none, whatever unended state the journey is in (SM-02)', () => {
+    for (const state of UNENDED) {
+      const two = { id: JOURNEY, state, responderIds: [RESPONDER, OTHER_RESPONDER] };
+      expect(transition(two, remove(RESPONDER)), state).toEqual(REMOVED_FROM(state, false));
+      expect(transition(two, remove(OTHER_RESPONDER)), state).toEqual(REMOVED_FROM(state, false));
+      expect(
+        transition(
+          { id: JOURNEY, state, responderIds: [OTHER_RESPONDER] },
+          remove(OTHER_RESPONDER),
+        ),
+        state,
+      ).toEqual(REMOVED_FROM(state, true));
+    }
+  });
+
+  test('SM-10-AC1: IDs are compared exactly, as the stores hand them back lower-case: the walker’s own ID, a stranger’s, and a responder’s ID in upper case are each NOT_A_RESPONDER', () => {
+    const responder = syntheticUuid();
+    expect(responder.toUpperCase(), 'an ID with a letter in it').not.toBe(responder);
+    const journey = { id: JOURNEY, state: 'ACTIVE' as const, responderIds: [responder] };
+
+    for (const who of [WALKER, STRANGER, responder.toUpperCase()]) {
+      expect(transition(journey, remove(who)), who).toEqual(NOT_A_RESPONDER);
+    }
+    expect(transition(journey, remove(responder))).toEqual(REMOVED_FROM('ACTIVE', true));
+  });
+
+  test('SM-10-AC16: for any journey and any responder, the removal’s outcome is the rule’s, in its order — no journey, ended, not a responder, then removed with whether it was the last — never a throw, never undefined (SM-02)', () => {
+    fc.assert(
+      fc.property(anyRemoval, ({ journey, responderId }) => {
+        let outcome: unknown;
+        expect(() => {
+          outcome = transition(journey, remove(responderId));
+        }).not.toThrow();
+        expect(outcome).toBeDefined();
+        expect(outcome).toEqual(expectedRemoval(journey, remove(responderId)));
+      }),
+    );
+  });
+
+  test('SM-10-AC16: deciding about a removal changes neither the journey nor the event handed in', () => {
+    fc.assert(
+      fc.property(anyRemoval, ({ journey, responderId }) => {
+        const event = remove(responderId);
+        const journeyBefore = structuredClone(journey);
+        const eventBefore = structuredClone(event);
+
+        transition(journey, event);
+
+        expect(journey).toEqual(journeyBefore);
+        expect(event).toEqual(eventBefore);
+      }),
+    );
+  });
+
+  test('SM-10-AC16: an event of a type the module does not list is thrown on in every removal situation, with the rule’s own message, never answered with a value', () => {
+    for (const { situation, journey } of REMOVE_ROWS) {
+      // Control: in this situation the listed event is answered, with a value.
+      expect(transition(journey, remove(RESPONDER)), situation).toBeDefined();
+      for (const type of ['teleport', 'leave', 'constructor', 'toString']) {
+        expect(
+          () => transition(journey, { type, responderId: RESPONDER } as unknown as RemoveEvent),
+          `${situation}, ${type}`,
+        ).toThrow(new RegExp(`^The state machine has no rule for an event of type ${type}\\.$`));
+      }
+    }
+  });
+
+  test('SM-10-AC16: (L1) a removal without the responder it removes does not type-check, nor one naming the walker’s device', () => {
+    // Each @ts-expect-error fails the type check (gate:static) the day the
+    // call under it is accepted. Values only; the calls are not made.
+    const refused: unknown[] = [
+      // @ts-expect-error -- a removal names the responder it removes
+      { type: 'remove' } satisfies RemoveEvent,
+      // @ts-expect-error -- and nothing else: not a device
+      { type: 'remove', responderId: RESPONDER, deviceId: DEVICE } satisfies RemoveEvent,
+    ];
+    expect(refused).toHaveLength(2);
+  });
+});
+
+describe('SM-10 and LOST-06: the reset is the alert rule’s third event, total over its lists', () => {
+  test.each(RESET_ROWS)(
+    'SM-10-AC16: $situation × $event gives exactly its expected outcome (LOST-06)',
+    ({ situation, expected }) => {
+      expect(alertTransition(resetFor(situation), acknowledgerRemoved(REMOVED))).toEqual(expected);
+    },
+  );
+
+  test('SM-10-AC4: removing the responder recorded on an unresolved alert resets it to OPEN, whatever its state; removing another responder, or the acknowledger of a RESOLVED alert, changes nothing (LOST-06)', () => {
+    for (const state of ['OPEN', 'ESCALATED', 'ACKNOWLEDGED'] as const) {
+      expect(
+        alertTransition(
+          { id: ALERT, state, acknowledgedBy: REMOVED },
+          acknowledgerRemoved(REMOVED),
+        ),
+        state,
+      ).toEqual({ type: 'reset', state: 'OPEN' });
+      expect(
+        alertTransition({ id: ALERT, state, acknowledgedBy: ON_IT }, acknowledgerRemoved(REMOVED)),
+        `${state}, someone else recorded`,
+      ).toEqual({ type: 'unchanged' });
+      expect(
+        alertTransition({ id: ALERT, state, acknowledgedBy: null }, acknowledgerRemoved(REMOVED)),
+        `${state}, nobody recorded`,
+      ).toEqual({ type: 'unchanged' });
+    }
+    expect(
+      alertTransition(
+        { id: ALERT, state: 'RESOLVED', acknowledgedBy: REMOVED },
+        acknowledgerRemoved(REMOVED),
+      ),
+    ).toEqual({ type: 'unchanged' });
+    expect(alertTransition(null, acknowledgerRemoved(REMOVED))).toEqual({ type: 'unchanged' });
+  });
+
+  test('SM-10-AC16: the reset’s IDs are compared exactly: the acknowledger recorded in upper case is someone else', () => {
+    expect(REMOVED.toUpperCase(), 'an ID with a letter in it').not.toBe(REMOVED);
+
+    expect(
+      alertTransition(
+        { id: ALERT, state: 'ACKNOWLEDGED', acknowledgedBy: REMOVED.toUpperCase() },
+        acknowledgerRemoved(REMOVED),
+      ),
+    ).toEqual(NOT_RESET);
+    expect(
+      alertTransition(
+        { id: ALERT, state: 'ACKNOWLEDGED', acknowledgedBy: REMOVED },
+        acknowledgerRemoved(REMOVED.toUpperCase()),
+      ),
+    ).toEqual(NOT_RESET);
+  });
+
+  test('SM-10-AC16: for any alert and any removed responder, the reset’s outcome is the rule’s, in its order — no alert, resolved, not the one recorded, then reset — never a throw, never undefined; deciding changes neither the alert nor the event handed in', () => {
+    fc.assert(
+      fc.property(anyReset, ({ alert, responderId }) => {
+        const event = acknowledgerRemoved(responderId);
+        const alertBefore = structuredClone(alert);
+        const eventBefore = structuredClone(event);
+        let outcome: unknown;
+        expect(() => {
+          outcome = alertTransition(alert, event);
+        }).not.toThrow();
+        expect([RESET, NOT_RESET]).toContainEqual(outcome);
+        expect(outcome).toEqual(expectedReset(alert, event));
+        expect(alert).toEqual(alertBefore);
+        expect(event).toEqual(eventBefore);
+      }),
+    );
+  });
+
+  test('SM-10-AC16: an event of a type the module does not list is thrown on in every reset situation too, with the rule’s own message, never answered with a value', () => {
+    for (const { situation } of RESET_ROWS) {
+      // Control: in this situation the listed event is answered, with a value.
+      expect(
+        alertTransition(resetFor(situation), acknowledgerRemoved(REMOVED)),
+        situation,
+      ).toBeDefined();
+      for (const type of ['snooze', 'acknowledger_left', 'constructor', 'valueOf']) {
+        expect(
+          () =>
+            alertTransition(resetFor(situation), {
+              type,
+              responderId: REMOVED,
+            } as unknown as AcknowledgerRemovedEvent),
+          `${situation}, ${type}`,
+        ).toThrow(new RegExp(`^The alert rule has no rule for an event of type ${type}\\.$`));
+      }
+    }
+  });
+
+  test('SM-10-AC16: (L1) a reset without the responder removed does not type-check', () => {
+    // As above: the @ts-expect-error fails gate:static the day it is accepted.
+    const refused: unknown[] = [
+      // @ts-expect-error -- the reset names who was removed
+      { type: 'acknowledger_removed' } satisfies AcknowledgerRemovedEvent,
+    ];
+    expect(refused).toHaveLength(1);
+  });
+
+  test('SM-10-AC16: the acknowledgement’s and the escalation’s rows are unchanged by the reset’s: an ESCALATED alert is still acknowledged, and an OPEN one nobody is on still escalated at two minutes', () => {
+    expect(
+      alertTransition(
+        { id: ALERT, state: 'ESCALATED', acknowledgedBy: null, responderIds: [SENDER] },
+        acknowledgeBy(SENDER),
+      ),
+    ).toEqual(ACKNOWLEDGED);
+    expect(
+      alertTransition(
+        { id: ALERT, state: 'OPEN', acknowledgedBy: null, smsRaisedAt: null },
+        { type: 'escalate', openedAt: OPENED_AT, now: new Date(OPENED_AT.getTime() + TWO_MINUTES) },
+      ),
+    ).toEqual(ESCALATED);
+  });
+});
+
+describe('SM-10, LOST-06 and LOST-07: every kind has one channel and one place among the withdrawals, decided in one place', () => {
+  test('SM-10-AC17: MESSAGE_KINDS is exactly the six kinds, NO_RESPONDER last', () => {
+    expect([...MESSAGE_KINDS]).toEqual([
+      'LOST_CONTACT',
+      'BACK_IN_CONTACT',
+      'HOME',
+      'ACKNOWLEDGED',
+      'LOST_CONTACT_SMS',
+      'NO_RESPONDER',
+    ]);
+    expect(MESSAGE_KINDS.at(-1)).toBe('NO_RESPONDER');
+  });
+
+  test('SM-10-AC17: JOURNEY_MESSAGE_KINDS is exactly NO_RESPONDER; WITHDRAWN_WHEN_RESET exactly ACKNOWLEDGED, each kind in it also withdrawn on resolution; WITHDRAWN_WHEN_REMOVED exactly every kind that is not a journey’s, in MESSAGE_KINDS’ order', () => {
+    // L1: assignable only while every kind listed is a message kind.
+    const journeyKinds: readonly MessageKind[] = JOURNEY_MESSAGE_KINDS;
+    const resetWithdraws: readonly MessageKind[] = WITHDRAWN_WHEN_RESET;
+    const removalWithdraws: readonly MessageKind[] = WITHDRAWN_WHEN_REMOVED;
+
+    expect(journeyKinds, 'JOURNEY_MESSAGE_KINDS').toEqual(['NO_RESPONDER']);
+    expect(resetWithdraws, 'WITHDRAWN_WHEN_RESET').toEqual(['ACKNOWLEDGED']);
+    expect(removalWithdraws, 'WITHDRAWN_WHEN_REMOVED').toEqual([
+      'LOST_CONTACT',
+      'BACK_IN_CONTACT',
+      'HOME',
+      'ACKNOWLEDGED',
+      'LOST_CONTACT_SMS',
+    ]);
+    expect(removalWithdraws).toEqual(MESSAGE_KINDS.filter((kind) => !journeyKinds.includes(kind)));
+    expect(
+      resetWithdraws.filter(
+        (kind) => !(WITHDRAWN_WHEN_RESOLVED as readonly string[]).includes(kind),
+      ),
+      'kinds a reset withdraws that a resolution leaves',
+    ).toEqual([]);
+  });
+
+  test('SM-10-AC17: every kind is in exactly one of SMS_KINDS and PUSH_KINDS, and in exactly one of WITHDRAWN_WHEN_RESOLVED, the open’s list (ALERT_RESOLUTIONS) and JOURNEY_MESSAGE_KINDS; a kind placed in none, or in two, is named', () => {
+    const bySms: readonly MessageKind[] = SMS_KINDS;
+    const byPush: readonly MessageKind[] = PUSH_KINDS;
+    const resolvedWithdraws: readonly MessageKind[] = WITHDRAWN_WHEN_RESOLVED;
+    const openWithdraws: readonly MessageKind[] = ALERT_RESOLUTIONS;
+    const journeyKinds: readonly MessageKind[] = JOURNEY_MESSAGE_KINDS;
+    expect(journeyKinds, 'JOURNEY_MESSAGE_KINDS').toEqual(['NO_RESPONDER']);
+
+    const channels = (kind: MessageKind) =>
+      Number(bySms.includes(kind)) + Number(byPush.includes(kind));
+    const places = (kind: MessageKind) =>
+      Number(resolvedWithdraws.includes(kind)) +
+      Number(openWithdraws.includes(kind)) +
+      Number(journeyKinds.includes(kind));
+    expect(
+      MESSAGE_KINDS.filter((kind) => channels(kind) !== 1),
+      'kinds in no channel, or in both',
+    ).toEqual([]);
+    expect(
+      MESSAGE_KINDS.filter((kind) => places(kind) !== 1),
+      'kinds in no place among the withdrawals and the journey kinds, or in two',
+    ).toEqual([]);
+    expect(byPush).toContain('NO_RESPONDER');
+    expect(bySms).not.toContain('NO_RESPONDER');
+  });
+
+  test('SM-10-AC17: PUSH_KINDS is exactly the five kinds other than LOST_CONTACT_SMS, in MESSAGE_KINDS’ order; SMS_KINDS, WITHDRAWN_WHEN_RESOLVED, WITHDRAWN_WHEN_ACKNOWLEDGED and ALERT_RESOLUTIONS are unchanged', () => {
+    expect([...PUSH_KINDS]).toEqual(MESSAGE_KINDS.filter((kind) => kind !== 'LOST_CONTACT_SMS'));
+    expect([...PUSH_KINDS]).toHaveLength(5);
+    expect([...SMS_KINDS]).toEqual(['LOST_CONTACT_SMS']);
+    expect([...WITHDRAWN_WHEN_RESOLVED]).toEqual([
+      'LOST_CONTACT',
+      'ACKNOWLEDGED',
+      'LOST_CONTACT_SMS',
+    ]);
+    expect([...WITHDRAWN_WHEN_ACKNOWLEDGED]).toEqual(['LOST_CONTACT_SMS']);
+    expect([...ALERT_RESOLUTIONS]).toEqual(['BACK_IN_CONTACT', 'HOME']);
+  });
+
+  test('SM-10-AC17: the test kit’s copies equal the domain’s: MESSAGE_KINDS, PUSH_KINDS, JOURNEY_MESSAGE_KINDS, WITHDRAWN_WHEN_RESET and WITHDRAWN_WHEN_REMOVED', () => {
+    // The test kit cannot import the server, so its copies are held to the
+    // domain's here, where both can be read.
+    const domain = {
+      MESSAGE_KINDS: MESSAGE_KINDS as readonly string[] | undefined,
+      PUSH_KINDS: PUSH_KINDS as readonly string[] | undefined,
+      JOURNEY_MESSAGE_KINDS: JOURNEY_MESSAGE_KINDS as readonly string[] | undefined,
+      WITHDRAWN_WHEN_RESET: WITHDRAWN_WHEN_RESET as readonly string[] | undefined,
+      WITHDRAWN_WHEN_REMOVED: WITHDRAWN_WHEN_REMOVED as readonly string[] | undefined,
+    };
+    expect({
+      MESSAGE_KINDS: [...KIT_MESSAGE_KINDS],
+      PUSH_KINDS: [...KIT_PUSH_KINDS],
+      JOURNEY_MESSAGE_KINDS: [...KIT_JOURNEY_MESSAGE_KINDS],
+      WITHDRAWN_WHEN_RESET: [...KIT_WITHDRAWN_WHEN_RESET],
+      WITHDRAWN_WHEN_REMOVED: [...KIT_WITHDRAWN_WHEN_REMOVED],
+    }).toEqual(
+      Object.fromEntries(
+        Object.entries(domain).map(([name, list]) => [name, list === undefined ? list : [...list]]),
+      ),
+    );
   });
 });

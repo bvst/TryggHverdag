@@ -799,7 +799,7 @@ new decision that supersedes it (see `00-working-agreement.md`).
   saying the worker has stopped.
 
 ## D-066 — Mutation testing runs Stryker's command runner, not its Vitest runner
-- **Date:** 2026-09-23 · **Status:** Accepted (delegated, D-031) · **Section:** 6
+- **Date:** 2026-09-23 · **Status:** Accepted (delegated, D-031); its grouping amended below, by D-098 and by D-117, and its `pnpm exec vitest run` command replaced by D-117 · **Section:** 6
 - **Context:** D-036 requires a mutation score on safety code. With
   `testRunner: 'vitest'`, Stryker reported **4.35 %** on the first run — which,
   taken at face value, says the domain tests are worthless.
@@ -4190,7 +4190,8 @@ any other path is work, not a candidate for the same treatment.
 ## D-117 — `worker.ts` gets a mutation group of its own, and each mutant's run starts Vitest directly (BUG-29)
 - **Date:** 2026-10-07 · **Status:** Accepted (delegated, D-031). It
   lowers no score and does not raise the budget · **Section:** 6 (amends
-  D-066's grouping; within D-036 and D-098)
+  D-066's grouping and replaces its `pnpm exec vitest run` command; within
+  D-036 and D-098)
 - **Context:** On LOST-07's pull request (#67), CI's required `mutation`
   check ran out of its 25-minute budget (job 112914873757): `spawnSync pnpm
   ETIMEDOUT`, the `process` group cut off after 7:23 and `api-process` never
@@ -4222,10 +4223,13 @@ any other path is work, not a candidate for the same treatment.
     run`, Vitest's own bin, instead of `pnpm exec vitest run`. The options,
     the tests and the configuration are unchanged.
   - The budget stays at 25 minutes.
-- **Why this cannot hide a weak test:** a narrower test set can only score
-  lower, never falsely higher (D-066's amendment). A future `worker.ts`
-  mutant that only `bin.test.ts` could kill would survive, and the gate would
-  name it.
+- **Why this cannot hide a weak test:** a narrower test set never scores
+  falsely higher (D-066's amendment). Dropping a test can turn a kill into a
+  survivor; the one way a score can rise is a mutant that made the dropped
+  test hang now failing fast in a kept test, which is still a real failure.
+  A future `worker.ts` mutant that only `bin.test.ts` could kill would
+  survive and be named in the log. It would block only below 80 %, so a few
+  such survivors could pass unseen in the score (`safety-reviewer`).
 - **Rejected:**
   - Raising the budget: the owner's, and D-036 asks for speed first.
   - `--pool=threads`: about 7 % more, but it changes how tests run (worker
@@ -4246,6 +4250,16 @@ any other path is work, not a candidate for the same treatment.
   112942878321: domain 6:08, healthchecks 1:45, journeys 2:26, alerts 6:42,
   process 7:36, api-process cut off). CI's run on the fix is the measure of
   record.
+- **CI's run on the fix** (#67, `2a65c3a`, job 112967666415): **21:07**,
+  3:53 under the budget, every file at 80 % or more and every score as
+  before. domain 5:31, healthchecks 1:38, journeys 2:13, alerts 6:15, worker
+  3:58, process 0:58, api-process 0:22. The margin is thin: the next task
+  that adds safety mutants may need more room, and the choice then is the
+  owner's (D-098). An overrun fails loudly, never green.
+- **Compared against:** the 189-mutant comparison was the scratch run
+  without `bin.test.ts` against the `process` group's JSON report from
+  `gate:full` at `ef8a8e4`. That report has since been overwritten; its log
+  shows the same 183/4/2 and the same four survivors (`test-auditor`).
 
 ## D-118 — Which model and thinking level each agent uses, and CI names its model (BUG-30)
 - **Date:** 2026-10-07 · **Status:** Accepted (owner, 2026-10-07). The owner's
@@ -4576,3 +4590,234 @@ any other path is work, not a candidate for the same treatment.
     it while the failure has not come back.
   - Revisit if a review ends with no structured output again, or if a Claude
     Code release changes how `--agent` treats tools, memory or `--model`.
+
+## D-122 — Removing a responder: the owner's four answers, and the removal has no route in M2 (SM-10, SM-02)
+- **Date:** 2026-10-09 · **Status:** Accepted (owner, 2026-10-09). Each was
+  asked with Claude's recommendation, and the owner chose it each time ·
+  **Section:** 5 (SM-02, SM-10; D-019, D-024, D-033, D-079, D-087, D-111,
+  D-114, D-115, D-116)
+- **Context:** SM-10's spec (`docs/specs/SM-10.md`) asked four questions that
+  are scope, cost, privacy or safety. D-115 gave this task "the removal"; it
+  did not say how far.
+- **Decision:**
+  1. **When the acknowledger of an alert that already sent its SMS is
+     removed, every remaining responder gets a second SMS at once.** The
+     alert goes back to `OPEN`, with no escalation time and its round raised,
+     so the next sweep, within about 10 s, texts them again: its two minutes
+     from the opening have long passed. No push is sent again. An alert
+     never escalated escalates at two minutes from its opening, as before.
+     - Rejected: a fresh two minutes from the removal (a delay at the worst
+       moment, seven or more minutes after last contact, and a new time to
+       count from); no second SMS (the others' last word would be "someone is
+       on it").
+  2. **A removed responder receives nothing more.** At the removal every
+     unsent message of the journey's alerts to them is withdrawn, whatever its
+     kind, and nothing later is written to them, so no stand-down either. One
+     already in a provider's hands cannot be recalled. The removal is the
+     walker's or the admin's deliberate choice, and the remove-a-member rule
+     says "immediately"; a stand-down would tell a removed, possibly abusive,
+     member the walker's state. This reads D-111's "every responder … gets
+     one stand-down" as every responder still on the journey.
+     - Rejected: a stand-down after removal (writes to someone no longer on
+       the journey); nothing withdrawn (a member removed seconds into an
+       alert would still get the critical alert).
+  3. **A silent journey with no responder opens its alert with nobody to tell,
+     and the owner is paged through the SMS check.** The journey goes to
+     `LOST_CONTACT`, the watchdog's sweep stays healthy, and each minute
+     `staging-sms` reports failing while such an alert is unresolved, with a
+     line saying how many. It lasts until contact comes back, "I'm home", or
+     SM-06's 24-hour rule (task 8) resolves it. Nothing for the owner to set
+     up. While it lasts a failed SMS adds no new page, since the check is
+     already failing. The page arrives by email (A-08) until D-079's go-live
+     question. This changes LOST-02's refusal: the open no longer refuses a
+     journey with no responder, since SM-02 lets one run on.
+     - Rejected: a third Healthchecks.io check (two more owner to-dos and
+       more wiring; it can be added if the overlap ever matters); one log line
+       and no page (silence is the failure this app exists to prevent); as
+       today, the sweep failing until the journey ends (the worker's check
+       would stay down and hide any other watchdog failure).
+  4. **The removed responder's row in `journey_responders` is deleted.** Every
+     path that tells a responder already reads those rows, so a removed one is
+     left out of each, M3's included, by construction (AR-11). Nothing then
+     says they followed the journey, beyond messages already sent; how long
+     journey records are kept stays M4's question.
+     - Rejected: keeping the row, marked removed (every path must remember to
+       leave it out, and one that forgets keeps alerting a removed member).
+  5. **No route in M2.** The removal is a store operation and a module, with
+     no production caller until M3's route. LOST-07's spec described this
+     task's option as "a store operation and module with no route"; D-115's
+     own text did not carry the words, so they are recorded here.
+- **Consequences:**
+  - SM-10-AC1 to AC21 are written on these answers. D-123 records the
+    technical choices within them.
+  - Item 1 costs one SMS per remaining responder (about €0.05 each, D-024),
+    only when an acknowledger is removed during an escalated alert.
+  - SM-02 will read as covered while its screen half, the no-responder state
+    on the walker's journey screen (D-087), is M3's to build.
+  - **M3's route must not ship where the SMS check is not running**
+    (`safety-reviewer`, review loop 1): with `HEALTHCHECKS_SMS_URL` unset,
+    item 3's page does not happen, where before this task the sweep failed
+    and the worker's check paged. No environment can reach it in M2. Before
+    the route ships, a deployed worker must refuse to start without
+    `HEALTHCHECKS_SMS_URL`, or make a check the owner is paged by fail (the
+    worker's own check, or `/v1/health`). A log line is not enough: it pages
+    nobody (`safety-reviewer`, loop-1 delta). Until then the start lines say
+    what the SMS check covers and what goes unpaged without it.
+  - Task numbers: LOST-06's spec and D-114 were written before D-115, so
+    their "task 7" for "They're safe" is task 8 today, and the
+    resumed-escalation rule they place in "task 6" is this task, task 7.
+    Supersedes nothing.
+
+## D-123 — Removing a responder: the removal and the reset as events, a round on alerts and messages, the walker's warning in the outbox, and how D-033's alert states are read (SM-10, SM-02)
+- **Date:** 2026-10-09 · **Status:** Accepted (delegated, D-031) ·
+  **Section:** 5 (AR-03 to AR-06, AR-11; D-033, D-086, D-087, D-100, D-102,
+  D-103, D-108, D-112, D-113, D-114, D-116, D-117, D-122)
+- **Context:** SM-10's spec has the full reasoning. This records the choices
+  it makes within the owner's answers (D-122) and the binding rules.
+- **Decision:**
+  - **The removal is a journey event,** `remove`, in `domain/journey.ts`'s
+    `transition` (AR-04). In order: no journey → refused,
+    `JOURNEY_NOT_FOUND`; `ENDED` → ignored, `JOURNEY_ENDED`; not a responder
+    → unchanged, `NOT_A_RESPONDER` (the walker included; IDs compared
+    exactly); else removed, saying whether it was the last. No event ID: a
+    repeat finds no row (D-103's reading).
+  - **The reset is an alert event,** `acknowledger_removed`, in
+    `alertTransition`. An unresolved alert whose recorded acknowledger is the
+    removed responder goes to `OPEN`, whatever its state; anything else is
+    unchanged, a `RESOLVED` alert's record included. The store clears
+    `acknowledged_by`, `acknowledged_at` and `sms_raised_at`, raises the
+    round, and withdraws the alert's unsent `ACKNOWLEDGED` notices
+    (`WITHDRAWN_WHEN_RESET`): "someone is on it" is false once nobody is.
+  - **`sms_raised_at` now means "this round's escalation".** Cleared by a
+    reset, so LOST-07's escalation, unchanged, writes the second round's SMS.
+    The first round's time stays on its SMS rows (LOST-07-AC17). Rejected: a
+    separate `sms_round` column, which changes the rule, the read and the
+    write on the path that pages, for no difference in behaviour.
+  - **A round on alerts and messages.** `alerts.round` starts at 1 and rises
+    with each reset; each message is written with its alert's round, in SQL.
+    The outbox's unique key becomes (alert, recipient, kind, round), so a
+    second round's SMS and notices are taken while a duplicate within a round
+    is still refused. Rejected: re-arming old rows (loses who was told what);
+    dropping the key (it guards the races LOST-02 to LOST-07 rely on); a kind
+    per round.
+  - **The walker's warning (SM-02) is an outbox message of a journey.** A new
+    kind `NO_RESPONDER`, last in `MESSAGE_KINDS` and in `PUSH_KINDS`,
+    non-critical (D-087). The outbox's `alert_id` becomes nullable and gains
+    `journey_id`, with a check that exactly one is set; the check names no
+    kind, since a value added to an enum cannot be used in the transaction
+    that adds it. `JOURNEY_MESSAGE_KINDS` lists the journey kinds; nothing
+    withdraws them in M2. Rejected: a table of its own (a second claim and
+    sender on the delivery path).
+  - **`WITHDRAWN_WHEN_REMOVED`** holds every alert kind (D-122, item 2).
+  - **One transaction, the journey's row first** (D-112), with its own
+    `lock_timeout` (`LOCK_WAIT_LIMIT_MS`) on whichever pool runs it: the
+    journey's row, the rule asked again under it, the responder row deleted
+    (exactly one), the alert's reset, the removed responder's withdrawals,
+    and the warning when it was the last. Database time throughout (AR-03).
+  - **A journey with no responder** (D-122, item 3): the open opens its
+    alert with no message; `alertsDueForEscalation` leaves such a journey's
+    alerts out, and under the lock the escalation skips one that has lost its
+    last responder; `unheardAlertCount()` counts unresolved alerts whose
+    journey has no responder, and the SMS check reports failing while it or
+    the unsent count is above zero.
+  - **Three closed log events** (PRIV-07, D-102): `removal_ignored`
+    (journey ID and reason), `removal_failed` (stage and SQLSTATE),
+    `unheard_alerts` (count). No event names a user.
+  - **The module** is `modules/journeys/removal.ts`, mutated in the
+    `journeys` group (D-117's budget; if a run does not fit, it gets a group
+    of its own). Migration `0007`.
+  - **`escalate()`'s comment** says that an unreadable time cannot reach the
+    rule (`databaseTime` throws first, so the sweep fails and pages), rather
+    than reading as a quiet failure.
+  - **How D-033's alert states are read now:** `ACKNOWLEDGED` → `OPEN` exists
+    when the acknowledger is removed (and `OPEN` or `ESCALATED` with that
+    responder recorded → `OPEN` too), and `OPEN` → `ESCALATED` again for the
+    next round. D-033 is itself delegated, so this is Claude's to record and
+    the owner's to reopen; `05-architecture.md`'s alert-state paragraph
+    draws the edge. The binding rules are unchanged.
+- **Consequences:**
+  - No new dependency (SEC-06), no new import route (AR-10). `api.ts`,
+    `worker.ts`, the contracts, Terraform and the workflows are unchanged.
+  - LOST-06-AC4's unique-key test stays as it is: the round defaults to 1.
+  - SM-10-AC1 to AC21 prove it. Supersedes nothing.
+
+## D-124 — Each mutant's run reuses Vitest's transforms from the run's first test run, and runs its test files one at a time (BUG-41)
+- **Date:** 2026-10-09 · **Status:** Accepted (delegated, D-031; D-036,
+  D-098 and D-117 say an overrun is fixed by faster per-mutant runs, not a
+  higher budget, which stays 25 minutes) · **Section:** 6 (D-036, D-066,
+  D-098, D-099, D-117)
+- **Context:** BUG-41. SM-10's mutation run ran out of its 25-minute budget
+  locally (`spawnSync pnpm ETIMEDOUT`), twice:
+  - in `gate:full`, with the three reviewers running tests beside it, cut
+    off in `alerts`;
+  - alone on the same 4-core machine: domain 9:29, healthchecks 2:01,
+    journeys 4:28 and alerts 8:15, 24:13 before `worker` started, which the
+    budget then cut off. About 32 minutes in all, against LOST-07's 18:57
+    on a quiet machine (D-117). Every group that finished passed.
+  - The cost is per mutant, and mostly not the tests: one run of a group's
+    tests is 2.5 to 4 s, of which Vitest reports transform 55 to 77 % and
+    tests 9 to 29 %. SM-10 grew the test kit (the behaviour suite from
+    6,700 to 8,714 lines), and the domain tests import it whole.
+  - Each mutant's Vitest also started one worker per test file, beside
+    Stryker's four runners: about 16 Node processes on 4 cores (load 11.8).
+- **Decision:** each mutant's command gains `--fsModuleCache
+  --fsModuleCachePath=.vitest-fs-cache --maxWorkers=1`.
+  - **The cache.** Vitest 5 can keep transformed modules on disk and reuse
+    them between runs. Stryker instruments every mutant into one copy of the
+    code and picks the active one by an environment variable, so the
+    transformed code is the same for every mutant: Stryker's first test run
+    fills the cache, and each mutant's run reads it.
+  - **Inside the run's sandbox.** The path is relative, so it is created in
+    Stryker's sandbox (`.stryker-tmp/sandbox-*/.vitest-fs-cache`) and removed
+    with it. No run reads another's entries (D-099): each key includes the
+    module's absolute path, sandbox and all, with the file's content and the
+    config. Stryker does not read `.gitignore` when it builds the sandbox,
+    so a stray `.vitest-fs-cache/` in the repository root would be copied
+    in, but its keys could never match (`safety-reviewer`, loop-1 delta).
+    Entries are written to a temporary file and renamed, so a runner never
+    reads half of one.
+  - **One test file at a time.** With one Vitest worker, Stryker's four
+    runners use the four cores without a worker per file on top, and
+    `--bail=1` stops at the first file that kills the mutant. Each file
+    still runs isolated, as before. Stryker's timeout is measured on the
+    same command, so it scales with it.
+- **Measured** on the same machine and code (`f32ca8c`), mutant by mutant
+  against the run without either change: the same status for every mutant,
+  1,170 of 1,170, the 6 survivors and 2 timeouts of `worker.ts` included.
+
+  | Group | Before | Cache only | Cache and one worker |
+  |---|---|---|---|
+  | domain | 9:29 | 6:04 | 3:25 |
+  | healthchecks | 2:01 | 1:29 | 1:14 |
+  | journeys | 4:28 | 3:07 | 1:53 |
+  | alerts | 8:15 | 5:57 | 3:15 |
+  | worker | 6:09 | 4:01 | 4:10 |
+  | process | 1:08 | 0:52 | 1:37 |
+  | api-process | 0:32 | 0:26 | 0:27 |
+  | **All** | **≈ 32:02** | **≈ 21:56** | **≈ 16:11** |
+
+  - `process` is slower with one worker: `bin.test.ts` mostly waits on real
+    processes, which overlapped with the other files before. One setting for
+    every group is kept anyway: simpler, and the total halves.
+  - CI's run is the one of record. D-117's quiet local run took 18:57 and
+    CI's 21:07; by that ratio this would be about 18 minutes on CI.
+  - **CI's run** (#74, `946f855`, job 113802883028): the mutation step took
+    **12:15** (11:42:34 to 11:54:49), 12:45 under the budget, and every run
+    passed (domain, healthchecks, journeys, alerts, worker, process,
+    api-process). LOST-07's run before this task took 21:07.
+- **Compared against:**
+  - giving `removal.ts` a group of its own (SM-10's spec): about 40 s;
+  - `--pool=threads`: about 7 % (D-117), and it changes how tests run;
+  - Stryker's vitest runner, which picks tests per mutant: it reported every
+    mutant covered and none killed against Vitest 5 (`stryker.config.mjs`);
+  - splitting CI's mutation job in two: the owner's (cost, and the required
+    checks). It stays the next step if the margin closes again.
+- **Consequences:**
+  - `stryker.config.mjs`, owned under D-100, so the owner and
+    `safety-reviewer` review it in SM-10's pull request; its tests in
+    `scripts/stryker-config.test.mjs` pin the command.
+  - A Vitest upgrade that drops `--fsModuleCache` fails Stryker's first test
+    run loudly: Vitest 5.0.1 refuses an unknown option and exits 1 (checked
+    with a misspelt flag). The cache holds transforms, not results, so it
+    cannot make a score higher.
+  - Supersedes nothing. D-117's command stays, with the three flags added.
