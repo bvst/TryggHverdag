@@ -638,13 +638,26 @@ describe('stryker.config.mjs', () => {
     }
   });
 
-  test('BUG-41: every run’s module cache is a relative path, neither absolute nor under node_modules, so it is made in the run’s own Stryker sandbox and goes with it: every run starts with an empty cache, and none reads another’s (D-099, D-124)', async () => {
+  // RG-03, a title correction; no assertion changed (CI's safety-reviewer on
+  // #74, D-124 as amended). The title ended "…goes with it: every run starts
+  // with an empty cache, and none reads another's". Not exactly true: Stryker
+  // does not read .gitignore, so a stray .vitest-fs-cache/ in the repository
+  // root would be copied into the sandbox. No run reads another's entries
+  // because each key includes the module's absolute path, sandbox and all,
+  // the file's content and the config. The title now claims only what the
+  // assertions check and what D-124 says, and the comment inside is corrected
+  // the same way.
+  test('BUG-41: every run’s module cache is a relative path, neither absolute nor under node_modules, so it is made in the run’s own Stryker sandbox and goes with it, and no run reads another’s entries (D-099, D-124)', async () => {
     // Stryker starts each mutant's command in the run's sandbox,
     // .stryker-tmp/sandbox-*, and removes the sandbox when the run ends. A
     // relative path is made there. An absolute one would outlive the run and
-    // be read by the next, and node_modules in a sandbox is a link to the
-    // repository's own, so a cache under it would too. Every run is fresh
-    // (D-099): the cache may hold this run's transforms, never another's.
+    // pile up outside it, and node_modules in a sandbox is a link to the
+    // repository's own, so a cache under it would too: either way the run
+    // would not be self-contained, as D-099 wants. Whether a later run could
+    // use those entries is not what this test guards. The cache is made in the
+    // run's own sandbox and goes with it, and no run can use another's
+    // entries, since each key includes the module's absolute path, sandbox and
+    // all. A stray copy carried in from the repository root could never match.
     for (const run of mutationRuns()) {
       const config = await configFor(run.name);
       const given = vitestArgs(config.commandRunner.command)
