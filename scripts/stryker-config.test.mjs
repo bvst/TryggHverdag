@@ -26,10 +26,22 @@
 // its incremental mode reused every earlier result in unchanged code whatever
 // happened to the tests: a gutted test file scored 100 %, and 0 % fresh.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { readdir } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { SAFETY_PATHS, mutationRuns } from './lib/gate-decisions.mjs';
 
@@ -198,6 +210,144 @@ function apartFromTheRun(config) {
   delete shared.commandRunner.command;
   if (shared.jsonReporter !== undefined) delete shared.jsonReporter.fileName;
   return shared;
+}
+
+/**
+ * Stryker 10's own code for what a run copies into its sandbox, so the test
+ * that uses it asks Stryker rather than guessing at its matching. The package
+ * exports only its entry point, so these modules are reached by file, and what
+ * they import is resolved from Stryker's folder in pnpm's store, as Node
+ * resolves it for Stryker.
+ */
+const STRYKER_CORE = realpathSync(path.join(root, 'node_modules', '@stryker-mutator', 'core'));
+const strykerRequire = createRequire(path.join(STRYKER_CORE, 'package.json'));
+const importFile = (file) => import(pathToFileURL(file).href);
+
+/**
+ * Its entry point is loaded first: its fs/ and config/ modules import each
+ * other, and loaded from either one, the other is evaluated too early and
+ * throws. From the entry they are evaluated in the order a real run has.
+ */
+async function strykerInternals() {
+  const dist = path.join(STRYKER_CORE, 'dist', 'src');
+  await importFile(path.join(dist, 'index.js'));
+  const [{ ProjectReader }, { OptionsValidator }, { strykerCoreSchema }, { noopLogger }] =
+    await Promise.all([
+      importFile(path.join(dist, 'fs', 'project-reader.js')),
+      importFile(path.join(dist, 'config', 'options-validator.js')),
+      importFile(strykerRequire.resolve('@stryker-mutator/api/core')),
+      importFile(strykerRequire.resolve('@stryker-mutator/util')),
+    ]);
+  return { ProjectReader, OptionsValidator, strykerCoreSchema, noopLogger };
+}
+
+/**
+ * The files Stryker copies into a run's sandbox under the config `config`,
+ * relative to the repository, when the working directory holds the tree at
+ * `tree`. Stryker's own steps, in its order (process/1-prepare-executor.js):
+ * the config is validated against Stryker's core schema, which fills in the
+ * defaults the reader reads (an absent ignorePatterns becomes []), and
+ * ProjectReader walks the working directory with its ignore rules, minimatch
+ * with `dot` and `nocase`, keeping the files Sandbox.fillSandbox copies:
+ * project.files. The one stand-in is the file system Stryker is handed. It
+ * reads `tree` where Stryker asks for the working directory, so every entry
+ * Stryker sees is a real one, a symbolic link among them.
+ */
+async function copiedIntoSandbox(config, tree) {
+  const { ProjectReader, OptionsValidator, strykerCoreSchema, noopLogger } =
+    await strykerInternals();
+  const options = structuredClone(config);
+  new OptionsValidator(strykerCoreSchema, noopLogger).validate(options);
+  const cwd = process.cwd();
+  const treeFs = {
+    readdir: (dir, how) => readdir(path.join(tree, path.relative(cwd, dir)), how),
+  };
+  const project = await new ProjectReader(treeFs, noopLogger, options).read();
+  return [...project.files.keys()].map((file) =>
+    path.relative(cwd, file).split(path.sep).join('/'),
+  );
+}
+
+/** Every file git tracks, or would track, relative to the repository. */
+function filesInRepository() {
+  const result = spawnSync(
+    'git',
+    ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+    {
+      cwd: root,
+      encoding: 'utf8',
+    },
+  );
+  if (result.status !== 0) throw new Error(`git ls-files failed:\n${result.stderr}`);
+  return [...new Set(result.stdout.split('\0').filter((file) => file !== ''))];
+}
+
+/**
+ * Of `files`, the ones a mutation run needs in its sandbox: everything under
+ * the safety paths, each run's tests and the configuration it names, the test
+ * kit, and the repository's root files, its configurations among them. The
+ * whole-suite run's tests are apps/ and packages/, so that is all of both.
+ */
+function neededByTheRuns(files) {
+  const entries = [
+    ...SAFETY_PATHS,
+    ...mutationRuns().flatMap((run) => [...run.tests, ...(run.config ? [run.config] : [])]),
+    'packages/test-kit/',
+  ];
+  const under = (file, entry) =>
+    file === entry || file.startsWith(entry.endsWith('/') ? entry : `${entry}/`);
+  return files.filter((file) => !file.includes('/') || entries.some((entry) => under(file, entry)));
+}
+
+/**
+ * The provider REL-10 added, where Terraform's plugin cache keeps it:
+ * scripts/infra-check.mjs sets TF_PLUGIN_CACHE_DIR to
+ * node_modules/.cache/terraform/plugins.
+ */
+const RANDOM_PROVIDER = 'registry.terraform.io/hashicorp/random/3.9.1/linux_amd64';
+const PLUGIN_CACHE = `node_modules/.cache/terraform/plugins/${RANDOM_PROVIDER}`;
+
+/**
+ * Terraform's working state under infra/, synthetic, as `terraform init`
+ * leaves it. A `link` is a symbolic link to the provider's directory in the
+ * plugin cache, which is how Terraform installs a provider from the cache; a
+ * `file` is a file. The first is the path in REL-10's log. The others are the
+ * older provider, a plain directory from before the cache, the backend's
+ * state, and a .terraform folder in another environment, deeper down, and in
+ * infra/ itself: any .terraform folder below infra/.
+ */
+const TERRAFORM_STATE = [
+  { link: `infra/staging/.terraform/providers/${RANDOM_PROVIDER}` },
+  {
+    file: 'infra/staging/.terraform/providers/registry.terraform.io/clevercloud/clevercloud/2.2.1/linux_amd64/terraform-provider-clevercloud_v2.2.1',
+  },
+  { file: 'infra/staging/.terraform/terraform.tfstate' },
+  { link: `infra/production/.terraform/providers/${RANDOM_PROVIDER}` },
+  { file: 'infra/modules/canary/.terraform/modules/modules.json' },
+  { file: 'infra/.terraform/terraform.tfstate' },
+];
+
+/** Whether the repository-relative `file` lies in a .terraform folder. */
+const inTerraformState = (file) => file.split('/').includes('.terraform');
+
+/**
+ * A fresh directory holding `files`, empty, Terraform's working state, and the
+ * plugin cache its links point to. The caller removes it.
+ */
+function treeWith(files) {
+  const tree = mkdtempSync(path.join(os.tmpdir(), 'stryker-sandbox-tree-'));
+  const parentOf = (relative) => {
+    mkdirSync(path.dirname(path.join(tree, relative)), { recursive: true });
+    return path.join(tree, relative);
+  };
+  const put = (relative) => writeFileSync(parentOf(relative), '');
+  files.forEach(put);
+  put(`${PLUGIN_CACHE}/terraform-provider-random_v3.9.1_x5`);
+  for (const entry of TERRAFORM_STATE) {
+    if (entry.file !== undefined) put(entry.file);
+    else symlinkSync(path.join(tree, PLUGIN_CACHE), parentOf(entry.link), 'dir');
+  }
+  return tree;
 }
 
 afterEach(() => {
@@ -709,6 +859,63 @@ describe('stryker.config.mjs', () => {
       expect(segments, `${run.name}: ${cachePath} is under node_modules`).not.toContain(
         'node_modules',
       );
+    }
+  });
+
+  test("every run keeps Terraform's working state, any .terraform folder under infra/ and the provider link in it, out of its Stryker sandbox, and still copies infra/'s tracked files and every file it needs (D-099)", async () => {
+    // Found by REL-10's gate:full, at d5b7b64: every mutation run crashed
+    // before testing a mutant, with
+    //   EISDIR: illegal operation on a directory, copyfile
+    //   '…/infra/staging/.terraform/providers/registry.terraform.io/hashicorp/random/3.9.1/linux_amd64'
+    //   -> '…/.stryker-tmp/sandbox-…/infra/staging/.terraform/providers/…/linux_amd64'
+    // REL-10 added hashicorp/random. The first infra:check after it, in
+    // gate:static before mutation, installs it from the plugin cache that
+    // scripts/infra-check.mjs sets, as a symbolic link to a directory, on any
+    // machine. Stryker copies every file its ignore rules leave in, reads no
+    // .gitignore, and takes the link for a file. Each run is fresh, in its
+    // own sandbox (D-099), so every run failed. CI's mutation job never runs
+    // terraform init, so it never saw this. Terraform's working state is never
+    // an input of a mutation run, and leaving infra/ out whole is not the fix:
+    // its tracked files, infra/staging/main.tf among them, are still copied.
+    const files = filesInRepository();
+    const infra = files.filter((file) => file.startsWith('infra/'));
+    const needed = neededByTheRuns(files);
+    expect(infra, 'infra/staging/main.tf is not a file the repository tracks').toContain(
+      'infra/staging/main.tf',
+    );
+    expect(needed, 'the test kit is not among the files a run needs').toEqual(
+      expect.arrayContaining(['packages/test-kit/package.json', 'vitest.system.config.mjs']),
+    );
+    const tree = treeWith([...infra, ...needed]);
+    try {
+      // The control. With Stryker's default, no ignorePatterns, every entry of
+      // Terraform's state is copied, each link as a file, as in the log. So
+      // the tree reaches Stryker, and what follows cannot pass for want of it.
+      const [first] = mutationRuns();
+      const unguarded = await copiedIntoSandbox(
+        { ...(await configFor(first?.name)), ignorePatterns: [] },
+        tree,
+      );
+      expect(unguarded.filter(inTerraformState).toSorted()).toEqual(
+        TERRAFORM_STATE.map((entry) => entry.file ?? entry.link).toSorted(),
+      );
+
+      for (const run of mutationRuns()) {
+        const copied = await copiedIntoSandbox(await configFor(run.name), tree);
+
+        expect(
+          copied.filter(inTerraformState),
+          `${run.name}: Terraform's working state is copied into the sandbox, and a provider ` +
+            'linked from the plugin cache is a directory, so copying it fails the run (EISDIR)',
+        ).toEqual([]);
+        const kept = new Set(copied);
+        expect(
+          [...infra, ...needed].filter((file) => !kept.has(file)),
+          `${run.name}: files it needs, or infra/'s tracked files, are not copied`,
+        ).toEqual([]);
+      }
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
     }
   });
 
