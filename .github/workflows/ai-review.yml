@@ -98,7 +98,13 @@ jobs:
     # a loud failure instead.
     if: always()
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    # 40 minutes: on REL-10's #77 (75 files, about 12,800 added lines)
+    # test-auditor was still working when the 20-minute limit cancelled it,
+    # with no verdict, so a required check blocked the pull request with
+    # nothing to fix in it. It took about 3 minutes on LOST-08's #75. A job
+    # that is cut off still fails loudly; this only gives a large safety
+    # pull request's audit room to finish (the owner, 2026-10-10).
+    timeout-minutes: 40
     permissions:
       contents: read
       pull-requests: write
