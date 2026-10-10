@@ -545,7 +545,8 @@ fails when a changed spec names a tracked requirement, or a criterion
       plan has 20 checks, this is the fourth.
     - **Database:** no new pool. About 40 one-statement reads per run on the
       worker's pool (one connection free beside Graphile's `LISTEN`), each a
-      few milliseconds; registration once per start. Three requests per run to
+      few milliseconds; registration once per process, on its first canary
+      run. Three requests per run to
       the API, on its pool of 2.
     - **CPU and memory:** negligible; nothing is held between runs.
     - **Nano's reduced CPU priority:** the expected alert time is 300 s plus
@@ -1235,10 +1236,14 @@ are; `openapi.json` is unchanged and `api:diff` has nothing to compare
 - **Nano's reduced CPU priority** (D-077) could make a run late; the run lines
   measure it (item 12).
 - **The credential.** A leaked `CANARY_CREDENTIAL` lets someone start, beat
-  and end the canary's journeys on staging, naming only the canary's
-  responder: synthetic, no one alerted, and it would show as failing or
-  skipped runs. It is in Terraform's state and the app's environment only;
-  never logged (AC15); rotated by replacing one Terraform resource.
+  and end the canary's journeys on staging, naming any existing user as a
+  responder: today only the canary's own, because staging has no other users
+  (D-091), and M3's login task re-checks it (*corrected after the merge*, CI's
+  `privacy-security-reviewer` on #79). Synthetic, no one alerted, and it
+  would show as failing or skipped runs. It is in Terraform's state and the
+  app's environment only; never logged (AC15); rotated by raising its
+  generation number, which replaces one Terraform resource (D-128's
+  amendment).
 - **The exception to "nothing makes a credential"** (D-091) is held by an
   import rule, fixed IDs and the API having no path to it (AC10). The login
   task must keep it so (Left for later).
@@ -1300,7 +1305,11 @@ Each is named so the task that owns it finds it. None blocks this task.
   send under the claim's lease, as the earlier specs ask.
 - **M3, the login task:** the canary's two users join no group and can be
   invited by no one; issuance must not touch `CANARY_DEVICE_ID`; the rule that
-  only the worker registers the canary stays, with its import rule.
+  only the worker registers the canary stays, with its import rule. Re-check
+  which users the canary's credential can name as responders: the API
+  accepts any existing user (`modules/journeys/service.ts`), which on staging
+  is only the canary's own (D-091), and must not reach a real user once
+  there are real users.
 - **M4, retention:** canary rows are deleted like any journey's, or sooner;
   the claim's index then sheds its withdrawn rows. The DPIA can say the
   canary holds no personal data.
@@ -1360,7 +1369,8 @@ Said here rather than chosen silently. How each is settled is at its end.
 5. **The canary's credential "never expires and is revoked only by deleting
    its row" (D-091)** — and deleting the row is now refused while canary
    journeys reference it (foreign key). *Settled:* revoked by rotating the
-   Terraform resource, which replaces the hash at the next start.
+   Terraform resource, which replaces the hash on the worker's first canary
+   run after the restart (D-128's amendment).
 6. **D-108: the canary must catch an "always-failing delivery".** In M2 every
    delivery fails by design (`NOT_CONFIGURED`), so a canary cannot tell a
    failing provider from the unconfigured one. *Settled for M2:* it catches a

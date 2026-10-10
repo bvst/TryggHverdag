@@ -1722,7 +1722,15 @@ describe('LOST-08: the close’s and the 24-hour end’s migration changes no ro
           [open?.['journey_id']],
         ),
       ).resolves.toMatchObject({ rowCount: 1 });
-      const [message] = before.outbox;
+      // BUG-43: an alert's message, found by what it holds, never the first
+      // row. before.outbox is ordered by id, a random UUID, and this seed
+      // holds the walker's NO_RESPONDER warning, which names a journey and no
+      // alert. Taken first (1 run in 15 with this seed), its SAFE and EXPIRED
+      // rows named neither, and outbox_alert_id_journey_id_check refused
+      // them: the `integration` failure on #77 at 0513b21. SAFE and EXPIRED
+      // are an alert's stand-downs (D-126), so the rows must name one.
+      const message = before.outbox.find((row) => row['alert_id'] !== null);
+      expect(message?.['alert_id'], 'no message in the seed names an alert').toBeTypeOf('string');
       for (const kind of ['SAFE', 'EXPIRED']) {
         await expect(
           client.query(

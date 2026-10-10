@@ -290,9 +290,11 @@ ping per run, not more; the other two checks are unchanged.
 ## If `CANARY_CREDENTIAL` leaks
 
 Anyone who holds it can start, beat and end the canary's journeys on staging,
-naming only the canary's own test responder. That is synthetic and alerts no
-one, and it would show as failing or skipped runs, but the credential never
-expires (D-091), so it is replaced and not left. It is made by Terraform
+naming any existing user as a responder: today that is only the canary's own
+test responder, because staging has no other users (D-091), and M3's login
+task must check this again. That is synthetic and alerts no one, and it would
+show as failing or skipped runs, but the credential never expires (D-091), so
+it is replaced and not left. It is made by Terraform
 (`random_password.canary_credential`) and lives only in Terraform's state in
 Cellar and the staging app's environment on Clever Cloud, so there is no GitHub
 secret to change. **Rotate it by raising its generation:**
