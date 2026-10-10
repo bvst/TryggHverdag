@@ -259,8 +259,9 @@ reads the agent briefs and asserts on them, so editing one really can fail
     hands: no one types, copies or sees it. Rotating it means raising
     `canary_credential_generation` in `infra/staging/main.tf` in a pull
     request (its one `keepers` value replaces the resource), then
-    `infra-staging` plan and apply; the worker registers the new hash when it
-    restarts after the apply (D-128 and its loop-1 amendment). The steps are under
+    `infra-staging` plan and apply; the worker registers the new hash on its
+    first canary run after the apply restarts it (D-128 and its loop-1
+    amendment). The steps are under
     "If `CANARY_CREDENTIAL` leaks" in [monitoring-setup.md](monitoring-setup.md)
   - Claude OAuth token
   - Claude's GitHub token (A-06)

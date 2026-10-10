@@ -346,7 +346,8 @@ fails when a changed spec names a tracked requirement, or a criterion
      and in the app's environment on Clever Cloud, as the database password
      already is (D-077), and **in no GitHub secret and no owner's hands**.
      Rotating it is a Terraform replace of that one resource, then a plan and
-     apply; the worker's registration replaces the hash at its restart.
+     apply; the worker's registration replaces the hash on its first canary
+     run after the restart.
      *Review loop 1:* `infra-staging.yml` runs a fixed plan with no `-replace`,
      so the replace is made through `keepers = { generation =
      local.canary_credential_generation }`: rotating is raising that committed

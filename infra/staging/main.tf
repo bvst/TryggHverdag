@@ -21,15 +21,16 @@ locals {
 
   # The canary's credential's generation (REL-10, D-128's loop-1 amendment).
   # To rotate the credential, raise it in a pull request, then plan and apply
-  # through infra-staging. The worker registers the new hash when it restarts.
+  # through infra-staging. The worker registers the new hash on its first
+  # canary run after the restart.
   canary_credential_generation = "1"
 }
 
 # The staging canary's device credential (REL-10, D-128): 43 letters and
 # digits, about 256 bits (D-091's strength). Made here, so it lives only in
 # Terraform's state and the app's environment, as the database password does,
-# and in no GitHub secret and no one's hands. The worker registers its hash at
-# start. Rotating it is raising local.canary_credential_generation in a pull
+# and in no GitHub secret and no one's hands. The worker registers its hash on
+# its first canary run. Rotating it is raising local.canary_credential_generation in a pull
 # request: infra-staging.yml runs a fixed plan with no `-replace`, so the
 # generation, its one keeper, is what replaces it (D-128's loop-1 amendment).
 resource "random_password" "canary_credential" {

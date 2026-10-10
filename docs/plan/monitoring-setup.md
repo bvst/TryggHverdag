@@ -155,7 +155,7 @@ About 3 minutes.
    hidden. Nothing else should be listed.
 3. Run it again with action `apply`, giving it the plan run's ID, as in A-22.
    Clever Cloud restarts staging; the worker registers the canary's identities
-   at start, and the first run comes at the next quarter of an hour.
+   on its first canary run, at the next quarter of an hour.
 4. **Within about 21 minutes, open the check in Healthchecks.io.** It must have
    left `new` and show a success ping. **If it stays `new`, stop and tell
    Claude**: a check that has never been pinged never pages, whatever happens.
@@ -308,8 +308,8 @@ secret to change. **Rotate it by raising its generation:**
    shows in clear is the generation itself (`"generation" = "1" -> "2"`,
    "forces replacement"), which is not a secret.
 3. Apply. The apply restarts the app; the worker registers the new
-   credential's hash when it starts (D-128), so the old credential gets 401
-   from then on. A run the old worker still had in flight then fails, so one
+   credential's hash on its first canary run, within 15 minutes of starting
+   (D-128), so the old credential gets 401 from then on. A run the old worker still had in flight then fails, so one
    `staging-canary` page around the restart is expected, and a second only if
    its journey, left unended, escalates and pages `staging-sms`. Both come
    once and stop.
