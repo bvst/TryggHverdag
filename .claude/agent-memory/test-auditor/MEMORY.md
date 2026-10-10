@@ -1,3 +1,6 @@
+- [REL-10 audit](project_rel10_audit.md) — PASS 880d2ba: 68 faults, 13 survived; four should-fixes (answer time vs opening at L6, start-line checks, registered hash)
+- [Coinciding times at L6](feedback_coinciding_times_l6.md) — swap two times a harness makes equal
+- [Wiring Stryker can't mutate](feedback_unmutable_wiring.md) — process.env→{} in bin, wrong value hashed; degraded start lines
 - [Notes before the memory folders](reference_notes_before_memory_folders.md) — the older notes file Claude Code never loaded, moved here unchanged (BUG-38); recurring patterns and how to verify things here; check a note against the current code first
 - [In-memory mutation](reference_in_memory_mutation.md) — Vite plugin in startVitest; `--import` register file reaches spawned children; guard blocks `=>`
 - [gate:integrity locally](project_gate_integrity_local.md) — 3/5 locally; use `gh api .../rules/branches/main`; repo visibility changes (public 2026-10-01)
