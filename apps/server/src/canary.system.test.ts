@@ -63,6 +63,7 @@ import {
   type FakeLogEvent,
   type PushMessage,
 } from '@trygghverdag/test-kit';
+import { getEventListeners } from 'node:events';
 import process from 'node:process';
 import { describe, expect, test } from 'vitest';
 import { httpCanaryClient } from './adapters/canary.ts';
@@ -92,6 +93,8 @@ const DEADLINE = FIVE_MINUTES + 60 * SECOND;
 const TWO_MINUTES = 2 * MINUTE;
 /** How often the canary reads while it watches. */
 const POLL = 2 * SECOND;
+/** When the canary first looks for the alert after its heartbeat: before one could open. */
+const FIRST_LOOK = 290 * SECOND;
 /** How long after the alert's resolution the canary waits for the stand-down's answer. */
 const STAND_DOWN_LIMIT = 90 * SECOND;
 /** A canary journey started this long ago or more is a leftover. */
@@ -700,6 +703,32 @@ describe('REL-10: a healthy system', () => {
   });
 });
 
+describe('REL-10: the canary keeps its reads few', () => {
+  // The spec: silence until just before an alert could open, then a read
+  // every 2 s from 290 s. On a Nano instance (D-077) each read is load, so a
+  // canary that read from the beat on, or looked early, is wrong though it
+  // would pass every outcome test.
+  test('REL-10-AC5: after its first read, straight after the beat, the canary reads nothing until last contact + 290 s, then every 2 s until the read that sees the alert answered', async () => {
+    const w = world();
+
+    await expect(w.run()).resolves.toEqual({ outcome: 'ON_TIME' });
+
+    const watching = w.observations.filter(({ journey }) => journey.state !== 'ENDED');
+    const lastContact = watching[0]?.journey.lastHeartbeatAt?.getTime() ?? Number.NaN;
+    const since = watching.map(({ now }) => now.getTime() - lastContact);
+    const answeredAt = watching.findIndex(({ lostContactAnswered }) => lostContactAnswered);
+
+    expect(since[0], 'the first read, after the beat').toBe(0);
+    expect(since[1], 'the first look').toBe(FIRST_LOOK);
+    expect(answeredAt, 'the read that saw the alert answered').toBe(watching.length - 1);
+    expect(answeredAt).toBeGreaterThan(1);
+    expect(since.slice(2), 'the reads after the first look').toEqual(
+      since.slice(1, -1).map((at) => at + POLL),
+    );
+    expect(since.at(-1)).toBeLessThanOrEqual(DEADLINE);
+  });
+});
+
 describe('REL-10: the watchdog does not open the alert', () => {
   test.each([
     { what: 'the sweep loop not running', stop: (w: World) => (w.running.sweep = false) },
@@ -1213,6 +1242,115 @@ describe('REL-10: every step fails loudly, and the journey is still ended', () =
     expect(w.sent).toEqual([]);
   });
 
+  // After "I'm home": each thing the run checks, wrong on its own while every
+  // other is as it must be (a store stub on the reads after the journey
+  // ended), so a check dropped from the list is found on its own. A canary
+  // whose "I'm home" stopped ending journeys, or resolving their alerts, must
+  // page.
+  test.each<{ what: string; change: (seen: CanaryObservation) => CanaryObservation }>([
+    {
+      what: 'the journey not ENDED, its reason HOME',
+      change: (seen) => ({ ...seen, journey: { ...seen.journey, state: 'LOST_CONTACT' } }),
+    },
+    {
+      what: 'the journey ENDED for another reason, SAFE',
+      change: (seen) => ({ ...seen, journey: { ...seen.journey, endReason: 'SAFE' } }),
+    },
+    {
+      what: 'the alert not RESOLVED, its resolution HOME',
+      change: (seen) => ({
+        ...seen,
+        alert: seen.alert === null ? null : { ...seen.alert, state: 'ACKNOWLEDGED' },
+      }),
+    },
+    {
+      what: 'no alert at all',
+      change: (seen) => ({ ...seen, alert: null }),
+    },
+    {
+      what: 'the alert RESOLVED for another reason, SAFE',
+      change: (seen) => ({
+        ...seen,
+        alert: seen.alert === null ? null : { ...seen.alert, resolution: 'SAFE' },
+      }),
+    },
+    {
+      what: 'the alert RESOLVED HOME with no time of resolution',
+      change: (seen) => ({
+        ...seen,
+        alert: seen.alert === null ? null : { ...seen.alert, resolvedAt: null },
+      }),
+    },
+  ])(
+    'REL-10-AC6: with $what after "I’m home" answered, the outcome is NOT_RESOLVED, reported failing once, and the journey was ended once',
+    async ({ change }) => {
+      const w = world();
+      let changed = 0;
+      w.changeReads((seen) => {
+        if (seen.journey.state !== 'ENDED') {
+          return seen;
+        }
+        // The read as the store gave it is right in every way the run checks;
+        // only the one change makes it wrong.
+        expect(seen.journey.endReason).toBe('HOME');
+        expect(seen.alert).toMatchObject({ state: 'RESOLVED', resolution: 'HOME' });
+        expect(seen.alert?.resolvedAt).toBeInstanceOf(Date);
+        changed += 1;
+        return change(seen);
+      });
+
+      await expect(w.run()).resolves.toEqual({ outcome: 'NOT_RESOLVED' });
+
+      expect(changed, 'reads after the journey ended').toBe(1);
+      expect(w.runLines()).toEqual([
+        runLine({
+          outcome: 'NOT_RESOLVED',
+          alertMs: null,
+          openedAfterMs: null,
+          status: null,
+          code: null,
+        }),
+      ]);
+      expect(w.alarm.statuses).toEqual(['failing']);
+      expect(w.homesFor(w.onlyJourney().id).map(({ status }) => status)).toEqual([200]);
+    },
+  );
+
+  // The stand-down's limit, 90 s after the alert's resolution by the
+  // database's clock: a stand-down first seen at exactly the limit is in
+  // time; one ms later it is not, though it was answered ("fail early, never
+  // pass late"). The second read after "I'm home" is stubbed to that moment.
+  test.each([
+    { after: STAND_DOWN_LIMIT, outcome: 'ON_TIME' as const, alarm: 'ok' },
+    {
+      after: STAND_DOWN_LIMIT + 1,
+      outcome: 'STAND_DOWN_NOT_HANDED_OVER' as const,
+      alarm: 'failing',
+    },
+  ])(
+    'REL-10-AC6: a stand-down first seen answered $after ms after the alert’s resolution comes to $outcome',
+    async ({ after, outcome, alarm }) => {
+      const w = world();
+      let ended = 0;
+      w.changeReads((seen) => {
+        if (seen.journey.state !== 'ENDED') {
+          return seen;
+        }
+        ended += 1;
+        const resolvedAt = seen.alert?.resolvedAt?.getTime() ?? Number.NaN;
+        return ended === 1
+          ? { ...seen, standDownAnswered: false }
+          : { ...seen, now: new Date(resolvedAt + after), standDownAnswered: true };
+      });
+
+      await expect(w.run()).resolves.toEqual({ outcome });
+
+      expect(ended, 'reads after the journey ended').toBe(2);
+      expect(w.alarm.statuses).toEqual([alarm]);
+      expect(w.runLines()).toEqual([runLine({ outcome })]);
+    },
+  );
+
   test('REL-10-AC6: the stand-down’s wait ends 90 s after the alert’s resolution, at most one poll on, and then the run is over', async () => {
     const w = world();
     w.everyInterval(() => {
@@ -1655,9 +1793,108 @@ describe('REL-10: leftovers and overlap', () => {
       expect(w.canaryJourneys().map(({ id }) => id)).toEqual([left]);
     },
   );
+
+  test('REL-10-AC6: when its read of the journey named by the start’s 409 fails with a SQLSTATE, the outcome is READ_FAILED with that SQLSTATE, reported failing once, and nothing is ended or started', async () => {
+    const w = world();
+    const left = await leftover(w, { startedAgo: LEFTOVER_AFTER });
+    w.failReads((index) => (index === 0 ? databaseError('57P01') : null));
+
+    await expect(w.run()).resolves.toEqual({ outcome: 'READ_FAILED' });
+
+    expect(w.runLines()).toEqual([
+      runLine({
+        outcome: 'READ_FAILED',
+        alertMs: null,
+        openedAfterMs: null,
+        status: null,
+        code: '57P01',
+      }),
+    ]);
+    expect(w.alarm.statuses).toEqual(['failing']);
+    expect(w.sent.map(({ route, status }) => [route, status])).toEqual([['start', 409]]);
+    expect(w.log.events.filter(({ event }) => event === 'canary_leftover_ended')).toEqual([]);
+    expect(w.store.endOf(left)).toEqual({ endedAt: null, endReason: null });
+    expect(w.canaryJourneys().map(({ id }) => id)).toEqual([left]);
+  });
 });
 
 describe('REL-10: a stop, or the run limit, ends the run quickly', () => {
+  // The worker's task hands every run Graphile's signal, run after run, 96 a
+  // day. A run that left its listener on that signal, or its run limit's
+  // timer or its stop limit's still running, would leak one of each per run.
+  test('REL-10-AC9: run after run on one stop signal, as the worker’s task, each run leaves no listener on that signal and no wait pending: on time, failing, and skipped alike', async () => {
+    const w = world();
+    const stop = new AbortController();
+    const canary = w.canary();
+    const listeners = () => getEventListeners(stop.signal, 'abort').length;
+    expect(listeners()).toBe(0);
+
+    const results = [];
+    for (let run = 0; run < 3; run += 1) {
+      results.push(await w.run(canary, stop.signal));
+      expect(listeners(), `listeners after run ${String(run + 1)}`).toBe(0);
+      expect(w.waits.pending, `waits pending after run ${String(run + 1)}`).toBe(0);
+    }
+    w.answer('start', () => refusal(500, 'INTERNAL_SERVER_ERROR'));
+    results.push(await w.run(canary, stop.signal));
+    expect(listeners(), 'listeners after a failing run').toBe(0);
+    expect(w.waits.pending, 'waits pending after a failing run').toBe(0);
+
+    expect(results).toEqual([
+      { outcome: 'ON_TIME' },
+      { outcome: 'ON_TIME' },
+      { outcome: 'ON_TIME' },
+      { outcome: 'START_FAILED' },
+    ]);
+  });
+
+  test('REL-10-AC9: a run skipped for a run in flight leaves no listener on the stop signal and no wait pending', async () => {
+    const w = world();
+    const stop = new AbortController();
+    const [one, other] = [w.canary(), w.canary()];
+
+    const results = await w.waits.run(() =>
+      Promise.all([one.run(stop.signal), other.run(stop.signal)]),
+    );
+
+    expect(results).toEqual(
+      expect.arrayContaining([{ outcome: 'ON_TIME' }, { skipped: 'RUN_IN_FLIGHT' }]),
+    );
+    expect(getEventListeners(stop.signal, 'abort')).toEqual([]);
+    expect(w.waits.pending).toBe(0);
+  });
+
+  test('REL-10-AC9: a stopped run whose "I’m home" is answered leaves no wait pending: neither its stop limit nor its run limit', async () => {
+    const w = world();
+    const stop = new AbortController();
+    w.everyInterval((at) => {
+      if (at === 100 * SECOND) {
+        stop.abort();
+      }
+    });
+
+    await expect(w.run(w.canary(), stop.signal)).resolves.toEqual({ outcome: 'INTERRUPTED' });
+
+    expect(w.homesFor(w.onlyJourney().id).map(({ status }) => status)).toEqual([200]);
+    expect(w.waits.pending).toBe(0);
+  });
+
+  test('REL-10-AC9: a run at its run limit whose "I’m home" is answered leaves no wait pending, and no listener on the stop signal', async () => {
+    const w = world();
+    const stop = new AbortController();
+    w.answer('heartbeat', neverAnswered);
+
+    await expect(
+      w.run(w.canary({ client: w.client({ timeoutMs: NO_TIMEOUT }) }), stop.signal),
+    ).resolves.toEqual({
+      outcome: 'RUN_LIMIT',
+    });
+
+    expect(w.homesFor(w.onlyJourney().id).map(({ status }) => status)).toEqual([200]);
+    expect(w.waits.pending).toBe(0);
+    expect(getEventListeners(stop.signal, 'abort')).toEqual([]);
+  });
+
   test('REL-10-AC9: a stop while the run waits for its alert sends "I’m home" once, writes INTERRUPTED, reports nothing, and the run is over within 5 s', async () => {
     const w = world();
     const stop = new AbortController();
@@ -1999,6 +2236,30 @@ describe('REL-10: a half-configured canary pages', () => {
     expect(w.sent).toEqual([]);
     expect(w.canaryJourneys()).toEqual([]);
   });
+
+  // Each half of the canary's settings on its own: the client, made from the
+  // API's address and the credential, and the credential's hash. Either one
+  // missing is a canary that cannot run, and it pages.
+  test.each([
+    { what: 'no client, though it has its credential’s hash', options: { client: null } },
+    { what: 'a client, but no credential’s hash', options: { hash: null } },
+  ])(
+    'REL-10-AC13: a canary with $what reports failing with NOT_CONFIGURED, registers nothing, sends no request and starts nothing',
+    async ({ options }) => {
+      const w = world();
+
+      await expect(w.run(w.canary(options))).resolves.toEqual({ outcome: 'NOT_CONFIGURED' });
+
+      expect(w.alarm.statuses).toEqual(['failing']);
+      expect(w.runLines()).toEqual([
+        runLine({ outcome: 'NOT_CONFIGURED', status: null, code: null }),
+      ]);
+      expect(w.storeCalls).toEqual([]);
+      expect(w.sent).toEqual([]);
+      expect(w.store.devices()).toEqual([]);
+      expect(w.canaryJourneys()).toEqual([]);
+    },
+  );
 });
 
 describe('REL-10: nothing secret or personal reaches a log (PRIV-07)', () => {
