@@ -56,6 +56,22 @@ For the diff (`git diff origin/main...HEAD`), check:
   `domain/health.ts`, never one in place of the other or a stand-in for a
   missing check-in, with `WORKER_STALE_AFTER_MS` as the threshold, so a
   stopped watchdog reads as stopped (D-105);
+- a change to the staging canary (`apps/server/src/modules/canary/`, and its
+  adapter `apps/server/src/adapters/canary.ts`) still reports `ok` only after
+  `ON_TIME`, decided on the database's times, never this machine's; reports
+  every other outcome as `failing`; reports nothing after `INTERRUPTED` or a
+  skip; writes a failed report as one `canary_report_failed` line, never
+  silence and never a thrown task; pages on `NOT_CONFIGURED`; ends its
+  journey through "I'm home" before its alert could escalate; never gives the
+  canary's responder a device, so nothing reaches the critical level (D-087);
+  keeps its adapter imported by `worker.ts` alone; its registration still
+  refuses a canary device ID owned by anyone else; it reports only to a check
+  of its own, `HEALTHCHECKS_CANARY_URL`, whose UUID differs from the worker's
+  (`HEALTHCHECKS_WORKER_URL`) and the SMS check's; it is in the crontab
+  (`CANARY_CRONTAB`) only when that URL is usable, and the worker says at
+  start what goes unpaged when it is not; a run never rejects, and is bounded
+  at `CANARY_RUN_LIMIT_MS`; and a run in flight never holds up the minute
+  check-in or the SMS check (D-128);
 - tests exist at L6 for any change in alert behaviour.
 
 

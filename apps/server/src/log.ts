@@ -25,7 +25,12 @@
  *   - `pool` only as api or worker;
  *   - `code` only as text that is a SQLSTATE, read by `sqlstateOf`, so no
  *     message can travel as a code;
- *   - `count` only as a non-negative safe integer.
+ *   - `count`, and the canary's two durations, `alertMs` and
+ *     `openedAfterMs`, only as a non-negative safe integer;
+ *   - the canary's `outcome` only from CANARY_OUTCOMES, its skip's `reason`
+ *     only as RUN_IN_FLIGHT, and its `status` only as an HTTP status, a whole
+ *     number from 100 to 599 (REL-10). No canary line has a field a user's
+ *     ID, its credential or a URL could travel in.
  * An event the log does not list is a fault in the caller: `write` throws,
  * writes nothing, and its error names nothing of what it was handed.
  *
@@ -50,6 +55,7 @@
  */
 import process from 'node:process';
 import pino from 'pino';
+import { CANARY_OUTCOMES } from './domain/canary.ts';
 import { PUSH_FAILURE_REASONS } from './domain/journey.ts';
 import { sqlstateOf } from './domain/sqlstate.ts';
 import type { Log, LogEvent } from './ports.ts';
@@ -90,6 +96,10 @@ const EVENT_LEVELS = {
   closure_failed: 66,
   expiry_failed: 67,
   expiry_overdue: 68,
+  canary_skipped: 35,
+  canary_run: 36,
+  canary_leftover_ended: 41,
+  canary_report_failed: 69,
 } as const satisfies Record<EventName, number>;
 
 /**
@@ -189,6 +199,12 @@ const EXPIRY_STAGES: readonly unknown[] = ['read', 'expire'] satisfies Extract<
   { event: 'expiry_failed' }
 >['stage'][];
 
+/** The reasons `canary_skipped` may give. */
+const CANARY_SKIP_REASONS: readonly unknown[] = ['RUN_IN_FLIGHT'] satisfies Extract<
+  LogEvent,
+  { event: 'canary_skipped' }
+>['reason'][];
+
 /** The pools `database_error` may name: each process's own. */
 const POOLS: readonly unknown[] = ['api', 'worker'] satisfies Extract<
   LogEvent,
@@ -212,6 +228,13 @@ function uuidOf(value: unknown): string | null {
 /** A count: a whole number from 0 up to the largest safe integer. */
 function countOf(value: unknown): number | null {
   return Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : null;
+}
+
+/** An HTTP status: a whole number from 100 to 599. */
+function statusOf(value: unknown): number | null {
+  return Number.isInteger(value) && (value as number) >= 100 && (value as number) <= 599
+    ? (value as number)
+    : null;
 }
 
 /** Only text that is a SQLSTATE, read as the store's error is read. */
@@ -369,6 +392,24 @@ export function createLog({
           return;
         case 'expiry_overdue':
           logger.expiry_overdue({ alertId: uuidOf(event.alertId) });
+          return;
+        case 'canary_run':
+          logger.canary_run({
+            outcome: oneOf(CANARY_OUTCOMES, event.outcome),
+            alertMs: countOf(event.alertMs),
+            openedAfterMs: countOf(event.openedAfterMs),
+            status: statusOf(event.status),
+            code: codeOf(event.code),
+          });
+          return;
+        case 'canary_skipped':
+          logger.canary_skipped({ reason: oneOf(CANARY_SKIP_REASONS, event.reason) });
+          return;
+        case 'canary_leftover_ended':
+          logger.canary_leftover_ended({ journeyId: uuidOf(event.journeyId) });
+          return;
+        case 'canary_report_failed':
+          logger.canary_report_failed({});
           return;
         default:
           // A type error the day an event joins LogEvent without a case. And

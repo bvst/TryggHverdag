@@ -67,6 +67,18 @@ const EVENTS: LogEvent[] = [
   { event: 'closure_failed', stage: 'store', code: '40001' },
   { event: 'expiry_failed', stage: 'expire', code: '55P03' },
   { event: 'expiry_overdue', alertId: syntheticUuid() },
+  // REL-10 (the spec's "Added to, not changed"): the staging canary's four.
+  {
+    event: 'canary_run',
+    outcome: 'ON_TIME',
+    alertMs: 301_250,
+    openedAfterMs: 300_000,
+    status: null,
+    code: null,
+  },
+  { event: 'canary_skipped', reason: 'RUN_IN_FLIGHT' },
+  { event: 'canary_leftover_ended', journeyId: syntheticUuid() },
+  { event: 'canary_report_failed' },
 ];
 
 /** Codes that are not a SQLSTATE: each is written as null, so no message can travel as a code. */
@@ -2204,6 +2216,390 @@ describe('PRIV-07 and LOST-08: the four new events are closed, at the type and a
           walkerId,
           numberShaped,
           credential,
+        ]),
+        event.event,
+      ).toEqual([]);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REL-10: the staging canary's four events (the spec's approach item 11).
+// One line per run, with its outcome, the alert's two durations from last
+// contact, an HTTP status and a SQLSTATE; a run skipped because another is in
+// flight; a leftover journey of the canary's ended, naming it; and a report to
+// the canary's own check that failed. No user's ID, no credential and no URL
+// has a field to travel in, and each field is written only when its value is
+// one the field allows: an outcome from the list, a whole non-negative number
+// of milliseconds, an HTTP status from 100 to 599, a SQLSTATE, a canonical
+// UUID (PRIV-07).
+// ---------------------------------------------------------------------------
+
+const REL_10_EVENTS: LogEvent[] = [
+  {
+    event: 'canary_run',
+    outcome: 'ON_TIME',
+    alertMs: 301_250,
+    openedAfterMs: 300_000,
+    status: null,
+    code: null,
+  },
+  {
+    event: 'canary_run',
+    outcome: 'START_FAILED',
+    alertMs: null,
+    openedAfterMs: null,
+    status: 401,
+    code: null,
+  },
+  {
+    event: 'canary_run',
+    outcome: 'READ_FAILED',
+    alertMs: null,
+    openedAfterMs: null,
+    status: null,
+    code: '57P01',
+  },
+  {
+    event: 'canary_run',
+    outcome: 'NOT_HANDED_OVER',
+    alertMs: null,
+    openedAfterMs: 0,
+    status: 599,
+    code: null,
+  },
+  {
+    event: 'canary_run',
+    outcome: 'INTERRUPTED',
+    alertMs: 0,
+    openedAfterMs: Number.MAX_SAFE_INTEGER,
+    status: 100,
+    code: 'XX000',
+  },
+  { event: 'canary_skipped', reason: 'RUN_IN_FLIGHT' },
+  { event: 'canary_leftover_ended', journeyId: syntheticUuid() },
+  { event: 'canary_report_failed' },
+];
+
+/** Every outcome a canary run can come to, as the interfaces list them. */
+const CANARY_OUTCOME_LIST = [
+  'ON_TIME',
+  'NOT_CONFIGURED',
+  'REGISTER_FAILED',
+  'START_FAILED',
+  'HEARTBEAT_FAILED',
+  'READ_FAILED',
+  'OPENED_EARLY',
+  'NOT_OPENED',
+  'NOT_HANDED_OVER',
+  'HOME_FAILED',
+  'NOT_RESOLVED',
+  'ESCALATED',
+  'STAND_DOWN_NOT_HANDED_OVER',
+  'RUN_LIMIT',
+  // RG-03 (REL-10 review loop 1, code-reviewer should-fix 4; D-128's loop-1
+  // amendment): RUN_FAILED is added, a run that failed in a way no step
+  // names. The log writes it as it writes every other outcome; nothing of the
+  // error that caused it has a field to travel in.
+  'RUN_FAILED',
+  'INTERRUPTED',
+] as const;
+
+/** A canary_run line the other tests vary one field of. */
+const A_RUN = {
+  event: 'canary_run',
+  outcome: 'ON_TIME',
+  alertMs: 305_000,
+  openedAfterMs: 300_000,
+  status: null,
+  code: null,
+};
+
+/** Durations that are not a whole non-negative number of milliseconds: each written as null. */
+const NOT_DURATIONS: { what: string; value: unknown }[] = [
+  { what: 'a negative number', value: -1 },
+  { what: 'a fraction', value: 300_000.5 },
+  { what: 'not a number', value: Number.NaN },
+  { what: 'infinity', value: Number.POSITIVE_INFINITY },
+  { what: 'beyond the largest safe integer', value: Number.MAX_SAFE_INTEGER + 2 },
+  { what: 'text holding a number', value: '300000' },
+  { what: 'a coordinate', value: syntheticCoordinate() },
+];
+
+/** Statuses that are not an HTTP status from 100 to 599: each written as null. */
+const NOT_STATUSES: { what: string; value: unknown }[] = [
+  { what: 'just under 100', value: 99 },
+  { what: 'just over 599', value: 600 },
+  { what: 'zero', value: 0 },
+  { what: 'a negative number', value: -401 },
+  { what: 'a fraction', value: 200.5 },
+  { what: 'text holding a status', value: '401' },
+  { what: 'not a number', value: Number.NaN },
+];
+
+describe('PRIV-07 and REL-10: the canary’s four events are closed, at the type and at run time', () => {
+  test('REL-10-AC15: (L1) PRIV-07: each of the four is exactly its fields, no more and no fewer: a field added to one, an optional one included, or a set widened, fails typecheck', () => {
+    // As LOST-08-AC18's pin: each entry is `true` only when each type is
+    // assignable to the other and both have the same keys.
+    type Exactly<A, B> = [A] extends [B]
+      ? [B] extends [A]
+        ? [keyof A] extends [keyof B]
+          ? [keyof B] extends [keyof A]
+            ? true
+            : false
+          : false
+        : false
+      : false;
+    type EventOf<Name extends LogEvent['event']> = Extract<LogEvent, { event: Name }>;
+    const pinned: [
+      Exactly<
+        EventOf<'canary_run'>,
+        {
+          event: 'canary_run';
+          outcome: (typeof CANARY_OUTCOME_LIST)[number];
+          alertMs: number | null;
+          openedAfterMs: number | null;
+          status: number | null;
+          code: string | null;
+        }
+      >,
+      Exactly<EventOf<'canary_skipped'>, { event: 'canary_skipped'; reason: 'RUN_IN_FLIGHT' }>,
+      Exactly<
+        EventOf<'canary_leftover_ended'>,
+        { event: 'canary_leftover_ended'; journeyId: string }
+      >,
+      Exactly<EventOf<'canary_report_failed'>, { event: 'canary_report_failed' }>,
+    ] = [true, true, true, true];
+
+    expect(pinned).toEqual([true, true, true, true]);
+  });
+
+  test('REL-10-AC15: (L1) PRIV-07: none of the four holds another field: a credential, a URL, a user’s ID, a latitude, a message, or another outcome or reason does not type-check', () => {
+    // Each @ts-expect-error fails the type check (gate:static) the day the
+    // property under it stops being an error. Values only; none is handed to
+    // the log. The credential is the test kit's, made at run time (RG-07).
+    const credential = syntheticCredential();
+    const someone = syntheticUuid();
+    const refused: unknown[] = [
+      {
+        event: 'canary_run',
+        outcome: 'ON_TIME',
+        alertMs: 305_000,
+        openedAfterMs: 300_000,
+        status: null,
+        code: null,
+        // @ts-expect-error -- not the canary's credential
+        credential,
+      } satisfies LogEvent,
+      {
+        event: 'canary_run',
+        outcome: 'START_FAILED',
+        alertMs: null,
+        openedAfterMs: null,
+        status: 401,
+        code: null,
+        // @ts-expect-error -- nor the API's URL
+        url: 'https://canary-api.invalid/v1/journeys',
+      } satisfies LogEvent,
+      {
+        event: 'canary_run',
+        outcome: 'ON_TIME',
+        alertMs: 305_000,
+        openedAfterMs: 300_000,
+        status: null,
+        code: null,
+        // @ts-expect-error -- nor the walker's ID
+        walkerId: someone,
+      } satisfies LogEvent,
+      {
+        event: 'canary_run',
+        // @ts-expect-error -- nor an outcome outside the list
+        outcome: 'LATE',
+        alertMs: null,
+        openedAfterMs: null,
+        status: null,
+        code: null,
+      } satisfies LogEvent,
+      {
+        event: 'canary_skipped',
+        reason: 'RUN_IN_FLIGHT',
+        // @ts-expect-error -- nor a latitude
+        latitude: 0,
+      } satisfies LogEvent,
+      {
+        event: 'canary_skipped',
+        // @ts-expect-error -- nor another reason
+        reason: 'LEFTOVER',
+      } satisfies LogEvent,
+      {
+        event: 'canary_leftover_ended',
+        journeyId: someone,
+        // @ts-expect-error -- nor the responder's ID
+        responderId: someone,
+      } satisfies LogEvent,
+      {
+        event: 'canary_report_failed',
+        // @ts-expect-error -- nor the report's error message
+        message: 'Healthchecks.io answered 500.',
+      } satisfies LogEvent,
+      {
+        event: 'canary_report_failed',
+        // @ts-expect-error -- nor the ping URL
+        url: 'https://hc-ping.com/00000000-0000-0000-0000-000000000000',
+      } satisfies LogEvent,
+    ];
+
+    expect(refused).toHaveLength(9);
+  });
+
+  test.each(REL_10_EVENTS)(
+    'REL-10-AC15: PRIV-07: createLog writes $event as one JSON line, holding exactly that event’s fields',
+    (event) => {
+      const writer = recordingWriter();
+
+      createLog({ write: writer.write }).write(event);
+
+      const lines = writer.lines();
+      expect(lines).toHaveLength(1);
+      expect(writer.chunks.join('').endsWith('\n')).toBe(true);
+      expect(JSON.parse(lines[0] ?? 'null')).toEqual(event);
+    },
+  );
+
+  test('REL-10-AC15: PRIV-07: every outcome in the list is written as it is', () => {
+    for (const outcome of CANARY_OUTCOME_LIST) {
+      expect(writtenThroughACast({ ...A_RUN, outcome }).line, outcome).toEqual({
+        ...A_RUN,
+        outcome,
+      });
+    }
+  });
+
+  test('REL-10-AC15: PRIV-07: an outcome outside the list is written as null, and none of it is written', () => {
+    for (const value of [
+      'LATE',
+      'on_time',
+      '',
+      ['ON_TIME'],
+      3,
+      ...freeText().map(({ value: text }) => text),
+    ]) {
+      const { line, text } = writtenThroughACast({ ...A_RUN, outcome: value });
+
+      expect(line, JSON.stringify(value)).toEqual({ ...A_RUN, outcome: null });
+      if (typeof value === 'string' && value !== '') {
+        expect(text, value).not.toContain(`"${value}"`);
+      }
+    }
+  });
+
+  test.each(['alertMs', 'openedAfterMs'])(
+    'REL-10-AC15: PRIV-07: a canary_run %s that is not a whole non-negative number of milliseconds is written as null; 0 and the largest safe integer as they are',
+    (field) => {
+      for (const { what, value } of NOT_DURATIONS) {
+        expect(writtenThroughACast({ ...A_RUN, [field]: value }).line, what).toEqual({
+          ...A_RUN,
+          [field]: null,
+        });
+      }
+      for (const value of [0, 360_000, Number.MAX_SAFE_INTEGER]) {
+        expect(writtenThroughACast({ ...A_RUN, [field]: value }).line).toEqual({
+          ...A_RUN,
+          [field]: value,
+        });
+      }
+    },
+  );
+
+  test('REL-10-AC15: PRIV-07: a canary_run status outside 100 to 599 is written as null; 100, 302, 401 and 599 as they are', () => {
+    for (const { what, value } of NOT_STATUSES) {
+      expect(writtenThroughACast({ ...A_RUN, status: value }).line, what).toEqual({
+        ...A_RUN,
+        status: null,
+      });
+    }
+    for (const status of [100, 302, 401, 599]) {
+      expect(writtenThroughACast({ ...A_RUN, status }).line).toEqual({ ...A_RUN, status });
+    }
+  });
+
+  test('REL-10-AC15: PRIV-07: a canary_run code that is not a SQLSTATE is written as null, and a SQLSTATE as it is', () => {
+    for (const { what, code } of [...NOT_SQLSTATES, ...CODES_NOT_TEXT]) {
+      const { line, text } = writtenThroughACast({ ...A_RUN, code });
+
+      expect(line, what).toEqual({ ...A_RUN, code: null });
+      if (typeof code === 'string' && code !== '') {
+        expect(text, what).not.toContain(code);
+      }
+    }
+    expect(writtenThroughACast({ ...A_RUN, code: '57P01' }).line).toEqual({
+      ...A_RUN,
+      code: '57P01',
+    });
+  });
+
+  test('REL-10-AC15: PRIV-07: in the canary_leftover_ended line, a journeyId that is not a lower-case canonical UUID is written as null, and none of it is written', () => {
+    const event = { event: 'canary_leftover_ended', journeyId: syntheticUuid() };
+    for (const { what, journeyId: value, markers } of NOT_JOURNEY_IDS) {
+      const { line, text } = writtenThroughACast({ ...event, journeyId: value() });
+
+      expect(line, what).toEqual({ ...event, journeyId: null });
+      expect(markersIn(text, markers()), what).toEqual([]);
+    }
+    expect(writtenThroughACast(event).line).toEqual(event);
+  });
+
+  test('REL-10-AC15: PRIV-07: a canary_skipped reason other than RUN_IN_FLIGHT is written as null, and none of it is written', () => {
+    const event = { event: 'canary_skipped', reason: 'RUN_IN_FLIGHT' };
+    for (const value of ['LEFTOVER', 'run_in_flight', '', ['RUN_IN_FLIGHT'], 409]) {
+      const { line, text } = writtenThroughACast({ ...event, reason: value });
+
+      expect(line, JSON.stringify(value)).toEqual({ ...event, reason: null });
+      if (typeof value === 'string' && value !== '') {
+        expect(text, value).not.toContain(`"${value}"`);
+      }
+    }
+    expect(writtenThroughACast(event).line).toEqual(event);
+  });
+
+  test('REL-10-AC15: PRIV-07: fields the four events do not have, got past the type, are not written: a credential, a URL, the walker’s, responder’s and device’s IDs, a position, a message, a phone-number-shaped value', () => {
+    const latitude = String(syntheticCoordinate());
+    const longitude = String(syntheticCoordinate());
+    const credential = syntheticCredential();
+    const [walkerId, responderId, deviceId] = [syntheticUuid(), syntheticUuid(), syntheticUuid()];
+    const url = `https://canary-api-${syntheticUuid()}.invalid`;
+    // Phone-number-shaped, made at run time and never in +47 form: eight
+    // digits with a leading 0, which no Norwegian subscriber number has.
+    const numberShaped = `0${String(Math.floor(Math.random() * 10_000_000)).padStart(7, '0')}`;
+    const extra = {
+      credential,
+      authorization: `Bearer ${credential}`,
+      url,
+      apiUrl: url,
+      walkerId,
+      responderId,
+      deviceId,
+      latitude: Number(latitude),
+      position: { latitude: Number(latitude), longitude: Number(longitude) },
+      message: `could not reach ${url} for ${walkerId} at ${latitude}, ${longitude}`,
+      err: new Error(`fetch failed: ${url} ${credential}`),
+      phoneNumber: numberShaped,
+    };
+
+    for (const event of REL_10_EVENTS) {
+      const { line, text } = writtenThroughACast({ ...event, ...extra });
+
+      expect(line, event.event).toEqual(event);
+      expect(
+        markersIn(text, [
+          credential,
+          url,
+          walkerId,
+          responderId,
+          deviceId,
+          latitude,
+          longitude,
+          numberShaped,
         ]),
         event.event,
       ).toEqual([]);

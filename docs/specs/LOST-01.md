@@ -9,6 +9,10 @@ D-099, D-100, D-101, D-102, D-103 · **Written:** 2026-10-02 · **Finalised:**
 2026-10-03, with the owner's answers (D-101, D-102 and its amendment, D-103)
 · **Status:** 📝 Spec, settled; review loop 1 applied (2026-10-03).
 
+*Task numbers (noted 2026-10-10):* written when M2 had eight tasks (D-090);
+since D-115 it has nine. This spec's "task 8" is the staging canary, task 9
+today, and its "of 8" is "of 9" (D-128).
+
 ## Requirement
 
 ### The rules this task delivers

@@ -1,7 +1,10 @@
 // CI-01. These tests are about one thing: the difference between "the merge
 // rules are enforced" and "nobody could tell". A gate that reports the second as
 // the first is worse than no gate, because it is believed.
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
+import { MUTATION_GROUPS, SAFETY_PATHS } from './gate-decisions.mjs';
 import {
   CHECKS,
   OWNER_APPROVAL_PATHS,
@@ -323,5 +326,66 @@ describe('reviewCodeowners', () => {
 
   test('extra owners and extra paths are fine — the file may protect more than the minimum', () => {
     expect(reviewCodeowners(`${complete}\n/docs/dpia/ @bvst @someone-else\n`)).toEqual([]);
+  });
+});
+
+// REL-10-AC18 (D-128): the staging canary is safety code, and is measured. A
+// canary that reports ok without looking is the silent failure F8 names, so
+// its module needs the owner, the safety review, a place among the safety
+// paths and a mutation group of its own; its adapter, which holds the one
+// insert of a device credential before the login task, needs the owner and
+// the safety review. Step 1 (#76) gave both paths the owner and the review;
+// the safety path, the group and the files themselves come with REL-10.
+// Read from the repository itself, beside the merge rules' own lists.
+describe('REL-10-AC18: the staging canary’s code needs the owner and the safety review, and is measured', () => {
+  const MODULE = 'apps/server/src/modules/canary/';
+  const ADAPTER = 'apps/server/src/adapters/canary.ts';
+
+  test('REL-10-AC18: OWNER_APPROVAL_PATHS holds the canary’s module folder and its adapter', () => {
+    expect(OWNER_APPROVAL_PATHS).toContain(`/${MODULE}`);
+    expect(OWNER_APPROVAL_PATHS).toContain(`/${ADAPTER}`);
+  });
+
+  test('REL-10-AC18: .github/CODEOWNERS gives each a line naming @bvst and @urso-agent, and every path the owner must approve is owned', () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const owners = (path) =>
+      text
+        .split('\n')
+        .map((line) => line.trim().split(/\s+/))
+        .filter(([pattern]) => pattern === path)
+        .map(([, ...names]) => names.join(' '));
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    expect(owners(`/${MODULE}`)).toEqual(['@bvst @urso-agent']);
+    expect(owners(`/${ADAPTER}`)).toEqual(['@bvst @urso-agent']);
+  });
+
+  test('REL-10-AC18: the ai-review safety filter lists the module’s files and the adapter', () => {
+    const workflow = readFileSync('.github/workflows/ai-review.yml', 'utf8');
+
+    expect(workflow).toContain(`- '${MODULE}**'`);
+    expect(workflow).toContain(`- '${ADAPTER}'`);
+  });
+
+  test('REL-10-AC18: the module is a safety path, mutated by a group of its own, canary, against canary.system.test.ts; the adapter is no safety path, proved at L3 and L2 and not mutated', () => {
+    expect(SAFETY_PATHS).toContain(MODULE);
+    expect(SAFETY_PATHS).not.toContain(ADAPTER);
+    expect(MUTATION_GROUPS.filter((group) => group.paths.includes(MODULE))).toEqual([
+      expect.objectContaining({
+        name: 'canary',
+        paths: [MODULE],
+        tests: ['apps/server/src/canary.system.test.ts'],
+      }),
+    ]);
+  });
+
+  test('REL-10-AC18: git tracks both owned canary paths: the adapter, and at least one file under the module', () => {
+    const tracked = (path) =>
+      spawnSync('git', ['ls-files', '--', path], { encoding: 'utf8' })
+        .stdout.split('\n')
+        .filter((file) => file !== '');
+
+    expect(tracked(ADAPTER)).toEqual([ADAPTER]);
+    expect(tracked(MODULE).filter((file) => file.endsWith('.ts')).length).toBeGreaterThan(0);
   });
 });

@@ -8,6 +8,8 @@
 // below is the same one the real adapter runs against PostgreSQL, so the two
 // cannot drift apart.
 import { describe, expect, test } from 'vitest';
+import { CANARY_IDS } from './canary-ids.ts';
+import { CANARY_STORE_BEHAVIOUR, type CanaryStoreUnderTest } from './canary-store-behaviour.ts';
 import { fakeClock } from './fake-clock.ts';
 import {
   fakeJourneyStore,
@@ -3170,5 +3172,205 @@ describe('fakeJourneyStore: "They’re safe" and the 24-hour end (LOST-08)', () 
     }
 
     expect(store.alerts().map(({ resolution }) => resolution)).toEqual(['SAFE', 'EXPIRED']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REL-10: the staging canary's store. Its shared behaviours are a list of
+// their own, CANARY_STORE_BEHAVIOUR, which the adapter runs at L3 in
+// canary.integration.test.ts (the adapter is adapters/canary.ts, beside the
+// journey store's). BUG-22: tests:changes does not see the shared suite, so
+// this pin is what shows a case removed. Every pin above is unchanged.
+// ---------------------------------------------------------------------------
+
+/** The canary's subject over a fresh fake: the journey suite's subject, with the canary's own parts. */
+function canaryUnderTest(): CanaryStoreUnderTest {
+  const base = underTest();
+  const store = base.store as FakeJourneyStore;
+  return {
+    store,
+    now: () => base.now(),
+    addUser: () => base.addUser(),
+    addDevice: (userId, deviceId) => Promise.resolve(store.addDevice(userId, deviceId)),
+    removeDevice: (deviceId) => {
+      store.removeDevice(deviceId);
+      return Promise.resolve();
+    },
+    devicesOf: (userId) =>
+      Promise.resolve(
+        store
+          .devices()
+          .filter((device) => device.userId === userId.toLowerCase())
+          .map(({ id, credentialHash }) => ({ id, credentialHash })),
+      ),
+    seedJourney: (journey) => base.seedJourney(journey),
+    seedAlert: (alert) => base.seedAlert(alert),
+    seedMessage: (message) => base.seedMessage(message),
+    alertsOf: (journeyId) => base.alertsOf(journeyId),
+    resolutionsOf: (journeyId) => base.resolutionsOf(journeyId),
+    messagesOf: (journeyId) => base.messagesOf(journeyId),
+    lastHeartbeatAt: (journeyId) => base.lastHeartbeatAt(journeyId),
+    endOf: (journeyId) => base.endOf(journeyId),
+  };
+}
+
+describe('fakeJourneyStore, against the behaviour the canary’s store shares with its adapter (REL-10)', () => {
+  test('the canary’s shared suite is the list the adapter runs too; a case removed shows here', () => {
+    expect(CANARY_STORE_BEHAVIOUR.map((behaviour) => behaviour.name)).toEqual([
+      'REL-10-AC10: registerCanary makes the canary’s walker and responder and the walker’s one device with the credential’s hash, again changes nothing, a new hash replaces the old, and a device of the canary’s ID owned by another user is refused',
+      'REL-10-AC11: observeCanaryJourney reads the canary’s journey, its alert, whether the port answered the responder’s lost-contact message and stand-down, and its SMS count, at the store’s now, and reads any other walker’s journey as none',
+      'REL-10-AC8: a second start of the canary’s walker while its journey is unended is refused with that journey’s ID',
+    ]);
+    expect(kit.CANARY_STORE_BEHAVIOUR).toBe(CANARY_STORE_BEHAVIOUR);
+  });
+
+  test.each(CANARY_STORE_BEHAVIOUR)('$name', async ({ run }) => {
+    await run(canaryUnderTest());
+  });
+});
+
+describe('fakeJourneyStore: the staging canary’s registration and read, beyond the shared suite (REL-10)', () => {
+  const HASH = 'a'.repeat(64);
+
+  test('registerCanary writes the canary’s three rows, each lower-case, and nothing else: no journey, heartbeat, alert or message', async () => {
+    const store = fakeJourneyStore({ clock: fakeClock(AT) });
+
+    await store.registerCanary({ credentialHash: HASH });
+
+    expect(store.calls).toEqual(['registerCanary']);
+    expect(await store.existingUsers([CANARY_IDS.walkerId, CANARY_IDS.responderId])).toEqual(
+      new Set([CANARY_IDS.walkerId, CANARY_IDS.responderId]),
+    );
+    expect(store.devices()).toEqual([
+      { id: CANARY_IDS.deviceId, userId: CANARY_IDS.walkerId, credentialHash: HASH },
+    ]);
+    expect(store.journeys()).toEqual([]);
+    expect(store.heartbeats()).toEqual([]);
+    expect(store.alerts()).toEqual([]);
+    expect(store.outbox()).toEqual([]);
+  });
+
+  test('registerCanary with no hash, or an empty one, is refused before it is recorded, as the not-null column refuses it', async () => {
+    const store = fakeJourneyStore({ clock: fakeClock(AT) });
+
+    await expect(store.registerCanary({ credentialHash: '' })).rejects.toThrow(/credential_hash/);
+    await expect(store.registerCanary({} as unknown as { credentialHash: string })).rejects.toThrow(
+      /credential_hash/,
+    );
+    expect(store.devices()).toEqual([]);
+    expect(store.calls).toEqual([]);
+  });
+
+  test('registerCanary, failing, writes nothing; and recovered, writes the rows', async () => {
+    const store = fakeJourneyStore({ clock: fakeClock(AT) });
+    const error = new Error('the database could not answer');
+    store.failWith(error, 'registerCanary');
+
+    await expect(store.registerCanary({ credentialHash: HASH })).rejects.toBe(error);
+    expect(store.devices()).toEqual([]);
+    expect(await store.existingUsers([CANARY_IDS.walkerId])).toEqual(new Set());
+
+    store.recover();
+    await store.registerCanary({ credentialHash: HASH });
+    expect(store.devices()).toHaveLength(1);
+  });
+
+  test('deviceWithCredentialHash finds the device a hash names, with its user, and null for any other hash', async () => {
+    const store = fakeJourneyStore({ clock: fakeClock(AT) });
+    await store.registerCanary({ credentialHash: HASH });
+
+    expect(store.deviceWithCredentialHash(HASH)).toEqual({
+      deviceId: CANARY_IDS.deviceId,
+      userId: CANARY_IDS.walkerId,
+    });
+    expect(store.deviceWithCredentialHash('b'.repeat(64))).toBeNull();
+
+    await store.registerCanary({ credentialHash: 'c'.repeat(64) });
+    expect(store.deviceWithCredentialHash(HASH)).toBeNull();
+  });
+
+  test('removeDevice refuses a device not stored, and one a journey was started from', async () => {
+    const store = fakeJourneyStore({ clock: fakeClock(AT) });
+    await store.registerCanary({ credentialHash: HASH });
+    store.seed({
+      walkerId: CANARY_IDS.walkerId,
+      deviceId: CANARY_IDS.deviceId,
+      state: 'ACTIVE',
+      responderIds: [CANARY_IDS.responderId],
+      startedAt: AT,
+    });
+
+    expect(() => {
+      store.removeDevice(CANARY_IDS.deviceId);
+    }).toThrow(/foreign key/);
+    expect(() => {
+      store.removeDevice(syntheticUuid());
+    }).toThrow(/no device/);
+    expect(store.devices()).toHaveLength(1);
+  });
+
+  test('observeCanaryJourney needs a clock: a fake given none throws, as it throws when asked about silence', async () => {
+    const store = fakeJourneyStore();
+    await store.registerCanary({ credentialHash: HASH });
+    const journeyId = store.seed({
+      walkerId: CANARY_IDS.walkerId,
+      deviceId: CANARY_IDS.deviceId,
+      state: 'ACTIVE',
+      responderIds: [CANARY_IDS.responderId],
+      startedAt: AT,
+    });
+
+    await expect(store.observeCanaryJourney(journeyId)).rejects.toThrow(/no clock/);
+  });
+
+  test('observeCanaryJourney is a plain read: it reads a held row without waiting, and is recorded in calls', async () => {
+    const store = fakeJourneyStore({ clock: fakeClock(AT) });
+    await store.registerCanary({ credentialHash: HASH });
+    const journeyId = store.seed({
+      walkerId: CANARY_IDS.walkerId,
+      deviceId: CANARY_IDS.deviceId,
+      state: 'ACTIVE',
+      responderIds: [CANARY_IDS.responderId],
+      startedAt: AT,
+    });
+    store.hold(journeyId);
+
+    const observation = await store.observeCanaryJourney(journeyId);
+
+    expect(observation?.journey.state).toBe('ACTIVE');
+    expect(observation?.now).toEqual(AT);
+    expect(store.calls).toEqual(['registerCanary', 'observeCanaryJourney']);
+  });
+
+  test('observeCanaryJourney reads the latest of a journey’s alerts, and what it hands back cannot change what the fake holds', async () => {
+    const store = fakeJourneyStore({ clock: fakeClock(AT) });
+    await store.registerCanary({ credentialHash: HASH });
+    const journeyId = store.seed({
+      walkerId: CANARY_IDS.walkerId,
+      deviceId: CANARY_IDS.deviceId,
+      state: 'LOST_CONTACT',
+      responderIds: [CANARY_IDS.responderId],
+      startedAt: AT,
+      lastHeartbeatAt: AT,
+    });
+    const earlier = new Date(AT.getTime() + 60_000);
+    const later = new Date(AT.getTime() + 120_000);
+    store.seedAlert({
+      journeyId,
+      state: 'RESOLVED',
+      openedAt: earlier,
+      silentSince: AT,
+      resolvedAt: earlier,
+      resolution: 'BACK_IN_CONTACT',
+    });
+    const latest = store.seedAlert({ journeyId, state: 'OPEN', openedAt: later, silentSince: AT });
+
+    const observation = await store.observeCanaryJourney(journeyId);
+    expect(observation?.alert?.id).toBe(latest);
+    observation?.journey.startedAt.setTime(0);
+    observation?.alert?.openedAt.setTime(0);
+
+    expect((await store.observeCanaryJourney(journeyId))?.journey.startedAt).toEqual(AT);
+    expect((await store.observeCanaryJourney(journeyId))?.alert?.openedAt).toEqual(later);
   });
 });

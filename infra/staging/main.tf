@@ -14,6 +14,29 @@ locals {
   # Node 22 from failing on the first `import type`.
   # apps/server/src/bin/bin.test.ts runs these same files with the same flag.
   node = "node --experimental-strip-types"
+
+  # Staging's address, written once: the app's vhost, and where the staging
+  # canary calls the public API (REL-10), so the two cannot differ.
+  fqdn = "trygg-hverdag-staging.cleverapps.io"
+
+  # The canary's credential's generation (REL-10, D-128's loop-1 amendment).
+  # To rotate the credential, raise it in a pull request, then plan and apply
+  # through infra-staging. The worker registers the new hash on its first
+  # canary run after the restart.
+  canary_credential_generation = "1"
+}
+
+# The staging canary's device credential (REL-10, D-128): 43 letters and
+# digits, about 256 bits (D-091's strength). Made here, so it lives only in
+# Terraform's state and the app's environment, as the database password does,
+# and in no GitHub secret and no one's hands. The worker registers its hash on
+# its first canary run. Rotating it is raising local.canary_credential_generation in a pull
+# request: infra-staging.yml runs a fixed plan with no `-replace`, so the
+# generation, its one keeper, is what replaces it (D-128's loop-1 amendment).
+resource "random_password" "canary_credential" {
+  length  = 43
+  special = false
+  keepers = { generation = local.canary_credential_generation }
 }
 
 resource "clevercloud_postgresql" "staging" {
@@ -43,7 +66,7 @@ resource "clevercloud_nodejs" "staging" {
   redirect_https  = true
   start_script    = "${local.node} apps/server/src/bin/api.ts"
 
-  vhosts = [{ fqdn = "trygg-hverdag-staging.cleverapps.io" }]
+  vhosts = [{ fqdn = local.fqdn }]
 
   hooks {
     # Before every start. A failure stops the deploy: new code never starts
@@ -78,5 +101,14 @@ resource "clevercloud_nodejs" "staging" {
     # SMS has waited 60 s unsent, so a failing SMS pages the owner (LOST-07).
     # Its own check, apart from the worker's. A secret, as the one above.
     HEALTHCHECKS_SMS_URL = var.healthchecks_sms_url
+
+    # The staging canary (REL-10, D-128): every 15 minutes the worker drives a
+    # test walker's journey through this app's own public address, as the
+    # canary's device, and reports to a third check of its own whether the
+    # alert reached the push port in time. The credential and the ping URL are
+    # secrets, so no plan shows them.
+    CANARY_API_URL          = "https://${local.fqdn}"
+    CANARY_CREDENTIAL       = random_password.canary_credential.result
+    HEALTHCHECKS_CANARY_URL = var.healthchecks_canary_url
   }
 }

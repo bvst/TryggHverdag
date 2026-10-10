@@ -376,3 +376,269 @@ describe('LOST-07: the two ping URLs are each a plain check address, and never t
     expect(message).toContain('HEALTHCHECKS_WORKER_URL');
   });
 });
+
+describe('REL-10: staging is configured for the canary by Terraform, and refuses a plan without its check', () => {
+  // The canary's check (staging-canary, A-34) is paged by its own ping URL, a
+  // secret as the other two are: anyone holding it can keep the check green
+  // while every alert is missed. Its credential is made by Terraform and lives
+  // only in Terraform's state and the app's environment (D-128), never in a
+  // GitHub secret. Its address is the staging vhost, written once, so the
+  // canary cannot be pointed somewhere staging is not. Each is written in
+  // infra/ and read by the worker (config.ts), where nothing but a test would
+  // notice them drifting apart.
+  const variables = read('infra/staging/variables.tf');
+  const versions = read('infra/staging/versions.tf');
+  const lock = read('infra/staging/.terraform.lock.hcl');
+  const NAME = 'healthchecks_canary_url';
+  const OTHERS = [
+    ['healthchecks_worker_url', 'HEALTHCHECKS_WORKER_URL'],
+    ['healthchecks_sms_url', 'HEALTHCHECKS_SMS_URL'],
+  ];
+
+  /** A variable's block, from its header to the closing brace at the start of a line. */
+  function variableBlock(name) {
+    const match = new RegExp(`^variable "${name}" \\{\\n[\\s\\S]*?\\n\\}$`, 'm').exec(variables);
+    return match?.[0] ?? '';
+  }
+
+  /** The bodies of a block's validation blocks. */
+  function validations(block) {
+    return [...block.matchAll(/\n {2}validation \{\n([\s\S]*?)\n {2}\}/g)].map(
+      ([, body]) => body ?? '',
+    );
+  }
+
+  /** A validation's error message, Terraform's string as written. */
+  function messageOf(body) {
+    return /\n?\s*error_message\s*=\s*"((?:[^"\\]|\\.)*)"/.exec(body)?.[1] ?? '';
+  }
+
+  /** The `can(regex(…))` patterns that validate the variable, as JavaScript expressions. */
+  function patternsOf(name) {
+    return [
+      ...variableBlock(name).matchAll(
+        new RegExp(
+          `\\n\\s*condition\\s*=\\s*can\\(regex\\("((?:[^"\\\\]|\\\\.)*)", var\\.${name}\\)\\)\\n`,
+          'g',
+        ),
+      ),
+      // Terraform's string escapes undone, as INF-08-AC8's test does; RE2 and
+      // JavaScript agree on patterns this simple.
+    ].map(([, pattern]) => new RegExp(String(pattern).replace(/\\\\/g, '\\')));
+  }
+
+  /** Whether Terraform would take this value: every pattern matches it. */
+  function takes(value) {
+    const patterns = patternsOf(NAME);
+    expect(patterns.length, `no can(regex(…)) validation of ${NAME}`).toBeGreaterThan(0);
+    return patterns.every((pattern) => pattern.test(value));
+  }
+
+  /** The app's environment in main.tf. */
+  const environment = () => /\n {2}environment = \{\n([\s\S]*?)\n {2}\}\n/.exec(main)?.[1] ?? '';
+
+  /** main.tf without its comment lines. */
+  const code = () =>
+    main
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('#'))
+      .join('\n');
+
+  test('REL-10-AC17: healthchecks_canary_url is a required string variable, with no default, and sensitive, so no plan shows it', () => {
+    const block = variableBlock(NAME);
+
+    expect(block, `variables.tf declares no variable "${NAME}"`).not.toBe('');
+    expect(block).toMatch(/\n\s*type\s*=\s*string\n/);
+    expect(block).not.toMatch(/\n\s*default\s*=/);
+    expect(block).toMatch(/\n\s*sensitive\s*=\s*true\n/);
+  });
+
+  test('REL-10-AC17: healthchecks_canary_url takes https://hc-ping.com/ and a lower-case UUID, and no other spelling of a check', () => {
+    const check = `a${syntheticUuid().slice(1)}`;
+    const pingKey = syntheticCredential().slice(0, 22);
+    const host = 'https://hc-ping.com';
+
+    expect(takes(`${host}/${check}`)).toBe(true);
+    expect(takes(`${host}/${CHECK}`)).toBe(true);
+    const refused = [
+      ['http, not https', `http://hc-ping.com/${check}`],
+      ['another host ending in the host', `https://hc-ping.com.example.invalid/${check}`],
+      ['a dot read as any character', `https://hc-pingXcom/${check}`],
+      ['the host inside another URL', `https://example.invalid/${host}/${check}`],
+      ['a trailing slash', `${host}/${check}/`],
+      ['a query', `${host}/${check}?rid=0f0e0d0c`],
+      ['a fragment', `${host}/${check}#0f0e0d0c`],
+      ['a trailing space', `${host}/${check} `],
+      ['a trailing newline', `${host}/${check}\n`],
+      ['a leading space', ` ${host}/${check}`],
+      ['an upper-case UUID', `${host}/${check.toUpperCase()}`],
+      ['a percent-encoded character in the UUID', `${host}/%61${check.slice(1)}`],
+      ['the slug form', `${host}/${pingKey}/staging-canary`],
+      ['an upper-case host', `https://HC-PING.COM/${check}`],
+      ['the failure signal', `${host}/${check}/fail`],
+      ['a path of two segments, the UUID second', `${host}/ping/${check}`],
+      ['an empty path', host],
+      ['a UUID too short', `${host}/${check.slice(0, -1)}`],
+      ['a UUID one hex digit too long', `${host}/${check}0`],
+      ['not a UUID', `${host}/${pingKey}`],
+      ['nothing', ''],
+    ];
+
+    // Every spelling Terraform would take, by what it is, so a failure names them all.
+    expect(refused.filter(([, value]) => takes(value)).map(([what]) => what)).toEqual([]);
+  });
+
+  test('REL-10-AC17: each of its validations’ error messages names the secret, HEALTHCHECKS_CANARY_URL, and the owner’s to-do, A-34', () => {
+    const bodies = validations(variableBlock(NAME));
+
+    expect(bodies.length, `no validation of ${NAME}`).toBeGreaterThan(0);
+    for (const body of bodies) {
+      const message = messageOf(body);
+      expect(message, body).toContain('HEALTHCHECKS_CANARY_URL');
+      expect(message, body).toMatch(/\bA-34\b/);
+    }
+  });
+
+  test.each(OTHERS)(
+    'REL-10-AC17: one validation refuses healthchecks_canary_url when it is %s, and its error message names HEALTHCHECKS_CANARY_URL and A-34',
+    (other) => {
+      const bodies = [NAME, ...OTHERS.map(([name]) => name)].flatMap((name) =>
+        validations(variableBlock(name)),
+      );
+      const differing = bodies.filter((body) =>
+        new RegExp(
+          `\\n?\\s*condition\\s*=\\s*(var\\.${NAME}\\s*!=\\s*var\\.${other}|var\\.${other}\\s*!=\\s*var\\.${NAME})\\s*(\\n|$)`,
+        ).test(body),
+      );
+
+      expect(differing).toHaveLength(1);
+      const message = messageOf(differing[0] ?? '');
+      expect(message).toContain('HEALTHCHECKS_CANARY_URL');
+      expect(message).toMatch(/\bA-34\b/);
+    },
+  );
+
+  test('REL-10-AC17: main.tf makes the canary’s credential with random_password.canary_credential: 43 characters, letters and digits only', () => {
+    const resource = /^resource "random_password" "canary_credential" \{\n([\s\S]*?)\n\}$/m.exec(
+      main,
+    )?.[1];
+
+    expect(resource, 'main.tf declares no random_password "canary_credential"').toBeDefined();
+    expect(resource).toMatch(/^\s*length\s*=\s*43\s*$/m);
+    expect(resource).toMatch(/^\s*special\s*=\s*false\s*$/m);
+    // Letters and digits only: nothing turns special characters back on.
+    expect(resource).not.toMatch(/^\s*override_special\s*=/m);
+    expect(resource).not.toMatch(/^\s*(upper|lower|numeric|number)\s*=\s*false\s*$/m);
+  });
+
+  // The rotation route (REL-10 review loop 1; D-128's loop-1 amendment).
+  // infra-staging.yml runs a fixed plan and applies that plan, with no
+  // `-replace`, so "replace the resource" was a rotation no one could run.
+  // Instead a committed generation number is the password's one keeper:
+  // raising it in a pull request, then the plan and the apply, replaces the
+  // password, and the worker registers the new hash at its restart. A string
+  // of digits, since keepers is a map of strings. Nothing else is kept: a
+  // secret there would sit in the plan, and a value that changes by itself
+  // would replace the credential, cutting off a run in flight, on every apply.
+  test('REL-10-AC17: the canary’s credential is rotated by a committed generation number: random_password.canary_credential keeps only generation = local.canary_credential_generation, a quoted string of digits declared once in main.tf’s locals', () => {
+    const resource =
+      /^resource "random_password" "canary_credential" \{\n([\s\S]*?)\n\}$/m.exec(main)?.[1] ?? '';
+    const keepers = [...resource.matchAll(/^\s*keepers\s*=\s*\{([^}]*)\}/gm)].map(
+      ([, body]) => body ?? '',
+    );
+
+    expect(keepers, 'random_password.canary_credential’s keepers').toHaveLength(1);
+    const entries = String(keepers[0])
+      .split(/[\n,]/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry !== '' && !entry.startsWith('#'))
+      .map((entry) => entry.split(/\s*=\s*/));
+    expect(entries, 'what the credential keeps').toEqual([
+      ['generation', 'local.canary_credential_generation'],
+    ]);
+
+    const locals = [...main.matchAll(/^locals \{\n([\s\S]*?)\n\}$/gm)]
+      .map(([, body]) => body ?? '')
+      .join('\n');
+    const declared = [...locals.matchAll(/^\s*canary_credential_generation\s*=\s*(.*?)\s*$/gm)].map(
+      ([, value]) => value,
+    );
+    expect(declared, 'canary_credential_generation in main.tf’s locals').toHaveLength(1);
+    expect(declared[0]).toMatch(/^"\d+"$/);
+    expect(main.match(/^\s*canary_credential_generation\s*=/gm)).toHaveLength(1);
+  });
+
+  test('REL-10-AC17: the app’s environment sets CANARY_API_URL to https:// and the staging vhost, from the one local the vhosts use, written once', () => {
+    const local = /\bvhosts\s*=\s*\[\{\s*fqdn\s*=\s*local\.(\w+)\s*\}\]/.exec(main)?.[1];
+    expect(local, 'the vhosts do not take their address from a local').toBeDefined();
+    const locals = /^locals \{\n([\s\S]*?)\n\}$/m.exec(main)?.[1] ?? '';
+    const host = new URL(STAGING_URL).host;
+
+    expect(locals).toMatch(
+      new RegExp(`^\\s*${String(local)}\\s*=\\s*"${host.replace(/\./g, '\\.')}"\\s*$`, 'm'),
+    );
+    expect(environment()).toMatch(
+      new RegExp(
+        `^\\s*CANARY_API_URL\\s*=\\s*"https://\\$\\{local\\.${String(local)}\\}"\\s*$`,
+        'm',
+      ),
+    );
+    // The address the deploy and the smoke test use, as an origin: what the
+    // canary calls is staging itself.
+    expect(`https://${host}`).toBe(new URL(STAGING_URL).origin);
+    // Written once: the vhost and the canary's address cannot differ.
+    expect(code().split(host).length - 1, `${host} is written more than once`).toBe(1);
+  });
+
+  test('REL-10-AC17: the app gets CANARY_CREDENTIAL from the password and HEALTHCHECKS_CANARY_URL from the variable, each named nowhere else', () => {
+    expect(environment()).toMatch(
+      /^\s*CANARY_CREDENTIAL\s*=\s*random_password\.canary_credential\.result\s*$/m,
+    );
+    expect(environment()).toMatch(
+      /^\s*HEALTHCHECKS_CANARY_URL\s*=\s*var\.healthchecks_canary_url\s*$/m,
+    );
+    expect(main.match(/\brandom_password\.canary_credential\b/g)).toHaveLength(1);
+    expect(main.match(/var\.healthchecks_canary_url\b/g)).toHaveLength(1);
+    // The other checks' URLs never stand in for the canary's.
+    for (const [other] of OTHERS) {
+      expect(environment()).not.toMatch(
+        new RegExp(`^\\s*HEALTHCHECKS_CANARY_URL\\s*=\\s*var\\.${other}\\b`, 'm'),
+      );
+    }
+    // Nowhere else: the URL comes from the staging environment's secret, the
+    // credential from Terraform's state; neither is committed.
+    expect(read('infra/staging/staging.auto.tfvars')).not.toMatch(/canary|hc-ping/i);
+    for (const file of ['main.tf', 'variables.tf', 'versions.tf', 'staging.auto.tfvars']) {
+      expect(read(`infra/staging/${file}`)).not.toMatch(/hc-ping\.com\/[0-9a-f]{8}-/i);
+    }
+  });
+
+  test('REL-10-AC17: versions.tf requires hashicorp/random as a ~> constraint, and the lock file records that constraint, one exact version within it, and its hashes', () => {
+    const required = /\n\s*required_providers \{\n([\s\S]*?)\n\s{2}\}\n/.exec(versions)?.[1] ?? '';
+    const random = /\n?\s*random = \{\n([\s\S]*?)\n\s*\}/.exec(required)?.[1];
+    expect(random, 'versions.tf requires no provider named random').toBeDefined();
+    expect(random).toMatch(/^\s*source\s*=\s*"hashicorp\/random"\s*$/m);
+    const constraint = /^\s*version\s*=\s*"(~> (\d+)\.(\d+)(?:\.(\d+))?)"\s*$/m.exec(random ?? '');
+    expect(constraint, 'its version is not a ~> constraint').not.toBeNull();
+
+    const locked =
+      /^provider "registry\.terraform\.io\/hashicorp\/random" \{\n([\s\S]*?)\n\}$/m.exec(lock)?.[1];
+    expect(locked, 'the lock file records no hashicorp/random').toBeDefined();
+    expect(locked).toContain(`constraints = "${String(constraint?.[1])}"`);
+    const version = /^\s*version\s*=\s*"(\d+)\.(\d+)\.(\d+)"\s*$/m.exec(locked ?? '');
+    expect(version, 'the lock file records no exact version').not.toBeNull();
+    expect(locked).toMatch(/"h1:[A-Za-z0-9+/]{43}="/);
+    expect(locked).toMatch(/"zh:[0-9a-f]{64}"/);
+
+    // ~> a.b allows a.x for x >= b; ~> a.b.c allows a.b.x for x >= c.
+    const [, , major, minor, patch] = constraint ?? [];
+    const [, vMajor, vMinor, vPatch] = (version ?? []).map(Number);
+    expect(vMajor).toBe(Number(major));
+    if (patch === undefined) {
+      expect(vMinor).toBeGreaterThanOrEqual(Number(minor));
+    } else {
+      expect(vMinor).toBe(Number(minor));
+      expect(vPatch).toBeGreaterThanOrEqual(Number(patch));
+    }
+  });
+});

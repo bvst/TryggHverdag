@@ -51,6 +51,8 @@ export {
 export type {
   AcknowledgementNotRecorded,
   AcknowledgementToRecord,
+  CanaryObservation,
+  StoredDevice,
   AlertForAcknowledgement,
   AlertForClosure,
   AlertMessage,
@@ -108,6 +110,23 @@ export type {
 export { JOURNEY_STORE_BEHAVIOUR, RACE_ROUNDS, RACERS } from './journey-store-behaviour.ts';
 export { fakeLog } from './fake-log.ts';
 export type { FakeLog, FakeLogEvent } from './fake-log.ts';
+export { CANARY_IDS, FAKE_CANARY_OUTCOMES } from './canary-ids.ts';
+export type { FakeCanaryOutcome } from './canary-ids.ts';
+export {
+  CANARY_ALARM_ABORTED,
+  CANARY_ALARM_REPORTED,
+  fakeCanaryAlarm,
+} from './fake-canary-alarm.ts';
+export type { CanaryAlarmReport, CanaryAlarmStatus, FakeCanaryAlarm } from './fake-canary-alarm.ts';
+export { fakeWait } from './fake-wait.ts';
+export type { FakeWait } from './fake-wait.ts';
+export { CANARY_STORE_BEHAVIOUR } from './canary-store-behaviour.ts';
+export type {
+  CanaryObservationAsRead,
+  CanaryStoreBehaviour,
+  CanaryStoreUnderTest,
+  DeviceAsStored,
+} from './canary-store-behaviour.ts';
 export {
   SYNTHETIC_EVENT_ID_PREFIX,
   syntheticAccuracy,

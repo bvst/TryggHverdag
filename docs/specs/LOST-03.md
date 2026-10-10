@@ -12,7 +12,9 @@ no shell, so the commits were not checked; every file named below was read
 at the state the branch holds · **Finalised:** 2026-10-06, with the owner's
 answers to Q1 and Q2 (D-110, D-111; "Answered by the owner", at the end of
 this file), as the coordinating session relayed them · *Task numbers (noted
-2026-10-09):* its "task 7" is "They're safe", task 8 since D-115 · **Status:** 📝 Spec,
+2026-10-09, and 2026-10-10 for the second):* its "task 7" is "They're safe",
+task 8 since D-115; its "task 8", the staging canary, is task 9 (D-128) ·
+**Status:** 📝 Spec,
 settled; red phase and review loop 1 applied (2026-10-06).
 
 ## Requirement

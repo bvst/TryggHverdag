@@ -2887,6 +2887,12 @@ any other path is work, not a candidate for the same treatment.
 - **Consequences:** task 8's canary credential never expires and is revoked
   only by deleting its row. It goes in the secrets inventory and in the
   `staging` environment. Supersedes nothing.
+- **Amended by D-128 (delegated, D-031, 2026-10-10), for the canary only:**
+  the worker registers the canary's three fixed identities, the one exception
+  to "no route, seed or insert function creates a credential before GRP-01",
+  held by an import rule; and the canary credential is revoked by rotating its
+  Terraform resource, not by deleting its row, and lives only in Terraform's
+  state and the app's environment, not in a GitHub secret.
 
 ## D-092 — The journey files become safety paths
 - **Date:** 2026-10-02 · **Status:** Accepted (owner, 2026-10-02). Asked in
@@ -4924,3 +4930,283 @@ any other path is work, not a candidate for the same treatment.
     run's count.
   - Left for a later change: one helper for the three due-alert loops (the
     open, the escalation, the expiry), before a fourth copy.
+
+## D-127 — The staging canary: the owner's three answers (REL-10)
+- **Date:** 2026-10-10 · **Status:** Accepted (owner, 2026-10-10, in this
+  session). Each was asked with Claude's recommendation, and the owner chose
+  it each time · **Section:** 3 and 10 (REL-10; D-019, D-021, D-022, D-090,
+  D-108)
+- **Context:** REL-10's spec (`docs/specs/REL-10.md`) asked three questions
+  that are scope, safety or noise. D-090's item 8 (task 9 since D-115) gives
+  M2 the staging canary, and M2's exit is "the staging canary alerts on time
+  for 24 hours". Staging has no push or SMS provider until M3, so what the
+  canary can prove, and what "on time" and "missed" mean for it, are the
+  owner's to say.
+- **Decision:**
+  1. **In M2, "alerted in time" means the push port answered the test
+     responder's lost-contact message within five minutes plus 60 s of last
+     contact,** by the database's clock. It proves the server half of the
+     alert path (the API, the journey, the watchdog, the transaction, the
+     outbox and the delivery loop) and closes D-108's unwatched delivery loop.
+     It does not prove that a phone is alerted: push and SMS answer
+     `NOT_CONFIGURED` on staging. M3 tightens "answered" to "accepted" once
+     the canary has a push target. M2's exit means "the alert reaches the push
+     port on time".
+     - Rejected: a stand-in push for the canary only (a branch in the
+       production push path that marks messages sent without sending them;
+       one wrong match is a real alert counted as sent and never delivered);
+       only that the alert opened (it leaves the delivery loop unwatched,
+       which is what D-108 asked the canary to close).
+     - The cost: M2's exit reads "the alert reaches the push port on time",
+       not "a phone is alerted". The spec, the monitoring guide and the run
+       lines say so.
+  2. **D-022's stop-the-line applies to the staging canary for a missed alert
+     as it sees one: `NOT_OPENED` and `NOT_HANDED_OVER`.** Each gets a BUG
+     and a fix with a test before more feature work. Every other failing run
+     pages and gets a BUG, but does not stop the line by itself.
+     - Rejected: every failing run (an outage UptimeRobot also sees, such as
+       the API being unreachable, would stop work); none until production
+       (the only end-to-end signal of the safety loop would have no teeth for
+       months).
+  3. **`staging-canary` has Period 15 minutes and Grace 20 minutes.** One
+     lost run is tolerated; a stopped canary pages about 35 minutes after its
+     last success; a dead worker still pages within about three minutes
+     through `staging-worker`. A failing run pages at once.
+     - Rejected: Grace 5 minutes (the first lost run pages, about 20 minutes
+       after the last success, and a deploy that lands in the six minutes a
+       run takes would page for nothing: a page that is often wrong teaches
+       the owner to ignore the right one, D-080).
+- **Consequences:** REL-10-AC1 to AC19 are written on these answers, and as
+  they stand no criterion changes. D-128 records the technical choices,
+  including `MISSED_ALERT_OUTCOMES`, the list the monitoring guide and the run
+  line name for (2); no code decides by it. A-34 (create the check with these
+  numbers) and A-35 (plan and apply after the merge, then read the 24 hours)
+  join the owner's list. Supersedes nothing.
+
+## D-128 — The staging canary: where it runs, a run's steps and timings, the fixed identities and credential, the page, and how D-091 changes for it (REL-10, PRIV-07)
+- **Date:** 2026-10-10 · **Status:** Accepted (delegated, D-031) ·
+  **Section:** 3, 5 and 8 (REL-10, PRIV-07; AR-03; D-021, D-022, D-075,
+  D-077, D-079, D-087, D-090, D-091, D-098, D-100, D-102, D-107, D-108,
+  D-110 to D-112, D-115, D-116, D-122, D-127)
+- **Context:** REL-10's spec has the full reasoning. This records the choices
+  it makes within the owner's answers (D-127) and the binding rules.
+- **Decision:**
+  - **Where and when.** In the worker, as a Graphile cron task `canary`
+    every 15 minutes (`*/15 * * * * canary ?max=1`), added to the crontab
+    only when its check can be reported to; `HEARTBEAT_CRONTAB` is unchanged.
+    The task never rejects, so Graphile never retries it, and a run is bounded
+    at 10 minutes (`CANARY_RUN_LIMIT_MS`). It holds no connection while it
+    waits and is one Graphile job, so concurrency stays 2 and no pool is
+    added. It drives the public staging API (`CANARY_API_URL`) with Node's
+    `fetch` and the contract's own schemas, as a phone would, with its own
+    device credential; apart from its registration it changes the database
+    only through the API, and it reads only its own walker's journeys.
+    - Rejected: a scheduled GitHub workflow (GitHub started the daily report
+      about 4¾ hours late, D-080; its logs are kept outside the EEA; it could
+      not see the alert without a new read route); a separate process (a
+      third pool, past the DEV plan's five connections at a deploy); calling
+      the journey module in-process (it skips the API, the authentication and
+      the contract, which a bad release can break too); Healthchecks.io alone
+      (it runs nothing; it is the pager).
+  - **Two Graphile facts, verified on settling** (by Claude, from
+    `graphile-worker` 0.18.0's own code in `node_modules`; the spec's writer
+    could not check them). `?max=1` is a real crontab option: `max`, matched
+    by `CRONTAB_OPTIONS_MAX = /^([0-9]+)$/` in `dist/cronConstants.js` and
+    parsed in `dist/crontab.js`, where it sets `maxAttempts`. A cron slot runs
+    once even when two workers overlap in a deploy: the job is added only for
+    the worker whose upsert into `_private_known_crontabs` advances
+    `last_execution` (`dist/cron.js`: the `locks` CTE with `where
+    known_crontabs.last_execution < excluded.last_execution`, then `inner join
+    locks`). The overlap rule below stays as defence in depth.
+  - **A run, in order, on the database's times (AR-03).** It registers (once
+    per process, again until it has succeeded); starts one journey naming the
+    fixed test responder alone; sends one heartbeat with no position and no
+    battery level, whose `last_heartbeat_at` is last contact; waits until last
+    contact + 290 s; then reads every 2 s (the database's `now()`, the
+    journey's alert, whether the push port has answered the responder's
+    lost-contact message) until the first answer or the first read past last
+    contact + 360 s (`LOST_CONTACT_AFTER_MS + ALERT_TIME_SLACK_MS`); sends
+    "I'm home" whatever it found (D-110); reads that the journey is `ENDED`
+    (`HOME`), the alert `RESOLVED` (`HOME`) and no escalation SMS was
+    written; and waits for the responder's `HOME` stand-down to be answered,
+    at most 90 s after the alert's `resolved_at`. The outcome is the first
+    failure in a fixed order, or `ON_TIME`. Exactly at the deadline is on
+    time; polling can fail a run up to 2 s early and never pass it late.
+    "Answered" is any answer from the port (`sent_at` or `last_failure`), in
+    M2 always `NOT_CONFIGURED` (D-127, Q1). A passing run takes about 5½
+    minutes, so its journey is ended at least about 55 s before its alert
+    could escalate: the canary never escalates and never pages the SMS check.
+    A stop during a run
+    sends "I'm home" once, bounded at 5 s, writes `INTERRUPTED` and reports
+    nothing; the run limit reports `RUN_LIMIT` as a failure. The expected
+    alert time on the Nano is 300 to 320 s against the 360 s deadline; every
+    run line records `alertMs`, and if runs go late for CPU the instance size
+    (a cost) goes to the owner with the numbers (D-077).
+  - **Overlap and leftovers.** A walker has one unended journey, so a start
+    answered 409 `ALREADY_ON_A_JOURNEY` names the canary's own. Started 10
+    minutes or more ago by the database's clock, it is a leftover of a run that
+    did not finish: this run ends it through "I'm home", writes
+    `canary_leftover_ended`, and starts again once (a second 409 is
+    `START_FAILED`). Started less than 10 minutes ago, another run is in
+    flight, the old or the new worker's in a deploy: this run writes
+    `canary_skipped`, reports nothing and ends, so two runs never both report
+    and the one in flight is never cut off.
+  - **Identities.** Three fixed, committed, random lower-case v4 UUIDs
+    (`CANARY_WALKER_ID`, `CANARY_RESPONDER_ID`, `CANARY_DEVICE_ID`) in
+    `domain/canary.ts`, pinned by a test; no flag column. The worker
+    registers them at start, in one transaction: both users inserted if
+    absent; the walker's device inserted with the SHA-256 of the credential
+    or, if it exists, its hash replaced; a device with the canary's ID owned
+    by anyone else is refused with a throw. The responder gets no device, so
+    nothing can reach a phone at the critical level (D-087's flag).
+  - **The credential.** 43 letters and digits from Terraform's
+    `random_password` (`length = 43`, `special = false`, sensitive), passed to
+    the app as `CANARY_CREDENTIAL`: 43 × log2(62) ≈ 256.03 bits, D-091's
+    strength. It stays the same across restarts because only the device that
+    started a journey can end it (D-101, D-110): a per-process credential
+    would strand a journey on every restart and deploy, and each would page.
+  - **D-091 is amended by this decision for the canary only, in two points.**
+    (i) The one exception to "no route, seed or insert function creates a
+    credential before GRP-01": the worker registers the canary's three fixed
+    identities. It is held narrow by an import rule (only `worker.ts` may
+    import `adapters/canary.ts`, beside D-108's), by the fixed IDs, and by the
+    API process having no way to reach it; a freshly migrated database still
+    holds no user and no device, and `device-credentials.ts`'s header is
+    corrected to say so. (ii) D-091's consequence said the canary credential
+    "is revoked only by deleting its row" and goes "in the `staging`
+    environment". Foreign keys now block that delete, because canary
+    journeys reference the device, so it is revoked by rotating the Terraform
+    resource (the worker's registration replaces the hash at its restart), and
+    it lives only in Terraform's state and the app's environment, as the
+    database password does (D-077), not in a GitHub secret. Its strength stays
+    D-091's.
+  - **The page.** A fourth Healthchecks.io check, `staging-canary`
+    (`HEALTHCHECKS_CANARY_URL`), read by `config.ts`'s ping-URL rule (D-116)
+    and refused unless its UUID differs from both other checks'. Reported
+    through the existing `healthchecksAlarm`, unchanged: `ok` after
+    `ON_TIME`, `failing` (the `/fail` address, which pages at once) after any
+    other reported outcome, nothing after `INTERRUPTED` or a skip. A report
+    that fails is one `canary_report_failed` line, never a thrown task. With
+    the URL unusable the canary is not scheduled and the worker says what
+    goes unpaged (on staging Terraform refuses a plan without it); with the
+    URL usable but `CANARY_API_URL` or `CANARY_CREDENTIAL` not, each run
+    reports `failing` with `NOT_CONFIGURED`, so a half-configured canary
+    pages. No canary setting stops the worker (D-079). `MISSED_ALERT_OUTCOMES`
+    (`NOT_OPENED`, `NOT_HANDED_OVER`) is the list D-127's second answer names.
+  - **The data.** Synthetic by construction: no name, phone number, position
+    or battery level, and no `positions` row ever. Each run writes one
+    journey, one responder row, one heartbeat, one alert and two messages:
+    about 580 rows a day, about 17,000 a month, a few megabytes against the
+    DEV plan's 256 MB, and the claim's partial index gains about 190 never-sent
+    entries a day. They are kept until M4's retention job; there is no
+    deletion code in M2, because a wrong predicate would delete a live
+    journey. Four closed log events (`canary_run`, `canary_skipped`,
+    `canary_leftover_ended`, `canary_report_failed`) carry no user ID, URL or
+    credential (PRIV-07).
+  - **The files and the safety lists.** `domain/canary.ts` (IDs, constants,
+    outcomes, the verdict), `modules/canary/run.ts` (the run, against ports)
+    and `adapters/canary.ts` (registration, the read, the HTTP client). The
+    module is a new safety path with a mutation group of its own, `canary`,
+    against `canary.system.test.ts`, placed apart from `modules/alerts/` so no
+    canary mutant first runs that group's five system files (D-066, D-124);
+    the adapter is owned, proved at L3 and L2 and not mutated (D-095's
+    reading). `worker.ts`, `bin/worker.ts`, `config.ts`, `log.ts` and
+    `ports.ts` gain the task, the three settings and the four events.
+  - **Terraform.** `random_password.canary_credential`; a required,
+    sensitive, validated `healthchecks_canary_url` that must differ from both
+    other checks'; `CANARY_API_URL` from the vhost's own local;
+    `infra-staging.yml` passes `TF_VAR_healthchecks_canary_url` in plan and
+    apply. One new provider, `hashicorp/random`: the implementer pins it as a
+    `~>` constraint, as `clevercloud` is (`~> 2.2`, locked at an exact
+    version), and verifies it with `terraform init` and `infra:check`; no
+    version number is fixed here. A change of the app's environment restarts
+    the app (D-079), so the apply is when the canary starts. No new npm
+    package, no contract change and no migration.
+  - **The `ai-review.yml` filter's two lines ship first, from a second
+    branch (the owner's answer, 2026-10-10).** `modules/canary/**` and
+    `adapters/canary.ts` go into the `safety` filter in a pull request of
+    their own, merged by hand (D-075), before REL-10's pull request, batched
+    with Dependabot's open #62 (claude-code-action 1.0.235 to 1.0.242), as
+    D-075 asks for batching.
+    - **Why first:** `scripts/gate.test.mjs` requires every owned `/apps/`
+      path to be in that filter ("the safety filter in ai-review.yml matches
+      the paths the owner must approve"), and REL-10 adds two owned paths.
+      #21 and #30 went first for the same reason. The same pull request also
+      adds the two paths to `OWNER_APPROVAL_PATHS` (`scripts/lib/merge-rules.mjs`)
+      and `.github/CODEOWNERS`: the other direction of that check (BUG-10,
+      D-097) requires every `/apps/` path the filter lists to be one the owner
+      must approve, which is why #56, #58 and #61 carried all three together.
+    - **Rejected:** naming the two paths as exceptions in that test. The
+      canary is safety code, and the test's one exception (`log.ts`, D-102)
+      is the owner's.
+    - **The branch:** `claude/busy-faraday-40n2zl-ai-review`, as #21 and #30
+      used. A cloud session pushes only to its own branch, so the owner was
+      asked and allowed the second one, with Claude's recommendation. REL-10's
+      work continues on the session branch meanwhile, and its pull request
+      waits for the filter's.
+  - **Owner to-dos.** A-34 (create `staging-canary`, Period 15 minutes, Grace
+    20 minutes, and save its ping URL as the `staging` environment secret
+    `HEALTHCHECKS_CANARY_URL`) and A-35 (after the merge: `infra-staging`
+    `plan`, then `apply`; within about 21 minutes `staging-canary` has left
+    `new`; 24 hours later report the window, the pings, any down event and the
+    largest `alertMs`).
+- **Consequences:** REL-10-AC1 to AC19 prove it; AC19 is the owner's 24-hour
+  reading (A-35), not a test, with its `req-coverage: not automated` line.
+  Amends D-091 for the canary only, as above; supersedes nothing else. Left
+  for later, each named in the spec: M3's push task (the canary's responder
+  never gets a critical push; "answered" becomes "accepted"), M3's login task
+  (issuance must not touch `CANARY_DEVICE_ID`), M4's retention (canary rows),
+  M5's production canary with its own check and credential, and M6's
+  reliability measurements, which leave canary journeys out by
+  `CANARY_WALKER_ID`.
+- **Amended in review loop 1 (2026-10-10), from the implementer's departures
+  and the three reviewers.** The spec's notes (marked *Built*, *Review loop 1*
+  or *Corrected in review loop 1*) have each in full.
+  - `CANARY_API_URL` is the exact origin (`url.origin`): no trailing slash and
+    no path. Terraform writes it as `"https://${local.fqdn}"`; any other
+    spelling is `NOT_CONFIGURED`, which pages.
+  - **A run that hits its limit and is then stopped inside the 5 s "I'm home"
+    wait** ends `RUN_LIMIT` and writes its line, but its report fails with the
+    stop: one `canary_report_failed` line, no failure signal.
+    `staging-canary`'s grace pages (`safety-reviewer`'s correction of the green
+    phase's own description).
+  - After a failed verdict, or an "I'm home" that fails (`HOME_FAILED`), the
+    run sends "I'm home" and stops: no after-read and no stand-down wait, so a
+    failing run takes about 6 minutes. `NOT_RESOLVED`, `ESCALATED` and
+    `STAND_DOWN_NOT_HANDED_OVER` come only after an on-time alert.
+  - A stand-down first seen later than `resolved_at` + 90 s fails, even when
+    that read also sees it answered; exactly 90 s is on time.
+  - A leftover whose "I'm home" fails with anything but a 409 is `START_FAILED`
+    with that status. A 409 naming a journey that is not the canary's is
+    `START_FAILED` 409.
+  - **Stryker's sandbox leaves out `infra/**/.terraform`** (`ignorePatterns`).
+    The new provider's plugin-cache symlink stopped every mutation run with
+    `EISDIR` in the first local `gate:full`, and would have on the owner's Mac.
+  - **A new outcome, `RUN_FAILED`** (`code-reviewer`): an error in the canary
+    itself, neither a step failure nor a halt. It is reported `failing`, "I'm
+    home" is sent once and waited for at most 5 s as for `RUN_LIMIT`, and it
+    gets a BUG. It is not a missed alert: `MISSED_ALERT_OUTCOMES` stays as
+    D-127 set it. `RUN_LIMIT` is now only the run limit. `test-author` found
+    that a client fault in "I'm home" made the run itself reject, with no line
+    and no report; the run now never rejects.
+  - **The credential is rotated by a committed generation number.**
+    `random_password.canary_credential` takes `keepers = { generation =
+    local.canary_credential_generation }`. Rotating it means raising that
+    number in a pull request, then `infra-staging` `plan` and `apply`; the
+    worker registers the new hash when it restarts. The workflow has no
+    `-replace` route, so "replace the resource" alone had no way to run.
+    `keepers` is read from `hashicorp/random` 3.9.1's own schema: "Arbitrary
+    map of values that, when changed, will trigger recreation of resource".
+  - **Kept as they are** (`code-reviewer`): `CanaryOptions.notConfigured` and
+    `CanaryCall.code`. The tests construct both, and removing them changes no
+    behaviour.
+  - **Registration is on the first canary run, not at the worker's start**
+    (CI's `privacy-security-reviewer` and `safety-reviewer` on #77). The
+    "Identities" bullet above says "at start", and the D-091 bullet says the
+    registration "replaces the hash at its restart"; `run.ts` registers once
+    per process, on its first canary run, and again on each run until it has
+    succeeded. So after a rotation the old credential works until that run (up
+    to about 15 minutes), and if the canary is not scheduled (no usable
+    `HEALTHCHECKS_CANARY_URL`) it is never replaced. The rotation steps' last
+    check, a run `ON_TIME` with a success ping, is what shows the rotation has
+    taken effect.

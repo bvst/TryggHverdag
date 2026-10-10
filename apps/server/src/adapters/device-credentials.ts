@@ -11,9 +11,13 @@
  * its hash is. A failed query can carry its parameters into an error message,
  * and the hash in there opens nothing.
  *
- * This adapter can only check a credential. Nothing in the code can create a
- * user, a device or a credential until the login task; tests insert rows
- * directly, through `hashCredential`.
+ * This adapter can only check a credential. Until the login task, one thing in
+ * the code creates a user, a device or a credential, and it is not here: the
+ * worker's registration of the staging canary's three fixed identities, in
+ * `adapters/canary.ts`, which only `worker.ts` may import and the API cannot
+ * reach (D-091 as D-128 amends it, held by an import rule). Nothing else can:
+ * a freshly migrated database holds no user and no device, and tests insert
+ * rows directly, through `hashCredential`.
  */
 import { eq } from 'drizzle-orm';
 import { createHash } from 'node:crypto';

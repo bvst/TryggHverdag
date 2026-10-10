@@ -10,6 +10,9 @@
 import {
   SYNTHETIC_CHECK_UUID as CHECK,
   SYNTHETIC_PING_URL as PING_URL,
+  syntheticCredential,
+  syntheticPingUrl,
+  syntheticUuid,
 } from '@trygghverdag/test-kit';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -253,6 +256,62 @@ describe('REL-08: bin/worker.ts and HEALTHCHECKS_WORKER_URL', () => {
     expect(code).toBe(1);
     expect(worker.output()).toMatch(/^worker: checking in with Healthchecks\.io\b/m);
     expect(worker.output()).not.toContain(CHECK);
+    expect(worker.output()).toContain('ECONNREFUSED');
+  });
+});
+
+describe('REL-10: bin/worker.ts and the canary’s settings', () => {
+  // The real process, to prove the entry file hands the canary's three
+  // settings to the worker at all: what the worker does with them is tested
+  // in-process in worker.test.ts. The database is unreachable, so each run
+  // ends in milliseconds, and ends for that reason.
+
+  test('REL-10-AC16: with none of the canary’s settings, the real worker says the canary is not running, naming HEALTHCHECKS_CANARY_URL and what goes unpaged, and starts as before: it fails only for want of its database', async () => {
+    const worker = start('worker.ts', { DATABASE_URL: UNREACHABLE });
+
+    const [code] = await worker.exited;
+
+    expect(code).toBe(1);
+    expect(worker.output()).toMatch(
+      /^worker: the canary is not running: .*HEALTHCHECKS_CANARY_URL.*Nothing checks end to end that an alert reaches the push port\.$/m,
+    );
+    expect(worker.output()).toMatch(/^worker: not checking in with Healthchecks\.io\b/m);
+    expect(worker.output()).toContain('ECONNREFUSED');
+    expect(worker.output()).not.toContain(SENTINEL);
+  });
+
+  test('REL-10-AC13: with all three of the canary’s settings usable, the real worker says the canary runs every 15 minutes and reports to a check of its own, and never where, nor its credential', async () => {
+    const check = syntheticUuid();
+    const credential = syntheticCredential();
+    const worker = start('worker.ts', {
+      DATABASE_URL: UNREACHABLE,
+      HEALTHCHECKS_CANARY_URL: syntheticPingUrl(check),
+      CANARY_API_URL: 'https://canary-api.invalid',
+      CANARY_CREDENTIAL: credential,
+    });
+
+    const [code] = await worker.exited;
+
+    expect(code).toBe(1);
+    expect(worker.output()).toMatch(
+      /^worker: the canary runs every 15 minutes and reports to a check of its own\b/m,
+    );
+    // REL-10 review loop 2 (test-auditor should-fix 4): added, nothing taken
+    // away. The pattern above also matches the half-configured line, so an
+    // entry file that handed the worker no canary settings at all passed
+    // (its B1). The one canary line is the running one, whole.
+    expect(
+      worker
+        .output()
+        .split('\n')
+        .filter((line) => line.startsWith('worker: the canary')),
+    ).toEqual([
+      'worker: the canary runs every 15 minutes and reports to a check of its own whether an alert reaches the push port in time.',
+    ]);
+    expect(worker.output()).not.toContain('cannot reach the API');
+    expect(worker.output()).not.toContain(check);
+    expect(worker.output()).not.toContain(credential);
+    expect(worker.output()).not.toContain('canary-api.invalid');
     expect(worker.output()).toContain('ECONNREFUSED');
   });
 });

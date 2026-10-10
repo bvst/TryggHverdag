@@ -97,6 +97,26 @@ describe('the paths these rules cover', () => {
     expect(complaintsAt(file, 'const t = Date.now();')).toEqual([expect.stringContaining('AR-03')]);
   });
 
+  // REL-10 (the spec's AC5, its lint clause): the staging canary decides
+  // everything on the database's times, so its domain file and its module
+  // read no clock and keep no timer of their own; the module is handed a
+  // Wait. Both sit under paths the rules already cover, so this passes before
+  // the files exist, and holds the day a path list is narrowed.
+  test.each(['apps/server/src/domain/canary.ts', 'apps/server/src/modules/canary/run.ts'])(
+    'REL-10-AC5: AR-03: the canary’s %s may not read the clock, nor keep time in memory',
+    (file) => {
+      expect(complaintsAt(file, 'const t = Date.now();')).toEqual([
+        expect.stringContaining('AR-03'),
+      ]);
+      expect(complaintsAt(file, 'const d = new Date();')).toEqual([
+        expect.stringContaining('AR-03'),
+      ]);
+      expect(complaintsAt(file, 'setTimeout(check, 2000);')).toEqual([
+        expect.stringContaining('AR-06'),
+      ]);
+    },
+  );
+
   test('AR-06: nor keep time in memory there', () => {
     expect(
       complaintsAt('apps/mobile/src/safety-core/countdown.tsx', 'setInterval(tick, 1000);'),
