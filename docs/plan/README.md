@@ -3,10 +3,11 @@
 **Last updated:** 2026-10-10 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24, LOST-06, LOST-07, BUG-29, SM-10, BUG-41 and LOST-08 done (D-090, D-115)
 
 **Current section:** milestone M2, started 2026-10-01 with SM-01; task 9,
-REL-10 (the staging canary), the last of M2's tasks, is in progress (D-090,
+REL-10 (the staging canary), the last of M2's tasks, is in review (D-090,
 D-115; the task list is in [10-roadmap.md](10-roadmap.md)): the owner answered
 its three questions on 2026-10-10, each with the recommendation (D-127), D-128
-records the delegated choices, and the owner's two steps are A-34 and A-35
+records the delegated choices, two review loops are done (the delta audit of
+the second is pending), and the owner's two steps are A-34 and A-35
 (below). LOST-08, "They're safe",
 is done (#75, 2026-10-09; D-125 and D-126). SM-10, removing a responder, is done (#74,
 2026-10-09; D-122 to D-124), with BUG-41, the mutation budget, in it.
