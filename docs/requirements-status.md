@@ -41,7 +41,7 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | REL-07 | Alerts need acknowledgement ("I'm on it", LOST-06). | must | 🟢 | 8 |
 | REL-08 | External uptime monitoring checks the API and the watchdog every minute and alerts the owner within ⚙️ 5 minu… | must | 🟢 | 9 |
 | REL-09 | If the phone can't reach the safety service, the walker sees it straight away (extends LOST-05). | must | ⚪ | 0 |
-| REL-10 | A **canary journey** runs in production every ⚙️ 15 minutes: a test walker goes silent, and the system must a… | must | ⚪ | 0 |
+| REL-10 | A **canary journey** runs in production every ⚙️ 15 minutes: a test walker goes silent, and the system must a… | must | 📝 | 0 |
 | REL-11 | Every position shown to responders includes its accuracy and age. | must | ⚪ | 0 |
 | REL-12 | Escalation SMS messages contain no location, because SMS is not encrypted. | must | ⚪ | 0 |
 | SEC-01 | Account takeover (stolen login code, SIM swap) | must | ⚪ | 0 |

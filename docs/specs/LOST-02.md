@@ -13,6 +13,10 @@ D-107, and BUG-18's D-105 for `adapters/db.ts` ("Answered by the owner", at
 the end of this file) · **Status:** 📝 Spec, settled. **Merges only after
 BUG-18** (D-105: `adapters/db.ts` under the owner and the safety review).
 
+*Task numbers (noted 2026-10-10):* written when M2 had eight tasks (D-090);
+since D-115 it has nine. This spec's "task 8" is the staging canary, task 9
+today, and its "of 8" is "of 9" (D-128).
+
 ## Requirement
 
 ### The rule this task delivers

@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-08 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, nine tasks (D-115 added one), **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 done** ([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`; D-106 to D-109); **LOST-03 done** ([#64](https://github.com/bvst/TryggHverdag/pull/64), `57502b8`; D-110 to D-112), with BUG-23 and BUG-24 in it; **LOST-06 done** ([#66](https://github.com/bvst/TryggHverdag/pull/66), `e695e8a`; D-113, D-114); **LOST-07 done** ([#67](https://github.com/bvst/TryggHverdag/pull/67), `1c4bc8b`; D-115, D-116); **BUG-30 and BUG-31 done** ([#68](https://github.com/bvst/TryggHverdag/pull/68), `5f4bdc1`; D-118, D-119), their workflow half done too ([#69](https://github.com/bvst/TryggHverdag/pull/69), `2c9808f`), review loops 2 and 3 in their own pull request (#70) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-10 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, nine tasks (D-115 added one), **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 done** ([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`; D-106 to D-109); **LOST-03 done** ([#64](https://github.com/bvst/TryggHverdag/pull/64), `57502b8`; D-110 to D-112), with BUG-23 and BUG-24 in it; **LOST-06 done** ([#66](https://github.com/bvst/TryggHverdag/pull/66), `e695e8a`; D-113, D-114); **LOST-07 done** ([#67](https://github.com/bvst/TryggHverdag/pull/67), `1c4bc8b`; D-115, D-116); **BUG-30 and BUG-31 done** ([#68](https://github.com/bvst/TryggHverdag/pull/68), `5f4bdc1`; D-118, D-119), their workflow half done too ([#69](https://github.com/bvst/TryggHverdag/pull/69), `2c9808f`), review loops 2 and 3 in their own pull request (#70); **SM-10 done** ([#74](https://github.com/bvst/TryggHverdag/pull/74), `f4ded6d`; D-122 to D-124); **LOST-08 done** ([#75](https://github.com/bvst/TryggHverdag/pull/75), `f5c14b2`; D-125, D-126); **REL-10 in progress**, the last M2 task (D-127, D-128) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -68,7 +68,7 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | 6 | LOST-07 | SMS escalation at 2 minutes | ✅ **Done** — 2026-10-07, [#67](https://github.com/bvst/TryggHverdag/pull/67), merged as `1c4bc8b` at 19:43 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `2a65c3a`. 20 acceptance criteria; D-115 (owner, five answers), D-116 (delegated, three review-loop amendments), with BUG-29 in it (D-117). Session reviews: all three PASS in the first round; three review loops; `test-auditor` blocked loop 1's head and passed loops 2 and 3. In CI on `2a65c3a`: all 16 checks passed, all five AI reviewers PASS (the privacy reviewer after two re-runs: a review that ran but returned no structured verdict, explained by D-121); `integration` on PostgreSQL 15 with migration 0006; `mutation` 21:07 against 25:00. On `main` after the merge: `ci` passed (run 37676690823) and `deploy-staging` passed (run 37676690808); the smoke test saw the worker check in at 19:47:54 UTC, so the stricter ping-URL check accepted the existing `HEALTHCHECKS_WORKER_URL`. **A-33 done** (the owner, 2026-10-07; apply run 37678702578). Record: `progress/m2.md` |
 | 7 | SM-10 | Removing a responder: resumed escalation and the last-responder warning (D-115) | ✅ **Done** — 2026-10-09, [#74](https://github.com/bvst/TryggHverdag/pull/74), merged as `f4ded6d` at 13:36 UTC after `urso-agent` approved: D-122 (the owner's four answers), D-123, and BUG-41's faster mutant runs (D-124). Three review loops; every check and all five CI reviewers passed, mutation in 12:15 and 13:48. `main`'s CI and `deploy-staging` passed; migration 0007 ran in the pre-run hook |
 | 8 | LOST-08 | "They're safe" | ✅ **Done** — 2026-10-09, [#75](https://github.com/bvst/TryggHverdag/pull/75), merged as `f5c14b2` at 18:33 UTC after `urso-agent` approved: the owner's two answers (D-125) and the delegated choices (D-126). One review loop; every check and all five CI reviewers passed, mutation in 15:19. `main`'s CI and `deploy-staging` passed; migration 0008 ran in the pre-run hook |
-| 9 | REL-10 | The staging canary | ⚪ Not started |
+| 9 | REL-10 | The staging canary | 🟡 **In progress** on `claude/busy-faraday-40n2zl`: spec settled, the owner's three answers (D-127) and the delegated choices (D-128, which amends D-091 for the canary only); tests next. The owner's steps are A-34 and A-35 |
 
 ## M1 at a glance
 
@@ -140,6 +140,19 @@ decision and a factually wrong count — all in Claude's own work. Before that i
 could not record a verdict at all (D-069, D-070, D-073).
 
 ## What the owner still needs to do
+
+**A-34 — create the `staging-canary` check in Healthchecks.io before REL-10's
+plan:** Period 15 minutes, Grace 20 minutes (D-127), alerts to the same place
+as the others; save its ping URL, in the UUID form, as the `staging`
+environment secret `HEALTHCHECKS_CANARY_URL`. Never another check's URL.
+About 3 minutes.
+
+**A-35 — after REL-10 merges:** straight after the merge's `deploy-staging`,
+run `infra-staging` with `plan`, then `apply`; within about 21 minutes check
+that `staging-canary` has left `new`; 24 hours later report the window, the
+success and failure pings, any down event and the largest `alertMs`. Until the
+apply, the deployed worker says at start that the canary is not running:
+expected. The full rows are in [`plan/README.md`](plan/README.md).
 
 **A-29 — request the location SDK's 30-day trial key shortly before M3's
 demo** (transistorsoft.com/shop/trials/new; owner's own phones only; D-086).
@@ -402,8 +415,9 @@ itself; the whole review session took 35 s (`duration_ms` 35428), which a
 down: an inference from the timing, as the hooks' output is not in the log.
 `code-reviewer`'s job took 83 s (5 min 14 s at `c626578`) and its session
 cost $0.30, against $1.11 on Sonnet 5 on #68 (job 113210298189).
-Dependabot's #62 (claude-code-action v1.0.239, Claude Code 2.1.287) is still
-open. **Review loops 2 to 4** (D-119's amendment: the stop gate reads raw
+Dependabot's #62 (claude-code-action 1.0.235 to 1.0.242, from its title on
+2026-10-10) is still open, and is the pull request D-128 batches the canary's
+filter lines with. **Review loops 2 to 4** (D-119's amendment: the stop gate reads raw
 line endings, in its early check and its fingerprint; the stand-down rule
 lives once in `inReviewJob()`; a guard test fails if the repository ever sets
 a line-ending attribute, which would blind the fingerprint again) are
@@ -421,14 +435,16 @@ Running CI's reviewers as `claude --agent` was measured and not adopted
 
 **LOST-07** (M2 task 6 of 9, SMS escalation) is done
 ([#67](https://github.com/bvst/TryggHverdag/pull/67), `1c4bc8b`, 2026-10-07;
-D-115, D-116). **A-32** is done (the owner). **A-33** is the owner's next step:
-run it straight after the merge's `deploy-staging`, because the stricter
-ping-URL check reads the worker's existing secret before any plan; the
-merge's deploy showed the worker checking in, so that secret is already in
-the UUID form. **A-33 is done** (the owner, 2026-10-07: plan run 37678574920,
-apply run 37678702578, the app's environment changed), so the SMS check is
-live on staging. **Task 9, REL-10** (the staging canary), the last of M2's
-tasks, is next. **Task 8, LOST-08** ("They're safe") is done
+D-115, D-116). **A-32 and A-33 are done** (the owner, 2026-10-07: plan run
+37678574920, apply run 37678702578, the app's environment changed), so the SMS
+check is live on staging. **Task 9, REL-10** (the staging canary), the last of
+M2's tasks, is in progress on `claude/busy-faraday-40n2zl`: the owner answered
+its three questions on 2026-10-10 with the recommendation each time (D-127),
+and D-128 records the delegated choices; the tests come next. **A-34** and
+**A-35** are the owner's. The ai-review filter's two lines for the canary's
+files ship in their own hand-merged pull request after REL-10's, batched with
+Dependabot's #62 (D-128), and how `scripts/gate.test.mjs` is satisfied until
+then is not settled (the spec's approach item 13). **Task 8, LOST-08** ("They're safe") is done
 ([#75](https://github.com/bvst/TryggHverdag/pull/75), `f5c14b2`, 2026-10-09):
 the owner's two answers (D-125) and the delegated choices (D-126); CI's
 mutation step took 15:19, and the merge's deploy applied migration 0008. **Task 7,
