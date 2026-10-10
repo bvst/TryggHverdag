@@ -531,6 +531,43 @@ describe('REL-10: staging is configured for the canary by Terraform, and refuses
     expect(resource).not.toMatch(/^\s*(upper|lower|numeric|number)\s*=\s*false\s*$/m);
   });
 
+  // The rotation route (REL-10 review loop 1; D-128's loop-1 amendment).
+  // infra-staging.yml runs a fixed plan and applies that plan, with no
+  // `-replace`, so "replace the resource" was a rotation no one could run.
+  // Instead a committed generation number is the password's one keeper:
+  // raising it in a pull request, then the plan and the apply, replaces the
+  // password, and the worker registers the new hash at its restart. A string
+  // of digits, since keepers is a map of strings. Nothing else is kept: a
+  // secret there would sit in the plan, and a value that changes by itself
+  // would replace the credential, cutting off a run in flight, on every apply.
+  test('REL-10-AC17: the canary’s credential is rotated by a committed generation number: random_password.canary_credential keeps only generation = local.canary_credential_generation, a quoted string of digits declared once in main.tf’s locals', () => {
+    const resource =
+      /^resource "random_password" "canary_credential" \{\n([\s\S]*?)\n\}$/m.exec(main)?.[1] ?? '';
+    const keepers = [...resource.matchAll(/^\s*keepers\s*=\s*\{([^}]*)\}/gm)].map(
+      ([, body]) => body ?? '',
+    );
+
+    expect(keepers, 'random_password.canary_credential’s keepers').toHaveLength(1);
+    const entries = String(keepers[0])
+      .split(/[\n,]/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry !== '' && !entry.startsWith('#'))
+      .map((entry) => entry.split(/\s*=\s*/));
+    expect(entries, 'what the credential keeps').toEqual([
+      ['generation', 'local.canary_credential_generation'],
+    ]);
+
+    const locals = [...main.matchAll(/^locals \{\n([\s\S]*?)\n\}$/gm)]
+      .map(([, body]) => body ?? '')
+      .join('\n');
+    const declared = [...locals.matchAll(/^\s*canary_credential_generation\s*=\s*(.*?)\s*$/gm)].map(
+      ([, value]) => value,
+    );
+    expect(declared, 'canary_credential_generation in main.tf’s locals').toHaveLength(1);
+    expect(declared[0]).toMatch(/^"\d+"$/);
+    expect(main.match(/^\s*canary_credential_generation\s*=/gm)).toHaveLength(1);
+  });
+
   test('REL-10-AC17: the app’s environment sets CANARY_API_URL to https:// and the staging vhost, from the one local the vhosts use, written once', () => {
     const local = /\bvhosts\s*=\s*\[\{\s*fqdn\s*=\s*local\.(\w+)\s*\}\]/.exec(main)?.[1];
     expect(local, 'the vhosts do not take their address from a local').toBeDefined();
