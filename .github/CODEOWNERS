@@ -29,6 +29,11 @@
 /apps/server/src/modules/journeys/ @bvst @urso-agent
 # The health wiring: it turns the worker's last check-in into /v1/health's answer (D-105).
 /apps/server/src/modules/health/   @bvst @urso-agent
+# The staging canary: a run that reports ok without looking is a silent failure
+# of the one check that drives the whole alert path (F8, D-128).
+/apps/server/src/modules/canary/   @bvst @urso-agent
+# The canary's identities and credential, its read and its HTTP client (D-128).
+/apps/server/src/adapters/canary.ts         @bvst @urso-agent
 /apps/server/src/api-process.ts   @bvst @urso-agent
 # The device-credential middleware and the walker always the device's own user,
 # the database clock itself, and where the migrations are read from and written
