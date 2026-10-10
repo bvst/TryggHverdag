@@ -314,7 +314,11 @@ secret to change. **Rotate it by raising its generation:**
    its journey, left unended, escalates and pages `staging-sms`. Both come
    once and stop.
 4. Confirm that the next run is `ON_TIME` and the check shows a success ping,
-   within about 21 minutes.
+   within about 21 minutes. This step is what ends the old credential: the
+   worker replaces the hash on its first canary run, so until then the old
+   one still works, and if the canary is not scheduled at all (no usable
+   `HEALTHCHECKS_CANARY_URL`), the old credential is never replaced. No
+   success ping means the rotation has not taken effect.
 
 `infra-staging.yml` runs `terraform plan` and then applies that plan, with no
 input for `-replace` (read in the workflow file on 2026-10-10), which is why
