@@ -5201,10 +5201,12 @@ any other path is work, not a candidate for the same treatment.
     `CanaryCall.code`. The tests construct both, and removing them changes no
     behaviour.
   - **Registration is on the first canary run, not at the worker's start**
-    (CI's `privacy-security-reviewer` on #77). The "Identities" bullet above
-    says "at start"; `run.ts` registers once per process, on its first canary
-    run. So after a rotation the old credential works until that run (up to
-    about 15 minutes), and if the canary is not scheduled (no usable
+    (CI's `privacy-security-reviewer` and `safety-reviewer` on #77). The
+    "Identities" bullet above says "at start", and the D-091 bullet says the
+    registration "replaces the hash at its restart"; `run.ts` registers once
+    per process, on its first canary run, and again on each run until it has
+    succeeded. So after a rotation the old credential works until that run (up
+    to about 15 minutes), and if the canary is not scheduled (no usable
     `HEALTHCHECKS_CANARY_URL`) it is never replaced. The rotation steps' last
     check, a run `ON_TIME` with a success ping, is what shows the rotation has
     taken effect.
