@@ -9,7 +9,10 @@
  * One exception: where the worker checks in with Healthchecks.io
  * (readHealthchecksSetting), and where its SMS check reports
  * (readHealthchecksSmsSetting). A monitoring setting must never stop the
- * watchdog it watches, or put it in a crash loop.
+ * watchdog it watches, or put it in a crash loop. The staging canary's three
+ * settings are monitoring settings too (REL-10, D-128): where its check is
+ * (readHealthchecksCanarySetting), and where and as whom it calls the public
+ * API (readCanarySetting).
  */
 
 /** The port Clever Cloud sends traffic to, and checks before a deploy counts as done. */
@@ -70,6 +73,67 @@ export function readHealthchecksSmsSetting(
   env: Record<string, string | undefined>,
 ): HealthchecksSetting {
   return readPingSetting(env, 'HEALTHCHECKS_SMS_URL');
+}
+
+/**
+ * Whether the staging canary reports to a Healthchecks.io check of its own,
+ * and where (REL-10, D-128): read by the same rules as the other two checks'
+ * URLs, from a variable of its own. The worker refuses it when it names the
+ * worker's check or the SMS check.
+ */
+export function readHealthchecksCanarySetting(
+  env: Record<string, string | undefined>,
+): HealthchecksSetting {
+  return readPingSetting(env, 'HEALTHCHECKS_CANARY_URL');
+}
+
+/**
+ * Whether the staging canary can drive the public API, and with what
+ * (REL-10, D-128). Never a throw, as for the check-in: a value that cannot be
+ * used is a reason, which the worker writes at start, naming the variable and
+ * never the value. The credential opens the canary's device, and the client
+ * sends it to the address, so neither is ever said.
+ */
+export type CanarySetting =
+  { running: true; apiUrl: string; credential: string } | { running: false; reason: string };
+
+/**
+ * The canary device's credential: 43 or more base64url characters. Terraform
+ * makes it of 43 letters and digits, about 256 bits (D-091's strength, D-128).
+ */
+const CANARY_CREDENTIAL = /^[A-Za-z0-9_-]{43,}$/;
+
+/**
+ * CANARY_API_URL, an https: origin and nothing else: the value exactly its
+ * own parsed origin, so no path, query, fragment or user info, the host in
+ * lower case and no default port written out. The client sends the canary's
+ * credential there, and to nowhere else. Then CANARY_CREDENTIAL.
+ */
+export function readCanarySetting(env: Record<string, string | undefined>): CanarySetting {
+  const apiUrl = present(env['CANARY_API_URL']);
+  if (apiUrl === undefined) {
+    return { running: false, reason: 'CANARY_API_URL is not set.' };
+  }
+  const url = URL.parse(apiUrl);
+  if (url?.protocol !== 'https:' || url.origin !== apiUrl) {
+    return {
+      running: false,
+      reason:
+        'CANARY_API_URL is not an https: origin in its one spelling: expected https://, the ' +
+        'host in lower case, an optional port, and nothing else.',
+    };
+  }
+  const credential = present(env['CANARY_CREDENTIAL']);
+  if (credential === undefined) {
+    return { running: false, reason: 'CANARY_CREDENTIAL is not set.' };
+  }
+  if (!CANARY_CREDENTIAL.test(credential)) {
+    return {
+      running: false,
+      reason: 'CANARY_CREDENTIAL is not 43 or more letters, digits, "-" or "_".',
+    };
+  }
+  return { running: true, apiUrl, credential };
 }
 
 /**

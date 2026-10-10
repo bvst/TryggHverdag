@@ -235,6 +235,29 @@
  *     the alerts due to expire; a read, and a refusal it needs no time for,
  *     are answered without one.
  *
+ * And for the staging canary (REL-10, its spec's approach items 4 and 5,
+ * D-128), the two things its store does, which the adapter does in
+ * `adapters/canary.ts`:
+ *   - `registerCanary` writes the canary's three fixed rows (`CANARY_IDS`) in
+ *     one step: its walker and its responder as users if absent, and the
+ *     walker's one device with the credential's hash, or that device's hash
+ *     replaced, which is how a rotated credential takes effect. A device with
+ *     the canary's ID that belongs to anyone but the canary's walker is
+ *     refused, writing nothing; so is a hash another device already holds, as
+ *     the unique index refuses it. The responder gets no device. It needs no
+ *     clock;
+ *   - `observeCanaryJourney` is one plain read, at the store's now: the
+ *     journey's state, start, last contact and end reason, only when its
+ *     walker is the canary's (any other journey reads as none); its latest
+ *     alert; whether the push port has answered (sent, or failed with a
+ *     reason) the canary responder's LOST_CONTACT and HOME of that alert; and
+ *     how many LOST_CONTACT_SMS the alert has. It never waits for a held row,
+ *     and needs a clock;
+ *   - the devices a test reads back carry their credential hash, null for one
+ *     put in by `addDevice`, and `deviceWithCredentialHash` finds the device
+ *     a hash names, as the API's authenticator does with the hash of what a
+ *     phone sends.
+ *
  * The shared behaviour suite (`journey-store-behaviour.ts`) runs the same
  * expectations against this fake and against the real adapter, which is
  * what keeps the two from drifting apart.
@@ -246,6 +269,7 @@
  * JourneyStore port by shape, so the test kit needs no import from the server.
  */
 import { EVENT_ID_PATTERN, MAX_EVENT_ID_LENGTH } from '@trygghverdag/contracts';
+import { CANARY_IDS } from './canary-ids.ts';
 import { PUSH_FAILURE_REASONS, type MessageKind, type PushFailureReason } from './fake-push.ts';
 import { syntheticUuid } from './synthetic-ids.ts';
 
@@ -821,6 +845,38 @@ export interface JourneyEnd {
   endReason: FakeJourneyEndReason | null;
 }
 
+/**
+ * The canary's read of one of its journeys (REL-10, approach item 5): the
+ * store's now, and what the canary decides on, each time the row's own. The
+ * server's `CanaryObservation`, by shape.
+ */
+export interface CanaryObservation {
+  now: Date;
+  journey: {
+    state: FakeJourneyState;
+    startedAt: Date;
+    lastHeartbeatAt: Date | null;
+    endReason: FakeJourneyEndReason | null;
+  };
+  alert: {
+    id: string;
+    openedAt: Date;
+    state: FakeAlertState;
+    resolution: FakeAlertResolution | null;
+    resolvedAt: Date | null;
+  } | null;
+  lostContactAnswered: boolean;
+  standDownAnswered: boolean;
+  smsWritten: number;
+}
+
+/** A device as stored: its user, and its credential's hash, null for one put in by `addDevice` (REL-10). */
+export interface StoredDevice {
+  id: string;
+  userId: string;
+  credentialHash: string | null;
+}
+
 /** The port methods, which `calls` records. */
 export type JourneyStoreCall =
   | 'unendedJourneyOf'
@@ -847,7 +903,9 @@ export type JourneyStoreCall =
   | 'alertForClosure'
   | 'recordClosure'
   | 'alertsDueForExpiry'
-  | 'expireAlert';
+  | 'expireAlert'
+  | 'registerCanary'
+  | 'observeCanaryJourney';
 
 export interface FakeJourneyStore {
   /** The walker's journey in any state but ENDED, or null. */
@@ -993,6 +1051,21 @@ export interface FakeJourneyStore {
     retryAfterMs: number;
   }): Promise<void>;
 
+  /**
+   * REL-10: in one step, the canary's walker and responder made users if
+   * absent, and the walker's one device stored with this credential hash, or
+   * its hash replaced. Rejects, writing nothing, when a device with the
+   * canary's ID belongs to another user, or another device holds the hash.
+   * Needs no clock.
+   */
+  registerCanary(request: { credentialHash: string }): Promise<void>;
+  /**
+   * REL-10: one plain read of a canary journey at the store's now, or null for
+   * a journey that is not the canary walker's, or no journey at all. Never
+   * waits for a held row. Needs a clock.
+   */
+  observeCanaryJourney(journeyId: string): Promise<CanaryObservation | null>;
+
   /** Makes a user exist, with a fresh ID unless one is given. Returns the ID, lower-case. */
   addUser(id?: string): string;
   /**
@@ -1083,6 +1156,19 @@ export interface FakeJourneyStore {
   journeyMessages(): StoredJourneyMessage[];
   /** Every journey stored, in the order stored. Copies: changing them changes nothing. */
   journeys(): StoredJourney[];
+  /** REL-10: every device stored, in the order stored, with its user and credential hash. Copies. */
+  devices(): StoredDevice[];
+  /**
+   * REL-10: the device this credential hash names, and its user, or null:
+   * what the API's authenticator finds for the hash of a credential.
+   */
+  deviceWithCredentialHash(credentialHash: string): { deviceId: string; userId: string } | null;
+  /**
+   * REL-10: deletes a device directly, as a test's own setup. Throws for a
+   * device not stored, or one a journey was started from, as the foreign key
+   * refuses it.
+   */
+  removeDevice(deviceId: string): void;
   /** How this journey ended: its end time and reason, both null until it ends through the store. Throws for a journey not stored. */
   endOf(journeyId: string): JourneyEnd;
   /** The device that started this journey (D-101). Throws for a journey not stored. */
@@ -1280,6 +1366,8 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
   const users = new Set<string>();
   /** Device ID → its user. */
   const devices = new Map<string, string>();
+  /** Device ID → its credential's hash (REL-10): only the devices registered with one. */
+  const credentialHashes = new Map<string, string>();
   const stored: KeptJourney[] = [];
   const heartbeats: StoredHeartbeat[] = [];
   const positions: StoredPosition[] = [];
@@ -2797,6 +2885,92 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       });
     },
 
+    registerCanary(request) {
+      const credentialHash = (request as { credentialHash?: unknown } | null)?.credentialHash;
+      if (typeof credentialHash !== 'string' || credentialHash === '') {
+        return Promise.reject(
+          new Error(
+            'null value in column "credential_hash" of relation "devices" violates not-null ' +
+              'constraint: registerCanary takes { credentialHash }, a hash that is not empty',
+          ),
+        );
+      }
+      return answer('registerCanary', () => {
+        const walkerId = asStored(CANARY_IDS.walkerId);
+        const responderId = asStored(CANARY_IDS.responderId);
+        const deviceId = asStored(CANARY_IDS.deviceId);
+        // Every refusal before anything is written: the registration is one
+        // transaction, all of it or none of it.
+        const owner = devices.get(deviceId);
+        if (owner !== undefined && owner !== walkerId) {
+          throw new Error(
+            `fakeJourneyStore.registerCanary: the device ${deviceId} belongs to another user, so ` +
+              'the canary’s registration is refused and nothing is written',
+          );
+        }
+        for (const [other, hash] of credentialHashes) {
+          if (other !== deviceId && hash === credentialHash) {
+            throw uniqueViolation('devices.credential_hash');
+          }
+        }
+        users.add(walkerId);
+        users.add(responderId);
+        devices.set(deviceId, walkerId);
+        credentialHashes.set(deviceId, credentialHash);
+      });
+    },
+    observeCanaryJourney(journeyId) {
+      // A plain read, as the adapter's is: no lock, so a held row is read all
+      // the same, and nothing is written.
+      return answer('observeCanaryJourney', async (): Promise<CanaryObservation | null> => {
+        const now = await nowFor('observeCanaryJourney');
+        const journey = journeyNamed(journeyId);
+        if (journey?.walkerId !== asStored(CANARY_IDS.walkerId)) {
+          return null;
+        }
+        const own = alerts.filter((alert) => alert.journeyId === journey.id);
+        // Its latest alert: the greatest opening, a tie to the one stored last.
+        const alert = own.reduce<KeptAlert | undefined>(
+          (latest, each) =>
+            latest === undefined || each.openedAt.getTime() >= latest.openedAt.getTime()
+              ? each
+              : latest,
+          undefined,
+        );
+        const ofAlert = alert === undefined ? [] : outbox.filter((m) => m.alertId === alert.id);
+        const responderId = asStored(CANARY_IDS.responderId);
+        const answered = (kind: MessageKind): boolean =>
+          ofAlert.some(
+            (message) =>
+              message.recipientId === responderId &&
+              message.kind === kind &&
+              (message.sentAt !== null || message.lastFailure !== null),
+          );
+        return {
+          now,
+          journey: {
+            state: journey.state,
+            startedAt: new Date(journey.startedAt.getTime()),
+            lastHeartbeatAt: copyOf(journey.lastHeartbeatAt),
+            endReason: journey.endReason,
+          },
+          alert:
+            alert === undefined
+              ? null
+              : {
+                  id: alert.id,
+                  openedAt: new Date(alert.openedAt.getTime()),
+                  state: alert.state,
+                  resolution: alert.resolution,
+                  resolvedAt: copyOf(alert.resolvedAt),
+                },
+          lostContactAnswered: answered('LOST_CONTACT'),
+          standDownAnswered: answered('HOME'),
+          smsWritten: ofAlert.filter((message) => message.kind === 'LOST_CONTACT_SMS').length,
+        };
+      });
+    },
+
     addUser(givenId = syntheticUuid()) {
       const id = asStored(givenId);
       users.add(id);
@@ -2995,6 +3169,36 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
     },
     journeys() {
       return stored.map(copy);
+    },
+    devices() {
+      return [...devices].map(([id, userId]) => ({
+        id,
+        userId,
+        credentialHash: credentialHashes.get(id) ?? null,
+      }));
+    },
+    deviceWithCredentialHash(credentialHash) {
+      for (const [deviceId, hash] of credentialHashes) {
+        const userId = devices.get(deviceId);
+        if (hash === credentialHash && userId !== undefined) {
+          return { deviceId, userId };
+        }
+      }
+      return null;
+    },
+    removeDevice(givenId) {
+      const id = asStored(givenId);
+      if (!devices.has(id)) {
+        throw new Error(`fakeJourneyStore.removeDevice: no device ${id} is stored`);
+      }
+      if (stored.some((journey) => journey.deviceId === id)) {
+        throw new Error(
+          `update or delete on table "devices" violates foreign key constraint: a journey was ` +
+            `started from the device ${id}`,
+        );
+      }
+      devices.delete(id);
+      credentialHashes.delete(id);
     },
     endOf(journeyId) {
       const journey = storedJourney('endOf', journeyId);

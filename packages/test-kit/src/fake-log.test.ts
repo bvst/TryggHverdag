@@ -165,6 +165,45 @@ describe('fakeLog', () => {
     expect(log.events).toEqual(written);
   });
 
+  test('records the staging canary’s four events too, each exactly as given (REL-10)', () => {
+    const log = fakeLog();
+    const written: FakeLogEvent[] = [
+      {
+        event: 'canary_run',
+        outcome: 'ON_TIME',
+        alertMs: 301_250,
+        openedAfterMs: 300_000,
+        status: null,
+        code: null,
+      },
+      {
+        event: 'canary_run',
+        outcome: 'START_FAILED',
+        alertMs: null,
+        openedAfterMs: null,
+        status: 401,
+        code: null,
+      },
+      {
+        event: 'canary_run',
+        outcome: 'READ_FAILED',
+        alertMs: null,
+        openedAfterMs: null,
+        status: null,
+        code: '57P01',
+      },
+      { event: 'canary_skipped', reason: 'RUN_IN_FLIGHT' },
+      { event: 'canary_leftover_ended', journeyId: syntheticUuid() },
+      { event: 'canary_report_failed' },
+    ];
+
+    for (const event of written) {
+      log.write(event);
+    }
+
+    expect(log.events).toEqual(written);
+  });
+
   test('the test kit hands it out', () => {
     expect(kit.fakeLog).toBe(fakeLog);
   });

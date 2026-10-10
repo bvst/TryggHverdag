@@ -15,7 +15,8 @@ criteria stand as written.
 *Task numbers (noted 2026-10-09):* this spec was written before D-115 gave M2
 a ninth task. Its "task 6" is LOST-07's SMS escalation, and the
 resumed-escalation rule it places there is task 7 (SM-10) today; its "task 7",
-"They're safe", is task 8 (D-122).
+"They're safe", is task 8 (D-122). Its "task 8", the staging canary, is task 9
+(noted 2026-10-10, D-128).
 
 ## Requirement
 

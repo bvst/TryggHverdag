@@ -74,3 +74,4 @@ true. First audit with a PR: `gh api .../commits/<sha>/check-runs` and `.../chec
 2026-10-08 cloud (BUG-36 loop 1 at 1f7ce47): 3 of 5; gh api: same 13 contexts incl. mutation/traceability, code-owner true. Pushed, no PR (REST pulls?head= empty), check-runs total_count 0. req:coverage left the report unchanged.
 2026-10-09 cloud (SM-10 at 3da9517): with NODE_USE_ENV_PROXY=1, gate:integrity read the live rules: **5 of 5**, 13 required incl. mutation/traceability. Without it Node fetch ignores the proxy (3 of 5). Pushed, no PR, check-runs total_count 0.
 2026-10-09 cloud (LOST-08 at 369f6b3): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5, 13 required incl. mutation/traceability. Pushed, no PR, check-runs total_count 0. req:coverage rewrote the report (stale at HEAD); restored from git show HEAD.
+2026-10-10 cloud (REL-10 loop 2 at 6c58524): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5, 13 required incl. mutation/traceability. No PR for the branch, check-runs total_count 0.

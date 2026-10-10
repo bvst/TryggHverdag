@@ -11,6 +11,11 @@
 export const SAFETY_PATHS = [
   'apps/server/src/domain/',
   'apps/server/src/modules/alerts/',
+  // The staging canary's run (REL-10, D-128): a canary that reports ok
+  // without looking is F8's silent failure, a bad release that breaks alerts
+  // and pages nobody. Its adapter, adapters/canary.ts, is not here: it is
+  // proved at L3 and L2, as the database adapters are.
+  'apps/server/src/modules/canary/',
   'apps/server/src/worker.ts',
   // Whether a worker that stopped is restarted: bin/worker.ts starts it, and
   // process.ts chooses its exit code (D-077). Both reviewers of INF-07 found
@@ -102,6 +107,15 @@ export const MUTATION_GROUPS = [
       'apps/server/src/closure.system.test.ts',
       'apps/server/src/expiry.system.test.ts',
     ],
+    config: 'vitest.system.config.mjs',
+  },
+  {
+    // The staging canary's run (REL-10, D-128), against its own system test,
+    // kept apart from modules/alerts/ so no canary mutant first runs that
+    // group's five system files (D-066, D-124).
+    name: 'canary',
+    paths: ['apps/server/src/modules/canary/'],
+    tests: ['apps/server/src/canary.system.test.ts'],
     config: 'vitest.system.config.mjs',
   },
   {

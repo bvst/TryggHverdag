@@ -147,6 +147,14 @@ export default {
   // wiring that is protected some other way.
   mutate: [...mutate, '!**/*.test.ts', '!**/*.integration.test.ts', '!**/*.system.test.ts'],
 
+  // Terraform's working state is never an input of a mutation run, and
+  // Stryker cannot copy it: a provider that infra:check links from its plugin
+  // cache is a symbolic link to a directory, so every run failed with EISDIR
+  // (found by REL-10's gate:full). Stryker does not read .gitignore (see the
+  // module cache, above), so it is left out here. infra/'s tracked files are
+  // still copied.
+  ignorePatterns: ['infra/**/.terraform'],
+
   // Run every test against every mutant. The default picks tests per mutant
   // from coverage, which needs the runner to report which test touched which
   // line — and here it reported almost nothing, so mutants survived because no

@@ -1477,6 +1477,11 @@ Each is named here so the task that owns it finds it. None blocks this task.
   acknowledges within two minutes, or the owner decides. The canary also
   watches push delivery (D-108). The SMS check's first live `/fail` is the
   canary's to show, if it ever escalates.
+  - *Changed 2026-10-10 by D-110 and D-128.* The canary does not acknowledge.
+    It ends each of its journeys through "I'm home" about six minutes after
+    its walker's last contact, before its alert could escalate, so it never
+    escalates and never pages the SMS check (the staging canary's spec,
+    approach item 2).
 - **M3, the SMS adapter:** LINK Mobility; the number read at send time from
   responder setup, `NO_TARGET` when there is none; no number in any log line
   or thrown error (as `healthchecks.ts` keeps its URL out); every send bounded

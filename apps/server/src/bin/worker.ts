@@ -4,10 +4,14 @@
  * own exits with 1, and why it starts nothing on the build machine
  * (INSTANCE_TYPE, BUG-3) is runWorkerProcess in ../worker.ts, where it is tested.
  * So is what it does with HEALTHCHECKS_WORKER_URL (INF-08) and
- * HEALTHCHECKS_SMS_URL (LOST-07), which only the worker reads.
+ * HEALTHCHECKS_SMS_URL (LOST-07), which only the worker reads, and with the
+ * staging canary's three settings, HEALTHCHECKS_CANARY_URL, CANARY_API_URL
+ * and CANARY_CREDENTIAL (REL-10).
  */
 import process from 'node:process';
 import {
+  readCanarySetting,
+  readHealthchecksCanarySetting,
   readHealthchecksSetting,
   readHealthchecksSmsSetting,
   readServerConfig,
@@ -20,5 +24,7 @@ runMain('worker', () =>
     instanceType: process.env['INSTANCE_TYPE'],
     healthchecks: readHealthchecksSetting(process.env),
     healthchecksSms: readHealthchecksSmsSetting(process.env),
+    healthchecksCanary: readHealthchecksCanarySetting(process.env),
+    canary: readCanarySetting(process.env),
   }),
 );
