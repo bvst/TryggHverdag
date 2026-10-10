@@ -917,6 +917,22 @@ without the check.**
 - **And** the mutation group `canary` mutates `modules/canary/` against
   `canary.system.test.ts`; `mutationRuns` mutates each canary file exactly
   once; each file reaches 80 % killed on its own (D-098).
+- **And** git tracks both owned canary paths: `adapters/canary.ts` and at
+  least one file under `modules/canary/`. The owner and filter tests compare
+  the lists with each other, not with the tree, so a split or rename of the
+  adapter would otherwise leave the canary's code unowned with every test
+  green (`safety-reviewer`, step 1, #76).
+- **And** `.claude/agents/safety-reviewer.md` names what to check in the
+  canary's code (D-128), pinned in `scripts/ai-review.test.mjs` as BUG-18's
+  paths are: `ok` only after `ON_TIME`, decided on the database's times;
+  every other reported outcome is `failing`; nothing is reported after
+  `INTERRUPTED` or a skip; a failed report is a `canary_report_failed` line,
+  never silence and never a thrown task; `NOT_CONFIGURED` pages; the run ends
+  its journey before it can escalate; the responder has no device; only
+  `worker.ts` imports `adapters/canary.ts`; registration refuses a canary
+  device ID owned by anyone else. A filter that summons the reviewer to a
+  path its brief says nothing about leaves that review empty, the gap BUG-14
+  and BUG-18 closed for their paths.
 
 **REL-10-AC19 — On staging, the canary runs on time for 24 hours.**
 - **Given** A-35 done: the merge deployed, the plan and apply ran, and
@@ -951,7 +967,7 @@ req-coverage: not automated REL-10-AC19: it is the canary itself running on stag
 | AC15 | L1, L2, L6 | `tsc`; `log.test.ts`, `fake-log.test.ts`; `adapters/canary.test.ts`; `canary.system.test.ts` (`captured()`) |
 | AC16 | L2 | `worker.test.ts`; `bin/bin.test.ts` (the real worker without the settings) |
 | AC17 | L2 (tooling) | `scripts/infra.test.mjs`; `infra:check` in `gate:static` |
-| AC18 | L2 (tooling) | `scripts/lib/gate-decisions.test.mjs`, `scripts/gate.test.mjs`, `scripts/stryker-config.test.mjs`; the CODEOWNERS and merge-rules tests |
+| AC18 | L2 (tooling) | `scripts/lib/gate-decisions.test.mjs`, `scripts/gate.test.mjs`, `scripts/stryker-config.test.mjs`, `scripts/ai-review.test.mjs`; the CODEOWNERS and merge-rules tests |
 | AC19 | L8 | Staging itself; A-35. Not automated (the line above) |
 
 ### The shared behaviour suite (D-100)
@@ -1044,7 +1060,9 @@ file first; only then the owner's options (the budget, one job per group).
 | `packages/config/` (dependency-cruiser rule and its test) | Only `worker.ts` imports `adapters/canary.ts` | **yes** | no | — |
 | `packages/test-kit/src/` (the store, the behaviour suite, `fakeLog`, a canary alarm, a fake `Wait`, their tests) | Fakes (test-author) | **yes** (D-100) | **yes** | input |
 | `scripts/lib/gate-decisions.mjs` | `modules/canary/` in `SAFETY_PATHS`; the `canary` group | **yes** | **yes** | input |
-| `scripts/lib/merge-rules.mjs` (`OWNER_APPROVAL_PATHS`), `.github/CODEOWNERS` | The two new paths | **yes** | — | — |
+| `scripts/lib/merge-rules.mjs` (`OWNER_APPROVAL_PATHS`), `.github/CODEOWNERS` | The two new paths: **in step 1's pull request (#76)**, with the filter lines; nothing here | **yes** | — | — |
+| `.claude/agents/safety-reviewer.md` | A line for the canary (AC18; D-128) | **yes** | — | — |
+| `scripts/ci-models.test.mjs`, `scripts/ai-review.test.mjs` (header comments) | Claude Code 2.1.283 becomes 2.1.290, the version claude-code-action 1.0.242 installs since #76 (test-author; comments only) | **yes** | — | — |
 | `apps/server/src/canary.system.test.ts`, `canary.integration.test.ts`, `adapters/canary.test.ts` (new) | L6, L3, L2 (test-author) | no | no | `canary`'s tests |
 | `config.test.ts`, `worker.test.ts`, `log.test.ts`, `bin/bin.test.ts`, `scripts/*.test.mjs` | Additions (test-author) | some | — | — |
 | `infra/staging/main.tf`, `variables.tf`, `versions.tf`, `.terraform.lock.hcl` | Item 14 | **yes** | no | — |
