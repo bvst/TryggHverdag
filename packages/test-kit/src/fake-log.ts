@@ -17,6 +17,7 @@
  * more than its type allows still shows in what a test reads back. It never
  * writes anywhere itself. Matches the server's Log port by shape.
  */
+import type { FakeCanaryOutcome } from './canary-ids.ts';
 
 /**
  * Every event the server may log, and nothing else. LOST-02 adds the
@@ -39,6 +40,11 @@
  * the reason; a close that failed, with its stage and SQLSTATE; a 24-hour end
  * that failed, with its stage and SQLSTATE; and an alert the 24-hour end could
  * not move, naming the alert. None names a user (PRIV-07).
+ * REL-10 adds the staging canary's four: one line per run, with its outcome,
+ * the alert's two durations, an HTTP status and a SQLSTATE; a run skipped
+ * because another is in flight; a leftover journey of the canary's ended,
+ * naming it; and a report to the canary's check that failed. None names a
+ * user, a credential or a URL (PRIV-07).
  */
 export type FakeLogEvent =
   | { event: 'heartbeat_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
@@ -73,7 +79,18 @@ export type FakeLogEvent =
   | { event: 'closure_ignored'; reason: 'ALERT_RESOLVED'; alertId: string }
   | { event: 'closure_failed'; stage: 'read' | 'store'; code: string | null }
   | { event: 'expiry_failed'; stage: 'read' | 'expire'; code: string | null }
-  | { event: 'expiry_overdue'; alertId: string };
+  | { event: 'expiry_overdue'; alertId: string }
+  | {
+      event: 'canary_run';
+      outcome: FakeCanaryOutcome;
+      alertMs: number | null;
+      openedAfterMs: number | null;
+      status: number | null;
+      code: string | null;
+    }
+  | { event: 'canary_skipped'; reason: 'RUN_IN_FLIGHT' }
+  | { event: 'canary_leftover_ended'; journeyId: string }
+  | { event: 'canary_report_failed' };
 
 export interface FakeLog {
   /** Records the event. */

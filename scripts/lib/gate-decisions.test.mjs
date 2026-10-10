@@ -576,6 +576,21 @@ describe('the mutation runs of this repository', () => {
           'apps/server/src/expiry.system.test.ts',
         ],
       }),
+      // RG-03 (REL-10, named in the spec's "Existing assertions that change by
+      // design": "the safety-list and group pins in scripts/" are added to, not
+      // changed; its Mutation section and D-128): the staging canary's module,
+      // modules/canary/, is a safety path of its own, kept apart from
+      // modules/alerts/ so that no canary mutant first runs that group's five
+      // system files (D-066, D-124). Its group, canary, mutates it against
+      // canary.system.test.ts, under the system tests' configuration, and
+      // runs after alerts. Every other group, its paths, its tests and its
+      // order, is unchanged.
+      expect.objectContaining({
+        name: 'canary',
+        paths: ['apps/server/src/modules/canary/'],
+        tests: ['apps/server/src/canary.system.test.ts'],
+        config: 'vitest.system.config.mjs',
+      }),
       // RG-03 (BUG-29, D-117): worker.ts leaves the process group for a group
       // of its own, `worker`, just before it, against worker.test.ts and
       // process.test.ts, in that order, under the root configuration. On
@@ -785,6 +800,62 @@ describe('the mutation runs of this repository', () => {
       missing,
       'these group paths hold nothing to mutate, so their group would pass without them',
     ).toEqual([]);
+  });
+});
+
+describe('REL-10: the staging canary’s module is a safety path, and is measured (D-128)', () => {
+  const safety = (file) =>
+    decideMutation({ changed: [file], onlyIfSafetyPathsChanged: true, configured: false });
+
+  test('REL-10-AC18: apps/server/src/modules/canary/ is in SAFETY_PATHS, as a folder', () => {
+    expect(SAFETY_PATHS).toContain('apps/server/src/modules/canary/');
+  });
+
+  test.each([['apps/server/src/modules/canary/run.ts'], ['apps/server/src/modules/canary/any.ts']])(
+    'REL-10-AC18: %s is a safety path, so every pull request that changes it is mutation-tested',
+    (file) => {
+      expect(safety(file).ok).toBe(false);
+    },
+  );
+
+  test('REL-10-AC18: modules/canary/ is mutated in one run, its own, canary, against canary.system.test.ts under the system tests’ configuration, and in no other run', () => {
+    const runs = mutationRuns().filter((run) =>
+      run.paths.includes('apps/server/src/modules/canary/'),
+    );
+
+    expect(runs).toEqual([
+      {
+        name: 'canary',
+        paths: ['apps/server/src/modules/canary/'],
+        tests: ['apps/server/src/canary.system.test.ts'],
+        config: 'vitest.system.config.mjs',
+      },
+    ]);
+  });
+
+  test('REL-10-AC18: the canary group runs right after the alerts group, and before the worker group', () => {
+    const names = MUTATION_GROUPS.map((group) => group.name);
+
+    expect(names.indexOf('canary') - names.indexOf('alerts')).toBe(1);
+    expect(names.indexOf('worker')).toBeGreaterThan(names.indexOf('canary'));
+  });
+
+  test.each([['apps/server/src/adapters/canary.ts'], ['apps/server/src/domain/canary.ts']])(
+    'REL-10-AC18: %s is in no run of its own: the adapter is proved at L3 and L2 and not mutated (D-095’s reading), and the domain file is the domain group’s',
+    (file) => {
+      const claims = MUTATION_GROUPS.filter((group) =>
+        group.paths.some((p) => file === p || file.startsWith(p)),
+      ).map((group) => group.name);
+
+      expect(claims).toEqual(file.includes('/domain/') ? ['domain'] : []);
+    },
+  );
+
+  test('REL-10-AC18: apps/server/src/adapters/canary.ts is not safety code for mutation: a change to it alone starts no mutation run', () => {
+    expect(safety('apps/server/src/adapters/canary.ts')).toMatchObject({
+      ok: true,
+      action: 'skip',
+    });
   });
 });
 

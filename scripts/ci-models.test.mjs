@@ -1,17 +1,17 @@
 // BUG-30 and BUG-31: what the two workflows that run Claude in CI tell it.
 //
 // BUG-30, D-118. CI never named a model, so which one ran was left to the
-// Claude Code version the pinned claude-code-action installs, 2.1.283. The
-// evidence D-118 cites is job 112942356368, whose log shows
+// Claude Code version the pinned claude-code-action installs, 2.1.290 at
+// v1.0.242. The evidence D-118 cites is job 112942356368, whose log shows
 // `"model": "claude-sonnet-5"`: Sonnet 5, not what D-118 wants. D-118:
 // "CI names its model by full ID: `ai-review.yml` passes `--model
 // claude-opus-5-5`, so the reviewers that inherit get Opus 5.5 in CI too;
 // `daily-status.yml` passes `--model claude-sonnet-5-5`. A full ID, not an
 // alias, because CI's alias is resolved by the Claude Code version the pinned
-// action installs (2.1.283), in which `sonnet` is still Sonnet 5." So the
-// tests below take the flag as written, the full ID and only that: an alias,
-// a second `--model`, or the `--model=` form are each a different thing from
-// what D-118 decided, and each fails.
+// action installs" (2.1.290 at v1.0.242), so it could change with any bump of
+// the action; a full ID cannot. So the tests below take the flag as written,
+// the full ID and only that: an alias, a second `--model`, or the `--model=`
+// form are each a different thing from what D-118 decided, and each fails.
 //
 // BUG-31, D-119. "In CI's review jobs, the stop gate and the progress gate
 // stand down. ai-review.yml sets `TRYGGHVERDAG_REVIEW_JOB=1` on the review

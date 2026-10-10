@@ -27,12 +27,14 @@
 // with its own setting and start line (AC10, AC11).
 import {
   BEAT_RECORDED,
+  CANARY_ALARM_ABORTED,
   CHECKED_IN,
   CHECK_IN_ABORTED,
   MESSAGE_KINDS,
   PUSH_KINDS,
   SYNTHETIC_CHECK_UUID as CHECK,
   SYNTHETIC_PING_URL as PING_URL,
+  fakeCanaryAlarm,
   fakeCheckIn,
   fakeClock,
   fakeLog,
@@ -50,15 +52,19 @@ import {
   type FakePostgresHandler,
   type FakePostgresQuery,
 } from '@trygghverdag/test-kit';
+import { parseCrontab } from 'graphile-worker';
 import { EventEmitter, once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import process from 'node:process';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { POOL_SIZE } from './adapters/db.ts';
 import { healthchecksCheckIn } from './adapters/healthchecks.ts';
 import { captured, markersIn } from './capture.test.ts';
 import {
+  readCanarySetting,
+  readHealthchecksCanarySetting,
   readHealthchecksSetting,
   readHealthchecksSmsSetting,
   type HealthchecksSetting,
@@ -72,6 +78,7 @@ import {
 } from './fake-postgres-server.test.ts';
 import type { CheckIn } from './ports.ts';
 import {
+  CANARY_CRONTAB,
   HEARTBEAT_CRONTAB,
   UNCONFIGURED_PUSH,
   UNCONFIGURED_SMS,
@@ -3953,4 +3960,714 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
       await stopSmsWorker(worker);
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// REL-10: the staging canary, a Graphile cron task of the worker's every 15
+// minutes, scheduled only when its own check can be reported to (the spec's
+// approach items 1, 8, 9 and 10). What is held here is the worker's side: the
+// cron line and the task, the start lines, the canary's own alarm apart from
+// the worker's check-in and the SMS check, a stop that waits for no canary,
+// and settings that never stop the worker. The run itself is held at L6, in
+// canary.system.test.ts.
+// ---------------------------------------------------------------------------
+
+/** The canary's start line, whatever it says after "the canary". */
+const CANARY_LINE = /^worker: the canary\b/;
+/** The start line when the canary is scheduled (the spec's approach item 10). */
+const CANARY_RUNS = /^worker: the canary runs every 15 minutes and reports to a check of its own\b/;
+/** The start line when it is not, up to its reason. */
+const CANARY_NOT_RUNNING = /^worker: the canary is not running: /;
+/** How a not-running line ends: what goes unpaged without it. */
+const CANARY_UNPAGED = /\bNothing checks end to end that an alert reaches the push port\.$/;
+
+const canaryLines = (written: string[]) =>
+  linesOf(written).filter((line) => CANARY_LINE.test(line));
+
+/** The crontab the runner was given, line by line, comments and blank lines left out. */
+function crontabLines(options: RunnerOptions | undefined): string[] {
+  const crontab = typeof options?.crontab === 'string' ? options.crontab : '';
+  return crontab
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#'));
+}
+
+/** Three ping URLs, each a check of its own, on the test kit's unreachable address. */
+function threeChecks() {
+  const [worker, sms, canary] = [syntheticUuid(), syntheticUuid(), syntheticUuid()];
+  return {
+    uuids: { worker, sms, canary },
+    urls: {
+      worker: syntheticPingUrl(worker),
+      sms: syntheticPingUrl(sms),
+      canary: syntheticPingUrl(canary),
+    },
+  };
+}
+
+/** A canary client that is never called in these tests: a run that reached it would show here. */
+function untouchedClient(calls: string[]) {
+  return {
+    start: () => {
+      calls.push('start');
+      return new Promise<never>(() => undefined);
+    },
+    heartbeat: () => {
+      calls.push('heartbeat');
+      return new Promise<never>(() => undefined);
+    },
+    home: () => {
+      calls.push('home');
+      return new Promise<never>(() => undefined);
+    },
+  };
+}
+
+/**
+ * runWorkerProcess with everything it reaches replaced, the canary's alarm
+ * and client included: what it wrote, how it exited, every URL an alarm or a
+ * check-in was made for, and every client made, with what it was made with.
+ */
+function canaryWorkerProcess({
+  healthchecks = readHealthchecksSetting({}),
+  healthchecksSms = readHealthchecksSmsSetting({}),
+  healthchecksCanary,
+  canary,
+  alarm = fakeCanaryAlarm(),
+  defaultAlarm = false,
+  events = [],
+}: {
+  healthchecks?: HealthchecksSetting;
+  healthchecksSms?: HealthchecksSetting;
+  healthchecksCanary?: HealthchecksSetting;
+  canary?: ReturnType<typeof readCanarySetting>;
+  alarm?: ReturnType<typeof fakeCanaryAlarm>;
+  defaultAlarm?: boolean;
+  events?: string[];
+}) {
+  const runner = recordingRunner(events);
+  const signals = new EventEmitter();
+  const written: string[] = [];
+  const exits: number[] = [];
+  const checkIns: string[] = [];
+  const smsAlarms: string[] = [];
+  const canaryAlarms: string[] = [];
+  const clients: unknown[][] = [];
+  const clientCalls: string[] = [];
+  const checkIn = fakeCheckIn();
+  const smsAlarm = fakeSmsAlarm();
+  const log = fakeLog();
+  let sweeps = 0;
+  const running = runWorkerProcess('postgres://example/db', {
+    runWorker: runner.run,
+    signals,
+    healthchecks,
+    createCheckIn: (url: string) => {
+      checkIns.push(url);
+      return checkIn;
+    },
+    healthchecksSms,
+    createSmsAlarm: (url: string) => {
+      smsAlarms.push(url);
+      return smsAlarm;
+    },
+    ...(healthchecksCanary === undefined ? {} : { healthchecksCanary }),
+    ...(canary === undefined ? {} : { canary }),
+    ...(defaultAlarm
+      ? {}
+      : {
+          createCanaryAlarm: (url: string) => {
+            canaryAlarms.push(url);
+            return alarm;
+          },
+        }),
+    createCanaryClient: (...args: unknown[]) => {
+      clients.push(args);
+      return untouchedClient(clientCalls);
+    },
+    ...quietLoops(),
+    watchdog: {
+      sweep: () => {
+        sweeps += 1;
+        return Promise.resolve({ ok: true, opened: 0, escalated: 0, stuck: 0 });
+      },
+    },
+    log,
+    keepAlive: () => undefined,
+    write: (text) => {
+      written.push(text);
+    },
+    exit: (code) => {
+      exits.push(code);
+      events.push(`exit ${String(code)}`);
+    },
+  });
+  return {
+    runner,
+    signals,
+    written,
+    exits,
+    checkIns,
+    smsAlarms,
+    canaryAlarms,
+    clients,
+    clientCalls,
+    checkIn,
+    smsAlarm,
+    alarm,
+    log,
+    running,
+    sweeps: () => sweeps,
+  };
+}
+
+async function stopCanaryWorker(worker: ReturnType<typeof canaryWorkerProcess>) {
+  worker.signals.emit('SIGTERM');
+  await expect(worker.running).resolves.toBeUndefined();
+  await settle();
+  expect(worker.exits).toEqual([0]);
+}
+
+describe('REL-10: the canary’s cron line, beside the minute tasks', () => {
+  test('REL-10-AC16: CANARY_CRONTAB is exactly */15 * * * * canary ?max=1, and HEARTBEAT_CRONTAB is unchanged', () => {
+    expect(CANARY_CRONTAB).toBe('*/15 * * * * canary ?max=1');
+    expect(HEARTBEAT_CRONTAB).toBe('* * * * * heartbeat\n* * * * * sms_check');
+  });
+
+  test('REL-10-AC16: Graphile Worker reads the line as the task canary, at minutes 0, 15, 30 and 45 of every hour, with one attempt and no backfill, so a failed run is never retried', () => {
+    const items = parseCrontab(CANARY_CRONTAB);
+
+    expect(items).toHaveLength(1);
+    const [item] = items;
+    expect(item?.task).toBe('canary');
+    expect(item?.options).toMatchObject({ maxAttempts: 1, backfillPeriod: 0 });
+    const minutes = Array.from({ length: 60 }, (_, min) => min).filter((min) =>
+      item?.match({ min, hour: 21, date: 1, month: 10, dow: 4 }),
+    );
+    expect(minutes).toEqual([0, 15, 30, 45]);
+    for (const hour of [0, 3, 12, 23]) {
+      expect(item?.match({ min: 30, hour, date: 9, month: 10, dow: 5 })).toBe(true);
+    }
+  });
+
+  test('REL-10-AC16: createTaskList holds the canary task exactly when it is given a canary, and the task hands the canary Graphile’s abort signal, the very one it was given', async () => {
+    const heartbeats = fakeWorkerHeartbeats();
+    const clock = fakeClock(NOW);
+    const signals: AbortSignal[] = [];
+    const canary = {
+      run: (signal: AbortSignal) => {
+        signals.push(signal);
+        return Promise.resolve({ outcome: 'ON_TIME' });
+      },
+    };
+
+    expect(Object.keys(createTaskList({ clock, heartbeats }))).not.toContain('canary');
+    const tasks = createTaskList({ clock, heartbeats, canary });
+    expect(Object.keys(tasks)).toContain('canary');
+    const { canary: canaryTask } = tasks;
+
+    const graphile = new AbortController();
+    await expect(canaryTask?.(null, helpersWith(graphile.signal))).resolves.toBeUndefined();
+    expect(signals).toEqual([graphile.signal]);
+  });
+
+  test('REL-10-AC16: with the canary’s check usable, the crontab is HEARTBEAT_CRONTAB with CANARY_CRONTAB appended, the task list holds canary, and the concurrency and the pool are unchanged', async () => {
+    const { urls } = threeChecks();
+    const worker = canaryWorkerProcess({
+      healthchecksCanary: readHealthchecksCanarySetting({ HEALTHCHECKS_CANARY_URL: urls.canary }),
+    });
+    await settle();
+
+    const options = worker.runner.options();
+    expect(crontabLines(options)).toEqual([...HEARTBEAT_CRONTAB.split('\n'), CANARY_CRONTAB]);
+    expect(Object.keys(options?.taskList ?? {}).sort()).toEqual(
+      ['canary', 'heartbeat', 'sms_check'].sort(),
+    );
+    expect(options?.concurrency).toBe(2);
+    expect(options?.pgPool?.options.max).toBe(POOL_SIZE.worker);
+    expect(POOL_SIZE.worker).toBe(2);
+
+    await stopCanaryWorker(worker);
+  });
+
+  test('REL-10-AC16: with the canary’s check unusable, the crontab is HEARTBEAT_CRONTAB alone, the task list holds no canary, and the concurrency and the pool are unchanged', async () => {
+    const worker = canaryWorkerProcess({});
+    await settle();
+
+    const options = worker.runner.options();
+    expect(options?.crontab).toBe(HEARTBEAT_CRONTAB);
+    expect(Object.keys(options?.taskList ?? {})).not.toContain('canary');
+    expect(options?.concurrency).toBe(2);
+    expect(options?.pgPool?.options.max).toBe(POOL_SIZE.worker);
+
+    await stopCanaryWorker(worker);
+  });
+});
+
+describe('REL-10: the canary’s settings, said at start, never stop the worker', () => {
+  const marker = syntheticUuid();
+
+  test.each([
+    ['unset', undefined],
+    ['empty', ''],
+    ['an http: address', `http://127.0.0.1:1/${marker}`],
+    ['not an address at all', `hc-ping.com/${marker}`],
+    ['a trailing slash', `https://127.0.0.1:1/${marker}/`],
+  ])(
+    'REL-10-AC13: with HEALTHCHECKS_CANARY_URL %s, no canary cron line is added, nothing reports, and one line says the canary is not running, why, naming the variable and never the value, and what goes unpaged; the worker stays up',
+    async (_what, value) => {
+      const healthchecksCanary = readHealthchecksCanarySetting(
+        value === undefined ? {} : { HEALTHCHECKS_CANARY_URL: value },
+      );
+      const worker = canaryWorkerProcess({
+        healthchecksCanary,
+        canary: readCanarySetting({
+          CANARY_API_URL: 'https://trygg-hverdag-staging.cleverapps.io',
+          CANARY_CREDENTIAL: syntheticCredential(),
+        }),
+      });
+      await settle();
+
+      expect(crontabLines(worker.runner.options())).not.toContain(CANARY_CRONTAB);
+      expect(Object.keys(worker.runner.options()?.taskList ?? {})).not.toContain('canary');
+      expect(worker.canaryAlarms).toEqual([]);
+      const lines = canaryLines(worker.written);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(CANARY_NOT_RUNNING);
+      expect(lines[0]).toContain('HEALTHCHECKS_CANARY_URL');
+      expect(lines[0]).toContain(healthchecksCanary.checkingIn ? '' : healthchecksCanary.reason);
+      expect(lines[0]).toMatch(CANARY_UNPAGED);
+      expect(lines[0]).not.toContain('Healthchecks.io');
+      expect(worker.written.join('')).not.toContain(marker);
+      expect(runTogether(worker.written)).toEqual([]);
+      expect(worker.exits).toEqual([]);
+
+      await stopCanaryWorker(worker);
+    },
+  );
+
+  test('REL-10-AC13: given no canary setting at all, the worker runs as though HEALTHCHECKS_CANARY_URL were unset, and says so', async () => {
+    const worker = canaryWorkerProcess({});
+    await settle();
+
+    const lines = canaryLines(worker.written);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(CANARY_NOT_RUNNING);
+    expect(lines[0]).toContain('HEALTHCHECKS_CANARY_URL');
+    expect(lines[0]).toMatch(CANARY_UNPAGED);
+    expect(worker.canaryAlarms).toEqual([]);
+
+    await stopCanaryWorker(worker);
+  });
+
+  test.each([
+    ['HEALTHCHECKS_WORKER_URL', 'worker'],
+    ['HEALTHCHECKS_SMS_URL', 'sms'],
+  ] as const)(
+    'REL-10-AC13: HEALTHCHECKS_CANARY_URL with the same UUID as %s, on another host, is refused: no canary line in the crontab, no alarm, and one line naming both variables and neither value',
+    async (other, which) => {
+      const { urls, uuids } = threeChecks();
+      const worker = canaryWorkerProcess({
+        healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: urls.worker }),
+        healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: urls.sms }),
+        healthchecksCanary: readHealthchecksCanarySetting({
+          HEALTHCHECKS_CANARY_URL: `https://localhost:1/${uuids[which]}`,
+        }),
+      });
+      await settle();
+
+      expect(crontabLines(worker.runner.options())).not.toContain(CANARY_CRONTAB);
+      expect(worker.canaryAlarms).toEqual([]);
+      // The other two checks are as they were.
+      expect(worker.checkIns).toEqual([urls.worker]);
+      expect(worker.smsAlarms).toEqual([urls.sms]);
+      const lines = canaryLines(worker.written);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(CANARY_NOT_RUNNING);
+      expect(lines[0]).toContain('HEALTHCHECKS_CANARY_URL');
+      expect(lines[0]).toContain(other);
+      expect(lines[0]).toMatch(CANARY_UNPAGED);
+      for (const uuid of Object.values(uuids)) {
+        expect(worker.written.join('')).not.toContain(uuid);
+      }
+      expect(worker.written.join('')).not.toContain('localhost');
+      expect(worker.exits).toEqual([]);
+
+      await stopCanaryWorker(worker);
+    },
+  );
+
+  test('REL-10-AC13: with all three URLs set and different, and the canary’s settings usable, as staging runs: one line says the canary runs every 15 minutes and reports to a check of its own; its alarm is made for its own URL and its client once; no line holds a value', async () => {
+    const { urls, uuids } = threeChecks();
+    const credential = syntheticCredential();
+    const apiUrl = 'https://trygg-hverdag-staging.cleverapps.io';
+    const worker = canaryWorkerProcess({
+      healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: urls.worker }),
+      healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: urls.sms }),
+      healthchecksCanary: readHealthchecksCanarySetting({ HEALTHCHECKS_CANARY_URL: urls.canary }),
+      canary: readCanarySetting({ CANARY_API_URL: apiUrl, CANARY_CREDENTIAL: credential }),
+    });
+    await settle();
+
+    expect(worker.checkIns).toEqual([urls.worker]);
+    expect(worker.smsAlarms).toEqual([urls.sms]);
+    expect(worker.canaryAlarms).toEqual([urls.canary]);
+    expect(worker.clients).toHaveLength(1);
+    expect(JSON.stringify(worker.clients[0])).toContain(apiUrl);
+    expect(JSON.stringify(worker.clients[0])).toContain(credential);
+    const lines = canaryLines(worker.written);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(CANARY_RUNS);
+    expect(lines[0]).not.toContain('Healthchecks.io');
+    const all = worker.written.join('');
+    for (const value of [...Object.values(uuids), credential, apiUrl, 'cleverapps']) {
+      expect(all).not.toContain(value);
+    }
+    expect(healthchecksLines(worker.written)).toHaveLength(1);
+    expect(runTogether(worker.written)).toEqual([]);
+    expect(worker.exits).toEqual([]);
+
+    await stopCanaryWorker(worker);
+  });
+
+  test('REL-10-AC13: with the canary’s check usable and its other settings not, the canary is scheduled anyway, and each run reports failing with NOT_CONFIGURED through its own alarm, making no client', async () => {
+    const { urls } = threeChecks();
+    const worker = canaryWorkerProcess({
+      healthchecksCanary: readHealthchecksCanarySetting({ HEALTHCHECKS_CANARY_URL: urls.canary }),
+      canary: readCanarySetting({ CANARY_API_URL: 'http://127.0.0.1:1' }),
+    });
+    await settle();
+
+    expect(crontabLines(worker.runner.options())).toContain(CANARY_CRONTAB);
+    expect(worker.canaryAlarms).toEqual([urls.canary]);
+    await expect(worker.runner.runTask('canary')).resolves.toBeUndefined();
+    await expect(worker.runner.runTask('canary')).resolves.toBeUndefined();
+
+    expect(worker.alarm.statuses).toEqual(['failing', 'failing']);
+    const notConfigured = {
+      event: 'canary_run',
+      outcome: 'NOT_CONFIGURED',
+      alertMs: null,
+      openedAfterMs: null,
+      status: null,
+      code: null,
+    };
+    expect(worker.log.events.filter(({ event }) => event === 'canary_run')).toEqual([
+      notConfigured,
+      notConfigured,
+    ]);
+    expect(worker.clients).toEqual([]);
+    expect(worker.clientCalls).toEqual([]);
+    expect(canaryLines(worker.written).length).toBeGreaterThanOrEqual(1);
+    expect(worker.written.join('')).not.toContain(urls.canary);
+    expect(worker.written.join('')).not.toContain('127.0.0.1:1');
+
+    await stopCanaryWorker(worker);
+  });
+
+  const COMBINATIONS = [
+    { canaryCheck: 'unset', canarySettings: 'unset' },
+    { canaryCheck: 'unset', canarySettings: 'usable' },
+    { canaryCheck: 'usable', canarySettings: 'unset' },
+    { canaryCheck: 'usable', canarySettings: 'usable' },
+    { canaryCheck: 'the worker’s', canarySettings: 'usable' },
+    { canaryCheck: 'the SMS check’s', canarySettings: 'unusable' },
+    { canaryCheck: 'not a URL', canarySettings: 'unusable' },
+  ] as const;
+
+  test.each(COMBINATIONS)(
+    'REL-10-AC13: with the canary’s check $canaryCheck and its settings $canarySettings, the worker starts and stays up, its loops run, its check-in and its SMS check are made for their own URLs and still scheduled every minute, and a SIGTERM still exits with 0',
+    async ({ canaryCheck, canarySettings }) => {
+      const { urls } = threeChecks();
+      const canaryUrl = {
+        unset: undefined,
+        usable: urls.canary,
+        'the worker’s': urls.worker,
+        'the SMS check’s': urls.sms,
+        'not a URL': 'canary',
+      }[canaryCheck];
+      const worker = canaryWorkerProcess({
+        healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: urls.worker }),
+        healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: urls.sms }),
+        healthchecksCanary: readHealthchecksCanarySetting(
+          canaryUrl === undefined ? {} : { HEALTHCHECKS_CANARY_URL: canaryUrl },
+        ),
+        canary: readCanarySetting(
+          canarySettings === 'usable'
+            ? {
+                CANARY_API_URL: 'https://trygg-hverdag-staging.cleverapps.io',
+                CANARY_CREDENTIAL: syntheticCredential(),
+              }
+            : canarySettings === 'unusable'
+              ? { CANARY_API_URL: 'ftp://canary', CANARY_CREDENTIAL: 'short' }
+              : {},
+        ),
+      });
+      await settle();
+
+      expect(worker.runner.options()).toBeDefined();
+      expect(worker.sweeps()).toBeGreaterThanOrEqual(1);
+      expect(worker.checkIns).toEqual([urls.worker]);
+      expect(worker.smsAlarms).toEqual([urls.sms]);
+      expect(crontabLines(worker.runner.options()).slice(0, 2)).toEqual(
+        HEARTBEAT_CRONTAB.split('\n'),
+      );
+      expect(Object.keys(worker.runner.options()?.taskList ?? {})).toEqual(
+        expect.arrayContaining(['heartbeat', 'sms_check']),
+      );
+      expect(worker.runner.options()?.concurrency).toBe(2);
+      expect(canaryLines(worker.written)).toHaveLength(1);
+      expect(worker.exits).toEqual([]);
+
+      await stopCanaryWorker(worker);
+    },
+  );
+});
+
+describe('REL-10: the canary’s page is its own, and never touches the others', () => {
+  test('REL-10-AC12: a failing run reports to the canary’s alarm alone: neither the worker’s check-in nor the SMS check’s alarm hears of it', async () => {
+    const { urls } = threeChecks();
+    const worker = canaryWorkerProcess({
+      healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: urls.worker }),
+      healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: urls.sms }),
+      healthchecksCanary: readHealthchecksCanarySetting({ HEALTHCHECKS_CANARY_URL: urls.canary }),
+    });
+    await settle();
+
+    await worker.runner.runTask('canary');
+
+    expect(worker.alarm.statuses).toEqual(['failing']);
+    expect(worker.checkIn.calls).toBe(0);
+    expect(worker.smsAlarm.reports).toEqual([]);
+
+    await stopCanaryWorker(worker);
+  });
+
+  test('REL-10-AC12: by default the canary reports through the Healthchecks.io adapter, made for its own address: a failing run sends that address with /fail appended exactly one HEAD, with no body, and nothing to any other', async () => {
+    const received: { method: string | undefined; path: string | undefined; bodyBytes: number }[] =
+      [];
+    const server = createServer((request, response) => {
+      let bodyBytes = 0;
+      request.on('data', (chunk: Buffer) => {
+        bodyBytes += chunk.length;
+      });
+      request.on('end', () => {
+        received.push({ method: request.method, path: request.url, bodyBytes });
+        response.writeHead(200);
+        response.end();
+      });
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const { port } = server.address() as AddressInfo;
+    const canaryCheck = syntheticUuid();
+
+    try {
+      const worker = canaryWorkerProcess({
+        healthchecksCanary: {
+          checkingIn: true,
+          url: `http://127.0.0.1:${String(port)}/${canaryCheck}`,
+        },
+        defaultAlarm: true,
+      });
+      await settle();
+
+      await expect(worker.runner.runTask('canary')).resolves.toBeUndefined();
+
+      expect(received).toEqual([{ method: 'HEAD', path: `/${canaryCheck}/fail`, bodyBytes: 0 }]);
+      await stopCanaryWorker(worker);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+
+  test('REL-10-AC12: a report that fails writes one canary_report_failed line beside the run’s, and the task completes: never a thrown task', async () => {
+    const { urls } = threeChecks();
+    const alarm = fakeCanaryAlarm();
+    alarm.failWith(new Error('Healthchecks.io answered 500.'));
+    const worker = canaryWorkerProcess({
+      healthchecksCanary: readHealthchecksCanarySetting({ HEALTHCHECKS_CANARY_URL: urls.canary }),
+      alarm,
+    });
+    await settle();
+
+    await expect(worker.runner.runTask('canary')).resolves.toBeUndefined();
+
+    expect(worker.log.events.filter(({ event }) => event.startsWith('canary_'))).toEqual([
+      expect.objectContaining({ event: 'canary_run', outcome: 'NOT_CONFIGURED' }),
+      { event: 'canary_report_failed' },
+    ]);
+    expect(worker.written.join('')).not.toContain('answered 500');
+
+    await stopCanaryWorker(worker);
+  });
+
+  test('REL-10-AC12: while a canary run is in flight, never settling, the check-in and the SMS check still run each minute, each to its end', async () => {
+    const clock = fakeClock(NOW);
+    const heartbeats = fakeWorkerHeartbeats();
+    const checkIn = fakeCheckIn();
+    let smsChecks = 0;
+    let canaryRuns = 0;
+    const tasks = createTaskList({
+      clock,
+      heartbeats,
+      checkIn,
+      smsCheck: {
+        check: () => {
+          smsChecks += 1;
+          return Promise.resolve('ok' as const);
+        },
+      },
+      canary: {
+        run: () => {
+          canaryRuns += 1;
+          return new Promise<never>(() => undefined);
+        },
+      },
+      write: () => undefined,
+    });
+    let canarySettled = false;
+    const { canary: canaryTask, heartbeat: heartbeatTask, sms_check: smsCheckTask } = tasks;
+    expect(canaryTask, 'the canary task').toBeDefined();
+    void Promise.resolve(canaryTask?.(null, helpersWith())).then(() => {
+      canarySettled = true;
+    });
+
+    for (let minute = 0; minute < 3; minute += 1) {
+      await heartbeats.record(await clock.now());
+      await expect(heartbeatTask?.(null, helpersWith())).resolves.toBeUndefined();
+      await expect(smsCheckTask?.(null, helpersWith())).resolves.toBeUndefined();
+      clock.advance(60_000);
+    }
+
+    expect(checkIn.calls).toBe(3);
+    expect(smsChecks).toBe(3);
+    expect(canaryRuns).toBe(1);
+    expect(canarySettled).toBe(false);
+  });
+
+  test('REL-10-AC12: with every canary run failing, the minute check-in follows each fresh beat as before; with the beat stale, as when the watchdog fails, there is none, whatever the canary did', async () => {
+    const clock = fakeClock(NOW);
+    const heartbeats = fakeWorkerHeartbeats();
+    const checkIn = fakeCheckIn();
+    let canaryRuns = 0;
+    const tasks = createTaskList({
+      clock,
+      heartbeats,
+      checkIn,
+      canary: {
+        run: () => {
+          canaryRuns += 1;
+          return Promise.resolve({ outcome: 'START_FAILED' });
+        },
+      },
+      write: () => undefined,
+    });
+    const { canary: canaryTask, heartbeat: heartbeatTask } = tasks;
+
+    await heartbeats.record(await clock.now());
+    await canaryTask?.(null, helpersWith());
+    await heartbeatTask?.(null, helpersWith());
+    expect(checkIn.calls).toBe(1);
+
+    clock.advance(BEAT_FRESH + 1);
+    await canaryTask?.(null, helpersWith());
+    await heartbeatTask?.(null, helpersWith());
+    expect(checkIn.calls).toBe(1);
+    expect(canaryRuns).toBe(2);
+  });
+
+  test('REL-10-AC12: while a canary task is in flight, its report hung, the sweep loop still runs every 10 s', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { urls } = threeChecks();
+      const alarm = fakeCanaryAlarm();
+      alarm.hang();
+      const watchdog = stubWatchdog();
+      const runner = recordingRunner();
+      const signals = new EventEmitter();
+      const running = runWorkerProcess('postgres://example/db', {
+        runWorker: runner.run,
+        signals,
+        healthchecksCanary: readHealthchecksCanarySetting({ HEALTHCHECKS_CANARY_URL: urls.canary }),
+        createCanaryAlarm: () => alarm,
+        ...quietLoops(),
+        watchdog,
+        keepAlive: () => undefined,
+        write: () => undefined,
+        exit: () => undefined,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      let canarySettled = false;
+      void runner.runTask('canary').finally(() => {
+        canarySettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(alarm.reports).toHaveLength(1);
+
+      const before = watchdog.count;
+      for (let interval = 0; interval < 3; interval += 1) {
+        watchdog.finish();
+        await vi.advanceTimersByTimeAsync(10 * SECOND);
+      }
+
+      expect(watchdog.count - before).toBe(3);
+      expect(canarySettled).toBe(false);
+      watchdog.finish();
+      signals.emit('SIGTERM');
+      await vi.advanceTimersByTimeAsync(0);
+      await running;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('REL-10: a stop waits for no canary', () => {
+  test('REL-10-AC9: on SIGTERM with a canary run in flight, its report hung, the canary is handed Graphile’s abort signal, which ends it, and the worker exits with 0 no more than 5 s later', async () => {
+    const events: string[] = [];
+    const { urls } = threeChecks();
+    const alarm = fakeCanaryAlarm({ events });
+    alarm.hang();
+    const worker = canaryWorkerProcess({
+      healthchecksCanary: readHealthchecksCanarySetting({ HEALTHCHECKS_CANARY_URL: urls.canary }),
+      alarm,
+      events,
+    });
+    await settle();
+    void worker.runner.runTask('canary').catch(() => undefined);
+    expect(await eventually(() => alarm.reports.length === 1)).toBe(true);
+
+    const signalled = performance.now();
+    worker.signals.emit('SIGTERM');
+    const exited = await eventually(() => events.includes('exit 0'), 3_000);
+
+    expect(exited).toBe(true);
+    expect(performance.now() - signalled).toBeLessThan(5_000 + 1_000);
+    expect(events.indexOf(CANARY_ALARM_ABORTED)).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf(CANARY_ALARM_ABORTED)).toBeLessThan(events.indexOf('runner stopped'));
+    expect(events.indexOf('runner stopped')).toBeLessThan(events.indexOf('exit 0'));
+    await worker.running;
+  });
+
+  test('REL-10-AC9: the canary task never rejects: a run that came to any outcome, a skip included, completes the task, so Graphile never retries it', async () => {
+    const heartbeats = fakeWorkerHeartbeats();
+    const clock = fakeClock(NOW);
+    for (const result of [
+      { outcome: 'ON_TIME' },
+      { outcome: 'NOT_OPENED' },
+      { outcome: 'INTERRUPTED' },
+      { skipped: 'RUN_IN_FLIGHT' },
+    ]) {
+      const { canary: canaryTask } = createTaskList({
+        clock,
+        heartbeats,
+        canary: { run: () => Promise.resolve(result) },
+      });
+
+      await expect(canaryTask?.(null, helpersWith())).resolves.toBeUndefined();
+    }
+  });
 });

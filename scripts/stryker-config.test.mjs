@@ -363,6 +363,21 @@ describe('stryker.config.mjs', () => {
     );
   });
 
+  test("REL-10-AC18: the canary run mutates modules/canary/ and runs canary.system.test.ts alone, under the system tests' configuration", async () => {
+    // As the alerts run: the root configuration leaves *.system.test.ts out,
+    // so the command is asked what it would run, not only read. Its own run,
+    // apart from modules/alerts/, so no canary mutant first runs that
+    // group's five system files (the spec's Mutation section, D-124).
+    const config = await configFor('canary');
+
+    expect(config.mutate).toEqual(['apps/server/src/modules/canary/**/*.ts', ...EXCLUSIONS]);
+    expect(config.commandRunner.command).toMatch(/^node node_modules\/vitest\/vitest\.mjs run /);
+    expect(config.incrementalFile).toBeUndefined();
+    const args = vitestArgs(config.commandRunner.command);
+    expect(configNamedIn(args)).toBe('vitest.system.config.mjs');
+    expect([...filesRunWith(args)].sort()).toEqual(['apps/server/src/canary.system.test.ts']);
+  });
+
   test('BUG-29: the worker run mutates worker.ts against worker.test.ts and process.test.ts, not bin.test.ts, under the root configuration (D-117)', async () => {
     // On LOST-07's pull request the mutation check ran out of its 25 minutes
     // inside the process run. bin.test.ts is about 8 s of CPU per mutant, and
@@ -466,11 +481,19 @@ describe('stryker.config.mjs', () => {
     // its 25 minutes in the process run on LOST-07's pull request. The others
     // keep their names and their order, and the union below is still every
     // safety path, each once.
+    //
+    // RG-03 (REL-10, named in the spec's "Existing assertions that change by
+    // design": the group pins in scripts/ are added to, not changed; its
+    // Mutation section): the canary group joins the runs, right after
+    // alerts, which gives it modules/canary/. The others keep their names
+    // and their order, and the union below is still every safety path, each
+    // once.
     expect(mutationRuns().map((run) => run.name)).toEqual([
       'domain',
       'healthchecks',
       'journeys',
       'alerts',
+      'canary',
       'worker',
       'process',
       'api-process',

@@ -1252,6 +1252,72 @@ describe("this repository's own workflows", () => {
     ).toEqual([]);
   });
 
+  // REL-10 (D-128; safety-reviewer on step 1, #76): the staging canary's
+  // module folder and its adapter. Step 1 put both in OWNER_APPROVAL_PATHS,
+  // CODEOWNERS and the safety filter, and the general tests above compare
+  // those lists with each other, not with the tree. So a split or a rename of
+  // the adapter, or a module folder that held no file, would leave the
+  // canary's code unowned with every test green. These read the tree: git
+  // tracks the adapter and at least one file under the module, and the last
+  // line of CODEOWNERS matching each such file names the owner, as BUG-18's
+  // health folder is held.
+  const CANARY_MODULE = '/apps/server/src/modules/canary/';
+  const CANARY_ADAPTER = '/apps/server/src/adapters/canary.ts';
+
+  test("REL-10-AC18: git tracks the canary's adapter, apps/server/src/adapters/canary.ts, and at least one file under apps/server/src/modules/canary/, and each is a path the owner must approve", () => {
+    const adapter = spawnSync('git', ['ls-files', '--', CANARY_ADAPTER.slice(1)], {
+      encoding: 'utf8',
+    });
+    const module = spawnSync('git', ['ls-files', '--', CANARY_MODULE.slice(1)], {
+      encoding: 'utf8',
+    });
+
+    expect(adapter.status, adapter.stderr).toBe(0);
+    expect(
+      adapter.stdout.split('\n').filter((file) => file !== ''),
+      `${CANARY_ADAPTER} is not a file git tracks`,
+    ).toEqual([CANARY_ADAPTER.slice(1)]);
+    expect(module.status, module.stderr).toBe(0);
+    expect(
+      module.stdout.split('\n').filter((file) => file !== '' && file.endsWith('.ts')).length,
+      `${CANARY_MODULE} holds no .ts file git tracks`,
+    ).toBeGreaterThan(0);
+    expect(OWNER_APPROVAL_PATHS).toContain(CANARY_ADAPTER);
+    expect(OWNER_APPROVAL_PATHS).toContain(CANARY_MODULE);
+  });
+
+  test("REL-10-AC18: under GitHub's last-match rule, the canary's adapter and every file git tracks under its module belong to @bvst @urso-agent, and gate:integrity finds every owner-approval path owned", () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+    const listed = spawnSync(
+      'git',
+      ['ls-files', '--', CANARY_MODULE.slice(1), CANARY_ADAPTER.slice(1)],
+      {
+        encoding: 'utf8',
+      },
+    );
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(files).toContain(CANARY_ADAPTER.slice(1));
+    expect(files.some((file) => file.startsWith(CANARY_MODULE.slice(1)))).toBe(true);
+    expect(
+      files.filter((file) => ownersOf(file).join(' ') !== OWNERS.join(' ')),
+      `canary files not owned by ${OWNERS.join(' ')}`,
+    ).toEqual([]);
+  });
+
+  test("REL-10-AC18: the ai-review safety filter covers the canary's adapter and every file under its module, so a change to either brings safety-reviewer", () => {
+    const safety = filterEntries(readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8'), 'safety');
+    const covered = (file) => safety.entries.some((glob) => globCovers(glob, file));
+
+    expect(safety.headers, 'how many filters are named safety').toBe(1);
+    expect(covered(CANARY_ADAPTER.slice(1))).toBe(true);
+    expect(covered(`${CANARY_MODULE.slice(1)}run.ts`)).toBe(true);
+    expect(covered(`${CANARY_MODULE.slice(1)}nested/step.ts`)).toBe(true);
+  });
+
   // The safety filter is held through the general filter test above, as D-097's block is.
   // RG-03 (BUG-18, code-reviewer): a per-file filter test for db.ts, added on this branch and
   // never on main, was removed. The general test already fails for either file missing from

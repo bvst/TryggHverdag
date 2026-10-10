@@ -309,9 +309,10 @@ function declared(text, key) {
 
 /**
  * D-118, as amended on 2026-10-07: the full ID for the Sonnet agents, not the
- * `sonnet` alias, because the Claude Code CI installs (2.1.283) still resolves
- * that alias to Sonnet 5. `effort: []` means no effort line at all, so the
- * agent gets Claude Code's default.
+ * `sonnet` alias, because an alias is resolved by whichever Claude Code CI
+ * installs (2.1.290 at claude-code-action v1.0.242), so it could change with
+ * any bump of the action; a full ID cannot. `effort: []` means no effort line
+ * at all, so the agent gets Claude Code's default.
  */
 const DECIDED = [
   { agent: 'safety-reviewer', model: ['inherit'], effort: ['high'] },
@@ -411,6 +412,59 @@ describe("BUG-18: safety-reviewer's brief has something to check in the database
           'apps/server/src/modules/health/',
         ].filter((named) => !brief.includes(named)),
         "what safety-reviewer's brief does not name",
+      ).toEqual([]);
+    }),
+  );
+});
+
+describe("REL-10: safety-reviewer's brief has something to check in the staging canary's code (D-128)", () => {
+  // Step 1 (#76) put apps/server/src/modules/canary/** and
+  // apps/server/src/adapters/canary.ts in the ai-review safety filter, so a
+  // change to either brings safety-reviewer. A brief that says nothing about
+  // them leaves that review nothing to check (D-045), the gap BUG-14 and
+  // BUG-18 closed for their paths. Loose on purpose, as BUG-18's pin: the
+  // citation, the paths, and the names of what to check (the outcome that
+  // alone reports ok, the stop that reports nothing, the line a failed report
+  // writes, the half-configured canary that pages, the one importer of the
+  // adapter), none of the wording around them.
+  test(
+    "REL-10-AC18: safety-reviewer's brief cites D-128, names apps/server/src/modules/canary/ and apps/server/src/adapters/canary.ts, and names what to check in them: ON_TIME, failing, INTERRUPTED, canary_report_failed, NOT_CONFIGURED, worker.ts",
+    explained(() => {
+      const brief = agentNamed('safety-reviewer.md')?.text ?? '';
+
+      expect(brief, 'no safety-reviewer.md with a verdict line in .claude/agents').not.toBe('');
+      expect(
+        [
+          'D-128',
+          'apps/server/src/modules/canary/',
+          'apps/server/src/adapters/canary.ts',
+          'ON_TIME',
+          'failing',
+          'INTERRUPTED',
+          'canary_report_failed',
+          'NOT_CONFIGURED',
+          'worker.ts',
+        ].filter((named) => !brief.includes(named)),
+        "what safety-reviewer's brief does not name",
+      ).toEqual([]);
+    }),
+  );
+
+  test(
+    "REL-10-AC18: the brief's item on the canary also speaks of the database's times, of escalation, of the responder's device and of the registration, the rest of what D-128 asks the review to hold",
+    explained(() => {
+      const brief = agentNamed('safety-reviewer.md')?.text ?? '';
+      const item = brief
+        .split(/\n(?=- )/)
+        .filter((part) => part.includes('apps/server/src/modules/canary/'))
+        .join('\n');
+
+      expect(item, 'no list item of the brief names the canary’s module').not.toBe('');
+      expect(
+        ['database', 'escalat', 'device', 'regist'].filter(
+          (stem) => !item.toLowerCase().includes(stem),
+        ),
+        "what the brief's canary item does not speak of",
       ).toEqual([]);
     }),
   );

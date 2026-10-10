@@ -5,6 +5,7 @@
 import {
   SYNTHETIC_CHECK_UUID as CHECK,
   SYNTHETIC_PING_URL as PING_URL,
+  fc,
   syntheticCredential,
   syntheticPingUrl,
   syntheticUuid,
@@ -12,6 +13,8 @@ import {
 import { describe, expect, test } from 'vitest';
 import {
   DEFAULT_PORT,
+  readCanarySetting,
+  readHealthchecksCanarySetting,
   readHealthchecksSetting,
   readHealthchecksSmsSetting,
   readServerConfig,
@@ -347,5 +350,229 @@ describe('LOST-07: one spelling per check', () => {
         expect(read({ [variable]: value }), value).toEqual({ checkingIn: true, url: value });
       }
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REL-10: the staging canary's three settings (the spec's approach items 9
+// and 10). Each is read once, never throws, and is never written out: a
+// refusal names the variable, never the value. CANARY_API_URL is where the
+// canary calls the public API, an https: origin and nothing else, since the
+// client sends its credential there; CANARY_CREDENTIAL is the canary device's
+// credential, 43 or more base64url characters, as Terraform's random_password
+// makes it (letters and digits); HEALTHCHECKS_CANARY_URL is the canary's own
+// check, read by the ping-URL rule the other two checks are read by (D-116).
+// None of them may stop the worker (D-079): worker.test.ts holds that.
+// ---------------------------------------------------------------------------
+
+/** Staging's origin, as Terraform sets CANARY_API_URL from the vhost. */
+const STAGING_API = 'https://trygg-hverdag-staging.cleverapps.io';
+
+/** The reason a canary setting gives for not running. Fails the test if it would run. */
+function canaryReasonOf(setting: ReturnType<typeof readCanarySetting>): string {
+  expect(setting.running).toBe(false);
+  return setting.running ? '' : setting.reason;
+}
+
+describe('REL-10: readCanarySetting', () => {
+  test('REL-10-AC13: an https: origin and a credential of 43 base64url characters mean the canary runs, with exactly those values', () => {
+    const credential = syntheticCredential();
+
+    expect(
+      readCanarySetting({ CANARY_API_URL: STAGING_API, CANARY_CREDENTIAL: credential }),
+    ).toEqual({ running: true, apiUrl: STAGING_API, credential });
+  });
+
+  test('REL-10-AC13: it takes an origin with a port, a credential longer than 43 characters, and one of letters and digits only, as Terraform makes it', () => {
+    const port = 'https://127.0.0.1:8443';
+    const long = `${syntheticCredential()}${syntheticCredential()}`;
+    const lettersAndDigits = syntheticCredential().replace(/[-_]/g, 'a');
+
+    expect(readCanarySetting({ CANARY_API_URL: port, CANARY_CREDENTIAL: long })).toEqual({
+      running: true,
+      apiUrl: port,
+      credential: long,
+    });
+    expect(
+      readCanarySetting({ CANARY_API_URL: STAGING_API, CANARY_CREDENTIAL: lettersAndDigits }),
+    ).toEqual({ running: true, apiUrl: STAGING_API, credential: lettersAndDigits });
+  });
+
+  /** A host that holds a marker of its own, made at run time (RG-07), and names nothing real. */
+  const marker = syntheticUuid();
+  const HOST = `canary-${marker}.invalid`;
+
+  test.each([
+    ['unset', undefined],
+    ['empty', ''],
+    ['an http: address', `http://${HOST}`],
+    ['another scheme', `ftp://${HOST}`],
+    ['not an address at all', HOST],
+    ['a path', `https://${HOST}/v1`],
+    ['a query', `https://${HOST}?probe=${marker}`],
+    ['an empty query', `https://${HOST}?`],
+    ['a fragment', `https://${HOST}#${marker}`],
+    ['user info', `https://${marker}:secret@${HOST}`],
+    ['an upper-case host, which is not its own spelling', `https://${HOST.toUpperCase()}`],
+    ['the default port written out, which is not its own spelling', `https://${HOST}:443`],
+    ['a trailing space', `https://${HOST} `],
+    ['a leading space', ` https://${HOST}`],
+    ['a backslash', `https:\\${HOST}`],
+  ])(
+    'REL-10-AC13: CANARY_API_URL %s means not running, with a reason that names the variable and never the value; never a throw',
+    (_what, value) => {
+      const setting = readCanarySetting({
+        ...(value === undefined ? {} : { CANARY_API_URL: value }),
+        CANARY_CREDENTIAL: syntheticCredential(),
+      });
+
+      expect(canaryReasonOf(setting)).toContain('CANARY_API_URL');
+      expect(JSON.stringify(setting).toLowerCase()).not.toContain(marker);
+    },
+  );
+
+  test.each([
+    ['unset', undefined],
+    ['empty', ''],
+    ['one character too short', () => syntheticCredential().slice(0, 42)],
+    ['holding a plus', () => `${syntheticCredential().slice(0, 42)}+`],
+    ['holding a slash', () => `${syntheticCredential().slice(0, 42)}/`],
+    ['padded with =', () => `${syntheticCredential()}=`],
+    ['holding a space', () => `${syntheticCredential().slice(0, 21)} ${syntheticCredential()}`],
+    ['holding a full stop', () => `${syntheticCredential()}.`],
+    ['holding a letter outside ASCII', () => `${syntheticCredential()}æ`],
+    ['ending in a newline', () => `${syntheticCredential()}\n`],
+  ])(
+    'REL-10-AC13: CANARY_CREDENTIAL %s means not running, with a reason that names the variable and never the value; never a throw',
+    (_what, make) => {
+      const value = typeof make === 'function' ? make() : make;
+      const setting = readCanarySetting({
+        CANARY_API_URL: STAGING_API,
+        ...(value === undefined ? {} : { CANARY_CREDENTIAL: value }),
+      });
+
+      expect(canaryReasonOf(setting)).toContain('CANARY_CREDENTIAL');
+      if (value !== undefined && value.length > 8) {
+        expect(JSON.stringify(setting)).not.toContain(value.slice(0, 8));
+      }
+    },
+  );
+
+  test('REL-10-AC13: with both unset, it does not run, and its reason names a variable it read', () => {
+    expect(canaryReasonOf(readCanarySetting({}))).toMatch(/\bCANARY_(?:API_URL|CREDENTIAL)\b/);
+  });
+
+  test('REL-10-AC13: it reads CANARY_API_URL and CANARY_CREDENTIAL and nothing else: a URL or a credential under another name is not the canary’s', () => {
+    const credential = syntheticCredential();
+
+    expect(readCanarySetting({ API_URL: STAGING_API, CANARY_CREDENTIAL: credential }).running).toBe(
+      false,
+    );
+    expect(
+      readCanarySetting({ CANARY_API_URL: STAGING_API, DEVICE_CREDENTIAL: credential }).running,
+    ).toBe(false);
+  });
+
+  test('REL-10-AC13: for any values of the two variables it never throws, and never holds a refused value in its reason', () => {
+    fc.assert(
+      fc.property(
+        fc.option(fc.string({ maxLength: 80 }), { nil: undefined }),
+        fc.option(fc.string({ minLength: 0, maxLength: 80 }), { nil: undefined }),
+        (url, credential) => {
+          const env: Record<string, string> = {};
+          if (url !== undefined) env['CANARY_API_URL'] = url;
+          if (credential !== undefined) env['CANARY_CREDENTIAL'] = credential;
+          const setting = readCanarySetting(env);
+          if (!setting.running && credential !== undefined && credential.length >= 12) {
+            expect(setting.reason).not.toContain(credential);
+          }
+        },
+      ),
+    );
+  });
+
+  test('REL-10-AC13: no reason says Healthchecks.io, so INF-08’s count of the worker’s lines that do keeps its meaning', () => {
+    for (const env of [
+      {},
+      { CANARY_API_URL: `http://${HOST}`, CANARY_CREDENTIAL: syntheticCredential() },
+      { CANARY_API_URL: STAGING_API, CANARY_CREDENTIAL: 'short' },
+    ]) {
+      expect(canaryReasonOf(readCanarySetting(env))).not.toContain('Healthchecks.io');
+    }
+  });
+});
+
+describe('REL-10: readHealthchecksCanarySetting', () => {
+  test('REL-10-AC13: a usable https: address means reporting, at exactly that address', () => {
+    expect(readHealthchecksCanarySetting({ HEALTHCHECKS_CANARY_URL: PING_URL })).toEqual({
+      checkingIn: true,
+      url: PING_URL,
+    });
+    expect(
+      readHealthchecksCanarySetting({ HEALTHCHECKS_CANARY_URL: `https://hc-ping.com/${CHECK}` }),
+    ).toEqual({ checkingIn: true, url: `https://hc-ping.com/${CHECK}` });
+  });
+
+  const check = `a${syntheticUuid().slice(1)}`;
+
+  test.each([
+    ['unset', undefined],
+    ['empty', ''],
+    ['an http: address', `http://hc-ping.com/${check}`],
+    ['not an address at all', `hc-ping.com/${check}`],
+    ['a query', `https://hc-ping.com/${check}?rid=1`],
+    ['a fragment', `https://hc-ping.com/${check}#1`],
+    ['a trailing slash', `https://hc-ping.com/${check}/`],
+    ['an upper-case UUID', `https://hc-ping.com/${check.toUpperCase()}`],
+    ['the slug form', `https://hc-ping.com/${syntheticCredential().slice(0, 22)}/staging-canary`],
+    ['a path of two segments', `https://hc-ping.com/${check}/fail`],
+  ])(
+    'REL-10-AC13: HEALTHCHECKS_CANARY_URL %s, refused by the ping-URL rule the other checks are read by, means not reporting, with a reason that names the variable and never the value',
+    (_what, value) => {
+      const setting = readHealthchecksCanarySetting(
+        value === undefined ? {} : { HEALTHCHECKS_CANARY_URL: value },
+      );
+
+      expect(reasonOf(setting)).toContain('HEALTHCHECKS_CANARY_URL');
+      expect(JSON.stringify(setting).toLowerCase()).not.toContain(check.slice(1, -1));
+    },
+  );
+
+  test('REL-10-AC13: the same value read by each of the three settings is judged alike, each naming its own variable', () => {
+    for (const value of [
+      PING_URL,
+      `http://hc-ping.com/${check}`,
+      `https://hc-ping.com/${check}/`,
+    ]) {
+      const canary = readHealthchecksCanarySetting({ HEALTHCHECKS_CANARY_URL: value });
+      const sms = readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: value });
+
+      expect(canary.checkingIn, value).toBe(sms.checkingIn);
+      if (!canary.checkingIn && !sms.checkingIn) {
+        expect(canary.reason.replaceAll('HEALTHCHECKS_CANARY_URL', 'X')).toBe(
+          sms.reason.replaceAll('HEALTHCHECKS_SMS_URL', 'X'),
+        );
+      }
+    }
+  });
+
+  test('REL-10-AC13: it reads HEALTHCHECKS_CANARY_URL and nothing else, and the other two settings do not read it', () => {
+    expect(
+      readHealthchecksCanarySetting({
+        HEALTHCHECKS_WORKER_URL: PING_URL,
+        HEALTHCHECKS_SMS_URL: PING_URL,
+        HEALTHCHECKS_URL: PING_URL,
+      }).checkingIn,
+    ).toBe(false);
+    expect(readHealthchecksSetting({ HEALTHCHECKS_CANARY_URL: PING_URL }).checkingIn).toBe(false);
+    expect(readHealthchecksSmsSetting({ HEALTHCHECKS_CANARY_URL: PING_URL }).checkingIn).toBe(
+      false,
+    );
+  });
+
+  test('REL-10-AC13: no reason says Healthchecks.io', () => {
+    for (const env of [{}, { HEALTHCHECKS_CANARY_URL: `http://hc-ping.com/${check}` }]) {
+      expect(reasonOf(readHealthchecksCanarySetting(env))).not.toContain('Healthchecks.io');
+    }
   });
 });
