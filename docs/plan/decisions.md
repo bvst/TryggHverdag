@@ -5193,7 +5193,8 @@ any other path is work, not a candidate for the same treatment.
     `random_password.canary_credential` takes `keepers = { generation =
     local.canary_credential_generation }`. Rotating it means raising that
     number in a pull request, then `infra-staging` `plan` and `apply`; the
-    worker registers the new hash when it restarts. The workflow has no
+    worker registers the new hash on its first canary run after the restart
+    (see the bullet on registration below). The workflow has no
     `-replace` route, so "replace the resource" alone had no way to run.
     `keepers` is read from `hashicorp/random` 3.9.1's own schema: "Arbitrary
     map of values that, when changed, will trigger recreation of resource".

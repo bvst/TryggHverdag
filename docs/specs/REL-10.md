@@ -545,7 +545,8 @@ fails when a changed spec names a tracked requirement, or a criterion
       plan has 20 checks, this is the fourth.
     - **Database:** no new pool. About 40 one-statement reads per run on the
       worker's pool (one connection free beside Graphile's `LISTEN`), each a
-      few milliseconds; registration once per start. Three requests per run to
+      few milliseconds; registration once per process, on its first canary
+      run. Three requests per run to
       the API, on its pool of 2.
     - **CPU and memory:** negligible; nothing is held between runs.
     - **Nano's reduced CPU priority:** the expected alert time is 300 s plus
@@ -1360,7 +1361,8 @@ Said here rather than chosen silently. How each is settled is at its end.
 5. **The canary's credential "never expires and is revoked only by deleting
    its row" (D-091)** — and deleting the row is now refused while canary
    journeys reference it (foreign key). *Settled:* revoked by rotating the
-   Terraform resource, which replaces the hash at the next start.
+   Terraform resource, which replaces the hash on the worker's first canary
+   run after the restart (D-128's amendment).
 6. **D-108: the canary must catch an "always-failing delivery".** In M2 every
    delivery fails by design (`NOT_CONFIGURED`), so a canary cannot tell a
    failing provider from the unconfigured one. *Settled for M2:* it catches a
