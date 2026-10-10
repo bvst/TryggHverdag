@@ -781,6 +781,76 @@ describe('REL-10: the watchdog does not open the alert', () => {
   );
 });
 
+describe('REL-10: the answer’s time is the read that first saw it, not the opening', () => {
+  // REL-10 review loop 2 (test-auditor, its fault R3): in a healthy run the
+  // alert opens, the port answers and the canary reads at the same moment, so
+  // the answer's time and the opening's cannot be told apart there. Here the
+  // port answers later than the opening. alertMs is the hand-over (what
+  // AC19's owner reads), and an answer first seen past the deadline fails,
+  // whenever the alert opened (approach item 6: never pass late).
+
+  test('REL-10-AC1: with delivery held off until 330 s, the alert opens at 300 s and the answer comes later: the run is ON_TIME with openedAfterMs 300 000 and alertMs the now() of the first read that saw the answer, past the opening', async () => {
+    const w = world();
+    w.running.deliver = false;
+    w.everyInterval((at) => {
+      if (at >= 330 * SECOND) {
+        w.running.deliver = true;
+      }
+    });
+
+    await expect(w.run()).resolves.toEqual({ outcome: 'ON_TIME' });
+
+    const lastContact = w.observations[0]?.journey.lastHeartbeatAt?.getTime() ?? Number.NaN;
+    const firstAnswered = w.observations.find(({ lostContactAnswered }) => lostContactAnswered);
+    const answeredAfter = (firstAnswered?.now.getTime() ?? Number.NaN) - lastContact;
+    expect(answeredAfter, 'the first read that saw the answer').toBeGreaterThan(FIVE_MINUTES);
+    expect(answeredAfter).toBeLessThanOrEqual(DEADLINE);
+    expect(w.runLines()).toEqual([
+      runLine({
+        outcome: 'ON_TIME',
+        alertMs: answeredAfter,
+        openedAfterMs: FIVE_MINUTES,
+        status: null,
+        code: null,
+      }),
+    ]);
+    expect(w.alarm.statuses).toEqual(['ok']);
+  });
+
+  test('REL-10-AC3: an answer the port gives at 361 s, first seen by the read at 362 s, past the 360 s deadline, is NOT_HANDED_OVER though the alert opened in time: never passed late', async () => {
+    const w = world();
+    w.push.holdAnswers();
+    // The port answers 361 s after the start, which is last contact: after
+    // the read at 360 s, before the one at 362 s.
+    void w.waits.wait(DEADLINE + SECOND, new AbortController().signal).then(() => {
+      w.push.releaseAnswers();
+    });
+
+    await expect(w.run()).resolves.toEqual({ outcome: 'NOT_HANDED_OVER' });
+
+    const lastContact = w.observations[0]?.journey.lastHeartbeatAt?.getTime() ?? Number.NaN;
+    expect(lastContact).toBe(START.getTime());
+    const watching = w.observations.filter(({ journey }) => journey.state !== 'ENDED');
+    const firstAnswered = watching.find(({ lostContactAnswered }) => lostContactAnswered);
+    expect(
+      (firstAnswered?.now.getTime() ?? Number.NaN) - lastContact,
+      'the first read that saw the answer',
+    ).toBe(DEADLINE + POLL);
+    expect(firstAnswered).toBe(watching.at(-1));
+    expect(w.runLines()).toEqual([
+      runLine({
+        outcome: 'NOT_HANDED_OVER',
+        alertMs: null,
+        openedAfterMs: FIVE_MINUTES,
+        status: null,
+        code: null,
+      }),
+    ]);
+    expect(w.alarm.statuses).toEqual(['failing']);
+    expect(w.homesFor(w.onlyJourney().id)).toHaveLength(1);
+  });
+});
+
 describe('REL-10: the alert opens but never reaches the push port', () => {
   test.each([
     { what: 'the delivery loop not running', stop: (w: World) => (w.running.deliver = false) },

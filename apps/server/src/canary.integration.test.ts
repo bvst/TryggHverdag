@@ -36,6 +36,7 @@ import {
   fakeCanaryAlarm,
   fakeLog,
   syntheticCredential,
+  syntheticPingUrl,
   syntheticUuid,
   type AlertAsStored,
   type CanaryStoreUnderTest,
@@ -45,7 +46,9 @@ import {
   type MessageAsStored,
   type ResolutionAsStored,
 } from '@trygghverdag/test-kit';
+import { EventEmitter } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
+import type { RunnerOptions } from 'graphile-worker';
 import type pg from 'pg';
 import { afterAll, describe, expect, test } from 'vitest';
 import { databaseCanaryStore, httpCanaryClient } from './adapters/canary.ts';
@@ -62,6 +65,8 @@ import { createClosureService } from './modules/alerts/closure.ts';
 import { createCanary } from './modules/canary/run.ts';
 import { createHealthService } from './modules/health/service.ts';
 import { createJourneyService } from './modules/journeys/service.ts';
+import { readCanarySetting, readHealthchecksCanarySetting } from './config.ts';
+import { runWorkerProcess, type RunWorker } from './worker.ts';
 
 /** What Clever Cloud's DEV plan runs; see deploy.integration.test.ts. */
 const STAGING_POSTGRES = 'postgres:15-alpine';
@@ -902,4 +907,101 @@ describe('REL-10: two runs on one database', () => {
     ]);
     expect(await rows.journeysOf(CANARY_WALKER_ID)).toEqual([{ id: journey?.id, state: 'ENDED' }]);
   }, 180_000);
+});
+
+describe('REL-10: what the real worker registers, on the real tables', () => {
+  // REL-10 review loop 2 (test-auditor should-fix 3, its W3): what the worker
+  // hands the canary as the hash to register was seen by no test. The worker
+  // tests replace the store and the client, and the L3 tests above call the
+  // adapter themselves. Here runWorkerProcess is given the canary's settings,
+  // as bin/worker.ts gives them from the environment, and a database of its
+  // own; Graphile is replaced by a runner that only keeps the task list, so
+  // the canary's task is run once, by hand. Its client answers the start 503,
+  // so the run ends right after its registration, which is the real adapter
+  // on the real tables. The device row must then hold the hash of
+  // CANARY_CREDENTIAL itself, the one the API authenticates.
+  test('REL-10-AC10: the real worker, given the canary’s three settings, registers on its first run the hash of CANARY_CREDENTIAL itself: the canary’s device holds hashCredential(credential), and the API takes the credential as that device', async () => {
+    const rows = await freshDatabase();
+    const uri = started.at(-1)?.container.getConnectionUri() ?? '';
+    const credential = syntheticCredential();
+    let options: RunnerOptions | undefined;
+    let finish: () => void = () => undefined;
+    const runWorker = ((given: RunnerOptions) => {
+      options = given;
+      return Promise.resolve({
+        promise: new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+        stop: () => {
+          finish();
+          return Promise.resolve();
+        },
+      });
+    }) as unknown as RunWorker;
+    const clients: { baseUrl: string; credential: string }[] = [];
+    const alarm = fakeCanaryAlarm();
+    const log = fakeLog();
+    const signals = new EventEmitter();
+    const exits: number[] = [];
+
+    const running = runWorkerProcess(uri, {
+      runWorker,
+      signals,
+      keepAlive: () => undefined,
+      write: () => undefined,
+      exit: (code) => {
+        exits.push(code);
+      },
+      healthchecksCanary: readHealthchecksCanarySetting({
+        HEALTHCHECKS_CANARY_URL: syntheticPingUrl(),
+      }),
+      canary: readCanarySetting({ CANARY_API_URL: ORIGIN, CANARY_CREDENTIAL: credential }),
+      createCanaryAlarm: () => alarm,
+      createCanaryClient: (made) => {
+        clients.push({ ...made });
+        const refused = () => Promise.resolve({ ok: false as const, status: 503, code: null });
+        return { start: refused, heartbeat: refused, home: refused };
+      },
+      log,
+      watchdog: { sweep: () => Promise.resolve({ ok: true, opened: 0, escalated: 0, stuck: 0 }) },
+      sender: { deliverDue: () => Promise.resolve({ sent: 0, failed: 0 }) },
+      smsSender: { deliverDue: () => Promise.resolve({ sent: 0, failed: 0 }) },
+    });
+    for (let turn = 0; turn < 200 && options === undefined; turn += 1) {
+      await sleep(10);
+    }
+    const { canary: canaryTask } = options?.taskList ?? {};
+    expect(canaryTask, 'the canary’s task').toBeDefined();
+
+    await canaryTask?.(null, { abortSignal: new AbortController().signal } as never);
+
+    expect(clients).toEqual([{ baseUrl: ORIGIN, credential }]);
+    expect(log.events.filter(({ event }) => event === 'canary_run')).toEqual([
+      expect.objectContaining({ outcome: 'START_FAILED', status: 503 }),
+    ]);
+    expect(
+      (await rows.devices()).map(({ id, userId, credentialHash }) => ({
+        id,
+        userId,
+        credentialHash,
+      })),
+    ).toEqual([
+      {
+        id: CANARY_DEVICE_ID,
+        userId: CANARY_WALKER_ID,
+        credentialHash: hashCredential(credential),
+      },
+    ]);
+    expect(await databaseDeviceAuthenticator(rows.db).authenticate(credential)).toEqual({
+      userId: CANARY_WALKER_ID,
+      deviceId: CANARY_DEVICE_ID,
+    });
+
+    signals.emit('SIGTERM');
+    await expect(running).resolves.toBeUndefined();
+    for (let turn = 0; turn < 200 && exits.length === 0; turn += 1) {
+      await sleep(10);
+    }
+    expect(exits).toEqual([0]);
+  });
 });

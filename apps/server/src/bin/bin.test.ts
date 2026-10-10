@@ -296,6 +296,19 @@ describe('REL-10: bin/worker.ts and the canary’s settings', () => {
     expect(worker.output()).toMatch(
       /^worker: the canary runs every 15 minutes and reports to a check of its own\b/m,
     );
+    // REL-10 review loop 2 (test-auditor should-fix 4): added, nothing taken
+    // away. The pattern above also matches the half-configured line, so an
+    // entry file that handed the worker no canary settings at all passed
+    // (its B1). The one canary line is the running one, whole.
+    expect(
+      worker
+        .output()
+        .split('\n')
+        .filter((line) => line.startsWith('worker: the canary')),
+    ).toEqual([
+      'worker: the canary runs every 15 minutes and reports to a check of its own whether an alert reaches the push port in time.',
+    ]);
+    expect(worker.output()).not.toContain('cannot reach the API');
     expect(worker.output()).not.toContain(check);
     expect(worker.output()).not.toContain(credential);
     expect(worker.output()).not.toContain('canary-api.invalid');

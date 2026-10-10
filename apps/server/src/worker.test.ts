@@ -4359,12 +4359,81 @@ describe('REL-10: the canary’s settings, said at start, never stop the worker'
     ]);
     expect(worker.clients).toEqual([]);
     expect(worker.clientCalls).toEqual([]);
-    expect(canaryLines(worker.written).length).toBeGreaterThanOrEqual(1);
+    // RG-03 (REL-10 review loop 2, test-auditor should-fix 2): strengthened,
+    // not weakened. This said only that some canary line was written, which a
+    // line that lost its reason, or said the canary was not running, also is
+    // (test-auditor's W2; Stryker's survivor at worker.ts:704). Now: exactly
+    // one canary line, the half-configured one, naming the setting that broke
+    // and NOT_CONFIGURED, and holding no value.
+    const [line, ...more] = canaryLines(worker.written);
+    expect(more, 'canary lines after the first').toEqual([]);
+    expect(line).toMatch(CANARY_RUNS);
+    expect(line).toMatch(
+      /, but cannot reach the API: CANARY_API_URL\b.* Each run reports failing, with NOT_CONFIGURED\.$/,
+    );
+    expect(line).not.toMatch(CANARY_NOT_RUNNING);
     expect(worker.written.join('')).not.toContain(urls.canary);
     expect(worker.written.join('')).not.toContain('127.0.0.1:1');
 
     await stopCanaryWorker(worker);
   });
+
+  // REL-10 review loop 2 (test-auditor should-fix 2): the half-configured
+  // line names whichever setting broke, and never its value: the credential
+  // is a secret, and the API's address is not the line's to repeat.
+  test.each<{
+    what: string;
+    env: (credential: string) => Record<string, string>;
+    names: string;
+  }>([
+    {
+      what: 'CANARY_CREDENTIAL unset',
+      env: () => ({ CANARY_API_URL: 'https://canary-api.invalid' }),
+      names: 'CANARY_CREDENTIAL',
+    },
+    {
+      what: 'CANARY_CREDENTIAL too short',
+      env: (credential: string) => ({
+        CANARY_API_URL: 'https://canary-api.invalid',
+        CANARY_CREDENTIAL: credential.slice(0, 42),
+      }),
+      names: 'CANARY_CREDENTIAL',
+    },
+    {
+      what: 'CANARY_API_URL with a path',
+      env: (credential: string) => ({
+        CANARY_API_URL: 'https://canary-api.invalid/v1',
+        CANARY_CREDENTIAL: credential,
+      }),
+      names: 'CANARY_API_URL',
+    },
+  ])(
+    'REL-10-AC13: with the canary’s check usable and $what, its one start line says it runs but cannot reach the API, naming $names and NOT_CONFIGURED, and holds neither the credential nor the API’s address',
+    async ({ env, names }) => {
+      const { urls } = threeChecks();
+      const credential = syntheticCredential();
+      const worker = canaryWorkerProcess({
+        healthchecksCanary: readHealthchecksCanarySetting({ HEALTHCHECKS_CANARY_URL: urls.canary }),
+        canary: readCanarySetting(env(credential)),
+      });
+      await settle();
+
+      const lines = canaryLines(worker.written);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(CANARY_RUNS);
+      expect(lines[0]).toMatch(
+        new RegExp(
+          `, but cannot reach the API: ${names}\\b.* Each run reports failing, with NOT_CONFIGURED\\.$`,
+        ),
+      );
+      const written = worker.written.join('');
+      expect(written).not.toContain(credential.slice(0, 42));
+      expect(written).not.toContain('canary-api.invalid');
+      expect(written).not.toContain(urls.canary);
+
+      await stopCanaryWorker(worker);
+    },
+  );
 
   const COMBINATIONS = [
     { canaryCheck: 'unset', canarySettings: 'unset' },
