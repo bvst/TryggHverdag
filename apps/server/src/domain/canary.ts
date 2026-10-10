@@ -72,8 +72,9 @@ export const CANARY_STOP_LIMIT_MS = 5_000;
  * Every outcome a run can come to, in the order its steps can fail: on time;
  * the canary's own settings; its registration, the start, the heartbeat and a
  * read; an early, missing or unanswered alert; "I'm home", the resolution, an
- * escalation and the stand-down; the run limit; and a stop, which alone is not
- * reported.
+ * escalation and the stand-down; the run limit; a run that failed in a way no
+ * step names, a fault in the canary itself (RUN_FAILED); and a stop, which
+ * alone is not reported.
  */
 export const CANARY_OUTCOMES = [
   'ON_TIME',
@@ -90,6 +91,7 @@ export const CANARY_OUTCOMES = [
   'ESCALATED',
   'STAND_DOWN_NOT_HANDED_OVER',
   'RUN_LIMIT',
+  'RUN_FAILED',
   'INTERRUPTED',
 ] as const;
 

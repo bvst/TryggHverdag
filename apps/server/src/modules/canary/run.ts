@@ -32,7 +32,10 @@
  * A stop (Graphile's abort signal) or the run limit ends a run at once: its
  * journey is ended through "I'm home", waiting at most CANARY_STOP_LIMIT_MS,
  * and the run comes to INTERRUPTED, which is not reported, or RUN_LIMIT,
- * which is. Whatever a stop leaves, the next run's leftover rule ends.
+ * which is. Whatever a stop leaves, the next run's leftover rule ends. An
+ * error that is neither a step's failure nor a halt is a fault in the canary
+ * itself: the run comes to RUN_FAILED, which is reported, its journey ended
+ * the same way. Nothing of that error reaches a line.
  *
  * Then one `canary_run` line, and the report to the canary's own check: ok
  * after ON_TIME alone, failing, which pages at once, after any other
@@ -300,15 +303,27 @@ export function createCanary({
         } else {
           // Ended before it finished. By the worker's stop: INTERRUPTED, which
           // is not reported, since the next run's leftover rule ends what it
-          // leaves. Otherwise at the run limit, or by anything else that kept
-          // it from finishing: RUN_LIMIT, which pages. Either way the journey,
-          // if the run started one, is ended through "I'm home", sent once,
-          // and waited for at most CANARY_STOP_LIMIT_MS of its own.
-          result = { outcome: stop.aborted ? 'INTERRUPTED' : 'RUN_LIMIT' };
+          // leaves. At the run limit: RUN_LIMIT, which pages. By anything else,
+          // a fault in the canary itself: RUN_FAILED, which pages too, and
+          // whose error no line holds (PRIV-07). Whichever, the journey, if
+          // the run started one, is ended through "I'm home", sent once, and
+          // waited for at most CANARY_STOP_LIMIT_MS of its own. "I'm home"
+          // failing here too changes nothing: the outcome stands, and the run
+          // still writes its line and reports.
+          if (error instanceof Halted) {
+            result = { outcome: stop.aborted ? 'INTERRUPTED' : 'RUN_LIMIT' };
+          } else {
+            result = { outcome: 'RUN_FAILED' };
+          }
           if (own.end !== null) {
             const stopLimit = new AbortController();
-            await Promise.race([own.end(), wait(CANARY_STOP_LIMIT_MS, stopLimit.signal)]);
-            stopLimit.abort();
+            try {
+              await Promise.race([own.end(), wait(CANARY_STOP_LIMIT_MS, stopLimit.signal)]);
+            } catch {
+              // No answer to name: what the run came to stands.
+            } finally {
+              stopLimit.abort();
+            }
           }
         }
       } finally {

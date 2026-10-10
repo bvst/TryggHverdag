@@ -668,10 +668,7 @@ export async function runWorkerProcess(
     write(
       `worker: the SMS check is not reporting: ${healthchecksSms.reason} ${SMS_CHECK_UNPAGED}\n`,
     );
-  } else if (
-    healthchecks.checkingIn &&
-    new URL(healthchecks.url).pathname === new URL(healthchecksSms.url).pathname
-  ) {
+  } else if (sameCheck(healthchecksSms.url, healthchecks)) {
     write(
       'worker: the SMS check is not reporting: HEALTHCHECKS_SMS_URL is the same address as ' +
         `HEALTHCHECKS_WORKER_URL, and the SMS check needs a check of its own. ${SMS_CHECK_UNPAGED}\n`,

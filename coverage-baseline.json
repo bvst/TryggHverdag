@@ -158,10 +158,10 @@
       "totalLines": 44
     },
     "apps/server/src/modules/canary/run.ts": {
-      "lines": 98.27,
-      "branches": 96,
-      "coveredLines": 114,
-      "totalLines": 116
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 119,
+      "totalLines": 119
     },
     "apps/server/src/modules/health/service.ts": {
       "lines": 100,
