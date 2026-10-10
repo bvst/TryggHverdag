@@ -43,3 +43,4 @@
 - [SM-10 audit](project_sm10_audit.md) — BLOCK 3da9517 (A-R1 reset read w/o unresolved filter); loop 2 PASS e7f082d, 18 faults killed, B1 L3 kill heap-order dependent (should-fix precondition)
 - [First-row reads](feedback_first_row_reads.md) — [first] of a parent-keyed filtered select needs a filtered-out sibling seeded first; plant the filter drop on both stores
 - [LOST-08 audit](project_lost08_audit.md) — PASS 369f6b3; 69 faults, A3 due-read `<` and A13 guard survive (expected); RG-02 replay 515b958; req-status stale should-fix; harness ta-lost08
+- [REL-10 AC9 wait audit](project_rel10_ac9_wait_audit.md) — PASS 1a1e0cd; real-timer bound ordering (start before, due sooner), getActiveResourcesInfo Timeout semantics, 13 wait faults; wait handover worker.ts:454 unpinned (note)
