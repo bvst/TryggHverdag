@@ -241,6 +241,25 @@ reads the agent briefs and asserts on them, so editing one really can fail
       Terraform), and in plain text in Terraform's state in Cellar. It must
       differ from `HEALTHCHECKS_WORKER_URL`: one green ping must never keep the
       other check green. Rotating it follows the same steps
+    - `HEALTHCHECKS_CANARY_URL` — the staging `staging-canary` check, which
+      pages when the staging canary fails or stops running (A-34, REL-10,
+      D-127, D-128). Stored in the same three places as the worker's: a secret
+      of the GitHub environment `staging` (main only), which `infra-staging.yml`
+      passes to Terraform and Terraform into the staging app's environment on
+      Clever Cloud, and in plain text in Terraform's state in Cellar. It must
+      differ from both `HEALTHCHECKS_WORKER_URL` and `HEALTHCHECKS_SMS_URL`,
+      for the same reason: Terraform and the worker refuse a plan or a start
+      that gives two checks one URL. Rotating it follows the same steps
+  - `CANARY_CREDENTIAL` — the device credential of the staging canary's test
+    walker (REL-10, D-128, which amends D-091 for the canary). It is made by
+    Terraform's `random_password.canary_credential` (43 letters and digits), so
+    it lives in two places only: Terraform's state in Cellar, in plain text
+    with the provider's `bcrypt_hash` of it, and the staging app's
+    environment on Clever Cloud. It is in no GitHub secret and in nobody's
+    hands: no one types, copies or sees it. Rotating it means replacing that
+    one resource, then `infra-staging` plan and apply; the worker registers
+    the new hash when it restarts after the apply (D-128). The steps are under
+    "If `CANARY_CREDENTIAL` leaks" in [monitoring-setup.md](monitoring-setup.md)
   - Claude OAuth token
   - Claude's GitHub token (A-06)
   - `RULES_READ_TOKEN` — **normally not needed.** CI-01 reads the merge rules
@@ -248,7 +267,11 @@ reads the agent briefs and asserts on them, so editing one really can fail
     Only if that stops working: fine-grained, this repository only, Metadata:
     Read-only (A-15, D-062)
 - **Rotation:** yearly, and immediately if a secret leaks. The secret scan
-  (CI-10) plus the local hook (HK-07) make leaks unlikely.
+  (CI-10) plus the local hook (HK-07) make leaks unlikely. The canary's two are
+  in it like the rest: `HEALTHCHECKS_CANARY_URL` by a new check, as for the
+  other check URLs, and `CANARY_CREDENTIAL` by replacing its Terraform
+  resource. The credential has no expiry of its own (D-091), so this yearly
+  replacement is the only thing that ever ends it.
 
 ## Versioning and dependencies
 - The app uses semantic versioning, with build numbers managed by EAS. The API

@@ -16,11 +16,14 @@ settling: `origin/main`'s last heading is D-126, no other remote branch's
 the only open pull request, Dependabot's #62, changes two workflow files
 (read through the API). Graphile Worker's cron behaviour with two workers
 (approach item 1) was read in 0.18.0's own code in `node_modules` and is
-recorded in D-128 · **Status:** Spec, settled. The owner answered Q1 to Q3 on
-2026-10-10 with the recommended answer each time, (a) (D-127); the delegated
-choices are D-128. The criteria stand as written. The ai-review filter's two lines ship
-first, in their own pull request from a second branch the owner allowed on
-2026-10-10 (approach item 13; D-128).
+recorded in D-128 · **Status:** Spec, settled; built, in review loop 1. The
+owner answered Q1 to Q3 on 2026-10-10 with the recommended answer each time,
+(a) (D-127); the delegated choices are D-128. The criteria stand as written.
+The ai-review filter's two lines shipped first, in their own pull request from
+a second branch the owner allowed on 2026-10-10 (approach item 13; D-128):
+#76, merged by the owner on 2026-10-10 as `5e5dc81`. **Where the code departs
+from the text below,** a note says so in place, marked *Built* (the
+implementer's, from `d5b7b64` on) or *Review loop 1*.
 
 ## Summary
 
@@ -292,6 +295,17 @@ fails when a changed spec names a tracked requirement, or a criterion
      and a request's time, and an alert opens no earlier than last contact +
      300 s, so it escalates no earlier than + 420 s: the canary's journey is
      always ended at least about 55 s before its alert could escalate.
+   - *Built (departure):* after a failed verdict, and after an "I'm home" that
+     fails (`HOME_FAILED`), the run goes no further: it makes neither step 7's
+     read nor step 8's stand-down wait, so its outcome is that verdict or
+     `HOME_FAILED`, and a failing run takes about 6 minutes, not up to 7½.
+     `NOT_RESOLVED`, `ESCALATED` and `STAND_DOWN_NOT_HANDED_OVER` therefore come
+     only after an alert that was on time. When two steps fail the outcome is
+     still the earlier one.
+   - *Built (departure), step 8:* the 90 s is judged on the read's own `now()`
+     before the answer is looked at. A stand-down first seen later than
+     `resolved_at` + 90 s fails, even if that same read shows it answered;
+     exactly 90 000 ms is on time, as the deadline's boundary is.
 
 3. **Through the public API, not in-process.** The client calls
    `CANARY_API_URL` (on staging `https://trygg-hverdag-staging.cleverapps.io`),
@@ -390,6 +404,11 @@ fails when a changed spec names a tracked requirement, or a criterion
      `HOME_FAILED`, `NOT_RESOLVED`, `ESCALATED`,
      `STAND_DOWN_NOT_HANDED_OVER`, `RUN_LIMIT`; and `INTERRUPTED` (item 8),
      which is not reported.
+   - *Review loop 1:* one outcome more, `RUN_FAILED`: an error in the canary
+     itself that is neither a step failing nor the run being halted (item 8).
+     It is reported `failing`, so it pages, and it gets a BUG; it is not a
+     missed alert, so it is not in `MISSED_ALERT_OUTCOMES`. The green phase
+     had called such an error `RUN_LIMIT`.
    - **`MISSED_ALERT_OUTCOMES`** is `NOT_OPENED` and `NOT_HANDED_OVER`: what
      D-022's "missed canary alert" means for this canary (Q2). It is a list
      the monitoring guide and the run line name; no code decides by it.
@@ -410,6 +429,11 @@ fails when a changed spec names a tracked requirement, or a criterion
    - A leftover that sat past its alert's two minutes has escalated, and
      `staging-sms` has paged for it: correct, since a run was lost. Ending it
      withdraws its unsent SMS (D-116), which clears that page.
+   - *Built (departure):* two more ways to `START_FAILED`, beside the second
+     409. A leftover whose "I'm home" fails with anything but a 409 is
+     `START_FAILED`, with that status, and the run goes no further. A 409 that
+     names a journey which is not the canary's (the read returns none for it)
+     is `START_FAILED` with status 409: nothing of it is the canary's to end.
 
 8. **A stop during a run.** The task takes Graphile's abort signal, which
    fires at once on a stop (`gracefulShutdownAbortTimeout: 0`). A run that is
@@ -419,6 +443,17 @@ fails when a changed spec names a tracked requirement, or a criterion
    longer than it does today. Whatever it leaves, the next run's item 7 ends.
    A run that reaches `CANARY_RUN_LIMIT_MS` is aborted the same way, but
    reported as a failure (`RUN_LIMIT`).
+   - *Corrected in review loop 1 (`safety-reviewer`):* a run that hits its limit
+     and is then stopped inside the "I'm home" wait of 5 s at most ends
+     `RUN_LIMIT` and writes its `canary_run` line, but its report is handed
+     Graphile's stop signal and fails with the stop: one `canary_report_failed`
+     line, and no failure signal reaches the check. `staging-canary`'s grace
+     pages it, about 35 minutes after the last success, not at once.
+   - *Review loop 1:* `RUN_LIMIT` is now only the run limit. An error that is
+     neither a step failure nor a halt (the stop, or the limit) ends the run as
+     `RUN_FAILED` (item 6): reported `failing`, with "I'm home" sent once for
+     the journey and waited for at most `CANARY_STOP_LIMIT_MS`, as for
+     `RUN_LIMIT`. The green phase had called any such error `RUN_LIMIT`.
 
 9. **The page: a check of its own** (`staging-canary`, A-34).
    - `HEALTHCHECKS_CANARY_URL`, read by `config.ts`'s ping-URL rule (D-116:
@@ -449,6 +484,10 @@ fails when a changed spec names a tracked requirement, or a criterion
     setting never stops the worker, D-079):
     - `CANARY_API_URL`: an `https:` URL that is exactly its own parsed
       spelling, with no path but `/`, no query, no fragment, no credentials.
+      - *Built (departure):* it must be the exact origin, `url.origin`, so no
+        trailing slash and no `/` path either: `https://trygg-hverdag-staging.cleverapps.io`,
+        not the same with a `/` after it. `config.ts` compares the value with
+        `url.origin`; Terraform writes it that way (`https://${local.fqdn}`).
     - `CANARY_CREDENTIAL`: 43 or more characters, each a letter, a digit, `-`
       or `_`.
     - `HEALTHCHECKS_CANARY_URL`: item 9.
@@ -597,7 +636,9 @@ the tests are written.
     'OPENED_EARLY', 'NOT_OPENED', 'NOT_HANDED_OVER', 'HOME_FAILED',
     'NOT_RESOLVED', 'ESCALATED', 'STAND_DOWN_NOT_HANDED_OVER', 'RUN_LIMIT',
     'INTERRUPTED']`; `CanaryOutcome`; `MISSED_ALERT_OUTCOMES` exactly
-    `['NOT_OPENED', 'NOT_HANDED_OVER']`;
+    `['NOT_OPENED', 'NOT_HANDED_OVER']`; *review loop 1:* `CANARY_OUTCOMES`
+    gains `RUN_FAILED` (item 6), `reportFor` gives it `failing`, and the tests
+    pin its place in the list;
   - `alertVerdict({ lastContact: Date; openedAt: Date | null; answeredAt:
     Date | null }): { outcome: 'ON_TIME'; alertMs: number; openedAfterMs:
     number } | { outcome: 'OPENED_EARLY' | 'NOT_OPENED' | 'NOT_HANDED_OVER';
@@ -743,6 +784,13 @@ once.**
 - **And** whenever J was started, "I'm home" is sent for it once before the
   run ends, whatever failed after
 - **And** when two steps fail, the outcome is the earlier one.
+- *Built (departures; approach items 2 and 7):* the steps after a failed
+  verdict or a failed "I'm home" are not made, so `NOT_RESOLVED`,
+  `ESCALATED` and `STAND_DOWN_NOT_HANDED_OVER` come only after an on-time
+  alert; a stand-down first seen later than `resolved_at` + 90 s fails
+  (90 000 ms is on time, 90 001 ms is not); a leftover's "I'm home" failing
+  with anything but a 409 is `START_FAILED` with that status, and a 409 naming
+  a journey that is not the canary's is `START_FAILED` 409.
 
 **REL-10-AC7 — The canary never escalates and never pages through the SMS
 check.**
@@ -788,6 +836,15 @@ limit is reported.**
   J the same way, and reports `failing` with `RUN_LIMIT`
 - **And** the task never rejects, in any of the cases of AC2 to AC9, so
   Graphile never retries it.
+- *Review loop 1:* **and when** a run meets an error that is neither a step
+  failure nor a halt, it ends `RUN_FAILED`, not `RUN_LIMIT`: reported
+  `failing` once, "I'm home" sent once for J and waited for at most
+  `CANARY_STOP_LIMIT_MS`, as for the run limit. `RUN_LIMIT` is only the run
+  limit.
+- *Corrected in review loop 1 (`safety-reviewer`):* **and when** a run at its
+  limit is then stopped inside that wait, it ends `RUN_LIMIT` and writes its
+  line, its report fails with the stop (one `canary_report_failed` line, no
+  failure signal), and `staging-canary`'s grace pages.
 
 ### The canary's identities and data
 
@@ -854,6 +911,8 @@ worker.**
   nothing reports
 - **And** no combination of these settings stops the worker or changes its
   three loops, its check-in or its SMS check.
+- *Built (departure; approach item 10):* `CANARY_API_URL` is the exact origin,
+  `url.origin`: a trailing `/` is refused too.
 
 **REL-10-AC14 — The canary never uses the critical level, and carries
 nothing personal (D-087's flag).**
@@ -1033,6 +1092,17 @@ behaviour suite, so its additions carry their reason by hand.
 D-095's reading), `config.ts` (not a safety path, D-079), `log.ts`,
 `ports.ts`, Terraform.
 
+*Built (departure, found by the first `gate:full`):* Stryker's sandbox leaves
+out `infra/**/.terraform` (`ignorePatterns` in `stryker.config.mjs`, with a test
+in `scripts/stryker-config.test.mjs`, red first). The new `hashicorp/random`
+provider made `infra:check` link it from Terraform's plugin cache into
+`infra/staging/.terraform/`, as a symbolic link to a directory, and every
+mutation run then stopped before testing a mutant with `EISDIR: illegal
+operation on a directory, copyfile` (BUG-33 describes the same fault, found on
+BUG-32). CI's `mutation` job runs no `terraform init`, so it never met it.
+Stryker does not read `.gitignore`; `infra/`'s tracked files, the lock file
+among them, are still copied.
+
 **The estimate, against 25 minutes** (not a measurement). The last CI
 measure is the "They're safe" task's: 15:19. `domain/canary.ts`: about 40 to
 55 mutants, +0:20 to +0:30. `modules/canary/run.ts`: about 120 to 160
@@ -1060,6 +1130,7 @@ file first; only then the owner's options (the budget, one job per group).
 | `packages/config/` (dependency-cruiser rule and its test) | Only `worker.ts` imports `adapters/canary.ts` | **yes** | no | — |
 | `packages/test-kit/src/` (the store, the behaviour suite, `fakeLog`, a canary alarm, a fake `Wait`, their tests) | Fakes (test-author) | **yes** (D-100) | **yes** | input |
 | `scripts/lib/gate-decisions.mjs` | `modules/canary/` in `SAFETY_PATHS`; the `canary` group | **yes** | **yes** | input |
+| `stryker.config.mjs`, `scripts/stryker-config.test.mjs` | *Built, not in the settled spec:* `ignorePatterns: ['infra/**/.terraform']` keeps Terraform's working state out of every mutation run's sandbox (see Mutation); its test is test-author's, red first | **yes** | **yes** (the config; not its test) | input (the config) |
 | `scripts/lib/merge-rules.mjs` (`OWNER_APPROVAL_PATHS`), `.github/CODEOWNERS` | The two new paths: **in step 1's pull request (#76)**, with the filter lines; nothing here | **yes** | — | — |
 | `.claude/agents/safety-reviewer.md` | A line for the canary (AC18; D-128) | **yes** | — | — |
 | `scripts/ci-models.test.mjs`, `scripts/ai-review.test.mjs` (header comments) | Claude Code 2.1.283 becomes 2.1.290, the version claude-code-action 1.0.242 installs since #76 (test-author; comments only) | **yes** | — | — |

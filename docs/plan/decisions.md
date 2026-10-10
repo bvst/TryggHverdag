@@ -5159,3 +5159,44 @@ any other path is work, not a candidate for the same treatment.
   M5's production canary with its own check and credential, and M6's
   reliability measurements, which leave canary journeys out by
   `CANARY_WALKER_ID`.
+- **Amended in review loop 1 (2026-10-10), from the implementer's departures
+  and the three reviewers.** The spec's notes (marked *Built*, *Review loop 1*
+  or *Corrected in review loop 1*) have each in full.
+  - `CANARY_API_URL` is the exact origin (`url.origin`): no trailing slash and
+    no path. Terraform writes it as `"https://${local.fqdn}"`; any other
+    spelling is `NOT_CONFIGURED`, which pages.
+  - **A run that hits its limit and is then stopped inside the 5 s "I'm home"
+    wait** ends `RUN_LIMIT` and writes its line, but its report fails with the
+    stop: one `canary_report_failed` line, no failure signal.
+    `staging-canary`'s grace pages (`safety-reviewer`'s correction of the green
+    phase's own description).
+  - After a failed verdict, or an "I'm home" that fails (`HOME_FAILED`), the
+    run sends "I'm home" and stops: no after-read and no stand-down wait, so a
+    failing run takes about 6 minutes. `NOT_RESOLVED`, `ESCALATED` and
+    `STAND_DOWN_NOT_HANDED_OVER` come only after an on-time alert.
+  - A stand-down first seen later than `resolved_at` + 90 s fails, even when
+    that read also sees it answered; exactly 90 s is on time.
+  - A leftover whose "I'm home" fails with anything but a 409 is `START_FAILED`
+    with that status. A 409 naming a journey that is not the canary's is
+    `START_FAILED` 409.
+  - **Stryker's sandbox leaves out `infra/**/.terraform`** (`ignorePatterns`).
+    The new provider's plugin-cache symlink stopped every mutation run with
+    `EISDIR` in the first local `gate:full`, and would have on the owner's Mac.
+  - **A new outcome, `RUN_FAILED`** (`code-reviewer`): an error in the canary
+    itself, neither a step failure nor a halt. It is reported `failing`, "I'm
+    home" is sent once and waited for at most 5 s as for `RUN_LIMIT`, and it
+    gets a BUG. It is not a missed alert: `MISSED_ALERT_OUTCOMES` stays as
+    D-127 set it. `RUN_LIMIT` is now only the run limit. `test-author` found
+    that a client fault in "I'm home" made the run itself reject, with no line
+    and no report; the run now never rejects.
+  - **The credential is rotated by a committed generation number.**
+    `random_password.canary_credential` takes `keepers = { generation =
+    local.canary_credential_generation }`. Rotating it means raising that
+    number in a pull request, then `infra-staging` `plan` and `apply`; the
+    worker registers the new hash when it restarts. The workflow has no
+    `-replace` route, so "replace the resource" alone had no way to run.
+    `keepers` is read from `hashicorp/random` 3.9.1's own schema: "Arbitrary
+    map of values that, when changed, will trigger recreation of resource".
+  - **Kept as they are** (`code-reviewer`): `CanaryOptions.notConfigured` and
+    `CanaryCall.code`. The tests construct both, and removing them changes no
+    behaviour.

@@ -144,7 +144,14 @@ helped on record). **Since LOST-08** (D-125, D-126), a journey can end
 its alert opened), and its alert resolves the same way, with `SAFE` and
 `EXPIRED` stand-downs in the outbox: alert records under the 30-day rule. Who
 closed a journey is the `acknowledged_by` of its alert resolved `SAFE`, so
-that field is how the record names the closer.
+that field is how the record names the closer. **Since REL-10** (D-128), each
+staging canary run leaves synthetic rows (a journey, its responder row, a
+heartbeat, an alert and two outbox messages), about 580 a day, plus two fixed
+`users` rows and one `devices` row written once; they are kept until M4's
+retention job, which must delete the run rows by `CANARY_WALKER_ID` and never
+the canary's two users or its device (the worker registers them once per start,
+so deleting them stops the canary until it restarts), and M6's reliability
+figures leave the same rows out by the same ID.
 
 ## Owner to-do
 Things only the owner can do. Claude checks this list at the start of every
