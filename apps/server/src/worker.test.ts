@@ -58,7 +58,7 @@ import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import process from 'node:process';
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { POOL_SIZE } from './adapters/db.ts';
 import { healthchecksCheckIn } from './adapters/healthchecks.ts';
 import { captured, markersIn } from './capture.test.ts';
@@ -79,6 +79,7 @@ import {
 import type { CheckIn } from './ports.ts';
 import {
   CANARY_CRONTAB,
+  CANARY_WAIT,
   HEARTBEAT_CRONTAB,
   UNCONFIGURED_PUSH,
   UNCONFIGURED_SMS,
@@ -4738,5 +4739,140 @@ describe('REL-10: a stop waits for no canary', () => {
 
       await expect(canaryTask?.(null, helpersWith())).resolves.toBeUndefined();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REL-10-AC9: CANARY_WAIT, the wait the worker hands the canary in production.
+// Every L6 test hands the canary the test kit's fakeWait, so its mutant
+// `delay(ms, undefined, {})`, which ignores its signal, survived (#77): a
+// stopped run still ends at once, but its timer would stay for up to 600 s.
+//
+// Real timers, on purpose: a faked timer would test the fake. However slow the
+// machine, a right wait passes: each bound is started before the wait and due
+// sooner, or after it and due later, or after the abort that has already
+// settled it. A slow machine can only make a wrong wait fail later.
+// pendingTimers counts the timers that keep Node running, as the wait's does.
+// ---------------------------------------------------------------------------
+
+/** How many timers this thread holds that keep Node running: Node's own count, read at once. */
+function pendingTimers(): number {
+  return process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length;
+}
+
+/** The wait, with a rejection marked handled at once, so one that comes before its outcome is read is not reported as unhandled. */
+function handled(waiting: Promise<void>): Promise<void> {
+  waiting.catch(() => undefined);
+  return waiting;
+}
+
+type WaitOutcome =
+  | { settled: 'resolved'; value: unknown }
+  | { settled: 'rejected'; name: string }
+  | { settled: 'pending' };
+
+/**
+ * A real timer of `ms`, started now. `outcomeOf(waiting)` says what the wait
+ * has come to when it fires: resolved and with what, rejected and with which
+ * error's name, or still pending. It is cleared either way.
+ */
+function startBound(ms: number): { outcomeOf: (waiting: Promise<void>) => Promise<WaitOutcome> } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const fired = new Promise<WaitOutcome>((resolve) => {
+    timer = setTimeout(() => {
+      resolve({ settled: 'pending' });
+    }, ms);
+  });
+  return {
+    outcomeOf: async (waiting) => {
+      try {
+        return await Promise.race([
+          waiting.then(
+            (value): WaitOutcome => ({ settled: 'resolved', value }),
+            (error: unknown): WaitOutcome => ({
+              settled: 'rejected',
+              name: error instanceof Error ? error.name : String(error),
+            }),
+          ),
+          fired,
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
+}
+
+/** A wait long enough that it can only settle within a test's bounds by its signal. */
+const LONG_WAIT_MS = 10_000;
+/** How long a wait's abort is given to show: far longer than it needs, far shorter than LONG_WAIT_MS. */
+const ABORT_BOUND_MS = 200;
+
+describe('REL-10: the canary’s production wait, which a stop ends at once', () => {
+  beforeEach(() => {
+    // Real timers for every test here, whatever another test left behind.
+    vi.useRealTimers();
+  });
+
+  test('REL-10-AC9: CANARY_WAIT, with a signal that never aborts, is still waiting when a timer of 90 % of its ms has fired, and then resolves with nothing', async () => {
+    const ms = 100;
+    // The bound before the wait: started after it, a pause in between could
+    // make it fall due after the wait's own timer.
+    const atNinetyPercent = startBound(ms * 0.9);
+    const waiting = CANARY_WAIT(ms, new AbortController().signal);
+
+    expect(await atNinetyPercent.outcomeOf(waiting)).toEqual({ settled: 'pending' });
+    expect(await startBound(5_000).outcomeOf(waiting)).toEqual({
+      settled: 'resolved',
+      value: undefined,
+    });
+  });
+
+  test('REL-10-AC9: CANARY_WAIT rejects with an AbortError, as the test kit’s fakeWait does, as soon as its signal aborts while it is waiting, long before its 10 s are up', async () => {
+    const controller = new AbortController();
+    const underWay = startBound(20);
+    const waiting = handled(CANARY_WAIT(LONG_WAIT_MS, controller.signal));
+    // Still waiting, a turn of the event loop in, when the stop comes.
+    expect(await underWay.outcomeOf(waiting)).toEqual({ settled: 'pending' });
+
+    controller.abort();
+
+    expect(await startBound(ABORT_BOUND_MS).outcomeOf(waiting)).toEqual({
+      settled: 'rejected',
+      name: 'AbortError',
+    });
+  });
+
+  test('REL-10-AC9: CANARY_WAIT, with a signal that has already aborted, rejects with an AbortError at once and sets no timer', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const before = pendingTimers();
+    const waiting = CANARY_WAIT(LONG_WAIT_MS, controller.signal);
+    const after = pendingTimers();
+    const outcome = startBound(ABORT_BOUND_MS).outcomeOf(waiting);
+
+    expect(after).toBe(before);
+    expect(await outcome).toEqual({ settled: 'rejected', name: 'AbortError' });
+  });
+
+  test('REL-10-AC9: CANARY_WAIT holds one real timer while it waits, and an abort clears it there and then, so a stopped run leaves no timer pending for the rest of its 10 s', async () => {
+    const controller = new AbortController();
+
+    // Read with nothing awaited in between, so no other timer starts or fires.
+    const before = pendingTimers();
+    const waiting = handled(CANARY_WAIT(LONG_WAIT_MS, controller.signal));
+    const whileWaiting = pendingTimers();
+    controller.abort();
+    const afterAbort = pendingTimers();
+
+    // Without this, a count that missed the wait's timer would pass below
+    // without showing anything.
+    expect(whileWaiting).toBe(before + 1);
+    expect(afterAbort).toBe(before);
+    expect(await startBound(ABORT_BOUND_MS).outcomeOf(waiting)).toEqual({
+      settled: 'rejected',
+      name: 'AbortError',
+    });
   });
 });

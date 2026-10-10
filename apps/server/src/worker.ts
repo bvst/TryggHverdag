@@ -115,9 +115,10 @@ export const CANARY_CRONTAB = '*/15 * * * * canary ?max=1';
 
 /**
  * The canary's waits: Node's timers, which a stop ends at once. A wait decides
- * nothing: every decision is made on the database's times (AR-03).
+ * nothing: every decision is made on the database's times (AR-03). Exported
+ * for its tests: every other test hands the canary the test kit's fakeWait.
  */
-const CANARY_WAIT: Wait = (ms, signal) => delay(ms, undefined, { signal });
+export const CANARY_WAIT: Wait = (ms, signal) => delay(ms, undefined, { signal });
 
 /**
  * The worker's push until M3 brings a provider (A-11): every message is
@@ -427,11 +428,16 @@ export async function startWorker(
       // ended the pool or chosen the exit code. runWorkerProcess owns the
       // signals instead.
       noHandleSignals: true,
+      // A canary run holds one slot for up to CANARY_RUN_LIMIT_MS, then its
+      // "I'm home" and report. The check-in and the SMS check share the other,
+      // their Healthchecks.io requests each bounded by CHECK_IN_TIMEOUT_MS: at
+      // 1, a canary run would stall the check-in.
       concurrency: 2,
       // On stop, a job's abort signal fires at once rather than after
-      // Graphile's default 5 s. The minute check-in and the SMS check are the
-      // only jobs, and each ends on that signal, so a stop never waits for
-      // Healthchecks.io.
+      // Graphile's default 5 s. Each job ends on it, and a stopped canary run
+      // (INTERRUPTED) reports nothing, so a stop never waits for
+      // Healthchecks.io. It may wait up to CANARY_STOP_LIMIT_MS for the
+      // canary's "I'm home".
       gracefulShutdownAbortTimeout: 0,
       crontab: canary === undefined ? HEARTBEAT_CRONTAB : `${HEARTBEAT_CRONTAB}\n${CANARY_CRONTAB}`,
       taskList: createTaskList({
