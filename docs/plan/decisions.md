@@ -5211,3 +5211,9 @@ any other path is work, not a candidate for the same treatment.
     `HEALTHCHECKS_CANARY_URL`) it is never replaced. The rotation steps' last
     check, a run `ON_TIME` with a success ping, is what shows the rotation has
     taken effect.
+  - **One more for M3's login task** (CI's `privacy-security-reviewer` on
+    #79): re-check which users the canary's credential can name as
+    responders. The API accepts any existing user
+    (`modules/journeys/service.ts`), which on staging is only the canary's own
+    (D-091); once there are real users, it must not reach one. The spec's
+    "Left for later tasks" names it.
