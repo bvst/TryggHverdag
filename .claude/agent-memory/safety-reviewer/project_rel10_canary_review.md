@@ -27,3 +27,16 @@ bound, CANARY_CRONTAB only with a usable URL, minute tasks unaffected; failing v
 from the run line; progress.md row 9 and lines 443-445 stale ("tests next", filter "after REL-10's");
 config.ts still unowned (decides scheduling). Worker pool is 2 connections shared with Graphile, loops
 and canary polls — no L3 contention measurement.
+
+**Loop 1: PASS at 880d2ba (2026-10-10).** All three should-fixes closed (brief item + ai-review pin; limit-then-stop
+pinned at L6 with the fake alarm now rejecting an already-aborted signal, as AbortSignal.any in healthchecks.ts ping
+does; progress row 9). New RUN_FAILED: catch splits Halted (INTERRUPTED/RUN_LIMIT) from anything else; bounded
+home in try/catch/finally. Planted 4 mutants via scratch config (scratchpad/sr-rel10-l1/mutant.config.mjs, MUTANT env,
+spreads vitest.system.config.mjs): rethrow in home catch, Halted check -> true, drop stopLimit.abort, fake's aborted
+check -> false: all killed. Real node:timers/promises delay probe (realwait-probe.ts piped to node from apps/server):
+a stop during first look / poll waits gives INTERRUPTED, no report (Halted's listener is registered first, so it
+wins the race over delay's AbortError) -> no false page per deploy. Stryker survivors 183 {end:null}->{} and 318
+guard->true are equivalent (calling a missing end throws sync inside the new try, before the 5 s wait starts).
+Open notes: RUN_FAILED (and RUN_LIMIT/INTERRUPTED) after a failed verdict masks NOT_OPENED in the line (both page,
+MISSED_ALERT_OUTCOMES used nowhere in production); rotation steps do not warn that an old-worker run in flight at the
+restart gets 401 and may page (canary, and SMS check via a stranded journey's escalation).

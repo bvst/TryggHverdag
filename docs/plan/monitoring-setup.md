@@ -304,10 +304,15 @@ secret to change. **Rotate it by raising its generation:**
    so it is a normal pull request; ask Claude for it.
 2. After it merges, run `infra-staging` plan and read it before applying. It
    must show `random_password.canary_credential` replaced and the app's
-   environment changing, values hidden, and nothing else.
+   environment changing, values hidden, and nothing else. The one value it
+   shows in clear is the generation itself (`"generation" = "1" -> "2"`,
+   "forces replacement"), which is not a secret.
 3. Apply. The apply restarts the app; the worker registers the new
    credential's hash when it starts (D-128), so the old credential gets 401
-   from then on.
+   from then on. A run the old worker still had in flight then fails, so one
+   `staging-canary` page around the restart is expected, and a second only if
+   its journey, left unended, escalates and pages `staging-sms`. Both come
+   once and stop.
 4. Confirm that the next run is `ON_TIME` and the check shows a success ping,
    within about 21 minutes.
 
