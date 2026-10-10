@@ -1,4 +1,4 @@
-- [REL-10 audit](project_rel10_audit.md) — PASS 880d2ba: 68 faults, 13 survived; four should-fixes (answer time vs opening at L6, start-line checks, registered hash)
+- [REL-10 audit](project_rel10_audit.md) — PASS 880d2ba: 68 faults, 13 survived; four should-fixes (answer time vs opening at L6, start-line checks, registered hash); loop 2 PASS 6c58524 (R3/W2/W3/B1 closed, 26 faults incl. variants, all killed by new tests)
 - [Coinciding times at L6](feedback_coinciding_times_l6.md) — swap two times a harness makes equal
 - [Wiring Stryker can't mutate](feedback_unmutable_wiring.md) — process.env→{} in bin, wrong value hashed; degraded start lines
 - [Notes before the memory folders](reference_notes_before_memory_folders.md) — the older notes file Claude Code never loaded, moved here unchanged (BUG-38); recurring patterns and how to verify things here; check a note against the current code first
