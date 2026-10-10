@@ -103,6 +103,14 @@ const MIGRATIONS = '^apps/server/src/adapters/migrations\\.ts$';
 const WORKER = '^apps/server/src/worker\\.ts$';
 /** What the drizzle-kit command reads to generate migrations. */
 const DRIZZLE_CONFIG = '^apps/server/drizzle\\.config\\.ts$';
+/** The staging canary's adapter: its registration, the one insert of a device credential before the login task (D-128). */
+const CANARY_ADAPTER = '^apps/server/src/adapters/canary\\.ts$';
+/** The API process's files: the app, the process that serves it, and its entry. */
+const API_PROCESS = [
+  '^apps/server/src/api\\.ts$',
+  '^apps/server/src/api-process\\.ts$',
+  '^apps/server/src/bin/api\\.ts$',
+];
 
 // A path that does not run through `node_modules`: neither starting with it
 // nor holding it as a folder further down. Written as two alternatives, not
@@ -188,6 +196,22 @@ module.exports = {
         "AR-10, D-108: drizzle-kit's api entry builds a pg.Pool of its own, outside createPool's connection budget, session limits and error listeners. Only apps/server/drizzle.config.ts imports it, for defineConfig, which the drizzle-kit command reads to generate migrations; that file opens no connection. Tests are exempt.",
       from: { path: PRODUCTION, pathNot: [DRIZZLE_CONFIG, TEST_FILE] },
       to: { path: DRIZZLE_KIT },
+    },
+    {
+      name: 'only-the-worker-registers-the-canary',
+      severity: 'error',
+      comment:
+        "AR-10, D-128: only apps/server/src/worker.ts imports apps/server/src/adapters/canary.ts, which registers the staging canary's three fixed identities: the one insert of a device credential before the login task, D-091's one exception. Nothing else in the code may reach it, so no route, seed or module can make a credential. Tests are exempt.",
+      from: { pathNot: [WORKER, TEST_FILE] },
+      to: { path: CANARY_ADAPTER },
+    },
+    {
+      name: 'the-api-cannot-reach-the-canary',
+      severity: 'error',
+      comment:
+        'AR-10, D-128: the API process reaches apps/server/src/adapters/canary.ts by no path at all, through worker.ts or any module, so no request can register a device or make a credential before the login task.',
+      from: { path: API_PROCESS },
+      to: { path: CANARY_ADAPTER, reachable: true },
     },
     {
       name: 'production-imports-no-test-file',

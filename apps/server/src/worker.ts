@@ -3,7 +3,7 @@
  *
  * It owns everything that happens because time passed rather than because
  * somebody made a request: the watchdog that notices a silent phone, the outbox
- * sender that delivers alerts, and later retention and the canary.
+ * sender that delivers alerts, the staging canary, and later retention.
  *
  * Three loops (LOST-02, LOST-07), each running again WATCHDOG_INTERVAL_MS
  * after its previous run finished, so a run never overlaps itself, and each
@@ -24,10 +24,12 @@
  * next run happens: nothing that goes wrong in a run stops a loop. The sweep
  * loop feeds the beat, so a sweep loop that stopped anyway shows as a beat
  * that stopped. The SMS loop is watched by the SMS check below. The delivery
- * loop has no such signal, and a delivery that is wedged, or fails every
- * time, pages nobody until the canary task checks that its test responder was
- * pushed to. The loops keep time with timers here, in the process, and every
- * due time stays in the database, so a restart loses nothing.
+ * loop is watched by the canary below: a delivery that is wedged or stopped
+ * leaves the canary's alert unanswered, and the canary pages (D-108). One
+ * that fails every send cannot be told from M2's unconfigured push until M3
+ * gives the canary a push target. The loops keep time with timers here, in
+ * the process, and every due time stays in the database, so a restart loses
+ * nothing.
  *
  * And two minute tasks, on Graphile Worker's cron. One checks in with
  * Healthchecks.io when the watchdog's beat is fresh: at most BEAT_FRESH_MS old
@@ -37,20 +39,35 @@
  * reports to a check of its own whether any escalation SMS has waited 60 s
  * unsent, whatever the beat says, so a failing SMS pages the owner.
  *
+ * And the staging canary (REL-10, D-128), every 15 minutes on the same cron,
+ * when its own check can be reported to: one Graphile job, which holds no
+ * connection while it waits, drives a test walker's journey through the public
+ * API, and reports to a third check whether the alert reached the push port
+ * in time. It shares nothing with the beat: a failing canary never stops the
+ * check-in, and its page is its own. A stop ends a run in flight within
+ * CANARY_STOP_LIMIT_MS. Only this file imports the canary's adapter, which
+ * holds the one insert of a device credential before the login task.
+ *
  * Until M3 brings APNs, FCM and an SMS provider, the worker's push and SMS
  * answer NOT_CONFIGURED to every message, so no message ever counts as sent,
  * and the worker says so at start.
  */
 import { run, type Runner, type TaskList } from 'graphile-worker';
 import process from 'node:process';
+import { setTimeout as delay } from 'node:timers/promises';
+import { databaseCanaryStore, httpCanaryClient } from './adapters/canary.ts';
 import { databaseClock } from './adapters/clock.ts';
 import { POOL_SIZE, createDatabase, createPool, sessionLimitsLines } from './adapters/db.ts';
+import { hashCredential } from './adapters/device-credentials.ts';
 import { healthchecksAlarm, healthchecksCheckIn } from './adapters/healthchecks.ts';
 import { databaseJourneyStore } from './adapters/journeys.ts';
 import { databaseWorkerHeartbeats } from './adapters/worker-heartbeats.ts';
 import {
+  readCanarySetting,
+  readHealthchecksCanarySetting,
   readHealthchecksSetting,
   readHealthchecksSmsSetting,
+  type CanarySetting,
   type HealthchecksSetting,
 } from './config.ts';
 import {
@@ -67,7 +84,19 @@ import {
 } from './modules/alerts/outbox.ts';
 import { createSmsCheck, type SmsCheck } from './modules/alerts/sms-check.ts';
 import { createWatchdog, type Watchdog } from './modules/alerts/watchdog.ts';
-import type { CheckIn, Clock, Log, Push, Sms, SmsAlarm, WorkerHeartbeats } from './ports.ts';
+import { createCanary, type CanaryOptions } from './modules/canary/run.ts';
+import type {
+  CanaryAlarm,
+  CanaryClient,
+  CheckIn,
+  Clock,
+  Log,
+  Push,
+  Sms,
+  SmsAlarm,
+  Wait,
+  WorkerHeartbeats,
+} from './ports.ts';
 import { exitOnSignal, type Reporting, type Signals } from './process.ts';
 import { describeFailure } from './redact.ts';
 
@@ -76,6 +105,19 @@ import { describeFailure } from './redact.ts';
  * Worker's cron does not go finer than that.
  */
 export const HEARTBEAT_CRONTAB = '* * * * * heartbeat\n* * * * * sms_check';
+
+/**
+ * The staging canary, every 15 minutes (REL-10, D-128), appended to
+ * HEARTBEAT_CRONTAB only when its own check can be reported to. `?max=1`:
+ * one attempt, so Graphile never retries a run, which never rejects anyway.
+ */
+export const CANARY_CRONTAB = '*/15 * * * * canary ?max=1';
+
+/**
+ * The canary's waits: Node's timers, which a stop ends at once. A wait decides
+ * nothing: every decision is made on the database's times (AR-03).
+ */
+const CANARY_WAIT: Wait = (ms, signal) => delay(ms, undefined, { signal });
 
 /**
  * The worker's push until M3 brings a provider (A-11): every message is
@@ -119,6 +161,7 @@ export function createTaskList({
   heartbeats,
   checkIn,
   smsCheck,
+  canary,
   write = writeToStderr,
 }: {
   clock: Clock;
@@ -126,8 +169,21 @@ export function createTaskList({
   checkIn?: CheckIn | undefined;
   /** The SMS check, when the setting allows it to report. */
   smsCheck?: SmsCheck | undefined;
+  /** The staging canary, when its check can be reported to. */
+  canary?: { run(signal: AbortSignal): Promise<unknown> } | undefined;
   write?: ((text: string) => void) | undefined;
 }): TaskList {
+  // The staging canary (REL-10), only when it is given. It never rejects, so
+  // Graphile never retries it; with Graphile's signal, a stop ends a run in
+  // flight.
+  const canaryTask: TaskList =
+    canary === undefined
+      ? {}
+      : {
+          canary: async (_payload, helpers) => {
+            await canary.run(helpers.abortSignal);
+          },
+        };
   return {
     heartbeat: async (_payload, helpers) => {
       // The database clock, not this machine's (REL-01): the beat is the
@@ -159,6 +215,7 @@ export function createTaskList({
     sms_check: async (_payload, helpers) => {
       await smsCheck?.check(helpers.abortSignal);
     },
+    ...canaryTask,
   };
 }
 
@@ -324,6 +381,12 @@ export interface WorkerOptions {
   smsSender?: SmsSender | undefined;
   /** Where the SMS check reports, when the setting allows it; without it, the check reports nothing. */
   smsAlarm?: SmsAlarm | undefined;
+  /**
+   * The staging canary, when its own check can be reported to: its client,
+   * null when its settings are unusable, its credential's hash and its alarm.
+   * Without it, the canary is not scheduled.
+   */
+  canary?: Omit<CanaryOptions, 'store' | 'log' | 'wait'> | undefined;
 }
 
 export async function startWorker(
@@ -341,6 +404,7 @@ export async function startWorker(
     sms = UNCONFIGURED_SMS,
     smsSender,
     smsAlarm,
+    canary,
   }: WorkerOptions = {},
 ): Promise<Worker> {
   // The idle limit (D-108): a sweep holds a journey's row for milliseconds,
@@ -369,7 +433,7 @@ export async function startWorker(
       // only jobs, and each ends on that signal, so a stop never waits for
       // Healthchecks.io.
       gracefulShutdownAbortTimeout: 0,
-      crontab: HEARTBEAT_CRONTAB,
+      crontab: canary === undefined ? HEARTBEAT_CRONTAB : `${HEARTBEAT_CRONTAB}\n${CANARY_CRONTAB}`,
       taskList: createTaskList({
         clock: databaseClock(db),
         heartbeats,
@@ -378,6 +442,10 @@ export async function startWorker(
           smsAlarm === undefined
             ? undefined
             : createSmsCheck({ outbox: journeys, alarm: smsAlarm, log }),
+        canary:
+          canary === undefined
+            ? undefined
+            : createCanary({ ...canary, store: databaseCanaryStore(db), log, wait: CANARY_WAIT }),
         write,
       }),
     });
@@ -487,6 +555,14 @@ async function startedWithinLimit(started: Promise<Worker>): Promise<Worker> {
 const SMS_CHECK_UNPAGED =
   'Neither an SMS left unsent nor an alert with no responder left to tell is paged.';
 
+/** How a "not running" line of the canary ends: what then goes unpaged (REL-10). */
+const CANARY_UNPAGED = 'Nothing checks end to end that an alert reaches the push port.';
+
+/** Whether two ping URLs name one check: config.ts takes each only as "/" and a lower-case UUID. */
+function sameCheck(url: string, other: HealthchecksSetting): boolean {
+  return other.checkingIn && new URL(url).pathname === new URL(other.url).pathname;
+}
+
 /**
  * The worker process: start the runner and the loops, stop them cleanly on
  * the platform's signal, and fail if the runner ends any other way. Here
@@ -510,6 +586,13 @@ const SMS_CHECK_UNPAGED =
  * where; and it says that no SMS provider is configured: its SMS is
  * UNCONFIGURED_SMS until M3. And once it has started, it reads back the
  * session limit its pool asked for, and says whether it is in force (D-109).
+ *
+ * The staging canary (REL-10, D-128) is scheduled when HEALTHCHECKS_CANARY_URL
+ * allows it and names neither of the other two checks, and the worker says
+ * at start whether it runs and, if not, why and what goes unpaged, never
+ * where nor as whom. Scheduled with CANARY_API_URL or CANARY_CREDENTIAL
+ * unusable, it runs anyway, and each run reports failing with NOT_CONFIGURED:
+ * a half-configured canary pages. No canary setting stops the worker.
  */
 export async function runWorkerProcess(
   connectionString: string,
@@ -522,6 +605,10 @@ export async function runWorkerProcess(
     createCheckIn = (url) => healthchecksCheckIn({ url }),
     healthchecksSms = readHealthchecksSmsSetting({}),
     createSmsAlarm = (url) => healthchecksAlarm({ url }),
+    canary = readCanarySetting({}),
+    healthchecksCanary = readHealthchecksCanarySetting({}),
+    createCanaryAlarm = (url) => healthchecksAlarm({ url }),
+    createCanaryClient = httpCanaryClient,
     log,
     watchdog,
     sender,
@@ -537,6 +624,12 @@ export async function runWorkerProcess(
     /** Where the SMS check reports (LOST-07): unset by default. */
     healthchecksSms?: HealthchecksSetting;
     createSmsAlarm?: (url: string) => SmsAlarm;
+    /** Where and as whom the canary calls the API (REL-10): unset by default. */
+    canary?: CanarySetting;
+    /** Where the canary reports (REL-10): unset by default, and then it is not scheduled. */
+    healthchecksCanary?: HealthchecksSetting;
+    createCanaryAlarm?: (url: string) => CanaryAlarm;
+    createCanaryClient?: (options: { baseUrl: string; credential: string }) => CanaryClient;
   } & Pick<WorkerOptions, 'log' | 'watchdog' | 'sender' | 'smsSender'> &
     Reporting = {},
 ): Promise<void> {
@@ -590,6 +683,42 @@ export async function runWorkerProcess(
     );
     smsAlarm = createSmsAlarm(healthchecksSms.url);
   }
+  // The canary's line never says "Healthchecks.io", nor where, nor as whom:
+  // the ping URL and the credential are secrets. Never another check's
+  // address: one green ping must never keep another check green (D-116).
+  let canaryWiring: WorkerOptions['canary'];
+  if (!healthchecksCanary.checkingIn) {
+    write(`worker: the canary is not running: ${healthchecksCanary.reason} ${CANARY_UNPAGED}\n`);
+  } else if (sameCheck(healthchecksCanary.url, healthchecks)) {
+    write(
+      'worker: the canary is not running: HEALTHCHECKS_CANARY_URL is the same check as ' +
+        `HEALTHCHECKS_WORKER_URL, and the canary needs a check of its own. ${CANARY_UNPAGED}\n`,
+    );
+  } else if (sameCheck(healthchecksCanary.url, healthchecksSms)) {
+    write(
+      'worker: the canary is not running: HEALTHCHECKS_CANARY_URL is the same check as ' +
+        `HEALTHCHECKS_SMS_URL, and the canary needs a check of its own. ${CANARY_UNPAGED}\n`,
+    );
+  } else {
+    write(
+      'worker: the canary runs every 15 minutes and reports to a check of its own' +
+        (canary.running
+          ? ' whether an alert reaches the push port in time.\n'
+          : `, but cannot reach the API: ${canary.reason} Each run reports failing, with NOT_CONFIGURED.\n`),
+    );
+    canaryWiring = canary.running
+      ? {
+          client: createCanaryClient({ baseUrl: canary.apiUrl, credential: canary.credential }),
+          credentialHash: hashCredential(canary.credential),
+          alarm: createCanaryAlarm(healthchecksCanary.url),
+        }
+      : {
+          client: null,
+          notConfigured: canary.reason,
+          credentialHash: null,
+          alarm: createCanaryAlarm(healthchecksCanary.url),
+        };
+  }
   // No push provider can be configured until M3 brings one (A-11), with its
   // setting; until then the worker's push is UNCONFIGURED_PUSH, and it says so.
   write(
@@ -612,6 +741,7 @@ export async function runWorkerProcess(
     sender,
     smsSender,
     smsAlarm,
+    canary: canaryWiring,
   });
   // The handler goes on before the start has returned, and its stop waits for
   // the start (BUG-32). Graphile Worker's run() opens the pool's connections

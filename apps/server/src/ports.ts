@@ -6,12 +6,15 @@
  * shape without depending on the implementation, and so that the test kit can
  * satisfy them structurally without importing any server code.
  */
+import type { CanaryOutcome } from './domain/canary.ts';
 import type {
   AcknowledgeOutcome,
   AlertForAcknowledgement,
   AlertForClosure,
+  AlertResolution,
   AlertState,
   CloseRefusal,
+  JourneyEndReason,
   JourneyForHeartbeat,
   JourneyForRemoval,
   JourneyState,
@@ -612,6 +615,89 @@ export interface ResponderStore {
 }
 
 /**
+ * The canary's read of one of its journeys (REL-10, D-128): the statement's
+ * now(), and what the canary decides on, each time the row's own. `alert` is
+ * the journey's latest; the two answers are the push port's (a send, or a
+ * failure with its reason) to the canary's responder's lost-contact message
+ * and "is home" stand-down of that alert; `smsWritten` counts the alert's
+ * escalation SMS, whatever became of them.
+ */
+export interface CanaryObservation {
+  now: Date;
+  journey: {
+    state: JourneyState;
+    startedAt: Date;
+    lastHeartbeatAt: Date | null;
+    endReason: JourneyEndReason | null;
+  };
+  alert: {
+    id: string;
+    openedAt: Date;
+    state: AlertState;
+    resolution: AlertResolution | null;
+    resolvedAt: Date | null;
+  } | null;
+  lostContactAnswered: boolean;
+  standDownAnswered: boolean;
+  smsWritten: number;
+}
+
+/**
+ * The canary's own way into the database (REL-10, D-128): its registration,
+ * the one insert of a device credential before the login task (D-091 as
+ * D-128 amends it), and its read. Everything else it does goes through the
+ * public API. Only the worker reaches the adapter (an import rule).
+ */
+export interface CanaryStore {
+  /**
+   * In one transaction: the canary's walker and responder made users if
+   * absent, and the walker's one device stored with this hash, or its hash
+   * replaced. Rejects, writing nothing, when a device with the canary's ID
+   * belongs to anyone else, or another device holds the hash.
+   */
+  registerCanary(request: { credentialHash: string }): Promise<void>;
+  /** One plain read at the statement's now(): no lock, no write. Null for any journey not the canary walker's. */
+  observeCanaryJourney(journeyId: string): Promise<CanaryObservation | null>;
+}
+
+/**
+ * One request of the canary's client: the route's answer, or the HTTP status
+ * it came with (null when there was none: a network failure, a timeout).
+ * `code` is a SQLSTATE or null, as a log line's is.
+ */
+export type CanaryCall<T> =
+  { ok: true; value: T } | { ok: false; status: number | null; code: string | null };
+
+/**
+ * The canary's client of the public API, with the canary device's own
+ * credential, as a phone would call it. Never rejects: every failure is a
+ * result. A start refused because the walker has an unended journey names it.
+ */
+export interface CanaryClient {
+  start(): Promise<
+    CanaryCall<{ journeyId: string }> | { ok: false; status: 409; journeyId: string }
+  >;
+  heartbeat(journeyId: string): Promise<CanaryCall<null>>;
+  home(journeyId: string): Promise<CanaryCall<null>>;
+}
+
+/**
+ * The canary's report, told to an outside monitor of its own (REL-10, A-34):
+ * `ok` after a run on time, `failing` after any other reported outcome, which
+ * pages at once. Rejects on anything but the monitor's acceptance, and as
+ * soon as `signal` aborts.
+ */
+export interface CanaryAlarm {
+  report(status: 'ok' | 'failing', signal?: AbortSignal): Promise<void>;
+}
+
+/**
+ * A wait of `ms`, which rejects as soon as `signal` aborts. The canary keeps
+ * no time of its own: it decides on the database's times, and waits on this.
+ */
+export type Wait = (ms: number, signal: AbortSignal) => Promise<void>;
+
+/**
  * Every line the server may log, and nothing else (PRIV-07). A closed union:
  * no event has a field a location, a phone number or an error's message
  * could travel in. `code` is a SQLSTATE or null, never a message.
@@ -641,7 +727,18 @@ export type LogEvent =
   | { event: 'closure_ignored'; reason: 'ALERT_RESOLVED'; alertId: string }
   | { event: 'closure_failed'; stage: 'read' | 'store'; code: string | null }
   | { event: 'expiry_failed'; stage: 'read' | 'expire'; code: string | null }
-  | { event: 'expiry_overdue'; alertId: string };
+  | { event: 'expiry_overdue'; alertId: string }
+  | {
+      event: 'canary_run';
+      outcome: CanaryOutcome;
+      alertMs: number | null;
+      openedAfterMs: number | null;
+      status: number | null;
+      code: string | null;
+    }
+  | { event: 'canary_skipped'; reason: 'RUN_IN_FLIGHT' }
+  | { event: 'canary_leftover_ended'; journeyId: string }
+  | { event: 'canary_report_failed' };
 
 /** Where the server writes what happened, one event at a time. */
 export interface Log {

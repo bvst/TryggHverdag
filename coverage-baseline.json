@@ -85,6 +85,12 @@
       "coveredLines": 2,
       "totalLines": 2
     },
+    "apps/server/src/domain/canary.ts": {
+      "lines": 100,
+      "branches": 100,
+      "coveredLines": 25,
+      "totalLines": 25
+    },
     "apps/server/src/domain/database-time.ts": {
       "lines": 100,
       "branches": 100,
@@ -150,6 +156,12 @@
       "branches": 100,
       "coveredLines": 44,
       "totalLines": 44
+    },
+    "apps/server/src/modules/canary/run.ts": {
+      "lines": 98.27,
+      "branches": 96,
+      "coveredLines": 114,
+      "totalLines": 116
     },
     "apps/server/src/modules/health/service.ts": {
       "lines": 100,
