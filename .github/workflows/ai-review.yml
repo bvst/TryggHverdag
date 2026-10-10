@@ -64,12 +64,14 @@ jobs:
               - 'apps/server/src/db/migrations/**'
               - 'apps/server/src/modules/journeys/**'
               - 'apps/server/src/modules/health/**'
+              - 'apps/server/src/modules/canary/**'
               - 'apps/server/src/api-process.ts'
               - 'apps/server/src/api.ts'
               - 'apps/server/src/adapters/clock.ts'
               - 'apps/server/src/adapters/migrations.ts'
               - 'apps/server/src/adapters/db.ts'
               - 'apps/server/src/adapters/worker-heartbeats.ts'
+              - 'apps/server/src/adapters/canary.ts'
               - 'apps/server/drizzle.config.ts'
               - 'apps/mobile/src/safety-core/**'
               - 'apps/mobile/app.config.ts'
@@ -161,7 +163,7 @@ jobs:
 
       - if: steps.applies.outputs.run == 'true'
         id: review
-        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790 # v1.0.235
+        uses: anthropics/claude-code-action@6c690188da61cf16ee7debb28383ba67f02abb4c # v1.0.242
         # Tells the project's stop gate and progress gate that this is a review
         # job, so they stand down (D-119): a review changes no code, and CI's
         # required checks run the same gates on this commit. On this step only —
@@ -192,8 +194,9 @@ jobs:
           # Named in full (D-118): with no --model the action runs Claude Code's
           # account default, which the job log showed as claude-sonnet-5; the
           # reviewers that inherit then ran on Sonnet 5. An alias would be
-          # resolved by the Claude Code this pinned action installs (2.1.283),
-          # in which `sonnet` is still Sonnet 5.
+          # resolved by whichever Claude Code this pinned action installs
+          # (2.1.290 at v1.0.242), so it could change with any bump of the
+          # action; a full ID cannot.
           claude_args: >-
             --model claude-opus-5-5
             --allowedTools
