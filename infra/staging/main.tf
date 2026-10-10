@@ -18,16 +18,24 @@ locals {
   # Staging's address, written once: the app's vhost, and where the staging
   # canary calls the public API (REL-10), so the two cannot differ.
   fqdn = "trygg-hverdag-staging.cleverapps.io"
+
+  # The canary's credential's generation (REL-10, D-128's loop-1 amendment).
+  # To rotate the credential, raise it in a pull request, then plan and apply
+  # through infra-staging. The worker registers the new hash when it restarts.
+  canary_credential_generation = "1"
 }
 
 # The staging canary's device credential (REL-10, D-128): 43 letters and
 # digits, about 256 bits (D-091's strength). Made here, so it lives only in
 # Terraform's state and the app's environment, as the database password does,
 # and in no GitHub secret and no one's hands. The worker registers its hash at
-# start, so rotating it is replacing this one resource, then a plan and apply.
+# start. Rotating it is raising local.canary_credential_generation in a pull
+# request: infra-staging.yml runs a fixed plan with no `-replace`, so the
+# generation, its one keeper, is what replaces it (D-128's loop-1 amendment).
 resource "random_password" "canary_credential" {
   length  = 43
   special = false
+  keepers = { generation = local.canary_credential_generation }
 }
 
 resource "clevercloud_postgresql" "staging" {
