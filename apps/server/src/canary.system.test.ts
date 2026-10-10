@@ -1818,6 +1818,119 @@ describe('REL-10: leftovers and overlap', () => {
   });
 });
 
+describe('REL-10: a run that fails in a way no step names is RUN_FAILED, and pages', () => {
+  // REL-10 review loop 1 (code-reviewer should-fix 4; D-128's loop-1
+  // amendment). An error that is neither a step's failure nor a halt is a
+  // fault in the canary itself: the run ends as RUN_FAILED, reported failing
+  // at once, with "I'm home" sent once for a journey it started, waited for
+  // at most CANARY_STOP_LIMIT_MS, as at the run limit. RUN_LIMIT means the run
+  // limit alone (its tests are in "a stop, or the run limit"), INTERRUPTED
+  // the worker's stop alone. The client is the one place such an error can
+  // come from without being a step's failure: the store's errors are read
+  // failures, and the waits reject only when aborted. Nothing of the error
+  // reaches a line (PRIV-07): the line has no field for it.
+
+  /** A TypeError whose message holds the credential and words a log must never carry. */
+  const faultOf = (w: World) =>
+    new TypeError(
+      `Cannot read properties of undefined (reading 'journeyId'): Bearer ${w.credential}`,
+    );
+
+  /** Every line written, as text, to look for the error in. */
+  const everyLine = (w: World) => w.log.events.map((event) => JSON.stringify(event)).join('\n');
+
+  test('REL-10-AC6: a client whose heartbeat throws a TypeError, after the journey started, ends the run as RUN_FAILED at once: reported failing once, its journey ended by one "I’m home", and nothing of the error in any line (PRIV-07)', async () => {
+    const w = world();
+    const fault = faultOf(w);
+    const client = {
+      ...w.client(),
+      heartbeat: () => {
+        throw fault;
+      },
+    };
+
+    await expect(w.run(w.canary({ client }))).resolves.toEqual({ outcome: 'RUN_FAILED' });
+
+    expect(w.runLines()).toEqual([
+      {
+        event: 'canary_run',
+        outcome: 'RUN_FAILED',
+        alertMs: null,
+        openedAfterMs: null,
+        status: null,
+        code: null,
+      },
+    ]);
+    expect(w.alarm.statuses).toEqual(['failing']);
+    const journey = w.onlyJourney();
+    expect(w.homesFor(journey.id).map(({ status }) => status)).toEqual([200]);
+    expect(w.store.endOf(journey.id).endReason).toBe('HOME');
+    expect(await w.elapsed(), 'no wait for the run limit').toBeLessThanOrEqual(STOP_LIMIT);
+    expect(everyLine(w)).not.toContain(w.credential);
+    expect(everyLine(w)).not.toContain('Cannot read');
+    expect(everyLine(w)).not.toContain('TypeError');
+  });
+
+  test('REL-10-AC6: when its "I’m home" is never answered either, the RUN_FAILED run waits for it at most CANARY_STOP_LIMIT_MS, sends it once, and reports failing once', async () => {
+    const w = world();
+    const fault = faultOf(w);
+    w.answer('home', neverAnswered);
+    const client = {
+      ...w.client({ timeoutMs: NO_TIMEOUT }),
+      heartbeat: () => Promise.reject(fault),
+    };
+
+    await expect(w.run(w.canary({ client }))).resolves.toEqual({ outcome: 'RUN_FAILED' });
+
+    expect(w.sentTo('home')).toHaveLength(1);
+    expect(w.alarm.statuses).toEqual(['failing']);
+    expect(w.runLines()).toEqual([runLine({ outcome: 'RUN_FAILED', status: null, code: null })]);
+    const elapsed = await w.elapsed();
+    expect(elapsed).toBeGreaterThanOrEqual(STOP_LIMIT);
+    expect(elapsed).toBeLessThanOrEqual(STOP_LIMIT + POLL);
+  });
+
+  test('REL-10-AC6: a client whose start throws a TypeError comes to RUN_FAILED with no journey, so no "I’m home", reported failing once', async () => {
+    const w = world();
+    const fault = faultOf(w);
+    const client = {
+      ...w.client(),
+      start: () => {
+        throw fault;
+      },
+    };
+
+    await expect(w.run(w.canary({ client }))).resolves.toEqual({ outcome: 'RUN_FAILED' });
+
+    expect(w.sent).toEqual([]);
+    expect(w.canaryJourneys()).toEqual([]);
+    expect(w.alarm.statuses).toEqual(['failing']);
+    expect(w.runLines()).toEqual([runLine({ outcome: 'RUN_FAILED', status: null, code: null })]);
+    expect(everyLine(w)).not.toContain(w.credential);
+  });
+
+  // Found while writing the above: today a client whose "I'm home" rejects
+  // makes the run itself reject, from the stop-limit race in its catch, so it
+  // writes no canary_run line and reports nothing: silent until the check's
+  // grace. The task never rejects (AC9), and a fault pages (RUN_FAILED).
+  test('REL-10-AC9: a client whose "I’m home" rejects with a TypeError does not make the run reject: it comes to RUN_FAILED, with one line, reported failing once', async () => {
+    const w = world();
+    const fault = faultOf(w);
+    const real = w.client();
+    const client = {
+      ...real,
+      heartbeat: () => Promise.reject(fault),
+      home: () => Promise.reject(fault),
+    };
+
+    await expect(w.run(w.canary({ client }))).resolves.toEqual({ outcome: 'RUN_FAILED' });
+
+    expect(w.runLines()).toEqual([runLine({ outcome: 'RUN_FAILED', status: null, code: null })]);
+    expect(w.alarm.statuses).toEqual(['failing']);
+    expect(everyLine(w)).not.toContain(w.credential);
+  });
+});
+
 describe('REL-10: a stop, or the run limit, ends the run quickly', () => {
   // The worker's task hands every run Graphile's signal, run after run, 96 a
   // day. A run that left its listener on that signal, or its run limit's
@@ -1980,6 +2093,53 @@ describe('REL-10: a stop, or the run limit, ends the run quickly', () => {
 
     expect(w.sentTo('home')).toHaveLength(1);
     expect(w.alarm.statuses).toEqual(['failing']);
+    expect(await w.elapsed()).toBeLessThanOrEqual(RUN_LIMIT + STOP_LIMIT);
+  });
+
+  // REL-10 review loop 1 (safety-reviewer should-fix 2): the run limit, then
+  // the worker's stop inside the 5 s wait for "I'm home". The outcome was
+  // fixed at the limit, RUN_LIMIT, before that wait; its line says so; the
+  // report is handed the stop's signal, by then aborted, so it fails, and the
+  // failure is one canary_report_failed line. Never silent: two lines, and
+  // staging-canary's grace pages if no later run reports. Pinned as the code
+  // behaves; the reviewer judged it acceptable.
+  test('REL-10-AC9: a run at its limit, stopped by the worker 2 s into its wait for "I’m home", still comes to RUN_LIMIT: one canary_run line saying so, then its report, handed the stop’s aborted signal, fails, and one canary_report_failed line follows', async () => {
+    const w = world();
+    const stop = new AbortController();
+    w.answer('heartbeat', neverAnswered);
+    let stoppedAt = null as number | null;
+    w.intercept((_request, entry) => {
+      if (entry.route === 'home') {
+        // The worker's stop comes 2 s into the run's wait for its "I'm home".
+        void w.waits.wait(2 * SECOND, new AbortController().signal).then(async () => {
+          stoppedAt = await w.elapsed();
+          stop.abort();
+        });
+      }
+      return undefined;
+    });
+    w.answer('home', neverAnswered);
+
+    await expect(
+      w.run(w.canary({ client: w.client({ timeoutMs: NO_TIMEOUT }) }), stop.signal),
+    ).resolves.toEqual({ outcome: 'RUN_LIMIT' });
+
+    expect(stoppedAt).toBe(RUN_LIMIT + 2 * SECOND);
+    expect(w.sentTo('home')).toHaveLength(1);
+    expect(w.canaryLines()).toEqual([
+      {
+        event: 'canary_run',
+        outcome: 'RUN_LIMIT',
+        alertMs: null,
+        openedAfterMs: null,
+        status: null,
+        code: null,
+      },
+      { event: 'canary_report_failed' },
+    ]);
+    expect(w.alarm.statuses).toEqual(['failing']);
+    expect(w.alarm.reports[0]?.signal).toBe(stop.signal);
+    expect(stop.signal.aborted).toBe(true);
     expect(await w.elapsed()).toBeLessThanOrEqual(RUN_LIMIT + STOP_LIMIT);
   });
 

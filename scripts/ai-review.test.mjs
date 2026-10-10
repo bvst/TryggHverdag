@@ -468,6 +468,49 @@ describe("REL-10: safety-reviewer's brief has something to check in the staging 
       ).toEqual([]);
     }),
   );
+
+  // REL-10 review loop 1 (safety-reviewer should-fix 1): the rest of what
+  // makes the canary's page trustworthy, which the item above did not ask the
+  // review to hold. Its own check (HEALTHCHECKS_CANARY_URL, whose UUID differs
+  // from the worker's and the SMS check's); its crontab line, scheduled only
+  // when that URL is usable, the worker saying at start what goes unpaged
+  // when it is not; a run that never rejects and is bounded by
+  // CANARY_RUN_LIMIT_MS; and the minute check-in and SMS check never held up
+  // while a run is in flight. As loose as the two above: the names and the
+  // stems, none of the wording, which is the implementer's.
+  test(
+    "REL-10-AC18: the brief's item on the canary names its own check, its crontab line and its run limit, HEALTHCHECKS_CANARY_URL, CANARY_CRONTAB and CANARY_RUN_LIMIT_MS, and speaks of the check's UUID against the worker's and the SMS check's, of what goes unpaged, of a run that never rejects, and of the check-in while a run is in flight",
+    explained(() => {
+      const brief = agentNamed('safety-reviewer.md')?.text ?? '';
+      const item = brief
+        .split(/\n(?=- )/)
+        .filter((part) => part.includes('apps/server/src/modules/canary/'))
+        .join('\n');
+
+      expect(item, 'no list item of the brief names the canary’s module').not.toBe('');
+      expect(
+        ['HEALTHCHECKS_CANARY_URL', 'CANARY_CRONTAB', 'CANARY_RUN_LIMIT_MS'].filter(
+          (named) => !item.includes(named),
+        ),
+        "what the brief's canary item does not name",
+      ).toEqual([]);
+      const spoken = item.toLowerCase().replace(/\s+/g, ' ');
+      expect(
+        [
+          ['its check’s UUID', /\buuid\b/],
+          ['the worker’s check', /\bworker['’]s\b|healthchecks_worker_url/],
+          ['the SMS check', /\bsms check/],
+          ['what goes unpaged', /\bunpaged\b/],
+          ['a run that never rejects', /\breject/],
+          ['the minute check-in', /\bcheck-?in\b/],
+          ['a run in flight', /\bin flight\b/],
+        ]
+          .filter(([, stem]) => !stem.test(spoken))
+          .map(([what]) => what),
+        "what the brief's canary item does not speak of",
+      ).toEqual([]);
+    }),
+  );
 });
 
 // BUG-37: the reviewer briefs still said "The gate reads that last line

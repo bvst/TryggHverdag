@@ -170,9 +170,22 @@ describe('REL-10: the outcomes and what each reports', () => {
       'ESCALATED',
       'STAND_DOWN_NOT_HANDED_OVER',
       'RUN_LIMIT',
+      // RG-03 (REL-10 review loop 1, code-reviewer should-fix 4; D-128's
+      // loop-1 amendment): RUN_FAILED is added, after RUN_LIMIT and before
+      // INTERRUPTED, which stays last. A run that failed in a way no step
+      // names (a programming fault, not a step's failure and not a halt) was
+      // reported as RUN_LIMIT, which must mean the run reached
+      // CANARY_RUN_LIMIT_MS and nothing else. Nothing else in the list moves.
+      'RUN_FAILED',
       'INTERRUPTED',
     ]);
     expect(CANARY_OUTCOMES).toEqual(FAKE_CANARY_OUTCOMES);
+  });
+
+  test('REL-10-AC6: RUN_FAILED is reported failing, at once, and is not a missed alert (D-127): only NOT_OPENED and NOT_HANDED_OVER are', () => {
+    expect(CANARY_OUTCOMES).toContain('RUN_FAILED');
+    expect(reportFor('RUN_FAILED')).toBe('failing');
+    expect(MISSED_ALERT_OUTCOMES).not.toContain('RUN_FAILED');
   });
 
   test('REL-10-AC5: MISSED_ALERT_OUTCOMES is exactly NOT_OPENED and NOT_HANDED_OVER: what D-022’s missed canary alert means for this canary (D-127)', () => {

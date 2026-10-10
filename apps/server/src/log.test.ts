@@ -2297,6 +2297,11 @@ const CANARY_OUTCOME_LIST = [
   'ESCALATED',
   'STAND_DOWN_NOT_HANDED_OVER',
   'RUN_LIMIT',
+  // RG-03 (REL-10 review loop 1, code-reviewer should-fix 4; D-128's loop-1
+  // amendment): RUN_FAILED is added, a run that failed in a way no step
+  // names. The log writes it as it writes every other outcome; nothing of the
+  // error that caused it has a field to travel in.
+  'RUN_FAILED',
   'INTERRUPTED',
 ] as const;
 

@@ -131,6 +131,22 @@ describe('fakeCanaryAlarm', () => {
     await expect(alarm.report('ok', controller.signal)).rejects.toThrow(/aborted/);
   });
 
+  test('a report handed a signal already aborted rejects at once though nothing hangs, recorded and saying so in the events, as the adapter’s fetch refuses to start', async () => {
+    const events: string[] = [];
+    const alarm = fakeCanaryAlarm({ events });
+    const controller = abortable();
+    controller.abort();
+
+    await expect(alarm.report('failing', controller.signal)).rejects.toThrow(/aborted/);
+
+    expect(alarm.statuses).toEqual(['failing']);
+    expect(alarm.reports[0]?.signal?.aborted).toBe(true);
+    expect(events).toEqual([`${CANARY_ALARM_REPORTED}: failing`, CANARY_ALARM_ABORTED]);
+    // A signal not aborted, or none, is reported as before.
+    await expect(alarm.report('ok', abortable().signal)).resolves.toBeUndefined();
+    await expect(alarm.report('ok')).resolves.toBeUndefined();
+  });
+
   test('what it hands back cannot change what it recorded', async () => {
     const alarm = fakeCanaryAlarm();
     await alarm.report('ok');

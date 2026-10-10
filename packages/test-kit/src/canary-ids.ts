@@ -25,8 +25,9 @@ export const CANARY_IDS = {
 /**
  * Every outcome a canary run can come to, in the spec's order (the
  * interfaces' `CANARY_OUTCOMES`): on time, a step's failure, a missed or early
- * alert, an escalation, a stand-down never answered, the run limit, and a
- * stop, which is not reported.
+ * alert, an escalation, a stand-down never answered, the run limit, a run
+ * that failed in a way no step names (RUN_FAILED, REL-10 review loop 1,
+ * D-128), and a stop, which is not reported.
  */
 export type FakeCanaryOutcome =
   | 'ON_TIME'
@@ -43,6 +44,7 @@ export type FakeCanaryOutcome =
   | 'ESCALATED'
   | 'STAND_DOWN_NOT_HANDED_OVER'
   | 'RUN_LIMIT'
+  | 'RUN_FAILED'
   | 'INTERRUPTED';
 
 /** The outcomes, as a list, in the spec's order. */
@@ -61,5 +63,6 @@ export const FAKE_CANARY_OUTCOMES: readonly FakeCanaryOutcome[] = [
   'ESCALATED',
   'STAND_DOWN_NOT_HANDED_OVER',
   'RUN_LIMIT',
+  'RUN_FAILED',
   'INTERRUPTED',
 ];

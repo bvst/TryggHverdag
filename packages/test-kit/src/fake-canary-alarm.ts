@@ -10,7 +10,10 @@
  * abort signal it was given, can fail the way the adapter fails (a non-2xx
  * answer, no connection, a timeout), and can hang the way a Healthchecks.io
  * that never answers does: a hung report settles only when its signal aborts,
- * and never when it was given none. Each report, and each abort of a hung one,
+ * and never when it was given none. A report handed a signal already aborted
+ * rejects at once, hung or not, as the adapter's does: its fetch is handed
+ * that signal, and a fetch whose signal has aborted never starts (REL-10
+ * review loop 1: a run at its limit, stopped before it reports). Each report, and each abort of a hung one,
  * is added to an `events` list it can share with the other fakes, so a test
  * can say what came first.
  *
@@ -70,6 +73,10 @@ export function fakeCanaryAlarm({ events }: { events?: string[] } = {}): FakeCan
     report(status: CanaryAlarmStatus, signal?: AbortSignalLike): Promise<void> {
       reports.push({ status, signal });
       events?.push(`${CANARY_ALARM_REPORTED}: ${status}`);
+      if (signal?.aborted === true) {
+        events?.push(CANARY_ALARM_ABORTED);
+        return Promise.reject(abortedError());
+      }
       if (hanging) {
         return new Promise<void>((_resolve, reject) => {
           if (signal === undefined) {

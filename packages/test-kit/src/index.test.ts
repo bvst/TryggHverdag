@@ -36,7 +36,11 @@ describe('the test kit', () => {
       expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     }
     expect(new Set(ids).size).toBe(3);
-    expect(kit.FAKE_CANARY_OUTCOMES).toHaveLength(15);
+    // RG-03 (REL-10 review loop 1, code-reviewer should-fix 4; D-128's
+    // loop-1 amendment): RUN_FAILED joins the outcomes, so 16, not 15. A run
+    // that failed in a way no step names was called RUN_LIMIT, which must mean
+    // the run limit alone. domain/canary.test.ts pins the list itself.
+    expect(kit.FAKE_CANARY_OUTCOMES).toHaveLength(16);
     expect(typeof kit.fakeCanaryAlarm).toBe('function');
     expect(typeof kit.fakeWait).toBe('function');
     expect(kit.CANARY_STORE_BEHAVIOUR).toHaveLength(3);
