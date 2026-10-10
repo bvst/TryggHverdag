@@ -269,9 +269,11 @@ reads the agent briefs and asserts on them, so editing one really can fail
 - **Rotation:** yearly, and immediately if a secret leaks. The secret scan
   (CI-10) plus the local hook (HK-07) make leaks unlikely. The canary's two are
   in it like the rest: `HEALTHCHECKS_CANARY_URL` by a new check, as for the
-  other check URLs, and `CANARY_CREDENTIAL` by replacing its Terraform
-  resource. The credential has no expiry of its own (D-091), so this yearly
-  replacement is the only thing that ever ends it.
+  other check URLs, and `CANARY_CREDENTIAL` by raising
+  `canary_credential_generation` in `infra/staging/main.tf` in a pull request,
+  then `infra-staging` plan and apply (its `keepers` replaces the resource;
+  D-128's loop-1 amendment). The credential has no expiry of its own (D-091),
+  so this yearly replacement is the only thing that ever ends it.
 
 ## Versioning and dependencies
 - The app uses semantic versioning, with build numbers managed by EAS. The API

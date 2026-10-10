@@ -347,6 +347,11 @@ fails when a changed spec names a tracked requirement, or a criterion
      already is (D-077), and **in no GitHub secret and no owner's hands**.
      Rotating it is a Terraform replace of that one resource, then a plan and
      apply; the worker's registration replaces the hash at its restart.
+     *Review loop 1:* `infra-staging.yml` runs a fixed plan with no `-replace`,
+     so the replace is made through `keepers = { generation =
+     local.canary_credential_generation }`: rotating is raising that committed
+     number in a pull request, then plan and apply (D-128's loop-1
+     amendment; `scripts/infra.test.mjs` pins it).
    - **Why a stable credential and not one made by each worker at start:** the
      "I'm home" route admits only the device that started the journey
      (D-110), so a worker restarted mid-run, or the new worker of a deploy,

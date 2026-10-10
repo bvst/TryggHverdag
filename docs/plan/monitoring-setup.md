@@ -295,28 +295,23 @@ one, and it would show as failing or skipped runs, but the credential never
 expires (D-091), so it is replaced and not left. It is made by Terraform
 (`random_password.canary_credential`) and lives only in Terraform's state in
 Cellar and the staging app's environment on Clever Cloud, so there is no GitHub
-secret to change: **replace that one resource**, then run `infra-staging` plan
-and apply. Read the plan before applying it. It must show
-`random_password.canary_credential` replaced and the app's environment changing,
-values hidden, and nothing else. The apply restarts the app; the worker
-registers the new credential's hash when it starts (D-128), so the old
-credential gets 401 from then on. Confirm that the next run is `ON_TIME` and the
-check shows a success ping, within about 21 minutes.
+secret to change. **Rotate it by raising its generation:**
+1. A pull request raises `canary_credential_generation` in the `locals` of
+   `infra/staging/main.tf` by one (from `"1"` to `"2"`, and so on). It is the
+   resource's only `keepers` value, and the random provider replaces the
+   resource when a `keepers` value changes (read from `hashicorp/random`
+   3.9.1's own schema, D-128's loop-1 amendment). `infra/` needs your approval,
+   so it is a normal pull request; ask Claude for it.
+2. After it merges, run `infra-staging` plan and read it before applying. It
+   must show `random_password.canary_credential` replaced and the app's
+   environment changing, values hidden, and nothing else.
+3. Apply. The apply restarts the app; the worker registers the new
+   credential's hash when it starts (D-128), so the old credential gets 401
+   from then on.
+4. Confirm that the next run is `ON_TIME` and the check shows a success ping,
+   within about 21 minutes.
 
-**How to replace it is not settled.** `infra-staging.yml` runs
-`terraform plan` and then applies that plan; it has no input that passes
-`-replace=random_password.canary_credential` (read in the workflow file on
-2026-10-10), and no runbook in this repository describes another way. Two ways
-exist, and neither was tried here:
-- A pull request that adds a `keepers` argument to the resource in
-  `infra/staging/main.tf` and changes its value to rotate. The random provider
-  replaces a resource when a `keepers` value changes (from the provider's
-  documentation; not checked in this repository).
-  `infra/` needs the owner's approval, so it is a normal pull request, and the
-  plan and apply follow its merge. Ask Claude for it.
-- `terraform apply -replace=random_password.canary_credential` run by hand with
-  the Cellar keys. A session cannot do it (HK-03), and the repository does not
-  describe it.
-
-Until one of them is chosen and tried, a leak of this credential has no tested
-fix: a gap to close before it is needed.
+`infra-staging.yml` runs `terraform plan` and then applies that plan, with no
+input for `-replace` (read in the workflow file on 2026-10-10), which is why
+rotation goes through the generation and not through a replace. Not yet tried
+on staging: the first rotation is the first proof.
