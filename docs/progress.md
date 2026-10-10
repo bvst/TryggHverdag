@@ -445,10 +445,11 @@ head `1e6f957`. **All nine of M2's tasks are done;** M2 closes on its exit
 criteria (D-090): L6 green, mutation at 80 % or more, and the staging canary
 on time for 24 hours. That last one is the owner's **A-34** (create the
 `staging-canary` check and its secret) and **A-35** (plan and apply, then
-read the 24 hours), REL-10-AC19. Queued next: BUG-43 (a test that picks an
-outbox row by random order), and a short REL-10 follow-up if the owner wants
-it (the real wait's stop signal untested; two out-of-date comments in
-`worker.ts`). **Task 8, LOST-08** ("They're safe") is done
+read the 24 hours), REL-10-AC19. BUG-43 (a test that picked an outbox row by
+random order) is done ([#79](https://github.com/bvst/TryggHverdag/pull/79),
+`85426bf`). The REL-10 follow-up the owner approved is in review: four
+REL-10-AC9 tests of the canary's real wait, which kill the mutant #77 left
+alive, and two out-of-date comments in `worker.ts`. **Task 8, LOST-08** ("They're safe") is done
 ([#75](https://github.com/bvst/TryggHverdag/pull/75), `f5c14b2`, 2026-10-09):
 the owner's two answers (D-125) and the delegated choices (D-126); CI's
 mutation step took 15:19, and the merge's deploy applied migration 0008. **Task 7,
