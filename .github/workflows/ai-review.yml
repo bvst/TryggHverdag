@@ -194,8 +194,9 @@ jobs:
           # Named in full (D-118): with no --model the action runs Claude Code's
           # account default, which the job log showed as claude-sonnet-5; the
           # reviewers that inherit then ran on Sonnet 5. An alias would be
-          # resolved by the Claude Code this pinned action installs (2.1.283),
-          # in which `sonnet` is still Sonnet 5.
+          # resolved by whichever Claude Code this pinned action installs
+          # (2.1.290 at v1.0.242), so it could change with any bump of the
+          # action; a full ID cannot.
           claude_args: >-
             --model claude-opus-5-5
             --allowedTools
