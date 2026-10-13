@@ -25,3 +25,14 @@ apps/server node_modules, `git init && commit` inside (gate.test reads git), per
 multi-line `push(` with a trailing comma is a syntax error: "KILLED (fail 0, pass 0)" means my mutant broke the file; use `[].push(`.
 gate:integrity 5/5 with NODE_USE_ENV_PROXY=1; no PR for the branch, check-runs total_count 0.
 Related: [[baseline-vs-main]], [[entry-script-wiring]], [[in-memory-mutation]], [[narrowed-mutation-group]]
+**Loop 1 PASS (61d6f0a tests, a2af885 fix), 2026-10-13.** B1 closed: test:coverage 4587 green, `coverage:ratchet --base origin/main`
+"32 changed, no drop"; baseline byte-identical to main; workflow-lint now 98.31/97.27 (175/178), merge-rules 100/92.42,
+gate-integrity 50.63/58.18 (fanOut map moved to pure `fanOutOf` in merge-rules.mjs). Gains not locked in (note);
+scripts/mutation.mjs baseline is a stale 0/0 of 23 lines on main while it measures 55.02/60.
+Mutants scratchpad/ta-bug45/m-loop1.mjs (rebuild tree/ from HEAD first): 23/24 killed - A19/A19c (S1), E01/E02 (S2),
+aggregateFolder kindOf swap/verdicts-as-reports, L06/L07/L09/L10/L12, fanOutOf x3, gate-integrity `fanOutOf(CHECKS) && {}`
+(killed only by gate.test AC10 end-to-end), ci.yml GROUP env/credentials/retention/`${{` in aggregator and plan scripts,
+head_ref swapped for base_ref. Survivor L11 (needsOf list loop `break` -> `continue`) near-equivalent: only lone single-token
+`      - x` lines later in the job would be added. RG-03: the one changed pin (gate.test ~4238, `--group "$GROUP"`) has a
+written reason and gained an env assertion. Verdict file lost `message`; no test ever asserted it (toMatchObject on
+name/status/ok) and the aggregator never read it. No PR open for the branch (PR #82 is BUG-42's, merged); 0 check runs.
