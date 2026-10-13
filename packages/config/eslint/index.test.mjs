@@ -5,9 +5,22 @@
 // They are the static half of AR-03: if the selector stops matching, domain
 // code can read the machine's clock and nothing goes red — the failure is a
 // safety decision made against the wrong time, discovered in production.
-import { Linter } from 'eslint';
-import { describe, expect, test } from 'vitest';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { ESLint, Linter } from 'eslint';
+import { afterEach, describe, expect, test } from 'vitest';
 import { CLOCK_FREE_PATHS, clockFreeRules } from './index.mjs';
+
+const ROOT = path.resolve(import.meta.dirname, '../../..');
 
 const linter = new Linter();
 
@@ -133,5 +146,149 @@ describe('the paths these rules cover', () => {
     // Not vacuous the other way either: the same component elsewhere passes,
     // so the complaints above come from the path, not from the harness.
     expect(complaintsAt('apps/mobile/src/app/index.tsx', COMPONENT)).toEqual([]);
+  });
+});
+
+// BUG-42 (BUG-26 is the same finding, logged earlier). The stop gate's lint is
+// `pnpm run lint`, which is `eslint .` from the repository root. ESLint walks
+// dot-folders and does not read .gitignore, so it walks into Stryker's
+// sandbox, .stryker-tmp/sandbox-*. That sandbox is a copy of the checkout in
+// which every file Stryker mutates carries `// @ts-nocheck`. While a mutation
+// run is going, and after one is killed at its limit and leaves its sandbox
+// behind, the gate then fails on Stryker's copies rather than on the branch.
+// On 2026-10-10 it reported 272 problems, one of them:
+//   .stryker-tmp/sandbox-Pvtahg/packages/test-kit/src/fake-push.ts
+//     24:1  error  Do not use "@ts-nocheck" because it alters compilation
+//                  errors  @typescript-eslint/ban-ts-comment
+// The ignore has to cover that folder and nothing beside it. A wider one would
+// stop the gate reading part of the branch, and the gate would then pass for
+// code it never read.
+//
+// Prettier needs no change. `prettier --check .` reads the root .gitignore,
+// which lists .stryker-tmp/, so the format check already skips the sandbox.
+describe('BUG-42: lint reads the branch, and never the Stryker sandbox in .stryker-tmp/', () => {
+  const made = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A file Stryker has instrumented: `@ts-nocheck` comes first, as in every file it mutates. */
+  const INSTRUMENTED = '// @ts-nocheck\nexport const pushed: string[] = [];\n';
+
+  /** Where the failing line of 2026-10-10 came from. */
+  const SANDBOX = '.stryker-tmp/sandbox-Pvtahg';
+
+  /**
+   * A checkout in miniature, outside the repository, with a Stryker sandbox in
+   * it as Stryker leaves one. Its eslint.config.mjs and .gitignore are this
+   * repository's, word for word, and it reaches the repository's node_modules,
+   * so it is linted by the same rules and ignores as `pnpm run lint`.
+   *
+   * The sandbox is what Stryker makes: a copy of the checkout, with its own
+   * eslint.config.mjs and with node_modules linked in, and its mutated files
+   * instrumented. Its config copy matters. ESLint 10 lints each file with the
+   * config nearest to it, so the root config can keep these files out only by
+   * not walking into .stryker-tmp/ in the first place. Ignoring the files
+   * alone is not enough.
+   *
+   * Beside the sandbox are two things the lint must still read: the branch's
+   * own copy of the same file, which carries the same comment and so must be
+   * reported, and a folder whose name only begins like Stryker's.
+   */
+  function checkout() {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'bug42-lint-')));
+    made.push(dir);
+    const put = (file, text) => {
+      mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+      writeFileSync(path.join(dir, file), text);
+    };
+    const copy = (from, to = from) => {
+      put(to, readFileSync(path.join(ROOT, from), 'utf8'));
+    };
+    const linkNodeModules = (into) => {
+      symlinkSync(path.join(ROOT, 'node_modules'), path.join(dir, into, 'node_modules'));
+    };
+
+    copy('eslint.config.mjs');
+    copy('.gitignore');
+    linkNodeModules('.');
+    copy('packages/test-kit/tsconfig.json');
+    put('packages/test-kit/src/fake-push.ts', INSTRUMENTED);
+
+    copy('eslint.config.mjs', `${SANDBOX}/eslint.config.mjs`);
+    copy('.gitignore', `${SANDBOX}/.gitignore`);
+    linkNodeModules(SANDBOX);
+    copy('packages/test-kit/tsconfig.json', `${SANDBOX}/packages/test-kit/tsconfig.json`);
+    put(`${SANDBOX}/packages/test-kit/src/fake-push.ts`, INSTRUMENTED);
+
+    put('.stryker-tmp-old/notes.mjs', 'debugger;\n');
+    return dir;
+  }
+
+  test('BUG-42: `eslint .`, the gate’s lint, reports nothing from a Stryker sandbox in .stryker-tmp/, and still reports the branch’s own @ts-nocheck', async () => {
+    // The lint step of the gate, so the walk below is the one the gate does.
+    // If the gate stops linting this way, this says so, rather than passing
+    // about a walk the gate no longer does.
+    const scripts = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).scripts;
+    expect(scripts['gate:static']).toContain('pnpm run lint');
+    expect(scripts.lint).toBe('eslint .');
+
+    const dir = checkout();
+    const results = await new ESLint({ cwd: dir }).lintFiles(['.']);
+    const relative = (file) => path.relative(dir, file).split(path.sep).join('/');
+    const linted = results.map((result) => relative(result.filePath));
+    const problems = Object.fromEntries(
+      results
+        .filter((result) => result.messages.length > 0)
+        .map((result) => [
+          relative(result.filePath),
+          result.messages.map((message) => message.ruleId ?? message.message),
+        ]),
+    );
+
+    expect(
+      linted.filter((file) => file.startsWith('.stryker-tmp/')),
+      'files in Stryker’s sandbox were linted',
+    ).toEqual([]);
+    // The control. The branch's own @ts-nocheck is still an error. A folder
+    // named like Stryker's, but not Stryker's, is still read. So the
+    // empty list above comes from the ignore and not from a walk that read
+    // nothing.
+    expect(problems).toEqual({
+      'packages/test-kit/src/fake-push.ts': ['@typescript-eslint/ban-ts-comment'],
+      '.stryker-tmp-old/notes.mjs': ['no-debugger'],
+    });
+  });
+
+  test('BUG-42: in this repository, every path under .stryker-tmp/ is ignored by lint, and nothing beside it is', async () => {
+    // Asked of the repository's own config, from its root, as
+    // scripts/mobile-app.test.mjs asks it about the app. The paths need not
+    // exist for ESLint to answer.
+    const eslint = new ESLint({ cwd: ROOT });
+    const ignored = async (file) => ({
+      file,
+      ignored: await eslint.isPathIgnored(path.join(ROOT, file)),
+    });
+
+    for (const file of [
+      `${SANDBOX}/packages/test-kit/src/fake-push.ts`,
+      `${SANDBOX}/apps/server/src/domain/journey.ts`,
+      `${SANDBOX}/scripts/mutation.mjs`,
+      `${SANDBOX}/eslint.config.mjs`,
+    ]) {
+      expect(await ignored(file)).toEqual({ file, ignored: true });
+    }
+    // The files those are copies of, the files around Stryker, and a folder
+    // whose name only begins like Stryker's: none of them is Stryker's.
+    for (const file of [
+      'packages/test-kit/src/fake-push.ts',
+      'apps/server/src/domain/journey.ts',
+      'scripts/mutation.mjs',
+      'stryker.config.mjs',
+      'eslint.config.mjs',
+      '.stryker-tmp-old/sandbox-Pvtahg/packages/test-kit/src/fake-push.ts',
+    ]) {
+      expect(await ignored(file)).toEqual({ file, ignored: false });
+    }
   });
 });
