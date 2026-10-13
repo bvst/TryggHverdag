@@ -5271,3 +5271,80 @@ any other path is work, not a candidate for the same treatment.
   will start, and its Vitest config excludes `apps/mobile/**`, so it needs
   its own design before that work lands (found by the measurement, left for
   that task). Supersedes nothing.
+
+## D-130 — How BUG-45 builds D-129's mutation check: a plan job, one leg per group, and an aggregator that judges every report again
+- **Date:** 2026-10-13 · **Status:** Accepted (delegated, D-031; D-129 left
+  the design to BUG-45) · **Section:** 6 (D-036, D-060, D-061, D-098, D-099,
+  D-129)
+- **Context:** D-129 chose one CI job per mutation group under an aggregator
+  still named `mutation`, a local `--group`, and the six mutants that only
+  time out fixed. How the jobs share the groups and how the aggregator reads
+  their results was left to BUG-45 (`specs/BUG-45.md`).
+- **Decision:**
+  1. **Three jobs in `ci.yml`.** `mutation-plan` (10 min) runs
+     `pnpm run mutation --plan --only-if-safety-paths-changed`, which writes
+     `decision` (`run` or `skip`), `reason` and `groups` to `GITHUB_OUTPUT`.
+     The groups come from `classifyRuns(mutationRuns())`, never from the
+     workflow. `mutation-group` (30 min) is a matrix over those groups with
+     `fail-fast: false`. It is skipped only when the plan says `skip`, runs
+     `pnpm run mutation --group <name>`, and uploads the report and a verdict
+     file even when it fails. `mutation` (10 min), the required check under
+     its old name, has `if: always()`, downloads the legs' artifacts and runs
+     `pnpm run mutation --aggregate`.
+  2. **The aggregator checks everything it can, and trusts nothing else.** It
+     works out the expected groups itself, at the same commit. It passes only
+     when all of these hold:
+     - the plan job succeeded;
+     - its `decision` is exactly `run` or `skip`;
+     - its `groups` equal the aggregator's own list.
+
+     Under `run`, the legs' result must also be `success`, and every expected
+     group needs a verdict file with exit 0 and a report that passes when
+     `judgeMutationReport` judges it again here. A missing, extra or
+     unparsable report fails. Under `skip`, it passes only when the legs were
+     skipped. Every cause is named.
+  3. **CI-12 is narrowed, not dropped.** A job-level `if:` is allowed only as
+     `always()` on a required check that declares a fan-out (`CHECKS`'
+     `fanOut`), and on that fan-out's own jobs. `gate:integrity` accepts a
+     fan-out job only when the check `needs` it and runs under `always()`. The
+     CI-12 test also counts every job-level `if:` line in the file, so it does
+     not depend on the job finder it checks with.
+  4. **The plan's values reach the aggregator through `env:` only,** never
+     `${{ }}` in a `run:`, because its reason names files a pull request
+     chooses. The three jobs hold no secrets and no permission beyond
+     `contents: read`. `actions/download-artifact` is pinned to v7.0.0,
+     `37930b1c2abaa49bbe596cd826c3c89aef350131`. That is a lightweight tag,
+     read with `git ls-remote` on 2026-10-13, so the hash is the commit.
+  5. **`pnpm run mutation --group <name>` is exactly what a leg runs.** It
+     refuses every other flag, and its last line says it is not the gate.
+     `gate:full` is unchanged: every group in sequence, inside one shared
+     25-minute budget (the owner's answer to Q2).
+  6. **`judgeMutationReport` names each mutant that timed out** (file, line
+     and column, mutator), with its verdict and score unchanged (the owner's
+     answer to Q1).
+  7. **The six timeouts.** Four are now killed within seconds:
+     - `run.ts` 203:23 and 237:23, where the poll's wait is dropped;
+     - `worker.ts` 271:15 and 288:15, where `again` is always true.
+
+     The fakes these loops call are bounded by the test kit's `turnBound`,
+     which notices work called again with no turn of the event loop between.
+     The other two are excluded with
+     `// Stryker disable next-line BlockStatement` and their reason: the
+     bodies of `run.ts`'s alert-watch `while` and stand-down `for (;;)`. With
+     either body emptied, the loop spins synchronously, so it can only hang
+     (D-098). For the comment to apply, the `while`'s condition now fits on
+     one line: `now <= lastContact + CANARY_DEADLINE_MS`, the same test in
+     whole milliseconds. Stryker's runs after the change:
+     - canary: 236 killed, 6 survived, 0 timed out, 2 ignored;
+     - worker: 245 killed, 6 survived, 0 timed out.
+
+     Every other mutant kept its status.
+- **Consequences:**
+  - The wall clock is expected to be the slowest group plus setup, about 4 to
+    4.5 minutes. It is measured on BUG-45's own pull request (AC13).
+  - Re-running one failed leg relies on the aggregator reading the other
+    legs' artifacts from the first attempt. That is assumed, and is checked
+    on that pull request.
+  - That a skipped required check reads as passing rests on D-060, D-061 and
+    `ci.yml`'s header. GitHub's documentation was not re-read for it.
+  - Supersedes nothing.
