@@ -196,10 +196,14 @@ export function createCanary({
           wait(lastContact.getTime() + CANARY_FIRST_LOOK_MS - first.now.getTime(), halt.signal),
         );
         let seen = await read(journeyId);
-        while (
-          !seen.lostContactAnswered &&
-          seen.now.getTime() - lastContact.getTime() <= CANARY_DEADLINE_MS
-        ) {
+        const deadline = lastContact.getTime() + CANARY_DEADLINE_MS;
+        // Only this loop's body changes `seen`, and its condition awaits nothing. With the
+        // body emptied the loop spins synchronously and no timer runs again, Vitest's
+        // included: that mutant can only hang, never fail a test, so it is left out (D-098,
+        // BUG-45). The condition fits on one line so that the body's `{` is on the line
+        // after the directive, which is where Stryker reads it.
+        // Stryker disable next-line BlockStatement: a synchronous spin, it can only hang
+        while (!seen.lostContactAnswered && seen.now.getTime() <= deadline) {
           await until(() => wait(CANARY_POLL_MS, halt.signal));
           seen = await read(journeyId);
         }
@@ -227,6 +231,10 @@ export function createCanary({
           return { outcome: 'ESCALATED' };
         }
         const resolvedAt = alert.resolvedAt.getTime();
+        // The loop's only exits and its only await are in its body. With the body emptied
+        // it spins synchronously and no timer runs again, Vitest's included: that mutant
+        // can only hang, never fail a test, so it is left out (D-098, BUG-45).
+        // Stryker disable next-line BlockStatement: a synchronous spin, it can only hang
         for (;;) {
           if (seen.now.getTime() - resolvedAt > CANARY_STAND_DOWN_LIMIT_MS) {
             return { outcome: 'STAND_DOWN_NOT_HANDED_OVER' };

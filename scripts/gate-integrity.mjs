@@ -24,7 +24,13 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { packageScripts, run } from './lib/proc.mjs';
-import { planChecks, reviewBypass, reviewCodeowners, reviewRuleset } from './lib/merge-rules.mjs';
+import {
+  CHECKS,
+  planChecks,
+  reviewBypass,
+  reviewCodeowners,
+  reviewRuleset,
+} from './lib/merge-rules.mjs';
 import { reviewWorkflows } from './lib/workflow-lint.mjs';
 
 const BRANCH = 'main';
@@ -289,6 +295,13 @@ async function main() {
         files: workflowFiles(cwd),
         scripts,
         required: plan.required,
+        // The jobs a required check fans out into, which no rule requires
+        // (BUG-45, D-129): accepted only on the terms reviewWorkflows holds.
+        fanOut: Object.fromEntries(
+          CHECKS.flatMap((check) =>
+            check.fanOut === undefined ? [] : [[check.check, check.fanOut]],
+          ),
+        ),
       }),
       codeownersText: readOrNull(path.join(cwd, '.github/CODEOWNERS')),
       slug,

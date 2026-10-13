@@ -378,6 +378,15 @@ export function judgeMutationRun(result) {
 export const mutationReportFile = (name) => `reports/mutation/${name}.json`;
 
 /**
+ * Where `pnpm run mutation --group <name>` writes its verdict, beside the
+ * run's report: the run's name, Stryker's exit status, and whether the run
+ * passed. The required check reads it with the report (BUG-45, D-129).
+ *
+ * @param {string} name — the run's name, from mutationRuns()
+ */
+export const mutationVerdictFile = (name) => `reports/mutation/${name}.verdict.json`;
+
+/**
  * D-036's threshold, which D-098 applies to every mutated file on its own.
  * stryker.config.mjs gives Stryker the same number as its `break`.
  */
@@ -416,7 +425,13 @@ const percent = (killed, counted) => Math.floor((killed * 10_000) / counted) / 1
  * mutate and is left out: failing it would block for good. A file that had
  * mutants and saw every one left out fails: nothing was measured in it.
  *
- * @param {{ files: Record<string, { mutants: { status: string }[] }> }} report
+ * Each mutant that timed out is named on a line of its own, where it is and
+ * which mutator made it, whether the run passes or not. Stryker's clear-text
+ * report names survivors only, so on #77 and #80 the six timeouts were counts
+ * and nothing more, and finding them took running the groups again (BUG-45,
+ * the owner's answer to its Q1). The lines change no verdict and no score.
+ *
+ * @param {{ files: Record<string, { mutants: { status: string, mutatorName?: string, location?: { start: { line: number, column: number } } }[] }> }} report
  *   — mutation-testing-report-schema, as Stryker's json reporter writes it
  * @returns {{ ok: boolean, message: string }}
  */
@@ -468,17 +483,32 @@ export function judgeMutationReport(report) {
   const scored = files.filter((file) => file.counted > 0);
   const unmeasured = files.filter((file) => file.counted === 0);
   const below = scored.filter((file) => file.killed * 100 < THRESHOLD_PERCENT * file.counted);
+  const timedOut = Object.entries(report.files).flatMap(([file, { mutants }]) =>
+    mutants
+      .filter((mutant) => mutant.status === 'Timeout')
+      .map(
+        (mutant) =>
+          `  ${file}:${String(mutant.location?.start.line)}:` +
+          `${String(mutant.location?.start.column)} ${String(mutant.mutatorName)}\n`,
+      ),
+  );
+  const timeouts =
+    timedOut.length === 0
+      ? ''
+      : '\nThese mutants timed out, and each counts against its file as not caught (D-098):\n' +
+        timedOut.join('');
   const problems = [];
   if (below.length > 0) {
     problems.push(
       `mutation: below ${String(THRESHOLD_PERCENT)} % of mutants killed (D-036), file by file:\n` +
         below.map((file) => `  ${file.line}\n`).join('') +
         'Only a killed mutant counts as caught (D-098): one that survived, timed out, ran no ' +
-        'test or hit a runtime error is not caught. The clear-text report above names each. A ' +
-        'survivor needs a test that fails on it. A timeout is a test that waited instead of ' +
-        'failing: make it fail in time, or, if the mutant can only ever hang, exclude it in the ' +
-        'code with a reason. A runtime error means the tests never ran against that mutant: ' +
-        'the log above says why.',
+        'test or hit a runtime error is not caught. The clear-text report above names each ' +
+        'survivor, and any timeout is named at the end of this message. A survivor needs a ' +
+        'test that fails on it. A timeout is a test that waited instead of failing: make it ' +
+        'fail in time, or, if the mutant can only ever hang, exclude it in the code with a ' +
+        'reason. A runtime error means the tests never ran against that mutant: the log above ' +
+        'says why.',
     );
   }
   if (unmeasured.length > 0) {
@@ -490,12 +520,13 @@ export function judgeMutationReport(report) {
     );
   }
   if (problems.length > 0) {
-    return { ok: false, message: problems.join('\n') };
+    return { ok: false, message: problems.join('\n') + timeouts };
   }
   return {
     ok: true,
     message:
       `mutation: every file reached ${String(THRESHOLD_PERCENT)} % of mutants killed:\n` +
-      scored.map((file) => `  ${file.line}\n`).join(''),
+      scored.map((file) => `  ${file.line}\n`).join('') +
+      timeouts,
   };
 }

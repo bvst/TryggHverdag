@@ -112,6 +112,10 @@ export const OWNER_APPROVAL_PATHS = [
  * @property {string} [needsScript] the package.json script the job runs
  * @property {string} [arrivesIn] the task that adds that script
  * @property {boolean} blocking whether it must be a required check (D-043)
+ * @property {string[]} [fanOut] the ci.yml jobs the check's job waits on, which
+ *   no rule requires: gate:integrity accepts them only while the check's job
+ *   needs each of them and has `if: always()`, so a failed one fails the check
+ *   rather than skipping it (BUG-45, D-129)
  */
 /** @type {Check[]} */
 export const CHECKS = [
@@ -134,7 +138,15 @@ export const CHECKS = [
   },
   { check: 'contract', requirement: 'CI-06', needsScript: 'api:diff', blocking: true },
   { check: 'traceability', requirement: 'CI-07', needsScript: 'req:coverage', blocking: true },
-  { check: 'mutation', requirement: 'CI-08', needsScript: 'mutation', blocking: true },
+  // The required check is the aggregator, still named `mutation`: the plan
+  // decides and lists the groups, and one leg per group runs Stryker (D-129).
+  {
+    check: 'mutation',
+    requirement: 'CI-08',
+    needsScript: 'mutation',
+    blocking: true,
+    fanOut: ['mutation-plan', 'mutation-group'],
+  },
   {
     check: 'android-e2e',
     requirement: 'CI-09',

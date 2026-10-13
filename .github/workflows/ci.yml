@@ -78,10 +78,12 @@ jobs:
       # reports deadlocks the pull request outright.
       #
       # So the job runs, asks, and either works or says it had nothing to
-      # check. `mutation` has worked this way since INF-04. Kept inside each
-      # job rather than in a shared one: a shared job would itself have to be a
-      # required check, and a job nothing requires can fail without stopping
-      # anything (gate:integrity says so, and it is right).
+      # check. `mutation` has worked this way since INF-04; since BUG-45 its
+      # plan job asks, and its required check always runs and says so. Kept
+      # inside each job rather than in a shared one: a shared job would itself
+      # have to be a required check, and a job nothing requires can fail
+      # without stopping anything (gate:integrity says so, and it is right;
+      # mutation's plan and legs pass it only on terms, as the check's fan-out).
       - id: affected
         run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
       - name: Nothing for this gate to check
@@ -114,10 +116,12 @@ jobs:
       # reports deadlocks the pull request outright.
       #
       # So the job runs, asks, and either works or says it had nothing to
-      # check. `mutation` has worked this way since INF-04. Kept inside each
-      # job rather than in a shared one: a shared job would itself have to be a
-      # required check, and a job nothing requires can fail without stopping
-      # anything (gate:integrity says so, and it is right).
+      # check. `mutation` has worked this way since INF-04; since BUG-45 its
+      # plan job asks, and its required check always runs and says so. Kept
+      # inside each job rather than in a shared one: a shared job would itself
+      # have to be a required check, and a job nothing requires can fail
+      # without stopping anything (gate:integrity says so, and it is right;
+      # mutation's plan and legs pass it only on terms, as the check's fan-out).
       - id: affected
         run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
       - name: Nothing for this gate to check
@@ -166,10 +170,12 @@ jobs:
       # reports deadlocks the pull request outright.
       #
       # So the job runs, asks, and either works or says it had nothing to
-      # check. `mutation` has worked this way since INF-04. Kept inside each
-      # job rather than in a shared one: a shared job would itself have to be a
-      # required check, and a job nothing requires can fail without stopping
-      # anything (gate:integrity says so, and it is right).
+      # check. `mutation` has worked this way since INF-04; since BUG-45 its
+      # plan job asks, and its required check always runs and says so. Kept
+      # inside each job rather than in a shared one: a shared job would itself
+      # have to be a required check, and a job nothing requires can fail
+      # without stopping anything (gate:integrity says so, and it is right;
+      # mutation's plan and legs pass it only on terms, as the check's fan-out).
       - id: affected
         run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
       - name: Nothing for this gate to check
@@ -209,10 +215,12 @@ jobs:
       # reports deadlocks the pull request outright.
       #
       # So the job runs, asks, and either works or says it had nothing to
-      # check. `mutation` has worked this way since INF-04. Kept inside each
-      # job rather than in a shared one: a shared job would itself have to be a
-      # required check, and a job nothing requires can fail without stopping
-      # anything (gate:integrity says so, and it is right).
+      # check. `mutation` has worked this way since INF-04; since BUG-45 its
+      # plan job asks, and its required check always runs and says so. Kept
+      # inside each job rather than in a shared one: a shared job would itself
+      # have to be a required check, and a job nothing requires can fail
+      # without stopping anything (gate:integrity says so, and it is right;
+      # mutation's plan and legs pass it only on terms, as the check's fan-out).
       - id: affected
         run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
       - name: Nothing for this gate to check
@@ -245,10 +253,12 @@ jobs:
       # reports deadlocks the pull request outright.
       #
       # So the job runs, asks, and either works or says it had nothing to
-      # check. `mutation` has worked this way since INF-04. Kept inside each
-      # job rather than in a shared one: a shared job would itself have to be a
-      # required check, and a job nothing requires can fail without stopping
-      # anything (gate:integrity says so, and it is right).
+      # check. `mutation` has worked this way since INF-04; since BUG-45 its
+      # plan job asks, and its required check always runs and says so. Kept
+      # inside each job rather than in a shared one: a shared job would itself
+      # have to be a required check, and a job nothing requires can fail
+      # without stopping anything (gate:integrity says so, and it is right;
+      # mutation's plan and legs pass it only on terms, as the check's fan-out).
       - id: affected
         run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
       - name: Nothing for this gate to check
@@ -322,44 +332,124 @@ jobs:
       - if: steps.affected.outputs.code == 'true'
         run: pnpm run coverage:ratchet --base origin/${{ github.base_ref || 'main' }}
 
-  mutation: # CI-08 (RG-05, D-036) — only when safety code changed; fails if it changed and Stryker is missing
+  # CI-08, the mutation check, is three jobs (BUG-45, D-129). It was one job
+  # that ran every group one after another, in 17 to 20 minutes, and paid all
+  # of it again for any fix. Now each group has a leg of its own, all at once,
+  # and a leg that failed can be re-run alone. Nothing measured changed: the
+  # same groups, the same rule, a fresh run every time (D-099).
+  #
+  # - mutation-plan decides once, by the rules the one job used, whether the
+  #   groups run, and lists them from the code that defines them
+  #   (`pnpm run mutation --plan`). No group's name is typed in this file.
+  # - mutation-group is one leg per group (`pnpm run mutation --group`), each
+  #   with the whole 25-minute budget, uploading its report and verdict
+  #   whatever happened.
+  # - mutation, the required check, keeps its name, so the merge rules are
+  #   unchanged. It judges every group's report again and passes only when
+  #   every group this commit expects reported and passed
+  #   (`pnpm run mutation --aggregate`).
+  #
+  # CI-12 allows no job-level `if:`, because a skipped required check reads as
+  # passing. These are the only two, and why each is safe:
+  # - `mutation` has `if: always()`, so it is never skipped: without it, a
+  #   failed or cancelled leg would skip it, and that skip would read as a pass.
+  # - the legs may be skipped, when the plan said there is nothing to mutate.
+  #   No rule requires them, so GitHub never reads their skip as a pass: only
+  #   `mutation` reads it, and accepts it only when the plan said skip.
+  # gate:integrity holds `mutation` to needing both jobs and to `if: always()`
+  # (`fanOut` in scripts/lib/merge-rules.mjs). Values reach a step's script
+  # through `env:` only where a pull request could choose them: the plan's
+  # reason names changed files.
+  mutation-plan: # CI-08: whether the groups run, why, and which groups there are
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
+    timeout-minutes: 10
+    outputs:
+      decision: ${{ steps.plan.outputs.decision }}
+      reason: ${{ steps.plan.outputs.reason }}
+      groups: ${{ steps.plan.outputs.groups }}
     steps:
+      # The whole history: the plan compares the branch with its base.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
-      # CI-12. Not a paths: filter and not a job-level if:, because either
-      # would leave this required check skipped — and a skipped job reports as
-      # a green tick, which the header above calls the one thing this
-      # repository must not produce. Worse, a required check that never
-      # reports deadlocks the pull request outright.
-      #
-      # So the job runs, asks, and either works or says it had nothing to
-      # check. `mutation` has worked this way since INF-04. Kept inside each
-      # job rather than in a shared one: a shared job would itself have to be a
-      # required check, and a job nothing requires can fail without stopping
-      # anything (gate:integrity says so, and it is right).
+      # CI-12's classification, never guarded. The plan makes its own decision
+      # (a diff of documentation only is a `skip`), but the git helper it reads
+      # the diff with passes over a base it cannot resolve, and would see no
+      # change and skip. affected.mjs fails instead, so a plan that could not
+      # see the diff never decides.
       - id: affected
         run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
-      - name: Nothing for this gate to check
-        if: steps.affected.outputs.code != 'true'
-        run: |
-          echo "Every changed file is documentation or reviewer memory."
-          echo "mutation has nothing to check on this diff (CI-12)."
-      - if: steps.affected.outputs.code == 'true'
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - if: steps.affected.outputs.code == 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with: { node-version-file: .nvmrc, cache: pnpm }
-      - if: steps.affected.outputs.code == 'true'
-        run: pnpm install --frozen-lockfile
-      # Fresh, never --incremental, which `pnpm run mutation` refuses (D-099).
-      # Its 25-minute budget (MUTATION_TIMEOUT_MS) fits inside this job's 30.
-      - if: steps.affected.outputs.code == 'true'
+      # Node and pnpm only: the plan uses Node's built-ins, so nothing is
+      # installed.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version-file: .nvmrc }
+      # Never guarded: its outputs are the job's, and an empty decision fails
+      # the check.
+      - id: plan
         run: >-
-          pnpm run mutation
+          pnpm run mutation --plan
           --only-if-safety-paths-changed
           --base origin/${{ github.base_ref || 'main' }}
+
+  mutation-group: # CI-08: one leg per group of the plan; no rule requires it
+    needs: mutation-plan
+    if: needs.mutation-plan.outputs.decision == 'run'
+    runs-on: ubuntu-26.04
+    # The 25-minute budget (MUTATION_TIMEOUT_MS) fits inside these 30, with
+    # room for checkout and install.
+    timeout-minutes: 30
+    strategy:
+      # Every leg finishes, so one that fails does not hide the others' scores.
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(needs.mutation-plan.outputs.groups) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      # Fresh, never --incremental, which `pnpm run mutation` refuses (D-099).
+      - run: pnpm run mutation --group ${{ matrix.group }}
+      # Whatever happened, so that `mutation` can say which group failed and
+      # why. A re-run replaces this leg's own artifact.
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-report-${{ matrix.group }}
+          path: |
+            reports/mutation/${{ matrix.group }}.json
+            reports/mutation/${{ matrix.group }}.verdict.json
+          overwrite: true
+
+  mutation: # CI-08 (RG-05, D-036) — the required check: every group this commit expects reported and passed
+    needs: [mutation-plan, mutation-group]
+    if: always()
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      # The commit whose groups it expects: it lists them itself, from the
+      # code, rather than trusting the plan's list.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version-file: .nvmrc }
+      # Every leg's report and verdict, into one flat folder.
+      - if: needs.mutation-plan.outputs.decision == 'run'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: mutation-report-*
+          merge-multiple: true
+          path: reports/mutation-legs
+      # Never guarded: with the plan's skip, it is what passes the check, and
+      # with anything less than every group passing, what fails it.
+      - run: pnpm run mutation --aggregate reports/mutation-legs
+        env:
+          MUTATION_PLAN_RESULT: ${{ needs.mutation-plan.result }}
+          MUTATION_PLAN_DECISION: ${{ needs.mutation-plan.outputs.decision }}
+          MUTATION_PLAN_REASON: ${{ needs.mutation-plan.outputs.reason }}
+          MUTATION_PLAN_GROUPS: ${{ needs.mutation-plan.outputs.groups }}
+          MUTATION_GROUP_RESULT: ${{ needs.mutation-group.result }}
 
   android-e2e: # CI-09 (L7) — the release build on an Android emulator, driven by Maestro
     runs-on: ubuntu-26.04
@@ -597,10 +687,12 @@ jobs:
       # reports deadlocks the pull request outright.
       #
       # So the job runs, asks, and either works or says it had nothing to
-      # check. `mutation` has worked this way since INF-04. Kept inside each
-      # job rather than in a shared one: a shared job would itself have to be a
-      # required check, and a job nothing requires can fail without stopping
-      # anything (gate:integrity says so, and it is right).
+      # check. `mutation` has worked this way since INF-04; since BUG-45 its
+      # plan job asks, and its required check always runs and says so. Kept
+      # inside each job rather than in a shared one: a shared job would itself
+      # have to be a required check, and a job nothing requires can fail
+      # without stopping anything (gate:integrity says so, and it is right;
+      # mutation's plan and legs pass it only on terms, as the check's fan-out).
       - id: affected
         run: node scripts/affected.mjs --base origin/${{ github.base_ref || 'main' }}
       - name: Nothing for this gate to check
