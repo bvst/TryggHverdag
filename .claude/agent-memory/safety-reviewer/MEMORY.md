@@ -24,3 +24,4 @@
 - [Verdict-pipeline review](feedback_verdict_pipeline_review.md) — invalid-over-failed precedence, glue args vs test fixtures, coarse go/no-go inputs, "no verdict"
 - [SPIKE-01 night 2026-09-30](project_spike01_night_20260930.md) — loop 2 PASS (6ae585f); verified raw facts; open should-fixes for 04b-spike-results, spec, code
 - [BUG-10 review](project_bug10_journey_safety_paths_review.md) — PASS 82c7a63; open: adapters/clock.ts in no list + weak REL-01 L3 test, api.ts not owner-approved, nightly claim, config-only skips mutation
+- [REL-10 wait follow-up](project_rel10_wait_followup_review.md) — PASS c80fbea: comments true (Graphile awaits release; abort timer 0); export reaches nothing; should-fix: AC9 test 1 bound started after the wait, 10 ms margin, comment overclaims

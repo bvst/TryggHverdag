@@ -844,6 +844,9 @@ limit is reported.**
   J the same way, and reports `failing` with `RUN_LIMIT`
 - **And** the task never rejects, in any of the cases of AC2 to AC9, so
   Graphile never retries it.
+- *After the merge (#80):* the worker's real wait, `CANARY_WAIT`, ends at
+  once when its signal aborts and leaves no timer, with four tests of its own.
+  That `startWorker` hands it to the canary is not tested yet: BUG-44.
 - *Review loop 1:* **and when** a run meets an error that is neither a step
   failure nor a halt, it ends `RUN_FAILED`, not `RUN_LIMIT`: reported
   `failing` once, "I'm home" sent once for J and waited for at most
