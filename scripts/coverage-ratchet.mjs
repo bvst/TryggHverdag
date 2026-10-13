@@ -14,7 +14,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { changedFiles } from './lib/git.mjs';
+import { changedFiles, requireMergeBase } from './lib/git.mjs';
 import {
   COVERAGE_SUMMARIES,
   floorBreaches,
@@ -69,7 +69,17 @@ function main() {
   const baseline = existsSync(baselinePath)
     ? (JSON.parse(readFileSync(baselinePath, 'utf8')).files ?? {})
     : {};
-  const changed = changedFiles({ base: argValue('--base', 'origin/main'), cwd });
+  // D-131 (BUG-46): without a merge base the committed diff is dropped, and a
+  // drop in a file changed on the branch would go unread. --update, above,
+  // reads no diff, so only this comparison refuses.
+  const base = argValue('--base', 'origin/main');
+  const required = requireMergeBase(base, cwd);
+  if (!required.ok) {
+    process.stderr.write(`coverage:ratchet: ${required.message}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const changed = changedFiles({ base, cwd });
 
   const drops = ratchetDrops({ current, baseline, changed });
   const { breaches, notApplicable } = floorBreaches(current);

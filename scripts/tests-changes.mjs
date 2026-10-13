@@ -11,7 +11,7 @@
 import process from 'node:process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { changedFiles, fileAt, mergeBase } from './lib/git.mjs';
+import { changedFiles, fileAt, requireMergeBase } from './lib/git.mjs';
 import { TEST_GLOBS, weakenings } from './lib/test-strength.mjs';
 import { matchesGlob } from './lib/glob.mjs';
 
@@ -40,18 +40,19 @@ export function weakenedFiles({ files, contentsNow, contentsBefore }) {
   return found;
 }
 
+/** The exit code: 0 when no changed test file was weakened, 1 otherwise. */
 function main() {
   const args = process.argv.slice(2);
   const baseIndex = args.indexOf('--base');
   const base = baseIndex === -1 ? 'origin/main' : (args[baseIndex + 1] ?? 'origin/main');
   const cwd = process.cwd();
 
-  const since = mergeBase(base, cwd);
-  if (since === null) {
-    process.stdout.write(
-      `tests:changes: no common history with ${base}, so there is nothing to compare against.\n`,
-    );
-    return;
+  // D-131 (BUG-46): with no merge base there is no "before" to compare with,
+  // and the committed diff is dropped, so could-not-tell is a failure.
+  const required = requireMergeBase(base, cwd);
+  if (!required.ok) {
+    process.stderr.write(`tests:changes: ${required.message}\n`);
+    return 1;
   }
 
   const files = changedFiles({ base, cwd });
@@ -59,7 +60,7 @@ function main() {
     files,
     contentsNow: (file) =>
       existsSync(path.join(cwd, file)) ? readFileSync(path.join(cwd, file), 'utf8') : '',
-    contentsBefore: (file) => fileAt(since, file, cwd),
+    contentsBefore: (file) => fileAt(required.mergeBase, file, cwd),
   });
 
   if (found.length === 0) {
@@ -67,7 +68,7 @@ function main() {
     process.stdout.write(
       `tests:changes: ${String(checked)} changed test file(s), none weakened (RG-03).\n`,
     );
-    return;
+    return 0;
   }
 
   for (const { file, issues } of found) {
@@ -77,9 +78,9 @@ function main() {
     '\nRG-03: tests may not be weakened to make a change pass. Either restore what was ' +
       'removed, or justify each case in the pull request under "Test changes" for test-auditor to review.\n',
   );
-  process.exitCode = 1;
+  return 1;
 }
 
 if (import.meta.filename === process.argv[1]) {
-  main();
+  process.exitCode = main();
 }

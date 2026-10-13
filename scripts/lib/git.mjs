@@ -10,6 +10,32 @@ export function mergeBase(base, cwd = process.cwd()) {
 }
 
 /**
+ * The merge base with `base`, or a refusal when git cannot resolve it (D-131).
+ *
+ * Every gate that reads what this branch changes asks this first. Without a
+ * merge base, changedFiles() drops the committed diff, so "could not tell" and
+ * "nothing changed" would arrive as the same empty list, and the gate would
+ * pass on a question nobody answered (BUG-46). The message names the base and
+ * says that it could not tell; the caller prefixes its own name and exits 1.
+ *
+ * @returns {{ ok: true, mergeBase: string } | { ok: false, message: string }}
+ */
+export function requireMergeBase(base, cwd = process.cwd()) {
+  const since = mergeBase(base, cwd);
+  if (since !== null) {
+    return { ok: true, mergeBase: since };
+  }
+  return {
+    ok: false,
+    message:
+      `git found no merge base with ${base} (no such branch, no history shared with HEAD, ` +
+      'or no repository here), so this gate could not tell what this branch changes. ' +
+      'Refusing to answer "nothing to check": not knowing is not the same as having ' +
+      `nothing to check (D-131). Fetch ${base}, or pass a --base that exists.`,
+  };
+}
+
+/**
  * Every file this branch touches: committed since the merge base, changed in the
  * working tree, or not yet added. Paths are relative to the repository root.
  *
