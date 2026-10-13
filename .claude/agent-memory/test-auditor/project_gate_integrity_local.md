@@ -76,3 +76,4 @@ true. First audit with a PR: `gh api .../commits/<sha>/check-runs` and `.../chec
 2026-10-09 cloud (LOST-08 at 369f6b3): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5, 13 required incl. mutation/traceability. Pushed, no PR, check-runs total_count 0. req:coverage rewrote the report (stale at HEAD); restored from git show HEAD.
 2026-10-10 cloud (REL-10 loop 2 at 6c58524): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5, 13 required incl. mutation/traceability. No PR for the branch, check-runs total_count 0.
 2026-10-10 cloud (REL-10 AC9 follow-up at 1a1e0cd): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5, 13 required incl. mutation/traceability. Pushed (origin at HEAD), no open PR for the branch, check-runs total_count 0. ai-review.yml:111 grants checks: read.
+2026-10-13 cloud (BUG-45 at 89688b1/73681ae): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5, 13 required incl. mutation/traceability. No PR for the branch, check-runs total_count 0.

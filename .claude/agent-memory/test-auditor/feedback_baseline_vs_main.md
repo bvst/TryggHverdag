@@ -35,3 +35,4 @@ Related: [[stale-base]], [[entry-script-wiring]]
 **Vacuous ratchetDrops (LOST-03, 2026-10-06).** `summarize(coverage-summary.json)` keys are ABSOLUTE paths; `changed` from git and
 the baseline are relative. Called as-is, ratchetDrops returns [] and floorBreaches says "none exists yet" — a false green. Strip
 `<checkout>/` from the keys first, and print how many changed files were actually compared (10 at LOST-03) before trusting [].
+**Changed scripts/lib files with new helper branches** (BUG-45, 2026-10-13): a commit message listing gate:quick/test:unit/test:system but not test:coverage hid a ratchet failure (workflow-lint.mjs -3.9 pts, a YAML-list parse branch no test reached). Measure each changed file at once with `vitest run --config vitest.coverage.config.mjs --coverage --coverage.include=<file> --coverage.reporter=json-summary <every test importing it>` (seconds) and compare with the baseline entry.
