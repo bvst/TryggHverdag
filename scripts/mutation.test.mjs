@@ -1909,4 +1909,25 @@ describe('BUG-46: `pnpm run mutation` with a --base git cannot resolve, in a scr
       );
     }
   });
+
+  test('BUG-46: `--plan` without `--only-if-safety-paths-changed`, with a base git cannot resolve, is not refused: it prints decision=run and exits 0, as D-131 leaves it', () => {
+    // --plan alone plans every group whatever changed, so its decision reads
+    // no diff, and D-131 refuses only where the decision does. safety-reviewer
+    // and test-auditor each noted that nothing pinned this: a refusal on the
+    // --plan step itself would have passed every other test here.
+    const repository = pullRequestRepository();
+    expectUnresolvable(repository.repo);
+    const output = path.join(repository.dir, 'github-output');
+
+    const result = mutation(repository, ['--plan', '--base', UNKNOWN_BASE], {
+      GITHUB_OUTPUT: output,
+    });
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.output).not.toMatch(COULD_NOT_TELL);
+    expect(result.status, result.output).toBe(0);
+    expect(result.stdout).toContain('decision=run');
+    expect(outputsIn(readFileSync(output, 'utf8')).values.decision, result.output).toBe('run');
+    expect(starts(repository.started), 'a Stryker run started').toBe('');
+  });
 });
