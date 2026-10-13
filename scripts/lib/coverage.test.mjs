@@ -2,7 +2,7 @@
 // RG-04. The two questions are tested apart: has this change made things worse,
 // and is safety code tested well enough to trust.
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
@@ -321,7 +321,8 @@ describe('pnpm run coverage:ratchet', () => {
    * ask only what they asked before.
    */
   function ratchet(summaries) {
-    const dir = mkdtempSync(path.join(tmpdir(), 'coverage-ratchet-'));
+    // Physical path: the ratchet strips its process.cwd(), which is resolved, from summary keys (tmpdir() may be a symlink, as on macOS).
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'coverage-ratchet-')));
     try {
       writeSummaries(dir, summaries);
       commitAsOriginMain(dir);
@@ -380,7 +381,8 @@ describe('BUG-46: coverage:ratchet with a base git cannot resolve (D-131)', () =
    * shows only in the committed diff: the working tree is clean.
    */
   function droppedRepository() {
-    const dir = mkdtempSync(path.join(tmpdir(), 'bug46-coverage-ratchet-'));
+    // Physical path: the ratchet strips its process.cwd(), which is resolved, from summary keys (tmpdir() may be a symlink, as on macOS).
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'bug46-coverage-ratchet-')));
     made.push(dir);
     mkdirSync(path.join(dir, 'apps/server/src'), { recursive: true });
     writeFileSync(path.join(dir, FILE), 'export const api = 1;\n');
