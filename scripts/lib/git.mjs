@@ -31,7 +31,8 @@ export function requireMergeBase(base, cwd = process.cwd()) {
       `git found no merge base with ${base} (no such branch, no history shared with HEAD, ` +
       'or no repository here), so this gate could not tell what this branch changes. ' +
       'Refusing to answer "nothing to check": not knowing is not the same as having ' +
-      `nothing to check (D-131). Fetch ${base}, or pass a --base that exists.`,
+      'nothing to check (D-131). Fetch it (git fetch origin), or run the gate against a ' +
+      'base that exists.',
   };
 }
 
