@@ -24,6 +24,14 @@ const repos = [];
 function repoWith(scripts, extraFiles = {}) {
   const dir = makeRepo(fakeScripts(scripts));
   repos.push(dir);
+  // origin/main at the only commit, as on a fresh branch: the merge base
+  // resolves, and only `extraFiles` differ from it. Without an origin/main the
+  // hook cannot tell what the branch changes and runs the gate whatever the
+  // files are (BUG-48), so a test of "nothing to check" would show nothing.
+  execFileSync('git', ['update-ref', 'refs/remotes/origin/main', 'HEAD'], {
+    cwd: dir,
+    stdio: 'pipe',
+  });
   write(dir, extraFiles);
   return dir;
 }
@@ -481,6 +489,11 @@ describe('BUG-31: a change git normalises away is still a change (HK-06, D-119)'
 // from LF to CRLF is not listed. When that is the only change — nothing
 // untracked, no origin/main — the hook decides nothing changed and exits
 // before any gate runs. test-auditor found it on #70.
+//
+// BUG-48: since then a missing origin/main runs the gate on its own (the hook
+// cannot tell what the branch changes), so this fixture puts origin/main at
+// its only commit. The merge base resolves and its diff is empty, and the CRLF
+// change is still the only thing that can make the gate run.
 describe('BUG-31: the check for any code change sees a change git normalises away (HK-06, D-119)', () => {
   test.each([{ autocrlf: 'input' }, { autocrlf: 'true' }])(
     'BUG-31: with core.autocrlf=$autocrlf, a tracked code file changed only from LF to CRLF, and nothing else, runs the gate',
@@ -496,20 +509,19 @@ describe('BUG-31: the check for any code change sees a change git normalises awa
       });
       repos.push(dir);
       git(dir, 'config', 'core.autocrlf', autocrlf);
+      git(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
 
       // The same text as committed, with CRLF line endings.
       write(dir, { [file]: 'export const a = 1;\r\n' });
       // The condition itself: git lists the file as modified and nothing else,
       // yet every list of changed paths the early check reads is empty —
-      // the diff against HEAD, the untracked files, and no origin/main to
-      // take a merge base from.
+      // the diff against HEAD, the untracked files, and the diff from the
+      // merge base with origin/main.
       expect(git(dir, 'status', '--short')).toBe(` M ${file}\n`);
       expect(git(dir, 'diff', '--name-only', '--no-renames', 'HEAD')).toBe('');
       expect(git(dir, 'ls-files', '--others', '--exclude-standard')).toBe('');
-      expect(
-        spawnSync('git', ['rev-parse', '--verify', '-q', 'refs/remotes/origin/main'], { cwd: dir })
-          .status,
-      ).not.toBe(0);
+      const mergeBase = git(dir, 'merge-base', 'HEAD', 'origin/main').trim();
+      expect(git(dir, 'diff', '--name-only', '--no-renames', mergeBase, 'HEAD')).toBe('');
 
       const result = stop(dir);
 
@@ -834,6 +846,9 @@ describe('BUG-36, review loop 1: from a subfolder, the stop gate reads its recor
       ...inSubfolder(fakeScripts({ 'gate:quick': PASSES })),
     });
     repos.push(dir);
+    // BUG-48: with no origin/main the gate runs whatever git lists, so the
+    // untracked file below would not be what made it run.
+    git(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
     const sub = path.join(dir, SUBFOLDER);
     write(dir, { 'packages/contracts/src/journey.ts': 'export const c = 1;\n' });
 
@@ -952,5 +967,172 @@ describe("BUG-36, review loop 2: from a subfolder, the stop gate's other uses of
       note,
     ]);
     expect(readFileSync(note, 'utf8')).toContain('gate:quick failed');
+  });
+});
+
+// BUG-48 (D-131): "not knowing is not the same as having nothing to check",
+// for the stop gate. It lists what changed from the working tree, the
+// untracked files and the diff from the merge base with origin/main. When git
+// could not resolve that merge base (no origin/main, or one that shares no
+// history with HEAD), the committed part counted as empty. So with code
+// committed on the branch and a clean working tree, the hook decided nothing
+// had changed and exited 0 without running a gate: the quiet pass D-131 ended
+// in the gates. CI's safety-reviewer and code-reviewer found it on #84,
+// 2026-10-13. Without a merge base the hook cannot tell whether code changed,
+// so it runs the gate it runs for a code change.
+
+const STATIC_FAILS = { exitCode: 1, output: '1 lint error' };
+
+/** No merge base git can resolve with origin/main, each way it happens. */
+const NO_MERGE_BASE = [
+  { how: 'there is no origin/main', base: () => {} },
+  {
+    how: 'origin/main shares no history with HEAD',
+    base: (dir) => {
+      const emptyTree = execFileSync('git', ['hash-object', '-w', '-t', 'tree', '--stdin'], {
+        cwd: dir,
+        input: '',
+        encoding: 'utf8',
+      }).trim();
+      const unrelated = git(dir, 'commit-tree', emptyTree, '-m', 'unrelated history').trim();
+      git(dir, 'update-ref', 'refs/remotes/origin/main', unrelated);
+    },
+  },
+];
+const NO_ORIGIN_MAIN = NO_MERGE_BASE[0].base;
+
+/** origin/main at the first commit, where the branch started: the merge base resolves. */
+const ORIGIN_MAIN_AT_FIRST_COMMIT = (dir) =>
+  git(dir, 'update-ref', 'refs/remotes/origin/main', 'main');
+
+/**
+ * A branch off the first commit with `files` committed on it and a clean
+ * working tree; `base` then sets origin/main up. The fake gate's ran.txt and
+ * .claude/state/ (the phase, the hooks' notes) are ignored, as this repository
+ * ignores the latter, so nothing uncommitted counts as a change.
+ */
+function branchCommitting(scripts, files, base) {
+  const dir = makeRepo({
+    ...fakeScripts(scripts),
+    '.gitignore': 'ran.txt\n.claude/state/\n',
+    'apps/server/src/api.ts': 'export const a = 1;\n',
+    'docs/notes.md': '# notes\n',
+  });
+  repos.push(dir);
+  git(dir, 'checkout', '-q', '-b', 'the-branch');
+  if (Object.keys(files).length > 0) {
+    write(dir, files);
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'work on the branch');
+  }
+  base(dir);
+  return dir;
+}
+
+/** The condition itself: a clean working tree, and no merge base git can resolve. */
+function expectCleanWithoutMergeBase(dir) {
+  expect(git(dir, 'status', '--porcelain', '--untracked-files=all')).toBe('');
+  const mergeBase = spawnSync('git', ['merge-base', 'HEAD', 'origin/main'], { cwd: dir });
+  expect(mergeBase.status).not.toBe(0);
+}
+
+const CODE_ON_THE_BRANCH = { 'apps/server/src/api.ts': 'export const a = 2;\n' };
+const DOCS_ON_THE_BRANCH = { 'docs/notes.md': '# notes\n\n- more\n' };
+
+describe('BUG-48: without a merge base with origin/main, the stop gate runs its gate (HK-06, D-131)', () => {
+  test.each(NO_MERGE_BASE)(
+    'BUG-48: when $how, code committed on the branch with a clean working tree runs gate:quick, which refuses',
+    ({ base }) => {
+      const dir = branchCommitting({ 'gate:quick': FAILS }, CODE_ON_THE_BRANCH, base);
+      expectCleanWithoutMergeBase(dir);
+      expect(git(dir, 'diff', '--name-only', 'main', 'HEAD')).toBe('apps/server/src/api.ts\n');
+
+      const result = stop(dir);
+
+      expect(ranLog(dir)).toContain('gate:quick');
+      expect(result.status).toBe(BLOCKED);
+      expect(result.stderr).toContain('2 tests failed');
+    },
+  );
+
+  test.each(NO_MERGE_BASE)(
+    'BUG-48: when $how, in the red phase of /feature, code committed on the branch runs gate:static, not gate:quick',
+    ({ base }) => {
+      const dir = branchCommitting(
+        { 'gate:quick': PASSES, 'gate:static': STATIC_FAILS },
+        CODE_ON_THE_BRANCH,
+        base,
+      );
+      write(dir, { '.claude/state/phase': 'red:LOST-02' });
+      expectCleanWithoutMergeBase(dir);
+
+      const result = stop(dir);
+
+      expect(runs(dir, 'gate:static')).toBe(1);
+      expect(runs(dir, 'gate:quick')).toBe(0);
+      expect(result.status).toBe(BLOCKED);
+      expect(result.stderr).toContain('gate:static');
+      expect(result.stderr).toContain('1 lint error');
+    },
+  );
+
+  test('BUG-48: with no origin/main, commits that touch only docs/ still run the gate: without a merge base the hook cannot tell they are docs only', () => {
+    const dir = branchCommitting({ 'gate:quick': FAILS }, DOCS_ON_THE_BRANCH, NO_ORIGIN_MAIN);
+    expectCleanWithoutMergeBase(dir);
+
+    const result = stop(dir);
+
+    expect(ranLog(dir)).toContain('gate:quick');
+    expect(result.status).toBe(BLOCKED);
+    expect(result.stderr).toContain('2 tests failed');
+  });
+
+  test('BUG-48: with no origin/main and nothing on top of the first commit, the gate still runs: "could not tell" is not "nothing changed"', () => {
+    const dir = branchCommitting({ 'gate:quick': FAILS }, {}, NO_ORIGIN_MAIN);
+    expectCleanWithoutMergeBase(dir);
+
+    const result = stop(dir);
+
+    expect(ranLog(dir)).toContain('gate:quick');
+    expect(result.status).toBe(BLOCKED);
+    expect(result.stderr).toContain('2 tests failed');
+  });
+});
+
+// The controls. Both pass today, and are meant to: with a merge base git can
+// resolve, the hook decides from the diff exactly as before. A fix that ran
+// the gate at every stop would fail the first.
+describe('BUG-48: with origin/main resolvable, the stop gate decides from the diff as before (HK-06)', () => {
+  test('BUG-48: commits that touch only docs/, with a clean working tree, finish without running the gate', () => {
+    const dir = branchCommitting(
+      { 'gate:quick': FAILS },
+      DOCS_ON_THE_BRANCH,
+      ORIGIN_MAIN_AT_FIRST_COMMIT,
+    );
+    expect(git(dir, 'status', '--porcelain', '--untracked-files=all')).toBe('');
+    const mergeBase = git(dir, 'merge-base', 'HEAD', 'origin/main').trim();
+    expect(git(dir, 'diff', '--name-only', mergeBase, 'HEAD')).toBe('docs/notes.md\n');
+
+    const result = stop(dir);
+
+    expect(result.status, result.stderr).toBe(ALLOWED);
+    expect(ranLog(dir)).toBe('');
+  });
+
+  test('BUG-48: code committed on the branch, with a clean working tree, runs gate:quick, which refuses', () => {
+    const dir = branchCommitting(
+      { 'gate:quick': FAILS },
+      CODE_ON_THE_BRANCH,
+      ORIGIN_MAIN_AT_FIRST_COMMIT,
+    );
+    expect(git(dir, 'status', '--porcelain', '--untracked-files=all')).toBe('');
+    const mergeBase = git(dir, 'merge-base', 'HEAD', 'origin/main').trim();
+    expect(git(dir, 'diff', '--name-only', mergeBase, 'HEAD')).toBe('apps/server/src/api.ts\n');
+
+    const result = stop(dir);
+
+    expect(runs(dir, 'gate:quick')).toBe(1);
+    expect(result.status).toBe(BLOCKED);
+    expect(result.stderr).toContain('2 tests failed');
   });
 });
