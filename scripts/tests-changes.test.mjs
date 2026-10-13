@@ -126,17 +126,20 @@ function movedTestRepo({ from, to, now }) {
 }
 
 /**
- * Runs scripts/tests-changes.mjs in `cwd`. The script reads neither
- * GITHUB_EVENT_NAME nor GITHUB_OUTPUT; both are removed all the same, so that
- * a CI job running these tests cannot hand it values of its own.
+ * Runs scripts/tests-changes.mjs in `cwd`, against `base`. The script reads
+ * neither GITHUB_EVENT_NAME nor GITHUB_OUTPUT; both are removed all the same,
+ * so that a CI job running these tests cannot hand it values of its own.
+ *
+ * BUG-46: `base` is new, and defaults to the origin/main every caller before
+ * it passed.
  */
-function runTestsChanges(cwd) {
+function runTestsChanges(cwd, base = 'origin/main') {
   const env = { ...process.env };
   delete env.GITHUB_EVENT_NAME;
   delete env.GITHUB_OUTPUT;
   const result = spawnSync(
     process.execPath,
-    [resolve('scripts/tests-changes.mjs'), '--base', 'origin/main'],
+    [resolve('scripts/tests-changes.mjs'), '--base', base],
     { cwd, encoding: 'utf8', env },
   );
   return { status: result.status, output: `${result.stdout}${result.stderr}` };
@@ -165,5 +168,93 @@ describe('tests:changes on a pull request that moves a test file', () => {
     expect(result.output).toContain('the number of tests went down');
     expect(result.output).toMatch(/apps\/server\/src\/(journeys\/)?journey\.test\.ts/);
     expect(result.output).toContain('RG-03');
+  });
+});
+
+// BUG-46 (D-131): tests:changes passed quietly on a base git cannot resolve.
+//
+// With `--base origin/no-such-branch` it printed "no common history with
+// origin/no-such-branch, so there is nothing to compare against." and exited
+// 0, as it had since INF-03, with no decision behind it. A test weakened in a
+// commit on the branch then passed RG-03 unseen: what it looked like before
+// comes from the merge base, and there was none. The owner's answer, D-131:
+// it exits 1, naming the base and saying it could not tell, rather than
+// reporting nothing to check. The shared helper behind it, requireMergeBase,
+// is tested in scripts/lib/git.test.mjs.
+
+/** "Could not tell", in D-131's words or close to them. */
+const COULD_NOT_TELL = /\b(could not|cannot|can not|can't) tell\b/i;
+
+/** A base no repository below has. */
+const UNKNOWN_BASE = 'origin/no-such-branch';
+
+/**
+ * origin/main holds journey.test.ts with the four tests in RULES. The branch
+ * writes `now` there and commits it, so the change is in the committed diff
+ * alone, and the working tree is clean.
+ */
+function editedTestRepo(now) {
+  const dir = mkdtempSync(join(tmpdir(), 'bug46-tests-changes-'));
+  repos.push(dir);
+  const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: 'pipe' });
+  const file = 'apps/server/src/journey.test.ts';
+  mkdirSync(dirname(join(dir, file)), { recursive: true });
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 'test@example.invalid');
+  git('config', 'user.name', 'Test');
+  git('config', 'commit.gpgsign', 'false');
+  writeFileSync(join(dir, file), RULES.join('\n'));
+  git('add', '-A');
+  git('commit', '-qm', 'main');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  git('checkout', '-q', '-b', 'the-pull-request');
+  writeFileSync(join(dir, file), now);
+  git('add', '-A');
+  git('commit', '-qm', 'the pull request');
+  return { dir, file, git };
+}
+
+/** Three of the four tests: one dropped. */
+const WEAKENED = RULES.slice(0, 3).join('\n');
+
+/** The four tests and a fifth. */
+const STRENGTHENED = [
+  ...RULES,
+  "test('rule 5 holds', () => {\n  expect(rule5()).toBe(true);\n});\n",
+].join('\n');
+
+describe('BUG-46: tests:changes with a base git cannot resolve (D-131)', () => {
+  test('BUG-46: with a base that resolves, a test dropped in a commit on the branch is reported, as today', () => {
+    const { dir, file } = editedTestRepo(WEAKENED);
+
+    const result = runTestsChanges(dir, 'origin/main');
+
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain(file);
+    expect(result.output).toContain('the number of tests went down');
+    expect(result.output).toContain('RG-03');
+  });
+
+  test('BUG-46: with a base that resolves, a test file only added to passes, as today', () => {
+    const { dir } = editedTestRepo(STRENGTHENED);
+
+    const result = runTestsChanges(dir, 'origin/main');
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain('1 changed test file(s), none weakened');
+  });
+
+  test('BUG-46: with a base git cannot resolve, it exits 1, naming the base and saying it could not tell, not that there is nothing to compare against', () => {
+    const { dir, git } = editedTestRepo(WEAKENED);
+    // The condition: git cannot find a merge base with it.
+    expect(() => git('merge-base', 'HEAD', UNKNOWN_BASE)).toThrow();
+
+    const result = runTestsChanges(dir, UNKNOWN_BASE);
+
+    expect(result.output).not.toContain('nothing to compare against');
+    expect(result.output).not.toContain('none weakened');
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain(UNKNOWN_BASE);
+    expect(result.output).toMatch(COULD_NOT_TELL);
   });
 });

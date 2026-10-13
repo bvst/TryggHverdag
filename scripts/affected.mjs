@@ -21,7 +21,7 @@
 // API. It imports node:fs and two local modules, and should stay that way.
 // (test-auditor noted the version gap on #17; it is a trade, not an oversight.)
 import { appendFileSync } from 'node:fs';
-import { changedFiles, mergeBase } from './lib/git.mjs';
+import { changedFiles, requireMergeBase } from './lib/git.mjs';
 import { onlyInert, reasons, touchesApp } from './lib/affected.mjs';
 
 const args = process.argv.slice(2);
@@ -65,13 +65,11 @@ if (event !== undefined && event !== 'pull_request') {
 //
 // That is precisely the silent pass CI-12 exists to prevent, so it would be a
 // poor place to have one. code-reviewer flagged the risk on #17 as pre-existing
-// and out of scope; it is in scope for the script that depends on it.
-if (mergeBase(base) === null) {
-  console.error(`affected: the merge base with ${base} will not resolve, so what`);
-  console.error('this diff changes cannot be established.');
-  console.error('');
-  console.error('Refusing to answer "nothing to check": every gate would pass on that,');
-  console.error('and not knowing is not the same as having nothing to check.');
+// and out of scope; it is in scope for the script that depends on it. The
+// check is the one the other gates that read a diff share (D-131).
+const required = requireMergeBase(base);
+if (!required.ok) {
+  console.error(`affected: ${required.message}`);
   process.exit(1);
 }
 

@@ -620,3 +620,122 @@ describe('INF-10-AC15: what RG-01 refuses, and what it says, decided in process'
     ]);
   });
 });
+
+// ===========================================================================
+// BUG-46 (D-131, as amended): req:coverage --fail-on-uncovered-changed read
+// the diff against an origin/main git could not resolve, and passed.
+// ===========================================================================
+
+describe('BUG-46: req:coverage with an origin/main git cannot resolve, in a scratch repository (D-131)', () => {
+  // With refs/remotes/origin/main removed, changedFiles() dropped the
+  // committed diff, so `--fail-on-uncovered-changed` saw no changed spec and
+  // passed a commit that adds a criterion no test names (exit 0). With
+  // origin/main at the commit before, the same commit failed under RG-01,
+  // naming the criterion (exit 1). safety-reviewer found it reading BUG-46's
+  // fix, and it was reproduced in a scratch clone on 2026-10-13. D-131, as
+  // amended by the owner ("Yes, add it to BUG-46"): it refuses as the other
+  // three gates do, exiting 1, naming the base and saying it could not tell.
+  //
+  // Without the flag, req:coverage reads no diff: it lists files with
+  // `git ls-files --cached --others --exclude-standard`, which no base
+  // changes, and returns before changedFiles(). Its answer does not depend on
+  // the base, so D-131 leaves it as it is, and the last test here pins that.
+  // req:coverage takes no --base: the base is changedFiles()'s default.
+  const BASE = 'origin/main';
+  /** "Could not tell", in D-131's words or close to them. */
+  const COULD_NOT_TELL = /\b(could not|cannot|can not|can't) tell\b/i;
+  const base = {
+    'docs/plan/01b-mvp-scope.md': '**DEMO-01 · A synthetic story** (Must)\n',
+    'docs/specs/DEMO-01.md': demoSpec('**DEMO-01-AC1** — one.'),
+    'apps/server/src/demo.test.ts': namingTests('DEMO-01-AC1'),
+  };
+  /** The reproduction's commit: a criterion added to the spec, and no test naming it. */
+  const UNCOVERED = {
+    'docs/specs/DEMO-01.md': demoSpec('**DEMO-01-AC1** — one.', '**DEMO-01-AC99** — ninety-nine.'),
+  };
+  /** The same criterion, with a test naming it: nothing for RG-01 to refuse. */
+  const COVERED = {
+    ...UNCOVERED,
+    'apps/server/src/demo.test.ts': namingTests('DEMO-01-AC1', 'DEMO-01-AC99'),
+  };
+
+  /** git in a scratch repository, with its own environment. */
+  const gitIn = (dir, ...args) =>
+    execFileSync('git', args, { cwd: dir, env: scratchEnv(dir), stdio: 'pipe' });
+
+  /** The condition the controls rest on: git finds the merge base with origin/main. */
+  function expectResolvable(dir) {
+    expect(() => gitIn(dir, 'merge-base', 'HEAD', BASE)).not.toThrow();
+  }
+
+  /** Removes origin/main, as in a clone that never fetched it, and checks git can no longer find a merge base with it. */
+  function removeOriginMain(dir) {
+    gitIn(dir, 'update-ref', '-d', 'refs/remotes/origin/main');
+    expect(() => gitIn(dir, 'merge-base', 'HEAD', BASE)).toThrow();
+  }
+
+  test('BUG-46: with origin/main resolvable, a committed criterion no test names is refused under RG-01, naming it, as today', () => {
+    const dir = repoWith(base, UNCOVERED);
+    expectResolvable(dir);
+
+    const { status, output } = reqCoverage(dir, '--fail-on-uncovered-changed');
+
+    expect(status, output).toBe(1);
+    expect(output).toContain('RG-01:');
+    expect(output.slice(output.indexOf('RG-01:'))).toContain('DEMO-01-AC99');
+    expect(output).not.toMatch(COULD_NOT_TELL);
+  });
+
+  test('BUG-46: with origin/main resolvable, a committed criterion a test names passes, as today', () => {
+    const dir = repoWith(base, COVERED);
+    expectResolvable(dir);
+
+    const { status, output } = reqCoverage(dir, '--fail-on-uncovered-changed');
+
+    expect(status, output).toBe(0);
+    expect(output).not.toContain('RG-01:');
+    expect(output).not.toMatch(COULD_NOT_TELL);
+  });
+
+  test('BUG-46: with origin/main gone, the same commit is refused: exit 1, naming origin/main and saying it could not tell, never passing', () => {
+    const dir = repoWith(base, UNCOVERED);
+    removeOriginMain(dir);
+
+    const { status, output } = reqCoverage(dir, '--fail-on-uncovered-changed');
+
+    expect(status, output).toBe(1);
+    expect(output).toContain(BASE);
+    expect(output).toMatch(COULD_NOT_TELL);
+  });
+
+  test('BUG-46: with origin/main gone, a commit with nothing uncovered is refused as well: it could not tell what the branch changes, so it does not pass', () => {
+    // The refusal is about the base, not about what the branch holds: a
+    // clone with no origin/main fails loudly instead of passing (D-131's
+    // consequences), whatever its commits say.
+    const dir = repoWith(base, COVERED);
+    removeOriginMain(dir);
+
+    const { status, output } = reqCoverage(dir, '--fail-on-uncovered-changed');
+
+    expect(status, output).toBe(1);
+    expect(output).toContain(BASE);
+    expect(output).toMatch(COULD_NOT_TELL);
+  });
+
+  test('BUG-46: without --fail-on-uncovered-changed it reads no diff, so with origin/main gone it prints the same, writes the same report and exits 0, as D-131 leaves it', () => {
+    const dir = repoWith(base, UNCOVERED);
+    const report = () => readFileSync(path.join(dir, 'docs', 'requirements-status.md'), 'utf8');
+    expectResolvable(dir);
+    const resolvable = reqCoverage(dir);
+    const resolvableReport = report();
+    removeOriginMain(dir);
+
+    const gone = reqCoverage(dir);
+
+    expect(resolvable.status, resolvable.output).toBe(0);
+    expect(gone.status, gone.output).toBe(0);
+    expect(gone.output).not.toMatch(COULD_NOT_TELL);
+    expect(gone.output).toBe(resolvable.output);
+    expect(report()).toBe(resolvableReport);
+  });
+});

@@ -5348,3 +5348,47 @@ any other path is work, not a candidate for the same treatment.
   - That a skipped required check reads as passing rests on D-060, D-061 and
     `ci.yml`'s header. GitHub's documentation was not re-read for it.
   - Supersedes nothing.
+
+## D-131 — A gate that compares against a base refuses a base git cannot resolve (BUG-46)
+- **Date:** 2026-10-13 · **Status:** Accepted (the owner's answers, 2026-10-13:
+  "All three gates", then the fourth) · **Section:** 6 (D-036, D-098, CI-12)
+- **Context:** BUG-46. Three gates read the diff against a base branch, and
+  each passed quietly when git could not resolve the merge base with it. All
+  three were reproduced on 2026-10-13 with `--base origin/no-such-branch`:
+  - `pnpm run mutation --plan --only-if-safety-paths-changed` printed
+    `decision=skip` ("nothing to mutate") and exited 0;
+  - `tests:changes` (RG-03) printed "no common history …, so there is nothing
+    to compare against" and exited 0. It has done so since INF-03
+    (2026-09-20), with no decision behind it;
+  - `coverage:ratchet` (RG-04) printed "0 changed file(s), no coverage went
+    down" and exited 0.
+
+  The cause is `changedFiles` (`scripts/lib/git.mjs`): when the merge base
+  will not resolve, it drops the committed diff. `affected.mjs` already
+  refuses that case ("not knowing is not the same as having nothing to
+  check"), and in CI it runs first in every job that classifies. The
+  `traceability` job checks out the full history, so its base always
+  resolves. Local runs had no such guard: the stop gate's `gate:quick`
+  (RG-03) and `gate:full`.
+- **Decision:** each of the three refuses a base git cannot resolve. It
+  exits 1 with a plain message naming the base, and says that it could not
+  tell, rather than reporting nothing to check. The check is one shared
+  helper in `scripts/lib/git.mjs`.
+
+  For mutation, the refusal applies only where the decision reads the diff:
+  `--only-if-safety-paths-changed`, with or without `--plan`. A plain
+  `pnpm run mutation`, and `--plan` without that flag, run every group
+  whatever changed, and are unchanged.
+- **Amended 2026-10-13 (the owner: "Yes, add it to BUG-46"):** a fourth gate,
+  `req:coverage --fail-on-uncovered-changed` (RG-01), had the same quiet pass.
+  `safety-reviewer` found it on reading BUG-46's fix, and it was reproduced in
+  a scratch clone. With `origin/main` removed, a committed spec with a
+  criterion no test names passed (exit 0). With `origin/main` in place, the
+  same commit failed ("LOST-02-AC99 … no test names it", exit 1). It refuses
+  the same way.
+- **Consequences:**
+  - A clone with no `origin/main` (a fresh `git init`, say) now fails these
+    gates loudly instead of passing them.
+  - CI is unchanged: its bases always resolve.
+  - Built test-first as BUG-46.
+  - Supersedes nothing.

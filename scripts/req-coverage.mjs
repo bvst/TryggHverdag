@@ -19,7 +19,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { changedFiles } from './lib/git.mjs';
+import { changedFiles, requireMergeBase } from './lib/git.mjs';
 import { matchesAnyGlob } from './lib/glob.mjs';
 import { run } from './lib/proc.mjs';
 import { TEST_GLOBS } from './lib/test-strength.mjs';
@@ -36,6 +36,10 @@ import {
 } from './lib/requirements.mjs';
 
 const REPORT = 'docs/requirements-status.md';
+/** What `--fail-on-uncovered-changed` compares against: the guard checks the same base the diff reads. */
+const BASE = 'origin/main';
+/** Only product code and specs can implement a requirement (see main). */
+const IMPLEMENTING_DIRS = ['apps/', 'packages/', SPECS_DIR];
 
 function readOrNull(cwd, file) {
   try {
@@ -106,15 +110,24 @@ function main() {
     return;
   }
 
+  // D-131 (BUG-46): without a merge base the committed diff is dropped, and a
+  // changed spec with a criterion no test names would go unread. The plain run,
+  // above, reads no diff, so only this comparison refuses.
+  const required = requireMergeBase(BASE, cwd);
+  if (!required.ok) {
+    process.stderr.write(`req:coverage: ${required.message}\n`);
+    process.exitCode = 1;
+    return;
+  }
+
   // Only product code and specs can implement a requirement. The repository's own
   // tooling mentions requirement IDs constantly — in comments explaining why a
   // guard exists — and counting those would make this gate cry wolf until nobody
   // listened to it.
   const changed = withText(
-    changedFiles({ cwd }).filter(
+    changedFiles({ base: BASE, cwd }).filter(
       (file) =>
-        !matchesAnyGlob(file, TEST_GLOBS) &&
-        (file.startsWith('apps/') || file.startsWith('packages/') || file.startsWith(SPECS_DIR)),
+        !matchesAnyGlob(file, TEST_GLOBS) && IMPLEMENTING_DIRS.some((dir) => file.startsWith(dir)),
     ),
   );
   // What RG-01 refuses is decided in requirements.mjs; this prints it and fails.

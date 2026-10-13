@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import { decideMutation } from './gate-decisions.mjs';
-import { changedFiles } from './git.mjs';
+import { changedFiles, mergeBase, requireMergeBase } from './git.mjs';
 
 const repos = [];
 afterEach(() => {
@@ -144,4 +144,135 @@ describe('the mutation decision on a pull request that moves safety code out', (
     expect(decision).toMatchObject({ ok: true, action: 'run' });
     expect(decision.message).toContain('1 changed safety file');
   });
+});
+
+// BUG-46 (D-131): three gates passed quietly on a base git cannot resolve.
+//
+// mutation.mjs (--only-if-safety-paths-changed and --plan), tests-changes.mjs
+// (RG-03) and coverage-ratchet.mjs (RG-04) read what changed against a base
+// branch. When `git merge-base HEAD <base>` fails, changedFiles() drops the
+// committed diff, and each gate then said what an empty diff says: "nothing
+// to mutate", "nothing to compare against", "0 changed file(s), no coverage
+// went down", and exited 0. All three were reproduced on 2026-10-13 with
+// `--base origin/no-such-branch`. affected.mjs already refused this case.
+//
+// The owner's answer, D-131: each refuses such a base, exiting 1 with a plain
+// message that names the base and says it could not tell, rather than
+// reporting nothing to check, through one shared helper in git.mjs. These
+// tests hold the helper's contract; the entry-point tests in
+// scripts/mutation.test.mjs, scripts/tests-changes.test.mjs and
+// scripts/lib/coverage.test.mjs hold each gate to it:
+//
+//   requireMergeBase(base, cwd = process.cwd())
+//     → { ok: true, mergeBase }   the commit `git merge-base HEAD <base>` names
+//     | { ok: false, message }    names `base`, says it could not tell what
+//                                 changed, and never that nothing did
+//
+// requireMergeBase is a new export; until it exists, these tests fail on that.
+
+/** "Could not tell", in D-131's words or close to them. */
+const COULD_NOT_TELL = /\b(could not|cannot|can not|can't) tell\b/i;
+
+/** What the three gates said of a base they could not resolve: each a claim that nothing changed. */
+const NOTHING_CHANGED = [
+  'nothing to compare against',
+  'none weakened',
+  'no coverage went down',
+  '0 changed file(s)',
+  'nothing to mutate',
+  'touches no safety code',
+];
+
+/**
+ * A repository checked out the way a pull request is: origin/main at a first
+ * commit, and the branch `the-pull-request` one commit on top of it.
+ */
+function pullRequestRepo() {
+  const dir = mkdtempSync(join(tmpdir(), 'bug46-git-'));
+  repos.push(dir);
+  const git = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'pipe', encoding: 'utf8' });
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 'test@example.invalid');
+  git('config', 'user.name', 'Test');
+  git('config', 'commit.gpgsign', 'false');
+  writeFileSync(join(dir, 'README.md'), '# Fixture\n');
+  git('add', '-A');
+  git('commit', '-qm', 'main');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  git('checkout', '-q', '-b', 'the-pull-request');
+  writeFileSync(join(dir, 'notes.md'), 'A synthetic change.\n');
+  git('add', '-A');
+  git('commit', '-qm', 'the pull request');
+  return { dir, git };
+}
+
+/** Every way `git merge-base HEAD <base>` fails, so that mergeBase() gives null. */
+const UNRESOLVABLE = [
+  {
+    what: 'a branch that does not exist',
+    base: 'origin/no-such-branch',
+    make: () => pullRequestRepo().dir,
+  },
+  {
+    // What tests:changes called "no common history".
+    what: 'a branch that shares no history with HEAD',
+    base: 'unrelated',
+    make: () => {
+      const { dir, git } = pullRequestRepo();
+      const root = git('commit-tree', 'HEAD^{tree}', '-m', 'unrelated').trim();
+      git('update-ref', 'refs/heads/unrelated', root);
+      return dir;
+    },
+  },
+  {
+    what: 'a repository with no commit yet',
+    base: 'origin/main',
+    make: () => {
+      const dir = mkdtempSync(join(tmpdir(), 'bug46-git-'));
+      repos.push(dir);
+      execFileSync('git', ['init', '-q'], { cwd: dir, stdio: 'pipe' });
+      return dir;
+    },
+  },
+  {
+    // How coverage:ratchet's own tests ran it until BUG-46.
+    what: 'a folder that is not a git repository',
+    base: 'origin/main',
+    make: () => {
+      const dir = mkdtempSync(join(tmpdir(), 'bug46-git-'));
+      repos.push(dir);
+      return dir;
+    },
+  },
+];
+
+describe('BUG-46: requireMergeBase, the one check the gates that compare against a base share (D-131)', () => {
+  test('BUG-46: a base that resolves gives the commit `git merge-base HEAD <base>` names', () => {
+    const { dir, git } = pullRequestRepo();
+    const expected = git('merge-base', 'HEAD', 'origin/main').trim();
+    // The condition: the merge base is origin/main itself, not HEAD.
+    expect(expected).toBe(git('rev-parse', 'origin/main').trim());
+    expect(expected).not.toBe(git('rev-parse', 'HEAD').trim());
+
+    expect(requireMergeBase('origin/main', dir)).toEqual({ ok: true, mergeBase: expected });
+  });
+
+  test.each(UNRESOLVABLE)(
+    'BUG-46: $what: it refuses, naming the base and saying it could not tell, never that nothing changed',
+    ({ base, make }) => {
+      const dir = make();
+      // The condition itself: this is a base mergeBase() cannot resolve.
+      expect(mergeBase(base, dir)).toBeNull();
+
+      const result = requireMergeBase(base, dir);
+
+      expect(result.ok).toBe(false);
+      expect(result).not.toHaveProperty('mergeBase');
+      expect(result.message).toContain(base);
+      expect(result.message).toMatch(COULD_NOT_TELL);
+      for (const claim of NOTHING_CHANGED) {
+        expect(result.message).not.toContain(claim);
+      }
+    },
+  );
 });

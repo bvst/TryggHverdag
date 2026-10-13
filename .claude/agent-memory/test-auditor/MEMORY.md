@@ -46,3 +46,4 @@
 - [REL-10 AC9 wait audit](project_rel10_ac9_wait_audit.md) — PASS 1a1e0cd; real-timer bound ordering (start before, due sooner), getActiveResourcesInfo Timeout semantics, 13 wait faults; wait handover worker.ts:454 unpinned (note)
 - [BUG-42 audit](project_bug42_audit.md) — PASS a4106b6 (.stryker-tmp/ ESLint ignore); NODE_OPTIONS data-URL load hook mutates modules ESLint imports natively; BUG-26 duplicate row still Queued
 - [BUG-45 audit](project_bug45_audit.md) — BLOCK 89688b1 on RG-04 (workflow-lint/gate-integrity coverage drop); loop 1 PASS a2af885 (23/24 faults killed, L11 near-equivalent); harness ta-bug45 m-loop1
+- [BUG-46 audit](project_bug46_audit.md) — PASS ecb3f22 (D-131 unresolvable-base refusals); loop 1 PASS 2cc8abf (req:coverage 4th gate, 15/18 faults, .some rewrite fair); RG-02 replay; IMPLEMENTING_DIRS apps/packages unpinned (pre-existing)

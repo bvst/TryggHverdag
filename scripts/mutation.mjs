@@ -38,7 +38,7 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { changedFiles } from './lib/git.mjs';
+import { changedFiles, requireMergeBase } from './lib/git.mjs';
 import { run } from './lib/proc.mjs';
 import {
   MUTATION_TIMEOUT_MS,
@@ -639,8 +639,21 @@ function onThisMachine(cwd) {
   };
 }
 
-/** Today's rules for whether to run: decideMutation, on this branch's changes. */
+/**
+ * Today's rules for whether to run: decideMutation, on this branch's changes.
+ *
+ * With --only-if-safety-paths-changed the decision reads the diff, so a base
+ * git cannot resolve is refused rather than read as an empty diff (D-131,
+ * BUG-46). Without it every group runs whatever changed, and nothing is
+ * refused.
+ */
 function decide({ cwd, base, onlyIfSafetyPathsChanged }) {
+  if (onlyIfSafetyPathsChanged) {
+    const required = requireMergeBase(base, cwd);
+    if (!required.ok) {
+      return { ok: false, action: 'skip', message: `mutation: ${required.message}` };
+    }
+  }
   return decideMutation({
     changed: changedFiles({ base, cwd }),
     onlyIfSafetyPathsChanged,
