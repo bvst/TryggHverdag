@@ -23,3 +23,18 @@ metadata:
   describes the old tests:changes behaviour as a candidate bugfix.
 - No PR for the branch, 0 check runs on HEAD: mutation result not readable (absent, not 403). gate:integrity 5/5 with NODE_USE_ENV_PROXY=1.
 Related: [[bug45-audit]], [[baseline-vs-main]], [[entry-script-wiring]]
+
+**Loop 1 (e7bbb76 red, 69697bf fix, 2cc8abf message) - PASS.** req:coverage --fail-on-uncovered-changed is the fourth gate.
+- RG-02 replay: tree at 2cc8abf with req-coverage.mjs + git.mjs from adbf3b4: exactly the 2 red cases fail, each on
+  "expected +0 to be 1" with the old "1 of 1 live requirements" line; HEAD tree 11/11 BUG-46 cases green.
+- Faults (ta-bug46/mutants-l1.mjs, tree t-L1): 15/18 killed. Survivors: R3 refusal without `return` (falls through, exit
+  stays 1: near-equivalent), R7 refusal on stdout (tests read stdout+stderr), and R10/R11/R13 IMPLEMENTING_DIRS dropping
+  apps/ or packages/ or adding scripts/ - pre-existing, the same faults survive at adbf3b4 (mutants-old.mjs O1/O2): no
+  entry test changes product code naming an uncovered ID. Plan-only refusal (U2) killed only by the new --plan pin.
+  drills INF-10-AC2/AC9 fail in any tree copy (jest-expo, root node_modules only): run a wide no-op control first.
+- RG-04: baseline file unchanged vs main (merge base = origin/main 9cc74b7). req-coverage.mjs 6/44 lines, 2/16 branches
+  = baseline 12.5. The `||` chain -> IMPLEMENTING_DIRS.some rewrite: istanbul counts every leaf of a nested logical as a
+  branch (4 -> 2), offsetting the guard's 2. Judged fair: behaviour-identical, disclosed in the commit, and the guard
+  pinned by subprocess tests (faults killed). Rule of thumb: a shape change that offsets uncounted branches is fair only
+  if all three hold; otherwise ask for an explained baseline update.
+- 0 check runs, no PR at 2cc8abf; gate:integrity 5/5 with NODE_USE_ENV_PROXY=1.
