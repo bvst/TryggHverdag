@@ -58,14 +58,16 @@ import {
   syntheticCoordinate,
   syntheticCredential,
   syntheticUuid,
+  turnBound,
   type CanaryObservation,
   type FakeJourneyStore,
   type FakeLogEvent,
   type PushMessage,
+  type TurnBound,
 } from '@trygghverdag/test-kit';
 import { getEventListeners } from 'node:events';
 import process from 'node:process';
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test } from 'vitest';
 import { httpCanaryClient } from './adapters/canary.ts';
 import { hashCredential } from './adapters/device-credentials.ts';
 import { createApi } from './api.ts';
@@ -121,6 +123,36 @@ const LOWER_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 function databaseError(code: string, message = 'the database could not answer'): Error {
   return Object.assign(new Error(message), { code });
 }
+
+/**
+ * BUG-45 (D-129): how many canary reads may come with no turn of the event
+ * loop between them. A correct run reads at most twice in a row without a
+ * wait: the leftover's read and the first, or the watch's last read and the
+ * one after "I'm home"; two runs at once, twice that. Each wait settles only
+ * after the event loop has turned (fakeWait), so a run that waits never comes
+ * near this.
+ */
+const READS_PER_TURN = 10;
+
+/**
+ * BUG-45 (D-129): the bound on every world's canary reads in the running
+ * test, checked after it. A run whose poll no longer waits (run.ts:203 and
+ * 237, `() => wait(…)` mutated to `() => undefined`) reads again at once, in a
+ * chain of promise callbacks that starves every timer: fakeWait's turns, and
+ * Vitest's own timeout. The test then hung until Stryker stopped it, about
+ * 40 s later, as a timeout, which is not a caught mutant (D-098). Bounded,
+ * the read throws at once, the run comes to READ_FAILED, and the check below
+ * names it, whatever the test itself expected.
+ */
+const readBounds: TurnBound[] = [];
+
+afterEach(() => {
+  const passed = readBounds.splice(0).flatMap((bound) => bound.passed);
+  expect(
+    passed,
+    'the canary read again and again with no turn of the event loop between (BUG-45)',
+  ).toEqual([]);
+});
 
 /** One turn of the event loop. */
 function aTurn(): Promise<void> {
@@ -310,6 +342,16 @@ function world({ log: given }: { log?: Log } = {}) {
   // The canary's store: the fake's two canary methods and nothing else, so
   // the run can change the database only through the API (AC11). Every
   // observation it was handed is kept, and a test can fail or change a read.
+  //
+  // BUG-45 (RG-03: this fixture changes, and no assertion of any test): each
+  // read is first counted against READS_PER_TURN, and how many waits the run
+  // had asked for before it is kept, in `readWaits`. A read past the bound
+  // throws before it reaches the store, so it is neither a store call nor an
+  // observation. A run that waits between its reads never reaches the bound,
+  // so every test here asserts what it did before.
+  const reads = turnBound({ what: 'the canary’s store read', most: READS_PER_TURN });
+  readBounds.push(reads);
+  const readWaits: number[] = [];
   const storeCalls: string[] = [];
   let readFailure: ((index: number) => Error | null) | null = null;
   let readChange: ((observation: CanaryObservation) => CanaryObservation) | null = null;
@@ -320,6 +362,8 @@ function world({ log: given }: { log?: Log } = {}) {
       return store.registerCanary(request);
     },
     observeCanaryJourney: async (journeyId: string) => {
+      reads.call();
+      readWaits.push(waits.asked.length);
       storeCalls.push('observeCanaryJourney');
       const failure = readFailure?.(observations.length) ?? null;
       if (failure !== null) {
@@ -402,6 +446,10 @@ function world({ log: given }: { log?: Log } = {}) {
     credentialHash,
     observations,
     storeCalls,
+    /** BUG-45: the bound on the canary's reads. */
+    reads,
+    /** BUG-45: for each canary read, in order, how many waits the run had asked for before it. */
+    readWaits,
     api,
     appFetch,
     canaryStore,
@@ -2601,5 +2649,64 @@ describe('REL-10: the run’s journeys carry nothing personal', () => {
       { id: CANARY_DEVICE_ID, userId: CANARY_WALKER_ID, credentialHash: w.credentialHash },
     ]);
     expect(syntheticUuid()).not.toBe(CANARY_DEVICE_ID);
+  });
+});
+
+describe('BUG-45: each of the canary’s two polls waits 2 s before it reads again (D-129)', () => {
+  // Stryker scored two mutants of run.ts as timed out, about 40 s each: the
+  // poll's `() => wait(CANARY_POLL_MS, halt.signal)` at 203:23 (the watch for
+  // the alert) and at 237:23 (the wait for the stand-down), each made
+  // `() => undefined`. The run then reads again at once, in a chain of promise
+  // callbacks that no timer can interrupt, Vitest's timeout included. With
+  // the reads bounded (READS_PER_TURN), such a run comes to READ_FAILED at
+  // once, and these two say which wait went missing.
+
+  /** The reads of the run's one journey, split at "I'm home": before it, the watch; from it, the wait for the stand-down. */
+  function readsAroundHome(w: World): { watched: number; total: number } {
+    // Every read in these runs is of the canary's own journey and is handed
+    // back, so the reads and the observations are the same list.
+    expect(w.readWaits).toHaveLength(w.observations.length);
+    const [home] = w.homesFor(w.onlyJourney().id);
+    expect(home, 'the run’s “I’m home”').toBeDefined();
+    return { watched: home?.readsBefore ?? Number.NaN, total: w.readWaits.length };
+  }
+
+  /** The waits the run asked for between two of its reads, by their numbers from 0. */
+  const waitsBetween = (w: World, before: number, after: number): number[] =>
+    w.waits.asked.slice(w.readWaits[before], w.readWaits[after]);
+
+  test('BUG-45-AC12: while it watches for the alert, every read after its first look comes after one 2 s wait of its own, so a poll that no longer waits fails here at once (run.ts:203)', async () => {
+    const w = world();
+
+    await expect(w.run()).resolves.toEqual({ outcome: 'ON_TIME' });
+
+    const { watched } = readsAroundHome(w);
+    // The read after the heartbeat, the first look, and at least one poll.
+    expect(watched).toBeGreaterThanOrEqual(3);
+    for (let read = 2; read < watched; read += 1) {
+      expect(
+        waitsBetween(w, read - 1, read),
+        `the waits before watch read ${String(read)}`,
+      ).toEqual([POLL]);
+    }
+    expect(w.reads.passed).toEqual([]);
+  });
+
+  test('BUG-45-AC12: after “I’m home”, every read while it waits for the stand-down, but the first, comes after one 2 s wait of its own, so a poll that no longer waits fails here at once (run.ts:237)', async () => {
+    const w = world();
+
+    await expect(w.run()).resolves.toEqual({ outcome: 'ON_TIME' });
+
+    const { watched, total } = readsAroundHome(w);
+    // The read right after "I'm home", then at least one poll: the stand-down
+    // is handed to the port at the next 10 s of the worker's loops, not at once.
+    expect(total - watched).toBeGreaterThanOrEqual(2);
+    for (let read = watched + 1; read < total; read += 1) {
+      expect(
+        waitsBetween(w, read - 1, read),
+        `the waits before stand-down read ${String(read)}`,
+      ).toEqual([POLL]);
+    }
+    expect(w.reads.passed).toEqual([]);
   });
 });

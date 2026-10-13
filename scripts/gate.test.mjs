@@ -34,10 +34,12 @@ import { packageScripts } from './lib/proc.mjs';
 import { planSteps, runPlan, summarize } from './lib/steps.mjs';
 import {
   findActionUses,
+  findJobIds,
   findUnboundedJobs,
   findUngroupedEcosystems,
 } from './lib/workflow-lint.mjs';
 import {
+  CHECKS,
   OWNER_APPROVAL_PATHS,
   planChecks,
   reviewBypass,
@@ -290,11 +292,44 @@ describe("this repository's own workflows", () => {
     //
     // So the conditionality lives on steps, never on jobs. This asserts the
     // shape rather than the intent, because intent is what erodes.
+    //
+    // BUG-45 (RG-03; D-129, the spec's approach item 7 and AC10): this said no
+    // job-level `if:` anywhere. The mutation check becomes one job per group
+    // under an aggregator still named `mutation`, and two exceptions follow,
+    // each read from CHECKS, never from a list typed here:
+    // - `if: always()` on a required check that has a fan-out, exactly that.
+    //   It is what keeps the check from being skipped: without it, a failed or
+    //   cancelled group would skip the aggregator, and a skipped required
+    //   check reads as passing, the green tick this test exists to stop;
+    // - any `if:` on a job of that fan-out. No rule requires those jobs, so
+    //   GitHub never reads their "skipped" as a pass: only the aggregator reads
+    //   it, and it accepts it only when the plan said there was nothing to
+    //   mutate (AC7), and gate:integrity holds the aggregator to needing them
+    //   and to `if: always()` (AC10).
+    // Every other job still has no job-level `if:`, and the paths filter is
+    // still forbidden everywhere.
     const text = readFileSync(`${WORKFLOWS}/ci.yml`, 'utf8');
     const workflow = text.slice(text.indexOf('\njobs:'));
+    const required = planChecks(scripts).required;
+    const fannedOut = CHECKS.filter(
+      (check) => required.includes(check.check) && check.fanOut !== undefined,
+    );
+    const fanOutJobs = fannedOut.flatMap((check) => check.fanOut);
 
-    // No job-level `if:` anywhere (four spaces of indent = job key).
-    expect(workflow).not.toMatch(/^ {4}if:/m);
+    // Job-level `if:` (four spaces of indent = job key), comment lines aside.
+    const guarded = findJobIds(text).flatMap((id) => {
+      const condition = /^ {4}if:\s*(.*?)\s*$/m.exec(ciJob(id) ?? '')?.[1];
+      return condition === undefined ? [] : [{ id, condition }];
+    });
+    const allowed = ({ id, condition }) =>
+      fanOutJobs.includes(id) ||
+      (fannedOut.some((check) => check.check === id) && condition === 'always()');
+    expect(guarded.filter((job) => !allowed(job))).toEqual([]);
+    // Independent of findJobIds and ciJob, as the old whole-section match was: an `if:` in a job they miss is still counted.
+    const jobLevelIfs = workflow
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('#') && /^ {4}if:/.test(line));
+    expect(jobLevelIfs).toHaveLength(guarded.length);
     // No paths filters, which would stop the workflow producing the check at all.
     expect(workflow).not.toMatch(/^\s*paths(-ignore)?:/m);
   });
@@ -427,8 +462,14 @@ describe("this repository's own workflows", () => {
     // score nobody measured. The limit must also stay inside the job's own
     // timeout, with room for checkout and install, or GitHub kills the job
     // first and nothing explains why.
+    //
+    // BUG-45 (RG-03; D-129, the spec's approach item 6 and AC9): this read the
+    // `mutation` job, which ran Stryker. Stryker now runs in `mutation-group`,
+    // one leg per group, each with the whole budget (`--group`); `mutation` is
+    // the aggregator, which runs no Stryker and has 10 minutes. The same
+    // bound, held on the job that runs Stryker.
     const ci = readFileSync(`${WORKFLOWS}/ci.yml`, 'utf8');
-    const job = /^ {2}mutation:.*\n(?:(?! {2}\S).*\n)*? {4}timeout-minutes: (\d+)/m.exec(ci);
+    const job = /^ {2}mutation-group:.*\n(?:(?! {2}\S).*\n)*? {4}timeout-minutes: (\d+)/m.exec(ci);
 
     expect(job).not.toBeNull();
     const jobMinutes = Number(job?.[1]);
@@ -436,14 +477,22 @@ describe("this repository's own workflows", () => {
     expect(MUTATION_TIMEOUT_MS).toBeLessThanOrEqual((jobMinutes - 3) * 60_000);
   });
 
-  test('the mutation budget stays 25 minutes for all the runs together, inside the 30-minute job', () => {
+  test('the mutation budget stays 25 minutes, inside each group’s 30-minute job (BUG-45: it was all the runs together, in one job)', () => {
     // The owner's grouping decision of 2026-09-25 split one Stryker run into
     // several and kept the budget as it was: 25 minutes across all of them,
     // not per run, because the job around them still has 30. A slow run is
     // fixed by making its tests faster, which is what the grouping did; this
     // number moving is a decision for the owner, not a fix.
+    //
+    // BUG-45 (RG-03; D-129: "D-098's 25-minute budget stays for each group"):
+    // this read the `mutation` job and said "for all the runs together". In CI
+    // each group now has a job of its own, `mutation-group`, with the same 30
+    // minutes, and its `--group` run the same 25. The number is unchanged,
+    // and still the owner's; locally, gate:full still runs every group inside
+    // one shared 25 minutes (the owner's answer to Q2), which the BUG-12
+    // tests at the top of this file hold.
     const ci = readFileSync(`${WORKFLOWS}/ci.yml`, 'utf8');
-    const job = /^ {2}mutation:.*\n(?:(?! {2}\S).*\n)*? {4}timeout-minutes: (\d+)/m.exec(ci);
+    const job = /^ {2}mutation-group:.*\n(?:(?! {2}\S).*\n)*? {4}timeout-minutes: (\d+)/m.exec(ci);
 
     expect(MUTATION_TIMEOUT_MS).toBe(25 * 60_000);
     expect(Number(job?.[1])).toBe(30);
@@ -455,9 +504,16 @@ describe("this repository's own workflows", () => {
     // that passed it would fail on every pull request it runs on. The two
     // flags that keep the run to the pull requests that need it, against the
     // pull request's own base, stay. Comment lines are not read.
-    const runs = ciSteps('mutation').filter((step) => /\bpnpm run mutation\b/.test(step));
+    //
+    // BUG-45 (RG-03; D-129, AC8): this read the `mutation` job. The decision
+    // to run is now made once, by `--plan` in `mutation-plan`, so the two
+    // flags are held there; the aggregator, `mutation`, runs
+    // `pnpm run mutation --aggregate` with neither, and is held in the BUG-45
+    // tests below. No step of the three jobs passes --incremental: held there
+    // too.
+    const runs = ciSteps('mutation-plan').filter((step) => /\bpnpm run mutation\b/.test(step));
 
-    expect(runs, 'steps of the mutation job that run pnpm run mutation').toHaveLength(1);
+    expect(runs, 'steps of the mutation-plan job that run pnpm run mutation').toHaveLength(1);
     const step = runs[0] ?? '';
     expect(step).not.toMatch(/--incremental\b/);
     expect(step).toMatch(/--only-if-safety-paths-changed\b/);
@@ -4051,6 +4107,281 @@ describe('oasdiff in ci.yml, pinned (INF-10-AC16, D-082)', () => {
   test('INF-10-AC16: every oasdiff check reports a job with no such step', () => {
     for (const [name, check] of Object.entries(OASDIFF_CHECKS)) {
       expect(check('', OASDIFF_ENV), name).toBe(NO_OASDIFF_STEP);
+    }
+  });
+});
+
+describe('BUG-45: the mutation check in ci.yml is one job per group, under an aggregator still named mutation (D-129)', () => {
+  // The owner's decision: the plan decides once and lists the groups from the
+  // code that defines them; one leg per group runs `--group`; the aggregator,
+  // the required check, keeps the id `mutation` and passes only when every
+  // group the code expects reported and passed. These pin that shape, and the
+  // three ways it could hand out a green tick for work nobody did: a skipped
+  // aggregator, a plan whose outputs are empty, and a list of groups typed by
+  // hand.
+  const PLAN = 'mutation-plan';
+  const GROUP = 'mutation-group';
+  const AGGREGATOR = 'mutation';
+  const THREE = [PLAN, GROUP, AGGREGATOR];
+  const BASE = "origin/${{ github.base_ref || 'main' }}";
+  const PINNED = (action) =>
+    new RegExp(`^\\s*-?\\s*uses:\\s*actions/${action}@[0-9a-f]{40}\\b`, 'm');
+
+  /** A job-level key's value, `    key: value`, or undefined when the job has no such key. */
+  const jobKey = (id, key) =>
+    new RegExp(`^ {4}${key}:\\s*(.*?)\\s*$`, 'm').exec(ciJob(id) ?? '')?.[1];
+
+  /** The jobs a job needs: `needs: a`, `needs: [a, b]`, or a list under `needs:`. */
+  function needsOf(id) {
+    const lines = (ciJob(id) ?? '').split('\n');
+    const at = lines.findIndex((line) => /^ {4}needs:/.test(line));
+    if (at === -1) return [];
+    const inline = (lines[at] ?? '').replace(/^ {4}needs:\s*/, '').trim();
+    if (inline !== '') {
+      return inline
+        .replace(/^\[|\]$/g, '')
+        .split(',')
+        .map((name) => name.trim())
+        .filter((name) => name !== '');
+    }
+    const listed = [];
+    for (const line of lines.slice(at + 1)) {
+      const item = /^ {6}-\s*(\S+)\s*$/.exec(line);
+      if (item === null) break;
+      listed.push(item[1] ?? '');
+    }
+    return listed;
+  }
+
+  /** A step's `run:` script, its words single-spaced. */
+  const commandOf = (step) => scriptOf(step).replace(/\s+/g, ' ').trim();
+
+  /** The index of the job's one step whose script matches, failing when there is not exactly one. */
+  function onlyStep(id, pattern) {
+    const steps = ciSteps(id);
+    const found = steps.flatMap((step, at) => (pattern.test(scriptOf(step)) ? [at] : []));
+    expect(found, `steps of ${id} whose script matches ${String(pattern)}`).toHaveLength(1);
+    return { at: found[0] ?? -1, step: steps[found[0] ?? -1] ?? '' };
+  }
+
+  test('BUG-45-AC8: ci.yml has the three jobs, and the required check keeps its id, mutation, with no name of its own, so the ruleset need not change', () => {
+    const ids = findJobIds(readFileSync(`${WORKFLOWS}/ci.yml`, 'utf8'));
+
+    expect(ids).toEqual(expect.arrayContaining(THREE));
+    expect(
+      jobKey(AGGREGATOR, 'name'),
+      'a name: on mutation would rename the check',
+    ).toBeUndefined();
+  });
+
+  test('BUG-45-AC8: mutation-plan checks out the whole history, classifies the diff first (CI-12), then runs the plan with today’s two flags against the pull request’s base', () => {
+    const steps = ciSteps(PLAN);
+    const checkout = steps.findIndex((step) => PINNED('checkout').test(step));
+    const affected = steps.findIndex((step) => /^\s*- id: affected\b/m.test(step));
+    const plan = onlyStep(PLAN, /\bpnpm run mutation\b/);
+
+    expect(checkout, 'mutation-plan checks out the repository').toBeGreaterThanOrEqual(0);
+    // A shallow clone has no merge base: the plan would see no diff, and skip.
+    expect(steps[checkout]).toMatch(/fetch-depth:\s*0\b/);
+    expect(affected, 'mutation-plan runs affected.mjs').toBeGreaterThan(checkout);
+    expect(commandOf(steps[affected] ?? '')).toBe(`node scripts/affected.mjs --base ${BASE}`);
+    expect(plan.at).toBeGreaterThan(affected);
+    expect(commandOf(plan.step)).toBe(
+      `pnpm run mutation --plan --only-if-safety-paths-changed --base ${BASE}`,
+    );
+  });
+
+  test('BUG-45-AC8: mutation-plan’s three outputs are its plan step’s own, and that step is never skipped, so even a diff of documentation has a decision for the aggregator to read', () => {
+    // An empty decision fails the aggregator (AC6): a plan step skipped on a
+    // documentation-only diff would turn every such pull request red. The
+    // plan decides `skip` for that diff itself (AC2).
+    const { step } = onlyStep(PLAN, /\bpnpm run mutation --plan\b/);
+    const id = /^\s*-?\s*id:\s*(\S+)\s*$/m.exec(step)?.[1];
+
+    expect(id, 'the plan step has an id its outputs are read by').toBeDefined();
+    expect(guardOf(step), 'the plan step is guarded').toBe('');
+    const job = ciJob(PLAN) ?? '';
+    for (const name of ['decision', 'reason', 'groups']) {
+      expect(job).toMatch(
+        new RegExp(
+          `^ {6}${name}:\\s*\\$\\{\\{\\s*steps\\.${String(id)}\\.outputs\\.${name}\\s*\\}\\}\\s*$`,
+          'm',
+        ),
+      );
+    }
+  });
+
+  test('BUG-45-AC8: mutation-group needs the plan, runs only when it said run, lets every leg finish when one fails, and takes its matrix from the plan’s groups', () => {
+    const job = ciJob(GROUP) ?? '';
+
+    expect(needsOf(GROUP)).toEqual([PLAN]);
+    expect(jobKey(GROUP, 'if')).toContain("needs.mutation-plan.outputs.decision == 'run'");
+    expect(job).toMatch(/^ {6}fail-fast:\s*false\s*$/m);
+    expect(job).toMatch(
+      /^\s+group:\s*\$\{\{\s*fromJSON\(\s*needs\.mutation-plan\.outputs\.groups\s*\)\s*\}\}\s*$/m,
+    );
+  });
+
+  test('BUG-45-AC8: each leg runs pnpm run mutation --group for its own group, then uploads its report and verdict file whatever happened, replacing its own on a re-run', () => {
+    const run = onlyStep(GROUP, /\bpnpm run mutation\b/);
+    const steps = ciSteps(GROUP);
+    const uploads = steps.flatMap((step, at) => (PINNED('upload-artifact').test(step) ? [at] : []));
+
+    expect(commandOf(run.step)).toBe('pnpm run mutation --group ${{ matrix.group }}');
+    expect(uploads, 'upload steps pinned by SHA').toHaveLength(1);
+    const at = uploads[0] ?? -1;
+    const upload = steps[at] ?? '';
+    expect(at).toBeGreaterThan(run.at);
+    expect(guardOf(upload)).toBe('always()');
+    expect(upload).toMatch(/^\s+name:\s*mutation-report-\$\{\{\s*matrix\.group\s*\}\}\s*$/m);
+    expect(upload).toMatch(/^\s+overwrite:\s*true\s*$/m);
+    expect(upload).toContain('reports/mutation/${{ matrix.group }}.json');
+    expect(upload).toContain('reports/mutation/${{ matrix.group }}.verdict.json');
+  });
+
+  test('BUG-45-AC8: mutation needs both jobs and always runs, downloads the legs’ artifacts into one folder when the plan said run, and always runs the aggregate on that folder', () => {
+    // Without `if: always()`, a failed or cancelled leg skips the aggregator,
+    // and a skipped required check reads as passing (CI-12).
+    const steps = ciSteps(AGGREGATOR);
+    const checkout = steps.findIndex((step) => PINNED('checkout').test(step));
+    const downloads = steps.flatMap((step, at) =>
+      PINNED('download-artifact').test(step) ? [at] : [],
+    );
+    const aggregate = onlyStep(AGGREGATOR, /\bpnpm run mutation\b/);
+
+    expect([...needsOf(AGGREGATOR)].sort()).toEqual([GROUP, PLAN]);
+    expect(jobKey(AGGREGATOR, 'if')).toBe('always()');
+    expect(
+      checkout,
+      'the aggregator checks out the commit whose groups it derives',
+    ).toBeGreaterThanOrEqual(0);
+    expect(downloads, 'download steps pinned by SHA').toHaveLength(1);
+    const download = steps[downloads[0] ?? -1] ?? '';
+    expect(guardOf(download)).toContain("needs.mutation-plan.outputs.decision == 'run'");
+    expect(download).toMatch(/^\s+pattern:\s*mutation-report-\*\s*$/m);
+    expect(download).toMatch(/^\s+merge-multiple:\s*true\s*$/m);
+    const folder = /^\s+path:\s*(\S+)\s*$/m.exec(download)?.[1];
+    expect(folder, 'the folder the artifacts are downloaded into').toBeDefined();
+    expect(aggregate.at).toBeGreaterThan(downloads[0] ?? Number.POSITIVE_INFINITY);
+    expect(aggregate.at).toBeGreaterThan(checkout);
+    expect(commandOf(aggregate.step)).toBe(`pnpm run mutation --aggregate ${String(folder)}`);
+    // Never skipped: with the plan's skip, it is what passes the check.
+    expect(guardOf(aggregate.step)).toBe('');
+  });
+
+  test('BUG-45-AC8: the aggregate step is handed the plan’s outputs and both jobs’ results through its environment, never through its script’s text', () => {
+    // The plan's reason names the changed files, which a pull request
+    // chooses: written into the script, a file name would be shell.
+    const { step } = onlyStep(AGGREGATOR, /\bpnpm run mutation --aggregate\b/);
+    const env = { ...jobEnv(AGGREGATOR), ...stepEnv(step) };
+
+    expect(env).toMatchObject({
+      MUTATION_PLAN_RESULT: '${{ needs.mutation-plan.result }}',
+      MUTATION_PLAN_DECISION: '${{ needs.mutation-plan.outputs.decision }}',
+      MUTATION_PLAN_REASON: '${{ needs.mutation-plan.outputs.reason }}',
+      MUTATION_PLAN_GROUPS: '${{ needs.mutation-plan.outputs.groups }}',
+      MUTATION_GROUP_RESULT: '${{ needs.mutation-group.result }}',
+    });
+    expect(scriptOf(step)).not.toContain('${{');
+  });
+
+  test('BUG-45-AC8: no group’s name is typed into the three jobs, and none passes --incremental', () => {
+    for (const id of THREE) {
+      const job = ciJob(id);
+      expect(job, `${id} is a job of ci.yml`).not.toBeNull();
+      for (const { name } of MUTATION_GROUPS) {
+        expect(job, `${id} names the ${name} group`).not.toMatch(
+          new RegExp(`(?<![\\w-])${name}(?![\\w-])`),
+        );
+      }
+      expect(job).not.toMatch(/--incremental\b/);
+    }
+  });
+
+  test('BUG-45-AC8: the plan and the aggregator have 10 minutes each, and each leg 30', () => {
+    expect(THREE.map((id) => jobKey(id, 'timeout-minutes'))).toEqual(['10', '30', '10']);
+  });
+
+  test('BUG-45-AC8: none of the three reads a secret, or sets permissions wider than the workflow’s contents: read: the legs run the pull request’s own code', () => {
+    for (const id of THREE) {
+      const job = ciJob(id);
+      expect(job, `${id} is a job of ci.yml`).not.toBeNull();
+      expect(job, `${id} reads a secret`).not.toContain('secrets.');
+      const lines = (job ?? '').split('\n');
+      const at = lines.findIndex((line) => /^ {4}permissions:/.test(line));
+      if (at === -1) continue;
+      const inline = (lines[at] ?? '').replace(/^ {4}permissions:\s*/, '').trim();
+      const granted =
+        inline === ''
+          ? lines
+              .slice(at + 1)
+              .filter((line, index, rest) =>
+                rest.slice(0, index + 1).every((l) => /^ {6}\S/.test(l)),
+              )
+              .map((line) => line.trim())
+          : inline
+              .replace(/^\{|\}$/g, '')
+              .split(',')
+              .map((entry) => entry.trim())
+              .filter((entry) => entry !== '');
+      expect(granted, `${id}'s permissions`).toEqual(
+        granted.length === 0 ? [] : ['contents: read'],
+      );
+    }
+  });
+
+  test('BUG-45-AC9: each group’s 25-minute budget fits inside its leg’s 30 minutes, with 3 to spare for checkout and install', () => {
+    expect(MUTATION_TIMEOUT_MS).toBe(25 * 60_000);
+    expect(jobKey(GROUP, 'timeout-minutes')).toBe('30');
+    expect(MUTATION_TIMEOUT_MS).toBeLessThanOrEqual((30 - 3) * 60_000);
+  });
+
+  test('BUG-45-AC9: gate:full’s mutation step is as it was: every group in sequence, in one shared budget, only when what the score is measured with changed (the owner’s answer to Q2)', () => {
+    const mutation = FULL_STEPS.find((step) => step.needsScript === 'mutation');
+
+    expect(mutation?.command).toEqual([
+      'pnpm',
+      'run',
+      'mutation',
+      '--only-if-safety-paths-changed',
+    ]);
+    expect(mutation?.timeout).toBeGreaterThanOrEqual(MUTATION_TIMEOUT_MS + 60_000);
+  });
+
+  test('BUG-45-AC10: gate:integrity, run on a copy of this repository’s workflows, finds the workflows sound: the two jobs no rule requires are the fan-out of mutation, which needs them and always runs', () => {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'bug45-integrity-')));
+    try {
+      mkdirSync(path.join(dir, '.github', 'workflows'), { recursive: true });
+      writeFileSync(path.join(dir, 'package.json'), readFileSync('package.json', 'utf8'));
+      writeFileSync(
+        path.join(dir, '.github', 'CODEOWNERS'),
+        readFileSync('.github/CODEOWNERS', 'utf8'),
+      );
+      for (const name of readdirSync(WORKFLOWS)) {
+        writeFileSync(
+          path.join(dir, WORKFLOWS, name),
+          readFileSync(`${WORKFLOWS}/${name}`, 'utf8'),
+        );
+      }
+      expect(findJobIds(readFileSync(`${WORKFLOWS}/ci.yml`, 'utf8'))).toEqual(
+        expect.arrayContaining([PLAN, GROUP]),
+      );
+
+      // No git and no token: the merge rules cannot be read here, which
+      // fails that section, and only that one. The workflows are read as CI
+      // reads them.
+      const result = spawnSync(process.execPath, [realpathSync('scripts/gate-integrity.mjs')], {
+        cwd: dir,
+        encoding: 'utf8',
+        timeout: 60_000,
+        env: { PATH: process.env.PATH, HOME: process.env.HOME },
+      });
+      const output = `${result.stdout}${result.stderr}`;
+
+      expect(output).toContain('✓ the workflow files produce them, with pinned actions');
+      expect(output).not.toMatch(/runs the job "mutation-(?:plan|group)"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

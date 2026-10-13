@@ -47,10 +47,12 @@ import {
   syntheticCredential,
   syntheticPingUrl,
   syntheticUuid,
+  turnBound,
   type FakeLog,
   type FakePgSetting,
   type FakePostgresHandler,
   type FakePostgresQuery,
+  type TurnBound,
 } from '@trygghverdag/test-kit';
 import { parseCrontab } from 'graphile-worker';
 import { EventEmitter, once } from 'node:events';
@@ -150,6 +152,49 @@ function stubSender() {
 }
 
 /**
+ * BUG-45 (D-129): how many runs of one loop may start with no turn of the
+ * event loop between them. A loop runs again only on its WATCHDOG_INTERVAL_MS
+ * timer, or at once after a run that a sweep woke while it was in flight, so a
+ * correct worker starts each loop's work at most twice in a turn.
+ */
+const RUNS_PER_TURN = 3;
+
+/**
+ * BUG-45 (D-129): the bounds on every stand-in loop work that succeeds at
+ * once, made in the running test, checked after it. Two mutants of worker.ts
+ * that start a loop's next run at once rather than on its timer (271:15,
+ * `again = false` made `true`; 288:15, `if (again)` made `if (true)`) turn
+ * such work into a chain of promise callbacks that starves every timer,
+ * Vitest's timeout included: the first test to start a worker hung, and
+ * Stryker stopped it about 40 s later, as a timeout, which is not a caught
+ * mutant (D-098). Bounded, the work answers only on the next turn of the
+ * event loop once it passes the bound, so the timers run again, the test
+ * ends, a stop included, and the check below names it, whatever the test
+ * itself expected.
+ */
+const loopBounds: TurnBound[] = [];
+
+afterEach(() => {
+  const passed = loopBounds.splice(0).flatMap((bound) => bound.passed);
+  expect(
+    passed,
+    'a loop of the worker started its work again and again with no turn of the event loop between (BUG-45)',
+  ).toEqual([]);
+});
+
+/**
+ * One loop's work that succeeds at once with what `result` makes, bounded by
+ * RUNS_PER_TURN (BUG-45). Past the bound it answers a turn later, never with
+ * an error: a rejected run is one the loop only writes a line about before it
+ * starts the next, so an error would not break the chain.
+ */
+function quietWork<T>(what: string, result: () => T): () => Promise<T> {
+  const bound = turnBound({ what, most: RUNS_PER_TURN });
+  loopBounds.push(bound);
+  return () => bound.answer(result);
+}
+
+/**
  * Loops that do nothing and succeed at once: for the tests about something
  * else, so the real watchdog and sender never reach for a database there.
  *
@@ -158,6 +203,10 @@ function stubSender() {
  * check's alarm, so that no test's worker runs a real SMS loop against a
  * database that does not exist, for the reason LOST-02's review loop 1 gave
  * for the quiet loops. Nothing any test asserts through them changes.
+ *
+ * RG-03 (BUG-45, D-129): each of the three works is bounded (quietWork), and
+ * answers exactly as before. A worker whose loops wait between their runs
+ * never reaches the bound, so nothing any test asserts through them changes.
  */
 function quietLoops(): {
   watchdog: { sweep: () => Promise<SweepResult> };
@@ -167,9 +216,11 @@ function quietLoops(): {
   log: FakeLog;
 } {
   return {
-    watchdog: { sweep: () => Promise.resolve({ ok: true, opened: 0, escalated: 0, stuck: 0 }) },
-    sender: { deliverDue: () => Promise.resolve({ sent: 0, failed: 0 }) },
-    smsSender: { deliverDue: () => Promise.resolve({ sent: 0, failed: 0 }) },
+    watchdog: {
+      sweep: quietWork('the quiet sweep', () => ({ ok: true, opened: 0, escalated: 0, stuck: 0 })),
+    },
+    sender: { deliverDue: quietWork('the quiet delivery', () => ({ sent: 0, failed: 0 })) },
+    smsSender: { deliverDue: quietWork('the quiet SMS delivery', () => ({ sent: 0, failed: 0 })) },
     smsAlarm: { report: () => Promise.resolve() },
     log: fakeLog(),
   };
@@ -1957,9 +2008,16 @@ describe('REL-08 and LOST-02: the sweep loop and the delivery loop', () => {
    * stop() would wait for that claim. So it gets a stand-in that succeeds at
    * once, as quietLoops() gives one, unless a test hands in its own. The
    * tests about the sweep and the delivery assert what they did before.
+   *
+   * RG-03 (BUG-45, D-129): that stand-in is bounded, as quietLoops()' are
+   * (quietWork), and answers exactly as before. Unbounded, it was what hung
+   * these tests under worker.ts's two "run again at once" mutants: the SMS
+   * loop's chain of promise callbacks starved the fake timers' own turns.
    */
   async function looping({
-    smsSender = { deliverDue: () => Promise.resolve({ sent: 0, failed: 0 }) },
+    smsSender = {
+      deliverDue: quietWork('the quiet SMS delivery', () => ({ sent: 0, failed: 0 })),
+    },
   }: { smsSender?: { deliverDue: () => Promise<DeliveryResult> } } = {}) {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const watchdog = stubWatchdog();
@@ -2213,6 +2271,75 @@ describe('REL-08 and LOST-02: the sweep loop and the delivery loop', () => {
     expect(watchdog.count).toBe(0);
     expect(sender.count).toBe(0);
     await running;
+  });
+
+  // BUG-45 (D-129): Stryker scored two mutants of worker.ts as timed out,
+  // about 40 s each: `again = false` at 271:15 made `true`, and `if (again)`
+  // at 288:15 made `if (true)`. Either starts a loop's next run as soon as the
+  // last one finished, with no WATCHDOG_INTERVAL_MS timer between; over work
+  // that answers at once, that is a chain of promise callbacks that starved
+  // every timer, Vitest's timeout included. With every quiet work bounded
+  // (quietWork), these fail at once on either mutant, and the worker is
+  // stopped whatever happened.
+
+  test('BUG-45-AC12: a run nobody woke while it was in flight is followed by its loop’s 10 s timer, never by a second run at once: each loop’s work runs once at start, and again only 10 s later (worker.ts:288)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const calls = { sweep: 0, delivery: 0, sms: 0 };
+    const counted =
+      <T>(loop: keyof typeof calls, work: () => Promise<T>) =>
+      (): Promise<T> => {
+        calls[loop] += 1;
+        return work();
+      };
+    const quiet = quietLoops();
+    const worker = await startWorker('postgres://example/db', recordingRunner().run, {
+      ...quiet,
+      watchdog: { sweep: counted('sweep', quiet.watchdog.sweep) },
+      sender: { deliverDue: counted('delivery', quiet.sender.deliverDue) },
+      smsSender: { deliverDue: counted('sms', quiet.smsSender.deliverDue) },
+      write: () => undefined,
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toEqual({ sweep: 1, delivery: 1, sms: 1 });
+      await vi.advanceTimersByTimeAsync(10 * SECOND - 1);
+      expect(calls).toEqual({ sweep: 1, delivery: 1, sms: 1 });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls).toEqual({ sweep: 2, delivery: 2, sms: 2 });
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  test('BUG-45-AC12: a delivery a sweep asked for while one was in flight runs once at once when that one finishes, and the run after it waits for the 10 s timer: what was asked for is forgotten once a run starts (worker.ts:271)', async () => {
+    const { watchdog, sender, worker } = await looping();
+
+    try {
+      // A sweep that opened an alert while the first delivery is in flight:
+      // one more delivery is owed.
+      watchdog.finish({ ok: true, opened: 1, escalated: 0, stuck: 0 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sender.count).toBe(1);
+      sender.finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sender.count).toBe(2);
+
+      // Nothing more is owed: the next delivery waits for the timer.
+      sender.finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sender.count).toBe(2);
+      await vi.advanceTimersByTimeAsync(10 * SECOND - 1);
+      expect(sender.count).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sender.count).toBe(3);
+    } finally {
+      const stopping = worker.stop();
+      watchdog.finish();
+      sender.finish();
+      await vi.advanceTimersByTimeAsync(0);
+      await stopping;
+    }
   });
 });
 
@@ -4060,6 +4187,10 @@ function canaryWorkerProcess({
   const smsAlarm = fakeSmsAlarm();
   const log = fakeLog();
   let sweeps = 0;
+  // RG-03 (BUG-45, D-129): the counting sweep below is bounded, as
+  // quietLoops()' works are, and counts and answers exactly as before.
+  const sweepBound = turnBound({ what: 'the counted sweep', most: RUNS_PER_TURN });
+  loopBounds.push(sweepBound);
   const running = runWorkerProcess('postgres://example/db', {
     runWorker: runner.run,
     signals,
@@ -4091,7 +4222,7 @@ function canaryWorkerProcess({
     watchdog: {
       sweep: () => {
         sweeps += 1;
-        return Promise.resolve({ ok: true, opened: 0, escalated: 0, stuck: 0 });
+        return sweepBound.answer(() => ({ ok: true, opened: 0, escalated: 0, stuck: 0 }));
       },
     },
     log,

@@ -442,3 +442,125 @@ describe('reviewWorkflows', () => {
     expect(review([], ['static'])[0]?.what).toContain('No workflow files');
   });
 });
+
+describe('BUG-45: reviewWorkflows accepts the jobs of a required check’s fan-out, and only on terms (AC10, D-129)', () => {
+  // The mutation check becomes a plan, one leg per group, and an aggregator
+  // still named `mutation`, the only one of the three a rule requires.
+  // gate:integrity reports every job of ci.yml that no rule requires, and is
+  // right to: such a job can fail without stopping anything. So it accepts the
+  // two helpers only as the declared fan-out of a required check whose job
+  // needs them and always runs; without `if: always()`, a failed leg would
+  // skip the aggregator, and a skipped required check reads as passing.
+  //
+  // `fanOut` is handed in as gate:integrity builds it from CHECKS: a required
+  // check's id, to the jobs it fans out into.
+  const scripts = { 'gate:static': 'x', mutation: 'x' };
+  const FAN_OUT = { mutation: ['mutation-plan', 'mutation-group'] };
+
+  const job = (id, keys) => [`  ${id}:`, ...keys.map((key) => `    ${key}`)];
+
+  /** A ci.yml with static, the two helpers and the aggregator, as `options` shape them. */
+  function ciWith({
+    needs = '[mutation-plan, mutation-group]',
+    condition = 'always()',
+    without = [],
+    extra = [],
+  } = {}) {
+    return {
+      path: '.github/workflows/ci.yml',
+      text: [
+        'jobs:',
+        ...job('static', ['steps:', '  - run: pnpm run gate:static']),
+        ...(without.includes('mutation-plan')
+          ? []
+          : job('mutation-plan', ['steps:', '  - run: pnpm run mutation --plan'])),
+        ...(without.includes('mutation-group')
+          ? []
+          : job('mutation-group', [
+              'needs: mutation-plan',
+              "if: needs.mutation-plan.outputs.decision == 'run'",
+              'steps:',
+              '  - run: pnpm run mutation --group x',
+            ])),
+        ...job('mutation', [
+          ...(needs === null ? [] : [`needs: ${needs}`]),
+          ...(condition === null ? [] : [`if: ${condition}`]),
+          'steps:',
+          '  - run: pnpm run mutation --aggregate artifacts',
+        ]),
+        ...extra,
+      ].join('\n'),
+    };
+  }
+
+  const review = (files, { required = ['static', 'mutation'], fanOut = FAN_OUT } = {}) =>
+    reviewWorkflows({ files, scripts, required, fanOut });
+
+  const naming = (problems, id) =>
+    problems.filter((problem) => new RegExp(`(?<![\\w-])${id}(?![\\w-])`).test(problem.what));
+
+  test('BUG-45-AC10: the two fan-out jobs are no problem when mutation, a required check, needs both and has if: always()', () => {
+    expect(review([ciWith()])).toEqual([]);
+    expect(review([ciWith({ needs: '[mutation-group, mutation-plan]' })])).toEqual([]);
+  });
+
+  test('BUG-45-AC10: with no fan-out declared, as before, each of the two is a job no rule requires', () => {
+    const problems = review([ciWith()], { fanOut: {} });
+
+    expect(naming(problems, 'mutation-plan')).toHaveLength(1);
+    expect(naming(problems, 'mutation-group')).toHaveLength(1);
+  });
+
+  test('BUG-45-AC10: a declared fan-out job missing from ci.yml is a problem, naming it', () => {
+    const problems = review([ciWith({ without: ['mutation-group'] })]);
+
+    expect(naming(problems, 'mutation-group').length, JSON.stringify(problems)).toBeGreaterThan(0);
+    expect(naming(problems, 'mutation-plan'), JSON.stringify(problems)).toEqual([]);
+  });
+
+  test('BUG-45-AC10: mutation not needing one of its fan-out jobs is a problem, naming that job and the need', () => {
+    const problems = review([ciWith({ needs: 'mutation-plan' })]);
+
+    expect(
+      naming(problems, 'mutation-group').some((problem) => /\bneeds?\b/.test(problem.what)),
+      JSON.stringify(problems),
+    ).toBe(true);
+    expect(naming(problems, 'mutation-plan'), JSON.stringify(problems)).toEqual([]);
+  });
+
+  test.each([
+    ['no job-level if: at all', null],
+    ['if: success()', 'success()'],
+    [
+      "if: needs.mutation-plan.outputs.decision == 'run'",
+      "needs.mutation-plan.outputs.decision == 'run'",
+    ],
+  ])(
+    'BUG-45-AC10: mutation with %s is a problem, naming it and always(): a failed leg would skip the check, which reads as passing',
+    (_, condition) => {
+      const problems = review([ciWith({ condition })]);
+
+      const named = naming(problems, 'mutation').filter((problem) =>
+        problem.what.includes('always()'),
+      );
+      expect(named.length, JSON.stringify(problems)).toBeGreaterThan(0);
+    },
+  );
+
+  test('BUG-45-AC10: any other job no rule requires is still a problem, beside an accepted fan-out', () => {
+    const problems = review([
+      ciWith({ extra: ['  leftover:', '    steps:', '      - run: echo synthetic'] }),
+    ]);
+
+    expect(naming(problems, 'leftover')).toHaveLength(1);
+    expect(naming(problems, 'mutation-plan'), JSON.stringify(problems)).toEqual([]);
+    expect(naming(problems, 'mutation-group'), JSON.stringify(problems)).toEqual([]);
+  });
+
+  test('BUG-45-AC10: a fan-out declared for a check no rule requires accepts nothing', () => {
+    const problems = review([ciWith()], { required: ['static'] });
+
+    expect(naming(problems, 'mutation-plan').length).toBeGreaterThan(0);
+    expect(naming(problems, 'mutation-group').length).toBeGreaterThan(0);
+  });
+});

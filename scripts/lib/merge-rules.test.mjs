@@ -389,3 +389,36 @@ describe('REL-10-AC18: the staging canary’s code needs the owner and the safet
     expect(tracked(MODULE).filter((file) => file.endsWith('.ts')).length).toBeGreaterThan(0);
   });
 });
+
+describe('BUG-45: the mutation check fans out into two jobs no rule requires (AC10, D-129)', () => {
+  // The required check keeps its name, `mutation`, now the aggregator's, so the
+  // ruleset does not change. The plan and the legs are declared as its
+  // fan-out, which gate:integrity accepts only on terms (workflow-lint.mjs).
+  test('BUG-45-AC10: CHECKS’ mutation entry declares its fan-out, mutation-plan then mutation-group, and keeps its name, requirement, script and blocking', () => {
+    expect(CHECKS.find((check) => check.check === 'mutation')).toEqual({
+      check: 'mutation',
+      requirement: 'CI-08',
+      needsScript: 'mutation',
+      blocking: true,
+      fanOut: ['mutation-plan', 'mutation-group'],
+    });
+  });
+
+  test('BUG-45-AC10: no other check fans out', () => {
+    expect(
+      CHECKS.filter((check) => check.fanOut !== undefined).map((check) => check.check),
+    ).toEqual(['mutation']);
+  });
+
+  test('BUG-45-AC10: the fan-out jobs are never checks of their own, required or advisory, so the ruleset the owner imported does not change', () => {
+    const { required, advisory, waiting } = planChecks(SCRIPTS_TODAY);
+
+    expect(required).toContain('mutation');
+    for (const job of ['mutation-plan', 'mutation-group']) {
+      expect(CHECKS.map((check) => check.check)).not.toContain(job);
+      expect(required).not.toContain(job);
+      expect(advisory).not.toContain(job);
+      expect(waiting.map((entry) => entry.check)).not.toContain(job);
+    }
+  });
+});
