@@ -728,10 +728,9 @@ function runGroup({ cwd, name }) {
     ...onThisMachine(cwd),
   });
   mkdirSync(path.dirname(verdictFile), { recursive: true });
-  writeFileSync(
-    verdictFile,
-    `${JSON.stringify({ name, status, ok: outcome.ok, message: outcome.message }, null, 2)}\n`,
-  );
+  // The three facts the aggregator checks; it judges the report again itself,
+  // so the leg's message is printed here and not kept.
+  writeFileSync(verdictFile, `${JSON.stringify({ name, status, ok: outcome.ok }, null, 2)}\n`);
   print(`\n${outcome.message}\n`);
   print(
     `mutation: the ${name} group ${outcome.ok ? 'passed' : 'failed'}. Only that group ran, so ` +
@@ -746,16 +745,21 @@ function aggregateFolder({ cwd, folder }) {
   const files = existsSync(at)
     ? readdirSync(at, { withFileTypes: true }).filter((entry) => entry.isFile())
     : [];
-  /** [name, text] for each file ending in `suffix`, the name without it. */
+  const VERDICT = '.verdict.json';
+  const REPORT = '.json';
+  /** A file's kind by its name alone: a verdict, a report, or neither. */
+  const kindOf = (name) =>
+    name.endsWith(VERDICT) ? VERDICT : name.endsWith(REPORT) ? REPORT : null;
+  /** [name, text] for each file of that kind, picked by name before it is read, the name without its suffix. */
   const named = (suffix) =>
     files
-      .filter(({ name }) => name.endsWith(suffix))
+      .filter(({ name }) => kindOf(name) === suffix)
       .map(({ name }) => [
         name.slice(0, -suffix.length),
         readFileSync(path.join(at, name), 'utf8'),
       ]);
-  const verdicts = Object.fromEntries(named('.verdict.json'));
-  const reports = Object.fromEntries(named('.json').filter(([name]) => !name.endsWith('.verdict')));
+  const verdicts = Object.fromEntries(named(VERDICT));
+  const reports = Object.fromEntries(named(REPORT));
   const env = process.env;
   const outcome = aggregateMutationJobs({
     runs: mutationRuns(),

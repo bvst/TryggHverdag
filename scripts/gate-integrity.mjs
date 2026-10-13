@@ -26,6 +26,7 @@ import process from 'node:process';
 import { packageScripts, run } from './lib/proc.mjs';
 import {
   CHECKS,
+  fanOutOf,
   planChecks,
   reviewBypass,
   reviewCodeowners,
@@ -297,11 +298,7 @@ async function main() {
         required: plan.required,
         // The jobs a required check fans out into, which no rule requires
         // (BUG-45, D-129): accepted only on the terms reviewWorkflows holds.
-        fanOut: Object.fromEntries(
-          CHECKS.flatMap((check) =>
-            check.fanOut === undefined ? [] : [[check.check, check.fanOut]],
-          ),
-        ),
+        fanOut: fanOutOf(CHECKS),
       }),
       codeownersText: readOrNull(path.join(cwd, '.github/CODEOWNERS')),
       slug,

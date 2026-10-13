@@ -357,9 +357,9 @@ jobs:
   #   No rule requires them, so GitHub never reads their skip as a pass: only
   #   `mutation` reads it, and accepts it only when the plan said skip.
   # gate:integrity holds `mutation` to needing both jobs and to `if: always()`
-  # (`fanOut` in scripts/lib/merge-rules.mjs). Values reach a step's script
-  # through `env:` only where a pull request could choose them: the plan's
-  # reason names changed files.
+  # (`fanOut` in scripts/lib/merge-rules.mjs). Every value a pull request could
+  # choose reaches a step's script through `env:`, never its text: the plan's
+  # reason names changed files, and a leg's group is the plan's output.
   mutation-plan: # CI-08: whether the groups run, why, and which groups there are
     runs-on: ubuntu-26.04
     timeout-minutes: 10
@@ -404,15 +404,23 @@ jobs:
       matrix:
         group: ${{ fromJSON(needs.mutation-plan.outputs.groups) }}
     steps:
+      # No token is left in .git/config: the pull request's own code and tests
+      # run here, and nothing in this job fetches.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version-file: .nvmrc, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       # Fresh, never --incremental, which `pnpm run mutation` refuses (D-099).
-      - run: pnpm run mutation --group ${{ matrix.group }}
+      # The group's name is the plan's output, computed by the pull request's
+      # own code, so it reaches the script through env:, as data.
+      - run: pnpm run mutation --group "$GROUP"
+        env:
+          GROUP: ${{ matrix.group }}
       # Whatever happened, so that `mutation` can say which group failed and
-      # why. A re-run replaces this leg's own artifact.
+      # why. A re-run replaces this leg's own artifact. Kept 7 days: the
+      # aggregator reads it in the same run, and the repository is public.
       - if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -421,6 +429,7 @@ jobs:
             reports/mutation/${{ matrix.group }}.json
             reports/mutation/${{ matrix.group }}.verdict.json
           overwrite: true
+          retention-days: 7
 
   mutation: # CI-08 (RG-05, D-036) — the required check: every group this commit expects reported and passed
     needs: [mutation-plan, mutation-group]

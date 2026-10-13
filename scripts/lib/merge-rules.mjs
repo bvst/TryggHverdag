@@ -184,6 +184,20 @@ export function planChecks(scripts) {
   };
 }
 
+/**
+ * The jobs each check fans out into, which no rule requires (BUG-45, D-129):
+ * every check that declares a `fanOut`, to its jobs in order, and nothing for
+ * a check that declares none. gate:integrity hands this to reviewWorkflows.
+ *
+ * @param {Check[]} checks
+ * @returns {Record<string, string[]>}
+ */
+export function fanOutOf(checks) {
+  return Object.fromEntries(
+    checks.flatMap((check) => (check.fanOut === undefined ? [] : [[check.check, check.fanOut]])),
+  );
+}
+
 const ruleOf = (rules, type) => rules.find((rule) => rule.type === type);
 
 /**
