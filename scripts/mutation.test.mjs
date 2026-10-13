@@ -705,6 +705,13 @@ describe('`pnpm run mutation` itself, in a scratch repository', () => {
       env: { PATH: process.env.PATH, HOME: process.env.HOME },
     });
     if (init.status !== 0) throw new Error(`git init failed:\n${init.stderr}`);
+    // BUG-46 (RG-03): origin/main at an empty first commit, so that the
+    // `--base origin/main` these cases pass resolves, and every file above is
+    // still untracked, so still changed. Without it the base resolved to
+    // nothing, which D-131 makes `--only-if-safety-paths-changed` refuse:
+    // these cases would then test that refusal, not theirs.
+    git(repo, ['commit', '-q', '--allow-empty', '-m', 'synthetic base']);
+    git(repo, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
     mkdirSync(bin);
     // The report's path as the shell expands it, from the function the
     // script reads reports by, so the two cannot drift apart.
@@ -960,6 +967,12 @@ describe('BUG-45: `pnpm run mutation --plan`, in a scratch repository (AC1, AC2)
     git(repo, ['init', '-q']);
     git(repo, ['add', '-A']);
     git(repo, ['commit', '-qm', 'synthetic base']);
+    // BUG-46 (RG-03): origin/main at the base commit, so that the plan's
+    // `--base origin/main` resolves. Without it the base resolved to nothing,
+    // which D-131 makes the plan refuse: these cases would then test that
+    // refusal, not theirs. The diff each case makes is in the working tree,
+    // as before.
+    git(repo, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
     mkdirSync(bin);
     writeFileSync(
       path.join(bin, 'pnpm'),
@@ -1722,5 +1735,178 @@ describe('BUG-45: `pnpm run mutation --aggregate <dir>`, in a scratch repository
     expect(result.starts, 'the aggregator started a Stryker run').toBe('');
     expect(result.status, result.output).toBe(0);
     expect(result.stdout).toContain(reason);
+  });
+});
+
+// ===========================================================================
+// BUG-46 (D-131): a --base git cannot resolve made the diff look empty.
+// ===========================================================================
+
+describe('BUG-46: `pnpm run mutation` with a --base git cannot resolve, in a scratch repository (D-131)', () => {
+  // With `--base origin/no-such-branch`, changedFiles() dropped the committed
+  // diff, so `--plan --only-if-safety-paths-changed` printed decision=skip,
+  // `--only-if-safety-paths-changed` printed "nothing to mutate", and both
+  // exited 0: a safety change committed on the branch was never mutated.
+  // Reproduced on 2026-10-13. D-131, the owner's answer: where the decision
+  // reads the diff, the script exits 1, naming the base and saying it could
+  // not tell, and starts nothing. A plain `pnpm run mutation` runs every group
+  // whatever changed, and is unchanged. The shared helper behind the refusal,
+  // requireMergeBase, is tested in scripts/lib/git.test.mjs.
+  const made = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  const script = realpathSync(path.join(root, 'scripts', 'mutation.mjs'));
+  const UNKNOWN_BASE = 'origin/no-such-branch';
+  /** "Could not tell", in D-131's words or close to them. */
+  const COULD_NOT_TELL = /\b(could not|cannot|can not|can't) tell\b/i;
+  const SAFETY_FILE = 'apps/server/src/worker.ts';
+
+  /**
+   * A pull request as CI checks it out: origin/main at a base commit holding
+   * every group's safety files and a Stryker config, and the branch one
+   * commit on top of it that changes a safety file. The working tree is
+   * clean, so the change shows only in the committed diff. Beside it, first
+   * on PATH, a stand-in `pnpm` that logs each Stryker start to `started`,
+   * writes a report in which the run's one mutant was killed, and exits 0:
+   * every run that starts passes.
+   */
+  function pullRequestRepository() {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'bug46-mutation-')));
+    made.push(dir);
+    const repo = path.join(dir, 'repo');
+    const bin = path.join(dir, 'bin');
+    const started = path.join(dir, 'stryker-started.log');
+    mkdirSync(repo);
+    writeFileSync(path.join(repo, 'stryker.config.mjs'), 'export default {};\n');
+    for (const run of mutationRuns().filter((each) => each.name !== WHOLE_SUITE_RUN_NAME)) {
+      for (const p of run.paths) plant(repo, p);
+    }
+    git(repo, ['init', '-q']);
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-qm', 'synthetic base']);
+    git(repo, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    git(repo, ['checkout', '-q', '-b', 'the-pull-request']);
+    writeFileSync(path.join(repo, SAFETY_FILE), 'export const planted = 2;\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-qm', 'the pull request']);
+    mkdirSync(bin);
+    const report = mutationReportFile('$STRYKER_RUN');
+    const passing = JSON.stringify(reportOf({ 'planted.ts': { Killed: 1 } }));
+    writeFileSync(
+      path.join(bin, 'pnpm'),
+      [
+        '#!/bin/sh',
+        `echo "STRYKER_RUN=$STRYKER_RUN pnpm $*" >> "${started}"`,
+        `mkdir -p "$(dirname "${report}")"`,
+        `echo '${passing}' > "${report}"`,
+        'exit 0',
+        '',
+      ].join('\n'),
+    );
+    chmodSync(path.join(bin, 'pnpm'), 0o755);
+    return { dir, repo, bin, started };
+  }
+
+  /** `node scripts/mutation.mjs …args` in `repo`, with only PATH, HOME and what `env` adds. */
+  function mutation({ repo, bin }, args, env = {}) {
+    const result = spawnSync(process.execPath, [script, ...args], {
+      cwd: repo,
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, HOME: process.env.HOME, ...env },
+    });
+    return { ...result, output: `${result.stdout}${result.stderr}` };
+  }
+
+  const starts = (started) => (existsSync(started) ? readFileSync(started, 'utf8') : '');
+
+  /** The condition the refusals below rest on: git finds no merge base with UNKNOWN_BASE. */
+  function expectUnresolvable(repo) {
+    expect(() => git(repo, ['merge-base', 'HEAD', UNKNOWN_BASE])).toThrow();
+  }
+
+  test('BUG-46: `--plan --only-if-safety-paths-changed` with a base that resolves reads the committed diff, as today: decision=run', () => {
+    const repository = pullRequestRepository();
+    const output = path.join(repository.dir, 'github-output');
+
+    const result = mutation(
+      repository,
+      ['--plan', '--only-if-safety-paths-changed', '--base', 'origin/main'],
+      { GITHUB_OUTPUT: output },
+    );
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.status, result.output).toBe(0);
+    expect(outputsIn(readFileSync(output, 'utf8')).values.decision, result.output).toBe('run');
+    expect(starts(repository.started), 'a Stryker run started').toBe('');
+  });
+
+  test('BUG-46: `--plan --only-if-safety-paths-changed` with a base git cannot resolve exits 1, naming the base and saying it could not tell, and writes no decision', () => {
+    const repository = pullRequestRepository();
+    expectUnresolvable(repository.repo);
+    const output = path.join(repository.dir, 'github-output');
+    writeFileSync(output, 'code=true\n');
+
+    const result = mutation(
+      repository,
+      ['--plan', '--only-if-safety-paths-changed', '--base', UNKNOWN_BASE],
+      { GITHUB_OUTPUT: output },
+    );
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.output).not.toContain('decision=skip');
+    expect(result.output).not.toContain('touches no safety code');
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain(UNKNOWN_BASE);
+    expect(result.output).toMatch(COULD_NOT_TELL);
+    // A plan that could not tell decides nothing for the legs to act on.
+    expect(outputsIn(readFileSync(output, 'utf8')).values.decision, result.output).toBeUndefined();
+    expect(starts(repository.started), 'a Stryker run started').toBe('');
+  });
+
+  test('BUG-46: `--only-if-safety-paths-changed` with a base that resolves starts Stryker on the committed safety change, as today', () => {
+    const repository = pullRequestRepository();
+
+    const result = mutation(repository, [
+      '--only-if-safety-paths-changed',
+      '--base',
+      'origin/main',
+    ]);
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.status, result.output).toBe(0);
+    expect(starts(repository.started), result.output).toContain('pnpm exec stryker run');
+  });
+
+  test('BUG-46: `--only-if-safety-paths-changed` with a base git cannot resolve exits 1, naming the base and saying it could not tell, and starts no Stryker run', () => {
+    const repository = pullRequestRepository();
+    expectUnresolvable(repository.repo);
+
+    const result = mutation(repository, ['--only-if-safety-paths-changed', '--base', UNKNOWN_BASE]);
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.output).not.toContain('touches no safety code');
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain(UNKNOWN_BASE);
+    expect(result.output).toMatch(COULD_NOT_TELL);
+    expect(starts(repository.started), 'a Stryker run started').toBe('');
+  });
+
+  test('BUG-46: a plain `pnpm run mutation` with a base git cannot resolve is not refused: it runs every group, whatever changed, as D-131 leaves it', () => {
+    const repository = pullRequestRepository();
+    expectUnresolvable(repository.repo);
+
+    const result = mutation(repository, ['--base', UNKNOWN_BASE]);
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.output).not.toMatch(COULD_NOT_TELL);
+    expect(result.status, result.output).toBe(0);
+    for (const name of GROUP_NAMES) {
+      expect(starts(repository.started), result.output).toContain(
+        `STRYKER_RUN=${name} pnpm exec stryker run`,
+      );
+    }
   });
 });

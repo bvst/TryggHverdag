@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test } from 'vitest';
 import vitestCoverageConfig from '../../vitest.coverage.config.mjs';
 import {
   COVERAGE_SUMMARIES,
@@ -260,31 +260,72 @@ describe('the two coverage summaries', () => {
   });
 });
 
+/** Writes each summary into `dir`, its `/repo/` paths made `dir`'s, as a coverage run writes them. */
+function writeSummaries(dir, summaries) {
+  for (const [file, summary] of Object.entries(summaries)) {
+    mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    const absolute = Object.fromEntries(
+      Object.entries(summary).map(([key, value]) => [key.replace(/^\/repo\//, `${dir}/`), value]),
+    );
+    writeFileSync(path.join(dir, file), JSON.stringify(absolute));
+  }
+}
+
+/** git in `dir`, with a synthetic identity and nothing of the machine's own. */
+function gitIn(dir, args) {
+  const result = spawnSync(
+    'git',
+    [
+      '-c',
+      'user.name=Synthetic Tester',
+      '-c',
+      'user.email=synthetic@example.invalid',
+      '-c',
+      'commit.gpgsign=false',
+      ...args,
+    ],
+    { cwd: dir, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: process.env.HOME } },
+  );
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed:\n${result.stderr}`);
+  return result.stdout;
+}
+
+/** Makes `dir` a git repository whose one commit holds everything in it, with origin/main at that commit, as CI's full-history checkout has its base. */
+function commitAsOriginMain(dir) {
+  gitIn(dir, ['init', '-q']);
+  gitIn(dir, ['add', '-A']);
+  gitIn(dir, ['commit', '-qm', 'synthetic base']);
+  gitIn(dir, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+}
+
+/** `node scripts/coverage-ratchet.mjs …args` in `dir`, with only PATH and HOME of this machine's. */
+function runRatchet(dir, args = []) {
+  const result = spawnSync(
+    process.execPath,
+    [path.resolve('scripts/coverage-ratchet.mjs'), ...args],
+    { cwd: dir, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: process.env.HOME } },
+  );
+  return { code: result.status, output: `${result.stdout}${result.stderr}` };
+}
+
 describe('pnpm run coverage:ratchet', () => {
   /**
-   * Runs the ratchet in a folder holding only the summaries given. The folder
-   * is not a git repository, so no file counts as changed and only the
-   * summaries and the floors decide the answer.
+   * Runs the ratchet in a scratch git repository holding only the summaries
+   * given, committed, with origin/main at that commit. No file counts as
+   * changed, so only the summaries and the floors decide the answer.
+   *
+   * BUG-46 (RG-03): the folder was not a git repository. "No file counts as
+   * changed" rested on the ratchet taking a base it could not resolve for a
+   * diff with nothing in it: the quiet pass D-131 ends, where the ratchet now
+   * refuses. With a base that resolves and an empty diff, these tests still
+   * ask only what they asked before.
    */
   function ratchet(summaries) {
     const dir = mkdtempSync(path.join(tmpdir(), 'coverage-ratchet-'));
     try {
-      for (const [file, summary] of Object.entries(summaries)) {
-        mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
-        const absolute = Object.fromEntries(
-          Object.entries(summary).map(([key, value]) => [
-            key.replace(/^\/repo\//, `${dir}/`),
-            value,
-          ]),
-        );
-        writeFileSync(path.join(dir, file), JSON.stringify(absolute));
-      }
-      const result = spawnSync(process.execPath, [path.resolve('scripts/coverage-ratchet.mjs')], {
-        cwd: dir,
-        encoding: 'utf8',
-        env: { PATH: process.env.PATH, HOME: process.env.HOME },
-      });
-      return { code: result.status, output: `${result.stdout}${result.stderr}` };
+      writeSummaries(dir, summaries);
+      commitAsOriginMain(dir);
+      return runRatchet(dir);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -308,5 +349,87 @@ describe('pnpm run coverage:ratchet', () => {
     const { code, output } = ratchet({ [VITEST_FILE]: VITEST_SUMMARY, [JEST_FILE]: JEST_SUMMARY });
 
     expect(code, output).toBe(0);
+  });
+});
+
+// BUG-46 (D-131): coverage:ratchet passed quietly on a base git cannot resolve.
+//
+// With `--base origin/no-such-branch` it printed "0 changed file(s), no
+// coverage went down (RG-04)." and exited 0: changedFiles() drops the
+// committed diff when the merge base will not resolve, so a drop in a file
+// changed in a commit on the branch was never compared with the baseline. The
+// owner's answer, D-131: it exits 1, naming the base and saying it could not
+// tell, rather than reporting nothing to check. The shared helper behind it,
+// requireMergeBase, is tested in scripts/lib/git.test.mjs.
+describe('BUG-46: coverage:ratchet with a base git cannot resolve (D-131)', () => {
+  /** "Could not tell", in D-131's words or close to them. */
+  const COULD_NOT_TELL = /\b(could not|cannot|can not|can't) tell\b/i;
+  const UNKNOWN_BASE = 'origin/no-such-branch';
+  const FILE = 'apps/server/src/api.ts';
+
+  const made = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * A pull request whose one commit changes apps/server/src/api.ts, and whose
+   * coverage run, committed with it, measured that file at 10 of 11 lines
+   * against 11 of 11 in the baseline origin/main holds. Nothing is below a
+   * floor, so the drop is the one thing the ratchet can fail it for, and it
+   * shows only in the committed diff: the working tree is clean.
+   */
+  function droppedRepository() {
+    const dir = mkdtempSync(path.join(tmpdir(), 'bug46-coverage-ratchet-'));
+    made.push(dir);
+    mkdirSync(path.join(dir, 'apps/server/src'), { recursive: true });
+    writeFileSync(path.join(dir, FILE), 'export const api = 1;\n');
+    writeFileSync(
+      path.join(dir, 'coverage-baseline.json'),
+      JSON.stringify({
+        generated: '2026-10-13',
+        files: { [FILE]: { lines: 100, branches: 100, coveredLines: 11, totalLines: 11 } },
+      }),
+    );
+    commitAsOriginMain(dir);
+    gitIn(dir, ['checkout', '-q', '-b', 'the-pull-request']);
+    writeFileSync(path.join(dir, FILE), 'export const api = 2;\n');
+    writeSummaries(dir, {
+      [VITEST_FILE]: {
+        total: { lines: { pct: 90.91 } },
+        [`/repo/${FILE}`]: {
+          lines: { pct: 90.91, covered: 10, total: 11 },
+          branches: { pct: 100 },
+        },
+      },
+      [JEST_FILE]: JEST_SUMMARY,
+    });
+    gitIn(dir, ['add', '-A']);
+    gitIn(dir, ['commit', '-qm', 'the pull request']);
+    return dir;
+  }
+
+  test('BUG-46: with a base that resolves, a drop in a file changed in a commit on the branch fails it, naming the file, as today', () => {
+    const dir = droppedRepository();
+
+    const { code, output } = runRatchet(dir, ['--base', 'origin/main']);
+
+    expect(code, output).toBe(1);
+    expect(output).toContain(`↓ ${FILE}: lines 100% → 90.91%`);
+    expect(output).toContain('RG-04');
+  });
+
+  test('BUG-46: with a base git cannot resolve, it exits 1, naming the base and saying it could not tell, not that no coverage went down', () => {
+    const dir = droppedRepository();
+    // The condition: git cannot find a merge base with it.
+    expect(() => gitIn(dir, ['merge-base', 'HEAD', UNKNOWN_BASE])).toThrow();
+
+    const { code, output } = runRatchet(dir, ['--base', UNKNOWN_BASE]);
+
+    expect(output).not.toContain('no coverage went down');
+    expect(output).not.toContain('0 changed file(s)');
+    expect(code, output).toBe(1);
+    expect(output).toContain(UNKNOWN_BASE);
+    expect(output).toMatch(COULD_NOT_TELL);
   });
 });
