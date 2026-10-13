@@ -448,9 +448,11 @@ on time for 24 hours. That last one is the owner's **A-34** (create the
 `staging-canary` check and its secret) and **A-35** (plan and apply, then
 read the 24 hours), REL-10-AC19. BUG-43 (a test that picked an outbox row by
 random order) is done ([#79](https://github.com/bvst/TryggHverdag/pull/79),
-`85426bf`). The REL-10 follow-up the owner approved is in review: four
-REL-10-AC9 tests of the canary's real wait, which kill the mutant #77 left
-alive, and two out-of-date comments in `worker.ts`. **Task 8, LOST-08** ("They're safe") is done
+`85426bf`). The REL-10 follow-up the owner approved is done
+([#80](https://github.com/bvst/TryggHverdag/pull/80), `8838d0d`, 2026-10-13):
+four REL-10-AC9 tests of the canary's real wait, which kill the mutant #77
+left alive, and two out-of-date comments in `worker.ts`; BUG-44 (no test that
+`startWorker` hands the canary that wait) is queued. **Task 8, LOST-08** ("They're safe") is done
 ([#75](https://github.com/bvst/TryggHverdag/pull/75), `f5c14b2`, 2026-10-09):
 the owner's two answers (D-125) and the delegated choices (D-126); CI's
 mutation step took 15:19, and the merge's deploy applied migration 0008. **Task 7,
