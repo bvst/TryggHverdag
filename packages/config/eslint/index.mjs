@@ -71,6 +71,10 @@ export const IGNORED_PATHS = [
   // but on disk after a local build, and ESLint does not read .gitignore.
   'apps/mobile/android/**',
   'apps/mobile/ios/**',
+  // Stryker's sandbox (BUG-42): a copy of the checkout whose mutated files carry
+  // @ts-nocheck. The folder itself, so ESLint never walks in to find the config
+  // Stryker copies there. Prettier already skips it through .gitignore.
+  '.stryker-tmp/',
   'spikes/**', // throwaway by definition — never shipped, never linted
   'docs/**', // planning material, including the file templates INF-02 copies in
 ];

@@ -5217,3 +5217,57 @@ any other path is work, not a candidate for the same treatment.
     (`modules/journeys/service.ts`), which on staging is only the canary's own
     (D-091); once there are real users, it must not reach one. The spec's
     "Left for later tasks" names it.
+
+## D-129 — The mutation check runs one CI job per group, under an aggregator still named `mutation`; a local `--group`; the six mutants that only time out are fixed (BUG-45)
+- **Date:** 2026-10-13 · **Status:** Accepted (the owner's answers, 2026-10-13)
+  · **Section:** 6 (D-036, D-066, D-098, D-099, D-117, D-124)
+- **Context:** BUG-45. The owner: the mutation check is "verrrrrry long", and
+  "if one thing fails it is another 25 minutes". Measured from CI's own logs
+  (jobs 114290527930 and 114204230196):
+  - the job took 17:20 on #80 and 19:44 on #77 (the 25 minutes is D-098's
+    budget, which #67 used up); it is CI's critical path, ahead of
+    `android-e2e` (10:00);
+  - its eight groups run one after another in one job: domain 502 mutants
+    (2:55), alerts 418 (3:06), canary 244 (3:28), worker 251 (3:30), journeys
+    157 (1:11), healthchecks 72 (0:51), process 29 (1:26), api-process 18
+    (0:15); 1,691 mutants, 16:42 in Stryker;
+  - the cost is the number of mutants times a fixed cost per mutant (a fresh
+    Vitest, about 1.4 s of CPU each on 4 cores), not the tests;
+  - six mutants (canary 4, worker 2) end only by timing out, about 40 s each;
+  - the margin is closing: #74 12:15, #75 15:19, #77 19:26.
+  - Ruled out, measured again on 2026-10-13: Stryker's vitest runner with
+    per-test coverage (D-066) still scores the domain group 2.79 % where the
+    command runner gives 99.20 %, and no release supports Vitest 5;
+    incremental mode reuses results without knowing the tests changed (D-099).
+  - D-117 and D-124 named one CI job per group as the next step and left it
+    to the owner: it changes CI's structure and the required checks.
+- **Decision (the owner chose each recommendation):**
+  - **One CI job per group, in parallel, under an aggregator job still named
+    `mutation`.** The aggregator fails unless every group's job succeeded and
+    every group's report was judged by the same rule as today
+    (`judgeMutationReport`); a run with nothing to mutate passes as today.
+    The list of groups is generated from the code that defines them, never
+    typed into the workflow by hand. The required check keeps its name, so
+    the ruleset does not change. Expected wall clock: the slowest group plus
+    setup, about 4 to 4.5 minutes, for every run and every re-run; a group
+    that fails can be re-run alone. The repository is public, so the extra
+    runner minutes are free (GitHub's docs, read 2026-10-13).
+  - **`pnpm run mutation --group <name>`** runs one group locally (0:15 to
+    4:00), so a fix is checked before it is pushed. It changes nothing in
+    the gate.
+  - **The six mutants that only time out are fixed:** each test that should
+    kill one fails in time, or a mutant that can only hang is excluded with
+    its reason (D-098's rule).
+  - Not chosen: running only the groups a pull request touches (a missed
+    dependency would skip a group that should run; little gain in wall clock
+    once the groups run in parallel), and keeping it as it is.
+- **Consequences:** BUG-45 is built test-first in its own pull request after
+  BUG-42; `.github/workflows/`, `scripts/` and the gate's pins are the
+  owner's paths. Nothing measured changes: the same mutants, the same
+  threshold, a fresh run every time (D-099). D-098's 25-minute budget stays
+  for each group. How the jobs share the groups and the aggregator reads
+  their results is BUG-45's design, recorded with it. When
+  `apps/mobile/src/safety-core/` gets its first file, the whole-suite run
+  will start, and its Vitest config excludes `apps/mobile/**`, so it needs
+  its own design before that work lands (found by the measurement, left for
+  that task). Supersedes nothing.
