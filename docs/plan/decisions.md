@@ -5350,8 +5350,8 @@ any other path is work, not a candidate for the same treatment.
   - Supersedes nothing.
 
 ## D-131 — A gate that compares against a base refuses a base git cannot resolve (BUG-46)
-- **Date:** 2026-10-13 · **Status:** Accepted (the owner's answer, 2026-10-13:
-  "All three gates") · **Section:** 6 (D-036, D-098, CI-12)
+- **Date:** 2026-10-13 · **Status:** Accepted (the owner's answers, 2026-10-13:
+  "All three gates", then the fourth) · **Section:** 6 (D-036, D-098, CI-12)
 - **Context:** BUG-46. Three gates read the diff against a base branch, and
   each passed quietly when git could not resolve the merge base with it. All
   three were reproduced on 2026-10-13 with `--base origin/no-such-branch`:
@@ -5375,9 +5375,17 @@ any other path is work, not a candidate for the same treatment.
   tell, rather than reporting nothing to check. The check is one shared
   helper in `scripts/lib/git.mjs`.
 
-  For mutation, the refusal applies only where the decision reads the diff
-  (`--only-if-safety-paths-changed` and `--plan`). A plain
-  `pnpm run mutation` runs every group and is unchanged.
+  For mutation, the refusal applies only where the decision reads the diff:
+  `--only-if-safety-paths-changed`, with or without `--plan`. A plain
+  `pnpm run mutation`, and `--plan` without that flag, run every group
+  whatever changed, and are unchanged.
+- **Amended 2026-10-13 (the owner: "Yes, add it to BUG-46"):** a fourth gate,
+  `req:coverage --fail-on-uncovered-changed` (RG-01), had the same quiet pass.
+  `safety-reviewer` found it on reading BUG-46's fix, and it was reproduced in
+  a scratch clone. With `origin/main` removed, a committed spec with a
+  criterion no test names passed (exit 0). With `origin/main` in place, the
+  same commit failed ("LOST-02-AC99 … no test names it", exit 1). It refuses
+  the same way.
 - **Consequences:**
   - A clone with no `origin/main` (a fresh `git init`, say) now fails these
     gates loudly instead of passing them.

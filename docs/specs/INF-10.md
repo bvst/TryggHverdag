@@ -657,7 +657,7 @@ automatic approval (D-072), or it shows nothing about the owner's.
 **Found while reading the gates, and not changed here:** `tests:changes`
 passes, saying "nothing to compare against", when the base will not resolve.
 CI's full-history checkout keeps it from biting today. A candidate
-`/bugfix`. (The in-body skip found at the same time is now in D-082: AC17.)
+`/bugfix`, since done as BUG-46 (D-131): it now refuses that base. (The in-body skip found at the same time is now in D-082: AC17.)
 
 ## Out of scope
 
