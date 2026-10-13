@@ -8,6 +8,7 @@ import { MUTATION_GROUPS, SAFETY_PATHS } from './gate-decisions.mjs';
 import {
   CHECKS,
   OWNER_APPROVAL_PATHS,
+  fanOutOf,
   planChecks,
   reviewBypass,
   reviewCodeowners,
@@ -420,5 +421,38 @@ describe('BUG-45: the mutation check fans out into two jobs no rule requires (AC
       expect(advisory).not.toContain(job);
       expect(waiting.map((entry) => entry.check)).not.toContain(job);
     }
+  });
+});
+
+describe('BUG-45: fanOutOf, the map gate:integrity hands reviewWorkflows, from CHECKS (AC10, review loop 1)', () => {
+  // test-auditor B1: gate:integrity built this map inline in main(), which no
+  // test reached in-process, so a fault there (a check dropped, its jobs
+  // swapped for another's) would show only as a red gate:integrity in CI. It
+  // is now a pure helper: every check that declares a fanOut, to its jobs in
+  // order, and nothing for a check that declares none.
+  test('BUG-45-AC10: with this repository’s CHECKS it is exactly mutation, to mutation-plan then mutation-group', () => {
+    expect(fanOutOf(CHECKS)).toEqual({ mutation: ['mutation-plan', 'mutation-group'] });
+  });
+
+  test('BUG-45-AC10: with a synthetic list, every check that declares a fanOut is there, with its own jobs in order, and no other check', () => {
+    const checks = [
+      { check: 'alpha', requirement: 'CI-91', blocking: true },
+      {
+        check: 'beta',
+        requirement: 'CI-92',
+        needsScript: 'beta',
+        blocking: true,
+        fanOut: ['beta-plan', 'beta-leg'],
+      },
+      { check: 'gamma', requirement: 'CI-93', needsScript: 'gamma', blocking: true },
+      { check: 'delta', requirement: 'CI-94', blocking: false, fanOut: ['delta-leg'] },
+    ];
+
+    expect(fanOutOf(checks)).toEqual({ beta: ['beta-plan', 'beta-leg'], delta: ['delta-leg'] });
+  });
+
+  test('BUG-45-AC10: no check that declares a fanOut, or no checks at all, is an empty map, so every helper job is reported as today', () => {
+    expect(fanOutOf([{ check: 'alpha', requirement: 'CI-91', blocking: true }])).toEqual({});
+    expect(fanOutOf([])).toEqual({});
   });
 });

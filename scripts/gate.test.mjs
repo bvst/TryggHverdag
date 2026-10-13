@@ -4227,7 +4227,18 @@ describe('BUG-45: the mutation check in ci.yml is one job per group, under an ag
     const steps = ciSteps(GROUP);
     const uploads = steps.flatMap((step, at) => (PINNED('upload-artifact').test(step) ? [at] : []));
 
-    expect(commandOf(run.step)).toBe('pnpm run mutation --group ${{ matrix.group }}');
+    // BUG-45 review loop 1 (RG-03; code-reviewer and privacy-security-reviewer
+    // on 89688b1): this pinned `pnpm run mutation --group ${{ matrix.group }}`,
+    // the group's name written into the script's text by GitHub before the
+    // shell reads it. The name is the plan's output, computed by the pull
+    // request's own code, so it reaches the script as ci.yml's other values a
+    // pull request could choose do: through `env:`, quoted, read by the shell
+    // as data. The leg still runs `--group` for its own group, and nothing
+    // else; only how the name arrives changes.
+    expect(commandOf(run.step)).toBe('pnpm run mutation --group "$GROUP"');
+    expect({ ...jobEnv(GROUP), ...stepEnv(run.step) }).toMatchObject({
+      GROUP: '${{ matrix.group }}',
+    });
     expect(uploads, 'upload steps pinned by SHA').toHaveLength(1);
     const at = uploads[0] ?? -1;
     const upload = steps[at] ?? '';
@@ -4283,6 +4294,51 @@ describe('BUG-45: the mutation check in ci.yml is one job per group, under an ag
       MUTATION_GROUP_RESULT: '${{ needs.mutation-group.result }}',
     });
     expect(scriptOf(step)).not.toContain('${{');
+  });
+
+  test('BUG-45-AC8: no run: script in the three jobs has a value written into its text but the base branch: the rest reach a script through env:', () => {
+    // BUG-45 review loop 1 (code-reviewer and privacy-security-reviewer):
+    // GitHub writes a `${{ … }}` into a script's text before the shell reads
+    // it, so a value that holds shell is run as shell. The plan's outputs, the
+    // matrix's group and both jobs' results are computed by, or from, the pull
+    // request's own code: they arrive through `env:`. The one exception is the
+    // pull request's base branch, `${{ github.base_ref || 'main' }}`, which
+    // every job of ci.yml writes into its `--base` and which the CI-12 and
+    // BUG-12 pins above hold there: a branch of this repository, never the
+    // pull request's code.
+    const BASE_REF = "${{ github.base_ref || 'main' }}";
+    for (const id of THREE) {
+      const runs = ciSteps(id).filter((step) => /^\s*(?:-\s+)?run:/m.test(step));
+      expect(runs.length, `${id} has steps that run a script`).toBeGreaterThan(0);
+      for (const step of runs) {
+        const script = scriptOf(step);
+        expect(script.trim(), `a run: step of ${id} whose script was not read`).not.toBe('');
+        expect(script.split(BASE_REF).join(''), `a run: script of ${id}`).not.toContain('${{');
+      }
+    }
+  });
+
+  test('BUG-45-AC8: each leg’s checkout keeps no credentials behind, since the pull request’s own code runs there', () => {
+    // BUG-45 review loop 1 (privacy-security-reviewer): the token is read-only
+    // (`contents: read`), but a leg runs Stryker over the pull request's own
+    // code and tests, which have no use for it.
+    const checkouts = ciSteps(GROUP).filter((step) => PINNED('checkout').test(step));
+
+    expect(checkouts.length, 'mutation-group checks out the repository').toBeGreaterThan(0);
+    for (const checkout of checkouts) {
+      expect(checkout, 'a mutation-group checkout keeps its credentials').toMatch(
+        /\bpersist-credentials:\s*false\b/,
+      );
+    }
+  });
+
+  test('BUG-45-AC8: each leg’s report and verdict are kept 7 days, as android-e2e-debug’s artifact is, not the repository’s default', () => {
+    // BUG-45 review loop 1 (privacy-security-reviewer): the repository is
+    // public, and the aggregator reads the artifacts within the same run.
+    const uploads = ciSteps(GROUP).filter((step) => PINNED('upload-artifact').test(step));
+
+    expect(uploads, 'upload steps pinned by SHA').toHaveLength(1);
+    expect(uploads[0]).toMatch(/^\s+retention-days:\s*7\s*$/m);
   });
 
   test('BUG-45-AC8: no group’s name is typed into the three jobs, and none passes --incremental', () => {

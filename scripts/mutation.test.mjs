@@ -1479,6 +1479,14 @@ describe('BUG-45: aggregateMutationJobs, the verdict of the required `mutation` 
       (i) => Object.assign(i.reports, { beta: '{"files": ' }),
       [/(?<![\w-])beta(?![\w-])/, /pars|JSON/i],
     ],
+    // BUG-45 review loop 1 (test-auditor S1): a row added, none changed. Its
+    // report passes, so only the verdict file can fail the group, and the
+    // line that says so names the group, the verdict file and the parse.
+    [
+      'a verdict file does not parse',
+      (i) => Object.assign(i.verdicts, { beta: '{"name": ' }),
+      [/(?<![\w-])beta(?![\w-])[^\n]*verdict[^\n]*(?:pars|JSON)/i],
+    ],
     [
       'a verdict file holds a non-zero exit',
       (i) => Object.assign(i.verdicts, { beta: verdictText('beta', { status: 1 }) }),
@@ -1667,6 +1675,24 @@ describe('BUG-45: `pnpm run mutation --aggregate <dir>`, in a scratch repository
     expect(result.output).toMatch(
       /(?<![\w-])canary(?![\w-])[^\n]*report|report[^\n]*(?<![\w-])canary(?![\w-])/i,
     );
+  });
+
+  test('BUG-45-AC6: the plan job’s result failure, with every report, verdict and other value passing: it exits 1, naming mutation-plan and its failure', () => {
+    // BUG-45 review loop 1 (test-auditor S2): the one value of the plan's
+    // environment that, read wrongly or not at all, leaves every other input
+    // passing. A failed plan's outputs cannot be relied on, whatever the legs
+    // left.
+    const repository = aggregateRepository();
+
+    const result = aggregateIn(repository, repository.artifacts, {
+      ...RAN,
+      MUTATION_PLAN_RESULT: 'failure',
+    });
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.starts, 'the aggregator started a Stryker run').toBe('');
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toMatch(/(?<![\w-])mutation-plan(?![\w-])[^\n]*failure/);
   });
 
   test('BUG-45-AC6: the plan’s environment missing altogether is a wiring fault, and fails', () => {

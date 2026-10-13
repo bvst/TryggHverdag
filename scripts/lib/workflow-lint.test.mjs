@@ -459,6 +459,17 @@ describe('BUG-45: reviewWorkflows accepts the jobs of a required check’s fan-o
 
   const job = (id, keys) => [`  ${id}:`, ...keys.map((key) => `    ${key}`)];
 
+  /**
+   * The aggregator's `needs:`, in the form `needs` gives: a string is written
+   * inline (`needs: [a, b]`, `needs: a`), a list as YAML's block list under
+   * `needs:`, and null leaves the key out.
+   */
+  const needsKeys = (needs) => {
+    if (needs === null) return [];
+    if (Array.isArray(needs)) return ['needs:', ...needs.map((name) => `  - ${name}`)];
+    return [`needs: ${needs}`];
+  };
+
   /** A ci.yml with static, the two helpers and the aggregator, as `options` shape them. */
   function ciWith({
     needs = '[mutation-plan, mutation-group]',
@@ -483,7 +494,7 @@ describe('BUG-45: reviewWorkflows accepts the jobs of a required check’s fan-o
               '  - run: pnpm run mutation --group x',
             ])),
         ...job('mutation', [
-          ...(needs === null ? [] : [`needs: ${needs}`]),
+          ...needsKeys(needs),
           ...(condition === null ? [] : [`if: ${condition}`]),
           'steps:',
           '  - run: pnpm run mutation --aggregate artifacts',
@@ -535,6 +546,11 @@ describe('BUG-45: reviewWorkflows accepts the jobs of a required check’s fan-o
       "if: needs.mutation-plan.outputs.decision == 'run'",
       "needs.mutation-plan.outputs.decision == 'run'",
     ],
+    // BUG-45 review loop 1 (test-auditor B1): a row added, none changed.
+    // `always() && success()` is false whenever a needed job failed, so a
+    // failed leg still skips the check. A test for `always()` that is not
+    // anchored at the end of the line would accept it.
+    ['if: always() && success()', 'always() && success()'],
   ])(
     'BUG-45-AC10: mutation with %s is a problem, naming it and always(): a failed leg would skip the check, which reads as passing',
     (_, condition) => {
@@ -546,6 +562,35 @@ describe('BUG-45: reviewWorkflows accepts the jobs of a required check’s fan-o
       expect(named.length, JSON.stringify(problems)).toBeGreaterThan(0);
     },
   );
+
+  // BUG-45 review loop 1 (test-auditor B1): `needs:` in its third form, a
+  // YAML list under the key, which the fan-out rule reads too, and a check job
+  // with no `needs:` at all.
+  test('BUG-45-AC10: mutation’s needs as a YAML list holding both fan-out jobs is no problem', () => {
+    expect(review([ciWith({ needs: ['mutation-plan', 'mutation-group'] })])).toEqual([]);
+    expect(review([ciWith({ needs: ['mutation-group', 'mutation-plan'] })])).toEqual([]);
+  });
+
+  test('BUG-45-AC10: mutation’s needs as a YAML list leaving mutation-plan out is a problem, naming mutation-plan and the need', () => {
+    const problems = review([ciWith({ needs: ['mutation-group'] })]);
+
+    expect(
+      naming(problems, 'mutation-plan').some((problem) => /\bneeds?\b/.test(problem.what)),
+      JSON.stringify(problems),
+    ).toBe(true);
+    expect(naming(problems, 'mutation-group'), JSON.stringify(problems)).toEqual([]);
+  });
+
+  test('BUG-45-AC10: mutation with no needs: at all is a problem, naming each fan-out job and the need', () => {
+    const problems = review([ciWith({ needs: null })]);
+
+    for (const id of ['mutation-plan', 'mutation-group']) {
+      expect(
+        naming(problems, id).some((problem) => /\bneeds?\b/.test(problem.what)),
+        `${id}: ${JSON.stringify(problems)}`,
+      ).toBe(true);
+    }
+  });
 
   test('BUG-45-AC10: any other job no rule requires is still a problem, beside an accepted fan-out', () => {
     const problems = review([
