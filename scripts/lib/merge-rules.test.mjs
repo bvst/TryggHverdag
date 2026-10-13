@@ -8,6 +8,7 @@ import { MUTATION_GROUPS, SAFETY_PATHS } from './gate-decisions.mjs';
 import {
   CHECKS,
   OWNER_APPROVAL_PATHS,
+  fanOutOf,
   planChecks,
   reviewBypass,
   reviewCodeowners,
@@ -387,5 +388,71 @@ describe('REL-10-AC18: the staging canary’s code needs the owner and the safet
 
     expect(tracked(ADAPTER)).toEqual([ADAPTER]);
     expect(tracked(MODULE).filter((file) => file.endsWith('.ts')).length).toBeGreaterThan(0);
+  });
+});
+
+describe('BUG-45: the mutation check fans out into two jobs no rule requires (AC10, D-129)', () => {
+  // The required check keeps its name, `mutation`, now the aggregator's, so the
+  // ruleset does not change. The plan and the legs are declared as its
+  // fan-out, which gate:integrity accepts only on terms (workflow-lint.mjs).
+  test('BUG-45-AC10: CHECKS’ mutation entry declares its fan-out, mutation-plan then mutation-group, and keeps its name, requirement, script and blocking', () => {
+    expect(CHECKS.find((check) => check.check === 'mutation')).toEqual({
+      check: 'mutation',
+      requirement: 'CI-08',
+      needsScript: 'mutation',
+      blocking: true,
+      fanOut: ['mutation-plan', 'mutation-group'],
+    });
+  });
+
+  test('BUG-45-AC10: no other check fans out', () => {
+    expect(
+      CHECKS.filter((check) => check.fanOut !== undefined).map((check) => check.check),
+    ).toEqual(['mutation']);
+  });
+
+  test('BUG-45-AC10: the fan-out jobs are never checks of their own, required or advisory, so the ruleset the owner imported does not change', () => {
+    const { required, advisory, waiting } = planChecks(SCRIPTS_TODAY);
+
+    expect(required).toContain('mutation');
+    for (const job of ['mutation-plan', 'mutation-group']) {
+      expect(CHECKS.map((check) => check.check)).not.toContain(job);
+      expect(required).not.toContain(job);
+      expect(advisory).not.toContain(job);
+      expect(waiting.map((entry) => entry.check)).not.toContain(job);
+    }
+  });
+});
+
+describe('BUG-45: fanOutOf, the map gate:integrity hands reviewWorkflows, from CHECKS (AC10, review loop 1)', () => {
+  // test-auditor B1: gate:integrity built this map inline in main(), which no
+  // test reached in-process, so a fault there (a check dropped, its jobs
+  // swapped for another's) would show only as a red gate:integrity in CI. It
+  // is now a pure helper: every check that declares a fanOut, to its jobs in
+  // order, and nothing for a check that declares none.
+  test('BUG-45-AC10: with this repository’s CHECKS it is exactly mutation, to mutation-plan then mutation-group', () => {
+    expect(fanOutOf(CHECKS)).toEqual({ mutation: ['mutation-plan', 'mutation-group'] });
+  });
+
+  test('BUG-45-AC10: with a synthetic list, every check that declares a fanOut is there, with its own jobs in order, and no other check', () => {
+    const checks = [
+      { check: 'alpha', requirement: 'CI-91', blocking: true },
+      {
+        check: 'beta',
+        requirement: 'CI-92',
+        needsScript: 'beta',
+        blocking: true,
+        fanOut: ['beta-plan', 'beta-leg'],
+      },
+      { check: 'gamma', requirement: 'CI-93', needsScript: 'gamma', blocking: true },
+      { check: 'delta', requirement: 'CI-94', blocking: false, fanOut: ['delta-leg'] },
+    ];
+
+    expect(fanOutOf(checks)).toEqual({ beta: ['beta-plan', 'beta-leg'], delta: ['delta-leg'] });
+  });
+
+  test('BUG-45-AC10: no check that declares a fanOut, or no checks at all, is an empty map, so every helper job is reported as today', () => {
+    expect(fanOutOf([{ check: 'alpha', requirement: 'CI-91', blocking: true }])).toEqual({});
+    expect(fanOutOf([])).toEqual({});
   });
 });

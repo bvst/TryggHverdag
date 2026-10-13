@@ -243,6 +243,106 @@ export function findUngroupedEcosystems(text) {
   return ungrouped;
 }
 
+/**
+ * A job's own lines, comment lines dropped, or null when the workflow has no
+ * job with that id.
+ *
+ * @param {string} text
+ * @param {string} id
+ */
+function jobLines(text, id) {
+  const lines = text.split('\n');
+  // Under `jobs:` only: `  group:` under `concurrency:` is not a job.
+  const jobs = lines.findIndex((line) => /^jobs:\s*$/.test(line));
+  const start = lines.findIndex(
+    (line, index) => index > jobs && (line === `  ${id}:` || line.startsWith(`  ${id}: `)),
+  );
+  if (start === -1) {
+    return null;
+  }
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => /^ {0,2}\S/.test(line));
+  return (end === -1 ? rest : rest.slice(0, end)).filter((line) => !isComment(line));
+}
+
+/**
+ * The jobs a job needs, in any of YAML's three forms: `needs: a`,
+ * `needs: [a, b]`, or a list under `needs:`.
+ *
+ * @param {string[]} lines — from jobLines
+ */
+function needsOf(lines) {
+  const at = lines.findIndex((line) => /^ {4}needs:/.test(line));
+  if (at === -1) {
+    return [];
+  }
+  const inline = lines[at].replace(/^ {4}needs:\s*/, '').trim();
+  if (inline !== '') {
+    return inline
+      .replace(/^\[|\]$/g, '')
+      .split(',')
+      .map((name) => name.trim())
+      .filter((name) => name !== '');
+  }
+  const listed = [];
+  for (const line of lines.slice(at + 1)) {
+    const item = /^ {6}-\s*(?<name>\S+)\s*$/.exec(line);
+    if (item?.groups === undefined) {
+      break;
+    }
+    listed.push(item.groups.name);
+  }
+  return listed;
+}
+
+/**
+ * The jobs of ci.yml no rule requires that are accepted all the same: those a
+ * required check fans out into (`fanOut` in CHECKS), while that check's job
+ * needs each of them and has `if: always()`. Without `if: always()`, a failed
+ * or cancelled fan-out job would skip the check's job, and a skipped required
+ * check reads as passing; without the need, the check could pass before, or
+ * without, the work it stands for (BUG-45, D-129).
+ *
+ * @param {{ text: string, required: string[], fanOut: Record<string, string[]> }} state
+ * @returns {{ accepted: string[], problems: { what: string, fix: string }[] }}
+ */
+function reviewFanOut({ text, required, fanOut }) {
+  const accepted = [];
+  const problems = [];
+  for (const [check, jobs] of Object.entries(fanOut)) {
+    const lines = jobLines(text, check);
+    // A check no rule requires accepts nothing; one with no job is already
+    // reported as a required check nothing produces.
+    if (!required.includes(check) || lines === null) {
+      continue;
+    }
+    const always = lines.some((line) => /^ {4}if:\s*always\(\)\s*$/.test(line));
+    if (!always) {
+      problems.push({
+        what: `ci.yml's ${check} job fans out, but has no job-level if: always(), so a failed or cancelled job it needs would skip it, and a skipped required check reads as passing.`,
+        fix: `Give the ${check} job \`if: always()\`, and let its own step judge what the jobs it needs left.`,
+      });
+    }
+    const needs = needsOf(lines);
+    for (const job of jobs) {
+      if (jobLines(text, job) === null) {
+        problems.push({
+          what: `CHECKS says ${check} fans out into ${job}, but ci.yml has no ${job} job.`,
+          fix: `Add the ${job} job, or take it out of ${check}'s fanOut in scripts/lib/merge-rules.mjs.`,
+        });
+      } else if (!needs.includes(job)) {
+        problems.push({
+          what: `ci.yml's ${check} job does not need ${job}, one of the jobs it fans out into, so it can pass before that job has finished, or without it.`,
+          fix: `Add ${job} to the needs of the ${check} job.`,
+        });
+      } else if (always) {
+        accepted.push(job);
+      }
+    }
+  }
+  return { accepted, problems };
+}
+
 /** `ai-review (test-auditor)` → `test-auditor`; anything else → null. */
 function reviewerOf(check) {
   return /^ai-review \((?<agent>[\w-]+)\)$/.exec(check)?.groups?.agent ?? null;
@@ -253,9 +353,11 @@ function reviewerOf(check) {
  *   files: {path: string, text: string}[],
  *   scripts: Record<string, string>,
  *   required: string[],
- * }} state
+ *   fanOut?: Record<string, string[]>,
+ * }} state — `fanOut`: a required check's id, to the ci.yml jobs it fans out
+ *   into, as CHECKS declares them (reviewFanOut)
  */
-export function reviewWorkflows({ files, scripts, required }) {
+export function reviewWorkflows({ files, scripts, required, fanOut = {} }) {
   if (files.length === 0) {
     return [
       {
@@ -304,8 +406,14 @@ export function reviewWorkflows({ files, scripts, required }) {
 
   const ci = files.find((file) => file.path.endsWith('/ci.yml'));
   if (ci !== undefined) {
+    const { accepted, problems: fanOutProblems } = reviewFanOut({
+      text: ci.text,
+      required,
+      fanOut,
+    });
+    problems.push(...fanOutProblems);
     for (const id of findJobIds(ci.text)) {
-      if (!required.includes(id)) {
+      if (!required.includes(id) && !accepted.includes(id)) {
         problems.push({
           what: `ci.yml runs the job "${id}", but no merge rule requires it, so it can fail without stopping anything.`,
           fix: 'Add it to CHECKS in scripts/lib/merge-rules.mjs and to the required checks, or remove the job.',

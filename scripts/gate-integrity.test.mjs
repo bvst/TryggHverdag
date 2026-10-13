@@ -1,5 +1,6 @@
 // CI-01, the part a person reads. A gate that finds a problem and then buries
 // it in output nobody scrolls to has not really found anything.
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import {
   combineRulesetAnswers,
@@ -236,5 +237,39 @@ describe('renderReport', () => {
 
   test('a section with no problems still appears, so "checked" and "not checked" look different', () => {
     expect(renderReport(clean).text).toContain('✓');
+  });
+});
+
+describe('BUG-45: gate:integrity reads the fan-out from fanOutOf, which is tested, not from code of its own (AC10, review loop 1)', () => {
+  // test-auditor B1: main() built the map of required checks to the jobs they
+  // fan out into inline, where no test reached it in-process. fanOutOf, in
+  // scripts/lib/merge-rules.mjs, is the one place that map is built, and its
+  // tests are in merge-rules.test.mjs; that main() hands reviewWorkflows a map
+  // the real workflows pass with is held, end to end, by the BUG-45-AC10 test
+  // in gate.test.mjs that runs this script on a copy of them. This holds the
+  // rest: main() calls the helper, and reads no check's fanOut itself.
+  const code = readFileSync(new URL('./gate-integrity.mjs', import.meta.url), 'utf8')
+    .split('\n')
+    .filter((line) => !/^\s*(?:\/\/|\/?\*)/.test(line))
+    .join('\n');
+
+  test('BUG-45-AC10: gate-integrity.mjs imports fanOutOf from merge-rules.mjs and calls it on CHECKS', () => {
+    const imported = /import\s*\{([^}]*)\}\s*from\s*'\.\/lib\/merge-rules\.mjs'/.exec(code)?.[1];
+
+    expect(imported, 'the import from ./lib/merge-rules.mjs').toBeDefined();
+    expect(imported).toMatch(/\bfanOutOf\b/);
+    expect(
+      /\bfanOutOf\(\s*CHECKS\s*\)/.test(code),
+      'gate-integrity.mjs calls fanOutOf(CHECKS)',
+    ).toBe(true);
+  });
+
+  test('BUG-45-AC10: gate-integrity.mjs reads no check’s fanOut itself', () => {
+    const reading = code
+      .split('\n')
+      .filter((line) => /\.fanOut\b|\[\s*['"`]fanOut['"`]\s*\]/.test(line))
+      .map((line) => line.trim());
+
+    expect(reading, 'lines of gate-integrity.mjs that read a fanOut').toEqual([]);
   });
 });

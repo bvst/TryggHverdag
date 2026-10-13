@@ -431,6 +431,197 @@ describe('BUG-12: judgeMutationReport, a run judged file by file from its report
   });
 });
 
+/**
+ * A Stryker JSON report whose mutants are given one by one: where each is,
+ * which mutator made it, and what became of it. `{ 'a.ts': [{ status:
+ * 'Timeout', line: 3, column: 7, mutatorName: 'ArrowFunction' }] }`.
+ */
+function reportOfMutants(files) {
+  let id = 0;
+  return {
+    schemaVersion: '1.0',
+    thresholds: { high: 90, low: 80 },
+    files: Object.fromEntries(
+      Object.entries(files).map(([file, mutants]) => [
+        file,
+        {
+          language: 'typescript',
+          source: '',
+          mutants: mutants.map(({ status, line, column, mutatorName, replacement = 'x' }) => {
+            id += 1;
+            return {
+              id: String(id),
+              mutatorName,
+              replacement,
+              status,
+              location: { start: { line, column }, end: { line, column: column + 1 } },
+            };
+          }),
+        },
+      ]),
+    ),
+  };
+}
+
+/** `count` killed mutants on lines of their own, from line 500 on, so none shares a place with the ones a test names. */
+const killedOnes = (count) =>
+  Array.from({ length: count }, (_, at) => ({
+    status: 'Killed',
+    line: 500 + at,
+    column: 5,
+    mutatorName: 'BlockStatement',
+  }));
+
+describe('BUG-45: judgeMutationReport names each mutant that timed out (AC14, the owner’s answer to Q1)', () => {
+  // On #80 and #77 the gate printed `run.ts: 95.9 % (234 killed, 6 survived,
+  // 4 timed out)` and said the clear-text report above named each mutant that
+  // was not caught. Stryker's clear-text report names survivors only, so the
+  // four timeouts, and the worker's two, could be found only by running the
+  // groups again and reading the JSON report the gate had already read.
+  const RUN = 'apps/server/src/modules/canary/run.ts';
+  const WORKER = 'apps/server/src/worker.ts';
+
+  /** The one line of the message that holds `place`; failing, saying so, when no line or more than one does. */
+  const lineNaming = (message, place) => {
+    const lines = message.split('\n').filter((line) => line.includes(place));
+    expect(lines.length, `lines of the message naming ${place}:\n${message}`).toBe(1);
+    return lines[0] ?? '';
+  };
+
+  test('BUG-45-AC14: in a run that passes, each timed-out mutant is named on a line of its own, with its file, line and column, and its mutator, read from the report', () => {
+    const verdict = judgeMutationReport(
+      reportOfMutants({
+        [RUN]: [
+          ...killedOnes(20),
+          { status: 'Timeout', line: 203, column: 23, mutatorName: 'ArrowFunction' },
+          { status: 'Timeout', line: 237, column: 23, mutatorName: 'ArrowFunction' },
+        ],
+        [WORKER]: [
+          ...killedOnes(30),
+          { status: 'Timeout', line: 271, column: 15, mutatorName: 'BooleanLiteral' },
+        ],
+      }),
+    );
+
+    expect(verdict.ok).toBe(true);
+    const first = lineNaming(verdict.message, `${RUN}:203:23`);
+    const second = lineNaming(verdict.message, `${RUN}:237:23`);
+    const third = lineNaming(verdict.message, `${WORKER}:271:15`);
+    expect(first, verdict.message).toContain('ArrowFunction');
+    expect(second, verdict.message).toContain('ArrowFunction');
+    expect(third, verdict.message).toContain('BooleanLiteral');
+    expect(new Set([first, second, third]).size).toBe(3);
+  });
+
+  test('BUG-45-AC14: in a run that fails, each timed-out mutant is named on a line of its own too', () => {
+    const verdict = judgeMutationReport(
+      reportOfMutants({
+        [WORKER]: [
+          ...killedOnes(7),
+          { status: 'Timeout', line: 271, column: 15, mutatorName: 'BooleanLiteral' },
+          { status: 'Timeout', line: 288, column: 15, mutatorName: 'ConditionalExpression' },
+          { status: 'Timeout', line: 290, column: 13, mutatorName: 'BlockStatement' },
+        ],
+      }),
+    );
+
+    expect(verdict.ok).toBe(false);
+    expect(lineNaming(verdict.message, `${WORKER}:271:15`), verdict.message).toContain(
+      'BooleanLiteral',
+    );
+    expect(lineNaming(verdict.message, `${WORKER}:288:15`), verdict.message).toContain(
+      'ConditionalExpression',
+    );
+    expect(lineNaming(verdict.message, `${WORKER}:290:13`), verdict.message).toContain(
+      'BlockStatement',
+    );
+  });
+
+  test('BUG-45-AC14: only the timed-out mutants are named by where they are: a killed, surviving or uncovered one is not', () => {
+    const verdict = judgeMutationReport(
+      reportOfMutants({
+        [RUN]: [
+          ...killedOnes(18),
+          { status: 'Killed', line: 101, column: 3, mutatorName: 'StringLiteral' },
+          { status: 'Survived', line: 102, column: 3, mutatorName: 'EqualityOperator' },
+          { status: 'NoCoverage', line: 103, column: 3, mutatorName: 'ObjectLiteral' },
+          { status: 'Timeout', line: 104, column: 3, mutatorName: 'ArrowFunction' },
+        ],
+      }),
+    );
+
+    expect(lineNaming(verdict.message, `${RUN}:104:3`), verdict.message).toContain('ArrowFunction');
+    for (const place of [`${RUN}:101:3`, `${RUN}:102:3`, `${RUN}:103:3`]) {
+      expect(verdict.message).not.toContain(place);
+    }
+  });
+
+  test('BUG-45-AC14: the verdict and each file’s score are exactly what they are without the timed-out lines', () => {
+    // 20 killed of 22 is 90.9 %, a pass; 8 of 10 is 80 %, a pass; 7 of 10 is
+    // 70 %, a failure: the same verdicts BUG-12's tests hold for counts alone.
+    const passing = judgeMutationReport(
+      reportOfMutants({
+        [RUN]: [
+          ...killedOnes(20),
+          { status: 'Timeout', line: 203, column: 23, mutatorName: 'ArrowFunction' },
+          { status: 'Timeout', line: 237, column: 23, mutatorName: 'ArrowFunction' },
+        ],
+      }),
+    );
+    expect(passing.ok).toBe(true);
+    expect(passing.message).toContain(
+      `${RUN}: 90.9 % (20 killed, 0 survived, 2 timed out, 0 no coverage)`,
+    );
+
+    const exactly = judgeMutationReport(
+      reportOfMutants({
+        [WORKER]: [
+          ...killedOnes(8),
+          { status: 'Timeout', line: 271, column: 15, mutatorName: 'BooleanLiteral' },
+          { status: 'Timeout', line: 288, column: 15, mutatorName: 'ConditionalExpression' },
+        ],
+      }),
+    );
+    expect(exactly.ok).toBe(true);
+    expect(exactly.message).toContain(
+      `${WORKER}: 80 % (8 killed, 0 survived, 2 timed out, 0 no coverage)`,
+    );
+
+    const failing = judgeMutationReport(
+      reportOfMutants({
+        [WORKER]: [
+          ...killedOnes(7),
+          { status: 'Timeout', line: 271, column: 15, mutatorName: 'BooleanLiteral' },
+          { status: 'Timeout', line: 288, column: 15, mutatorName: 'ConditionalExpression' },
+          { status: 'Timeout', line: 290, column: 13, mutatorName: 'BlockStatement' },
+        ],
+      }),
+    );
+    expect(failing.ok).toBe(false);
+    expect(failing.message).toContain(
+      `${WORKER}: 70 % (7 killed, 0 survived, 3 timed out, 0 no coverage)`,
+    );
+  });
+
+  test('BUG-45-AC14: a failing run’s message no longer says the clear-text report names each mutant that was not caught, which it does not: it names survivors only', () => {
+    const verdict = judgeMutationReport(
+      reportOfMutants({
+        [WORKER]: [
+          ...killedOnes(7),
+          { status: 'Survived', line: 120, column: 9, mutatorName: 'EqualityOperator' },
+          { status: 'Timeout', line: 271, column: 15, mutatorName: 'BooleanLiteral' },
+          { status: 'NoCoverage', line: 130, column: 9, mutatorName: 'BlockStatement' },
+        ],
+      }),
+    );
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.message).not.toContain('The clear-text report above names each.');
+    // Still told apart, as BUG-12 has them: a timeout is a test that waited.
+    expect(verdict.message).toMatch(/not[^.]*caught/i);
+  });
+});
+
 describe('mutationRuns', () => {
   // The owner's decision of 2026-09-25, an amendment to D-066. PR #31's
   // mutation check was killed at its time limit because every mutant in every

@@ -32,6 +32,22 @@
 // test file gutted to assert nothing scored 100 % incremental and 0 % fresh.
 // So `pnpm run mutation --incremental` is refused before any Stryker run
 // starts, and Stryker is never asked for incremental mode.
+//
+// BUG-45 (D-129, the owner, 2026-10-13) splits the one CI job into one per
+// group, under an aggregator still named `mutation`, and adds a local
+// `--group`. Three entry points join `pnpm run mutation`, each tested here
+// through the real script in a scratch repository, and the two pure functions
+// behind them directly:
+// - `--plan` makes the decision once, by today's rules, and writes it, with
+//   the list of groups from the code that defines them, as job outputs;
+// - `--group <name>` runs one group, judged as today, and writes a verdict
+//   file beside its report;
+// - `--aggregate <dir>` passes only when every group the code expects
+//   reported and passed, judged again from the raw reports, and trusts
+//   neither the plan's list nor GitHub's roll-up of the legs.
+// Two new exports are imported below, `classifyRuns` and
+// `aggregateMutationJobs`; until they exist, the tests that call them fail
+// on that.
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
@@ -45,10 +61,23 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, test } from 'vitest';
-import { judgeMutationReport, mutationReportFile, mutationRuns } from './lib/gate-decisions.mjs';
-import { hasSourceFiles, runMutationGroups, strykerRunner } from './mutation.mjs';
+import {
+  MUTATION_GROUPS,
+  MUTATION_TIMEOUT_MS,
+  decideMutation,
+  judgeMutationReport,
+  mutationReportFile,
+  mutationRuns,
+} from './lib/gate-decisions.mjs';
+import {
+  aggregateMutationJobs,
+  classifyRuns,
+  hasSourceFiles,
+  runMutationGroups,
+  strykerRunner,
+} from './mutation.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -781,5 +810,917 @@ describe('`pnpm run mutation` itself, in a scratch repository', () => {
     expect(verdict, missing.output).toContain(gone);
     expect(verdict, missing.output).toMatch(/(?<![\w-])process\b/);
     expect(verdict, missing.output).not.toContain('apps/server/src/process.ts');
+  });
+});
+
+// ===========================================================================
+// BUG-45 (D-129): one CI job per group, under an aggregator still named
+// `mutation`, and a local `--group`.
+// ===========================================================================
+
+/** The name of the run that takes the safety paths no group claims. */
+const WHOLE_SUITE_RUN_NAME = 'whole-suite';
+
+/** This repository's runs that are groups, in order: every run but the whole-suite one. */
+const GROUP_NAMES = mutationRuns()
+  .filter((run) => run.name !== WHOLE_SUITE_RUN_NAME)
+  .map((run) => run.name);
+
+/** Where a run's verdict file is written beside its report (the spec's approach item 4). */
+const verdictFile = (name) => `reports/mutation/${name}.verdict.json`;
+
+/** Plants a source file in a safety path of `repo`: in a folder, or the file itself. */
+function plant(repo, safetyPath) {
+  const file = safetyPath.endsWith('/')
+    ? path.join(repo, safetyPath, 'planted.ts')
+    : path.join(repo, safetyPath);
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, 'export const planted = 1;\n');
+}
+
+/** git in a scratch repository, with a synthetic identity and nothing of the machine's own. */
+function git(repo, args) {
+  const result = spawnSync(
+    'git',
+    [
+      '-c',
+      'user.name=Synthetic Tester',
+      '-c',
+      'user.email=synthetic@example.invalid',
+      '-c',
+      'commit.gpgsign=false',
+      ...args,
+    ],
+    { cwd: repo, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: process.env.HOME } },
+  );
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed:\n${result.stderr}`);
+}
+
+/** `name=value` lines, as GitHub reads a GITHUB_OUTPUT file: the lines in order, and the last value of each name. */
+function outputsIn(text) {
+  const lines = text.split('\n').filter((line) => line !== '');
+  const values = {};
+  for (const line of lines) {
+    const at = line.indexOf('=');
+    if (at > 0) values[line.slice(0, at)] = line.slice(at + 1);
+  }
+  return { lines, values };
+}
+
+describe('BUG-45: classifyRuns, the one list of the runs that have something to mutate (AC1)', () => {
+  // The plan's `groups` output and the aggregator's own expected list both
+  // come from this, so the list is generated from the code that defines the
+  // groups, once, and never typed into ci.yml. The paths here are made up, so
+  // these tests hold the rule; the last one holds this repository.
+  const SAFETY = ['src/a/', 'src/b.ts', 'src/c/', 'src/unclaimed/'];
+  const A = { name: 'a', paths: ['src/a/'], tests: ['src/a'] };
+  const B = { name: 'b', paths: ['src/b.ts', 'src/c/'], tests: ['src/b.test.ts'] };
+
+  /** hasSourceFiles as the runs see it: true when any of the paths asked about holds a file. */
+  const holdingNothingIn = (empty) => (paths) => !paths.every((p) => empty.includes(p));
+
+  test('BUG-45-AC1: the groups that have something to mutate, in order; the whole-suite run, with nothing to mutate, is left out', () => {
+    const runs = mutationRuns(SAFETY, [A, B]);
+    expect(runs.map((run) => run.name)).toEqual(['a', 'b', WHOLE_SUITE_RUN_NAME]);
+
+    const { groups } = classifyRuns({ runs, hasSourceFiles: holdingNothingIn(['src/unclaimed/']) });
+
+    expect(groups).toEqual(['a', 'b']);
+  });
+
+  test('BUG-45-AC1: a whole-suite run that has something to mutate goes in, last, as it runs last', () => {
+    const runs = mutationRuns(SAFETY, [A, B]);
+
+    expect(classifyRuns({ runs, hasSourceFiles: holdingNothingIn([]) }).groups).toEqual([
+      'a',
+      'b',
+      WHOLE_SUITE_RUN_NAME,
+    ]);
+  });
+
+  test('BUG-45-AC1: a group one of whose safety paths holds no source file stays in: its leg runs on its other paths and fails, naming the path, as the sequential run does', () => {
+    const runs = mutationRuns(SAFETY, [A, B]);
+
+    const { groups } = classifyRuns({
+      runs,
+      hasSourceFiles: holdingNothingIn(['src/c/', 'src/unclaimed/']),
+    });
+
+    expect(groups).toEqual(['a', 'b']);
+  });
+
+  test('BUG-45-AC1: the order is the order of the runs, not of their names', () => {
+    const zeta = { ...B, name: 'zeta' };
+    const alpha = { ...A, name: 'alpha' };
+    const runs = mutationRuns(SAFETY, [zeta, alpha]);
+
+    expect(
+      classifyRuns({ runs, hasSourceFiles: holdingNothingIn(['src/unclaimed/']) }).groups,
+    ).toEqual(['zeta', 'alpha']);
+  });
+
+  test('BUG-45-AC1: in this repository it is exactly the groups of MUTATION_GROUPS, the eight of them today, in order, and the whole-suite run, whose safety-core path holds no file yet, is left out', () => {
+    const { groups } = classifyRuns({
+      runs: mutationRuns(),
+      hasSourceFiles: (paths) => hasSourceFiles(paths, root),
+    });
+
+    expect(groups).toEqual(MUTATION_GROUPS.map((group) => group.name));
+    expect(groups).not.toContain(WHOLE_SUITE_RUN_NAME);
+  });
+});
+
+describe('BUG-45: `pnpm run mutation --plan`, in a scratch repository (AC1, AC2)', () => {
+  // The plan job's one step that decides: whether the groups run at all,
+  // why, and which groups there are. Through the real script, as CI runs it,
+  // in a repository whose groups' safety files are committed and whose
+  // whole-suite path holds nothing, as this repository's does. A stand-in
+  // `pnpm` first on PATH records any Stryker run, of which there must be
+  // none: the plan only decides.
+  const made = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  const script = realpathSync(path.join(root, 'scripts', 'mutation.mjs'));
+  const ARGS = ['--plan', '--only-if-safety-paths-changed', '--base', 'origin/main'];
+
+  /** A committed scratch repository: every group's safety files, and the Stryker config unless `configured` is false. */
+  function planRepository({ configured = true } = {}) {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'bug45-plan-')));
+    made.push(dir);
+    const repo = path.join(dir, 'repo');
+    const bin = path.join(dir, 'bin');
+    const started = path.join(dir, 'stryker-started.log');
+    mkdirSync(repo);
+    if (configured) writeFileSync(path.join(repo, 'stryker.config.mjs'), 'export default {};\n');
+    for (const run of mutationRuns().filter((each) => each.name !== WHOLE_SUITE_RUN_NAME)) {
+      for (const p of run.paths) plant(repo, p);
+    }
+    git(repo, ['init', '-q']);
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-qm', 'synthetic base']);
+    mkdirSync(bin);
+    writeFileSync(
+      path.join(bin, 'pnpm'),
+      ['#!/bin/sh', `echo "STRYKER_RUN=$STRYKER_RUN pnpm $*" >> "${started}"`, 'exit 1', ''].join(
+        '\n',
+      ),
+    );
+    chmodSync(path.join(bin, 'pnpm'), 0o755);
+    return { dir, repo, bin, started };
+  }
+
+  /** The diff: a new file, or a line added to one the base commit holds. */
+  function change(repo, file) {
+    const at = path.join(repo, file);
+    mkdirSync(path.dirname(at), { recursive: true });
+    writeFileSync(
+      at,
+      `${existsSync(at) ? readFileSync(at, 'utf8') : ''}export const changed = 2;\n`,
+    );
+  }
+
+  /** `node scripts/mutation.mjs --plan …` in `repo`, with only PATH, HOME and what `env` adds. */
+  function plan({ repo, bin }, env = {}) {
+    const result = spawnSync(process.execPath, [script, ...ARGS], {
+      cwd: repo,
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, HOME: process.env.HOME, ...env },
+    });
+    return { ...result, output: `${result.stdout}${result.stderr}` };
+  }
+
+  const starts = (started) => (existsSync(started) ? readFileSync(started, 'utf8') : '');
+
+  test.each([
+    ['documentation only (CI-12)', 'docs/synthetic-notes.md', 'skip'],
+    ['no safety code and nothing the score is measured with', 'apps/server/src/http.ts', 'skip'],
+    ['a safety file', 'apps/server/src/worker.ts', 'run'],
+    ['only what the score is measured with', 'packages/test-kit/src/synthetic-fake.ts', 'run'],
+  ])(
+    'BUG-45-AC2: a diff of %s: `decision` is today’s, `reason` is decideMutation’s message on one line, and `groups` is the full list, appended to GITHUB_OUTPUT as name=value',
+    (_, file, expected) => {
+      const today = decideMutation({
+        changed: [file],
+        onlyIfSafetyPathsChanged: true,
+        configured: true,
+      });
+      // The case is what its name says, by today's rules.
+      expect(today.action).toBe(expected);
+      const repository = planRepository();
+      change(repository.repo, file);
+      const output = path.join(repository.dir, 'github-output');
+      writeFileSync(output, 'code=true\n');
+
+      const result = plan(repository, { GITHUB_OUTPUT: output });
+
+      expect(result.error, result.output).toBeUndefined();
+      expect(result.status, result.output).toBe(0);
+      expect(starts(repository.started), 'a Stryker run started').toBe('');
+      const { lines, values } = outputsIn(readFileSync(output, 'utf8'));
+      // Appended: what the step's output file held is still there, first.
+      expect(lines[0]).toBe('code=true');
+      expect(values.decision, result.output).toBe(expected);
+      expect(lines, result.output).toContain(`reason=${today.message}`);
+      expect(
+        lines.filter((line) => line.startsWith('groups=')),
+        result.output,
+      ).toHaveLength(1);
+      expect(JSON.parse(values.groups ?? 'null'), result.output).toEqual(GROUP_NAMES);
+    },
+  );
+
+  test('BUG-45-AC1: the plan names the run it leaves out for having nothing to mutate, and leaves it out of `groups`', () => {
+    const repository = planRepository();
+    change(repository.repo, 'apps/server/src/worker.ts');
+    const output = path.join(repository.dir, 'github-output');
+
+    const result = plan(repository, { GITHUB_OUTPUT: output });
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.stdout).toMatch(
+      /whole-suite[^\n]*nothing to mutate|nothing to mutate[^\n]*whole-suite/i,
+    );
+    const groups = JSON.parse(outputsIn(readFileSync(output, 'utf8')).values.groups ?? 'null');
+    expect(groups).toEqual(GROUP_NAMES);
+    expect(groups).not.toContain(WHOLE_SUITE_RUN_NAME);
+  });
+
+  test('BUG-45-AC2: Stryker not set up, with a safety change: the plan exits 1 with today’s message, and starts nothing', () => {
+    const repository = planRepository({ configured: false });
+    change(repository.repo, 'apps/server/src/worker.ts');
+    const today = decideMutation({
+      changed: ['apps/server/src/worker.ts'],
+      onlyIfSafetyPathsChanged: true,
+      configured: false,
+    });
+    expect(today.ok).toBe(false);
+
+    const result = plan(repository, { GITHUB_OUTPUT: path.join(repository.dir, 'github-output') });
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain(today.message);
+    expect(starts(repository.started), 'a Stryker run started').toBe('');
+  });
+
+  test('BUG-45-AC2: with no GITHUB_OUTPUT, the three outputs are printed instead', () => {
+    const repository = planRepository();
+    change(repository.repo, 'docs/synthetic-notes.md');
+
+    const result = plan(repository);
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.stdout).toMatch(/\bdecision\s*[=:]\s*skip\b/);
+    expect(result.stdout).toMatch(/\breason\s*[=:]/);
+    expect(result.stdout).toContain(JSON.stringify(GROUP_NAMES));
+    expect(starts(repository.started), 'a Stryker run started').toBe('');
+  });
+
+  test('BUG-45-AC2: a GITHUB_OUTPUT that cannot be written fails the plan, saying so: outputs nobody can read are a decision nobody made', () => {
+    const repository = planRepository();
+    change(repository.repo, 'apps/server/src/worker.ts');
+
+    const result = plan(repository, {
+      GITHUB_OUTPUT: path.join(repository.dir, 'no-such-folder', 'github-output'),
+    });
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toContain('GITHUB_OUTPUT');
+    expect(starts(repository.started), 'a Stryker run started').toBe('');
+  });
+});
+
+describe('BUG-45: `pnpm run mutation --group <name>`, in a scratch repository (AC3, AC4)', () => {
+  // What each CI leg runs, and what a session runs before it pushes. Through
+  // the real script, with spawnSync replaced (loaded with --import, as
+  // gate.test.mjs does for gate:full) by a stand-in Stryker that records each
+  // start, with its STRYKER_RUN and the timeout it was given, writes the
+  // report it is told to, and exits with the status it is told to. git is
+  // left to the real spawnSync.
+  const made = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  const script = realpathSync(path.join(root, 'scripts', 'mutation.mjs'));
+
+  const FAKE_STRYKER = [
+    "import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';",
+    "import path from 'node:path';",
+    "import childProcess from 'node:child_process';",
+    "import { syncBuiltinESMExports } from 'node:module';",
+    'const original = childProcess.spawnSync;',
+    'childProcess.spawnSync = (command, args = [], options = {}) => {',
+    "  if (command !== 'pnpm') return original(command, args, options);",
+    '  const env = options.env ?? {};',
+    '  const name = env.STRYKER_RUN ?? null;',
+    '  appendFileSync(',
+    '    env.FAKE_STRYKER_LOG,',
+    "    JSON.stringify({ args, timeout: options.timeout ?? null, name }) + '\\n',",
+    '  );',
+    "  if (env.FAKE_STRYKER_REPORT !== 'none' && name !== null) {",
+    "    const file = path.join(options.cwd ?? process.cwd(), env.FAKE_STRYKER_REPORT_FILE.replace('NAME', name));",
+    '    mkdirSync(path.dirname(file), { recursive: true });',
+    '    writeFileSync(file, env.FAKE_STRYKER_REPORT);',
+    '  }',
+    "  const stdout = 'the stand-in Stryker ran ' + String(name) + '\\n';",
+    "  return { pid: 0, output: [null, stdout, ''], stdout, stderr: '', status: Number(env.FAKE_STRYKER_STATUS), signal: null };",
+    '};',
+    'syncBuiltinESMExports();',
+    '',
+  ].join('\n');
+
+  const PASSING = reportOf({ 'apps/server/src/domain/planted.ts': { Killed: 10 } });
+  const FAILING = reportOf({ 'apps/server/src/domain/planted.ts': { Killed: 5, Survived: 3 } });
+
+  /** A scratch repository with every run's safety files and a Stryker config, and the stand-in beside it. */
+  function groupRepository() {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'bug45-group-')));
+    made.push(dir);
+    const repo = path.join(dir, 'repo');
+    mkdirSync(repo);
+    writeFileSync(path.join(repo, 'stryker.config.mjs'), 'export default {};\n');
+    for (const run of mutationRuns()) for (const p of run.paths) plant(repo, p);
+    git(repo, ['init', '-q']);
+    const fake = path.join(dir, 'fake-stryker.mjs');
+    writeFileSync(fake, FAKE_STRYKER);
+    return { dir, repo, fake, log: path.join(dir, 'stryker-calls.jsonl') };
+  }
+
+  /** `node scripts/mutation.mjs …args` in `repo`, the stand-in writing `report` (null for none) and exiting with `status`. */
+  function mutation({ repo, fake, log }, args, { report = PASSING, status = 0 } = {}) {
+    const result = spawnSync(
+      process.execPath,
+      ['--import', pathToFileURL(fake).href, script, ...args],
+      {
+        cwd: repo,
+        encoding: 'utf8',
+        timeout: 60_000,
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          FAKE_STRYKER_LOG: log,
+          FAKE_STRYKER_REPORT: report === null ? 'none' : JSON.stringify(report),
+          FAKE_STRYKER_REPORT_FILE: mutationReportFile('NAME'),
+          FAKE_STRYKER_STATUS: String(status),
+        },
+      },
+    );
+    return { ...result, output: `${result.stdout}${result.stderr}` };
+  }
+
+  /** Every Stryker start the stand-in recorded. */
+  const startsIn = (log) =>
+    existsSync(log)
+      ? readFileSync(log, 'utf8')
+          .split('\n')
+          .filter((line) => line !== '')
+          .map((line) => JSON.parse(line))
+      : [];
+
+  /** The verdict file a run wrote, parsed, or null. */
+  const verdictIn = (repo, name) => {
+    const file = path.join(repo, verdictFile(name));
+    return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null;
+  };
+
+  /** The last line the script printed. */
+  const lastLine = (stdout) => stdout.trim().split('\n').at(-1) ?? '';
+
+  test('BUG-45-AC3: `--group domain` starts Stryker once, for domain alone, named in STRYKER_RUN, with the whole budget as its timeout; a report that passes exits 0', () => {
+    const repository = groupRepository();
+
+    const result = mutation(repository, ['--group', 'domain']);
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.status, result.output).toBe(0);
+    const calls = startsIn(repository.log);
+    expect(calls.map((call) => call.name)).toEqual(['domain']);
+    expect(calls[0]?.args).toEqual(['exec', 'stryker', 'run']);
+    // The whole budget, less what starting took: never a share of it.
+    expect(calls[0]?.timeout).toBeGreaterThan(MUTATION_TIMEOUT_MS - 60_000);
+    expect(calls[0]?.timeout).toBeLessThanOrEqual(MUTATION_TIMEOUT_MS);
+    expect(result.output).toContain(judgeMutationReport(PASSING).message.trim());
+  });
+
+  test('BUG-45-AC3: it writes a verdict file beside the report: the run’s name, Stryker’s exit status, and the verdict', () => {
+    const repository = groupRepository();
+
+    mutation(repository, ['--group', 'domain']);
+
+    expect(verdictIn(repository.repo, 'domain')).toMatchObject({
+      name: 'domain',
+      status: 0,
+      ok: true,
+    });
+    expect(existsSync(path.join(repository.repo, mutationReportFile('domain')))).toBe(true);
+    expect(verdictIn(repository.repo, 'healthchecks')).toBeNull();
+  });
+
+  test.each([
+    ['passes', PASSING, 0],
+    ['fails', FAILING, 1],
+  ])(
+    'BUG-45-AC3: when the run %s, its last line says that only this group ran and that this is not the mutation gate',
+    (_, report, exitCode) => {
+      const repository = groupRepository();
+
+      const result = mutation(repository, ['--group', 'domain'], { report });
+
+      expect(result.status, result.output).toBe(exitCode);
+      const last = lastLine(result.stdout);
+      expect(last, result.output).toMatch(/(?<![\w-])domain(?![\w-])/);
+      expect(last, result.output).toMatch(/\bonly\b/i);
+      expect(last, result.output).toMatch(/\bnot the mutation gate\b/i);
+    },
+  );
+
+  test('BUG-45-AC3: a report with a file below 80 % exits 1, judged by judgeMutationReport, and its verdict file says it failed', () => {
+    const repository = groupRepository();
+
+    const result = mutation(repository, ['--group', 'domain'], { report: FAILING });
+
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain('apps/server/src/domain/planted.ts');
+    expect(result.output).toMatch(/62\.5 ?%/);
+    expect(verdictIn(repository.repo, 'domain')).toMatchObject({
+      name: 'domain',
+      status: 0,
+      ok: false,
+    });
+  });
+
+  test('BUG-45-AC3: Stryker exiting 1 exits 1, judged by judgeMutationRun, and its verdict file holds that status', () => {
+    const repository = groupRepository();
+
+    const result = mutation(repository, ['--group', 'domain'], { status: 1 });
+
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain('Stryker exited with 1');
+    expect(verdictIn(repository.repo, 'domain')).toMatchObject({
+      name: 'domain',
+      status: 1,
+      ok: false,
+    });
+  });
+
+  test('BUG-45-AC3: the report is cleared first: one left from an earlier run never stands in for this one, which wrote none', () => {
+    const repository = groupRepository();
+    const leftover = path.join(repository.repo, mutationReportFile('domain'));
+    mkdirSync(path.dirname(leftover), { recursive: true });
+    writeFileSync(leftover, JSON.stringify(PASSING));
+
+    const result = mutation(repository, ['--group', 'domain'], { report: null });
+
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toMatch(/no (json )?report/i);
+    expect(verdictIn(repository.repo, 'domain')).toMatchObject({ name: 'domain', ok: false });
+  });
+
+  test.each([
+    ['an unknown name', ['--group', 'no-such-group'], /no-such-group/],
+    ['no name at all', ['--group'], /--group/],
+    ['another flag where the name goes', ['--group', '--only-if-safety-paths-changed'], /--group/],
+    ['two groups', ['--group', 'domain', '--group', 'alerts'], /--group/],
+    [
+      'the CI filter, since a group asked for by name always runs',
+      ['--group', 'domain', '--only-if-safety-paths-changed'],
+      /--only-if-safety-paths-changed/,
+    ],
+    ['--plan', ['--group', 'domain', '--plan'], /--plan/],
+    ['--aggregate', ['--group', 'domain', '--aggregate', 'artifacts'], /--aggregate/],
+    ['--incremental (D-099)', ['--group', 'domain', '--incremental'], /--incremental/],
+  ])(
+    'BUG-45-AC4: `--group` with %s is refused before anything starts: exit 1, no Stryker run, no report, and the reason',
+    (_, args, names) => {
+      const repository = groupRepository();
+      // In this repository `--group domain` alone starts Stryker. Without
+      // this, "nothing started" below could hold only because nothing would.
+      const fine = mutation(repository, ['--group', 'domain']);
+      expect(
+        startsIn(repository.log).map((call) => call.name),
+        fine.output,
+      ).toEqual(['domain']);
+      rmSync(repository.log);
+      rmSync(path.join(repository.repo, 'reports'), { recursive: true, force: true });
+
+      const refused = mutation(repository, args);
+
+      expect(refused.error, refused.output).toBeUndefined();
+      expect(refused.signal, refused.output).toBeNull();
+      expect(refused.status, refused.output).toBe(1);
+      expect(startsIn(repository.log), 'a Stryker run started').toEqual([]);
+      expect(existsSync(path.join(repository.repo, 'reports')), 'a report was written').toBe(false);
+      expect(refused.output).toMatch(names);
+    },
+  );
+
+  test('BUG-45-AC4: an unknown name is refused with every run’s name, so the right one can be read off the message', () => {
+    const repository = groupRepository();
+
+    const refused = mutation(repository, ['--group', 'no-such-group']);
+
+    expect(refused.status, refused.output).toBe(1);
+    for (const run of mutationRuns()) {
+      expect(refused.output).toContain(run.name);
+    }
+  });
+});
+
+/**
+ * The runs the aggregator's tests derive their expected list from: two
+ * groups, and a whole-suite run whose path holds nothing. Made up, so that
+ * every name a message must hold is one no other word in it holds.
+ */
+const AGGREGATED_RUNS = [
+  { name: 'alpha', paths: ['src/alpha/'], tests: ['src/alpha'] },
+  { name: 'beta', paths: ['src/beta.ts', 'src/beta-more/'], tests: ['src/beta.test.ts'] },
+  { name: WHOLE_SUITE_RUN_NAME, paths: ['src/unclaimed/'], tests: ['apps', 'packages'] },
+];
+
+/** A group's report, raw, as the leg uploaded it: every mutant of its one file killed. */
+const passingReportText = (name) =>
+  JSON.stringify(reportOf({ [`src/${name}/${name}.ts`]: { Killed: 10 } }));
+
+/** A group's verdict file, raw, as `--group` writes it. */
+const verdictText = (name, { status = 0, ok = true } = {}) =>
+  JSON.stringify({ name, status, ok, message: '' });
+
+/**
+ * What the aggregator is handed when everything went well: the plan's result
+ * and its three outputs as GitHub hands them, strings; the group job's
+ * result; and, by run name, the raw text of each report and verdict file
+ * found in the downloaded folder. `change` edits a copy before it is judged.
+ */
+function aggregate(change = () => undefined) {
+  const input = {
+    runs: AGGREGATED_RUNS.map((run) => ({ ...run })),
+    nothingIn: ['src/unclaimed/'],
+    plan: {
+      result: 'success',
+      decision: 'run',
+      reason: 'mutation: running on 1 changed safety file(s).',
+      groups: JSON.stringify(['alpha', 'beta']),
+    },
+    groupResult: 'success',
+    reports: { alpha: passingReportText('alpha'), beta: passingReportText('beta') },
+    verdicts: { alpha: verdictText('alpha'), beta: verdictText('beta') },
+  };
+  change(input);
+  const { nothingIn, ...rest } = input;
+  return aggregateMutationJobs({
+    ...rest,
+    hasSourceFiles: (paths) => !paths.every((p) => nothingIn.includes(p)),
+  });
+}
+
+describe('BUG-45: aggregateMutationJobs, the verdict of the required `mutation` check (AC5–AC7)', () => {
+  // The aggregator is the only job GitHub reads as the check. It passes only
+  // when every group its own code expects reported and passed, judged again
+  // from the raw reports; it trusts neither the plan's list nor GitHub's
+  // roll-up of the legs. Anything less fails, naming the cause.
+
+  test('BUG-45-AC5: the plan succeeded and said run, its groups are the expected ones, the legs succeeded, and every group’s verdict and report pass: it passes, printing each group’s per-file lines', () => {
+    const verdict = aggregate();
+
+    expect(verdict.ok, verdict.message).toBe(true);
+    for (const name of ['alpha', 'beta']) {
+      expect(verdict.message).toContain(name);
+      expect(verdict.message).toContain(`src/${name}/${name}.ts: 100 %`);
+    }
+  });
+
+  test('BUG-45-AC5: it derives the groups it expects itself, from the runs and the paths at this commit: a plan and legs that both left a group out do not pass', () => {
+    // If the aggregator took the plan's word, this would pass: the plan, the
+    // legs and the artifacts agree with each other, and leave beta unmeasured.
+    const verdict = aggregate((input) => {
+      input.plan.groups = JSON.stringify(['alpha']);
+      delete input.reports.beta;
+      delete input.verdicts.beta;
+    });
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.message).toMatch(/(?<![\w-])beta(?![\w-])/);
+  });
+
+  // Built here, not in the table below: HK-05 reads a test.each table only up
+  // to its first closing parenthesis.
+  const BELOW_80 = JSON.stringify(reportOf({ 'src/beta/beta.ts': { Killed: 5, Survived: 3 } }));
+  const AC6 = [
+    [
+      'the plan job failed',
+      (i) => Object.assign(i.plan, { result: 'failure' }),
+      [/mutation-plan/, /failure/],
+    ],
+    [
+      'the plan job was cancelled',
+      (i) => Object.assign(i.plan, { result: 'cancelled' }),
+      [/mutation-plan/, /cancelled/],
+    ],
+    [
+      'the plan job was skipped',
+      (i) => Object.assign(i.plan, { result: 'skipped' }),
+      [/mutation-plan/, /skipped/],
+    ],
+    ['the decision is empty', (i) => Object.assign(i.plan, { decision: '' }), [/decision/]],
+    ['the decision is missing', (i) => delete i.plan.decision, [/decision/]],
+    [
+      'the decision is neither run nor skip',
+      (i) => Object.assign(i.plan, { decision: 'maybe' }),
+      [/decision/, /maybe/],
+    ],
+    ['the groups are not JSON', (i) => Object.assign(i.plan, { groups: 'alpha,beta' }), [/groups/]],
+    [
+      'a group is listed twice',
+      (i) => Object.assign(i.plan, { groups: '["alpha","alpha","beta"]' }),
+      [/(?<![\w-])alpha(?![\w-])/, /twice|duplicate|more than once/i],
+    ],
+    [
+      'an expected group is missing from the groups',
+      (i) => Object.assign(i.plan, { groups: '["alpha"]' }),
+      [/(?<![\w-])beta(?![\w-])/],
+    ],
+    [
+      'the groups name one not expected',
+      (i) => Object.assign(i.plan, { groups: '["alpha","beta","gamma"]' }),
+      [/gamma/],
+    ],
+    [
+      'the group job failed',
+      (i) => Object.assign(i, { groupResult: 'failure' }),
+      [/mutation-group/, /failure/],
+    ],
+    [
+      'the group job was cancelled',
+      (i) => Object.assign(i, { groupResult: 'cancelled' }),
+      [/mutation-group/, /cancelled/],
+    ],
+    [
+      'the group job was skipped',
+      (i) => Object.assign(i, { groupResult: 'skipped' }),
+      [/mutation-group/, /skipped/],
+    ],
+    [
+      'a group’s report is missing',
+      (i) => delete i.reports.beta,
+      [/(?<![\w-])beta(?![\w-])/, /report/i],
+    ],
+    [
+      'a group’s verdict file is missing',
+      (i) => delete i.verdicts.beta,
+      [/(?<![\w-])beta(?![\w-])/, /verdict/i],
+    ],
+    [
+      'a report does not parse',
+      (i) => Object.assign(i.reports, { beta: '{"files": ' }),
+      [/(?<![\w-])beta(?![\w-])/, /pars|JSON/i],
+    ],
+    // BUG-45 review loop 1 (test-auditor S1): a row added, none changed. Its
+    // report passes, so only the verdict file can fail the group, and the
+    // line that says so names the group, the verdict file and the parse.
+    [
+      'a verdict file does not parse',
+      (i) => Object.assign(i.verdicts, { beta: '{"name": ' }),
+      [/(?<![\w-])beta(?![\w-])[^\n]*verdict[^\n]*(?:pars|JSON)/i],
+    ],
+    [
+      'a verdict file holds a non-zero exit',
+      (i) => Object.assign(i.verdicts, { beta: verdictText('beta', { status: 1 }) }),
+      [/(?<![\w-])beta(?![\w-])/],
+    ],
+    [
+      'a verdict file holds a failed verdict',
+      (i) => Object.assign(i.verdicts, { beta: verdictText('beta', { ok: false }) }),
+      [/(?<![\w-])beta(?![\w-])/],
+    ],
+    [
+      'a report has a file below 80 %, with the group job a success',
+      (i) => Object.assign(i.reports, { beta: BELOW_80 }),
+      [/(?<![\w-])beta(?![\w-])/, /src\/beta\/beta\.ts/, /62\.5 ?%/],
+    ],
+    [
+      'a report is for a group not expected',
+      (i) => Object.assign(i.reports, { gamma: passingReportText('gamma') }),
+      [/gamma/],
+    ],
+    [
+      'a group’s safety path holds no source file',
+      (i) => i.nothingIn.push('src/beta-more/'),
+      [/src\/beta-more\//],
+    ],
+    [
+      'no run has anything to mutate',
+      (i) =>
+        Object.assign(
+          i,
+          { runs: [AGGREGATED_RUNS[2]], reports: {}, verdicts: {} },
+          { plan: { ...i.plan, groups: '[]' } },
+        ),
+      [/nothing/i],
+    ],
+  ];
+
+  test.each(AC6)('BUG-45-AC6: %s: it fails, naming the cause', (_, change, names) => {
+    const verdict = aggregate(change);
+
+    expect(verdict.ok, verdict.message).toBe(false);
+    for (const name of names) {
+      expect(verdict.message).toMatch(name);
+    }
+  });
+
+  test('BUG-45-AC6: when several causes hold, every one is named', () => {
+    const verdict = aggregate((input) => {
+      input.plan.groups = JSON.stringify(['alpha']);
+      input.verdicts.alpha = verdictText('alpha', { status: 1 });
+      input.reports.gamma = passingReportText('gamma');
+      input.groupResult = 'failure';
+    });
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.message).toMatch(/(?<![\w-])beta(?![\w-])/);
+    expect(verdict.message).toMatch(/(?<![\w-])alpha(?![\w-])/);
+    expect(verdict.message).toMatch(/gamma/);
+    expect(verdict.message).toMatch(/mutation-group/);
+  });
+
+  test('BUG-45-AC7: the plan said skip and the group job was skipped: it passes, printing the plan’s reason', () => {
+    const reason =
+      'mutation: this change touches no safety code, and nothing the score is measured with, so there is nothing to mutate (D-036, D-098).';
+
+    const verdict = aggregate((input) => {
+      Object.assign(input.plan, { decision: 'skip', reason });
+      Object.assign(input, { groupResult: 'skipped', reports: {}, verdicts: {} });
+    });
+
+    expect(verdict.ok, verdict.message).toBe(true);
+    expect(verdict.message).toContain(reason);
+  });
+
+  test.each([['success'], ['failure'], ['cancelled']])(
+    'BUG-45-AC7: the plan said skip but the group job’s result is %s: it fails as inconsistent',
+    (result) => {
+      const verdict = aggregate((input) => {
+        input.plan.decision = 'skip';
+        input.groupResult = result;
+      });
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.message).toMatch(/inconsistent/i);
+      expect(verdict.message).toContain(result);
+    },
+  );
+});
+
+describe('BUG-45: `pnpm run mutation --aggregate <dir>`, in a scratch repository (AC5–AC7)', () => {
+  // The required check's one step, through the real script, as ci.yml runs
+  // it: the plan's outputs and both jobs' results in its environment, and the
+  // legs' artifacts downloaded, merged, into one folder: each group's
+  // `<name>.json` report and `<name>.verdict.json` beside it. The expected
+  // groups are derived from this repository's runs and the scratch
+  // repository's files, where every group's safety files are and the
+  // whole-suite path holds nothing.
+  const made = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  const script = realpathSync(path.join(root, 'scripts', 'mutation.mjs'));
+
+  /**
+   * The scratch repository, the folder the legs' artifacts were downloaded
+   * into, and, first on PATH, a stand-in `pnpm` that records any Stryker run
+   * and exits 1. The aggregator mutates nothing: it only reads what the legs
+   * left, so any start it makes is a failure.
+   */
+  function aggregateRepository() {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'bug45-aggregate-')));
+    made.push(dir);
+    const repo = path.join(dir, 'repo');
+    const artifacts = path.join(dir, 'artifacts');
+    const bin = path.join(dir, 'bin');
+    const started = path.join(dir, 'stryker-started.log');
+    mkdirSync(repo);
+    mkdirSync(artifacts);
+    mkdirSync(bin);
+    writeFileSync(
+      path.join(bin, 'pnpm'),
+      ['#!/bin/sh', `echo "STRYKER_RUN=$STRYKER_RUN pnpm $*" >> "${started}"`, 'exit 1', ''].join(
+        '\n',
+      ),
+    );
+    chmodSync(path.join(bin, 'pnpm'), 0o755);
+    writeFileSync(path.join(repo, 'stryker.config.mjs'), 'export default {};\n');
+    for (const run of mutationRuns().filter((each) => each.name !== WHOLE_SUITE_RUN_NAME)) {
+      for (const p of run.paths) plant(repo, p);
+      writeFileSync(
+        path.join(artifacts, `${run.name}.json`),
+        JSON.stringify(reportOf({ [`${run.name}.ts`]: { Killed: 1 } })),
+      );
+      writeFileSync(path.join(artifacts, `${run.name}.verdict.json`), verdictText(run.name));
+    }
+    git(repo, ['init', '-q']);
+    return { dir, repo, artifacts, bin, started };
+  }
+
+  /** `node scripts/mutation.mjs --aggregate <folder>` in `repo`, with `env` and nothing else of this machine's but PATH and HOME. */
+  function aggregateIn({ repo, bin, started }, folder, env) {
+    const result = spawnSync(process.execPath, [script, '--aggregate', folder], {
+      cwd: repo,
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, HOME: process.env.HOME, ...env },
+    });
+    return {
+      ...result,
+      output: `${result.stdout}${result.stderr}`,
+      starts: existsSync(started) ? readFileSync(started, 'utf8') : '',
+    };
+  }
+
+  const RAN = {
+    MUTATION_PLAN_RESULT: 'success',
+    MUTATION_PLAN_DECISION: 'run',
+    MUTATION_PLAN_REASON: 'mutation: running on 1 changed safety file(s).',
+    MUTATION_PLAN_GROUPS: JSON.stringify(GROUP_NAMES),
+    MUTATION_GROUP_RESULT: 'success',
+  };
+
+  test('BUG-45-AC5: every group reported and passed: it exits 0 and prints every group’s per-file lines', () => {
+    const repository = aggregateRepository();
+
+    const result = aggregateIn(repository, repository.artifacts, RAN);
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.starts, 'the aggregator started a Stryker run').toBe('');
+    expect(result.status, result.output).toBe(0);
+    for (const name of GROUP_NAMES) {
+      expect(result.stdout).toContain(`${name}.ts: 100 %`);
+    }
+  });
+
+  test('BUG-45-AC6: one group’s report missing from the folder: it exits 1, naming that group', () => {
+    const repository = aggregateRepository();
+    rmSync(path.join(repository.artifacts, 'canary.json'));
+
+    const result = aggregateIn(repository, repository.artifacts, RAN);
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.starts, 'the aggregator started a Stryker run').toBe('');
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toMatch(
+      /(?<![\w-])canary(?![\w-])[^\n]*report|report[^\n]*(?<![\w-])canary(?![\w-])/i,
+    );
+  });
+
+  test('BUG-45-AC6: the plan job’s result failure, with every report, verdict and other value passing: it exits 1, naming mutation-plan and its failure', () => {
+    // BUG-45 review loop 1 (test-auditor S2): the one value of the plan's
+    // environment that, read wrongly or not at all, leaves every other input
+    // passing. A failed plan's outputs cannot be relied on, whatever the legs
+    // left.
+    const repository = aggregateRepository();
+
+    const result = aggregateIn(repository, repository.artifacts, {
+      ...RAN,
+      MUTATION_PLAN_RESULT: 'failure',
+    });
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.starts, 'the aggregator started a Stryker run').toBe('');
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toMatch(/(?<![\w-])mutation-plan(?![\w-])[^\n]*failure/);
+  });
+
+  test('BUG-45-AC6: the plan’s environment missing altogether is a wiring fault, and fails', () => {
+    const repository = aggregateRepository();
+
+    const result = aggregateIn(repository, repository.artifacts, {});
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.starts, 'the aggregator started a Stryker run').toBe('');
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toMatch(/decision/);
+  });
+
+  test('BUG-45-AC7: the plan said skip and the group job was skipped, with no folder downloaded: it exits 0, printing the plan’s reason', () => {
+    const repository = aggregateRepository();
+    const reason =
+      'mutation: this change touches no safety code, and nothing the score is measured with, so there is nothing to mutate (D-036, D-098).';
+
+    const result = aggregateIn(repository, path.join(repository.dir, 'never-downloaded'), {
+      ...RAN,
+      MUTATION_PLAN_DECISION: 'skip',
+      MUTATION_PLAN_REASON: reason,
+      MUTATION_GROUP_RESULT: 'skipped',
+    });
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.starts, 'the aggregator started a Stryker run').toBe('');
+    expect(result.status, result.output).toBe(0);
+    expect(result.stdout).toContain(reason);
   });
 });

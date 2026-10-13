@@ -120,6 +120,8 @@ export {
 export type { CanaryAlarmReport, CanaryAlarmStatus, FakeCanaryAlarm } from './fake-canary-alarm.ts';
 export { fakeWait } from './fake-wait.ts';
 export type { FakeWait } from './fake-wait.ts';
+export { turnBound } from './turn-bound.ts';
+export type { TurnBound } from './turn-bound.ts';
 export { CANARY_STORE_BEHAVIOUR } from './canary-store-behaviour.ts';
 export type {
   CanaryObservationAsRead,
