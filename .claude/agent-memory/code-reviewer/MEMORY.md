@@ -16,3 +16,4 @@
 - [LOST-06 review](project_lost06_review.md) — one-case switch fails no-unnecessary-condition; layered headers in the fake; grep tests before calling a guard dead; the open withdraws the resolution enum
 - [LOST-07 review](project_lost07_review.md) — a request field one side ignores; a departure forced by an exact-set test; two monitoring URLs must differ; hand-added baselines vs measured; sqlstateOf accepts Node codes
 - [async spawn timeout orphans](project_async_spawn_timeout_orphans.md)
+- [CI fan-out review angles](project_ci_fanout_mutation.md) — BUG-45 mutation plan/group/aggregate: unused verdict fields, 6x boilerplate churn, matrix value in run:
