@@ -759,8 +759,8 @@ describe('BUG-47: which committed files req:coverage --fail-on-uncovered-changed
   // the folder list is the one thing that decides; the other controls are
   // chosen by where the check could go wrong (below). DEMO-02 is a synthetic
   // live story that no counted test names; DEMO-01 has one, so the repository
-  // has a counted test that names something else. Nothing under docs/specs/ changes, so no
-  // criterion is read and no not-automated line is involved.
+  // has a counted test that names something else. Nothing under docs/specs/
+  // changes, so no criterion is read and no not-automated line is involved.
   const UNCOVERED_ID = 'DEMO-02';
   const base = {
     'docs/plan/01b-mvp-scope.md':
