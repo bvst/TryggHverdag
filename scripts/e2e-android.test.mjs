@@ -13,7 +13,7 @@
 // runs on, not the script (docs/progress.md, "a test that spawns a script
 // inherits the runner's environment"). PATH holds the stand-ins and nothing
 // else, so the machine's own adb and java cannot answer in their place.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
@@ -30,6 +30,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { APK, ensureMaestro } from './lib/e2e-android.mjs';
 
@@ -414,11 +415,37 @@ const INVALID_APK = {
 };
 
 /**
+ * Shell lines that make the stand-in slow to start, the way a busy machine
+ * makes every program it starts (BUG-21). Before it does anything else, a call
+ * whose arguments match a rule's `call`, a `case` pattern, sleeps for `ms`: the
+ * first `times` such calls, or every one when `times` is unset. Each rule
+ * counts its calls in a file of its own in `dir`.
+ *
+ * @param {{ call: string, ms: number, times?: number }[]} slowStarts
+ * @param {string} dir
+ */
+function slowStartLines(slowStarts, dir) {
+  return slowStarts.flatMap(({ call, ms, times }, i) => {
+    const count = path.join(dir, `slow-start-${String(i)}`);
+    const sleep = `/bin/sleep ${String(ms / 1000)}`;
+    return [
+      `case "$*" in ${call})`,
+      `  s=$(/bin/cat "${count}" 2>/dev/null || echo 0); s=$((s + 1)); echo "$s" > "${count}"`,
+      times === undefined
+        ? `  ${sleep} ;;`
+        : `  if [ "$s" -le ${String(times)} ]; then ${sleep}; fi ;;`,
+      'esac',
+    ];
+  });
+}
+
+/**
  * The stand-in adb: emulators by serial, a device set to `locale` (bokmål
  * unless a test says otherwise) or one that applies bokmål only after
  * `appliedAfter` readings, or one that goes through `timeline`'s phases, and a
  * crash buffer when there is one. Amended 2026-09-28: `adb install` answers
  * `installs` in turn, and on the timeline's device, `timelineInstall`.
+ * Amended 2026-10-14 (BUG-21): `slowStarts` makes chosen calls slow to start.
  */
 function deviceAdbBody({
   log,
@@ -432,9 +459,12 @@ function deviceAdbBody({
   phaseLog,
   installs,
   installDir,
+  slowStarts,
+  slowStartDir,
 }) {
   return [
     '#!/bin/sh',
+    ...slowStartLines(slowStarts, slowStartDir),
     `echo "adb $*" >> "${log}"`,
     "serial=''",
     'if [ "$1" = "-s" ]; then serial="$2"; shift 2; fi',
@@ -474,6 +504,114 @@ function writeTool(file, body) {
 }
 
 /**
+ * A module, loaded with --import before the script, that records every reading
+ * the script takes of Date.now and writes them to `file`, one per line, as the
+ * script exits (BUG-21). The waits for bokmål and for the install decide by
+ * that clock, so it says what they decided, however slow the machine was to
+ * start the programs they asked. It only records: each reading is returned
+ * unchanged, and nothing else in the script reads Date.now.
+ */
+function clockObserver(file) {
+  return [
+    "import { writeFileSync } from 'node:fs';",
+    'const readings = [];',
+    'const read = Date.now;',
+    'Date.now = function now() {',
+    '  const t = read();',
+    '  readings.push(t);',
+    '  return t;',
+    '};',
+    `process.on('exit', () => writeFileSync(${JSON.stringify(file)}, readings.join('\\n')));`,
+    '',
+  ].join('\n');
+}
+
+/**
+ * Runs `command` to its end, as spawnSync does, and kills it with SIGTERM
+ * `timeout` ms after it started, or, with `stopAfter`, `stopAfter.ms` after
+ * the first call in `log` that `stopAfter.call` matches, whichever comes first.
+ *
+ * Added 2026-10-14 (BUG-21): a check of how long the script is still waiting
+ * starts its time at the script's first question, not at its start, so a
+ * machine slow to start the script cannot use up the time the check is for.
+ */
+function runToEnd([command = '', ...args], { cwd, env, timeout, stopAfter, log }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding('utf8').on('data', (chunk) => {
+      stderr += chunk;
+    });
+    const stop = () => child.kill('SIGTERM');
+    const timers = [setTimeout(stop, timeout)];
+    const watching =
+      stopAfter === undefined
+        ? undefined
+        : setInterval(() => {
+            const calls = existsSync(log) ? readFileSync(log, 'utf8').split('\n') : [];
+            if (!calls.some(stopAfter.call)) return;
+            clearInterval(watching);
+            timers.push(setTimeout(stop, stopAfter.ms));
+          }, 10);
+    const done = () => {
+      clearInterval(watching);
+      for (const timer of timers) clearTimeout(timer);
+    };
+    child.on('error', (error) => {
+      done();
+      reject(error);
+    });
+    child.on('close', (status, signal) => {
+      done();
+      resolve({ status, signal, stdout, stderr });
+    });
+  });
+}
+
+/**
+ * A wait as the script decided it (BUG-21), from `clock`, the script's own
+ * readings of Date.now, and `asks`, when each question it waited on reached
+ * adb, in milliseconds on the same machine's clock. Only readings from `since`
+ * on count, so that an earlier wait does not.
+ *
+ * `waited` is from its first reading to its last. A wait reads the clock as it
+ * starts and again after each question, and stops on the first reading at or
+ * past the deadline, so a correct wait is at least the deadline long, whatever
+ * the machine's speed.
+ *
+ * `lastTimeLeft` is its last reading that still left time before the deadline,
+ * and `lastAsk` when it last asked. A wait that keeps asking asks again after
+ * every such reading, so `lastAsk` comes after it: however slow that question
+ * is to start or to answer, it reaches adb after the reading that sent it.
+ *
+ * These replace spans taken from the stand-ins' own stamps, which a slow start
+ * of the first question shortened and a slow last question cut off, so that a
+ * run that waited 1 s by its clock measured 639 ms.
+ */
+function waitByItsClock({ clock, asks, deadline, since = -Infinity }) {
+  const readings = clock.filter((t) => t >= since);
+  const start = Math.min(...readings);
+  return {
+    readings: readings.length,
+    waited: Math.max(...readings) - start,
+    lastTimeLeft: Math.max(...readings.filter((t) => t - start < deadline)),
+    lastAsk: Math.max(...asks),
+  };
+}
+
+/** The message when the script read its clock less than a wait has to. */
+const noClock = (output) =>
+  `the script read Date.now fewer than twice; if its waits now read another clock, the observer must too:\n${output}`;
+
+/** The message when the script stopped asking while its clock still left time. */
+const stoppedAsking = ({ lastAsk, lastTimeLeft }, output) =>
+  `it last asked at ${String(lastAsk)}, though its clock still left time at ${String(lastTimeLeft)}:\n${output}`;
+
+/**
  * Runs the entry script past its preflight, against the stand-ins.
  *
  * @param {{
@@ -493,16 +631,20 @@ function writeTool(file, body) {
  *     packageService: string,
  *   }[],
  *   installs?: { stdout: string, stderr: string, exit: number }[],
+ *   slowStarts?: { call: string, ms: number, times?: number }[],
  *   env?: Record<string, string>,
  *   timeout?: number,
+ *   stopAfter?: { call: (call: string) => boolean, ms: number },
  * }} options — `flows` is what Maestro's report says ran; `crash` puts a
  *   crash of the app, and one of another app, in the device's crash buffer;
  *   `locale` is the language the device reports, unless `localeAppliedAfter`
  *   makes it a device that applies bokmål only after that many readings
  *   (localeAnswers), or `timeline` one whose framework restarts to apply it
  *   (timelinePhase); `installs` is what `adb install` answers, in turn, the
- *   last one from then on (installAnswers); `env` is added to the script's
- *   environment; `timeout` is when the run is killed
+ *   last one from then on (installAnswers); `slowStarts` makes chosen calls to
+ *   adb slow to start (slowStartLines); `env` is added to the script's
+ *   environment; `timeout` is when the run is killed, counted from its start,
+ *   and `stopAfter` kills it `ms` after its first call that `call` matches
  */
 async function runPastPreflight({
   args = ['--skip-build'],
@@ -515,8 +657,10 @@ async function runPastPreflight({
   localeAppliedAfter,
   timeline,
   installs = [INSTALL_SUCCESS],
+  slowStarts = [],
   env = {},
   timeout = 60_000,
+  stopAfter,
 } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'e2e-android-past-preflight-'));
   try {
@@ -532,8 +676,10 @@ async function runPastPreflight({
     const readTimes = path.join(dir, 'locale-read-times');
     const phaseLog = path.join(dir, 'phases.log');
     const installDir = path.join(dir, 'installs');
+    const slowStartDir = path.join(dir, 'slow-starts');
 
     mkdirSync(installDir, { recursive: true });
+    mkdirSync(slowStartDir, { recursive: true });
     installs.forEach(({ stdout, stderr, exit }, i) => {
       writeFileSync(path.join(installDir, `${String(i + 1)}.out`), stdout);
       writeFileSync(path.join(installDir, `${String(i + 1)}.err`), stderr);
@@ -589,6 +735,8 @@ async function runPastPreflight({
           phaseLog,
           installs,
           installDir,
+          slowStarts,
+          slowStartDir,
         }),
       );
     }
@@ -600,29 +748,43 @@ async function runPastPreflight({
       ['#!/bin/sh', `echo "pnpm $*" >> "${log}"`, 'exit 1'].join('\n'),
     );
 
+    // Amended 2026-10-14 (BUG-21): the script runs with an observer of its
+    // clock, so a test can read the waits as the script decided them.
+    const clockLog = path.join(dir, 'clock.log');
+    const observer = path.join(dir, 'clock-observer.mjs');
+    writeFileSync(observer, clockObserver(clockLog));
+
     // Set in full: no MAESTRO_ or EXPO_ variable comes from the caller, so
     // whatever Maestro is run with, the script set. `env` adds only what a
     // test names.
-    const result = spawnSync(process.execPath, [SCRIPT, ...args], {
-      cwd: root,
-      encoding: 'utf8',
-      env: {
-        PATH: bin,
-        HOME: path.join(dir, 'home'),
-        ANDROID_HOME: sdk,
-        ANDROID_SDK_ROOT: sdk,
-        JAVA_HOME: jdk,
-        ...env,
+    const result = await runToEnd(
+      [process.execPath, '--import', pathToFileURL(observer).href, SCRIPT, ...args],
+      {
+        cwd: root,
+        env: {
+          PATH: bin,
+          HOME: path.join(dir, 'home'),
+          ANDROID_HOME: sdk,
+          ANDROID_SDK_ROOT: sdk,
+          JAVA_HOME: jdk,
+          ...env,
+        },
+        timeout,
+        stopAfter,
+        log,
       },
-      timeout,
-    });
+    );
     const lines = (file) => (existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n') : []);
-    const readAt = lines(readTimes).map(Number);
     return {
       code: result.status,
       signal: result.signal,
-      // From the device's first language reading to its last, in milliseconds.
-      askedFor: readAt.length === 0 ? 0 : Math.max(...readAt) - Math.min(...readAt),
+      // Every reading the script took of its clock, Date.now, in order. Empty
+      // when it was killed, as it then wrote none.
+      clock: lines(clockLog)
+        .filter((line) => line !== '')
+        .map(Number),
+      // When each reading of the device's language reached adb, in milliseconds.
+      readTimes: lines(readTimes).map(Number),
       stdout: result.stdout,
       stderr: result.stderr,
       output: `${result.stdout}${result.stderr}`,
@@ -687,14 +849,6 @@ const SHORT_WAIT = {
   E2E_ANDROID_LOCALE_DEADLINE_MS: String(SHORT_DEADLINE),
   E2E_ANDROID_LOCALE_INTERVAL_MS: String(SHORT_INTERVAL),
 };
-
-/**
- * How long a run that waited out SHORT_DEADLINE kept asking the device, at the
- * least: one interval off for a wait that stops when the next reading would be
- * late, and two for the stand-in's own start-up, which stamps each reading. A
- * run that does not wait asks for a few milliseconds at most.
- */
-const WAITED_OUT = SHORT_DEADLINE - 3 * SHORT_INTERVAL;
 
 /** A message that states `ms` as a duration, in seconds, minutes or milliseconds. */
 function saysHowLong(ms) {
@@ -890,10 +1044,14 @@ describe('past the preflight', () => {
     // Amended 2026-09-27: it now waits for bokmål before it stops, so this run
     // has the tests' one-second deadline, and it stops after the wait, not at
     // once: it asks more than once, and keeps asking for that long.
-    const { code, output, calls, askedFor } = await runPastPreflight({
+    // Amended 2026-10-14 (BUG-21): "that long" is read from the script's own
+    // clock, and "more than once" became "again after every reading of its
+    // clock that left time", as in the test below, which says why.
+    const { code, output, calls, clock, readTimes } = await runPastPreflight({
       locale: 'en-US',
       env: SHORT_WAIT,
     });
+    const wait = waitByItsClock({ clock, asks: readTimes, deadline: SHORT_DEADLINE });
 
     // Not vacuous: the device was asked for its language.
     // Amended 2026-09-27, run 6: asked through the configuration, `am
@@ -903,8 +1061,9 @@ describe('past the preflight', () => {
       calls.some((call) => /^adb\b.*\bam get-config\b/.test(call)),
       output,
     ).toBe(true);
-    expect(calls.filter(isLocaleRead).length, output).toBeGreaterThan(1);
-    expect(askedFor, output).toBeGreaterThanOrEqual(WAITED_OUT);
+    expect(wait.readings, noClock(output)).toBeGreaterThan(1);
+    expect(wait.waited, output).toBeGreaterThanOrEqual(SHORT_DEADLINE);
+    expect(wait.lastAsk, stoppedAsking(wait, output)).toBeGreaterThan(wait.lastTimeLeft);
     expect(code, output).not.toBe(0);
     expect(code, 'it was killed rather than finishing').not.toBeNull();
     expect(output).toMatch(/bokmål/);
@@ -937,16 +1096,28 @@ describe('past the preflight', () => {
   });
 
   test('INF-06-AC9: when the emulator never applies bokmål, it stops after the deadline, says it waited, how long, bokmål and what the device reports, and runs no flow', async () => {
-    const { code, stderr, output, calls, askedFor } = await runPastPreflight({
+    const { code, stderr, output, calls, clock, readTimes } = await runPastPreflight({
       localeAppliedAfter: Infinity,
       env: SHORT_WAIT,
     });
+    const wait = waitByItsClock({ clock, asks: readTimes, deadline: SHORT_DEADLINE });
 
     expect(code, output).not.toBe(0);
     expect(code, 'it was killed rather than finishing').not.toBeNull();
     // It waited: it asked more than once, and kept asking until the deadline.
-    expect(calls.filter(isLocaleRead).length, output).toBeGreaterThan(1);
-    expect(askedFor, output).toBeGreaterThanOrEqual(WAITED_OUT);
+    // Amended 2026-10-14 (BUG-21): both are read from the script's own clock.
+    // The span from the first reading to the last, each stamped by a stand-in
+    // this test starts, was allowed three intervals for the stand-ins' start-up,
+    // and under gate:full's load measured 639 ms of a wait the script timed at
+    // 1 s: a slow start of the first reading shortens it, a slow last reading
+    // cuts it off. The script's clock says what it decided: it waited the whole
+    // deadline, with no allowance, and asked again after every reading of its
+    // clock that left time. "More than once" also assumed a reading takes less
+    // than the deadline; this holds it to more than once whenever its clock left
+    // time for a second reading, which on this machine is several times over.
+    expect(wait.readings, noClock(output)).toBeGreaterThan(1);
+    expect(wait.waited, output).toBeGreaterThanOrEqual(SHORT_DEADLINE);
+    expect(wait.lastAsk, stoppedAsking(wait, output)).toBeGreaterThan(wait.lastTimeLeft);
     // And it says so where a failure is said.
     expect(stderr, output).toMatch(/bokmål/);
     expect(stderr, output).toMatch(/\bwait/i);
@@ -961,14 +1132,21 @@ describe('past the preflight', () => {
   test("INF-06-AC9: without the tests' shorter deadline, it is still waiting for bokmål after 4 s, not failing at once", async () => {
     // The production deadline, at least 60 s, is what the script uses when no
     // test shortens it. Killed at 4 s, it must still be waiting.
+    // Amended 2026-10-14 (BUG-21): the 4 s are counted from its first question
+    // about the language, not from its start. Counted from its start, a machine
+    // slow to start the script and its preflight used them up before it asked,
+    // and the check below that it asked failed, though nothing was wrong.
     const { code, signal, output, calls } = await runPastPreflight({
       localeAppliedAfter: Infinity,
-      timeout: 4_000,
+      stopAfter: { call: isLocaleRead, ms: 4_000 },
     });
 
     // Not vacuous: it got as far as asking the device for its language.
     expect(calls.filter(isLocaleRead).length, output).toBeGreaterThan(0);
-    expect(code, `it finished within 4 s, with exit code ${String(code)}:\n${output}`).toBeNull();
+    expect(
+      code,
+      `it finished within 4 s of asking, with exit code ${String(code)}:\n${output}`,
+    ).toBeNull();
     expect(signal).toBe('SIGTERM');
     expect(calls.filter(isFlowRun)).toEqual([]);
   });
@@ -1006,15 +1184,20 @@ describe('past the preflight', () => {
   });
 
   test('INF-06-AC9: when persist.sys.locale says nb-NO but the framework never restarts to apply it, it installs nothing, and after the deadline says the configuration is en-rUS and the package service was found', async () => {
-    const { code, stderr, output, calls, askedFor } = await runPastPreflight({
+    const { code, stderr, output, calls, clock, readTimes } = await runPastPreflight({
       timeline: PROPERTY_ONLY,
       env: SHORT_WAIT,
     });
+    const wait = waitByItsClock({ clock, asks: readTimes, deadline: SHORT_DEADLINE });
 
     expect(touchedDevice(calls), output).toEqual([]);
     expect(code, output).not.toBe(0);
     expect(code, 'it was killed rather than finishing').not.toBeNull();
-    expect(askedFor, output).toBeGreaterThanOrEqual(WAITED_OUT);
+    // Amended 2026-10-14 (BUG-21): how long it asked is read from the script's
+    // own clock, for the reason "never applies bokmål" above gives.
+    expect(wait.readings, noClock(output)).toBeGreaterThan(1);
+    expect(wait.waited, output).toBeGreaterThanOrEqual(SHORT_DEADLINE);
+    expect(wait.lastAsk, stoppedAsking(wait, output)).toBeGreaterThan(wait.lastTimeLeft);
     expect(stderr, output).toMatch(/bokmål/);
     expect(stderr, output).toMatch(/\bwait/i);
     expect(stderr, output).toMatch(saysHowLong(SHORT_DEADLINE));
@@ -1026,15 +1209,20 @@ describe('past the preflight', () => {
   });
 
   test('INF-06-AC9: when the configuration says nb-rNO but the package service never comes back, it installs nothing, and after the deadline says the package service was not found', async () => {
-    const { code, stderr, output, calls, askedFor } = await runPastPreflight({
+    const { code, stderr, output, calls, clock, readTimes } = await runPastPreflight({
       timeline: PACKAGE_NEVER_BACK,
       env: SHORT_WAIT,
     });
+    const wait = waitByItsClock({ clock, asks: readTimes, deadline: SHORT_DEADLINE });
 
     expect(touchedDevice(calls), output).toEqual([]);
     expect(code, output).not.toBe(0);
     expect(code, 'it was killed rather than finishing').not.toBeNull();
-    expect(askedFor, output).toBeGreaterThanOrEqual(WAITED_OUT);
+    // Amended 2026-10-14 (BUG-21): how long it asked is read from the script's
+    // own clock, for the reason "never applies bokmål" above gives.
+    expect(wait.readings, noClock(output)).toBeGreaterThan(1);
+    expect(wait.waited, output).toBeGreaterThanOrEqual(SHORT_DEADLINE);
+    expect(wait.lastAsk, stoppedAsking(wait, output)).toBeGreaterThan(wait.lastTimeLeft);
     expect(stderr, output).toMatch(/bokmål/);
     expect(stderr, output).toMatch(/\bwait/i);
     expect(stderr, output).toMatch(saysHowLong(SHORT_DEADLINE));
@@ -1063,9 +1251,14 @@ describe('past the preflight', () => {
   });
 
   test('INF-06-AC9: when the install fails as in run 8 and then as in run 6 before it works, it waits for the package manager, shows each attempt, and then runs the flows, once', async () => {
+    // Amended 2026-10-14 (BUG-21): with a 20 s deadline, as the waits for
+    // bokmål that end in a pass have. With the 1 s one, the three attempts had
+    // to be made within a second, and on a machine slow to start adb the deadline came
+    // first and the run failed, though the script did what this test says. A
+    // run that passes never waits out the deadline, so it costs no time.
     const { code, output, calls, installTimes } = await runPastPreflight({
       installs: [RUN_8_INSTALL, RUN_6_INSTALL, INSTALL_SUCCESS],
-      env: SHORT_INSTALL_WAIT,
+      env: { ...SHORT_INSTALL_WAIT, E2E_ANDROID_INSTALL_DEADLINE_MS: '20000' },
     });
 
     expect(calls.filter(isInstallCall).length, output).toBe(3);
@@ -1090,24 +1283,45 @@ describe('past the preflight', () => {
   });
 
   test('INF-06-AC9: when the install is still not ready at the deadline, it stops, says how long it waited, how many attempts and what adb said last, and runs no flow', async () => {
-    const { code, stderr, output, calls, installTimes } = await runPastPreflight({
-      installs: [RUN_6_INSTALL, RUN_8_INSTALL],
+    const answers = [RUN_6_INSTALL, RUN_8_INSTALL];
+    const { code, stderr, output, calls, clock, readTimes, installTimes } = await runPastPreflight({
+      installs: answers,
       env: SHORT_INSTALL_WAIT,
     });
     const installs = calls.filter(isInstallCall);
+    // The install's wait, by the script's clock: from after it last read the
+    // device's language, which it does only before it installs.
+    const wait = waitByItsClock({
+      clock,
+      asks: installTimes,
+      deadline: SHORT_INSTALL_DEADLINE,
+      since: Math.max(...readTimes),
+    });
 
     // It waited: it tried more than the two answers, and kept trying until the deadline.
-    expect(installs.length, output).toBeGreaterThan(2);
-    expect((installTimes.at(-1) ?? 0) - (installTimes[0] ?? 0), output).toBeGreaterThanOrEqual(
-      SHORT_INSTALL_DEADLINE - 3 * SHORT_INSTALL_INTERVAL,
-    );
+    // Amended 2026-10-14 (BUG-21): both are read from the script's own clock.
+    // "More than two attempts" needed each attempt, with the interval after it,
+    // to take under a third of the deadline; on a machine slow to start adb a
+    // correct run made 2. The span from the first attempt to the last was held
+    // to the deadline less three intervals, here a single interval. The
+    // script's clock says what it decided: it tried for the whole deadline, and
+    // tried again after every reading of its clock that left time, which on
+    // this machine means more than two attempts.
+    expect(wait.readings, noClock(output)).toBeGreaterThan(1);
+    expect(wait.waited, output).toBeGreaterThanOrEqual(SHORT_INSTALL_DEADLINE);
+    expect(wait.lastAsk, stoppedAsking(wait, output)).toBeGreaterThan(wait.lastTimeLeft);
     expect(code, output).not.toBe(0);
     expect(code, 'it was killed rather than finishing').not.toBeNull();
     expect(stderr, output).toMatch(/\bwait/i);
     expect(stderr, output).toMatch(saysHowLong(SHORT_INSTALL_DEADLINE));
     expect(stderr, output).toMatch(saysAttempts(installs.length));
     // What adb said last: run 8's exception, which the first answer did not have.
-    expect(stderr, output).toContain('PackageManagerInternal');
+    // Amended 2026-10-14 (BUG-21): all of what adb printed on the last attempt,
+    // which the stand-in chose as it does: run 8's from the second attempt on.
+    // A run whose clock had passed the deadline after one attempt made only
+    // that one, and its last answer is the first.
+    const lastAnswer = answers[Math.min(installs.length, answers.length) - 1];
+    expect(stderr, output).toContain(lastAnswer?.stderr.trim());
     expect(output).not.toMatch(/flows? passed/);
     expect(calls.filter(isFlowRun)).toEqual([]);
   });
@@ -1130,14 +1344,19 @@ describe('past the preflight', () => {
   test("INF-06-AC9: without the tests' shorter install deadline, it is still waiting for the package manager after 6 s, not failing at once", async () => {
     // The production deadline, at least 60 s, is what the script uses when no
     // test shortens it. Killed at 6 s, it must still be waiting.
+    // Amended 2026-10-14 (BUG-21): the 6 s are counted from its first install,
+    // not from its start, for the reason the 4 s wait for bokmål above gives.
     const { code, signal, output, calls } = await runPastPreflight({
       installs: [RUN_8_INSTALL],
-      timeout: 6_000,
+      stopAfter: { call: isInstallCall, ms: 6_000 },
     });
 
     // Not vacuous: it got as far as installing.
     expect(calls.filter(isInstallCall).length, output).toBeGreaterThan(0);
-    expect(code, `it finished within 6 s, with exit code ${String(code)}:\n${output}`).toBeNull();
+    expect(
+      code,
+      `it finished within 6 s of installing, with exit code ${String(code)}:\n${output}`,
+    ).toBeNull();
     expect(signal).toBe('SIGTERM');
     expect(calls.filter(isFlowRun)).toEqual([]);
   });
@@ -1203,5 +1422,153 @@ describe('past the preflight', () => {
     expect(output).toMatch(/\bJAVA_HOME\b/);
     expect(output).toMatch(/\bJDK 17\b/);
     expect(didWork(calls)).toEqual([]);
+  });
+});
+
+// BUG-21. The waits above were judged with clocks and counts the script does
+// not control: the stand-ins it starts, each stamped or counted per call, and
+// the test's own timer, started with the run. Under gate:full's load on
+// 2026-10-06 a run that waited out its deadline, and said "Waited 1 s",
+// measured 639 ms from its first reading to its last; on 2026-10-13 another
+// made 2 install attempts where 3 were expected, and the 4 s check failed. A
+// machine slow to start programs made a correct wait look short.
+//
+// These runs make that slowness explicit, rather than hoping for a busy
+// machine: chosen calls to the stand-in adb sleep before they do anything, as
+// a program does that a busy machine is slow to start. The script is the same
+// correct one throughout, so each of these runs must pass the same checks as
+// its sibling above. Each failed them as they were before BUG-21: the first
+// reading 0.8 s slow measured 157 ms against 700; 1.1 s slow, it read once, not
+// more than once; started 1.2 s slow with the timer started at its start, it
+// had not yet asked; with installs 0.4 s slow it made 2 attempts, not more than
+// 2, and the install that works on the third attempt failed after the second
+// at the 1 s deadline; started slowly, it had not yet installed. Each also
+// checks that the slowness happened, so it cannot pass by being fast.
+
+/** The first reading of the language slow to start, and how slow. */
+const SLOW_FIRST_READINGS = [
+  { what: 'slow to start, by 0.8 s', ms: 800 },
+  { what: 'so slow to start, by 1.1 s, that the deadline has passed when it answers', ms: 1_100 },
+];
+
+describe('BUG-21: a machine slow to start programs does not fail a run that waited correctly', () => {
+  test.each(SLOW_FIRST_READINGS)(
+    'BUG-21: with the first reading of the language $what, a run that never sees bokmål still counts as waiting out the deadline',
+    async ({ ms }) => {
+      const { code, stderr, output, calls, clock, readTimes } = await runPastPreflight({
+        localeAppliedAfter: Infinity,
+        env: SHORT_WAIT,
+        slowStarts: [{ call: '*get-config*', ms, times: 1 }],
+      });
+      const wait = waitByItsClock({ clock, asks: readTimes, deadline: SHORT_DEADLINE });
+
+      // Not vacuous: the first reading reached adb at least `ms` after the wait began.
+      expect((readTimes[0] ?? 0) - Math.min(...clock), output).toBeGreaterThanOrEqual(ms);
+      // The checks of "never applies bokmål" above.
+      expect(code, output).not.toBe(0);
+      expect(code, 'it was killed rather than finishing').not.toBeNull();
+      expect(wait.readings, noClock(output)).toBeGreaterThan(1);
+      expect(wait.waited, output).toBeGreaterThanOrEqual(SHORT_DEADLINE);
+      expect(wait.lastAsk, stoppedAsking(wait, output)).toBeGreaterThan(wait.lastTimeLeft);
+      expect(stderr, output).toMatch(/bokmål/);
+      expect(stderr, output).toMatch(/\bwait/i);
+      expect(stderr, output).toMatch(saysHowLong(SHORT_DEADLINE));
+      expect(stderr, output).toMatch(/\ben[-_]r?US\b/);
+      expect(calls.filter(isFlowRun)).toEqual([]);
+    },
+  );
+
+  test('BUG-21: started slowly, by 1.2 s, it is still waiting for bokmål a second after it first asked, and was not stopped before it asked', async () => {
+    const started = Date.now();
+    const { code, signal, output, calls, readTimes } = await runPastPreflight({
+      localeAppliedAfter: Infinity,
+      slowStarts: [{ call: 'devices', ms: 1_200 }],
+      stopAfter: { call: isLocaleRead, ms: 1_000 },
+    });
+
+    // Not vacuous: it first asked more than the slow start after the run began.
+    expect((readTimes[0] ?? 0) - started, output).toBeGreaterThanOrEqual(1_200);
+    // The checks of "still waiting for bokmål after 4 s" above.
+    expect(calls.filter(isLocaleRead).length, output).toBeGreaterThan(0);
+    expect(
+      code,
+      `it finished within 1 s of asking, with exit code ${String(code)}:\n${output}`,
+    ).toBeNull();
+    expect(signal).toBe('SIGTERM');
+    expect(calls.filter(isFlowRun)).toEqual([]);
+  });
+
+  test('BUG-21: with every install slow to start, by 0.4 s, an install still not ready at the deadline still counts as trying until then', async () => {
+    const answers = [RUN_6_INSTALL, RUN_8_INSTALL];
+    const { code, stderr, output, calls, clock, readTimes, installTimes } = await runPastPreflight({
+      installs: answers,
+      env: SHORT_INSTALL_WAIT,
+      slowStarts: [{ call: '*install*', ms: 400 }],
+    });
+    const installs = calls.filter(isInstallCall);
+    const wait = waitByItsClock({
+      clock,
+      asks: installTimes,
+      deadline: SHORT_INSTALL_DEADLINE,
+      since: Math.max(...readTimes),
+    });
+
+    // Not vacuous: the first install reached adb at least 0.4 s after the language was read.
+    expect((installTimes[0] ?? 0) - Math.max(...readTimes), output).toBeGreaterThanOrEqual(400);
+    // The checks of "still not ready at the deadline" above.
+    expect(wait.readings, noClock(output)).toBeGreaterThan(1);
+    expect(wait.waited, output).toBeGreaterThanOrEqual(SHORT_INSTALL_DEADLINE);
+    expect(wait.lastAsk, stoppedAsking(wait, output)).toBeGreaterThan(wait.lastTimeLeft);
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    expect(stderr, output).toMatch(/\bwait/i);
+    expect(stderr, output).toMatch(saysHowLong(SHORT_INSTALL_DEADLINE));
+    expect(stderr, output).toMatch(saysAttempts(installs.length));
+    const lastAnswer = answers[Math.min(installs.length, answers.length) - 1];
+    expect(stderr, output).toContain(lastAnswer?.stderr.trim());
+    expect(calls.filter(isFlowRun)).toEqual([]);
+  });
+
+  test('BUG-21: with every install slow to start, by 0.4 s, an install that works on the third attempt still gets its third attempt, and the flows run once', async () => {
+    const { code, output, calls, readTimes, installTimes } = await runPastPreflight({
+      installs: [RUN_8_INSTALL, RUN_6_INSTALL, INSTALL_SUCCESS],
+      env: { ...SHORT_INSTALL_WAIT, E2E_ANDROID_INSTALL_DEADLINE_MS: '20000' },
+      slowStarts: [{ call: '*install*', ms: 400 }],
+    });
+
+    // Not vacuous: the first install reached adb at least 0.4 s after the language was read.
+    expect((installTimes[0] ?? 0) - Math.max(...readTimes), output).toBeGreaterThanOrEqual(400);
+    // The checks of "fails as in run 8 and then as in run 6 before it works" above.
+    expect(calls.filter(isInstallCall).length, output).toBe(3);
+    const gaps = installTimes.slice(1).map((t, i) => t - (installTimes[i] ?? Infinity));
+    expect(gaps.length, output).toBe(2);
+    for (const gap of gaps) {
+      expect(gap, `gaps between installs: ${gaps.join(', ')} ms`).toBeGreaterThanOrEqual(
+        SHORT_INSTALL_INTERVAL - 2,
+      );
+    }
+    expect(calls.filter(isFlowRun).length, output).toBe(1);
+    expect(calls.findIndex(isFlowRun), output).toBeGreaterThan(calls.findLastIndex(isInstallCall));
+    expect(code, output).toBe(0);
+  });
+
+  test('BUG-21: started slowly, by 1.2 s, it is still waiting for the package manager a second after it first tried the install, and was not stopped before it tried', async () => {
+    const started = Date.now();
+    const { code, signal, output, calls, readTimes } = await runPastPreflight({
+      installs: [RUN_8_INSTALL],
+      slowStarts: [{ call: 'devices', ms: 1_200 }],
+      stopAfter: { call: isInstallCall, ms: 1_000 },
+    });
+
+    // Not vacuous: it first asked more than the slow start after the run began.
+    expect((readTimes[0] ?? 0) - started, output).toBeGreaterThanOrEqual(1_200);
+    // The checks of "still waiting for the package manager after 6 s" above.
+    expect(calls.filter(isInstallCall).length, output).toBeGreaterThan(0);
+    expect(
+      code,
+      `it finished within 1 s of installing, with exit code ${String(code)}:\n${output}`,
+    ).toBeNull();
+    expect(signal).toBe('SIGTERM');
+    expect(calls.filter(isFlowRun)).toEqual([]);
   });
 });
