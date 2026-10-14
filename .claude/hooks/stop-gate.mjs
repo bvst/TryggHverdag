@@ -26,21 +26,21 @@ const git = (...a) => spawnSync('git', [...RAW_BYTES, ...a], { cwd, encoding: 'u
 
 // --no-renames: a moved file counts under the path it left too, so code moved
 // to docs/ still runs the gate (BUG-7).
+// BUG-48 (D-131): without a merge base with origin/main (none, or no shared
+// history), what the branch committed is unknown, and not knowing is not the
+// same as having nothing to check: the gate runs as for a code change.
+const mb = git('merge-base', 'HEAD', 'origin/main');
+const baseKnown = mb.status === 0;
 const changed = new Set();
 for (const out of [
   git('diff', '--name-only', '--no-renames', 'HEAD').stdout,
   git('ls-files', '--others', '--exclude-standard').stdout,
-  (() => {
-    const mb = git('merge-base', 'HEAD', 'origin/main');
-    return mb.status === 0
-      ? git('diff', '--name-only', '--no-renames', mb.stdout.trim(), 'HEAD').stdout
-      : '';
-  })(),
+  baseKnown ? git('diff', '--name-only', '--no-renames', mb.stdout.trim(), 'HEAD').stdout : '',
 ])
   for (const f of (out || '').split('\n')) if (f.trim()) changed.add(f.trim());
-const codeChanged = [...changed].some(
-  (f) => !f.startsWith('docs/') && !f.startsWith('.claude/agent-memory/'),
-);
+const codeChanged =
+  !baseKnown ||
+  [...changed].some((f) => !f.startsWith('docs/') && !f.startsWith('.claude/agent-memory/'));
 if (!codeChanged || !existsSync(path.join(cwd, 'package.json'))) process.exit(0);
 
 const phaseFile = path.join(cwd, '.claude/state/phase');
