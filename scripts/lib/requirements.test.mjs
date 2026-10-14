@@ -739,3 +739,78 @@ describe('BUG-46: req:coverage with an origin/main git cannot resolve, in a scra
     expect(report()).toBe(resolvableReport);
   });
 });
+
+// ===========================================================================
+// BUG-47: which changed files req:coverage --fail-on-uncovered-changed reads
+// for requirement IDs. The list is IMPLEMENTING_DIRS in req-coverage.mjs:
+// product code under apps/ and packages/, and specs under docs/specs/.
+// ===========================================================================
+
+describe('BUG-47: which committed files req:coverage --fail-on-uncovered-changed reads for a requirement no test names, in a scratch repository (RG-01)', () => {
+  // test-auditor found, in BUG-46's loop-1 audit, that no test committed a
+  // product file naming an ID with no test, or a tooling file mentioning one.
+  // So the list could lose apps/ or packages/, letting product work on an
+  // untested requirement through RG-01, or gain scripts/, making the gate
+  // refuse the comments tooling writes to explain a guard, with every test
+  // green. The behaviour is right today; these pin it.
+  //
+  // Each case commits one file holding the same text, under the same path
+  // below its top folder; only the top folder differs, so the folder list is
+  // the one thing that decides. DEMO-02 is a synthetic live story that no
+  // counted test names; DEMO-01 has one, so the repository has a counted test
+  // that names something else. Nothing under docs/specs/ changes, so no
+  // criterion is read and no not-automated line is involved.
+  const UNCOVERED_ID = 'DEMO-02';
+  const base = {
+    'docs/plan/01b-mvp-scope.md':
+      '**DEMO-01 · A synthetic story** (Must)\n' + '**DEMO-02 · Another synthetic story** (Must)\n',
+    'apps/server/src/demo.test.ts': namingTests('DEMO-01-AC1'),
+  };
+  /** The file a case commits: the same path under each top folder. */
+  const fileUnder = (top) => `${top}/demo/src/demo.ts`;
+  /** The same text in every case: one line naming DEMO-02, as a comment would. */
+  const NAMING_TEXT = `// ${UNCOVERED_ID}: why this exists.\nexport const demo = true;\n`;
+
+  /** A scratch repository whose branch commits only `file`, with NAMING_TEXT. */
+  function branchCommitting(file) {
+    const dir = repoWith(base, { [file]: NAMING_TEXT });
+    // The condition every case rests on: origin/main resolves, and the branch
+    // changes that one file and nothing else.
+    const diff = execFileSync('git', ['diff', '--name-only', 'origin/main...HEAD'], {
+      cwd: dir,
+      env: scratchEnv(dir),
+      encoding: 'utf8',
+    });
+    expect(diff.split('\n').filter((line) => line !== '')).toEqual([file]);
+    return dir;
+  }
+
+  test('BUG-47: a committed apps/ file naming a live requirement no test names is refused under RG-01, naming it', () => {
+    const dir = branchCommitting(fileUnder('apps'));
+
+    const { status, output } = reqCoverage(dir, '--fail-on-uncovered-changed');
+
+    expect(status, output).toBe(1);
+    expect(output).toContain('RG-01:');
+    expect(output.slice(output.indexOf('RG-01:'))).toContain(UNCOVERED_ID);
+  });
+
+  test('BUG-47: a committed packages/ file naming a live requirement no test names is refused under RG-01, naming it', () => {
+    const dir = branchCommitting(fileUnder('packages'));
+
+    const { status, output } = reqCoverage(dir, '--fail-on-uncovered-changed');
+
+    expect(status, output).toBe(1);
+    expect(output).toContain('RG-01:');
+    expect(output.slice(output.indexOf('RG-01:'))).toContain(UNCOVERED_ID);
+  });
+
+  test('BUG-47: the same requirement named only in a committed scripts/ file, tooling, is not refused', () => {
+    const dir = branchCommitting(fileUnder('scripts'));
+
+    const { status, output } = reqCoverage(dir, '--fail-on-uncovered-changed');
+
+    expect(status, output).toBe(0);
+    expect(output).not.toContain('RG-01:');
+  });
+});
