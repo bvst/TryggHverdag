@@ -5013,29 +5013,51 @@ describe('REL-10: the canary’s production wait, which a stop ends at once', ()
 // ---------------------------------------------------------------------------
 // BUG-44: the wait startWorker hands the canary. The tests above hold
 // CANARY_WAIT on its own, and every test of a run elsewhere hands the canary
-// the test kit's fakeWait, so nothing held that startWorker hands the canary
-// CANARY_WAIT: a wait that ignored its signal, wired in its place, passed
-// every test in this file (test-auditor, #80). So these run the canary that
-// startWorker made, through the worker's own task list, and look at the one
-// wait every run holds from its first moment to its end: its run limit, of
-// CANARY_RUN_LIMIT_MS. While the run is in flight, it is one real timer; once
-// the run has ended, by a stop or on its own, it is gone.
+// the test kit's fakeWait. So no test held that startWorker hands the canary
+// CANARY_WAIT. A wait that ignored its signal, wired in its place, passed
+// every test in this file (test-auditor, #80).
 //
-// Counted, never timed: pendingTimers is read with nothing awaited between
-// two reads, or only a run that ends through promise callbacks alone, so no
-// other timer of this process starts or fires between them, however slow the
-// machine.
+// So these run the canary that startWorker made, through the worker's own
+// task list, and count the timer of its run limit: the wait of
+// CANARY_RUN_LIMIT_MS that run.ts starts before anything else in a run, and
+// aborts in the run's `finally`. It is the only wait these runs start: the
+// first look and the polls come only after a start that succeeded, and the
+// stop's wait for "I'm home" only once a journey has started. While the run
+// is in flight, its run limit is one real timer; once the run has ended, by a
+// stop or on its own, it is gone.
+//
+// Counted, never timed. Each assertion compares two reads of pendingTimers
+// taken in the same turn of the event loop, so no timer can fire between
+// them, however slow the machine:
+//   - the first test compares `before` with `whileInFlight`, with nothing
+//     awaited between them, and `beforeStop` with `afterStop`, with only the
+//     abort and the end of the run it stops between them, which comes through
+//     promise callbacks alone;
+//   - the second test compares `before` with `whileInFlight`, with nothing
+//     awaited between them, and `before` with `afterRun`, with only the run
+//     between them, which ends through promise callbacks alone too.
+// Each `settle()`, a turn of the event loop, comes before or between those
+// pairs, never inside one.
 // ---------------------------------------------------------------------------
 
 /**
- * The fake database's answers to the canary's registration: the device's
- * insert returns the canary device's ID, as PostgreSQL returns the row it
- * wrote, and every other query is answered as by a database that holds
- * nothing.
+ * The canary device's registration: the insert into devices that returns the
+ * ID of the row it wrote, for the canary's own device. The one statement of
+ * the registration that the fake database answers with a row.
+ */
+const isTheCanaryDeviceInsert = ({ text, values }: FakePostgresQuery) =>
+  /^insert into "devices" [\s\S]*\sreturning "id"$/i.test(text) &&
+  values.includes(CANARY_IDS.deviceId);
+
+/**
+ * The fake database's answers to the canary's registration. The canary
+ * device's insert returns the device's ID, as PostgreSQL returns the row it
+ * wrote. Every other query is answered as quietDatabase answers it: a
+ * set_config with one row, its value empty, and anything else with no rows.
  */
 const registersTheCanary: FakePostgresHandler = (query) =>
-  /\breturning\b/i.test(query.text)
-    ? { columns: askedFor(query.text), rows: [[CANARY_IDS.deviceId]] }
+  isTheCanaryDeviceInsert(query)
+    ? { columns: ['id'], rows: [[CANARY_IDS.deviceId]] }
     : quietDatabase(query);
 
 /**
