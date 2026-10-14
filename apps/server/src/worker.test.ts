@@ -5061,29 +5061,23 @@ const registersTheCanary: FakePostgresHandler = (query) =>
     : quietDatabase(query);
 
 /**
- * A canary client whose first start is refused with a 503, so that run ends
- * at once, and whose every later start is never answered, so that run is in
- * flight until it is stopped. A run that reached its heartbeat or its "I'm
- * home" would show in `calls`.
+ * untouchedClient, except that its first start is refused with a 503, so that
+ * run ends at once. Every later call is untouchedClient's: recorded in
+ * `calls`, never answered.
  */
 function startRefusedThenHeld() {
   const calls: string[] = [];
+  const untouched = untouchedClient(calls);
   return {
     calls,
     client: {
+      ...untouched,
       start: () => {
+        if (calls.includes('start')) {
+          return untouched.start();
+        }
         calls.push('start');
-        return calls.filter((call) => call === 'start').length === 1
-          ? Promise.resolve({ ok: false as const, status: 503, code: null })
-          : new Promise<never>(() => undefined);
-      },
-      heartbeat: () => {
-        calls.push('heartbeat');
-        return new Promise<never>(() => undefined);
-      },
-      home: () => {
-        calls.push('home');
-        return new Promise<never>(() => undefined);
+        return Promise.resolve({ ok: false as const, status: 503, code: null });
       },
     },
   };
@@ -5111,42 +5105,46 @@ describe('BUG-44: the wait startWorker hands the canary, which a stop ends at on
         write: () => undefined,
         canary: { client, credentialHash: hashCredential(syntheticCredential()), alarm },
       });
-      const { canary: canaryTask } = runner.options()?.taskList ?? {};
-      expect(canaryTask, 'the canary task').toBeDefined();
+      try {
+        const { canary: canaryTask } = runner.options()?.taskList ?? {};
+        expect(canaryTask, 'the canary task').toBeDefined();
 
-      // The first run registers the canary over the fake database and comes
-      // to START_FAILED, so the run below reaches the database for nothing.
-      await canaryTask?.(null, helpersWith());
-      expect(canaryRunOutcomes(loops.log)).toEqual(['START_FAILED']);
-      const queriesBefore = database.queries.length;
+        // The first run registers the canary over the fake database and comes
+        // to START_FAILED, so the run below reaches the database for nothing.
+        await canaryTask?.(null, helpersWith());
+        expect(canaryRunOutcomes(loops.log)).toEqual(['START_FAILED']);
+        const queriesBefore = database.queries.length;
 
-      const graphile = new AbortController();
-      let ended = false;
-      const before = pendingTimers();
-      const run = Promise.resolve(canaryTask?.(null, helpersWith(graphile.signal))).finally(() => {
-        ended = true;
-      });
-      const whileInFlight = pendingTimers();
-      // A turn of the event loop: the run is still in flight, waiting on its start.
-      await settle();
-      expect(ended, 'the run ended before it was stopped').toBe(false);
-      expect(calls).toEqual(['start', 'start']);
+        const graphile = new AbortController();
+        let ended = false;
+        const before = pendingTimers();
+        const run = Promise.resolve(canaryTask?.(null, helpersWith(graphile.signal))).finally(
+          () => {
+            ended = true;
+          },
+        );
+        const whileInFlight = pendingTimers();
+        // A turn of the event loop: the run is still in flight, waiting on its start.
+        await settle();
+        expect(ended, 'the run ended before it was stopped').toBe(false);
+        expect(calls).toEqual(['start', 'start']);
 
-      const beforeStop = pendingTimers();
-      graphile.abort();
-      await run;
-      const afterStop = pendingTimers();
+        const beforeStop = pendingTimers();
+        graphile.abort();
+        await run;
+        const afterStop = pendingTimers();
 
-      // Without this, a count that missed the wait's timer would pass below
-      // without showing anything.
-      expect(whileInFlight, 'timers while the run is in flight').toBe(before + 1);
-      expect(afterStop, 'timers once the stop has ended the run').toBe(beforeStop - 1);
-      expect(canaryRunOutcomes(loops.log)).toEqual(['START_FAILED', 'INTERRUPTED']);
-      expect(alarm.statuses).toEqual(['failing']);
-      expect(calls).toEqual(['start', 'start']);
-      expect(database.queries.length, 'queries the stopped run sent').toBe(queriesBefore);
-
-      await worker.stop();
+        // Without this, a count that missed the wait's timer would pass below
+        // without showing anything.
+        expect(whileInFlight, 'timers while the run is in flight').toBe(before + 1);
+        expect(afterStop, 'timers once the stop has ended the run').toBe(beforeStop - 1);
+        expect(canaryRunOutcomes(loops.log)).toEqual(['START_FAILED', 'INTERRUPTED']);
+        expect(alarm.statuses).toEqual(['failing']);
+        expect(calls).toEqual(['start', 'start']);
+        expect(database.queries.length, 'queries the stopped run sent').toBe(queriesBefore);
+      } finally {
+        await worker.stop();
+      }
     } finally {
       await database.close();
     }
@@ -5163,24 +5161,26 @@ describe('BUG-44: the wait startWorker hands the canary, which a stop ends at on
       write: () => undefined,
       canary: { client: null, credentialHash: null, alarm },
     });
-    const { canary: canaryTask } = runner.options()?.taskList ?? {};
-    expect(canaryTask, 'the canary task').toBeDefined();
-    // A turn of the event loop first: the worker's loops set their timers in
-    // promise callbacks after their first runs, which would otherwise land
-    // between the counts below.
-    await settle();
+    try {
+      const { canary: canaryTask } = runner.options()?.taskList ?? {};
+      expect(canaryTask, 'the canary task').toBeDefined();
+      // A turn of the event loop first: the worker's loops set their timers in
+      // promise callbacks after their first runs, which would otherwise land
+      // between the counts below.
+      await settle();
 
-    const before = pendingTimers();
-    const run = Promise.resolve(canaryTask?.(null, helpersWith()));
-    const whileInFlight = pendingTimers();
-    await run;
-    const afterRun = pendingTimers();
+      const before = pendingTimers();
+      const run = Promise.resolve(canaryTask?.(null, helpersWith()));
+      const whileInFlight = pendingTimers();
+      await run;
+      const afterRun = pendingTimers();
 
-    expect(whileInFlight, 'timers while the run is in flight').toBe(before + 1);
-    expect(afterRun, 'timers once the run has ended').toBe(before);
-    expect(canaryRunOutcomes(loops.log)).toEqual(['NOT_CONFIGURED']);
-    expect(alarm.statuses).toEqual(['failing']);
-
-    await worker.stop();
+      expect(whileInFlight, 'timers while the run is in flight').toBe(before + 1);
+      expect(afterRun, 'timers once the run has ended').toBe(before);
+      expect(canaryRunOutcomes(loops.log)).toEqual(['NOT_CONFIGURED']);
+      expect(alarm.statuses).toEqual(['failing']);
+    } finally {
+      await worker.stop();
+    }
   });
 });
