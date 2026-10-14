@@ -469,6 +469,9 @@ describe('BUG-48: without a merge base with origin/main, the progress gate refus
       const result = check(dir);
 
       expect(result.status).toBe(BLOCKED);
+      // test-auditor, BUG-48: the refusal says which gate it is, as every other
+      // HK-08 refusal does; nothing else held that prefix.
+      expect(result.stderr).toMatch(/^HK-08: /m);
       expect(result.stderr).toContain('origin/main');
       expect(result.stderr).toMatch(/could not tell/);
     },
@@ -506,6 +509,29 @@ describe('BUG-48: without a merge base with origin/main, the progress gate refus
       expect(readFileSync(marker(dir), 'utf8')).toMatch(/could not tell/);
     },
   );
+
+  // test-auditor, BUG-48: the merge base is looked for in the repository the
+  // gate judges, CLAUDE_PROJECT_DIR's (BUG-36), not wherever the hook's process
+  // runs. Every other test starts the hook inside the repository it checks, so
+  // asking git from the process's folder passed them all. Here that folder is
+  // another repository whose origin/main resolves: asked there, git finds a
+  // merge base, the project's committed code is then not seen, and the gate
+  // passes in silence.
+  test("BUG-48: from another repository whose origin/main resolves, the project's missing merge base is still refused: it judges CLAUDE_PROJECT_DIR's repository, not the process's folder", () => {
+    const project = branchCommitting(CODE_ON_THE_BRANCH, NO_ORIGIN_MAIN);
+    expectCleanWithoutMergeBase(project);
+    const elsewhere = repoWith();
+    expect(spawnSync('git', ['merge-base', 'HEAD', 'origin/main'], { cwd: elsewhere }).status).toBe(
+      0,
+    );
+
+    const result = checkFrom({ folder: elsewhere, project });
+
+    expect(result.status).toBe(BLOCKED);
+    expect(result.stderr).toMatch(/^HK-08: /m);
+    expect(result.stderr).toContain('origin/main');
+    expect(result.stderr).toMatch(/could not tell/);
+  });
 });
 
 // The controls. All three pass today, and are meant to: with a merge base git
