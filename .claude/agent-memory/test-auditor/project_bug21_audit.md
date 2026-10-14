@@ -23,3 +23,10 @@ PASS at e5c6d2e (2026-10-14, HEAD 87e8314 = + psr memory only). Test-only: scrip
   stand-ins outlive SIGTERM (pre-existing; same with spawnSync's timeout).
 - RG-05: `mutation --plan --only-if-safety-paths-changed` = skip (scripts/ not a safety path). No PR, check-runs 0.
 Related: [[load-proof-floors]], [[in-memory-mutation]], [[gate-integrity-local]]
+
+**Loop 1, PASS at b73fc73** (2026-10-14). Preload now records sleeps (timers/promises swap + syncBuiltinESMExports); expectWaitedOut
+asserts readings-2 sleeps == interval; clock pins (reads+1, reads+installs+1). Rebuilt base at b73fc73: all 24 script faults killed
+(I5/I6/I10/L7/L9 now too, via "it slept [...]"), T1n (stamps) and T4 (no sync -> sleeps []) killed, control 31/31. Written count
+185 -> 140 from four shared expect* helpers; runtime per-test counts via afterEach expect.getState().assertionCalls
+(ta-bug21/count.mjs, e5c vs b73): 0 lower, 12 higher, 19 same. Bash rewrite skipped post-edit hooks; gate:file exit 0 after.
+Load: 2/2 under 12 busy loops (5.3 -> 12.4), ~65 s. ENOTEMPTY orphan race seen again under L9 (hot loop), pre-existing.
