@@ -846,7 +846,12 @@ limit is reported.**
   Graphile never retries it.
 - *After the merge (#80):* the worker's real wait, `CANARY_WAIT`, ends at
   once when its signal aborts and leaves no timer, with four tests of its own.
-  That `startWorker` hands it to the canary is not tested yet: BUG-44.
+  That `startWorker` hands it to the canary is pinned by the two `BUG-44:`
+  tests in `worker.test.ts`: a canary run `startWorker` made holds one real
+  timer while in flight, and none once a stop or its own end has finished it.
+  Not pinned: the wait's length. A signal-respecting wait of the wrong length
+  passes; it is loud, not silent (every run ends `RUN_LIMIT` and pages, or a
+  hung run pages through `staging-canary`'s Period and Grace).
 - *Review loop 1:* **and when** a run meets an error that is neither a step
   failure nor a halt, it ends `RUN_FAILED`, not `RUN_LIMIT`: reported
   `failing` once, "I'm home" sent once for J and waited for at most
@@ -1028,7 +1033,7 @@ req-coverage: not automated REL-10-AC19: it is the canary itself running on stag
 | AC6 | L6, L2 | `canary.system.test.ts` (fake `fetch` answers, store stubs); `apps/server/src/adapters/canary.test.ts` (new: each HTTP failure as a result, the timeout) |
 | AC7 | L6 | `canary.system.test.ts` (96 runs on the fake clock, with the SMS check and its recording alarm) |
 | AC8 | L6, L3, L2 | `canary.system.test.ts`; `apps/server/src/canary.integration.test.ts` (new: two runs on one database, the unique index); behaviour suite |
-| AC9 | L6, L2 | `canary.system.test.ts`; `worker.test.ts` (the stop's added wait, Graphile's signal) |
+| AC9 | L6, L2 | `canary.system.test.ts`; `worker.test.ts` (the stop's added wait, Graphile's signal; `CANARY_WAIT`, and the `BUG-44:` tests that `startWorker` hands it to the canary) |
 | AC10 | L3, L2, L1 | `canary.integration.test.ts`; behaviour suite; `device-credentials.integration.test.ts` and `journeys.integration.test.ts` (the start task's AC13, unchanged, run as they are); the import rule's test in `packages/config/` |
 | AC11 | L3, L2, L6 | `canary.integration.test.ts`; behaviour suite; `canary.system.test.ts` |
 | AC12 | L6, L2 | `canary.system.test.ts`; `worker.test.ts` |
