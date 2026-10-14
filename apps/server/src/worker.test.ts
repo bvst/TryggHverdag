@@ -28,6 +28,7 @@
 import {
   BEAT_RECORDED,
   CANARY_ALARM_ABORTED,
+  CANARY_IDS,
   CHECKED_IN,
   CHECK_IN_ABORTED,
   MESSAGE_KINDS,
@@ -62,6 +63,7 @@ import type { AddressInfo } from 'node:net';
 import process from 'node:process';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { POOL_SIZE } from './adapters/db.ts';
+import { hashCredential } from './adapters/device-credentials.ts';
 import { healthchecksCheckIn } from './adapters/healthchecks.ts';
 import { captured, markersIn } from './capture.test.ts';
 import {
@@ -5005,5 +5007,180 @@ describe('REL-10: the canary’s production wait, which a stop ends at once', ()
       settled: 'rejected',
       name: 'AbortError',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-44: the wait startWorker hands the canary. The tests above hold
+// CANARY_WAIT on its own, and every test of a run elsewhere hands the canary
+// the test kit's fakeWait. So no test held that startWorker hands the canary
+// CANARY_WAIT. A wait that ignored its signal, wired in its place, passed
+// every test in this file (test-auditor, #80).
+//
+// So these run the canary that startWorker made, through the worker's own
+// task list, and count the timer of its run limit: the wait of
+// CANARY_RUN_LIMIT_MS that run.ts starts before anything else in a run, and
+// aborts in the run's `finally`. It is the only wait these runs start: the
+// first look and the polls come only after a start that succeeded, and the
+// stop's wait for "I'm home" only once a journey has started. While the run
+// is in flight, its run limit is one real timer; once the run has ended, by a
+// stop or on its own, it is gone.
+//
+// Counted, never timed. Each assertion compares two reads of pendingTimers
+// taken in the same turn of the event loop, so no timer can fire between
+// them, however slow the machine:
+//   - the first test compares `before` with `whileInFlight`, with nothing
+//     awaited between them, and `beforeStop` with `afterStop`, with only the
+//     abort and the end of the run it stops between them, which comes through
+//     promise callbacks alone;
+//   - the second test compares `before` with `whileInFlight`, with nothing
+//     awaited between them, and `before` with `afterRun`, with only the run
+//     between them, which ends through promise callbacks alone too.
+// Each `settle()`, a turn of the event loop, comes before or between those
+// pairs, never inside one.
+// ---------------------------------------------------------------------------
+
+/**
+ * The canary device's registration: the insert into devices that returns the
+ * ID of the row it wrote, for the canary's own device. The one statement of
+ * the registration that the fake database answers with a row.
+ */
+const isTheCanaryDeviceInsert = ({ text, values }: FakePostgresQuery) =>
+  /^insert into "devices" [\s\S]*\sreturning "id"$/i.test(text) &&
+  values.includes(CANARY_IDS.deviceId);
+
+/**
+ * The fake database's answers to the canary's registration. The canary
+ * device's insert returns the device's ID, as PostgreSQL returns the row it
+ * wrote. Every other query is answered as quietDatabase answers it: a
+ * set_config with one row, its value empty, and anything else with no rows.
+ */
+const registersTheCanary: FakePostgresHandler = (query) =>
+  isTheCanaryDeviceInsert(query)
+    ? { columns: ['id'], rows: [[CANARY_IDS.deviceId]] }
+    : quietDatabase(query);
+
+/**
+ * untouchedClient, except that its first start is refused with a 503, so that
+ * run ends at once. Every later call is untouchedClient's: recorded in
+ * `calls`, never answered.
+ */
+function startRefusedThenHeld() {
+  const calls: string[] = [];
+  const untouched = untouchedClient(calls);
+  return {
+    calls,
+    client: {
+      ...untouched,
+      start: () => {
+        if (calls.includes('start')) {
+          return untouched.start();
+        }
+        calls.push('start');
+        return Promise.resolve({ ok: false as const, status: 503, code: null });
+      },
+    },
+  };
+}
+
+/** The outcomes of the `canary_run` lines a log holds, in order. */
+const canaryRunOutcomes = (log: FakeLog) =>
+  log.events.flatMap((event) => (event.event === 'canary_run' ? [event.outcome] : []));
+
+describe('BUG-44: the wait startWorker hands the canary, which a stop ends at once', () => {
+  beforeEach(() => {
+    // Real timers for every test here, whatever another test left behind.
+    vi.useRealTimers();
+  });
+
+  test('BUG-44: a canary run startWorker made, stopped through Graphile’s abort signal while it is in flight, holds its wait’s one real timer until the stop, and none once the stop has ended it', async () => {
+    const database = await listeningFakePostgres(registersTheCanary);
+    try {
+      const alarm = fakeCanaryAlarm();
+      const { client, calls } = startRefusedThenHeld();
+      const loops = quietLoops();
+      const runner = recordingRunner();
+      const worker = await startWorker(database.url, runner.run, {
+        ...loops,
+        write: () => undefined,
+        canary: { client, credentialHash: hashCredential(syntheticCredential()), alarm },
+      });
+      try {
+        const { canary: canaryTask } = runner.options()?.taskList ?? {};
+        expect(canaryTask, 'the canary task').toBeDefined();
+
+        // The first run registers the canary over the fake database and comes
+        // to START_FAILED, so the run below reaches the database for nothing.
+        await canaryTask?.(null, helpersWith());
+        expect(canaryRunOutcomes(loops.log)).toEqual(['START_FAILED']);
+        const queriesBefore = database.queries.length;
+
+        const graphile = new AbortController();
+        let ended = false;
+        const before = pendingTimers();
+        const run = Promise.resolve(canaryTask?.(null, helpersWith(graphile.signal))).finally(
+          () => {
+            ended = true;
+          },
+        );
+        const whileInFlight = pendingTimers();
+        // A turn of the event loop: the run is still in flight, waiting on its start.
+        await settle();
+        expect(ended, 'the run ended before it was stopped').toBe(false);
+        expect(calls).toEqual(['start', 'start']);
+
+        const beforeStop = pendingTimers();
+        graphile.abort();
+        await run;
+        const afterStop = pendingTimers();
+
+        // Without this, a count that missed the wait's timer would pass below
+        // without showing anything.
+        expect(whileInFlight, 'timers while the run is in flight').toBe(before + 1);
+        expect(afterStop, 'timers once the stop has ended the run').toBe(beforeStop - 1);
+        expect(canaryRunOutcomes(loops.log)).toEqual(['START_FAILED', 'INTERRUPTED']);
+        expect(alarm.statuses).toEqual(['failing']);
+        expect(calls).toEqual(['start', 'start']);
+        expect(database.queries.length, 'queries the stopped run sent').toBe(queriesBefore);
+      } finally {
+        await worker.stop();
+      }
+    } finally {
+      await database.close();
+    }
+  });
+
+  test('BUG-44: a canary run startWorker made holds its run limit as one real timer from its first moment, and has cleared it by the time the run has ended on its own', async () => {
+    const alarm = fakeCanaryAlarm();
+    const loops = quietLoops();
+    const runner = recordingRunner();
+    // Unusable settings: each run comes to NOT_CONFIGURED and reports, with no
+    // database and no API, so the run ends through promise callbacks alone.
+    const worker = await startWorker('postgres://example/db', runner.run, {
+      ...loops,
+      write: () => undefined,
+      canary: { client: null, credentialHash: null, alarm },
+    });
+    try {
+      const { canary: canaryTask } = runner.options()?.taskList ?? {};
+      expect(canaryTask, 'the canary task').toBeDefined();
+      // A turn of the event loop first: the worker's loops set their timers in
+      // promise callbacks after their first runs, which would otherwise land
+      // between the counts below.
+      await settle();
+
+      const before = pendingTimers();
+      const run = Promise.resolve(canaryTask?.(null, helpersWith()));
+      const whileInFlight = pendingTimers();
+      await run;
+      const afterRun = pendingTimers();
+
+      expect(whileInFlight, 'timers while the run is in flight').toBe(before + 1);
+      expect(afterRun, 'timers once the run has ended').toBe(before);
+      expect(canaryRunOutcomes(loops.log)).toEqual(['NOT_CONFIGURED']);
+      expect(alarm.statuses).toEqual(['failing']);
+    } finally {
+      await worker.stop();
+    }
   });
 });
