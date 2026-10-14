@@ -754,11 +754,12 @@ describe('BUG-47: which committed files req:coverage --fail-on-uncovered-changed
   // refuse the comments tooling writes to explain a guard, with every test
   // green. The behaviour is right today; these pin it.
   //
-  // Each case commits one file holding the same text, under the same path
-  // below its top folder; only the top folder differs, so the folder list is
-  // the one thing that decides. DEMO-02 is a synthetic live story that no
-  // counted test names; DEMO-01 has one, so the repository has a counted test
-  // that names something else. Nothing under docs/specs/ changes, so no
+  // Each case commits one file holding the same text. The apps/ and packages/
+  // cases and the scripts/ control share the path below their top folder, so
+  // the folder list is the one thing that decides; the other controls are
+  // chosen by where the check could go wrong (below). DEMO-02 is a synthetic
+  // live story that no counted test names; DEMO-01 has one, so the repository
+  // has a counted test that names something else. Nothing under docs/specs/ changes, so no
   // criterion is read and no not-automated line is involved.
   const UNCOVERED_ID = 'DEMO-02';
   const base = {
@@ -805,12 +806,29 @@ describe('BUG-47: which committed files req:coverage --fail-on-uncovered-changed
     expect(output.slice(output.indexOf('RG-01:'))).toContain(UNCOVERED_ID);
   });
 
-  test('BUG-47: the same requirement named only in a committed scripts/ file, tooling, is not refused', () => {
-    const dir = branchCommitting(fileUnder('scripts'));
+  // The files the folder check must let through: tooling, and paths that only
+  // look like product code. test-auditor found, in BUG-47's audit, that the
+  // check could gain .github/, match apps/ anywhere in a path rather than at
+  // its start, or lose the trailing slash on apps or packages, with every test
+  // green. Each row is chosen so one of those, or gaining scripts/, refuses it.
+  const NOT_PRODUCT_CODE = [
+    { file: fileUnder('scripts'), what: 'tooling' },
+    { file: '.github/demo/demo.ts', what: 'CI configuration' },
+    { file: '.claude/hooks/demo.mjs', what: 'a hook, tooling' },
+    { file: fileUnder('appsettings'), what: 'starts with apps, not apps/' },
+    { file: fileUnder('tools/apps'), what: 'apps/ below the top folder' },
+    { file: fileUnder('packagesmeta'), what: 'starts with packages, not packages/' },
+  ];
 
-    const { status, output } = reqCoverage(dir, '--fail-on-uncovered-changed');
+  test.each(NOT_PRODUCT_CODE)(
+    'BUG-47: the same requirement named only in a committed $file, $what, is not refused',
+    ({ file }) => {
+      const dir = branchCommitting(file);
 
-    expect(status, output).toBe(0);
-    expect(output).not.toContain('RG-01:');
-  });
+      const { status, output } = reqCoverage(dir, '--fail-on-uncovered-changed');
+
+      expect(status, output).toBe(0);
+      expect(output).not.toContain('RG-01:');
+    },
+  );
 });
