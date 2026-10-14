@@ -20,7 +20,7 @@
 //                  where blocking would only lose work
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { changedFiles } from '../../scripts/lib/git.mjs';
+import { changedFiles, requireMergeBase } from '../../scripts/lib/git.mjs';
 import { block, hasFlag, inReviewJob, readInput } from './lib.mjs';
 
 const PROGRESS_CURRENT = 'docs/progress.md';
@@ -49,20 +49,25 @@ if (inReviewJob()) process.exit(0);
 const cwd = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
 const marker = path.join(cwd, '.claude/state/progress-missing');
 
-const changed = changedFiles({ cwd });
+// BUG-48 (D-131): without a merge base with origin/main, changedFiles() drops
+// what the branch committed, so "nothing changed" could mean "could not tell".
+// That is refused (or noted) the way an unlogged change is, never passed.
+const base = requireMergeBase('origin/main', cwd);
+const changed = base.ok ? changedFiles({ cwd }) : [];
 const unlogged = needsLogging(changed);
 
-if (unlogged.length === 0 || changed.some(isProgressLog)) {
+if (base.ok && (unlogged.length === 0 || changed.some(isProgressLog))) {
   rmSync(marker, { force: true });
   process.exit(0);
 }
 
-const message =
-  `HK-08: this branch changes ${String(unlogged.length)} file(s) outside docs/, but neither ` +
-  `${PROGRESS_CURRENT} nor a milestone log under docs/progress/ (docs/progress/m0.md for ` +
-  'M0) has been updated. The next session starts by reading them, so ' +
-  'write the narrative — what was built, what was verified, what is left — to the second, and ' +
-  'correct the first if a task status changed. Then finish.';
+const message = base.ok
+  ? `HK-08: this branch changes ${String(unlogged.length)} file(s) outside docs/, but neither ` +
+    `${PROGRESS_CURRENT} nor a milestone log under docs/progress/ (docs/progress/m0.md for ` +
+    'M0) has been updated. The next session starts by reading them, so ' +
+    'write the narrative — what was built, what was verified, what is left — to the second, and ' +
+    'correct the first if a task status changed. Then finish.'
+  : `HK-08: ${base.message}`;
 
 if (hasFlag('--warn-only') || input.stop_hook_active) {
   mkdirSync(path.dirname(marker), { recursive: true });

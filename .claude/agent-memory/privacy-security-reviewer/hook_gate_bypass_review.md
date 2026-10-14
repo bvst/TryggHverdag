@@ -89,3 +89,22 @@ case-insensitive with --global, stop/progress gate rooted at CLAUDE_PROJECT_DIR)
   lists both as getting past).
 - First /feature write of the phase file in a fresh clone: the state dir may not exist and
   mkdir of it is refused for everyone; the Write tool creates it (Note only).
+
+**BUG-48 review (head aa4c1c8, 2026-10-14), PASS, Notes only.** Stop and progress gates now
+treat "no merge base with origin/main" as "could not tell": stop gate sets codeChanged when
+merge-base fails (runs gate:quick/static), progress gate blocks with requireMergeBase's
+message (or notes it under --warn-only / stop_hook_active, same road as an unlogged change).
+- **Monotonicity check is the fast proof:** stop gate's codeChanged is old-condition OR
+  !baseKnown; progress gate's pass is base.ok AND old-condition. Neither can pass where it
+  blocked before. Do this boolean read first on any "fail closed" hook change.
+- **Still open (pre-existing, not protected):** an agent can point origin/main at HEAD with
+  `git update-ref refs/remotes/origin/main HEAD` (not in settings.json's allow list, so it
+  asks): merge base = HEAD, committed diff empty, both hooks see only the working tree.
+  Same class as assume-unchanged. requireMergeBase's remedy line ("or run the gate against a
+  base that exists") does not apply to the hooks (they take no base) and could nudge that.
+- **Test containment:** hook tests' scratch repos are mkdtemp under os.tmpdir, removed in
+  afterEach; runHook sets CLAUDE_PROJECT_DIR to the scratch dir. Git children inherit the
+  env, so a GIT_DIR in the environment would redirect update-ref/commit-tree to the real
+  repo; .githooks/pre-commit runs no vitest, so theoretical only.
+- Targeted run: `pnpm exec vitest run .claude/hooks/stop-gate.test.mjs
+  .claude/hooks/progress-gate.test.mjs` = 86 passed, ~90 s, no guard blocks in the cloud.
