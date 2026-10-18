@@ -48,3 +48,5 @@
 - [BUG-45 audit](project_bug45_audit.md) — BLOCK 89688b1 on RG-04 (workflow-lint/gate-integrity coverage drop); loop 1 PASS a2af885 (23/24 faults killed, L11 near-equivalent); harness ta-bug45 m-loop1
 - [BUG-46 audit](project_bug46_audit.md) — PASS ecb3f22 (D-131 unresolvable-base refusals); loop 1 PASS 2cc8abf (req:coverage 4th gate, 15/18 faults, .some rewrite fair); RG-02 replay; IMPLEMENTING_DIRS apps/packages unpinned (pre-existing)
 - [BUG-48 audit](project_bug48_audit.md) — PASS aa4c1c8 (D-131 in stop/progress hooks); 11/11 red right reasons; 17/20 faults (HK-08 prefix, cwd arg unpinned); every fixture resolves origin/main
+- [BUG-21 audit](project_bug21_audit.md) — PASS e5c6d2e; loop 1 PASS b73fc73 (sleeps observed, 26/26 faults killed, per-test assertion counts 0 lower); harness ta-bug21 (count.mjs)
+- [Load-proof floors](feedback_load_proof_floors.md) — a relaxed deadline/count can drop the only ceiling on an interval; plant x2/x4/env-ignored vs old and new; sleep-observer preload
