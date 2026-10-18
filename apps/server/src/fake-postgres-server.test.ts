@@ -24,6 +24,13 @@
 // its `finally`, so it fails with the fake's own message, in place of
 // whatever the failed request made it assert, and even when the request
 // somehow succeeded.
+//
+// BUG-34 adds a second stand-in beside it, used by db.test.ts and
+// worker.test.ts: a database that accepts the connection and never answers
+// (listeningSilentPostgres), as safety-reviewer showed on BUG-32 with a TCP
+// listener as DATABASE_URL. And a wait bounded in real time (settledWithin),
+// so a test can drive pg's own timers with Vitest's fake ones and still say
+// "it hung" rather than time out.
 import {
   fakePostgres,
   syntheticCredential,
@@ -33,7 +40,8 @@ import {
   type FakePostgresHandler,
   type FakePostgresQuery,
 } from '@trygghverdag/test-kit';
-import { createServer, type AddressInfo, type Socket } from 'node:net';
+import { connect, createServer, type AddressInfo, type Socket } from 'node:net';
+import { setTimeout as realDelay } from 'node:timers/promises';
 import pg from 'pg';
 import { describe, expect, test } from 'vitest';
 
@@ -287,6 +295,119 @@ export async function eventually(check: () => boolean, turns = 500): Promise<boo
   return check();
 }
 
+/** What settledWithin gives when the promise had not settled in time. */
+export const STILL_WAITING = Symbol(
+  'still waiting: it had not settled within the real-time ceiling',
+);
+
+/**
+ * BUG-34: what `promise` settles with, or STILL_WAITING if it has not settled
+ * `ms` real milliseconds from now. Real under vi.useFakeTimers too: Vitest
+ * fakes the global setTimeout, not node:timers/promises, so a test can move
+ * pg's timers by hand and still bound its own wait. A rejection rejects.
+ */
+export async function settledWithin<T>(
+  promise: Promise<T>,
+  ms: number,
+): Promise<T | typeof STILL_WAITING> {
+  const ceiling = new AbortController();
+  try {
+    return await Promise.race([
+      promise,
+      realDelay(ms, STILL_WAITING, { signal: ceiling.signal, ref: false }),
+    ]);
+  } finally {
+    ceiling.abort();
+  }
+}
+
+/**
+ * BUG-34: the real-time ceiling on a wait that only a hang reaches. Once pg's
+ * timer has fired, its query rejected 0.2 ms later here (measured), and the
+ * real Graphile Worker's start 7 ms later. Five seconds is thousands of times
+ * that, so a slow machine does not fail a correct fix (BUG-21's lesson), and
+ * it is well inside the unit run's 60 s test timeout, so a hang fails with
+ * the test's own message rather than as a timeout.
+ */
+export const HANG_CEILING_MS = 5_000;
+
+export interface ListeningSilentPostgres {
+  /** Where to connect: the loopback address, the user `synthetic`, and the password if one was given. */
+  url: string;
+  /** Resolves once a client has connected and sent its first bytes: the startup message it then waits on. */
+  heard: () => Promise<void>;
+  /** How many bytes the server has written back: always 0, which is the point. */
+  written: () => number;
+  /** How many connections are open now. */
+  open: () => number;
+  /** Resolves once a connection was made and every one made has closed: the client gave up on it. */
+  allClosed: () => Promise<void>;
+  /** Destroys every socket still open, then closes the server. */
+  close: () => Promise<void>;
+}
+
+/**
+ * BUG-34: a database that accepts the connection and never answers. It
+ * reads what a client sends and writes nothing back, and never closes a
+ * connection on its own, so a client with no connection timeout waits for
+ * ever. safety-reviewer's stand-in on BUG-32 was a TCP listener like it.
+ */
+export async function listeningSilentPostgres({
+  password,
+}: { password?: string } = {}): Promise<ListeningSilentPostgres> {
+  const sockets = new Set<Socket>();
+  let made = 0;
+  let wasHeard = false;
+  const hearing: (() => void)[] = [];
+  const closing: (() => void)[] = [];
+  const allGone = () => made > 0 && sockets.size === 0;
+
+  const server = createServer((socket) => {
+    made += 1;
+    sockets.add(socket);
+    socket.on('error', () => undefined);
+    socket.on('data', () => {
+      wasHeard = true;
+      for (const resolve of hearing.splice(0)) resolve();
+    });
+    socket.on('close', () => {
+      sockets.delete(socket);
+      if (allGone()) {
+        for (const resolve of closing.splice(0)) resolve();
+      }
+    });
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const { port } = server.address() as AddressInfo;
+  const credentials = password === undefined ? 'synthetic' : `synthetic:${password}`;
+  return {
+    url: `postgres://${credentials}@127.0.0.1:${String(port)}/synthetic`,
+    heard: () =>
+      wasHeard
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            hearing.push(resolve);
+          }),
+    written: () => [...sockets].reduce((sum, socket) => sum + socket.bytesWritten, 0),
+    open: () => sockets.size,
+    allClosed: () =>
+      allGone()
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            closing.push(resolve);
+          }),
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const socket of sockets) socket.destroy();
+        server.close(() => {
+          resolve();
+        });
+      }),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The controls: without them, a process test that found nothing could mean
 // only that the helper was blind.
@@ -418,6 +539,53 @@ describe('the fake PostgreSQL server on a port', () => {
     await expect(client.query('select 1')).rejects.toThrow();
     await client.end().catch(() => undefined);
     await expect(server.close()).rejects.toThrow(/ASCII/);
+  });
+
+  // BUG-34: the silent server's control. Were it to answer, or to close a
+  // connection on its own, a pool with no connection timeout would fail
+  // rather than wait, and the BUG-34 tests would pass on the bug.
+  test('the silent server accepts a connection, hears its first bytes, writes nothing back and closes nothing, and allClosed() resolves once the client lets go', async () => {
+    const server = await listeningSilentPostgres();
+    const { port } = new URL(server.url);
+    const client = connect(Number(port), '127.0.0.1');
+    client.on('error', () => undefined);
+    let answered = 0;
+    let ended = false;
+    client.on('data', (chunk: Buffer) => {
+      answered += chunk.length;
+    });
+    client.on('close', () => {
+      ended = true;
+    });
+    try {
+      await new Promise<void>((resolve) => client.once('connect', resolve));
+      client.write('a startup message');
+
+      expect(await settledWithin(server.heard(), HANG_CEILING_MS)).toBeUndefined();
+      // A database answers a startup message in milliseconds: this one waits.
+      expect(await settledWithin(server.allClosed(), 100)).toBe(STILL_WAITING);
+      expect({ answered, ended, written: server.written(), open: server.open() }).toEqual({
+        answered: 0,
+        ended: false,
+        written: 0,
+        open: 1,
+      });
+
+      client.destroy();
+      expect(await settledWithin(server.allClosed(), HANG_CEILING_MS)).toBeUndefined();
+      expect(server.open()).toBe(0);
+    } finally {
+      client.destroy();
+      await server.close();
+    }
+  });
+
+  test('settledWithin gives what the promise settled with, or STILL_WAITING once the real-time ceiling passed', async () => {
+    expect(await settledWithin(Promise.resolve('answered'), HANG_CEILING_MS)).toBe('answered');
+    expect(await settledWithin(new Promise(() => undefined), 10)).toBe(STILL_WAITING);
+    await expect(settledWithin(Promise.reject(new Error('refused')), 10)).rejects.toThrow(
+      'refused',
+    );
   });
 
   test('askedFor names the columns a select or a returning clause asks for, aliases first', () => {

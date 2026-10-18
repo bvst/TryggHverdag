@@ -1,13 +1,45 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-10 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24, LOST-06, LOST-07, BUG-29, SM-10, BUG-41, LOST-08 and REL-10 done: all nine tasks; M2 closes on the canary's 24 hours on staging (D-090, D-115)
+**Last updated:** 2026-10-18 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24, LOST-06, LOST-07, BUG-29, SM-10, BUG-41, LOST-08 and REL-10 done: all nine tasks; M2 closes on the canary's 24 hours on staging (D-090, D-115)
 
 **Current section:** milestone M2, started 2026-10-01 with SM-01; all nine
 tasks are done (D-090, D-115; the task list is in
 [10-roadmap.md](10-roadmap.md)). Task 9, REL-10 (the staging canary), is done
 (#77, 2026-10-10; D-127 and D-128). M2 closes on its exit criteria: L6 green,
-mutation at 80 % or more, and the staging canary on time for 24 hours, which
-is the owner's A-34 and A-35 (below). LOST-08, "They're safe",
+mutation at 80 % or more, and the staging canary on time for 24 hours. The ones
+still open are the owner's A-34, then A-35 (below): the canary does not run
+until A-35's apply, and then it has to run on time for 24 hours (REL-10-AC19).
+Bugs found and fixed since the last update (2026-10-10), with the pull request
+and its squash commit: BUG-43 (a test picked an outbox row by random order;
+#79, `85426bf`, which carried REL-10's record), BUG-42 and BUG-26 (the gate's
+lint read Stryker's sandbox; both in #82, `69370a2`), BUG-45 (the mutation check
+as one CI job per group; #83, `9cc74b7`), BUG-46 (four gates passed quietly on a
+base git cannot resolve; #84, `595c584`), BUG-48 (the stop and progress hooks
+did the same; #85, `85aa8fb`), BUG-47 (no test pinned which folders
+`req:coverage` treats as product code; #86, `f1bfb5e`), BUG-44 (no test held
+that `startWorker` hands the canary its real wait; #87, `111815d`) and BUG-21
+(three Android-script tests failed under load on a correct script; #88,
+`0c0b239`, 2026-10-18).
+Queued for the owner to schedule: BUG-13 (`gate:full` miscounts the steps that
+did not run after a failure), BUG-16 (`req:coverage` counts an ID named in a
+comment), BUG-17 (the Android emulator sometimes stays in English past the
+wait), BUG-19 (no test checks every owner-approval path keeps its owners),
+BUG-20 (graphile-worker's own logger prints its error object, past `log.ts`),
+BUG-22 (the test-weakening check does not see the shared behaviour suites),
+BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an
+advisory), BUG-27 (whether the worker's session limits are in force on a deploy
+is seen only by chance), BUG-28 (no test holds two journeys past the watchdog's
+stuck threshold, so a waiting loop that stops early goes unseen), BUG-34 (the
+worker's start can hang silently on a database that never answers), BUG-35 (a
+second stop signal ends the process before the pool is closed) and BUG-40
+(`affected.mjs` counts the agent-memory files and `decisions.md` as inert, so
+CI's `unit` job is skipped for a change to only them). For the owner to decide:
+BUG-49 (moving `origin/main` gets a session past the stop and progress hooks;
+its fix is in `.claude/`, which needs the owner's approval) and BUG-50 (no test checks that
+`req:coverage --fail-on-uncovered-changed` leaves changed test files out of
+product code). The owner starts `/bugfix` and `/feature` (the session was
+refused starting `/bugfix` itself on 2026-10-14; see
+[../progress/m2.md](../progress/m2.md), BUG-44). LOST-08, "They're safe",
 is done (#75, 2026-10-09; D-125 and D-126). SM-10, removing a responder, is done (#74,
 2026-10-09; D-122 to D-124), with BUG-41, the mutation budget, in it.
 LOST-07, SMS escalation, is done (#67,
@@ -26,19 +58,7 @@ dependency audit's braces advisory (#59, 2026-10-03; D-104). SM-01 is done
 safety review (D-092, D-094 to D-097), is done (#56, 2026-10-02); so are
 BUG-12, the mutation gate's silent false green (D-098, D-099; #57), and
 BUG-14, the test kit and the mutation check's own files under the owner and
-the safety review (D-100; #58), both 2026-10-02. BUG-13 (`gate:full` miscounts
-the steps that did not run after a failure) is queued for the owner to
-schedule, and so are BUG-16 (`req:coverage` counts an ID named in a comment),
-BUG-17 (the Android emulator sometimes stays in English past the wait),
-BUG-19 (no test checks every owner-approval path keeps its owners), BUG-20
-(graphile-worker's own logger prints its error object, past `log.ts`) and
-BUG-21 (an Android script test's timing margin fails under full-suite load),
-BUG-22 (the test-weakening check does not see the shared behaviour suites),
-BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an advisory),
-BUG-26 (a lint run during a mutation run fails on Stryker's sandbox) and
-BUG-27 (whether the worker's session limits are in force on a deploy is seen
-only by chance) and BUG-28 (no test holds two journeys past the watchdog's
-stuck threshold, so a waiting loop that stops early goes unseen).
+the safety review (D-100; #58), both 2026-10-02.
 M1 closed with all four roadmap items done:
 SPIKE-01 (S1–S8), Section 4 closed with a conditional GO for the location SDK
 (D-086, full results in [04b-spike-results.md](04b-spike-results.md)), and the

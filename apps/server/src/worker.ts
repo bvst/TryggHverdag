@@ -526,7 +526,7 @@ function keepProcessAlive(): void {
  * after its start, so a healthy start has room many times over, and a stuck
  * one ends loudly, with exit 1, well inside a platform's usual stop grace.
  */
-const START_LIMIT_MS = 10_000;
+export const START_LIMIT_MS = 10_000;
 
 /**
  * The worker once its start has returned, for a stop signal that came while

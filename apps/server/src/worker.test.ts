@@ -55,14 +55,14 @@ import {
   type FakePostgresQuery,
   type TurnBound,
 } from '@trygghverdag/test-kit';
-import { parseCrontab } from 'graphile-worker';
+import { parseCrontab, run as graphileRun } from 'graphile-worker';
 import { EventEmitter, once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import process from 'node:process';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { POOL_SIZE } from './adapters/db.ts';
+import { CONNECT_TIMEOUT_MS, POOL_SIZE } from './adapters/db.ts';
 import { hashCredential } from './adapters/device-credentials.ts';
 import { healthchecksCheckIn } from './adapters/healthchecks.ts';
 import { captured, markersIn } from './capture.test.ts';
@@ -74,17 +74,23 @@ import {
   type HealthchecksSetting,
 } from './config.ts';
 import {
+  HANG_CEILING_MS,
+  STILL_WAITING,
   askedFor,
   eventually,
   listeningFakePostgres,
+  listeningSilentPostgres,
   quietDatabase,
   sessionSetting,
+  settledWithin,
 } from './fake-postgres-server.test.ts';
 import type { CheckIn } from './ports.ts';
+import { runMain } from './process.ts';
 import {
   CANARY_CRONTAB,
   CANARY_WAIT,
   HEARTBEAT_CRONTAB,
+  START_LIMIT_MS as WORKER_START_LIMIT_MS,
   UNCONFIGURED_PUSH,
   UNCONFIGURED_SMS,
   createTaskList,
@@ -1042,6 +1048,141 @@ describe('runWorkerProcess, when the stop signal comes while the runner is start
     } finally {
       read.release();
       await database.close();
+    }
+  });
+});
+
+// BUG-34 (safety-reviewer, on BUG-32): against a database that accepts the
+// connection and never answers, the real worker's start never returned nor
+// rejected, and nothing was written after its start-up lines. BUG-32's limit
+// ends such a start only after a stop signal; with none, the worker waited
+// for ever, and a worker stuck there watches nobody: no sweep, no beat, and
+// Healthchecks.io pages only about 3 minutes later. Now the pool's first
+// connection gives up after CONNECT_TIMEOUT_MS (db.test.ts shows each pool),
+// and the start fails with it, so runMain says so and exits with 1, and the
+// platform restarts the worker.
+//
+// The start here is the real one: the real createPool and the real Graphile
+// Worker run(), whose first act is to take a connection for its migrations,
+// against the silent server. pg's timer is the global setTimeout, driven by
+// the fake one, so the bound is exact; the tests' own waits are real and
+// generous (settledWithin, HANG_CEILING_MS), so only a hang reaches them.
+describe('BUG-34: the worker against a database that accepts the connection and never answers', () => {
+  /** How long a check that something has not happened yet waits, in real ms. */
+  const NOT_YET_MS = 100;
+
+  // BUG-34, review loop 1 (safety-reviewer and test-auditor): the tests below
+  // hold the start to CONNECT_TIMEOUT_MS whatever its value, so 10 s or 60 s
+  // passed them all. What fixes the value is its reason in db.ts: half the
+  // worker's START_LIMIT_MS, so a start against a silent database fails on its
+  // own cause before a stop signal's limit would end it. The limit is the one
+  // worker.ts exports. This file's own START_LIMIT_MS, above, stays: it pins
+  // the 10 s BUG-32's tests hold, and taking the export in its place would let
+  // a change to the limit pass them. So this test also says the two agree.
+  test('BUG-34: CONNECT_TIMEOUT_MS is shorter than the worker’s START_LIMIT_MS, so a start against a silent database fails on its own cause before a stop signal’s limit would end it', () => {
+    expect(WORKER_START_LIMIT_MS, 'the limit BUG-32’s tests pin').toBe(START_LIMIT_MS);
+    expect(CONNECT_TIMEOUT_MS).toBeLessThan(WORKER_START_LIMIT_MS);
+  });
+
+  /**
+   * BUG-34, review loop 1: the slowest whole start BUG-32 measured, in ms:
+   * the real worker's first connection came 0.6 to 1.1 s after the process
+   * started, process start included, against a local PostgreSQL
+   * (docs/progress/m2.md). Any handshake inside such a start took less, so a
+   * timeout above it would have cut off none of them. A floor only: the
+   * handshake to Clever Cloud over the network has not been measured.
+   */
+  const SLOWEST_MEASURED_START_MS = 1_100;
+
+  test('BUG-34: CONNECT_TIMEOUT_MS is longer than the slowest whole start BUG-32 measured, so no start measured healthy would have been cut off', () => {
+    expect(
+      CONNECT_TIMEOUT_MS,
+      `CONNECT_TIMEOUT_MS must exceed ${String(SLOWEST_MEASURED_START_MS)} ms, the slowest whole start BUG-32 measured`,
+    ).toBeGreaterThan(SLOWEST_MEASURED_START_MS);
+  });
+
+  test('BUG-34: startWorker, with the real Graphile Worker and no stop signal, rejects once CONNECT_TIMEOUT_MS have passed since it asked for its first connection, and not before', async () => {
+    const database = await listeningSilentPostgres();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    // Quiet loops, as elsewhere: they start only after the runner has, and
+    // this test is about the start.
+    const started = startWorker(database.url, graphileRun, {
+      write: () => undefined,
+      ...quietLoops(),
+    }).then(
+      () => 'started',
+      (error: unknown) => error,
+    );
+    try {
+      expect(
+        await settledWithin(database.heard(), HANG_CEILING_MS),
+        'the worker never asked the database for a connection',
+      ).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(CONNECT_TIMEOUT_MS - 1);
+      expect(await settledWithin(started, NOT_YET_MS)).toBe(STILL_WAITING);
+
+      await vi.advanceTimersByTimeAsync(1);
+      vi.useRealTimers();
+      expect(
+        await settledWithin(started, HANG_CEILING_MS),
+        `the start had neither returned nor failed ${String(CONNECT_TIMEOUT_MS)} ms after it asked for a connection`,
+      ).toBeInstanceOf(Error);
+    } finally {
+      vi.useRealTimers();
+      // Closing the server fails a start still waiting, so none outlives the test.
+      await database.close();
+      await settledWithin(started, HANG_CEILING_MS);
+    }
+  });
+
+  test('BUG-34: the worker process then says in one line that it failed and why, without the password, and exits with 1: it does not wait for a stop signal', async () => {
+    const marker = syntheticCredential();
+    const database = await listeningSilentPostgres({ password: marker });
+    const written: string[] = [];
+    let exited: (code: number) => void = () => undefined;
+    const exit = new Promise<number>((resolve) => {
+      exited = resolve;
+    });
+    const reporting = {
+      write: (text: string) => {
+        written.push(text);
+      },
+      exit: (code: number) => {
+        exited(code);
+      },
+    };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      // As bin/worker.ts runs it, with the real Graphile Worker (the
+      // default), and signals that never come.
+      runMain(
+        'worker',
+        () =>
+          runWorkerProcess(database.url, {
+            signals: new EventEmitter(),
+            log: fakeLog(),
+            ...reporting,
+          }),
+        reporting,
+      );
+      expect(await settledWithin(database.heard(), HANG_CEILING_MS)).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(CONNECT_TIMEOUT_MS);
+      vi.useRealTimers();
+
+      expect(
+        await settledWithin(exit, HANG_CEILING_MS),
+        `no exit ${String(CONNECT_TIMEOUT_MS)} ms after the worker asked for a connection`,
+      ).toBe(1);
+      const failed = linesOf(written).filter((line) => line.startsWith('worker failed: '));
+      expect(failed).toHaveLength(1);
+      expect(failed[0]).toMatch(/\btime(?:d)? ?out\b|\btimeout\b/i);
+      expect(written.join('')).not.toContain(marker);
+    } finally {
+      vi.useRealTimers();
+      await database.close();
+      await settledWithin(exit, HANG_CEILING_MS);
     }
   });
 });

@@ -50,3 +50,5 @@
 - [BUG-48 audit](project_bug48_audit.md) — PASS aa4c1c8 (D-131 in stop/progress hooks); 11/11 red right reasons; 17/20 faults (HK-08 prefix, cwd arg unpinned); every fixture resolves origin/main
 - [BUG-21 audit](project_bug21_audit.md) — PASS e5c6d2e; loop 1 PASS b73fc73 (sleeps observed, 26/26 faults killed, per-test assertion counts 0 lower); harness ta-bug21 (count.mjs)
 - [Load-proof floors](feedback_load_proof_floors.md) — a relaxed deadline/count can drop the only ceiling on an interval; plant x2/x4/env-ignored vs old and new; sleep-observer preload
+- [BUG-34 audit](project_bug34_audit.md) — PASS befe3ed; 26 faults, pool-level timeout and raised constant survive (should fix); load-proof under 8 busy loops; loop 1 PASS 52f510b (both closed)
+- [Rejected alternative](feedback_rejected_alternative.md) — plant the form the commit message says it did not choose; its harm is untested
