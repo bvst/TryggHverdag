@@ -518,7 +518,7 @@ Still open from D-098's consequences (BUG-12, done):
 - the whole-suite run is now unreachable, and removing it needs a decision;
 - mobile `.tsx` safety files will need a jest-expo group.
 
-**BUG-13**, **BUG-16**, **BUG-17**, **BUG-19**, **BUG-20**, **BUG-22**, **BUG-25**, **BUG-27**, **BUG-28**, **BUG-34**, **BUG-35** and **BUG-40** are queued for the owner to schedule, and **BUG-49** and **BUG-50** for the owner to decide (the rows under M2, above). BUG-21 is done ([#88](https://github.com/bvst/TryggHverdag/pull/88), `0c0b239`).
+**BUG-13**, **BUG-16**, **BUG-17**, **BUG-19**, **BUG-20**, **BUG-22**, **BUG-25**, **BUG-27**, **BUG-28**, **BUG-35** and **BUG-40** are queued for the owner to schedule, and **BUG-49** and **BUG-50** for the owner to decide (the rows under M2, above). BUG-21 is done ([#88](https://github.com/bvst/TryggHverdag/pull/88), `0c0b239`); BUG-34 is in progress.
 
 **D-085's loose ends** (the pull request merged, [#43](https://github.com/bvst/TryggHverdag/pull/43)).
 - **Verified:** `deploy-staging` on `ubuntu-26.04`. Run 36621209842, for
