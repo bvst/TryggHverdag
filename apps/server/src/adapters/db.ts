@@ -41,9 +41,8 @@ export const CONNECT_TIMEOUT_MS = 5_000;
  * How long PostgreSQL lets one statement on the API's or the worker's
  * connections run before it cancels it, with SQLSTATE 57014, leaving the
  * connection usable (D-132). Twice LOCK_WAIT_LIMIT_MS (5 s), so a wait for a
- * row that gives up on time is never cut off first.
- *
- * Not wired in yet: no pool sends it, so it bounds nothing today. BUG-51 wires it.
+ * row that gives up on time is never cut off first. Each process asks for it
+ * as it asks for its other session limits, and reads it back with them.
  */
 export const STATEMENT_TIMEOUT_MS = 10_000;
 
@@ -52,11 +51,18 @@ export const STATEMENT_TIMEOUT_MS = 10_000;
  * before the client gives up on it and on its connection (D-132). Longer than
  * STATEMENT_TIMEOUT_MS, so on a database that answers, PostgreSQL's cancel
  * always comes first: when this limit fires, the database has stopped answering.
- *
- * Not wired in yet: no pool applies it, so a query the database never answers
- * still waits forever today. BUG-51 wires it.
  */
 export const QUERY_TIMEOUT_MS = 15_000;
+
+/**
+ * How long a process pool's connection sits idle before TCP keepalive sends
+ * its first probe (D-132, amended). pg's default, 0, keeps the operating
+ * system's own, about two hours on Linux. The interval and count after it stay
+ * the operating system's, so an idle connection whose peer is gone is dropped
+ * after about 11 minutes; one with a query in flight is bounded by
+ * QUERY_TIMEOUT_MS instead.
+ */
+const KEEPALIVE_DELAY_MS = 10_000;
 
 /**
  * A pg client that gives up on its handshake after CONNECT_TIMEOUT_MS,
@@ -80,9 +86,126 @@ class ConnectTimeoutClient extends pg.Client {
   }
 }
 
+/** pg-pool's release of a client it handed out: with an error or `true`, the client is destroyed. */
+type Release = (error?: Error | boolean) => void;
+
+/**
+ * The API's and the worker's client (D-132): a ConnectTimeoutClient whose
+ * every query fails once QUERY_TIMEOUT_MS have passed without an answer.
+ *
+ * On the client, not the pool: Drizzle's transactions and Graphile Worker
+ * query a client the pool handed out, which no pool-wide hook sees. The
+ * timer is the global setTimeout, as pg's own are. A limit per query, never
+ * per hand-out, so a client held idle for Graphile's LISTEN, or a wait for a
+ * free client in a full pool, is never cut short.
+ *
+ * When the limit fires, the client is ended at once: its socket is destroyed
+ * under the query, which rejects, and it takes no other. Destroyed, not handed
+ * back: pg's own query_timeout rejects the caller but leaves a query already
+ * sent holding the connection (pg 8.23, client.js, about line 720), and every
+ * later query on it would wait behind that one. And its place in the pool is
+ * given back, through the release pg-pool put on it, because a client a
+ * holder never releases is counted for ever: drizzle-orm 0.45.3 awaits a
+ * transaction's `begin` before the `try` whose `finally` releases
+ * (node-postgres/session.js, about line 184), so a `begin` that hangs would
+ * keep its place, and a pool of two would fill. A holder's own release of it
+ * later, as Graphile's withPgClient releases in the turn its query rejects,
+ * does nothing.
+ *
+ * A submittable query (a cursor or a stream) settles through methods of its
+ * own, which the limit cannot see, so it is refused rather than left
+ * unbounded. None is sent on these pools.
+ */
+class QueryLimitClient extends ConnectTimeoutClient {
+  /** pg-pool's release for this client's latest hand-out. */
+  #release: Release | undefined;
+  /** Whether the pool has this client handed out now. */
+  #handedOut = false;
+  /** Whether the query limit has fired: the client is ended and its place given back. */
+  #givenUp = false;
+
+  constructor(config: pg.ClientConfig = {}) {
+    super(config);
+    // Wrapped, not overridden: an override would have to restate pg's seven
+    // overloads, and the bound method keeps them typing every call.
+    const send: (...args: unknown[]) => unknown = this.query.bind(this);
+    this.query = ((...args: unknown[]) => this.#limited(send, args)) as pg.Client['query'];
+  }
+
+  /** Set by pg-pool on each hand-out; called by whoever holds the client to give it back. */
+  set release(release: Release) {
+    this.#release = release;
+    this.#handedOut = true;
+  }
+
+  get release(): Release {
+    const release = this.#release;
+    return (error) => {
+      if (this.#givenUp) {
+        return;
+      }
+      // Only this hand-out's own release ends it. Any other call reaches
+      // pg-pool's release, which throws on a second release as it always has.
+      if (this.#release === release) {
+        this.#handedOut = false;
+      }
+      release?.(error);
+    };
+  }
+
+  /** Sends one query, as `send`, and gives the client up if it is not answered in time. */
+  #limited(send: (...args: unknown[]) => unknown, args: unknown[]): unknown {
+    const [query] = args;
+    if (typeof (query as { submit?: unknown } | null | undefined)?.submit === 'function') {
+      throw new TypeError(
+        'A submittable query cannot be bounded by QUERY_TIMEOUT_MS on this pool (D-132): send its text instead.',
+      );
+    }
+    const timer = setTimeout(() => {
+      this.#giveUp();
+    }, QUERY_TIMEOUT_MS);
+    const settled = (): void => {
+      clearTimeout(timer);
+    };
+    // pg answers through a callback when the last argument is one (pg-pool's
+    // pool.query sends that way), and through the promise it returns otherwise.
+    const callback = args.at(-1);
+    if (typeof callback === 'function') {
+      args[args.length - 1] = (...results: unknown[]) => {
+        settled();
+        Reflect.apply(callback, undefined, results);
+      };
+    }
+    const result = send(...args);
+    if (result instanceof Promise) {
+      void result.then(settled, settled);
+    }
+    return result;
+  }
+
+  #giveUp(): void {
+    if (this.#givenUp) {
+      return;
+    }
+    this.#givenUp = true;
+    // Ended at once: with a query in flight, pg destroys the socket, so the
+    // query rejects ("Connection terminated"), and any query after it too.
+    void this.end();
+    // And its place given back, whether or not its holder ever releases it.
+    if (this.#handedOut) {
+      this.#handedOut = false;
+      this.#release?.(true);
+    }
+  }
+}
+
 /** What a process pool is told about itself, and the session limits it asks for. */
 export interface PoolOptions {
-  /** Which process's pool this is: the name its `database_error` lines carry. */
+  /**
+   * Which process's pool this is: the name its `database_error` lines carry.
+   * With a name, every query on the pool is bounded and every connection has
+   * TCP keepalive (D-132).
+   */
   name?: 'api' | 'worker';
   /** Where a connection's error is written. With `name`, the pool gets its listeners. */
   log?: Log;
@@ -90,9 +213,11 @@ export interface PoolOptions {
   idleInTransactionMs?: number;
   /** PostgreSQL's lock_timeout for every connection, in ms. */
   lockTimeoutMs?: number;
+  /** PostgreSQL's statement_timeout for every connection, in ms (D-132). */
+  statementTimeoutMs?: number;
 }
 
-/** The longest idle_in_transaction_session_timeout or lock_timeout PostgreSQL takes, in milliseconds. */
+/** The longest session limit PostgreSQL takes, in milliseconds: each of the three is a 32-bit integer. */
 const SESSION_LIMIT_MAX_MS = 2_147_483_647;
 
 /**
@@ -126,6 +251,18 @@ function checkSessionLimit(option: string, setting: string, ms: number | undefin
  * given must be a whole number of milliseconds from 1 to 2147483647: PostgreSQL
  * reads 0 as no limit at all, so anything else throws, naming the option,
  * before the pool is made. That stops the process at start, which is loud.
+ * `statementTimeoutMs` (D-132) travels the same way, and has PostgreSQL cancel
+ * a statement that runs longer, with SQLSTATE 57014.
+ *
+ * A pool made with a `name` is a process's pool, and nothing on it waits for
+ * ever (D-132): each query fails after QUERY_TIMEOUT_MS without an answer
+ * (QueryLimitClient), and TCP keepalive finds an idle connection whose peer
+ * has vanished, Graphile Worker's LISTEN connection included. A connection
+ * the query limit ends raises no `error`, so it writes no `database_error`
+ * line below: its query's caller fails instead, as a 500, a failed sweep or
+ * the read-back's line. The migrations' pool, made with no name, gets only
+ * BUG-34's bound on the handshake, so a long migration is not cut off halfway
+ * through a deploy.
  *
  * The listeners (D-068), given a `name` and a `log`, both attached before
  * the pool is returned, so nothing that is handed the pool, Graphile Worker
@@ -151,7 +288,7 @@ function checkSessionLimit(option: string, setting: string, ms: number | undefin
 export function createPool(
   connectionString: string,
   max: number,
-  { name, log, idleInTransactionMs, lockTimeoutMs }: PoolOptions = {},
+  { name, log, idleInTransactionMs, lockTimeoutMs, statementTimeoutMs }: PoolOptions = {},
 ): pg.Pool {
   checkSessionLimit(
     'idleInTransactionMs',
@@ -159,14 +296,22 @@ export function createPool(
     idleInTransactionMs,
   );
   checkSessionLimit('lockTimeoutMs', 'lock_timeout', lockTimeoutMs);
+  checkSessionLimit('statementTimeoutMs', 'statement_timeout', statementTimeoutMs);
   const pool = new pg.Pool({
     connectionString,
     max,
-    Client: ConnectTimeoutClient,
+    ...(name === undefined
+      ? { Client: ConnectTimeoutClient }
+      : {
+          Client: QueryLimitClient,
+          keepAlive: true,
+          keepAliveInitialDelayMillis: KEEPALIVE_DELAY_MS,
+        }),
     ...(idleInTransactionMs === undefined
       ? {}
       : { idle_in_transaction_session_timeout: idleInTransactionMs }),
     ...(lockTimeoutMs === undefined ? {} : { lock_timeout: lockTimeoutMs }),
+    ...(statementTimeoutMs === undefined ? {} : { statement_timeout: statementTimeoutMs }),
   });
   if (name !== undefined && log !== undefined) {
     const reported = new WeakSet<object>();
@@ -207,6 +352,11 @@ const SESSION_LIMITS = [
     setting: 'lock_timeout',
     option: 'lockTimeoutMs',
     without: 'a heartbeat may wait for a lock without end',
+  },
+  {
+    setting: 'statement_timeout',
+    option: 'statementTimeoutMs',
+    without: 'a slow statement is cut off only by the query limit, which closes its connection',
   },
 ] as const;
 
@@ -255,6 +405,7 @@ export async function sessionLimitsLines(
     /** What the pool asked for, as it was given to createPool. */
     idleInTransactionMs?: number;
     lockTimeoutMs?: number;
+    statementTimeoutMs?: number;
   },
 ): Promise<string[]> {
   const limits = SESSION_LIMITS.flatMap((limit) => {

@@ -57,7 +57,13 @@ import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { databaseCanaryStore, httpCanaryClient } from './adapters/canary.ts';
 import { databaseClock } from './adapters/clock.ts';
-import { POOL_SIZE, createDatabase, createPool, sessionLimitsLines } from './adapters/db.ts';
+import {
+  POOL_SIZE,
+  STATEMENT_TIMEOUT_MS,
+  createDatabase,
+  createPool,
+  sessionLimitsLines,
+} from './adapters/db.ts';
 import { hashCredential } from './adapters/device-credentials.ts';
 import { healthchecksAlarm, healthchecksCheckIn } from './adapters/healthchecks.ts';
 import { databaseJourneyStore } from './adapters/journeys.ts';
@@ -411,9 +417,14 @@ export async function startWorker(
   // The idle limit (D-108): a sweep holds a journey's row for milliseconds,
   // and a session frozen with one is ended. No lock limit on the pool: every
   // open sets its own for its transaction, the claim takes rows with `skip
-  // locked`, and Graphile Worker's statements share this pool. The listeners
-  // are on the pool before Graphile Worker is handed it.
-  const limits = { idleInTransactionMs: IDLE_IN_TRANSACTION_LIMIT_MS };
+  // locked`, and Graphile Worker's statements share this pool. They share
+  // statement_timeout too (D-132), so a start that waits longer than
+  // STATEMENT_TIMEOUT_MS on another worker's schema install fails, loudly.
+  // The listeners are on the pool before Graphile Worker is handed it.
+  const limits = {
+    idleInTransactionMs: IDLE_IN_TRANSACTION_LIMIT_MS,
+    statementTimeoutMs: STATEMENT_TIMEOUT_MS,
+  };
   const pool = createPool(connectionString, POOL_SIZE.worker, { name: 'worker', log, ...limits });
   const db = createDatabase(pool);
   const heartbeats = databaseWorkerHeartbeats(db);
