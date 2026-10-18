@@ -5475,3 +5475,29 @@ any other path is work, not a candidate for the same treatment.
     within the query limit plus one interval (25 s). While it stays hung,
     each statement fails after 15 s in turn, and every sweep fails loudly;
     the page comes as it does today.
+- **Amended again 2026-10-18 (Claude, D-031, from BUG-51's reviews):**
+  - **The limit's rejection carries `code: 'ETIMEDOUT'`,** with a message
+    naming the limit and nothing of the query. Graphile Worker 0.18 completes
+    and fails a job with a call nobody awaits (`worker.js` about lines 262
+    and 283). Its retry wrapper retries only a few codes, ETIMEDOUT among them
+    (`lib.js`, `RETRYABLE_ERROR_CODES`). With pg's plain "Connection
+    terminated", a completion cut off by the limit was an unhandled
+    rejection, and the worker exited 1 at 15 s (`safety-reviewer` probed it).
+    That was the "exit the worker" option the owner did not choose, arriving
+    by the back door. With ETIMEDOUT, Graphile retries the completion with
+    backoff from 3 s to 120 s, up to 100 times. A stall of seconds or minutes
+    no longer ends the worker. Only a hang that outlasts every retry, hours
+    long, still does, loudly. `sqlstateOf` reads no SQLSTATE in ETIMEDOUT, so
+    the lines that log one still say null.
+  - **The limit is armed only once pg has taken the query,** so a query pg
+    refuses at once (a null query) leaves no timer behind to end a healthy
+    connection later. A query whose config carries its own `callback`, like
+    a submittable one, is refused before anything is sent: the limit could
+    not see it settle. None is sent on these pools.
+  - **Only the given-up hand-out's own release is swallowed.** A later
+    hand-out of the same pool is untouched.
+  - **No `database_error` line when the limit ends a connection,** by
+    choice. pg raises no `error` for a client it was asked to end, and the
+    query's caller fails loudly: a 500, `watchdog_failed`, a Graphile retry
+    line, or the read-back's line. Such a failure logs code null, as a
+    connection reset does, so the two cannot be told apart in the logs.
