@@ -24,3 +24,10 @@ in fake-postgres-server.test.ts), fix befe3ed (db.ts only; no test file differs 
 - gate:integrity 5 of 5 (NODE_USE_ENV_PROXY=1). Pushed at 4141e77, no PR, check-runs total_count 0.
 - safety-reviewer independently found the same two should-fixes (pool-level, START_LIMIT relation).
 Related: [[rejected-alternative]], [[in-memory-mutation]], [[load-proof-floors]]
+
+**Loop-1 delta (2026-10-18, c74d569 + 52f510b). PASS.** Full-pool test kills pool-level alone and beside client form in ~15 ms
+("timeout exceeded when trying to connect"), releases held/late in finally; pool-level value above 3x CONNECT_TIMEOUT_MS
+(15001) survives (finite window; advancing hours on fake timers would cost nothing - note). Constant 10 s, 60 s, 100 ms and 1_100
+die (strict floor); 1_101 and 9_999 survive by design. START_LIMIT_MS export 4 s / 20 s dies on the agree check with the file's
+own copy. RG-03: only moved statements, pool?.end() and the reworded guard comment removed. Load: 6/6 targeted + 231/231 whole
+files at load ~12. gate:integrity 5 of 5; pushed at 52f510b, no PR, check-runs 0.
