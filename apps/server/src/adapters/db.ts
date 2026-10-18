@@ -31,9 +31,9 @@ export const DEV_PLAN_CONNECTION_LIMIT = 5;
  * 1.1 s after the process started, but against a local PostgreSQL, process
  * start included. The handshake to Clever Cloud over the network, TLS and SCRAM
  * included, has not been measured, and the add-on's URI sets no `sslmode` today
- * (PRIV-08, still open). What 5 s is for certain: half the worker's
- * START_LIMIT_MS (10 s), so a silent database fails the start on its own cause
- * before a stop signal's limit would.
+ * (encryption in transit is still an open item in decisions.md). What 5 s is
+ * for certain: half the worker's START_LIMIT_MS (10 s), so a silent database
+ * fails the start on its own cause before a stop signal's limit would.
  */
 export const CONNECT_TIMEOUT_MS = 5_000;
 
