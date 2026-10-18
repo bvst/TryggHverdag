@@ -29,12 +29,14 @@ BUG-20 (graphile-worker's own logger prints its error object, past `log.ts`),
 BUG-22 (the test-weakening check does not see the shared behaviour suites),
 BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an
 advisory), BUG-27 (whether the worker's session limits are in force on a deploy
-is seen only by chance), BUG-28 (no test holds two journeys past the watchdog's
-stuck threshold, so a waiting loop that stops early goes unseen), BUG-35 (a
+is seen only by chance), BUG-35 (a
 second stop signal ends the process before the pool is closed) and BUG-40
 (`affected.mjs` counts the agent-memory files and `decisions.md` as inert, so
 CI's `unit` job is skipped for a change to only them) and BUG-51 (a database
-connection that hangs after its handshake has no limit). For the owner to decide:
+connection that hangs after its handshake has no limit) and BUG-52 (`gate:file`
+checks nothing for an edited L6 or L3 test file, and exits 1). BUG-28 (no test
+held two journeys past the watchdog's stuck threshold) is fixed on the session
+branch, pull request open. For the owner to decide:
 BUG-49 (moving `origin/main` gets a session past the stop and progress hooks;
 its fix is in `.claude/`, which needs the owner's approval) and BUG-50 (no test checks that
 `req:coverage --fail-on-uncovered-changed` leaves changed test files out of
