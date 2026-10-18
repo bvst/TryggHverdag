@@ -20,7 +20,8 @@ did the same; #85, `85aa8fb`), BUG-47 (no test pinned which folders
 that `startWorker` hands the canary its real wait; #87, `111815d`) and BUG-21
 (three Android-script tests failed under load on a correct script; #88,
 `0c0b239`, 2026-10-18) and BUG-34 (the worker's start hung silently on a
-database that never answers; #89, `1151d18`, 2026-10-18).
+database that never answers; #89, `1151d18`, 2026-10-18) and BUG-28 (no test held
+two journeys past the watchdog's stuck threshold; #90, `c94e908`, 2026-10-18).
 Queued for the owner to schedule: BUG-13 (`gate:full` miscounts the steps that
 did not run after a failure), BUG-16 (`req:coverage` counts an ID named in a
 comment), BUG-17 (the Android emulator sometimes stays in English past the
@@ -34,9 +35,7 @@ second stop signal ends the process before the pool is closed) and BUG-40
 (`affected.mjs` counts the agent-memory files and `decisions.md` as inert, so
 CI's `unit` job is skipped for a change to only them) and BUG-51 (a database
 connection that hangs after its handshake has no limit) and BUG-52 (`gate:file`
-checks nothing for an edited L6 or L3 test file, and exits 1). BUG-28 (no test
-held two journeys past the watchdog's stuck threshold) is fixed on the session
-branch, pull request open. For the owner to decide:
+checks nothing for an edited L6 or L3 test file, and exits 1). For the owner to decide:
 BUG-49 (moving `origin/main` gets a session past the stop and progress hooks;
 its fix is in `.claude/`, which needs the owner's approval) and BUG-50 (no test checks that
 `req:coverage --fail-on-uncovered-changed` leaves changed test files out of
