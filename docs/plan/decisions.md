@@ -5392,3 +5392,64 @@ any other path is work, not a candidate for the same treatment.
   - CI is unchanged: its bases always resolve.
   - Built test-first as BUG-46.
   - Supersedes nothing.
+
+## D-132 — A query the database never answers fails within a limit; nothing waits forever (BUG-51)
+- **Date:** 2026-10-18 · **Status:** Accepted (the owner's answer, 2026-10-18:
+  "Time out the query") · **Section:** 5 (REL-08, LOST-02; D-068, BUG-34)
+- **Context:** BUG-51. BUG-34 bounded a connection's handshake, but nothing
+  bounds a query once the connection is up. Neither pool sets
+  `statement_timeout`, a client-side query limit, or TCP keepalive. A query
+  that never returns, or a database that vanishes without closing the
+  connection, therefore holds a sweep, a Graphile Worker query or the API's
+  session-limits read-back forever. Each of the worker's loops runs again only
+  after its previous run ends, so a hung sweep stops its loop for good. The
+  API's `stop()` awaits the read-back. Detection already works: a hung sweep
+  writes no beat, so the check-in stops and Healthchecks.io pages in about
+  three minutes. Recovery does not: nothing frees the loop.
+
+  The owner chose between four options:
+  - time out the query (chosen);
+  - exit the worker after N stuck intervals, relying on Clever Cloud to
+    restart it. Its docs say it restarts crashed apps, but nobody has checked
+    this for the worker. Each exit would also stop delivery and escalation;
+  - both;
+  - leave it.
+- **Decision:** the API's and the worker's pools bound every query, in three
+  layers. The migrations' pool gets none of them, as it gets no session
+  limits today, so a long migration is not cut off.
+  1. **`statement_timeout` = 10 s,** a startup parameter like the session
+     limits. A live server cancels a statement that runs longer, with SQLSTATE
+     57014, and the connection stays usable. 10 s is twice `LOCK_WAIT_LIMIT_MS`
+     (5 s), so a lock wait that gives up on time is never cut off first.
+  2. **A client-side query limit = 15 s,** longer than `statement_timeout`, so
+     on a live server PostgreSQL's cancel always comes first. When it fires,
+     the database has stopped answering. The query rejects, and the connection
+     is destroyed, not handed back to the pool, so the next query gets a fresh
+     one. pg's own `query_timeout` rejects the caller but leaves a query
+     already sent holding the connection (pg 8.23, `client.js` about line
+     720). A connection handed back in that state would fail every later
+     query on it, so the destroy is part of this decision.
+  3. **TCP keepalive on every connection,** so an idle connection whose peer
+     has vanished is found and dropped, including one Graphile Worker holds
+     for `LISTEN`.
+
+  With these, a hung sweep fails like any database error. It writes its
+  `watchdog_failed` line and no beat, and the next sweep, `WATCHDOG_INTERVAL_MS`
+  later, runs on a fresh connection. A sweep stuck this way therefore recovers
+  within the query limit plus one interval (25 s), long before
+  `WORKER_STALE_AFTER_MS` (3 min). The delivery and escalation loops keep
+  running throughout. The read-back that proves the session limits are in
+  force at start reports `statement_timeout` too.
+- **Consequences:**
+  - A legitimately slow statement on these pools now fails at 10 s, loudly.
+    None is known today. Graphile Worker's own schema install at start runs on
+    the worker's pool: a start that waits more than 10 s on another worker's
+    install lock now fails the start, loudly (BUG-32's path).
+  - A recovered hang may page nobody. One failed sweep's `watchdog_failed`
+    line is the record, as for any one failed sweep today.
+  - Not covered: work that hangs outside a query. One example is a Graphile
+    task that never settles; the canary's run limit bounds the only one there
+    is.
+  - Values are Claude's (D-031); the approach is the owner's. Built test-first
+    as BUG-51.
+  - Supersedes nothing.
