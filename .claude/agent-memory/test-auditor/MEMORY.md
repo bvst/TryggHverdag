@@ -52,3 +52,4 @@
 - [Load-proof floors](feedback_load_proof_floors.md) — a relaxed deadline/count can drop the only ceiling on an interval; plant x2/x4/env-ignored vs old and new; sleep-observer preload
 - [BUG-34 audit](project_bug34_audit.md) — PASS befe3ed; 26 faults, pool-level timeout and raised constant survive (should fix); load-proof under 8 busy loops; loop 1 PASS 52f510b (both closed)
 - [Rejected alternative](feedback_rejected_alternative.md) — plant the form the commit message says it did not choose; its harm is untested
+- [BUG-28 audit](project_bug28_audit.md) — PASS 7a58b33, loop 1 PASS d907018 (break after skipped/failed killed by tests 4/5 only; fake failWith/recover scoping proven); 12 faults in memory, A/B/C/E survive main L6+unit, killed by new tests; AC20 1094 beforeAt gap closed by 999/AC19/AC12/BUG-28; alerts L6 now a mutation input

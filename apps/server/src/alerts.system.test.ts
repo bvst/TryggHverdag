@@ -18,7 +18,8 @@
 //     however many sweepers and senders run (AC7);
 //   - a held row skipped and alerted once free (AC8); past 5 min 30 s, waited
 //     for once, briefly, so a holder that lets go is not stuck and one that
-//     never does is reported, not silently skipped (AC20, REL-08);
+//     never does is reported, not silently skipped (AC20, REL-08), and with
+//     two such journeys, in either order, each is waited for (BUG-28);
 //   - all or nothing (AC12), and what the alert records (AC13);
 //   - each message to the port once, content-free, with its own opaque ID
 //     (AC14), never counted as sent unless accepted (AC15), and never lost to
@@ -1136,6 +1137,262 @@ describe('REL-08 and LOST-02: a journey the watchdog cannot move is reported, an
       ]),
     );
     expect(await w.beats.lastBeat()).toBeNull();
+  });
+
+  // BUG-28: LOST-02-AC20 with two journeys at once (approach item 3, step 4:
+  // "Try once more, waiting, for each journey that was skipped
+  // and is past the stuck threshold"). The waiting loop asks about
+  // every journey the first pass skipped past 5 min 30 s, whatever the
+  // journey before it came to. A loop that stopped at the first journey held
+  // through its wait, or at the first it opened, would lose the next
+  // journey's retry: its open, or its watchdog_overdue line, would come a
+  // sweep later, and `stuck` would be undercounted. LOST-07-AC16's twins in
+  // escalation.system.test.ts hold the escalation's loop the same way.
+  //
+  // The order. The adapter's read has no `order by`, so in production either
+  // journey may be read first, and both orders are tested here. The order in
+  // each test is the fake's: `overdueJourneys` reads the journeys in the
+  // order they were stored (it filters the fake's stored list, to which
+  // `seed` appends), and `overdue` seeds each journey with `w.seed`, one
+  // after the other, so `first` is read first and asked about first. Each
+  // test pins that order in its open requests, so a fake that read them
+  // otherwise would fail here loudly, not quietly test the other order. Two
+  // responders on one journey and three on the other, so neither's messages
+  // can pass for the other's.
+
+  test('BUG-28: of two journeys past 5 min 30 s, each with its row held, the waiting loop goes on past the first: the first, read first and held through its wait, is stuck, with one watchdog_overdue line naming it; the second’s holder lets go within its wait, and the second is opened with a message for each of its responders; the sweep fails, opening one and finding one stuck, and records no beat; let go, the next sweep opens the first', async () => {
+    const w = world();
+    const first = overdue(w, 2, FIVE_MINUTES + STUCK_AFTER);
+    const second = overdue(w, 3, FIVE_MINUTES + STUCK_AFTER);
+    w.store.hold(first.journeyId);
+    w.store.holdUntilWaited(second.journeyId);
+
+    expect(await w.watchdog.sweep()).toEqual({ ok: false, opened: 1, escalated: 0, stuck: 1 });
+
+    // Both skipped without a wait, then both waited for, in the order read.
+    expect(w.store.openRequests()).toEqual([
+      { journeyId: first.journeyId, afterMs: FIVE_MINUTES },
+      { journeyId: second.journeyId, afterMs: FIVE_MINUTES },
+      { journeyId: first.journeyId, afterMs: FIVE_MINUTES, lockWaitMs: LOCK_WAIT },
+      { journeyId: second.journeyId, afterMs: FIVE_MINUTES, lockWaitMs: LOCK_WAIT },
+    ]);
+    expect(w.log.events).toEqual([{ event: 'watchdog_overdue', journeyId: first.journeyId }]);
+    expect(w.stateOf(second.journeyId)).toBe('LOST_CONTACT');
+    expect(w.alertsOf(second.journeyId).map(({ state }) => state)).toEqual(['OPEN']);
+    expect(recipientsOf(w.messagesOf(second.journeyId))).toEqual([...second.responderIds].sort());
+    expect(w.stateOf(first.journeyId)).toBe('ACTIVE');
+    expect(w.alertsOf(first.journeyId)).toEqual([]);
+    expect(w.messagesOf(first.journeyId)).toEqual([]);
+    expect(await w.beats.lastBeat()).toBeNull();
+
+    // Let go, the next sweep opens the first, and beats.
+    w.store.release(first.journeyId);
+    w.clock.advance(INTERVAL);
+    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 1, escalated: 0, stuck: 0 });
+    expect(w.stateOf(first.journeyId)).toBe('LOST_CONTACT');
+    expect(recipientsOf(w.messagesOf(first.journeyId))).toEqual([...first.responderIds].sort());
+    expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
+    expect(w.log.events).toHaveLength(1);
+  });
+
+  // The test above in the other order. There the journey the wait opens is
+  // the last one asked about, so a loop that stopped once it had opened a
+  // journey would lose nothing. Here it is the first, and such a loop would
+  // never wait for the second: no watchdog_overdue line, no stuck journey,
+  // and a sweep that records the beat while a journey it could not move is
+  // still held.
+
+  test('BUG-28: of two journeys past 5 min 30 s, each with its row held, the waiting loop goes on past a journey it opens: the first, read first, has its holder let go within its wait and is opened with a message for each of its responders; the second, held through its wait, is stuck, with one watchdog_overdue line naming it; the sweep fails, opening one and finding one stuck, and records no beat; let go, the next sweep opens the second', async () => {
+    const w = world();
+    const first = overdue(w, 2, FIVE_MINUTES + STUCK_AFTER);
+    const second = overdue(w, 3, FIVE_MINUTES + STUCK_AFTER);
+    w.store.holdUntilWaited(first.journeyId);
+    w.store.hold(second.journeyId);
+
+    expect(await w.watchdog.sweep()).toEqual({ ok: false, opened: 1, escalated: 0, stuck: 1 });
+
+    // Both skipped without a wait, then both waited for, in the order read.
+    expect(w.store.openRequests()).toEqual([
+      { journeyId: first.journeyId, afterMs: FIVE_MINUTES },
+      { journeyId: second.journeyId, afterMs: FIVE_MINUTES },
+      { journeyId: first.journeyId, afterMs: FIVE_MINUTES, lockWaitMs: LOCK_WAIT },
+      { journeyId: second.journeyId, afterMs: FIVE_MINUTES, lockWaitMs: LOCK_WAIT },
+    ]);
+    expect(w.log.events).toEqual([{ event: 'watchdog_overdue', journeyId: second.journeyId }]);
+    expect(w.stateOf(first.journeyId)).toBe('LOST_CONTACT');
+    expect(w.alertsOf(first.journeyId).map(({ state }) => state)).toEqual(['OPEN']);
+    expect(recipientsOf(w.messagesOf(first.journeyId))).toEqual([...first.responderIds].sort());
+    expect(w.stateOf(second.journeyId)).toBe('ACTIVE');
+    expect(w.alertsOf(second.journeyId)).toEqual([]);
+    expect(w.messagesOf(second.journeyId)).toEqual([]);
+    expect(await w.beats.lastBeat()).toBeNull();
+
+    // Let go, the next sweep opens the second, and beats.
+    w.store.release(second.journeyId);
+    w.clock.advance(INTERVAL);
+    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 1, escalated: 0, stuck: 0 });
+    expect(w.stateOf(second.journeyId)).toBe('LOST_CONTACT');
+    expect(recipientsOf(w.messagesOf(second.journeyId))).toEqual([...second.responderIds].sort());
+    expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
+    expect(w.log.events).toHaveLength(1);
+  });
+
+  test('BUG-28: of two journeys past 5 min 30 s, both rows held through the wait, each is waited for once, in the order read, and each is stuck: two watchdog_overdue lines, one naming each journey; the sweep fails, opening none and finding two stuck, and records no beat; let go, the next sweep opens both', async () => {
+    const w = world();
+    const first = overdue(w, 2, FIVE_MINUTES + STUCK_AFTER);
+    const second = overdue(w, 3, FIVE_MINUTES + STUCK_AFTER);
+    w.store.hold(first.journeyId);
+    w.store.hold(second.journeyId);
+
+    expect(await w.watchdog.sweep()).toEqual({ ok: false, opened: 0, escalated: 0, stuck: 2 });
+
+    // Both skipped without a wait, then both waited for, in the order read.
+    expect(w.store.openRequests()).toEqual([
+      { journeyId: first.journeyId, afterMs: FIVE_MINUTES },
+      { journeyId: second.journeyId, afterMs: FIVE_MINUTES },
+      { journeyId: first.journeyId, afterMs: FIVE_MINUTES, lockWaitMs: LOCK_WAIT },
+      { journeyId: second.journeyId, afterMs: FIVE_MINUTES, lockWaitMs: LOCK_WAIT },
+    ]);
+    expect(w.log.events).toEqual([
+      { event: 'watchdog_overdue', journeyId: first.journeyId },
+      { event: 'watchdog_overdue', journeyId: second.journeyId },
+    ]);
+    expect(await w.beats.lastBeat()).toBeNull();
+    for (const { journeyId } of [first, second]) {
+      expect(w.stateOf(journeyId), journeyId).toBe('ACTIVE');
+      expect(w.alertsOf(journeyId), journeyId).toEqual([]);
+      expect(w.messagesOf(journeyId), journeyId).toEqual([]);
+    }
+
+    // Let go, the next sweep opens both, and beats.
+    w.store.release(first.journeyId);
+    w.store.release(second.journeyId);
+    w.clock.advance(INTERVAL);
+    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 2, escalated: 0, stuck: 0 });
+    expect(recipientsOf(w.messagesOf(first.journeyId))).toEqual([...first.responderIds].sort());
+    expect(recipientsOf(w.messagesOf(second.journeyId))).toEqual([...second.responderIds].sort());
+    expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
+    expect(w.log.events).toHaveLength(2);
+  });
+
+  // The waiting attempt's other two answers (safety-reviewer on BUG-28). It
+  // answers skipped when its holder dealt with the journey: another sweeper
+  // that opened the alert, or a heartbeat that brought contact back. It fails
+  // when the database throws. A loop that stopped at either would lose the
+  // next journey's wait too. After a skipped answer that is the BUG-28 class
+  // itself: no watchdog_overdue line, nothing stuck, and a sweep that records
+  // the beat while a journey it could not move is still held. After a failure
+  // the sweep still fails, but the next journey's watchdog_overdue line and
+  // its count in `stuck` are lost. In both tests below the first journey's
+  // waiting attempt gives that answer and the second is held through its
+  // wait, so the second is the one such a loop would lose.
+
+  test('BUG-28: of two journeys past 5 min 30 s, each with its row held, the waiting loop goes on past a journey whose holder dealt with it: the first, read first, is held by another sweeper that opens its alert within the wait, so its waiting attempt is skipped and it has exactly one alert; the second, held through its wait, is stuck, with one watchdog_overdue line naming it; the sweep fails, opening none and finding one stuck, and records no beat; let go, the next sweep opens the second', async () => {
+    const w = world();
+    const first = overdue(w, 2, FIVE_MINUTES + STUCK_AFTER);
+    const second = overdue(w, 3, FIVE_MINUTES + STUCK_AFTER);
+    // The first's holder is another sweeper, which opens its alert and commits.
+    const otherSweeper = { opened: false };
+    w.store.holdUntilWaited(first.journeyId, async () => {
+      const theirs = await w.store.openLostContactAlert({
+        journeyId: first.journeyId,
+        afterMs: FIVE_MINUTES,
+      });
+      otherSweeper.opened = theirs.outcome === 'opened';
+    });
+    w.store.hold(second.journeyId);
+
+    expect(await w.watchdog.sweep()).toEqual({ ok: false, opened: 0, escalated: 0, stuck: 1 });
+
+    expect(otherSweeper.opened).toBe(true);
+    // Both skipped without a wait, then both waited for, in the order read.
+    // The fourth request is not the sweep's: it is the other sweeper's own
+    // open, without a wait, which the fake runs while the sweep's waiting
+    // attempt for the first waits on its holder, so it comes between the
+    // sweep's two waiting attempts.
+    expect(w.store.openRequests()).toEqual([
+      { journeyId: first.journeyId, afterMs: FIVE_MINUTES },
+      { journeyId: second.journeyId, afterMs: FIVE_MINUTES },
+      { journeyId: first.journeyId, afterMs: FIVE_MINUTES, lockWaitMs: LOCK_WAIT },
+      { journeyId: first.journeyId, afterMs: FIVE_MINUTES },
+      { journeyId: second.journeyId, afterMs: FIVE_MINUTES, lockWaitMs: LOCK_WAIT },
+    ]);
+    expect(w.log.events).toEqual([{ event: 'watchdog_overdue', journeyId: second.journeyId }]);
+    expect(await w.beats.lastBeat()).toBeNull();
+    expect(w.stateOf(first.journeyId)).toBe('LOST_CONTACT');
+    expect(w.alertsOf(first.journeyId).map(({ state }) => state)).toEqual(['OPEN']);
+    expect(recipientsOf(w.messagesOf(first.journeyId))).toEqual([...first.responderIds].sort());
+    expect(w.stateOf(second.journeyId)).toBe('ACTIVE');
+    expect(w.alertsOf(second.journeyId)).toEqual([]);
+    expect(w.messagesOf(second.journeyId)).toEqual([]);
+
+    // Let go, the next sweep opens the second, and beats; the first keeps its one alert.
+    w.store.release(second.journeyId);
+    w.clock.advance(INTERVAL);
+    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 1, escalated: 0, stuck: 0 });
+    expect(w.stateOf(second.journeyId)).toBe('LOST_CONTACT');
+    expect(recipientsOf(w.messagesOf(second.journeyId))).toEqual([...second.responderIds].sort());
+    expect(w.alertsOf(first.journeyId)).toHaveLength(1);
+    expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
+    expect(w.log.events).toHaveLength(1);
+  });
+
+  test('BUG-28: of two journeys past 5 min 30 s, both rows held, the waiting loop goes on past a waiting attempt that fails: the first’s fails with an error, one watchdog_failed line with stage open and its SQLSTATE; the second’s is still made, and held through its wait; both are stuck, one watchdog_overdue line naming each; the sweep fails, opening none and finding two stuck, and records no beat; let go, the next sweep opens both', async () => {
+    const w = world();
+    const first = overdue(w, 2, FIVE_MINUTES + STUCK_AFTER);
+    const second = overdue(w, 3, FIVE_MINUTES + STUCK_AFTER);
+    w.store.hold(first.journeyId);
+    w.store.hold(second.journeyId);
+    // Both first attempts are skipped, as the rows are held. The third open,
+    // the first's waiting attempt, fails. The fourth, the second's, clears
+    // the failure as it is made, before the fake answers it, so only the
+    // first's fails and the second's meets the held row.
+    w.store.beforeNext('openLostContactAlert', () => undefined);
+    w.store.beforeNext('openLostContactAlert', () => undefined);
+    w.store.beforeNext('openLostContactAlert', () => {
+      w.store.failWith(databaseError('40P01'), 'openLostContactAlert');
+    });
+    w.store.beforeNext('openLostContactAlert', () => {
+      w.store.recover();
+    });
+
+    expect(await w.watchdog.sweep()).toEqual({ ok: false, opened: 0, escalated: 0, stuck: 2 });
+
+    // Both skipped without a wait, then both waited for, in the order read.
+    expect(w.store.openRequests()).toEqual([
+      { journeyId: first.journeyId, afterMs: FIVE_MINUTES },
+      { journeyId: second.journeyId, afterMs: FIVE_MINUTES },
+      { journeyId: first.journeyId, afterMs: FIVE_MINUTES, lockWaitMs: LOCK_WAIT },
+      { journeyId: second.journeyId, afterMs: FIVE_MINUTES, lockWaitMs: LOCK_WAIT },
+    ]);
+    // One line for the failure and one per stuck journey. The order of the
+    // failure's line against the overdue lines is left open, as in
+    // LOST-02-AC19's one-journey test above; a second watchdog_failed line
+    // would mean the second's attempt failed too, not that it was held.
+    expect(w.log.events).toHaveLength(3);
+    expect(w.log.events).toEqual(
+      expect.arrayContaining([
+        { event: 'watchdog_failed', stage: 'open', code: '40P01' },
+        { event: 'watchdog_overdue', journeyId: first.journeyId },
+        { event: 'watchdog_overdue', journeyId: second.journeyId },
+      ]),
+    );
+    expect(await w.beats.lastBeat()).toBeNull();
+    for (const { journeyId } of [first, second]) {
+      expect(w.stateOf(journeyId), journeyId).toBe('ACTIVE');
+      expect(w.alertsOf(journeyId), journeyId).toEqual([]);
+      expect(w.messagesOf(journeyId), journeyId).toEqual([]);
+    }
+
+    // Let go, the next sweep opens both, and beats.
+    w.store.release(first.journeyId);
+    w.store.release(second.journeyId);
+    w.clock.advance(INTERVAL);
+    expect(await w.watchdog.sweep()).toEqual({ ok: true, opened: 2, escalated: 0, stuck: 0 });
+    expect(recipientsOf(w.messagesOf(first.journeyId))).toEqual([...first.responderIds].sort());
+    expect(recipientsOf(w.messagesOf(second.journeyId))).toEqual([...second.responderIds].sort());
+    expect(await w.beats.lastBeat()).toEqual(await w.clock.now());
+    expect(w.log.events).toHaveLength(3);
   });
 });
 
