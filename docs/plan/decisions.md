@@ -5453,3 +5453,25 @@ any other path is work, not a candidate for the same treatment.
   - Values are Claude's (D-031); the approach is the owner's. Built test-first
     as BUG-51.
   - Supersedes nothing.
+- **Amended 2026-10-18 (Claude, D-031, from `test-author`'s red tests):**
+  - **The limit also gives the connection's place in the pool back.**
+    Destroying the connection is not enough when the statement that hangs
+    is a Drizzle transaction's `begin`. drizzle-orm 0.45.3
+    (`node-postgres/session.js`, about line 184) awaits `begin` before the
+    `try` whose `finally` releases the client, so the client is never
+    released, and pg-pool counts it for ever. In the worker's pool of two,
+    with Graphile Worker's `LISTEN` connection in the other place, one such
+    transaction fills the pool, which is BUG-51 again. So when the limit
+    fires, the connection is made unusable at once and handed back to the
+    pool as failed, and a later release of it does nothing.
+  - **Keepalive starts after 10 s idle.** pg's default delay of 0 keeps the
+    operating system's own, about two hours on Linux, which would leave a
+    vanished peer on an idle connection unnoticed for that long. Node 22's
+    `socket.setKeepAlive` sets only the first probe's delay, so the interval
+    and count stay the operating system's (on Linux, 75 s and 9). An idle connection whose
+    peer is gone is therefore dropped after about 11 minutes. A connection
+    with a query in flight is bounded by the query limit instead.
+  - **Recovery time:** when the database answers again, a hung sweep recovers
+    within the query limit plus one interval (25 s). While it stays hung,
+    each statement fails after 15 s in turn, and every sweep fails loudly;
+    the page comes as it does today.
