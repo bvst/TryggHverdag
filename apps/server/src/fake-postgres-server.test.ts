@@ -31,19 +31,27 @@
 // listener as DATABASE_URL. And a wait bounded in real time (settledWithin),
 // so a test can drive pg's own timers with Vitest's fake ones and still say
 // "it hung" rather than time out.
+//
+// BUG-51 adds a third, used by db.test.ts, worker.test.ts and
+// api-process.test.ts: a database that completes the startup and then never
+// answers a query (listeningHungPostgres). That is what a backend stuck for
+// ever, or a peer that vanished without a reset, looks like to a client whose
+// connection is already up, and BUG-34's bound on the handshake no longer
+// reaches it.
 import {
   fakePostgres,
   syntheticCredential,
   type FakePostgres,
+  type FakePostgresAnswer,
   type FakePostgresConnection,
   type FakePostgresFatal,
   type FakePostgresHandler,
   type FakePostgresQuery,
 } from '@trygghverdag/test-kit';
-import { connect, createServer, type AddressInfo, type Socket } from 'node:net';
+import { Socket, connect, createServer, type AddressInfo } from 'node:net';
 import { setTimeout as realDelay } from 'node:timers/promises';
 import pg from 'pg';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 export interface ListeningFakePostgres {
   /** Where to connect: the loopback address, the user `synthetic`, and the password if one was given. */
@@ -408,6 +416,255 @@ export async function listeningSilentPostgres({
   };
 }
 
+/** What a hung server's handler gives for a query the database never answers. */
+export const NEVER_ANSWERED = Symbol(
+  'never answered: from this query on, its connection gets nothing back',
+);
+
+/**
+ * BUG-51: answers a query as a FakePostgresHandler does (an answer, or a
+ * throw for an error), or gives NEVER_ANSWERED to leave it unanswered.
+ */
+export type HungPostgresHandler = (
+  query: FakePostgresQuery,
+) => FakePostgresAnswer | typeof NEVER_ANSWERED;
+
+export interface ListeningHungPostgres {
+  /** Where to connect: the loopback address and the user `synthetic`. */
+  url: string;
+  /** Every connection made, in order: its startup parameters, and every query it sent, answered or not. */
+  connections: () => readonly FakePostgresConnection[];
+  /**
+   * The connections that hang, in the order they began to: one of their
+   * queries went unanswered, and nothing has been written to them since.
+   */
+  hung: () => readonly FakePostgresConnection[];
+  /** Resolves once `count` connections hang (1 by default). */
+  hanging: (count?: number) => Promise<void>;
+  /** The connections whose sockets have closed, in the order they closed. */
+  closed: () => readonly FakePostgresConnection[];
+  /**
+   * How many cancel requests arrived. Each comes on a socket of its own, as
+   * PostgreSQL takes them, is closed at once, and is no connection.
+   */
+  cancelRequests: () => number;
+  /** Destroys every socket still open, then closes the server; rejects if the fake threw. */
+  close: () => Promise<void>;
+}
+
+/** PostgreSQL's code for a cancel request, where a startup message has its protocol. */
+const CANCEL_REQUEST_CODE = 80_877_102;
+
+/** The secret every hung connection's key carries: synthetic, and only ever compared by a client. */
+const SYNTHETIC_SECRET_KEY = 0x5eed;
+
+/** One message from the server, as PostgreSQL frames it: its type, its length, its body. */
+function serverMessage(type: string, body: Buffer = Buffer.alloc(0)): Buffer {
+  const head = Buffer.alloc(5);
+  head.write(type, 0, 'ascii');
+  head.writeInt32BE(body.length + 4, 1);
+  return Buffer.concat([head, body]);
+}
+
+/** Two 32-bit integers, as PostgreSQL writes them. */
+function int32s(...values: number[]): Buffer {
+  const out = Buffer.alloc(4 * values.length);
+  values.forEach((value, at) => out.writeInt32BE(value, 4 * at));
+  return out;
+}
+
+/**
+ * What PostgreSQL answers a startup with: AuthenticationOk, the session's
+ * key for a cancel (BackendKeyData), and ReadyForQuery, idle. No
+ * ParameterStatus: neither pg nor Drizzle needs one.
+ */
+function startupAnswer(processId: number): Buffer {
+  return Buffer.concat([
+    serverMessage('R', int32s(0)),
+    serverMessage('K', int32s(processId, SYNTHETIC_SECRET_KEY)),
+    serverMessage('Z', Buffer.from('I', 'ascii')),
+  ]);
+}
+
+/**
+ * BUG-51: a database that completes the startup and then never answers a
+ * query. Each connection's startup is answered at once, and its startup
+ * parameters are kept (so a test can read statement_timeout). Each query is
+ * recorded and put to `handler`: one it answers is answered, as the test
+ * kit's fake answers it; at the first it gives NEVER_ANSWERED for, the
+ * connection hangs, and nothing is written to it again, as a backend stuck
+ * for ever, or a peer gone without a reset, writes nothing. The server never
+ * closes a connection on its own, so a client with no bound on a query waits
+ * for ever. By default every query is never answered.
+ *
+ * A handler that answers once the test says so is a database that came
+ * back: a connection made after that is answered, and one that hangs stays
+ * hung, so a pool that hands a hung connection out again is caught.
+ */
+export async function listeningHungPostgres(
+  handler: HungPostgresHandler = () => NEVER_ANSWERED,
+): Promise<ListeningHungPostgres> {
+  const hung: FakePostgresConnection[] = [];
+  const waiting: { count: number; resolve: () => void }[] = [];
+  let receiving: FakePostgresConnection | undefined;
+  const database = fakePostgres((query) => {
+    const answer = handler(query);
+    if (answer !== NEVER_ANSWERED) {
+      return answer;
+    }
+    if (receiving !== undefined && !hung.includes(receiving)) {
+      hung.push(receiving);
+      for (const waiter of waiting.filter(({ count }) => hung.length >= count)) {
+        waiting.splice(waiting.indexOf(waiter), 1);
+        waiter.resolve();
+      }
+    }
+    // Encoded by the fake, and never sent.
+    return { columns: [], rows: [] };
+  });
+  const sockets = new Set<Socket>();
+  const closed: FakePostgresConnection[] = [];
+  const thrown: unknown[] = [];
+  let cancels = 0;
+  let processIds = 0;
+
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on('error', () => undefined);
+    socket.on('close', () => {
+      sockets.delete(socket);
+    });
+    let first = Buffer.alloc(0);
+    let connection: FakePostgresConnection | undefined;
+    socket.on('data', (chunk: Buffer) => {
+      let bytes = chunk;
+      if (connection === undefined) {
+        // A startup and a cancel request both start with a length and a
+        // code: read both before deciding which this socket is.
+        first = Buffer.concat([first, chunk]);
+        if (first.length < 8) {
+          return;
+        }
+        if (first.readInt32BE(4) === CANCEL_REQUEST_CODE) {
+          cancels += 1;
+          socket.destroy();
+          return;
+        }
+        const made = database.connect();
+        connection = made;
+        socket.on('close', () => {
+          closed.push(made);
+        });
+        bytes = first;
+      }
+      const starting = Object.keys(connection.parameters).length === 0;
+      let reply: Uint8Array;
+      receiving = connection;
+      try {
+        reply = connection.receive(bytes);
+      } catch (error) {
+        thrown.push(error);
+        socket.destroy();
+        return;
+      } finally {
+        receiving = undefined;
+      }
+      if (hung.includes(connection)) {
+        return;
+      }
+      if (starting && Object.keys(connection.parameters).length > 0) {
+        processIds += 1;
+        socket.write(startupAnswer(processIds));
+        return;
+      }
+      if (reply.length > 0) {
+        socket.write(reply);
+      }
+    });
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `postgres://synthetic@127.0.0.1:${String(port)}/synthetic`,
+    connections: () => [...database.connections],
+    hung: () => [...hung],
+    hanging: (count = 1) =>
+      hung.length >= count
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            waiting.push({ count, resolve });
+          }),
+    closed: () => [...closed],
+    cancelRequests: () => cancels,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        for (const socket of sockets) socket.destroy();
+        server.close(() => {
+          if (thrown.length === 0) {
+            resolve();
+            return;
+          }
+          const said = thrown.map((error) =>
+            error instanceof Error ? error.message : String(error),
+          );
+          reject(
+            new Error(
+              `The hung PostgreSQL server threw, and closed the connection: ${said.join(' | ')}`,
+              { cause: thrown[0] },
+            ),
+          );
+        });
+      }),
+  };
+}
+
+export interface WatchingKeepAlive {
+  /**
+   * How many sockets connected to the server at `url`, and open now, had TCP
+   * keepalive turned on. Read before the pool ends: a closed socket no longer
+   * says where it was connected.
+   */
+  socketsTo: (url: string) => number;
+  /**
+   * The delay before the first probe, in ms, that each of those sockets was
+   * last given with keepalive turned on, in the order they were first given
+   * one: the second argument to setKeepAlive.
+   */
+  delaysTo: (url: string) => unknown[];
+  /** Stops watching. */
+  restore: () => void;
+}
+
+/**
+ * BUG-51: watches every socket TCP keepalive is turned on for, through
+ * Socket's own setKeepAlive, which is how pg turns it on once its socket
+ * connects (pg/lib/connection.js). The method still runs: this only counts.
+ */
+export function watchingKeepAlive(): WatchingKeepAlive {
+  const spy = vi.spyOn(Socket.prototype, 'setKeepAlive');
+  /** Each socket to `url` with keepalive turned on, and the delay it was last given. */
+  const turnedOn = (url: string): Map<Socket, unknown> => {
+    const port = Number(new URL(url).port);
+    const delays = new Map<Socket, unknown>();
+    spy.mock.calls.forEach(([enable, initialDelay], at) => {
+      const socket = spy.mock.contexts[at] as Socket | undefined;
+      if (enable === true && socket?.remotePort === port) {
+        delays.set(socket, initialDelay);
+      }
+    });
+    return delays;
+  };
+  return {
+    socketsTo: (url) => turnedOn(url).size,
+    delaysTo: (url) => [...turnedOn(url).values()],
+    restore: () => {
+      spy.mockRestore();
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The controls: without them, a process test that found nothing could mean
 // only that the helper was blind.
@@ -586,6 +843,164 @@ describe('the fake PostgreSQL server on a port', () => {
     await expect(settledWithin(Promise.reject(new Error('refused')), 10)).rejects.toThrow(
       'refused',
     );
+  });
+
+  // BUG-51: the hung server's controls. Were it to answer a query it should
+  // not, or to close a connection on its own, a pool with no bound on a
+  // query would fail rather than wait, and the BUG-51 tests would pass on the
+  // bug. Were it to fail the startup, they would be BUG-34's tests again.
+  test('the hung server completes a real pg client’s startup, with the key a cancel needs, keeps its startup parameters, records a query and never answers it, and closes nothing; closed() lists the connection once the client lets go', async () => {
+    const server = await listeningHungPostgres();
+    const client = new pg.Client({
+      connectionString: server.url,
+      application_name: 'control',
+      statement_timeout: 1_234,
+    });
+    client.on('error', () => undefined);
+    try {
+      const connected = client.connect().then(() => 'connected');
+      expect(await settledWithin(connected, HANG_CEILING_MS)).toBe('connected');
+      const query = client.query('select 42 as answer').then(
+        () => 'answered',
+        (error: unknown) => error,
+      );
+
+      expect(await settledWithin(server.hanging(), HANG_CEILING_MS)).toBeUndefined();
+      // A database answers a query in milliseconds: this one waits.
+      expect(await settledWithin(query, 100)).toBe(STILL_WAITING);
+      const [connection] = server.connections();
+      expect(server.connections()).toHaveLength(1);
+      expect(connection?.queries.map(({ text }) => text)).toEqual(['select 42 as answer']);
+      expect(connection?.parameters).toMatchObject({
+        user: 'synthetic',
+        database: 'synthetic',
+        application_name: 'control',
+        statement_timeout: '1234',
+      });
+      expect(server.hung()).toEqual(server.connections());
+      expect(server.closed()).toEqual([]);
+
+      await client.end();
+      expect(await eventually(() => server.closed().length === 1)).toBe(true);
+      expect(server.closed()).toEqual(server.connections());
+    } finally {
+      await client.end().catch(() => undefined);
+      await server.close();
+    }
+  });
+
+  test('the hung server’s handler decides each query: one it answers is answered, at one it gives NEVER_ANSWERED for its connection hangs, and a connection made later is answered', async () => {
+    const server = await listeningHungPostgres((query) =>
+      /\bnever\b/.test(query.text) ? NEVER_ANSWERED : { columns: ['answer'], rows: [['42']] },
+    );
+    const first = new pg.Client({ connectionString: server.url });
+    const second = new pg.Client({ connectionString: server.url });
+    first.on('error', () => undefined);
+    second.on('error', () => undefined);
+    try {
+      await first.connect();
+      expect((await first.query<{ answer: string }>('select 42 as answer')).rows).toEqual([
+        { answer: '42' },
+      ]);
+      const never = first.query("select 'never' as answer").then(
+        () => 'answered',
+        (error: unknown) => error,
+      );
+      expect(await settledWithin(server.hanging(), HANG_CEILING_MS)).toBeUndefined();
+      expect(await settledWithin(never, 100)).toBe(STILL_WAITING);
+
+      await second.connect();
+      expect((await second.query<{ answer: string }>('select 42 as answer')).rows).toEqual([
+        { answer: '42' },
+      ]);
+      expect(server.hung()).toEqual([server.connections()[0]]);
+      expect(server.connections()).toHaveLength(2);
+    } finally {
+      await first.end().catch(() => undefined);
+      await second.end().catch(() => undefined);
+      await server.close();
+    }
+  });
+
+  test('the hung server answers a startup with AuthenticationOk, BackendKeyData and ReadyForQuery, in that order; it takes a cancel request on a socket of its own, counts it, closes that socket, and counts no connection for it', async () => {
+    const server = await listeningHungPostgres();
+    const { port } = new URL(server.url);
+    const session = connect(Number(port), '127.0.0.1');
+    const sessionUp = new Promise<void>((resolve) => session.once('connect', resolve));
+    session.on('error', () => undefined);
+    let answer = Buffer.alloc(0);
+    session.on('data', (chunk: Buffer) => {
+      answer = Buffer.concat([answer, chunk]);
+    });
+    let cancel: Socket | undefined;
+    try {
+      await sessionUp;
+      // A startup message: its length, protocol 3.0, then the user and the
+      // database as pairs ended by a zero byte, and one more zero.
+      const pairs = Buffer.from('user\0synthetic\0database\0synthetic\0\0', 'ascii');
+      session.write(Buffer.concat([int32s(8 + pairs.length, 196_608), pairs]));
+      expect(await eventually(() => answer.length >= 9 + 13 + 6)).toBe(true);
+      const types: string[] = [];
+      for (let at = 0; at < answer.length; at += 1 + answer.readInt32BE(at + 1)) {
+        types.push(String.fromCharCode(answer[at] ?? 0));
+      }
+      expect(types).toEqual(['R', 'K', 'Z']);
+
+      const canceller = connect(Number(port), '127.0.0.1');
+      cancel = canceller;
+      canceller.on('error', () => undefined);
+      const cancelClosed = new Promise<void>((resolve) => {
+        canceller.once('close', () => {
+          resolve();
+        });
+      });
+      await new Promise<void>((resolve) => canceller.once('connect', resolve));
+      // Length 16, the cancel request code, a process ID and its secret.
+      canceller.write(int32s(16, CANCEL_REQUEST_CODE, 1, SYNTHETIC_SECRET_KEY));
+
+      expect(await settledWithin(cancelClosed, HANG_CEILING_MS)).toBeUndefined();
+      expect(server.cancelRequests()).toBe(1);
+      expect(server.connections()).toHaveLength(1);
+      expect(server.closed()).toEqual([]);
+    } finally {
+      session.destroy();
+      cancel?.destroy();
+      await server.close();
+    }
+  });
+
+  // BUG-51: the keepalive watcher's control. Were it blind, a pool with no
+  // keepalive and one with it would both read 0, and a test that wanted 0
+  // would pass either way.
+  test('watchingKeepAlive counts a pg client made with keepAlive, and not one made without it, nor a socket to another server', async () => {
+    const server = await listeningFakePostgres(() => ({ columns: [], rows: [] }));
+    const other = await listeningFakePostgres(() => ({ columns: [], rows: [] }));
+    const keepAlive = watchingKeepAlive();
+    const plain = new pg.Client({ connectionString: server.url });
+    const kept = new pg.Client({
+      connectionString: server.url,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 1_234,
+    });
+    const elsewhere = new pg.Client({ connectionString: other.url, keepAlive: true });
+    try {
+      await plain.connect();
+      expect(keepAlive.socketsTo(server.url)).toBe(0);
+      await kept.connect();
+      await elsewhere.connect();
+
+      expect(keepAlive.socketsTo(server.url)).toBe(1);
+      expect(keepAlive.socketsTo(other.url)).toBe(1);
+      // BUG-51 (D-132, amended): the delay before the first probe is read too.
+      expect(keepAlive.delaysTo(server.url)).toEqual([1_234]);
+    } finally {
+      keepAlive.restore();
+      await plain.end();
+      await kept.end();
+      await elsewhere.end();
+      await server.close();
+      await other.close();
+    }
   });
 
   test('askedFor names the columns a select or a returning clause asks for, aliases first', () => {

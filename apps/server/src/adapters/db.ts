@@ -38,6 +38,27 @@ export const DEV_PLAN_CONNECTION_LIMIT = 5;
 export const CONNECT_TIMEOUT_MS = 5_000;
 
 /**
+ * How long PostgreSQL lets one statement on the API's or the worker's
+ * connections run before it cancels it, with SQLSTATE 57014, leaving the
+ * connection usable (D-132). Twice LOCK_WAIT_LIMIT_MS (5 s), so a wait for a
+ * row that gives up on time is never cut off first.
+ *
+ * Not wired in yet: no pool sends it, so it bounds nothing today. BUG-51 wires it.
+ */
+export const STATEMENT_TIMEOUT_MS = 10_000;
+
+/**
+ * How long a query on the API's or the worker's pool may wait for an answer
+ * before the client gives up on it and on its connection (D-132). Longer than
+ * STATEMENT_TIMEOUT_MS, so on a database that answers, PostgreSQL's cancel
+ * always comes first: when this limit fires, the database has stopped answering.
+ *
+ * Not wired in yet: no pool applies it, so a query the database never answers
+ * still waits forever today. BUG-51 wires it.
+ */
+export const QUERY_TIMEOUT_MS = 15_000;
+
+/**
  * A pg client that gives up on its handshake after CONNECT_TIMEOUT_MS,
  * destroying its socket, so its connect rejects with "timeout expired".
  * Set on the client, not the pool: pg-pool's own connectionTimeoutMillis would

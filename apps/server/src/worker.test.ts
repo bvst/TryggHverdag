@@ -61,10 +61,14 @@ import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import process from 'node:process';
+import { setTimeout as realDelay } from 'node:timers/promises';
+import type { PoolClient } from 'pg';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { CONNECT_TIMEOUT_MS, POOL_SIZE } from './adapters/db.ts';
+import { CONNECT_TIMEOUT_MS, POOL_SIZE, QUERY_TIMEOUT_MS, createDatabase } from './adapters/db.ts';
 import { hashCredential } from './adapters/device-credentials.ts';
 import { healthchecksCheckIn } from './adapters/healthchecks.ts';
+import { databaseJourneyStore } from './adapters/journeys.ts';
+import { databaseWorkerHeartbeats } from './adapters/worker-heartbeats.ts';
 import { captured, markersIn } from './capture.test.ts';
 import {
   readCanarySetting,
@@ -73,17 +77,22 @@ import {
   readHealthchecksSmsSetting,
   type HealthchecksSetting,
 } from './config.ts';
+import { WATCHDOG_INTERVAL_MS } from './domain/watchdog.ts';
 import {
   HANG_CEILING_MS,
+  NEVER_ANSWERED,
   STILL_WAITING,
   askedFor,
   eventually,
   listeningFakePostgres,
+  listeningHungPostgres,
   listeningSilentPostgres,
   quietDatabase,
   sessionSetting,
   settledWithin,
+  watchingKeepAlive,
 } from './fake-postgres-server.test.ts';
+import { createWatchdog, type Watchdog } from './modules/alerts/watchdog.ts';
 import type { CheckIn } from './ports.ts';
 import { runMain } from './process.ts';
 import {
@@ -1003,7 +1012,7 @@ describe('runWorkerProcess, when the stop signal comes while the runner is start
     // The read-back's answer is held, as in LOST-02-AC17's test above, so the
     // stop is seen waiting for a read-back in flight, not merely after one.
     const database = await listeningFakePostgres(
-      (query) => pgSettingsAnswer(query, IDLE_AS_ASKED) ?? quietDatabase(query),
+      (query) => pgSettingsAnswer(query, LIMITS_AS_ASKED) ?? quietDatabase(query),
     );
     const read = database.holdAnswer(/\bpg_settings\b/);
     const runner = heldRunner();
@@ -1040,8 +1049,10 @@ describe('runWorkerProcess, when the stop signal comes while the runner is start
       await running;
 
       expect(runner.events).toContain('runner stopped');
+      // RG-03 (BUG-51, D-132): the read-back reports statement_timeout too,
+      // so its one line names both limits. The order it holds is unchanged.
       expect(runner.events.filter((event) => event !== 'runner stopped')).toEqual([
-        'worker: session limit in force: idle_in_transaction_session_timeout=10000ms',
+        'worker: session limits in force: idle_in_transaction_session_timeout=10000ms statement_timeout=10000ms',
         'pool ended',
         'exit 0',
       ]);
@@ -2844,9 +2855,22 @@ describe('REL-08 and LOST-02: by default, the real watchdog and sender, and the 
 // unconfigured one (privacy-security-reviewer).
 // ---------------------------------------------------------------------------
 
-/** What the worker asks for, as pg_settings reports it when the startup parameter arrived. */
-const IDLE_AS_ASKED: Record<string, FakePgSetting> = {
+/**
+ * What the worker asks for, as pg_settings reports it when the startup
+ * parameters arrived.
+ *
+ * RG-03 (BUG-51, D-132): statement_timeout joins the idle limit, because the
+ * worker now asks for it and reads it back too, so this was renamed from
+ * IDLE_AS_ASKED. Each test that took it as "everything in force" still does.
+ */
+const LIMITS_AS_ASKED: Record<string, FakePgSetting> = {
   idle_in_transaction_session_timeout: { setting: '10000', unit: 'ms' },
+  statement_timeout: { setting: '10000', unit: 'ms' },
+};
+
+/** statement_timeout as the worker asks for it, in force (BUG-51, D-132). */
+const STATEMENT_AS_ASKED: Record<string, FakePgSetting> = {
+  statement_timeout: { setting: '10000', unit: 'ms' },
 };
 
 /** The lines a worker wrote about its session limits. */
@@ -2898,7 +2922,7 @@ describe('SEC-03 and LOST-02: the worker reads its session limit back at start (
 
   test('LOST-02-AC17: stop() waits for a read-back still in flight: its line is written before stop() resolves, and the pool ends after it', async () => {
     const database = await listeningFakePostgres(
-      (query) => pgSettingsAnswer(query, IDLE_AS_ASKED) ?? quietDatabase(query),
+      (query) => pgSettingsAnswer(query, LIMITS_AS_ASKED) ?? quietDatabase(query),
     );
     const read = database.holdAnswer(/\bpg_settings\b/);
     const events: string[] = [];
@@ -2973,7 +2997,7 @@ describe('SEC-03 and LOST-02: the worker reads its session limit back at start (
     expect(entry).not.toMatch(passesAWriter);
 
     const database = await listeningFakePostgres(
-      (query) => pgSettingsAnswer(query, IDLE_AS_ASKED) ?? quietDatabase(query),
+      (query) => pgSettingsAnswer(query, LIMITS_AS_ASKED) ?? quietDatabase(query),
     );
     const toStdout: string[] = [];
     const toStderr: string[] = [];
@@ -3002,15 +3026,18 @@ describe('SEC-03 and LOST-02: the worker reads its session limit back at start (
       await database.close();
     }
 
+    // RG-03 (BUG-51, D-132): the line names statement_timeout too.
     expect(limitLines(toStderr)).toEqual([
-      'worker: session limit in force: idle_in_transaction_session_timeout=10000ms',
+      'worker: session limits in force: idle_in_transaction_session_timeout=10000ms statement_timeout=10000ms',
     ]);
     expect(toStdout.join('')).not.toMatch(/\bsession limits?\b/);
   });
 
+  // RG-03 (BUG-51, D-132): statement_timeout is given as in force, so the
+  // one limit with no row is still the idle limit alone.
   test('LOST-02-AC17: a limit pg_settings returns no row for is written as unreadable, not in force', async () => {
     const { written } = await workerReadingBack(
-      (query) => pgSettingsAnswer(query, {}) ?? quietDatabase(query),
+      (query) => pgSettingsAnswer(query, STATEMENT_AS_ASKED) ?? quietDatabase(query),
     );
 
     expect(limitLines(written)).toEqual([IDLE_UNREADABLE]);
@@ -3019,9 +3046,12 @@ describe('SEC-03 and LOST-02: the worker reads its session limit back at start (
   test.each(['10000x', 'x10000', '10 000'])(
     'LOST-02-AC17: a setting with anything around its digits (10000x, x10000, 10 000) is written as unreadable — %s',
     async (setting) => {
+      // RG-03 (BUG-51, D-132): statement_timeout in force, so only the idle
+      // limit is unreadable, as before.
       const { written } = await workerReadingBack(
         (query) =>
           pgSettingsAnswer(query, {
+            ...STATEMENT_AS_ASKED,
             idle_in_transaction_session_timeout: { setting, unit: 'ms' },
           }) ?? quietDatabase(query),
       );
@@ -3034,9 +3064,12 @@ describe('SEC-03 and LOST-02: the worker reads its session limit back at start (
   test.each(['h', 'us', 'constructor', 'toString', '__proto__'])(
     'LOST-02-AC17: a unit other than ms, s and min, including names every object has (constructor, toString, __proto__), is written as unreadable — %s',
     async (unit) => {
+      // RG-03 (BUG-51, D-132): statement_timeout in force, so only the idle
+      // limit is unreadable, as before.
       const { written } = await workerReadingBack(
         (query) =>
           pgSettingsAnswer(query, {
+            ...STATEMENT_AS_ASKED,
             idle_in_transaction_session_timeout: { setting: '10000', unit },
           }) ?? quietDatabase(query),
       );
@@ -3046,42 +3079,54 @@ describe('SEC-03 and LOST-02: the worker reads its session limit back at start (
     },
   );
 
-  test('LOST-02-AC17: at start the worker reads idle_in_transaction_session_timeout back from pg_settings and writes exactly one line: worker: session limit in force: idle_in_transaction_session_timeout=10000ms', async () => {
+  // RG-03 (BUG-51, D-132): the read-back reports statement_timeout too, so
+  // the one read names it as well, and the one line names both limits.
+  // Nothing this test held before is dropped.
+  test('LOST-02-AC17: at start the worker reads idle_in_transaction_session_timeout and statement_timeout back from pg_settings and writes exactly one line: worker: session limits in force: idle_in_transaction_session_timeout=10000ms statement_timeout=10000ms', async () => {
     const { database, written } = await workerReadingBack(
-      (query) => pgSettingsAnswer(query, IDLE_AS_ASKED) ?? quietDatabase(query),
+      (query) => pgSettingsAnswer(query, LIMITS_AS_ASKED) ?? quietDatabase(query),
     );
 
     expect(
       database.queries.filter(
         ({ text, values }) =>
           /\bpg_settings\b/.test(text) &&
-          `${text} ${values.join(' ')}`.includes('idle_in_transaction_session_timeout'),
+          `${text} ${values.join(' ')}`.includes('idle_in_transaction_session_timeout') &&
+          `${text} ${values.join(' ')}`.includes('statement_timeout'),
       ),
     ).toHaveLength(1);
     expect(limitLines(written)).toEqual([
-      'worker: session limit in force: idle_in_transaction_session_timeout=10000ms',
+      'worker: session limits in force: idle_in_transaction_session_timeout=10000ms statement_timeout=10000ms',
     ]);
   });
 
+  // RG-03 (BUG-51, D-132): a pooler that dropped the startup parameters
+  // drops statement_timeout too, so it is 0 here as well, and its own line
+  // follows the idle limit's. The idle limit's line is held as before.
   test('LOST-02-AC17: when the database reports an idle limit other than the one asked for, as a pooler that dropped the startup parameters would, the worker writes the fixed mismatch line, and still sweeps', async () => {
     const { written, watchdog } = await workerReadingBack(
       (query) =>
         pgSettingsAnswer(query, {
           idle_in_transaction_session_timeout: { setting: '0', unit: 'ms' },
+          statement_timeout: { setting: '0', unit: 'ms' },
         }) ?? quietDatabase(query),
     );
 
     expect(limitLines(written)).toEqual([
       'worker: session limit idle_in_transaction_session_timeout is 0ms, not 10000ms: a stalled transaction will not be ended.',
+      expect.stringMatching(/^worker: session limit statement_timeout is 0ms, not 10000ms: .+\.$/),
     ]);
     expect(watchdog.count).toBeGreaterThan(0);
   });
 
   test('LOST-02-AC17: a limit that is not digits and a unit is written as unreadable, a failed read gives one line with its SQLSTATE, and no start-up line holds the connection URL, its password marker or an error message', async () => {
     const marker = syntheticCredential();
+    // RG-03 (BUG-51, D-132): statement_timeout in force, so only the idle
+    // limit is unreadable, as before.
     const unreadable = await workerReadingBack(
       (query) =>
         pgSettingsAnswer(query, {
+          ...STATEMENT_AS_ASKED,
           idle_in_transaction_session_timeout: { setting: 'eleventy', unit: 'fortnights' },
         }) ?? quietDatabase(query),
       { password: marker },
@@ -3118,6 +3163,331 @@ describe('SEC-03 and LOST-02: the worker reads its session limit back at start (
   });
 });
 
+// ---------------------------------------------------------------------------
+// BUG-51 (D-132): the worker's pool bounds every query once its connection is
+// up. Each connection asks for statement_timeout and has TCP keepalive on; a
+// query the database never answers fails once QUERY_TIMEOUT_MS have passed,
+// made and released as Graphile Worker's are; a sweep held that way ends as a
+// failed sweep, and the next one runs on a new connection; the read-back
+// reports statement_timeout; and stop(), which waits for the read-back, waits
+// no longer than the limit. How the pool itself behaves is in db.test.ts:
+// this is the pool startWorker makes and hands Graphile Worker.
+//
+// The limit is driven with Vitest's fake setTimeout, as BUG-34's tests drive
+// pg's; the tests' own waits are real (settledWithin, HANG_CEILING_MS).
+// ---------------------------------------------------------------------------
+
+/** A database's now(), as PostgreSQL writes it, for the reads a sweep makes. */
+const SWEEP_NOW = '2031-02-03 04:05:06.789+00';
+
+/**
+ * BUG-51: a database with nothing in it but its clock. A read that asks for
+ * now() gets one row, its now() and nothing else, as the sweep's left joins
+ * give when no journey or alert is due; anything else gets no row.
+ */
+const emptyButTheClock: FakePostgresHandler = (query) => {
+  const columns = askedFor(query.text);
+  return columns.includes('now')
+    ? { columns, rows: [columns.map((column) => (column === 'now' ? SWEEP_NOW : null))] }
+    : quietDatabase(query);
+};
+
+/**
+ * Waits in real 1 ms turns, which Vitest's fake timers leave alone, until
+ * `check` holds or HANG_CEILING_MS have passed.
+ */
+async function untilReally(check: () => boolean): Promise<boolean> {
+  const deadline = performance.now() + HANG_CEILING_MS;
+  while (!check() && performance.now() < deadline) {
+    await realDelay(1);
+  }
+  return check();
+}
+
+describe('BUG-51: the worker against a database that completes the startup and never answers a query', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** How long a check that something has not happened yet waits, in real ms. */
+  const NOT_YET_MS = 100;
+
+  test('BUG-51: the worker’s pool asks, in the startup of every connection it makes, for statement_timeout 10 000 ms', async () => {
+    const database = await listeningFakePostgres(quietDatabase);
+    const runner = recordingRunner();
+    const worker = await startWorker(database.url, runner.run, {
+      ...quietLoops(),
+      write: () => undefined,
+    });
+
+    try {
+      await runner.options()?.pgPool?.query('select 1');
+
+      // A startup parameter, as D-132 says, like the idle limit before it:
+      // in force before the connection's first statement.
+      const connections = database.connections();
+      expect(connections.length).toBeGreaterThan(0);
+      for (const connection of connections) {
+        expect(connection.parameters['statement_timeout']).toBe('10000');
+      }
+    } finally {
+      await worker.stop();
+      await database.close();
+    }
+  });
+
+  test('BUG-51: every connection the worker’s pool makes has TCP keepalive turned on', async () => {
+    const database = await listeningFakePostgres(quietDatabase);
+    const keepAlive = watchingKeepAlive();
+    const runner = recordingRunner();
+    const worker = await startWorker(database.url, runner.run, {
+      ...quietLoops(),
+      write: () => undefined,
+    });
+
+    try {
+      const pool = runner.options()?.pgPool;
+      if (pool === undefined) {
+        throw new Error('the runner was never given a pool');
+      }
+      const first = await pool.connect();
+      const second = await pool.connect();
+      first.release();
+      second.release();
+
+      expect(database.connections()).toHaveLength(2);
+      expect(keepAlive.socketsTo(database.url), 'connections made with no TCP keepalive').toBe(2);
+    } finally {
+      keepAlive.restore();
+      await worker.stop();
+      await database.close();
+    }
+  });
+
+  test('BUG-51: when the database reports a statement_timeout other than 10 000 ms, as a pooler that dropped it would, the worker writes one line saying so, naming statement_timeout, and still sweeps', async () => {
+    const { written, watchdog } = await workerReadingBack(
+      (query) =>
+        pgSettingsAnswer(query, {
+          ...LIMITS_AS_ASKED,
+          statement_timeout: { setting: '0', unit: 'ms' },
+        }) ?? quietDatabase(query),
+    );
+
+    expect(limitLines(written)).toEqual([
+      expect.stringMatching(/^worker: session limit statement_timeout is 0ms, not 10000ms: .+\.$/),
+    ]);
+    expect(watchdog.count).toBeGreaterThan(0);
+  });
+
+  test('BUG-51: on the pool startWorker hands Graphile Worker, a query made and released as Graphile’s withPgClient makes and releases it, which the database never answers, rejects once QUERY_TIMEOUT_MS have passed, and not before; the next one gets a new connection, which the database, answering again, answers', async () => {
+    let answering = false;
+    const database = await listeningHungPostgres(() =>
+      answering ? { columns: ['answer'], rows: [['42']] } : NEVER_ANSWERED,
+    );
+    const runner = recordingRunner();
+    let worker: Awaited<ReturnType<typeof startWorker>> | undefined;
+    try {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      worker = await startWorker(database.url, runner.run, {
+        ...quietLoops(),
+        write: () => undefined,
+      });
+      const pool = runner.options()?.pgPool;
+      if (pool === undefined) {
+        throw new Error('the runner was never given a pool');
+      }
+      // As graphile-worker 0.18 makes it (dist/helpers.js,
+      // makeWithPgClientFromPool): released in a `finally`, without an error.
+      const withPgClient = async <T>(callback: (client: PoolClient) => Promise<T>): Promise<T> => {
+        const client = await pool.connect();
+        try {
+          return await callback(client);
+        } finally {
+          client.release();
+        }
+      };
+      const first = withPgClient((client) => client.query('select 1')).then(
+        () => 'answered',
+        (error: unknown) => error,
+      );
+      expect(
+        await settledWithin(database.hanging(), HANG_CEILING_MS),
+        'the query never reached the database',
+      ).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(QUERY_TIMEOUT_MS - 1);
+      expect(await settledWithin(first, NOT_YET_MS)).toBe(STILL_WAITING);
+
+      await vi.advanceTimersByTimeAsync(1);
+      vi.useRealTimers();
+      expect(
+        await settledWithin(first, HANG_CEILING_MS),
+        `the query was still waiting ${String(QUERY_TIMEOUT_MS)} ms after the database stopped answering it`,
+      ).toBeInstanceOf(Error);
+
+      answering = true;
+      const next = withPgClient((client) =>
+        client.query<{ answer: string }>('select 42 as answer'),
+      ).then(
+        (result) => result.rows,
+        (error: unknown) => error,
+      );
+      expect(await settledWithin(next, HANG_CEILING_MS), 'the next query was not answered').toEqual(
+        [{ answer: '42' }],
+      );
+      const [hung] = database.hung();
+      const answeredOn = database
+        .connections()
+        .filter((connection) =>
+          connection.queries.some(({ text }) => text === 'select 42 as answer'),
+        );
+      expect(answeredOn).toHaveLength(1);
+      expect(answeredOn[0]).not.toBe(hung);
+    } finally {
+      vi.useRealTimers();
+      await database.close();
+      if (worker !== undefined) {
+        await settledWithin(worker.stop(), HANG_CEILING_MS);
+      }
+    }
+  });
+
+  test('BUG-51: a sweep over the worker’s pool whose read the database never answers ends with ok: false once QUERY_TIMEOUT_MS have passed, and not before, with one watchdog_failed line for its read; the next sweep runs WATCHDOG_INTERVAL_MS later on a new connection and, with the database answering again, succeeds and records the beat', async () => {
+    let answering = false;
+    const database = await listeningHungPostgres((query) =>
+      answering ? emptyButTheClock(query) : NEVER_ANSWERED,
+    );
+    const runner = recordingRunner();
+    const log = fakeLog();
+    const loops = quietLoops();
+    const sweeps: SweepResult[] = [];
+    let watching: Watchdog | undefined;
+    // The real watchdog over the pool startWorker made, built as startWorker
+    // builds its own, with each sweep's result kept.
+    const watchdog = {
+      sweep: async (): Promise<SweepResult> => {
+        const pool = runner.options()?.pgPool;
+        if (pool === undefined) {
+          throw new Error('the runner was never given a pool');
+        }
+        const db = createDatabase(pool);
+        watching ??= createWatchdog({
+          journeys: databaseJourneyStore(db),
+          beats: databaseWorkerHeartbeats(db),
+          log,
+        });
+        const result = await watching.sweep();
+        sweeps.push(result);
+        return result;
+      },
+    };
+    let worker: Awaited<ReturnType<typeof startWorker>> | undefined;
+    try {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      worker = await startWorker(database.url, runner.run, {
+        watchdog,
+        sender: loops.sender,
+        smsSender: loops.smsSender,
+        log,
+        write: () => undefined,
+      });
+      expect(
+        await settledWithin(database.hanging(), HANG_CEILING_MS),
+        'the sweep’s read never reached the database',
+      ).toBeUndefined();
+      const [hung] = database.hung();
+      expect(hung?.queries.map(({ text }) => text)).toEqual([
+        expect.stringMatching(/\bleft join "?journeys"?/i),
+      ]);
+
+      await vi.advanceTimersByTimeAsync(QUERY_TIMEOUT_MS - 1);
+      expect(sweeps).toEqual([]);
+      expect(log.events.filter(({ event }) => event === 'watchdog_failed')).toEqual([]);
+
+      answering = true;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(
+        await untilReally(() => sweeps.length === 1),
+        `the sweep was still running ${String(QUERY_TIMEOUT_MS)} ms after the database stopped answering its read`,
+      ).toBe(true);
+      expect(sweeps[0]?.ok).toBe(false);
+      expect(log.events.filter(({ event }) => event === 'watchdog_failed')).toEqual([
+        expect.objectContaining({ event: 'watchdog_failed', stage: 'read' }),
+      ]);
+
+      // The loop sets its timer once the sweep has settled: a real turn first.
+      await realDelay(1);
+      await vi.advanceTimersByTimeAsync(WATCHDOG_INTERVAL_MS);
+      expect(
+        await untilReally(() => sweeps.length === 2),
+        `no sweep ran ${String(WATCHDOG_INTERVAL_MS)} ms after the one that failed`,
+      ).toBe(true);
+      expect(sweeps[1]).toEqual({ ok: true, opened: 0, escalated: 0, stuck: 0 });
+      const beatOn = database
+        .connections()
+        .filter((connection) =>
+          connection.queries.some(({ text }) => /\binsert into "?worker_heartbeat"?/i.test(text)),
+        );
+      expect(beatOn).toHaveLength(1);
+      expect(beatOn[0]).not.toBe(hung);
+    } finally {
+      vi.useRealTimers();
+      await database.close();
+      if (worker !== undefined) {
+        await settledWithin(worker.stop(), HANG_CEILING_MS);
+      }
+    }
+  });
+
+  test('BUG-51: stop() finishes once QUERY_TIMEOUT_MS have passed, and not before, when the database never answers the read-back of the session limits: one line says they could not be read, and the pool is ended', async () => {
+    const database = await listeningHungPostgres();
+    const events: string[] = [];
+    const runner = recordingRunner(events);
+    const written: string[] = [];
+    let stopping: Promise<unknown> | undefined;
+    try {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const worker = await startWorker(database.url, runner.run, {
+        ...quietLoops(),
+        write: (text) => {
+          written.push(text);
+        },
+      });
+      // As runWorkerProcess reads it back: once started, not awaited.
+      void worker.readLimitsBack();
+      expect(
+        await settledWithin(database.hanging(), HANG_CEILING_MS),
+        'the read-back never reached the database',
+      ).toBeUndefined();
+      stopping = worker.stop().then(
+        () => 'stopped',
+        (error: unknown) => error,
+      );
+
+      await vi.advanceTimersByTimeAsync(QUERY_TIMEOUT_MS - 1);
+      expect(await settledWithin(stopping, NOT_YET_MS)).toBe(STILL_WAITING);
+
+      await vi.advanceTimersByTimeAsync(1);
+      vi.useRealTimers();
+      expect(
+        await settledWithin(stopping, HANG_CEILING_MS),
+        `stop() was still waiting for the read-back ${String(QUERY_TIMEOUT_MS)} ms after the database stopped answering it`,
+      ).toBe('stopped');
+      expect(limitLines(written)).toEqual([
+        expect.stringMatching(/^worker: session limits could not be read \(.+\)\.$/),
+      ]);
+      expect(events).toContain('pool ended');
+    } finally {
+      vi.useRealTimers();
+      // The server first: a read-back still waiting would hold the stop.
+      await database.close();
+      if (stopping !== undefined) {
+        await settledWithin(stopping, HANG_CEILING_MS);
+      }
+    }
+  });
+});
+
 describe('LOST-02: the running worker pushes through the unconfigured push', () => {
   const DATABASE_NOW = '2031-02-03 04:05:06.789+00';
 
@@ -3130,7 +3500,7 @@ describe('LOST-02: the running worker pushes through the unconfigured push', () 
   function oneDueMessage(messageId: string, recipientId: string): FakePostgresHandler {
     let claimed = false;
     return (query) => {
-      const settings = pgSettingsAnswer(query, IDLE_AS_ASKED);
+      const settings = pgSettingsAnswer(query, LIMITS_AS_ASKED);
       if (settings !== undefined) {
         return settings;
       }
@@ -3337,7 +3707,7 @@ function smsDatabase({
   const state: { count: number | null; unheard: number } = { count: 0, unheard: 0 };
   let claimed = false;
   const handler: FakePostgresHandler = (query) => {
-    const settings = pgSettingsAnswer(query, IDLE_AS_ASKED);
+    const settings = pgSettingsAnswer(query, LIMITS_AS_ASKED);
     if (settings !== undefined) {
       return settings;
     }

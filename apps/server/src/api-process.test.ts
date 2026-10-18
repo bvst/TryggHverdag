@@ -24,6 +24,7 @@ import {
 } from '@trygghverdag/test-kit';
 import process from 'node:process';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { QUERY_TIMEOUT_MS } from './adapters/db.ts';
 import { startApiProcess } from './api-process.ts';
 import { captured, markersIn } from './capture.test.ts';
 // The test kit's fake PostgreSQL server on a local port, for a process to
@@ -33,11 +34,17 @@ import { captured, markersIn } from './capture.test.ts';
 // connection's startup parameters, and ending a connection as PostgreSQL ends
 // a session. No assertion of this file changed with the move.
 import {
+  HANG_CEILING_MS,
+  NEVER_ANSWERED,
+  STILL_WAITING,
   askedFor,
   eventually,
   listeningFakePostgres,
+  listeningHungPostgres,
   quietDatabase,
   sessionSetting,
+  settledWithin,
+  watchingKeepAlive,
 } from './fake-postgres-server.test.ts';
 
 /** A socket directory that does not exist: every query fails in milliseconds, offline. */
@@ -456,10 +463,18 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
   // The API reads both limits back once at start, from pg_settings, and says
   // on one fixed line what is in force, or which one is not; it starts anyway.
 
-  /** What the API asks for, as pg_settings reports it when the startup parameters arrived. */
+  /**
+   * What the API asks for, as pg_settings reports it when the startup
+   * parameters arrived.
+   *
+   * RG-03 (BUG-51, D-132): statement_timeout joins the two limits, because
+   * the API now asks for it and reads it back too. Each test that took this
+   * as "everything in force" still does.
+   */
   const AS_ASKED: Record<string, FakePgSetting> = {
     idle_in_transaction_session_timeout: { setting: '10000', unit: 'ms' },
     lock_timeout: { setting: '5000', unit: 'ms' },
+    statement_timeout: { setting: '10000', unit: 'ms' },
   };
 
   /** The lines written about the session limits. */
@@ -493,7 +508,10 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
     return { database, status, written };
   }
 
-  test('LOST-02-AC17: at start the API reads idle_in_transaction_session_timeout and lock_timeout back from pg_settings and writes exactly one line: api: session limits in force: idle_in_transaction_session_timeout=10000ms lock_timeout=5000ms', async () => {
+  // RG-03 (BUG-51, D-132): the read-back reports statement_timeout too, so
+  // the read names it and the one line ends with it. Nothing this test held
+  // before is dropped.
+  test('LOST-02-AC17: at start the API reads idle_in_transaction_session_timeout, lock_timeout and statement_timeout back from pg_settings and writes exactly one line: api: session limits in force: idle_in_transaction_session_timeout=10000ms lock_timeout=5000ms statement_timeout=10000ms', async () => {
     const { database, written } = await startedReadingBack(
       (query) => pgSettingsAnswer(query, AS_ASKED) ?? healthDatabase(query),
     );
@@ -503,22 +521,32 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
     const read = `${reads[0]?.text ?? ''} ${(reads[0]?.values ?? []).join(' ')}`;
     expect(read).toContain('idle_in_transaction_session_timeout');
     expect(read).toContain('lock_timeout');
+    expect(read).toContain('statement_timeout');
     expect(limitLines(written)).toEqual([
-      'api: session limits in force: idle_in_transaction_session_timeout=10000ms lock_timeout=5000ms',
+      'api: session limits in force: idle_in_transaction_session_timeout=10000ms lock_timeout=5000ms statement_timeout=10000ms',
     ]);
   });
 
+  // RG-03 (BUG-51, D-132): a pooler that dropped the startup parameters
+  // drops statement_timeout too, so it is 0 here as well, and its own line
+  // joins the two. The two lines this test held are held as before.
   test('LOST-02-AC17: when the database reports a limit other than the one asked for, as a pooler that dropped the startup parameters would, the API writes the fixed mismatch line for each such setting, and still starts and answers /v1/health', async () => {
     const dropped: Record<string, FakePgSetting> = {
       idle_in_transaction_session_timeout: { setting: '0', unit: 'ms' },
       lock_timeout: { setting: '0', unit: 'ms' },
+      statement_timeout: { setting: '0', unit: 'ms' },
     };
     const { status, written } = await startedReadingBack(
       (query) => pgSettingsAnswer(query, dropped) ?? healthDatabase(query),
     );
 
     const lines = limitLines(written);
-    expect(lines).toHaveLength(2);
+    expect(lines).toHaveLength(3);
+    expect(
+      lines.filter((line) =>
+        /^api: session limit statement_timeout is 0ms, not 10000ms: .+\.$/.test(line),
+      ),
+    ).toHaveLength(1);
     expect(lines).toContain(
       'api: session limit idle_in_transaction_session_timeout is 0ms, not 10000ms: a stalled transaction will not be ended.',
     );
@@ -634,17 +662,21 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
       await database.close();
     }
 
+    // RG-03 (BUG-51, D-132): the line ends with statement_timeout now.
     expect(limitLines(toStderr.join(''))).toEqual([
-      'api: session limits in force: idle_in_transaction_session_timeout=10000ms lock_timeout=5000ms',
+      'api: session limits in force: idle_in_transaction_session_timeout=10000ms lock_timeout=5000ms statement_timeout=10000ms',
     ]);
     expect(toStdout.join('')).not.toMatch(/\bsession limits?\b/);
   });
 
+  // RG-03 (BUG-51, D-132): statement_timeout is given as in force, so the
+  // one limit with no row is still lock_timeout alone.
   test('LOST-02-AC17: a limit pg_settings returns no row for is written as unreadable, not in force', async () => {
     const { written } = await startedReadingBack(
       (query) =>
         pgSettingsAnswer(query, {
           idle_in_transaction_session_timeout: { setting: '10000', unit: 'ms' },
+          statement_timeout: { setting: '10000', unit: 'ms' },
         }) ?? healthDatabase(query),
     );
 
@@ -798,6 +830,177 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
     } finally {
       await api.stop();
       await database.close();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // BUG-51 (D-132): the API's pool bounds every query once its connection is
+  // up. Each connection asks for statement_timeout and has TCP keepalive on;
+  // a query the database never answers fails once QUERY_TIMEOUT_MS have
+  // passed, its connection is closed, and the next request gets a new one;
+  // the read-back reports statement_timeout; and stop(), which waits for the
+  // read-back, waits no longer than the limit. How the pool itself behaves is
+  // in db.test.ts: this is the pool the API process makes.
+  //
+  // The limit is driven with Vitest's fake setTimeout, as BUG-34's tests drive
+  // pg's; the tests' own waits are real (settledWithin, HANG_CEILING_MS).
+  // -------------------------------------------------------------------------
+
+  /** How long a check that something has not happened yet waits, in real ms. */
+  const NOT_YET_MS = 100;
+
+  test('BUG-51: the API’s pool asks, in the startup of every connection it makes, for statement_timeout 10 000 ms', async () => {
+    const database = await listeningFakePostgres(healthDatabase);
+    const api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+
+    try {
+      expect(await health(api.port)).toBe(200);
+
+      // A startup parameter, as D-132 says, like the two limits before it:
+      // in force before the connection's first statement.
+      const connections = database.connections();
+      expect(connections.length).toBeGreaterThan(0);
+      for (const connection of connections) {
+        expect(connection.parameters['statement_timeout']).toBe('10000');
+      }
+    } finally {
+      await api.stop();
+      await database.close();
+    }
+  });
+
+  test('BUG-51: every connection the API’s pool makes has TCP keepalive turned on', async () => {
+    const database = await listeningFakePostgres(
+      (query) => pgSettingsAnswer(query, AS_ASKED) ?? healthDatabase(query),
+    );
+    const keepAlive = watchingKeepAlive();
+    const api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+
+    try {
+      await eventually(() => database.queries.some(({ text }) => /\bpg_settings\b/.test(text)));
+      expect(await health(api.port)).toBe(200);
+
+      const made = database.connections().length;
+      expect(made).toBeGreaterThan(0);
+      expect(keepAlive.socketsTo(database.url), 'connections made with no TCP keepalive').toBe(
+        made,
+      );
+    } finally {
+      keepAlive.restore();
+      await api.stop();
+      await database.close();
+    }
+  });
+
+  test('BUG-51: when the database reports a statement_timeout other than 10 000 ms, as a pooler that dropped it would, the API writes one line saying so, naming statement_timeout, and still answers /v1/health', async () => {
+    const { status, written } = await startedReadingBack(
+      (query) =>
+        pgSettingsAnswer(query, {
+          ...AS_ASKED,
+          statement_timeout: { setting: '0', unit: 'ms' },
+        }) ?? healthDatabase(query),
+    );
+
+    expect(limitLines(written)).toEqual([
+      expect.stringMatching(/^api: session limit statement_timeout is 0ms, not 10000ms: .+\.$/),
+    ]);
+    expect(status).toBe(200);
+  });
+
+  test('BUG-51: a /v1/health whose read the database never answers is a 500 once QUERY_TIMEOUT_MS have passed, and not before; the connections it and the read-back hung on are closed, and the next /v1/health, with the database answering again, gets a new connection and a 200', async () => {
+    let answering = false;
+    const database = await listeningHungPostgres((query) =>
+      answering ? healthDatabase(query) : NEVER_ANSWERED,
+    );
+    // Each lost connection is a database_error line on stdout: kept out of
+    // the run's output.
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    let api: Awaited<ReturnType<typeof startApiProcess>> | undefined;
+    try {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+      const first = health(api.port).then(
+        (status) => status,
+        (error: unknown) => error,
+      );
+      expect(
+        await settledWithin(database.hanging(2), HANG_CEILING_MS),
+        'the read-back and the health check did not both reach the database',
+      ).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(QUERY_TIMEOUT_MS - 1);
+      expect(await settledWithin(first, NOT_YET_MS)).toBe(STILL_WAITING);
+
+      await vi.advanceTimersByTimeAsync(1);
+      vi.useRealTimers();
+      expect(
+        await settledWithin(first, HANG_CEILING_MS),
+        `/v1/health was still waiting ${String(QUERY_TIMEOUT_MS)} ms after the database stopped answering it`,
+      ).toBe(500);
+      const hung = database.hung();
+      expect(
+        await eventually(() => hung.every((connection) => database.closed().includes(connection))),
+        'a connection a query hung on was left open',
+      ).toBe(true);
+
+      answering = true;
+      expect(await settledWithin(health(api.port), HANG_CEILING_MS)).toBe(200);
+    } finally {
+      vi.useRealTimers();
+      // The server first: a query still waiting would hold the stop.
+      await database.close();
+      if (api !== undefined) {
+        await settledWithin(api.stop(), HANG_CEILING_MS);
+      }
+      stdout.mockRestore();
+    }
+  });
+
+  test('BUG-51: stop() finishes once QUERY_TIMEOUT_MS have passed, and not before, when the database never answers the read-back of the session limits: one line says they could not be read, and every connection is closed', async () => {
+    const database = await listeningHungPostgres();
+    const toStderr: string[] = [];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      toStderr.push(String(chunk));
+      return true;
+    });
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    let stopping: Promise<unknown> | undefined;
+    try {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const api = await startApiProcess({ databaseUrl: database.url, port: 0 });
+      expect(
+        await settledWithin(database.hanging(), HANG_CEILING_MS),
+        'the read-back never reached the database',
+      ).toBeUndefined();
+      stopping = api.stop().then(
+        () => 'stopped',
+        (error: unknown) => error,
+      );
+
+      await vi.advanceTimersByTimeAsync(QUERY_TIMEOUT_MS - 1);
+      expect(await settledWithin(stopping, NOT_YET_MS)).toBe(STILL_WAITING);
+
+      await vi.advanceTimersByTimeAsync(1);
+      vi.useRealTimers();
+      expect(
+        await settledWithin(stopping, HANG_CEILING_MS),
+        `stop() was still waiting for the read-back ${String(QUERY_TIMEOUT_MS)} ms after the database stopped answering it`,
+      ).toBe('stopped');
+      expect(limitLines(toStderr.join(''))).toEqual([
+        expect.stringMatching(/^api: session limits could not be read \(.+\)\.$/),
+      ]);
+      expect(
+        await eventually(() => database.closed().length === database.connections().length),
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      // The server first: a read-back still waiting would hold the stop.
+      await database.close();
+      if (stopping !== undefined) {
+        await settledWithin(stopping, HANG_CEILING_MS);
+      }
+      stderr.mockRestore();
+      stdout.mockRestore();
     }
   });
 });
