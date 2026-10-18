@@ -34,6 +34,19 @@ export const DEV_PLAN_CONNECTION_LIMIT = 5;
  */
 export const CONNECT_TIMEOUT_MS = 5_000;
 
+/**
+ * A pg client that gives up on its handshake after CONNECT_TIMEOUT_MS,
+ * destroying its socket, so its connect rejects with "timeout expired".
+ * Set on the client, not the pool: pg-pool's own connectionTimeoutMillis would
+ * also time out a wait for a free client in a full pool, and in the worker
+ * that waiter can be Graphile's unawaited completeJob, which would end the process.
+ */
+class ConnectTimeoutClient extends pg.Client {
+  constructor(config: pg.ClientConfig = {}) {
+    super({ ...config, connectionTimeoutMillis: CONNECT_TIMEOUT_MS });
+  }
+}
+
 /** What a process pool is told about itself, and the session limits it asks for. */
 export interface PoolOptions {
   /** Which process's pool this is: the name its `database_error` lines carry. */
@@ -116,6 +129,7 @@ export function createPool(
   const pool = new pg.Pool({
     connectionString,
     max,
+    Client: ConnectTimeoutClient,
     ...(idleInTransactionMs === undefined
       ? {}
       : { idle_in_transaction_session_timeout: idleInTransactionMs }),
