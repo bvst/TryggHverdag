@@ -23,3 +23,11 @@ skipped where 2 skipped are expiry LOST-08-AC10 tests whose names mention BUG-28
   (clock advanced) and all three BUG-28 toBeNull tests. Note, not a safety gap.
 - Test names prefix BUG-28 not LOST-02-AC20 (LOST-07-AC16 twins use the AC); precedent BUG-32/34/44; note.
 Related: [[lost07-sms-review]], [[lost02-alert-review]], [[reviewer-sandbox-limits]].
+
+## Loop 1: d907018, PASS
+Tests 4 (first's holder = another sweeper that opens it, waiting attempt skipped; second held) and 5 (first's
+waiting attempt fails via beforeNext/failWith/recover; second held). Re-planted with the same scratch config:
+L6 760/760 green; break-after-skipped killed by test 4 only; break-after-failed killed by test 5 only (which also
+proves the third open, not the fourth, is the one that fails); every earlier mutant still killed. All four waiting
+outcomes (opened, skipped, held, failed) now have a "loop goes on past it" test. Left: a two-journey bound
+(e.g. slice(0, 2)) would survive, contrived; first-loop exits are a separate loop, not re-checked here.

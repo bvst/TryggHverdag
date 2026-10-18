@@ -20,3 +20,12 @@ req:coverage left the report unchanged.
   AC12 x2, SM-10-AC15, and BUG-28 tests 1-3 (toBeNull). Gap closed elsewhere: note, not a fix for this PR.
 - Pattern: wait-loop faults are order-dependent; a two-item test per order is needed (break-after-X only dies when X is first).
 Related: [[lost07-audit]], [[second-path-isolation]]
+
+**Loop 1 (2026-10-18, d907018): PASS.** Tests 4 (skipped then held) and 5 (failed then held), plus a comment in test 3 (itself new
+vs main). tests:changes clean, req:coverage unchanged, check-runs 0 (no PR). Harness ta-bug28/spec3.mjs. S (else-break after
+skipped) killed by test 4 only; F (break after failed) by test 5 only; both survive the other 758 L6. H (`=== 'held'`) killed by
+test 5. Test 5 scoping proven by faulting the fake: recover() no-op -> 4 log lines, failWith() no-op -> 2; beforeNext runs at call
+time and the loop awaits call 3 before call 4, so only call 3 fails. Test 4's five-request pin is sequential awaits in the fake
+(holderAction awaited inside call 3's work, no timers); 10/10 repeat runs green.
+- Pattern: for "each is waited for" claims, enumerate every outcome of the per-item attempt (opened/skipped/held/failed) and plant
+  a break after each; loop 0 covered only held and opened.
