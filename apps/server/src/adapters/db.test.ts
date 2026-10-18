@@ -9,8 +9,23 @@
 // A pool that exhausts the ceiling takes the watchdog with it, and the watchdog
 // is what turns a silent phone into an alert. So the arithmetic is a test.
 import { fakeLog } from '@trygghverdag/test-kit';
-import { describe, expect, test } from 'vitest';
-import { DEV_PLAN_CONNECTION_LIMIT, POOL_SIZE, createPool } from './db.ts';
+import { setTimeout as realDelay } from 'node:timers/promises';
+import { describe, expect, test, vi } from 'vitest';
+import { IDLE_IN_TRANSACTION_LIMIT_MS, LOCK_WAIT_LIMIT_MS } from '../domain/watchdog.ts';
+import {
+  HANG_CEILING_MS,
+  STILL_WAITING,
+  listeningFakePostgres,
+  listeningSilentPostgres,
+  settledWithin,
+} from '../fake-postgres-server.test.ts';
+import {
+  CONNECT_TIMEOUT_MS,
+  DEV_PLAN_CONNECTION_LIMIT,
+  POOL_SIZE,
+  createPool,
+  type PoolOptions,
+} from './db.ts';
 
 describe('the connection budget', () => {
   test('the two processes and the spare fit inside what the plan allows', () => {
@@ -109,6 +124,112 @@ describe('the session limits a pool is made with', () => {
       }
     } finally {
       await Promise.all(made.map((pool) => pool.end()));
+    }
+  });
+});
+
+// BUG-34 (safety-reviewer, on BUG-32): createPool set no connection timeout,
+// so a database that accepts the connection and never answers held a pool's
+// first connection for ever. The worker's start waited on it with nothing
+// written, and a worker stuck there watches nobody: no sweep, no beat. The
+// API's pool and the migrations' are made here too, so each of the three
+// pools is shown: a first query rejects once CONNECT_TIMEOUT_MS have passed,
+// and not before, and the connection it opened is closed, not left half open.
+//
+// pg's timer is the global setTimeout, so Vitest's fake one drives it: the
+// bound is exact, whatever the machine's load. The tests' own waits are real
+// and generous (settledWithin, HANG_CEILING_MS), so only a hang reaches them.
+// The rejection is the loud part: a connection that never connected raises no
+// `error` event, so no `database_error` line is expected. Its caller says it:
+// the worker as "worker failed: …" (worker.test.ts), the API as a 500, a
+// migration as a failed deploy.
+describe('BUG-34: a pool against a database that accepts the connection and never answers', () => {
+  /** How long a check that something has not happened yet waits, in real ms. */
+  const NOT_YET_MS = 100;
+
+  const pools: [string, PoolOptions][] = [
+    [
+      'the API’s',
+      {
+        name: 'api',
+        log: fakeLog(),
+        idleInTransactionMs: IDLE_IN_TRANSACTION_LIMIT_MS,
+        lockTimeoutMs: LOCK_WAIT_LIMIT_MS,
+      },
+    ],
+    [
+      'the worker’s',
+      { name: 'worker', log: fakeLog(), idleInTransactionMs: IDLE_IN_TRANSACTION_LIMIT_MS },
+    ],
+    ['the migrations’', {}],
+  ];
+
+  test.each(pools)(
+    'BUG-34: %s pool rejects its first query once CONNECT_TIMEOUT_MS have passed, not before and not never, and closes the connection it opened',
+    async (_which, options) => {
+      const database = await listeningSilentPostgres();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const pool = createPool(database.url, 1, options);
+      try {
+        const query = pool.query('select 1').then(
+          () => 'answered',
+          (error: unknown) => error,
+        );
+        expect(await settledWithin(database.heard(), HANG_CEILING_MS)).toBeUndefined();
+
+        await vi.advanceTimersByTimeAsync(CONNECT_TIMEOUT_MS - 1);
+        expect(await settledWithin(query, NOT_YET_MS)).toBe(STILL_WAITING);
+
+        await vi.advanceTimersByTimeAsync(1);
+        vi.useRealTimers();
+        expect(await settledWithin(query, HANG_CEILING_MS)).toBeInstanceOf(Error);
+        expect(await settledWithin(database.allClosed(), HANG_CEILING_MS)).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+        // The server first: a connection still waiting would hold pool.end().
+        await database.close();
+        await pool.end();
+      }
+    },
+  );
+
+  test('BUG-34: guard: with the timeout in force, a pool against a database that answers connects and answers, and a query answered later than CONNECT_TIMEOUT_MS is not cut short', async () => {
+    // Passes today and after: the timeout bounds the connection's start, not
+    // a query. A query_timeout or statement-wide limit in its place would
+    // fail the held query below.
+    const database = await listeningFakePostgres(() => ({ columns: ['answer'], rows: [['42']] }));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const pool = createPool(database.url, 1, {
+      name: 'worker',
+      log: fakeLog(),
+      idleInTransactionMs: IDLE_IN_TRANSACTION_LIMIT_MS,
+    });
+    try {
+      expect(await settledWithin(pool.query('select 42 as answer'), HANG_CEILING_MS)).toMatchObject(
+        { rows: [{ answer: '42' }] },
+      );
+
+      const held = database.holdAnswer(/slow/);
+      const slow = pool.query('select 42 as answer from slow').then(
+        (result) => result,
+        (error: unknown) => error,
+      );
+      // Real 1 ms turns: the faked setTimeout would never fire here.
+      for (let turn = 0; turn < 1_000 && !held.arrived(); turn += 1) {
+        await realDelay(1);
+      }
+      expect(held.arrived()).toBe(true);
+      await vi.advanceTimersByTimeAsync(CONNECT_TIMEOUT_MS);
+      held.release();
+      vi.useRealTimers();
+
+      expect(await settledWithin(slow, HANG_CEILING_MS)).toMatchObject({
+        rows: [{ answer: '42' }],
+      });
+    } finally {
+      vi.useRealTimers();
+      await pool.end();
+      await database.close();
     }
   });
 });

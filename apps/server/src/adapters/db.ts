@@ -25,6 +25,15 @@ export const POOL_SIZE = { api: 2, worker: 2, spare: 1 } as const;
 /** What the DEV plan allows in total (Section 8). The budget above must fit inside it. */
 export const DEV_PLAN_CONNECTION_LIMIT = 5;
 
+/**
+ * How long a new connection may take to be established before it is given up
+ * (BUG-34). Why 5 s: in BUG-32's measurement the first connection came 0.6 to
+ * 1.1 s after the process started, so this leaves room for TLS and SCRAM to a
+ * remote host. And it is half the worker's START_LIMIT_MS (10 s), so a silent
+ * database fails the start on its own cause before a stop signal's limit would.
+ */
+export const CONNECT_TIMEOUT_MS = 5_000;
+
 /** What a process pool is told about itself, and the session limits it asks for. */
 export interface PoolOptions {
   /** Which process's pool this is: the name its `database_error` lines carry. */
