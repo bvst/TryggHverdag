@@ -10,6 +10,7 @@
 // is what turns a silent phone into an alert. So the arithmetic is a test.
 import { fakeLog } from '@trygghverdag/test-kit';
 import { setTimeout as realDelay } from 'node:timers/promises';
+import type { PoolClient } from 'pg';
 import { describe, expect, test, vi } from 'vitest';
 import { IDLE_IN_TRANSACTION_LIMIT_MS, LOCK_WAIT_LIMIT_MS } from '../domain/watchdog.ts';
 import {
@@ -168,9 +169,13 @@ describe('BUG-34: a pool against a database that accepts the connection and neve
     'BUG-34: %s pool rejects its first query once CONNECT_TIMEOUT_MS have passed, not before and not never, and closes the connection it opened',
     async (_which, options) => {
       const database = await listeningSilentPostgres();
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-      const pool = createPool(database.url, 1, options);
+      // RG-03 (BUG-34, review loop 1, code-reviewer): the fake timers and the
+      // pool are now made inside the try, so a throw cannot leave fake timers
+      // or the silent server behind. No assertion changed.
+      let pool: ReturnType<typeof createPool> | undefined;
       try {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        pool = createPool(database.url, 1, options);
         const query = pool.query('select 1').then(
           () => 'answered',
           (error: unknown) => error,
@@ -188,23 +193,31 @@ describe('BUG-34: a pool against a database that accepts the connection and neve
         vi.useRealTimers();
         // The server first: a connection still waiting would hold pool.end().
         await database.close();
-        await pool.end();
+        await pool?.end();
       }
     },
   );
 
   test('BUG-34: guard: with the timeout in force, a pool against a database that answers connects and answers, and a query answered later than CONNECT_TIMEOUT_MS is not cut short', async () => {
     // Passes today and after: the timeout bounds the connection's start, not
-    // a query. A query_timeout or statement-wide limit in its place would
-    // fail the held query below.
+    // a query. A client-side query_timeout in its place would fail the held
+    // query below. (A statement_timeout would not: it travels as a startup
+    // parameter, and this fake database ignores those.)
+    //
+    // RG-03 (BUG-34, review loop 1): that sentence said "a query_timeout or
+    // statement-wide limit"; test-auditor planted statement_timeout and this
+    // test passed, so the comment now says only what the test catches. And
+    // (code-reviewer) the fake timers and the pool are made inside the try.
+    // No assertion changed.
     const database = await listeningFakePostgres(() => ({ columns: ['answer'], rows: [['42']] }));
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const pool = createPool(database.url, 1, {
-      name: 'worker',
-      log: fakeLog(),
-      idleInTransactionMs: IDLE_IN_TRANSACTION_LIMIT_MS,
-    });
+    let pool: ReturnType<typeof createPool> | undefined;
     try {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      pool = createPool(database.url, 1, {
+        name: 'worker',
+        log: fakeLog(),
+        idleInTransactionMs: IDLE_IN_TRANSACTION_LIMIT_MS,
+      });
       expect(await settledWithin(pool.query('select 42 as answer'), HANG_CEILING_MS)).toMatchObject(
         { rows: [{ answer: '42' }] },
       );
@@ -228,7 +241,59 @@ describe('BUG-34: a pool against a database that accepts the connection and neve
       });
     } finally {
       vi.useRealTimers();
-      await pool.end();
+      await pool?.end();
+      await database.close();
+    }
+  });
+
+  // BUG-34, review loop 1 (safety-reviewer and test-auditor): the timeout is
+  // the client's handshake timer, never pg-pool's own connectionTimeoutMillis.
+  // pg-pool would also time out a wait for a free client in a full pool, and
+  // in the worker that waiter can be Graphile Worker's completeJob, which
+  // Graphile does not await (dist/worker.js), so its rejection would end the
+  // process. Graphile holds one of the worker's two connections for LISTEN,
+  // and a sweep may hold the other up to LOCK_WAIT_LIMIT_MS for a row, so a
+  // queue is ordinary. pg-pool hands its options to every client, so the
+  // tests above pass with the timeout on the pool too: only a full pool tells
+  // the two apart.
+  test('BUG-34: a full pool’s waiter is never timed out: a pool.connect() queued behind a checked-out client is still waiting 3 × CONNECT_TIMEOUT_MS later and gets that client once it is released, so no wait for a free client can fail Graphile Worker’s unawaited completeJob', async () => {
+    const database = await listeningFakePostgres(() => ({ columns: [], rows: [] }));
+    let pool: ReturnType<typeof createPool> | undefined;
+    let held: PoolClient | undefined;
+    let queued: Promise<PoolClient | Error> | undefined;
+    try {
+      pool = createPool(database.url, 1, {
+        name: 'worker',
+        log: fakeLog(),
+        idleInTransactionMs: IDLE_IN_TRANSACTION_LIMIT_MS,
+      });
+      held = await pool.connect();
+      const first = held;
+
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      queued = pool.connect().then(
+        (client) => client,
+        (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+      );
+      await vi.advanceTimersByTimeAsync(3 * CONNECT_TIMEOUT_MS);
+      expect(
+        await settledWithin(queued, NOT_YET_MS),
+        `a wait for a free client gave up ${String(3 * CONNECT_TIMEOUT_MS)} ms in`,
+      ).toBe(STILL_WAITING);
+
+      vi.useRealTimers();
+      held.release();
+      held = undefined;
+      expect(await settledWithin(queued, HANG_CEILING_MS)).toBe(first);
+    } finally {
+      vi.useRealTimers();
+      // Both clients go back, whatever failed, or pool.end() waits for them.
+      held?.release();
+      const late = queued === undefined ? undefined : await settledWithin(queued, HANG_CEILING_MS);
+      if (late !== undefined && late !== STILL_WAITING && !(late instanceof Error)) {
+        late.release();
+      }
+      await pool?.end();
       await database.close();
     }
   });

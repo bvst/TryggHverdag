@@ -90,6 +90,7 @@ import {
   CANARY_CRONTAB,
   CANARY_WAIT,
   HEARTBEAT_CRONTAB,
+  START_LIMIT_MS as WORKER_START_LIMIT_MS,
   UNCONFIGURED_PUSH,
   UNCONFIGURED_SMS,
   createTaskList,
@@ -1069,6 +1070,36 @@ describe('runWorkerProcess, when the stop signal comes while the runner is start
 describe('BUG-34: the worker against a database that accepts the connection and never answers', () => {
   /** How long a check that something has not happened yet waits, in real ms. */
   const NOT_YET_MS = 100;
+
+  // BUG-34, review loop 1 (safety-reviewer and test-auditor): the tests below
+  // hold the start to CONNECT_TIMEOUT_MS whatever its value, so 10 s or 60 s
+  // passed them all. What fixes the value is its reason in db.ts: half the
+  // worker's START_LIMIT_MS, so a start against a silent database fails on its
+  // own cause before a stop signal's limit would end it. The limit is the one
+  // worker.ts exports. This file's own START_LIMIT_MS, above, stays: it pins
+  // the 10 s BUG-32's tests hold, and taking the export in its place would let
+  // a change to the limit pass them. So this test also says the two agree.
+  test('BUG-34: CONNECT_TIMEOUT_MS is shorter than the worker’s START_LIMIT_MS, so a start against a silent database fails on its own cause before a stop signal’s limit would end it', () => {
+    expect(WORKER_START_LIMIT_MS, 'the limit BUG-32’s tests pin').toBe(START_LIMIT_MS);
+    expect(CONNECT_TIMEOUT_MS).toBeLessThan(WORKER_START_LIMIT_MS);
+  });
+
+  /**
+   * BUG-34, review loop 1: the slowest whole start BUG-32 measured, in ms:
+   * the real worker's first connection came 0.6 to 1.1 s after the process
+   * started, process start included, against a local PostgreSQL
+   * (docs/progress/m2.md). Any handshake inside such a start took less, so a
+   * timeout above it would have cut off none of them. A floor only: the
+   * handshake to Clever Cloud over the network has not been measured.
+   */
+  const SLOWEST_MEASURED_START_MS = 1_100;
+
+  test('BUG-34: CONNECT_TIMEOUT_MS is longer than the slowest whole start BUG-32 measured, so no start measured healthy would have been cut off', () => {
+    expect(
+      CONNECT_TIMEOUT_MS,
+      `CONNECT_TIMEOUT_MS must exceed ${String(SLOWEST_MEASURED_START_MS)} ms, the slowest whole start BUG-32 measured`,
+    ).toBeGreaterThan(SLOWEST_MEASURED_START_MS);
+  });
 
   test('BUG-34: startWorker, with the real Graphile Worker and no stop signal, rejects once CONNECT_TIMEOUT_MS have passed since it asked for its first connection, and not before', async () => {
     const database = await listeningSilentPostgres();
