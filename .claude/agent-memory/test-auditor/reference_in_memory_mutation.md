@@ -144,3 +144,5 @@ the split regex removed split's own paren, a syntax error that "killed" 159 test
 (`'=;&|()<'` -> `'=;&|)<'`). The session's own D-120 guard refuses any command (a grep, a heredoc into memory) holding a write verb or a
 redirect next to a protected token, and the bare dot-claude folder name counts now; build such strings with `'.cl' + 'aude'` or say
 "dot-claude". To wait on a background run without sleep: `timeout 300 tail -n 0 -f <task output> | grep -m N -E '^(KILLED|SURVIVED)'`.
+
+**No Write tool (BUG-34, 2026-10-18):** pipe the harness as a quoted heredoc to `node --input-type=module -`, no `>` anywhere (use `function`, swap comparisons). The Vite transform can also APPEND a probe test to a test file (return code + extra), so a proposed missing test can be shown to pass on HEAD and kill a fault without writing it.
