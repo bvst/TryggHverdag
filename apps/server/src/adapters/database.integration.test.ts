@@ -384,6 +384,69 @@ describe('LOST-02: a stalled transaction is ended, and a heartbeat never waits f
   }, 30_000);
 });
 
+// ---------------------------------------------------------------------------
+// BUG-51 (D-132), review loop 1 (test-auditor, safety-reviewer): the unit
+// tests show statement_timeout in each connection's startup, to a fake that
+// ignores it. Only a real PostgreSQL shows it applied: a statement that runs
+// longer is cancelled with SQLSTATE 57014, and the connection stays usable,
+// which is what lets QUERY_TIMEOUT_MS, longer, fire only when the database has
+// stopped answering. The read-back proves it at deploy; this proves it here.
+// ---------------------------------------------------------------------------
+
+/**
+ * How long the cancelled statement would sleep if nothing cancelled it, in
+ * seconds: past the limit and its margin, so a statement that ran to its end
+ * fails the timing below as well, and well inside QUERY_TIMEOUT_MS (15 s), so
+ * the client's own limit never comes first.
+ */
+const SLEEP_PAST_THE_LIMIT_S = (2 * (SHORT_LIMIT_MS + MARGIN_MS)) / 1_000;
+
+describe('BUG-51: a statement that runs too long is cancelled, and its connection is kept', () => {
+  test('BUG-51: a statement on a pool made as the worker makes it, its statement_timeout set short, that runs longer is cancelled by PostgreSQL within the limit plus a margin with SQLSTATE 57014; the same backend, by pg_backend_pid(), answers the next query, and no database_error line is written', async () => {
+    const log = fakeLog();
+    const limited = createPool(connectionUri(), POOL_SIZE.worker, {
+      name: 'worker',
+      log,
+      idleInTransactionMs: IDLE_IN_TRANSACTION_LIMIT_MS,
+      statementTimeoutMs: SHORT_LIMIT_MS,
+    });
+    let inForce: string | undefined;
+    let pidBefore: number | undefined;
+    let pidAfter: number | undefined;
+    let cancelled: unknown;
+    let tookMs: number | undefined;
+    try {
+      const client = await limited.connect();
+      try {
+        inForce = (await client.query<{ statement_timeout: string }>('show statement_timeout'))
+          .rows[0]?.statement_timeout;
+        pidBefore = (await client.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]
+          ?.pid;
+        const started = performance.now();
+        cancelled = await client.query('select pg_sleep($1)', [SLEEP_PAST_THE_LIMIT_S]).then(
+          () => 'answered',
+          (error: unknown) => error,
+        );
+        tookMs = performance.now() - started;
+        pidAfter = (await client.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]
+          ?.pid;
+      } finally {
+        client.release();
+      }
+    } finally {
+      await endTestPool(limited);
+    }
+
+    expect(inForce).toBe(`${String(SHORT_LIMIT_MS)}ms`);
+    expect(cancelled).toBeInstanceOf(Error);
+    expect((cancelled as { code?: unknown }).code).toBe('57014');
+    expect(tookMs).toBeLessThan(SHORT_LIMIT_MS + MARGIN_MS);
+    expect(pidBefore).toBeTypeOf('number');
+    expect(pidAfter).toBe(pidBefore);
+    expect(log.events).toEqual([]);
+  }, 30_000);
+});
+
 describe('LOST-02: a connection’s error is one line, never a crash', () => {
   test('LOST-02-AC18: pg_terminate_backend on an idle connection of a pool made with a name and a log gives one database_error line with 57P01, and the pool serves the next query', async () => {
     const log = fakeLog();

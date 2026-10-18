@@ -481,6 +481,10 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
   const limitLines = (written: string) =>
     written.split('\n').filter((line) => /\bsession limits?\b/.test(line));
 
+  /** The API's line for a statement_timeout read back as 0 (BUG-51, D-132), word for word. */
+  const STATEMENT_TIMEOUT_DROPPED =
+    'api: session limit statement_timeout is 0ms, not 10000ms: a slow statement is cut off only by the query limit, which closes its connection.';
+
   /**
    * Starts the API over the fake server, waits for its read of pg_settings to
    * be answered and a moment more, asks for /v1/health, and stops it: what it
@@ -530,6 +534,10 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
   // RG-03 (BUG-51, D-132): a pooler that dropped the startup parameters
   // drops statement_timeout too, so it is 0 here as well, and its own line
   // joins the two. The two lines this test held are held as before.
+  //
+  // RG-03 (BUG-51, review loop 1, test-auditor's F22): statement_timeout's
+  // line was matched only up to its reason (`.+`), so a reworded reason
+  // passed. It is now pinned word for word, as the idle limit's is.
   test('LOST-02-AC17: when the database reports a limit other than the one asked for, as a pooler that dropped the startup parameters would, the API writes the fixed mismatch line for each such setting, and still starts and answers /v1/health', async () => {
     const dropped: Record<string, FakePgSetting> = {
       idle_in_transaction_session_timeout: { setting: '0', unit: 'ms' },
@@ -542,11 +550,7 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
 
     const lines = limitLines(written);
     expect(lines).toHaveLength(3);
-    expect(
-      lines.filter((line) =>
-        /^api: session limit statement_timeout is 0ms, not 10000ms: .+\.$/.test(line),
-      ),
-    ).toHaveLength(1);
+    expect(lines.filter((line) => line === STATEMENT_TIMEOUT_DROPPED)).toHaveLength(1);
     expect(lines).toContain(
       'api: session limit idle_in_transaction_session_timeout is 0ms, not 10000ms: a stalled transaction will not be ended.',
     );
@@ -892,6 +896,9 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
     }
   });
 
+  // RG-03 (BUG-51, review loop 1, test-auditor's F22): the line was matched
+  // only up to its reason (`.+`), so a reworded reason passed. It is now
+  // pinned word for word.
   test('BUG-51: when the database reports a statement_timeout other than 10 000 ms, as a pooler that dropped it would, the API writes one line saying so, naming statement_timeout, and still answers /v1/health', async () => {
     const { status, written } = await startedReadingBack(
       (query) =>
@@ -901,20 +908,36 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
         }) ?? healthDatabase(query),
     );
 
-    expect(limitLines(written)).toEqual([
-      expect.stringMatching(/^api: session limit statement_timeout is 0ms, not 10000ms: .+\.$/),
-    ]);
+    expect(limitLines(written)).toEqual([STATEMENT_TIMEOUT_DROPPED]);
     expect(status).toBe(200);
   });
 
+  // RG-03 (BUG-51, review loop 1, test-auditor and privacy-security-reviewer):
+  // the comment here said each lost connection is a database_error line on
+  // stdout. It is not: D-132 (amended again) has the limit end a connection
+  // with no such line, by choice, and the 500 is what says it. So what the API
+  // writes, to stdout and to stderr, is now kept rather than dropped, and two
+  // checks are added: no database_error line, and nothing written holds the
+  // connection URL or the password marker the hung server's URL now carries
+  // (it never asks for it). No assertion this test held is changed.
   test('BUG-51: a /v1/health whose read the database never answers is a 500 once QUERY_TIMEOUT_MS have passed, and not before; the connections it and the read-back hung on are closed, and the next /v1/health, with the database answering again, gets a new connection and a 200', async () => {
     let answering = false;
-    const database = await listeningHungPostgres((query) =>
-      answering ? healthDatabase(query) : NEVER_ANSWERED,
+    const marker = syntheticCredential();
+    const database = await listeningHungPostgres(
+      (query) => (answering ? healthDatabase(query) : NEVER_ANSWERED),
+      { password: marker },
     );
-    // Each lost connection is a database_error line on stdout: kept out of
-    // the run's output.
-    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    // Everything the API writes is kept, out of the run's output.
+    const toStdout: string[] = [];
+    const toStderr: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      toStdout.push(String(chunk));
+      return true;
+    });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      toStderr.push(String(chunk));
+      return true;
+    });
     let api: Awaited<ReturnType<typeof startApiProcess>> | undefined;
     try {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -953,7 +976,16 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
         await settledWithin(api.stop(), HANG_CEILING_MS);
       }
       stdout.mockRestore();
+      stderr.mockRestore();
     }
+
+    expect(
+      eventLines(toStdout.join(''), 'database_error'),
+      'the limit ending a connection wrote a database_error line',
+    ).toEqual([]);
+    expect(markersIn(`${toStdout.join('')}\n${toStderr.join('')}`, [marker, database.url])).toEqual(
+      [],
+    );
   });
 
   test('BUG-51: stop() finishes once QUERY_TIMEOUT_MS have passed, and not before, when the database never answers the read-back of the session limits: one line says they could not be read, and every connection is closed', async () => {

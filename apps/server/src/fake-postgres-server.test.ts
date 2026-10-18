@@ -430,7 +430,7 @@ export type HungPostgresHandler = (
 ) => FakePostgresAnswer | typeof NEVER_ANSWERED;
 
 export interface ListeningHungPostgres {
-  /** Where to connect: the loopback address and the user `synthetic`. */
+  /** Where to connect: the loopback address, the user `synthetic`, and the password if one was given. */
   url: string;
   /** Every connection made, in order: its startup parameters, and every query it sent, answered or not. */
   connections: () => readonly FakePostgresConnection[];
@@ -500,9 +500,14 @@ function startupAnswer(processId: number): Buffer {
  * A handler that answers once the test says so is a database that came
  * back: a connection made after that is answered, and one that hangs stays
  * hung, so a pool that hands a hung connection out again is caught.
+ *
+ * BUG-51, review loop 1 (privacy-security-reviewer): a password given is put
+ * in the URL, as the two servers above put it, and is never asked for, so a
+ * test can look for it in what a process wrote while the limit cut a query off.
  */
 export async function listeningHungPostgres(
   handler: HungPostgresHandler = () => NEVER_ANSWERED,
+  { password }: { password?: string } = {},
 ): Promise<ListeningHungPostgres> {
   const hung: FakePostgresConnection[] = [];
   const waiting: { count: number; resolve: () => void }[] = [];
@@ -586,8 +591,9 @@ export async function listeningHungPostgres(
     server.listen(0, '127.0.0.1', resolve);
   });
   const { port } = server.address() as AddressInfo;
+  const credentials = password === undefined ? 'synthetic' : `synthetic:${password}`;
   return {
-    url: `postgres://synthetic@127.0.0.1:${String(port)}/synthetic`,
+    url: `postgres://${credentials}@127.0.0.1:${String(port)}/synthetic`,
     connections: () => [...database.connections],
     hung: () => [...hung],
     hanging: (count = 1) =>
@@ -965,6 +971,33 @@ describe('the fake PostgreSQL server on a port', () => {
     } finally {
       session.destroy();
       cancel?.destroy();
+      await server.close();
+    }
+  });
+
+  // BUG-51, review loop 1 (privacy-security-reviewer): the hung server's
+  // password, as the first server's above. Were it to need the password, or to
+  // drop it from the URL, a test that found no marker in what was written
+  // would prove nothing.
+  test('a password given to the hung server is in its URL and nowhere on the wire: it never asks for one, and a real pg client connects and is answered', async () => {
+    const marker = syntheticCredential();
+    const server = await listeningHungPostgres(() => ({ columns: ['answer'], rows: [['42']] }), {
+      password: marker,
+    });
+    const client = new pg.Client({ connectionString: server.url });
+    client.on('error', () => undefined);
+    try {
+      await client.connect();
+      expect((await client.query<{ answer: string }>('select 42 as answer')).rows).toEqual([
+        { answer: '42' },
+      ]);
+
+      expect(server.url).toContain(`:${marker}@`);
+      expect(
+        JSON.stringify(server.connections().map(({ parameters }) => parameters)),
+      ).not.toContain(marker);
+    } finally {
+      await client.end().catch(() => undefined);
       await server.close();
     }
   });

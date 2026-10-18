@@ -9,11 +9,12 @@
 // A pool that exhausts the ceiling takes the watchdog with it, and the watchdog
 // is what turns a silent phone into an alert. So the arithmetic is a test.
 import { WORKER_STALE_AFTER_MS } from '@trygghverdag/contracts';
-import { fakeLog } from '@trygghverdag/test-kit';
+import { fakeLog, syntheticCredential, syntheticUuid } from '@trygghverdag/test-kit';
 import { sql } from 'drizzle-orm';
 import { setTimeout as realDelay } from 'node:timers/promises';
-import type { PoolClient } from 'pg';
+import type { PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { describe, expect, test, vi } from 'vitest';
+import { sqlstateOf } from '../domain/sqlstate.ts';
 import {
   IDLE_IN_TRANSACTION_LIMIT_MS,
   LOCK_WAIT_LIMIT_MS,
@@ -112,12 +113,28 @@ describe('the pool listeners, where each pool is made', () => {
 describe('the session limits a pool is made with', () => {
   const SYNTHETIC_URL = 'postgres://synthetic@127.0.0.1:1/synthetic';
 
-  test('LOST-02-AC17: createPool refuses an idleInTransactionMs or lockTimeoutMs that is not a whole number from 1 to 2147483647 (0, -1, 0.5, 1.5, NaN, 2147483648), naming the option, and takes 1 and 2147483647', async () => {
+  // RG-03 (BUG-51, review loop 1, test-auditor's F18): D-132 adds a third
+  // session limit, statementTimeoutMs, which createPool checks as it checks
+  // the two before it, and nothing tested that check: removing it passed
+  // every test. So the loop now runs over all three options, and the name
+  // says so. Every value and assertion it held for the two is held as before.
+  test('LOST-02-AC17: createPool refuses an idleInTransactionMs, lockTimeoutMs or statementTimeoutMs (BUG-51) that is not a whole number from 1 to 2147483647 (0, -1, 0.5, 1.5, NaN, 2147483648), naming the option, and takes 1 and 2147483647', async () => {
     const made: ReturnType<typeof createPool>[] = [];
-    const limit = (option: 'idleInTransactionMs' | 'lockTimeoutMs', value: number) =>
-      option === 'idleInTransactionMs' ? { idleInTransactionMs: value } : { lockTimeoutMs: value };
+    const limit = (
+      option: 'idleInTransactionMs' | 'lockTimeoutMs' | 'statementTimeoutMs',
+      value: number,
+    ): PoolOptions =>
+      option === 'idleInTransactionMs'
+        ? { idleInTransactionMs: value }
+        : option === 'lockTimeoutMs'
+          ? { lockTimeoutMs: value }
+          : { statementTimeoutMs: value };
     try {
-      for (const option of ['idleInTransactionMs', 'lockTimeoutMs'] as const) {
+      for (const option of [
+        'idleInTransactionMs',
+        'lockTimeoutMs',
+        'statementTimeoutMs',
+      ] as const) {
         // 1.5 is there for the whole-number rule alone: it is inside the range.
         for (const value of [0, -1, 0.5, 1.5, Number.NaN, 2_147_483_648]) {
           expect(
@@ -383,6 +400,41 @@ async function endWithin(pool: ReturnType<typeof createPool> | undefined): Promi
     await settledWithin(pool.end(), HANG_CEILING_MS);
   }
 }
+
+/** What a query settled with: its rows, or what it rejected with. */
+function rowsOrError<T extends QueryResultRow>(query: Promise<QueryResult<T>>): Promise<unknown> {
+  return query.then(
+    (result) => result.rows,
+    (error: unknown) => error,
+  );
+}
+
+/** A client from pool.connect(), or a throw when none came back within HANG_CEILING_MS. */
+async function checkedOut(pool: ReturnType<typeof createPool>): Promise<PoolClient> {
+  const client = await settledWithin(pool.connect(), HANG_CEILING_MS);
+  if (client === STILL_WAITING) {
+    throw new Error('no client came back from pool.connect()');
+  }
+  return client;
+}
+
+/**
+ * A client's query method as pg receives it, any argument at all. A call
+ * through it keeps the client as `this`, as a call made in the code would.
+ */
+interface AnyQuery {
+  query: (...args: unknown[]) => unknown;
+}
+
+/** The rows pg gives for ANSWER. */
+const ANSWERED = [{ answer: '42' }];
+
+/**
+ * When safety-reviewer's probe on BUG-51 checks its client out again, after
+ * the query pg refused: before pg-pool closes an idle client (10 s), and
+ * before QUERY_TIMEOUT_MS.
+ */
+const REUSED_AFTER_MS = 8_000;
 
 describe('BUG-51: a process’s pool against a database that completes the startup and never answers a query', () => {
   /** How long a check that something has not happened yet waits, in real ms. */
@@ -711,6 +763,478 @@ describe('BUG-51: a process’s pool against a database that completes the start
         keepAlive.restore();
         await pool?.end();
         await database.close();
+      }
+    },
+  );
+
+  // BUG-51, review loop 1 (test-auditor, BLOCK): the limit's healthy side.
+  // Every test above starts from a database that never answers, so none ran
+  // a query that was answered and then waited past the limit. A limit never
+  // disarmed, disarmed on only one of pg's two ways of answering (pg-pool's
+  // pool.query takes a callback; a checked-out client's query returns a
+  // promise), or armed on each hand-out rather than on each query, would end
+  // every healthy connection QUERY_TIMEOUT_MS after it was used, Graphile
+  // Worker's LISTEN connection with it, and it passed every test above.
+  //
+  // Here the database answers. Each test runs one answered query, holds the
+  // client, lets 2 × QUERY_TIMEOUT_MS pass on the fake clock, and asks the same
+  // client again: it answers, on the one connection the pool made. The client
+  // is held, not left idle in the pool, while the time passes, because
+  // pg-pool closes a client left idle for 10 s (idleTimeoutMillis), which is
+  // not the limit. Each hand-out happens on the fake clock, so a limit armed
+  // per hand-out would fire too. These pass today and must still pass after.
+  test.each(processes)(
+    'BUG-51: guard: %s pool disarms the limit when pool.query is answered: the client that answered it, checked out and held for 2 × QUERY_TIMEOUT_MS, answers again on the same connection',
+    async (_which, name) => {
+      const database = await listeningFakePostgres(() => ANSWER);
+      let pool: ReturnType<typeof createPool> | undefined;
+      let held: PoolClient | undefined;
+      try {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        pool = createPool(database.url, 1, processPoolOptions(name));
+        expect(
+          await settledWithin(rowsOrError(pool.query('select 42 as answer')), HANG_CEILING_MS),
+        ).toEqual(ANSWERED);
+        held = await checkedOut(pool);
+
+        await vi.advanceTimersByTimeAsync(2 * QUERY_TIMEOUT_MS);
+        expect(
+          await settledWithin(rowsOrError(held.query('select 42 as answer')), HANG_CEILING_MS),
+          'a limit armed for a query that was answered ended its connection later',
+        ).toEqual(ANSWERED);
+        expect(database.connections()).toHaveLength(1);
+        expect(database.closed(), 'the connection was closed').toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+        held?.release();
+        await endWithin(pool);
+        await database.close();
+      }
+    },
+  );
+
+  test.each(processes)(
+    'BUG-51: guard: %s pool disarms the limit when a checked-out client’s query is answered: the client, held idle for 2 × QUERY_TIMEOUT_MS after it, as Graphile Worker holds its LISTEN connection, answers again on the same connection',
+    async (_which, name) => {
+      const database = await listeningFakePostgres(() => ANSWER);
+      let pool: ReturnType<typeof createPool> | undefined;
+      let held: PoolClient | undefined;
+      try {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        pool = createPool(database.url, 1, processPoolOptions(name));
+        held = await checkedOut(pool);
+        expect(
+          await settledWithin(rowsOrError(held.query('select 42 as answer')), HANG_CEILING_MS),
+        ).toEqual(ANSWERED);
+
+        await vi.advanceTimersByTimeAsync(2 * QUERY_TIMEOUT_MS);
+        expect(
+          await settledWithin(rowsOrError(held.query('select 42 as answer')), HANG_CEILING_MS),
+          'a limit armed for a query that was answered, or for the hand-out, ended the held connection',
+        ).toEqual(ANSWERED);
+        expect(database.connections()).toHaveLength(1);
+        expect(database.closed(), 'the connection was closed').toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+        held?.release();
+        await endWithin(pool);
+        await database.close();
+      }
+    },
+  );
+
+  // BUG-51, review loop 1 (code-reviewer, safety-reviewer; D-132 amended
+  // again): pg throws at once, before sending anything, for a null query
+  // (pg 8.23, client.js, query()). A limit armed before that throw is never
+  // disarmed, and QUERY_TIMEOUT_MS later it ends a client that is healthy. If
+  // the client is still held, its holder's next query fails. If it went back
+  // to the pool, it ends there unseen, and the next hand-out of it fails and
+  // its release is swallowed, so the pool loses that place for good:
+  // safety-reviewer's probe, the second test below, on a pool of one.
+  test.each(processes)(
+    'BUG-51: %s pool: a query pg refuses at once (a null query) on a checked-out client throws and leaves no limit behind: 2 × QUERY_TIMEOUT_MS later the client still answers, and once released the pool hands out a client that answers, on the same connection',
+    async (_which, name) => {
+      const database = await listeningFakePostgres(() => ANSWER);
+      let pool: ReturnType<typeof createPool> | undefined;
+      let held: PoolClient | undefined;
+      try {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        pool = createPool(database.url, 1, processPoolOptions(name));
+        held = await checkedOut(pool);
+        const client = held as unknown as AnyQuery;
+        expect(() => client.query(null)).toThrow(TypeError);
+
+        await vi.advanceTimersByTimeAsync(2 * QUERY_TIMEOUT_MS);
+        expect(
+          await settledWithin(rowsOrError(held.query('select 42 as answer')), HANG_CEILING_MS),
+          'a limit armed for the query pg refused ended the client later',
+        ).toEqual(ANSWERED);
+        held.release();
+        held = await checkedOut(pool);
+        expect(
+          await settledWithin(rowsOrError(held.query('select 42 as answer')), HANG_CEILING_MS),
+        ).toEqual(ANSWERED);
+        expect(database.connections()).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+        held?.release();
+        await endWithin(pool);
+        await database.close();
+      }
+    },
+  );
+
+  test.each(processes)(
+    'BUG-51: %s pool of one: a query pg refuses at once, on a client then released, reused 8 000 ms later and released again, leaves no limit behind: at QUERY_TIMEOUT_MS nothing ends the idle client, and pool.connect() then still gets a client that answers, on the same connection',
+    async (_which, name) => {
+      const database = await listeningFakePostgres(() => ANSWER);
+      let pool: ReturnType<typeof createPool> | undefined;
+      let held: PoolClient | undefined;
+      try {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        pool = createPool(database.url, 1, processPoolOptions(name));
+        const first = await checkedOut(pool);
+        expect(() => (first as unknown as AnyQuery).query(null)).toThrow(TypeError);
+        first.release();
+
+        // Reused before pg-pool's 10 s idle limit, which this hand-out resets.
+        await vi.advanceTimersByTimeAsync(REUSED_AFTER_MS);
+        const reused = await checkedOut(pool);
+        expect(reused, 'the pool of one made a new client rather than reuse its idle one').toBe(
+          first,
+        );
+        expect(
+          await settledWithin(rowsOrError(reused.query('select 42 as answer')), HANG_CEILING_MS),
+        ).toEqual(ANSWERED);
+        reused.release();
+
+        // QUERY_TIMEOUT_MS after the refused query, and 7 000 ms after the
+        // release, so pg-pool's own idle limit has not come yet.
+        await vi.advanceTimersByTimeAsync(QUERY_TIMEOUT_MS - REUSED_AFTER_MS);
+        await realDelay(NOT_YET_MS);
+        const closedAtTheLimit = database.closed().length;
+
+        const next = await settledWithin(pool.connect(), HANG_CEILING_MS);
+        expect(next, 'the pool of one had lost its place').not.toBe(STILL_WAITING);
+        if (next === STILL_WAITING) {
+          return;
+        }
+        held = next;
+        expect(
+          await settledWithin(rowsOrError(held.query('select 42 as answer')), HANG_CEILING_MS),
+          'the pool handed out a client a limit armed for the refused query had ended',
+        ).toEqual(ANSWERED);
+        expect(
+          closedAtTheLimit,
+          'a limit armed for the refused query closed the idle connection at QUERY_TIMEOUT_MS',
+        ).toBe(0);
+        expect(database.connections()).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+        held?.release();
+        await endWithin(pool);
+        await database.close();
+      }
+    },
+  );
+
+  // BUG-51, review loop 1 (safety-reviewer; D-132 amended again): a query
+  // config that carries its own `callback` gets no promise back from pg, and
+  // the limit could not see it settle, so it is refused, before anything is
+  // sent, as a submittable query is. None is sent on these pools.
+  test.each(processes)(
+    'BUG-51: %s pool refuses, with a TypeError, a query whose config carries its own callback, before anything is sent: the database receives no query, and 2 × QUERY_TIMEOUT_MS later the client still answers on the same connection',
+    async (_which, name) => {
+      const database = await listeningFakePostgres(() => ANSWER);
+      let pool: ReturnType<typeof createPool> | undefined;
+      let held: PoolClient | undefined;
+      try {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        pool = createPool(database.url, 1, processPoolOptions(name));
+        held = await checkedOut(pool);
+        let calledBack = false;
+        const withItsOwnCallback = {
+          text: 'select 42 as answer from refused',
+          callback: () => {
+            calledBack = true;
+          },
+        };
+        expect(
+          () => (held as unknown as AnyQuery).query(withItsOwnCallback),
+          'a query config with its own callback was not refused',
+        ).toThrow(TypeError);
+        await realDelay(NOT_YET_MS);
+        expect(
+          database.queries.map(({ text }) => text),
+          'the query was sent',
+        ).toEqual([]);
+        expect(calledBack).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(2 * QUERY_TIMEOUT_MS);
+        expect(
+          await settledWithin(rowsOrError(held.query('select 42 as answer')), HANG_CEILING_MS),
+          'a limit armed for the refused query ended the client later',
+        ).toEqual(ANSWERED);
+        expect(database.connections()).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+        held?.release();
+        await endWithin(pool);
+        await database.close();
+      }
+    },
+  );
+
+  // BUG-51, review loop 1 (test-auditor, safety-reviewer): the submittable
+  // refusal had no test. A submittable (a cursor or a stream) settles through
+  // methods of its own, which the limit cannot see; pg sends it by calling its
+  // submit(). Without the refusal, pg would take this one as its active query,
+  // and the client would answer nothing after it. Passes today.
+  test.each(processes)(
+    'BUG-51: guard: %s pool refuses a submittable query with a TypeError before anything is sent: its submit() is never called, the database receives no query, and 2 × QUERY_TIMEOUT_MS later the client still answers on the same connection',
+    async (_which, name) => {
+      const database = await listeningFakePostgres(() => ANSWER);
+      let pool: ReturnType<typeof createPool> | undefined;
+      let held: PoolClient | undefined;
+      try {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        pool = createPool(database.url, 1, processPoolOptions(name));
+        held = await checkedOut(pool);
+        let submitted = false;
+        const submittable = {
+          submit: () => {
+            submitted = true;
+          },
+        };
+        expect(
+          () => (held as unknown as AnyQuery).query(submittable),
+          'a submittable query was not refused',
+        ).toThrow(TypeError);
+        await realDelay(NOT_YET_MS);
+        expect(submitted, 'pg was handed the submittable and sent it').toBe(false);
+        expect(database.queries.map(({ text }) => text)).toEqual([]);
+
+        await vi.advanceTimersByTimeAsync(2 * QUERY_TIMEOUT_MS);
+        expect(
+          await settledWithin(rowsOrError(held.query('select 42 as answer')), HANG_CEILING_MS),
+          'the client no longer answered after the submittable',
+        ).toEqual(ANSWERED);
+        expect(database.connections()).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+        held?.release();
+        await endWithin(pool);
+        await database.close();
+      }
+    },
+  );
+
+  // BUG-51, review loop 1 (safety-reviewer; D-132 amended again): the limit's
+  // rejection carries code ETIMEDOUT. Graphile Worker 0.18 completes and fails
+  // a job with a call nobody awaits, and its retry wrapper retries only a few
+  // codes, ETIMEDOUT among them (dist/lib.js, RETRYABLE_ERROR_CODES): pg's
+  // plain "Connection terminated" there was an unhandled rejection, which
+  // ended the worker. Its message names the limit and holds nothing of the
+  // query, and sqlstateOf reads no SQLSTATE in it, so the lines that log one
+  // still say null. Each query below names a synthetic table and sends a
+  // synthetic parameter, so a message holding either is caught.
+  //
+  // Graphile's own retry over this rejection is not tested here:
+  // makeEnhancedWithPgClient and makeWithPgClientFromPool are not exported
+  // (graphile-worker 0.18's exports map holds dist/index.js alone), and
+  // makeWorkerUtils, which is, installs Graphile's schema first.
+
+  /** A query's text naming a synthetic table, and its synthetic parameter. */
+  function markedQuery(): { table: string; text: string; parameter: string } {
+    const table = `bug51_${syntheticUuid().replaceAll('-', '')}`;
+    return {
+      table,
+      text: `select $1::text as answer from ${table}`,
+      parameter: syntheticCredential(),
+    };
+  }
+
+  /**
+   * What `ask` settled with, on a pool of one over a database that never
+   * answers, once QUERY_TIMEOUT_MS have passed; or STILL_WAITING.
+   */
+  async function settledAtTheLimit(
+    name: 'api' | 'worker',
+    ask: (pool: ReturnType<typeof createPool>) => Promise<unknown>,
+  ): Promise<unknown> {
+    const database = await listeningHungPostgres();
+    let pool: ReturnType<typeof createPool> | undefined;
+    try {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      pool = createPool(database.url, 1, processPoolOptions(name));
+      const asked = ask(pool).then(
+        () => 'answered',
+        (error: unknown) => error,
+      );
+      expect(
+        await settledWithin(database.hanging(), HANG_CEILING_MS),
+        'the query never reached the database',
+      ).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(QUERY_TIMEOUT_MS);
+      vi.useRealTimers();
+      return await settledWithin(asked, HANG_CEILING_MS);
+    } finally {
+      vi.useRealTimers();
+      await database.close();
+      await endWithin(pool);
+    }
+  }
+
+  /** Holds what D-132 says of the limit's rejection. */
+  function expectTheLimitsRejection(
+    rejection: unknown,
+    { table, text, parameter }: ReturnType<typeof markedQuery>,
+  ): void {
+    expect(
+      rejection,
+      `the query was still waiting ${String(QUERY_TIMEOUT_MS)} ms after the database stopped answering it`,
+    ).toBeInstanceOf(Error);
+    const { code, message } = rejection as Error & { code?: unknown };
+    expect(
+      code,
+      'the limit’s rejection has no code ETIMEDOUT, which Graphile Worker’s retry wrapper retries',
+    ).toBe('ETIMEDOUT');
+    expect(message, 'the limit’s message does not name QUERY_TIMEOUT_MS').toMatch(
+      /\bQUERY_TIMEOUT_MS\b/,
+    );
+    expect(message).not.toContain(text);
+    expect(message).not.toContain(table);
+    expect(message).not.toContain(parameter);
+    expect(sqlstateOf(rejection)).toBeNull();
+  }
+
+  test.each(processes)(
+    'BUG-51: %s pool: pool.query given up at QUERY_TIMEOUT_MS rejects with code ETIMEDOUT, which Graphile Worker retries, and a message that names QUERY_TIMEOUT_MS and holds neither the SQL nor its parameter; sqlstateOf reads no SQLSTATE in it',
+    async (_which, name) => {
+      const marked = markedQuery();
+      const rejection = await settledAtTheLimit(name, (pool) =>
+        pool.query(marked.text, [marked.parameter]),
+      );
+
+      expectTheLimitsRejection(rejection, marked);
+    },
+  );
+
+  test.each(processes)(
+    'BUG-51: %s pool: a checked-out client’s query, given up at QUERY_TIMEOUT_MS, rejects with code ETIMEDOUT, which Graphile Worker retries, and a message that names QUERY_TIMEOUT_MS and holds neither the SQL nor its parameter; sqlstateOf reads no SQLSTATE in it',
+    async (_which, name) => {
+      const marked = markedQuery();
+      const rejection = await settledAtTheLimit(name, async (pool) => {
+        // As Graphile Worker's withPgClient: released in a `finally`.
+        const client = await pool.connect();
+        try {
+          return await client.query(marked.text, [marked.parameter]);
+        } finally {
+          client.release();
+        }
+      });
+
+      expectTheLimitsRejection(rejection, marked);
+    },
+  );
+
+  // Drizzle wraps what pg rejects with in a DrizzleQueryError, whose own
+  // message holds the SQL and its parameters (drizzle-orm 0.45.3), and which
+  // carries pg's rejection as its cause. Every caller logs only sqlstateOf of
+  // it (privacy-security-reviewer), so the cause is what is held here.
+  test.each(processes)(
+    'BUG-51: %s pool: a Drizzle query given up at QUERY_TIMEOUT_MS rejects with the limit’s rejection as its cause: code ETIMEDOUT, a message that names QUERY_TIMEOUT_MS and holds neither the SQL nor its parameter; sqlstateOf reads no SQLSTATE in the whole chain',
+    async (_which, name) => {
+      const marked = markedQuery();
+      const rejection = await settledAtTheLimit(name, (pool) =>
+        createDatabase(pool).execute(
+          sql`select ${marked.parameter}::text as answer from ${sql.raw(marked.table)}`,
+        ),
+      );
+
+      expect(rejection).toBeInstanceOf(Error);
+      expect(sqlstateOf(rejection)).toBeNull();
+      expectTheLimitsRejection((rejection as { cause?: unknown }).cause, marked);
+    },
+  );
+
+  // BUG-51, review loop 1 (safety-reviewer; D-132 amended again): only the
+  // given-up hand-out's own release is swallowed. A swallow kept anywhere
+  // wider than that one client (on the pool, or for the module) would leave
+  // the next client's release doing nothing: its place lost, and a double
+  // release unseen. Passes today: the swallow is the given-up client's own.
+  test.each(processes)(
+    'BUG-51: guard: %s pool: after the limit gives up on one client, whose holder’s release then does nothing, a different client the pool hands out later is released normally, back to the pool, and a second release of it still throws pg-pool’s double-release error',
+    async (_which, name) => {
+      let answering = false;
+      const database = await listeningHungPostgres(() => (answering ? ANSWER : NEVER_ANSWERED));
+      let pool: ReturnType<typeof createPool> | undefined;
+      let held: PoolClient | undefined;
+      try {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        pool = createPool(database.url, 1, processPoolOptions(name));
+        const givenUp = await checkedOut(pool);
+        const hung = rowsOrError(givenUp.query('select 1'));
+        expect(await settledWithin(database.hanging(), HANG_CEILING_MS)).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(QUERY_TIMEOUT_MS);
+        vi.useRealTimers();
+        expect(await settledWithin(hung, HANG_CEILING_MS)).toBeInstanceOf(Error);
+        expect(() => {
+          givenUp.release();
+        }, 'the given-up client’s release reached pg-pool').not.toThrow();
+
+        answering = true;
+        const later = await checkedOut(pool);
+        held = later;
+        expect(later).not.toBe(givenUp);
+        expect(
+          await settledWithin(rowsOrError(later.query('select 42 as answer')), HANG_CEILING_MS),
+        ).toEqual(ANSWERED);
+        later.release();
+        held = undefined;
+        expect(pool.idleCount, 'the later client’s release did not give it back').toBe(1);
+        expect(() => {
+          later.release();
+        }).toThrow('Release called on client which has already been released to the pool.');
+        held = await checkedOut(pool);
+        expect(held, 'the pool did not hand the released client out again').toBe(later);
+      } finally {
+        vi.useRealTimers();
+        held?.release();
+        await database.close();
+        await endWithin(pool);
+      }
+    },
+  );
+
+  // BUG-51, review loop 1 (test-auditor; D-132 amended again): no
+  // database_error line when the limit ends a connection, by choice. pg raises
+  // no `error` for a client it was asked to end, and the query's caller fails
+  // loudly instead. A limit that destroyed the socket with an error, or
+  // emitted one, would write a line for each give-up. Passes today.
+  test.each(processes)(
+    'BUG-51: guard: %s pool, made with a log, writes nothing to it when the limit ends a connection: the query rejects and its connection closes, with no database_error line',
+    async (_which, name) => {
+      const database = await listeningHungPostgres();
+      const log = fakeLog();
+      let pool: ReturnType<typeof createPool> | undefined;
+      try {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        pool = createPool(database.url, 1, { ...processPoolOptions(name), log });
+        const query = rowsOrError(pool.query('select 1'));
+        expect(await settledWithin(database.hanging(), HANG_CEILING_MS)).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(QUERY_TIMEOUT_MS);
+        vi.useRealTimers();
+        expect(await settledWithin(query, HANG_CEILING_MS)).toBeInstanceOf(Error);
+        expect(await eventually(() => database.closed().length === 1)).toBe(true);
+        // A line written a moment late is still a line.
+        await realDelay(NOT_YET_MS);
+
+        expect(log.events).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+        await database.close();
+        await endWithin(pool);
       }
     },
   );

@@ -2877,6 +2877,10 @@ const STATEMENT_AS_ASKED: Record<string, FakePgSetting> = {
 const limitLines = (written: string[]) =>
   linesOf(written).filter((line) => /\bsession limits?\b/.test(line));
 
+/** The worker's line for a statement_timeout read back as 0 (BUG-51, D-132), word for word. */
+const STATEMENT_TIMEOUT_DROPPED =
+  'worker: session limit statement_timeout is 0ms, not 10000ms: a slow statement is cut off only by the query limit, which closes its connection.';
+
 /**
  * The worker process over the fake PostgreSQL server, answering the start-up
  * read of pg_settings through `settings`, with loops that count their runs.
@@ -3103,6 +3107,10 @@ describe('SEC-03 and LOST-02: the worker reads its session limit back at start (
   // RG-03 (BUG-51, D-132): a pooler that dropped the startup parameters
   // drops statement_timeout too, so it is 0 here as well, and its own line
   // follows the idle limit's. The idle limit's line is held as before.
+  //
+  // RG-03 (BUG-51, review loop 1, test-auditor's F22): statement_timeout's
+  // line was matched only up to its reason (`.+`), so a reworded reason
+  // passed. It is now pinned word for word, as the idle limit's is.
   test('LOST-02-AC17: when the database reports an idle limit other than the one asked for, as a pooler that dropped the startup parameters would, the worker writes the fixed mismatch line, and still sweeps', async () => {
     const { written, watchdog } = await workerReadingBack(
       (query) =>
@@ -3114,7 +3122,7 @@ describe('SEC-03 and LOST-02: the worker reads its session limit back at start (
 
     expect(limitLines(written)).toEqual([
       'worker: session limit idle_in_transaction_session_timeout is 0ms, not 10000ms: a stalled transaction will not be ended.',
-      expect.stringMatching(/^worker: session limit statement_timeout is 0ms, not 10000ms: .+\.$/),
+      STATEMENT_TIMEOUT_DROPPED,
     ]);
     expect(watchdog.count).toBeGreaterThan(0);
   });
@@ -3264,6 +3272,9 @@ describe('BUG-51: the worker against a database that completes the startup and n
     }
   });
 
+  // RG-03 (BUG-51, review loop 1, test-auditor's F22): the line was matched
+  // only up to its reason (`.+`), so a reworded reason passed. It is now
+  // pinned word for word.
   test('BUG-51: when the database reports a statement_timeout other than 10 000 ms, as a pooler that dropped it would, the worker writes one line saying so, naming statement_timeout, and still sweeps', async () => {
     const { written, watchdog } = await workerReadingBack(
       (query) =>
@@ -3273,9 +3284,7 @@ describe('BUG-51: the worker against a database that completes the startup and n
         }) ?? quietDatabase(query),
     );
 
-    expect(limitLines(written)).toEqual([
-      expect.stringMatching(/^worker: session limit statement_timeout is 0ms, not 10000ms: .+\.$/),
-    ]);
+    expect(limitLines(written)).toEqual([STATEMENT_TIMEOUT_DROPPED]);
     expect(watchdog.count).toBeGreaterThan(0);
   });
 
@@ -3352,11 +3361,20 @@ describe('BUG-51: the worker against a database that completes the startup and n
     }
   });
 
+  // RG-03 (BUG-51, review loop 1, privacy-security-reviewer): the hung
+  // server's URL now carries a password marker, which it never asks for, and
+  // the worker's writer keeps what it is given rather than dropping it, and
+  // stdout and stderr are kept for the test's length. One check is added:
+  // nothing the worker wrote, logged or printed holds the marker or the URL.
+  // No assertion this test held is changed.
   test('BUG-51: a sweep over the worker’s pool whose read the database never answers ends with ok: false once QUERY_TIMEOUT_MS have passed, and not before, with one watchdog_failed line for its read; the next sweep runs WATCHDOG_INTERVAL_MS later on a new connection and, with the database answering again, succeeds and records the beat', async () => {
     let answering = false;
-    const database = await listeningHungPostgres((query) =>
-      answering ? emptyButTheClock(query) : NEVER_ANSWERED,
+    const marker = syntheticCredential();
+    const database = await listeningHungPostgres(
+      (query) => (answering ? emptyButTheClock(query) : NEVER_ANSWERED),
+      { password: marker },
     );
+    const written: string[] = [];
     const runner = recordingRunner();
     const log = fakeLog();
     const loops = quietLoops();
@@ -3382,6 +3400,15 @@ describe('BUG-51: the worker against a database that completes the startup and n
       },
     };
     let worker: Awaited<ReturnType<typeof startWorker>> | undefined;
+    const printed: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      printed.push(String(chunk));
+      return true;
+    });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      printed.push(String(chunk));
+      return true;
+    });
     try {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       worker = await startWorker(database.url, runner.run, {
@@ -3389,7 +3416,9 @@ describe('BUG-51: the worker against a database that completes the startup and n
         sender: loops.sender,
         smsSender: loops.smsSender,
         log,
-        write: () => undefined,
+        write: (text) => {
+          written.push(text);
+        },
       });
       expect(
         await settledWithin(database.hanging(), HANG_CEILING_MS),
@@ -3436,7 +3465,16 @@ describe('BUG-51: the worker against a database that completes the startup and n
       if (worker !== undefined) {
         await settledWithin(worker.stop(), HANG_CEILING_MS);
       }
+      stdout.mockRestore();
+      stderr.mockRestore();
     }
+
+    expect(
+      markersIn([...written, ...printed, JSON.stringify(log.events)].join('\n'), [
+        marker,
+        database.url,
+      ]),
+    ).toEqual([]);
   });
 
   test('BUG-51: stop() finishes once QUERY_TIMEOUT_MS have passed, and not before, when the database never answers the read-back of the session limits: one line says they could not be read, and the pool is ended', async () => {
