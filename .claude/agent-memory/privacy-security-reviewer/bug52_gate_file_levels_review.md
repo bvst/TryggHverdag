@@ -114,3 +114,24 @@ named export -> "at scripts/gate-file.mjs:20" (from error.stack's first line).
 - Exit codes in probes: with `printf | timeout node | cut | head`, the hook's status is
   PIPESTATUS[1], not [2]; the first loop-3 run read cut's 0. Simpler: send the hook's output
   to /dev/null and read $?.
+
+**Loop 4 (head ae082f5, 2026-10-19), PASS, Notes only.** Option (a): the hook loads no repo
+code (literal GATE_FILE_LIMIT_MS = 170_000, test pins it equal to the gate's export); diff
+against 5ee115c is the constant plus comments. probe4 with a scratch hook whose limit is sed'ed
+to 5_000: syntax error (gate-file.mjs and vitest.shared.mjs), throw 42, unsettled TLA -> exit 2
+"Checks failed"; live-timer TLA and `while (true) {}` -> exit 2 "spawnSync pnpm ETIMEDOUT"
+after 5 s; README.md -> 0.
+- **Orphans (pre-existing, confirmed):** spawnSync's timeout SIGTERMs only pnpm; the
+  `node scripts/gate-file.mjs` child is reparented to PID 1 and keeps running (a busy loop
+  spins forever). One was still alive 2 h after my loop-3 run of the 5ee115c hook, which proves
+  it predates the branch. Find with `ps -eo pid,ppid,etimes,args | grep "[n]ode scripts/gate-file"`
+  and kill them after probing. In practice the gate's own step timers (150 s) end first, so only
+  a gate that hangs itself orphans. Fix: spawn detached + process.kill(-pid) in the hook.
+  The hook tests' fake pnpm does `exec node load-gate.mjs`, so they leave no orphans.
+- **Another agent may be running the same vitest file at the same time** (test-auditor): a
+  ps listing then shows their node and bash processes. Do not kill by pattern beyond your own
+  scratch path.
+- guard-bash quote splice (`".clau""de"`): already listed as open in hook_gate_bypass_review.md
+  since BUG-36 loop 1 (2026-10-08); test-author actually USED it in a throwaway worktree.
+  Severity view: low-medium, session-local (CODEOWNERS + CI gate merges), same class as the
+  other tokenizer gaps; queue them together with a shell-word lexer, not one-off regexes.
