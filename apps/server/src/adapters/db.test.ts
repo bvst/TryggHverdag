@@ -436,6 +436,13 @@ const ANSWERED = [{ answer: '42' }];
  */
 const REUSED_AFTER_MS = 8_000;
 
+/**
+ * When a second query is sent to a client whose first hangs: before the
+ * first's limit comes, so the second's own limit is still 5 000 ms away when
+ * the first's ends the client.
+ */
+const QUEUED_AFTER_MS = 5_000;
+
 describe('BUG-51: a process’s pool against a database that completes the startup and never answers a query', () => {
   /** How long a check that something has not happened yet waits, in real ms. */
   const NOT_YET_MS = 100;
@@ -1235,6 +1242,155 @@ describe('BUG-51: a process’s pool against a database that completes the start
         vi.useRealTimers();
         await database.close();
         await endWithin(pool);
+      }
+    },
+  );
+
+  // BUG-51, review loop 2 (the implementer's probes): three edges of how the
+  // limit reads a query, which nothing else here reaches. Each passes today.
+  //
+  // pg writes the callback it is given onto the query config it was given
+  // (pg 8.23, utils.js, normalizeQueryConfig), and pg-pool's pool.query always
+  // gives one. So a config sent through pool.query a second time already
+  // carries the first call's callback, though this call answers through its
+  // own callback argument. drizzle-orm sends one config object for each run of
+  // a prepared query. Refusing every config with a callback, whatever the
+  // arguments, would refuse that second send.
+  test.each(processes)(
+    'BUG-51: guard: %s pool answers the same query config sent twice through pool.query, both times, though pg writes the first call’s callback onto it; and neither leaves a limit behind: the client, held for 2 × QUERY_TIMEOUT_MS after, answers on the same connection',
+    async (_which, name) => {
+      const database = await listeningFakePostgres(() => ANSWER);
+      let pool: ReturnType<typeof createPool> | undefined;
+      let held: PoolClient | undefined;
+      try {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        pool = createPool(database.url, 1, processPoolOptions(name));
+        const config: { text: string; callback?: unknown } = { text: 'select 42 as answer' };
+        expect(await settledWithin(rowsOrError(pool.query(config)), HANG_CEILING_MS)).toEqual(
+          ANSWERED,
+        );
+        expect(
+          typeof config.callback,
+          'pg no longer writes pg-pool’s callback onto the config, so this test no longer reaches the case',
+        ).toBe('function');
+        expect(
+          await settledWithin(rowsOrError(pool.query(config)), HANG_CEILING_MS),
+          'the config sent a second time was not answered',
+        ).toEqual(ANSWERED);
+
+        held = await checkedOut(pool);
+        await vi.advanceTimersByTimeAsync(2 * QUERY_TIMEOUT_MS);
+        expect(
+          await settledWithin(rowsOrError(held.query('select 42 as answer')), HANG_CEILING_MS),
+          'a limit armed for one of the two sends ended the connection later',
+        ).toEqual(ANSWERED);
+        expect(database.connections()).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+        held?.release();
+        await endWithin(pool);
+        await database.close();
+      }
+    },
+  );
+
+  // When the limit ends a client, every query pg had taken from it rejects:
+  // the one in flight, and any queued behind it on the same client, which pg
+  // had not sent yet. Each was cut off by the limit, so each rejects with
+  // ETIMEDOUT, and Graphile Worker retries it. The queued one here is sent
+  // 5 000 ms after the hung one, so its own limit has not come when the hung
+  // one's does: only the end reaches it. A query sent to the client after the
+  // end was never cut off by the limit; pg refuses it, and its error is pg's own.
+  test.each(processes)(
+    'BUG-51: guard: %s pool: when the limit gives up on a checked-out client, a query queued behind the hung one on that client, whose own limit has not come, also rejects with code ETIMEDOUT; a query sent to that client after the give-up rejects with pg’s own "Client was closed and is not queryable", with no code',
+    async (_which, name) => {
+      const database = await listeningHungPostgres();
+      let pool: ReturnType<typeof createPool> | undefined;
+      let held: PoolClient | undefined;
+      try {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        pool = createPool(database.url, 1, processPoolOptions(name));
+        held = await checkedOut(pool);
+        const hung = rowsOrError(held.query('select 1'));
+        expect(await settledWithin(database.hanging(), HANG_CEILING_MS)).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(QUEUED_AFTER_MS);
+        const queued = rowsOrError(held.query('select 2'));
+        await vi.advanceTimersByTimeAsync(QUERY_TIMEOUT_MS - QUEUED_AFTER_MS);
+        vi.useRealTimers();
+
+        const [hungFailure, queuedFailure] = [
+          await settledWithin(hung, HANG_CEILING_MS),
+          await settledWithin(queued, HANG_CEILING_MS),
+        ];
+        expect(
+          database.connections()[0]?.queries.map(({ text }) => text),
+          'the second query was sent, so it was not queued behind the hung one',
+        ).toEqual(['select 1']);
+        expect(hungFailure).toBeInstanceOf(Error);
+        expect((hungFailure as { code?: unknown }).code).toBe('ETIMEDOUT');
+        expect(queuedFailure, 'the queued query was still waiting').toBeInstanceOf(Error);
+        expect(
+          (queuedFailure as { code?: unknown }).code,
+          'the queued query the limit cut off did not reject with ETIMEDOUT',
+        ).toBe('ETIMEDOUT');
+
+        const afterTheEnd = await settledWithin(
+          rowsOrError(held.query('select 3')),
+          HANG_CEILING_MS,
+        );
+        expect(afterTheEnd).toBeInstanceOf(Error);
+        expect(
+          (afterTheEnd as { code?: unknown }).code,
+          'a query sent after the give-up was given the limit’s ETIMEDOUT',
+        ).toBeUndefined();
+        expect((afterTheEnd as Error).message).toBe('Client was closed and is not queryable');
+      } finally {
+        vi.useRealTimers();
+        held?.release();
+        await database.close();
+        await endWithin(pool);
+      }
+    },
+  );
+
+  // pg answers through a function given as a query's values when no callback
+  // follows it (pg 8.23, utils.js, normalizeQueryConfig), an undefined
+  // callback included. Read from the last argument alone, that undefined
+  // would hide it: the query would be answered with its limit still armed,
+  // and the limit would end the healthy client QUERY_TIMEOUT_MS later.
+  test.each(processes)(
+    'BUG-51: guard: %s pool clears the limit of a query whose callback is given as its values, with an undefined callback after it (client.query(text, callback, undefined)): it is answered, and 2 × QUERY_TIMEOUT_MS later the client still answers on the same connection',
+    async (_which, name) => {
+      const database = await listeningFakePostgres(() => ANSWER);
+      let pool: ReturnType<typeof createPool> | undefined;
+      let held: PoolClient | undefined;
+      try {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        pool = createPool(database.url, 1, processPoolOptions(name));
+        held = await checkedOut(pool);
+        const client = held as unknown as AnyQuery;
+        const answered = new Promise<unknown>((resolve) => {
+          client.query(
+            'select 42 as answer',
+            (error: unknown, result?: { rows: unknown }) => {
+              resolve(error ?? result?.rows);
+            },
+            undefined,
+          );
+        });
+        expect(await settledWithin(answered, HANG_CEILING_MS)).toEqual(ANSWERED);
+
+        await vi.advanceTimersByTimeAsync(2 * QUERY_TIMEOUT_MS);
+        expect(
+          await settledWithin(rowsOrError(held.query('select 42 as answer')), HANG_CEILING_MS),
+          'a limit armed for the query answered through its values ended the client later',
+        ).toEqual(ANSWERED);
+        expect(database.connections()).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+        held?.release();
+        await endWithin(pool);
+        await database.close();
       }
     },
   );
