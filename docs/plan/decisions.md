@@ -5487,6 +5487,15 @@ any other path is work, not a candidate for the same treatment.
     no longer ends the worker. Only a hang that outlasts every retry, hours
     long, still does, loudly. `sqlstateOf` reads no SQLSTATE in ETIMEDOUT, so
     the lines that log one still say null.
+  - **Graphile's job fetch now backs off too.** `withRetries` also wraps
+    fetching jobs, failing them, resetting locks and reading queue names.
+    Before, a failed fetch was retried at the next poll, every 2 s. Now one
+    call backs off from 3 s by 1.5 times each attempt, capped at 120 s, with
+    jitter. After a hang of about 8 minutes or more, the cron tasks (the
+    minute check-in, `sms_check` and the canary) can resume up to about 3
+    minutes after the database answers again, so the page clears late. The
+    watchdog, delivery and escalation are the worker's own loops and resume
+    on their next run. Accepted: a hung fetch never came back at all before.
   - **No limit outlives a query pg refuses.** The timer is armed just before
     the query is handed to pg, because pg 8.23 can answer inside that call
     (`Query.prepare`, for a parameter it cannot encode). It is cleared if pg
@@ -5494,10 +5503,14 @@ any other path is work, not a candidate for the same treatment.
     healthy connection later. A query whose config carries its own `callback`, like
     a submittable one, is refused before anything is sent: the limit could
     not see it settle. None is sent on these pools.
-  - **Only the given-up hand-out's own release is swallowed.** A later
-    hand-out of the same pool is untouched.
+  - **Once the limit has given a client up, its releases do nothing.** The
+    swallow belongs to that one client, and pg-pool never hands a given-up
+    client out again, so a later hand-out is never affected. Any other
+    client's release, a second release included, reaches pg-pool as before.
   - **No `database_error` line when the limit ends a connection,** by
     choice. pg raises no `error` for a client it was asked to end, and the
-    query's caller fails loudly: a 500, `watchdog_failed`, a Graphile retry
-    line, or the read-back's line. Such a failure logs code null, as a
+    query's caller fails loudly: a 500, `watchdog_failed`, or the
+    read-back's line. Graphile's own retries write nothing until the
+    100th attempt fails; a hang is still loud through the watchdog's
+    failed sweeps, the stale beat and the page. Such a failure logs code null, as a
     connection reset does, so the two cannot be told apart in the logs.
