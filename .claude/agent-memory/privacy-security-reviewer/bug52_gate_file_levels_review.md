@@ -52,3 +52,23 @@ Targeted run: `pnpm exec vitest run scripts/gate-file.test.mjs .claude/hooks/pos
 = 75 passed, 8 s. Cloud session: /usr/bin/docker exists, `docker info` exits 1 (no daemon).
 
 Related: [[hook-gate-bypass-review]], [[tooling-scripts-review]]
+
+**Loop 1 (head fa00e6f, 2026-10-19), PASS with one should-fix.** All loop-0 findings closed
+(probe3.mjs in scratchpad: out-of-include L3 names route to "the edited tests no Vitest config
+includes" with no needsTool; needsScript/needsEnv/adb all throw). Vitest 5 resolves a filter
+holding a slash against the root (`vitest run lib/glob.test.mjs` = "No test files found", it
+does NOT substring-match scripts/lib/glob.test.mjs), so an orphan step cannot borrow a
+matching file's pass.
+- **NEW fail-open from loop 1:** post-edit.mjs now statically imports scripts/gate-file.mjs
+  (for GATE_FILE_LIMIT_MS), which pulls in vitest.shared.mjs and scripts/lib/{glob,proc,steps,
+  test-strength}.mjs. A syntax error in any of them kills the hook with node's exit 1, which
+  Claude Code treats as NON-blocking: the breaking edit passes and every later edit is
+  unchecked until fixed. The 5ee115c hook exited 2 for the same edit (gate:file failed).
+  Probe recipe (scratchpad/imp): copy hook + lib.mjs, scripts/lib, gate-file.mjs,
+  vitest.shared.mjs into a scratch project, append `export const broken = ;`, run new and
+  `git show 5ee115c:` hooks, compare exit 1 vs 2. Fix: dynamic import in try/catch that
+  calls block(), or a literal pinned by a test. Same class pre-exists for test-weakening.mjs
+  and progress-gate.mjs (static imports from scripts/lib) - check every hook that imports
+  repo code for this.
+- Guard quirk again: a Bash grep pattern naming the environment object with a dot was
+  refused ("Reading .env files"); drop the object name from the pattern.
