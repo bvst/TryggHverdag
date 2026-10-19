@@ -56,3 +56,19 @@ Related: [[entry-script-wiring]], [[in-memory-mutation]], [[gate-integrity-local
 - Determinism: vi.doMock + resetModules in withMocked are undone in finally, the only dynamic import, no concurrent
   tests, default isolate; setTimeout spy is pass-through and restored. Load 3/3 at load 7.5-12 on 4 cores, slowest
   3.8 s vs 30-120 s ceilings. Coverage gate-file.mjs 96.84 % lines / 92.75 % branches from the two files.
+
+**Loop 2 delta (2026-10-19; red cc81aad, fix 84cb623, docs 8568ed8 = BUG-53/54 queued). PASS, one should-fix.**
+- RG-02: cc81aad's hook tests on 40b089a's hook: 8 red (6 "blocks" cases + 2 docs cases), all because node exits 1
+  on the static import; 8568ed8 30/30. The temp-copy tests follow the hook's imports (static and dynamic) and
+  have a control (intact copy passes), so an incomplete copy cannot fake a block.
+- RG-03: the one changed test is new on the branch (b8bdc3e). It loosened two source regexes (accepts a dynamic
+  import and `x.GATE_FILE_LIMIT_MS`) and added a forbid on `GATE_FILE_LIMIT_MS = <digit>`. tests:changes clean.
+- Faults (mutants3.mjs, harness3.mjs with TESTS env): KILLED import before the early exits (two placements),
+  failure swallowed with a fallback module, empty catch, catch exit 1, message without error/file/"could not be
+  loaded", static import restored, block replaced by a stderr write. SURVIVED: fallback limit
+  `gate.GATE_FILE_LIMIT_MS ?? 170_000`, `|| 170_000`, `?? LIMIT` const (the regex matches only the prefix;
+  should fix, low impact: needs the export to vanish, which the suite's Number check catches; at HEAD a vanished
+  export means spawnSync with no timeout, bounded only by the gate's own 15 s + 150 s timers). Q08 import placed
+  between the ext filter and the package.json check: near-equivalent (note).
+- Leftovers: hook-test-* count unchanged across runs (a transient 4th disappeared); one gate-file-main-in-process
+  dir from 11:26 came from a loop-1 mutant run, not a normal run; removed. Load 3/3 at load 7.5-13, slowest 3.3 s.

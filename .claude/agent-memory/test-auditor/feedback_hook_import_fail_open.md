@@ -15,3 +15,6 @@ exit codes. Ask for a guarded dynamic import (try/catch -> block) or a literal p
 stop-gate.mjs is self-contained (spawns gate:quick), so it is should-fix. Pre-existing in progress-gate.mjs and
 test-weakening.mjs (static imports from scripts/lib).
 Related: [[bug52-audit]], [[entry-script-wiring]]
+Loop 2: the guarded dynamic import closed it. Plant also a fallback (`?? literal`) for the imported constant: a source
+regex that matches `timeout: x.CONST\b` lets it through; ask for a behaviour check (export renamed in a temp copy ->
+block) or an anchored regex (`CONST\s*,`).
