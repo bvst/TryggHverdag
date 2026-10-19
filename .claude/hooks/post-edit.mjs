@@ -4,36 +4,13 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { inspect } from 'node:util';
 import { readInput, relPath, block, tail } from './lib.mjs';
 
-// BUG-52: the project root from the hook's own place, not from cwd. Node names a
-// broken module by its real path, and cwd can be a symlink (/var on macOS).
-const ROOT = fileURLToPath(new URL('../../', import.meta.url));
-const GATE_URL = new URL('../../scripts/gate-file.mjs', import.meta.url).href;
-const RELOAD_LIMIT_MS = 10_000;
-const AT_LINE = /^(file:\/\/\/\S+):(\d+)$/m;
-
-// BUG-52: where the gate broke, as path:line from the project root, or '' if node
-// names no file. A caught SyntaxError has none in its stack (Node 22), so the
-// gate is loaded again in a node of its own, which prints file:///…:line when it
-// fails uncaught. Never throws: this runs only on the way to block().
-function whereItBroke(error) {
-  try {
-    const first = error instanceof Error ? String(error.stack).split('\n', 1)[0] : '';
-    const reload = () =>
-      spawnSync(
-        process.execPath,
-        ['--input-type=module', '-e', `await import(${JSON.stringify(GATE_URL)})`],
-        { encoding: 'utf8', timeout: RELOAD_LIMIT_MS },
-      ).stderr ?? '';
-    const found = AT_LINE.exec(first) ?? AT_LINE.exec(reload());
-    return found ? `${relPath(fileURLToPath(found[1]), ROOT)}:${found[2]}` : '';
-  } catch {
-    return '';
-  }
-}
+// BUG-52 (D-133): the gate's limit as a number of the hook's own, not an import.
+// The hook loads none of the gate's code, so it runs only in the child, which
+// stops at this limit: a gate that throws, never settles or hangs still blocks.
+// post-edit.test.mjs holds it equal to scripts/gate-file.mjs's GATE_FILE_LIMIT_MS.
+const GATE_FILE_LIMIT_MS = 170_000;
 
 const input = await readInput();
 const file = input?.tool_input?.file_path ?? input?.tool_input?.notebook_path;
@@ -52,35 +29,10 @@ if (!scripts['gate:file']) {
   );
 }
 
-// BUG-52 (D-133): loaded here, guarded, not by a static import. A gate whose code
-// cannot load made node exit 1, which Claude Code does not block on: it must block.
-let gate;
-try {
-  gate = await import('../../scripts/gate-file.mjs');
-} catch (error) {
-  const why = error instanceof Error ? `${error.name}: ${error.message}` : inspect(error);
-  const where = whereItBroke(error);
-  block(
-    `gate:file could not be loaded, so no checks ran after editing ${rel}. ` +
-      `scripts/gate-file.mjs or a file it loads failed${where ? `, at ${where}` : ''}: ${why}`,
-  );
-}
-
-// BUG-52 (D-133): spawnSync takes only a whole number of ms above 0 as a limit.
-// It runs with no limit on undefined, null or 0, and throws (exit 1) on anything
-// else: both fail open. So any other value blocks, never a number of our own.
-if (!Number.isInteger(gate.GATE_FILE_LIMIT_MS) || gate.GATE_FILE_LIMIT_MS <= 0) {
-  block(
-    `gate:file has no usable time limit, so no checks ran after editing ${rel}. ` +
-      `scripts/gate-file.mjs must export GATE_FILE_LIMIT_MS as a whole number of milliseconds above 0, ` +
-      `and it gave ${inspect(gate.GATE_FILE_LIMIT_MS)}.`,
-  );
-}
-
 const r = spawnSync('pnpm', ['-s', 'gate:file', '--', rel], {
   cwd,
   encoding: 'utf8',
-  timeout: gate.GATE_FILE_LIMIT_MS,
+  timeout: GATE_FILE_LIMIT_MS,
 });
 if (r.error) block(`Checks could not run for ${rel}: ${r.error.message}`);
 if (r.status !== 0)
