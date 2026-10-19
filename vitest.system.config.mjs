@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { SYSTEM_TEST_FILES } from './vitest.shared.mjs';
 
 /**
  * L6: whole flows through the real API, with fakes at the edges and a clock the
@@ -8,7 +9,7 @@ import { defineConfig } from 'vitest/config';
  */
 export default defineConfig({
   test: {
-    include: ['apps/**/src/**/*.system.test.ts'],
+    include: SYSTEM_TEST_FILES,
     environment: 'node',
     testTimeout: 20_000,
   },

@@ -4,6 +4,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { GATE_FILE_LIMIT_MS } from '../../scripts/gate-file.mjs';
 import { readInput, relPath, block, tail } from './lib.mjs';
 
 const input = await readInput();
@@ -26,22 +27,17 @@ if (!scripts['gate:file']) {
 const r = spawnSync('pnpm', ['-s', 'gate:file', '--', rel], {
   cwd,
   encoding: 'utf8',
-  timeout: 170_000,
+  timeout: GATE_FILE_LIMIT_MS,
 });
 if (r.error) block(`Checks could not run for ${rel}: ${r.error.message}`);
 if (r.status !== 0)
   block(`Checks failed after editing ${rel}:\n${tail((r.stdout ?? '') + (r.stderr ?? ''))}`);
 
-// BUG-52 (D-133): the gate prints nothing when every step passed, so anything it
-// prints on exit 0 is for the session, such as an edited test that was not
-// possible here. Exit 0 with one JSON object is how a PostToolUse hook tells
-// Claude something without blocking (code.claude.com/docs/en/hooks, "Add
-// context for Claude"); plain stdout on exit 0 reaches only the debug log.
+// BUG-52: what a passing gate prints goes to the session as context (D-133).
 const said = (r.stdout ?? '').trim();
 if (!said) process.exit(0);
 const additionalContext = `No check failed after editing ${rel}. The gate also said:\n${said}`;
-// No process.exit after this write: where a pipe is written asynchronously
-// (macOS), exiting at once could cut the JSON short.
+// No process.exit after this write: on macOS, exiting at once can cut the JSON short.
 process.stdout.write(
   JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext } }) +
     '\n',

@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { INTEGRATION_TEST_FILES } from './vitest.shared.mjs';
 
 /**
  * L3: tests that need a real PostgreSQL in a container (Testcontainers).
@@ -11,7 +12,7 @@ import { defineConfig } from 'vitest/config';
  */
 export default defineConfig({
   test: {
-    include: ['apps/**/src/**/*.integration.test.ts', 'packages/**/src/**/*.integration.test.ts'],
+    include: INTEGRATION_TEST_FILES,
     environment: 'node',
     testTimeout: 60_000,
     hookTimeout: 180_000,

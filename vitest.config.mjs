@@ -1,20 +1,12 @@
 import { defineConfig } from 'vitest/config';
-import { JEST_EXPO_FILES, TEST_FILES } from './vitest.shared.mjs';
+import { TEST_FILES, UNIT_EXCLUDE } from './vitest.shared.mjs';
 
 export default defineConfig({
   test: {
     // Hook tests run the hooks as real processes, so they need room to breathe.
     include: TEST_FILES,
-    // L3 needs Docker and L6 is its own gate, so neither belongs in the run
-    // that must stay fast and work on any machine. Without this they would be
-    // swept up by the patterns above and a laptop with no Docker would see a
-    // confusing failure rather than a passing unit suite.
-    exclude: [
-      '**/node_modules/**',
-      JEST_EXPO_FILES,
-      '**/*.integration.test.ts',
-      '**/*.system.test.ts',
-    ],
+    // No L3 and no L6: vitest.shared.mjs says why.
+    exclude: UNIT_EXCLUDE,
     environment: 'node',
     testTimeout: 60_000,
     // No coverage settings here on purpose. Coverage is measured by
