@@ -2,17 +2,11 @@
 // HK-04: every edit is checked immediately, by the same script CI runs.
 import { afterEach, describe, expect, test } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import {
-  appendFileSync,
-  copyFileSync,
-  mkdirSync,
-  readFileSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { appendFileSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import ts from 'typescript';
 import { GATE_FILE_LIMIT_MS, report } from '../../scripts/gate-file.mjs';
 import {
   ALLOWED,
@@ -324,33 +318,280 @@ describe('HK-04 (D-133): what a passing gate has to say reaches the session', ()
   });
 });
 
-// BUG-52, review loop 1 (privacy-security-reviewer). The hook stops gate:file at
-// a limit, and the gate's own budget (the Docker probe and its steps) is checked
-// against that limit in scripts/gate-file.test.mjs. So the hook takes the limit
-// from there, GATE_FILE_LIMIT_MS, rather than a number of its own that could
-// drift from it (it was the literal 170_000); and Claude Code's limit on the hook
-// (settings.json) is longer, so the hook lives to report a gate it stopped. The
-// hook's limit cannot be watched without waiting it out, so the first test reads
-// the hook's source.
+// BUG-52, review loop 4 (privacy-security-reviewer's should-fix on loop 3).
+// Loops 1 to 3 had the hook load scripts/gate-file.mjs in its own process for
+// GATE_FILE_LIMIT_MS, by a static import and then by a guarded `await
+// import()`. A guard catches a load that throws. It cannot catch a load that
+// never finishes, and a timer cannot catch a synchronous hang. The reviewer
+// appended each of these to the gate's code in a scratch copy:
+// - `await new Promise(function () {})`: node exits 13, "Detected unsettled
+//   top-level await";
+// - the same with a live setInterval, or `while (true) {}`: the hook hangs
+//   until Claude Code's own limit on it (180 s) ends it.
+// Claude Code blocks on neither, so the edit that broke the gate went through,
+// and so did every later edit until the file was fixed.
+//
+// The fix (the reviewer's option (a), D-031): the hook loads no code of the
+// repository. The gate's code then runs only in the gate:file child, which the
+// hook stops at a limit of its own, and each way that child can end other than
+// exit 0 blocks the edit: a non-zero exit, a signal, or an error from spawnSync
+// itself, such as ETIMEDOUT. The tests below hold the hook to that.
+//
+// Decided here (test-author, D-031): the hook's source is read as the parser
+// sees it (TypeScript's, a dependency of the repository already), not with a
+// regular expression. So a mention in a comment or a string does not count,
+// and a dynamic import whose specifier is computed at run time does: it could
+// load anything. What the hook may load: node: built-ins, except the three
+// that load or run code in the hook's own process (node:module, node:vm,
+// node:worker_threads), and files in .claude/hooks, followed through every
+// file it loads, so lib.mjs, or anything it comes to load later, is held to
+// the same. require() and createRequire count as loads too.
+const REPO = path.resolve(import.meta.dirname, '..', '..');
+const HOOK = '.claude/hooks/post-edit.mjs';
+const HOOKS_FOLDER = '.claude/hooks';
+const GATE = 'scripts/gate-file.mjs';
+
+/** A JavaScript module parsed, by default the repository's file `rel`. */
+function parse(rel, text = readFileSync(path.join(REPO, rel), 'utf8')) {
+  return ts.createSourceFile(rel, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+}
+
+/** The nodes of `source` that `keep` accepts, in the order they appear. */
+function nodesIn(source, keep) {
+  const found = [];
+  const visit = (node) => {
+    if (keep(node)) {
+      found.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+
+/**
+ * How a parsed module loads code: each import and export … from, static or
+ * dynamic, each require() and each createRequire. `specifier` is undefined
+ * where it is not a string literal, that is, where it is computed at run time.
+ */
+function loadsIn(source) {
+  const literal = (node) =>
+    node !== undefined && ts.isStringLiteralLike(node) ? node.text : undefined;
+  const loads = [];
+  nodesIn(source, (node) => {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
+      loads.push({ how: 'import', specifier: literal(node.moduleSpecifier) });
+    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      loads.push({ how: 'import()', specifier: literal(node.arguments[0]) });
+    } else if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'require'
+    ) {
+      loads.push({ how: 'require()', specifier: literal(node.arguments[0]) });
+    } else if (ts.isIdentifier(node) && node.text === 'createRequire') {
+      loads.push({ how: 'createRequire', specifier: undefined });
+    }
+    return false;
+  });
+  return loads;
+}
+
+/**
+ * The repository's modules loaded from `start`, followed through relative
+ * specifiers, and each load `allowed` refuses, as "file: how 'specifier'". A
+ * refused load is not followed.
+ */
+function follow(start, allowed = () => true) {
+  const modules = [];
+  const refused = [];
+  const visit = (rel) => {
+    if (modules.includes(rel)) {
+      return;
+    }
+    modules.push(rel);
+    for (const load of loadsIn(parse(rel))) {
+      const target =
+        load.specifier !== undefined && /^\.{1,2}\//.test(load.specifier)
+          ? path.posix.normalize(path.posix.join(path.posix.dirname(rel), load.specifier))
+          : undefined;
+      if (!allowed(load, target)) {
+        const what =
+          load.specifier === undefined
+            ? '(a specifier computed at run time)'
+            : `'${load.specifier}'`;
+        refused.push(`${rel}: ${load.how} ${what}`);
+      } else if (target !== undefined) {
+        visit(target);
+      }
+    }
+  };
+  visit(start);
+  return { modules, refused };
+}
+
+/** node: built-ins that load or run code in the hook's own process. */
+const RUNS_CODE_IN_PROCESS = new Set(['node:module', 'node:vm', 'node:worker_threads']);
+
+/** What the hook may load: a node: built-in that runs no code in its process, or a file in .claude/hooks. */
+function hookMayLoad({ how, specifier }, target) {
+  if ((how !== 'import' && how !== 'import()') || specifier === undefined) {
+    return false;
+  }
+  if (specifier.startsWith('node:')) {
+    return !RUNS_CODE_IN_PROCESS.has(specifier);
+  }
+  return target !== undefined && target.startsWith(`${HOOKS_FOLDER}/`);
+}
+
+describe('HK-04 (BUG-52): the post-edit hook loads no code of the repository', () => {
+  test('BUG-52: the scan sees each way a module loads code, and not a mention in a comment or a string', () => {
+    // The check below is only as good as this scan, so the scan is checked
+    // first, on synthetic source: each form the hook has used or could use.
+    const text = [
+      "import { spawnSync } from 'node:child_process';",
+      "import { GATE_FILE_LIMIT_MS } from '../../scripts/gate-file.mjs';",
+      "import '../../vitest.shared.mjs';",
+      "export { run } from '../../scripts/lib/proc.mjs';",
+      "const gate = await import('../../scripts/gate-file.mjs');",
+      "const later = await import(new URL('../../scripts/lib/steps.mjs', import.meta.url).href);",
+      'const load = createRequire(import.meta.url);',
+      "const cjs = require('../../scripts/a-commonjs-file.cjs');",
+      "// import { x } from '../../scripts/in-a-comment.mjs'; await import('../../scripts/in-a-comment.mjs');",
+      "spawnSync(process.execPath, ['-e', \"await import('../../scripts/in-a-child.mjs')\"]);",
+    ].join('\n');
+
+    expect(loadsIn(parse('synthetic.mjs', text))).toEqual([
+      { how: 'import', specifier: 'node:child_process' },
+      { how: 'import', specifier: '../../scripts/gate-file.mjs' },
+      { how: 'import', specifier: '../../vitest.shared.mjs' },
+      { how: 'import', specifier: '../../scripts/lib/proc.mjs' },
+      { how: 'import()', specifier: '../../scripts/gate-file.mjs' },
+      { how: 'import()', specifier: undefined },
+      { how: 'createRequire', specifier: undefined },
+      { how: 'require()', specifier: '../../scripts/a-commonjs-file.cjs' },
+    ]);
+  });
+
+  test('BUG-52: the hook loads only node: built-ins and files beside it in .claude/hooks, followed through each file it loads, so none of the repository’s code runs in its process', () => {
+    const { modules, refused } = follow(HOOK, hookMayLoad);
+
+    expect(
+      refused,
+      `what the hook loads besides node: built-ins and files in ${HOOKS_FOLDER}:\n${refused.join('\n')}`,
+    ).toEqual([]);
+    expect(modules, 'the scan followed the hook into lib.mjs, which it imports').toContain(
+      `${HOOKS_FOLDER}/lib.mjs`,
+    );
+  });
+});
+
+// BUG-52, review loops 1 and 4. The hook stops gate:file at a limit, and the
+// gate's own budget (the Docker probe and its steps) is checked against
+// GATE_FILE_LIMIT_MS in scripts/gate-file.test.mjs. Loop 1 had the hook take
+// the limit from there by importing it, so the two could not drift. Loop 4 (the
+// review above) forbids the import. So the hook holds the limit as a number of
+// its own, and these tests hold that number to the gate's:
+// - the gate's export is a safe whole number of milliseconds above 0, the
+//   values spawnSync takes as a limit. It runs with no limit on undefined, null
+//   and 0, and throws on a string, NaN, a negative number, Infinity or a
+//   fraction (Node 22, checked in loop 3). 1e300 is a whole number too, and
+//   spawnSync takes it without a word, as no limit in effect (the reviewer,
+//   loop 3; checked again: it throws nothing). A safe integer leaves it out, and
+//   the settings.json test bounds the number from above;
+// - the hook declares GATE_FILE_LIMIT_MS once, at its top level, as a const
+//   holding a plain number, the gate's number. A value read at run time, from
+//   an environment variable or anything else, could differ from what is pinned
+//   here, so it does not count;
+// - the spawnSync that runs gate:file has `timeout: GATE_FILE_LIMIT_MS`. A
+//   fallback such as `?? 170_000` got past loop 1's regex, so the parser reads
+//   the whole value. What the hook really asks spawnSync for is pinned too,
+//   below, from a run of the hook ("asks spawnSync to stop gate:file at").
+// - Claude Code's own limit on the hook (settings.json) is at least 5 s longer,
+//   so the hook lives to report a gate it stopped.
 describe('HK-04 (BUG-52): the hook’s limit on gate:file', () => {
   const HOOK_MARGIN_MS = 5_000;
 
-  test('BUG-52: the hook stops gate:file at GATE_FILE_LIMIT_MS from scripts/gate-file.mjs, not at a number of its own', () => {
-    const source = readFileSync(path.join(import.meta.dirname, 'post-edit.mjs'), 'utf8');
+  test('BUG-52: GATE_FILE_LIMIT_MS, exported by scripts/gate-file.mjs, is a safe whole number of milliseconds above 0, a value spawnSync takes as a limit', () => {
+    expect(
+      Number.isSafeInteger(GATE_FILE_LIMIT_MS),
+      `GATE_FILE_LIMIT_MS is ${String(GATE_FILE_LIMIT_MS)}`,
+    ).toBe(true);
+    expect(GATE_FILE_LIMIT_MS).toBeGreaterThan(0);
+  });
 
-    expect(GATE_FILE_LIMIT_MS, 'GATE_FILE_LIMIT_MS, exported by scripts/gate-file.mjs').toEqual(
-      expect.any(Number),
+  test('BUG-52: the hook holds its limit as a number of its own, GATE_FILE_LIMIT_MS: declared once, at its top level, as a const holding a plain number, the number scripts/gate-file.mjs exports', () => {
+    const source = parse(HOOK);
+    const declarations = nodesIn(
+      source,
+      (node) =>
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.name.text === 'GATE_FILE_LIMIT_MS',
     );
-    // Loaded from the gate: by a static import, or (review loop 2) by a guarded
-    // dynamic one, so that a gate that cannot load blocks the edit (below).
-    expect(source).toMatch(
-      /(?:\bfrom\s*|\bimport\s*\(\s*)['"]\.\.\/\.\.\/scripts\/gate-file\.mjs['"]/,
+
+    expect(
+      declarations.map((node) => node.getText(source)),
+      'the declarations of GATE_FILE_LIMIT_MS in the hook',
+    ).toHaveLength(1);
+    const [declaration] = declarations;
+    const list = declaration.parent;
+    expect(
+      ts.isVariableStatement(list.parent) && list.parent.parent === source,
+      'declared at the hook’s top level',
+    ).toBe(true);
+    expect((list.flags & ts.NodeFlags.Const) !== 0, 'declared with const').toBe(true);
+    const value = declaration.initializer;
+    expect(
+      value !== undefined && ts.isNumericLiteral(value),
+      `GATE_FILE_LIMIT_MS = ${String(value?.getText(source))}: a plain number, read from nothing at run time`,
+    ).toBe(true);
+    expect(
+      Number(value.text),
+      'the hook’s GATE_FILE_LIMIT_MS, against the one scripts/gate-file.mjs exports',
+    ).toBe(GATE_FILE_LIMIT_MS);
+  });
+
+  test('BUG-52: the spawnSync that runs gate:file is stopped at the hook’s GATE_FILE_LIMIT_MS: `timeout: GATE_FILE_LIMIT_MS`, once, with nothing spread over it', () => {
+    const source = parse(HOOK);
+    const runsGate = nodesIn(
+      source,
+      (node) =>
+        ts.isCallExpression(node) &&
+        /\bspawnSync$/.test(node.expression.getText(source)) &&
+        node.arguments.some(
+          (argument) =>
+            ts.isArrayLiteralExpression(argument) &&
+            argument.elements.some(
+              (element) => ts.isStringLiteralLike(element) && element.text === 'gate:file',
+            ),
+        ),
     );
-    expect(source).toMatch(/\btimeout:\s*(?:[\w$]+\.)?GATE_FILE_LIMIT_MS\b/);
-    expect(source, 'a timeout typed as a number').not.toMatch(/\btimeout:\s*\d/);
-    expect(source, 'GATE_FILE_LIMIT_MS given a number of the hook’s own').not.toMatch(
-      /\bGATE_FILE_LIMIT_MS\s*=\s*\d/,
+
+    expect(
+      runsGate.map((node) => node.getText(source)),
+      'the spawnSync calls in the hook that run gate:file',
+    ).toHaveLength(1);
+    const options = runsGate[0].arguments[2];
+    expect(
+      options !== undefined && ts.isObjectLiteralExpression(options),
+      `its options, an object written out: ${String(options?.getText(source))}`,
+    ).toBe(true);
+    expect(
+      options.properties.filter((property) => ts.isSpreadAssignment(property)).length,
+      'options spread into it, which could set another limit',
+    ).toBe(0);
+    const timeouts = options.properties.filter(
+      (property) => property.name?.getText(source) === 'timeout',
     );
+    expect(
+      timeouts.map((property) =>
+        ts.isPropertyAssignment(property)
+          ? property.initializer.getText(source)
+          : property.getText(source),
+      ),
+      'the timeout spawnSync is given',
+    ).toEqual(['GATE_FILE_LIMIT_MS']);
   });
 
   test('BUG-52: Claude Code’s own limit on the post-edit hook is at least 5 s longer than the hook’s limit on gate:file, so the hook lives to report a gate it stopped', () => {
@@ -372,140 +613,398 @@ describe('HK-04 (BUG-52): the hook’s limit on gate:file', () => {
   });
 });
 
-// BUG-52, review loop 2 (privacy-security-reviewer and test-auditor, each on
-// its own). The hook imported scripts/gate-file.mjs statically for
-// GATE_FILE_LIMIT_MS, and with it vitest.shared.mjs and four scripts/lib files,
-// before it read its input. If any of them cannot load (a syntax error, or,
-// mid-TDD, an import of a name not exported yet), node exits 1, and Claude Code
-// treats exit 1 from a hook as a non-blocking error: the session is told
-// nothing, the edit that broke the gate goes through, and no edit after it is
-// checked until the file is fixed. A gate that cannot load must block, and say
-// so.
+// BUG-52, review loops 2 to 4 (privacy-security-reviewer and test-auditor). A
+// gate whose code cannot load, or never finishes loading, must block the edit,
+// and say why. If any of the files the gate loads cannot load (a syntax error,
+// or, mid-TDD, an import of a name not exported yet), or its load never ends,
+// the edit that broke it must not go through, nor any checked edit after it.
+// Loops 2 and 3 caught that in the hook. Loop 4 moved it into the gate:file
+// child, where the hook's limit holds: the hook loads none of the gate's code
+// (above), so whatever the gate's code does ends the child, and the hook blocks
+// on every end but exit 0. What node prints when a module fails uncaught,
+// file:///…:line included, reaches the session in the block message, which
+// carries the end of the gate's output.
 //
-// These run a copy of the hook in a temporary folder that holds exactly the
-// files the hook loads, followed from its own imports, so a file the hook comes
-// to load later is copied too. One of them is broken on purpose, and gate:file
-// is a fake that passes, so an edit here can only block because the gate's code
-// did not load.
+// These run a copy of the hook in a temporary folder that holds the files the
+// hook loads and the files the gate loads, each followed from its own imports,
+// so a file either comes to load later is copied too. gate:file there is
+// load-gate.mjs. It loads the copy's gate code, as `node scripts/gate-file.mjs`
+// does, runs no check, and passes. It writes to ran.txt that it started and,
+// once the gate's code has loaded, that it loaded. So a block that came through
+// the child shows the first and not the second; a hook that loads the gate's
+// code itself blocks before the child starts, or never ends.
 //
-// Decided here (test-author, D-031): an edit to a file the gate does not check,
-// such as a .md file, still exits 0 and prints nothing when the gate's code is
-// broken. The gate has nothing to say about such a file, so the hook's early
-// exit comes before it loads the gate. That hides nothing: the edit that broke
-// the gate is to a file the gate checks (.mjs) and blocks, and so does every
-// checked edit after it. And while the gate is down, a session can still write
-// down in docs/ what broke.
-describe('HK-04 (BUG-52): a gate:file that cannot be loaded blocks the edit, and says so', () => {
-  const REPO = path.resolve(import.meta.dirname, '..', '..');
-  const HOOK = '.claude/hooks/post-edit.mjs';
+// A gate that never finishes. The hook's limit is 170 s, which a test cannot
+// wait out, and production code gets no knob for tests. So these runs can load
+// record-spawn.mjs into the hook's node first (node --import). It writes down
+// each spawnSync the hook makes, and in the two hang tests it stops gate:file
+// after 3 s instead of the limit the hook asked for, which is pinned to
+// GATE_FILE_LIMIT_MS from what it wrote down. In those two tests pnpm is a shim
+// on PATH that execs node in its own place: checked by hand (pnpm 10.33), pnpm
+// stopped at a limit leaves its node child running, and a gate that spins
+// would outlive the test. Two more shims pin the hook's other ways out: a pnpm
+// ended by a signal (no exit code), and no pnpm at all (spawnSync's ENOENT).
+//
+// Decided in loop 2 (test-author, D-031), and unchanged: an edit to a file the
+// gate does not check, such as a .md file, still exits 0 and prints nothing
+// when the gate's code is broken. The gate has nothing to say about such a
+// file, so the hook's early exit comes before it starts the gate. That hides
+// nothing: the edit that broke the gate is to a file the gate checks (.mjs)
+// and blocks, and so does every checked edit after it. And while the gate is
+// down, a session can still write down in docs/ what broke.
+describe('HK-04 (BUG-52): a gate:file whose code cannot load, or never finishes, blocks the edit, through the child', () => {
   const SOURCE = 'apps/server/src/api.ts';
   const SYNTAX_ERROR = '\nexport const broken = ;\n';
+  const NEVER_SETTLES = '\nawait new Promise(function () {});\n';
+  const STARTED = 'gate:file started';
+  const LOADED = 'gate:file loaded the gate';
+  const SHORT_LIMIT_MS = 3_000;
+  const HANG_ENDS_AFTER_MS = 60_000;
 
-  /** The files the hook loads: its own relative imports, static or dynamic, followed. */
-  function hookModules() {
-    const seen = new Set();
-    const visit = (rel) => {
-      if (seen.has(rel)) {
-        return;
-      }
-      seen.add(rel);
-      const text = readFileSync(path.join(REPO, rel), 'utf8');
-      const imports = /(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s*)['"](\.{1,2}\/[^'"]+)['"]/gm;
-      for (const [, specifier] of text.matchAll(imports)) {
-        visit(path.posix.normalize(path.posix.join(path.posix.dirname(rel), specifier)));
-      }
-    };
-    visit(HOOK);
-    return [...seen];
-  }
+  /** The files the gate loads, followed from scripts/gate-file.mjs. */
+  const GATE_MODULES = follow(GATE).modules;
 
-  /** A temporary project: the hook, what it loads, and a gate:file that passes. */
+  /** A temporary project: the files the hook and the gate load, and a gate:file that only loads the gate's code. */
   function projectCopy() {
-    const dir = dirWith(fakeScripts({ 'gate:file': {} }));
-    const modules = hookModules();
-    for (const rel of modules) {
+    const dir = dirWith({
+      'package.json': JSON.stringify({
+        name: 'fake',
+        private: true,
+        scripts: { 'gate:file': 'node load-gate.mjs' },
+      }),
+      'load-gate.mjs': [
+        "import { appendFileSync } from 'node:fs';",
+        `appendFileSync('ran.txt', ${JSON.stringify(STARTED)} + ' ' + process.argv.slice(2).join(' ') + '\\n');`,
+        `await import('./${GATE}');`,
+        `appendFileSync('ran.txt', ${JSON.stringify(LOADED)} + '\\n');`,
+      ].join('\n'),
+    });
+    for (const rel of new Set([...follow(HOOK).modules, ...GATE_MODULES])) {
       mkdirSync(path.join(dir, path.dirname(rel)), { recursive: true });
       copyFileSync(path.join(REPO, rel), path.join(dir, rel));
     }
-    return { dir, modules };
+    return dir;
   }
 
-  /** A project copy with `text` appended to `target`, one of the files the hook loads. */
+  /** A project copy with `text` appended to `target`, one of the files the gate loads. */
   function brokenCopy(target, text) {
-    const { dir, modules } = projectCopy();
-    expect(modules, `the hook does not load ${target}, so breaking it proves nothing`).toContain(
-      target,
-    );
+    expect(
+      GATE_MODULES,
+      `the gate does not load ${target}, so breaking it proves nothing`,
+    ).toContain(target);
+    const dir = projectCopy();
     appendFileSync(path.join(dir, target), text);
     return dir;
   }
 
-  /** Runs the copy's hook on an edit of `file`, the way runHook runs the real one. */
-  function hookIn(dir, file) {
-    const env = { ...process.env, CLAUDE_PROJECT_DIR: dir };
+  /** A shell script as `pnpm` in the copy's bin/, and a PATH that finds it first. */
+  function fakePnpm(dir, lines) {
+    const bin = path.join(dir, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'pnpm'), ['#!/bin/sh', ...lines, ''].join('\n'), { mode: 0o755 });
+    return { bin, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` };
+  }
+
+  /**
+   * record-spawn.mjs in the copy, for the hook's node to load first. It writes
+   * each spawnSync the hook makes to spawned.jsonl and, given `limitMs`, stops
+   * it after that many ms instead of the limit the hook asked for.
+   */
+  function recordSpawns(dir, limitMs) {
+    const file = path.join(dir, 'record-spawn.mjs');
+    writeFileSync(
+      file,
+      [
+        "import { appendFileSync } from 'node:fs';",
+        "import childProcess from 'node:child_process';",
+        "import { syncBuiltinESMExports } from 'node:module';",
+        'const spawnSync = childProcess.spawnSync;',
+        'childProcess.spawnSync = (command, args, options) => {',
+        "  const call = { command, args, timeout: options?.timeout ?? 'none' };",
+        "  appendFileSync(new URL('spawned.jsonl', import.meta.url), JSON.stringify(call) + '\\n');",
+        limitMs === undefined
+          ? '  return spawnSync(command, args, options);'
+          : `  return spawnSync(command, args, { ...options, timeout: ${String(limitMs)} });`,
+        '};',
+        'syncBuiltinESMExports();',
+      ].join('\n'),
+    );
+    return file;
+  }
+
+  /** What record-spawn.mjs wrote down about the spawnSync calls that ran gate:file. */
+  function gateSpawns(dir) {
+    let text;
+    try {
+      text = readFileSync(path.join(dir, 'spawned.jsonl'), 'utf8');
+    } catch {
+      return [];
+    }
+    return text
+      .split('\n')
+      .filter((line) => line !== '')
+      .map((line) => JSON.parse(line))
+      .filter((call) => Array.isArray(call.args) && call.args.includes('gate:file'));
+  }
+
+  /**
+   * Runs the copy's hook on an edit of `file`, the way runHook runs the real
+   * one. `hung` is true if the hook itself did not end within `limitMs`.
+   */
+  function hookIn(dir, file, { PATH = process.env.PATH, preload, limitMs = 60_000 } = {}) {
+    const env = { ...process.env, CLAUDE_PROJECT_DIR: dir, PATH };
     delete env.TRYGGHVERDAG_REVIEW_JOB;
-    const result = spawnSync(process.execPath, [path.join(dir, HOOK)], {
-      input: JSON.stringify({ cwd: dir, ...edit(path.join(dir, file)) }),
-      cwd: dir,
-      env,
-      encoding: 'utf8',
-      timeout: 60_000,
-    });
-    if (result.error) {
+    const result = spawnSync(
+      process.execPath,
+      [...(preload ? ['--import', pathToFileURL(preload).href] : []), path.join(dir, HOOK)],
+      {
+        input: JSON.stringify({ cwd: dir, ...edit(path.join(dir, file)) }),
+        cwd: dir,
+        env,
+        encoding: 'utf8',
+        timeout: limitMs,
+      },
+    );
+    if (result.error && result.error.code !== 'ETIMEDOUT') {
       throw result.error;
     }
-    return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+    return {
+      status: result.status,
+      stdout: result.stdout ?? '',
+      stderr: result.stderr ?? '',
+      hung: result.error !== undefined,
+    };
   }
+
+  /**
+   * What each block below holds: the hook ended, with exit 2, naming the
+   * edited file and printing nothing for the session; gate:file started, so
+   * the block came through the child; and the gate's code never loaded.
+   */
+  function expectBlockedThroughTheChild(dir, result, edited) {
+    expect(
+      result.hung,
+      'the hook itself did not end: Claude Code’s own limit would end it, and that is no block',
+    ).toBe(false);
+    expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
+    expect(result.stderr, 'the block message names the edited file').toContain(edited);
+    expect(result.stdout).toBe('');
+    expect(
+      ranLog(dir),
+      'gate:file never started: the hook blocked without it, so it loaded the gate’s code itself',
+    ).toContain(STARTED);
+    expect(ranLog(dir), 'gate:file ran on, though the gate’s code did not load').not.toContain(
+      LOADED,
+    );
+  }
+
+  /** The 1-based number of the last line of the copy's `rel` that is exactly `text`. */
+  function lineOf(dir, rel, text) {
+    const index = readFileSync(path.join(dir, rel), 'utf8').split('\n').lastIndexOf(text);
+    expect(index, `"${text}" is not a line of ${rel}`).toBeGreaterThanOrEqual(0);
+    return index + 1;
+  }
+
+  const escaped = (text) => text.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  /** How node names line `line` of the copy's `rel`: the end of its file:///…:line, in this copy. */
+  const nodeNames = (dir, rel, line) =>
+    new RegExp(String.raw`/${escaped(path.basename(dir))}/${escaped(rel)}:${String(line)}(?!\d)`);
+
+  test('BUG-52: the copy’s control: with the gate’s code intact, an edit to a source file starts gate:file, which loads the gate’s code and passes, and the hook exits 0 and prints nothing', () => {
+    // If the copy lacked a file the gate or the hook loads, this would fail
+    // too, so the blocks below come from the breaks, not an incomplete copy.
+    const dir = projectCopy();
+
+    const result = hookIn(dir, SOURCE);
+
+    expect(result.status, `stderr:\n${result.stderr}`).toBe(ALLOWED);
+    expect(result.stdout).toBe('');
+    expect(ranLog(dir)).toContain(STARTED);
+    expect(ranLog(dir)).toContain(SOURCE);
+    expect(ranLog(dir)).toContain(LOADED);
+  });
+
+  test('BUG-52: the hook asks spawnSync to stop gate:file at GATE_FILE_LIMIT_MS, the number scripts/gate-file.mjs exports', () => {
+    const dir = projectCopy();
+
+    const result = hookIn(dir, SOURCE, { preload: recordSpawns(dir) });
+
+    expect(result.status, `stderr:\n${result.stderr}`).toBe(ALLOWED);
+    expect(gateSpawns(dir)).toEqual([
+      {
+        command: 'pnpm',
+        args: expect.arrayContaining(['gate:file', SOURCE]),
+        timeout: GATE_FILE_LIMIT_MS,
+      },
+    ]);
+  });
+
+  test('BUG-52: the files below are the gate’s own: gate-file.mjs, vitest.shared.mjs and scripts/lib modules, so the test.each is never empty', () => {
+    expect(GATE_MODULES).toContain(GATE);
+    expect(GATE_MODULES).toContain('vitest.shared.mjs');
+    expect(GATE_MODULES.filter((rel) => rel.startsWith('scripts/lib/')).length).toBeGreaterThan(0);
+    expect(GATE_MODULES.filter((rel) => rel.startsWith(`${HOOKS_FOLDER}/`))).toEqual([]);
+  });
+
+  test.each(GATE_MODULES)(
+    'BUG-52: with a syntax error in %s, an edit to a source file blocks (exit 2) through gate:file, and the block message carries node’s file and line for the broken file',
+    (target) => {
+      const dir = brokenCopy(target, SYNTAX_ERROR);
+      const line = lineOf(dir, target, SYNTAX_ERROR.trim());
+
+      const result = hookIn(dir, SOURCE);
+
+      expectBlockedThroughTheChild(dir, result, SOURCE);
+      expect(result.stderr).toContain('Unexpected token');
+      expect(result.stderr, `no …/${target}:${String(line)} in the message`).toMatch(
+        nodeNames(dir, target, line),
+      );
+    },
+  );
+
+  test.each([
+    { target: GATE, from: './lib/steps.mjs' },
+    { target: 'scripts/lib/steps.mjs', from: './glob.mjs' },
+  ])(
+    'BUG-52: with an import of a name not exported yet in $target, an edit to a source file blocks (exit 2) through gate:file, and the block message carries node’s file and line for the import',
+    ({ target, from }) => {
+      const statement = `import { NOT_EXPORTED_YET } from '${from}';`;
+      const dir = brokenCopy(target, `\n${statement}\n`);
+      const line = lineOf(dir, target, statement);
+
+      const result = hookIn(dir, SOURCE);
+
+      expectBlockedThroughTheChild(dir, result, SOURCE);
+      expect(result.stderr).toContain('NOT_EXPORTED_YET');
+      expect(result.stderr, `no …/${target}:${String(line)} in the message`).toMatch(
+        nodeNames(dir, target, line),
+      );
+    },
+  );
 
   const BREAKS = [
     {
       broken: 'a syntax error in gate-file.mjs',
-      target: 'scripts/gate-file.mjs',
+      target: GATE,
       text: SYNTAX_ERROR,
-      said: 'Unexpected token',
-    },
-    {
-      broken: 'a syntax error in vitest.shared.mjs',
-      target: 'vitest.shared.mjs',
-      text: SYNTAX_ERROR,
-      said: 'Unexpected token',
+      said: /Unexpected token/,
     },
     {
       broken: 'an import of a name not exported yet',
-      target: 'scripts/gate-file.mjs',
+      target: GATE,
       text: "\nimport { NOT_EXPORTED_YET } from './lib/steps.mjs';\n",
-      said: 'NOT_EXPORTED_YET',
+      said: /NOT_EXPORTED_YET/,
+    },
+    {
+      // No stack and no file to name: node prints the thrown value only.
+      broken: '`throw 42` in scripts/lib/glob.mjs',
+      target: 'scripts/lib/glob.mjs',
+      text: '\nthrow 42;\n',
+      said: /\b42\b/,
+    },
+    {
+      broken: 'an await that never settles (exit 13)',
+      target: GATE,
+      text: NEVER_SETTLES,
+      said: /unsettled top-level await/i,
     },
   ];
-  const CASES = BREAKS.flatMap((each) =>
-    ['scripts/gate-file.mjs', SOURCE].map((edited) => ({ ...each, edited })),
-  );
+  const CASES = BREAKS.flatMap((each) => [GATE, SOURCE].map((edited) => ({ ...each, edited })));
 
   test.each(CASES)(
-    'BUG-52: with $broken, an edit to $edited blocks (exit 2), saying gate:file could not be loaded, and names the file and the error',
+    'BUG-52: with $broken, an edit to $edited blocks (exit 2) through gate:file, names the edited file, and carries what node said',
     ({ target, text, said, edited }) => {
       const dir = brokenCopy(target, text);
 
       const result = hookIn(dir, edited);
 
-      expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
-      expect(result.stderr).toMatch(/gate:file/);
-      expect(result.stderr).toMatch(/could not be loaded/i);
-      expect(result.stderr).toContain(edited);
-      expect(result.stderr).toContain(said);
-      expect(ranLog(dir), 'gate:file was run, though its code could not be loaded').toBe('');
+      expectBlockedThroughTheChild(dir, result, edited);
+      expect(result.stderr).toMatch(said);
     },
   );
 
-  test.each(['docs/plan/README.md', 'README.md'])(
-    'BUG-52: with gate:file unable to load, an edit to %s, which the gate does not check, still exits 0 and prints nothing',
-    (file) => {
-      const dir = brokenCopy('scripts/gate-file.mjs', SYNTAX_ERROR);
+  test.each([
+    {
+      hang: 'a busy loop',
+      text: `\nconst until = Date.now() + ${String(HANG_ENDS_AFTER_MS)};\nwhile (Date.now() < until) {}\n`,
+    },
+    {
+      hang: 'an await that never settles, and a timer',
+      text: `\nconst timer = setInterval(() => {}, 1_000);\nsetTimeout(() => clearInterval(timer), ${String(HANG_ENDS_AFTER_MS)});\nawait new Promise(function () {});\n`,
+    },
+  ])(
+    'BUG-52: with $hang in scripts/gate-file.mjs, gate:file never finishes: the hook stops it at its limit and blocks (exit 2), saying ETIMEDOUT, and does not hang itself',
+    ({ text }) => {
+      // Each hang ends by itself after a minute, so even if something here goes
+      // wrong, nothing it starts spins on for longer than that.
+      const dir = brokenCopy(GATE, text);
+      const { PATH } = fakePnpm(dir, [
+        `exec ${JSON.stringify(process.execPath)} load-gate.mjs "$@"`,
+      ]);
+
+      const result = hookIn(dir, SOURCE, {
+        PATH,
+        preload: recordSpawns(dir, SHORT_LIMIT_MS),
+        limitMs: 30_000,
+      });
+
+      expectBlockedThroughTheChild(dir, result, SOURCE);
+      expect(result.stderr, 'the block message says gate:file ran out of time').toMatch(
+        /ETIMEDOUT/,
+      );
+      expect(
+        gateSpawns(dir).map((call) => call.timeout),
+        'the limit the hook asked for, before record-spawn.mjs shortened it',
+      ).toEqual([GATE_FILE_LIMIT_MS]);
+    },
+  );
+
+  test('BUG-52: a gate:file ended by a signal, with no exit code, blocks (exit 2) and names the edited file', () => {
+    const dir = projectCopy();
+    const { bin, PATH } = fakePnpm(dir, [`echo '${STARTED}' >> ran.txt`, 'kill -KILL $$']);
+    const fixture = spawnSync(path.join(bin, 'pnpm'), [], { cwd: dirWith({}) });
+    expect(
+      { status: fixture.status, signal: fixture.signal },
+      'the fixture: this pnpm ends by a signal',
+    ).toEqual({ status: null, signal: 'SIGKILL' });
+
+    const result = hookIn(dir, SOURCE, { PATH });
+
+    expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
+    expect(result.stderr).toContain(SOURCE);
+    expect(result.stdout).toBe('');
+    expect(ranLog(dir), 'the hook never ran this pnpm').toContain(STARTED);
+  });
+
+  test('BUG-52: with no pnpm to run gate:file, spawnSync’s own error blocks (exit 2), and the block message names it (ENOENT) and the edited file', () => {
+    const dir = projectCopy();
+    const empty = path.join(dir, 'empty-bin');
+    mkdirSync(empty);
+
+    const result = hookIn(dir, SOURCE, { PATH: empty });
+
+    expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
+    expect(result.stderr).toContain(SOURCE);
+    expect(result.stderr, 'the block message names spawnSync’s error').toMatch(/ENOENT/);
+    expect(result.stdout).toBe('');
+    expect(ranLog(dir)).toBe('');
+  });
+
+  test.each(
+    [
+      { broken: 'a syntax error', text: SYNTAX_ERROR },
+      { broken: 'an await that never settles', text: NEVER_SETTLES },
+    ].flatMap((each) => ['docs/plan/README.md', 'README.md'].map((file) => ({ ...each, file }))),
+  )(
+    'BUG-52: with $broken in scripts/gate-file.mjs, an edit to $file, which the gate does not check, still exits 0, prints nothing and starts no gate:file',
+    ({ text, file }) => {
+      const dir = brokenCopy(GATE, text);
 
       const result = hookIn(dir, file);
 
       expect(result.status, `stderr:\n${result.stderr}`).toBe(ALLOWED);
       expect(result.stdout).toBe('');
+      expect(ranLog(dir)).toBe('');
       // The control: in this same copy a checked edit blocks, so the 0 above is
       // the hook's early exit, not a gate that loaded after all.
       expect(hookIn(dir, SOURCE).status).toBe(BLOCKED);
@@ -515,7 +1014,7 @@ describe('HK-04 (BUG-52): a gate:file that cannot be loaded blocks the edit, and
   test.each(['docs/plan/README.md', 'README.md'])(
     'BUG-52: with the gate’s code intact, an edit to %s, which the gate does not check, exits 0, prints nothing and runs nothing',
     (file) => {
-      const { dir } = projectCopy();
+      const dir = projectCopy();
 
       const result = hookIn(dir, file);
 
@@ -524,349 +1023,4 @@ describe('HK-04 (BUG-52): a gate:file that cannot be loaded blocks the edit, and
       expect(ranLog(dir)).toBe('');
     },
   );
-
-  test('BUG-52: the copy’s control: with the gate’s code intact, an edit to a source file loads the gate, runs gate:file and passes', () => {
-    // If the copy lacked a file the hook loads, this would fail too, so the
-    // blocks above come from the break, not from an incomplete copy.
-    const { dir } = projectCopy();
-
-    const result = hookIn(dir, SOURCE);
-
-    expect(result.status, `stderr:\n${result.stderr}`).toBe(ALLOWED);
-    expect(ranLog(dir)).toContain(SOURCE);
-  });
-
-  // BUG-52, review loop 3 (test-auditor's should-fix, and the
-  // privacy-security-reviewer's note 3, each on its own). The hook stops
-  // gate:file at GATE_FILE_LIMIT_MS, and a source regex was all that held it
-  // there. It read only the start of the value, so a fallback such as
-  // `gate.GATE_FILE_LIMIT_MS ?? 170_000`, `|| 170_000` or `?? LIMIT` got past
-  // every test. And if gate-file.mjs loads but no longer exports a usable
-  // GATE_FILE_LIMIT_MS, the hook fails open. Checked by hand, on Node 22 (the
-  // repository's engines), what spawnSync does with each such value:
-  // - missing (undefined), null or 0: it runs gate:file with no limit at all,
-  //   until Claude Code's own limit on the hook ends it, and Claude Code does
-  //   not treat that as a block;
-  // - a string, NaN, a negative number, Infinity or a fraction: it throws
-  //   ERR_OUT_OF_RANGE ("It must be an unsigned integer"), node exits 1, and
-  //   Claude Code does not block on exit 1 either.
-  // Decided here (test-author, D-031): a usable limit is a whole number of
-  // milliseconds above 0, the values spawnSync takes as a limit. Any other
-  // value blocks the edit, names GATE_FILE_LIMIT_MS and the edited file, says
-  // that no checks ran, and runs no gate:file. A fallback number of the hook's
-  // own would hide a gate that lost its limit, so these copies leave the hook
-  // no way through but to block.
-  //
-  // Not pinned: a limit so long that Claude Code's limit on the hook ends
-  // first. The real value is held below that limit by the settings.json test
-  // above; checking it at run time would have the hook read settings.json.
-  //
-  // As loop 2 decided for a gate that cannot load: an edit to a file the gate
-  // does not check still exits 0 at the hook's early exit.
-  describe('with a gate-file.mjs that loads but has no usable GATE_FILE_LIMIT_MS', () => {
-    const GATE = 'scripts/gate-file.mjs';
-
-    /**
-     * A project copy whose gate-file.mjs loads, but exports `declaration` as
-     * GATE_FILE_LIMIT_MS, or, with no declaration, has the name renamed away.
-     */
-    function copyWithLimit(declaration) {
-      const { dir } = projectCopy();
-      const file = path.join(dir, GATE);
-      const text = readFileSync(file, 'utf8');
-      const renamed = text.replaceAll(/\bGATE_FILE_LIMIT_MS\b/g, 'GATE_FILE_LIMIT_MS_RENAMED');
-      expect(
-        renamed,
-        `${GATE} does not name GATE_FILE_LIMIT_MS, so renaming it proves nothing`,
-      ).not.toBe(text);
-      writeFileSync(
-        file,
-        declaration === undefined
-          ? renamed
-          : `${renamed}\nexport const GATE_FILE_LIMIT_MS = ${declaration};\n`,
-      );
-      return dir;
-    }
-
-    /** What the copy's gate-file.mjs exports as GATE_FILE_LIMIT_MS, read by loading it in a node of its own. */
-    function exportedLimit(dir) {
-      const url = pathToFileURL(path.join(dir, GATE)).href;
-      const result = spawnSync(
-        process.execPath,
-        [
-          '--input-type=module',
-          '-e',
-          `const gate = await import(${JSON.stringify(url)});` +
-            'const limit = gate.GATE_FILE_LIMIT_MS;' +
-            "process.stdout.write(JSON.stringify({ exported: 'GATE_FILE_LIMIT_MS' in gate, type: typeof limit, value: String(limit) }));",
-        ],
-        { cwd: dir, encoding: 'utf8', timeout: 60_000 },
-      );
-      if (result.error) {
-        throw result.error;
-      }
-      expect(
-        result.status,
-        `the copy's gate-file.mjs did not load, so a block would not be about the limit:\n${result.stderr}`,
-      ).toBe(0);
-      return JSON.parse(result.stdout);
-    }
-
-    const NO_LIMIT = 'runs it with no limit';
-    const THROWS = 'throws, and node exits 1';
-    const UNUSABLE = [
-      {
-        limit: 'renamed away',
-        declaration: undefined,
-        spawnSync: NO_LIMIT,
-        exported: false,
-        type: 'undefined',
-        value: 'undefined',
-      },
-      {
-        limit: 'null',
-        declaration: 'null',
-        spawnSync: NO_LIMIT,
-        exported: true,
-        type: 'object',
-        value: 'null',
-      },
-      {
-        limit: '0',
-        declaration: '0',
-        spawnSync: NO_LIMIT,
-        exported: true,
-        type: 'number',
-        value: '0',
-      },
-      {
-        limit: 'a string',
-        declaration: "'170000'",
-        spawnSync: THROWS,
-        exported: true,
-        type: 'string',
-        value: '170000',
-      },
-      {
-        limit: 'NaN',
-        declaration: 'Number.NaN',
-        spawnSync: THROWS,
-        exported: true,
-        type: 'number',
-        value: 'NaN',
-      },
-      {
-        limit: 'a negative number',
-        declaration: '-170_000',
-        spawnSync: THROWS,
-        exported: true,
-        type: 'number',
-        value: '-170000',
-      },
-      {
-        limit: 'Infinity',
-        declaration: 'Number.POSITIVE_INFINITY',
-        spawnSync: THROWS,
-        exported: true,
-        type: 'number',
-        value: 'Infinity',
-      },
-      {
-        limit: 'a fraction',
-        declaration: '170_000.5',
-        spawnSync: THROWS,
-        exported: true,
-        type: 'number',
-        value: '170000.5',
-      },
-    ];
-
-    test.each(UNUSABLE)(
-      'BUG-52: with GATE_FILE_LIMIT_MS $limit (spawnSync $spawnSync), an edit to a file the gate checks blocks (exit 2), names GATE_FILE_LIMIT_MS and the file, says no checks ran, and runs no gate:file',
-      ({ declaration, exported, type, value }) => {
-        const dir = copyWithLimit(declaration);
-        expect(
-          exportedLimit(dir),
-          'the copy: gate-file.mjs loads, with this GATE_FILE_LIMIT_MS',
-        ).toEqual({
-          exported,
-          type,
-          value,
-        });
-
-        const result = hookIn(dir, SOURCE);
-
-        expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
-        expect(result.stderr).toContain('GATE_FILE_LIMIT_MS');
-        expect(result.stderr).toContain(SOURCE);
-        expect(result.stderr).toMatch(/no checks ran/i);
-        expect(ranLog(dir), 'gate:file was run without a usable limit').toBe('');
-      },
-    );
-
-    test('BUG-52: the edit to gate-file.mjs that renamed GATE_FILE_LIMIT_MS away blocks too, and names both', () => {
-      const dir = copyWithLimit(undefined);
-
-      const result = hookIn(dir, GATE);
-
-      expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
-      expect(result.stderr).toContain('GATE_FILE_LIMIT_MS');
-      expect(result.stderr).toContain(GATE);
-      expect(result.stderr).toMatch(/no checks ran/i);
-      expect(ranLog(dir), 'gate:file was run without a limit').toBe('');
-    });
-
-    test.each(['docs/plan/README.md', 'README.md'])(
-      'BUG-52: with GATE_FILE_LIMIT_MS renamed away, an edit to %s, which the gate does not check, still exits 0 and prints nothing',
-      (file) => {
-        const dir = copyWithLimit(undefined);
-
-        const result = hookIn(dir, file);
-
-        expect(result.status, `stderr:\n${result.stderr}`).toBe(ALLOWED);
-        expect(result.stdout).toBe('');
-        expect(ranLog(dir)).toBe('');
-        // The control: in this same copy a checked edit blocks, so the 0 above
-        // is the hook's early exit, not a limit the hook found after all.
-        expect(hookIn(dir, SOURCE).status).toBe(BLOCKED);
-      },
-    );
-
-    test('BUG-52: the copy’s control: with gate-file.mjs intact, the copy exports the real GATE_FILE_LIMIT_MS, and the hook runs gate:file and passes', () => {
-      // If exportedLimit misread the copy, or the intact limit blocked, this
-      // fails, so the blocks above come from the planted values alone.
-      const { dir } = projectCopy();
-
-      expect(exportedLimit(dir)).toEqual({
-        exported: true,
-        type: 'number',
-        value: String(GATE_FILE_LIMIT_MS),
-      });
-      const result = hookIn(dir, SOURCE);
-      expect(result.status, `stderr:\n${result.stderr}`).toBe(ALLOWED);
-      expect(ranLog(dir)).toContain(SOURCE);
-    });
-  });
-
-  // BUG-52, review loop 3 (privacy-security-reviewer, note 4). The message
-  // gave the error's name and message only, so for a syntax error the session
-  // was not told which of the files the gate loads broke. What node gives,
-  // checked by hand on Node 22 (the repository's engines):
-  // - a syntax error: the caught error's stack names no file and no line. It
-  //   is "SyntaxError: Unexpected token ';'" and node's own frames. Node prints
-  //   the file:///…:line only when the error goes uncaught (for example,
-  //   loading the gate in a node of its own), or for `node --check <file>`;
-  // - an import of a name not exported: the first line of the stack is the
-  //   importing file's file:///…:line;
-  // - a top-level `throw 42`: a bare number, with no stack. Node names no file
-  //   for it, even uncaught. So the hook is held only to blocking and saying
-  //   what was thrown.
-  // Decided here (test-author, D-031): the message names the broken file as a
-  // path from the project's root, with its line, as path:line. That is how the
-  // hook names the edited file, and it is a path Read and Edit take as it is.
-  // A file:/// URL or an absolute path alone does not count: it names where
-  // this checkout sits on the disk, which the message does not need. The line
-  // is required too, because node gives it wherever it gives the file.
-  describe('the load-failure message names the file that broke, and the line', () => {
-    /** The files the gate loads: what the hook loads, less the hook's own folder. */
-    const GATE_MODULES = hookModules().filter((rel) => !rel.startsWith('.claude/'));
-    const BROKEN_LINE = SYNTAX_ERROR.trim();
-
-    /** The 1-based number of the last line of the copy's `rel` that is exactly `text`. */
-    function lineOf(dir, rel, text) {
-      const index = readFileSync(path.join(dir, rel), 'utf8').split('\n').lastIndexOf(text);
-      expect(index, `"${text}" is not a line of ${rel}`).toBeGreaterThanOrEqual(0);
-      return index + 1;
-    }
-
-    const escaped = (text) => text.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
-    /** `rel:line` as a path of its own, not the end of an absolute path or a file:/// URL. */
-    const at = (rel, line) =>
-      new RegExp(String.raw`(?<![\w./\\-])${escaped(rel)}:${String(line)}(?!\d)`);
-
-    test('BUG-52: the files below are the gate’s own: gate-file.mjs, vitest.shared.mjs and scripts/lib modules, so the test.each is never empty', () => {
-      expect(GATE_MODULES).toContain('scripts/gate-file.mjs');
-      expect(GATE_MODULES).toContain('vitest.shared.mjs');
-      expect(GATE_MODULES.filter((rel) => rel.startsWith('scripts/lib/')).length).toBeGreaterThan(
-        0,
-      );
-    });
-
-    test.each(GATE_MODULES)(
-      'BUG-52: with a syntax error in %s, the block message names that file and the line, as a path from the project root',
-      (target) => {
-        const dir = brokenCopy(target, SYNTAX_ERROR);
-        const line = lineOf(dir, target, BROKEN_LINE);
-
-        const result = hookIn(dir, SOURCE);
-
-        expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
-        expect(result.stderr).toMatch(/could not be loaded/i);
-        expect(result.stderr).toContain('Unexpected token');
-        expect(result.stderr, `no ${target}:${String(line)} in the message`).toMatch(
-          at(target, line),
-        );
-        expect(ranLog(dir), 'gate:file was run, though its code could not be loaded').toBe('');
-      },
-    );
-
-    test.each([
-      { target: 'scripts/gate-file.mjs', from: './lib/steps.mjs' },
-      { target: 'scripts/lib/steps.mjs', from: './glob.mjs' },
-    ])(
-      'BUG-52: with an import of a name not exported yet in $target, the block message names that file and the import’s line',
-      ({ target, from }) => {
-        const statement = `import { NOT_EXPORTED_YET } from '${from}';`;
-        const dir = brokenCopy(target, `\n${statement}\n`);
-        const line = lineOf(dir, target, statement);
-
-        const result = hookIn(dir, SOURCE);
-
-        expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
-        expect(result.stderr).toMatch(/could not be loaded/i);
-        expect(result.stderr).toContain('NOT_EXPORTED_YET');
-        expect(result.stderr, `no ${target}:${String(line)} in the message`).toMatch(
-          at(target, line),
-        );
-        expect(ranLog(dir), 'gate:file was run, though its code could not be loaded').toBe('');
-      },
-    );
-
-    test('BUG-52: reached through a symlink to the project, as on macOS, where the temporary folder is one, the message still names the broken file from the project root', () => {
-      // Node loads a module by its real path, so the file:/// it names for a
-      // broken file is the real one; the session's cwd can be the symlink's
-      // path. On macOS, /var is a symlink to /private/var. A path taken from
-      // cwd then reads ../../private/var/…, so this test runs the hook through
-      // a symlink here, rather than passing on Linux and failing on the Mac.
-      const target = 'vitest.shared.mjs';
-      const dir = brokenCopy(target, SYNTAX_ERROR);
-      const line = lineOf(dir, target, BROKEN_LINE);
-      const project = path.join(dirWith({}), 'project');
-      symlinkSync(dir, project, 'dir');
-
-      const result = hookIn(project, SOURCE);
-
-      expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
-      expect(result.stderr).toContain(SOURCE);
-      expect(result.stderr, `no ${target}:${String(line)} in the message`).toMatch(
-        at(target, line),
-      );
-      expect(ranLog(dir), 'gate:file was run, though its code could not be loaded').toBe('');
-    });
-
-    test('BUG-52: with a top-level `throw 42` in a scripts/lib module, which has no stack and no file to name, the edit still blocks and says what was thrown', () => {
-      // A guard for the change above: code that reads a file and line out of
-      // what was thrown must not itself throw on a value with no stack, or the
-      // hook exits 1 and fails open again.
-      const dir = brokenCopy('scripts/lib/glob.mjs', '\nthrow 42;\n');
-
-      const result = hookIn(dir, SOURCE);
-
-      expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
-      expect(result.stderr).toMatch(/could not be loaded/i);
-      expect(result.stderr).toContain(SOURCE);
-      expect(result.stderr).toMatch(/\b42\b/);
-      expect(ranLog(dir), 'gate:file was run, though its code could not be loaded').toBe('');
-    });
-  });
 });
