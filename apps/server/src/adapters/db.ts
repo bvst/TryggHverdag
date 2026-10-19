@@ -90,31 +90,39 @@ class ConnectTimeoutClient extends pg.Client {
 type Release = (error?: Error | boolean) => void;
 
 /**
+ * What a query the limit cut off rejects with (D-132): code ETIMEDOUT, which
+ * Graphile Worker 0.18 retries (lib.js, RETRYABLE_ERROR_CODES), and a message
+ * that names the limit and nothing of the query. sqlstateOf reads no SQLSTATE
+ * in it. A new one for each query, so no caller shares another's.
+ */
+function queryTimedOut(): Error {
+  return Object.assign(
+    new Error(
+      `No answer from the database within QUERY_TIMEOUT_MS (${String(QUERY_TIMEOUT_MS)} ms), so its connection was closed (D-132).`,
+    ),
+    { code: 'ETIMEDOUT' },
+  );
+}
+
+/**
  * The API's and the worker's client (D-132): a ConnectTimeoutClient whose
  * every query fails once QUERY_TIMEOUT_MS have passed without an answer.
  *
- * On the client, not the pool: Drizzle's transactions and Graphile Worker
- * query a client the pool handed out, which no pool-wide hook sees. The
- * timer is the global setTimeout, as pg's own are. A limit per query, never
- * per hand-out, so a client held idle for Graphile's LISTEN, or a wait for a
- * free client in a full pool, is never cut short.
+ * On the client, not the pool, as Drizzle's transactions and Graphile Worker
+ * query a client the pool handed out. A limit per query, never per hand-out,
+ * so a client held idle for Graphile's LISTEN is never cut short.
  *
- * When the limit fires, the client is ended at once: its socket is destroyed
- * under the query, which rejects, and it takes no other. Destroyed, not handed
- * back: pg's own query_timeout rejects the caller but leaves a query already
- * sent holding the connection (pg 8.23, client.js, about line 720), and every
- * later query on it would wait behind that one. And its place in the pool is
- * given back, through the release pg-pool put on it, because a client a
- * holder never releases is counted for ever: drizzle-orm 0.45.3 awaits a
- * transaction's `begin` before the `try` whose `finally` releases
- * (node-postgres/session.js, about line 184), so a `begin` that hangs would
- * keep its place, and a pool of two would fill. A holder's own release of it
- * later, as Graphile's withPgClient releases in the turn its query rejects,
- * does nothing.
+ * When the limit fires, the client is ended, not handed back: pg's own
+ * query_timeout leaves a query already sent holding the connection (pg 8.23,
+ * client.js, Client.query). Its place in the pool is given back at once,
+ * because drizzle-orm 0.45.3 never releases a client whose `begin` failed
+ * (node-postgres/session.js, NodePgSession.transaction), and its holder's own
+ * release later does nothing. Each query the end cut off rejects with
+ * queryTimedOut(), in place of pg's "Connection terminated".
  *
- * A submittable query (a cursor or a stream) settles through methods of its
- * own, which the limit cannot see, so it is refused rather than left
- * unbounded. None is sent on these pools.
+ * A query that would settle where the limit cannot see it, a submittable or
+ * one answered through its config's own callback, is refused. None is sent on
+ * these pools. D-132 has the rest.
  */
 class QueryLimitClient extends ConnectTimeoutClient {
   /** pg-pool's release for this client's latest hand-out. */
@@ -155,30 +163,65 @@ class QueryLimitClient extends ConnectTimeoutClient {
 
   /** Sends one query, as `send`, and gives the client up if it is not answered in time. */
   #limited(send: (...args: unknown[]) => unknown, args: unknown[]): unknown {
-    const [query] = args;
-    if (typeof (query as { submit?: unknown } | null | undefined)?.submit === 'function') {
+    const [query, values, callback] = args;
+    const config = query as { submit?: unknown; callback?: unknown } | null | undefined;
+    // Where pg answers (pg 8.23, utils.js, normalizeQueryConfig): the callback
+    // argument, else a function given as the values, else the config's own
+    // callback, else the promise it returns. pg-pool's pool.query passes a
+    // callback argument, which pg also writes onto a config it was given.
+    const answeredAt = callback ? 2 : typeof values === 'function' ? 1 : undefined;
+    if (typeof config?.submit === 'function') {
       throw new TypeError(
         'A submittable query cannot be bounded by QUERY_TIMEOUT_MS on this pool (D-132): send its text instead.',
       );
     }
+    if (answeredAt === undefined && typeof config?.callback === 'function') {
+      throw new TypeError(
+        'A query answered through its config’s own callback cannot be bounded by QUERY_TIMEOUT_MS on this pool (D-132): pass the callback as an argument, or await the promise.',
+      );
+    }
+    // The limit's rejection replaces only the failure of a query pg took
+    // before the limit ended this client; a query sent after it keeps pg's own.
+    const takenBeforeTheEnd = !this.#givenUp;
+    const failure = (error: unknown): unknown =>
+      takenBeforeTheEnd && this.#givenUp ? queryTimedOut() : error;
+    // Armed before the send, not after: pg can answer inside it, through the
+    // callback, when it cannot encode a parameter (query.js, Query.prepare).
     const timer = setTimeout(() => {
       this.#giveUp();
     }, QUERY_TIMEOUT_MS);
     const settled = (): void => {
       clearTimeout(timer);
     };
-    // pg answers through a callback when the last argument is one (pg-pool's
-    // pool.query sends that way), and through the promise it returns otherwise.
-    const callback = args.at(-1);
-    if (typeof callback === 'function') {
-      args[args.length - 1] = (...results: unknown[]) => {
+    const answer = answeredAt === undefined ? undefined : args[answeredAt];
+    if (answeredAt !== undefined && typeof answer === 'function') {
+      args[answeredAt] = (...results: unknown[]) => {
         settled();
-        Reflect.apply(callback, undefined, results);
+        if (results[0]) {
+          results[0] = failure(results[0]);
+        }
+        Reflect.apply(answer, undefined, results);
       };
     }
-    const result = send(...args);
+    let result: unknown;
+    try {
+      result = send(...args);
+    } catch (error) {
+      // Refused before pg took it, as a null query is: no limit is left behind.
+      settled();
+      throw error;
+    }
     if (result instanceof Promise) {
-      void result.then(settled, settled);
+      return result.then(
+        (answered: unknown) => {
+          settled();
+          return answered;
+        },
+        (error: unknown) => {
+          settled();
+          throw failure(error);
+        },
+      );
     }
     return result;
   }
@@ -188,8 +231,8 @@ class QueryLimitClient extends ConnectTimeoutClient {
       return;
     }
     this.#givenUp = true;
-    // Ended at once: with a query in flight, pg destroys the socket, so the
-    // query rejects ("Connection terminated"), and any query after it too.
+    // Ended at once: with a query in flight, pg destroys the socket, so each
+    // query it had taken rejects, with queryTimedOut() (#limited).
     void this.end();
     // And its place given back, whether or not its holder ever releases it.
     if (this.#handedOut) {
@@ -300,6 +343,7 @@ export function createPool(
   const pool = new pg.Pool({
     connectionString,
     max,
+    // No name, the migrations' pool: no query limit and no keepalive (D-132).
     ...(name === undefined
       ? { Client: ConnectTimeoutClient }
       : {
