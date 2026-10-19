@@ -5426,8 +5426,7 @@ any other path is work, not a candidate for the same treatment.
      the database has stopped answering. The query rejects, and the connection
      is destroyed, not handed back to the pool, so the next query gets a fresh
      one. pg's own `query_timeout` rejects the caller but leaves a query
-     already sent holding the connection (pg 8.23, `client.js` about line
-     720). A connection handed back in that state would fail every later
+     already sent holding the connection (pg 8.23, `client.js`, `Client.query`). A connection handed back in that state would fail every later
      query on it, so the destroy is part of this decision.
   3. **TCP keepalive on every connection,** so an idle connection whose peer
      has vanished is found and dropped, including one Graphile Worker holds
@@ -5457,7 +5456,7 @@ any other path is work, not a candidate for the same treatment.
   - **The limit also gives the connection's place in the pool back.**
     Destroying the connection is not enough when the statement that hangs
     is a Drizzle transaction's `begin`. drizzle-orm 0.45.3
-    (`node-postgres/session.js`, about line 184) awaits `begin` before the
+    (`node-postgres/session.js`, `NodePgSession.transaction`) awaits `begin` before the
     `try` whose `finally` releases the client, so the client is never
     released, and pg-pool counts it for ever. In the worker's pool of two,
     with Graphile Worker's `LISTEN` connection in the other place, one such
@@ -5478,8 +5477,7 @@ any other path is work, not a candidate for the same treatment.
 - **Amended again 2026-10-18 (Claude, D-031, from BUG-51's reviews):**
   - **The limit's rejection carries `code: 'ETIMEDOUT'`,** with a message
     naming the limit and nothing of the query. Graphile Worker 0.18 completes
-    and fails a job with a call nobody awaits (`worker.js` about lines 262
-    and 283). Its retry wrapper retries only a few codes, ETIMEDOUT among them
+    and fails a job with a call nobody awaits (`worker.js`, where a job is completed and failed). Its retry wrapper retries only a few codes, ETIMEDOUT among them
     (`lib.js`, `RETRYABLE_ERROR_CODES`). With pg's plain "Connection
     terminated", a completion cut off by the limit was an unhandled
     rejection, and the worker exited 1 at 15 s (`safety-reviewer` probed it).
@@ -5489,9 +5487,11 @@ any other path is work, not a candidate for the same treatment.
     no longer ends the worker. Only a hang that outlasts every retry, hours
     long, still does, loudly. `sqlstateOf` reads no SQLSTATE in ETIMEDOUT, so
     the lines that log one still say null.
-  - **The limit is armed only once pg has taken the query,** so a query pg
-    refuses at once (a null query) leaves no timer behind to end a healthy
-    connection later. A query whose config carries its own `callback`, like
+  - **No limit outlives a query pg refuses.** The timer is armed just before
+    the query is handed to pg, because pg 8.23 can answer inside that call
+    (`Query.prepare`, for a parameter it cannot encode). It is cleared if pg
+    throws instead, as for a null query, so no timer is left behind to end a
+    healthy connection later. A query whose config carries its own `callback`, like
     a submittable one, is refused before anything is sent: the limit could
     not see it settle. None is sent on these pools.
   - **Only the given-up hand-out's own release is swallowed.** A later
