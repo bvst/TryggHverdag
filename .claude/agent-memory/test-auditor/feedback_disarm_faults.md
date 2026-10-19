@@ -14,3 +14,6 @@ promise, callback, sync throw), armed at the wrong scope (per hand-out, per sess
 clear. Ask for a probe of the shape "answered in time, advance 2x the limit on fake timers, the same resource still
 works". Blocking when the faulted form would hit every healthy operation and no gate covers the file.
 Related: [[bug51-audit]], [[rejected-alternative]], [[load-proof-floors]]
+Loop 1 lesson: a fix that splits settle paths (resolve vs reject handlers, callback wrapper) needs each side planted on
+its own - the resolve side died, the reject side (F13b) survived. And check the test-kit fake can reach a path before
+asking for a test of it (the fake throws on pg's Close after a bind failure).

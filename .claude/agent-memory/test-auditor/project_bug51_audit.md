@@ -34,3 +34,22 @@ Audited 2026-10-18 (cloud, fresh run after a container restart). Red 3f94034 (te
   L3 named pools are few and short-lived, so F11/F20 would not be caught there either.
 - gate:integrity 5 of 5 (NODE_USE_ENV_PROXY=1), 13 required incl. mutation/traceability.
 Related: [[disarm-faults]], [[rejected-alternative]], [[bug34-audit]], [[in-memory-mutation]]
+
+**Loop 1 delta (2026-10-19, 5ffa62e tests, 9300e8e fix, 1e3f5e8 guards; HEAD 33eddcd = D-132 text + memory). PASS.**
+- RG-02: HEAD tests vs 4233657's db.ts: 16 red (the 12 of 5ffa62e plus 4 of 1e3f5e8's "guards", which are guards only
+  relative to 9300e8e: queued-query ETIMEDOUT, values-as-callback with undefined after), each for the right reason;
+  vs 9300e8e: 0 red. RG-03: only `.+` -> exact line (F22), refusal loop +statementTimeoutMs (F18), hung /v1/health and
+  sweep tests gain stdout/stderr capture + marker/database_error checks; none weakened (tests:changes 5 files).
+- Faults (mutants4/5/6.mjs): killed F11, F12, F13a (resolve side), F13c (callback wrapper), F20, F18, F22, SYNC,
+  old at(-1) detection, values-callback ignored, ETIMEDOUT everywhere-after/never/promise-only/callback-only/57014/any
+  failure/SQL in message, config-callback refusal removed or too broad (reused pool.query config), submittable refusal.
+  SURVIVED: F13b (reject handler never clears: a checked-out client ended 15 s after ANY failed query, 55P03/57014
+  included) - probe TA-REJ (fake handler throws 55P03, hold 2x limit, same connection answers) passes HEAD, kills it:
+  should fix. ARM (timer armed after send): reachable only on a checked-out client's callback path with an unencodable
+  param; the test-kit fake throws on pg's Close ("C") after a bind failure, so no unit test can reach it (note).
+  AT3 (values-fn preferred over callback) near-equivalent. Old equivalents unchanged (F03, F14-16, F19, F06c).
+- L3: ran database.integration.test.ts against local PG16 (unshare initdb, port 55433, fresh `create database` per run;
+  a reused DB fails two older tests on stale beats): 12/12; statement_timeout dropped kills the BUG-51 L3 test
+  ("expected '0' to be '500ms'"); client limit at 1 s does not (expected: 500 ms cancel first).
+- Load: 6/6 runs of the four files, 360/360, 8 busy loops (load to ~8).
+- gate:integrity 5 of 5; no open PR, check-runs 0.
