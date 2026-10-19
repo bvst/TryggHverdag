@@ -5519,3 +5519,46 @@ any other path is work, not a candidate for the same treatment.
     100th attempt fails; a hang is still loud through the watchdog's
     failed sweeps, the stale beat and the page. Such a failure logs code null, as a
     connection reset does, so the two cannot be told apart in the logs.
+
+## D-133 — The per-edit gate runs an edited test at its own level, and says when a level cannot run here (BUG-52)
+- **Date:** 2026-10-19 · **Status:** Accepted (the owner's answer, 2026-10-19:
+  "Yes, change the hook") · **Section:** 7 (HK-04, D-119, INF-06)
+- **Context:** BUG-52. `gate:file` ran an edited test file with `vitest run`
+  and the unit config. That config excludes `*.system.test.ts` (L6) and
+  `*.integration.test.ts` (L3), so Vitest found no file and exited 1. Every
+  edit to an L6 or L3 test then failed the post-edit hook while running
+  nothing. An edited test edited beside a source file was not run at all:
+  only the source file's related tests ran.
+- **Decision:**
+  - **Each edited test runs at its own level,** with the config whose
+    `include` finds it:
+    - L6 with `vitest.system.config.mjs`;
+    - L3 with `vitest.integration.config.mjs`;
+    - unit tests with the default config.
+
+    This holds whether or not a source file was edited with it.
+  - **L3 needs Docker.** Where `docker info` fails, the L3 step is not
+    started. It comes back as **not possible here**, naming Docker, in the
+    words `gate:full` uses. It is not a failure, and it is not a pass:
+    anything that reads only "passed" sees it did not pass. The gate asks
+    for Docker only when an edit has an L3 step.
+  - **The post-edit hook passes the note on** (the owner's answer). Before,
+    it showed the gate's output only when the gate failed, so a "not
+    possible here" note with exit 0 would have reached nobody. Now the
+    session is told, as information and not as a failure, which edited
+    tests could not run here and why. The way Claude Code documents for a
+    PostToolUse hook to tell the model something without blocking is one
+    JSON object on stdout,
+    `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":…}}`,
+    and exit 0 (code.claude.com/docs/en/hooks, "Add context for Claude").
+    Plain stdout on exit 0 reaches only the debug log. Exit 2 and
+    `"decision": "block"` read as a problem, so they are kept for failures,
+    as now.
+- **Consequences:**
+  - An edit to an L6 test now runs that file's tests after every edit
+    (seconds; the smallest suite took 1.3 s warm).
+  - In a session without Docker, an L3 edit is checked by CI's
+    `integration` job, and the session is told so.
+  - The change touches `.claude/hooks/post-edit.mjs`, which needs the
+    owner's or `urso-agent`'s approval through the merge rules (D-042).
+  - Built test-first as BUG-52. Supersedes nothing.
