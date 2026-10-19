@@ -87,3 +87,30 @@ limit (pinned by a test only; a `typeof !== 'number'` block would close it); the
 SyntaxError message names no file or line (the stack is dropped). The hook test's
 hookModules() follows the hook's relative imports and copies them into a dirWith temp
 project, so it tracks future imports. 112 tests passed (post-edit + gate-file).
+
+**Loop 3 (head d04c930, 2026-10-19), PASS with one should-fix (my miss from loop 2).**
+Limit check (Number.isInteger and above 0) blocks string/0/-1/1.5/undefined (probed exit 2), but
+accepts 1e300, which spawnSync takes as no effective limit (sleep 2 ran 2008 ms, no
+error); only the settings.json test holds the real value under 180 s. whereItBroke: child
+`node --input-type=module -e "await import(<GATE_URL>)"`, process.execPath, arg array, no
+shell, 10 s, stdin closed, env/cwd inherited; main() stays off (argv[1] undefined under -e);
+only a `^file:///\S+:\d+$` line leaves, made repo-relative. Probed: syntax error -> "at
+scripts/gate-file.mjs:308"; lib/steps.mjs error -> "at scripts/lib/steps.mjs:126"; missing
+named export -> "at scripts/gate-file.mjs:20" (from error.stack's first line).
+- **inspect() of a non-Error throw prints its contents:** `throw { token: "SYNTH-SECRET-123" }`
+  came out verbatim in the block message (String() gave "[object Object]"). Theoretical (gate
+  code throwing a secret-bearing object), unbounded length: suggest depth 0 + maxStringLength
+  or tail().
+- **MISSED IN LOOP 2: an in-process dynamic import fails OPEN on a load that never ends.**
+  Appended to the scratch gate-file.mjs: `await new Promise(function () {})` -> node exit 13
+  ("unsettled top-level await", non-blocking); the same with a live setInterval -> hangs (124
+  under `timeout 25`), so Claude Code's 180 s hook timeout ends it, non-blocking;
+  `while (true) {}` -> hangs too. The 5ee115c hook blocked all of these (exit 2: gate failed /
+  spawnSync ETIMEDOUT at 170 s). Lesson: when a hook moves repo code from a child process with
+  a timeout into its own process, probe THREE load failures, not one: throw/syntax error,
+  unsettled top-level await (exit 13), and a hang (sync loop or live handle). Fix to ask
+  for: no repo import in the hook (literal limit pinned by a test), or do the whole load in
+  a child with a timeout and block on anything but success.
+- Exit codes in probes: with `printf | timeout node | cut | head`, the hook's status is
+  PIPESTATUS[1], not [2]; the first loop-3 run read cut's 0. Simpler: send the hook's output
+  to /dev/null and read $?.

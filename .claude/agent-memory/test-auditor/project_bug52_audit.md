@@ -72,3 +72,19 @@ Related: [[entry-script-wiring]], [[in-memory-mutation]], [[gate-integrity-local
   between the ext filter and the package.json check: near-equivalent (note).
 - Leftovers: hook-test-* count unchanged across runs (a transient 4th disappeared); one gate-file-main-in-process
   dir from 11:26 came from a loop-1 mutant run, not a normal run; removed. Load 3/3 at load 7.5-13, slowest 3.3 s.
+
+**Loop 3 delta (2026-10-19; red f5e25db, fix d04c930, hook only). PASS, notes only.**
+- RG-02: f5e25db's hook tests on fa4d9e2's hook: 20 red, right reasons: renamed/null/0 ran the gate with no limit
+  (exit 0); string/NaN/negative/Infinity/fraction died in spawnSync with ERR_OUT_OF_RANGE (exit 1), proving the
+  test's claim; 9 location tests lack path:line; the 2 docs tests are red through their same-copy checked-edit
+  control. d04c930 53/53. RG-03: only the fs import line re-added expanded; tests:changes clean.
+- Faults (mutants4.mjs + mutants4b.mjs, harness3.mjs): 24/26 KILLED: check removed alone or with ?? / || / ?? LIMIT /
+  ternary fallback, isFinite, >= 0, typeof number, undefined-only, too strict (<= 170_000), check after the gate
+  ran, message without file / "no checks ran", reload removed, location from input cwd (symlink test), absolute
+  path, file:/// URL, full-stack-only, reload 1 ms, AT_LINE without m, no line, whereItBroke throwing on non-Error,
+  where never printed. SURVIVED (notes): location from process.cwd() and a relative GATE path in the reload
+  (tests always run the hook with cwd = project root; Linux and macOS getcwd resolve symlinks; the hook already
+  needs cwd = root for package.json, so equivalent in practice); reload-only (same outcome, extra child spawn).
+  S02f first draft declared `r` twice (a SyntaxError "kill"): re-planted as a real check-after-gate fault.
+- Load 3/3 at load 6-11, slowest 3.9 s vs 60 s spawn ceiling; reload child 10 s cap only on the failure path.
+  hook-test-* count unchanged, no gate-file-* dirs.

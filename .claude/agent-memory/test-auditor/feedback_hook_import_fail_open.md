@@ -18,3 +18,5 @@ Related: [[bug52-audit]], [[entry-script-wiring]]
 Loop 2: the guarded dynamic import closed it. Plant also a fallback (`?? literal`) for the imported constant: a source
 regex that matches `timeout: x.CONST\b` lets it through; ask for a behaviour check (export renamed in a temp copy ->
 block) or an anchored regex (`CONST\s*,`).
+Loop 3: the runtime check (`Number.isInteger(x) && x > 0`, else block) killed every fallback form. A planted fault
+must not create a SyntaxError of its own (e.g. a second `const r`): that "kills" through a crash, not a test.
