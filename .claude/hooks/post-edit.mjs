@@ -31,4 +31,18 @@ const r = spawnSync('pnpm', ['-s', 'gate:file', '--', rel], {
 if (r.error) block(`Checks could not run for ${rel}: ${r.error.message}`);
 if (r.status !== 0)
   block(`Checks failed after editing ${rel}:\n${tail((r.stdout ?? '') + (r.stderr ?? ''))}`);
-process.exit(0);
+
+// BUG-52 (D-133): the gate prints nothing when every step passed, so anything it
+// prints on exit 0 is for the session, such as an edited test that was not
+// possible here. Exit 0 with one JSON object is how a PostToolUse hook tells
+// Claude something without blocking (code.claude.com/docs/en/hooks, "Add
+// context for Claude"); plain stdout on exit 0 reaches only the debug log.
+const said = (r.stdout ?? '').trim();
+if (!said) process.exit(0);
+const additionalContext = `No check failed after editing ${rel}. The gate also said:\n${said}`;
+// No process.exit after this write: where a pipe is written asynchronously
+// (macOS), exiting at once could cut the JSON short.
+process.stdout.write(
+  JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext } }) +
+    '\n',
+);

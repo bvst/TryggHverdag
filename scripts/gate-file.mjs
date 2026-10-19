@@ -10,6 +10,8 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import process from 'node:process';
 import { matchesAnyGlob } from './lib/glob.mjs';
+import { run } from './lib/proc.mjs';
+import { planSteps } from './lib/steps.mjs';
 import { TEST_GLOBS } from './lib/test-strength.mjs';
 
 /** Files these checks apply to: our own code, not planning documents or spikes. */
@@ -54,22 +56,44 @@ export function stepsFor(files) {
     });
   }
   const vitestCode = code.filter((file) => !file.startsWith(APP));
-  const testable = vitestCode.filter((file) => !matchesAnyGlob(file, TEST_GLOBS));
+  const tests = vitestCode.filter((file) => matchesAnyGlob(file, TEST_GLOBS));
+  const testable = vitestCode.filter((file) => !tests.includes(file));
   if (testable.length > 0) {
     steps.push({
       name: 'tests that cover this file',
       command: ['pnpm', 'exec', 'vitest', 'related', '--run', ...testable],
     });
-  } else if (vitestCode.some((file) => matchesAnyGlob(file, TEST_GLOBS))) {
+  }
+  // BUG-52 (D-133): every edited test runs itself, whatever else was edited,
+  // with the config whose `include` finds it. The unit config excludes L6 and
+  // L3, so Vitest given one of those with it finds no test file and fails.
+  const system = tests.filter((file) => file.endsWith('.system.test.ts'));
+  const integration = tests.filter((file) => file.endsWith('.integration.test.ts'));
+  const unit = tests.filter((file) => !system.includes(file) && !integration.includes(file));
+  if (unit.length > 0) {
+    steps.push({ name: 'the edited tests', command: ['pnpm', 'exec', 'vitest', 'run', ...unit] });
+  }
+  if (system.length > 0) {
     steps.push({
-      name: 'the edited tests',
+      name: 'the edited system tests (L6)',
+      command: ['pnpm', 'exec', 'vitest', 'run', '--config', 'vitest.system.config.mjs', ...system],
+    });
+  }
+  if (integration.length > 0) {
+    // As gate:full's L3 step (scripts/gate.mjs): it runs only where Docker works.
+    steps.push({
+      name: 'the edited integration tests (L3)',
       command: [
         'pnpm',
         'exec',
         'vitest',
         'run',
-        ...vitestCode.filter((file) => matchesAnyGlob(file, TEST_GLOBS)),
+        '--config',
+        'vitest.integration.config.mjs',
+        ...integration,
       ],
+      needsTool: 'docker',
+      toolReason: 'a real PostgreSQL runs in a container (L3)',
     });
   }
   // Jest runs in the app, so the files go to it relative to the app. An edited
@@ -100,12 +124,25 @@ export function stepsFor(files) {
  * or is still running at `timeout` (and is then killed, together with every
  * process it started) is a failure.
  *
- * @param {{ name: string, command: string[] }[]} steps
- * @param {{ cwd?: string, timeout?: number }} [options]
- * @returns {Promise<{ name: string, ok: boolean, output: string }[]>} in the order of `steps`
+ * A step that needs a tool `available` does not mark as working is not started
+ * (BUG-52). It comes back as not possible, with planSteps' reason, and with
+ * `ok: false`, so anything that reads only `ok` never takes it for a pass.
+ *
+ * @param {{ name: string, command: string[], needsTool?: string, toolReason?: string }[]} steps
+ * @param {{ cwd?: string, timeout?: number, available?: Record<string, boolean> }} [options]
+ * @returns {Promise<{ name: string, ok: boolean, notPossible?: boolean, output: string }[]>} in the order of `steps`
  */
-export async function runSteps(steps, { cwd = process.cwd(), timeout = 160_000 } = {}) {
-  return Promise.all(steps.map((step) => runStep(step, { cwd, timeout })));
+export async function runSteps(
+  steps,
+  { cwd = process.cwd(), timeout = 160_000, available = {} } = {},
+) {
+  return Promise.all(
+    planSteps(steps, {}, {}, available).map(({ step, willRun, reason }) =>
+      willRun
+        ? runStep(step, { cwd, timeout })
+        : { name: step.name, ok: false, notPossible: true, output: reason },
+    ),
+  );
 }
 
 /**
@@ -159,22 +196,48 @@ async function runStep({ name, command: [program, ...args] }, { cwd, timeout }) 
 /**
  * What main() prints after the steps have run: nothing when every step passed;
  * otherwise each failing step with its output trimmed, in the order of the
- * steps, then the count and the files.
+ * steps, then the count and the files. A step that was not possible here
+ * (BUG-52) is not a failure, so the exit code comes from the other steps alone;
+ * it is named last, one line each, with its reason, so that a clean run never
+ * quietly means "did not check".
  *
- * @param {{ name: string, ok: boolean, output: string }[]} results
+ * @param {{ name: string, ok: boolean, notPossible?: boolean, output: string }[]} results
  * @param {string[]} files
  * @returns {{ text: string, exitCode: number }}
  */
 export function report(results, files) {
-  const failures = results.filter((result) => !result.ok);
-  if (failures.length === 0) {
-    return { text: '', exitCode: 0 };
+  const notPossible = results.filter((result) => result.notPossible === true);
+  const failures = results.filter((result) => !result.ok && result.notPossible !== true);
+  let text = '';
+  if (failures.length > 0) {
+    text +=
+      failures.map((failure) => `\n--- ${failure.name} ---\n${failure.output.trim()}\n`).join('') +
+      `\n${String(failures.length)} check(s) failed for: ${files.join(', ')}\n` +
+      'Fix them before moving on — CI runs exactly the same checks.\n';
   }
-  const text =
-    failures.map((failure) => `\n--- ${failure.name} ---\n${failure.output.trim()}\n`).join('') +
-    `\n${String(failures.length)} check(s) failed for: ${files.join(', ')}\n` +
-    'Fix them before moving on — CI runs exactly the same checks.\n';
-  return { text, exitCode: 1 };
+  if (notPossible.length > 0) {
+    text +=
+      '\n' +
+      notPossible
+        .map((result) => `· ${result.name} — not possible here: ${result.output.trim()}\n`)
+        .join('');
+  }
+  return { text, exitCode: failures.length === 0 ? 0 : 1 };
+}
+
+/**
+ * Which tools the steps need that work on this machine, asked the way gate:full
+ * asks (availableTools in gate.mjs): `docker info`, because a machine can have
+ * the binary and no daemon. Asked only when a step needs Docker: `docker info`
+ * can take seconds, and this gate runs after every edit.
+ *
+ * @param {{ needsTool?: string }[]} steps
+ * @returns {Record<string, boolean>}
+ */
+function availableFor(steps, cwd) {
+  return steps.some((step) => step.needsTool === 'docker')
+    ? { docker: run('docker', ['info'], { cwd, timeout: 15_000 }).ok }
+    : {};
 }
 
 async function main() {
@@ -183,7 +246,9 @@ async function main() {
     return;
   }
 
-  const { text, exitCode } = report(await runSteps(stepsFor(files)), files);
+  const steps = stepsFor(files);
+  const available = availableFor(steps, process.cwd());
+  const { text, exitCode } = report(await runSteps(steps, { available }), files);
   process.stdout.write(text);
   process.exitCode = exitCode;
 }
