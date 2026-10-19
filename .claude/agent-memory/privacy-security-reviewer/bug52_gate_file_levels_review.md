@@ -72,3 +72,18 @@ matching file's pass.
   repo code for this.
 - Guard quirk again: a Bash grep pattern naming the environment object with a dot was
   refused ("Reading .env files"); drop the object name from the pattern.
+
+**Loop 2 (head 8568ed8, fix 84cb623, 2026-10-19), PASS, Notes only.** The hook now loads
+gate-file.mjs with `await import()` in try/catch after the early exits; a failed load calls
+block() (lib.mjs block = stderr + process.exit(2), so `gate` is never read undefined).
+probe4 re-run (scratchpad/imp, keep `git show fa00e6f:` hook as the loop-1 control):
+syntax error in gate-file.mjs -> exit 2 (loop-1 hook exit 1, 5ee115c hook exit 2); syntax
+error in vitest.shared.mjs -> exit 2 on its own edit and on a later apps/x.ts edit; top-level
+`throw 42` in scripts/lib/glob.mjs -> exit 2 with "42"; README.md edit while broken -> exit 0
+(early exit first, test-author's documented decision). Left open on purpose and queued:
+malformed package.json JSON.parse -> exit 1 (BUG-53, with progress-gate/test-weakening
+static imports). Residual notes: a missing GATE_FILE_LIMIT_MS export gives spawnSync no
+limit (pinned by a test only; a `typeof !== 'number'` block would close it); the
+SyntaxError message names no file or line (the stack is dropped). The hook test's
+hookModules() follows the hook's relative imports and copies them into a dirWith temp
+project, so it tracks future imports. 112 tests passed (post-edit + gate-file).
