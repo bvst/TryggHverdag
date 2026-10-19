@@ -4,7 +4,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { GATE_FILE_LIMIT_MS } from '../../scripts/gate-file.mjs';
 import { readInput, relPath, block, tail } from './lib.mjs';
 
 const input = await readInput();
@@ -24,10 +23,23 @@ if (!scripts['gate:file']) {
   );
 }
 
+// BUG-52 (D-133): loaded here, guarded, not by a static import. A gate whose code
+// cannot load made node exit 1, which Claude Code does not block on: it must block.
+let gate;
+try {
+  gate = await import('../../scripts/gate-file.mjs');
+} catch (error) {
+  const why = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  block(
+    `gate:file could not be loaded, so no checks ran after editing ${rel}. ` +
+      `scripts/gate-file.mjs or a file it loads failed: ${why}`,
+  );
+}
+
 const r = spawnSync('pnpm', ['-s', 'gate:file', '--', rel], {
   cwd,
   encoding: 'utf8',
-  timeout: GATE_FILE_LIMIT_MS,
+  timeout: gate.GATE_FILE_LIMIT_MS,
 });
 if (r.error) block(`Checks could not run for ${rel}: ${r.error.message}`);
 if (r.status !== 0)
