@@ -20,3 +20,6 @@ regex that matches `timeout: x.CONST\b` lets it through; ask for a behaviour che
 block) or an anchored regex (`CONST\s*,`).
 Loop 3: the runtime check (`Number.isInteger(x) && x > 0`, else block) killed every fallback form. A planted fault
 must not create a SyntaxError of its own (e.g. a second `const r`): that "kills" through a crash, not a test.
+Loop 4: the final design loads no repo code in the hook at all (a guarded import cannot catch a load that never
+settles: exit 13, or a busy loop hangs the hook). Plant: guarded import back, a hang in the gate's load, and check
+what killing pnpm at the limit leaves behind (real pnpm orphans its node child).

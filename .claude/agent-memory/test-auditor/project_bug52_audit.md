@@ -88,3 +88,26 @@ Related: [[entry-script-wiring]], [[in-memory-mutation]], [[gate-integrity-local
   S02f first draft declared `r` twice (a SyntaxError "kill"): re-planted as a real check-after-gate fault.
 - Load 3/3 at load 6-11, slowest 3.9 s vs 60 s spawn ceiling; reload child 10 s cap only on the failure path.
   hook-test-* count unchanged, no gate-file-* dirs.
+
+**Loop 4 delta (2026-10-19; red 0b1a515, fix ae082f5; HEAD a75f867 = privacy memory). PASS, notes only.**
+- Design: the hook loads no repository code; `const GATE_FILE_LIMIT_MS = 170_000` as the timeout; the gate runs
+  only in the child. Tests: TypeScript-parser import scan (followed through lib.mjs; node:module/vm/worker_threads
+  refused), AST pins on the const and the single `timeout: GATE_FILE_LIMIT_MS`, a --import preload recording the
+  timeout really passed (and shortening it to 3 s in the two hang tests), load-gate.mjs writing started/loaded.
+- RG-02: 23 red on ab6d864's hook, right reasons (scan finds import(), no const, gate.X timeout, child never
+  started, exit 13 in the hook, hook itself hung). ae082f5 52/52.
+- RG-03: main's tests untouched (only an import line); 10 main expects intact. 109 -> 103 is branch-internal:
+  12 unusable-limit tests replaced by static pins (export safe int > 0, hook literal equal); symlink and
+  repo-relative path:line dropped because the hook no longer computes a location (node prints file:///..:line);
+  6-expect helper shared by 18 tests. test-weakening.mjs compares against git HEAD, so the cp-then-Edit route
+  still ran the full comparison (it flagged the drop).
+- Faults (mutants5.mjs, harness3.mjs): 22/22 KILLED: guarded import back, static gate/vitest.shared import, computed
+  import, 160_000 / 170_001, env default / env in timeout / let reassigned, status === 1 / > 0 / signal ignored,
+  no r.error branch / ENOENT-only / ETIMEDOUT passes, lib.mjs importing scripts/lib or node:module, hook importing
+  node:vm, timeout removed (recorder sees 'none' though the preload imposes 3 s), spread after timeout, timeout twice,
+  message without file. Env-limit faults die only to the AST pin (recorder runs with env unset).
+- Real pnpm killed at the limit orphans its node child (verified: ppid 1, still spinning). The tests exec node through
+  a shim to avoid it; in real sessions a gate that hangs forever leaves a spinner per checked edit. Pre-existing
+  (same spawnSync on main); note, suggest queueing (detached spawn + group kill, as gate-file runStep does).
+  CAUTION: `pkill -f "node spin.mjs"` killed my own shell (exit 144): use a bracket pattern like `spin[.]mjs`.
+- Load 3/3 at load 8-9, slowest 4.3 s; hang tests about 3.2 s. No hook-test/gate-file dirs or node orphans left.
