@@ -8,7 +8,13 @@
  */
 import process from 'node:process';
 import { databaseClock } from './adapters/clock.ts';
-import { POOL_SIZE, createDatabase, createPool, sessionLimitsLines } from './adapters/db.ts';
+import {
+  POOL_SIZE,
+  STATEMENT_TIMEOUT_MS,
+  createDatabase,
+  createPool,
+  sessionLimitsLines,
+} from './adapters/db.ts';
 import { databaseDeviceAuthenticator } from './adapters/device-credentials.ts';
 import { databaseJourneyStore } from './adapters/journeys.ts';
 import { databaseWorkerHeartbeats } from './adapters/worker-heartbeats.ts';
@@ -37,10 +43,12 @@ export async function startApiProcess(config: ServerConfig): Promise<ApiProcess>
   // session idle inside a transaction is ended, and a heartbeat waits at most
   // LOCK_WAIT_LIMIT_MS for a row, then fails as a 500 the phone resends.
   // Without the lock limit, two such waits would hold both connections, and
-  // every route, health included, would wait with them.
+  // every route, health included, would wait with them. And PostgreSQL
+  // cancels any statement that runs longer than STATEMENT_TIMEOUT_MS (D-132).
   const limits = {
     idleInTransactionMs: IDLE_IN_TRANSACTION_LIMIT_MS,
     lockTimeoutMs: LOCK_WAIT_LIMIT_MS,
+    statementTimeoutMs: STATEMENT_TIMEOUT_MS,
   };
   const pool = createPool(config.databaseUrl, POOL_SIZE.api, { name: 'api', log, ...limits });
   const db = createDatabase(pool);

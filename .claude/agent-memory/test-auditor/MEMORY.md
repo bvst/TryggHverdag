@@ -53,3 +53,5 @@
 - [BUG-34 audit](project_bug34_audit.md) — PASS befe3ed; 26 faults, pool-level timeout and raised constant survive (should fix); load-proof under 8 busy loops; loop 1 PASS 52f510b (both closed)
 - [Rejected alternative](feedback_rejected_alternative.md) — plant the form the commit message says it did not choose; its harm is untested
 - [BUG-28 audit](project_bug28_audit.md) — PASS 7a58b33, loop 1 PASS d907018 (break after skipped/failed killed by tests 4/5 only; fake failWith/recover scoping proven); 12 faults in memory, A/B/C/E survive main L6+unit, killed by new tests; AC20 1094 beforeAt gap closed by 999/AC19/AC12/BUG-28; alerts L6 now a mutation input
+- [BUG-51 audit](project_bug51_audit.md) — BLOCK 4233657 (disarm/per-hand-out unpinned); loop 1 PASS 1e3f5e8: all named faults killed, reject-side clear (F13b) survives (TA-REJ should fix), ARM unreachable by the fake; L3 run on local PG16
+- [Disarm faults](feedback_disarm_faults.md) — per-operation limits: plant "never cleared" per settle path and "armed per hand-out"; ask for "answered, advance 2x limit, still works"

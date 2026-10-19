@@ -5392,3 +5392,130 @@ any other path is work, not a candidate for the same treatment.
   - CI is unchanged: its bases always resolve.
   - Built test-first as BUG-46.
   - Supersedes nothing.
+
+## D-132 — A query the database never answers fails within a limit; nothing waits forever (BUG-51)
+- **Date:** 2026-10-18 · **Status:** Accepted (the owner's answer, 2026-10-18:
+  "Time out the query") · **Section:** 5 (REL-08, LOST-02; D-068, BUG-34)
+- **Context:** BUG-51. BUG-34 bounded a connection's handshake, but nothing
+  bounds a query once the connection is up. Neither pool sets
+  `statement_timeout`, a client-side query limit, or TCP keepalive. A query
+  that never returns, or a database that vanishes without closing the
+  connection, therefore holds a sweep, a Graphile Worker query or the API's
+  session-limits read-back forever. Each of the worker's loops runs again only
+  after its previous run ends, so a hung sweep stops its loop for good. The
+  API's `stop()` awaits the read-back. Detection already works: a hung sweep
+  writes no beat, so the check-in stops and Healthchecks.io pages in about
+  three minutes. Recovery does not: nothing frees the loop.
+
+  The owner chose between four options:
+  - time out the query (chosen);
+  - exit the worker after N stuck intervals, relying on Clever Cloud to
+    restart it. Its docs say it restarts crashed apps, but nobody has checked
+    this for the worker. Each exit would also stop delivery and escalation;
+  - both;
+  - leave it.
+- **Decision:** the API's and the worker's pools bound every query, in three
+  layers. The migrations' pool gets none of them, as it gets no session
+  limits today, so a long migration is not cut off.
+  1. **`statement_timeout` = 10 s,** a startup parameter like the session
+     limits. A live server cancels a statement that runs longer, with SQLSTATE
+     57014, and the connection stays usable. 10 s is twice `LOCK_WAIT_LIMIT_MS`
+     (5 s), so a lock wait that gives up on time is never cut off first.
+  2. **A client-side query limit = 15 s,** longer than `statement_timeout`, so
+     on a live server PostgreSQL's cancel always comes first. When it fires,
+     the database has stopped answering. The query rejects, and the connection
+     is destroyed, not handed back to the pool, so the next query gets a fresh
+     one. pg's own `query_timeout` rejects the caller but leaves a query
+     already sent holding the connection (pg 8.23, `client.js`, `Client.query`). A connection handed back in that state would fail every later
+     query on it, so the destroy is part of this decision.
+  3. **TCP keepalive on every connection,** so an idle connection whose peer
+     has vanished is found and dropped, including one Graphile Worker holds
+     for `LISTEN`.
+
+  With these, a hung sweep fails like any database error. It writes its
+  `watchdog_failed` line and no beat, and the next sweep, `WATCHDOG_INTERVAL_MS`
+  later, runs on a fresh connection. A sweep stuck this way therefore recovers
+  within the query limit plus one interval (25 s), long before
+  `WORKER_STALE_AFTER_MS` (3 min). The delivery and escalation loops keep
+  running throughout. The read-back that proves the session limits are in
+  force at start reports `statement_timeout` too.
+- **Consequences:**
+  - A legitimately slow statement on these pools now fails at 10 s, loudly.
+    None is known today. Graphile Worker's own schema install at start runs on
+    the worker's pool: a start that waits more than 10 s on another worker's
+    install lock now fails the start, loudly (BUG-32's path).
+  - A recovered hang may page nobody. One failed sweep's `watchdog_failed`
+    line is the record, as for any one failed sweep today.
+  - Not covered: work that hangs outside a query. One example is a Graphile
+    task that never settles; the canary's run limit bounds the only one there
+    is.
+  - Values are Claude's (D-031); the approach is the owner's. Built test-first
+    as BUG-51.
+  - Supersedes nothing.
+- **Amended 2026-10-18 (Claude, D-031, from `test-author`'s red tests):**
+  - **The limit also gives the connection's place in the pool back.**
+    Destroying the connection is not enough when the statement that hangs
+    is a Drizzle transaction's `begin`. drizzle-orm 0.45.3
+    (`node-postgres/session.js`, `NodePgSession.transaction`) awaits `begin` before the
+    `try` whose `finally` releases the client, so the client is never
+    released, and pg-pool counts it for ever. In the worker's pool of two,
+    with Graphile Worker's `LISTEN` connection in the other place, one such
+    transaction fills the pool, which is BUG-51 again. So when the limit
+    fires, the connection is made unusable at once and handed back to the
+    pool as failed, and a later release of it does nothing.
+  - **Keepalive starts after 10 s idle.** pg's default delay of 0 keeps the
+    operating system's own, about two hours on Linux, which would leave a
+    vanished peer on an idle connection unnoticed for that long. Node 22's
+    `socket.setKeepAlive` sets only the first probe's delay, so the interval
+    and count stay the operating system's (on Linux, 75 s and 9). An idle connection whose
+    peer is gone is therefore dropped after about 11 minutes. A connection
+    with a query in flight is bounded by the query limit instead.
+  - **Recovery time:** when the database answers again, a hung sweep recovers
+    within the query limit plus one interval (25 s). While it stays hung,
+    each statement fails after 15 s in turn, and every sweep fails loudly;
+    the page comes as it does today.
+- **Amended again 2026-10-18 (Claude, D-031, from BUG-51's reviews):**
+  - **The limit's rejection carries `code: 'ETIMEDOUT'`,** with a message
+    naming the limit and nothing of the query. Graphile Worker 0.18 completes
+    and fails a job with a call nobody awaits (`worker.js`, where a job is completed and failed). Its retry wrapper retries only a few codes, ETIMEDOUT among them
+    (`lib.js`, `RETRYABLE_ERROR_CODES`). With pg's plain "Connection
+    terminated", a completion cut off by the limit was an unhandled
+    rejection, and the worker exited 1 at 15 s (`safety-reviewer` probed it).
+    That was the "exit the worker" option the owner did not choose, arriving
+    by the back door. With ETIMEDOUT, Graphile retries the completion with
+    backoff from 3 s to 120 s, up to 100 times. A stall of seconds or minutes
+    no longer ends the worker. Only a hang that outlasts every retry, hours
+    long, still does, loudly. `sqlstateOf` reads no SQLSTATE in ETIMEDOUT, so
+    the lines that log one still say null.
+  - **Graphile's job fetch now backs off too.** `withRetries` also wraps
+    fetching jobs, failing them, resetting locks and reading queue names.
+    Before, a failed fetch was retried at the next poll, every 2 s. Now one
+    call backs off from 3 s by 1.5 times each attempt, capped at 120 s, with
+    jitter. After a hang of about 8 minutes or more, the cron tasks (the
+    minute check-in, `sms_check` and the canary) can resume up to about 3
+    minutes after the database answers again, so the page clears late. The
+    watchdog, delivery and escalation are the worker's own loops and resume
+    on their next run. Accepted: a hung fetch never came back at all before.
+  - **A query's limit starts when it is called, not when pg sends it.** A
+    query queued on a client behind a slow statement that PostgreSQL still
+    answers can therefore be cut off before its own turn has had 15 s. Only
+    concurrent queries on one client meet this, and none is known: Drizzle's
+    transactions and Graphile Worker send one at a time (`test-auditor`).
+  - **No limit outlives a query pg refuses.** The timer is armed just before
+    the query is handed to pg, because pg 8.23 can answer inside that call
+    (`Query.prepare`, for a parameter it cannot encode). It is cleared if pg
+    throws instead, as for a null query, so no timer is left behind to end a
+    healthy connection later. A query whose config carries its own `callback`, like
+    a submittable one, is refused before anything is sent: the limit could
+    not see it settle. None is sent on these pools.
+  - **Once the limit has given a client up, its releases do nothing.** The
+    swallow belongs to that one client, and pg-pool never hands a given-up
+    client out again, so a later hand-out is never affected. Any other
+    client's release, a second release included, reaches pg-pool as before.
+  - **No `database_error` line when the limit ends a connection,** by
+    choice. pg raises no `error` for a client it was asked to end, and the
+    query's caller fails loudly: a 500, `watchdog_failed`, or the
+    read-back's line. Graphile's own retries write nothing until the
+    100th attempt fails; a hang is still loud through the watchdog's
+    failed sweeps, the stale beat and the page. Such a failure logs code null, as a
+    connection reset does, so the two cannot be told apart in the logs.
