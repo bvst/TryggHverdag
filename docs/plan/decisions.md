@@ -5496,6 +5496,11 @@ any other path is work, not a candidate for the same treatment.
     minutes after the database answers again, so the page clears late. The
     watchdog, delivery and escalation are the worker's own loops and resume
     on their next run. Accepted: a hung fetch never came back at all before.
+  - **A query's limit starts when it is called, not when pg sends it.** A
+    query queued on a client behind a slow statement that PostgreSQL still
+    answers can therefore be cut off before its own turn has had 15 s. Only
+    concurrent queries on one client meet this, and none is known: Drizzle's
+    transactions and Graphile Worker send one at a time (`test-auditor`).
   - **No limit outlives a query pg refuses.** The timer is armed just before
     the query is handed to pg, because pg 8.23 can answer inside that call
     (`Query.prepare`, for a parameter it cannot encode). It is cleared if pg
