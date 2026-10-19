@@ -850,6 +850,89 @@ describe('BUG-51: a process’s pool against a database that completes the start
     },
   );
 
+  // BUG-51, review loop 2 (test-auditor's TA-REJ, fault F13b): a query the
+  // database answers with an error is answered too, and its limit must be
+  // cleared as an answered one's is. Left armed, it would end the client
+  // QUERY_TIMEOUT_MS later, a checked-out one included: a Drizzle transaction's,
+  // or Graphile Worker's withPgClient's, after a 55P03 or a statement_timeout
+  // 57014, which D-132 says leave the connection usable. Shown on both ways a
+  // checked-out client answers: its promise, and a callback. (pool.query
+  // releases its client with the query's error, and pg-pool then destroys it,
+  // so a failed pool.query leaves no client for a stray limit to end.) These
+  // pass today.
+  const failsWithLockTimeout = (query: { text: string }) => {
+    if (/\bfail\b/.test(query.text)) {
+      throw Object.assign(new Error('canceling statement due to lock timeout'), {
+        code: '55P03',
+      });
+    }
+    return ANSWER;
+  };
+
+  test.each(processes)(
+    'BUG-51: guard: %s pool clears the limit of a checked-out client’s query that the database answers with an error: it rejects with 55P03, not ETIMEDOUT, and 2 × QUERY_TIMEOUT_MS later the client still answers on the same connection',
+    async (_which, name) => {
+      const database = await listeningFakePostgres(failsWithLockTimeout);
+      let pool: ReturnType<typeof createPool> | undefined;
+      let held: PoolClient | undefined;
+      try {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        pool = createPool(database.url, 1, processPoolOptions(name));
+        held = await checkedOut(pool);
+        const failed = await settledWithin(rowsOrError(held.query('select fail')), HANG_CEILING_MS);
+        expect(failed).toBeInstanceOf(Error);
+        expect((failed as { code?: unknown }).code).toBe('55P03');
+
+        await vi.advanceTimersByTimeAsync(2 * QUERY_TIMEOUT_MS);
+        expect(
+          await settledWithin(rowsOrError(held.query('select 42 as answer')), HANG_CEILING_MS),
+          'a limit armed for the query the database answered with an error ended the client later',
+        ).toEqual(ANSWERED);
+        expect(database.connections()).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+        held?.release();
+        await endWithin(pool);
+        await database.close();
+      }
+    },
+  );
+
+  test.each(processes)(
+    'BUG-51: guard: %s pool clears the limit of a checked-out client’s query, answered through a callback, that the database answers with an error: the callback gets 55P03, not ETIMEDOUT, and 2 × QUERY_TIMEOUT_MS later the client still answers on the same connection',
+    async (_which, name) => {
+      const database = await listeningFakePostgres(failsWithLockTimeout);
+      let pool: ReturnType<typeof createPool> | undefined;
+      let held: PoolClient | undefined;
+      try {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        pool = createPool(database.url, 1, processPoolOptions(name));
+        held = await checkedOut(pool);
+        const client = held as unknown as AnyQuery;
+        const calledBack = new Promise<unknown>((resolve) => {
+          client.query('select fail', (error: unknown) => {
+            resolve(error);
+          });
+        });
+        const failed = await settledWithin(calledBack, HANG_CEILING_MS);
+        expect(failed).toBeInstanceOf(Error);
+        expect((failed as { code?: unknown }).code).toBe('55P03');
+
+        await vi.advanceTimersByTimeAsync(2 * QUERY_TIMEOUT_MS);
+        expect(
+          await settledWithin(rowsOrError(held.query('select 42 as answer')), HANG_CEILING_MS),
+          'a limit armed for the query the database answered with an error ended the client later',
+        ).toEqual(ANSWERED);
+        expect(database.connections()).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+        held?.release();
+        await endWithin(pool);
+        await database.close();
+      }
+    },
+  );
+
   // BUG-51, review loop 1 (code-reviewer, safety-reviewer; D-132 amended
   // again): pg throws at once, before sending anything, for a null query
   // (pg 8.23, client.js, query()). A limit armed before that throw is never
