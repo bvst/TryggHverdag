@@ -232,15 +232,16 @@ export function report(results, files) {
  * can take seconds, and this gate runs after every edit.
  *
  * @param {{ needsTool?: string }[]} steps
+ * @param {string} cwd
  * @returns {Record<string, boolean>}
  */
-function availableFor(steps, cwd) {
+export function availableFor(steps, cwd) {
   return steps.some((step) => step.needsTool === 'docker')
     ? { docker: run('docker', ['info'], { cwd, timeout: 15_000 }).ok }
     : {};
 }
 
-async function main() {
+export async function main() {
   const files = filesToCheck(process.argv.slice(2));
   if (files.length === 0) {
     return;
