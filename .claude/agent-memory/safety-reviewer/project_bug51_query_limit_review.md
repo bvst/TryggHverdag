@@ -54,3 +54,22 @@ Findings given (all Should fix / Notes):
 5. void this.end(): pg 8.23 end() never rejects; leaving it unhandled is the loud choice. Refuted as a defect.
 
 Related: [[bug34-connect-timeout-review]], [[reviewer-sandbox-limits]]
+
+**Loop 1 (2026-10-19), b962f3a..1e3f5e8: PASS.** 360 tests in the 4 unit files pass. L3 (new 57014 test in
+database.integration.test.ts) not run by me; read only.
+- Fix: rejection now Error with code ETIMEDOUT (message names QUERY_TIMEOUT_MS and D-132); timer cleared when
+  send throws; config.callback refused; answer detection mirrors normalizeQueryConfig (callback arg, else
+  function values); promise path returns the wrapped promise; every query taken before the end gets ETIMEDOUT.
+  The release swallow is STILL per client (#givenUp), not per hand-out as D-132's amendment words it.
+- Re-probe (probe/server.ts now answers extended protocol at Sync via `extended: () => boolean`): unawaited
+  batchCompleteJobs, DB answering from 20 s: ETIMEDOUT at 15.0 s and 31.8 s, retried on new connections,
+  answered 37.2 s, exit 0. Real bin/worker.ts vs fully hung DB: exit 1 at 16.0 s, "worker failed: Error: No
+  answer from the database within QUERY_TIMEOUT_MS (15000 ms)..." (migrate is not withRetries).
+- Mutants (probe/vitest.mutant2.config.mjs, 14): all killed except noEnd and noHandedOutGuard, both
+  equivalent now (the limit can fire only mid hand-out once a refused query leaves no timer).
+- Found: Graphile withRetries logs NOTHING per retry (lib.js 370-392), so D-132's "a Graphile retry line" is
+  false. withRetries also wraps getJobs (incl. taskIdentifiers), failJobs, resetLockedAt, getQueueNames:
+  ETIMEDOUT now makes the job FETCH back off (3 s x 1.5^n, cap 120 s, jitter 0.5-1.5) instead of failing to
+  the 2 s poll, so after a hang of ~8+ min the minute check-in, sms_check and canary (Graphile cron, concurrency
+  2) can resume up to ~3 min after the DB answers. Watchdog/delivery/escalation are worker.ts loops, unaffected.
+  Residual exit after 100 retries ~3.5 h, loud (console.error + unhandled rejection).
