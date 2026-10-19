@@ -1,8 +1,10 @@
 // req-coverage: fixtures-only — the IDs below are sample data for testing the gates.
 // HK-04: every edit is checked immediately, by the same script CI runs.
 import { afterEach, describe, expect, test } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { appendFileSync, copyFileSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import process from 'node:process';
 import { GATE_FILE_LIMIT_MS, report } from '../../scripts/gate-file.mjs';
 import {
   ALLOWED,
@@ -331,11 +333,16 @@ describe('HK-04 (BUG-52): the hook’s limit on gate:file', () => {
     expect(GATE_FILE_LIMIT_MS, 'GATE_FILE_LIMIT_MS, exported by scripts/gate-file.mjs').toEqual(
       expect.any(Number),
     );
+    // Loaded from the gate: by a static import, or (review loop 2) by a guarded
+    // dynamic one, so that a gate that cannot load blocks the edit (below).
     expect(source).toMatch(
-      /import\s*\{[^}]*\bGATE_FILE_LIMIT_MS\b[^}]*\}\s*from\s*['"]\.\.\/\.\.\/scripts\/gate-file\.mjs['"]/,
+      /(?:\bfrom\s*|\bimport\s*\(\s*)['"]\.\.\/\.\.\/scripts\/gate-file\.mjs['"]/,
     );
-    expect(source).toMatch(/\btimeout:\s*GATE_FILE_LIMIT_MS\b/);
+    expect(source).toMatch(/\btimeout:\s*(?:[\w$]+\.)?GATE_FILE_LIMIT_MS\b/);
     expect(source, 'a timeout typed as a number').not.toMatch(/\btimeout:\s*\d/);
+    expect(source, 'GATE_FILE_LIMIT_MS given a number of the hook’s own').not.toMatch(
+      /\bGATE_FILE_LIMIT_MS\s*=\s*\d/,
+    );
   });
 
   test('BUG-52: Claude Code’s own limit on the post-edit hook is at least 5 s longer than the hook’s limit on gate:file, so the hook lives to report a gate it stopped', () => {
@@ -354,5 +361,170 @@ describe('HK-04 (BUG-52): the hook’s limit on gate:file', () => {
     for (const hook of postEdit) {
       expect(hook.timeout * 1_000 - GATE_FILE_LIMIT_MS).toBeGreaterThanOrEqual(HOOK_MARGIN_MS);
     }
+  });
+});
+
+// BUG-52, review loop 2 (privacy-security-reviewer and test-auditor, each on
+// its own). The hook imported scripts/gate-file.mjs statically for
+// GATE_FILE_LIMIT_MS, and with it vitest.shared.mjs and four scripts/lib files,
+// before it read its input. If any of them cannot load (a syntax error, or,
+// mid-TDD, an import of a name not exported yet), node exits 1, and Claude Code
+// treats exit 1 from a hook as a non-blocking error: the session is told
+// nothing, the edit that broke the gate goes through, and no edit after it is
+// checked until the file is fixed. A gate that cannot load must block, and say
+// so.
+//
+// These run a copy of the hook in a temporary folder that holds exactly the
+// files the hook loads, followed from its own imports, so a file the hook comes
+// to load later is copied too. One of them is broken on purpose, and gate:file
+// is a fake that passes, so an edit here can only block because the gate's code
+// did not load.
+//
+// Decided here (test-author, D-031): an edit to a file the gate does not check,
+// such as a .md file, still exits 0 and prints nothing when the gate's code is
+// broken. The gate has nothing to say about such a file, so the hook's early
+// exit comes before it loads the gate. That hides nothing: the edit that broke
+// the gate is to a file the gate checks (.mjs) and blocks, and so does every
+// checked edit after it. And while the gate is down, a session can still write
+// down in docs/ what broke.
+describe('HK-04 (BUG-52): a gate:file that cannot be loaded blocks the edit, and says so', () => {
+  const REPO = path.resolve(import.meta.dirname, '..', '..');
+  const HOOK = '.claude/hooks/post-edit.mjs';
+  const SOURCE = 'apps/server/src/api.ts';
+  const SYNTAX_ERROR = '\nexport const broken = ;\n';
+
+  /** The files the hook loads: its own relative imports, static or dynamic, followed. */
+  function hookModules() {
+    const seen = new Set();
+    const visit = (rel) => {
+      if (seen.has(rel)) {
+        return;
+      }
+      seen.add(rel);
+      const text = readFileSync(path.join(REPO, rel), 'utf8');
+      const imports = /(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s*)['"](\.{1,2}\/[^'"]+)['"]/gm;
+      for (const [, specifier] of text.matchAll(imports)) {
+        visit(path.posix.normalize(path.posix.join(path.posix.dirname(rel), specifier)));
+      }
+    };
+    visit(HOOK);
+    return [...seen];
+  }
+
+  /** A temporary project: the hook, what it loads, and a gate:file that passes. */
+  function projectCopy() {
+    const dir = dirWith(fakeScripts({ 'gate:file': {} }));
+    const modules = hookModules();
+    for (const rel of modules) {
+      mkdirSync(path.join(dir, path.dirname(rel)), { recursive: true });
+      copyFileSync(path.join(REPO, rel), path.join(dir, rel));
+    }
+    return { dir, modules };
+  }
+
+  /** A project copy with `text` appended to `target`, one of the files the hook loads. */
+  function brokenCopy(target, text) {
+    const { dir, modules } = projectCopy();
+    expect(modules, `the hook does not load ${target}, so breaking it proves nothing`).toContain(
+      target,
+    );
+    appendFileSync(path.join(dir, target), text);
+    return dir;
+  }
+
+  /** Runs the copy's hook on an edit of `file`, the way runHook runs the real one. */
+  function hookIn(dir, file) {
+    const env = { ...process.env, CLAUDE_PROJECT_DIR: dir };
+    delete env.TRYGGHVERDAG_REVIEW_JOB;
+    const result = spawnSync(process.execPath, [path.join(dir, HOOK)], {
+      input: JSON.stringify({ cwd: dir, ...edit(path.join(dir, file)) }),
+      cwd: dir,
+      env,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    if (result.error) {
+      throw result.error;
+    }
+    return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+  }
+
+  const BREAKS = [
+    {
+      broken: 'a syntax error in gate-file.mjs',
+      target: 'scripts/gate-file.mjs',
+      text: SYNTAX_ERROR,
+      said: 'Unexpected token',
+    },
+    {
+      broken: 'a syntax error in vitest.shared.mjs',
+      target: 'vitest.shared.mjs',
+      text: SYNTAX_ERROR,
+      said: 'Unexpected token',
+    },
+    {
+      broken: 'an import of a name not exported yet',
+      target: 'scripts/gate-file.mjs',
+      text: "\nimport { NOT_EXPORTED_YET } from './lib/steps.mjs';\n",
+      said: 'NOT_EXPORTED_YET',
+    },
+  ];
+  const CASES = BREAKS.flatMap((each) =>
+    ['scripts/gate-file.mjs', SOURCE].map((edited) => ({ ...each, edited })),
+  );
+
+  test.each(CASES)(
+    'BUG-52: with $broken, an edit to $edited blocks (exit 2), saying gate:file could not be loaded, and names the file and the error',
+    ({ target, text, said, edited }) => {
+      const dir = brokenCopy(target, text);
+
+      const result = hookIn(dir, edited);
+
+      expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
+      expect(result.stderr).toMatch(/gate:file/);
+      expect(result.stderr).toMatch(/could not be loaded/i);
+      expect(result.stderr).toContain(edited);
+      expect(result.stderr).toContain(said);
+      expect(ranLog(dir), 'gate:file was run, though its code could not be loaded').toBe('');
+    },
+  );
+
+  test.each(['docs/plan/README.md', 'README.md'])(
+    'BUG-52: with gate:file unable to load, an edit to %s, which the gate does not check, still exits 0 and prints nothing',
+    (file) => {
+      const dir = brokenCopy('scripts/gate-file.mjs', SYNTAX_ERROR);
+
+      const result = hookIn(dir, file);
+
+      expect(result.status, `stderr:\n${result.stderr}`).toBe(ALLOWED);
+      expect(result.stdout).toBe('');
+      // The control: in this same copy a checked edit blocks, so the 0 above is
+      // the hook's early exit, not a gate that loaded after all.
+      expect(hookIn(dir, SOURCE).status).toBe(BLOCKED);
+    },
+  );
+
+  test.each(['docs/plan/README.md', 'README.md'])(
+    'BUG-52: with the gate’s code intact, an edit to %s, which the gate does not check, exits 0, prints nothing and runs nothing',
+    (file) => {
+      const { dir } = projectCopy();
+
+      const result = hookIn(dir, file);
+
+      expect(result.status, `stderr:\n${result.stderr}`).toBe(ALLOWED);
+      expect(result.stdout).toBe('');
+      expect(ranLog(dir)).toBe('');
+    },
+  );
+
+  test('BUG-52: the copy’s control: with the gate’s code intact, an edit to a source file loads the gate, runs gate:file and passes', () => {
+    // If the copy lacked a file the hook loads, this would fail too, so the
+    // blocks above come from the break, not from an incomplete copy.
+    const { dir } = projectCopy();
+
+    const result = hookIn(dir, SOURCE);
+
+    expect(result.status, `stderr:\n${result.stderr}`).toBe(ALLOWED);
+    expect(ranLog(dir)).toContain(SOURCE);
   });
 });
