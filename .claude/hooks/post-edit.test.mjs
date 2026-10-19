@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, test } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { report } from '../../scripts/gate-file.mjs';
 import {
   ALLOWED,
   BLOCKED,
@@ -98,5 +99,149 @@ describe('HK-04: edits the gate has nothing to say about', () => {
       cwd: dir,
     });
     expect(result.status).toBe(ALLOWED);
+  });
+});
+
+// BUG-52 (D-133, the owner: "Yes, change the hook"). gate:file can now pass
+// (exit 0) and still have something to say: an edited L3 test whose step was
+// not possible here, because Docker does not work on this machine. The hook
+// showed the gate's output only when the gate failed, so that note reached
+// nobody, and an L3 edit in a session without Docker looked checked. D-133:
+// the hook passes the note on as information, not as a failure, in the way
+// Claude Code documents for a PostToolUse hook (code.claude.com/docs/en/hooks,
+// "Add context for Claude"): exit 0 and one JSON object on stdout,
+// {"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":…}}.
+// Plain stdout on exit 0 reaches only the debug log. Exit 2 stays for failures.
+//
+// What the hook keys on (test-author, D-031): nothing but the gate's exit code
+// and whether it printed anything. gate:file prints nothing when every step
+// passed (scripts/gate-file.test.mjs, "a well-formatted file passes the gate:
+// exit code 0 and nothing printed"), so anything it prints on exit 0 is for the
+// session. A hook that looked for a phrase would drop a note the gate later
+// words differently, silently. The wording the gate prints, "not possible
+// here", is pinned once, in scripts/gate-file.test.mjs; the last two tests here
+// hand the hook that file's own report() text, so the two cannot drift apart.
+describe('HK-04 (D-133): what a passing gate has to say reaches the session', () => {
+  const L3_FILE = 'apps/server/src/alerts.integration.test.ts';
+  /** A not-possible note in the gate's words. It does not name the file: the hook must. */
+  const NOTE =
+    '· the edited integration tests (L3) — not possible here: needs docker, which is not working on this machine — a real PostgreSQL runs in a container (L3)';
+  const LINT_OUTPUT = 'alerts.integration.test.ts:3:7  error  no-unused-vars';
+  const FAILURE = `--- lint ---\n${LINT_OUTPUT}`;
+
+  /** stdout as one JSON value, or undefined if it is anything else (nothing, text, two objects). */
+  const parsed = (stdout) => {
+    try {
+      return JSON.parse(stdout);
+    } catch {
+      return undefined;
+    }
+  };
+
+  /** The shape D-133 names, and nothing besides: no decision, no stop. */
+  const CONTEXT_ONLY = {
+    hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: expect.any(String) },
+  };
+
+  const hookAfter = (gate) => {
+    const dir = dirWith(fakeScripts({ 'gate:file': gate }));
+    const result = runHook('post-edit.mjs', { input: edit(path.join(dir, L3_FILE)), cwd: dir });
+    return { dir, result };
+  };
+
+  test('BUG-52: a gate that passes but could not run an L3 step here: exit 0, and one PostToolUse JSON object whose additionalContext names the file and carries the note', () => {
+    const { dir, result } = hookAfter({ exitCode: 0, output: `\n${NOTE}\n` });
+
+    expect(ranLog(dir), 'the fake gate never ran').toContain(L3_FILE);
+    expect(result.status, result.stderr).toBe(ALLOWED);
+    const printed = parsed(result.stdout);
+    expect(printed, `the hook's stdout:\n${result.stdout}`).toEqual(CONTEXT_ONLY);
+    expect(printed.hookSpecificOutput.additionalContext).toContain(L3_FILE);
+    expect(printed.hookSpecificOutput.additionalContext).toContain(NOTE);
+  });
+
+  test('BUG-52: anything else a passing gate prints reaches the session too, so a note worded differently later is never dropped', () => {
+    const note = 'gate:file: a synthetic note in words no rule in the hook knows';
+    const { result } = hookAfter({ exitCode: 0, output: `${note}\n` });
+
+    expect(result.status, result.stderr).toBe(ALLOWED);
+    const printed = parsed(result.stdout);
+    expect(printed, `the hook's stdout:\n${result.stdout}`).toEqual(CONTEXT_ONLY);
+    expect(printed.hookSpecificOutput.additionalContext).toContain(note);
+  });
+
+  test('BUG-52: a gate that passes with nothing to say: the hook prints nothing and exits 0, as before', () => {
+    const { dir, result } = hookAfter({ exitCode: 0, output: '' });
+
+    expect(ranLog(dir), 'the fake gate never ran').toContain(L3_FILE);
+    expect(result.status).toBe(ALLOWED);
+    expect(result.stdout).toBe('');
+  });
+
+  test('BUG-52: a gate that fails and also could not run a step here: the hook blocks, as before, and the block message carries both the failure and the note', () => {
+    // Decided here: the note stays in the block message. Whoever fixes the
+    // failure should also learn which edited tests did not run on this machine.
+    const { result } = hookAfter({
+      exitCode: 1,
+      output: `\n${FAILURE}\n\n1 check(s) failed for: ${L3_FILE}\n${NOTE}\n`,
+    });
+
+    expect(result.status).toBe(BLOCKED);
+    expect(result.stderr).toContain('no-unused-vars');
+    expect(result.stderr).toContain(NOTE);
+  });
+
+  // The gate's own words, not a copy of them: each test below builds the text
+  // with scripts/gate-file.mjs's report(), for a step in the shape its runSteps
+  // returns when a tool is missing, and hands that text and exit code to the
+  // hook through the fake gate:file.
+  const NOT_POSSIBLE = {
+    name: 'the edited integration tests (L3)',
+    ok: false,
+    notPossible: true,
+    output:
+      'needs docker, which is not working on this machine — a real PostgreSQL runs in a container (L3)',
+  };
+  /** The lines of the gate's text that say a step was not possible here. */
+  const notPossibleLines = (text) =>
+    text
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => /not possible here/i.test(line));
+
+  test("BUG-52: gate-file.mjs's own report of a step not possible here reaches the session, every not-possible line of it", () => {
+    const gate = report([{ name: 'formatting', ok: true, output: '' }, NOT_POSSIBLE], [L3_FILE]);
+    const { result } = hookAfter({ exitCode: gate.exitCode, output: gate.text });
+
+    expect(result.status, `the hook blocked:\n${result.stderr}`).toBe(ALLOWED);
+    const lines = notPossibleLines(gate.text);
+    expect(
+      lines.length,
+      `no "not possible here" line in what report() printed:\n${gate.text}`,
+    ).toBeGreaterThan(0);
+    const printed = parsed(result.stdout);
+    expect(printed, `the hook's stdout:\n${result.stdout}`).toEqual(CONTEXT_ONLY);
+    for (const line of lines) {
+      expect(printed.hookSpecificOutput.additionalContext).toContain(line);
+    }
+  });
+
+  test("BUG-52: gate-file.mjs's own report of a failure beside a step not possible here blocks, and the block message keeps the not-possible line", () => {
+    const gate = report(
+      [{ name: 'lint', ok: false, output: `${LINT_OUTPUT}\n` }, NOT_POSSIBLE],
+      [L3_FILE],
+    );
+    const { result } = hookAfter({ exitCode: gate.exitCode, output: gate.text });
+
+    expect(result.status).toBe(BLOCKED);
+    expect(result.stderr).toContain('no-unused-vars');
+    const lines = notPossibleLines(gate.text);
+    expect(
+      lines.length,
+      `no "not possible here" line in what report() printed:\n${gate.text}`,
+    ).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(result.stderr).toContain(line);
+    }
   });
 });
