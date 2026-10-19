@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, test } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { report } from '../../scripts/gate-file.mjs';
+import { GATE_FILE_LIMIT_MS, report } from '../../scripts/gate-file.mjs';
 import {
   ALLOWED,
   BLOCKED,
@@ -242,6 +242,117 @@ describe('HK-04 (D-133): what a passing gate has to say reaches the session', ()
     ).toBeGreaterThan(0);
     for (const line of lines) {
       expect(result.stderr).toContain(line);
+    }
+  });
+
+  test("BUG-52: gate-file.mjs's own report of a failure with more than 4,000 characters of output, beside a step not possible here, blocks, and the block message still keeps the not-possible line", () => {
+    // review loop 1 (test-auditor): the hook keeps only the last 4,000
+    // characters of the gate's output (tail in lib.mjs), and nothing held that
+    // the not-possible lines come where that keeps them. Named before the
+    // failures, a long failure pushed them out, and every test still passed.
+    const longLint = Array.from(
+      { length: 120 },
+      (_, index) => `alerts.integration.test.ts:${String(index + 1)}:7  error  no-unused-vars`,
+    ).join('\n');
+    const gate = report(
+      [{ name: 'lint', ok: false, output: `${longLint}\n` }, NOT_POSSIBLE],
+      [L3_FILE],
+    );
+    const { result } = hookAfter({ exitCode: gate.exitCode, output: gate.text });
+
+    expect(gate.text.length, 'the fixture: a report longer than the hook keeps').toBeGreaterThan(
+      4_000,
+    );
+    expect(result.status).toBe(BLOCKED);
+    const lines = notPossibleLines(gate.text);
+    expect(
+      lines.length,
+      `no "not possible here" line in what report() printed:\n${gate.text}`,
+    ).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(result.stderr).toContain(line);
+    }
+  });
+
+  /** A gate:file that writes `stdout` and `stderr`, notes that it ran, and exits 0. */
+  const gateWriting = (stdout, stderr) => ({
+    'package.json': JSON.stringify({
+      name: 'fake',
+      private: true,
+      scripts: { 'gate:file': 'node fake-gate.mjs' },
+    }),
+    'fake-gate.mjs': [
+      "import { appendFileSync } from 'node:fs';",
+      "appendFileSync('ran.txt', 'gate:file ' + process.argv.slice(2).join(' ') + '\\n');",
+      `process.stdout.write(${JSON.stringify(stdout)});`,
+      `process.stderr.write(${JSON.stringify(stderr)});`,
+      'process.exit(0);',
+    ].join('\n'),
+  });
+  const WARNING = '(node:4242) ExperimentalWarning: a synthetic warning on stderr';
+
+  test('BUG-52: what a passing gate writes to stderr does not reach the session: with nothing on stdout, the hook prints nothing', () => {
+    // review loop 1 (test-auditor): only stdout is the gate's report. stderr
+    // holds what node and pnpm say on the side, and is not for the session.
+    const dir = dirWith(gateWriting('', `${WARNING}\n`));
+    const result = runHook('post-edit.mjs', { input: edit(path.join(dir, L3_FILE)), cwd: dir });
+
+    expect(ranLog(dir), 'the fake gate never ran').toContain(L3_FILE);
+    expect(result.status).toBe(ALLOWED);
+    expect(result.stdout).toBe('');
+  });
+
+  test('BUG-52: with a note on stdout and a warning on stderr from a passing gate, the session gets the note and not the warning', () => {
+    const dir = dirWith(gateWriting(`\n${NOTE}\n`, `${WARNING}\n`));
+    const result = runHook('post-edit.mjs', { input: edit(path.join(dir, L3_FILE)), cwd: dir });
+
+    expect(result.status).toBe(ALLOWED);
+    const printed = parsed(result.stdout);
+    expect(printed, `the hook's stdout:\n${result.stdout}`).toEqual(CONTEXT_ONLY);
+    expect(printed.hookSpecificOutput.additionalContext).toContain(NOTE);
+    expect(printed.hookSpecificOutput.additionalContext).not.toContain('ExperimentalWarning');
+  });
+});
+
+// BUG-52, review loop 1 (privacy-security-reviewer). The hook stops gate:file at
+// a limit, and the gate's own budget (the Docker probe and its steps) is checked
+// against that limit in scripts/gate-file.test.mjs. So the hook takes the limit
+// from there, GATE_FILE_LIMIT_MS, rather than a number of its own that could
+// drift from it (it was the literal 170_000); and Claude Code's limit on the hook
+// (settings.json) is longer, so the hook lives to report a gate it stopped. The
+// hook's limit cannot be watched without waiting it out, so the first test reads
+// the hook's source.
+describe('HK-04 (BUG-52): the hook’s limit on gate:file', () => {
+  const HOOK_MARGIN_MS = 5_000;
+
+  test('BUG-52: the hook stops gate:file at GATE_FILE_LIMIT_MS from scripts/gate-file.mjs, not at a number of its own', () => {
+    const source = readFileSync(path.join(import.meta.dirname, 'post-edit.mjs'), 'utf8');
+
+    expect(GATE_FILE_LIMIT_MS, 'GATE_FILE_LIMIT_MS, exported by scripts/gate-file.mjs').toEqual(
+      expect.any(Number),
+    );
+    expect(source).toMatch(
+      /import\s*\{[^}]*\bGATE_FILE_LIMIT_MS\b[^}]*\}\s*from\s*['"]\.\.\/\.\.\/scripts\/gate-file\.mjs['"]/,
+    );
+    expect(source).toMatch(/\btimeout:\s*GATE_FILE_LIMIT_MS\b/);
+    expect(source, 'a timeout typed as a number').not.toMatch(/\btimeout:\s*\d/);
+  });
+
+  test('BUG-52: Claude Code’s own limit on the post-edit hook is at least 5 s longer than the hook’s limit on gate:file, so the hook lives to report a gate it stopped', () => {
+    const settings = JSON.parse(
+      readFileSync(path.join(import.meta.dirname, '..', 'settings.json'), 'utf8'),
+    );
+    const postEdit = Object.values(settings.hooks ?? {})
+      .flat()
+      .flatMap((matcher) => matcher.hooks ?? [])
+      .filter((hook) => String(hook.command).includes('post-edit.mjs'));
+
+    expect(GATE_FILE_LIMIT_MS, 'GATE_FILE_LIMIT_MS, exported by scripts/gate-file.mjs').toEqual(
+      expect.any(Number),
+    );
+    expect(postEdit.length, 'settings.json runs post-edit.mjs').toBeGreaterThan(0);
+    for (const hook of postEdit) {
+      expect(hook.timeout * 1_000 - GATE_FILE_LIMIT_MS).toBeGreaterThanOrEqual(HOOK_MARGIN_MS);
     }
   });
 });

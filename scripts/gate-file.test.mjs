@@ -20,8 +20,20 @@ import { stripVTControlCharacters } from 'node:util';
 import unitConfig from '../vitest.config.mjs';
 import integrationConfig from '../vitest.integration.config.mjs';
 import systemConfig from '../vitest.system.config.mjs';
-import { availableFor, filesToCheck, main, report, runSteps, stepsFor } from './gate-file.mjs';
+import {
+  availableFor,
+  DOCKER_PROBE_TIMEOUT_MS,
+  filesToCheck,
+  GATE_FILE_LIMIT_MS,
+  main,
+  report,
+  runSteps,
+  STEP_TIMEOUT_MS,
+  stepsFor,
+} from './gate-file.mjs';
+import { FULL_STEPS } from './gate.mjs';
 import { matchesAnyGlob } from './lib/glob.mjs';
+import { L3_NEEDS_DOCKER } from './lib/steps.mjs';
 
 const names = (files) => stepsFor(files).map((step) => step.name);
 
@@ -758,6 +770,92 @@ describe('stepsFor, for each level of test (BUG-52)', () => {
     expect(vitestSteps([file])).toEqual([]);
     expect(stepsFor([file]).filter((step) => step.command.includes('jest'))).toHaveLength(1);
   });
+
+  // BUG-52, review loop 1 (privacy-security-reviewer). A test goes to a level
+  // because that level's config includes it, not because of its name. Routed by
+  // name, `scripts/x.integration.test.ts` got the L3 step and `needsTool:
+  // 'docker'`, so without Docker the gate passed with a note that CI would run
+  // it. But no config includes it (the unit and coverage configs exclude every
+  // `*.integration.test.ts`; the L3 config includes only apps|packages/**/src/**),
+  // so nothing ever runs it. Such a file has to fail where it is edited: a Vitest
+  // step with no tool to wait for, and nothing else in it that its config finds,
+  // because Vitest given one filter that matches and one that does not runs the
+  // first and exits 0 (measured 2026-10-19: `vitest run --config
+  // vitest.system.config.mjs apps/server/src/api.system.test.ts
+  // scripts/zz.system.test.ts` exits 0; the second file alone exits 1, "No test
+  // files found"). The configs are read as Vitest reads them (CONFIGS above), so
+  // these keep holding if their globs move to vitest.shared.mjs.
+  /** Whether any of the repository's Vitest configs would collect `file`. */
+  const anyConfigFinds = (file) =>
+    [...CONFIGS.values()].some(
+      ({ test: { include = [], exclude = [] } = {} }) =>
+        matchesAnyGlob(file, include) && !matchesAnyGlob(file, exclude),
+    );
+
+  test.each([
+    'apps/server/src/zz.integration.test.ts',
+    'packages/contracts/src/zz.integration.test.ts',
+  ])('BUG-52: %s, which the L3 config includes, gets the L3 step, which needs Docker', (file) => {
+    const steps = stepsNaming([file], file);
+
+    expect(steps).toHaveLength(1);
+    expect(configOf(steps[0])).toBe('vitest.integration.config.mjs');
+    expect(configFinds(steps[0], file)).toBe(true);
+    expect(steps[0]?.needsTool).toBe('docker');
+  });
+
+  test.each([
+    'scripts/zz.integration.test.ts',
+    'apps/server/zz.integration.test.ts',
+    'packages/config/zz.integration.test.ts',
+  ])(
+    'BUG-52: %s, named like an L3 test but outside the L3 config’s include, gets a Vitest step that needs no tool, so it fails without Docker rather than passing as not possible here',
+    (file) => {
+      expect(anyConfigFinds(file), 'the fixture: no Vitest config includes this file').toBe(false);
+      const steps = stepsNaming([file], file);
+
+      expect(steps).toHaveLength(1);
+      expect(steps[0]?.needsTool).toBeUndefined();
+    },
+  );
+
+  test.each([
+    'scripts/zz.system.test.ts',
+    'apps/server/zz.system.test.ts',
+    'packages/contracts/src/zz.system.test.ts',
+  ])(
+    'BUG-52: %s, named like an L6 test but outside the L6 config’s include, gets a Vitest step that needs no tool, so it fails',
+    (file) => {
+      expect(anyConfigFinds(file), 'the fixture: no Vitest config includes this file').toBe(false);
+      const steps = stepsNaming([file], file);
+
+      expect(steps).toHaveLength(1);
+      expect(steps[0]?.needsTool).toBeUndefined();
+    },
+  );
+
+  test.each([
+    ['an L6 test', SYSTEM, 'scripts/zz.system.test.ts'],
+    ['an L3 test', INTEGRATION, 'scripts/zz.integration.test.ts'],
+    ['a unit test (.test.ts)', UNIT_TS, 'scripts/zz.integration.test.ts'],
+    ['a unit test (.test.mjs)', UNIT_MJS, 'apps/server/zz.system.test.ts'],
+  ])(
+    'BUG-52: a test no config includes, edited beside %s, gets a step of its own that needs no tool, never one with a file its config finds, where the run would pass without it',
+    (_, found, orphan) => {
+      const edited = [found, orphan];
+      const steps = stepsNaming(edited, orphan);
+
+      expect(anyConfigFinds(orphan), 'the fixture: no Vitest config includes this file').toBe(
+        false,
+      );
+      expect(steps).toHaveLength(1);
+      expect(
+        steps[0]?.command.filter((arg) => arg !== orphan && configFinds(steps[0], arg)),
+        `${orphan} shares its step with files its config finds`,
+      ).toEqual([]);
+      expect(steps[0]?.needsTool).toBeUndefined();
+    },
+  );
 });
 
 // BUG-52: what runSteps does with a step that needs a tool. The machine's tools
@@ -1062,7 +1160,42 @@ describe('main(), on an edited L6 or L3 test (BUG-52)', () => {
     expect(tools.pnpmCalls()).toContain('vitest');
     expect(tools.dockerAsked(), 'docker was asked, though no step needs it').toBe(false);
   });
+
+  test('BUG-52: an edited test named like L3 but outside the L3 config’s include, where Docker does not work: exit code 1, because no config would ever run it, not 0 with a note that CI will', () => {
+    // review loop 1 (privacy-security-reviewer). Real Vitest, as for the L6
+    // file above: the file does not exist and no config includes it, so its
+    // step finds nothing and fails. Every other step passes (the fake pnpm).
+    const file = 'scripts/x.integration.test.ts';
+    const tools = fakeTools({ docker: false, vitest: realPnpm() });
+
+    const run = gate(file, tools.env, 60_000);
+
+    expect(run.status, told(run)).toBe(1);
+    expect(run.stdout.split('\n'), told(run)).toContain(`1 check(s) failed for: ${file}`);
+    expect(run.stdout, told(run)).not.toMatch(/not possible here/i);
+    const vitestCalls = tools
+      .pnpmCalls()
+      .split('\n')
+      .filter((call) => call.includes('vitest'));
+    expect(vitestCalls, tools.pnpmCalls()).toHaveLength(1);
+    expect(vitestCalls[0]).toContain(file);
+  }, 90_000);
 });
+
+/**
+ * Puts PATH back as it was. An environment variable assigned `undefined` holds
+ * the string "undefined", so a PATH that was not set is deleted, not assigned
+ * (BUG-52, review loop 1: privacy-security-reviewer and code-reviewer).
+ *
+ * @param {string | undefined} before
+ */
+function restorePath(before) {
+  if (before === undefined) {
+    delete process.env.PATH;
+  } else {
+    process.env.PATH = before;
+  }
+}
 
 // BUG-52, RG-04: the coverage ratchet measures this file in-process, and the
 // main() tests above run the script as a child process, which coverage does not
@@ -1111,7 +1244,7 @@ describe('availableFor, in this process (BUG-52)', () => {
     try {
       return body();
     } finally {
-      process.env.PATH = before;
+      restorePath(before);
     }
   }
   const first = (bin) => `${bin}${path.delimiter}${process.env.PATH ?? ''}`;
@@ -1220,7 +1353,7 @@ describe('main(), in this process (BUG-52)', () => {
     } finally {
       write.mockRestore();
       process.argv = before.argv;
-      process.env.PATH = before.path;
+      restorePath(before.path);
       process.exitCode = before.exitCode;
     }
 
@@ -1231,5 +1364,229 @@ describe('main(), in this process (BUG-52)', () => {
     const calls = readFileSync(path.join(bin, 'pnpm-calls'), 'utf8');
     expect(calls).toContain('prettier');
     expect(calls, 'the L3 step ran where Docker does not work').not.toContain('vitest');
+  });
+});
+
+/**
+ * Imports a fresh copy of scripts/gate-file.mjs with `id` replaced by what
+ * `factory` returns, runs `body` with it, and puts the module registry back.
+ * The copy the rest of this file imported is not touched.
+ */
+async function withMocked(id, factory, body) {
+  vi.resetModules();
+  vi.doMock(id, factory);
+  try {
+    return await body(await import('./gate-file.mjs'));
+  } finally {
+    vi.doUnmock(id);
+    vi.resetModules();
+  }
+}
+
+// BUG-52, review loop 1 (privacy-security-reviewer, code-reviewer): a need
+// gate:file cannot judge fails loudly. runSteps hands planSteps no scripts and
+// no environment, and availableFor knows how to ask about Docker only, so a
+// step with `needsScript`, `needsEnv` or any other `needsTool` would always come
+// back "not possible here", and the gate would pass with a note whatever the
+// machine could do. Such a step is a mistake in the gate, and it must say so.
+describe('needs gate:file cannot judge (BUG-52)', () => {
+  const dirs = [];
+  function tempDir() {
+    const dir = mkdtempSync(path.join(tmpdir(), 'gate-file-needs-'));
+    dirs.push(dir);
+    return dir;
+  }
+
+  afterEach(() => {
+    while (dirs.length > 0) {
+      rmSync(dirs.pop(), { recursive: true, force: true });
+    }
+  });
+
+  const L7 = {
+    name: 'Android end-to-end flows (L7)',
+    command: ['pnpm', 'run', 'e2e:android'],
+    needsTool: 'android',
+  };
+
+  test('BUG-52: availableFor throws on a needsTool it cannot probe, naming the tool, rather than letting the step be not possible here', () => {
+    expect(() => availableFor([L7], tempDir())).toThrow(/android/);
+  });
+
+  test('BUG-52: availableFor throws on a tool it cannot probe even beside an L3 step, whose Docker it can probe', () => {
+    // PATH holds one empty folder, so a Docker probe, if it comes first,
+    // answers at once (no docker), whatever this machine has.
+    const empty = tempDir();
+    const before = process.env.PATH;
+    process.env.PATH = empty;
+    try {
+      const steps = [...stepsFor(['apps/server/src/alerts.integration.test.ts']), L7];
+
+      expect(() => availableFor(steps, empty)).toThrow(/android/);
+    } finally {
+      restorePath(before);
+    }
+  });
+
+  test.each([
+    ['needsScript', { needsScript: 'test:integration' }],
+    ['needsEnv', { needsEnv: ['GITHUB_TOKEN'] }],
+  ])(
+    'BUG-52: runSteps rejects a step with %s, which it cannot judge, naming the step and the need, and starts no step',
+    async (need, extra) => {
+      const dir = tempDir();
+      const steps = [
+        { name: 'formatting', command: [process.execPath, '-e', ''] },
+        { name: 'a step judged elsewhere', command: [process.execPath, '-e', ''], ...extra },
+      ];
+      const spawned = [];
+
+      await withMocked(
+        'node:child_process',
+        async (importOriginal) => {
+          const original = await importOriginal();
+          return {
+            ...original,
+            spawn: (...args) => {
+              spawned.push(args[0]);
+              return original.spawn(...args);
+            },
+          };
+        },
+        async (fresh) => {
+          const outcome = fresh.runSteps(steps, { cwd: dir, timeout: 30_000, available: {} });
+
+          await expect(outcome).rejects.toThrow(need);
+          await expect(outcome).rejects.toThrow('a step judged elsewhere');
+        },
+      );
+      expect(spawned, 'a step was started before the rejection').toEqual([]);
+    },
+  );
+});
+
+// BUG-52, review loop 1 (privacy-security-reviewer). The post-edit hook stops
+// gate:file at 170 s, and the gate could take 15 s for `docker info` and then
+// 160 s for its steps: 175 s. A gate stopped by the hook says nothing about the
+// edit, and its detached step groups run on. So the budget is three exported
+// numbers in scripts/gate-file.mjs, and these pin how they add up and that the
+// gate keeps to them. The margin is for starting pnpm and node and printing the
+// report: measured 2026-10-19, `pnpm -s gate:file` took 0.5 s with no step to
+// run and about 1 s with one short step; 5 s is about ten times that.
+describe('how long gate:file may take (BUG-52)', () => {
+  const START_MARGIN_MS = 5_000;
+  const INTEGRATION = 'apps/server/src/alerts.integration.test.ts';
+  const dirs = [];
+
+  afterEach(() => {
+    while (dirs.length > 0) {
+      rmSync(dirs.pop(), { recursive: true, force: true });
+    }
+  });
+
+  test('BUG-52: the Docker probe and the slowest step end at least 5 s before the post-edit hook stops gate:file', () => {
+    expect(
+      { DOCKER_PROBE_TIMEOUT_MS, STEP_TIMEOUT_MS, GATE_FILE_LIMIT_MS },
+      'the three limits, exported by scripts/gate-file.mjs',
+    ).toEqual({
+      DOCKER_PROBE_TIMEOUT_MS: expect.any(Number),
+      STEP_TIMEOUT_MS: expect.any(Number),
+      GATE_FILE_LIMIT_MS: expect.any(Number),
+    });
+    expect(DOCKER_PROBE_TIMEOUT_MS + STEP_TIMEOUT_MS + START_MARGIN_MS).toBeLessThanOrEqual(
+      GATE_FILE_LIMIT_MS,
+    );
+  });
+
+  test('BUG-52: availableFor asks `docker info` with DOCKER_PROBE_TIMEOUT_MS, so the probe takes no more than its share', async () => {
+    const asked = [];
+
+    const probe = await withMocked(
+      './lib/proc.mjs',
+      async (importOriginal) => ({
+        ...(await importOriginal()),
+        run: (command, args, options) => {
+          asked.push({ command, args, options });
+          return { ok: true, status: 0, output: '' };
+        },
+      }),
+      (fresh) => {
+        fresh.availableFor(fresh.stepsFor([INTEGRATION]), tmpdir());
+        return fresh.DOCKER_PROBE_TIMEOUT_MS;
+      },
+    );
+
+    expect(probe, 'DOCKER_PROBE_TIMEOUT_MS, exported by scripts/gate-file.mjs').toEqual(
+      expect.any(Number),
+    );
+    expect(asked).toEqual([
+      {
+        command: 'docker',
+        args: ['info'],
+        options: expect.objectContaining({ timeout: probe }),
+      },
+    ]);
+  });
+
+  test('BUG-52: main() gives each step STEP_TIMEOUT_MS at most, so the probe and the steps end inside the post-edit hook’s limit', async () => {
+    // Each step's limit is a timer runSteps sets as the step starts, so the
+    // test reads the timers main() sets, in this process, with fake pnpm and
+    // docker first on PATH as in the main() test above. Docker does not work,
+    // so the four steps that do start are formatting, lint, types and the
+    // import rules.
+    const bin = path.join(mkdtempSync(path.join(tmpdir(), 'gate-file-budget-')), 'bin');
+    dirs.push(path.dirname(bin));
+    mkdirSync(bin);
+    writeFileSync(path.join(bin, 'pnpm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    writeFileSync(path.join(bin, 'docker'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    const before = { argv: process.argv, path: process.env.PATH, exitCode: process.exitCode };
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+    let limits;
+    try {
+      process.argv = [process.execPath, 'scripts/gate-file.mjs', INTEGRATION];
+      process.env.PATH = `${bin}${path.delimiter}${before.path ?? ''}`;
+      await main();
+      limits = timers.mock.calls
+        .map(([, ms]) => ms)
+        .filter((ms) => typeof ms === 'number' && ms >= 1_000);
+    } finally {
+      timers.mockRestore();
+      write.mockRestore();
+      process.argv = before.argv;
+      restorePath(before.path);
+      process.exitCode = before.exitCode;
+    }
+
+    expect(STEP_TIMEOUT_MS, 'STEP_TIMEOUT_MS, exported by scripts/gate-file.mjs').toEqual(
+      expect.any(Number),
+    );
+    expect(limits.length, 'the step timers main() set').toBeGreaterThanOrEqual(4);
+    for (const limit of limits) {
+      expect(limit).toBeLessThanOrEqual(STEP_TIMEOUT_MS);
+      expect(limit + DOCKER_PROBE_TIMEOUT_MS + START_MARGIN_MS).toBeLessThanOrEqual(
+        GATE_FILE_LIMIT_MS,
+      );
+    }
+  });
+});
+
+// BUG-52, review loop 1 (code-reviewer). gate:full's L3 step and gate:file's L3
+// step need Docker for the same reason, and the reason was typed in each of
+// them. One constant in scripts/lib/steps.mjs, which both import, keeps them
+// from saying two things about one level.
+describe('one reason for L3’s need of Docker (BUG-52)', () => {
+  test('BUG-52: gate:full’s L3 step and gate:file’s L3 step need Docker for one reason, L3_NEEDS_DOCKER from scripts/lib/steps.mjs', () => {
+    expect(L3_NEEDS_DOCKER, 'L3_NEEDS_DOCKER, exported by scripts/lib/steps.mjs').toEqual({
+      needsTool: 'docker',
+      toolReason: expect.any(String),
+    });
+    const full = FULL_STEPS.find((step) => step.needsScript === 'test:integration');
+    const file = stepsFor(['apps/server/src/alerts.integration.test.ts']).find((step) =>
+      step.command.includes('vitest.integration.config.mjs'),
+    );
+
+    expect(full).toMatchObject(L3_NEEDS_DOCKER);
+    expect(file).toMatchObject(L3_NEEDS_DOCKER);
   });
 });
