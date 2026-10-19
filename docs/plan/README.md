@@ -35,8 +35,14 @@ advisory), BUG-27 (whether the worker's session limits are in force on a deploy
 is seen only by chance), BUG-35 (a
 second stop signal ends the process before the pool is closed) and BUG-40
 (`affected.mjs` counts the agent-memory files and `decisions.md` as inert, so
-CI's `unit` job is skipped for a change to only them) and BUG-52 (`gate:file`
-checks nothing for an edited L6 or L3 test file, and exits 1). For the owner to decide:
+CI's `unit` job is skipped for a change to only them), BUG-53 (two hooks fail
+open when the repository code they import cannot load), BUG-54 (the
+test-weakening check reads the word "fit" as a focused test), BUG-55 (a gate
+that hangs leaves its node process running past the post-edit hook's limit)
+and BUG-56 (guard-bash judges the quoted pieces of a path one by one, so a
+joined path escapes it). BUG-52 (`gate:file` checked nothing for an edited L6
+or L3 test file, and exited 1) is fixed on the session branch, pull request
+open (D-133). For the owner to decide:
 BUG-49 (moving `origin/main` gets a session past the stop and progress hooks;
 its fix is in `.claude/`, which needs the owner's approval) and BUG-50 (no test checks that
 `req:coverage --fail-on-uncovered-changed` leaves changed test files out of
