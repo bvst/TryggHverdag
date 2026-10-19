@@ -1,7 +1,7 @@
 // req-coverage: fixtures-only — the IDs below are sample data for testing the gates.
 // HK-04 runs after every single edit, so what it decides to check — and what it
 // leaves alone — shapes how the whole project feels to work in.
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
@@ -20,7 +20,7 @@ import { stripVTControlCharacters } from 'node:util';
 import unitConfig from '../vitest.config.mjs';
 import integrationConfig from '../vitest.integration.config.mjs';
 import systemConfig from '../vitest.system.config.mjs';
-import { filesToCheck, report, runSteps, stepsFor } from './gate-file.mjs';
+import { availableFor, filesToCheck, main, report, runSteps, stepsFor } from './gate-file.mjs';
 import { matchesAnyGlob } from './lib/glob.mjs';
 
 const names = (files) => stepsFor(files).map((step) => step.name);
@@ -1061,5 +1061,175 @@ describe('main(), on an edited L6 or L3 test (BUG-52)', () => {
     // The control: the fake tools were on the path and reached.
     expect(tools.pnpmCalls()).toContain('vitest');
     expect(tools.dockerAsked(), 'docker was asked, though no step needs it').toBe(false);
+  });
+});
+
+// BUG-52, RG-04: the coverage ratchet measures this file in-process, and the
+// main() tests above run the script as a child process, which coverage does not
+// see. So `availableFor` — which tools the steps need that work here — is tested
+// here, in this process, against a fake `docker` put first on this process's
+// PATH for the length of one test and taken off again in a `finally`. `run`
+// (scripts/lib/proc.mjs) hands the child this process's environment, so the
+// fake is what answers `docker info`, and it writes down every call.
+describe('availableFor, in this process (BUG-52)', () => {
+  const dirs = [];
+  function tempDir() {
+    const dir = mkdtempSync(path.join(tmpdir(), 'gate-file-available-'));
+    dirs.push(dir);
+    return dir;
+  }
+
+  afterEach(() => {
+    while (dirs.length > 0) {
+      rmSync(dirs.pop(), { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * A bin directory holding a `docker` that writes down its arguments and exits
+   * with `exitCode`: 0 for a daemon that answers, 1 for a binary with no daemon.
+   * Without `exitCode`, the directory has no docker at all.
+   */
+  function fakeDocker(exitCode) {
+    const bin = path.join(tempDir(), 'bin');
+    mkdirSync(bin);
+    const calls = path.join(bin, 'docker-calls');
+    if (exitCode !== undefined) {
+      writeFileSync(
+        path.join(bin, 'docker'),
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> "$(dirname "$0")/docker-calls"\nexit ${String(exitCode)}\n`,
+        { mode: 0o755 },
+      );
+    }
+    return { bin, asked: () => existsSync(calls), calls: () => readFileSync(calls, 'utf8') };
+  }
+
+  /** Runs `body` with `PATH` set to `pathValue`, and puts the old PATH back whatever happens. */
+  function withPath(pathValue, body) {
+    const before = process.env.PATH;
+    process.env.PATH = pathValue;
+    try {
+      return body();
+    } finally {
+      process.env.PATH = before;
+    }
+  }
+  const first = (bin) => `${bin}${path.delimiter}${process.env.PATH ?? ''}`;
+
+  test.each([
+    ['a unit test', 'apps/server/src/config.test.ts'],
+    ['an L6 test, which needs no database', 'apps/server/src/escalation.system.test.ts'],
+    ['a source file', 'apps/server/src/api.ts'],
+    ['a configuration file', 'turbo.json'],
+  ])(
+    'BUG-52: availableFor, for %s, where no step needs a tool, returns {} and never asks docker',
+    (_, file) => {
+      const docker = fakeDocker(0);
+      const cwd = tempDir();
+
+      const available = withPath(first(docker.bin), () => availableFor(stepsFor([file]), cwd));
+
+      expect(available).toEqual({});
+      expect(docker.asked(), 'docker was asked, though no step needs it').toBe(false);
+      // The control: the fake was on the PATH and answers, so its silence above
+      // means it was never asked, not that it could not be reached.
+      withPath(first(docker.bin), () => spawnSync('docker', ['info'], { env: process.env }));
+      expect(docker.asked(), 'the fake docker could not be reached').toBe(true);
+    },
+  );
+
+  test('BUG-52: availableFor, with an L3 step and a docker daemon that answers, asks `docker info` and returns { docker: true }', () => {
+    const docker = fakeDocker(0);
+
+    const available = withPath(first(docker.bin), () =>
+      availableFor(stepsFor(['apps/server/src/alerts.integration.test.ts']), tempDir()),
+    );
+
+    expect(available).toEqual({ docker: true });
+    expect(docker.calls().trim().split('\n')).toEqual(['info']);
+  });
+
+  test('BUG-52: availableFor, with an L3 step and a docker binary whose daemon does not answer (exit 1), returns { docker: false }', () => {
+    const docker = fakeDocker(1);
+
+    const available = withPath(first(docker.bin), () =>
+      availableFor(stepsFor(['apps/server/src/alerts.integration.test.ts']), tempDir()),
+    );
+
+    expect(available).toEqual({ docker: false });
+    expect(docker.calls().trim().split('\n')).toEqual(['info']);
+  });
+
+  test('BUG-52: availableFor, with an L3 step on a machine with no docker at all, returns { docker: false } rather than throwing', () => {
+    // A PATH holding one empty folder: no docker anywhere on it.
+    const empty = fakeDocker();
+
+    const available = withPath(empty.bin, () =>
+      availableFor(stepsFor(['apps/server/src/alerts.integration.test.ts']), tempDir()),
+    );
+
+    expect(available).toEqual({ docker: false });
+  });
+});
+
+// BUG-52, RG-04: main() itself, in this process, so the ratchet sees its lines
+// (the main() tests above run it as a child, and coverage does not follow a
+// child). This needs one change to the script: `main` exported, as it is
+// declared today (no arguments). The test sets what main() reads and writes —
+// process.argv, PATH, process.stdout.write and process.exitCode — for its own
+// length only and puts each back in a `finally`, so the run that hosts it is
+// left exactly as it was. Every step is `pnpm …`, so a fake pnpm first on PATH
+// passes them all at once, and a fake docker answers `docker info` with exit 1.
+describe('main(), in this process (BUG-52)', () => {
+  const ROOT = path.resolve(import.meta.dirname, '..');
+  const INTEGRATION = 'apps/server/src/alerts.integration.test.ts';
+  const dirs = [];
+
+  afterEach(() => {
+    while (dirs.length > 0) {
+      rmSync(dirs.pop(), { recursive: true, force: true });
+    }
+  });
+
+  test('BUG-52: main() on an edited L3 test where Docker does not work prints that the step was not possible here and sets exit code 0', async () => {
+    const bin = path.join(mkdtempSync(path.join(tmpdir(), 'gate-file-main-in-process-')), 'bin');
+    dirs.push(path.dirname(bin));
+    mkdirSync(bin);
+    writeFileSync(
+      path.join(bin, 'pnpm'),
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$(dirname "$0")/pnpm-calls"\nexit 0\n`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      path.join(bin, 'docker'),
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$(dirname "$0")/docker-calls"\nexit 1\n`,
+      { mode: 0o755 },
+    );
+    const before = { argv: process.argv, path: process.env.PATH, exitCode: process.exitCode };
+    let written = '';
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      written += String(chunk);
+      return true;
+    });
+    let exitCode;
+    try {
+      process.argv = [process.execPath, path.join(ROOT, 'scripts/gate-file.mjs'), INTEGRATION];
+      process.env.PATH = `${bin}${path.delimiter}${before.path ?? ''}`;
+      await main();
+      exitCode = process.exitCode;
+    } finally {
+      write.mockRestore();
+      process.argv = before.argv;
+      process.env.PATH = before.path;
+      process.exitCode = before.exitCode;
+    }
+
+    expect(exitCode, written).toBe(0);
+    expect(written).toMatch(/not possible here/i);
+    expect(written).toMatch(/needs docker/i);
+    expect(readFileSync(path.join(bin, 'docker-calls'), 'utf8')).toContain('info');
+    const calls = readFileSync(path.join(bin, 'pnpm-calls'), 'utf8');
+    expect(calls).toContain('prettier');
+    expect(calls, 'the L3 step ran where Docker does not work').not.toContain('vitest');
   });
 });
