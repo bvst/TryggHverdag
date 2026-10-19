@@ -2,9 +2,17 @@
 // HK-04: every edit is checked immediately, by the same script CI runs.
 import { afterEach, describe, expect, test } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, copyFileSync, mkdirSync, readFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { pathToFileURL } from 'node:url';
 import { GATE_FILE_LIMIT_MS, report } from '../../scripts/gate-file.mjs';
 import {
   ALLOWED,
@@ -526,5 +534,339 @@ describe('HK-04 (BUG-52): a gate:file that cannot be loaded blocks the edit, and
 
     expect(result.status, `stderr:\n${result.stderr}`).toBe(ALLOWED);
     expect(ranLog(dir)).toContain(SOURCE);
+  });
+
+  // BUG-52, review loop 3 (test-auditor's should-fix, and the
+  // privacy-security-reviewer's note 3, each on its own). The hook stops
+  // gate:file at GATE_FILE_LIMIT_MS, and a source regex was all that held it
+  // there. It read only the start of the value, so a fallback such as
+  // `gate.GATE_FILE_LIMIT_MS ?? 170_000`, `|| 170_000` or `?? LIMIT` got past
+  // every test. And if gate-file.mjs loads but no longer exports a usable
+  // GATE_FILE_LIMIT_MS, the hook fails open. Checked by hand, on Node 22 (the
+  // repository's engines), what spawnSync does with each such value:
+  // - missing (undefined), null or 0: it runs gate:file with no limit at all,
+  //   until Claude Code's own limit on the hook ends it, and Claude Code does
+  //   not treat that as a block;
+  // - a string, NaN, a negative number, Infinity or a fraction: it throws
+  //   ERR_OUT_OF_RANGE ("It must be an unsigned integer"), node exits 1, and
+  //   Claude Code does not block on exit 1 either.
+  // Decided here (test-author, D-031): a usable limit is a whole number of
+  // milliseconds above 0, the values spawnSync takes as a limit. Any other
+  // value blocks the edit, names GATE_FILE_LIMIT_MS and the edited file, says
+  // that no checks ran, and runs no gate:file. A fallback number of the hook's
+  // own would hide a gate that lost its limit, so these copies leave the hook
+  // no way through but to block.
+  //
+  // Not pinned: a limit so long that Claude Code's limit on the hook ends
+  // first. The real value is held below that limit by the settings.json test
+  // above; checking it at run time would have the hook read settings.json.
+  //
+  // As loop 2 decided for a gate that cannot load: an edit to a file the gate
+  // does not check still exits 0 at the hook's early exit.
+  describe('with a gate-file.mjs that loads but has no usable GATE_FILE_LIMIT_MS', () => {
+    const GATE = 'scripts/gate-file.mjs';
+
+    /**
+     * A project copy whose gate-file.mjs loads, but exports `declaration` as
+     * GATE_FILE_LIMIT_MS, or, with no declaration, has the name renamed away.
+     */
+    function copyWithLimit(declaration) {
+      const { dir } = projectCopy();
+      const file = path.join(dir, GATE);
+      const text = readFileSync(file, 'utf8');
+      const renamed = text.replaceAll(/\bGATE_FILE_LIMIT_MS\b/g, 'GATE_FILE_LIMIT_MS_RENAMED');
+      expect(
+        renamed,
+        `${GATE} does not name GATE_FILE_LIMIT_MS, so renaming it proves nothing`,
+      ).not.toBe(text);
+      writeFileSync(
+        file,
+        declaration === undefined
+          ? renamed
+          : `${renamed}\nexport const GATE_FILE_LIMIT_MS = ${declaration};\n`,
+      );
+      return dir;
+    }
+
+    /** What the copy's gate-file.mjs exports as GATE_FILE_LIMIT_MS, read by loading it in a node of its own. */
+    function exportedLimit(dir) {
+      const url = pathToFileURL(path.join(dir, GATE)).href;
+      const result = spawnSync(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          `const gate = await import(${JSON.stringify(url)});` +
+            'const limit = gate.GATE_FILE_LIMIT_MS;' +
+            "process.stdout.write(JSON.stringify({ exported: 'GATE_FILE_LIMIT_MS' in gate, type: typeof limit, value: String(limit) }));",
+        ],
+        { cwd: dir, encoding: 'utf8', timeout: 60_000 },
+      );
+      if (result.error) {
+        throw result.error;
+      }
+      expect(
+        result.status,
+        `the copy's gate-file.mjs did not load, so a block would not be about the limit:\n${result.stderr}`,
+      ).toBe(0);
+      return JSON.parse(result.stdout);
+    }
+
+    const NO_LIMIT = 'runs it with no limit';
+    const THROWS = 'throws, and node exits 1';
+    const UNUSABLE = [
+      {
+        limit: 'renamed away',
+        declaration: undefined,
+        spawnSync: NO_LIMIT,
+        exported: false,
+        type: 'undefined',
+        value: 'undefined',
+      },
+      {
+        limit: 'null',
+        declaration: 'null',
+        spawnSync: NO_LIMIT,
+        exported: true,
+        type: 'object',
+        value: 'null',
+      },
+      {
+        limit: '0',
+        declaration: '0',
+        spawnSync: NO_LIMIT,
+        exported: true,
+        type: 'number',
+        value: '0',
+      },
+      {
+        limit: 'a string',
+        declaration: "'170000'",
+        spawnSync: THROWS,
+        exported: true,
+        type: 'string',
+        value: '170000',
+      },
+      {
+        limit: 'NaN',
+        declaration: 'Number.NaN',
+        spawnSync: THROWS,
+        exported: true,
+        type: 'number',
+        value: 'NaN',
+      },
+      {
+        limit: 'a negative number',
+        declaration: '-170_000',
+        spawnSync: THROWS,
+        exported: true,
+        type: 'number',
+        value: '-170000',
+      },
+      {
+        limit: 'Infinity',
+        declaration: 'Number.POSITIVE_INFINITY',
+        spawnSync: THROWS,
+        exported: true,
+        type: 'number',
+        value: 'Infinity',
+      },
+      {
+        limit: 'a fraction',
+        declaration: '170_000.5',
+        spawnSync: THROWS,
+        exported: true,
+        type: 'number',
+        value: '170000.5',
+      },
+    ];
+
+    test.each(UNUSABLE)(
+      'BUG-52: with GATE_FILE_LIMIT_MS $limit (spawnSync $spawnSync), an edit to a file the gate checks blocks (exit 2), names GATE_FILE_LIMIT_MS and the file, says no checks ran, and runs no gate:file',
+      ({ declaration, exported, type, value }) => {
+        const dir = copyWithLimit(declaration);
+        expect(
+          exportedLimit(dir),
+          'the copy: gate-file.mjs loads, with this GATE_FILE_LIMIT_MS',
+        ).toEqual({
+          exported,
+          type,
+          value,
+        });
+
+        const result = hookIn(dir, SOURCE);
+
+        expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
+        expect(result.stderr).toContain('GATE_FILE_LIMIT_MS');
+        expect(result.stderr).toContain(SOURCE);
+        expect(result.stderr).toMatch(/no checks ran/i);
+        expect(ranLog(dir), 'gate:file was run without a usable limit').toBe('');
+      },
+    );
+
+    test('BUG-52: the edit to gate-file.mjs that renamed GATE_FILE_LIMIT_MS away blocks too, and names both', () => {
+      const dir = copyWithLimit(undefined);
+
+      const result = hookIn(dir, GATE);
+
+      expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
+      expect(result.stderr).toContain('GATE_FILE_LIMIT_MS');
+      expect(result.stderr).toContain(GATE);
+      expect(result.stderr).toMatch(/no checks ran/i);
+      expect(ranLog(dir), 'gate:file was run without a limit').toBe('');
+    });
+
+    test.each(['docs/plan/README.md', 'README.md'])(
+      'BUG-52: with GATE_FILE_LIMIT_MS renamed away, an edit to %s, which the gate does not check, still exits 0 and prints nothing',
+      (file) => {
+        const dir = copyWithLimit(undefined);
+
+        const result = hookIn(dir, file);
+
+        expect(result.status, `stderr:\n${result.stderr}`).toBe(ALLOWED);
+        expect(result.stdout).toBe('');
+        expect(ranLog(dir)).toBe('');
+        // The control: in this same copy a checked edit blocks, so the 0 above
+        // is the hook's early exit, not a limit the hook found after all.
+        expect(hookIn(dir, SOURCE).status).toBe(BLOCKED);
+      },
+    );
+
+    test('BUG-52: the copy’s control: with gate-file.mjs intact, the copy exports the real GATE_FILE_LIMIT_MS, and the hook runs gate:file and passes', () => {
+      // If exportedLimit misread the copy, or the intact limit blocked, this
+      // fails, so the blocks above come from the planted values alone.
+      const { dir } = projectCopy();
+
+      expect(exportedLimit(dir)).toEqual({
+        exported: true,
+        type: 'number',
+        value: String(GATE_FILE_LIMIT_MS),
+      });
+      const result = hookIn(dir, SOURCE);
+      expect(result.status, `stderr:\n${result.stderr}`).toBe(ALLOWED);
+      expect(ranLog(dir)).toContain(SOURCE);
+    });
+  });
+
+  // BUG-52, review loop 3 (privacy-security-reviewer, note 4). The message
+  // gave the error's name and message only, so for a syntax error the session
+  // was not told which of the files the gate loads broke. What node gives,
+  // checked by hand on Node 22 (the repository's engines):
+  // - a syntax error: the caught error's stack names no file and no line. It
+  //   is "SyntaxError: Unexpected token ';'" and node's own frames. Node prints
+  //   the file:///…:line only when the error goes uncaught (for example,
+  //   loading the gate in a node of its own), or for `node --check <file>`;
+  // - an import of a name not exported: the first line of the stack is the
+  //   importing file's file:///…:line;
+  // - a top-level `throw 42`: a bare number, with no stack. Node names no file
+  //   for it, even uncaught. So the hook is held only to blocking and saying
+  //   what was thrown.
+  // Decided here (test-author, D-031): the message names the broken file as a
+  // path from the project's root, with its line, as path:line. That is how the
+  // hook names the edited file, and it is a path Read and Edit take as it is.
+  // A file:/// URL or an absolute path alone does not count: it names where
+  // this checkout sits on the disk, which the message does not need. The line
+  // is required too, because node gives it wherever it gives the file.
+  describe('the load-failure message names the file that broke, and the line', () => {
+    /** The files the gate loads: what the hook loads, less the hook's own folder. */
+    const GATE_MODULES = hookModules().filter((rel) => !rel.startsWith('.claude/'));
+    const BROKEN_LINE = SYNTAX_ERROR.trim();
+
+    /** The 1-based number of the last line of the copy's `rel` that is exactly `text`. */
+    function lineOf(dir, rel, text) {
+      const index = readFileSync(path.join(dir, rel), 'utf8').split('\n').lastIndexOf(text);
+      expect(index, `"${text}" is not a line of ${rel}`).toBeGreaterThanOrEqual(0);
+      return index + 1;
+    }
+
+    const escaped = (text) => text.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+    /** `rel:line` as a path of its own, not the end of an absolute path or a file:/// URL. */
+    const at = (rel, line) =>
+      new RegExp(String.raw`(?<![\w./\\-])${escaped(rel)}:${String(line)}(?!\d)`);
+
+    test('BUG-52: the files below are the gate’s own: gate-file.mjs, vitest.shared.mjs and scripts/lib modules, so the test.each is never empty', () => {
+      expect(GATE_MODULES).toContain('scripts/gate-file.mjs');
+      expect(GATE_MODULES).toContain('vitest.shared.mjs');
+      expect(GATE_MODULES.filter((rel) => rel.startsWith('scripts/lib/')).length).toBeGreaterThan(
+        0,
+      );
+    });
+
+    test.each(GATE_MODULES)(
+      'BUG-52: with a syntax error in %s, the block message names that file and the line, as a path from the project root',
+      (target) => {
+        const dir = brokenCopy(target, SYNTAX_ERROR);
+        const line = lineOf(dir, target, BROKEN_LINE);
+
+        const result = hookIn(dir, SOURCE);
+
+        expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
+        expect(result.stderr).toMatch(/could not be loaded/i);
+        expect(result.stderr).toContain('Unexpected token');
+        expect(result.stderr, `no ${target}:${String(line)} in the message`).toMatch(
+          at(target, line),
+        );
+        expect(ranLog(dir), 'gate:file was run, though its code could not be loaded').toBe('');
+      },
+    );
+
+    test.each([
+      { target: 'scripts/gate-file.mjs', from: './lib/steps.mjs' },
+      { target: 'scripts/lib/steps.mjs', from: './glob.mjs' },
+    ])(
+      'BUG-52: with an import of a name not exported yet in $target, the block message names that file and the import’s line',
+      ({ target, from }) => {
+        const statement = `import { NOT_EXPORTED_YET } from '${from}';`;
+        const dir = brokenCopy(target, `\n${statement}\n`);
+        const line = lineOf(dir, target, statement);
+
+        const result = hookIn(dir, SOURCE);
+
+        expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
+        expect(result.stderr).toMatch(/could not be loaded/i);
+        expect(result.stderr).toContain('NOT_EXPORTED_YET');
+        expect(result.stderr, `no ${target}:${String(line)} in the message`).toMatch(
+          at(target, line),
+        );
+        expect(ranLog(dir), 'gate:file was run, though its code could not be loaded').toBe('');
+      },
+    );
+
+    test('BUG-52: reached through a symlink to the project, as on macOS, where the temporary folder is one, the message still names the broken file from the project root', () => {
+      // Node loads a module by its real path, so the file:/// it names for a
+      // broken file is the real one; the session's cwd can be the symlink's
+      // path. On macOS, /var is a symlink to /private/var. A path taken from
+      // cwd then reads ../../private/var/…, so this test runs the hook through
+      // a symlink here, rather than passing on Linux and failing on the Mac.
+      const target = 'vitest.shared.mjs';
+      const dir = brokenCopy(target, SYNTAX_ERROR);
+      const line = lineOf(dir, target, BROKEN_LINE);
+      const project = path.join(dirWith({}), 'project');
+      symlinkSync(dir, project, 'dir');
+
+      const result = hookIn(project, SOURCE);
+
+      expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
+      expect(result.stderr).toContain(SOURCE);
+      expect(result.stderr, `no ${target}:${String(line)} in the message`).toMatch(
+        at(target, line),
+      );
+      expect(ranLog(dir), 'gate:file was run, though its code could not be loaded').toBe('');
+    });
+
+    test('BUG-52: with a top-level `throw 42` in a scripts/lib module, which has no stack and no file to name, the edit still blocks and says what was thrown', () => {
+      // A guard for the change above: code that reads a file and line out of
+      // what was thrown must not itself throw on a value with no stack, or the
+      // hook exits 1 and fails open again.
+      const dir = brokenCopy('scripts/lib/glob.mjs', '\nthrow 42;\n');
+
+      const result = hookIn(dir, SOURCE);
+
+      expect(result.status, `stderr:\n${result.stderr}`).toBe(BLOCKED);
+      expect(result.stderr).toMatch(/could not be loaded/i);
+      expect(result.stderr).toContain(SOURCE);
+      expect(result.stderr).toMatch(/\b42\b/);
+      expect(ranLog(dir), 'gate:file was run, though its code could not be loaded').toBe('');
+    });
   });
 });
