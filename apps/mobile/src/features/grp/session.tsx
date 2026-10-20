@@ -90,7 +90,14 @@ export function GroupSessionProvider({ children }: { children: ReactNode }) {
   /** The credential is gone from the phone, and the join screen says so. */
   const signOut = useCallback(async () => {
     credential.current = null;
-    await secureStorage.deleteCredential();
+    try {
+      await secureStorage.deleteCredential();
+    } catch {
+      // The server has refused the credential, so the phone is signed out
+      // whether or not the delete worked, and the join screen says so. A
+      // credential left behind is refused again at the next start, which
+      // tries the delete again.
+    }
     update({ phase: 'joining', signedOut: true });
   }, [update]);
 
