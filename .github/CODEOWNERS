@@ -34,6 +34,11 @@
 /apps/server/src/modules/canary/   @bvst @urso-agent
 # The canary's identities and credential, its read and its HTTP client (D-128).
 /apps/server/src/adapters/canary.ts         @bvst @urso-agent
+# Groups and membership: they decide who may join, and who is told when a walker
+# goes silent; a removed member must stop seeing and receiving at once (D-137).
+/apps/server/src/modules/groups/   @bvst @urso-agent
+# The join, the invitation, the members and a member's removal, in SQL (D-137).
+/apps/server/src/adapters/groups.ts         @bvst @urso-agent
 /apps/server/src/api-process.ts   @bvst @urso-agent
 # The device-credential middleware and the walker always the device's own user,
 # the database clock itself, and where the migrations are read from and written

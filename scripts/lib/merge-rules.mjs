@@ -44,6 +44,12 @@ export const OWNER_APPROVAL_PATHS = [
   '/apps/server/src/modules/canary/',
   // The canary's identities and credential, its read and its HTTP client (D-128).
   '/apps/server/src/adapters/canary.ts',
+  // Groups and membership: they decide who may join, and who is told when a
+  // walker goes silent; a removed member must stop seeing and receiving at once
+  // (GRP-01, D-137).
+  '/apps/server/src/modules/groups/',
+  // The join, the invitation, the members and a member's removal, in SQL (D-137).
+  '/apps/server/src/adapters/groups.ts',
   '/apps/server/src/api-process.ts',
   // The device-credential middleware and the walker always the device's own
   // user, the database clock itself, and where the migrations are read from

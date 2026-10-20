@@ -65,6 +65,7 @@ jobs:
               - 'apps/server/src/modules/journeys/**'
               - 'apps/server/src/modules/health/**'
               - 'apps/server/src/modules/canary/**'
+              - 'apps/server/src/modules/groups/**'
               - 'apps/server/src/api-process.ts'
               - 'apps/server/src/api.ts'
               - 'apps/server/src/adapters/clock.ts'
@@ -72,6 +73,7 @@ jobs:
               - 'apps/server/src/adapters/db.ts'
               - 'apps/server/src/adapters/worker-heartbeats.ts'
               - 'apps/server/src/adapters/canary.ts'
+              - 'apps/server/src/adapters/groups.ts'
               - 'apps/server/drizzle.config.ts'
               - 'apps/mobile/src/safety-core/**'
               - 'apps/mobile/app.config.ts'
@@ -162,14 +164,14 @@ jobs:
       - if: steps.applies.outputs.run == 'true'
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - if: steps.applies.outputs.run == 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm }
       - if: steps.applies.outputs.run == 'true'
         run: pnpm install --frozen-lockfile
 
       - if: steps.applies.outputs.run == 'true'
         id: review
-        uses: anthropics/claude-code-action@6c690188da61cf16ee7debb28383ba67f02abb4c # v1.0.242
+        uses: anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9 # v1.0.251
         # Tells the project's stop gate and progress gate that this is a review
         # job, so they stand down (D-119): a review changes no code, and CI's
         # required checks run the same gates on this commit. On this step only —
@@ -201,7 +203,7 @@ jobs:
           # account default, which the job log showed as claude-sonnet-5; the
           # reviewers that inherit then ran on Sonnet 5. An alias would be
           # resolved by whichever Claude Code this pinned action installs
-          # (2.1.290 at v1.0.242), so it could change with any bump of the
+          # (2.1.301 at v1.0.251), so it could change with any bump of the
           # action; a full ID cannot.
           claude_args: >-
             --model claude-opus-5-5
