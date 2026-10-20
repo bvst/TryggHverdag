@@ -102,8 +102,10 @@ export const MUTATION_GROUPS = [
   {
     // The join, the invitation and the admin's member list and removal
     // (GRP-01-AC32), against their system test, under the system tests'
-    // configuration.
-    name: 'groups',
+    // configuration. Named membership, not after its folder: `groups` is the
+    // mutation plan's output key in ci.yml, where BUG-45-AC8 refuses any
+    // group's name.
+    name: 'membership',
     paths: ['apps/server/src/modules/groups/'],
     tests: ['apps/server/src/groups.system.test.ts'],
     config: 'vitest.system.config.mjs',
