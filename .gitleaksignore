@@ -8,7 +8,7 @@
 # GRP-01 (PR #96): a synthetic join key written as a literal in a contracts
 # test, the shape of 32 random bytes as base64url, flagged as generic-api-key.
 # It was never a credential of anything. a9b9dd1 makes the key at run time, as
-# SM-01's "Synthetic data only" asks, but the commit that added it stays in
+# RG-07 (test data is always synthetic) asks, but the commit that added it stays in
 # the branch's history, which the security job scans. 064be6c is a
 # branch-only commit: main takes pull requests squashed, so once #96 merges
 # this line matches nothing on main and can be removed.
