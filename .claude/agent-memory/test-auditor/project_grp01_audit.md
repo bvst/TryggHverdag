@@ -25,3 +25,17 @@ No open PR (all PRs from this branch name are closed, earlier tasks), check-runs
   restore in finally) + m-server/m-extra/m-rest/m-app/m-probe*.mjs. Equivalent: G3, G4; G5 only unbounds the
   membership-row wait (removeInside sets its own lock_timeout).
 Related: [[narrowed-mutation-group]], [[shared-suite-rg03-blind]], [[in-memory-mutation]], [[bug51-audit]]
+
+**Loop 1 (delta 5880361..3fac8fb, HEAD 0ce82fa), PASS, 2026-10-20.** gate:integrity 5 of 5 (NODE_USE_ENV_PROXY=1); no PR,
+check-runs 0, so RG-05 read from the fresh local reports (D-099, no incremental). Correction to the line above: the domain
+report's L129 survivor is Stryker's mutant of the LEFT operand only (`caller === null` -> false, span 129:7-22), which is
+equivalent (mayAdminister(null) is false and refuses); the whole-condition plant dies to 6 domain tests. Read each survivor's
+span (location start-end), never just its start column: most "reason"/"type" StringLiteral survivors here were the
+`type: 'refused'` discriminant, equivalent because api.ts tests `type === 'removed'/'started'` and reads `reason` only.
+membership survivors: join.ts L76 `code === null` unreachable at L6 (contract INVITATION_CODE_PATTERN admits only strings
+the normaliser accepts) and killed by join.test.ts (L2, outside the group: should-fix, group could run under
+vitest.coverage.config.mjs, needs AC32 + merge-rules pin amended); invitations.ts `stage: 'store'` pinned by no test at any level.
+Planted on a git-archive tree (ta-grp01/run-l1.mjs, m-l1*.mjs): AC21 closure/me opened -> killed; P4 join key, P17 20 s
+(10/19/21/30 s, none) -> killed; D7/D7u ASCII filter -> killed; timingSafeEqual -> === killed; display-name N1-N4 killed;
+Maestro pattern E1-E4 killed. RG-02 replay at b62ce4c: all loop-1 tests red on assertions (noise from no .git in the copy).
+req-status was stale at 3fac8fb (PRIV-07 14 vs 15; CI traceability diffs it) and fixed by 0ce82fa during the audit.

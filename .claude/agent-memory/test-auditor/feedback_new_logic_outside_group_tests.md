@@ -16,3 +16,4 @@ and against the new test file; a kill only by the outside file means the group's
 folder the spec calls a safety path against SAFETY_PATHS and MUTATION_GROUPS (gate-decisions.test.mjs pins both).
 Treat a local report's Survived as a lead, not a fact: plant it (one was stale here).
 Related: [[narrowed-mutation-group]], [[grp01-audit]], [[stryker-incremental-reuse]]
+**Read the span, not the start column** (GRP-01 loop 1): a ConditionalExpression at `if (a === null || f(a))` may be the left operand alone (equivalent when f(null) already refuses), and a StringLiteral survivor on a `return { type: ..., reason: ... }` line is often the `type` discriminant the caller never compares. Print location start-end and the replaced text before calling a survivor real.
