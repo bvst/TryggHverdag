@@ -1580,7 +1580,7 @@ const textAt = (tree, key) => key.split('.').reduce((node, part) => node?.[part]
 
 /**
  * A synthetic bootstrap code, as Terraform makes one: 16 random bytes as 32
- * upper-case hex digits. Made at run time, as SM-01's "Synthetic data only"
+ * upper-case hex digits. Made at run time, as RG-07 (synthetic test data)
  * asks: no credential-looking literal is written in a file, because gitleaks
  * (CI's `security` job) reads every committed line. Fixed for the run.
  */

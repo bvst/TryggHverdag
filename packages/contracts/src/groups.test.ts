@@ -31,7 +31,7 @@ import { joinRequestSchema } from './index.ts';
 
 /**
  * A join key of the real one's shape: 32 random bytes as base64url, 43
- * characters (D-091). Made at run time, as SM-01's "Synthetic data only" asks:
+ * characters (D-091). Made at run time, as RG-07 (synthetic test data) asks:
  * no credential-looking literal is written in a file, because gitleaks (CI's
  * `security` job) reads every committed line. Made once, so it is fixed for
  * the run and every case below differs from the next by its name alone.

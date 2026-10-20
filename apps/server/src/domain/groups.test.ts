@@ -71,8 +71,8 @@ describe('GRP-01-AC2: the invitation code’s normaliser', () => {
   });
 
   test('GRP-01-AC2: the first admin’s bootstrap code, 32 upper-case hex digits, is well-formed as it is, and in lower case', () => {
-    // Made at run time, as Terraform makes one, since SM-01's "Synthetic data
-    // only" writes no credential-looking literal in a file: gitleaks reads
+    // Made at run time, as Terraform makes one, since RG-07 (synthetic test
+    // data) writes no credential-looking literal in a file: gitleaks reads
     // every line.
     const code = syntheticBootstrapCode();
 

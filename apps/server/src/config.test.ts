@@ -617,8 +617,8 @@ describe('GRP-01: readAdminBootstrapSetting', () => {
     );
   });
 
-  // The spoilt codes are a synthetic code made at run time, then spoilt (SM-01's
-  // "Synthetic data only": no credential-looking literal in a file, for
+  // The spoilt codes are a synthetic code made at run time, then spoilt (RG-07,
+  // synthetic test data: no credential-looking literal in a file, for
   // gitleaks reads every line). Each keeps its one fault: one character too
   // many, a U last, a `!` at the seventeenth place.
   const spoilt = syntheticBootstrapCode();

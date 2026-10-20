@@ -63,7 +63,7 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | PRIV-10 | A plain-language privacy notice in bokmål, shown before the first journey. | must | ⚪ | 0 |
 | PRIV-11 | A DPIA is written and kept in `docs/` before the private group starts. | must | ⚪ | 0 |
 | PRIV-12 | Members under 18 (D-017): the admin records only an age band at invitation (under 15 / 15–17 / 18+), never a… | must | ⚪ | 0 |
-| SM-01 | One active journey per walker. | must | 🟢 | 17 |
+| SM-01 | One active journey per walker. | must | 🟢 | 13 |
 | SM-02 | A journey needs at least one responder to start. | must | 🟢 | 13 |
 | SM-03 | Heartbeats keep a journey ACTIVE even without a position; "location unavailable" is a flag (REL-05). | must | 🟢 | 4 |
 | SM-04 | LOST_CONTACT → ENDED (home) is allowed, e.g. | must | 🟢 | 14 |

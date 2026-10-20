@@ -393,7 +393,7 @@ function native(): typeof ReactNative {
 /**
  * A synthetic code as the admin's app shows one: four groups of five of
  * Crockford's base32 characters, hyphens between. Made at run time, as
- * SM-01's "Synthetic data only" asks: no credential-looking literal is
+ * RG-07 (synthetic test data) asks: no credential-looking literal is
  * written in a file, because gitleaks (CI's `security` job) reads every
  * committed line. Fixed for the run. The app does not depend on the test kit
  * (its package.json does not name it), so this is the kit's
