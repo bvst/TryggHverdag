@@ -230,6 +230,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.4
+      fast-check:
+        specifier: ^4.10.2
+        version: 4.10.2
       typescript:
         specifier: 'catalog:'
         version: 6.0.3
