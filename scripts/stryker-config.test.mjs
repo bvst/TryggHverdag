@@ -475,11 +475,13 @@ describe('stryker.config.mjs', () => {
     );
   });
 
-  test("GRP-01-AC32: the groups run mutates modules/groups/ and runs groups.system.test.ts alone, under the system tests' configuration", async () => {
+  test("GRP-01-AC32: the membership run mutates modules/groups/ and runs groups.system.test.ts alone, under the system tests' configuration", async () => {
     // As the canary run: the root configuration leaves *.system.test.ts out,
     // so the command is asked what it would run, not only read. Its own run,
-    // right after journeys (review loop 1, safety-reviewer S4).
-    const config = await configFor('groups');
+    // right after journeys (review loop 1, safety-reviewer S4). Named
+    // membership, not groups: that word is the mutation plan's output key in
+    // ci.yml's three mutation jobs, where BUG-45-AC8 refuses any group's name.
+    const config = await configFor('membership');
 
     expect(config.mutate).toEqual(['apps/server/src/modules/groups/**/*.ts', ...EXCLUSIONS]);
     expect(config.commandRunner.command).toMatch(/^node node_modules\/vitest\/vitest\.mjs run /);
@@ -661,14 +663,16 @@ describe('stryker.config.mjs', () => {
     //
     // RG-03 (GRP-01-AC32, review loop 1, safety-reviewer S4; the spec's
     // Mutation section and "Existing assertions that change by design"): the
-    // groups group joins the runs, right after journeys, which gives it
+    // membership group joins the runs, right after journeys, which gives it
     // modules/groups/. The others keep their names and their order, and the
-    // union below is still every safety path, each once.
+    // union below is still every safety path, each once. It is not named
+    // groups: that word is the mutation plan's output key in ci.yml's three
+    // mutation jobs, where BUG-45-AC8 refuses any group's name.
     expect(mutationRuns().map((run) => run.name)).toEqual([
       'domain',
       'healthchecks',
       'journeys',
-      'groups',
+      'membership',
       'alerts',
       'canary',
       'worker',

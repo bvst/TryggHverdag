@@ -1687,6 +1687,84 @@ describe('the flows themselves', () => {
   });
 });
 
+// GRP-01-AC28 (L7, review loop 1): the invite screen shows the code as four
+// Texts of five, inside one element whose screen-reader label spells it
+// character by character, group by group, so no element holds the whole code
+// as text, and first-admin-invites.yaml finds it by that label and by the
+// groups drawn inside it. L7 runs only where an emulator does, so the flow's
+// patterns are held here, as Maestro reads them: the whole text, any case.
+// The code is synthetic (RG-07), the L5 test's; the label is spelled as the
+// screen spells it, and as the L5 test reads it, with a comma, full stop or
+// semicolon between groups.
+describe('GRP-01-AC28: first-admin-invites finds the code by its spelled label and its drawn groups', () => {
+  const CODE = 'K7Q2M-9TRVX-4HNPA-62WZE';
+  /** The code as the screen's label spells it: each character apart, `between` between groups. */
+  const spelled = (code, between = ', ') =>
+    code
+      .replace(/[^0-9A-Za-z]/g, '')
+      .match(/.{1,5}/g)
+      .map((group) => Array.from(group).join(' '))
+      .join(between);
+  /** Maestro 2.10.0 matches a text selector against the whole text, ignoring case. */
+  const asMaestroReads = (pattern) => new RegExp(maestroPattern(pattern).source, 'is');
+  /** Every single-quoted value of the flow's steps, comments left out. */
+  const patterns = () =>
+    [
+      ...readFileSync(path.join(FLOWS, 'first-admin-invites.yaml'), 'utf8')
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('#'))
+        .join('\n')
+        .matchAll(/'((?:[^']|'')*)'/g),
+    ].map((match) => match[1].replaceAll("''", "'"));
+  const matching = (text) => patterns().filter((p) => asMaestroReads(p).test(text));
+
+  test('GRP-01-AC28: a step of the flow matches the label the screen spells, with a comma, full stop or semicolon between groups', () => {
+    for (const between of [', ', '. ', '; ']) {
+      expect(matching(spelled(CODE, between)), JSON.stringify(between)).not.toEqual([]);
+    }
+  });
+
+  test.each([
+    { case: 'the code as one text, hyphens between groups', text: CODE },
+    { case: 'the code as one text, spaces between groups', text: CODE.replaceAll('-', ' ') },
+    { case: 'three groups', text: spelled('K7Q2M-9TRVX-4HNPA') },
+    { case: 'five groups', text: spelled(`${CODE}-ABCDE`) },
+    { case: 'a group of six', text: 'K 7 Q 2 M, 9 T R V X Y, 4 H N P A, 6 2 W Z E' },
+    { case: 'twenty-one characters', text: spelled(`${CODE}Q`) },
+    { case: 'no pause between groups', text: spelled(CODE, ' ') },
+    { case: 'an I, which is not Crockford', text: spelled('K7Q2M-9TRVX-4HNPA-62WZI') },
+    { case: 'an L', text: spelled('K7Q2L-9TRVX-4HNPA-62WZE') },
+    { case: 'an O', text: spelled('K7Q2M-9TOVX-4HNPA-62WZE') },
+    { case: 'a U', text: spelled('K7Q2M-9TRVX-4HNUA-62WZE') },
+  ])('GRP-01-AC28: every step that matches the spelled label refuses $case', ({ text }) => {
+    const label = patterns().filter((p) => asMaestroReads(p).test(spelled(CODE)));
+
+    expect(label.length).toBeGreaterThan(0);
+    for (const pattern of label) {
+      expect({ pattern, matches: asMaestroReads(pattern).test(text) }).toEqual({
+        pattern,
+        matches: false,
+      });
+    }
+  });
+
+  test('GRP-01-AC28: a step of the flow matches a drawn group, five of Crockford’s characters and nothing else', () => {
+    const groups = CODE.split('-');
+    const drawn = patterns().filter((p) => groups.every((group) => asMaestroReads(p).test(group)));
+
+    expect(drawn.length).toBeGreaterThan(0);
+    for (const pattern of drawn) {
+      for (const text of ['K7Q2', 'K7Q2M9', 'K7Q 2', 'K7Q2L', spelled(CODE), CODE]) {
+        expect({ pattern, text, matches: asMaestroReads(pattern).test(text) }).toEqual({
+          pattern,
+          text,
+          matches: false,
+        });
+      }
+    }
+  });
+});
+
 describe('the pinned Maestro', () => {
   const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 

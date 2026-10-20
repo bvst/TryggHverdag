@@ -26,6 +26,8 @@ appId: ${APP_ID}
 - extendedWaitUntil:
     visible: ${JOIN_TITLE}
     timeout: 30000
+# A label matches its field and the Text shown above it; Maestro taps the
+# clickable one, the field (see first-admin-invites.yaml).
 - tapOn: ${CODE_LABEL}
 - inputText: 'ZZZZZ-ZZZZZ-ZZZZZ-ZZZZZ'
 - tapOn: ${NAME_LABEL}

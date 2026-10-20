@@ -31,6 +31,11 @@ appId: ${APP_ID}
 - extendedWaitUntil:
     visible: ${JOIN_TITLE}
     timeout: 30000
+# Since review loop 1 each field's label also shows above it, as a Text with
+# the field's own screen-reader label, so a label matches two elements: that
+# Text and the field. With no index, Maestro 2.10.0 sorts the matches
+# clickable first and taps the first. A text field is clickable; the label,
+# with no onPress, is not. So the tap lands on the field.
 - tapOn: ${CODE_LABEL}
 - inputText: ${BOOTSTRAP_CODE}
 - tapOn: ${NAME_LABEL}
@@ -50,8 +55,28 @@ appId: ${APP_ID}
     timeout: 15000
 - tapOn: ${CREATE_INVITATION}
 # Twenty of Crockford's base32 characters, in four groups of five.
+#
+# RG-03 (GRP-01-AC28, review loop 1): no element holds the whole code as text
+# any more. Each group of five is a Text of its own, inside one element whose
+# screen-reader label spells the code character by character, group by group
+# ("K 7 Q 2 M, 9 T R V X, ..."). On Android that label is the element's
+# content description, which Maestro's text selector also matches, against
+# the whole label. So the step waits for that label: exactly four groups of
+# five, each character apart, a comma, full stop or semicolon between groups,
+# as the L5 test reads it. The screen builds the label from the code; nothing
+# in it comes from nb.json. What the step proves is unchanged: twenty of
+# Crockford's characters, in four groups of five.
 - extendedWaitUntil:
-    visible: '.*[0-9A-HJKMNP-TV-Z]{5}[- ][0-9A-HJKMNP-TV-Z]{5}[- ][0-9A-HJKMNP-TV-Z]{5}[- ][0-9A-HJKMNP-TV-Z]{5}.*'
+    visible: '[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}(\s*[,.;]\s*[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}){3}'
     timeout: 15000
+# And the code is drawn so, not only labelled: inside that element, a fourth
+# element whose whole text is five of those characters. Maestro orders the
+# matches top to bottom, then left to right, so this holds however the
+# groups wrap.
+- assertVisible:
+    text: '[0-9A-HJKMNP-TV-Z]{5}'
+    index: 3
+    childOf:
+      text: '[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}(\s*[,.;]\s*[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}){3}'
 - assertVisible: ${SHARE_BUTTON}
 - assertNotVisible: '[a-z][a-zA-Z0-9]*(\.[a-zA-Z0-9]+)+'

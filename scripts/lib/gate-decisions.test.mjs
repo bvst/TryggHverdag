@@ -741,11 +741,14 @@ describe('the mutation runs of this repository', () => {
       // RG-03 (GRP-01-AC32, review loop 1, safety-reviewer S4): the groups
       // module, modules/groups/, decides who receives alerts, and the green
       // head left it out of every run. It is a safety path with a group of
-      // its own, groups, right after journeys, against groups.system.test.ts
-      // under the system tests' configuration. A group added; every other
-      // group, its paths, its tests and its order, is unchanged.
+      // its own, membership, right after journeys, against
+      // groups.system.test.ts under the system tests' configuration. A group
+      // added; every other group, its paths, its tests and its order, is
+      // unchanged. Named membership, not groups: that word is the mutation
+      // plan's output key in ci.yml's three mutation jobs, where BUG-45-AC8
+      // refuses any group's name (the spec's AC32).
       expect.objectContaining({
-        name: 'groups',
+        name: 'membership',
         paths: ['apps/server/src/modules/groups/'],
         tests: ['apps/server/src/groups.system.test.ts'],
         config: 'vitest.system.config.mjs',

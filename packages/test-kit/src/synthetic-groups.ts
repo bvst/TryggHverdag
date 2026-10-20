@@ -65,8 +65,10 @@ export function syntheticInvitationCode(): string {
 
 /**
  * The first admin's bootstrap code with the real one's shape: Terraform's
- * `random_id` of 16 bytes, written as upper-case hex, 32 characters
- * (approach item 8). Every hex digit is one of Crockford's characters.
+ * `random_bytes.admin_bootstrap_code`, `length = 16`, written as upper-case
+ * hex (`upper(random_bytes.admin_bootstrap_code.hex)`), 32 characters
+ * (approach item 8; `random_bytes`, not `random_id`, since review loop 1, so
+ * no plan prints it). Every hex digit is one of Crockford's characters.
  */
 export function syntheticBootstrapCode(): string {
   return randomOf(HEX_UPPER, 32);
