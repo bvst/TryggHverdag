@@ -49,3 +49,33 @@ Recurring patterns to check on every later screen:
   for a removed member who is walking (AC21: signed out when the walk ends).
   "deres" for one person reads as plural or formal; use the name or "vedkommende".
 - Wording drift: "Prøv igjen" / "Prøv på nytt", en "Try again" / "Try once more".
+
+## Loop 2 delta review (3fac8fb..879096f): PASS, S1 and S2 met
+
+Checked by reading the diff, running `pnpm exec jest src/features/grp` in
+`apps/mobile` (100 tests) and `pnpm exec vitest run scripts/lib/e2e-android.test.mjs`
+(149); not run: Maestro/L7 (CI only), any device.
+
+- The code's label and announcement are now "Invitasjonskode: K 7 Q 2 M, …"
+  (`named()` in `invite-screen.tsx`, key `grp.join.codeLabel`, nb and en keys
+  still 31 and 31). The ": " is hard-coded punctuation, fine for nb and en.
+- RN 0.86.3 `ActivityIndicator` puts `accessible`, role and label on the native
+  indicator inside a plain wrapper View (`style` goes on the wrapper). So
+  `accessible` on `Waiting` does reach the element a screen reader focuses.
+- Still true after loop 2, check on every later screen: `Waiting` has no live
+  region, so a screen-reader user is not told when it appears; focus stays on the
+  pressed button, and the indicator is only reached by swiping. A one-line
+  `accessibilityLiveRegion="polite"` would announce it on Android (iOS is task 12).
+- When a busy indicator lives inside a conditional block (the removal's
+  confirmation), anything that closes the block mid-flight makes the indicator
+  vanish, so `disabled={busy}` on the block's buttons becomes load-bearing for
+  AC30. grp.test.tsx pins no `disabled` and never touches the cancel button
+  (grep `disabled|cancel` finds only the translation-key list). Look for this
+  whenever an indicator is moved into a block.
+- A removal that gets no answer (5xx, network) is said after the list
+  (`members-screen.tsx`, the `failed` block), not in the member's row as a
+  refusal is; and its "Prøv igjen" reloads the list, it does not repeat the
+  removal. Pre-existing from loop 1, outside the delta; reasoned, not seen.
+- A new in-flight indicator below two 56 pt buttons is about 130 pt below the
+  confirm button's top: on a screen where the confirm sits at the fold, the
+  dimmed buttons are the only sighted cue. Reasoned from the layout.
