@@ -91,12 +91,15 @@ export function Button({
 
 /**
  * A request in flight (GRP-01-AC30): a spinner with the role a screen reader
- * names as progress, and its label, besides the dimmed button.
+ * names as progress, and its label, besides the dimmed button. It is an
+ * accessibility element of its own (review loop 2), so a screen reader
+ * stops on it and reads that label.
  */
 export function Waiting({ label }: { label: string }) {
   return (
     <ActivityIndicator
       size="large"
+      accessible
       accessibilityRole="progressbar"
       accessibilityLabel={label}
       style={styles.waiting}

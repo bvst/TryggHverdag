@@ -10,13 +10,18 @@
  *   - a removal answered 403 or 409 is said as a refusal, in that member's
  *     row, never as a server that could not be reached;
  *   - a removal done is said, naming them, once the list shows without them;
- *   - while the list loads or a removal is in flight, a waiting indicator
- *     shows (AC30).
+ *   - while the list loads, a waiting indicator shows at the top (AC30);
+ *     while a removal is in flight, inside the confirmation, beside its
+ *     buttons, which stay on screen, disabled (review loop 2).
  *
- * A removal answered 404 MEMBER_NOT_FOUND is done all the same: the member is
- * gone, whatever removed them (F2). Only that code counts: a 404 without it
- * is no answer from the route, and is said as one. A 401 signs the phone out
- * (AC29), and the join screen takes over.
+ * What a removal's answer comes to:
+ *   - 200, or 404 with the code MEMBER_NOT_FOUND: done. The member is gone,
+ *     whatever removed them (F2);
+ *   - any other refusal, a 4xx but 401 (a 403, a 409, a 404 without that
+ *     code, a 400): refused, said in that member's row, and they stay
+ *     listed (review loop 2);
+ *   - no answer, or a 5xx: the server could not be reached, with a retry;
+ *   - a 401: the phone is signed out (AC29), and the join screen takes over.
  */
 import type {
   ListMembersResponse,
@@ -96,7 +101,7 @@ export function MembersScreen({ onBack }: { onBack: () => void }) {
   return (
     <Screen>
       <Heading>{t('grp.members.title')}</Heading>
-      {loading || busy ? <Waiting label={t('grp.waiting')} /> : null}
+      {loading ? <Waiting label={t('grp.waiting')} /> : null}
       {outcome?.kind === 'removed' ? (
         <Message>{t('grp.members.removed', { name: outcome.name })}</Message>
       ) : null}
@@ -125,6 +130,7 @@ export function MembersScreen({ onBack }: { onBack: () => void }) {
                 disabled={busy}
                 quiet
               />
+              {busy ? <Waiting label={t('grp.waiting')} /> : null}
             </View>
           ) : null}
           {member.role === 'MEMBER' && confirming === null ? (

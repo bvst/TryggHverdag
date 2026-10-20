@@ -16,7 +16,11 @@
  *   - the four are one element to a screen reader, whose label spells the
  *     code character by character, group by group ("K 7 Q 2 M, 9 T R V X,
  *     …"), not as a word;
- *   - it is announced, spelled so, when it appears.
+ *   - it is announced, spelled so, when it appears;
+ *   - (review loop 2) the label and the announcement begin with the code
+ *     field's own name and a colon ("Invitasjonskode: K 7 Q 2 M, …"), so
+ *     the characters are never read without saying what they are, and
+ *     nothing follows the code.
  */
 import type { CreateInvitationResponse } from '@trygghverdag/contracts';
 import { useState } from 'react';
@@ -34,6 +38,11 @@ function groupsOf(code: string): string[] {
 /** The code as a screen reader should read it: each character apart, a pause between groups. */
 function spelled(groups: string[]): string {
   return groups.map((group) => Array.from(group).join(' ')).join(', ');
+}
+
+/** What the code is called, then the code, spelled: its label and its announcement alike. */
+function named(name: string, groups: string[]): string {
+  return `${name}: ${spelled(groups)}`;
 }
 
 /** When the invitation expires, as a person reads a date and a time in their own language. */
@@ -74,7 +83,9 @@ export function InviteScreen({ onBack }: { onBack: () => void }) {
     setBusy(false);
     if (answer.kind === 'ok') {
       setInvitation(answer.body);
-      AccessibilityInfo.announceForAccessibility(spelled(groupsOf(answer.body.invitationCode)));
+      AccessibilityInfo.announceForAccessibility(
+        named(t('grp.join.codeLabel'), groupsOf(answer.body.invitationCode)),
+      );
     } else {
       setFailed(true);
     }
@@ -87,7 +98,11 @@ export function InviteScreen({ onBack }: { onBack: () => void }) {
       <Heading>{t('grp.invite.title')}</Heading>
       {invitation === null ? null : (
         <>
-          <View accessible accessibilityLabel={spelled(groups)} style={styles.codeGroups}>
+          <View
+            accessible
+            accessibilityLabel={named(t('grp.join.codeLabel'), groups)}
+            style={styles.codeGroups}
+          >
             {groups.map((group, at) => (
               // A group's place tells it apart: two groups may read the same.
               <Text key={at} style={styles.code}>
