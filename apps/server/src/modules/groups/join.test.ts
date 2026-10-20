@@ -172,3 +172,114 @@ describe('GRP-01-AC8: the bootstrap code is compared in constant time', () => {
     expect(store.groups()).toEqual([]);
   });
 });
+
+// A code the domain's normaliser refuses (GRP-01-AC2). The contract lets only
+// codes through, so no request at L6 reaches this: the module is called here
+// directly, as a caller the contract did not guard would call it. Every shape
+// is built from a synthetic code a character away from a real one, the
+// bootstrap code among them, so a refusal that keyed on anything but the
+// normaliser's answer would show. None may reach the store, make a group, or
+// write a line: a refusal is the caller's answer (approach item 13).
+describe('GRP-01-AC2: a code that is not a code lets nobody in, and asks the store nothing', () => {
+  test.each([
+    {
+      shape: 'empty',
+      typed: (): string => '',
+    },
+    {
+      shape: 'one character short of an invitation code',
+      typed: (): string => syntheticInvitationCode().slice(0, 19),
+    },
+    {
+      shape: 'the bootstrap code with one character more',
+      typed: (setting: string): string => `${setting}0`,
+    },
+    {
+      shape: 'a U, which is no character of the alphabet even once normalised',
+      typed: (): string => `${syntheticInvitationCode().slice(0, 19)}U`,
+    },
+    {
+      shape: 'a character that is not a code’s at all',
+      typed: (): string => `${syntheticInvitationCode().slice(0, 19)}!`,
+    },
+    {
+      shape: 'a tab between its groups',
+      typed: (): string => {
+        const code = syntheticInvitationCode();
+        return `${code.slice(0, 10)}\t${code.slice(10)}`;
+      },
+    },
+    {
+      shape:
+        'the bootstrap code with a letter outside ASCII that upper-cases to one of the alphabet’s',
+      typed: (setting: string): string => `${setting.slice(0, 31)}ſ`,
+    },
+  ])(
+    'GRP-01-AC2: a code the normaliser refuses ($shape) is the one refusal, INVITATION_NOT_VALID; the store is never asked, no group is made, and no line is written',
+    async ({ typed }) => {
+      const setting = syntheticBootstrapCode();
+      const store = fakeJourneyStore({ clock: fakeClock(T) });
+      const log = fakeLog();
+      const service = createJoinService({ groups: store, log, bootstrapCode: setting });
+
+      const result = await service.join(joinWith(typed(setting)));
+
+      expect(result).toEqual({ type: 'refused', reason: 'INVITATION_NOT_VALID' });
+      expect(store.calls).toEqual([]);
+      expect(store.groups()).toEqual([]);
+      expect(log.events).toEqual([]);
+    },
+  );
+});
+
+/**
+ * A store failure as Drizzle throws one: its message names the query's
+ * parameters, here the code, the join key and the display name the join sent,
+ * and PostgreSQL's SQLSTATE sits on its cause, not on the error itself.
+ */
+function storeFailure(sqlstate: string, parameters: readonly string[]): Error {
+  return new Error(`Failed query: params: ${parameters.join(',')}`, {
+    cause: Object.assign(new Error('the database could not answer'), { code: sqlstate }),
+  });
+}
+
+// The store failing the join (GRP-01-AC24, PRIV-07). The module writes one
+// closed line, the stage and the SQLSTATE, and rethrows the store's own
+// error: a failure is never swallowed, and never turned into the refusal a
+// person would read as "the code is wrong". The line holds nothing the join
+// sent, though the error's message does. The bootstrap path and the
+// invitation path each reach the store by its own call, so each is failed.
+describe('GRP-01-AC24: a join the store fails is one closed log line, and the store’s error, never a refusal', () => {
+  test.each([
+    {
+      path: 'bootstrapGroup' as const,
+      sqlstate: '40001',
+      sent: (setting: string): string => setting,
+    },
+    {
+      path: 'joinWithInvitation' as const,
+      sqlstate: '23505',
+      sent: (): string => syntheticInvitationCode(),
+    },
+  ])(
+    'GRP-01-AC24: when $path rejects with SQLSTATE $sqlstate, the join rejects with that same error, and exactly one join_failed line is written, at the store stage with the SQLSTATE, holding no code, join key or display name',
+    async ({ path, sqlstate, sent }) => {
+      const setting = syntheticBootstrapCode();
+      const store = fakeJourneyStore({ clock: fakeClock(T) });
+      const log = fakeLog();
+      const service = createJoinService({ groups: store, log, bootstrapCode: setting });
+      const call = joinWith(sent(setting));
+      const error = storeFailure(sqlstate, [call.invitationCode, call.joinKey, call.displayName]);
+      store.failWith(error, path);
+
+      await expect(service.join(call)).rejects.toBe(error);
+
+      expect(store.calls).toEqual([path]);
+      expect(log.events).toEqual([{ event: 'join_failed', stage: 'store', code: sqlstate }]);
+      const written = JSON.stringify(log.events);
+      for (const secret of [call.invitationCode, call.joinKey, call.displayName]) {
+        expect(written).not.toContain(secret);
+      }
+    },
+  );
+});
