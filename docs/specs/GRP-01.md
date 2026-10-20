@@ -12,10 +12,33 @@ owner on 2026-10-20), for the cloud session's branch `claude/busy-faraday-40n2zl
 (D-055). This writer had no shell: the branch and its commit were not checked,
 `pnpm run decision` and `req:coverage` were not run, and the decisions were
 read in `docs/plan/decisions.md` itself, by line · **Status:** Spec,
-settled. The owner answered all five questions on 2026-10-20, each time with
-Claude's recommendation (D-136; "Owner's answers", at the end); the choices
-delegated to Claude are D-137. The criteria were written on those answers and
-stand as written.
+settled; built (green at `a5fd8cf`), in review loop 1. The owner answered all
+five questions on 2026-10-20, each time with Claude's recommendation (D-136;
+"Owner's answers", at the end); the choices delegated to Claude are D-137.
+Changes made in review loop 1 are marked *Review loop 1* where they are made,
+and listed below; D-137's loop-1 amendment records them, and D-138 the app
+client's swap from D-032's libraries.
+
+### Review loop 1 (2026-10-20), from the reviews of `a5fd8cf`
+
+Claude's choices (D-031), from the reviewers' findings. Criteria numbers
+AC1 to AC30 are unchanged; AC8, AC28 and AC30 are amended; AC31 to AC33 are
+new.
+
+| Change | From | Where |
+|---|---|---|
+| The bootstrap code is made by `random_bytes`, not `random_id`, so no plan prints it | `privacy-security-reviewer`, B1 (blocking) | Approach 8; AC8 |
+| The bootstrap join can be retried with its join key while the admin is the only member | `privacy-security-reviewer` N1; `code-reviewer` | Approach 2, 8; AC8 |
+| The bootstrap code is compared in constant time | `privacy-security-reviewer` N2 | Approach 8; AC8 |
+| Display names refuse bidirectional controls and other format characters (ZWNJ and ZWJ allowed), and names with nothing visible | `privacy-security-reviewer` N4 (the abusive-member threat) | Approach 2, 12; AC31 |
+| `modules/groups/` is a safety path with a mutation group; the journeys group runs `groups.system.test.ts` | `safety-reviewer` S4 | Approach 1; Mutation; AC32 |
+| `android-e2e` runs on changes to the server and the contracts | `safety-reviewer`; implementer | Approach 14; AC33 |
+| `responderIds`' description says "a member of the walker's group" | `code-reviewer` S2 | Approach 6; Contract changes |
+| The app's plain `fetch` client instead of `@orpc/client` and TanStack Query, recorded as D-138 | `code-reviewer` S3 | Approach 14 |
+| A refusal on removal is not shown as "could not be reached"; the detached JSDoc in `api.ts` goes | `code-reviewer` S4, S1 | AC28; no criterion for S1 |
+| The app's accessibility: the removal confirmation in place, the code's wrapping and reading, visible labels, a waiting indicator, one "try again" | `a11y-i18n-reviewer` S2 to S6 | Approach 14; AC28, AC30 |
+| The authentication query may find the journey by `walker_id` too | `safety-reviewer`, note | Approach 5 |
+| Dark-first screens (task 2); the app's sign-out on a 401 against a walking removed member (task 3); the task-6 hand-off corrected | `a11y-i18n-reviewer` S1; `safety-reviewer` S1, S2; `privacy-security-reviewer` N3 | Left for later tasks |
 
 ## Requirement
 
@@ -176,6 +199,9 @@ Each is stated so the reviewers can check it.
 5. **The first admin is not invited** (nobody exists to invite them). A
    bootstrap code opens only an empty group: it works once (the group it
    creates ends it) and has no expiry of its own (D-136, answer 1).
+   *Review loop 1:* as with an invitation (reading 3), a retry of that same
+   join, with the same join key, is the same join, not a second use; it is
+   accepted while the admin is the group's only member (approach 8).
 6. **"A member"** is a user with a membership row. **"Removed"** is that row
    deleted. Their `users` row stays: journeys, alerts and messages reference it
    (the retention rule, M4, decides when it goes).
@@ -191,7 +217,9 @@ Each is stated so the reviewers can check it.
 9. **"Stops receiving alerts"**: every unsent message to them is withdrawn,
    nothing new is written to them, and they cannot be named as a responder
    again (AC12, AC18, AC19). Push targets arrive with task 6, which must send
-   only to devices that authenticate (Left for later tasks).
+   only to devices that authenticate, and to a removed member's walking
+   device only the messages to the walker of its own unended journey (Left
+   for later tasks, corrected in review loop 1).
 10. **The admin is also a member**, and can be a walker and a responder like
     anyone else.
 
@@ -235,7 +263,9 @@ already make are recorded in D-137.
    - **Module:** `apps/server/src/modules/groups/` (new): `join.ts`,
      `invitations.ts`, `members.ts` (list and remove). Thin, as every module:
      read, ask the domain, write through a port. A new safety path, because it
-     decides who receives alerts.
+     decides who receives alerts. *Review loop 1:* the green head left it out
+     of `SAFETY_PATHS` and every mutation group; it goes in, with a group of
+     its own (Mutation, AC32).
    - **SQL:** `apps/server/src/adapters/groups.ts` (new): the join, the
      invitation, the members, the member's removal; owned, proven at L3 and by
      the shared behaviour suite (D-100), not mutated (D-095's reading).
@@ -257,8 +287,16 @@ already make are recorded in D-137.
 
    | Table | Columns | Constraints |
    |---|---|---|
-   | `groups` | `id` (UUID), `created_at` (database time) | at most one row: a unique index on a constant (reading 1) |
+   | `groups` | `id` (UUID), `created_at` (database time), `bootstrap_join_key_hash` (*review loop 1*: the SHA-256 of the first admin's join key, written with the group) | at most one row: a unique index on a constant (reading 1); `bootstrap_join_key_hash` not null |
    | `memberships` | `user_id` (PK, references `users`), `group_id`, `role` (`ADMIN` \| `MEMBER`), `display_name`, `joined_at` (database time) | one group per user (the PK); one `ADMIN` per group (partial unique index); `display_name` 1 to 40 characters after trimming, no control characters; **`user_id` not one of the canary's two IDs** (a check with literals, AC15) |
+
+   *Review loop 1:* the contract's rule for a display name is stricter than
+   the table's check (approach 12, AC31): no bidirectional control, no other
+   format character but ZWNJ and ZWJ, and at least one visible character. The table's check is unchanged and stays the backstop
+   for length and control characters; the join route is the only way a
+   display name is written, and it takes the contract's rule. The new column
+   goes into this task's migration, which has not merged and has run on no
+   deployed database.
    | `invitations` | `id`, `group_id`, `code_hash` (unique), `created_by` (references `users`), `created_at`, `expires_at`, `used_at`, `used_by` (references `users`), `join_key_hash` | `expires_at > created_at`; `used_at`, `used_by` and `join_key_hash` all null or all set |
    | `audit_log` | `id` (identity), `at` (database time), `actor_id` (nullable), `action` (`GROUP_CREATED` \| `INVITATION_CREATED` \| `MEMBER_REMOVED`), `subject_id` (nullable: an invitation's or a user's ID, by action) | no free text, no name, no code |
 
@@ -320,6 +358,12 @@ already make are recorded in D-137.
      D-110), and every other route answers it the one 401. Once that journey
      ends, the query admits it nowhere. The 401 contract and "a check that
      cannot run is a 500" are unchanged.
+   - *Review loop 1 (`safety-reviewer`, a note):* the query finds the unended
+     journey by `device_id` alone, which no index serves, so every request
+     reads the unended journeys. It may also match on `walker_id` (the
+     device's user), so the existing partial unique index on a walker's
+     unended journey serves it. Who is admitted does not change; the
+     implementer makes this change only if it stays one query and simple.
    - So removing a membership revokes every device of that user at its commit,
      with no column to forget and no path to miss. A `revoked_at` per device,
      for the admin's revoke-sessions of the account-takeover threat, is M4's.
@@ -340,6 +384,10 @@ already make are recorded in D-137.
    - The contract's `INVALID_RESPONDER` message becomes "A responder named is
      the walker, or is not a member of the walker's group." (a description
      change, not a breaking one).
+   - *Review loop 1 (`code-reviewer` S2):* so does the start route's
+     `responderIds` description, which still said "an existing user": each
+     must be a member of the walker's group other than the walker. Also a
+     description change only.
 
 7. **The canary stays outside** (D-128). Its two users have no membership,
    held by the table's check; a join never writes `CANARY_DEVICE_ID` or its
@@ -349,18 +397,56 @@ already make are recorded in D-137.
    canary's walker can name only its own responder, and no member can name
    either canary user.
 
-8. **The first admin** (D-136, answer 1). Terraform makes the code
-   (`random_id.admin_bootstrap_code`, 16 bytes, written as upper-case hex: 32
-   characters the normaliser accepts), passed to the API as
-   `ADMIN_BOOTSTRAP_CODE`, sensitive, never in a GitHub secret. While no group
-   exists, a join with it creates the group and makes the joiner its `ADMIN`,
-   with a `GROUP_CREATED` audit row, in one transaction; the one-group index
-   decides a race. Once a group exists, it is refused like any invalid code.
-   `config.ts` reads it as usable only if it normalises to 20 to 32 base32
-   characters; the API says at start, in one line, whether the first admin can
-   join with it, and never its value. The owner reads it in Clever Cloud's
-   console for the staging app (A-36, below). In CI's L7 job it is a synthetic
-   value set by the job.
+8. **The first admin** (D-136, answer 1).
+   - **Made by Terraform with `random_bytes`** (*review loop 1*,
+     `privacy-security-reviewer` B1): `random_bytes.admin_bootstrap_code`,
+     `length = 16`, written as upper-case hex (32 characters the normaliser
+     accepts): `ADMIN_BOOTSTRAP_CODE =
+     upper(random_bytes.admin_bootstrap_code.hex)`. The green head used
+     `random_id`, which in `hashicorp/random` 3.9.1 marks no attribute
+     sensitive and whose `id` is the bytes themselves (base64url): every
+     `infra-staging` plan would print `random_id.admin_bootstrap_code:
+     Refreshing state... [id=…]`, the code, into a job log that is public.
+     `random_bytes`' `hex` is sensitive and the resource has no ID made from
+     the value, so a plan shows `(sensitive value)` and no code (the reviewer
+     checked both against a hand-written state, in a scratch directory). That
+     public log is the exposure D-136, answer 1, chose Terraform to avoid,
+     and SEC-03 asks for secrets in a managed store. Nothing was planned or
+     applied with `random_id`: GRP-01 has not merged, and A-36's plan comes
+     after the merge. Never in a GitHub secret or a variable.
+   - **Rotated by a generation** (*review loop 1*, the coordinator, D-031):
+     the resource takes `keepers = { generation =
+     local.admin_bootstrap_code_generation }`, starting at `"1"`, as the
+     canary's credential does (D-128's loop-1 amendment). `infra-staging.yml`
+     has no `-replace`, so raising that number in a pull request, then plan
+     and apply, is the one-line rotation.
+   - While no group exists, a join with it creates the group and makes the
+     joiner its `ADMIN`, with a `GROUP_CREATED` audit row and the join key's
+     hash on the group's row, in one transaction; the one-group index decides
+     a race. Once a group exists, it is refused like any invalid code, with
+     one exception:
+   - **The bootstrap join can be retried** (*review loop 1*,
+     `privacy-security-reviewer` N1, `code-reviewer`). The same code with the
+     same join key (`groups.bootstrap_join_key_hash`), while the admin is the
+     group's only member, gives the admin's one device a new credential and
+     answers as the first time (the same user, `ADMIN`); the earlier
+     credential stops working; the display name sent with the retry is not
+     used. Without it, a lost answer (F2) left the group made and the owner
+     outside it, and only emptying the staging database would let them in.
+     The window closes when anyone else joins: an invitation can only be made
+     with a working admin credential, so a second member shows the admin's
+     phone has one. Another key, or the same key after that, is the one
+     refusal.
+   - **Compared in constant time** (*review loop 1*,
+     `privacy-security-reviewer` N2): the code sent and the setting are each
+     hashed with SHA-256 and the two digests compared with
+     `crypto.timingSafeEqual`, never with `===`, so the time a refusal takes
+     says nothing about how much of the code was right.
+   - `config.ts` reads it as usable only if it normalises to 20 to 32 base32
+     characters; the API says at start, in one line, whether the first admin
+     can join with it, and never its value. The owner reads it in Clever
+     Cloud's console for the staging app (A-36, below). In CI's L7 job it is
+     a synthetic value set by the job.
 
 9. **The admin removes a member: one transaction, all or nothing.**
    - Takes the membership row `FOR UPDATE`; refuses the admin's own ID
@@ -417,6 +503,36 @@ already make are recorded in D-137.
     Every ID in a path is `z.uuid().toLowerCase()`, so a malformed one is the
     fixed 400, never a 22P02 and a 500. Every refusal is a fixed shape that
     carries nothing of the request.
+    - **A display name is something a person can see** (*review loop 1*,
+      `privacy-security-reviewer` N4; the abusive-member threat). The green
+      head's rule (1 to 40 characters after trimming, no control character)
+      let through U+202E RIGHT-TO-LEFT OVERRIDE, which makes a name read as
+      another, and a name of U+200B ZERO WIDTH SPACE alone, which shows as
+      nothing in the admin's list. The threat is spoofing: a name that reads
+      as someone else's through a bidirectional override, and a name that
+      shows as nothing. The join's schema now also refuses:
+      - the bidirectional controls: U+061C, U+200E, U+200F, U+202A to
+        U+202E and U+2066 to U+2069;
+      - every other format character (Unicode general category Cf, such as
+        U+200B, U+FEFF and the soft hyphen U+00AD), **except** ZERO WIDTH
+        NON-JOINER (U+200C) and ZERO WIDTH JOINER (U+200D), which real names
+        and joined emoji need (some Persian names; an emoji family);
+      - a name with no visible character. A visible character is one that is
+        not white space (Unicode `White_Space`), not Cc or Cf (U+200C and
+        U+200D included: they are allowed, but they are not visible), and not
+        one of the blank fillers U+115F, U+1160, U+3164, U+FFA0 and U+2800.
+        So a name made only of spaces, ZWJ, ZWNJ or other non-printing
+        characters is refused.
+
+      The rule is one function in `packages/contracts`, used by the join's
+      schema (the fixed 400), and the app checks a name with the same
+      function before it sends one (AC31), so a refused name is never shown
+      as a refused invitation. The trade-off, stated: ZWNJ and ZWJ are let
+      through because refusing them would refuse real names and emoji, which
+      costs more than it protects; on their own they cannot reverse a name,
+      and a name of nothing else is refused as invisible. (The rule as first
+      written in this loop refused every Cf character; the coordinator
+      narrowed it, D-031.)
 
 13. **The log** takes closed events only. New events name a stage and a
     SQLSTATE (`join_failed`, `invitation_failed`, `member_removal_failed`),
@@ -435,12 +551,33 @@ already make are recorded in D-137.
     - On start the app calls `GET /v1/me` once it holds a credential. **Any
       401 deletes the stored credential** and shows the join screen with a
       plain line that this phone is no longer signed in; a 500 or a network
-      failure never signs out, and is said plainly with a retry.
+      failure never signs out, and is said plainly with a retry. This holds
+      in task 1 because the app has no journey yet; task 3 must change it
+      before a removed member can walk with the app (Left for later tasks).
     - New dependencies: `expo-secure-store`, `expo-crypto` (the join key),
-      `@orpc/client` with its OpenAPI link, `@tanstack/react-query` (D-032),
       and the workspace's `@trygghverdag/contracts`. Each through
       `licenses:check`. No analytics, no web view, no deep link (`scheme` stays
       absent, D-013); the share sheet is React Native's own `Share`.
+    - **The API client is plain `fetch`** (*review loop 1*, `code-reviewer`
+      S3, recorded rather than changed). The spec named `@orpc/client` with
+      its OpenAPI link and `@tanstack/react-query` (D-032's library set); the
+      build has one module, `src/shared/api/client.ts`, that sends a request
+      and reads its answer into one of four kinds kept apart on purpose: ok,
+      refused (with the contract's code), unauthorized (the 401, the only
+      answer that signs out, AC29) and unreachable (no answer within 20 s, or
+      a 5xx). Five calls on four screens need no cache, no refetching and no
+      generated client, and two fewer packages are two fewer things to vet
+      (the no-analytics rule, D-016). The types still come from the
+      contracts: every screen imports its request and answer types from
+      `@trygghverdag/contracts`, type-only. The `as T` casts on a success
+      body are accepted: the app does not validate the server's answer at
+      run time; a changed shape is caught before it ships by `api:diff`
+      (additive only), the L6 tests of each route's answer and the L7 flows
+      against the real API. What is accepted, stated: an answer that is not
+      the type's shape would not be caught in the app itself. TanStack Query and
+      `@orpc/client` come back to the question when a screen needs caching or
+      refetching (task 3's responder picker at the earliest). D-138 records
+      the swap, as D-032 asks for any swap.
     - The API's address is fixed at build time (`EXPO_PUBLIC_API_URL`), the
       staging one for release builds (D-046). The L7 build talks to a server
       the CI job starts; if that is plain HTTP, cleartext is allowed only to
@@ -448,6 +585,44 @@ already make are recorded in D-137.
       `app.config.ts` test that the release configuration allows none.
     - Every string through `nb.json` and `en.json`, bokmål first (D-014);
       every control has a screen-reader label; large targets.
+    - **Accessibility** (*review loop 1*, `a11y-i18n-reviewer` S2 to S6;
+      AC28, AC30):
+      - **The removal's confirmation is shown in place,** in the member's own
+        row, not after the list, where with more than about four members it
+        fell below the fold. Its confirm button names the person ("Fjern
+        Kari"), and the result is announced once the list shows without them.
+      - **Its wording** says the removal takes effect at once, that they get
+        no more alerts, and that they need a new invitation to join again. It
+        does not say their phone is signed out at once, which is not true of
+        a member who is walking (AC21), and does not use "deres" for one
+        person (it reads as plural or formal); it uses the name.
+      - **The invitation code** is shown in its four groups of five and never
+        breaks inside a group when it wraps (a hyphen before a digit is not a
+        line-break opportunity, so one `Text` with hyphens could). It is
+        announced when it appears, and a screen reader reads it character by
+        character, group by group, not as a word.
+      - **Every text field has a visible label** above it, which stays while
+        text is typed; a placeholder is never the only label.
+      - **While a request is in flight,** the screen shows a waiting
+        indicator with a screen-reader label, besides the dimmed button.
+      - **One wording for trying again:** "Prøv igjen" in bokmål and "Try
+        again" in English, on every screen.
+      - Dark-first colours are task 2's (Left for later tasks).
+    - **A refusal on removal is said as a refusal** (*review loop 1*,
+      `code-reviewer` S4): a 403 or a 409 shows that the removal was refused,
+      not that the server could not be reached; a 404 `MEMBER_NOT_FOUND` is
+      done, as before (F2).
+    - **`android-e2e` runs on changes to the server and the contracts**
+      (*review loop 1*, `safety-reviewer` and the implementer; AC33). The L7
+      flows now join, invite and refuse against the API the job starts, so a
+      server change can break them as surely as an app change.
+      `scripts/lib/affected.mjs`, which decides whether the job runs, answered
+      "cannot change the app" for `apps/server/**`. A change under
+      `apps/server/` or `packages/contracts/` now makes the job run.
+      `packages/contracts/` already did, through the app's dependency
+      closure; it is named so it stays true if the app ever stops importing
+      it. How (a list, or the server's dependency closure read as the app's
+      is) is the implementer's, as long as AC33 holds.
 
 ## Acceptance criteria
 
@@ -531,6 +706,26 @@ the phone.**
 - **And** with the setting unset or unusable, the API says so in one line at
   start, naming the setting and never a value, and a join with any code finds
   no group (404).
+- **And** (*review loop 1*) a retry of that join with the same code and the
+  same join key, while the admin is the group's only member, is 201 with the
+  same user ID, the role `ADMIN` and a new credential; the first credential
+  is then refused (401) and the new one works; no second group, membership,
+  device or `GROUP_CREATED` row exists; the admin's display name is the
+  first join's (L3, L6)
+- **And** the bootstrap code with another join key, or with the same key once
+  a second member has joined, is the same 404 `INVITATION_NOT_VALID`, and
+  writes nothing
+- **And** the code sent is compared with the setting as the SHA-256 digests
+  of both, by `crypto.timingSafeEqual` (a unit test spies on it, as AC7's
+  does on `crypto.randomBytes`), and never with `===` (L2)
+- **And** Terraform makes the code with `random_bytes.admin_bootstrap_code`,
+  `length = 16`, `keepers = { generation =
+  local.admin_bootstrap_code_generation }` as its only keeper, the local set
+  in `main.tf`'s `locals` (as `canary_credential_generation` is), and the
+  app's environment takes `upper(random_bytes.admin_bootstrap_code.hex)`; no
+  `.tf` file in
+  `infra/staging/` declares a `random_id` resource (a static test, as the
+  existing ones read `main.tf`), so no plan prints the code.
 
 **GRP-01-AC9 — Only the admin invites and lists members, and there is one
 admin.**
@@ -734,9 +929,20 @@ invitation)
 - **Given** the app signed in as the admin
 - **Then** the invite screen creates an invitation and shows its code, its
   expiry date and a share action
+- **And** (*review loop 1*) the code shows as four groups of five, each group
+  kept whole when the line wraps; it is announced when it appears; and its
+  screen-reader label spells it character by character, group by group
 - **And** the members screen lists names and roles, and removing a member
   asks for confirmation that says it takes effect at once, then shows the list
   without them
+- **And** (*review loop 1*) the confirmation appears in that member's place
+  in the list, not after it; its confirm button's label names the member;
+  its text says they get no more alerts and need a new invitation to join
+  again, and says neither that their phone is signed out at once nor
+  "deres"; once the list shows without them, the removal is announced
+- **And** (*review loop 1*) a removal answered 403 or 409 says the removal was
+  refused, never that the server could not be reached; one answered 404
+  `MEMBER_NOT_FOUND` shows the list without them, as a done removal
 - **And** a member who is not the admin sees neither choice.
 
 **GRP-01-AC29 — A 401 signs the phone out loudly; nothing else does.** (L5)
@@ -750,18 +956,74 @@ invitation)
 - **Then** every string of the new screens comes from `nb.json` and `en.json`,
   with the same keys in both (the existing translations test), every control
   has a screen-reader label, and no screen says or implies the user is
-  protected.
+  protected
+- **And** (*review loop 1*) every text field has a visible label that stays
+  shown while text is typed, not a placeholder alone
+- **And** while any request is in flight, the screen shows a waiting
+  indicator with a screen-reader label
+- **And** every "try again" control reads "Prøv igjen" in bokmål and "Try
+  again" in English: one key, or keys with the same text, on every screen.
+
+### Added in review loop 1
+
+**GRP-01-AC31 — A display name must hold something a person can see, and
+nothing that changes how a name reads.** (*review loop 1*; L2, L6, L5)
+- **Given** a join that is otherwise valid
+- **When** its display name holds a bidirectional control (U+061C, U+200E,
+  U+200F, U+202A to U+202E, U+2066 to U+2069), or any other format character
+  (Unicode category Cf, such as U+200B or U+FEFF) but ZWNJ (U+200C) and ZWJ
+  (U+200D); or holds no visible character (only white space, ZWNJ, ZWJ, or
+  the blank fillers U+115F, U+1160, U+3164, U+FFA0, U+2800)
+- **Then** the fixed 400; no user, membership, device or audit row is
+  written, and the invitation stays unused (L6)
+- **And** a name in any script with letters, digits, spaces, an apostrophe or
+  a hyphen ("Åse", "O'Brien", "Anne-Marit"), a name with ZWNJ between two
+  letters, and a name holding an emoji joined with ZWJ are accepted
+- **And** a property test (fast-check) over any string: the contract's rule
+  accepts it exactly when, once trimmed, it is 1 to 40 characters (counted
+  as the green head's rule counts them), holds no Cc character, no Cf
+  character other than U+200C and U+200D, and at least one visible
+  character; it never throws (L2)
+- **And** the app checks the name with the contract's own rule before it
+  sends the join: a name the rule refuses is not sent, and the screen says
+  plainly that the name cannot be used, never that the invitation does not
+  work (L5).
+
+**GRP-01-AC32 — The groups module is a safety path, and its mutants are run
+by the tests that kill them.** (*review loop 1*; the gate's own tests)
+- **Then** `apps/server/src/modules/groups/` is in `SAFETY_PATHS`, as a
+  folder, and `apps/server/src/adapters/groups.ts` is not (proved at L3 and
+  by the shared suite, D-095's reading)
+- **And** a mutation group `groups` mutates `modules/groups/` against
+  `groups.system.test.ts`, under the system tests' configuration;
+  `mutationRuns` mutates each of its files exactly once
+- **And** the `journeys` group runs `groups.system.test.ts` after its three
+  files: the walker check in `modules/journeys/removal.ts` is killed only by
+  that file's tests (AC21, AC23), as `safety-reviewer`'s planted mutant
+  showed
+- **And** each file of both groups reaches 80 % killed on its own (D-098).
+
+**GRP-01-AC33 — A change to the server or the contracts runs the Android
+flows.** (*review loop 1*; the gate's own tests)
+- **Given** a pull request's diff
+- **When** `scripts/affected.mjs` decides whether `android-e2e` runs
+- **Then** a diff whose only change is a file under `apps/server/`, or only a
+  file under `packages/contracts/`, can change what the flows check, and
+  `android-e2e` runs
+- **And** a diff of only `docs/`, or only `packages/test-kit/`, still does
+  not, as INF-06 holds today.
 
 ## Test plan
 
 | Level | Where | Criteria | Runs here? |
 |---|---|---|---|
 | L1 static | `tsc`, ESLint, dependency-cruiser | AC15 (the canary import rule); `features/grp/` reached only through its `index`; no clock in `domain/` or `modules/` | Yes |
-| L2 domain and in-process | `domain/groups.test.ts` (validity, normaliser, admin rules, with fast-check), `domain/journey.test.ts` (the renamed set), `adapters/device-credentials.test.ts` (the issuer's spy), `config.test.ts`, `worker.test.ts` | AC2, AC6, AC7, AC8 (config), AC9 (rules), AC25 | Yes |
+| L2 domain and in-process | `domain/groups.test.ts` (validity, normaliser, admin rules, with fast-check), `domain/journey.test.ts` (the renamed set), `adapters/device-credentials.test.ts` (the issuer's spy), `config.test.ts`, `worker.test.ts`; *review loop 1:* the join module's test (the `timingSafeEqual` spy), `packages/contracts/src/groups.test.ts` (the display-name rule, with fast-check) | AC2, AC6, AC7, AC8 (config; the constant-time compare), AC9 (rules), AC25, AC31 (the rule) | Yes |
+| The gate's own tests (Vitest, `test:unit`) | `scripts/infra.test.mjs` (`random_bytes`, no `random_id`), `scripts/lib/gate-decisions.test.mjs` and `scripts/lib/merge-rules.test.mjs` (the safety path and the groups), `scripts/lib/affected.test.mjs` (the triggers) | AC8 (Terraform), AC32, AC33 | Yes |
 | L3 integration | `groups.integration.test.ts` (new), `adapters/device-credentials.integration.test.ts`, `removal.integration.test.ts`, `canary.integration.test.ts`; the shared behaviour suite for the group store (D-100) runs against the fake and the adapter | AC1, AC3 to AC9, AC11, AC13, AC15, AC17, AC20, AC24 | **No**: needs Docker; CI's `integration` |
 | L4 contract | `api:spec`, `api:diff` (oasdiff) | "Contract changes": additive only | Yes |
-| L5 app | jest-expo and React Native Testing Library under `apps/mobile/src/features/grp/` | AC26 to AC30 | Yes |
-| L6 system | `groups.system.test.ts` (new), `removal.system.test.ts`, `journeys.system.test.ts`, `api.system.test.ts`, `canary.system.test.ts` (unchanged, must stay green) | AC1 to AC3, AC5, AC8 to AC12, AC14, AC16 to AC19, AC21 to AC23 | Yes |
+| L5 app | jest-expo and React Native Testing Library under `apps/mobile/src/features/grp/` | AC26 to AC30; AC31 (the app's check) | Yes |
+| L6 system | `groups.system.test.ts` (new), `removal.system.test.ts`, `journeys.system.test.ts`, `api.system.test.ts`, `canary.system.test.ts` (unchanged, must stay green) | AC1 to AC3, AC5, AC8 to AC12 (AC8: the bootstrap retry too), AC14, AC16 to AC19, AC21 to AC23, AC31 (the 400) | Yes |
 | L7 Android | Maestro flows in `apps/mobile/e2e/`: the first admin joins; the admin creates an invitation and its code shows; a wrong code shows the one message | AC26 to AC28 | **No**: CI's `android-e2e` |
 | L7 iOS | none | — | Not in this task: the app has no `ios` configuration until task 12 (D-134), so no iOS run exists, here or on the Mac |
 
@@ -769,7 +1031,13 @@ invitation)
 emulator; CI's `android-e2e` runs it); any iOS behaviour (not configured);
 Terraform's plan and apply, and reading `ADMIN_BOOTSTRAP_CODE` in Clever
 Cloud's console (the owner's, A-36); that `staging-worker` pages when the SMS
-check is withheld on a real deploy (only the owner sees Healthchecks.io).
+check is withheld on a real deploy (only the owner sees Healthchecks.io). That
+the staging plan prints no code with `random_bytes` was shown by
+`privacy-security-reviewer` against a hand-written state, not by a plan of
+staging's own state; A-36's plan is the first, and the owner is asked to stop
+if it shows the code. A constant-time comparison cannot be timed reliably in
+a test: AC8 holds that `timingSafeEqual` is what compares, not how long it
+takes.
 
 **L7 needs a server.** This is the first L7 flow that does. The `android-e2e`
 job starts PostgreSQL and the API (with a synthetic `ADMIN_BOOTSTRAP_CODE`)
@@ -799,6 +1067,31 @@ can check none is a weakening:
   the join screen, not the placeholder. The flow asserts the join screen's
   bokmål title and that no raw key shows; the placeholder's keys go.
 
+Added in review loop 1:
+
+- **GRP-01-AC8's Terraform tests** (`scripts/infra.test.mjs`): "main.tf makes
+  the code with `random_id.admin_bootstrap_code`, 16 bytes" and the
+  environment's `upper(random_id.admin_bootstrap_code.hex)` become
+  `random_bytes.admin_bootstrap_code`, `length = 16`, with its generation
+  keeper, and `upper(random_bytes.admin_bootstrap_code.hex)`. Not a weakening: the
+  resource changes because `random_id` would print the code (B1), and AC8 gains
+  the test that no `random_id` is declared.
+- **The `MUTATION_GROUPS` pin** (`scripts/lib/gate-decisions.test.mjs`): the
+  `journeys` group's tests gain `groups.system.test.ts`, fourth, and a new
+  `groups` group follows it (AC32). Each only adds tests or mutants.
+- **INF-06-AC13's "the server cannot"** (`scripts/lib/affected.test.mjs`):
+  the two assertions that `apps/server/src/api.ts` cannot change the app
+  become "can change what the flows check" (AC33). A meaning changed by the
+  first L7 flows that need a server; the `packages/test-kit/` and `docs/`
+  assertions stay.
+- **The start route's `responderIds` description**, wherever a test or the
+  generated `openapi.json` holds it: "an existing user" becomes "a member of
+  the walker's group". A description change; `api:diff` passes it.
+- **The app's translations and L5 tests**: the confirmation's text, the
+  retry key's text ("Prøv på nytt" / "Try once more" become "Prøv igjen" /
+  "Try again"), and the L7 flows' strings read from `nb.json` follow AC28
+  and AC30.
+
 ## Mutation (D-036, D-098, D-099, D-129)
 
 - `domain/groups.ts` joins the `domain` group; `modules/groups/` gets a group
@@ -806,6 +1099,20 @@ can check none is a weakening:
   measured time allows. The implementer checks whether CI's per-group matrix
   (BUG-45) is read from `MUTATION_GROUPS` or written out in the workflow; if
   written out, the workflow edit is owned.
+- *Review loop 1 (`safety-reviewer` S4), settled:* the green head did
+  neither, so `modules/groups/` was mutated by no run. It goes into
+  `SAFETY_PATHS` as a folder, with a group of its own, `groups`, against
+  `groups.system.test.ts` under `vitest.system.config.mjs`, placed after
+  `journeys`. And `groups.system.test.ts` joins the `journeys` group's
+  tests, fourth: the reviewer planted a mutant that skips the walker check in
+  `modules/journeys/removal.ts`, and it survived the group's three files and
+  died to `groups.system.test.ts` (AC32).
+- `api.ts` is not a safety path and is mutated by no group, as before this
+  task. The reviewer's second surviving mutant, `api.ts`'s full-access gate
+  always open, is killed by `groups.system.test.ts` (AC21, AC23), which
+  `test:system` and `test:coverage` run either way; but no mutation run will
+  find the next such gap in `api.ts`. Adding `api.ts` to `SAFETY_PATHS` is
+  not part of this loop: it is a BUG of its own (Left for later tasks).
 - `adapters/groups.ts` is proven at L3 and by the shared suite and not mutated
   (D-095's reading), as `adapters/journeys.ts` is.
 - Each file ≥ 80 %, every run fresh.
@@ -836,20 +1143,36 @@ its builders, synthetic display names.
 `app.config.ts` (owned; the API address, and the e2e build's cleartext rule if
 used), `package.json`, `e2e/` flows.
 
-**Infra and CI (owned):** `infra/staging/` (`random_id.admin_bootstrap_code`
-and its environment entry); `.github/workflows/` (the L7 job's
-server; any mutation matrix line); the first, separate pull request for the
-ai-review filter, `OWNER_APPROVAL_PATHS` and CODEOWNERS (approach 1).
+**Infra and CI (owned):** `infra/staging/` (`random_bytes.admin_bootstrap_code`
+since review loop 1, and its environment entry); `.github/workflows/` (the L7
+job's server; any mutation matrix line); the first, separate pull request for
+the ai-review filter, `OWNER_APPROVAL_PATHS` and CODEOWNERS (approach 1).
+
+**Review loop 1 adds:** `db/schema.ts` and the migration
+(`groups.bootstrap_join_key_hash`); `adapters/groups.ts` and
+`modules/groups/join.ts` (the bootstrap retry, the constant-time compare);
+`packages/contracts/src/groups.ts` (the display-name rule) and
+`journeys.ts` (`responderIds`' description); `api.ts` (the detached JSDoc);
+`apps/mobile/src/features/grp/` and the translations (AC28, AC30, AC31);
+`scripts/lib/gate-decisions.mjs` (`SAFETY_PATHS`, `MUTATION_GROUPS`);
+`scripts/lib/affected.mjs` (AC33); and, if the authentication query changes
+(approach 5), `adapters/device-credentials.ts`.
 
 **Docs:** this spec; the decisions; `docs/plan/monitoring-setup.md` (what the
-canary's credential can name now; the withheld check-in);
-`docs/plan/README.md` (A-36).
+canary's credential can name now; the withheld check-in, under "When
+`staging-worker` pages you"; "If `ADMIN_BOOTSTRAP_CODE` leaks");
+`docs/plan/08-cicd-releases.md` (the secrets inventory gains
+`ADMIN_BOOTSTRAP_CODE`); `docs/plan/README.md` (A-36; "Open for M4", since
+GRP-01). The three docs items were promised in the green head and missed;
+review loop 1 makes them.
 
 **New owner to-do, A-36** (D-136, answer 1; the row is in
 `docs/plan/README.md`): after this task merges and deploys, `infra-staging`
 plan and apply; then read `ADMIN_BOOTSTRAP_CODE` once in Clever Cloud's
 console for the staging app and join with it in the app from the owner's own
 phone (D-135). That this console shows the value was not checked from here.
+Since review loop 1 the plan shows a new `random_bytes` and no value; a plan
+that shows the code anywhere is a stop.
 
 ## Contract changes
 
@@ -863,12 +1186,20 @@ All additive (AR-08); `api:diff` must pass.
 | `GET /v1/group/members` | admin | 200 `{ members: [{ userId, displayName, role }] }` | 403 `NOT_THE_ADMIN` |
 | `DELETE /v1/group/members/{userId}` | admin | 200 `{ outcome: 'REMOVED' }` | 400 fixed; 403 `NOT_THE_ADMIN`; 404 `MEMBER_NOT_FOUND`; 409 `CANNOT_REMOVE_ADMIN` |
 | `DELETE /v1/journeys/{journeyId}/responders/{responderId}` | the journey's walker | 200 `{ outcome: 'REMOVED' }` | 400 fixed; 404 `JOURNEY_NOT_FOUND`; 409 `NOT_A_RESPONDER`; 409 `JOURNEY_ENDED` |
-| `POST /v1/journeys` (changed text only) | — | — | `INVALID_RESPONDER`'s message: "… or is not a member of the walker's group" |
+| `POST /v1/journeys` (changed text only) | — | — | `INVALID_RESPONDER`'s message: "… or is not a member of the walker's group"; *review loop 1:* `responderIds`' description, "a member of the walker's group" for "an existing user" |
 
 The join's body: `invitationCode` (string, normalised at the edge), `joinKey`
 (43 base64url characters), `displayName` (the person's own; 1 to 40
-characters after trimming), strict. The bearer scheme is required on every route but health and
-the join.
+characters after trimming; *review loop 1:* no control character, no
+bidirectional control, no other format character but ZWNJ and ZWJ, and at
+least one visible character, AC31), strict. The bearer scheme is
+required on every route but health and the join.
+
+*Review loop 1:* the display-name rule narrows what the join accepts. No
+shipped app can be broken by it: no app version has shipped
+(`packages/contracts/released/` does not exist yet, checked 2026-10-20), and
+the join is new in this task. Whether `api:diff` sees a zod refinement at all
+was not checked. The bootstrap retry changes no shape.
 
 ## Risks and failure modes
 
@@ -910,6 +1241,27 @@ the join.
   coverage.** A join's lost answer would burn the invitation and leave an
   orphan member; AC5 makes the retry safe. Removal routes answer a repeat with
   `MEMBER_NOT_FOUND` or `NOT_A_RESPONDER`, which the app reads as done.
+  *Review loop 1:* the bootstrap join's lost answer was the same failure at
+  its worst, a group made with the owner outside it and nobody able to
+  invite; AC8's retry covers it while the owner is the only member.
+- **[F6](../plan/03-safety-reliability-security.md#failure-modes) and
+  [F7](../plan/03-safety-reliability-security.md#failure-modes), a page
+  nobody reads right** (*review loop 1*, `safety-reviewer` S3). With AC25,
+  `staging-worker` can page while the worker is alive, the watchdog sweeps,
+  `/v1/health` answers ok and UptimeRobot is green: the check-in is withheld
+  because the SMS check is not reporting. Read as "the worker is down", it
+  sends the owner the wrong way. `monitoring-setup.md` gains "When
+  `staging-worker` pages you", whose first step is the worker's withheld
+  start line. A Healthchecks.io check that has never been pinged does not
+  page at all, so a new `staging-worker` check, after a rotation, must be
+  seen to leave `new` (the rotation steps already ask it).
+- **[F6](../plan/03-safety-reliability-security.md#failure-modes), a walking
+  removed member signed out by their own app** (*review loop 1*,
+  `safety-reviewer` S1, `privacy-security-reviewer` N3). AC29 deletes the
+  credential on any 401, and `GET /v1/me` answers a walker-only device 401.
+  Harmless in task 1, which has no journey in the app; task 3 must not ship
+  without its fix (Left for later tasks), or a removed member's walk would
+  stop sending heartbeats and could no longer say "I'm home".
 - **[F10](../plan/03-safety-reliability-security.md#failure-modes), someone
   else's unlocked phone.** Whoever holds the admin's unlocked phone can invite
   and remove. Known limitation; the admin-account threat's stronger login, the
@@ -927,10 +1279,22 @@ the join.
 - **The bootstrap code** opens only an empty group. If the staging
   database were emptied, it would open again: anyone holding it could become
   admin of the new group. It lives only in Terraform's state and the app's
-  environment, as the canary's credential does.
+  environment, as the canary's credential does. *Review loop 1:* and in no
+  job log, because `random_bytes` keeps it sensitive (approach 8); the
+  green head's `random_id` would have printed it in every public
+  `infra-staging` plan. Its retry needs the join key too, which only the
+  owner's phone holds, so the code alone re-opens nothing once the group
+  exists. What a leak means and how it is replaced are in
+  `08-cicd-releases.md`'s inventory and `monitoring-setup.md`.
 - **Display names are personal data** in the EEA (D-016, the EEA rule), never
   logged (AC24), deleted with the membership; the privacy notice and the
   DPIA (M4) must name them.
+- **A display name that misleads** (*review loop 1*, the abusive-member
+  threat): a name with a right-to-left override can read as someone else's,
+  and one of zero-width characters shows as nothing in the admin's list, so
+  the admin cannot see who joined. AC31 refuses both. Look-alike letters
+  from other scripts ("Kаri" with a Cyrillic а) are not refused; the admin
+  sees every new member and can remove them.
 
 ### Flags from other decisions, checked
 
@@ -967,12 +1331,44 @@ the join.
 
 ### Left for later tasks
 
+- **A BUG of its own, after GRP-01 merges: `api.ts` is mutated by no run**
+  (*review loop 1*, from `safety-reviewer` S4; to be queued by the
+  coordinator). `apps/server/src/api.ts` is not in `SAFETY_PATHS`, so no
+  mutation run tests it, yet its middleware decides which routes a device
+  reaches: full access for a member or the canary, and only heartbeats and
+  "I'm home" for a walker-only device (approach 5). `safety-reviewer`'s
+  planted mutant, that gate always open, survived the journeys group and was
+  killed only by `groups.system.test.ts`, which `test:system` runs but no
+  mutation run reads for `api.ts`. The fix: `api.ts` into `SAFETY_PATHS`,
+  with a mutation group against the system tests that reach its routes,
+  measured first for time (D-066, D-098), and the owner's and safety
+  review's paths checked (`merge-rules.mjs`).
+- **Task 2 (the home screen)** (*review loop 1*, `a11y-i18n-reviewer` S1):
+  dark-first screens. GRP-01's screens are light-only: `ui.tsx` hard-codes
+  its colours (`#1f4e79` on black is 2.4:1), sets no background or text
+  colour, and `app.config.ts` sets no `userInterfaceStyle`, so Expo's default
+  is light. INF-06 deferred dark mode, status-bar contrast and
+  `SafeAreaProvider` to the real home screen, which is task 2's. Task 2 makes
+  the shared kit dark-first, these screens with it; the reviewer will block
+  task 2 if the home screen is still light-only.
 - **Task 3 (start a journey):** the member list for members; the responder
   picker; the removal route's button; what the app shows a walker whose
   removal of the last responder answers `REMOVED`.
+  *Review loop 1 (`safety-reviewer` S1, `privacy-security-reviewer` N3):*
+  the app deletes its credential on any 401 (AC29), but a removed member's
+  walking phone is admitted only as a walker (approach 5), so `GET /v1/me`
+  answers it 401, and an app restart mid-walk would delete the credential:
+  no more heartbeats, and no "I'm home". Task 3 must either not delete the
+  credential while the phone holds a journey it has not seen end, or have
+  `GET /v1/me` answer a walker-only device with something other than 401
+  (a contract change, additive). Either way the walk keeps its device until
+  it ends (D-136, answer 5), and the phone is signed out after.
 - **Task 6 (push):** targets only for devices that authenticate; a removed
-  member's device gets nothing; the canary's responder never at the critical
-  level (D-128).
+  member's device gets nothing but the messages to the walker of its own
+  unended journey, so the walker's own `NO_RESPONDER` warning still reaches
+  them when their last responder goes (*corrected in review loop 1*,
+  `safety-reviewer` S2; the green head's "gets nothing" would have dropped
+  it, F6); the canary's responder never at the critical level (D-128).
 - **Tasks 7 and 8 (alert screen, map):** every read of an alert or a position
   checks the caller's responder row and membership (the responders-only rule).
 - **Task 10 (SMS):** sign-in on a new device; Better Auth's UUID question;
@@ -1033,6 +1429,20 @@ D-137 records the choices among these that were Claude's (D-031).
    puts in M4. This task adds the role only.
 7. **D-091's "GRP-01 decides Better Auth's use of UUID user IDs"** cannot be
    decided where Better Auth is not installed (approach 4).
+
+## Questions raised by review loop 1
+
+Two were settled by the coordinator under D-031: the bootstrap code's
+generation keeper (approach 8, AC8), and `api.ts`'s mutation gap, which goes
+to a BUG of its own (Left for later tasks). One is the owner's:
+
+- **Files that carry authentication but have no code owner**
+  (`privacy-security-reviewer` N5): `apps/server/src/config.ts`,
+  `apps/server/src/bin/api.ts`, `apps/server/src/ports.ts`,
+  `packages/contracts/src/groups.ts`, and in the app
+  `src/shared/secure-storage.ts`, `src/shared/api/client.ts` and
+  `package.json`. Raised in the pull request for the owner. It blocks none of
+  this task's criteria.
 
 ## Owner's answers
 

@@ -1,6 +1,6 @@
 # Monitoring setup — the owner's steps (INF-08)
 
-**Last updated:** 2026-10-10 · Decisions: D-065, D-077, D-079, D-127, D-128 · Specs: [`../specs/INF-08.md`](../specs/INF-08.md), [`../specs/REL-10.md`](../specs/REL-10.md)
+**Last updated:** 2026-10-20 · Decisions: D-065, D-077, D-079, D-127, D-128, D-136, D-137 · Specs: [`../specs/INF-08.md`](../specs/INF-08.md), [`../specs/REL-10.md`](../specs/REL-10.md), [`../specs/GRP-01.md`](../specs/GRP-01.md)
 
 **Status: done.** A-23 to A-26 are complete. The drill ran on 2026-09-26, and
 the owner accepted it on 2026-09-28. Two things differ from the steps below:
@@ -10,6 +10,10 @@ the owner accepted it on 2026-09-28. Two things differ from the steps below:
 
 **Added with REL-10 (2026-10-10):** A-34 and A-35, the staging canary's check,
 and "When `staging-canary` pages you". Both steps are still open.
+
+**Added with GRP-01 (2026-10-20):** "When `staging-worker` pages you" (the
+worker can now withhold its check-in while it is alive), "If
+`ADMIN_BOOTSTRAP_CODE` leaks", and what the canary's credential can name.
 
 The times, and what is still unverified, are in the owner to-do list in
 [`README.md`](README.md).
@@ -167,6 +171,51 @@ About 3 minutes.
    worker's `canary_run` lines in the same log. M2's exit is 24 hours with no
    failure signal and no down event (REL-10-AC19).
 
+## When `staging-worker` pages you
+
+`staging-worker` pages when it has had no ping for 3 minutes (Period 1,
+Grace 2). Since GRP-01 that has two causes, and they look alike from
+Healthchecks.io:
+- **The worker is down or stuck.** Then `/v1/health` turns `degraded` after 3
+  minutes without a heartbeat, and UptimeRobot alerts too, at its next
+  5-minute check after that.
+- **The worker is alive and withholds its check-in** (GRP-01, D-122, D-137),
+  because the SMS check is not reporting. The watchdog still sweeps and
+  alerts still go out; what is lost is the page for an unsent SMS or an
+  alert with nobody left to tell (see "When `staging-sms` pages you"). The
+  worker still records its heartbeat, so **`/v1/health` stays `ok` and
+  UptimeRobot stays green.** A page from `staging-worker` with UptimeRobot
+  green points here.
+
+Go in this order:
+1. **Read the worker's start lines** in Clever Cloud's log for the staging
+   app (the deploy job's log can end before them, BUG-27). Look for:
+   `worker: not checking in with Healthchecks.io: the check-in is withheld
+   while HEALTHCHECKS_SMS_URL names no check of its own, so the worker’s check
+   pages within its grace.` The SMS check's own line, among the same start
+   lines, says what is wrong with the setting and what goes unpaged. The fix is
+   `HEALTHCHECKS_SMS_URL`, not the worker: re-copy the `staging-sms` ping URL,
+   in the UUID form Healthchecks.io shows (`https://hc-ping.com/<uuid>`), into
+   the `staging` environment secret, never the worker's URL, then
+   `infra-staging` plan and apply. Within about 3 minutes `staging-worker`
+   shows a ping every minute again. Terraform refuses a plan without a usable
+   SMS URL, or with the worker's (A-32, D-116), so on staging this line
+   means the app's environment was changed outside Terraform, for example in
+   Clever Cloud's console. Say so to Claude.
+2. **A line beginning `worker: not checking in with Healthchecks.io:
+   HEALTHCHECKS_WORKER_URL`** means the worker's own setting is wrong; the
+   rest of the line says what (as in A-33).
+3. **No worker start line since the last deploy, or UptimeRobot red as
+   well:** the worker is down or stuck. Restart the app from Clever Cloud's
+   console, as in A-26, and tell Claude.
+
+**A check that has never been pinged does not page.** Healthchecks.io leaves
+a new check in `new` until its first ping, and a check in `new` never goes
+down. `staging-worker` has been pinged since A-24, so a withheld check-in
+pages. A new `staging-worker` check (after a leak, below) that starts out
+withheld would sit in `new` and page nothing, which is why the rotation steps
+end by confirming the new check has left `new`.
+
 ## When `staging-sms` pages you
 
 The worker reports the SMS check each minute, and it reports failing for
@@ -290,9 +339,9 @@ ping per run, not more; the other two checks are unchanged.
 ## If `CANARY_CREDENTIAL` leaks
 
 Anyone who holds it can start, beat and end the canary's journeys on staging,
-naming any existing user as a responder: today that is only the canary's own
-test responder, because staging has no other users (D-091), and M3's login
-task must check this again. That is synthetic and alerts no one, and it would
+naming as responder only the canary's own test responder
+(`CANARY_RESPONDER_ID`): since GRP-01 the API refuses any other user, real
+members included (D-128, GRP-01-AC14). That is synthetic and alerts no one, and it would
 show as failing or skipped runs, but the credential never expires (D-091), so
 it is replaced and not left. It is made by Terraform
 (`random_password.canary_credential`) and lives only in Terraform's state in
@@ -326,3 +375,39 @@ secret to change. **Rotate it by raising its generation:**
 input for `-replace` (read in the workflow file on 2026-10-10), which is why
 rotation goes through the generation and not through a replace. Not yet tried
 on staging: the first rotation is the first proof.
+
+## If `ADMIN_BOOTSTRAP_CODE` leaks
+
+The bootstrap code makes whoever joins with it the staging group's admin,
+**but only while no group exists** (GRP-01, D-136 answer 1). Once you have
+joined with it (A-36), every join with it is refused like any invalid code.
+Its retry, for a join whose answer was lost, also needs the join key that
+only your phone holds, and works only while you are the only member. It is
+made by Terraform (`random_bytes.admin_bootstrap_code`) and lives only in
+Terraform's state in Cellar and the staging app's environment on Clever
+Cloud; no plan or apply prints it.
+
+- **It leaked before you joined:** join at once, as in A-36. Creating the
+  group ends the code. If your join is refused with the invalid-code message,
+  someone may have joined first and be the admin: stop and tell Claude. That
+  group must be removed from the staging database, which needs Claude and
+  you together.
+- **It leaked after you joined:** it opens nothing now. Replace it before
+  the staging database is ever emptied, and say so to Claude so the
+  replacement is planned.
+- **To replace it, raise its generation:**
+  1. A pull request raises `admin_bootstrap_code_generation` in the `locals`
+     of `infra/staging/main.tf` by one (from `"1"` to `"2"`, and so on). It
+     is the resource's only `keepers` value, and the random provider replaces
+     the resource when it changes; `infra-staging.yml` has no `-replace`, so
+     this one line is the rotation, as for `CANARY_CREDENTIAL` above.
+     `infra/` needs your approval, so ask Claude for it.
+  2. After it merges, run `infra-staging` plan and read it: it must show
+     `random_bytes.admin_bootstrap_code` replaced and the app's environment
+     changing, values hidden, and nothing else. The one value it shows in
+     clear is the generation (`"generation" = "1" -> "2"`, "forces
+     replacement"), which is not a secret. **If the plan shows a
+     32-character code anywhere, stop and tell Claude.**
+  3. Apply. The apply restarts the app, and the API reads the new code at
+     start. Its start line says whether the first admin can join with it,
+     never the code.

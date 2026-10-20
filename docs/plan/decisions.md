@@ -5879,3 +5879,147 @@ any other path is work, not a candidate for the same treatment.
     that need a server.
   - Amends D-091: issuance, expiry, rotation and revocation are as above.
     Supersedes nothing.
+- **Amended in review loop 1 (2026-10-20; Claude, D-031, from the reviews of
+  `a5fd8cf`).** The spec's notes marked *Review loop 1*, and its table "Review
+  loop 1", have each in full. GRP-01-AC8, AC28 and AC30 are amended;
+  AC31 to AC33 are new; no criterion was renumbered.
+  - **The bootstrap code is made by `random_bytes`, not `random_id`**
+    (`privacy-security-reviewer`, B1, blocking). In `hashicorp/random` 3.9.1,
+    `random_id` marks no attribute sensitive, and its `id` is the bytes
+    themselves, in base64url. Terraform prints a resource's `id`, so every
+    `infra-staging` plan would have written
+    `random_id.admin_bootstrap_code: Refreshing state... [id=<the code>]`
+    into a job log that is public in this repository. D-136, answer 1,
+    rejected the database-command route for exactly that ("a CI log that is
+    public in this repository"), and SEC-03 asks for secrets in a managed
+    store. `random_bytes` (`length = 16`) has a sensitive `hex` and no ID
+    made from the value; the app's environment takes
+    `upper(random_bytes.admin_bootstrap_code.hex)`, the same 32 characters
+    as before. It takes `keepers = { generation =
+    local.admin_bootstrap_code_generation }`, as the canary's credential
+    does (D-128's loop-1 amendment): `infra-staging.yml` has no `-replace`,
+    so raising that number in a pull request is the one-line rotation. The reviewer showed the difference on a hand-written state:
+    the code once in the plan with `random_id`, nowhere in the plan with
+    `random_bytes`. Nothing
+    had been planned or applied with `random_id`: GRP-01 had not merged, and
+    A-36's plan comes after the merge. For any secret Terraform makes from
+    now on: `random_password` or `random_bytes`, never `random_id`,
+    `random_string` or `random_integer`.
+  - **The bootstrap join can be retried** (`privacy-security-reviewer` N1,
+    `code-reviewer`). The group's row keeps the first admin's join key's
+    SHA-256 (`groups.bootstrap_join_key_hash`); the same code with the same
+    key, while the admin is the group's only member, gives the admin's one
+    device a new credential, as an invitation's retry does. A lost answer
+    (F2) had left the group made, the owner outside it, and only an emptied
+    database to start again. The window closes when a second member joins,
+    because inviting them needed a working admin credential.
+  - **The bootstrap code is compared in constant time**
+    (`privacy-security-reviewer` N2): the SHA-256 digests of the code sent
+    and of the setting, by `crypto.timingSafeEqual`, never `===`.
+  - **A display name refuses bidirectional controls, other format
+    characters, and names with nothing visible** (`privacy-security-reviewer`
+    N4, the abusive-member threat). The threat is spoofing: a bidirectional
+    override makes a name read as another's (U+202E), and an invisible name
+    shows as nothing in the admin's list (U+200B alone). Refused: the
+    bidirectional controls U+061C, U+200E, U+200F, U+202A to U+202E and
+    U+2066 to U+2069; every other character of Unicode category Cf except
+    ZWNJ (U+200C) and ZWJ (U+200D); and any name with no visible character,
+    that is, only white space, Cc or Cf characters (ZWNJ and ZWJ included) or
+    the blank fillers U+115F, U+1160, U+3164, U+FFA0 and U+2800. ZWNJ and ZWJ
+    are allowed because real Persian names and joined emoji need them, and
+    refusing those costs more than it protects: alone they cannot reverse a
+    name, and a name of nothing else is refused as invisible. One rule in
+    `packages/contracts`, used by the join's schema and by the app before it
+    sends.
+  - **`modules/groups/` is a safety path with a mutation group of its own**
+    (`safety-reviewer` S4), against `groups.system.test.ts`, and that file
+    joins the `journeys` group's tests: a planted mutant skipping the walker
+    check in `modules/journeys/removal.ts` survived the group's three files.
+    `api.ts` stays outside `SAFETY_PATHS` in this loop, so no mutation run
+    tests its middleware; that is a BUG of its own, named in the spec's
+    "Left for later tasks".
+  - **`android-e2e` runs on changes to `apps/server/` and
+    `packages/contracts/`** (`safety-reviewer`, the implementer): the L7
+    flows now run against the API the job starts, so a server change can
+    break them.
+  - **The app's API client is plain `fetch`** (`code-reviewer` S3): a swap
+    from D-032's library set, so recorded as a decision of its own, D-138,
+    as D-032 asks.
+  - **Smaller corrections:** the start route's `responderIds` description
+    says "a member of the walker's group" (`code-reviewer` S2); a refusal on
+    removal is no longer shown as "could not be reached" (`code-reviewer`
+    S4); a detached JSDoc in `api.ts` goes (`code-reviewer` S1); the
+    authentication query may also match on `walker_id`, to use the existing
+    index, if that stays simple (`safety-reviewer`, a note).
+  - **The app's accessibility** (`a11y-i18n-reviewer` S2 to S6): the removal
+    confirmation in the member's place, its button naming them, the result
+    announced; its wording without "deres", saying a new invitation is
+    needed to rejoin and not that the phone is signed out at once (untrue
+    for a walking member, D-136 answer 5); the invitation code kept whole
+    group by group when it wraps, announced, and read character by
+    character; visible field labels; a waiting indicator; one wording for
+    "Prøv igjen" / "Try again".
+  - **Left for later tasks, as the spec names them:** dark-first screens
+    (task 2; `a11y-i18n-reviewer` S1, which will block task 2's home screen
+    if it is light-only); the app's sign-out on any 401, which would delete a
+    walking removed member's credential, since `GET /v1/me` answers a
+    walker-only device 401 (task 3; `safety-reviewer` S1,
+    `privacy-security-reviewer` N3); task 6's push hand-off, corrected to "a
+    removed member's device gets nothing but the messages to the walker of
+    its own unended journey", so the walker's `NO_RESPONDER` warning still
+    arrives (`safety-reviewer` S2, F6).
+  - **Docs the green head promised and missed** (`privacy-security-reviewer`
+    S1, S2; `safety-reviewer` S3): `ADMIN_BOOTSTRAP_CODE` in
+    `08-cicd-releases.md`'s secrets inventory; in `monitoring-setup.md`,
+    "When `staging-worker` pages you" (the withheld check-in), "If
+    `ADMIN_BOOTSTRAP_CODE` leaks", and the canary's credential naming only
+    `CANARY_RESPONDER_ID` (D-128); in `README.md`, A-36's plan with
+    `random_bytes` and no value, and "Open for M4" since GRP-01.
+  - Supersedes nothing. The swap from D-032's client libraries is D-138's.
+
+## D-138 — The app's API client is plain `fetch` for now, not `@orpc/client` and TanStack Query (GRP-01)
+- **Date:** 2026-10-20 · **Status:** Accepted (delegated, D-031) ·
+  **Section:** 5 (the library set); D-016, D-032, D-137
+- **Context:**
+  - D-032's library set names oRPC (contract-first) and TanStack Query, and
+    says "Any swap is recorded as a new decision".
+  - GRP-01's spec planned `@orpc/client` with its OpenAPI link and
+    `@tanstack/react-query` for the app's first calls.
+  - The build (green at `a5fd8cf`) used neither. `code-reviewer` found the
+    deviation unrecorded (S3, review loop 1).
+- **Decision:**
+  - **What was swapped:** the app reaches the API through one module,
+    `apps/mobile/src/shared/api/client.ts`, built on the platform's own
+    `fetch`. `@orpc/client` and `@tanstack/react-query` are not installed.
+  - **Why:**
+    - **Two dependencies fewer.** Each is one more package to vet for
+      licences and telemetry (D-016, the no-analytics rule), and one more
+      supply-chain path into the app.
+    - **Simpler.** Task 1 has five calls on four screens and needs no
+      cache, refetching or generated client. The one module keeps four
+      answers apart, which the screens depend on: ok, refused (with the
+      contract's code), unauthorized (the 401, the only answer that signs a
+      phone out, GRP-01-AC29) and unreachable (no answer within 20 s, or a
+      5xx, which never signs out).
+    - **Types still come from the contracts.** Every screen imports its
+      request and answer types from `@trygghverdag/contracts`, type-only, so
+      a renamed field breaks the app's type check.
+- **The cost, stated plainly:** the success bodies are cast (`as T`), so
+  **the app does not validate the server's answers at run time.** An answer
+  whose shape differs from its type would not be caught in the app: it could
+  show wrongly or show nothing, without saying so. What holds the shapes
+  instead is upstream of the app: `api:diff` (additive changes only), the L6
+  tests of each route's answer, and the L7 flows against the real API.
+- **When to revisit:**
+  - when the app grows enough screens to want caching or refetching
+    (task 3's responder picker at the earliest, or the alert and map
+    screens of tasks 7 and 8);
+  - or when an answer's shape matters to safety on the phone (an alert, a
+    journey's state). There, a run-time check of the answer, with zod from
+    the contracts or `@orpc/client`, is weighed against this choice.
+  - Revisiting is a new decision, or an amendment of this one.
+- **Consequences:**
+  - GRP-01's spec, approach 14, describes the client.
+  - D-137's loop-1 amendment points here.
+  - Amends D-032 for the app's client only; oRPC stays the server's and the
+    contract's. Supersedes nothing.
