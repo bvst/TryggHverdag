@@ -39,3 +39,15 @@ Planted on a git-archive tree (ta-grp01/run-l1.mjs, m-l1*.mjs): AC21 closure/me 
 (10/19/21/30 s, none) -> killed; D7/D7u ASCII filter -> killed; timingSafeEqual -> === killed; display-name N1-N4 killed;
 Maestro pattern E1-E4 killed. RG-02 replay at b62ce4c: all loop-1 tests red on assertions (noise from no .git in the copy).
 req-status was stale at 3fac8fb (PRIV-07 14 vs 15; CI traceability diffs it) and fixed by 0ce82fa during the audit.
+
+**Loop 2 (delta 3fac8fb..879096f), PASS, 2026-10-20.** gate:integrity 5 of 5 (NODE_USE_ENV_PROXY=1), 13 required incl.
+mutation/traceability; no PR for the branch, check-runs total_count 0, so RG-05 read from local reports (19:46-20:02, after the
+revert): membership join.ts 83.3 % (L76 guard + strings), members.ts 85.7 %, invitations.ts 89.7 % (56:56-63 = stage store,
+the S2 mutant, still survives the run; pinned at L2 in join.test.ts). S1 (join.test.ts in the group) tried in 1594939 and
+withdrawn: a group config is a mutation input, so BUG-14 tests demand it in ai-review.yml (D-075) and safety-reviewer.md
+(the owner). Judged acceptable: file >= 80 %, guard unreachable at L6, deferral recorded in the spec api.ts BUG (still no ID).
+Verified byte-identity: git diff 639fc12 879096f on the 3 pin tests empty; gate-decisions.mjs unchanged vs 3fac8fb.
+RG-02 replay (git archive 1e8ce72 + node_modules symlinks, jest -t 'review loop 2'): 8 red on assertions, 4 other-4xx green.
+Plants: any-404-done kills the 404 rows; 400/422 to unreachable kills those rows; invitations.ts stage empty, swallow to refused,
+constant SQLSTATE, no log line: all die; main.tf random_string / bare random_integer / indented random_id: die; random_password
+passes (sensitive, out of scope). Symlinked node_modules work for both jest-expo and vitest (faster than cp -a).
