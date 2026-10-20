@@ -155,18 +155,13 @@ could not record a verdict at all (D-069, D-070, D-073).
 
 ## What the owner still needs to do
 
-**A-34 — create the `staging-canary` check in Healthchecks.io before REL-10's
-plan:** Period 15 minutes, Grace 20 minutes (D-127), alerts to the same place
-as the others; save its ping URL, in the UUID form, as the `staging`
-environment secret `HEALTHCHECKS_CANARY_URL`. Never another check's URL.
-About 3 minutes.
-
-**A-35 — after REL-10 merges:** straight after the merge's `deploy-staging`,
-run `infra-staging` with `plan`, then `apply`; within about 21 minutes check
-that `staging-canary` has left `new`; 24 hours later report the window, the
-success and failure pings, any down event and the largest `alertMs`. Until the
-apply, the deployed worker says at start that the canary is not running:
-expected. The full rows are in [`plan/README.md`](plan/README.md).
+**A-35 — the canary's 24-hour reading, from about 06:40 UTC on 2026-10-21.**
+A-34 is done, and so are A-35's plan and apply (2026-10-20, apply complete
+at 06:36:55 UTC); the owner saw `staging-canary` ping OK. What is left:
+report the window, the number of success and failure pings, any down event,
+and the largest `alertMs` in the `canary_run` lines of Clever Cloud's log.
+That reading closes M2 (REL-10-AC19, D-090). The full row is in
+[`plan/README.md`](plan/README.md).
 
 **A-29 — request the location SDK's 30-day trial key shortly before M3's
 demo** (transistorsoft.com/shop/trials/new; owner's own phones only; D-086).
