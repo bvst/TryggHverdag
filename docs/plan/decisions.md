@@ -5911,8 +5911,12 @@ any other path is work, not a candidate for the same treatment.
     key, while the admin is the group's only member, gives the admin's one
     device a new credential, as an invitation's retry does. A lost answer
     (F2) had left the group made, the owner outside it, and only an emptied
-    database to start again. The window closes when a second member joins,
-    because inviting them needed a working admin credential.
+    database to start again. The window is open while the admin is the
+    group's only member: it closes when a second member joins, and opens
+    again if the admin removes every other member (amended in review loop
+    2, `privacy-security-reviewer`). The retry also needs the join key the
+    admin's phone keeps, so the code alone opens nothing once the group
+    exists.
   - **The bootstrap code is compared in constant time**
     (`privacy-security-reviewer` N2): the SHA-256 digests of the code sent
     and of the setting, by `crypto.timingSafeEqual`, never `===`.

@@ -17,7 +17,24 @@ five questions on 2026-10-20, each time with Claude's recommendation (D-136;
 "Owner's answers", at the end); the choices delegated to Claude are D-137.
 Changes made in review loop 1 are marked *Review loop 1* where they are made,
 and listed below; D-137's loop-1 amendment records them, and D-138 the app
-client's swap from D-032's libraries.
+client's swap from D-032's libraries. Review loop 2 is marked the same way.
+
+### Review loop 2 (2026-10-20), from the delta reviews of `3fac8fb`
+
+All five reviewers passed `3fac8fb`, with nothing blocking. Claude's choices
+(D-031): the cheap should-fixes go in now, and the rest are recorded under
+"Left for later tasks". AC8, AC24, AC28, AC30 and AC32 are amended.
+
+| Change | From | Where |
+|---|---|---|
+| The invitation code's spelled label and its announcement begin with the code field's own name | `a11y-i18n-reviewer` S1 | AC28 |
+| While a removal is in flight, the waiting indicator shows in the confirmation, where the admin acted; the indicator is an accessibility element with its label | `a11y-i18n-reviewer` S2, S3 | AC30 |
+| A removal refused with any other 4xx says it was refused; the members screen's header comment says what the code does | `code-reviewer` | AC28 |
+| The staging Terraform declares no `random_id`, `random_string` or `random_integer` resource, as D-137 says | `privacy-security-reviewer`, note 3 | AC8 |
+| The `membership` mutation group runs `join.test.ts` too, so `join.ts`'s guard for a code that is not a code is killed inside its own run | `test-auditor` S1 | AC32; Mutation |
+| An invitation the store cannot create writes one `invitation_failed` line with `stage: 'store'` | `test-auditor` S2 | AC24 |
+| D-137: the bootstrap retry's window opens again if the admin removes every other member | `privacy-security-reviewer`, note 1 | D-137 |
+| Display names of combining marks alone, and line separators inside a name; VoiceOver on iOS; the spinner's contrast; an audit row for the bootstrap retry | `privacy-security-reviewer` notes 1, 2; `a11y-i18n-reviewer` S3 | Left for later tasks |
 
 ### Review loop 1 (2026-10-20), from the reviews of `a5fd8cf`
 
@@ -725,7 +742,9 @@ the phone.**
   app's environment takes `upper(random_bytes.admin_bootstrap_code.hex)`; no
   `.tf` file in
   `infra/staging/` declares a `random_id` resource (a static test, as the
-  existing ones read `main.tf`), so no plan prints the code.
+  existing ones read `main.tf`), so no plan prints the code. *Review loop
+  2:* nor a `random_string` or `random_integer` resource, whose values a plan
+  prints as well (D-137).
 
 **GRP-01-AC9 — Only the admin invites and lists members, and there is one
 admin.**
@@ -893,6 +912,10 @@ existing log-capture tests' way, PRIV-07)
 - **Then** no line written by the API contains an invitation code, a join
   key, a credential or its hash, a display name or a user's ID
 - **And** every new event is in `log.ts`'s closed list.
+- **And** (*review loop 2*) when the store fails, the join writes one
+  `join_failed` line and an invitation's creation one `invitation_failed`
+  line, each with `stage: 'store'` and the SQLSTATE, and the store's error
+  goes on (L2).
 
 **GRP-01-AC25 — The worker does not check in while the SMS check is not
 reporting.** (L2, in-process, as `worker.test.ts` runs the worker; D-122)
@@ -932,6 +955,9 @@ invitation)
 - **And** (*review loop 1*) the code shows as four groups of five, each group
   kept whole when the line wraps; it is announced when it appears; and its
   screen-reader label spells it character by character, group by group
+- **And** (*review loop 2*) that label and that announcement begin with the
+  code field's own name (`grp.join.codeLabel`, "Invitasjonskode") and a
+  colon, so the characters are never read without saying what they are
 - **And** the members screen lists names and roles, and removing a member
   asks for confirmation that says it takes effect at once, then shows the list
   without them
@@ -943,6 +969,9 @@ invitation)
 - **And** (*review loop 1*) a removal answered 403 or 409 says the removal was
   refused, never that the server could not be reached; one answered 404
   `MEMBER_NOT_FOUND` shows the list without them, as a done removal
+- **And** (*review loop 2*) one answered with any other 4xx, a 404 without
+  `MEMBER_NOT_FOUND` among them, says the removal was refused too, and the
+  list still shows them
 - **And** a member who is not the admin sees neither choice.
 
 **GRP-01-AC29 — A 401 signs the phone out loudly; nothing else does.** (L5)
@@ -961,6 +990,10 @@ invitation)
   shown while text is typed, not a placeholder alone
 - **And** while any request is in flight, the screen shows a waiting
   indicator with a screen-reader label
+- **And** (*review loop 2*) while a removal is in flight, that indicator
+  shows inside the confirmation, next to its buttons, where the admin acted,
+  not only at the top of the list; and the indicator is an accessibility
+  element (`accessible`) carrying its label
 - **And** every "try again" control reads "Prøv igjen" in bokmål and "Try
   again" in English: one key, or keys with the same text, on every screen.
 
@@ -996,7 +1029,12 @@ by the tests that kill them.** (*review loop 1*; the gate's own tests)
   by the shared suite, D-095's reading)
 - **And** a mutation group `membership` mutates `modules/groups/` against
   `groups.system.test.ts`, under the system tests' configuration;
-  `mutationRuns` mutates each of its files exactly once. It is not named
+  `mutationRuns` mutates each of its files exactly once. *Review loop 2:*
+  against `apps/server/src/modules/groups/join.test.ts` and then
+  `groups.system.test.ts`, under `vitest.coverage.config.mjs` (unit and
+  system together, no L3), because only the unit file reaches `join.ts`'s
+  guard for a code that is not a code: the contract refuses such a code
+  before any request reaches the module. It is not named
   `groups`: that word is the mutation plan's output key in `ci.yml`'s three
   mutation jobs, where BUG-45-AC8 refuses any group's name
 - **And** the `journeys` group runs `groups.system.test.ts` after its three
@@ -1085,7 +1123,9 @@ Added in review loop 1:
   the two assertions that `apps/server/src/api.ts` cannot change the app
   become "can change what the flows check" (AC33). A meaning changed by the
   first L7 flows that need a server; the `packages/test-kit/` and `docs/`
-  assertions stay.
+  assertions stay. `apps/server/package.json` leaves the "cannot change the
+  app" list for the same reason: AC33 covers every file under
+  `apps/server/`.
 - **The start route's `responderIds` description**, wherever a test or the
   generated `openapi.json` holds it: "an existing user" becomes "a member of
   the walker's group". A description change; `api:diff` passes it.
@@ -1093,6 +1133,19 @@ Added in review loop 1:
   retry key's text ("Prøv på nytt" / "Try once more" become "Prøv igjen" /
   "Try again"), and the L7 flows' strings read from `nb.json` follow AC28
   and AC30.
+
+Added in review loop 2:
+
+- **The invite flow's code step** (`apps/mobile/e2e/first-admin-invites.yaml`)
+  and its pattern tests (`scripts/lib/e2e-android.test.mjs`): the spelled
+  label now begins with the code field's name and a colon (AC28). The
+  pattern still proves 20 characters in four groups of five.
+- **The `membership` group's pins** (`scripts/lib/gate-decisions.test.mjs`,
+  `scripts/lib/merge-rules.test.mjs`, `scripts/stryker-config.test.mjs`): its
+  tests gain `join.test.ts`, first, and its configuration becomes
+  `vitest.coverage.config.mjs` (AC32). It only adds a test file to the run.
+- **GRP-01-AC8's no-`random_id` test** (`scripts/infra.test.mjs`) refuses
+  `random_string` and `random_integer` too. A stronger test.
 
 ## Mutation (D-036, D-098, D-099, D-129)
 
@@ -1109,6 +1162,12 @@ Added in review loop 1:
   tests, fourth: the reviewer planted a mutant that skips the walker check in
   `modules/journeys/removal.ts`, and it survived the group's three files and
   died to `groups.system.test.ts` (AC32).
+- *Review loop 2 (`test-auditor` S1):* the fresh run at `3fac8fb` gave
+  `join.ts` 83.3 %, with its `code === null` guard surviving: no request can
+  reach it, and only `join.test.ts` (L2) kills it. The `membership` group now
+  runs `join.test.ts` and then `groups.system.test.ts` under
+  `vitest.coverage.config.mjs`, which holds the unit and the system files
+  and no L3 (AC32).
 - `api.ts` is not a safety path and is mutated by no group, as before this
   task. The reviewer's second surviving mutant, `api.ts`'s full-access gate
   always open, is killed by `groups.system.test.ts` (AC21, AC23), which
@@ -1356,6 +1415,13 @@ was not checked. The bootstrap retry changes no shape.
 - **Task 3 (start a journey):** the member list for members; the responder
   picker; the removal route's button; what the app shows a walker whose
   removal of the last responder answers `REMOVED`.
+  *Review loop 2 (`privacy-security-reviewer`, note 2):* AC31's rule accepts
+  a name made only of combining marks (Mn, Me: U+034F, U+FE0F, U+0301 each
+  came back usable) and a line or paragraph separator (U+2028, U+2029)
+  inside a name, which can break a line in a list. When task 3 shows the
+  member list to members, it either refuses a name with no base character
+  and any Zl or Zp character, with tests at L2 and L6, or records why it
+  accepts them.
   *Review loop 1 (`safety-reviewer` S1, `privacy-security-reviewer` N3):*
   the app deletes its credential on any 401 (AC29), but a removed member's
   walking phone is admitted only as a walker (approach 5), so `GET /v1/me`
@@ -1376,9 +1442,25 @@ was not checked. The bootstrap retry changes no shape.
 - **Task 10 (SMS):** sign-in on a new device; Better Auth's UUID question;
   the new-device notice, to the member and the admin (D-136, answer 2);
   binding an invitation to a number.
+- **Task 2 (the home screen)**, also (*review loop 2*, `a11y-i18n-reviewer`):
+  the waiting indicator's colour is the platform default, below 3:1 on white
+  on iOS; it takes the palette's colour with the rest.
+- **Task 12 (the iOS build)** (*review loop 2*, `a11y-i18n-reviewer` S3):
+  `accessibilityLiveRegion` is Android-only in React Native 0.86, so on iOS
+  the screens' messages (the confirmation, the removal's result, the refusal,
+  `grp.join.nameNotUsable`, the errors) are silent in VoiceOver; only the
+  invitation code is announced on both, by `announceForAccessibility`.
+  AC28's "the removal is announced" holds on Android until task 12 announces
+  each message on iOS too. Task 12 also checks where VoiceOver's focus goes
+  when the confirmation replaces the pressed "Fjern" button, and that the
+  waiting indicator's label, not the system's "In progress", is what
+  VoiceOver reads. All three on a device.
 - **M4:** the admin's passkey (D-136, answer 2); a device's `revoked_at` for
   the admin's revoke-sessions (D-136, answer 4); retention of the new tables;
-  the DPIA naming display names.
+  the DPIA naming display names. *Review loop 2 (`privacy-security-reviewer`,
+  note 1):* the bootstrap retry gives the admin's device a new credential
+  and writes no audit row, as an invitation's retry writes none; M4's admin
+  audit log decides whether a credential's re-issue is an audited action.
 
 ## Settled by the plan, so not asked
 
