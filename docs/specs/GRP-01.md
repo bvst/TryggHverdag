@@ -994,9 +994,11 @@ by the tests that kill them.** (*review loop 1*; the gate's own tests)
 - **Then** `apps/server/src/modules/groups/` is in `SAFETY_PATHS`, as a
   folder, and `apps/server/src/adapters/groups.ts` is not (proved at L3 and
   by the shared suite, D-095's reading)
-- **And** a mutation group `groups` mutates `modules/groups/` against
+- **And** a mutation group `membership` mutates `modules/groups/` against
   `groups.system.test.ts`, under the system tests' configuration;
-  `mutationRuns` mutates each of its files exactly once
+  `mutationRuns` mutates each of its files exactly once. It is not named
+  `groups`: that word is the mutation plan's output key in `ci.yml`'s three
+  mutation jobs, where BUG-45-AC8 refuses any group's name
 - **And** the `journeys` group runs `groups.system.test.ts` after its three
   files: the walker check in `modules/journeys/removal.ts` is killed only by
   that file's tests (AC21, AC23), as `safety-reviewer`'s planted mutant
@@ -1078,7 +1080,7 @@ Added in review loop 1:
   the test that no `random_id` is declared.
 - **The `MUTATION_GROUPS` pin** (`scripts/lib/gate-decisions.test.mjs`): the
   `journeys` group's tests gain `groups.system.test.ts`, fourth, and a new
-  `groups` group follows it (AC32). Each only adds tests or mutants.
+  `membership` group follows it (AC32). Each only adds tests or mutants.
 - **INF-06-AC13's "the server cannot"** (`scripts/lib/affected.test.mjs`):
   the two assertions that `apps/server/src/api.ts` cannot change the app
   become "can change what the flows check" (AC33). A meaning changed by the
@@ -1101,7 +1103,7 @@ Added in review loop 1:
   written out, the workflow edit is owned.
 - *Review loop 1 (`safety-reviewer` S4), settled:* the green head did
   neither, so `modules/groups/` was mutated by no run. It goes into
-  `SAFETY_PATHS` as a folder, with a group of its own, `groups`, against
+  `SAFETY_PATHS` as a folder, with a group of its own, `membership`, against
   `groups.system.test.ts` under `vitest.system.config.mjs`, placed after
   `journeys`. And `groups.system.test.ts` joins the `journeys` group's
   tests, fourth: the reviewer planted a mutant that skips the walker check in
