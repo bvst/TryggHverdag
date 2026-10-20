@@ -1,11 +1,11 @@
 # Progress log
 
-**Last updated:** 2026-10-18 · **Milestone:** M2 started (2026-10-01, D-090): the core safety loop on the server, nine tasks (D-115 added one), **SM-01 done** ([#53](https://github.com/bvst/TryggHverdag/pull/53), `2db7046`), with BUG-11 in it; **BUG-10 done** ([#56](https://github.com/bvst/TryggHverdag/pull/56), `348f620`); **BUG-12 done** ([#57](https://github.com/bvst/TryggHverdag/pull/57), `a47334f`; D-098, D-099); **BUG-14 done** ([#58](https://github.com/bvst/TryggHverdag/pull/58), `34bc460`; D-100); **BUG-15 done** ([#59](https://github.com/bvst/TryggHverdag/pull/59), `c46b3b3`; D-104); **LOST-01 done** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`; D-101 to D-103); **BUG-18 done** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`; D-105); **LOST-02 done** ([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`; D-106 to D-109); **LOST-03 done** ([#64](https://github.com/bvst/TryggHverdag/pull/64), `57502b8`; D-110 to D-112), with BUG-23 and BUG-24 in it; **LOST-06 done** ([#66](https://github.com/bvst/TryggHverdag/pull/66), `e695e8a`; D-113, D-114); **LOST-07 done** ([#67](https://github.com/bvst/TryggHverdag/pull/67), `1c4bc8b`; D-115, D-116); **BUG-30 and BUG-31 done** ([#68](https://github.com/bvst/TryggHverdag/pull/68), `5f4bdc1`; D-118, D-119), their workflow half done too ([#69](https://github.com/bvst/TryggHverdag/pull/69), `2c9808f`), review loops 2 and 3 in their own pull request (#70); **SM-10 done** ([#74](https://github.com/bvst/TryggHverdag/pull/74), `f4ded6d`; D-122 to D-124); **LOST-08 done** ([#75](https://github.com/bvst/TryggHverdag/pull/75), `f5c14b2`; D-125, D-126); **REL-10 done** ([#77](https://github.com/bvst/TryggHverdag/pull/77), `b6c6074`; D-127, D-128), the last M2 task: M2's exit waits on the canary's 24 hours on staging (A-34, A-35) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-20 · **Milestone:** M3 started (2026-10-20, D-134): twelve tasks, GRP-01 first; **GRP-01 is built and has been through two review loops, on the session branch; its pull request is to open** (step 1 is done: [#94](https://github.com/bvst/TryggHverdag/pull/94), `60b46ee`) · M2 (D-090): all nine tasks are done, the last REL-10 in [#77](https://github.com/bvst/TryggHverdag/pull/77) (`b6c6074`); M2 closes on the staging canary's 24 hours (A-35, reading due from about 06:40 UTC on 2026-10-21) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
-[`progress/m1.md`](progress/m1.md) for M1 and [`progress/m2.md`](progress/m2.md)
-for M2.
+[`progress/m1.md`](progress/m1.md) for M1, [`progress/m2.md`](progress/m2.md)
+for M2 and [`progress/m3.md`](progress/m3.md) for M3.
 
 This file is kept short on purpose. `CLAUDE.md` tells every session to read it
 before doing anything, and a thousand-line file that is read under protest stops
@@ -15,6 +15,25 @@ done. Length was the symptom; a status nobody trusts was the cost.
 
 The plan is in [`plan/README.md`](plan/README.md); the milestone task lists are in
 [`plan/10-roadmap.md`](plan/10-roadmap.md). One task per pull request (D-052).
+
+## M3 at a glance
+
+**M3 started on 2026-10-20** (**D-134**), while M2's last exit criterion (A-35)
+still runs. The app MVP, demo-able, in twelve tasks, one pull request each,
+**one task at a time**, GRP-01 first and sign-in without SMS first. Exit: L7
+green on Android (every pull request) and iOS (weekly); the owner can show the
+app through internal TestFlight and Google Play internal testing. The order is
+in D-134 and [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
+[`progress/m3.md`](progress/m3.md).
+
+| # | ID | Task | Status |
+|---|----|------|--------|
+| 1 | GRP-01 | Sign-in and groups: a single-use invitation that expires after 7 days, the first admin's bootstrap code, device sessions where membership is the session, the admin's invitations, member list and removal, the walker's removal of a responder (D-122), and the minimum app screens | 🟢 **Built and reviewed twice; pull request to open** — 2026-10-20, session branch `claude/busy-faraday-40n2zl` at `25ca436`. 33 acceptance criteria; D-136 (the owner's five answers), D-137 (delegated, amended in loop 1), D-138 (the app's client is plain `fetch`, so it does not validate the server's answers at run time). Step 1 is done: [#94](https://github.com/bvst/TryggHverdag/pull/94), `60b46ee` (the safety filter and owner paths for `modules/groups/` and `adapters/groups.ts`, with Dependabot #91's bumps). Loop 1: `privacy-security-reviewer` blocked (`random_id` would have printed the bootstrap code in the public plan log; now `random_bytes`) and `test-auditor` blocked (RG-05: `modules/groups` was mutated by no run; now the `membership` group); all five reviewers then passed `3fac8fb`. Loop 2: `test-auditor` and `a11y-i18n-reviewer` passed `879096f` (their notes are committed), and so did `code-reviewer` (the coordinating session's report; no note is committed); `25ca436`, one L5 test, came after and has no review. `gate:full` at `879096f` passed every step it can run here (the coordinating session's report; L3 needs Docker and L7 an emulator, so those run in CI only). **No CI has run on it yet.** The owner still has A-36 (after the merge and its deploy) and a code-owner question that goes in the pull request. Record: `progress/m3.md` |
+| | BUG-57 | `apps/server/src/api.ts` is mutated by no run, though its middleware decides FULL versus WALKER_ONLY access (GRP-01-AC21, AC23): `safety-reviewer`'s planted mutant, that gate always open, survived the `journeys` group and was killed only by `groups.system.test.ts`, which `test:system` runs and no mutation run reads for `api.ts`. **In the same change,** the `membership` group would run `modules/groups/join.test.ts` before `groups.system.test.ts`, under `vitest.coverage.config.mjs`. That was tried in loop 2 (`1594939`) and withdrawn (`879096f`): a group's configuration is a mutation input (`decideMutation`), so BUG-14's tests then require the coverage configuration in `ai-review.yml`'s safety filter (D-075, merged by hand) and in `.claude/agents/safety-reviewer.md` (the owner's). What it would kill: `join.ts`'s `code === null` guard, which no request can reach (the contract refuses such a code first; removed, it fails loudly with a `join_failed` line and a 500), and `invitations.ts`'s `invitation_failed` stage. Measured in loop 2: about 50 s for the group (48 s in the implementer's run), `join.ts` 97.2 % (83.3 % today), `invitations.ts` 93.1 % (89.7 %). Found 2026-10-20 by `safety-reviewer` (S4, loop 1) and `test-auditor` (S1, loop 2). Detail: the spec's "Left for later tasks" | ⚪ **Queued**, for the owner to schedule (`ai-review.yml` is a hand merge, D-075, and the safety reviewer's brief under `.claude/` needs the owner's approval). Claude recommends one pull request: `api.ts` into `SAFETY_PATHS` with a group over the system tests that reach its routes, measured first for time (D-066, D-098), and the `membership` group's second test file in the same change, with the two input lists (`ai-review.yml`, the reviewer's brief) updated first, as step 1 did for the filter |
+| | BUG-58 | guard-bash's rule against skipping git hooks (`.claude/hooks/guard-bash.mjs`, line 37: `/--no-verify\b\|\bgit\s+commit\b[^\n]*\s-n\b/`) matches more than the flag. The short flag is matched anywhere later on the line, so `git commit -F msg && sed -n 1,5p msg` and `git commit -F msg && grep -n x msg` are refused, and so is a command that only mentions the words, such as `grep -r "git commit -n" docs`. Measured 2026-10-20 by running line 37's pattern on ten sample commands in a scratch file; the guard's other checks were not exercised. It fails closed, so it is a nuisance, not a hole: a refused command costs a rewrite, and a rule that refuses what it should not teaches people to word around it. Found by the implementer in review loop 2, and by Claude when a search for the pattern itself was refused | ⚪ **Queued**, for the owner to schedule (`.claude/` needs the owner's approval). Claude recommends matching the flag only as an argument of the `git commit` command itself: split the command into simple commands first (the same word splitting BUG-56 wants fixed as a whole), with tests for the flag itself, the chained `-n` and the mention |
+| | BUG-59 | The post-edit hook runs `gate:file` on a file outside the repository. `.claude/hooks/post-edit.mjs` (lines 15-39) names the edited file relative to the working tree (`relPath` gives a `../…` path for one outside it), skips only a wrong extension and `docs/`, and runs the gate on the rest. Seen by Claude in review loop 1 on a file in the session's scratchpad, and **again on 2026-10-20 while GRP-01 was being recorded:** a scratch `.mjs` under `/tmp` was reported as failing Prettier ("Code style issues found") and ESLint ("ESLint couldn't find an eslint.config.* file"), and the hook ended "Fix them before moving on", though the ESLint half cannot be fixed outside the repository. A false red on a file that is not the repository's; the live gotcha about a worktree outside the project is the same hook, but there the files are checked against the main checkout | ⚪ **Queued**, for the owner to schedule (`.claude/` needs the owner's approval). Claude recommends skipping a path outside the working tree and saying so in one line (not checked, and why), so it is neither a false failure nor a silent pass |
+| | BUG-60 | test-author's Bash guard denies writes only under `apps/*/src/**` and `packages/contracts/**` (`.claude/agents/test-author.md`, line 20), while its Edit and Write hook (line 16) allows only `**/*.test.ts`, `.tsx` and `.mjs` files, `apps/mobile/e2e/**` and `packages/test-kit/**`. So a shell write by test-author could reach production files that hook would refuse, such as non-test `.mjs` files in `scripts/`, `infra/` and `.github/`; and a shell write skips the Edit hooks and the post-edit checks. In review loop 1, test-author edited `scripts/lib/merge-rules.test.mjs` with a shell script: that was its own file, but the post-edit checks did not run, so it redid the edit with Edit. **What was checked:** the two frontmatter lines (16 and 20) were read. What `guard-paths.mjs` and `guard-bash.mjs` enforce for test-author with those arguments, and whether the global guard (D-120) already refuses some of these paths, was **not** checked; no shell write by test-author to a production file is known. The same family as BUG-56 | ⚪ **Queued**, for the owner to schedule (`.claude/` needs the owner's approval). Claude recommends denying shell writes to every non-test path for test-author, mirroring the Edit hook's rule, or refusing shell writes to tracked files for both roles |
+| 2 to 12 | D-134 | In the order of D-134: the home screen (GRP-02, CALL-01, CALL-02); start a journey (JRN-01, JRN-02, LOST-01's phone half); the safety permission check (GRP-03); "I'm home" and the two-hour stop (JRN-05, JRN-06); real push; the alert screen (HELP-01); what responders see (JRN-03); responder setup (GRP-04); real SMS (LINK Mobility) and the SMS sign-in code; CALL-03, LOST-04, LOST-05; iOS and the stores | ⚪ Not started. One at a time (D-134); A-11 is needed by task 6, A-12 by task 10, A-03 by task 12 |
 
 ## M2 at a glance
 
@@ -49,6 +68,7 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | | BUG-27 | Whether the worker's session limits are in force on a deploy is seen only by chance. The deploy job's log is Clever Cloud's stream, which ends when Clever Cloud reports the deploy done: on LOST-06's deploy (run 37595559908) "Successfully deployed" came 21 ms after "Starting worker", and the worker's `session limit` read-back line (D-109) was never in the log. The API's was. Earlier deploys caught both only because the timing fell right. The worker ran (its beat moved every 10 s and it checked in). Found 2026-10-07 | ⚪ **Queued**, for the owner to schedule. Claude recommends that each process records its read-back where the smoke test can check it (for example, the worker beside its beat, read through `/v1/health`), so every deploy fails loudly if either process's limits are not in force |
 | | BUG-28 | The watchdog's waiting loop (`modules/alerts/watchdog.ts:116-123` on `main` then, 141-147 now, LOST-02) has no test with two journeys held past the stuck threshold, so a loop that stops early goes unseen, in either order: a `break` after the first stuck journey survives `main`'s three L6 alert suites and `alerts.integration.test.ts`, and so does a `break` after the first journey opened within its wait. Later journeys would lose this sweep's retry: their `watchdog_overdue` line, or their open, comes one sweep (about 10 s) later, and `stuck` can be undercounted. With the first break the sweep still fails and pages; with the second, it can record one beat while a journey is held. Found by `test-auditor` in LOST-07's loop-2 and loop-3 audits, 2026-10-07; LOST-07 adds the tests for the escalation's twin loop | ✅ **Done** — 2026-10-18, [#90](https://github.com/bvst/TryggHverdag/pull/90), squashed as `c94e908` (the owner, 2026-10-18: `/bugfix BUG-28`): tests only; five `BUG-28:` L6 tests, one for each answer the first journey's waiting attempt can give, in both orders for held and opened, and each kills a `break` that `main`'s suites let through ([progress/m2.md](progress/m2.md#bug-28--pins-for-the-watchdogs-waiting-loop-two-journeys-at-once-2026-10-18)) |
 | | BUG-29 | The required `mutation` check ran out of its 25-minute budget on LOST-07's pull request (#67): `spawnSync pnpm ETIMEDOUT`, twice (jobs 112914873757 and 112942878321, about 25:00 each). Every group that finished passed | ✅ **Done** — with LOST-07 in [#67](https://github.com/bvst/TryggHverdag/pull/67) (`1c4bc8b`): `worker.ts` has a mutation group of its own, without `bin.test.ts`, and each mutant's run starts Vitest directly (D-117; the owner agreed). CI's run on the fix took 21:07, every score unchanged. The budget is not raised; the margin, 3:53, is thin |
+| | BUG-30, BUG-31 | Which model and thinking level each agent uses, and how fast the gates run (D-118, D-119) | ✅ **Done** — 2026-10-08, [#68](https://github.com/bvst/TryggHverdag/pull/68) (`5f4bdc1`); the workflow half in [#69](https://github.com/bvst/TryggHverdag/pull/69) (`2c9808f`), merged by the owner by hand (D-075): `--model claude-opus-5-5` for CI's reviews, `--model claude-sonnet-5-5` for the daily report, `TRYGGHVERDAG_REVIEW_JOB=1` on the review step only; review loops 2 to 4 in [#70](https://github.com/bvst/TryggHverdag/pull/70) (`b6ee158`). Their follow-ups BUG-36 to BUG-39 are in #72, below. Record: `progress/m2.md` |
 | | BUG-32 | The worker listened for a stop signal only after its start had returned, and Graphile Worker opens the pool's connections before that, so a SIGTERM or SIGINT during the start met no listener and ended the process by the signal: no runner stopped, no pool ended, no exit 0. CI's `integration` check hit it once on #70 (job 113295132594, the D-068 test: `{ code: null, signal: 'SIGTERM' }`); the real worker against a fresh local PostgreSQL 16, signalled as soon as it held a connection, died by SIGTERM 12 times out of 12 | ✅ **Done** — [#71](https://github.com/bvst/TryggHverdag/pull/71) (`acda4c0`): `runWorkerProcess` installs `exitOnSignal` before the start, its stop waits for the start, and a signal during the start is said at once and waits at most 10 s, then exits with 1 (measured: 12 of 12 exits with 0 against the real worker; 10.016 s against a database that never answers) |
 | | BUG-33 | `gate:full` cannot measure mutation in a session where Terraform is installed: its static step's `scripts/infra-check.mjs` runs `terraform init -backend=false`, which leaves `infra/staging/.terraform/providers/…/linux_amd64` as a symlink to a directory (the plugin cache in `node_modules/.cache/terraform`), and every Stryker run in the same `gate:full` then stops with `EISDIR: illegal operation on a directory, copyfile` before testing a mutant. CI's `mutation` job runs no `terraform init`, so it is unaffected. Found on BUG-32, 2026-10-08 | ✅ **Done** — 2026-10-10, in REL-10 ([#77](https://github.com/bvst/TryggHverdag/pull/77), `b6c6074`): `ignorePatterns: ['infra/**/.terraform']` in `stryker.config.mjs` (`e9f1d11`), with its test (`389ecea`, red first). REL-10's first `gate:full` hit it again on the new `random` provider |
 | | BUG-34 | The worker's start can hang silently: `createPool` sets no `connectionTimeoutMillis`, so a database that accepts the connection and never answers holds the start forever, with nothing written after the start-up lines. A worker stuck there watches nobody: no beat, so the Healthchecks.io check-in stops and `/v1/health` reads degraded. Shown by `safety-reviewer` on BUG-32 (a TCP listener that never answers as `DATABASE_URL`), 2026-10-08; predates BUG-32 | ✅ **Done** — 2026-10-18, [#89](https://github.com/bvst/TryggHverdag/pull/89), squashed as `1151d18` (the owner, 2026-10-18: `/bugfix BUG-34`): every pool gives up on a connection's handshake after `CONNECT_TIMEOUT_MS` (5 s) through a `pg.Client` subclass, never on a wait for a free client in a full pool (red `3023816`, fix `befe3ed`, loop 1 `c74d569` and `52f510b`). A worker started against a silent database now writes `worker failed: Error: timeout expired` and exits 1 within 5 s; migrations fail the deploy and the API answers 500, each within about 6 s. The one open edge is BUG-51 (a connection that hangs after its handshake) |
@@ -82,7 +102,7 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | 6 | LOST-07 | SMS escalation at 2 minutes | ✅ **Done** — 2026-10-07, [#67](https://github.com/bvst/TryggHverdag/pull/67), merged as `1c4bc8b` at 19:43 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `2a65c3a`. 20 acceptance criteria; D-115 (owner, five answers), D-116 (delegated, three review-loop amendments), with BUG-29 in it (D-117). Session reviews: all three PASS in the first round; three review loops; `test-auditor` blocked loop 1's head and passed loops 2 and 3. In CI on `2a65c3a`: all 16 checks passed, all five AI reviewers PASS (the privacy reviewer after two re-runs: a review that ran but returned no structured verdict, explained by D-121); `integration` on PostgreSQL 15 with migration 0006; `mutation` 21:07 against 25:00. On `main` after the merge: `ci` passed (run 37676690823) and `deploy-staging` passed (run 37676690808); the smoke test saw the worker check in at 19:47:54 UTC, so the stricter ping-URL check accepted the existing `HEALTHCHECKS_WORKER_URL`. **A-33 done** (the owner, 2026-10-07; apply run 37678702578). Record: `progress/m2.md` |
 | 7 | SM-10 | Removing a responder: resumed escalation and the last-responder warning (D-115) | ✅ **Done** — 2026-10-09, [#74](https://github.com/bvst/TryggHverdag/pull/74), merged as `f4ded6d` at 13:36 UTC after `urso-agent` approved: D-122 (the owner's four answers), D-123, and BUG-41's faster mutant runs (D-124). Three review loops; every check and all five CI reviewers passed, mutation in 12:15 and 13:48. `main`'s CI and `deploy-staging` passed; migration 0007 ran in the pre-run hook |
 | 8 | LOST-08 | "They're safe" | ✅ **Done** — 2026-10-09, [#75](https://github.com/bvst/TryggHverdag/pull/75), merged as `f5c14b2` at 18:33 UTC after `urso-agent` approved: the owner's two answers (D-125) and the delegated choices (D-126). One review loop; every check and all five CI reviewers passed, mutation in 15:19. `main`'s CI and `deploy-staging` passed; migration 0008 ran in the pre-run hook |
-| 9 | REL-10 | The staging canary | ✅ **Done** — 2026-10-10, [#77](https://github.com/bvst/TryggHverdag/pull/77), merged as `b6c6074` at 16:06 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `1e6f957`. 19 acceptance criteria; D-127 (owner, three answers), D-128 (delegated, amends D-091 for the canary only, with a review-loop amendment). The filter lines shipped first in [#76](https://github.com/bvst/TryggHverdag/pull/76) (`5e5dc81`). Two review loops; every check and all five CI reviewers passed `1e6f957`, mutation in 19:26 (`run.ts` 95.9 %, `worker.ts` 96.41 %). `main`'s CI (all 10 jobs) and `deploy-staging` passed; REL-10 adds no migration, and the deployed worker has no canary setting until A-35's apply. The canary does not run until the owner's **A-34** and **A-35**; A-35's 24-hour reading is REL-10-AC19, and M2's exit |
+| 9 | REL-10 | The staging canary | ✅ **Done** — 2026-10-10, [#77](https://github.com/bvst/TryggHverdag/pull/77), merged as `b6c6074` at 16:06 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `1e6f957`. 19 acceptance criteria; D-127 (owner, three answers), D-128 (delegated, amends D-091 for the canary only, with a review-loop amendment). The filter lines shipped first in [#76](https://github.com/bvst/TryggHverdag/pull/76) (`5e5dc81`). Two review loops; every check and all five CI reviewers passed `1e6f957`, mutation in 19:26 (`run.ts` 95.9 %, `worker.ts` 96.41 %). `main`'s CI (all 10 jobs) and `deploy-staging` passed; REL-10 adds no migration, and the deployed worker has no canary setting until A-35's apply. The canary does not run until the owner's **A-34** and **A-35**; A-35's 24-hour reading is REL-10-AC19, and M2's exit. A-34 and A-35's plan and apply are done (2026-10-20); the reading is due from about 06:40 UTC on 2026-10-21. Follow-up in [#80](https://github.com/bvst/TryggHverdag/pull/80) (`8838d0d`, 2026-10-13): four REL-10-AC9 tests of the canary's real wait, which kill the mutant #77 left alive, and two out-of-date comments in `worker.ts` |
 
 ## M1 at a glance
 
@@ -155,6 +175,23 @@ could not record a verdict at all (D-069, D-070, D-073).
 
 ## What the owner still needs to do
 
+**A-36 — after GRP-01 merges and its `deploy-staging` has run:** `infra-staging`
+plan, then apply; then read the first admin's bootstrap code once in Clever
+Cloud's console and join in the app on your own phone, with your name. You
+become the group's admin. **The plan must show no code:** if a 32-character code
+appears anywhere in it, stop and tell Claude, because the job log is public. The
+full row, with the retry and the leak runbook, is in
+[`plan/README.md`](plan/README.md). Not yet due: the pull request is to open.
+**Open:** how the app gets onto your phone for the join. Nothing builds it for a
+phone before task 12 (`apps/mobile` has no `eas.json`); the row says what exists.
+
+**A question for GRP-01's pull request:** should the files that carry
+authentication get a code owner? Today none has one: `apps/server/src/config.ts`,
+`bin/api.ts` and `ports.ts`; `packages/contracts/src/groups.ts` and
+`display-name.ts`; and in the app `shared/secure-storage.ts`,
+`shared/api/client.ts` and `package.json`. Raised by `privacy-security-reviewer`
+(N5); it blocks nothing in GRP-01. Details in `progress/m3.md`.
+
 **A-35 — the canary's 24-hour reading, from about 06:40 UTC on 2026-10-21.**
 A-34 is done, and so are A-35's plan and apply (2026-10-20, apply complete
 at 06:36:55 UTC); the owner saw `staging-canary` ping OK. What is left:
@@ -177,8 +214,9 @@ demo** (transistorsoft.com/shop/trials/new; owner's own phones only; D-086).
 Due M3, not now.
 
 **A-30 — send the Critical Alerts entitlement request**
-(`docs/plan/critical-alerts-request.md`, Part D) once the Apple Developer
-account (A-02) exists; D-087. Due M4 at the latest; record only the outcome.
+(`docs/plan/critical-alerts-request.md`, Part D); D-087. The Apple Developer
+account exists now (A-02 done, 2026-10-20), so nothing blocks it. Due M4 at the
+latest; record only the outcome.
 
 **A-27 — raise the daily-status check's grace in Healthchecks.io to 8 hours**
 (about a minute; agreed 2026-09-26). GitHub starts the report hours late by
@@ -191,9 +229,9 @@ costs money.
 **A-14 — the cloud environment's allowlist is applied** (2026-09-24). A setup
 script is still to come.
 
-**A-01, A-02, A-03 — phones, Apple, Google Play.** Not needed for SPIKE-01:
-simulators and emulators need no account. A-02 is needed to send the Critical
-Alerts request (**A-30**, above). The rest block the first real device build.
+**A-01 — which phones the group uses** (iPhone or Android; brand and model):
+decides which real devices the automated tests cover, and Google's 12-tester
+rule. Still open. A-02 (Apple) is done; A-03 (Google Play) is above.
 
 **Dependabot and the reviewer gate.** `CLAUDE_CODE_OAUTH_TOKEN` is in the
 Dependabot secret store, which unblocks npm updates. **github-actions updates
@@ -201,13 +239,12 @@ still cannot pass**, structurally: `ai-review.yml` pins actions such as
 `actions/checkout`, `actions/setup-node` and `pnpm/action-setup`, so bumping any
 of them edits that workflow, and `claude-code-action` refuses to run when the
 workflow differs from the default branch. Those pull requests need a manual merge
-(D-075). **The three that were open are no longer:** #4 (`actions/setup-node`),
-#5 (`actions/checkout`) and #36 (`anthropics/claude-code-action`). Their
-changes went into #48 (`05ca463`, 2026-09-30), pinned to the commits Dependabot
-proposed. **Checked:** the workflows now pin setup-node v7.0.0, checkout v7.0.1
-and claude-code-action v1.0.235 (v1.0.242 since #76, 2026-10-10). **Not checked from this session:** each pull
-request's own state on GitHub (no `gh` here). The orchestrating session found no
-open pull requests on 2026-10-01 and 2026-10-02.
+(D-075), batched. #91's four bumps went in with #94 (`60b46ee`, 2026-10-20).
+**Checked in the workflows on 2026-10-20:** `actions/checkout` v7.0.1,
+`actions/setup-node` v7.1.0 and `claude-code-action` v1.0.251. **Open now:
+[#95](https://github.com/bvst/TryggHverdag/pull/95)** (`claude-code-action`
+1.0.251 to 1.0.252): it edits `ai-review.yml` and `daily-status.yml` (`gh api`,
+2026-10-20), so it waits for the next D-075 hand-merged batch.
 
 **Done, and recorded elsewhere:** A-04 to A-10, A-15 to A-26 (bar A-22's leftover)
 and A-28. Each row is in [`plan/README.md`](plan/README.md), and the evidence is
@@ -361,11 +398,24 @@ The things that still bite, and cost a session hours the first time.
   each push.
 - **The agent briefs still send the narrative to `m0.md`.** `plan-keeper`,
   `/status` and `/bugfix` name `docs/progress/m0.md` (D-088 lists it among the
-  `.claude/` gaps). M2's narrative is [`progress/m2.md`](progress/m2.md) and
-  M1's is [`progress/m1.md`](progress/m1.md), so a bug's next `BUG-<n>` has to
-  be looked for in all three files, in this one and in `decisions.md`. The
-  next one is **BUG-57** (BUG-13 to BUG-56 are taken). The last paragraph of
+  `.claude/` gaps). M3's narrative is [`progress/m3.md`](progress/m3.md), M2's
+  is [`progress/m2.md`](progress/m2.md) and M1's is
+  [`progress/m1.md`](progress/m1.md), so a bug's next `BUG-<n>` has to be looked
+  for in all four files, in this one and in `decisions.md`. The next one is
+  **BUG-61** (BUG-13 to BUG-60 are taken). The last paragraph of
   `progress/m1.md` says why.
+- **`git log origin/main..HEAD` is not the task's commits.** Every task is
+  squash-merged and this session branch is reused, so the range also lists each
+  earlier pull request's own commits: 396 on 2026-10-20, for a task of 48. Count
+  from the task's first commit (`git rev-list --count <first>^..HEAD`).
+- **guard-bash refuses a `git commit` line that has `-n` anywhere after it,**
+  `sed -n` and `grep -n` included, and any command that only mentions the rule's
+  words (BUG-58). Commit with `git commit -F <file>` in a command of its own,
+  and search for the rule with the Grep tool.
+- **The post-edit hook checks a file outside the repository,** a scratchpad
+  script for instance, and reports Prettier and ESLint failures there ("ESLint
+  couldn't find an eslint.config.* file", BUG-59). They are about the location,
+  not the code; say so and go on.
 - **The write-time sensitive-data hook catches only `+47`/`0047` phone
   numbers, on Write and Edit.** `scan-sensitive.mjs` does not look for 8-digit
   domestic numbers, email addresses, postal addresses, D-U-N-S or
@@ -419,87 +469,24 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**BUG-30 and BUG-31** (the agents' models and thinking levels, and the gates'
-speed; D-118, D-119) are done: [#68](https://github.com/bvst/TryggHverdag/pull/68),
-`5f4bdc1`, 2026-10-08. **The workflow half is done too:
-[#69](https://github.com/bvst/TryggHverdag/pull/69), `2c9808f`**, merged by
-the owner by hand (D-075): `--model claude-opus-5-5` for CI's reviews,
-`--model claude-sonnet-5-5` for the daily report, and `TRYGGHVERDAG_REVIEW_JOB=1`
-on the review step only. **Checked on the first review run after it** (#70 at
-`6ae6a68`, job 113295185327): the log says `"model": "claude-opus-5-5"` (it
-said `claude-sonnet-5` before), with `claude-sonnet-5-5` for `code-reviewer`
-itself; the whole review session took 35 s (`duration_ms` 35428), which a
-`gate:quick` run at its end (88–112 s) could not fit in, so the stop gate stood
-down: an inference from the timing, as the hooks' output is not in the log.
-`code-reviewer`'s job took 83 s (5 min 14 s at `c626578`) and its session
-cost $0.30, against $1.11 on Sonnet 5 on #68 (job 113210298189).
-Dependabot's #62 (claude-code-action 1.0.235 to 1.0.242) was closed without
-merging on 2026-10-10: #76 carried its bump, and both workflows pin 1.0.242
-now. **Review loops 2 to 4** (D-119's amendment: the stop gate reads raw
-line endings, in its early check and its fingerprint; the stand-down rule
-lives once in `inReviewJob()`; a guard test fails if the repository ever sets
-a line-ending attribute, which would blind the fingerprint again) are done:
-[#70](https://github.com/bvst/TryggHverdag/pull/70), `b6ee158`, 2026-10-08.
+**GRP-01** (M3 task 1) is built and has been through two review loops; its
+pull request is to open (the M3 table above, and
+[`progress/m3.md`](progress/m3.md)). **M2's last exit criterion** is the staging
+canary's 24 hours: the owner's A-35 reading, due from about 06:40 UTC on
+2026-10-21. Every other M2 task and bug fix is done and has its row above; the
+story is in [`progress/m2.md`](progress/m2.md).
 
-Left for later, from BUG-30 and BUG-31's reviews: **all done on
-2026-10-08** (the owner: "Do the follow ups"), in
-[#72](https://github.com/bvst/TryggHverdag/pull/72) (`aa8a94d`): BUG-36 (D-120, a guard on
-`.claude/settings.local.json` and the hooks' records in `.claude/state/`),
-BUG-37 (the reviewer briefs' verdict paragraph), BUG-38 (the loose memory
-files moved into their folders) and BUG-39 (`pnpm run decision D-NNN`).
-Running CI's reviewers as `claude --agent` was measured and not adopted
-(D-121).
-
-**LOST-07** (M2 task 6 of 9, SMS escalation) is done
-([#67](https://github.com/bvst/TryggHverdag/pull/67), `1c4bc8b`, 2026-10-07;
-D-115, D-116). **A-32 and A-33 are done** (the owner, 2026-10-07: plan run
-37678574920, apply run 37678702578, the app's environment changed), so the SMS
-check is live on staging. **Task 9, REL-10** (the staging canary), the last of
-M2's tasks, is done ([#77](https://github.com/bvst/TryggHverdag/pull/77),
-`b6c6074`, 2026-10-10): the owner's three answers (D-127) and the delegated
-choices (D-128). Every check and all five CI reviewers passed the reviewed
-head `1e6f957`. **All nine of M2's tasks are done;** M2 closes on its exit
-criteria (D-090): L6 green, mutation at 80 % or more, and the staging canary
-on time for 24 hours. That last one is the owner's **A-34** (create the
-`staging-canary` check and its secret) and **A-35** (plan and apply, then
-read the 24 hours), REL-10-AC19. BUG-43 (a test that picked an outbox row by
-random order) is done ([#79](https://github.com/bvst/TryggHverdag/pull/79),
-`85426bf`). The REL-10 follow-up the owner approved is done
-([#80](https://github.com/bvst/TryggHverdag/pull/80), `8838d0d`, 2026-10-13):
-four REL-10-AC9 tests of the canary's real wait, which kill the mutant #77
-left alive, and two out-of-date comments in `worker.ts`; BUG-44 (no test that
-`startWorker` hands the canary that wait) followed, and is done (below). **BUG-42** (the gate's
-lint read Stryker's sandbox) is done
-([#82](https://github.com/bvst/TryggHverdag/pull/82), `69370a2`, 2026-10-13),
-with D-129 in it. **BUG-45** (the mutation check as one CI job per group, a local `--group`, the six mutants that only time out) is done ([#83](https://github.com/bvst/TryggHverdag/pull/83), `9cc74b7`, 2026-10-13): the check took 4:57 on its own CI, against 17 to 20 minutes before. **BUG-46** (four gates passed quietly on a base git cannot resolve: mutation, `tests:changes`, `coverage:ratchet` and `req:coverage`) is done ([#84](https://github.com/bvst/TryggHverdag/pull/84), `595c584`, 2026-10-13; D-131). BUG-48 (the stop and progress hooks did the same) is done ([#85](https://github.com/bvst/TryggHverdag/pull/85), `85aa8fb`, 2026-10-14). BUG-47 (no test pinned which folders `req:coverage` treats as product code) is done ([#86](https://github.com/bvst/TryggHverdag/pull/86), `f1bfb5e`, 2026-10-14). BUG-44 (no test held that `startWorker` hands the canary its real wait) is done ([#87](https://github.com/bvst/TryggHverdag/pull/87), `111815d`, 2026-10-14). BUG-21 (three Android-script tests failed under load on a correct script) is done ([#88](https://github.com/bvst/TryggHverdag/pull/88), `0c0b239`, 2026-10-18). BUG-49 and BUG-50 are queued for the owner. **Task 8, LOST-08** ("They're safe") is done
-([#75](https://github.com/bvst/TryggHverdag/pull/75), `f5c14b2`, 2026-10-09):
-the owner's two answers (D-125) and the delegated choices (D-126); CI's
-mutation step took 15:19, and the merge's deploy applied migration 0008. **Task 7,
-SM-10** (removing a responder, D-115) is done
-([#74](https://github.com/bvst/TryggHverdag/pull/74), `f4ded6d`, 2026-10-09):
-the owner's four answers (D-122), the delegated choices (D-123), and BUG-41,
-the mutation budget, fixed in it by D-124 (CI's mutation step 12:15 and
-13:48, against LOST-07's 21:07). Before M3's route ships, a deployed worker
-must refuse to start without `HEALTHCHECKS_SMS_URL`, or fail a check that
-pages the owner (D-122). **LOST-06** (task 5,
-"I'm on it") is done ([#66](https://github.com/bvst/TryggHverdag/pull/66),
-`e695e8a`). Before M3 pushes its notice on either platform, a real-phone test
-must show the notice never displaces an undelivered critical alert (D-113's
-amendment). **LOST-03** (task 4, back in contact, and "I'm home") is done
-([#64](https://github.com/bvst/TryggHverdag/pull/64), `57502b8`), with
-**BUG-23** and **BUG-24** (the dependency audit's two new advisories) in it.
-**LOST-02** ([#63](https://github.com/bvst/TryggHverdag/pull/63), `5cd5d24`),
-**BUG-18** ([#61](https://github.com/bvst/TryggHverdag/pull/61), `7e05c8e`),
-**LOST-01** ([#60](https://github.com/bvst/TryggHverdag/pull/60), `fe384c5`)
-and **BUG-15** ([#59](https://github.com/bvst/TryggHverdag/pull/59),
-`c46b3b3`) are done too. **A-31** (Dependabot alerts are off) is the owner's.
-LOST-01's to LOST-07's reviews leave items for later tasks, listed in
-`progress/m2.md` ("Left for later tasks").
-
-**BUG-32** (the owner's go-ahead, 2026-10-08) is done (#71, `acda4c0`): the
-worker listens for a stop signal before it starts. See its row above and
-[`progress/m2.md`](progress/m2.md). Its reviewers' older finds are queued:
-BUG-33, BUG-34 (`safety-reviewer` recommends it soon) and BUG-35.
+**Carried into M3, from M2's decisions:**
+- Before M3 pushes the "I'm on it" notice on either platform, a real-phone test
+  must show it never displaces an undelivered critical alert (D-113's
+  amendment): task 6 or 7.
+- D-122's condition for the removal route, that a deployed worker must not leave
+  the SMS check unseen, is met by GRP-01's AC25 once GRP-01 merges: the worker
+  withholds its check-in, and `staging-worker` pages.
+- LOST-01's to LOST-07's reviews leave items for later tasks, listed in
+  `progress/m2.md` ("Left for later tasks"); GRP-01's are in its spec and in
+  `progress/m3.md`.
+- **A-31** (Dependabot alerts are off) is the owner's.
 
 **For the owner, from CI's `test-auditor` on #60:** should
 `apps/server/src/log.ts` be mutation-tested? It is the one place that keeps
@@ -523,12 +510,13 @@ Still open from BUG-14's reviews, for the owner:
   (`test-auditor`; the safe direction, and `/.github/` needs the owner anyway).
 
 Still open from D-098's consequences (BUG-12, done):
-- imports do not trigger the run (`api.ts`, `http.ts`, the adapters, contracts);
+- imports do not trigger the run (`api.ts`, `http.ts`, the adapters, contracts;
+  `api.ts` itself is BUG-57);
 - dependency updates do not trigger it either (a cost question);
 - the whole-suite run is now unreachable, and removing it needs a decision;
 - mobile `.tsx` safety files will need a jest-expo group.
 
-**BUG-13**, **BUG-16**, **BUG-17**, **BUG-19**, **BUG-20**, **BUG-22**, **BUG-25**, **BUG-27**, **BUG-35**, **BUG-40**, **BUG-53**, **BUG-54**, **BUG-55** and **BUG-56** are queued for the owner to schedule, and **BUG-49** and **BUG-50** for the owner to decide (the rows under M2, above). BUG-21 is done ([#88](https://github.com/bvst/TryggHverdag/pull/88), `0c0b239`); BUG-34 (the worker's start hung silently on a database that never answers) is done ([#89](https://github.com/bvst/TryggHverdag/pull/89), `1151d18`, 2026-10-18). BUG-28 (no test held two journeys past the watchdog's stuck threshold) is done ([#90](https://github.com/bvst/TryggHverdag/pull/90), `c94e908`, 2026-10-18). BUG-51 (a connection that hangs after its handshake was unbounded) is done ([#92](https://github.com/bvst/TryggHverdag/pull/92), `0df5737`, 2026-10-19). BUG-52 (`gate:file` checked nothing for an edited L6 or L3 test, and exited 1) is done ([#93](https://github.com/bvst/TryggHverdag/pull/93), `20af31a`, 2026-10-20).
+**BUG-13**, **BUG-16**, **BUG-17**, **BUG-19**, **BUG-20**, **BUG-22**, **BUG-25**, **BUG-27**, **BUG-35**, **BUG-40**, **BUG-53**, **BUG-54**, **BUG-55**, **BUG-56**, **BUG-57**, **BUG-58**, **BUG-59** and **BUG-60** are queued for the owner to schedule, and **BUG-49** and **BUG-50** for the owner to decide (the rows in the M3 and M2 tables, above). BUG-57 to BUG-60 came from GRP-01; BUG-58 to BUG-60 are in `.claude/` and need the owner's approval, and BUG-57 touches it too.
 
 **D-085's loose ends** (the pull request merged, [#43](https://github.com/bvst/TryggHverdag/pull/43)).
 - **Verified:** `deploy-staging` on `ubuntu-26.04`. Run 36621209842, for
@@ -538,7 +526,9 @@ Still open from D-098's consequences (BUG-12, done):
 - **Verified:** every workflow names `ubuntu-26.04` since #48 (`05ca463`,
   which moved `ai-review.yml`): `grep` finds `ubuntu-latest` only in a comment
   in `ci.yml`.
-- **Not verified yet:** `infra-staging`, on the owner's next `plan`.
+- **Verified:** `infra-staging` on `ubuntu-26.04`. A-35's plan (run
+  39381315279, 2026-10-20) has the job label `ubuntu-26.04` and concluded
+  `success` (`gh api`, 2026-10-20); `infra-staging.yml` names it twice.
 - **On 26.04, `android-e2e`'s install was refused on attempt 1 in 3 of 6
   runs:** BUG-9's session error once, run 8's `NullPointerException` twice. The
   wait got past the NPE both times. BUG-9's own signature has not come back.
@@ -557,7 +547,9 @@ Still open from D-098's consequences (BUG-12, done):
   Resolved by D-099 (BUG-12, merged as `a47334f`).
 - D-036's nightly full mutation run.
 - D-079's hand-offs to M2.
-- AR-10's import rule, which nothing enforces.
+- AR-10's import rule, which nothing enforces. (GRP-01 added one such rule:
+  anything in the app outside `features/` reaches a feature through its index
+  alone. The others were not re-checked.)
 - ESLint reading Stryker's `.stryker-tmp/` during a run.
 - **From INF-10:**
   - the live attempt at drills 6 and 8 is an M5 go-live item (D-083). It runs
@@ -624,3 +616,4 @@ merged by hand.
 turns. Several entries exist only so the next session does not repeat them.
 [`progress/m1.md`](progress/m1.md) — M1, from 2026-09-29.
 [`progress/m2.md`](progress/m2.md) — M2, from 2026-10-01.
+[`progress/m3.md`](progress/m3.md) — M3, from 2026-10-20.
