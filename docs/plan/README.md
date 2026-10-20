@@ -190,7 +190,7 @@ session.
 | ID | Action | Why | Status |
 |----|--------|-----|--------|
 | A-01 | Ask the group which phones they use (iPhone or Android; brand and model) and who wants to join the private group | Which phone models the automated real-device tests cover; Google's 12-tester rule | ⬜ Open |
-| A-02 | Enrol the AS in the Apple Developer Program: look up the AS's D-U-N-S number (Apple has a lookup tool), and check that the AS has a public website and an email address on its own domain | Test builds on iPhones; Critical Alerts request | ⬜ Open (D-027) |
+| A-02 | Enrol the AS in the Apple Developer Program: look up the AS's D-U-N-S number (Apple has a lookup tool), and check that the AS has a public website and an email address on its own domain | Test builds on iPhones; Critical Alerts request | ✅ **Done** — the owner, 2026-10-20: the AS is enrolled (D-027) |
 | A-03 | Create a Google Play developer account for the AS (same D-U-N-S number) | Android test track | ⬜ Open (D-027) |
 | A-04 | Create a Clever Cloud account for the AS | Hosting (D-025) | ✅ Done (2026-09-20) |
 | A-05 | Create a repository on your paid GitHub account and give Claude Code access | Code and CI (D-029); public since 2026-09-28 (D-089) | ✅ Done (2026-09-20) |
