@@ -27,6 +27,7 @@
 // sweep or a claim here sees only what the test itself put in.
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import {
+  insertMemberRow,
   RACE_ROUNDS,
   RACERS,
   apiPath,
@@ -39,6 +40,7 @@ import {
   syntheticUuid,
   type FakeLog,
   type FakePush,
+  unusedService,
 } from '@trygghverdag/test-kit';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
@@ -143,10 +145,17 @@ function namedPool(applicationName: string, size = 2): pg.Pool {
 // database's own now(), in the statement that writes them.
 // ---------------------------------------------------------------------------
 
+/**
+ * A user, a member of the one group.
+ *
+ * RG-03 (GRP-01, the spec's "Existing assertions that change by design"):
+ * a plain user until GRP-01. A journey's walker and responders must now be
+ * current members of the walker's group, held under the start's lock, and a
+ * device authenticates only while its user is a member (D-137), so every
+ * person here is one. Nothing these tests assert changes.
+ */
 async function addUser(): Promise<string> {
-  const id = syntheticUuid();
-  await connection().query('insert into users (id) values ($1)', [id]);
-  return id;
+  return insertMemberRow(connection());
 }
 
 /** A device of this user, and the credential it would send. */
@@ -456,6 +465,16 @@ function realApi({
     closures: {
       close: () => Promise.reject(new Error('these tests close nothing')),
     },
+    // RG-03 (GRP-01; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): the join, the
+    // invitations, the members and the walker's removal of a responder
+    // (approach item 12) made four services part of what the API needs. These
+    // tests call none of their routes, so each is a stand-in that fails
+    // loudly if reached; nothing they assert changes.
+    joins: unusedService('these tests join nobody'),
+    invitations: unusedService('these tests invite nobody'),
+    members: unusedService('these tests read and remove no member'),
+    removals: unusedService('these tests remove no responder through the route'),
   });
 }
 

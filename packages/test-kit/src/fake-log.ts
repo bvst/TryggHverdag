@@ -45,6 +45,11 @@ import type { FakeCanaryOutcome } from './canary-ids.ts';
  * because another is in flight; a leftover journey of the canary's ended,
  * naming it; and a report to the canary's check that failed. None names a
  * user, a credential or a URL (PRIV-07).
+ * GRP-01 adds three, each a store call that failed, with its stage, the
+ * store's alone, and its SQLSTATE: a join, an invitation's creation and the
+ * admin's removal of a member. A refusal writes no line. None names an
+ * invitation code, a join key, a credential, a display name or a user
+ * (approach item 13, AC24).
  */
 export type FakeLogEvent =
   | { event: 'heartbeat_ignored'; reason: 'JOURNEY_ENDED'; journeyId: string }
@@ -90,7 +95,10 @@ export type FakeLogEvent =
     }
   | { event: 'canary_skipped'; reason: 'RUN_IN_FLIGHT' }
   | { event: 'canary_leftover_ended'; journeyId: string }
-  | { event: 'canary_report_failed' };
+  | { event: 'canary_report_failed' }
+  | { event: 'join_failed'; stage: 'store'; code: string | null }
+  | { event: 'invitation_failed'; stage: 'store'; code: string | null }
+  | { event: 'member_removal_failed'; stage: 'store'; code: string | null };
 
 export interface FakeLog {
   /** Records the event. */

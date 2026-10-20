@@ -100,6 +100,9 @@ const EVENT_LEVELS = {
   canary_run: 36,
   canary_leftover_ended: 41,
   canary_report_failed: 69,
+  join_failed: 70,
+  invitation_failed: 71,
+  member_removal_failed: 72,
 } as const satisfies Record<EventName, number>;
 
 /**
@@ -411,6 +414,11 @@ export function createLog({
         case 'canary_report_failed':
           logger.canary_report_failed({});
           return;
+        case 'join_failed':
+        case 'invitation_failed':
+        case 'member_removal_failed':
+          // GRP-01's red phase: the three events are typed, and not written yet.
+          throw new Error('not implemented (GRP-01)');
         default:
           // A type error the day an event joins LogEvent without a case. And
           // a throw, never a quiet nothing: the line that says a heartbeat

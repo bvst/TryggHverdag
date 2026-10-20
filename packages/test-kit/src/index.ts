@@ -32,9 +32,37 @@ export { CREDENTIAL_BYTES, syntheticCredential, syntheticUuid } from './syntheti
 export { fakeDeviceAuthenticator } from './fake-device-authenticator.ts';
 export type {
   AuthenticatedDevice,
+  DeviceAccess,
   FakeDeviceAuthenticator,
   RegisteredDevice,
 } from './fake-device-authenticator.ts';
+export { sha256Hex } from './sha256.ts';
+export {
+  BASE64URL_43,
+  CROCKFORD_ALPHABET,
+  INVITATION_CODE,
+  SHOWN_INVITATION_CODE,
+  inGroupsOfFive,
+  syntheticBootstrapCode,
+  syntheticDisplayName,
+  syntheticInvitationCode,
+  syntheticJoinKey,
+} from './synthetic-groups.ts';
+export { GROUP_RACERS, GROUP_STORE_BEHAVIOUR } from './group-store-behaviour.ts';
+export type {
+  AuditAsStored,
+  GroupDeviceAsStored,
+  GroupStoreBehaviour,
+  GroupStoreUnderTest,
+  InvitationAsStored,
+  MembershipAsStored,
+  RemovalMessageAsStored,
+  ResetAsStored,
+  WarningAsStored,
+} from './group-store-behaviour.ts';
+export { unusedService } from './unused-service.ts';
+export { insertMemberRow, theGroupRow } from './group-rows.ts';
+export type { Queryable } from './group-rows.ts';
 export {
   ALERT_RESOLUTIONS,
   JOURNEY_END_REASONS,
@@ -51,7 +79,19 @@ export {
 export type {
   AcknowledgementNotRecorded,
   AcknowledgementToRecord,
+  AuditAction,
   CanaryObservation,
+  CreateInvitationResult,
+  FakeRole,
+  JoinResult,
+  JoinToRecord,
+  MemberAsRead,
+  MemberRemovalRefusal,
+  RemoveMemberResult,
+  StoredAuditEntry,
+  StoredGroup,
+  StoredInvitation,
+  StoredMembership,
   StoredDevice,
   AlertForAcknowledgement,
   AlertForClosure,

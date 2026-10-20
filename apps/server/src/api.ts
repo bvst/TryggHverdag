@@ -35,7 +35,11 @@ import {
 import { Hono } from 'hono';
 import type { AcknowledgementService } from './modules/alerts/acknowledgement.ts';
 import type { ClosureService } from './modules/alerts/closure.ts';
+import type { InvitationService } from './modules/groups/invitations.ts';
+import type { JoinService } from './modules/groups/join.ts';
+import type { MemberService } from './modules/groups/members.ts';
 import type { HealthService } from './modules/health/service.ts';
+import type { RemovalService } from './modules/journeys/removal.ts';
 import type { JourneyService } from './modules/journeys/service.ts';
 import type { DeviceAuthenticator } from './ports.ts';
 
@@ -45,6 +49,13 @@ export interface ApiDependencies {
   devices: DeviceAuthenticator;
   acknowledgements: AcknowledgementService;
   closures: ClosureService;
+  // GRP-01 (approach item 12): the join, the invitations, the members and the
+  // walker's removal of a responder. In GRP-01's red phase no route reaches
+  // them yet.
+  joins: JoinService;
+  invitations: InvitationService;
+  members: MemberService;
+  removals: RemovalService;
 }
 
 /** What a request brings in besides its body: only what the credential check reads. */

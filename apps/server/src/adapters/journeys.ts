@@ -173,7 +173,6 @@ import {
   type AlertResolution,
   type AlertState,
   type JourneyForHeartbeat,
-  type JourneyForRemoval,
   type JourneyState,
   type UnendedJourney,
 } from '../domain/journey.ts';
@@ -195,6 +194,7 @@ import type {
   HeartbeatToRecord,
   HomeToRecord,
   InsertStartedResult,
+  JourneyForRemovalWithWalker,
   JourneyStore,
   LatestHeartbeat,
   MessageKind,
@@ -288,10 +288,14 @@ async function alertForAcknowledgement(
  * rows, one row each; or null for an ID no journey has. A plain read: it
  * takes no lock.
  */
-async function journeyForRemoval(db: Reader, journeyId: string): Promise<JourneyForRemoval | null> {
+async function journeyForRemoval(
+  db: Reader,
+  journeyId: string,
+): Promise<JourneyForRemovalWithWalker | null> {
   const rows = await db
     .select({
       id: journeys.id,
+      walkerId: journeys.walkerId,
       state: journeys.state,
       responderId: journeyResponders.responderId,
     })
@@ -304,6 +308,7 @@ async function journeyForRemoval(db: Reader, journeyId: string): Promise<Journey
   }
   return {
     id: first.id,
+    walkerId: first.walkerId,
     state: first.state,
     responderIds: rows.flatMap(({ responderId }) => (responderId === null ? [] : [responderId])),
   };
@@ -1115,7 +1120,14 @@ export function databaseJourneyStore(
       return unendedJourneyOf(db, walkerId);
     },
 
-    async existingUsers(ids: readonly string[]): Promise<ReadonlySet<string>> {
+    // GRP-01's red phase: renamed from `existingUsers`, its query unchanged, so
+    // it still answers which IDs are users. Membership of the walker's group,
+    // and the canary's walker naming its own responder alone (approach item
+    // 6), are the green phase's.
+    async eligibleResponders(
+      _walkerId: string,
+      ids: readonly string[],
+    ): Promise<ReadonlySet<string>> {
       const rows = await db
         .select({ id: users.id })
         .from(users)
@@ -1473,7 +1485,7 @@ export function databaseJourneyStore(
       return db.transaction((tx) => closeInside(tx, closure));
     },
 
-    journeyForRemoval(journeyId: string): Promise<JourneyForRemoval | null> {
+    journeyForRemoval(journeyId: string): Promise<JourneyForRemovalWithWalker | null> {
       return journeyForRemoval(db, journeyId);
     },
 

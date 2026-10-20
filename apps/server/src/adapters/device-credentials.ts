@@ -30,6 +30,15 @@ export function hashCredential(credential: string): string {
   return createHash('sha256').update(credential, 'utf8').digest('hex');
 }
 
+/**
+ * A new device credential (GRP-01-AC7, D-091): 32 bytes of
+ * `crypto.randomBytes`, base64url, and the SHA-256 the table keeps of it.
+ * GRP-01's red phase: the signature only.
+ */
+export function issueCredential(): { credential: string; hash: string } {
+  throw new Error('not implemented (GRP-01)');
+}
+
 export function databaseDeviceAuthenticator(db: Database): DeviceAuthenticator {
   return {
     // Rejects when the database cannot answer, rather than answering null:
@@ -41,7 +50,10 @@ export function databaseDeviceAuthenticator(db: Database): DeviceAuthenticator {
         .where(eq(devices.credentialHash, hashCredential(credential)))
         .limit(1);
 
-      return rows[0] ?? null;
+      const [row] = rows;
+      // GRP-01's red phase: every device admitted FULL, as every device was
+      // before. Admission by membership (approach item 5) is the green phase's.
+      return row === undefined ? null : { ...row, access: 'FULL' };
     },
   };
 }

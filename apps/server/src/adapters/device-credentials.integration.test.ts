@@ -9,18 +9,28 @@
 // device has, rejects rather than answering null when it cannot check, and
 // that after a credential has been used, no column of any table holds it.
 //
-// Devices are inserted directly, with hashCredential: nothing in this task
-// can create one, by design.
+// Devices are inserted directly, with hashCredential, as tests insert them
+// beside the join that GRP-01 brings (its issuer is held in
+// device-credentials.test.ts and the shared group suite).
+//
+// RG-03 (GRP-01, the spec's "Existing assertions that change by design"):
+// since GRP-01 a device authenticates only while its user is a current
+// member (approach item 5, D-137), and the adapter answers how far it is
+// admitted. So the users here are members of the one group, every exact
+// answer gains `access: 'FULL'`, and SM-01-AC13's list of what the adapter
+// exports gains the issuer. Nothing else these tests assert changes.
 //
 // PostgreSQL 15, staging's version. Needs Docker: CI's integration job runs
 // it, a cloud session cannot.
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import {
+  insertMemberRow,
   apiPath,
   endTestPool,
   fakeLog,
   syntheticCredential,
   syntheticUuid,
+  unusedService,
 } from '@trygghverdag/test-kit';
 import { createHash } from 'node:crypto';
 import type pg from 'pg';
@@ -80,10 +90,9 @@ function connection(): pg.Pool {
   return pool;
 }
 
+/** A user, a member of the one group: since GRP-01 only a member's device authenticates (D-137). */
 async function addUser(): Promise<string> {
-  const id = syntheticUuid();
-  await connection().query('insert into users (id) values ($1)', [id]);
-  return id;
+  return insertMemberRow(connection());
 }
 
 /** A device for this user, inserted as the login task will one day insert it: by its hash. */
@@ -138,6 +147,16 @@ function realApi() {
     closures: {
       close: () => Promise.reject(new Error('these tests close nothing')),
     },
+    // RG-03 (GRP-01; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): the join, the
+    // invitations, the members and the walker's removal of a responder
+    // (approach item 12) made four services part of what the API needs. These
+    // tests call none of their routes, so each is a stand-in that fails
+    // loudly if reached; nothing they assert changes.
+    joins: unusedService('these tests join nobody'),
+    invitations: unusedService('these tests invite nobody'),
+    members: unusedService('these tests read and remove no member'),
+    removals: unusedService('these tests remove no responder through the route'),
   });
 }
 
@@ -223,7 +242,7 @@ describe('SEC-07: only a hash of a device credential is kept', () => {
 
     expect(row.rows[0]?.credential_hash).toEqual(hashCredential(credential));
     await expect(databaseDeviceAuthenticator(database()).authenticate(credential)).resolves.toEqual(
-      { deviceId, userId },
+      { deviceId, userId, access: 'FULL' },
     );
   });
 
@@ -288,10 +307,12 @@ describe('SEC-07: the adapter answers who a credential belongs to, and nothing e
     await expect(authenticator.authenticate(phone.credential)).resolves.toEqual({
       deviceId: phone.deviceId,
       userId,
+      access: 'FULL',
     });
     await expect(authenticator.authenticate(tablet.credential)).resolves.toEqual({
       deviceId: tablet.deviceId,
       userId,
+      access: 'FULL',
     });
   });
 
@@ -308,13 +329,18 @@ describe('SEC-07: the adapter answers who a credential belongs to, and nothing e
     ).rejects.toThrow();
   });
 
-  test('SM-01-AC13: the adapter can only check a credential; it has no way to create a user, a device or a credential', () => {
-    // Before the login task nobody may be issued a credential, so the
-    // production adapter has no insert of its own. Tests insert rows
-    // directly, as above.
+  test('SM-01-AC13: the adapter checks a credential and, since GRP-01, issues one; it has no way of its own to create a user or a device', () => {
+    // RG-03 (GRP-01, the spec's "Existing assertions that change by design":
+    // "device-credentials.ts's header, 'This adapter can only check a
+    // credential', becomes the issuer's description"): before the login task
+    // nobody could be issued a credential; GRP-01 is the login task, and
+    // its issuer sits beside the hash (approach item 4), held to
+    // crypto.randomBytes(32) in device-credentials.test.ts. Still no insert
+    // of a user or a device here: the join's store writes those.
     expect(Object.keys(credentialsModule).sort()).toEqual([
       'databaseDeviceAuthenticator',
       'hashCredential',
+      'issueCredential',
     ]);
     expect(Object.keys(databaseDeviceAuthenticator(database()))).toEqual(['authenticate']);
   });

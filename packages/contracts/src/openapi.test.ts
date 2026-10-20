@@ -34,6 +34,12 @@ describe('the generated OpenAPI description', () => {
     // assertions that change by design" did not name this list (it named
     // the contract's key pins and this file's sha256 pins, expected
     // unchanged); the change is the same one. Still exact.
+    //
+    // RG-03 (GRP-01): its five routes are added by design (its spec's
+    // approach item 12 and "Contract changes"): the join and the member list
+    // at /group/members, GET /me, the invitations, the admin's removal of a
+    // member, and the walker's removal of a responder. Named here on
+    // purpose, as this comment asks. Still exact.
     expect(Object.keys(paths).sort()).toEqual(
       [
         '/health',
@@ -42,6 +48,11 @@ describe('the generated OpenAPI description', () => {
         '/journeys/{journeyId}/home',
         '/alerts/{alertId}/acknowledgement',
         '/alerts/{alertId}/closure',
+        '/me',
+        '/group/invitations',
+        '/group/members',
+        '/group/members/{userId}',
+        '/journeys/{journeyId}/responders/{responderId}',
       ].sort(),
     );
     expect(paths['/health']).toHaveProperty('get');
@@ -80,9 +91,33 @@ const HTTP_METHODS = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch'
 
 /**
  * The operations anyone may call without a device credential, as the
- * document names them, under the /v1 server. Only health, as in AC9's list.
+ * document names them, under the /v1 server: health, and since GRP-01 the
+ * join, as in AC9's list.
+ *
+ * RG-03 (GRP-01, the spec's "Existing assertions that change by design":
+ * SM-01-AC9's public list gains the join, on purpose): this is that list's
+ * published half, and gains it too.
  */
-const PUBLIC_OPERATIONS = ['GET /health'];
+const PUBLIC_OPERATIONS = ['GET /health', 'POST /group/members'];
+
+/** INVALID_RESPONDER's message before GRP-01, and the one GRP-01 publishes (approach item 6). */
+const INVALID_RESPONDER_BEFORE = 'A responder named is the walker, or is not a user.';
+const INVALID_RESPONDER_NOW =
+  "A responder named is the walker, or is not a member of the walker's group.";
+
+/**
+ * A path item's JSON, as it was published before GRP-01. GRP-01 changes one
+ * thing in the start route, INVALID_RESPONDER's message, a description and
+ * not a break (approach item 6, "Contract changes"); with that one message
+ * put back, the start route must hash as it always has. So each pin below
+ * still holds the rest of the route to the byte.
+ *
+ * RG-03 (GRP-01): the pins of '/journeys' read the route through this,
+ * where they read it as it is.
+ */
+function publishedBeforeGrp01(item: unknown): string {
+  return JSON.stringify(item).replaceAll(INVALID_RESPONDER_NOW, INVALID_RESPONDER_BEFORE);
+}
 
 /** The parts of an OpenAPI document these tests read. */
 interface Operation {
@@ -316,9 +351,10 @@ describe('SM-04: the "I’m home" route, as published (D-110)', () => {
     const { paths } = await described();
 
     for (const [route, digest] of Object.entries(UNCHANGED_PATH_ITEMS)) {
-      expect(createHash('sha256').update(JSON.stringify(paths[route])).digest('hex'), route).toBe(
-        digest,
-      );
+      expect(
+        createHash('sha256').update(publishedBeforeGrp01(paths[route])).digest('hex'),
+        route,
+      ).toBe(digest);
     }
   });
 });
@@ -398,9 +434,10 @@ describe('LOST-06 and SEC-07: the "I’m on it" route, as published (D-114)', ()
     const { paths } = await described();
 
     for (const [route, digest] of Object.entries(PATH_ITEMS_BEFORE_LOST_06)) {
-      expect(createHash('sha256').update(JSON.stringify(paths[route])).digest('hex'), route).toBe(
-        digest,
-      );
+      expect(
+        createHash('sha256').update(publishedBeforeGrp01(paths[route])).digest('hex'),
+        route,
+      ).toBe(digest);
     }
   });
 });
@@ -482,9 +519,155 @@ describe('LOST-08 and SEC-07: the "They’re safe" route, as published', () => {
     expect(Object.keys(PATH_ITEMS_BEFORE_LOST_08)).toHaveLength(5);
     expect(Object.keys(paths)).toContain(CLOSURE);
     for (const [route, digest] of Object.entries(PATH_ITEMS_BEFORE_LOST_08)) {
-      expect(createHash('sha256').update(JSON.stringify(paths[route])).digest('hex'), route).toBe(
-        digest,
-      );
+      expect(
+        createHash('sha256').update(publishedBeforeGrp01(paths[route])).digest('hex'),
+        route,
+      ).toBe(digest);
     }
+  });
+});
+
+// ===========================================================================
+// GRP-01: the join, the member's own read, the admin's three routes, and the
+// walker's removal of a responder, as published (approach item 12, "Contract
+// changes"). All additive: every route above is published as before but for
+// INVALID_RESPONDER's message, which says "member of the walker's group" now.
+// ===========================================================================
+
+/** Each new operation, as the document names it, and the answers it declares (the spec's "Contract changes"). */
+const GRP_01_OPERATIONS = [
+  { route: '/group/members', method: 'post', answers: ['201', '400', '404'] },
+  { route: '/me', method: 'get', answers: ['200', '401', '404'] },
+  { route: '/group/invitations', method: 'post', answers: ['201', '400', '401', '403'] },
+  { route: '/group/members', method: 'get', answers: ['200', '401', '403'] },
+  {
+    route: '/group/members/{userId}',
+    method: 'delete',
+    answers: ['200', '400', '401', '403', '404', '409'],
+  },
+  {
+    route: '/journeys/{journeyId}/responders/{responderId}',
+    method: 'delete',
+    answers: ['200', '400', '401', '404', '409'],
+  },
+] as const;
+
+/** A response's JSON schema, by status. */
+function schemaOf(operation: Operation | undefined, status: string): JsonSchema | undefined {
+  const response = operation?.responses?.[status] as
+    { content?: Record<string, { schema?: JsonSchema }> } | undefined;
+  return response?.content?.['application/json']?.schema;
+}
+
+describe('GRP-01: the new routes, as published', () => {
+  test.each(GRP_01_OPERATIONS)(
+    'GRP-01-AC10: $method $route is described under the /v1 server, answering $answers and no other',
+    async ({ route, method, answers }) => {
+      const { paths } = await described();
+      const document = await openApiDocument();
+
+      expect(document['servers']).toEqual([{ url: API_PREFIX }]);
+      expect(paths[route]?.[method]).toBeDefined();
+      expect(Object.keys(paths[route]?.[method]?.responses ?? {}).sort()).toEqual(
+        [...answers].sort(),
+      );
+    },
+  );
+
+  test('GRP-01-AC10: the join is public, as health is, and declares no 401; every other new route requires the bearer scheme', async () => {
+    const { paths, securitySchemes, securityOf } = await described();
+    const [bearerName] = Object.entries(securitySchemes)
+      .filter(([, scheme]) => scheme.type === 'http' && scheme.scheme?.toLowerCase() === 'bearer')
+      .map(([name]) => name);
+
+    expect(securityOf(paths['/group/members']?.['post'])).toEqual([]);
+    expect(Object.keys(paths['/group/members']?.['post']?.responses ?? {})).not.toContain('401');
+    for (const { route, method } of GRP_01_OPERATIONS.slice(1)) {
+      expect(securityOf(paths[route]?.[method]), `${method} ${route}`).toContainEqual({
+        [bearerName ?? '']: [],
+      });
+    }
+  });
+
+  test('GRP-01-AC2: the join’s body is exactly invitationCode, joinKey and displayName, each required, and nothing else', async () => {
+    const { paths } = await described();
+    const body = (
+      paths['/group/members']?.['post'] as
+        | {
+            requestBody?: {
+              content?: Record<
+                string,
+                { schema?: JsonSchema & { additionalProperties?: unknown } }
+              >;
+            };
+          }
+        | undefined
+    )?.requestBody?.content?.['application/json']?.schema;
+
+    expect(Object.keys(body?.properties ?? {}).sort()).toEqual([
+      'displayName',
+      'invitationCode',
+      'joinKey',
+    ]);
+    expect([...(body?.required ?? [])].sort()).toEqual([
+      'displayName',
+      'invitationCode',
+      'joinKey',
+    ]);
+    expect(body?.additionalProperties).toBe(false);
+  });
+
+  test('GRP-01-AC3: the join’s 201 body is the credential, the user’s ID and the role, ADMIN or MEMBER', async () => {
+    const { paths } = await described();
+    const schema = schemaOf(paths['/group/members']?.['post'], '201');
+
+    expect(Object.keys(schema?.properties ?? {}).sort()).toEqual(['credential', 'role', 'userId']);
+    const role = schema?.properties?.['role'];
+    expect([...(role?.enum ?? [])].sort()).toEqual(['ADMIN', 'MEMBER']);
+    expect(schema?.properties?.['userId']?.format).toBe('uuid');
+  });
+
+  test('GRP-01-AC16 and AC22: both removals answer exactly { "outcome": "REMOVED" }', async () => {
+    const { paths } = await described();
+
+    for (const [route, method] of [
+      ['/group/members/{userId}', 'delete'],
+      ['/journeys/{journeyId}/responders/{responderId}', 'delete'],
+    ] as const) {
+      const schema = schemaOf(paths[route]?.[method], '200');
+      const outcome = schema?.properties?.['outcome'];
+      expect(Object.keys(schema?.properties ?? {}), route).toEqual(['outcome']);
+      expect(outcome?.const === undefined ? outcome?.enum : [outcome.const], route).toEqual([
+        'REMOVED',
+      ]);
+    }
+  });
+
+  test('GRP-01-AC16 and AC23: every ID in a new path is a required path parameter, a UUID, and nothing is in the query or a header', async () => {
+    const { paths } = await described();
+
+    for (const [route, method, names] of [
+      ['/group/members/{userId}', 'delete', ['userId']],
+      ['/journeys/{journeyId}/responders/{responderId}', 'delete', ['journeyId', 'responderId']],
+    ] as const) {
+      const parameters =
+        (paths[route]?.[method] as { parameters?: Parameter[] } | undefined)?.parameters ?? [];
+      expect(
+        parameters.map(({ name, in: where, required }) => ({ name, where, required })),
+        route,
+      ).toEqual(names.map((name) => ({ name, where: 'path', required: true })));
+      expect(
+        parameters.map(({ schema }) => schema?.format),
+        route,
+      ).toEqual(names.map(() => 'uuid'));
+    }
+  });
+
+  test('GRP-01-AC12: the start route publishes INVALID_RESPONDER’s new message, and the old one no longer', async () => {
+    const { paths } = await described();
+    const start = JSON.stringify(paths['/journeys']);
+
+    expect(start).toContain(INVALID_RESPONDER_NOW);
+    expect(start).not.toContain(INVALID_RESPONDER_BEFORE);
   });
 });

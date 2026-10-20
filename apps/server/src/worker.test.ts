@@ -1367,6 +1367,14 @@ describe('runWorkerProcess, when stopping fails', () => {
 
 const CHECKING_IN = /^worker: checking in with Healthchecks\.io\b/;
 const NOT_CHECKING_IN = /^worker: not checking in with Healthchecks\.io\b/;
+/**
+ * GRP-01-AC25: the worker's check-in withheld because the SMS check is not
+ * reporting. The Healthchecks.io line says it is withheld and names the SMS
+ * check's setting, never its value. It does not say "SMS check" itself, so
+ * the SMS check's own line, which says why it does not report and what then
+ * goes unpaged, stays the one line that does.
+ */
+const WITHHELD = /\bwithheld\b.*\bHEALTHCHECKS_SMS_URL\b|\bHEALTHCHECKS_SMS_URL\b.*\bwithheld\b/;
 const CHECK_IN_FAILED = 'worker: Healthchecks.io check-in failed: ';
 /** The line the worker says at start until M3 brings a push provider (LOST-02, approach item 5). */
 const NO_PUSH = /^worker: .*\bno push provider\b/i;
@@ -1475,14 +1483,27 @@ function runHeartbeat(runner: ReturnType<typeof recordingRunner>): Promise<void>
  * is 'default' — a check-in the test owns. Returns what it wrote, how it
  * exited, and every URL it asked a check-in to be made for.
  */
+/**
+ * RG-03 (GRP-01-AC25, D-122, D-137; not in the spec's "Existing assertions
+ * that change by design", which missed it): since GRP-01 the worker checks in
+ * only while its SMS check reports, so the INF-08 tests below, which are about
+ * the check-in itself, are given what staging runs: when the worker's URL is
+ * usable, a usable SMS check URL of its own, a different synthetic check,
+ * unless a test says otherwise. Every assertion they make is unchanged; the
+ * withheld check-in is GRP-01-AC25's, tested on its own below.
+ */
 function workerProcess({
   healthchecks,
   instanceType,
   createCheckIn,
+  healthchecksSms = healthchecks.checkingIn
+    ? readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: syntheticPingUrl() })
+    : undefined,
 }: {
   healthchecks: HealthchecksSetting;
   instanceType?: string;
   createCheckIn?: ((url: string) => CheckIn) | 'default';
+  healthchecksSms?: HealthchecksSetting | undefined;
 }) {
   const runner = recordingRunner();
   const signals = new EventEmitter();
@@ -1497,6 +1518,8 @@ function workerProcess({
     signals,
     instanceType,
     healthchecks,
+    ...(healthchecksSms === undefined ? {} : { healthchecksSms }),
+    createSmsAlarm: () => fakeSmsAlarm(),
     ...quietLoops(),
     ...(make === 'default'
       ? {}
@@ -2091,6 +2114,10 @@ describe('REL-08: runWorkerProcess and HEALTHCHECKS_WORKER_URL', () => {
         runWorker: runner.run,
         signals,
         healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: PING_URL }),
+        // RG-03 (GRP-01-AC25): the check-in runs only beside a reporting SMS
+        // check, so this is given one of its own, as staging has.
+        healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: syntheticPingUrl() }),
+        createSmsAlarm: () => fakeSmsAlarm(),
         createCheckIn: () => checkIn,
         ...quietLoops(),
         exit: () => undefined,
@@ -2516,6 +2543,10 @@ describe('REL-08 and LOST-02: a stop that no longer waits for Healthchecks.io (D
       runWorker: runner.run,
       signals,
       healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: PING_URL }),
+      // RG-03 (GRP-01-AC25): the check-in runs only beside a reporting SMS
+      // check, so this is given one of its own, as staging has.
+      healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: syntheticPingUrl() }),
+      createSmsAlarm: () => fakeSmsAlarm(),
       createCheckIn: () => checkIn,
       ...quietLoops(),
       write: () => undefined,
@@ -2567,6 +2598,10 @@ describe('REL-08 and LOST-02: a check-in the stop cancelled says so', () => {
       runWorker: runner.run,
       signals,
       healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: PING_URL }),
+      // RG-03 (GRP-01-AC25): the check-in runs only beside a reporting SMS
+      // check, so this is given one of its own, as staging has.
+      healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: syntheticPingUrl() }),
+      createSmsAlarm: () => fakeSmsAlarm(),
       createCheckIn: (url) => healthchecksCheckIn({ url, fetch: neverAnswers }),
       ...quietLoops(),
       write: (text) => {
@@ -4274,13 +4309,16 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
     const exits: number[] = [];
     const created: string[] = [];
     const checkIns: string[] = [];
+    // GRP-01-AC25: the check-ins made, kept, so a test can see one was never sent.
+    const events: string[] = [];
+    const checkIn = fakeCheckIn({ events });
     const running = runWorkerProcess('postgres://example/db', {
       runWorker: runner.run,
       signals,
       healthchecks,
       createCheckIn: (url: string) => {
         checkIns.push(url);
-        return fakeCheckIn();
+        return checkIn;
       },
       ...(healthchecksSms === undefined ? {} : { healthchecksSms }),
       createSmsAlarm: (url: string) => {
@@ -4296,7 +4334,7 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
         exits.push(code);
       },
     });
-    return { runner, signals, written, exits, created, checkIns, running };
+    return { runner, signals, written, exits, created, checkIns, checkIn, events, running };
   }
 
   async function stopSmsWorker(worker: ReturnType<typeof smsWorkerProcess>) {
@@ -4424,17 +4462,30 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
     }
   });
 
-  test('LOST-07-AC11: with HEALTHCHECKS_SMS_URL set to the same address as HEALTHCHECKS_WORKER_URL, the worker checks in there but makes no SMS alarm for it, and says once at start that the SMS check does not report, naming both variables and neither value', async () => {
+  test('LOST-07-AC11: with HEALTHCHECKS_SMS_URL set to the same address as HEALTHCHECKS_WORKER_URL, the worker makes no SMS alarm for it, and says once at start that the SMS check does not report, naming both variables and neither value; and, since GRP-01, it does not check in there either', async () => {
     // Two faults behind one signal (D-115, REL-08): an SMS check reporting to
     // the worker's own check would turn "worker down" and "SMS failing" into
     // one page, and an "ok" from one would clear the other's "failing".
+    //
+    // RG-03 (GRP-01-AC25, D-122's condition for the removal route, D-137;
+    // not in the spec's "Existing assertions that change by design", which
+    // missed it): this said "the worker checks in there", and held it with
+    // `checkIns` equal to [PING_URL] and the CHECKING_IN line. The SMS check
+    // naming the worker's own address is one of AC25's three cases of an SMS
+    // check that does not report, and then the worker's check-in is
+    // withheld, so `staging-worker` pages. So the worker no longer checks in
+    // after a fresh beat, and its Healthchecks.io line says it does not, and
+    // why. Everything else this held is held as it was.
     const worker = smsWorkerProcess({
       healthchecks: readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: PING_URL }),
       healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: PING_URL }),
     });
     await settle();
+    answerLikePostgres(worker.runner, worker.events);
+    await runHeartbeat(worker.runner);
 
-    expect(worker.checkIns).toEqual([PING_URL]);
+    expect(worker.checkIn.calls).toBe(0);
+    expect(worker.events).not.toContain(CHECKED_IN);
     expect(worker.created).toEqual([]);
     const lines = smsCheckLines(worker.written);
     expect(lines).toHaveLength(1);
@@ -4444,7 +4495,8 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
     expect(lines[0]).not.toContain('Healthchecks.io');
     expect(worker.written.join('')).not.toContain(CHECK);
     expect(healthchecksLines(worker.written)).toHaveLength(1);
-    expect(healthchecksLines(worker.written)[0]).toMatch(CHECKING_IN);
+    expect(healthchecksLines(worker.written)[0]).toMatch(NOT_CHECKING_IN);
+    expect(healthchecksLines(worker.written)[0]).toMatch(WITHHELD);
     expect(runTogether(worker.written)).toEqual([]);
     expect(worker.exits).toEqual([]);
 
@@ -4482,7 +4534,13 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
     await stopSmsWorker(worker);
   });
 
-  test('LOST-07-AC11: two settings with the same UUID are one check, however each is spelled: with the worker’s URL on one host and the SMS check’s on another, the worker checks in at the worker’s but makes no SMS alarm, and says once at start the line it says for the same address, naming both variables and neither value', async () => {
+  test('LOST-07-AC11: two settings with the same UUID are one check, however each is spelled: with the worker’s URL on one host and the SMS check’s on another, the worker makes no SMS alarm, says once at start the line it says for the same address, naming both variables and neither value; and, since GRP-01, does not check in', async () => {
+    // RG-03 (GRP-01-AC25; not in the spec's "Existing assertions that change
+    // by design", which missed it): this said "the worker checks in at the
+    // worker's", held with `checkIns` equal to [workerUrl] and the CHECKING_IN
+    // line. One check behind both is an SMS check that does not report, so
+    // the worker's check-in is now withheld (AC25): no check-in after a fresh
+    // beat, and the Healthchecks.io line says so. The rest is as it was.
     // LOST-07 review loop 2 (safety-reviewer should-fix 1, D-116): a check is
     // its UUID, so "different" compares UUIDs, not spellings. Config refuses
     // most other spellings of one URL, and takes any https: host, so the two
@@ -4501,8 +4559,11 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
       healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: PING_URL }),
     });
     await settle();
+    answerLikePostgres(worker.runner, worker.events);
+    await runHeartbeat(worker.runner);
 
-    expect(worker.checkIns).toEqual([workerUrl]);
+    expect(worker.checkIn.calls).toBe(0);
+    expect(worker.events).not.toContain(CHECKED_IN);
     expect(worker.created).toEqual([]);
     const lines = smsCheckLines(worker.written);
     expect(lines).toHaveLength(1);
@@ -4513,7 +4574,8 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
     expect(worker.written.join('')).not.toContain(check);
     expect(worker.written.join('')).not.toContain('localhost');
     expect(healthchecksLines(worker.written)).toHaveLength(1);
-    expect(healthchecksLines(worker.written)[0]).toMatch(CHECKING_IN);
+    expect(healthchecksLines(worker.written)[0]).toMatch(NOT_CHECKING_IN);
+    expect(healthchecksLines(worker.written)[0]).toMatch(WITHHELD);
     expect(runTogether(worker.written)).toEqual([]);
     expect(worker.exits).toEqual([]);
 
@@ -4639,6 +4701,207 @@ describe('LOST-07 and D-079: runWorkerProcess and HEALTHCHECKS_SMS_URL', () => {
       await stopSmsWorker(worker);
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// GRP-01-AC25 (approach item 11, D-122's condition for the removal route,
+// D-137): when the worker's own check-in is configured and the SMS check is
+// not reporting (unset, unusable, or the worker's own check), the worker does
+// not check in, so `staging-worker` pages within its grace. It still starts,
+// and its watchdog and senders still run: refusing to start would stop every
+// alert to page about one (F7). With neither URL set, as on a developer's
+// machine, nothing changes; with a usable SMS URL of its own, the check-in
+// runs as before.
+// ---------------------------------------------------------------------------
+
+describe('GRP-01-AC25: the worker’s check-in is withheld while the SMS check is not reporting', () => {
+  /**
+   * runWorkerProcess with a usable HEALTHCHECKS_WORKER_URL unless told
+   * otherwise and the SMS setting given; a check-in that records what it is
+   * asked, and loops that count their runs, each bounded as the quiet loops
+   * are.
+   */
+  function withheldWorker({
+    healthchecks = readHealthchecksSetting({ HEALTHCHECKS_WORKER_URL: PING_URL }),
+    healthchecksSms,
+  }: {
+    healthchecks?: HealthchecksSetting;
+    healthchecksSms?: HealthchecksSetting;
+  }) {
+    const runner = recordingRunner();
+    const signals = new EventEmitter();
+    const events: string[] = [];
+    const written: string[] = [];
+    const exits: number[] = [];
+    const checkIn = fakeCheckIn({ events });
+    const counts = { sweeps: 0, deliveries: 0, smsDeliveries: 0 };
+    const bound = turnBound({ what: 'the counted loops', most: 3 * RUNS_PER_TURN });
+    loopBounds.push(bound);
+    const running = runWorkerProcess('postgres://example/db', {
+      runWorker: runner.run,
+      signals,
+      healthchecks,
+      ...(healthchecksSms === undefined ? {} : { healthchecksSms }),
+      createCheckIn: () => checkIn,
+      createSmsAlarm: () => fakeSmsAlarm(),
+      ...quietLoops(),
+      watchdog: {
+        sweep: () => {
+          counts.sweeps += 1;
+          return bound.answer(() => ({ ok: true, opened: 0, escalated: 0, stuck: 0 }));
+        },
+      },
+      sender: {
+        deliverDue: () => {
+          counts.deliveries += 1;
+          return bound.answer(() => ({ sent: 0, failed: 0 }));
+        },
+      },
+      smsSender: {
+        deliverDue: () => {
+          counts.smsDeliveries += 1;
+          return bound.answer(() => ({ sent: 0, failed: 0 }));
+        },
+      },
+      keepAlive: () => undefined,
+      write: (text) => {
+        written.push(text);
+      },
+      exit: (code) => {
+        exits.push(code);
+      },
+    });
+    return { runner, signals, events, written, exits, checkIn, counts, running };
+  }
+
+  async function stop(worker: ReturnType<typeof withheldWorker>) {
+    worker.signals.emit('SIGTERM');
+    await expect(worker.running).resolves.toBeUndefined();
+    await settle();
+    expect(worker.exits).toEqual([0]);
+  }
+
+  const NOT_REPORTING = [
+    ['unset', () => undefined],
+    ['empty', () => readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: '' })],
+    [
+      'an http: address',
+      () => readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: `http://127.0.0.1:1/${CHECK}` }),
+    ],
+    [
+      'not an address at all',
+      () => readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: `hc-ping.com/${CHECK}` }),
+    ],
+    [
+      'the worker’s own address',
+      () => readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: PING_URL }),
+    ],
+    [
+      'the worker’s own check, on another host',
+      () => readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: `https://localhost:1/${CHECK}` }),
+    ],
+  ] as const;
+
+  test.each(NOT_REPORTING)(
+    'GRP-01-AC25: with HEALTHCHECKS_WORKER_URL usable and HEALTHCHECKS_SMS_URL %s, a fresh beat is followed by no check-in, ever',
+    async (_what, sms) => {
+      const healthchecksSms = sms();
+      const worker = withheldWorker(healthchecksSms === undefined ? {} : { healthchecksSms });
+      await settle();
+      answerLikePostgres(worker.runner, worker.events);
+
+      await expect(runHeartbeat(worker.runner)).resolves.toBeUndefined();
+      await expect(runHeartbeat(worker.runner)).resolves.toBeUndefined();
+
+      expect(worker.events).toContain(BEAT_READ);
+      expect(worker.events).not.toContain(CHECKED_IN);
+      expect(worker.checkIn.calls).toBe(0);
+      expect(worker.exits).toEqual([]);
+
+      await stop(worker);
+    },
+  );
+
+  test.each(NOT_REPORTING)(
+    'GRP-01-AC25: with HEALTHCHECKS_SMS_URL %s, the start line says the worker’s check-in is withheld because of HEALTHCHECKS_SMS_URL, never that it checks in, naming no URL; and the SMS check’s line still says what goes unpaged',
+    async (_what, sms) => {
+      const healthchecksSms = sms();
+      const worker = withheldWorker(healthchecksSms === undefined ? {} : { healthchecksSms });
+      await settle();
+
+      const lines = healthchecksLines(worker.written);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(NOT_CHECKING_IN);
+      expect(lines[0]).toMatch(WITHHELD);
+      expect(lines[0]).not.toMatch(/\bSMS check\b/i);
+      expect(linesOf(worker.written).filter((line) => CHECKING_IN.test(line))).toEqual([]);
+      const smsLines = smsCheckLines(worker.written);
+      expect(smsLines).toHaveLength(1);
+      expect(smsLines[0]).toMatch(/^worker: the SMS check is not reporting: /);
+      expect(smsLines[0]).toMatch(
+        /\bNeither an SMS left unsent nor an alert with no responder left to tell is paged\.$/,
+      );
+      expect(worker.written.join('')).not.toContain(CHECK);
+      expect(worker.written.join('')).not.toContain('localhost');
+      expect(worker.written.join('')).not.toContain('127.0.0.1');
+      expect(runTogether(worker.written)).toEqual([]);
+
+      await stop(worker);
+    },
+  );
+
+  test.each(NOT_REPORTING)(
+    'GRP-01-AC25: with HEALTHCHECKS_SMS_URL %s and the check-in withheld, the worker starts and stays up: the watchdog sweeps and both senders run',
+    async (_what, sms) => {
+      const healthchecksSms = sms();
+      const worker = withheldWorker(healthchecksSms === undefined ? {} : { healthchecksSms });
+      await settle();
+
+      expect(worker.runner.options()?.crontab).toBe(HEARTBEAT_CRONTAB);
+      expect(worker.counts.sweeps).toBeGreaterThanOrEqual(1);
+      expect(worker.counts.deliveries).toBeGreaterThanOrEqual(1);
+      expect(worker.counts.smsDeliveries).toBeGreaterThanOrEqual(1);
+      expect(worker.exits).toEqual([]);
+
+      await stop(worker);
+    },
+  );
+
+  test('GRP-01-AC25: with a usable SMS URL of its own, the check-in runs as today: one check-in after a fresh beat, and the CHECKING_IN line with no word of withholding', async () => {
+    const worker = withheldWorker({
+      healthchecksSms: readHealthchecksSmsSetting({ HEALTHCHECKS_SMS_URL: syntheticPingUrl() }),
+    });
+    await settle();
+    answerLikePostgres(worker.runner, worker.events);
+
+    await expect(runHeartbeat(worker.runner)).resolves.toBeUndefined();
+
+    expect(worker.events.at(-1)).toBe(CHECKED_IN);
+    expect(worker.checkIn.calls).toBe(1);
+    const lines = healthchecksLines(worker.written);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(CHECKING_IN);
+    expect(worker.written.join('')).not.toMatch(/\bwithheld\b/);
+
+    await stop(worker);
+  });
+
+  test('GRP-01-AC25: with neither URL set, as on a developer’s machine, nothing changes: no check-in, the INF-08 line that it is not checking in because HEALTHCHECKS_WORKER_URL is not set, and no word of withholding', async () => {
+    const worker = withheldWorker({ healthchecks: readHealthchecksSetting({}) });
+    await settle();
+    answerLikePostgres(worker.runner, worker.events);
+
+    await expect(runHeartbeat(worker.runner)).resolves.toBeUndefined();
+
+    expect(worker.checkIn.calls).toBe(0);
+    const lines = healthchecksLines(worker.written);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(NOT_CHECKING_IN);
+    expect(lines[0]).toContain(reasonOf(readHealthchecksSetting({})));
+    expect(worker.written.join('')).not.toMatch(/\bwithheld\b/);
+
+    await stop(worker);
+  });
 });
 
 // ---------------------------------------------------------------------------

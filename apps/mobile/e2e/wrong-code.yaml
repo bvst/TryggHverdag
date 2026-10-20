@@ -1,0 +1,40 @@
+# GRP-01-AC27 (L7): a code no invitation has, typed into a fresh install, shows
+# the one message, ask the admin for a new invitation, and the member screen
+# never shows.
+#
+# This flow needs the server CI's android-e2e job starts before the flows (see
+# first-admin-invites.yaml). It passes whether or not the first admin has
+# joined: a code that was never issued is refused either way.
+#
+# Nothing a reader sees is written here: scripts/e2e-android.mjs passes every
+# string in with -e, read from nb.json.
+#   APP_ID        the Android application ID
+#   JOIN_TITLE    grp.join.title
+#   CODE_LABEL    grp.join.codeLabel
+#   NAME_LABEL    grp.join.nameLabel
+#   JOIN_SUBMIT   grp.join.submit
+#   NOT_VALID     grp.join.notValid
+#   MEMBER_TITLE  grp.member.title
+# The code and the name typed are synthetic (RG-07): the code is well-formed,
+# so the server, not the app, refuses it.
+#
+# Never add `retry:` or `optional: true` to a step here (see app-starts.yaml).
+appId: ${APP_ID}
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: ${JOIN_TITLE}
+    timeout: 30000
+- tapOn: ${CODE_LABEL}
+- inputText: 'ZZZZZ-ZZZZZ-ZZZZZ-ZZZZZ'
+- tapOn: ${NAME_LABEL}
+- inputText: 'Testmedlem Emulator'
+- hideKeyboard
+- tapOn: ${JOIN_SUBMIT}
+- extendedWaitUntil:
+    visible: ${NOT_VALID}
+    timeout: 30000
+- assertVisible: ${NOT_VALID}
+- assertNotVisible: ${MEMBER_TITLE}
+- assertVisible: ${JOIN_TITLE}

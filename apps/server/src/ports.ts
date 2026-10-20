@@ -7,6 +7,7 @@
  * satisfy them structurally without importing any server code.
  */
 import type { CanaryOutcome } from './domain/canary.ts';
+import type { MemberRemovalRefusal, Role } from './domain/groups.ts';
 import type {
   AcknowledgeOutcome,
   AlertForAcknowledgement,
@@ -77,10 +78,19 @@ export interface SmsAlarm {
   report(status: 'ok' | 'failing', signal?: AbortSignal): Promise<void>;
 }
 
-/** Who a device credential belongs to. */
+/**
+ * How far a device is admitted (GRP-01, approach item 5, D-137): `FULL` for a
+ * current member's device or the canary's; `WALKER_ONLY` for a removed
+ * member's device that started a journey not yet ended, which may send that
+ * journey's heartbeats and "I'm home" and nothing else.
+ */
+export type DeviceAccess = 'FULL' | 'WALKER_ONLY';
+
+/** Who a device credential belongs to, and how far it is admitted. */
 export interface AuthenticatedDevice {
   deviceId: string;
   userId: string;
+  access: DeviceAccess;
 }
 
 /**
@@ -105,9 +115,15 @@ export interface StartedJourney {
   startedAt: Date;
 }
 
-/** Stored, or refused because the walker already has an unended journey. */
+/**
+ * Stored; or refused because the walker already has an unended journey; or
+ * refused because a responder named is not one the walker may name under the
+ * start's lock (GRP-01, approach item 6).
+ */
 export type InsertStartedResult =
-  { inserted: true; journeyId: string } | { inserted: false; unendedJourneyId: string };
+  | { inserted: true; journeyId: string }
+  | { inserted: false; unendedJourneyId: string }
+  | { inserted: false; refused: 'INVALID_RESPONDER' };
 
 /** A position as the phone recorded it. Its time is the phone's: a label, never a decision (REL-01). */
 export interface HeartbeatPosition {
@@ -458,12 +474,17 @@ export interface Sms {
   send(message: SmsMessage): Promise<SmsResult>;
 }
 
-/** Journeys, their responders, their heartbeats, and the users all of them must be (SM-01, LOST-01). */
+/** Journeys, their responders, their heartbeats, and whom a walker may name (SM-01, LOST-01, GRP-01). */
 export interface JourneyStore {
   /** The walker's journey in any state but ENDED, or null. */
   unendedJourneyOf(walkerId: string): Promise<UnendedJourney | null>;
-  /** Which of these IDs are users. */
-  existingUsers(ids: readonly string[]): Promise<ReadonlySet<string>>;
+  /**
+   * Which of these IDs the walker may name as responders (GRP-01, approach
+   * item 6): current members of the walker's group other than the walker;
+   * for the canary's walker, the canary's responder alone; for anyone else,
+   * nobody.
+   */
+  eligibleResponders(walkerId: string, ids: readonly string[]): Promise<ReadonlySet<string>>;
   /**
    * Stores the journey ACTIVE with its responders, all of it or none of it.
    * When the walker already has an unended journey, as when two starts race
@@ -592,13 +613,23 @@ export type RemoveResponderResult =
   | { outcome: 'removed'; resetAlertId: string | null; messages: AlertMessage[] }
   | { outcome: 'not_removed'; decision: Exclude<RemoveOutcome, { type: 'removed' }> };
 
+/**
+ * A journey as the removal's read answers it: what the removal rule reads,
+ * and the journey's walker, the one caller the route may let remove a
+ * responder (GRP-01, approach item 10). Beside the domain's type rather than
+ * in it: the rule itself reads no walker.
+ */
+export interface JourneyForRemovalWithWalker extends JourneyForRemoval {
+  walkerId: string;
+}
+
 /** What removing a responder needs of the journeys (SM-10, D-122, D-123). */
 export interface ResponderStore {
   /**
-   * The journey this ID names, in any state, with its responder rows, read
-   * without a lock; or null when no journey has that ID.
+   * The journey this ID names, in any state, with its walker and its
+   * responder rows, read without a lock; or null when no journey has that ID.
    */
-  journeyForRemoval(journeyId: string): Promise<JourneyForRemoval | null>;
+  journeyForRemoval(journeyId: string): Promise<JourneyForRemovalWithWalker | null>;
   /**
    * In one transaction, with a lock limit of its own (LOCK_WAIT_LIMIT_MS),
    * whichever pool runs it: takes the journey's row first (D-112), asks the
@@ -612,6 +643,51 @@ export interface ResponderStore {
    * rule's other outcome. Rejects, having written nothing, on any failure.
    */
   removeResponder(removal: RemovalToRecord): Promise<RemoveResponderResult>;
+}
+
+/** A member as the group store reads one (GRP-01): who, the name they gave, and their role. */
+export interface MemberAsRead {
+  userId: string;
+  displayName: string;
+  role: Role;
+}
+
+/**
+ * A join's answer (GRP-01-AC2 to AC8): a member, with the credential issued
+ * for the phone that joined, once; or the one refusal, with nothing written.
+ */
+export type JoinResult =
+  { outcome: 'joined'; userId: string; role: Role; credential: string } | { outcome: 'not_valid' };
+
+/** A join as the group store takes it: the code as the domain normalised it, the phone's join key, and the name typed. */
+export interface JoinToRecord {
+  invitationCode: string;
+  joinKey: string;
+  displayName: string;
+}
+
+/** The admin's invitation (GRP-01-AC1): its code, shown once, and when it expires; or refused. */
+export type CreateInvitationResult =
+  { outcome: 'created'; invitationCode: string; expiresAt: Date } | { outcome: 'not_the_admin' };
+
+/** The admin's removal of a member (GRP-01-AC17): removed, all of it, or refused, none of it. */
+export type RemoveMemberResult =
+  { outcome: 'removed' } | { outcome: 'not_removed'; reason: MemberRemovalRefusal };
+
+/** The one group, its members, its invitations and its audit log (GRP-01, D-137). */
+export interface GroupStore {
+  /** GRP-01-AC8: the first admin, while no group exists; `not_valid` once one does. */
+  bootstrapGroup(request: { displayName: string }): Promise<JoinResult>;
+  /** GRP-01-AC2 to AC6: a join with an invitation, decided at the database's now(). */
+  joinWithInvitation(request: JoinToRecord): Promise<JoinResult>;
+  /** This user's membership, or null for a user who is no member. */
+  memberOf(userId: string): Promise<MemberAsRead | null>;
+  /** GRP-01-AC9: every member of the group. */
+  members(): Promise<MemberAsRead[]>;
+  /** GRP-01-AC1: the admin's invitation and its audit row, in one transaction; or `not_the_admin`. */
+  createInvitation(request: { adminId: string }): Promise<CreateInvitationResult>;
+  /** GRP-01-AC16, AC17, AC20: the admin's removal of a member, in one transaction. */
+  removeMember(request: { adminId: string; memberId: string }): Promise<RemoveMemberResult>;
 }
 
 /**
@@ -738,7 +814,10 @@ export type LogEvent =
     }
   | { event: 'canary_skipped'; reason: 'RUN_IN_FLIGHT' }
   | { event: 'canary_leftover_ended'; journeyId: string }
-  | { event: 'canary_report_failed' };
+  | { event: 'canary_report_failed' }
+  | { event: 'join_failed'; stage: 'store'; code: string | null }
+  | { event: 'invitation_failed'; stage: 'store'; code: string | null }
+  | { event: 'member_removal_failed'; stage: 'store'; code: string | null };
 
 /** Where the server writes what happened, one event at a time. */
 export interface Log {

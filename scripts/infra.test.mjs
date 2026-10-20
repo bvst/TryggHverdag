@@ -642,3 +642,54 @@ describe('REL-10: staging is configured for the canary by Terraform, and refuses
     }
   });
 });
+
+// GRP-01-AC8 (approach item 8, D-136 answer 1): the first admin's bootstrap
+// code. Terraform makes it, 16 random bytes written as upper-case hex, 32
+// characters the API's normaliser takes, and hands it to the API as
+// ADMIN_BOOTSTRAP_CODE. Like the canary's credential (D-128), it lives only in
+// Terraform's state and the app's environment: no variable, no tfvars, no
+// GitHub secret, since whoever holds it can make themself the group's admin
+// while no group exists. The owner reads it in Clever Cloud's console (A-36).
+describe('GRP-01: the first admin’s bootstrap code, made by Terraform', () => {
+  /** The app's environment in main.tf. */
+  const environment = () => /\n {2}environment = \{\n([\s\S]*?)\n {2}\}\n/.exec(main)?.[1] ?? '';
+  const resource = () =>
+    /^resource "random_id" "admin_bootstrap_code" \{\n([\s\S]*?)\n\}$/m.exec(main)?.[1];
+
+  test('GRP-01-AC8: main.tf makes the code with random_id.admin_bootstrap_code, 16 bytes, with no prefix', () => {
+    expect(resource(), 'main.tf declares no random_id "admin_bootstrap_code"').toBeDefined();
+    expect(resource()).toMatch(/^\s*byte_length\s*=\s*16\s*$/m);
+    // A prefix would put characters before the hex that no code has.
+    expect(resource()).not.toMatch(/^\s*prefix\s*=/m);
+  });
+
+  test('GRP-01-AC8: the app’s environment sets ADMIN_BOOTSTRAP_CODE to the code as upper-case hex, and main.tf names the code nowhere else', () => {
+    expect(environment()).toMatch(
+      /^\s*ADMIN_BOOTSTRAP_CODE\s*=\s*upper\(random_id\.admin_bootstrap_code\.hex\)\s*$/m,
+    );
+    // Once: no output, no other resource, no log of it.
+    expect(main.match(/\brandom_id\.admin_bootstrap_code\b/g)).toHaveLength(1);
+    expect(main.match(/\bADMIN_BOOTSTRAP_CODE\b/g)).toHaveLength(1);
+  });
+
+  test('GRP-01-AC8: the code is no variable and no secret: variables.tf, the tfvars and the staging workflows never name it, and no workflow reads it from a GitHub secret', () => {
+    expect(read('infra/staging/variables.tf')).not.toMatch(/admin_bootstrap/i);
+    expect(read('infra/staging/staging.auto.tfvars')).not.toMatch(/admin_bootstrap/i);
+    for (const workflow of ['infra-staging.yml', 'deploy-staging.yml']) {
+      expect(read(`.github/workflows/${workflow}`), workflow).not.toMatch(/admin_bootstrap/i);
+    }
+    for (const workflow of [
+      'ai-review.yml',
+      'ci.yml',
+      'daily-status.yml',
+      'deploy-staging.yml',
+      'infra-staging.yml',
+    ]) {
+      const text = read(`.github/workflows/${workflow}`);
+      expect(text, workflow).not.toMatch(
+        /secrets\s*(\.\s*ADMIN_BOOTSTRAP_CODE\b|\[\s*['"]ADMIN_BOOTSTRAP_CODE['"])/i,
+      );
+      expect(text, workflow).not.toMatch(/TF_VAR_admin_bootstrap_code/i);
+    }
+  });
+});

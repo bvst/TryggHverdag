@@ -18,6 +18,7 @@
 // it, a cloud session cannot.
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import {
+  insertMemberRow,
   RACERS,
   apiPath,
   endTestPool,
@@ -26,6 +27,7 @@ import {
   syntheticEventId,
   syntheticUuid,
   type FakeLog,
+  unusedService,
 } from '@trygghverdag/test-kit';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
@@ -140,10 +142,17 @@ function workerPool(applicationName: string, size = 2): pg.Pool {
 // database's own now(), in the statement that writes them.
 // ---------------------------------------------------------------------------
 
+/**
+ * A user, a member of the one group.
+ *
+ * RG-03 (GRP-01, the spec's "Existing assertions that change by design"):
+ * a plain user until GRP-01. A journey's walker and responders must now be
+ * current members of the walker's group, held under the start's lock, and a
+ * device authenticates only while its user is a member (D-137), so every
+ * person here is one. Nothing these tests assert changes.
+ */
 async function addUser(): Promise<string> {
-  const id = syntheticUuid();
-  await connection().query('insert into users (id) values ($1)', [id]);
-  return id;
+  return insertMemberRow(connection());
 }
 
 /** A device of this user, and the credential it would send. */
@@ -528,6 +537,16 @@ function realApi({
     devices: databaseDeviceAuthenticator(on),
     acknowledgements: createAcknowledgementService({ alerts: databaseJourneyStore(on), log }),
     closures: closuresFor({ database: on, log }),
+    // RG-03 (GRP-01; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): the join, the
+    // invitations, the members and the walker's removal of a responder
+    // (approach item 12) made four services part of what the API needs. These
+    // tests call none of their routes, so each is a stand-in that fails
+    // loudly if reached; nothing they assert changes.
+    joins: unusedService('these tests join nobody'),
+    invitations: unusedService('these tests invite nobody'),
+    members: unusedService('these tests read and remove no member'),
+    removals: unusedService('these tests remove no responder through the route'),
   });
 }
 
@@ -589,6 +608,23 @@ const STAND_DOWNS = ['BACK_IN_CONTACT', 'HOME', 'SAFE', 'EXPIRED'];
 // ---------------------------------------------------------------------------
 // LOST-08-AC8, AC9 and AC17: the 24-hour end, on the real tables.
 // ---------------------------------------------------------------------------
+
+/**
+ * The journey's walker, read from its row; a stranger for a journey that does
+ * not exist, which is not found either way.
+ *
+ * RG-03 (GRP-01, approach item 10): the removal module now takes the caller,
+ * and answers JOURNEY_NOT_FOUND to anyone but the journey's walker, so every
+ * removal here is asked as the journey's own walker. What each removal
+ * answers and does is unchanged.
+ */
+async function walkerOf(journeyId: string): Promise<string> {
+  const { rows } = await connection().query<{ walker_id: string }>(
+    'select walker_id::text as walker_id from journeys where id = $1',
+    [journeyId],
+  );
+  return rows[0]?.walker_id ?? syntheticUuid();
+}
 
 describe('LOST-08, SM-06 and REL-01: the 24-hour end, on the real tables', () => {
   test('LOST-08-AC8: ALERT_EXPIRES_AFTER_MS is the 24 hours this file writes out (SM-06)', () => {
@@ -667,7 +703,13 @@ describe('LOST-08, SM-06 and REL-01: the 24-hour end, on the real tables', () =>
 
   test('LOST-08-AC8: a reset alert, in round 2, opened 24 hours before now(): the 24 hours count from its opening, not the reset; the remaining responders are told in round 2 (SM-06, SM-10)', async () => {
     const { journeyId, alertId, r1, others } = await acknowledged({ responders: 3 });
-    expect(await removalFor().remove({ journeyId, responderId: r1.userId })).toEqual({
+    expect(
+      await removalFor().remove({
+        walkerId: await walkerOf(journeyId),
+        journeyId,
+        responderId: r1.userId,
+      }),
+    ).toEqual({
       type: 'removed',
     });
     await openedAgo(alertId, A_DAY);
@@ -759,7 +801,11 @@ describe('LOST-08, SM-06 and SM-09: the 24-hour end decides under the journey’
                 ? home(realApi(), walker.credential, journeyId)
                 : holder === 'R1’s close'
                   ? close(realApi(), r1.credential, alertId)
-                  : removalFor().remove({ journeyId, responderId: r3.userId });
+                  : removalFor().remove({
+                      walkerId: await walkerOf(journeyId),
+                      journeyId,
+                      responderId: r3.userId,
+                    });
           holding.catch(() => undefined);
           try {
             expect(await eventually(someoneAtTheGate)).toBe(true);
@@ -834,6 +880,7 @@ describe('LOST-08, SM-06 and SM-09: the 24-hour end decides under the journey’
                         journeys: databaseJourneyStore(on),
                         log: fakeLog(),
                       }).remove({
+                        walkerId: await walkerOf(journeyId),
                         journeyId,
                         responderId: r3.userId,
                       });

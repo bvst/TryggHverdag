@@ -137,6 +137,23 @@ export function readCanarySetting(env: Record<string, string | undefined>): Cana
 }
 
 /**
+ * Whether the first admin can join with ADMIN_BOOTSTRAP_CODE, and with what
+ * code (GRP-01-AC8, D-136 answer 1). Never a throw, as for the monitoring
+ * settings: a value that cannot be used is a reason, said at start, naming
+ * the variable and never the value, since whoever holds it can make themself
+ * the group's admin while no group exists.
+ */
+export type AdminBootstrapSetting =
+  { usable: true; code: string } | { usable: false; reason: string };
+
+/** GRP-01's red phase: the signature only. */
+export const readAdminBootstrapSetting: (
+  env: Record<string, string | undefined>,
+) => AdminBootstrapSetting = () => {
+  throw new Error('not implemented (GRP-01)');
+};
+
+/**
  * The path of a check's ping URL: "/" and the check's UUID, in lower case, as
  * Healthchecks.io shows it (D-116, review loop 2).
  */

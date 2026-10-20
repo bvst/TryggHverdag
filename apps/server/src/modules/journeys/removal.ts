@@ -32,8 +32,14 @@ import { transition, type RemoveOutcome } from '../../domain/journey.ts';
 import { sqlstateOf } from '../../domain/sqlstate.ts';
 import type { Log, ResponderStore } from '../../ports.ts';
 
-/** A removal, as a caller hands it over: the journey, and the responder to remove from it. */
+/**
+ * A removal, as a caller hands it over: who asks, the journey, and the
+ * responder to remove from it. Only the journey's walker may remove one
+ * (GRP-01, approach item 10); in GRP-01's red phase the caller is taken and
+ * not yet checked.
+ */
 export interface RemovalCall {
+  walkerId: string;
   journeyId: string;
   responderId: string;
 }

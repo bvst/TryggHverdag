@@ -204,6 +204,21 @@ describe('fakeLog', () => {
     expect(log.events).toEqual(written);
   });
 
+  test('records the group’s three failures too, each exactly as given (GRP-01-AC24)', () => {
+    const log = fakeLog();
+    const written: FakeLogEvent[] = [
+      { event: 'join_failed', stage: 'store', code: '40001' },
+      { event: 'invitation_failed', stage: 'store', code: null },
+      { event: 'member_removal_failed', stage: 'store', code: '55P03' },
+    ];
+
+    for (const event of written) {
+      log.write(event);
+    }
+
+    expect(log.events).toEqual(written);
+  });
+
   test('the test kit hands it out', () => {
     expect(kit.fakeLog).toBe(fakeLog);
   });

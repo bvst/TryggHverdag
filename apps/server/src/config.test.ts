@@ -6,6 +6,7 @@ import {
   SYNTHETIC_CHECK_UUID as CHECK,
   SYNTHETIC_PING_URL as PING_URL,
   fc,
+  syntheticBootstrapCode,
   syntheticCredential,
   syntheticPingUrl,
   syntheticUuid,
@@ -13,6 +14,7 @@ import {
 import { describe, expect, test } from 'vitest';
 import {
   DEFAULT_PORT,
+  readAdminBootstrapSetting,
   readCanarySetting,
   readHealthchecksCanarySetting,
   readHealthchecksSetting,
@@ -574,5 +576,100 @@ describe('REL-10: readHealthchecksCanarySetting', () => {
     for (const env of [{}, { HEALTHCHECKS_CANARY_URL: `http://hc-ping.com/${check}` }]) {
       expect(reasonOf(readHealthchecksCanarySetting(env))).not.toContain('Healthchecks.io');
     }
+  });
+});
+
+// GRP-01-AC8 (approach item 8, D-136 answer 1): the first admin's bootstrap
+// code. Terraform makes it, 16 random bytes as 32 upper-case hex digits, and
+// hands it to the API as ADMIN_BOOTSTRAP_CODE. Like the monitoring settings,
+// it never stops the API: a code that cannot be used is a reason, said at
+// start, and then no join can create the group. Usable only if it normalises,
+// as a code a person types is normalised, to 20 to 32 of Crockford's base32
+// characters; its value is never in a reason, since whoever holds it can make
+// themself the group's admin while no group exists.
+describe('GRP-01: readAdminBootstrapSetting', () => {
+  test('GRP-01-AC8: 32 upper-case hex digits, as Terraform writes them, are usable, as exactly that code', () => {
+    const code = syntheticBootstrapCode();
+
+    expect(readAdminBootstrapSetting({ ADMIN_BOOTSTRAP_CODE: code })).toEqual({
+      usable: true,
+      code,
+    });
+  });
+
+  test('GRP-01-AC8: the code is normalised as a typed code is: lower case, hyphens and spaces read as the same code', () => {
+    const code = syntheticBootstrapCode();
+    const typed = `${code.slice(0, 8).toLowerCase()}-${code.slice(8, 16)} ${code.slice(16)}`;
+
+    expect(readAdminBootstrapSetting({ ADMIN_BOOTSTRAP_CODE: typed })).toEqual({
+      usable: true,
+      code,
+    });
+  });
+
+  test('GRP-01-AC8: 20 characters, the shortest a code may be, are usable; 19 are not', () => {
+    expect(readAdminBootstrapSetting({ ADMIN_BOOTSTRAP_CODE: 'ABCDEFGHJKMNPQRSTVWX' })).toEqual({
+      usable: true,
+      code: 'ABCDEFGHJKMNPQRSTVWX',
+    });
+    expect(readAdminBootstrapSetting({ ADMIN_BOOTSTRAP_CODE: 'ABCDEFGHJKMNPQRSTVW' }).usable).toBe(
+      false,
+    );
+  });
+
+  test.each([
+    ['unset', undefined],
+    ['empty', ''],
+    ['19 characters', 'ABCDEF0123456789ABC'],
+    ['33 characters', 'A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E'],
+    ['a U in it', 'A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5DU'],
+    ['punctuation in it', 'A1B2C3D4E5F6A7B8!9D0E1F2A3B4C5D6'],
+  ])(
+    'GRP-01-AC8: ADMIN_BOOTSTRAP_CODE %s is not usable, and the reason names the setting and never the value',
+    (_what, value) => {
+      const setting = readAdminBootstrapSetting(
+        value === undefined ? {} : { ADMIN_BOOTSTRAP_CODE: value },
+      );
+
+      expect(setting.usable).toBe(false);
+      const reason = setting.usable ? '' : setting.reason;
+      expect(reason).toContain('ADMIN_BOOTSTRAP_CODE');
+      if (value !== undefined && value !== '') {
+        expect(reason).not.toContain(value);
+        expect(reason.toUpperCase()).not.toContain(value.toUpperCase().slice(0, 12));
+      }
+    },
+  );
+
+  test('GRP-01-AC8: it reads ADMIN_BOOTSTRAP_CODE and nothing else', () => {
+    const code = syntheticBootstrapCode();
+
+    expect(readAdminBootstrapSetting({ BOOTSTRAP_CODE: code, ADMIN_CODE: code }).usable).toBe(
+      false,
+    );
+  });
+
+  test('GRP-01-AC8: for any value it never throws, and its reason never holds the value', () => {
+    fc.assert(
+      fc.property(fc.string({ minLength: 1, maxLength: 64 }), (value) => {
+        const setting = readAdminBootstrapSetting({ ADMIN_BOOTSTRAP_CODE: value });
+
+        if (setting.usable) {
+          expect(setting.code).toMatch(/^[0-9A-HJKMNP-TV-Z]{20,32}$/);
+        } else if (value.trim().length >= 8) {
+          // Eight characters or more: a shorter value could be part of the
+          // reason's own fixed words, ADMIN_BOOTSTRAP_CODE among them.
+          expect(setting.reason).not.toContain(value.trim());
+        }
+      }),
+      { numRuns: 500 },
+    );
+  });
+
+  test('GRP-01-AC8: readServerConfig still starts the API without it: a missing bootstrap code is never a reason to refuse to start', () => {
+    expect(() => readServerConfig({ DATABASE_URL: DATABASE })).not.toThrow();
+    expect(() =>
+      readServerConfig({ DATABASE_URL: DATABASE, ADMIN_BOOTSTRAP_CODE: 'not a code at all' }),
+    ).not.toThrow();
   });
 });

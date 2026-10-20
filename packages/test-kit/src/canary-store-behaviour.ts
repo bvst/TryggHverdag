@@ -72,7 +72,6 @@ export interface CanaryStoreUnderTest {
     registerCanary(request: { credentialHash: string }): Promise<void>;
     /** REL-10: one plain read of a canary journey at the store's now; null for any other. */
     observeCanaryJourney(journeyId: string): Promise<CanaryObservationAsRead | null>;
-    existingUsers(ids: readonly string[]): Promise<ReadonlySet<string>>;
     insertStarted(journey: StartedJourney): Promise<InsertStartedResult>;
     unendedJourneyOf(walkerId: string): Promise<{ id: string; state: string } | null>;
     overdueJourneys(afterMs: number): Promise<OverdueJourneys>;
@@ -97,6 +96,14 @@ export interface CanaryStoreUnderTest {
   now(): Promise<Date>;
   /** A new user, by the store's own means. */
   addUser(): Promise<string>;
+  /**
+   * Which of these IDs are users, read directly, by the store's own means.
+   * RG-03 (GRP-01): the registration's behaviour read this through the
+   * journey store's `existingUsers`, which GRP-01 renames
+   * `eligibleResponders`, "may this walker name them", a different question;
+   * so the subject reads the users table, or the fake's users, itself.
+   */
+  usersAmong(ids: readonly string[]): Promise<string[]>;
   /** A new device of this user, with this ID if given, by the store's own means; resolves to its ID. */
   addDevice(userId: string, deviceId?: string): Promise<string>;
   /** Deletes a device that no journey was started from, as a test's own setup. */
@@ -217,9 +224,7 @@ export const CANARY_STORE_BEHAVIOUR: readonly CanaryStoreBehaviour[] = [
     name: 'REL-10-AC10: registerCanary makes the canary’s walker and responder and the walker’s one device with the credential’s hash, again changes nothing, a new hash replaces the old, and a device of the canary’s ID owned by another user is refused',
     run: async (subject) => {
       const { walkerId, responderId, deviceId } = CANARY_IDS;
-      const canaryUsers = async () => [
-        ...(await subject.store.existingUsers([walkerId, responderId])),
-      ];
+      const canaryUsers = async () => subject.usersAmong([walkerId, responderId]);
 
       // Refused first: a device with the canary's ID belongs to someone else.
       const someoneElse = await subject.addUser();

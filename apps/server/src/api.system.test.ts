@@ -5,7 +5,12 @@
 // What makes it a system test rather than a unit test is that nothing here is
 // stubbed between the HTTP request and the domain rule: the real router, the
 // real contract, the real serialisation. Only the edges are fake.
-import { fakeClock, fakeDeviceAuthenticator, fakeWorkerHeartbeats } from '@trygghverdag/test-kit';
+import {
+  fakeClock,
+  fakeDeviceAuthenticator,
+  fakeWorkerHeartbeats,
+  unusedService,
+} from '@trygghverdag/test-kit';
 import { API_PREFIX, WORKER_STALE_AFTER_MS, healthResponseSchema } from '@trygghverdag/contracts';
 import { describe, expect, test } from 'vitest';
 import { createApi } from './api.ts';
@@ -48,6 +53,16 @@ function noJourneys() {
     closures: {
       close: () => Promise.reject(new Error('these tests close nothing')),
     },
+    // RG-03 (GRP-01; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): the join, the
+    // invitations, the members and the walker's removal of a responder
+    // (approach item 12) made four services part of what the API needs. These
+    // tests call none of their routes, so each is a stand-in that fails
+    // loudly if reached; nothing they assert changes.
+    joins: unusedService('the health tests join nobody'),
+    invitations: unusedService('the health tests invite nobody'),
+    members: unusedService('the health tests read and remove no member'),
+    removals: unusedService('the health tests remove no responder'),
   };
 }
 

@@ -63,6 +63,7 @@ import {
   type FakeJourneyState,
   type RegisteredDevice,
   type SyntheticHeartbeat,
+  unusedService,
 } from '@trygghverdag/test-kit';
 import { describe, expect, test } from 'vitest';
 import { createApi } from './api.ts';
@@ -181,6 +182,16 @@ function world({ log: given }: { log?: Log } = {}) {
     closures: {
       close: () => Promise.reject(new Error('these tests close nothing')),
     },
+    // RG-03 (GRP-01; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): the join, the
+    // invitations, the members and the walker's removal of a responder
+    // (approach item 12) made four services part of what the API needs. These
+    // tests call none of their routes, so each is a stand-in that fails
+    // loudly if reached; nothing they assert changes.
+    joins: unusedService('these tests join nobody'),
+    invitations: unusedService('these tests invite nobody'),
+    members: unusedService('these tests read and remove no member'),
+    removals: unusedService('these tests remove no responder through the route'),
   });
   const removal = createRemovalService({ journeys: store, log });
   const watchdog = createWatchdog({ journeys: store, beats, log });
@@ -218,14 +229,18 @@ function world({ log: given }: { log?: Log } = {}) {
     /** A user with a device: someone who can start a journey. */
     walker(): RegisteredDevice {
       const device = devices.register();
-      store.addUser(device.userId);
+      // RG-03 (GRP-01, the spec's "Existing assertions that change by
+      // design"): a member of the one group, where it was a plain user. Since
+      // GRP-01 a journey's walker and responders must be current members of
+      // the walker's group (D-137); nothing these tests assert changes.
+      store.addMember(device.userId);
       store.addDevice(device.userId, device.deviceId);
       return device;
     },
     /** A user with a device of their own, who can follow a journey and say "I'm on it" (D-091). */
     responder(): RegisteredDevice {
       const device = devices.register();
-      store.addUser(device.userId);
+      store.addMember(device.userId);
       return device;
     },
     /** Starts a journey through the API, which must be 201; resolves to its ID. */
@@ -252,8 +267,22 @@ function world({ log: given }: { log?: Log } = {}) {
     /** "I'm on it" through the API (D-114). */
     acknowledge: (device: RegisteredDevice, alertId: string): Promise<Answer> =>
       post(device.credential, `alerts/${alertId}/acknowledgement`),
-    /** The removal, through its module: no route removes a responder in M2 (D-122, item 5). */
-    remove: (journeyId: string, responderId: string) => removal.remove({ journeyId, responderId }),
+    /**
+     * The removal, through its module, as the journey's walker asks it.
+     * RG-03 (GRP-01, approach item 10): the module now takes the caller and
+     * answers JOURNEY_NOT_FOUND to anyone but the journey's walker, so this
+     * helper names the journey's own walker, read from the store, or a
+     * stranger for a journey that does not exist, which is not found either
+     * way. What every removal here answers and does is unchanged.
+     */
+    remove: (journeyId: string, responderId: string) =>
+      removal.remove({
+        walkerId:
+          store.journeys().find(({ id }) => id === journeyId.toLowerCase())?.walkerId ??
+          syntheticUuid(),
+        journeyId,
+        responderId,
+      }),
     /** A journey put in directly, its silence begun `silentForMs` before the clock's now. */
     async seed(
       device: RegisteredDevice,

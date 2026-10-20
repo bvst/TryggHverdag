@@ -1529,28 +1529,80 @@ function literalOf(pattern) {
  * test counter stops at the first closing bracket inside one.
  */
 const LOOKALIKES = [
-  { field: 'TITLE', text: 'Hjem (trygt)? Ja+', lookalike: 'Hjem trygt Jaaa' },
-  { field: 'STATUS', text: 'Klar? 1+1 er [to].', lookalike: 'Kla 11 er tX' },
-  { field: 'STATUS', text: 'Nesten (ferdig', lookalike: 'Nesten ferdig' },
-  { field: 'TITLE', text: 'a.b*c^d$e|f{2}g\\h', lookalike: 'ffgh' },
+  { field: 'JOIN_TITLE', text: 'Hjem (trygt)? Ja+', lookalike: 'Hjem trygt Jaaa' },
+  { field: 'NOT_VALID', text: 'Klar? 1+1 er [to].', lookalike: 'Kla 11 er tX' },
+  { field: 'MEMBER_TITLE', text: 'Nesten (ferdig', lookalike: 'Nesten ferdig' },
+  { field: 'JOIN_TITLE', text: 'a.b*c^d$e|f{2}g\\h', lookalike: 'ffgh' },
 ];
 
+/**
+ * GRP-01 (L7): each value a flow names that is a string of the app's, and the
+ * key in nb.json it is read from. RG-03 (GRP-01, the spec's "Existing
+ * assertions that change by design", INF-06-AC11's item): TITLE and STATUS
+ * were placeholder.title and placeholder.status; a cleared app opens on the
+ * join screen now, and the placeholder's keys go, so they are JOIN_TITLE and
+ * JOIN_INTRO, the join screen's title and the line under it. BOOTSTRAP_CODE is no string
+ * of the app's: the job hands it in, synthetic, as the API's
+ * ADMIN_BOOTSTRAP_CODE.
+ */
+const FLOW_TEXTS = {
+  JOIN_TITLE: 'grp.join.title',
+  JOIN_INTRO: 'grp.join.intro',
+  CODE_LABEL: 'grp.join.codeLabel',
+  NAME_LABEL: 'grp.join.nameLabel',
+  JOIN_SUBMIT: 'grp.join.submit',
+  NOT_VALID: 'grp.join.notValid',
+  MEMBER_TITLE: 'grp.member.title',
+  INVITE_BUTTON: 'grp.member.invite',
+  MEMBERS_BUTTON: 'grp.member.members',
+  CREATE_INVITATION: 'grp.invite.create',
+  SHARE_BUTTON: 'grp.invite.share',
+};
+
+/** A translation file holding `text` at every key a flow reads, unless `except` says otherwise. */
+function translationsWith(text, except = {}) {
+  const tree = {};
+  for (const [field, key] of Object.entries(FLOW_TEXTS)) {
+    const parts = key.split('.');
+    let node = tree;
+    for (const part of parts.slice(0, -1)) {
+      node[part] ??= {};
+      node = node[part];
+    }
+    node[parts.at(-1)] = except[field] ?? text;
+  }
+  return tree;
+}
+
+/** The value of a dotted key in a translation file. */
+const textAt = (tree, key) => key.split('.').reduce((node, part) => node?.[part], tree);
+
+/** A synthetic bootstrap code, as Terraform makes one: 32 upper-case hex digits. */
+const BOOTSTRAP_CODE = 'A1B2C3D4E5F60718293A4B5C6D7E8F90';
+
 describe('maestroTestCommand: every flow, with a JUnit report', () => {
-  const translations = { placeholder: { title: 'Tittel', status: 'Statuslinje' } };
-  const argv = maestroTestCommand({
-    maestro: '/cache/maestro/bin/maestro',
-    report: '/tmp/e2e/report.xml',
-    appId: 'no.example.placeholder',
-    translations,
-  });
+  // RG-03 (GRP-01): the translations are the join screen's and the admin's,
+  // and the job's bootstrap code is handed in beside them (FLOW_TEXTS). Made
+  // in each test, not once for the block, so a command that cannot be made
+  // fails the tests that need it and no others.
+  const argvOf = () =>
+    maestroTestCommand({
+      maestro: '/cache/maestro/bin/maestro',
+      report: '/tmp/e2e/report.xml',
+      appId: 'no.example.placeholder',
+      translations: translationsWith('Tittel'),
+      bootstrapCode: BOOTSTRAP_CODE,
+    });
 
   test('INF-06-AC9: runs the pinned Maestro over every flow in apps/mobile/e2e', () => {
+    const argv = argvOf();
     expect(argv[0]).toBe('/cache/maestro/bin/maestro');
     expect(argv).toContain('test');
     expect(argv.some((arg) => arg.replace(/\/$/, '').endsWith(FLOWS))).toBe(true);
   });
 
   test('INF-06-AC9: writes the JUnit report the run is judged by', () => {
+    const argv = argvOf();
     expect(argv.join(' ')).toMatch(/--format[= ]junit\b/i);
     expect(argv.join(' ')).toMatch(/--output[= ]\/tmp\/e2e\/report\.xml\b/);
   });
@@ -1571,16 +1623,26 @@ describe('maestroTestCommand: every flow, with a JUnit report', () => {
         report: 'report.xml',
         appId: 'no.example.placeholder',
         translations: nb,
+        bootstrapCode: BOOTSTRAP_CODE,
       }),
     );
 
     expect(Object.keys(env).sort()).toEqual(used.sort());
     expect(env.APP_ID).toBe('no.example.placeholder');
-    // TITLE and STATUS arrive escaped for Maestro's regular expressions, so
-    // what is compared is the text each one stands for: exactly nb.json's.
-    // The status line ends in a full stop, which unescaped matches anything.
-    expect(literalOf(env.TITLE ?? '')).toBe(nb.placeholder.title);
-    expect(literalOf(env.STATUS ?? '')).toBe(nb.placeholder.status);
+    // RG-03 (GRP-01, INF-06-AC11's item): was TITLE and STATUS, from the
+    // placeholder's keys; now every string the flows name, each from its key
+    // in nb.json (FLOW_TEXTS), and the job's bootstrap code. The strings
+    // arrive escaped for Maestro's regular expressions, so what is compared
+    // is the text each one stands for: exactly nb.json's. A string that ends
+    // in a full stop, unescaped, would match anything there.
+    for (const [field, key] of Object.entries(FLOW_TEXTS)) {
+      if (used.includes(field)) {
+        expect(typeof textAt(nb, key), key).toBe('string');
+        expect(literalOf(env[field] ?? ''), field).toBe(textAt(nb, key));
+      }
+    }
+    expect(env.BOOTSTRAP_CODE).toBe(BOOTSTRAP_CODE);
+    expect(used).toEqual(expect.arrayContaining(['JOIN_TITLE', 'BOOTSTRAP_CODE', 'NOT_VALID']));
   });
 
   // Amended 2026-09-26. Maestro reads a text selector as a regular expression.
@@ -1596,12 +1658,8 @@ describe('maestroTestCommand: every flow, with a JUnit report', () => {
           maestro: 'maestro',
           report: 'report.xml',
           appId: 'no.example.placeholder',
-          translations: {
-            placeholder: {
-              title: field === 'TITLE' ? text : other,
-              status: field === 'STATUS' ? text : other,
-            },
-          },
+          translations: translationsWith(other, { [field]: text }),
+          bootstrapCode: BOOTSTRAP_CODE,
         }),
       );
       const sent = env[field] ?? '';

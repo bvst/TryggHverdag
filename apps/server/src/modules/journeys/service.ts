@@ -103,13 +103,13 @@ export function createJourneyService({
   return {
     async start({ walkerId, deviceId, responderIds }: StartRequest): Promise<StartResult> {
       const current = await journeys.unendedJourneyOf(walkerId);
-      const existingUserIds = await journeys.existingUsers(responderIds);
+      const eligibleResponderIds = await journeys.eligibleResponders(walkerId, responderIds);
 
       const decision = transition(current, {
         type: 'start',
         walkerId,
         responderIds,
-        existingUserIds,
+        eligibleResponderIds,
       });
       if (decision.type === 'refused') {
         return decision;
@@ -122,6 +122,11 @@ export function createJourneyService({
         responderIds: decision.responderIds,
         startedAt,
       });
+      if (!stored.inserted && 'refused' in stored) {
+        // GRP-01's red phase: a responder gone from the group under the
+        // start's lock (approach item 6) is not answered yet.
+        throw new Error('not implemented (GRP-01)');
+      }
       if (!stored.inserted) {
         // Another start for this walker got past the read above at the same
         // moment and won at the database. To the caller that is the same

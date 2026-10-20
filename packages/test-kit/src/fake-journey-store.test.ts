@@ -7,6 +7,15 @@
 // make those tests pass whatever the server did. The shared behaviour suite
 // below is the same one the real adapter runs against PostgreSQL, so the two
 // cannot drift apart.
+//
+// RG-03 (GRP-01, the spec's "Existing assertions that change by design",
+// D-137): a start now names only current members of the walker's group, held
+// under the store's "lock". So the walkers and responders of the starts below
+// are made with `addMember` where they were made with `addUser`; the port
+// method `existingUsers` is renamed `eligibleResponders`, and the tests that
+// used it to see which users exist read `userIds()`, the fake's own reader,
+// instead; the shared suite's subject gains `addMember`. No other assertion
+// changes.
 import { describe, expect, test } from 'vitest';
 import { CANARY_IDS } from './canary-ids.ts';
 import { CANARY_STORE_BEHAVIOUR, type CanaryStoreUnderTest } from './canary-store-behaviour.ts';
@@ -126,6 +135,7 @@ function underTest(): JourneyStoreUnderTest {
     timeMarginMs: 0,
     store,
     addUser: () => Promise.resolve(store.addUser()),
+    addMember: () => Promise.resolve(store.addMember()),
     addDevice: (userId) => Promise.resolve(store.addDevice(userId)),
     seedJourney: (journey) => Promise.resolve(store.seed(journey)),
     journeysOf: (walkerId) =>
@@ -351,10 +361,10 @@ function underTest(): JourneyStoreUnderTest {
   };
 }
 
-/** A store with one user who has one device: someone who can start a journey. */
+/** A store with one member who has one device: someone who can start a journey (GRP-01: a member). */
 function withWalker(): { store: FakeJourneyStore; walkerId: string; deviceId: string } {
   const store = fakeJourneyStore();
-  const walkerId = store.addUser();
+  const walkerId = store.addMember();
   return { store, walkerId, deviceId: store.addDevice(walkerId) };
 }
 
@@ -369,10 +379,18 @@ describe('fakeJourneyStore, against the behaviour every journey store shares', (
       'an ENDED journey does not block a new one, and stays exactly as it was',
       'one walker’s unended journey does not block another walker',
       'starts racing for one walker, 10 at once and 5 times over: exactly one is inserted, and every other names it',
-      'existingUsers names exactly the given IDs that are users',
+      // RG-03 (GRP-01, the spec's "Existing assertions that change by
+      // design"): `existingUsers` became `eligibleResponders`, whose behaviour
+      // takes this place, with three of GRP-01's beside it; and a responder or
+      // a walker who is no user is now answered INVALID_RESPONDER under the
+      // start's lock, where the foreign key rejected it.
+      'GRP-01-AC12: eligibleResponders names exactly the given IDs that are current members of the walker’s group, other than the walker: never a plain user, an ID that is no user, or the walker',
+      'GRP-01-AC12: a walker who is not a member may name nobody, members included',
+      'GRP-01-AC12: a start naming a plain user beside a member is refused whole under the lock, answered INVALID_RESPONDER, and stores nothing; the same start naming the member alone is stored',
+      'GRP-01-AC12: a start by a walker who is not a member is refused whole under the lock, answered INVALID_RESPONDER, and stores nothing, however many members it names',
       'an ID in upper case finds the same user and the same journey, and every ID comes back lower-case',
-      'a responder who is not a user is refused whole: the store rejects, and leaves no journey',
-      'a walker who is not a user is refused: the store rejects, and stores nothing',
+      'a responder who is not a user is refused whole: the store answers INVALID_RESPONDER, and leaves no journey',
+      'a walker who is not a user is refused: the store answers INVALID_RESPONDER, and stores nothing',
       'a start with no responders is refused, and stores nothing',
       'a start with no responders beside an unended journey is refused too, never answered as not inserted, and changes nothing',
       'LOST-01-AC10: a start stores the device it was given, and no other (D-101)',
@@ -677,7 +695,7 @@ describe('fakeJourneyStore reads the phone-time range in UTC, whatever zone the 
 describe('fakeJourneyStore, beyond the shared suite', () => {
   test('seeds a journey in any state, and hands back what it stored', () => {
     const { store, walkerId, deviceId } = withWalker();
-    const responderId = store.addUser();
+    const responderId = store.addMember();
 
     const ended = store.seed({
       walkerId,
@@ -746,7 +764,7 @@ describe('fakeJourneyStore, beyond the shared suite', () => {
     expect(store.journeys()).toEqual([]);
   });
 
-  test('addUser uses the ID a test gives, or makes a fresh one', async () => {
+  test('addUser uses the ID a test gives, or makes a fresh one', () => {
     const store = fakeJourneyStore();
     const given = syntheticUuid();
 
@@ -754,21 +772,21 @@ describe('fakeJourneyStore, beyond the shared suite', () => {
     const made = store.addUser();
 
     expect(made).not.toBe(given);
-    expect([...(await store.existingUsers([given, made]))].sort()).toEqual([given, made].sort());
+    expect(store.userIds().sort()).toEqual([given, made].sort());
   });
 
   test('records each port method called, in order, and nothing for its own test helpers', async () => {
     const { store, walkerId, deviceId } = withWalker();
-    const responderId = store.addUser();
+    const responderId = store.addMember();
     store.seed({ walkerId, deviceId, state: 'ENDED', responderIds: [], startedAt: AT });
     store.journeys();
     expect(store.calls).toEqual([]);
 
     await store.unendedJourneyOf(walkerId);
-    await store.existingUsers([walkerId]);
+    await store.eligibleResponders(walkerId, [responderId]);
     await store.insertStarted({ walkerId, deviceId, responderIds: [responderId], startedAt: AT });
 
-    expect(store.calls).toEqual(['unendedJourneyOf', 'existingUsers', 'insertStarted']);
+    expect(store.calls).toEqual(['unendedJourneyOf', 'eligibleResponders', 'insertStarted']);
   });
 
   test('while failing, every port method rejects with exactly the error given, and changes nothing', async () => {
@@ -777,18 +795,18 @@ describe('fakeJourneyStore, beyond the shared suite', () => {
     store.failWith(error);
 
     await expect(store.unendedJourneyOf(walkerId)).rejects.toBe(error);
-    await expect(store.existingUsers([walkerId])).rejects.toBe(error);
+    await expect(store.eligibleResponders(walkerId, [walkerId])).rejects.toBe(error);
     await expect(
       store.insertStarted({ walkerId, deviceId, responderIds: [], startedAt: AT }),
     ).rejects.toBe(error);
 
     expect(store.journeys()).toEqual([]);
-    expect(store.calls).toEqual(['unendedJourneyOf', 'existingUsers', 'insertStarted']);
+    expect(store.calls).toEqual(['unendedJourneyOf', 'eligibleResponders', 'insertStarted']);
   });
 
   test('answers again after recovering', async () => {
     const { store, walkerId, deviceId } = withWalker();
-    const responderId = store.addUser();
+    const responderId = store.addMember();
     store.failWith(new Error('the database did not answer'));
 
     store.recover();
@@ -804,7 +822,7 @@ describe('fakeJourneyStore, beyond the shared suite', () => {
 
   test('a start counts as stored only once it has settled, not when it is asked for', async () => {
     const { store, walkerId, deviceId } = withWalker();
-    const responderId = store.addUser();
+    const responderId = store.addMember();
 
     const storing = store.insertStarted({
       walkerId,
@@ -820,7 +838,7 @@ describe('fakeJourneyStore, beyond the shared suite', () => {
 
   test('stores the responders it is given, repeats included, so a caller that forgot to drop them shows', async () => {
     const { store, walkerId, deviceId } = withWalker();
-    const responderId = store.addUser();
+    const responderId = store.addMember();
 
     await store.insertStarted({
       walkerId,
@@ -834,7 +852,7 @@ describe('fakeJourneyStore, beyond the shared suite', () => {
 
   test('what it hands back cannot change what it holds', async () => {
     const { store, walkerId, deviceId } = withWalker();
-    const responderId = store.addUser();
+    const responderId = store.addMember();
     const startedAt = new Date(AT.getTime());
     const responderIds = [responderId];
     await store.insertStarted({ walkerId, deviceId, responderIds, startedAt });
@@ -911,7 +929,7 @@ describe('fakeJourneyStore: the device a journey starts from (D-101) and its hea
 
   test('refuses to seed, or to store a start, with a device that does not exist, as the foreign key would', async () => {
     const { store, walkerId } = withWalker();
-    const responderId = store.addUser();
+    const responderId = store.addMember();
 
     expect(() =>
       store.seed({
@@ -935,7 +953,7 @@ describe('fakeJourneyStore: the device a journey starts from (D-101) and its hea
 
   test('refuses a start or a seed that names no device, as device_id’s NOT NULL would, beside an unended journey too', async () => {
     const { store, walkerId, deviceId } = withWalker();
-    const responderId = store.addUser();
+    const responderId = store.addMember();
     // A start as a caller that forgot the device would hand it over: typed as
     // what it is, then cast to the port's parameter type, as such a caller's
     // own types would have let it through. The fake must refuse it at run time.
@@ -957,7 +975,7 @@ describe('fakeJourneyStore: the device a journey starts from (D-101) and its hea
 
   test('a start beside an unended journey is not inserted even with a device that does not exist, as ON CONFLICT DO NOTHING checks no foreign key', async () => {
     const { store, walkerId, deviceId } = withWalker();
-    const responderId = store.addUser();
+    const responderId = store.addMember();
     const journeyId = store.seed({
       walkerId,
       deviceId,
@@ -978,7 +996,7 @@ describe('fakeJourneyStore: the device a journey starts from (D-101) and its hea
 
   test('deviceOf and lastHeartbeatAt read what was seeded or stored, and throw for a journey never stored', async () => {
     const { store, walkerId, deviceId } = withWalker();
-    const responderId = store.addUser();
+    const responderId = store.addMember();
     const seeded = store.seed({
       walkerId,
       deviceId,
@@ -1182,9 +1200,9 @@ function watchedStore({
 }: { responders?: number; silentForMs?: number } = {}) {
   const clock = fakeClock(CLOCK_AT);
   const store = fakeJourneyStore({ clock });
-  const walkerId = store.addUser();
+  const walkerId = store.addMember();
   const deviceId = store.addDevice(walkerId);
-  const responderIds = Array.from({ length: responders }, () => store.addUser());
+  const responderIds = Array.from({ length: responders }, () => store.addMember());
   const journeyId = store.seed({
     walkerId,
     deviceId,
@@ -1210,12 +1228,12 @@ async function settled(): Promise<void> {
 describe('fakeJourneyStore: the watchdog and the outbox (LOST-02)', () => {
   test('a store given no clock refuses every question about silence or delivery, loudly, naming the clock, and changes nothing', async () => {
     const store = fakeJourneyStore();
-    const walkerId = store.addUser();
+    const walkerId = store.addMember();
     const journeyId = store.seed({
       walkerId,
       deviceId: store.addDevice(walkerId),
       state: 'ACTIVE',
-      responderIds: [store.addUser()],
+      responderIds: [store.addMember()],
       startedAt: AT,
     });
 
@@ -1539,8 +1557,8 @@ describe('fakeJourneyStore: the watchdog and the outbox (LOST-02)', () => {
   test('a journey given a responder twice cannot be opened: one message per (alert, recipient, kind), as the unique index holds, and nothing is written', async () => {
     const clock = fakeClock(CLOCK_AT);
     const store = fakeJourneyStore({ clock });
-    const walkerId = store.addUser();
-    const responderId = store.addUser();
+    const walkerId = store.addMember();
+    const responderId = store.addMember();
     const journeyId = store.seed({
       walkerId,
       deviceId: store.addDevice(walkerId),
@@ -1599,21 +1617,21 @@ async function homeFor(
 describe('fakeJourneyStore: back in contact and "I’m home" (LOST-03)', () => {
   test('a store given no clock refuses, loudly and naming the clock, to say whether contact is back or to end a journey, and changes nothing; a heartbeat it needs no time for is answered without one', async () => {
     const store = fakeJourneyStore();
-    const walkerId = store.addUser();
+    const walkerId = store.addMember();
     const deviceId = store.addDevice(walkerId);
     const lost = store.seed({
       walkerId,
       deviceId,
       state: 'LOST_CONTACT',
-      responderIds: [store.addUser()],
+      responderIds: [store.addMember()],
       startedAt: AT,
     });
-    const otherWalker = store.addUser();
+    const otherWalker = store.addMember();
     const active = store.seed({
       walkerId: otherWalker,
       deviceId: store.addDevice(otherWalker),
       state: 'ACTIVE',
-      responderIds: [store.addUser()],
+      responderIds: [store.addMember()],
       startedAt: AT,
     });
 
@@ -2024,8 +2042,8 @@ describe('fakeJourneyStore: review loop 1 of back in contact and "I’m home" (L
 describe('fakeJourneyStore: "I’m on it" (LOST-06)', () => {
   test('a store given no clock refuses, loudly and naming the clock, to record an acknowledgement, and changes nothing; a read, and a refusal it needs no time for, are answered without one', async () => {
     const store = fakeJourneyStore();
-    const walkerId = store.addUser();
-    const [r1, r2] = [store.addUser(), store.addUser()];
+    const walkerId = store.addMember();
+    const [r1, r2] = [store.addMember(), store.addMember()];
     const journeyId = store.seed({
       walkerId,
       deviceId: store.addDevice(walkerId),
@@ -2182,8 +2200,8 @@ describe('fakeJourneyStore: "I’m on it" (LOST-06)', () => {
 
   test('seedAlert takes acknowledgedBy and acknowledgedAt, both or neither, the acknowledger a user, in any state; left out, both are null', () => {
     const store = fakeJourneyStore();
-    const walkerId = store.addUser();
-    const responderId = store.addUser();
+    const walkerId = store.addMember();
+    const responderId = store.addMember();
     const journeyId = store.seed({
       walkerId,
       deviceId: store.addDevice(walkerId),
@@ -2375,8 +2393,8 @@ describe('fakeJourneyStore: escalation to SMS (LOST-07)', () => {
   // a threshold; what each test below asserts is otherwise unchanged.
   test('a store given no clock refuses, loudly and naming the clock, to read the due alerts, escalate, claim SMS or count them, and changes nothing', async () => {
     const store = fakeJourneyStore();
-    const walkerId = store.addUser();
-    const responderId = store.addUser();
+    const walkerId = store.addMember();
+    const responderId = store.addMember();
     const journeyId = store.seed({
       walkerId,
       deviceId: store.addDevice(walkerId),
@@ -2466,12 +2484,12 @@ describe('fakeJourneyStore: escalation to SMS (LOST-07)', () => {
 
     // No check ties it to the state: OPEN with one, and ESCALATED without.
     store.setState(journeyId, 'ENDED');
-    const otherWalker = store.addUser();
+    const otherWalker = store.addMember();
     const other = store.seed({
       walkerId: otherWalker,
       deviceId: store.addDevice(otherWalker),
       state: 'LOST_CONTACT',
-      responderIds: [store.addUser()],
+      responderIds: [store.addMember()],
       startedAt: AT,
     });
     store.seedAlert({
@@ -2557,8 +2575,8 @@ const NOT_A_RESPONDER = {
 describe('fakeJourneyStore: removing a responder (SM-10)', () => {
   test('a store given no clock refuses, loudly and naming the clock, to remove a responder or count unheard alerts, and changes nothing; the read, and a refusal it needs no time for, are answered without one', async () => {
     const store = fakeJourneyStore();
-    const walkerId = store.addUser();
-    const [r1, r2] = [store.addUser(), store.addUser()];
+    const walkerId = store.addMember();
+    const [r1, r2] = [store.addMember(), store.addMember()];
     const journeyId = store.seed({
       walkerId,
       deviceId: store.addDevice(walkerId),
@@ -2572,8 +2590,10 @@ describe('fakeJourneyStore: removing a responder (SM-10)', () => {
 
     expect(store.journeys()[0]?.responderIds).toEqual([r1, r2]);
     expect(store.journeyMessages()).toEqual([]);
+    // RG-03 (GRP-01, approach item 10): the read names the walker too.
     expect(await store.journeyForRemoval(journeyId)).toEqual({
       id: journeyId,
+      walkerId,
       state: 'ACTIVE',
       responderIds: [r1, r2],
     });
@@ -2837,8 +2857,8 @@ async function acknowledgedStore({
 describe('fakeJourneyStore: "They’re safe" and the 24-hour end (LOST-08)', () => {
   test('a store given no clock refuses, loudly and naming the clock, to close, to read the alerts due to end or to end one, and changes nothing; the read, and a refusal it needs no time for, are answered without one', async () => {
     const store = fakeJourneyStore();
-    const walkerId = store.addUser();
-    const [r1, r2] = [store.addUser(), store.addUser()];
+    const walkerId = store.addMember();
+    const [r1, r2] = [store.addMember(), store.addMember()];
     const journeyId = store.seed({
       walkerId,
       deviceId: store.addDevice(walkerId),
@@ -3092,7 +3112,7 @@ describe('fakeJourneyStore: "They’re safe" and the 24-hour end (LOST-08)', () 
 
   test('afterConflict runs between a start’s conflict and its read, and beforeRetry before its retry, each once, in order; a start that meets no journey runs neither', async () => {
     const { store, walkerId, deviceId, journeyId } = watchedStore({ responders: 1 });
-    const responderId = store.addUser();
+    const responderId = store.addMember();
     const seen: string[] = [];
     store.afterConflict(() => {
       seen.push(`conflict, journey ${store.journeys()[0]?.state ?? ''}`);
@@ -3115,7 +3135,7 @@ describe('fakeJourneyStore: "They’re safe" and the 24-hour end (LOST-08)', () 
 
     // A start that meets nothing runs neither queued action.
     const fresh = withWalker();
-    const responder = fresh.store.addUser();
+    const responder = fresh.store.addMember();
     let ran = false;
     fresh.store.afterConflict(() => {
       ran = true;
@@ -3143,7 +3163,7 @@ describe('fakeJourneyStore: "They’re safe" and the 24-hour end (LOST-08)', () 
       await store.insertStarted({
         walkerId,
         deviceId,
-        responderIds: [store.addUser()],
+        responderIds: [store.addMember()],
         startedAt: AT,
       }),
     ).toEqual({ inserted: false, unendedJourneyId: journeyId });
@@ -3191,6 +3211,10 @@ function canaryUnderTest(): CanaryStoreUnderTest {
     store,
     now: () => base.now(),
     addUser: () => base.addUser(),
+    usersAmong: (ids) =>
+      Promise.resolve(
+        store.userIds().filter((id) => ids.map((each) => each.toLowerCase()).includes(id)),
+      ),
     addDevice: (userId, deviceId) => Promise.resolve(store.addDevice(userId, deviceId)),
     removeDevice: (deviceId) => {
       store.removeDevice(deviceId);
@@ -3238,9 +3262,7 @@ describe('fakeJourneyStore: the staging canary’s registration and read, beyond
     await store.registerCanary({ credentialHash: HASH });
 
     expect(store.calls).toEqual(['registerCanary']);
-    expect(await store.existingUsers([CANARY_IDS.walkerId, CANARY_IDS.responderId])).toEqual(
-      new Set([CANARY_IDS.walkerId, CANARY_IDS.responderId]),
-    );
+    expect(store.userIds().sort()).toEqual([CANARY_IDS.walkerId, CANARY_IDS.responderId].sort());
     expect(store.devices()).toEqual([
       { id: CANARY_IDS.deviceId, userId: CANARY_IDS.walkerId, credentialHash: HASH },
     ]);
@@ -3268,7 +3290,7 @@ describe('fakeJourneyStore: the staging canary’s registration and read, beyond
 
     await expect(store.registerCanary({ credentialHash: HASH })).rejects.toBe(error);
     expect(store.devices()).toEqual([]);
-    expect(await store.existingUsers([CANARY_IDS.walkerId])).toEqual(new Set());
+    expect(store.userIds()).toEqual([]);
 
     store.recover();
     await store.registerCanary({ credentialHash: HASH });
@@ -3279,9 +3301,12 @@ describe('fakeJourneyStore: the staging canary’s registration and read, beyond
     const store = fakeJourneyStore({ clock: fakeClock(AT) });
     await store.registerCanary({ credentialHash: HASH });
 
+    // RG-03 (GRP-01): the answer gains how far the device is admitted; the
+    // canary's device is admitted FULL, though its user is no member.
     expect(store.deviceWithCredentialHash(HASH)).toEqual({
       deviceId: CANARY_IDS.deviceId,
       userId: CANARY_IDS.walkerId,
+      access: 'FULL',
     });
     expect(store.deviceWithCredentialHash('b'.repeat(64))).toBeNull();
 

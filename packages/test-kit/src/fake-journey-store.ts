@@ -258,9 +258,53 @@
  *     a hash names, as the API's authenticator does with the hash of what a
  *     phone sends.
  *
+ * And for the group, its members and their devices (GRP-01, its spec's
+ * approach items 2 to 9, D-136, D-137), which the adapter keeps in
+ * `adapters/groups.ts`, `adapters/device-credentials.ts` and
+ * `adapters/journeys.ts`:
+ *   - one group at most, a user in at most one membership, one ADMIN per
+ *     group, a display name of 1 to 40 characters after trimming with no
+ *     control character, and neither of the canary's two users ever a member,
+ *     each refused as the table's index or check refuses it;
+ *   - `eligibleResponders` names the given IDs the walker may name: current
+ *     members of the walker's group other than the walker; for the canary's
+ *     walker, the canary's responder alone; for anyone else, nobody. A start
+ *     (`insertStarted`) asks the same under its "lock", before it writes, and
+ *     answers `refused: 'INVALID_RESPONDER'`, storing nothing, when one named
+ *     is not eligible then: a member removed since the read, a non-member, a
+ *     user who is no user at all, or a walker who is not a member;
+ *   - `authenticate` finds the device by the SHA-256 of the credential, as
+ *     the adapter does, and admits it `FULL` while its user is a member or it
+ *     is the canary's device, `WALKER_ONLY` while it started a journey not yet
+ *     ended, and not at all otherwise (D-136, answer 5);
+ *   - `bootstrapGroup` opens only an empty store: the group, its ADMIN, a
+ *     device with a fresh credential and a GROUP_CREATED audit row in one
+ *     step; with a group already there it is `not_valid`, writing nothing;
+ *   - `createInvitation` is the ADMIN's alone: a fresh code of 20 of
+ *     Crockford's characters, kept only as its SHA-256, expiring seven days
+ *     after the store's now, and an INVITATION_CREATED audit row, in one step;
+ *   - `joinWithInvitation` reads the invitation by the code's SHA-256 and
+ *     decides at the store's now: no such invitation, or one created seven
+ *     days or more before now, is `not_valid`; an unused one brings in one
+ *     MEMBER with a device holding the SHA-256 of a fresh credential, and is
+ *     marked used, by whom, when, and with the join key's SHA-256; a used one,
+ *     sent again with the same join key while its user is still a member, is
+ *     the same join retried (F2): the same user, that device's hash replaced
+ *     by a new credential's; anything else on a used one is `not_valid`;
+ *   - `removeMember` is the ADMIN's alone and one step: NOT_THE_ADMIN,
+ *     CANNOT_REMOVE_ADMIN and MEMBER_NOT_FOUND write nothing; otherwise the
+ *     membership goes, then, for each unended journey the member follows, in
+ *     journey-ID order, SM-10's removal step, the one `removeResponder` takes,
+ *     then a MEMBER_REMOVED audit row at the store's now. A journey row held
+ *     by `hold` makes it reject as a lock wait that runs out does (55P03),
+ *     writing nothing; one held by `holdUntilWaited` is let go first;
+ *   - a fake given no clock throws when asked to bootstrap, invite, join or
+ *     remove a member, as it throws when asked about silence.
+ *
  * The shared behaviour suite (`journey-store-behaviour.ts`) runs the same
  * expectations against this fake and against the real adapter, which is
- * what keeps the two from drifting apart.
+ * what keeps the two from drifting apart; `group-store-behaviour.ts` does the
+ * same for the group (GRP-01, D-100).
  *
  * It can also fail like a database that is gone (`failWith`), for every port
  * method or for one, run a test's action at the moment a port method is
@@ -270,8 +314,11 @@
  */
 import { EVENT_ID_PATTERN, MAX_EVENT_ID_LENGTH } from '@trygghverdag/contracts';
 import { CANARY_IDS } from './canary-ids.ts';
+import type { AuthenticatedDevice, DeviceAccess } from './fake-device-authenticator.ts';
 import { PUSH_FAILURE_REASONS, type MessageKind, type PushFailureReason } from './fake-push.ts';
-import { syntheticUuid } from './synthetic-ids.ts';
+import { sha256Hex } from './sha256.ts';
+import { syntheticDisplayName, syntheticInvitationCode } from './synthetic-groups.ts';
+import { syntheticCredential, syntheticUuid } from './synthetic-ids.ts';
 
 /**
  * The longest lock_timeout PostgreSQL takes, in milliseconds, as the adapter's
@@ -422,9 +469,15 @@ export interface StartedJourney {
   startedAt: Date;
 }
 
-/** What storing a start came to: stored, or refused by the one-unended-journey rule. */
+/**
+ * What storing a start came to: stored; refused by the one-unended-journey
+ * rule, naming that journey; or refused because a responder named is not one
+ * the walker may name under the start's "lock" (GRP-01, approach item 6).
+ */
 export type InsertStartedResult =
-  { inserted: true; journeyId: string } | { inserted: false; unendedJourneyId: string };
+  | { inserted: true; journeyId: string }
+  | { inserted: false; unendedJourneyId: string }
+  | { inserted: false; refused: 'INVALID_RESPONDER' };
 
 /** The journey a heartbeat names, in any state: whose it is and which device started it. */
 export interface JourneyForHeartbeat {
@@ -649,11 +702,13 @@ export interface UnheardAlertCount {
 }
 
 /**
- * A journey as the removal reads it (SM-10): its state and its responder rows.
- * The server's `JourneyForRemoval`, by shape.
+ * A journey as the removal reads it (SM-10): its walker, its state and its
+ * responder rows. The server's `JourneyForRemoval`, by shape; the walker since
+ * GRP-01 (approach item 10), so the walker's route can tell its caller apart.
  */
 export interface JourneyForRemoval {
   id: string;
+  walkerId: string;
   state: FakeJourneyState;
   responderIds: readonly string[];
 }
@@ -877,10 +932,92 @@ export interface StoredDevice {
   credentialHash: string | null;
 }
 
+/** A member's role in the group (GRP-01, approach item 2). */
+export type FakeRole = 'ADMIN' | 'MEMBER';
+
+/** A member as the group store reads one (GRP-01): who, the name they gave, and their role. */
+export interface MemberAsRead {
+  userId: string;
+  displayName: string;
+  role: FakeRole;
+}
+
+/**
+ * A join or a bootstrap (GRP-01, approach items 4 and 8): joined, with the
+ * user, the role and the device's new credential, the one time it is ever
+ * handed out; or `not_valid`, the one answer for every refusal, writing
+ * nothing.
+ */
+export type JoinResult =
+  | { outcome: 'joined'; userId: string; role: FakeRole; credential: string }
+  | { outcome: 'not_valid' };
+
+/** A join as the group store takes it: the code as the domain normalised it, the phone's join key, and the name typed. */
+export interface JoinToRecord {
+  invitationCode: string;
+  joinKey: string;
+  displayName: string;
+}
+
+/**
+ * An invitation made (GRP-01-AC1): its code, the 20 characters as the store
+ * keeps them, handed out this once, and when it expires; or refused, writing
+ * nothing, because the caller is not the admin.
+ */
+export type CreateInvitationResult =
+  { outcome: 'created'; invitationCode: string; expiresAt: Date } | { outcome: 'not_the_admin' };
+
+/** Why the admin's removal of a member writes nothing (GRP-01-AC16). */
+export type MemberRemovalRefusal = 'NOT_THE_ADMIN' | 'MEMBER_NOT_FOUND' | 'CANNOT_REMOVE_ADMIN';
+
+/** The admin's removal of a member (GRP-01-AC17): removed, all of it, or refused, none of it. */
+export type RemoveMemberResult =
+  { outcome: 'removed' } | { outcome: 'not_removed'; reason: MemberRemovalRefusal };
+
+/** What the audit log records (SEC-03, GRP-01, approach item 2). */
+export type AuditAction = 'GROUP_CREATED' | 'INVITATION_CREATED' | 'MEMBER_REMOVED';
+
+/** The group as stored; `createdAt` null for one put in by a builder, as a row put in by hand has no time from the store. */
+export interface StoredGroup {
+  id: string;
+  createdAt: Date | null;
+}
+
+/** A membership as stored; `joinedAt` null for one put in by a builder. */
+export interface StoredMembership {
+  userId: string;
+  groupId: string;
+  role: FakeRole;
+  displayName: string;
+  joinedAt: Date | null;
+}
+
+/** An invitation as stored: only the code's SHA-256, and the join key's once used (approach item 3). */
+export interface StoredInvitation {
+  id: string;
+  groupId: string;
+  codeHash: string;
+  createdBy: string;
+  createdAt: Date;
+  expiresAt: Date;
+  usedAt: Date | null;
+  usedBy: string | null;
+  joinKeyHash: string | null;
+}
+
+/** One audit row: who acted, what, on whom or what, and when, by the store's now. No free text. */
+export interface StoredAuditEntry {
+  id: number;
+  at: Date;
+  actorId: string | null;
+  action: AuditAction;
+  subjectId: string | null;
+}
+
 /** The port methods, which `calls` records. */
 export type JourneyStoreCall =
   | 'unendedJourneyOf'
-  | 'existingUsers'
+  | 'eligibleResponders'
   | 'insertStarted'
   | 'journeyForHeartbeat'
   | 'recordHeartbeat'
@@ -905,16 +1042,30 @@ export type JourneyStoreCall =
   | 'alertsDueForExpiry'
   | 'expireAlert'
   | 'registerCanary'
-  | 'observeCanaryJourney';
+  | 'observeCanaryJourney'
+  | 'authenticate'
+  | 'bootstrapGroup'
+  | 'joinWithInvitation'
+  | 'memberOf'
+  | 'members'
+  | 'createInvitation'
+  | 'removeMember';
 
 export interface FakeJourneyStore {
   /** The walker's journey in any state but ENDED, or null. */
   unendedJourneyOf(walkerId: string): Promise<{ id: string; state: UnendedJourneyState } | null>;
-  /** Which of these IDs are users. */
-  existingUsers(ids: readonly string[]): Promise<ReadonlySet<string>>;
+  /**
+   * GRP-01 (approach item 6): which of these IDs the walker may name as
+   * responders: current members of the walker's group other than the walker;
+   * for the canary's walker, the canary's responder alone; for anyone else,
+   * nobody. Lower-case, as stored.
+   */
+  eligibleResponders(walkerId: string, ids: readonly string[]): Promise<ReadonlySet<string>>;
   /**
    * Stores a start as ACTIVE, with the device that sent it, unless the walker
    * already has an unended journey. Rejects a start with no responders.
+   * Refuses, storing nothing, when a responder named is not one the walker
+   * may name under the "lock" (GRP-01).
    */
   insertStarted(journey: StartedJourney): Promise<InsertStartedResult>;
   /** The journey this ID names, in any state, or null. */
@@ -1066,8 +1217,88 @@ export interface FakeJourneyStore {
    */
   observeCanaryJourney(journeyId: string): Promise<CanaryObservation | null>;
 
-  /** Makes a user exist, with a fresh ID unless one is given. Returns the ID, lower-case. */
+  /**
+   * GRP-01 (approach item 5): the device the SHA-256 of this credential names,
+   * its user, and how far it is admitted (`FULL` for a member's device or the
+   * canary's, `WALKER_ONLY` for one that started a journey not yet ended);
+   * null when no device has it, or it is admitted nowhere. Rejects while
+   * failing, never answering null for a store that cannot check.
+   */
+  authenticate(credential: string): Promise<AuthenticatedDevice | null>;
+  /**
+   * GRP-01-AC8: while no group exists, in one step: the group, a user, an
+   * ADMIN membership with this name, a device with a fresh credential's hash,
+   * and a GROUP_CREATED audit row. Once a group exists, `not_valid`, writing
+   * nothing. Needs a clock.
+   */
+  bootstrapGroup(request: { displayName: string }): Promise<JoinResult>;
+  /**
+   * GRP-01-AC2 to AC6: the invitation the code's SHA-256 names, decided at the
+   * store's now, and written in one step: a new member, or the same join
+   * retried, or `not_valid`, writing nothing. Needs a clock.
+   */
+  joinWithInvitation(request: JoinToRecord): Promise<JoinResult>;
+  /** GRP-01: this user's membership, or null for a user who is no member, a canary user among them. */
+  memberOf(userId: string): Promise<MemberAsRead | null>;
+  /** GRP-01-AC9: every member of the group, in no order a caller may count on. */
+  members(): Promise<MemberAsRead[]>;
+  /** GRP-01-AC1: the admin's invitation and its audit row, in one step; or `not_the_admin`. Needs a clock. */
+  createInvitation(request: { adminId: string }): Promise<CreateInvitationResult>;
+  /**
+   * GRP-01-AC16, AC17, AC20: the admin's removal of a member, in one step:
+   * the membership, then SM-10's removal from each unended journey the member
+   * follows, in journey-ID order, then a MEMBER_REMOVED audit row; or a
+   * refusal, writing nothing. Rejects, writing nothing, when a journey's row
+   * is held by `hold` (55P03). Needs a clock.
+   */
+  removeMember(request: { adminId: string; memberId: string }): Promise<RemoveMemberResult>;
+
+  /** Makes a user exist, with a fresh ID unless one is given. Returns the ID, lower-case. No membership. */
   addUser(id?: string): string;
+  /** Every user stored, lower-case, in the order made: what `existingUsers` once read, now a test's own reader (GRP-01). */
+  userIds(): string[];
+  /**
+   * GRP-01: makes a member of the one group, putting the group in first if
+   * there is none: the user too, if absent, with a fresh ID unless one is
+   * given. A MEMBER with a synthetic display name unless told otherwise.
+   * Keeps the tables' rules: throws for a second membership, a second ADMIN,
+   * a canary user, or a display name the check refuses. Returns the ID,
+   * lower-case.
+   */
+  addMember(id?: string, options?: { role?: FakeRole; displayName?: string }): string;
+  /**
+   * GRP-01: a device of a user who exists, holding the SHA-256 of a fresh
+   * credential, as a join leaves one: what a phone would send, and the
+   * device's ID.
+   */
+  addDeviceWithCredential(userId: string): { deviceId: string; credential: string };
+  /**
+   * GRP-01-AC13: deletes this user's membership directly, as another
+   * transaction's removal would, and nothing else: no journey is touched and
+   * no audit row is written. Throws for a user who is no member.
+   */
+  removeMembership(userId: string): void;
+  /**
+   * GRP-01: puts an invitation in directly, as a test's own setup: made by a
+   * member, created at `createdAt`, expiring seven days later unless told
+   * otherwise, and used, by whom and with which join key, if told so. Keeps
+   * the table's rules: the used fields all set or all null, the expiry after
+   * the creation. Returns its ID and its code.
+   */
+  seedInvitation(invitation: {
+    createdBy: string;
+    createdAt: Date;
+    expiresAt?: Date;
+    used?: { at: Date; by: string; joinKey: string } | null;
+  }): { id: string; invitationCode: string };
+  /** GRP-01: the group, if there is one, as stored. Copies. */
+  groups(): StoredGroup[];
+  /** GRP-01: every membership, in the order made. Copies. */
+  memberships(): StoredMembership[];
+  /** GRP-01: every invitation, in the order made. Copies. */
+  invitations(): StoredInvitation[];
+  /** GRP-01: every audit row, in the order written. Copies. */
+  auditLog(): StoredAuditEntry[];
   /**
    * Makes a device exist for a user who exists, as the `devices` table's
    * foreign key requires, with a fresh ID unless one is given. Returns the
@@ -1159,10 +1390,11 @@ export interface FakeJourneyStore {
   /** REL-10: every device stored, in the order stored, with its user and credential hash. Copies. */
   devices(): StoredDevice[];
   /**
-   * REL-10: the device this credential hash names, and its user, or null:
-   * what the API's authenticator finds for the hash of a credential.
+   * REL-10: the device this credential hash names, its user, and how far it
+   * is admitted (GRP-01, as `authenticate` admits it), or null: what the
+   * API's authenticator finds for the hash of a credential.
    */
-  deviceWithCredentialHash(credentialHash: string): { deviceId: string; userId: string } | null;
+  deviceWithCredentialHash(credentialHash: string): AuthenticatedDevice | null;
   /**
    * REL-10: deletes a device directly, as a test's own setup. Throws for a
    * device not stored, or one a journey was started from, as the foreign key
@@ -1362,6 +1594,44 @@ function uniqueViolation(what: string): Error {
 /** The answer of a step that has not read the store's now yet, and needs it to go on. */
 const NEEDS_NOW = Symbol('needs the store’s now');
 
+/**
+ * Seven days (GRP-01, reading 4): the server's INVITATION_VALID_FOR_MS,
+ * written out because the test kit imports nothing from the server. An
+ * invitation is valid while the store's now is before its creation plus
+ * this, and expired from that very moment.
+ */
+const INVITATION_VALID_FOR_MS = 604_800_000;
+
+/** The longest display name a membership holds, after trimming (GRP-01, approach item 2). */
+const DISPLAY_NAME_MAX = 40;
+
+/** A control character, C0 or C1, which a display name may not hold (approach item 2). */
+function isControl(character: string): boolean {
+  const code = character.codePointAt(0) ?? 0;
+  return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+}
+
+/**
+ * Whether the memberships table's check takes this display name: 1 to 40
+ * characters after trimming, counted as PostgreSQL's char_length counts them
+ * (code points), none a control character.
+ */
+function isDisplayName(name: string): boolean {
+  const length = Array.from(name.trim()).length;
+  let control = false;
+  for (const character of name) {
+    control ||= isControl(character);
+  }
+  return length >= 1 && length <= DISPLAY_NAME_MAX && !control;
+}
+
+/** A lock wait that ran out, as PostgreSQL reports one: SQLSTATE 55P03. */
+function lockNotAvailable(what: string): Error {
+  return Object.assign(new Error(`canceling statement due to lock timeout: ${what}`), {
+    code: '55P03',
+  });
+}
+
 export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJourneyStore {
   const users = new Set<string>();
   /** Device ID → its user. */
@@ -1387,6 +1657,11 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
   /** LOST-08-AC21: what runs after a start's next conflicts, and before its next retries. */
   const afterConflicts: (() => unknown)[] = [];
   const beforeRetries: (() => unknown)[] = [];
+  /** GRP-01: the one group, if any; the memberships by user; the invitations; the audit log. */
+  const groupRows: { id: string; createdAt: Date | null }[] = [];
+  const membershipRows = new Map<string, StoredMembership>();
+  const invitationRows: StoredInvitation[] = [];
+  const auditRows: StoredAuditEntry[] = [];
 
   /** The store's now: the clock's, or a loud refusal when it was given none. */
   const nowFor = async (call: JourneyStoreCall): Promise<Date> => {
@@ -1605,6 +1880,114 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
   const unendedOf = (walkerId: string): KeptJourney | undefined =>
     stored.find((journey) => journey.walkerId === asStored(walkerId) && journey.state !== 'ENDED');
 
+  /** The canary's two users, which no membership may name (D-128, GRP-01-AC15). */
+  const canaryUsers = new Set([asStored(CANARY_IDS.walkerId), asStored(CANARY_IDS.responderId)]);
+
+  /**
+   * GRP-01 (approach item 6): whom this walker may name. Current members of
+   * the walker's group other than the walker; for the canary's walker, the
+   * canary's responder alone; for anyone else, nobody.
+   */
+  const mayName = (givenWalkerId: string): ((id: string) => boolean) => {
+    const walkerId = asStored(givenWalkerId);
+    if (walkerId === asStored(CANARY_IDS.walkerId)) {
+      return (id) => id === asStored(CANARY_IDS.responderId);
+    }
+    const walker = membershipRows.get(walkerId);
+    if (walker === undefined) {
+      return () => false;
+    }
+    return (id) => id !== walkerId && membershipRows.get(id)?.groupId === walker.groupId;
+  };
+
+  /**
+   * GRP-01 (approach item 5, D-137): how far this device is admitted, or null:
+   * FULL while its user is a member, or it is the canary's device; WALKER_ONLY
+   * while it started a journey that has not ended; nowhere otherwise.
+   */
+  const admissionOf = (deviceId: string, userId: string): DeviceAccess | null => {
+    if (membershipRows.has(userId) || deviceId === asStored(CANARY_IDS.deviceId)) {
+      return 'FULL';
+    }
+    return stored.some((journey) => journey.deviceId === deviceId && journey.state !== 'ENDED')
+      ? 'WALKER_ONLY'
+      : null;
+  };
+
+  /** The device this credential hash names, admitted as `admissionOf` says, or null. */
+  const admittedByHash = (credentialHash: string): AuthenticatedDevice | null => {
+    for (const [deviceId, hash] of credentialHashes) {
+      const userId = devices.get(deviceId);
+      if (hash === credentialHash && userId !== undefined) {
+        const access = admissionOf(deviceId, userId);
+        return access === null ? null : { deviceId, userId, access };
+      }
+    }
+    return null;
+  };
+
+  /** A device for this user with the SHA-256 of a fresh credential: what a join leaves on a phone. */
+  const newDeviceFor = (userId: string): { deviceId: string; credential: string } => {
+    const deviceId = syntheticUuid();
+    const credential = syntheticCredential();
+    devices.set(deviceId, userId);
+    credentialHashes.set(deviceId, sha256Hex(credential));
+    return { deviceId, credential };
+  };
+
+  /**
+   * A membership as the table takes it, or a throw, as its keys and checks
+   * refuse one: the user must be a user, have no membership yet, be neither
+   * canary user, and the name must pass the check; one ADMIN per group.
+   */
+  const checkedMembership = (membership: StoredMembership): StoredMembership => {
+    if (!users.has(membership.userId)) {
+      throw notAUser('member', membership.userId);
+    }
+    if (canaryUsers.has(membership.userId)) {
+      throw checkViolation('memberships', 'user_id is neither of the canary’s two users (D-128)');
+    }
+    if (membershipRows.has(membership.userId)) {
+      throw uniqueViolation('memberships_pkey: one membership per user');
+    }
+    if (!isDisplayName(membership.displayName)) {
+      throw checkViolation(
+        'memberships',
+        'display_name is 1 to 40 characters after trimming, with no control character',
+      );
+    }
+    if (
+      membership.role === 'ADMIN' &&
+      [...membershipRows.values()].some(
+        (other) => other.groupId === membership.groupId && other.role === 'ADMIN',
+      )
+    ) {
+      throw uniqueViolation('one ADMIN per group');
+    }
+    return membership;
+  };
+
+  /** The one group's ID, the group put in first, at `createdAt`, when there is none. */
+  const theGroup = (createdAt: Date | null): string => {
+    const existing = groupRows[0];
+    if (existing !== undefined) {
+      return existing.id;
+    }
+    const id = syntheticUuid();
+    groupRows.push({ id, createdAt: copyOf(createdAt) });
+    return id;
+  };
+
+  const audit = (entry: Omit<StoredAuditEntry, 'id'>): void => {
+    auditRows.push({ id: auditRows.length + 1, ...entry, at: new Date(entry.at.getTime()) });
+  };
+
+  const memberAsRead = (membership: StoredMembership): MemberAsRead => ({
+    userId: membership.userId,
+    displayName: membership.displayName,
+    role: membership.role,
+  });
+
   /** What a foreign key would refuse, worded as PostgreSQL words it. */
   const notAUser = (role: string, id: string): Error =>
     new Error(`insert violates foreign key constraint: the ${role} ${id} is not a user`);
@@ -1748,6 +2131,94 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
   };
 
   /**
+   * SM-10's removal step (approach items 4 to 7), for a journey that is not
+   * ENDED and a responder of it, at the store's now, written at once: the
+   * responder's row deleted, the alert they are recorded on reset, their
+   * unsent messages of the journey's alerts withdrawn, and the walker warned
+   * when none is left. `removeResponder` takes it under the journey's "lock",
+   * and the admin's `removeMember` (GRP-01, approach item 9) takes the same
+   * step for each journey the member follows, so the two cannot differ.
+   */
+  const applyRemoval = (
+    journey: KeptJourney,
+    responderId: string,
+    now: Date,
+  ): RemoveResponderResult => {
+    const remaining = journey.responderIds.filter((id) => id !== responderId);
+    // The reset (approach item 4): the journey's one unresolved alert,
+    // when the removed responder is recorded on it, whatever its state.
+    const alert = alerts.find((kept) => kept.journeyId === journey.id && kept.state !== 'RESOLVED');
+    const reset = alert?.acknowledgedBy === responderId ? alert : null;
+    // The walker's warning (approach item 7): the last responder gone.
+    const warning: KeptMessage | null =
+      remaining.length === 0
+        ? {
+            messageId: syntheticUuid(),
+            alertId: null,
+            journeyId: journey.id,
+            recipientId: journey.walkerId,
+            kind: 'NO_RESPONDER',
+            round: 1,
+            createdAt: new Date(now.getTime()),
+            attempts: 0,
+            nextAttemptAt: new Date(now.getTime()),
+            sentAt: null,
+            lastFailure: null,
+            withdrawnAt: null,
+          }
+        : null;
+    const journeysAlerts = new Set(
+      alerts.filter((kept) => kept.journeyId === journey.id).map(({ id }) => id),
+    );
+
+    journey.responderIds = remaining;
+    if (reset !== null) {
+      reset.state = 'OPEN';
+      reset.acknowledgedBy = null;
+      reset.acknowledgedAt = null;
+      reset.smsRaisedAt = null;
+      reset.round += 1;
+    }
+    for (const message of outbox) {
+      if (message.sentAt !== null || message.withdrawnAt !== null) {
+        continue;
+      }
+      // The reset's withdrawal: the alert's "someone is on it" notices.
+      const byReset =
+        reset !== null &&
+        message.alertId === reset.id &&
+        WITHDRAWN_WHEN_RESET.includes(message.kind);
+      // The removal's (D-122, item 2): every unsent message of the
+      // journey's alerts to the removed responder, of any alert kind.
+      const byRemoval =
+        message.alertId !== null &&
+        journeysAlerts.has(message.alertId) &&
+        message.recipientId === responderId &&
+        WITHDRAWN_WHEN_REMOVED.includes(message.kind);
+      if (byReset || byRemoval) {
+        message.withdrawnAt = new Date(now.getTime());
+      }
+    }
+    if (warning !== null) {
+      outbox.push(warning);
+    }
+    return {
+      outcome: 'removed',
+      resetAlertId: reset?.id ?? null,
+      messages:
+        warning === null
+          ? []
+          : [
+              {
+                messageId: warning.messageId,
+                recipientId: warning.recipientId,
+                kind: warning.kind,
+              },
+            ],
+    };
+  };
+
+  /**
    * Answers a turn later, as a real query does, and only then checks for a
    * failure and touches the data — so code that forgot to wait for a write
    * cannot look, to a test, as though it had waited. Each answer is worked
@@ -1781,11 +2252,11 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
           : { id: journey.id, state: journey.state as UnendedJourneyState };
       });
     },
-    existingUsers(ids) {
-      return answer(
-        'existingUsers',
-        () => new Set(ids.map(asStored).filter((id) => users.has(id))),
-      );
+    eligibleResponders(walkerId, ids) {
+      return answer('eligibleResponders', () => {
+        const eligible = mayName(walkerId);
+        return new Set(ids.map(asStored).filter(eligible));
+      });
     },
     insertStarted({
       walkerId: givenWalkerId,
@@ -1805,6 +2276,14 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
             'fakeJourneyStore.insertStarted: a start with no responders is refused, so no ' +
               'journey is ever stored with nobody to alert',
           );
+        }
+        // GRP-01 (approach item 6): the named responders' memberships, taken
+        // under the start's lock before anything is written; one not eligible
+        // now, a member removed since the module's read among them, refuses
+        // the whole start.
+        const eligible = mayName(walkerId);
+        if (!responderIds.every(eligible)) {
+          return { inserted: false, refused: 'INVALID_RESPONDER' };
         }
         // LOST-08 (approach item 9): an insert that meets the walker's
         // unended journey, then reads which journey won, as the adapter does
@@ -2243,7 +2722,12 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         const journey = journeyNamed(journeyId);
         return journey === undefined
           ? null
-          : { id: journey.id, state: journey.state, responderIds: [...journey.responderIds] };
+          : {
+              id: journey.id,
+              walkerId: journey.walkerId,
+              state: journey.state,
+              responderIds: [...journey.responderIds],
+            };
       });
     },
     removeResponder(removal) {
@@ -2288,80 +2772,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
         if (now === null) {
           return NEEDS_NOW;
         }
-        const remaining = journey.responderIds.filter((id) => id !== responderId);
-        // The reset (approach item 4): the journey's one unresolved alert,
-        // when the removed responder is recorded on it, whatever its state.
-        const alert = alerts.find(
-          (kept) => kept.journeyId === journey.id && kept.state !== 'RESOLVED',
-        );
-        const reset = alert?.acknowledgedBy === responderId ? alert : null;
-        // The walker's warning (approach item 7): the last responder gone.
-        const warning: KeptMessage | null =
-          remaining.length === 0
-            ? {
-                messageId: syntheticUuid(),
-                alertId: null,
-                journeyId: journey.id,
-                recipientId: journey.walkerId,
-                kind: 'NO_RESPONDER',
-                round: 1,
-                createdAt: new Date(now.getTime()),
-                attempts: 0,
-                nextAttemptAt: new Date(now.getTime()),
-                sentAt: null,
-                lastFailure: null,
-                withdrawnAt: null,
-              }
-            : null;
-        const journeysAlerts = new Set(
-          alerts.filter((kept) => kept.journeyId === journey.id).map(({ id }) => id),
-        );
-
-        journey.responderIds = remaining;
-        if (reset !== null) {
-          reset.state = 'OPEN';
-          reset.acknowledgedBy = null;
-          reset.acknowledgedAt = null;
-          reset.smsRaisedAt = null;
-          reset.round += 1;
-        }
-        for (const message of outbox) {
-          if (message.sentAt !== null || message.withdrawnAt !== null) {
-            continue;
-          }
-          // The reset's withdrawal: the alert's "someone is on it" notices.
-          const byReset =
-            reset !== null &&
-            message.alertId === reset.id &&
-            WITHDRAWN_WHEN_RESET.includes(message.kind);
-          // The removal's (D-122, item 2): every unsent message of the
-          // journey's alerts to the removed responder, of any alert kind.
-          const byRemoval =
-            message.alertId !== null &&
-            journeysAlerts.has(message.alertId) &&
-            message.recipientId === responderId &&
-            WITHDRAWN_WHEN_REMOVED.includes(message.kind);
-          if (byReset || byRemoval) {
-            message.withdrawnAt = new Date(now.getTime());
-          }
-        }
-        if (warning !== null) {
-          outbox.push(warning);
-        }
-        return {
-          outcome: 'removed',
-          resetAlertId: reset?.id ?? null,
-          messages:
-            warning === null
-              ? []
-              : [
-                  {
-                    messageId: warning.messageId,
-                    recipientId: warning.recipientId,
-                    kind: warning.kind,
-                  },
-                ],
-        };
+        return applyRemoval(journey, responderId, now);
       };
       return answer(
         'removeResponder',
@@ -2971,10 +3382,268 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       });
     },
 
+    authenticate(credential) {
+      // The adapter's one query (approach item 5): the device by the hash of
+      // what was sent, its user, and how far it is admitted. A store that
+      // cannot answer rejects, through `answer`, and never answers null.
+      return answer('authenticate', () => admittedByHash(sha256Hex(credential)));
+    },
+    bootstrapGroup({ displayName }) {
+      return answer('bootstrapGroup', async (): Promise<JoinResult> => {
+        const now = await nowFor('bootstrapGroup');
+        // The one-group index decides: with a group there, the code opens
+        // nothing (approach item 8).
+        if (groupRows.length > 0) {
+          return { outcome: 'not_valid' };
+        }
+        const userId = syntheticUuid();
+        const groupId = syntheticUuid();
+        const membership = { userId, groupId, role: 'ADMIN' as const, displayName, joinedAt: now };
+        // Checked before anything is written: all of it or none of it.
+        if (!isDisplayName(displayName)) {
+          throw checkViolation(
+            'memberships',
+            'display_name is 1 to 40 characters after trimming, with no control character',
+          );
+        }
+        groupRows.push({ id: groupId, createdAt: new Date(now.getTime()) });
+        users.add(userId);
+        membershipRows.set(userId, checkedMembership(membership));
+        const { credential } = newDeviceFor(userId);
+        audit({ at: now, actorId: userId, action: 'GROUP_CREATED', subjectId: userId });
+        return { outcome: 'joined', userId, role: 'ADMIN', credential };
+      });
+    },
+    joinWithInvitation({ invitationCode, joinKey, displayName }) {
+      return answer('joinWithInvitation', async (): Promise<JoinResult> => {
+        const now = await nowFor('joinWithInvitation');
+        const codeHash = sha256Hex(invitationCode);
+        // The invitation's row, taken as the adapter's `for update` takes it.
+        const invitation = invitationRows.find((row) => row.codeHash === codeHash);
+        if (invitation === undefined) {
+          return { outcome: 'not_valid' };
+        }
+        // Reading 4: valid while now is before its creation plus seven days.
+        if (now.getTime() >= invitation.createdAt.getTime() + INVITATION_VALID_FOR_MS) {
+          return { outcome: 'not_valid' };
+        }
+        const joinKeyHash = sha256Hex(joinKey);
+        if (invitation.usedAt !== null) {
+          // Reading 3: the same join, retried after its answer was lost, is
+          // the same key while its user is still a member; anything else is
+          // the one refusal.
+          const usedBy = invitation.usedBy ?? '';
+          const member = membershipRows.get(usedBy);
+          if (invitation.joinKeyHash !== joinKeyHash || member === undefined) {
+            return { outcome: 'not_valid' };
+          }
+          const own = [...devices].filter(([, userId]) => userId === usedBy);
+          if (own.length !== 1) {
+            throw uniqueViolation('devices.credential_hash: one join, one device');
+          }
+          const [[deviceId]] = own as [[string, string]];
+          const credential = syntheticCredential();
+          credentialHashes.set(deviceId, sha256Hex(credential));
+          return { outcome: 'joined', userId: usedBy, role: member.role, credential };
+        }
+        if (!isDisplayName(displayName)) {
+          throw checkViolation(
+            'memberships',
+            'display_name is 1 to 40 characters after trimming, with no control character',
+          );
+        }
+        const userId = syntheticUuid();
+        users.add(userId);
+        membershipRows.set(
+          userId,
+          checkedMembership({
+            userId,
+            groupId: invitation.groupId,
+            role: 'MEMBER',
+            displayName,
+            joinedAt: new Date(now.getTime()),
+          }),
+        );
+        const { credential } = newDeviceFor(userId);
+        invitation.usedAt = new Date(now.getTime());
+        invitation.usedBy = userId;
+        invitation.joinKeyHash = joinKeyHash;
+        return { outcome: 'joined', userId, role: 'MEMBER', credential };
+      });
+    },
+    memberOf(userId) {
+      return answer('memberOf', () => {
+        const membership = membershipRows.get(asStored(userId));
+        return membership === undefined ? null : memberAsRead(membership);
+      });
+    },
+    members() {
+      return answer('members', () => [...membershipRows.values()].map(memberAsRead));
+    },
+    createInvitation({ adminId }) {
+      return answer('createInvitation', async (): Promise<CreateInvitationResult> => {
+        const admin = membershipRows.get(asStored(adminId));
+        if (admin?.role !== 'ADMIN') {
+          return { outcome: 'not_the_admin' };
+        }
+        const now = await nowFor('createInvitation');
+        let invitationCode = syntheticInvitationCode();
+        while (invitationRows.some((row) => row.codeHash === sha256Hex(invitationCode))) {
+          invitationCode = syntheticInvitationCode();
+        }
+        const id = syntheticUuid();
+        const expiresAt = new Date(now.getTime() + INVITATION_VALID_FOR_MS);
+        invitationRows.push({
+          id,
+          groupId: admin.groupId,
+          codeHash: sha256Hex(invitationCode),
+          createdBy: admin.userId,
+          createdAt: new Date(now.getTime()),
+          expiresAt,
+          usedAt: null,
+          usedBy: null,
+          joinKeyHash: null,
+        });
+        audit({ at: now, actorId: admin.userId, action: 'INVITATION_CREATED', subjectId: id });
+        return { outcome: 'created', invitationCode, expiresAt: new Date(expiresAt.getTime()) };
+      });
+    },
+    removeMember({ adminId: givenAdminId, memberId: givenMemberId }) {
+      return answer('removeMember', async (): Promise<RemoveMemberResult> => {
+        const adminId = asStored(givenAdminId);
+        const memberId = asStored(givenMemberId);
+        // The admin rules (approach item 9), in their order, under the
+        // membership row's lock: each refusal writes nothing.
+        if (membershipRows.get(adminId)?.role !== 'ADMIN') {
+          return { outcome: 'not_removed', reason: 'NOT_THE_ADMIN' };
+        }
+        if (memberId === adminId) {
+          return { outcome: 'not_removed', reason: 'CANNOT_REMOVE_ADMIN' };
+        }
+        const member = membershipRows.get(memberId);
+        if (member === undefined) {
+          return { outcome: 'not_removed', reason: 'MEMBER_NOT_FOUND' };
+        }
+        if (member.role === 'ADMIN') {
+          return { outcome: 'not_removed', reason: 'CANNOT_REMOVE_ADMIN' };
+        }
+        const following = () =>
+          stored
+            .filter(
+              (journey) => journey.state !== 'ENDED' && journey.responderIds.includes(memberId),
+            )
+            .sort((a, b) => a.id.localeCompare(b.id));
+        // A holder that commits within the wait is let go first, its work
+        // done; one that never lets go outlasts the lock limit, and the
+        // whole removal fails, writing nothing (approach item 9, AC20).
+        for (const journey of following()) {
+          const holderAction = lettingGo.get(journey.id);
+          if (holderAction !== undefined) {
+            lettingGo.delete(journey.id);
+            await holderAction();
+            letGo(journey.id);
+          }
+        }
+        const blocked = following().find((journey) => held.has(journey.id));
+        if (blocked !== undefined) {
+          throw lockNotAvailable(`the row of journey ${blocked.id} is held`);
+        }
+        const now = await nowFor('removeMember');
+        membershipRows.delete(memberId);
+        for (const journey of following()) {
+          applyRemoval(journey, memberId, now);
+        }
+        audit({ at: now, actorId: adminId, action: 'MEMBER_REMOVED', subjectId: memberId });
+        return { outcome: 'removed' };
+      });
+    },
+
     addUser(givenId = syntheticUuid()) {
       const id = asStored(givenId);
       users.add(id);
       return id;
+    },
+    userIds() {
+      return [...users];
+    },
+    addMember(
+      givenId = syntheticUuid(),
+      { role = 'MEMBER', displayName = syntheticDisplayName() } = {},
+    ) {
+      const userId = asStored(givenId);
+      if (canaryUsers.has(userId)) {
+        throw checkViolation('memberships', 'user_id is neither of the canary’s two users (D-128)');
+      }
+      const groupId = theGroup(null);
+      users.add(userId);
+      membershipRows.set(
+        userId,
+        checkedMembership({ userId, groupId, role, displayName, joinedAt: null }),
+      );
+      return userId;
+    },
+    addDeviceWithCredential(givenUserId) {
+      const userId = asStored(givenUserId);
+      if (!users.has(userId)) {
+        throw notAUser('device’s user', userId);
+      }
+      return newDeviceFor(userId);
+    },
+    removeMembership(givenUserId) {
+      const userId = asStored(givenUserId);
+      if (!membershipRows.delete(userId)) {
+        throw new Error(`fakeJourneyStore.removeMembership: ${userId} is no member`);
+      }
+    },
+    seedInvitation({ createdBy: givenCreatedBy, createdAt, expiresAt, used = null }) {
+      const createdBy = asStored(givenCreatedBy);
+      const creator = membershipRows.get(createdBy);
+      if (creator === undefined) {
+        throw new Error(
+          `fakeJourneyStore.seedInvitation: ${createdBy} is no member, so there is no group to invite to`,
+        );
+      }
+      const expiry = expiresAt ?? new Date(createdAt.getTime() + INVITATION_VALID_FOR_MS);
+      if (expiry.getTime() <= createdAt.getTime()) {
+        throw checkViolation('invitations', 'expires_at > created_at');
+      }
+      if (used !== null && !users.has(asStored(used.by))) {
+        throw notAUser('invitation’s user', used.by);
+      }
+      const invitationCode = syntheticInvitationCode();
+      const id = syntheticUuid();
+      invitationRows.push({
+        id,
+        groupId: creator.groupId,
+        codeHash: sha256Hex(invitationCode),
+        createdBy,
+        createdAt: new Date(createdAt.getTime()),
+        expiresAt: new Date(expiry.getTime()),
+        usedAt: used === null ? null : new Date(used.at.getTime()),
+        usedBy: used === null ? null : asStored(used.by),
+        joinKeyHash: used === null ? null : sha256Hex(used.joinKey),
+      });
+      return { id, invitationCode };
+    },
+    groups() {
+      return groupRows.map(({ id, createdAt }) => ({ id, createdAt: copyOf(createdAt) }));
+    },
+    memberships() {
+      return [...membershipRows.values()].map((membership) => ({
+        ...membership,
+        joinedAt: copyOf(membership.joinedAt),
+      }));
+    },
+    invitations() {
+      return invitationRows.map((row) => ({
+        ...row,
+        createdAt: new Date(row.createdAt.getTime()),
+        expiresAt: new Date(row.expiresAt.getTime()),
+        usedAt: copyOf(row.usedAt),
+      }));
+    },
+    auditLog() {
+      return auditRows.map((row) => ({ ...row, at: new Date(row.at.getTime()) }));
     },
     addDevice(givenUserId, givenId = syntheticUuid()) {
       const userId = asStored(givenUserId);
@@ -3178,13 +3847,7 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       }));
     },
     deviceWithCredentialHash(credentialHash) {
-      for (const [deviceId, hash] of credentialHashes) {
-        const userId = devices.get(deviceId);
-        if (hash === credentialHash && userId !== undefined) {
-          return { deviceId, userId };
-        }
-      }
-      return null;
+      return admittedByHash(credentialHash);
     },
     removeDevice(givenId) {
       const id = asStored(givenId);

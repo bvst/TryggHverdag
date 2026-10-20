@@ -20,6 +20,19 @@
 // The expected text is read from nb.json and en.json rather than copied, so
 // these tests hold the screen to the translation files, not to a second copy
 // of the words.
+//
+// RG-03 (GRP-01, the spec's "Existing assertions that change by design",
+// INF-06-AC11's item; approach item 14): the app no longer opens on a
+// placeholder. A fresh install, nothing in secure storage, opens on the join
+// screen, so the title these tests look for is the join screen's
+// (grp.join.title) and the line under it its introduction (grp.join.intro),
+// where they were placeholder.title and placeholder.status, whose keys go.
+// The app is rendered from its whole route folder, since the index route may
+// now lead to another route, and secure storage and the join key's random
+// bytes are stood in for, empty and synthetic, with no network: a fresh
+// install asks the server nothing. What each test holds is unchanged: the
+// title as a heading and the line under it, in the device's language, and no
+// raw key on screen.
 import { afterEach, beforeAll, describe, expect, jest, test } from '@jest/globals';
 import type * as ExpoRouterTesting from 'expo-router/testing-library';
 import type { ReactElement } from 'react';
@@ -62,6 +75,55 @@ jest.mock('@testing-library/react-native', () =>
   jest.requireActual<object>('@testing-library/react-native/pure'),
 );
 
+// A fresh install: secure storage holds nothing (GRP-01).
+jest.mock(
+  'expo-secure-store',
+  () => ({
+    getItemAsync: jest.fn(() => Promise.resolve(null)),
+    setItemAsync: jest.fn(() => Promise.resolve()),
+    deleteItemAsync: jest.fn(() => Promise.resolve()),
+    getItem: jest.fn(() => null),
+    setItem: jest.fn(),
+    deleteItem: jest.fn(),
+  }),
+  { virtual: true },
+);
+jest.mock(
+  'expo-crypto',
+  () => ({
+    getRandomBytes: jest.fn((size: number) => new Uint8Array(size)),
+    getRandomBytesAsync: jest.fn((size: number) => Promise.resolve(new Uint8Array(size))),
+    getRandomValues: jest.fn(<T,>(array: T) => array),
+    randomUUID: jest.fn(() => '00000000-0000-4000-8000-000000000000'),
+  }),
+  { virtual: true },
+);
+// No network: a fresh install asks the server nothing before anyone joins.
+(globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+  Promise.reject(new Error('a fresh install asks the server nothing')),
+);
+
+/** A text of a translation file by its dotted key, which must be there. */
+function textOf(file: unknown, key: string): string {
+  const value = key
+    .split('.')
+    .reduce<unknown>(
+      (node, part) =>
+        typeof node === 'object' && node !== null
+          ? (node as Record<string, unknown>)[part]
+          : undefined,
+      file,
+    );
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`the translation file has no text for ${key}`);
+  }
+  return value;
+}
+
+/** The join screen's title and the line under it: what a fresh install opens on (GRP-01). */
+const TITLE = 'grp.join.title';
+const LINE = 'grp.join.intro';
+
 /** A route file as Expo Router loads it: the whole module, not just its component. */
 type RouteModule = Record<string, unknown> & { default: () => ReactElement | null };
 
@@ -89,9 +151,16 @@ function loadAppOn(languages: readonly DeviceLanguage[]): LoadedApp {
   };
 }
 
-/** Renders the initial route, "/", under the root layout: what the app shows when it opens. */
+/**
+ * Renders the initial route, "/", under the root layout: what the app shows
+ * when it opens. From the whole route folder, so a route the index leads to
+ * is there too (GRP-01); the root layout and the index route loaded above
+ * keep the dependency graph HK-04 reads.
+ */
 async function openApp({ testing, rootLayout, indexRoute }: LoadedApp) {
-  await testing.renderRouter({ _layout: rootLayout, index: indexRoute });
+  expect(typeof rootLayout.default).toBe('function');
+  expect(typeof indexRoute.default).toBe('function');
+  await testing.renderRouter('src/app', { initialUrl: '/' });
   return testing.screen;
 }
 
@@ -127,17 +196,20 @@ describe('on a device whose preferred language is Norwegian bokmål', () => {
   test('INF-06-AC2: the index route shows the bokmål title as a heading', async () => {
     const screen = await openApp(app);
 
-    expect(screen.getAllByRole(HEADING, { name: nb.placeholder.title }).length).toBeGreaterThan(0);
+    expect(
+      (await screen.findAllByRole(HEADING, { name: textOf(nb, TITLE) })).length,
+    ).toBeGreaterThan(0);
   });
 
-  test('INF-06-AC2: the index route shows the bokmål status line', async () => {
+  test('INF-06-AC2: the index route shows the bokmål line under the title', async () => {
     const screen = await openApp(app);
 
-    expect(screen.getByText(nb.placeholder.status)).toBeTruthy();
+    expect(await screen.findByText(textOf(nb, LINE))).toBeTruthy();
   });
 
   test('INF-06-AC2: no text on the screen is a raw translation key', async () => {
     const screen = await openApp(app);
+    await screen.findAllByRole(HEADING, { name: textOf(nb, TITLE) });
 
     for (const key of keysOf(nb)) {
       expect(screen.queryByText(key)).toBeNull();
@@ -155,21 +227,21 @@ describe('on a device whose preferred language is English', () => {
     await app.testing.cleanup();
   });
 
-  test('INF-06-AC3: the same route shows the English title as a heading and the English status line', async () => {
+  test('INF-06-AC3: the same route shows the English title as a heading and the English line under it', async () => {
     const screen = await openApp(app);
 
-    expect(screen.getAllByRole(HEADING, { name: en.placeholder.title }).length).toBeGreaterThan(0);
-    expect(screen.getByText(en.placeholder.status)).toBeTruthy();
+    expect(
+      (await screen.findAllByRole(HEADING, { name: textOf(en, TITLE) })).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText(textOf(en, LINE))).toBeTruthy();
   });
 
   test('INF-06-AC3: a visible string differs between the files, and the bokmål one is not shown', async () => {
     // Without a difference, this file could not tell which translation was used.
-    const shown = [
-      ['placeholder.title', nb.placeholder.title, en.placeholder.title],
-      ['placeholder.status', nb.placeholder.status, en.placeholder.status],
-    ] as const;
+    const shown = [TITLE, LINE].map((key) => [key, textOf(nb, key), textOf(en, key)] as const);
     const differing = shown.filter(([, bokmål, english]) => bokmål !== english);
     const screen = await openApp(app);
+    await screen.findAllByRole(HEADING, { name: textOf(en, TITLE) });
 
     expect(differing.map(([key]) => key).length).toBeGreaterThan(0);
     for (const [, bokmål] of differing) {

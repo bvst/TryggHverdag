@@ -16,6 +16,7 @@ import {
   sessionLimitsLines,
 } from './adapters/db.ts';
 import { databaseDeviceAuthenticator } from './adapters/device-credentials.ts';
+import { databaseGroupStore } from './adapters/groups.ts';
 import { databaseJourneyStore } from './adapters/journeys.ts';
 import { databaseWorkerHeartbeats } from './adapters/worker-heartbeats.ts';
 import { createApi } from './api.ts';
@@ -25,7 +26,11 @@ import { listen } from './http.ts';
 import { createLog } from './log.ts';
 import { createAcknowledgementService } from './modules/alerts/acknowledgement.ts';
 import { createClosureService } from './modules/alerts/closure.ts';
+import { createInvitationService } from './modules/groups/invitations.ts';
+import { createJoinService } from './modules/groups/join.ts';
+import { createMemberService } from './modules/groups/members.ts';
 import { createHealthService } from './modules/health/service.ts';
+import { createRemovalService } from './modules/journeys/removal.ts';
 import { createJourneyService } from './modules/journeys/service.ts';
 
 export interface ApiProcess {
@@ -56,6 +61,7 @@ export async function startApiProcess(config: ServerConfig): Promise<ApiProcess>
   // watchdog's "how long since" are read from the same now.
   const clock = databaseClock(db);
   const store = databaseJourneyStore(db);
+  const groups = databaseGroupStore(db);
   const app = createApi({
     health: createHealthService({ clock, heartbeats: databaseWorkerHeartbeats(db) }),
     journeys: createJourneyService({ clock, journeys: store, log }),
@@ -65,6 +71,13 @@ export async function startApiProcess(config: ServerConfig): Promise<ApiProcess>
     // "They're safe" reads no clock either: it ends the journey at the
     // database's now() (LOST-08).
     closures: createClosureService({ alerts: store, log }),
+    // GRP-01's red phase: wired, and reached by no route yet. The bootstrap
+    // code is null until the green phase reads ADMIN_BOOTSTRAP_CODE
+    // (readAdminBootstrapSetting) and says at start whether it is usable.
+    joins: createJoinService({ groups, log, bootstrapCode: null }),
+    invitations: createInvitationService({ groups, log }),
+    members: createMemberService({ groups, log }),
+    removals: createRemovalService({ journeys: store, log }),
   });
 
   let server;
