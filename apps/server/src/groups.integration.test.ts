@@ -36,6 +36,7 @@ import {
   apiPath,
   endTestPool,
   fakeLog,
+  insertGroupRow,
   insertMemberRow,
   syntheticBootstrapCode,
   syntheticCredential,
@@ -431,6 +432,104 @@ describe('GRP-01: joining, against the real tables', () => {
   );
 });
 
+// Review loop 1 (privacy-security-reviewer N1, code-reviewer; approach item
+// 8): the first admin's bootstrap, retried with its join key while the admin
+// is the group's only member, over the real tables. The group's row keeps
+// the join key's SHA-256 (groups.bootstrap_join_key_hash), and nothing else
+// is written but the admin's device's new hash.
+describe('GRP-01: the first admin’s bootstrap, retried, against the real tables', () => {
+  test(
+    'GRP-01-AC8: the bootstrap code sent again with the same join key, while the admin is the only member, is 201: the same user, ADMIN, a new credential; the first credential is then 401 and the new one works; still one group, membership, user, device and GROUP_CREATED row; the device holds the new credential’s hash; the name is the first join’s; and the group’s row keeps only the join key’s SHA-256',
+    withServer(async (s) => {
+      const adminPhone = await s.admin();
+
+      const again = await s.call('POST', apiPath('group/members'), {
+        body: {
+          invitationCode: s.bootstrapCode,
+          joinKey: adminPhone.joinKey,
+          displayName: syntheticDisplayName(),
+        },
+      });
+
+      expect(again.status, again.text).toBe(201);
+      expect(again.headers.get('cache-control')).toBe('no-store');
+      const { userId, role, credential } = again.body as {
+        userId: string;
+        role: string;
+        credential: string;
+      };
+      expect([userId, role]).toEqual([adminPhone.userId, 'ADMIN']);
+      expect(credential).not.toBe(adminPhone.credential);
+      expect((await s.me(adminPhone)).status).toBe(401);
+      const me = await s.me({ credential });
+      expect([me.status, me.body]).toEqual([
+        200,
+        { userId, displayName: adminPhone.displayName, role: 'ADMIN' },
+      ]);
+      expect({
+        groups: await s.count('groups'),
+        memberships: await s.count('memberships'),
+        users: await s.count('users'),
+        devices: await s.count('devices'),
+      }).toEqual({ groups: 1, memberships: 1, users: 1, devices: 1 });
+      const devices = await s.pool.query<{ credential_hash: string }>(
+        'select credential_hash from devices where user_id = $1',
+        [userId],
+      );
+      expect(devices.rows).toEqual([{ credential_hash: hashCredential(credential) }]);
+      const audit = await s.pool.query<{ action: string }>('select action::text from audit_log');
+      expect(audit.rows).toEqual([{ action: 'GROUP_CREATED' }]);
+      const group = await s.pool.query<{ bootstrap_join_key_hash: string }>(
+        'select bootstrap_join_key_hash from groups',
+      );
+      expect(group.rows).toEqual([{ bootstrap_join_key_hash: hashCredential(adminPhone.joinKey) }]);
+      for (const secret of [adminPhone.joinKey, credential, adminPhone.credential]) {
+        expect(await anyColumnHolds(s.pool, secret), 'a column holds a secret').toEqual([]);
+      }
+    }),
+  );
+
+  test(
+    'GRP-01-AC8: the bootstrap code with another join key while the admin is the only member, and with the same join key once a second member has joined, is each 404 INVITATION_NOT_VALID and writes nothing: the admin’s device keeps its hash, and its credential still works',
+    withServer(async (s) => {
+      const adminPhone = await s.admin();
+      const counts = async () => ({
+        groups: await s.count('groups'),
+        memberships: await s.count('memberships'),
+        users: await s.count('users'),
+        devices: await s.count('devices'),
+        audit_log: await s.count('audit_log'),
+        hashes: (
+          await s.pool.query<{ credential_hash: string }>(
+            'select credential_hash from devices order by credential_hash',
+          )
+        ).rows,
+      });
+      const join = (joinKey: string) =>
+        s.call('POST', apiPath('group/members'), {
+          body: { invitationCode: s.bootstrapCode, joinKey, displayName: syntheticDisplayName() },
+        });
+
+      const beforeOther = await counts();
+      const otherKey = await join(syntheticJoinKey());
+      expect(await counts()).toEqual(beforeOther);
+
+      await s.member(adminPhone);
+      const beforeSame = await counts();
+      const sameKey = await join(adminPhone.joinKey);
+      expect(await counts()).toEqual(beforeSame);
+
+      for (const answer of [otherKey, sameKey]) {
+        expect([answer.status, (answer.body as { code?: unknown } | null)?.code]).toEqual([
+          404,
+          'INVITATION_NOT_VALID',
+        ]);
+      }
+      expect((await s.me(adminPhone)).status).toBe(200);
+    }),
+  );
+});
+
 describe('GRP-01: what the tables refuse', () => {
   test(
     'GRP-01-AC9: the database refuses a second ADMIN in the group (unique) and a second group (unique), by its own indexes',
@@ -440,9 +539,13 @@ describe('GRP-01: what the tables refuse', () => {
       await expect(insertMemberRow(s.pool, { role: 'ADMIN' })).rejects.toMatchObject({
         code: '23505',
       });
-      await expect(
-        s.pool.query('insert into groups (id, created_at) values ($1, now())', [syntheticUuid()]),
-      ).rejects.toMatchObject({ code: '23505' });
+      // RG-03 (GRP-01-AC8, review loop 1): the second group is put in by the
+      // test kit's insertGroupRow, with every column the table has, rather
+      // than with its ID and time alone: groups gains bootstrap_join_key_hash,
+      // not null, and a row without it would be refused by that column
+      // (23502) before the one-group index could refuse it. What is held,
+      // 23505 from the index and still one group, is unchanged.
+      await expect(insertGroupRow(s.pool)).rejects.toMatchObject({ code: '23505' });
       expect(await s.count('groups')).toBe(1);
     }),
   );

@@ -438,14 +438,57 @@ describe('touchesApp', () => {
     expect(canChangeApp([file])).toBe(true);
   });
 
+  // RG-03 (GRP-01-AC33, review loop 1, named in the spec's "Existing
+  // assertions that change by design"): apps/server/src/api.ts left this
+  // table. "The app does not depend on the server" is still so, but since
+  // GRP-01 the L7 flows join, invite and refuse against the API the
+  // android-e2e job starts, so a server change can break them as surely as
+  // an app change. It is held the other way round below. The test kit's row
+  // stays as it was.
   test.each([
     {
       file: 'packages/test-kit/src/index.ts',
       how: 'it depends on what the app uses, not the reverse',
     },
-    { file: 'apps/server/src/api.ts', how: 'the app does not depend on the server' },
   ])('INF-06-AC13: $file cannot change the app: $how', ({ file }) => {
     expect(canChangeApp([file])).toBe(false);
+  });
+
+  // GRP-01-AC33 (review loop 1, safety-reviewer and the implementer): the
+  // flows now need a server, so any file under apps/server/ can change what
+  // they check, the server's own package.json among them.
+  test.each([
+    'apps/server/src/api.ts',
+    'apps/server/src/modules/groups/join.ts',
+    'apps/server/src/db/migrations/0009_first_the_watchers.sql',
+    'apps/server/package.json',
+  ])(
+    'GRP-01-AC33: a diff of only %s, under apps/server/, can change what the flows check, so android-e2e runs',
+    (file) => {
+      expect(canChangeApp([file])).toBe(true);
+    },
+  );
+
+  test('GRP-01-AC33: a diff of only a file under packages/contracts/ runs android-e2e, and still does when the app no longer depends on the contracts', () => {
+    const appWithoutContracts = manifest(
+      '@trygghverdag/mobile',
+      { expo: '~57.0.25' },
+      { '@trygghverdag/config': 'workspace:*' },
+    );
+
+    expect(canChangeApp(['packages/contracts/src/groups.ts'])).toBe(true);
+    expect(
+      canChangeApp(['packages/contracts/src/groups.ts'], {
+        'apps/mobile/package.json': appWithoutContracts,
+      }),
+    ).toBe(true);
+  });
+
+  test('GRP-01-AC33: a diff of only docs/, or only packages/test-kit/, still does not run android-e2e, as INF-06 holds', () => {
+    expect(canChangeApp(['docs/progress.md'])).toBe(false);
+    expect(canChangeApp(['docs/plan/decisions.md', 'docs/specs/GRP-01.md'])).toBe(false);
+    expect(canChangeApp(['packages/test-kit/src/index.ts'])).toBe(false);
+    expect(canChangeApp(['packages/test-kit/src/fake-journey-store.ts'])).toBe(false);
   });
 
   test.each([
@@ -485,10 +528,12 @@ describe('touchesApp', () => {
     },
   );
 
+  // RG-03 (GRP-01-AC33): apps/server/package.json left this list. It is a
+  // file under apps/server/, which AC33 makes run android-e2e (the table
+  // above holds it so); every other entry stays.
   test.each([
     'docs/progress.md',
     'README.md',
-    'apps/server/package.json',
     'turbo.json',
     '.claude/hooks/lib.mjs',
     'infra/staging/main.tf',
@@ -629,14 +674,21 @@ describe('touchesApp', () => {
     expect(canChangeApp(['docs/progress.md'], overrides)).toBe(false);
   });
 
-  test('INF-06-AC13: in this repository, the app, the e2e script and its decisions can; the server cannot', () => {
+  // RG-03 (GRP-01-AC33, review loop 1, named in the spec's "Existing
+  // assertions that change by design"): "the server cannot" became "the
+  // server can": apps/server/src/api.ts is now expected true, not false,
+  // because the L7 flows run against the API the job starts. The contracts
+  // and the test kit are named here too; docs/ stays false.
+  test('INF-06-AC13 and GRP-01-AC33: in this repository, the app, the e2e script and its decisions can, and so can the server and the contracts; docs and the test kit cannot', () => {
     const here = (file) => touchesApp([file], { root: process.cwd() });
 
     expect(here('apps/mobile/src/app/index.tsx')).toBe(true);
     expect(here('scripts/e2e-android.mjs')).toBe(true);
     expect(here('scripts/lib/e2e-android.mjs')).toBe(true);
-    expect(here('apps/server/src/api.ts')).toBe(false);
+    expect(here('apps/server/src/api.ts')).toBe(true);
+    expect(here('packages/contracts/src/groups.ts')).toBe(true);
     expect(here('docs/progress.md')).toBe(false);
+    expect(here('packages/test-kit/src/index.ts')).toBe(false);
   });
 });
 

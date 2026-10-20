@@ -137,8 +137,15 @@ describe('fakeJourneyStore, against the behaviour every group store shares (GRP-
   test('the shared suite is the list the adapter runs too; a case removed shows here', () => {
     expect(GROUP_STORE_BEHAVIOUR.map((behaviour) => behaviour.name)).toEqual([
       'GRP-01-AC8: bootstrapGroup on an empty store makes, at once, the group, its ADMIN with the name given, one device holding only the SHA-256 of a fresh 43-character credential, and one GROUP_CREATED audit row naming the admin; the credential authenticates FULL',
-      'GRP-01-AC2 and AC8: once a group exists, bootstrapGroup is not_valid and writes nothing: no second group, admin, user, device or audit row, whether the group came from a bootstrap or not',
+      // RG-03 (GRP-01-AC8, review loop 1): this behaviour's name narrows to
+      // "with another join key", since the same key while the admin is the
+      // only member is now the bootstrap retried; its checks are unchanged.
+      // The two behaviours after the race are added: the retry, and its
+      // window closing once a second member has joined.
+      'GRP-01-AC2 and AC8: once a group exists, bootstrapGroup with another join key is not_valid and writes nothing: no second group, admin, user, device or audit row, whether the group came from a bootstrap or not',
       'GRP-01-AC8: bootstraps racing on an empty store leave exactly one group and one admin: one is joined, every other not_valid',
+      'GRP-01-AC8: bootstrapGroup sent again with the same join key, while the admin is the group’s only member, is the same bootstrap retried: the same user, ADMIN, a new credential; the admin’s one device now holds its SHA-256 and the first credential authenticates nowhere; still one group, membership, user, device and GROUP_CREATED row, and the name is the first one’s',
+      'GRP-01-AC8: the bootstrap retried with the same join key once a second member has joined is not_valid and writes nothing; the admin’s credential still authenticates',
       'GRP-01-AC1: the admin’s createInvitation is created: a code of 20 of Crockford’s characters, expiring exactly seven days after it was made at the store’s now; only the code’s SHA-256 is stored, with its maker; and one INVITATION_CREATED audit row names the admin and the invitation',
       'GRP-01-AC9: createInvitation by a member who is not the admin, by a user who is no member, or by an ID that is no user is not_the_admin, and writes nothing',
       'GRP-01-AC3: an unused invitation brings in one member: joined MEMBER with a new user, the name given, one device holding only the SHA-256 of a fresh 43-character credential; the invitation used at the store’s now, by that user, with the join key’s SHA-256; the credential authenticates FULL',
@@ -216,6 +223,40 @@ describe('fakeJourneyStore: the group, beyond the shared suite (GRP-01)', () => 
       fakeJourneyStore().bootstrapGroup({ displayName: syntheticDisplayName() }),
     ).rejects.toThrow(/no clock/);
     expect(store.memberships()).toHaveLength(2);
+  });
+
+  // The fake's own corner of the bootstrap retry (GRP-01-AC8, review loop 1),
+  // which the shared suite cannot reach: the port takes a join key, but a
+  // caller may send none, as the join module did before review loop 1. Such a
+  // bootstrap keeps no key, so nothing can retry it; nor can a group a
+  // builder put in, which has no first admin's key either.
+  test('a bootstrap sent with no join key, and a group a builder put in, can never be retried: every later bootstrap is not_valid and writes nothing', async () => {
+    const bootstrapped = fakeJourneyStore({ clock: fakeClock(AT) });
+    const first = await bootstrapped.bootstrapGroup({ displayName: syntheticDisplayName() });
+    expect(first).toMatchObject({ outcome: 'joined', role: 'ADMIN' });
+    const devices = bootstrapped.devices();
+
+    expect(await bootstrapped.bootstrapGroup({ displayName: syntheticDisplayName() })).toEqual({
+      outcome: 'not_valid',
+    });
+    expect(
+      await bootstrapped.bootstrapGroup({
+        joinKey: syntheticJoinKey(),
+        displayName: syntheticDisplayName(),
+      }),
+    ).toEqual({ outcome: 'not_valid' });
+    expect(bootstrapped.devices()).toEqual(devices);
+
+    const built = fakeJourneyStore({ clock: fakeClock(AT) });
+    built.addMember(undefined, { role: 'ADMIN' });
+    expect(
+      await built.bootstrapGroup({
+        joinKey: syntheticJoinKey(),
+        displayName: syntheticDisplayName(),
+      }),
+    ).toEqual({ outcome: 'not_valid' });
+    expect(built.groups()).toHaveLength(1);
+    expect(built.auditLog()).toEqual([]);
   });
 
   test('a canary user is no member: addMember refuses either, as the table’s check does, and the canary’s walker names its own responder alone', async () => {

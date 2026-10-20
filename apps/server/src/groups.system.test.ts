@@ -418,6 +418,108 @@ describe('GRP-01: the first admin, by the bootstrap code', () => {
   });
 });
 
+// Review loop 1 (privacy-security-reviewer N1, code-reviewer; approach item
+// 8): a first admin whose answer was lost (F2) left the group made and the
+// owner outside it. The same code with the same join key, while the admin is
+// the group's only member, is the bootstrap retried: the admin's one device
+// gets a new credential. The window closes when anyone else joins.
+describe('GRP-01: the first admin’s bootstrap, retried (F2)', () => {
+  test('GRP-01-AC8: the bootstrap code sent again with the same join key, while the admin is the group’s only member, is 201 again: the same user, ADMIN, a new credential, no-store; the first credential is then 401 and the new one works; no second group, membership, device or GROUP_CREATED row; and the name is the first join’s', async () => {
+    const w = world();
+    const admin = await w.admin();
+    const before = w.snapshot();
+
+    const again = await w.join({
+      invitationCode: w.bootstrapCode,
+      joinKey: admin.joinKey,
+      displayName: syntheticDisplayName(),
+    });
+
+    expect(again.status, again.text).toBe(201);
+    expect(again.headers.get('cache-control')).toBe('no-store');
+    expect(again.body).toEqual({
+      credential: expect.stringMatching(BASE64URL_43) as unknown,
+      userId: admin.userId,
+      role: 'ADMIN',
+    });
+    const { credential } = again.body as { credential: string };
+    expect(credential).not.toBe(admin.credential);
+    const old = await w.me(admin);
+    expect([old.status, old.text]).toEqual([401, await unknown401(w)]);
+    const me = await w.me({ credential });
+    expect([me.status, me.body]).toEqual([
+      200,
+      { userId: admin.userId, displayName: admin.displayName, role: 'ADMIN' },
+    ]);
+    const after = w.snapshot();
+    expect(after.groups).toEqual(before.groups);
+    expect(after.memberships).toEqual(before.memberships);
+    expect(after.users).toBe(before.users);
+    expect(after.devices.map(({ id, userId }) => ({ id, userId }))).toEqual(
+      before.devices.map(({ id, userId }) => ({ id, userId })),
+    );
+    expect(after.devices.map(({ credentialHash }) => credentialHash)).toEqual([
+      sha256Hex(credential),
+    ]);
+    expect(after.audit).toEqual(before.audit);
+    expect(after.audit.filter(({ action }) => action === 'GROUP_CREATED')).toHaveLength(1);
+    expect(w.log.events).toEqual([]);
+  });
+
+  test('GRP-01-AC8: the retried bootstrap, typed as a person types it (lower case, in groups), is the same retry', async () => {
+    const w = world();
+    const admin = await w.admin();
+    const code = w.bootstrapCode ?? '';
+    const typed = `${code.slice(0, 16).toLowerCase()} ${code.slice(16)}`;
+
+    const again = await w.join({
+      invitationCode: typed,
+      joinKey: admin.joinKey,
+      displayName: admin.displayName,
+    });
+
+    expect([again.status, (again.body as { userId?: unknown } | null)?.userId]).toEqual([
+      201,
+      admin.userId,
+    ]);
+    expect(w.store.groups()).toHaveLength(1);
+  });
+
+  test('GRP-01-AC8: the bootstrap code with another join key while the admin is the only member, and with the same join key once a second member has joined, is each the one 404 INVITATION_NOT_VALID, the same body as a code that never existed; neither writes anything, and the admin’s credential still works', async () => {
+    const w = world();
+    const admin = await w.admin();
+    const never = await w.join({
+      invitationCode: syntheticInvitationCode(),
+      joinKey: syntheticJoinKey(),
+      displayName: syntheticDisplayName(),
+    });
+
+    const beforeOther = w.snapshot();
+    const otherKey = await w.join({
+      invitationCode: w.bootstrapCode,
+      joinKey: syntheticJoinKey(),
+      displayName: syntheticDisplayName(),
+    });
+    expect(w.snapshot()).toEqual(beforeOther);
+
+    await w.member(admin);
+    const beforeSame = w.snapshot();
+    const sameKey = await w.join({
+      invitationCode: w.bootstrapCode,
+      joinKey: admin.joinKey,
+      displayName: admin.displayName,
+    });
+    expect(w.snapshot()).toEqual(beforeSame);
+
+    for (const answer of [otherKey, sameKey]) {
+      expect([answer.status, codeOf(answer)]).toEqual([404, 'INVITATION_NOT_VALID']);
+      expect(answer.text).toBe(never.text);
+    }
+    expect((await w.me(admin)).status).toBe(200);
+    expect(w.log.events).toEqual([]);
+  });
+});
+
 describe('GRP-01: the admin’s invitation', () => {
   test('GRP-01-AC1: the admin asks for an invitation: 201, a code of 20 base32 characters in four groups of five, expiring exactly seven days after the clock’s now; only its SHA-256 is stored, and one INVITATION_CREATED audit row names the admin and the invitation', async () => {
     const w = world();
@@ -641,6 +743,63 @@ describe('GRP-01: joining with an invitation', () => {
       expect(answer.status).toBe(400);
       expect(answer.text).toBe(await fixed400(w, admin));
       expect(w.snapshot()).toEqual(before);
+    },
+  );
+
+  // Review loop 1 (privacy-security-reviewer N4, the abusive-member threat):
+  // a name with a bidirectional control reads as someone else's, and one of
+  // zero-width characters shows as nothing in the admin's list. The join's
+  // schema refuses both, as the fixed 400; the invitation stays unused.
+  test.each([
+    ['a right-to-left override inside it', `Test\u202Emedlem`],
+    ['a first-strong isolate around it', `\u2068Testmedlem\u2069`],
+    ['an Arabic letter mark in it', `Test\u061Cmedlem`],
+    ['a zero-width space alone', '\u200B'],
+    ['a zero-width no-break space inside it', `Test\uFEFFmedlem`],
+    ['ZWNJ and ZWJ only', '\u200C\u200D'],
+    ['a Hangul filler alone', '\u3164'],
+    ['a braille blank and spaces', ' \u2800 \u2800 '],
+  ])(
+    'GRP-01-AC31: a join whose name holds %s is the fixed 400, the same body every route gives: no user, membership, device or audit row, no line, and the invitation stays unused',
+    async (_what, name) => {
+      const w = world();
+      const admin = await w.admin();
+      const invitationCode = await w.invitation(admin);
+      const before = w.snapshot();
+
+      const answer = await w.join({
+        invitationCode,
+        joinKey: syntheticJoinKey(),
+        displayName: name,
+      });
+
+      expect(answer.status, answer.text).toBe(400);
+      expect(answer.text).toBe(await fixed400(w, admin));
+      expect(w.snapshot()).toEqual(before);
+      expect(w.store.invitations().map(({ usedAt }) => usedAt)).toEqual([null]);
+      expect(w.log.events).toEqual([]);
+    },
+  );
+
+  test.each([
+    ['ZWNJ between two letters', `Test\u200Cmedlem`],
+    ['an emoji joined with ZWJ', `Testmedlem \u{1F469}\u200D\u{1F4BB}`],
+    ['a non-Latin script', 'Тестовый'],
+  ])(
+    'GRP-01-AC31: a join whose name has %s is 201, and the name is kept as typed',
+    async (_what, displayName) => {
+      const w = world();
+      const admin = await w.admin();
+
+      const answer = await w.join({
+        invitationCode: await w.invitation(admin),
+        joinKey: syntheticJoinKey(),
+        displayName,
+      });
+
+      expect(answer.status, answer.text).toBe(201);
+      const { credential } = answer.body as { credential: string };
+      expect((await w.me({ credential })).body).toMatchObject({ displayName });
     },
   );
 
@@ -1237,17 +1396,31 @@ describe('GRP-01: the admin’s removal of a member', () => {
       kind: 'LOST_CONTACT',
     });
     const [alert] = w.alertsOf(journeyId);
-    for (const [what, answer] of [
-      ['a start', await w.start(m, [r1.userId])],
-      ['"I’m on it"', await w.acknowledge(m, alert?.id ?? syntheticUuid())],
-      ['GET /v1/me', await w.me(m)],
-      ['an invitation', await w.invite(m)],
-      ['the member list', await w.members(m)],
-      ['a member’s removal', await w.removeMember(m, r1.userId)],
-      ['a responder’s removal', await w.removeResponder(m, journeyId, r1.userId)],
-    ] as const) {
-      expect(answer.status, what).toBe(401);
-    }
+    // RG-03 (GRP-01-AC21, review loop 1, test-auditor): the routes a removed
+    // member's walking phone must not reach were a list typed by hand, seven
+    // of them, and it left out "They're safe", the closure route, which a
+    // mutant opened to the walking phone and nothing caught. The list is now
+    // read from the contract: every route but health, the join, and the two a
+    // walking phone keeps (its heartbeats and "I'm home"). The seven are still
+    // in it, with the closure route beside them, and a route added later is
+    // in it without anyone adding it. Path IDs are the real ones: the walk,
+    // its alert, and R1.
+    const walking = await walkerOnlyRefusals(w, m, { journeyId, alertId: alert?.id, r1 });
+    expect(walking.map(({ route }) => route)).toEqual(
+      expect.arrayContaining([
+        'POST /v1/journeys',
+        'POST /v1/alerts/{alertId}/acknowledgement',
+        'POST /v1/alerts/{alertId}/closure',
+        'GET /v1/me',
+        'POST /v1/group/invitations',
+        'GET /v1/group/members',
+        'DELETE /v1/group/members/{userId}',
+        'DELETE /v1/journeys/{journeyId}/responders/{responderId}',
+      ]),
+    );
+    expect(walking.map(({ route, status }) => ({ route, status }))).toEqual(
+      walking.map(({ route }) => ({ route, status: 401 })),
+    );
 
     const home = await w.home(m, journeyId);
     expect([home.status, home.body]).toEqual([200, { outcome: 'ENDED' }]);
@@ -1256,6 +1429,50 @@ describe('GRP-01: the admin’s removal of a member', () => {
     expect((await w.me(m)).status).toBe(401);
   });
 });
+
+/** The two routes a removed member's walking phone keeps for its own journey (approach item 5). */
+const WALKER_ONLY_ROUTES = ['POST /v1/heartbeats', 'POST /v1/journeys/{journeyId}/home'];
+
+/**
+ * GRP-01-AC21: every route the contract describes but health, the join and
+ * the walking phone's two, called as `phone`, with the path's IDs filled from
+ * `ids` (a journey, an alert, R1), and a body a route with one would take.
+ * Read from the contract, so a route added later is called too.
+ */
+async function walkerOnlyRefusals(
+  w: World,
+  phone: Phone,
+  ids: { journeyId: string; alertId: string | undefined; r1: Phone },
+): Promise<{ route: string; status: number }[]> {
+  const filled: Record<string, string> = {
+    journeyId: ids.journeyId,
+    alertId: ids.alertId ?? syntheticUuid(),
+    userId: ids.r1.userId,
+    responderId: ids.r1.userId,
+  };
+  const answers: { route: string; status: number }[] = [];
+  for (const route of await contractRoutes()) {
+    if (PUBLIC_ROUTES.includes(route.key) || WALKER_ONLY_ROUTES.includes(route.key)) {
+      continue;
+    }
+    const template = route.key.slice(route.method.length + 1);
+    const path = template.replace(/\{([^}]*)\}/g, (_match, name: string) => {
+      const id = filled[name];
+      if (id === undefined) {
+        throw new Error(`no ID for {${name}} in ${route.key}: name one here`);
+      }
+      return id;
+    });
+    const body =
+      route.key === 'POST /v1/journeys' ? { responderIds: [ids.r1.userId] } : bodyFor(route);
+    const answer = await w.call(route.method, path, {
+      credential: phone.credential,
+      ...(body === undefined ? {} : { body }),
+    });
+    answers.push({ route: route.key, status: answer.status });
+  }
+  return answers;
+}
 
 // ---------------------------------------------------------------------------
 // The walker removes a responder (AC22, AC23): D-122's route.

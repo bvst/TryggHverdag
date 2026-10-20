@@ -93,6 +93,56 @@ describe('GRP-01-AC2: the invitation code’s normaliser', () => {
     expect(normaliseInvitationCode(typed)).toBeNull();
   });
 
+  // GRP-01, review loop 1 (test-auditor): the normaliser upper-cases what it
+  // is given, and String.prototype.toUpperCase maps some letters outside
+  // ASCII onto ASCII ones: dotless ı (U+0131) to I, long ſ (U+017F) to S, ß
+  // to SS, the ligature ﬁ to FI. Without the ASCII filter in front, a code
+  // typed with them would be read as a code nobody typed. Every such
+  // character in Unicode, found by asking toUpperCase itself, is refused.
+  test.each([
+    ['dotless ı (U+0131), which toUpperCase() reads as I', 'ı'],
+    ['long ſ (U+017F), which toUpperCase() reads as S', 'ſ'],
+  ])(
+    'GRP-01-AC2: a code typed with %s is refused, not normalised to the ASCII letter',
+    (_what, letter) => {
+      const upper = letter.toUpperCase();
+      // Not vacuous: without the filter, this would be a well-formed code.
+      expect(upper).toMatch(/^[A-Z]$/);
+      const typed = `ABCDEFGHJKMNPQRSTVW${letter}`;
+      expect(`ABCDEFGHJKMNPQRSTVW${upper}`.replace(/[IL]/g, '1')).toMatch(WELL_FORMED);
+
+      expect(normaliseInvitationCode(typed)).toBeNull();
+      expect(normaliseInvitationCode(`${letter}BCDE-FGHJK-MNPQR-STVWX`)).toBeNull();
+      expect(normaliseInvitationCode(letter.repeat(20))).toBeNull();
+    },
+  );
+
+  test('GRP-01-AC2: no character outside ASCII that toUpperCase() maps into A to Z is ever read as a code’s letter: every one of them in Unicode makes the code refused', () => {
+    const intoAscii: string[] = [];
+    for (let point = 0x80; point <= 0x10ffff; point += 1) {
+      if (point >= 0xd800 && point <= 0xdfff) {
+        continue;
+      }
+      const character = String.fromCodePoint(point);
+      if (/^[A-Z]+$/.test(character.toUpperCase())) {
+        intoAscii.push(character);
+      }
+    }
+
+    // Not vacuous: the two the auditor named are among them.
+    expect(intoAscii).toEqual(expect.arrayContaining(['ı', 'ſ']));
+    for (const character of intoAscii) {
+      const upper = character.toUpperCase();
+      // A code that would be well-formed, 20 characters, were the character
+      // read as its upper case.
+      const typed = `${'ABCDEFGHJKMNPQRSTVWX'.slice(0, 20 - upper.length)}${character}`;
+      expect({ character, normalised: normaliseInvitationCode(typed) }).toEqual({
+        character,
+        normalised: null,
+      });
+    }
+  });
+
   test('GRP-01-AC2: for any string at all, the normaliser either yields a well-formed code or refuses it, never throws, and a code it yields normalises to itself', () => {
     fc.assert(
       fc.property(

@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { API_PREFIX, openApiDocument, openApiJson } from './index.ts';
+import { API_PREFIX, openApiDocument, openApiJson, startJourneyRequestSchema } from './index.ts';
 
 const COMMITTED_SPEC = path.join(import.meta.dirname, '..', 'openapi.json');
 
@@ -106,6 +106,17 @@ const INVALID_RESPONDER_NOW =
   "A responder named is the walker, or is not a member of the walker's group.";
 
 /**
+ * The start route's `responderIds` description before GRP-01's review loop 1,
+ * and what it says now (code-reviewer S2; approach item 6, "Contract
+ * changes"): each responder must be a member of the walker's group, no
+ * longer "an existing user". Either apostrophe is taken; the rest of the
+ * description is held to the byte by the pins that read the route through
+ * `publishedBeforeGrp01`.
+ */
+const RESPONDER_IDS_BEFORE = 'Each must be an existing user other than the walker';
+const RESPONDER_IDS_NOW = /Each must be a member of the walker[’']s group other than the walker/;
+
+/**
  * A path item's JSON, as it was published before GRP-01. GRP-01 changes one
  * thing in the start route, INVALID_RESPONDER's message, a description and
  * not a break (approach item 6, "Contract changes"); with that one message
@@ -114,9 +125,19 @@ const INVALID_RESPONDER_NOW =
  *
  * RG-03 (GRP-01): the pins of '/journeys' read the route through this,
  * where they read it as it is.
+ *
+ * RG-03 (GRP-01, review loop 1, the spec's "Existing assertions that change
+ * by design": "the start route's `responderIds` description, wherever a test
+ * or the generated `openapi.json` holds it"): a second description changes,
+ * `responderIds`' "an existing user" to "a member of the walker's group",
+ * and this puts that one back too, so the pins still hold every other byte
+ * of the route. A description change, not a break; the new wording is held
+ * on its own below.
  */
 function publishedBeforeGrp01(item: unknown): string {
-  return JSON.stringify(item).replaceAll(INVALID_RESPONDER_NOW, INVALID_RESPONDER_BEFORE);
+  return JSON.stringify(item)
+    .replaceAll(INVALID_RESPONDER_NOW, INVALID_RESPONDER_BEFORE)
+    .replace(RESPONDER_IDS_NOW, RESPONDER_IDS_BEFORE);
 }
 
 /** The parts of an OpenAPI document these tests read. */
@@ -669,5 +690,28 @@ describe('GRP-01: the new routes, as published', () => {
 
     expect(start).toContain(INVALID_RESPONDER_NOW);
     expect(start).not.toContain(INVALID_RESPONDER_BEFORE);
+  });
+
+  test('GRP-01-AC12: the start route’s responderIds description says each must be a member of the walker’s group other than the walker, and no longer an existing user', async () => {
+    const { paths } = await described();
+    const start = paths['/journeys'] as
+      | {
+          post?: {
+            requestBody?: {
+              content?: Record<
+                string,
+                { schema?: { properties?: Record<string, { description?: string }> } }
+              >;
+            };
+          };
+        }
+      | undefined;
+    const published =
+      start?.post?.requestBody?.content?.['application/json']?.schema?.properties?.['responderIds']
+        ?.description;
+
+    expect(published).toMatch(RESPONDER_IDS_NOW);
+    expect(published).not.toContain('an existing user');
+    expect(startJourneyRequestSchema.shape.responderIds.description).toBe(published);
   });
 });

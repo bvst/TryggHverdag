@@ -61,7 +61,7 @@ export type {
   WarningAsStored,
 } from './group-store-behaviour.ts';
 export { unusedService } from './unused-service.ts';
-export { insertMemberRow, theGroupRow } from './group-rows.ts';
+export { insertGroupRow, insertMemberRow, theGroupRow } from './group-rows.ts';
 export type { Queryable } from './group-rows.ts';
 export {
   ALERT_RESOLUTIONS,

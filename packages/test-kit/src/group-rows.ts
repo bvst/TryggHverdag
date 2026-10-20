@@ -13,8 +13,16 @@
  * anything with pg's `query(text, values)`: a pool, or a client inside a
  * transaction of the test's own. Column names are the spec's (approach item
  * 2); a table that names them otherwise fails here, loudly.
+ *
+ * GRP-01-AC8, review loop 1: a group keeps the SHA-256 of its first admin's
+ * join key, `bootstrap_join_key_hash`, not null. A group put in here is no
+ * bootstrap, so it gets the hash of a join key nobody holds, and no phone can
+ * retry it. The row is built from the columns the table has
+ * (`json_populate_record`), so the same SQL fills that column once the
+ * migration adds it and still runs on a table without it; any other column
+ * the table gains that is not null and not named here fails here, loudly.
  */
-import { syntheticDisplayName } from './synthetic-groups.ts';
+import { syntheticDisplayName, syntheticJoinKey } from './synthetic-groups.ts';
 import { syntheticUuid } from './synthetic-ids.ts';
 
 /** What these helpers need of a pool or a client: pg's query, by shape. */
@@ -22,10 +30,36 @@ export interface Queryable {
   query(text: string, values?: unknown[]): Promise<{ rows: unknown[] }>;
 }
 
+/**
+ * A group row, as SQL: the ID in `$<id>`, now() as its time, and the hash of
+ * the join key in `$<key>` as its first admin's, nobody's. Only the columns
+ * the table has are filled.
+ */
+const groupRowSql = (id: number, key: number): string =>
+  `select r.* from json_populate_record(
+     null::groups,
+     json_build_object(
+       'id', $${String(id)}::uuid,
+       'created_at', now(),
+       'bootstrap_join_key_hash', encode(sha256(convert_to($${String(key)}, 'UTF8')), 'hex')
+     )
+   ) as r`;
+
+/**
+ * Puts a group row in, as a second group would be: no `on conflict`, so it
+ * rejects as the table rejects one (GRP-01-AC9). Resolves to its ID.
+ */
+export async function insertGroupRow(db: Queryable): Promise<string> {
+  const id = syntheticUuid();
+  await db.query(`insert into groups ${groupRowSql(1, 2)}`, [id, syntheticJoinKey()]);
+  return id;
+}
+
 /** The one group's ID, the group put in first, at now(), when there is none. */
 export async function theGroupRow(db: Queryable): Promise<string> {
-  await db.query('insert into groups (id, created_at) values ($1, now()) on conflict do nothing', [
+  await db.query(`insert into groups ${groupRowSql(1, 2)} on conflict do nothing`, [
     syntheticUuid(),
+    syntheticJoinKey(),
   ]);
   const { rows } = await db.query('select id::text as id from groups');
   const [row, ...others] = rows as { id: string }[];
@@ -56,7 +90,7 @@ export async function insertMemberRow(
 ): Promise<string> {
   await db.query(
     `with made as (
-       insert into groups (id, created_at) values ($1, now()) on conflict do nothing returning id
+       insert into groups ${groupRowSql(1, 5)} on conflict do nothing returning id
      ),
      the_group as (
        select id from made union all select id from groups
@@ -66,7 +100,7 @@ export async function insertMemberRow(
      )
      insert into memberships (user_id, group_id, role, display_name, joined_at)
      select $2, (select id from the_group limit 1), $3, $4, now()`,
-    [syntheticUuid(), userId, role, displayName],
+    [syntheticUuid(), userId, role, displayName, syntheticJoinKey()],
   );
   return userId;
 }

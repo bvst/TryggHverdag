@@ -720,6 +720,14 @@ describe('the mutation runs of this repository', () => {
       // lives in modules/journeys/, and its L6 file, removal.system.test.ts,
       // joins the group third. What the group mutates and its configuration
       // do not change.
+      //
+      // RG-03 (GRP-01-AC32, review loop 1, named in the spec's "Existing
+      // assertions that change by design" and its Mutation section): the
+      // walker check in modules/journeys/removal.ts and the start's refusal
+      // under the lock (AC13) are killed only by groups.system.test.ts, as
+      // safety-reviewer's planted mutant showed (S4), so that file joins the
+      // group fourth. What the group mutates, its configuration and its other
+      // three files do not change: a test added can only raise the score.
       expect.objectContaining({
         name: 'journeys',
         paths: ['apps/server/src/modules/journeys/'],
@@ -727,7 +735,20 @@ describe('the mutation runs of this repository', () => {
           'apps/server/src/journeys.system.test.ts',
           'apps/server/src/contact.system.test.ts',
           'apps/server/src/removal.system.test.ts',
+          'apps/server/src/groups.system.test.ts',
         ],
+      }),
+      // RG-03 (GRP-01-AC32, review loop 1, safety-reviewer S4): the groups
+      // module, modules/groups/, decides who receives alerts, and the green
+      // head left it out of every run. It is a safety path with a group of
+      // its own, groups, right after journeys, against groups.system.test.ts
+      // under the system tests' configuration. A group added; every other
+      // group, its paths, its tests and its order, is unchanged.
+      expect.objectContaining({
+        name: 'groups',
+        paths: ['apps/server/src/modules/groups/'],
+        tests: ['apps/server/src/groups.system.test.ts'],
+        config: 'vitest.system.config.mjs',
       }),
       // LOST-02 (RG-03): modules/alerts/ gets its first files, the watchdog
       // and the sender, and with them a group of its own (D-098), as the test
@@ -1117,6 +1138,11 @@ describe('BUG-10: the journey files, split by test level (D-095)', () => {
     // RG-03 (SM-10, named in the spec's "Existing assertions that change by
     // design"): and removal.system.test.ts, third, holding the removal
     // (removal.ts, in modules/journeys/). Still one run, its own.
+    //
+    // RG-03 (GRP-01-AC32, review loop 1, the spec's "Existing assertions that
+    // change by design"): and groups.system.test.ts, fourth, which alone kills
+    // the walker check in removal.ts (safety-reviewer S4). Still one run, its
+    // own; a test added.
     const runs = mutationRuns().filter((run) =>
       run.paths.includes('apps/server/src/modules/journeys/'),
     );
@@ -1129,6 +1155,7 @@ describe('BUG-10: the journey files, split by test level (D-095)', () => {
           'apps/server/src/journeys.system.test.ts',
           'apps/server/src/contact.system.test.ts',
           'apps/server/src/removal.system.test.ts',
+          'apps/server/src/groups.system.test.ts',
         ],
       }),
     ]);

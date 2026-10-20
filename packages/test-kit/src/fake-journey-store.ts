@@ -277,9 +277,13 @@
  *     the adapter does, and admits it `FULL` while its user is a member or it
  *     is the canary's device, `WALKER_ONLY` while it started a journey not yet
  *     ended, and not at all otherwise (D-136, answer 5);
- *   - `bootstrapGroup` opens only an empty store: the group, its ADMIN, a
- *     device with a fresh credential and a GROUP_CREATED audit row in one
- *     step; with a group already there it is `not_valid`, writing nothing;
+ *   - `bootstrapGroup` opens only an empty store: the group, keeping the
+ *     SHA-256 of the join key sent, its ADMIN, a device with a fresh
+ *     credential and a GROUP_CREATED audit row in one step; with a group
+ *     already there it is `not_valid`, writing nothing, but for the same
+ *     bootstrap retried (GRP-01-AC8, review loop 1): the same join key while
+ *     the admin is the group's only member re-issues the admin's one
+ *     device's credential, as a retried join does;
  *   - `createInvitation` is the ADMIN's alone: a fresh code of 20 of
  *     Crockford's characters, kept only as its SHA-256, expiring seven days
  *     after the store's now, and an INVITATION_CREATED audit row, in one step;
@@ -1226,12 +1230,16 @@ export interface FakeJourneyStore {
    */
   authenticate(credential: string): Promise<AuthenticatedDevice | null>;
   /**
-   * GRP-01-AC8: while no group exists, in one step: the group, a user, an
-   * ADMIN membership with this name, a device with a fresh credential's hash,
-   * and a GROUP_CREATED audit row. Once a group exists, `not_valid`, writing
-   * nothing. Needs a clock.
+   * GRP-01-AC8: while no group exists, in one step: the group, keeping the
+   * SHA-256 of this join key, a user, an ADMIN membership with this name, a
+   * device with a fresh credential's hash, and a GROUP_CREATED audit row.
+   * Once a group exists, `not_valid`, writing nothing, but for the same
+   * bootstrap retried (review loop 1): the same join key while the admin is
+   * the group's only member gives the admin's one device a new credential,
+   * and answers as the first time. A bootstrap sent with no join key can
+   * never be retried. Needs a clock.
    */
-  bootstrapGroup(request: { displayName: string }): Promise<JoinResult>;
+  bootstrapGroup(request: { displayName: string; joinKey?: string }): Promise<JoinResult>;
   /**
    * GRP-01-AC2 to AC6: the invitation the code's SHA-256 names, decided at the
    * store's now, and written in one step: a new member, or the same join
@@ -1657,8 +1665,14 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
   /** LOST-08-AC21: what runs after a start's next conflicts, and before its next retries. */
   const afterConflicts: (() => unknown)[] = [];
   const beforeRetries: (() => unknown)[] = [];
-  /** GRP-01: the one group, if any; the memberships by user; the invitations; the audit log. */
-  const groupRows: { id: string; createdAt: Date | null }[] = [];
+  /**
+   * GRP-01: the one group, if any; the memberships by user; the invitations;
+   * the audit log. A group keeps the SHA-256 of its first admin's join key
+   * (review loop 1, approach item 8); null for one a builder put in, and for
+   * a bootstrap that sent no join key, so neither can be retried.
+   */
+  const groupRows: { id: string; createdAt: Date | null; bootstrapJoinKeyHash: string | null }[] =
+    [];
   const membershipRows = new Map<string, StoredMembership>();
   const invitationRows: StoredInvitation[] = [];
   const auditRows: StoredAuditEntry[] = [];
@@ -1974,8 +1988,43 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       return existing.id;
     }
     const id = syntheticUuid();
-    groupRows.push({ id, createdAt: copyOf(createdAt) });
+    groupRows.push({ id, createdAt: copyOf(createdAt), bootstrapJoinKeyHash: null });
     return id;
+  };
+
+  /**
+   * GRP-01-AC8, review loop 1 (approach item 8): the first admin's bootstrap,
+   * sent again with the same join key while the admin is the group's only
+   * member, is the same bootstrap retried (F2): the admin's one device gets a
+   * new credential's hash, and nothing else is written: no group, user,
+   * membership, device or audit row, and the name the retry sends is not
+   * used. Anything else, another key, or the same key once anyone else has
+   * joined, is `not_valid`, writing nothing.
+   */
+  const retriedBootstrap = (
+    group: { id: string; bootstrapJoinKeyHash: string | null },
+    joinKey: string | undefined,
+  ): JoinResult => {
+    if (
+      joinKey === undefined ||
+      group.bootstrapJoinKeyHash === null ||
+      group.bootstrapJoinKeyHash !== sha256Hex(joinKey)
+    ) {
+      return { outcome: 'not_valid' };
+    }
+    const members = [...membershipRows.values()].filter(({ groupId }) => groupId === group.id);
+    const [admin] = members;
+    if (members.length !== 1 || admin?.role !== 'ADMIN') {
+      return { outcome: 'not_valid' };
+    }
+    const own = [...devices].filter(([, userId]) => userId === admin.userId);
+    if (own.length !== 1) {
+      throw uniqueViolation('devices.credential_hash: one bootstrap, one device');
+    }
+    const [[deviceId]] = own as [[string, string]];
+    const credential = syntheticCredential();
+    credentialHashes.set(deviceId, sha256Hex(credential));
+    return { outcome: 'joined', userId: admin.userId, role: 'ADMIN', credential };
   };
 
   const audit = (entry: Omit<StoredAuditEntry, 'id'>): void => {
@@ -3388,13 +3437,14 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
       // cannot answer rejects, through `answer`, and never answers null.
       return answer('authenticate', () => admittedByHash(sha256Hex(credential)));
     },
-    bootstrapGroup({ displayName }) {
+    bootstrapGroup({ displayName, joinKey }) {
       return answer('bootstrapGroup', async (): Promise<JoinResult> => {
         const now = await nowFor('bootstrapGroup');
         // The one-group index decides: with a group there, the code opens
-        // nothing (approach item 8).
-        if (groupRows.length > 0) {
-          return { outcome: 'not_valid' };
+        // nothing (approach item 8), but for the same bootstrap retried.
+        const [group] = groupRows;
+        if (group !== undefined) {
+          return retriedBootstrap(group, joinKey);
         }
         const userId = syntheticUuid();
         const groupId = syntheticUuid();
@@ -3406,7 +3456,11 @@ export function fakeJourneyStore({ clock }: { clock?: StoreClock } = {}): FakeJo
             'display_name is 1 to 40 characters after trimming, with no control character',
           );
         }
-        groupRows.push({ id: groupId, createdAt: new Date(now.getTime()) });
+        groupRows.push({
+          id: groupId,
+          createdAt: new Date(now.getTime()),
+          bootstrapJoinKeyHash: joinKey === undefined ? null : sha256Hex(joinKey),
+        });
         users.add(userId);
         membershipRows.set(userId, checkedMembership(membership));
         const { credential } = newDeviceFor(userId);

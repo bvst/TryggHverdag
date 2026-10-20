@@ -4,7 +4,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { MUTATION_GROUPS, SAFETY_PATHS } from './gate-decisions.mjs';
+import { MUTATION_GROUPS, SAFETY_PATHS, decideMutation, mutationRuns } from './gate-decisions.mjs';
 import {
   CHECKS,
   OWNER_APPROVAL_PATHS,
@@ -388,6 +388,93 @@ describe('REL-10-AC18: the staging canary’s code needs the owner and the safet
 
     expect(tracked(ADAPTER)).toEqual([ADAPTER]);
     expect(tracked(MODULE).filter((file) => file.endsWith('.ts')).length).toBeGreaterThan(0);
+  });
+});
+
+// GRP-01-AC32 (review loop 1, safety-reviewer S4): the groups module decides
+// who receives alerts (who joins, who is removed, and with them whose devices
+// authenticate), and the green head left it out of SAFETY_PATHS and out of
+// every mutation group, so no mutation run read it and no branch floor held
+// it. It is a safety path, as a folder, with a group of its own after
+// journeys. Its adapter is not: proved at L3 and by the shared group suite,
+// as adapters/journeys.ts is (D-095's reading). And the journeys group runs
+// groups.system.test.ts too: the reviewer's planted mutant, the walker check
+// in modules/journeys/removal.ts skipped, survived the group's three files
+// and died to that one alone. Read from the repository itself, beside the
+// canary's pins above.
+describe('GRP-01-AC32: the groups module is a safety path, and its mutants are run by the tests that kill them', () => {
+  const MODULE = 'apps/server/src/modules/groups/';
+  const ADAPTER = 'apps/server/src/adapters/groups.ts';
+  const SYSTEM_TESTS = 'apps/server/src/groups.system.test.ts';
+  const safety = (file) =>
+    decideMutation({ changed: [file], onlyIfSafetyPathsChanged: true, configured: false });
+  /** The module's source files git tracks, its tests left out: what a run mutates. */
+  const moduleFiles = () =>
+    spawnSync('git', ['ls-files', '--', MODULE], { encoding: 'utf8' })
+      .stdout.split('\n')
+      .filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'));
+  const covers = (p, file) => file === p || (p.endsWith('/') && file.startsWith(p));
+
+  test('GRP-01-AC32: apps/server/src/modules/groups/ is in SAFETY_PATHS, as a folder; apps/server/src/adapters/groups.ts is not, and no safety path covers it', () => {
+    expect(SAFETY_PATHS).toContain(MODULE);
+    expect(SAFETY_PATHS.filter((p) => covers(p, ADAPTER))).toEqual([]);
+  });
+
+  test('GRP-01-AC32: every file of the module is a safety path, so a pull request that changes any of them is mutation-tested; the adapter alone starts no mutation run', () => {
+    const files = moduleFiles();
+
+    expect(files, 'git tracks no file under the module').toEqual(
+      expect.arrayContaining([
+        'apps/server/src/modules/groups/join.ts',
+        'apps/server/src/modules/groups/invitations.ts',
+        'apps/server/src/modules/groups/members.ts',
+      ]),
+    );
+    for (const file of files) {
+      expect({ file, ok: safety(file).ok }).toEqual({ file, ok: false });
+    }
+    expect(safety(ADAPTER)).toMatchObject({ ok: true, action: 'skip' });
+  });
+
+  test('GRP-01-AC32: modules/groups/ is mutated in one run, its own, groups, against groups.system.test.ts under the system tests’ configuration, and in no other run', () => {
+    const runs = mutationRuns().filter((run) => run.paths.includes(MODULE));
+
+    expect(runs).toEqual([
+      {
+        name: 'groups',
+        paths: [MODULE],
+        tests: [SYSTEM_TESTS],
+        config: 'vitest.system.config.mjs',
+      },
+    ]);
+  });
+
+  test('GRP-01-AC32: mutationRuns mutates each file of the groups group exactly once, in that group’s run', () => {
+    const files = moduleFiles();
+
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const runs = mutationRuns()
+        .filter((run) => run.paths.some((p) => covers(p, file)))
+        .map((run) => run.name);
+      expect({ file, runs }).toEqual({ file, runs: ['groups'] });
+    }
+  });
+
+  test('GRP-01-AC32: the groups group comes right after the journeys group', () => {
+    const names = MUTATION_GROUPS.map((group) => group.name);
+
+    expect(names, 'there is no groups group').toContain('groups');
+    expect(names.indexOf('groups') - names.indexOf('journeys')).toBe(1);
+  });
+
+  test('GRP-01-AC32: the journeys group runs groups.system.test.ts fourth, after its three files, since only that file kills the walker check in modules/journeys/removal.ts', () => {
+    expect(MUTATION_GROUPS.find((group) => group.name === 'journeys')?.tests).toEqual([
+      'apps/server/src/journeys.system.test.ts',
+      'apps/server/src/contact.system.test.ts',
+      'apps/server/src/removal.system.test.ts',
+      SYSTEM_TESTS,
+    ]);
   });
 });
 

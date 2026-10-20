@@ -14,7 +14,10 @@
  *   - the first admin, by the bootstrap, only while no group exists: the
  *     group, the ADMIN, one device holding only the SHA-256 of a fresh
  *     credential, and a GROUP_CREATED audit row, all at once; racing
- *     bootstraps leave one group (AC8);
+ *     bootstraps leave one group (AC8); and (review loop 1) the same
+ *     bootstrap retried with its join key while the admin is the only
+ *     member re-issues the admin's credential and writes nothing else, any
+ *     other bootstrap being `not_valid` (AC8);
  *   - the admin's invitation: a code of 20 of Crockford's characters, kept
  *     only as its SHA-256, expiring seven days after the store's now, with an
  *     INVITATION_CREATED audit row; nobody else's (AC1, AC9);
@@ -138,7 +141,7 @@ export interface ResetAsStored {
  */
 export interface GroupStoreUnderTest {
   store: {
-    bootstrapGroup(request: { displayName: string }): Promise<JoinResult>;
+    bootstrapGroup(request: { joinKey: string; displayName: string }): Promise<JoinResult>;
     joinWithInvitation(request: JoinToRecord): Promise<JoinResult>;
     memberOf(userId: string): Promise<MemberAsRead | null>;
     members(): Promise<MemberAsRead[]>;
@@ -325,7 +328,10 @@ export const GROUP_STORE_BEHAVIOUR: readonly GroupStoreBehaviour[] = [
       const displayName = syntheticDisplayName();
       const from = await subject.now();
 
-      const result = await subject.store.bootstrapGroup({ displayName });
+      const result = await subject.store.bootstrapGroup({
+        joinKey: syntheticJoinKey(),
+        displayName,
+      });
 
       const to = await subject.now();
       expect(result).toEqual({
@@ -360,12 +366,28 @@ export const GROUP_STORE_BEHAVIOUR: readonly GroupStoreBehaviour[] = [
     },
   },
   {
-    name: 'GRP-01-AC2 and AC8: once a group exists, bootstrapGroup is not_valid and writes nothing: no second group, admin, user, device or audit row, whether the group came from a bootstrap or not',
+    // RG-03 (GRP-01-AC8, review loop 1): the bootstrap now takes the
+    // phone's join key, and the same key while the admin is the only member
+    // is the bootstrap retried (the next behaviours). So this one sends
+    // another key, as a second phone would, and its name says so: "once a
+    // group exists, bootstrapGroup is not_valid" became "... bootstrapGroup
+    // with another join key is not_valid". What it checks is unchanged.
+    name: 'GRP-01-AC2 and AC8: once a group exists, bootstrapGroup with another join key is not_valid and writes nothing: no second group, admin, user, device or audit row, whether the group came from a bootstrap or not',
     async run(subject) {
-      joined(await subject.store.bootstrapGroup({ displayName: syntheticDisplayName() }));
+      joined(
+        await subject.store.bootstrapGroup({
+          joinKey: syntheticJoinKey(),
+          displayName: syntheticDisplayName(),
+        }),
+      );
       const first = await snapshot(subject);
 
-      expect(await subject.store.bootstrapGroup({ displayName: syntheticDisplayName() })).toEqual({
+      expect(
+        await subject.store.bootstrapGroup({
+          joinKey: syntheticJoinKey(),
+          displayName: syntheticDisplayName(),
+        }),
+      ).toEqual({
         outcome: 'not_valid',
       });
       expect(await snapshot(subject)).toEqual(first);
@@ -376,7 +398,10 @@ export const GROUP_STORE_BEHAVIOUR: readonly GroupStoreBehaviour[] = [
     async run(subject) {
       const results = await Promise.all(
         Array.from({ length: GROUP_RACERS }, () =>
-          subject.store.bootstrapGroup({ displayName: syntheticDisplayName() }),
+          subject.store.bootstrapGroup({
+            joinKey: syntheticJoinKey(),
+            displayName: syntheticDisplayName(),
+          }),
         ),
       );
 
@@ -392,6 +417,75 @@ export const GROUP_STORE_BEHAVIOUR: readonly GroupStoreBehaviour[] = [
       expect(await subject.userCount()).toBe(1);
       expect(await subject.deviceCount()).toBe(1);
       expect(await subject.auditAsStored()).toHaveLength(1);
+    },
+  },
+  {
+    name: 'GRP-01-AC8: bootstrapGroup sent again with the same join key, while the admin is the group’s only member, is the same bootstrap retried: the same user, ADMIN, a new credential; the admin’s one device now holds its SHA-256 and the first credential authenticates nowhere; still one group, membership, user, device and GROUP_CREATED row, and the name is the first one’s',
+    async run(subject) {
+      const joinKey = syntheticJoinKey();
+      const displayName = syntheticDisplayName();
+      const first = joined(await subject.store.bootstrapGroup({ joinKey, displayName }));
+      const [device] = await subject.devicesOf(first.userId);
+      const before = await snapshot(subject);
+
+      const again = joined(
+        await subject.store.bootstrapGroup({ joinKey, displayName: syntheticDisplayName() }),
+      );
+
+      expect(again).toEqual({
+        outcome: 'joined',
+        userId: first.userId,
+        role: 'ADMIN',
+        credential: expect.stringMatching(BASE64URL_43) as unknown,
+      });
+      expect(again.credential).not.toBe(first.credential);
+      expect(await subject.devicesOf(first.userId)).toEqual([
+        { id: device?.id, credentialHash: subject.hash(again.credential) },
+      ]);
+      expect(await subject.store.authenticate(first.credential)).toBeNull();
+      expect(await subject.store.authenticate(again.credential)).toEqual({
+        deviceId: device?.id,
+        userId: first.userId,
+        access: 'FULL',
+      });
+      expect(await snapshot(subject)).toEqual(before);
+      expect((await subject.auditAsStored()).map(({ action }) => action)).toEqual([
+        'GROUP_CREATED',
+      ]);
+      expect(await subject.store.memberOf(first.userId)).toEqual({
+        userId: first.userId,
+        displayName,
+        role: 'ADMIN',
+      });
+    },
+  },
+  {
+    name: 'GRP-01-AC8: the bootstrap retried with the same join key once a second member has joined is not_valid and writes nothing; the admin’s credential still authenticates',
+    async run(subject) {
+      const joinKey = syntheticJoinKey();
+      const admin = joined(
+        await subject.store.bootstrapGroup({ joinKey, displayName: syntheticDisplayName() }),
+      );
+      const { invitationCode } = created(
+        await subject.store.createInvitation({ adminId: admin.userId }),
+      );
+      joined(
+        await subject.store.joinWithInvitation({
+          invitationCode,
+          joinKey: syntheticJoinKey(),
+          displayName: syntheticDisplayName(),
+        }),
+      );
+      const before = await snapshot(subject);
+
+      expect(
+        await subject.store.bootstrapGroup({ joinKey, displayName: syntheticDisplayName() }),
+      ).toEqual({ outcome: 'not_valid' });
+      expect(await snapshot(subject)).toEqual(before);
+      expect(await subject.store.authenticate(admin.credential)).toMatchObject({
+        userId: admin.userId,
+        access: 'FULL',
+      });
     },
   },
   {
@@ -744,7 +838,10 @@ export const GROUP_STORE_BEHAVIOUR: readonly GroupStoreBehaviour[] = [
         await expect(subject.addMember({ id }), id).rejects.toThrow();
       }
       const admin = joined(
-        await subject.store.bootstrapGroup({ displayName: syntheticDisplayName() }),
+        await subject.store.bootstrapGroup({
+          joinKey: syntheticJoinKey(),
+          displayName: syntheticDisplayName(),
+        }),
       );
       for (let i = 0; i < 3; i += 1) {
         const { invitationCode } = created(
@@ -1117,5 +1214,8 @@ export const GROUP_STORE_BEHAVIOUR: readonly GroupStoreBehaviour[] = [
 /** The first admin, by the bootstrap: their ID, name and credential. */
 async function joinedAdmin(subject: GroupStoreUnderTest) {
   const displayName = syntheticDisplayName();
-  return { displayName, ...joined(await subject.store.bootstrapGroup({ displayName })) };
+  return {
+    displayName,
+    ...joined(await subject.store.bootstrapGroup({ joinKey: syntheticJoinKey(), displayName })),
+  };
 }
