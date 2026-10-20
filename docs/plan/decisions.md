@@ -5615,3 +5615,10 @@ any other path is work, not a candidate for the same treatment.
   - **Left to BUG-53:** the same fail-open in `progress-gate.mjs` and
     `test-weakening.mjs`, and the post-edit hook's unguarded read of
     `package.json`.
+  - **An L3 step can stop before its setup does** (`safety-reviewer`, CI on
+    #93). On a machine with Docker, `gate:file` gives an edited L3 test
+    150 s, while `vitest.integration.config.mjs` allows a setup hook 180 s.
+    A slow first container pull can therefore end the step with "Still
+    running after 150 s, so it was stopped." That is a loud false failure,
+    never a quiet pass: run the file again, or run `pnpm run
+    test:integration`, before reading it as a test fault.

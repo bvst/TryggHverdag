@@ -97,8 +97,8 @@ shell, 10 s, stdin closed, env/cwd inherited; main() stays off (argv[1] undefine
 only a `^file:///\S+:\d+$` line leaves, made repo-relative. Probed: syntax error -> "at
 scripts/gate-file.mjs:308"; lib/steps.mjs error -> "at scripts/lib/steps.mjs:126"; missing
 named export -> "at scripts/gate-file.mjs:20" (from error.stack's first line).
-- **inspect() of a non-Error throw prints its contents:** `throw { token: "SYNTH-SECRET-123" }`
-  came out verbatim in the block message (String() gave "[object Object]"). Theoretical (gate
+- **inspect() of a non-Error throw prints its contents:** a thrown object holding a synthetic
+  token-shaped string came out verbatim in the block message (String() gave "[object Object]"). Theoretical (gate
   code throwing a secret-bearing object), unbounded length: suggest depth 0 + maxStringLength
   or tail().
 - **MISSED IN LOOP 2: an in-process dynamic import fails OPEN on a load that never ends.**
