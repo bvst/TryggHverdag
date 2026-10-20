@@ -36,3 +36,23 @@ Notes: authenticate's journeys join has no device_id index (seq scan per request
 unique index); affected.mjs skips android-e2e on server-only changes; FakeDeviceAuthenticator defaults FULL with no
 membership (real refuses) -- simple stand-in, membership-aware auth is the fake journey store's.
 Related: [[sm10-removal-review]], [[rel10-canary-review]], [[reviewer-sandbox-limits]].
+
+## Loop 1: a5fd8cf..3fac8fb, PASS
+S4 closed: modules/groups/ in SAFETY_PATHS (folder) + CODEOWNERS L39; group `membership` (not `groups`: ci.yml output key,
+BUG-45-AC8); journeys group runs groups.system.test.ts fourth. Fresh reports/mutation/journeys.json (written 18:23, after
+3fac8fb 18:09): removal.ts 44/45 97.8 %, service.ts 129/131 98.5 %. The L98 survivor is col 24 `type: 'refused'` (equivalent:
+api.ts checks only type === 'removed'), NOT the JOURNEY_NOT_FOUND literal (col 43, killed). membership.json: invitations
+89.7, join 83.3, members 85.7; survivors are log/event literals + join.ts L76 `code === null` guard (join.test.ts, a unit
+test outside the group, covers them; same pattern as test-auditor's feedback_new_logic_outside_group_tests).
+Planted myself (scratchpad/grp01l1/mutant.config.mjs, MUTANT env, spreads vitest.system.config.mjs): walker check
+`if (false)` killed by the 3 AC23 tests in the journeys group's 4 files; api FULL gate `() => true` killed by AC21's
+derived-route list; bootstrap with constant join key killed by 2 AC8 tests. L6 6 files 532/532; L2 7 files 229/229;
+gate tests 385/385. L3 NOT run (no PG on 55432, no docker daemon).
+Bootstrap retry facts: groups FOR UPDATE (WHERE hash matches, so other keys lock nothing) -> memberships plain read ->
+admin's devices FOR UPDATE -> update hash. Only other locks on groups are FK KEY SHAREs from memberships/invitations
+inserts; only journeys.device_id FK takes KEY SHARE on devices, and an admin alone cannot start (empty list =
+NO_RESPONDER). No cycle with joinWithInvitation (invitation FOR UPDATE -> groups KEY SHARE) or insertStarted. App joins only
+with no stored credential; join key persists in SecureStore. Device ID unchanged, so a journey's device_id still matches.
+Canary: no memberships, own device row, untouched. Same-key concurrent bootstraps: both 201, last credential wins (untested
+at L3, benign). Fake bootstrapGroup has optional joinKey (null hash = never retried): stricter than real, not a D-100 leak.
+Migration 0009 edited in place: fine, not on origin/main (60b46ee).
