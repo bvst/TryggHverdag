@@ -24,14 +24,24 @@
 // contracts-depend-on-nothing-of-ours), so fast-check comes from its own
 // devDependencies. Every name here is synthetic (RG-07): words that mean
 // "test" or "member", never anyone's name.
+import { randomBytes } from 'node:crypto';
 import fc from 'fast-check';
 import { describe, expect, test } from 'vitest';
 import { joinRequestSchema } from './index.ts';
 
+/**
+ * A join key of the real one's shape: 32 random bytes as base64url, 43
+ * characters (D-091). Made at run time, as SM-01's "Synthetic data only" asks:
+ * no credential-looking literal is written in a file, because gitleaks (CI's
+ * `security` job) reads every committed line. Made once, so it is fixed for
+ * the run and every case below differs from the next by its name alone.
+ */
+const JOIN_KEY = randomBytes(32).toString('base64url');
+
 /** A join that is otherwise valid: a code of the right shape and a join key of 43 base64url characters. */
 const join = (displayName: string) => ({
   invitationCode: 'ABCDE-FGHJK-MNPQR-STVWX',
-  joinKey: 'A1b2C3d4E5f6G7h8J9k0M1n2P3q4R5s6T7v8W9x0Y1z',
+  joinKey: JOIN_KEY,
   displayName,
 });
 

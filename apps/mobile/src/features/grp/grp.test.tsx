@@ -390,8 +390,22 @@ function native(): typeof ReactNative {
   return launched.native;
 }
 
-/** A synthetic code as the admin's app shows one, and a synthetic name. */
-const CODE = 'K7Q2M-9TRVX-4HNPA-62WZE';
+/**
+ * A synthetic code as the admin's app shows one: four groups of five of
+ * Crockford's base32 characters, hyphens between. Made at run time, as
+ * SM-01's "Synthetic data only" asks: no credential-looking literal is
+ * written in a file, because gitleaks (CI's `security` job) reads every
+ * committed line. Fixed for the run. The app does not depend on the test kit
+ * (its package.json does not name it), so this is the kit's
+ * `syntheticInvitationCode` and `inGroupsOfFive`, written again; `Math.random`,
+ * as the kit's is, since the code guards nothing.
+ */
+const CODE = Array.from({ length: 4 }, () =>
+  Array.from({ length: 5 }, () =>
+    '0123456789ABCDEFGHJKMNPQRSTVWXYZ'.charAt(Math.floor(Math.random() * 32)),
+  ).join(''),
+).join('-');
+/** A synthetic name. */
 const NAME = 'Testmedlem ØKVAR';
 
 /** The join screen's two fields and its button, as a screen reader finds them. */
@@ -1039,8 +1053,8 @@ const GROUPS = CODE.split('-');
 
 /**
  * The code as a screen reader must read it: each group's characters apart,
- * and a pause, a comma, full stop or semicolon, between groups. For the
- * synthetic code: "K 7 Q 2 M, 9 T R V X, 4 H N P A, 6 2 W Z E".
+ * and a pause, a comma, full stop or semicolon, between groups. For a code
+ * that begins ABCDE-FGHJK: "A B C D E, F G H J K, ...".
  */
 const SPELLED = new RegExp(
   GROUPS.map((group) => Array.from(group).join('\\s+')).join('\\s*[,.;]\\s*'),

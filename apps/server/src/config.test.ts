@@ -617,13 +617,22 @@ describe('GRP-01: readAdminBootstrapSetting', () => {
     );
   });
 
+  // The spoilt codes are a synthetic code made at run time, then spoilt (SM-01's
+  // "Synthetic data only": no credential-looking literal in a file, for
+  // gitleaks reads every line). Each keeps its one fault: one character too
+  // many, a U last, a `!` at the seventeenth place.
+  const spoilt = syntheticBootstrapCode();
+  const oneTooMany = `${spoilt}A`;
+  const withU = `${spoilt.slice(0, 31)}U`;
+  const withPunctuation = `${spoilt.slice(0, 16)}!${spoilt.slice(17)}`;
+
   test.each([
     ['unset', undefined],
     ['empty', ''],
     ['19 characters', 'ABCDEF0123456789ABC'],
-    ['33 characters', 'A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E'],
-    ['a U in it', 'A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5DU'],
-    ['punctuation in it', 'A1B2C3D4E5F6A7B8!9D0E1F2A3B4C5D6'],
+    ['33 characters', oneTooMany],
+    ['a U in it', withU],
+    ['punctuation in it', withPunctuation],
   ])(
     'GRP-01-AC8: ADMIN_BOOTSTRAP_CODE %s is not usable, and the reason names the setting and never the value',
     (_what, value) => {

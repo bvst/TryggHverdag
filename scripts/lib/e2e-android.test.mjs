@@ -14,7 +14,7 @@
 // inside a failed one. A flow's status is one of PENDING, PREPARING,
 // INSTALLING, RUNNING, SUCCESS, ERROR, CANCELED, STOPPED or WARNING, so "has
 // no <failure>" is not the same as "passed".
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -1578,8 +1578,13 @@ function translationsWith(text, except = {}) {
 /** The value of a dotted key in a translation file. */
 const textAt = (tree, key) => key.split('.').reduce((node, part) => node?.[part], tree);
 
-/** A synthetic bootstrap code, as Terraform makes one: 32 upper-case hex digits. */
-const BOOTSTRAP_CODE = 'A1B2C3D4E5F60718293A4B5C6D7E8F90';
+/**
+ * A synthetic bootstrap code, as Terraform makes one: 16 random bytes as 32
+ * upper-case hex digits. Made at run time, as SM-01's "Synthetic data only"
+ * asks: no credential-looking literal is written in a file, because gitleaks
+ * (CI's `security` job) reads every committed line. Fixed for the run.
+ */
+const BOOTSTRAP_CODE = randomBytes(16).toString('hex').toUpperCase();
 
 describe('maestroTestCommand: every flow, with a JUnit report', () => {
   // RG-03 (GRP-01): the translations are the join screen's and the admin's,

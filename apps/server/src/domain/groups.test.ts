@@ -18,7 +18,7 @@
 //     with the same key, its user still a member, before then (AC5);
 //   - GRP-01-AC9 (the rules): only the admin invites, lists and removes, and
 //     never themself; a member who is no member is not found.
-import { fakeClock, fc } from '@trygghverdag/test-kit';
+import { fakeClock, fc, syntheticBootstrapCode } from '@trygghverdag/test-kit';
 import { describe, expect, test } from 'vitest';
 import {
   INVITATION_VALID_FOR_MS,
@@ -71,7 +71,10 @@ describe('GRP-01-AC2: the invitation code’s normaliser', () => {
   });
 
   test('GRP-01-AC2: the first admin’s bootstrap code, 32 upper-case hex digits, is well-formed as it is, and in lower case', () => {
-    const code = 'A1B2C3D4E5F60718293A4B5C6D7E8F90';
+    // Made at run time, as Terraform makes one, since SM-01's "Synthetic data
+    // only" writes no credential-looking literal in a file: gitleaks reads
+    // every line.
+    const code = syntheticBootstrapCode();
 
     expect(normaliseInvitationCode(code)).toBe(code);
     expect(normaliseInvitationCode(code.toLowerCase())).toBe(code);
