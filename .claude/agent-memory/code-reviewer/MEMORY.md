@@ -17,3 +17,4 @@
 - [LOST-07 review](project_lost07_review.md) — a request field one side ignores; a departure forced by an exact-set test; two monitoring URLs must differ; hand-added baselines vs measured; sqlstateOf accepts Node codes
 - [async spawn timeout orphans](project_async_spawn_timeout_orphans.md)
 - [CI fan-out review angles](project_ci_fanout_mutation.md) — BUG-45 mutation plan/group/aggregate: unused verdict fields, 6x boilerplate churn, matrix value in run:
+- [GRP-01 review](project_grp01_review.md) — orphaned JSDoc after helper extraction; unrecorded spec deviations; stale pinned contract description
