@@ -391,6 +391,38 @@ describe('REL-10-AC18: the staging canary’s code needs the owner and the safet
   });
 });
 
+// SEC-06 (privacy-security-reviewer on PR #96, raised twice): the secret scan
+// on every change is CI's required `security` check, run as `./gitleaks git .`
+// with no --config (ci.yml, "Secret scan (gitleaks)"). So gitleaks takes its
+// ignore list, /.gitleaksignore, and its configuration, /.gitleaks.toml when
+// there is one, from the pull request's own tree: a pull request could add a
+// fingerprint or an allowlist that silences the scan on itself, and pass it.
+// Owned, neither can change without the owner seeing it. /.gitleaks.toml is
+// owned before it exists, since the pull request that adds one is the one to
+// stop. Read from the repository itself, beside the canary's pins above.
+describe('SEC-06: the files that tell gitleaks what to skip need the owner', () => {
+  const GITLEAKS_FILES = ['/.gitleaksignore', '/.gitleaks.toml'];
+
+  test('SEC-06: OWNER_APPROVAL_PATHS holds /.gitleaksignore and /.gitleaks.toml', () => {
+    expect(GITLEAKS_FILES.filter((path) => !OWNER_APPROVAL_PATHS.includes(path))).toEqual([]);
+  });
+
+  test('SEC-06: .github/CODEOWNERS gives each a line naming @bvst and @urso-agent, and every path the owner must approve is owned', () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const owners = (path) =>
+      text
+        .split('\n')
+        .map((line) => line.trim().split(/\s+/))
+        .filter(([pattern]) => pattern === path)
+        .map(([, ...names]) => names.join(' '));
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    for (const path of GITLEAKS_FILES) {
+      expect(owners(path), path).toEqual(['@bvst @urso-agent']);
+    }
+  });
+});
+
 // GRP-01-AC32 (review loop 1, safety-reviewer S4): the groups module decides
 // who receives alerts (who joins, who is removed, and with them whose devices
 // authenticate), and the green head left it out of SAFETY_PATHS and out of

@@ -49,7 +49,7 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | SEC-03 | Server breach | must | 🟢 | 7 |
 | SEC-04 | Leaked invitation | must | ⚪ | 0 |
 | SEC-05 | Admin (owner) account compromised | must | ⚪ | 0 |
-| SEC-06 | Vulnerable or malicious dependencies | must | 🟢 | 1 |
+| SEC-06 | Vulnerable or malicious dependencies | must | 🟢 | 2 |
 | SEC-07 | Faked "I'm fine" heartbeats | must | 🟢 | 14 |
 | PRIV-01 | Location is collected only while a journey is running (including one started by CALL-03). | must | ⚪ | 0 |
 | PRIV-02 | Only the walker can start sharing their own location. | must | ⚪ | 0 |
