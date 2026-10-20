@@ -125,10 +125,10 @@ export function createApi({
   const os = implement(contract).$context<RequestContext>();
 
   /**
-   * Every route is built from this except health, so a route added later is
-   * authenticated unless someone builds it from `os` on purpose — and the
-   * system test that calls every route in the contract without a credential
-   * fails if they do.
+   * Every route is built from this except health and the join, so a route
+   * added later is authenticated unless someone builds it from `os` on
+   * purpose — and the system test that calls every route in the contract
+   * without a credential fails if they do.
    *
    * One 401 for every cause, so it says nothing about which check failed. A
    * check that cannot run is not one of those causes: the authenticator
@@ -139,8 +139,7 @@ export function createApi({
    * it is never logged, and never part of an answer. Past this point the
    * header is gone from the context: handlers get the device, and
    * `authorization` is undefined, so none can read the credential.
-   */
-  /**
+   *
    * Membership is the session (GRP-01, approach item 5, D-137): a device is
    * admitted FULL while its user is a member, or it is the canary's; a removed
    * member's device that started a journey not yet ended is admitted
