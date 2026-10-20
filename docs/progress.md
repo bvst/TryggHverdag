@@ -163,6 +163,15 @@ and the largest `alertMs` in the `canary_run` lines of Clever Cloud's log.
 That reading closes M2 (REL-10-AC19, D-090). The full row is in
 [`plan/README.md`](plan/README.md).
 
+**A-03 — Google Play account for the AS:** waiting on Google's answer. If it
+does not give the AS an organisation account, a new one is made with the
+AS's Workspace user. Needed by M3's task 12.
+
+**A-11 — Firebase project and APNs key** (push), needed by M3's task 6.
+**A-12 — LINK Mobility account** (SMS), needed by M3's task 10. M3's order,
+twelve tasks with GRP-01 first, is D-134; the full rows are in
+[`plan/README.md`](plan/README.md).
+
 **A-29 — request the location SDK's 30-day trial key shortly before M3's
 demo** (transistorsoft.com/shop/trials/new; owner's own phones only; D-086).
 Due M3, not now.

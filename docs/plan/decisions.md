@@ -5622,3 +5622,105 @@ any other path is work, not a candidate for the same treatment.
     running after 150 s, so it was stopped." That is a loud false failure,
     never a quiet pass: run the file again, or run `pnpm run
     test:integration`, before reading it as a test fault.
+
+## D-134 — M3's order: twelve tasks, GRP-01 first, and sign-in without SMS first
+- **Date:** 2026-10-20 · **Status:** Accepted (the owner, 2026-10-20: "jeg
+  godtar rekkefølgen", "Innlogging uten sms først", "Ja, en oppgave om
+  gangen"). Asked in session with Claude's recommendation for each ·
+  **Section:** 10 (M3)
+- **Context:**
+  - M3's roadmap row lists its requirements and exit criteria but, as M2's did
+    (D-090), no order and no task table.
+  - Earlier decisions and specs hand M3 many obligations: the real push and
+    SMS adapters, the alert's read route (D-106), the location SDK's settings
+    (D-086), the tests D-087 owes, iOS and the store builds. Each lands in the
+    task below that builds the thing it is about.
+  - Sign-in is planned with SMS codes (D-032), and SMS needs the provider
+    (A-12).
+  - D-052 (one requirement in flight) was to be revisited after M2.
+- **Decision:** twelve tasks, one pull request each, each through
+  `/feature <ID>`:
+  1. **GRP-01 — Sign-in and groups.** A single-use invitation that expires
+     after 7 days, device sessions (D-091), groups, membership, an admin
+     removing a member; the route that removes a responder from a journey
+     (D-122); the canary's users kept out of every group (D-128).
+  2. **GRP-02, CALL-01, CALL-02 — The home screen.** The #1 contact, the call
+     button, and 112 always visible.
+  3. **JRN-01, JRN-02 and LOST-01's phone half — Start a journey.** The safety
+     core, the location SDK in the background, a heartbeat every 60 s, and the
+     "sharing" notice that stays on screen. Mutation testing of the safety core
+     is set up before its first code (D-081 item 13).
+  4. **GRP-03 — The safety permission check,** so the journey from task 3 never
+     starts silently degraded.
+  5. **JRN-05, JRN-06 — "I'm home"** (with its offline queue) **and the
+     two-hour stop** (a new end reason, D-125), and the walker's screen once a
+     journey has ended.
+  6. **Real push (APNs and FCM),** with JRN-04's start and end notices.
+  7. **The alert screen,** with HELP-01: the read route (D-106), "I'm on it"
+     (LOST-06) and "They're safe" (LOST-08).
+  8. **JRN-03 — What responders see:** the map, the age of the last position,
+     and the battery level.
+  9. **GRP-04 — Responder setup:** alerts that break through a silenced phone
+     (Time Sensitive now, Critical Alerts if Apple grants them), readiness, and
+     the confirmed SMS number.
+  10. **Real SMS (LINK Mobility),** to the owner's own number only on staging
+      (D-135), and the SMS sign-in code for a new device.
+  11. **CALL-03, LOST-04, LOST-05:** calling #1 shares the location with #1;
+      the low-battery notice; the offline notice.
+  12. **iOS and the stores:** `e2e:ios` with its weekly simulator run, the EAS
+      preview builds, internal TestFlight and Google Play internal testing.
+- **Sign-in without SMS first:** in task 1 the invitation binds the first
+  device. Signing in on a new device with an SMS code comes with task 10, so
+  task 1 does not wait on A-12.
+- **One task at a time (D-052, revisited):** kept. The tasks are large and
+  build on each other.
+- **Why this order:** sign-in comes first because every screen needs a real
+  user and a device session, and today only the tests and the canary have one.
+  What the walker needs (2–5) comes before what the responder sees; it can be
+  built and tested on the Android emulator with the push and SMS fakes, and
+  needs no account of the owner's. The tasks that wait on the owner come late:
+  A-11 by task 6, A-12 by task 10, A-03 by task 12. iOS and the stores come
+  last because they wrap the demo.
+- **Consequences:**
+  - The roadmap gains "M3 — App MVP in detail".
+  - The owner to-do list gains A-11 (push) and A-12 (SMS), which only the
+    roadmap's table named.
+  - GRP-01 may start while M2's last exit criterion, the canary's 24-hour
+    reading (A-35), is still running: that reading needs no code.
+  - UI work runs on the Mac, where the simulators are (D-055); server parts may
+    run in cloud sessions.
+  - Tensions found in the documents, to be raised with the owner in the task
+    each concerns, not decided here:
+    - real-phone checks M3 is asked for (D-086 condition 2, D-113's gate)
+      against D-037;
+    - the SEC-01 new-device notice, placed in M3's sign-in task by SM-01's spec
+      and in M4 by the roadmap;
+    - the iOS L7 cadence: weekly in the roadmap, nightly in
+      `06-testing-strategy.md`.
+  - A change to the order or the split goes back to the owner. A bug fix may
+    run between tasks.
+  - Amends D-032's sign-in for M3 only (SMS codes arrive with task 10).
+    Supersedes nothing.
+
+## D-135 — The owner's own data may be on staging, for M3's demo
+- **Date:** 2026-10-20 · **Status:** Accepted (the owner, 2026-10-20: "Ja, jeg
+  tillater å bruke mine data i staging"). Asked in session with Claude's
+  recommendation · **Section:** 8 (environments), 10 (M3)
+- **Context:**
+  - Staging is "Synthetic only" (`08-cicd-releases.md`, D-046).
+  - M3's demo uses the preview builds, which talk to staging, with real push to
+    the owner's phone, SMS to the owner's number, and the owner's location
+    while a journey runs (D-134).
+- **Decision:**
+  - Until production exists (M5), staging may hold **the owner's own** personal
+    data: the owner's name, phone number, push tokens and location. Nobody
+    else's.
+  - Tests and test data stay synthetic (RG-07). This covers the demo only.
+- **Consequences:**
+  - The staging row in `08-cicd-releases.md` names this exception.
+  - Everything PRIV-07 and REL-12 require holds on staging as in production:
+    no location and no phone number in a log line, no location in an SMS.
+  - Task 10's SMS adapter sends only to the owner's number on staging; how is
+    task 10's to design.
+  - Revisited at M5, when production arrives (D-046).
+  - Supersedes nothing; narrows D-046's staging row for the owner's own data.

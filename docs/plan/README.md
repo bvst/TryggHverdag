@@ -10,6 +10,9 @@ mutation at 80 % or more, and the staging canary on time for 24 hours. The one
 still open is the last part of the owner's A-35 (below): the canary has run since
 A-35's apply (2026-10-20, 06:36:55 UTC), and has to run on time for 24 hours
 (REL-10-AC19); the reading is due from about 06:40 UTC on 2026-10-21.
+**M3's order is decided** (D-134, 2026-10-20): twelve tasks, GRP-01 first,
+sign-in without SMS first, one task at a time; the demo may use the owner's
+own data on staging (D-135). The task list is in [10-roadmap.md](10-roadmap.md).
 Bugs found and fixed since the last update (2026-10-10), with the pull request
 and its squash commit: BUG-43 (a test picked an outbox row by random order;
 #79, `85426bf`, which carried REL-10's record), BUG-42 and BUG-26 (the gate's
@@ -199,6 +202,8 @@ session.
 | A-08 | Create Healthchecks.io and UptimeRobot accounts, with alerts to your phone | Get paged if the safety system stops (REL-08) | ✅ Done (2026-09-26) — both alert by email, which the owner accepts for now (2026-09-28); UptimeRobot's monitor was A-25 |
 | A-09 | Run `claude setup-token` and save the token as the repository secret `CLAUDE_CODE_OAUTH_TOKEN` | AI reviews and the daily report in CI (D-045, D-050) | ✅ Done — 2026-09-23. `CLAUDE_CODE_OAUTH_TOKEN` is set and `ANTHROPIC_API_KEY` is not |
 | A-10 | Set up the Mac: separate `claude-dev` Standard user, FileVault, no sleep on power, shared tools — see [M0-kickoff.md](M0-kickoff.md) Part 2 | Hybrid sessions (D-055, D-056) | ✅ Done (2026-09-25) — `pnpm run doctor` passes 9 of 9 (INF-00); `claude-dev` is on GitHub as `urso-agent` only |
+| A-11 | Create a Firebase project for the AS (Android push), and an APNs authentication key in the Apple Developer account (iPhone push). The secret names and the exact steps come with M3's push task | M3's task 6, real push to your phone (D-134). Firebase brings a data flow to Google, so its data processing terms belong with it (D-016, PRIV-06) | ⬜ Open — needed before M3's task 6 |
+| A-12 | Create an SMS account with LINK Mobility for the AS, and sign its data processing agreement | M3's task 10: SMS escalation and the SMS sign-in code, sent only to your own number on staging (D-134, D-135, LOST-07) | ⬜ Open — needed before M3's task 10 |
 | A-14 | Create a cloud environment at claude.ai/code (Claude prepares the settings) | Everyday cloud sessions (D-055) | 🟡 Network allowlist applied by the owner (2026-09-24, [cloud-environment.md](cloud-environment.md)); it reached the running session. Setup script still to come |
 | A-15 | Switch on the merge rules and add the two secrets — every step is written out in [merge-rules.md](merge-rules.md), about 10 minutes | Without them no gate can stop a merge, and `gate-integrity` stays red (D-029, D-042) | ✅ Done (2026-09-23) — `gate:integrity` reports 5 of 5 against the live rules, including that nobody can bypass them |
 | A-16 | In Healthchecks.io, add a check named `daily-status` with **Period 1 day** and **Grace 3 hours**, copy its ping URL, and save it as the repository secret `HEALTHCHECKS_DAILY_STATUS_URL` (Settings → Secrets and variables → Actions). About 3 minutes | Pages you when a morning passes with no daily report at all — the one failure the report cannot tell you about itself (D-076). Until then every report says it is missing and the run is red | ✅ Done (2026-09-24) — verified by the first run: `PING_CONFIGURED: true`, and the ping logged exit status 0 |

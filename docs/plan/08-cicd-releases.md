@@ -120,7 +120,7 @@ DPIA written, PRIV-11):
 |-------------|---------|------|-------|
 | local | Claude Code sessions; PostgreSQL in containers | Synthetic only | Owner's machine |
 | ci | One per pull request, thrown away afterwards | Synthetic only | GitHub Actions |
-| staging | Always-on copy of production: demos, UI tests, its own canary | **Synthetic only** | Clever Cloud (EEA), small instances |
+| staging | Always-on copy of production: demos, UI tests, its own canary | **Synthetic only**, except the owner's own data for M3's demo until M5 (D-135) | Clever Cloud (EEA), small instances |
 | production | Real users | Real personal data | Clever Cloud (EEA) |
 
 There are three app variants — development, preview (talks to staging) and
