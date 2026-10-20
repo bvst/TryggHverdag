@@ -66,3 +66,23 @@ bin/api.ts, ports.ts, contracts/src/groups.ts, apps/mobile/src/shared/{secure-st
 apps/mobile/package.json (privacy-security-reviewer always runs and blocks, so a Note).
 
 Related: [[rel10-canary-review]], [[lost07-sms-escalation-review]], [[reviewer-sandbox-quirks]], [[mobile-release-review]]
+
+**Loop 1 (2026-10-20, delta a5fd8cf..3fac8fb): PASS.**
+- B1 fixed: random_bytes + keepers {generation = local...}. Scratch plan recipe reused with the REAL block cut
+  from main.tf by `awk '/^resource "random_bytes"/,/^}/'` plus a terraform_data stand-in for the env; terraform
+  binary is node_modules/.cache/terraform/1.16.4/linux_amd64/terraform (not on PATH). Refresh line has no [id=];
+  a rotation plan (generation 1 -> 2) shows only `(sensitive value)` and the keeper change; 0 hits in both plans,
+  3 in the state file (positive control). random_bytes 3.9.1 schema has NO id attribute; clevercloud_nodejs
+  `environment` is sensitive in the 2.2.1 schema. The terraform_data stand-in prints a "will no longer be marked
+  sensitive" warning: an artefact of the stand-in, not of the real resource.
+- Bootstrap retry probe (real adapter + createJoinService on a PG16 scratch cluster under /tmp, port 55434):
+  other key while alone = 404, counts unchanged; same key = same user, old credential null; with a member = 404;
+  the member's key + bootstrap code = 404; 6 concurrent retries = 1 device, 1 working credential; hash 64 hex,
+  not the key. The window REOPENS when the admin removes every member (memberships rows are deleted), which
+  D-137's "the window closes when a second member joins" does not say; harmless (needs the join key, which the
+  app keeps in SecureStore forever and never sends anywhere else). The retry writes no audit row.
+- Display-name rule gaps beyond the spec (Notes for task 3, the member list): combining-mark-only names (U+034F,
+  U+FE0F, U+0301) and U+2028 inside a name are accepted.
+- infra.test.mjs refuses only `resource "random_id"`; D-137 also forbids random_string and random_integer.
+- Another session's stop-gate (gate:quick) rewrote docs/requirements-status.md in the working tree during the
+  review (PRIV-07 14 -> 15): check `ps` before blaming yourself for a dirty tree.
