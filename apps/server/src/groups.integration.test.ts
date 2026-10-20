@@ -10,7 +10,9 @@
 //     through the API, leave one of each;
 //   - AC6: the seven days are the database's: a process clock far ahead or far
 //     behind changes nothing;
-//   - AC9: the tables refuse a second ADMIN and a second group;
+//   - AC9: the tables refuse a second ADMIN and a second group, the group by
+//     the index groups_one_group, by name: the admin's removal checks no
+//     group, so it relies on there being one;
 //   - AC11: a removed member's device is 401, the walking one admitted for its
 //     own journey only, and a database that cannot answer is a 500;
 //   - AC13: a start and a removal racing on the membership row, both orders,
@@ -18,7 +20,8 @@
 //   - AC16 and AC17: two removals of one member at once, the second arriving
 //     while the first holds the membership row, give one removal and one
 //     MEMBER_NOT_FOUND, never a failure: the removal's `for update` on the
-//     member's row decides it (approach item 9);
+//     member's row decides it (approach item 9); and so with M's row held FOR
+//     SHARE by a third transaction, where `for share` would deadlock;
 //   - AC15: the canary's users can have no membership, and joins never touch
 //     the canary's device;
 //   - AC20: a removal that cannot finish, its lock wait run out or a failure
@@ -554,6 +557,30 @@ describe('GRP-01: what the tables refuse', () => {
     }),
   );
 
+  // safety-reviewer's note on PR #96: removeMember never checks that the admin
+  // and the member are in the same group. It reads the caller's role and the
+  // member's row by user ID alone (adapters/groups.ts), so the only thing
+  // keeping one group's admin from removing another group's member is that
+  // there is no other group: this index, groups_one_group (migration 0009), a
+  // unique index on a constant. The test above holds "a second group is
+  // refused"; this one holds that it is this index that refuses it, by name.
+  // Lifting the index, for a second group, needs a same-group check in
+  // removeMember first, with its own test, or an admin could remove anyone.
+  test(
+    'GRP-01-AC9: a second group is refused by the unique index groups_one_group, by name (23505): the admin’s removal relies on there being one group, so the index may only go once removeMember checks the group',
+    withServer(async (s) => {
+      const first = await insertGroupRow(s.pool);
+
+      await expect(insertGroupRow(s.pool)).rejects.toMatchObject({
+        code: '23505',
+        table: 'groups',
+        constraint: 'groups_one_group',
+      });
+      const groups = await s.pool.query<{ id: string }>('select id::text as id from groups');
+      expect(groups.rows).toEqual([{ id: first }]);
+    }),
+  );
+
   test(
     'GRP-01-AC15: the memberships table refuses either canary user by its check, registered or not; joins and a bootstrap leave CANARY_DEVICE_ID with its user and hash',
     withServer(async (s) => {
@@ -821,6 +848,72 @@ describe('GRP-01: two removals of one member racing on the membership row (AC16,
         [journeyId],
       );
       expect(responders.rows.map(({ id }) => id)).toEqual([keeper.userId]);
+      expect(await s.count('audit_log')).toBe(audit + 1);
+      const removed = await s.pool.query<{ actor: string }>(
+        `select actor_id::text as actor from audit_log
+          where action = 'MEMBER_REMOVED' and subject_id = $1`,
+        [m.userId],
+      );
+      expect(removed.rows).toEqual([{ actor: adminPhone.userId }]);
+    }),
+  );
+
+  // test-auditor's probe on dd7126d: the test above holds J's row, so the
+  // first removal has deleted M's row before the second reads it, and that
+  // catches a dropped `for update` but not one made `for share`. Here a third
+  // transaction holds M's own membership row FOR SHARE, as a start naming M
+  // holds it (AC13), so both removals meet at M's row before either deletes.
+  // With `for update`, the first waits on the holder and the second behind
+  // the first; the second then reads M gone. With `for share`, both reads
+  // would be granted beside the holder's, each delete would wait on the
+  // other's share lock, and PostgreSQL would end one as a deadlock (40P01):
+  // a 500 where the admin should hear MEMBER_NOT_FOUND.
+  test(
+    'GRP-01-AC16 and AC17: two removals of M while another transaction holds M’s membership row FOR SHARE both wait on it; once it lets go, one answers removed and the other MEMBER_NOT_FOUND; neither throws, and one MEMBER_REMOVED audit row is written',
+    withServer(async (s) => {
+      const adminPhone = await s.admin();
+      const m = await s.member(adminPhone);
+      const keeper = await s.member(adminPhone);
+      const audit = await s.count('audit_log');
+      // Each removal's answer, or what it threw: never left to reject unheard.
+      const removal = async () => {
+        try {
+          return await s.groups.removeMember({ adminId: adminPhone.userId, memberId: m.userId });
+        } catch (error) {
+          return { threw: error instanceof Error ? error.message : String(error) };
+        }
+      };
+
+      const holder = await s.pool.connect();
+      await holder.query('begin');
+      await holder.query('select 1 from memberships where user_id = $1 for share', [m.userId]);
+      const waiting: number[] = [];
+      let first: ReturnType<typeof removal> | undefined;
+      let second: ReturnType<typeof removal> | undefined;
+      try {
+        first = removal();
+        // The first removal waits on the holder for M's row.
+        waiting.push(await untilWaiting(s, 1));
+        second = removal();
+        // The second waits too: both are in flight before the holder lets go.
+        waiting.push(await untilWaiting(s, 2));
+      } finally {
+        await holder.query('rollback');
+        holder.release();
+      }
+
+      expect(waiting, 'both removals were in flight at once, each waiting on a lock').toEqual([
+        1, 2,
+      ]);
+      expect([await first, await second]).toEqual([
+        { outcome: 'removed' },
+        { outcome: 'not_removed', reason: 'MEMBER_NOT_FOUND' },
+      ]);
+      const left = await s.pool.query<{ id: string }>(
+        'select user_id::text as id from memberships where user_id = any($1)',
+        [[m.userId, keeper.userId]],
+      );
+      expect(left.rows).toEqual([{ id: keeper.userId }]);
       expect(await s.count('audit_log')).toBe(audit + 1);
       const removed = await s.pool.query<{ actor: string }>(
         `select actor_id::text as actor from audit_log
