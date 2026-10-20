@@ -78,6 +78,10 @@ export const OWNER_APPROVAL_PATHS = [
   // but git executes this file, so an unowned copy of it could switch the gate
   // off without the rules changing a line — the gate present and doing nothing.
   '/.githooks/',
+  // What gitleaks skips: it reads both from the pull request's own tree, so
+  // an unowned change could silence the required security check (SEC-06).
+  '/.gitleaksignore',
+  '/.gitleaks.toml',
   '/package.json',
   // Their include and exclude lists decide which tests CI runs at all, the
   // gate drills among them (D-082).
