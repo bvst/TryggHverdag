@@ -5854,8 +5854,11 @@ any other path is work, not a candidate for the same treatment.
      transaction, as above.
   5. D-134 says UI work runs on the Mac (D-055), but task 1's app needs no
      simulator: it has no iOS configuration until task 12, L5 runs anywhere
-     and L7 Android runs in CI. Not resolved here: where the app half is built
-     is for the coordinating session or the owner.
+     and L7 Android runs in CI. Resolved by the owner (2026-10-20, "Her i
+     skyøkten", Claude's recommendation): all of GRP-01 is built in the cloud
+     session; the Mac is used when a task needs the iOS simulator or a look
+     at the screen, task 12 at the latest. This narrows D-134's "UI work runs
+     on the Mac".
   6. `05-architecture.md`'s data model puts "age band and role per
      membership" together; the age band is M4's (the roadmap). Resolved: the
      role only.
@@ -5866,7 +5869,9 @@ any other path is work, not a candidate for the same treatment.
   - `modules/groups/` and `adapters/groups.ts` are new owned safety paths; as
     with D-128, the ai-review `safety` filter, `OWNER_APPROVAL_PATHS` and
     CODEOWNERS gain them in a pull request of their own, merged by hand
-    (D-075), before GRP-01's.
+    (D-075), before GRP-01's. It comes from the second branch
+    `claude/busy-faraday-40n2zl-ai-review`, as REL-10's did: the owner
+    allowed it again for GRP-01 (2026-10-20, Claude's recommendation).
   - Every L3 and L6 test that starts a journey puts its users in a group; the
     test kit's builders gain groups and memberships.
   - The join becomes the second public route, in SM-01-AC9's list on purpose.
