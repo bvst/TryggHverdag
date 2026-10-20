@@ -113,13 +113,24 @@ export function reasons(files) {
 // costs ten minutes or more and a "no" costs one.
 //
 // A wrong "no" is the expensive mistake: an app-breaking change would merge
-// with a green android-e2e over it. So nothing here is a list kept by hand. The
-// app's dependency closure is read from the package.json files, and the e2e
-// script's import closure from its source, every time this runs: a dependency
-// or an import added later is followed without an edit here.
+// with a green android-e2e over it. So, but for the two folders the flows'
+// server is built from (SERVER_DIRS, GRP-01-AC33), nothing here is a list kept
+// by hand. The app's dependency closure is read from the package.json files,
+// and the e2e script's import closure from its source, every time this runs: a
+// dependency or an import added later is followed without an edit here.
 
 /** Where the app lives. */
 const APP_DIR = 'apps/mobile/';
+
+/**
+ * What the flows run against besides the app (GRP-01-AC33): the API the
+ * android-e2e job starts, and the contract it serves. The app does not depend
+ * on the server, but since GRP-01 the flows join, invite and refuse against
+ * it, so a change to either can break them as surely as an app change. The
+ * contracts are named even though the app's dependency closure holds them
+ * today, so this stays true if the app ever stops importing them.
+ */
+const SERVER_DIRS = ['apps/server/', 'packages/contracts/'];
 
 /** Root files that decide what is installed, and with which Node. */
 const INSTALL_FILES = [
@@ -261,7 +272,8 @@ function e2eClosure(root) {
 }
 
 /**
- * True when any changed file can change the app or how android-e2e tests it.
+ * True when any changed file can change the app, the server and contract the
+ * flows run against, or how android-e2e tests them.
  *
  * An empty diff answers false: there is nothing for android-e2e to check.
  *
@@ -276,6 +288,7 @@ export function touchesApp(files, { root }) {
   return files.some(
     (file) =>
       file.startsWith(APP_DIR) ||
+      SERVER_DIRS.some((folder) => file.startsWith(folder)) ||
       INSTALL_FILES.includes(file) ||
       file === CI_WORKFLOW ||
       dependencies.some((folder) => file.startsWith(folder)) ||
