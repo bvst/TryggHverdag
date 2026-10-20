@@ -1419,6 +1419,11 @@ was not checked. The bootstrap retry changes no shape.
   `SafeAreaProvider` to the real home screen, which is task 2's. Task 2 makes
   the shared kit dark-first, these screens with it; the reviewer will block
   task 2 if the home screen is still light-only.
+  *From PR #96's CI review (`a11y-i18n-reviewer`):* a signed-in phone opens
+  on GRP-01's member screen (`home-screen.tsx`), which has no 112 button.
+  By design: no call or journey feature exists yet (CALL-01, CALL-02). Task
+  2's home screen replaces it and shows 112 always (CALL-02); its a11y
+  review blocks if 112 is missing.
 - **Task 3 (start a journey):** the member list for members; the responder
   picker; the removal route's button; what the app shows a walker whose
   removal of the last responder answers `REMOVED`.
