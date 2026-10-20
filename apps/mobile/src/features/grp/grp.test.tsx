@@ -1670,10 +1670,13 @@ type InFlight = 'join' | 'start' | 'invitation' | 'list' | 'removal';
 /**
  * The app with `what` sent and its answer held, so the screen is looked at
  * while the request is in flight. Each as the review-loop-1 tests above set
- * it up.
+ * it up. A test that lets the answer go passes the held reply in; the others
+ * leave it held.
  */
-async function whileInFlight(what: InFlight): Promise<typeof ExpoRouterTesting.screen> {
-  const answer = held();
+async function whileInFlight(
+  what: InFlight,
+  answer: ReturnType<typeof held> = held(),
+): Promise<typeof ExpoRouterTesting.screen> {
   if (what === 'join') {
     api.reply(JOIN, answer.reply);
     const screen = await launch();
@@ -1837,4 +1840,99 @@ describe('GRP-01-AC30: the waiting indicator where the admin acted, an accessibi
       }
     },
   );
+});
+
+describe('GRP-01-AC30: the confirmation holds while a removal is in flight (review loop 2, a11y-i18n-reviewer)', () => {
+  // The waiting indicator inside the confirmation (the test above) shows the
+  // admin the removal is on its way only while the confirmation stays. If
+  // cancel worked mid-flight, the confirmation and its indicator would go
+  // while the DELETE is still out; if confirm did, a second DELETE would go.
+  // So both buttons stay on screen, disabled, until the answer comes.
+
+  /** Lets every promise that can settle settle, and React render what it set. */
+  async function settle() {
+    await testing().act(async () => {
+      for (let turn = 0; turn < 50; turn += 1) {
+        await Promise.resolve();
+      }
+    });
+  }
+
+  /** What a button's accessibility state says of `disabled`, or "not on screen". */
+  const disabledOf = (button: unknown): unknown =>
+    button === null
+      ? 'not on screen'
+      : ((button as HostNode).props['accessibilityState'] as { disabled?: unknown } | undefined)
+          ?.disabled;
+
+  /** The confirm and cancel buttons as a screen reader finds them now: each disabled, or not. */
+  const buttonsNow = (screen: typeof ExpoRouterTesting.screen) => ({
+    confirm: disabledOf(
+      screen.queryByRole('button', {
+        name: nbFilled('grp.members.confirm', { name: FIRST.displayName }),
+      }),
+    ),
+    cancel: disabledOf(screen.queryByRole('button', { name: nbText('grp.members.cancel') })),
+  });
+
+  /** The waiting indicators inside the confirmation now: none when it is gone. */
+  function indicatorsInConfirmation(screen: typeof ExpoRouterTesting.screen): HostNode[] {
+    const text = shownTexts(screen).find(
+      (shown) => shown.text === nbFilled('grp.members.confirmText', { name: FIRST.displayName }),
+    );
+    const confirm = screen.queryByRole('button', {
+      name: nbFilled('grp.members.confirm', { name: FIRST.displayName }),
+    }) as unknown as HostNode | null;
+    const confirmation =
+      text === undefined || confirm === null ? null : lowestHolding(text.node, confirm);
+    return confirmation === null
+      ? []
+      : waitingIndicators(screen).filter((indicator) => holds(confirmation, indicator));
+  }
+
+  test('GRP-01-AC30: while a removal is in flight, its confirm and cancel buttons stay on screen, each disabled (accessibilityState.disabled true); pressing confirm again sends no second DELETE, and pressing cancel takes away neither the confirmation nor its waiting indicator; once the answer comes, the removal completes', async () => {
+    const answer = held();
+    const screen = await whileInFlight('removal', answer);
+    const { fireEvent } = testing();
+    const confirmText = nbFilled('grp.members.confirmText', { name: FIRST.displayName });
+
+    expect(buttonsNow(screen)).toEqual({ confirm: true, cancel: true });
+    expect(indicatorsInConfirmation(screen)).toHaveLength(1);
+
+    await fireEvent.press(confirmButton(screen));
+    await settle();
+    expect(api.to(REMOVE)).toHaveLength(1);
+
+    await fireEvent.press(screen.getByRole('button', { name: nbText('grp.members.cancel') }));
+    await settle();
+    expect({
+      confirmation: screen.queryByText(confirmText) !== null,
+      indicators: indicatorsInConfirmation(screen).length,
+      buttons: buttonsNow(screen),
+      removals: api.to(REMOVE).length,
+    }).toEqual({
+      confirmation: true,
+      indicators: 1,
+      buttons: { confirm: true, cancel: true },
+      removals: 1,
+    });
+
+    answer.release({ status: 200, body: { outcome: 'REMOVED' } });
+    await testing().waitFor(() => {
+      expect(screen.queryByText(FIRST.displayName)).toBeNull();
+    });
+    await testing().waitFor(() => {
+      expect(waitingIndicators(screen)).toEqual([]);
+    });
+    await testing().waitFor(() => {
+      expect(announcements(screen)).toContain(
+        nbFilled('grp.members.removed', { name: FIRST.displayName }),
+      );
+    });
+    expect(screen.queryByText(confirmText)).toBeNull();
+    expect(screen.queryByText(nbText('grp.member.unreachable'))).toBeNull();
+    expect(screen.queryByText(nbText('grp.members.refused'))).toBeNull();
+    expect(screen.getByText(SECOND.displayName)).toBeTruthy();
+    expect(api.to(REMOVE).map(({ path }) => path)).toEqual([`/v1/group/members/${FIRST.userId}`]);
+  });
 });
