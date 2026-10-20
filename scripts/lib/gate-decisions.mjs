@@ -101,14 +101,22 @@ export const MUTATION_GROUPS = [
   },
   {
     // The join, the invitation and the admin's member list and removal
-    // (GRP-01-AC32), against their system test, under the system tests'
-    // configuration. Named membership, not after its folder: `groups` is the
+    // (GRP-01-AC32). Named membership, not after its folder: `groups` is the
     // mutation plan's output key in ci.yml, where BUG-45-AC8 refuses any
     // group's name.
+    //
+    // Two files, the L2 one first (review loop 2, test-auditor S1): only
+    // join.test.ts reaches join.ts's guard for a code that is not a code,
+    // since the contract refuses such a code before any request reaches the
+    // module, and only it pins invitation_failed's stage when the store
+    // fails. groups.system.test.ts holds the rest. The coverage configuration
+    // collects both, unit and system together, and no L3; the system one
+    // would not collect join.test.ts, and Vitest runs no file its
+    // configuration leaves out, even when it is named.
     name: 'membership',
     paths: ['apps/server/src/modules/groups/'],
-    tests: ['apps/server/src/groups.system.test.ts'],
-    config: 'vitest.system.config.mjs',
+    tests: ['apps/server/src/modules/groups/join.test.ts', 'apps/server/src/groups.system.test.ts'],
+    config: 'vitest.coverage.config.mjs',
   },
   {
     // The watchdog's sweep and the outbox's sender (LOST-02), then "I'm on
