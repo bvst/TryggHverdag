@@ -5,7 +5,8 @@
   "description": "API request and response schemas shared by app and server (AR-07)",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./display-name": "./src/display-name.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

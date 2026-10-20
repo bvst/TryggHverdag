@@ -33,9 +33,9 @@ export const startJourneyRequestSchema = z
       .array(z.uuid().toLowerCase())
       .max(MAX_RESPONDERS)
       .describe(
-        'The users who should follow this journey. Each must be an existing user other than ' +
-          'the walker; a repeated ID counts once. An empty list is accepted here and refused ' +
-          'as NO_RESPONDER.',
+        "The users who should follow this journey. Each must be a member of the walker's group " +
+          'other than the walker; a repeated ID counts once. An empty list is accepted here and ' +
+          'refused as NO_RESPONDER.',
       ),
   })
   .describe('A start request. The walker is the user whose device sends it; no field names one.');

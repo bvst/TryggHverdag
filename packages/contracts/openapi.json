@@ -114,7 +114,7 @@
                       "type": "string",
                       "format": "uuid"
                     },
-                    "description": "The users who should follow this journey. Each must be an existing user other than the walker; a repeated ID counts once. An empty list is accepted here and refused as NO_RESPONDER."
+                    "description": "The users who should follow this journey. Each must be a member of the walker's group other than the walker; a repeated ID counts once. An empty list is accepted here and refused as NO_RESPONDER."
                   }
                 },
                 "required": [
@@ -1937,7 +1937,7 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 40,
-                    "description": "The name the person typed for themself: 1 to 40 characters once the spaces around it are trimmed, and no control character."
+                    "description": "The name the person typed for themself: 1 to 40 characters once the spaces around it are trimmed; no control character; no bidirectional control or other format character but ZWNJ (U+200C) and ZWJ (U+200D); and at least one visible character."
                   }
                 },
                 "required": [

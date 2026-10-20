@@ -37,9 +37,9 @@ export { API_PREFIX, API_VERSION } from './api-version.ts';
 export { badRequestError } from './bad-request.ts';
 export { contract } from './contract.ts';
 export { deviceCredentialErrors } from './device-credential.ts';
+export { MAX_DISPLAY_NAME_LENGTH, isUsableDisplayName } from './display-name.ts';
 export {
   INVITATION_CODE_PATTERN,
-  MAX_DISPLAY_NAME_LENGTH,
   ROLES,
   createInvitation,
   createInvitationErrors,

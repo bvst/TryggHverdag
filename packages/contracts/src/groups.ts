@@ -16,6 +16,7 @@ import { oc } from '@orpc/contract';
 import { z } from 'zod';
 import { badRequestError } from './bad-request.ts';
 import { deviceRoute } from './device-credential.ts';
+import { MAX_DISPLAY_NAME_LENGTH, isUsableDisplayName } from './display-name.ts';
 
 /** A member's role: one ADMIN, everyone else a MEMBER. */
 export const ROLES = ['ADMIN', 'MEMBER'] as const;
@@ -32,28 +33,23 @@ export const INVITATION_CODE_PATTERN = /^[ -]*(?:[0-9A-TV-Za-tv-z][ -]*){20,32}$
 /** A join key and a device credential alike: 32 bytes, base64url without padding, 43 characters (D-091). */
 const BASE64URL_43 = /^[A-Za-z0-9_-]{43}$/;
 
-/** Whether a text holds a control character, C0 or C1, which the memberships table's check refuses (approach item 2). */
-function holdsControlCharacter(text: string): boolean {
-  return Array.from(text).some((character) => {
-    const code = character.codePointAt(0) ?? 0;
-    return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
-  });
-}
-
-/** The longest display name, in characters, after trimming. */
-export const MAX_DISPLAY_NAME_LENGTH = 40;
-
 const role = z.enum(ROLES).describe('ADMIN for the one admin; MEMBER for everyone else.');
 
+/**
+ * A display name, held to the one rule in `display-name.ts` (GRP-01-AC31),
+ * which the app runs too before it sends. The length is also said to zod, so
+ * the published description carries it.
+ */
 const displayName = z
   .string()
   .trim()
   .min(1)
   .max(MAX_DISPLAY_NAME_LENGTH)
-  .refine((name) => !holdsControlCharacter(name))
+  .refine(isUsableDisplayName)
   .describe(
     'The name the person typed for themself: 1 to 40 characters once the spaces around it are ' +
-      'trimmed, and no control character.',
+      'trimmed; no control character; no bidirectional control or other format character but ' +
+      'ZWNJ (U+200C) and ZWJ (U+200D); and at least one visible character.',
   );
 
 export const joinRequestSchema = z
