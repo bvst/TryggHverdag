@@ -21,6 +21,12 @@
 // node:crypto is mocked with itself, timingSafeEqual wrapped in a spy that
 // calls the real one unless a test says otherwise, so a named import and the
 // default one both reach the spy. The group store is the test kit's fake.
+//
+// Review loop 2 (test-auditor S2): this file is also where the groups
+// module's other L2 test lives, the invitation the store cannot create
+// (AC24), at the end. Here, not in a file of its own: the membership mutation
+// group runs this file and groups.system.test.ts and no other (AC32), and a
+// mutant of invitations.ts is killed only by a test that run has.
 import {
   fakeClock,
   fakeJourneyStore,
@@ -33,6 +39,7 @@ import {
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { createInvitationService } from './invitations.ts';
 import { createJoinService } from './join.ts';
 
 const timingSafeEqual = vi.hoisted(() => ({
@@ -280,6 +287,36 @@ describe('GRP-01-AC24: a join the store fails is one closed log line, and the st
       for (const secret of [call.invitationCode, call.joinKey, call.displayName]) {
         expect(written).not.toContain(secret);
       }
+    },
+  );
+});
+
+// The store failing an invitation's creation (GRP-01-AC24, review loop 2,
+// test-auditor S2, PRIV-07), written as the join's are above. The admin's call
+// is otherwise valid: the failure is the store's alone. The module writes one
+// closed line, the stage and the SQLSTATE, and rethrows the store's own error,
+// never turning it into a refusal. The error's message names the admin's ID,
+// as Drizzle's names a query's parameters; the line holds no ID and no code.
+// Two SQLSTATEs, so the line's code is the store's, not a constant.
+describe('GRP-01-AC24: an invitation the store fails is one closed log line, and the store’s error, never a refusal', () => {
+  test.each([{ sqlstate: '40001' }, { sqlstate: '57P01' }])(
+    'GRP-01-AC24: when createInvitation rejects with SQLSTATE $sqlstate, the invitation rejects with that same error, and exactly one invitation_failed line is written, at the store stage with the SQLSTATE, holding no code and no ID',
+    async ({ sqlstate }) => {
+      const store = fakeJourneyStore({ clock: fakeClock(T) });
+      const log = fakeLog();
+      const adminId = store.addMember(undefined, { role: 'ADMIN' });
+      const service = createInvitationService({ groups: store, log });
+      const error = storeFailure(sqlstate, [adminId]);
+      store.failWith(error, 'createInvitation');
+
+      await expect(service.create({ adminId })).rejects.toBe(error);
+
+      expect(store.calls).toEqual(['createInvitation']);
+      expect(log.events).toEqual([{ event: 'invitation_failed', stage: 'store', code: sqlstate }]);
+      const written = JSON.stringify(log.events);
+      expect(written).not.toContain(adminId);
+      expect(written).not.toMatch(/[0-9A-HJKMNP-TV-Z]{5}-?[0-9A-HJKMNP-TV-Z]{5}/);
+      expect(store.invitations()).toEqual([]);
     },
   );
 });

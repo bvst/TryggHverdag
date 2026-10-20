@@ -718,14 +718,29 @@ describe('GRP-01: the first admin’s bootstrap code, made by Terraform', () => 
   // privacy-security-reviewer B1: a random_id's `id` is its value, printed by
   // every plan that refreshes it. No staging file may declare one, for this
   // code or any later secret, so no plan prints one.
-  test('GRP-01-AC8: no .tf file in infra/staging declares a random_id resource, so no plan prints a random value as its ID', () => {
+  //
+  // RG-03 (GRP-01-AC8, review loop 2, privacy-security-reviewer note 3; the
+  // spec's "Added in review loop 2"): nor a random_string or a
+  // random_integer, whose `result` no plan hides either (D-137). The test
+  // refuses three resource types where it refused one, and reads a type
+  // label quoted or bare, as HCL takes either. A stronger test: every
+  // declaration it refused, it still refuses.
+  test('GRP-01-AC8: no .tf file in infra/staging declares a random_id, random_string or random_integer resource, so no plan prints a random value', () => {
     const files = readdirSync(path.join(ROOT, 'infra/staging')).filter((file) =>
       file.endsWith('.tf'),
     );
+    const printed = ['random_id', 'random_string', 'random_integer'];
 
     expect(files, 'the .tf files read').toContain('main.tf');
     for (const file of files) {
-      expect(read(`infra/staging/${file}`), file).not.toMatch(/^\s*resource\s+"random_id"\s/m);
+      const text = read(`infra/staging/${file}`);
+      for (const type of printed) {
+        expect({
+          file,
+          type,
+          declared: new RegExp(`^\\s*resource\\s+"?${type}"?\\s`, 'm').test(text),
+        }).toEqual({ file, type, declared: false });
+      }
     }
   });
 

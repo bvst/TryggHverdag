@@ -1604,3 +1604,237 @@ describe('GRP-01-AC29: the app waits 20 s for an answer, and no longer (review l
     expect(stored()).toContain(credential);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Review loop 2 (2026-10-20): from the delta reviews of 3fac8fb. The
+// a11y-i18n reviewer's S1 (the code's label and its announcement say what the
+// characters are before reading them), S2 and S3 (the waiting indicator where
+// the admin acted, and an accessibility element), and code-reviewer's (any
+// other 4xx on a removal is a refusal).
+// ---------------------------------------------------------------------------
+
+/** `text` as a regular expression that matches exactly that text. */
+const asPattern = (text: string): string => text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+
+/** How the code's label and its announcement begin (AC28, review loop 2): the code field's own name and a colon. */
+const codeLabelStart = (): string => `${nbText('grp.join.codeLabel')}:`;
+
+/**
+ * The code's label and its announcement as a whole (AC28, review loop 2): the
+ * code field's own name, a colon, then the code spelled as SPELLED reads it,
+ * and nothing after. For the synthetic code: "Invitasjonskode: K 7 Q 2 M,
+ * 9 T R V X, 4 H N P A, 6 2 W Z E". Anchored at both ends, as the L7 flow's
+ * pattern is a whole-text match, so this and that flow hold the same label.
+ */
+const labelledCode = (): RegExp =>
+  new RegExp(`^${asPattern(nbText('grp.join.codeLabel'))}:\\s*${SPELLED.source}$`);
+
+/**
+ * A removal answered with a 4xx that is neither a 401 nor a done removal: a
+ * 404 without MEMBER_NOT_FOUND among them. Kept out of the test.each call, as
+ * a table holding a bracket is (HK-05's test counter).
+ */
+const OTHER_REFUSALS: [string, Reply][] = [
+  ['404 with no body, so no code', { status: 404 }],
+  ['404 with a code that is not MEMBER_NOT_FOUND', refusal(404, 'NOT_FOUND')],
+  ['400 BAD_REQUEST', refusal(400, 'BAD_REQUEST')],
+  ['422 with a code the app does not know', refusal(422, 'UNPROCESSABLE_CONTENT')],
+];
+
+/** The lowest element that holds both `a` and `b`, or null. */
+function lowestHolding(a: HostNode, b: HostNode): HostNode | null {
+  const aboveA = new Set<HostNode>();
+  for (let up = a.parent; up !== null; up = up.parent) {
+    aboveA.add(up);
+  }
+  for (let up = b.parent; up !== null; up = up.parent) {
+    if (aboveA.has(up)) {
+      return up;
+    }
+  }
+  return null;
+}
+
+/** The Text on screen, inside no other, whose whole text is `text`; it must be there. */
+function shownTextNode(screen: typeof ExpoRouterTesting.screen, text: string): HostNode {
+  const found = shownTexts(screen).find((shown) => shown.text === text);
+  if (found === undefined) {
+    throw new Error(`no Text on screen reads ${JSON.stringify(text)}`);
+  }
+  return found.node;
+}
+
+/** Each request a screen waits on (AC30). */
+type InFlight = 'join' | 'start' | 'invitation' | 'list' | 'removal';
+
+/**
+ * The app with `what` sent and its answer held, so the screen is looked at
+ * while the request is in flight. Each as the review-loop-1 tests above set
+ * it up.
+ */
+async function whileInFlight(what: InFlight): Promise<typeof ExpoRouterTesting.screen> {
+  const answer = held();
+  if (what === 'join') {
+    api.reply(JOIN, answer.reply);
+    const screen = await launch();
+    await fillAndSend(screen);
+    await testing().waitFor(() => {
+      expect(api.to(JOIN)).toHaveLength(1);
+    });
+    return screen;
+  }
+  if (what === 'start') {
+    await signedIn('MEMBER');
+    const before = api.to(ME).length;
+    api.reply(ME, answer.reply);
+    const screen = await launch();
+    await testing().waitFor(() => {
+      expect(api.to(ME).length).toBeGreaterThan(before);
+    });
+    return screen;
+  }
+  if (what === 'invitation') {
+    const { screen } = await signedIn('ADMIN');
+    api.reply(INVITE, answer.reply);
+    const { fireEvent } = testing();
+    await fireEvent.press(screen.getByRole('button', { name: nbText('grp.member.invite') }));
+    await fireEvent.press(await screen.findByRole('button', { name: nbText('grp.invite.create') }));
+    await testing().waitFor(() => {
+      expect(api.to(INVITE)).toHaveLength(1);
+    });
+    return screen;
+  }
+  if (what === 'list') {
+    const { screen } = await signedIn('ADMIN');
+    api.reply(LIST, answer.reply);
+    await testing().fireEvent.press(
+      screen.getByRole('button', { name: nbText('grp.member.members') }),
+    );
+    await testing().waitFor(() => {
+      expect(api.to(LIST)).toHaveLength(1);
+    });
+    return screen;
+  }
+  api.reply(REMOVE, answer.reply);
+  const { screen } = await onTheMembersScreen(MEMBERS.slice(1));
+  await askToRemoveFirst(screen);
+  await testing().fireEvent.press(confirmButton(screen));
+  await testing().waitFor(() => {
+    expect(api.to(REMOVE)).toHaveLength(1);
+  });
+  return screen;
+}
+
+describe('GRP-01-AC28: the code is read with its name first (review loop 2, a11y-i18n-reviewer S1)', () => {
+  test('GRP-01-AC28: the code’s screen-reader label begins with the code field’s own name, grp.join.codeLabel, and a colon, then spells the code, and holds nothing more: "Invitasjonskode: K 7 Q 2 M, 9 T R V X, …"', async () => {
+    const screen = await invitationShown();
+
+    const spelled = hostNodes(screen)
+      .map((node) => labelOf(node))
+      .filter((label): label is string => label !== null && SPELLED.test(label));
+
+    expect(spelled).toHaveLength(1);
+    expect({ label: spelled[0], start: spelled[0]?.startsWith(codeLabelStart()) }).toEqual({
+      label: spelled[0],
+      start: true,
+    });
+    expect(spelled).toEqual([expect.stringMatching(labelledCode())]);
+  });
+
+  test('GRP-01-AC28: every announcement that spells the code begins the same way, with the code field’s own name and a colon, so the characters are never read without saying what they are', async () => {
+    const screen = await invitationShown();
+
+    const spelled = announcements(screen).filter((text) => SPELLED.test(text));
+
+    expect(spelled.length).toBeGreaterThan(0);
+    for (const text of spelled) {
+      expect({ text, start: text.startsWith(codeLabelStart()) }).toEqual({ text, start: true });
+      expect(text).toMatch(labelledCode());
+    }
+  });
+});
+
+describe('GRP-01-AC28: any other 4xx on a removal is a refusal (review loop 2, code-reviewer)', () => {
+  test.each(OTHER_REFUSALS)(
+    'GRP-01-AC28: a removal answered %s says the removal was refused, never that the server could not be reached and never that it was done; the member stays in the list',
+    async (_what, reply) => {
+      api.reply(REMOVE, reply);
+      const { screen } = await onTheMembersScreen();
+      await askToRemoveFirst(screen);
+      const refused = nbText('grp.members.refused');
+      const unreachable = nbText('grp.member.unreachable');
+      const removed = nbFilled('grp.members.removed', { name: FIRST.displayName });
+
+      await testing().fireEvent.press(confirmButton(screen));
+      await testing().waitFor(() => {
+        expect(
+          screen.queryByText(unreachable) ??
+            screen.queryByText(refused) ??
+            screen.queryByText(removed),
+        ).not.toBeNull();
+      });
+
+      expect(screen.queryByText(unreachable)).toBeNull();
+      expect(screen.queryByText(removed)).toBeNull();
+      expect(announcements(screen)).not.toContain(removed);
+      expect(screen.getByText(refused)).toBeTruthy();
+      expect(screen.getByText(FIRST.displayName)).toBeTruthy();
+      expect(api.to(REMOVE)).toHaveLength(1);
+    },
+  );
+});
+
+describe('GRP-01-AC30: the waiting indicator where the admin acted, an accessibility element (review loop 2, a11y-i18n-reviewer S2, S3)', () => {
+  test('GRP-01-AC30: while a removal is in flight, a waiting indicator shows inside the confirmation, next to its buttons: in the element that holds the confirmation’s text and its confirm button, after the member’s name and before the next member’s', async () => {
+    const screen = await whileInFlight('removal');
+    const confirmText = shownTextNode(
+      screen,
+      nbFilled('grp.members.confirmText', { name: FIRST.displayName }),
+    );
+    const confirm = confirmButton(screen) as unknown as HostNode;
+
+    const confirmation = lowestHolding(confirmText, confirm);
+    const inside = waitingIndicators(screen).filter(
+      (indicator) => confirmation !== null && holds(confirmation, indicator),
+    );
+
+    expect(confirmation).not.toBeNull();
+    expect(inside).toHaveLength(1);
+    const order = hostNodes(screen);
+    const at = {
+      member: order.indexOf(shownTextNode(screen, FIRST.displayName)),
+      indicator: inside[0] === undefined ? -1 : order.indexOf(inside[0]),
+      next: order.indexOf(shownTextNode(screen, SECOND.displayName)),
+    };
+    expect(at.member).toBeGreaterThanOrEqual(0);
+    expect(at.indicator).toBeGreaterThan(at.member);
+    expect(at.indicator).toBeLessThan(at.next);
+  });
+
+  test.each([
+    ['the join', 'join'],
+    ['the start, GET /v1/me', 'start'],
+    ['an invitation', 'invitation'],
+    ['the member list', 'list'],
+    ['a removal', 'removal'],
+  ] satisfies [string, InFlight][])(
+    'GRP-01-AC30: while %s is in flight, every waiting indicator is an accessibility element, accessible set, carrying its translated screen-reader label',
+    async (what, inFlight) => {
+      const screen = await whileInFlight(inFlight);
+
+      const indicators = waitingIndicators(screen);
+
+      expect({ what, indicators: indicators.length > 0 }).toEqual({ what, indicators: true });
+      const texts = grpTexts(nb);
+      for (const indicator of indicators) {
+        const label = labelOf(indicator);
+        expect({
+          what,
+          accessible: indicator.props['accessible'],
+          label,
+          translated: label !== null && texts.includes(label),
+        }).toEqual({ what, accessible: true, label, translated: true });
+      }
+    },
+  );
+});

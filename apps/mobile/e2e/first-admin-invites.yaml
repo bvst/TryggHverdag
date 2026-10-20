@@ -13,7 +13,8 @@
 #   APP_ID             the Android application ID
 #   BOOTSTRAP_CODE     the API's ADMIN_BOOTSTRAP_CODE, synthetic, the job's
 #   JOIN_TITLE         grp.join.title
-#   CODE_LABEL         grp.join.codeLabel, the code field's screen-reader label
+#   CODE_LABEL         grp.join.codeLabel, the code field's screen-reader label,
+#                      and the start of the code's own label (review loop 2)
 #   NAME_LABEL         grp.join.nameLabel, the name field's
 #   JOIN_SUBMIT        grp.join.submit
 #   MEMBER_TITLE       grp.member.title
@@ -66,8 +67,18 @@ appId: ${APP_ID}
 # as the L5 test reads it. The screen builds the label from the code; nothing
 # in it comes from nb.json. What the step proves is unchanged: twenty of
 # Crockford's characters, in four groups of five.
+#
+# RG-03 (GRP-01-AC28, review loop 2, a11y-i18n-reviewer S1): the label now
+# begins with the code field's own name and a colon ("Invitasjonskode: K 7 Q
+# 2 M, ..."), so the characters are never read without saying what they are.
+# Maestro matches the whole label, so the pattern begins with ${CODE_LABEL},
+# which the script already passes in, read from nb.json and escaped, and a
+# colon: this file still writes no text a reader sees. Not `.*`, which would
+# match the label with no name before the code too, and so prove nothing of
+# the start. What follows the colon is the pattern as it was: twenty of
+# Crockford's characters, in four groups of five.
 - extendedWaitUntil:
-    visible: '[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}(\s*[,.;]\s*[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}){3}'
+    visible: '${CODE_LABEL}:\s*[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}(\s*[,.;]\s*[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}){3}'
     timeout: 15000
 # And the code is drawn so, not only labelled: inside that element, a fourth
 # element whose whole text is five of those characters. Maestro orders the
@@ -77,6 +88,6 @@ appId: ${APP_ID}
     text: '[0-9A-HJKMNP-TV-Z]{5}'
     index: 3
     childOf:
-      text: '[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}(\s*[,.;]\s*[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}){3}'
+      text: '${CODE_LABEL}:\s*[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}(\s*[,.;]\s*[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}){3}'
 - assertVisible: ${SHARE_BUTTON}
 - assertNotVisible: '[a-z][a-zA-Z0-9]*(\.[a-zA-Z0-9]+)+'

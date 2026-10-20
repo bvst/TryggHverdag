@@ -51,6 +51,7 @@ import {
 
 const FLOWS = 'apps/mobile/e2e';
 const NB = 'apps/mobile/src/shared/translations/nb.json';
+const EN = 'apps/mobile/src/shared/translations/en.json';
 
 const made = [];
 afterEach(() => {
@@ -1687,6 +1688,36 @@ describe('the flows themselves', () => {
   });
 });
 
+/**
+ * GRP-01-AC28 (review loop 2): labels that do not begin with the code field's
+ * own name and a colon, each with the code spelled in them as the screen
+ * spells it. Kept out of the test.each call, as LOOKALIKES is.
+ */
+const LABEL_STARTS = [
+  {
+    case: 'the name with no colon',
+    text: ({ codeLabel, spelled }) => `${codeLabel} ${spelled}`,
+  },
+  {
+    case: 'the name after the code',
+    text: ({ codeLabel, spelled }) => `${spelled}: ${codeLabel}`,
+  },
+  {
+    case: 'a word before the name',
+    text: ({ codeLabel, spelled }) => `Ny ${codeLabel}: ${spelled}`,
+  },
+  {
+    case: 'the name field’s label in its place',
+    text: ({ spelled }) =>
+      `${String(textAt(JSON.parse(readFileSync(NB, 'utf8')), 'grp.join.nameLabel'))}: ${spelled}`,
+  },
+  {
+    case: 'the English name, which a bokmål phone does not show',
+    text: ({ spelled }) =>
+      `${String(textAt(JSON.parse(readFileSync(EN, 'utf8')), 'grp.join.codeLabel'))}: ${spelled}`,
+  },
+];
+
 // GRP-01-AC28 (L7, review loop 1): the invite screen shows the code as four
 // Texts of five, inside one element whose screen-reader label spells it
 // character by character, group by group, so no element holds the whole code
@@ -1696,6 +1727,17 @@ describe('the flows themselves', () => {
 // The code is synthetic (RG-07), the L5 test's; the label is spelled as the
 // screen spells it, and as the L5 test reads it, with a comma, full stop or
 // semicolon between groups.
+//
+// RG-03 (GRP-01-AC28, review loop 2, a11y-i18n-reviewer S1; the spec's "Added
+// in review loop 2"): the label now begins with the code field's own name,
+// grp.join.codeLabel, and a colon ("Invitasjonskode: K 7 Q 2 M, ..."), and the
+// flow's pattern begins with ${CODE_LABEL}, which the script passes in. So
+// the flow's values are read as Maestro reads them, each ${NAME} replaced by
+// what maestroTestCommand passes, from nb.json; and every text the tests
+// below match or refuse carries the name and the colon first (`labelled`),
+// so each refusal is still of the code's shape, not of a missing name. What
+// they prove is unchanged: twenty of Crockford's characters, in four groups
+// of five. The tests after them pin the new start.
 describe('GRP-01-AC28: first-admin-invites finds the code by its spelled label and its drawn groups', () => {
   const CODE = 'K7Q2M-9TRVX-4HNPA-62WZE';
   /** The code as the screen's label spells it: each character apart, `between` between groups. */
@@ -1705,22 +1747,52 @@ describe('GRP-01-AC28: first-admin-invites finds the code by its spelled label a
       .match(/.{1,5}/g)
       .map((group) => Array.from(group).join(' '))
       .join(between);
+  const nb = () => JSON.parse(readFileSync(NB, 'utf8'));
+  /** The code field's own name, grp.join.codeLabel, as nb.json has it. */
+  const codeLabel = () => String(textAt(nb(), 'grp.join.codeLabel'));
+  /** A text as the code's label holds it since review loop 2: the code field's name, a colon, a space, then `text`. */
+  const labelled = (text) => `${codeLabel()}: ${text}`;
   /** Maestro 2.10.0 matches a text selector against the whole text, ignoring case. */
   const asMaestroReads = (pattern) => new RegExp(maestroPattern(pattern).source, 'is');
-  /** Every single-quoted value of the flow's steps, comments left out. */
-  const patterns = () =>
-    [
+  /** What the script passes the flows with -e, from nb.json, as Maestro gets it. */
+  const flowEnv = () =>
+    envOf(
+      maestroTestCommand({
+        maestro: 'maestro',
+        report: 'report.xml',
+        appId: 'no.example.placeholder',
+        translations: nb(),
+        bootstrapCode: BOOTSTRAP_CODE,
+      }),
+    );
+  /**
+   * Every single-quoted value of the flow's steps, comments left out, with
+   * each ${NAME} replaced by the value the script passes for it, as Maestro
+   * replaces it. A name the script does not pass throws: Maestro would read
+   * it as an empty string.
+   */
+  const patterns = () => {
+    const env = flowEnv();
+    return [
       ...readFileSync(path.join(FLOWS, 'first-admin-invites.yaml'), 'utf8')
         .split('\n')
         .filter((line) => !line.trimStart().startsWith('#'))
         .join('\n')
         .matchAll(/'((?:[^']|'')*)'/g),
-    ].map((match) => match[1].replaceAll("''", "'"));
+    ].map((match) =>
+      match[1].replaceAll("''", "'").replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_all, name) => {
+        if (env[name] === undefined) {
+          throw new Error(`first-admin-invites.yaml names \${${name}}, which no -e passes`);
+        }
+        return env[name];
+      }),
+    );
+  };
   const matching = (text) => patterns().filter((p) => asMaestroReads(p).test(text));
 
-  test('GRP-01-AC28: a step of the flow matches the label the screen spells, with a comma, full stop or semicolon between groups', () => {
+  test('GRP-01-AC28: a step of the flow matches the label the screen spells, the code field’s name and a colon first, with a comma, full stop or semicolon between groups', () => {
     for (const between of [', ', '. ', '; ']) {
-      expect(matching(spelled(CODE, between)), JSON.stringify(between)).not.toEqual([]);
+      expect(matching(labelled(spelled(CODE, between))), JSON.stringify(between)).not.toEqual([]);
     }
   });
 
@@ -1737,11 +1809,11 @@ describe('GRP-01-AC28: first-admin-invites finds the code by its spelled label a
     { case: 'an O', text: spelled('K7Q2M-9TOVX-4HNPA-62WZE') },
     { case: 'a U', text: spelled('K7Q2M-9TRVX-4HNUA-62WZE') },
   ])('GRP-01-AC28: every step that matches the spelled label refuses $case', ({ text }) => {
-    const label = patterns().filter((p) => asMaestroReads(p).test(spelled(CODE)));
+    const label = patterns().filter((p) => asMaestroReads(p).test(labelled(spelled(CODE))));
 
     expect(label.length).toBeGreaterThan(0);
     for (const pattern of label) {
-      expect({ pattern, matches: asMaestroReads(pattern).test(text) }).toEqual({
+      expect({ pattern, matches: asMaestroReads(pattern).test(labelled(text)) }).toEqual({
         pattern,
         matches: false,
       });
@@ -1754,7 +1826,15 @@ describe('GRP-01-AC28: first-admin-invites finds the code by its spelled label a
 
     expect(drawn.length).toBeGreaterThan(0);
     for (const pattern of drawn) {
-      for (const text of ['K7Q2', 'K7Q2M9', 'K7Q 2', 'K7Q2L', spelled(CODE), CODE]) {
+      for (const text of [
+        'K7Q2',
+        'K7Q2M9',
+        'K7Q 2',
+        'K7Q2L',
+        spelled(CODE),
+        CODE,
+        labelled(spelled(CODE)),
+      ]) {
         expect({ pattern, text, matches: asMaestroReads(pattern).test(text) }).toEqual({
           pattern,
           text,
@@ -1763,6 +1843,35 @@ describe('GRP-01-AC28: first-admin-invites finds the code by its spelled label a
       }
     }
   });
+
+  // GRP-01-AC28, review loop 2: the label's start, pinned. A label that does
+  // not begin with the code field's own name and a colon is refused by every
+  // step that matches the labelled code, and no step matches the code spelled
+  // with nothing before it, as the label read before this loop: a step left
+  // with the old pattern would wait for a label the screen no longer gives.
+  test('GRP-01-AC28: no step of the flow matches the code spelled with no name before it, the label as it read before review loop 2', () => {
+    for (const between of [', ', '. ', '; ']) {
+      expect(matching(spelled(CODE, between)), JSON.stringify(between)).toEqual([]);
+    }
+  });
+
+  test.each(LABEL_STARTS)(
+    'GRP-01-AC28: every step that matches the labelled code refuses $case',
+    ({ text }) => {
+      const label = patterns().filter((p) => asMaestroReads(p).test(labelled(spelled(CODE))));
+      const refused = text({ codeLabel: codeLabel(), spelled: spelled(CODE) });
+
+      expect(label.length).toBeGreaterThan(0);
+      expect(refused).toMatch(/K 7 Q 2 M/);
+      for (const pattern of label) {
+        expect({ pattern, refused, matches: asMaestroReads(pattern).test(refused) }).toEqual({
+          pattern,
+          refused,
+          matches: false,
+        });
+      }
+    },
+  );
 });
 
 describe('the pinned Maestro', () => {
