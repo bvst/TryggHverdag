@@ -291,6 +291,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "bootstrap_join_key_hash": {
+          "name": "bootstrap_join_key_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {

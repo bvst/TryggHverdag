@@ -413,12 +413,18 @@ export const outbox = pgTable(
  * The group (GRP-01, reading 1, D-137): the private group, and only ever one.
  * A unique index on a constant allows one row at most, so two first admins
  * racing on an empty database meet here, and one of them makes the group.
+ *
+ * It keeps the SHA-256 of its first admin's join key, never the key
+ * (GRP-01-AC8, review loop 1, approach item 8): the same bootstrap code with
+ * the same join key, while the admin is the group's only member, is that
+ * bootstrap retried after its answer was lost (F2).
  */
 export const groups = pgTable(
   'groups',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     createdAt: moment('created_at').notNull().defaultNow(),
+    bootstrapJoinKeyHash: text('bootstrap_join_key_hash').notNull(),
   },
   () => [uniqueIndex('groups_one_group').on(sql`(true)`)],
 );

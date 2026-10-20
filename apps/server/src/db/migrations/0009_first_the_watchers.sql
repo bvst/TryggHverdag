@@ -10,7 +10,8 @@ CREATE TABLE "audit_log" (
 --> statement-breakpoint
 CREATE TABLE "groups" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"bootstrap_join_key_hash" text NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "invitations" (

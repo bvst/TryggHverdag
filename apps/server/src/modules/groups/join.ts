@@ -8,8 +8,16 @@
  * case, spaces and hyphens, O for 0, I and L for 1. The bootstrap code, as
  * config.ts hands it over, normalised the same way, opens only an empty
  * group: the store's one-group index decides, and once a group exists it is
- * the one refusal, as any code that lets nobody in is (reading 2). With no
- * usable bootstrap code, every code is tried as an invitation.
+ * the one refusal, as any code that lets nobody in is (reading 2), but for
+ * the same bootstrap retried with its join key while the admin is the only
+ * member (review loop 1, approach item 8). With no usable bootstrap code,
+ * every code is tried as an invitation.
+ *
+ * Whether a code is the bootstrap code is asked in constant time (review
+ * loop 1, privacy-security-reviewer N2): the SHA-256 of the code sent and of
+ * the setting, compared by `crypto.timingSafeEqual`, never by `===`, so how
+ * long a refusal takes says nothing of how much of the code was right. Both
+ * digests are 32 bytes, whatever the codes' lengths.
  *
  * The module reads no clock: the store decides an invitation at the
  * database's now() (AR-03, REL-01).
@@ -19,6 +27,7 @@
  * A refusal is the caller's answer and writes no line. No line holds a code,
  * a join key, a credential, a name or a user's ID.
  */
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { normaliseInvitationCode, type Role } from '../../domain/groups.ts';
 import { sqlstateOf } from '../../domain/sqlstate.ts';
 import type { GroupStore, JoinResult, Log } from '../../ports.ts';
@@ -41,6 +50,9 @@ export interface JoinService {
 
 const NOT_VALID: JoinServiceResult = { type: 'refused', reason: 'INVITATION_NOT_VALID' };
 
+/** A code's SHA-256, as the 32 bytes `timingSafeEqual` compares. */
+const sha256 = (code: string): Buffer => createHash('sha256').update(code, 'utf8').digest();
+
 /** `bootstrapCode` is ADMIN_BOOTSTRAP_CODE as config.ts hands it over, normalised; null when unset or unusable. */
 export function createJoinService({
   groups,
@@ -51,6 +63,11 @@ export function createJoinService({
   log: Log;
   bootstrapCode: string | null;
 }): JoinService {
+  const bootstrapDigest = bootstrapCode === null ? null : sha256(bootstrapCode);
+  /** Whether this code, normalised, is the bootstrap code: digest against digest, in constant time. */
+  const isBootstrapCode = (code: string): boolean =>
+    bootstrapDigest !== null && timingSafeEqual(sha256(code), bootstrapDigest);
+
   return {
     async join({ invitationCode, joinKey, displayName }: JoinCall): Promise<JoinServiceResult> {
       const code = normaliseInvitationCode(invitationCode);
@@ -61,10 +78,9 @@ export function createJoinService({
       }
       let result: JoinResult;
       try {
-        result =
-          bootstrapCode !== null && code === bootstrapCode
-            ? await groups.bootstrapGroup({ displayName })
-            : await groups.joinWithInvitation({ invitationCode: code, joinKey, displayName });
+        result = isBootstrapCode(code)
+          ? await groups.bootstrapGroup({ joinKey, displayName })
+          : await groups.joinWithInvitation({ invitationCode: code, joinKey, displayName });
       } catch (error) {
         log.write({ event: 'join_failed', stage: 'store', code: sqlstateOf(error) });
         throw error;

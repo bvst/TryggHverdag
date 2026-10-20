@@ -20,6 +20,14 @@
  * creation and expiry, its use, a membership's start and each audit row. An
  * invitation is decided at that now() by the domain's rule.
  *
+ * The first admin's bootstrap can be retried (GRP-01-AC8, review loop 1,
+ * approach item 8): the group's row keeps the SHA-256 of the join key it was
+ * made with, and the same key, while the admin is the group's only member,
+ * gives the admin's one device a new credential, as a retried join does. The
+ * group's row is taken FOR UPDATE for it; a member joining checks its
+ * membership's foreign key against that row (FOR KEY SHARE), so the two take
+ * turns, and the retry counts the members as they are when it decides.
+ *
  * The admin's removal of a member is one transaction (approach item 9): its
  * own lock limit; the membership's row FOR UPDATE, after the start's FOR SHARE
  * (`adapters/journeys.ts`), so a start and a removal never leave a removed
@@ -146,21 +154,75 @@ async function newMember(
 /** The join's one refusal. */
 const NOT_VALID: JoinResult = { outcome: 'not_valid' };
 
+/**
+ * The same join retried (readings 3 and 5): the one device the first join made
+ * for this user gets a new credential, and the first stops working. Anything
+ * else than one device is thrown, never guessed at.
+ */
+async function reissueCredential(tx: Transaction, userId: string): Promise<string> {
+  const own = await tx
+    .select({ id: devices.id })
+    .from(devices)
+    .where(eq(devices.userId, userId))
+    .for('update');
+  const [device, ...others] = own;
+  if (device === undefined || others.length > 0) {
+    throw new Error('A retried join found other than the one device its join made.');
+  }
+  const { credential, hash } = issueCredential();
+  await tx.update(devices).set({ credentialHash: hash }).where(eq(devices.id, device.id));
+  return credential;
+}
+
+/**
+ * The first admin's bootstrap, sent again once the group exists (GRP-01-AC8,
+ * review loop 1): the same bootstrap retried when the group was made with this
+ * join key and its admin is still its only member; the one refusal otherwise,
+ * writing nothing.
+ */
+async function retriedBootstrap(tx: Transaction, joinKeyHash: string): Promise<JoinResult> {
+  const [group] = await tx
+    .select({ id: groups.id })
+    .from(groups)
+    .where(eq(groups.bootstrapJoinKeyHash, joinKeyHash))
+    .for('update');
+  if (group === undefined) {
+    return NOT_VALID;
+  }
+  const [admin, ...others] = await tx
+    .select(memberColumns)
+    .from(memberships)
+    .where(eq(memberships.groupId, group.id));
+  if (admin === undefined || others.length > 0 || admin.role !== 'ADMIN') {
+    return NOT_VALID;
+  }
+  const credential = await reissueCredential(tx, admin.userId);
+  return { outcome: 'joined', userId: admin.userId, role: 'ADMIN', credential };
+}
+
 export function databaseGroupStore(db: Database): GroupStore {
   return {
-    // GRP-01-AC8 (approach item 8): the group, its ADMIN, a device and the
-    // audit row, in one transaction. The one-group index decides a race: a
-    // second bootstrap waits for the first, finds the group, and writes
-    // nothing.
-    bootstrapGroup({ displayName }: { displayName: string }): Promise<JoinResult> {
+    // GRP-01-AC8 (approach item 8): the group, keeping the join key's
+    // SHA-256, its ADMIN, a device and the audit row, in one transaction. The
+    // one-group index decides a race: a second bootstrap waits for the first,
+    // finds the group, and writes nothing, unless it is the same bootstrap
+    // retried (review loop 1).
+    bootstrapGroup({
+      joinKey,
+      displayName,
+    }: {
+      joinKey: string;
+      displayName: string;
+    }): Promise<JoinResult> {
       return db.transaction(async (tx): Promise<JoinResult> => {
+        const joinKeyHash = hashCredential(joinKey);
         const [group] = await tx
           .insert(groups)
-          .values({})
+          .values({ bootstrapJoinKeyHash: joinKeyHash })
           .onConflictDoNothing()
           .returning({ id: groups.id });
         if (group === undefined) {
-          return NOT_VALID;
+          return retriedBootstrap(tx, joinKeyHash);
         }
         const { userId, credential } = await newMember(tx, {
           groupId: group.id,
@@ -219,17 +281,7 @@ export function databaseGroupStore(db: Database): GroupStore {
           if (user === null) {
             throw new Error('The join rule retried a join whose user is no member.');
           }
-          const own = await tx
-            .select({ id: devices.id })
-            .from(devices)
-            .where(eq(devices.userId, user.userId))
-            .for('update');
-          const [device, ...others] = own;
-          if (device === undefined || others.length > 0) {
-            throw new Error('A retried join found other than the one device its join made.');
-          }
-          const { credential, hash } = issueCredential();
-          await tx.update(devices).set({ credentialHash: hash }).where(eq(devices.id, device.id));
+          const credential = await reissueCredential(tx, user.userId);
           return { outcome: 'joined', userId: user.userId, role: user.role, credential };
         }
 

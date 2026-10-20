@@ -676,8 +676,13 @@ export type RemoveMemberResult =
 
 /** The one group, its members, its invitations and its audit log (GRP-01, D-137). */
 export interface GroupStore {
-  /** GRP-01-AC8: the first admin, while no group exists; `not_valid` once one does. */
-  bootstrapGroup(request: { displayName: string }): Promise<JoinResult>;
+  /**
+   * GRP-01-AC8: the first admin, while no group exists, the group keeping
+   * the SHA-256 of this join key; once one does, `not_valid`, but for the
+   * same bootstrap retried (review loop 1): the same join key while the admin
+   * is the group's only member gives the admin's one device a new credential.
+   */
+  bootstrapGroup(request: { joinKey: string; displayName: string }): Promise<JoinResult>;
   /** GRP-01-AC2 to AC6: a join with an invitation, decided at the database's now(). */
   joinWithInvitation(request: JoinToRecord): Promise<JoinResult>;
   /** This user's membership, or null for a user who is no member. */
