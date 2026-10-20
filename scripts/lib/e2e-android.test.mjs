@@ -1866,6 +1866,62 @@ function literalOf(pattern) {
 }
 
 /**
+ * How Maestro 2.10.0 reads `${…}` in a flow's string, from its source (tag
+ * cli-2.10.0; maestro-orchestra-models, maestro/orchestra/util/Env.kt,
+ * String.evaluateScripts, lines 10 to 26):
+ *
+ *     val result = "(?<!\\\\)\\\$\\{([^\$]*)}".toRegex()
+ *         .replace(this) { match ->
+ *             val script = match.groups[1]?.value ?: ""
+ *             if (script.isNotBlank()) {
+ *                 jsEngine.evaluateScript(script).toString()
+ *             } else {
+ *                 ""
+ *             }
+ *         }
+ *     return result
+ *         .replace("\\\\\\\$\\{([^\$]*)}".toRegex()) { match ->
+ *             match.value.substringAfter('\\')
+ *         }
+ *
+ * As patterns, (?<!\\)\$\{([^$]*)} and \\\$\{([^$]*)}. The script runs from
+ * `${` to the last `}` before the next `$`, greedily, not to the first `}`.
+ * GraalJsEngine.kt (maestro-client, maestro/js) runs it as
+ * `(function(){ return eval(`…`) })()`, in strict mode, with each -e value as
+ * a global. Its context reads an undeclared name as undefined, through a Proxy
+ * set as globalThis's prototype. A `\${…}` is kept, less its backslash.
+ */
+const MAESTRO_SCRIPT = /(?<!\\)\$\{([^$]*)\}/g;
+const MAESTRO_ESCAPED_SCRIPT = /\\\$\{([^$]*)\}/g;
+/** Where Maestro starts a script: a `${` with no backslash before it. */
+const MAESTRO_SCRIPT_START = /(?<!\\)\$\{/;
+/** What a flow puts inside `${…}`: a bare name, which Maestro's engine reads as the value passed with -e. */
+const BARE_NAME = /^[A-Z_][A-Z0-9_]*$/;
+
+/**
+ * A flow's string, `value`, with its `${…}` read as Maestro 2.10.0 reads them
+ * (MAESTRO_SCRIPT): a script that is a bare name becomes the value `env` has
+ * for it. Anything else would go to Maestro's JavaScript engine, and throws
+ * here, naming the script Maestro would run. So does a name no -e passes,
+ * which Maestro would read as undefined.
+ */
+function asMaestroInterpolates(value, env, where) {
+  const evaluated = value.replace(MAESTRO_SCRIPT, (_all, script) => {
+    if (script.trim() === '') return '';
+    if (!BARE_NAME.test(script)) {
+      throw new Error(
+        `${where}: Maestro would evaluate ${JSON.stringify(script)} as JavaScript, not a bare name, in ${JSON.stringify(value)}`,
+      );
+    }
+    if (env[script] === undefined) {
+      throw new Error(`${where} names \${${script}}, which no -e passes`);
+    }
+    return env[script];
+  });
+  return evaluated.replace(MAESTRO_ESCAPED_SCRIPT, (all) => all.slice(all.indexOf('\\') + 1));
+}
+
+/**
  * Texts that read differently as a pattern, each with a text the unescaped
  * pattern would also match. Kept out of the test.each call because HK-05's
  * test counter stops at the first closing bracket inside one.
@@ -1956,8 +2012,11 @@ describe('maestroTestCommand: every flow, with a JUnit report', () => {
 
   test('INF-06-AC11: passes the flow exactly the values it uses, from nb.json and the application ID', () => {
     // The flow names what it needs as ${NAME}. Anything it names and is not
-    // given is an empty string to Maestro, and asserting that an empty string
-    // is visible is not a test of the screen.
+    // given is the text "undefined" to Maestro, and asserting that it is
+    // visible is not a test of the screen. (Was "an empty string": Maestro
+    // 2.10.0's own Env.evaluateScripts, run on "Tittel ${NOT_PASSED}", gives
+    // "Tittel undefined", because GraalJsEngine.kt reads an undeclared name
+    // as undefined.)
     const flowText = readdirSync(FLOWS)
       .filter((name) => /\.ya?ml$/.test(name))
       .map((name) => readFileSync(path.join(FLOWS, name), 'utf8'))
@@ -2031,6 +2090,37 @@ describe('the flows themselves', () => {
       expect(text, `${name} retries a step`).not.toMatch(/^\s*-?\s*retry\s*:/m);
       expect(text, `${name} has an optional step`).not.toMatch(/optional\s*:\s*true/);
     }
+  });
+
+  // PR #96's android-e2e (job 118918227742): Maestro takes a `${…}` up to the
+  // last `}` before the next `$` (MAESTRO_SCRIPT), so a `${NAME}` followed by
+  // a pattern's {4} became one script, and the flow stopped on a SyntaxError
+  // at that step on every run. A string with no `${` is not evaluated, and
+  // may hold braces. Each flow writes one value per line, in block style, so
+  // a line is a string here.
+  test('INF-06-AC11: no string in a flow holds a ${…} beside any other brace, so Maestro reads each ${…} as a bare name', () => {
+    const flows = readdirSync(FLOWS).filter((name) => /\.ya?ml$/.test(name));
+    const read = [];
+    const found = [];
+    for (const name of flows) {
+      readFileSync(path.join(FLOWS, name), 'utf8')
+        .split('\n')
+        .forEach((line, i) => {
+          if (line.trimStart().startsWith('#') || !MAESTRO_SCRIPT_START.test(line)) return;
+          read.push(`${name}:${String(i + 1)}`);
+          const scripts = [...line.matchAll(MAESTRO_SCRIPT)].map((match) => match[1]);
+          const outsideNames = line.replace(/(?<!\\)\$\{[A-Z_][A-Z0-9_]*\}/g, '');
+          if (/[{}]/.test(outsideNames) || !scripts.every((script) => BARE_NAME.test(script))) {
+            found.push({ at: `${name}:${String(i + 1)}`, scripts });
+          }
+        });
+    }
+
+    expect(read.length, 'no flow names a ${…}, so nothing was checked').toBeGreaterThan(0);
+    expect(
+      found,
+      'Maestro would evaluate these scripts as JavaScript: write the braces out, or move the value to a string of its own',
+    ).toEqual([]);
   });
 });
 
@@ -2113,9 +2203,16 @@ describe('GRP-01-AC28: first-admin-invites finds the code by its spelled label a
     );
   /**
    * Every single-quoted value of the flow's steps, comments left out, with
-   * each ${NAME} replaced by the value the script passes for it, as Maestro
-   * replaces it. A name the script does not pass throws: Maestro would read
-   * it as an empty string.
+   * its `${…}` read as Maestro 2.10.0 reads them (asMaestroInterpolates): a
+   * bare name becomes the value the script passes for it. A name the script
+   * does not pass throws, because Maestro would read it as undefined. So does
+   * a `${` whose script, by Maestro's rule, runs past its name.
+   *
+   * RG-03 (INF-06-AC11, PR #96's android-e2e, job 118918227742): this replaced
+   * each `${NAME}` up to its own `}`, which Maestro does not do. Maestro takes
+   * everything up to the last `}` before the next `$`. So these tests passed a
+   * flow whose two label steps Maestro could not run: it took
+   * `CODE_LABEL}:\s*…{4}){3` as one script.
    */
   const patterns = () => {
     const env = flowEnv();
@@ -2126,12 +2223,7 @@ describe('GRP-01-AC28: first-admin-invites finds the code by its spelled label a
         .join('\n')
         .matchAll(/'((?:[^']|'')*)'/g),
     ].map((match) =>
-      match[1].replaceAll("''", "'").replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_all, name) => {
-        if (env[name] === undefined) {
-          throw new Error(`first-admin-invites.yaml names \${${name}}, which no -e passes`);
-        }
-        return env[name];
-      }),
+      asMaestroInterpolates(match[1].replaceAll("''", "'"), env, 'first-admin-invites.yaml'),
     );
   };
   const matching = (text) => patterns().filter((p) => asMaestroReads(p).test(text));

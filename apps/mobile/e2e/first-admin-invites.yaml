@@ -77,17 +77,36 @@ appId: ${APP_ID}
 # match the label with no name before the code too, and so prove nothing of
 # the start. What follows the colon is the pattern as it was: twenty of
 # Crockford's characters, in four groups of five.
+#
+# RG-03 (INF-06-AC11, PR #96's android-e2e, job 118918227742): the pattern
+# is written out in full, with no {4} or {3}. Maestro evaluates every `${…}`
+# in a string as JavaScript, and finds it with this regular expression
+# (Maestro 2.10.0, tag cli-2.10.0, maestro-orchestra-models,
+# maestro/orchestra/util/Env.kt, String.evaluateScripts, line 11):
+#     "(?<!\\\\)\\\$\\{([^\$]*)}".toRegex()
+# That is (?<!\\)\$\{([^$]*)} as a pattern: from `${` to the last `}` before
+# the next `$`, greedily. GraalJsEngine.kt then runs what it took inside
+# `(function(){ return eval(`…`) })()`. With quantifier braces after
+# ${CODE_LABEL} and no `$` after them, it took `CODE_LABEL}:\s*…{4}){3` as
+# one script, and every run stopped here: "SyntaxError: <eval>:1:19 Missing
+# space after numeric literal". So no string in a flow holds a `${…}` and
+# any other brace (scripts/lib/e2e-android.test.mjs holds that). The meaning
+# is unchanged, only the spelling: each [0-9A-HJKMNP-TV-Z](\s+…){4} is
+# written as five characters with space between them, and (…){3} as three
+# more groups, each after a comma, full stop or semicolon.
 - extendedWaitUntil:
-    visible: '${CODE_LABEL}:\s*[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}(\s*[,.;]\s*[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}){3}'
+    visible: '${CODE_LABEL}:\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s*[,.;]\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s*[,.;]\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s*[,.;]\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]'
     timeout: 15000
 # And the code is drawn so, not only labelled: inside that element, a fourth
 # element whose whole text is five of those characters. Maestro orders the
 # matches top to bottom, then left to right, so this holds however the
-# groups wrap.
+# groups wrap. The group's pattern keeps its {5}: it holds no `${`, so
+# Maestro evaluates nothing in it. The parent's is the label's pattern above,
+# written out for the same reason.
 - assertVisible:
     text: '[0-9A-HJKMNP-TV-Z]{5}'
     index: 3
     childOf:
-      text: '${CODE_LABEL}:\s*[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}(\s*[,.;]\s*[0-9A-HJKMNP-TV-Z](\s+[0-9A-HJKMNP-TV-Z]){4}){3}'
+      text: '${CODE_LABEL}:\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s*[,.;]\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s*[,.;]\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s*[,.;]\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]'
 - assertVisible: ${SHARE_BUTTON}
 - assertNotVisible: '[a-z][a-zA-Z0-9]*(\.[a-zA-Z0-9]+)+'
