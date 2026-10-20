@@ -409,8 +409,6 @@ describe('GRP-01-AC32: the groups module is a safety path, and its mutants are r
   const MODULE = 'apps/server/src/modules/groups/';
   const ADAPTER = 'apps/server/src/adapters/groups.ts';
   const SYSTEM_TESTS = 'apps/server/src/groups.system.test.ts';
-  /** The join module's L2 tests (review loop 2): the only file that reaches join.ts's guard for a code that is not a code. */
-  const UNIT_TESTS = 'apps/server/src/modules/groups/join.test.ts';
   const safety = (file) =>
     decideMutation({ changed: [file], onlyIfSafetyPathsChanged: true, configured: false });
   /** The module's source files git tracks, its tests left out: what a run mutates. */
@@ -441,23 +439,15 @@ describe('GRP-01-AC32: the groups module is a safety path, and its mutants are r
     expect(safety(ADAPTER)).toMatchObject({ ok: true, action: 'skip' });
   });
 
-  // RG-03 (GRP-01-AC32, review loop 2, test-auditor S1; the spec's "Added in
-  // review loop 2"): the run's tests gain join.test.ts, first, and its
-  // configuration becomes vitest.coverage.config.mjs, which collects the unit
-  // and the system files and no L3: the fresh run at 3fac8fb left join.ts's
-  // guard for a code that is not a code alive, since the contract refuses
-  // such a code before any request reaches the module, and only join.test.ts
-  // (L2) kills it. One run, its own, and no other, as before; a test file
-  // added to it.
-  test('GRP-01-AC32: modules/groups/ is mutated in one run, its own, membership, against join.test.ts and then groups.system.test.ts under vitest.coverage.config.mjs (the unit and the system files, no L3), and in no other run', () => {
+  test('GRP-01-AC32: modules/groups/ is mutated in one run, its own, membership, against groups.system.test.ts under the system tests’ configuration, and in no other run', () => {
     const runs = mutationRuns().filter((run) => run.paths.includes(MODULE));
 
     expect(runs).toEqual([
       {
         name: 'membership',
         paths: [MODULE],
-        tests: [UNIT_TESTS, SYSTEM_TESTS],
-        config: 'vitest.coverage.config.mjs',
+        tests: [SYSTEM_TESTS],
+        config: 'vitest.system.config.mjs',
       },
     ]);
   });

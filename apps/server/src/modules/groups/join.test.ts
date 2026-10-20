@@ -24,9 +24,10 @@
 //
 // Review loop 2 (test-auditor S2): this file is also where the groups
 // module's other L2 test lives, the invitation the store cannot create
-// (AC24), at the end. Here, not in a file of its own: the membership mutation
-// group runs this file and groups.system.test.ts and no other (AC32), and a
-// mutant of invitations.ts is killed only by a test that run has.
+// (AC24), at the end. It pins invitation_failed's stage at L2. The membership
+// mutation group runs groups.system.test.ts alone (AC32; running this file in
+// it was tried and withdrawn, the spec's Mutation section), so no mutation
+// run has this test yet.
 import {
   fakeClock,
   fakeJourneyStore,

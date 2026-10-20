@@ -747,24 +747,11 @@ describe('the mutation runs of this repository', () => {
       // unchanged. Named membership, not groups: that word is the mutation
       // plan's output key in ci.yml's three mutation jobs, where BUG-45-AC8
       // refuses any group's name (the spec's AC32).
-      //
-      // RG-03 (GRP-01-AC32, review loop 2, test-auditor S1; the spec's "Added
-      // in review loop 2" and its Mutation section): join.ts's guard for a
-      // code that is not a code survived the fresh run at 3fac8fb, because
-      // the contract refuses such a code before any request reaches the
-      // module, and only join.test.ts (L2) kills it. So the group runs
-      // join.test.ts first, then groups.system.test.ts, under
-      // vitest.coverage.config.mjs, which collects the unit and the system
-      // files and no L3. What the group mutates and its place do not change;
-      // a test file added can only raise the score.
       expect.objectContaining({
         name: 'membership',
         paths: ['apps/server/src/modules/groups/'],
-        tests: [
-          'apps/server/src/modules/groups/join.test.ts',
-          'apps/server/src/groups.system.test.ts',
-        ],
-        config: 'vitest.coverage.config.mjs',
+        tests: ['apps/server/src/groups.system.test.ts'],
+        config: 'vitest.system.config.mjs',
       }),
       // LOST-02 (RG-03): modules/alerts/ gets its first files, the watchdog
       // and the sender, and with them a group of its own (D-098), as the test

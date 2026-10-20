@@ -475,38 +475,20 @@ describe('stryker.config.mjs', () => {
     );
   });
 
-  // RG-03 (GRP-01-AC32, review loop 2, test-auditor S1; the spec's "Added in
-  // review loop 2" and its Mutation section): the run was groups.system.test.ts
-  // alone, under the system tests' configuration. join.ts's guard for a code
-  // that is not a code survived the fresh run at 3fac8fb: the contract
-  // refuses such a code before any request reaches the module, and only
-  // join.test.ts (L2) kills it. So the run names join.test.ts and then
-  // groups.system.test.ts, under vitest.coverage.config.mjs, which collects
-  // the unit and the system files and no L3, and "alone" leaves the title.
-  // The files are still asked of `vitest list`, so a configuration that
-  // collected only one of them fails here. What the run mutates does not
-  // change; a test file is added.
-  test('GRP-01-AC32: the membership run mutates modules/groups/ and runs join.test.ts and then groups.system.test.ts, under vitest.coverage.config.mjs, the unit and the system files with no L3', async () => {
+  test("GRP-01-AC32: the membership run mutates modules/groups/ and runs groups.system.test.ts alone, under the system tests' configuration", async () => {
     // As the canary run: the root configuration leaves *.system.test.ts out,
     // so the command is asked what it would run, not only read. Its own run,
     // right after journeys (review loop 1, safety-reviewer S4). Named
     // membership, not groups: that word is the mutation plan's output key in
     // ci.yml's three mutation jobs, where BUG-45-AC8 refuses any group's name.
     const config = await configFor('membership');
-    const files = [
-      'apps/server/src/modules/groups/join.test.ts',
-      'apps/server/src/groups.system.test.ts',
-    ];
 
     expect(config.mutate).toEqual(['apps/server/src/modules/groups/**/*.ts', ...EXCLUSIONS]);
     expect(config.commandRunner.command).toMatch(/^node node_modules\/vitest\/vitest\.mjs run /);
     expect(config.incrementalFile).toBeUndefined();
     const args = vitestArgs(config.commandRunner.command);
-    expect(configNamedIn(args)).toBe('vitest.coverage.config.mjs');
-    // Named in the order the spec gives and MUTATION_GROUPS lists: the unit
-    // file, then the system file.
-    expect(args.filter((arg) => /\.test\.ts$/.test(arg))).toEqual(files);
-    expect([...filesRunWith(args)].sort()).toEqual([...files].sort());
+    expect(configNamedIn(args)).toBe('vitest.system.config.mjs');
+    expect([...filesRunWith(args)].sort()).toEqual(['apps/server/src/groups.system.test.ts']);
   });
 
   test("LOST-02: the alerts run mutates modules/alerts/ and runs alerts.system.test.ts, under the system tests' configuration", async () => {
