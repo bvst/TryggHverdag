@@ -37,6 +37,12 @@ import nb from '../../shared/translations/nb.json';
 const mockSecureItems = new Map<string, string>();
 /** Every call the app made to secure storage, in order. */
 const mockSecureCalls: string[] = [];
+/**
+ * What secure storage refuses, when a test sets it: a delete that rejects with
+ * this error, as the Keystore can, and keeps the item. Unset, it refuses
+ * nothing (PR #96, code-reviewer: a sign-out whose delete fails).
+ */
+const mockSecureRefuses: { delete: Error | null } = { delete: null };
 
 jest.mock(
   'expo-secure-store',
@@ -60,6 +66,10 @@ jest.mock(
       }),
       getItemAsync: jest.fn((key: string) => Promise.resolve(get(key))),
       deleteItemAsync: jest.fn((key: string) => {
+        if (mockSecureRefuses.delete !== null) {
+          mockSecureCalls.push(`delete ${key} refused`);
+          return Promise.reject(mockSecureRefuses.delete);
+        }
         remove(key);
         return Promise.resolve();
       }),
@@ -1949,4 +1959,73 @@ describe('GRP-01-AC30: the confirmation holds while a removal is in flight (revi
     expect(screen.getByText(SECOND.displayName)).toBeTruthy();
     expect(api.to(REMOVE).map(({ path }) => path)).toEqual([`/v1/group/members/${FIRST.userId}`]);
   });
+});
+
+// ---------------------------------------------------------------------------
+// PR #96, CI review of dd7126d (code-reviewer, should-fix): a 401 whose
+// credential secure storage cannot delete. The sign-out awaited the delete
+// with nothing to catch it, so its rejection left the call that heard the
+// 401: at start, from a launch nobody awaits; on a screen, from a press
+// nobody awaits. Either way unheard, and the app stayed where it was, the
+// credential already dropped from memory, never on the join screen.
+//
+// AC29 says what a 401 shows: the join screen, with the line that this phone
+// is no longer signed in to the group. That stays true when the delete fails:
+// the server has refused the credential, so the phone is not signed in, and
+// no other words for this case are in the spec or the translations. Whether
+// the app tries the delete again later is not held here.
+//
+// An unhandled rejection fails the test by Jest's own detection: jest-circus
+// takes the process's unhandledRejection events while a test runs and adds
+// each to that test's errors. A listener on `process` here would not do it:
+// the test's `process` is Jest's copy, whose listeners the real process never
+// calls.
+// ---------------------------------------------------------------------------
+
+describe('GRP-01-AC29: a 401 signs the phone out loudly even when secure storage cannot delete the credential (PR #96, code-reviewer)', () => {
+  afterEach(() => {
+    mockSecureRefuses.delete = null;
+  });
+
+  /** Each way a 401 reaches the app: the launch's GET /v1/me, or a call a screen makes. */
+  const WAYS: [string, () => Promise<typeof ExpoRouterTesting.screen>][] = [
+    [
+      'at start, GET /v1/me',
+      async () => {
+        await signedIn('MEMBER');
+        api.always(ME, refusal(401, 'UNAUTHORIZED'));
+        mockSecureRefuses.delete = new Error('synthetic: the Keystore refused the delete');
+        return launch();
+      },
+    ],
+    [
+      'on the admin’s invitation',
+      async () => {
+        const { screen } = await signedIn('ADMIN');
+        api.reply(INVITE, refusal(401, 'UNAUTHORIZED'));
+        mockSecureRefuses.delete = new Error('synthetic: the Keystore refused the delete');
+        const { fireEvent } = testing();
+        await fireEvent.press(screen.getByRole('button', { name: nbText('grp.member.invite') }));
+        await fireEvent.press(
+          await screen.findByRole('button', { name: nbText('grp.invite.create') }),
+        );
+        return screen;
+      },
+    ],
+  ];
+
+  test.each(WAYS)(
+    'GRP-01-AC29: a 401 %s, with the credential’s delete rejected by secure storage: the join screen shows with the line that this phone is no longer signed in, and no rejection goes unhandled',
+    async (_way, answered401) => {
+      const screen = await answered401();
+
+      expect(await screen.findByText(nbText('grp.join.signedOut'))).toBeTruthy();
+      expect(
+        (await screen.findAllByRole(HEADING, { name: nbText('grp.join.title') })).length,
+      ).toBeGreaterThan(0);
+      expect(screen.queryAllByRole(HEADING, { name: nbText('grp.member.title') })).toEqual([]);
+      // The delete was tried and refused: the case this test is for.
+      expect(mockSecureCalls).toContain('delete deviceCredential refused');
+    },
+  );
 });
