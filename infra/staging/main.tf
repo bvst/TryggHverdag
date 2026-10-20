@@ -39,6 +39,18 @@ resource "random_password" "canary_credential" {
   keepers = { generation = local.canary_credential_generation }
 }
 
+# The first admin's bootstrap code (GRP-01, approach item 8, D-136 answer 1):
+# 16 random bytes, written into the app's environment as 32 upper-case hex
+# digits, which the API's normaliser takes as a code. It opens only an empty
+# group: the first join with it creates the group and makes the joiner its
+# admin, and once a group exists it is refused like any invalid code. Made
+# here, as the canary's credential is, so it lives only in Terraform's state
+# and the app's environment: no variable, no tfvars, no GitHub secret. The
+# owner reads it once in Clever Cloud's console for the staging app (A-36).
+resource "random_id" "admin_bootstrap_code" {
+  byte_length = 16
+}
+
 resource "clevercloud_postgresql" "staging" {
   name   = "trygg-hverdag-staging-db"
   plan   = "dev"
@@ -110,5 +122,9 @@ resource "clevercloud_nodejs" "staging" {
     CANARY_API_URL          = "https://${local.fqdn}"
     CANARY_CREDENTIAL       = random_password.canary_credential.result
     HEALTHCHECKS_CANARY_URL = var.healthchecks_canary_url
+
+    # The first admin's bootstrap code, from the resource above. Only the API
+    # reads it, and says at start whether it is usable, never its value.
+    ADMIN_BOOTSTRAP_CODE = upper(random_id.admin_bootstrap_code.hex)
   }
 }
