@@ -23,7 +23,7 @@ client's swap from D-032's libraries. Review loop 2 is marked the same way.
 
 All five reviewers passed `3fac8fb`, with nothing blocking. Claude's choices
 (D-031): the cheap should-fixes go in now, and the rest are recorded under
-"Left for later tasks". AC8, AC24, AC28, AC30 and AC32 are amended.
+"Left for later tasks". AC8, AC24, AC28 and AC30 are amended.
 
 | Change | From | Where |
 |---|---|---|
@@ -31,7 +31,7 @@ All five reviewers passed `3fac8fb`, with nothing blocking. Claude's choices
 | While a removal is in flight, the waiting indicator shows in the confirmation, where the admin acted; the indicator is an accessibility element with its label | `a11y-i18n-reviewer` S2, S3 | AC30 |
 | A removal refused with any other 4xx says it was refused; the members screen's header comment says what the code does | `code-reviewer` | AC28 |
 | The staging Terraform declares no `random_id`, `random_string` or `random_integer` resource, as D-137 says | `privacy-security-reviewer`, note 3 | AC8 |
-| The `membership` mutation group runs `join.test.ts` too, so `join.ts`'s guard for a code that is not a code is killed inside its own run | `test-auditor` S1 | AC32; Mutation |
+| The `membership` mutation group running `join.test.ts` too: tried and withdrawn, left for the `api.ts` BUG (see Mutation) | `test-auditor` S1 | Mutation; Left for later tasks |
 | An invitation the store cannot create writes one `invitation_failed` line with `stage: 'store'` | `test-auditor` S2 | AC24 |
 | D-137: the bootstrap retry's window opens again if the admin removes every other member | `privacy-security-reviewer`, note 1 | D-137 |
 | Display names of combining marks alone, and line separators inside a name; VoiceOver on iOS; the spinner's contrast; an audit row for the bootstrap retry | `privacy-security-reviewer` notes 1, 2; `a11y-i18n-reviewer` S3 | Left for later tasks |
@@ -1029,12 +1029,7 @@ by the tests that kill them.** (*review loop 1*; the gate's own tests)
   by the shared suite, D-095's reading)
 - **And** a mutation group `membership` mutates `modules/groups/` against
   `groups.system.test.ts`, under the system tests' configuration;
-  `mutationRuns` mutates each of its files exactly once. *Review loop 2:*
-  against `apps/server/src/modules/groups/join.test.ts` and then
-  `groups.system.test.ts`, under `vitest.coverage.config.mjs` (unit and
-  system together, no L3), because only the unit file reaches `join.ts`'s
-  guard for a code that is not a code: the contract refuses such a code
-  before any request reaches the module. It is not named
+  `mutationRuns` mutates each of its files exactly once. It is not named
   `groups`: that word is the mutation plan's output key in `ci.yml`'s three
   mutation jobs, where BUG-45-AC8 refuses any group's name
 - **And** the `journeys` group runs `groups.system.test.ts` after its three
@@ -1140,10 +1135,6 @@ Added in review loop 2:
   and its pattern tests (`scripts/lib/e2e-android.test.mjs`): the spelled
   label now begins with the code field's name and a colon (AC28). The
   pattern still proves 20 characters in four groups of five.
-- **The `membership` group's pins** (`scripts/lib/gate-decisions.test.mjs`,
-  `scripts/lib/merge-rules.test.mjs`, `scripts/stryker-config.test.mjs`): its
-  tests gain `join.test.ts`, first, and its configuration becomes
-  `vitest.coverage.config.mjs` (AC32). It only adds a test file to the run.
 - **GRP-01-AC8's no-`random_id` test** (`scripts/infra.test.mjs`) refuses
   `random_string` and `random_integer` too. A stronger test.
 
@@ -1162,12 +1153,20 @@ Added in review loop 2:
   tests, fourth: the reviewer planted a mutant that skips the walker check in
   `modules/journeys/removal.ts`, and it survived the group's three files and
   died to `groups.system.test.ts` (AC32).
-- *Review loop 2 (`test-auditor` S1):* the fresh run at `3fac8fb` gave
-  `join.ts` 83.3 %, with its `code === null` guard surviving: no request can
-  reach it, and only `join.test.ts` (L2) kills it. The `membership` group now
-  runs `join.test.ts` and then `groups.system.test.ts` under
-  `vitest.coverage.config.mjs`, which holds the unit and the system files
-  and no L3 (AC32).
+- *Review loop 2 (`test-auditor` S1), tried and withdrawn:* the fresh run at
+  `3fac8fb` gave `join.ts` 83.3 %, above D-098's 80 %, with its
+  `code === null` guard surviving. No request can reach that guard (the
+  contract's pattern refuses such a code first), its removal fails loudly (a
+  `join_failed` line and a 500, never a join), and only `join.test.ts` (L2)
+  kills it. Running `join.test.ts` in the `membership` group needs a
+  configuration holding unit and system files, `vitest.coverage.config.mjs`,
+  and the implementer showed (`1594939`) that a group's configuration is a
+  mutation input: BUG-14's tests then require it in `ai-review.yml`'s safety
+  filter (merged by hand, D-075) and in `safety-reviewer`'s own list under
+  `.claude/agents/` (the owner's to approve). That cost is more than an
+  unreachable guard is worth in this task, so the group stays as loop 1 left
+  it, and the change goes with the `api.ts` BUG, which needs a group over
+  the system tests and the same two files (Left for later tasks).
 - `api.ts` is not a safety path and is mutated by no group, as before this
   task. The reviewer's second surviving mutant, `api.ts`'s full-access gate
   always open, is killed by `groups.system.test.ts` (AC21, AC23), which
@@ -1403,7 +1402,15 @@ was not checked. The bootstrap retry changes no shape.
   mutation run reads for `api.ts`. The fix: `api.ts` into `SAFETY_PATHS`,
   with a mutation group against the system tests that reach its routes,
   measured first for time (D-066, D-098), and the owner's and safety
-  review's paths checked (`merge-rules.mjs`).
+  review's paths checked (`merge-rules.mjs`). *Review loop 2:* the same BUG
+  lets the `membership` group run `modules/groups/join.test.ts` before
+  `groups.system.test.ts`, under `vitest.coverage.config.mjs`, so `join.ts`'s
+  unreachable `code === null` guard and `invitations.ts`'s
+  `invitation_failed` stage are killed inside their own run. That makes the
+  coverage configuration a mutation input, named in `ai-review.yml`'s safety
+  filter (D-075) and in `.claude/agents/safety-reviewer.md` (the owner's).
+  Measured in loop 2: 50 s for the group, `join.ts` 97.2 %,
+  `invitations.ts` 93.1 %.
 - **Task 2 (the home screen)** (*review loop 1*, `a11y-i18n-reviewer` S1):
   dark-first screens. GRP-01's screens are light-only: `ui.tsx` hard-codes
   its colours (`#1f4e79` on black is 2.4:1), sets no background or text
