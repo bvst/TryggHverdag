@@ -23,7 +23,8 @@ that `startWorker` hands the canary its real wait; #87, `111815d`) and BUG-21
 database that never answers; #89, `1151d18`, 2026-10-18) and BUG-28 (no test held
 two journeys past the watchdog's stuck threshold; #90, `c94e908`, 2026-10-18) and
 BUG-51 (a query the database never answered held a sweep for ever; #92,
-`0df5737`, 2026-10-19, D-132).
+`0df5737`, 2026-10-19, D-132) and BUG-52 (`gate:file` checked nothing for an
+edited L6 or L3 test file, and exited 1; #93, `20af31a`, 2026-10-20, D-133).
 Queued for the owner to schedule: BUG-13 (`gate:full` miscounts the steps that
 did not run after a failure), BUG-16 (`req:coverage` counts an ID named in a
 comment), BUG-17 (the Android emulator sometimes stays in English past the
@@ -40,9 +41,7 @@ open when the repository code they import cannot load), BUG-54 (the
 test-weakening check reads the word "fit" as a focused test), BUG-55 (a gate
 that hangs leaves its node process running past the post-edit hook's limit)
 and BUG-56 (guard-bash judges the quoted pieces of a path one by one, so a
-joined path escapes it). BUG-52 (`gate:file` checked nothing for an edited L6
-or L3 test file, and exited 1) is fixed on the session branch, pull request
-open (D-133). For the owner to decide:
+joined path escapes it). For the owner to decide:
 BUG-49 (moving `origin/main` gets a session past the stop and progress hooks;
 its fix is in `.claude/`, which needs the owner's approval) and BUG-50 (no test checks that
 `req:coverage --fail-on-uncovered-changed` leaves changed test files out of
