@@ -1429,6 +1429,15 @@ was not checked. The bootstrap retry changes no shape.
   member list to members, it either refuses a name with no base character
   and any Zl or Zp character, with tests at L2 and L6, or records why it
   accepts them.
+  *After review loop 2 (`a11y-i18n-reviewer`, notes):* when task 3 reworks
+  the member list, three small things on the admin's screen go with it:
+  the waiting indicator is not a live region, so on Android a screen-reader
+  user hears nothing between pressing confirm and the result, up to the
+  20 s limit (`accessibilityLiveRegion="polite"` on `Waiting` would say it);
+  a removal that gets no answer is said after the list, not in the member's
+  row as a refusal is, and its "Prøv igjen" reloads the list rather than
+  sending the removal again; and `members-screen.tsx`'s header says the
+  indicator is "beside" the buttons, where it is after them.
   *Review loop 1 (`safety-reviewer` S1, `privacy-security-reviewer` N3):*
   the app deletes its credential on any 401 (AC29), but a removed member's
   walking phone is admitted only as a walker (approach 5), so `GET /v1/me`
