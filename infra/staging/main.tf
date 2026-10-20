@@ -24,6 +24,11 @@ locals {
   # through infra-staging. The worker registers the new hash on its first
   # canary run after the restart.
   canary_credential_generation = "1"
+
+  # The first admin's bootstrap code's generation (GRP-01, D-137's loop-1
+  # amendment), as the canary's credential's: to rotate the code, raise it in
+  # a pull request, then plan and apply through infra-staging.
+  admin_bootstrap_code_generation = "1"
 }
 
 # The staging canary's device credential (REL-10, D-128): 43 letters and
@@ -43,12 +48,22 @@ resource "random_password" "canary_credential" {
 # 16 random bytes, written into the app's environment as 32 upper-case hex
 # digits, which the API's normaliser takes as a code. It opens only an empty
 # group: the first join with it creates the group and makes the joiner its
-# admin, and once a group exists it is refused like any invalid code. Made
-# here, as the canary's credential is, so it lives only in Terraform's state
-# and the app's environment: no variable, no tfvars, no GitHub secret. The
-# owner reads it once in Clever Cloud's console for the staging app (A-36).
-resource "random_id" "admin_bootstrap_code" {
-  byte_length = 16
+# admin, and once a group exists it is refused like any invalid code, but for
+# that first join retried with its own join key while the admin is the only
+# member. Made here, as the canary's credential is, so it lives only in
+# Terraform's state and the app's environment: no variable, no tfvars, no
+# GitHub secret. The owner reads it once in Clever Cloud's console for the
+# staging app (A-36).
+#
+# random_bytes, never random_id (D-137's loop-1 amendment): a random_id's ID
+# is its value, which every plan prints in a public job log, while
+# random_bytes' hex is sensitive and its ID is not made from the value.
+# Rotating it is raising local.admin_bootstrap_code_generation in a pull
+# request: infra-staging.yml has no `-replace`, so the generation, its one
+# keeper, is what replaces it.
+resource "random_bytes" "admin_bootstrap_code" {
+  length  = 16
+  keepers = { generation = local.admin_bootstrap_code_generation }
 }
 
 resource "clevercloud_postgresql" "staging" {
@@ -125,6 +140,6 @@ resource "clevercloud_nodejs" "staging" {
 
     # The first admin's bootstrap code, from the resource above. Only the API
     # reads it, and says at start whether it is usable, never its value.
-    ADMIN_BOOTSTRAP_CODE = upper(random_id.admin_bootstrap_code.hex)
+    ADMIN_BOOTSTRAP_CODE = upper(random_bytes.admin_bootstrap_code.hex)
   }
 }
