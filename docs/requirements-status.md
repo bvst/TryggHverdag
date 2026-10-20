@@ -9,7 +9,7 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 
 | ID | Requirement | Priority | Status | Tests |
 |----|-------------|----------|--------|-------|
-| GRP-01 | Join by invitation | must | 🟢 | 51 |
+| GRP-01 | Join by invitation | must | 🟢 | 52 |
 | GRP-02 | Choose my #1 contact | must | ⚪ | 0 |
 | GRP-03 | Safety permission check | must | ⚪ | 0 |
 | GRP-04 | Responder setup | must | ⚪ | 0 |
