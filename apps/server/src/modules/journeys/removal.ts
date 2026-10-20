@@ -25,8 +25,15 @@
  * caller's answer, and a removal is the journey's own record. No user's ID is
  * logged, neither the removed responder's nor the walker's.
  *
- * No route calls this in M2 (D-122, item 5): only tests construct it. M3's
- * route wires it into the API, with who may remove whom.
+ * The route (GRP-01, approach item 10, D-137): only the journey's walker may
+ * remove a responder from it, from any of their devices. The walker is read
+ * with the journey, and compared with the caller before the rule is asked: a
+ * caller who is not the walker gets JOURNEY_NOT_FOUND, whatever the journey's
+ * state and whoever follows it, the one answer for a caller who may not tell
+ * JOURNEY_NOT_FOUND, NOT_A_RESPONDER and JOURNEY_ENDED apart, and writes no
+ * line. A journey's walker never changes, so the store's lock needs no second
+ * look at it. The admin's removal of a member reaches the same store step
+ * through the group store instead, inside its own transaction.
  */
 import { transition, type RemoveOutcome } from '../../domain/journey.ts';
 import { sqlstateOf } from '../../domain/sqlstate.ts';
@@ -35,8 +42,7 @@ import type { Log, ResponderStore } from '../../ports.ts';
 /**
  * A removal, as a caller hands it over: who asks, the journey, and the
  * responder to remove from it. Only the journey's walker may remove one
- * (GRP-01, approach item 10); in GRP-01's red phase the caller is taken and
- * not yet checked.
+ * (GRP-01, approach item 10).
  */
 export interface RemovalCall {
   walkerId: string;
@@ -76,7 +82,7 @@ export function createRemovalService({
   }
 
   return {
-    async remove({ journeyId, responderId }: RemovalCall): Promise<RemovalResult> {
+    async remove({ walkerId, journeyId, responderId }: RemovalCall): Promise<RemovalResult> {
       /** What the caller is told when nothing is removed now, and the one line an ended journey gets. */
       const answer = (decision: NotRemoved): RemovalResult => {
         if (decision.type === 'ignored') {
@@ -86,6 +92,11 @@ export function createRemovalService({
       };
 
       const journey = await stage('read', () => journeys.journeyForRemoval(journeyId));
+      // Anyone but its walker is told the journey is not there: no state, no
+      // responder, and no line (approach item 10).
+      if (journey !== null && journey.walkerId !== walkerId) {
+        return { type: 'refused', reason: 'JOURNEY_NOT_FOUND' };
+      }
       const decision = transition(journey, { type: 'remove', responderId });
       if (decision.type !== 'removed') {
         return answer(decision);

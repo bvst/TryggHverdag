@@ -202,6 +202,15 @@ const EXPIRY_STAGES: readonly unknown[] = ['read', 'expire'] satisfies Extract<
   { event: 'expiry_failed' }
 >['stage'][];
 
+/**
+ * The stages `join_failed`, `invitation_failed` and `member_removal_failed`
+ * may name (GRP-01): each is one store call, so `store` alone.
+ */
+const GROUP_STAGES: readonly unknown[] = ['store'] satisfies Extract<
+  LogEvent,
+  { event: 'join_failed' | 'invitation_failed' | 'member_removal_failed' }
+>['stage'][];
+
 /** The reasons `canary_skipped` may give. */
 const CANARY_SKIP_REASONS: readonly unknown[] = ['RUN_IN_FLIGHT'] satisfies Extract<
   LogEvent,
@@ -415,10 +424,23 @@ export function createLog({
           logger.canary_report_failed({});
           return;
         case 'join_failed':
+          logger.join_failed({
+            stage: oneOf(GROUP_STAGES, event.stage),
+            code: codeOf(event.code),
+          });
+          return;
         case 'invitation_failed':
+          logger.invitation_failed({
+            stage: oneOf(GROUP_STAGES, event.stage),
+            code: codeOf(event.code),
+          });
+          return;
         case 'member_removal_failed':
-          // GRP-01's red phase: the three events are typed, and not written yet.
-          throw new Error('not implemented (GRP-01)');
+          logger.member_removal_failed({
+            stage: oneOf(GROUP_STAGES, event.stage),
+            code: codeOf(event.code),
+          });
+          return;
         default:
           // A type error the day an event joins LogEvent without a case. And
           // a throw, never a quiet nothing: the line that says a heartbeat

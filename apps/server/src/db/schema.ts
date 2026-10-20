@@ -34,6 +34,8 @@ import {
   uuid,
   type PgColumn,
 } from 'drizzle-orm/pg-core';
+import { CANARY_RESPONDER_ID, CANARY_WALKER_ID } from '../domain/canary.ts';
+import { ROLES } from '../domain/groups.ts';
 import {
   ALERT_RESOLUTIONS,
   ALERT_STATES,
@@ -405,4 +407,121 @@ export const outbox = pgTable(
       .on(table.nextAttemptAt, table.id)
       .where(sql`${table.sentAt} is null`),
   ],
+);
+
+/**
+ * The group (GRP-01, reading 1, D-137): the private group, and only ever one.
+ * A unique index on a constant allows one row at most, so two first admins
+ * racing on an empty database meet here, and one of them makes the group.
+ */
+export const groups = pgTable(
+  'groups',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: moment('created_at').notNull().defaultNow(),
+  },
+  () => [uniqueIndex('groups_one_group').on(sql`(true)`)],
+);
+
+/** A member's role, exactly as the domain lists them (approach item 2). */
+export const membershipRole = pgEnum('membership_role', ROLES);
+
+/**
+ * Who is in the group (GRP-01, approach item 2). A user with a row here is a
+ * member; removing a member deletes the row, and with it the name they gave
+ * (reading 6). Their `users` row stays: journeys, alerts and messages name it.
+ *
+ * Held by the database:
+ *   - one group per user: the user is the key;
+ *   - one ADMIN per group: a partial unique index;
+ *   - the display name, the person's own, 1 to 40 characters after trimming
+ *     with no control character, C0 or C1. No column here holds a phone
+ *     number, an age, a position or a device detail;
+ *   - neither of the staging canary's two users is ever a member (D-128,
+ *     GRP-01-AC15): a check with their IDs as literals, so no code path, a
+ *     join's or a test's, can make one.
+ *
+ * A device authenticates only while its user has a row here, or it is the
+ * canary's, or for its own unended journey (approach item 5): membership is
+ * the session.
+ */
+export const memberships = pgTable(
+  'memberships',
+  {
+    userId: uuid('user_id').primaryKey(),
+    groupId: uuid('group_id').notNull(),
+    role: membershipRole('role').notNull(),
+    displayName: text('display_name').notNull(),
+    joinedAt: moment('joined_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({ columns: [table.userId], foreignColumns: [users.id] }),
+    foreignKey({ columns: [table.groupId], foreignColumns: [groups.id] }),
+    uniqueIndex('memberships_one_admin_per_group')
+      .on(table.groupId)
+      .where(sql`${table.role} = 'ADMIN'`),
+    check(
+      'memberships_display_name_check',
+      sql`char_length(btrim(${table.displayName})) between 1 and 40 and ${table.displayName} !~ '[\\u0001-\\u001f\\u007f-\\u009f]'`,
+    ),
+    check(
+      'memberships_not_the_canary_check',
+      sql`${table.userId} not in (${sql.raw(`'${CANARY_WALKER_ID}'::uuid, '${CANARY_RESPONDER_ID}'::uuid`)})`,
+    ),
+  ],
+);
+
+/**
+ * The admin's invitations (GRP-01, approach item 3). A code is never stored,
+ * only its SHA-256, as a device's credential is; so is the join key of the
+ * phone that used it (approach item 4). Expires seven days after it was made,
+ * by the database's clock; used once, by one user, and then `used_at`,
+ * `used_by` and `join_key_hash` are all set, never some of them.
+ */
+export const invitations = pgTable(
+  'invitations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    groupId: uuid('group_id').notNull(),
+    codeHash: text('code_hash').notNull().unique(),
+    createdBy: uuid('created_by').notNull(),
+    createdAt: moment('created_at').notNull().defaultNow(),
+    expiresAt: moment('expires_at').notNull(),
+    usedAt: moment('used_at'),
+    usedBy: uuid('used_by'),
+    joinKeyHash: text('join_key_hash'),
+  },
+  (table) => [
+    foreignKey({ columns: [table.groupId], foreignColumns: [groups.id] }),
+    foreignKey({ columns: [table.createdBy], foreignColumns: [users.id] }),
+    foreignKey({ columns: [table.usedBy], foreignColumns: [users.id] }),
+    check('invitations_expires_at_check', sql`${table.expiresAt} > ${table.createdAt}`),
+    check(
+      'invitations_used_check',
+      sql`num_nulls(${table.usedAt}, ${table.usedBy}, ${table.joinKeyHash}) in (0, 3)`,
+    ),
+  ],
+);
+
+/** The admin's actions the audit log records (SEC-03), exactly as listed here, and no others. */
+export const AUDIT_ACTIONS = ['GROUP_CREATED', 'INVITATION_CREATED', 'MEMBER_REMOVED'] as const;
+
+export const auditAction = pgEnum('audit_action', AUDIT_ACTIONS);
+
+/**
+ * The audit log of admin actions (GRP-01, approach item 2; SEC-03): who, what,
+ * whom, and when, in database time, written in the transaction of the action
+ * itself. `subject_id` is a user's ID or an invitation's, by the action. No
+ * free text, no name and no code: nothing here says more than which IDs.
+ */
+export const auditLog = pgTable(
+  'audit_log',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    at: moment('at').notNull().defaultNow(),
+    actorId: uuid('actor_id'),
+    action: auditAction('action').notNull(),
+    subjectId: uuid('subject_id'),
+  },
+  (table) => [foreignKey({ columns: [table.actorId], foreignColumns: [users.id] })],
 );

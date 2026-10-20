@@ -1,6 +1,13 @@
 /**
- * Journeys, their responders, their heartbeats and the users all of them must
- * be, in PostgreSQL (SM-01, LOST-01).
+ * Journeys, their responders, their heartbeats and whom a walker may name, in
+ * PostgreSQL (SM-01, LOST-01, GRP-01).
+ *
+ * Since GRP-01 (approach item 6, D-137) a responder must be a current member
+ * of the walker's group, or, for the staging canary's walker, the canary's
+ * own responder alone. A start reads that without a lock, and asks it again
+ * inside its transaction with the memberships taken FOR SHARE, so a member
+ * removed in between is never stored as a new journey's responder: the start
+ * writes nothing and answers INVALID_RESPONDER.
  *
  * The domain decides; this stores what it decided, and the database enforces
  * the rules a read cannot. Two starts that race past `unendedJourneyOf` both
@@ -150,13 +157,14 @@ import {
   heartbeats,
   journeyResponders,
   journeys,
+  memberships,
   messageKind,
   outbox,
   positions,
   unended,
   unresolved,
-  users,
 } from '../db/schema.ts';
+import { CANARY_RESPONDER_ID, CANARY_WALKER_ID } from '../domain/canary.ts';
 import { databaseTime } from '../domain/database-time.ts';
 import {
   ALERT_EXPIRES_AFTER_MS,
@@ -922,8 +930,14 @@ const NO_RESPONDER_WARNING = 'NO_RESPONDER' satisfies MessageKind;
  *      walker, naming the journey and no alert, in round 1, written and due
  *      at now(): exactly one row.
  * Every time is this transaction's now() (AR-03, REL-01).
+ *
+ * Exported for the admin's removal of a member (GRP-01, approach item 9,
+ * D-137), which runs this step for each unended journey the member follows
+ * inside its own one transaction, so the rules, the reset, the withdrawals and
+ * the walker's warning are the ones SM-10 proved, not a copy. Only
+ * `adapters/groups.ts` calls it from outside this file.
  */
-async function removeInside(
+export async function removeInside(
   tx: Pick<Database, 'execute' | 'select' | 'update' | 'delete'>,
   { journeyId, responderId }: RemovalToRecord,
 ): Promise<RemoveResponderResult> {
@@ -1106,6 +1120,66 @@ async function claim(
   };
 }
 
+/** A membership as a start reads it: whose, and in which group. */
+interface MembershipRow {
+  userId: string;
+  groupId: string;
+}
+
+/**
+ * The memberships of the walker and of these IDs, in user order; taken FOR
+ * SHARE under a start's transaction, so a removal of any of them waits for
+ * the start, and a start waits for a removal already under way (GRP-01,
+ * approach item 6, AC13). Shared locks do not wait for each other, so starts
+ * never wait on one another here.
+ */
+async function membershipsOf(
+  db: Reader,
+  walkerId: string,
+  ids: readonly string[],
+  lock: 'read' | 'share',
+): Promise<MembershipRow[]> {
+  const query = db
+    .select({ userId: memberships.userId, groupId: memberships.groupId })
+    .from(memberships)
+    .where(inArray(memberships.userId, [walkerId, ...ids]))
+    .orderBy(memberships.userId);
+  return lock === 'share' ? query.for('share') : query;
+}
+
+/**
+ * Whom this walker may name of `ids` (GRP-01, approach items 6 and 7, D-128,
+ * D-137): the current members of the walker's group other than the walker;
+ * for the canary's walker, the canary's responder alone, and nobody else;
+ * for a walker who is no member, nobody. The canary's users have no
+ * membership (the table refuses one), so no member can name either.
+ *
+ * IDs are compared as the database writes them, in lower case: a UUID names
+ * the same user in either case. The set holds them that way too.
+ */
+function mayName(
+  rows: readonly MembershipRow[],
+  givenWalkerId: string,
+  ids: readonly string[],
+): ReadonlySet<string> {
+  const walkerId = givenWalkerId.toLowerCase();
+  const named = new Set(ids.map((id) => id.toLowerCase()));
+  if (walkerId === CANARY_WALKER_ID) {
+    return new Set(named.has(CANARY_RESPONDER_ID) ? [CANARY_RESPONDER_ID] : []);
+  }
+  const walker = rows.find((row) => row.userId === walkerId);
+  if (walker === undefined) {
+    return new Set();
+  }
+  return new Set(
+    rows
+      .filter(
+        (row) => row.userId !== walkerId && row.groupId === walker.groupId && named.has(row.userId),
+      )
+      .map((row) => row.userId),
+  );
+}
+
 /**
  * A start's insert met the walker's unended journey, and the read after it
  * found none: that journey ended in between (LOST-08, approach item 9).
@@ -1120,19 +1194,13 @@ export function databaseJourneyStore(
       return unendedJourneyOf(db, walkerId);
     },
 
-    // GRP-01's red phase: renamed from `existingUsers`, its query unchanged, so
-    // it still answers which IDs are users. Membership of the walker's group,
-    // and the canary's walker naming its own responder alone (approach item
-    // 6), are the green phase's.
+    // GRP-01 (approach item 6): whom this walker may name, read without a
+    // lock. The start asks the same again under its lock (insertStarted).
     async eligibleResponders(
-      _walkerId: string,
+      walkerId: string,
       ids: readonly string[],
     ): Promise<ReadonlySet<string>> {
-      const rows = await db
-        .select({ id: users.id })
-        .from(users)
-        .where(inArray(users.id, [...ids]));
-      return new Set(rows.map((row) => row.id));
+      return mayName(await membershipsOf(db, walkerId, ids, 'read'), walkerId, ids);
     },
 
     async insertStarted({ walkerId, deviceId, responderIds, startedAt }: StartedJourney) {
@@ -1145,6 +1213,22 @@ export function databaseJourneyStore(
       /** One try, in a transaction of its own: stored, refused, or ended meanwhile. */
       const attempt = () =>
         db.transaction(async (tx): Promise<InsertStartedResult | typeof ENDED_MEANWHILE> => {
+          // GRP-01 (approach item 6, AC13): the walker's and the named
+          // responders' memberships, taken FOR SHARE before anything is
+          // written, and asked again. A member removed since the module's
+          // read is gone here, and the start writes nothing; a removal that
+          // comes after waits for this transaction, and then finds the new
+          // journey and removes them from it. Membership rows, then new rows:
+          // the order the admin's removal takes them, membership first.
+          const eligible = mayName(
+            await membershipsOf(tx, walkerId, responderIds, 'share'),
+            walkerId,
+            responderIds,
+          );
+          if (responderIds.some((id) => !eligible.has(id.toLowerCase()))) {
+            return { inserted: false, refused: 'INVALID_RESPONDER' };
+          }
+
           const [journey] = await tx
             .insert(journeys)
             .values({ walkerId, deviceId, state: 'ACTIVE', startedAt })

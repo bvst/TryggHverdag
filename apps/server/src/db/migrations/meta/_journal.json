@@ -64,6 +64,13 @@
       "when": 1791559973254,
       "tag": "0008_mushy_vampiro",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792502105753,
+      "tag": "0009_first_the_watchers",
+      "breakpoints": true
     }
   ]
 }

@@ -37,6 +37,39 @@ export { API_PREFIX, API_VERSION } from './api-version.ts';
 export { badRequestError } from './bad-request.ts';
 export { contract } from './contract.ts';
 export { deviceCredentialErrors } from './device-credential.ts';
+export {
+  INVITATION_CODE_PATTERN,
+  MAX_DISPLAY_NAME_LENGTH,
+  ROLES,
+  createInvitation,
+  createInvitationErrors,
+  createInvitationRequestSchema,
+  createInvitationResponseSchema,
+  joinErrors,
+  joinGroup,
+  joinRequestSchema,
+  joinResponseSchema,
+  listMembers,
+  listMembersErrors,
+  listMembersResponseSchema,
+  me,
+  meErrors,
+  memberSchema,
+  removeMember,
+  removeMemberErrors,
+  removeMemberRequestSchema,
+  removedResponseSchema,
+} from './groups.ts';
+export type {
+  CreateInvitationResponse,
+  JoinErrorCode,
+  JoinRequest,
+  JoinResponse,
+  ListMembersResponse,
+  Member,
+  RemoveMemberRequest,
+  RemovedResponse,
+} from './groups.ts';
 export { health, healthResponseSchema, WORKER_STALE_AFTER_MS } from './health.ts';
 export type { HealthResponse } from './health.ts';
 export {
@@ -53,12 +86,19 @@ export { homeErrors, homeRequestSchema, homeResponseSchema, reportHome } from '.
 export type { HomeErrorCode, HomeRequest, HomeResponse } from './home.ts';
 export {
   MAX_RESPONDERS,
+  removeResponder,
+  removeResponderErrors,
+  removeResponderRequestSchema,
+  removeResponderResponseSchema,
   startJourney,
   startJourneyErrors,
   startJourneyRequestSchema,
   startJourneyResponseSchema,
 } from './journeys.ts';
 export type {
+  RemoveResponderErrorCode,
+  RemoveResponderRequest,
+  RemoveResponderResponse,
   StartJourneyErrorCode,
   StartJourneyRequest,
   StartJourneyResponse,

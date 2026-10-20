@@ -123,9 +123,10 @@ export function createJourneyService({
         startedAt,
       });
       if (!stored.inserted && 'refused' in stored) {
-        // GRP-01's red phase: a responder gone from the group under the
-        // start's lock (approach item 6) is not answered yet.
-        throw new Error('not implemented (GRP-01)');
+        // A responder named was removed from the group between the read above
+        // and the start's lock (GRP-01, approach item 6, AC13): the same
+        // refusal the read would have given, and nothing stored.
+        return { type: 'refused', reason: stored.refused };
       }
       if (!stored.inserted) {
         // Another start for this walker got past the read above at the same

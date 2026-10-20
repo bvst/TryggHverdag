@@ -601,7 +601,10 @@ function sameCheck(url: string, other: HealthchecksSetting): boolean {
  * Likewise its SMS check reports when HEALTHCHECKS_SMS_URL allows it and is
  * not the worker's own address (LOST-07), said at start without naming
  * where; and it says that no SMS provider is configured: its SMS is
- * UNCONFIGURED_SMS until M3. And once it has started, it reads back the
+ * UNCONFIGURED_SMS until M3. Since GRP-01 (approach item 11, D-122, D-137),
+ * the check-in is withheld while the SMS check does not report, so the
+ * worker's own check pages: a removal can leave an alert with nobody to tell,
+ * which only the SMS check pages. And once it has started, it reads back the
  * session limit its pool asked for, and says whether it is in force (D-109).
  *
  * The staging canary (REL-10, D-128) is scheduled when HEALTHCHECKS_CANARY_URL
@@ -660,12 +663,30 @@ export async function runWorkerProcess(
     exitOnSignal({ name: 'worker', signals, stop: () => Promise.resolve(), ...reporting });
     return;
   }
+  // Whether the SMS check reports: a usable URL of its own, not the worker's
+  // check (D-115, D-116). Read first, because the worker's check-in depends on
+  // it (GRP-01-AC25, below).
+  const smsReports = healthchecksSms.checkingIn && !sameCheck(healthchecksSms.url, healthchecks);
+  // D-122's condition for the removal route (GRP-01, approach item 11, D-137):
+  // a removal can leave an alert with nobody to tell, which only the SMS check
+  // pages. While it does not report, the worker's own check-in is withheld,
+  // so `staging-worker` pages within its grace: a line alone pages nobody.
+  // The worker still starts, and every loop still runs: refusing to start
+  // would stop every alert to page about one (F7). This line never says "SMS
+  // check": the SMS check's own line below says why it does not report and
+  // what then goes unpaged.
   let checkIn: CheckIn | undefined;
-  if (healthchecks.checkingIn) {
+  if (healthchecks.checkingIn && smsReports) {
     write(
       "worker: checking in with Healthchecks.io once a minute while the watchdog's beat is fresh.\n",
     );
     checkIn = createCheckIn(healthchecks.url);
+  } else if (healthchecks.checkingIn) {
+    write(
+      'worker: not checking in with Healthchecks.io: the check-in is withheld while ' +
+        'HEALTHCHECKS_SMS_URL names no check of its own, so the worker’s check pages ' +
+        'within its grace.\n',
+    );
   } else {
     write(`worker: not checking in with Healthchecks.io: ${healthchecks.reason}\n`);
   }

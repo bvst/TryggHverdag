@@ -18,7 +18,8 @@
  *     default, which is the safe direction. ENDED frees the walker: an ENDED
  *     journey handed in as the current one is no journey at all.
  *   - SM-02, its start rule: a journey needs at least one responder to start.
- *     A responder is an existing user other than the walker.
+ *     A responder is one the walker may name: since GRP-01, a current member
+ *     of the walker's group other than the walker (`eligibleResponderIds`).
  *   - The heartbeat (LOST-01): only for the walker's own journey (SEC-07),
  *     ignored once it has ENDED (SM-07), only from the device that started
  *     it (D-101), and otherwise recorded with the state unchanged (SM-03). The

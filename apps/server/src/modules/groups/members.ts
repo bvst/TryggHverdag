@@ -3,10 +3,19 @@
  * the admin's list, and the admin's removal of a member, at once and in one
  * transaction.
  *
- * GRP-01's red phase: the signatures only.
+ * Thin, as every module: the store reads, asks the domain's admin rules
+ * (`domain/groups.ts`) and writes. The removal is the store's one
+ * transaction: the membership, the member's place on every unended journey
+ * they follow, through SM-10's own step, and the audit row, all or none of
+ * it (approach item 9). It reads no clock (AR-03).
+ *
+ * The log takes closed events only (PRIV-07): one line naming the stage and
+ * the SQLSTATE when the removal's store fails. A refusal writes no line, and
+ * no line holds a name or anyone's ID.
  */
-import type { MemberRemovalRefusal } from '../../domain/groups.ts';
-import type { GroupStore, Log, MemberAsRead } from '../../ports.ts';
+import { mayAdminister, type MemberRemovalRefusal } from '../../domain/groups.ts';
+import { sqlstateOf } from '../../domain/sqlstate.ts';
+import type { GroupStore, Log, MemberAsRead, RemoveMemberResult } from '../../ports.ts';
 
 /** Who this phone is signed in as; or not a member (the canary's device). */
 export type MeResult = { type: 'member'; member: MemberAsRead } | { type: 'not_a_member' };
@@ -25,17 +34,43 @@ export interface MemberService {
   remove(call: { adminId: string; memberId: string }): Promise<MemberRemovalResult>;
 }
 
-export const createMemberService: (dependencies: {
+export function createMemberService({
+  groups,
+  log,
+}: {
   groups: GroupStore;
   log: Log;
-}) => MemberService = () => ({
-  me() {
-    throw new Error('not implemented (GRP-01)');
-  },
-  list() {
-    throw new Error('not implemented (GRP-01)');
-  },
-  remove() {
-    throw new Error('not implemented (GRP-01)');
-  },
-});
+}): MemberService {
+  return {
+    async me({ userId }: { userId: string }): Promise<MeResult> {
+      const member = await groups.memberOf(userId);
+      return member === null ? { type: 'not_a_member' } : { type: 'member', member };
+    },
+
+    async list({ adminId }: { adminId: string }): Promise<MemberListResult> {
+      if (!mayAdminister(await groups.memberOf(adminId))) {
+        return { type: 'refused', reason: 'NOT_THE_ADMIN' };
+      }
+      return { type: 'listed', members: await groups.members() };
+    },
+
+    async remove({
+      adminId,
+      memberId,
+    }: {
+      adminId: string;
+      memberId: string;
+    }): Promise<MemberRemovalResult> {
+      let result: RemoveMemberResult;
+      try {
+        result = await groups.removeMember({ adminId, memberId });
+      } catch (error) {
+        log.write({ event: 'member_removal_failed', stage: 'store', code: sqlstateOf(error) });
+        throw error;
+      }
+      return result.outcome === 'removed'
+        ? { type: 'removed' }
+        : { type: 'refused', reason: result.reason };
+    },
+  };
+}
