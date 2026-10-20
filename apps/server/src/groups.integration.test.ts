@@ -15,6 +15,10 @@
 //     own journey only, and a database that cannot answer is a 500;
 //   - AC13: a start and a removal racing on the membership row, both orders,
 //     on two connections, never leave a removed member on a new journey;
+//   - AC16 and AC17: two removals of one member at once, the second arriving
+//     while the first holds the membership row, give one removal and one
+//     MEMBER_NOT_FOUND, never a failure: the removal's `for update` on the
+//     member's row decides it (approach item 9);
 //   - AC15: the canary's users can have no membership, and joins never touch
 //     the canary's device;
 //   - AC20: a removal that cannot finish, its lock wait run out or a failure
@@ -737,6 +741,93 @@ describe('GRP-01: a start and a removal racing on the membership row (AC13)', ()
         [journeyId],
       );
       expect(responders.rows.map(({ id }) => id)).toEqual([kept.userId]);
+    }),
+  );
+});
+
+describe('GRP-01: two removals of one member racing on the membership row (AC16, AC17)', () => {
+  /** How many sessions on this test's own database are waiting on a lock right now. */
+  async function waitingOnALock(s: Server): Promise<number> {
+    const result = await s.pool.query<{ n: number }>(
+      `select count(*)::int as n from pg_stat_activity
+        where datname = current_database() and wait_event_type = 'Lock'`,
+    );
+    return result.rows[0]?.n ?? 0;
+  }
+
+  /** Polls in short sleeps until `n` sessions wait on a lock, or about two seconds pass; then says how many do. */
+  async function untilWaiting(s: Server, n: number): Promise<number> {
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      if ((await waitingOnALock(s)) >= n) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return waitingOnALock(s);
+  }
+
+  test(
+    'GRP-01-AC16 and AC17: a second removal of M arriving while the first holds M’s membership row waits for it, then answers MEMBER_NOT_FOUND; the first answers removed; neither throws, and one MEMBER_REMOVED audit row is written',
+    withServer(async (s) => {
+      const adminPhone = await s.admin();
+      const m = await s.member(adminPhone);
+      const keeper = await s.member(adminPhone);
+      const walker = await s.member(adminPhone);
+      const started = await s.start(walker, [m.userId, keeper.userId]);
+      expect(started.status, started.text).toBe(201);
+      const journeyId = (started.body as { journeyId: string }).journeyId;
+      const audit = await s.count('audit_log');
+      // Each removal's answer, or what it threw: never left to reject unheard.
+      const removal = async () => {
+        try {
+          return await s.groups.removeMember({ adminId: adminPhone.userId, memberId: m.userId });
+        } catch (error) {
+          return { threw: error instanceof Error ? error.message : String(error) };
+        }
+      };
+
+      // Another transaction holds J's row, so the first removal stops on it
+      // with M's membership row taken and deleted, its transaction open.
+      const holder = await s.pool.connect();
+      await holder.query('begin');
+      await holder.query('select 1 from journeys where id = $1 for update', [journeyId]);
+      const waiting: number[] = [];
+      let first: ReturnType<typeof removal> | undefined;
+      let second: ReturnType<typeof removal> | undefined;
+      try {
+        first = removal();
+        // The first removal waits on J's row: it holds M's membership row.
+        waiting.push(await untilWaiting(s, 1));
+        second = removal();
+        // The second waits too, behind the first's transaction.
+        waiting.push(await untilWaiting(s, 2));
+      } finally {
+        await holder.query('rollback');
+        holder.release();
+      }
+
+      expect(waiting, 'both removals were in flight at once, each waiting on a lock').toEqual([
+        1, 2,
+      ]);
+      expect([await first, await second]).toEqual([
+        { outcome: 'removed' },
+        { outcome: 'not_removed', reason: 'MEMBER_NOT_FOUND' },
+      ]);
+      expect(
+        (await s.pool.query('select 1 from memberships where user_id = $1', [m.userId])).rowCount,
+      ).toBe(0);
+      const responders = await s.pool.query<{ id: string }>(
+        'select responder_id::text as id from journey_responders where journey_id = $1',
+        [journeyId],
+      );
+      expect(responders.rows.map(({ id }) => id)).toEqual([keeper.userId]);
+      expect(await s.count('audit_log')).toBe(audit + 1);
+      const removed = await s.pool.query<{ actor: string }>(
+        `select actor_id::text as actor from audit_log
+          where action = 'MEMBER_REMOVED' and subject_id = $1`,
+        [m.userId],
+      );
+      expect(removed.rows).toEqual([{ actor: adminPhone.userId }]);
     }),
   );
 });
