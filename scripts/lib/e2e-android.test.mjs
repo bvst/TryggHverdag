@@ -1434,6 +1434,347 @@ describe('judgeReport: only a report in which every flow ran and passed is a pas
   });
 });
 
+/**
+ * One <testcase> as Maestro 2.10.0 writes it. Read from tag cli-2.10.0 of
+ * github.com/mobile-dev-inc/maestro: JUnitTestSuiteReporter.kt and its
+ * JUnitTestSuiteReporterTest.kt ("XML - Test failed"), under
+ * maestro-cli/src/{main/java,test/kotlin}/maestro/cli/report/. A failed flow's
+ * reason is the text of its <failure> element (@JacksonXmlText), never a
+ * `message` attribute. It comes after the flow's <properties>, when the flow
+ * has any, and only an ERROR flow has one (TestSuiteInteractor.kt). Jackson
+ * 2.17.1 writes through Woodstox 6.6.2, whose BufferingXmlWriter escapes < and
+ * & in element text always, > at the start or after ], and a carriage return
+ * as &#xd;. It leaves " and line breaks as they are. `failure` goes in as it
+ * stands in the file, entities and all.
+ *
+ * @param {string} name
+ * @param {string} status
+ * @param {{ failure?: string, properties?: Record<string, string> }} [children]
+ */
+function maestroFlow(name, status, { failure, properties } = {}) {
+  const open =
+    `    <testcase id="${name}" name="${name}" classname="${name}" ` +
+    `file="apps/mobile/e2e/${name}.yaml" time="37.412" timestamp="2026-10-20T09:00:02" status="${status}"`;
+  const inside = [
+    ...(properties === undefined
+      ? []
+      : [
+          '      <properties>',
+          ...Object.entries(properties).map(
+            ([key, value]) => `        <property name="${key}" value="${value}"/>`,
+          ),
+          '      </properties>',
+        ]),
+    ...(failure === undefined ? [] : [`      <failure>${failure}</failure>`]),
+  ];
+  return inside.length === 0 ? `${open}/>` : [`${open}>`, ...inside, '    </testcase>'].join('\n');
+}
+
+/**
+ * A failed <testcase> holding this <failure> element, written as it stands: the
+ * shape other JUnit writers use, with the reason in a `message` attribute.
+ */
+const failedWith = (name, element) =>
+  `    <testcase id="${name}" name="${name}" classname="${name}" ` +
+  `file="apps/mobile/e2e/${name}.yaml" time="50.204" timestamp="2026-10-20T09:00:02" status="ERROR">\n` +
+  `      ${element}\n` +
+  '    </testcase>';
+
+/** `text` with every run of white space as one space. */
+const squash = (text) => text.replace(/\s+/g, ' ');
+
+/** How many times `text` shows in `message`, white space aside. */
+const timesIn = (message, text) => squash(message).split(squash(text)).length - 1;
+
+/**
+ * The flow, of `names`, named last before `text` first shows in `message`,
+ * white space aside: the flow that text is listed under. Undefined when `text`
+ * is not in the message at all.
+ *
+ * @param {string} message
+ * @param {string} text
+ * @param {string[]} names
+ */
+function listedUnder(message, text, names) {
+  const flat = squash(message);
+  const at = flat.indexOf(squash(text));
+  if (at === -1) return undefined;
+  const before = flat.slice(0, at);
+  let under;
+  let last = -1;
+  for (const name of names) {
+    const where = before.lastIndexOf(name);
+    if (where > last) {
+      under = name;
+      last = where;
+    }
+  }
+  return under;
+}
+
+/** The note that a reason was cut short. */
+const SAYS_CUT = /\b(cut|truncated|shortened)\b/i;
+
+// CI's job log has to say why a flow failed: the debug artifact with
+// report.xml in it is not always within reach (PR #96, first-admin-invites).
+// Maestro's reason may hold the flow's typed values. In CI those are the job's
+// synthetic bootstrap code, which the log already prints, in the job's env and
+// in the `maestro test -e BOOTSTRAP_CODE=…` line scripts/e2e-android.mjs writes
+// before the run, so a reason needs no redaction. Every reason below is plain
+// words or a pattern from a flow; the one code-shaped value is made at run time.
+describe("judgeReport: a failed flow says why, in Maestro's own words", () => {
+  const FLOW_NAMES = ['app-starts', 'first-admin-invites', 'wrong-code'];
+
+  test("INF-06-AC9: a failed flow's reason, the text of its <failure>, shows under the flow's name", () => {
+    const reason = 'Element not found: Text matching regex: Opprett invitasjon';
+
+    const result = judgeReport(
+      report(
+        maestroFlow('app-starts', 'SUCCESS'),
+        maestroFlow('first-admin-invites', 'ERROR', { failure: reason }),
+        maestroFlow('wrong-code', 'SUCCESS'),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(
+      '1 of 3 flows failed or did not finish: first-admin-invites (ERROR)',
+    );
+    expect(result.message).toContain(reason);
+    expect(listedUnder(result.message, reason, FLOW_NAMES)).toBe('first-admin-invites');
+  });
+
+  test('INF-06-AC9: the reason is read as XML: its entities are decoded, once', () => {
+    // &lt;, &amp; and &gt; are what Woodstox writes in element text; &quot; and
+    // &#10; are as valid there. &amp;lt; is a reason that holds "&lt;" itself.
+    const written =
+      'Assertion is false: &quot;Inviter &amp; del&quot; is visible&#10;' +
+      'Below: &lt;Medlemmer&gt;, written &amp;lt;b&amp;gt; in the pattern';
+
+    const result = judgeReport(
+      report(maestroFlow('first-admin-invites', 'ERROR', { failure: written })),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('Assertion is false: "Inviter & del" is visible');
+    expect(result.message).toContain('Below: <Medlemmer>, written &lt;b&gt; in the pattern');
+    expect(result.message).toMatch(/is visible\s+Below:/);
+    expect(result.message).not.toContain('&quot;');
+    expect(result.message).not.toContain('&amp;');
+    expect(result.message).not.toContain('&#10;');
+    expect(result.message).not.toContain('&lt;Medlemmer');
+  });
+
+  test("INF-06-AC9: a reason after the flow's <properties>, as Maestro writes a tagged flow, shows too", () => {
+    const reason = 'Element not found: Text matching regex: Kode';
+
+    const result = judgeReport(
+      report(
+        maestroFlow('first-admin-invites', 'ERROR', {
+          properties: { tags: 'grp, admin' },
+          failure: reason,
+        }),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(reason);
+    expect(listedUnder(result.message, reason, FLOW_NAMES)).toBe('first-admin-invites');
+  });
+
+  test('INF-06-AC9: a reason in a `message` attribute, as other JUnit writers put it, shows and is decoded', () => {
+    // Woodstox writes a line break in an attribute as &#xa;; &#10; is the same
+    // character in decimal.
+    const element =
+      '<failure message="Element not found: Text matching regex: &quot;Kode&quot; &amp; &lt;navn&gt;' +
+      '&#10;second line&#xa;third line" type="MaestroException"/>';
+
+    const result = judgeReport(report(failedWith('first-admin-invites', element)));
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('Element not found: Text matching regex: "Kode" & <navn>');
+    expect(result.message).toMatch(/<navn>\s+second line\s+third line/);
+    expect(listedUnder(result.message, 'Element not found: Text matching regex:', FLOW_NAMES)).toBe(
+      'first-admin-invites',
+    );
+    expect(result.message).not.toMatch(/&(quot|amp|lt|gt|#10|#xa);/);
+  });
+
+  test('INF-06-AC9: a <failure> with both a `message` attribute and text shows both', () => {
+    const element =
+      '<failure message="Assertion is false: Kode is visible">' +
+      'Waited for the join screen, and it never showed</failure>';
+
+    const result = judgeReport(report(failedWith('first-admin-invites', element)));
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('Assertion is false: Kode is visible');
+    expect(result.message).toContain('Waited for the join screen, and it never showed');
+  });
+
+  test('INF-06-AC9: a reason is shown as Maestro wrote it, typed values and all', () => {
+    // Made here, so no code-shaped value sits in this file (RG-07). In CI the
+    // value would be the job's synthetic bootstrap code, which the log already
+    // shows: see the comment above this block.
+    const typed = randomBytes(10).toString('hex').toUpperCase();
+    const reason = `Assertion is false: "${typed}" is visible`;
+
+    const result = judgeReport(
+      report(maestroFlow('first-admin-invites', 'ERROR', { failure: reason })),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(reason);
+  });
+});
+
+describe('judgeReport: with more than one failed flow, each says why', () => {
+  const FLOW_NAMES = ['app-starts', 'first-admin-invites', 'wrong-code'];
+
+  test("INF-06-AC9: each failed flow's reason is listed under its own name", () => {
+    const appStarts = 'Assertion is false: "TryggHverdag" is visible';
+    const firstAdmin = 'Element not found: Text matching regex: Opprett invitasjon';
+
+    const result = judgeReport(
+      report(
+        maestroFlow('app-starts', 'ERROR', { failure: appStarts }),
+        maestroFlow('wrong-code', 'SUCCESS'),
+        maestroFlow('first-admin-invites', 'ERROR', { failure: firstAdmin }),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(
+      '2 of 3 flows failed or did not finish: app-starts (ERROR), first-admin-invites (ERROR)',
+    );
+    expect(result.message).toContain(appStarts);
+    expect(result.message).toContain(firstAdmin);
+    expect(listedUnder(result.message, appStarts, FLOW_NAMES)).toBe('app-starts');
+    expect(listedUnder(result.message, firstAdmin, FLOW_NAMES)).toBe('first-admin-invites');
+    expect(timesIn(result.message, appStarts)).toBe(1);
+    expect(timesIn(result.message, firstAdmin)).toBe(1);
+  });
+
+  test('INF-06-AC9: a cancelled flow before a failed one gets neither its reason nor a placeholder', () => {
+    // The cancelled <testcase> closes itself. The next <failure> in the file
+    // belongs to the flow after it.
+    const firstAdmin = 'Element not found: Text matching regex: Opprett invitasjon';
+
+    const result = judgeReport(
+      report(
+        maestroFlow('app-starts', 'CANCELED'),
+        maestroFlow('first-admin-invites', 'ERROR', { failure: firstAdmin }),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(
+      '2 of 2 flows failed or did not finish: app-starts (CANCELED), first-admin-invites (ERROR)',
+    );
+    expect(result.message).toContain(firstAdmin);
+    expect(timesIn(result.message, firstAdmin)).toBe(1);
+    expect(listedUnder(result.message, firstAdmin, FLOW_NAMES)).toBe('first-admin-invites');
+    expect(result.message).not.toMatch(/\bundefined\b|\bnull\b|\[object /);
+  });
+});
+
+describe('judgeReport: a long reason is cut, so a stack trace cannot flood the log', () => {
+  /** A reason with a synthetic stack trace under it, thousands of characters long. */
+  const longReason = (first) =>
+    [
+      first,
+      ...Array.from(
+        { length: 120 },
+        (_, i) =>
+          `\tat maestro.orchestra.Orchestra.step${String(i)}(Orchestra.kt:${String(1000 + i)})`,
+      ),
+      '\tthe last line of the trace',
+    ].join('\n');
+
+  test('INF-06-AC9: a long reason shows its start, then says it was cut', () => {
+    const reason = longReason('Element not found: Text matching regex: Opprett invitasjon');
+    expect(reason.length).toBeGreaterThan(5_000);
+
+    const result = judgeReport(
+      report(maestroFlow('first-admin-invites', 'ERROR', { failure: reason })),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(squash(result.message)).toContain(squash(reason.slice(0, 400)));
+    expect(result.message).not.toContain('the last line of the trace');
+    expect(result.message).toMatch(SAYS_CUT);
+    expect(result.message.length).toBeLessThan(1_000);
+  });
+
+  test("INF-06-AC9: each flow's long reason is cut on its own, so every flow's reason still shows", () => {
+    const appStarts = longReason('Assertion is false: "TryggHverdag" is visible');
+    const firstAdmin = longReason('Element not found: Text matching regex: Opprett invitasjon');
+
+    const result = judgeReport(
+      report(
+        maestroFlow('app-starts', 'ERROR', { failure: appStarts }),
+        maestroFlow('first-admin-invites', 'ERROR', { failure: firstAdmin }),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('Assertion is false: "TryggHverdag" is visible');
+    expect(result.message).toContain('Element not found: Text matching regex: Opprett invitasjon');
+    expect(result.message).not.toContain('the last line of the trace');
+    expect(result.message.length).toBeLessThan(2_000);
+  });
+
+  test('INF-06-AC9: a reason within the limit shows whole, with no note that it was cut', () => {
+    // What Maestro 2.10.0 says when first-admin-invites' last assertVisible on
+    // the code fails: ElementSelector.description() inside Condition's.
+    const code =
+      '[0-9A-HJKMNP-TV-Z](\\s+[0-9A-HJKMNP-TV-Z]){4}(\\s*[,.;]\\s*[0-9A-HJKMNP-TV-Z](\\s+[0-9A-HJKMNP-TV-Z]){4}){3}';
+    const reason = `Assertion is false: "[0-9A-HJKMNP-TV-Z]{5}", Index: 3, Child of: "Kode:\\s*${code}" is visible`;
+    expect(reason.length).toBeLessThan(400);
+
+    const result = judgeReport(
+      report(maestroFlow('first-admin-invites', 'ERROR', { failure: reason })),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(reason);
+    expect(result.message).not.toMatch(SAYS_CUT);
+  });
+});
+
+describe('judgeReport: what has no reason, or passed, says what it said before', () => {
+  test('INF-06-AC9: a cancelled flow, which has no <failure>, is reported exactly as before', () => {
+    expect(
+      judgeReport(
+        report(
+          maestroFlow('app-starts', 'SUCCESS'),
+          maestroFlow('first-admin-invites', 'CANCELED'),
+          maestroFlow('wrong-code', 'SUCCESS'),
+        ),
+      ),
+    ).toEqual({
+      ok: false,
+      message: '1 of 3 flows failed or did not finish: first-admin-invites (CANCELED)',
+    });
+  });
+
+  test('INF-06-AC9: when every flow passed, the verdict is exactly as before', () => {
+    expect(judgeReport(report(maestroFlow('app-starts', 'SUCCESS')))).toEqual({
+      ok: true,
+      message: '1 of 1 flow passed.',
+    });
+    expect(
+      judgeReport(
+        report(
+          maestroFlow('app-starts', 'SUCCESS'),
+          maestroFlow('first-admin-invites', 'SUCCESS', { properties: { tags: 'grp, admin' } }),
+          maestroFlow('wrong-code', 'SUCCESS'),
+        ),
+      ),
+    ).toEqual({ ok: true, message: '3 of 3 flows passed.' });
+  });
+});
+
 describe('buildPlan: the release build, made on this machine', () => {
   const plan = buildPlan({ root: '/repo' });
   const commands = plan.map((step) => step.command.join(' '));
