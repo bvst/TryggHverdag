@@ -310,7 +310,7 @@ function declared(text, key) {
 /**
  * D-118, as amended on 2026-10-07: the full ID for the Sonnet agents, not the
  * `sonnet` alias, because an alias is resolved by whichever Claude Code CI
- * installs (2.1.290 at claude-code-action v1.0.242), so it could change with
+ * installs (2.1.301 at claude-code-action v1.0.251), so it could change with
  * any bump of the action; a full ID cannot. `effort: []` means no effort line
  * at all, so the agent gets Claude Code's default.
  */
