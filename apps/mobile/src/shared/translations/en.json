@@ -7,6 +7,7 @@
       "nameLabel": "Your name",
       "submit": "Join",
       "notValid": "That code does not work. Ask the admin for a new invitation.",
+      "nameNotUsable": "This name cannot be used. It needs at least one visible character, and no hidden characters.",
       "notSaved": "The server could not be reached, so nothing was saved. Try again.",
       "retry": "Try again",
       "signedOut": "This phone is no longer signed in to the group."
@@ -17,7 +18,7 @@
       "invite": "Invite someone",
       "members": "See the members",
       "unreachable": "The server could not be reached. Try again in a moment.",
-      "retry": "Try once more",
+      "retry": "Try again",
       "back": "Back"
     },
     "invite": {
@@ -31,9 +32,12 @@
       "admin": "Admin",
       "member": "Member",
       "remove": "Remove {{name}}",
-      "confirmText": "Remove {{name}} from the group? It takes effect at once: their phone is signed out, and they get no more alerts.",
-      "confirm": "Remove",
-      "cancel": "Cancel"
-    }
+      "confirmText": "Remove {{name}} from the group? It takes effect at once: {{name}} gets no more alerts, and needs a new invitation to join again.",
+      "confirm": "Yes, remove {{name}}",
+      "cancel": "Cancel",
+      "removed": "{{name}} has been removed from the group.",
+      "refused": "The server refused the removal. Nobody was removed."
+    },
+    "waiting": "Waiting for an answer"
   }
 }

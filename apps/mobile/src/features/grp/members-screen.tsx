@@ -3,32 +3,58 @@
  * for every member but the admin, a removal that asks first, saying it takes
  * effect at once, and then shows the list without them.
  *
- * A removal answered MEMBER_NOT_FOUND is done all the same: the member is
- * gone, whatever removed them (F2). A 401 signs the phone out (AC29), and the
- * join screen takes over.
+ * Review loop 1 (a11y-i18n-reviewer, code-reviewer S4):
+ *   - the confirmation shows in that member's own row, where the admin
+ *     pressed, not after the list, where a long list put it out of sight;
+ *     its button names the member;
+ *   - a removal answered 403 or 409 is said as a refusal, in that member's
+ *     row, never as a server that could not be reached;
+ *   - a removal done is said, naming them, once the list shows without them;
+ *   - while the list loads or a removal is in flight, a waiting indicator
+ *     shows (AC30).
+ *
+ * A removal answered 404 MEMBER_NOT_FOUND is done all the same: the member is
+ * gone, whatever removed them (F2). Only that code counts: a 404 without it
+ * is no answer from the route, and is said as one. A 401 signs the phone out
+ * (AC29), and the join screen takes over.
  */
-import type { ListMembersResponse, Member, RemovedResponse } from '@trygghverdag/contracts';
+import type {
+  ListMembersResponse,
+  Member,
+  RemovedResponse,
+  removeMemberErrors,
+} from '@trygghverdag/contracts';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { useGroupSession } from './session';
-import { Button, Heading, Message, Screen } from './ui';
+import { Button, Heading, Message, Screen, Waiting } from './ui';
+
+/** The refusal that means the member is gone already: a removal done (F2). */
+const GONE_ALREADY: keyof typeof removeMemberErrors = 'MEMBER_NOT_FOUND';
+
+/** What the last removal came to, said where it belongs. */
+type Outcome = { kind: 'removed'; name: string } | { kind: 'refused'; userId: string } | null;
 
 export function MembersScreen({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation();
   const { call } = useGroupSession();
   const [members, setMembers] = useState<Member[] | null>(null);
+  const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const [confirming, setConfirming] = useState<Member | null>(null);
   const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState<Outcome>(null);
 
   const load = useCallback(async () => {
     setFailed(false);
+    setLoading(true);
     const answer = await call<ListMembersResponse>({ method: 'GET', path: 'group/members' });
     if (answer.kind === 'unauthorized') {
       return;
     }
+    setLoading(false);
     if (answer.kind === 'ok') {
       setMembers(answer.body.members);
     } else {
@@ -42,6 +68,7 @@ export function MembersScreen({ onBack }: { onBack: () => void }) {
 
   async function remove(member: Member) {
     setBusy(true);
+    setOutcome(null);
     const answer = await call<RemovedResponse>({
       method: 'DELETE',
       path: `group/members/${encodeURIComponent(member.userId)}`,
@@ -51,8 +78,16 @@ export function MembersScreen({ onBack }: { onBack: () => void }) {
     }
     setBusy(false);
     setConfirming(null);
-    if (answer.kind === 'ok' || (answer.kind === 'refused' && answer.status === 404)) {
+    if (
+      answer.kind === 'ok' ||
+      (answer.kind === 'refused' && answer.status === 404 && answer.code === GONE_ALREADY)
+    ) {
+      // Gone, as the server says: off the list at once, then the list again.
+      setMembers((shown) => shown?.filter(({ userId }) => userId !== member.userId) ?? null);
+      setOutcome({ kind: 'removed', name: member.displayName });
       await load();
+    } else if (answer.kind === 'refused') {
+      setOutcome({ kind: 'refused', userId: member.userId });
     } else {
       setFailed(true);
     }
@@ -61,16 +96,42 @@ export function MembersScreen({ onBack }: { onBack: () => void }) {
   return (
     <Screen>
       <Heading>{t('grp.members.title')}</Heading>
+      {loading || busy ? <Waiting label={t('grp.waiting')} /> : null}
+      {outcome?.kind === 'removed' ? (
+        <Message>{t('grp.members.removed', { name: outcome.name })}</Message>
+      ) : null}
       {(members ?? []).map((member) => (
         <View key={member.userId} style={styles.row}>
           <Text style={styles.name}>{member.displayName}</Text>
           <Text style={styles.role}>
             {member.role === 'ADMIN' ? t('grp.members.admin') : t('grp.members.member')}
           </Text>
+          {outcome?.kind === 'refused' && outcome.userId === member.userId ? (
+            <Message>{t('grp.members.refused')}</Message>
+          ) : null}
+          {confirming?.userId === member.userId ? (
+            <View style={styles.confirm}>
+              <Message>{t('grp.members.confirmText', { name: member.displayName })}</Message>
+              <Button
+                label={t('grp.members.confirm', { name: member.displayName })}
+                onPress={() => void remove(member)}
+                disabled={busy}
+              />
+              <Button
+                label={t('grp.members.cancel')}
+                onPress={() => {
+                  setConfirming(null);
+                }}
+                disabled={busy}
+                quiet
+              />
+            </View>
+          ) : null}
           {member.role === 'MEMBER' && confirming === null ? (
             <Button
               label={t('grp.members.remove', { name: member.displayName })}
               onPress={() => {
+                setOutcome(null);
                 setConfirming(member);
               }}
               quiet
@@ -78,24 +139,6 @@ export function MembersScreen({ onBack }: { onBack: () => void }) {
           ) : null}
         </View>
       ))}
-      {confirming === null ? null : (
-        <View style={styles.confirm}>
-          <Message>{t('grp.members.confirmText', { name: confirming.displayName })}</Message>
-          <Button
-            label={t('grp.members.confirm')}
-            onPress={() => void remove(confirming)}
-            disabled={busy}
-          />
-          <Button
-            label={t('grp.members.cancel')}
-            onPress={() => {
-              setConfirming(null);
-            }}
-            disabled={busy}
-            quiet
-          />
-        </View>
-      )}
       {failed ? (
         <>
           <Message>{t('grp.member.unreachable')}</Message>

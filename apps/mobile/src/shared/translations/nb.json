@@ -7,6 +7,7 @@
       "nameLabel": "Navnet ditt",
       "submit": "Bli med",
       "notValid": "Koden virker ikke. Be administratoren om en ny invitasjon.",
+      "nameNotUsable": "Navnet kan ikke brukes. Det må ha minst ett synlig tegn, og ingen skjulte tegn.",
       "notSaved": "Vi fikk ikke kontakt med serveren, så ingenting er lagret. Prøv igjen.",
       "retry": "Prøv igjen",
       "signedOut": "Denne telefonen er ikke lenger logget inn i gruppen."
@@ -17,7 +18,7 @@
       "invite": "Inviter noen",
       "members": "Se medlemmene",
       "unreachable": "Vi fikk ikke kontakt med serveren. Prøv igjen om litt.",
-      "retry": "Prøv på nytt",
+      "retry": "Prøv igjen",
       "back": "Tilbake"
     },
     "invite": {
@@ -31,9 +32,12 @@
       "admin": "Administrator",
       "member": "Medlem",
       "remove": "Fjern {{name}}",
-      "confirmText": "Vil du fjerne {{name}} fra gruppen? Det skjer med en gang: telefonen deres logges ut, og de får ikke flere varsler.",
-      "confirm": "Fjern",
-      "cancel": "Avbryt"
-    }
+      "confirmText": "Vil du fjerne {{name}} fra gruppen? Det skjer med en gang: {{name}} får ingen flere varsler, og trenger en ny invitasjon for å bli med igjen.",
+      "confirm": "Ja, fjern {{name}}",
+      "cancel": "Avbryt",
+      "removed": "{{name}} er fjernet fra gruppen.",
+      "refused": "Serveren avviste fjerningen. Ingen ble fjernet."
+    },
+    "waiting": "Venter på svar"
   }
 }

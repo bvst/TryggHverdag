@@ -5,19 +5,23 @@
  *
  *   - a button is a Pressable with the role "button" and a label, at least
  *     56 points tall;
- *   - a text field has its label as its screen-reader label and as the hint
- *     inside it, so a person sees what to type and a screen reader says it;
+ *   - a text field has its label shown above it, where it stays while text
+ *     is typed (never a placeholder alone), and the same label as its
+ *     screen-reader label, so a screen reader meets the field once, by name;
  *   - a heading is marked as one;
- *   - a message the app gives after an action is read out when it appears.
+ *   - a message the app gives after an action is read out when it appears;
+ *   - a request in flight shows a waiting indicator a screen reader names.
  * Every word comes from the translation files: these take text, never keys.
  */
 import type { ReactNode } from 'react';
 import {
+  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  View,
   type TextInputProps,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -85,6 +89,21 @@ export function Button({
   );
 }
 
+/**
+ * A request in flight (GRP-01-AC30): a spinner with the role a screen reader
+ * names as progress, and its label, besides the dimmed button.
+ */
+export function Waiting({ label }: { label: string }) {
+  return (
+    <ActivityIndicator
+      size="large"
+      accessibilityRole="progressbar"
+      accessibilityLabel={label}
+      style={styles.waiting}
+    />
+  );
+}
+
 export function TextField({
   label,
   value,
@@ -96,15 +115,20 @@ export function TextField({
   onChangeText: (text: string) => void;
 } & Pick<TextInputProps, 'autoCapitalize' | 'autoComplete' | 'textContentType' | 'maxLength'>) {
   return (
-    <TextInput
-      accessibilityLabel={label}
-      placeholder={label}
-      value={value}
-      onChangeText={onChangeText}
-      autoCorrect={false}
-      style={styles.field}
-      {...rest}
-    />
+    <View style={styles.fieldGroup}>
+      {/* Seen, not read: the field below says the same as its own label. */}
+      <Text style={styles.fieldLabel} importantForAccessibility="no" accessibilityElementsHidden>
+        {label}
+      </Text>
+      <TextInput
+        accessibilityLabel={label}
+        value={value}
+        onChangeText={onChangeText}
+        autoCorrect={false}
+        style={styles.field}
+        {...rest}
+      />
+    </View>
   );
 }
 
@@ -155,6 +179,16 @@ const styles = StyleSheet.create({
   },
   quietButtonText: {
     color: '#1f4e79',
+  },
+  waiting: {
+    paddingVertical: 8,
+  },
+  fieldGroup: {
+    gap: 8,
+  },
+  fieldLabel: {
+    fontSize: 17,
+    fontWeight: '600',
   },
   field: {
     minHeight: 56,

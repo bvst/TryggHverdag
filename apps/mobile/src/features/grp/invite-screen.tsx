@@ -4,17 +4,37 @@
  * likes (D-136, answer 3). React Native's `Share`, no web link and no deep
  * link (D-013).
  *
- * The code is shown as the API gives it, in four groups of five, and is kept
- * nowhere: the server keeps only its hash, and leaving this screen loses it.
- * A 401 signs the phone out (AC29), and the join screen takes over.
+ * The code is shown in its four groups of five, and is kept nowhere: the
+ * server keeps only its hash, and leaving this screen loses it. A 401 signs
+ * the phone out (AC29), and the join screen takes over.
+ *
+ * How the code is shown and read (GRP-01-AC28, review loop 1):
+ *   - each group of five is a Text of its own, inside no other Text, and the
+ *     groups wrap as whole boxes: five letters and digits have no line-break
+ *     opportunity, so no group breaks when the line wraps (a hyphen before a
+ *     digit is none either, so one Text with hyphens could);
+ *   - the four are one element to a screen reader, whose label spells the
+ *     code character by character, group by group ("K 7 Q 2 M, 9 T R V X,
+ *     …"), not as a word;
+ *   - it is announced, spelled so, when it appears.
  */
 import type { CreateInvitationResponse } from '@trygghverdag/contracts';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Share, StyleSheet, Text } from 'react-native';
+import { AccessibilityInfo, Share, StyleSheet, Text, View } from 'react-native';
 
 import { useGroupSession } from './session';
-import { Button, Heading, Message, Screen } from './ui';
+import { Button, Heading, Message, Screen, Waiting } from './ui';
+
+/** The code's groups of five, whatever separates them as the API gives it. */
+function groupsOf(code: string): string[] {
+  return code.replace(/[^0-9A-Za-z]/g, '').match(/.{1,5}/g) ?? [];
+}
+
+/** The code as a screen reader should read it: each character apart, a pause between groups. */
+function spelled(groups: string[]): string {
+  return groups.map((group) => Array.from(group).join(' ')).join(', ');
+}
 
 /** When the invitation expires, as a person reads a date and a time in their own language. */
 function expiryOf(expiresAt: string, language: string): string {
@@ -54,19 +74,27 @@ export function InviteScreen({ onBack }: { onBack: () => void }) {
     setBusy(false);
     if (answer.kind === 'ok') {
       setInvitation(answer.body);
+      AccessibilityInfo.announceForAccessibility(spelled(groupsOf(answer.body.invitationCode)));
     } else {
       setFailed(true);
     }
   }
+
+  const groups = invitation === null ? [] : groupsOf(invitation.invitationCode);
 
   return (
     <Screen>
       <Heading>{t('grp.invite.title')}</Heading>
       {invitation === null ? null : (
         <>
-          <Text selectable style={styles.code}>
-            {invitation.invitationCode}
-          </Text>
+          <View accessible accessibilityLabel={spelled(groups)} style={styles.codeGroups}>
+            {groups.map((group, at) => (
+              // A group's place tells it apart: two groups may read the same.
+              <Text key={at} style={styles.code}>
+                {group}
+              </Text>
+            ))}
+          </View>
           <Text style={styles.expiry}>
             {t('grp.invite.expires', { date: expiryOf(invitation.expiresAt, i18n.language) })}
           </Text>
@@ -84,6 +112,7 @@ export function InviteScreen({ onBack }: { onBack: () => void }) {
         disabled={busy}
         quiet={invitation !== null}
       />
+      {busy ? <Waiting label={t('grp.waiting')} /> : null}
       {failed ? <Message>{t('grp.member.unreachable')}</Message> : null}
       <Button label={t('grp.member.back')} onPress={onBack} quiet />
     </Screen>
@@ -91,6 +120,13 @@ export function InviteScreen({ onBack }: { onBack: () => void }) {
 }
 
 const styles = StyleSheet.create({
+  codeGroups: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    columnGap: 16,
+    rowGap: 4,
+  },
   code: {
     fontSize: 30,
     fontWeight: '700',

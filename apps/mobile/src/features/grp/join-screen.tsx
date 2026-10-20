@@ -3,23 +3,26 @@
  * person's own name, and nothing that looks joined until the server says so.
  *
  * What it says, plainly:
+ *   - a name the contract's rule refuses (GRP-01-AC31): that the name cannot
+ *     be used, and nothing is sent, so it is never shown as a refused
+ *     invitation;
  *   - a 404 or a 400: the one message, ask the admin for a new invitation;
  *   - no answer, or a 5xx: nothing was saved, and a retry that sends the
  *     same join again, its join key with it (AC5);
  *   - signed out by a 401: that this phone is no longer signed in.
  * The member screen shows only once the join is answered 201 and its
- * credential is in secure storage.
+ * credential is in secure storage. While a join is in flight, a waiting
+ * indicator shows (AC30).
  */
+import { MAX_DISPLAY_NAME_LENGTH, isUsableDisplayName } from '@trygghverdag/contracts/display-name';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useGroupSession, type JoinBody } from './session';
-import { Body, Button, Heading, Message, Screen, TextField } from './ui';
+import { Body, Button, Heading, Message, Screen, TextField, Waiting } from './ui';
 
 /** The longest code a person may type, separators included. */
 const CODE_MAX_LENGTH = 64;
-/** The longest name a membership holds (approach item 2). */
-const NAME_MAX_LENGTH = 40;
 
 export function JoinScreen({ signedOut }: { signedOut: boolean }) {
   const { t } = useTranslation();
@@ -27,7 +30,7 @@ export function JoinScreen({ signedOut }: { signedOut: boolean }) {
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<'notValid' | 'notSaved' | null>(null);
+  const [message, setMessage] = useState<'notValid' | 'notSaved' | 'nameNotUsable' | null>(null);
   /** The join that saved nothing, kept to be sent again exactly as it was. */
   const [unsent, setUnsent] = useState<JoinBody | null>(null);
 
@@ -45,6 +48,12 @@ export function JoinScreen({ signedOut }: { signedOut: boolean }) {
   }
 
   async function submit() {
+    // The contract's own rule, before anything is sent (AC31).
+    if (!isUsableDisplayName(name)) {
+      setMessage('nameNotUsable');
+      setUnsent(null);
+      return;
+    }
     let body: JoinBody;
     try {
       body = await joinBody({ invitationCode: code, displayName: name });
@@ -77,9 +86,10 @@ export function JoinScreen({ signedOut }: { signedOut: boolean }) {
         autoCapitalize="words"
         autoComplete="name"
         textContentType="name"
-        maxLength={NAME_MAX_LENGTH}
+        maxLength={MAX_DISPLAY_NAME_LENGTH}
       />
       <Button label={t('grp.join.submit')} onPress={() => void submit()} disabled={!ready} />
+      {busy ? <Waiting label={t('grp.waiting')} /> : null}
       {message === null ? null : <Message>{t(`grp.join.${message}`)}</Message>}
       {message === 'notSaved' && unsent !== null ? (
         <Button

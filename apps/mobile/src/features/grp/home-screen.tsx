@@ -2,8 +2,10 @@
  * What the app opens on (GRP-01, approach item 14): the join screen for a
  * phone that is not signed in, the member screen for one that is, and, when
  * the server could not be reached to ask, that said plainly with a retry,
- * the credential kept (AC29). Nothing shows until secure storage has been
- * read, so a signed-in phone never flashes the join screen.
+ * the credential kept (AC29). Nothing but a waiting indicator shows until
+ * secure storage has been read and, for a phone that holds a credential,
+ * the server has said who it is (AC30), so a signed-in phone never flashes
+ * the join screen.
  *
  * The admin's invitation and member list open from the member screen, in
  * this one route, so whatever signs the phone out, from any of them, brings
@@ -19,7 +21,7 @@ import { InviteScreen } from './invite-screen';
 import { JoinScreen } from './join-screen';
 import { MembersScreen } from './members-screen';
 import { useGroupSession } from './session';
-import { Body, Button, Heading, Message, Screen } from './ui';
+import { Body, Button, Heading, Message, Screen, Waiting } from './ui';
 
 /** Which of the member's screens is open. */
 type View = 'member' | 'invite' | 'members';
@@ -107,12 +109,23 @@ function UnreachableScreen() {
   );
 }
 
+/** While the app starts, and asks the server who this phone is. */
+function StartingScreen() {
+  const { t } = useTranslation();
+
+  return (
+    <Screen>
+      <Waiting label={t('grp.waiting')} />
+    </Screen>
+  );
+}
+
 export function HomeScreen() {
   const { state } = useGroupSession();
 
   switch (state.phase) {
     case 'starting':
-      return <Screen />;
+      return <StartingScreen />;
     case 'joining':
       return <JoinScreen signedOut={state.signedOut} />;
     case 'unreachable':
