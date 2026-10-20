@@ -173,10 +173,9 @@ Each is stated so the reviewers can check it.
 4. **"Expires after 7 days"**: valid while the database's now() is before
    `created_at + 7 days`; at exactly 7 days it is expired. The 7 is a ⚙️
    constant in one place (`domain/groups.ts`).
-5. **The first admin is not invited** (nobody exists to invite them). On Q1
-   (a), a bootstrap code opens only an empty group: it works once (the group
-   it creates ends it) and needs no expiry of its own. The owner may prefer
-   it to expire too (Q1).
+5. **The first admin is not invited** (nobody exists to invite them). A
+   bootstrap code opens only an empty group: it works once (the group it
+   creates ends it) and has no expiry of its own (D-136, answer 1).
 6. **"A member"** is a user with a membership row. **"Removed"** is that row
    deleted. Their `users` row stays: journeys, alerts and messages reference it
    (the retention rule, M4, decides when it goes).
@@ -225,9 +224,8 @@ scope", each with its owner task.
 
 ## Approach (technical choices delegated to Claude, D-031)
 
-To be recorded as one delegated decision when the owner's answers are recorded
-(the next free numbers, D-136 for the answers and D-137 for these, unless
-taken by then).
+Built on the owner's answers (D-136). The choices here that the plan did not
+already make are recorded in D-137.
 
 1. **Where the code goes.**
    - **Rules:** `apps/server/src/domain/groups.ts` (new): the invitation's
@@ -268,8 +266,8 @@ taken by then).
    membership, so a removal deletes it with the row (minimisation; the
    retention rule, M4, covers the rest).
 
-3. **The invitation.** On Q3 (a): a code. 20 characters of Crockford's base32
-   (100 bits) from `crypto.randomBytes`, shown as four groups of five. Only
+3. **The invitation: a code, and nothing else** (D-136, answer 3). 20
+   characters of Crockford's base32 (100 bits) from `crypto.randomBytes`, shown as four groups of five. Only
    its SHA-256 is stored; 100 random bits cannot be found from a copy of the
    table within seven days, or guessed online at any rate the API serves, so
    no slow hash and no rate limit are needed for it (SM-01's spec leaves rate
@@ -281,8 +279,8 @@ taken by then).
 4. **Sign-in without SMS: the invitation binds the first device** (D-134).
    - **The join** (public route, approach 12): the app sends the code, its
      **join key** (32 random bytes the app makes once, kept in secure storage)
-     and, on Q3 (a), the person's display name. In one transaction the store
-     takes the invitation's row (`FOR UPDATE`), asks the domain whether it is
+     and the display name the person types for themselves (D-136, answer 3).
+     In one transaction the store takes the invitation's row (`FOR UPDATE`), asks the domain whether it is
      valid at the database's now(), and writes: a user, a `MEMBER` membership,
      a device with the hash of a new credential, the invitation marked used
      with the join key's hash. The answer carries the credential once, with
@@ -297,21 +295,31 @@ taken by then).
      come from the database's `gen_random_uuid()`, never from a constant.
    - **Better Auth is not installed in this task.** Its value is its sign-in
      flows, SMS codes and passkeys (D-032), and neither exists in task 1
-     (D-134, Q2). D-091's port stays, with this issuer behind it. Whether
-     Better Auth can use UUID user IDs is decided by the task that installs
-     it (task 10, or the passkey's task), against the version it pins.
+     (D-134; the passkey is M4's, D-136, answer 2). D-091's port stays, with
+     this issuer behind it. Whether Better Auth can use UUID user IDs is
+     decided by the task that installs it (task 10 for SMS codes, or M4 for
+     the passkey, whichever comes first), against the version it pins.
    - **The app** keeps the credential and the join key only in
      `expo-secure-store` (Android Keystore; iOS Keychain when iOS arrives), and
      nowhere else; `allowBackup: false` stays.
 
-5. **Sessions: membership is the session** (on Q4 (a)).
+5. **Sessions: membership is the session** (D-136, answer 4).
    - A credential does not expire by time and is not rotated, except by a
      retried join (approach 4).
    - **A device authenticates only while** its credential's hash matches, and
      its user is a current member, **or** it is the canary's device
-     (`CANARY_DEVICE_ID`, D-128), **or** (on Q5 (a)) it started a journey that
-     has not ended. One query in `adapters/device-credentials.ts`; the 401
-     contract and "a check that cannot run is a 500" are unchanged.
+     (`CANARY_DEVICE_ID`, D-128), **or** it started a journey that has not
+     ended, and then only for that journey's heartbeats and "I'm home"
+     (D-136, answer 5).
+   - One query in `adapters/device-credentials.ts` answers the device, its
+     user, and whether it is admitted fully (a member's, or the canary's) or
+     only as a walker (a removed member's device with a journey it started
+     and that has not ended). The middleware stays closed by default: a
+     walker-only device passes on `recordHeartbeat` and `reportHome` alone,
+     whose rules already require the journey's own walker and device (D-101,
+     D-110), and every other route answers it the one 401. Once that journey
+     ends, the query admits it nowhere. The 401 contract and "a check that
+     cannot run is a 500" are unchanged.
    - So removing a membership revokes every device of that user at its commit,
      with no column to forget and no path to miss. A `revoked_at` per device,
      for the admin's revoke-sessions of the account-takeover threat, is M4's.
@@ -341,7 +349,7 @@ taken by then).
    canary's walker can name only its own responder, and no member can name
    either canary user.
 
-8. **The first admin** (on Q1 (a)). Terraform makes the code
+8. **The first admin** (D-136, answer 1). Terraform makes the code
    (`random_id.admin_bootstrap_code`, 16 bytes, written as upper-case hex: 32
    characters the normaliser accepts), passed to the API as
    `ADMIN_BOOTSTRAP_CODE`, sensitive, never in a GitHub secret. While no group
@@ -371,9 +379,10 @@ taken by then).
      on it" take journey rows only, so no cycle. Each journey's wait keeps
      SM-10's lock limit; a limit reached fails the whole removal, loudly
      (AC20), and the admin retries.
-   - **On Q5 (a), the member's own unended journey as walker is not touched**:
-     it runs to its end, followed by the responders already on it, and its
-     device keeps authenticating until it ends (approach 5).
+   - **The member's own unended journey as walker is not touched** (D-136,
+     answer 5): it runs to its end, followed by the responders already on it,
+     and its device may send only that journey's heartbeats and "I'm home"
+     until it ends (approach 5).
 
 10. **The walker removes a responder from their journey** (D-122's route).
     - Only the journey's walker, from any of their devices that authenticates.
@@ -417,7 +426,7 @@ taken by then).
 
 14. **The app** (`apps/mobile/src/features/grp/`, its public `index.ts`; the
     routes under `src/app/`).
-    - Screens: **join** (code and, on Q3 (a), name); **member** (says the
+    - Screens: **join** (code and the person's own name); **member** (says the
       phone is signed in to the group, and nothing that suggests anyone is
       being looked after: no journey exists in the app yet); for the admin,
       **invite** (create, then show the code, its expiry date, and the
@@ -472,7 +481,8 @@ the database's clock.**
 **GRP-01-AC3 — A valid invitation brings one person in, with a device bound to
 the phone.**
 - **Given** an unused invitation created less than 7 days ago
-- **When** a phone joins with it, its join key and a display name (Q3 (a))
+- **When** a phone joins with it, its join key and the display name the person
+  typed
 - **Then** 201 with a credential (43 base64url characters), the new user's ID
   and the role `MEMBER`, and `Cache-Control: no-store`
 - **And** one user, one membership in the group, one device holding only the
@@ -511,7 +521,7 @@ the phone.**
 - **And** no response but the join's carries a credential, and no log line
   ever does (AC24).
 
-**GRP-01-AC8 — The first admin joins with the bootstrap code** (Q1 (a)).
+**GRP-01-AC8 — The first admin joins with the bootstrap code.**
 - **Given** an empty database and a usable `ADMIN_BOOTSTRAP_CODE`
 - **When** a phone joins with it
 - **Then** 201 with the role `ADMIN`; one group, one admin membership, one
@@ -542,12 +552,11 @@ admin.**
 - **Then** each is the one 401, as SM-01-AC9 holds today.
 
 **GRP-01-AC11 — A device authenticates only while its user is a member.**
-(Q4 (a), Q5 (a))
 - **Given** member M with a device D
 - **When** M's membership is removed (AC17)
 - **Then** D's next request to every authenticated route is the one 401, the
   same body as an unknown credential
-- **But** on Q5 (a), while D's own journey has not ended, its heartbeats and
+- **But** while D's own journey has not ended, its heartbeats and
   "I'm home" are accepted, and every other route is 401; once it has ended,
   those are 401 too
 - **And** the canary's device still authenticates (it has no membership)
@@ -647,7 +656,7 @@ removal, reached through the admin.** (L6)
 - **And** the same removal, retried once the row is free, completes as AC17.
 
 **GRP-01-AC21 — A removed member who is walking keeps their own journey to its
-end.** (Q5 (a))
+end.**
 - **Given** member M walking, followed by R1
 - **When** the admin removes M
 - **Then** M's journey is unchanged and R1 still follows it: silence still
@@ -706,7 +715,7 @@ reporting.** (L2, in-process, as `worker.test.ts` runs the worker; D-122)
 **GRP-01-AC26 — A new install joins with an invitation.** (L5; L7 Android)
 - **Given** a fresh install, no stored credential
 - **Then** the join screen shows, in bokmål on a bokmål phone
-- **When** a valid code (and, Q3 (a), a name) is entered and sent
+- **When** a valid code and the person's own name are entered and sent
 - **Then** the credential and join key are in secure storage and nowhere else
   (L5, with the store mocked), and the member screen shows
 - **And** L7: the first admin joins with the job's synthetic bootstrap code
@@ -828,7 +837,7 @@ its builders, synthetic display names.
 used), `package.json`, `e2e/` flows.
 
 **Infra and CI (owned):** `infra/staging/` (`random_id.admin_bootstrap_code`
-and its environment entry; on Q1 (a)); `.github/workflows/` (the L7 job's
+and its environment entry); `.github/workflows/` (the L7 job's
 server; any mutation matrix line); the first, separate pull request for the
 ai-review filter, `OWNER_APPROVAL_PATHS` and CODEOWNERS (approach 1).
 
@@ -836,10 +845,11 @@ ai-review filter, `OWNER_APPROVAL_PATHS` and CODEOWNERS (approach 1).
 canary's credential can name now; the withheld check-in);
 `docs/plan/README.md` (A-36).
 
-**New owner to-do, A-36 (on Q1 (a)):** after the merge, `infra-staging` plan
-and apply; then read `ADMIN_BOOTSTRAP_CODE` in Clever Cloud's console for the
-staging app and join with it from the owner's own phone (D-135). That this
-console shows the value was not checked from here.
+**New owner to-do, A-36** (D-136, answer 1; the row is in
+`docs/plan/README.md`): after this task merges and deploys, `infra-staging`
+plan and apply; then read `ADMIN_BOOTSTRAP_CODE` once in Clever Cloud's
+console for the staging app and join with it in the app from the owner's own
+phone (D-135). That this console shows the value was not checked from here.
 
 ## Contract changes
 
@@ -856,8 +866,8 @@ All additive (AR-08); `api:diff` must pass.
 | `POST /v1/journeys` (changed text only) | — | — | `INVALID_RESPONDER`'s message: "… or is not a member of the walker's group" |
 
 The join's body: `invitationCode` (string, normalised at the edge), `joinKey`
-(43 base64url characters), `displayName` (Q3 (a); 1 to 40 characters after
-trimming), strict. The bearer scheme is required on every route but health and
+(43 base64url characters), `displayName` (the person's own; 1 to 40
+characters after trimming), strict. The bearer scheme is required on every route but health and
 the join.
 
 ## Risks and failure modes
@@ -881,9 +891,10 @@ the join.
   - *The admin removes the acknowledger*: escalation resumes, with a second
     SMS at once if it had already gone (D-122, item 1; about €0.05 per
     remaining responder, D-024).
-  - *The admin removes someone who is walking*: on Q5 (a) their journey keeps
-    its protection to its end; on (b) it would end at once with no further
-    alert, which the app must say loudly; on (c) the admin must wait.
+  - *The admin removes someone who is walking*: their journey keeps its
+    protection to its end (D-136, answer 5). Silence on it still alerts the
+    responders already on it (AC21), and nothing ends a walk's protection
+    because of a removal.
 - **[F7](../plan/03-safety-reliability-security.md#failure-modes), the server
   or watchdog down.** The authenticator now joins memberships: a database
   that cannot answer is still a 500, never a 401, so no walker is signed out
@@ -901,10 +912,10 @@ the join.
   `MEMBER_NOT_FOUND` or `NOT_A_RESPONDER`, which the app reads as done.
 - **[F10](../plan/03-safety-reliability-security.md#failure-modes), someone
   else's unlocked phone.** Whoever holds the admin's unlocked phone can invite
-  and remove. Known limitation; the admin-account threat's stronger login is
-  Q2.
+  and remove. Known limitation; the admin-account threat's stronger login, the
+  passkey, comes in M4 (D-136, answer 2).
 - **A lost admin phone** leaves no admin until a new device can sign in (task
-  10, or the passkey's task): nobody can invite or remove. On staging the
+  10's SMS sign-in): nobody can invite or remove. On staging the
   owner would need help from a database operation. Stated, not solved here.
 - **A leaked invitation** lets whoever has it join as a member, once, within
   seven days. The leaked-invitation threat's binding to a phone number needs
@@ -913,7 +924,7 @@ the join.
 - **Real people's data on staging.** Nothing technical stops the owner from
   inviting someone real before M5; D-135 allows only the owner's own data.
   The invite screen does not enforce it.
-- **The bootstrap code** (Q1 (a)) opens only an empty group. If the staging
+- **The bootstrap code** opens only an empty group. If the staging
   database were emptied, it would open again: anyone holding it could become
   admin of the new group. It lives only in Terraform's state and the app's
   environment, as the canary's credential does.
@@ -936,8 +947,9 @@ the join.
 - **The #1 contact** (task 2); **responder setup and readiness** (task 9);
   **SMS sign-in on a new device and SMS itself** (task 10, A-12); **push**
   (task 6), which must send only to devices that authenticate.
-- **The new-device notice** and **the admin's passkey** (Q2), and the admin's
-  revoke-sessions of the account-takeover threat (M4).
+- **The new-device notice** (task 10) and **the admin's passkey** (M4), both
+  by D-136, answer 2; and the admin's revoke-sessions of the account-takeover
+  threat, one phone at a time (M4, D-136, answer 4).
 - **Binding an invitation to a phone number**, **age bands at invitation**
   (the minors rule), the privacy notice, export and deletion, and leaving the
   group on one's own (M4, the roadmap's M4 row).
@@ -964,15 +976,20 @@ the join.
 - **Tasks 7 and 8 (alert screen, map):** every read of an alert or a position
   checks the caller's responder row and membership (the responders-only rule).
 - **Task 10 (SMS):** sign-in on a new device; Better Auth's UUID question;
-  on Q2 (a) the new-device notice; binding an invitation to a number.
-- **M4:** a device's `revoked_at` for the admin's revoke-sessions; retention
-  of the new tables; the DPIA naming display names.
+  the new-device notice, to the member and the admin (D-136, answer 2);
+  binding an invitation to a number.
+- **M4:** the admin's passkey (D-136, answer 2); a device's `revoked_at` for
+  the admin's revoke-sessions (D-136, answer 4); retention of the new tables;
+  the DPIA naming display names.
 
 ## Settled by the plan, so not asked
 
+D-137 records the choices among these that were Claude's (D-031).
+
 - **One group, a user in at most one:** D-008, D-009 and the story's "the
   group" (reading 1).
-- **No web link:** D-013. A custom-scheme link is Q3's alternative.
+- **No web link:** D-013. The owner also chose no custom-scheme link (D-136,
+  answer 3).
 - **Better Auth waits:** D-091 gives issuance to this task, D-134 takes SMS
   out of it, and D-031 delegates the library's timing (approach 4).
 - **The issuer's randomness and the hash:** D-091.
@@ -992,7 +1009,8 @@ the join.
    the roadmap's M4 row (the threat model's IDs) and
    `critical-alerts-request.md` lines 522-523 ("which comes in M4") put it in
    M4. D-134 names this tension. Neither placement can be task 1: no sign-in
-   on a new device exists before task 10, and no push before task 6. Q2.
+   on a new device exists before task 10, and no push before task 6.
+   **Resolved:** task 10 (D-136, answer 2).
 2. **D-128 against SM-01's spec:** the canary's users "join no group", while
    the responder check becomes "a current member of the walker's group". Taken
    together, the canary's walker could name nobody and every canary run would
@@ -1001,7 +1019,8 @@ the join.
 3. **The leaked-invitation threat against D-134:** invitations are to be
    "bound to the invited phone number", but D-134 starts sign-in without SMS,
    and a number cannot be bound without proving it. The roadmap puts that
-   threat in M4; this spec leaves the binding to task 10 or M4.
+   threat in M4; this spec leaves the binding to task 10, where proving a
+   number first becomes possible, or M4.
 4. **SM-10's spec against this one:** it describes the admin's removal as
    calling the store operation "once per journey"; approach 9 runs it inside
    one transaction instead, for the reason given there.
@@ -1015,83 +1034,25 @@ the join.
 7. **D-091's "GRP-01 decides Better Auth's use of UUID user IDs"** cannot be
    decided where Better Auth is not installed (approach 4).
 
-## Questions for the owner
+## Owner's answers
 
-Five. Each criterion that depends on one says so; all are written on the
-recommendation.
+The owner answered all five questions on 2026-10-20, asked in Norwegian, one
+at a time, each with Claude's recommendation, and chose the recommendation each
+time. Recorded as D-136, with the alternatives offered.
 
-### Q1 — How does the owner become the first admin, when nobody can join without an invitation?
-
-- **(a) Recommended: a one-time bootstrap code made by Terraform.** Terraform
-  generates it, gives it to the staging API, and you read it once in Clever
-  Cloud's console and type it into the app. It works only while no group
-  exists, so it is dead the moment you have joined. One new to-do (A-36: plan,
-  apply, read, join). No secret for you to make; nothing to delete afterwards.
-- (b) The same, but you choose the code and save it as a `staging` secret
-  (one more secret to create, and its strength is yours to get right).
-- (c) A one-off command that writes an admin invitation into the database.
-  Needs database access from outside Clever Cloud, which the threat model
-  avoids, or a CI workflow whose log is public in this repository.
-- (d) The first person to join becomes admin. Rejected: whoever finds the
-  staging address first owns the group.
-
-Also: should the bootstrap code expire after 7 days like an invitation?
-Recommendation: no; it opens only an empty group (reading 5).
-
-### Q2 — The admin's passkey and the new-device notice: when?
-
-Neither can be in this task: nobody signs in on a second device before task
-10, and nothing can notify before push (task 6).
-- **(a) Recommended:** the new-device notice with **task 10**, where signing
-  in on a new device first exists (it notifies the member and you); the
-  passkey in **M4**, with the admin-account threat. Native passkeys need a
-  verified web domain for the app on both platforms, which is its own work.
-- (b) Both in task 10.
-- (c) Both in M4, as the roadmap's M4 row reads today.
-
-Until then your admin login is your phone's credential, like any member's,
-and a lost phone leaves the group without an admin until a new device can sign
-in.
-
-### Q3 — What does an invitation look like, and who types the member's name?
-
-- **(a) Recommended: a code, and the person types their own name when they
-  join.** The app shows you a code like `7KQ2M-XD9PA-3HN0R-W1TBC` with its
-  expiry date and a share button; you send it however you like (a message from
-  your own phone, or read it out), and they type or paste it with their name.
-  No link means no deep-link attack surface and nothing the app must open
-  (D-013 already rules out web links). Their name is theirs to give, and it is
-  what you see in the member list.
-- (b) A code, and **you** write the name when you create the invitation (you
-  see whom each code was for; you type others' personal data).
-- (c) A link in the app's own scheme as well as the code (one tap for the
-  invitee; the app gains a deep link, which `app.config.ts` keeps out until a
-  feature needs it).
-
-### Q4 — How long does a phone stay signed in?
-
-- **(a) Recommended: until the member is removed.** No time limit and no
-  rotation in M3. A session that ran out during a walk would stop its
-  heartbeats and alarm the group falsely, or worse, leave a walker
-  unprotected without knowing. Removal ends every session at once (AC11);
-  the threat model's "the admin can revoke sessions" (a single phone, without
-  removing the member) comes in M4.
-- (b) A fixed lifetime (say 90 days) with the app renewing it while in use:
-  more protection against a stolen credential, and one more way for a walk to
-  go silent if renewal fails.
-
-### Q5 — If you remove a member while they are walking, what happens to their own journey?
-
-The requirement covers what they see and receive, and both stop at once on
-every answer. This is about the protection of the person removed.
-- **(a) Recommended: their journey runs to its end, followed by the responders
-  already on it.** Their phone can still send heartbeats and "I'm home" for
-  that journey only, and nothing else; when it ends, the phone is signed out.
-  Cutting someone's protection mid-walk is the silent failure this app exists
-  to prevent, and they see nothing of anyone else meanwhile.
-- (b) Their journey ends at once: the responders are told it ended (a new end
-  reason and message), and their phone is signed out, so their app learns it
-  only at its next contact. Protection stops mid-walk.
-- (c) The removal is refused until their journey ends (up to two hours, or 24
-  if contact is lost): while walking they also stay a responder for others,
-  against "immediately".
+1. **The first admin:** "Terraform makes a one-time bootstrap code. It works
+   only while no group exists and does not expire after 7 days." The owner
+   reads it once in Clever Cloud's console and joins with it (A-36).
+   Approach 8; AC8.
+2. **The admin's passkey and the new-device notice:** "the new-device notice
+   comes with task 10, and the admin's passkey in M4." Neither is in this
+   task.
+3. **What an invitation looks like:** "a code only. The person types their
+   own name when they join." Approach 3 and 4; AC1, AC3, AC26.
+4. **How long a phone stays signed in:** "a session lasts until the member is
+   removed. No time limit and no rotation in M3. Revoking a single phone comes
+   in M4." Approach 5; AC11.
+5. **A member removed while walking:** "keeps their own journey to its end,
+   followed by the responders already on it. Their phone may send only
+   heartbeats and 'I'm home' for that journey, and is signed out when it
+   ends." Approach 5 and 9; AC11, AC21.

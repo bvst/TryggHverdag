@@ -5724,3 +5724,153 @@ any other path is work, not a candidate for the same treatment.
     task 10's to design.
   - Revisited at M5, when production arrives (D-046).
   - Supersedes nothing; narrows D-046's staging row for the owner's own data.
+
+## D-136 — Joining by invitation: the owner's five answers (GRP-01)
+- **Date:** 2026-10-20 · **Status:** Accepted (the owner, 2026-10-20). Each
+  was asked in Norwegian, one at a time, with Claude's recommendation, and the
+  owner chose the recommendation each time · **Section:** 10 (M3, task 1);
+  D-032, D-091, D-122, D-134
+- **Context:** GRP-01's spec (`docs/specs/GRP-01.md`) asked five questions
+  that are scope, cost, privacy or safety. D-134 starts sign-in without SMS:
+  the invitation binds the first device, and SMS sign-in on a new device comes
+  with task 10.
+- **Decision:**
+  1. **The first admin joins with a one-time bootstrap code made by
+     Terraform.** It is given to the staging API; the owner reads it once in
+     Clever Cloud's console and joins with it in the app. It works only while
+     no group exists, and does not expire after 7 days.
+     - Rejected: a code the owner chooses and saves as a `staging` secret (one
+       more secret, its strength the owner's to get right); a one-off command
+       writing an admin invitation into the database (database access from
+       outside Clever Cloud, or a CI log that is public in this repository);
+       the first person to join becomes admin (whoever finds the staging
+       address first owns the group).
+  2. **The new-device notice comes with task 10, and the admin's passkey in
+     M4.** Neither can be in task 1: nobody signs in on a second device before
+     task 10, and nothing can notify before push (task 6).
+     - Rejected: both in task 10; both in M4, as the roadmap's M4 row read.
+  3. **An invitation is a code only, and the person types their own name when
+     they join.** The admin's app shows the code with its expiry date and a
+     share action; the admin sends it any way they like.
+     - Rejected: the admin writes the name on the invitation (the admin types
+       others' personal data); a link in the app's own scheme as well as the
+       code (a deep link, which `app.config.ts` keeps out until a feature needs
+       one). D-013 already ruled out web links.
+  4. **A session lasts until the member is removed.** No time limit and no
+     rotation in M3. Revoking a single phone comes in M4.
+     - Rejected: a fixed lifetime (for example 90 days) renewed by the app,
+       which adds a way for a walk to go silent if renewal fails.
+  5. **A member removed while walking keeps their own journey to its end,**
+     followed by the responders already on it. Their phone may send only
+     heartbeats and "I'm home" for that journey, and is signed out when it
+     ends. What they see and receive stops at once either way.
+     - Rejected: the journey ends at once, with a new end reason and message
+       (protection stops mid-walk, and the walker's app learns it only at its
+       next contact); the removal is refused until the journey ends (up to 24
+       hours, while they stay a responder for others, against "immediately").
+- **Consequences:**
+  - GRP-01-AC1 to AC30 are written on these answers. D-137 records the
+    choices delegated to Claude within them.
+  - A new owner to-do, A-36: after GRP-01 merges and deploys, `infra-staging`
+    plan and apply, read the bootstrap code once in Clever Cloud's console,
+    and join in the app from the owner's own phone (D-135).
+  - Settles D-134's tension on the new-device notice: task 10.
+  - Amends D-032 for M3: the admin's passkey waits for M4. Supersedes nothing.
+
+## D-137 — Joining by invitation: the delegated choices, and where the plan disagreed with itself (GRP-01)
+- **Date:** 2026-10-20 · **Status:** Accepted (delegated, D-031) ·
+  **Section:** 5 (AR-03 to AR-05, AR-10, AR-11); D-008, D-009, D-013, D-032,
+  D-091, D-122, D-128, D-134, D-136
+- **Context:** GRP-01's spec has the full reasoning. This records the choices
+  it settles without asking, and the contradictions it found.
+- **Decision:**
+  - **One group, and a user in at most one.** D-008 and D-009 name "the
+    private group", the story says "the group", and the admin is "the owner".
+    A unique index allows one `groups` row; `memberships` has the user as its
+    key; one `ADMIN` per group.
+  - **Better Auth is not installed in task 1.** Its value is its sign-in
+    flows, SMS codes and passkeys (D-032), and neither exists in task 1
+    (D-134, D-136). D-091's `DeviceAuthenticator` port stays, with an issuer
+    that uses `crypto.randomBytes(32)` and a test asserting it. Whether Better
+    Auth can use UUID user IDs moves to the task that installs it, against the
+    version it pins.
+  - **Membership is the session** (within D-136, answer 4). A device
+    authenticates while its user is a current member, or it is the canary's
+    device, or, for its own unended journey's heartbeats and "I'm home" only,
+    it started that journey (D-136, answer 5). Removing a membership signs out
+    every device of that user at its commit, with no revocation column to
+    forget. A `revoked_at` per device is M4's.
+  - **A join can be retried.** The app sends a join key it makes once; the
+    same code with the same key, while the invitation is unexpired and its
+    user still a member, re-issues that device's credential instead of
+    burning the invitation (F2).
+  - **Only a journey's walker removes a responder from it** (D-122's route).
+    The admin removes members, not one responder from one journey; a responder
+    leaving on their own is in no story. Neither is built.
+  - **A caller who is not the walker gets 404 `JOURNEY_NOT_FOUND`,** whatever
+    the journey's state and whoever follows it: the one answer for a caller
+    who may not tell `JOURNEY_NOT_FOUND`, `NOT_A_RESPONDER` and
+    `JOURNEY_ENDED` apart. The walker gets all three. The route has no 403,
+    because a 403 would say the journey exists. Every ID in a path is
+    validated as a UUID, so a malformed one is the fixed 400.
+  - **An admin's removal writes an audit row** (`MEMBER_REMOVED`: the admin,
+    the member, the database's time) in its own transaction, and so do the
+    group's creation and each invitation. The walker's removal of a responder
+    writes none: the walker is not acting as admin.
+  - **The worker's check-in is withheld while the SMS check is not
+    reporting** (D-122's condition for the route). When
+    `HEALTHCHECKS_WORKER_URL` is usable and `HEALTHCHECKS_SMS_URL` is unset,
+    unusable or the worker's own, the worker does not check in, says why at
+    start, and `staging-worker` pages within its grace. Rejected: refusing to
+    start, which would stop the watchdog and every alert to page about one
+    (F7).
+  - **An admin's removal is one transaction across every journey the member
+    follows,** instead of SM-10's spec's "once per journey": membership row
+    `FOR UPDATE`, then each unended journey in ID order through SM-10's own
+    removal step, then the audit row; all or nothing, and a lock limit reached
+    fails the whole removal loudly. With one transaction per journey, a
+    failure after the membership was gone would leave a removed member
+    alerted, with nothing left for a retry to find.
+  - **A journey's responders must be current members of the walker's group,**
+    held under the lock: the start takes the named members' rows `FOR SHARE`,
+    the removal `FOR UPDATE`.
+  - **The canary's walker may name its own responder and nobody else;** no
+    member may name either canary user; the canary's users can have no
+    membership (a check on the table); a join never writes
+    `CANARY_DEVICE_ID`. Only the worker registers the canary, as before.
+- **Where the plan disagreed with itself, and how the spec resolves each:**
+  1. The new-device notice: SM-01's spec put it in M3's login task; the
+     roadmap's M4 row and `critical-alerts-request.md` put it in M4. Resolved
+     by the owner: task 10 (D-136, answer 2).
+  2. D-128 against SM-01's spec: the canary's users join no group, while a
+     responder must be a member of the walker's group, so the canary's walker
+     could name nobody and every run would fail and page. Resolved: the
+     canary's walker may name its own responder, and only it.
+  3. The leaked-invitation threat asks for invitations bound to the invited
+     phone number, which needs SMS, while D-134 starts sign-in without it.
+     Resolved: the binding waits for task 10 or M4 (the roadmap's M4 row); the
+     admin sees every new member by name and can remove them.
+  4. SM-10's spec: "once per journey" for the admin's removal. Resolved: one
+     transaction, as above.
+  5. D-134 says UI work runs on the Mac (D-055), but task 1's app needs no
+     simulator: it has no iOS configuration until task 12, L5 runs anywhere
+     and L7 Android runs in CI. Not resolved here: where the app half is built
+     is for the coordinating session or the owner.
+  6. `05-architecture.md`'s data model puts "age band and role per
+     membership" together; the age band is M4's (the roadmap). Resolved: the
+     role only.
+  7. D-091 gave GRP-01 Better Auth's UUID question, which cannot be answered
+     where Better Auth is not installed. Resolved: it moves to the task that
+     installs it.
+- **Consequences:**
+  - `modules/groups/` and `adapters/groups.ts` are new owned safety paths; as
+    with D-128, the ai-review `safety` filter, `OWNER_APPROVAL_PATHS` and
+    CODEOWNERS gain them in a pull request of their own, merged by hand
+    (D-075), before GRP-01's.
+  - Every L3 and L6 test that starts a journey puts its users in a group; the
+    test kit's builders gain groups and memberships.
+  - The join becomes the second public route, in SM-01-AC9's list on purpose.
+  - CI's `android-e2e` starts PostgreSQL and the API for the first L7 flows
+    that need a server.
+  - Amends D-091: issuance, expiry, rotation and revocation are as above.
+    Supersedes nothing.
