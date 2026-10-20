@@ -5519,3 +5519,99 @@ any other path is work, not a candidate for the same treatment.
     100th attempt fails; a hang is still loud through the watchdog's
     failed sweeps, the stale beat and the page. Such a failure logs code null, as a
     connection reset does, so the two cannot be told apart in the logs.
+
+## D-133 — The per-edit gate runs an edited test at its own level, and says when a level cannot run here (BUG-52)
+- **Date:** 2026-10-19 · **Status:** Accepted (the owner's answer, 2026-10-19:
+  "Yes, change the hook") · **Section:** 7 (HK-04, D-119, INF-06)
+- **Context:** BUG-52. `gate:file` ran an edited test file with `vitest run`
+  and the unit config. That config excludes `*.system.test.ts` (L6) and
+  `*.integration.test.ts` (L3), so Vitest found no file and exited 1. Every
+  edit to an L6 or L3 test then failed the post-edit hook while running
+  nothing. An edited test edited beside a source file was not run at all:
+  only the source file's related tests ran.
+- **Decision:**
+  - **Each edited test runs at its own level,** with the config whose
+    `include` finds it:
+    - L6 with `vitest.system.config.mjs`;
+    - L3 with `vitest.integration.config.mjs`;
+    - unit tests with the default config.
+
+    This holds whether or not a source file was edited with it.
+  - **L3 needs Docker.** Where `docker info` fails, the L3 step is not
+    started. It comes back as **not possible here**, naming Docker, in the
+    words `gate:full` uses. It is not a failure, and it is not a pass:
+    anything that reads only "passed" sees it did not pass. The gate asks
+    for Docker only when an edit has an L3 step.
+  - **The post-edit hook passes the note on** (the owner's answer). Before,
+    it showed the gate's output only when the gate failed, so a "not
+    possible here" note with exit 0 would have reached nobody. Now the
+    session is told, as information and not as a failure, which edited
+    tests could not run here and why. The way Claude Code documents for a
+    PostToolUse hook to tell the model something without blocking is one
+    JSON object on stdout,
+    `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":…}}`,
+    and exit 0 (code.claude.com/docs/en/hooks, "Add context for Claude").
+    Plain stdout on exit 0 reaches only the debug log. Exit 2 and
+    `"decision": "block"` read as a problem, so they are kept for failures,
+    as now.
+- **Consequences:**
+  - An edit to an L6 test now runs that file's tests after every edit
+    (seconds; the smallest suite took 1.3 s warm).
+  - In a session without Docker, an L3 edit is checked by CI's
+    `integration` job, and the session is told so.
+  - The change touches `.claude/hooks/post-edit.mjs`, which needs the
+    owner's or `urso-agent`'s approval through the merge rules (D-042).
+  - Built test-first as BUG-52. Supersedes nothing.
+- **Amended 2026-10-19 (Claude, D-031, from BUG-52's reviews):**
+  - **A test's level comes from the configs' own lists, not from its
+    name.** The unit config's `exclude` and the L6 and L3 `include` lists
+    live in `vitest.shared.mjs` (`UNIT_EXCLUDE`, `SYSTEM_TEST_FILES`,
+    `INTEGRATION_TEST_FILES`). The three configs and `gate:file` all import
+    them, and the configs resolve exactly as before.
+    - A file named like an L3 test but outside the L3 `include` (under
+      `scripts/`, for example) is not excused as "not possible here": no
+      config would ever run it.
+    - An edited test that no config includes gets a step of its own, "the
+      edited tests no Vitest config includes". That step fails with
+      Vitest's "No test files found". It never shares a step with a file
+      Vitest would find, because Vitest given one matching filter and one
+      orphan runs the match and exits 0 (`privacy-security-reviewer`,
+      `test-author`).
+  - **The gate refuses what it cannot judge.** Before anything starts, it
+    throws on any of these:
+    - a step that needs a tool other than Docker;
+    - a step that needs a script;
+    - a step that needs an environment variable.
+
+    So "not possible here" is never said about something nobody checked.
+  - **One time budget.**
+    - `gate:file` gives the Docker probe 15 s and each step 150 s.
+    - It exports `GATE_FILE_LIMIT_MS`, their sum plus 5 s (170 s). The
+      post-edit hook uses that as its limit on `gate:file`.
+    - Claude Code's own limit on the hook, 180 s in the settings file, stays
+      at least 5 s above it. A test pins this.
+  - **The post-edit hook loads no repository code.** It imports only
+    Node's built-ins and the files beside it in `.claude/hooks/`. The
+    gate's code runs only inside the `spawnSync` child, which has a limit.
+    - Loop 1 had the hook import `GATE_FILE_LIMIT_MS` from `gate-file.mjs`.
+      Whenever the gate, or a file it loads, could not load, node exited 1;
+      Claude Code does not block on exit 1, so every later edit went
+      unchecked without a word (`privacy-security-reviewer`,
+      `test-auditor`).
+    - A guarded `import()` (loop 2) caught a load that throws, but not one
+      that never finishes. A top-level await that never settles made node
+      exit 13, and a busy loop hung the hook until Claude Code's own limit.
+      Neither is a block (`privacy-security-reviewer`, loop 3).
+    - In the child, all of these end as a non-zero exit, a signal or a
+      timeout, and the hook blocks on each. An uncaught load error carries
+      Node's own `file:///…:line`, which reaches the session in the block
+      message.
+    - So the limit is the hook's own named number. A test holds it equal to
+      the gate's `GATE_FILE_LIMIT_MS`, which must be a whole number of
+      milliseconds above 0.
+    - **An edit to a file the gate does not check still exits 0,** whatever
+      state the gate is in. The edit that broke the gate was itself checked,
+      and blocked.
+  - **Left to BUG-53:** the same fail-open in `progress-gate.mjs` and
+    `test-weakening.mjs`, and the post-edit hook's unguarded read of
+    `package.json`.

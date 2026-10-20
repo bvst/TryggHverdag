@@ -14,7 +14,7 @@ import process from 'node:process';
 import { checkDevices } from './lib/e2e-android.mjs';
 import { MUTATION_TIMEOUT_MS } from './lib/gate-decisions.mjs';
 import { packageScripts, run } from './lib/proc.mjs';
-import { planSteps, runPlan, summarize } from './lib/steps.mjs';
+import { L3_NEEDS_DOCKER, planSteps, runPlan, summarize } from './lib/steps.mjs';
 
 const pnpmRun = (script, ...args) => ['pnpm', 'run', script, ...args];
 
@@ -59,8 +59,7 @@ export const FULL_STEPS = [
     name: 'integration tests (real PostgreSQL)',
     command: pnpmRun('test:integration'),
     needsScript: 'test:integration',
-    needsTool: 'docker',
-    toolReason: 'a real PostgreSQL runs in a container (L3)',
+    ...L3_NEEDS_DOCKER,
   },
   {
     name: 'system tests (the alert path end to end)',

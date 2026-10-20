@@ -9,8 +9,26 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import process from 'node:process';
+import {
+  INTEGRATION_TEST_FILES,
+  SYSTEM_TEST_FILES,
+  TEST_FILES,
+  UNIT_EXCLUDE,
+} from '../vitest.shared.mjs';
 import { matchesAnyGlob } from './lib/glob.mjs';
+import { run } from './lib/proc.mjs';
+import { L3_NEEDS_DOCKER, planSteps } from './lib/steps.mjs';
 import { TEST_GLOBS } from './lib/test-strength.mjs';
+
+/**
+ * How long gate:file may take (BUG-52). The post-edit hook stops it at
+ * GATE_FILE_LIMIT_MS. It may ask `docker info` first and then runs its steps
+ * side by side, so the probe and the slowest step end 5 s before the limit,
+ * for pnpm and node to start and the report to be printed.
+ */
+export const DOCKER_PROBE_TIMEOUT_MS = 15_000;
+export const STEP_TIMEOUT_MS = 150_000;
+export const GATE_FILE_LIMIT_MS = DOCKER_PROBE_TIMEOUT_MS + STEP_TIMEOUT_MS + 5_000;
 
 /** Files these checks apply to: our own code, not planning documents or spikes. */
 const CHECKABLE = /\.(ts|tsx|mts|cts|js|mjs|cjs|json|ya?ml)$/;
@@ -54,22 +72,59 @@ export function stepsFor(files) {
     });
   }
   const vitestCode = code.filter((file) => !file.startsWith(APP));
-  const testable = vitestCode.filter((file) => !matchesAnyGlob(file, TEST_GLOBS));
+  const tests = vitestCode.filter((file) => matchesAnyGlob(file, TEST_GLOBS));
+  const testable = vitestCode.filter((file) => !tests.includes(file));
   if (testable.length > 0) {
     steps.push({
       name: 'tests that cover this file',
       command: ['pnpm', 'exec', 'vitest', 'related', '--run', ...testable],
     });
-  } else if (vitestCode.some((file) => matchesAnyGlob(file, TEST_GLOBS))) {
+  }
+  // BUG-52 (D-133): every edited test runs itself, whatever else was edited,
+  // with the config whose `include` finds it and whose `exclude` does not: the
+  // configs' own lists, not the file's name.
+  const finds =
+    (include, exclude = []) =>
+    (file) =>
+      matchesAnyGlob(file, include) && !matchesAnyGlob(file, exclude);
+  const unit = tests.filter(finds(TEST_FILES, UNIT_EXCLUDE));
+  const system = tests.filter(finds(SYSTEM_TEST_FILES));
+  const integration = tests.filter(finds(INTEGRATION_TEST_FILES));
+  // No config finds these, so nothing would ever run them. Alone, Vitest finds
+  // no test file and fails, which says so; beside a file it does find, it would
+  // run that one and pass.
+  const unfound = tests.filter(
+    (file) => !unit.includes(file) && !system.includes(file) && !integration.includes(file),
+  );
+  if (unit.length > 0) {
+    steps.push({ name: 'the edited tests', command: ['pnpm', 'exec', 'vitest', 'run', ...unit] });
+  }
+  if (system.length > 0) {
     steps.push({
-      name: 'the edited tests',
+      name: 'the edited system tests (L6)',
+      command: ['pnpm', 'exec', 'vitest', 'run', '--config', 'vitest.system.config.mjs', ...system],
+    });
+  }
+  if (integration.length > 0) {
+    // As gate:full's L3 step (scripts/gate.mjs): it runs only where Docker works.
+    steps.push({
+      name: 'the edited integration tests (L3)',
       command: [
         'pnpm',
         'exec',
         'vitest',
         'run',
-        ...vitestCode.filter((file) => matchesAnyGlob(file, TEST_GLOBS)),
+        '--config',
+        'vitest.integration.config.mjs',
+        ...integration,
       ],
+      ...L3_NEEDS_DOCKER,
+    });
+  }
+  if (unfound.length > 0) {
+    steps.push({
+      name: 'the edited tests no Vitest config includes',
+      command: ['pnpm', 'exec', 'vitest', 'run', ...unfound],
     });
   }
   // Jest runs in the app, so the files go to it relative to the app. An edited
@@ -94,18 +149,39 @@ export function stepsFor(files) {
 }
 
 /**
- * Runs every step at the same time and waits for all of them (D-119): after an
- * edit, no check waits for the one before it. Never rejects. A step passes on
- * exit code 0 and nothing else, so one that cannot start, is ended by a signal
- * or is still running at `timeout` (and is then killed, together with every
- * process it started) is a failure.
+ * Runs every step at the same time and waits for all of them (D-119). A step
+ * passes on exit code 0 alone; one still running at `timeout` is killed with
+ * every process it started.
  *
- * @param {{ name: string, command: string[] }[]} steps
- * @param {{ cwd?: string, timeout?: number }} [options]
- * @returns {Promise<{ name: string, ok: boolean, output: string }[]>} in the order of `steps`
+ * A step that needs a tool `available` does not mark as working is not started
+ * (BUG-52). It comes back as not possible, with `ok: false`, so anything that
+ * reads only `ok` never takes it for a pass. A step with `needsScript` or
+ * `needsEnv`, which this gate cannot judge, rejects before any step starts.
+ *
+ * @param {import('./lib/steps.mjs').Step[]} steps
+ * @param {{ cwd?: string, timeout?: number, available?: Record<string, boolean> }} [options]
+ * @returns {Promise<{ name: string, ok: boolean, notPossible?: boolean, output: string }[]>} in the order of `steps`
  */
-export async function runSteps(steps, { cwd = process.cwd(), timeout = 160_000 } = {}) {
-  return Promise.all(steps.map((step) => runStep(step, { cwd, timeout })));
+export async function runSteps(
+  steps,
+  { cwd = process.cwd(), timeout = STEP_TIMEOUT_MS, available = {} } = {},
+) {
+  const unjudged = steps.find(
+    (step) => step.needsScript !== undefined || step.needsEnv !== undefined,
+  );
+  if (unjudged !== undefined) {
+    const need = unjudged.needsScript === undefined ? 'needsEnv' : 'needsScript';
+    throw new Error(
+      `"${unjudged.name}" has ${need}, which gate:file cannot judge: it reads no scripts and no environment, so the step would never run.`,
+    );
+  }
+  return Promise.all(
+    planSteps(steps, {}, {}, available).map(({ step, willRun, reason }) =>
+      willRun
+        ? runStep(step, { cwd, timeout })
+        : { name: step.name, ok: false, notPossible: true, output: reason },
+    ),
+  );
 }
 
 /**
@@ -157,33 +233,70 @@ async function runStep({ name, command: [program, ...args] }, { cwd, timeout }) 
 }
 
 /**
- * What main() prints after the steps have run: nothing when every step passed;
- * otherwise each failing step with its output trimmed, in the order of the
- * steps, then the count and the files.
+ * What main() prints: nothing when every step passed; otherwise each failure
+ * with its output, then the count and the files. A step not possible here
+ * (BUG-52) is no failure and leaves the exit code alone, but it is named last,
+ * with its reason, so a clean run never quietly means "did not check".
  *
- * @param {{ name: string, ok: boolean, output: string }[]} results
+ * @param {{ name: string, ok: boolean, notPossible?: boolean, output: string }[]} results
  * @param {string[]} files
  * @returns {{ text: string, exitCode: number }}
  */
 export function report(results, files) {
-  const failures = results.filter((result) => !result.ok);
-  if (failures.length === 0) {
-    return { text: '', exitCode: 0 };
+  const notPossible = results.filter((result) => result.notPossible === true);
+  const failures = results.filter((result) => !result.ok && result.notPossible !== true);
+  let text = '';
+  if (failures.length > 0) {
+    text +=
+      failures.map((failure) => `\n--- ${failure.name} ---\n${failure.output.trim()}\n`).join('') +
+      `\n${String(failures.length)} check(s) failed for: ${files.join(', ')}\n` +
+      'Fix them before moving on — CI runs exactly the same checks.\n';
   }
-  const text =
-    failures.map((failure) => `\n--- ${failure.name} ---\n${failure.output.trim()}\n`).join('') +
-    `\n${String(failures.length)} check(s) failed for: ${files.join(', ')}\n` +
-    'Fix them before moving on — CI runs exactly the same checks.\n';
-  return { text, exitCode: 1 };
+  if (notPossible.length > 0) {
+    text +=
+      '\n' +
+      notPossible
+        .map((result) => `· ${result.name} — not possible here: ${result.output.trim()}\n`)
+        .join('');
+  }
+  return { text, exitCode: failures.length === 0 ? 0 : 1 };
 }
 
-async function main() {
+/**
+ * Which tools the steps need that work on this machine, asked the way gate:full
+ * asks (availableTools in gate.mjs): `docker info`, because a machine can have
+ * the binary and no daemon. Asked only when a step needs Docker: `docker info`
+ * can take seconds, and this gate runs after every edit. Docker is the only
+ * tool it can ask about, so a step needing any other throws.
+ *
+ * @param {{ name: string, needsTool?: string }[]} steps
+ * @param {string} cwd
+ * @returns {Record<string, boolean>}
+ */
+export function availableFor(steps, cwd) {
+  const unknown = steps.find((step) => step.needsTool !== undefined && step.needsTool !== 'docker');
+  if (unknown !== undefined) {
+    throw new Error(
+      `"${unknown.name}" needs ${String(unknown.needsTool)}, and gate:file cannot ask whether it works here: it can ask about docker only.`,
+    );
+  }
+  return steps.some((step) => step.needsTool === 'docker')
+    ? { docker: run('docker', ['info'], { cwd, timeout: DOCKER_PROBE_TIMEOUT_MS }).ok }
+    : {};
+}
+
+export async function main() {
   const files = filesToCheck(process.argv.slice(2));
   if (files.length === 0) {
     return;
   }
 
-  const { text, exitCode } = report(await runSteps(stepsFor(files)), files);
+  const steps = stepsFor(files);
+  const available = availableFor(steps, process.cwd());
+  const { text, exitCode } = report(
+    await runSteps(steps, { available, timeout: STEP_TIMEOUT_MS }),
+    files,
+  );
   process.stdout.write(text);
   process.exitCode = exitCode;
 }

@@ -11,7 +11,8 @@
  * The two configs differ in what they *exclude*, not in what they collect:
  * the unit run leaves out the system tests because they are their own gate,
  * and the coverage run keeps them because the API is reached at L6 and nowhere
- * else. That difference is real, so it stays visible at each call site.
+ * else. That difference is real, so each keeps a list of its own: the coverage
+ * run's in its config, the unit run's below (UNIT_EXCLUDE).
  */
 export const TEST_FILES = [
   '.claude/hooks/**/*.test.mjs',
@@ -35,3 +36,30 @@ export const TEST_FILES = [
  * it is written once, here.
  */
 export const JEST_EXPO_FILES = 'apps/mobile/**';
+
+// What the unit, L6 and L3 configs collect, kept here rather than in each
+// config because gate:file sends an edited test to the config that finds it
+// (D-133) and reads these to know which one that is. Importing a config would
+// load Vitest, in that gate and in the post-edit hook, after every edit.
+
+/**
+ * What the unit run (vitest.config.mjs) leaves out. L3 needs Docker and L6 is
+ * its own gate, so neither belongs in the run that must stay fast and work on
+ * any machine. Without this they would be swept up by TEST_FILES and a laptop
+ * with no Docker would see a confusing failure rather than a passing unit suite.
+ */
+export const UNIT_EXCLUDE = [
+  '**/node_modules/**',
+  JEST_EXPO_FILES,
+  '**/*.integration.test.ts',
+  '**/*.system.test.ts',
+];
+
+/** L6, vitest.system.config.mjs. */
+export const SYSTEM_TEST_FILES = ['apps/**/src/**/*.system.test.ts'];
+
+/** L3, vitest.integration.config.mjs. */
+export const INTEGRATION_TEST_FILES = [
+  'apps/**/src/**/*.integration.test.ts',
+  'packages/**/src/**/*.integration.test.ts',
+];

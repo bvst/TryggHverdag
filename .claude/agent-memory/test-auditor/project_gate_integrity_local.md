@@ -81,3 +81,8 @@ true. First audit with a PR: `gh api .../commits/<sha>/check-runs` and `.../chec
 2026-10-18 cloud (BUG-34 at befe3ed, HEAD 4141e77): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5, 13 required incl. mutation/traceability. Pushed, no PR, check-runs total_count 0.
 2026-10-18 cloud (BUG-51 at 4233657, HEAD 5b547d7): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5, 13 required incl. mutation/traceability. Pushed, no PR for the branch, check-runs total_count 0.
 2026-10-19 cloud (BUG-51 loop 1 at 1e3f5e8, HEAD 33eddcd): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5. No open PR, check-runs total_count 0.
+2026-10-19 cloud (BUG-52 at 5ee115c, HEAD 62b55c4): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5, 13 required incl. mutation/traceability. Pushed, no open PR, check-runs total_count 0.
+2026-10-19 cloud (BUG-52 loop 1 at fa00e6f, HEAD 40b089a): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5, mutation/traceability required. Pushed, no open PR for the branch (only #91 dependabot), check-runs total_count 0.
+2026-10-19 cloud (BUG-52 loop 2 at 84cb623, HEAD 8568ed8): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5. No open PR for the branch, check-runs total_count 0.
+2026-10-19 cloud (BUG-52 loop 3 at d04c930): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5. No open PR for the branch, check-runs total_count 0.
+2026-10-19 cloud (BUG-52 loop 4 at ae082f5, HEAD a75f867): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5. No open PR for the branch, check-runs total_count 0.

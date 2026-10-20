@@ -16,6 +16,12 @@
  * @property {string} [toolReason] why the step needs it
  */
 
+/** Why an L3 step needs Docker, in the words gate:full and gate:file both use (D-133). */
+export const L3_NEEDS_DOCKER = {
+  needsTool: 'docker',
+  toolReason: 'a real PostgreSQL runs in a container (L3)',
+};
+
 /**
  * Decides, without running anything, which steps this repository can do today.
  *

@@ -6,6 +6,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { readInput, relPath, block, tail } from './lib.mjs';
 
+// BUG-52 (D-133): the gate's limit as a number of the hook's own, not an import.
+// The hook loads none of the gate's code, so it runs only in the child, which
+// stops at this limit: a gate that throws, never settles or hangs still blocks.
+// post-edit.test.mjs holds it equal to scripts/gate-file.mjs's GATE_FILE_LIMIT_MS.
+const GATE_FILE_LIMIT_MS = 170_000;
+
 const input = await readInput();
 const file = input?.tool_input?.file_path ?? input?.tool_input?.notebook_path;
 if (!file) process.exit(0);
@@ -26,9 +32,18 @@ if (!scripts['gate:file']) {
 const r = spawnSync('pnpm', ['-s', 'gate:file', '--', rel], {
   cwd,
   encoding: 'utf8',
-  timeout: 170_000,
+  timeout: GATE_FILE_LIMIT_MS,
 });
 if (r.error) block(`Checks could not run for ${rel}: ${r.error.message}`);
 if (r.status !== 0)
   block(`Checks failed after editing ${rel}:\n${tail((r.stdout ?? '') + (r.stderr ?? ''))}`);
-process.exit(0);
+
+// BUG-52: what a passing gate prints goes to the session as context (D-133).
+const said = (r.stdout ?? '').trim();
+if (!said) process.exit(0);
+const additionalContext = `No check failed after editing ${rel}. The gate also said:\n${said}`;
+// No process.exit after this write: on macOS, exiting at once can cut the JSON short.
+process.stdout.write(
+  JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext } }) +
+    '\n',
+);

@@ -1,6 +1,6 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-18 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24, LOST-06, LOST-07, BUG-29, SM-10, BUG-41, LOST-08 and REL-10 done: all nine tasks; M2 closes on the canary's 24 hours on staging (D-090, D-115)
+**Last updated:** 2026-10-19 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24, LOST-06, LOST-07, BUG-29, SM-10, BUG-41, LOST-08 and REL-10 done: all nine tasks; M2 closes on the canary's 24 hours on staging (D-090, D-115)
 
 **Current section:** milestone M2, started 2026-10-01 with SM-01; all nine
 tasks are done (D-090, D-115; the task list is in
@@ -21,7 +21,9 @@ that `startWorker` hands the canary its real wait; #87, `111815d`) and BUG-21
 (three Android-script tests failed under load on a correct script; #88,
 `0c0b239`, 2026-10-18) and BUG-34 (the worker's start hung silently on a
 database that never answers; #89, `1151d18`, 2026-10-18) and BUG-28 (no test held
-two journeys past the watchdog's stuck threshold; #90, `c94e908`, 2026-10-18).
+two journeys past the watchdog's stuck threshold; #90, `c94e908`, 2026-10-18) and
+BUG-51 (a query the database never answered held a sweep for ever; #92,
+`0df5737`, 2026-10-19, D-132).
 Queued for the owner to schedule: BUG-13 (`gate:full` miscounts the steps that
 did not run after a failure), BUG-16 (`req:coverage` counts an ID named in a
 comment), BUG-17 (the Android emulator sometimes stays in English past the
@@ -33,10 +35,14 @@ advisory), BUG-27 (whether the worker's session limits are in force on a deploy
 is seen only by chance), BUG-35 (a
 second stop signal ends the process before the pool is closed) and BUG-40
 (`affected.mjs` counts the agent-memory files and `decisions.md` as inert, so
-CI's `unit` job is skipped for a change to only them) and BUG-52 (`gate:file`
-checks nothing for an edited L6 or L3 test file, and exits 1). BUG-51 (a database
-connection that hangs after its handshake had no limit) is fixed on the session
-branch, pull request open (D-132). For the owner to decide:
+CI's `unit` job is skipped for a change to only them), BUG-53 (two hooks fail
+open when the repository code they import cannot load), BUG-54 (the
+test-weakening check reads the word "fit" as a focused test), BUG-55 (a gate
+that hangs leaves its node process running past the post-edit hook's limit)
+and BUG-56 (guard-bash judges the quoted pieces of a path one by one, so a
+joined path escapes it). BUG-52 (`gate:file` checked nothing for an edited L6
+or L3 test file, and exited 1) is fixed on the session branch, pull request
+open (D-133). For the owner to decide:
 BUG-49 (moving `origin/main` gets a session past the stop and progress hooks;
 its fix is in `.claude/`, which needs the owner's approval) and BUG-50 (no test checks that
 `req:coverage --fail-on-uncovered-changed` leaves changed test files out of
