@@ -191,15 +191,18 @@ admin can join and no group is made": expected.
 **Open:** how the app gets onto your phone for the join. Nothing builds it for a
 phone before task 12 (`apps/mobile` has no `eas.json`); the row says what exists.
 
-**Still open, from #96 (the owner's question 1, answered: the owner said yes, 2026-10-21, D-139; the change is in progress on the session branch): should the files
+**Still open, from #96 (the owner's question 1, answered: the owner said yes, 2026-10-21, D-139, and then "Begge to" (both) for two more files found on review, eleven in all; the change is in progress on the session branch): should the files
 that carry authentication get a code owner?** Today none has one:
 `apps/server/src/config.ts`, `apps/server/src/bin/api.ts` and
 `apps/server/src/ports.ts`; `packages/contracts/src/groups.ts` and
 `packages/contracts/src/display-name.ts`; and in the app
 `apps/mobile/src/shared/secure-storage.ts`,
 `apps/mobile/src/shared/api/client.ts`,
-`apps/mobile/src/features/grp/session.tsx` and `apps/mobile/package.json`.
-Raised by `privacy-security-reviewer` (N5). Claude recommends a small follow-up
+`apps/mobile/src/features/grp/session.tsx` and `apps/mobile/package.json`; and
+the two found on review of the follow-up, `apps/mobile/src/features/grp/join-key.ts`
+(makes the join key) and `apps/server/src/redact.ts` (strips the database
+password from failure lines).
+Raised by `privacy-security-reviewer` (N5; S1 and N2 for the last two). Claude recommends a small follow-up
 pull request adding them to CODEOWNERS. Details in `progress/m3.md`. A second
 code-owner gap, from the same reviewer on #96's CI run: `pnpm-lock.yaml` and
 `pnpm-workspace.yaml` have no line in `.github/CODEOWNERS` (read 2026-10-20);
