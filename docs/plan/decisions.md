@@ -6082,11 +6082,15 @@ any other path is work, not a candidate for the same treatment.
         new credential, so a key that could be guessed would hand a user's
         place to whoever has the code. The owned contract fixes the key's
         format, not its randomness.
-    11. `/apps/server/src/redact.ts`: removes the database password from every
-        failure line the API and the worker print (`describeFailure`, called
-        by `process.ts` and `worker.ts`, both owned); weakening it could put
-        the password in a log (D-068, PRIV-07). The same reason as
-        `log.ts`'s (D-102).
+    11. `/apps/server/src/redact.ts`: removes the database password from the
+        failure lines that `process.ts` and `worker.ts`, both owned, write
+        through `describeFailure`; weakening it could put the password in a
+        log (D-068, SEC-03). It reaches no further than those lines. Its own
+        header (D-077) lists what it does not cover: Graphile Worker's own
+        logger, Hono's and the Node server's default error printing, and
+        Node's printer for an uncaught exception. The same kind of reason as
+        `log.ts`'s (D-102), a guard on what a log may hold, under SEC-03
+        rather than PRIV-07.
   - **The reasons were read against each file's opening comment and code
     (2026-10-21).** The one for `client.ts` says "every request that has one"
     because `credential` is optional in `ApiRequest` and the join sends none.
@@ -6094,7 +6098,12 @@ any other path is work, not a candidate for the same treatment.
     join gets a new credential, and the first stops working); the one for
     `redact.ts` says "the database password", and not "credentials", because
     that is all it strips: a connection string's password and a `password=…`
-    pair.
+    pair. It names the lines `process.ts` and `worker.ts` write through
+    `describeFailure`, and not every line the API and the worker print,
+    because the file's header lists the output that never passes through it.
+    It cites SEC-03, not PRIV-07, which covers only precise locations and
+    phone numbers (`02-norway-law-privacy.md`, PRIV-07; D-068 calls the
+    password a SEC-03 matter).
   - **The ai-review `safety` filter is not changed,** as D-102 did for
     `log.ts`. Claude chose this (D-031); the owner's answer covers the code
     owner only. A change to the filter would make this pull request edit
@@ -6182,8 +6191,8 @@ any other path is work, not a candidate for the same treatment.
       unseen.
     - **N2, a note:** `redact.ts` strips the database password from failure
       lines. `process.ts` and `worker.ts`, both owned, call it, and weakening
-      it could put a secret in a log. The reason is the same as `log.ts`'s
-      (D-102).
+      it could put a secret in a log. The same kind of reason as `log.ts`'s
+      (D-102), under SEC-03 (see the correction below).
   - **Asked:** "Skal flere filer få code owner i samme PR?" (Should more files
     get a code owner in the same pull request?), with the two files named and
     Claude's recommendation: both.
@@ -6195,3 +6204,18 @@ any other path is work, not a candidate for the same treatment.
     filter stays as it was, for the same reasons.
   - **Not asked about:** `device-credential.ts` and `bin/migrate.ts`, which
     the reviewer named as notes (see "Not in this decision").
+  - **Corrected 2026-10-21 (`privacy-security-reviewer`, delta review of
+    `93047f8`, a should-fix; made before this decision merged):** item 11
+    cited PRIV-07 and said `redact.ts` removes the password "from every
+    failure line the API and the worker print". Both were wrong.
+    - **The rule:** PRIV-07 covers only precise locations and phone numbers
+      (`02-norway-law-privacy.md`, line 124). D-068 says the password is a
+      SEC-03 matter. Item 11 now cites SEC-03.
+    - **The coverage:** the file's own header (D-077) lists what it does not
+      cover: Graphile Worker's own logger, Hono's and the Node server's
+      default error printing, and Node's printer for an uncaught exception.
+      Item 11 now says the failure lines `process.ts` and `worker.ts` write
+      through `describeFailure`.
+    - **What did not change:** the owner's answer, the file's code owner, its
+      place in `OWNER_APPROVAL_PATHS` and the ai-review filter, which stays as
+      it was.

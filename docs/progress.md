@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-21 · **Milestone:** M3 started (2026-10-20, D-134): twelve tasks; **task 1, GRP-01, is done: [#96](https://github.com/bvst/TryggHverdag/pull/96) was squash-merged as `bd83b21` on 2026-10-21, after `urso-agent` approved it**; task 2, the home screen (GRP-02, CALL-01, CALL-02), is next and not started (step 1 was [#94](https://github.com/bvst/TryggHverdag/pull/94), `60b46ee`) · M2 (D-090): all nine tasks are done, the last REL-10 in [#77](https://github.com/bvst/TryggHverdag/pull/77) (`b6c6074`); M2 closes on the staging canary's 24 hours (A-35, reading due from about 06:40 UTC on 2026-10-21) · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-21 · **Milestone:** M3 started (2026-10-20, D-134): twelve tasks; **task 1, GRP-01, is done: [#96](https://github.com/bvst/TryggHverdag/pull/96) was squash-merged as `bd83b21` on 2026-10-21, after `urso-agent` approved it**; task 2, the home screen (GRP-02, CALL-01, CALL-02), is next and not started (step 1 was [#94](https://github.com/bvst/TryggHverdag/pull/94), `60b46ee`) · M2 (D-090): all nine tasks are done, the last REL-10 in [#77](https://github.com/bvst/TryggHverdag/pull/77) (`b6c6074`); M2 is not closed yet: the owner reports the canary's 24 hours OK on Healthchecks.io (A-35, 2026-10-21), and Clever Cloud's half of the reading (REL-10-AC19) is still owed · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -19,7 +19,7 @@ The plan is in [`plan/README.md`](plan/README.md); the milestone task lists are 
 ## M3 at a glance
 
 **M3 started on 2026-10-20** (**D-134**), while M2's last exit criterion (A-35)
-still runs. The app MVP, demo-able, in twelve tasks, one pull request each,
+was still running. The app MVP, demo-able, in twelve tasks, one pull request each,
 **one task at a time**, GRP-01 first and sign-in without SMS first. Exit: L7
 green on Android (every pull request) and iOS (weekly); the owner can show the
 app through internal TestFlight and Google Play internal testing. The order is
@@ -28,7 +28,7 @@ in D-134 and [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 
 | # | ID | Task | Status |
 |---|----|------|--------|
-| 1 | GRP-01 | Sign-in and groups: a single-use invitation that expires after 7 days, the first admin's bootstrap code, device sessions where membership is the session, the admin's invitations, member list and removal, the walker's removal of a responder (D-122), and the minimum app screens | ✅ **Done** — 2026-10-21, [#96](https://github.com/bvst/TryggHverdag/pull/96), squashed as `bd83b21` at 06:41:40 UTC by auto-merge, after `urso-agent`'s code-owner approval at 06:41:34 UTC. The tree of `bd83b21` is the reviewed head `a2830fa` (`git diff a2830fa bd83b21` is empty). All five CI reviewers passed `a2830fa` (safety-reviewer, privacy-security-reviewer, test-auditor, code-reviewer and a11y-i18n-reviewer), none with a blocking finding; `code-reviewer`'s last round left small advisory should-fixes, recorded for later. Every required check on `a2830fa` was green after one re-run (BUG-17's third occurrence, below). On `main` at `bd83b21`: `ci` run 39557013605 passed (eleven jobs succeeded and `mutation-group` was skipped; 06:41:43 to 06:51:40 UTC), and `deploy-staging` run 39557013621 passed (06:41:47 to 06:45:21 UTC): the pre-run hook `migrate.ts` ran, the app started and the smoke test passed. 33 acceptance criteria; D-136 (the owner's five answers), D-137 (delegated, amended in loop 1), D-138 (the app's client is plain `fetch`). Step 1 is done: [#94](https://github.com/bvst/TryggHverdag/pull/94), `60b46ee`. **A-36 is the owner's now** (below). What CI's reviewers left for tasks 2 and 3 and later, and the story: `progress/m3.md` |
+| 1 | GRP-01 | Sign-in and groups: a single-use invitation that expires after 7 days, the first admin's bootstrap code, device sessions where membership is the session, the admin's invitations, member list and removal, the walker's removal of a responder (D-122), and the minimum app screens | ✅ **Done** — 2026-10-21, [#96](https://github.com/bvst/TryggHverdag/pull/96), squashed as `bd83b21` at 06:41:40 UTC by auto-merge, after `urso-agent`'s code-owner approval at 06:41:34 UTC. The tree of `bd83b21` is the reviewed head `a2830fa` (`git diff a2830fa bd83b21` is empty). All five CI reviewers passed `a2830fa` (safety-reviewer, privacy-security-reviewer, test-auditor, code-reviewer and a11y-i18n-reviewer), none with a blocking finding; `code-reviewer`'s last round left small advisory should-fixes, recorded for later. Every required check on `a2830fa` was green after one re-run (BUG-17's third occurrence, below). On `main` at `bd83b21`: `ci` run 39557013605 passed (eleven jobs succeeded and `mutation-group` was skipped; 06:41:43 to 06:51:40 UTC), and `deploy-staging` run 39557013621 passed (06:41:47 to 06:45:21 UTC): the pre-run hook `migrate.ts` ran, the app started and the smoke test passed. 33 acceptance criteria; D-136 (the owner's five answers), D-137 (delegated, amended in loop 1), D-138 (the app's client is plain `fetch`). Step 1 is done: [#94](https://github.com/bvst/TryggHverdag/pull/94), `60b46ee`. A-36's plan and apply are done (2026-10-21); the join in the app is the owner's (below). What CI's reviewers left for tasks 2 and 3 and later, and the story: `progress/m3.md` |
 | | BUG-57 | `apps/server/src/api.ts` is mutated by no run, though its middleware decides FULL versus WALKER_ONLY access (GRP-01-AC21, AC23): `safety-reviewer`'s planted mutant, that gate always open, survived the `journeys` group and was killed only by `groups.system.test.ts`, which `test:system` runs and no mutation run reads for `api.ts`. **In the same change,** the `membership` group would run `modules/groups/join.test.ts` before `groups.system.test.ts`, under `vitest.coverage.config.mjs`. That was tried in loop 2 (`1594939`) and withdrawn (`879096f`): a group's configuration is a mutation input (`decideMutation`), so BUG-14's tests then require the coverage configuration in `ai-review.yml`'s safety filter (D-075, merged by hand) and in `.claude/agents/safety-reviewer.md` (the owner's). What it would kill: `join.ts`'s `code === null` guard, which no request can reach (the contract refuses such a code first; removed, it fails loudly with a `join_failed` line and a 500), and `invitations.ts`'s `invitation_failed` stage. Measured in loop 2: about 50 s for the group (48 s in the implementer's run), `join.ts` 97.2 % (83.3 % today), `invitations.ts` 93.1 % (89.7 %). Found 2026-10-20 by `safety-reviewer` (S4, loop 1) and `test-auditor` (S1, loop 2). **The 14 mutants that survive in the `membership` group** (`test-auditor` on `a2830fa`: 86 %, every file at or above 80 %: `invitations.ts` 89.65, `join.ts` 83.33, `members.ts` 85.71) belong with this bug and have no ID of their own: 10 are `type` or `reason` strings in returned results, 3 are `stage: 'store'` in log lines (`invitations.ts:56`, `join.ts:85`, `members.ts:68`), and 1 is `join.ts:76`'s `code === null` guard, which `join.test.ts` covers but which is outside the group (the second half of this row). Detail: the spec's "Left for later tasks", and `progress/m3.md` | ⚪ **Queued**, for the owner to schedule (`ai-review.yml` is a hand merge, D-075, and the safety reviewer's brief under `.claude/` needs the owner's approval). Claude recommends one pull request: `api.ts` into `SAFETY_PATHS` with a group over the system tests that reach its routes, measured first for time (D-066, D-098), and the `membership` group's second test file in the same change, with the two input lists (`ai-review.yml`, the reviewer's brief) updated first, as step 1 did for the filter |
 | | BUG-58 | guard-bash's rule against skipping git hooks (`.claude/hooks/guard-bash.mjs`, line 37: `/--no-verify\b\|\bgit\s+commit\b[^\n]*\s-n\b/`) matches more than the flag. The short flag is matched anywhere later on the line, so `git commit -F msg && sed -n 1,5p msg` and `git commit -F msg && grep -n x msg` are refused, and so is a command that only mentions the words, such as `grep -r "git commit -n" docs`. Measured 2026-10-20 by running line 37's pattern on ten sample commands in a scratch file; the guard's other checks were not exercised. It fails closed, so it is a nuisance, not a hole: a refused command costs a rewrite, and a rule that refuses what it should not teaches people to word around it. Found by the implementer in review loop 2, and by Claude when a search for the pattern itself was refused | ⚪ **Queued**, for the owner to schedule (`.claude/` needs the owner's approval). Claude recommends matching the flag only as an argument of the `git commit` command itself: split the command into simple commands first (the same word splitting BUG-56 wants fixed as a whole), with tests for the flag itself, the chained `-n` and the mention |
 | | BUG-59 | The post-edit hook runs `gate:file` on a file outside the repository. `.claude/hooks/post-edit.mjs` (lines 15-39) names the edited file relative to the working tree (`relPath` gives a `../…` path for one outside it), skips only a wrong extension and `docs/`, and runs the gate on the rest. Seen by Claude in review loop 1 on a file in the session's scratchpad, and **again on 2026-10-20 while GRP-01 was being recorded:** a scratch `.mjs` under `/tmp` was reported as failing Prettier ("Code style issues found") and ESLint ("ESLint couldn't find an eslint.config.* file"), and the hook ended "Fix them before moving on", though the ESLint half cannot be fixed outside the repository. A false red on a file that is not the repository's; the live gotcha about a worktree outside the project is the same hook, but there the files are checked against the main checkout | ⚪ **Queued**, for the owner to schedule (`.claude/` needs the owner's approval). Claude recommends skipping a path outside the working tree and saying so in one line (not checked, and why), so it is neither a false failure nor a silent pass |
@@ -36,6 +36,7 @@ in D-134 and [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | | BUG-61 | `pnpm audit --audit-level high` turned red on #96 at `155fef6` on a new advisory, GHSA-587h-7wmj-h5pm: `vite` >=8.3.0 <=8.3.2, patched in 8.3.3, reached only through `vitest`. It was published after the branch's last green audit, so `main` would fail the same way (`6b7cd97`'s reasoning; `main`'s own run before the fix was not read). Found 2026-10-20 | ✅ **Done** — 2026-10-21, in GRP-01's merge, [#96](https://github.com/bvst/TryggHverdag/pull/96), `bd83b21`; `security` passed in `main`'s `ci` run 39557013605. The fix, `6b7cd97`: a root dev dependency `vite: ^8.3.3`, locked at 8.3.4. It is the only way found to move vitest's auto-installed peer: a pnpm override changed only the peer range, and `pnpm up --depth Infinity` left vite at 8.3.0. Pinned by `dbe2c7a`: a `PATCHED` row in `scripts/dependency-audit.test.mjs` and a test that holds the dev dependency, with its reason. Record: `progress/m3.md` |
 | | BUG-62 | `pnpm audit` reports a moderate advisory, GHSA-5r4p-p66f-jhc7, in `hono` >=4.12.4 <4.13.11, patched in 4.13.11. `apps/server` depends on `hono` `^4.13.8`, installed as 4.13.8, a production dependency of the API. The advisory (CWE-174, created 2026-10-20) is about `serveStatic` decoding the request path a second time, so middleware mounted on a static prefix can be bypassed; "Applications that serve only public files are not affected." `apps/` does not use `serveStatic` (a grep finds no use), so it is not exploitable in the API today. CI's audit runs at `--audit-level high`, so it is not red. Found 2026-10-21 | ⚪ **Queued**, for the owner to schedule. Claude recommends bumping `hono` to `^4.13.11` in a small `/bugfix`, or with the next dependency batch, so a later use of `serveStatic` does not inherit it |
 | | GRP-01 follow-up | Remove the one line in `.gitleaksignore` (the fingerprint of `064be6c`, `packages/contracts/src/groups.test.ts` line 34) and the comment above it. Asked for by `code-reviewer` | 🟡 **Done in the pull request that records this merge, which is not merged yet:** the file keeps only its header. `064be6c` is not an ancestor of `bd83b21`. With gitleaks 8.30.1, the same version and command as CI's `security` job (`gitleaks git . --redact --no-banner --log-opts="--no-merges"`), the branch scans "88 commits scanned … no leaks found", exit 0, without the line. `/.gitleaksignore` is a code-owner path (SEC-06), so that pull request needs the owner's approval. Delete this row when it merges |
+| | D-139 | The eleven sign-in files get a code owner (the owner's question 1 on #96: yes, 2026-10-21, and "Begge to" (both) for two more files found on review): in the server `config.ts`, `bin/api.ts`, `ports.ts` and `redact.ts`; in the contracts `groups.ts` and `display-name.ts`; in the app `shared/secure-storage.ts`, `shared/api/client.ts`, `features/grp/session.tsx`, `features/grp/join-key.ts` and `package.json` | 🟡 **Done on the session branch `claude/busy-faraday-40n2zl` (base `f3e682c`), not merged.** Each file is in `.github/CODEOWNERS` and `OWNER_APPROVAL_PATHS` as `@bvst @urso-agent`; the ai-review safety filter is unchanged. Red `2b1d04e` and `aee541f`, green `0fe7547` and `93047f8`: 290 of 290 in merge-rules, gate and gate-integrity. `gate:full` passed 11 steps; its CI-01 step needs the session's proxy setting (run alone with it, `gate:integrity` reports 5 of 5), and L7 Android did not run here (CI's `android-e2e` runs it). `code-reviewer`, `privacy-security-reviewer` and `test-auditor` PASS in the session; `safety-reviewer` and `a11y-i18n-reviewer` were not run (no domain or UI code changed). RG-03: one gate test's exception pin grew from `log.ts` to ten paths, reason beside it. `redact.ts` covers the failure lines `process.ts` and `worker.ts` write through `describeFailure`, not all log output (its header, D-077). Not in D-139: `pnpm-lock.yaml` and `pnpm-workspace.yaml` (BUG-25's row). Details: `progress/m3.md`. Delete this row when it merges |
 | 2 to 12 | D-134 | In the order of D-134: the home screen (GRP-02, CALL-01, CALL-02); start a journey (JRN-01, JRN-02, LOST-01's phone half); the safety permission check (GRP-03); "I'm home" and the two-hour stop (JRN-05, JRN-06); real push; the alert screen (HELP-01); what responders see (JRN-03); responder setup (GRP-04); real SMS (LINK Mobility) and the SMS sign-in code; CALL-03, LOST-04, LOST-05; iOS and the stores | ⚪ Not started. Next is task 2, the home screen (GRP-02, CALL-01, CALL-02). One at a time (D-134); A-11 is needed by task 6, A-12 by task 10, A-03 by task 12 |
 
 ## M2 at a glance
@@ -105,7 +106,7 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | 6 | LOST-07 | SMS escalation at 2 minutes | ✅ **Done** — 2026-10-07, [#67](https://github.com/bvst/TryggHverdag/pull/67), merged as `1c4bc8b` at 19:43 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `2a65c3a`. 20 acceptance criteria; D-115 (owner, five answers), D-116 (delegated, three review-loop amendments), with BUG-29 in it (D-117). Session reviews: all three PASS in the first round; three review loops; `test-auditor` blocked loop 1's head and passed loops 2 and 3. In CI on `2a65c3a`: all 16 checks passed, all five AI reviewers PASS (the privacy reviewer after two re-runs: a review that ran but returned no structured verdict, explained by D-121); `integration` on PostgreSQL 15 with migration 0006; `mutation` 21:07 against 25:00. On `main` after the merge: `ci` passed (run 37676690823) and `deploy-staging` passed (run 37676690808); the smoke test saw the worker check in at 19:47:54 UTC, so the stricter ping-URL check accepted the existing `HEALTHCHECKS_WORKER_URL`. **A-33 done** (the owner, 2026-10-07; apply run 37678702578). Record: `progress/m2.md` |
 | 7 | SM-10 | Removing a responder: resumed escalation and the last-responder warning (D-115) | ✅ **Done** — 2026-10-09, [#74](https://github.com/bvst/TryggHverdag/pull/74), merged as `f4ded6d` at 13:36 UTC after `urso-agent` approved: D-122 (the owner's four answers), D-123, and BUG-41's faster mutant runs (D-124). Three review loops; every check and all five CI reviewers passed, mutation in 12:15 and 13:48. `main`'s CI and `deploy-staging` passed; migration 0007 ran in the pre-run hook |
 | 8 | LOST-08 | "They're safe" | ✅ **Done** — 2026-10-09, [#75](https://github.com/bvst/TryggHverdag/pull/75), merged as `f5c14b2` at 18:33 UTC after `urso-agent` approved: the owner's two answers (D-125) and the delegated choices (D-126). One review loop; every check and all five CI reviewers passed, mutation in 15:19. `main`'s CI and `deploy-staging` passed; migration 0008 ran in the pre-run hook |
-| 9 | REL-10 | The staging canary | ✅ **Done** — 2026-10-10, [#77](https://github.com/bvst/TryggHverdag/pull/77), merged as `b6c6074` at 16:06 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `1e6f957`. 19 acceptance criteria; D-127 (owner, three answers), D-128 (delegated, amends D-091 for the canary only, with a review-loop amendment). The filter lines shipped first in [#76](https://github.com/bvst/TryggHverdag/pull/76) (`5e5dc81`). Two review loops; every check and all five CI reviewers passed `1e6f957`, mutation in 19:26 (`run.ts` 95.9 %, `worker.ts` 96.41 %). `main`'s CI (all 10 jobs) and `deploy-staging` passed; REL-10 adds no migration, and the deployed worker has no canary setting until A-35's apply. The canary does not run until the owner's **A-34** and **A-35**; A-35's 24-hour reading is REL-10-AC19, and M2's exit. A-34 and A-35's plan and apply are done (2026-10-20); the reading is due from about 06:40 UTC on 2026-10-21. Follow-up in [#80](https://github.com/bvst/TryggHverdag/pull/80) (`8838d0d`, 2026-10-13): four REL-10-AC9 tests of the canary's real wait, which kill the mutant #77 left alive, and two out-of-date comments in `worker.ts` |
+| 9 | REL-10 | The staging canary | ✅ **Done** — 2026-10-10, [#77](https://github.com/bvst/TryggHverdag/pull/77), merged as `b6c6074` at 16:06 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `1e6f957`. 19 acceptance criteria; D-127 (owner, three answers), D-128 (delegated, amends D-091 for the canary only, with a review-loop amendment). The filter lines shipped first in [#76](https://github.com/bvst/TryggHverdag/pull/76) (`5e5dc81`). Two review loops; every check and all five CI reviewers passed `1e6f957`, mutation in 19:26 (`run.ts` 95.9 %, `worker.ts` 96.41 %). `main`'s CI (all 10 jobs) and `deploy-staging` passed; REL-10 adds no migration, and the deployed worker has no canary setting until A-35's apply. The canary does not run until the owner's **A-34** and **A-35**; A-35's 24-hour reading is REL-10-AC19, and M2's exit. A-34 and A-35's plan and apply are done (2026-10-20); the owner reported the Healthchecks.io half of the 24-hour reading OK on 2026-10-21, and Clever Cloud's half (one `canary_run` line per run, each `ON_TIME`, and the largest `alertMs`) is still owed. Follow-up in [#80](https://github.com/bvst/TryggHverdag/pull/80) (`8838d0d`, 2026-10-13): four REL-10-AC9 tests of the canary's real wait, which kill the mutant #77 left alive, and two out-of-date comments in `worker.ts` |
 
 ## M1 at a glance
 
@@ -178,46 +179,40 @@ could not record a verdict at all (D-069, D-070, D-073).
 
 ## What the owner still needs to do
 
-**A-36 — yours to do now.** GRP-01 has merged (`bd83b21`) and its
-`deploy-staging` (run 39557013621) passed at 06:45:21 UTC on 2026-10-21, so the
-precondition is met. `infra-staging` plan, then apply; then read the first
-admin's bootstrap code once in Clever Cloud's console and join in the app on your
-own phone, with your name. You become the group's admin. **The plan must show no
-code:** if a 32-character code appears anywhere in it, stop and tell Claude,
-because the job log is public. The full row, with the retry and the leak
-runbook, is in [`plan/README.md`](plan/README.md). Until the apply the API logs
-"api: the first admin cannot join: ADMIN_BOOTSTRAP_CODE is not set, so no first
-admin can join and no group is made": expected.
-**Open:** how the app gets onto your phone for the join. Nothing builds it for a
-phone before task 12 (`apps/mobile` has no `eas.json`); the row says what exists.
+**A-36 — the plan and apply are done; the join is yours.** On 2026-10-21
+`infra-staging` ran the plan (run 39564821518, job 119104478062: "Plan: 1 to
+add, 1 to change, 0 to destroy.") and the apply (run 39564903393, job
+119104742624: "Same plan as the one read in run 39564821518: 92bd5a13…", then
+"Apply complete! Resources: 1 added, 1 changed, 0 destroyed." at 07:51:29 UTC).
+The coordinating session read the job logs: the staging app's `environment` and
+the bootstrap code's `base64` and `hex` print as "(sensitive value)", and no code
+appears; the only long hex string is the plan's fingerprint, a SHA-256. **What is
+left:** read `ADMIN_BOOTSTRAP_CODE` once in Clever Cloud's console, and join in
+the app on your phone, with your name. You become the group's admin. That needs a
+development build made on the Mac, since there is no EAS build before task 12
+(`apps/mobile` has no `eas.json`); tell Claude if you want the steps written. The
+full row, with the retry and the leak runbook, is in
+[`plan/README.md`](plan/README.md). **Not verified from a session:** that the API
+now logs "api: the first admin can join with ADMIN_BOOTSTRAP_CODE while no group
+exists." A session cannot read Clever Cloud's log; if it still says "cannot
+join", tell Claude.
 
-**Still open, from #96 (the owner's question 1, answered: the owner said yes, 2026-10-21, D-139, and then "Begge to" (both) for two more files found on review, eleven in all; the change is in progress on the session branch): should the files
-that carry authentication get a code owner?** Today none has one:
-`apps/server/src/config.ts`, `apps/server/src/bin/api.ts` and
-`apps/server/src/ports.ts`; `packages/contracts/src/groups.ts` and
-`packages/contracts/src/display-name.ts`; and in the app
-`apps/mobile/src/shared/secure-storage.ts`,
-`apps/mobile/src/shared/api/client.ts`,
-`apps/mobile/src/features/grp/session.tsx` and `apps/mobile/package.json`; and
-the two found on review of the follow-up, `apps/mobile/src/features/grp/join-key.ts`
-(makes the join key) and `apps/server/src/redact.ts` (strips the database
-password from failure lines).
-Raised by `privacy-security-reviewer` (N5; S1 and N2 for the last two). Claude recommends a small follow-up
-pull request adding them to CODEOWNERS. Details in `progress/m3.md`. A second
-code-owner gap, from the same reviewer on #96's CI run: `pnpm-lock.yaml` and
-`pnpm-workspace.yaml` have no line in `.github/CODEOWNERS` (read 2026-10-20);
-BUG-25 already covers the second.
-
-**A-35 — the canary's 24-hour reading, from about 06:40 UTC on 2026-10-21.**
-A-34 is done, and so are A-35's plan and apply (2026-10-20, apply complete
-at 06:36:55 UTC); the owner saw `staging-canary` ping OK. What is left:
-report the window, the number of success and failure pings, any down event,
-and the largest `alertMs` in the `canary_run` lines of Clever Cloud's log.
-That reading closes M2 (REL-10-AC19, D-090). **GRP-01's deploy restarted the
-worker at about 06:43 UTC on 2026-10-21,** after the 24-hour window closed (the
-apply was at 06:36:55 UTC on 2026-10-20), so the reading should end at 06:36:55
-UTC on 2026-10-21, or before the restart. The full row is in
-[`plan/README.md`](plan/README.md).
+**A-35 — the canary's 24 hours: the Healthchecks.io half is reported, Clever
+Cloud's half is yours.** On 2026-10-21 you wrote "24-timersvinduet er OK" (the
+24-hour window is OK) and sent a screenshot of `staging-canary`'s ping log.
+The coordinating session read it: pings #77 to #98, every one OK; #77 to #96 are
+15 minutes apart from 03:50 to 08:35, then #97 at 09:05 and #98 at 09:20, on Oct
+21 in Norwegian local time (UTC+2). The window ends at 06:36:55 UTC (the apply
+was at the same time on Oct 20), so #96 at 08:35 local (06:35 UTC) is the last
+ping inside it. #1 to #76 are not in the screenshot; by the numbering, 96 pings 15
+minutes apart from about 06:50 UTC on Oct 20 fit the window exactly, with no room
+for a missed run. The 30-minute gap between #96 and #97 follows the deploy at
+about 06:43 UTC, which restarted the worker (the pinging address changed, .21 to
+.12, between the two); it is outside the window and within REL-10-AC19's "at
+least one success in every 35 minutes". **Still owed for AC19:** Clever Cloud's
+log for those hours must hold one `canary_run` line per run, each `ON_TIME`, and
+you report the largest `alertMs`. **M2 is not closed until you do.** The full row
+is in [`plan/README.md`](plan/README.md).
 
 **A-03 — Google Play account for the AS:** waiting on Google's answer. If it
 does not give the AS an organisation account, a new one is made with the
@@ -501,11 +496,14 @@ The things that still bite, and cost a session hours the first time.
 ## In flight
 
 **No M3 task is in flight:** GRP-01 (task 1) is merged, and task 2 has not
-started (the M3 table above, and [`progress/m3.md`](progress/m3.md)). **M2's last
-exit criterion** is the staging canary's 24 hours: the owner's A-35 reading, due
-from about 06:40 UTC on 2026-10-21 (see the note on the worker's restart under
-"What the owner still needs to do"). Every other M2 task and bug fix is done and
-has its row above; the story is in [`progress/m2.md`](progress/m2.md).
+started (the M3 table above, and [`progress/m3.md`](progress/m3.md)). What is on
+the session branch is two small follow-ups to GRP-01, not merged: D-139 (the
+eleven sign-in files get a code owner) and the `.gitleaksignore` line's removal
+(their rows are in the M3 table). **M2's last exit criterion** is the staging
+canary's 24 hours: the Healthchecks.io half is reported OK by the owner, and
+Clever Cloud's half of A-35's reading is still owed (see "What the owner still
+needs to do"). Every other M2 task and bug fix is done and has its row above; the
+story is in [`progress/m2.md`](progress/m2.md).
 
 **Carried into M3, from M2's decisions:**
 - Before M3 pushes the "I'm on it" notice on either platform, a real-phone test

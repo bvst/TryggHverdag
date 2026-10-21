@@ -647,7 +647,9 @@ describe("this repository's own workflows", () => {
     // pull request): /apps/mobile/src/features/grp/join-key.ts, which makes
     // the join key a retried join is given a fresh credential with, and
     // /apps/server/src/redact.ts, which strips the database password from
-    // every failure line the API and the worker print. Both are /apps/ owner
+    // the failure lines process.ts and worker.ts write through
+    // describeFailure. It does not reach what Graphile Worker, Hono or Node
+    // print on their own, as its header says (D-077). Both are /apps/ owner
     // paths, and the amendment leaves both out of the filter for the reasons
     // above: for redact.ts exactly D-102's for log.ts, and for join-key.ts
     // privacy-security-reviewer, which runs on every pull request and found
