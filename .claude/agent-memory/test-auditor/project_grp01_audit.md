@@ -65,3 +65,12 @@ ownerless /packages/contracts/src/: all 15 caught. Note: D139_FILES is duplicate
 nothing holding them equal (gate.test's /apps/ part is pinned via the exceptions literal). req:coverage unchanged: gate.test.mjs
 is fixtures-only and merge-rules.test.mjs already named GRP-01 on main (GRP-01-AC32), so no count moves; SEC-01 stays at 0.
 `apps/mobile/src/**/*.tsx` sits in the ui filter, not safety: grep -A40 from "safety:" runs into it, read the block boundaries.
+
+**D-139 amendment (join-key.ts + redact.ts; red aee541f, green 93047f8), PASS, 2026-10-21.** Base origin/main f3e682c. RG-02 replay
+(git worktree at aee541f + node_modules symlink, vitest on gate/merge-rules/gate-integrity tests): 6 failed/284 passed; HEAD 290/290.
+The new N9 test (merge-rules.test.mjs regex-reads gate.test.mjs's D139_FILES literal, compares sorted both ways) is green at red by
+design (an equality guard between two test files). Probes: path dropped from either copy (apps and contracts paths) -> caught;
+reorder -> passes (not order-brittle); comment line inside the literal -> fails loudly (documented: one quoted path per line;
+prettier singleQuote+trailingComma keeps the shape). Exceptions pin exact at 10; 35 /apps/ owner paths - 10 = 25 still required.
+Later single-owner glob over join-key.ts and misspelt redact CODEOWNERS line -> caught. tests:changes 2 files none weakened;
+req:coverage unchanged; decideMutation skip (only-if-safety mode).
