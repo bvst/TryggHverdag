@@ -66,6 +66,9 @@ export const OWNER_APPROVAL_PATHS = [
   // The server's port types, the group store's and the device-credential
   // check's among them (GRP-01, D-139).
   '/apps/server/src/ports.ts',
+  // Removes the database password from the failure lines the API and the
+  // worker print; the same reason as log.ts's, D-102 (GRP-01, D-139).
+  '/apps/server/src/redact.ts',
   // The server's one log adapter: it takes closed events only, which is what
   // keeps heartbeat data out of logs (PRIV-07). Not in the ai-review safety
   // filter, by the owner's decision (D-102).
@@ -84,6 +87,10 @@ export const OWNER_APPROVAL_PATHS = [
   // The app's dependencies, the secure-storage library (expo-secure-store)
   // among them (GRP-01, D-139).
   '/apps/mobile/package.json',
+  // Makes the join key from 32 random bytes from the platform's secure random
+  // source; a guessable key would give a user's place to whoever has the code
+  // (GRP-01, D-139).
+  '/apps/mobile/src/features/grp/join-key.ts',
   // The join's request and answer, the issued credential among them (GRP-01, D-139).
   '/packages/contracts/src/groups.ts',
   // The display-name rule, which the app checks before it sends and the
