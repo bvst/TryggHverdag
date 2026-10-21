@@ -191,7 +191,7 @@ admin can join and no group is made": expected.
 **Open:** how the app gets onto your phone for the join. Nothing builds it for a
 phone before task 12 (`apps/mobile` has no `eas.json`); the row says what exists.
 
-**Still open, from #96 (the owner's question 1, unanswered): should the files
+**Still open, from #96 (the owner's question 1, answered: the owner said yes, 2026-10-21, D-139; the change is in progress on the session branch): should the files
 that carry authentication get a code owner?** Today none has one:
 `apps/server/src/config.ts`, `apps/server/src/bin/api.ts` and
 `apps/server/src/ports.ts`; `packages/contracts/src/groups.ts` and

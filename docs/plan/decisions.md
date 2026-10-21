@@ -6027,3 +6027,103 @@ any other path is work, not a candidate for the same treatment.
   - D-137's loop-1 amendment points here.
   - Amends D-032 for the app's client only; oRPC stays the server's and the
     contract's. Supersedes nothing.
+
+## D-139 — The nine sign-in files get a code owner (GRP-01)
+- **Date:** 2026-10-21 · **Status:** Accepted (owner, 2026-10-21; asked in
+  GRP-01's pull request, #96, question 1, with Claude's recommendation, the
+  recommended option chosen) · **Section:** 6/8 (CI-01; extends D-097 and
+  D-102; D-042, D-071, D-137)
+- **Context:**
+  - Nine files that carry sign-in or device credentials had no code owner when
+    GRP-01 merged (#96, `bd83b21`, 2026-10-21). A change to any of them merged
+    without the owner's eye, while the server's credential check (`api.ts` and
+    `adapters/device-credentials.ts`, D-097) and the groups code (D-137) are
+    owner paths.
+  - `privacy-security-reviewer` raised it as a note in its reviews of #96
+    (N5). Claude asked the owner in the pull request (question 1) and
+    recommended a small follow-up pull request adding them to CODEOWNERS.
+  - The owner answered on 2026-10-21: "Ja, la code owner på de ni filene."
+    (Yes, put a code owner on the nine files.)
+- **Decision:**
+  - **The nine paths are code-owner paths,** owned by `@bvst @urso-agent` like
+    every other owner path (D-071). They go in both lists that must agree:
+    `.github/CODEOWNERS`, and `OWNER_APPROVAL_PATHS` in
+    `scripts/lib/merge-rules.mjs`, which `gate:integrity` (CI-01) checks
+    against CODEOWNERS. Each is written as the others are, from the repository
+    root, with its reason beside it as a comment:
+    1. `/apps/server/src/config.ts`: reads every setting a server process
+       starts from, among them `ADMIN_BOOTSTRAP_CODE`, the code that makes the
+       first admin.
+    2. `/apps/server/src/bin/api.ts`: the API's entry point, which wires the
+       configuration into the API.
+    3. `/apps/server/src/ports.ts`: the server's port types, among them the
+       group store's and the device-credential check's.
+    4. `/packages/contracts/src/groups.ts`: the join's request and answer,
+       including the issued credential.
+    5. `/packages/contracts/src/display-name.ts`: the display-name rule, which
+       the app checks before it sends and the server enforces.
+    6. `/apps/mobile/src/shared/secure-storage.ts`: where the phone keeps its
+       credential and its join key.
+    7. `/apps/mobile/src/shared/api/client.ts`: sends the credential, as
+       `Authorization: Bearer`, with every request that has one (the join is
+       public and sends none).
+    8. `/apps/mobile/src/features/grp/session.tsx`: where a 401 deletes the
+       credential and signs the phone out.
+    9. `/apps/mobile/package.json`: the app's dependencies, among them the
+       secure-storage library (`expo-secure-store`).
+  - **The reasons were read against each file's opening comment and code
+    (2026-10-21).** The one for `client.ts` says "every request that has one"
+    because `credential` is optional in `ApiRequest` and the join sends none.
+  - **The ai-review `safety` filter is not changed,** as D-102 did for
+    `log.ts`. Claude chose this (D-031); the owner's answer covers the code
+    owner only. A change to the filter would make this pull request edit
+    `ai-review.yml`, which CI's reviewers cannot review, so it would be merged
+    by hand (D-075).
+  - **These are owner paths, not safety paths.** None is in `SAFETY_PATHS`, so
+    none is mutated. The seven `/apps/` ones are not in the filter, so none
+    summons `safety-reviewer` by path; `privacy-security-reviewer` runs on
+    every pull request already (D-102). The two `packages/contracts/` files do
+    summon it, and did before this: the filter lists `packages/contracts/**`
+    (read 2026-10-21). Nothing here changes that.
+  - **The requirement ID for the tests is GRP-01,** the story of these
+    sign-in files and of the pull request the question came from. The tests
+    are named "GRP-01 (D-139): …". Not SEC-01: its mitigations, the
+    new-device notice (task 10, D-136 answer 2) and the admin's revoking of a
+    device's session (`revoked_at`, M4, D-137), are not built, and
+    `req:coverage` counts an ID anywhere in a test file's text, so naming
+    these tests after SEC-01 would show it as covered when it is not.
+  - **Who decided:** the owner decided the scope (the nine files, a code owner
+    on each). Claude chose the ID, the owners and leaving out the ai-review
+    filter (D-031).
+  - **Not in this decision:** `pnpm-lock.yaml` and `pnpm-workspace.yaml`, which
+    also have no CODEOWNERS line (read 2026-10-21). BUG-25 covers them.
+- **Consequences:**
+  - One small pull request, from the session's branch, changes
+    `.github/CODEOWNERS`, `OWNER_APPROVAL_PATHS` and the gate tests, and not
+    `ai-review.yml`, so CI's reviewers can run on it and it needs no hand
+    merge (D-075). It touches owner paths (`.github/`, `scripts/` and this
+    file), so it needs a code owner's approval like any other (D-042, D-071).
+  - **One gate test needs a longer named exception, which `test-author`
+    writes with the reason beside it (RG-03).** "The safety filter in
+    ai-review.yml matches the paths the owner must approve"
+    (`scripts/gate.test.mjs`) requires every `/apps/` owner path to be in the
+    filter, but for the exception pinned exactly to
+    `['/apps/server/src/log.ts']` (D-102, amended). Seven more `/apps/` owner
+    paths that stay out of the filter would turn it red. The pinned exception
+    becomes eight paths: `log.ts` and the seven above, citing D-102 and D-139.
+    That narrows the test by those seven and no others; every other `/apps/`
+    owner path is still required in the filter. The two `packages/contracts/`
+    paths are not `/apps/` paths, and that test does not read them.
+  - **The tests,** each named "GRP-01 (D-139): …": all nine are in
+    `OWNER_APPROVAL_PATHS` and tracked by git; under GitHub's last-match rule
+    the CODEOWNERS line that matches each names `@bvst @urso-agent`, and
+    `gate:integrity` finds every owner path owned; and the seven `/apps/` ones
+    are in the ai-review safety filter neither by name nor under a glob, as
+    D-102's test holds for `log.ts`.
+  - **The cost, stated plainly:** every later change to the nine needs a code
+    owner's approval (D-042). `ports.ts` holds every port the server has and
+    `apps/mobile/package.json` every dependency the app has, so a task that
+    adds a port, a setting or an app dependency waits for the owner, and so
+    does one that changes the join's contract, the client or the session.
+  - Extends D-097 and D-102: more owner paths, the same mechanism. Supersedes
+    nothing.
