@@ -58,6 +58,14 @@ export const OWNER_APPROVAL_PATHS = [
   '/apps/server/src/adapters/clock.ts',
   '/apps/server/src/adapters/migrations.ts',
   '/apps/server/drizzle.config.ts',
+  // Every setting a server process starts from, ADMIN_BOOTSTRAP_CODE among
+  // them: the code that makes the first admin (GRP-01, D-139).
+  '/apps/server/src/config.ts',
+  // The API's entry point, which wires the configuration into the API (GRP-01, D-139).
+  '/apps/server/src/bin/api.ts',
+  // The server's port types, the group store's and the device-credential
+  // check's among them (GRP-01, D-139).
+  '/apps/server/src/ports.ts',
   // The server's one log adapter: it takes closed events only, which is what
   // keeps heartbeat data out of logs (PRIV-07). Not in the ai-review safety
   // filter, by the owner's decision (D-102).
@@ -66,6 +74,21 @@ export const OWNER_APPROVAL_PATHS = [
   // Where the app's permissions, background modes, backup and deep links are
   // set; background location is what the safety core stands on (D-084).
   '/apps/mobile/app.config.ts',
+  // Where the phone keeps its credential and its join key (GRP-01, D-139).
+  '/apps/mobile/src/shared/secure-storage.ts',
+  // Sends the credential, as Authorization: Bearer, with every request that
+  // has one; the join is public and sends none (GRP-01, D-139).
+  '/apps/mobile/src/shared/api/client.ts',
+  // Where a 401 deletes the credential and signs the phone out (GRP-01, D-139).
+  '/apps/mobile/src/features/grp/session.tsx',
+  // The app's dependencies, the secure-storage library (expo-secure-store)
+  // among them (GRP-01, D-139).
+  '/apps/mobile/package.json',
+  // The join's request and answer, the issued credential among them (GRP-01, D-139).
+  '/packages/contracts/src/groups.ts',
+  // The display-name rule, which the app checks before it sends and the
+  // server enforces (GRP-01, D-139).
+  '/packages/contracts/src/display-name.ts',
   '/.github/',
   '/.claude/',
   // Loaded into every agent session, and states the non-negotiables and the
