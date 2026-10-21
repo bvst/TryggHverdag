@@ -1,7 +1,7 @@
 // INF-07: the things that must agree across infra/, the server and the
 // workflows — each written in one place and read in another, where nothing but
 // a test would notice them drifting apart.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { SYNTHETIC_CHECK_UUID as CHECK } from '../packages/test-kit/src/ping-url.ts';
@@ -639,6 +639,129 @@ describe('REL-10: staging is configured for the canary by Terraform, and refuses
     } else {
       expect(vMinor).toBe(Number(minor));
       expect(vPatch).toBeGreaterThanOrEqual(Number(patch));
+    }
+  });
+});
+
+// GRP-01-AC8 (approach item 8, D-136 answer 1): the first admin's bootstrap
+// code. Terraform makes it, 16 random bytes written as upper-case hex, 32
+// characters the API's normaliser takes, and hands it to the API as
+// ADMIN_BOOTSTRAP_CODE. Like the canary's credential (D-128), it lives only in
+// Terraform's state and the app's environment: no variable, no tfvars, no
+// GitHub secret, since whoever holds it can make themself the group's admin
+// while no group exists. The owner reads it in Clever Cloud's console (A-36).
+//
+// RG-03 (GRP-01, review loop 1, privacy-security-reviewer B1): the resource
+// is random_bytes, not random_id. random_id in hashicorp/random 3.9.1 marks no
+// attribute sensitive and its `id` is the bytes themselves, so every
+// infra-staging plan would print "random_id.admin_bootstrap_code: Refreshing
+// state... [id=...]", the code, into a job log that is public. random_bytes'
+// hex is sensitive and the resource has no ID made from the value. The pins
+// that named random_id now name random_bytes, its length and its one keeper,
+// and a test below holds that no .tf file in infra/staging declares a
+// random_id at all. Not a weakening: the same 16 bytes, the same hex, the same
+// one environment entry, and one test more.
+describe('GRP-01: the first admin’s bootstrap code, made by Terraform', () => {
+  /** The app's environment in main.tf. */
+  const environment = () => /\n {2}environment = \{\n([\s\S]*?)\n {2}\}\n/.exec(main)?.[1] ?? '';
+  const resource = () =>
+    /^resource "random_bytes" "admin_bootstrap_code" \{\n([\s\S]*?)\n\}$/m.exec(main)?.[1];
+
+  test('GRP-01-AC8: main.tf makes the code with random_bytes.admin_bootstrap_code, length = 16', () => {
+    expect(resource(), 'main.tf declares no random_bytes "admin_bootstrap_code"').toBeDefined();
+    expect(resource()).toMatch(/^\s*length\s*=\s*16\s*$/m);
+    expect(resource()).not.toMatch(/^\s*byte_length\s*=/m);
+    // A prefix would put characters before the hex that no code has.
+    expect(resource()).not.toMatch(/^\s*prefix\s*=/m);
+  });
+
+  // As the canary's credential is rotated (REL-10-AC17, D-128's loop-1
+  // amendment): infra-staging.yml runs a fixed plan with no `-replace`, so a
+  // committed generation number, the code's one keeper, is the rotation.
+  // Nothing else is kept: a secret there would sit in the plan, and a value
+  // that changes by itself would make a new code on every apply.
+  test('GRP-01-AC8: the code is rotated by a committed generation number: random_bytes.admin_bootstrap_code keeps only generation = local.admin_bootstrap_code_generation, a quoted string of digits declared once in main.tf’s locals, as canary_credential_generation is', () => {
+    const keepers = [...(resource() ?? '').matchAll(/^\s*keepers\s*=\s*\{([^}]*)\}/gm)].map(
+      ([, body]) => body ?? '',
+    );
+
+    expect(keepers, 'random_bytes.admin_bootstrap_code’s keepers').toHaveLength(1);
+    const entries = String(keepers[0])
+      .split(/[\n,]/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry !== '' && !entry.startsWith('#'))
+      .map((entry) => entry.split(/\s*=\s*/));
+    expect(entries, 'what the code keeps').toEqual([
+      ['generation', 'local.admin_bootstrap_code_generation'],
+    ]);
+
+    const locals = [...main.matchAll(/^locals \{\n([\s\S]*?)\n\}$/gm)]
+      .map(([, body]) => body ?? '')
+      .join('\n');
+    const declared = [
+      ...locals.matchAll(/^\s*admin_bootstrap_code_generation\s*=\s*(.*?)\s*$/gm),
+    ].map(([, value]) => value);
+    expect(declared, 'admin_bootstrap_code_generation in main.tf’s locals').toHaveLength(1);
+    expect(declared[0]).toMatch(/^"\d+"$/);
+    expect(main.match(/^\s*admin_bootstrap_code_generation\s*=/gm)).toHaveLength(1);
+  });
+
+  test('GRP-01-AC8: the app’s environment sets ADMIN_BOOTSTRAP_CODE to the code as upper-case hex, and main.tf names the code nowhere else', () => {
+    expect(environment()).toMatch(
+      /^\s*ADMIN_BOOTSTRAP_CODE\s*=\s*upper\(random_bytes\.admin_bootstrap_code\.hex\)\s*$/m,
+    );
+    // Once: no output, no other resource, no log of it.
+    expect(main.match(/\brandom_bytes\.admin_bootstrap_code\b/g)).toHaveLength(1);
+    expect(main.match(/\bADMIN_BOOTSTRAP_CODE\b/g)).toHaveLength(1);
+  });
+
+  // privacy-security-reviewer B1: a random_id's `id` is its value, printed by
+  // every plan that refreshes it. No staging file may declare one, for this
+  // code or any later secret, so no plan prints one.
+  //
+  // RG-03 (GRP-01-AC8, review loop 2, privacy-security-reviewer note 3; the
+  // spec's "Added in review loop 2"): nor a random_string or a
+  // random_integer, whose `result` no plan hides either (D-137). The test
+  // refuses three resource types where it refused one, and reads a type
+  // label quoted or bare, as HCL takes either. A stronger test: every
+  // declaration it refused, it still refuses.
+  test('GRP-01-AC8: no .tf file in infra/staging declares a random_id, random_string or random_integer resource, so no plan prints a random value', () => {
+    const files = readdirSync(path.join(ROOT, 'infra/staging')).filter((file) =>
+      file.endsWith('.tf'),
+    );
+    const printed = ['random_id', 'random_string', 'random_integer'];
+
+    expect(files, 'the .tf files read').toContain('main.tf');
+    for (const file of files) {
+      const text = read(`infra/staging/${file}`);
+      for (const type of printed) {
+        expect({
+          file,
+          type,
+          declared: new RegExp(`^\\s*resource\\s+"?${type}"?\\s`, 'm').test(text),
+        }).toEqual({ file, type, declared: false });
+      }
+    }
+  });
+
+  test('GRP-01-AC8: the code is no variable and no secret: variables.tf, the tfvars and the staging workflows never name it, and no workflow reads it from a GitHub secret', () => {
+    expect(read('infra/staging/variables.tf')).not.toMatch(/admin_bootstrap/i);
+    expect(read('infra/staging/staging.auto.tfvars')).not.toMatch(/admin_bootstrap/i);
+    for (const workflow of ['infra-staging.yml', 'deploy-staging.yml']) {
+      expect(read(`.github/workflows/${workflow}`), workflow).not.toMatch(/admin_bootstrap/i);
+    }
+    for (const workflow of [
+      'ai-review.yml',
+      'ci.yml',
+      'daily-status.yml',
+      'deploy-staging.yml',
+      'infra-staging.yml',
+    ]) {
+      const text = read(`.github/workflows/${workflow}`);
+      expect(text, workflow).not.toMatch(
+        /secrets\s*(\.\s*ADMIN_BOOTSTRAP_CODE\b|\[\s*['"]ADMIN_BOOTSTRAP_CODE['"])/i,
+      );
+      expect(text, workflow).not.toMatch(/TF_VAR_admin_bootstrap_code/i);
     }
   });
 });

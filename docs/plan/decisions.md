@@ -5615,3 +5615,415 @@ any other path is work, not a candidate for the same treatment.
   - **Left to BUG-53:** the same fail-open in `progress-gate.mjs` and
     `test-weakening.mjs`, and the post-edit hook's unguarded read of
     `package.json`.
+  - **An L3 step can stop before its setup does** (`safety-reviewer`, CI on
+    #93). On a machine with Docker, `gate:file` gives an edited L3 test
+    150 s, while `vitest.integration.config.mjs` allows a setup hook 180 s.
+    A slow first container pull can therefore end the step with "Still
+    running after 150 s, so it was stopped." That is a loud false failure,
+    never a quiet pass: run the file again, or run `pnpm run
+    test:integration`, before reading it as a test fault.
+
+## D-134 — M3's order: twelve tasks, GRP-01 first, and sign-in without SMS first
+- **Date:** 2026-10-20 · **Status:** Accepted (the owner, 2026-10-20: "jeg
+  godtar rekkefølgen", "Innlogging uten sms først", "Ja, en oppgave om
+  gangen"). Asked in session with Claude's recommendation for each ·
+  **Section:** 10 (M3)
+- **Context:**
+  - M3's roadmap row lists its requirements and exit criteria but, as M2's did
+    (D-090), no order and no task table.
+  - Earlier decisions and specs hand M3 many obligations: the real push and
+    SMS adapters, the alert's read route (D-106), the location SDK's settings
+    (D-086), the tests D-087 owes, iOS and the store builds. Each lands in the
+    task below that builds the thing it is about.
+  - Sign-in is planned with SMS codes (D-032), and SMS needs the provider
+    (A-12).
+  - D-052 (one requirement in flight) was to be revisited after M2.
+- **Decision:** twelve tasks, one pull request each, each through
+  `/feature <ID>`:
+  1. **GRP-01 — Sign-in and groups.** A single-use invitation that expires
+     after 7 days, device sessions (D-091), groups, membership, an admin
+     removing a member; the route that removes a responder from a journey
+     (D-122); the canary's users kept out of every group (D-128).
+  2. **GRP-02, CALL-01, CALL-02 — The home screen.** The #1 contact, the call
+     button, and 112 always visible.
+  3. **JRN-01, JRN-02 and LOST-01's phone half — Start a journey.** The safety
+     core, the location SDK in the background, a heartbeat every 60 s, and the
+     "sharing" notice that stays on screen. Mutation testing of the safety core
+     is set up before its first code (D-081 item 13).
+  4. **GRP-03 — The safety permission check,** so the journey from task 3 never
+     starts silently degraded.
+  5. **JRN-05, JRN-06 — "I'm home"** (with its offline queue) **and the
+     two-hour stop** (a new end reason, D-125), and the walker's screen once a
+     journey has ended.
+  6. **Real push (APNs and FCM),** with JRN-04's start and end notices.
+  7. **The alert screen,** with HELP-01: the read route (D-106), "I'm on it"
+     (LOST-06) and "They're safe" (LOST-08).
+  8. **JRN-03 — What responders see:** the map, the age of the last position,
+     and the battery level.
+  9. **GRP-04 — Responder setup:** alerts that break through a silenced phone
+     (Time Sensitive now, Critical Alerts if Apple grants them), readiness, and
+     the confirmed SMS number.
+  10. **Real SMS (LINK Mobility),** to the owner's own number only on staging
+      (D-135), and the SMS sign-in code for a new device.
+  11. **CALL-03, LOST-04, LOST-05:** calling #1 shares the location with #1;
+      the low-battery notice; the offline notice.
+  12. **iOS and the stores:** `e2e:ios` with its weekly simulator run, the EAS
+      preview builds, internal TestFlight and Google Play internal testing.
+- **Sign-in without SMS first:** in task 1 the invitation binds the first
+  device. Signing in on a new device with an SMS code comes with task 10, so
+  task 1 does not wait on A-12.
+- **One task at a time (D-052, revisited):** kept. The tasks are large and
+  build on each other.
+- **Why this order:** sign-in comes first because every screen needs a real
+  user and a device session, and today only the tests and the canary have one.
+  What the walker needs (2–5) comes before what the responder sees; it can be
+  built and tested on the Android emulator with the push and SMS fakes, and
+  needs no account of the owner's. The tasks that wait on the owner come late:
+  A-11 by task 6, A-12 by task 10, A-03 by task 12. iOS and the stores come
+  last because they wrap the demo.
+- **Consequences:**
+  - The roadmap gains "M3 — App MVP in detail".
+  - The owner to-do list gains A-11 (push) and A-12 (SMS), which only the
+    roadmap's table named.
+  - GRP-01 may start while M2's last exit criterion, the canary's 24-hour
+    reading (A-35), is still running: that reading needs no code.
+  - UI work runs on the Mac, where the simulators are (D-055); server parts may
+    run in cloud sessions.
+  - Tensions found in the documents, to be raised with the owner in the task
+    each concerns, not decided here:
+    - real-phone checks M3 is asked for (D-086 condition 2, D-113's gate)
+      against D-037;
+    - the SEC-01 new-device notice, placed in M3's sign-in task by SM-01's spec
+      and in M4 by the roadmap;
+    - the iOS L7 cadence: weekly in the roadmap, nightly in
+      `06-testing-strategy.md`.
+  - A change to the order or the split goes back to the owner. A bug fix may
+    run between tasks.
+  - Amends D-032's sign-in for M3 only (SMS codes arrive with task 10).
+    Supersedes nothing.
+
+## D-135 — The owner's own data may be on staging, for M3's demo
+- **Date:** 2026-10-20 · **Status:** Accepted (the owner, 2026-10-20: "Ja, jeg
+  tillater å bruke mine data i staging"). Asked in session with Claude's
+  recommendation · **Section:** 8 (environments), 10 (M3)
+- **Context:**
+  - Staging is "Synthetic only" (`08-cicd-releases.md`, D-046).
+  - M3's demo uses the preview builds, which talk to staging, with real push to
+    the owner's phone, SMS to the owner's number, and the owner's location
+    while a journey runs (D-134).
+- **Decision:**
+  - Until production exists (M5), staging may hold **the owner's own** personal
+    data: the owner's name, phone number, push tokens and location. Nobody
+    else's.
+  - Tests and test data stay synthetic (RG-07). This covers the demo only.
+- **Consequences:**
+  - The staging row in `08-cicd-releases.md` names this exception.
+  - Everything PRIV-07 and REL-12 require holds on staging as in production:
+    no location and no phone number in a log line, no location in an SMS.
+  - Task 10's SMS adapter sends only to the owner's number on staging; how is
+    task 10's to design.
+  - Revisited at M5, when production arrives (D-046).
+  - Supersedes nothing; narrows D-046's staging row for the owner's own data.
+
+## D-136 — Joining by invitation: the owner's five answers (GRP-01)
+- **Date:** 2026-10-20 · **Status:** Accepted (the owner, 2026-10-20). Each
+  was asked in Norwegian, one at a time, with Claude's recommendation, and the
+  owner chose the recommendation each time · **Section:** 10 (M3, task 1);
+  D-032, D-091, D-122, D-134
+- **Context:** GRP-01's spec (`docs/specs/GRP-01.md`) asked five questions
+  that are scope, cost, privacy or safety. D-134 starts sign-in without SMS:
+  the invitation binds the first device, and SMS sign-in on a new device comes
+  with task 10.
+- **Decision:**
+  1. **The first admin joins with a one-time bootstrap code made by
+     Terraform.** It is given to the staging API; the owner reads it once in
+     Clever Cloud's console and joins with it in the app. It works only while
+     no group exists, and does not expire after 7 days.
+     - Rejected: a code the owner chooses and saves as a `staging` secret (one
+       more secret, its strength the owner's to get right); a one-off command
+       writing an admin invitation into the database (database access from
+       outside Clever Cloud, or a CI log that is public in this repository);
+       the first person to join becomes admin (whoever finds the staging
+       address first owns the group).
+  2. **The new-device notice comes with task 10, and the admin's passkey in
+     M4.** Neither can be in task 1: nobody signs in on a second device before
+     task 10, and nothing can notify before push (task 6).
+     - Rejected: both in task 10; both in M4, as the roadmap's M4 row read.
+  3. **An invitation is a code only, and the person types their own name when
+     they join.** The admin's app shows the code with its expiry date and a
+     share action; the admin sends it any way they like.
+     - Rejected: the admin writes the name on the invitation (the admin types
+       others' personal data); a link in the app's own scheme as well as the
+       code (a deep link, which `app.config.ts` keeps out until a feature needs
+       one). D-013 already ruled out web links.
+  4. **A session lasts until the member is removed.** No time limit and no
+     rotation in M3. Revoking a single phone comes in M4.
+     - Rejected: a fixed lifetime (for example 90 days) renewed by the app,
+       which adds a way for a walk to go silent if renewal fails.
+  5. **A member removed while walking keeps their own journey to its end,**
+     followed by the responders already on it. Their phone may send only
+     heartbeats and "I'm home" for that journey, and is signed out when it
+     ends. What they see and receive stops at once either way.
+     - Rejected: the journey ends at once, with a new end reason and message
+       (protection stops mid-walk, and the walker's app learns it only at its
+       next contact); the removal is refused until the journey ends (up to 24
+       hours, while they stay a responder for others, against "immediately").
+- **Consequences:**
+  - GRP-01-AC1 to AC30 are written on these answers. D-137 records the
+    choices delegated to Claude within them.
+  - A new owner to-do, A-36: after GRP-01 merges and deploys, `infra-staging`
+    plan and apply, read the bootstrap code once in Clever Cloud's console,
+    and join in the app from the owner's own phone (D-135).
+  - Settles D-134's tension on the new-device notice: task 10.
+  - Amends D-032 for M3: the admin's passkey waits for M4. Supersedes nothing.
+
+## D-137 — Joining by invitation: the delegated choices, and where the plan disagreed with itself (GRP-01)
+- **Date:** 2026-10-20 · **Status:** Accepted (delegated, D-031) ·
+  **Section:** 5 (AR-03 to AR-05, AR-10, AR-11); D-008, D-009, D-013, D-032,
+  D-091, D-122, D-128, D-134, D-136
+- **Context:** GRP-01's spec has the full reasoning. This records the choices
+  it settles without asking, and the contradictions it found.
+- **Decision:**
+  - **One group, and a user in at most one.** D-008 and D-009 name "the
+    private group", the story says "the group", and the admin is "the owner".
+    A unique index allows one `groups` row; `memberships` has the user as its
+    key; one `ADMIN` per group.
+  - **Better Auth is not installed in task 1.** Its value is its sign-in
+    flows, SMS codes and passkeys (D-032), and neither exists in task 1
+    (D-134, D-136). D-091's `DeviceAuthenticator` port stays, with an issuer
+    that uses `crypto.randomBytes(32)` and a test asserting it. Whether Better
+    Auth can use UUID user IDs moves to the task that installs it, against the
+    version it pins.
+  - **Membership is the session** (within D-136, answer 4). A device
+    authenticates while its user is a current member, or it is the canary's
+    device, or, for its own unended journey's heartbeats and "I'm home" only,
+    it started that journey (D-136, answer 5). Removing a membership signs out
+    every device of that user at its commit, with no revocation column to
+    forget. A `revoked_at` per device is M4's.
+  - **A join can be retried.** The app sends a join key it makes once; the
+    same code with the same key, while the invitation is unexpired and its
+    user still a member, re-issues that device's credential instead of
+    burning the invitation (F2).
+  - **Only a journey's walker removes a responder from it** (D-122's route).
+    The admin removes members, not one responder from one journey; a responder
+    leaving on their own is in no story. Neither is built.
+  - **A caller who is not the walker gets 404 `JOURNEY_NOT_FOUND`,** whatever
+    the journey's state and whoever follows it: the one answer for a caller
+    who may not tell `JOURNEY_NOT_FOUND`, `NOT_A_RESPONDER` and
+    `JOURNEY_ENDED` apart. The walker gets all three. The route has no 403,
+    because a 403 would say the journey exists. Every ID in a path is
+    validated as a UUID, so a malformed one is the fixed 400.
+  - **An admin's removal writes an audit row** (`MEMBER_REMOVED`: the admin,
+    the member, the database's time) in its own transaction, and so do the
+    group's creation and each invitation. The walker's removal of a responder
+    writes none: the walker is not acting as admin.
+  - **The worker's check-in is withheld while the SMS check is not
+    reporting** (D-122's condition for the route). When
+    `HEALTHCHECKS_WORKER_URL` is usable and `HEALTHCHECKS_SMS_URL` is unset,
+    unusable or the worker's own, the worker does not check in, says why at
+    start, and `staging-worker` pages within its grace. Rejected: refusing to
+    start, which would stop the watchdog and every alert to page about one
+    (F7).
+  - **An admin's removal is one transaction across every journey the member
+    follows,** instead of SM-10's spec's "once per journey": membership row
+    `FOR UPDATE`, then each unended journey in ID order through SM-10's own
+    removal step, then the audit row; all or nothing, and a lock limit reached
+    fails the whole removal loudly. With one transaction per journey, a
+    failure after the membership was gone would leave a removed member
+    alerted, with nothing left for a retry to find.
+  - **A journey's responders must be current members of the walker's group,**
+    held under the lock: the start takes the named members' rows `FOR SHARE`,
+    the removal `FOR UPDATE`.
+  - **The canary's walker may name its own responder and nobody else;** no
+    member may name either canary user; the canary's users can have no
+    membership (a check on the table); a join never writes
+    `CANARY_DEVICE_ID`. Only the worker registers the canary, as before.
+- **Where the plan disagreed with itself, and how the spec resolves each:**
+  1. The new-device notice: SM-01's spec put it in M3's login task; the
+     roadmap's M4 row and `critical-alerts-request.md` put it in M4. Resolved
+     by the owner: task 10 (D-136, answer 2).
+  2. D-128 against SM-01's spec: the canary's users join no group, while a
+     responder must be a member of the walker's group, so the canary's walker
+     could name nobody and every run would fail and page. Resolved: the
+     canary's walker may name its own responder, and only it.
+  3. The leaked-invitation threat asks for invitations bound to the invited
+     phone number, which needs SMS, while D-134 starts sign-in without it.
+     Resolved: the binding waits for task 10 or M4 (the roadmap's M4 row); the
+     admin sees every new member by name and can remove them.
+  4. SM-10's spec: "once per journey" for the admin's removal. Resolved: one
+     transaction, as above.
+  5. D-134 says UI work runs on the Mac (D-055), but task 1's app needs no
+     simulator: it has no iOS configuration until task 12, L5 runs anywhere
+     and L7 Android runs in CI. Resolved by the owner (2026-10-20, "Her i
+     skyøkten", Claude's recommendation): all of GRP-01 is built in the cloud
+     session; the Mac is used when a task needs the iOS simulator or a look
+     at the screen, task 12 at the latest. This narrows D-134's "UI work runs
+     on the Mac".
+  6. `05-architecture.md`'s data model puts "age band and role per
+     membership" together; the age band is M4's (the roadmap). Resolved: the
+     role only.
+  7. D-091 gave GRP-01 Better Auth's UUID question, which cannot be answered
+     where Better Auth is not installed. Resolved: it moves to the task that
+     installs it.
+- **Consequences:**
+  - `modules/groups/` and `adapters/groups.ts` are new owned safety paths; as
+    with D-128, the ai-review `safety` filter, `OWNER_APPROVAL_PATHS` and
+    CODEOWNERS gain them in a pull request of their own, merged by hand
+    (D-075), before GRP-01's. It comes from the second branch
+    `claude/busy-faraday-40n2zl-ai-review`, as REL-10's did: the owner
+    allowed it again for GRP-01 (2026-10-20, Claude's recommendation).
+  - Every L3 and L6 test that starts a journey puts its users in a group; the
+    test kit's builders gain groups and memberships.
+  - The join becomes the second public route, in SM-01-AC9's list on purpose.
+  - CI's `android-e2e` starts PostgreSQL and the API for the first L7 flows
+    that need a server.
+  - Amends D-091: issuance, expiry, rotation and revocation are as above.
+    Supersedes nothing.
+- **Amended in review loop 1 (2026-10-20; Claude, D-031, from the reviews of
+  `a5fd8cf`).** The spec's notes marked *Review loop 1*, and its table "Review
+  loop 1", have each in full. GRP-01-AC8, AC28 and AC30 are amended;
+  AC31 to AC33 are new; no criterion was renumbered.
+  - **The bootstrap code is made by `random_bytes`, not `random_id`**
+    (`privacy-security-reviewer`, B1, blocking). In `hashicorp/random` 3.9.1,
+    `random_id` marks no attribute sensitive, and its `id` is the bytes
+    themselves, in base64url. Terraform prints a resource's `id`, so every
+    `infra-staging` plan would have written
+    `random_id.admin_bootstrap_code: Refreshing state... [id=<the code>]`
+    into a job log that is public in this repository. D-136, answer 1,
+    rejected the database-command route for exactly that ("a CI log that is
+    public in this repository"), and SEC-03 asks for secrets in a managed
+    store. `random_bytes` (`length = 16`) has a sensitive `hex` and no ID
+    made from the value; the app's environment takes
+    `upper(random_bytes.admin_bootstrap_code.hex)`, the same 32 characters
+    as before. It takes `keepers = { generation =
+    local.admin_bootstrap_code_generation }`, as the canary's credential
+    does (D-128's loop-1 amendment): `infra-staging.yml` has no `-replace`,
+    so raising that number in a pull request is the one-line rotation. The reviewer showed the difference on a hand-written state:
+    the code once in the plan with `random_id`, nowhere in the plan with
+    `random_bytes`. Nothing
+    had been planned or applied with `random_id`: GRP-01 had not merged, and
+    A-36's plan comes after the merge. For any secret Terraform makes from
+    now on: `random_password` or `random_bytes`, never `random_id`,
+    `random_string` or `random_integer`.
+  - **The bootstrap join can be retried** (`privacy-security-reviewer` N1,
+    `code-reviewer`). The group's row keeps the first admin's join key's
+    SHA-256 (`groups.bootstrap_join_key_hash`); the same code with the same
+    key, while the admin is the group's only member, gives the admin's one
+    device a new credential, as an invitation's retry does. A lost answer
+    (F2) had left the group made, the owner outside it, and only an emptied
+    database to start again. The window is open while the admin is the
+    group's only member: it closes when a second member joins, and opens
+    again if the admin removes every other member (amended in review loop
+    2, `privacy-security-reviewer`). The retry also needs the join key the
+    admin's phone keeps, so the code alone opens nothing once the group
+    exists.
+  - **The bootstrap code is compared in constant time**
+    (`privacy-security-reviewer` N2): the SHA-256 digests of the code sent
+    and of the setting, by `crypto.timingSafeEqual`, never `===`.
+  - **A display name refuses bidirectional controls, other format
+    characters, and names with nothing visible** (`privacy-security-reviewer`
+    N4, the abusive-member threat). The threat is spoofing: a bidirectional
+    override makes a name read as another's (U+202E), and an invisible name
+    shows as nothing in the admin's list (U+200B alone). Refused: the
+    bidirectional controls U+061C, U+200E, U+200F, U+202A to U+202E and
+    U+2066 to U+2069; every other character of Unicode category Cf except
+    ZWNJ (U+200C) and ZWJ (U+200D); and any name with no visible character,
+    that is, only white space, Cc or Cf characters (ZWNJ and ZWJ included) or
+    the blank fillers U+115F, U+1160, U+3164, U+FFA0 and U+2800. ZWNJ and ZWJ
+    are allowed because real Persian names and joined emoji need them, and
+    refusing those costs more than it protects: alone they cannot reverse a
+    name, and a name of nothing else is refused as invisible. One rule in
+    `packages/contracts`, used by the join's schema and by the app before it
+    sends.
+  - **`modules/groups/` is a safety path with a mutation group of its own**
+    (`safety-reviewer` S4), against `groups.system.test.ts`, and that file
+    joins the `journeys` group's tests: a planted mutant skipping the walker
+    check in `modules/journeys/removal.ts` survived the group's three files.
+    `api.ts` stays outside `SAFETY_PATHS` in this loop, so no mutation run
+    tests its middleware; that is a BUG of its own, named in the spec's
+    "Left for later tasks".
+  - **`android-e2e` runs on changes to `apps/server/` and
+    `packages/contracts/`** (`safety-reviewer`, the implementer): the L7
+    flows now run against the API the job starts, so a server change can
+    break them.
+  - **The app's API client is plain `fetch`** (`code-reviewer` S3): a swap
+    from D-032's library set, so recorded as a decision of its own, D-138,
+    as D-032 asks.
+  - **Smaller corrections:** the start route's `responderIds` description
+    says "a member of the walker's group" (`code-reviewer` S2); a refusal on
+    removal is no longer shown as "could not be reached" (`code-reviewer`
+    S4); a detached JSDoc in `api.ts` goes (`code-reviewer` S1); the
+    authentication query may also match on `walker_id`, to use the existing
+    index, if that stays simple (`safety-reviewer`, a note).
+  - **The app's accessibility** (`a11y-i18n-reviewer` S2 to S6): the removal
+    confirmation in the member's place, its button naming them, the result
+    announced; its wording without "deres", saying a new invitation is
+    needed to rejoin and not that the phone is signed out at once (untrue
+    for a walking member, D-136 answer 5); the invitation code kept whole
+    group by group when it wraps, announced, and read character by
+    character; visible field labels; a waiting indicator; one wording for
+    "Prøv igjen" / "Try again".
+  - **Left for later tasks, as the spec names them:** dark-first screens
+    (task 2; `a11y-i18n-reviewer` S1, which will block task 2's home screen
+    if it is light-only); the app's sign-out on any 401, which would delete a
+    walking removed member's credential, since `GET /v1/me` answers a
+    walker-only device 401 (task 3; `safety-reviewer` S1,
+    `privacy-security-reviewer` N3); task 6's push hand-off, corrected to "a
+    removed member's device gets nothing but the messages to the walker of
+    its own unended journey", so the walker's `NO_RESPONDER` warning still
+    arrives (`safety-reviewer` S2, F6).
+  - **Docs the green head promised and missed** (`privacy-security-reviewer`
+    S1, S2; `safety-reviewer` S3): `ADMIN_BOOTSTRAP_CODE` in
+    `08-cicd-releases.md`'s secrets inventory; in `monitoring-setup.md`,
+    "When `staging-worker` pages you" (the withheld check-in), "If
+    `ADMIN_BOOTSTRAP_CODE` leaks", and the canary's credential naming only
+    `CANARY_RESPONDER_ID` (D-128); in `README.md`, A-36's plan with
+    `random_bytes` and no value, and "Open for M4" since GRP-01.
+  - Supersedes nothing. The swap from D-032's client libraries is D-138's.
+
+## D-138 — The app's API client is plain `fetch` for now, not `@orpc/client` and TanStack Query (GRP-01)
+- **Date:** 2026-10-20 · **Status:** Accepted (delegated, D-031) ·
+  **Section:** 5 (the library set); D-016, D-032, D-137
+- **Context:**
+  - D-032's library set names oRPC (contract-first) and TanStack Query, and
+    says "Any swap is recorded as a new decision".
+  - GRP-01's spec planned `@orpc/client` with its OpenAPI link and
+    `@tanstack/react-query` for the app's first calls.
+  - The build (green at `a5fd8cf`) used neither. `code-reviewer` found the
+    deviation unrecorded (S3, review loop 1).
+- **Decision:**
+  - **What was swapped:** the app reaches the API through one module,
+    `apps/mobile/src/shared/api/client.ts`, built on the platform's own
+    `fetch`. `@orpc/client` and `@tanstack/react-query` are not installed.
+  - **Why:**
+    - **Two dependencies fewer.** Each is one more package to vet for
+      licences and telemetry (D-016, the no-analytics rule), and one more
+      supply-chain path into the app.
+    - **Simpler.** Task 1 has five calls on four screens and needs no
+      cache, refetching or generated client. The one module keeps four
+      answers apart, which the screens depend on: ok, refused (with the
+      contract's code), unauthorized (the 401, the only answer that signs a
+      phone out, GRP-01-AC29) and unreachable (no answer within 20 s, or a
+      5xx, which never signs out).
+    - **Types still come from the contracts.** Every screen imports its
+      request and answer types from `@trygghverdag/contracts`, type-only, so
+      a renamed field breaks the app's type check.
+- **The cost, stated plainly:** the success bodies are cast (`as T`), so
+  **the app does not validate the server's answers at run time.** An answer
+  whose shape differs from its type would not be caught in the app: it could
+  show wrongly or show nothing, without saying so. What holds the shapes
+  instead is upstream of the app: `api:diff` (additive changes only), the L6
+  tests of each route's answer, and the L7 flows against the real API.
+- **When to revisit:**
+  - when the app grows enough screens to want caching or refetching
+    (task 3's responder picker at the earliest, or the alert and map
+    screens of tasks 7 and 8);
+  - or when an answer's shape matters to safety on the phone (an alert, a
+    journey's state). There, a run-time check of the answer, with zod from
+    the contracts or `@orpc/client`, is weighed against this choice.
+  - Revisiting is a new decision, or an amendment of this one.
+- **Consequences:**
+  - GRP-01's spec, approach 14, describes the client.
+  - D-137's loop-1 amendment points here.
+  - Amends D-032 for the app's client only; oRPC stays the server's and the
+    contract's. Supersedes nothing.

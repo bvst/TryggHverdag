@@ -595,9 +595,17 @@ jobs:
       # Built before the emulator boots: on a two-core runner, Gradle and an
       # emulator running at once starve each other, and a slow build turns into
       # a flaky test.
+      #
+      # GRP-01: the flows that join the group talk to the API this job starts
+      # below, which the emulator reaches at 10.0.2.2, its alias for this
+      # runner's loopback. The address is fixed at build time, and
+      # app.config.ts lets this build, and only a build with this address,
+      # use plain HTTP to that one host.
       - name: Build the release app for x86_64
         if: steps.affected.outputs.app == 'true'
         timeout-minutes: 30
+        env:
+          EXPO_PUBLIC_API_URL: http://10.0.2.2:8080
         run: pnpm run e2e:android --build-only
       # What the build leaves that nothing after it reads. Gradle's daemon is
       # stopped first: a file it still holds open keeps its space after it is
@@ -648,6 +656,56 @@ jobs:
             ~/.android/adb*
           # The key the restore above resolved, so it is written once.
           key: ${{ steps.avd-cache.outputs.cache-primary-key }}
+      # GRP-01 (L7): the first flows that need a server. A freshly migrated
+      # PostgreSQL, staging's version, so no group exists yet, and the API on
+      # port 8080 with ADMIN_BOOTSTRAP_CODE set to a code made here for this
+      # run alone: 16 random bytes as 32 upper-case hex digits, as Terraform
+      # writes staging's. It is synthetic and opens only this throwaway
+      # database. The flows get it as BOOTSTRAP_CODE (scripts/e2e-android.mjs).
+      # The API's output goes to a file, shown below when a flow failed.
+      - name: Start a freshly migrated PostgreSQL and the API for the flows
+        if: steps.affected.outputs.app == 'true'
+        env:
+          DATABASE_URL: postgres://postgres@127.0.0.1:5432/trygghverdag
+        run: |
+          set -euo pipefail
+          docker run --detach --name e2e-postgres --publish 127.0.0.1:5432:5432 \
+            --env POSTGRES_HOST_AUTH_METHOD=trust --env POSTGRES_DB=trygghverdag \
+            postgres:15-alpine
+          ready=false
+          for attempt in $(seq 1 60); do
+            if docker exec e2e-postgres pg_isready --host 127.0.0.1 --username postgres --dbname trygghverdag; then
+              ready=true
+              break
+            fi
+            echo "PostgreSQL is not ready yet (attempt $attempt of 60)."
+            sleep 1
+          done
+          if [ "$ready" != true ]; then
+            docker logs e2e-postgres
+            echo "::error::PostgreSQL did not become ready within 60 s, so the flows that need the API cannot run."
+            exit 1
+          fi
+          node --experimental-strip-types apps/server/src/bin/migrate.ts
+          code=$(openssl rand -hex 16 | tr 'a-f' 'A-F')
+          echo "BOOTSTRAP_CODE=$code" >> "$GITHUB_ENV"
+          ADMIN_BOOTSTRAP_CODE="$code" PORT=8080 \
+            nohup node --experimental-strip-types apps/server/src/bin/api.ts \
+            > "$RUNNER_TEMP/api.log" 2>&1 &
+          up=false
+          for attempt in $(seq 1 60); do
+            if curl --silent --fail --output /dev/null http://127.0.0.1:8080/v1/health; then
+              up=true
+              break
+            fi
+            echo "The API is not answering yet (attempt $attempt of 60)."
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/api.log"
+          if [ "$up" != true ]; then
+            echo "::error::The API did not answer /v1/health within 60 s, so the flows that need it cannot run."
+            exit 1
+          fi
       # On the job's 16 KB-page image, a native library that is not aligned for
       # those pages fails here, not at store upload.
       - name: Boot the emulator in bokmål and run every flow
@@ -673,6 +731,11 @@ jobs:
           name: android-e2e-debug
           path: reports/e2e-android/
           retention-days: 7
+      # The API's own lines, closed events only and synthetic data (PRIV-07,
+      # RG-07), so a failed flow can be read against what the server saw.
+      - name: Show the API's output when a flow failed
+        if: failure() && steps.affected.outputs.app == 'true'
+        run: cat "$RUNNER_TEMP/api.log" || echo "The API wrote no log file."
       - if: steps.affected.outputs.app == 'true' && github.ref == 'refs/heads/main' && steps.gradle-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

@@ -18,7 +18,8 @@
  *     default, which is the safe direction. ENDED frees the walker: an ENDED
  *     journey handed in as the current one is no journey at all.
  *   - SM-02, its start rule: a journey needs at least one responder to start.
- *     A responder is an existing user other than the walker.
+ *     A responder is one the walker may name: since GRP-01, a current member
+ *     of the walker's group other than the walker (`eligibleResponderIds`).
  *   - The heartbeat (LOST-01): only for the walker's own journey (SEC-07),
  *     ignored once it has ENDED (SM-07), only from the device that started
  *     it (D-101), and otherwise recorded with the state unchanged (SM-03). The
@@ -330,8 +331,12 @@ export interface StartEvent {
   walkerId: string;
   /** As the walker named them: possibly empty, possibly with repeats. */
   responderIds: readonly string[];
-  /** Which of the named IDs exist as users. */
-  existingUserIds: ReadonlySet<string>;
+  /**
+   * Which of the named IDs the walker may name: the current members of the
+   * walker's group other than the walker (GRP-01, approach item 6). Never
+   * read as "is a user".
+   */
+  eligibleResponderIds: ReadonlySet<string>;
 }
 
 /**
@@ -625,10 +630,10 @@ function start(current: WalkersJourney | null, event: StartEvent): StartOutcome 
   if (current !== null && current.state !== 'ENDED') {
     return { type: 'refused', reason: 'ALREADY_ON_A_JOURNEY', journeyId: current.id };
   }
-  const { walkerId, responderIds, existingUserIds } = event;
+  const { walkerId, responderIds, eligibleResponderIds } = event;
   // The whole start is refused, not just the bad entry: dropping it quietly
   // would let a walker believe someone is following them who is not.
-  if (responderIds.some((id) => id === walkerId || !existingUserIds.has(id))) {
+  if (responderIds.some((id) => id === walkerId || !eligibleResponderIds.has(id))) {
     return { type: 'refused', reason: 'INVALID_RESPONDER' };
   }
   if (responderIds.length === 0) {

@@ -14,7 +14,7 @@
 // inside a failed one. A flow's status is one of PENDING, PREPARING,
 // INSTALLING, RUNNING, SUCCESS, ERROR, CANCELED, STOPPED or WARNING, so "has
 // no <failure>" is not the same as "passed".
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -51,6 +51,7 @@ import {
 
 const FLOWS = 'apps/mobile/e2e';
 const NB = 'apps/mobile/src/shared/translations/nb.json';
+const EN = 'apps/mobile/src/shared/translations/en.json';
 
 const made = [];
 afterEach(() => {
@@ -1433,6 +1434,347 @@ describe('judgeReport: only a report in which every flow ran and passed is a pas
   });
 });
 
+/**
+ * One <testcase> as Maestro 2.10.0 writes it. Read from tag cli-2.10.0 of
+ * github.com/mobile-dev-inc/maestro: JUnitTestSuiteReporter.kt and its
+ * JUnitTestSuiteReporterTest.kt ("XML - Test failed"), under
+ * maestro-cli/src/{main/java,test/kotlin}/maestro/cli/report/. A failed flow's
+ * reason is the text of its <failure> element (@JacksonXmlText), never a
+ * `message` attribute. It comes after the flow's <properties>, when the flow
+ * has any, and only an ERROR flow has one (TestSuiteInteractor.kt). Jackson
+ * 2.17.1 writes through Woodstox 6.6.2, whose BufferingXmlWriter escapes < and
+ * & in element text always, > at the start or after ], and a carriage return
+ * as &#xd;. It leaves " and line breaks as they are. `failure` goes in as it
+ * stands in the file, entities and all.
+ *
+ * @param {string} name
+ * @param {string} status
+ * @param {{ failure?: string, properties?: Record<string, string> }} [children]
+ */
+function maestroFlow(name, status, { failure, properties } = {}) {
+  const open =
+    `    <testcase id="${name}" name="${name}" classname="${name}" ` +
+    `file="apps/mobile/e2e/${name}.yaml" time="37.412" timestamp="2026-10-20T09:00:02" status="${status}"`;
+  const inside = [
+    ...(properties === undefined
+      ? []
+      : [
+          '      <properties>',
+          ...Object.entries(properties).map(
+            ([key, value]) => `        <property name="${key}" value="${value}"/>`,
+          ),
+          '      </properties>',
+        ]),
+    ...(failure === undefined ? [] : [`      <failure>${failure}</failure>`]),
+  ];
+  return inside.length === 0 ? `${open}/>` : [`${open}>`, ...inside, '    </testcase>'].join('\n');
+}
+
+/**
+ * A failed <testcase> holding this <failure> element, written as it stands: the
+ * shape other JUnit writers use, with the reason in a `message` attribute.
+ */
+const failedWith = (name, element) =>
+  `    <testcase id="${name}" name="${name}" classname="${name}" ` +
+  `file="apps/mobile/e2e/${name}.yaml" time="50.204" timestamp="2026-10-20T09:00:02" status="ERROR">\n` +
+  `      ${element}\n` +
+  '    </testcase>';
+
+/** `text` with every run of white space as one space. */
+const squash = (text) => text.replace(/\s+/g, ' ');
+
+/** How many times `text` shows in `message`, white space aside. */
+const timesIn = (message, text) => squash(message).split(squash(text)).length - 1;
+
+/**
+ * The flow, of `names`, named last before `text` first shows in `message`,
+ * white space aside: the flow that text is listed under. Undefined when `text`
+ * is not in the message at all.
+ *
+ * @param {string} message
+ * @param {string} text
+ * @param {string[]} names
+ */
+function listedUnder(message, text, names) {
+  const flat = squash(message);
+  const at = flat.indexOf(squash(text));
+  if (at === -1) return undefined;
+  const before = flat.slice(0, at);
+  let under;
+  let last = -1;
+  for (const name of names) {
+    const where = before.lastIndexOf(name);
+    if (where > last) {
+      under = name;
+      last = where;
+    }
+  }
+  return under;
+}
+
+/** The note that a reason was cut short. */
+const SAYS_CUT = /\b(cut|truncated|shortened)\b/i;
+
+// CI's job log has to say why a flow failed: the debug artifact with
+// report.xml in it is not always within reach (PR #96, first-admin-invites).
+// Maestro's reason may hold the flow's typed values. In CI those are the job's
+// synthetic bootstrap code, which the log already prints, in the job's env and
+// in the `maestro test -e BOOTSTRAP_CODE=…` line scripts/e2e-android.mjs writes
+// before the run, so a reason needs no redaction. Every reason below is plain
+// words or a pattern from a flow; the one code-shaped value is made at run time.
+describe("judgeReport: a failed flow says why, in Maestro's own words", () => {
+  const FLOW_NAMES = ['app-starts', 'first-admin-invites', 'wrong-code'];
+
+  test("INF-06-AC9: a failed flow's reason, the text of its <failure>, shows under the flow's name", () => {
+    const reason = 'Element not found: Text matching regex: Opprett invitasjon';
+
+    const result = judgeReport(
+      report(
+        maestroFlow('app-starts', 'SUCCESS'),
+        maestroFlow('first-admin-invites', 'ERROR', { failure: reason }),
+        maestroFlow('wrong-code', 'SUCCESS'),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(
+      '1 of 3 flows failed or did not finish: first-admin-invites (ERROR)',
+    );
+    expect(result.message).toContain(reason);
+    expect(listedUnder(result.message, reason, FLOW_NAMES)).toBe('first-admin-invites');
+  });
+
+  test('INF-06-AC9: the reason is read as XML: its entities are decoded, once', () => {
+    // &lt;, &amp; and &gt; are what Woodstox writes in element text; &quot; and
+    // &#10; are as valid there. &amp;lt; is a reason that holds "&lt;" itself.
+    const written =
+      'Assertion is false: &quot;Inviter &amp; del&quot; is visible&#10;' +
+      'Below: &lt;Medlemmer&gt;, written &amp;lt;b&amp;gt; in the pattern';
+
+    const result = judgeReport(
+      report(maestroFlow('first-admin-invites', 'ERROR', { failure: written })),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('Assertion is false: "Inviter & del" is visible');
+    expect(result.message).toContain('Below: <Medlemmer>, written &lt;b&gt; in the pattern');
+    expect(result.message).toMatch(/is visible\s+Below:/);
+    expect(result.message).not.toContain('&quot;');
+    expect(result.message).not.toContain('&amp;');
+    expect(result.message).not.toContain('&#10;');
+    expect(result.message).not.toContain('&lt;Medlemmer');
+  });
+
+  test("INF-06-AC9: a reason after the flow's <properties>, as Maestro writes a tagged flow, shows too", () => {
+    const reason = 'Element not found: Text matching regex: Kode';
+
+    const result = judgeReport(
+      report(
+        maestroFlow('first-admin-invites', 'ERROR', {
+          properties: { tags: 'grp, admin' },
+          failure: reason,
+        }),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(reason);
+    expect(listedUnder(result.message, reason, FLOW_NAMES)).toBe('first-admin-invites');
+  });
+
+  test('INF-06-AC9: a reason in a `message` attribute, as other JUnit writers put it, shows and is decoded', () => {
+    // Woodstox writes a line break in an attribute as &#xa;; &#10; is the same
+    // character in decimal.
+    const element =
+      '<failure message="Element not found: Text matching regex: &quot;Kode&quot; &amp; &lt;navn&gt;' +
+      '&#10;second line&#xa;third line" type="MaestroException"/>';
+
+    const result = judgeReport(report(failedWith('first-admin-invites', element)));
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('Element not found: Text matching regex: "Kode" & <navn>');
+    expect(result.message).toMatch(/<navn>\s+second line\s+third line/);
+    expect(listedUnder(result.message, 'Element not found: Text matching regex:', FLOW_NAMES)).toBe(
+      'first-admin-invites',
+    );
+    expect(result.message).not.toMatch(/&(quot|amp|lt|gt|#10|#xa);/);
+  });
+
+  test('INF-06-AC9: a <failure> with both a `message` attribute and text shows both', () => {
+    const element =
+      '<failure message="Assertion is false: Kode is visible">' +
+      'Waited for the join screen, and it never showed</failure>';
+
+    const result = judgeReport(report(failedWith('first-admin-invites', element)));
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('Assertion is false: Kode is visible');
+    expect(result.message).toContain('Waited for the join screen, and it never showed');
+  });
+
+  test('INF-06-AC9: a reason is shown as Maestro wrote it, typed values and all', () => {
+    // Made here, so no code-shaped value sits in this file (RG-07). In CI the
+    // value would be the job's synthetic bootstrap code, which the log already
+    // shows: see the comment above this block.
+    const typed = randomBytes(10).toString('hex').toUpperCase();
+    const reason = `Assertion is false: "${typed}" is visible`;
+
+    const result = judgeReport(
+      report(maestroFlow('first-admin-invites', 'ERROR', { failure: reason })),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(reason);
+  });
+});
+
+describe('judgeReport: with more than one failed flow, each says why', () => {
+  const FLOW_NAMES = ['app-starts', 'first-admin-invites', 'wrong-code'];
+
+  test("INF-06-AC9: each failed flow's reason is listed under its own name", () => {
+    const appStarts = 'Assertion is false: "TryggHverdag" is visible';
+    const firstAdmin = 'Element not found: Text matching regex: Opprett invitasjon';
+
+    const result = judgeReport(
+      report(
+        maestroFlow('app-starts', 'ERROR', { failure: appStarts }),
+        maestroFlow('wrong-code', 'SUCCESS'),
+        maestroFlow('first-admin-invites', 'ERROR', { failure: firstAdmin }),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(
+      '2 of 3 flows failed or did not finish: app-starts (ERROR), first-admin-invites (ERROR)',
+    );
+    expect(result.message).toContain(appStarts);
+    expect(result.message).toContain(firstAdmin);
+    expect(listedUnder(result.message, appStarts, FLOW_NAMES)).toBe('app-starts');
+    expect(listedUnder(result.message, firstAdmin, FLOW_NAMES)).toBe('first-admin-invites');
+    expect(timesIn(result.message, appStarts)).toBe(1);
+    expect(timesIn(result.message, firstAdmin)).toBe(1);
+  });
+
+  test('INF-06-AC9: a cancelled flow before a failed one gets neither its reason nor a placeholder', () => {
+    // The cancelled <testcase> closes itself. The next <failure> in the file
+    // belongs to the flow after it.
+    const firstAdmin = 'Element not found: Text matching regex: Opprett invitasjon';
+
+    const result = judgeReport(
+      report(
+        maestroFlow('app-starts', 'CANCELED'),
+        maestroFlow('first-admin-invites', 'ERROR', { failure: firstAdmin }),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(
+      '2 of 2 flows failed or did not finish: app-starts (CANCELED), first-admin-invites (ERROR)',
+    );
+    expect(result.message).toContain(firstAdmin);
+    expect(timesIn(result.message, firstAdmin)).toBe(1);
+    expect(listedUnder(result.message, firstAdmin, FLOW_NAMES)).toBe('first-admin-invites');
+    expect(result.message).not.toMatch(/\bundefined\b|\bnull\b|\[object /);
+  });
+});
+
+describe('judgeReport: a long reason is cut, so a stack trace cannot flood the log', () => {
+  /** A reason with a synthetic stack trace under it, thousands of characters long. */
+  const longReason = (first) =>
+    [
+      first,
+      ...Array.from(
+        { length: 120 },
+        (_, i) =>
+          `\tat maestro.orchestra.Orchestra.step${String(i)}(Orchestra.kt:${String(1000 + i)})`,
+      ),
+      '\tthe last line of the trace',
+    ].join('\n');
+
+  test('INF-06-AC9: a long reason shows its start, then says it was cut', () => {
+    const reason = longReason('Element not found: Text matching regex: Opprett invitasjon');
+    expect(reason.length).toBeGreaterThan(5_000);
+
+    const result = judgeReport(
+      report(maestroFlow('first-admin-invites', 'ERROR', { failure: reason })),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(squash(result.message)).toContain(squash(reason.slice(0, 400)));
+    expect(result.message).not.toContain('the last line of the trace');
+    expect(result.message).toMatch(SAYS_CUT);
+    expect(result.message.length).toBeLessThan(1_000);
+  });
+
+  test("INF-06-AC9: each flow's long reason is cut on its own, so every flow's reason still shows", () => {
+    const appStarts = longReason('Assertion is false: "TryggHverdag" is visible');
+    const firstAdmin = longReason('Element not found: Text matching regex: Opprett invitasjon');
+
+    const result = judgeReport(
+      report(
+        maestroFlow('app-starts', 'ERROR', { failure: appStarts }),
+        maestroFlow('first-admin-invites', 'ERROR', { failure: firstAdmin }),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('Assertion is false: "TryggHverdag" is visible');
+    expect(result.message).toContain('Element not found: Text matching regex: Opprett invitasjon');
+    expect(result.message).not.toContain('the last line of the trace');
+    expect(result.message.length).toBeLessThan(2_000);
+  });
+
+  test('INF-06-AC9: a reason within the limit shows whole, with no note that it was cut', () => {
+    // What Maestro 2.10.0 says when first-admin-invites' last assertVisible on
+    // the code fails: ElementSelector.description() inside Condition's.
+    const code =
+      '[0-9A-HJKMNP-TV-Z](\\s+[0-9A-HJKMNP-TV-Z]){4}(\\s*[,.;]\\s*[0-9A-HJKMNP-TV-Z](\\s+[0-9A-HJKMNP-TV-Z]){4}){3}';
+    const reason = `Assertion is false: "[0-9A-HJKMNP-TV-Z]{5}", Index: 3, Child of: "Kode:\\s*${code}" is visible`;
+    expect(reason.length).toBeLessThan(400);
+
+    const result = judgeReport(
+      report(maestroFlow('first-admin-invites', 'ERROR', { failure: reason })),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(reason);
+    expect(result.message).not.toMatch(SAYS_CUT);
+  });
+});
+
+describe('judgeReport: what has no reason, or passed, says what it said before', () => {
+  test('INF-06-AC9: a cancelled flow, which has no <failure>, is reported exactly as before', () => {
+    expect(
+      judgeReport(
+        report(
+          maestroFlow('app-starts', 'SUCCESS'),
+          maestroFlow('first-admin-invites', 'CANCELED'),
+          maestroFlow('wrong-code', 'SUCCESS'),
+        ),
+      ),
+    ).toEqual({
+      ok: false,
+      message: '1 of 3 flows failed or did not finish: first-admin-invites (CANCELED)',
+    });
+  });
+
+  test('INF-06-AC9: when every flow passed, the verdict is exactly as before', () => {
+    expect(judgeReport(report(maestroFlow('app-starts', 'SUCCESS')))).toEqual({
+      ok: true,
+      message: '1 of 1 flow passed.',
+    });
+    expect(
+      judgeReport(
+        report(
+          maestroFlow('app-starts', 'SUCCESS'),
+          maestroFlow('first-admin-invites', 'SUCCESS', { properties: { tags: 'grp, admin' } }),
+          maestroFlow('wrong-code', 'SUCCESS'),
+        ),
+      ),
+    ).toEqual({ ok: true, message: '3 of 3 flows passed.' });
+  });
+});
+
 describe('buildPlan: the release build, made on this machine', () => {
   const plan = buildPlan({ root: '/repo' });
   const commands = plan.map((step) => step.command.join(' '));
@@ -1524,41 +1866,157 @@ function literalOf(pattern) {
 }
 
 /**
+ * How Maestro 2.10.0 reads `${…}` in a flow's string, from its source (tag
+ * cli-2.10.0; maestro-orchestra-models, maestro/orchestra/util/Env.kt,
+ * String.evaluateScripts, lines 10 to 26):
+ *
+ *     val result = "(?<!\\\\)\\\$\\{([^\$]*)}".toRegex()
+ *         .replace(this) { match ->
+ *             val script = match.groups[1]?.value ?: ""
+ *             if (script.isNotBlank()) {
+ *                 jsEngine.evaluateScript(script).toString()
+ *             } else {
+ *                 ""
+ *             }
+ *         }
+ *     return result
+ *         .replace("\\\\\\\$\\{([^\$]*)}".toRegex()) { match ->
+ *             match.value.substringAfter('\\')
+ *         }
+ *
+ * As patterns, (?<!\\)\$\{([^$]*)} and \\\$\{([^$]*)}. The script runs from
+ * `${` to the last `}` before the next `$`, greedily, not to the first `}`.
+ * GraalJsEngine.kt (maestro-client, maestro/js) runs it as
+ * `(function(){ return eval(`…`) })()`, in strict mode, with each -e value as
+ * a global. Its context reads an undeclared name as undefined, through a Proxy
+ * set as globalThis's prototype. A `\${…}` is kept, less its backslash.
+ */
+const MAESTRO_SCRIPT = /(?<!\\)\$\{([^$]*)\}/g;
+const MAESTRO_ESCAPED_SCRIPT = /\\\$\{([^$]*)\}/g;
+/** Where Maestro starts a script: a `${` with no backslash before it. */
+const MAESTRO_SCRIPT_START = /(?<!\\)\$\{/;
+/** What a flow puts inside `${…}`: a bare name, which Maestro's engine reads as the value passed with -e. */
+const BARE_NAME = /^[A-Z_][A-Z0-9_]*$/;
+
+/**
+ * A flow's string, `value`, with its `${…}` read as Maestro 2.10.0 reads them
+ * (MAESTRO_SCRIPT): a script that is a bare name becomes the value `env` has
+ * for it. Anything else would go to Maestro's JavaScript engine, and throws
+ * here, naming the script Maestro would run. So does a name no -e passes,
+ * which Maestro would read as undefined.
+ */
+function asMaestroInterpolates(value, env, where) {
+  const evaluated = value.replace(MAESTRO_SCRIPT, (_all, script) => {
+    if (script.trim() === '') return '';
+    if (!BARE_NAME.test(script)) {
+      throw new Error(
+        `${where}: Maestro would evaluate ${JSON.stringify(script)} as JavaScript, not a bare name, in ${JSON.stringify(value)}`,
+      );
+    }
+    if (env[script] === undefined) {
+      throw new Error(`${where} names \${${script}}, which no -e passes`);
+    }
+    return env[script];
+  });
+  return evaluated.replace(MAESTRO_ESCAPED_SCRIPT, (all) => all.slice(all.indexOf('\\') + 1));
+}
+
+/**
  * Texts that read differently as a pattern, each with a text the unescaped
  * pattern would also match. Kept out of the test.each call because HK-05's
  * test counter stops at the first closing bracket inside one.
  */
 const LOOKALIKES = [
-  { field: 'TITLE', text: 'Hjem (trygt)? Ja+', lookalike: 'Hjem trygt Jaaa' },
-  { field: 'STATUS', text: 'Klar? 1+1 er [to].', lookalike: 'Kla 11 er tX' },
-  { field: 'STATUS', text: 'Nesten (ferdig', lookalike: 'Nesten ferdig' },
-  { field: 'TITLE', text: 'a.b*c^d$e|f{2}g\\h', lookalike: 'ffgh' },
+  { field: 'JOIN_TITLE', text: 'Hjem (trygt)? Ja+', lookalike: 'Hjem trygt Jaaa' },
+  { field: 'NOT_VALID', text: 'Klar? 1+1 er [to].', lookalike: 'Kla 11 er tX' },
+  { field: 'MEMBER_TITLE', text: 'Nesten (ferdig', lookalike: 'Nesten ferdig' },
+  { field: 'JOIN_TITLE', text: 'a.b*c^d$e|f{2}g\\h', lookalike: 'ffgh' },
 ];
 
+/**
+ * GRP-01 (L7): each value a flow names that is a string of the app's, and the
+ * key in nb.json it is read from. RG-03 (GRP-01, the spec's "Existing
+ * assertions that change by design", INF-06-AC11's item): TITLE and STATUS
+ * were placeholder.title and placeholder.status; a cleared app opens on the
+ * join screen now, and the placeholder's keys go, so they are JOIN_TITLE and
+ * JOIN_INTRO, the join screen's title and the line under it. BOOTSTRAP_CODE is no string
+ * of the app's: the job hands it in, synthetic, as the API's
+ * ADMIN_BOOTSTRAP_CODE.
+ */
+const FLOW_TEXTS = {
+  JOIN_TITLE: 'grp.join.title',
+  JOIN_INTRO: 'grp.join.intro',
+  CODE_LABEL: 'grp.join.codeLabel',
+  NAME_LABEL: 'grp.join.nameLabel',
+  JOIN_SUBMIT: 'grp.join.submit',
+  NOT_VALID: 'grp.join.notValid',
+  MEMBER_TITLE: 'grp.member.title',
+  INVITE_BUTTON: 'grp.member.invite',
+  MEMBERS_BUTTON: 'grp.member.members',
+  CREATE_INVITATION: 'grp.invite.create',
+  SHARE_BUTTON: 'grp.invite.share',
+};
+
+/** A translation file holding `text` at every key a flow reads, unless `except` says otherwise. */
+function translationsWith(text, except = {}) {
+  const tree = {};
+  for (const [field, key] of Object.entries(FLOW_TEXTS)) {
+    const parts = key.split('.');
+    let node = tree;
+    for (const part of parts.slice(0, -1)) {
+      node[part] ??= {};
+      node = node[part];
+    }
+    node[parts.at(-1)] = except[field] ?? text;
+  }
+  return tree;
+}
+
+/** The value of a dotted key in a translation file. */
+const textAt = (tree, key) => key.split('.').reduce((node, part) => node?.[part], tree);
+
+/**
+ * A synthetic bootstrap code, as Terraform makes one: 16 random bytes as 32
+ * upper-case hex digits. Made at run time, as RG-07 (synthetic test data)
+ * asks: no credential-looking literal is written in a file, because gitleaks
+ * (CI's `security` job) reads every committed line. Fixed for the run.
+ */
+const BOOTSTRAP_CODE = randomBytes(16).toString('hex').toUpperCase();
+
 describe('maestroTestCommand: every flow, with a JUnit report', () => {
-  const translations = { placeholder: { title: 'Tittel', status: 'Statuslinje' } };
-  const argv = maestroTestCommand({
-    maestro: '/cache/maestro/bin/maestro',
-    report: '/tmp/e2e/report.xml',
-    appId: 'no.example.placeholder',
-    translations,
-  });
+  // RG-03 (GRP-01): the translations are the join screen's and the admin's,
+  // and the job's bootstrap code is handed in beside them (FLOW_TEXTS). Made
+  // in each test, not once for the block, so a command that cannot be made
+  // fails the tests that need it and no others.
+  const argvOf = () =>
+    maestroTestCommand({
+      maestro: '/cache/maestro/bin/maestro',
+      report: '/tmp/e2e/report.xml',
+      appId: 'no.example.placeholder',
+      translations: translationsWith('Tittel'),
+      bootstrapCode: BOOTSTRAP_CODE,
+    });
 
   test('INF-06-AC9: runs the pinned Maestro over every flow in apps/mobile/e2e', () => {
+    const argv = argvOf();
     expect(argv[0]).toBe('/cache/maestro/bin/maestro');
     expect(argv).toContain('test');
     expect(argv.some((arg) => arg.replace(/\/$/, '').endsWith(FLOWS))).toBe(true);
   });
 
   test('INF-06-AC9: writes the JUnit report the run is judged by', () => {
+    const argv = argvOf();
     expect(argv.join(' ')).toMatch(/--format[= ]junit\b/i);
     expect(argv.join(' ')).toMatch(/--output[= ]\/tmp\/e2e\/report\.xml\b/);
   });
 
   test('INF-06-AC11: passes the flow exactly the values it uses, from nb.json and the application ID', () => {
     // The flow names what it needs as ${NAME}. Anything it names and is not
-    // given is an empty string to Maestro, and asserting that an empty string
-    // is visible is not a test of the screen.
+    // given is the text "undefined" to Maestro, and asserting that it is
+    // visible is not a test of the screen. (Was "an empty string": Maestro
+    // 2.10.0's own Env.evaluateScripts, run on "Tittel ${NOT_PASSED}", gives
+    // "Tittel undefined", because GraalJsEngine.kt reads an undeclared name
+    // as undefined.)
     const flowText = readdirSync(FLOWS)
       .filter((name) => /\.ya?ml$/.test(name))
       .map((name) => readFileSync(path.join(FLOWS, name), 'utf8'))
@@ -1571,16 +2029,26 @@ describe('maestroTestCommand: every flow, with a JUnit report', () => {
         report: 'report.xml',
         appId: 'no.example.placeholder',
         translations: nb,
+        bootstrapCode: BOOTSTRAP_CODE,
       }),
     );
 
     expect(Object.keys(env).sort()).toEqual(used.sort());
     expect(env.APP_ID).toBe('no.example.placeholder');
-    // TITLE and STATUS arrive escaped for Maestro's regular expressions, so
-    // what is compared is the text each one stands for: exactly nb.json's.
-    // The status line ends in a full stop, which unescaped matches anything.
-    expect(literalOf(env.TITLE ?? '')).toBe(nb.placeholder.title);
-    expect(literalOf(env.STATUS ?? '')).toBe(nb.placeholder.status);
+    // RG-03 (GRP-01, INF-06-AC11's item): was TITLE and STATUS, from the
+    // placeholder's keys; now every string the flows name, each from its key
+    // in nb.json (FLOW_TEXTS), and the job's bootstrap code. The strings
+    // arrive escaped for Maestro's regular expressions, so what is compared
+    // is the text each one stands for: exactly nb.json's. A string that ends
+    // in a full stop, unescaped, would match anything there.
+    for (const [field, key] of Object.entries(FLOW_TEXTS)) {
+      if (used.includes(field)) {
+        expect(typeof textAt(nb, key), key).toBe('string');
+        expect(literalOf(env[field] ?? ''), field).toBe(textAt(nb, key));
+      }
+    }
+    expect(env.BOOTSTRAP_CODE).toBe(BOOTSTRAP_CODE);
+    expect(used).toEqual(expect.arrayContaining(['JOIN_TITLE', 'BOOTSTRAP_CODE', 'NOT_VALID']));
   });
 
   // Amended 2026-09-26. Maestro reads a text selector as a regular expression.
@@ -1596,12 +2064,8 @@ describe('maestroTestCommand: every flow, with a JUnit report', () => {
           maestro: 'maestro',
           report: 'report.xml',
           appId: 'no.example.placeholder',
-          translations: {
-            placeholder: {
-              title: field === 'TITLE' ? text : other,
-              status: field === 'STATUS' ? text : other,
-            },
-          },
+          translations: translationsWith(other, { [field]: text }),
+          bootstrapCode: BOOTSTRAP_CODE,
         }),
       );
       const sent = env[field] ?? '';
@@ -1627,6 +2091,225 @@ describe('the flows themselves', () => {
       expect(text, `${name} has an optional step`).not.toMatch(/optional\s*:\s*true/);
     }
   });
+
+  // PR #96's android-e2e (job 118918227742): Maestro takes a `${…}` up to the
+  // last `}` before the next `$` (MAESTRO_SCRIPT), so a `${NAME}` followed by
+  // a pattern's {4} became one script, and the flow stopped on a SyntaxError
+  // at that step on every run. A string with no `${` is not evaluated, and
+  // may hold braces. Each flow writes one value per line, in block style, so
+  // a line is a string here.
+  test('INF-06-AC11: no string in a flow holds a ${…} beside any other brace, so Maestro reads each ${…} as a bare name', () => {
+    const flows = readdirSync(FLOWS).filter((name) => /\.ya?ml$/.test(name));
+    const read = [];
+    const found = [];
+    for (const name of flows) {
+      readFileSync(path.join(FLOWS, name), 'utf8')
+        .split('\n')
+        .forEach((line, i) => {
+          if (line.trimStart().startsWith('#') || !MAESTRO_SCRIPT_START.test(line)) return;
+          read.push(`${name}:${String(i + 1)}`);
+          const scripts = [...line.matchAll(MAESTRO_SCRIPT)].map((match) => match[1]);
+          const outsideNames = line.replace(/(?<!\\)\$\{[A-Z_][A-Z0-9_]*\}/g, '');
+          if (/[{}]/.test(outsideNames) || !scripts.every((script) => BARE_NAME.test(script))) {
+            found.push({ at: `${name}:${String(i + 1)}`, scripts });
+          }
+        });
+    }
+
+    expect(read.length, 'no flow names a ${…}, so nothing was checked').toBeGreaterThan(0);
+    expect(
+      found,
+      'Maestro would evaluate these scripts as JavaScript: write the braces out, or move the value to a string of its own',
+    ).toEqual([]);
+  });
+});
+
+/**
+ * GRP-01-AC28 (review loop 2): labels that do not begin with the code field's
+ * own name and a colon, each with the code spelled in them as the screen
+ * spells it. Kept out of the test.each call, as LOOKALIKES is.
+ */
+const LABEL_STARTS = [
+  {
+    case: 'the name with no colon',
+    text: ({ codeLabel, spelled }) => `${codeLabel} ${spelled}`,
+  },
+  {
+    case: 'the name after the code',
+    text: ({ codeLabel, spelled }) => `${spelled}: ${codeLabel}`,
+  },
+  {
+    case: 'a word before the name',
+    text: ({ codeLabel, spelled }) => `Ny ${codeLabel}: ${spelled}`,
+  },
+  {
+    case: 'the name field’s label in its place',
+    text: ({ spelled }) =>
+      `${String(textAt(JSON.parse(readFileSync(NB, 'utf8')), 'grp.join.nameLabel'))}: ${spelled}`,
+  },
+  {
+    case: 'the English name, which a bokmål phone does not show',
+    text: ({ spelled }) =>
+      `${String(textAt(JSON.parse(readFileSync(EN, 'utf8')), 'grp.join.codeLabel'))}: ${spelled}`,
+  },
+];
+
+// GRP-01-AC28 (L7, review loop 1): the invite screen shows the code as four
+// Texts of five, inside one element whose screen-reader label spells it
+// character by character, group by group, so no element holds the whole code
+// as text, and first-admin-invites.yaml finds it by that label and by the
+// groups drawn inside it. L7 runs only where an emulator does, so the flow's
+// patterns are held here, as Maestro reads them: the whole text, any case.
+// The code is synthetic (RG-07), the L5 test's; the label is spelled as the
+// screen spells it, and as the L5 test reads it, with a comma, full stop or
+// semicolon between groups.
+//
+// RG-03 (GRP-01-AC28, review loop 2, a11y-i18n-reviewer S1; the spec's "Added
+// in review loop 2"): the label now begins with the code field's own name,
+// grp.join.codeLabel, and a colon ("Invitasjonskode: K 7 Q 2 M, ..."), and the
+// flow's pattern begins with ${CODE_LABEL}, which the script passes in. So
+// the flow's values are read as Maestro reads them, each ${NAME} replaced by
+// what maestroTestCommand passes, from nb.json; and every text the tests
+// below match or refuse carries the name and the colon first (`labelled`),
+// so each refusal is still of the code's shape, not of a missing name. What
+// they prove is unchanged: twenty of Crockford's characters, in four groups
+// of five. The tests after them pin the new start.
+describe('GRP-01-AC28: first-admin-invites finds the code by its spelled label and its drawn groups', () => {
+  const CODE = 'K7Q2M-9TRVX-4HNPA-62WZE';
+  /** The code as the screen's label spells it: each character apart, `between` between groups. */
+  const spelled = (code, between = ', ') =>
+    code
+      .replace(/[^0-9A-Za-z]/g, '')
+      .match(/.{1,5}/g)
+      .map((group) => Array.from(group).join(' '))
+      .join(between);
+  const nb = () => JSON.parse(readFileSync(NB, 'utf8'));
+  /** The code field's own name, grp.join.codeLabel, as nb.json has it. */
+  const codeLabel = () => String(textAt(nb(), 'grp.join.codeLabel'));
+  /** A text as the code's label holds it since review loop 2: the code field's name, a colon, a space, then `text`. */
+  const labelled = (text) => `${codeLabel()}: ${text}`;
+  /** Maestro 2.10.0 matches a text selector against the whole text, ignoring case. */
+  const asMaestroReads = (pattern) => new RegExp(maestroPattern(pattern).source, 'is');
+  /** What the script passes the flows with -e, from nb.json, as Maestro gets it. */
+  const flowEnv = () =>
+    envOf(
+      maestroTestCommand({
+        maestro: 'maestro',
+        report: 'report.xml',
+        appId: 'no.example.placeholder',
+        translations: nb(),
+        bootstrapCode: BOOTSTRAP_CODE,
+      }),
+    );
+  /**
+   * Every single-quoted value of the flow's steps, comments left out, with
+   * its `${…}` read as Maestro 2.10.0 reads them (asMaestroInterpolates): a
+   * bare name becomes the value the script passes for it. A name the script
+   * does not pass throws, because Maestro would read it as undefined. So does
+   * a `${` whose script, by Maestro's rule, runs past its name.
+   *
+   * RG-03 (INF-06-AC11, PR #96's android-e2e, job 118918227742): this replaced
+   * each `${NAME}` up to its own `}`, which Maestro does not do. Maestro takes
+   * everything up to the last `}` before the next `$`. So these tests passed a
+   * flow whose two label steps Maestro could not run: it took
+   * `CODE_LABEL}:\s*…{4}){3` as one script.
+   */
+  const patterns = () => {
+    const env = flowEnv();
+    return [
+      ...readFileSync(path.join(FLOWS, 'first-admin-invites.yaml'), 'utf8')
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('#'))
+        .join('\n')
+        .matchAll(/'((?:[^']|'')*)'/g),
+    ].map((match) =>
+      asMaestroInterpolates(match[1].replaceAll("''", "'"), env, 'first-admin-invites.yaml'),
+    );
+  };
+  const matching = (text) => patterns().filter((p) => asMaestroReads(p).test(text));
+
+  test('GRP-01-AC28: a step of the flow matches the label the screen spells, the code field’s name and a colon first, with a comma, full stop or semicolon between groups', () => {
+    for (const between of [', ', '. ', '; ']) {
+      expect(matching(labelled(spelled(CODE, between))), JSON.stringify(between)).not.toEqual([]);
+    }
+  });
+
+  test.each([
+    { case: 'the code as one text, hyphens between groups', text: CODE },
+    { case: 'the code as one text, spaces between groups', text: CODE.replaceAll('-', ' ') },
+    { case: 'three groups', text: spelled('K7Q2M-9TRVX-4HNPA') },
+    { case: 'five groups', text: spelled(`${CODE}-ABCDE`) },
+    { case: 'a group of six', text: 'K 7 Q 2 M, 9 T R V X Y, 4 H N P A, 6 2 W Z E' },
+    { case: 'twenty-one characters', text: spelled(`${CODE}Q`) },
+    { case: 'no pause between groups', text: spelled(CODE, ' ') },
+    { case: 'an I, which is not Crockford', text: spelled('K7Q2M-9TRVX-4HNPA-62WZI') },
+    { case: 'an L', text: spelled('K7Q2L-9TRVX-4HNPA-62WZE') },
+    { case: 'an O', text: spelled('K7Q2M-9TOVX-4HNPA-62WZE') },
+    { case: 'a U', text: spelled('K7Q2M-9TRVX-4HNUA-62WZE') },
+  ])('GRP-01-AC28: every step that matches the spelled label refuses $case', ({ text }) => {
+    const label = patterns().filter((p) => asMaestroReads(p).test(labelled(spelled(CODE))));
+
+    expect(label.length).toBeGreaterThan(0);
+    for (const pattern of label) {
+      expect({ pattern, matches: asMaestroReads(pattern).test(labelled(text)) }).toEqual({
+        pattern,
+        matches: false,
+      });
+    }
+  });
+
+  test('GRP-01-AC28: a step of the flow matches a drawn group, five of Crockford’s characters and nothing else', () => {
+    const groups = CODE.split('-');
+    const drawn = patterns().filter((p) => groups.every((group) => asMaestroReads(p).test(group)));
+
+    expect(drawn.length).toBeGreaterThan(0);
+    for (const pattern of drawn) {
+      for (const text of [
+        'K7Q2',
+        'K7Q2M9',
+        'K7Q 2',
+        'K7Q2L',
+        spelled(CODE),
+        CODE,
+        labelled(spelled(CODE)),
+      ]) {
+        expect({ pattern, text, matches: asMaestroReads(pattern).test(text) }).toEqual({
+          pattern,
+          text,
+          matches: false,
+        });
+      }
+    }
+  });
+
+  // GRP-01-AC28, review loop 2: the label's start, pinned. A label that does
+  // not begin with the code field's own name and a colon is refused by every
+  // step that matches the labelled code, and no step matches the code spelled
+  // with nothing before it, as the label read before this loop: a step left
+  // with the old pattern would wait for a label the screen no longer gives.
+  test('GRP-01-AC28: no step of the flow matches the code spelled with no name before it, the label as it read before review loop 2', () => {
+    for (const between of [', ', '. ', '; ']) {
+      expect(matching(spelled(CODE, between)), JSON.stringify(between)).toEqual([]);
+    }
+  });
+
+  test.each(LABEL_STARTS)(
+    'GRP-01-AC28: every step that matches the labelled code refuses $case',
+    ({ text }) => {
+      const label = patterns().filter((p) => asMaestroReads(p).test(labelled(spelled(CODE))));
+      const refused = text({ codeLabel: codeLabel(), spelled: spelled(CODE) });
+
+      expect(label.length).toBeGreaterThan(0);
+      expect(refused).toMatch(/K 7 Q 2 M/);
+      for (const pattern of label) {
+        expect({ pattern, refused, matches: asMaestroReads(pattern).test(refused) }).toEqual({
+          pattern,
+          refused,
+          matches: false,
+        });
+      }
+    },
+  );
 });
 
 describe('the pinned Maestro', () => {

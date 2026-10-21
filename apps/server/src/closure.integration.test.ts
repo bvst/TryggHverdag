@@ -19,6 +19,7 @@
 // it, a cloud session cannot.
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import {
+  insertMemberRow,
   RACE_ROUNDS,
   RACERS,
   apiPath,
@@ -30,6 +31,7 @@ import {
   syntheticUuid,
   type FakeLog,
   type FakePush,
+  unusedService,
 } from '@trygghverdag/test-kit';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
@@ -146,10 +148,17 @@ function workerPool(applicationName: string, size = 2): pg.Pool {
 // database's own now(), in the statement that writes them.
 // ---------------------------------------------------------------------------
 
+/**
+ * A user, a member of the one group.
+ *
+ * RG-03 (GRP-01, the spec's "Existing assertions that change by design"):
+ * a plain user until GRP-01. A journey's walker and responders must now be
+ * current members of the walker's group, held under the start's lock, and a
+ * device authenticates only while its user is a member (D-137), so every
+ * person here is one. Nothing these tests assert changes.
+ */
 async function addUser(): Promise<string> {
-  const id = syntheticUuid();
-  await connection().query('insert into users (id) values ($1)', [id]);
-  return id;
+  return insertMemberRow(connection());
 }
 
 /** A device of this user, and the credential it would send. */
@@ -534,6 +543,16 @@ function realApi({
     devices: databaseDeviceAuthenticator(on),
     acknowledgements: createAcknowledgementService({ alerts: databaseJourneyStore(on), log }),
     closures: closuresFor({ database: on, log }),
+    // RG-03 (GRP-01; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): the join, the
+    // invitations, the members and the walker's removal of a responder
+    // (approach item 12) made four services part of what the API needs. These
+    // tests call none of their routes, so each is a stand-in that fails
+    // loudly if reached; nothing they assert changes.
+    joins: unusedService('these tests join nobody'),
+    invitations: unusedService('these tests invite nobody'),
+    members: unusedService('these tests read and remove no member'),
+    removals: unusedService('these tests remove no responder through the route'),
   });
 }
 
@@ -611,6 +630,23 @@ const STAND_DOWNS = ['BACK_IN_CONTACT', 'HOME', 'SAFE', 'EXPIRED'];
 // ---------------------------------------------------------------------------
 // LOST-08-AC1, AC3 and AC6: the close, on the real tables.
 // ---------------------------------------------------------------------------
+
+/**
+ * The journey's walker, read from its row; a stranger for a journey that does
+ * not exist, which is not found either way.
+ *
+ * RG-03 (GRP-01, approach item 10): the removal module now takes the caller,
+ * and answers JOURNEY_NOT_FOUND to anyone but the journey's walker, so every
+ * removal here is asked as the journey's own walker. What each removal
+ * answers and does is unchanged.
+ */
+async function walkerOf(journeyId: string): Promise<string> {
+  const { rows } = await connection().query<{ walker_id: string }>(
+    'select walker_id::text as walker_id from journeys where id = $1',
+    [journeyId],
+  );
+  return rows[0]?.walker_id ?? syntheticUuid();
+}
 
 describe('LOST-08 and SM-06: "They’re safe", on the real tables', () => {
   test('LOST-08-AC1: a journey alerted by the real adapter with R1, R2 and R3; R1 says "I’m on it" through the API, R2’s notice sent and R3’s not; R1 closes A through the API: 200 CLOSED; A RESOLVED, SAFE, acknowledged_by R1; J ENDED, SAFE, ended_at equal to resolved_at, to the microsecond; one SAFE each for R2 and R3 in A’s round, none for R1 or W; every unsent message of A withdrawn at that time, R2’s sent notice untouched; the next delivery hands each SAFE to the push port with exactly messageId, recipientId and kind (SM-06)', async () => {
@@ -696,7 +732,13 @@ describe('LOST-08 and SM-06: "They’re safe", on the real tables', () => {
   test('LOST-08-AC3: on the real tables, A acknowledged by R1 and R1 removed through the removal module: R1’s close is 404 ALERT_NOT_FOUND, R2’s and R3’s 403 NOT_THE_ACKNOWLEDGER, nothing changing; R2 acknowledges through the API and closes: 200; A RESOLVED, SAFE, acknowledged_by R2, round 2; J ENDED, SAFE; one SAFE for R3 alone, in round 2 (SM-10)', async () => {
     const { journeyId, alertId, r1, others } = await acknowledged({ responders: 3 });
     const [r2, r3] = others as [Person, Person];
-    expect(await removalFor().remove({ journeyId, responderId: r1.userId })).toEqual({
+    expect(
+      await removalFor().remove({
+        walkerId: await walkerOf(journeyId),
+        journeyId,
+        responderId: r1.userId,
+      }),
+    ).toEqual({
       type: 'removed',
     });
     const before = await recordOf(journeyId);
@@ -782,7 +824,13 @@ describe('LOST-08, SEC-07 and SM-10: at a resolved alert, a caller who does not 
     const { journeyId, alertId, r1 } = await acknowledged({ responders: 3 });
     await store().recordHeartbeat(await freshHeartbeat(journeyId));
     expect((await journeyOf(journeyId)).state).toBe('ACTIVE');
-    expect(await removalFor().remove({ journeyId, responderId: r1.userId })).toEqual({
+    expect(
+      await removalFor().remove({
+        walkerId: await walkerOf(journeyId),
+        journeyId,
+        responderId: r1.userId,
+      }),
+    ).toEqual({
       type: 'removed',
     });
     const before = await recordOf(journeyId);
@@ -886,7 +934,11 @@ describe('LOST-08, SM-09, SM-10 and LOST-03: the close decides under the journey
         await withTrigger(create, drop, async () => {
           const holding: Promise<unknown> =
             holder === 'R1’s removal'
-              ? removalFor().remove({ journeyId, responderId: r1.userId })
+              ? removalFor().remove({
+                  walkerId: await walkerOf(journeyId),
+                  journeyId,
+                  responderId: r1.userId,
+                })
               : holder === 'a fresh heartbeat'
                 ? store().recordHeartbeat(await freshHeartbeat(journeyId))
                 : holder === '"I’m home"'
@@ -968,6 +1020,7 @@ describe('LOST-08, SM-09, SM-10 and LOST-03: the close decides under the journey
                         journeys: databaseJourneyStore(on),
                         log: fakeLog(),
                       }).remove({
+                        walkerId: await walkerOf(journeyId),
                         journeyId,
                         responderId: r1.userId,
                       })

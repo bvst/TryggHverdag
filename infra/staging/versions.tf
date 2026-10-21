@@ -12,8 +12,9 @@ terraform {
       source  = "CleverCloud/clevercloud"
       version = "~> 2.2"
     }
-    # The staging canary's credential (REL-10, D-128): random_password, made
-    # in Terraform's state and nowhere else.
+    # The staging canary's credential (REL-10, D-128): random_password, and
+    # the first admin's bootstrap code (GRP-01): random_bytes; each made in
+    # Terraform's state and nowhere else.
     random = {
       source  = "hashicorp/random"
       version = "~> 3.9"

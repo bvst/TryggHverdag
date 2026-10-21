@@ -100,6 +100,9 @@ const EVENT_LEVELS = {
   canary_run: 36,
   canary_leftover_ended: 41,
   canary_report_failed: 69,
+  join_failed: 70,
+  invitation_failed: 71,
+  member_removal_failed: 72,
 } as const satisfies Record<EventName, number>;
 
 /**
@@ -197,6 +200,15 @@ const CLOSURE_STAGES: readonly unknown[] = ['read', 'store'] satisfies Extract<
 const EXPIRY_STAGES: readonly unknown[] = ['read', 'expire'] satisfies Extract<
   LogEvent,
   { event: 'expiry_failed' }
+>['stage'][];
+
+/**
+ * The stages `join_failed`, `invitation_failed` and `member_removal_failed`
+ * may name (GRP-01): each is one store call, so `store` alone.
+ */
+const GROUP_STAGES: readonly unknown[] = ['store'] satisfies Extract<
+  LogEvent,
+  { event: 'join_failed' | 'invitation_failed' | 'member_removal_failed' }
 >['stage'][];
 
 /** The reasons `canary_skipped` may give. */
@@ -410,6 +422,24 @@ export function createLog({
           return;
         case 'canary_report_failed':
           logger.canary_report_failed({});
+          return;
+        case 'join_failed':
+          logger.join_failed({
+            stage: oneOf(GROUP_STAGES, event.stage),
+            code: codeOf(event.code),
+          });
+          return;
+        case 'invitation_failed':
+          logger.invitation_failed({
+            stage: oneOf(GROUP_STAGES, event.stage),
+            code: codeOf(event.code),
+          });
+          return;
+        case 'member_removal_failed':
+          logger.member_removal_failed({
+            stage: oneOf(GROUP_STAGES, event.stage),
+            code: codeOf(event.code),
+          });
           return;
         default:
           // A type error the day an event joins LogEvent without a case. And

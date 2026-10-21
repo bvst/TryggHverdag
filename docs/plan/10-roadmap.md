@@ -115,7 +115,7 @@ runs never changes what is allowed to merge.
 | **M0** | Foundations | Repository, toolchain, Claude Code configuration, CI, merge rules, staging, monitoring, daily report | All INF tasks done; **gate drills pass**; CI green on `main`. The push to `main` and the merge without code-owner approval count as covered by `gate:integrity`'s live read until their live attempt at M5 (D-083) |
 | **M1** | Spike (emulators and simulators) — ✅ **closed** (2026-10-01, D-088) | SPIKE-01, S1–S7 on emulators and simulators (D-037); location SDK in debug mode; Critical Alerts request drafted (STORE-01) | Spike results recorded; SDK go/no-go decision; Section 4 closed — all met |
 | **M2** | Core safety loop (server) — 🟡 **in progress** (D-090) | State machine, watchdog, outbox, fake push and SMS; LOST-01 to LOST-03, LOST-06 to LOST-08, SM-01 to SM-10; staging canary (REL-10) | L6 tests green; mutation ≥ 80 %; the staging canary alerts on time for 24 hours |
-| **M3** | App MVP (demo-able) | GRP-01 to GRP-04, CALL-01 to CALL-03, JRN-01 to JRN-06, LOST-04, LOST-05, HELP-01; real push to the owner's phone; SMS to the owner's own number only | L7 green on Android (every PR) and iOS (weekly); **the owner can show the app** via internal TestFlight and Google Play internal testing |
+| **M3** | App MVP (demo-able) — order decided (D-134) | GRP-01 to GRP-04, CALL-01 to CALL-03, JRN-01 to JRN-06, LOST-04, LOST-05, HELP-01; real push to the owner's phone; SMS to the owner's own number only | L7 green on Android (every PR) and iOS (weekly); **the owner can show the app** via internal TestFlight and Google Play internal testing |
 | **M4** | Privacy, security and compliance | PRIV-01 to PRIV-12 (retention jobs, export and delete, privacy notice in nb and en, age bands); SEC-01 to SEC-07; DPIA; Critical Alerts entitlement requested; **decide how long journey records are kept** (open question in `README.md`, "Open for M4") | Every PRIV and SEC ID covered by tests; DPIA in `docs/dpia/` |
 | **M5** | Go-live readiness | Real-phone suite L9 on Firebase Test Lab (D-041); production environment (D-046, phase B); location SDK licence; Apple beta review; release 1.0 | RL-01 to RL-07 pass; owner approves the release pull request |
 | **M6** | Private group phase | Friends and family use it for real; L10 monitoring; tuning ⚙️ thresholds; every failure becomes a test (D-035) | Reliability targets from Section 3 met for ⚙️ 4 weeks |
@@ -181,6 +181,33 @@ request.
 
 **Exit criteria, unchanged:** L6 green; mutation ≥ 80 %; the staging canary on
 time for 24 hours.
+
+## M3 — App MVP in detail
+
+Twelve tasks, one pull request each, each through `/feature <ID>` (D-134),
+one at a time (D-052). The order is the owner's choice. Sign-in arrives with
+GRP-01 without SMS: the invitation binds the first device, and the SMS code
+for a new device comes with task 10. The demo may hold the owner's own data
+on staging (D-135).
+
+| # | ID | Task | Waits on the owner |
+|---|----|------|--------------------|
+| 1 | GRP-01 | Sign-in and groups: single-use invitation (7 days), device sessions (D-091), groups, membership, an admin removing a member; the route that removes a responder (D-122); the canary's users in no group (D-128) | — |
+| 2 | GRP-02, CALL-01, CALL-02 | The home screen: #1 contact, the call button, 112 always visible | — |
+| 3 | JRN-01, JRN-02, LOST-01 (phone) | Start a journey: the safety core, the location SDK in the background, a heartbeat every 60 s, the sharing notice; the safety core's mutation testing first (D-081) | A-29 for real phones only |
+| 4 | GRP-03 | The safety permission check: a journey never starts silently degraded | — |
+| 5 | JRN-05, JRN-06 | "I'm home" with its offline queue; the two-hour stop (D-125); the walker's screen once a journey has ended | — |
+| 6 | Push, JRN-04 | The APNs and FCM adapter (D-087, D-108, D-112, D-113); the start and end notices | A-11 |
+| 7 | Alert screen, HELP-01 | The alert's read route (D-106); "I'm on it" (LOST-06); "They're safe" (LOST-08); the guidance | — |
+| 8 | JRN-03 | What responders see: map, age of the last position, battery | — |
+| 9 | GRP-04 | Responder setup: break-through alerts, readiness, the confirmed SMS number | A-30 for Critical Alerts only |
+| 10 | SMS | The LINK Mobility adapter, to the owner's own number only on staging (D-135); the SMS sign-in code for a new device | A-12 |
+| 11 | CALL-03, LOST-04, LOST-05 | Calling #1 shares the location; low battery; offline | — |
+| 12 | iOS, stores | `e2e:ios` and its weekly simulator run; EAS preview builds; internal TestFlight and Google Play internal testing | A-03 |
+
+**Exit criteria, unchanged:** L7 green on Android (every pull request) and iOS
+(weekly); the owner can show the app through internal TestFlight and Google
+Play internal testing.
 
 ## Owner actions by milestone
 

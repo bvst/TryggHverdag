@@ -57,3 +57,6 @@
 - [Disarm faults](feedback_disarm_faults.md) — per-operation limits: plant "never cleared" per settle path and "armed per hand-out"; ask for "answered, advance 2x limit, still works"
 - [BUG-52 audit](project_bug52_audit.md) — PASS 5ee115c; loops 1-3 PASS; loop 4 PASS ae082f5: hook loads no repo code (AST scan + spawn recorder), 23 red right reasons, 22/22 faults; real pnpm orphans its child on timeout (pre-existing note)
 - [Hook import fail-open](feedback_hook_import_fail_open.md) — a hook statically importing repo code exits 1 (non-blocking) when that code breaks; plant a missing export, compare exit codes old vs new
+- [GRP-01 audit](project_grp01_audit.md) — BLOCK a762276 (modules/groups unmutated); loop 1 PASS 3fac8fb; loop 2 PASS 879096f (S1 withdrawn: group config is a mutation input; S2 pinned at L2; plants all killed)
+- [New logic outside group tests](feedback_new_logic_outside_group_tests.md) — pooled score passes while every new mutant survives; match survivors to the diff hunks; local Survived can be stale
+- [Local PG UTF8](feedback_local_pg_utf8.md) — initdb -E UTF8; drop leftover template DBs; beforeAll failure is INVALID not SURVIVED

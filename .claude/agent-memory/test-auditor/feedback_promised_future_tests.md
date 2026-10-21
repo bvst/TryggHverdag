@@ -27,3 +27,5 @@ none does. Recommend that the decision recording the owner's answer quotes the t
 and read every session. A spec naming tracked IDs only in words is correct, not evasion: in docs/specs a tracked ID
 would mark that requirement 📝, "a spec, no test yet", although the spec is not its spec.
 Related: [[entry-script-wiring]], [[gate-integrity-local]]
+
+GRP-01 loop 2 (2026-10-20): a mutation-group change withdrawn for cost (its config becomes a mutation input: a D-075 file and an owner agent file) and deferred to an un-numbered api.ts BUG to be queued by the coordinator. Acceptable when the file stays >= 80 % and the behaviour is pinned at a level a required check runs; still note that the landing place has no ID.

@@ -19,7 +19,9 @@
 //
 // This file is counted by req:coverage (no fixtures-only marker): REL-10-AC10
 // is a criterion of its task, and the traceability job needs a counted test to
-// name it. It names no other tracked requirement.
+// name it. Since GRP-01 it names one more: GRP-01-AC15's L1 half, "only
+// worker.ts may import adapters/canary.ts (the import rule stands)", held for
+// the files GRP-01 adds, which register members and devices of their own.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -199,5 +201,38 @@ describe('REL-10-AC10: only the worker imports the canary’s adapter, and the A
 
     expect(check.violations, check.output).toEqual([]);
     expect(check.status, check.output).toBe(0);
+  });
+});
+
+/** GRP-01's new production files: the group store, its modules, and the issuer beside the hash. */
+const GROUP_FILES = [
+  'apps/server/src/adapters/groups.ts',
+  'apps/server/src/modules/groups/join.ts',
+  'apps/server/src/modules/groups/invitations.ts',
+  'apps/server/src/modules/groups/members.ts',
+  'apps/server/src/domain/groups.ts',
+];
+
+describe('GRP-01-AC15: the canary’s import rule stands beside the group’s files', () => {
+  test.each(GROUP_FILES)(
+    'GRP-01-AC15: %s importing adapters/canary.ts is refused, naming a rule that cites D-128',
+    (from) => {
+      const check = importCheck({ [from]: importing(from, [ADAPTER]) });
+
+      const refusals = refusalsFrom(check, from);
+      expect(refusals.length, check.output).toBeGreaterThanOrEqual(1);
+      expect(check.status, check.output).not.toBe(0);
+    },
+  );
+
+  test('GRP-01-AC15: the API cannot reach adapters/canary.ts through the join module either', () => {
+    const between = 'apps/server/src/modules/groups/join.ts';
+    const check = importCheck({
+      [between]: importing(between, [ADAPTER]),
+      'apps/server/src/api.ts': importing('apps/server/src/api.ts', [between]),
+    });
+
+    expect(refusalsFrom(check, 'apps/server/src/api.ts'), check.output).not.toEqual([]);
+    expect(check.status, check.output).not.toBe(0);
   });
 });

@@ -10,6 +10,7 @@
 import {
   SYNTHETIC_CHECK_UUID as CHECK,
   SYNTHETIC_PING_URL as PING_URL,
+  syntheticBootstrapCode,
   syntheticCredential,
   syntheticPingUrl,
   syntheticUuid,
@@ -142,6 +143,59 @@ describe('bin/api.ts', () => {
   });
 });
 
+/**
+ * GRP-01-AC8: what the API says at start about the first admin's bootstrap
+ * code. It answers on PORT first, so the line has been written by the time
+ * the health check is answered; then it is stopped as the platform stops it.
+ */
+async function bootstrapLines(env: Record<string, string>): Promise<string[]> {
+  const port = await freePort();
+  const api = start('api.ts', { PORT: String(port), DATABASE_URL: UNREACHABLE, ...env });
+  try {
+    await firstResponse(`http://127.0.0.1:${String(port)}/v1/health`);
+    await waitForOutput(api, 'ADMIN_BOOTSTRAP_CODE', 20);
+  } finally {
+    api.child.kill('SIGTERM');
+  }
+  const [code, signal] = await api.exited;
+  expect({ code, signal }).toEqual({ code: 0, signal: null });
+  return api
+    .output()
+    .split('\n')
+    .filter((line) => line.includes('ADMIN_BOOTSTRAP_CODE'));
+}
+
+describe('bin/api.ts and the first admin’s bootstrap code (GRP-01)', () => {
+  test('GRP-01-AC8: with ADMIN_BOOTSTRAP_CODE unset, the API starts, and says so in one line naming the setting', async () => {
+    const lines = await bootstrapLines({});
+
+    expect(lines).toHaveLength(1);
+  });
+
+  test('GRP-01-AC8: with a usable code, the API says in one line that the first admin can join with it, a line of its own, and never the code', async () => {
+    const value = syntheticBootstrapCode();
+
+    const usable = await bootstrapLines({ ADMIN_BOOTSTRAP_CODE: value });
+    const unset = await bootstrapLines({});
+
+    expect(usable).toHaveLength(1);
+    expect(usable[0]).not.toBe(unset[0]);
+    expect(usable.join('\n')).not.toContain(value);
+    expect(usable.join('\n').toLowerCase()).not.toContain(value.toLowerCase());
+  });
+
+  test('GRP-01-AC8: with an unusable value, the API starts and says so in one line naming the setting, never the value, and not the usable line', async () => {
+    const value = `${syntheticBootstrapCode().slice(0, 18)}!`;
+
+    const unusable = await bootstrapLines({ ADMIN_BOOTSTRAP_CODE: value });
+    const usable = await bootstrapLines({ ADMIN_BOOTSTRAP_CODE: syntheticBootstrapCode() });
+
+    expect(unusable).toHaveLength(1);
+    expect(unusable[0]).not.toBe(usable[0]);
+    expect(unusable.join('\n')).not.toContain(value.slice(0, 18));
+  });
+});
+
 describe('bin/worker.ts', () => {
   test('a worker that cannot reach its database exits with 1 and says why', async () => {
     // That the password stays out of what it says is proven in redact.test.ts:
@@ -246,9 +300,18 @@ describe('REL-08: bin/worker.ts and HEALTHCHECKS_WORKER_URL', () => {
     // https, so the worker accepts it. Port 1 on the loopback address, which
     // fetch refuses to connect to, so nothing could leave this machine
     // whatever the worker did with it.
+    //
+    // RG-03 (GRP-01-AC25, D-122's condition for the removal route, D-137; not
+    // in the spec's "Existing assertions that change by design", which missed
+    // this test): the worker now checks in only beside a reporting SMS check,
+    // so a usable HEALTHCHECKS_SMS_URL of its own, another check's, is set as
+    // well. What this holds is unchanged: it says it is checking in, and
+    // never where, neither check's address.
+    const smsCheck = syntheticUuid();
     const worker = start('worker.ts', {
       DATABASE_URL: UNREACHABLE,
       HEALTHCHECKS_WORKER_URL: PING_URL,
+      HEALTHCHECKS_SMS_URL: syntheticPingUrl(smsCheck),
     });
 
     const [code] = await worker.exited;
@@ -256,6 +319,7 @@ describe('REL-08: bin/worker.ts and HEALTHCHECKS_WORKER_URL', () => {
     expect(code).toBe(1);
     expect(worker.output()).toMatch(/^worker: checking in with Healthchecks\.io\b/m);
     expect(worker.output()).not.toContain(CHECK);
+    expect(worker.output()).not.toContain(smsCheck);
     expect(worker.output()).toContain('ECONNREFUSED');
   });
 });

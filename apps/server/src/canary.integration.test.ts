@@ -45,6 +45,7 @@ import {
   type FakeJourneyState,
   type MessageAsStored,
   type ResolutionAsStored,
+  unusedService,
 } from '@trygghverdag/test-kit';
 import { EventEmitter } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -391,6 +392,16 @@ async function freshDatabase() {
         devices: databaseDeviceAuthenticator(db),
         acknowledgements: createAcknowledgementService({ alerts: rows.journeys, log }),
         closures: createClosureService({ alerts: rows.journeys, log }),
+        // RG-03 (GRP-01; not in the spec's "Existing assertions that change by
+        // design", which names no ApiDependencies stand-in): the join, the
+        // invitations, the members and the walker's removal of a responder
+        // (approach item 12) made four services part of what the API needs. These
+        // tests call none of their routes, so each is a stand-in that fails
+        // loudly if reached; nothing they assert changes.
+        joins: unusedService('these tests join nobody'),
+        invitations: unusedService('these tests invite nobody'),
+        members: unusedService('these tests read and remove no member'),
+        removals: unusedService('these tests remove no responder through the route'),
       });
     },
   };
@@ -406,7 +417,6 @@ async function underTest(): Promise<CanaryStoreUnderTest> {
     store: {
       registerCanary: (request) => rows.canary.registerCanary(request),
       observeCanaryJourney: (journeyId) => rows.canary.observeCanaryJourney(journeyId),
-      existingUsers: (ids) => rows.journeys.existingUsers(ids),
       insertStarted: (journey) => rows.journeys.insertStarted(journey),
       unendedJourneyOf: (walkerId) => rows.journeys.unendedJourneyOf(walkerId),
       overdueJourneys: (afterMs) => rows.journeys.overdueJourneys(afterMs),
@@ -417,6 +427,14 @@ async function underTest(): Promise<CanaryStoreUnderTest> {
     },
     now: async () => new Date(await rows.nowMs()),
     addUser: () => rows.addUser(),
+    // RG-03 (GRP-01): the registration's behaviour read which users exist
+    // through the journey store's `existingUsers`, which GRP-01 renames
+    // `eligibleResponders` ("may this walker name them"); the users table is
+    // read directly instead, as the shared suite's subject now says.
+    usersAmong: async (ids) => {
+      const named = ids.map((id) => id.toLowerCase());
+      return (await rows.users()).map(({ id }) => id).filter((id) => named.includes(id));
+    },
     addDevice: (userId, deviceId) => rows.addDevice(userId, deviceId),
     removeDevice: async (deviceId) => {
       await rows.query('delete from devices where id = $1', [deviceId]);
@@ -507,9 +525,13 @@ describe('REL-10: the canary’s registration, on the real tables', () => {
         credentialHash: hashCredential(credential),
       },
     ]);
+    // RG-03 (GRP-01, approach item 5): the authenticator answers how far the
+    // device is admitted too; the canary's device is admitted fully, with no
+    // membership (D-128).
     expect(await databaseDeviceAuthenticator(rows.db).authenticate(credential)).toEqual({
       deviceId: CANARY_DEVICE_ID,
       userId: CANARY_WALKER_ID,
+      access: 'FULL',
     });
 
     // Through the API: a start with the canary's credential naming its
@@ -552,9 +574,12 @@ describe('REL-10: the canary’s registration, on the real tables', () => {
     ]);
     const authenticator = databaseDeviceAuthenticator(rows.db);
     expect(await authenticator.authenticate(first)).toBeNull();
+    // RG-03 (GRP-01, approach item 5): the answer gains how far the device
+    // is admitted; the canary's device is admitted FULL, with no membership.
     expect(await authenticator.authenticate(second)).toEqual({
       deviceId: CANARY_DEVICE_ID,
       userId: CANARY_WALKER_ID,
+      access: 'FULL',
     });
     const api = rows.api();
     const body = { responderIds: [CANARY_RESPONDER_ID] };
@@ -590,7 +615,11 @@ describe('REL-10: the canary’s registration, on the real tables', () => {
     expect(await rows.devices()).toEqual(devices);
   });
 
-  test('REL-10-AC10: after the canary’s registration, without a credential every route but health still answers 401', async () => {
+  test('REL-10-AC10: after the canary’s registration, without a credential every route but health and the join still answers 401', async () => {
+    // RG-03 (GRP-01, the spec's "Existing assertions that change by design":
+    // SM-01-AC9's public list gains the join): was "every route but health".
+    // The join, POST /v1/group/members, is public on purpose, and answers a
+    // body of {} with the fixed 400; every other route is held as before.
     const rows = await freshDatabase();
     await rows.canary.registerCanary({ credentialHash: hashCredential(syntheticCredential()) });
     const api = rows.api();
@@ -605,7 +634,9 @@ describe('REL-10: the canary’s registration, on the real tables', () => {
           path: `${API_PREFIX}${path.replace(/\{[^}]*\}/g, () => syntheticUuid())}`,
         })),
     );
-    const guarded = routes.filter(({ key }) => key !== `GET ${API_PREFIX}/health`);
+    const guarded = routes.filter(
+      ({ key }) => key !== `GET ${API_PREFIX}/health` && key !== `POST ${API_PREFIX}/group/members`,
+    );
 
     expect(guarded.length).toBeGreaterThan(0);
     for (const route of guarded) {
@@ -992,9 +1023,13 @@ describe('REL-10: what the real worker registers, on the real tables', () => {
         credentialHash: hashCredential(credential),
       },
     ]);
+    // RG-03 (GRP-01, approach item 5): the authenticator answers how far the
+    // device is admitted too; the canary's device is admitted fully, with no
+    // membership (D-128).
     expect(await databaseDeviceAuthenticator(rows.db).authenticate(credential)).toEqual({
       userId: CANARY_WALKER_ID,
       deviceId: CANARY_DEVICE_ID,
+      access: 'FULL',
     });
 
     signals.emit('SIGTERM');

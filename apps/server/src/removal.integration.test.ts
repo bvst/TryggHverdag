@@ -40,6 +40,7 @@
 // the test itself put in.
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import {
+  insertMemberRow,
   RACE_ROUNDS,
   RACERS,
   apiPath,
@@ -54,6 +55,7 @@ import {
   type FakeLog,
   type FakePush,
   type FakeSms,
+  unusedService,
 } from '@trygghverdag/test-kit';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
@@ -180,10 +182,17 @@ const sleep = (ms: number) =>
 // database's own now(), in the statement that writes them.
 // ---------------------------------------------------------------------------
 
+/**
+ * A user, a member of the one group.
+ *
+ * RG-03 (GRP-01, the spec's "Existing assertions that change by design"):
+ * a plain user until GRP-01. A journey's walker and responders must now be
+ * current members of the walker's group, held under the start's lock, and a
+ * device authenticates only while its user is a member (D-137), so every
+ * person here is one. Nothing these tests assert changes.
+ */
 async function addUser(): Promise<string> {
-  const id = syntheticUuid();
-  await connection().query('insert into users (id) values ($1)', [id]);
-  return id;
+  return insertMemberRow(connection());
 }
 
 /** A device of this user, and the credential it would send. */
@@ -657,12 +666,29 @@ function removalFor({
   return createRemovalService({ journeys: databaseJourneyStore(on), log });
 }
 
-/** The removal, through its module, on the shared pool unless another database is given. */
-const remove = (
+/**
+ * The removal, through its module, on the shared pool unless another database
+ * is given, asked as the journey's walker.
+ *
+ * RG-03 (GRP-01, approach item 10): the module now takes the caller, and
+ * answers JOURNEY_NOT_FOUND to anyone but the journey's walker, so the walker
+ * is read from the journey's row first, on the shared pool, before the
+ * removal's own reads; a stranger for a journey that does not exist, which is
+ * not found either way. What every removal here answers and does is
+ * unchanged.
+ */
+const remove = async (
   journeyId: string,
   responderId: string,
   options: { database?: Database; log?: FakeLog } = {},
-) => removalFor(options).remove({ journeyId, responderId });
+) => {
+  const { rows } = await connection().query<{ walker_id: string }>(
+    'select walker_id::text as walker_id from journeys where id = $1',
+    [journeyId],
+  );
+  const walkerId = rows[0]?.walker_id ?? syntheticUuid();
+  return removalFor(options).remove({ walkerId, journeyId, responderId });
+};
 
 function watchdogFor({
   database: on = database(),
@@ -702,6 +728,16 @@ function realApi({
     closures: {
       close: () => Promise.reject(new Error('these tests close nothing')),
     },
+    // RG-03 (GRP-01; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): the join, the
+    // invitations, the members and the walker's removal of a responder
+    // (approach item 12) made four services part of what the API needs. These
+    // tests call none of their routes, so each is a stand-in that fails
+    // loudly if reached; nothing they assert changes.
+    joins: unusedService('these tests join nobody'),
+    invitations: unusedService('these tests invite nobody'),
+    members: unusedService('these tests read and remove no member'),
+    removals: unusedService('these tests remove no responder through the route'),
   });
 }
 

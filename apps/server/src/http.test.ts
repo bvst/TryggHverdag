@@ -2,7 +2,12 @@
 // port 8080 on a public interface before it sends traffic, and fails the
 // deploy with "listening on localhost instead of publicly" otherwise — so the
 // address is asserted, not assumed.
-import { fakeClock, fakeDeviceAuthenticator, fakeWorkerHeartbeats } from '@trygghverdag/test-kit';
+import {
+  fakeClock,
+  fakeDeviceAuthenticator,
+  fakeWorkerHeartbeats,
+  unusedService,
+} from '@trygghverdag/test-kit';
 import { describe, expect, test } from 'vitest';
 import { createApi } from './api.ts';
 import { listen } from './http.ts';
@@ -41,6 +46,16 @@ function api() {
     closures: {
       close: () => Promise.reject(new Error('these tests close nothing')),
     },
+    // RG-03 (GRP-01; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): the join, the
+    // invitations, the members and the walker's removal of a responder
+    // (approach item 12) made four services part of what the API needs. These
+    // tests call none of their routes, so each is a stand-in that fails
+    // loudly if reached; nothing they assert changes.
+    joins: unusedService('these tests join nobody'),
+    invitations: unusedService('these tests invite nobody'),
+    members: unusedService('these tests read and remove no member'),
+    removals: unusedService('these tests remove no responder through the route'),
   });
 }
 

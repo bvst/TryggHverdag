@@ -120,7 +120,7 @@ DPIA written, PRIV-11):
 |-------------|---------|------|-------|
 | local | Claude Code sessions; PostgreSQL in containers | Synthetic only | Owner's machine |
 | ci | One per pull request, thrown away afterwards | Synthetic only | GitHub Actions |
-| staging | Always-on copy of production: demos, UI tests, its own canary | **Synthetic only** | Clever Cloud (EEA), small instances |
+| staging | Always-on copy of production: demos, UI tests, its own canary | **Synthetic only**, except the owner's own data for M3's demo until M5 (D-135) | Clever Cloud (EEA), small instances |
 | production | Real users | Real personal data | Clever Cloud (EEA) |
 
 There are three app variants — development, preview (talks to staging) and
@@ -263,6 +263,44 @@ reads the agent briefs and asserts on them, so editing one really can fail
     first canary run after the apply restarts it (D-128 and its loop-1
     amendment). The steps are under
     "If `CANARY_CREDENTIAL` leaks" in [monitoring-setup.md](monitoring-setup.md)
+  - `ADMIN_BOOTSTRAP_CODE` — the staging group's one-time bootstrap code,
+    with which the first admin joins (GRP-01, D-136 answer 1, D-137 and its
+    loop-1 amendment). 32 upper-case hex characters, 128 bits.
+    - **Where it lives:** made by Terraform's
+      `random_bytes.admin_bootstrap_code` (16 bytes), so it is in two places
+      only: Terraform's state in Cellar, in plain text as every state value
+      is, and the staging app's environment on Clever Cloud, which only the
+      API reads. In no GitHub secret, no variable and no tfvars file, and
+      never in the app bundle. `random_bytes` keeps it sensitive, so no
+      `infra-staging` plan or apply prints it; `random_id`, which the first
+      build used, would have printed it in every plan's public log, and was
+      replaced before GRP-01 merged (`infra-staging` runs in the `staging`
+      environment, which only `main` can read). CI's L7 job uses a synthetic
+      value of its own, never this one
+    - **Who can see it:** anyone who can read the staging app's environment
+      variables in Clever Cloud's console, which is the owner's way to read
+      it once (A-36); and anyone who can read Terraform's state in Cellar
+      (`CELLAR_KEY_ID`, `CELLAR_KEY_SECRET`). Whether the staging CI user's
+      key (`CLEVER_TOKEN`, `CLEVER_SECRET`) can also read the environment
+      through Clever Cloud's API was not checked; treat it as able to
+    - **What a leak means:** the code makes its holder admin **only while no
+      group exists**: before the owner's join (A-36), or after the staging
+      database has been emptied. Once the group exists, a join with it is
+      refused like any invalid code. Its retry (the same join again after a
+      lost answer) also needs the join key, which only the owner's phone
+      holds, and works only while the owner is the group's only member. So
+      after A-36, a leaked code opens nothing until the database is emptied
+    - **Replacing it:** raise `admin_bootstrap_code_generation` in the
+      `locals` of `infra/staging/main.tf` by one in a pull request, then
+      `infra-staging` plan and apply. It is the resource's only `keepers`
+      value, and the random provider replaces the resource when it changes;
+      `infra-staging.yml` has no `-replace`, so this one line is the
+      rotation, as `canary_credential_generation` is for the canary's
+      credential. The plan must show `random_bytes.admin_bootstrap_code`
+      replaced and the app's environment changing, values hidden; the apply
+      restarts the app, and the API reads the new code at start. Replace it
+      before the staging database is ever emptied. The steps are under "If
+      `ADMIN_BOOTSTRAP_CODE` leaks" in [monitoring-setup.md](monitoring-setup.md)
   - Claude OAuth token
   - Claude's GitHub token (A-06)
   - `RULES_READ_TOKEN` — **normally not needed.** CI-01 reads the merge rules
@@ -277,6 +315,11 @@ reads the agent briefs and asserts on them, so editing one really can fail
   then `infra-staging` plan and apply (its `keepers` replaces the resource;
   D-128's loop-1 amendment). The credential has no expiry of its own (D-091),
   so this yearly replacement is the only thing that ever ends it.
+  `ADMIN_BOOTSTRAP_CODE` opens nothing once the staging group exists, so it
+  needs no yearly replacement; it is replaced if it leaks before the owner's
+  join, and before the staging database is ever emptied, by raising
+  `admin_bootstrap_code_generation` in `infra/staging/main.tf` in a pull
+  request, then `infra-staging` plan and apply (GRP-01).
 
 ## Versioning and dependencies
 - The app uses semantic versioning, with build numbers managed by EAS. The API

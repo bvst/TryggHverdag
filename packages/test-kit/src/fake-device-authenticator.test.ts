@@ -4,6 +4,11 @@
 // what this fake answers. A fake that accepted a removed device, answered
 // null where it should reject, or could not fail at all would not go red: it
 // would make those tests pass whatever the middleware did.
+//
+// RG-03 (GRP-01, approach item 5, D-137): the answer gains `access`, how far
+// the device is admitted, so every exact answer below gains `access: 'FULL'`,
+// the default, and one case is added for a device registered WALKER_ONLY.
+// Nothing else these tests assert changes.
 import { describe, expect, test } from 'vitest';
 import { fakeDeviceAuthenticator } from './fake-device-authenticator.ts';
 import * as kit from './index.ts';
@@ -14,7 +19,28 @@ describe('fakeDeviceAuthenticator', () => {
     const devices = fakeDeviceAuthenticator();
     const { credential, deviceId, userId } = devices.register();
 
-    await expect(devices.authenticate(credential)).resolves.toEqual({ deviceId, userId });
+    await expect(devices.authenticate(credential)).resolves.toEqual({
+      deviceId,
+      userId,
+      access: 'FULL',
+    });
+  });
+
+  test('a device registered WALKER_ONLY is answered so, and only that device (GRP-01)', async () => {
+    const devices = fakeDeviceAuthenticator();
+    const walking = devices.register({ access: 'WALKER_ONLY' });
+    const other = devices.register({ userId: walking.userId });
+
+    await expect(devices.authenticate(walking.credential)).resolves.toEqual({
+      deviceId: walking.deviceId,
+      userId: walking.userId,
+      access: 'WALKER_ONLY',
+    });
+    await expect(devices.authenticate(other.credential)).resolves.toEqual({
+      deviceId: other.deviceId,
+      userId: walking.userId,
+      access: 'FULL',
+    });
   });
 
   test('each registration is a new device, a new user and a new credential', () => {
@@ -38,6 +64,7 @@ describe('fakeDeviceAuthenticator', () => {
     await expect(devices.authenticate(second.credential)).resolves.toEqual({
       deviceId: second.deviceId,
       userId: first.userId,
+      access: 'FULL',
     });
   });
 
@@ -60,6 +87,7 @@ describe('fakeDeviceAuthenticator', () => {
     await expect(devices.authenticate(kept.credential)).resolves.toEqual({
       deviceId: kept.deviceId,
       userId: kept.userId,
+      access: 'FULL',
     });
   });
 
@@ -89,7 +117,11 @@ describe('fakeDeviceAuthenticator', () => {
 
     devices.recover();
 
-    await expect(devices.authenticate(credential)).resolves.toEqual({ deviceId, userId });
+    await expect(devices.authenticate(credential)).resolves.toEqual({
+      deviceId,
+      userId,
+      access: 'FULL',
+    });
   });
 
   test('counts every check it was asked for, answered, null or failed', async () => {
@@ -117,6 +149,7 @@ describe('fakeDeviceAuthenticator', () => {
     await expect(devices.authenticate(registered.credential)).resolves.toEqual({
       deviceId: registered.deviceId,
       userId: registered.userId,
+      access: 'FULL',
     });
   });
 

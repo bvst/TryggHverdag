@@ -36,6 +36,13 @@ export const SAFETY_PATHS = [
   // does not exist yet (an open follow-up).
   'apps/server/src/modules/journeys/',
   'apps/server/src/api-process.ts',
+  // The groups module (GRP-01-AC32, D-137's loop-1 amendment): who joins and
+  // who is removed, and with them whose devices authenticate and who can be
+  // named a responder, so who receives alerts. Its tests run in-process, as
+  // the journey module's do. Its adapter, adapters/groups.ts, is not here: it
+  // is proved at L3 and by the shared group suite, as adapters/journeys.ts is
+  // (D-095's reading).
+  'apps/server/src/modules/groups/',
   'apps/mobile/src/safety-core/',
 ];
 
@@ -78,14 +85,29 @@ export const MUTATION_GROUPS = [
     // back in contact and "I'm home" (contact.system.test.ts, LOST-03, D-112),
     // then removing a responder (removal.system.test.ts, SM-10, D-123): the
     // module's code is proven by all three, so a mutant here is run by all
-    // three.
+    // three. Then the group's (groups.system.test.ts, GRP-01-AC32): the
+    // walker check in removal.ts and the start's eligible responders are
+    // killed by that file alone, as safety-reviewer's planted mutant showed
+    // (S4). Fourth, so a mutant the first three kill never waits for it.
     name: 'journeys',
     paths: ['apps/server/src/modules/journeys/'],
     tests: [
       'apps/server/src/journeys.system.test.ts',
       'apps/server/src/contact.system.test.ts',
       'apps/server/src/removal.system.test.ts',
+      'apps/server/src/groups.system.test.ts',
     ],
+    config: 'vitest.system.config.mjs',
+  },
+  {
+    // The join, the invitation and the admin's member list and removal
+    // (GRP-01-AC32), against their system test, under the system tests'
+    // configuration. Named membership, not after its folder: `groups` is the
+    // mutation plan's output key in ci.yml, where BUG-45-AC8 refuses any
+    // group's name.
+    name: 'membership',
+    paths: ['apps/server/src/modules/groups/'],
+    tests: ['apps/server/src/groups.system.test.ts'],
     config: 'vitest.system.config.mjs',
   },
   {

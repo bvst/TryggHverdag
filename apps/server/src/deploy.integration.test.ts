@@ -1686,8 +1686,14 @@ describe('LOST-08: the close’s and the 24-hour end’s migration changes no ro
         'select count(*)::int as n from drizzle.__drizzle_migrations',
       );
       expect(applied.rows).toEqual([{ n: journal(MIGRATIONS).entries.length }]);
+      // RG-03 (GRP-01; not in its spec's "Existing assertions that change by
+      // design", which missed this pin): GRP-01 adds exactly one migration,
+      // 0009, by design ("Modules and files affected": `db/schema.ts` and one
+      // migration). So the journal is 0000 to 0009, and migrateDatabase runs
+      // 0009 over this database as well; every row above is still held
+      // unchanged, column for column, now through 0009 too.
       expect(journal(MIGRATIONS).entries.map((entry) => entry.idx)).toEqual([
-        0, 1, 2, 3, 4, 5, 6, 7, 8,
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
       ]);
 
       // The values added inside the migration's transaction are usable once

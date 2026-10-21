@@ -67,16 +67,44 @@ describe('LOST-06 and SEC-07: the "I’m on it" route, as the contract holds it'
     // `closeAlert` last), and that spec's "Existing assertions that change by
     // design" names this pin. The list is still exact, one key larger; this
     // route's own assertions below do not change.
-    expect(Object.keys(contract).sort()).toEqual(
+    //
+    // RG-03 (GRP-01; not in its spec's "Existing assertions that change by
+    // design", which missed this pin): GRP-01 adds six routes to the contract
+    // by design (approach item 12, "Contract changes"), and its spec names
+    // their paths, not their keys. So this pin now holds the contract's routes
+    // by method and path, exactly, the six before and GRP-01's six, and the
+    // six keys it named before, in their order; it no longer names every key.
+    // Still exact on what the contract serves; this route's own assertions do
+    // not change.
+    const served = Object.values(contract).map((procedure) => {
+      const { route: each } = definitionOf(procedure);
+      return `${each.method ?? ''} ${each.path ?? ''}`;
+    });
+    expect(served.sort()).toEqual(
       [
-        'acknowledgeAlert',
-        'closeAlert',
-        'health',
-        'recordHeartbeat',
-        'reportHome',
-        'startJourney',
+        'GET /health',
+        'POST /journeys',
+        'POST /heartbeats',
+        'POST /journeys/{journeyId}/home',
+        'POST /alerts/{alertId}/acknowledgement',
+        'POST /alerts/{alertId}/closure',
+        'POST /group/members',
+        'GET /me',
+        'POST /group/invitations',
+        'GET /group/members',
+        'DELETE /group/members/{userId}',
+        'DELETE /journeys/{journeyId}/responders/{responderId}',
       ].sort(),
     );
+    const before = [
+      'health',
+      'startJourney',
+      'recordHeartbeat',
+      'reportHome',
+      'acknowledgeAlert',
+      'closeAlert',
+    ];
+    expect(Object.keys(contract).filter((key) => before.includes(key))).toEqual(before);
     expect(route.method).toBe('POST');
     expect(route.path).toBe('/alerts/{alertId}/acknowledgement');
     expect(route.successStatus).toBe(200);
@@ -184,7 +212,25 @@ describe('LOST-08 and SEC-07: the "They’re safe" route, as the contract holds 
     const { route } = definitionOf(closeAlert);
 
     expect(contract.closeAlert).toBe(closeAlert);
-    expect(Object.keys(contract)).toEqual([
+    // RG-03 (GRP-01; not in its spec's "Existing assertions that change by
+    // design", which missed this pin): GRP-01 adds six routes by design
+    // (approach item 12, "Contract changes") and names their paths, not their
+    // keys, nor where they go. So closeAlert is last of the six keys this
+    // named, still in their order, and no longer last of the contract; the
+    // routes the contract serves are held exactly by method and path in the
+    // "I'm on it" test above and in home.test.ts.
+    expect(
+      Object.keys(contract).filter((key) =>
+        [
+          'health',
+          'startJourney',
+          'recordHeartbeat',
+          'reportHome',
+          'acknowledgeAlert',
+          'closeAlert',
+        ].includes(key),
+      ),
+    ).toEqual([
       'health',
       'startJourney',
       'recordHeartbeat',
@@ -192,6 +238,7 @@ describe('LOST-08 and SEC-07: the "They’re safe" route, as the contract holds 
       'acknowledgeAlert',
       'closeAlert',
     ]);
+    expect(Object.keys(contract)).toHaveLength(12);
     expect(route.method).toBe('POST');
     expect(route.path).toBe('/alerts/{alertId}/closure');
     expect(route.successStatus).toBe(200);

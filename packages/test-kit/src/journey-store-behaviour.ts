@@ -12,9 +12,13 @@
  *   - one unended journey per walker: a second start is "not inserted" and
  *     names the journey already there, also when many starts race;
  *   - an ENDED journey blocks nothing and is never reported as unended;
- *   - a start is written whole or not at all, and a walker or responder who
- *     is not a user, or a device that is not a device, is refused, not
- *     half-stored;
+ *   - a start is written whole or not at all, and a device that is not a
+ *     device is refused, not half-stored;
+ *   - a start names only responders the walker may name, held under the
+ *     start's lock (GRP-01, approach item 6): a responder who is not a
+ *     current member of the walker's group, or a walker who is not a member,
+ *     is refused whole, answered INVALID_RESPONDER, and leaves nothing; so is
+ *     a member removed after the module's read;
  *   - a start stores the device that sent it, and no other (D-101);
  *   - a start with no responders is refused, in the store's own words, and
  *     leaves nothing: a journey with nobody to alert is the silent failure
@@ -22,7 +26,8 @@
  *     caller gets past the domain's NO_RESPONDER. Beside an unended journey
  *     too, where answering "not inserted" would let the empty list through
  *     unrefused;
- *   - `existingUsers` names exactly the IDs that are users;
+ *   - `eligibleResponders` names exactly the given IDs that are current
+ *     members of the walker's group, other than the walker (GRP-01);
  *   - an ID is matched as PostgreSQL's `uuid` type matches it, in either
  *     case, and comes back lower-case.
  *
@@ -224,7 +229,12 @@ export interface JourneyStoreUnderTest {
       retryAfterMs: number;
     }): Promise<void>;
     unendedJourneyOf(walkerId: string): Promise<{ id: string; state: string } | null>;
-    existingUsers(ids: readonly string[]): Promise<ReadonlySet<string>>;
+    /**
+     * GRP-01 (approach item 6): which of these IDs the walker may name.
+     * RG-03: replaces `existingUsers`, which answered "is a user"; the port
+     * method is renamed so no safety reader takes "is a user" for the rule.
+     */
+    eligibleResponders(walkerId: string, ids: readonly string[]): Promise<ReadonlySet<string>>;
     insertStarted(journey: StartedJourney): Promise<InsertStartedResult>;
     journeyForHeartbeat(
       journeyId: string,
@@ -290,8 +300,19 @@ export interface JourneyStoreUnderTest {
       lockWaitMs?: number | undefined;
     }): Promise<ExpireAlertResult>;
   };
-  /** A new user, by the store's own means: a row in the real table, an entry in the fake. */
+  /**
+   * A new user, by the store's own means: a row in the real table, an entry
+   * in the fake. A member of no group: since GRP-01 nobody can name them as a
+   * responder.
+   */
   addUser(): Promise<string>;
+  /**
+   * GRP-01: a new user who is a member of the store's one group, the group put
+   * in first if there is none, by the store's own means. Every walker and
+   * responder of a start is one (D-137): the start names only members of the
+   * walker's group.
+   */
+  addMember(): Promise<string>;
   /**
    * A new device of this user, by the store's own means; resolves to its ID.
    * Every start and every seeded journey names the device it came from, as
@@ -612,10 +633,20 @@ function normalised(journeys: readonly JourneyAsStored[]) {
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/**
+ * People a behaviour needs: each a member of the store's one group.
+ *
+ * RG-03 (GRP-01, the spec's "Existing assertions that change by design"):
+ * these were plain users. Since GRP-01 a journey's responders must be current
+ * members of the walker's group, held under the start's lock (D-137), so a
+ * start naming plain users is refused; every walker and responder here is
+ * now a member, and every behaviour's assertion stays as it was. The
+ * behaviours that need someone who is not a member ask `addUser` for them.
+ */
 async function users(subject: JourneyStoreUnderTest, count: number): Promise<string[]> {
   const made: string[] = [];
   for (let i = 0; i < count; i += 1) {
-    made.push(await subject.addUser());
+    made.push(await subject.addMember());
   }
   return made;
 }
@@ -623,7 +654,7 @@ async function users(subject: JourneyStoreUnderTest, count: number): Promise<str
 function insertedId(result: InsertStartedResult): string {
   if (!result.inserted) {
     throw new Error(
-      `expected the start to be inserted, but it was refused for ${result.unendedJourneyId}`,
+      `expected the start to be inserted, but it was refused: ${JSON.stringify(result)}`,
     );
   }
   return result.journeyId;
@@ -1806,16 +1837,89 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     },
   },
   {
-    name: 'existingUsers names exactly the given IDs that are users',
+    // RG-03 (GRP-01, approach item 6, the spec's "Existing assertions that
+    // change by design"): was "existingUsers names exactly the given IDs that
+    // are users". The port method is renamed and its meaning moves from "is a
+    // user" to "is a current member of the walker's group, other than the
+    // walker", so a plain user is now left out, beside an ID that is no user
+    // at all, as that was.
+    name: 'GRP-01-AC12: eligibleResponders names exactly the given IDs that are current members of the walker’s group, other than the walker: never a plain user, an ID that is no user, or the walker',
     async run(subject) {
-      const [first = '', second = ''] = await users(subject, 2);
+      const [walkerId = '', first = '', second = ''] = await users(subject, 3);
+      const plainUser = await subject.addUser();
       const stranger = syntheticUuid();
 
-      const found = await subject.store.existingUsers([first, stranger, second, first]);
+      const found = await subject.store.eligibleResponders(walkerId, [
+        first,
+        stranger,
+        second,
+        plainUser,
+        walkerId,
+        first,
+      ]);
 
       expect([...found].sort()).toEqual([first, second].sort());
-      expect([...(await subject.store.existingUsers([stranger]))]).toEqual([]);
-      expect([...(await subject.store.existingUsers([]))]).toEqual([]);
+      expect([...(await subject.store.eligibleResponders(walkerId, [stranger]))]).toEqual([]);
+      expect([...(await subject.store.eligibleResponders(walkerId, [plainUser]))]).toEqual([]);
+      expect([...(await subject.store.eligibleResponders(walkerId, []))]).toEqual([]);
+    },
+  },
+  {
+    name: 'GRP-01-AC12: a walker who is not a member may name nobody, members included',
+    async run(subject) {
+      const [member = ''] = await users(subject, 1);
+      const plainWalker = await subject.addUser();
+
+      expect([...(await subject.store.eligibleResponders(plainWalker, [member]))]).toEqual([]);
+      expect([...(await subject.store.eligibleResponders(syntheticUuid(), [member]))]).toEqual([]);
+    },
+  },
+  {
+    name: 'GRP-01-AC12: a start naming a plain user beside a member is refused whole under the lock, answered INVALID_RESPONDER, and stores nothing; the same start naming the member alone is stored',
+    async run(subject) {
+      const [walkerId = '', member = ''] = await users(subject, 2);
+      const plainUser = await subject.addUser();
+      const deviceId = await subject.addDevice(walkerId);
+
+      for (const responderIds of [[member, plainUser], [plainUser, member], [plainUser]]) {
+        expect(
+          await subject.store.insertStarted({
+            walkerId,
+            deviceId,
+            responderIds,
+            startedAt: STARTED_AT,
+          }),
+          JSON.stringify(responderIds),
+        ).toEqual({ inserted: false, refused: 'INVALID_RESPONDER' });
+        expect(await subject.journeysOf(walkerId)).toEqual([]);
+        expect(await subject.store.unendedJourneyOf(walkerId)).toBeNull();
+      }
+
+      const stored = await subject.store.insertStarted({
+        walkerId,
+        deviceId,
+        responderIds: [member],
+        startedAt: STARTED_AT,
+      });
+      expect(stored.inserted).toBe(true);
+    },
+  },
+  {
+    name: 'GRP-01-AC12: a start by a walker who is not a member is refused whole under the lock, answered INVALID_RESPONDER, and stores nothing, however many members it names',
+    async run(subject) {
+      const [first = '', second = ''] = await users(subject, 2);
+      const plainWalker = await subject.addUser();
+      const deviceId = await subject.addDevice(plainWalker);
+
+      expect(
+        await subject.store.insertStarted({
+          walkerId: plainWalker,
+          deviceId,
+          responderIds: [first, second],
+          startedAt: STARTED_AT,
+        }),
+      ).toEqual({ inserted: false, refused: 'INVALID_RESPONDER' });
+      expect(await subject.journeysOf(plainWalker)).toEqual([]);
     },
   },
   {
@@ -1828,9 +1932,13 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       const [walkerId = '', responderId = ''] = await users(subject, 2);
       expect([walkerId, responderId]).toEqual([walkerId.toLowerCase(), responderId.toLowerCase()]);
 
-      expect([...(await subject.store.existingUsers([responderId.toUpperCase()]))]).toEqual([
-        responderId,
-      ]);
+      // RG-03 (GRP-01): `existingUsers` became `eligibleResponders`, asked
+      // for the walker; the expectation is the same responder, lower-case.
+      expect([
+        ...(await subject.store.eligibleResponders(walkerId.toUpperCase(), [
+          responderId.toUpperCase(),
+        ])),
+      ]).toEqual([responderId]);
 
       const journeyId = insertedId(
         await subject.store.insertStarted({
@@ -1860,19 +1968,25 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     },
   },
   {
-    name: 'a responder who is not a user is refused whole: the store rejects, and leaves no journey',
+    // RG-03 (GRP-01, approach item 6, the spec's "Existing assertions that
+    // change by design"): was "… the store rejects". The start now takes the
+    // named responders' memberships under its lock before it writes, and an
+    // ID that is no user is no member: refused as INVALID_RESPONDER, an
+    // answer, where the foreign key's rejection used to stop it. Still whole,
+    // still nothing stored, and the retry below is unchanged.
+    name: 'a responder who is not a user is refused whole: the store answers INVALID_RESPONDER, and leaves no journey',
     async run(subject) {
       const [walkerId = '', responderId = ''] = await users(subject, 2);
       const deviceId = await subject.addDevice(walkerId);
 
-      await expect(
-        subject.store.insertStarted({
+      expect(
+        await subject.store.insertStarted({
           walkerId,
           deviceId,
           responderIds: [responderId, syntheticUuid()],
           startedAt: STARTED_AT,
         }),
-      ).rejects.toThrow();
+      ).toEqual({ inserted: false, refused: 'INVALID_RESPONDER' });
 
       expect(await subject.journeysOf(walkerId)).toEqual([]);
       expect(await subject.store.unendedJourneyOf(walkerId)).toBeNull();
@@ -1887,7 +2001,11 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
     },
   },
   {
-    name: 'a walker who is not a user is refused: the store rejects, and stores nothing',
+    // RG-03 (GRP-01, approach item 6, the spec's "Existing assertions that
+    // change by design"): was "… the store rejects". A walker who is no user
+    // is no member, so may name nobody: refused as INVALID_RESPONDER under the
+    // start's lock, before any foreign key is reached. Still nothing stored.
+    name: 'a walker who is not a user is refused: the store answers INVALID_RESPONDER, and stores nothing',
     async run(subject) {
       const [responderId = ''] = await users(subject, 1);
       const stranger = syntheticUuid();
@@ -1895,14 +2013,14 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       // (D-101): a device that did not exist would be refused on its own.
       const deviceId = await subject.addDevice(responderId);
 
-      await expect(
-        subject.store.insertStarted({
+      expect(
+        await subject.store.insertStarted({
           walkerId: stranger,
           deviceId,
           responderIds: [responderId],
           startedAt: STARTED_AT,
         }),
-      ).rejects.toThrow();
+      ).toEqual({ inserted: false, refused: 'INVALID_RESPONDER' });
 
       expect(await subject.journeysOf(stranger)).toEqual([]);
     },
@@ -7259,8 +7377,14 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       const now = await subject.now();
       for (const state of STATES) {
         const journey = await watched(subject, { state, startedAt: ago(now, HOUR), responders: 2 });
+        // RG-03 (GRP-01, approach item 10, "Modules and files affected":
+        // `walkerId` in `journeyForRemoval`): the read names the journey's
+        // walker too, read in the same query, so the walker's route can
+        // answer JOURNEY_NOT_FOUND to anyone else (GRP-01-AC23). Everything
+        // else this read held is held as before.
         const expected = {
           id: journey.journeyId,
+          walkerId: journey.walkerId,
           state,
           responderIds: [...journey.responderIds].sort(),
         };
@@ -7295,6 +7419,7 @@ export const JOURNEY_STORE_BEHAVIOUR: readonly JourneyStoreBehaviour[] = [
       await subject.removeResponders(bare.journeyId);
       expect(await subject.store.journeyForRemoval(bare.journeyId)).toEqual({
         id: bare.journeyId,
+        walkerId: bare.walkerId,
         state: 'ACTIVE',
         responderIds: [],
       });

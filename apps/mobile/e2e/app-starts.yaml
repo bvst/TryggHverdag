@@ -1,13 +1,21 @@
 # INF-06-AC11: the release build, installed on an Android emulator whose
-# language is Norwegian bokmål, starts from a cleared state and shows the
-# placeholder screen's bokmål title and status line, and no raw translation key.
+# language is Norwegian bokmål, starts from a cleared state and shows the join
+# screen's bokmål title and the line under it, and no raw translation key.
+#
+# RG-03 (GRP-01, the spec's "Existing assertions that change by design",
+# INF-06-AC11's item): a cleared app now opens on the join screen, not the
+# placeholder, so the title is the join screen's (grp.join.title) and the
+# line under it the join screen's introduction (grp.join.intro), where they
+# were the placeholder's TITLE and STATUS, gone with its keys. What this flow
+# holds is unchanged: a title and the line under it, and no raw key. It needs
+# no server: a fresh install asks the server nothing before anyone joins.
 #
 # Nothing a reader sees is written here. scripts/e2e-android.mjs reads the
-# application ID from app.config.ts and the two strings from nb.json, and passes
+# application ID from app.config.ts and the string from nb.json, and passes
 # them in with -e, so this flow cannot drift from the app it tests:
-#   APP_ID  the Android application ID
-#   TITLE   placeholder.title in nb.json
-#   STATUS  placeholder.status in nb.json
+#   APP_ID      the Android application ID
+#   JOIN_TITLE  grp.join.title in nb.json
+#   JOIN_INTRO  grp.join.intro in nb.json
 #
 # Maestro matches text as a regular expression over an element's whole text.
 #
@@ -22,10 +30,10 @@ appId: ${APP_ID}
 # for the title, rather than asserting at once, keeps a slow start from
 # looking like a broken app.
 - extendedWaitUntil:
-    visible: ${TITLE}
+    visible: ${JOIN_TITLE}
     timeout: 30000
-- assertVisible: ${TITLE}
-- assertVisible: ${STATUS}
+- assertVisible: ${JOIN_TITLE}
+- assertVisible: ${JOIN_INTRO}
 # What i18next shows for a key it cannot find is the dotted key itself, such as
-# "placeholder.title". No visible text may look like one.
+# "grp.join.title". No visible text may look like one.
 - assertNotVisible: '[a-z][a-zA-Z0-9]*(\.[a-zA-Z0-9]+)+'

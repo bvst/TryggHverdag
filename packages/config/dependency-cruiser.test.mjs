@@ -153,6 +153,59 @@ describe('the safety core is reached through its index, from anywhere in the app
   });
 });
 
+// GRP-01's app (approach item 14): its screens live in src/features/grp/, and
+// the routes under src/app/ reach them through the feature's public index
+// alone (the spec's test plan, L1: "features/grp/ reached only through its
+// index"), as a feature reaches another feature (AR-10). The rule's name is
+// the implementer's; a refusal must name an error rule whose comment cites
+// AR-10.
+const FEATURE_APP = {
+  'apps/mobile/src/features/grp/index.ts': "export { JoinScreen } from './join-screen';\n",
+  'apps/mobile/src/features/grp/join-screen.tsx': 'export const JoinScreen = (): null => null;\n',
+  'apps/mobile/src/app/index.tsx': reachesIn('../features/grp/join-screen'),
+  'apps/mobile/src/app/admin/members.tsx': reachesIn('../../features/grp/join-screen'),
+  'apps/mobile/src/app/_layout.tsx': reachesIn('../features/grp'),
+  'apps/mobile/src/app/join.tsx': reachesIn('../features/grp/index'),
+};
+
+/** The error rules whose comment cites AR-10: those that hold the app's boundaries. */
+function ar10Rules() {
+  return createRequire(import.meta.url)('./dependency-cruiser.cjs')
+    .forbidden.filter(
+      (rule) => rule.severity === 'error' && String(rule.comment ?? '').includes('AR-10'),
+    )
+    .map((rule) => rule.name);
+}
+
+describe('GRP-01: the routes reach a feature only through its index', () => {
+  let check;
+  beforeAll(() => {
+    check = importCheck(FEATURE_APP);
+  });
+
+  const refused = (from) =>
+    check.violations.filter((v) => ar10Rules().includes(v.rule) && v.from === from);
+
+  test('a route under src/app/ may not import a file of features/grp/ other than its index', () => {
+    expect(refused('apps/mobile/src/app/index.tsx').map(({ to }) => to)).toEqual([
+      'apps/mobile/src/features/grp/join-screen.tsx',
+    ]);
+  });
+
+  test('nor may a nested route', () => {
+    expect(refused('apps/mobile/src/app/admin/members.tsx')).toHaveLength(1);
+  });
+
+  test('the index is the way in, named as the folder or as index', () => {
+    expect(refused('apps/mobile/src/app/_layout.tsx')).toEqual([]);
+    expect(refused('apps/mobile/src/app/join.tsx')).toEqual([]);
+  });
+
+  test('the feature may use its own files', () => {
+    expect(refused('apps/mobile/src/features/grp/index.ts')).toEqual([]);
+  });
+});
+
 describe('only the process wiring and tests import the log adapter; modules get the Log port', () => {
   let check;
   beforeAll(() => {

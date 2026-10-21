@@ -9,7 +9,10 @@
  * test can run the whole API in-process against fakes and a clock it controls
  * (L6) — which is where the alert behaviour will be proven in M2.
  *
- * Every request but a health check comes from a known device (SEC-07). The
+ * Every request but a health check and the join comes from a known device
+ * (SEC-07); the join is public on purpose, since nobody holds a credential
+ * before they join (GRP-01, SM-01-AC9's list). Since GRP-01 a device is known
+ * while its user is a member of the group: membership is the session. The
  * credential is checked before the body is validated against the route's
  * schema, so an unknown caller learns nothing about what a valid request
  * looks like. oRPC decodes the body before the credential check runs (in
@@ -26,6 +29,7 @@
  */
 import { OpenAPIHandler } from '@orpc/openapi/fetch';
 import { implement, ORPCError } from '@orpc/server';
+import { ResponseHeadersPlugin, type ResponseHeadersPluginContext } from '@orpc/server/plugins';
 import {
   API_PREFIX,
   badRequestError,
@@ -35,9 +39,13 @@ import {
 import { Hono } from 'hono';
 import type { AcknowledgementService } from './modules/alerts/acknowledgement.ts';
 import type { ClosureService } from './modules/alerts/closure.ts';
+import type { InvitationService } from './modules/groups/invitations.ts';
+import type { JoinService } from './modules/groups/join.ts';
+import type { MemberService } from './modules/groups/members.ts';
 import type { HealthService } from './modules/health/service.ts';
+import type { RemovalService } from './modules/journeys/removal.ts';
 import type { JourneyService } from './modules/journeys/service.ts';
-import type { DeviceAuthenticator } from './ports.ts';
+import type { AuthenticatedDevice, DeviceAuthenticator } from './ports.ts';
 
 export interface ApiDependencies {
   health: HealthService;
@@ -45,10 +53,21 @@ export interface ApiDependencies {
   devices: DeviceAuthenticator;
   acknowledgements: AcknowledgementService;
   closures: ClosureService;
+  // GRP-01 (approach item 12): the join, the invitations, the members and the
+  // walker's removal of a responder.
+  joins: JoinService;
+  invitations: InvitationService;
+  members: MemberService;
+  removals: RemovalService;
 }
 
-/** What a request brings in besides its body: only what the credential check reads. */
-interface RequestContext {
+/**
+ * What a request brings in besides its body: only what the credential check
+ * reads. And the headers an answer gains (ResponseHeadersPlugin): the join's
+ * `Cache-Control: no-store`, so its credential is kept by nothing between
+ * the phone and the server (GRP-01, approach item 4).
+ */
+interface RequestContext extends ResponseHeadersPluginContext {
   authorization: string | undefined;
 }
 
@@ -98,14 +117,18 @@ export function createApi({
   devices,
   acknowledgements,
   closures,
+  joins,
+  invitations,
+  members,
+  removals,
 }: ApiDependencies): Hono {
   const os = implement(contract).$context<RequestContext>();
 
   /**
-   * Every route is built from this except health, so a route added later is
-   * authenticated unless someone builds it from `os` on purpose — and the
-   * system test that calls every route in the contract without a credential
-   * fails if they do.
+   * Every route is built from this except health and the join, so a route
+   * added later is authenticated unless someone builds it from `os` on
+   * purpose — and the system test that calls every route in the contract
+   * without a credential fails if they do.
    *
    * One 401 for every cause, so it says nothing about which check failed. A
    * check that cannot run is not one of those causes: the authenticator
@@ -116,15 +139,33 @@ export function createApi({
    * it is never logged, and never part of an answer. Past this point the
    * header is gone from the context: handlers get the device, and
    * `authorization` is undefined, so none can read the credential.
+   *
+   * Membership is the session (GRP-01, approach item 5, D-137): a device is
+   * admitted FULL while its user is a member, or it is the canary's; a removed
+   * member's device that started a journey not yet ended is admitted
+   * WALKER_ONLY, and only the two routes built from `fromWalkingDevice` take
+   * it, whose rules already require the journey's own walker and device
+   * (D-101, D-110). Everywhere else, and everywhere once that journey ends,
+   * it gets the same one 401.
    */
-  const fromKnownDevice = os.use(async ({ context, next }) => {
-    const credential = BEARER.exec(context.authorization ?? '')?.[1];
-    const device = credential === undefined ? null : await devices.authenticate(credential);
-    if (device === null) {
-      throw new ORPCError('UNAUTHORIZED', { message: deviceCredentialErrors.UNAUTHORIZED.message });
-    }
-    return next({ context: { device, authorization: undefined } });
-  });
+  const fromDevice = (admitted: (device: AuthenticatedDevice) => boolean) =>
+    os.use(async ({ context, next }) => {
+      const credential = BEARER.exec(context.authorization ?? '')?.[1];
+      const device = credential === undefined ? null : await devices.authenticate(credential);
+      if (device === null || !admitted(device)) {
+        throw new ORPCError('UNAUTHORIZED', {
+          message: deviceCredentialErrors.UNAUTHORIZED.message,
+        });
+      }
+      return next({ context: { device, authorization: undefined } });
+    });
+  /** Closed by default: a device admitted in full, a current member's or the canary's. */
+  const fromKnownDevice = fromDevice(({ access }) => access === 'FULL');
+  /**
+   * The walker's own two: any device the authenticator admits, FULL or
+   * WALKER_ONLY, a removed member's for its own unended journey.
+   */
+  const fromWalkingDevice = fromDevice(() => true);
 
   const router = os.router({
     // The one public route: uptime monitors and the platform's deploy check
@@ -153,31 +194,38 @@ export function createApi({
     // LOST-01. The walker is the device's own user and the device is the one
     // that sent it; the body names only the journey. A 200 means the server
     // has the event, so the phone may drop it.
-    recordHeartbeat: fromKnownDevice.recordHeartbeat.handler(async ({ input, context, errors }) => {
-      const result = await journeys.heartbeat({
-        walkerId: context.device.userId,
-        deviceId: context.device.deviceId,
-        heartbeat: input,
-      });
-      switch (result.type) {
-        case 'recorded':
-          return { outcome: 'RECORDED' };
-        case 'duplicate':
-          return { outcome: 'DUPLICATE' };
-        case 'ignored':
-        case 'refused':
-          // Each reason the rule gives is the contract's code for it:
-          // JOURNEY_ENDED (409), JOURNEY_NOT_FOUND (404) and
-          // NOT_THE_JOURNEYS_DEVICE (403).
-          throw errors[result.reason]();
-      }
-    }),
+    //
+    // A removed member's device is admitted here for its own unended journey
+    // (D-136, answer 5): the rule takes heartbeats only from the device that
+    // started the journey, and only until it ends.
+    recordHeartbeat: fromWalkingDevice.recordHeartbeat.handler(
+      async ({ input, context, errors }) => {
+        const result = await journeys.heartbeat({
+          walkerId: context.device.userId,
+          deviceId: context.device.deviceId,
+          heartbeat: input,
+        });
+        switch (result.type) {
+          case 'recorded':
+            return { outcome: 'RECORDED' };
+          case 'duplicate':
+            return { outcome: 'DUPLICATE' };
+          case 'ignored':
+          case 'refused':
+            // Each reason the rule gives is the contract's code for it:
+            // JOURNEY_ENDED (409), JOURNEY_NOT_FOUND (404) and
+            // NOT_THE_JOURNEYS_DEVICE (403).
+            throw errors[result.reason]();
+        }
+      },
+    ),
 
     // "I'm home" (SM-04, D-110). The journey is the path's, and only the
     // path's: the input is detailed, so the body cannot name another. Only the
     // device that started it may end it. A 200 and a 409 both mean the
-    // journey is over.
-    reportHome: fromKnownDevice.reportHome.handler(async ({ input, context, errors }) => {
+    // journey is over. A removed member's device is admitted here for its own
+    // unended journey, as for a heartbeat (D-136, answer 5).
+    reportHome: fromWalkingDevice.reportHome.handler(async ({ input, context, errors }) => {
       const result = await journeys.home({
         walkerId: context.device.userId,
         deviceId: context.device.deviceId,
@@ -231,9 +279,94 @@ export function createApi({
       // ALERT_RESOLVED (409).
       throw errors[result.reason]();
     }),
+
+    // The join (GRP-01, approach items 4 and 8): the second public route, on
+    // purpose, since nobody holds a credential before they join. Its answer
+    // carries the credential once, and is cached by nothing. Every code that
+    // lets nobody in gets the one 404.
+    joinGroup: os.joinGroup.handler(async ({ input, context, errors }) => {
+      context.resHeaders?.set('cache-control', 'no-store');
+      const result = await joins.join(input);
+      if (result.type === 'refused') {
+        throw errors.INVITATION_NOT_VALID();
+      }
+      const { credential, userId, role } = result;
+      return { credential, userId, role };
+    }),
+
+    // Who this phone is signed in as. The canary's device is no member
+    // (D-128): a 404, never a 401, so nothing signs it out.
+    me: fromKnownDevice.me.handler(async ({ context, errors }) => {
+      const result = await members.me({ userId: context.device.userId });
+      if (result.type === 'not_a_member') {
+        throw errors.NOT_A_MEMBER();
+      }
+      const { userId, displayName, role } = result.member;
+      return { userId, displayName, role };
+    }),
+
+    // The admin's three (GRP-01, approach item 9). Anyone else gets
+    // NOT_THE_ADMIN: a member knows they are not the admin.
+    createInvitation: fromKnownDevice.createInvitation.handler(async ({ context, errors }) => {
+      const result = await invitations.create({ adminId: context.device.userId });
+      if (result.type === 'refused') {
+        throw errors.NOT_THE_ADMIN();
+      }
+      return {
+        invitationCode: result.invitationCode,
+        expiresAt: result.expiresAt.toISOString(),
+      };
+    }),
+
+    listMembers: fromKnownDevice.listMembers.handler(async ({ context, errors }) => {
+      const result = await members.list({ adminId: context.device.userId });
+      if (result.type === 'refused') {
+        throw errors.NOT_THE_ADMIN();
+      }
+      return {
+        members: result.members.map(({ userId, displayName, role }) => ({
+          userId,
+          displayName,
+          role,
+        })),
+      };
+    }),
+
+    removeMember: fromKnownDevice.removeMember.handler(async ({ input, context, errors }) => {
+      const result = await members.remove({
+        adminId: context.device.userId,
+        memberId: input.params.userId,
+      });
+      if (result.type === 'removed') {
+        return { outcome: 'REMOVED' };
+      }
+      // Each reason the admin's rules give is the contract's code for it:
+      // NOT_THE_ADMIN (403), MEMBER_NOT_FOUND (404) and CANNOT_REMOVE_ADMIN
+      // (409).
+      throw errors[result.reason]();
+    }),
+
+    // The walker removes a responder from their journey (D-122's route,
+    // GRP-01 approach item 10). The walker is the device's own user, from any
+    // of their devices; the journey and the responder are the path's. Anyone
+    // else is told the journey is not there.
+    removeResponder: fromKnownDevice.removeResponder.handler(async ({ input, context, errors }) => {
+      const result = await removals.remove({
+        walkerId: context.device.userId,
+        journeyId: input.params.journeyId,
+        responderId: input.params.responderId,
+      });
+      if (result.type === 'removed') {
+        return { outcome: 'REMOVED' };
+      }
+      // Each reason the rule gives is the contract's code for it:
+      // NOT_A_RESPONDER (409), JOURNEY_ENDED (409) and JOURNEY_NOT_FOUND (404).
+      throw errors[result.reason]();
+    }),
   });
 
   const handler = new OpenAPIHandler(router, {
+    plugins: [new ResponseHeadersPlugin()],
     // Keyed on the code, not the status: a route that later defines a 400 of
     // its own, with its own code, keeps its own body.
     customErrorResponseBodyEncoder: (error) =>

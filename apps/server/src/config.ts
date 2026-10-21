@@ -12,8 +12,11 @@
  * watchdog it watches, or put it in a crash loop. The staging canary's three
  * settings are monitoring settings too (REL-10, D-128): where its check is
  * (readHealthchecksCanarySetting), and where and as whom it calls the public
- * API (readCanarySetting).
+ * API (readCanarySetting). And the first admin's bootstrap code
+ * (readAdminBootstrapSetting, GRP-01): without it the API still serves every
+ * walker, and only the first admin cannot join.
  */
+import { normaliseInvitationCode } from './domain/groups.ts';
 
 /** The port Clever Cloud sends traffic to, and checks before a deploy counts as done. */
 export const DEFAULT_PORT = 8080;
@@ -134,6 +137,44 @@ export function readCanarySetting(env: Record<string, string | undefined>): Cana
     };
   }
   return { running: true, apiUrl, credential };
+}
+
+/**
+ * Whether the first admin can join with ADMIN_BOOTSTRAP_CODE, and with what
+ * code (GRP-01-AC8, D-136 answer 1). Never a throw, as for the monitoring
+ * settings: a value that cannot be used is a reason, said at start, naming
+ * the variable and never the value, since whoever holds it can make themself
+ * the group's admin while no group exists.
+ */
+export type AdminBootstrapSetting =
+  { usable: true; code: string } | { usable: false; reason: string };
+
+/**
+ * Usable only if it normalises, as a code a person types is normalised, to 20
+ * to 32 of Crockford's base32 characters (approach item 8): Terraform's 16
+ * bytes as upper-case hex are 32 of them. The code handed over is the
+ * normalised one, as the join compares it.
+ */
+export function readAdminBootstrapSetting(
+  env: Record<string, string | undefined>,
+): AdminBootstrapSetting {
+  const value = present(env['ADMIN_BOOTSTRAP_CODE']);
+  if (value === undefined) {
+    return {
+      usable: false,
+      reason: 'ADMIN_BOOTSTRAP_CODE is not set, so no first admin can join and no group is made.',
+    };
+  }
+  const code = normaliseInvitationCode(value);
+  if (code === null) {
+    return {
+      usable: false,
+      reason:
+        'ADMIN_BOOTSTRAP_CODE is not 20 to 32 base32 characters, so no first admin can join ' +
+        'and no group is made.',
+    };
+  }
+  return { usable: true, code };
 }
 
 /**

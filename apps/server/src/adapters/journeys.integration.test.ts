@@ -27,6 +27,7 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { startJourneyResponseSchema } from '@trygghverdag/contracts';
 import {
+  insertMemberRow,
   JOURNEY_STORE_BEHAVIOUR,
   RACE_ROUNDS,
   RACERS,
@@ -58,6 +59,7 @@ import {
   type ResolutionAsStored,
   type SyntheticHeartbeat,
   type WithdrawalAsStored,
+  unusedService,
 } from '@trygghverdag/test-kit';
 import { sql } from 'drizzle-orm';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -154,6 +156,21 @@ async function addUser(): Promise<string> {
   return id;
 }
 
+/**
+ * A user who is a member of the one group (GRP-01).
+ *
+ * RG-03 (GRP-01, the spec's "Existing assertions that change by design"):
+ * since GRP-01 a journey's walker and responders must be current members of
+ * the walker's group, held under the start's lock, and a device
+ * authenticates only while its user is a member (D-137). So every walker and
+ * responder of a start below is made with this, where `addUser` made them;
+ * the shared suite's subject gains it as `addMember`. A message's recipient
+ * may stay a plain user. Nothing these tests assert changes.
+ */
+async function addMember(): Promise<string> {
+  return insertMemberRow(connection());
+}
+
 /** A device of this user, and the credential it would send. */
 async function addDevice(userId: string): Promise<{ deviceId: string; credential: string }> {
   const deviceId = syntheticUuid();
@@ -165,9 +182,9 @@ async function addDevice(userId: string): Promise<{ deviceId: string; credential
   return { deviceId, credential };
 }
 
-/** A user with a device, and the credential that device would send. */
+/** A member with a device, and the credential that device would send. */
 async function walker(): Promise<{ userId: string; deviceId: string; credential: string }> {
-  const userId = await addUser();
+  const userId = await addMember();
   return { userId, ...(await addDevice(userId)) };
 }
 
@@ -1138,6 +1155,16 @@ function realApi(log: FakeLog = fakeLog()) {
     closures: {
       close: () => Promise.reject(new Error('these tests close nothing')),
     },
+    // RG-03 (GRP-01; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): the join, the
+    // invitations, the members and the walker's removal of a responder
+    // (approach item 12) made four services part of what the API needs. These
+    // tests call none of their routes, so each is a stand-in that fails
+    // loudly if reached; nothing they assert changes.
+    joins: unusedService('these tests join nobody'),
+    invitations: unusedService('these tests invite nobody'),
+    members: unusedService('these tests read and remove no member'),
+    removals: unusedService('these tests remove no responder through the route'),
   });
 }
 
@@ -1182,6 +1209,7 @@ describe('databaseJourneyStore, against the behaviour every journey store shares
   const underTest = (): JourneyStoreUnderTest => ({
     store: databaseJourneyStore(database()),
     addUser,
+    addMember,
     addDevice: async (userId) => (await addDevice(userId)).deviceId,
     seedJourney,
     journeysOf,
@@ -1282,7 +1310,7 @@ describe('databaseJourneyStore, against the behaviour every journey store shares
 describe('SM-01: starting a journey, on the real tables', () => {
   test('SM-01-AC1: a walker with a responder starts one: 201 in the contract’s shape, stored ACTIVE with exactly that responder, timed by the database', async () => {
     const device = await walker();
-    const responderId = await addUser();
+    const responderId = await addMember();
 
     const before = await databaseNowMs();
     const answer = await start(device.credential, { responderIds: [responderId] });
@@ -1310,8 +1338,8 @@ describe('SM-01: starting a journey, on the real tables', () => {
 
   test('SM-01-AC2: a walker whose journey is in LOST_CONTACT, put there directly, is reported by the adapter and refused 409 with it; nothing changes', async () => {
     const device = await walker();
-    const earlier = await addUser();
-    const later = await addUser();
+    const earlier = await addMember();
+    const later = await addMember();
     const journeyId = await seedJourney({
       walkerId: device.userId,
       deviceId: device.deviceId,
@@ -1338,7 +1366,7 @@ describe('SM-01: starting a journey, on the real tables', () => {
 
     for (let round = 0; round < RACE_ROUNDS; round += 1) {
       const device = await walker();
-      const responderId = await addUser();
+      const responderId = await addMember();
 
       const answers = await Promise.all(
         Array.from({ length: RACERS }, () =>
@@ -1422,8 +1450,8 @@ describe('SM-01: starting a journey, on the real tables', () => {
 
   test('SM-01-AC4: a walker whose only journey is ENDED, put there directly, starts a new one; the ended one is unchanged', async () => {
     const device = await walker();
-    const earlier = await addUser();
-    const later = await addUser();
+    const earlier = await addMember();
+    const later = await addMember();
     const endedId = await seedJourney({
       walkerId: device.userId,
       deviceId: device.deviceId,
@@ -1453,7 +1481,7 @@ describe('SM-01: starting a journey, on the real tables', () => {
 describe('SM-02: responders are users other than the walker, checked against the real users table', () => {
   test('SM-01-AC6: an ID with no row in users is 422 INVALID_RESPONDER, alone or beside a real one, and nothing is stored', async () => {
     const device = await walker();
-    const responderId = await addUser();
+    const responderId = await addMember();
 
     for (const responderIds of [[syntheticUuid()], [responderId, syntheticUuid()]]) {
       const answer = await start(device.credential, { responderIds });
@@ -1466,7 +1494,7 @@ describe('SM-02: responders are users other than the walker, checked against the
 
   test('SM-01-AC6: the walker naming themself is 422 INVALID_RESPONDER, and nothing is stored', async () => {
     const device = await walker();
-    const responderId = await addUser();
+    const responderId = await addMember();
 
     const answer = await start(device.credential, { responderIds: [responderId, device.userId] });
 
@@ -1480,7 +1508,7 @@ describe('SM-02: responders are users other than the walker, checked against the
     // the start rule compares IDs as strings. Unless the edge makes them one
     // case, a real user named in upper case is refused as INVALID_RESPONDER.
     const device = await walker();
-    const responderId = await addUser();
+    const responderId = await addMember();
     expect(responderId).toBe(responderId.toLowerCase());
 
     const answer = await start(device.credential, { responderIds: [responderId.toUpperCase()] });
@@ -1496,7 +1524,7 @@ describe('SM-02: responders are users other than the walker, checked against the
 
   test('SM-01-AC6: a responder named twice is one responder row', async () => {
     const device = await walker();
-    const responderId = await addUser();
+    const responderId = await addMember();
 
     const answer = await start(device.credential, { responderIds: [responderId, responderId] });
 
@@ -1513,7 +1541,7 @@ describe('SM-02: responders are users other than the walker, checked against the
 describe('SM-01: a journey never exists without its responders', () => {
   test('SM-01-AC8: when writing a responder row fails, the answer is 500, not 201, and no journey row is left', async () => {
     const device = await walker();
-    const responderId = await addUser();
+    const responderId = await addMember();
     // A trigger this test creates in its own database, and removes again,
     // so the failure falls exactly between the journey row and its
     // responders: the moment a missing transaction would show.
@@ -1698,7 +1726,7 @@ async function walking(lastHeartbeatAt: Date | null = null) {
     walkerId: device.userId,
     deviceId: device.deviceId,
     state: 'ACTIVE',
-    responderIds: [await addUser()],
+    responderIds: [await addMember()],
     startedAt: EARLIER,
     lastHeartbeatAt,
   });
@@ -1771,7 +1799,7 @@ function everythingIn(error: unknown): string {
 describe('SM-08, SM-09 and REL-01: a heartbeat stored once, in database-time order, on the real tables', () => {
   test('LOST-01-AC1: a heartbeat through the API with every real adapter is 200 RECORDED: one heartbeat and one position as sent, received at the database’s time between two readings of now(), and last contact that same time', async () => {
     const device = await walker();
-    const started = await start(device.credential, { responderIds: [await addUser()] });
+    const started = await start(device.credential, { responderIds: [await addMember()] });
     expect(started.status).toBe(201);
     const { journeyId } = started.body as StartedBody;
     const body = syntheticHeartbeat({ journeyId, position: syntheticPosition() });
@@ -1940,7 +1968,7 @@ describe('SEC-07 and D-101: the device that started the journey, on the real tab
     const phone = await walker();
     const tablet = await addDevice(phone.userId);
 
-    const started = await start(phone.credential, { responderIds: [await addUser()] });
+    const started = await start(phone.credential, { responderIds: [await addMember()] });
 
     expect(started.status).toBe(201);
     const { journeyId } = started.body as StartedBody;
@@ -2108,7 +2136,7 @@ describe('the database agrees: one place for coordinates, and the rules held by 
 
   test('LOST-01-AC18: journeys.last_heartbeat_at exists, and is null for a journey just started', async () => {
     const device = await walker();
-    const started = await start(device.credential, { responderIds: [await addUser()] });
+    const started = await start(device.credential, { responderIds: [await addMember()] });
     const { journeyId } = started.body as StartedBody;
 
     const column = await connection().query<{ data_type: string }>(
@@ -2377,7 +2405,7 @@ async function overdueWith(responders: number) {
   const device = await walker();
   const responderIds: string[] = [];
   for (let i = 0; i < responders; i += 1) {
-    responderIds.push(await addUser());
+    responderIds.push(await addMember());
   }
   const journeyId = await seedJourney({
     walkerId: device.userId,
@@ -3004,7 +3032,7 @@ describe('LOST-06: the database agrees on who is on an alert, and on the notice'
 
   test('LOST-06-AC17: the database itself refuses an alert with acknowledged_by and no acknowledged_at, or the reverse; it takes both, or neither; and it takes an ACKNOWLEDGED alert with neither, as no check ties the state to them', async () => {
     const { journeyId } = await walking();
-    const responderId = await addUser();
+    const responderId = await addMember();
 
     await expect(
       insertAcknowledgedAlert(journeyId, { acknowledgedBy: responderId, acknowledgedAt: false }),

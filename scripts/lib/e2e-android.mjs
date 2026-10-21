@@ -384,11 +384,82 @@ export async function installWhenReady(
 /** The value of one XML attribute in an element's opening tag, or undefined. */
 const attribute = (tag, name) => new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
 
+/** The entities XML names. Every other character comes as a number. */
+const NAMED_ENTITIES = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
+
+/**
+ * `text` with its XML entities decoded, once: "&amp;lt;" is "&lt;", as the
+ * writer meant it. A number that is no character stays as it was written.
+ *
+ * @param {string} text
+ */
+function decodeXml(text) {
+  return text.replace(
+    /&(?:(lt|gt|amp|quot|apos)|#(\d+)|#x([\da-fA-F]+));/g,
+    (entity, name, decimal, hex) => {
+      if (name !== undefined) return NAMED_ENTITIES[name];
+      const code = decimal === undefined ? Number.parseInt(hex, 16) : Number(decimal);
+      return code <= 0x10ffff ? String.fromCodePoint(code) : entity;
+    },
+  );
+}
+
+/**
+ * What a <testcase> holds: the report after its opening tag, up to its
+ * </testcase>. Nothing when the tag closes itself, as a cancelled flow's does,
+ * and never past the next flow's tag, so no flow is given another's <failure>.
+ *
+ * @param {string} xml
+ * @param {string} tag
+ * @param {number} index where `tag` starts in `xml`
+ */
+function testcaseBody(xml, tag, index) {
+  if (tag.endsWith('/>')) return '';
+  return xml.slice(index + tag.length).split(/<\/testcase>|<testcase\b/, 1)[0];
+}
+
+/**
+ * Why a flow failed, in the words of its <failure> elements: the text Maestro
+ * writes, after the `message` attribute other JUnit writers use, decoded. An
+ * empty string when there is none.
+ *
+ * @param {string} body
+ */
+function failureReason(body) {
+  return [...body.matchAll(/<failure\b([^>]*?)(?:\/>|>([\s\S]*?)<\/failure>)/g)]
+    .flatMap(([, attributes, text]) => [attribute(attributes, 'message'), text])
+    .filter((part) => part !== undefined)
+    .map((part) => decodeXml(part).trim())
+    .filter((part) => part !== '')
+    .join('\n');
+}
+
+/**
+ * How much of each flow's reason the message shows. The start says what went
+ * wrong; a stack trace under it would flood the job log, and the whole of it is
+ * in the report.
+ */
+const REASON_LIMIT = 500;
+
+/** `reason`, at most REASON_LIMIT characters of it, saying so when it was cut. */
+function shortened(reason) {
+  if (reason.length <= REASON_LIMIT) return reason;
+  return (
+    `${reason.slice(0, REASON_LIMIT)}\n[Cut here: the other ` +
+    `${String(reason.length - REASON_LIMIT)} characters are in ${REPORT_DIR}/report.xml.]`
+  );
+}
+
 /**
  * The verdict on a run, from Maestro's JUnit report, or null when there is no
  * report. Only a report in which at least one flow ran and every flow's status
  * is SUCCESS is a pass. Maestro counts only ERROR in its `failures` attribute,
  * so a cancelled flow has no <failure> element and still did not pass.
+ *
+ * A flow that failed with a reason has it shown under its name, indented and
+ * cut to REASON_LIMIT, so the job log says why without the debug artifact.
+ * Typed values stay in: in CI the only one is the job's synthetic bootstrap
+ * code, which the log already prints.
  *
  * @param {string | null} xml
  * @returns {{ ok: boolean, message: string }}
@@ -400,9 +471,10 @@ export function judgeReport(xml) {
       message: 'Maestro wrote no report, so nothing shows that any flow ran. That is not a pass.',
     };
   }
-  const flows = [...xml.matchAll(/<testcase\b[^>]*>/g)].map(([tag]) => ({
+  const flows = [...xml.matchAll(/<testcase\b[^>]*>/g)].map(({ 0: tag, index }) => ({
     name: attribute(tag, 'name') ?? attribute(tag, 'id') ?? '(unnamed flow)',
     status: attribute(tag, 'status') ?? '(no status)',
+    reason: failureReason(testcaseBody(xml, tag, index)),
   }));
   if (flows.length === 0) {
     return {
@@ -412,11 +484,18 @@ export function judgeReport(xml) {
   }
   const notPassed = flows.filter((flow) => flow.status !== 'SUCCESS');
   if (notPassed.length > 0) {
+    const reasons = notPassed
+      .filter((flow) => flow.reason !== '')
+      .map(
+        (flow) =>
+          `\nMaestro's reason for ${flow.name}:\n${shortened(flow.reason).replace(/^/gm, '  ')}`,
+      );
     return {
       ok: false,
       message:
         `${String(notPassed.length)} of ${String(flows.length)} flows failed or did not finish: ` +
-        notPassed.map((flow) => `${flow.name} (${flow.status})`).join(', '),
+        notPassed.map((flow) => `${flow.name} (${flow.status})`).join(', ') +
+        reasons.join(''),
     };
   }
   return {
@@ -460,26 +539,77 @@ export function buildPlan({ root }) {
 }
 
 /**
- * The Maestro command line: every flow in apps/mobile/e2e, with a JUnit report
- * to judge the run by. The flows name what they need as ${APP_ID}, ${TITLE}
- * and ${STATUS}, and get exactly those, from the app config and nb.json, so no
- * flow keeps a second copy of the text a reader sees.
+ * Each string of the app's a flow names, as the variable it reads, and its key
+ * in nb.json (GRP-01): the join screen, the member screen and the admin's
+ * invitation. A flow names nothing a reader sees in its own words.
+ */
+export const FLOW_TEXT_KEYS = {
+  JOIN_TITLE: 'grp.join.title',
+  JOIN_INTRO: 'grp.join.intro',
+  CODE_LABEL: 'grp.join.codeLabel',
+  NAME_LABEL: 'grp.join.nameLabel',
+  JOIN_SUBMIT: 'grp.join.submit',
+  NOT_VALID: 'grp.join.notValid',
+  MEMBER_TITLE: 'grp.member.title',
+  INVITE_BUTTON: 'grp.member.invite',
+  MEMBERS_BUTTON: 'grp.member.members',
+  CREATE_INVITATION: 'grp.invite.create',
+  SHARE_BUTTON: 'grp.invite.share',
+};
+
+/**
+ * The text at a dotted key of a translation file. A key with no text there
+ * throws, naming it: a flow handed an empty string would assert that nothing
+ * is visible, which is no test of the screen.
  *
- * Maestro reads a text selector as a regular expression, so TITLE and STATUS
- * are escaped: unescaped, "Klar." would also match "Klar!", and a flow could
- * pass on a screen the app does not show.
+ * @param {Record<string, unknown>} translations
+ * @param {string} key
+ * @returns {string}
+ */
+function textOf(translations, key) {
+  /** @type {unknown} */
+  let node = translations;
+  for (const part of key.split('.')) {
+    node = typeof node === 'object' && node !== null ? node[part] : undefined;
+  }
+  if (typeof node !== 'string' || node === '') {
+    throw new Error(`nb.json has no text for ${key}, which an e2e flow names.`);
+  }
+  return node;
+}
+
+/**
+ * The Maestro command line: every flow in apps/mobile/e2e, with a JUnit report
+ * to judge the run by. The flows name what they need as ${APP_ID}, ${BOOTSTRAP_CODE}
+ * and each string of FLOW_TEXT_KEYS, and get exactly those, from the app
+ * config, nb.json and the API the emulator reaches, so no flow keeps a second
+ * copy of the text a reader sees.
+ *
+ * Maestro reads a text selector as a regular expression, so every string is
+ * escaped: unescaped, "Klar." would also match "Klar!", and a flow could pass
+ * on a screen the app does not show. The bootstrap code is typed, not
+ * matched, so it goes as it is: the API's ADMIN_BOOTSTRAP_CODE (GRP-01-AC26).
  *
  * @param {{
  *   maestro: string,
  *   report: string,
  *   appId: string,
- *   translations: { placeholder: { title: string, status: string } },
+ *   translations: Record<string, unknown>,
+ *   bootstrapCode: string,
  *   device?: string,
  *   debugOutput?: string,
  * }} options
  * @returns {string[]}
  */
-export function maestroTestCommand({ maestro, report, appId, translations, device, debugOutput }) {
+export function maestroTestCommand({
+  maestro,
+  report,
+  appId,
+  translations,
+  bootstrapCode,
+  device,
+  debugOutput,
+}) {
   return [
     maestro,
     'test',
@@ -492,9 +622,11 @@ export function maestroTestCommand({ maestro, report, appId, translations, devic
     '-e',
     `APP_ID=${appId}`,
     '-e',
-    `TITLE=${escapeRegExp(translations.placeholder.title)}`,
-    '-e',
-    `STATUS=${escapeRegExp(translations.placeholder.status)}`,
+    `BOOTSTRAP_CODE=${bootstrapCode}`,
+    ...Object.entries(FLOW_TEXT_KEYS).flatMap(([name, key]) => [
+      '-e',
+      `${name}=${escapeRegExp(textOf(translations, key))}`,
+    ]),
     FLOWS,
   ];
 }

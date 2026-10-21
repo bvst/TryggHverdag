@@ -187,6 +187,18 @@ if (typeof appId !== 'string') stop('app.config.ts names no Android application 
 const translations = JSON.parse(
   readFileSync(path.join(appDir, 'src/shared/translations/nb.json'), 'utf8'),
 );
+// The flows that need a server (GRP-01) join as the first admin with the API's
+// ADMIN_BOOTSTRAP_CODE, which the caller hands in as BOOTSTRAP_CODE: CI's
+// android-e2e job sets both, from one synthetic value. Unset, those flows type
+// an empty code and fail, loudly; this says why first.
+const bootstrapCode = process.env.BOOTSTRAP_CODE ?? '';
+if (bootstrapCode === '') {
+  process.stderr.write(
+    'e2e:android: BOOTSTRAP_CODE is not set, so the flows that join as the first admin will ' +
+      'fail: set it to the ADMIN_BOOTSTRAP_CODE of the API the emulator reaches, on a freshly ' +
+      'migrated database.\n',
+  );
+}
 const report = path.join(REPORT_DIR, 'report.xml');
 rmSync(REPORT_DIR, { recursive: true, force: true });
 mkdirSync(REPORT_DIR, { recursive: true });
@@ -195,6 +207,7 @@ const test = maestroTestCommand({
   report,
   appId,
   translations,
+  bootstrapCode,
   device,
   debugOutput: path.join(REPORT_DIR, 'debug'),
 });

@@ -6,10 +6,11 @@
 //   - SM-01: one unended journey per walker, and a retried start learns which
 //     journey it already has;
 //   - SM-02, its start rule: a journey needs at least one responder, and every
-//     responder must be a user other than the walker;
-//   - SEC-07: every route but health refuses a request without a valid device
-//     credential, the walker is always the device's own user, and the body is
-//     checked before anything is stored.
+//     responder must be a user other than the walker (since GRP-01, a current
+//     member of the walker's group: every walker and responder here is one);
+//   - SEC-07: every route but health and the join refuses a request without a
+//     valid device credential, the walker is always the device's own user,
+//     and the body is checked before anything is stored.
 //
 // The routes are read from the contract, never typed out, so a route added
 // there is called by these tests the day it appears: it fails here unless it
@@ -43,6 +44,7 @@ import {
   type RegisteredDevice,
   type SyntheticHeartbeat,
   type SyntheticPosition,
+  unusedService,
 } from '@trygghverdag/test-kit';
 import process from 'node:process';
 import { describe, expect, test, vi } from 'vitest';
@@ -57,8 +59,16 @@ const EARLIER = new Date('2026-10-01T21:10:00.000Z');
 const JOURNEYS = apiPath('journeys');
 const HEARTBEATS = apiPath('heartbeats');
 
-/** The routes anyone may call without a device credential. Only health: see the file comment. */
-const PUBLIC_ROUTES = ['GET /v1/health'];
+/**
+ * The routes anyone may call without a device credential: health, and since
+ * GRP-01 the join, see the file comment.
+ *
+ * RG-03 (GRP-01, the spec's "Existing assertions that change by design";
+ * SM-01's spec, item 5, asked for this "deliberately, in the test"): the
+ * join, POST /v1/group/members, is the second public route, so it is added
+ * here, on purpose, and nowhere else.
+ */
+const PUBLIC_ROUTES = ['GET /v1/health', 'POST /v1/group/members'];
 
 type Api = ReturnType<typeof createApi>;
 
@@ -113,6 +123,16 @@ function world({ log, storeKeepsTime = false }: { log?: Log; storeKeepsTime?: bo
     closures: {
       close: () => Promise.reject(new Error('these tests close nothing')),
     },
+    // RG-03 (GRP-01; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): the join, the
+    // invitations, the members and the walker's removal of a responder
+    // (approach item 12) made four services part of what the API needs. These
+    // tests call none of their routes, so each is a stand-in that fails
+    // loudly if reached; nothing they assert changes.
+    joins: unusedService('these tests join nobody'),
+    invitations: unusedService('these tests invite nobody'),
+    members: unusedService('these tests read and remove no member'),
+    removals: unusedService('these tests remove no responder through the route'),
   });
 
   return {
@@ -129,7 +149,11 @@ function world({ log, storeKeepsTime = false }: { log?: Log; storeKeepsTime?: bo
      */
     walker: () => {
       const device = devices.register();
-      store.addUser(device.userId);
+      // RG-03 (GRP-01, the spec's "Existing assertions that change by
+      // design"): a member of the one group, where it was a plain user. Since
+      // GRP-01 a journey's walker and responders must be current members of
+      // the walker's group (D-137); nothing these tests assert changes.
+      store.addMember(device.userId);
       store.addDevice(device.userId, device.deviceId);
       return device;
     },
@@ -140,7 +164,7 @@ function world({ log, storeKeepsTime = false }: { log?: Log; storeKeepsTime?: bo
       return device;
     },
     /** A user with no device here: someone who can follow a journey. */
-    user: (): string => store.addUser(),
+    user: (): string => store.addMember(),
     /** A journey of this device's walker, started from this device, put in directly. */
     journeyOf: (
       device: RegisteredDevice,
@@ -633,10 +657,13 @@ async function protectedRoutes(): Promise<Route[]> {
 }
 
 describe('SEC-07: every route but health needs a valid device credential', () => {
-  test('SM-01-AC9: the routes are read from the contract; the public list holds only GET /v1/health, which the contract has', async () => {
+  test('SM-01-AC9: the routes are read from the contract; the public list holds only GET /v1/health and, since GRP-01, the join, both of which the contract has', async () => {
+    // RG-03 (GRP-01): was "holds only GET /v1/health", pinned to that one
+    // route. The join is the second, added on purpose (SM-01's spec, item 5);
+    // the pin holds the two, and nothing else.
     const routes = await contractRoutes();
 
-    expect(PUBLIC_ROUTES).toEqual(['GET /v1/health']);
+    expect(PUBLIC_ROUTES).toEqual(['GET /v1/health', 'POST /v1/group/members']);
     expect(routes.map((route) => route.key)).toEqual(expect.arrayContaining(PUBLIC_ROUTES));
     expect(routes.map((route) => route.key)).toContain(`POST ${JOURNEYS}`);
     expect((await protectedRoutes()).length).toBe(routes.length - PUBLIC_ROUTES.length);
@@ -726,10 +753,16 @@ describe('SEC-07: every route but health needs a valid device credential', () =>
     expect(response.status).toBe(200);
   });
 
-  test('SM-01-AC13: without a credential only GET /v1/health answers, so no route can hand one out before the login task', async () => {
+  test('SM-01-AC13: without a credential only GET /v1/health and, since GRP-01, the join answer, so no other route can hand a credential out', async () => {
     // A route that issued credentials would have to answer callers who have
     // none. This lists every route that does; it can only grow by changing
     // PUBLIC_ROUTES above, in a test, on purpose.
+    //
+    // RG-03 (GRP-01, the spec's "Existing assertions that change by design"):
+    // was "only GET /v1/health answers … before the login task". GRP-01 is
+    // the login task: the join is the one route that hands out a credential,
+    // public on purpose. That a freshly migrated database holds no user,
+    // device, group or invitation, the other half of SM-01-AC13, stays, at L3.
     const { api, responderId } = guardedWorld();
     const answering: string[] = [];
 
@@ -740,7 +773,7 @@ describe('SEC-07: every route but health needs a valid device credential', () =>
       }
     }
 
-    expect(answering).toEqual(['GET /v1/health']);
+    expect(answering.sort()).toEqual([...PUBLIC_ROUTES].sort());
   });
 });
 

@@ -1,4 +1,5 @@
 import type { ExpoConfig } from 'expo/config';
+import { AndroidConfig, XML, withAndroidManifest, withDangerousMod } from 'expo/config-plugins';
 
 /**
  * The Android application ID, defined here and nowhere else: the e2e script
@@ -19,7 +20,8 @@ const APPLICATION_ID = 'no.trygghverdag.placeholder';
  *   build whose JavaScript a server can replace after testing is a build
  *   nobody tested.
  * - `scheme`. Deep links are an attack surface, and they arrive with the first
- *   feature that needs one.
+ *   feature that needs one. GRP-01's invitation is a code the person types,
+ *   not a link (D-013, D-136 answer 3).
  * - `ios`. Android only for now; iOS is its own later task.
  */
 const config: ExpoConfig = {
@@ -53,4 +55,73 @@ const config: ExpoConfig = {
   ],
 };
 
-export default config;
+/** The Android emulator's address for the machine it runs on. */
+const EMULATOR_HOST = '10.0.2.2';
+
+/**
+ * The one host this build may reach over plain HTTP (GRP-01, approach item
+ * 14), from the API address the build fixes (EXPO_PUBLIC_API_URL, D-046).
+ *
+ * None for an https address, or for none at all, as every release build has.
+ * The emulator's host for an http address naming it: CI's android-e2e job
+ * builds with http://10.0.2.2:8080, the API it starts beside the emulator.
+ * Any other address stops the build, because no build may send a credential
+ * in the clear across a network.
+ */
+function cleartextHost(apiUrl: string | undefined): string | null {
+  if (apiUrl === undefined || apiUrl === '') {
+    return null;
+  }
+  const url = new URL(apiUrl);
+  if (url.protocol === 'https:') {
+    return null;
+  }
+  if (url.protocol === 'http:' && url.hostname === EMULATOR_HOST) {
+    return EMULATOR_HOST;
+  }
+  throw new Error(
+    "EXPO_PUBLIC_API_URL must be an https address, or plain http to the Android emulator's host " +
+      `address, ${EMULATOR_HOST}, for the e2e build alone.`,
+  );
+}
+
+/**
+ * The config with cleartext permitted to `host` and nowhere else: a network
+ * security configuration naming that one domain, its subdomains excluded,
+ * which leaves Android's refusal of cleartext everywhere else in place.
+ */
+function withCleartextTo(base: ExpoConfig, host: string): ExpoConfig {
+  const named = withAndroidManifest(base, (mod) => {
+    const application = AndroidConfig.Manifest.getMainApplicationOrThrow(mod.modResults);
+    application.$['android:networkSecurityConfig'] = '@xml/network_security_config';
+    return mod;
+  });
+  return withDangerousMod(named, [
+    'android',
+    async (mod) => {
+      const resources = await AndroidConfig.Paths.getResourceFolderAsync(
+        mod.modRequest.projectRoot,
+      );
+      await XML.writeXMLAsync({
+        path: `${resources}/xml/network_security_config.xml`,
+        xml: {
+          'network-security-config': {
+            'domain-config': [
+              {
+                $: { cleartextTrafficPermitted: 'true' },
+                domain: [{ $: { includeSubdomains: 'false' }, _: host }],
+              },
+            ],
+          },
+        },
+      });
+      return mod;
+    },
+  ]);
+}
+
+const host = cleartextHost(process.env['EXPO_PUBLIC_API_URL'] as string | undefined);
+
+// Unchanged for every release build. The e2e build alone gains cleartext to
+// the emulator's host.
+export default host === null ? config : withCleartextTo(config, host);

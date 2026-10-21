@@ -33,9 +33,9 @@ export const startJourneyRequestSchema = z
       .array(z.uuid().toLowerCase())
       .max(MAX_RESPONDERS)
       .describe(
-        'The users who should follow this journey. Each must be an existing user other than ' +
-          'the walker; a repeated ID counts once. An empty list is accepted here and refused ' +
-          'as NO_RESPONDER.',
+        "The users who should follow this journey. Each must be a member of the walker's group " +
+          'other than the walker; a repeated ID counts once. An empty list is accepted here and ' +
+          'refused as NO_RESPONDER.',
       ),
   })
   .describe('A start request. The walker is the user whose device sends it; no field names one.');
@@ -68,7 +68,7 @@ export const startJourneyErrors = {
   },
   INVALID_RESPONDER: {
     status: 422,
-    message: 'A responder named is the walker, or is not a user.',
+    message: "A responder named is the walker, or is not a member of the walker's group.",
   },
   NO_RESPONDER: {
     status: 422,
@@ -93,3 +93,72 @@ export const startJourney = deviceRoute
   .errors(startJourneyErrors)
   .input(startJourneyRequestSchema)
   .output(startJourneyResponseSchema);
+
+/**
+ * The walker removes a responder from their journey (SM-10, D-122's route;
+ * GRP-01, approach item 10, D-137). The journey and the responder are named
+ * in the path and nowhere else, each a UUID lower-cased at the edge.
+ *
+ * Only the journey's walker may, from any of their devices. Anyone else gets
+ * JOURNEY_NOT_FOUND, whatever the journey's state and whoever follows it: the
+ * one answer for a caller who may not tell the three refusals apart, and no
+ * 403, which would say the journey exists. A removed responder stays a member
+ * of the group.
+ */
+export const removeResponderRequestSchema = z.object({
+  params: z.strictObject({
+    journeyId: z.uuid().toLowerCase().describe('The walker’s journey.'),
+    responderId: z.uuid().toLowerCase().describe('The responder to remove from it.'),
+  }),
+});
+
+export type RemoveResponderRequest = z.infer<typeof removeResponderRequestSchema>;
+
+export const removeResponderResponseSchema = z
+  .object({
+    outcome: z.literal('REMOVED').describe('Removed now.'),
+  })
+  .describe('Removed: they follow the journey no more, and nothing more is sent to them about it.');
+
+export type RemoveResponderResponse = z.infer<typeof removeResponderResponseSchema>;
+
+/** Every refusal the removal can meet besides the 401, by its code. */
+export const removeResponderErrors = {
+  // A journey or user ID that is not a UUID: the one fixed 400, never with
+  // `data`.
+  BAD_REQUEST: badRequestError,
+  // One answer for a journey that does not exist and for any journey whose
+  // walker the caller is not, so it says nothing about other walkers'.
+  JOURNEY_NOT_FOUND: {
+    status: 404,
+    message: 'The walker has no journey with this ID.',
+  },
+  NOT_A_RESPONDER: {
+    status: 409,
+    message: 'The user named is not a responder of this journey.',
+  },
+  JOURNEY_ENDED: {
+    status: 409,
+    message: 'The journey has already ended.',
+  },
+};
+
+export type RemoveResponderErrorCode = keyof typeof removeResponderErrors;
+
+export const removeResponder = deviceRoute
+  .route({
+    method: 'DELETE',
+    path: '/journeys/{journeyId}/responders/{responderId}',
+    inputStructure: 'detailed',
+    successStatus: 200,
+    successDescription: 'The responder is removed.',
+    summary: 'Remove a responder from a journey',
+    description:
+      'Needs the walker’s device credential. Removes the responder named in the path from the ' +
+      'walker’s journey named in the path: anything not yet sent to them about it is withdrawn, ' +
+      'an alert they were on goes back to unacknowledged, and when none is left the walker is ' +
+      'warned. A 409, NOT_A_RESPONDER, after a removal whose answer was lost means it is done.',
+  })
+  .errors(removeResponderErrors)
+  .input(removeResponderRequestSchema)
+  .output(removeResponderResponseSchema);

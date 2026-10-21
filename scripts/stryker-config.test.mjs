@@ -451,6 +451,11 @@ describe('stryker.config.mjs', () => {
     // design" and its Mutation section): removal.system.test.ts joins the
     // group too, as the removal module lives in modules/journeys/. The run
     // still mutates the same files, under the same config.
+    //
+    // RG-03 (GRP-01-AC32, review loop 1, safety-reviewer S4; the spec's
+    // Mutation section): groups.system.test.ts joins the run fourth, the one
+    // file that kills the walker check in modules/journeys/removal.ts. The
+    // run still mutates the same files, under the same config; a test added.
     const config = await configFor('journeys');
 
     expect(config.mutate).toEqual(['apps/server/src/modules/journeys/**/*.ts', ...EXCLUSIONS]);
@@ -465,8 +470,25 @@ describe('stryker.config.mjs', () => {
         'apps/server/src/journeys.system.test.ts',
         'apps/server/src/contact.system.test.ts',
         'apps/server/src/removal.system.test.ts',
+        'apps/server/src/groups.system.test.ts',
       ].sort(),
     );
+  });
+
+  test("GRP-01-AC32: the membership run mutates modules/groups/ and runs groups.system.test.ts alone, under the system tests' configuration", async () => {
+    // As the canary run: the root configuration leaves *.system.test.ts out,
+    // so the command is asked what it would run, not only read. Its own run,
+    // right after journeys (review loop 1, safety-reviewer S4). Named
+    // membership, not groups: that word is the mutation plan's output key in
+    // ci.yml's three mutation jobs, where BUG-45-AC8 refuses any group's name.
+    const config = await configFor('membership');
+
+    expect(config.mutate).toEqual(['apps/server/src/modules/groups/**/*.ts', ...EXCLUSIONS]);
+    expect(config.commandRunner.command).toMatch(/^node node_modules\/vitest\/vitest\.mjs run /);
+    expect(config.incrementalFile).toBeUndefined();
+    const args = vitestArgs(config.commandRunner.command);
+    expect(configNamedIn(args)).toBe('vitest.system.config.mjs');
+    expect([...filesRunWith(args)].sort()).toEqual(['apps/server/src/groups.system.test.ts']);
   });
 
   test("LOST-02: the alerts run mutates modules/alerts/ and runs alerts.system.test.ts, under the system tests' configuration", async () => {
@@ -638,10 +660,19 @@ describe('stryker.config.mjs', () => {
     // alerts, which gives it modules/canary/. The others keep their names
     // and their order, and the union below is still every safety path, each
     // once.
+    //
+    // RG-03 (GRP-01-AC32, review loop 1, safety-reviewer S4; the spec's
+    // Mutation section and "Existing assertions that change by design"): the
+    // membership group joins the runs, right after journeys, which gives it
+    // modules/groups/. The others keep their names and their order, and the
+    // union below is still every safety path, each once. It is not named
+    // groups: that word is the mutation plan's output key in ci.yml's three
+    // mutation jobs, where BUG-45-AC8 refuses any group's name.
     expect(mutationRuns().map((run) => run.name)).toEqual([
       'domain',
       'healthchecks',
       'journeys',
+      'membership',
       'alerts',
       'canary',
       'worker',

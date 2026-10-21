@@ -103,13 +103,13 @@ export function createJourneyService({
   return {
     async start({ walkerId, deviceId, responderIds }: StartRequest): Promise<StartResult> {
       const current = await journeys.unendedJourneyOf(walkerId);
-      const existingUserIds = await journeys.existingUsers(responderIds);
+      const eligibleResponderIds = await journeys.eligibleResponders(walkerId, responderIds);
 
       const decision = transition(current, {
         type: 'start',
         walkerId,
         responderIds,
-        existingUserIds,
+        eligibleResponderIds,
       });
       if (decision.type === 'refused') {
         return decision;
@@ -122,6 +122,12 @@ export function createJourneyService({
         responderIds: decision.responderIds,
         startedAt,
       });
+      if (!stored.inserted && 'refused' in stored) {
+        // A responder named was removed from the group between the read above
+        // and the start's lock (GRP-01, approach item 6, AC13): the same
+        // refusal the read would have given, and nothing stored.
+        return { type: 'refused', reason: stored.refused };
+      }
       if (!stored.inserted) {
         // Another start for this walker got past the read above at the same
         // moment and won at the database. To the caller that is the same

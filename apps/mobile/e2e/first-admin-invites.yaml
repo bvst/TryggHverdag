@@ -1,0 +1,112 @@
+# GRP-01-AC26 and AC28 (L7): the first admin joins with the job's synthetic
+# bootstrap code and sees the admin's choices; then creates an invitation, and
+# its code shows, in four groups of five, with a share action.
+#
+# This flow needs the server CI's android-e2e job starts before the flows: a
+# freshly migrated PostgreSQL, so no group exists yet, and the API with
+# ADMIN_BOOTSTRAP_CODE set to the job's own synthetic value, which reaches the
+# flow as BOOTSTRAP_CODE. The bootstrap code opens only an empty group, so this
+# flow can pass once per database: the job's database is made for the run.
+#
+# Nothing a reader sees is written here: scripts/e2e-android.mjs passes every
+# string in with -e, read from nb.json, and the code from the job.
+#   APP_ID             the Android application ID
+#   BOOTSTRAP_CODE     the API's ADMIN_BOOTSTRAP_CODE, synthetic, the job's
+#   JOIN_TITLE         grp.join.title
+#   CODE_LABEL         grp.join.codeLabel, the code field's screen-reader label,
+#                      and the start of the code's own label (review loop 2)
+#   NAME_LABEL         grp.join.nameLabel, the name field's
+#   JOIN_SUBMIT        grp.join.submit
+#   MEMBER_TITLE       grp.member.title
+#   INVITE_BUTTON      grp.member.invite
+#   MEMBERS_BUTTON     grp.member.members
+#   CREATE_INVITATION  grp.invite.create
+#   SHARE_BUTTON       grp.invite.share
+# The name typed is synthetic (RG-07).
+#
+# Never add `retry:` or `optional: true` to a step here (see app-starts.yaml).
+appId: ${APP_ID}
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: ${JOIN_TITLE}
+    timeout: 30000
+# Since review loop 1 each field's label also shows above it, as a Text with
+# the field's own screen-reader label, so a label matches two elements: that
+# Text and the field. With no index, Maestro 2.10.0 sorts the matches
+# clickable first and taps the first. A text field is clickable; the label,
+# with no onPress, is not. So the tap lands on the field.
+- tapOn: ${CODE_LABEL}
+- inputText: ${BOOTSTRAP_CODE}
+- tapOn: ${NAME_LABEL}
+- inputText: 'Testadmin Emulator'
+- hideKeyboard
+- tapOn: ${JOIN_SUBMIT}
+# The join and then GET /v1/me go to the job's API, on the emulator's host.
+- extendedWaitUntil:
+    visible: ${MEMBER_TITLE}
+    timeout: 30000
+- assertVisible: ${MEMBER_TITLE}
+- assertVisible: ${INVITE_BUTTON}
+- assertVisible: ${MEMBERS_BUTTON}
+- tapOn: ${INVITE_BUTTON}
+- extendedWaitUntil:
+    visible: ${CREATE_INVITATION}
+    timeout: 15000
+- tapOn: ${CREATE_INVITATION}
+# Twenty of Crockford's base32 characters, in four groups of five.
+#
+# RG-03 (GRP-01-AC28, review loop 1): no element holds the whole code as text
+# any more. Each group of five is a Text of its own, inside one element whose
+# screen-reader label spells the code character by character, group by group
+# ("K 7 Q 2 M, 9 T R V X, ..."). On Android that label is the element's
+# content description, which Maestro's text selector also matches, against
+# the whole label. So the step waits for that label: exactly four groups of
+# five, each character apart, a comma, full stop or semicolon between groups,
+# as the L5 test reads it. The screen builds the label from the code; nothing
+# in it comes from nb.json. What the step proves is unchanged: twenty of
+# Crockford's characters, in four groups of five.
+#
+# RG-03 (GRP-01-AC28, review loop 2, a11y-i18n-reviewer S1): the label now
+# begins with the code field's own name and a colon ("Invitasjonskode: K 7 Q
+# 2 M, ..."), so the characters are never read without saying what they are.
+# Maestro matches the whole label, so the pattern begins with ${CODE_LABEL},
+# which the script already passes in, read from nb.json and escaped, and a
+# colon: this file still writes no text a reader sees. Not `.*`, which would
+# match the label with no name before the code too, and so prove nothing of
+# the start. What follows the colon is the pattern as it was: twenty of
+# Crockford's characters, in four groups of five.
+#
+# RG-03 (INF-06-AC11, PR #96's android-e2e, job 118918227742): the pattern
+# is written out in full, with no {4} or {3}. Maestro evaluates every `${…}`
+# in a string as JavaScript, and finds it with this regular expression
+# (Maestro 2.10.0, tag cli-2.10.0, maestro-orchestra-models,
+# maestro/orchestra/util/Env.kt, String.evaluateScripts, line 11):
+#     "(?<!\\\\)\\\$\\{([^\$]*)}".toRegex()
+# That is (?<!\\)\$\{([^$]*)} as a pattern: from `${` to the last `}` before
+# the next `$`, greedily. GraalJsEngine.kt then runs what it took inside
+# `(function(){ return eval(`…`) })()`. With quantifier braces after
+# ${CODE_LABEL} and no `$` after them, it took `CODE_LABEL}:\s*…{4}){3` as
+# one script, and every run stopped here: "SyntaxError: <eval>:1:19 Missing
+# space after numeric literal". So no string in a flow holds a `${…}` and
+# any other brace (scripts/lib/e2e-android.test.mjs holds that). The meaning
+# is unchanged, only the spelling: each [0-9A-HJKMNP-TV-Z](\s+…){4} is
+# written as five characters with space between them, and (…){3} as three
+# more groups, each after a comma, full stop or semicolon.
+- extendedWaitUntil:
+    visible: '${CODE_LABEL}:\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s*[,.;]\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s*[,.;]\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s*[,.;]\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]'
+    timeout: 15000
+# And the code is drawn so, not only labelled: inside that element, a fourth
+# element whose whole text is five of those characters. Maestro orders the
+# matches top to bottom, then left to right, so this holds however the
+# groups wrap. The group's pattern keeps its {5}: it holds no `${`, so
+# Maestro evaluates nothing in it. The parent's is the label's pattern above,
+# written out for the same reason.
+- assertVisible:
+    text: '[0-9A-HJKMNP-TV-Z]{5}'
+    index: 3
+    childOf:
+      text: '${CODE_LABEL}:\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s*[,.;]\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s*[,.;]\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s*[,.;]\s*[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]\s+[0-9A-HJKMNP-TV-Z]'
+- assertVisible: ${SHARE_BUTTON}
+- assertNotVisible: '[a-z][a-zA-Z0-9]*(\.[a-zA-Z0-9]+)+'

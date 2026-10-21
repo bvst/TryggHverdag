@@ -8,7 +8,9 @@
  * real adapter.
  *
  * It answers the three ways the real adapter answers, and no other:
- *   - the device and its user, for a credential a device has;
+ *   - the device, its user and how far it is admitted, for a credential a
+ *     device has: `FULL` unless a test registered it `WALKER_ONLY`, a removed
+ *     member's phone still walking its own journey (GRP-01, approach item 5);
  *   - `null`, for one no device has, including one whose device was removed;
  *   - a rejection, when it cannot check at all (`failWith`), as the adapter
  *     does when the database does not answer. That is the case that must be a
@@ -20,10 +22,19 @@
  */
 import { syntheticCredential, syntheticUuid } from './synthetic-ids.ts';
 
-/** Who a credential belongs to. */
+/**
+ * How far a device is admitted (GRP-01, approach item 5, D-137): `FULL` for a
+ * current member's device or the canary's; `WALKER_ONLY` for a removed
+ * member's device that started a journey not yet ended, which may send that
+ * journey's heartbeats and "I'm home" and nothing else.
+ */
+export type DeviceAccess = 'FULL' | 'WALKER_ONLY';
+
+/** Who a credential belongs to, and how far it is admitted. */
 export interface AuthenticatedDevice {
   deviceId: string;
   userId: string;
+  access: DeviceAccess;
 }
 
 /** A device a test registered: what the app would hold, and who it is. */
@@ -36,9 +47,10 @@ export interface FakeDeviceAuthenticator {
   authenticate(credential: string): Promise<AuthenticatedDevice | null>;
   /**
    * A new device with a fresh credential. Its user is new too, unless a test
-   * names an existing one: a second phone for the same person.
+   * names an existing one: a second phone for the same person. Admitted
+   * `FULL` unless a test says `WALKER_ONLY` (GRP-01).
    */
-  register(options?: { userId?: string }): RegisteredDevice;
+  register(options?: { userId?: string; access?: DeviceAccess }): RegisteredDevice;
   /** The device's row is gone: its credential is from now on one no device has. */
   remove(deviceId: string): void;
   /** How many credentials it was asked to check, answered or not. */
@@ -63,9 +75,12 @@ export function fakeDeviceAuthenticator(): FakeDeviceAuthenticator {
       const device = byCredential.get(credential);
       return Promise.resolve(device === undefined ? null : { ...device });
     },
-    register({ userId = syntheticUuid() }: { userId?: string } = {}): RegisteredDevice {
+    register({
+      userId = syntheticUuid(),
+      access = 'FULL',
+    }: { userId?: string; access?: DeviceAccess } = {}): RegisteredDevice {
       const credential = syntheticCredential();
-      const device = { deviceId: syntheticUuid(), userId };
+      const device = { deviceId: syntheticUuid(), userId, access };
       byCredential.set(credential, device);
       return { credential, ...device };
     },

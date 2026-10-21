@@ -16,6 +16,7 @@ import {
   sessionLimitsLines,
 } from './adapters/db.ts';
 import { databaseDeviceAuthenticator } from './adapters/device-credentials.ts';
+import { databaseGroupStore } from './adapters/groups.ts';
 import { databaseJourneyStore } from './adapters/journeys.ts';
 import { databaseWorkerHeartbeats } from './adapters/worker-heartbeats.ts';
 import { createApi } from './api.ts';
@@ -25,7 +26,11 @@ import { listen } from './http.ts';
 import { createLog } from './log.ts';
 import { createAcknowledgementService } from './modules/alerts/acknowledgement.ts';
 import { createClosureService } from './modules/alerts/closure.ts';
+import { createInvitationService } from './modules/groups/invitations.ts';
+import { createJoinService } from './modules/groups/join.ts';
+import { createMemberService } from './modules/groups/members.ts';
 import { createHealthService } from './modules/health/service.ts';
+import { createRemovalService } from './modules/journeys/removal.ts';
 import { createJourneyService } from './modules/journeys/service.ts';
 
 export interface ApiProcess {
@@ -34,7 +39,16 @@ export interface ApiProcess {
   stop: () => Promise<void>;
 }
 
-export async function startApiProcess(config: ServerConfig): Promise<ApiProcess> {
+/**
+ * `bootstrapCode` is ADMIN_BOOTSTRAP_CODE as config.ts reads it, normalised,
+ * or null when it is unset or unusable (GRP-01, approach item 8): then no
+ * join can make the group, and every walker is served all the same.
+ * bin/api.ts reads it and says at start which it is.
+ */
+export async function startApiProcess(
+  config: ServerConfig,
+  { bootstrapCode = null }: { bootstrapCode?: string | null } = {},
+): Promise<ApiProcess> {
   // The one place the API's real log is made: modules get the Log port
   // (AR-10). It writes to this process's stdout, where the platform collects
   // it.
@@ -56,6 +70,7 @@ export async function startApiProcess(config: ServerConfig): Promise<ApiProcess>
   // watchdog's "how long since" are read from the same now.
   const clock = databaseClock(db);
   const store = databaseJourneyStore(db);
+  const groups = databaseGroupStore(db);
   const app = createApi({
     health: createHealthService({ clock, heartbeats: databaseWorkerHeartbeats(db) }),
     journeys: createJourneyService({ clock, journeys: store, log }),
@@ -65,6 +80,13 @@ export async function startApiProcess(config: ServerConfig): Promise<ApiProcess>
     // "They're safe" reads no clock either: it ends the journey at the
     // database's now() (LOST-08).
     closures: createClosureService({ alerts: store, log }),
+    // GRP-01: the join, the admin's invitations, the members and the
+    // walker's removal of a responder. None reads a clock: the stores time
+    // every row at the database's now().
+    joins: createJoinService({ groups, log, bootstrapCode }),
+    invitations: createInvitationService({ groups, log }),
+    members: createMemberService({ groups, log }),
+    removals: createRemovalService({ journeys: store, log }),
   });
 
   let server;

@@ -177,9 +177,17 @@ const OTHER_WALKER = syntheticUuid();
 const OTHER_WALKERS_DEVICE = syntheticUuid();
 
 /**
- * A start, with `existingUserIds` worked out as the module works it out: the
- * named IDs that exist as users. The walker exists — a device belongs to a
- * user — so naming the walker puts the walker in the set too.
+ * A start, with `eligibleResponderIds` worked out from the people given: the
+ * named IDs among them. The walker is among them by default, so naming the
+ * walker puts the walker in the set too, and the rule must refuse them all
+ * the same.
+ *
+ * RG-03 (GRP-01, the spec's "Existing assertions that change by design"):
+ * the event's set was `existingUserIds`, "which of the named IDs are users";
+ * GRP-01 renames it `eligibleResponderIds` (approach item 6), because the
+ * module now fills it with the current members of the walker's group, and no
+ * reader may take "is a user" for the rule. A rename, here and below: the
+ * rule's shape is unchanged, and no assertion changes.
  */
 function start(
   responderIds: readonly string[],
@@ -190,7 +198,7 @@ function start(
     type: 'start',
     walkerId: WALKER,
     responderIds: [...responderIds],
-    existingUserIds: new Set(responderIds.filter((id) => existing.has(id))),
+    eligibleResponderIds: new Set(responderIds.filter((id) => existing.has(id))),
   };
 }
 
@@ -779,13 +787,13 @@ describe('AR-04: the journey state machine is one module, total over its own lis
       .record({
         walkerId: fc.uuid(),
         responderIds: fc.array(fc.oneof(fc.uuid(), fc.string()), { maxLength: 12 }),
-        existingUserIds: fc.uniqueArray(fc.oneof(fc.uuid(), fc.string()), { maxLength: 12 }),
+        eligibleResponderIds: fc.uniqueArray(fc.oneof(fc.uuid(), fc.string()), { maxLength: 12 }),
       })
-      .map(({ walkerId, responderIds, existingUserIds }): StartEvent => ({
+      .map(({ walkerId, responderIds, eligibleResponderIds }): StartEvent => ({
         type: 'start',
         walkerId,
         responderIds,
-        existingUserIds: new Set(existingUserIds),
+        eligibleResponderIds: new Set(eligibleResponderIds),
       }));
 
     fc.assert(
@@ -879,7 +887,7 @@ describe('SM-02: at least one responder to start', () => {
 
   test('SM-01-AC6: a responder who exists is valid, and one who does not is not, by the set given', () => {
     // The same ID, once known and once not: the decision follows
-    // existingUserIds, not anything about the ID itself.
+    // eligibleResponderIds, not anything about the ID itself.
     expect(transition(null, start([STRANGER], [STRANGER]))).toEqual(STARTED_WITH([STRANGER]));
     expect(transition(null, start([RESPONDER], []))).toEqual(INVALID_RESPONDER);
   });
@@ -889,7 +897,7 @@ describe('SM-02: at least one responder to start', () => {
       type: 'start',
       walkerId: WALKER,
       responderIds: [WALKER],
-      existingUserIds: new Set([WALKER]),
+      eligibleResponderIds: new Set([WALKER]),
     };
 
     expect(transition(null, event)).toEqual(INVALID_RESPONDER);
@@ -948,7 +956,7 @@ const startArbitrary = people.chain(({ walkerId, existing, strangers }) => {
       type: 'start',
       walkerId,
       responderIds,
-      existingUserIds: new Set(responderIds.filter((id) => users.has(id))),
+      eligibleResponderIds: new Set(responderIds.filter((id) => users.has(id))),
     };
     return event;
   });
@@ -960,7 +968,7 @@ function expectedOutcome(current: { id: string } | null, event: StartEvent): Out
     return ALREADY_ON(current.id);
   }
   const ids = [...event.responderIds];
-  if (ids.some((id) => id === event.walkerId || !event.existingUserIds.has(id))) {
+  if (ids.some((id) => id === event.walkerId || !event.eligibleResponderIds.has(id))) {
     return INVALID_RESPONDER;
   }
   if (ids.length === 0) {
@@ -1164,13 +1172,13 @@ describe('LOST-01: a heartbeat for the journey it names, in the rule’s order',
       .record({
         walkerId: someWalker,
         responderIds: fc.array(fc.oneof(fc.uuid(), someWalker), { maxLength: 6 }),
-        existingUserIds: fc.uniqueArray(fc.oneof(fc.uuid(), someWalker), { maxLength: 6 }),
+        eligibleResponderIds: fc.uniqueArray(fc.oneof(fc.uuid(), someWalker), { maxLength: 6 }),
       })
-      .map(({ walkerId, responderIds, existingUserIds }): StartEvent => ({
+      .map(({ walkerId, responderIds, eligibleResponderIds }): StartEvent => ({
         type: 'start',
         walkerId,
         responderIds,
-        existingUserIds: new Set(existingUserIds),
+        eligibleResponderIds: new Set(eligibleResponderIds),
       }));
     const anyEvent: fc.Arbitrary<JourneyEvent> = fc.oneof(anyStart, anyHeartbeat);
 

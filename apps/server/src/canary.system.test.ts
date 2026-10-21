@@ -64,6 +64,7 @@ import {
   type FakeLogEvent,
   type PushMessage,
   type TurnBound,
+  unusedService,
 } from '@trygghverdag/test-kit';
 import { getEventListeners } from 'node:events';
 import process from 'node:process';
@@ -270,6 +271,16 @@ function world({ log: given }: { log?: Log } = {}) {
     devices,
     acknowledgements: createAcknowledgementService({ alerts: store, log }),
     closures: createClosureService({ alerts: store, log }),
+    // RG-03 (GRP-01; not in the spec's "Existing assertions that change by
+    // design", which names no ApiDependencies stand-in): the join, the
+    // invitations, the members and the walker's removal of a responder
+    // (approach item 12) made four services part of what the API needs. These
+    // tests call none of their routes, so each is a stand-in that fails
+    // loudly if reached; nothing they assert changes.
+    joins: unusedService('these tests join nobody'),
+    invitations: unusedService('these tests invite nobody'),
+    members: unusedService('these tests read and remove no member'),
+    removals: unusedService('these tests remove no responder through the route'),
   });
 
   // The worker's loops, each switchable, and the sweep replaceable by a stub.

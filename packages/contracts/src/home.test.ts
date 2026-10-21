@@ -59,16 +59,44 @@ describe('SM-04: the "I’m home" route, as the contract holds it', () => {
     // last), and that spec's "Existing assertions that change by design"
     // names this pin. Still exact, one key larger; this route's own
     // assertions do not change.
-    expect(Object.keys(contract).sort()).toEqual(
+    //
+    // RG-03 (GRP-01; not in its spec's "Existing assertions that change by
+    // design", which missed this pin): GRP-01 adds six routes to the contract
+    // by design (approach item 12, "Contract changes"), and its spec names
+    // their paths, not their keys. So this pin now holds the contract's routes
+    // by method and path, exactly, the six before and GRP-01's six, and the
+    // six keys it named before, in their order; it no longer names every key.
+    // Still exact on what the contract serves; this route's own assertions do
+    // not change.
+    const served = Object.values(contract).map((procedure) => {
+      const { route: each } = definitionOf(procedure);
+      return `${each.method ?? ''} ${each.path ?? ''}`;
+    });
+    expect(served.sort()).toEqual(
       [
-        'acknowledgeAlert',
-        'closeAlert',
-        'health',
-        'recordHeartbeat',
-        'reportHome',
-        'startJourney',
+        'GET /health',
+        'POST /journeys',
+        'POST /heartbeats',
+        'POST /journeys/{journeyId}/home',
+        'POST /alerts/{alertId}/acknowledgement',
+        'POST /alerts/{alertId}/closure',
+        'POST /group/members',
+        'GET /me',
+        'POST /group/invitations',
+        'GET /group/members',
+        'DELETE /group/members/{userId}',
+        'DELETE /journeys/{journeyId}/responders/{responderId}',
       ].sort(),
     );
+    const before = [
+      'health',
+      'startJourney',
+      'recordHeartbeat',
+      'reportHome',
+      'acknowledgeAlert',
+      'closeAlert',
+    ];
+    expect(Object.keys(contract).filter((key) => before.includes(key))).toEqual(before);
     expect(route.method).toBe('POST');
     expect(route.path).toBe('/journeys/{journeyId}/home');
     expect(route.successStatus).toBe(200);

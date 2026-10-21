@@ -197,13 +197,29 @@ describe('BUG-12: what the process hands the API, seen from the database', () =>
     //   - the time, from `now()`: the synthetic 2031 time;
     //   - the journey and its responders, inserted in one transaction.
     // Any other query is refused, and the start answers 500.
+    //
+    // RG-03 (GRP-01, approach items 5 and 6, the spec's "Existing assertions
+    // that change by design": a start's responders must be current members of
+    // the walker's group): the fake answers the queries a start now makes as
+    // well, and asserts nothing more of them:
+    //   - SEC-07: the device lookup answers how far the device is admitted,
+    //     after its ID and its user's: FULL;
+    //   - whom the walker may name, and the memberships the start takes under
+    //     its lock, from `memberships`: the walker and the responder named,
+    //     both members of the one group, each row answered with the columns
+    //     the query asks for (the member's ID as user_id or id, group_id,
+    //     role), or as (user_id, group_id) when it asks for something else. The fake ignores a
+    //     query's conditions, so it answers both rows to every such query.
+    const groupId = syntheticUuid();
     const credential = syntheticCredential();
     const device = { id: syntheticUuid(), userId: syntheticUuid() };
     const responderId = syntheticUuid();
     const journeyId = syntheticUuid();
     const database = await listeningFakePostgres(({ text }) => {
-      if (/\bfrom "devices"/i.test(text)) {
-        return { columns: ['id', 'user_id'], rows: [[device.id, device.userId]] };
+      if (/\bfrom "?devices"?/i.test(text)) {
+        // RG-03 (GRP-01, approach item 5): the device lookup answers how far
+        // the device is admitted too: FULL, a member's device (deviceLookup).
+        return deviceLookup(text, device);
       }
       if (/^insert into "journeys"/i.test(text)) {
         return { columns: ['id'], rows: [[journeyId]] };
@@ -216,6 +232,25 @@ describe('BUG-12: what the process hands the API, seen from the database', () =>
       }
       if (/\bfrom "users"/i.test(text)) {
         return { columns: ['id'], rows: [[responderId]] };
+      }
+      if (/\bfrom "?memberships"?/i.test(text)) {
+        const asked = selectedNames(text);
+        const memberColumns: Record<string, (userId: string) => string> = {
+          id: (userId) => userId,
+          user_id: (userId) => userId,
+          group_id: () => groupId,
+          role: () => 'MEMBER',
+        };
+        const columns =
+          asked.length > 0 && asked.every((name) => snake(name) in memberColumns)
+            ? asked
+            : ['user_id', 'group_id'];
+        return {
+          columns,
+          rows: [device.userId, responderId].map((userId) =>
+            columns.map((name) => memberColumns[snake(name)]?.(userId) ?? null),
+          ),
+        };
       }
       if (/\bnow\(\)/i.test(text)) {
         return { columns: ['now'], rows: [[DATABASE_NOW]] };
@@ -320,7 +355,9 @@ describe('LOST-01: what the process hands the journey module for a heartbeat, se
         return { columns: [], rows: [] };
       }
       if (/\bfrom "?devices"?/i.test(text)) {
-        return { columns: ['id', 'user_id'], rows: [[device.id, device.userId]] };
+        // RG-03 (GRP-01, approach item 5): the device lookup answers how far
+        // the device is admitted too: FULL, a member's device (deviceLookup).
+        return deviceLookup(text, device);
       }
       if (/^insert into "?heartbeats"?/i.test(text)) {
         return rowOf(text, { id: '1', journey_id: journeyId });
@@ -368,7 +405,15 @@ describe('LOST-01: what the process hands the journey module for a heartbeat, se
       const index = (pattern: RegExp) => texts.findIndex((text) => pattern.test(text));
       expect(texts.filter((text) => /\bnow\(\)/i.test(text))).toHaveLength(1);
       // REL-01: the receive time is the database's, read before the journey is.
-      expect(index(/\bnow\(\)/i)).toBeLessThan(index(/\bfrom "?journeys"?/i));
+      // RG-03 (GRP-01, approach item 5): the device lookup may read journeys
+      // too, for a walker-only device's unended journey, in its one query; so
+      // the journey's read is the first query on journeys that is not the
+      // device lookup. The order it holds is unchanged.
+      const journeyRead = texts.findIndex(
+        (text) => /\bfrom "?journeys"?/i.test(text) && !/\bfrom "?devices"?/i.test(text),
+      );
+      expect(journeyRead).toBeGreaterThan(-1);
+      expect(index(/\bnow\(\)/i)).toBeLessThan(journeyRead);
       const begin = index(/^begin\b/i);
       const commit = index(/^commit\b/i);
       const locked = index(/\bfrom "?journeys"?[\s\S]*\bfor update\b/i);
@@ -794,7 +839,9 @@ describe('SEC-03 and LOST-02: the API’s pool, seen from the database and from 
       (query) => {
         const { text } = query;
         if (/\bfrom "?devices"?/i.test(text)) {
-          return { columns: ['id', 'user_id'], rows: [[device.id, device.userId]] };
+          // RG-03 (GRP-01, approach item 5): the device lookup answers how far
+          // the device is admitted too: FULL, a member's device (deviceLookup).
+          return deviceLookup(text, device);
         }
         if (/\bfrom "?journeys"?/i.test(text)) {
           const columns = askedFor(text);
@@ -1093,6 +1140,68 @@ function tableOf(text: string): string | undefined {
 /** A column's name as the table holds it: an alias written in camelCase read as its column. */
 const snake = (name: string) => name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
 
+/**
+ * The names a select asks for, in order, as PostgreSQL names its answer's
+ * columns (an alias if there is one, else the column); or none when it is
+ * not a select. Its list is read to the `from` at its own depth,
+ * so a subquery inside it, an `exists (select 1 from …)`, does not cut it
+ * short. An item it cannot name, an expression with no alias, is ''.
+ */
+function selectedNames(text: string): string[] {
+  const start = /^\s*select\s+/i.exec(text);
+  if (start === null) {
+    return [];
+  }
+  const items: string[] = [];
+  let depth = 0;
+  let current = '';
+  const rest = text.slice(start[0].length);
+  for (let at = 0; at < rest.length; at += 1) {
+    const character = rest[at] ?? '';
+    if (character === '(') depth += 1;
+    if (character === ')') depth -= 1;
+    if (depth === 0 && /^\sfrom\s/i.test(rest.slice(at, at + 6))) {
+      break;
+    }
+    if (character === ',' && depth === 0) {
+      items.push(current);
+      current = '';
+    } else {
+      current += character;
+    }
+  }
+  items.push(current);
+  return items.map((item) => {
+    const trimmed = item.trim();
+    const aliased = /\bas\s+"?(\w+)"?$/i.exec(trimmed);
+    const column = /^(?:"?\w+"?\.)?"?(\w+)"?(?:::\w+)?$/.exec(trimmed);
+    return aliased?.[1] ?? column?.[1] ?? '';
+  });
+}
+
+/**
+ * The fake database's answer to the device lookup (SEC-07): the device's ID,
+ * its user's, and how far it is admitted, FULL, a member's device (GRP-01,
+ * approach item 5). Answered with the columns the query names, in its order,
+ * when it names them all; else by position, as a select built with drizzle
+ * reads them: ID, user, access. So these tests hold what the lookup answers,
+ * not how its SQL is written.
+ */
+function deviceLookup(text: string, device: { id: string; userId: string }) {
+  const known: Record<string, string> = {
+    id: device.id,
+    device_id: device.id,
+    user_id: device.userId,
+    access: 'FULL',
+  };
+  const asked = selectedNames(text);
+  const columns =
+    asked.length > 0 && asked.every((name) => snake(name) in known)
+      ? asked
+      : ['id', 'user_id', 'access'];
+  return { columns, rows: [columns.map((name) => known[snake(name)] ?? null)] };
+}
+
 /** The API's lock limit, which the fake answers a set_config with. */
 const LOCK_LIMIT_MS = 5_000;
 
@@ -1182,7 +1291,9 @@ describe('LOST-06: what the process hands the acknowledgement module, seen from 
         return { columns: ['set_config'], rows: [[String(LOCK_LIMIT_MS)]] };
       }
       if (/\bfrom "?devices"?/i.test(text)) {
-        return { columns: ['id', 'user_id'], rows: [[device.id, device.userId]] };
+        // RG-03 (GRP-01, approach item 5): the device lookup answers how far
+        // the device is admitted too: FULL, a member's device (deviceLookup).
+        return deviceLookup(text, device);
       }
       const items = itemsOf(text);
       const main = tableOf(text);
@@ -1390,7 +1501,9 @@ describe('LOST-08: what the process hands the closure module, seen from the data
         return { columns: ['set_config'], rows: [[String(LOCK_LIMIT_MS)]] };
       }
       if (/\bfrom "?devices"?/i.test(text)) {
-        return { columns: ['id', 'user_id'], rows: [[device.id, device.userId]] };
+        // RG-03 (GRP-01, approach item 5): the device lookup answers how far
+        // the device is admitted too: FULL, a member's device (deviceLookup).
+        return deviceLookup(text, device);
       }
       // A statement that begins with a `with` (the stand-downs, written
       // after the withdrawal in one statement) is answered as its last

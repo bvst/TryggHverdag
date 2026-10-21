@@ -33,6 +33,17 @@
  * The root package.json overrides everything below 1.11.0 to `^1.11.0`,
  * because other advisories cover the versions below 1.8.4 (see `PATCHED`).
  *
+ * BUG-61 is the same kind again: GHSA-587h-7wmj-h5pm (high, filed against
+ * vite: "launch-editor: `fs.existsSync()` existence check can be bypassed on
+ * Windows"). The lockfile held vite 8.3.0, through `. > vitest > vite` and
+ * `apps__server > vitest > vite`. vite comes in only as an auto-installed peer
+ * of vitest and `@vitest/mocker`, and BUG-61's fix (6b7cd97) found that
+ * nothing else moved that peer: a pnpm override changed only the peer range
+ * ("unmet peer vite@^8.3.3: found 8.3.0"), and `pnpm up --depth Infinity` left
+ * it at 8.3.0. Naming vite as a root dev dependency, `^8.3.3`, did. A JSON
+ * file cannot say why a line is there, so `VITE_FLOOR_WHY` says it here,
+ * where removing the line fails.
+ *
  * An ignore list is a quiet way to stop a gate from seeing anything, so these
  * tests read files instead of running the audit: a `pnpm audit` run reads the
  * registry's advisory data, which changes whenever an advisory is published, and
@@ -96,7 +107,18 @@
  *     advisory and passes; every `shell-quote` below 1.11.0 fails, because
  *     other advisories cover the versions below 1.8.4. The lockfile's
  *     `overrides` section, where the fixes write their selectors, holds
- *     ranges, not resolved versions, and is not read.
+ *     ranges, not resolved versions, and is not read;
+ *   - BUG-61's fix, its row in `PATCHED`, read the same way: no `vite` the
+ *     lockfile resolves is below 8.3.3. GHSA-587h-7wmj-h5pm covers one range
+ *     per release line (>=7.0.0 <=7.3.6, >=8.0.0 <=8.1.5, >=8.2.0 <=8.2.3,
+ *     >=8.3.0 <=8.3.2), and other high advisories cover 8.0.x, so, as for
+ *     `shell-quote`, every vite below 8.3.3 fails. That includes the older
+ *     lines' own fixed releases (7.3.7, 8.1.6, 8.2.4), which the audit would
+ *     pass: the check is a floor, as the root dev dependency is;
+ *   - the root package.json's `devDependencies.vite` has a floor of 8.3.3 or
+ *     later (`^`, `~` or an exact version): the means BUG-61's fix found,
+ *     pinned so that a cleanup of a dev dependency nothing imports fails here,
+ *     with the reason, instead of letting vitest's peer fall back unnoticed.
  *
  * Not pinned:
  *   - the audit's result;
@@ -124,8 +146,9 @@
  *     under Node's type stripping, not tsx;
  *   - how BUG-23's and BUG-24's fixes reach the lockfile: the root
  *     package.json's overrides are not read, only what the lockfile resolves.
- *     `source-map-js` or `shell-quote` leaving the lockfile passes, because
- *     nothing then resolves in the range;
+ *     `source-map-js`, `shell-quote` or `vite` leaving the lockfile passes the
+ *     lockfile check, because nothing then resolves in the range. BUG-61's
+ *     means, the root dev dependency, is the one read (above);
  *   - `source-map-js` and `shell-quote` in the spike's lockfile, which holds
  *     1.2.1 and 1.10.0 and which the audit does not read (D-093 names it as
  *     not covered);
@@ -1036,7 +1059,7 @@ const D104_REACH_CHANGED =
  * `vulnerableFrom` (null: from the first version there is) up to, and not
  * including, `fixedAt`. `lockedBefore` is what the lockfile held when the audit
  * failed. The ranges were read from npm's bulk advisory endpoint, the data
- * `pnpm audit` reads, on 2026-10-06.
+ * `pnpm audit` reads, on 2026-10-06 (BUG-23, BUG-24) and 2026-10-20 (BUG-61).
  */
 const PATCHED = [
   {
@@ -1064,7 +1087,39 @@ const PATCHED = [
     fixedAt: '1.11.0',
     lockedBefore: '1.10.0',
   },
+  {
+    bug: 'BUG-61',
+    name: 'vite',
+    advisory: 'GHSA-587h-7wmj-h5pm',
+    // The fix's commit cites >=8.3.0 <=8.3.2, the range of the line the
+    // lockfile held. The endpoint gives the advisory one range per release
+    // line: >=7.0.0 <=7.3.6, >=8.0.0 <=8.1.5, >=8.2.0 <=8.2.3 and
+    // >=8.3.0 <=8.3.2. GHSA-v2wj-q39q-566r and GHSA-p9ff-h696-f583 (high,
+    // >=8.0.0 <=8.0.4) and GHSA-fx2h-pf6j-xcff (high, >=8.0.0 <=8.0.15)
+    // cover 8.0.x as well. A floor at 8.3.0 would pass a vite 8.2.3 the audit
+    // fails, so every vite below 8.3.3 counts: the floor the root dev
+    // dependency, `^8.3.3`, sets. The older lines' own fixed releases (7.3.7,
+    // 8.1.6, 8.2.4) count too, though the audit passes them: a red here that
+    // the audit would not give, never a green it would not.
+    vulnerableFrom: null,
+    fixedAt: '8.3.3',
+    lockedBefore: '8.3.0',
+  },
 ];
+
+/**
+ * Why the root package.json names vite as a dev dependency (BUG-61). Nothing
+ * imports it; it is there for vitest's auto-installed peer. A JSON file cannot
+ * hold that comment, so it is said here, where removing the line fails.
+ */
+const VITE_FLOOR_WHY =
+  "the root package.json's devDependencies.vite (`^8.3.3`, BUG-61) is the only way found to move vitest's auto-installed vite peer past GHSA-587h-7wmj-h5pm: a pnpm override changed only the peer range, and `pnpm up --depth Infinity` left vite at 8.3.0. Keep it at a floor of 8.3.3 or later; to drop it, first show the lockfile resolves no vite below 8.3.3 without it, then change this test with a written reason (RG-03)";
+
+/** The floor of a dev dependency's specifier: `^8.3.3`, `~8.3.3` and `8.3.3` give 8.3.3; any other form, null. */
+function floorOf(specifier) {
+  const plain = /^[\^~]?(\d+\.\d+\.\d+)$/.exec(String(specifier));
+  return plain === null ? null : plain[1];
+}
 
 /** A fix's range, in the form the advisory database writes one: `>=1.0.0 <1.2.2`, or `<1.11.0`. */
 function rangeOf({ vulnerableFrom, fixedAt }) {
@@ -1127,14 +1182,16 @@ function shortOfFix(lock, fix) {
 }
 
 /**
- * A synthetic lockfile in v9's form, as BUG-23's and BUG-24's fixes leave it:
- * both overrides in the form and order pnpm 10.33.0 writes them (read from a
- * scratch install, 2026-10-06), source-map-js 1.2.2 through magicast, under
- * the coverage tool, and through postcss, reached here from vitest; and
- * shell-quote 1.11.0 through the app's react-native and its
- * react-devtools-core. The overrides are floors (`^1.2.2`, `^1.11.0`), so a
- * real install may lock a later version: the same scratch install locked
- * shell-quote 1.12.0.
+ * A synthetic lockfile in v9's form, as BUG-23's, BUG-24's and BUG-61's fixes
+ * leave it: both overrides in the form and order pnpm 10.33.0 writes them
+ * (read from a scratch install, 2026-10-06), source-map-js 1.2.2 through
+ * magicast, under the coverage tool, and through postcss, reached here from
+ * vitest; shell-quote 1.11.0 through the app's react-native and its
+ * react-devtools-core; and vite 8.3.3 as the root's own dev dependency and as
+ * vitest's peer. The overrides and the dev dependency are floors (`^1.2.2`,
+ * `^1.11.0`, `^8.3.3`), so a real install may lock a later version: the same
+ * scratch install locked shell-quote 1.12.0, and BUG-61's fix locked vite
+ * 8.3.4.
  */
 const PATCHED_SAMPLE_LOCK = `lockfileVersion: '9.0'
 
@@ -1153,6 +1210,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^5.0.1
         version: 5.0.1(vitest@5.0.1)
+      vite:
+        specifier: ^8.3.3
+        version: 8.3.3
       vitest:
         specifier: ^5.0.1
         version: 5.0.1
@@ -1189,6 +1249,9 @@ packages:
   source-map-js@1.2.2:
     resolution: {integrity: sha512-synthetic}
     engines: {node: '>=0.10.0'}
+
+  vite@8.3.3:
+    resolution: {integrity: sha512-synthetic}
 
   vitest@5.0.1:
     resolution: {integrity: sha512-synthetic}
@@ -1227,9 +1290,12 @@ snapshots:
 
   source-map-js@1.2.2: {}
 
+  vite@8.3.3: {}
+
   vitest@5.0.1:
     dependencies:
       postcss: 8.5.28
+      vite: 8.3.3
 
   ws@7.5.13: {}
 `;
@@ -1968,15 +2034,57 @@ describe('the dependency audit passes on a patched version where there is one, n
     },
   );
 
-  test('BUG-23, BUG-24: the check fails on a lockfile holding source-map-js 1.2.1 or shell-quote 1.10.0, in either section, and passes on one holding only 1.2.2 and 1.11.0 or later', () => {
-    // Per fix: its override line, a second path to the version the lockfile
-    // held before (beside the fixed one), a later version that a floor
-    // (`^1.2.2`, `^1.11.0`) may lock, a version below the advisory's own
-    // range, and what the check says of each.
+  test("BUG-61: the root package.json names vite as a dev dependency with a floor of 8.3.3 or later, the only way found to move vitest's auto-installed peer past GHSA-587h-7wmj-h5pm", () => {
+    const fix = PATCHED.find(({ bug }) => bug === 'BUG-61');
+    expect(fix, 'PATCHED has no row for BUG-61').toBeDefined();
+    const specifier = manifest.devDependencies?.vite;
+
+    expect(specifier, VITE_FLOOR_WHY).toEqual(expect.any(String));
+    const floor = floorOf(specifier);
+    expect(
+      floor,
+      `${VITE_FLOOR_WHY}. Its specifier, ${specifier}, has no floor this reads`,
+    ).not.toBeNull();
+    expect(placeAgainst(floor, fix), VITE_FLOOR_WHY).toBe('fixed');
+  });
+
+  test('BUG-61: the floor read from a dev dependency: a caret, a tilde or an exact version, and nothing else', () => {
+    const fix = PATCHED.find(({ bug }) => bug === 'BUG-61');
+    const read = (specifier) => {
+      const floor = floorOf(specifier);
+      return floor === null ? 'no floor' : placeAgainst(floor, fix);
+    };
+
+    expect(['^8.3.3', '~8.3.3', '8.3.3', '^8.3.4', '^9.0.0'].map(read)).toEqual([
+      'fixed',
+      'fixed',
+      'fixed',
+      'fixed',
+      'fixed',
+    ]);
+    // The lockfile's 8.3.0 and the 8.2 line's own fix: below the floor.
+    expect(['^8.3.0', '^8.2.4', '~8.3.2', '8.3.0'].map(read)).toEqual([
+      'in range',
+      'in range',
+      'in range',
+      'in range',
+    ]);
+    // Forms with no single floor to read: each fails the test above.
+    expect(
+      ['>=8.3.3', '8.x', '*', 'latest', 'catalog:', 'workspace:*', '^8.3', '', undefined].map(read),
+    ).toEqual(Array.from({ length: 9 }, () => 'no floor'));
+  });
+
+  test('BUG-23, BUG-24, BUG-61: the check fails on a lockfile holding source-map-js 1.2.1, shell-quote 1.10.0 or vite 8.3.0, in either section, and passes on one holding only 1.2.2, 1.11.0 and 8.3.3 or later', () => {
+    // Per fix: the lines the fix writes into the lockfile (an override, or
+    // for BUG-61 the root's own dev dependency), a second path to the version
+    // the lockfile held before (beside the fixed one), a later version that a
+    // floor (`^1.2.2`, `^1.11.0`, `^8.3.3`) may lock, a version below the
+    // advisory's own range, and what the check says of each.
     const controls = [
       {
         fix: PATCHED[0],
-        override: '  source-map-js@>=1.0.0 <1.2.2: ^1.2.2\n',
+        fixedBy: '  source-map-js@>=1.0.0 <1.2.2: ^1.2.2\n',
         // magicast's path left at 1.2.1, postcss's fixed.
         secondPath: [
           '  magicast@0.5.5:\n    dependencies:\n      source-map-js: 1.2.2\n',
@@ -1994,7 +2102,7 @@ describe('the dependency audit passes on a patched version where there is one, n
       },
       {
         fix: PATCHED[1],
-        override: '  shell-quote@<1.11.0: ^1.11.0\n',
+        fixedBy: '  shell-quote@<1.11.0: ^1.11.0\n',
         // A second path, from react-native itself, not overridden.
         secondPath: [
           '  react-native@0.86.3:\n    dependencies:\n      react-devtools-core: 6.1.5\n',
@@ -2015,13 +2123,33 @@ describe('the dependency audit passes on a patched version where there is one, n
           'shell-quote https://example.invalid/shell-quote-1.11.0.tgz is locked, a version that cannot be compared with 1.11.0',
         ],
       },
+      {
+        fix: PATCHED[2],
+        // No override: the root's own dev dependency, what BUG-61's fix wrote.
+        fixedBy: '      vite:\n        specifier: ^8.3.3\n        version: 8.3.3\n',
+        // The failure the dev dependency exists to prevent: the root's vite
+        // fixed, and vitest's auto-installed peer left at 8.3.0 beside it.
+        secondPath: ['      vite: 8.3.3\n', '      vite: 8.3.0\n'],
+        // What BUG-61's fix locked.
+        later: '8.3.4',
+        // Below 8.3.0, the range the fix's commit cites, but inside
+        // GHSA-587h-7wmj-h5pm's own range for the 8.2 line, >=8.2.0 <=8.2.3.
+        belowAdvisory: {
+          version: '8.2.3',
+          short: ['vite 8.2.3 is locked, in <8.3.3, which 8.3.3 fixes (GHSA-587h-7wmj-h5pm)'],
+        },
+        inRange: ['vite 8.3.0 is locked, in <8.3.3, which 8.3.3 fixes (GHSA-587h-7wmj-h5pm)'],
+        unplaced: [
+          'vite https://example.invalid/vite-8.3.3.tgz is locked, a version that cannot be compared with 8.3.3',
+        ],
+      },
     ];
     expect(controls.map((c) => c.fix)).toEqual(PATCHED);
 
     const sample = readLockfile(PATCHED_SAMPLE_LOCK);
     expect(sample.lockfileVersion).toBe('9.0');
 
-    for (const { fix, override, secondPath, later, belowAdvisory, inRange, unplaced } of controls) {
+    for (const { fix, fixedBy, secondPath, later, belowAdvisory, inRange, unplaced } of controls) {
       const { name, fixedAt, lockedBefore } = fix;
       const others = PATCHED.filter((other) => other !== fix);
       // What the check says of a lockfile text for this fix, once every other
@@ -2051,10 +2179,10 @@ describe('the dependency audit passes on a patched version where there is one, n
       expect(check(PATCHED_SAMPLE_LOCK)).toEqual([]);
 
       // The lockfile the audit failed on: the old version on every path, and
-      // no override.
+      // none of the lines the fix wrote.
       const before = edited(
         PATCHED_SAMPLE_LOCK,
-        [override, ''],
+        [fixedBy, ''],
         [`${name}@${fixedAt}`, `${name}@${lockedBefore}`],
         [`${name}: ${fixedAt}`, `${name}: ${lockedBefore}`],
       );
@@ -2103,7 +2231,7 @@ describe('the dependency audit passes on a patched version where there is one, n
     }
   });
 
-  test('BUG-23, BUG-24: where each fix draws its line: in the range, before it, fixed, or not comparable', () => {
+  test('BUG-23, BUG-24, BUG-61: where each fix draws its line: in the range, before it, fixed, or not comparable', () => {
     // Each part is compared as a number: 1.9.9 and 1.10.0 are below 1.11.0,
     // though "1.9.9" sorts after "1.11.0" as text. A pre-release is below its
     // release. The `file:` rows hold the pattern's start anchor: each ends in
@@ -2135,6 +2263,31 @@ describe('the dependency audit passes on a patched version where there is one, n
         fixed: ['1.11.0', '1.11.0+build.7', '1.11.1', '1.12.0', '1.100.0', '2.0.0'],
         unplaced: ['github:synthetic/shell-quote', 'file:vendor/shell-quote-1.11.0', '1.11', ''],
       },
+      {
+        fix: PATCHED[2],
+        // Every vite below 8.3.3: each line's last version in
+        // GHSA-587h-7wmj-h5pm (7.3.6, 8.1.5, 8.2.3, 8.3.2); 8.0.16, the 8.0
+        // line's last, inside its >=8.0.0 <=8.1.5; 8.3.0, which the lockfile
+        // held; and the older lines' own fixed releases, 7.3.7, 8.1.6 and
+        // 8.2.4, which the audit passes: the check is a floor.
+        'in range': [
+          '0.0.1',
+          '7.3.6',
+          '7.3.7',
+          '8.0.16',
+          '8.1.5',
+          '8.1.6',
+          '8.2.3',
+          '8.2.4',
+          '8.3.0-beta.1',
+          '8.3.0',
+          '8.3.2',
+          '8.3.2+build.7',
+          '8.3.3-beta.0',
+        ],
+        fixed: ['8.3.3', '8.3.3+build.7', '8.3.4', '8.3.10', '8.4.0', '8.10.0', '9.0.0'],
+        unplaced: ['github:synthetic/vite', 'file:vendor/vite-8.3.3', '8.3', ''],
+      },
     ];
     expect(boundaries.map((b) => b.fix)).toEqual(PATCHED);
 
@@ -2146,6 +2299,6 @@ describe('the dependency audit passes on a patched version where there is one, n
         ).toEqual(versions.map(() => place));
       }
     }
-    expect(PATCHED.map(rangeOf)).toEqual(['>=1.0.0 <1.2.2', '<1.11.0']);
+    expect(PATCHED.map(rangeOf)).toEqual(['>=1.0.0 <1.2.2', '<1.11.0', '<8.3.3']);
   });
 });

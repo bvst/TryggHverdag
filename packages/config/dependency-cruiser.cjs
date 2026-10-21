@@ -263,6 +263,17 @@ module.exports = {
       },
     },
     {
+      name: 'routes-reach-a-feature-through-its-index',
+      severity: 'error',
+      comment:
+        "AR-10 (GRP-01): the routes under src/app/, and anything else in the app outside features/, use a feature only through its public interface, its index file, as another feature does, so a feature's screens can change without its routes knowing.",
+      from: { path: '^apps/mobile/src/', pathNot: '^apps/mobile/src/features/' },
+      to: {
+        path: '^apps/mobile/src/features/[^/]+/',
+        pathNot: '^apps/mobile/src/features/[^/]+/index\\.tsx?$',
+      },
+    },
+    {
       name: 'contracts-depend-on-nothing-of-ours',
       severity: 'error',
       comment:

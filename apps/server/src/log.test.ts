@@ -12,7 +12,15 @@
 // looked up when a line is written. pino's own default destination writes to
 // file descriptor 1 directly, which a capture of process.stdout.write cannot
 // see: then every "nothing was written" test would pass while proving nothing.
-import { syntheticCoordinate, syntheticCredential, syntheticUuid } from '@trygghverdag/test-kit';
+import {
+  sha256Hex,
+  syntheticCoordinate,
+  syntheticCredential,
+  syntheticDisplayName,
+  syntheticInvitationCode,
+  syntheticJoinKey,
+  syntheticUuid,
+} from '@trygghverdag/test-kit';
 import process from 'node:process';
 import { inspect } from 'node:util';
 import { describe, expect, test, vi } from 'vitest';
@@ -2601,6 +2609,106 @@ describe('PRIV-07 and REL-10: the canary’s four events are closed, at the type
           longitude,
           numberShaped,
         ]),
+        event.event,
+      ).toEqual([]);
+    }
+  });
+});
+
+// ===========================================================================
+// GRP-01-AC24 (approach item 13): the join's, the invitation's and the
+// admin's removal's failures, each one line naming its stage and its
+// SQLSTATE, as removal_failed is. Closed as the earlier ones are: a stage
+// only from its set, a code only as a SQLSTATE, and no field an invitation
+// code, a join key, a credential, a display name or a user's ID could travel
+// in. A refusal writes no line at all: it is the caller's answer (PRIV-07,
+// AR-11).
+// ===========================================================================
+
+const GRP_01_EVENTS: LogEvent[] = [
+  { event: 'join_failed', stage: 'store', code: '40001' },
+  { event: 'join_failed', stage: 'store', code: null },
+  { event: 'invitation_failed', stage: 'store', code: '23505' },
+  { event: 'invitation_failed', stage: 'store', code: null },
+  { event: 'member_removal_failed', stage: 'store', code: '55P03' },
+  { event: 'member_removal_failed', stage: 'store', code: null },
+];
+
+describe('PRIV-07 and GRP-01: the three new events are closed, at run time', () => {
+  test.each(GRP_01_EVENTS)(
+    'GRP-01-AC24: createLog writes $event as one JSON line, holding exactly that event’s fields',
+    (event) => {
+      const writer = recordingWriter();
+
+      createLog({ write: writer.write }).write(event);
+
+      const lines = writer.lines();
+      expect(lines).toHaveLength(1);
+      expect(writer.chunks.join('').endsWith('\n')).toBe(true);
+      expect(JSON.parse(lines[0] ?? 'null')).toEqual(event);
+    },
+  );
+
+  test.each(['join_failed', 'invitation_failed', 'member_removal_failed'])(
+    'GRP-01-AC24: a %s code that is not a SQLSTATE is written as null, and a SQLSTATE as it is',
+    (name) => {
+      const event = { event: name, stage: 'store', code: '23505' };
+
+      for (const { what, code } of [...NOT_SQLSTATES, ...CODES_NOT_TEXT]) {
+        const { line, text } = writtenThroughACast({ ...event, code });
+
+        expect(line, what).toEqual({ ...event, code: null });
+        if (typeof code === 'string' && code !== '') {
+          expect(text, what).not.toContain(code);
+        }
+      }
+      expect(writtenThroughACast(event).line).toEqual(event);
+    },
+  );
+
+  test.each(['join_failed', 'invitation_failed', 'member_removal_failed'])(
+    'GRP-01-AC24: a %s stage outside its set, or free text, is written as null and none of it is written',
+    (name) => {
+      const event = { event: name, stage: 'store', code: null };
+
+      for (const value of ['clock', 'STORE', '', ['store'], 3, ...freeText().map((t) => t.value)]) {
+        const { line, text } = writtenThroughACast({ ...event, stage: value });
+
+        expect(line, JSON.stringify(value)).toEqual({ ...event, stage: null });
+        if (typeof value === 'string' && value !== '') {
+          expect(text, value).not.toContain(`"${value}"`);
+        }
+      }
+    },
+  );
+
+  test('GRP-01-AC24: fields the three events do not have, got past the type, are not written: an invitation code, a join key, a credential or its hash, a display name, a user’s ID, an error', () => {
+    const invitationCode = syntheticInvitationCode();
+    const joinKey = syntheticJoinKey();
+    const credential = syntheticCredential();
+    const displayName = syntheticDisplayName();
+    const userId = syntheticUuid();
+    const credentialHash = sha256Hex(credential);
+    const extra = {
+      invitationCode,
+      code_hash: sha256Hex(invitationCode),
+      joinKey,
+      credential,
+      credentialHash,
+      displayName,
+      userId,
+      memberId: userId,
+      adminId: syntheticUuid(),
+      message: `duplicate key value violates unique constraint (${displayName})`,
+      err: new Error(`could not join ${userId} as ${displayName} with ${invitationCode}`),
+    };
+
+    for (const event of GRP_01_EVENTS) {
+      const { line, text } = writtenThroughACast({ ...event, ...extra });
+
+      expect(line, event.event).toEqual(event);
+      expect(
+        markersIn(text, [invitationCode, joinKey, credential, credentialHash, displayName, userId]),
         event.event,
       ).toEqual([]);
     }
