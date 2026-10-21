@@ -4,12 +4,3 @@
 # still found. Add a line only for a value shown to be synthetic, with the
 # reason above it. Always give the full commit: an entry without it
 # (file:rule:line) covers that line in every commit, past and future.
-#
-# GRP-01 (PR #96): a synthetic join key written as a literal in a contracts
-# test, the shape of 32 random bytes as base64url, flagged as generic-api-key.
-# It was never a credential of anything. a9b9dd1 makes the key at run time, as
-# RG-07 (test data is always synthetic) asks, but the commit that added it stays in
-# the branch's history, which the security job scans. 064be6c is a
-# branch-only commit: main takes pull requests squashed, so once #96 merges
-# this line matches nothing on main and can be removed.
-064be6c28e1b46945fadd5589bf8eb93b663121f:packages/contracts/src/groups.test.ts:generic-api-key:34

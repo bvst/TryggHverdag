@@ -1,6 +1,6 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-20 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24, LOST-06, LOST-07, BUG-29, SM-10, BUG-41, LOST-08 and REL-10 done: all nine tasks; M2 closes on the canary's 24 hours on staging (D-090, D-115) → 🟡 **M3 started** (2026-10-20, D-134): GRP-01, task 1 of 12, is built and has been through two review loops; its pull request is to open
+**Last updated:** 2026-10-21 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24, LOST-06, LOST-07, BUG-29, SM-10, BUG-41, LOST-08 and REL-10 done: all nine tasks; M2 closes on the canary's 24 hours on staging (D-090, D-115) → 🟡 **M3 started** (2026-10-20, D-134): GRP-01, task 1 of 12, is done (#96, squashed as `bd83b21` on 2026-10-21); task 2, the home screen (GRP-02, CALL-01, CALL-02), is next and not started
 
 **Current section:** milestone M2, started 2026-10-01 with SM-01; all nine
 tasks are done (D-090, D-115; the task list is in
@@ -13,12 +13,14 @@ A-35's apply (2026-10-20, 06:36:55 UTC), and has to run on time for 24 hours
 **M3's order is decided** (D-134, 2026-10-20): twelve tasks, GRP-01 first,
 sign-in without SMS first, one task at a time; the demo may use the owner's
 own data on staging (D-135). The task list is in [10-roadmap.md](10-roadmap.md).
-**GRP-01, task 1, is built and has been through two review loops; its pull
-request is to open.** Step 1 is done (#94, `60b46ee`); the owner's five answers
-are D-136, the delegated choices D-137 and the app's plain `fetch` client D-138;
-the record is [../progress/m3.md](../progress/m3.md). The owner's part is A-36
-(below), after the merge and its deploy, and a code-owner question that goes in
-the pull request.
+**GRP-01, task 1, is done:** [#96](https://github.com/bvst/TryggHverdag/pull/96)
+was squash-merged as `bd83b21` on 2026-10-21, after `urso-agent` approved it, and
+its `deploy-staging` (run 39557013621) passed. Step 1 was #94 (`60b46ee`); the
+owner's five answers are D-136, the delegated choices D-137 and the app's plain
+`fetch` client D-138; the record is [../progress/m3.md](../progress/m3.md). The
+next task is task 2 in D-134's order, the home screen (GRP-02, CALL-01, CALL-02);
+it has not started. The owner's part is A-36 (below), now actionable, and a
+code-owner question from #96 (the owner's question 1) that is still unanswered.
 Bugs found and fixed since the last update (2026-10-10), with the pull request
 and its squash commit: BUG-43 (a test picked an outbox row by random order;
 #79, `85426bf`, which carried REL-10's record), BUG-42 and BUG-26 (the gate's
@@ -34,11 +36,14 @@ database that never answers; #89, `1151d18`, 2026-10-18) and BUG-28 (no test hel
 two journeys past the watchdog's stuck threshold; #90, `c94e908`, 2026-10-18) and
 BUG-51 (a query the database never answered held a sweep for ever; #92,
 `0df5737`, 2026-10-19, D-132) and BUG-52 (`gate:file` checked nothing for an
-edited L6 or L3 test file, and exited 1; #93, `20af31a`, 2026-10-20, D-133).
+edited L6 or L3 test file, and exited 1; #93, `20af31a`, 2026-10-20, D-133)
+and BUG-61 (a new `vite` advisory failed the dependency audit; fixed in
+GRP-01's #96, `bd83b21`, 2026-10-21).
 Queued for the owner to schedule: BUG-13 (`gate:full` miscounts the steps that
 did not run after a failure), BUG-16 (`req:coverage` counts an ID named in a
 comment), BUG-17 (the Android emulator sometimes stays in English past the
-wait), BUG-19 (no test checks every owner-approval path keeps its owners),
+wait: three times now, #57, #60 and #96, and Claude recommends it as the next
+`/bugfix` after the current task), BUG-19 (no test checks every owner-approval path keeps its owners),
 BUG-20 (graphile-worker's own logger prints its error object, past `log.ts`),
 BUG-22 (the test-weakening check does not see the shared behaviour suites),
 BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an
@@ -57,7 +62,10 @@ walker-only access, is mutated by no run), BUG-58 (guard-bash refuses a
 mentions its rule), BUG-59 (the post-edit hook checks a file outside the
 repository and reports false failures) and BUG-60 (test-author's shell guard
 does not mirror its Edit hook's allow-list; BUG-57 to BUG-60 came from GRP-01,
-and BUG-58 to BUG-60 are in `.claude/`). For the owner to decide:
+and BUG-58 to BUG-60 are in `.claude/`) and BUG-62 (`pnpm audit` reports a
+moderate advisory in `hono`, GHSA-5r4p-p66f-jhc7, patched in 4.13.11; not
+exploitable in the API today, which does not use `serveStatic`). For the owner
+to decide:
 BUG-49 (moving `origin/main` gets a session past the stop and progress hooks;
 its fix is in `.claude/`, which needs the owner's approval) and BUG-50 (no test checks that
 `req:coverage --fail-on-uncovered-changed` leaves changed test files out of
@@ -149,9 +157,10 @@ safety paths in BUG-10 (D-092, done). What Claude needs
 from the owner: [../progress.md](../progress.md).
 
 **Milestone M3 has started** (2026-10-20, D-134): the app MVP, demo-able, in
-twelve tasks, one at a time, GRP-01 first. GRP-01 (sign-in and groups) is built
-and has been through two review loops; its pull request is to open. Its record
-is [../progress/m3.md](../progress/m3.md); the owner's part is A-36.
+twelve tasks, one at a time, GRP-01 first. GRP-01 (sign-in and groups) is done:
+#96, squashed as `bd83b21` on 2026-10-21. Its record is
+[../progress/m3.md](../progress/m3.md); the owner's part is A-36, now
+actionable. Task 2, the home screen, is next and not started.
 
 **Open for M4** (not an owner action, so not in the to-do table below; it sits
 here so that M4's planning, which starts from this file and the roadmap's M4
@@ -257,8 +266,8 @@ session.
 | A-32 | In Healthchecks.io, add a check named `staging-sms`: **Period 1 minute, Grace 2 minutes**, alerts to the same place as the others. Save its ping URL as the `staging` environment secret `HEALTHCHECKS_SMS_URL` | A failed SMS pages you through its own check (D-115, LOST-07). Needed before LOST-07's `infra-staging` plan, which stops with "Invalid value for variable" without it | ✅ Done — the owner, 2026-10-07. Not verified from a session: the secrets API is refused here. LOST-07's `infra-staging` plan is the first real check |
 | A-33 | After LOST-07 merges: run `infra-staging` with `plan`, then `apply`, and check within about 3 minutes that `staging-sms` has left `new` and shows a ping every minute, and that the worker's check still gets one ping a minute, not two (the two URLs must differ). **Do it straight after the merge's `deploy-staging` run:** the new code reads the worker's existing secret before any plan. If `staging-worker` pages first, read the worker's start lines in Clever Cloud's log for the staging app (the deploy job's log can end before them, BUG-27). A line beginning `worker: not checking in with Healthchecks.io: HEALTHCHECKS_WORKER_URL` means the watchdog is running and only its check-in stopped; the rest of the line says what is wrong with the secret. Re-copy it in the UUID form Healthchecks.io shows (`https://hc-ping.com/<uuid>`), then plan and apply. If the plan stops with "Invalid value for variable", read the message under it: it names the secret and what is wrong (D-116) | Puts the SMS check live. There is no live drill of a failing SMS in M2: staging has no journeys before task 9 (D-091) | ✅ Done — the owner, 2026-10-07: `infra-staging` plan (run 37678574920) and apply (run 37678702578, "Apply complete! Resources: 0 added, 1 changed", the app's environment, values hidden). Both ping URLs passed Terraform's UUID-only check. That `staging-sms` left `new` and each check gets one ping a minute is the owner's observation, not verified from a session (Healthchecks.io is not reachable from one) |
 | A-34 | **Before the plan:** in Healthchecks.io, add a check named `staging-canary`, **Period 15 minutes, Grace 20 minutes**, alerts to the same place as the others. Save its ping URL, in the UUID form Healthchecks.io shows (`https://hc-ping.com/<uuid>`), as the `staging` environment secret `HEALTHCHECKS_CANARY_URL`. Never another check's URL. About 3 minutes | A failed or stopped canary pages you through its own check (D-127 Q3, D-128, REL-10). Needed before REL-10's `infra-staging` plan, which stops with "Invalid value for variable" without it | ✅ **Done** — 2026-10-20: `staging-canary` created and its ping URL saved as the `staging` secret; the plan then read it |
-| A-35 | **After the merge:** straight after the merge's `deploy-staging`, run `infra-staging` with `plan` (it shows the app's environment changing and a new `random_password`, values hidden), then `apply`. Within about 21 minutes check that `staging-canary` has left `new` and shows a success ping. 24 hours later, report the window, the number of success and failure pings, any down event, and the largest `alertMs` in the `canary_run` lines of Clever Cloud's log. If the plan stops with "Invalid value for variable", the message names the secret. Until the apply, the deployed worker says at start that the canary is not running: expected | Puts the staging canary live and records M2's exit: the canary runs on time for 24 hours (D-090, D-127 Q1, REL-10-AC19). Only you can read Healthchecks.io and Clever Cloud's log | 🟡 **Plan and apply done** — 2026-10-20: plan run 39381315279 ("1 to add, 1 to change"), apply run 39381374851 ("Same plan as the one read in run 39381315279"; "Apply complete! Resources: 1 added, 1 changed, 0 destroyed." at 06:36:55 UTC). The owner saw `staging-canary` ping OK. **Still to do:** the 24-hour reading, from about 06:40 UTC on 2026-10-21 |
-| A-36 | **After GRP-01 merges and its `deploy-staging` has run:** run `infra-staging` with `plan` (it shows a new `random_bytes` for the admin's bootstrap code and the app's environment changing, values hidden), read it, then `apply`. **The plan shows no value:** `random_bytes` keeps the code sensitive and has no ID made from it, so the plan prints `(sensitive value)` where it would be. If the plan shows a 32-character code anywhere, stop and tell Claude: the job log is public. Then open the staging app in Clever Cloud's console, read `ADMIN_BOOTSTRAP_CODE` once from its environment variables, and join in the app on your own phone with that code and your name. You become the group's admin; for anyone else the code stops working the moment the group exists. **Open, checked 2026-10-20: how the app gets onto your phone.** Nothing in the repository builds it for a phone before M3's task 12 (`apps/mobile` has no `eas.json`; CI's `android-e2e` build is for the emulator). The route that exists is a development build made on the Mac (INF-06-AC16); the app talks to staging unless `EXPO_PUBLIC_API_URL` says otherwise. The plan and apply do not wait for this; the join does. Tell Claude if you want the steps written before you do it. If the join gets no answer or a server error, use the screen's retry: it sends the same join again and works while you are the only member. Never share the code or put it anywhere else; if it leaks, see "If `ADMIN_BOOTSTRAP_CODE` leaks" in [monitoring-setup.md](monitoring-setup.md). If the console does not show the value, say so: that was not checked from a session | Nobody can join without an invitation, and nobody exists yet to invite you: the bootstrap code makes you the first member and admin (D-136, answer 1; GRP-01). Only your own data goes on staging (D-135) | ⬜ Open — after GRP-01 merges and deploys |
+| A-35 | **After the merge:** straight after the merge's `deploy-staging`, run `infra-staging` with `plan` (it shows the app's environment changing and a new `random_password`, values hidden), then `apply`. Within about 21 minutes check that `staging-canary` has left `new` and shows a success ping. 24 hours later, report the window, the number of success and failure pings, any down event, and the largest `alertMs` in the `canary_run` lines of Clever Cloud's log. If the plan stops with "Invalid value for variable", the message names the secret. Until the apply, the deployed worker says at start that the canary is not running: expected | Puts the staging canary live and records M2's exit: the canary runs on time for 24 hours (D-090, D-127 Q1, REL-10-AC19). Only you can read Healthchecks.io and Clever Cloud's log | 🟡 **Plan and apply done** — 2026-10-20: plan run 39381315279 ("1 to add, 1 to change"), apply run 39381374851 ("Same plan as the one read in run 39381315279"; "Apply complete! Resources: 1 added, 1 changed, 0 destroyed." at 06:36:55 UTC). The owner saw `staging-canary` ping OK. **Still to do:** the 24-hour reading, from about 06:40 UTC on 2026-10-21. **Note on the restart:** GRP-01's `deploy-staging` (run 39557013621, 06:41:47 to 06:45:21 UTC on 2026-10-21) restarted the worker at about 06:43 UTC, after the 24-hour window closed (the apply was at 06:36:55 UTC on 2026-10-20). The reading should end at 06:36:55 UTC on 2026-10-21, or before the restart. The deploy's smoke test saw the worker check in at 2026-10-21T06:45:12.041Z, after the deploy (2026-10-21T06:43:35.102Z) |
+| A-36 | **GRP-01 has merged (`bd83b21`) and its `deploy-staging` has run (run 39557013621, passed at 06:45:21 UTC on 2026-10-21), so this is yours to do now:** run `infra-staging` with `plan` (it shows a new `random_bytes` for the admin's bootstrap code and the app's environment changing, values hidden), read it, then `apply`. **The plan shows no value:** `random_bytes` keeps the code sensitive and has no ID made from it, so the plan prints `(sensitive value)` where it would be. If the plan shows a 32-character code anywhere, stop and tell Claude: the job log is public. Then open the staging app in Clever Cloud's console, read `ADMIN_BOOTSTRAP_CODE` once from its environment variables, and join in the app on your own phone with that code and your name. You become the group's admin; for anyone else the code stops working the moment the group exists. **Open, checked 2026-10-20: how the app gets onto your phone.** Nothing in the repository builds it for a phone before M3's task 12 (`apps/mobile` has no `eas.json`; CI's `android-e2e` build is for the emulator). The route that exists is a development build made on the Mac (INF-06-AC16); the app talks to staging unless `EXPO_PUBLIC_API_URL` says otherwise. The plan and apply do not wait for this; the join does. Tell Claude if you want the steps written before you do it. If the join gets no answer or a server error, use the screen's retry: it sends the same join again and works while you are the only member. Never share the code or put it anywhere else; if it leaks, see "If `ADMIN_BOOTSTRAP_CODE` leaks" in [monitoring-setup.md](monitoring-setup.md). If the console does not show the value, say so: that was not checked from a session | Nobody can join without an invitation, and nobody exists yet to invite you: the bootstrap code makes you the first member and admin (D-136, answer 1; GRP-01). Only your own data goes on staging (D-135) | ⬜ **Open — actionable now:** the precondition is met (`bd83b21`; `deploy-staging` run 39557013621 passed at 06:45:21 UTC on 2026-10-21). Until the apply, the API logs "api: the first admin cannot join: ADMIN_BOOTSTRAP_CODE is not set, so no first admin can join and no group is made": expected |
 
 ## Why this order
 The specialised agents and skills (Section 7) are where your quality bar gets
