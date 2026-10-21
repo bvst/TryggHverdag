@@ -566,7 +566,7 @@ describe("this repository's own workflows", () => {
    * amendment), and both halves are pinned in the tests below.
    *
    * One list for both halves: the paths D-102 gives the owner are /apps/
-   * owner paths the safety filter leaves out. With D-139's seven below they
+   * owner paths the safety filter leaves out. With D-139's nine below they
    * are the only ones, pinned exactly in the filter test below, so a further
    * exception has to show itself there, in a test change with its own reason.
    * (Until LOST-01's code review this was two lists, D102_FILES and
@@ -575,20 +575,26 @@ describe("this repository's own workflows", () => {
   const D102_FILES = ['/apps/server/src/log.ts'];
 
   /**
-   * GRP-01 (D-139): the nine files that carry sign-in or device credentials,
-   * which had no code owner when GRP-01 merged (#96). The owner gave each a
-   * code owner; Claude left the ai-review safety filter as it was, as D-102
-   * did for log.ts (D-031). None is a safety path, privacy-security-reviewer
-   * runs on every pull request already, and a change to the filter would have
-   * made that pull request edit ai-review.yml, which CI's reviewers cannot
-   * review (D-075). So the seven under /apps/ are named exceptions in the
-   * filter test below, beside log.ts, and are pinned out of the filter by
-   * name and by glob after LOST-01's pins. The two under /packages/contracts/
-   * are not /apps/ paths, which that test does not read; the filter lists
-   * packages/contracts/** already, and D-139 does not change that.
+   * GRP-01 (D-139): the eleven files that carry sign-in or device
+   * credentials, make one, or keep a secret out of the logs, which had no code
+   * owner when GRP-01 merged (#96). The owner gave each a code owner: the
+   * first nine on #96 (N5), the last two, join-key.ts and redact.ts, by
+   * D-139's amendment ("Begge to.", 2026-10-21, on privacy-security-
+   * reviewer's S1 and N2). Claude left the ai-review safety filter as it was,
+   * as D-102 did for log.ts (D-031). None is a safety path,
+   * privacy-security-reviewer runs on every pull request already, and a
+   * change to the filter would have made that pull request edit
+   * ai-review.yml, which CI's reviewers cannot review (D-075). So the nine
+   * under /apps/ are named exceptions in the filter test below, beside
+   * log.ts, and are pinned out of the filter by name and by glob after
+   * LOST-01's pins. The two under /packages/contracts/ are not /apps/ paths,
+   * which that test does not read; the filter lists packages/contracts/**
+   * already, and D-139 does not change that.
    *
-   * One list for both halves, as D102_FILES is: the seven exceptions are
-   * read from the nine, not copied.
+   * One list for both halves, as D102_FILES is: the nine exceptions are read
+   * from the eleven, not copied. scripts/lib/merge-rules.test.mjs writes the
+   * eleven out too, and reads this literal to hold its copy equal to this one
+   * (test-auditor's N9), so keep it one quoted path per line.
    */
   const D139_FILES = [
     '/apps/server/src/config.ts',
@@ -600,6 +606,8 @@ describe("this repository's own workflows", () => {
     '/apps/mobile/src/shared/api/client.ts',
     '/apps/mobile/src/features/grp/session.tsx',
     '/apps/mobile/package.json',
+    '/apps/mobile/src/features/grp/join-key.ts',
+    '/apps/server/src/redact.ts',
   ];
   const D139_APPS_FILES = D139_FILES.filter((owned) => owned.startsWith('/apps/'));
 
@@ -627,22 +635,35 @@ describe("this repository's own workflows", () => {
     //
     // Seven more, by the owner's decision on D-139 (2026-10-21) and Claude's
     // choice there (D-031): the /apps/ ones of the nine sign-in files D-139
-    // gives a code owner, D139_APPS_FILES, read from D139_FILES above. D-139
-    // leaves the filter as D-102 did, for the same reasons. RG-03 (GRP-01,
-    // D-139): until D-139 the exceptions were log.ts alone, and once the seven
-    // are owner paths outside the filter this test would fail on each of them.
-    // This narrows it by those seven files and no other, as D-139's
-    // Consequences say: the pin below stays exact, now at eight, and every
-    // other /apps/ owner path is still required in the filter. The two
-    // /packages/contracts/ files of the nine are not /apps/ paths, so they are
-    // not excepted here: this test does not read them.
+    // first gave a code owner, D139_APPS_FILES, read from D139_FILES above.
+    // D-139 leaves the filter as D-102 did, for the same reasons. RG-03
+    // (GRP-01, D-139): until D-139 the exceptions were log.ts alone, and once
+    // the seven are owner paths outside the filter this test would fail on
+    // each of them. This narrowed it by those seven files and no other, as
+    // D-139's Consequences say, and the pin below stayed exact, at eight.
+    //
+    // Two more, by D-139's amendment (the owner's "Begge to.", both,
+    // 2026-10-21, on privacy-security-reviewer's S1 and N2 on the follow-up
+    // pull request): /apps/mobile/src/features/grp/join-key.ts, which makes
+    // the join key a retried join is given a fresh credential with, and
+    // /apps/server/src/redact.ts, which strips the database password from
+    // every failure line the API and the worker print. Both are /apps/ owner
+    // paths, and the amendment leaves both out of the filter for the reasons
+    // above: for redact.ts exactly D-102's for log.ts, and for join-key.ts
+    // privacy-security-reviewer, which runs on every pull request and found
+    // it. RG-03 (GRP-01, D-139's amendment): this narrows the test by those
+    // two files and no other. The pin stays exact, now at ten (log.ts and
+    // D-139's nine /apps/ paths), and every other /apps/ owner path is still
+    // required in the filter. The two /packages/contracts/ files of the
+    // eleven are not /apps/ paths, so they are not excepted here: this test
+    // does not read them.
     const text = readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8');
     const safety = filterEntries(text, 'safety');
     const appsPaths = OWNER_APPROVAL_PATHS.filter((p) => p.startsWith('/apps/'));
     const exceptions = [...D102_FILES, ...D139_APPS_FILES];
     const safetyPaths = appsPaths.filter((p) => !exceptions.includes(p));
 
-    expect(exceptions, 'the named exceptions (D-102, amended; D-139)').toEqual([
+    expect(exceptions, 'the named exceptions (D-102, amended; D-139, amended)').toEqual([
       '/apps/server/src/log.ts',
       '/apps/server/src/config.ts',
       '/apps/server/src/bin/api.ts',
@@ -651,6 +672,8 @@ describe("this repository's own workflows", () => {
       '/apps/mobile/src/shared/api/client.ts',
       '/apps/mobile/src/features/grp/session.tsx',
       '/apps/mobile/package.json',
+      '/apps/mobile/src/features/grp/join-key.ts',
+      '/apps/server/src/redact.ts',
     ]);
     expect(safety.headers, 'how many filters are named safety').toBe(1);
     expect(safety.unreadable).toEqual([]);
@@ -662,7 +685,7 @@ describe("this repository's own workflows", () => {
     // owner path, misspelt, moved or no longer owned, excuses nothing, and
     // would leave the pin above passing over a list that means nothing.
     // RG-03 (GRP-01, D-139): it reads every named exception now, D-139's
-    // seven with log.ts, not D102_FILES alone; it is no looser for log.ts.
+    // nine with log.ts, not D102_FILES alone; it is no looser for log.ts.
     expect(
       exceptions.filter((p) => !appsPaths.includes(p)),
       'each named exception is an /apps/ path the owner must approve',
@@ -1253,15 +1276,16 @@ describe("this repository's own workflows", () => {
     // to hold equal.
   });
 
-  // GRP-01 (D-139): the nine sign-in files' ownership, and the seven /apps/
+  // GRP-01 (D-139): the eleven sign-in files' ownership, and the nine /apps/
   // ones' staying out of the ai-review safety filter, pinned with D139_FILES
   // and D139_APPS_FILES (declared beside D102_FILES, above the safety filter
-  // test, which names the seven as exceptions), as LOST-01's pins above hold
+  // test, which names the nine as exceptions), as LOST-01's pins above hold
   // log.ts. scripts/lib/merge-rules.test.mjs holds the merge rules' side:
-  // OWNER_APPROVAL_PATHS, each path's own CODEOWNERS line, and git tracking
-  // all nine. The last-match reading is here, with the reader it shares.
+  // OWNER_APPROVAL_PATHS, each path's own CODEOWNERS line, git tracking all
+  // eleven, and its copy of D139_FILES held equal to this one. The last-match
+  // reading is here, with the reader it shares.
 
-  test('GRP-01 (D-139): the seven /apps/ sign-in files the safety filter test names as exceptions are tracked by git and are paths the owner must approve', () => {
+  test('GRP-01 (D-139): the nine /apps/ sign-in files the safety filter test names as exceptions are tracked by git and are paths the owner must approve', () => {
     const listed = spawnSync(
       'git',
       ['ls-files', '--', ...D139_APPS_FILES.map((owned) => owned.slice(1))],
@@ -1275,8 +1299,8 @@ describe("this repository's own workflows", () => {
     expect(D139_APPS_FILES.filter((owned) => !OWNER_APPROVAL_PATHS.includes(owned))).toEqual([]);
   });
 
-  test("GRP-01 (D-139): under GitHub's last-match rule, the line of .github/CODEOWNERS that matches each of the nine sign-in files names @bvst @urso-agent, and gate:integrity finds every owner-approval path owned", () => {
-    // All nine, the two under packages/contracts/ among them: the root's
+  test("GRP-01 (D-139): under GitHub's last-match rule, the line of .github/CODEOWNERS that matches each of the eleven sign-in files names @bvst @urso-agent, and gate:integrity finds every owner-approval path owned", () => {
+    // All eleven, the two under packages/contracts/ among them: the root's
     // /package.json and /packages/contracts/released/ lines must not be read
     // as covering any of them, and no later line may take one back.
     const text = readFileSync('.github/CODEOWNERS', 'utf8');
@@ -1288,14 +1312,14 @@ describe("this repository's own workflows", () => {
     );
   });
 
-  test('GRP-01 (D-139): the seven /apps/ sign-in files are not in the ai-review safety filter, by name or under a glob, as D-139 decided', () => {
+  test('GRP-01 (D-139): the nine /apps/ sign-in files are not in the ai-review safety filter, by name or under a glob, as D-139 decided', () => {
     const safety = filterEntries(readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8'), 'safety');
 
     expect(safety.headers, 'how many filters are named safety').toBe(1);
     expect(safety.unreadable).toEqual([]);
     expect(safety.entries.length).toBeGreaterThan(0);
     // The matcher is checked first on one of the filter's own entries under
-    // apps/mobile/, where four of the seven live.
+    // apps/mobile/, where five of the nine live.
     expect(
       globCovers('apps/mobile/src/safety-core/**', 'apps/mobile/src/safety-core/heartbeat.ts'),
     ).toBe(true);

@@ -424,18 +424,26 @@ describe('SEC-06: the files that tell gitleaks what to skip need the owner', () 
 });
 
 // GRP-01 (D-139; privacy-security-reviewer's N5 on PR #96, and the owner's
-// answer to that pull request's question 1): nine files that carry sign-in or
-// device credentials had no code owner when GRP-01 merged, so a change to any
-// of them merged without the owner seeing it, while the server's credential
-// check (api.ts and adapters/device-credentials.ts, D-097) and the groups
-// code (D-137) were owner paths. Each is an owner path now, owned by
-// @bvst @urso-agent like every other (D-071), in both lists gate:integrity
-// holds equal: OWNER_APPROVAL_PATHS and .github/CODEOWNERS. They are owner
-// paths, not safety paths, and the ai-review safety filter is left as it was,
-// as D-102 left it for log.ts; scripts/gate.test.mjs pins that half, and the
-// last-match reading of CODEOWNERS for all nine, beside D-102's pins. Read
-// from the repository itself, beside SEC-06's pins above.
-describe('GRP-01 (D-139): the nine files that carry sign-in or device credentials need the owner', () => {
+// answer to that pull request's question 1): eleven files that carry sign-in or
+// device credentials, make one, or keep a secret out of the logs had no code
+// owner when GRP-01 merged, so a change to any of them merged without the
+// owner seeing it, while the server's credential check (api.ts and
+// adapters/device-credentials.ts, D-097) and the groups code (D-137) were
+// owner paths. Each is an owner path now, owned by @bvst @urso-agent like
+// every other (D-071), in both lists gate:integrity holds equal:
+// OWNER_APPROVAL_PATHS and .github/CODEOWNERS. They are owner paths, not
+// safety paths, and the ai-review safety filter is left as it was, as D-102
+// left it for log.ts; scripts/gate.test.mjs pins that half, and the last-match
+// reading of CODEOWNERS for all eleven, beside D-102's pins. Read from the
+// repository itself, beside SEC-06's pins above.
+//
+// The first nine came from N5. The last two, join-key.ts and redact.ts, came
+// with D-139's amendment: privacy-security-reviewer's S1 and N2 on the
+// follow-up pull request, and the owner's answer, "Begge to." (both),
+// 2026-10-21. join-key.ts makes the join key, from which a retried join gets a
+// fresh credential; redact.ts strips the database password from the failure
+// lines process.ts and worker.ts print.
+describe('GRP-01 (D-139): the eleven files that carry sign-in or device credentials, make one, or keep a secret out of the logs need the owner', () => {
   const D139_FILES = [
     '/apps/server/src/config.ts',
     '/apps/server/src/bin/api.ts',
@@ -446,9 +454,11 @@ describe('GRP-01 (D-139): the nine files that carry sign-in or device credential
     '/apps/mobile/src/shared/api/client.ts',
     '/apps/mobile/src/features/grp/session.tsx',
     '/apps/mobile/package.json',
+    '/apps/mobile/src/features/grp/join-key.ts',
+    '/apps/server/src/redact.ts',
   ];
 
-  test('GRP-01 (D-139): OWNER_APPROVAL_PATHS holds all nine', () => {
+  test('GRP-01 (D-139): OWNER_APPROVAL_PATHS holds all eleven', () => {
     expect(
       D139_FILES.filter((path) => !OWNER_APPROVAL_PATHS.includes(path)),
       'paths D-139 gives the owner that OWNER_APPROVAL_PATHS does not hold',
@@ -474,7 +484,7 @@ describe('GRP-01 (D-139): the nine files that carry sign-in or device credential
     );
   });
 
-  test('GRP-01 (D-139): git tracks each of the nine as a file of its own, and each is the path OWNER_APPROVAL_PATHS holds, so a misspelt path cannot pass as owned', () => {
+  test('GRP-01 (D-139): git tracks each of the eleven as a file of its own, and each is the path OWNER_APPROVAL_PATHS holds, so a misspelt path cannot pass as owned', () => {
     // The two tests above compare the merge rules' lists with this one. This
     // compares it with the tree: a path misspelt alike in all three would
     // pass both while the real file stayed unowned.
@@ -492,6 +502,32 @@ describe('GRP-01 (D-139): the nine files that carry sign-in or device credential
       D139_FILES.filter((path) => !OWNER_APPROVAL_PATHS.includes(path)),
       'tracked files D-139 gives the owner that OWNER_APPROVAL_PATHS does not hold',
     ).toEqual([]);
+  });
+
+  test("GRP-01 (D-139): scripts/gate.test.mjs's D139_FILES holds the same eleven paths as this file's, so a path dropped from one copy alone cannot pass", () => {
+    // test-auditor's N9: the list is written out twice, here and in
+    // scripts/gate.test.mjs, and nothing held the two copies equal. Any path
+    // dropped from this copy alone leaves the pins above silent about that
+    // file, with every test green. One dropped from gate.test.mjs's copy alone
+    // does the same to its last-match pin; its exceptions pin notices an
+    // /apps/ path missing, but it reads no other, so a /packages/contracts/
+    // path would go unnoticed. The other copy is read from that file's text, its one
+    // `const D139_FILES = [ ... ];` literal, one quoted path per line, and
+    // compared both ways. A line of that literal this cannot read, or a
+    // second literal or none, fails here rather than letting the comparison
+    // pass over a list it did not read.
+    const text = readFileSync('scripts/gate.test.mjs', 'utf8');
+    const literals = [...text.matchAll(/^\s*const D139_FILES = \[\n(?<body>[^\]]*)^\s*\];$/gm)];
+
+    expect(literals.length, 'how many D139_FILES literals scripts/gate.test.mjs has').toBe(1);
+    const lines = literals[0].groups.body.split('\n').filter((line) => line.trim() !== '');
+    const paths = lines.map((line) => /^\s*'(?<path>[^']+)',$/.exec(line)?.groups?.path);
+
+    expect(
+      lines.filter((_, index) => paths[index] === undefined),
+      'lines of that literal that are not one quoted path',
+    ).toEqual([]);
+    expect(paths.toSorted()).toEqual(D139_FILES.toSorted());
   });
 });
 
