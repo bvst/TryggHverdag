@@ -51,3 +51,26 @@ RG-02 replay (git archive 1e8ce72 + node_modules symlinks, jest -t 'review loop 
 Plants: any-404-done kills the 404 rows; 400/422 to unreachable kills those rows; invitations.ts stage empty, swallow to refused,
 constant SQLSTATE, no log line: all die; main.tf random_string / bare random_integer / indented random_id: die; random_password
 passes (sensitive, out of scope). Symlinked node_modules work for both jest-expo and vitest (faster than cp -a).
+
+**D-139 follow-up (nine sign-in files get a code owner; red 2b1d04e, green 0fe7547), PASS, 2026-10-21.** Base = origin/main f3e682c.
+gate:integrity 5 of 5 (NODE_USE_ENV_PROXY=1), 13 required incl. mutation/traceability. Branch name reused (PRs #22..#97 all
+closed, none for 0fe7547); check-runs total_count 0. decideMutation({changed,...}) = skip (scripts/, .github/ not safety paths).
+RG-02 replay (git worktree at 2b1d04e + node_modules symlink, vitest --reporter=json): 6 failed/251 passed, as the commit says;
+HEAD 257/257. The 7th GRP-01 test (not in the safety filter) is a guard, green at red by design. RG-03: safety-filter test's
+exception pin = [...D102_FILES, ...D139_APPS_FILES] toEqual 8 literals; 25 safety /apps/ entries = 33 owner /apps/ paths - 8.
+Probes (scratchpad/harness/probe.mjs, edit/run/restore): later ownerless dir, *.tsx, other-owner dir, misspelt CODEOWNERS line,
+misspelt in all 4 lists (ls-files catches), filter glob/name for one of the seven, dropping api.ts/app.config.ts/groups.ts from
+the filter, dropping package.json from OWNER_APPROVAL_PATHS, single owner, later ownerless duplicate line, widening D139_FILES,
+ownerless /packages/contracts/src/: all 15 caught. Note: D139_FILES is duplicated in gate.test.mjs and merge-rules.test.mjs with
+nothing holding them equal (gate.test's /apps/ part is pinned via the exceptions literal). req:coverage unchanged: gate.test.mjs
+is fixtures-only and merge-rules.test.mjs already named GRP-01 on main (GRP-01-AC32), so no count moves; SEC-01 stays at 0.
+`apps/mobile/src/**/*.tsx` sits in the ui filter, not safety: grep -A40 from "safety:" runs into it, read the block boundaries.
+
+**D-139 amendment (join-key.ts + redact.ts; red aee541f, green 93047f8), PASS, 2026-10-21.** Base origin/main f3e682c. RG-02 replay
+(git worktree at aee541f + node_modules symlink, vitest on gate/merge-rules/gate-integrity tests): 6 failed/284 passed; HEAD 290/290.
+The new N9 test (merge-rules.test.mjs regex-reads gate.test.mjs's D139_FILES literal, compares sorted both ways) is green at red by
+design (an equality guard between two test files). Probes: path dropped from either copy (apps and contracts paths) -> caught;
+reorder -> passes (not order-brittle); comment line inside the literal -> fails loudly (documented: one quoted path per line;
+prettier singleQuote+trailingComma keeps the shape). Exceptions pin exact at 10; 35 /apps/ owner paths - 10 = 25 still required.
+Later single-owner glob over join-key.ts and misspelt redact CODEOWNERS line -> caught. tests:changes 2 files none weakened;
+req:coverage unchanged; decideMutation skip (only-if-safety mode).

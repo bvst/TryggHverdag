@@ -6027,3 +6027,195 @@ any other path is work, not a candidate for the same treatment.
   - D-137's loop-1 amendment points here.
   - Amends D-032 for the app's client only; oRPC stays the server's and the
     contract's. Supersedes nothing.
+
+## D-139 — The sign-in files get a code owner (GRP-01)
+- **Date:** 2026-10-21 · **Status:** Accepted (owner, 2026-10-21; asked in
+  GRP-01's pull request, #96, question 1, with Claude's recommendation, the
+  recommended option chosen; amended the same day, below) · **Section:** 6/8
+  (CI-01; extends D-097 and D-102; D-042, D-071, D-137)
+- **Context:**
+  - Eleven files that carry sign-in or device credentials, make one, or keep a
+    secret out of the logs had no code owner when GRP-01 merged (#96,
+    `bd83b21`, 2026-10-21). A change to any of them merged without the owner's
+    eye, while the server's credential check (`api.ts` and
+    `adapters/device-credentials.ts`, D-097) and the groups code (D-137) are
+    owner paths.
+  - `privacy-security-reviewer` raised nine of them as a note in its reviews
+    of #96 (N5). Claude asked the owner in the pull request (question 1) and
+    recommended a small follow-up pull request adding them to CODEOWNERS.
+  - The owner answered on 2026-10-21: "Ja, la code owner på de ni filene."
+    (Yes, put a code owner on the nine files.)
+  - The same reviewer found the other two when it reviewed this follow-up
+    (see the amendment below).
+- **Decision:**
+  - **The eleven paths are code-owner paths,** owned by `@bvst @urso-agent`
+    like every other owner path (D-071). They go in both lists that must
+    agree: `.github/CODEOWNERS`, and `OWNER_APPROVAL_PATHS` in
+    `scripts/lib/merge-rules.mjs`, which `gate:integrity` (CI-01) checks
+    against CODEOWNERS. Each is written as the others are, from the repository
+    root, with its reason beside it as a comment:
+    1. `/apps/server/src/config.ts`: reads every setting a server process
+       starts from, among them `ADMIN_BOOTSTRAP_CODE`, the code that makes the
+       first admin.
+    2. `/apps/server/src/bin/api.ts`: the API's entry point, which wires the
+       configuration into the API.
+    3. `/apps/server/src/ports.ts`: the server's port types, among them the
+       group store's and the device-credential check's.
+    4. `/packages/contracts/src/groups.ts`: the join's request and answer,
+       including the issued credential.
+    5. `/packages/contracts/src/display-name.ts`: the display-name rule, which
+       the app checks before it sends and the server enforces.
+    6. `/apps/mobile/src/shared/secure-storage.ts`: where the phone keeps its
+       credential and its join key.
+    7. `/apps/mobile/src/shared/api/client.ts`: sends the credential, as
+       `Authorization: Bearer`, with every request that has one (the join is
+       public and sends none).
+    8. `/apps/mobile/src/features/grp/session.tsx`: where a 401 deletes the
+       credential and signs the phone out.
+    9. `/apps/mobile/package.json`: the app's dependencies, among them the
+       secure-storage library (`expo-secure-store`).
+    10. `/apps/mobile/src/features/grp/join-key.ts`: makes the join key, 32
+        random bytes from the platform's secure random source (`expo-crypto`,
+        `getRandomBytesAsync`). The server takes a join sent again with the
+        same invitation code (or, while the admin is alone, the bootstrap
+        code) and the same key as the same join retried, and gives that user a
+        new credential, so a key that could be guessed would hand a user's
+        place to whoever has the code. The owned contract fixes the key's
+        format, not its randomness.
+    11. `/apps/server/src/redact.ts`: removes the database password from the
+        failure lines that `process.ts` and `worker.ts`, both owned, write
+        through `describeFailure`; weakening it could put the password in a
+        log (D-068, SEC-03). It reaches no further than those lines. Its own
+        header (D-077) lists what it does not cover: Graphile Worker's own
+        logger, Hono's and the Node server's default error printing, and
+        Node's printer for an uncaught exception. The same kind of reason as
+        `log.ts`'s (D-102), a guard on what a log may hold, under SEC-03
+        rather than PRIV-07.
+  - **The reasons were read against each file's opening comment and code
+    (2026-10-21).** The one for `client.ts` says "every request that has one"
+    because `credential` is optional in `ApiRequest` and the join sends none.
+    The one for `join-key.ts` was read against the server's join (a retried
+    join gets a new credential, and the first stops working); the one for
+    `redact.ts` says "the database password", and not "credentials", because
+    that is all it strips: a connection string's password and a `password=…`
+    pair. It names the lines `process.ts` and `worker.ts` write through
+    `describeFailure`, and not every line the API and the worker print,
+    because the file's header lists the output that never passes through it.
+    It cites SEC-03, not PRIV-07, which covers only precise locations and
+    phone numbers (`02-norway-law-privacy.md`, PRIV-07; D-068 calls the
+    password a SEC-03 matter).
+  - **The ai-review `safety` filter is not changed,** as D-102 did for
+    `log.ts`. Claude chose this (D-031); the owner's answer covers the code
+    owner only. A change to the filter would make this pull request edit
+    `ai-review.yml`, which CI's reviewers cannot review, so it would be merged
+    by hand (D-075). For `redact.ts` the reason is exactly D-102's for
+    `log.ts`: `privacy-security-reviewer` runs on every pull request, and
+    logging is in its brief. For `join-key.ts` the same reviewer is the cover:
+    it runs on every pull request, and it is the one that found the file.
+  - **These are owner paths, not safety paths.** None is in `SAFETY_PATHS`, so
+    none is mutated. The nine `/apps/` ones are not in the filter, so none
+    summons `safety-reviewer` by path; `privacy-security-reviewer` runs on
+    every pull request already (D-102). The two `packages/contracts/` files do
+    summon it, and did before this: the filter lists `packages/contracts/**`
+    (read 2026-10-21). Nothing here changes that.
+  - **The requirement ID for the tests is GRP-01,** the story of these
+    sign-in files and of the pull request the question came from. The tests
+    are named "GRP-01 (D-139): …". Not SEC-01: its mitigations, the
+    new-device notice (task 10, D-136 answer 2) and the admin's revoking of a
+    device's session (`revoked_at`, M4, D-137), are not built, and
+    `req:coverage` counts an ID anywhere in a test file's text, so naming
+    these tests after SEC-01 would show it as covered when it is not.
+  - **Who decided:** the owner decided the scope: the nine files, and then the
+    two more (the amendment below), a code owner on each. Claude chose the ID,
+    the owners and leaving out the ai-review filter (D-031).
+  - **Not in this decision:**
+    - `pnpm-lock.yaml` and `pnpm-workspace.yaml`, which also have no
+      CODEOWNERS line (read 2026-10-21). BUG-25 covers them.
+    - Two files `privacy-security-reviewer` named as notes. Noted, not chosen:
+      the owner was not asked about them.
+      - `packages/contracts/src/device-credential.ts`: the API spec's
+        description of the bearer scheme. The check itself is in `api.ts`,
+        which is owned, and the file is in the safety filter already, under
+        `packages/contracts/**`.
+      - `apps/server/src/bin/migrate.ts`: reads the database URL, through
+        `config.ts`, which is owned.
+- **Consequences:**
+  - One small pull request, from the session's branch, changes
+    `.github/CODEOWNERS`, `OWNER_APPROVAL_PATHS` and the gate tests, and not
+    `ai-review.yml`, so CI's reviewers can run on it and it needs no hand
+    merge (D-075). It touches owner paths (`.github/`, `scripts/` and this
+    file), so it needs a code owner's approval like any other (D-042, D-071).
+  - **One gate test needs a longer named exception, which `test-author`
+    writes with the reason beside it (RG-03).** "The safety filter in
+    ai-review.yml matches the paths the owner must approve"
+    (`scripts/gate.test.mjs`) requires every `/apps/` owner path to be in the
+    filter, but for the exception pinned exactly to
+    `['/apps/server/src/log.ts']` (D-102, amended). Nine more `/apps/` owner
+    paths that stay out of the filter would turn it red. The pinned exception
+    becomes ten paths: `log.ts` and the nine above, citing D-102 and D-139.
+    That narrows the test by those nine and no others; every other `/apps/`
+    owner path is still required in the filter. The two `packages/contracts/`
+    paths are not `/apps/` paths, and that test does not read them.
+  - **The tests,** each named "GRP-01 (D-139): …": all eleven are in
+    `OWNER_APPROVAL_PATHS` and tracked by git; under GitHub's last-match rule
+    the CODEOWNERS line that matches each names `@bvst @urso-agent`, and
+    `gate:integrity` finds every owner path owned; and the nine `/apps/` ones
+    are in the ai-review safety filter neither by name nor under a glob, as
+    D-102's test holds for `log.ts`.
+  - **The cost, stated plainly:** every later change to the eleven needs a
+    code owner's approval (D-042). `ports.ts` holds every port the server has
+    and `apps/mobile/package.json` every dependency the app has, so a task
+    that adds a port, a setting or an app dependency waits for the owner, and
+    so does one that changes the join's contract, the client, the session, how
+    the join key is made, or what a failure line may print.
+  - **A gap this does not close, stated plainly (`privacy-security-reviewer`,
+    note N3).** `config.ts` also reads the Healthchecks and canary settings,
+    and `ports.ts` holds the `Clock`, `WatchdogStore`, `OutboxStore` and
+    `LogEvent` ports. Neither file is in the ai-review safety filter, so a
+    change to only those parts does not have `safety-reviewer` called in by
+    path, though `privacy-security-reviewer` runs. That is no worse than before
+    D-139, when neither file was owned or filtered. Changing the filter would
+    be for `safety-reviewer` and the owner to decide; this decision does not.
+  - Extends D-097 and D-102: more owner paths, the same mechanism. Supersedes
+    nothing.
+- **Amended 2026-10-21 (owner, asked with Claude's recommendation, the
+  recommended option chosen):**
+  - **Why:** `privacy-security-reviewer` reviewed this change (head `0fe7547`,
+    PASS) and found two more files that belong with the nine. Its own list on
+    #96 (N5), from which the nine came, had missed them.
+    - **S1, a should-fix:** `join-key.ts` is a sign-in file and was unowned. It
+      makes the join key from 32 random bytes. Whoever has the invitation code
+      (or, while the admin is alone, the bootstrap code) and the join key gets
+      a fresh credential for that user. The owned contract fixes only the
+      key's format, so a change to `Math.random` or to a constant would pass
+      unseen.
+    - **N2, a note:** `redact.ts` strips the database password from failure
+      lines. `process.ts` and `worker.ts`, both owned, call it, and weakening
+      it could put a secret in a log. The same kind of reason as `log.ts`'s
+      (D-102), under SEC-03 (see the correction below).
+  - **Asked:** "Skal flere filer få code owner i samme PR?" (Should more files
+    get a code owner in the same pull request?), with the two files named and
+    Claude's recommendation: both.
+  - **The owner answered:** "Begge to." (Both.)
+  - **Decision:** both files get a code owner in this same pull request, with
+    tests. D-139 covers eleven paths, not nine. Claude changed the title and
+    every count in this entry to match: the `/apps/` exceptions are nine, and
+    the pinned exception in the gate test becomes ten paths. The ai-review
+    filter stays as it was, for the same reasons.
+  - **Not asked about:** `device-credential.ts` and `bin/migrate.ts`, which
+    the reviewer named as notes (see "Not in this decision").
+  - **Corrected 2026-10-21 (`privacy-security-reviewer`, delta review of
+    `93047f8`, a should-fix; made before this decision merged):** item 11
+    cited PRIV-07 and said `redact.ts` removes the password "from every
+    failure line the API and the worker print". Both were wrong.
+    - **The rule:** PRIV-07 covers only precise locations and phone numbers
+      (`02-norway-law-privacy.md`, line 124). D-068 says the password is a
+      SEC-03 matter. Item 11 now cites SEC-03.
+    - **The coverage:** the file's own header (D-077) lists what it does not
+      cover: Graphile Worker's own logger, Hono's and the Node server's
+      default error printing, and Node's printer for an uncaught exception.
+      Item 11 now says the failure lines `process.ts` and `worker.ts` write
+      through `describeFailure`.
+    - **What did not change:** the owner's answer, the file's code owner, its
+      place in `OWNER_APPROVAL_PATHS` and the ai-review filter, which stays as
+      it was.
