@@ -77,6 +77,16 @@ jobs:
               - 'apps/server/drizzle.config.ts'
               - 'apps/mobile/src/safety-core/**'
               - 'apps/mobile/app.config.ts'
+              # The call button: it places a phone call to the walker's #1 (CALL-01, D-141).
+              - 'apps/mobile/src/features/call/**'
+              # Screen draws the 112 bar on every screen (CALL-02, D-141).
+              - 'apps/mobile/src/shared/ui/**'
+              # The L7 flows: the only end-to-end proof that 112 opens the dialer,
+              # and the rule never to tap call there (CALL-02, D-141).
+              - 'apps/mobile/e2e/**'
+              # Expo Router's routes and _layout.tsx, the frame around every
+              # screen: a change could cover or drop the 112 bar (CALL-02, D-141).
+              - 'apps/mobile/src/app/**'
               - 'packages/contracts/**'
               - 'scripts/mutation.mjs'
               - 'scripts/lib/gate-decisions.mjs'
@@ -171,7 +181,7 @@ jobs:
 
       - if: steps.applies.outputs.run == 'true'
         id: review
-        uses: anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9 # v1.0.251
+        uses: anthropics/claude-code-action@db77d4d3c98f3f6380e7cd45ffba2342a3dbde3c # v1.0.254
         # Tells the project's stop gate and progress gate that this is a review
         # job, so they stand down (D-119): a review changes no code, and CI's
         # required checks run the same gates on this commit. On this step only —
@@ -203,7 +213,7 @@ jobs:
           # account default, which the job log showed as claude-sonnet-5; the
           # reviewers that inherit then ran on Sonnet 5. An alias would be
           # resolved by whichever Claude Code this pinned action installs
-          # (2.1.301 at v1.0.251), so it could change with any bump of the
+          # (2.1.304 at v1.0.254), so it could change with any bump of the
           # action; a full ID cannot.
           claude_args: >-
             --model claude-opus-5-5
