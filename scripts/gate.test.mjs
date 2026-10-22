@@ -1506,6 +1506,63 @@ describe("this repository's own workflows", () => {
     expect(covered(`${CANARY_MODULE.slice(1)}nested/step.ts`)).toBe(true);
   });
 
+  // CALL-01-AC9 (D-141 item 7, the owner's answer to Q7): the call button's
+  // code, apps/mobile/src/features/call/, needs the owner and the safety
+  // review. Step 1, merged by hand before task 2 (D-075), puts the folder in
+  // OWNER_APPROVAL_PATHS, CODEOWNERS and the safety filter, as REL-10's step 1
+  // did for the canary; scripts/lib/merge-rules.test.mjs pins those three
+  // lists. The folder does not exist until task 2 creates it, so these read
+  // synthetic paths, one file directly in it and one nested below it: the
+  // CODEOWNERS line and the filter entry match nothing in the tree yet. The
+  // pin that git tracks a file under it, and that every such file is owned
+  // and covered, comes with task 2's own tests (CALL-01-AC9's last part). The
+  // general tests above hold the rest unchanged: every /apps/ owner path
+  // outside the named exceptions is in the safety filter, and every /apps/
+  // filter entry is an owner path (BUG-10).
+  const CALL_FOLDER = '/apps/mobile/src/features/call/';
+  const CALL_FILES = [
+    'apps/mobile/src/features/call/CallButton.tsx',
+    'apps/mobile/src/features/call/nested/phone.ts',
+  ];
+
+  test("CALL-01-AC9: under GitHub's last-match rule, a file directly in apps/mobile/src/features/call/ and one nested below it belong to @bvst @urso-agent, and gate:integrity finds every owner-approval path owned", () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    // The reading is checked on an owned folder of the app's first.
+    expect(ownersOf('apps/mobile/src/safety-core/heartbeat.ts')).toEqual(OWNERS);
+    expect(CALL_FILES.map((file) => [file, ownersOf(file)])).toEqual(
+      CALL_FILES.map((file) => [file, OWNERS]),
+    );
+  });
+
+  test('CALL-01-AC9: the ai-review safety filter covers a file directly in apps/mobile/src/features/call/ and one nested below it, so a change to either brings safety-reviewer', () => {
+    const safety = filterEntries(readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8'), 'safety');
+    const covered = (file) => safety.entries.some((glob) => globCovers(glob, file));
+
+    expect(safety.headers, 'how many filters are named safety').toBe(1);
+    expect(safety.unreadable).toEqual([]);
+    expect(
+      CALL_FILES.filter((file) => !covered(file)),
+      'files under apps/mobile/src/features/call/ the safety filter does not cover',
+    ).toEqual([]);
+  });
+
+  test('CALL-01-AC9: apps/mobile/src/features/call/ is not among the named exceptions the safety filter test leaves out of the filter, as D-141 decided', () => {
+    // A guard, not a red test: it passes before step 1's code as after it, by
+    // design. The folder is a safety-review path, unlike D-102's and D-139's
+    // ten, so no named exception may be it, lie in it or hold it. The
+    // exceptions are read as the safety filter test reads them, from
+    // D102_FILES and D139_APPS_FILES, declared in this describe above it.
+    const exceptions = [...D102_FILES, ...D139_APPS_FILES];
+
+    expect(exceptions.length).toBeGreaterThan(0);
+    expect(
+      exceptions.filter((owned) => owned.startsWith(CALL_FOLDER) || CALL_FOLDER.startsWith(owned)),
+    ).toEqual([]);
+  });
+
   // The safety filter is held through the general filter test above, as D-097's block is.
   // RG-03 (BUG-18, code-reviewer): a per-file filter test for db.ts, added on this branch and
   // never on main, was removed. The general test already fails for either file missing from

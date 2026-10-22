@@ -391,6 +391,59 @@ describe('REL-10-AC18: the staging canary’s code needs the owner and the safet
   });
 });
 
+// CALL-01-AC9 (D-141 item 7, the owner's answer to Q7): the call button's code,
+// apps/mobile/src/features/call/, places a phone call to the walker's #1, so it
+// needs the owner and the safety review. Step 1 gives the folder a line in
+// .github/CODEOWNERS, an entry in OWNER_APPROVAL_PATHS and an entry in the
+// ai-review safety filter, before task 2 creates it (D-075). It is no D-139
+// named exception, no safety path and no mutation group: the app's mutation
+// testing comes with the safety core in task 3 (D-134), which is for that task
+// to consider. The folder does not exist yet, so the pin that git tracks a
+// file under it, as REL-10-AC18's last test does for the canary, comes with
+// task 2's own tests. Read from the repository itself, beside the canary's.
+describe('CALL-01-AC9: features/call/ needs the owner and the safety review (step 1, D-141)', () => {
+  const CALL = 'apps/mobile/src/features/call/';
+
+  test('CALL-01-AC9: OWNER_APPROVAL_PATHS holds /apps/mobile/src/features/call/', () => {
+    expect(OWNER_APPROVAL_PATHS).toContain(`/${CALL}`);
+  });
+
+  test('CALL-01-AC9: .github/CODEOWNERS gives the folder exactly one line, naming @bvst and @urso-agent, and every path the owner must approve is owned', () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const owners = (path) =>
+      text
+        .split('\n')
+        .map((line) => line.trim().split(/\s+/))
+        .filter(([pattern]) => pattern === path)
+        .map(([, ...names]) => names.join(' '));
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    expect(owners(`/${CALL}`)).toEqual(['@bvst @urso-agent']);
+  });
+
+  test('CALL-01-AC9: the ai-review safety filter lists the folder’s files', () => {
+    const workflow = readFileSync('.github/workflows/ai-review.yml', 'utf8');
+
+    expect(workflow).toContain(`- '${CALL}**'`);
+  });
+
+  test('CALL-01-AC9: the folder is no safety path and no mutation group lists it, as D-141 decided for step 1', () => {
+    // A guard, not a red test: it passes before step 1's code as after it, by
+    // design. It pins what step 1 must not do (D-141 item 7: "It is not a
+    // mutation path"), so that putting features/call/ among the safety paths
+    // or in a mutation group, as task 3 may later decide, shows itself as a
+    // change to this test with its own reason (RG-03). A safety path or a
+    // group path that is the folder, or a folder above it, would make it one.
+    const covers = (path) => CALL.startsWith(path);
+
+    expect(SAFETY_PATHS).not.toContain(CALL);
+    expect(SAFETY_PATHS.filter(covers)).toEqual([]);
+    expect(
+      MUTATION_GROUPS.filter((group) => group.paths.some(covers)).map((group) => group.name),
+    ).toEqual([]);
+  });
+});
+
 // SEC-06 (privacy-security-reviewer on PR #96, raised twice): the secret scan
 // on every change is CI's required `security` check, run as `./gitleaks git .`
 // with no --config (ci.yml, "Secret scan (gitleaks)"). So gitleaks takes its
