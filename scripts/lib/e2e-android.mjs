@@ -205,11 +205,15 @@ export function checkLocale(locale) {
 }
 
 /**
- * How long to wait for the device to report bokmål. An emulator started with
- * `-change-locale nb-NO` applies it only after it has booted, by restarting
- * Android's framework: on the Mac, a CI-identical one reported nb-rNO about
- * 36 s after it had booted, and CI's runner is slower. A shorter deadline
- * fails runs that were only slow.
+ * How long to wait for the device to report bokmål, counted from the first
+ * reading, so the switch to bokmål (switchToBokmal) is inside it.
+ * persist.sys.locale takes effect when Android's framework starts, so the
+ * switch restarts it: on the Mac's recording for run 6, a CI-identical
+ * emulator's framework was down and back in nb-rNO about 6 s after the
+ * property said nb-NO, and CI's runner is slower. That restart was the
+ * emulator's own `-change-locale`; switchToBokmal's has not been timed on CI.
+ * 120 s is what the wait had before BUG-17; a shorter deadline fails runs that
+ * were only slow.
  */
 export const LOCALE_DEADLINE_MS = 120_000;
 
@@ -239,32 +243,111 @@ function packageServiceFound(output) {
 }
 
 /**
+ * Did `adb shell service check package` say the service is not found? It does
+ * while Android's framework restarts (run 6), so a wait that saw it once saw
+ * the framework restarting.
+ *
+ * @param {string | null} output
+ */
+function packageServiceNotFound(output) {
+  return /^Service package: not found\r?$/m.test(output ?? '');
+}
+
+/**
+ * The switch to bokmål, as the adb arguments after `-s <serial>`, in order:
+ * adbd as root, which setprop of a persist. property needs; the device back
+ * after adbd's restart; the language; and a restart of zygote, and with it
+ * Android's framework, which reads the language only as it starts. The
+ * emulator refuses to set the property at boot (`-prop`, D-081, run 8).
+ */
+const SWITCH_STEPS = [
+  ['root'],
+  ['wait-for-device'],
+  ['shell', 'setprop', 'persist.sys.locale', 'nb-NO'],
+  ['shell', 'setprop', 'ctl.restart', 'zygote'],
+];
+
+/**
+ * Switches the emulator to bokmål (BUG-17): runs SWITCH_STEPS once each, in
+ * order, and stops at the first one refused, naming it and saying what adb
+ * printed. A step is refused when its status is not 0, null included (adb
+ * could not be run, or did not finish), or, for `adb root`, when adbd says it
+ * cannot run as root: adb exits 0 with that. Passing says only that each step
+ * was accepted; whether the language took is for waitForLocale to see.
+ *
+ * @param {(args: string[]) => { ok: boolean, status: number | null, output: string }} adb
+ *   runs `adb -s <serial>` with `args`, as proc.mjs's `run` answers: `output`
+ *   is stdout and stderr together
+ * @returns {{ ok: boolean, message: string }}
+ */
+export function switchToBokmal(adb) {
+  for (const args of SWITCH_STEPS) {
+    const { status, output } = adb(args);
+    const step = `adb ${args.join(' ')}`;
+    let refusal;
+    if (status === null) refusal = 'could not be run or did not finish';
+    else if (status !== 0) refusal = `exited with ${String(status)}`;
+    else if (args[0] === 'root' && /cannot run as root/.test(output)) {
+      refusal = 'was refused by adbd, though adb exited 0';
+    }
+    if (refusal !== undefined) {
+      return {
+        ok: false,
+        message: `The switch to bokmål stopped at ${step}, which ${refusal}. ${adbPrinted(output)}`,
+      };
+    }
+  }
+  return {
+    ok: true,
+    message:
+      "Switching the emulator to bokmål: persist.sys.locale is set to nb-NO, and Android's framework was told to restart to apply it.",
+  };
+}
+
+/**
  * Waits for the device to be ready for bokmål flows: reads it at once, then
  * every `interval`, and passes on the first reading in which the configuration
  * is bokmål and the package service is found. persist.sys.locale is not enough:
  * it says nb-NO a second or two before Android restarts its framework to apply
- * it, and nothing can be installed while the framework is down (run 6). It
- * fails once `deadline` has passed without such a reading, and says how long it
- * waited and what the device said last. `now` and `sleep` are its only clock.
+ * it, and nothing can be installed while the framework is down (run 6).
  *
- * @param {() => { config: string | null, packageService: string | null }} read
- *   what `adb shell am get-config` and `adb shell service check package`
- *   printed, stdout and stderr together, or null when adb could not be run
+ * When the first reading is not ready, it calls `switchLocale` straight away,
+ * before any sleep, and only that once: the emulator boots in its image's
+ * language, and e2e:android switches it (BUG-17). The switch is inside the
+ * wait, whose deadline counts from the first reading, and a refused switch
+ * fails the wait at once with the switch's own message.
+ *
+ * It fails once `deadline` has passed without a ready reading, and says how
+ * long it waited, what the device said last, persist.sys.locale included, and
+ * whether its framework was seen restarting: the package service not found in
+ * any reading. `now` and `sleep` are its only clock.
+ *
+ * @param {() => {
+ *   config: string | null,
+ *   packageService: string | null,
+ *   property?: string | null,
+ * }} read what `adb shell am get-config`, `adb shell service check package`
+ *   and `adb shell getprop persist.sys.locale` printed, stdout and stderr
+ *   together, or null when adb could not be run. A `property` left out is
+ *   reported as null.
  * @param {{
  *   deadline?: number,
  *   interval?: number,
  *   now: () => number,
  *   sleep: (ms: number) => Promise<unknown>,
+ *   switchLocale?: () => { ok: boolean, message: string },
  * }} options — milliseconds throughout
  * @returns {Promise<{ ok: boolean, message: string }>}
  */
 export async function waitForLocale(
   read,
-  { deadline = LOCALE_DEADLINE_MS, interval = LOCALE_INTERVAL_MS, now, sleep },
+  { deadline = LOCALE_DEADLINE_MS, interval = LOCALE_INTERVAL_MS, now, sleep, switchLocale },
 ) {
   const start = now();
+  let switched = false;
+  let restartSeen = false;
   for (;;) {
-    const { config, packageService } = read();
+    const { config, packageService, property = null } = read();
     const language = configLanguage(config);
     const found = packageServiceFound(packageService);
     if (language !== null && checkLocale(language).ok && found) {
@@ -273,17 +356,26 @@ export async function waitForLocale(
         message: `The device's language is ${language}, and its package service is up.`,
       };
     }
+    restartSeen ||= packageServiceNotFound(packageService);
+    if (switchLocale !== undefined && !switched) {
+      switched = true;
+      const switching = switchLocale();
+      if (!switching.ok) return switching;
+    }
     if (now() - start >= deadline) {
       const asked = (output, answer) =>
         output === null ? 'unknown, as adb could not be run' : answer;
+      const value = property?.trim() ?? '';
       return {
         ok: false,
         message:
           `Waited ${String(deadline / 1000)} s for the emulator to be in Norwegian bokmål with ` +
           'its package service up, ready to install the app. When last asked, its package ' +
-          `service was ${asked(packageService, found ? 'found' : 'not found')}, and its ` +
-          `configuration's language was ${asked(config, language ?? 'none')}. The flows ` +
-          'expect nb-NO; in CI, android-e2e starts the emulator with it.',
+          `service was ${asked(packageService, found ? 'found' : 'not found')}, its ` +
+          `configuration's language was ${asked(config, language ?? 'none')}, and ` +
+          `persist.sys.locale was ${asked(property, value === '' ? 'empty' : JSON.stringify(value))}. ` +
+          `Android's framework was ${restartSeen ? '' : 'not '}seen restarting during the wait. ` +
+          'The flows expect nb-NO, and e2e:android switches an emulator in any other language to it.',
       };
     }
     await sleep(interval);

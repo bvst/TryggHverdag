@@ -485,11 +485,15 @@ jobs:
       # because API levels gained minor versions: Google's index has
       # platforms;android-37.0 to 37.2 and no android-37, which is what a bare
       # '37' asked for on the first run.
+      #
+      # No language: the emulator boots in its image's, and e2e:android
+      # switches it to bokmål itself, with adb root and setprop (BUG-17). The
+      # emulator's own -change-locale switched it after boot, where it could
+      # not be watched, and three times it had not taken 120 s later.
       EMULATOR_API_LEVEL: '37.2'
       EMULATOR_TARGET: google_apis_ps16k
       EMULATOR_ARCH: x86_64
       EMULATOR_PROFILE: pixel_8
-      EMULATOR_LOCALE: nb-NO
       # The emulator's cores (BUG-6). Unset, the pinned action gives it 2, and
       # every run's emulator warned "AVD 'test' will run more smoothly with 4
       # CPU cores (currently using 2)"; run 36418631362's System UI then stopped
@@ -632,7 +636,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-${{ env.EMULATOR_API_LEVEL }}-${{ env.EMULATOR_TARGET }}-${{ env.EMULATOR_ARCH }}-${{ env.EMULATOR_PROFILE }}-${{ env.EMULATOR_LOCALE }}-${{ env.EMULATOR_CORES }}cores
+          key: avd-${{ env.EMULATOR_API_LEVEL }}-${{ env.EMULATOR_TARGET }}-${{ env.EMULATOR_ARCH }}-${{ env.EMULATOR_PROFILE }}-${{ env.EMULATOR_CORES }}cores
       # On main, with no cached device yet: boot once to make a clean snapshot
       # for later runs to start from. Pull requests only ever read it.
       - name: Create the virtual device and its snapshot
@@ -645,7 +649,7 @@ jobs:
           profile: ${{ env.EMULATOR_PROFILE }}
           cores: ${{ env.EMULATOR_CORES }}
           force-avd-creation: false
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -change-locale ${{ env.EMULATOR_LOCALE }}
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: false
           script: echo "Created the virtual device and saved a clean snapshot."
       - if: steps.affected.outputs.app == 'true' && github.ref == 'refs/heads/main' && steps.avd-cache.outputs.cache-hit != 'true'
@@ -707,8 +711,9 @@ jobs:
             exit 1
           fi
       # On the job's 16 KB-page image, a native library that is not aligned for
-      # those pages fails here, not at store upload.
-      - name: Boot the emulator in bokmål and run every flow
+      # those pages fails here, not at store upload. e2e:android switches the
+      # emulator to bokmål before it installs the app (BUG-17).
+      - name: Boot the emulator, switch it to bokmål and run every flow
         if: steps.affected.outputs.app == 'true'
         timeout-minutes: 15
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
@@ -719,7 +724,7 @@ jobs:
           profile: ${{ env.EMULATOR_PROFILE }}
           cores: ${{ env.EMULATOR_CORES }}
           force-avd-creation: false
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -change-locale ${{ env.EMULATOR_LOCALE }}
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: pnpm run e2e:android --skip-build
       # Maestro's screenshots and logs show only synthetic screens (RG-07), and
