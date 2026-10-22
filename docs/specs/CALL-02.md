@@ -374,7 +374,7 @@ because the route draws it and no feature can (the last bullet).
   no `callNumber`, whether `callPermission()` answers `granted` or
   `notGranted` (L5)
 - **And** `phone.ts`'s `openDialer('112')` calls `Linking.openURL('tel:112')`
-  once and never starts `ACTION_CALL` (L5, `phone.test.ts`)
+  once and never starts `ACTION_CALL` (L5, `phone.test.tsx`)
 - **And** on the emulator, the focused window belongs to the phone's default
   dialer (the script reads `dumpsys window` against the holder of the dialer
   role), "112" is visible on it, and Telecom's record shows no call (L7); the
@@ -543,7 +543,7 @@ Keys for the three specs; the implementer may rename keys, not texts.
 | `call.permission.settings` | Åpne innstillinger | Open settings |
 | `grp.firstContact.none` | Velg hvem du vil ringe | Choose who to call |
 | `grp.firstContact.noneHint` | Du har ikke valgt en nummer 1-kontakt. Trykk for å velge. | You have not chosen a #1 contact. Tap to choose. |
-| `grp.firstContact.unreadable` | Vi fikk ikke lest hvem du skal ringe. Trykk for å velge på nytt. | We could not read who to call. Tap to choose again. |
+| `grp.firstContact.unreadable` | Vi fikk ikke lest hvem du skal ringe. Trykk for å velge igjen. | We could not read who to call. Tap to choose again. |
 | `grp.firstContact.shown` | Nummer 1: {{name}} | #1: {{name}} |
 | `grp.firstContact.change` | Bytt nummer 1-kontakt | Change your #1 contact |
 | `grp.firstContact.title` | Hvem vil du ringe først? | Who do you call first? |
@@ -559,7 +559,9 @@ Keys for the three specs; the implementer may rename keys, not texts.
 | `app.error.screen` | Noe gikk galt på denne skjermen. | Something went wrong on this screen. |
 
 "Prøv igjen" / "Try again" stays one wording (GRP-01-AC30), the error
-fallback's included (AC13).
+fallback's included (AC13). `grp.firstContact.unreadable` says "velge igjen",
+not "velge på nytt", because GRP-01-AC30 bans "på nytt" from every `grp.*`
+bokmål text (D-031).
 
 ## Accessibility and night use (all three specs)
 
@@ -582,14 +584,16 @@ fallback's included (AC13).
 | Level | Where | Criteria | Runs here? |
 |---|---|---|---|
 | L1 static | `tsc` (the `@ts-expect-error` on `EmergencyBar`'s props); ESLint or a source test for colour literals and raw JSX text; the `no-restricted-imports` rule in `eslint.config.mjs`, with fixture tests in `packages/config/` | AC1 (`Screen` imported by routes only), AC2 (props, imports), AC7 (palette only), AC9 (raw text), AC13 (`shared/ui/` imports nothing of `features/` but `call`'s index: dependency-cruiser, fixtures in `packages/config/`) | Yes |
-| L5 app | `features/call/emergency.test.tsx` and the shared home tests (the whole app through Expo Router's testing library, the phone module and `fetch` faked, `GET /v1/me` held unanswered, answered as member and admin, 401, 5xx, no answer, network error; the English 112 texts); `features/call/phone.test.ts`; `src/shared/ui/palette.test.ts` (contrast); `src/shared/ui/screen.test.tsx` (every route through `Screen` inside the real root layout, nothing drawn beside it, an absolute child clipped below the bar, and the error fallback, a route's throw and `GroupSessionProvider`'s); the `app.config` test | AC1 to AC9, AC13 | Yes |
-| L7 Android | Maestro, `apps/mobile/e2e/`: 112 visible on the join, home, setup (keyboard up) and invite screens; tap 112, the dialer in front with 112, Telecom with no call, back; at the largest font size, 112 visible on the home screen | AC1, AC2, AC3 | **No**: CI's `android-e2e` |
+| L5 app | `features/call/emergency.test.tsx` and the shared home tests (the whole app through Expo Router's testing library, the phone module and `fetch` faked, `GET /v1/me` held unanswered, answered as member and admin, 401, 5xx, no answer, network error; the English 112 texts); `features/call/phone.test.tsx`; `src/shared/ui/palette.test.ts` (contrast); `src/shared/ui/screen.test.tsx` (every route through `Screen` inside the real root layout, nothing drawn beside it, an absolute child clipped below the bar, and the error fallback, a route's throw and `GroupSessionProvider`'s); the `app.config` test | AC1 to AC9, AC13 | Yes |
+| L7 Android | Maestro, `apps/mobile/e2e/`, run as `CALL-01.md`'s approach 9 says (the flows that need the script's steps tagged `scripted` and run one at a time, with Telecom read before and after, the dialer focus checked after, and the font scale set before and always reset at the end; orchestration tests in `scripts/lib/e2e-android.test.mjs`): 112 visible on the join, home, setup (keyboard up) and invite screens; tap 112, the dialer in front with 112, Telecom with no call, back; at the largest font size, 112 visible on the home screen | AC1, AC2, AC3 | **No**: CI's `android-e2e` |
 | Gate tests | `scripts/lib/merge-rules.test.mjs`, `scripts/gate.test.mjs`, beside CALL-01-AC9's | AC10 (step 1's part in step 1's pull request; the tracked-file and defining-file parts in task 2's); AC11 and AC12 (all of them in step 1's pull request) | Yes |
 | L7 iOS; L9 | none | — | Task 12; a real iPhone (D-037) |
 
 **The L7 112 step** taps the app's 112 button and then only reads: the dialer's
 screen through Maestro, and the focused window and Telecom's record through
-the script; then `pressKey: back`. The flow's header says it must never tap
+the script; then `pressKey: back`. The 112 flow is tagged `scripted`, so the
+script reads Telecom before it and, after it, Telecom again and the focused
+window, as `CALL-01.md`'s approach 9 sets out. The flow's header says it must never tap
 anything in the dialer. The dialer places no call by itself, and the emulator
 has no network, so a mistake here could not reach an emergency centre; the
 rule stands anyway. From step 1 on, a change to the flows, this one's header
@@ -619,6 +623,9 @@ confirmation (task 12); how the dark palette looks on a real screen at night.
 - **GRP-01's colours**: the kit's hard-coded colours become the palette's. No
   assertion names a colour today (read in `grp.test.tsx`'s header, not every
   line).
+- **INF-06-AC9's single Maestro run** over the whole `e2e/` folder becomes one
+  run over the flows not tagged `scripted`, then one run per scripted flow
+  (`CALL-01.md`, approach 9; tests in `scripts/lib/e2e-android.test.mjs`).
 - **INF-06-AC11's flow** (`e2e/app-starts.yaml`) holds a title, the line under
   it and no raw key; with 112 on the join screen (Q4) it gains nothing it must
   change. Its `assertNotVisible` of a dotted key still holds: "112" is not one.

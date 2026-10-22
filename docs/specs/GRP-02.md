@@ -293,8 +293,10 @@ Technical choices delegated to Claude (D-031), on the owner's answers in D-141.
    - **If #1 cannot be read** (secure storage's read rejects, or the stored
      value is not JSON, or its name or number fails the rules above): as
      without #1, but the line under the button is "Vi fikk ikke lest hvem du
-     skal ringe. Trykk for å velge på nytt."; saving on the setup screen
+     skal ringe. Trykk for å velge igjen."; saving on the setup screen
      replaces the stored value. Never a blank button and never a stale name.
+     ("igjen", not "på nytt": GRP-01-AC30 bans "på nytt" from every `grp.*`
+     bokmål text, so this line uses the same word as "Prøv igjen"; D-031.)
 8. **No number in a log** (PRIV-07). The app has no logger, and none is added.
    No `console` call or error that leaves the app's code holds the number or
    the name; an L5 test holds it over every path (AC9).
@@ -400,7 +402,7 @@ server.** (L5)
 - **When** at start secure storage's read of #1 rejects, or returns a value that
   is not JSON, or one whose name or number fails the rules
 - **Then** the call button reads "Velg hvem du vil ringe" with "Vi fikk ikke
-  lest hvem du skal ringe. Trykk for å velge på nytt." under it, no "Nummer 1"
+  lest hvem du skal ringe. Trykk for å velge igjen." under it, no "Nummer 1"
   line shows, and a tap opens the setup screen and calls neither `callNumber`
   nor `openDialer`.
 
@@ -433,7 +435,7 @@ PRIV-07)
 | Level | Where | Criteria | Runs here? |
 |---|---|---|---|
 | L1 static | `tsc`, ESLint, dependency-cruiser (the new rule is CALL-01-AC6's) | — (CALL-01-AC6) | Yes |
-| L5 app | `features/grp/first-contact.test.ts` (the number rule, table-driven); `features/grp/home.test.tsx` (the whole app through Expo Router's testing library, as `grp.test.tsx` does, with `expo-secure-store`, `fetch`, `expo-localization` and the phone module faked) | AC1 to AC10 | Yes |
+| L5 app | `features/grp/first-contact.test.tsx` (the number rule, table-driven; `.tsx`, not `.ts`, because as `.ts` it changed how the app's TypeScript program types `process.env`, test-author's red); `features/grp/home.test.tsx` (the whole app through Expo Router's testing library, as `grp.test.tsx` does, with `expo-secure-store`, `fetch`, `expo-localization` and the phone module faked) | AC1 to AC10 | Yes |
 | L7 Android | Maestro, in `apps/mobile/e2e/`: a signed-in phone with no #1 sees the explaining call button; chooses #1; sees "Nummer 1: {name}" and "Ring {name}" | AC1, AC2 | **No**: CI's `android-e2e` |
 | L7 iOS | none | — | Task 12 (D-134): no `ios` configuration yet |
 

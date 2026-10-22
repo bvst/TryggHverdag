@@ -285,6 +285,44 @@ and why": tracked requirements this task does not deliver are named in words.
    (D-134). `features/call/` should join it then; this task adds no mutation
    run, and step 1 adds no safety path for mutation (`SAFETY_PATHS`) for
    any of its four folders.
+9. **How `pnpm run e2e:android` runs the flows** (`scripts/e2e-android.mjs`,
+   owned; the main session's choice under D-031, after test-author's red
+   found that today's script runs the whole `apps/mobile/e2e/` folder in one
+   Maestro run, which leaves no point between flows for the script's steps):
+   - **First, one Maestro run** over every flow **not** tagged `scripted`, as
+     today: one `maestro test` with the JUnit report, judged by INF-06's rules
+     (Maestro's exit status and the report; zero flows is a failure).
+   - **Then each flow tagged `scripted`, one at a time,** one
+     `maestro test <flow>` each, in a fixed order that the script holds (not
+     the folder's listing order). The order meets what each flow's header
+     says it needs before it (for example, #1 chosen first).
+   - **Before each scripted flow, the script's steps for it:** grant or revoke
+     `CALL_PHONE` (`adb shell pm grant` / `pm revoke`), set the font scale
+     (`settings put system font_scale`, with the value printed in the job
+     log), and read Telecom's record (`dumpsys telecom`) as the baseline.
+   - **After it:** read Telecom's record again and compare it with the
+     baseline (AC2: exactly one new outgoing call to #1's number, then the
+     call is ended; AC4 and CALL-02-AC3: no new call), and check that the
+     focused window belongs to the default dialer wherever the flow expects
+     the dialer in front (AC4; CALL-02-AC3).
+   - **The font scale is always reset** at the end, even after a failed step
+     or flow.
+   - **A failed step or flow fails the run,** and the message names the flow
+     and the step.
+   - **A flow is tagged `scripted` exactly when it needs one of these steps.**
+     The tag is Maestro's `tags:` in the flow's header. How the first run
+     leaves those flows out (for example, `--exclude-tags scripted`) is the
+     implementer's choice.
+   - **Every call flow names its permissions in `launchApp`.** Maestro 2.10.0's
+     `launchApp` grants every permission unless the flow names them, which
+     would grant `CALL_PHONE` behind the script's revoke and hide AC3's
+     dialog and AC4's line. So each flow that relies on the permission's
+     state says that state itself.
+   - **This changes INF-06's single-run assertion by design** (RG-03):
+     INF-06-AC9's "runs the pinned Maestro over every flow in
+     apps/mobile/e2e" (`scripts/lib/e2e-android.test.mjs`) becomes one run
+     over the flows not tagged `scripted`, followed by one run per scripted
+     flow. test-author writes these tests in the same file.
 
 ## Step 1: `features/call/`, `shared/ui/`, `e2e/` and `src/app/` need the owner and the safety review (Q7 and its amendments, D-141)
 
@@ -439,14 +477,14 @@ texts are the bokmål in `CALL-02.md`'s translations table, asserted in full.
   normalised number, and no `openDialer` (L5, the screen)
 - **And** `phone.ts`'s `callNumber` starts `android.intent.action.CALL` with
   `tel:` and that number, once, and does not call `Linking.openURL`
-  (L5, `phone.test.ts`, `expo-intent-launcher` and `Linking` mocked)
+  (L5, `phone.test.tsx`, `expo-intent-launcher` and `Linking` mocked)
 - **And** on the emulator, Telecom's record (`dumpsys telecom`) shows one
   outgoing call to that number, placed with no second tap (L7, read as SPIKE-01
   read it)
 - **And** a second tap before the first `callNumber` has settled, and before
   the app has come back to the foreground, records no second call; a tap after
   either calls again (L5)
-- **And**, in `phone.test.ts` (L5), which does not import
+- **And**, in `phone.test.tsx` (L5), which does not import
   `features/grp/first-contact.ts` and passes every number in as written, so
   nothing leans on GRP-02's normalisation; each case with the permission
   granted and without:
@@ -556,7 +594,8 @@ screen says a second tap is needed.** (L5; L7)
   (L5)
 - **And** with Android's font size at the largest the emulator image's
   Settings offer (set by the script with `settings put system font_scale`
-  before the flow, reset after, and the value printed in the job log), the call
+  before the flow, reset at the end of the run even after a failure (approach
+  9), and the value printed in the job log), the call
   button with its text "Ring {name}" is visible on the home screen without
   scrolling (L7, with a short synthetic name).
 
@@ -583,16 +622,17 @@ code.** (scripts' gate tests; Q7, D-141)
 | Level | Where | Criteria | Runs here? |
 |---|---|---|---|
 | L1 static | the new dependency-cruiser rule, with fixture tests in `packages/config/` beside LOST-02-AC25's; ESLint | AC6 (imports) | Yes |
-| L5 app | `features/call/call.test.tsx` (the whole app through Expo Router's testing library, the phone module faked with a recording fake whose answers are set per test; `AppState` driven for the foreground check); `features/call/phone.test.ts` (the module's own choices: `ACTION_CALL` with the permission, the dialer without, the fallback when `ACTION_CALL` rejects, the cleaning and the URI built from it, the emergency set and its prefixes to the dialer, written plainly and with spaces, dashes, `+47` or `0047`, strings that are not a plain number to the dialer, the permission's answers, with `expo-intent-launcher`, `PermissionsAndroid` and `Linking` mocked) | AC1 to AC8 | Yes |
-| L7 Android | Maestro, `apps/mobile/e2e/`: grant through Android's own dialog (tapped by its resource ID); tap and read Telecom's record; revoke with `adb shell pm revoke`, relaunch, see the line, tap, see the dialer and no call; at the largest font size, the button visible | AC2, AC3, AC4, AC8 | **No**: CI's `android-e2e` |
+| L5 app | `features/call/call.test.tsx` (the whole app through Expo Router's testing library, the phone module faked with a recording fake whose answers are set per test; `AppState` driven for the foreground check); `features/call/phone.test.tsx` (`.tsx`, not `.ts`, because as `.ts` it changed how the app's TypeScript program types `process.env`, test-author's red; the module's own choices: `ACTION_CALL` with the permission, the dialer without, the fallback when `ACTION_CALL` rejects, the cleaning and the URI built from it, the emergency set and its prefixes to the dialer, written plainly and with spaces, dashes, `+47` or `0047`, strings that are not a plain number to the dialer, the permission's answers, with `expo-intent-launcher`, `PermissionsAndroid` and `Linking` mocked) | AC1 to AC8 | Yes |
+| L7 Android | Maestro, `apps/mobile/e2e/`, run by `scripts/e2e-android.mjs` as approach 9 says: one run over the flows not tagged `scripted`, then each `scripted` flow alone in the script's fixed order, with the script's steps before it (grant or revoke `CALL_PHONE`, the font scale, Telecom read) and after it (Telecom read again, the dialer in front where expected), the font scale reset at the end even after a failure. The flows: grant through Android's own dialog (tapped by its resource ID); tap and read Telecom's record; revoke with `adb shell pm revoke`, relaunch, see the line, tap, see the dialer and no call; at the largest font size, the button visible. Each call flow names its permissions in `launchApp`. The orchestration's own tests are in `scripts/lib/e2e-android.test.mjs` | AC2, AC3, AC4, AC8 | **No**: CI's `android-e2e` (the orchestration's tests in `scripts/lib/`: yes) |
 | Gate tests | `scripts/lib/merge-rules.test.mjs`, `scripts/gate.test.mjs` | AC9, and CALL-02-AC10, AC11 and AC12 beside it (step 1's part in step 1's pull request; the tracked-file part in task 2's, but for `e2e/` and `src/app/`, which step 1 pins itself) | Yes |
 | L7 iOS; L9 | none | — | Task 12, and a real iPhone (D-037) |
 
 **L7 reads Telecom's record** (`adb shell dumpsys telecom`), as SPIKE-01's S6
 drivers did, because Maestro cannot see a call. That reading, the permission
 revoke, the font size and ending the emulated call belong in
-`scripts/e2e-android.mjs` or a helper it runs (owned paths), and the readers get
-tests in `scripts/lib/`, as S6's did. The flows themselves, in
+`scripts/e2e-android.mjs` or a helper it runs (owned paths), around each flow
+tagged `scripted` (approach 9), and the readers get tests in `scripts/lib/`, as
+S6's did. The flows themselves, in
 `apps/mobile/e2e/`, are owned and safety-reviewed from step 1 on
 (CALL-02-AC11). The emulator has no real network; a call
 there reaches no one. The number dialled is from a range reserved for fiction.
