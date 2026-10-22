@@ -10,11 +10,11 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | ID | Requirement | Priority | Status | Tests |
 |----|-------------|----------|--------|-------|
 | GRP-01 | Join by invitation | must | 🟢 | 52 |
-| GRP-02 | Choose my #1 contact | must | ⚪ | 0 |
+| GRP-02 | Choose my #1 contact | must | 📝 | 0 |
 | GRP-03 | Safety permission check | must | ⚪ | 0 |
 | GRP-04 | Responder setup | must | ⚪ | 0 |
-| CALL-01 | Call my #1 contact | must | ⚪ | 0 |
-| CALL-02 | 112 is always one tap away | must | ⚪ | 0 |
+| CALL-01 | Call my #1 contact | must | 📝 | 0 |
+| CALL-02 | 112 is always one tap away | must | 📝 | 0 |
 | CALL-03 | Calling #1 also shares my location with #1 | must | ⚪ | 0 |
 | JRN-01 | Start a journey | must | ⚪ | 0 |
 | JRN-02 | Sharing is always visible | must | ⚪ | 0 |

@@ -6292,3 +6292,140 @@ any other path is work, not a candidate for the same treatment.
     the timeout message, `scripts/e2e-android.test.mjs` holds the script run
     against a stand-in `adb`, and `scripts/gate.test.mjs` holds that no
     emulator step in `ci.yml` is started with `-change-locale`.
+
+## D-141 — The home screen: the owner's answers (GRP-02, CALL-01, CALL-02; M3 task 2)
+- **Date:** 2026-10-22 · **Status:** Accepted (the owner, 2026-10-22). Asked in
+  session, one at a time, each with Claude's recommendation, and the owner chose
+  the recommendation every time · **Section:** 10 (M3, task 2); D-010, D-012,
+  D-013, D-014, D-016, D-023, D-031, D-042, D-055, D-075, D-081, D-128, D-134,
+  D-137, D-139
+- **Context:**
+  - D-134 puts GRP-02, CALL-01 and CALL-02 in one task: the home screen, with
+    the #1 contact, the call button and 112 always visible. Its three specs
+    (`docs/specs/GRP-02.md`, `CALL-01.md` and `CALL-02.md`) ask seven
+    questions, Q1 to Q7, that are scope, cost, privacy or safety. Each spec
+    holds the reasoning for its own.
+  - The specs were written on the recommended answers, and say which criterion
+    another answer would change.
+  - Two more questions, about where task 2 is built and where step 1 comes
+    from, were asked in the same session.
+- **Decision:** the seven answers, then the two.
+  1. **Where #1 is kept (Q1): on the phone only,** in secure storage, a name
+     and a number. The server holds nothing about a possible non-member, and
+     calling works when the server is down. A reinstall or a new phone loses
+     #1, and the home screen then says no #1 is chosen.
+     - Rejected: also on the server, which makes a non-member's name and
+       number server data (a legal basis, the privacy notice and the DPIA, a
+       retention rule, a route, a table, a contract change).
+  2. **How #1 is entered (Q2): by typing a name and a number.** No contacts
+     permission, no contact picker, and no new dependency for it.
+     - Rejected: picking from the phone's contacts.
+  3. **112 "one tap away" (Q3): accepted as the dialer opening with 112 filled
+     in, and the walker pressing call there.** Android's documentation for
+     `ACTION_CALL` says: "Note: this Intent cannot be used to call emergency
+     numbers. Applications can dial emergency numbers using ACTION_DIAL,
+     however." (developer.android.com/reference/android/content/Intent, the
+     `ACTION_CALL` entry, read on 2026-10-22.) So the app can only open the
+     dialer with the number in it. The dialer is the phone's normal path, so
+     the position is still sent automatically (AML, `01-product-vision.md`,
+     finding 1), and it guards against a mistaken gloved press. The story's
+     wording is unchanged: "one tap away" holds for reaching 112, not for
+     placing the call.
+     - Rejected: not accepting it. The specs found no alternative on Android
+       short of the app becoming the phone's default dialer, out of all
+       proportion.
+  4. **Which screens show 112 (Q4): every screen the app shows, the join
+     screen included.** It is one rule in the shared screen component, with
+     nothing to leave it out. This goes beyond the story's wording (the home
+     screen and the journey screen), which is why it was asked.
+     - Rejected: every signed-in screen but not the join screen; the home
+       screen only.
+  5. **Theme (Q5): always dark for the MVP.** One palette, whatever the
+     phone's setting, with its contrast checked by a test. Dark-first is a
+     hypothesis in the MVP scope, and the private test is where it is checked.
+     - Rejected: following the phone's setting (two palettes to test, and a
+       bright app on every phone left in light mode at night).
+  6. **Minimum sizes (Q6), the story's placeholder:**
+     - the call button at least 120 dp tall and the screen's full width less
+       its margins, and the largest element on the home screen;
+     - 112 at least 64 dp tall and 96 dp wide;
+     - every other control at least 56 dp tall;
+     - at least 24 dp between 112 and the call button.
+  7. **Code owner and safety filter (Q7): yes.**
+     `apps/mobile/src/features/call/` gets a code owner, `@bvst @urso-agent`
+     (D-071), and joins the ai-review `safety` filter, so `safety-reviewer` sees
+     every change to it.
+     - It goes in both lists that must agree, `.github/CODEOWNERS` and
+       `OWNER_APPROVAL_PATHS` in `scripts/lib/merge-rules.mjs`, and in the
+       `safety` filter in `.github/workflows/ai-review.yml`, with their gate
+       tests.
+     - It is done in a small "step 1" pull request merged by hand (D-075)
+       before task 2's, as D-128 did for REL-10 and D-137 for GRP-01. Its
+       tests and its code go through `test-author` and `implementer`. Its gate
+       tests are named for CALL-01-AC9.
+     - From step 1's merge on, `docs/requirements-status.md` shows CALL-01 as
+       🟢 before any call code exists: the report's 🟢 means only that a test
+       names the requirement, not that the story works. The tracked-file pin
+       in task 2's tests (CALL-01-AC9) is what shows the folder holds code.
+     - **It is not a mutation path.** `features/call/` does not join
+       `SAFETY_PATHS`: the app's mutation testing is set up with the safety
+       core in task 3 (D-081 item 13, D-134), and `features/call/` is for that
+       task to consider. Until then no mutation run measures its tests.
+  8. **Where task 2 is built: "Her i skyen"** (here, in the cloud session), as
+     GRP-01 was. Screens are tested with jest-expo (L5), and CI's
+     `android-e2e` runs the flows (L7). iOS and VoiceOver wait for task 12.
+  9. **Step 1's branch:** step 1 comes from the second branch
+     `claude/busy-faraday-40n2zl-ai-review`, as REL-10's and GRP-01's did. It is
+     batched with Dependabot's [#95](https://github.com/bvst/TryggHverdag/pull/95)
+     (`anthropics/claude-code-action` 1.0.251 to 1.0.254, in `ai-review.yml` and
+     `daily-status.yml`), whose SHA is checked against its tag before the
+     merge. The owner's answer was "Ja, som sist" ("Yes, as last time").
+- **Who decided:** the owner decided all of the above. Claude chose, under
+  D-031, the path name (`features/call/`, after the CALL story prefix), the test
+  levels and the specs' detail, among them these choices, listed so that
+  reviewers see them:
+  - a new dependency-cruiser rule in `packages/config/dependency-cruiser.cjs`,
+    because the existing rules allow `features/call` to import a module's index
+    in `grp` or `safety-core` (CALL-01-AC6);
+  - 110, 112 and 113 as #1 always go to the dialer and never to `ACTION_CALL`
+    (CALL-01-AC2);
+  - `expo-intent-launcher` for `ACTION_CALL`;
+  - GRP-02-AC6 checks `apps/mobile/package.json` for other stores
+    (AsyncStorage, file system, SQLite, MMKV), so #1 has no other place to be
+    written to;
+  - the number is shown as dialled, not grouped.
+- **Consequences:**
+  - **No server work in task 2.** No route, no table and no contract change;
+    `api:diff` must show none. #1 is deleted from the phone with the credential
+    when the phone is signed out by a 401, and kept through an unreachable
+    server (GRP-02's spec).
+  - **The privacy notice and the DPIA (M4) say** that #1, a third party's name
+    and number, is kept on the walker's phone only.
+  - **Task 2's pull request needs the owner's approval anyway (D-042).** It
+    touches three of D-139's code-owner paths: `secure-storage.ts`,
+    `session.tsx` and `package.json`. It also edits
+    `packages/config/dependency-cruiser.cjs` for the new import rule, which is
+    under `/packages/config/`, an owner path (`.github/CODEOWNERS` line 119 and
+    `OWNER_APPROVAL_PATHS` in `scripts/lib/merge-rules.mjs` line 131, at
+    `3d2255c`). The call itself needs a new dependency, `expo-intent-launcher`
+    (the spike's, Claude's choice under D-031), which goes through
+    `licenses:check`. After step 1, every later change to `features/call/` waits
+    for the owner's approval too.
+  - **Existing assertions change by design (RG-03).** GRP-01's tests of the
+    member screen and of the unreachable screen follow the home screen, which
+    now shows once storage is read and does not wait for `GET /v1/me`. Only a
+    401 still signs out. The specs list each one.
+  - **iOS is left to task 12:** `tel:112` and its confirmation, `tel:` for #1,
+    VoiceOver and the live-region announcements.
+  - **Amends D-134 for task 2 only** (item 8), as D-137 (item 5) did for task
+    1: its consequence "UI work runs on the Mac (D-055)" does not apply to
+    task 2. No accepted text is edited. Supersedes nothing.
+- **Not verified when this was decided:**
+  - That Android's dialer opens with 112 filled in when the app sends `tel:112`
+    through `Linking.openURL`. Android sends that as `ACTION_VIEW`, not as
+    `ACTION_DIAL`, which the documentation names; SPIKE-01's S6 saw the dialer
+    handle an `ACTION_VIEW` `tel:` link for an ordinary number only. CI's
+    `android-e2e` is the first observation.
+  - That AML sends the position when the call is placed from the dialer. Only
+    a real emergency call would show it, and no test makes one (SPIKE-01-AC10).
+  - Anything on iOS.

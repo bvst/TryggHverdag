@@ -1,6 +1,6 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-21 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24, LOST-06, LOST-07, BUG-29, SM-10, BUG-41, LOST-08 and REL-10 done: all nine tasks; M2 closes on the canary's 24 hours on staging (D-090, D-115) → 🟡 **M3 started** (2026-10-20, D-134): GRP-01, task 1 of 12, is done (#96, squashed as `bd83b21` on 2026-10-21); task 2, the home screen (GRP-02, CALL-01, CALL-02), is next and not started
+**Last updated:** 2026-10-22 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24, LOST-06, LOST-07, BUG-29, SM-10, BUG-41, LOST-08 and REL-10 done: all nine tasks; M2 closes on the canary's 24 hours on staging (D-090, D-115) → 🟡 **M3 started** (2026-10-20, D-134): GRP-01, task 1 of 12, is done (#96, squashed as `bd83b21` on 2026-10-21); task 2, the home screen (GRP-02, CALL-01, CALL-02), is in progress: its specs are settled on the owner's answers (D-141), and its step 1 is next
 
 **Current section:** milestone M2, started 2026-10-01 with SM-01; all nine
 tasks are done (D-090, D-115; the task list is in
@@ -20,8 +20,10 @@ was squash-merged as `bd83b21` on 2026-10-21, after `urso-agent` approved it, an
 its `deploy-staging` (run 39557013621) passed. Step 1 was #94 (`60b46ee`); the
 owner's five answers are D-136, the delegated choices D-137 and the app's plain
 `fetch` client D-138; the record is [../progress/m3.md](../progress/m3.md). The
-next task is task 2 in D-134's order, the home screen (GRP-02, CALL-01, CALL-02);
-it has not started. The owner's part is A-36 (below): its plan and apply are
+next task is task 2 in D-134's order, the home screen (GRP-02, CALL-01, CALL-02).
+It is in progress: its three specs are settled on the owner's answers (D-141,
+2026-10-22), and its step 1, which makes `apps/mobile/src/features/call/` a
+code-owner and safety-review path, comes first, merged by hand. The owner's part is A-36 (below): its plan and apply are
 done (2026-10-21), and the join in the app is left. The code-owner question from
 #96 (the owner's question 1) is answered, D-139: eleven sign-in files got a code
 owner in #98 (`a2457b5`, 2026-10-21).
@@ -42,12 +44,12 @@ BUG-51 (a query the database never answered held a sweep for ever; #92,
 `0df5737`, 2026-10-19, D-132) and BUG-52 (`gate:file` checked nothing for an
 edited L6 or L3 test file, and exited 1; #93, `20af31a`, 2026-10-20, D-133)
 and BUG-61 (a new `vite` advisory failed the dependency audit; fixed in
-GRP-01's #96, `bd83b21`, 2026-10-21).
+GRP-01's #96, `bd83b21`, 2026-10-21) and BUG-17 (the Android emulator sometimes
+stayed in English past the wait; `e2e:android` now switches it to bokmål itself;
+#99, `3d2255c`, 2026-10-22, D-140).
 Queued for the owner to schedule: BUG-13 (`gate:full` miscounts the steps that
 did not run after a failure), BUG-16 (`req:coverage` counts an ID named in a
-comment), BUG-17 (the Android emulator sometimes stays in English past the
-wait: three times now, #57, #60 and #96, and Claude recommends it as the next
-`/bugfix` after the current task), BUG-19 (no test checks every owner-approval path keeps its owners),
+comment), BUG-19 (no test checks every owner-approval path keeps its owners),
 BUG-20 (graphile-worker's own logger prints its error object, past `log.ts`),
 BUG-22 (the test-weakening check does not see the shared behaviour suites),
 BUG-25 (an override in the unowned `pnpm-workspace.yaml` could hide an
