@@ -1,0 +1,52 @@
+# CALL-01-AC4 (L7): with the call permission revoked in Android's settings, a
+# relaunch shows the line that a second tap is needed, with the button to
+# allow phone calls; a tap of the call button opens the dialer with #1's
+# number, and places no call.
+#
+# NEVER TAP ANYTHING IN THE DIALER. This flow taps the app's call button and
+# then only reads: no tap, no input, no swipe after it, and never the dialer's
+# call button (SPIKE-01-AC10's rule). The dialer places no call by itself.
+#
+# Tagged `scripted` (CALL-01, approach 9): scripts/e2e-android.mjs runs it on
+# its own, one `maestro test` for this flow alone, in the order the script
+# holds, with the script's steps around it:
+#   - it runs after call-with-permission.yaml, once the script has ended that
+#     call, and needs #1 chosen;
+#   - before it, the script revokes the permission
+#     (`adb shell pm revoke <app> android.permission.CALL_PHONE`), sets the
+#     phone's usual font size, and reads Telecom's record as the baseline;
+#     this flow relaunches the app with the phone permission denied, so
+#     Maestro does not grant it back (its launchApp grants every permission
+#     when a flow names none);
+#   - it ends with the dialer in front, on purpose: after it, the script reads
+#     the focused window against the holder of the dialer role, and Telecom's
+#     record again, which must show no new call;
+#   - after it: back-from-the-dialer.yaml, unless emergency-112.yaml's dialer
+#     is the one it leaves.
+#   APP_ID              the Android application ID
+#   CALL_BUTTON         call.button.call, filled with #1's synthetic name
+#   PERMISSION_MISSING  call.permission.missing
+#   PERMISSION_ALLOW    call.permission.allow
+#   EMERGENCY_LABEL     call.emergency.label
+#
+# Never add `retry:` or `optional: true` to a step here (see app-starts.yaml).
+appId: ${APP_ID}
+tags:
+  - scripted
+---
+- launchApp:
+    stopApp: true
+    permissions:
+      phone: deny
+- extendedWaitUntil:
+    visible: ${PERMISSION_MISSING}
+    timeout: 30000
+- assertVisible: ${PERMISSION_ALLOW}
+- assertVisible: ${CALL_BUTTON}
+- assertVisible: ${EMERGENCY_LABEL}
+- tapOn: ${CALL_BUTTON}
+# The dialer, with #1's number in it, waiting for a second tap that never
+# comes. Read only.
+- waitForAnimationToEnd:
+    timeout: 5000
+- assertNotVisible: ${PERMISSION_MISSING}

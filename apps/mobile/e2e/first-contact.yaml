@@ -1,0 +1,123 @@
+# GRP-02-AC1 and AC2, CALL-01-AC3, CALL-02-AC1 and AC2 (L7): a signed-in phone
+# with no #1 sees the call button explain how to set one; chooses #1 by name
+# and number, with 112 on the setup screen while the keyboard is up; grants
+# Android's call permission in Android's own dialog, tapped by its resource ID
+# so the phone's language does not matter; and sees "Nummer 1: {name}", the
+# number as it is dialled, and "Ring {name}". 112 is on the home screen, the
+# setup screen and the admin's invite screen.
+#
+# NEVER TAP ANYTHING IN THE DIALER. This flow places no call and opens no
+# dialer: it never taps the call button or 112.
+#
+# Tagged `scripted` (CALL-01, approach 9): Android's dialog for CALL_PHONE is
+# granted here, so the permission has to be in a known state before it runs,
+# not held, and the flows after it continue from what it leaves.
+# scripts/e2e-android.mjs runs it on its own, one `maestro test` for this flow
+# alone, in the order the script holds, with the script's steps around it:
+#   - it needs the state first-admin-invites.yaml leaves: the app signed in to
+#     the group as its first admin, with no #1. That flow is scripted too, and
+#     runs first of the scripted flows, with no flow that clears the app's
+#     state between the two. The bootstrap code opens only an empty group, so
+#     no second flow can join on the same database; this one continues from
+#     that one, and does not clear the app's state;
+#   - before it, the script revokes the permission
+#     (`adb shell pm revoke <app> android.permission.CALL_PHONE`), so an
+#     earlier run on the same emulator cannot have left it granted (an install
+#     with -r keeps a grant), sets the phone's usual font size, and reads
+#     Telecom's record (`dumpsys telecom`) as the baseline;
+#   - it launches the app with every permission denied, so CALL_PHONE is not
+#     held: Maestro 2.10.0's launchApp grants all of them when a flow names
+#     none (Orchestra.launchAppCommand), which would leave no dialog to grant;
+#   - after it, the script reads Telecom's record again, which must show no
+#     new call: this flow never taps the call button;
+#   - after it: call-with-permission.yaml.
+#
+# Nothing a reader sees, and no number, is written here: scripts/e2e-android.mjs
+# passes every string in with -e, read from nb.json, and #1's synthetic name
+# and number from the test kit's fixtures (EMULATOR_FIRST_CONTACT, in Ofcom's
+# range reserved for drama; HK-07).
+#   APP_ID                      the Android application ID
+#   EMERGENCY_LABEL             call.emergency.label
+#   CHOOSE_CONTACT              grp.firstContact.none, the call button with no #1
+#   NO_CONTACT_HINT             grp.firstContact.noneHint
+#   CHANGE_CONTACT              grp.firstContact.change
+#   SETUP_TITLE                 grp.firstContact.title
+#   CONTACT_NAME_LABEL          grp.firstContact.nameLabel
+#   CONTACT_NUMBER_LABEL        grp.firstContact.numberLabel
+#   SAVE_CONTACT                grp.firstContact.save
+#   PERMISSION_WHY              call.permission.why
+#   PERMISSION_MISSING          call.permission.missing
+#   FIRST_CONTACT_NAME          #1's name, typed as it is
+#   FIRST_CONTACT_NUMBER        #1's number, typed as a person types it, spaced
+#   FIRST_CONTACT_SHOWN         grp.firstContact.shown, filled with the name
+#   FIRST_CONTACT_NUMBER_SHOWN  the number as the app shows and dials it
+#   CALL_BUTTON                 call.button.call, filled with the name
+#   INVITE_BUTTON               grp.member.invite
+#
+# Never add `retry:` or `optional: true` to a step here (see app-starts.yaml).
+appId: ${APP_ID}
+tags:
+  - scripted
+---
+- launchApp:
+    permissions:
+      all: deny
+# The home screen, with no #1: the call button explains, and is no dead button
+# (GRP-02-AC1). 112 is there (CALL-02-AC1).
+- extendedWaitUntil:
+    visible: ${CHOOSE_CONTACT}
+    timeout: 30000
+- assertVisible: ${NO_CONTACT_HINT}
+- assertVisible: ${EMERGENCY_LABEL}
+- assertNotVisible: ${CHANGE_CONTACT}
+- tapOn: ${CHOOSE_CONTACT}
+# The setup screen, with 112, and the line that says why the call permission
+# is wanted (CALL-01-AC3).
+- extendedWaitUntil:
+    visible: ${SETUP_TITLE}
+    timeout: 15000
+- assertVisible: ${EMERGENCY_LABEL}
+- assertVisible: ${PERMISSION_WHY}
+# A label matches its field and the Text shown above it; Maestro taps the
+# clickable one, the field (see first-admin-invites.yaml).
+- tapOn: ${CONTACT_NAME_LABEL}
+- inputText: ${FIRST_CONTACT_NAME}
+- tapOn: ${CONTACT_NUMBER_LABEL}
+- inputText: ${FIRST_CONTACT_NUMBER}
+# The keyboard is up: 112 is still on screen, in its fixed bar at the top
+# (CALL-02-AC2).
+- assertVisible: ${EMERGENCY_LABEL}
+- hideKeyboard
+- tapOn: ${SAVE_CONTACT}
+# Android's own dialog for CALL_PHONE, after #1 is saved (CALL-01-AC3). Tapped
+# by its resource ID, in the permission controller (Android 10 and later) or
+# the package installer (before it), whatever the phone's language.
+- extendedWaitUntil:
+    visible:
+      id: '.*:id/permission_allow_button'
+    timeout: 15000
+- tapOn:
+    id: '.*:id/permission_allow_button'
+# The home screen shows who #1 is, the number exactly as it is dialled, and the
+# call button that calls them (GRP-02-AC2). The permission is held, so no line
+# says a second tap is needed.
+- extendedWaitUntil:
+    visible: ${FIRST_CONTACT_SHOWN}
+    timeout: 15000
+- assertVisible: ${FIRST_CONTACT_NUMBER_SHOWN}
+- assertVisible: ${CALL_BUTTON}
+- assertVisible: ${CHANGE_CONTACT}
+- assertVisible: ${EMERGENCY_LABEL}
+- assertNotVisible: ${PERMISSION_MISSING}
+# The admin's invite screen has 112 too (CALL-02-AC1); Android's back returns
+# to the home screen.
+- tapOn: ${INVITE_BUTTON}
+- extendedWaitUntil:
+    visible: ${EMERGENCY_LABEL}
+    timeout: 15000
+- assertNotVisible: ${CALL_BUTTON}
+- pressKey: back
+- extendedWaitUntil:
+    visible: ${CALL_BUTTON}
+    timeout: 15000
+- assertNotVisible: '[a-z][a-zA-Z0-9]*(\.[a-zA-Z0-9]+)+'

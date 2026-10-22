@@ -69,6 +69,35 @@ describe('the app config', () => {
     expect(resolvedConfig().android?.package).toMatch(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/);
   });
 
+  // CALL-02-AC7 (Q5, D-141: always dark): one palette, whatever the phone's
+  // setting, so the app never draws a light system UI at night.
+  test("CALL-02-AC7: the app is always dark: userInterfaceStyle is 'dark', whatever the phone's own setting", () => {
+    expect(resolvedConfig().userInterfaceStyle).toBe('dark');
+  });
+
+  // CALL-01-AC3 (approach 3): "the call starts on the tap" needs Android's
+  // CALL_PHONE (SPIKE-01, S6), so the release build declares it, to be asked
+  // for when the first #1 is saved. The four permissions the skeleton blocks
+  // stay blocked, and CALL_PHONE is not among them.
+  test('CALL-01-AC3: the release build declares Android’s CALL_PHONE, and still blocks the four it blocked, CALL_PHONE not among them', () => {
+    const android = resolvedConfig().android;
+    const declared = (android?.permissions ?? []).map((permission) =>
+      permission.startsWith('android.permission.')
+        ? permission
+        : `android.permission.${permission}`,
+    );
+
+    expect(declared).toContain('android.permission.CALL_PHONE');
+    expect([...(android?.blockedPermissions ?? [])].sort()).toEqual(
+      [
+        'android.permission.SYSTEM_ALERT_WINDOW',
+        'android.permission.READ_EXTERNAL_STORAGE',
+        'android.permission.WRITE_EXTERNAL_STORAGE',
+        'android.permission.VIBRATE',
+      ].sort(),
+    );
+  });
+
   test("INF-06-AC19: the release app keeps nothing in Android's cloud backup", () => {
     // Auto Backup would copy what the app stores, such as a session token or a
     // journey, to Google Drive, outside the providers chosen for the EEA

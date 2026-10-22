@@ -33,6 +33,18 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { APK, ensureMaestro } from './lib/e2e-android.mjs';
+import {
+  DIALER_PACKAGE,
+  appWindow,
+  callRecord,
+  dialerWindow,
+  dialledEvents,
+  maskedAddress,
+  telecomDump,
+  windowDump,
+} from '../packages/test-kit/src/android-dumps.ts';
+import { EMULATOR_FIRST_CONTACT } from '../packages/test-kit/src/fixtures/phone-numbers.ts';
+import { flowsRunBy, maestroTags } from '../packages/test-kit/src/maestro-flows.ts';
 
 const SCRIPT = path.resolve('scripts/e2e-android.mjs');
 
@@ -213,14 +225,24 @@ const CRASH_BUFFER = [
   '09-26 21:14:07.880  4242  4242 E AndroidRuntime: java.lang.RuntimeException: synthetic crash in the app under test',
 ];
 
-/** The stand-in Maestro. */
-function maestroBody({ log, envLog, report, crashes, exit }) {
+/**
+ * The stand-in Maestro.
+ *
+ * Amended for CALL-01, approach 9: with a `world` (worldMaestro), a run of
+ * the flows is handed to the stand-in emulator's world, which records it,
+ * does to the device what the flow would, writes the flow's report and exits
+ * as the flow did. Without one, nothing changes.
+ */
+function maestroBody({ log, envLog, report, crashes, exit, world }) {
   const quote = (line) => `'${line.replace(/'/g, "'\\''")}'`;
   return [
     '#!/bin/sh',
     `echo "maestro $*" >> "${log}"`,
     `printf '%s\\t%s\\t%s\\n' "$*" "\${MAESTRO_DISABLE_UPDATE_CHECK-<unset>}" "\${MAESTRO_CLI_NO_ANALYTICS-<unset>}" >> "${envLog}"`,
     'if [ "$1" = "--version" ]; then echo "2.10.0"; exit 0; fi',
+    ...(world === undefined
+      ? []
+      : [`exec "${process.execPath}" "${world.script}" "${world.config}" "$@"`]),
     "out=''",
     "app=''",
     "prev=''",
@@ -240,6 +262,181 @@ function maestroBody({ log, envLog, report, crashes, exit }) {
         ]),
     `exit ${String(exit)}`,
   ].join('\n');
+}
+
+/**
+ * CALL-01, approach 9 (D-031): the stand-in emulator's world, for the flows
+ * tagged `scripted`, which e2e:android runs one at a time with its own steps
+ * around each. What the device holds is kept in files in `stateDir`, which
+ * the stand-in adb reads and writes (worldAnswers) and this stand-in Maestro
+ * changes as a flow would:
+ *   telecom      what `dumpsys telecom` prints: Telecom's record of calls;
+ *   window       what `dumpsys window` prints: the focused window;
+ *   font_scale   Settings' font size, as `settings get system font_scale` says;
+ *   call_phone   CALL_PHONE, granted or revoked.
+ *
+ * Each run of the flows is written to invocations.jsonl: its arguments, the
+ * scripted flow it ran alone (`flow`, or null for any other run), and the
+ * font size and CALL_PHONE's state as it started. A scripted flow run alone
+ * does what its `effects` entry says: `calls`, each placed by the app or by
+ * the dialer to #1 or to an emergency number, added to Telecom's record;
+ * `focus`, the app's window or the dialer's left in front; `callPhone`, the
+ * permission as the flow leaves it (Android's dialog in first-contact.yaml);
+ * `status`, its report's, ERROR exiting 1. The report goes where --output
+ * says. Every package and number is synthetic, and no call reaches anyone: it
+ * is a line in a file (RG-07; SPIKE-01-AC10's rule).
+ *
+ * The script is read by Node as a module of its own, with the world's
+ * config, written as JSON by runPastPreflight, as its first argument.
+ */
+const WORLD_MAESTRO = [
+  "import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';",
+  "import path from 'node:path';",
+  'const [configFile, ...args] = process.argv.slice(2);',
+  "const config = JSON.parse(readFileSync(configFile, 'utf8'));",
+  'const at = (name) => path.join(config.stateDir, name);',
+  "const read = (name) => (existsSync(at(name)) ? readFileSync(at(name), 'utf8').trim() : '');",
+  'const after = (option) => {',
+  '  const i = args.indexOf(option);',
+  "  const joined = args.find((arg) => arg.startsWith(option + '='));",
+  '  return i !== -1 ? args[i + 1] : joined?.slice(option.length + 1);',
+  '};',
+  "const env = args.filter((arg, i) => args[i - 1] === '-e' || args[i - 1] === '--env');",
+  "const app = (env.find((value) => value.startsWith('APP_ID=')) ?? 'APP_ID=').slice('APP_ID='.length);",
+  'const named = args',
+  "  .filter((arg, i) => /\\.ya?ml$/.test(arg) && !['--config', '--output', '--debug-output'].includes(args[i - 1] ?? ''))",
+  "  .map((arg) => arg.split('/').at(-1).replace(/\\.ya?ml$/, ''));",
+  'const flow = named.length === 1 && config.scripted.includes(named[0]) ? named[0] : null;',
+  'appendFileSync(',
+  "  at('invocations.jsonl'),",
+  "  JSON.stringify({ args, flow, fontScale: read('font_scale'), callPhone: read('call_phone') }) + '\\n',",
+  ');',
+  'const effect = (flow === null ? undefined : config.effects[flow]) ?? {};',
+  'for (const call of effect.calls ?? []) {',
+  "  const id = Number(read('call_count') || '0') + 1;",
+  "  writeFileSync(at('call_count'), String(id));",
+  "  const by = call.by === 'app' ? app : config.dialer;",
+  '  appendFileSync(',
+  "    at('telecom'),",
+  "    config.callTemplates[call.to].replaceAll('{ID}', String(id)).replaceAll('{BY}', by),",
+  '  );',
+  '}',
+  "if (effect.focus === 'dialer') writeFileSync(at('window'), config.dialerWindow);",
+  "if (effect.focus === 'app') writeFileSync(at('window'), config.appWindow.replaceAll('{APP}', app));",
+  "if (effect.callPhone !== undefined) writeFileSync(at('call_phone'), effect.callPhone + '\\n');",
+  "const status = effect.status ?? 'SUCCESS';",
+  "const output = after('--output');",
+  'if (output !== undefined) {',
+  '  writeFileSync(output, flow === null ? config.firstRunReport : config.flowReports[flow][status]);',
+  '}',
+  "process.exit(status === 'SUCCESS' ? 0 : 1);",
+  '',
+].join('\n');
+
+/** #1's number as Telecom's record shows it (the test kit's, from Ofcom's range reserved for drama), and 112's. */
+const FIRST_CONTACT_ADDRESS = maskedAddress(EMULATOR_FIRST_CONTACT.normalised);
+const EMERGENCY_ADDRESS = maskedAddress('112');
+
+/** The launcher, in front before any flow has run. */
+const LAUNCHER_WINDOW =
+  'Window{1f2e3d4 u0 com.google.android.apps.nexuslauncher/com.google.android.apps.nexuslauncher.NexusLauncherActivity}';
+
+/**
+ * Writes the stand-in emulator's world for a run (WORLD_MAESTRO) to
+ * `stateDir`: a device as an earlier run on the same emulator leaves it, with
+ * Telecom's record holding no call, the launcher in front, the usual font
+ * size, and CALL_PHONE granted, as `adb install -r` keeps a grant. And the
+ * config WORLD_MAESTRO reads: which flows in `flowsDir` are scripted, each
+ * one's report, and the dumps it writes. Returns where the script and its
+ * config are.
+ */
+function setUpWorld({ dir, stateDir, flowsDir, world }) {
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(path.join(stateDir, 'telecom'), telecomDump([]));
+  writeFileSync(path.join(stateDir, 'window'), windowDump(LAUNCHER_WINDOW));
+  writeFileSync(path.join(stateDir, 'font_scale'), '1.0\n');
+  writeFileSync(path.join(stateDir, 'call_phone'), 'granted\n');
+  const flows = readdirSync(flowsDir)
+    .filter((name) => /\.ya?ml$/.test(name))
+    .map((name) => ({
+      name: name.replace(/\.ya?ml$/, ''),
+      tags: maestroTags(readFileSync(path.join(flowsDir, name), 'utf8')),
+    }));
+  const scripted = flows.filter(({ tags }) => tags.includes('scripted')).map(({ name }) => name);
+  const template = (address) =>
+    `${callRecord({ id: '{ID}', address, events: dialledEvents('{BY}', address) }).join('\n')}\n`;
+  const config = {
+    stateDir,
+    scripted,
+    effects: world.effects ?? {},
+    firstRunReport: junit(
+      flows.filter(({ name }) => !scripted.includes(name)).map(({ name }) => [name, 'SUCCESS']),
+    ),
+    flowReports: Object.fromEntries(
+      scripted.map((name) => [
+        name,
+        { SUCCESS: junit([[name, 'SUCCESS']]), ERROR: junit([[name, 'ERROR']]) },
+      ]),
+    ),
+    callTemplates: {
+      first: template(FIRST_CONTACT_ADDRESS),
+      emergency: template(EMERGENCY_ADDRESS),
+    },
+    dialerWindow: windowDump(dialerWindow()),
+    appWindow: windowDump(appWindow('{APP}')),
+    dialer: DIALER_PACKAGE,
+  };
+  const files = {
+    script: path.join(dir, 'world-maestro.mjs'),
+    config: path.join(dir, 'world.json'),
+  };
+  writeFileSync(files.script, WORLD_MAESTRO);
+  writeFileSync(files.config, JSON.stringify(config));
+  return files;
+}
+
+/**
+ * How the stand-in emulator's world answers in `shell`'s case (CALL-01,
+ * approach 9): Telecom's record, the focused window and the dialer role's
+ * holder; CALL_PHONE granted and revoked, and the font size set, cleared and
+ * read, each kept in `stateDir` (WORLD_MAESTRO says which file holds what);
+ * and the API level of CI's image. `refuse` makes Android refuse a step, as
+ * a SecurityException does: every `pm revoke` of CALL_PHONE ('revoke'), or
+ * every font size above 1 ('largeFont').
+ *
+ * @param {{ stateDir: string, refuse?: 'revoke' | 'largeFont' }} world
+ */
+function worldAnswers({ stateDir, refuse }) {
+  const file = (name) => `"${path.join(stateDir, name)}"`;
+  const refusal = (what) => [
+    `        echo "Exception occurred while executing '${what}':" >&2`,
+    '        echo "java.lang.SecurityException: refused by the stand-in emulator (synthetic)" >&2',
+    '        exit 1',
+  ];
+  return [
+    `      *dumpsys*telecom*) /bin/cat ${file('telecom')} ;;`,
+    `      *dumpsys*window*) /bin/cat ${file('window')} ;;`,
+    `      *get-role-holders*android.app.role.DIALER*) echo "${DIALER_PACKAGE}" ;;`,
+    '      *pm*grant*android.permission.CALL_PHONE*)',
+    `        echo granted > ${file('call_phone')} ;;`,
+    '      *pm*revoke*android.permission.CALL_PHONE*)',
+    ...(refuse === 'revoke' ? refusal('revoke') : []),
+    `        echo revoked > ${file('call_phone')} ;;`,
+    '      *settings*put*system*font_scale*)',
+    '        for v in $*; do :; done',
+    ...(refuse === 'largeFont'
+      ? [
+          `        if "${process.execPath}" -e 'process.exit(Number(process.argv[1]) > 1 ? 0 : 1)' "$v"; then`,
+          ...refusal('settings').map((line) => `  ${line}`),
+          '        fi',
+        ]
+      : []),
+    `        echo "$v" > ${file('font_scale')} ;;`,
+    '      *settings*delete*system*font_scale*)',
+    `        echo 1.0 > ${file('font_scale')} ;;`,
+    `      *settings*get*system*font_scale*) /bin/cat ${file('font_scale')} ;;`,
+    '      *getprop*ro.build.version.sdk*) echo 37 ;;',
+  ];
 }
 
 /**
@@ -556,6 +753,9 @@ function slowStartLines(slowStarts, dir) {
  * `installs` in turn, and on the timeline's device, `timelineInstall`.
  * Amended 2026-10-14 (BUG-21): `slowStarts` makes chosen calls slow to start.
  *
+ * Amended for CALL-01, approach 9: with a `world`, the stand-in emulator's
+ * world answers first in `shell`'s case (worldAnswers).
+ *
  * Amended for BUG-17: or a device that takes the switch to bokmål only from
  * the script (`switchable`). And `adb root` answers as a google_apis
  * emulator's adbd does, or with `rootAnswer`, and `adb wait-for-device`
@@ -581,6 +781,7 @@ function deviceAdbBody({
   installDir,
   slowStarts,
   slowStartDir,
+  world,
 }) {
   /** The device's own answers in `shell`'s case: the timeline's, the switchable one's, or a locale's. */
   const answers = () => {
@@ -612,6 +813,7 @@ function deviceAdbBody({
     '  shell)',
     '    case "$*" in',
     '      *ro.kernel.qemu*) case "$serial" in emulator-*) echo 1 ;; esac ;;',
+    ...(world === undefined ? [] : worldAnswers(world)),
     ...answers(),
     '      *boot_completed*) echo 1 ;;',
     '    esac ;;',
@@ -841,7 +1043,18 @@ function expectWaitedOut(wait, { deadline, interval }, output) {
  *   last one from then on (installAnswers); `slowStarts` makes chosen calls to
  *   adb slow to start (slowStartLines); `env` is added to the script's
  *   environment; `timeout` is when the run is killed, counted from its start,
- *   and `stopAfter` kills it `ms` after its first call that `call` matches
+ *   and `stopAfter` kills it `ms` after its first call that `call` matches.
+ *
+ *   Amended for CALL-01, approach 9 (D-031; RG-03 in the test-changes list):
+ *   `copyFlows` is which of the app's flows the scratch copy holds. By
+ *   default, 'unscripted': only the flows not tagged `scripted`, as the folder
+ *   held before the call flows came, because the tests that use the default
+ *   are of INF-06's one run, its preflight and its waits, and the scripted
+ *   flows need a device that answers for Telecom, the focused window and the
+ *   dialer role, which only `world` gives. 'all' copies every flow.
+ *   `extraFlows` adds synthetic flows, by file name. `world` is the stand-in
+ *   emulator's world for the scripted flows (WORLD_MAESTRO, worldAnswers):
+ *   each flow's `effects`, and what Android `refuse`s.
  */
 async function runPastPreflight({
   args = ['--skip-build'],
@@ -863,6 +1076,9 @@ async function runPastPreflight({
   // timing out first with nothing to show.
   timeout = 50_000,
   stopAfter,
+  copyFlows = 'unscripted',
+  extraFlows = {},
+  world,
 } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'e2e-android-past-preflight-'));
   try {
@@ -898,12 +1114,29 @@ async function runPastPreflight({
       mkdirSync(path.dirname(path.join(root, APP, file)), { recursive: true });
       copyFileSync(path.join(REPO, APP, file), path.join(root, APP, file));
     }
-    cpSync(path.join(REPO, APP, 'e2e'), path.join(root, APP, 'e2e'), { recursive: true });
+    // RG-03 (CALL-01, approach 9, D-031): was every flow of the folder. The
+    // flows tagged `scripted` are copied only when a test asks for them, with
+    // the world they need (`copyFlows`, above).
+    cpSync(path.join(REPO, APP, 'e2e'), path.join(root, APP, 'e2e'), {
+      recursive: true,
+      filter: (source) =>
+        copyFlows === 'all' ||
+        !/\.ya?ml$/.test(source) ||
+        !maestroTags(readFileSync(source, 'utf8')).includes('scripted'),
+    });
+    for (const [name, text] of Object.entries(extraFlows)) {
+      writeFileSync(path.join(root, APP, 'e2e', name), text);
+    }
     symlinkSync(path.join(REPO, APP, 'node_modules'), path.join(root, APP, 'node_modules'), 'dir');
     mkdirSync(path.dirname(path.join(root, APK)), { recursive: true });
     writeFileSync(path.join(root, APK), 'a stand-in for the release build');
 
     writeFileSync(report, junit(flows));
+    const stateDir = path.join(dir, 'world');
+    const worldFiles =
+      world === undefined
+        ? undefined
+        : setUpWorld({ dir, stateDir, flowsDir: path.join(root, APP, 'e2e'), world });
     const archive = Buffer.from('a stand-in for maestro.zip');
     await ensureMaestro({
       root,
@@ -918,6 +1151,7 @@ async function runPastPreflight({
             report,
             crashes: crash ? crashes : undefined,
             exit: maestroExit,
+            world: worldFiles,
           }),
         );
       },
@@ -943,6 +1177,7 @@ async function runPastPreflight({
           installDir,
           slowStarts,
           slowStartDir,
+          world: world === undefined ? undefined : { stateDir, refuse: world.refuse },
         }),
       );
     }
@@ -1018,6 +1253,12 @@ async function runPastPreflight({
       }),
       // Without one: when each `adb install` began, in milliseconds.
       installTimes: lines(path.join(installDir, 'times')).map(Number),
+      // With a world: each run of the flows, as WORLD_MAESTRO recorded it, and
+      // the font size Settings holds at the end.
+      invocations: lines(path.join(stateDir, 'invocations.jsonl'))
+        .filter((line) => line !== '')
+        .map((line) => JSON.parse(line)),
+      fontScaleAtEnd: lines(path.join(stateDir, 'font_scale')).join(''),
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -2013,5 +2254,401 @@ describe('BUG-17: e2e:android switches the emulator to bokmål itself, rather th
     expect(stderr, output).toMatch(NO_RESTART);
     // Not vacuous: the switch was made, once.
     expect(calls.filter(isSwitchCall), output).toEqual(SWITCH_CALLS);
+  });
+});
+
+// CALL-01, approach 9 (the main session's decision under D-031): after the
+// one run over every flow not tagged `scripted`, e2e:android runs each flow
+// tagged `scripted` on its own, one `maestro test <flow>` each, in a fixed
+// order it holds, with its steps around it: before it, CALL_PHONE granted or
+// revoked as the flow needs, the font size set, and Telecom's record read as
+// the baseline; after it, Telecom's record read again and compared (one new
+// call, to #1, after call-with-permission; none after any other), and the
+// focused window checked against the dialer role where the flow leaves the
+// dialer in front. The font size is reset at the end, even after a failure,
+// and a failed step or flow fails the run, naming the flow and the step.
+//
+// These runs copy every flow of the app's folder (copyFlows: 'all'), the
+// real ones, and give the stand-in emulator a world (WORLD_MAESTRO) that
+// answers for Telecom, the window, the role, the permission and the font
+// size. Nothing here dials anything: a call is a line in a file.
+
+/** The flows of the app's folder, by file name, with their tags. */
+const APP_FLOWS = readdirSync(path.join(REPO, APP, 'e2e'))
+  .filter((name) => /\.ya?ml$/.test(name))
+  .map((name) => ({
+    name,
+    tags: maestroTags(readFileSync(path.join(REPO, APP, 'e2e', name), 'utf8')),
+  }));
+const SCRIPTED = APP_FLOWS.filter(({ tags }) => tags.includes('scripted'))
+  .map(({ name }) => name)
+  .sort();
+const UNSCRIPTED = APP_FLOWS.filter(({ tags }) => !tags.includes('scripted'))
+  .map(({ name }) => name)
+  .sort();
+
+/**
+ * What each scripted flow does to the device in a run where all is as it
+ * should be. first-contact.yaml grants CALL_PHONE in Android's dialog;
+ * call-with-permission.yaml places one call, by the app, to #1, and the
+ * dialer's call screen comes to the front; the flows that open the dialer
+ * leave it in front; the others leave the app there.
+ */
+const AS_IT_SHOULD_BE = {
+  'first-admin-invites': { focus: 'app' },
+  'first-contact': { focus: 'app', callPhone: 'granted' },
+  'call-with-permission': { calls: [{ by: 'app', to: 'first' }], focus: 'dialer' },
+  'call-without-permission': { focus: 'dialer' },
+  'back-from-the-dialer': { focus: 'app' },
+  'large-text': { focus: 'app' },
+  'emergency-112': { focus: 'dialer' },
+};
+
+/**
+ * What the script does around each scripted flow, from the flows' headers:
+ * CALL_PHONE's state as the flow starts (`callPhone`); the font size it
+ * starts at, the largest for large-text and the usual 1 for the others
+ * (`largest`); whether the script checks the dialer in front after it
+ * (`dialer`); and whether it ends the call after it (`endsCall`). Telecom's
+ * record is read before and after every one.
+ */
+const STEPS = {
+  'first-admin-invites.yaml': {},
+  'first-contact.yaml': { callPhone: 'revoked' },
+  'call-with-permission.yaml': { callPhone: 'granted', endsCall: true },
+  'call-without-permission.yaml': { callPhone: 'revoked', dialer: true },
+  'back-from-the-dialer.yaml': {},
+  'large-text.yaml': { largest: true },
+  'emergency-112.yaml': { dialer: true },
+};
+
+/** Calls to adb that read Telecom's record, the focused window, or the dialer role's holders. */
+const isTelecomRead = (call) => /^adb\b.*\bdumpsys\b.*\btelecom\b/.test(call);
+const isWindowRead = (call) => /^adb\b.*\bdumpsys\b.*\bwindow\b/.test(call);
+const isRoleRead = (call) =>
+  /^adb\b.*\bget-role-holders\b.*\bandroid\.app\.role\.DIALER\b/.test(call);
+/** Calls to adb that set, or clear, Settings' font size. */
+const isFontWrite = (call) =>
+  /^adb\b.*\bsettings\b.*\b(put|delete)\b.*\bsystem\b.*\bfont_scale\b/.test(call);
+/** A font size set back to the usual: put to 1, or cleared. */
+const isFontReset = (call) =>
+  /^adb\b.*\bsettings\b.*\bdelete\b.*\bsystem\b.*\bfont_scale\b/.test(call) ||
+  /^adb\b.*\bsettings\b.*\bput\b.*\bsystem\b.*\bfont_scale\s+1(\.0+)?['"]?\s*$/.test(call);
+/**
+ * A call to adb that ends a call: the end-call key, the emulator console's
+ * `gsm cancel`, or the phone service's end call. How is the script's choice.
+ */
+const endsTheCall = (call) =>
+  /^adb\b.*\bkeyevent\b.*\b(KEYCODE_ENDCALL|6)\b/.test(call) ||
+  /^adb\b.*\bgsm\b.*\bcancel\b/.test(call) ||
+  /^adb\b.*\bservice\s+call\s+phone\b/.test(call);
+
+/** A run with every flow copied and the stand-in emulator's world, as it should be unless `effects` or `refuse` say otherwise. */
+const runScripted = ({ effects = {}, refuse, extraFlows } = {}) =>
+  runPastPreflight({
+    copyFlows: 'all',
+    extraFlows,
+    world: { effects: { ...AS_IT_SHOULD_BE, ...effects }, refuse },
+  });
+
+/**
+ * The runs of the flows in a run, in order: the flows each one ran, as Maestro
+ * reads its command line; the scripted flow it ran alone, or null; the font
+ * size and CALL_PHONE's state as it started; where it is in `calls`; and the
+ * calls to adb before it, since the run before (or the start), and after it,
+ * until the next (or the end).
+ */
+function flowRunsOf({ calls, invocations }, flows = APP_FLOWS) {
+  const at = calls.flatMap((call, i) => (isFlowRun(call) ? [i] : []));
+  return at.map((index, n) => {
+    const invocation = invocations[n] ?? { args: [], flow: null, fontScale: '', callPhone: '' };
+    const from = n === 0 ? 0 : (at[n - 1] ?? 0) + 1;
+    const to = at[n + 1] ?? calls.length;
+    return {
+      index,
+      flows: flowsRunBy(['maestro', ...invocation.args], { folder: `${APP}/e2e`, flows }),
+      flow: invocation.flow === null ? null : `${String(invocation.flow)}.yaml`,
+      fontScale: invocation.fontScale,
+      callPhone: invocation.callPhone,
+      before: calls.slice(from, index).filter((call) => call.startsWith('adb')),
+      after: calls.slice(index + 1, to).filter((call) => call.startsWith('adb')),
+      end: to,
+    };
+  });
+}
+
+/** Whether a flow of the app's folder clears the app's state at launch (`clearState: true`). */
+const clearsState = (name) =>
+  readFileSync(path.join(REPO, APP, 'e2e', name), 'utf8')
+    .split('\n---')
+    .slice(1)
+    .join('\n---')
+    .split('\n')
+    .some((line) => !line.trimStart().startsWith('#') && /^\s+clearState:\s*true\s*$/.test(line));
+
+/**
+ * What each scripted flow's header says must run before it, as pairs of
+ * [earlier, later]. emergency-112 clears the app's state, which signs the app
+ * out and forgets #1, so it comes after every flow that needs either.
+ * first-contact continues from first-admin-invites' state (D-031).
+ */
+const MUST_RUN_BEFORE = [
+  ['first-admin-invites.yaml', 'first-contact.yaml'],
+  ['first-contact.yaml', 'call-with-permission.yaml'],
+  ['first-contact.yaml', 'call-without-permission.yaml'],
+  ['first-contact.yaml', 'large-text.yaml'],
+  ['call-with-permission.yaml', 'call-without-permission.yaml'],
+  ['first-contact.yaml', 'emergency-112.yaml'],
+  ['call-with-permission.yaml', 'emergency-112.yaml'],
+  ['call-without-permission.yaml', 'emergency-112.yaml'],
+  ['large-text.yaml', 'emergency-112.yaml'],
+];
+
+/**
+ * Ways a run goes wrong after the first run, each with the flow whose step
+ * failed, a word the message must hold for that step, and where in the calls
+ * it failed. Kept out of the test.each call, as REPORT_PROBLEMS is.
+ */
+const SCRIPTED_FAILURES = [
+  {
+    // Telecom's record shows no new call after the flow.
+    id: 'CALL-01-AC2',
+    what: 'call-with-permission places no call',
+    effects: { 'call-with-permission': { focus: 'app' } },
+    flow: 'call-with-permission',
+    step: /telecom/i,
+    failedAt: (calls) => calls.findIndex((call) => /call-with-permission\.yaml/.test(call)),
+  },
+  {
+    // The new call was created by the dialer, which means a second tap.
+    id: 'CALL-01-AC2',
+    what: 'the dialer, not the app, placed the call',
+    effects: {
+      'call-with-permission': { calls: [{ by: 'dialer', to: 'first' }], focus: 'dialer' },
+    },
+    flow: 'call-with-permission',
+    step: /telecom/i,
+    failedAt: (calls) => calls.findIndex((call) => /call-with-permission\.yaml/.test(call)),
+  },
+  {
+    // A new call in Telecom's record, though the flow never taps the dialer.
+    id: 'CALL-02-AC3',
+    what: 'a call appears during emergency-112',
+    effects: { 'emergency-112': { calls: [{ by: 'dialer', to: 'emergency' }], focus: 'dialer' } },
+    flow: 'emergency-112',
+    step: /telecom/i,
+    failedAt: (calls) => calls.findIndex((call) => /emergency-112\.yaml/.test(call)),
+  },
+  {
+    id: 'CALL-02-AC3',
+    what: 'emergency-112 leaves the app in front',
+    effects: { 'emergency-112': { focus: 'app' } },
+    flow: 'emergency-112',
+    step: /focus|window|in front/i,
+    failedAt: (calls) => calls.findIndex((call) => /emergency-112\.yaml/.test(call)),
+  },
+  {
+    // The app, not the dialer, is in front after call-without-permission.
+    id: 'CALL-01-AC4',
+    what: 'call-without-permission shows no dialer',
+    effects: { 'call-without-permission': { focus: 'app' } },
+    flow: 'call-without-permission',
+    step: /focus|window|in front/i,
+    failedAt: (calls) => calls.findIndex((call) => /call-without-permission\.yaml/.test(call)),
+  },
+  {
+    // call-without-permission's own run ends in ERROR, exit code 1.
+    id: 'INF-06-AC9',
+    what: 'a scripted flow fails in Maestro',
+    effects: { 'call-without-permission': { focus: 'dialer', status: 'ERROR' } },
+    flow: 'call-without-permission',
+    step: /\bmaestro\b|\bexit|\bERROR\b/i,
+    failedAt: (calls) => calls.findIndex((call) => /call-without-permission\.yaml/.test(call)),
+  },
+  {
+    // Every `pm revoke` of CALL_PHONE is refused; first-contact needs one first.
+    id: 'CALL-01-AC3',
+    what: 'Android refuses to revoke CALL_PHONE',
+    refuse: 'revoke',
+    flow: 'first-contact',
+    step: /\brevoke|CALL_PHONE/i,
+    failedAt: (calls) => calls.findIndex((call) => /^adb\b.*\bpm\b.*\brevoke\b/.test(call)),
+  },
+  {
+    // Every font size above 1 is refused; large-text needs the largest.
+    id: 'CALL-01-AC8',
+    what: 'Android refuses the largest font size',
+    refuse: 'largeFont',
+    flow: 'large-text',
+    step: /font/i,
+    failedAt: (calls) =>
+      calls.findIndex(
+        (call) => isFontWrite(call) && !isFontReset(call) && !/font_scale\s+0/.test(call),
+      ),
+  },
+];
+
+describe('CALL-01, approach 9: e2e:android runs each flow tagged scripted on its own, in its order, with its steps', () => {
+  test('INF-06-AC9: with every flow passing and the emulator answering as it should, the run passes: first one run over every flow not tagged scripted, then one run for each scripted flow, alone', async () => {
+    const { code, output, calls, invocations } = await runScripted();
+    const runs = flowRunsOf({ calls, invocations });
+
+    expect(code, output).toBe(0);
+    // The first run's flows are app-starts and wrong-code: first-admin-invites
+    // is scripted, for its place in the order (D-031). And the folder holds both kinds.
+    expect(UNSCRIPTED).toEqual(['app-starts.yaml', 'wrong-code.yaml']);
+    expect(SCRIPTED).toContain('first-admin-invites.yaml');
+    expect(runs[0]?.flows, output).toEqual(UNSCRIPTED);
+    expect(
+      runs.slice(1).map(({ flows }) => flows.length),
+      output,
+    ).toEqual(runs.slice(1).map(() => 1));
+    expect(
+      runs
+        .slice(1)
+        .map(({ flow }) => flow)
+        .sort(),
+      output,
+    ).toEqual(SCRIPTED);
+  });
+
+  test('CALL-01-AC2, CALL-01-AC4 and CALL-02-AC3: the scripted flows run in an order that meets what each one’s header says it needs before it', async () => {
+    const { output, calls, invocations } = await runScripted();
+    const order = flowRunsOf({ calls, invocations })
+      .map(({ flow }) => flow)
+      .filter((flow) => flow !== null);
+    const unmet = MUST_RUN_BEFORE.filter(
+      ([earlier, later]) =>
+        !order.includes(earlier) ||
+        !order.includes(later) ||
+        order.indexOf(earlier) > order.indexOf(later),
+    ).map(([earlier, later]) => `${earlier} before ${later}`);
+    const back = order.indexOf('back-from-the-dialer.yaml');
+
+    expect(unmet, `order: ${JSON.stringify(order)}\n${output}`).toEqual([]);
+    // The way back from the dialer comes right after a flow that left it in front.
+    expect(back, `order: ${JSON.stringify(order)}`).toBeGreaterThan(0);
+    expect(['emergency-112.yaml', 'call-without-permission.yaml']).toContain(order[back - 1]);
+  });
+
+  test('GRP-01-AC26 and GRP-02-AC1: first-admin-invites runs first of the scripted flows, on its own, and before first-contact, with no flow that clears the app’s state between them, so first-contact starts signed in as the first admin (D-031)', async () => {
+    const { output, calls, invocations } = await runScripted();
+    const runs = flowRunsOf({ calls, invocations });
+    const scripted = runs.filter(({ flow }) => flow !== null);
+    const admin = runs.findIndex(({ flow }) => flow === 'first-admin-invites.yaml');
+    const contact = runs.findIndex(({ flow }) => flow === 'first-contact.yaml');
+    const clearing = runs
+      .slice(admin + 1, contact)
+      .flatMap(({ flows }) => flows)
+      .filter(clearsState);
+
+    // Not vacuous: the flows that clear the app's state are known by their steps.
+    expect(
+      ['app-starts.yaml', 'wrong-code.yaml', 'emergency-112.yaml'].filter(clearsState),
+    ).toEqual(['app-starts.yaml', 'wrong-code.yaml', 'emergency-112.yaml']);
+    expect(scripted[0]?.flow, output).toBe('first-admin-invites.yaml');
+    // In a run of its own, not in the first run, where Maestro picks the order.
+    expect(runs[0]?.flows ?? [], output).not.toContain('first-admin-invites.yaml');
+    expect(admin, output).toBeGreaterThan(0);
+    expect(contact, output).toBeGreaterThan(admin);
+    expect(clearing, output).toEqual([]);
+  });
+
+  test('CALL-01-AC2, CALL-01-AC3, CALL-01-AC4, CALL-01-AC8 and CALL-02-AC3: each scripted flow gets its steps: CALL_PHONE as it needs, its font size, and Telecom’s record read before it; Telecom’s record read after it; the dialer checked in front where it leaves it; and the call ended after call-with-permission', async () => {
+    const { output, calls, invocations } = await runScripted();
+    const runs = flowRunsOf({ calls, invocations });
+    const missing = [];
+    for (const [flow, need] of Object.entries(STEPS)) {
+      const run = runs.find((candidate) => candidate.flow === flow);
+      if (run === undefined) {
+        missing.push(`${flow}: never run on its own`);
+        continue;
+      }
+      if (need.callPhone !== undefined && run.callPhone !== need.callPhone) {
+        missing.push(`${flow}: started with CALL_PHONE ${run.callPhone}, not ${need.callPhone}`);
+      }
+      const scale = Number(run.fontScale);
+      if (need.largest === true ? !(scale > 1) : scale !== 1) {
+        missing.push(`${flow}: started at font size ${run.fontScale}`);
+      }
+      if (!run.before.some(isTelecomRead)) missing.push(`${flow}: Telecom not read before it`);
+      if (!run.after.some(isTelecomRead)) missing.push(`${flow}: Telecom not read after it`);
+      if (need.dialer === true) {
+        if (!run.after.some(isWindowRead)) {
+          missing.push(`${flow}: the focused window not read after it`);
+        }
+        if (!calls.slice(0, run.end).some(isRoleRead)) {
+          missing.push(`${flow}: the dialer role's holders not read by then`);
+        }
+      }
+      if (need.endsCall === true) {
+        const read = run.after.findIndex(isTelecomRead);
+        if (!run.after.slice(read + 1).some(endsTheCall)) {
+          missing.push(`${flow}: the call not ended after Telecom was read`);
+        }
+      }
+    }
+
+    expect(missing, output).toEqual([]);
+  });
+
+  test('CALL-01-AC8: the font size set before large-text is above the usual 1, its value is in the job log, and the font size is the usual again at the end', async () => {
+    const { code, stdout, output, calls, invocations, fontScaleAtEnd } = await runScripted();
+    const large = flowRunsOf({ calls, invocations }).find(({ flow }) => flow === 'large-text.yaml');
+    const lastWrite = calls.findLastIndex(isFontWrite);
+
+    expect(code, output).toBe(0);
+    expect(large, output).toBeDefined();
+    expect(Number(large?.fontScale)).toBeGreaterThan(1);
+    expect(stdout).toMatch(
+      new RegExp(`font[^\\n]*${(large?.fontScale ?? '').replace(/\./g, '\\.')}`, 'i'),
+    );
+    expect(Number(fontScaleAtEnd), output).toBe(1);
+    expect(isFontReset(calls[lastWrite] ?? ''), output).toBe(true);
+    expect(lastWrite, output).toBeGreaterThan(calls.findLastIndex(isFlowRun));
+  });
+
+  test.each(SCRIPTED_FAILURES)(
+    '$id: when $what, the run fails, the message names the flow and the step, and the font size is still reset at the end (CALL-01, approach 9)',
+    async ({ effects, refuse, flow, step, failedAt }) => {
+      const { code, stderr, output, calls, fontScaleAtEnd } = await runScripted({
+        effects,
+        refuse,
+      });
+      const at = failedAt(calls);
+
+      expect(code, output).not.toBe(0);
+      expect(code, 'it was killed rather than finishing').not.toBeNull();
+      expect(stderr, output).toContain(flow);
+      expect(stderr, output).toMatch(step);
+      // Not vacuous: the run got as far as the step that failed.
+      expect(at, output).toBeGreaterThan(-1);
+      expect(calls.slice(at + 1).some(isFontReset), output).toBe(true);
+      expect(Number(fontScaleAtEnd), output).toBe(1);
+    },
+  );
+
+  test('INF-06-AC9: a flow tagged scripted that the script’s order does not name stops the run, naming the flow, rather than never running', async () => {
+    // The first run leaves every scripted flow out, so a scripted flow the
+    // script does not know would otherwise run nowhere, and the run pass.
+    const { code, stderr, output } = await runScripted({
+      extraFlows: {
+        'unordered-scripted.yaml': [
+          '# A synthetic flow, tagged scripted, that no order names.',
+          'appId: ${APP_ID}',
+          'tags:',
+          '  - scripted',
+          '---',
+          '- launchApp:',
+          '    permissions:',
+          '      all: deny',
+          '',
+        ].join('\n'),
+      },
+    });
+
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    expect(stderr, output).toContain('unordered-scripted');
   });
 });

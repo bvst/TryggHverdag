@@ -28,6 +28,8 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
+import { EMULATOR_FIRST_CONTACT } from '../../packages/test-kit/src/fixtures/phone-numbers.ts';
+import { flowsRunBy, maestroTags } from '../../packages/test-kit/src/maestro-flows.ts';
 import {
   APK,
   INSTALL_DEADLINE_MS,
@@ -2351,19 +2353,58 @@ const FLOW_TEXTS = {
   MEMBERS_BUTTON: 'grp.member.members',
   CREATE_INVITATION: 'grp.invite.create',
   SHARE_BUTTON: 'grp.invite.share',
+  // RG-03 (GRP-02, CALL-01, CALL-02; M3 task 2): the flows task 2 adds
+  // (first-contact.yaml, the call flows, emergency-112.yaml,
+  // back-from-the-dialer.yaml, large-text.yaml) read these strings of the
+  // app's, each from its key in CALL-02.md's translations table. Added only:
+  // every entry above is as it was, and so is every assertion that reads
+  // this table.
+  EMERGENCY_LABEL: 'call.emergency.label',
+  CHOOSE_CONTACT: 'grp.firstContact.none',
+  NO_CONTACT_HINT: 'grp.firstContact.noneHint',
+  CHANGE_CONTACT: 'grp.firstContact.change',
+  SETUP_TITLE: 'grp.firstContact.title',
+  CONTACT_NAME_LABEL: 'grp.firstContact.nameLabel',
+  CONTACT_NUMBER_LABEL: 'grp.firstContact.numberLabel',
+  SAVE_CONTACT: 'grp.firstContact.save',
+  PERMISSION_WHY: 'call.permission.why',
+  PERMISSION_MISSING: 'call.permission.missing',
+  PERMISSION_ALLOW: 'call.permission.allow',
 };
 
-/** A translation file holding `text` at every key a flow reads, unless `except` says otherwise. */
+/**
+ * GRP-02 and CALL-01 (L7): the values a flow names that are a string of the
+ * app's with #1's name in it, and the key each is filled from, as the app
+ * fills it: "Nummer 1: {{name}}" and "Ring {{name}}". Kept apart from
+ * FLOW_TEXTS, whose values a flow gets as nb.json writes them.
+ */
+const FLOW_TEMPLATES = {
+  FIRST_CONTACT_SHOWN: 'grp.firstContact.shown',
+  CALL_BUTTON: 'call.button.call',
+};
+
+/**
+ * A translation file holding `text` at every key a flow reads, unless `except`
+ * says otherwise. RG-03 (M3 task 2): the keys of FLOW_TEMPLATES too, each with
+ * #1's placeholder after `text`, since the command reads them as well; the
+ * keys of FLOW_TEXTS hold what they held.
+ */
 function translationsWith(text, except = {}) {
   const tree = {};
-  for (const [field, key] of Object.entries(FLOW_TEXTS)) {
+  const put = (key, value) => {
     const parts = key.split('.');
     let node = tree;
     for (const part of parts.slice(0, -1)) {
       node[part] ??= {};
       node = node[part];
     }
-    node[parts.at(-1)] = except[field] ?? text;
+    node[parts.at(-1)] = value;
+  };
+  for (const [field, key] of Object.entries(FLOW_TEXTS)) {
+    put(key, except[field] ?? text);
+  }
+  for (const [field, key] of Object.entries(FLOW_TEMPLATES)) {
+    put(key, except[field] ?? `${text} {{name}}`);
   }
   return tree;
 }
@@ -2379,11 +2420,21 @@ const textAt = (tree, key) => key.split('.').reduce((node, part) => node?.[part]
  */
 const BOOTSTRAP_CODE = randomBytes(16).toString('hex').toUpperCase();
 
+/** Each flow in apps/mobile/e2e, with the tags Maestro reads in its config section. */
+const flowsOnDisk = () =>
+  readdirSync(FLOWS)
+    .filter((name) => /\.ya?ml$/.test(name))
+    .map((name) => ({ name, tags: maestroTags(readFileSync(path.join(FLOWS, name), 'utf8')) }));
+
 describe('maestroTestCommand: every flow, with a JUnit report', () => {
   // RG-03 (GRP-01): the translations are the join screen's and the admin's,
   // and the job's bootstrap code is handed in beside them (FLOW_TEXTS). Made
   // in each test, not once for the block, so a command that cannot be made
   // fails the tests that need it and no others.
+  // RG-03 (M3 task 2): every call here is also handed #1, the synthetic name
+  // and number the new flows type, from the test kit's fixtures
+  // (EMULATOR_FIRST_CONTACT), as the bootstrap code is handed in. An argument
+  // added to each call; no assertion is changed or removed.
   const argvOf = () =>
     maestroTestCommand({
       maestro: '/cache/maestro/bin/maestro',
@@ -2391,13 +2442,32 @@ describe('maestroTestCommand: every flow, with a JUnit report', () => {
       appId: 'no.example.placeholder',
       translations: translationsWith('Tittel'),
       bootstrapCode: BOOTSTRAP_CODE,
+      firstContact: EMULATOR_FIRST_CONTACT,
     });
 
-  test('INF-06-AC9: runs the pinned Maestro over every flow in apps/mobile/e2e', () => {
+  // RG-03 (CALL-01, approach 9; the main session's decision under D-031):
+  // was "runs the pinned Maestro over every flow in apps/mobile/e2e", which
+  // held that the folder was on the command line. The flows tagged `scripted`
+  // need the script's steps between them (a permission granted or revoked,
+  // the font size, Telecom's record, the dialer in front), which one run over
+  // the folder leaves no point for. So this command, the first run, runs every
+  // flow not tagged `scripted` and none that is, and each scripted flow runs
+  // on its own after it (scripts/e2e-android.test.mjs). How it leaves them
+  // out, --exclude-tags or the flows by name, is the script's choice, so what
+  // is held is which flows the command runs, as Maestro reads it. The pinned
+  // Maestro and `test` are held as before.
+  test('INF-06-AC9: runs the pinned Maestro over every flow in apps/mobile/e2e not tagged scripted, and over none that is', () => {
     const argv = argvOf();
+    const flows = flowsOnDisk();
+    const unscripted = flows
+      .filter(({ tags }) => !tags.includes('scripted'))
+      .map(({ name }) => name)
+      .sort();
+
     expect(argv[0]).toBe('/cache/maestro/bin/maestro');
     expect(argv).toContain('test');
-    expect(argv.some((arg) => arg.replace(/\/$/, '').endsWith(FLOWS))).toBe(true);
+    expect(unscripted.length).toBeGreaterThan(0);
+    expect(flowsRunBy(argv, { folder: FLOWS, flows })).toEqual(unscripted);
   });
 
   test('INF-06-AC9: writes the JUnit report the run is judged by', () => {
@@ -2426,6 +2496,7 @@ describe('maestroTestCommand: every flow, with a JUnit report', () => {
         appId: 'no.example.placeholder',
         translations: nb,
         bootstrapCode: BOOTSTRAP_CODE,
+        firstContact: EMULATOR_FIRST_CONTACT,
       }),
     );
 
@@ -2462,6 +2533,7 @@ describe('maestroTestCommand: every flow, with a JUnit report', () => {
           appId: 'no.example.placeholder',
           translations: translationsWith(other, { [field]: text }),
           bootstrapCode: BOOTSTRAP_CODE,
+          firstContact: EMULATOR_FIRST_CONTACT,
         }),
       );
       const sent = env[field] ?? '';
@@ -2517,6 +2589,299 @@ describe('the flows themselves', () => {
       found,
       'Maestro would evaluate these scripts as JavaScript: write the braces out, or move the value to a string of its own',
     ).toEqual([]);
+  });
+});
+
+// GRP-02, CALL-01 and CALL-02 (L7, M3 task 2): what the script hands the new
+// flows, beside what it handed before. #1 is typed as a person types it, so
+// its name and number go as they are, as the bootstrap code does; what a flow
+// matches goes escaped for Maestro's regular expressions, as every string of
+// the app's does: #1's name in "Nummer 1: {{name}}" and "Ring {{name}}",
+// filled as the app fills them, the number as the app shows and dials it, and
+// 112, the app's own constant.
+describe('maestroTestCommand: the new flows get #1 and their strings', () => {
+  /** Strings with characters a regular expression reads its own way, so escaping shows. */
+  const translations = () =>
+    translationsWith('Tekst (vanlig).', {
+      FIRST_CONTACT_SHOWN: 'Nr. 1: {{name}}?',
+      CALL_BUTTON: 'Ring {{name}} [nå]',
+    });
+  const envNow = () =>
+    envOf(
+      maestroTestCommand({
+        maestro: 'maestro',
+        report: 'report.xml',
+        appId: 'no.example.placeholder',
+        translations: translations(),
+        bootstrapCode: BOOTSTRAP_CODE,
+        firstContact: EMULATOR_FIRST_CONTACT,
+      }),
+    );
+
+  test('GRP-02-AC2: #1’s name and number go to the flows as they are typed, from the test kit’s fixtures, in Ofcom’s range reserved for drama', () => {
+    const env = envNow();
+
+    expect(env.FIRST_CONTACT_NAME).toBe(EMULATOR_FIRST_CONTACT.name);
+    expect(env.FIRST_CONTACT_NUMBER).toBe(EMULATOR_FIRST_CONTACT.typed);
+    expect(EMULATOR_FIRST_CONTACT.normalised).toMatch(/^\+447700900\d{3}$/);
+  });
+
+  test('GRP-02-AC2 and CALL-01-AC2: what a flow matches of #1 arrives escaped: "Nummer 1: {{name}}" and "Ring {{name}}" filled with the name, and the number as the app shows it', () => {
+    const env = envNow();
+    const { name, normalised } = EMULATOR_FIRST_CONTACT;
+
+    expect(literalOf(env.FIRST_CONTACT_SHOWN ?? '')).toBe(`Nr. 1: ${name}?`);
+    expect(literalOf(env.CALL_BUTTON ?? '')).toBe(`Ring ${name} [nå]`);
+    expect(literalOf(env.FIRST_CONTACT_NUMBER_SHOWN ?? '')).toBe(normalised);
+    expect(maestroPattern(env.FIRST_CONTACT_NUMBER_SHOWN ?? '').test(normalised)).toBe(true);
+    expect(maestroPattern(env.FIRST_CONTACT_NUMBER_SHOWN ?? '').test(normalised.slice(1))).toBe(
+      false,
+    );
+    expect(maestroPattern(env.FIRST_CONTACT_SHOWN ?? '').test(`Nr. 1: ${name}`)).toBe(false);
+  });
+
+  test('CALL-02-AC3: 112 goes to the flows as the app’s own constant, matched exactly', () => {
+    const env = envNow();
+
+    expect(literalOf(env.EMERGENCY_NUMBER ?? '')).toBe('112');
+    expect(maestroPattern(env.EMERGENCY_NUMBER ?? '').test('1123')).toBe(false);
+  });
+
+  test.each(
+    Object.entries(FLOW_TEXTS).filter(
+      ([field]) =>
+        !field.startsWith('JOIN') &&
+        ![
+          'CODE_LABEL',
+          'NAME_LABEL',
+          'NOT_VALID',
+          'MEMBER_TITLE',
+          'INVITE_BUTTON',
+          'MEMBERS_BUTTON',
+          'CREATE_INVITATION',
+          'SHARE_BUTTON',
+        ].includes(field),
+    ),
+  )('GRP-02, CALL-01 and CALL-02: %s arrives escaped, as nb.json’s %s', (field, key) => {
+    const env = envNow();
+
+    expect(literalOf(env[field] ?? ''), field).toBe(textAt(translations(), key));
+  });
+});
+
+/** Each step of a flow, comments left out: one value per line, as the flows are written. */
+const stepsOf = (name) =>
+  readFileSync(path.join(FLOWS, name), 'utf8')
+    .split('---')
+    .slice(1)
+    .join('---')
+    .split('\n')
+    .filter((line) => line.trim() !== '' && !line.trimStart().startsWith('#'));
+
+/** A flow's header: the comment lines before its first line of YAML. */
+const headerOf = (name) => {
+  const lines = readFileSync(path.join(FLOWS, name), 'utf8').split('\n');
+  const end = lines.findIndex((line) => !line.startsWith('#'));
+  return lines.slice(0, end).join('\n');
+};
+
+/** Steps that touch the screen: a tap, a press held, typing, a swipe, a scroll. */
+const TOUCH =
+  /^\s*-?\s*(tapOn|doubleTapOn|longPressOn|inputText|inputRandom\w*|eraseText|swipe|scroll\w*|pasteText|copyTextFrom)\b/;
+
+/** The steps that open the dialer or a call: a tap of the app's 112 button or its call button. */
+const OPENS_THE_DIALER = /^\s*-?\s*tapOn:\s*\$\{(EMERGENCY_LABEL|CALL_BUTTON)\}\s*$/;
+
+// CALL-02's L7 112 step and SPIKE-01-AC10's rule: a test never taps anything
+// in the dialer. From step 1 on, apps/mobile/e2e/ needs the owner and
+// safety-reviewer (CALL-02-AC11); these hold the rule in the flows themselves.
+describe('the flows that reach the dialer never tap in it', () => {
+  const flows = () => readdirSync(FLOWS).filter((name) => /\.ya?ml$/.test(name));
+  /** Flows that open the dialer or a call, or start in the dialer. */
+  const reaching = () =>
+    flows().filter(
+      (name) =>
+        stepsOf(name).some((line) => OPENS_THE_DIALER.test(line)) ||
+        name === 'back-from-the-dialer.yaml',
+    );
+
+  test('CALL-02-AC3: there are flows that open the dialer: the 112 button’s, the call without the permission’s, and the way back', () => {
+    expect(reaching()).toEqual(
+      expect.arrayContaining([
+        'emergency-112.yaml',
+        'call-with-permission.yaml',
+        'call-without-permission.yaml',
+        'back-from-the-dialer.yaml',
+      ]),
+    );
+  });
+
+  test('CALL-02-AC3: every flow that reaches the dialer or a call says in its header that it never taps anything in the dialer', () => {
+    const silent = reaching().filter(
+      (name) => !/never tap anything in the dialer/i.test(headerOf(name)),
+    );
+
+    expect(silent).toEqual([]);
+  });
+
+  test('CALL-02-AC3: after the step that opens the dialer or a call, a flow touches nothing: no tap, no typing, no swipe, no scroll; and the way back presses back alone', () => {
+    const touching = reaching().flatMap((name) => {
+      const steps = stepsOf(name);
+      const opened = steps.findIndex((line) => OPENS_THE_DIALER.test(line));
+      const after = name === 'back-from-the-dialer.yaml' ? steps : steps.slice(opened + 1);
+      return after.filter((line) => TOUCH.test(line)).map((line) => `${name}: ${line.trim()}`);
+    });
+
+    expect(touching).toEqual([]);
+    expect(
+      stepsOf('back-from-the-dialer.yaml').some((line) => /pressKey:\s*back/i.test(line)),
+    ).toBe(true);
+  });
+
+  test('CALL-01-AC3 and CALL-01-AC4: a flow that relies on the call permission’s state names it at launch, since Maestro 2.10.0’s launchApp grants every permission when a flow names none', () => {
+    const launches = (name) => {
+      const text = stepsOf(name).join('\n');
+      return (
+        /launchApp:\s*\n\s+(clearState|stopApp|permissions)/.test(text) &&
+        /permissions:\s*\n\s+(all|phone):\s*(allow|deny)/.test(text)
+      );
+    };
+
+    expect(
+      ['first-contact.yaml', 'call-with-permission.yaml', 'call-without-permission.yaml'].filter(
+        (name) => !launches(name),
+      ),
+    ).toEqual([]);
+    expect(stepsOf('first-contact.yaml').join('\n')).toMatch(/all:\s*deny/);
+    expect(stepsOf('call-without-permission.yaml').join('\n')).toMatch(/phone:\s*deny/);
+  });
+});
+
+// CALL-01, approach 9 (D-031): a flow is tagged `scripted` when it needs one
+// of the script's steps between flows (CALL_PHONE granted or revoked, the
+// font size set, Telecom's record read before and after it, or the dialer
+// checked in front) or a place in the script's order. The script runs those
+// one at a time, in its own order, with their steps
+// (scripts/e2e-android.test.mjs); every other flow runs in the first run.
+describe('the flows tagged scripted, and the flows that are not', () => {
+  /** The flows of the call button and of 112, which rely on the device's state. */
+  const CALL_FLOWS = [
+    // CALL-01-AC3: Android's dialog for CALL_PHONE, with the permission revoked before it.
+    'first-contact.yaml',
+    // CALL-01-AC2: Telecom's record before and after: one call, to #1.
+    'call-with-permission.yaml',
+    // CALL-01-AC4: the permission revoked before it; no call, and the dialer in front after it.
+    'call-without-permission.yaml',
+    // CALL-02-AC3: back from the dialer that a flow before it left in front.
+    'back-from-the-dialer.yaml',
+    // CALL-01-AC8: the largest font size before it.
+    'large-text.yaml',
+    // CALL-02-AC3: no call, and the dialer in front after it.
+    'emergency-112.yaml',
+  ];
+  /**
+   * Every flow tagged scripted: the call flows, and first-admin-invites.yaml,
+   * which needs a place in the order, first, since first-contact.yaml
+   * continues from the state it leaves (GRP-01-AC26; D-031).
+   */
+  const SCRIPTED = ['first-admin-invites.yaml', ...CALL_FLOWS];
+
+  test('GRP-01-AC26, CALL-01-AC2, CALL-01-AC3, CALL-01-AC4, CALL-01-AC8 and CALL-02-AC3: each flow that needs a step of the script or a place in its order is tagged scripted, in its config section, as Maestro reads tags: first-admin-invites and the six call flows', () => {
+    const tagged = flowsOnDisk()
+      .filter(({ tags }) => tags.includes('scripted'))
+      .map(({ name }) => name)
+      .sort();
+
+    expect(tagged).toEqual([...SCRIPTED].sort());
+  });
+
+  test('INF-06-AC9: the flows not tagged scripted are app-starts and wrong-code, which need no step of the script and no place in its order, so the first run has exactly those to run', () => {
+    const untagged = flowsOnDisk()
+      .filter(({ tags }) => !tags.includes('scripted'))
+      .map(({ name }) => name)
+      .sort();
+
+    expect(untagged).toEqual(['app-starts.yaml', 'wrong-code.yaml']);
+    expect(
+      flowsOnDisk().filter(({ tags }) => tags.length > 0 && !tags.includes('scripted')),
+    ).toEqual([]);
+  });
+
+  test('CALL-01-AC3 and CALL-01-AC4: every launchApp in a call flow names the permissions it launches with, since Maestro 2.10.0 grants them all when a flow names none', () => {
+    const unnamed = CALL_FLOWS.flatMap((name) => {
+      const steps = stepsOf(name);
+      return steps.flatMap((line, i) => {
+        if (!/^\s*-\s*launchApp\b/.test(line)) return [];
+        const indent = line.indexOf('-');
+        const body = [];
+        for (const next of steps.slice(i + 1)) {
+          if (next.search(/\S/) <= indent) break;
+          body.push(next);
+        }
+        return body.some((option) => /^\s+permissions:\s*$/.test(option))
+          ? []
+          : [`${name}: ${line.trim()}`];
+      });
+    });
+
+    expect(unnamed).toEqual([]);
+    expect(stepsOf('emergency-112.yaml').join('\n')).toMatch(/permissions:\s*\n\s+all:\s*deny/);
+  });
+});
+
+// CALL-02-AC1 (L7): "L7 asserts it visible on the join screen, the home
+// screen, the setup screen and the invite screen as the flows reach them".
+describe('the flows assert 112 on every screen they reach', () => {
+  /** Whether, in `name`, 112 is asserted visible after the step that matches `reached`, before the next tap. */
+  const assertedAfter = (name, reached) => {
+    const steps = stepsOf(name);
+    const at = steps.findIndex((line) => reached.test(line));
+    if (at === -1) return false;
+    const next = steps.slice(at + 1);
+    const until = next.findIndex((line) => /^\s*-\s*tapOn\b/.test(line));
+    return (until === -1 ? next : next.slice(0, until)).some(
+      (line) =>
+        /^\s*-\s*(assertVisible|visible):\s*\$\{EMERGENCY_LABEL\}\s*$/.test(line) ||
+        /^\s+visible:\s*\$\{EMERGENCY_LABEL\}\s*$/.test(line),
+    );
+  };
+
+  test.each([
+    ['the join screen', 'emergency-112.yaml', /visible:\s*\$\{JOIN_TITLE\}/],
+    ['the home screen', 'first-contact.yaml', /visible:\s*\$\{CHOOSE_CONTACT\}/],
+    ['the setup screen', 'first-contact.yaml', /visible:\s*\$\{SETUP_TITLE\}/],
+    [
+      'the setup screen with the keyboard up',
+      'first-contact.yaml',
+      /inputText:\s*\$\{FIRST_CONTACT_NUMBER\}/,
+    ],
+    ['the home screen with #1', 'first-contact.yaml', /visible:\s*\$\{FIRST_CONTACT_SHOWN\}/],
+    ['the invite screen', 'first-contact.yaml', /tapOn:\s*\$\{INVITE_BUTTON\}/],
+    [
+      'the home screen without the permission',
+      'call-without-permission.yaml',
+      /visible:\s*\$\{PERMISSION_MISSING\}/,
+    ],
+    ['the home screen at the largest font size', 'large-text.yaml', /visible:\s*\$\{CALL_BUTTON\}/],
+  ])('CALL-02-AC1: 112 is asserted visible on %s (%s)', (_screen, flow, reached) => {
+    expect(assertedAfter(flow, reached)).toBe(true);
+  });
+
+  test('GRP-02 and CALL-01: no flow writes a phone number: every number a flow types or matches is passed in (HK-07)', () => {
+    const written = readdirSync(FLOWS)
+      .filter((name) => /\.ya?ml$/.test(name))
+      .flatMap((name) =>
+        stepsOf(name)
+          .filter(
+            (line) =>
+              !/^\s*-?\s*(timeout|times|index):/.test(line.trim()) &&
+              !/\b(timeout|times|index):\s*\d+\s*$/.test(line),
+          )
+          .filter((line) => /\d{3,}/.test(line.replace(/\{\d+\}/g, '')))
+          .map((line) => `${name}: ${line.trim()}`),
+      );
+
+    expect(written).toEqual([]);
   });
 });
 
@@ -2595,6 +2960,7 @@ describe('GRP-01-AC28: first-admin-invites finds the code by its spelled label a
         appId: 'no.example.placeholder',
         translations: nb(),
         bootstrapCode: BOOTSTRAP_CODE,
+        firstContact: EMULATOR_FIRST_CONTACT,
       }),
     );
   /**

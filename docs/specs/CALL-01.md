@@ -309,8 +309,12 @@ and why": tracked requirements this task does not deliver are named in words.
      or flow.
    - **A failed step or flow fails the run,** and the message names the flow
      and the step.
-   - **A flow is tagged `scripted` exactly when it needs one of these steps.**
-     The tag is Maestro's `tags:` in the flow's header. How the first run
+   - **A flow is tagged `scripted` exactly when it needs one of these steps,
+     or a place in the script's order.** `first-admin-invites.yaml` needs
+     no step but runs first, because `first-contact.yaml` continues from its
+     signed-in state. The first run's order is not fixed (Maestro 2.10.0 walks
+     the folder unsorted), and `app-starts.yaml` and `wrong-code.yaml` clear
+     the app's state. The tag is Maestro's `tags:` in the flow's header. How the first run
      leaves those flows out (for example, `--exclude-tags scripted`) is the
      implementer's choice.
    - **Every call flow names its permissions in `launchApp`.** Maestro 2.10.0's

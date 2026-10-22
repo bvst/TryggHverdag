@@ -1,0 +1,58 @@
+# CALL-02-AC1 and AC3 (L7): 112 is on the join screen of a fresh install, and
+# a tap on it opens the phone's own dialer with 112 in it, and places no call.
+#
+# NEVER TAP ANYTHING IN THE DIALER. This flow taps the app's 112 button and
+# then only reads: the dialer places no call by itself, the emulator has no
+# network, and a test never dials 112 or any emergency number (SPIKE-01-AC10's
+# rule; CALL-02, "The L7 112 step"). Never add a tap, an input or a swipe after
+# the 112 tap, and never press the dialer's call button.
+#
+# Tagged `scripted` (CALL-01, approach 9): scripts/e2e-android.mjs runs it on
+# its own, one `maestro test` for this flow alone, in the order the script
+# holds, with the script's steps around it:
+#   - it clears the app's state, which signs the app out of its group and
+#     forgets #1, so it runs after every flow that needs either;
+#   - before it, the script sets the phone's usual font size and reads
+#     Telecom's record (`dumpsys telecom`) as the baseline;
+#   - it launches the app with every permission denied, as a fresh install has
+#     them: 112 needs none (Maestro's launchApp grants them all when a flow
+#     names none);
+#   - it ends with the dialer in front, on purpose: after it, the script reads
+#     the focused window (`dumpsys window`) against the holder of the dialer
+#     role (`cmd role get-role-holders android.app.role.DIALER`), and
+#     Telecom's record again, which must show no new call (scripts/lib's
+#     readers, CALL-02-AC3);
+#   - after it: back-from-the-dialer.yaml, which leaves the dialer by Android's
+#     back key alone, unless call-without-permission.yaml's dialer was the one
+#     it left.
+#
+# Nothing a reader sees is written here: scripts/e2e-android.mjs passes every
+# string in with -e, read from nb.json, and 112 from the app's own constant.
+#   APP_ID            the Android application ID
+#   JOIN_TITLE        grp.join.title
+#   EMERGENCY_LABEL   call.emergency.label, the 112 button's screen-reader label
+#   EMERGENCY_NUMBER  112
+#
+# Never add `retry:` or `optional: true` to a step here (see app-starts.yaml).
+appId: ${APP_ID}
+tags:
+  - scripted
+---
+- launchApp:
+    clearState: true
+    permissions:
+      all: deny
+- extendedWaitUntil:
+    visible: ${JOIN_TITLE}
+    timeout: 30000
+# The join screen: 112 is there before anyone has joined (Q4, D-141).
+- assertVisible: ${EMERGENCY_LABEL}
+- tapOn: ${EMERGENCY_LABEL}
+# The dialer, with 112 in it. Read only. Its field may wrap the digits in
+# formatting marks, so the pattern allows anything but a digit around them:
+# "112" matches, "1123" does not.
+- extendedWaitUntil:
+    visible: '[^0-9]*${EMERGENCY_NUMBER}[^0-9]*'
+    timeout: 15000
+- assertVisible: '[^0-9]*${EMERGENCY_NUMBER}[^0-9]*'
+- assertNotVisible: ${JOIN_TITLE}

@@ -447,7 +447,45 @@ describe('CALL-01-AC9: features/call/ needs the owner and the safety review (ste
       MUTATION_GROUPS.filter((group) => group.paths.some(covers)).map((group) => group.name),
     ).toEqual([]);
   });
+
+  // Task 2's part of CALL-01-AC9 (CALL-01.md, "What step 1 cannot pin"): the
+  // folder did not exist when step 1's lines were written, so a misspelt line
+  // or filter entry matched nothing and showed nothing. Once task 2 creates
+  // it, git tracks code under it, and scripts/gate.test.mjs holds every such
+  // file to its owners and the filter. Test files do not count as the code it
+  // holds (D-141: the pin "is what shows the folder holds code"): task 2's own
+  // tests sit in the folder before its code does.
+  test('CALL-01-AC9: git tracks at least one .ts or .tsx file under apps/mobile/src/features/call/ that is code, not a test (task 2)', () => {
+    const listed = spawnSync('git', ['ls-files', '--', CALL], { encoding: 'utf8' });
+
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      listed.stdout
+        .split('\n')
+        .filter((file) => /\.tsx?$/.test(file) && !/\.(test|spec)\.tsx?$/.test(file)).length,
+      `${CALL} holds no .ts or .tsx file git tracks but tests`,
+    ).toBeGreaterThan(0);
+  });
 });
+
+/** Every non-test .ts and .tsx file git tracks under apps/mobile/src/, with its text. */
+function trackedAppSources() {
+  const listed = spawnSync('git', ['ls-files', '--', 'apps/mobile/src/'], { encoding: 'utf8' });
+  return listed.stdout
+    .split('\n')
+    .filter((file) => /\.tsx?$/.test(file) && !/\.(test|spec)\.tsx?$/.test(file))
+    .map((file) => ({ file, text: readFileSync(file, 'utf8') }));
+}
+
+/** The files that define a component named `name`: a function, a class, or a const or let given one. */
+function definersOf(name) {
+  const defines = new RegExp(
+    `(^|\\n)\\s*(export\\s+)?(default\\s+)?(function\\s+${name}\\b|class\\s+${name}\\b|(const|let|var)\\s+${name}\\s*[=:])`,
+  );
+  return trackedAppSources()
+    .filter(({ text }) => defines.test(text))
+    .map(({ file }) => file);
+}
 
 // CALL-02-AC10 (D-141 item 7, as the owner amended it on 2026-10-22: "Ja, hele
 // shared/ui/"): Screen, in apps/mobile/src/shared/ui/, draws the 112 bar on
@@ -501,6 +539,79 @@ describe('CALL-02-AC10: shared/ui/, where Screen draws the 112 bar, needs the ow
     expect(
       MUTATION_GROUPS.filter((group) => group.paths.some(covers)).map((group) => group.name),
     ).toEqual([]);
+  });
+
+  // Task 2's part of CALL-02-AC10: as for features/call/ above, the folder's
+  // lines matched nothing until task 2 created it. And the two components the
+  // 112 bar depends on must be defined in owned folders: Screen, which draws
+  // the bar on every screen, under shared/ui/; EmergencyBar, the bar itself,
+  // under features/call/ or shared/ui/ (CALL-02, approach 1). A Screen left in
+  // features/grp/ui.tsx, or a second one elsewhere, would draw 112 from an
+  // unowned file.
+  test('CALL-02-AC10: git tracks at least one .ts or .tsx file under apps/mobile/src/shared/ui/ that is code, not a test (task 2)', () => {
+    const listed = spawnSync('git', ['ls-files', '--', SHARED_UI], { encoding: 'utf8' });
+
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      listed.stdout
+        .split('\n')
+        .filter((file) => /\.tsx?$/.test(file) && !/\.(test|spec)\.tsx?$/.test(file)).length,
+      `${SHARED_UI} holds no .ts or .tsx file git tracks but tests`,
+    ).toBeGreaterThan(0);
+  });
+
+  test('CALL-02-AC10: Screen is defined under apps/mobile/src/shared/ui/, and nowhere else in the app (task 2)', () => {
+    const definers = definersOf('Screen');
+
+    expect(
+      definers.length,
+      'no file git tracks under apps/mobile/src/ defines Screen',
+    ).toBeGreaterThan(0);
+    expect(definers.filter((file) => !file.startsWith(SHARED_UI))).toEqual([]);
+  });
+
+  test('CALL-02-AC10: EmergencyBar is defined under apps/mobile/src/features/call/ or apps/mobile/src/shared/ui/, both owned, and nowhere else (task 2)', () => {
+    const definers = definersOf('EmergencyBar');
+
+    expect(
+      definers.length,
+      'no file git tracks under apps/mobile/src/ defines EmergencyBar',
+    ).toBeGreaterThan(0);
+    expect(
+      definers.filter(
+        (file) => !file.startsWith('apps/mobile/src/features/call/') && !file.startsWith(SHARED_UI),
+      ),
+    ).toEqual([]);
+  });
+
+  test('CALL-02-AC10: the check finds a component’s definition in each of the ways one is written, and nothing else', () => {
+    // The pattern definersOf uses, held on text made here, so that a pattern
+    // that matched nothing could not pass the two tests above by finding no
+    // file outside the owned folders.
+    const defines = (text, name) =>
+      new RegExp(
+        `(^|\\n)\\s*(export\\s+)?(default\\s+)?(function\\s+${name}\\b|class\\s+${name}\\b|(const|let|var)\\s+${name}\\s*[=:])`,
+      ).test(text);
+
+    for (const text of [
+      'export function Screen({ children }) {}',
+      'export default function Screen() {}',
+      'function Screen() {}',
+      'export const Screen = memo(() => null);',
+      'const Screen: FC = () => null;',
+      'export class Screen extends Component {}',
+    ]) {
+      expect({ text, found: defines(text, 'Screen') }).toEqual({ text, found: true });
+    }
+    for (const text of [
+      "import { Screen } from './screen';",
+      '<Screen>',
+      'export { Screen } from "./screen";',
+      'const ScreenReader = 1;',
+      '// function Screen() is drawn by the route',
+    ]) {
+      expect({ text, found: defines(text, 'Screen') }).toEqual({ text, found: false });
+    }
   });
 });
 

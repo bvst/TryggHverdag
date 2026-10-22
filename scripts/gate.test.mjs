@@ -1563,6 +1563,47 @@ describe("this repository's own workflows", () => {
     ).toEqual([]);
   });
 
+  // Task 2's part of CALL-01-AC9 (CALL-01.md, "What step 1 cannot pin"): with
+  // the folder created, the tests above that read synthetic paths are joined
+  // by these, which read the files git tracks there, as CALL-02-AC11's read
+  // e2e/: a misspelt CODEOWNERS line or filter entry, which matched nothing
+  // until now, fails here.
+  test("CALL-01-AC9: under GitHub's last-match rule, every file git tracks in apps/mobile/src/features/call/ belongs to @bvst @urso-agent, and at least one of them is code, not a test (task 2)", () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+    const listed = spawnSync('git', ['ls-files', '--', CALL_FOLDER.slice(1)], { encoding: 'utf8' });
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      files.filter((file) => /\.tsx?$/.test(file) && !/\.(test|spec)\.tsx?$/.test(file)).length,
+      `${CALL_FOLDER} holds no .ts or .tsx file git tracks but tests`,
+    ).toBeGreaterThan(0);
+    expect(files.map((file) => [file, ownersOf(file)])).toEqual(
+      files.map((file) => [file, OWNERS]),
+    );
+  });
+
+  test('CALL-01-AC9: the ai-review safety filter covers every file git tracks in apps/mobile/src/features/call/, and at least one of them is code, not a test (task 2)', () => {
+    const safety = filterEntries(readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8'), 'safety');
+    const covered = (file) => safety.entries.some((glob) => globCovers(glob, file));
+    const listed = spawnSync('git', ['ls-files', '--', CALL_FOLDER.slice(1)], { encoding: 'utf8' });
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(safety.headers, 'how many filters are named safety').toBe(1);
+    expect(safety.unreadable).toEqual([]);
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      files.filter((file) => /\.tsx?$/.test(file) && !/\.(test|spec)\.tsx?$/.test(file)).length,
+      `${CALL_FOLDER} holds no .ts or .tsx file git tracks but tests`,
+    ).toBeGreaterThan(0);
+    expect(
+      files.filter((file) => !covered(file)),
+      'files under apps/mobile/src/features/call/ the safety filter does not cover',
+    ).toEqual([]);
+  });
+
   // CALL-02-AC10 (D-141 item 7, as the owner amended it on 2026-10-22: "Ja,
   // hele shared/ui/"): Screen, in apps/mobile/src/shared/ui/, draws the 112 bar
   // on every screen (CALL-02, approach 1), so a change there could drop 112
@@ -1630,6 +1671,49 @@ describe("this repository's own workflows", () => {
       exceptions.filter(
         (owned) => owned.startsWith(SHARED_UI_FOLDER) || SHARED_UI_FOLDER.startsWith(owned),
       ),
+    ).toEqual([]);
+  });
+
+  // Task 2's part of CALL-02-AC10: as for features/call/ above, the files git
+  // tracks in shared/ui/, now that task 2 has created it, each owned and each
+  // brought to safety-reviewer by the filter.
+  test("CALL-02-AC10: under GitHub's last-match rule, every file git tracks in apps/mobile/src/shared/ui/ belongs to @bvst @urso-agent, and at least one of them is code, not a test (task 2)", () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+    const listed = spawnSync('git', ['ls-files', '--', SHARED_UI_FOLDER.slice(1)], {
+      encoding: 'utf8',
+    });
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      files.filter((file) => /\.tsx?$/.test(file) && !/\.(test|spec)\.tsx?$/.test(file)).length,
+      `${SHARED_UI_FOLDER} holds no .ts or .tsx file git tracks but tests`,
+    ).toBeGreaterThan(0);
+    expect(files.map((file) => [file, ownersOf(file)])).toEqual(
+      files.map((file) => [file, OWNERS]),
+    );
+  });
+
+  test('CALL-02-AC10: the ai-review safety filter covers every file git tracks in apps/mobile/src/shared/ui/, and at least one of them is code, not a test (task 2)', () => {
+    const safety = filterEntries(readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8'), 'safety');
+    const covered = (file) => safety.entries.some((glob) => globCovers(glob, file));
+    const listed = spawnSync('git', ['ls-files', '--', SHARED_UI_FOLDER.slice(1)], {
+      encoding: 'utf8',
+    });
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(safety.headers, 'how many filters are named safety').toBe(1);
+    expect(safety.unreadable).toEqual([]);
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      files.filter((file) => /\.tsx?$/.test(file) && !/\.(test|spec)\.tsx?$/.test(file)).length,
+      `${SHARED_UI_FOLDER} holds no .ts or .tsx file git tracks but tests`,
+    ).toBeGreaterThan(0);
+    expect(
+      files.filter((file) => !covered(file)),
+      'files under apps/mobile/src/shared/ui/ the safety filter does not cover',
     ).toEqual([]);
   });
 
