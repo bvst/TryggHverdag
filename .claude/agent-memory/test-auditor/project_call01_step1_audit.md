@@ -35,3 +35,15 @@ Related: [[grp01-audit]], [[gate-integrity-local]], [[config-pinning-tests]]
   test-auditor, privacy-security-reviewer FAIL with "Skipping action due to workflow validation" (branch edits ai-review.yml).
 - 2.1.304 at db77d4d verified: curl raw.githubusercontent.com .../base-action/action.yml line 150 CLAUDE_CODE_VERSION (gh api 403).
 - Docs nit: m3.md table says AC10 red "5 failed, 340 passed"; two-file replay gives 269 passed (AC11's 277 matches two files).
+
+**Delta audit 18007c2..4581520 (2026-10-22), PASS.** CALL-02-AC12 (src/app/, red 52f21f4, green f5f24e2, D-141 third amendment).
+- RG-02 replay on the two files: 5 failed/286 passed, all on assertions; HEAD 291/291. 9 new tests = 5 red + 4 by-design guards/pins.
+- git check-ignore --no-index confirms `/apps/mobile/src/app` (no slash) matches app/_layout.tsx and app/index.tsx but NOT
+  src/app.test.tsx; `app*` matches both. So the app.test.tsx pin catches only wider lines; it is the SOLE catcher of a wider line
+  added BESIDE the exact line (P2b: 1 failure). A no-slash line REPLACING the exact one fails 22 tests (reviewCodeowners exact match).
+- 18 probes all caught (no-slash, app*, src/ replace and added, single owner, later single-owner/ownerless lines, duplicate line,
+  filter commented / *.ts / one file / moved under ui, OAP no slash, SAFETY_PATHS file-in-folder and apps/mobile/, group path,
+  D139_FILES entry, _layout.tsx and whole folder untracked). merge-rules toContain still passes commented/moved entries (gate.test catches).
+- req:coverage report unchanged (CALL-02 green, 1 file; no CALL spec on this branch). tests:changes --base 18007c2: 2 files, none weakened.
+  Baseline untouched. Check runs on 4581520: 18, mutation/traceability/unit/gate-integrity success; ai-review test-auditor,
+  privacy-security, code-reviewer fail on workflow validation; safety-reviewer success.
