@@ -21,3 +21,17 @@ Audited 2026-10-22 (cloud). Base origin/main 3d2255c. Spec and D-141 live only o
 - gh api to anthropics/claude-code-action 403 (repo not attached); `git ls-remote` works for public tag SHA checks.
 - Cleanup: `rm` with $VAR paths is refused by a safety check; use literal absolute paths.
 Related: [[grp01-audit]], [[gate-integrity-local]], [[config-pinning-tests]]
+
+**Delta audit cb9fbd3..18007c2 (2026-10-22), PASS.** CALL-02-AC10 (shared/ui/, red 3f7912e) and AC11 (e2e/, red 84fc01e).
+- RG-02 replay on merge-rules.test + gate.test: AC10 red 5 failed/269 passed, AC11 red 5/277, HEAD 282/282; all on assertions.
+- Note 1 closed: CALL-01-AC9 guard now `CALL.startsWith(p) || p.startsWith(CALL)`; strictly stronger, reason written. P5 (file in
+  features/call/ as SAFETY_PATH) now caught. New guards in AC10/AC11 read both ways from the start.
+- 17 probes all caught: en.json pin catches /apps/mobile/src/shared/, /apps/mobile/src/ (early) and *.json; ui/* and e2e/*.yml in
+  CODEOWNERS; later single-owner lines; OWNER_APPROVAL_PATHS without slash; filter entry commented / moved under `ui:` (merge-rules
+  toContain passes, gate.test filterEntries catches); `*`/`*.yml` filter with a decoy; group/SAFETY_PATHS file-in-folder;
+  `git rm --cached -r apps/mobile/e2e` -> 3 tests fail (no empty-list pass).
+- req:coverage regenerated in worktree: report unchanged (current). tests:changes --base cb9fbd3: 4 files, none weakened.
+- PR #100 open; 18 check runs on 18007c2: mutation, traceability, unit, gate-integrity success. ai-review code-reviewer,
+  test-auditor, privacy-security-reviewer FAIL with "Skipping action due to workflow validation" (branch edits ai-review.yml).
+- 2.1.304 at db77d4d verified: curl raw.githubusercontent.com .../base-action/action.yml line 150 CLAUDE_CODE_VERSION (gh api 403).
+- Docs nit: m3.md table says AC10 red "5 failed, 340 passed"; two-file replay gives 269 passed (AC11's 277 matches two files).
