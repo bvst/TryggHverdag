@@ -21,3 +21,21 @@ Should-fix given:
 - SAFETY_PATHS exclusion correct: an app path there today would run Vitest whole-suite Stryker (no jest runner)
   -> nothing killed / measured nothing (D-099). Spec cites F6 for "call not placed"; F6 is "alert not noticed".
 Related: [[rel10-canary-filter-review]], [[grp01-review]], [[unowned-gate-configs]].
+
+**Delta PASS at 18007c2 (2026-10-22)**, `git diff cb9fbd3 18007c2`: shared/ui/ (CALL-02-AC10) and e2e/ (CALL-02-AC11)
+in CODEOWNERS (L86, L89; nothing later matches), OWNER_APPROVAL_PATHS, safety filter; --model comment fixed (no
+2.1.301/v1.0.251 left outside docs). Worktree at 84fc01e: 5 red; at 18007c2 4 files 353/353. GitHub codeowners/errors
+on branch = []. The 3 e2e flows read: no tel:, 112, dialer or call step (only join/invite taps).
+Should-fixes given (task 2 specs, session branch claude/busy-faraday-40n2zl):
+- phone.ts reduction keeps ASCII digits only, but sends the raw/stored string to ACTION_CALL: if unowned
+  first-contact.ts is ever loosened, `112,5` / `11A` / Unicode digits / `*31#112` reduce to non-emergency while
+  Android's own parse (network portion, keypad letters, Character.digit) sees 112. Fix: anything not `^\+?[0-9]+$`
+  after its own separators goes to the dialer; build tel: from phone.ts's cleaned string.
+- emergency set lacks 911 (3GPP TS 22.101: 112 + 911 always emergency on every handset); no-SIM list 000/08/110/118/
+  119/999. AC2 pins "one of three followed by a digit -> ACTION_CALL" (1120): prefix-matching Telecom may intercept.
+- _layout.tsx (unowned): Slot replacement is caught by route pin only if the render uses the real _layout; a sibling
+  overlay/Modal or an ErrorBoundary fallback is caught by nothing (AC2 checks ancestors only). Screens drawn inside a
+  route by unowned grp code (new states) escape the fixed AC1 state list. Suggested: ESLint no-restricted-imports
+  (Modal, SafeAreaView, ScrollView outside shared/ui), "every host element inside Screen" assertion, ErrorBoundary on
+  Screen, owner question on owning src/app/.
+- Notes: translations nb/en.json and apps/mobile/tsconfig.json unowned (label text; @ts-expect-error vacuous if excluded).
