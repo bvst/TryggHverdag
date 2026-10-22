@@ -62,3 +62,4 @@
 - [Local PG UTF8](feedback_local_pg_utf8.md) — initdb -E UTF8; drop leftover template DBs; beforeAll failure is INVALID not SURVIVED
 - [BUG-17 audit](project_bug17_audit.md) — PASS 9597d9f (D-140 switch); 17/399 red, 416 head; 32 faults, B4 package clause survives; AC9 isLocaleRead count diluted (should fix); harness ta-bug17 worktrees
 - [Script change dilutes a count](feedback_script_change_dilutes_count.md) — new calls matching an unchanged test filter loosen it; run that test alone vs main and HEAD script
+- [CALL-01 step 1 audit](project_call01_step1_audit.md) — PASS cb9fbd3 (features/call/ owner+filter); req:coverage counts files, gate.test is fixtures-only so 1 is right; whole-file toContain backed by filterEntries; file-inside-folder SAFETY_PATHS guard gap (note); no NODE_USE_ENV_PROXY -> 3/5, gh api 13 contexts

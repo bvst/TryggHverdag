@@ -92,3 +92,4 @@ true. First audit with a PR: `gh api .../commits/<sha>/check-runs` and `.../chec
 2026-10-21 cloud (D-139 at 0fe7547): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5, 13 required incl. mutation/traceability. Pushed, no PR for the commit (branch name reused by closed PRs), check-runs total_count 0.
 2026-10-21 cloud (D-139 amendment at 93047f8): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5, 13 required incl. mutation/traceability. No PR for the branch (only #95 dependabot open), check-runs total_count 0.
 2026-10-22 cloud (BUG-17 at 9597d9f): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5, 13 required incl. mutation/traceability. Pushed, no PR for the branch, check-runs total_count 0.
+2026-10-22 cloud (CALL-01 step 1 at cb9fbd3): brief forbade NODE_USE_ENV_PROXY, so gate:integrity 3 of 5; gh api: 13 contexts incl. mutation/traceability, code-owner true. No open PR, check-runs total_count 0.
