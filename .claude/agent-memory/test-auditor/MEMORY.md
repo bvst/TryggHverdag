@@ -60,3 +60,5 @@
 - [GRP-01 audit](project_grp01_audit.md) — BLOCK a762276 (modules/groups unmutated); loop 1 PASS 3fac8fb; loop 2 PASS 879096f (S1 withdrawn: group config is a mutation input; S2 pinned at L2; plants all killed); D-139 follow-up PASS 0fe7547 (15 ownership/filter probes all caught)
 - [New logic outside group tests](feedback_new_logic_outside_group_tests.md) — pooled score passes while every new mutant survives; match survivors to the diff hunks; local Survived can be stale
 - [Local PG UTF8](feedback_local_pg_utf8.md) — initdb -E UTF8; drop leftover template DBs; beforeAll failure is INVALID not SURVIVED
+- [BUG-17 audit](project_bug17_audit.md) — PASS 9597d9f (D-140 switch); 17/399 red, 416 head; 32 faults, B4 package clause survives; AC9 isLocaleRead count diluted (should fix); harness ta-bug17 worktrees
+- [Script change dilutes a count](feedback_script_change_dilutes_count.md) — new calls matching an unchanged test filter loosen it; run that test alone vs main and HEAD script

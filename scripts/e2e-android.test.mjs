@@ -332,6 +332,22 @@ function localeAnswers({ locale, appliedAfter, readCount, readTimes }) {
  * one, which the `shell*locale*` pattern counted as a question and answered
  * with the phase's property, as no setprop does. Today's script makes no
  * setprop, so for it nothing changes.
+ *
+ * Amended again for BUG-17 (RG-03: this restores the strength of the test on
+ * MAC_RECORDING, it does not loosen it): `getprop persist.sys.locale` is no
+ * question either. It still answers the phase's property, and moves the device
+ * on no further. The phases' lengths were set when a reading was two questions,
+ * `am get-config` and `service check package`, the two that decide. The fix
+ * reads the property in every reading too, for its failure message only, which
+ * made a reading three questions: a reading wholly inside a phase, as
+ * `framework-stopping`'s configuration gone with the package service found, no
+ * longer happened, and the getprop moved the device on between a reading and
+ * the install it led to. So a script that took an unreadable configuration
+ * with the package service found as ready installed in a phase logged `ready`,
+ * and the test on MAC_RECORDING passed it; against the script before the fix
+ * it failed (test-author, BUG-17, against 9597d9f). A script that reads only
+ * the property, as before run 6, now never moves the device out of `booted`,
+ * so it never installs and still fails that test.
  */
 function timelinePhase({ timeline, readCount, phaseLog }) {
   let upTo = 0;
@@ -345,6 +361,7 @@ function timelinePhase({ timeline, readCount, phaseLog }) {
     `n=$(/bin/cat "${readCount}" 2>/dev/null || echo 0)`,
     'case "$*" in',
     '  shell*setprop*) ;;',
+    '  shell*getprop*persist.sys.locale*) ;;',
     `  shell*locale*|shell*get-config*|shell*service*check*) n=$((n + 1)); echo "$n" > "${readCount}" ;;`,
     'esac',
     ...branches,
@@ -1457,7 +1474,15 @@ describe('past the preflight', () => {
     expect(output).toMatch(/\b1 of 1 flows? passed/);
     // It read past the three answers the device gave as it booted, and only
     // then ran the flows.
-    expect(calls.filter(isLocaleRead).length, output).toBeGreaterThan(3);
+    // Amended for BUG-17 (RG-03: this restores the test's strength, it does
+    // not loosen it): readings are counted as `am get-config` calls
+    // (isConfigRead, with the BUG-17 tests below), one in each reading, not as
+    // every call isLocaleRead matches. Since the fix, each reading also runs
+    // `getprop persist.sys.locale`, and the switch one `setprop
+    // persist.sys.locale nb-NO`; both name "locale", so two readings made five
+    // such calls, and a script that passed on its second or third reading,
+    // whatever the device said, passed here (test-auditor, at 9597d9f).
+    expect(calls.filter(isConfigRead).length, output).toBeGreaterThan(3);
     expect(calls.findIndex(isFlowRun), output).toBeGreaterThan(calls.findLastIndex(isLocaleRead));
     // Amended in BUG-21's review: between each two readings it slept for
     // exactly the interval, once. Nothing else here holds the interval from

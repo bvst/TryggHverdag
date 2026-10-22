@@ -907,6 +907,13 @@ const IN_BOKMAL = { config: configOutput('nb-rNO'), packageService: FOUND, prope
 /** The property set, and the framework still in English: the switch did not take. */
 const NOT_TAKEN = { config: configOutput('en-rUS'), packageService: FOUND, property: PROPERTY_NB };
 
+/** Bokmål in the configuration, and no package service to install with: not ready (D-140). */
+const BOKMAL_NO_PACKAGE = {
+  config: configOutput('nb-rNO'),
+  packageService: NOT_FOUND,
+  property: PROPERTY_NB,
+};
+
 /**
  * A device that e2e:android switches itself. Each reading is `before` until
  * `switchLocale` is called, and `after(msSinceTheSwitch)` from then on, and
@@ -1033,6 +1040,34 @@ describe('BUG-17: waitForLocale switches a device that is not in bokmål, once, 
     expect(phone.reads.map((r) => r.at)).toEqual([0, 1_000, 2_000, 3_000]);
     // Not vacuous: it read on through the restart, while the package service was gone.
     expect(phone.reads.map((r) => r.packageService)).toContain(NOT_FOUND);
+  });
+
+  test('BUG-17: a device whose first reading is in bokmål but has no package service is not ready either, so it is switched once, straight after that reading, and then passes once the restarted framework has its package service', async () => {
+    // D-140: the first reading is not ready when the configuration is not
+    // bokmål, or the package service is not found, and either is switched. A
+    // switch made only for a language that is wrong passed every test before
+    // this one (test-auditor's mutant B4, at 9597d9f). The device stays as it
+    // was until it is switched, so a wait that does not switch it runs out.
+    const time = fakeTime();
+    const phone = switchedDevice(time, {
+      before: BOKMAL_NO_PACKAGE,
+      after: (ms) => (ms < 3_000 ? RESTARTING : IN_BOKMAL),
+    });
+
+    const result = await waitForLocale(phone.read, {
+      deadline: 30_000,
+      interval: 1_000,
+      now: time.now,
+      sleep: time.sleep,
+      switchLocale: phone.switchLocale,
+    });
+
+    expect(phone.switches).toEqual([{ at: 0, afterReads: 1 }]);
+    // The guard: switched, it waits as before, an interval between each two
+    // readings, and passes on the first with the package service found.
+    expect(result.ok, result.message).toBe(true);
+    expect(phone.reads.map((r) => r.at)).toEqual([0, 1_000, 2_000, 3_000]);
+    expect(phone.reads.at(-1)?.packageService).toBe(FOUND);
   });
 
   test('BUG-17: when the switch is refused, the wait fails at once with what the switch said: no sleep, and no reading after it', async () => {
