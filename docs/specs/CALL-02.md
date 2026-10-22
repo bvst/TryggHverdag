@@ -434,8 +434,11 @@ the script; then `pressKey: back`. The flow's header says it must never tap
 anything in the dialer. The dialer places no call by itself, and the emulator
 has no network, so a mistake here could not reach an emergency centre; the
 rule stands anyway. From step 1 on, a change to the flows, this one's header
-included, needs the owner and `safety-reviewer` (AC11), as a change to
-`scripts/e2e-android.mjs` already does.
+included, needs the owner and `safety-reviewer` (AC11). A change to
+`scripts/e2e-android.mjs` needs the owner (`/scripts/`) but does not bring
+`safety-reviewer`: the `safety` filter lists only `scripts/mutation.mjs` and
+`scripts/lib/gate-decisions.mjs` among the scripts (`ai-review.yml`, read on
+2026-10-22).
 
 **What this cloud session cannot verify:** that Android's dialer takes `tel:112`
 as this spec reads it (first seen in CI's `android-e2e`); that AML sends a
