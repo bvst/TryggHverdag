@@ -46,6 +46,7 @@ import {
   judgeReport,
   maestroTestCommand,
   maestroUrl,
+  switchToBokmal,
   waitForLocale,
 } from './e2e-android.mjs';
 
@@ -737,6 +738,366 @@ describe('waitForLocale: bokmål counts only once the restarted framework report
       // And the package service, as last seen: named, and missing only if it was.
       expect(result.message).toMatch(/\bpackage\b/i);
       expect(PACKAGE_MISSING.test(result.message), result.message).toBe(packageMissing);
+    },
+  );
+});
+
+// BUG-17. android-e2e failed three times before the app was installed: #57
+// (job 110875720264), #60 (job 111180346250) and #96 (job 118947039610, run
+// 39515647691), each with this wait's own message, "Waited 120 s for the
+// emulator to be in Norwegian bokmål with its package service up … its package
+// service was found, and its configuration's language was en-rUS." CI started
+// the emulator with `-change-locale nb-NO`, which the emulator applies after
+// boot by restarting Android's framework. #96's failing run and its passing
+// re-run (job 119070015215) both logged "Changing locale to nb-NO … Restarting
+// framework." at the same point; in the failing one the framework was up, and
+// still en-rUS, 120 s later. That switch cannot be watched and sometimes does
+// not take, so e2e:android could only wait for it and fail.
+//
+// So e2e:android makes the switch itself (D-031), and only on a device that is
+// not in bokmål already: `adb root`, `adb wait-for-device`, `adb shell setprop
+// persist.sys.locale nb-NO`, and `adb shell setprop ctl.restart zygote`, which
+// restarts the framework that reads the property. Setting it at boot with
+// `-prop persist.sys.locale` is refused by the emulator (D-081, run 8). A step
+// that is refused fails at once, naming the step and what adb printed; a wait
+// for a switch that cannot happen would only use up the deadline. When the wait
+// after the switch runs out, it says what persist.sys.locale said last and
+// whether the framework was seen restarting, so the next failure can be read
+// (D-070).
+//
+// `adb` answers as the entry script's `run` does, { ok, status, output }:
+// status null when adb could not be run or did not finish, output stdout and
+// stderr together.
+
+/** The adb arguments of the switch's four steps, after `-s <serial>`, in order. */
+const SWITCH = [
+  ['root'],
+  ['wait-for-device'],
+  ['shell', 'setprop', 'persist.sys.locale', 'nb-NO'],
+  ['shell', 'setprop', 'ctl.restart', 'zygote'],
+];
+
+/**
+ * `adb -s <serial> …` on an emulator, which notes each call's arguments and
+ * answers them from `answers`, by the arguments joined with spaces. Any other
+ * step it accepts, as a google_apis emulator does: `adb root` says it restarts
+ * adbd as root, and the rest print nothing and exit 0.
+ */
+function emulatorAdb(answers = {}) {
+  const calls = [];
+  return {
+    calls,
+    adb: (args) => {
+      calls.push(args);
+      const step = args.join(' ');
+      if (Object.hasOwn(answers, step)) return answers[step];
+      return { ok: true, status: 0, output: step === 'root' ? 'restarting adbd as root\n' : '' };
+    },
+  };
+}
+
+/** The two answers of an adbd that is, or now will be, root. */
+const ROOT_ACCEPTED = [
+  { what: 'restarts adbd as root', output: 'restarting adbd as root\n' },
+  { what: 'already runs adbd as root', output: 'adbd is already running as root\n' },
+];
+
+/**
+ * Each step refused, with what adb printed. `names` is the step's own name,
+ * looked for in the message once adb's words are taken out, as they may name
+ * it too. adbd's refusal on a production build is adb's own text
+ * (restart_root_service), and `adb root` exits 0 with it, as it does whenever
+ * its answer lacks "restarting"; "unable to connect for" is adb's when it
+ * cannot reach adbd, and "Failed to set property" toolbox's setprop's.
+ */
+const SWITCH_REFUSED = [
+  {
+    what: 'adb root is refused, as on a production build, though adb exits 0',
+    step: 'root',
+    answer: { ok: true, status: 0, output: 'adbd cannot run as root in production builds\n' },
+    names: /\broot\b/,
+  },
+  {
+    what: 'adb root exits 1',
+    step: 'root',
+    answer: { ok: false, status: 1, output: 'adb: unable to connect for root: closed\n' },
+    names: /\broot\b/,
+  },
+  {
+    what: 'adb wait-for-device does not finish',
+    step: 'wait-for-device',
+    answer: { ok: false, status: null, output: 'spawnSync adb ETIMEDOUT' },
+    names: /\bwait-for-device\b/,
+  },
+  {
+    what: 'setprop persist.sys.locale exits 1',
+    step: 'shell setprop persist.sys.locale nb-NO',
+    answer: {
+      ok: false,
+      status: 1,
+      output:
+        "Failed to set property 'persist.sys.locale' to 'nb-NO'.\nSee dmesg for error reason.\n",
+    },
+    names: /\bpersist\.sys\.locale\b/,
+  },
+  {
+    what: 'setprop ctl.restart zygote exits 1',
+    step: 'shell setprop ctl.restart zygote',
+    answer: {
+      ok: false,
+      status: 1,
+      output: "Failed to set property 'ctl.restart' to 'zygote'.\nSee dmesg for error reason.\n",
+    },
+    names: /\bctl\.restart\b|\bzygote\b/,
+  },
+];
+
+/** Each line of what adb printed, as a message may show it: trimmed, and the empty ones left out. */
+const printedLines = (output) =>
+  output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+
+describe('BUG-17: switchToBokmal makes the switch to bokmål itself, step by step', () => {
+  test.each(ROOT_ACCEPTED)(
+    'BUG-17: on an emulator that $what, it runs adb root, wait-for-device, setprop persist.sys.locale nb-NO and setprop ctl.restart zygote, once each and in that order, and passes',
+    async ({ output }) => {
+      const device = emulatorAdb({ root: { ok: true, status: 0, output } });
+
+      const result = await switchToBokmal(device.adb);
+
+      expect(result.ok, result.message).toBe(true);
+      expect(device.calls).toEqual(SWITCH);
+    },
+  );
+
+  test.each(SWITCH_REFUSED)(
+    'BUG-17: when $what, it stops at that step and fails, naming the step and saying what adb printed',
+    async ({ step, answer, names }) => {
+      const device = emulatorAdb({ [step]: answer });
+      const refusedAt = SWITCH.findIndex((args) => args.join(' ') === step);
+
+      const result = await switchToBokmal(device.adb);
+      const said = printedLines(answer.output);
+      const rest = said.reduce((message, line) => message.split(line).join(''), result.message);
+
+      expect(result.ok, result.message).toBe(false);
+      // Nothing after the refused step was run.
+      expect(device.calls).toEqual(SWITCH.slice(0, refusedAt + 1));
+      for (const line of said) expect(result.message).toContain(line);
+      expect(rest, result.message).toMatch(names);
+    },
+  );
+});
+
+/** What `adb shell getprop persist.sys.locale` prints: the value, or an empty line when unset. */
+const PROPERTY_NB = 'nb-NO\n';
+const PROPERTY_UNSET = '\n';
+
+/** The device as it booted, in its image's language, with persist.sys.locale unset. */
+const BOOTED = { config: configOutput('en-rUS'), packageService: FOUND, property: PROPERTY_UNSET };
+
+/** While the framework restarts: no configuration, no package service, the property set. */
+const RESTARTING = { config: ACTIVITY_DOWN, packageService: NOT_FOUND, property: PROPERTY_NB };
+
+/** The restarted framework in bokmål, ready to install. */
+const IN_BOKMAL = { config: configOutput('nb-rNO'), packageService: FOUND, property: PROPERTY_NB };
+
+/** The property set, and the framework still in English: the switch did not take. */
+const NOT_TAKEN = { config: configOutput('en-rUS'), packageService: FOUND, property: PROPERTY_NB };
+
+/**
+ * A device that e2e:android switches itself. Each reading is `before` until
+ * `switchLocale` is called, and `after(msSinceTheSwitch)` from then on, and
+ * the switch answers `switched`. Notes each reading, with when it was taken,
+ * and each switch, with when and after how many readings.
+ */
+function switchedDevice(time, { before, after, switched = { ok: true, message: 'Switched.' } }) {
+  const reads = [];
+  const switches = [];
+  return {
+    reads,
+    switches,
+    read: () => {
+      if (reads.length >= MAX_READS) {
+        throw new Error(
+          `read ${String(MAX_READS)} times: the wait is not following the now and sleep it was given`,
+        );
+      }
+      const at = time.now();
+      const reading = switches.length === 0 ? before : after(at - (switches[0]?.at ?? at));
+      reads.push({ at, ...reading });
+      return reading;
+    },
+    switchLocale: () => {
+      switches.push({ at: time.now(), afterReads: reads.length });
+      return switched;
+    },
+  };
+}
+
+/**
+ * A message that says persist.sys.locale was `value`: the property's name, and
+ * then the value in the same clause, at most 25 characters on. "The flows expect
+ * nb-NO", which the message already says, is no such statement.
+ */
+const propertySays = (value) =>
+  new RegExp(`persist\\.sys\\.locale\\b[^\\n.;,]{0,25}?\\b${value.replace(/[.-]/g, '\\$&')}\\b`);
+
+/** A message that says persist.sys.locale was empty, in the same way. */
+const PROPERTY_EMPTY =
+  /persist\.sys\.locale\b[^\n.;,]{0,25}?(?:""|''|\bempty\b|\bnothing\b|\bunset\b|\bnot set\b|\bblank\b|\bno value\b)/i;
+
+/** A message that speaks of the framework's restart at all. */
+const SAYS_RESTART = /\brestart/i;
+
+/**
+ * A message that says no restart was seen: a no, not, never or without, and
+ * "restart" after it in the same clause, at most 25 characters on. "was not
+ * seen restarting", "no restart was seen" and "never restarted" all are; "was
+ * seen restarting" is not.
+ */
+const NO_RESTART = /\b(?:no|not|never|without)\b[^.,;:()\n]{0,25}?\brestart/i;
+
+/**
+ * The wait after the switch, run out, and what its failure must then say:
+ * persist.sys.locale as last read, and whether the package service was seen
+ * missing at least once, the sign of a framework restarting. In each, the last
+ * reading has the configuration in en-rUS and the package service found.
+ */
+const AFTER_THE_SWITCH = [
+  {
+    what: 'the framework restart and then en-rUS, with persist.sys.locale nb-NO',
+    after: (ms) => (ms < 3_000 ? RESTARTING : NOT_TAKEN),
+    says: propertySays('nb-NO'),
+    doesNotSay: PROPERTY_EMPTY,
+    restartSeen: true,
+  },
+  {
+    what: 'no restart, with persist.sys.locale nb-NO',
+    after: () => NOT_TAKEN,
+    says: propertySays('nb-NO'),
+    doesNotSay: PROPERTY_EMPTY,
+    restartSeen: false,
+  },
+  {
+    what: 'no restart, with persist.sys.locale still empty',
+    after: () => BOOTED,
+    says: PROPERTY_EMPTY,
+    doesNotSay: propertySays('nb-NO'),
+    restartSeen: false,
+  },
+];
+
+describe('BUG-17: waitForLocale switches a device that is not in bokmål, once, and then waits as before', () => {
+  test('BUG-17: a device already in bokmål with its package service up is not switched: it passes on the first reading, and the switch is never made', async () => {
+    // Passes before the fix too, which never switches: it fails a fix that
+    // switches every device, bokmål or not.
+    const time = fakeTime();
+    const phone = switchedDevice(time, { before: IN_BOKMAL, after: () => IN_BOKMAL });
+
+    const result = await waitForLocale(phone.read, {
+      deadline: 30_000,
+      interval: 1_000,
+      now: time.now,
+      sleep: time.sleep,
+      switchLocale: phone.switchLocale,
+    });
+
+    expect(result.ok, result.message).toBe(true);
+    expect(phone.switches).toEqual([]);
+    expect(phone.reads.length).toBe(1);
+  });
+
+  test('BUG-17: a device not in bokmål is switched once, straight after the first reading and before any sleep, and then read every interval until the restarted framework reports bokmål with its package service found', async () => {
+    // Within the wait, so its deadline is today's, from the first reading,
+    // and an interval passes between each two readings, as BUG-21's checks of
+    // the entry script hold it to.
+    const time = fakeTime();
+    const phone = switchedDevice(time, {
+      before: BOOTED,
+      after: (ms) => (ms < 3_000 ? RESTARTING : IN_BOKMAL),
+    });
+
+    const result = await waitForLocale(phone.read, {
+      deadline: 30_000,
+      interval: 1_000,
+      now: time.now,
+      sleep: time.sleep,
+      switchLocale: phone.switchLocale,
+    });
+
+    expect(phone.switches).toEqual([{ at: 0, afterReads: 1 }]);
+    expect(result.ok, result.message).toBe(true);
+    expect(phone.reads.map((r) => r.at)).toEqual([0, 1_000, 2_000, 3_000]);
+    // Not vacuous: it read on through the restart, while the package service was gone.
+    expect(phone.reads.map((r) => r.packageService)).toContain(NOT_FOUND);
+  });
+
+  test('BUG-17: when the switch is refused, the wait fails at once with what the switch said: no sleep, and no reading after it', async () => {
+    // After the refusal the device would report bokmål, so a wait that read
+    // on would pass, and be seen to.
+    const time = fakeTime();
+    const refused = {
+      ok: false,
+      message: 'adb root was refused. adb printed:\nadbd cannot run as root in production builds',
+    };
+    const phone = switchedDevice(time, {
+      before: BOOTED,
+      after: () => IN_BOKMAL,
+      switched: refused,
+    });
+
+    const result = await waitForLocale(phone.read, {
+      deadline: 30_000,
+      interval: 1_000,
+      now: time.now,
+      sleep: time.sleep,
+      switchLocale: phone.switchLocale,
+    });
+
+    expect(phone.switches.length).toBe(1);
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(refused.message);
+    expect(phone.reads.length).toBe(1);
+    expect(time.now()).toBe(0);
+  });
+
+  test.each(AFTER_THE_SWITCH)(
+    'BUG-17: when the wait after the switch runs out, having seen $what, the failure still says what it said before, and adds what persist.sys.locale said last and whether the framework was seen restarting',
+    async ({ after, says, doesNotSay, restartSeen }) => {
+      const time = fakeTime();
+      const phone = switchedDevice(time, { before: BOOTED, after });
+
+      const result = await waitForLocale(phone.read, {
+        deadline: 30_000,
+        interval: 1_000,
+        now: time.now,
+        sleep: time.sleep,
+        switchLocale: phone.switchLocale,
+      });
+
+      // It waited out the deadline as before.
+      expect(result.ok).toBe(false);
+      expect(phone.reads.at(-1)?.at).toBeGreaterThanOrEqual(30_000 - 1_000);
+      expect(time.now()).toBeLessThanOrEqual(30_000 + 1_000);
+      // What it said before: it waited, how long, for bokmål, and what the
+      // configuration and the package service last said.
+      expect(result.message).toMatch(/bokmål/);
+      expect(result.message).toMatch(/\bwait/i);
+      expect(result.message).toMatch(saysHowLong(30_000));
+      expect(result.message).toMatch(spelled('en-US'));
+      expect(result.message).toMatch(/\bpackage\b/i);
+      expect(PACKAGE_MISSING.test(result.message), result.message).toBe(false);
+      // What persist.sys.locale said last.
+      expect(result.message).toMatch(says);
+      expect(result.message).not.toMatch(doesNotSay);
+      // Whether the framework was seen restarting.
+      expect(result.message).toMatch(SAYS_RESTART);
+      expect(NO_RESTART.test(result.message), result.message).toBe(!restartSeen);
+      // Not vacuous: this was the wait after a switch, made once.
+      expect(phone.switches.length).toBe(1);
     },
   );
 });
