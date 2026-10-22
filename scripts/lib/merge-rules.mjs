@@ -95,6 +95,9 @@ export const OWNER_APPROVAL_PATHS = [
   '/apps/mobile/src/features/call/',
   // Screen draws the 112 bar on every screen (CALL-02, D-141).
   '/apps/mobile/src/shared/ui/',
+  // The L7 flows: the only end-to-end proof that 112 opens the dialer, and the
+  // rule never to tap call there (CALL-02, D-141).
+  '/apps/mobile/e2e/',
   // The join's request and answer, the issued credential among them (GRP-01, D-139).
   '/packages/contracts/src/groups.ts',
   // The display-name rule, which the app checks before it sends and the

@@ -81,6 +81,9 @@ jobs:
               - 'apps/mobile/src/features/call/**'
               # Screen draws the 112 bar on every screen (CALL-02, D-141).
               - 'apps/mobile/src/shared/ui/**'
+              # The L7 flows: the only end-to-end proof that 112 opens the dialer,
+              # and the rule never to tap call there (CALL-02, D-141).
+              - 'apps/mobile/e2e/**'
               - 'packages/contracts/**'
               - 'scripts/mutation.mjs'
               - 'scripts/lib/gate-decisions.mjs'
