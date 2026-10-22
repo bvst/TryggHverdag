@@ -98,6 +98,9 @@ export const OWNER_APPROVAL_PATHS = [
   // The L7 flows: the only end-to-end proof that 112 opens the dialer, and the
   // rule never to tap call there (CALL-02, D-141).
   '/apps/mobile/e2e/',
+  // Expo Router's routes and _layout.tsx, the frame around every screen: a
+  // change could cover or drop the 112 bar (CALL-02, D-141).
+  '/apps/mobile/src/app/',
   // The join's request and answer, the issued credential among them (GRP-01, D-139).
   '/packages/contracts/src/groups.ts',
   // The display-name rule, which the app checks before it sends and the

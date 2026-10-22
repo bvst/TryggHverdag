@@ -84,6 +84,9 @@ jobs:
               # The L7 flows: the only end-to-end proof that 112 opens the dialer,
               # and the rule never to tap call there (CALL-02, D-141).
               - 'apps/mobile/e2e/**'
+              # Expo Router's routes and _layout.tsx, the frame around every
+              # screen: a change could cover or drop the 112 bar (CALL-02, D-141).
+              - 'apps/mobile/src/app/**'
               - 'packages/contracts/**'
               - 'scripts/mutation.mjs'
               - 'scripts/lib/gate-decisions.mjs'
