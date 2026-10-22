@@ -1563,6 +1563,76 @@ describe("this repository's own workflows", () => {
     ).toEqual([]);
   });
 
+  // CALL-02-AC10 (D-141 item 7, as the owner amended it on 2026-10-22: "Ja,
+  // hele shared/ui/"): Screen, in apps/mobile/src/shared/ui/, draws the 112 bar
+  // on every screen (CALL-02, approach 1), so a change there could drop 112
+  // from every screen at once. Step 1 puts the whole folder in
+  // OWNER_APPROVAL_PATHS, CODEOWNERS and the safety filter, as it does for
+  // features/call/ above; scripts/lib/merge-rules.test.mjs pins those three
+  // lists. Task 2 creates the folder, moving the UI kit there from
+  // features/grp/ui.tsx, so these read synthetic paths too, and the pin that
+  // git tracks a file under it, owned and covered, comes with task 2's own
+  // tests. apps/mobile/src/shared/ is older than ui/ and holds files outside
+  // it, which keep the owners they have today.
+  const SHARED_UI_FOLDER = '/apps/mobile/src/shared/ui/';
+  const SHARED_UI_FILES = [
+    'apps/mobile/src/shared/ui/screen.tsx',
+    'apps/mobile/src/shared/ui/nested/palette.ts',
+  ];
+
+  test("CALL-02-AC10: under GitHub's last-match rule, a file directly in apps/mobile/src/shared/ui/ and one nested below it belong to @bvst @urso-agent, and gate:integrity finds every owner-approval path owned", () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    // The reading is checked on an owned file beside the folder first.
+    expect(ownersOf('apps/mobile/src/shared/secure-storage.ts')).toEqual(OWNERS);
+    expect(SHARED_UI_FILES.map((file) => [file, ownersOf(file)])).toEqual(
+      SHARED_UI_FILES.map((file) => [file, OWNERS]),
+    );
+  });
+
+  test("CALL-02-AC10: under GitHub's last-match rule, apps/mobile/src/shared/translations/en.json, in shared/ but outside ui/, keeps the owners it has today: none", () => {
+    // A pin, not a red test: it passes before step 1's code as after it, by
+    // design. The owner chose shared/ui/, not shared/: a line for
+    // /apps/mobile/src/shared/, or any pattern wider than ui/, would make the
+    // translations owned too, and fail here. The reading is checked on the
+    // two owned files beside it first, so the empty list is CODEOWNERS'
+    // answer and not the reader's blind spot.
+    const ownersOf = lastMatchOwners(readFileSync('.github/CODEOWNERS', 'utf8'));
+
+    expect(ownersOf('apps/mobile/src/shared/secure-storage.ts')).toEqual(OWNERS);
+    expect(ownersOf('apps/mobile/src/shared/api/client.ts')).toEqual(OWNERS);
+    expect(ownersOf('apps/mobile/src/shared/translations/en.json')).toEqual([]);
+  });
+
+  test('CALL-02-AC10: the ai-review safety filter covers a file directly in apps/mobile/src/shared/ui/ and one nested below it, so a change to either brings safety-reviewer', () => {
+    const safety = filterEntries(readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8'), 'safety');
+    const covered = (file) => safety.entries.some((glob) => globCovers(glob, file));
+
+    expect(safety.headers, 'how many filters are named safety').toBe(1);
+    expect(safety.unreadable).toEqual([]);
+    expect(
+      SHARED_UI_FILES.filter((file) => !covered(file)),
+      'files under apps/mobile/src/shared/ui/ the safety filter does not cover',
+    ).toEqual([]);
+  });
+
+  test('CALL-02-AC10: apps/mobile/src/shared/ui/ is not among the named exceptions the safety filter test leaves out of the filter, as D-141 decided', () => {
+    // A guard, not a red test: it passes before step 1's code as after it, by
+    // design, as CALL-01-AC9's above does. D-139's two shared/ files,
+    // secure-storage.ts and api/client.ts, are named exceptions beside the
+    // folder, not in it; no exception may be the folder, lie in it or hold it.
+    const exceptions = [...D102_FILES, ...D139_APPS_FILES];
+
+    expect(exceptions.length).toBeGreaterThan(0);
+    expect(
+      exceptions.filter(
+        (owned) => owned.startsWith(SHARED_UI_FOLDER) || SHARED_UI_FOLDER.startsWith(owned),
+      ),
+    ).toEqual([]);
+  });
+
   // The safety filter is held through the general filter test above, as D-097's block is.
   // RG-03 (BUG-18, code-reviewer): a per-file filter test for db.ts, added on this branch and
   // never on main, was removed. The general test already fails for either file missing from

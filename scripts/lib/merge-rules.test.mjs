@@ -434,9 +434,69 @@ describe('CALL-01-AC9: features/call/ needs the owner and the safety review (ste
     // or in a mutation group, as task 3 may later decide, shows itself as a
     // change to this test with its own reason (RG-03). A safety path or a
     // group path that is the folder, or a folder above it, would make it one.
-    const covers = (path) => CALL.startsWith(path);
+    // RG-03 (test-auditor's note 1 on step 1): so would a file or a folder
+    // inside it, such as 'apps/mobile/src/features/call/phone.ts', which the
+    // check read one way only, CALL.startsWith(path), let through with every
+    // test green. It reads both ways now; it is no looser for the folder or a
+    // folder above it.
+    const covers = (path) => CALL.startsWith(path) || path.startsWith(CALL);
 
     expect(SAFETY_PATHS).not.toContain(CALL);
+    expect(SAFETY_PATHS.filter(covers)).toEqual([]);
+    expect(
+      MUTATION_GROUPS.filter((group) => group.paths.some(covers)).map((group) => group.name),
+    ).toEqual([]);
+  });
+});
+
+// CALL-02-AC10 (D-141 item 7, as the owner amended it on 2026-10-22: "Ja, hele
+// shared/ui/"): Screen, in apps/mobile/src/shared/ui/, draws the 112 bar on
+// every screen (CALL-02, approach 1), so a change there could drop 112 from
+// every screen at once. safety-reviewer found the folder had no owner and no
+// safety review. Step 1 gives the whole folder a line in .github/CODEOWNERS,
+// an entry in OWNER_APPROVAL_PATHS and an entry in the ai-review safety
+// filter, as it does for features/call/ above, before task 2 creates it by
+// moving the UI kit there from features/grp/ui.tsx. It is no D-139 named
+// exception, no safety path and no mutation group. Only ui/ is new:
+// apps/mobile/src/shared/ itself stays unowned, and its two owned files keep
+// their own lines (scripts/gate.test.mjs pins a file outside ui/). The pin
+// that git tracks a file under the folder comes with task 2's own tests.
+describe('CALL-02-AC10: shared/ui/, where Screen draws the 112 bar, needs the owner and the safety review (step 1, D-141)', () => {
+  const SHARED_UI = 'apps/mobile/src/shared/ui/';
+
+  test('CALL-02-AC10: OWNER_APPROVAL_PATHS holds /apps/mobile/src/shared/ui/', () => {
+    expect(OWNER_APPROVAL_PATHS).toContain(`/${SHARED_UI}`);
+  });
+
+  test('CALL-02-AC10: .github/CODEOWNERS gives the folder exactly one line, naming @bvst and @urso-agent, and every path the owner must approve is owned', () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const owners = (path) =>
+      text
+        .split('\n')
+        .map((line) => line.trim().split(/\s+/))
+        .filter(([pattern]) => pattern === path)
+        .map(([, ...names]) => names.join(' '));
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    expect(owners(`/${SHARED_UI}`)).toEqual(['@bvst @urso-agent']);
+  });
+
+  test('CALL-02-AC10: the ai-review safety filter lists the folder’s files', () => {
+    const workflow = readFileSync('.github/workflows/ai-review.yml', 'utf8');
+
+    expect(workflow).toContain(`- '${SHARED_UI}**'`);
+  });
+
+  test('CALL-02-AC10: the folder is no safety path and no mutation group lists it, a folder above it or a path in it, as D-141 decided for step 1', () => {
+    // A guard, not a red test: it passes before step 1's code as after it, by
+    // design, as CALL-01-AC9's above does, and reads both ways for the same
+    // reason (test-auditor's note 1). It pins what step 1 must not do, so that
+    // putting shared/ui/, a folder above it or a file in it among the safety
+    // paths or in a mutation group shows itself as a change to this test with
+    // its own reason (RG-03).
+    const covers = (path) => SHARED_UI.startsWith(path) || path.startsWith(SHARED_UI);
+
+    expect(SAFETY_PATHS).not.toContain(SHARED_UI);
     expect(SAFETY_PATHS.filter(covers)).toEqual([]);
     expect(
       MUTATION_GROUPS.filter((group) => group.paths.some(covers)).map((group) => group.name),
