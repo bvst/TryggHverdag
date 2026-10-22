@@ -23,8 +23,11 @@ src/app/"): AC12; and on safety-reviewer's delta notes for task 2: the route
 pin renders the real root layout and finds nothing drawn outside `Screen`
 (AC1), an import rule keeps `Modal`, `SafeAreaView` and `ScrollView` in
 `shared/ui/` (AC2), the English 112 texts asserted in full (AC6), and a crash
-keeps 112 (AC13) · **Status:** Settled, and amended. The owner's answers are
-in D-141.
+keeps 112 (AC13). **Amended a fourth time**, on safety-reviewer's notes after
+#100 passed: the fallback stands alone, outside the providers (AC13); a child
+of `Screen` is clipped below the bar (AC2); the route draws `Screen`, the
+features do not (AC1); and `Alert` joins the import rule (AC2) ·
+**Status:** Settled, and amended. The owner's answers are in D-141.
 
 ## Requirement
 
@@ -160,17 +163,44 @@ and why".
      a screen built on `Screen` cannot leave it out (reading 5). Every screen
      of the app, the brief start's waiting indicator included, is drawn on
      `Screen` (Q4), and every route file renders through it (AC1).
+   - **`Screen`'s shape** (safety-reviewer's notes on #100; Claude's choice
+     under D-031): inside the safe area, the bar and one clipping container
+     are siblings, the bar first. Every child `Screen` is given is drawn inside
+     that container: its `ScrollView`, whose style never sets
+     `overflow: 'visible'`, or, where it does not scroll, a `View` with
+     `overflow: 'hidden'`. The bar is never inside the container. So a child
+     positioned absolutely, at any size or `zIndex`, is clipped to the area
+     below the bar and cannot cover it (AC2).
+   - **The route draws `Screen`, not the feature** (Claude's choice under
+     D-031, over naming an accepted gap). Each route file in `src/app/`
+     (owned, AC12) wraps what it renders in `Screen` itself, so the bar on
+     every screen comes from owned code. The views a feature draws inside a
+     route (the brief start, the join, home, setup, invite and members views
+     in `features/grp/`) render content only and never `Screen`, so there is
+     no second bar. Today each of GRP-01's six views wraps itself in
+     `<Screen>` and passes it nothing but children (read in
+     `features/grp/ui.tsx`, `home-screen.tsx`, `join-screen.tsx`,
+     `invite-screen.tsx` and `members-screen.tsx`, 2026-10-22), so the change
+     is mechanical: the wrapper moves up into `src/app/index.tsx`. *Why not
+     the gap:* `features/grp/` is unowned, and a state added there later would
+     render under no criterion's state list; with the route drawing `Screen`,
+     whatever it renders sits in the clipping container below the bar.
+     `Screen`'s options, if it gains any, are set by the route; a view that
+     needs others becomes a route of its own. Content that changes view within
+     one route is keyed by view, so each view starts at the top of the scroll.
    - Both files are in owned, safety-reviewed folders after step 1: `Screen`
      in `shared/ui/`, and `EmergencyBar` in `features/call/`, or in
      `shared/ui/` if the import rules make that the cleaner home (AC10). The
      routes and the root layout are too (`src/app/`, AC12).
    - **Nothing covers the bar** (safety-reviewer's delta notes; Claude's
      choices under D-031):
-     - only files in `src/shared/ui/` may import `Modal`, `SafeAreaView` or
-       `ScrollView` from `react-native`, or `SafeAreaView` from
-       `react-native-safe-area-context` (the one `Screen` uses today): an
-       ESLint `no-restricted-imports` rule in the owned `eslint.config.mjs`
-       (AC2);
+     - only files in `src/shared/ui/` may import `Modal`, `Alert`,
+       `SafeAreaView` or `ScrollView` from `react-native`, or `SafeAreaView`
+       from `react-native-safe-area-context` (the one `Screen` uses today);
+       and only files in `src/app/` and `src/shared/ui/` may import `Screen`:
+       an ESLint `no-restricted-imports` rule in the owned
+       `eslint.config.mjs` (AC2). `Alert` because a native dialog sits over
+       the bar until it is dismissed;
      - nothing the app draws sits outside `Screen` but the root layout's
        `StatusBar` (AC1);
      - `_layout.tsx` exports an `ErrorBoundary` whose fallback is drawn on
@@ -179,6 +209,23 @@ and why".
        the screen, with "Prøv igjen", which calls the boundary's retry; it
        never shows the error's message, which could hold #1's number
        (GRP-02-AC9).
+     - **The fallback stands alone.** safety-reviewer read the installed
+       expo-router 57.0.23: `fromImport` in `build/useScreens.js` wraps the
+       layout component itself in `Try catch={ErrorBoundary}`, so the
+       boundary `_layout.tsx` exports catches errors thrown in the layout and
+       in its providers too. Its fallback therefore renders *outside*
+       `I18nextProvider` and `GroupSessionProvider`. The app's i18n is
+       `i18next.createInstance()` without `initReactI18next`, so outside the
+       provider react-i18next 17's `useTranslation` returns raw keys. So:
+       - the fallback is a component in `src/shared/ui/` that supplies its
+         own `I18nextProvider` with the shared instance from
+         `src/shared/translations/`;
+       - it uses no group-session hook;
+       - `Screen` and `EmergencyBar` never read the group session: nothing in
+         `src/shared/ui/` imports from `src/features/` but `features/call`'s
+         index, and nothing in `features/call/` imports `features/grp/`
+         (CALL-01-AC6's rule), so neither can reach `useGroupSession`
+         (AC13).
 2. **The home screen does not wait for the server** (reading 3; changes GRP-01's
    start). The session's start becomes:
    - storage read, no credential: the join screen (unchanged; with the bar);
@@ -261,7 +308,12 @@ translations table below, asserted in full.
   that `Screen`, or is an ancestor of it (the wrappers Expo Router and the
   layout put around every screen), or is on a short allow-list named in the
   test with its reason: the root layout's `StatusBar` (L5,
-  `src/shared/ui/screen.test.tsx`).
+  `src/shared/ui/screen.test.tsx`)
+- **And** that `Screen` is drawn by the route file itself: each route file
+  under `src/app/` imports `Screen`, and no file under `src/features/` does
+  (AC2's import rule refuses it), so a view a feature adds inside a route
+  later is drawn inside the route's `Screen`, below the bar (approach 1)
+  (L1).
 
 *Why L5, and why this way.* Whether a route draws `Screen` is a property of
 what it renders through every component between the route file and the screen
@@ -275,9 +327,11 @@ layout, and finding no host element beside `Screen`, is what catches
 something drawn over the bar from outside a route: an overlay in the layout,
 or a sibling of `Screen` that covers it, which the ancestor checks of AC2
 cannot see. The test sits in `shared/ui/`, an owned, safety-reviewed path
-(AC10), so loosening it needs the owner and `safety-reviewer`. The screens
-drawn inside a route (the join, setup, invite and members screens) are held
-by the state list above, not by this test.
+(AC10), so loosening it needs the owner and `safety-reviewer`. The views
+drawn inside a route (the join, setup, invite and members views) are held by
+the state list above for the states known today; a state `features/grp/`
+adds later, under no list, is still drawn inside the route's `Screen`,
+because the route draws it and no feature can (the last bullet).
 
 **CALL-02-AC2 — The 112 button is never hidden.** (L5; L7)
 - **Then** on every screen and state of AC1, no ancestor of the 112 button in
@@ -288,16 +342,26 @@ by the state list above, not by this test.
 - **And** `EmergencyBar` accepts no props: a typed test passes it one under
   `@ts-expect-error`, so `tsc` fails if it ever accepts any (L1)
 - **And** a `no-restricted-imports` rule in `eslint.config.mjs` refuses an
-  import of `Modal`, `SafeAreaView` or `ScrollView` from `react-native`, or of
-  `SafeAreaView` from `react-native-safe-area-context`, in any file under
-  `apps/mobile/src/` outside `src/shared/ui/`, and allows it inside; fixture
-  tests in `packages/config/`, in the style of LOST-02-AC25's, run ESLint on
-  a probe file inside `shared/ui/` (no error) and one outside (an error for
-  each of the four), with a control that the rule fires; and
-  `pnpm run gate:static`'s lint passes on the repository with the rule in
-  place (L1)
+  import of `Modal`, `Alert`, `SafeAreaView` or `ScrollView` from
+  `react-native`, or of `SafeAreaView` from `react-native-safe-area-context`,
+  in any file under `apps/mobile/src/` outside `src/shared/ui/`, and allows it
+  inside; and refuses an import of `Screen` in any file outside `src/app/`
+  and `src/shared/ui/`. Fixture tests in `packages/config/`, in the style of
+  LOST-02-AC25's, run ESLint on a probe file inside `shared/ui/` (no error),
+  one in `src/app/` importing `Screen` (no error), and one under
+  `src/features/` (an error for each of the five imports, and for `Screen`),
+  with a control that the rule fires; and `pnpm run gate:static`'s lint
+  passes on the repository with the rule in place (L1)
 - **And** `Screen`, rendered with each of its optional props set and unset,
   holds the 112 button every time (L5)
+- **And** `Screen`, rendered with each of its optional props set and unset,
+  and given one child that is positioned absolutely at full size (`top`,
+  `right`, `bottom` and `left` 0, a high `zIndex` and `elevation`): the child
+  is a descendant of the clipping container (the `ScrollView`, with no
+  `overflow: 'visible'` in its flattened style, or a `View` whose flattened
+  style has `overflow: 'hidden'`); the 112 button is not a descendant of that
+  container; and the bar and the container are siblings (approach 1)
+  (L5, `src/shared/ui/screen.test.tsx`)
 - **And** on #1's setup screen with the keyboard open, it is visible (L7)
 - **And** with Android's font size at the largest the emulator image's Settings
   offer (as CALL-01-AC8 sets it), it is visible on the home screen without
@@ -433,7 +497,7 @@ review.** (scripts' gate tests; D-141 as amended)
   folder, such as `/apps/mobile/src/app*` or `/apps/mobile/src/`, is caught. A
   line written without the trailing slash is caught by the exact-line check.
 
-**CALL-02-AC13 — A screen that crashes still shows 112.** (L5)
+**CALL-02-AC13 — A screen that crashes still shows 112.** (L5; L1)
 - **Given** the real `src/app/_layout.tsx`, which exports an `ErrorBoundary`
 - **When** a route throws while rendering (a faked module the index route
   renders throws an error whose message holds a synthetic #1 number)
@@ -444,7 +508,20 @@ review.** (scripts' gate tests; D-141 as amended)
   igjen"; a tap on "Prøv igjen", with the module no longer throwing, renders
   the route again
 - **And** no text the fallback renders holds the error's message or the
-  number (GRP-02-AC9's rule) (L5, `src/shared/ui/screen.test.tsx`).
+  number (GRP-02-AC9's rule) (L5, `src/shared/ui/screen.test.tsx`)
+- **When** `GroupSessionProvider` itself throws while rendering (the layout's
+  provider, so the fallback renders outside it and outside the layout's
+  `I18nextProvider`)
+- **Then** the fallback shows exactly one 112 button whose
+  `accessibilityLabel` is "Ring 112, nødnummeret" in full, not a raw key, and
+  "Noe gikk galt på denne skjermen." in full; and pressing the button calls
+  `openDialer('112')` (L5)
+- **And** nothing in `src/shared/ui/` imports from `src/features/` but
+  `features/call`'s index, a dependency-cruiser rule in
+  `packages/config/dependency-cruiser.cjs` beside CALL-01-AC6's, with fixture
+  tests and a control that it fires; with CALL-01-AC6's rule, this keeps
+  `Screen`, `EmergencyBar` and the fallback from reaching `useGroupSession`
+  (L1).
 
 ## Translations (D-014): bokmål first, then English
 
@@ -504,8 +581,8 @@ fallback's included (AC13).
 
 | Level | Where | Criteria | Runs here? |
 |---|---|---|---|
-| L1 static | `tsc` (the `@ts-expect-error` on `EmergencyBar`'s props); ESLint or a source test for colour literals and raw JSX text; the `no-restricted-imports` rule in `eslint.config.mjs`, with fixture tests in `packages/config/` | AC2 (props, imports), AC7 (palette only), AC9 (raw text) | Yes |
-| L5 app | `features/call/emergency.test.tsx` and the shared home tests (the whole app through Expo Router's testing library, the phone module and `fetch` faked, `GET /v1/me` held unanswered, answered as member and admin, 401, 5xx, no answer, network error; the English 112 texts); `features/call/phone.test.ts`; `src/shared/ui/palette.test.ts` (contrast); `src/shared/ui/screen.test.tsx` (every route through `Screen` inside the real root layout, nothing drawn beside it, and the error fallback); the `app.config` test | AC1 to AC9, AC13 | Yes |
+| L1 static | `tsc` (the `@ts-expect-error` on `EmergencyBar`'s props); ESLint or a source test for colour literals and raw JSX text; the `no-restricted-imports` rule in `eslint.config.mjs`, with fixture tests in `packages/config/` | AC1 (`Screen` imported by routes only), AC2 (props, imports), AC7 (palette only), AC9 (raw text), AC13 (`shared/ui/` imports nothing of `features/` but `call`'s index: dependency-cruiser, fixtures in `packages/config/`) | Yes |
+| L5 app | `features/call/emergency.test.tsx` and the shared home tests (the whole app through Expo Router's testing library, the phone module and `fetch` faked, `GET /v1/me` held unanswered, answered as member and admin, 401, 5xx, no answer, network error; the English 112 texts); `features/call/phone.test.ts`; `src/shared/ui/palette.test.ts` (contrast); `src/shared/ui/screen.test.tsx` (every route through `Screen` inside the real root layout, nothing drawn beside it, an absolute child clipped below the bar, and the error fallback, a route's throw and `GroupSessionProvider`'s); the `app.config` test | AC1 to AC9, AC13 | Yes |
 | L7 Android | Maestro, `apps/mobile/e2e/`: 112 visible on the join, home, setup (keyboard up) and invite screens; tap 112, the dialer in front with 112, Telecom with no call, back; at the largest font size, 112 visible on the home screen | AC1, AC2, AC3 | **No**: CI's `android-e2e` |
 | Gate tests | `scripts/lib/merge-rules.test.mjs`, `scripts/gate.test.mjs`, beside CALL-01-AC9's | AC10 (step 1's part in step 1's pull request; the tracked-file and defining-file parts in task 2's); AC11 and AC12 (all of them in step 1's pull request) | Yes |
 | L7 iOS; L9 | none | — | Task 12; a real iPhone (D-037) |
@@ -545,20 +622,29 @@ confirmation (task 12); how the dark palette looks on a real screen at night.
 - **INF-06-AC11's flow** (`e2e/app-starts.yaml`) holds a title, the line under
   it and no raw key; with 112 on the join screen (Q4) it gains nothing it must
   change. Its `assertNotVisible` of a dotted key still holds: "112" is not one.
+- **GRP-01's views stop drawing `Screen`** (approach 1): `src/app/index.tsx`
+  wraps `HomeScreen` in `Screen`, and the six views in `features/grp/` render
+  content only. What a screen shows is unchanged; no assertion names
+  `Screen` today (GRP-01's tests read text and roles; `grp.test.tsx`'s header
+  read, not every line).
 
 ## Modules and files affected
 
 **App:** `src/features/call/` (`emergency-bar.tsx`, `phone.ts`'s `openDialer`,
 tests); `src/shared/ui/` (the kit moved from `features/grp/ui.tsx`,
-`palette.ts`, `screen.test.tsx`, tests); `src/features/grp/` (every screen on
-the moved kit; `session.tsx` and `home-screen.tsx` for approach 2;
-`session.tsx` owned, D-139); `src/app/_layout.tsx` (the `StatusBar` and the
-`ErrorBoundary`; owned after step 1, AC12); `app.config.ts` (dark; owned);
+`palette.ts`, the error fallback, `screen.test.tsx`, tests); `src/features/grp/`
+(every view on the moved kit, drawing content only, not `Screen`;
+`session.tsx` and `home-screen.tsx` for approach 2; `session.tsx` owned,
+D-139); `src/app/index.tsx` (wraps the home screen in `Screen`) and
+`src/app/_layout.tsx` (the `StatusBar` and the `ErrorBoundary`), both owned
+after step 1 (AC12); `app.config.ts` (dark; owned);
 `nb.json`, `en.json` (the fallback's line among the new keys); `e2e/` flows
 (owned after step 1, AC11).
 
 **Config (owned):** `eslint.config.mjs` (the `no-restricted-imports` rule,
-AC2) and its fixture tests in `packages/config/`.
+AC2) and `packages/config/dependency-cruiser.cjs` (`shared/ui/` reaches no
+feature but `call`'s index, AC13), with their fixture tests in
+`packages/config/`.
 
 **Who reviews what, after step 1:** `src/shared/ui/` is now an owned,
 safety-reviewed path (AC10), as `src/features/call/` is (CALL-01-AC9), so
@@ -566,7 +652,8 @@ safety-reviewed path (AC10), as `src/features/call/` is (CALL-01-AC9), so
 `safety-reviewer`; and so is `apps/mobile/e2e/` (AC11), so the L7 flows of
 AC1 to AC3, and the 112 step's never-tap-in-the-dialer header, cannot either. `features/grp/home-screen.tsx` and
 `features/grp/first-contact.ts` stay unowned; acceptable, because 112 does not
-depend on them: the bar comes from `Screen`, the route pin and AC1 to AC5's
+depend on them: the bar comes from `Screen`, which the owned route file draws
+around whatever they render (approach 1), the route pin and AC1 to AC5's
 tests live in owned folders, and the dialer's number is a constant beside the
 bar, in an owned folder (`CALL-01.md`, "Modules and files affected", says the same
 for the call button). `src/app/`, the routes and the root layout, is owned
@@ -604,12 +691,17 @@ None.
   crashes (AC13); a home screen held behind a spinner (approach 2); a
   keyboard over it (reading 2); a font size that pushes it off (AC2). Each has
   a criterion.
-- **A crash outside the route.** AC13 covers an error thrown while a route
-  renders. Whether the root layout's own boundary also catches an error in
-  the layout itself or its providers depends on Expo Router's wiring, not
-  checked here; if it does not, React unmounts the app and 112 goes with it.
-  The implementer finds out in AC13's test, adds that case if the boundary
-  catches it, and says so plainly if it does not.
+- **A crash outside the route.** safety-reviewer read the installed
+  expo-router 57.0.23 on #100: `fromImport` in `build/useScreens.js` wraps the
+  layout component itself in `Try catch={ErrorBoundary}`, so the boundary
+  `_layout.tsx` exports also catches errors in the layout and its providers
+  (not re-read in this pass). The fallback then renders outside the
+  translations and the group session; approach 1 makes it stand alone, and
+  AC13 throws from `GroupSessionProvider` to prove it. What is left: an error
+  in the fallback itself, or in Expo Router above the root layout, has no
+  boundary above it, and React unmounts the app with 112. The fallback holds
+  only `Screen`, `EmergencyBar`, the shared translation instance and
+  `phone.ts`, the same code every other screen depends on for 112.
 - **`src/app/` changed unseen.** Before the third amendment, a change to the
   root layout could draw over the bar on every screen with only the advisory
   `a11y-i18n-reviewer` seeing it. After step 1 it needs the owner and

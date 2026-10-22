@@ -31,8 +31,10 @@ delta notes for task 2: `phone.ts` cleans the number itself and builds every
 AC2). The Norwegian numbering facts behind the narrowed prefix rule are
 Nkom's, from a web search's summary of two Nkom pages, read on 2026-10-22 by
 the session that coordinated this pass (approach 2 cites them); Nkom's
-current allocation file was not read · **Status:** Settled, and amended. The
-owner's answers are in D-141.
+current allocation file was not read. **Amended a fourth time** on
+safety-reviewer's smaller notes after #100 passed: the reduction loops
+(approach 2, AC2), and a pasted invisible character is named as a risk ·
+**Status:** Settled, and amended. The owner's answers are in D-141.
 
 ## Requirement
 
@@ -180,9 +182,10 @@ and why": tracked requirements this task does not deliver are named in words.
      Each of these can reach an emergency number through `ACTION_CALL`
      without looking like one. Today only `features/grp/first-contact.ts`,
      which is not a code-owner path, keeps such strings out of #1.
-   - **It reduces a plain number for the emergency check.** A leading `+47` or
-     `0047` is dropped, and then a leading `+`. (So `+47 112` reduces to
-     `112`, and `+112` to `112`: the check errs towards the dialer.)
+   - **It reduces a plain number for the emergency check,** in a loop until
+     nothing changes: a leading `+47` is dropped, else a leading `0047`, else
+     a leading `+`. (So `+47 112` reduces to `112`, `+112` to `112`, and
+     `+0047112` to `112`: the check errs towards the dialer.)
    - **Emergency numbers go to the dialer.** The reduced number is an
      emergency number if it is exactly one of: `112` and `911`, which 3GPP
      TS 22.101 makes emergency numbers on every phone; `110` and `113`,
@@ -452,8 +455,8 @@ texts are the bokmål in `CALL-02.md`'s translations table, asserted in full.
     `Linking.openURL` and never starts `ACTION_CALL`;
   - *written other ways:* the same for each written with spaces between the
     digits, with dashes between them, with a leading `+47` (with and without a
-    space after it) and with a leading `0047`: the dialer with the reduced
-    digits alone (`tel:112`), never `ACTION_CALL`;
+    space after it), with a leading `0047`, and with a leading `+0047`: the
+    dialer with the reduced digits alone (`tel:112`), never `ACTION_CALL`;
   - *by prefix:* the same, the dialer, for `110`, `112`, `113`, `000`, `118`
     and `119` each followed by more digits (shapes `112d`, `113dd`). This
     replaces the earlier pin that one of 110, 112 or 113 followed by a digit
@@ -678,14 +681,20 @@ None.
     (approach 2); the pages may be old, and Nkom's current allocation file was
     not read, so a newer allocation beginning with a prefix in the rule would
     send that #1 to the dialer: one tap more, never a failed call.
+  - *An invisible character in the number:* a bidirectional mark (U+200E,
+    say) pasted with a number is not whitespace, so the cleaned string fails
+    `^\+?[0-9]+$` and the #1 goes to the dialer: one tap more, the safe
+    direction. `first-contact.ts` refuses such a number today (GRP-02-AC3),
+    so it reaches `phone.ts` only if that rule changes.
 - **The 112 bar or the call button removed by a change outside
   `features/call/`.** `Screen` draws the bar on every screen, from
   `shared/ui/`; after step 1 that folder needs the owner and
   `safety-reviewer` too (CALL-02-AC10), and task 2's test that every route is
   drawn through `Screen` (CALL-02-AC1) catches a screen added later without
   it. The routes and the root layout in `src/app/` need both as well
-  (CALL-02-AC12), and nothing outside `shared/ui/` may import `Modal`,
-  `SafeAreaView` or `ScrollView` (CALL-02-AC2). `home-screen.tsx` and
+  (CALL-02-AC12), and they, not the features, draw `Screen`; nothing outside
+  `shared/ui/` may import `Modal`, `Alert`, `SafeAreaView` or `ScrollView`,
+  and a child of `Screen` is clipped below the bar (CALL-02-AC1, AC2). `home-screen.tsx` and
   `first-contact.ts` stay unowned ("Modules and files affected" says why that
   is acceptable).
 - **[F7](../plan/03-safety-reliability-security.md#failure-modes), the server

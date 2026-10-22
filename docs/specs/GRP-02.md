@@ -212,6 +212,9 @@ Technical choices delegated to Claude (D-031), on the owner's answers in D-141.
    same pieces without importing each other, and every colour comes from one
    palette module. `shared/ui/` holds `Screen`, which draws the 112 bar, so
    after step 1 it is a code-owner and safety-review path (CALL-02-AC10).
+   The route file in `src/app/` draws `Screen`; the views in `features/grp/`
+   (the setup screen among them) render content only, and may not import
+   `Screen` (CALL-02's spec, approach 1; CALL-02-AC1, AC2).
 6. **Sizes** (Q6, as proposed): ordinary controls at least 56 dp tall (as
    today); the 112 button at least 64 dp tall and 96 dp wide; the call button
    at least 120 dp tall and the screen's full width less its margins; at least
@@ -464,7 +467,9 @@ with the reason beside it and `test-auditor` can check none is a weakening:
 - **`first-admin-invites.yaml`**: if the home screen's heading changes from
   `grp.member.title`, the flow's `MEMBER_TITLE` step follows it.
 - **The shared kit moves** from `features/grp/ui.tsx` to `src/shared/ui/`, and
-  its colours to the palette: imports change, no assertion.
+  its colours to the palette: imports change, no assertion. GRP-01's views
+  stop wrapping themselves in `Screen`, which `src/app/index.tsx` now draws
+  around them (CALL-02's spec, approach 1): what each shows is unchanged.
 
 ## Modules and files affected
 
