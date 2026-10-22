@@ -6296,9 +6296,9 @@ any other path is work, not a candidate for the same treatment.
 ## D-141 — The home screen: the owner's answers (GRP-02, CALL-01, CALL-02; M3 task 2)
 - **Date:** 2026-10-22 · **Status:** Accepted (the owner, 2026-10-22). Asked in
   session, one at a time, each with Claude's recommendation, and the owner chose
-  the recommendation every time · **Section:** 10 (M3, task 2); D-010, D-012,
-  D-013, D-014, D-016, D-023, D-031, D-042, D-055, D-075, D-081, D-128, D-134,
-  D-137, D-139
+  the recommendation every time; item 7 amended twice the same day, below ·
+  **Section:** 10 (M3, task 2); D-010, D-012, D-013, D-014, D-016, D-023, D-031,
+  D-042, D-055, D-075, D-081, D-128, D-134, D-137, D-139
 - **Context:**
   - D-134 puts GRP-02, CALL-01 and CALL-02 in one task: the home screen, with
     the #1 contact, the call button and 112 always visible. Its three specs
@@ -6371,6 +6371,10 @@ any other path is work, not a candidate for the same treatment.
        `SAFETY_PATHS`: the app's mutation testing is set up with the safety
        core in task 3 (D-081 item 13, D-134), and `features/call/` is for that
        task to consider. Until then no mutation run measures its tests.
+     - **Amended the same day (the owner, twice, after step 1's reviews):**
+       `apps/mobile/src/shared/ui/` and `apps/mobile/e2e/` join
+       `features/call/` in everything this item says, in the same step-1 pull
+       request. See "Amended 2026-10-22", below.
   8. **Where task 2 is built: "Her i skyen"** (here, in the cloud session), as
      GRP-01 was. Screens are tested with jest-expo (L5), and CI's
      `android-e2e` runs the flows (L7). iOS and VoiceOver wait for task 12.
@@ -6393,7 +6397,15 @@ any other path is work, not a candidate for the same treatment.
   - GRP-02-AC6 checks `apps/mobile/package.json` for other stores
     (AsyncStorage, file system, SQLite, MMKV), so #1 has no other place to be
     written to;
-  - the number is shown as dialled, not grouped.
+  - the number is shown as dialled, not grouped;
+  - (a, added by the amendment below, 2026-10-22) `phone.ts` checks for 110,
+    112 and 113 itself, rather than relying on `features/grp/first-contact.ts`'s
+    normalisation, so the emergency rule lives wholly in owned code
+    (`features/call/`; CALL-01, approach 2 and AC2);
+  - (b, added by the amendment below, 2026-10-22) a task-2 test requires every
+    route under `apps/mobile/src/app/` to be drawn through `Screen`, so that no
+    route can leave the 112 bar out by not using the component that draws it
+    (CALL-02-AC1).
 - **Consequences:**
   - **No server work in task 2.** No route, no table and no contract change;
     `api:diff` must show none. #1 is deleted from the phone with the credential
@@ -6429,3 +6441,130 @@ any other path is work, not a candidate for the same treatment.
   - That AML sends the position when the call is placed from the dialer. Only
     a real emergency call would show it, and no test makes one (SPIKE-01-AC10).
   - Anything on iOS.
+
+- **Amended 2026-10-22, with two owner answers, each asked in session with
+  Claude's recommendation and each the recommended option: the first, after
+  step 1's four reviews, on `shared/ui/`; the second, after `planner` and
+  `safety-reviewer` raised it, on `e2e/` (further down):**
+  - **Why (the first answer, `shared/ui/`):** step 1's pull request (branch
+    `claude/busy-faraday-40n2zl-ai-review`, from `main` at `3d2255c`, not opened
+    when this was written) was reviewed in the session at `cb9fbd3` by
+    `code-reviewer`, `safety-reviewer`, `privacy-security-reviewer` and
+    `test-auditor`. All four passed it.
+    `safety-reviewer`'s should-fix 1 found a gap in item 7:
+    - `Screen`, the component that draws the 112 bar on every screen (CALL-02,
+      approach 1), will live in `apps/mobile/src/shared/ui/`. Task 2 moves the
+      shared kit there from `features/grp/ui.tsx`, where `Screen` is today
+      (read in the worktree on 2026-10-22). The folder does not exist yet, as
+      `features/call/` does not.
+    - The folder had no code owner and no safety review. A later change to
+      `Screen`, or to the buttons or the palette beside it, could drop 112 from
+      every screen and be seen only by `a11y-i18n-reviewer`, which is advisory
+      (`ai-review.yml`: `blocking: false`, `applies: ui`).
+    - Adding the folder later would take another pull request merged by hand
+      (D-075), because the `safety` filter is in `ai-review.yml`.
+  - **Asked (the first answer):** whether `shared/ui/` should get the code
+    owner and the safety review too, in this same pull request, with Claude's
+    recommendation: yes, the whole folder. (The question's own wording is not
+    recorded here.)
+  - **The owner answered (the first answer):** "Ja, hele shared/ui/" (Yes, the
+    whole of `shared/ui/`), on 2026-10-22.
+  - **Decision (the first answer):** item 7 holds for a second folder.
+    - `/apps/mobile/src/shared/ui/` gets the code owner `@bvst @urso-agent`
+      (D-071) and joins the ai-review `safety` filter, in the same step-1 pull
+      request, in the same three places as `features/call/`:
+      `.github/CODEOWNERS`, `OWNER_APPROVAL_PATHS` in
+      `scripts/lib/merge-rules.mjs`, and the `safety` filter in
+      `.github/workflows/ai-review.yml`, with their gate tests.
+    - **Like `features/call/`,** it is no D-139 named exception (its `/apps/`
+      owner path is in the filter, as that test requires), no `SAFETY_PATHS`
+      entry and no mutation group. The app's mutation testing is set up in task
+      3 (D-081 item 13), and `shared/ui/` is for that task to consider with
+      `features/call/`.
+    - **Its gate tests are named CALL-02-AC10,** a new criterion in
+      `docs/specs/CALL-02.md`, as `features/call/`'s are named CALL-01-AC9.
+      CALL-02 is the story whose 112 bar the folder draws.
+  - **Claude's two choices (D-031), (a) and (b) under "Who decided":** `phone.ts`
+    checks for 110, 112 and 113 itself; a task-2 test requires every route under
+    `src/app/` to be drawn through `Screen`.
+  - **Consequences (the first answer):**
+    - **Every later change to the shared UI kit** (`Screen`, the buttons, the
+      palette) waits for the owner's approval (D-042) and brings
+      `safety-reviewer` by path, as `features/call/` does after step 1.
+    - **`features/grp/home-screen.tsx` and `features/grp/first-contact.ts` stay
+      unowned and out of the filter.** That is acceptable now because of choice
+      (a): the emergency rule is in `phone.ts`, which is owned, so a change to
+      `first-contact.ts`'s normalisation or to the home screen cannot by itself
+      send 110, 112 or 113 through `ACTION_CALL`. What it does not cover, stated
+      plainly:
+      - a change to either file that stored a wrong #1, showed the number
+        wrongly or dropped the call button from the home screen would not call
+        `safety-reviewer` by path. `privacy-security-reviewer` runs on every
+        pull request, and the CALL-01 and GRP-02 tests, once written, run in CI,
+        but neither is the safety review;
+      - that `phone.ts` is the only file that places a call is the design
+        (CALL-01, approach 1), and the spec, as read on 2026-10-22, names no
+        import rule or test that pins it;
+      - adding the two files is a new decision, for the owner; this one does
+        not.
+    - **The requirement report shows CALL-02 as 🟢 from step 1's merge,** as
+      CALL-01, because a gate test names it, before any 112 code exists. The
+      report's 🟢 still means only that a test names the requirement. Task 2's
+      own tests are what show that the folders hold code (the tracked-file pins
+      of CALL-01-AC9 and CALL-02-AC10).
+    - **Step 1's pull request grows:** its red tests (CALL-02-AC10) are written
+      first, then its green change. The hand merge (D-075) and the batching
+      with #95 are unchanged (items 7 and 9).
+  - **The second answer, the same day: `apps/mobile/e2e/` too.**
+    - **Why:** `planner` and `safety-reviewer` raised it. As the owner was
+      asked:
+      - `apps/mobile/e2e/` holds the Maestro flows that run the app on Android
+        in CI (L7, the `android-e2e` check). It holds three today,
+        `app-starts.yaml`, `first-admin-invites.yaml` and `wrong-code.yaml`, all
+        tracked by git. It has no code owner and is not in the `safety` filter
+        (no `apps/mobile/e2e` in `.github/CODEOWNERS`, `OWNER_APPROVAL_PATHS` or
+        `ai-review.yml`, read on this branch and on the side branch,
+        2026-10-22).
+      - They are the only end-to-end proof that 112 opens the dialer (CALL-02's
+        L7 row).
+      - They carry the rule that a test never taps call in the dialer
+        (SPIKE-01-AC10), so that no test can ever really call 112. On the
+        emulator the dialer places no call by itself and the emulator has no
+        network (CALL-02's spec), but the rule matters more once the flows run on
+        a real phone (L9).
+      - An unowned change could drop the 112 checks or break that rule, and
+        `safety-reviewer` would not be summoned by path. It would be seen only
+        by what `test-auditor`, which runs on every pull request, notices.
+    - **Asked (the second answer):** whether `apps/mobile/e2e/` should get the
+      code owner and the safety review too, in this same pull request, with
+      Claude's recommendation: yes. (The question's own wording is not recorded
+      here.)
+    - **The owner answered (the second answer):** "Ja, ta med e2e/" (Yes,
+      include `e2e/`), on 2026-10-22.
+    - **Decision (the second answer):** item 7 holds for a third folder.
+      - `/apps/mobile/e2e/` gets the code owner `@bvst @urso-agent` (D-071) and
+        joins the ai-review `safety` filter (`apps/mobile/e2e/**`), in the same
+        step-1 pull request, in the same three places as the other two, with
+        their gate tests.
+      - **Like the other two,** it is no D-139 named exception, no
+        `SAFETY_PATHS` entry and no mutation group.
+      - **Its gate tests are named CALL-02-AC11,** a new criterion in
+        `docs/specs/CALL-02.md`.
+      - **The folder exists today,** so step 1 pins its tracked files itself:
+        git tracks at least one `.yaml` file under it, and every file git tracks
+        there belongs to `@bvst @urso-agent` and is covered by the filter
+        (CALL-02-AC11). For `features/call/` and `shared/ui/` that pin waits for
+        task 2, which creates them.
+    - **Consequences (the second answer):**
+      - **Every later change to an L7 flow** waits for the owner's approval
+        (D-042) and brings `safety-reviewer` by path.
+      - **The extra cost is small:** task pull requests already need the owner
+        through D-139's paths (#96 did; task 2's does, above). A change to a flow
+        alone is what now waits.
+      - **Not read here:** the three existing flows against SPIKE-01-AC10's rule.
+        The owner's answer puts a code owner on the folder; it makes no claim
+        about what the flows hold today.
+      - **Step 1's pull request now covers three folders,** `features/call/`,
+        `shared/ui/` and `e2e/`. Its red tests for CALL-02-AC11 are written
+        first, then its green change, as for CALL-02-AC10. The hand merge
+        (D-075) and the batching with #95 are unchanged (items 7 and 9).

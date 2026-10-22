@@ -5,16 +5,26 @@
 home screen, places the call to #1 on the tap when the app holds Android's call
 permission, and says plainly when it does not. Who #1 is, and the home screen
 the three specs share, are in `docs/specs/GRP-02.md` ("The home screen task 2
-builds"); 112 is `docs/specs/CALL-02.md`. This spec also owns `features/call/`,
-so it carries step 1, the pull request that makes that folder a code-owner and
-safety-review path before task 2's · **Decisions:** D-010, D-012, D-014,
-D-023, D-031, D-037, D-042, D-055, D-075, D-128, D-134, D-139, D-141 ·
+builds"); 112 is `docs/specs/CALL-02.md`. This spec also carries step 1, the
+pull request that makes `features/call/`, `shared/ui/` and `apps/mobile/e2e/`
+code-owner and safety-review paths before task 2's (CALL-01-AC9,
+CALL-02-AC10 and CALL-02-AC11) · **Decisions:** D-010, D-012, D-014, D-023,
+D-031, D-037, D-042, D-055, D-075, D-128, D-134, D-139, D-141 ·
 **Written:** 2026-10-22, step 1 of `/feature` for task 2, for this cloud
 session's branch (D-055). **Settled** the same day on the owner's answers
 (D-141). Neither pass had a shell: the branch was not checked, `pnpm run
 decision` and `req:coverage` were not run, decisions were read in
 `docs/plan/decisions.md` by line, and D-141, written in parallel, was not read
-here · **Status:** Settled. The owner's answers are in D-141.
+here. **Amended** the same day on the owner's answer about `shared/ui/` (D-141
+item 7, as amended) and on safety-reviewer's notes on step 1's pull request.
+That pass had no shell either: it read `.github/CODEOWNERS`, the `safety`
+filter and the version comment in `.github/workflows/ai-review.yml`, the
+failure-modes table in `docs/plan/03-safety-reliability-security.md`, D-141 as
+it stood before the amendment, and the files under `apps/mobile/src/app/` and
+`apps/mobile/src/shared/`, in this session's worktree; it did not read step 1's
+branch. **Amended again** the same day on the owner's answer about
+`apps/mobile/e2e/` ("Ja, ta med e2e/"), after reading that folder's file list
+in the worktree · **Status:** Settled, and amended. The owner's answers are in D-141.
 
 ## Requirement
 
@@ -40,7 +50,8 @@ text."
 Task 2: "**GRP-02, CALL-01, CALL-02 — The home screen.** The #1 contact, the
 call button, and 112 always visible." Built in this cloud session (D-141). iOS
 waits for task 12. The ⚙️ sizes are Q6's, as proposed (D-141), and
-`features/call/` needs the owner and the safety review (Q7, D-141; "Step 1").
+`features/call/` needs the owner and the safety review (Q7, D-141; "Step 1"),
+and so does the whole of `shared/ui/` (D-141 item 7, amended).
 
 ### What the plan fixed around it
 
@@ -70,6 +81,13 @@ waits for task 12. The ⚙️ sizes are Q6's, as proposed (D-141), and
 - **D-141** (the owner): Q6's sizes; Q7, `features/call/` a code-owner and
   safety-review path, from a step-1 pull request on
   `claude/busy-faraday-40n2zl-ai-review`, batched with Dependabot #95.
+  Amended (the owner, 2026-10-22, "Ja, hele shared/ui/"): the whole
+  `apps/mobile/src/shared/ui/` folder too, in the same pull request, with
+  Claude's two choices under D-031 that came with the answer: `phone.ts`
+  checks for 110, 112 and 113 itself (approach 2), and a task-2 test requires
+  every route to be drawn through `Screen` (CALL-02-AC1). Amended again (the
+  owner, 2026-10-22, "Ja, ta med e2e/"): `apps/mobile/e2e/`, the Maestro
+  flows, too, in the same pull request (CALL-02-AC11).
 - **The UI rules** (`.claude/rules/ui-i18n.md`): "Designed for night, stress
   and gloves: large touch targets … Every interactive element has a
   screen-reader label."
@@ -83,6 +101,14 @@ waits for task 12. The ⚙️ sizes are Q6's, as proposed (D-141), and
   `expo-linking` is.
 - GRP-01's buttons are at least 56 points tall (`features/grp/ui.tsx`).
 - `apps/mobile/src/features/call/` does not exist, and no merge rule names it.
+- `apps/mobile/src/shared/ui/` does not exist either, and no merge rule names
+  it. `src/shared/` holds `translations/`, `api/client.ts` and
+  `secure-storage.ts`; the last two are code-owner paths (D-139), and no
+  CODEOWNERS line matches `translations/` (read 2026-10-22).
+- `apps/mobile/e2e/` exists, with three flow files (`app-starts.yaml`,
+  `wrong-code.yaml`, `first-admin-invites.yaml`, listed on disk in the
+  worktree; whether git tracks each was not checked: no shell). No CODEOWNERS line and no ai-review
+  filter matches it (the `ui` filter's app entry is `apps/mobile/src/**/*.tsx`).
 
 ### Readings this spec makes
 
@@ -117,9 +143,25 @@ and why": tracked requirements this task does not deliver are named in words.
    Screens never touch the platform directly, so L5 fakes this one module and
    nothing else.
 2. **Placing the call, on Android** (`callNumber`):
-   - **110, 112 or 113** (the normalised number equal to one of the three): the
-     dialer with the number in it, exactly as `openDialer`; never
-     `ACTION_CALL`, whatever the permission (Android's documented rule above).
+   - **110, 112 or 113:** the dialer with the three digits in it (`tel:112`,
+     for example), exactly as `openDialer`; never `ACTION_CALL`, whatever the
+     permission (Android's documented rule above). `phone.ts` decides this
+     itself, on the number exactly as it is given, and relies on no other
+     module's normalisation (D-141 item 7, amended; Claude's choice (a)):
+     - it keeps only the digits `0`–`9`, noting whether the first character
+       that is not whitespace is `+`;
+     - if it was, and the digits begin `47`, it drops that `47`; if the digits
+       begin `0047`, it drops that `0047`;
+     - if what is left is exactly `110`, `112` or `113`, it is an emergency
+       number.
+     The check errs towards the dialer: a number that reduces to one of the
+     three because of a stray character goes to the dialer, which places no
+     call by itself and costs the walker one tap more; it never sends an
+     emergency number to `ACTION_CALL`, whose behaviour then is undocumented.
+     `features/grp/first-contact.ts` (GRP-02, approach 3) still normalises #1
+     for storage and display, and is not a code-owner path. Because the
+     emergency rule now lives wholly in `phone.ts`, which is, no change to
+     `first-contact.ts` can route 110, 112 or 113 to `ACTION_CALL`.
    - with `CALL_PHONE` granted: `ACTION_CALL` with `tel:<number>`, through
      `expo-intent-launcher`, as SPIKE-01's app did;
    - without it, or if `ACTION_CALL` is refused (rejects): the dialer with the
@@ -173,9 +215,10 @@ and why": tracked requirements this task does not deliver are named in words.
    approval (D-139). Nothing else.
 8. **Mutation testing** of the app is set up with the safety core in task 3
    (D-134). `features/call/` should join it then; this task adds no mutation
-   run, and step 1 adds no safety path for mutation (`SAFETY_PATHS`).
+   run, and step 1 adds no safety path for mutation (`SAFETY_PATHS`) for
+   either folder.
 
-## Step 1: `features/call/` needs the owner and the safety review (Q7, D-141)
+## Step 1: `features/call/`, `shared/ui/` and `e2e/` need the owner and the safety review (Q7 and its amendments, D-141)
 
 A pull request of its own, merged by hand before task 2's (D-075), as D-128's
 step 1 (#76) and D-137's were for their paths. It edits
@@ -184,45 +227,96 @@ that pull request, so it is opened from the second branch,
 `claude/busy-faraday-40n2zl-ai-review`, batched with Dependabot #95 (which
 edits the same workflow), so one hand merge carries both (D-141).
 
+**Why `shared/ui/` too.** The 112 bar is in `features/call/`, but `Screen`,
+which draws it on every screen (CALL-02, approach 1), moves in task 2 to
+`apps/mobile/src/shared/ui/` (`GRP-02.md`, "The home screen task 2 builds",
+item 5). With only `features/call/` owned, a later change to `Screen` could
+drop 112 from every screen with no owner's approval and no `safety-reviewer`,
+seen only by the advisory `a11y-i18n-reviewer`; and the easy way out of an
+import loop would move `EmergencyBar` into `shared/ui/` as well
+(safety-reviewer, should-fix 1, on step 1's pull request). The owner's
+answer, 2026-10-22: "Ja, hele shared/ui/", the whole folder, in this same pull
+request (D-141 item 7, amended).
+
+**Why `e2e/` too.** The Maestro flows in `apps/mobile/e2e/` (L7) are the only
+end-to-end proof that the 112 button opens the phone's dialer (CALL-02-AC3),
+and they carry the rule never to tap call in the dialer (SPIKE-01-AC10's
+rule; CALL-02, "The L7 112 step"). Unowned, a change could drop a flow's 112
+assertions, or tap in the dialer, with no owner's approval and no
+`safety-reviewer`. The owner's answer, 2026-10-22: "Ja, ta med e2e/", in this
+same pull request (D-141 item 7, amended).
+
 **What it changes, and nothing else:**
 
-- **`.github/CODEOWNERS`**: one line, `/apps/mobile/src/features/call/
-  @bvst @urso-agent`, with a comment naming CALL-01, CALL-02 and D-141, among
-  the other `/apps/mobile/` lines (before the ownerless `/.claude/agent-memory/`
-  line, which does not match it anyway).
+- **`.github/CODEOWNERS`**: three lines, `/apps/mobile/src/features/call/
+  @bvst @urso-agent`, `/apps/mobile/src/shared/ui/  @bvst @urso-agent` and
+  `/apps/mobile/e2e/  @bvst @urso-agent`, each with a comment naming CALL-01,
+  CALL-02 and D-141 (the second also `Screen` and the 112 bar; the third the
+  flows as the only end-to-end proof of 112 and the never-tap-in-the-dialer
+  rule), among the other `/apps/mobile/` lines (before the ownerless
+  `/.claude/agent-memory/` line, which matches none of them anyway).
 - **`OWNER_APPROVAL_PATHS`** in `scripts/lib/merge-rules.mjs`:
-  `'/apps/mobile/src/features/call/'`.
+  `'/apps/mobile/src/features/call/'`, `'/apps/mobile/src/shared/ui/'` and
+  `'/apps/mobile/e2e/'`.
 - **The `safety` filter in `.github/workflows/ai-review.yml`**:
-  `- 'apps/mobile/src/features/call/**'`.
-- **Not** D-139's named exceptions in `scripts/gate.test.mjs` (the folder is a
-  safety-review path, unlike those ten), **not** `SAFETY_PATHS` or a mutation
-  group (approach 8).
+  `- 'apps/mobile/src/features/call/**'`,
+  `- 'apps/mobile/src/shared/ui/**'` and `- 'apps/mobile/e2e/**'`.
+- **Not** D-139's named exceptions in `scripts/gate.test.mjs` (all three
+  folders are safety-review paths, unlike those ten), **not** `SAFETY_PATHS`
+  or a mutation group (approach 8).
+- **Two fixes from the step-1 reviews**, in the same pull request:
+  - *test-auditor's guard note:* the test that no safety path covers a folder
+    now checks both directions for each of the three: no `SAFETY_PATHS` entry is
+    the folder or a parent of it, and none lies inside it, so an entry naming
+    one file in the folder is caught too;
+  - *the stale version comments:* the comment in `ai-review.yml` that names the
+    Claude Code version the pinned action installs, and any other the batch's
+    bump leaves stale, reads Claude Code 2.1.304 at `claude-code-action`
+    v1.0.254, the version Dependabot #95 pins. (In this worktree it reads
+    "2.1.301 at v1.0.251", `ai-review.yml` line 206; the 2.1.304 pairing is
+    the review's, not checked in this pass.)
 
-**Its tests** (gate tests under `scripts/`, named for CALL-01-AC9 as
-REL-10-AC18's are, and like them):
+**Its tests** (gate tests under `scripts/`, named for CALL-01-AC9 for
+`features/call/`, CALL-02-AC10 for `shared/ui/` and CALL-02-AC11 for `e2e/`,
+as REL-10-AC18's are, and like them; the same checks for each folder, except
+that `e2e/`'s last-match and filter checks run on the files git tracks there
+rather than on synthetic paths, as the next paragraph says):
 
 - in `scripts/lib/merge-rules.test.mjs`, as REL-10-AC18's block for the
   canary: `OWNER_APPROVAL_PATHS` holds the folder; `.github/CODEOWNERS` gives
   it exactly one line, owners `@bvst @urso-agent`, and `reviewCodeowners` of
-  the file finds no problem; the workflow holds
-  `- 'apps/mobile/src/features/call/**'`;
+  the file finds no problem; the workflow holds the folder's `**` entry; no
+  `SAFETY_PATHS` entry covers the folder or lies inside it, and no mutation
+  group covers it;
 - in `scripts/gate.test.mjs`, as BUG-10's and REL-10-AC18's last-match and
   filter checks: under GitHub's last-match reading (`lastMatchOwners`), a file
   directly in the folder and one nested below it each belong to
   `@bvst @urso-agent`; the `safety` filter covers both (`globCovers`); and the
-  folder is not among the named exceptions.
+  folder is not among the named exceptions;
+- for `shared/ui/` alone, a control: `apps/mobile/src/shared/translations/en.json`,
+  under `shared/` but outside `ui/`, keeps its present owners (today none: no
+  CODEOWNERS line matches it), so the new line is not `/apps/mobile/src/shared/`
+  by mistake.
 - The general tests already there hold the rest, unchanged: every `/apps/`
   owner path outside the ten named exceptions must be in the `safety` filter,
   and every `/apps/` entry in the filter must be an owner path (BUG-10).
 
-**What step 1 cannot pin.** The folder does not exist until task 2 creates it,
-so step 1 cannot test that git tracks a file under it, as REL-10-AC18's last
-test does for the canary. The file paths step 1's last-match and filter tests
-use are synthetic. Until task 2 merges, the CODEOWNERS line and the filter
-entry match nothing, so a typo in the path would not show yet. **That pin comes
-with task 2's own tests** (CALL-01-AC9's last part): git tracks at least one
-`.ts` or `.tsx` file under `apps/mobile/src/features/call/`, and every file git
-tracks there is owned under last-match and covered by the filter.
+**What step 1 pins for `e2e/` itself.** That folder exists today, so step 1
+pins it as REL-10-AC18's last test does for the canary (CALL-02-AC11): git
+tracks at least one `.yaml` file under `apps/mobile/e2e/`, and every file git
+tracks there belongs to `@bvst @urso-agent` under last-match and is covered
+by the `safety` filter. A typo in its CODEOWNERS line or filter entry fails in
+step 1's own pull request.
+
+**What step 1 cannot pin.** Neither `features/call/` nor `shared/ui/` exists
+until task 2 creates it, so step 1 cannot test that git tracks a file under
+them. The file paths step 1's last-match and filter tests use for them are
+synthetic. Until task 2 merges, their CODEOWNERS lines and filter entries
+match nothing, so a typo in either path would not show yet. **That pin comes
+with task 2's own tests** (the last part of CALL-01-AC9 and of
+CALL-02-AC10): git tracks at least one `.ts` or `.tsx` file under each
+folder, and every file git tracks there is owned under last-match and covered
+by the filter.
 
 ## Acceptance criteria
 
@@ -264,7 +358,18 @@ texts are the bokmål in `CALL-02.md`'s translations table, asserted in full.
   either calls again (L5)
 - **And** `callNumber` given `110`, `112` or `113` opens `tel:` with that number
   through `Linking.openURL` and never starts `ACTION_CALL`, with the permission
-  granted and without (L5, `phone.test.ts`).
+  granted and without (L5, `phone.test.ts`)
+- **And** `phone.ts` reduces the number itself (approach 2): `callNumber` given
+  each of the three written with spaces between the digits, with dashes
+  between them, with a leading `+47` (with and without a space after it), and
+  with a leading `0047`, opens `tel:` with the three digits alone through
+  `Linking.openURL` and never starts `ACTION_CALL`, with the permission
+  granted and without; and given numbers that do not reduce to one of the
+  three (the fixtures' eight-digit numbers, among them one shaped `ddd112dd`;
+  `47` followed by one of the three, with no `+`; one of the three followed by
+  a digit), it starts `ACTION_CALL` as above (L5, `phone.test.ts`, which does
+  not import `features/grp/first-contact.ts` and passes the numbers in as
+  written, so the check cannot lean on GRP-02's normalisation).
 
 **CALL-01-AC3 — The app asks for the call permission when the first #1 is
 saved, and only then.** (L5; L7)
@@ -356,26 +461,32 @@ code.** (scripts' gate tests; Q7, D-141)
   the `safety` filter in `ai-review.yml` lists
   `apps/mobile/src/features/call/**`; under last-match, a file in the folder
   and one nested below it belong to `@bvst @urso-agent` and are covered by the
-  filter; the folder is not among D-139's named exceptions
+  filter; the folder is not among D-139's named exceptions; it is no safety
+  path (no `SAFETY_PATHS` entry covers it or lies inside it), and no mutation
+  group covers it
 - **Task 2:** git tracks at least one `.ts` or `.tsx` file under
   `apps/mobile/src/features/call/`, and every file git tracks there belongs to
   `@bvst @urso-agent` under last-match and is covered by the `safety` filter.
+- CALL-02-AC10 holds the same for `apps/mobile/src/shared/ui/`, and
+  CALL-02-AC11 for `apps/mobile/e2e/`, in the same step-1 pull request.
 
 ## Test plan
 
 | Level | Where | Criteria | Runs here? |
 |---|---|---|---|
 | L1 static | the new dependency-cruiser rule, with fixture tests in `packages/config/` beside LOST-02-AC25's; ESLint | AC6 (imports) | Yes |
-| L5 app | `features/call/call.test.tsx` (the whole app through Expo Router's testing library, the phone module faked with a recording fake whose answers are set per test; `AppState` driven for the foreground check); `features/call/phone.test.ts` (the module's own choices: `ACTION_CALL` with the permission, the dialer without, the fallback when `ACTION_CALL` rejects, 110/112/113 to the dialer, the permission's answers, with `expo-intent-launcher`, `PermissionsAndroid` and `Linking` mocked) | AC1 to AC8 | Yes |
+| L5 app | `features/call/call.test.tsx` (the whole app through Expo Router's testing library, the phone module faked with a recording fake whose answers are set per test; `AppState` driven for the foreground check); `features/call/phone.test.ts` (the module's own choices: `ACTION_CALL` with the permission, the dialer without, the fallback when `ACTION_CALL` rejects, 110/112/113 to the dialer, written plainly and with spaces, dashes, `+47` or `0047`, the permission's answers, with `expo-intent-launcher`, `PermissionsAndroid` and `Linking` mocked) | AC1 to AC8 | Yes |
 | L7 Android | Maestro, `apps/mobile/e2e/`: grant through Android's own dialog (tapped by its resource ID); tap and read Telecom's record; revoke with `adb shell pm revoke`, relaunch, see the line, tap, see the dialer and no call; at the largest font size, the button visible | AC2, AC3, AC4, AC8 | **No**: CI's `android-e2e` |
-| Gate tests | `scripts/lib/merge-rules.test.mjs`, `scripts/gate.test.mjs` | AC9 (step 1's part in step 1's pull request; the tracked-file part in task 2's) | Yes |
+| Gate tests | `scripts/lib/merge-rules.test.mjs`, `scripts/gate.test.mjs` | AC9, and CALL-02-AC10 and AC11 beside it (step 1's part in step 1's pull request; the tracked-file part in task 2's, but for `e2e/`, which step 1 pins itself) | Yes |
 | L7 iOS; L9 | none | — | Task 12, and a real iPhone (D-037) |
 
 **L7 reads Telecom's record** (`adb shell dumpsys telecom`), as SPIKE-01's S6
 drivers did, because Maestro cannot see a call. That reading, the permission
 revoke, the font size and ending the emulated call belong in
 `scripts/e2e-android.mjs` or a helper it runs (owned paths), and the readers get
-tests in `scripts/lib/`, as S6's did. The emulator has no real network; a call
+tests in `scripts/lib/`, as S6's did. The flows themselves, in
+`apps/mobile/e2e/`, are owned and safety-reviewed from step 1 on
+(CALL-02-AC11). The emulator has no real network; a call
 there reaches no one. The number dialled is from a range reserved for fiction.
 
 **What this cloud session cannot verify:** any call (no emulator; CI's
@@ -385,24 +496,38 @@ Maestro reads text, not pixels); gloves.
 
 ## Modules and files affected
 
-**Step 1 (its own pull request):** `.github/CODEOWNERS`,
+**Step 1 (its own pull request), for the three folders:** `.github/CODEOWNERS`,
 `scripts/lib/merge-rules.mjs` (`OWNER_APPROVAL_PATHS`),
-`.github/workflows/ai-review.yml` (the `safety` filter),
-`scripts/lib/merge-rules.test.mjs`, `scripts/gate.test.mjs`. All owned.
+`.github/workflows/ai-review.yml` (the `safety` filter, and the stale version
+comment), `scripts/lib/merge-rules.test.mjs`, `scripts/gate.test.mjs`. All
+owned.
 
 **App:** `src/features/call/` (new: `phone.ts`, `call-button.tsx`, the
 permission line, `index.ts`, tests); `src/features/grp/home-screen.tsx` and
 the setup screen (the permission line and request on the first save);
 `app.config.ts` (`CALL_PHONE`; its test that release builds ask for it and
 still block the four it blocks); `package.json` (`expo-intent-launcher`,
-owned, D-139); `nb.json`, `en.json`; `e2e/` flows.
+owned, D-139); `nb.json`, `en.json`; `e2e/` flows (owned after step 1,
+CALL-02-AC11).
+
+**Who reviews what, after step 1:** `features/call/`, `shared/ui/` and
+`apps/mobile/e2e/` are code-owner and safety-review paths (`shared/ui/` holds
+`Screen`, CALL-02; `e2e/` holds the L7 flows of AC2, AC3, AC4 and AC8).
+`features/grp/home-screen.tsx` and `features/grp/first-contact.ts` stay
+unowned. That is acceptable because neither can now take away a call path
+unseen: the 112 bar is drawn by `Screen`, and the call button's size, its
+calls and the emergency rule are in `features/call/`; the tests that would
+fail if `home-screen.tsx` dropped either button (AC1, CALL-02-AC1) live in
+`features/call/` and `shared/ui/`, both owned; and `phone.ts` checks for 110,
+112 and 113 itself (approach 2). What stays unowned is what #1 is and how it
+is shown (GRP-02), which the walker sees on the home screen.
 
 **Config (owned):** `packages/config/dependency-cruiser.cjs` (the new rule)
 and its fixture tests.
 
 **Scripts (owned):** `scripts/e2e-android.mjs` and a tested reader for
-Telecom's record; the font-size step; task 2's tracked-file pin for
-`features/call/` (AC9).
+Telecom's record; the font-size step; task 2's tracked-file pins for
+`features/call/` (AC9) and `shared/ui/` (CALL-02-AC10).
 
 **Server, contracts, infra:** nothing.
 
@@ -412,8 +537,12 @@ None.
 
 ## Risks and failure modes
 
-- **[F6](../plan/03-safety-reliability-security.md#failure-modes), a call that
-  does not happen when it should.**
+- **The walker's own call path failing: a call that does not happen when it
+  should.** None of the F1–F10 failure modes
+  ([table](../plan/03-safety-reliability-security.md#failure-modes)) is this
+  one: they are about journeys and the alerts to responders, and F6 is "Alert not
+  noticed". (An earlier version of this spec called this F6; safety-reviewer
+  noted the error.)
   - *The permission refused or revoked:* the call needs a second tap in the
     dialer. Said on the home screen (AC4), with the way to fix it. Not silent.
   - *A failure to start the call at all:* said, with the number (AC5).
@@ -421,11 +550,21 @@ None.
   - *A start that never settles:* the next return to the foreground frees the
     button (AC2).
   - *A #1 who is 110, 112 or 113:* never given to `ACTION_CALL`, whose
-    documented rule excludes emergency numbers; the dialer opens (AC2). Another
-    country's emergency number as #1 is not recognised and goes to
-    `ACTION_CALL`; what Android does then is undocumented. A refusal reaches
-    the dialer through the fallback, but a silent no-op would not. Accepted as
-    unlikely for a walker in Norway; not observable before L9.
+    documented rule excludes emergency numbers; the dialer opens (AC2).
+    `phone.ts` recognises the three however they are written, with spaces,
+    dashes, `+47` or `0047`, without relying on `first-contact.ts`
+    (approach 2). Another country's emergency number as #1 (other than 112
+    itself) is not recognised and goes to `ACTION_CALL`; what Android does
+    then is undocumented. A refusal reaches the dialer through the fallback,
+    but a silent no-op would not. Accepted as unlikely for a walker in Norway;
+    not observable before L9.
+- **The 112 bar or the call button removed by a change outside
+  `features/call/`.** `Screen` draws the bar on every screen, from
+  `shared/ui/`; after step 1 that folder needs the owner and
+  `safety-reviewer` too (CALL-02-AC10), and task 2's test that every route is
+  drawn through `Screen` (CALL-02-AC1) catches a screen added later without
+  it. `home-screen.tsx` and `first-contact.ts` stay unowned ("Modules and
+  files affected" says why that is acceptable).
 - **[F7](../plan/03-safety-reliability-security.md#failure-modes), the server
   down:** calling needs no server (AC6), and the home screen does not wait for
   it (CALL-02's spec, approach 2).
@@ -436,8 +575,15 @@ None.
   walker's tap in the dialer. The app places one only from the call button
   (AC2's single `ACTION_CALL`), and `phone.ts` is the one place that can.
   After step 1 every change to it needs the owner and `safety-reviewer` (AC9).
-- **The step-1 lines match nothing until task 2 merges.** A misspelt path would
-  not show until then; task 2's tracked-file pin (AC9) is what catches it.
+- **The L7 flows changed unseen.** `apps/mobile/e2e/` holds the only
+  end-to-end proof that a tap places the call (AC2) and that 112 opens the
+  dialer (CALL-02-AC3), and the rule never to tap call in the dialer. After
+  step 1 a change to them needs the owner and `safety-reviewer`
+  (CALL-02-AC11). The scripts that drive them were owned already.
+- **The step-1 lines for `features/call/` and `shared/ui/` match nothing until
+  task 2 merges.** A misspelt path would not show until then; task 2's
+  tracked-file pins (AC9, CALL-02-AC10) are what catch it. `e2e/`'s line is
+  pinned against its tracked flows in step 1 itself (CALL-02-AC11).
 - **Emulator against real phone.** S6 was observed on the emulator only; some
   manufacturers' dialers may differ. The private test and L9 (deferred,
   D-037) are where that shows.
@@ -477,3 +623,13 @@ The full list of task 2's answers is at the end of `GRP-02.md`.
   hand-merged step-1 pull request before task 2's, from
   `claude/busy-faraday-40n2zl-ai-review`, batched with Dependabot #95 ("Step
   1", AC9).
+- **Amendment to Q7 (the owner, 2026-10-22): "Ja, hele shared/ui/".** The whole
+  `apps/mobile/src/shared/ui/` folder too, in the same step-1 pull request; no
+  named exception, no safety path, no mutation group ("Step 1",
+  CALL-02-AC10). With it, Claude's choices under D-031: `phone.ts` checks for
+  110, 112 and 113 itself (approach 2, AC2), and a task-2 test requires every
+  route to be drawn through `Screen` (CALL-02-AC1).
+- **Second amendment to Q7 (the owner, 2026-10-22): "Ja, ta med e2e/".**
+  `apps/mobile/e2e/`, the Maestro flows, too, in the same step-1 pull request;
+  no named exception, no safety path, no mutation group; pinned against its
+  tracked flows in step 1 itself ("Step 1", CALL-02-AC11).

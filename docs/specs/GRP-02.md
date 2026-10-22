@@ -11,8 +11,11 @@ D-023, D-031, D-055, D-134, D-136, D-137, D-138, D-139, D-141 · **Written:**
 had a shell: the branch was not checked, `pnpm run decision` and
 `req:coverage` were not run, the decisions were read in
 `docs/plan/decisions.md` by line, and D-141, written in parallel by
-plan-keeper, was not read here · **Status:** Settled. The owner's answers are
-in D-141; every criterion is written on them.
+plan-keeper, was not read here. **Amended** the same day on the owner's
+answer about `shared/ui/` (D-141 item 7, as amended), and again on the one
+about `apps/mobile/e2e/`; no GRP-02 criterion changes. That pass had no shell either; what it read is listed in
+`CALL-01.md`'s header · **Status:** Settled, and amended. The owner's answers
+are in D-141; every criterion is written on them.
 
 ## Why three specs, not one
 
@@ -79,7 +82,9 @@ VoiceOver wait for task 12.
   approval (D-042).
 - **D-141** (the owner): #1 is kept on the phone only (Q1); it is typed (Q2);
   `features/call/` is a code-owner and safety-review path from a step-1 pull
-  request (Q7, `CALL-01.md`, "Step 1").
+  request (Q7, `CALL-01.md`, "Step 1"); amended, so is the whole
+  `apps/mobile/src/shared/ui/` folder, in the same pull request
+  (CALL-02-AC10).
 - **GRP-01's spec, "Left for later tasks", task 2:** dark-first screens
   (`a11y-i18n-reviewer` S1, "will block task 2's home screen if it is
   light-only"); the waiting indicator's colour from the palette; and "a
@@ -204,7 +209,8 @@ Technical choices delegated to Claude (D-031), on the owner's answers in D-141.
 5. **Dark-first, one palette** (Q5: always dark): the shared kit moves from
    `features/grp/ui.tsx` to `src/shared/ui/`, so `call` and `grp` draw with the
    same pieces without importing each other, and every colour comes from one
-   palette module.
+   palette module. `shared/ui/` holds `Screen`, which draws the 112 bar, so
+   after step 1 it is a code-owner and safety-review path (CALL-02-AC10).
 6. **Sizes** (Q6, as proposed): ordinary controls at least 56 dp tall (as
    today); the 112 button at least 64 dp tall and 96 dp wide; the call button
    at least 120 dp tall and the screen's full width less its margins; at least
@@ -237,7 +243,9 @@ Technical choices delegated to Claude (D-031), on the owner's answers in D-141.
    or 113: the walker chooses whom they call first. The call button sends
    those three to the dialer and never through `ACTION_CALL` (`CALL-01.md`,
    approach 2), because Android's documented rule is that `ACTION_CALL`
-   "cannot be used to call emergency numbers".
+   "cannot be used to call emergency numbers". `phone.ts` recognises them by
+   its own reduction to digits, not by this function's output, so this rule
+   is not what keeps an emergency number away from `ACTION_CALL`.
 4. **Where it is kept** (Q1: on the phone only).
    - In `expo-secure-store`, beside the credential, under its own key, as one
      JSON value, `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY` (the encryption rule;
@@ -462,7 +470,20 @@ with the reason beside it and `test-auditor` can check none is a weakening:
 on sign-out and the home screen's start, and their tests); `src/shared/secure-
 storage.ts` (#1's three functions); `src/shared/translations/nb.json` and
 `en.json`; `e2e/` (the new flows). `session.tsx`, `secure-storage.ts` and
-`package.json` are code-owner paths (D-139).
+`package.json` are code-owner paths (D-139); `e2e/` is one from step 1 on,
+and safety-reviewed (CALL-02-AC11).
+
+**Who reviews what, after step 1:** `src/shared/ui/`, where the moved kit and
+`Screen` go, is an owned, safety-reviewed path (CALL-02-AC10), as
+`src/features/call/` is (CALL-01-AC9). `features/grp/home-screen.tsx` and
+`features/grp/first-contact.ts` stay unowned. Acceptable: neither decides
+whether 112 shows (`Screen` does), how the call is placed, or whether an
+emergency number reaches `ACTION_CALL` (`phone.ts` reduces the number
+itself, `CALL-01.md`, approach 2); the tests that fail if the home screen
+loses either button live in owned folders; and what these two files do
+decide, which #1 is stored and how it is shown, is in front of the walker on
+the home screen, with GRP-02's own tests and the always-blocking
+`test-auditor` behind it.
 
 **Test kit (owned):** `packages/test-kit/src/fixtures/phone-numbers.ts`, the
 one file HK-07 lets hold numbers that look Norwegian, with synthetic numbers
@@ -482,10 +503,19 @@ None (Q1). `api:diff` must show no change.
 
 ## Risks and failure modes
 
-- **[F6](../plan/03-safety-reliability-security.md#failure-modes), the call
-  reaches nobody.** A mistyped number calls a stranger or no one. Mitigated
+- **The walker's own call path failing: the call reaches nobody.** None of
+  the F1–F10 failure modes
+  ([table](../plan/03-safety-reliability-security.md#failure-modes)) is this
+  one: they are about journeys and the alerts to responders, and F6 is "Alert not
+  noticed". (An earlier version of this spec called this F6; safety-reviewer
+  noted the error.) A mistyped number calls a stranger or no one. Mitigated
   only in part: the home screen shows the number exactly as it is dialled, so
   the walker can see it. A "test call" is in no story.
+- **A change to `first-contact.ts` or `home-screen.tsx`, which stay unowned.**
+  Neither can now remove 112, change how the call is placed, or send an
+  emergency number to `ACTION_CALL` ("Modules and files affected"). A
+  regression in the number rule shows on the home screen: a number that cannot
+  be saved is said (AC3, AC8), and a stored number is shown as dialled.
 - **[F7](../plan/03-safety-reliability-security.md#failure-modes), the server
   down.** With #1 on the phone, the call button works with no server (AC7 and
   CALL-01-AC6).
@@ -557,6 +587,16 @@ recommendation:
 
 Also in D-141: task 2 is built in this cloud session, and step 1 comes from
 the branch `claude/busy-faraday-40n2zl-ai-review`, batched with Dependabot #95.
+
+**Amendment to Q7 (the owner, 2026-10-22): "Ja, hele shared/ui/".** The whole
+`apps/mobile/src/shared/ui/` folder is a code-owner and safety-review path too,
+in the same step-1 pull request (`CALL-02.md`, AC10); with Claude's choices
+under D-031 that `phone.ts` checks for 110, 112 and 113 itself (`CALL-01.md`,
+approach 2) and that every route is drawn through `Screen` (CALL-02-AC1).
+
+**Second amendment to Q7 (the owner, 2026-10-22): "Ja, ta med e2e/".**
+`apps/mobile/e2e/`, the Maestro flows, is a code-owner and safety-review path
+too, in the same step-1 pull request (`CALL-02.md`, AC11).
 
 **Considered, and not taken (Q2):** picking #1 from the phone's contacts.
 Whether Android's contact picker needs the contacts permission was never
