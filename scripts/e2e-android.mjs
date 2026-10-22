@@ -40,6 +40,7 @@ import {
   installWhenReady,
   judgeReport,
   maestroTestCommand,
+  switchToBokmal,
   waitForLocale,
 } from './lib/e2e-android.mjs';
 import { run } from './lib/proc.mjs';
@@ -124,20 +125,31 @@ const installInterval = millisecondsFrom('E2E_ANDROID_INSTALL_INTERVAL_MS', INST
 const maestro = buildOnly ? undefined : await ensureMaestro({ root });
 if (maestro !== undefined) {
   expectOk(checkMaestro(run(maestro, ['--version'], { timeout: 120_000 })));
-  // The emulator applies its language after it has booted, by restarting
-  // Android's framework, so one reading proves nothing: wait, up to the
-  // deadline, for the restarted framework's configuration to be bokmål and its
-  // package service to be back, which the install needs.
+  // The emulator boots in its image's language. When the first reading is not
+  // bokmål, this switches it, once (switchToBokmal, BUG-17): Android applies
+  // the language by restarting its framework, so one reading after the switch
+  // proves nothing. Wait, up to the deadline, for the restarted framework's
+  // configuration to be bokmål and its package service to be back, which the
+  // install needs. persist.sys.locale is read only for the failure message.
   const readDevice = () => ({
     config: output(adb, ['-s', device ?? '', 'shell', 'am', 'get-config']),
     packageService: output(adb, ['-s', device ?? '', 'shell', 'service', 'check', 'package']),
+    property: output(adb, ['-s', device ?? '', 'shell', 'getprop', 'persist.sys.locale']),
   });
+  const switchLocale = () => {
+    const switched = switchToBokmal((adbArgs) =>
+      run(adb, ['-s', device ?? '', ...adbArgs], { timeout: 60_000 }),
+    );
+    if (switched.ok) process.stdout.write(`e2e:android: ${switched.message}\n`);
+    return switched;
+  };
   expectOk(
     await waitForLocale(readDevice, {
       deadline: millisecondsFrom('E2E_ANDROID_LOCALE_DEADLINE_MS', LOCALE_DEADLINE_MS),
       interval: millisecondsFrom('E2E_ANDROID_LOCALE_INTERVAL_MS', LOCALE_INTERVAL_MS),
       now: Date.now,
       sleep,
+      switchLocale,
     }),
   );
 }

@@ -3738,6 +3738,28 @@ describe('the android-e2e job in ci.yml', () => {
       FAKE_HARDWARE.memory,
     );
   });
+
+  test('BUG-17: no emulator step starts the emulator with -change-locale: e2e:android switches it to bokmål itself, so every run takes that path', () => {
+    // #96's run 39515647691 (job 118947039610) logged "Changing locale to
+    // nb-NO … Restarting framework." and was still en-rUS 120 s later; its
+    // re-run, job 119070015215, logged the same and passed. The emulator's
+    // switch cannot be watched and sometimes does not take, and e2e:android
+    // now makes the switch itself on a device that is not in bokmål. Left in,
+    // -change-locale would race that switch and, when it took, hide it from
+    // every run, so a broken switch would reach main green. Comment lines do
+    // not count: ciJob drops them.
+    const emulators = ciSteps('android-e2e').filter(bootsEmulator);
+    const options = emulators.map((step) => /^\s*emulator-options:(.*)$/m.exec(step)?.[1]);
+
+    // Not vacuous: both emulator steps, the snapshot's and the flows', each
+    // with the line that holds the emulator's options.
+    expect(emulators.length).toBeGreaterThanOrEqual(2);
+    for (const [at, line] of options.entries()) {
+      expect(line, `emulator step ${String(at + 1)} has no emulator-options line`).toBeDefined();
+      expect(line, `emulator step ${String(at + 1)}`).not.toMatch(/(?:^|\s)-change-locale\b/);
+    }
+    expect(ciJob('android-e2e')).not.toMatch(/(?:^|\s)-change-locale\b/m);
+  });
 });
 
 // The gate drills (INF-10, D-082). scripts/drills.test.mjs holds the seven

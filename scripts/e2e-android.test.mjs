@@ -262,31 +262,45 @@ function maestroBody({ log, envLog, report, crashes, exit }) {
  * Amended 2026-09-27, run 6: the package service is up throughout, and
  * `service check package` says so without counting as a reading. A device
  * whose framework restarts to apply the language is `timeline`'s.
+ *
+ * Amended for BUG-17: a reading is an `am get-config`, and only that is
+ * stamped and counted. Any call naming "locale" was, from before run 6, when
+ * the script read persist.sys.locale; since then the script has read the
+ * language from `am get-config` alone, so for today's script nothing changes.
+ * The fix sets the property with `setprop persist.sys.locale nb-NO`, which
+ * that pattern would have stamped and counted as a reading, and answered with
+ * a language as no setprop does, and it may read the property with getprop
+ * for its failure message. A setprop now prints nothing, and a getprop answers
+ * without being a reading. A device that takes the switch is `switchable`'s.
  */
 function localeAnswers({ locale, appliedAfter, readCount, readTimes }) {
   const config = (qualifier) =>
     `config: mcc310-mnc260-${qualifier}-ldltr-sw411dp-w411dp-h914dp-420dpi-normal-long-notround-lowdr-nowidecg-port-notnight-finger-keysexposed-nokeys-navhidden-v37`;
   const stamp = `        "${process.execPath}" -e 'console.log(Date.now())' >> "${readTimes}"`;
   const packageService = '      *service*check*) echo "Service package: found" ;;';
+  const setprop = '      *setprop*) ;;';
   if (appliedAfter === undefined) {
     return [
       packageService,
-      '      *locale*|*get-config*)',
+      setprop,
+      '      *get-config*)',
       stamp,
-      '        case "$*" in',
-      `          *get-config*) echo "${config(locale.replace('-', '-r'))}" ;;`,
-      `          *) echo "${locale}" ;;`,
-      '        esac ;;',
+      `        echo "${config(locale.replace('-', '-r'))}" ;;`,
+      `      *locale*) echo "${locale}" ;;`,
     ];
   }
   const applied = appliedAfter === Infinity ? 'false' : `[ "$n" -gt ${String(appliedAfter)} ]`;
   return [
     packageService,
+    setprop,
     '      *locale*|*get-config*)',
-    stamp,
     `        n=$(/bin/cat "${readCount}" 2>/dev/null || echo 0)`,
-    '        n=$((n + 1))',
-    `        echo "$n" > "${readCount}"`,
+    '        case "$*" in',
+    '          *get-config*)',
+    `  ${stamp}`,
+    '            n=$((n + 1))',
+    `            echo "$n" > "${readCount}" ;;`,
+    '        esac',
     `        if ${applied}; then lang=nb-NO; qualifier=nb-rNO; else lang=''; qualifier=en-rUS; fi`,
     '        case "$*" in',
     '          *ro.product.locale*) echo en-US ;;',
@@ -312,6 +326,28 @@ function localeAnswers({ locale, appliedAfter, readCount, readTimes }) {
  *
  * These are the shell lines that set `phase`, `property`, `qualifier` and
  * `pkg` for this call, before anything else.
+ *
+ * Amended for BUG-17: a `setprop` is not a question about the device's state,
+ * and prints nothing (timelineAnswers). The fix sets persist.sys.locale with
+ * one, which the `shell*locale*` pattern counted as a question and answered
+ * with the phase's property, as no setprop does. Today's script makes no
+ * setprop, so for it nothing changes.
+ *
+ * Amended again for BUG-17 (RG-03: this restores the strength of the test on
+ * MAC_RECORDING, it does not loosen it): `getprop persist.sys.locale` is no
+ * question either. It still answers the phase's property, and moves the device
+ * on no further. The phases' lengths were set when a reading was two questions,
+ * `am get-config` and `service check package`, the two that decide. The fix
+ * reads the property in every reading too, for its failure message only, which
+ * made a reading three questions: a reading wholly inside a phase, as
+ * `framework-stopping`'s configuration gone with the package service found, no
+ * longer happened, and the getprop moved the device on between a reading and
+ * the install it led to. So a script that took an unreadable configuration
+ * with the package service found as ready installed in a phase logged `ready`,
+ * and the test on MAC_RECORDING passed it; against the script before the fix
+ * it failed (test-author, BUG-17, against 9597d9f). A script that reads only
+ * the property, as before run 6, now never moves the device out of `booted`,
+ * so it never installs and still fails that test.
  */
 function timelinePhase({ timeline, readCount, phaseLog }) {
   let upTo = 0;
@@ -324,6 +360,8 @@ function timelinePhase({ timeline, readCount, phaseLog }) {
   return [
     `n=$(/bin/cat "${readCount}" 2>/dev/null || echo 0)`,
     'case "$*" in',
+    '  shell*setprop*) ;;',
+    '  shell*getprop*persist.sys.locale*) ;;',
     `  shell*locale*|shell*get-config*|shell*service*check*) n=$((n + 1)); echo "$n" > "${readCount}" ;;`,
     'esac',
     ...branches,
@@ -331,9 +369,13 @@ function timelinePhase({ timeline, readCount, phaseLog }) {
   ];
 }
 
-/** How the timeline's device answers the script's questions, in `shell`'s case. */
+/**
+ * How the timeline's device answers the script's questions, in `shell`'s case.
+ * Amended for BUG-17: a `setprop` prints nothing, as timelinePhase says why.
+ */
 function timelineAnswers({ readTimes }) {
   return [
+    '      *setprop*) ;;',
     '      *locale*|*get-config*|*service*check*)',
     `        "${process.execPath}" -e 'console.log(Date.now())' >> "${readTimes}"`,
     '        case "$*" in',
@@ -383,6 +425,73 @@ function installAnswers({ installs, installDir }) {
     `    exit "$(/bin/cat "${installDir}/$i.exit")" ;;`,
   ];
 }
+
+/**
+ * BUG-17: a device that e2e:android switches to bokmål itself, as CI's is once
+ * the emulator is no longer started with `-change-locale`. It booted in its
+ * image's language: `am get-config` says en-rUS, persist.sys.locale is empty,
+ * and the package service is found. `adb shell setprop persist.sys.locale
+ * nb-NO` sets the property and changes nothing else, until `adb shell setprop
+ * ctl.restart zygote`, after it, restarts the framework that reads it: for the
+ * next `downFor` readings `am get-config` fails as cmd does while the activity
+ * service is gone, and the package service is not found. From then on the
+ * configuration is `after`, nb-rNO when the switch took and en-rUS when it did
+ * not, with the package service found. A restart before the property is set,
+ * like a property never followed by a restart, changes nothing.
+ *
+ * Its phase, booted, property-set, restarting or up, is kept in `stateFile`. A
+ * reading is one `am get-config`, stamped in `readTimes` as on the other
+ * devices; while it restarts they are counted in `readCount`. Each call is
+ * written to `phaseLog` with the phase it came in, as on the timeline's
+ * device, so a test can say when the release build was installed.
+ *
+ * These are the shell lines that set `phase` for this call, before anything else.
+ */
+function switchablePhase({ switchable: { downFor }, stateFile, readCount, phaseLog }) {
+  return [
+    `phase=$(/bin/cat "${stateFile}" 2>/dev/null || echo booted)`,
+    'case "$*" in',
+    '  shell*setprop*persist.sys.locale*nb-NO*)',
+    `    if [ "$phase" = booted ]; then phase=property-set; echo "$phase" > "${stateFile}"; fi ;;`,
+    '  shell*setprop*ctl.restart*zygote*)',
+    '    if [ "$phase" = property-set ]; then',
+    `      phase=restarting; echo "$phase" > "${stateFile}"; echo 0 > "${readCount}"`,
+    '    fi ;;',
+    '  shell*get-config*)',
+    '    if [ "$phase" = restarting ]; then',
+    `      r=$(/bin/cat "${readCount}"); r=$((r + 1)); echo "$r" > "${readCount}"`,
+    `      if [ "$r" -gt ${String(downFor)} ]; then phase=up; echo "$phase" > "${stateFile}"; fi`,
+    '    fi ;;',
+    'esac',
+    `echo "$phase adb $*" >> "${phaseLog}"`,
+  ];
+}
+
+/** How the switchable device answers, in `shell`'s case. */
+function switchableAnswers({ switchable: { after }, readTimes }) {
+  const config = (qualifier) =>
+    `config: mcc310-mnc260-${qualifier}-ldltr-sw411dp-w411dp-h914dp-normal-long-notround-lowdr-nowidecg-port-notnight-420dpi-finger-keysexposed-nokeys-navhidden-v37`;
+  return [
+    '      *setprop*) ;;',
+    '      *get-config*)',
+    `        "${process.execPath}" -e 'console.log(Date.now())' >> "${readTimes}"`,
+    '        case "$phase" in',
+    `          restarting) echo "cmd: Can't find service: activity" >&2; exit 20 ;;`,
+    `          up) echo "${config(after)}" ;;`,
+    `          *) echo "${config('en-rUS')}" ;;`,
+    '        esac ;;',
+    '      *service*check*)',
+    '        if [ "$phase" = restarting ]; then echo "Service package: not found"; else echo "Service package: found"; fi ;;',
+    '      *ro.product.locale*) echo en-US ;;',
+    '      *persist.sys.locale*) if [ "$phase" = booted ]; then echo; else echo nb-NO; fi ;;',
+  ];
+}
+
+/** What a google_apis emulator's `adb root` prints: adbd restarts as root. */
+const ROOT_ACCEPTED = { output: 'restarting adbd as root\n', exit: 0 };
+
+/** `text` as one single-quoted shell word. */
+const shellWord = (text) => `'${text.replace(/'/g, "'\\''")}'`;
 
 /** What adb prints when the install worked. */
 const INSTALL_SUCCESS = { stdout: 'Performing Streamed Install\nSuccess\n', stderr: '', exit: 0 };
@@ -446,6 +555,14 @@ function slowStartLines(slowStarts, dir) {
  * crash buffer when there is one. Amended 2026-09-28: `adb install` answers
  * `installs` in turn, and on the timeline's device, `timelineInstall`.
  * Amended 2026-10-14 (BUG-21): `slowStarts` makes chosen calls slow to start.
+ *
+ * Amended for BUG-17: or a device that takes the switch to bokmål only from
+ * the script (`switchable`). And `adb root` answers as a google_apis
+ * emulator's adbd does, or with `rootAnswer`, and `adb wait-for-device`
+ * returns at once, on every device: the fix issues both. `adb root` answered
+ * nothing before, which no adb does, so a script that judges it by what adb
+ * printed, as it must (adb exits 0 even when adbd refuses), would have been
+ * refused by the stand-in rather than by the device.
  */
 function deviceAdbBody({
   log,
@@ -456,27 +573,46 @@ function deviceAdbBody({
   readCount,
   readTimes,
   timeline,
+  switchable,
+  stateFile,
   phaseLog,
+  rootAnswer = ROOT_ACCEPTED,
   installs,
   installDir,
   slowStarts,
   slowStartDir,
 }) {
+  /** The device's own answers in `shell`'s case: the timeline's, the switchable one's, or a locale's. */
+  const answers = () => {
+    if (timeline !== undefined) return timelineAnswers({ readTimes });
+    if (switchable !== undefined) return switchableAnswers({ switchable, readTimes });
+    return localeAnswers({ locale, appliedAfter, readCount, readTimes });
+  };
+  /** The lines that set this call's phase, on the devices that have one. */
+  const phase = () => {
+    if (timeline !== undefined) return timelinePhase({ timeline, readCount, phaseLog });
+    if (switchable !== undefined) {
+      return switchablePhase({ switchable, stateFile, readCount, phaseLog });
+    }
+    return [];
+  };
   return [
     '#!/bin/sh',
     ...slowStartLines(slowStarts, slowStartDir),
     `echo "adb $*" >> "${log}"`,
     "serial=''",
     'if [ "$1" = "-s" ]; then serial="$2"; shift 2; fi',
-    ...(timeline === undefined ? [] : timelinePhase({ timeline, readCount, phaseLog })),
+    ...phase(),
     'case "$1" in',
     `  devices) printf 'List of devices attached\\n${devices.map(([serial, state]) => `${serial}\\t${state}\\n`).join('')}\\n' ;;`,
+    '  root)',
+    `    printf '%s' ${shellWord(rootAnswer.output)}`,
+    `    exit ${String(rootAnswer.exit)} ;;`,
+    '  wait-for-device) ;;',
     '  shell)',
     '    case "$*" in',
     '      *ro.kernel.qemu*) case "$serial" in emulator-*) echo 1 ;; esac ;;',
-    ...(timeline === undefined
-      ? localeAnswers({ locale, appliedAfter, readCount, readTimes })
-      : timelineAnswers({ readTimes })),
+    ...answers(),
     '      *boot_completed*) echo 1 ;;',
     '    esac ;;',
     ...(timeline === undefined ? installAnswers({ installs, installDir }) : timelineInstall),
@@ -687,6 +823,8 @@ function expectWaitedOut(wait, { deadline, interval }, output) {
  *     configLocale: string,
  *     packageService: string,
  *   }[],
+ *   switchable?: { downFor: number, after: string },
+ *   rootAnswer?: { output: string, exit: number },
  *   installs?: { stdout: string, stderr: string, exit: number }[],
  *   slowStarts?: { call: string, ms: number, times?: number }[],
  *   env?: Record<string, string>,
@@ -697,7 +835,9 @@ function expectWaitedOut(wait, { deadline, interval }, output) {
  *   `locale` is the language the device reports, unless `localeAppliedAfter`
  *   makes it a device that applies bokmål only after that many readings
  *   (localeAnswers), or `timeline` one whose framework restarts to apply it
- *   (timelinePhase); `installs` is what `adb install` answers, in turn, the
+ *   (timelinePhase), or `switchable` one that the script switches itself
+ *   (switchablePhase, BUG-17); `rootAnswer` is what `adb root` prints and
+ *   exits with; `installs` is what `adb install` answers, in turn, the
  *   last one from then on (installAnswers); `slowStarts` makes chosen calls to
  *   adb slow to start (slowStartLines); `env` is added to the script's
  *   environment; `timeout` is when the run is killed, counted from its start,
@@ -713,6 +853,8 @@ async function runPastPreflight({
   locale = 'nb-NO',
   localeAppliedAfter,
   timeline,
+  switchable,
+  rootAnswer,
   installs = [INSTALL_SUCCESS],
   slowStarts = [],
   env = {},
@@ -735,6 +877,7 @@ async function runPastPreflight({
     const readCount = path.join(dir, 'locale-reads');
     const readTimes = path.join(dir, 'locale-read-times');
     const phaseLog = path.join(dir, 'phases.log');
+    const stateFile = path.join(dir, 'switch-state');
     const installDir = path.join(dir, 'installs');
     const slowStartDir = path.join(dir, 'slow-starts');
 
@@ -792,7 +935,10 @@ async function runPastPreflight({
           readCount,
           readTimes,
           timeline,
+          switchable,
+          stateFile,
           phaseLog,
+          rootAnswer,
           installs,
           installDir,
           slowStarts,
@@ -864,7 +1010,8 @@ async function runPastPreflight({
         return { args: maestroArgs, updateCheck, analytics };
       }),
       crashBuffer: lines(crashes),
-      // With a timeline: every call to adb, and the phase the device was in.
+      // With a timeline, or a switchable device: every call to adb, and the
+      // phase the device was in.
       phaseCalls: lines(phaseLog).map((line) => {
         const [phase = '', ...call] = line.split(' ');
         return { phase, call: call.join(' ') };
@@ -1327,7 +1474,15 @@ describe('past the preflight', () => {
     expect(output).toMatch(/\b1 of 1 flows? passed/);
     // It read past the three answers the device gave as it booted, and only
     // then ran the flows.
-    expect(calls.filter(isLocaleRead).length, output).toBeGreaterThan(3);
+    // Amended for BUG-17 (RG-03: this restores the test's strength, it does
+    // not loosen it): readings are counted as `am get-config` calls
+    // (isConfigRead, with the BUG-17 tests below), one in each reading, not as
+    // every call isLocaleRead matches. Since the fix, each reading also runs
+    // `getprop persist.sys.locale`, and the switch one `setprop
+    // persist.sys.locale nb-NO`; both name "locale", so two readings made five
+    // such calls, and a script that passed on its second or third reading,
+    // whatever the device said, passed here (test-auditor, at 9597d9f).
+    expect(calls.filter(isConfigRead).length, output).toBeGreaterThan(3);
     expect(calls.findIndex(isFlowRun), output).toBeGreaterThan(calls.findLastIndex(isLocaleRead));
     // Amended in BUG-21's review: between each two readings it slept for
     // exactly the interval, once. Nothing else here holds the interval from
@@ -1677,5 +1832,186 @@ describe('BUG-21: a machine slow to start programs does not fail a run that wait
     // Not vacuous: it first asked more than the slow start after the run began.
     expect((run.readTimes[0] ?? 0) - started, run.output).toBeGreaterThanOrEqual(1_200);
     expectStillWaiting(run, { first: isInstallCall, within: '1 s of installing' });
+  });
+});
+
+// BUG-17. android-e2e failed three times before the app was installed (#57,
+// #60 and #96; #96's was job 118947039610, run 39515647691): "Waited 120 s for
+// the emulator to be in Norwegian bokmål with its package service up … its
+// package service was found, and its configuration's language was en-rUS."
+// CI started the emulator with `-change-locale nb-NO`, which the emulator
+// applies after boot by restarting Android's framework, and the runner logged
+// "Changing locale to nb-NO … Restarting framework." in the failing run and in
+// its passing re-run (job 119070015215) alike. That switch cannot be watched
+// and sometimes does not take, so the script could only wait for it and fail.
+//
+// The script now makes the switch itself, once, and only on a device that is
+// not in bokmål already: `adb root`, `adb wait-for-device`, `adb shell setprop
+// persist.sys.locale nb-NO`, `adb shell setprop ctl.restart zygote`, and then
+// the wait for bokmål as before. A refused step stops the run at once. When
+// the wait after the switch runs out, its message also says what
+// persist.sys.locale said last and whether the framework was seen restarting.
+// The switchable device (switchablePhase) takes the switch only from the
+// script; scripts/lib/e2e-android.test.mjs holds the steps and the wait's
+// message in detail.
+
+/** The calls, in the stand-ins' log, that switch the device's language, or would: root, a wait for the device, a setprop, a reboot. */
+const isSwitchCall = (call) =>
+  /^adb\b.*\s(?:root|unroot|wait-for-device|reboot|remount|setprop)\b/.test(call);
+
+/** The calls that read the device's configuration: one in each reading. */
+const isConfigRead = (call) => /^adb\b.*\bam get-config\b/.test(call);
+
+/** The switch, as the stand-ins log it, in order. */
+const SWITCH_CALLS = [
+  'adb -s emulator-5554 root',
+  'adb -s emulator-5554 wait-for-device',
+  'adb -s emulator-5554 shell setprop persist.sys.locale nb-NO',
+  'adb -s emulator-5554 shell setprop ctl.restart zygote',
+];
+
+/**
+ * The wait for bokmål in a run that fails at its deadline after the switch,
+ * having to see the framework restart and come back first: 5 s, read every
+ * 100 ms. The switch and three readings must all happen within it, about
+ * thirteen calls to the stand-in adb, so the tests' 1 s would leave a machine
+ * slow to start programs (BUG-21) failing on the device's state rather than
+ * on the message.
+ */
+const RESTART_DEADLINE = 5_000;
+
+/**
+ * A message that says persist.sys.locale was `value`: the property's name, and
+ * then the value in the same clause, at most 25 characters on. "The flows expect
+ * nb-NO", which the message already says, is no such statement.
+ */
+const propertySays = (value) =>
+  new RegExp(`persist\\.sys\\.locale\\b[^\\n.;,]{0,25}?\\b${value.replace(/[.-]/g, '\\$&')}\\b`);
+
+/** A message that says persist.sys.locale was empty, in the same way. */
+const PROPERTY_EMPTY =
+  /persist\.sys\.locale\b[^\n.;,]{0,25}?(?:""|''|\bempty\b|\bnothing\b|\bunset\b|\bnot set\b|\bblank\b|\bno value\b)/i;
+
+/** A message that speaks of the framework's restart at all. */
+const SAYS_RESTART = /\brestart/i;
+
+/**
+ * A message that says no restart was seen: a no, not, never or without, and
+ * "restart" after it in the same clause, at most 25 characters on. "was not
+ * seen restarting", "no restart was seen" and "never restarted" all are; "was
+ * seen restarting" is not.
+ */
+const NO_RESTART = /\b(?:no|not|never|without)\b[^.,;:()\n]{0,25}?\brestart/i;
+
+/** What adbd says on a production build, where it cannot be root. adb exits 0 with it. */
+const ROOT_REFUSED = 'adbd cannot run as root in production builds';
+
+describe('BUG-17: e2e:android switches the emulator to bokmål itself, rather than waiting for -change-locale', () => {
+  test('BUG-17: on a device in en-US, it switches the language itself, once: adb root, wait-for-device, setprop persist.sys.locale nb-NO and setprop ctl.restart zygote, in that order, then waits through the restart for nb-rNO with the package service found, installs, and the flows run', async () => {
+    const { code, output, calls, phaseCalls, sleeps, readTimes } = await runPastPreflight({
+      switchable: { downFor: 3, after: 'nb-rNO' },
+      env: { ...SHORT_WAIT, E2E_ANDROID_LOCALE_DEADLINE_MS: '20000' },
+    });
+    const installs = phaseCalls.filter(isInstall);
+
+    expect(calls.filter(isSwitchCall), output).toEqual(SWITCH_CALLS);
+    // It read the device before it switched it.
+    expect(calls.findIndex(isConfigRead), output).toBeGreaterThan(-1);
+    expect(calls.findIndex(isConfigRead), output).toBeLessThan(calls.findIndex(isSwitchCall));
+    // It read on through the restart, and installed only once the restarted
+    // framework said bokmål and could install.
+    expect(
+      phaseCalls.map(({ phase }) => phase),
+      output,
+    ).toContain('restarting');
+    expect(installs.length, output).toBeGreaterThan(0);
+    expect(
+      installs.map(({ phase }) => phase),
+      output,
+    ).toEqual(installs.map(() => 'up'));
+    // The wait is the one it was: between each two readings, one sleep of
+    // exactly the interval, and none for the switch.
+    const slept = sleeps.filter(({ at }) => at <= Math.max(...readTimes)).map(({ ms }) => ms);
+    expect(slept, sleptOtherwise({ sleeps: slept }, SHORT_INTERVAL, output)).toEqual(
+      Array.from({ length: readTimes.length - 1 }, () => SHORT_INTERVAL),
+    );
+    expect(code, output).toBe(0);
+    expect(output).toMatch(/\b1 of 1 flows? passed/);
+  });
+
+  test('BUG-17: on a device already in bokmål with its package service up, it switches nothing: no adb root, no wait-for-device and no setprop, and the flows run', async () => {
+    // Passes before the fix too, which never switches: it fails a fix that
+    // switches every device, bokmål or not.
+    const { code, output, calls } = await runPastPreflight();
+
+    // Not vacuous: it read the device's configuration.
+    expect(calls.some(isConfigRead), output).toBe(true);
+    expect(calls.filter(isSwitchCall), output).toEqual([]);
+    expect(code, output).toBe(0);
+    expect(output).toMatch(/\b1 of 1 flows? passed/);
+  });
+
+  test('BUG-17: when adb root is refused, as on a production build, it stops at once: it names adb root and says what adb printed, sets nothing, reads the device no more and sleeps not once', async () => {
+    // The device would take the switch, so a script that went on past the
+    // refusal would be seen to.
+    const { code, stderr, output, calls, sleeps } = await runPastPreflight({
+      switchable: { downFor: 3, after: 'nb-rNO' },
+      rootAnswer: { output: `${ROOT_REFUSED}\n`, exit: 0 },
+      env: SHORT_WAIT,
+    });
+
+    expect(calls.filter(isSwitchCall), output).toEqual([SWITCH_CALLS[0]]);
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    expect(stderr, output).toContain(ROOT_REFUSED);
+    // The step is named apart from adbd's words, which say "root" too.
+    expect(stderr.split(ROOT_REFUSED).join(''), output).toMatch(/\broot\b/);
+    // At once: the one reading before the switch, and no wait at all.
+    expect(calls.filter(isConfigRead).length, output).toBe(1);
+    expect(sleeps, output).toEqual([]);
+    expect(touchedDevice(calls)).toEqual([]);
+  });
+
+  test('BUG-17: when the switch is made and the framework restarts but comes back in en-rUS, it fails at the deadline, and says what it said before, that persist.sys.locale said nb-NO, and that the framework was seen restarting', async () => {
+    const { code, stderr, output, calls } = await runPastPreflight({
+      switchable: { downFor: 2, after: 'en-rUS' },
+      env: { ...SHORT_WAIT, E2E_ANDROID_LOCALE_DEADLINE_MS: String(RESTART_DEADLINE) },
+    });
+
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    // What it said before.
+    expect(stderr, output).toMatch(/bokmål/);
+    expect(stderr, output).toMatch(/\bwait/i);
+    expect(stderr, output).toMatch(saysHowLong(RESTART_DEADLINE));
+    expect(stderr, output).toMatch(/\ben[-_]r?US\b/);
+    expect(stderr, output).toMatch(/\bpackage\b/i);
+    expect(stderr, output).not.toMatch(PACKAGE_MISSING);
+    // What it adds: persist.sys.locale as last read, and the restart it saw.
+    expect(stderr, output).toMatch(propertySays('nb-NO'));
+    expect(stderr, output).not.toMatch(PROPERTY_EMPTY);
+    expect(stderr, output).toMatch(SAYS_RESTART);
+    expect(stderr, output).not.toMatch(NO_RESTART);
+    // Not vacuous: the switch was made, once, and nothing was installed.
+    expect(calls.filter(isSwitchCall), output).toEqual(SWITCH_CALLS);
+    expect(touchedDevice(calls)).toEqual([]);
+  });
+
+  test('BUG-17: when the switch is made and nothing comes of it, it fails at the deadline, and says that persist.sys.locale was empty and that the framework was not seen restarting', async () => {
+    // localeAnswers' device that never applies bokmål: the property stays
+    // empty, and the package service is found throughout.
+    const { code, stderr, output, calls } = await runPastPreflight({
+      localeAppliedAfter: Infinity,
+      env: SHORT_WAIT,
+    });
+
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    expect(stderr, output).toMatch(/\ben[-_]r?US\b/);
+    expect(stderr, output).toMatch(PROPERTY_EMPTY);
+    expect(stderr, output).not.toMatch(propertySays('nb-NO'));
+    expect(stderr, output).toMatch(NO_RESTART);
+    // Not vacuous: the switch was made, once.
+    expect(calls.filter(isSwitchCall), output).toEqual(SWITCH_CALLS);
   });
 });

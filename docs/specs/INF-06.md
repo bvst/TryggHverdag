@@ -153,7 +153,9 @@ saying which one:
   after it reports the boot complete. `persist.sys.locale` flips about
   1–2 s before Android restarts its framework, and the package service is
   missing for about 4 s, which is how CI run 6 failed to install. On
-  failure it says how long it waited and what it last saw for each signal.)
+  failure it says how long it waited and what it last saw for each signal.
+  Superseded for CI by D-140 (BUG-17, 2026-10-22): `e2e:android` switches the
+  emulator to bokmål itself, and CI no longer starts it with `-change-locale`.)
 - Maestro is not usable, or Java is not 17 to 21 (amended 2026-09-26: Java 25
   passes a "17 or newer" check and then fails the native build after about 18
   minutes; the message says to set `JAVA_HOME` to a JDK 17);
