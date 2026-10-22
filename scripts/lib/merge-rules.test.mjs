@@ -504,6 +504,65 @@ describe('CALL-02-AC10: shared/ui/, where Screen draws the 112 bar, needs the ow
   });
 });
 
+// CALL-02-AC11 (D-141 item 7, amended a second time on 2026-10-22: "Ja, ta med
+// e2e/"): the Maestro flows in apps/mobile/e2e/ are the only end-to-end proof
+// that 112 opens the dialer, and they carry the rule that a test never taps
+// call there, yet the folder had no owner and no safety review. Unlike the two
+// folders above it exists today, so step 1 pins the files git tracks in it.
+describe('CALL-02-AC11: apps/mobile/e2e/, the flows that prove 112 opens the dialer, needs the owner and the safety review (step 1, D-141)', () => {
+  const E2E = 'apps/mobile/e2e/';
+
+  test('CALL-02-AC11: OWNER_APPROVAL_PATHS holds /apps/mobile/e2e/', () => {
+    expect(OWNER_APPROVAL_PATHS).toContain(`/${E2E}`);
+  });
+
+  test('CALL-02-AC11: .github/CODEOWNERS gives the folder exactly one line, naming @bvst and @urso-agent, and every path the owner must approve is owned', () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const owners = (path) =>
+      text
+        .split('\n')
+        .map((line) => line.trim().split(/\s+/))
+        .filter(([pattern]) => pattern === path)
+        .map(([, ...names]) => names.join(' '));
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    expect(owners(`/${E2E}`)).toEqual(['@bvst @urso-agent']);
+  });
+
+  test('CALL-02-AC11: the ai-review safety filter lists the folder’s files', () => {
+    const workflow = readFileSync('.github/workflows/ai-review.yml', 'utf8');
+
+    expect(workflow).toContain(`- '${E2E}**'`);
+  });
+
+  test('CALL-02-AC11: git tracks at least one .yaml file under apps/mobile/e2e/', () => {
+    // Passes before step 1's code as after it, by design: the flows exist
+    // today. It keeps the last-match and filter tests in scripts/gate.test.mjs,
+    // which read the same list, from passing over an empty one.
+    const listed = spawnSync('git', ['ls-files', '--', E2E], { encoding: 'utf8' });
+
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      listed.stdout.split('\n').filter((file) => file.endsWith('.yaml')).length,
+      `${E2E} holds no .yaml file git tracks`,
+    ).toBeGreaterThan(0);
+  });
+
+  test('CALL-02-AC11: the folder is no safety path and no mutation group lists it, a folder above it or a path in it, as D-141 decided for step 1', () => {
+    // A guard, not a red test: it passes before step 1's code as after it, by
+    // design, and reads both ways as CALL-01-AC9's and CALL-02-AC10's do. The
+    // flows are run at L7, not mutated, so a safety path or a group here shows
+    // itself as a change to this test with its own reason (RG-03).
+    const covers = (path) => E2E.startsWith(path) || path.startsWith(E2E);
+
+    expect(SAFETY_PATHS).not.toContain(E2E);
+    expect(SAFETY_PATHS.filter(covers)).toEqual([]);
+    expect(
+      MUTATION_GROUPS.filter((group) => group.paths.some(covers)).map((group) => group.name),
+    ).toEqual([]);
+  });
+});
+
 // SEC-06 (privacy-security-reviewer on PR #96, raised twice): the secret scan
 // on every change is CI's required `security` check, run as `./gitleaks git .`
 // with no --config (ci.yml, "Secret scan (gitleaks)"). So gitleaks takes its

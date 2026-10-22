@@ -1633,6 +1633,63 @@ describe("this repository's own workflows", () => {
     ).toEqual([]);
   });
 
+  // CALL-02-AC11 (D-141 item 7, amended a second time on 2026-10-22: "Ja, ta
+  // med e2e/"): the Maestro flows in apps/mobile/e2e/ are the only end-to-end
+  // proof that 112 opens the dialer, so step 1 gives the folder the owner and
+  // the safety review. The folder exists today, so these read the files git
+  // tracks there, not synthetic paths, and a misspelt line fails in step 1.
+  const E2E_FOLDER = '/apps/mobile/e2e/';
+
+  test("CALL-02-AC11: under GitHub's last-match rule, every file git tracks in apps/mobile/e2e/ belongs to @bvst @urso-agent, and gate:integrity finds every owner-approval path owned", () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+    const listed = spawnSync('git', ['ls-files', '--', E2E_FOLDER.slice(1)], { encoding: 'utf8' });
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    // The reading is checked on an owned file beside the folder first.
+    expect(ownersOf('apps/mobile/app.config.ts')).toEqual(OWNERS);
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      files.filter((file) => file.endsWith('.yaml')).length,
+      `${E2E_FOLDER} holds no .yaml file git tracks`,
+    ).toBeGreaterThan(0);
+    expect(files.map((file) => [file, ownersOf(file)])).toEqual(
+      files.map((file) => [file, OWNERS]),
+    );
+  });
+
+  test('CALL-02-AC11: the ai-review safety filter covers every file git tracks in apps/mobile/e2e/, so a change to a flow brings safety-reviewer', () => {
+    const safety = filterEntries(readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8'), 'safety');
+    const covered = (file) => safety.entries.some((glob) => globCovers(glob, file));
+    const listed = spawnSync('git', ['ls-files', '--', E2E_FOLDER.slice(1)], { encoding: 'utf8' });
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(safety.headers, 'how many filters are named safety').toBe(1);
+    expect(safety.unreadable).toEqual([]);
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      files.filter((file) => file.endsWith('.yaml')).length,
+      `${E2E_FOLDER} holds no .yaml file git tracks`,
+    ).toBeGreaterThan(0);
+    expect(
+      files.filter((file) => !covered(file)),
+      'files under apps/mobile/e2e/ the safety filter does not cover',
+    ).toEqual([]);
+  });
+
+  test('CALL-02-AC11: apps/mobile/e2e/ is not among the named exceptions the safety filter test leaves out of the filter, as D-141 decided', () => {
+    // A guard, not a red test: it passes before step 1's code as after it, by
+    // design, as CALL-02-AC10's above does. D-139's /apps/mobile/package.json
+    // is a named exception beside the folder, not in it.
+    const exceptions = [...D102_FILES, ...D139_APPS_FILES];
+
+    expect(exceptions.length).toBeGreaterThan(0);
+    expect(
+      exceptions.filter((owned) => owned.startsWith(E2E_FOLDER) || E2E_FOLDER.startsWith(owned)),
+    ).toEqual([]);
+  });
+
   // The safety filter is held through the general filter test above, as D-097's block is.
   // RG-03 (BUG-18, code-reviewer): a per-file filter test for db.ts, added on this branch and
   // never on main, was removed. The general test already fails for either file missing from
