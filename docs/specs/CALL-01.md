@@ -6,9 +6,9 @@ home screen, places the call to #1 on the tap when the app holds Android's call
 permission, and says plainly when it does not. Who #1 is, and the home screen
 the three specs share, are in `docs/specs/GRP-02.md` ("The home screen task 2
 builds"); 112 is `docs/specs/CALL-02.md`. This spec also carries step 1, the
-pull request that makes `features/call/`, `shared/ui/` and `apps/mobile/e2e/`
-code-owner and safety-review paths before task 2's (CALL-01-AC9,
-CALL-02-AC10 and CALL-02-AC11) · **Decisions:** D-010, D-012, D-014, D-023,
+pull request that makes `features/call/`, `shared/ui/`, `apps/mobile/e2e/` and
+`apps/mobile/src/app/` code-owner and safety-review paths before task 2's
+(CALL-01-AC9, CALL-02-AC10, AC11 and AC12) · **Decisions:** D-010, D-012, D-014, D-023,
 D-031, D-037, D-042, D-055, D-075, D-128, D-134, D-139, D-141 ·
 **Written:** 2026-10-22, step 1 of `/feature` for task 2, for this cloud
 session's branch (D-055). **Settled** the same day on the owner's answers
@@ -24,7 +24,15 @@ it stood before the amendment, and the files under `apps/mobile/src/app/` and
 `apps/mobile/src/shared/`, in this session's worktree; it did not read step 1's
 branch. **Amended again** the same day on the owner's answer about
 `apps/mobile/e2e/` ("Ja, ta med e2e/"), after reading that folder's file list
-in the worktree · **Status:** Settled, and amended. The owner's answers are in D-141.
+in the worktree. **Amended a third time** the same day on the owner's answer
+about `apps/mobile/src/app/` ("Ja, ta med src/app/") and on safety-reviewer's
+delta notes for task 2: `phone.ts` cleans the number itself and builds every
+`tel:` URI from the cleaned string, and the emergency set grows (approach 2,
+AC2). The Norwegian numbering facts behind the narrowed prefix rule are
+Nkom's, from a web search's summary of two Nkom pages, read on 2026-10-22 by
+the session that coordinated this pass (approach 2 cites them); Nkom's
+current allocation file was not read · **Status:** Settled, and amended. The
+owner's answers are in D-141.
 
 ## Requirement
 
@@ -51,7 +59,8 @@ Task 2: "**GRP-02, CALL-01, CALL-02 — The home screen.** The #1 contact, the
 call button, and 112 always visible." Built in this cloud session (D-141). iOS
 waits for task 12. The ⚙️ sizes are Q6's, as proposed (D-141), and
 `features/call/` needs the owner and the safety review (Q7, D-141; "Step 1"),
-and so does the whole of `shared/ui/` (D-141 item 7, amended).
+and so do the whole of `shared/ui/`, `apps/mobile/e2e/` and
+`apps/mobile/src/app/` (D-141 item 7, amended).
 
 ### What the plan fixed around it
 
@@ -87,7 +96,10 @@ and so does the whole of `shared/ui/` (D-141 item 7, amended).
   checks for 110, 112 and 113 itself (approach 2), and a task-2 test requires
   every route to be drawn through `Screen` (CALL-02-AC1). Amended again (the
   owner, 2026-10-22, "Ja, ta med e2e/"): `apps/mobile/e2e/`, the Maestro
-  flows, too, in the same pull request (CALL-02-AC11).
+  flows, too, in the same pull request (CALL-02-AC11). Amended a third time
+  (the owner, 2026-10-22, "Ja, ta med src/app/"): `apps/mobile/src/app/`,
+  Expo Router's routes and the root layout around every screen, too, in the
+  same pull request (CALL-02-AC12).
 - **The UI rules** (`.claude/rules/ui-i18n.md`): "Designed for night, stress
   and gloves: large touch targets … Every interactive element has a
   screen-reader label."
@@ -107,8 +119,13 @@ and so does the whole of `shared/ui/` (D-141 item 7, amended).
   CODEOWNERS line matches `translations/` (read 2026-10-22).
 - `apps/mobile/e2e/` exists, with three flow files (`app-starts.yaml`,
   `wrong-code.yaml`, `first-admin-invites.yaml`, listed on disk in the
-  worktree; whether git tracks each was not checked: no shell). No CODEOWNERS line and no ai-review
-  filter matches it (the `ui` filter's app entry is `apps/mobile/src/**/*.tsx`).
+  worktree; whether git tracks each was not checked: no shell). No
+  CODEOWNERS line and no ai-review filter matches it (the `ui` filter's app
+  entry is `apps/mobile/src/**/*.tsx`).
+- `apps/mobile/src/app/` holds `_layout.tsx` and `index.tsx`, and
+  `apps/mobile/src/app.test.tsx` sits beside the folder (listed on disk). No
+  CODEOWNERS line matches any of them, and only the `ui` filter covers the
+  two `.tsx` routes.
 
 ### Readings this spec makes
 
@@ -142,31 +159,79 @@ and why": tracked requirements this task does not deliver are named in words.
    answer once it will no longer show its dialog), and `openAppSettings()`.
    Screens never touch the platform directly, so L5 fakes this one module and
    nothing else.
-2. **Placing the call, on Android** (`callNumber`):
-   - **110, 112 or 113:** the dialer with the three digits in it (`tel:112`,
-     for example), exactly as `openDialer`; never `ACTION_CALL`, whatever the
-     permission (Android's documented rule above). `phone.ts` decides this
-     itself, on the number exactly as it is given, and relies on no other
-     module's normalisation (D-141 item 7, amended; Claude's choice (a)):
-     - it keeps only the digits `0`–`9`, noting whether the first character
-       that is not whitespace is `+`;
-     - if it was, and the digits begin `47`, it drops that `47`; if the digits
-       begin `0047`, it drops that `0047`;
-     - if what is left is exactly `110`, `112` or `113`, it is an emergency
-       number.
-     The check errs towards the dialer: a number that reduces to one of the
-     three because of a stray character goes to the dialer, which places no
-     call by itself and costs the walker one tap more; it never sends an
-     emergency number to `ACTION_CALL`, whose behaviour then is undocumented.
-     `features/grp/first-contact.ts` (GRP-02, approach 3) still normalises #1
-     for storage and display, and is not a code-owner path. Because the
-     emergency rule now lives wholly in `phone.ts`, which is, no change to
-     `first-contact.ts` can route 110, 112 or 113 to `ACTION_CALL`.
-   - with `CALL_PHONE` granted: `ACTION_CALL` with `tel:<number>`, through
-     `expo-intent-launcher`, as SPIKE-01's app did;
+2. **Placing the call, on Android** (`callNumber`). `phone.ts` handles the
+   number itself, as it is given, and relies on no other module's
+   normalisation (D-141 item 7, amended: Claude's choice (a), and
+   safety-reviewer's delta notes on task 2, also Claude's choices under
+   D-031). In this order:
+   - **It cleans the number.** It removes whitespace (`\s`), `-`, `.`, `(`
+     and `)`, and nothing else. Every `tel:` URI it builds, for `ACTION_CALL`
+     and for the dialer, comes from this cleaned string (or, for an emergency
+     number, from its reduction below), never from the string it was given.
+   - **What is not a plain number goes to the dialer.** If the cleaned string
+     does not match `^\+?[0-9]+$` (ASCII digits only), `callNumber` opens the
+     dialer and never starts `ACTION_CALL`, whatever the permission. The URI
+     holds the cleaned string with every character but the digits and a first
+     `+` percent-encoded, so none is read as a URI delimiter. *Why:* Android
+     reads a `tel:` string its own way. A comma or a semicolon ends the number
+     that is dialled (`112,5` dials 112), letters count as keypad digits
+     (`11A` is 112), digits from other scripts count as digits (`١١٢`, in
+     Arabic-Indic digits, is 112), and `#` starts a URI fragment (`*31#112`).
+     Each of these can reach an emergency number through `ACTION_CALL`
+     without looking like one. Today only `features/grp/first-contact.ts`,
+     which is not a code-owner path, keeps such strings out of #1.
+   - **It reduces a plain number for the emergency check.** A leading `+47` or
+     `0047` is dropped, and then a leading `+`. (So `+47 112` reduces to
+     `112`, and `+112` to `112`: the check errs towards the dialer.)
+   - **Emergency numbers go to the dialer.** The reduced number is an
+     emergency number if it is exactly one of: `112` and `911`, which 3GPP
+     TS 22.101 makes emergency numbers on every phone; `110` and `113`,
+     Norway's own; and `000`, `08`, `118`, `119` and `999`, which a phone with
+     no SIM card treats as emergency numbers. It is one too if it *begins*
+     with `110`, `112`, `113`, `000`, `118` or `119` and has more digits,
+     because Android may match emergency numbers by prefix. An emergency
+     number gets the dialer with the reduced digits in it (`tel:112`, for
+     example), exactly as `openDialer`; never `ACTION_CALL`, whatever the
+     permission (Android's documented rule above).
+     - *The prefix rule is narrowed for `911`, `999` and `08`.* Norwegian
+       mobile numbers are eight digits beginning with 4 or 9 (blocks 40–49
+       and 90–99), so `911ddddd` and `999ddddd` are the shapes of real mobile
+       numbers; and 02000–09999 are five-digit special numbers, so `08ddd` is
+       a real shape too. Sending those to the dialer would take "the call
+       starts on the tap" from real #1s, so they go to `ACTION_CALL` unless
+       they are exactly `911`, `999` or `08`.
+     - *The prefix rule stands for `110`, `112`, `113`, `118`, `119` and
+       `000`.* No subscriber number begins with 1. Numbers beginning with 1
+       are 100–115 and 117–179 (three-digit standardised special numbers),
+       116 000–116 999 (six-digit EEA-harmonised numbers), 1800–1899
+       (four-digit directory enquiries) and 190–199 (provider-specific), so
+       none is longer than three digits and begins `110`, `112`, `113`, `118`
+       or `119`; the three-digit numbers themselves are in the exact set.
+       `00` is the international prefix and `01` is reserved, so no
+       Norwegian number begins `000`. If a later allocation adds one, the
+       prefix rule narrows for it as for `911`; a wrong match costs one tap,
+       never a failed call.
+     - *Source:* Nkom, "Alle nummerserier for norske telefonnumre"
+       (nkom.no/telefoni-og-telefonnummer/telefonnummer-og-den-norske-nummerplan/alle-nummerserier-for-norske-telefonnumre)
+       and "5-sifrede nummer" (the same path, `/5-sifrede-nummer`), as a web
+       search summarised them on 2026-10-22. The pages themselves were not
+       opened, the summary notes they may be years old, and Nkom's current
+       allocation file (nkom.no/files/nummerplaner/E164.csv) was not read.
+     - The check errs towards the dialer: a wrong match costs the walker one
+       tap more in a dialer that places no call by itself; a missed match
+       sends an emergency number to `ACTION_CALL`, whose behaviour then is
+       undocumented.
+     - `first-contact.ts` (GRP-02, approach 3) still normalises #1 for storage
+       and display, and is not a code-owner path. Because the cleaning, the
+       URI and the emergency rule now live wholly in `phone.ts`, which is, no
+       change to `first-contact.ts` can send an emergency number, or a string
+       Android would read as one, to `ACTION_CALL`.
+   - with `CALL_PHONE` granted, for any other plain number: `ACTION_CALL` with
+     `tel:` and the cleaned string, through `expo-intent-launcher`, as
+     SPIKE-01's app did;
    - without it, or if `ACTION_CALL` is refused (rejects): the dialer with the
-     number in it (`Linking.openURL('tel:<number>')`), and the home screen's
-     line (item 4);
+     cleaned string in it (`Linking.openURL('tel:' + cleaned)`), and the home
+     screen's line (item 4);
    - if both fail: a message that the phone could not start the call, with the
      number shown so the walker can dial it by hand.
    - The app does not ask `Linking.canOpenURL` first: on Android 11 and later it
@@ -216,9 +281,9 @@ and why": tracked requirements this task does not deliver are named in words.
 8. **Mutation testing** of the app is set up with the safety core in task 3
    (D-134). `features/call/` should join it then; this task adds no mutation
    run, and step 1 adds no safety path for mutation (`SAFETY_PATHS`) for
-   either folder.
+   any of its four folders.
 
-## Step 1: `features/call/`, `shared/ui/` and `e2e/` need the owner and the safety review (Q7 and its amendments, D-141)
+## Step 1: `features/call/`, `shared/ui/`, `e2e/` and `src/app/` need the owner and the safety review (Q7 and its amendments, D-141)
 
 A pull request of its own, merged by hand before task 2's (D-075), as D-128's
 step 1 (#76) and D-137's were for their paths. It edits
@@ -246,27 +311,39 @@ assertions, or tap in the dialer, with no owner's approval and no
 `safety-reviewer`. The owner's answer, 2026-10-22: "Ja, ta med e2e/", in this
 same pull request (D-141 item 7, amended).
 
+**Why `src/app/` too.** `apps/mobile/src/app/` holds Expo Router's routes:
+`_layout.tsx`, the frame every screen is drawn inside, and `index.tsx`. A
+change there could draw something over the 112 bar on every screen, or a
+route that does not use `Screen`, and only the advisory `a11y-i18n-reviewer`
+would see it. From task 2 on, `_layout.tsx` also holds the error boundary
+that keeps 112 on a screen that crashes (CALL-02-AC13). The owner's answer,
+2026-10-22: "Ja, ta med src/app/", in this same pull request, #100 (D-141
+item 7, amended).
+
 **What it changes, and nothing else:**
 
-- **`.github/CODEOWNERS`**: three lines, `/apps/mobile/src/features/call/
-  @bvst @urso-agent`, `/apps/mobile/src/shared/ui/  @bvst @urso-agent` and
-  `/apps/mobile/e2e/  @bvst @urso-agent`, each with a comment naming CALL-01,
-  CALL-02 and D-141 (the second also `Screen` and the 112 bar; the third the
-  flows as the only end-to-end proof of 112 and the never-tap-in-the-dialer
-  rule), among the other `/apps/mobile/` lines (before the ownerless
-  `/.claude/agent-memory/` line, which matches none of them anyway).
+- **`.github/CODEOWNERS`**: four lines, `/apps/mobile/src/features/call/
+  @bvst @urso-agent`, `/apps/mobile/src/shared/ui/  @bvst @urso-agent`,
+  `/apps/mobile/e2e/  @bvst @urso-agent` and
+  `/apps/mobile/src/app/  @bvst @urso-agent`, each with a comment naming
+  CALL-01, CALL-02 and D-141 (the second also `Screen` and the 112 bar; the
+  third the flows as the only end-to-end proof of 112 and the
+  never-tap-in-the-dialer rule; the fourth the routes and the root layout
+  around every screen), among the other `/apps/mobile/` lines (before the
+  ownerless `/.claude/agent-memory/` line, which matches none of them anyway).
 - **`OWNER_APPROVAL_PATHS`** in `scripts/lib/merge-rules.mjs`:
-  `'/apps/mobile/src/features/call/'`, `'/apps/mobile/src/shared/ui/'` and
-  `'/apps/mobile/e2e/'`.
+  `'/apps/mobile/src/features/call/'`, `'/apps/mobile/src/shared/ui/'`,
+  `'/apps/mobile/e2e/'` and `'/apps/mobile/src/app/'`.
 - **The `safety` filter in `.github/workflows/ai-review.yml`**:
   `- 'apps/mobile/src/features/call/**'`,
-  `- 'apps/mobile/src/shared/ui/**'` and `- 'apps/mobile/e2e/**'`.
-- **Not** D-139's named exceptions in `scripts/gate.test.mjs` (all three
+  `- 'apps/mobile/src/shared/ui/**'`, `- 'apps/mobile/e2e/**'` and
+  `- 'apps/mobile/src/app/**'`.
+- **Not** D-139's named exceptions in `scripts/gate.test.mjs` (all four
   folders are safety-review paths, unlike those ten), **not** `SAFETY_PATHS`
   or a mutation group (approach 8).
 - **Two fixes from the step-1 reviews**, in the same pull request:
   - *test-auditor's guard note:* the test that no safety path covers a folder
-    now checks both directions for each of the three: no `SAFETY_PATHS` entry is
+    now checks both directions for each of the four: no `SAFETY_PATHS` entry is
     the folder or a parent of it, and none lies inside it, so an entry naming
     one file in the folder is caught too;
   - *the stale version comments:* the comment in `ai-review.yml` that names the
@@ -277,9 +354,10 @@ same pull request (D-141 item 7, amended).
     the review's, not checked in this pass.)
 
 **Its tests** (gate tests under `scripts/`, named for CALL-01-AC9 for
-`features/call/`, CALL-02-AC10 for `shared/ui/` and CALL-02-AC11 for `e2e/`,
-as REL-10-AC18's are, and like them; the same checks for each folder, except
-that `e2e/`'s last-match and filter checks run on the files git tracks there
+`features/call/`, CALL-02-AC10 for `shared/ui/`, CALL-02-AC11 for `e2e/` and
+CALL-02-AC12 for `src/app/`, as REL-10-AC18's are, and like them; the same
+checks for each folder, except that the last-match and filter checks of
+`e2e/` and `src/app/`, which exist today, run on the files git tracks there
 rather than on synthetic paths, as the next paragraph says):
 
 - in `scripts/lib/merge-rules.test.mjs`, as REL-10-AC18's block for the
@@ -296,16 +374,25 @@ rather than on synthetic paths, as the next paragraph says):
 - for `shared/ui/` alone, a control: `apps/mobile/src/shared/translations/en.json`,
   under `shared/` but outside `ui/`, keeps its present owners (today none: no
   CODEOWNERS line matches it), so the new line is not `/apps/mobile/src/shared/`
-  by mistake.
+  by mistake;
+- for `src/app/` alone, a control: `apps/mobile/src/app.test.tsx`, beside the
+  folder in `src/` and not in it, keeps the owners it has today (none), so a
+  line wider than the folder, such as `/apps/mobile/src/app*` or
+  `/apps/mobile/src/`, is caught. A line written without the trailing slash
+  matches the same files as the folder's line (git's own matcher, checked by
+  test-author) and is caught by the exact-line check and `reviewCodeowners`
+  instead.
 - The general tests already there hold the rest, unchanged: every `/apps/`
   owner path outside the ten named exceptions must be in the `safety` filter,
   and every `/apps/` entry in the filter must be an owner path (BUG-10).
 
-**What step 1 pins for `e2e/` itself.** That folder exists today, so step 1
-pins it as REL-10-AC18's last test does for the canary (CALL-02-AC11): git
-tracks at least one `.yaml` file under `apps/mobile/e2e/`, and every file git
-tracks there belongs to `@bvst @urso-agent` under last-match and is covered
-by the `safety` filter. A typo in its CODEOWNERS line or filter entry fails in
+**What step 1 pins for `e2e/` and `src/app/` itself.** Those folders exist
+today, so step 1 pins them as REL-10-AC18's last test does for the canary:
+git tracks at least one `.yaml` file under `apps/mobile/e2e/`
+(CALL-02-AC11), and at least one `.tsx` file under `apps/mobile/src/app/`,
+`_layout.tsx` among them (CALL-02-AC12); and every file git tracks in either
+belongs to `@bvst @urso-agent` under last-match and is covered by the
+`safety` filter. A typo in their CODEOWNERS lines or filter entries fails in
 step 1's own pull request.
 
 **What step 1 cannot pin.** Neither `features/call/` nor `shared/ui/` exists
@@ -356,20 +443,37 @@ texts are the bokmål in `CALL-02.md`'s translations table, asserted in full.
 - **And** a second tap before the first `callNumber` has settled, and before
   the app has come back to the foreground, records no second call; a tap after
   either calls again (L5)
-- **And** `callNumber` given `110`, `112` or `113` opens `tel:` with that number
-  through `Linking.openURL` and never starts `ACTION_CALL`, with the permission
-  granted and without (L5, `phone.test.ts`)
-- **And** `phone.ts` reduces the number itself (approach 2): `callNumber` given
-  each of the three written with spaces between the digits, with dashes
-  between them, with a leading `+47` (with and without a space after it), and
-  with a leading `0047`, opens `tel:` with the three digits alone through
-  `Linking.openURL` and never starts `ACTION_CALL`, with the permission
-  granted and without; and given numbers that do not reduce to one of the
-  three (the fixtures' eight-digit numbers, among them one shaped `ddd112dd`;
-  `47` followed by one of the three, with no `+`; one of the three followed by
-  a digit), it starts `ACTION_CALL` as above (L5, `phone.test.ts`, which does
-  not import `features/grp/first-contact.ts` and passes the numbers in as
-  written, so the check cannot lean on GRP-02's normalisation).
+- **And**, in `phone.test.ts` (L5), which does not import
+  `features/grp/first-contact.ts` and passes every number in as written, so
+  nothing leans on GRP-02's normalisation; each case with the permission
+  granted and without:
+  - *the emergency set:* `callNumber` given `112`, `911`, `110`, `113`, `000`,
+    `08`, `118`, `119` or `999` opens `tel:` with that number through
+    `Linking.openURL` and never starts `ACTION_CALL`;
+  - *written other ways:* the same for each written with spaces between the
+    digits, with dashes between them, with a leading `+47` (with and without a
+    space after it) and with a leading `0047`: the dialer with the reduced
+    digits alone (`tel:112`), never `ACTION_CALL`;
+  - *by prefix:* the same, the dialer, for `110`, `112`, `113`, `000`, `118`
+    and `119` each followed by more digits (shapes `112d`, `113dd`). This
+    replaces the earlier pin that one of 110, 112 or 113 followed by a digit
+    went to `ACTION_CALL`: Android may match emergency numbers by prefix, and,
+    by Nkom's numbering plan as approach 2 cites it, no Norwegian number
+    longer than three digits begins with these;
+  - *the narrowed prefixes:* `911` and `999` followed by five digits
+    (`911ddddd`, `999ddddd`, the shape of Norwegian mobile numbers) and `08`
+    followed by three (`08ddd`) start `ACTION_CALL` with the permission, as
+    any other #1 does (approach 2 says why);
+  - *not a plain number:* `112,5`, `11A`, `١١٢` (Arabic-Indic digits) and
+    `*31#112` each open the dialer and never start `ACTION_CALL`, and the
+    URI holds no unencoded `,`, `;` or `#`;
+  - *the URI from the cleaned string:* given `ddd dd ddd` or
+    `(ddd) dd-ddd` with the permission, `ACTION_CALL`'s data is `tel:` and the
+    eight digits, with no space, dash or parenthesis; without it, the dialer's
+    URI is the same;
+  - *not emergency numbers:* the fixtures' eight-digit numbers, one of them
+    shaped `ddd112dd`, and `47` followed by one of 110, 112 or 113 with no
+    `+`, start `ACTION_CALL` with the permission.
 
 **CALL-01-AC3 — The app asks for the call permission when the first #1 is
 saved, and only then.** (L5; L7)
@@ -467,17 +571,18 @@ code.** (scripts' gate tests; Q7, D-141)
 - **Task 2:** git tracks at least one `.ts` or `.tsx` file under
   `apps/mobile/src/features/call/`, and every file git tracks there belongs to
   `@bvst @urso-agent` under last-match and is covered by the `safety` filter.
-- CALL-02-AC10 holds the same for `apps/mobile/src/shared/ui/`, and
-  CALL-02-AC11 for `apps/mobile/e2e/`, in the same step-1 pull request.
+- CALL-02-AC10 holds the same for `apps/mobile/src/shared/ui/`, CALL-02-AC11
+  for `apps/mobile/e2e/` and CALL-02-AC12 for `apps/mobile/src/app/`, in the
+  same step-1 pull request.
 
 ## Test plan
 
 | Level | Where | Criteria | Runs here? |
 |---|---|---|---|
 | L1 static | the new dependency-cruiser rule, with fixture tests in `packages/config/` beside LOST-02-AC25's; ESLint | AC6 (imports) | Yes |
-| L5 app | `features/call/call.test.tsx` (the whole app through Expo Router's testing library, the phone module faked with a recording fake whose answers are set per test; `AppState` driven for the foreground check); `features/call/phone.test.ts` (the module's own choices: `ACTION_CALL` with the permission, the dialer without, the fallback when `ACTION_CALL` rejects, 110/112/113 to the dialer, written plainly and with spaces, dashes, `+47` or `0047`, the permission's answers, with `expo-intent-launcher`, `PermissionsAndroid` and `Linking` mocked) | AC1 to AC8 | Yes |
+| L5 app | `features/call/call.test.tsx` (the whole app through Expo Router's testing library, the phone module faked with a recording fake whose answers are set per test; `AppState` driven for the foreground check); `features/call/phone.test.ts` (the module's own choices: `ACTION_CALL` with the permission, the dialer without, the fallback when `ACTION_CALL` rejects, the cleaning and the URI built from it, the emergency set and its prefixes to the dialer, written plainly and with spaces, dashes, `+47` or `0047`, strings that are not a plain number to the dialer, the permission's answers, with `expo-intent-launcher`, `PermissionsAndroid` and `Linking` mocked) | AC1 to AC8 | Yes |
 | L7 Android | Maestro, `apps/mobile/e2e/`: grant through Android's own dialog (tapped by its resource ID); tap and read Telecom's record; revoke with `adb shell pm revoke`, relaunch, see the line, tap, see the dialer and no call; at the largest font size, the button visible | AC2, AC3, AC4, AC8 | **No**: CI's `android-e2e` |
-| Gate tests | `scripts/lib/merge-rules.test.mjs`, `scripts/gate.test.mjs` | AC9, and CALL-02-AC10 and AC11 beside it (step 1's part in step 1's pull request; the tracked-file part in task 2's, but for `e2e/`, which step 1 pins itself) | Yes |
+| Gate tests | `scripts/lib/merge-rules.test.mjs`, `scripts/gate.test.mjs` | AC9, and CALL-02-AC10, AC11 and AC12 beside it (step 1's part in step 1's pull request; the tracked-file part in task 2's, but for `e2e/` and `src/app/`, which step 1 pins itself) | Yes |
 | L7 iOS; L9 | none | — | Task 12, and a real iPhone (D-037) |
 
 **L7 reads Telecom's record** (`adb shell dumpsys telecom`), as SPIKE-01's S6
@@ -496,7 +601,7 @@ Maestro reads text, not pixels); gloves.
 
 ## Modules and files affected
 
-**Step 1 (its own pull request), for the three folders:** `.github/CODEOWNERS`,
+**Step 1 (its own pull request, #100), for the four folders:** `.github/CODEOWNERS`,
 `scripts/lib/merge-rules.mjs` (`OWNER_APPROVAL_PATHS`),
 `.github/workflows/ai-review.yml` (the `safety` filter, and the stale version
 comment), `scripts/lib/merge-rules.test.mjs`, `scripts/gate.test.mjs`. All
@@ -510,17 +615,24 @@ still block the four it blocks); `package.json` (`expo-intent-launcher`,
 owned, D-139); `nb.json`, `en.json`; `e2e/` flows (owned after step 1,
 CALL-02-AC11).
 
-**Who reviews what, after step 1:** `features/call/`, `shared/ui/` and
-`apps/mobile/e2e/` are code-owner and safety-review paths (`shared/ui/` holds
-`Screen`, CALL-02; `e2e/` holds the L7 flows of AC2, AC3, AC4 and AC8).
+**Who reviews what, after step 1:** `features/call/`, `shared/ui/`,
+`apps/mobile/e2e/` and `apps/mobile/src/app/` are code-owner and
+safety-review paths (`shared/ui/` holds `Screen`, CALL-02; `e2e/` holds the
+L7 flows of AC2, AC3, AC4 and AC8; `src/app/` the routes and the root layout
+around every screen).
 `features/grp/home-screen.tsx` and `features/grp/first-contact.ts` stay
 unowned. That is acceptable because neither can now take away a call path
 unseen: the 112 bar is drawn by `Screen`, and the call button's size, its
 calls and the emergency rule are in `features/call/`; the tests that would
 fail if `home-screen.tsx` dropped either button (AC1, CALL-02-AC1) live in
-`features/call/` and `shared/ui/`, both owned; and `phone.ts` checks for 110,
-112 and 113 itself (approach 2). What stays unowned is what #1 is and how it
-is shown (GRP-02), which the walker sees on the home screen.
+`features/call/` and `shared/ui/`, both owned; and `phone.ts` cleans the
+number, builds the URI and checks for emergency numbers itself (approach 2).
+What stays unowned is what #1 is and how it is shown (GRP-02), which the
+walker sees on the home screen. `nb.json` and `en.json` stay unowned too:
+the owned tests in `features/call/` assert the 112 button's texts in full in
+both languages (CALL-02-AC6) and the call button's in bokmål (the quoted
+texts above); the call button's English is held only by AC7's word list,
+which reads every value under `call.` in both files.
 
 **Config (owned):** `packages/config/dependency-cruiser.cjs` (the new rule)
 and its fixture tests.
@@ -549,22 +661,33 @@ None.
   - *A double tap with gloves:* one call (AC2).
   - *A start that never settles:* the next return to the foreground frees the
     button (AC2).
-  - *A #1 who is 110, 112 or 113:* never given to `ACTION_CALL`, whose
-    documented rule excludes emergency numbers; the dialer opens (AC2).
-    `phone.ts` recognises the three however they are written, with spaces,
-    dashes, `+47` or `0047`, without relying on `first-contact.ts`
-    (approach 2). Another country's emergency number as #1 (other than 112
-    itself) is not recognised and goes to `ACTION_CALL`; what Android does
-    then is undocumented. A refusal reaches the dialer through the fallback,
-    but a silent no-op would not. Accepted as unlikely for a walker in Norway;
-    not observable before L9.
+  - *A #1 that is an emergency number, or that Android would read as one:*
+    never given to `ACTION_CALL`, whose documented rule excludes emergency
+    numbers; the dialer opens (AC2). `phone.ts` cleans the number, builds the
+    URI from the cleaned string, sends anything that is not a plain number to
+    the dialer, and recognises the emergency set (112, 911, 110, 113, and the
+    no-SIM numbers 000, 08, 118, 119, 999) however it is written, without
+    relying on `first-contact.ts` (approach 2). Left over: `911`, `999` and
+    `08` followed by more digits go to `ACTION_CALL`, because those are the
+    shapes of real Norwegian numbers; and another country's own emergency
+    number outside the set goes to `ACTION_CALL` too. What Android does then
+    is undocumented: a refusal reaches the dialer through the fallback, but a
+    silent no-op would not. Accepted as unlikely for a walker in Norway; not
+    observable before L9. The numbering facts behind the narrowed prefix rule
+    are Nkom's overview pages as a web search summarised them on 2026-10-22
+    (approach 2); the pages may be old, and Nkom's current allocation file was
+    not read, so a newer allocation beginning with a prefix in the rule would
+    send that #1 to the dialer: one tap more, never a failed call.
 - **The 112 bar or the call button removed by a change outside
   `features/call/`.** `Screen` draws the bar on every screen, from
   `shared/ui/`; after step 1 that folder needs the owner and
   `safety-reviewer` too (CALL-02-AC10), and task 2's test that every route is
   drawn through `Screen` (CALL-02-AC1) catches a screen added later without
-  it. `home-screen.tsx` and `first-contact.ts` stay unowned ("Modules and
-  files affected" says why that is acceptable).
+  it. The routes and the root layout in `src/app/` need both as well
+  (CALL-02-AC12), and nothing outside `shared/ui/` may import `Modal`,
+  `SafeAreaView` or `ScrollView` (CALL-02-AC2). `home-screen.tsx` and
+  `first-contact.ts` stay unowned ("Modules and files affected" says why that
+  is acceptable).
 - **[F7](../plan/03-safety-reliability-security.md#failure-modes), the server
   down:** calling needs no server (AC6), and the home screen does not wait for
   it (CALL-02's spec, approach 2).
@@ -582,8 +705,9 @@ None.
   (CALL-02-AC11). The scripts that drive them were owned already.
 - **The step-1 lines for `features/call/` and `shared/ui/` match nothing until
   task 2 merges.** A misspelt path would not show until then; task 2's
-  tracked-file pins (AC9, CALL-02-AC10) are what catch it. `e2e/`'s line is
-  pinned against its tracked flows in step 1 itself (CALL-02-AC11).
+  tracked-file pins (AC9, CALL-02-AC10) are what catch it. The lines for
+  `e2e/` and `src/app/` are pinned against their tracked files in step 1
+  itself (CALL-02-AC11, AC12).
 - **Emulator against real phone.** S6 was observed on the emulator only; some
   manufacturers' dialers may differ. The private test and L9 (deferred,
   D-037) are where that shows.
@@ -633,3 +757,8 @@ The full list of task 2's answers is at the end of `GRP-02.md`.
   `apps/mobile/e2e/`, the Maestro flows, too, in the same step-1 pull request;
   no named exception, no safety path, no mutation group; pinned against its
   tracked flows in step 1 itself ("Step 1", CALL-02-AC11).
+- **Third amendment to Q7 (the owner, 2026-10-22): "Ja, ta med src/app/".**
+  `apps/mobile/src/app/`, Expo Router's routes and the root layout, too, in
+  the same step-1 pull request, #100; no named exception, no safety path, no
+  mutation group; pinned against its tracked files in step 1 itself ("Step
+  1", CALL-02-AC12).

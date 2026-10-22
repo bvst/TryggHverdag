@@ -6296,7 +6296,7 @@ any other path is work, not a candidate for the same treatment.
 ## D-141 — The home screen: the owner's answers (GRP-02, CALL-01, CALL-02; M3 task 2)
 - **Date:** 2026-10-22 · **Status:** Accepted (the owner, 2026-10-22). Asked in
   session, one at a time, each with Claude's recommendation, and the owner chose
-  the recommendation every time; item 7 amended twice the same day, below ·
+  the recommendation every time; item 7 amended three times the same day, below ·
   **Section:** 10 (M3, task 2); D-010, D-012, D-013, D-014, D-016, D-023, D-031,
   D-042, D-055, D-075, D-081, D-128, D-134, D-137, D-139
 - **Context:**
@@ -6371,10 +6371,10 @@ any other path is work, not a candidate for the same treatment.
        `SAFETY_PATHS`: the app's mutation testing is set up with the safety
        core in task 3 (D-081 item 13, D-134), and `features/call/` is for that
        task to consider. Until then no mutation run measures its tests.
-     - **Amended the same day (the owner, twice, after step 1's reviews):**
-       `apps/mobile/src/shared/ui/` and `apps/mobile/e2e/` join
-       `features/call/` in everything this item says, in the same step-1 pull
-       request. See "Amended 2026-10-22", below.
+     - **Amended the same day (the owner, three times, after step 1's
+       reviews):** `apps/mobile/src/shared/ui/`, `apps/mobile/e2e/` and
+       `apps/mobile/src/app/` join `features/call/` in everything this item
+       says, in the same step-1 pull request. See "Amended 2026-10-22", below.
   8. **Where task 2 is built: "Her i skyen"** (here, in the cloud session), as
      GRP-01 was. Screens are tested with jest-expo (L5), and CI's
      `android-e2e` runs the flows (L7). iOS and VoiceOver wait for task 12.
@@ -6405,7 +6405,21 @@ any other path is work, not a candidate for the same treatment.
   - (b, added by the amendment below, 2026-10-22) a task-2 test requires every
     route under `apps/mobile/src/app/` to be drawn through `Screen`, so that no
     route can leave the 112 bar out by not using the component that draws it
-    (CALL-02-AC1).
+    (CALL-02-AC1);
+  - (c, added by the third answer, below, 2026-10-22; from `safety-reviewer`'s
+    delta review of #100) `apps/mobile/src/app/_layout.tsx` exports an
+    `ErrorBoundary` whose fallback is drawn on `Screen`, so that a crash still
+    shows 112;
+  - (d, as c) an ESLint rule lets `Modal`, `SafeAreaView` and `ScrollView` be
+    imported only inside `apps/mobile/src/shared/ui/`;
+  - (e, as c) `phone.ts` removes only its own separators. Anything that is not
+    then digits, with an optional leading `+`, goes to the dialer. It builds
+    the `tel:` URI from the cleaned string;
+  - (f, as c) the emergency set becomes 112, 911, 110, 113, 000, 08, 118, 119
+    and 999, and any of these followed by more digits also goes to the dialer.
+    This widens the set of the choice above, "110, 112 and 113 as #1 always go
+    to the dialer and never to `ACTION_CALL`" (CALL-01-AC2), and (a)'s: the rule
+    is the same, the dialer and never `ACTION_CALL`.
 - **Consequences:**
   - **No server work in task 2.** No route, no table and no contract change;
     `api:diff` must show none. #1 is deleted from the phone with the credential
@@ -6442,10 +6456,11 @@ any other path is work, not a candidate for the same treatment.
     a real emergency call would show it, and no test makes one (SPIKE-01-AC10).
   - Anything on iOS.
 
-- **Amended 2026-10-22, with two owner answers, each asked in session with
+- **Amended 2026-10-22, with three owner answers, each asked in session with
   Claude's recommendation and each the recommended option: the first, after
   step 1's four reviews, on `shared/ui/`; the second, after `planner` and
-  `safety-reviewer` raised it, on `e2e/` (further down):**
+  `safety-reviewer` raised it, on `e2e/`; the third, after `safety-reviewer`'s
+  delta review of #100 raised it, on `src/app/` (each further down):**
   - **Why (the first answer, `shared/ui/`):** step 1's pull request (branch
     `claude/busy-faraday-40n2zl-ai-review`, from `main` at `3d2255c`, not opened
     when this was written) was reviewed in the session at `cb9fbd3` by
@@ -6565,6 +6580,72 @@ any other path is work, not a candidate for the same treatment.
         The owner's answer puts a code owner on the folder; it makes no claim
         about what the flows hold today.
       - **Step 1's pull request now covers three folders,** `features/call/`,
-        `shared/ui/` and `e2e/`. Its red tests for CALL-02-AC11 are written
-        first, then its green change, as for CALL-02-AC10. The hand merge
-        (D-075) and the batching with #95 are unchanged (items 7 and 9).
+        `shared/ui/` and `e2e/` (four after the third answer, below). Its red
+        tests for CALL-02-AC11 are written first, then its green change, as for
+        CALL-02-AC10. The hand merge (D-075) and the batching with #95 are
+        unchanged (items 7 and 9).
+  - **The third answer, the same day: `apps/mobile/src/app/` too.**
+    - **Why:** `safety-reviewer` raised it in its delta review of #100 (PASS on
+      `18007c2`). As the owner was asked:
+      - `apps/mobile/src/app/` holds Expo Router's routes: `_layout.tsx`, the
+        frame around every screen, and `index.tsx`. Git tracks both. The folder
+        has no code owner and is not in the `safety` filter (no
+        `apps/mobile/src/app` in `.github/CODEOWNERS`, `OWNER_APPROVAL_PATHS` or
+        `ai-review.yml`, read on the side branch's head `18007c2`, 2026-10-22).
+      - A change there could draw something over the 112 button (a modal, a
+        splash) or show an error screen without 112. Both files are `.tsx`, so
+        the only reviewer that would read them by path is the advisory
+        `a11y-i18n-reviewer` (`apps/mobile/src/**/*.tsx` in the `ui` filter).
+    - **Asked (the third answer):** whether `apps/mobile/src/app/` should get
+      the code owner and the safety review too, in step 1's pull request, with
+      Claude's recommendation: yes. The four choices under D-031 below were
+      offered in the same question. (The question's own wording is not recorded
+      here.)
+    - **The owner answered (the third answer):** "Ja, ta med src/app/" (Yes,
+      include `src/app/`), on 2026-10-22.
+    - **Decision:** item 7 holds for a fourth folder.
+      - `/apps/mobile/src/app/` gets the code owner `@bvst @urso-agent` (D-071)
+        and joins the ai-review `safety` filter (`apps/mobile/src/app/**`), in
+        step 1's pull request, #100, in the same three places as the other
+        three, with their gate tests.
+      - **Like the others,** it is no D-139 named exception, no `SAFETY_PATHS`
+        entry and no mutation group.
+      - **Its gate tests are named CALL-02-AC12,** a new criterion that
+        `planner` is writing into `docs/specs/CALL-02.md` (not there when this
+        was written).
+      - **The folder exists today,** so step 1 pins its tracked files itself, as
+        for `e2e/`.
+    - **Claude's four choices (D-031), (c) to (f) under "Who decided",** from
+      `safety-reviewer`'s delta should-fixes, which `planner` writes into the
+      specs:
+      - (c) `_layout.tsx` exports an `ErrorBoundary` drawn on `Screen`;
+      - (d) an ESLint rule keeps `Modal`, `SafeAreaView` and `ScrollView` inside
+        `shared/ui/`;
+      - (e) `phone.ts` removes only its own separators, sends to the dialer
+        anything that is not then digits with an optional leading `+`, and
+        builds the `tel:` URI from the cleaned string;
+      - (f) the emergency set is 112, 911, 110, 113, 000, 08, 118, 119 and 999,
+        and any of them followed by more digits goes to the dialer.
+    - **Consequences (the third answer):**
+      - **Every later change to a route** (`_layout.tsx`, `index.tsx` or a file
+        added under `src/app/`) waits for the owner's approval (D-042) and
+        brings `safety-reviewer` by path.
+      - **A cost, stated plainly:** Expo Router's routes are files, so a later
+        task's pull request that adds a route, as a new screen usually does (the
+        invite and members screens are drawn inside `index.tsx`, today), waits
+        for the owner and the safety review even if nothing else in it is
+        owner-gated. Task 2's pull request already needs the owner (D-139's
+        paths, above).
+      - **(f)'s cost, stated plainly:** a #1 whose number begins with one of the
+        nine, followed by more digits (any number that starts `08`, for
+        example), goes to the dialer, not to `ACTION_CALL`, so the walker taps
+        call there, as for 112. That is a second tap, not a failed call. The
+        owner was not asked about it separately.
+      - **(c) and (d) read as task 2's code, not step 1's:** step 1 changes only
+        the three lists and their gate tests. Where the specs place them is
+        `planner`'s, and was not read for this entry.
+      - **Step 1's pull request now covers four folders:** `features/call/`,
+        `shared/ui/`, `e2e/` and `src/app/`. It is open as #100, from the side
+        branch, without auto-merge, for the owner's hand merge (D-075). Its red
+        tests for CALL-02-AC12 are written first, then its green change, as for
+        the others. The batching with #95 is unchanged (items 7 and 9).

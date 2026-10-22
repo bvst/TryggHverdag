@@ -12,9 +12,10 @@ had a shell: the branch was not checked, `pnpm run decision` and
 `req:coverage` were not run, the decisions were read in
 `docs/plan/decisions.md` by line, and D-141, written in parallel by
 plan-keeper, was not read here. **Amended** the same day on the owner's
-answer about `shared/ui/` (D-141 item 7, as amended), and again on the one
-about `apps/mobile/e2e/`; no GRP-02 criterion changes. That pass had no shell either; what it read is listed in
-`CALL-01.md`'s header · **Status:** Settled, and amended. The owner's answers
+answer about `shared/ui/` (D-141 item 7, as amended), and again on the ones
+about `apps/mobile/e2e/` and `apps/mobile/src/app/` and on safety-reviewer's
+delta notes for task 2; no GRP-02 criterion changes. That pass had no shell
+either; what it read is listed in `CALL-01.md`'s header · **Status:** Settled, and amended. The owner's answers
 are in D-141; every criterion is written on them.
 
 ## Why three specs, not one
@@ -240,12 +241,14 @@ Technical choices delegated to Claude (D-031), on the owner's answers in D-141.
    - anything else is refused, with one message, and nothing is saved.
    It accepts a Norwegian eight-digit number, one with `+47` or `0047` in
    front, and a foreign one with its country code. It does not refuse 110, 112
-   or 113: the walker chooses whom they call first. The call button sends
-   those three to the dialer and never through `ACTION_CALL` (`CALL-01.md`,
-   approach 2), because Android's documented rule is that `ACTION_CALL`
-   "cannot be used to call emergency numbers". `phone.ts` recognises them by
-   its own reduction to digits, not by this function's output, so this rule
-   is not what keeps an emergency number away from `ACTION_CALL`.
+   or 113, or any other emergency number: the walker chooses whom they call
+   first. The call button sends emergency numbers to the dialer and never
+   through `ACTION_CALL` (`CALL-01.md`, approach 2), because Android's
+   documented rule is that `ACTION_CALL` "cannot be used to call emergency
+   numbers". `phone.ts` cleans the number, builds the `tel:` URI and checks
+   for emergency numbers itself, not from this function's output, so this
+   rule is not what keeps an emergency number, or a string Android would read
+   as one, away from `ACTION_CALL`.
 4. **Where it is kept** (Q1: on the phone only).
    - In `expo-secure-store`, beside the credential, under its own key, as one
      JSON value, `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY` (the encryption rule;
@@ -475,11 +478,12 @@ and safety-reviewed (CALL-02-AC11).
 
 **Who reviews what, after step 1:** `src/shared/ui/`, where the moved kit and
 `Screen` go, is an owned, safety-reviewed path (CALL-02-AC10), as
-`src/features/call/` is (CALL-01-AC9). `features/grp/home-screen.tsx` and
+`src/features/call/` is (CALL-01-AC9), and the routes in `src/app/`
+(CALL-02-AC12). `features/grp/home-screen.tsx` and
 `features/grp/first-contact.ts` stay unowned. Acceptable: neither decides
 whether 112 shows (`Screen` does), how the call is placed, or whether an
-emergency number reaches `ACTION_CALL` (`phone.ts` reduces the number
-itself, `CALL-01.md`, approach 2); the tests that fail if the home screen
+emergency number reaches `ACTION_CALL` (`phone.ts` cleans and checks the
+number itself, `CALL-01.md`, approach 2); the tests that fail if the home screen
 loses either button live in owned folders; and what these two files do
 decide, which #1 is stored and how it is shown, is in front of the walker on
 the home screen, with GRP-02's own tests and the always-blocking
@@ -528,8 +532,9 @@ None (Q1). `api:diff` must show no change.
 - **Someone else's unlocked phone**
   ([F10](../plan/03-safety-reliability-security.md#failure-modes)): whoever
   holds it can change #1. A known limitation, as with "I'm home".
-- **A #1 who is 110, 112 or 113:** accepted (approach 3); the call button then
-  opens the dialer with that number, as the 112 button does, and never uses
+- **A #1 who is an emergency number** (110, 112, 113, or another in
+  `CALL-01.md`'s set): accepted (approach 3); the call button then opens the
+  dialer with that number, as the 112 button does, and never uses
   `ACTION_CALL` (CALL-01-AC2). Not refused, not encouraged.
 
 ## Out of scope
@@ -597,6 +602,11 @@ approach 2) and that every route is drawn through `Screen` (CALL-02-AC1).
 **Second amendment to Q7 (the owner, 2026-10-22): "Ja, ta med e2e/".**
 `apps/mobile/e2e/`, the Maestro flows, is a code-owner and safety-review path
 too, in the same step-1 pull request (`CALL-02.md`, AC11).
+
+**Third amendment to Q7 (the owner, 2026-10-22): "Ja, ta med src/app/".**
+`apps/mobile/src/app/`, Expo Router's routes and the root layout, is a
+code-owner and safety-review path too, in the same step-1 pull request, #100
+(`CALL-02.md`, AC12).
 
 **Considered, and not taken (Q2):** picking #1 from the phone's contacts.
 Whether Android's contact picker needs the contacts permission was never

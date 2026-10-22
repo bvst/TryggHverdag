@@ -17,8 +17,14 @@ was not read here. **Amended** the same day on the owner's answer about
 `shared/ui/` (D-141 item 7, as amended): AC10, the route pin in AC1, and the
 risk renamed from F6. That pass had no shell either; what it read is listed in
 `CALL-01.md`'s header. **Amended again** the same day on the owner's answer
-about `apps/mobile/e2e/` ("Ja, ta med e2e/"): AC11 · **Status:** Settled, and amended. The owner's answers
-are in D-141.
+about `apps/mobile/e2e/` ("Ja, ta med e2e/"): AC11. **Amended a third time**
+the same day on the owner's answer about `apps/mobile/src/app/` ("Ja, ta med
+src/app/"): AC12; and on safety-reviewer's delta notes for task 2: the route
+pin renders the real root layout and finds nothing drawn outside `Screen`
+(AC1), an import rule keeps `Modal`, `SafeAreaView` and `ScrollView` in
+`shared/ui/` (AC2), the English 112 texts asserted in full (AC6), and a crash
+keeps 112 (AC13) · **Status:** Settled, and amended. The owner's answers are
+in D-141.
 
 ## Requirement
 
@@ -80,7 +86,10 @@ join screen included (Q4); always dark (Q5); Q6's sizes as proposed.
   pull request (AC10); with Claude's choice under D-031 that a task-2 test
   requires every route to be drawn through `Screen` (AC1). Amended again (the
   owner, 2026-10-22, "Ja, ta med e2e/"): so is `apps/mobile/e2e/`, the Maestro
-  flows, in the same pull request (AC11).
+  flows, in the same pull request (AC11). Amended a third time (the owner,
+  2026-10-22, "Ja, ta med src/app/"): so is `apps/mobile/src/app/`, the routes
+  and the root layout around every screen, in the same pull request, #100
+  (AC12).
 
 ### What exists today
 
@@ -99,7 +108,8 @@ join screen included (Q4); always dark (Q5); Q6's sizes as proposed.
   `Slot` inside the translations and the group session and draws nothing of
   its own; and `index.tsx`, the one route, which renders `HomeScreen`. The
   invite and members screens are drawn inside that route, not as routes of
-  their own (read 2026-10-22).
+  their own (read 2026-10-22). No CODEOWNERS line matches the folder, or
+  `src/app.test.tsx` beside it; neither route exports an `ErrorBoundary`.
 - `src/shared/ui/` does not exist, and no merge rule names it.
 - `apps/mobile/e2e/` holds three flows (`app-starts.yaml`, `wrong-code.yaml`,
   `first-admin-invites.yaml`, listed on disk 2026-10-22); no CODEOWNERS line
@@ -152,7 +162,23 @@ and why".
      `Screen` (Q4), and every route file renders through it (AC1).
    - Both files are in owned, safety-reviewed folders after step 1: `Screen`
      in `shared/ui/`, and `EmergencyBar` in `features/call/`, or in
-     `shared/ui/` if the import rules make that the cleaner home (AC10).
+     `shared/ui/` if the import rules make that the cleaner home (AC10). The
+     routes and the root layout are too (`src/app/`, AC12).
+   - **Nothing covers the bar** (safety-reviewer's delta notes; Claude's
+     choices under D-031):
+     - only files in `src/shared/ui/` may import `Modal`, `SafeAreaView` or
+       `ScrollView` from `react-native`, or `SafeAreaView` from
+       `react-native-safe-area-context` (the one `Screen` uses today): an
+       ESLint `no-restricted-imports` rule in the owned `eslint.config.mjs`
+       (AC2);
+     - nothing the app draws sits outside `Screen` but the root layout's
+       `StatusBar` (AC1);
+     - `_layout.tsx` exports an `ErrorBoundary` whose fallback is drawn on
+       `Screen`, so a screen that throws while rendering still shows 112
+       (AC13). The fallback says, in one line, that something went wrong on
+       the screen, with "Prøv igjen", which calls the boundary's retry; it
+       never shows the error's message, which could hold #1's number
+       (GRP-02-AC9).
 2. **The home screen does not wait for the server** (reading 3; changes GRP-01's
    start). The session's start becomes:
    - storage read, no credential: the join screen (unchanged; with the bar);
@@ -227,10 +253,14 @@ translations table below, asserted in full.
   `_layout` files, and any other file Expo Router does not render as a screen,
   each such exclusion named in the test with its reason); fails if the list is
   empty; and renders each file through Expo Router's testing library at its
-  own path (a dynamic segment given a synthetic value), once with no
-  credential stored and once with a credential stored and `GET /v1/me` held
-  unanswered. Each time the rendered tree holds exactly one `Screen`, found by
-  its component type, with the 112 button inside it (L5,
+  own path (a dynamic segment given a synthetic value), inside the real
+  `src/app/_layout.tsx`, not a stand-in, once with no credential stored and
+  once with a credential stored and `GET /v1/me` held unanswered. Each time
+  the rendered tree holds exactly one `Screen`, found by its component type,
+  with the 112 button inside it; and every host element in the tree is inside
+  that `Screen`, or is an ancestor of it (the wrappers Expo Router and the
+  layout put around every screen), or is on a short allow-list named in the
+  test with its reason: the root layout's `StatusBar` (L5,
   `src/shared/ui/screen.test.tsx`).
 
 *Why L5, and why this way.* Whether a route draws `Screen` is a property of
@@ -240,11 +270,14 @@ a search of the source cannot follow and a render can. L7 reaches only the
 screens its flows reach, so a route with no flow would escape it. Listing the
 files when the test runs, rather than naming them in it, is what catches a
 route added later with no edit to the test; the empty-list failure stops the
-check from passing on nothing if `src/app/` moves. The test sits in
-`shared/ui/`, an owned, safety-reviewed path (AC10), so loosening it needs the
-owner and `safety-reviewer`. The screens drawn inside a route (the join,
-setup, invite and members screens) are held by the state list above, not by
-this test.
+check from passing on nothing if `src/app/` moves. Rendering the real root
+layout, and finding no host element beside `Screen`, is what catches
+something drawn over the bar from outside a route: an overlay in the layout,
+or a sibling of `Screen` that covers it, which the ancestor checks of AC2
+cannot see. The test sits in `shared/ui/`, an owned, safety-reviewed path
+(AC10), so loosening it needs the owner and `safety-reviewer`. The screens
+drawn inside a route (the join, setup, invite and members screens) are held
+by the state list above, not by this test.
 
 **CALL-02-AC2 — The 112 button is never hidden.** (L5; L7)
 - **Then** on every screen and state of AC1, no ancestor of the 112 button in
@@ -254,6 +287,15 @@ this test.
   `importantForAccessibility="no-hide-descendants"` (L5)
 - **And** `EmergencyBar` accepts no props: a typed test passes it one under
   `@ts-expect-error`, so `tsc` fails if it ever accepts any (L1)
+- **And** a `no-restricted-imports` rule in `eslint.config.mjs` refuses an
+  import of `Modal`, `SafeAreaView` or `ScrollView` from `react-native`, or of
+  `SafeAreaView` from `react-native-safe-area-context`, in any file under
+  `apps/mobile/src/` outside `src/shared/ui/`, and allows it inside; fixture
+  tests in `packages/config/`, in the style of LOST-02-AC25's, run ESLint on
+  a probe file inside `shared/ui/` (no error) and one outside (an error for
+  each of the four), with a control that the rule fires; and
+  `pnpm run gate:static`'s lint passes on the repository with the rule in
+  place (L1)
 - **And** `Screen`, rendered with each of its optional props set and unset,
   holds the 112 button every time (L5)
 - **And** on #1's setup screen with the keyboard open, it is visible (L7)
@@ -294,6 +336,14 @@ this test.
   `accessibilityLabel` "Ring 112, nødnummeret" and its `accessibilityHint`
   "Åpner telefonappen med 112. Trykk ring der.", with the English in `en.json`
   under the same keys
+- **And**, in the same owned test (`features/call/emergency.test.tsx`), with
+  the app's language set to English as the existing language test sets it,
+  the label reads "Call 112, the emergency number", the hint "Opens your phone
+  app with 112. Tap call there.", and AC5's line "Your phone could not open
+  112. Dial 112 yourself.", each in full. `nb.json` and `en.json` are not
+  code-owner paths, so these assertions, in an owned folder, are what keep a
+  change to either file from altering what the 112 button says without the
+  owner and `safety-reviewer`
 - **And** its flattened style has a `minHeight` of at least 64 and a
   `minWidth` of at least 96 (Q6)
 - **And** none of its texts, in either language, contains a word on
@@ -366,6 +416,36 @@ code.** (scripts' gate tests; D-141 as amended)
 - **And** it is not among D-139's named exceptions, and no `SAFETY_PATHS`
   entry and no mutation group covers it, the folder or a path in it.
 
+**CALL-02-AC12 — `apps/mobile/src/app/` needs the owner and the safety
+review.** (scripts' gate tests; D-141 as amended)
+- **Then** `OWNER_APPROVAL_PATHS` holds `/apps/mobile/src/app/`
+- **And** `.github/CODEOWNERS` has exactly one line for it, owners
+  `@bvst @urso-agent`, and `reviewCodeowners` finds no problem
+- **And** the `safety` filter lists `apps/mobile/src/app/**`
+- **And**, as the folder exists today, step 1 pins it itself: git tracks at
+  least one `.tsx` file under `apps/mobile/src/app/`, `_layout.tsx` among
+  them, and every file git tracks there belongs to `@bvst @urso-agent` under
+  last-match and is covered by the `safety` filter
+- **And** it is not among D-139's named exceptions, and no `SAFETY_PATHS`
+  entry and no mutation group covers it, in either direction
+- **And** `apps/mobile/src/app.test.tsx`, beside the folder in `src/` and not
+  in it, keeps the owners it has today (none), so a line wider than the
+  folder, such as `/apps/mobile/src/app*` or `/apps/mobile/src/`, is caught. A
+  line written without the trailing slash is caught by the exact-line check.
+
+**CALL-02-AC13 — A screen that crashes still shows 112.** (L5)
+- **Given** the real `src/app/_layout.tsx`, which exports an `ErrorBoundary`
+- **When** a route throws while rendering (a faked module the index route
+  renders throws an error whose message holds a synthetic #1 number)
+- **Then** the fallback shows, drawn on `Screen`: exactly one 112 button, with
+  the `accessibilityLabel` "Ring 112, nødnummeret", that still calls
+  `openDialer('112')` when tapped, and AC2's ancestor checks hold for it
+- **And** the fallback shows "Noe gikk galt på denne skjermen." and "Prøv
+  igjen"; a tap on "Prøv igjen", with the module no longer throwing, renders
+  the route again
+- **And** no text the fallback renders holds the error's message or the
+  number (GRP-02-AC9's rule) (L5, `src/shared/ui/screen.test.tsx`).
+
 ## Translations (D-014): bokmål first, then English
 
 Keys for the three specs; the implementer may rename keys, not texts.
@@ -399,8 +479,10 @@ Keys for the three specs; the implementer may rename keys, not texts.
 | `grp.firstContact.nameNotUsable` | Navnet kan ikke brukes. Det må ha minst ett synlig tegn, og ingen skjulte tegn. | That name can't be used. It needs at least one visible character, and no hidden ones. |
 | `grp.firstContact.notSaved` | Nummeret ble ikke lagret. Prøv igjen. | The number was not saved. Try again. |
 | `grp.member.unreachable` | (unchanged) Vi fikk ikke kontakt med serveren. Prøv igjen om litt. | (unchanged) |
+| `app.error.screen` | Noe gikk galt på denne skjermen. | Something went wrong on this screen. |
 
-"Prøv igjen" / "Try again" stays one wording (GRP-01-AC30).
+"Prøv igjen" / "Try again" stays one wording (GRP-01-AC30), the error
+fallback's included (AC13).
 
 ## Accessibility and night use (all three specs)
 
@@ -422,10 +504,10 @@ Keys for the three specs; the implementer may rename keys, not texts.
 
 | Level | Where | Criteria | Runs here? |
 |---|---|---|---|
-| L1 static | `tsc` (the `@ts-expect-error` on `EmergencyBar`'s props); ESLint or a source test for colour literals and raw JSX text | AC2 (props), AC7 (palette only), AC9 (raw text) | Yes |
-| L5 app | `features/call/emergency.test.tsx` and the shared home tests (the whole app through Expo Router's testing library, the phone module and `fetch` faked, `GET /v1/me` held unanswered, answered as member and admin, 401, 5xx, no answer, network error); `features/call/phone.test.ts`; `src/shared/ui/palette.test.ts` (contrast); `src/shared/ui/screen.test.tsx` (every route through `Screen`); the `app.config` test | AC1 to AC9 | Yes |
+| L1 static | `tsc` (the `@ts-expect-error` on `EmergencyBar`'s props); ESLint or a source test for colour literals and raw JSX text; the `no-restricted-imports` rule in `eslint.config.mjs`, with fixture tests in `packages/config/` | AC2 (props, imports), AC7 (palette only), AC9 (raw text) | Yes |
+| L5 app | `features/call/emergency.test.tsx` and the shared home tests (the whole app through Expo Router's testing library, the phone module and `fetch` faked, `GET /v1/me` held unanswered, answered as member and admin, 401, 5xx, no answer, network error; the English 112 texts); `features/call/phone.test.ts`; `src/shared/ui/palette.test.ts` (contrast); `src/shared/ui/screen.test.tsx` (every route through `Screen` inside the real root layout, nothing drawn beside it, and the error fallback); the `app.config` test | AC1 to AC9, AC13 | Yes |
 | L7 Android | Maestro, `apps/mobile/e2e/`: 112 visible on the join, home, setup (keyboard up) and invite screens; tap 112, the dialer in front with 112, Telecom with no call, back; at the largest font size, 112 visible on the home screen | AC1, AC2, AC3 | **No**: CI's `android-e2e` |
-| Gate tests | `scripts/lib/merge-rules.test.mjs`, `scripts/gate.test.mjs`, beside CALL-01-AC9's | AC10 (step 1's part in step 1's pull request; the tracked-file and defining-file parts in task 2's); AC11 (all of it in step 1's pull request) | Yes |
+| Gate tests | `scripts/lib/merge-rules.test.mjs`, `scripts/gate.test.mjs`, beside CALL-01-AC9's | AC10 (step 1's part in step 1's pull request; the tracked-file and defining-file parts in task 2's); AC11 and AC12 (all of them in step 1's pull request) | Yes |
 | L7 iOS; L9 | none | — | Task 12; a real iPhone (D-037) |
 
 **The L7 112 step** taps the app's 112 button and then only reads: the dialer's
@@ -470,9 +552,13 @@ confirmation (task 12); how the dark palette looks on a real screen at night.
 tests); `src/shared/ui/` (the kit moved from `features/grp/ui.tsx`,
 `palette.ts`, `screen.test.tsx`, tests); `src/features/grp/` (every screen on
 the moved kit; `session.tsx` and `home-screen.tsx` for approach 2;
-`session.tsx` owned, D-139); `src/app/_layout.tsx` (the `StatusBar`);
-`app.config.ts` (dark; owned); `nb.json`, `en.json`; `e2e/` flows (owned
-after step 1, AC11).
+`session.tsx` owned, D-139); `src/app/_layout.tsx` (the `StatusBar` and the
+`ErrorBoundary`; owned after step 1, AC12); `app.config.ts` (dark; owned);
+`nb.json`, `en.json` (the fallback's line among the new keys); `e2e/` flows
+(owned after step 1, AC11).
+
+**Config (owned):** `eslint.config.mjs` (the `no-restricted-imports` rule,
+AC2) and its fixture tests in `packages/config/`.
 
 **Who reviews what, after step 1:** `src/shared/ui/` is now an owned,
 safety-reviewed path (AC10), as `src/features/call/` is (CALL-01-AC9), so
@@ -483,13 +569,16 @@ AC1 to AC3, and the 112 step's never-tap-in-the-dialer header, cannot either. `f
 depend on them: the bar comes from `Screen`, the route pin and AC1 to AC5's
 tests live in owned folders, and the dialer's number is a constant beside the
 bar, in an owned folder (`CALL-01.md`, "Modules and files affected", says the same
-for the call button). `src/app/` stays unowned too; a route added there is
-caught by AC1's route pin, which is in `shared/ui/`.
+for the call button). `src/app/`, the routes and the root layout, is owned
+and safety-reviewed after step 1 too (AC12), and a route added there is
+caught by AC1's route pin, which is in `shared/ui/`. `nb.json` and `en.json`
+stay unowned; the 112 button's texts in both languages are asserted in full
+in an owned test (AC6), so a change to them fails there.
 
 **Step 1 (owned; `CALL-01.md`, "Step 1"):** `.github/CODEOWNERS`,
 `scripts/lib/merge-rules.mjs`, `.github/workflows/ai-review.yml`, and their
 gate tests in `scripts/lib/merge-rules.test.mjs` and `scripts/gate.test.mjs`
-(AC10's step-1 part, and all of AC11).
+(AC10's step-1 part, and all of AC11 and AC12).
 
 **Scripts (owned):** `scripts/e2e-android.mjs` (the strings, Telecom's record,
 the focused window, the font size) and its tests; task 2's tracked-file and
@@ -510,9 +599,21 @@ None.
   noticed". (An earlier version of this spec called this F6; safety-reviewer
   noted the error.) A screen that forgets the bar (approach 1: `Screen` draws
   it, with no props to remove it; AC1's route pin catches a route that does
-  not draw `Screen`); a home screen held behind a spinner (approach 2); a
+  not draw `Screen`); something drawn over it from the root layout or beside
+  `Screen` (AC1's host-element check, AC2's import rule); a screen that
+  crashes (AC13); a home screen held behind a spinner (approach 2); a
   keyboard over it (reading 2); a font size that pushes it off (AC2). Each has
   a criterion.
+- **A crash outside the route.** AC13 covers an error thrown while a route
+  renders. Whether the root layout's own boundary also catches an error in
+  the layout itself or its providers depends on Expo Router's wiring, not
+  checked here; if it does not, React unmounts the app and 112 goes with it.
+  The implementer finds out in AC13's test, adds that case if the boundary
+  catches it, and says so plainly if it does not.
+- **`src/app/` changed unseen.** Before the third amendment, a change to the
+  root layout could draw over the bar on every screen with only the advisory
+  `a11y-i18n-reviewer` seeing it. After step 1 it needs the owner and
+  `safety-reviewer` (AC12), and AC1's host-element check fails.
 - **A later change to `Screen` that drops 112 from every screen.** Before the
   amendment, `shared/ui/` had no owner and no safety review, so only the
   advisory `a11y-i18n-reviewer` would have seen it. After step 1 it needs the
@@ -588,3 +689,8 @@ The full list of task 2's answers is at the end of `GRP-02.md`.
   path, from the same step-1 pull request: the flows are the only end-to-end
   proof that 112 opens the dialer, and carry the rule never to tap call in the
   dialer (AC11).
+- **Third amendment to Q7 (the owner, 2026-10-22): "Ja, ta med src/app/".**
+  `apps/mobile/src/app/`, Expo Router's routes and the root layout around
+  every screen, is a code-owner and safety-review path, from the same step-1
+  pull request, #100; no named exception, no safety path, no mutation group
+  (AC12).
