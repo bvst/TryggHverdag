@@ -79,6 +79,8 @@ jobs:
               - 'apps/mobile/app.config.ts'
               # The call button: it places a phone call to the walker's #1 (CALL-01, D-141).
               - 'apps/mobile/src/features/call/**'
+              # Screen draws the 112 bar on every screen (CALL-02, D-141).
+              - 'apps/mobile/src/shared/ui/**'
               - 'packages/contracts/**'
               - 'scripts/mutation.mjs'
               - 'scripts/lib/gate-decisions.mjs'

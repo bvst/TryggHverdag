@@ -82,6 +82,8 @@
 /apps/mobile/src/features/grp/join-key.ts  @bvst @urso-agent
 # The call button: it places a phone call to the walker's #1 (CALL-01, CALL-02, D-141).
 /apps/mobile/src/features/call/            @bvst @urso-agent
+# Screen draws the 112 bar on every screen (CALL-02, D-141).
+/apps/mobile/src/shared/ui/                @bvst @urso-agent
 # The join's request and answer, the issued credential among them (GRP-01, D-139).
 /packages/contracts/src/groups.ts          @bvst @urso-agent
 # The display-name rule, which the app checks before it sends and the server
