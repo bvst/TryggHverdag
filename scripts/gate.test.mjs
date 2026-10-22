@@ -1690,6 +1690,79 @@ describe("this repository's own workflows", () => {
     ).toEqual([]);
   });
 
+  // CALL-02-AC12 (D-141 item 7, amended a third time on 2026-10-22: "Ja, ta
+  // med src/app/"): Expo Router's routes in apps/mobile/src/app/, _layout.tsx
+  // the frame around every screen among them, could draw over the 112 button
+  // or show an error screen without it, so step 1 gives the folder the owner
+  // and the safety review. It exists today, as e2e/ does, so these read the
+  // files git tracks there, and a misspelt line fails in step 1.
+  const APP_FOLDER = '/apps/mobile/src/app/';
+
+  test("CALL-02-AC12: under GitHub's last-match rule, every file git tracks in apps/mobile/src/app/ belongs to @bvst @urso-agent, _layout.tsx among them, and gate:integrity finds every owner-approval path owned", () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const ownersOf = lastMatchOwners(text);
+    const listed = spawnSync('git', ['ls-files', '--', APP_FOLDER.slice(1)], { encoding: 'utf8' });
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    // The reading is checked on an owned .tsx file beside the folder first.
+    expect(ownersOf('apps/mobile/src/features/grp/session.tsx')).toEqual(OWNERS);
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      files.filter((file) => file.endsWith('.tsx')).length,
+      `${APP_FOLDER} holds no .tsx file git tracks`,
+    ).toBeGreaterThan(0);
+    expect(files).toContain(`${APP_FOLDER.slice(1)}_layout.tsx`);
+    expect(files.map((file) => [file, ownersOf(file)])).toEqual(
+      files.map((file) => [file, OWNERS]),
+    );
+  });
+
+  test("CALL-02-AC12: under GitHub's last-match rule, apps/mobile/src/app.test.tsx, beside the folder in src/ and not in it, keeps the owners it has today: none", () => {
+    // A pin, not a red test: it passes before step 1's code as after it, by
+    // design. A line wider than the folder, such as /apps/mobile/src/app* or
+    // /apps/mobile/src/, would make this file owned too, and fail here; the
+    // reading is checked on two owned files beside it first, so the empty list
+    // is CODEOWNERS' answer and not the reader's blind spot.
+    const ownersOf = lastMatchOwners(readFileSync('.github/CODEOWNERS', 'utf8'));
+
+    expect(ownersOf('apps/mobile/src/features/grp/session.tsx')).toEqual(OWNERS);
+    expect(ownersOf('apps/mobile/src/shared/secure-storage.ts')).toEqual(OWNERS);
+    expect(ownersOf('apps/mobile/src/app.test.tsx')).toEqual([]);
+  });
+
+  test('CALL-02-AC12: the ai-review safety filter covers every file git tracks in apps/mobile/src/app/, so a change to a route or the frame around every screen brings safety-reviewer', () => {
+    const safety = filterEntries(readFileSync(`${WORKFLOWS}/ai-review.yml`, 'utf8'), 'safety');
+    const covered = (file) => safety.entries.some((glob) => globCovers(glob, file));
+    const listed = spawnSync('git', ['ls-files', '--', APP_FOLDER.slice(1)], { encoding: 'utf8' });
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(safety.headers, 'how many filters are named safety').toBe(1);
+    expect(safety.unreadable).toEqual([]);
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      files.filter((file) => file.endsWith('.tsx')).length,
+      `${APP_FOLDER} holds no .tsx file git tracks`,
+    ).toBeGreaterThan(0);
+    expect(files).toContain(`${APP_FOLDER.slice(1)}_layout.tsx`);
+    expect(
+      files.filter((file) => !covered(file)),
+      'files under apps/mobile/src/app/ the safety filter does not cover',
+    ).toEqual([]);
+  });
+
+  test('CALL-02-AC12: apps/mobile/src/app/ is not among the named exceptions the safety filter test leaves out of the filter, as D-141 decided', () => {
+    // A guard, not a red test: it passes before step 1's code as after it, by
+    // design, as CALL-02-AC11's above does. D-139's features/grp/session.tsx
+    // is a named exception beside the folder in src/, not in it.
+    const exceptions = [...D102_FILES, ...D139_APPS_FILES];
+
+    expect(exceptions.length).toBeGreaterThan(0);
+    expect(
+      exceptions.filter((owned) => owned.startsWith(APP_FOLDER) || APP_FOLDER.startsWith(owned)),
+    ).toEqual([]);
+  });
+
   // The safety filter is held through the general filter test above, as D-097's block is.
   // RG-03 (BUG-18, code-reviewer): a per-file filter test for db.ts, added on this branch and
   // never on main, was removed. The general test already fails for either file missing from

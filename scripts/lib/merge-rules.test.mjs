@@ -563,6 +563,68 @@ describe('CALL-02-AC11: apps/mobile/e2e/, the flows that prove 112 opens the dia
   });
 });
 
+// CALL-02-AC12 (D-141 item 7, amended a third time on 2026-10-22: "Ja, ta med
+// src/app/"): Expo Router's routes in apps/mobile/src/app/, _layout.tsx the
+// frame around every screen among them, could draw over the 112 button or show
+// an error screen without it, yet the folder had no owner and no safety review.
+// It exists today, as e2e/ does, so step 1 pins the files git tracks in it.
+describe('CALL-02-AC12: apps/mobile/src/app/, the routes and the frame around every screen, needs the owner and the safety review (step 1, D-141)', () => {
+  const APP = 'apps/mobile/src/app/';
+
+  test('CALL-02-AC12: OWNER_APPROVAL_PATHS holds /apps/mobile/src/app/', () => {
+    expect(OWNER_APPROVAL_PATHS).toContain(`/${APP}`);
+  });
+
+  test('CALL-02-AC12: .github/CODEOWNERS gives the folder exactly one line, naming @bvst and @urso-agent, and every path the owner must approve is owned', () => {
+    const text = readFileSync('.github/CODEOWNERS', 'utf8');
+    const owners = (path) =>
+      text
+        .split('\n')
+        .map((line) => line.trim().split(/\s+/))
+        .filter(([pattern]) => pattern === path)
+        .map(([, ...names]) => names.join(' '));
+
+    expect(reviewCodeowners(text)).toEqual([]);
+    expect(owners(`/${APP}`)).toEqual(['@bvst @urso-agent']);
+  });
+
+  test('CALL-02-AC12: the ai-review safety filter lists the folder’s files', () => {
+    const workflow = readFileSync('.github/workflows/ai-review.yml', 'utf8');
+
+    expect(workflow).toContain(`- '${APP}**'`);
+  });
+
+  test('CALL-02-AC12: git tracks at least one .tsx file under apps/mobile/src/app/, _layout.tsx among them', () => {
+    // Passes before step 1's code as after it, by design: the routes exist
+    // today. It keeps the last-match and filter tests in scripts/gate.test.mjs,
+    // which read the same list, from passing over an empty one, or over a
+    // list without the frame around every screen.
+    const listed = spawnSync('git', ['ls-files', '--', APP], { encoding: 'utf8' });
+    const files = listed.stdout.split('\n').filter((file) => file !== '');
+
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      files.filter((file) => file.endsWith('.tsx')).length,
+      `${APP} holds no .tsx file git tracks`,
+    ).toBeGreaterThan(0);
+    expect(files).toContain(`${APP}_layout.tsx`);
+  });
+
+  test('CALL-02-AC12: the folder is no safety path and no mutation group lists it, a folder above it or a path in it, as D-141 decided for step 1', () => {
+    // A guard, not a red test: it passes before step 1's code as after it, by
+    // design, and reads both ways as CALL-02-AC11's does. The routes are not
+    // mutated in step 1, so a safety path or a group here shows itself as a
+    // change to this test with its own reason (RG-03).
+    const covers = (path) => APP.startsWith(path) || path.startsWith(APP);
+
+    expect(SAFETY_PATHS).not.toContain(APP);
+    expect(SAFETY_PATHS.filter(covers)).toEqual([]);
+    expect(
+      MUTATION_GROUPS.filter((group) => group.paths.some(covers)).map((group) => group.name),
+    ).toEqual([]);
+  });
+});
+
 // SEC-06 (privacy-security-reviewer on PR #96, raised twice): the secret scan
 // on every change is CI's required `security` check, run as `./gitleaks git .`
 // with no --config (ci.yml, "Secret scan (gitleaks)"). So gitleaks takes its
