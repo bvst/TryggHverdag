@@ -23,8 +23,8 @@ owner's five answers are D-136, the delegated choices D-137 and the app's plain
 next task is task 2 in D-134's order, the home screen (GRP-02, CALL-01, CALL-02);
 it has not started. The owner's part is A-36 (below): its plan and apply are
 done (2026-10-21), and the join in the app is left. The code-owner question from
-#96 (the owner's question 1) is answered, D-139: eleven sign-in files get a code
-owner, on the session branch and not merged.
+#96 (the owner's question 1) is answered, D-139: eleven sign-in files got a code
+owner in #98 (`a2457b5`, 2026-10-21).
 Bugs found and fixed since the last update (2026-10-10), with the pull request
 and its squash commit: BUG-43 (a test picked an outbox row by random order;
 #79, `85426bf`, which carried REL-10's record), BUG-42 and BUG-26 (the gate's

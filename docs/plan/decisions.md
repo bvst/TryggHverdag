@@ -1925,7 +1925,7 @@ any other path is work, not a candidate for the same treatment.
     08:00 estimated above.
 
 ## D-081 — App skeleton v1: Expo SDK 57 and the toolchain built around it
-- **Date:** 2026-09-26 · **Status:** Accepted (delegated, D-031) · **Section:** 4/5/6/8 (M0, INF-06)
+- **Date:** 2026-09-26 · **Status:** Accepted (delegated, D-031); the `-change-locale` flow in item 12's runs 5 to 9 is superseded for CI by D-140 (BUG-17) · **Section:** 4/5/6/8 (M0, INF-06)
 - **Context:** INF-06's spec (`docs/specs/INF-06.md`, "Versions") delegated the
   exact Expo SDK, its dependent versions and the L7 toolchain to Claude, asking
   for the newest stable SDK the workspace can install, and for each other
@@ -6219,3 +6219,76 @@ any other path is work, not a candidate for the same treatment.
     - **What did not change:** the owner's answer, the file's code owner, its
       place in `OWNER_APPROVAL_PATHS` and the ai-review filter, which stays as
       it was.
+
+## D-140 — e2e:android switches the emulator to bokmål itself (BUG-17)
+- **Date:** 2026-10-22 · **Status:** Accepted (delegated, D-031) ·
+  **Section:** 6/8 (INF-06; supersedes, for CI, part of D-081, below)
+- **Context:**
+  - BUG-17: `android-e2e` failed three times before the app was installed, on
+    #57 (job 110875720264), #60 (job 111180346250) and #96 (job
+    118947039610), each time with "Waited 120 s … its package service was
+    found, and its configuration's language was en-rUS".
+  - CI started the emulator with `-change-locale nb-NO` (D-081, item 12, runs
+    5 to 9). The emulator applies that asynchronously after boot, by
+    restarting Android's framework, and `e2e:android` only waited for it.
+  - The runner's log of the failing run (job 118947039610) and of the passing
+    re-run (job 119070015215) has the same sequence at the same timing:
+    "Boot completed", then "Changing locale to nb-NO … Restarting framework",
+    then "Disabling animations" with three `adb shell settings put`, then
+    `e2e:android`. So that sequence does not tell them apart.
+  - In the failing run, the framework was up and still `en-rUS` 130 s after
+    boot. Either the switch did not take, or the restart did not happen.
+    **Which of the two cannot be known:** the script logged nothing of its
+    readings, and the emulator's switch is not observable.
+- **Decision:**
+  - **The switch.** `e2e:android` makes the switch itself, inside its existing
+    wait. If the first reading is not ready (the configuration is not bokmål,
+    or the package service is not found), it runs, once each, `adb root`,
+    `adb wait-for-device`, `adb shell setprop persist.sys.locale nb-NO` and
+    `adb shell setprop ctl.restart zygote`. It then waits as before: 120 s from
+    the first reading, until the configuration is bokmål and the package
+    service is found.
+  - **Already bokmål.** A device that is already in bokmål, with its package
+    service up, passes on its first reading and is not switched.
+  - **A refused step.** A step whose status is not 0, or `adb root` saying
+    "cannot run as root", fails the run at once, naming the step and what adb
+    printed.
+  - **The timeout message.** It now also says what `persist.sys.locale` said
+    last, and whether the framework was seen restarting during the wait.
+  - **CI.** `ci.yml` drops `-change-locale` from both emulator steps, and drops
+    `EMULATOR_LOCALE` from the job's environment and from the AVD cache key. So
+    every run takes the script's switch and the path is always exercised, not
+    only when the emulator's switch fails, and a fresh snapshot is made without
+    it. The flows step is renamed "Boot the emulator, switch it to bokmål and
+    run every flow".
+  - **Supersedes, for CI,** the part of D-081 (item 12, runs 5 to 9) where the
+    emulator is started with `-change-locale nb-NO` and `e2e:android` waits for
+    that switch. The rest of D-081 stands: the 120 s deadline, the pass
+    condition (bokmål and the package service found) and the install wait. The
+    switch runs once, and nothing here retries a flow (D-060).
+- **Why:**
+  - A switch the script makes and then watches can be explained when it fails.
+    The emulator's could not.
+  - A fallback taken only when the emulator's switch fails would be an untested
+    path, so the emulator's switch is removed and the script's is the only one.
+  - Recorded earlier in D-081 (run 8): `-prop persist.sys.locale` is refused by
+    the emulator ("only 'qemu.*' properties are supported"), so the property is
+    set from the device's shell after boot, as above. On the first boot in
+    bokmål, installs are refused for a while, which the install wait already
+    handles.
+- **Not verified when this was decided:** that `adb root` and
+  `setprop ctl.restart zygote` work on CI's image (API 37.2,
+  `google_apis_ps16k`), and how long that restart takes there. No emulator can
+  run in a cloud session. The pull request's own `android-e2e` run is the first
+  proof.
+- **Consequences:**
+  - The owner's Mac runs (INF-06-AC16) need an image that allows `adb root`. A
+    `google_apis` image does; a Play Store image does not, and the script then
+    fails at once, naming `adb root`.
+  - `docs/specs/INF-06.md` (AC9) and D-081 describe the old `-change-locale`
+    flow. Each carries a one-line note that D-140 supersedes it for CI; neither
+    is rewritten.
+  - The tests (RG-03): `scripts/lib/e2e-android.test.mjs` holds the steps and
+    the timeout message, `scripts/e2e-android.test.mjs` holds the script run
+    against a stand-in `adb`, and `scripts/gate.test.mjs` holds that no
+    emulator step in `ci.yml` is started with `-change-locale`.
