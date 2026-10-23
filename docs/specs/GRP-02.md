@@ -18,9 +18,11 @@ delta notes for task 2; no GRP-02 criterion changes. That pass had no shell
 either; what it read is listed in `CALL-01.md`'s header. **Amended again** in
 review loop 1 (2026-10-23), from the five reviews of the green code at
 `0930b86`; listed under "Review loop 1" below and marked *Review loop 1* where
-made. What that pass read is in `CALL-02.md`'s header · **Status:** Settled,
-and amended. The owner's answers are in D-141; every criterion is written on
-them.
+made. What that pass read is in `CALL-02.md`'s header. **Amended again** in
+review loop 2 (2026-10-23), from the delta reviews of `d2a55ca`; listed under
+"Review loop 2" below and marked *Review loop 2* where made. What that pass
+read is in `CALL-02.md`'s header · **Status:** Settled, and amended. The
+owner's answers are in D-141; every criterion is written on them.
 
 ### Review loop 1 (2026-10-23), from the reviews of `0930b86`
 
@@ -38,6 +40,17 @@ AC11 is new.
 | `code-reviewer` 3 with `a11y-i18n-reviewer` 6: a new view opens scrolled and unfocused | When the index route's content changes view, the scroll goes to the top and focus to the new view's heading | AC11 (new); `CALL-02.md`, approach 1 |
 | `test-auditor` 4: docs drift | GRP-01's member and unreachable tests needed no change; the "Existing assertions" list says so | Existing assertions |
 | Noted, not done now: autofill on #1's number; the waiting indicator's live region | Recorded with their reasons | Left for later tasks |
+
+### Review loop 2 (2026-10-23), from the delta reviews of `d2a55ca`
+
+The delta reviews of loop 1's changes, at `d2a55ca`, all passed. The change
+below is Claude's choice under D-031, from a reviewer's should-fix. AC6 and
+AC9 are amended; no criterion is new.
+
+| Finding | Decision | Criterion |
+|---|---|---|
+| `privacy-security-reviewer` S1 (the retention rule): a #1 left by a refused delete stays on a phone that never joins again. A 401 runs the sign-out, the store refuses #1's delete (or a save already running lands after it), and the walker never rejoins: the name and number stay under the join screen for as long as the app is installed, where the walker cannot see them | With no credential at start, the app deletes #1, best effort and silently, before the join screen shows; a refusal there does not stop the join screen, and the delete is tried again at every start | Approach 4; AC6, AC9; Risks |
+| Not changed, a follow-up (`code-reviewer` note 9): a source test refusing `{ virtual: true }` for an installed bare package in `apps/mobile`'s tests | Not this task. It needs `expo-secure-store`'s and `expo-crypto`'s virtual mocks dropped in all six files that hold them (`grp.test.tsx`, `home.test.tsx`, `app.test.tsx`, `call.test.tsx`, `emergency.test.tsx` and `shared/ui/screen.test.tsx`, found by a search for `virtual: true` on 2026-10-23), and in `packages/test-kit/src/fake-secure-store.test.ts` as the reviewer named it (the search found no `virtual: true` there; what changes in it is the follow-up's to read), in one change, never mixed: a virtual mock of an installed package is the hazard behind `phone.test.tsx`'s order-dependent failure that `a54f735` fixed | None |
 
 ## Why three specs, not one
 
@@ -297,6 +310,20 @@ Technical choices delegated to Claude (D-031), on the owner's answers in D-141.
      app deletes #1 too, best effort: a refusal there does not fail the join.
      If the store refuses both deletes, the old #1 shows on the home screen,
      in front of the walker, who can change it (Risks).
+   - **Deleted at a start with no credential** (*Review loop 2*,
+     `privacy-security-reviewer` S1; the retention rule). When the app starts
+     and secure storage answers that it holds no credential, the app deletes
+     #1 before the join screen shows. No credential means no home screen, so
+     no #1 should exist; one that does was left by a refused delete at a
+     sign-out, or by a save that was already running and landed after it. The
+     join's delete above catches it only if the walker joins again; this one
+     catches it on a phone that never does. Best effort and silent: a
+     refusal is not logged (PRIV-07) and does not stop the join screen from
+     showing, and the delete is tried again at every start with no
+     credential. It removes nothing the walker could keep: the join that
+     follows deletes #1 already. A start whose credential read rejects is
+     not a start with no credential: #1 is kept, and the home screen shows,
+     as today.
 5. **The setup screen** (`features/grp/first-contact-screen.tsx`), opened from
    the home screen's call button when no #1 is set or #1 cannot be read, and
    from "Bytt nummer 1-kontakt":
@@ -452,6 +479,17 @@ the numbers from the fixtures, in these shapes)
 - **And** if the store also refuses that delete at the join, the join still
   completes and the new credential is saved (best effort) (*Review loop 1*,
   `privacy-security-reviewer` S1).
+- **When** the secure-store fake refuses #1's delete on a 401 (the
+  credential's delete allowed), then allows it, and the app is restarted (a
+  fresh module registry, secure storage kept) with no credential stored
+- **Then** #1's key is gone from the fake before any join, and the join
+  screen shows (*Review loop 2*, `privacy-security-reviewer` S1)
+- **When** the fake refuses #1's delete on the 401 and again at that start
+- **Then** the join screen still shows, #1's key is still in the fake, and
+  no `console` method is called on the way (AC9); at the next start with no
+  credential, the fake now allowing it, #1's key is gone (*Review loop 2*)
+- **And** when the credential read itself rejects at start, #1's delete is
+  not called (approach 4) (*Review loop 2*).
 
 **GRP-02-AC7 — The home screen shows who #1 is without waiting for the
 server.** (L5)
@@ -485,7 +523,8 @@ PRIV-07)
   with errors whose messages hold #1's number and name
 - **When** #1 is chosen, changed, refused, failed to save, read, failed to
   read, and called (CALL-01's paths, the permission refused and both call
-  paths failing included)
+  paths failing included), and its delete is refused at a start with no
+  credential (AC6; *Review loop 2*)
 - **Then** no spied call, and no error that escapes to the test's global
   handlers (an unhandled rejection, or an error thrown out of a render), holds
   #1's name or its number in any form: as typed, normalised, or as the
@@ -568,7 +607,8 @@ with the reason beside it and `test-auditor` can check none is a weakening:
 
 **App (`apps/mobile/`):** `src/features/grp/` (`first-contact.ts`,
 `first-contact-screen.tsx`, `home-screen.tsx`, `session.tsx` for #1's deletion
-on sign-out and the home screen's start, and their tests); `src/shared/secure-
+on sign-out, at a join, and at a start with no credential (*Review loop 2*),
+and the home screen's start, and their tests); `src/shared/secure-
 storage.ts` (#1's three functions); `src/shared/translations/nb.json` and
 `en.json`; `e2e/` (the new flows). `session.tsx`, `secure-storage.ts` and
 `package.json` are code-owner paths (D-139); `e2e/` is one from step 1 on,
@@ -631,6 +671,14 @@ None (Q1). `api:diff` must show no change.
   refuses that one too, the old #1 shows after the new join: kept past the
   sign-out the retention rule ties it to, but on the walker's own phone and
   shown on the home screen, where the walker can change it. Not silent.
+  *Review loop 2, `privacy-security-reviewer` S1:* on a phone that never
+  joins again, the delete at every start with no credential (approach 4,
+  AC6) removes it. What is left: that delete can be refused too. Then #1
+  stays on the phone, under the join screen and unseen by the walker, until
+  a start at which the store allows the delete, or until the app is
+  uninstalled; it is tried again at every start. No log says so (PRIV-07),
+  and nothing on the join screen does: the join screen does not show #1, and
+  this spec adds no message for a delete the walker can do nothing about.
 - **#1 is a third party's personal data,** a name and a number, about someone
   who may not use the app (D-013). On the phone only, it never reaches the
   server or a provider; the privacy notice and the DPIA (M4) should still say

@@ -32,7 +32,17 @@ code at `0930b86`, and on the owner's answer recorded as D-141's fourth
 amendment; listed under "Review loop 1" below and marked *Review loop 1* where
 made. That pass read the three specs, GRP-01's spec, `grp.test.tsx`,
 `features/call/permission.tsx`, the root `package.json`, `coverage-baseline.json`
-and `.github/CODEOWNERS` in the worktree; it ran no command ·
+and `.github/CODEOWNERS` in the worktree; it ran no command. **Amended a
+sixth time** in review loop 2 (2026-10-23), from the delta reviews of
+`d2a55ca`; listed under "Review loop 2" below and marked *Review loop 2* where
+made. That pass read the three specs; D-141 in `docs/plan/decisions.md` by
+line, its fourth amendment included (it had no shell, so `pnpm run decision
+D-141` was not run); `features/grp/session.tsx`,
+`features/call/call-button.tsx`, `permission.tsx` and `phone.ts`;
+`eslint.config.mjs`, `packages/config/eslint/index.mjs` and
+`packages/config/calling-imports.test.mjs`; and searched `apps/mobile/src`
+for the import forms CALL-01-AC6 now refuses and for `virtual: true`. It did
+not read `scripts/lib/e2e-android.mjs`, and it ran no command ·
 **Status:** Settled, and amended. The owner's answers are in D-141.
 
 ### Review loop 1 (2026-10-23), from the reviews of `0930b86`
@@ -55,6 +65,16 @@ new here (the scroll and focus reset is GRP-02-AC11).
 | `code-reviewer` 3 with `a11y-i18n-reviewer` 6: a new view opens scrolled and unfocused | The scroll goes to the top and focus to the new view's heading; the means is the implementer's | Approach 1; GRP-02-AC11 |
 | `test-auditor` 4: docs drift | GRP-01's start tests needed no change; the "Existing assertions" list says so | Existing assertions |
 | Noted, not done now: Expo Router's `+not-found` screen is not on `Screen` | Recorded with its reason | Left for later |
+
+### Review loop 2 (2026-10-23), from the delta reviews of `d2a55ca`
+
+The delta reviews of loop 1's changes, at `d2a55ca`, all passed. One
+sentence of this spec changes; no criterion changes.
+
+| Finding | Decision | Criterion |
+|---|---|---|
+| `a11y-i18n-reviewer` should-fix 1: the note under the translations table said the English hint reads "the phone app", "as the owner gave it"; the table, `en.json`, `emergency.test.tsx` and D-141's fourth amendment all say "Opens your phone app with 1 1 2. Tap call there.", and D-141 records "the phone app" as a slip in an earlier brief | The note says the English hint keeps "your phone app", as D-141 records. The text itself does not change | Translations |
+| Not changed (`a11y-i18n-reviewer` note), WCAG 2.5.3, Label in Name: the 112 button's accessible name, "Ring 1 1 2, nødnummeret", does not contain the visible "112", so a Voice Access user who says "tap 112" may not reach it | Nothing changes now: the label is the owner's answer (D-141, fourth amendment), and changing it is the owner's. The coordinating session puts it to the owner | None |
 
 ## Requirement
 
@@ -648,8 +668,10 @@ Keys for the three specs; the implementer may rename keys, not texts.
 
 *Review loop 1, the owner's answer (D-141, fourth amendment):* the 112
 button's label and hint spell the number "1 1 2", in both languages, and the
-English hint reads "the phone app", as the owner gave it. The visible "112"
-and the failure line's visible text, `call.emergency.failed`, are unchanged.
+English hint keeps "your phone app", as D-141 records ("the phone app" was a
+slip in an earlier brief; *Review loop 2*, `a11y-i18n-reviewer` should-fix
+1). The visible "112" and the failure line's visible text,
+`call.emergency.failed`, are unchanged.
 *After review loop 1 (Claude's choice under D-031, following that answer):*
 the failure line gets a screen-reader label of its own,
 `call.emergency.failedLabel`, spelling "1 1 2" in both languages (AC5). The
