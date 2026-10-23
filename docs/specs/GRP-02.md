@@ -50,7 +50,7 @@ AC9 are amended; no criterion is new.
 | Finding | Decision | Criterion |
 |---|---|---|
 | `privacy-security-reviewer` S1 (the retention rule): a #1 left by a refused delete stays on a phone that never joins again. A 401 runs the sign-out, the store refuses #1's delete (or a save already running lands after it), and the walker never rejoins: the name and number stay under the join screen for as long as the app is installed, where the walker cannot see them | With no credential at start, the app deletes #1, best effort and silently, before the join screen shows; a refusal there does not stop the join screen, and the delete is tried again at every start | Approach 4; AC6, AC9; Risks |
-| Not changed, a follow-up (`code-reviewer` note 9): a source test refusing `{ virtual: true }` for an installed bare package in `apps/mobile`'s tests | Not this task. It needs `expo-secure-store`'s and `expo-crypto`'s virtual mocks dropped in all six files that hold them (`grp.test.tsx`, `home.test.tsx`, `app.test.tsx`, `call.test.tsx`, `emergency.test.tsx` and `shared/ui/screen.test.tsx`, found by a search for `virtual: true` on 2026-10-23), and in `packages/test-kit/src/fake-secure-store.test.ts` as the reviewer named it (the search found no `virtual: true` there; what changes in it is the follow-up's to read), in one change, never mixed: a virtual mock of an installed package is the hazard behind `phone.test.tsx`'s order-dependent failure that `a54f735` fixed | None |
+| `code-reviewer` note 9 and `test-auditor` N2 (on the audit of `c827f21`): a source test refusing `{ virtual: true }` for an installed bare package in `apps/mobile`'s tests | Done in this loop, by the coordinating session's choice after a second reviewer asked for it (the first entry of this row said "not this task"). It needs `expo-secure-store`'s and `expo-crypto`'s virtual mocks dropped in all six files that hold them (`grp.test.tsx`, `home.test.tsx`, `app.test.tsx`, `call.test.tsx`, `emergency.test.tsx` and `shared/ui/screen.test.tsx`, found by a search for `virtual: true` on 2026-10-23), and in `packages/test-kit/src/fake-secure-store.test.ts` as the reviewer named it (the search found no `virtual: true` there; what changes in it is the follow-up's to read), in one change, never mixed: a virtual mock of an installed package is the hazard behind `phone.test.tsx`'s order-dependent failure that `a54f735` fixed | None |
 
 ## Why three specs, not one
 
@@ -595,7 +595,14 @@ with the reason beside it and `test-auditor` can check none is a weakening:
   halves are unchanged: only a 401 signs out, and an unreachable server keeps
   the credential and says so. The only change to that file is the teardown's
   order, marked RG-03 at its lines 524 and 1562 (`CALL-02.md`, "Existing
-  assertions"); no assertion changed.
+  assertions"); no assertion changed. *Review loop 2, `test-auditor` N1:*
+  `4989261` then narrowed GRP-01-AC30's retry-word filter in the same file
+  to whole words, because it matched "Trykk" in CALL-01's permission line.
+  It still requires at least one retry control and every one named exactly
+  "Prøv igjen", and it still matches every retry form (Prøv…, retry, try,
+  tries, trying); it no longer matches words that only contain "try" or
+  "prøv" ("Trykk", "TryggHverdag"). Its reason is written beside it and in
+  the commit.
 - **`first-admin-invites.yaml`**: if the home screen's heading changes from
   `grp.member.title`, the flow's `MEMBER_TITLE` step follows it.
 - **The shared kit moves** from `features/grp/ui.tsx` to `src/shared/ui/`, and
