@@ -117,6 +117,29 @@ export function GroupSessionProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  /** #1 as secure storage holds it, or unreadable when the read fails (GRP-02-AC8). */
+  const readFirstContact = useCallback(async (): Promise<FirstContactState> => {
+    try {
+      return storedFirstContact(await secureStorage.readFirstContact());
+    } catch {
+      return { kind: 'unreadable' };
+    }
+  }, []);
+
+  /**
+   * #1 deleted from secure storage, best effort (GRP-02-AC6): a refusal does
+   * not stop what called it. A #1 kept is tried again at the next start with
+   * no credential. Not logged: the error's message may hold the number
+   * (PRIV-07).
+   */
+  const forgetFirstContact = useCallback(async () => {
+    try {
+      await secureStorage.deleteFirstContact();
+    } catch {
+      // Kept, as above.
+    }
+  }, []);
+
   /** The credential and #1 are gone from the phone, and the join screen says so. */
   const signOut = useCallback(async () => {
     credential.current = null;
@@ -129,13 +152,10 @@ export function GroupSessionProvider({ children }: { children: ReactNode }) {
     } catch {
       // Said by the join screen, as above.
     }
-    try {
-      await secureStorage.deleteFirstContact();
-    } catch {
-      // As for the credential: the home screen #1 belonged to is gone.
-    }
+    // As for the credential: the home screen #1 belonged to is gone.
+    await forgetFirstContact();
     update({ phase: 'joining', signedOut: true });
-  }, [update]);
+  }, [forgetFirstContact, update]);
 
   /** Who this phone is, by its credential. */
   const checkIn = useCallback(
@@ -159,15 +179,6 @@ export function GroupSessionProvider({ children }: { children: ReactNode }) {
     [signOut, updateHome],
   );
 
-  /** #1 as secure storage holds it, or unreadable when the read fails (GRP-02-AC8). */
-  const readFirstContact = useCallback(async (): Promise<FirstContactState> => {
-    try {
-      return storedFirstContact(await secureStorage.readFirstContact());
-    } catch {
-      return { kind: 'unreadable' };
-    }
-  }, []);
-
   const start = useCallback(async () => {
     let stored: string | null;
     try {
@@ -185,18 +196,13 @@ export function GroupSessionProvider({ children }: { children: ReactNode }) {
       // is was left by a refused delete at a sign-out, or by a save that
       // landed after it. Best effort, and before the join screen shows
       // (GRP-02-AC6).
-      try {
-        await secureStorage.deleteFirstContact();
-      } catch {
-        // Kept, and tried again at the next start with no credential. Not
-        // logged: the error's message may hold the number (PRIV-07).
-      }
+      await forgetFirstContact();
       update({ phase: 'joining', signedOut: false });
       return;
     }
     update({ phase: 'home', server: { kind: 'asking' }, firstContact: await readFirstContact() });
     await checkIn(stored);
-  }, [checkIn, readFirstContact, update]);
+  }, [checkIn, forgetFirstContact, readFirstContact, update]);
 
   useEffect(() => {
     mounted.current = true;
@@ -232,13 +238,10 @@ export function GroupSessionProvider({ children }: { children: ReactNode }) {
       // screen shows only with no credential, and a new member has no #1. It
       // goes before the new credential is kept, so no stop between the two
       // can leave it on the new home screen. Best effort: a refusal here
-      // does not fail the join (GRP-02-AC6).
-      try {
-        await secureStorage.deleteFirstContact();
-      } catch {
-        // Kept: the next start reads it and shows it on the home screen, in
-        // front of the walker, who can change it (GRP-02, Risks).
-      }
+      // does not fail the join (GRP-02-AC6). One kept is read by the next
+      // start and shown on the home screen, in front of the walker, who can
+      // change it (GRP-02, Risks).
+      await forgetFirstContact();
       try {
         await secureStorage.saveCredential(issued);
       } catch {
@@ -254,7 +257,7 @@ export function GroupSessionProvider({ children }: { children: ReactNode }) {
       });
       return 'joined';
     },
-    [update],
+    [forgetFirstContact, update],
   );
 
   /** Asks the server again who this phone is, the home screen and #1 staying where they are. */

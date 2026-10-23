@@ -78,7 +78,7 @@
       "cancel": "Cancel",
       "numberNotUsable": "That number doesn't look right. Use digits only, with + and the country code first if needed.",
       "nameNotUsable": "That name can't be used. It needs at least one visible character, and no hidden ones.",
-      "notSaved": "The number was not saved. Try again."
+      "notSaved": "The contact was not saved. Try again."
     }
   }
 }

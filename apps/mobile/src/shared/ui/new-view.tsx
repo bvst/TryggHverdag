@@ -36,14 +36,15 @@ import { AccessibilityInfo, type Text } from 'react-native';
 /** A heading's element, once it is drawn. */
 export type HeadingRef = RefObject<ComponentRef<typeof Text> | null>;
 
-interface ScreenViews {
+/** What a `ScreenViews` gives what it holds, through `ScreenViewsContext`. */
+interface ScreenViewsApi {
   /** A heading is drawn inside the Screen; the function it returns says it is gone. */
   addHeading: (heading: HeadingRef) => () => void;
   /** A new view is drawn: the scroll to its top, and focus to its heading. */
   opened: () => void;
 }
 
-const ScreenViewsContext = createContext<ScreenViews | null>(null);
+const ScreenViewsContext = createContext<ScreenViewsApi | null>(null);
 
 /** Drawn by `Screen` around what it holds, with the way to scroll its ScrollView to the top. */
 export function ScreenViews({
@@ -55,7 +56,7 @@ export function ScreenViews({
 }) {
   /** The headings drawn now, in the order they were drawn. */
   const headings = useRef(new Set<HeadingRef>());
-  const views = useMemo<ScreenViews>(
+  const views = useMemo<ScreenViewsApi>(
     () => ({
       addHeading: (heading) => {
         headings.current.add(heading);

@@ -1,9 +1,10 @@
 /**
- * What the emulator records of a call, and of the dialer, read between the
- * L7 flows by scripts/e2e-android.mjs (CALL-01, approach 9; CALL-01-AC2,
- * CALL-01-AC4, CALL-02-AC3), because Maestro cannot see a call. Pure: each
- * reader takes what adb printed. SPIKE-01's S6 read Telecom's record the same
- * way (spikes/background-safety/analysis/s6.mjs).
+ * What the emulator records of a call, of the dialer, and of the phone's
+ * wakefulness, read between the L7 flows by scripts/e2e-android.mjs (CALL-01,
+ * approach 9; CALL-01-AC2, CALL-01-AC4, CALL-02-AC3), because Maestro cannot
+ * see a call, nor a phone asleep. Pure: each reader takes what adb printed.
+ * SPIKE-01's S6 read Telecom's record the same way
+ * (spikes/background-safety/analysis/s6.mjs).
  *
  * Output a reader does not recognise is refused with an error, never read as
  * "no call" or "not the dialer": a check that cannot read its evidence must
@@ -192,6 +193,63 @@ export function focusedPackage(text) {
   if (own !== undefined) return own;
   const app = lines.find((line) => /^\s*mFocusedApp=/.test(line));
   return (app === undefined ? undefined : WINDOW_PACKAGE.exec(app)?.[1]) ?? null;
+}
+
+/**
+ * The events that mark a call as ended in Telecom's record: disconnected, or
+ * destroyed (SPIKE-01's s6.test.mjs sample).
+ */
+const ENDING_EVENTS = ['SET_DISCONNECTED', 'DESTROYED'];
+
+/**
+ * CALL-01, approach 9: whether the one new call in Telecom's record is still
+ * in progress, so the end-call key ends a call rather than putting the phone
+ * to sleep (with no call in progress, Android's END_BUTTON_BEHAVIOR_SLEEP).
+ * The message names the events read, never the address. No new call, or more
+ * than one, is refused: the key is never pressed on a guess.
+ *
+ * @param {{ before: TelecomCall[], after: TelecomCall[] }} records
+ * @returns {{ inProgress: boolean, message: string }}
+ */
+export function callInProgress({ before, after }) {
+  const added = newCalls({ before, after });
+  if (added.length !== 1) {
+    throw new Error(
+      `Telecom's record shows ${String(added.length)} new calls, not one, so whether a call is in progress cannot be read.`,
+    );
+  }
+  const [call] = added;
+  const events = call.events.join(', ');
+  if (call.events.some((name) => ENDING_EVENTS.includes(name))) {
+    return {
+      inProgress: false,
+      message: `the new call had already ended (Telecom's events for it: ${events}).`,
+    };
+  }
+  return {
+    inProgress: true,
+    message: `the new call is in progress, not yet ended (Telecom's events for it: ${events}).`,
+  };
+}
+
+/** "  mWakefulness=Awake": not mWakefulnessChanging=. */
+const WAKEFULNESS_LINE = /^\s*mWakefulness=([A-Za-z]+)\s*$/;
+
+/**
+ * CALL-01, approach 9: the phone's wakefulness, the value of the
+ * `mWakefulness=` line in `adb shell dumpsys power` (Awake, Asleep, Dozing or
+ * Dreaming). Output with no such line is refused, never read as awake.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function readWakefulness(text) {
+  if (typeof text !== 'string') throw new Error('the power dump must be its text.');
+  for (const line of text.split(/\r?\n/)) {
+    const value = WAKEFULNESS_LINE.exec(line)?.[1];
+    if (value !== undefined) return value;
+  }
+  throw new Error('the output has no mWakefulness= line, so it is not the power dump');
 }
 
 const PACKAGE = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/;

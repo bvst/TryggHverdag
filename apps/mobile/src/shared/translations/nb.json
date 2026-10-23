@@ -78,7 +78,7 @@
       "cancel": "Avbryt",
       "numberNotUsable": "Nummeret ser ikke riktig ut. Bruk bare sifre, gjerne med + og landskode først.",
       "nameNotUsable": "Navnet kan ikke brukes. Det må ha minst ett synlig tegn, og ingen skjulte tegn.",
-      "notSaved": "Nummeret ble ikke lagret. Prøv igjen."
+      "notSaved": "Kontakten ble ikke lagret. Prøv igjen."
     }
   }
 }

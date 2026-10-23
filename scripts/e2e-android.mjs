@@ -12,7 +12,10 @@
  * steps around it: CALL_PHONE granted or revoked, the font size set, and
  * Telecom's record read before it; Telecom's record read again after it, the
  * dialer checked in front where the flow leaves it and only then left with
- * Android's back key, and a call ended. A flow the order names that is absent,
+ * Android's back key, and a call still in progress ended. Before each, the
+ * phone is woken and its keyguard lifted when `dumpsys power` says it is not
+ * awake, and when one fails in Maestro, the phone's wakefulness and the
+ * focused window's package are printed. A flow the order names that is absent,
  * or there but not tagged `scripted`, stops the run before any flow runs, as
  * does a flow tagged `scripted` that the order does not name. Maestro
  * cannot see a call, so the script reads Telecom's record instead, as
@@ -42,7 +45,15 @@ import path from 'node:path';
 import process from 'node:process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { EMULATOR_FIRST_CONTACT } from '../packages/test-kit/src/fixtures/phone-numbers.ts';
-import { callPlacedByApp, dialerInFront, noNewCall, readTelecom } from './lib/call-records.mjs';
+import {
+  callInProgress,
+  callPlacedByApp,
+  dialerInFront,
+  focusedPackage,
+  noNewCall,
+  readTelecom,
+  readWakefulness,
+} from './lib/call-records.mjs';
 import {
   APK,
   FLOWS,
@@ -323,6 +334,74 @@ function step(name, adbArgs) {
 const telecomNow = () =>
   readTelecom(step("read Telecom's record", ['shell', 'dumpsys', 'telecom']));
 
+/** The phone's wakefulness now: `adb shell dumpsys power`'s mWakefulness= value, read. */
+const wakefulnessNow = () =>
+  readWakefulness(step("read the phone's wakefulness", ['shell', 'dumpsys', 'power']));
+
+/**
+ * An awake, unlocked phone before `flow` (CALL-01, approach 9): a sleeping
+ * phone shows Maestro nothing. Read after every key pressed since the flow
+ * before; when it is not Awake, the wake key, then the keyguard a sleep leaves
+ * lifted, and a second read. Throws, naming the step, when it cannot be read
+ * or is still not Awake.
+ */
+function wakeBefore(flow) {
+  const read = (when) => {
+    try {
+      return wakefulnessNow();
+    } catch (error) {
+      throw new Error(
+        `the phone's wakefulness could not be read ${when}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
+  };
+  const first = read('before it');
+  if (first === 'Awake') return;
+  process.stdout.write(
+    `e2e:android: ${flow}: the phone is ${first}, not Awake (dumpsys power's mWakefulness), before it: ` +
+      'waking it (KEYCODE_WAKEUP) and lifting the keyguard (wm dismiss-keyguard).\n',
+  );
+  step('wake the phone', ['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP']);
+  step('lift the keyguard', ['shell', 'wm', 'dismiss-keyguard']);
+  const second = read('after waking it');
+  if (second !== 'Awake') {
+    throw new Error(
+      `wake the phone before it: still ${second}, not Awake, after the wake key and lifting the keyguard, so Maestro would see nothing.`,
+    );
+  }
+  process.stdout.write(`e2e:android: ${flow}: the phone is Awake now.\n`);
+}
+
+/** What `read` returns, or undefined when it throws: evidence is best effort. */
+function bestEffort(read) {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * What the phone was showing when `flow` failed in Maestro (CALL-01, approach
+ * 9): its wakefulness and the focused window's package, printed, or unread
+ * when they cannot be read. Only the value and the package name are printed,
+ * never a dump's text (PRIV-07).
+ */
+function printEvidence(flow) {
+  const wakefulness = bestEffort(wakefulnessNow);
+  const focused = bestEffort(() =>
+    focusedPackage(step('read the focused window', ['shell', 'dumpsys', 'window'])),
+  );
+  let window = focused ?? 'none: nothing has focus';
+  if (focused === undefined) window = 'unread: dumpsys window could not be read';
+  process.stdout.write(
+    `e2e:android: ${flow} failed. The phone's wakefulness then: ` +
+      `${wakefulness ?? 'unread: dumpsys power could not be read'}.\n` +
+      `e2e:android: ${flow} failed. The focused window's package then: ${window}.\n`,
+  );
+}
+
 /** Sets Settings' font size, saying so in the job log (CALL-01-AC8). */
 function setFontScale(scale, why) {
   step(`set the font size to ${scale}`, [
@@ -349,13 +428,17 @@ function runScripted({ flow, callPhone, fontScale, telecomAfter, dialerInFront: 
   }
   setFontScale(fontScale, `for ${flow}`);
   const before = telecomNow();
+  wakeBefore(flow);
   const name = flow.replace(/\.ya?ml$/, '');
   const failed = runFlows(`run ${flow} on its own`, {
     report: path.join(REPORT_DIR, `${name}.xml`),
     debugOutput: path.join(REPORT_DIR, 'debug', name),
     flow,
   });
-  if (failed !== null) throw new Error(`the flow failed in Maestro: ${failed}`);
+  if (failed !== null) {
+    printEvidence(flow);
+    throw new Error(`the flow failed in Maestro: ${failed}`);
+  }
   const after = telecomNow();
   const calls =
     telecomAfter === 'callPlaced'
@@ -383,8 +466,18 @@ function runScripted({ flow, callPhone, fontScale, telecomAfter, dialerInFront: 
     step('leave the dialer with the back key', ['shell', 'input', 'keyevent', 'KEYCODE_BACK']);
   }
   if (endCall === true) {
-    // The emulator's call to #1 reaches no one; it is ended before the next flow.
-    step('end the call', ['shell', 'input', 'keyevent', 'KEYCODE_ENDCALL']);
+    // The emulator's call to #1 reaches no one; it is ended before the next
+    // flow, but only while Telecom shows it in progress: with no call in
+    // progress, the end-call key puts the phone to sleep (CALL-01, approach 9).
+    const call = callInProgress({ before, after });
+    if (call.inProgress) {
+      process.stdout.write(
+        `e2e:android: ${flow}: ${call.message} Pressing the end-call key (KEYCODE_ENDCALL).\n`,
+      );
+      step('end the call', ['shell', 'input', 'keyevent', 'KEYCODE_ENDCALL']);
+    } else {
+      process.stdout.write(`e2e:android: ${flow}: ${call.message} No key pressed.\n`);
+    }
   }
 }
 
