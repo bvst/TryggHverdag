@@ -780,8 +780,13 @@ screen says a second tap is needed.** (L5; L7)
 - **And** the controls hold: in the same files, `type RN = typeof
   import('react-native');` and `import('./local-module')` are not refused,
   nor are `AppState`, `Platform`, `Pressable`, `Text` and `View` from
-  `react-native` (as today); in `phone.ts` none of the probes above is
-  refused; in a probe under `apps/mobile/src/safety-core/`, the AR-03 clock
+  `react-native` (as today); in `phone.ts` the calling rule refuses none of
+  the probes above (CALL-02-AC2's frame rule still refuses a namespace
+  import of `react-native` there, because it restricts `Modal` and
+  `ScrollView` by name, and ESLint refuses a namespace import of a module
+  whose names it restricts; so the test checks that every refusal in
+  `phone.ts` carries the `CALL-02-AC2:` message: red phase of loop 2); in a
+  probe under `apps/mobile/src/safety-core/`, the AR-03 clock
   rule still refuses `Date.now()` beside a refused dynamic import, so the
   calling rule's options did not replace the clock rule's; and the
   repository's own app still passes (*Review loop 2*).
