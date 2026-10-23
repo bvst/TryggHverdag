@@ -10,11 +10,11 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | ID | Requirement | Priority | Status | Tests |
 |----|-------------|----------|--------|-------|
 | GRP-01 | Join by invitation | must | 🟢 | 53 |
-| GRP-02 | Choose my #1 contact | must | 🟢 | 6 |
+| GRP-02 | Choose my #1 contact | must | 🟢 | 9 |
 | GRP-03 | Safety permission check | must | ⚪ | 0 |
 | GRP-04 | Responder setup | must | ⚪ | 0 |
-| CALL-01 | Call my #1 contact | must | 🟢 | 16 |
-| CALL-02 | 112 is always one tap away | must | 🟢 | 17 |
+| CALL-01 | Call my #1 contact | must | 🟢 | 18 |
+| CALL-02 | 112 is always one tap away | must | 🟢 | 18 |
 | CALL-03 | Calling #1 also shares my location with #1 | must | ⚪ | 0 |
 | JRN-01 | Start a journey | must | ⚪ | 0 |
 | JRN-02 | Sharing is always visible | must | ⚪ | 0 |
@@ -24,7 +24,7 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | JRN-06 | Journeys never run forever | must | ⚪ | 0 |
 | JRN-07 | Automatic arrival | ⛔ parked | ⚪ | 0 |
 | LOST-01 | Heartbeat | must | 🟢 | 14 |
-| LOST-02 | Lost-contact alert | must | 🟢 | 24 |
+| LOST-02 | Lost-contact alert | must | 🟢 | 25 |
 | LOST-03 | Back in contact | must | 🟢 | 22 |
 | LOST-04 | Low battery warning | must | ⚪ | 0 |
 | LOST-05 | The walker knows when they're offline | must | ⚪ | 0 |
