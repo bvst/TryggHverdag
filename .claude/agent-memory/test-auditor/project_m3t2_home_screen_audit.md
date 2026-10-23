@@ -50,3 +50,16 @@ Related: [[call01-step1-audit]], [[gate-integrity-local]], [[shared-scratchpad-w
   jest files never load them. Consistent today; latent hazard if a new file loads session.tsx unmocked or mocks non-virtually (nit: drop virtual in all 6 at once).
 - Classifier DENIED sed -i + `git checkout --` in a scratch worktree ("Irreversible Local Destruction"). Worked: `git archive <sha> | tar -x -C scratch/copy`,
   symlink node_modules, cp f f.orig / perl -0pi / run / cp back. Unlink the symlinks at the end. Heredoc append to the memory dir worked (2026-10-23).
+
+## Loop 2 audit, 2026-10-23 (cloud), HEAD 91d0bce (code = 9c7c498): PASS, two should-fixes
+- Premise: NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5 (allowed this time), 13 required incl. mutation/traceability. No PR, check-runs total_count 0 on 9c7c498 and 91d0bce.
+- req:coverage --fail-on-uncovered-changed exit 0, report unchanged. tests:changes --base c827f21: 10 files, none weakened. Baseline untouched in loop 2.
+- 4c38bb2 mock edits: byte-identical modulo `{ virtual: true }` + comments (node normaliser over the diff, 6/6). Guard on c827f21's six files: 12 refusals.
+- Guard plants (scratch copy ta-m3t2-loop2-copy, vitest on the copy): home/phone/app tests, helper .ts doMock, scoped subpath, root jest.setup.js all CAUGHT.
+  SURVIVE: nested `src/**/build|dist|android|ios/` (NOT_SOURCE skipped at every depth, jest testMatch runs them) -> should-fix (top-level only);
+  `['virtual']: true`, `jest['mock']`, `import { jest as j }` aliasing -> contrived, note.
+- session.tsx faults (home.test -t AC6|AC9): no delete, uncaught, unawaited-uncaught, console with/without error, delete on rejected read: all killed.
+  SURVIVE: delete unawaited+caught, delete after update(joining): approach 4's "before the join screen shows" unpinned (AC6 text says "before any join", pinned) -> should-fix, needs fake-secure-store holdDeletes.
+- call-button hint: old notGranted-only, null-as-granted, always-missing: killed; "not settled" fails alone. features/grp + features/call are NOT mutation inputs, so hand faults are the only evidence.
+- eslint.config.mjs: last block calling-only / removed / clock-only / APP_CLOCK_FREE wrong prefix -> safety-core probe killed; variable-source, template, shared-ui deep/syntax, RN default, syntax in phone block: killed. Unanchored deep regex survives (stricter; whole-repo lint backstops).
+- Stability on HEAD 91d0bce: -i FIRST=home,call,grp phone-last 705/705; -i reverse (phone first) 705/705; 9 act warnings each (known).
