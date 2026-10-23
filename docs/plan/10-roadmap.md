@@ -1,6 +1,6 @@
 # 10 · Roadmap & first milestone
 
-**Status:** ✅ Done — **planning complete**; next: [M0 kickoff](M0-kickoff.md) · **Last updated:** 2026-10-02 (M2's task list, D-090)
+**Status:** ✅ Done — **planning complete**; next: [M0 kickoff](M0-kickoff.md) · **Last updated:** 2026-10-23 (M2 closed, D-142)
 
 ## Summary
 - Roadmap M0 → M6 approved (D-053). No fixed dates; quality first (D-054).
@@ -114,7 +114,7 @@ runs never changes what is allowed to merge.
 |---|-----------|--------------|-------------------------------|
 | **M0** | Foundations | Repository, toolchain, Claude Code configuration, CI, merge rules, staging, monitoring, daily report | All INF tasks done; **gate drills pass**; CI green on `main`. The push to `main` and the merge without code-owner approval count as covered by `gate:integrity`'s live read until their live attempt at M5 (D-083) |
 | **M1** | Spike (emulators and simulators) — ✅ **closed** (2026-10-01, D-088) | SPIKE-01, S1–S7 on emulators and simulators (D-037); location SDK in debug mode; Critical Alerts request drafted (STORE-01) | Spike results recorded; SDK go/no-go decision; Section 4 closed — all met |
-| **M2** | Core safety loop (server) — 🟡 **in progress** (D-090) | State machine, watchdog, outbox, fake push and SMS; LOST-01 to LOST-03, LOST-06 to LOST-08, SM-01 to SM-10; staging canary (REL-10) | L6 tests green; mutation ≥ 80 %; the staging canary alerts on time for 24 hours |
+| **M2** | Core safety loop (server) — ✅ **closed** (2026-10-23, D-142) | State machine, watchdog, outbox, fake push and SMS; LOST-01 to LOST-03, LOST-06 to LOST-08, SM-01 to SM-10; staging canary (REL-10) | L6 tests green; mutation ≥ 80 %; the staging canary alerts on time for 24 hours — all met (D-142: window B of REL-10-AC19, "alerts" meaning the alert reaches the push port, D-127) |
 | **M3** | App MVP (demo-able) — order decided (D-134) | GRP-01 to GRP-04, CALL-01 to CALL-03, JRN-01 to JRN-06, LOST-04, LOST-05, HELP-01; real push to the owner's phone; SMS to the owner's own number only | L7 green on Android (every PR) and iOS (weekly); **the owner can show the app** via internal TestFlight and Google Play internal testing |
 | **M4** | Privacy, security and compliance | PRIV-01 to PRIV-12 (retention jobs, export and delete, privacy notice in nb and en, age bands); SEC-01 to SEC-07; DPIA; Critical Alerts entitlement requested; **decide how long journey records are kept** (open question in `README.md`, "Open for M4") | Every PRIV and SEC ID covered by tests; DPIA in `docs/dpia/` |
 | **M5** | Go-live readiness | Real-phone suite L9 on Firebase Test Lab (D-041); production environment (D-046, phase B); location SDK licence; Apple beta review; release 1.0 | RL-01 to RL-07 pass; owner approves the release pull request |
@@ -181,6 +181,10 @@ request.
 
 **Exit criteria, unchanged:** L6 green; mutation ≥ 80 %; the staging canary on
 time for 24 hours.
+
+**M2 is closed** (2026-10-23, D-142). The owner chose on 2026-10-22 to close it
+on window B of REL-10-AC19, with BUG-63 open; the account is in
+[`../progress/m2.md`](../progress/m2.md).
 
 ## M3 — App MVP in detail
 

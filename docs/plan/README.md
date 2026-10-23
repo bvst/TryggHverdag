@@ -1,17 +1,22 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-22 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → 🟡 **M2 in progress**: the core safety loop on the server; SM-01, BUG-10, BUG-12, BUG-14, BUG-15, LOST-01, BUG-18, LOST-02, LOST-03, BUG-23, BUG-24, LOST-06, LOST-07, BUG-29, SM-10, BUG-41, LOST-08 and REL-10 done: all nine tasks; M2 closes on the canary's 24 hours on staging (D-090, D-115) → 🟡 **M3 started** (2026-10-20, D-134): GRP-01, task 1 of 12, is done (#96, squashed as `bd83b21` on 2026-10-21); task 2, the home screen (GRP-02, CALL-01, CALL-02), is in progress: its specs are settled on the owner's answers (D-141), and its step 1 is next
+**Last updated:** 2026-10-23 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → ✅ **M2 closed** (2026-10-23, D-142): the core safety loop on the server, all nine tasks done (D-090, D-115), closed on window B of REL-10-AC19, the staging canary on time for 24 hours, with BUG-63 open → 🟡 **M3 started** (2026-10-20, D-134): GRP-01, task 1 of 12, is done (#96, squashed as `bd83b21` on 2026-10-21); task 2, the home screen (GRP-02, CALL-01, CALL-02), is in progress: its specs are settled on the owner's answers (D-141), its step 1 was merged as #100 (`50214c0`, 2026-10-22), and [../progress.md](../progress.md) has where the rest stands
 
-**Current section:** milestone M2, started 2026-10-01 with SM-01; all nine
+**Current section:** milestone M3, started 2026-10-20 (D-134). **Milestone M2
+is closed** (2026-10-23, D-142). It started 2026-10-01 with SM-01; all nine
 tasks are done (D-090, D-115; the task list is in
 [10-roadmap.md](10-roadmap.md)). Task 9, REL-10 (the staging canary), is done
-(#77, 2026-10-10; D-127 and D-128). M2 closes on its exit criteria: L6 green,
-mutation at 80 % or more, and the staging canary on time for 24 hours. The one
-still open is the last part of the owner's A-35 (below): the canary has run since
-A-35's apply (2026-10-20, 06:36:55 UTC), and has to run on time for 24 hours
-(REL-10-AC19). The owner has reported the Healthchecks.io half OK
-(2026-10-21); Clever Cloud's half, the `canary_run` lines and the largest
-`alertMs`, is still owed.
+(#77, 2026-10-10; D-127 and D-128), and the owner's A-35 is done. The owner
+chose on 2026-10-22 to close M2 on window B of REL-10-AC19 (12:22:54 UTC on
+2026-10-21 to the same time on the 22nd): 96 `canary_run` lines in Clever Cloud's
+log, all `ON_TIME`, the largest gap 15.04 minutes and the largest `alertMs`
+310 041 ms; Healthchecks.io's log was seen for the last 28 of those 96 runs, all
+OK, and not before (the owner can no longer see back that far). The meaning is
+D-127's: the alert reaches the push port on time. **BUG-63 is open:** staging's
+API gave the canary no answer three times on 2026-10-21 and the cause is unknown;
+whether the API should log one line per request is the owner's question
+([../progress.md](../progress.md)). D-142 also corrects D-128: a canary whose
+"I'm home" fails does escalate and does page the SMS check.
 **M3's order is decided** (D-134, 2026-10-20): twelve tasks, GRP-01 first,
 sign-in without SMS first, one task at a time; the demo may use the owner's
 own data on staging (D-135). The task list is in [10-roadmap.md](10-roadmap.md).
@@ -23,7 +28,8 @@ owner's five answers are D-136, the delegated choices D-137 and the app's plain
 next task is task 2 in D-134's order, the home screen (GRP-02, CALL-01, CALL-02).
 It is in progress: its three specs are settled on the owner's answers (D-141,
 2026-10-22), and its step 1, which makes `apps/mobile/src/features/call/` a
-code-owner and safety-review path, comes first, merged by hand. The owner's part is A-36 (below): its plan and apply are
+code-owner and safety-review path, was merged by hand by the owner as #100
+(`50214c0`, 2026-10-22). The owner's part is A-36 (below): its plan and apply are
 done (2026-10-21), and the join in the app is left. The code-owner question from
 #96 (the owner's question 1) is answered, D-139: eleven sign-in files got a code
 owner in #98 (`a2457b5`, 2026-10-21).
@@ -73,9 +79,11 @@ moderate advisory in `hono`, GHSA-5r4p-p66f-jhc7, patched in 4.13.11; not
 exploitable in the API today, which does not use `serveStatic`). For the owner
 to decide:
 BUG-49 (moving `origin/main` gets a session past the stop and progress hooks;
-its fix is in `.claude/`, which needs the owner's approval) and BUG-50 (no test checks that
+its fix is in `.claude/`, which needs the owner's approval), BUG-50 (no test checks that
 `req:coverage --fail-on-uncovered-changed` leaves changed test files out of
-product code). The owner starts `/bugfix` and `/feature` (the session was
+product code) and BUG-63 (staging's API gave the canary no answer three times
+on 2026-10-21, and the API writes no per-request log to say why; the log line
+Claude proposes touches `apps/server/src/log.ts`, which needs the owner). The owner starts `/bugfix` and `/feature` (the session was
 refused starting `/bugfix` itself on 2026-10-14; see
 [../progress/m2.md](../progress/m2.md), BUG-44). LOST-08, "They're safe",
 is done (#75, 2026-10-09; D-125 and D-126). SM-10, removing a responder, is done (#74,
@@ -155,19 +163,20 @@ five open items found while planning SPIKE-01 are now answered, including
 D-086's conditions, A-30, and three `.claude/` configuration gaps, each
 needing the owner's approval and an ID.
 
-**Milestone M2 is in progress** (D-090): the core safety loop on the server
-(state machine, watchdog, outbox, fake push and SMS; the staging canary), in
-nine tasks (eight by D-090, one more by D-115), SM-01 first. Devices authenticate with a hashed per-device
-credential until login arrives with GRP-01 (D-091). The journey files become
-safety paths in BUG-10 (D-092, done). What Claude needs
-from the owner: [../progress.md](../progress.md).
+**Milestone M2 is closed** (2026-10-23, D-142; started 2026-10-01 under D-090):
+the core safety loop on the server (state machine, watchdog, outbox, fake push
+and SMS; the staging canary), in nine tasks (eight by D-090, one more by D-115),
+SM-01 first. Devices authenticated with a hashed per-device credential until
+login arrived with GRP-01 (D-091). The journey files became safety paths in
+BUG-10 (D-092, done). The story is in [../progress/m2.md](../progress/m2.md);
+what Claude needs from the owner is in [../progress.md](../progress.md).
 
 **Milestone M3 has started** (2026-10-20, D-134): the app MVP, demo-able, in
 twelve tasks, one at a time, GRP-01 first. GRP-01 (sign-in and groups) is done:
 #96, squashed as `bd83b21` on 2026-10-21. Its record is
 [../progress/m3.md](../progress/m3.md); the owner's part is A-36: its plan and
-apply are done, and the join in the app is left. Task 2, the home screen, is next
-and not started.
+apply are done, and the join in the app is left. Task 2, the home screen, is in
+progress (D-141; step 1 is #100, `50214c0`): [../progress.md](../progress.md).
 
 **Open for M4** (not an owner action, so not in the to-do table below; it sits
 here so that M4's planning, which starts from this file and the roadmap's M4
@@ -273,7 +282,7 @@ session.
 | A-32 | In Healthchecks.io, add a check named `staging-sms`: **Period 1 minute, Grace 2 minutes**, alerts to the same place as the others. Save its ping URL as the `staging` environment secret `HEALTHCHECKS_SMS_URL` | A failed SMS pages you through its own check (D-115, LOST-07). Needed before LOST-07's `infra-staging` plan, which stops with "Invalid value for variable" without it | ✅ Done — the owner, 2026-10-07. Not verified from a session: the secrets API is refused here. LOST-07's `infra-staging` plan is the first real check |
 | A-33 | After LOST-07 merges: run `infra-staging` with `plan`, then `apply`, and check within about 3 minutes that `staging-sms` has left `new` and shows a ping every minute, and that the worker's check still gets one ping a minute, not two (the two URLs must differ). **Do it straight after the merge's `deploy-staging` run:** the new code reads the worker's existing secret before any plan. If `staging-worker` pages first, read the worker's start lines in Clever Cloud's log for the staging app (the deploy job's log can end before them, BUG-27). A line beginning `worker: not checking in with Healthchecks.io: HEALTHCHECKS_WORKER_URL` means the watchdog is running and only its check-in stopped; the rest of the line says what is wrong with the secret. Re-copy it in the UUID form Healthchecks.io shows (`https://hc-ping.com/<uuid>`), then plan and apply. If the plan stops with "Invalid value for variable", read the message under it: it names the secret and what is wrong (D-116) | Puts the SMS check live. There is no live drill of a failing SMS in M2: staging has no journeys before task 9 (D-091) | ✅ Done — the owner, 2026-10-07: `infra-staging` plan (run 37678574920) and apply (run 37678702578, "Apply complete! Resources: 0 added, 1 changed", the app's environment, values hidden). Both ping URLs passed Terraform's UUID-only check. That `staging-sms` left `new` and each check gets one ping a minute is the owner's observation, not verified from a session (Healthchecks.io is not reachable from one) |
 | A-34 | **Before the plan:** in Healthchecks.io, add a check named `staging-canary`, **Period 15 minutes, Grace 20 minutes**, alerts to the same place as the others. Save its ping URL, in the UUID form Healthchecks.io shows (`https://hc-ping.com/<uuid>`), as the `staging` environment secret `HEALTHCHECKS_CANARY_URL`. Never another check's URL. About 3 minutes | A failed or stopped canary pages you through its own check (D-127 Q3, D-128, REL-10). Needed before REL-10's `infra-staging` plan, which stops with "Invalid value for variable" without it | ✅ **Done** — 2026-10-20: `staging-canary` created and its ping URL saved as the `staging` secret; the plan then read it |
-| A-35 | **After the merge:** straight after the merge's `deploy-staging`, run `infra-staging` with `plan` (it shows the app's environment changing and a new `random_password`, values hidden), then `apply`. Within about 21 minutes check that `staging-canary` has left `new` and shows a success ping. 24 hours later, report the window, the number of success and failure pings, any down event, and the largest `alertMs` in the `canary_run` lines of Clever Cloud's log. If the plan stops with "Invalid value for variable", the message names the secret. Until the apply, the deployed worker says at start that the canary is not running: expected | Puts the staging canary live and records M2's exit: the canary runs on time for 24 hours (D-090, D-127 Q1, REL-10-AC19). Only you can read Healthchecks.io and Clever Cloud's log | 🟡 **Plan and apply done; the Healthchecks.io half of the 24-hour reading is reported OK by the owner; Clever Cloud's half is still owed. M2 is not closed.** **Plan and apply, 2026-10-20:** plan run 39381315279 ("1 to add, 1 to change"), apply run 39381374851 ("Same plan as the one read in run 39381315279"; "Apply complete! Resources: 1 added, 1 changed, 0 destroyed." at 06:36:55 UTC). The owner saw `staging-canary` ping OK. **The reading, 2026-10-21:** the owner wrote "24-timersvinduet er OK" (the 24-hour window is OK) and sent a screenshot of `staging-canary`'s ping log in Healthchecks.io. The coordinating session read it, and this row repeats that reading. It shows pings #77 to #98, every one OK: #77 to #96 are 15 minutes apart from 03:50 to 08:35, then #97 at 09:05 and #98 at 09:20, on Oct 21 in Norwegian local time (UTC+2). The window ends at 06:36:55 UTC, so #96 at 08:35 local (06:35 UTC) is the last ping inside it. #1 to #76 are not in the screenshot; by the numbering, 96 pings 15 minutes apart from about 06:50 UTC on Oct 20 fit the window exactly, with no room for a missed run. **After the window:** GRP-01's `deploy-staging` (run 39557013621, 06:41:47 to 06:45:21 UTC on 2026-10-21) restarted the worker at about 06:43 UTC (the smoke test saw the worker check in at 2026-10-21T06:45:12.041Z, after the deploy at 2026-10-21T06:43:35.102Z). The 30-minute gap between #96 and #97 follows that restart (the pinging address changed, .21 to .12, between the two); it is outside the window and within REL-10-AC19's "at least one success in every 35 minutes". **Still owed:** that Clever Cloud's log for those hours holds one `canary_run` line per run, each `ON_TIME`, and the largest `alertMs`. Without them REL-10-AC19 is not met and M2 stays open |
+| A-35 | **After the merge:** straight after the merge's `deploy-staging`, run `infra-staging` with `plan` (it shows the app's environment changing and a new `random_password`, values hidden), then `apply`. Within about 21 minutes check that `staging-canary` has left `new` and shows a success ping. 24 hours later, report the window, the number of success and failure pings, any down event, and the largest `alertMs` in the `canary_run` lines of Clever Cloud's log. If the plan stops with "Invalid value for variable", the message names the secret. Until the apply, the deployed worker says at start that the canary is not running: expected | Puts the staging canary live and records M2's exit: the canary runs on time for 24 hours (D-090, D-127 Q1, REL-10-AC19). Only you can read Healthchecks.io and Clever Cloud's log | ✅ **Done** — 2026-10-23, and M2 is closed (D-142). **Plan and apply, 2026-10-20:** plan run 39381315279 ("1 to add, 1 to change"), apply run 39381374851 ("Same plan as the one read in run 39381315279"; "Apply complete! Resources: 1 added, 1 changed, 0 destroyed." at 06:36:55 UTC). **The reading:** window A (from the apply) did not count, because the outage of 2026-10-21 (BUG-63) broke it. The owner chose on 2026-10-22 to close on **window B**, 12:22:54 UTC on 2026-10-21 to the same time on the 22nd. Clever Cloud, the owner's lines (68 sent on the 22nd, 28 on the 23rd): 96 `canary_run` lines, all `ON_TIME`, the largest gap 15.04 minutes, the largest `alertMs` 310 041 ms, at 09:35:20 UTC on 2026-10-22. Healthchecks.io `staging-canary`: pings #186 to #219 seen, every one OK, of which #186 to #213 (05:35 to 12:20 UTC on the 22nd) are inside the window; the owner can no longer see back past 07:35 Norwegian time on the 22nd, so the first 68 runs' pings were not seen. The figures are the owner's, counted by the coordinating session and again by the session that wrote D-142. The full account: [../progress/m2.md](../progress/m2.md) |
 | A-36 | **GRP-01 has merged (`bd83b21`) and its `deploy-staging` passed (run 39557013621, 06:45:21 UTC on 2026-10-21). The plan and apply are done (below); the join is yours:** read `ADMIN_BOOTSTRAP_CODE` once from the staging app's environment variables in Clever Cloud's console, and join in the app on your own phone with that code and your name. You become the group's admin; for anyone else the code stops working the moment the group exists. **Open, checked 2026-10-20: how the app gets onto your phone.** Nothing in the repository builds it for a phone before M3's task 12 (`apps/mobile` has no `eas.json`; CI's `android-e2e` build is for the emulator). The route that exists is a development build made on the Mac (INF-06-AC16); the app talks to staging unless `EXPO_PUBLIC_API_URL` says otherwise. Tell Claude if you want the steps written before you do it. If the join gets no answer or a server error, use the screen's retry: it sends the same join again and works while you are the only member. Never share the code or put it anywhere else; if it leaks, see "If `ADMIN_BOOTSTRAP_CODE` leaks" in [monitoring-setup.md](monitoring-setup.md). If the console does not show the value, say so: that was not checked from a session | Nobody can join without an invitation, and nobody exists yet to invite you: the bootstrap code makes you the first member and admin (D-136, answer 1; GRP-01). Only your own data goes on staging (D-135) | 🟡 **Plan and apply done, 2026-10-21; the join is still to do.** **Plan:** run 39564821518 (job 119104478062), "Plan: 1 to add, 1 to change, 0 to destroy." The staging app's `environment` and the bootstrap code's `base64` and `hex` print as "(sensitive value)", and no code appears in the log; the only long hex string is the plan fingerprint `92bd5a13…`, a SHA-256. **Apply:** run 39564903393 (job 119104742624), "Same plan as the one read in run 39564821518: 92bd5a13…", then "Apply complete! Resources: 1 added, 1 changed, 0 destroyed." at 07:51:29 UTC on 2026-10-21. Both come from the coordinating session's reading of the job logs. **Not verified from a session:** that the API now logs "api: the first admin can join with ADMIN_BOOTSTRAP_CODE while no group exists." (the line in `apps/server/src/bin/api.ts`); a session cannot read Clever Cloud's log. **Still the owner's:** reading the code in the console, and the join on the phone, which needs a development build from the Mac |
 
 ## Why this order

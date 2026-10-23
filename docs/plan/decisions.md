@@ -5217,6 +5217,15 @@ any other path is work, not a candidate for the same treatment.
     (`modules/journeys/service.ts`), which on staging is only the canary's own
     (D-091); once there are real users, it must not reach one. The spec's
     "Left for later tasks" names it.
+- **Corrected by D-142 (2026-10-23), a statement of fact.** "The canary never
+  escalates and never pages the SMS check" (the end of "A run, in order", and
+  REL-10-AC7's title) holds only for a run whose "I'm home" is answered: that
+  is what ends its journey before the alert could escalate. When "I'm home"
+  fails (`HOME_FAILED`), the journey stays unended, its alert escalates, an
+  escalation SMS is written for the test responder, and the SMS check reports
+  failing, which pages (D-115, item 2). BUG-63 showed it on 2026-10-21: two
+  escalation SMS written, `sms_unsent` reported from 11:54 to 12:15 UTC and
+  again at 12:24. The text above is left as it was written.
 
 ## D-129 — The mutation check runs one CI job per group, under an aggregator still named `mutation`; a local `--group`; the six mutants that only time out are fixed (BUG-45)
 - **Date:** 2026-10-13 · **Status:** Accepted (the owner's answers, 2026-10-13)
@@ -6292,6 +6301,8 @@ any other path is work, not a candidate for the same treatment.
     the timeout message, `scripts/e2e-android.test.mjs` holds the script run
     against a stand-in `adb`, and `scripts/gate.test.mjs` holds that no
     emulator step in `ci.yml` is started with `-change-locale`.
+  - **Added 2026-10-23:** a switch that was not needed costs one framework
+    restart.
 
 ## D-141 — The home screen: the owner's answers (GRP-02, CALL-01, CALL-02; M3 task 2)
 - **Date:** 2026-10-22 · **Status:** Accepted (the owner, 2026-10-22). Asked in
@@ -6711,3 +6722,138 @@ any other path is work, not a candidate for the same treatment.
       unchanged. Following this answer, Claude gave it a spelled screen-reader
       label under D-031, `call.emergency.failedLabel`: "Telefonen kunne ikke
       åpne 1 1 2. Ring 1 1 2 selv." (CALL-02-AC5).
+
+## D-142 — M2 closes on window B of REL-10-AC19, with BUG-63 open; D-128's "never escalates" is corrected
+- **Date:** 2026-10-23 · **Status:** Accepted (owner, 2026-10-22, asked "Skal M2
+  lukkes når vindu B er ferdig i dag kl. 14:23, selv om årsaken til utfallet
+  21. okt. (BUG-63) ikke er funnet?", "should M2 close when window B ends
+  today at 14:23, though the cause of the outage on 21 Oct (BUG-63) has not
+  been found?": "Lukk på vindu B", "close on window B", Claude's
+  recommendation; and 2026-10-23: "Sjekk at: det aldri går mer enn 35
+  minutter mellom to vellykkede kjøringer; hver kjøring er ON_TIME. Hvis begge
+  stemmer: registrer at M2 er lukket på vindu B som D-142", "check that there
+  are never more than 35 minutes between two successful runs, and that every
+  run is ON_TIME; if both hold, record M2 as closed on window B as D-142").
+  Item 3 corrects a fact in a delegated decision and is Claude's (D-031) ·
+  **Section:** 10 (M2); D-083, D-088, D-090, D-115, D-127, D-128, D-140
+- **Context:**
+  - **M2's exit** (D-090): L6 green, mutation ≥ 80 %, and the staging canary on
+    time for 24 hours. D-127's first answer says what the last one proves: the
+    alert reaches the push port on time, by the database's clock. It does not
+    prove that a phone is alerted, because staging has no push or SMS provider
+    until M3.
+  - **REL-10-AC19 is that reading** (A-35). Over 24 consecutive hours the
+    `staging-canary` check shows no failure signal and no down event, and at
+    least one success in every 35 minutes; Clever Cloud's log holds one
+    `canary_run` line per run, each `ON_TIME`, with its `alertMs`; and the
+    owner reports the window, the counts and the largest `alertMs`.
+  - **All nine tasks are done** (D-090, D-115). REL-10, the last, merged in #77
+    (`b6c6074`, 2026-10-10), and the canary has run since A-35's apply at
+    06:36:55 UTC on 2026-10-20.
+  - **Window A was not counted.** The owner reported Healthchecks.io's half OK
+    on 2026-10-21. The Clever Cloud lines the owner sent for it begin at 12:35
+    UTC on 2026-10-20, six hours after the apply: 73 lines, to 06:35 UTC on
+    2026-10-21, all `ON_TIME`, the largest `alertMs` 310 030 ms. The
+    coordinating session's word is that the outage of 2026-10-21, next, broke
+    it.
+  - **BUG-63, the outage.** On 2026-10-21, between 11:50 and 12:20 UTC,
+    staging's public API gave the canary no HTTP answer three times. "I'm home"
+    failed fast twice (`HOME_FAILED`, lines at 11:50:02 and 12:20:04) and one
+    start timed out after 10 s (`START_FAILED`, 12:00:10); `status` and `code`
+    are null on all three. The worker and the database were fine, and nothing
+    restarted. The owner did nothing against staging: their last action was at
+    07:51 UTC. `staging-canary` went from up to down at 11:50. Escalation SMS
+    `74c29daf` and `ce489c45` were written, and `sms_unsent` was reported from
+    11:54 to 12:15 and again at 12:24. **The cause is unknown:** the API writes
+    no per-request log (`log.ts` has no event for one, and `api.ts` and
+    `http.ts` write none; read in this checkout on 2026-10-23).
+  - **Window B** runs from 12:22:54 UTC on 2026-10-21 to 12:22:54 UTC on
+    2026-10-22. (That start is the coordinating session's; what happened at
+    12:22:54 is not in this record.)
+    - **Clever Cloud, the owner's `canary_run` lines.** 96, from 12:35:16 UTC on
+      2026-10-21 to 12:20:16 UTC on 2026-10-22, which is 24 × 4. All 96 are
+      `ON_TIME`, with `status` and `code` null. The largest gap is 15.04
+      minutes with the window's two edges counted (AC19 allows 35), and 14.87
+      to 15.04 between runs. The largest `alertMs` is 310 041 ms, at 09:35:20
+      UTC on 2026-10-22, inside D-128's expected 300 to 320 s against the 360 s
+      deadline; the smallest is 302 016 ms. The run before the window, at
+      12:20:04 UTC on 2026-10-21, was BUG-63's `HOME_FAILED`.
+    - **Healthchecks.io `staging-canary`.** Pings #186 to #219, every one OK,
+      from 07:35 to 15:50 Norwegian time on 2026-10-22 (05:35 to 13:50 UTC).
+      #186 to #213, 28 pings from 05:35 to 12:20 UTC, are inside the window.
+      The owner can no longer see back past 07:35, so the check's log for the
+      other 68 runs (12:35 UTC on 2026-10-21 to 05:20 UTC on 2026-10-22) was
+      not seen by anyone. A run that is `ON_TIME` reports a success ping
+      (D-128), so the lines imply those pings; the pings were not seen. The
+      owner's "24-hour window OK" of 2026-10-21 is about window A.
+    - **#99 merged inside the window,** at 10:20:14 UTC on 2026-10-22 as
+      `3d2255c`, and its deploy cost no run: the lines at 10:20:12 and 10:35:12
+      UTC are both present and `ON_TIME`. Healthchecks.io's source address
+      changed between 10:20 and 10:35 UTC, which is consistent with the worker
+      restarting on the new deploy. On `3d2255c`, `ci` (run 39762336456) and
+      `deploy-staging` (run 39762336560) both succeeded.
+    - **One report that is not a canary line:** `sms_unsent` at 12:24 UTC on
+      2026-10-21, about a minute after the window began. AC19 reads the
+      canary's check and its `canary_run` lines, not the SMS check.
+  - **Observed, and by whom.** The Clever Cloud lines are the owner's, sent in
+    two parts: 68 lines on 2026-10-22 and 28 on 2026-10-23. The coordinating
+    session counted them with a script, and they were counted again from the
+    same pasted lines for this record, with the same results. The Healthchecks.io
+    pings and the change of source address are the owner's view of
+    Healthchecks.io, as the coordinating session reported it; a session cannot
+    reach Healthchecks.io or Clever Cloud's log.
+- **Decision:**
+  1. **M2 is closed,** on window B, as the owner chose. Clever Cloud's half of
+     AC19 is met in full: 96 of 96 lines `ON_TIME`, the largest gap 15.04
+     minutes, the largest `alertMs` 310 041 ms. Healthchecks.io's half was seen
+     for the last 28 of the window's 96 runs, all OK, and not for the first 68
+     (above). M2's exit therefore means what D-127 set: the alert reaches the
+     push port on time. L6 and the mutation threshold are met task by task, as
+     each task's row in `docs/progress.md` records; on `main` at `50214c0`
+     (`ci` run 39815194815, read through GitHub's API on 2026-10-23) `system`
+     and `mutation` succeeded and `mutation-group` was skipped, because that
+     merge changed no safety path.
+  2. **BUG-63 stays open, and does not keep M2 open.** D-127's second answer
+     stops the line only for `NOT_OPENED` and `NOT_HANDED_OVER`; any other
+     failing run pages and gets a BUG, and BUG-63 is that BUG. Claude proposes
+     one log line per API request: the route (its pattern, not the path), the
+     status and the duration in milliseconds, and nothing else, so no location,
+     number, identifier, query, header or body (PRIV-07). It adds a closed event
+     to `apps/server/src/log.ts`, which needs the owner (D-102), so it is the
+     owner's question and nothing is started.
+  3. **D-128 is corrected.** Its sentence that the canary "never escalates and
+     never pages the SMS check" is true only while "I'm home" is answered. When
+     it fails, the canary does escalate and does page the SMS check, as BUG-63
+     showed. D-128 carries a note pointing here; its text stays as written
+     (the working agreement). REL-10-AC7's title and `canary.system.test.ts`'s
+     describe say the same, under "the loops healthy"; the title overstates.
+  4. **`push_failed` lines on staging are by design.** A stand-down to someone
+     who cannot be reached is retried every 60 s, one `push_failed` line each,
+     one message at a time, until the next alert withdraws it (LOST-03's spec;
+     REL-10's spec, item 14). Push is not configured on staging, so every
+     message there is `NOT_CONFIGURED`. It is neither a fault nor part of
+     BUG-63; M3's push task and its give-up rule change it.
+- **Not seen, and not known:**
+  - Healthchecks.io's log for 12:35 UTC on 2026-10-21 to 05:20 UTC on
+    2026-10-22. The owner knew: the message of 2026-10-23 that set the two
+    checks above, both on the Clever Cloud lines, also said "Jeg kan ikke se
+    lenger tilbake enn 07:35 i Healthchecks nå", "I can't see further back
+    than 07:35 in Healthchecks now".
+  - The cause of BUG-63. Clever Cloud's metrics and platform events for the API
+    app on 2026-10-21, 11:40 to 12:25 UTC, were not read (a session cannot
+    reach them).
+  - That `staging-sms` showed down in Healthchecks.io. The `sms_unsent` line is
+    written in the same check that reports `failing` (`sms-check.ts`), so the
+    check reported failing; the page itself was not seen.
+- **What stays open** (none of it blocks M3):
+  - BUG-63's cause, and the owner's answer on the request log.
+  - Left for later by D-128, each named in REL-10's spec: M3's push task
+    ("answered" becomes "accepted"), M3's login task, M4's retention of canary
+    rows, M5's production canary and M6's reliability measurements.
+  - The queued bugs on M2's table in `docs/progress.md`.
+- **Consequences:**
+  - The roadmap's M2 row is marked closed (D-142); `docs/progress.md` and
+    `docs/plan/README.md` follow; A-35 is done.
+  - The next milestone is M3, under way since 2026-10-20 (D-134).
+  - Amends D-128 by a note and adds one dated sentence to D-140; supersedes
+    nothing.
