@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-22 · **Milestone:** M3 started (2026-10-20, D-134): twelve tasks; **task 1, GRP-01, is done: [#96](https://github.com/bvst/TryggHverdag/pull/96) was squash-merged as `bd83b21` on 2026-10-21, after `urso-agent` approved it**; task 2, the home screen (GRP-02, CALL-01, CALL-02), is next and not started (step 1 was [#94](https://github.com/bvst/TryggHverdag/pull/94), `60b46ee`) · M2 (D-090): all nine tasks are done, the last REL-10 in [#77](https://github.com/bvst/TryggHverdag/pull/77) (`b6c6074`); M2 is not closed yet: the owner reports the canary's 24 hours OK on Healthchecks.io (A-35, 2026-10-21), and Clever Cloud's half of the reading (REL-10-AC19) is still owed · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-23 · **Milestone:** M3 started (2026-10-20, D-134): twelve tasks; **task 1, GRP-01, is done: [#96](https://github.com/bvst/TryggHverdag/pull/96) was squash-merged as `bd83b21` on 2026-10-21, after `urso-agent` approved it**; task 2, the home screen (GRP-02, CALL-01, CALL-02), is built and through two review loops, every review PASS, on the session branch (head `72ad66d`), and is **ready for its pull request, which is to be opened**: the owner answered (D-141, 2026-10-22) and its step 1 was merged by the owner as [#100](https://github.com/bvst/TryggHverdag/pull/100), `50214c0`, on 2026-10-22 (task 1's step 1 was [#94](https://github.com/bvst/TryggHverdag/pull/94), `60b46ee`) · **M2 closed 2026-10-23 (D-142, the owner's choice of 2026-10-22):** all nine tasks done, the last REL-10 in [#77](https://github.com/bvst/TryggHverdag/pull/77) (`b6c6074`); closed on window B of REL-10-AC19 (A-35), with BUG-63 open · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -35,17 +35,27 @@ in D-134 and [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | | BUG-60 | test-author's Bash guard denies writes only under `apps/*/src/**` and `packages/contracts/**` (`.claude/agents/test-author.md`, line 20), while its Edit and Write hook (line 16) allows only `**/*.test.ts`, `.tsx` and `.mjs` files, `apps/mobile/e2e/**` and `packages/test-kit/**`. So a shell write by test-author could reach production files that hook would refuse, such as non-test `.mjs` files in `scripts/`, `infra/` and `.github/`; and a shell write skips the Edit hooks and the post-edit checks. In review loop 1, test-author edited `scripts/lib/merge-rules.test.mjs` with a shell script: that was its own file, but the post-edit checks did not run, so it redid the edit with Edit. **What was checked:** the two frontmatter lines (16 and 20) were read. What `guard-paths.mjs` and `guard-bash.mjs` enforce for test-author with those arguments, and whether the global guard (D-120) already refuses some of these paths, was **not** checked; no shell write by test-author to a production file is known. The same family as BUG-56 | ⚪ **Queued**, for the owner to schedule (`.claude/` needs the owner's approval). Claude recommends denying shell writes to every non-test path for test-author, mirroring the Edit hook's rule, or refusing shell writes to tracked files for both roles |
 | | BUG-61 | `pnpm audit --audit-level high` turned red on #96 at `155fef6` on a new advisory, GHSA-587h-7wmj-h5pm: `vite` >=8.3.0 <=8.3.2, patched in 8.3.3, reached only through `vitest`. It was published after the branch's last green audit, so `main` would fail the same way (`6b7cd97`'s reasoning; `main`'s own run before the fix was not read). Found 2026-10-20 | ✅ **Done** — 2026-10-21, in GRP-01's merge, [#96](https://github.com/bvst/TryggHverdag/pull/96), `bd83b21`; `security` passed in `main`'s `ci` run 39557013605. The fix, `6b7cd97`: a root dev dependency `vite: ^8.3.3`, locked at 8.3.4. It is the only way found to move vitest's auto-installed peer: a pnpm override changed only the peer range, and `pnpm up --depth Infinity` left vite at 8.3.0. Pinned by `dbe2c7a`: a `PATCHED` row in `scripts/dependency-audit.test.mjs` and a test that holds the dev dependency, with its reason. Record: `progress/m3.md` |
 | | BUG-62 | `pnpm audit` reports a moderate advisory, GHSA-5r4p-p66f-jhc7, in `hono` >=4.12.4 <4.13.11, patched in 4.13.11. `apps/server` depends on `hono` `^4.13.8`, installed as 4.13.8, a production dependency of the API. The advisory (CWE-174, created 2026-10-20) is about `serveStatic` decoding the request path a second time, so middleware mounted on a static prefix can be bypassed; "Applications that serve only public files are not affected." `apps/` does not use `serveStatic` (a grep finds no use), so it is not exploitable in the API today. CI's audit runs at `--audit-level high`, so it is not red. Found 2026-10-21 | ⚪ **Queued**, for the owner to schedule. Claude recommends bumping `hono` to `^4.13.11` in a small `/bugfix`, or with the next dependency batch, so a later use of `serveStatic` does not inherit it |
-| 2 to 12 | D-134 | In the order of D-134: the home screen (GRP-02, CALL-01, CALL-02); start a journey (JRN-01, JRN-02, LOST-01's phone half); the safety permission check (GRP-03); "I'm home" and the two-hour stop (JRN-05, JRN-06); real push; the alert screen (HELP-01); what responders see (JRN-03); responder setup (GRP-04); real SMS (LINK Mobility) and the SMS sign-in code; CALL-03, LOST-04, LOST-05; iOS and the stores | ⚪ Not started. Next is task 2, the home screen (GRP-02, CALL-01, CALL-02). One at a time (D-134); A-11 is needed by task 6, A-12 by task 10, A-03 by task 12 |
+| 2 | GRP-02, CALL-01, CALL-02 | The home screen: the #1 contact (a name and a number, kept on the phone only), the call button, and 112 on every screen | 🟡 **Ready for its pull request, which is to be opened** (head `72ad66d`, pushed). Built and through two review loops; every review PASS. Specs: `docs/specs/GRP-02.md`, `CALL-01.md`, `CALL-02.md`. The owner's answers are D-141 and its four amendments, each as Claude recommended: all of `shared/ui/`, `e2e/` and `src/app/` join step 1, and the 112 button is read "Ring 1 1 2, nødnummeret", digit by digit. **Step 1 is done:** [#100](https://github.com/bvst/TryggHverdag/pull/100) was merged by the owner as `50214c0` on 2026-10-22. `features/call/`, `shared/ui/`, `e2e/` and `src/app/` need the owner and the safety review; [#95](https://github.com/bvst/TryggHverdag/pull/95) was closed without a merge, its bump is in #100. **The build:** red `ebf2faf`, green `0930b86`, five reviews of `cff3021`; loop 1 red `91665eb`, green `e128741`, with `a54f735` (an order-dependent jest failure, from a virtual mock of an installed package); loop 2 red `f3be1e1`, green `9c7c498`, test-only `72ad66d`. **On `72ad66d`:** `gate:quick` 3 passed, mobile jest 706 passed. On `9c7c498`, `gate:full` 11 passed, 0 failed, 3 not possible yet (L3, L7, and CI-01, run apart: `gate:integrity` 5 of 5). **Not verified:** L3 and L7 could not run here, so CI's `android-e2e` is where the Maestro flows first run and where "the dialer opens with 112 filled in" is first observed (D-141); how TalkBack reads the 112 label. **Owner:** approve the pull request (D-042; it adds `expo-system-ui` to `apps/mobile/package.json`), and kept the 112 label on WCAG 2.5.3 (2026-10-23, below). No folder is a mutation path until task 3 (D-081 item 13). The follow-ups: "In flight" below; the story and the evidence: `progress/m3.md` |
+| 3 to 12 | D-134 | In the order of D-134: start a journey (JRN-01, JRN-02, LOST-01's phone half); the safety permission check (GRP-03); "I'm home" and the two-hour stop (JRN-05, JRN-06); real push; the alert screen (HELP-01); what responders see (JRN-03); responder setup (GRP-04); real SMS (LINK Mobility) and the SMS sign-in code; CALL-03, LOST-04, LOST-05; iOS and the stores | ⚪ Not started. One at a time (D-134); A-11 is needed by task 6, A-12 by task 10, A-03 by task 12 |
 
 ## M2 at a glance
 
-**M2 started on 2026-10-01** (**D-090**). The core safety loop on the server,
-in eight tasks, one pull request each, SM-01 first; nine since D-115 (2026-10-07)
-gave SM-10 and the last-responder warning a task of their own. The owner chose this order;
-the alternative was seven tasks with LOST-01 first. Exit: L6 green; mutation
-≥ 80 %; the staging canary on time for 24 hours. Until GRP-01 brings logins
-in M3, devices authenticate with a hashed per-device credential (**D-091**).
-The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
+**M2 started on 2026-10-01** (**D-090**) and **closed on 2026-10-23**
+(**D-142**). The core safety loop on the server, in eight tasks, one pull request
+each, SM-01 first; nine since D-115 (2026-10-07) gave SM-10 and the last-responder
+warning a task of their own. The owner chose this order; the alternative was seven
+tasks with LOST-01 first. Exit: L6 green; mutation ≥ 80 %; the staging canary on
+time for 24 hours. **The owner chose on 2026-10-22 to close it on window B of
+REL-10-AC19, with BUG-63 open.** Window B, 12:22:54 UTC on 2026-10-21 to the same
+time on the 22nd: 96 `canary_run` lines in Clever Cloud's log, all `ON_TIME`, the
+largest gap 15.04 minutes (AC19 allows 35), the largest `alertMs` 310 041 ms. The
+Healthchecks.io half was seen for the last 28 of its 96 runs, all OK, and not for
+the first 68: the owner can no longer see back that far. The lines are the owner's,
+counted by the coordinating session and again by the session that wrote D-142.
+Meaning, as D-127 set it: the alert reaches the push port on time, not that a phone
+is alerted. Until GRP-01 brought logins in M3, devices authenticated with a hashed
+per-device credential (**D-091**). The task list is in
+[`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 [`progress/m2.md`](progress/m2.md).
 
 | # | ID | Task | Status |
@@ -57,7 +67,7 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | | BUG-14 | The test kit needs the owner, and the mutation check's own files and the test kit join the ai-review `safety` filter (D-100, the owner's answer of 2026-10-02 to CI's `code-reviewer` and `test-auditor` on #57) | ✅ **Done** — 2026-10-02, [#58](https://github.com/bvst/TryggHverdag/pull/58), merged by the owner by hand (D-075) as `34bc460` after `urso-agent` approved. D-100 and its amendment: `/packages/test-kit/` needs the owner; the mutation check's own files, the test kit and the three Vitest configs are in the safety filter. All four session reviewers PASS; CI's four AI reviewers skipped, as expected for a pull request that edits `ai-review.yml` (read in each job log). On #58, the new filter matched `gate-decisions.mjs` and started the safety review, and `mutation` ran fresh, identical to BUG-12 (job 110964175819). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37058587754), and `deploy-staging` passed with its smoke test (run 37058587803). Record: `progress/m2.md` |
 | | BUG-15 | CI's required `security` check (`pnpm audit --audit-level high`) failed on `main` and every pull request from 2026-10-02: braces GHSA-vfj7-8cjw-p6xm, no patched version, reached only through Jest and Metro tooling (D-104) | ✅ **Done** — 2026-10-03, [#59](https://github.com/bvst/TryggHverdag/pull/59), merged as `c46b3b3` after `urso-agent` approved; `main`'s tree is the reviewed head `10a1af4`. D-104 (owner, 2026-10-03: accept this one, recorded): one ID in `ignoreGhsas`, and a lockfile test that only `apps/mobile` reaches braces. Reviews PASS in the session (privacy and security, test audit, code) and in CI (all five AI reviewers). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37125357152), and `deploy-staging` passed with its smoke test (run 37125357148). Record: `progress/m2.md` |
 | | BUG-16 | `req:coverage` counts a requirement as tested when any test file names its ID, in a comment too: `mentions()` in `scripts/lib/requirements.mjs` searches the file's whole text. Found by CI's `test-auditor` on #60, which checked LOST-01's 20 criteria by hand and found a real test behind each | ⚪ **Queued**, for the owner to schedule. On `main` |
-| | BUG-17 | `android-e2e` fails before the app is installed: the emulator still reports `en-rUS` 120 s after the switch to nb-NO. **Three times:** #57 (job 110875720264), #60 (job 111180346250) and #96 (job 118947039610, run 39515647691): "Waited 120 s for the emulator to be in Norwegian bokmål with its package service up … its configuration's language was en-rUS". A re-run passed on #57, and on #96 (job 119070015215, the owner's, because a session may not re-run a job, D-077). The failing run and its passing re-run log the same sequence at the same timing, so the log does not tell them apart (`progress/m3.md`) | 🟡 **Fixed on the session branch `claude/busy-faraday-40n2zl` (base `a2457b5`), not merged.** **Root cause:** CI started the emulator with `-change-locale nb-NO`, which the emulator applies after boot by restarting Android's framework, so `e2e:android` could only wait for a switch it could not watch, and three times it had not taken 120 s later (which of "did not take" and "no restart" cannot be known: the script logged nothing of its readings). **The fix (D-140, Claude's choice under D-031):** `e2e:android` makes the switch itself when its first reading is not ready, that is not bokmål or no package service (`adb root`, `adb wait-for-device`, `setprop persist.sys.locale nb-NO`, `setprop ctl.restart zygote`, once each, inside the 120 s wait; a refused step fails at once, naming it), its timeout message says what `persist.sys.locale` said last and whether the framework was seen restarting, and `ci.yml` drops `-change-locale` and `EMULATOR_LOCALE`, so every run takes that path. Red `f7d4e2a`: 17 failing tests and 2 guards, 399 passing; green `9caa720`. The e2e-android, its lib and gate tests: 416 of 416. `tests:changes`: "3 changed test file(s), none weakened (RG-03)". `gate:full`: 11 steps passed; its CI-01 step needs the session's proxy setting, and `gate:integrity` run alone with it gives 5 of 5. L3 needs Docker and L7 needs an emulator, so both run in CI. **Not verified: the switch on CI's image** (API 37.2, `google_apis_ps16k`): that `adb root` and the framework restart work there, and how long the restart takes. No emulator runs in a cloud session; the pull request's `android-e2e` run is the proof. `ci.yml` and `scripts/` are code-owner paths in `.github/CODEOWNERS`, so the merge waits for a code owner. The owner's Mac runs (INF-06-AC16) need an image that allows `adb root` (a `google_apis` one does, a Play Store one does not: the script then fails at once, naming `adb root`) |
+| | BUG-17 | `android-e2e` fails before the app is installed: the emulator still reports `en-rUS` 120 s after the switch to nb-NO. **Three times:** #57 (job 110875720264), #60 (job 111180346250) and #96 (job 118947039610, run 39515647691): "Waited 120 s for the emulator to be in Norwegian bokmål with its package service up … its configuration's language was en-rUS". A re-run passed on #57, and on #96 (job 119070015215, the owner's, because a session may not re-run a job, D-077). The failing run and its passing re-run log the same sequence at the same timing, so the log does not tell them apart (`progress/m3.md`) | ✅ **Done** — 2026-10-22, [#99](https://github.com/bvst/TryggHverdag/pull/99), squashed as `3d2255c` at 10:20:14 UTC. **Root cause:** CI started the emulator with `-change-locale nb-NO`, which the emulator applies after boot by restarting Android's framework, so `e2e:android` could only wait for a switch it could not watch, and three times it had not taken 120 s later (which of "did not take" and "no restart" cannot be known: the script logged nothing of its readings). **The fix (D-140, Claude's choice under D-031):** `e2e:android` makes the switch itself when its first reading is not ready, that is not bokmål or no package service (`adb root`, `adb wait-for-device`, `setprop persist.sys.locale nb-NO`, `setprop ctl.restart zygote`, once each, inside the 120 s wait; a refused step fails at once, naming it), its timeout message says what `persist.sys.locale` said last and whether the framework was seen restarting, and `ci.yml` drops `-change-locale` and `EMULATOR_LOCALE`, so every run takes that path. Red `f7d4e2a`: 17 failing tests and 2 guards, 399 passing; green `9caa720`. The e2e-android, its lib and gate tests: 416 of 416 there, 417 of 417 at the merge (counted 2026-10-23; one test came in later in the pull request). `tests:changes`: "3 changed test file(s), none weakened (RG-03)". `gate:full`: 11 steps passed; its CI-01 step needs the session's proxy setting, and `gate:integrity` run alone with it gives 5 of 5. L3 needs Docker and L7 needs an emulator, so both run in CI. **The merge** was at 10:20:14 UTC, inside REL-10's window B (the merger, by GitHub's API, was `urso-agent`); its deploy cost the canary no run (D-142). **On `main` at `3d2255c`** (GitHub's API, 2026-10-23; job conclusions, not logs): `ci` run 39762336456 succeeded (eleven jobs, `android-e2e` among them, and `mutation-group` skipped) and `deploy-staging` run 39762336560 succeeded. **The pull request's own `android-e2e`** (run 39753601142, job 119739944768, on `ea7d82d`) succeeded; its step "Boot the emulator, switch it to bokmål and run every flow" ran 09:19:30 to 09:24:21 UTC (API step times). From its log, as the coordinating session read it (a session's `gh` cannot fetch logs): "Switching the emulator to bokmål…" at 09:22:08, `nb-rNO` 3.7 s later, the install on attempt 1, 3 of 3 flows. So the switch worked on CI's image once. **Not verified: that the failure is gone.** The old setup also passed on re-run, so two green runs (the pull request's and `main`'s) do not show it; a fourth `en-rUS` timeout would mean the cause is still open. **Two follow-ups, neither urgent:** a stale docblock above `timelinePhase` in `scripts/e2e-android.test.mjs` (`test-auditor`; it still lists `getprop` among the questions `readCount` counts), and the "Emulators only" comment on `checkDevices` in `scripts/lib/e2e-android.mjs`, which should say the run also roots `adbd` (`privacy-security-reviewer`); see `progress/m3.md`, 2026-10-23. The owner's Mac runs (INF-06-AC16) need an image that allows `adb root` (a `google_apis` one does, a Play Store one does not: the script then fails at once, naming `adb root`) |
 | | BUG-18 | Three files that decide whether a missed alert or a stopped watchdog can go unseen need the owner and the safety review (D-105 and its two amendments, the owner's answers of 2026-10-03 and 2026-10-04): `apps/server/src/adapters/db.ts` (every pool's size, and LOST-02's session limits), `adapters/worker-heartbeats.ts` (the worker's check-in row) and `modules/health/` (which turns it into `/v1/health`'s answer) | ✅ **Done** — 2026-10-04, [#61](https://github.com/bvst/TryggHverdag/pull/61), merged by the owner by hand (D-075) as `7e05c8e` at 11:48 UTC, with no review on the pull request; `main`'s tree is the reviewed head `974e6e8`. The merge rules were updated at 11:49 UTC and read active with no bypass actors. All four session reviewers PASS; CI's three AI reviewers that apply skipped, as expected (read in each job log). On `main` after the merge: `ci` 10 of 10 jobs passed (run 37199989215), `gate-integrity` among them, and `deploy-staging` passed (run 37199989255). Record: `progress/m2.md` |
 | | BUG-19 | No test checks that every file git tracks under every owner-approval path still has owners under CODEOWNERS' last-match rule. Pins exist per file family (since BUG-8), so an ownerless later line for another owned file (for example `/?ackage.json`) un-owns it with every test green. Found by `test-auditor` on BUG-18; replacing the hand-written glob readers with real matchers (`git check-ignore`, picomatch) would also fit here | ⚪ **Queued**, for the owner to schedule. `/.github/` needs the owner, so such a line needs the owner's approval anyway |
 | | BUG-20 | graphile-worker's own LISTEN connection prints its error object to the console when it drops or cannot connect (`@graphile/logger` prints meta with `%O`), at start and at every retry while the database is out of reach. The object can name the database's host, port or user, never personal data or the password; it bypasses `log.ts`'s closed events, so for that one connection AC18's "one `database_error` line" is not the only line. Pre-existing (the same on `main` before LOST-02). Found by `privacy-security-reviewer` in LOST-02's reviews and raised again by CI's on [#63](https://github.com/bvst/TryggHverdag/pull/63). The fix the spec names: give Graphile a logger that writes closed events only, without dropping the lines that make a stopped worker loud | ⚪ **Queued**, for the owner to schedule. Claude recommends it before M3, as its own small task |
@@ -104,7 +114,8 @@ The task list is in [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | 6 | LOST-07 | SMS escalation at 2 minutes | ✅ **Done** — 2026-10-07, [#67](https://github.com/bvst/TryggHverdag/pull/67), merged as `1c4bc8b` at 19:43 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `2a65c3a`. 20 acceptance criteria; D-115 (owner, five answers), D-116 (delegated, three review-loop amendments), with BUG-29 in it (D-117). Session reviews: all three PASS in the first round; three review loops; `test-auditor` blocked loop 1's head and passed loops 2 and 3. In CI on `2a65c3a`: all 16 checks passed, all five AI reviewers PASS (the privacy reviewer after two re-runs: a review that ran but returned no structured verdict, explained by D-121); `integration` on PostgreSQL 15 with migration 0006; `mutation` 21:07 against 25:00. On `main` after the merge: `ci` passed (run 37676690823) and `deploy-staging` passed (run 37676690808); the smoke test saw the worker check in at 19:47:54 UTC, so the stricter ping-URL check accepted the existing `HEALTHCHECKS_WORKER_URL`. **A-33 done** (the owner, 2026-10-07; apply run 37678702578). Record: `progress/m2.md` |
 | 7 | SM-10 | Removing a responder: resumed escalation and the last-responder warning (D-115) | ✅ **Done** — 2026-10-09, [#74](https://github.com/bvst/TryggHverdag/pull/74), merged as `f4ded6d` at 13:36 UTC after `urso-agent` approved: D-122 (the owner's four answers), D-123, and BUG-41's faster mutant runs (D-124). Three review loops; every check and all five CI reviewers passed, mutation in 12:15 and 13:48. `main`'s CI and `deploy-staging` passed; migration 0007 ran in the pre-run hook |
 | 8 | LOST-08 | "They're safe" | ✅ **Done** — 2026-10-09, [#75](https://github.com/bvst/TryggHverdag/pull/75), merged as `f5c14b2` at 18:33 UTC after `urso-agent` approved: the owner's two answers (D-125) and the delegated choices (D-126). One review loop; every check and all five CI reviewers passed, mutation in 15:19. `main`'s CI and `deploy-staging` passed; migration 0008 ran in the pre-run hook |
-| 9 | REL-10 | The staging canary | ✅ **Done** — 2026-10-10, [#77](https://github.com/bvst/TryggHverdag/pull/77), merged as `b6c6074` at 16:06 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `1e6f957`. 19 acceptance criteria; D-127 (owner, three answers), D-128 (delegated, amends D-091 for the canary only, with a review-loop amendment). The filter lines shipped first in [#76](https://github.com/bvst/TryggHverdag/pull/76) (`5e5dc81`). Two review loops; every check and all five CI reviewers passed `1e6f957`, mutation in 19:26 (`run.ts` 95.9 %, `worker.ts` 96.41 %). `main`'s CI (all 10 jobs) and `deploy-staging` passed; REL-10 adds no migration, and the deployed worker has no canary setting until A-35's apply. The canary does not run until the owner's **A-34** and **A-35**; A-35's 24-hour reading is REL-10-AC19, and M2's exit. A-34 and A-35's plan and apply are done (2026-10-20); the owner reported the Healthchecks.io half of the 24-hour reading OK on 2026-10-21, and Clever Cloud's half (one `canary_run` line per run, each `ON_TIME`, and the largest `alertMs`) is still owed. Follow-up in [#80](https://github.com/bvst/TryggHverdag/pull/80) (`8838d0d`, 2026-10-13): four REL-10-AC9 tests of the canary's real wait, which kill the mutant #77 left alive, and two out-of-date comments in `worker.ts` |
+| 9 | REL-10 | The staging canary | ✅ **Done** — 2026-10-10, [#77](https://github.com/bvst/TryggHverdag/pull/77), merged as `b6c6074` at 16:06 UTC after `urso-agent` approved; `main`'s tree is the reviewed head `1e6f957`. 19 acceptance criteria; D-127 (owner, three answers), D-128 (delegated, amends D-091 for the canary only, with a review-loop amendment). The filter lines shipped first in [#76](https://github.com/bvst/TryggHverdag/pull/76) (`5e5dc81`). Two review loops; every check and all five CI reviewers passed `1e6f957`, mutation in 19:26 (`run.ts` 95.9 %, `worker.ts` 96.41 %). `main`'s CI (all 10 jobs) and `deploy-staging` passed; REL-10 adds no migration, and the deployed worker has no canary setting until A-35's apply. A-34 and A-35 are done (the owner): the plan and apply ran on 2026-10-20 (06:36:55 UTC), and **window B of the 24-hour reading, REL-10-AC19, closed M2 on 2026-10-23 (D-142)**: 96 of 96 runs `ON_TIME`, with BUG-63, the outage of 2026-10-21 that ended window A, still open (row below). Follow-up in [#80](https://github.com/bvst/TryggHverdag/pull/80) (`8838d0d`, 2026-10-13): four REL-10-AC9 tests of the canary's real wait, which kill the mutant #77 left alive, and two out-of-date comments in `worker.ts` |
+| | BUG-63 | Staging's public API gave the canary no HTTP answer three times between 11:50 and 12:20 UTC on 2026-10-21: "I'm home" failed fast twice (`HOME_FAILED`, 11:50:02 and 12:20:04) and one start timed out after 10 s (`START_FAILED`, 12:00:10). The worker and the database were fine and nothing restarted; the owner did nothing against staging (their last action was at 07:51 UTC). `staging-canary` went from up to down at 11:50. Two escalation SMS were written (`74c29daf`, `ce489c45`) and `sms_unsent` was reported from 11:54 to 12:15 and at 12:24: the canary escalated and paged the SMS check, so D-128's "never escalates" was wrong for a failed "I'm home" (corrected in D-142). It ended window A. **The cause is unknown:** the API writes no per-request log | ⚪ **Open**, for the owner to decide. Claude proposes one log line per API request: the route (its pattern, not the path), the status and the duration in milliseconds, nothing else (PRIV-07). It adds a closed event to `apps/server/src/log.ts`, an owned path (D-102), so it needs the owner's yes. Claude recommends it as a small `/bugfix BUG-63`; the owner may first want to look at Clever Cloud's metrics for 11:40 to 12:25 UTC on 2026-10-21, which a session cannot reach. It does not stop the line (D-127, second answer). Found 2026-10-21; record: `progress/m2.md` |
 
 ## M1 at a glance
 
@@ -177,6 +188,18 @@ could not record a verdict at all (D-069, D-070, D-073).
 
 ## What the owner still needs to do
 
+**Task 2's pull request (home screen), when it is open.** It needs your approval
+(D-042). It adds `expo-system-ui` to `apps/mobile/package.json`, so that the
+always-dark theme applies on Android (Claude's choice under D-031; MIT, Expo's
+pin for SDK 57).
+
+**The 112 button's name and WCAG 2.5.3 (Label in Name): answered 2026-10-23,
+"Behold som nå"** (keep it), as Claude recommended. Its screen-reader name stays
+"Ring 1 1 2, nødnummeret" (D-141), which TalkBack reads digit by digit; it does not
+contain the visible "112", so a Voice Access user who says "tap 112" may not
+reach it (they can still use "show numbers"). A known trade-off, to look at again
+with real users; CALL-02's loop-2 table records it.
+
 **A-36 — the plan and apply are done; the join is yours.** On 2026-10-21
 `infra-staging` ran the plan (run 39564821518, job 119104478062: "Plan: 1 to
 add, 1 to change, 0 to destroy.") and the apply (run 39564903393, job
@@ -195,22 +218,16 @@ now logs "api: the first admin can join with ADMIN_BOOTSTRAP_CODE while no group
 exists." A session cannot read Clever Cloud's log; if it still says "cannot
 join", tell Claude.
 
-**A-35 — the canary's 24 hours: the Healthchecks.io half is reported, Clever
-Cloud's half is yours.** On 2026-10-21 you wrote "24-timersvinduet er OK" (the
-24-hour window is OK) and sent a screenshot of `staging-canary`'s ping log.
-The coordinating session read it: pings #77 to #98, every one OK; #77 to #96 are
-15 minutes apart from 03:50 to 08:35, then #97 at 09:05 and #98 at 09:20, on Oct
-21 in Norwegian local time (UTC+2). The window ends at 06:36:55 UTC (the apply
-was at the same time on Oct 20), so #96 at 08:35 local (06:35 UTC) is the last
-ping inside it. #1 to #76 are not in the screenshot; by the numbering, 96 pings 15
-minutes apart from about 06:50 UTC on Oct 20 fit the window exactly, with no room
-for a missed run. The 30-minute gap between #96 and #97 follows the deploy at
-about 06:43 UTC, which restarted the worker (the pinging address changed, .21 to
-.12, between the two); it is outside the window and within REL-10-AC19's "at
-least one success in every 35 minutes". **Still owed for AC19:** Clever Cloud's
-log for those hours must hold one `canary_run` line per run, each `ON_TIME`, and
-you report the largest `alertMs`. **M2 is not closed until you do.** The full row
-is in [`plan/README.md`](plan/README.md).
+**BUG-63 — a question for you: should the API log one line per request?** On
+2026-10-21 staging's API gave the canary no answer three times in half an hour,
+and nobody can say why, because the API logs nothing per request (the row in the
+M2 table above). Claude proposes one line with the route, the status and the
+duration, and nothing else, so no location, number, identifier or body (PRIV-07).
+It changes `apps/server/src/log.ts`, which needs your approval, so Claude has not
+started. You may first want to look at Clever Cloud's metrics and events for the
+API app between 11:40 and 12:25 UTC that day, which a session cannot reach; if
+they show a restart, a memory limit or a platform event, say so. M2 is closed
+either way (D-142).
 
 **A-03 — Google Play account for the AS:** waiting on Google's answer. If it
 does not give the AS an organisation account, a new one is made with the
@@ -251,15 +268,16 @@ still cannot pass**, structurally: `ai-review.yml` pins actions such as
 `actions/checkout`, `actions/setup-node` and `pnpm/action-setup`, so bumping any
 of them edits that workflow, and `claude-code-action` refuses to run when the
 workflow differs from the default branch. Those pull requests need a manual merge
-(D-075), batched. #91's four bumps went in with #94 (`60b46ee`, 2026-10-20).
-**Checked in the workflows on 2026-10-20:** `actions/checkout` v7.0.1,
-`actions/setup-node` v7.1.0 and `claude-code-action` v1.0.251. **Open now:
-[#95](https://github.com/bvst/TryggHverdag/pull/95)** (`claude-code-action`
-1.0.251 to 1.0.252): it edits `ai-review.yml` and `daily-status.yml` (`gh api`,
-2026-10-20), so it waits for the next D-075 hand-merged batch.
+(D-075), batched. #91's four bumps went in with #94 (`60b46ee`, 2026-10-20), and
+`claude-code-action`'s 1.0.251 to 1.0.254 (Dependabot's
+[#95](https://github.com/bvst/TryggHverdag/pull/95)) with task 2's step 1,
+[#100](https://github.com/bvst/TryggHverdag/pull/100) (`50214c0`, 2026-10-22);
+#95 was closed without a merge. The workflows name SHA `db77d4d`, the commit
+tag `v1.0.254` points to (`git ls-remote`, 2026-10-22). Nothing was open from
+Dependabot on 2026-10-23 (`gh api`).
 
-**Done, and recorded elsewhere:** A-04 to A-10, A-15 to A-26 (bar A-22's leftover)
-and A-28. Each row is in [`plan/README.md`](plan/README.md), and the evidence is
+**Done, and recorded elsewhere:** A-04 to A-10, A-15 to A-26 (bar A-22's leftover),
+A-28 and A-32 to A-35 (A-35 closed M2: D-142). Each row is in [`plan/README.md`](plan/README.md), and the evidence is
 in [`progress/m0.md`](progress/m0.md). Still true from them:
 `CLAUDE_CODE_OAUTH_TOKEN` is set and `ANTHROPIC_API_KEY` is not; `claude-dev` acts
 on GitHub as `urso-agent` only; the owner accepted the INF-08 drill with no
@@ -280,6 +298,14 @@ The things that still bite, and cost a session hours the first time.
   rewriting `docs/requirements-status.md` fails a concurrent `gate:quick`;
   and a `gate:quick` (or the stop hook) during a mutation run lints Stryker's
   `.stryker-tmp/sandbox-*` copy, which carries `@ts-nocheck`. Let one finish.
+- **In a cloud session CI-01 (`gate:integrity`) needs `NODE_USE_ENV_PROXY=1`,
+  and `gate:full` as a whole must not have it.** Without the variable CI-01 gives
+  3 of 5; with it, 5 of 5. Set for the whole of `gate:full`, it fails
+  `scripts/lib/proc.test.mjs` (3 of 8 tests, measured 2026-10-23): every child
+  process then prints Node's `UNDICI-EHPA` warning, and the tests compare the
+  output. Run `gate:full` without it, then `NODE_USE_ENV_PROXY=1 pnpm run
+  gate:integrity` on its own, and say so when you quote `gate:full`'s count (task
+  2's run on `9c7c498` left CI-01 out and ran it apart).
 - **A git worktree outside the project gets no post-edit checks.** The
   post-edit hook runs in `$CLAUDE_PROJECT_DIR`, so edits in a scratchpad
   worktree are checked against the main checkout (reporting its errors, or
@@ -414,7 +440,7 @@ The things that still bite, and cost a session hours the first time.
   is [`progress/m2.md`](progress/m2.md) and M1's is
   [`progress/m1.md`](progress/m1.md), so a bug's next `BUG-<n>` has to be looked
   for in all four files, in this one and in `decisions.md`. The next one is
-  **BUG-63** (BUG-13 to BUG-62 are taken). The last paragraph of
+  **BUG-64** (BUG-13 to BUG-63 are taken). The last paragraph of
   `progress/m1.md` says why.
 - **gitleaks scans the pull request's whole history, not only its tree.** A
   credential-shaped literal stays a finding after the commit that removes it
@@ -484,7 +510,10 @@ The things that still bite, and cost a session hours the first time.
   `ssr` folders don't pile up in `/tmp` (LOST-07).
 - **Run `gate:full` on a quiet machine.** Its mutation step runs the groups
   one after another inside a 25-minute budget. With reviewers running beside
-  it, LOST-07's groups overran it; alone, they passed (LOST-07).
+  it, LOST-07's groups overran it; alone, they passed (LOST-07). It happened
+  again on task 2's `d2a55ca`: seven of the nine groups used the 25 minutes, and
+  `process` and `api-process`, run alone with `--group` (D-129), passed. Whether
+  anything ran beside that `gate:full` was not checked.
 - **Agents can sit for hours on an approval prompt.** Edits to `.claude/**`
   and `docs/plan/decisions.md` always ask (`settings.json`), and a background
   agent waiting on one shows no sign of it: no file changes, no processes. On
@@ -493,24 +522,39 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**No M3 task is in flight:** GRP-01 (task 1) is merged, and task 2 has not
-started (the M3 table above, and [`progress/m3.md`](progress/m3.md)). GRP-01's
-two follow-ups are merged too: the `.gitleaksignore` line's removal in
-[#97](https://github.com/bvst/TryggHverdag/pull/97) (`f3e682c`) and D-139's code
-owners in [#98](https://github.com/bvst/TryggHverdag/pull/98) (`a2457b5`).
-
-**On the session branch, not merged: BUG-17's fix** (`claude/busy-faraday-40n2zl`,
-the fix is `9caa720`, base `a2457b5`; its row is in the M2 table, above). When this was
-written, no pull request was open for it. **Nothing may merge to `main` before
-12:22:54 UTC on 2026-10-22, this included:** window B of REL-10-AC19 ends then,
-and a deploy restarts the worker. Delete those two sentences once that time has
-passed.
-
-**M2's last exit criterion** is the staging canary's 24 hours: the
-Healthchecks.io half is reported OK by the owner, and Clever Cloud's half of
-A-35's reading is still owed (see "What the owner still needs to do"). Every
-other M2 task and bug fix is done and has its row above; the story is in
-[`progress/m2.md`](progress/m2.md).
+**Task 2 (GRP-02, CALL-01, CALL-02) is ready for its pull request, which is to be
+opened.** The session branch `claude/busy-faraday-40n2zl` is pushed at `72ad66d`;
+`gh api` showed no open pull request on 2026-10-23. Built, and through two review
+loops with every review PASS. The M3 table above has the row, and the story, with
+the evidence, is in `progress/m3.md` ("two review loops done …").
+- **Step 1 is done:** [#100](https://github.com/bvst/TryggHverdag/pull/100),
+  `50214c0` (merged by the owner, 2026-10-22).
+- **The loops:** the five reviews of `cff3021`; loop 1 red `91665eb`, green
+  `e128741`; the order-dependent jest failure `a54f735`; loop 2 red `f3be1e1`,
+  green `9c7c498`; test-only `72ad66d`. Delta reviews of both loops: all PASS.
+  `code-reviewer`'s verdicts are the coordinating session's word, not a committed
+  note.
+- **Checks:** on `9c7c498`, `gate:full` 11 passed, 0 failed, 3 not possible yet
+  (L3, L7, and CI-01 run apart: `gate:integrity` 5 of 5). On `72ad66d`,
+  `gate:quick` 3 passed and mobile jest 706 passed.
+- **Not run here:** L3 and L7. CI's `android-e2e` is the first time the Maestro
+  flows run.
+- **Follow-ups, queued and not done:**
+  1. the `expo/build` / `expo/src` deep-path pattern and its probe (CALL-01
+     Risks);
+  2. the start's secure-store calls have no time limit (`safety-reviewer`); a
+     limit in `shared/secure-storage.ts` would be the fix, and Expo's Android
+     delete always settles today;
+  3. on iOS, Keychain items, the credential included, can outlive an uninstall
+     (`privacy-security-reviewer`); it belongs in task 12's spec;
+  4. the 112 button's name and WCAG 2.5.3: the owner kept it (2026-10-23), a
+     trade-off to look at again with real users;
+  5. the two BUG-17 follow-ups: the stale docblock above `timelinePhase` in
+     `scripts/e2e-android.test.mjs` (a `test-author` change), and the "Emulators
+     only" comment on `checkDevices` in `scripts/lib/e2e-android.mjs`, which should
+     say the run also roots `adbd` (the BUG-17 row has the detail);
+  6. the mock guard's obscure spellings (`{ ['virtual']: true }`, `jest['mock']`,
+     an aliased `jest`): `test-auditor` rated them a note, no action.
 
 **Carried into M3, from M2's decisions:**
 - Before M3 pushes the "I'm on it" notice on either platform, a real-phone test
@@ -553,7 +597,7 @@ Still open from D-098's consequences (BUG-12, done):
 - the whole-suite run is now unreachable, and removing it needs a decision;
 - mobile `.tsx` safety files will need a jest-expo group.
 
-**BUG-13**, **BUG-16**, **BUG-19**, **BUG-20**, **BUG-22**, **BUG-25**, **BUG-27**, **BUG-35**, **BUG-40**, **BUG-53**, **BUG-54**, **BUG-55**, **BUG-56**, **BUG-57**, **BUG-58**, **BUG-59**, **BUG-60** and **BUG-62** are queued for the owner to schedule, and **BUG-49** and **BUG-50** for the owner to decide (the rows in the M3 and M2 tables, above). BUG-57 to BUG-60 came from GRP-01; BUG-58 to BUG-60 are in `.claude/` and need the owner's approval, and BUG-57 touches it too.
+**BUG-13**, **BUG-16**, **BUG-19**, **BUG-20**, **BUG-22**, **BUG-25**, **BUG-27**, **BUG-35**, **BUG-40**, **BUG-53**, **BUG-54**, **BUG-55**, **BUG-56**, **BUG-57**, **BUG-58**, **BUG-59**, **BUG-60** and **BUG-62** are queued for the owner to schedule, and **BUG-49**, **BUG-50** and **BUG-63** for the owner to decide (the rows in the M3 and M2 tables, above; BUG-63's question is under "What the owner still needs to do"). BUG-57 to BUG-60 came from GRP-01; BUG-58 to BUG-60 are in `.claude/` and need the owner's approval, and BUG-57 touches it too.
 
 **D-085's loose ends** (the pull request merged, [#43](https://github.com/bvst/TryggHverdag/pull/43)).
 - **Verified:** `deploy-staging` on `ubuntu-26.04`. Run 36621209842, for

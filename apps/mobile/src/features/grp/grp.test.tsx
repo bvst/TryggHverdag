@@ -44,69 +44,66 @@ const mockSecureCalls: string[] = [];
  */
 const mockSecureRefuses: { delete: Error | null } = { delete: null };
 
-jest.mock(
-  'expo-secure-store',
-  () => {
-    const set = (key: string, value: string) => {
-      mockSecureCalls.push(`set ${key}`);
-      mockSecureItems.set(key, value);
-    };
-    const get = (key: string) => {
-      mockSecureCalls.push(`get ${key}`);
-      return mockSecureItems.get(key) ?? null;
-    };
-    const remove = (key: string) => {
-      mockSecureCalls.push(`delete ${key}`);
-      mockSecureItems.delete(key);
-    };
-    return {
-      setItemAsync: jest.fn((key: string, value: string) => {
-        set(key, value);
-        return Promise.resolve();
-      }),
-      getItemAsync: jest.fn((key: string) => Promise.resolve(get(key))),
-      deleteItemAsync: jest.fn((key: string) => {
-        if (mockSecureRefuses.delete !== null) {
-          mockSecureCalls.push(`delete ${key} refused`);
-          return Promise.reject(mockSecureRefuses.delete);
-        }
-        remove(key);
-        return Promise.resolve();
-      }),
-      setItem: jest.fn(set),
-      getItem: jest.fn(get),
-      deleteItem: jest.fn(remove),
-      isAvailableAsync: jest.fn(() => Promise.resolve(true)),
-      AFTER_FIRST_UNLOCK: 0,
-      AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY: 1,
-      ALWAYS: 2,
-      WHEN_PASSCODE_SET_THIS_DEVICE_ONLY: 3,
-      ALWAYS_THIS_DEVICE_ONLY: 4,
-      WHEN_UNLOCKED: 5,
-      WHEN_UNLOCKED_THIS_DEVICE_ONLY: 6,
-    };
-  },
-  { virtual: true },
-);
+// expo-secure-store and expo-crypto are installed, so both are mocked as
+// installed, never virtual, as in every test file of the app: a virtual mock
+// of an installed package is skipped in a jest worker that already loaded it
+// for real from the same importer (packages/config/jest-virtual-mocks.test.mjs
+// says why, and refuses one).
+jest.mock('expo-secure-store', () => {
+  const set = (key: string, value: string) => {
+    mockSecureCalls.push(`set ${key}`);
+    mockSecureItems.set(key, value);
+  };
+  const get = (key: string) => {
+    mockSecureCalls.push(`get ${key}`);
+    return mockSecureItems.get(key) ?? null;
+  };
+  const remove = (key: string) => {
+    mockSecureCalls.push(`delete ${key}`);
+    mockSecureItems.delete(key);
+  };
+  return {
+    setItemAsync: jest.fn((key: string, value: string) => {
+      set(key, value);
+      return Promise.resolve();
+    }),
+    getItemAsync: jest.fn((key: string) => Promise.resolve(get(key))),
+    deleteItemAsync: jest.fn((key: string) => {
+      if (mockSecureRefuses.delete !== null) {
+        mockSecureCalls.push(`delete ${key} refused`);
+        return Promise.reject(mockSecureRefuses.delete);
+      }
+      remove(key);
+      return Promise.resolve();
+    }),
+    setItem: jest.fn(set),
+    getItem: jest.fn(get),
+    deleteItem: jest.fn(remove),
+    isAvailableAsync: jest.fn(() => Promise.resolve(true)),
+    AFTER_FIRST_UNLOCK: 0,
+    AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY: 1,
+    ALWAYS: 2,
+    WHEN_PASSCODE_SET_THIS_DEVICE_ONLY: 3,
+    ALWAYS_THIS_DEVICE_ONLY: 4,
+    WHEN_UNLOCKED: 5,
+    WHEN_UNLOCKED_THIS_DEVICE_ONLY: 6,
+  };
+});
 
-jest.mock(
-  'expo-crypto',
-  () => {
-    const bytes = (size: number) =>
-      Uint8Array.from({ length: size }, () => Math.floor(Math.random() * 256));
-    return {
-      getRandomBytes: jest.fn(bytes),
-      getRandomBytesAsync: jest.fn((size: number) => Promise.resolve(bytes(size))),
-      getRandomValues: jest.fn(<T extends ArrayBufferView>(array: T) => {
-        const view = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
-        view.set(bytes(view.length));
-        return array;
-      }),
-      randomUUID: jest.fn(() => '00000000-0000-4000-8000-000000000000'),
-    };
-  },
-  { virtual: true },
-);
+jest.mock('expo-crypto', () => {
+  const bytes = (size: number) =>
+    Uint8Array.from({ length: size }, () => Math.floor(Math.random() * 256));
+  return {
+    getRandomBytes: jest.fn(bytes),
+    getRandomBytesAsync: jest.fn((size: number) => Promise.resolve(bytes(size))),
+    getRandomValues: jest.fn(<T extends ArrayBufferView>(array: T) => {
+      const view = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+      view.set(bytes(view.length));
+      return array;
+    }),
+    randomUUID: jest.fn(() => '00000000-0000-4000-8000-000000000000'),
+  };
+});
 
 jest.mock('expo-localization', () => {
   const locale = {
@@ -521,6 +518,18 @@ afterEach(async () => {
     await launched.testing.cleanup();
     launched = undefined;
   }
+  // RG-03 (M3 task 2, CALL-02-AC7): moved here from the afterEach of "GRP-01-AC29:
+  // the app waits 20 s", which Jest ran before this one, so the app was
+  // unmounted under real timers. No assertion changes; only the order of the
+  // teardown does.
+  // Real timers come back here, once the app is unmounted, and never in a
+  // describe's own afterEach, which Jest runs before this one. Expo Router's
+  // renderRouter fakes the timers, and React Native's StatusBar, drawn by the
+  // root layout (CALL-02-AC7), clears its pending immediate as it unmounts:
+  // unmounted under real timers, it hands its fake id to Node's real
+  // clearImmediate, which corrupts Node's count of immediates, and from then
+  // on React's act never settles and every later launch in the file hangs.
+  jest.useRealTimers();
 });
 
 // ---------------------------------------------------------------------------
@@ -1423,10 +1432,21 @@ describe('GRP-01-AC30: labels that stay, a waiting indicator, one "try again" (r
         await screen.findByText(nbText('grp.member.unreachable'));
       }
 
+      // RG-03 (M3 task 2, review loop 1): the filter was /prøv|try/i, which
+      // matched "try" inside any word. GRP-02-AC1 now has the explaining call
+      // button's label carry its line, "… Trykk for å velge.", and "Trykk"
+      // means "press", not a retry, so that button was taken for one. A retry
+      // word is now matched only as a word of its own: any word that begins
+      // "prøv" (prøv, prøve, prøvde) or "retry", or "try", "tries" or
+      // "trying". Every control offering to try again is still caught, and
+      // must still be named exactly "Prøv igjen"; only words that merely begin
+      // with "try", such as "Trykk" or "trygg", no longer count.
       const named = screen
         .queryAllByRole('button')
         .map((button) => labelOf(button as unknown as HostNode) ?? '')
-        .filter((label) => /prøv|try/i.test(label));
+        .filter((label) =>
+          /(?:^|[^\p{L}])(?:prøv\p{L}*|retry\p{L}*|try|tries|trying)(?![\p{L}])/iu.test(label),
+        );
       expect(named.length).toBeGreaterThan(0);
       expect(named).toEqual(named.map(() => 'Prøv igjen'));
     },
@@ -1547,9 +1567,8 @@ describe('GRP-01-AC27: a join sent again carries the join key of the first (revi
 });
 
 describe('GRP-01-AC29: the app waits 20 s for an answer, and no longer (review loop 1, test-auditor)', () => {
-  afterEach(() => {
-    jest.useRealTimers();
-  });
+  // RG-03 (M3 task 2): real timers are restored by the file's afterEach, after
+  // the app is unmounted, and no longer here (see that afterEach for why).
 
   /** Jest's fake timers, with promises left to run as they do. */
   const fakeTimers = () => {

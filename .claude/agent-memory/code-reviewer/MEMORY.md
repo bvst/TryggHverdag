@@ -18,3 +18,4 @@
 - [async spawn timeout orphans](project_async_spawn_timeout_orphans.md)
 - [CI fan-out review angles](project_ci_fanout_mutation.md) — BUG-45 mutation plan/group/aggregate: unused verdict fields, 6x boilerplate churn, matrix value in run:
 - [GRP-01 review](project_grp01_review.md) — orphaned JSDoc after helper extraction; unrecorded spec deviations; stale pinned contract description
+- [Home screen review](project_home_screen_review.md) — redundant props, silent absent flows in scripted order, .ts import in node script, copied oracle, scroll-reset gap

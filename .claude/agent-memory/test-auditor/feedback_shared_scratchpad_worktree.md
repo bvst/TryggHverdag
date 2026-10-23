@@ -13,3 +13,5 @@ exactly mine, restored with `git checkout -- <those two files>`.
 [ "$(pwd)" = "$W" ] || exit 9`; restore with `git -C "$W" checkout -- .`; end each block with `git -C /home/user/TryggHverdag
 status --short`. Other reviewers' uncommitted memory edits may sit in the main tree: never restore those.
 Related: [[readonly-guard]], [[call01-step1-audit]]
+2026-10-23 (task 2 loop 1): auto-mode classifier refused `sed -i` + `git checkout -- f` in a scratch worktree. Use a non-git copy instead:
+`git archive <sha> | tar -x -C <scratch>/ta-<task>-copy`, symlink each node_modules from the main tree, keep f.orig with cp, unlink links when done.

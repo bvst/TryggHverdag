@@ -24,8 +24,21 @@
 #   SHARE_BUTTON       grp.invite.share
 # The name typed is synthetic (RG-07).
 #
+# Tagged `scripted` (CALL-01, approach 9; D-031): it needs a place in the
+# script's order, though no step of its own. first-contact.yaml continues from
+# the state this flow leaves, the app signed in as the group's first admin,
+# and the first run, over every flow not tagged `scripted`, holds
+# app-starts.yaml and wrong-code.yaml, which clear the app's state, in an
+# order Maestro takes from the folder's listing. So scripts/e2e-android.mjs
+# runs it on its own, first of the scripted flows, and runs nothing that
+# clears the app's state between it and first-contact.yaml. Before it, the
+# script sets the usual font size and reads Telecom's record; after it, it
+# reads Telecom's record again, which must show no new call.
+#
 # Never add `retry:` or `optional: true` to a step here (see app-starts.yaml).
 appId: ${APP_ID}
+tags:
+  - scripted
 ---
 - launchApp:
     clearState: true

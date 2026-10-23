@@ -5217,6 +5217,15 @@ any other path is work, not a candidate for the same treatment.
     (`modules/journeys/service.ts`), which on staging is only the canary's own
     (D-091); once there are real users, it must not reach one. The spec's
     "Left for later tasks" names it.
+- **Corrected by D-142 (2026-10-23), a statement of fact.** "The canary never
+  escalates and never pages the SMS check" (the end of "A run, in order", and
+  REL-10-AC7's title) holds only for a run whose "I'm home" is answered: that
+  is what ends its journey before the alert could escalate. When "I'm home"
+  fails (`HOME_FAILED`), the journey stays unended, its alert escalates, an
+  escalation SMS is written for the test responder, and the SMS check reports
+  failing, which pages (D-115, item 2). BUG-63 showed it on 2026-10-21: two
+  escalation SMS written, `sms_unsent` reported from 11:54 to 12:15 UTC and
+  again at 12:24. The text above is left as it was written.
 
 ## D-129 — The mutation check runs one CI job per group, under an aggregator still named `mutation`; a local `--group`; the six mutants that only time out are fixed (BUG-45)
 - **Date:** 2026-10-13 · **Status:** Accepted (the owner's answers, 2026-10-13)
@@ -6292,3 +6301,559 @@ any other path is work, not a candidate for the same treatment.
     the timeout message, `scripts/e2e-android.test.mjs` holds the script run
     against a stand-in `adb`, and `scripts/gate.test.mjs` holds that no
     emulator step in `ci.yml` is started with `-change-locale`.
+  - **Added 2026-10-23:** a switch that was not needed costs one framework
+    restart.
+
+## D-141 — The home screen: the owner's answers (GRP-02, CALL-01, CALL-02; M3 task 2)
+- **Date:** 2026-10-22 · **Status:** Accepted (the owner, 2026-10-22). Asked in
+  session, one at a time, each with Claude's recommendation, and the owner chose
+  the recommendation every time; item 7 amended three times the same day, below;
+  a fourth answer, on CALL-02-AC6's screen-reader label, given 2026-10-22 and
+  recorded 2026-10-23, is the last amendment, below ·
+  **Section:** 10 (M3, task 2); D-010, D-012, D-013, D-014, D-016, D-023, D-031,
+  D-042, D-055, D-075, D-081, D-128, D-134, D-137, D-139
+- **Context:**
+  - D-134 puts GRP-02, CALL-01 and CALL-02 in one task: the home screen, with
+    the #1 contact, the call button and 112 always visible. Its three specs
+    (`docs/specs/GRP-02.md`, `CALL-01.md` and `CALL-02.md`) ask seven
+    questions, Q1 to Q7, that are scope, cost, privacy or safety. Each spec
+    holds the reasoning for its own.
+  - The specs were written on the recommended answers, and say which criterion
+    another answer would change.
+  - Two more questions, about where task 2 is built and where step 1 comes
+    from, were asked in the same session.
+- **Decision:** the seven answers, then the two.
+  1. **Where #1 is kept (Q1): on the phone only,** in secure storage, a name
+     and a number. The server holds nothing about a possible non-member, and
+     calling works when the server is down. A reinstall or a new phone loses
+     #1, and the home screen then says no #1 is chosen.
+     - Rejected: also on the server, which makes a non-member's name and
+       number server data (a legal basis, the privacy notice and the DPIA, a
+       retention rule, a route, a table, a contract change).
+  2. **How #1 is entered (Q2): by typing a name and a number.** No contacts
+     permission, no contact picker, and no new dependency for it.
+     - Rejected: picking from the phone's contacts.
+  3. **112 "one tap away" (Q3): accepted as the dialer opening with 112 filled
+     in, and the walker pressing call there.** Android's documentation for
+     `ACTION_CALL` says: "Note: this Intent cannot be used to call emergency
+     numbers. Applications can dial emergency numbers using ACTION_DIAL,
+     however." (developer.android.com/reference/android/content/Intent, the
+     `ACTION_CALL` entry, read on 2026-10-22.) So the app can only open the
+     dialer with the number in it. The dialer is the phone's normal path, so
+     the position is still sent automatically (AML, `01-product-vision.md`,
+     finding 1), and it guards against a mistaken gloved press. The story's
+     wording is unchanged: "one tap away" holds for reaching 112, not for
+     placing the call.
+     - Rejected: not accepting it. The specs found no alternative on Android
+       short of the app becoming the phone's default dialer, out of all
+       proportion.
+  4. **Which screens show 112 (Q4): every screen the app shows, the join
+     screen included.** It is one rule in the shared screen component, with
+     nothing to leave it out. This goes beyond the story's wording (the home
+     screen and the journey screen), which is why it was asked.
+     - Rejected: every signed-in screen but not the join screen; the home
+       screen only.
+  5. **Theme (Q5): always dark for the MVP.** One palette, whatever the
+     phone's setting, with its contrast checked by a test. Dark-first is a
+     hypothesis in the MVP scope, and the private test is where it is checked.
+     - Rejected: following the phone's setting (two palettes to test, and a
+       bright app on every phone left in light mode at night).
+  6. **Minimum sizes (Q6), the story's placeholder:**
+     - the call button at least 120 dp tall and the screen's full width less
+       its margins, and the largest element on the home screen;
+     - 112 at least 64 dp tall and 96 dp wide;
+     - every other control at least 56 dp tall;
+     - at least 24 dp between 112 and the call button.
+  7. **Code owner and safety filter (Q7): yes.**
+     `apps/mobile/src/features/call/` gets a code owner, `@bvst @urso-agent`
+     (D-071), and joins the ai-review `safety` filter, so `safety-reviewer` sees
+     every change to it.
+     - It goes in both lists that must agree, `.github/CODEOWNERS` and
+       `OWNER_APPROVAL_PATHS` in `scripts/lib/merge-rules.mjs`, and in the
+       `safety` filter in `.github/workflows/ai-review.yml`, with their gate
+       tests.
+     - It is done in a small "step 1" pull request merged by hand (D-075)
+       before task 2's, as D-128 did for REL-10 and D-137 for GRP-01. Its
+       tests and its code go through `test-author` and `implementer`. Its gate
+       tests are named for CALL-01-AC9.
+     - From step 1's merge on, `docs/requirements-status.md` shows CALL-01 as
+       🟢 before any call code exists: the report's 🟢 means only that a test
+       names the requirement, not that the story works. The tracked-file pin
+       in task 2's tests (CALL-01-AC9) is what shows the folder holds code.
+     - **It is not a mutation path.** `features/call/` does not join
+       `SAFETY_PATHS`: the app's mutation testing is set up with the safety
+       core in task 3 (D-081 item 13, D-134), and `features/call/` is for that
+       task to consider. Until then no mutation run measures its tests.
+     - **Amended the same day (the owner, three times, after step 1's
+       reviews):** `apps/mobile/src/shared/ui/`, `apps/mobile/e2e/` and
+       `apps/mobile/src/app/` join `features/call/` in everything this item
+       says, in the same step-1 pull request. See "Amended 2026-10-22", below.
+  8. **Where task 2 is built: "Her i skyen"** (here, in the cloud session), as
+     GRP-01 was. Screens are tested with jest-expo (L5), and CI's
+     `android-e2e` runs the flows (L7). iOS and VoiceOver wait for task 12.
+  9. **Step 1's branch:** step 1 comes from the second branch
+     `claude/busy-faraday-40n2zl-ai-review`, as REL-10's and GRP-01's did. It is
+     batched with Dependabot's [#95](https://github.com/bvst/TryggHverdag/pull/95)
+     (`anthropics/claude-code-action` 1.0.251 to 1.0.254, in `ai-review.yml` and
+     `daily-status.yml`), whose SHA is checked against its tag before the
+     merge. The owner's answer was "Ja, som sist" ("Yes, as last time").
+- **Who decided:** the owner decided all of the above. Claude chose, under
+  D-031, the path name (`features/call/`, after the CALL story prefix), the test
+  levels and the specs' detail, among them these choices, listed so that
+  reviewers see them:
+  - a new dependency-cruiser rule in `packages/config/dependency-cruiser.cjs`,
+    because the existing rules allow `features/call` to import a module's index
+    in `grp` or `safety-core` (CALL-01-AC6);
+  - 110, 112 and 113 as #1 always go to the dialer and never to `ACTION_CALL`
+    (CALL-01-AC2);
+  - `expo-intent-launcher` for `ACTION_CALL`;
+  - GRP-02-AC6 checks `apps/mobile/package.json` for other stores
+    (AsyncStorage, file system, SQLite, MMKV), so #1 has no other place to be
+    written to;
+  - the number is shown as dialled, not grouped;
+  - (a, added by the amendment below, 2026-10-22) `phone.ts` checks for 110,
+    112 and 113 itself, rather than relying on `features/grp/first-contact.ts`'s
+    normalisation, so the emergency rule lives wholly in owned code
+    (`features/call/`; CALL-01, approach 2 and AC2);
+  - (b, added by the amendment below, 2026-10-22) a task-2 test requires every
+    route under `apps/mobile/src/app/` to be drawn through `Screen`, so that no
+    route can leave the 112 bar out by not using the component that draws it
+    (CALL-02-AC1);
+  - (c, added by the third answer, below, 2026-10-22; from `safety-reviewer`'s
+    delta review of #100) `apps/mobile/src/app/_layout.tsx` exports an
+    `ErrorBoundary` whose fallback is drawn on `Screen`, so that a crash still
+    shows 112;
+  - (d, as c) an ESLint rule lets `Modal`, `SafeAreaView` and `ScrollView` be
+    imported only inside `apps/mobile/src/shared/ui/`;
+  - (e, as c) `phone.ts` removes only its own separators. Anything that is not
+    then digits, with an optional leading `+`, goes to the dialer. It builds
+    the `tel:` URI from the cleaned string;
+  - (f, as c) the emergency set becomes 112, 911, 110, 113, 000, 08, 118, 119
+    and 999, and any of these followed by more digits also goes to the dialer.
+    This widens the set of the choice above, "110, 112 and 113 as #1 always go
+    to the dialer and never to `ACTION_CALL`" (CALL-01-AC2), and (a)'s: the rule
+    is the same, the dialer and never `ACTION_CALL`;
+  - (g, added by the fourth answer, below, 2026-10-23) the hint is spelled
+    digit by digit as the label is, and the English texts follow, as the
+    decision below gives them. As relayed for this record, the question named
+    the label; the hint and the English are Claude's, so reviewers see them.
+- **Consequences:**
+  - **No server work in task 2.** No route, no table and no contract change;
+    `api:diff` must show none. #1 is deleted from the phone with the credential
+    when the phone is signed out by a 401, and kept through an unreachable
+    server (GRP-02's spec).
+  - **The privacy notice and the DPIA (M4) say** that #1, a third party's name
+    and number, is kept on the walker's phone only.
+  - **Task 2's pull request needs the owner's approval anyway (D-042).** It
+    touches three of D-139's code-owner paths: `secure-storage.ts`,
+    `session.tsx` and `package.json`. It also edits
+    `packages/config/dependency-cruiser.cjs` for the new import rule, which is
+    under `/packages/config/`, an owner path (`.github/CODEOWNERS` line 119 and
+    `OWNER_APPROVAL_PATHS` in `scripts/lib/merge-rules.mjs` line 131, at
+    `3d2255c`). The call itself needs a new dependency, `expo-intent-launcher`
+    (the spike's, Claude's choice under D-031), which goes through
+    `licenses:check`. After step 1, every later change to `features/call/` waits
+    for the owner's approval too.
+  - **Existing assertions change by design (RG-03).** GRP-01's tests of the
+    member screen and of the unreachable screen follow the home screen, which
+    now shows once storage is read and does not wait for `GET /v1/me`. Only a
+    401 still signs out. The specs list each one.
+  - **iOS is left to task 12:** `tel:112` and its confirmation, `tel:` for #1,
+    VoiceOver and the live-region announcements.
+  - **Amends D-134 for task 2 only** (item 8), as D-137 (item 5) did for task
+    1: its consequence "UI work runs on the Mac (D-055)" does not apply to
+    task 2. No accepted text is edited. Supersedes nothing.
+- **Not verified when this was decided:**
+  - That Android's dialer opens with 112 filled in when the app sends `tel:112`
+    through `Linking.openURL`. Android sends that as `ACTION_VIEW`, not as
+    `ACTION_DIAL`, which the documentation names; SPIKE-01's S6 saw the dialer
+    handle an `ACTION_VIEW` `tel:` link for an ordinary number only. CI's
+    `android-e2e` is the first observation.
+  - That AML sends the position when the call is placed from the dialer. Only
+    a real emergency call would show it, and no test makes one (SPIKE-01-AC10).
+  - Anything on iOS.
+
+- **Amended 2026-10-22, with three owner answers, each asked in session with
+  Claude's recommendation and each the recommended option: the first, after
+  step 1's four reviews, on `shared/ui/`; the second, after `planner` and
+  `safety-reviewer` raised it, on `e2e/`; the third, after `safety-reviewer`'s
+  delta review of #100 raised it, on `src/app/` (each further down):**
+  - **Why (the first answer, `shared/ui/`):** step 1's pull request (branch
+    `claude/busy-faraday-40n2zl-ai-review`, from `main` at `3d2255c`, not opened
+    when this was written) was reviewed in the session at `cb9fbd3` by
+    `code-reviewer`, `safety-reviewer`, `privacy-security-reviewer` and
+    `test-auditor`. All four passed it.
+    `safety-reviewer`'s should-fix 1 found a gap in item 7:
+    - `Screen`, the component that draws the 112 bar on every screen (CALL-02,
+      approach 1), will live in `apps/mobile/src/shared/ui/`. Task 2 moves the
+      shared kit there from `features/grp/ui.tsx`, where `Screen` is today
+      (read in the worktree on 2026-10-22). The folder does not exist yet, as
+      `features/call/` does not.
+    - The folder had no code owner and no safety review. A later change to
+      `Screen`, or to the buttons or the palette beside it, could drop 112 from
+      every screen and be seen only by `a11y-i18n-reviewer`, which is advisory
+      (`ai-review.yml`: `blocking: false`, `applies: ui`).
+    - Adding the folder later would take another pull request merged by hand
+      (D-075), because the `safety` filter is in `ai-review.yml`.
+  - **Asked (the first answer):** whether `shared/ui/` should get the code
+    owner and the safety review too, in this same pull request, with Claude's
+    recommendation: yes, the whole folder. (The question's own wording is not
+    recorded here.)
+  - **The owner answered (the first answer):** "Ja, hele shared/ui/" (Yes, the
+    whole of `shared/ui/`), on 2026-10-22.
+  - **Decision (the first answer):** item 7 holds for a second folder.
+    - `/apps/mobile/src/shared/ui/` gets the code owner `@bvst @urso-agent`
+      (D-071) and joins the ai-review `safety` filter, in the same step-1 pull
+      request, in the same three places as `features/call/`:
+      `.github/CODEOWNERS`, `OWNER_APPROVAL_PATHS` in
+      `scripts/lib/merge-rules.mjs`, and the `safety` filter in
+      `.github/workflows/ai-review.yml`, with their gate tests.
+    - **Like `features/call/`,** it is no D-139 named exception (its `/apps/`
+      owner path is in the filter, as that test requires), no `SAFETY_PATHS`
+      entry and no mutation group. The app's mutation testing is set up in task
+      3 (D-081 item 13), and `shared/ui/` is for that task to consider with
+      `features/call/`.
+    - **Its gate tests are named CALL-02-AC10,** a new criterion in
+      `docs/specs/CALL-02.md`, as `features/call/`'s are named CALL-01-AC9.
+      CALL-02 is the story whose 112 bar the folder draws.
+  - **Claude's two choices (D-031), (a) and (b) under "Who decided":** `phone.ts`
+    checks for 110, 112 and 113 itself; a task-2 test requires every route under
+    `src/app/` to be drawn through `Screen`.
+  - **Consequences (the first answer):**
+    - **Every later change to the shared UI kit** (`Screen`, the buttons, the
+      palette) waits for the owner's approval (D-042) and brings
+      `safety-reviewer` by path, as `features/call/` does after step 1.
+    - **`features/grp/home-screen.tsx` and `features/grp/first-contact.ts` stay
+      unowned and out of the filter.** That is acceptable now because of choice
+      (a): the emergency rule is in `phone.ts`, which is owned, so a change to
+      `first-contact.ts`'s normalisation or to the home screen cannot by itself
+      send 110, 112 or 113 through `ACTION_CALL`. What it does not cover, stated
+      plainly:
+      - a change to either file that stored a wrong #1, showed the number
+        wrongly or dropped the call button from the home screen would not call
+        `safety-reviewer` by path. `privacy-security-reviewer` runs on every
+        pull request, and the CALL-01 and GRP-02 tests, once written, run in CI,
+        but neither is the safety review;
+      - that `phone.ts` is the only file that places a call is the design
+        (CALL-01, approach 1), and the spec, as read on 2026-10-22, names no
+        import rule or test that pins it;
+      - adding the two files is a new decision, for the owner; this one does
+        not.
+    - **The requirement report shows CALL-02 as 🟢 from step 1's merge,** as
+      CALL-01, because a gate test names it, before any 112 code exists. The
+      report's 🟢 still means only that a test names the requirement. Task 2's
+      own tests are what show that the folders hold code (the tracked-file pins
+      of CALL-01-AC9 and CALL-02-AC10).
+    - **Step 1's pull request grows:** its red tests (CALL-02-AC10) are written
+      first, then its green change. The hand merge (D-075) and the batching
+      with #95 are unchanged (items 7 and 9).
+  - **The second answer, the same day: `apps/mobile/e2e/` too.**
+    - **Why:** `planner` and `safety-reviewer` raised it. As the owner was
+      asked:
+      - `apps/mobile/e2e/` holds the Maestro flows that run the app on Android
+        in CI (L7, the `android-e2e` check). It holds three today,
+        `app-starts.yaml`, `first-admin-invites.yaml` and `wrong-code.yaml`, all
+        tracked by git. It has no code owner and is not in the `safety` filter
+        (no `apps/mobile/e2e` in `.github/CODEOWNERS`, `OWNER_APPROVAL_PATHS` or
+        `ai-review.yml`, read on this branch and on the side branch,
+        2026-10-22).
+      - They are the only end-to-end proof that 112 opens the dialer (CALL-02's
+        L7 row).
+      - They carry the rule that a test never taps call in the dialer
+        (SPIKE-01-AC10), so that no test can ever really call 112. On the
+        emulator the dialer places no call by itself and the emulator has no
+        network (CALL-02's spec), but the rule matters more once the flows run on
+        a real phone (L9).
+      - An unowned change could drop the 112 checks or break that rule, and
+        `safety-reviewer` would not be summoned by path. It would be seen only
+        by what `test-auditor`, which runs on every pull request, notices.
+    - **Asked (the second answer):** whether `apps/mobile/e2e/` should get the
+      code owner and the safety review too, in this same pull request, with
+      Claude's recommendation: yes. (The question's own wording is not recorded
+      here.)
+    - **The owner answered (the second answer):** "Ja, ta med e2e/" (Yes,
+      include `e2e/`), on 2026-10-22.
+    - **Decision (the second answer):** item 7 holds for a third folder.
+      - `/apps/mobile/e2e/` gets the code owner `@bvst @urso-agent` (D-071) and
+        joins the ai-review `safety` filter (`apps/mobile/e2e/**`), in the same
+        step-1 pull request, in the same three places as the other two, with
+        their gate tests.
+      - **Like the other two,** it is no D-139 named exception, no
+        `SAFETY_PATHS` entry and no mutation group.
+      - **Its gate tests are named CALL-02-AC11,** a new criterion in
+        `docs/specs/CALL-02.md`.
+      - **The folder exists today,** so step 1 pins its tracked files itself:
+        git tracks at least one `.yaml` file under it, and every file git tracks
+        there belongs to `@bvst @urso-agent` and is covered by the filter
+        (CALL-02-AC11). For `features/call/` and `shared/ui/` that pin waits for
+        task 2, which creates them.
+    - **Consequences (the second answer):**
+      - **Every later change to an L7 flow** waits for the owner's approval
+        (D-042) and brings `safety-reviewer` by path.
+      - **The extra cost is small:** task pull requests already need the owner
+        through D-139's paths (#96 did; task 2's does, above). A change to a flow
+        alone is what now waits.
+      - **Not read here:** the three existing flows against SPIKE-01-AC10's rule.
+        The owner's answer puts a code owner on the folder; it makes no claim
+        about what the flows hold today.
+      - **Step 1's pull request now covers three folders,** `features/call/`,
+        `shared/ui/` and `e2e/` (four after the third answer, below). Its red
+        tests for CALL-02-AC11 are written first, then its green change, as for
+        CALL-02-AC10. The hand merge (D-075) and the batching with #95 are
+        unchanged (items 7 and 9).
+  - **The third answer, the same day: `apps/mobile/src/app/` too.**
+    - **Why:** `safety-reviewer` raised it in its delta review of #100 (PASS on
+      `18007c2`). As the owner was asked:
+      - `apps/mobile/src/app/` holds Expo Router's routes: `_layout.tsx`, the
+        frame around every screen, and `index.tsx`. Git tracks both. The folder
+        has no code owner and is not in the `safety` filter (no
+        `apps/mobile/src/app` in `.github/CODEOWNERS`, `OWNER_APPROVAL_PATHS` or
+        `ai-review.yml`, read on the side branch's head `18007c2`, 2026-10-22).
+      - A change there could draw something over the 112 button (a modal, a
+        splash) or show an error screen without 112. Both files are `.tsx`, so
+        the only reviewer that would read them by path is the advisory
+        `a11y-i18n-reviewer` (`apps/mobile/src/**/*.tsx` in the `ui` filter).
+    - **Asked (the third answer):** whether `apps/mobile/src/app/` should get
+      the code owner and the safety review too, in step 1's pull request, with
+      Claude's recommendation: yes. The four choices under D-031 below were
+      offered in the same question. (The question's own wording is not recorded
+      here.)
+    - **The owner answered (the third answer):** "Ja, ta med src/app/" (Yes,
+      include `src/app/`), on 2026-10-22.
+    - **Decision:** item 7 holds for a fourth folder.
+      - `/apps/mobile/src/app/` gets the code owner `@bvst @urso-agent` (D-071)
+        and joins the ai-review `safety` filter (`apps/mobile/src/app/**`), in
+        step 1's pull request, #100, in the same three places as the other
+        three, with their gate tests.
+      - **Like the others,** it is no D-139 named exception, no `SAFETY_PATHS`
+        entry and no mutation group.
+      - **Its gate tests are named CALL-02-AC12,** a new criterion that
+        `planner` is writing into `docs/specs/CALL-02.md` (not there when this
+        was written).
+      - **The folder exists today,** so step 1 pins its tracked files itself, as
+        for `e2e/`.
+    - **Claude's four choices (D-031), (c) to (f) under "Who decided",** from
+      `safety-reviewer`'s delta should-fixes, which `planner` writes into the
+      specs:
+      - (c) `_layout.tsx` exports an `ErrorBoundary` drawn on `Screen`;
+      - (d) an ESLint rule keeps `Modal`, `SafeAreaView` and `ScrollView` inside
+        `shared/ui/`;
+      - (e) `phone.ts` removes only its own separators, sends to the dialer
+        anything that is not then digits with an optional leading `+`, and
+        builds the `tel:` URI from the cleaned string;
+      - (f) the emergency set is 112, 911, 110, 113, 000, 08, 118, 119 and 999,
+        and any of them followed by more digits goes to the dialer.
+    - **Consequences (the third answer):**
+      - **Every later change to a route** (`_layout.tsx`, `index.tsx` or a file
+        added under `src/app/`) waits for the owner's approval (D-042) and
+        brings `safety-reviewer` by path.
+      - **A cost, stated plainly:** Expo Router's routes are files, so a later
+        task's pull request that adds a route, as a new screen usually does (the
+        invite and members screens are drawn inside `index.tsx`, today), waits
+        for the owner and the safety review even if nothing else in it is
+        owner-gated. Task 2's pull request already needs the owner (D-139's
+        paths, above).
+      - **(f)'s cost, stated plainly:** a #1 whose number begins with one of the
+        nine, followed by more digits (any number that starts `08`, for
+        example), goes to the dialer, not to `ACTION_CALL`, so the walker taps
+        call there, as for 112. That is a second tap, not a failed call. The
+        owner was not asked about it separately.
+      - **(c) and (d) read as task 2's code, not step 1's:** step 1 changes only
+        the three lists and their gate tests. Where the specs place them is
+        `planner`'s, and was not read for this entry.
+      - **Step 1's pull request now covers four folders:** `features/call/`,
+        `shared/ui/`, `e2e/` and `src/app/`. It is open as #100, from the side
+        branch, without auto-merge, for the owner's hand merge (D-075). Its red
+        tests for CALL-02-AC12 are written first, then its green change, as for
+        the others. The batching with #95 is unchanged (items 7 and 9).
+
+- **Amended 2026-10-23, with a fourth owner answer, asked in session with
+  Claude's recommendation and given on 2026-10-22: the 112 button's
+  screen-reader texts spell the number digit by digit.** It changes none of the
+  nine items above. It changes the strings of CALL-02-AC6:
+  - **Why:** `a11y-i18n-reviewer` flagged, in its review of task 2 at `cff3021`
+    (PASS, advisory under D-043, with should-fix items), that a screen reader
+    likely reads the 112 button's label, "Ring 112, nødnummeret", as "ring
+    hundre og tolv", where Norwegians say "én én to".
+    - The reviewer reasoned this. Its own note says it ran no TalkBack and no
+      Norwegian text-to-speech voice
+      (`.claude/agent-memory/a11y-i18n-reviewer/project_task2_home_screen.md`,
+      read 2026-10-23).
+    - CALL-02-AC6 asserts the label in full, in a test in an owned folder, and
+      the button is the 112 button. So Claude asked, not decided.
+  - **Asked:** whether the screen-reader text should be "Ring 1 1 2,
+    nødnummeret", read digit by digit, with the visible text staying "112",
+    with Claude's recommendation: yes. It was not tested with TalkBack on a
+    real phone when it was asked. (The question's own wording is not recorded
+    here.)
+  - **The owner answered:** "Ja, «Ring 1 1 2»" (Yes, "Ring 1 1 2"), the
+    recommendation, on 2026-10-22.
+  - **Decision:**
+    - CALL-02-AC6's label is "Ring 1 1 2, nødnummeret".
+    - Its hint is spelled the same way: "Åpner telefonappen med 1 1 2. Trykk
+      ring der."
+    - The English is "Call 1 1 2, the emergency number" for the label and
+      "Opens your phone app with 1 1 2. Tap call there." for the hint.
+    - The visible text stays "112".
+    - **Claude's choice (D-031), (g) under "Who decided":** the hint and the
+      English follow the label's spelling, as #1's number is already spelled
+      for a screen reader (GRP-02-AC10).
+  - **Consequences:**
+    - **Existing assertions change by design (RG-03).** Four test files hold
+      the old label (`shared/ui/screen.test.tsx`, `features/call/call.test.tsx`,
+      `features/call/emergency.test.tsx` and `features/grp/home.test.tsx`, found
+      by `grep` on 2026-10-23), and `emergency.test.tsx` asserts the label and
+      the hint in full in both languages (CALL-02-AC6). Only `test-author`
+      changes them, with a written reason; `nb.json` and `en.json` follow. The
+      specs list the criteria (`planner` is writing them; not read for this
+      entry).
+    - **The English hint keeps "your".** `en.json` and `emergency.test.tsx`
+      read "Opens your phone app with 112. Tap call there." (read
+      2026-10-23). Only the digits change; an earlier draft of this entry said
+      "the phone app", which was a slip in the coordinating session's brief.
+    - **No L7 flow changes for the label.** `grep` finds neither the label nor
+      "Ring 112" under `apps/mobile/e2e/` or `scripts/` (2026-10-23), and the
+      visible text, "112", stays.
+  - **Not verified:**
+    - How TalkBack actually reads either form, "Ring 112" or "Ring 1 1 2".
+      Only a real phone (L9) shows it.
+    - **Not part of the question:** "Telefonen kunne ikke åpne 112. Ring 112
+      selv." (`call.emergency.failed`) is also read aloud. Its visible text is
+      unchanged. Following this answer, Claude gave it a spelled screen-reader
+      label under D-031, `call.emergency.failedLabel`: "Telefonen kunne ikke
+      åpne 1 1 2. Ring 1 1 2 selv." (CALL-02-AC5).
+
+## D-142 — M2 closes on window B of REL-10-AC19, with BUG-63 open; D-128's "never escalates" is corrected
+- **Date:** 2026-10-23 · **Status:** Accepted (owner, 2026-10-22, asked "Skal M2
+  lukkes når vindu B er ferdig i dag kl. 14:23, selv om årsaken til utfallet
+  21. okt. (BUG-63) ikke er funnet?", "should M2 close when window B ends
+  today at 14:23, though the cause of the outage on 21 Oct (BUG-63) has not
+  been found?": "Lukk på vindu B", "close on window B", Claude's
+  recommendation; and 2026-10-23: "Sjekk at: det aldri går mer enn 35
+  minutter mellom to vellykkede kjøringer; hver kjøring er ON_TIME. Hvis begge
+  stemmer: registrer at M2 er lukket på vindu B som D-142", "check that there
+  are never more than 35 minutes between two successful runs, and that every
+  run is ON_TIME; if both hold, record M2 as closed on window B as D-142").
+  Item 3 corrects a fact in a delegated decision and is Claude's (D-031) ·
+  **Section:** 10 (M2); D-083, D-088, D-090, D-115, D-127, D-128, D-140
+- **Context:**
+  - **M2's exit** (D-090): L6 green, mutation ≥ 80 %, and the staging canary on
+    time for 24 hours. D-127's first answer says what the last one proves: the
+    alert reaches the push port on time, by the database's clock. It does not
+    prove that a phone is alerted, because staging has no push or SMS provider
+    until M3.
+  - **REL-10-AC19 is that reading** (A-35). Over 24 consecutive hours the
+    `staging-canary` check shows no failure signal and no down event, and at
+    least one success in every 35 minutes; Clever Cloud's log holds one
+    `canary_run` line per run, each `ON_TIME`, with its `alertMs`; and the
+    owner reports the window, the counts and the largest `alertMs`.
+  - **All nine tasks are done** (D-090, D-115). REL-10, the last, merged in #77
+    (`b6c6074`, 2026-10-10), and the canary has run since A-35's apply at
+    06:36:55 UTC on 2026-10-20.
+  - **Window A was not counted.** The owner reported Healthchecks.io's half OK
+    on 2026-10-21. The Clever Cloud lines the owner sent for it begin at 12:35
+    UTC on 2026-10-20, six hours after the apply: 73 lines, to 06:35 UTC on
+    2026-10-21, all `ON_TIME`, the largest `alertMs` 310 030 ms. The
+    coordinating session's word is that the outage of 2026-10-21, next, broke
+    it.
+  - **BUG-63, the outage.** On 2026-10-21, between 11:50 and 12:20 UTC,
+    staging's public API gave the canary no HTTP answer three times. "I'm home"
+    failed fast twice (`HOME_FAILED`, lines at 11:50:02 and 12:20:04) and one
+    start timed out after 10 s (`START_FAILED`, 12:00:10); `status` and `code`
+    are null on all three. The worker and the database were fine, and nothing
+    restarted. The owner did nothing against staging: their last action was at
+    07:51 UTC. `staging-canary` went from up to down at 11:50. Escalation SMS
+    `74c29daf` and `ce489c45` were written, and `sms_unsent` was reported from
+    11:54 to 12:15 and again at 12:24. **The cause is unknown:** the API writes
+    no per-request log (`log.ts` has no event for one, and `api.ts` and
+    `http.ts` write none; read in this checkout on 2026-10-23).
+  - **Window B** runs from 12:22:54 UTC on 2026-10-21 to 12:22:54 UTC on
+    2026-10-22. (That start is the coordinating session's; what happened at
+    12:22:54 is not in this record.)
+    - **Clever Cloud, the owner's `canary_run` lines.** 96, from 12:35:16 UTC on
+      2026-10-21 to 12:20:16 UTC on 2026-10-22, which is 24 × 4. All 96 are
+      `ON_TIME`, with `status` and `code` null. The largest gap is 15.04
+      minutes with the window's two edges counted (AC19 allows 35), and 14.87
+      to 15.04 between runs. The largest `alertMs` is 310 041 ms, at 09:35:20
+      UTC on 2026-10-22, inside D-128's expected 300 to 320 s against the 360 s
+      deadline; the smallest is 302 016 ms. The run before the window, at
+      12:20:04 UTC on 2026-10-21, was BUG-63's `HOME_FAILED`.
+    - **Healthchecks.io `staging-canary`.** Pings #186 to #219, every one OK,
+      from 07:35 to 15:50 Norwegian time on 2026-10-22 (05:35 to 13:50 UTC).
+      #186 to #213, 28 pings from 05:35 to 12:20 UTC, are inside the window.
+      The owner can no longer see back past 07:35, so the check's log for the
+      other 68 runs (12:35 UTC on 2026-10-21 to 05:20 UTC on 2026-10-22) was
+      not seen by anyone. A run that is `ON_TIME` reports a success ping
+      (D-128), so the lines imply those pings; the pings were not seen. The
+      owner's "24-hour window OK" of 2026-10-21 is about window A.
+    - **#99 merged inside the window,** at 10:20:14 UTC on 2026-10-22 as
+      `3d2255c`, and its deploy cost no run: the lines at 10:20:12 and 10:35:12
+      UTC are both present and `ON_TIME`. Healthchecks.io's source address
+      changed between 10:20 and 10:35 UTC, which is consistent with the worker
+      restarting on the new deploy. On `3d2255c`, `ci` (run 39762336456) and
+      `deploy-staging` (run 39762336560) both succeeded.
+    - **One report that is not a canary line:** `sms_unsent` at 12:24 UTC on
+      2026-10-21, about a minute after the window began. AC19 reads the
+      canary's check and its `canary_run` lines, not the SMS check.
+  - **Observed, and by whom.** The Clever Cloud lines are the owner's, sent in
+    two parts: 68 lines on 2026-10-22 and 28 on 2026-10-23. The coordinating
+    session counted them with a script, and they were counted again from the
+    same pasted lines for this record, with the same results. The Healthchecks.io
+    pings and the change of source address are the owner's view of
+    Healthchecks.io, as the coordinating session reported it; a session cannot
+    reach Healthchecks.io or Clever Cloud's log.
+- **Decision:**
+  1. **M2 is closed,** on window B, as the owner chose. Clever Cloud's half of
+     AC19 is met in full: 96 of 96 lines `ON_TIME`, the largest gap 15.04
+     minutes, the largest `alertMs` 310 041 ms. Healthchecks.io's half was seen
+     for the last 28 of the window's 96 runs, all OK, and not for the first 68
+     (above). M2's exit therefore means what D-127 set: the alert reaches the
+     push port on time. L6 and the mutation threshold are met task by task, as
+     each task's row in `docs/progress.md` records; on `main` at `50214c0`
+     (`ci` run 39815194815, read through GitHub's API on 2026-10-23) `system`
+     and `mutation` succeeded and `mutation-group` was skipped, because that
+     merge changed no safety path.
+  2. **BUG-63 stays open, and does not keep M2 open.** D-127's second answer
+     stops the line only for `NOT_OPENED` and `NOT_HANDED_OVER`; any other
+     failing run pages and gets a BUG, and BUG-63 is that BUG. Claude proposes
+     one log line per API request: the route (its pattern, not the path), the
+     status and the duration in milliseconds, and nothing else, so no location,
+     number, identifier, query, header or body (PRIV-07). It adds a closed event
+     to `apps/server/src/log.ts`, which needs the owner (D-102), so it is the
+     owner's question and nothing is started.
+  3. **D-128 is corrected.** Its sentence that the canary "never escalates and
+     never pages the SMS check" is true only while "I'm home" is answered. When
+     it fails, the canary does escalate and does page the SMS check, as BUG-63
+     showed. D-128 carries a note pointing here; its text stays as written
+     (the working agreement). REL-10-AC7's title and `canary.system.test.ts`'s
+     describe say the same, under "the loops healthy"; the title overstates.
+  4. **`push_failed` lines on staging are by design.** A stand-down to someone
+     who cannot be reached is retried every 60 s, one `push_failed` line each,
+     one message at a time, until the next alert withdraws it (LOST-03's spec;
+     REL-10's spec, item 14). Push is not configured on staging, so every
+     message there is `NOT_CONFIGURED`. It is neither a fault nor part of
+     BUG-63; M3's push task and its give-up rule change it.
+- **Not seen, and not known:**
+  - Healthchecks.io's log for 12:35 UTC on 2026-10-21 to 05:20 UTC on
+    2026-10-22. The owner knew: the message of 2026-10-23 that set the two
+    checks above, both on the Clever Cloud lines, also said "Jeg kan ikke se
+    lenger tilbake enn 07:35 i Healthchecks nå", "I can't see further back
+    than 07:35 in Healthchecks now".
+  - The cause of BUG-63. Clever Cloud's metrics and platform events for the API
+    app on 2026-10-21, 11:40 to 12:25 UTC, were not read (a session cannot
+    reach them).
+  - That `staging-sms` showed down in Healthchecks.io. The `sms_unsent` line is
+    written in the same check that reports `failing` (`sms-check.ts`), so the
+    check reported failing; the page itself was not seen.
+- **What stays open** (none of it blocks M3):
+  - BUG-63's cause, and the owner's answer on the request log.
+  - Left for later by D-128, each named in REL-10's spec: M3's push task
+    ("answered" becomes "accepted"), M3's login task, M4's retention of canary
+    rows, M5's production canary and M6's reliability measurements.
+  - The queued bugs on M2's table in `docs/progress.md`.
+- **Consequences:**
+  - The roadmap's M2 row is marked closed (D-142); `docs/progress.md` and
+    `docs/plan/README.md` follow; A-35 is done.
+  - The next milestone is M3, under way since 2026-10-20 (D-134).
+  - Amends D-128 by a note and adds one dated sentence to D-140; supersedes
+    nothing.

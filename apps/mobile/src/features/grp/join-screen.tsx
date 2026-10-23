@@ -18,8 +18,8 @@ import { MAX_DISPLAY_NAME_LENGTH, isUsableDisplayName } from '@trygghverdag/cont
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { Body, Button, Heading, Message, TextField, Waiting } from '../../shared/ui';
 import { useGroupSession, type JoinBody } from './session';
-import { Body, Button, Heading, Message, Screen, TextField, Waiting } from './ui';
 
 /** The longest code a person may type, separators included. */
 const CODE_MAX_LENGTH = 64;
@@ -67,7 +67,7 @@ export function JoinScreen({ signedOut }: { signedOut: boolean }) {
   const ready = !busy && code.trim() !== '' && name.trim() !== '';
 
   return (
-    <Screen>
+    <>
       <Heading>{t('grp.join.title')}</Heading>
       <Body>{t('grp.join.intro')}</Body>
       {signedOut ? <Message>{t('grp.join.signedOut')}</Message> : null}
@@ -99,6 +99,6 @@ export function JoinScreen({ signedOut }: { signedOut: boolean }) {
           quiet
         />
       ) : null}
-    </Screen>
+    </>
   );
 }

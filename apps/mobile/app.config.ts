@@ -29,8 +29,16 @@ const config: ExpoConfig = {
   slug: 'trygghverdag',
   version: '0.0.0',
   orientation: 'portrait',
+  // Always dark (CALL-02, approach 5; Q5, D-141): one palette, whatever the
+  // phone's own setting, so the system's own pieces are drawn dark too.
+  userInterfaceStyle: 'dark',
   android: {
     package: APPLICATION_ID,
+    // The call button calls #1 on the tap (CALL-01, reading 1; SPIKE-01, S6),
+    // which needs CALL_PHONE. It is asked for once, when the first #1 is saved
+    // (CALL-01, approach 3), and the app places a call only from that button,
+    // through features/call/phone.ts. Without it the button opens the dialer.
+    permissions: ['android.permission.CALL_PHONE'],
     // Auto Backup would copy what the app stores, such as a session token or a
     // journey, to Google Drive, outside the providers chosen for the EEA, and a
     // restore would move a login bound to one phone onto another (D-081).

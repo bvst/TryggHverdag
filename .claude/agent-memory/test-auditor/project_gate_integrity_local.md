@@ -95,3 +95,5 @@ true. First audit with a PR: `gh api .../commits/<sha>/check-runs` and `.../chec
 2026-10-22 cloud (CALL-01 step 1 at cb9fbd3): brief forbade NODE_USE_ENV_PROXY, so gate:integrity 3 of 5; gh api: 13 contexts incl. mutation/traceability, code-owner true. No open PR, check-runs total_count 0.
 - 2026-10-22 cloud (CALL-02 delta at 18007c2): no NODE_USE_ENV_PROXY so 3 of 5; gh api 13 contexts, code-owner true. PR #100 open: 18 check runs, mutation/traceability/unit/gate-integrity success; three ai-reviews red on workflow validation (branch edits ai-review.yml).
 - 2026-10-22 cloud (CALL-02-AC12 delta at 4581520): no NODE_USE_ENV_PROXY so 3 of 5; gh api same 13 contexts, code-owner true. PR #100: 18 check runs, mutation/traceability/unit/gate-integrity success.
+- 2026-10-23 cloud (task 2 loop 1 at c827f21): no NODE_USE_ENV_PROXY so 3 of 5; gh api 13 contexts incl. mutation/traceability, code-owner true, bypass [] never. No open PR, check-runs total_count 0.
+- 2026-10-23 cloud (task 2 loop 2 at 9c7c498/91d0bce): NODE_USE_ENV_PROXY=1 gate:integrity 5 of 5, 13 required incl. mutation/traceability. No PR, check-runs total_count 0 on both.

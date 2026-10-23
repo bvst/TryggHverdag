@@ -33,8 +33,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { Button, Heading, Message, Waiting, palette } from '../../shared/ui';
 import { useGroupSession } from './session';
-import { Button, Heading, Message, Screen, Waiting } from './ui';
 
 /** The refusal that means the member is gone already: a removal done (F2). */
 const GONE_ALREADY: keyof typeof removeMemberErrors = 'MEMBER_NOT_FOUND';
@@ -99,7 +99,7 @@ export function MembersScreen({ onBack }: { onBack: () => void }) {
   }
 
   return (
-    <Screen>
+    <>
       <Heading>{t('grp.members.title')}</Heading>
       {loading ? <Waiting label={t('grp.waiting')} /> : null}
       {outcome?.kind === 'removed' ? (
@@ -152,7 +152,7 @@ export function MembersScreen({ onBack }: { onBack: () => void }) {
         </>
       ) : null}
       <Button label={t('grp.member.back')} onPress={onBack} quiet />
-    </Screen>
+    </>
   );
 }
 
@@ -164,9 +164,11 @@ const styles = StyleSheet.create({
   name: {
     fontSize: 20,
     fontWeight: '600',
+    color: palette.text,
   },
   role: {
     fontSize: 16,
+    color: palette.text,
   },
   confirm: {
     gap: 12,
