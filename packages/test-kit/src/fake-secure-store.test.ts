@@ -214,6 +214,85 @@ describe('fakeSecureStore', () => {
     expect(await store.module.getItemAsync('a')).toBe('later');
   });
 
+  // test-auditor's audit of review loop 2 (GRP-02-AC6): the app's tests see
+  // the app while #1's delete at a start with no credential has not settled.
+  // A hold that settled early, removed the item before the release, held the
+  // reads and writes too, or kept holding after it was released would show
+  // the app a state it was not in.
+  test('held deletes settle only when released: the item is kept and the delete unrecorded until then, each is carried out at the release in the order asked, and deletes after it settle at once', async () => {
+    const journal: string[] = [];
+    const store = fakeSecureStore({ journal });
+    store.items.set('a', 'one');
+    store.items.set('b', 'two');
+    store.items.set('c', 'three');
+    const hold = store.holdDeletes();
+    const settledDeletes: string[] = [];
+
+    void store.module.deleteItemAsync('a').then(() => settledDeletes.push('a'));
+    void store.module.deleteItemAsync('b').then(() => settledDeletes.push('b'));
+    await settled();
+
+    expect({
+      settledDeletes,
+      waiting: hold.waiting(),
+      kept: [...store.items.keys()],
+      deletes: store.calls().filter(({ op }) => op === 'delete'),
+      journal,
+    }).toEqual({ settledDeletes: [], waiting: 2, kept: ['a', 'b', 'c'], deletes: [], journal: [] });
+    hold.release();
+    await settled();
+
+    expect({
+      settledDeletes,
+      waiting: hold.waiting(),
+      kept: [...store.items.keys()],
+      journal,
+    }).toEqual({
+      settledDeletes: ['a', 'b'],
+      waiting: 0,
+      kept: ['c'],
+      journal: ['secure-store delete a', 'secure-store delete b'],
+    });
+    await expect(store.module.deleteItemAsync('c')).resolves.toBeUndefined();
+    expect(store.items.size).toBe(0);
+  });
+
+  test('while deletes are held, reads and writes settle at once, and a delete of a key the store refuses is refused at once', async () => {
+    const store = fakeSecureStore();
+    const hold = store.holdDeletes();
+
+    await expect(store.module.setItemAsync('a', 'one')).resolves.toBeUndefined();
+    await expect(store.module.getItemAsync('a')).resolves.toBe('one');
+    await expect(store.module.deleteItemAsync('bad key')).rejects.toThrow(INVALID_KEY);
+    expect(hold.waiting()).toBe(0);
+  });
+
+  test('a held delete rejects at the release when a refusal is set for it then, and the item is kept', async () => {
+    const store = fakeSecureStore();
+    store.items.set('kept', 'value');
+    const hold = store.holdDeletes();
+    const error = new Error('synthetic: the Keystore refused');
+
+    const held = store.module.deleteItemAsync('kept');
+    store.refuse('delete', 'kept', error);
+    hold.release();
+
+    await expect(held).rejects.toBe(error);
+    expect(store.items.get('kept')).toBe('value');
+    expect(store.callsFor('delete', 'kept').map(({ refused }) => refused)).toEqual([true]);
+  });
+
+  test('reset forgets a delete hold: a delete after it settles at once', async () => {
+    const store = fakeSecureStore();
+    store.holdDeletes();
+
+    store.reset();
+    store.items.set('a', 'one');
+
+    await expect(store.module.deleteItemAsync('a')).resolves.toBeUndefined();
+    expect(store.items.has('a')).toBe(false);
+  });
+
   test('with a journal, writes each call into it, refused ones marked', async () => {
     const journal: string[] = [];
     const store = fakeSecureStore({ journal });

@@ -1338,6 +1338,54 @@ describe('GRP-02-AC6: #1 stays on the phone', () => {
     expect(mockStore.items.has(key)).toBe(false);
   });
 
+  // test-auditor's audit of review loop 2: the tests above see the join
+  // screen only after the fake store has settled #1's delete, so a start that
+  // shows the join screen while the delete still runs, or before it is even
+  // asked, passed them. This one holds the delete: until it settles, the app
+  // stays in its brief start (CALL-02, approach 2: the waiting indicator, on
+  // `Screen`, with the 112 button; CALL-02-AC1), and the join screen does not
+  // show.
+  test('GRP-02-AC6: with no credential stored and #1 kept, while the store holds #1’s delete at start, the join screen does not show, only the brief start with its waiting indicator and the 112 button; once the delete settles, the join screen shows and #1’s key is gone', async () => {
+    await phoneHolding({ credential: false, firstContact: FIRST });
+    const key = await firstContactKey();
+    const hold = mockStore.holdDeletes();
+
+    const screen = await launch();
+    // Not vacuous: the start read no credential and asked for #1's delete,
+    // which waits on the hold.
+    await app().testing.waitFor(() => {
+      expect(hold.waiting()).toBe(1);
+    });
+    await settle();
+
+    expect(hold.waiting()).toBe(1);
+    expect(mockStore.items.get(key)).toBe(JSON.stringify(FIRST));
+    expect(screen.queryByText(NB.joinTitle)).toBeNull();
+    expect(screen.queryByLabelText(exactly(NB.joinCode))).toBeNull();
+    expect(screen.queryByRole('button', { name: exactly(NB.joinSubmit) })).toBeNull();
+    expect(
+      hostNodes(screen).filter(
+        (node) => labelOf(node) === NB.emergencyLabel && roleOf(node) === 'button',
+      ),
+    ).toHaveLength(1);
+    expect(
+      hostNodes(screen).filter(
+        (node) =>
+          node.type === 'ActivityIndicator' || node.props['accessibilityRole'] === 'progressbar',
+      ).length,
+    ).toBeGreaterThan(0);
+
+    await app().testing.act(async () => {
+      hold.release();
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText(NB.joinTitle)).toBeTruthy();
+    expect(mockStore.items.has(key)).toBe(false);
+    expect(mockStore.callsFor('delete', key).map(({ refused }) => refused)).toEqual([false]);
+    expect(api.to(JOIN)).toEqual([]);
+  });
+
   test('GRP-02-AC6: when the credential read itself rejects at start, #1’s delete is not called: #1 is kept, and the home screen shows it (approach 4: a start whose read failed is not a start with no credential)', async () => {
     await phoneHolding({ firstContact: FIRST });
     const key = await firstContactKey();

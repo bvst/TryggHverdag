@@ -17,7 +17,13 @@
  *     the very value, as GRP-02-AC9's failure paths need); a refused write
  *     keeps nothing and a refused delete keeps the item, as the Keystore does;
  *   - to hold every read until released, for the app's brief start while
- *     storage is read (CALL-02-AC1).
+ *     storage is read (CALL-02-AC1);
+ *   - to hold every async delete until released, so a test can see the app
+ *     while a delete it asked for has not settled: #1's delete at a start
+ *     with no credential, before the join screen shows (GRP-02-AC6, test-
+ *     auditor's audit of review loop 2). As a held read, a held delete is
+ *     carried out, recorded and journalled at the release, under what is
+ *     kept and refused then; the hold counts the deletes waiting on it.
  * With a `journal`, it writes `secure-store <op> <key>` into it as each call
  * is made, so a test can order its calls against the phone fake's.
  *
@@ -27,7 +33,7 @@
  * read, write and delete, and a value that is not a string, in every write.
  * As the store does (its `ensureValidKey` and `isValidValue`, read in the
  * installed 57.0.4), with its own messages, before anything else: before a
- * refusal a test set, and before a held read waits. The async functions
+ * refusal a test set, and before a held read or delete waits. The async functions
  * reject, the sync ones throw; the call is recorded, as refused, and nothing
  * is kept or removed.
  *
@@ -67,6 +73,14 @@ export interface FakeSecureStoreModule {
   readonly WHEN_UNLOCKED_THIS_DEVICE_ONLY: number;
 }
 
+/** A hold on `deleteItemAsync`: every delete asked while it holds settles when it is released. */
+export interface DeleteHold {
+  /** Carries out every held delete, in the order asked, under what is kept and refused now. */
+  readonly release: () => void;
+  /** How many deletes are waiting on it. */
+  readonly waiting: () => number;
+}
+
 export interface FakeSecureStore {
   /** What `jest.mock` hands the app in the module's place. The same object for the fake's life. */
   readonly module: FakeSecureStoreModule;
@@ -82,7 +96,9 @@ export interface FakeSecureStore {
   readonly allowAll: () => void;
   /** Holds every read from now until the returned function is called. */
   readonly holdReads: () => () => void;
-  /** Forgets everything: items, calls, refusals and holds. */
+  /** Holds every async delete from now until the hold is released. */
+  readonly holdDeletes: () => DeleteHold;
+  /** Forgets everything: items, calls, refusals and holds (of reads and of deletes). */
   readonly reset: () => void;
 }
 
@@ -111,6 +127,7 @@ export function fakeSecureStore({ journal }: { journal?: string[] } = {}): FakeS
   let calls: SecureStoreCall[] = [];
   let refusals = new Map<string, Error>();
   let heldReads: (() => void)[] | null = null;
+  let heldDeletes: (() => void)[] | null = null;
 
   const refusalOf = (op: SecureStoreOp, key: string): Error | undefined =>
     refusals.get(`${op} ${key}`) ?? refusals.get(`${op} ${EVERY_KEY}`);
@@ -183,10 +200,22 @@ export function fakeSecureStore({ journal }: { journal?: string[] } = {}): FakeS
         settle(() => {
           write(key, value, options);
         }),
-      deleteItemAsync: (key, options) =>
-        settle(() => {
-          remove(key, options);
-        }),
+      deleteItemAsync: (key, options) => {
+        // The store checks the key before anything waits.
+        if (heldDeletes === null || invalid('delete', key, null) !== undefined) {
+          return settle(() => {
+            remove(key, options);
+          });
+        }
+        const waiting = heldDeletes;
+        return new Promise<void>((resolve, reject) => {
+          waiting.push(() => {
+            settle(() => {
+              remove(key, options);
+            }).then(resolve, reject);
+          });
+        });
+      },
       getItem: (key, options) => read(key, options),
       setItem: (key, value, options) => {
         write(key, value, options);
@@ -224,11 +253,27 @@ export function fakeSecureStore({ journal }: { journal?: string[] } = {}): FakeS
         }
       };
     },
+    holdDeletes: () => {
+      const waiting: (() => void)[] = [];
+      heldDeletes = waiting;
+      return {
+        release: () => {
+          if (heldDeletes === waiting) {
+            heldDeletes = null;
+          }
+          for (const go of waiting.splice(0)) {
+            go();
+          }
+        },
+        waiting: () => waiting.length,
+      };
+    },
     reset: () => {
       items.clear();
       calls = [];
       refusals = new Map();
       heldReads = null;
+      heldDeletes = null;
     },
   };
 }

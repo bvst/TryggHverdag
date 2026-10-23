@@ -28,30 +28,33 @@
 // an object literal) is refused too, saying so, rather than passed unread.
 //
 // The files read: every JavaScript and TypeScript file under apps/mobile but
-// what a build or an install writes (node_modules, coverage, android, ios,
-// .expo, dist, build), so a helper module that mocks is read as a test is.
+// what a build or an install writes, so a helper module that mocks is read as
+// a test is. What an install writes, node_modules, is left out at any depth,
+// as jest leaves it out (its testPathIgnorePatterns, ["/node_modules/"], is
+// the only folder it ignores). What a build or a test run writes, coverage,
+// android, ios, .expo, dist and build, is left out only at the app's top
+// level, where those tools write it: jest ignores none of those names, so a
+// folder so named under src is the app's own, and its tests run (test-
+// auditor's audit of review loop 2: a virtual mock of expo-crypto in
+// src/shared/build/probe.test.tsx passed this guard, and jest ran it).
 //
 // A tooling test: it proves no tracked requirement, so it is exempt from the
 // `<ID>-ACn` naming rule (.claude/rules/tests.md).
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import ts from 'typescript';
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test } from 'vitest';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
 const APP = path.join(ROOT, 'apps', 'mobile');
 
-/** Folders a build, an install or a test run writes: never the app's own files. */
-const NOT_SOURCE = new Set([
-  'node_modules',
-  'coverage',
-  'android',
-  'ios',
-  '.expo',
-  'dist',
-  'build',
-]);
+/** What an install writes: never the app's own files, at any depth, as jest's testPathIgnorePatterns says. */
+const INSTALLED = 'node_modules';
+
+/** Folders a build or a test run writes at the app's top level: never the app's own files there, and only there. */
+const NOT_SOURCE = new Set(['coverage', 'android', 'ios', '.expo', 'dist', 'build']);
 
 /** The extensions jest-expo reads as code. */
 const CODE = /\.(?:[cm]?[jt]sx?)$/;
@@ -59,12 +62,16 @@ const CODE = /\.(?:[cm]?[jt]sx?)$/;
 /** The jest functions that register a mock, and take the options as their third argument. */
 const MOCKING = new Set(['mock', 'doMock', 'unstable_mockModule']);
 
-/** Every code file under `dir`, but what a build or an install writes. */
-function codeFiles(dir) {
+/**
+ * Every code file under `dir`, the app's folder, but what an install writes,
+ * at any depth, and what a build or a test run writes, at `dir`'s top level.
+ */
+export function codeFiles(dir, top = dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      return NOT_SOURCE.has(entry.name) ? [] : codeFiles(full);
+      const skipped = entry.name === INSTALLED || (dir === top && NOT_SOURCE.has(entry.name));
+      return skipped ? [] : codeFiles(full, top);
     }
     return entry.isFile() && CODE.test(entry.name) ? [full] : [];
   });
@@ -277,6 +284,82 @@ describe('jest virtual mocks: the reader', () => {
       expect({ name, installed: installedFrom(PROBE, name) }).toEqual({ name, installed: true });
     }
     expect(installedFrom(PROBE, 'trygghverdag-no-such-package-probe')).toBe(false);
+  });
+});
+
+/** The text of the file test-auditor planted (its audit of review loop 2). */
+const PLANTED = "jest.mock('expo-crypto', () => ({ randomUUID: () => 'x' }), { virtual: true });\n";
+
+const made = [];
+
+/** Writes `files`, by path, into a fresh folder that stands for apps/mobile; its path. */
+function tempApp(files) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'jest-virtual-mocks-'));
+  made.push(dir);
+  for (const [file, text] of Object.entries(files)) {
+    mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    writeFileSync(path.join(dir, file), text);
+  }
+  return dir;
+}
+
+/** `file`, under `dir`, as a path relative to it with forward slashes. */
+const relative = (dir, file) => path.relative(dir, file).split(path.sep).join('/');
+
+describe('jest virtual mocks: the walk', () => {
+  afterEach(() => {
+    for (const dir of made.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // test-auditor's audit of review loop 2: jest runs a test under
+  // src/**/build/ (its testPathIgnorePatterns is ["/node_modules/"] alone),
+  // so the walk reads it. A walk that skipped a build output's name at any
+  // depth let a virtual mock of an installed package through.
+  test('reads a code file in a folder under src named as a build output (build, dist, coverage, android, ios, .expo), and skips those names at the app’s top level only; node_modules is skipped at any depth', () => {
+    const names = [...NOT_SOURCE];
+    const dir = tempApp(
+      Object.fromEntries(
+        [
+          'src/app.test.tsx',
+          ...names.map((name) => `src/shared/${name}/probe.test.tsx`),
+          ...names.map((name) => `src/${name}/probe.ts`),
+          ...names.map((name) => `${name}/probe.test.tsx`),
+          'node_modules/some-package/index.js',
+          'src/node_modules/some-package/index.js',
+          'src/shared/build/node_modules/some-package/index.test.js',
+        ].map((file) => [file, PLANTED]),
+      ),
+    );
+
+    // Not vacuous: the names are the walk's own set, build among them, so
+    // each name it leaves out at the top is also made, and read, under src.
+    expect(names.length).toBeGreaterThan(0);
+    expect(names).toContain('build');
+    expect(
+      codeFiles(dir)
+        .map((file) => relative(dir, file))
+        .sort(),
+    ).toEqual(
+      [
+        'src/app.test.tsx',
+        ...names.map((name) => `src/shared/${name}/probe.test.tsx`),
+        ...names.map((name) => `src/${name}/probe.ts`),
+      ].sort(),
+    );
+  });
+
+  test('the file test-auditor planted, src/shared/build/probe.test.tsx with a virtual mock of expo-crypto, is walked and refused, read as the app’s file', () => {
+    const dir = tempApp({ 'src/shared/build/probe.test.tsx': PLANTED });
+
+    const refused = codeFiles(dir).flatMap((file) =>
+      refusedIn(path.join(APP, path.relative(dir, file)), readFileSync(file, 'utf8')),
+    );
+
+    expect(refused).toEqual([
+      `${path.join('apps', 'mobile', 'src', 'shared', 'build', 'probe.test.tsx')}:1 jest.mock('expo-crypto', …, { virtual: true }): 'expo-crypto' is installed; mock it without virtual`,
+    ]);
   });
 });
 
