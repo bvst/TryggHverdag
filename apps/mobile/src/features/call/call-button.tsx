@@ -4,14 +4,14 @@
  * is easy to hit one-handed with gloves.
  *
  * With #1 it reads "Ring {name}", and a screen reader hears "Ring {name}" and
- * the hint "Ringer" with the number digit by digit (CALL-01-AC8); while
- * Android's call permission is not held, the tap places no call, so the hint
- * says instead that the button opens the phone app, where the walker taps
- * call (CALL-01-AC4). One tap
- * calls #1 through the phone module (phone.ts): at once with Android's call
- * permission, through the dialer without it, and the dialer always for an
- * emergency number (CALL-01-AC2, AC4). It asks nothing of the server, and
- * reads nothing of a journey (CALL-01-AC6).
+ * the hint "Ringer" with the number digit by digit (CALL-01-AC8). That hint
+ * holds only while Android's call permission reads granted: not held, not yet
+ * read, or no read answered, the tap may place no call, so the hint says
+ * instead that the button opens the phone app, where the walker taps call
+ * (CALL-01-AC4). One tap calls #1 through the phone module (phone.ts): at
+ * once with Android's call permission, through the dialer without it, and the
+ * dialer always for an emergency number (CALL-01-AC2, AC4). It asks nothing
+ * of the server, and reads nothing of a journey (CALL-01-AC6).
  *
  * One call at a time: a tap while a call is being started starts no second
  * one. "Being started" ends when the phone module settles, or when the app
@@ -162,9 +162,9 @@ function CallingButton({
       <LargeButton
         label={t('call.button.call', { name: callee.name })}
         hint={
-          permission.permission === 'notGranted'
-            ? t('call.permission.missing')
-            : t('call.button.hint', { number: spelledNumber(callee.number) })
+          permission.permission === 'granted'
+            ? t('call.button.hint', { number: spelledNumber(callee.number) })
+            : t('call.permission.missing')
         }
         title={t('call.button.call', { name: callee.name })}
         onPress={call}

@@ -6,8 +6,8 @@
  *
  * Membership is the session. At start, secure storage is read, and only
  * while it is, a waiting indicator shows (CALL-02, approach 2):
- *   - no credential, a fresh install: the join screen, and nothing is asked
- *     of the server;
+ *   - no credential, a fresh install: #1 is deleted, best effort, then the
+ *     join screen, and nothing is asked of the server;
  *   - a credential: the home screen at once, with #1, the call button and
  *     112, and the server asked who this phone is (`GET /v1/me`) behind it,
  *     so a phone that cannot reach the server can still call (CALL-02-AC8,
@@ -29,7 +29,9 @@
  * kept through an unreachable server (GRP-02-AC6). The delete at a sign-out
  * is one call the store can refuse, so a join that gets a new credential
  * deletes #1 again, best effort: a #1 still there then belongs to a home
- * screen that is gone, and a refusal does not fail the join.
+ * screen that is gone, and a refusal does not fail the join. So does every
+ * start with no credential, for a phone that never joins again; a start whose
+ * credential read fails is not one, and keeps #1.
  *
  * The join sends the code as typed, the join key and the name. A join
  * answered with no answer at all, or a 5xx, saved nothing and can be sent
@@ -179,6 +181,16 @@ export function GroupSessionProvider({ children }: { children: ReactNode }) {
       return;
     }
     if (stored === null) {
+      // No credential, so no home screen, and no #1 should be here: one that
+      // is was left by a refused delete at a sign-out, or by a save that
+      // landed after it. Best effort, and before the join screen shows
+      // (GRP-02-AC6).
+      try {
+        await secureStorage.deleteFirstContact();
+      } catch {
+        // Kept, and tried again at the next start with no credential. Not
+        // logged: the error's message may hold the number (PRIV-07).
+      }
       update({ phase: 'joining', signedOut: false });
       return;
     }

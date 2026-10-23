@@ -16,6 +16,9 @@
  *     shows moves nothing: the screen starts at its top already, and a heading
  *     that appears when the server answers does not take the focus from where
  *     the walker is.
+ * `opened` focuses the first heading still drawn, in the order the headings
+ * said where they are, so a heading kept across views would win over the new
+ * view's; today every view draws its own `Heading`.
  * Outside a `Screen`, both do nothing.
  */
 import {

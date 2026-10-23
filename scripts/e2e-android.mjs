@@ -19,9 +19,9 @@
  * SPIKE-01's S6 did (lib/call-records.mjs). The font size is set back to the
  * usual at the end, even after a failed step or flow, and a failure names the
  * flow and the step. No step taps anything, and back is a key, not a tap:
- * the flows never tap in the dialer, and the one call placed is to the test kit's synthetic #1, in
- * Ofcom's range reserved for drama, on an emulator with no network
- * (SPIKE-01-AC10's rule).
+ * the flows never tap in the dialer, and the one call placed is to the test
+ * kit's synthetic #1, in Ofcom's range reserved for drama, on an emulator
+ * with no network (SPIKE-01-AC10's rule).
  *
  * Usage:
  *   pnpm run e2e:android                 the whole run: check, build, install, test

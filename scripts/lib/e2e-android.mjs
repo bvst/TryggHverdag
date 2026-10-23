@@ -885,11 +885,9 @@ export const SCRIPTED_FLOWS = [
  *     `scripted` (CALL-01, approach 9, review loop 1): a flow that silently
  *     dropped out of the order would take its Telecom and dialer checks with
  *     it, and an untagged one would run in the first run, without its steps.
- * `absent` is always empty when the run goes on; it is kept for the shape the
- * callers read.
  *
  * @param {{ name: string, text: string }[]} flows the folder's flow files
- * @returns {{ ok: true, run: ScriptedFlow[], absent: string[] } | { ok: false, message: string }}
+ * @returns {{ ok: true, run: ScriptedFlow[] } | { ok: false, message: string }}
  */
 export function scriptedFlowsToRun(flows) {
   const present = flows.map(({ name }) => name);
@@ -924,7 +922,7 @@ export function scriptedFlowsToRun(flows) {
   if (problems.length > 0) {
     return { ok: false, message: problems.join('\n') };
   }
-  return { ok: true, run: [...SCRIPTED_FLOWS], absent: [] };
+  return { ok: true, run: [...SCRIPTED_FLOWS] };
 }
 
 /**
