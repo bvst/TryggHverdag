@@ -41,13 +41,17 @@ import {
   checkDevices,
   checkJava,
   checkLocale,
+  SCRIPTED_FLOWS,
+  SCRIPTED_TAG,
   checkMaestro,
   ensureMaestro,
+  flowTags,
   installVerdict,
   installWhenReady,
   judgeReport,
   maestroTestCommand,
   maestroUrl,
+  scriptedFlowsToRun,
   switchToBokmal,
   waitForLocale,
 } from './e2e-android.mjs';
@@ -3182,5 +3186,171 @@ describe('the pinned Maestro', () => {
 
     expect(existsSync(maestro)).toBe(true);
     expect(readdirSync(path.join(home, 'lib'))).toEqual(['maestro-cli.jar']);
+  });
+});
+
+// CALL-01, approach 9 (D-031): which flows the script runs on their own, read
+// from each flow's tags, and the order it runs them in. The stand-in runs of
+// scripts/e2e-android.test.mjs reach these only through the script, as a
+// process of its own, which the coverage run does not count (RG-04), so they
+// are held here directly as well.
+
+/** A flow's text, with these tags in its config section as a block list, or none. */
+const flowWithTags = (tags) =>
+  [
+    'appId: ${APP_ID}',
+    ...(tags === undefined ? [] : ['tags:', ...tags.map((tag) => `  - ${tag}`)]),
+    '---',
+    '- launchApp',
+    '',
+  ].join('\n');
+
+describe('flowTags: a flow’s tags, as Maestro reads them from its config section', () => {
+  test('INF-06-AC9: an inline list, with and without quotes', () => {
+    expect(flowTags('appId: x\ntags: [scripted]\n---\n- launchApp\n')).toEqual(['scripted']);
+    expect(flowTags('appId: x\ntags: [\'scripted\', "slow"]\n---\n')).toEqual(['scripted', 'slow']);
+    expect(flowTags('appId: x\ntags: []\n---\n')).toEqual([]);
+  });
+
+  test('INF-06-AC9: a block list, quoted or not', () => {
+    expect(flowTags('appId: x\ntags:\n  - scripted\n  - "slow"\n---\n- launchApp\n')).toEqual([
+      'scripted',
+      'slow',
+    ]);
+  });
+
+  test('INF-06-AC9: a block list ends at the next key', () => {
+    expect(flowTags('appId: x\ntags:\n  - scripted\nname: Ein flyt\n---\n')).toEqual(['scripted']);
+  });
+
+  test('INF-06-AC9: no config section (no --- line), no tags: line, or tags only after the ---, is no tag', () => {
+    expect(flowTags('- launchApp\n')).toEqual([]);
+    expect(flowTags('appId: x\n---\n- launchApp\n')).toEqual([]);
+    expect(flowTags('appId: x\n---\ntags:\n  - scripted\n')).toEqual([]);
+  });
+
+  test('INF-06-AC9: a commented-out tags: line, or commented-out items, is no tag', () => {
+    expect(flowTags('appId: x\n# tags: [scripted]\n---\n')).toEqual([]);
+    expect(flowTags('appId: x\n#tags:\n#  - scripted\n---\n')).toEqual([]);
+  });
+
+  test('INF-06-AC9: on every flow of the app, it reads the tags the test kit’s reader reads', () => {
+    const read = readdirSync(FLOWS)
+      .filter((name) => /\.ya?ml$/.test(name))
+      .map((name) => {
+        const text = readFileSync(path.join(FLOWS, name), 'utf8');
+        return { name, script: flowTags(text), kit: maestroTags(text) };
+      });
+
+    expect(read.length).toBeGreaterThan(0);
+    expect(
+      read.filter(({ script, kit }) => JSON.stringify(script) !== JSON.stringify(kit)),
+    ).toEqual([]);
+    expect(read.some(({ script }) => script.includes(SCRIPTED_TAG))).toBe(true);
+  });
+});
+
+describe('scriptedFlowsToRun: the scripted flows, in the script’s order', () => {
+  /** The folder as the order expects it: each flow of SCRIPTED_FLOWS tagged, and one that is not. */
+  const allOrdered = () => [
+    { name: 'app-starts.yaml', text: flowWithTags(undefined) },
+    ...SCRIPTED_FLOWS.map(({ flow }) => ({ name: flow, text: flowWithTags([SCRIPTED_TAG]) })),
+  ];
+
+  test('INF-06-AC9: every tagged flow in the order: ok, each run in SCRIPTED_FLOWS’ order, whatever the folder’s order, none absent, and no untagged flow', () => {
+    const result = scriptedFlowsToRun([...allOrdered()].reverse());
+
+    expect(result).toEqual({ ok: true, run: [...SCRIPTED_FLOWS], absent: [] });
+  });
+
+  test('INF-06-AC9: a flow in the order but not in the folder is not run, and is listed as absent', () => {
+    const result = scriptedFlowsToRun(
+      allOrdered().filter(({ name }) => name !== 'large-text.yaml'),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.absent).toEqual(['large-text.yaml']);
+    expect(result.run.map(({ flow }) => flow)).toEqual(
+      SCRIPTED_FLOWS.map(({ flow }) => flow).filter((flow) => flow !== 'large-text.yaml'),
+    );
+  });
+
+  test('INF-06-AC9: one flow tagged scripted that the order does not name: not ok, and the message names it, in the singular', () => {
+    const result = scriptedFlowsToRun([
+      ...allOrdered(),
+      { name: 'unordered-scripted.yaml', text: flowWithTags([SCRIPTED_TAG]) },
+    ]);
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('unordered-scripted.yaml is tagged scripted');
+    expect(result.message).toMatch(/\bdoes not name it\b/);
+    expect(result.message).toMatch(/\bnothing would run it\b/);
+  });
+
+  test('INF-06-AC9: two such flows: not ok, and the message names both, in the plural', () => {
+    const result = scriptedFlowsToRun([
+      ...allOrdered(),
+      { name: 'first-unordered.yaml', text: flowWithTags([SCRIPTED_TAG]) },
+      { name: 'second-unordered.yaml', text: flowWithTags(['slow', SCRIPTED_TAG]) },
+    ]);
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(
+      'first-unordered.yaml, second-unordered.yaml are tagged scripted',
+    );
+    expect(result.message).toMatch(/\bdoes not name them\b/);
+    expect(result.message).toMatch(/\bnothing would run them\b/);
+  });
+
+  test('INF-06-AC9: the app’s own folder: ok, every scripted flow run, in the order, none absent', () => {
+    const flows = readdirSync(FLOWS)
+      .filter((name) => /\.ya?ml$/.test(name))
+      .map((name) => ({ name, text: readFileSync(path.join(FLOWS, name), 'utf8') }));
+
+    expect(scriptedFlowsToRun(flows)).toEqual({ ok: true, run: [...SCRIPTED_FLOWS], absent: [] });
+  });
+});
+
+describe('maestroTestCommand: a text the flows name and nb.json lacks', () => {
+  /** nb.json, as the app has it, with `change` made to a copy. */
+  const nbWith = (change) => {
+    const tree = JSON.parse(readFileSync(NB, 'utf8'));
+    change(tree);
+    return tree;
+  };
+  const commandWith = (translations) => () =>
+    maestroTestCommand({
+      maestro: 'maestro',
+      report: 'report.xml',
+      appId: 'no.example.placeholder',
+      translations,
+      bootstrapCode: BOOTSTRAP_CODE,
+      firstContact: EMULATOR_FIRST_CONTACT,
+    });
+
+  test('INF-06-AC11: the command is not made, and the error names the key: a key nb.json does not hold, a key whose text is empty, a key under a text rather than an object', () => {
+    // The control: nb.json as it is makes a command.
+    expect(commandWith(nbWith(() => undefined))()).toContain('test');
+    expect(
+      commandWith(
+        nbWith((tree) => {
+          delete tree.grp.join.title;
+        }),
+      ),
+    ).toThrow(/\bgrp\.join\.title\b/);
+    expect(
+      commandWith(
+        nbWith((tree) => {
+          tree.grp.join.title = '';
+        }),
+      ),
+    ).toThrow(/\bgrp\.join\.title\b/);
+    expect(
+      commandWith(
+        nbWith((tree) => {
+          tree.grp.join = 'Ein tekst, ikkje eit objekt';
+        }),
+      ),
+    ).toThrow(/\bgrp\.join\.\w+\b/);
   });
 });
