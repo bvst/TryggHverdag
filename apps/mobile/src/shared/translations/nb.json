@@ -1,4 +1,28 @@
 {
+  "app": {
+    "error": {
+      "screen": "Noe gikk galt på denne skjermen.",
+      "retry": "Prøv igjen"
+    }
+  },
+  "call": {
+    "emergency": {
+      "label": "Ring 112, nødnummeret",
+      "hint": "Åpner telefonappen med 112. Trykk ring der.",
+      "failed": "Telefonen kunne ikke åpne 112. Ring 112 selv."
+    },
+    "button": {
+      "call": "Ring {{name}}",
+      "hint": "Ringer {{number}}",
+      "failed": "Telefonen kunne ikke starte samtalen. Ring {{number}} selv."
+    },
+    "permission": {
+      "why": "Tillat telefonsamtaler, så ringer knappen med ett trykk.",
+      "missing": "Knappen åpner telefonappen, og du må trykke ring der.",
+      "allow": "Tillat telefonsamtaler",
+      "settings": "Åpne innstillinger"
+    }
+  },
   "grp": {
     "join": {
       "title": "Bli med i gruppen",
@@ -38,6 +62,22 @@
       "removed": "{{name}} er fjernet fra gruppen.",
       "refused": "Serveren avviste fjerningen. Ingen ble fjernet."
     },
-    "waiting": "Venter på svar"
+    "waiting": "Venter på svar",
+    "firstContact": {
+      "none": "Velg hvem du vil ringe",
+      "noneHint": "Du har ikke valgt en nummer 1-kontakt. Trykk for å velge.",
+      "unreadable": "Vi fikk ikke lest hvem du skal ringe. Trykk for å velge igjen.",
+      "shown": "Nummer 1: {{name}}",
+      "change": "Bytt nummer 1-kontakt",
+      "title": "Hvem vil du ringe først?",
+      "intro": "Den store knappen ringer denne personen. Det kan være hvem som helst du stoler på.",
+      "nameLabel": "Navn",
+      "numberLabel": "Telefonnummer",
+      "save": "Lagre",
+      "cancel": "Avbryt",
+      "numberNotUsable": "Nummeret ser ikke riktig ut. Bruk bare sifre, gjerne med + og landskode først.",
+      "nameNotUsable": "Navnet kan ikke brukes. Det må ha minst ett synlig tegn, og ingen skjulte tegn.",
+      "notSaved": "Nummeret ble ikke lagret. Prøv igjen."
+    }
   }
 }

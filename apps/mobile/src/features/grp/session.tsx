@@ -1,24 +1,36 @@
 /**
  * The phone's place in the group (GRP-01, approach items 4, 5 and 14):
  * whether it is signed in, as whom, and every call it makes with its
- * credential.
+ * credential; and the walker's #1 contact, which belongs to that place
+ * (GRP-02, approach item 4).
  *
- * Membership is the session. At start, with a credential in secure storage,
- * the app asks the server who it is (`GET /v1/me`):
- *   - a member: the member screen;
- *   - a 401: the credential is deleted, and the join screen says plainly that
- *     this phone is no longer signed in to the group (AC29). Any call that
- *     answers 401 does the same, wherever it is made;
- *   - no answer, or a 5xx: nothing is deleted, nothing signs out, and the app
- *     says the server could not be reached, with a retry. A database that
- *     blinked must never sign anyone out.
- * With no credential, a fresh install, the join screen, and nothing is asked
- * of the server.
+ * Membership is the session. At start, secure storage is read, and only
+ * while it is, a waiting indicator shows (CALL-02, approach 2):
+ *   - no credential, a fresh install: the join screen, and nothing is asked
+ *     of the server;
+ *   - a credential: the home screen at once, with #1, the call button and
+ *     112, and the server asked who this phone is (`GET /v1/me`) behind it,
+ *     so a phone that cannot reach the server can still call (CALL-02-AC8,
+ *     GRP-02-AC7). Nothing of the group shows until the server has said:
+ *       - a member: the heading, the status line and, for the admin, the two
+ *         choices;
+ *       - a 401: the credential and #1 are deleted, and the join screen says
+ *         plainly that this phone is no longer signed in to the group (AC29).
+ *         Any call that answers 401 does the same, wherever it is made;
+ *       - no answer, or a 5xx: nothing is deleted, nothing signs out, and the
+ *         home screen says the server could not be reached, with a retry. A
+ *         database that blinked must never sign anyone out;
+ *   - storage that cannot be read: the home screen, as for no answer, and #1
+ *     as unreadable when its own read fails (GRP-02-AC8).
+ *
+ * #1 is kept in secure storage and nowhere else, never sent to the server
+ * (Q1, D-141), deleted with the credential when the phone is signed out, and
+ * kept through an unreachable server (GRP-02-AC6).
  *
  * The join sends the code as typed, the join key and the name. A join
  * answered with no answer at all, or a 5xx, saved nothing and can be sent
  * again exactly as it was, the same join key with it, which the server takes
- * as the same join retried (AC5, AC27).
+ * as the same join retried (AC5, AC27). A new member has no #1.
  */
 import type { JoinResponse, Member } from '@trygghverdag/contracts';
 import {
@@ -34,14 +46,18 @@ import {
 
 import { callApi, type ApiAnswer, type ApiRequest } from '../../shared/api/client';
 import { secureStorage } from '../../shared/secure-storage';
+import { storedFirstContact, type FirstContact, type FirstContactState } from './first-contact';
 import { makeJoinKey } from './join-key';
+
+/** What the server has said of this phone, on the home screen. */
+export type ServerAnswer =
+  { kind: 'asking' } | { kind: 'unreachable' } | { kind: 'member'; member: Member };
 
 /** Where the phone stands. */
 export type SessionState =
   | { phase: 'starting' }
   | { phase: 'joining'; signedOut: boolean }
-  | { phase: 'unreachable' }
-  | { phase: 'member'; member: Member };
+  | { phase: 'home'; server: ServerAnswer; firstContact: FirstContactState };
 
 /** A join as the phone sends it. */
 export interface JoinBody {
@@ -63,6 +79,8 @@ export interface GroupSession {
   retry: () => Promise<void>;
   /** A call with this phone's credential. A 401 signs the phone out before it answers. */
   call: <T>(request: Omit<ApiRequest, 'credential'>) => Promise<ApiAnswer<T>>;
+  /** Keeps #1 in secure storage, as given; false when storage refused it, and nothing changed. */
+  saveFirstContact: (contact: FirstContact) => Promise<boolean>;
 }
 
 const SessionContext = createContext<GroupSession | null>(null);
@@ -86,17 +104,29 @@ export function GroupSessionProvider({ children }: { children: ReactNode }) {
       setState(next);
     }
   }, []);
+  /** Changes the home screen's state, and leaves any other phase as it is. */
+  const updateHome = useCallback((change: Partial<Extract<SessionState, { phase: 'home' }>>) => {
+    if (mounted.current) {
+      setState((now) => (now.phase === 'home' ? { ...now, ...change } : now));
+    }
+  }, []);
 
-  /** The credential is gone from the phone, and the join screen says so. */
+  /** The credential and #1 are gone from the phone, and the join screen says so. */
   const signOut = useCallback(async () => {
     credential.current = null;
+    // The server has refused the credential, so the phone is signed out
+    // whether or not each delete worked, and the join screen says so. A
+    // credential left behind is refused again at the next start, which tries
+    // the delete again.
     try {
       await secureStorage.deleteCredential();
     } catch {
-      // The server has refused the credential, so the phone is signed out
-      // whether or not the delete worked, and the join screen says so. A
-      // credential left behind is refused again at the next start, which
-      // tries the delete again.
+      // Said by the join screen, as above.
+    }
+    try {
+      await secureStorage.deleteFirstContact();
+    } catch {
+      // As for the credential: the home screen #1 belonged to is gone.
     }
     update({ phase: 'joining', signedOut: true });
   }, [update]);
@@ -108,35 +138,49 @@ export function GroupSessionProvider({ children }: { children: ReactNode }) {
       switch (answer.kind) {
         case 'ok':
           credential.current = stored;
-          update({ phase: 'member', member: answer.body });
+          updateHome({ server: { kind: 'member', member: answer.body } });
           return;
         case 'unauthorized':
           await signOut();
           return;
         case 'refused':
         case 'unreachable':
-          // Only a 401 signs out; the credential is kept for the retry.
-          update({ phase: 'unreachable' });
+          // Only a 401 signs out; the credential and #1 are kept for the retry.
+          updateHome({ server: { kind: 'unreachable' } });
           return;
       }
     },
-    [signOut, update],
+    [signOut, updateHome],
   );
+
+  /** #1 as secure storage holds it, or unreadable when the read fails (GRP-02-AC8). */
+  const readFirstContact = useCallback(async (): Promise<FirstContactState> => {
+    try {
+      return storedFirstContact(await secureStorage.readFirstContact());
+    } catch {
+      return { kind: 'unreadable' };
+    }
+  }, []);
 
   const start = useCallback(async () => {
     let stored: string | null;
     try {
       stored = await secureStorage.readCredential();
     } catch {
-      update({ phase: 'unreachable' });
+      update({
+        phase: 'home',
+        server: { kind: 'unreachable' },
+        firstContact: await readFirstContact(),
+      });
       return;
     }
     if (stored === null) {
       update({ phase: 'joining', signedOut: false });
       return;
     }
+    update({ phase: 'home', server: { kind: 'asking' }, firstContact: await readFirstContact() });
     await checkIn(stored);
-  }, [checkIn, update]);
+  }, [checkIn, readFirstContact, update]);
 
   useEffect(() => {
     mounted.current = true;
@@ -176,16 +220,21 @@ export function GroupSessionProvider({ children }: { children: ReactNode }) {
         return 'notSaved';
       }
       credential.current = issued;
-      update({ phase: 'member', member: { userId, displayName: body.displayName, role } });
+      update({
+        phase: 'home',
+        server: { kind: 'member', member: { userId, displayName: body.displayName, role } },
+        firstContact: { kind: 'none' },
+      });
       return 'joined';
     },
     [update],
   );
 
+  /** Asks the server again who this phone is, the home screen and #1 staying where they are. */
   const retry = useCallback(async () => {
-    update({ phase: 'starting' });
+    updateHome({ server: { kind: 'asking' } });
     await start();
-  }, [start, update]);
+  }, [start, updateHome]);
 
   const call = useCallback(
     async <T,>(request: Omit<ApiRequest, 'credential'>): Promise<ApiAnswer<T>> => {
@@ -202,9 +251,24 @@ export function GroupSessionProvider({ children }: { children: ReactNode }) {
     [signOut],
   );
 
+  const saveFirstContact = useCallback(
+    async (contact: FirstContact): Promise<boolean> => {
+      try {
+        await secureStorage.saveFirstContact(contact);
+      } catch {
+        // Nothing was saved, and the earlier #1, or none, stays (GRP-02-AC8).
+        // The error is not kept: its message may hold the number (PRIV-07).
+        return false;
+      }
+      updateHome({ firstContact: { kind: 'set', contact } });
+      return true;
+    },
+    [updateHome],
+  );
+
   const session = useMemo<GroupSession>(
-    () => ({ state, joinBody, join, retry, call }),
-    [state, joinBody, join, retry, call],
+    () => ({ state, joinBody, join, retry, call, saveFirstContact }),
+    [state, joinBody, join, retry, call, saveFirstContact],
   );
 
   return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>;

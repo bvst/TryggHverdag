@@ -6,6 +6,20 @@
  * Emulators only: it never installs onto, or reads crash logs from, a real
  * phone.
  *
+ * The flows run in two parts (CALL-01, approach 9; D-031): first one Maestro
+ * run over every flow not tagged `scripted`; then each flow tagged
+ * `scripted`, alone, in the order SCRIPTED_FLOWS holds, with the script's
+ * steps around it: CALL_PHONE granted or revoked, the font size set, and
+ * Telecom's record read before it; Telecom's record read again after it, the
+ * dialer checked in front where the flow leaves it, and a call ended. Maestro
+ * cannot see a call, so the script reads Telecom's record instead, as
+ * SPIKE-01's S6 did (lib/call-records.mjs). The font size is set back to the
+ * usual at the end, even after a failed step or flow, and a failure names the
+ * flow and the step. No step taps anything: the flows never tap in the
+ * dialer, and the one call placed is to the test kit's synthetic #1, in
+ * Ofcom's range reserved for drama, on an emulator with no network
+ * (SPIKE-01-AC10's rule).
+ *
  * Usage:
  *   pnpm run e2e:android                 the whole run: check, build, install, test
  *   pnpm run e2e:android --build-only    only the release build (no device needed)
@@ -20,17 +34,21 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { EMULATOR_FIRST_CONTACT } from '../packages/test-kit/src/fixtures/phone-numbers.ts';
+import { callPlacedByApp, dialerInFront, noNewCall, readTelecom } from './lib/call-records.mjs';
 import {
   APK,
+  FLOWS,
   INSTALL_DEADLINE_MS,
   INSTALL_INTERVAL_MS,
   LOCALE_DEADLINE_MS,
   LOCALE_INTERVAL_MS,
   REPORT_DIR,
+  USUAL_FONT_SCALE,
   buildPlan,
   checkDevices,
   checkJava,
@@ -40,6 +58,7 @@ import {
   installWhenReady,
   judgeReport,
   maestroTestCommand,
+  scriptedFlowsToRun,
   switchToBokmal,
   waitForLocale,
 } from './lib/e2e-android.mjs';
@@ -199,6 +218,21 @@ if (typeof appId !== 'string') stop('app.config.ts names no Android application 
 const translations = JSON.parse(
   readFileSync(path.join(appDir, 'src/shared/translations/nb.json'), 'utf8'),
 );
+// Which flows run on their own, after the first run, and in which order
+// (CALL-01, approach 9). A flow tagged `scripted` that the order does not
+// name would run nowhere, so the run stops here, naming it.
+const flowsDir = path.join(root, FLOWS);
+const scripted = scriptedFlowsToRun(
+  readdirSync(flowsDir)
+    .filter((name) => /\.ya?ml$/.test(name))
+    .map((name) => ({ name, text: readFileSync(path.join(flowsDir, name), 'utf8') })),
+);
+if (!scripted.ok) stop(scripted.message);
+if (scripted.absent.length > 0) {
+  process.stdout.write(
+    `e2e:android: not in ${FLOWS}, so not run: ${scripted.absent.join(', ')}.\n`,
+  );
+}
 // The flows that need a server (GRP-01) join as the first admin with the API's
 // ADMIN_BOOTSTRAP_CODE, which the caller hands in as BOOTSTRAP_CODE: CI's
 // android-e2e job sets both, from one synthetic value. Unset, those flows type
@@ -211,30 +245,27 @@ if (bootstrapCode === '') {
       'migrated database.\n',
   );
 }
-const report = path.join(REPORT_DIR, 'report.xml');
 rmSync(REPORT_DIR, { recursive: true, force: true });
 mkdirSync(REPORT_DIR, { recursive: true });
-const test = maestroTestCommand({
-  maestro,
-  report,
-  appId,
-  translations,
-  bootstrapCode,
-  device,
-  debugOutput: path.join(REPORT_DIR, 'debug'),
-});
-process.stdout.write(`\ne2e:android: run the flows\n  $ ${test.join(' ')}\n`);
-const maestroRun = spawnSync(test[0] ?? '', test.slice(1), { cwd: root, stdio: 'inherit' });
 
-// 5. Both have to pass: Maestro's exit status and its report. The report alone
-// is not enough, because it is written as flows finish and does not show that
-// Maestro itself got to the end; the exit status alone is not enough, because
-// a run in which nothing ran exits 0 too.
-const verdict = judgeReport(existsSync(report) ? readFileSync(report, 'utf8') : null);
-if (maestroRun.status !== 0 || !verdict.ok) {
-  let exit = `Maestro exited with code ${String(maestroRun.status)}`;
-  if (maestroRun.signal !== null) exit = `Maestro was stopped by ${maestroRun.signal}`;
-  if (maestroRun.error !== undefined) exit = `Maestro could not run: ${maestroRun.error.message}`;
+/** The command line for the first run, or, given `flow`, for that flow alone. */
+const testCommand = ({ report, debugOutput, flow }) =>
+  maestroTestCommand({
+    maestro,
+    report,
+    appId,
+    translations,
+    bootstrapCode,
+    // The test kit's synthetic #1, from Ofcom's range reserved for drama: the
+    // one number a flow may type and call on the emulator (GRP-02, HK-07).
+    firstContact: EMULATOR_FIRST_CONTACT,
+    device,
+    debugOutput,
+    flow,
+  });
+
+/** The app's own lines in the device's crash buffer, printed for a run that failed. */
+function printCrashes() {
   // Only the app's own lines: the crash buffer holds every app's crashes.
   const crashes =
     output(adb, ['-s', device ?? '', 'logcat', '-d', '-b', 'crash', '-e', escapeRegExp(appId)]) ??
@@ -244,9 +275,138 @@ if (maestroRun.status !== 0 || !verdict.ok) {
       `\nThe app's crash lines on the device (adb logcat -b crash):\n${crashes}\n`,
     );
   }
-  stop(
+}
+
+/**
+ * Runs Maestro and judges the run. Both have to pass: Maestro's exit status
+ * and its report. The report alone is not enough, because it is written as
+ * flows finish and does not show that Maestro itself got to the end; the exit
+ * status alone is not enough, because a run in which nothing ran exits 0 too.
+ * Null when it passed, or what failed.
+ */
+function runFlows(title, { report, debugOutput, flow }) {
+  const test = testCommand({ report, debugOutput, flow });
+  process.stdout.write(`\ne2e:android: ${title}\n  $ ${test.join(' ')}\n`);
+  const maestroRun = spawnSync(test[0] ?? '', test.slice(1), { cwd: root, stdio: 'inherit' });
+  const verdict = judgeReport(existsSync(report) ? readFileSync(report, 'utf8') : null);
+  if (maestroRun.status === 0 && verdict.ok) {
+    process.stdout.write(`\ne2e:android: ${verdict.message}\n`);
+    return null;
+  }
+  let exit = `Maestro exited with code ${String(maestroRun.status)}`;
+  if (maestroRun.signal !== null) exit = `Maestro was stopped by ${maestroRun.signal}`;
+  if (maestroRun.error !== undefined) exit = `Maestro could not run: ${maestroRun.error.message}`;
+  printCrashes();
+  return (
     `${exit}, and its report says: ${verdict.message} Both have to pass. ` +
-      `Maestro's debug output is in ${REPORT_DIR}/debug.`,
+    `Maestro's debug output is in ${debugOutput}.`
   );
 }
-process.stdout.write(`\ne2e:android: ${verdict.message}\n`);
+
+// 5. The first run: every flow not tagged `scripted`, in one Maestro run.
+const firstRun = runFlows('run the flows not tagged scripted', {
+  report: path.join(REPORT_DIR, 'report.xml'),
+  debugOutput: path.join(REPORT_DIR, 'debug'),
+});
+if (firstRun !== null) stop(firstRun);
+
+/** A step of the run on the device: adb's output, or what failed, with the step's name. */
+function step(name, adbArgs) {
+  const result = run(adb, ['-s', device ?? '', ...adbArgs], { timeout: 60_000 });
+  if (!result.ok) {
+    throw new Error(`${name} failed (exit code ${String(result.status)}): ${result.output.trim()}`);
+  }
+  return result.output;
+}
+
+/** Telecom's record of calls now: `adb shell dumpsys telecom`, read. */
+const telecomNow = () =>
+  readTelecom(step("read Telecom's record", ['shell', 'dumpsys', 'telecom']));
+
+/** Sets Settings' font size, saying so in the job log (CALL-01-AC8). */
+function setFontScale(scale, why) {
+  step(`set the font size to ${scale}`, [
+    'shell',
+    'settings',
+    'put',
+    'system',
+    'font_scale',
+    scale,
+  ]);
+  process.stdout.write(`e2e:android: font size (font_scale) set to ${scale}, ${why}.\n`);
+}
+
+/** One scripted flow, alone, with its steps around it. Throws, naming the step, when one fails. */
+function runScripted({ flow, callPhone, fontScale, telecomAfter, dialerInFront: dialer, endCall }) {
+  if (callPhone !== undefined) {
+    step(`${callPhone} CALL_PHONE`, [
+      'shell',
+      'pm',
+      callPhone,
+      appId,
+      'android.permission.CALL_PHONE',
+    ]);
+  }
+  setFontScale(fontScale, `for ${flow}`);
+  const before = telecomNow();
+  const name = flow.replace(/\.ya?ml$/, '');
+  const failed = runFlows(`run ${flow} on its own`, {
+    report: path.join(REPORT_DIR, `${name}.xml`),
+    debugOutput: path.join(REPORT_DIR, 'debug', name),
+    flow,
+  });
+  if (failed !== null) throw new Error(`the flow failed in Maestro: ${failed}`);
+  const after = telecomNow();
+  const calls =
+    telecomAfter === 'callPlaced'
+      ? callPlacedByApp({ before, after, app: appId, number: EMULATOR_FIRST_CONTACT.normalised })
+      : noNewCall({ before, after });
+  if (!calls.ok) throw new Error(`Telecom's record after it: ${calls.message}`);
+  process.stdout.write(`e2e:android: ${flow}: ${calls.message}\n`);
+  if (dialer === true) {
+    const inFront = dialerInFront({
+      window: step('read the focused window', ['shell', 'dumpsys', 'window']),
+      holders: step("read the dialer role's holders", [
+        'shell',
+        'cmd',
+        'role',
+        'get-role-holders',
+        'android.app.role.DIALER',
+      ]),
+    });
+    if (!inFront.ok) throw new Error(`the dialer in front after it: ${inFront.message}`);
+    process.stdout.write(`e2e:android: ${flow}: ${inFront.message}\n`);
+  }
+  if (endCall === true) {
+    // The emulator's call to #1 reaches no one; it is ended before the next flow.
+    step('end the call', ['shell', 'input', 'keyevent', 'KEYCODE_ENDCALL']);
+  }
+}
+
+// 6. Each flow tagged `scripted`, alone, in its order, with its steps. The
+// font size is set back to the usual at the end, whatever happened, and the
+// first failure stops the run, naming the flow and the step.
+let failure = null;
+if (scripted.run.length > 0) {
+  try {
+    for (const flow of scripted.run) {
+      try {
+        runScripted(flow);
+      } catch (error) {
+        failure = `${flow.flow}: ${error instanceof Error ? error.message : String(error)}`;
+        break;
+      }
+    }
+  } finally {
+    try {
+      setFontScale(USUAL_FONT_SCALE, 'the usual, at the end of the run');
+    } catch (error) {
+      const reset = `the font size could not be set back to the usual: ${error instanceof Error ? error.message : String(error)}`;
+      failure = failure === null ? reset : `${failure}\nAnd ${reset}`;
+    }
+  }
+}
+if (failure !== null) stop(failure);
+process.stdout.write(
+  `\ne2e:android: every flow passed: the first run, and ${String(scripted.run.length)} on their own.\n`,
+);

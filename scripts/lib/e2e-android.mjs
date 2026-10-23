@@ -632,8 +632,10 @@ export function buildPlan({ root }) {
 
 /**
  * Each string of the app's a flow names, as the variable it reads, and its key
- * in nb.json (GRP-01): the join screen, the member screen and the admin's
- * invitation. A flow names nothing a reader sees in its own words.
+ * in nb.json: the join screen, the member screen and the admin's invitation
+ * (GRP-01); and, from M3 task 2, the 112 button, #1's setup and the call
+ * permission's lines (GRP-02, CALL-01, CALL-02). A flow names nothing a reader
+ * sees in its own words.
  */
 export const FLOW_TEXT_KEYS = {
   JOIN_TITLE: 'grp.join.title',
@@ -647,7 +649,34 @@ export const FLOW_TEXT_KEYS = {
   MEMBERS_BUTTON: 'grp.member.members',
   CREATE_INVITATION: 'grp.invite.create',
   SHARE_BUTTON: 'grp.invite.share',
+  EMERGENCY_LABEL: 'call.emergency.label',
+  CHOOSE_CONTACT: 'grp.firstContact.none',
+  NO_CONTACT_HINT: 'grp.firstContact.noneHint',
+  CHANGE_CONTACT: 'grp.firstContact.change',
+  SETUP_TITLE: 'grp.firstContact.title',
+  CONTACT_NAME_LABEL: 'grp.firstContact.nameLabel',
+  CONTACT_NUMBER_LABEL: 'grp.firstContact.numberLabel',
+  SAVE_CONTACT: 'grp.firstContact.save',
+  PERMISSION_WHY: 'call.permission.why',
+  PERMISSION_MISSING: 'call.permission.missing',
+  PERMISSION_ALLOW: 'call.permission.allow',
 };
+
+/**
+ * The strings of the app's a flow names with #1's name in them, and the key
+ * each is filled from, as the app fills it (GRP-02-AC2, CALL-01-AC2).
+ */
+const FIRST_CONTACT_TEMPLATES = {
+  FIRST_CONTACT_SHOWN: 'grp.firstContact.shown',
+  CALL_BUTTON: 'call.button.call',
+};
+
+/**
+ * The number the 112 button dials: the app's own constant, EMERGENCY_NUMBER
+ * in apps/mobile/src/features/call/emergency-bar.tsx, never a translation. A
+ * flow matches it on the dialer and never dials it (SPIKE-01-AC10's rule).
+ */
+const EMERGENCY_NUMBER = '112';
 
 /**
  * The text at a dotted key of a translation file. A key with no text there
@@ -671,16 +700,19 @@ function textOf(translations, key) {
 }
 
 /**
- * The Maestro command line: every flow in apps/mobile/e2e, with a JUnit report
- * to judge the run by. The flows name what they need as ${APP_ID}, ${BOOTSTRAP_CODE}
- * and each string of FLOW_TEXT_KEYS, and get exactly those, from the app
- * config, nb.json and the API the emulator reaches, so no flow keeps a second
- * copy of the text a reader sees.
+ * The Maestro command line, with a JUnit report to judge the run by: the first
+ * run, over every flow in apps/mobile/e2e not tagged `scripted`; or, given
+ * `flow`, that one flow alone (CALL-01, approach 9). The flows name what they
+ * need as ${APP_ID}, ${BOOTSTRAP_CODE}, each string of FLOW_TEXT_KEYS and #1's,
+ * and get exactly those, from the app config, nb.json, the API the emulator
+ * reaches and the test kit's synthetic #1, so no flow keeps a second copy of
+ * the text a reader sees, or a number.
  *
- * Maestro reads a text selector as a regular expression, so every string is
- * escaped: unescaped, "Klar." would also match "Klar!", and a flow could pass
- * on a screen the app does not show. The bootstrap code is typed, not
- * matched, so it goes as it is: the API's ADMIN_BOOTSTRAP_CODE (GRP-01-AC26).
+ * Maestro reads a text selector as a regular expression, so every string a
+ * flow matches is escaped: unescaped, "Klar." would also match "Klar!", and a
+ * flow could pass on a screen the app does not show. What a flow types goes
+ * as it is: the bootstrap code, the API's ADMIN_BOOTSTRAP_CODE (GRP-01-AC26),
+ * and #1's name and number as a person types them (GRP-02-AC2).
  *
  * @param {{
  *   maestro: string,
@@ -688,8 +720,10 @@ function textOf(translations, key) {
  *   appId: string,
  *   translations: Record<string, unknown>,
  *   bootstrapCode: string,
+ *   firstContact: { name: string, typed: string, normalised: string },
  *   device?: string,
  *   debugOutput?: string,
+ *   flow?: string,
  * }} options
  * @returns {string[]}
  */
@@ -699,9 +733,12 @@ export function maestroTestCommand({
   appId,
   translations,
   bootstrapCode,
+  firstContact,
   device,
   debugOutput,
+  flow,
 }) {
+  const filled = (key) => textOf(translations, key).replaceAll('{{name}}', firstContact.name);
   return [
     maestro,
     'test',
@@ -719,8 +756,156 @@ export function maestroTestCommand({
       '-e',
       `${name}=${escapeRegExp(textOf(translations, key))}`,
     ]),
-    FLOWS,
+    '-e',
+    `FIRST_CONTACT_NAME=${firstContact.name}`,
+    '-e',
+    `FIRST_CONTACT_NUMBER=${firstContact.typed}`,
+    '-e',
+    `FIRST_CONTACT_NUMBER_SHOWN=${escapeRegExp(firstContact.normalised)}`,
+    ...Object.entries(FIRST_CONTACT_TEMPLATES).flatMap(([name, key]) => [
+      '-e',
+      `${name}=${escapeRegExp(filled(key))}`,
+    ]),
+    '-e',
+    `EMERGENCY_NUMBER=${escapeRegExp(EMERGENCY_NUMBER)}`,
+    ...(flow === undefined
+      ? ['--exclude-tags', SCRIPTED_TAG, FLOWS]
+      : [path.posix.join(FLOWS, flow)]),
   ];
+}
+
+/** The tag a flow carries when it runs on its own, with the script's steps around it (CALL-01, approach 9). */
+export const SCRIPTED_TAG = 'scripted';
+
+/**
+ * The tags in a flow's config section, the YAML before its first `---` line,
+ * as Maestro reads them: `tags:` as a block list or a flow sequence.
+ *
+ * @param {string} flowText
+ * @returns {string[]}
+ */
+export function flowTags(flowText) {
+  const lines = flowText.split('\n');
+  const end = lines.findIndex((line) => line.trim() === '---');
+  if (end === -1) return [];
+  const config = lines.slice(0, end).filter((line) => !line.trimStart().startsWith('#'));
+  const at = config.findIndex((line) => /^tags\s*:/.test(line));
+  if (at === -1) return [];
+  const unquote = (value) => value.trim().replace(/^(['"])(.*)\1$/, '$2');
+  const inline = /^tags\s*:\s*\[(.*)\]\s*$/.exec(config[at] ?? '');
+  if (inline !== null) return (inline[1] ?? '').split(',').map(unquote).filter(Boolean);
+  const tags = [];
+  for (const line of config.slice(at + 1)) {
+    const item = /^\s+-\s+(.+?)\s*$/.exec(line);
+    if (item === null) break;
+    tags.push(unquote(item[1] ?? ''));
+  }
+  return tags;
+}
+
+/**
+ * The largest font size the emulator image's Settings offer: 200 %, Android
+ * 14's non-linear font scaling and later (CI's image is API 37.2). Set before
+ * large-text.yaml, printed in the job log, and reset at the end (CALL-01-AC8).
+ */
+export const LARGEST_FONT_SCALE = '2.0';
+
+/** The phone's usual font size, set before every other scripted flow, and at the end of the run. */
+export const USUAL_FONT_SCALE = '1.0';
+
+/**
+ * @typedef {{
+ *   flow: string,
+ *   callPhone?: 'grant' | 'revoke',
+ *   fontScale: string,
+ *   telecomAfter: 'callPlaced' | 'noNewCall',
+ *   dialerInFront?: true,
+ *   endCall?: true,
+ * }} ScriptedFlow
+ */
+
+/**
+ * The flows tagged `scripted`, in the order they run, each alone, with the
+ * script's steps around it, as each flow's header says it needs (CALL-01,
+ * approach 9). Before each: CALL_PHONE granted or revoked where the flow needs
+ * it, its font size, and Telecom's record read as the baseline. After each:
+ * Telecom's record again, with one call to #1 after call-with-permission and
+ * no new call after any other; the dialer checked in front where the flow
+ * leaves it there; and the call ended after call-with-permission.
+ *
+ *   - first-admin-invites signs the app in as the group's first admin, and
+ *     first-contact continues from there, so nothing runs between them that
+ *     clears the app's state (D-031);
+ *   - the call flows need #1, which first-contact chooses;
+ *   - back-from-the-dialer comes right after a flow that leaves the dialer in
+ *     front;
+ *   - emergency-112 clears the app's state, so it comes last.
+ *
+ * @type {readonly ScriptedFlow[]}
+ */
+export const SCRIPTED_FLOWS = [
+  { flow: 'first-admin-invites.yaml', fontScale: USUAL_FONT_SCALE, telecomAfter: 'noNewCall' },
+  {
+    flow: 'first-contact.yaml',
+    callPhone: 'revoke',
+    fontScale: USUAL_FONT_SCALE,
+    telecomAfter: 'noNewCall',
+  },
+  {
+    flow: 'call-with-permission.yaml',
+    callPhone: 'grant',
+    fontScale: USUAL_FONT_SCALE,
+    telecomAfter: 'callPlaced',
+    endCall: true,
+  },
+  {
+    flow: 'call-without-permission.yaml',
+    callPhone: 'revoke',
+    fontScale: USUAL_FONT_SCALE,
+    telecomAfter: 'noNewCall',
+    dialerInFront: true,
+  },
+  { flow: 'back-from-the-dialer.yaml', fontScale: USUAL_FONT_SCALE, telecomAfter: 'noNewCall' },
+  { flow: 'large-text.yaml', fontScale: LARGEST_FONT_SCALE, telecomAfter: 'noNewCall' },
+  {
+    flow: 'emergency-112.yaml',
+    fontScale: USUAL_FONT_SCALE,
+    telecomAfter: 'noNewCall',
+    dialerInFront: true,
+  },
+];
+
+/**
+ * The scripted flows to run, in SCRIPTED_FLOWS' order, from the flows in the
+ * folder: every flow tagged `scripted` must be in that order, or the run stops
+ * before it starts, naming it, since the first run leaves it out and nothing
+ * else would run it. A flow in the order but not in the folder is not run,
+ * and named.
+ *
+ * @param {{ name: string, text: string }[]} flows the folder's flow files
+ * @returns {{ ok: true, run: ScriptedFlow[], absent: string[] } | { ok: false, message: string }}
+ */
+export function scriptedFlowsToRun(flows) {
+  const tagged = flows
+    .filter(({ text }) => flowTags(text).includes(SCRIPTED_TAG))
+    .map(({ name }) => name);
+  const ordered = new Set(SCRIPTED_FLOWS.map(({ flow }) => flow));
+  const unordered = tagged.filter((name) => !ordered.has(name));
+  if (unordered.length > 0) {
+    return {
+      ok: false,
+      message:
+        `${unordered.join(', ')} ${unordered.length === 1 ? 'is' : 'are'} tagged ${SCRIPTED_TAG}, ` +
+        "but the script's order (SCRIPTED_FLOWS in scripts/lib/e2e-android.mjs) does not name " +
+        `${unordered.length === 1 ? 'it' : 'them'}, so nothing would run ${unordered.length === 1 ? 'it' : 'them'}. ` +
+        'Add each to the order, with the steps its header says it needs.',
+    };
+  }
+  return {
+    ok: true,
+    run: SCRIPTED_FLOWS.filter(({ flow }) => tagged.includes(flow)),
+    absent: SCRIPTED_FLOWS.filter(({ flow }) => !tagged.includes(flow)).map(({ flow }) => flow),
+  };
 }
 
 /**

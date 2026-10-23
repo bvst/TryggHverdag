@@ -27,8 +27,8 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AccessibilityInfo, Share, StyleSheet, Text, View } from 'react-native';
 
+import { Button, Heading, Message, Waiting, palette } from '../../shared/ui';
 import { useGroupSession } from './session';
-import { Button, Heading, Message, Screen, Waiting } from './ui';
 
 /** The code's groups of five, whatever separates them as the API gives it. */
 function groupsOf(code: string): string[] {
@@ -94,7 +94,7 @@ export function InviteScreen({ onBack }: { onBack: () => void }) {
   const groups = invitation === null ? [] : groupsOf(invitation.invitationCode);
 
   return (
-    <Screen>
+    <>
       <Heading>{t('grp.invite.title')}</Heading>
       {invitation === null ? null : (
         <>
@@ -130,7 +130,7 @@ export function InviteScreen({ onBack }: { onBack: () => void }) {
       {busy ? <Waiting label={t('grp.waiting')} /> : null}
       {failed ? <Message>{t('grp.member.unreachable')}</Message> : null}
       <Button label={t('grp.member.back')} onPress={onBack} quiet />
-    </Screen>
+    </>
   );
 }
 
@@ -147,9 +147,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 2,
     textAlign: 'center',
+    color: palette.text,
   },
   expiry: {
     fontSize: 17,
     textAlign: 'center',
+    color: palette.text,
   },
 });
