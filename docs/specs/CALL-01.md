@@ -411,6 +411,38 @@ and why": tracked requirements this task does not deliver are named in words.
      or flow.
    - **A failed step or flow fails the run,** and the message names the flow
      and the step.
+   - **An awake, unlocked phone before each scripted flow, and evidence when
+     one fails** (*PR #101's first `android-e2e`*, 2026-10-23, the
+     coordinating session's choice under D-031). That run's job log
+     (run 39956809738, job 120424570385) shows `call-with-permission`
+     passing with its call placed, then `call-without-permission` failing
+     at its first wait: `Assertion is false: "Knappen åpner telefonappen, og
+     du må trykke ring der\." is visible`, after 30 s. Between the two, the
+     script pressed `KEYCODE_ENDCALL`. Android's end-call key hangs up a
+     call in progress, but with no call in progress its default behaviour
+     (`END_BUTTON_BEHAVIOR_SLEEP`) puts the phone to sleep, and a sleeping
+     phone shows Maestro nothing. That the call had already ended, and that
+     the phone slept, is inferred, not seen: the job log holds neither, and
+     the debug artifact could not be read from the session. So:
+     - **Before each scripted flow,** the script reads whether the phone is
+       awake (`dumpsys power`, its wakefulness) and whether the keyguard is
+       showing; if it is asleep or locked, it wakes it
+       (`input keyevent KEYCODE_WAKEUP`, `wm dismiss-keyguard`) and says so
+       in the job log, naming the flow; if it is still not awake and
+       unlocked after that, the run stops there, naming the flow and the
+       step. Output it cannot read stops the run too, never read as awake.
+     - **The end-call key only while Telecom shows the call in progress.**
+       After `call-with-permission`, the script reads the new call's events
+       in Telecom's record: while the call has not ended, it presses
+       `KEYCODE_ENDCALL` and says so; once the record shows it ended
+       (disconnected or destroyed), it presses nothing and says that the
+       call had already ended. The job log names the events it read, never
+       the number (PRIV-07).
+     - **When a scripted flow fails,** before the run stops, the script
+       prints the phone's wakefulness and the package of the focused
+       window, so the job log itself says what the phone was showing.
+       Reading them is best effort: what cannot be read is printed as
+       unread, and the failure stays the flow's.
    - **A scripted flow that is not there stops the run** (*Review loop 1*,
      `code-reviewer` 1). A flow named in the script's order that is absent
      from `apps/mobile/e2e/`, or present but not tagged `scripted`, stops the
