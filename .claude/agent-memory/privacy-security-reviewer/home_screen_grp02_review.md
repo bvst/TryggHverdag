@@ -37,3 +37,21 @@ only the delete path, and what happens when the delete itself fails.
 - Fixture numbers shaped as Norwegian mobiles (L5 only) are not from a reserved range; Note only.
 
 Related: [[grp01-join-review]], [[mobile-release-review]], [[device-harness-review]]
+
+**Loop 1 delta (2026-10-23, HEAD d2a55ca, base 9820f78): PASS.** S1 fixed: join() deletes #1
+(best effort) BEFORE saveCredential, tested with the fake refusing the 401's delete and with both
+refused. Left: start()'s no-credential path still never deletes #1, so a single refused delete on
+a phone that never rejoins keeps #1 hidden under the join screen (Should-fix, low; or name it in
+the spec's Risks). Pattern: a "deleted again at X" fix covers only users who reach X; ask what
+happens to one who never does.
+- expo-system-ui 57.0.4 added (a11y: userInterfaceStyle on Android): MIT, SDK-pinned
+  (bundledNativeModules.json ~57.0.4), lock integrity == npm view; empty manifest in source AND in
+  the prebuilt AAR under local-maven-repo (unzip -p the .aar AndroidManifest.xml); deps
+  normalize-colors and debug were already in the tree; no network.
+- CALL-01-AC6 ESLint rule (no-restricted-imports `paths`) misses: dynamic import(), deep subpaths
+  (expo-intent-launcher/build/..., react-native/Libraries/Linking/...), NativeModules /
+  requireNativeModule, and expo-router's router.push/Link with an external href, which calls
+  Linking.openURL(href) un-awaited (build/global-state/router.js:143). require() is caught by
+  strictTypeChecked's no-require-imports. None used today.
+- jest.mock virtual vs installed: a virtual mock of an installed bare name is skipped once the
+  worker resolver cached the real path (a54f735).

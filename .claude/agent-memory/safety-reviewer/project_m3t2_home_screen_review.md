@@ -27,3 +27,17 @@ secure store key/value validation; no import rule pins phone.ts as sole importer
 401 now also deletes #1 (widens GRP-01 WALKER_ONLY hand-off for task 3); scriptedFlowsToRun 'absent' passes but
 e2e-android.test.mjs L3305 pins the real folder has none absent.
 Related: [[call01-step1-review]], [[grp01-review]].
+
+**Loop-1 delta PASS at d2a55ca (2026-10-23)**, `git diff 9820f78..HEAD` (bc656cb/d2a55ca docs excluded). Read-only, no
+runs (gate:full running). All 5 findings closed with tests: (1) emergency-112.yaml asserts id trygghverdag-emergency-button
+visible, taps, extendedWaitUntil notVisible id (15 s) before the dialer regex; emergency.test.tsx reads the ID from the
+flow and pins it on exactly the 112 button; L7 still unobserved (spec says so). (2) phone.ts heldForCall try/catch ->
+false -> dialer; phone.test.tsx "CALL-01-AC4: when reading the permission (PermissionsAndroid.check) rejects". (3) 403/404/
+409 -> 'refused' -> unreachable line, nothing deleted: home.test.tsx (unowned grp) AND emergency.test.tsx CALL-02-AC8
+(owned). (4) fake-secure-store key /^[\w.-]+$/ + string value, matches expo-secure-store 57.0.4 build. (5) ESLint
+no-restricted-imports CALLING_PIECES outside phone.ts + packages/config/calling-imports.test.mjs.
+a54f735 = only drops { virtual: true }; same factory; failure mode was red (real module), not green -> weakens nothing.
+New: join deletes #1 best effort (privacy S1); new-view.tsx (ScreenViews context inside ScrollView, no host element,
+scrollTo y0 + sendAccessibilityEvent focus) cannot touch the bar. Notes given: import rule misses dynamic import(),
+react-native/Libraries/Linking deep path, NativeModules/requireNativeModule, namespace import untested; call-button
+hint says "Ringer" while permission null (read failed) though the tap goes to the dialer; home-screen.tsx still unowned.
