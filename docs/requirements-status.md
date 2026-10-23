@@ -57,7 +57,7 @@ Whether those tests pass is CI's answer, not this file's (INF-04 adds it).
 | PRIV-04 | Retention: precise positions deleted ⚙️ 24 hours after a journey ends; alert records (who was alerted, when,… | must | ⚪ | 0 |
 | PRIV-05 | Personal data is stored inside the EEA, with a provider and region chosen in Section 4 (D-016). | must | ⚪ | 0 |
 | PRIV-06 | No third-party analytics or advertising SDKs. | must | ⚪ | 0 |
-| PRIV-07 | Logs and error reports never contain precise locations or phone numbers. | must | 🟢 | 16 |
+| PRIV-07 | Logs and error reports never contain precise locations or phone numbers. | must | 🟢 | 17 |
 | PRIV-08 | Encryption in transit and at rest. | must | ⚪ | 0 |
 | PRIV-09 | Users can see, export and delete their own data from within the app. | must | ⚪ | 0 |
 | PRIV-10 | A plain-language privacy notice in bokmål, shown before the first journey. | must | ⚪ | 0 |
