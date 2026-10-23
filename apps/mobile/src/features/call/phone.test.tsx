@@ -24,12 +24,21 @@
 // number in as written, so nothing here leans on GRP-02's normalisation: the
 // emergency rule lives wholly in phone.ts, an owned path (D-141 (a), (e), (f)).
 //
-// What stands in for the platform, and nothing else: expo-intent-launcher
-// (not installed until task 2 adds it, so its mock is virtual), React
-// Native's Linking (openURL, canOpenURL, openSettings) and PermissionsAndroid
-// (check, request), on Android. ACTION_CALL without the permission is refused,
-// as Android refuses it, so a phone.ts that tries it first and one that reads
-// the permission first are held to the same outcome.
+// What stands in for the platform, and nothing else: expo-intent-launcher,
+// React Native's Linking (openURL, canOpenURL, openSettings) and
+// PermissionsAndroid (check, request), on Android. ACTION_CALL without the
+// permission is refused, as Android refuses it, so a phone.ts that tries it
+// first and one that reads the permission first are held to the same outcome.
+//
+// expo-intent-launcher is installed, so its mock must not be virtual. A
+// virtual mock of a bare package name is keyed by the name, while phone.ts's
+// require of it is keyed by the real path whenever an earlier test file in the
+// same jest worker loaded phone.ts for real, as app.test.tsx and grp.test.tsx
+// do: the worker's resolver caches that answer per importer and name, and
+// ignores the virtual mock. The mock is then skipped, the real package runs,
+// and every ACTION_CALL case fails, in some full runs and never alone. Mocked
+// as installed, the mock and the require are keyed by the same real path in
+// any file order.
 //
 // This file is named .tsx, though it holds no JSX, on purpose. The app's
 // tsconfig reads every src/**/*.ts before any .tsx, and a .ts test that sorts
@@ -70,22 +79,19 @@ const mockPlatform = {
 
 const CALL = 'android.intent.action.CALL';
 
-jest.mock(
-  'expo-intent-launcher',
-  () => ({
-    startActivityAsync: (action: string, params?: unknown) => {
-      mockPlatform.intents.push({ action, params });
-      if (action === CALL && (!mockPlatform.granted || mockPlatform.callRefused)) {
-        return Promise.reject(new Error('synthetic: Permission Denial: CALL_PHONE'));
-      }
-      return Promise.resolve({ resultCode: 0 });
-    },
-    // The settings actions are android.settings.<NAME>, as the package's own enum has them.
-    ActivityAction: new Proxy({}, { get: (_target, name) => `android.settings.${String(name)}` }),
-    ResultCode: { Success: -1, Canceled: 0, FirstUser: 1 },
-  }),
-  { virtual: true },
-);
+// Not { virtual: true }: the package is installed (see the header).
+jest.mock('expo-intent-launcher', () => ({
+  startActivityAsync: (action: string, params?: unknown) => {
+    mockPlatform.intents.push({ action, params });
+    if (action === CALL && (!mockPlatform.granted || mockPlatform.callRefused)) {
+      return Promise.reject(new Error('synthetic: Permission Denial: CALL_PHONE'));
+    }
+    return Promise.resolve({ resultCode: 0 });
+  },
+  // The settings actions are android.settings.<NAME>, as the package's own enum has them.
+  ActivityAction: new Proxy({}, { get: (_target, name) => `android.settings.${String(name)}` }),
+  ResultCode: { Success: -1, Canceled: 0, FirstUser: 1 },
+}));
 
 type ReactNative = typeof import('react-native');
 
