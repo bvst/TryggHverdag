@@ -360,7 +360,17 @@ and why": tracked requirements this task does not deliver are named in words.
      fixture, which Node runs only with type stripping on by default, from
      22.18. So the root `package.json`'s `engines.node` floor rises from
      `>=22.13.0` to `>=22.18.0` (the `<23` ceiling stays). CI reads `.nvmrc`,
-     "22", which installs the latest 22.
+     "22", which installs the latest 22. `scripts/doctor.mjs` names the same
+     floor, and a test holds the two together (D-031).
+   - **After a flow that leaves the dialer in front** (`dialerInFront`), the
+     script reads the focused window first and, only once that check passes,
+     presses back (`KEYCODE_BACK`) as its last step for the flow. The flows
+     themselves never press anything in the dialer (*review loop 1*, D-031).
+   - **Flows find the call button by its ID,**
+     `testID="trygghverdag-call-button"`, the same on the explaining and the
+     "Ring {name}" forms, because its screen-reader label now carries its
+     line (GRP-02-AC1) and a text match would depend on Maestro reading the
+     child view (*review loop 1*, D-031).
    - **A flow is tagged `scripted` exactly when it needs one of these steps,
      or a place in the script's order.** `first-admin-invites.yaml` needs
      no step but runs first, because `first-contact.yaml` continues from its

@@ -689,7 +689,11 @@ bokmål text (D-031).
 
 **The L7 112 step** taps the app's 112 button and then only reads: the dialer's
 screen through Maestro, and the focused window and Telecom's record through
-the script; then `pressKey: back`. *Review loop 1:* between the tap and the
+the script. The flow presses nothing: *review loop 1*, the script checks
+that the dialer is in front and only then presses back (`KEYCODE_BACK`), as
+its last step for the flow, so the run never leaves the dialer showing 112;
+a failed check presses nothing and names the flow (D-031, `CALL-01.md`
+approach 9). *Review loop 1:* between the tap and the
 first read of the dialer, the flow waits until the app is gone, so the 112 it
 then finds cannot be the app's own button (AC3). The 112 flow is tagged `scripted`, so the
 script reads Telecom before it and, after it, Telecom again and the focused
