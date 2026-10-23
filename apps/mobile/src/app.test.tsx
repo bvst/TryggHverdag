@@ -75,29 +75,25 @@ jest.mock('@testing-library/react-native', () =>
   jest.requireActual<object>('@testing-library/react-native/pure'),
 );
 
-// A fresh install: secure storage holds nothing (GRP-01).
-jest.mock(
-  'expo-secure-store',
-  () => ({
-    getItemAsync: jest.fn(() => Promise.resolve(null)),
-    setItemAsync: jest.fn(() => Promise.resolve()),
-    deleteItemAsync: jest.fn(() => Promise.resolve()),
-    getItem: jest.fn(() => null),
-    setItem: jest.fn(),
-    deleteItem: jest.fn(),
-  }),
-  { virtual: true },
-);
-jest.mock(
-  'expo-crypto',
-  () => ({
-    getRandomBytes: jest.fn((size: number) => new Uint8Array(size)),
-    getRandomBytesAsync: jest.fn((size: number) => Promise.resolve(new Uint8Array(size))),
-    getRandomValues: jest.fn(<T,>(array: T) => array),
-    randomUUID: jest.fn(() => '00000000-0000-4000-8000-000000000000'),
-  }),
-  { virtual: true },
-);
+// A fresh install: secure storage holds nothing (GRP-01). Both packages are
+// installed, so both are mocked as installed, never virtual, as in every test
+// file of the app: a virtual mock of an installed package is skipped in a jest
+// worker that already loaded it for real from the same importer
+// (packages/config/jest-virtual-mocks.test.mjs says why, and refuses one).
+jest.mock('expo-secure-store', () => ({
+  getItemAsync: jest.fn(() => Promise.resolve(null)),
+  setItemAsync: jest.fn(() => Promise.resolve()),
+  deleteItemAsync: jest.fn(() => Promise.resolve()),
+  getItem: jest.fn(() => null),
+  setItem: jest.fn(),
+  deleteItem: jest.fn(),
+}));
+jest.mock('expo-crypto', () => ({
+  getRandomBytes: jest.fn((size: number) => new Uint8Array(size)),
+  getRandomBytesAsync: jest.fn((size: number) => Promise.resolve(new Uint8Array(size))),
+  getRandomValues: jest.fn(<T,>(array: T) => array),
+  randomUUID: jest.fn(() => '00000000-0000-4000-8000-000000000000'),
+}));
 // No network: a fresh install asks the server nothing before anyone joins.
 (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
   Promise.reject(new Error('a fresh install asks the server nothing')),

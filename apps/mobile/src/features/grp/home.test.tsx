@@ -98,21 +98,23 @@ const api = fakeApi();
 /** The phone's language, read by the expo-localization stand-in when a launch loads it. */
 let mockLanguage: 'nb-NO' | 'en-GB' = 'nb-NO';
 
-jest.mock('expo-secure-store', () => mockStore.module, { virtual: true });
+// expo-secure-store and expo-crypto are installed, so both are mocked as
+// installed, never virtual, as in every test file of the app: a virtual mock
+// of an installed package is skipped in a jest worker that already loaded it
+// for real from the same importer (packages/config/jest-virtual-mocks.test.mjs
+// says why, and refuses one). phone.ts's mock stays virtual: by its path, its
+// key is the real path (see above).
+jest.mock('expo-secure-store', () => mockStore.module);
 jest.mock('../call/phone.ts', () => mockPhone.module, { virtual: true });
-jest.mock(
-  'expo-crypto',
-  () => {
-    const bytes = (size: number) =>
-      Uint8Array.from({ length: size }, () => Math.floor(Math.random() * 256));
-    return {
-      getRandomBytes: jest.fn(bytes),
-      getRandomBytesAsync: jest.fn((size: number) => Promise.resolve(bytes(size))),
-      randomUUID: jest.fn(() => '00000000-0000-4000-8000-000000000000'),
-    };
-  },
-  { virtual: true },
-);
+jest.mock('expo-crypto', () => {
+  const bytes = (size: number) =>
+    Uint8Array.from({ length: size }, () => Math.floor(Math.random() * 256));
+  return {
+    getRandomBytes: jest.fn(bytes),
+    getRandomBytesAsync: jest.fn((size: number) => Promise.resolve(bytes(size))),
+    randomUUID: jest.fn(() => '00000000-0000-4000-8000-000000000000'),
+  };
+});
 jest.mock('expo-localization', () => {
   const english = mockLanguage === 'en-GB';
   const locale = {

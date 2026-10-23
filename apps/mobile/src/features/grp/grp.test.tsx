@@ -44,69 +44,66 @@ const mockSecureCalls: string[] = [];
  */
 const mockSecureRefuses: { delete: Error | null } = { delete: null };
 
-jest.mock(
-  'expo-secure-store',
-  () => {
-    const set = (key: string, value: string) => {
-      mockSecureCalls.push(`set ${key}`);
-      mockSecureItems.set(key, value);
-    };
-    const get = (key: string) => {
-      mockSecureCalls.push(`get ${key}`);
-      return mockSecureItems.get(key) ?? null;
-    };
-    const remove = (key: string) => {
-      mockSecureCalls.push(`delete ${key}`);
-      mockSecureItems.delete(key);
-    };
-    return {
-      setItemAsync: jest.fn((key: string, value: string) => {
-        set(key, value);
-        return Promise.resolve();
-      }),
-      getItemAsync: jest.fn((key: string) => Promise.resolve(get(key))),
-      deleteItemAsync: jest.fn((key: string) => {
-        if (mockSecureRefuses.delete !== null) {
-          mockSecureCalls.push(`delete ${key} refused`);
-          return Promise.reject(mockSecureRefuses.delete);
-        }
-        remove(key);
-        return Promise.resolve();
-      }),
-      setItem: jest.fn(set),
-      getItem: jest.fn(get),
-      deleteItem: jest.fn(remove),
-      isAvailableAsync: jest.fn(() => Promise.resolve(true)),
-      AFTER_FIRST_UNLOCK: 0,
-      AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY: 1,
-      ALWAYS: 2,
-      WHEN_PASSCODE_SET_THIS_DEVICE_ONLY: 3,
-      ALWAYS_THIS_DEVICE_ONLY: 4,
-      WHEN_UNLOCKED: 5,
-      WHEN_UNLOCKED_THIS_DEVICE_ONLY: 6,
-    };
-  },
-  { virtual: true },
-);
+// expo-secure-store and expo-crypto are installed, so both are mocked as
+// installed, never virtual, as in every test file of the app: a virtual mock
+// of an installed package is skipped in a jest worker that already loaded it
+// for real from the same importer (packages/config/jest-virtual-mocks.test.mjs
+// says why, and refuses one).
+jest.mock('expo-secure-store', () => {
+  const set = (key: string, value: string) => {
+    mockSecureCalls.push(`set ${key}`);
+    mockSecureItems.set(key, value);
+  };
+  const get = (key: string) => {
+    mockSecureCalls.push(`get ${key}`);
+    return mockSecureItems.get(key) ?? null;
+  };
+  const remove = (key: string) => {
+    mockSecureCalls.push(`delete ${key}`);
+    mockSecureItems.delete(key);
+  };
+  return {
+    setItemAsync: jest.fn((key: string, value: string) => {
+      set(key, value);
+      return Promise.resolve();
+    }),
+    getItemAsync: jest.fn((key: string) => Promise.resolve(get(key))),
+    deleteItemAsync: jest.fn((key: string) => {
+      if (mockSecureRefuses.delete !== null) {
+        mockSecureCalls.push(`delete ${key} refused`);
+        return Promise.reject(mockSecureRefuses.delete);
+      }
+      remove(key);
+      return Promise.resolve();
+    }),
+    setItem: jest.fn(set),
+    getItem: jest.fn(get),
+    deleteItem: jest.fn(remove),
+    isAvailableAsync: jest.fn(() => Promise.resolve(true)),
+    AFTER_FIRST_UNLOCK: 0,
+    AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY: 1,
+    ALWAYS: 2,
+    WHEN_PASSCODE_SET_THIS_DEVICE_ONLY: 3,
+    ALWAYS_THIS_DEVICE_ONLY: 4,
+    WHEN_UNLOCKED: 5,
+    WHEN_UNLOCKED_THIS_DEVICE_ONLY: 6,
+  };
+});
 
-jest.mock(
-  'expo-crypto',
-  () => {
-    const bytes = (size: number) =>
-      Uint8Array.from({ length: size }, () => Math.floor(Math.random() * 256));
-    return {
-      getRandomBytes: jest.fn(bytes),
-      getRandomBytesAsync: jest.fn((size: number) => Promise.resolve(bytes(size))),
-      getRandomValues: jest.fn(<T extends ArrayBufferView>(array: T) => {
-        const view = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
-        view.set(bytes(view.length));
-        return array;
-      }),
-      randomUUID: jest.fn(() => '00000000-0000-4000-8000-000000000000'),
-    };
-  },
-  { virtual: true },
-);
+jest.mock('expo-crypto', () => {
+  const bytes = (size: number) =>
+    Uint8Array.from({ length: size }, () => Math.floor(Math.random() * 256));
+  return {
+    getRandomBytes: jest.fn(bytes),
+    getRandomBytesAsync: jest.fn((size: number) => Promise.resolve(bytes(size))),
+    getRandomValues: jest.fn(<T extends ArrayBufferView>(array: T) => {
+      const view = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+      view.set(bytes(view.length));
+      return array;
+    }),
+    randomUUID: jest.fn(() => '00000000-0000-4000-8000-000000000000'),
+  };
+});
 
 jest.mock('expo-localization', () => {
   const locale = {
