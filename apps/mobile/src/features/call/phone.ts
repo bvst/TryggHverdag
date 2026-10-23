@@ -23,10 +23,15 @@
  *     emergency numbers"; what it does with one anyway is undocumented, so it
  *     is never given one;
  *   - any other number, with CALL_PHONE held, is called at once with
- *     ACTION_CALL through expo-intent-launcher (SPIKE-01, S6); without it, or
- *     when ACTION_CALL is refused, it opens the dialer with the number in it,
- *     where the walker taps call; when both fail, the promise rejects, so the
- *     screen can say so with the number.
+ *     ACTION_CALL through expo-intent-launcher (SPIKE-01, S6); without it,
+ *     when reading it fails, or when ACTION_CALL is refused, it opens the
+ *     dialer with the number in it, where the walker taps call; when both
+ *     fail, the promise rejects, so the screen can say so with the number.
+ *
+ * This is the only file that may import expo-intent-launcher, expo-linking,
+ * or PermissionsAndroid and Linking from react-native: an ESLint rule refuses
+ * them everywhere else under src/ (CALL-01-AC6).
+ *
  * It never asks `Linking.canOpenURL` first: on Android 11 and later that
  * answers false without a <queries> entry, which would turn a working button
  * into a refusal.
@@ -121,6 +126,19 @@ export async function callPermission(): Promise<CallPermission> {
   return held ? 'granted' : 'notGranted';
 }
 
+/**
+ * Whether a call may go by ACTION_CALL: CALL_PHONE read as held. A read that
+ * fails is a permission not known to be held, so the call goes through the
+ * dialer, and the button does not fail because of the read (CALL-01-AC4).
+ */
+async function heldForCall(): Promise<boolean> {
+  try {
+    return (await callPermission()) === 'granted';
+  } catch {
+    return false;
+  }
+}
+
 /** Asks Android for CALL_PHONE, with Android's own dialog, unless it will no longer show one. */
 export async function askCallPermission(): Promise<CallPermissionAnswer> {
   if (Platform.OS !== 'android') {
@@ -160,7 +178,7 @@ export async function callNumber(number: string): Promise<void> {
     return;
   }
   const uri = telUri(plain);
-  if ((await callPermission()) === 'granted') {
+  if (await heldForCall()) {
     try {
       await startActivityAsync(ACTION_CALL, { data: uri });
       return;

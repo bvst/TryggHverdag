@@ -7,9 +7,10 @@
   },
   "call": {
     "emergency": {
-      "label": "Ring 112, nødnummeret",
-      "hint": "Åpner telefonappen med 112. Trykk ring der.",
-      "failed": "Telefonen kunne ikke åpne 112. Ring 112 selv."
+      "label": "Ring 1 1 2, nødnummeret",
+      "hint": "Åpner telefonappen med 1 1 2. Trykk ring der.",
+      "failed": "Telefonen kunne ikke åpne 112. Ring 112 selv.",
+      "failedLabel": "Telefonen kunne ikke åpne 1 1 2. Ring 1 1 2 selv."
     },
     "button": {
       "call": "Ring {{name}}",

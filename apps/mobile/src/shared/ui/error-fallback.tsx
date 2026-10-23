@@ -22,7 +22,8 @@ function SomethingWentWrong({ retry }: { retry: () => void }) {
 
   return (
     <>
-      <Message>{t('app.error.screen')}</Message>
+      {/* Read out at once: the screen changed under the walker's thumb (CALL-02-AC13). */}
+      <Message assertive>{t('app.error.screen')}</Message>
       <Button label={t('app.error.retry')} onPress={retry} />
     </>
   );

@@ -11,6 +11,10 @@
  * no #1, no permission, no credential and no server (CALL-02-AC4). A dialer
  * that cannot open is said at once, and the button stays (CALL-02-AC5).
  *
+ * A screen reader hears the number digit by digit, "Ring 1 1 2, nødnummeret",
+ * in the button's label and hint and in the line when the dialer cannot open;
+ * the visible text stays "112" (D-141's fourth amendment; CALL-02-AC5, AC6).
+ *
  * The button is at least 64 dp tall and 96 dp wide (Q6), its text grows with
  * the phone's font size and wraps (no numberOfLines, CALL-02-AC2), and the bar
  * leaves 24 dp below it, which no scroll can take away, before the content
@@ -26,6 +30,13 @@ import { openDialer } from './phone';
 
 /** The number the bar dials: a constant, never a translation or a setting (CALL-02, approach 3). */
 export const EMERGENCY_NUMBER = '112';
+
+/**
+ * The 112 button's ID, which React Native gives Android as its resource ID:
+ * emergency-112.yaml waits until it is gone before it reads the dialer, so
+ * the "112" it then finds cannot be the app's own (CALL-02-AC3).
+ */
+const EMERGENCY_BUTTON_ID = 'trygghverdag-emergency-button';
 
 /** The space below the 112 button that no scroll can reduce (CALL-01-AC1; Q6, D-141). */
 const SPACE_BELOW = 24;
@@ -53,6 +64,7 @@ export const EmergencyBar: ComponentType = function EmergencyBar() {
     <View style={styles.bar}>
       <Pressable
         role="button"
+        testID={EMERGENCY_BUTTON_ID}
         accessibilityLabel={t('call.emergency.label')}
         accessibilityHint={t('call.emergency.hint')}
         onPress={open}
@@ -60,7 +72,11 @@ export const EmergencyBar: ComponentType = function EmergencyBar() {
       >
         <Text style={styles.text}>{EMERGENCY_NUMBER}</Text>
       </Pressable>
-      {failed ? <Message assertive>{t('call.emergency.failed')}</Message> : null}
+      {failed ? (
+        <Message assertive label={t('call.emergency.failedLabel')}>
+          {t('call.emergency.failed')}
+        </Message>
+      ) : null}
     </View>
   );
 };

@@ -8,6 +8,9 @@
  *     number with GRP-02's number rule (first-contact.ts), says which one is
  *     refused, and saves nothing then (GRP-02-AC3, AC4). A save secure storage
  *     refuses is said, and the earlier #1, or none, stays (GRP-02-AC8).
+ *   - "Lagre" puts the keyboard away first, and what it says is drawn above
+ *     it, so a refusal is seen, not left under the phone keypad (GRP-02-AC3,
+ *     AC4).
  *   - "Avbryt", or Android's back, returns to the home screen with nothing
  *     changed (GRP-02-AC5).
  *   - Choosing the first #1, without Android's call permission, one line
@@ -19,6 +22,7 @@
 import { MAX_DISPLAY_NAME_LENGTH } from '@trygghverdag/contracts/display-name';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Keyboard } from 'react-native';
 
 import { Body, Button, Heading, Message, TextField, Waiting } from '../../shared/ui';
 import type { CallPermissionState } from '../call';
@@ -50,6 +54,7 @@ export function FirstContactScreen({
   const askAfterSaving = current === null && permission.permission === 'notGranted';
 
   async function save() {
+    Keyboard.dismiss();
     const contact = firstContactOf({ name, number });
     if (typeof contact === 'string') {
       setMessage(contact);
@@ -90,9 +95,9 @@ export function FirstContactScreen({
         textContentType="telephoneNumber"
         maxLength={NUMBER_MAX_LENGTH}
       />
+      {message === null ? null : <Message>{t(`grp.firstContact.${message}`)}</Message>}
       <Button label={t('grp.firstContact.save')} onPress={() => void save()} disabled={busy} />
       {busy ? <Waiting label={t('grp.waiting')} /> : null}
-      {message === null ? null : <Message>{t(`grp.firstContact.${message}`)}</Message>}
       <Button label={t('grp.firstContact.cancel')} onPress={onDone} disabled={busy} quiet />
     </>
   );

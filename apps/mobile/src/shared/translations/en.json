@@ -7,9 +7,10 @@
   },
   "call": {
     "emergency": {
-      "label": "Call 112, the emergency number",
-      "hint": "Opens your phone app with 112. Tap call there.",
-      "failed": "Your phone could not open 112. Dial 112 yourself."
+      "label": "Call 1 1 2, the emergency number",
+      "hint": "Opens your phone app with 1 1 2. Tap call there.",
+      "failed": "Your phone could not open 112. Dial 112 yourself.",
+      "failedLabel": "Your phone could not open 1 1 2. Dial 1 1 2 yourself."
     },
     "button": {
       "call": "Call {{name}}",

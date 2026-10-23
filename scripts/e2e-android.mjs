@@ -11,12 +11,15 @@
  * `scripted`, alone, in the order SCRIPTED_FLOWS holds, with the script's
  * steps around it: CALL_PHONE granted or revoked, the font size set, and
  * Telecom's record read before it; Telecom's record read again after it, the
- * dialer checked in front where the flow leaves it, and a call ended. Maestro
+ * dialer checked in front where the flow leaves it and only then left with
+ * Android's back key, and a call ended. A flow the order names that is absent,
+ * or there but not tagged `scripted`, stops the run before any flow runs, as
+ * does a flow tagged `scripted` that the order does not name. Maestro
  * cannot see a call, so the script reads Telecom's record instead, as
  * SPIKE-01's S6 did (lib/call-records.mjs). The font size is set back to the
  * usual at the end, even after a failed step or flow, and a failure names the
- * flow and the step. No step taps anything: the flows never tap in the
- * dialer, and the one call placed is to the test kit's synthetic #1, in
+ * flow and the step. No step taps anything, and back is a key, not a tap:
+ * the flows never tap in the dialer, and the one call placed is to the test kit's synthetic #1, in
  * Ofcom's range reserved for drama, on an emulator with no network
  * (SPIKE-01-AC10's rule).
  *
@@ -220,7 +223,9 @@ const translations = JSON.parse(
 );
 // Which flows run on their own, after the first run, and in which order
 // (CALL-01, approach 9). A flow tagged `scripted` that the order does not
-// name would run nowhere, so the run stops here, naming it.
+// name would run nowhere, and a flow the order names that is absent, or there
+// but not tagged `scripted`, would take its checks with it; so the run stops
+// here, before any flow runs, naming each.
 const flowsDir = path.join(root, FLOWS);
 const scripted = scriptedFlowsToRun(
   readdirSync(flowsDir)
@@ -228,11 +233,6 @@ const scripted = scriptedFlowsToRun(
     .map((name) => ({ name, text: readFileSync(path.join(flowsDir, name), 'utf8') })),
 );
 if (!scripted.ok) stop(scripted.message);
-if (scripted.absent.length > 0) {
-  process.stdout.write(
-    `e2e:android: not in ${FLOWS}, so not run: ${scripted.absent.join(', ')}.\n`,
-  );
-}
 // The flows that need a server (GRP-01) join as the first admin with the API's
 // ADMIN_BOOTSTRAP_CODE, which the caller hands in as BOOTSTRAP_CODE: CI's
 // android-e2e job sets both, from one synthetic value. Unset, those flows type
@@ -376,6 +376,11 @@ function runScripted({ flow, callPhone, fontScale, telecomAfter, dialerInFront: 
     });
     if (!inFront.ok) throw new Error(`the dialer in front after it: ${inFront.message}`);
     process.stdout.write(`e2e:android: ${flow}: ${inFront.message}\n`);
+    // Only now, once the window it left was read and was the dialer, Android's
+    // back key, once, as the last step for this flow, so the run never leaves
+    // the dialer showing 112. Back is not a tap: nothing in the dialer is
+    // touched (CALL-02-AC3). A failed check above presses nothing.
+    step('leave the dialer with the back key', ['shell', 'input', 'keyevent', 'KEYCODE_BACK']);
   }
   if (endCall === true) {
     // The emulator's call to #1 reaches no one; it is ended before the next flow.

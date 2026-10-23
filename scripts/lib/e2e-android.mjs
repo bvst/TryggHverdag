@@ -877,35 +877,54 @@ export const SCRIPTED_FLOWS = [
 
 /**
  * The scripted flows to run, in SCRIPTED_FLOWS' order, from the flows in the
- * folder: every flow tagged `scripted` must be in that order, or the run stops
- * before it starts, naming it, since the first run leaves it out and nothing
- * else would run it. A flow in the order but not in the folder is not run,
- * and named.
+ * folder. The run stops before any flow runs, naming each flow and what is
+ * wrong with it, when:
+ *   - a flow tagged `scripted` is not in that order: the first run leaves it
+ *     out, and nothing else would run it;
+ *   - a flow in that order is absent from the folder, or there but not tagged
+ *     `scripted` (CALL-01, approach 9, review loop 1): a flow that silently
+ *     dropped out of the order would take its Telecom and dialer checks with
+ *     it, and an untagged one would run in the first run, without its steps.
+ * `absent` is always empty when the run goes on; it is kept for the shape the
+ * callers read.
  *
  * @param {{ name: string, text: string }[]} flows the folder's flow files
  * @returns {{ ok: true, run: ScriptedFlow[], absent: string[] } | { ok: false, message: string }}
  */
 export function scriptedFlowsToRun(flows) {
+  const present = flows.map(({ name }) => name);
   const tagged = flows
     .filter(({ text }) => flowTags(text).includes(SCRIPTED_TAG))
     .map(({ name }) => name);
   const ordered = new Set(SCRIPTED_FLOWS.map(({ flow }) => flow));
   const unordered = tagged.filter((name) => !ordered.has(name));
+  /** One sentence for each thing wrong, naming the flow. */
+  const problems = [];
   if (unordered.length > 0) {
-    return {
-      ok: false,
-      message:
-        `${unordered.join(', ')} ${unordered.length === 1 ? 'is' : 'are'} tagged ${SCRIPTED_TAG}, ` +
+    problems.push(
+      `${unordered.join(', ')} ${unordered.length === 1 ? 'is' : 'are'} tagged ${SCRIPTED_TAG}, ` +
         "but the script's order (SCRIPTED_FLOWS in scripts/lib/e2e-android.mjs) does not name " +
         `${unordered.length === 1 ? 'it' : 'them'}, so nothing would run ${unordered.length === 1 ? 'it' : 'them'}. ` +
         'Add each to the order, with the steps its header says it needs.',
-    };
+    );
   }
-  return {
-    ok: true,
-    run: SCRIPTED_FLOWS.filter(({ flow }) => tagged.includes(flow)),
-    absent: SCRIPTED_FLOWS.filter(({ flow }) => !tagged.includes(flow)).map(({ flow }) => flow),
-  };
+  for (const { flow } of SCRIPTED_FLOWS) {
+    if (!present.includes(flow)) {
+      problems.push(
+        `${flow} is in the script's order (SCRIPTED_FLOWS in scripts/lib/e2e-android.mjs) ` +
+          'but not in the folder of flows, so its checks would not run.',
+      );
+    } else if (!tagged.includes(flow)) {
+      problems.push(
+        `${flow} is in the script's order and in the folder, but not tagged ${SCRIPTED_TAG}, ` +
+          "so the first run would run it without the script's steps around it.",
+      );
+    }
+  }
+  if (problems.length > 0) {
+    return { ok: false, message: problems.join('\n') };
+  }
+  return { ok: true, run: [...SCRIPTED_FLOWS], absent: [] };
 }
 
 /**

@@ -17,15 +17,19 @@
  *       - a 401: the credential and #1 are deleted, and the join screen says
  *         plainly that this phone is no longer signed in to the group (AC29).
  *         Any call that answers 401 does the same, wherever it is made;
- *       - no answer, or a 5xx: nothing is deleted, nothing signs out, and the
- *         home screen says the server could not be reached, with a retry. A
- *         database that blinked must never sign anyone out;
+ *       - no answer, a 5xx, or any 4xx but a 401 (a 403, 404 or 409): nothing
+ *         is deleted, nothing signs out, and the home screen says the server
+ *         could not be reached, with a retry. A database that blinked must
+ *         never sign anyone out;
  *   - storage that cannot be read: the home screen, as for no answer, and #1
  *     as unreadable when its own read fails (GRP-02-AC8).
  *
  * #1 is kept in secure storage and nowhere else, never sent to the server
  * (Q1, D-141), deleted with the credential when the phone is signed out, and
- * kept through an unreachable server (GRP-02-AC6).
+ * kept through an unreachable server (GRP-02-AC6). The delete at a sign-out
+ * is one call the store can refuse, so a join that gets a new credential
+ * deletes #1 again, best effort: a #1 still there then belongs to a home
+ * screen that is gone, and a refusal does not fail the join.
  *
  * The join sends the code as typed, the join key and the name. A join
  * answered with no answer at all, or a 5xx, saved nothing and can be sent
@@ -212,6 +216,17 @@ export function GroupSessionProvider({ children }: { children: ReactNode }) {
         return 'notValid';
       }
       const { credential: issued, userId, role } = answer.body;
+      // A #1 kept now was left by a refused delete at a sign-out: the join
+      // screen shows only with no credential, and a new member has no #1. It
+      // goes before the new credential is kept, so no stop between the two
+      // can leave it on the new home screen. Best effort: a refusal here
+      // does not fail the join (GRP-02-AC6).
+      try {
+        await secureStorage.deleteFirstContact();
+      } catch {
+        // Kept: the next start reads it and shows it on the home screen, in
+        // front of the walker, who can change it (GRP-02, Risks).
+      }
       try {
         await secureStorage.saveCredential(issued);
       } catch {

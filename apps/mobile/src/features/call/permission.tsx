@@ -13,11 +13,13 @@
  * to allow phone calls. Once Android answers `neverAskAgain`, it shows no
  * dialog any more, so the same tap opens the app's settings, and from then
  * until the app restarts or the permission is held, the button reads "Åpne
- * innstillinger" and opens them directly (CALL-01-AC4).
+ * innstillinger" and opens them directly (CALL-01-AC4). It speaks of
+ * Android's permission and Android's dialog, so on any other platform it
+ * renders nothing (iOS is task 12's).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { Body, Button } from '../../shared/ui/kit';
 import {
@@ -102,7 +104,7 @@ async function openSettings(): Promise<void> {
 export function CallPermissionLine({ permission }: { permission: CallPermissionState }) {
   const { t } = useTranslation();
 
-  if (permission.permission !== 'notGranted') {
+  if (Platform.OS !== 'android' || permission.permission !== 'notGranted') {
     return null;
   }
   return (

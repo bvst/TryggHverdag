@@ -11,7 +11,8 @@
  *   - a text field has its label shown above it, where it stays while text
  *     is typed (never a placeholder alone), and the same label as its
  *     screen-reader label, so a screen reader meets the field once, by name;
- *   - a heading is marked as one;
+ *   - a heading is marked as one, and says where it is drawn, so a new view
+ *     inside a Screen can move the focus to it (GRP-02-AC11);
  *   - a message the app gives after an action is read out when it appears,
  *     at once when it says a call or 112 could not start;
  *   - a request in flight shows a waiting indicator a screen reader names.
@@ -20,6 +21,7 @@
  * `Screen`, which draws the 112 bar, is in screen.tsx: features import these
  * pieces from this file, and never `Screen` (CALL-02-AC1, AC2).
  */
+import { useRef } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -30,14 +32,18 @@ import {
   type TextInputProps,
 } from 'react-native';
 
+import { useScreenHeading, type HeadingRef } from './new-view';
 import { palette } from './palette';
 
 /** The least height of every control (Q6, D-141). */
 export const CONTROL_MIN_HEIGHT = 56;
 
 export function Heading({ children }: { children: string }) {
+  const heading: HeadingRef = useRef(null);
+  useScreenHeading(heading);
+
   return (
-    <Text accessibilityRole="header" style={styles.heading}>
+    <Text ref={heading} accessibilityRole="header" style={styles.heading}>
       {children}
     </Text>
   );
@@ -50,17 +56,25 @@ export function Body({ children }: { children: string }) {
 /**
  * What the app says after an action: read out when it appears. `assertive`
  * when it must interrupt, as a call or 112 that could not start must
- * (CALL-01-AC5, CALL-02-AC5).
+ * (CALL-01-AC5, CALL-02-AC5). `label`, when given, is what a screen reader
+ * reads instead of the text: the same sentence with a number spelled digit
+ * by digit, so it can be dialled by ear.
  */
 export function Message({
   children,
   assertive = false,
+  label,
 }: {
   children: string;
   assertive?: boolean;
+  label?: string;
 }) {
   return (
-    <Text accessibilityLiveRegion={assertive ? 'assertive' : 'polite'} style={styles.message}>
+    <Text
+      accessibilityLiveRegion={assertive ? 'assertive' : 'polite'}
+      accessibilityLabel={label}
+      style={styles.message}
+    >
       {children}
     </Text>
   );

@@ -21,14 +21,24 @@
  * The setup screen, and the admin's invitation and member list, open from the
  * home screen, in this one route, so whatever signs the phone out, from any of
  * them, brings the join screen back at once. Back, on screen or Android's
- * own, returns to the home screen.
+ * own, returns to the home screen. Each view opened, the home screen again
+ * included, starts at the top of the route's Screen, with screen-reader focus
+ * on its heading (GRP-02-AC11).
  */
 import type { Member } from '@trygghverdag/contracts';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BackHandler, StyleSheet, Text } from 'react-native';
 
-import { Body, Button, Heading, Message, Waiting, palette } from '../../shared/ui';
+import {
+  Body,
+  Button,
+  Heading,
+  Message,
+  Waiting,
+  palette,
+  useViewStartsAtTop,
+} from '../../shared/ui';
 import {
   CallButton,
   CallPermissionLine,
@@ -135,7 +145,7 @@ function HomeView({
           >
             {firstContact.contact.number}
           </Text>
-          <CallButton callee={firstContact.contact} />
+          <CallButton callee={firstContact.contact} permission={permission} />
           <CallPermissionLine permission={permission} />
           <Button label={t('grp.firstContact.change')} onPress={choose} quiet />
         </>
@@ -166,6 +176,7 @@ function HomeArea({
 }) {
   const permission = useCallPermission();
   const [view, setView] = useState<View>('home');
+  useViewStartsAtTop(view);
 
   useEffect(() => {
     if (view === 'home') {
