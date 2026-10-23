@@ -1435,10 +1435,21 @@ describe('GRP-01-AC30: labels that stay, a waiting indicator, one "try again" (r
         await screen.findByText(nbText('grp.member.unreachable'));
       }
 
+      // RG-03 (M3 task 2, review loop 1): the filter was /prøv|try/i, which
+      // matched "try" inside any word. GRP-02-AC1 now has the explaining call
+      // button's label carry its line, "… Trykk for å velge.", and "Trykk"
+      // means "press", not a retry, so that button was taken for one. A retry
+      // word is now matched only as a word of its own: any word that begins
+      // "prøv" (prøv, prøve, prøvde) or "retry", or "try", "tries" or
+      // "trying". Every control offering to try again is still caught, and
+      // must still be named exactly "Prøv igjen"; only words that merely begin
+      // with "try", such as "Trykk" or "trygg", no longer count.
       const named = screen
         .queryAllByRole('button')
         .map((button) => labelOf(button as unknown as HostNode) ?? '')
-        .filter((label) => /prøv|try/i.test(label));
+        .filter((label) =>
+          /(?:^|[^\p{L}])(?:prøv\p{L}*|retry\p{L}*|try|tries|trying)(?![\p{L}])/iu.test(label),
+        );
       expect(named.length).toBeGreaterThan(0);
       expect(named).toEqual(named.map(() => 'Prøv igjen'));
     },
