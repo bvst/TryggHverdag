@@ -662,7 +662,7 @@ Keys for the three specs; the implementer may rename keys, not texts.
 | `grp.firstContact.cancel` | Avbryt | Cancel |
 | `grp.firstContact.numberNotUsable` | Nummeret ser ikke riktig ut. Bruk bare sifre, gjerne med + og landskode først. | That number doesn't look right. Use digits only, with + and the country code first if needed. |
 | `grp.firstContact.nameNotUsable` | Navnet kan ikke brukes. Det må ha minst ett synlig tegn, og ingen skjulte tegn. | That name can't be used. It needs at least one visible character, and no hidden ones. |
-| `grp.firstContact.notSaved` | Nummeret ble ikke lagret. Prøv igjen. | The number was not saved. Try again. |
+| `grp.firstContact.notSaved` | Kontakten ble ikke lagret. Prøv igjen. | The contact was not saved. Try again. |
 | `grp.member.unreachable` | (unchanged) Vi fikk ikke kontakt med serveren. Prøv igjen om litt. | (unchanged) |
 | `app.error.screen` | Noe gikk galt på denne skjermen. | Something went wrong on this screen. |
 

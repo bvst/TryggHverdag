@@ -504,8 +504,10 @@ server.** (L5)
 
 **GRP-02-AC8 — A #1 that cannot be saved or read is said, never hidden.** (L5)
 - **When** secure storage's `setItemAsync` rejects on "Lagre"
-- **Then** the setup screen shows "Nummeret ble ikke lagret. Prøv igjen.", and
-  the home screen, once returned to, shows the earlier #1, or none
+- **Then** the setup screen shows "Kontakten ble ikke lagret. Prøv igjen.", and
+  the home screen, once returned to, shows the earlier #1, or none (*PR #101*,
+  `a11y-i18n-reviewer`: the save writes the name and the number together, so
+  "Kontakten" says what was not saved; it was "Nummeret ble ikke lagret.")
 - **When** at start secure storage's read of #1 rejects, or returns a value that
   is not JSON, or one whose name or number fails the rules
 - **Then** the call button reads "Velg hvem du vil ringe" with "Vi fikk ikke
@@ -602,7 +604,12 @@ with the reason beside it and `test-auditor` can check none is a weakening:
   "Prøv igjen", and it still matches every retry form (Prøv…, retry, try,
   tries, trying); it no longer matches words that only contain "try" or
   "prøv" ("Trykk", "TryggHverdag"). Its reason is written beside it and in
-  the commit.
+  the commit. *PR #101, `test-auditor` note 1:* `4c38bb2` also drops
+  `{ virtual: true }` from the `expo-secure-store` and `expo-crypto` mocks in
+  this file and in `app.test.tsx` (and in the four other files that mock
+  them), because the packages are installed and a virtual mock of an
+  installed package is skipped in some file orders (`a54f735`'s cause); the
+  factories are byte-identical, and the reason is written beside each.
 - **`first-admin-invites.yaml`**: if the home screen's heading changes from
   `grp.member.title`, the flow's `MEMBER_TITLE` step follows it.
 - **The shared kit moves** from `features/grp/ui.tsx` to `src/shared/ui/`, and
