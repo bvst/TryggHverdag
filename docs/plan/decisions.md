@@ -6296,7 +6296,9 @@ any other path is work, not a candidate for the same treatment.
 ## D-141 — The home screen: the owner's answers (GRP-02, CALL-01, CALL-02; M3 task 2)
 - **Date:** 2026-10-22 · **Status:** Accepted (the owner, 2026-10-22). Asked in
   session, one at a time, each with Claude's recommendation, and the owner chose
-  the recommendation every time; item 7 amended three times the same day, below ·
+  the recommendation every time; item 7 amended three times the same day, below;
+  a fourth answer, on CALL-02-AC6's screen-reader label, given 2026-10-22 and
+  recorded 2026-10-23, is the last amendment, below ·
   **Section:** 10 (M3, task 2); D-010, D-012, D-013, D-014, D-016, D-023, D-031,
   D-042, D-055, D-075, D-081, D-128, D-134, D-137, D-139
 - **Context:**
@@ -6419,7 +6421,11 @@ any other path is work, not a candidate for the same treatment.
     and 999, and any of these followed by more digits also goes to the dialer.
     This widens the set of the choice above, "110, 112 and 113 as #1 always go
     to the dialer and never to `ACTION_CALL`" (CALL-01-AC2), and (a)'s: the rule
-    is the same, the dialer and never `ACTION_CALL`.
+    is the same, the dialer and never `ACTION_CALL`;
+  - (g, added by the fourth answer, below, 2026-10-23) the hint is spelled
+    digit by digit as the label is, and the English texts follow, as the
+    decision below gives them. As relayed for this record, the question named
+    the label; the hint and the English are Claude's, so reviewers see them.
 - **Consequences:**
   - **No server work in task 2.** No route, no table and no contract change;
     `api:diff` must show none. #1 is deleted from the phone with the credential
@@ -6649,3 +6655,59 @@ any other path is work, not a candidate for the same treatment.
         branch, without auto-merge, for the owner's hand merge (D-075). Its red
         tests for CALL-02-AC12 are written first, then its green change, as for
         the others. The batching with #95 is unchanged (items 7 and 9).
+
+- **Amended 2026-10-23, with a fourth owner answer, asked in session with
+  Claude's recommendation and given on 2026-10-22: the 112 button's
+  screen-reader texts spell the number digit by digit.** It changes none of the
+  nine items above. It changes the strings of CALL-02-AC6:
+  - **Why:** `a11y-i18n-reviewer` flagged, in its review of task 2 at `cff3021`
+    (PASS, advisory under D-043, with should-fix items), that a screen reader
+    likely reads the 112 button's label, "Ring 112, nødnummeret", as "ring
+    hundre og tolv", where Norwegians say "én én to".
+    - The reviewer reasoned this. Its own note says it ran no TalkBack and no
+      Norwegian text-to-speech voice
+      (`.claude/agent-memory/a11y-i18n-reviewer/project_task2_home_screen.md`,
+      read 2026-10-23).
+    - CALL-02-AC6 asserts the label in full, in a test in an owned folder, and
+      the button is the 112 button. So Claude asked, not decided.
+  - **Asked:** whether the screen-reader text should be "Ring 1 1 2,
+    nødnummeret", read digit by digit, with the visible text staying "112",
+    with Claude's recommendation: yes. It was not tested with TalkBack on a
+    real phone when it was asked. (The question's own wording is not recorded
+    here.)
+  - **The owner answered:** "Ja, «Ring 1 1 2»" (Yes, "Ring 1 1 2"), the
+    recommendation, on 2026-10-22.
+  - **Decision:**
+    - CALL-02-AC6's label is "Ring 1 1 2, nødnummeret".
+    - Its hint is spelled the same way: "Åpner telefonappen med 1 1 2. Trykk
+      ring der."
+    - The English is "Call 1 1 2, the emergency number" for the label and
+      "Opens your phone app with 1 1 2. Tap call there." for the hint.
+    - The visible text stays "112".
+    - **Claude's choice (D-031), (g) under "Who decided":** the hint and the
+      English follow the label's spelling, as #1's number is already spelled
+      for a screen reader (GRP-02-AC10).
+  - **Consequences:**
+    - **Existing assertions change by design (RG-03).** Four test files hold
+      the old label (`shared/ui/screen.test.tsx`, `features/call/call.test.tsx`,
+      `features/call/emergency.test.tsx` and `features/grp/home.test.tsx`, found
+      by `grep` on 2026-10-23), and `emergency.test.tsx` asserts the label and
+      the hint in full in both languages (CALL-02-AC6). Only `test-author`
+      changes them, with a written reason; `nb.json` and `en.json` follow. The
+      specs list the criteria (`planner` is writing them; not read for this
+      entry).
+    - **The English hint keeps "your".** `en.json` and `emergency.test.tsx`
+      read "Opens your phone app with 112. Tap call there." (read
+      2026-10-23). Only the digits change; an earlier draft of this entry said
+      "the phone app", which was a slip in the coordinating session's brief.
+    - **No L7 flow changes for the label.** `grep` finds neither the label nor
+      "Ring 112" under `apps/mobile/e2e/` or `scripts/` (2026-10-23), and the
+      visible text, "112", stays.
+  - **Not verified:**
+    - How TalkBack actually reads either form, "Ring 112" or "Ring 1 1 2".
+      Only a real phone (L9) shows it.
+    - **Not part of the question:** "Telefonen kunne ikke åpne 112. Ring 112
+      selv." (`call.emergency.failed`) is also read aloud. Its visible text is
+      unchanged. Following this answer, Claude gave it a spelled screen-reader
+      label under D-031, `call.emergency.failedLabel`: "Telefonen kunne ikke
+      åpne 1 1 2. Ring 1 1 2 selv." (CALL-02-AC5).

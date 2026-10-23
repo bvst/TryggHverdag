@@ -45,7 +45,7 @@ new here (the scroll and focus reset is GRP-02-AC11).
 
 | Finding | Decision | Criterion |
 |---|---|---|
-| The owner: "Ja, «Ring 1 1 2»" | The 112 button's screen-reader label is "Ring 1 1 2, nødnummeret" and its hint "Åpner telefonappen med 1 1 2. Trykk ring der."; English "Call 1 1 2, the emergency number" and "Opens the phone app with 1 1 2. Tap call there."; the visible text stays "112" | Approach 1; AC1, AC6, AC13; translations table |
+| The owner: "Ja, «Ring 1 1 2»" | The 112 button's screen-reader label is "Ring 1 1 2, nødnummeret" and its hint "Åpner telefonappen med 1 1 2. Trykk ring der."; English "Call 1 1 2, the emergency number" and "Opens your phone app with 1 1 2. Tap call there."; the visible text stays "112" | Approach 1; AC1, AC6, AC13; translations table |
 | The spec pass's note: the failure line still says "112" to a screen reader | Claude's choice under D-031, following the owner's answer: `call.emergency.failed` gets a screen-reader label, `call.emergency.failedLabel`, "Telefonen kunne ikke åpne 1 1 2. Ring 1 1 2 selv." / "Your phone could not open 1 1 2. Dial 1 1 2 yourself."; the visible text keeps "112" | Approach 4; AC5, AC6; translations table |
 | `safety-reviewer` 1: the L7 flow can pass on the app's own button | After the tap, the flow waits until the app is gone before it asserts the dialer's 112; until CI runs the fixed flow, "the dialer opens with 112" is unobserved | AC3; "The L7 112 step" |
 | `safety-reviewer` 3: a non-401 4xx at start | 403, 404 or 409 on `GET /v1/me` keeps the credential and #1 and shows the unreachable line; only a 401 signs out | Approach 2; AC8 (and GRP-02-AC6) |
@@ -477,7 +477,7 @@ because the route draws it and no feature can (the last bullet).
   the visible text unchanged)
 - **And**, in the same owned test (`features/call/emergency.test.tsx`), with
   the app's language set to English as the existing language test sets it,
-  the label reads "Call 1 1 2, the emergency number", the hint "Opens the
+  the label reads "Call 1 1 2, the emergency number", the hint "Opens your
   phone app with 1 1 2. Tap call there.", AC5's line "Your phone could
   not open 112. Dial 112 yourself.", and AC5's label "Your phone could not
   open 1 1 2. Dial 1 1 2 yourself.", each in full; and, in bokmål, AC5's
@@ -619,7 +619,7 @@ Keys for the three specs; the implementer may rename keys, not texts.
 |---|---|---|
 | `call.emergency.text` | 112 (a constant, not a key: approach 3) | — |
 | `call.emergency.label` | Ring 1 1 2, nødnummeret | Call 1 1 2, the emergency number |
-| `call.emergency.hint` | Åpner telefonappen med 1 1 2. Trykk ring der. | Opens the phone app with 1 1 2. Tap call there. |
+| `call.emergency.hint` | Åpner telefonappen med 1 1 2. Trykk ring der. | Opens your phone app with 1 1 2. Tap call there. |
 | `call.emergency.failed` | Telefonen kunne ikke åpne 112. Ring 112 selv. | Your phone could not open 112. Dial 112 yourself. |
 | `call.emergency.failedLabel` | Telefonen kunne ikke åpne 1 1 2. Ring 1 1 2 selv. | Your phone could not open 1 1 2. Dial 1 1 2 yourself. |
 | `call.button.call` | Ring {{name}} | Call {{name}} |
