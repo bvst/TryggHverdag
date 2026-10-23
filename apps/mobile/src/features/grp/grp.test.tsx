@@ -521,6 +521,18 @@ afterEach(async () => {
     await launched.testing.cleanup();
     launched = undefined;
   }
+  // RG-03 (M3 task 2, CALL-02-AC7): moved here from the afterEach of "GRP-01-AC29:
+  // the app waits 20 s", which Jest ran before this one, so the app was
+  // unmounted under real timers. No assertion changes; only the order of the
+  // teardown does.
+  // Real timers come back here, once the app is unmounted, and never in a
+  // describe's own afterEach, which Jest runs before this one. Expo Router's
+  // renderRouter fakes the timers, and React Native's StatusBar, drawn by the
+  // root layout (CALL-02-AC7), clears its pending immediate as it unmounts:
+  // unmounted under real timers, it hands its fake id to Node's real
+  // clearImmediate, which corrupts Node's count of immediates, and from then
+  // on React's act never settles and every later launch in the file hangs.
+  jest.useRealTimers();
 });
 
 // ---------------------------------------------------------------------------
@@ -1547,9 +1559,8 @@ describe('GRP-01-AC27: a join sent again carries the join key of the first (revi
 });
 
 describe('GRP-01-AC29: the app waits 20 s for an answer, and no longer (review loop 1, test-auditor)', () => {
-  afterEach(() => {
-    jest.useRealTimers();
-  });
+  // RG-03 (M3 task 2): real timers are restored by the file's afterEach, after
+  // the app is unmounted, and no longer here (see that afterEach for why).
 
   /** Jest's fake timers, with promises left to run as they do. */
   const fakeTimers = () => {

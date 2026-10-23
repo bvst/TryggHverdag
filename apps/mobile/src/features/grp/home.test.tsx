@@ -223,6 +223,8 @@ const NB = {
 
 /** The same texts, as en.json is to hold them under the same keys (GRP-02-AC10). */
 const EN = {
+  shown: (name: string) => `#1: ${name}`,
+  change: 'Change your #1 contact',
   title: 'Who do you call first?',
   nameLabel: 'Name',
   numberLabel: 'Phone number',
@@ -539,6 +541,14 @@ afterEach(async () => {
     await launched.testing.cleanup();
     launched = undefined;
   }
+  // Real timers come back here, once the app is unmounted, and never in a
+  // describe's own afterEach, which Jest runs before this one. Expo Router's
+  // renderRouter fakes the timers, and React Native's StatusBar, drawn by the
+  // root layout (CALL-02-AC7), clears its pending immediate as it unmounts:
+  // unmounted under real timers, it hands its fake id to Node's real
+  // clearImmediate, which corrupts Node's count of immediates, and from then
+  // on React's act never settles and every later launch in the file hangs.
+  jest.useRealTimers();
   expect(unanswered).toEqual([]);
 });
 
@@ -905,9 +915,7 @@ async function launchWithMeFailing(how: string): Promise<Screen> {
 }
 
 describe('GRP-02-AC6: #1 stays on the phone', () => {
-  afterEach(() => {
-    jest.useRealTimers();
-  });
+  // Real timers are restored by the file's afterEach, after the app is unmounted.
 
   test('GRP-02-AC6: through choosing, changing and calling #1, no request the app makes to the server holds #1’s name or number, in its path, its headers or its body', async () => {
     await phoneHolding({ role: 'ADMIN' });
@@ -1033,9 +1041,7 @@ describe('GRP-02-AC6: #1 stays on the phone', () => {
 // ---------------------------------------------------------------------------
 
 describe('GRP-02-AC7: the home screen shows who #1 is without waiting for the server', () => {
-  afterEach(() => {
-    jest.useRealTimers();
-  });
+  // Real timers are restored by the file's afterEach, after the app is unmounted.
 
   test('GRP-02-AC7: while GET /v1/me has not answered, the home screen shows "Nummer 1: {name}", the number, and the call button "Ring {name}"', async () => {
     await phoneHolding({ firstContact: FIRST });
@@ -1293,7 +1299,9 @@ describe('GRP-02-AC10: every word is translated, every field labelled', () => {
     async (_language, language, file, title, save) => {
       await phoneHolding({ firstContact: FIRST });
       const screen = await launch({ language });
-      await screen.findByText(language === 'nb-NO' ? NB.shown(FIRST.name) : /#1/);
+      // The whole "#1: {name}" line: /#1/ alone also matched the button to
+      // change #1, "Change your #1 contact" in English (GRP-02's texts).
+      await screen.findByText(exactly((language === 'nb-NO' ? NB : EN).shown(FIRST.name)));
 
       const home = texts(screen).filter(
         (text) => text !== '112' && text !== FIRST.number && text.includes(FIRST.name),
@@ -1303,13 +1311,11 @@ describe('GRP-02-AC10: every word is translated, every field labelled', () => {
         expect({ text, translated: translated(file, text) }).toEqual({ text, translated: true });
       }
 
-      const change = buttons(screen).find(
-        (node) => node !== callButton(screen) && labelOf(node) !== NB.emergencyLabel,
-      );
-      if (change === undefined) {
-        throw new Error('the home screen has no button to change #1');
-      }
-      await press(change);
+      // The button to change #1, by its own text in the language: the call
+      // button and 112's are found by their bokmål names, so in English,
+      // leaving them out found no call button at all.
+      const words = language === 'nb-NO' ? NB : EN;
+      await press(screen.getByRole('button', { name: exactly(words.change) }));
       await screen.findByText(title);
       const setup = texts(screen).filter((text) => text !== '112');
       expect(setup).toContain(title);

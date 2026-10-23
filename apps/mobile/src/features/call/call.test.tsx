@@ -473,6 +473,14 @@ afterEach(async () => {
     await launched.testing.cleanup();
     launched = undefined;
   }
+  // Real timers come back here, once the app is unmounted, and never in a
+  // describe's own afterEach, which Jest runs before this one. Expo Router's
+  // renderRouter fakes the timers, and React Native's StatusBar, drawn by the
+  // root layout (CALL-02-AC7), clears its pending immediate as it unmounts:
+  // unmounted under real timers, it hands its fake id to Node's real
+  // clearImmediate, which corrupts Node's count of immediates, and from then
+  // on React's act never settles and every later launch in the file hangs.
+  jest.useRealTimers();
   expect(unanswered).toEqual([]);
 });
 
@@ -939,9 +947,7 @@ const SERVER_DOWN: [string, string][] = [
 ];
 
 describe('CALL-01-AC6: calling needs no server and no journey', () => {
-  afterEach(() => {
-    jest.useRealTimers();
-  });
+  // Real timers are restored by the file's afterEach, after the app is unmounted.
 
   test.each(SERVER_DOWN)(
     'CALL-01-AC6: with GET /v1/me %s, a tap starts the call to #1, and no request is made between the tap and the call',

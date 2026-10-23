@@ -287,6 +287,15 @@ function hiding(node: HostNode): string[] {
 }
 
 const ME = 'GET /v1/me';
+/** GET /v1/me's answer for a member, every value synthetic, as emergency.test.tsx's. */
+const ME_ANSWER = {
+  status: 200,
+  body: {
+    userId: 'b2b2b2b2-0000-4000-8000-00000000000b',
+    displayName: 'Testmedlem ØKVAR',
+    role: 'MEMBER',
+  },
+};
 const CREDENTIAL_KEY = 'deviceCredential';
 const CREDENTIAL = 'C'.repeat(20) + 'd'.repeat(13) + '-_0123456789';
 
@@ -305,6 +314,14 @@ afterEach(async () => {
     await launched.testing.cleanup();
     launched = undefined;
   }
+  // Real timers come back here, once the app is unmounted, and never in a
+  // describe's own afterEach, which Jest runs before this one. Expo Router's
+  // renderRouter fakes the timers, and React Native's StatusBar, drawn by the
+  // root layout (CALL-02-AC7), clears its pending immediate as it unmounts:
+  // unmounted under real timers, it hands its fake id to Node's real
+  // clearImmediate, which corrupts Node's count of immediates, and from then
+  // on React's act never settles and every later launch in the file hangs.
+  jest.useRealTimers();
   expect(unanswered).toEqual([]);
 });
 
@@ -641,6 +658,10 @@ describe('CALL-02-AC7: every screen is dark', () => {
 
   test('CALL-02-AC7: the waiting indicator, shown while secure storage is read at start, takes its colour from the palette', async () => {
     mockStore.items.set(CREDENTIAL_KEY, CREDENTIAL);
+    // Once the read is released below, the home screen asks GET /v1/me at once
+    // (CALL-02, approach 2), so it gets an answer, as emergency.test.tsx's
+    // brief start does, and the file's afterEach finds nothing unanswered.
+    api.always(ME, ME_ANSWER);
     const release = mockStore.holdReads();
     const screen = await launch('/');
     await settle();

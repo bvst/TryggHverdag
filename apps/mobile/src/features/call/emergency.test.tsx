@@ -553,6 +553,14 @@ afterEach(async () => {
     await launched.testing.cleanup();
     launched = undefined;
   }
+  // Real timers come back here, once the app is unmounted, and never in a
+  // describe's own afterEach, which Jest runs before this one. Expo Router's
+  // renderRouter fakes the timers, and React Native's StatusBar, drawn by the
+  // root layout (CALL-02-AC7), clears its pending immediate as it unmounts:
+  // unmounted under real timers, it hands its fake id to Node's real
+  // clearImmediate, which corrupts Node's count of immediates, and from then
+  // on React's act never settles and every later launch in the file hangs.
+  jest.useRealTimers();
   expect(unanswered).toEqual([]);
 });
 
@@ -1032,9 +1040,7 @@ describe('CALL-02-AC6: the 112 button says what it is, and nothing more', () => 
 // ---------------------------------------------------------------------------
 
 describe('CALL-02-AC8: the home screen shows 112 and the call button at once, without waiting for the server', () => {
-  afterEach(() => {
-    jest.useRealTimers();
-  });
+  // Real timers are restored by the file's afterEach, after the app is unmounted.
 
   test('CALL-02-AC8: with a credential stored and GET /v1/me held unanswered, once secure storage is read the home screen shows the 112 button and the call button, and nothing of the group: not "Du er med i gruppen", not "Denne telefonen er logget inn i gruppen.", not the admin’s choices', async () => {
     signedIn('ADMIN');
