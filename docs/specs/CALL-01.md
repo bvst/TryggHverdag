@@ -424,13 +424,13 @@ and why": tracked requirements this task does not deliver are named in words.
      phone shows Maestro nothing. That the call had already ended, and that
      the phone slept, is inferred, not seen: the job log holds neither, and
      the debug artifact could not be read from the session. So:
-     - **Before each scripted flow,** the script reads whether the phone is
-       awake (`dumpsys power`, its wakefulness) and whether the keyguard is
-       showing; if it is asleep or locked, it wakes it
-       (`input keyevent KEYCODE_WAKEUP`, `wm dismiss-keyguard`) and says so
-       in the job log, naming the flow; if it is still not awake and
-       unlocked after that, the run stops there, naming the flow and the
-       step. Output it cannot read stops the run too, never read as awake.
+     - **Before each scripted flow,** the script reads the phone's
+       wakefulness (`dumpsys power`, its `mWakefulness=` line). If it is not
+       `Awake`, it wakes the phone (`input keyevent KEYCODE_WAKEUP`), lifts
+       the keyguard a sleep leaves (`wm dismiss-keyguard`), says so in the
+       job log, naming the flow and what it read, and reads again; still not
+       `Awake` stops the run there, naming the flow and the step. Output
+       with no `mWakefulness=` line stops the run too, never read as awake.
      - **The end-call key only while Telecom shows the call in progress.**
        After `call-with-permission`, the script reads the new call's events
        in Telecom's record: while the call has not ended, it presses
