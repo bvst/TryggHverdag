@@ -18,7 +18,12 @@
  *     `recover(name)`, or `reset()`; the call is recorded all the same;
  *   - `holdCalls()` keeps every `callNumber` from settling until the hold is
  *     released (or fails), so a test can tap again while a call is still
- *     being started (CALL-01-AC2).
+ *     being started (CALL-01-AC2);
+ *   - `holdPermission()` keeps every `callPermission()` read from settling
+ *     until the hold is released; each then answers what `permission` says,
+ *     or rejects with the failure set for it, at the release. So a test can
+ *     see the app while no read has answered yet (CALL-01-AC4, review
+ *     loop 2).
  * It records every call as it is made, whatever it answers, with the number
  * exactly as it was given. With a `journal`, it also writes `phone <name>`
  * into it, so a test can order its calls against another fake's (see
@@ -60,6 +65,14 @@ export interface CallHold {
   readonly waiting: () => number;
 }
 
+/** A hold on `callPermission`: every read made while it holds settles when it is released. */
+export interface PermissionHold {
+  /** Settles every held read with what the fake answers now: `permission`, or the failure set. */
+  readonly release: () => void;
+  /** How many reads are waiting on it. */
+  readonly waiting: () => number;
+}
+
 export interface FakePhone {
   /** What `jest.mock` hands the app in the module's place. The same object for the fake's life. */
   readonly module: FakePhoneModule;
@@ -79,6 +92,8 @@ export interface FakePhone {
   readonly recover: (fn: PhoneFunction) => void;
   /** Holds every `callNumber` from now until the hold is released or failed. */
   readonly holdCalls: () => CallHold;
+  /** Holds every `callPermission()` read from now until the hold is released. */
+  readonly holdPermission: () => PermissionHold;
   /** Forgets every call, every failure and every hold, and answers `notGranted` and `denied` again. */
   readonly reset: () => void;
 }
@@ -87,6 +102,7 @@ export function fakePhone({ journal }: { journal?: string[] } = {}): FakePhone {
   let calls: PhoneCall[] = [];
   let failures = new Map<PhoneFunction, Error>();
   let hold: { settlers: { resolve: () => void; reject: (error: Error) => void }[] } | null = null;
+  let permissionHold: { answers: (() => void)[] } | null = null;
 
   const record = (fn: PhoneFunction, number: string | null = null): void => {
     calls.push({ fn, number });
@@ -117,6 +133,19 @@ export function fakePhone({ journal }: { journal?: string[] } = {}): FakePhone {
       },
       callPermission: () => {
         record('callPermission');
+        if (permissionHold !== null) {
+          const waiting = permissionHold;
+          return new Promise<CallPermission>((resolve, reject) => {
+            waiting.answers.push(() => {
+              const error = failures.get('callPermission');
+              if (error === undefined) {
+                resolve(fake.permission);
+              } else {
+                reject(error);
+              }
+            });
+          });
+        }
         return failure('callPermission') ?? Promise.resolve(fake.permission);
       },
       askCallPermission: () => {
@@ -171,10 +200,26 @@ export function fakePhone({ journal }: { journal?: string[] } = {}): FakePhone {
         waiting: () => current.settlers.length,
       };
     },
+    holdPermission: () => {
+      const current = { answers: [] as (() => void)[] };
+      permissionHold = current;
+      return {
+        release: () => {
+          if (permissionHold === current) {
+            permissionHold = null;
+          }
+          for (const answer of current.answers.splice(0)) {
+            answer();
+          }
+        },
+        waiting: () => current.answers.length,
+      };
+    },
     reset: () => {
       calls = [];
       failures = new Map();
       hold = null;
+      permissionHold = null;
       fake.permission = 'notGranted';
       fake.askAnswer = 'denied';
     },

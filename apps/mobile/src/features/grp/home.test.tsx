@@ -51,6 +51,12 @@
 //     from the call button by that label; the new one also begins "Ring ",
 //     so it now also leaves out the button whose visible text is "112", the
 //     text the owner kept. What each test asserts is unchanged.
+//
+// Review loop 2 (GRP-02.md, "Review loop 2"; privacy-security-reviewer S1):
+//   - Added: AC6, with no credential at start, #1 is deleted before the join
+//     screen shows, best effort and silently, and tried again at every such
+//     start; a start whose credential read rejects deletes nothing. AC9, that
+//     delete refused with an error holding #1 logs nothing.
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import type * as ExpoRouterTesting from 'expo-router/testing-library';
 import { readFileSync } from 'node:fs';
@@ -1269,6 +1275,84 @@ describe('GRP-02-AC6: #1 stays on the phone', () => {
     expect(mockStore.items.get(CREDENTIAL_KEY)).toBe(NEW_CREDENTIAL);
     expect(screen.queryByText(NB.joinTitle)).toBeNull();
   });
+
+  // Review loop 2 (privacy-security-reviewer S1; the retention rule): the
+  // join's delete catches a #1 left by a refused delete only if the walker
+  // joins again. With no credential at start, no #1 should exist, so the app
+  // deletes it before the join screen shows, best effort and silently, and
+  // tries again at every such start (GRP-02, approach 4).
+  test('GRP-02-AC6: when the store refuses #1’s delete on a 401 (the credential’s delete allowed), then allows it, a restart with no credential stored (a fresh module registry, secure storage kept) deletes #1’s key before any join, and the join screen shows', async () => {
+    await phoneHolding({ firstContact: FIRST });
+    const key = await firstContactKey();
+    mockStore.refuse('delete', key, new Error('synthetic: the Keystore refused the delete'));
+    api.always(ME, { status: 401, body: { code: 'UNAUTHORIZED', status: 401 } });
+    const screen = await launch();
+    expect(await screen.findByText(NB.signedOut)).toBeTruthy();
+    // Not vacuous: the 401's delete of #1 was refused, so #1 is kept, and the
+    // credential's delete was allowed, so the next start has no credential.
+    expect(mockStore.callsFor('delete', key).some(({ refused }) => refused)).toBe(true);
+    expect(mockStore.items.has(key)).toBe(true);
+    expect(mockStore.items.has(CREDENTIAL_KEY)).toBe(false);
+
+    mockStore.allowAll();
+    const again = await launch();
+
+    expect(await again.findByText(NB.joinTitle)).toBeTruthy();
+    expect(mockStore.items.has(key)).toBe(false);
+    expect(api.to(JOIN)).toEqual([]);
+    await settle();
+    expect(mockStore.items.has(key)).toBe(false);
+    expect(again.getByText(NB.joinTitle)).toBeTruthy();
+  });
+
+  test('GRP-02-AC6: when the store refuses #1’s delete on the 401 and again at the next start with no credential, the join screen still shows, #1’s key is still kept, and no console method is called on the way; at the start after that, the store allowing it, #1’s key is gone', async () => {
+    await phoneHolding({ firstContact: FIRST });
+    const key = await firstContactKey();
+    mockStore.refuse('delete', key, new Error('synthetic: the Keystore refused the delete'));
+    api.always(ME, { status: 401, body: { code: 'UNAUTHORIZED', status: 401 } });
+    const screen = await launch();
+    await screen.findByText(NB.signedOut);
+    expect(mockStore.items.has(key)).toBe(true);
+    const before = mockStore.callsFor('delete', key).length;
+
+    const again = await launch();
+    expect(await again.findByText(NB.joinTitle)).toBeTruthy();
+    await settle();
+
+    // Not vacuous: that start asked for #1's delete, and the store refused it.
+    const atThatStart = mockStore.callsFor('delete', key).slice(before);
+    expect(atThatStart.length).toBeGreaterThan(0);
+    expect(atThatStart.every(({ refused }) => refused)).toBe(true);
+    expect(again.getByText(NB.joinTitle)).toBeTruthy();
+    expect(mockStore.items.has(key)).toBe(true);
+    expect(
+      consoleCalls.map(
+        ({ method, args }) => `${method}: ${args.map(said).join(' ').slice(0, 200)}`,
+      ),
+    ).toEqual([]);
+
+    mockStore.allowAll();
+    const third = await launch();
+    expect(await third.findByText(NB.joinTitle)).toBeTruthy();
+    await settle();
+    expect(mockStore.items.has(key)).toBe(false);
+  });
+
+  test('GRP-02-AC6: when the credential read itself rejects at start, #1’s delete is not called: #1 is kept, and the home screen shows it (approach 4: a start whose read failed is not a start with no credential)', async () => {
+    await phoneHolding({ firstContact: FIRST });
+    const key = await firstContactKey();
+    mockStore.refuse('get', CREDENTIAL_KEY, new Error('synthetic: the Keystore refused the read'));
+
+    const screen = await launch();
+    await expectShown(screen, FIRST);
+    await settle();
+
+    // Not vacuous: the start asked for the credential, and the store refused it.
+    expect(mockStore.callsFor('get', CREDENTIAL_KEY).some(({ refused }) => refused)).toBe(true);
+    expect(mockStore.callsFor('delete', key)).toEqual([]);
+    expect(mockStore.items.get(key)).toBe(JSON.stringify(FIRST));
+    expect(screen.queryByText(NB.joinTitle)).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1524,6 +1608,27 @@ describe('GRP-02-AC9: no phone number or name in a log or an escaping error (PRI
 
     expect(mockPhone.timesCalled('callNumber') + mockPhone.timesCalled('openDialer')).toBe(2);
     expectNothingLogged([FIRST]);
+  });
+
+  // Review loop 2 (AC6; privacy-security-reviewer S1): the delete at a start
+  // with no credential is silent. An error that escaped would reach jest's
+  // global handlers, which fail the test.
+  test('GRP-02-AC9: #1’s delete refused at a start with no credential, with an error holding the number and name, puts neither in the console, calls no console method, and no error escapes; the join screen shows', async () => {
+    await phoneHolding({ credential: false, firstContact: FIRST });
+    const key = await firstContactKey();
+    mockStore.refuse('delete', key, leaking(FIRST));
+
+    const screen = await launch();
+    expect(await screen.findByText(NB.joinTitle)).toBeTruthy();
+    await settle();
+
+    // Not vacuous: the start asked for #1's delete, and the store refused it
+    // with the error that holds #1.
+    const deletes = mockStore.callsFor('delete', key);
+    expect(deletes.length).toBeGreaterThan(0);
+    expect(deletes.every(({ refused }) => refused)).toBe(true);
+    expectNothingLogged([FIRST]);
+    expect(consoleCalls.map(({ method }) => method)).toEqual([]);
   });
 });
 

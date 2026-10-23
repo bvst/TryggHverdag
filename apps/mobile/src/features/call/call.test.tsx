@@ -43,6 +43,13 @@
 //     left out any name holding "112". The new label begins "Ring " and holds
 //     no "112", so each now also leaves out the button whose visible text is
 //     "112", the text the owner kept. What each test asserts is unchanged.
+//
+// Review loop 2 (CALL-01.md, "Review loop 2"; safety-reviewer and
+// a11y-i18n-reviewer notes):
+//   - Added: AC4, the call hint is "Ringer …" only while the permission reads
+//     granted: AC4's line when callPermission answers notGranted, has not
+//     settled (the test kit's fakePhone.holdPermission), or rejects at every
+//     read; AC8, the same for its parenthetical.
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import type * as ExpoRouterTesting from 'expo-router/testing-library';
 import { existsSync } from 'node:fs';
@@ -1004,6 +1011,91 @@ describe('CALL-01-AC4: without the permission, the button still calls, and the h
   });
 });
 
+// Review loop 2 (CALL-01.md, approach 5 and AC4; safety-reviewer and
+// a11y-i18n-reviewer notes): "Ringer …" only while the permission reads
+// granted. Unread, the app does not know the tap places a call: phone.ts
+// reads the permission again at the tap, and a read that fails opens the
+// dialer. So the hint may promise less than the tap does, never more.
+
+/** How the phone module's callPermission stands at start, in AC4's three cases where it does not read granted. */
+type NotReadGranted = 'notGranted' | 'not settled' | 'rejects';
+
+const NOT_READ_GRANTED: [string, NotReadGranted][] = [
+  ['answers notGranted', 'notGranted'],
+  ['has not settled yet (the permission state is null: not yet read)', 'not settled'],
+  ['rejects, at start and at every read since (null: no read answered)', 'rejects'],
+];
+
+/** AC4's cases where no read has answered at all (CALL-01-AC8's parenthetical, review loop 2). */
+const NO_READ_ANSWERED = NOT_READ_GRANTED.filter(([, how]) => how !== 'notGranted');
+
+/**
+ * The home screen with #1 set and callPermission standing as `how`, settled.
+ * For `rejects`, the app has also come back to the foreground once, so a read
+ * made since the start has rejected too. Returns what lets a held read
+ * answer (a no-op unless `how` is `not settled`).
+ */
+async function homeWithPermission(how: NotReadGranted): Promise<{
+  screen: Screen;
+  release: () => Promise<void>;
+}> {
+  await phoneWith('set');
+  let hold: { release: () => void; waiting: () => number } | null = null;
+  if (how === 'notGranted') {
+    mockPhone.permission = 'notGranted';
+  } else if (how === 'not settled') {
+    hold = mockPhone.holdPermission();
+  } else {
+    mockPhone.fail('callPermission', new Error('synthetic: the permission could not be read'));
+  }
+  const screen = await launch();
+  await findCallButton(screen, NB.call(FIRST.name));
+  await settle();
+  if (how === 'rejects') {
+    await backToTheForeground();
+  }
+  // Not vacuous: the app read the permission at start (and, rejected, again
+  // since), and a held read is still waiting.
+  expect(mockPhone.timesCalled('callPermission')).toBeGreaterThanOrEqual(how === 'rejects' ? 2 : 1);
+  if (hold !== null) {
+    expect(hold.waiting()).toBeGreaterThan(0);
+  }
+  const held = hold;
+  return {
+    screen,
+    release: async () => {
+      await app().testing.act(async () => {
+        held?.release();
+        await Promise.resolve();
+      });
+      await settle();
+    },
+  };
+}
+
+describe('CALL-01-AC4 (review loop 2): the call button’s hint says "Ringer …" only while the permission reads granted', () => {
+  test.each(NOT_READ_GRANTED)(
+    'CALL-01-AC4: with #1 set, while callPermission %s, the call button’s hint is "Knappen åpner telefonappen, og du må trykke ring der.", not "Ringer …", and its visible text is still "Ring {name}"; once it answers granted and AppState becomes active, the hint is "Ringer " and the number spelled',
+    async (_what, how) => {
+      const { screen, release } = await homeWithPermission(how);
+
+      const call = callButton(screen);
+      expect(hintOf(call)).toBe(NB.permissionMissing);
+      expect(textOf(call)).toBe(NB.call(FIRST.name));
+
+      mockPhone.recover('callPermission');
+      mockPhone.permission = 'granted';
+      await release();
+      await backToTheForeground();
+
+      await app().testing.waitFor(() => {
+        expect(hintOf(callButton(screen))).toBe(NB.callHint(FIRST.number));
+      });
+      expect(textOf(callButton(screen))).toBe(NB.call(FIRST.name));
+    },
+  );
+});
+
 // Review loop 1 (code-reviewer 4): iOS is task 12's. The line speaks of
 // Android's permission and its dialog, so on any other platform it renders
 // nothing, whatever it is given.
@@ -1336,6 +1428,20 @@ describe('CALL-01-AC8: the button is found and read as what it is, at any text s
     expect(NB.callHint(FIRST.number)).toBe(`Ringer ${Array.from(FIRST.number).join(' ')}`);
     expect(texts(screen)).toContain(NB.call(FIRST.name));
   });
+
+  // Review loop 2: AC8's hint is the granted one; while the permission is not
+  // yet read, or no read has answered, it is AC4's, as without it.
+  test.each(NO_READ_ANSWERED)(
+    'CALL-01-AC8: while callPermission %s, the call button still has the role "button" and the label "Ring {name}", and its hint is AC4’s "Knappen åpner telefonappen, og du må trykke ring der.", not "Ringer …"',
+    async (_what, how) => {
+      const { screen } = await homeWithPermission(how);
+      const call = callButton(screen);
+
+      expect(roleOf(call)).toBe('button');
+      expect(labelOf(call)).toBe(NB.call(FIRST.name));
+      expect(hintOf(call)).toBe(NB.permissionMissing);
+    },
+  );
 
   test.each([
     ['with #1', 'set'],

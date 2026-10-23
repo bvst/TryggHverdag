@@ -3451,10 +3451,17 @@ describe('scriptedFlowsToRun: the scripted flows, in the script’s order', () =
     ...SCRIPTED_FLOWS.map(({ flow }) => ({ name: flow, text: flowWithTags([SCRIPTED_TAG]) })),
   ];
 
+  // RG-03 (CALL-01, review loop 2, code-reviewer should-fix 1): the result
+  // held `absent: []` beside ok and run. Since review loop 1 a scripted flow
+  // missing from the folder stops the run (not ok, named in the message), so
+  // an ok result's `absent` was always empty, and the script's one reader of
+  // it was deleted in that loop. The field is dead, and is to go: the result
+  // is now exactly what the caller reads. Nothing is loosened: toEqual still
+  // holds the whole result, and a missing flow is held by the tests below.
   test('INF-06-AC9: every tagged flow in the order: ok, each run in SCRIPTED_FLOWS’ order, whatever the folder’s order, none absent, and no untagged flow', () => {
     const result = scriptedFlowsToRun([...allOrdered()].reverse());
 
-    expect(result).toEqual({ ok: true, run: [...SCRIPTED_FLOWS], absent: [] });
+    expect(result).toEqual({ ok: true, run: [...SCRIPTED_FLOWS] });
   });
 
   // RG-03 (CALL-01, approach 9, review loop 1, code-reviewer 1): this test was
@@ -3548,7 +3555,9 @@ describe('scriptedFlowsToRun: the scripted flows, in the script’s order', () =
       .filter((name) => /\.ya?ml$/.test(name))
       .map((name) => ({ name, text: readFileSync(path.join(FLOWS, name), 'utf8') }));
 
-    expect(scriptedFlowsToRun(flows)).toEqual({ ok: true, run: [...SCRIPTED_FLOWS], absent: [] });
+    // RG-03 (review loop 2, code-reviewer should-fix 1): `absent: []` dropped
+    // from the whole result, as in the first test of this block, which says why.
+    expect(scriptedFlowsToRun(flows)).toEqual({ ok: true, run: [...SCRIPTED_FLOWS] });
   });
 });
 

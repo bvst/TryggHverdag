@@ -107,6 +107,55 @@ describe('fakePhone', () => {
     await expect(held).rejects.toBe(error);
   });
 
+  // Review loop 2 (CALL-01-AC4): the app's tests see the call button while no
+  // read of the permission has answered. A hold that settled early, answered
+  // what the fake said when the read was made rather than at the release, or
+  // kept holding after it was released would show the app a state it was not
+  // in.
+  test('a held permission read settles only when the hold is released, with what permission says then; reads after it answer at once', async () => {
+    const phone = fakePhone();
+    const hold = phone.holdPermission();
+    const answers: string[] = [];
+
+    void phone.module.callPermission().then((answer) => answers.push(`first ${answer}`));
+    void phone.module.callPermission().then((answer) => answers.push(`second ${answer}`));
+    await settled();
+
+    expect({ answers, waiting: hold.waiting(), read: phone.timesCalled('callPermission') }).toEqual(
+      { answers: [], waiting: 2, read: 2 },
+    );
+    phone.permission = 'granted';
+    hold.release();
+    await settled();
+    expect({ answers, waiting: hold.waiting() }).toEqual({
+      answers: ['first granted', 'second granted'],
+      waiting: 0,
+    });
+    phone.permission = 'notGranted';
+    expect(await phone.module.callPermission()).toBe('notGranted');
+  });
+
+  test('a held permission read rejects at the release when a failure is set for callPermission then', async () => {
+    const phone = fakePhone();
+    const hold = phone.holdPermission();
+    const error = new Error('synthetic: the permission could not be read');
+
+    const held = phone.module.callPermission();
+    phone.fail('callPermission', error);
+    hold.release();
+
+    await expect(held).rejects.toBe(error);
+  });
+
+  test('reset forgets a permission hold: a read after it answers at once', async () => {
+    const phone = fakePhone();
+    phone.holdPermission();
+
+    phone.reset();
+
+    expect(await phone.module.callPermission()).toBe('notGranted');
+  });
+
   test('reset forgets calls, failures, holds and answers', async () => {
     const phone = fakePhone();
     phone.permission = 'granted';
