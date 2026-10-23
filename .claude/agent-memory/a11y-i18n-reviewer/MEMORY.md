@@ -1,2 +1,3 @@
 - [INF-06 skeleton screen precedent](project_inf06_placeholder_screen.md) — placeholder screen has no interactive elements and no dark-first support; both judged acceptable because the spec scopes them out explicitly.
 - [GRP-01 first real screens](project_grp01_first_real_screens.md) — what was good, the light-only palette (block at task 2 if still so), the screen patterns to check on every later screen, and the loop-2 delta (PASS).
+- [M3 task 2 home screen](project_task2_home_screen.md) — PASS with should-fix at cff3021: dark-first closed, sizes and contrast verified, userInterfaceStyle needs expo-system-ui, hints that carry essential info, unspelled number in a live region, no scroll/focus reset on view change, keyboard and Lagre.
