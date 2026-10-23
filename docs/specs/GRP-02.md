@@ -5,7 +5,7 @@
 phone number), the home screen shows who it is, and with no #1 the call button
 explains how to set one. The call itself is `docs/specs/CALL-01.md`, 112 is
 `docs/specs/CALL-02.md` · **Decisions:** D-010, D-012, D-013, D-014, D-016,
-D-023, D-031, D-055, D-134, D-136, D-137, D-138, D-139, D-141 · **Written:**
+D-023, D-031, D-100, D-055, D-134, D-136, D-137, D-138, D-139, D-141 · **Written:**
 2026-10-22, step 1 of `/feature` for task 2, for this cloud session's branch
 (D-055). **Settled** the same day on the owner's answers (D-141). Neither pass
 had a shell: the branch was not checked, `pnpm run decision` and
@@ -15,8 +15,29 @@ plan-keeper, was not read here. **Amended** the same day on the owner's
 answer about `shared/ui/` (D-141 item 7, as amended), and again on the ones
 about `apps/mobile/e2e/` and `apps/mobile/src/app/` and on safety-reviewer's
 delta notes for task 2; no GRP-02 criterion changes. That pass had no shell
-either; what it read is listed in `CALL-01.md`'s header · **Status:** Settled, and amended. The owner's answers
-are in D-141; every criterion is written on them.
+either; what it read is listed in `CALL-01.md`'s header. **Amended again** in
+review loop 1 (2026-10-23), from the five reviews of the green code at
+`0930b86`; listed under "Review loop 1" below and marked *Review loop 1* where
+made. What that pass read is in `CALL-02.md`'s header · **Status:** Settled,
+and amended. The owner's answers are in D-141; every criterion is written on
+them.
+
+### Review loop 1 (2026-10-23), from the reviews of `0930b86`
+
+Five reviewers passed `0930b86`. Each change below is Claude's choice under
+D-031, from a reviewer's should-fix. AC1, AC2, AC3, AC6 and AC8 are amended;
+AC11 is new.
+
+| Finding | Decision | Criterion |
+|---|---|---|
+| `privacy-security-reviewer` S1 (the retention rule): a #1 whose delete failed on a 401 comes back | The app deletes #1, best effort, when a join saves a new credential | Approach 4; AC6 |
+| `safety-reviewer` 3: a non-401 4xx on `GET /v1/me` | 403, 404 or 409 keeps the credential and #1 and shows the unreachable line; only a 401 signs out | AC6 (and CALL-02-AC8) |
+| `safety-reviewer` 4: the secure-store fake is more lenient than the store | The test kit's fake rejects a key not matching `/^[\w.-]+$/` and a value that is not a string, as `expo-secure-store` does (D-100) | AC2 |
+| `a11y-i18n-reviewer` 2: the explaining button's name | Its accessible name carries the title and the line, not the line as a hint only | Approach 7; AC1, AC8 |
+| `a11y-i18n-reviewer` 7: the setup screen's refusals | "Lagre" dismisses the keyboard, and a refusal's message sits above "Lagre" | Approach 5; AC3, AC4 |
+| `code-reviewer` 3 with `a11y-i18n-reviewer` 6: a new view opens scrolled and unfocused | When the index route's content changes view, the scroll goes to the top and focus to the new view's heading | AC11 (new); `CALL-02.md`, approach 1 |
+| `test-auditor` 4: docs drift | GRP-01's member and unreachable tests needed no change; the "Existing assertions" list says so | Existing assertions |
+| Noted, not done now: autofill on #1's number; the waiting indicator's live region | Recorded with their reasons | Left for later tasks |
 
 ## Why three specs, not one
 
@@ -266,7 +287,16 @@ Technical choices delegated to Claude (D-031), on the owner's answers in D-141.
    - **Deleted when the phone is signed out** (a 401, GRP-01-AC29), with the
      credential: the home screen it belongs to is gone, and a person who joins
      again joins as a new member and chooses again. Kept through an
-     unreachable server, which never signs out.
+     unreachable server, which never signs out, and through any answer but a
+     401 (a 403, 404 or 409 included).
+   - **Deleted again when a join saves a new credential** (*Review loop 1*,
+     `privacy-security-reviewer` S1; the retention rule). The delete at a 401
+     is one secure-store call, and the store can refuse it; the #1 left
+     behind would then come back after a new join and a restart, on a home
+     screen it does not belong to. So when a join saves a new credential, the
+     app deletes #1 too, best effort: a refusal there does not fail the join.
+     If the store refuses both deletes, the old #1 shows on the home screen,
+     in front of the walker, who can change it (Risks).
 5. **The setup screen** (`features/grp/first-contact-screen.tsx`), opened from
    the home screen's call button when no #1 is set or #1 cannot be read, and
    from "Bytt nummer 1-kontakt":
@@ -278,6 +308,9 @@ Technical choices delegated to Claude (D-031), on the owner's answers in D-141.
    - opened to change #1, the fields hold the current #1;
    - a refused name or number says which and saves nothing; a save secure
      storage refuses says nothing was saved, and the earlier #1 (or none) stays.
+   - *Review loop 1, `a11y-i18n-reviewer` 7:* pressing "Lagre" dismisses the
+     keyboard, and a refused name's or number's message sits above the
+     "Lagre" button, so it is seen rather than left under the keyboard.
    - On Android, the permission line and request of `CALL-01.md`, approach 3.
 6. **How #1 is chosen** (Q2: typed). No contacts permission, no contact
    picker, no new dependency for it.
@@ -289,7 +322,12 @@ Technical choices delegated to Claude (D-031), on the owner's answers in D-141.
    - **Without #1:** no "Nummer 1" line and no "Bytt nummer 1-kontakt"; the
      call button, the same size and place, reads "Velg hvem du vil ringe" with
      one line under it, "Du har ikke valgt en nummer 1-kontakt. Trykk for å
-     velge.", and opens the setup screen.
+     velge.", and opens the setup screen. *Review loop 1,
+     `a11y-i18n-reviewer` 2:* the button's accessible name carries both, the
+     title and then the line ("Velg hvem du vil ringe. Du har ikke valgt…"),
+     so a screen reader says why the button is there as it names it, not
+     only in a hint that may be turned off. The same holds for the unreadable
+     line below.
    - **If #1 cannot be read** (secure storage's read rejects, or the stored
      value is not JSON, or its name or number fails the rules above): as
      without #1, but the line under the button is "Vi fikk ikke lest hvem du
@@ -317,6 +355,10 @@ the setup.** (L5; L7)
   ringe" with "Du har ikke valgt en nummer 1-kontakt. Trykk for å velge." under
   it; it is the same component, with the same size style, in the same place in
   the screen's order as the call button with a #1 (CALL-01-AC1 holds for both)
+- **And** its `accessibilityLabel` carries both texts, the title then the
+  line: "Velg hvem du vil ringe. Du har ikke valgt en nummer 1-kontakt. Trykk
+  for å velge." The line is not carried only as an `accessibilityHint` (L5;
+  *Review loop 1*, `a11y-i18n-reviewer` 2)
 - **And** neither "Nummer 1: …" nor "Bytt nummer 1-kontakt" shows
 - **When** it is tapped
 - **Then** the setup screen opens, and the phone module's `callNumber`,
@@ -332,7 +374,15 @@ shows who #1 is.** (L5; L7)
 - **And** the home screen shows "Nummer 1: {name}", the normalised number under
   it, and the call button reading "Ring {name}"
 - **And** after the app is restarted (a fresh module registry, secure storage
-  kept), the same.
+  kept), the same
+- **And** the test kit's secure-store fake, which these tests store #1 in,
+  rejects what `expo-secure-store` rejects: a key not matching
+  `/^[\w.-]+$/`, and a value that is not a string. So no test of #1 can pass
+  on a key or a value the real store would refuse (D-100: a fake made more
+  lenient quietly weakens what the tests prove). The fake's own tests, in
+  `packages/test-kit/src/fake-secure-store.test.ts`, show each refusal, and
+  that a key of letters, digits, `_`, `.` and `-` with a string value is
+  accepted (*Review loop 1*, `safety-reviewer` 4).
 
 **GRP-02-AC3 — Any phone number, and only a phone number.** (L5, table-driven;
 the numbers from the fixtures, in these shapes)
@@ -348,6 +398,10 @@ the numbers from the fixtures, in these shapes)
 - **And** on the setup screen, a refused number shows "Nummeret ser ikke riktig
   ut. Bruk bare sifre, gjerne med + og landskode først.", and secure storage's
   `setItemAsync` is not called
+- **And** pressing "Lagre" dismisses the keyboard (`Keyboard.dismiss` is
+  called), and the refusal's message comes before "Lagre" in the rendered
+  tree's order, so it sits above the button; the same holds for AC4's
+  message (*Review loop 1*, `a11y-i18n-reviewer` 7)
 - **And** the fake API records no request while a number is typed, checked or
   saved (reading 1).
 
@@ -355,7 +409,8 @@ the numbers from the fixtures, in these shapes)
 - **When** the name is empty, only whitespace, longer than 40 characters after
   trimming, or holds a bidirectional control
 - **Then** "Navnet kan ikke brukes. Det må ha minst ett synlig tegn, og ingen
-  skjulte tegn." shows, and secure storage's `setItemAsync` is not called
+  skjulte tegn." shows, above "Lagre" (AC3), and secure storage's
+  `setItemAsync` is not called
 - **And** "Åse", "O'Brien" and "Anne-Marit" are accepted, as GRP-01-AC31 holds
   for the rule itself.
 
@@ -382,7 +437,21 @@ the numbers from the fixtures, in these shapes)
 - **Then** #1's key is deleted with the credential, the join screen shows
   (GRP-01-AC29), and after a new join the home screen shows no #1 (AC1)
 - **When** a request gets no answer within 20 s, a network error, or a 5xx
-- **Then** #1's key is not deleted, and the home screen shows #1.
+- **Then** #1's key is not deleted, and the home screen shows #1
+- **When** `GET /v1/me` is answered 403, 404 or 409 (any 4xx but a 401)
+- **Then** the credential and #1's key are both kept, the home screen shows #1
+  with "Vi fikk ikke kontakt med serveren. Prøv igjen om litt." and "Prøv
+  igjen", and the join screen does not show: only a 401 signs out
+  (*Review loop 1*, `safety-reviewer` 3; CALL-02-AC8)
+- **When** the secure-store fake refuses #1's delete on a 401, and the walker
+  then joins again and the app is restarted (a fresh module registry, secure
+  storage kept)
+- **Then** the home screen shows no #1 (AC1's explaining button, no "Nummer
+  1" line), and #1's key is gone from the fake: the join that saved the new
+  credential deleted it
+- **And** if the store also refuses that delete at the join, the join still
+  completes and the new credential is saved (best effort) (*Review loop 1*,
+  `privacy-security-reviewer` S1).
 
 **GRP-02-AC7 — The home screen shows who #1 is without waiting for the
 server.** (L5)
@@ -404,7 +473,10 @@ server.** (L5)
 - **Then** the call button reads "Velg hvem du vil ringe" with "Vi fikk ikke
   lest hvem du skal ringe. Trykk for å velge igjen." under it, no "Nummer 1"
   line shows, and a tap opens the setup screen and calls neither `callNumber`
-  nor `openDialer`.
+  nor `openDialer`
+- **And** the button's `accessibilityLabel` carries both texts, as in AC1:
+  "Velg hvem du vil ringe. Vi fikk ikke lest hvem du skal ringe. Trykk for å
+  velge igjen." (*Review loop 1*, `a11y-i18n-reviewer` 2).
 
 **GRP-02-AC9 — No phone number or name in a log or an escaping error.** (L5;
 PRIV-07)
@@ -430,12 +502,27 @@ PRIV-07)
   by single spaces (`+ddd` → `+ d d d`), so a screen reader reads it digit by
   digit.
 
+**GRP-02-AC11 — A view opened inside the home route starts at its top, with
+focus on its heading.** (L5; *Review loop 1*, `code-reviewer` 3 and
+`a11y-i18n-reviewer` 6)
+- **Given** the home screen, with the phone's font scale set large in the
+  test, and the scroll moved down
+- **When** the setup screen is opened from the home screen
+- **Then** the scroll is at the top (the `ScrollView` `Screen` owns is reset
+  to offset 0, as the test can observe it)
+- **And** screen-reader focus is set on the setup screen's heading
+- **And** the same holds whenever the index route's content changes view
+  among home, setup, invite and members. `Screen` owns the `ScrollView`, so
+  the reset comes from where `Screen` is drawn (the route) or from a context
+  `Screen` provides; which is the implementer's choice (`CALL-02.md`,
+  approach 1).
+
 ## Test plan
 
 | Level | Where | Criteria | Runs here? |
 |---|---|---|---|
 | L1 static | `tsc`, ESLint, dependency-cruiser (the new rule is CALL-01-AC6's) | — (CALL-01-AC6) | Yes |
-| L5 app | `features/grp/first-contact.test.tsx` (the number rule, table-driven; `.tsx`, not `.ts`, because as `.ts` it changed how the app's TypeScript program types `process.env`, test-author's red); `features/grp/home.test.tsx` (the whole app through Expo Router's testing library, as `grp.test.tsx` does, with `expo-secure-store`, `fetch`, `expo-localization` and the phone module faked) | AC1 to AC10 | Yes |
+| L5 app | `features/grp/first-contact.test.tsx` (the number rule, table-driven; `.tsx`, not `.ts`, because as `.ts` it changed how the app's TypeScript program types `process.env`, test-author's red); `features/grp/home.test.tsx` (the whole app through Expo Router's testing library, as `grp.test.tsx` does, with `expo-secure-store`, `fetch`, `expo-localization` and the phone module faked); *review loop 1:* `packages/test-kit/src/fake-secure-store.test.ts` (the fake's refusals, AC2) | AC1 to AC11 | Yes |
 | L7 Android | Maestro, in `apps/mobile/e2e/`: a signed-in phone with no #1 sees the explaining call button; chooses #1; sees "Nummer 1: {name}" and "Ring {name}" | AC1, AC2 | **No**: CI's `android-e2e` |
 | L7 iOS | none | — | Task 12 (D-134): no `ios` configuration yet |
 
@@ -459,13 +546,17 @@ Each a change of meaning made by this task's specs, so `test-author` writes it
 with the reason beside it and `test-auditor` can check none is a weakening:
 
 - **GRP-01's L5 tests of the member screen and the unreachable screen**
-  (`features/grp/grp.test.tsx`): the member screen becomes the home screen
-  (#1, the call button and 112 on it); a phone holding a credential shows it
-  before `GET /v1/me` answers (CALL-02's spec, approach 2), where it showed
-  only a waiting indicator; and "could not be reached" with "Prøv igjen" shows
-  on the home screen, where it was a screen of its own. GRP-01-AC29's two
+  (`features/grp/grp.test.tsx`): *corrected in review loop 1
+  (`test-auditor` 4).* An earlier version listed these as changing by design.
+  None needed to change: the member screen became the home screen (#1, the
+  call button and 112 on it), a phone holding a credential shows it before
+  `GET /v1/me` answers (CALL-02's spec, approach 2), and "could not be
+  reached" with "Prøv igjen" shows on the home screen, and GRP-01's tests,
+  which read texts and roles, still hold over all of it. GRP-01-AC29's two
   halves are unchanged: only a 401 signs out, and an unreachable server keeps
-  the credential and says so.
+  the credential and says so. The only change to that file is the teardown's
+  order, marked RG-03 at its lines 524 and 1562 (`CALL-02.md`, "Existing
+  assertions"); no assertion changed.
 - **`first-admin-invites.yaml`**: if the home screen's heading changes from
   `grp.member.title`, the flow's `MEMBER_TITLE` step follows it.
 - **The shared kit moves** from `features/grp/ui.tsx` to `src/shared/ui/`, and
@@ -501,7 +592,9 @@ one file HK-07 lets hold numbers that look Norwegian, with synthetic numbers
 in the shapes AC3 lists; the app's tests and the L7 script read them from
 there. Whether the app's jest can import the test kit, or the fixture is read
 another way, is the implementer's to settle without a second copy of the
-numbers.
+numbers. *Review loop 1:* `packages/test-kit/src/fake-secure-store.ts` and
+its test, so the fake refuses the keys and values `expo-secure-store`
+refuses (AC2).
 
 **Scripts (owned):** `scripts/e2e-android.mjs` passes the new flows their
 strings from `nb.json` and the synthetic number.
@@ -532,6 +625,12 @@ None (Q1). `api:diff` must show no change.
   CALL-01-AC6).
 - **A lost #1 after a reinstall or a new phone** (`allowBackup: false`): the
   home screen says no #1 is chosen (AC1). Not silent; the cost of Q1's answer.
+- **A #1 left behind by a refused delete** (*Review loop 1*,
+  `privacy-security-reviewer` S1): a 401's delete refused by the store is
+  caught by the delete at the next join (approach 4, AC6). If the store
+  refuses that one too, the old #1 shows after the new join: kept past the
+  sign-out the retention rule ties it to, but on the walker's own phone and
+  shown on the home screen, where the walker can change it. Not silent.
 - **#1 is a third party's personal data,** a name and a number, about someone
   who may not use the app (D-013). On the phone only, it never reaches the
   server or a provider; the privacy notice and the DPIA (M4) should still say
@@ -565,6 +664,14 @@ None (Q1). `api:diff` must show no change.
 - **Task 11:** the member link and the recommendation (above).
 - **M4:** the privacy notice and the DPIA name #1 as data kept on the walker's
   phone only.
+- **Autofill on #1's number** (*review loop 1*, noted, not done now). The
+  number field's `autoComplete="tel"` (approach 5) may offer the walker's own
+  number, which is not who #1 should be. Consider `autoComplete="off"` later;
+  the walker sees the number as typed, and the home screen shows it as
+  dialled, so a wrong choice is in front of them.
+- **The waiting indicator has no live region** (*review loop 1*, noted, not
+  done now; carried from GRP-01's spec). A screen reader is not told when the
+  wait starts or ends. Left with GRP-01's other carried accessibility notes.
 
 ## Settled by the plan, so not asked
 

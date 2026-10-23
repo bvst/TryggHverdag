@@ -26,8 +26,35 @@ pin renders the real root layout and finds nothing drawn outside `Screen`
 keeps 112 (AC13). **Amended a fourth time**, on safety-reviewer's notes after
 #100 passed: the fallback stands alone, outside the providers (AC13); a child
 of `Screen` is clipped below the bar (AC2); the route draws `Screen`, the
-features do not (AC1); and `Alert` joins the import rule (AC2) ·
+features do not (AC1); and `Alert` joins the import rule (AC2). **Amended a
+fifth time** in review loop 1 (2026-10-23), from the five reviews of the green
+code at `0930b86`, and on the owner's answer recorded as D-141's fourth
+amendment; listed under "Review loop 1" below and marked *Review loop 1* where
+made. That pass read the three specs, GRP-01's spec, `grp.test.tsx`,
+`features/call/permission.tsx`, the root `package.json`, `coverage-baseline.json`
+and `.github/CODEOWNERS` in the worktree; it ran no command ·
 **Status:** Settled, and amended. The owner's answers are in D-141.
+
+### Review loop 1 (2026-10-23), from the reviews of `0930b86`
+
+Five reviewers passed `0930b86`. One change is the owner's (D-141, fourth
+amendment); the rest are Claude's choices under D-031 from the reviewers'
+should-fixes, and two after the review that follow from it. AC2, AC3, AC5,
+AC6, AC7, AC8 and AC13 are amended; no criterion is
+new here (the scroll and focus reset is GRP-02-AC11).
+
+| Finding | Decision | Criterion |
+|---|---|---|
+| The owner: "Ja, «Ring 1 1 2»" | The 112 button's screen-reader label is "Ring 1 1 2, nødnummeret" and its hint "Åpner telefonappen med 1 1 2. Trykk ring der."; English "Call 1 1 2, the emergency number" and "Opens the phone app with 1 1 2. Tap call there."; the visible text stays "112" | Approach 1; AC1, AC6, AC13; translations table |
+| The spec pass's note: the failure line still says "112" to a screen reader | Claude's choice under D-031, following the owner's answer: `call.emergency.failed` gets a screen-reader label, `call.emergency.failedLabel`, "Telefonen kunne ikke åpne 1 1 2. Ring 1 1 2 selv." / "Your phone could not open 1 1 2. Dial 1 1 2 yourself."; the visible text keeps "112" | Approach 4; AC5, AC6; translations table |
+| `safety-reviewer` 1: the L7 flow can pass on the app's own button | After the tap, the flow waits until the app is gone before it asserts the dialer's 112; until CI runs the fixed flow, "the dialer opens with 112" is unobserved | AC3; "The L7 112 step" |
+| `safety-reviewer` 3: a non-401 4xx at start | 403, 404 or 409 on `GET /v1/me` keeps the credential and #1 and shows the unreachable line; only a 401 signs out | Approach 2; AC8 (and GRP-02-AC6) |
+| `test-auditor` 1: the props check proves too little | The test proves `EmergencyBar`'s props type has no keys, not only that `hidden` is refused | AC2 |
+| `a11y-i18n-reviewer` 1: dark needs `expo-system-ui` on Android | `expo-system-ui`, at the version Expo SDK 57 pins, becomes an app dependency (first-party Expo); a new dependency in a D-139 path, so the owner approves it; AC7's config test checks it | Approach 5; AC7; Modules |
+| `a11y-i18n-reviewer` 5: the crash fallback is not announced | Its message is in an element with `accessibilityLiveRegion="assertive"` | AC13 |
+| `code-reviewer` 3 with `a11y-i18n-reviewer` 6: a new view opens scrolled and unfocused | The scroll goes to the top and focus to the new view's heading; the means is the implementer's | Approach 1; GRP-02-AC11 |
+| `test-auditor` 4: docs drift | GRP-01's start tests needed no change; the "Existing assertions" list says so | Existing assertions |
+| Noted, not done now: Expo Router's `+not-found` screen is not on `Screen` | Recorded with its reason | Left for later |
 
 ## Requirement
 
@@ -156,8 +183,11 @@ and why".
    - A bar at the top of the screen, inside the safe area, outside every
      `ScrollView`, holding one button: visible text "112", red fill from the
      palette, at least 64 dp tall and 96 dp wide (Q6).
-   - Screen-reader label "Ring 112, nødnummeret", and a hint: "Åpner
-     telefonappen med 112. Trykk ring der."
+   - Screen-reader label "Ring 1 1 2, nødnummeret", and a hint: "Åpner
+     telefonappen med 1 1 2. Trykk ring der." *Review loop 1, the owner's
+     answer (D-141, fourth amendment):* the number is spelled digit by digit
+     in both, as #1's number is for a screen reader (GRP-02-AC10); the
+     visible text stays "112".
    - `EmergencyBar` takes no props. The shared kit's `Screen`
      (`src/shared/ui/`) renders it unconditionally above its `ScrollView`, so
      a screen built on `Screen` cannot leave it out (reading 5). Every screen
@@ -186,8 +216,15 @@ and why".
      render under no criterion's state list; with the route drawing `Screen`,
      whatever it renders sits in the clipping container below the bar.
      `Screen`'s options, if it gains any, are set by the route; a view that
-     needs others becomes a route of its own. Content that changes view within
-     one route is keyed by view, so each view starts at the top of the scroll.
+     needs others becomes a route of its own.
+   - **A new view starts at its top, with focus on its heading** (*Review loop
+     1*, `code-reviewer` 3 and `a11y-i18n-reviewer` 6; Claude's choice under
+     D-031). When the index route's content changes view (home, setup,
+     invite, members), the scroll goes to the top and screen-reader focus
+     moves to the new view's heading. Keying the content by view does not do
+     it: `Screen` owns the `ScrollView`, so the reset comes from where
+     `Screen` is drawn (the route) or from a context `Screen` provides. Which
+     is the implementer's choice. GRP-02-AC11 holds it.
    - Both files are in owned, safety-reviewed folders after step 1: `Screen`
      in `shared/ui/`, and `EmergencyBar` in `features/call/`, or in
      `shared/ui/` if the import rules make that the cleaner home (AC10). The
@@ -235,9 +272,11 @@ and why".
        choices if the role is `ADMIN`;
      - a 401: signed out, the join screen with its line (GRP-01-AC29,
        unchanged);
-     - no answer within 20 s, a network error, or a 5xx: the home screen stays,
-       with "Vi fikk ikke kontakt med serveren. Prøv igjen om litt." and "Prøv
-       igjen" on it, and the credential kept (GRP-01-AC29, unchanged).
+     - no answer within 20 s, a network error, a 5xx, or any 4xx but a 401
+       (403, 404 or 409, say): the home screen stays, with "Vi fikk ikke
+       kontakt med serveren. Prøv igjen om litt." and "Prøv igjen" on it, and
+       the credential and #1 kept (GRP-01-AC29, unchanged: only a 401 signs
+       out). *Review loop 1, `safety-reviewer` 3:* the 4xx case named.
    - storage unreadable: the home screen, as for no answer, with #1 as
      GRP-02-AC8 says.
    - The waiting indicator alone shows only while storage itself is being read,
@@ -253,7 +292,11 @@ and why".
    no permission, no credential and no server.
 4. **When the dialer cannot be opened:** a message, read out when it appears
    (`accessibilityLiveRegion="assertive"`): "Telefonen kunne ikke åpne 112.
-   Ring 112 selv." The button stays.
+   Ring 112 selv." The button stays. *After review loop 1 (Claude's choice
+   under D-031, following the owner's answer for the 112 button):* the
+   message's screen-reader label spells the number, "Telefonen kunne ikke
+   åpne 1 1 2. Ring 1 1 2 selv.", while its visible text keeps "112"
+   (AC5).
 5. **Dark-first, one palette** (Q5: always dark).
    - `src/shared/ui/palette.ts`: a near-black background, light text, the
      accent, and the 112 red; and the list of colour pairs the app draws, each
@@ -264,6 +307,14 @@ and why".
      installed SDK was not checked here; if they do not, the implementer sets
      them light by the means the SDK offers, and AC7's config test reads that
      setting.
+   - *Review loop 1, `a11y-i18n-reviewer` 1:* on Android,
+     `userInterfaceStyle` takes effect only with `expo-system-ui` installed
+     (`@expo/config-types` says so, as the reviewer read it). So
+     `expo-system-ui`, at the version Expo SDK 57 pins, becomes a dependency
+     of the app: first-party Expo, Claude's choice under D-031. It is a new
+     dependency in `apps/mobile/package.json`, a D-139 path, so task 2's pull
+     request needs the owner's approval for it as for `expo-intent-launcher`
+     (`CALL-01.md`, approach 7), and it goes through `licenses:check`.
    - The shared kit moves from `features/grp/ui.tsx` to `src/shared/ui/`
      (`GRP-02.md`, "The home screen task 2 builds", item 5); every colour in it
      comes from the palette, the waiting indicator's included. GRP-01's
@@ -290,7 +341,7 @@ translations table below, asserted in full.
   screen (choosing and changing); the admin's invite screen, before and after a
   code is made; the members screen, with the removal's confirmation open
 - **Then** each shows exactly one element with the `accessibilityLabel` "Ring
-  112, nødnummeret" and the role "button" (L5)
+  1 1 2, nødnummeret" and the role "button" (L5)
 - **And** L7 asserts it visible on the join screen, the home screen, the setup
   screen and the invite screen as the flows reach them
 - **And** every route file under `apps/mobile/src/app/` renders through
@@ -339,8 +390,12 @@ because the route draws it and no feature can (the last bullet).
   `opacity: 0`, a `height` or `maxHeight` of 0,
   `accessibilityElementsHidden`, or
   `importantForAccessibility="no-hide-descendants"` (L5)
-- **And** `EmergencyBar` accepts no props: a typed test passes it one under
-  `@ts-expect-error`, so `tsc` fails if it ever accepts any (L1)
+- **And** `EmergencyBar` accepts no props: a type-level test proves its props
+  type has **no keys** (for example, that
+  `keyof React.ComponentProps<typeof EmergencyBar>` is `never`), so `tsc`
+  fails if it ever accepts any prop, not only one named `hidden`; a test that
+  passes it one named prop under `@ts-expect-error` is not enough alone (L1;
+  *Review loop 1*, `test-auditor` 1)
 - **And** a `no-restricted-imports` rule in `eslint.config.mjs` refuses an
   import of `Modal`, `Alert`, `SafeAreaView` or `ScrollView` from
   `react-native`, or of `SafeAreaView` from `react-native-safe-area-context`,
@@ -378,7 +433,17 @@ because the route draws it and no feature can (the last bullet).
 - **And** on the emulator, the focused window belongs to the phone's default
   dialer (the script reads `dumpsys window` against the holder of the dialer
   role), "112" is visible on it, and Telecom's record shows no call (L7); the
-  flow then presses back and taps nothing in the dialer.
+  flow then presses back and taps nothing in the dialer
+- **And** after the tap, `emergency-112.yaml` waits until the app is gone (an
+  element only the app draws, found by its ID, no longer visible, with a
+  bounded wait that fails the flow if it runs out) before it asserts the 112
+  pattern on the dialer. The app's own 112 button shows "112" and is labelled
+  "Ring 1 1 2, nødnummeret", so an assertion made while the app is still in
+  front can pass on the app's own button and prove nothing about the dialer
+  (L7; *Review loop 1*, `safety-reviewer` 1). Until CI's `android-e2e` has
+  run the fixed flow, "the dialer opens with 112" is **unobserved**: this
+  session has no emulator, and a green run of the flow before the fix does
+  not show it, because that run could have passed on the app's own button.
 
 **CALL-02-AC4 — 112 needs nothing else.** (L5)
 - **Given** each in turn: no #1; the call permission not granted; no credential
@@ -393,18 +458,30 @@ because the route draws it and no feature can (the last bullet).
 - **When** the 112 button is tapped
 - **Then** "Telefonen kunne ikke åpne 112. Ring 112 selv." shows, in an element
   with `accessibilityLiveRegion="assertive"`, and the 112 button stays and a
-  later tap calls `openDialer('112')` again.
+  later tap calls `openDialer('112')` again
+- **And** that element's `accessibilityLabel` is "Telefonen kunne ikke åpne
+  1 1 2. Ring 1 1 2 selv." (`call.emergency.failedLabel`), while its visible
+  text stays "Telefonen kunne ikke åpne 112. Ring 112 selv."; in English, the
+  label "Your phone could not open 1 1 2. Dial 1 1 2 yourself." and the
+  visible text unchanged (AC6's owned test asserts both in full) (*after
+  review loop 1*: Claude's choice under D-031, following the owner's answer,
+  D-141's fourth amendment, so the screen reader says 112 the same way on
+  the button and in its failure line).
 
 **CALL-02-AC6 — The 112 button says what it is, and nothing more.** (L5)
 - **Then** its visible text is "112", its role "button", its
-  `accessibilityLabel` "Ring 112, nødnummeret" and its `accessibilityHint`
-  "Åpner telefonappen med 112. Trykk ring der.", with the English in `en.json`
-  under the same keys
+  `accessibilityLabel` "Ring 1 1 2, nødnummeret" and its `accessibilityHint`
+  "Åpner telefonappen med 1 1 2. Trykk ring der.", with the English in
+  `en.json` under the same keys (*Review loop 1*, the owner's answer, D-141's
+  fourth amendment: the number spelled digit by digit for a screen reader;
+  the visible text unchanged)
 - **And**, in the same owned test (`features/call/emergency.test.tsx`), with
   the app's language set to English as the existing language test sets it,
-  the label reads "Call 112, the emergency number", the hint "Opens your phone
-  app with 112. Tap call there.", and AC5's line "Your phone could not open
-  112. Dial 112 yourself.", each in full. `nb.json` and `en.json` are not
+  the label reads "Call 1 1 2, the emergency number", the hint "Opens the
+  phone app with 1 1 2. Tap call there.", AC5's line "Your phone could
+  not open 112. Dial 112 yourself.", and AC5's label "Your phone could not
+  open 1 1 2. Dial 1 1 2 yourself.", each in full; and, in bokmål, AC5's
+  label "Telefonen kunne ikke åpne 1 1 2. Ring 1 1 2 selv." in full. `nb.json` and `en.json` are not
   code-owner paths, so these assertions, in an owned folder, are what keep a
   change to either file from altering what the 112 button says without the
   owner and `safety-reviewer`
@@ -417,6 +494,9 @@ because the route draws it and no feature can (the last bullet).
 **CALL-02-AC7 — Every screen is dark, and readable at night.** (L5; L1)
 - **Then** `app.config.ts` sets `userInterfaceStyle: 'dark'` (its test), and the
   root layout renders `StatusBar` with `barStyle="light-content"` (L5)
+- **And** the same config test checks that `apps/mobile/package.json` declares
+  `expo-system-ui` as a dependency, without which Android does not apply
+  `userInterfaceStyle` (approach 5; *Review loop 1*, `a11y-i18n-reviewer` 1)
 - **And** no file in `apps/mobile/src/` but `src/shared/ui/palette.ts` holds a
   colour literal: a hex colour (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`), or a
   string starting `rgb(`, `rgba(`, `hsl(` or `hsla(` (a test over the source
@@ -439,7 +519,11 @@ waiting for the server.** (L5)
 - **And** a 401 signs out to the join screen with its line
 - **And** no answer within 20 s, a network error, or a 5xx leaves the home
   screen, with "Vi fikk ikke kontakt med serveren. Prøv igjen om litt." and
-  "Prøv igjen", and the credential kept (GRP-01-AC29 unchanged).
+  "Prøv igjen", and the credential kept (GRP-01-AC29 unchanged)
+- **And** an answer of 403, 404 or 409 does the same: the home screen stays,
+  with the unreachable line and "Prøv igjen", the credential and #1 kept, and
+  no join screen; only a 401 signs out (*Review loop 1*, `safety-reviewer` 3;
+  GRP-02-AC6 holds #1's half).
 
 **CALL-02-AC9 — Every word is translated, bokmål first.** (L5)
 - **Then** every key in the translations table below is in `nb.json` and
@@ -502,18 +586,21 @@ review.** (scripts' gate tests; D-141 as amended)
 - **When** a route throws while rendering (a faked module the index route
   renders throws an error whose message holds a synthetic #1 number)
 - **Then** the fallback shows, drawn on `Screen`: exactly one 112 button, with
-  the `accessibilityLabel` "Ring 112, nødnummeret", that still calls
+  the `accessibilityLabel` "Ring 1 1 2, nødnummeret", that still calls
   `openDialer('112')` when tapped, and AC2's ancestor checks hold for it
 - **And** the fallback shows "Noe gikk galt på denne skjermen." and "Prøv
   igjen"; a tap on "Prøv igjen", with the module no longer throwing, renders
   the route again
+- **And** "Noe gikk galt på denne skjermen." is in an element with
+  `accessibilityLiveRegion="assertive"`, so it is read out when it appears
+  (*Review loop 1*, `a11y-i18n-reviewer` 5)
 - **And** no text the fallback renders holds the error's message or the
   number (GRP-02-AC9's rule) (L5, `src/shared/ui/screen.test.tsx`)
 - **When** `GroupSessionProvider` itself throws while rendering (the layout's
   provider, so the fallback renders outside it and outside the layout's
   `I18nextProvider`)
 - **Then** the fallback shows exactly one 112 button whose
-  `accessibilityLabel` is "Ring 112, nødnummeret" in full, not a raw key, and
+  `accessibilityLabel` is "Ring 1 1 2, nødnummeret" in full, not a raw key, and
   "Noe gikk galt på denne skjermen." in full; and pressing the button calls
   `openDialer('112')` (L5)
 - **And** nothing in `src/shared/ui/` imports from `src/features/` but
@@ -531,9 +618,10 @@ Keys for the three specs; the implementer may rename keys, not texts.
 | Key | nb | en |
 |---|---|---|
 | `call.emergency.text` | 112 (a constant, not a key: approach 3) | — |
-| `call.emergency.label` | Ring 112, nødnummeret | Call 112, the emergency number |
-| `call.emergency.hint` | Åpner telefonappen med 112. Trykk ring der. | Opens your phone app with 112. Tap call there. |
+| `call.emergency.label` | Ring 1 1 2, nødnummeret | Call 1 1 2, the emergency number |
+| `call.emergency.hint` | Åpner telefonappen med 1 1 2. Trykk ring der. | Opens the phone app with 1 1 2. Tap call there. |
 | `call.emergency.failed` | Telefonen kunne ikke åpne 112. Ring 112 selv. | Your phone could not open 112. Dial 112 yourself. |
+| `call.emergency.failedLabel` | Telefonen kunne ikke åpne 1 1 2. Ring 1 1 2 selv. | Your phone could not open 1 1 2. Dial 1 1 2 yourself. |
 | `call.button.call` | Ring {{name}} | Call {{name}} |
 | `call.button.hint` | Ringer {{number}} | Calls {{number}} |
 | `call.button.failed` | Telefonen kunne ikke starte samtalen. Ring {{number}} selv. | Your phone could not start the call. Dial {{number}} yourself. |
@@ -557,6 +645,16 @@ Keys for the three specs; the implementer may rename keys, not texts.
 | `grp.firstContact.notSaved` | Nummeret ble ikke lagret. Prøv igjen. | The number was not saved. Try again. |
 | `grp.member.unreachable` | (unchanged) Vi fikk ikke kontakt med serveren. Prøv igjen om litt. | (unchanged) |
 | `app.error.screen` | Noe gikk galt på denne skjermen. | Something went wrong on this screen. |
+
+*Review loop 1, the owner's answer (D-141, fourth amendment):* the 112
+button's label and hint spell the number "1 1 2", in both languages, and the
+English hint reads "the phone app", as the owner gave it. The visible "112"
+and the failure line's visible text, `call.emergency.failed`, are unchanged.
+*After review loop 1 (Claude's choice under D-031, following that answer):*
+the failure line gets a screen-reader label of its own,
+`call.emergency.failedLabel`, spelling "1 1 2" in both languages (AC5). The
+English "your phone" in `call.emergency.failed` and `call.permission.missing`
+stays as it is.
 
 "Prøv igjen" / "Try again" stays one wording (GRP-01-AC30), the error
 fallback's included (AC13). `grp.firstContact.unreadable` says "velge igjen",
@@ -591,7 +689,9 @@ bokmål text (D-031).
 
 **The L7 112 step** taps the app's 112 button and then only reads: the dialer's
 screen through Maestro, and the focused window and Telecom's record through
-the script; then `pressKey: back`. The 112 flow is tagged `scripted`, so the
+the script; then `pressKey: back`. *Review loop 1:* between the tap and the
+first read of the dialer, the flow waits until the app is gone, so the 112 it
+then finds cannot be the app's own button (AC3). The 112 flow is tagged `scripted`, so the
 script reads Telecom before it and, after it, Telecom again and the focused
 window, as `CALL-01.md`'s approach 9 sets out. The flow's header says it must never tap
 anything in the dialer. The dialer places no call by itself, and the emulator
@@ -604,7 +704,8 @@ included, needs the owner and `safety-reviewer` (AC11). A change to
 2026-10-22).
 
 **What this cloud session cannot verify:** that Android's dialer takes `tel:112`
-as this spec reads it (first seen in CI's `android-e2e`); that AML sends a
+as this spec reads it (first seen in CI's `android-e2e`, and only by a run of
+the flow fixed in review loop 1, AC3); that AML sends a
 position (only a real emergency call would show it, and none is made); whether
 the navigation bar's buttons follow `userInterfaceStyle` (approach 5); any iOS
 behaviour, including whether iOS opens `tel:112` from an app with its one
@@ -612,14 +713,20 @@ confirmation (task 12); how the dark palette looks on a real screen at night.
 
 ### Existing assertions that change by design (RG-03)
 
-- **GRP-01's start** (`features/grp/grp.test.tsx`, and `home-screen.tsx`'s
-  header): "Nothing but a waiting indicator shows until … the server has said
-  who it is" becomes: the home screen shows once storage is read (AC8).
-  GRP-01-AC29 and AC30 hold as written: only a 401 signs out; a waiting
-  indicator shows while a request is in flight, now beside the home screen,
-  not instead of it. A signed-in phone still never shows the join screen
-  before a 401, and still shows nothing of the group before the server's
-  answer.
+- **GRP-01's start** (`home-screen.tsx`'s header): "Nothing but a waiting
+  indicator shows until … the server has said who it is" becomes: the home
+  screen shows once storage is read (AC8). GRP-01-AC29 and AC30 hold as
+  written: only a 401 signs out; a waiting indicator shows while a request is
+  in flight, now beside the home screen, not instead of it. A signed-in phone
+  still never shows the join screen before a 401, and still shows nothing of
+  the group before the server's answer. *Review loop 1, `test-auditor` 4
+  (corrected):* an earlier version listed GRP-01's start, member and
+  unreachable tests in `features/grp/grp.test.tsx` as changing by design.
+  None needed to change: they read texts and roles the home screen keeps. The
+  only change to that file is the teardown's order (real timers restored in
+  the file's `afterEach`, after the app is unmounted, because the root
+  layout's `StatusBar`, AC7, clears a fake timer as it unmounts), marked
+  RG-03 at its lines 524 and 1562; no assertion changed.
 - **GRP-01's colours**: the kit's hard-coded colours become the palette's. No
   assertion names a colour today (read in `grp.test.tsx`'s header, not every
   line).
@@ -644,7 +751,9 @@ tests); `src/shared/ui/` (the kit moved from `features/grp/ui.tsx`,
 `session.tsx` and `home-screen.tsx` for approach 2; `session.tsx` owned,
 D-139); `src/app/index.tsx` (wraps the home screen in `Screen`) and
 `src/app/_layout.tsx` (the `StatusBar` and the `ErrorBoundary`), both owned
-after step 1 (AC12); `app.config.ts` (dark; owned);
+after step 1 (AC12); `app.config.ts` (dark; owned); `package.json`
+(`expo-system-ui`, *review loop 1*, a new dependency in a D-139 path that
+needs the owner's approval, approach 5);
 `nb.json`, `en.json` (the fallback's line among the new keys); `e2e/` flows
 (owned after step 1, AC11).
 
@@ -757,6 +866,15 @@ None.
   (`01-product-vision.md`; D-012's "Parked").
 - **The offline notice and the unreachable-service rule's full notice** (task
   11).
+
+### Left for later
+
+- **Expo Router's built-in `+not-found` screen is not drawn on `Screen`**, so
+  it would show no 112 bar (*review loop 1*, noted, not done now). It is
+  unreachable today: the app sets no `scheme`, so no link can open a route
+  that does not exist. When links arrive, the task that adds them adds
+  `src/app/+not-found.tsx` drawn on `Screen`, and AC1's route pin then holds
+  it.
 
 ## Settled by the plan, so not asked
 

@@ -33,8 +33,31 @@ Nkom's, from a web search's summary of two Nkom pages, read on 2026-10-22 by
 the session that coordinated this pass (approach 2 cites them); Nkom's
 current allocation file was not read. **Amended a fourth time** on
 safety-reviewer's smaller notes after #100 passed: the reduction loops
-(approach 2, AC2), and a pasted invisible character is named as a risk ·
+(approach 2, AC2), and a pasted invisible character is named as a risk.
+**Amended a fifth time** in review loop 1 (2026-10-23), from the five reviews
+of the green code at `0930b86`; listed under "Review loop 1" below and marked
+*Review loop 1* where made. What that pass read is in `CALL-02.md`'s header ·
 **Status:** Settled, and amended. The owner's answers are in D-141.
+
+### Review loop 1 (2026-10-23), from the reviews of `0930b86`
+
+Five reviewers passed `0930b86`. Each change below is Claude's choice under
+D-031, from a reviewer's should-fix. AC2, AC4, AC5, AC6 and AC8 are amended,
+and approaches 1, 2, 4, 5, 7 and 9; no criterion is new.
+
+| Finding | Decision | Criterion |
+|---|---|---|
+| `safety-reviewer` 2: reading the permission can reject | `callNumber` treats a rejected read as not granted and opens the dialer; it does not fail | Approach 2; AC4 |
+| `safety-reviewer` 5: any file could place a call | An ESLint `no-restricted-imports` rule allows `expo-intent-launcher`, and `PermissionsAndroid` and `Linking` from `react-native`, only in `features/call/phone.ts`, with fixture tests | Approach 1; AC6 |
+| The spec pass's note on that rule: `expo-linking`, an app dependency, is not in it | The rule also allows `expo-linking` only in `features/call/phone.ts` (Claude's choice under D-031, after the review) | Approach 1; AC6; test plan, L1 |
+| `code-reviewer` 1: a missing or untagged scripted flow is only printed | A flow named in the script's order that is absent, or present but not tagged `scripted`, stops the run with a message naming it | Approach 9 |
+| `code-reviewer` 2: the script imports a `.ts` fixture | The root `package.json`'s `engines.node` floor rises to `>=22.18.0` | Approach 9; Modules |
+| `code-reviewer` 4: iOS | `CallPermissionLine` renders nothing when the platform is not Android | Approach 4; AC4 |
+| `a11y-i18n-reviewer` 3: the hint promises a call the tap does not place | While `CALL_PHONE` is not granted, the call button's hint is the "permission missing" text | Approach 5; AC4, AC8 |
+| `a11y-i18n-reviewer` 4: the failure line's number is read as a figure | The failed-call message's `accessibilityLabel` spells the number digit by digit; the visible text is unchanged | AC5 |
+| `test-auditor` 2: the URI from the cleaned string, for a number that is not plain | `112 ,5` proves its URI is built from the cleaned string | AC2 |
+| `test-auditor` 3 (RG-04): the coverage baseline lags | `coverage-baseline.json`'s entry for `scripts/lib/e2e-android.mjs` rises to the measured 98.33 lines / 92.59 branches; test-author makes the change | Test plan; Modules |
+| `a11y-i18n-reviewer` 1: `expo-system-ui` | A second new app dependency, CALL-02's | Approach 7 (`CALL-02.md`, AC7) |
 
 ## Requirement
 
@@ -160,7 +183,13 @@ and why": tracked requirements this task does not deliver are named in words.
    `askCallPermission()` (`granted`, `denied`, or `neverAskAgain`: Android's
    answer once it will no longer show its dialog), and `openAppSettings()`.
    Screens never touch the platform directly, so L5 fakes this one module and
-   nothing else.
+   nothing else. *Review loop 1, `safety-reviewer` 5:* "the only file" is
+   enforced, not only intended. An ESLint `no-restricted-imports` rule in the
+   owned `eslint.config.mjs` refuses an import of `expo-intent-launcher` or
+   `expo-linking`, or of `PermissionsAndroid` or `Linking` from
+   `react-native`, in any file under
+   `apps/mobile/src/` but `features/call/phone.ts`, so no other file can place
+   a call (AC6).
 2. **Placing the call, on Android** (`callNumber`). `phone.ts` handles the
    number itself, as it is given, and relies on no other module's
    normalisation (D-141 item 7, amended: Claude's choice (a), and
@@ -235,6 +264,9 @@ and why": tracked requirements this task does not deliver are named in words.
    - without it, or if `ACTION_CALL` is refused (rejects): the dialer with the
      cleaned string in it (`Linking.openURL('tel:' + cleaned)`), and the home
      screen's line (item 4);
+   - if reading the permission rejects: as without it. `callNumber` treats
+     the failed read as not granted and opens the dialer; it does not fail
+     because of the read (*Review loop 1*, `safety-reviewer` 2; AC4);
    - if both fail: a message that the phone could not start the call, with the
      number shown so the walker can dial it by hand.
    - The app does not ask `Linking.canOpenURL` first: on Android 11 and later it
@@ -263,10 +295,15 @@ and why": tracked requirements this task does not deliver are named in words.
    every time the app comes to the foreground (`AppState` becomes `active`),
    so the line comes and goes with the setting. Rejected: refusing to save #1
    until the permission is given (a walker who says no would have no button at
-   all).
+   all). *Review loop 1, `code-reviewer` 4:* the line (`CallPermissionLine`,
+   in `features/call/permission.tsx`) renders nothing when the platform is not
+   Android; iOS is task 12's.
 5. **The button** (`features/call/call-button.tsx`): a `Pressable` with the
    role "button"; the visible text "Ring {name}"; the screen-reader label "Ring
-   {name}" and the hint "Ringer {number}", the number digit by digit; Q6's
+   {name}" and the hint "Ringer {number}", the number digit by digit (while
+   `CALL_PHONE` is not granted, the hint is item 4's "Knappen åpner
+   telefonappen, og du må trykke ring der." instead, because the tap then
+   places no call: *Review loop 1*, `a11y-i18n-reviewer` 3); Q6's
    sizes; the palette's colours (CALL-02's spec, approach 5); its text allowed
    to grow with the phone's font size and to wrap, never cut off (no
    `numberOfLines`, no `allowFontScaling={false}`). With no #1, or #1
@@ -280,7 +317,9 @@ and why": tracked requirements this task does not deliver are named in words.
    with fixture tests in `packages/config/`.
 7. **New dependency:** `expo-intent-launcher` (first-party Expo, MIT, used in
    SPIKE-01), through `licenses:check`; `package.json` needs the owner's
-   approval (D-139). Nothing else.
+   approval (D-139). Nothing else for calling. *Review loop 1:* task 2 adds
+   one more app dependency, `expo-system-ui`, for the dark screens, not for
+   calling (`CALL-02.md`, approach 5, AC7); it needs the same approval.
 8. **Mutation testing** of the app is set up with the safety core in task 3
    (D-134). `features/call/` should join it then; this task adds no mutation
    run, and step 1 adds no safety path for mutation (`SAFETY_PATHS`) for
@@ -309,6 +348,19 @@ and why": tracked requirements this task does not deliver are named in words.
      or flow.
    - **A failed step or flow fails the run,** and the message names the flow
      and the step.
+   - **A scripted flow that is not there stops the run** (*Review loop 1*,
+     `code-reviewer` 1). A flow named in the script's order that is absent
+     from `apps/mobile/e2e/`, or present but not tagged `scripted`, stops the
+     run before any flow runs, with a message naming the flow and which of
+     the two it is. It is not merely printed as "not run": a flow that
+     silently drops out of the order would take its Telecom and dialer
+     checks with it.
+   - **Node 22.18 or later** (*Review loop 1*, `code-reviewer` 2).
+     `scripts/e2e-android.mjs` imports the test kit's `.ts` phone-number
+     fixture, which Node runs only with type stripping on by default, from
+     22.18. So the root `package.json`'s `engines.node` floor rises from
+     `>=22.13.0` to `>=22.18.0` (the `<23` ceiling stays). CI reads `.nvmrc`,
+     "22", which installs the latest 22.
    - **A flow is tagged `scripted` exactly when it needs one of these steps,
      or a place in the script's order.** `first-admin-invites.yaml` needs
      no step but runs first, because `first-contact.yaml` continues from its
@@ -512,6 +564,12 @@ texts are the bokmål in `CALL-02.md`'s translations table, asserted in full.
   - *not a plain number:* `112,5`, `11A`, `١١٢` (Arabic-Indic digits) and
     `*31#112` each open the dialer and never start `ACTION_CALL`, and the
     URI holds no unencoded `,`, `;` or `#`;
+  - *a not-plain number with a separator* (*Review loop 1*, `test-auditor`
+    2): `112 ,5` opens the dialer with a URI built from the cleaned string,
+    `112,5` with its comma encoded (`tel:112%2C5`), holding no space and no
+    encoded space, and never starts `ACTION_CALL`; so the cleaning is shown
+    to run before the dialer's URI on this path too, not only on a plain
+    number's;
   - *the URI from the cleaned string:* given `ddd dd ddd` or
     `(ddd) dd-ddd` with the permission, `ACTION_CALL`'s data is `tel:` and the
     eight digits, with no space, dash or parenthesis; without it, the dialer's
@@ -555,7 +613,19 @@ screen says a second tap is needed.** (L5; L7)
 - **And** once `callPermission()` answers `granted` (after the dialog, or when
   `AppState` becomes `active` after the settings), the line and its button are
   gone and a tap calls as in AC2
-- **And** with no #1 set, the line does not show.
+- **And** with no #1 set, the line does not show
+- **And** while the permission is not granted, the call button's
+  `accessibilityHint` is "Knappen åpner telefonappen, og du må trykke ring
+  der.", not "Ringer …"; once it is granted, AC8's hint returns (L5;
+  *Review loop 1*, `a11y-i18n-reviewer` 3)
+- **And**, in `phone.test.tsx`, when reading the permission
+  (`PermissionsAndroid.check`) rejects, `callNumber` treats it as not
+  granted: it calls `Linking.openURL` with `tel:` and the cleaned number,
+  never starts `ACTION_CALL`, and does not reject (L5; *Review loop 1*,
+  `safety-reviewer` 2)
+- **And** with the platform faked as iOS, `CallPermissionLine` renders
+  nothing, whatever the permission state it is given (L5; *Review loop 1*,
+  `code-reviewer` 4; iOS is task 12's).
 
 **CALL-01-AC5 — A call the phone cannot start is said, with the number.** (L5)
 - **Given** the phone module's `callNumber` rejects (with the permission it
@@ -564,6 +634,10 @@ screen says a second tap is needed.** (L5; L7)
 - **Then** "Telefonen kunne ikke starte samtalen. Ring {number} selv." shows,
   with #1's normalised number, in an element with
   `accessibilityLiveRegion="assertive"` so it is read out when it appears
+- **And** that element's `accessibilityLabel` is the same sentence with the
+  number's characters separated by single spaces, as GRP-02-AC10 spells #1's
+  number, so a screen reader reads it digit by digit; the visible text is
+  unchanged (*Review loop 1*, `a11y-i18n-reviewer` 4)
 - **And** the call button stays, and a later tap calls `callNumber` again.
 
 **CALL-01-AC6 — Calling needs no server and no journey.** (L5; L1)
@@ -579,7 +653,22 @@ screen says a second tap is needed.** (L5; L7)
   (L1; fixture tests in `packages/config/`, with a control that the rule fires
   against a probe file)
 - **And** `pnpm run gate:static`'s dependency-cruiser run passes on the
-  repository with the rule in place.
+  repository with the rule in place
+- **And** an ESLint `no-restricted-imports` rule in `eslint.config.mjs`
+  refuses an import of `expo-intent-launcher` or `expo-linking`, or of
+  `PermissionsAndroid` or `Linking` from `react-native`, in any file under
+  `apps/mobile/src/` but `apps/mobile/src/features/call/phone.ts`, and allows
+  them there, so no other file can place a call or open the dialer.
+  `expo-linking` is an app dependency that no file under `apps/mobile/src/`
+  imports today; its `openURL` would open a `tel:` link as `Linking`'s does
+  (Claude's choice under D-031, after review loop 1). Fixture tests in
+  `packages/config/`, beside CALL-02-AC2's: a probe file standing as
+  `features/call/phone.ts` (no error), and probes elsewhere under
+  `features/call/` and under `features/grp/` (an error for each of the four
+  imports), with a control
+  that the rule fires; and `pnpm run gate:static`'s lint passes on the
+  repository with the rule in place (L1; *Review loop 1*, `safety-reviewer`
+  5).
 
 **CALL-01-AC7 — Nothing says the call does more than call.** (L5)
 - **Then** no text the home screen or the setup screen renders, in any state
@@ -592,8 +681,9 @@ screen says a second tap is needed.** (L5; L7)
 **CALL-01-AC8 — The button is found and read as what it is, at any text size.**
 (L5; L7)
 - **Then** it has the role "button", the `accessibilityLabel` "Ring {name}",
-  and the `accessibilityHint` "Ringer " followed by #1's number with its
-  characters separated by single spaces (L5)
+  and, with `CALL_PHONE` granted, the `accessibilityHint` "Ringer " followed
+  by #1's number with its characters separated by single spaces (L5; without
+  the permission, AC4's hint: *Review loop 1*)
 - **And** its text sets no `numberOfLines` and no `allowFontScaling={false}`
   (L5)
 - **And** with Android's font size at the largest the emulator image's
@@ -625,9 +715,9 @@ code.** (scripts' gate tests; Q7, D-141)
 
 | Level | Where | Criteria | Runs here? |
 |---|---|---|---|
-| L1 static | the new dependency-cruiser rule, with fixture tests in `packages/config/` beside LOST-02-AC25's; ESLint | AC6 (imports) | Yes |
+| L1 static | the new dependency-cruiser rule, with fixture tests in `packages/config/` beside LOST-02-AC25's; ESLint, with the `no-restricted-imports` rule that keeps the calling imports (`expo-intent-launcher`, `expo-linking`, and `PermissionsAndroid` and `Linking` from `react-native`) in `phone.ts` and its fixture tests (*review loop 1*) | AC6 (imports) | Yes |
 | L5 app | `features/call/call.test.tsx` (the whole app through Expo Router's testing library, the phone module faked with a recording fake whose answers are set per test; `AppState` driven for the foreground check); `features/call/phone.test.tsx` (`.tsx`, not `.ts`, because as `.ts` it changed how the app's TypeScript program types `process.env`, test-author's red; the module's own choices: `ACTION_CALL` with the permission, the dialer without, the fallback when `ACTION_CALL` rejects, the cleaning and the URI built from it, the emergency set and its prefixes to the dialer, written plainly and with spaces, dashes, `+47` or `0047`, strings that are not a plain number to the dialer, the permission's answers, with `expo-intent-launcher`, `PermissionsAndroid` and `Linking` mocked) | AC1 to AC8 | Yes |
-| L7 Android | Maestro, `apps/mobile/e2e/`, run by `scripts/e2e-android.mjs` as approach 9 says: one run over the flows not tagged `scripted`, then each `scripted` flow alone in the script's fixed order, with the script's steps before it (grant or revoke `CALL_PHONE`, the font scale, Telecom read) and after it (Telecom read again, the dialer in front where expected), the font scale reset at the end even after a failure. The flows: grant through Android's own dialog (tapped by its resource ID); tap and read Telecom's record; revoke with `adb shell pm revoke`, relaunch, see the line, tap, see the dialer and no call; at the largest font size, the button visible. Each call flow names its permissions in `launchApp`. The orchestration's own tests are in `scripts/lib/e2e-android.test.mjs` | AC2, AC3, AC4, AC8 | **No**: CI's `android-e2e` (the orchestration's tests in `scripts/lib/`: yes) |
+| L7 Android | Maestro, `apps/mobile/e2e/`, run by `scripts/e2e-android.mjs` as approach 9 says: one run over the flows not tagged `scripted`, then each `scripted` flow alone in the script's fixed order, with the script's steps before it (grant or revoke `CALL_PHONE`, the font scale, Telecom read) and after it (Telecom read again, the dialer in front where expected), the font scale reset at the end even after a failure. The flows: grant through Android's own dialog (tapped by its resource ID); tap and read Telecom's record; revoke with `adb shell pm revoke`, relaunch, see the line, tap, see the dialer and no call; at the largest font size, the button visible. Each call flow names its permissions in `launchApp`. The orchestration's own tests are in `scripts/lib/e2e-android.test.mjs`, a scripted flow absent or untagged stopping the run among them (*review loop 1*); RG-04: `coverage-baseline.json`'s entry for `scripts/lib/e2e-android.mjs` rises to the measured 98.33 lines and 92.59 branches, a change test-author makes (*review loop 1*, `test-auditor` 3) | AC2, AC3, AC4, AC8 | **No**: CI's `android-e2e` (the orchestration's tests in `scripts/lib/`: yes) |
 | Gate tests | `scripts/lib/merge-rules.test.mjs`, `scripts/gate.test.mjs` | AC9, and CALL-02-AC10, AC11 and AC12 beside it (step 1's part in step 1's pull request; the tracked-file part in task 2's, but for `e2e/` and `src/app/`, which step 1 pins itself) | Yes |
 | L7 iOS; L9 | none | — | Task 12, and a real iPhone (D-037) |
 
@@ -682,11 +772,19 @@ texts above); the call button's English is held only by AC7's word list,
 which reads every value under `call.` in both files.
 
 **Config (owned):** `packages/config/dependency-cruiser.cjs` (the new rule)
-and its fixture tests.
+and its fixture tests; *review loop 1:* `eslint.config.mjs` (the
+`no-restricted-imports` rule for the calling imports, AC6) and its fixture
+tests in `packages/config/`.
 
 **Scripts (owned):** `scripts/e2e-android.mjs` and a tested reader for
 Telecom's record; the font-size step; task 2's tracked-file pins for
-`features/call/` (AC9) and `shared/ui/` (CALL-02-AC10).
+`features/call/` (AC9) and `shared/ui/` (CALL-02-AC10); *review loop 1:* the
+stop on a scripted flow that is absent or untagged (approach 9).
+
+**Root (owned), review loop 1:** `package.json`'s `engines.node`, from
+`>=22.13.0 <23` to `>=22.18.0 <23` (approach 9); `coverage-baseline.json`'s
+entry for `scripts/lib/e2e-android.mjs`, to 98.33 / 92.59 (RG-04; test-author's
+change). Both are code-owner paths (`.github/CODEOWNERS`, read 2026-10-23).
 
 **Server, contracts, infra:** nothing.
 
