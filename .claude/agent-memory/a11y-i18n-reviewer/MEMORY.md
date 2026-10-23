@@ -2,3 +2,4 @@
 - [GRP-01 first real screens](project_grp01_first_real_screens.md) — what was good, the light-only palette (block at task 2 if still so), the screen patterns to check on every later screen, and the loop-2 delta (PASS).
 - [M3 task 2 home screen](project_task2_home_screen.md) — PASS with should-fix at cff3021: dark-first closed, sizes and contrast verified, userInterfaceStyle needs expo-system-ui, hints that carry essential info, unspelled number in a live region, no scroll/focus reset on view change, keyboard and Lagre.
 - [M3 task 2 loop-1 delta](project_task2_loop1_delta.md) — PASS at d2a55ca: all seven loop-1 findings closed, the owner's 112 text matches, one spec drift ("the phone app"), and what is unobserved on a device.
+- [M3 task 2 loop-2 delta](project_task2_loop2_delta.md) — PASS at 9c7c498: the hint only when granted, RN 0.86.3 Android hint = tooltipText (a hint flip is probably silent), what not to re-flag.

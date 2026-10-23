@@ -55,3 +55,24 @@ happens to one who never does.
   strictTypeChecked's no-require-imports. None used today.
 - jest.mock virtual vs installed: a virtual mock of an installed bare name is skipped once the
   worker resolver cached the real path (a54f735).
+
+**Loop 2 delta (2026-10-23, HEAD 9c7c498, base d2a55ca): PASS.** S1 closed: start()'s
+`stored === null` path deletes #1 best effort (silent catch, comment cites PRIV-07) before
+`phase: 'joining'`; a REJECTED credential read keeps #1 (home screen shows it). Tests: refused-then-
+allowed restart, refused twice then allowed, read-rejects-no-delete, and AC9 with a leaking error.
+GRP-02 Risks records the delete-refused-every-start case honestly. Lockfile and every package.json
+unchanged; no server/contracts/infra/.github change; no new digit strings in the diff.
+- ESLint probe recipe that works with typed rules on: a scratchpad .mjs that createRequire's
+  eslint from the repo root, `new ESLint({cwd, overrideConfig: {languageOptions: {parserOptions:
+  {projectService: false, project: null}}}, ruleFilter})`, lintText with a filePath under
+  apps/mobile/src. (`npx eslint --stdin --parser-options=projectService:false` dies on
+  await-thenable needing type info.)
+- Probe results at 9c7c498: refused outside phone.ts: namespace, default, `export *`,
+  `export {Linking}`, NativeModules/TurboModuleRegistry, `expo` requireNativeModule, import() with
+  a variable or a react-native deep path, `react-native/index`, require() and `import x = require`
+  (no-require-imports). OPEN: deep path into `expo` itself (`expo/build/Expo`, `expo/src/Expo`
+  re-export requireNativeModule; CALLING_PACKAGES omits `expo`), and `globalThis.expo.modules.X`
+  (recorded in Risks as globals). safety-core keeps the AR-03 Date.now refusal beside the calling
+  selectors. expo-router tel: path recorded in CALL-01 Risks; nothing in src uses router.push/Link.
+Pattern: an "exact-name list plus deep-path list" rule must carry the SAME package list in both;
+check every package in the named-import list also appears in the deep-path regex.

@@ -41,3 +41,19 @@ New: join deletes #1 best effort (privacy S1); new-view.tsx (ScreenViews context
 scrollTo y0 + sendAccessibilityEvent focus) cannot touch the bar. Notes given: import rule misses dynamic import(),
 react-native/Libraries/Linking deep path, NativeModules/requireNativeModule, namespace import untested; call-button
 hint says "Ringer" while permission null (read failed) though the tap goes to the dialer; home-screen.tsx still unowned.
+
+**Loop-2 delta PASS at 9c7c498 (2026-10-23)**, `git diff d2a55ca..HEAD -- apps packages scripts eslint.config.mjs docs/specs`.
+Read-only, no test runs (gate:full running); one `npx eslint --print-config` per path was enough to read effective rules.
+- session.tsx start(): stored===null -> await deleteFirstContact() in try/catch, then joining. Read reject -> home with #1,
+  no delete. A delete that never settles would hold the waiting view, but the real expo-secure-store 57.0.4 Android
+  deleteValueWithKeyAsync = synchronous SharedPreferences removeItem/commit (resolve or DeleteException): always settles;
+  readCredential was already awaited the same way. Note given: no timeout pins it.
+- call-button hint: only 'granted' -> "Ringer"; null/notGranted/read-failed -> permission.missing. Tap path unchanged,
+  phone.ts untouched (git diff --stat empty).
+- ESLint: print-config verified: safety-core probe path (folder does not exist yet) gets AR-03 3 selectors + 3 calling
+  selectors + no-restricted-globals; phone.ts keeps FRAME_PIECES + SCREEN and no calling rule; routes/shared-ui/features
+  get CALLING_SYNTAX + deep-path pattern. esquery 1.7.0 parses the `\/` inside the regex fine (probed). Gaps noted:
+  globalThis.expo.modules / nativeModuleProxy JSI globals, deep paths of `expo` itself.
+- 4c38bb2 + guard: non-virtual mocks keyed by real path; phone.ts virtual-by-relative-path keys = real path. Guard test
+  refuses planted bare-name virtual mocks of installed packages (REFUSED_PROBES) and asserts the walk read app files.
+- test-kit fake-phone holdPermission: a test control (pending read), accepts nothing the real refuses (D-100 ok).

@@ -998,6 +998,19 @@ None.
     rule does not see. Test files are not bundled into the app.
   - *Globals* that hold native modules (React Native's and Expo's module
     proxies on `global`) are not refused.
+  - *A deep path into `expo` itself* (on the delta reviews of `9c7c498`,
+    `safety-reviewer` N4 and `privacy-security-reviewer` N-A). The rule
+    refuses `expo`'s `requireNativeModule`, `requireOptionalNativeModule`,
+    and its default and namespace imports, but its deep-path pattern names
+    only `expo-intent-launcher`, `expo-linking`, `expo-modules-core` and
+    `react-native`, so `import { requireNativeModule } from
+    'expo/build/Expo'` (which `expo`, with no `exports` field, allows) gets
+    through; the privacy reviewer probed it. Nothing imports it today. The
+    fix is one pattern, `^expo/(?:build|src)/`, which leaves room for
+    `expo`'s public subpaths such as `expo/fetch`, and one probe in
+    `calling-imports.test.mjs`. Recorded, not fixed in this task, by the
+    coordinating session's choice (both reviewers offered recording it);
+    queued as a follow-up.
 - **The permission hint after a failed read** (*Review loop 2*; approach 5).
   The permission state keeps the last read that answered, so the
   permission line does not vanish on a failed read (`permission.tsx`). A
