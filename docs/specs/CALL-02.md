@@ -74,7 +74,7 @@ sentence of this spec changes; no criterion changes.
 | Finding | Decision | Criterion |
 |---|---|---|
 | `a11y-i18n-reviewer` should-fix 1: the note under the translations table said the English hint reads "the phone app", "as the owner gave it"; the table, `en.json`, `emergency.test.tsx` and D-141's fourth amendment all say "Opens your phone app with 1 1 2. Tap call there.", and D-141 records "the phone app" as a slip in an earlier brief | The note says the English hint keeps "your phone app", as D-141 records. The text itself does not change | Translations |
-| Not changed (`a11y-i18n-reviewer` note), WCAG 2.5.3, Label in Name: the 112 button's accessible name, "Ring 1 1 2, nødnummeret", does not contain the visible "112", so a Voice Access user who says "tap 112" may not reach it | Nothing changes now: the label is the owner's answer (D-141, fourth amendment), and changing it is the owner's. The coordinating session puts it to the owner | None |
+| Not changed (`a11y-i18n-reviewer` note), WCAG 2.5.3, Label in Name: the 112 button's accessible name, "Ring 1 1 2, nødnummeret", does not contain the visible "112", so a Voice Access user who says "tap 112" may not reach it | Nothing changes: the label is the owner's answer (D-141, fourth amendment), and changing it is the owner's. Asked on 2026-10-23 (keep it, recommended; or put "112" first, which some voices may read as "hundred and twelve"), the owner answered "Behold som nå": kept, a known trade-off to look at again with real users | None |
 
 ## Requirement
 

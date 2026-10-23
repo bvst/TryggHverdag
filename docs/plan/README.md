@@ -1,6 +1,6 @@
 # Planning hub — walk-home safety app (working title)
 
-**Last updated:** 2026-10-23 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → ✅ **M2 closed** (2026-10-23, D-142): the core safety loop on the server, all nine tasks done (D-090, D-115), closed on window B of REL-10-AC19, the staging canary on time for 24 hours, with BUG-63 open → 🟡 **M3 started** (2026-10-20, D-134): GRP-01, task 1 of 12, is done (#96, squashed as `bd83b21` on 2026-10-21); task 2, the home screen (GRP-02, CALL-01, CALL-02), is in progress: its specs are settled on the owner's answers (D-141), its step 1 was merged as #100 (`50214c0`, 2026-10-22), and [../progress.md](../progress.md) has where the rest stands
+**Last updated:** 2026-10-23 · **Phase:** ✅ Planning complete → ✅ **M0 closed** (2026-09-29, D-083) → ✅ **M1 closed** (2026-10-01, D-088) → ✅ **M2 closed** (2026-10-23, D-142): the core safety loop on the server, all nine tasks done (D-090, D-115), closed on window B of REL-10-AC19, the staging canary on time for 24 hours, with BUG-63 open → 🟡 **M3 started** (2026-10-20, D-134): GRP-01, task 1 of 12, is done (#96, squashed as `bd83b21` on 2026-10-21); task 2, the home screen (GRP-02, CALL-01, CALL-02), is built and through two review loops with every review passing (head `72ad66d`), and its pull request is to be opened: its specs are settled on the owner's answers (D-141), its step 1 was merged as #100 (`50214c0`, 2026-10-22), and [../progress.md](../progress.md) has where the rest stands
 
 **Current section:** milestone M3, started 2026-10-20 (D-134). **Milestone M2
 is closed** (2026-10-23, D-142). It started 2026-10-01 with SM-01; all nine
@@ -26,11 +26,15 @@ its `deploy-staging` (run 39557013621) passed. Step 1 was #94 (`60b46ee`); the
 owner's five answers are D-136, the delegated choices D-137 and the app's plain
 `fetch` client D-138; the record is [../progress/m3.md](../progress/m3.md). The
 next task is task 2 in D-134's order, the home screen (GRP-02, CALL-01, CALL-02).
-It is in progress: its three specs are settled on the owner's answers (D-141,
-2026-10-22), and its step 1, which makes `apps/mobile/src/features/call/` a
-code-owner and safety-review path, was merged by hand by the owner as #100
-(`50214c0`, 2026-10-22). The owner's part is A-36 (below): its plan and apply are
-done (2026-10-21), and the join in the app is left. The code-owner question from
+It is built and through two review loops, every review passing (head `72ad66d`
+on the session branch), and its pull request is to be opened. Its three specs
+are settled on the owner's answers (D-141, 2026-10-22), and its step 1, which
+makes four folders of `apps/mobile` (`src/features/call/`, `src/shared/ui/`,
+`src/app/` and `e2e/`) code-owner and safety-review paths, was merged by hand by the owner as #100
+(`50214c0`, 2026-10-22). The owner approves its pull request (D-042); the owner kept
+the 112 button's name on WCAG 2.5.3 (2026-10-23, in
+[../progress.md](../progress.md)). The owner's other part is A-36 (below): its plan
+and apply are done (2026-10-21), and the join in the app is left. The code-owner question from
 #96 (the owner's question 1) is answered, D-139: eleven sign-in files got a code
 owner in #98 (`a2457b5`, 2026-10-21).
 Bugs found and fixed since the last update (2026-10-10), with the pull request
@@ -175,8 +179,9 @@ what Claude needs from the owner is in [../progress.md](../progress.md).
 twelve tasks, one at a time, GRP-01 first. GRP-01 (sign-in and groups) is done:
 #96, squashed as `bd83b21` on 2026-10-21. Its record is
 [../progress/m3.md](../progress/m3.md); the owner's part is A-36: its plan and
-apply are done, and the join in the app is left. Task 2, the home screen, is in
-progress (D-141; step 1 is #100, `50214c0`): [../progress.md](../progress.md).
+apply are done, and the join in the app is left. Task 2, the home screen, is built
+and through two review loops, and its pull request is to be opened (D-141; step 1
+is #100, `50214c0`): [../progress.md](../progress.md).
 
 **Open for M4** (not an owner action, so not in the to-do table below; it sits
 here so that M4's planning, which starts from this file and the roadmap's M4
