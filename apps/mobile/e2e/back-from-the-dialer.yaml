@@ -11,7 +11,10 @@
 # holds, with the script's steps around it:
 #   - it runs right after a flow that leaves the dialer in front
 #     (emergency-112.yaml or call-without-permission.yaml), once the script
-#     has read the focused window and Telecom's record after that flow;
+#     has read the focused window and Telecom's record after that flow, and
+#     then pressed Android's back key once (review loop 1, D-031). So it may
+#     start in the dialer's own main screen, or already in the app; the
+#     repeat below presses back only while 112 is not on screen;
 #   - before it, the script sets the phone's usual font size and reads
 #     Telecom's record as the baseline. It changes no permission here: a
 #     revoke stops the app's process, behind the dialer;

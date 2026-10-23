@@ -22,8 +22,33 @@
 // No test dials 112: the phone module is a fake, and phone.test.tsx holds what
 // the real one does with it (SPIKE-01-AC10's rule). Test data is synthetic
 // (RG-07): every number and name from the test kit's fixtures (HK-07).
+//
+// Review loop 1 (CALL-02.md, "Review loop 1"):
+//   - RG-03, the owner's answer (D-141's fourth amendment): the 112 button's
+//     screen-reader label and hint spell the number digit by digit, "Ring 1 1
+//     2, nødnummeret" and "Åpner telefonappen med 1 1 2. Trykk ring der.",
+//     "Call 1 1 2, the emergency number" and "Opens your phone app with 1 1 2.
+//     Tap call there." in English; its visible text stays "112". EMERGENCY
+//     below holds the new texts, so every test that finds the 112 button by
+//     its label, and the tests that quote it, now hold the owner's wording.
+//     No assertion was dropped or loosened: the texts changed, by design.
+//   - RG-03, for the same reason: callButton, the helper that finds the call
+//     button among the buttons whose names begin "Ring ", left out the 112
+//     button by its label alone. The new label also begins "Ring ", so while
+//     the app still says the old one, the helper would see two call buttons
+//     and every call-button test would fail on that, not on what it checks.
+//     It now also leaves out the button whose visible text is "112", the one
+//     text the owner kept. What each test asserts is unchanged.
+//   - Added: AC5 and AC6, the failure line's label `call.emergency.failedLabel`,
+//     "1 1 2" spelled; AC2, EmergencyBar's props type has no keys; AC3, the
+//     112 button carries the ID emergency-112.yaml waits on until the app is
+//     gone; AC8, a 403, 404 or 409 keeps the credential and #1.
+//     These find the 112 button by its visible text, "112", which the owner
+//     kept, so each fails or passes on what it checks, not on the label.
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import type * as ExpoRouterTesting from 'expo-router/testing-library';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 import { fakeApi, parsedOrText } from '../../../../../packages/test-kit/src/fake-api.ts';
 import { fakePhone } from '../../../../../packages/test-kit/src/fake-phone.ts';
@@ -47,7 +72,7 @@ import {
 } from '../../../../../packages/test-kit/src/rendered-tree.ts';
 import en from '../../shared/translations/en.json';
 import nb from '../../shared/translations/nb.json';
-import type { ComponentType } from 'react';
+import type { ComponentProps, ComponentType, ElementType } from 'react';
 import type * as CallFeature from './index';
 
 /**
@@ -174,18 +199,31 @@ jest.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
 // The words, in full: CALL-02.md's translations table.
 // ---------------------------------------------------------------------------
 
-/** The 112 button's words, in both languages. */
+/**
+ * The 112 button's words, in both languages.
+ *
+ * RG-03 (review loop 1; the owner's answer, D-141's fourth amendment): the
+ * label and the hint were "Ring 112, nødnummeret" and "Åpner telefonappen med
+ * 112. Trykk ring der.", "Call 112, the emergency number" and "Opens your
+ * phone app with 112. Tap call there."; the owner chose to spell the number
+ * for a screen reader, "1 1 2", as #1's number is (GRP-02-AC10). The visible
+ * text, "112", and the failure line's visible text are unchanged. Added: the
+ * failure line's screen-reader label, `call.emergency.failedLabel`, which
+ * spells the number the same way (CALL-02-AC5, after review loop 1).
+ */
 const EMERGENCY = {
   text: '112',
   nb: {
-    label: 'Ring 112, nødnummeret',
-    hint: 'Åpner telefonappen med 112. Trykk ring der.',
+    label: 'Ring 1 1 2, nødnummeret',
+    hint: 'Åpner telefonappen med 1 1 2. Trykk ring der.',
     failed: 'Telefonen kunne ikke åpne 112. Ring 112 selv.',
+    failedLabel: 'Telefonen kunne ikke åpne 1 1 2. Ring 1 1 2 selv.',
   },
   en: {
-    label: 'Call 112, the emergency number',
-    hint: 'Opens your phone app with 112. Tap call there.',
+    label: 'Call 1 1 2, the emergency number',
+    hint: 'Opens your phone app with 1 1 2. Tap call there.',
     failed: 'Your phone could not open 112. Dial 112 yourself.',
+    failedLabel: 'Your phone could not open 1 1 2. Dial 1 1 2 yourself.',
   },
 } as const;
 
@@ -217,6 +255,8 @@ const TABLE: [string, string, string][] = [
   ['call.emergency.label', EMERGENCY.nb.label, EMERGENCY.en.label],
   ['call.emergency.hint', EMERGENCY.nb.hint, EMERGENCY.en.hint],
   ['call.emergency.failed', EMERGENCY.nb.failed, EMERGENCY.en.failed],
+  // Added after review loop 1 (CALL-02-AC5): the failure line's screen-reader label.
+  ['call.emergency.failedLabel', EMERGENCY.nb.failedLabel, EMERGENCY.en.failedLabel],
   ['call.button.call', 'Ring {{name}}', 'Call {{name}}'],
   ['call.button.hint', 'Ringer {{number}}', 'Calls {{number}}'],
   [
@@ -392,10 +432,57 @@ async function findEmergencyButton(
   return only;
 }
 
+/**
+ * The one 112 button, found by its visible text, "112", and its role: the
+ * text the owner kept when the label changed (D-141's fourth amendment). For
+ * the tests added in review loop 1, so each fails or passes on what it checks,
+ * not on the label, which CALL-02-AC1 and AC6 hold.
+ */
+function the112Button(screen: Screen): HostNode {
+  const found = buttons(screen).filter((node) => textOf(node) === EMERGENCY.text);
+  const [only] = found;
+  if (found.length !== 1 || only === undefined) {
+    throw new Error(`expected one button reading "112", found ${String(found.length)}`);
+  }
+  return only;
+}
+
+/** The 112 button by its visible text, waited for. */
+async function find112Button(screen: Screen): Promise<HostNode> {
+  await app().testing.waitFor(() => {
+    expect(the112Button(screen)).toBeDefined();
+  });
+  return the112Button(screen);
+}
+
+/**
+ * The screen-reader labels a message is read by: its own, and those of the
+ * elements above it up to the one that announces it (its live region), each
+ * once. A label on any of them is what TalkBack reads for the message.
+ */
+function labelsReadFor(message: HostNode): string[] {
+  const chain: HostNode[] = [];
+  for (const node of [message, ...ancestorsOf(message)]) {
+    chain.push(node);
+    if (
+      node.props['accessibilityLiveRegion'] === 'assertive' ||
+      node.props['aria-live'] === 'assertive'
+    ) {
+      break;
+    }
+  }
+  return [
+    ...new Set(chain.map((node) => labelOf(node)).filter((label) => label !== null)),
+  ] as string[];
+}
+
 function callButton(screen: Screen): HostNode {
+  // RG-03 (review loop 1): the 112 button is left out by its visible text,
+  // "112", as well as by its label; see the file's header.
   const found = buttons(screen).filter(
     (node) =>
       labelOf(node) !== EMERGENCY.nb.label &&
+      textOf(node) !== EMERGENCY.text &&
       (beginning(NB.none).test(nameOf(node)) || nameOf(node).startsWith('Ring ')),
   );
   const [only] = found;
@@ -729,7 +816,7 @@ function hiding(node: HostNode): string[] {
 
 describe('CALL-02-AC1: the 112 button is on every screen the app shows', () => {
   test.each(STATE_NAMES)(
-    'CALL-02-AC1: %s shows exactly one element with the label "Ring 112, nødnummeret" and the role "button"',
+    'CALL-02-AC1: %s shows exactly one element with the label "Ring 1 1 2, nødnummeret" and the role "button"',
     async (name) => {
       const { screen, release } = await reach(name);
 
@@ -797,6 +884,26 @@ describe('CALL-02-AC2: the 112 button is never hidden', () => {
 
     expect(element.type).toBe(EmergencyBar);
   });
+
+  // Review loop 1 (test-auditor 1): the test above proves only that a prop
+  // named `hidden` is refused. This one proves the props type has no keys at
+  // all, so tsc fails if EmergencyBar ever accepts any prop, whatever its name.
+  test('CALL-02-AC2: EmergencyBar’s props type has no keys: keyof React.ComponentProps<typeof EmergencyBar> is never, so tsc fails if it ever accepts any prop (L1, checked by tsc)', () => {
+    /**
+     * The names of the props a component takes. Generic, so ESLint's
+     * no-generated-empty-object-type, which refuses a written type that
+     * resolves to `{}` (what EmergencyBar's props are meant to be), has
+     * nothing to refuse. Checked in a scratch probe in review loop 1: for a
+     * component typed as taking `hidden` or `children`, HasNoKeys below is
+     * `false`, and tsc refuses the assignment (TS2322).
+     */
+    type PropKeys<C extends ElementType> = keyof ComponentProps<C>;
+    /** `true` only when EmergencyBar's props have no keys; with any key, `false`, and tsc refuses the line below. */
+    type HasNoKeys = [PropKeys<typeof CallFeature.EmergencyBar>] extends [never] ? true : false;
+    const hasNoKeys: HasNoKeys = true;
+
+    expect(hasNoKeys).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -823,7 +930,47 @@ describe('CALL-02-AC3: it opens the phone’s own dialer with 112, and places no
       expect(mockPhone.timesCalled('askCallPermission')).toBe(0);
     },
   );
+
+  // Review loop 1 (safety-reviewer 1): after its tap, emergency-112.yaml waits
+  // until an element only the app draws is gone, found by its ID, before it
+  // looks for 112 on the dialer: the app's own 112 button shows "112" too, so
+  // without the wait the flow could pass on the app's button. React Native
+  // hands Android a view's testID as its resource ID, which Maestro's `id:`
+  // matches. This holds that the ID the flow waits on is the 112 button's own,
+  // on the screen the flow taps it on, and no other element's; an ID nothing
+  // carries would be "not visible" at once, and the wait would prove nothing.
+  test('CALL-02-AC3: the ID emergency-112.yaml waits on until the app is gone is the 112 button’s testID, or its bar’s, on the join screen the flow taps it on, and no other element carries it', async () => {
+    const id = idTheFlowWaitsOn();
+    const screen = await launch();
+    await screen.findByText(NB.joinTitle);
+    const button = await find112Button(screen);
+
+    const carrying = hostNodes(screen).filter((node) => node.props['testID'] === id);
+    expect(carrying).toHaveLength(1);
+    const [only] = carrying;
+    expect(only !== undefined && (only === button || holds(only, button))).toBe(true);
+  });
 });
+
+/** The flow that taps 112 on the emulator (L7), as git holds it. */
+const EMERGENCY_FLOW = path.join(__dirname, '../../../e2e/emergency-112.yaml');
+
+/** The ID emergency-112.yaml waits on, after its tap, until the app is gone (CALL-02-AC3), read from the flow. */
+function idTheFlowWaitsOn(): string {
+  const steps = readFileSync(EMERGENCY_FLOW, 'utf8')
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n');
+  const wait =
+    /-\s*extendedWaitUntil:\s*\n\s+notVisible:\s*\n\s+id:\s*['"]?([\w.-]+)['"]?\s*\n/.exec(steps);
+  const id = wait?.[1];
+  if (id === undefined) {
+    throw new Error(
+      'emergency-112.yaml waits on no element by its ID (extendedWaitUntil: notVisible: id:) until the app is gone',
+    );
+  }
+  return id;
+}
 
 // ---------------------------------------------------------------------------
 // AC4: 112 needs nothing else.
@@ -927,6 +1074,21 @@ describe('CALL-02-AC5: a dialer that cannot open is said', () => {
     expect(mockPhone.numbersGivenTo('openDialer')).toEqual(['112', '112']);
     expect(mockPhone.timesCalled('callNumber')).toBe(0);
   });
+
+  // After review loop 1 (Claude's choice under D-031, following the owner's
+  // answer, D-141's fourth amendment): a screen reader says 112 the same way
+  // on the button and in its failure line.
+  test('CALL-02-AC5: the message’s screen-reader label is "Telefonen kunne ikke åpne 1 1 2. Ring 1 1 2 selv.", the number spelled, while its visible text stays "Telefonen kunne ikke åpne 112. Ring 112 selv."', async () => {
+    signedIn();
+    mockPhone.fail('openDialer', new Error('synthetic: no activity found for the dialer'));
+    const screen = await launch();
+
+    await press(await find112Button(screen));
+    const message = await screen.findByText(EMERGENCY.nb.failed);
+
+    expect(textOf(message)).toBe(EMERGENCY.nb.failed);
+    expect(labelsReadFor(message)).toEqual([EMERGENCY.nb.failedLabel]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -963,7 +1125,10 @@ const keysOf = (text: string): string[] =>
     .map(([key]) => key);
 
 describe('CALL-02-AC6: the 112 button says what it is, and nothing more', () => {
-  test('CALL-02-AC6: its visible text is "112", its role "button", its label "Ring 112, nødnummeret" and its hint "Åpner telefonappen med 112. Trykk ring der."', async () => {
+  // RG-03 (review loop 1; the owner's answer, D-141's fourth amendment): the
+  // label and hint quoted here were "Ring 112, nødnummeret" and "Åpner
+  // telefonappen med 112. Trykk ring der."; the visible text is unchanged.
+  test('CALL-02-AC6: its visible text is "112", its role "button", its label "Ring 1 1 2, nødnummeret" and its hint "Åpner telefonappen med 1 1 2. Trykk ring der."', async () => {
     signedIn();
     const screen = await launch();
     const button = await findEmergencyButton(screen);
@@ -974,11 +1139,13 @@ describe('CALL-02-AC6: the 112 button says what it is, and nothing more', () => 
     expect(textOf(button)).toBe(EMERGENCY.text);
   });
 
-  test('CALL-02-AC6: the English is in en.json under the same keys as the bokmål: the label, the hint and the line when the dialer cannot open, each in full', () => {
+  test('CALL-02-AC6: the English is in en.json under the same keys as the bokmål: the label, the hint, the line when the dialer cannot open and that line’s screen-reader label, each in full', () => {
+    // Added after review loop 1: the line's label, call.emergency.failedLabel.
     for (const [bokmål, english] of [
       [EMERGENCY.nb.label, EMERGENCY.en.label],
       [EMERGENCY.nb.hint, EMERGENCY.en.hint],
       [EMERGENCY.nb.failed, EMERGENCY.en.failed],
+      [EMERGENCY.nb.failedLabel, EMERGENCY.en.failedLabel],
     ] as const) {
       const keys = keysOf(bokmål);
       expect({ bokmål, keys: keys.length > 0 }).toEqual({ bokmål, keys: true });
@@ -988,7 +1155,11 @@ describe('CALL-02-AC6: the 112 button says what it is, and nothing more', () => 
     }
   });
 
-  test('CALL-02-AC6: with the app’s language set to English, the label reads "Call 112, the emergency number", the hint "Opens your phone app with 112. Tap call there.", and a dialer that cannot open says "Your phone could not open 112. Dial 112 yourself."', async () => {
+  // RG-03 (review loop 1; the owner's answer, D-141's fourth amendment): the
+  // label and hint quoted here were "Call 112, the emergency number" and
+  // "Opens your phone app with 112. Tap call there."; the line when the
+  // dialer cannot open is unchanged.
+  test('CALL-02-AC6: with the app’s language set to English, the label reads "Call 1 1 2, the emergency number", the hint "Opens your phone app with 1 1 2. Tap call there.", and a dialer that cannot open says "Your phone could not open 112. Dial 112 yourself."', async () => {
     signedIn();
     mockPhone.fail('openDialer', new Error('synthetic: no activity found for the dialer'));
     const screen = await launch({ language: 'en-GB' });
@@ -1000,6 +1171,27 @@ describe('CALL-02-AC6: the 112 button says what it is, and nothing more', () => 
     await press(button);
     expect(await screen.findByText(EMERGENCY.en.failed)).toBeTruthy();
   });
+
+  // After review loop 1 (CALL-02-AC5 and AC6): the failure line's label, in
+  // full, in both languages, in this owned file, so nb.json and en.json,
+  // which are not owned, cannot change what a screen reader says of it.
+  test.each([
+    ['English', EMERGENCY.en.failed, EMERGENCY.en.failedLabel, 'en-GB'],
+    ['bokmål', EMERGENCY.nb.failed, EMERGENCY.nb.failedLabel, 'nb-NO'],
+  ] as [string, string, string, 'en-GB' | 'nb-NO'][])(
+    'CALL-02-AC6: in %s, a dialer that cannot open shows "%s", and its screen-reader label reads "%s", in full',
+    async (_language, visible, label, language) => {
+      signedIn();
+      mockPhone.fail('openDialer', new Error('synthetic: no activity found for the dialer'));
+      const screen = await launch({ language });
+
+      await press(await find112Button(screen));
+      const message = await screen.findByText(visible);
+
+      expect(textOf(message)).toBe(visible);
+      expect(labelsReadFor(message)).toEqual([label]);
+    },
+  );
 
   test('CALL-02-AC6: its flattened style has a minHeight of at least 64 and a minWidth of at least 96 (Q6)', async () => {
     signedIn();
@@ -1022,10 +1214,12 @@ describe('CALL-02-AC6: the 112 button says what it is, and nothing more', () => 
         ),
       ),
     ).toEqual([]);
+    // Added after review loop 1: the failure line's label, call.emergency.failedLabel.
     for (const [bokmål, english] of [
       [EMERGENCY.nb.label, EMERGENCY.en.label],
       [EMERGENCY.nb.hint, EMERGENCY.en.hint],
       [EMERGENCY.nb.failed, EMERGENCY.en.failed],
+      [EMERGENCY.nb.failedLabel, EMERGENCY.en.failedLabel],
     ] as const) {
       expect(keysOf(bokmål).length).toBeGreaterThan(0);
       expect(keysOf(bokmål).map((key) => textAt(en, key))).toEqual(
@@ -1138,6 +1332,40 @@ describe('CALL-02-AC8: the home screen shows 112 and the call button at once, wi
       expect(nameOf(callButton(screen))).toMatch(beginning(NB.none));
       expect(mockStore.items.get(CREDENTIAL_KEY)).toBe(CREDENTIAL);
       expect(screen.queryByText(NB.joinTitle)).toBeNull();
+    },
+  );
+
+  // Review loop 1 (safety-reviewer 3): only a 401 signs out (GRP-01-AC29).
+  // Any other 4xx on GET /v1/me is the server not saying who this phone is,
+  // so the home screen stays as for an unreachable server, with #1 and both
+  // buttons, and the credential and #1 are kept for the retry.
+  test.each([
+    ['403', 403, 'FORBIDDEN'],
+    ['404', 404, 'NOT_FOUND'],
+    ['409', 409, 'CONFLICT'],
+  ] as [string, number, string][])(
+    'CALL-02-AC8: an answer of %s to GET /v1/me leaves the home screen, with "Vi fikk ikke kontakt med serveren. Prøv igjen om litt." and "Prøv igjen", 112, #1 and the call button "Ring {name}"; the credential and #1 are kept, and the join screen does not show: only a 401 signs out',
+    async (_what, status, code) => {
+      await withFirstContact('set');
+      const key = await firstContactKey();
+      signedIn();
+      api.always(ME, { status, body: { code, status } });
+      const screen = await launch();
+
+      expect(await screen.findByText(NB.unreachable)).toBeTruthy();
+      expect(screen.getByRole('button', { name: exactly(NB.retry) })).toBeTruthy();
+      expect(the112Button(screen)).toBeDefined();
+      expect(screen.getByText(NB.shown(FIRST.name))).toBeTruthy();
+      expect(nameOf(await findCallButton(screen, NB.call(FIRST.name)))).toMatch(
+        beginning(NB.call(FIRST.name)),
+      );
+      expect(mockStore.items.get(CREDENTIAL_KEY)).toBe(CREDENTIAL);
+      expect(mockStore.items.get(key)).toBe(JSON.stringify(FIRST));
+      expect(mockStore.callsFor('delete', key)).toEqual([]);
+      expect(mockStore.callsFor('delete', CREDENTIAL_KEY)).toEqual([]);
+      expect(screen.queryByText(NB.joinTitle)).toBeNull();
+      expect(screen.queryByText(NB.signedOut)).toBeNull();
+      expect(api.to(ME).length).toBeGreaterThan(0);
     },
   );
 });

@@ -171,7 +171,11 @@ jest.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
 // The words, in full (CALL-02.md's translations table).
 // ---------------------------------------------------------------------------
 
-const EMERGENCY_LABEL = 'Ring 112, nødnummeret';
+// RG-03 (review loop 1; the owner's answer, D-141's fourth amendment): the 112
+// button's label was "Ring 112, nødnummeret". The owner chose to spell the
+// number for a screen reader; its visible text, "112", is unchanged. Every
+// test here that finds the 112 button by its label now holds the new wording.
+const EMERGENCY_LABEL = 'Ring 1 1 2, nødnummeret';
 const ERROR_LINE = 'Noe gikk galt på denne skjermen.';
 const RETRY = 'Prøv igjen';
 const JOIN_TITLE = 'Bli med i gruppen';
@@ -795,7 +799,8 @@ describe('CALL-02-AC13: a screen that crashes still shows 112', () => {
     expect(emergencyButtons(screen)).toHaveLength(1);
   });
 
-  test('CALL-02-AC13: when the layout’s own GroupSessionProvider throws while rendering, the fallback, outside the providers, shows one 112 button labelled "Ring 112, nødnummeret" in full, not a raw key, and "Noe gikk galt på denne skjermen." in full; pressing the button opens the dialer with 112', async () => {
+  // RG-03 (review loop 1): the label quoted here was "Ring 112, nødnummeret".
+  test('CALL-02-AC13: when the layout’s own GroupSessionProvider throws while rendering, the fallback, outside the providers, shows one 112 button labelled "Ring 1 1 2, nødnummeret" in full, not a raw key, and "Noe gikk galt på denne skjermen." in full; pressing the button opens the dialer with 112', async () => {
     const screen = await launch('/', throwingSession);
 
     expect(await screen.findByText(ERROR_LINE)).toBeTruthy();
@@ -819,4 +824,29 @@ describe('CALL-02-AC13: a screen that crashes still shows 112', () => {
     await expectFallback(await launch('/', throwingHomeScreen));
     await expectFallback(await launch('/', throwingSession));
   });
+
+  // Review loop 1 (a11y-i18n-reviewer 5): a screen that crashes changes under
+  // the walker's thumb, so its line is read out when it appears, as the
+  // app's other messages after an action are (accessibilityLiveRegion,
+  // Android; iOS is task 12's).
+  test.each([
+    ['the index route', 'route'],
+    ['the layout’s GroupSessionProvider', 'session'],
+  ] as [string, 'route' | 'session'][])(
+    'CALL-02-AC13: when %s throws, "Noe gikk galt på denne skjermen." is in an element with accessibilityLiveRegion="assertive", so it is read out when it appears',
+    async (_what, which) => {
+      mockThrowing.on = true;
+      const screen = await launch('/', which === 'route' ? throwingHomeScreen : throwingSession);
+
+      const line = await screen.findByText(ERROR_LINE);
+
+      expect(
+        [line, ...ancestorsOf(line)].some(
+          (node) =>
+            node.props['accessibilityLiveRegion'] === 'assertive' ||
+            node.props['aria-live'] === 'assertive',
+        ),
+      ).toBe(true);
+    },
+  );
 });

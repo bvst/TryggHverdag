@@ -20,7 +20,10 @@
 #     when a flow names none);
 #   - it ends with the dialer in front, on purpose: after it, the script reads
 #     the focused window against the holder of the dialer role, and Telecom's
-#     record again, which must show no new call;
+#     record again, which must show no new call; only once the window check
+#     has passed does the script press Android's back key, once, as its last
+#     step for this flow (review loop 1, D-031). Back is not a tap: nothing
+#     in the dialer is touched;
 #   - after it: back-from-the-dialer.yaml, unless emergency-112.yaml's dialer
 #     is the one it leaves.
 #   APP_ID              the Android application ID
@@ -44,7 +47,10 @@ tags:
 - assertVisible: ${PERMISSION_ALLOW}
 - assertVisible: ${CALL_BUTTON}
 - assertVisible: ${EMERGENCY_LABEL}
-- tapOn: ${CALL_BUTTON}
+# Tapped by its ID, trygghverdag-call-button, its testID in both its forms
+# (review loop 1); the assertion above holds that it reads "Ring {name}".
+- tapOn:
+    id: trygghverdag-call-button
 # The dialer, with #1's number in it, waiting for a second tap that never
 # comes. Read only.
 - waitForAnimationToEnd:

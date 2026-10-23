@@ -28,10 +28,26 @@
 //
 // Test data is synthetic (RG-07): every number and name from the test kit's
 // fixtures (HK-07).
+//
+// Review loop 1 (CALL-01.md, "Review loop 1"):
+//   - Added: AC4, the call button's hint while CALL_PHONE is not granted is
+//     the "permission missing" line (a11y-i18n-reviewer 3), and
+//     CallPermissionLine renders nothing when the platform is not Android
+//     (code-reviewer 4); AC5, the failed-call message's screen-reader label
+//     spells the number (a11y-i18n-reviewer 4).
+//   - RG-03, the owner's answer for the 112 button (D-141's fourth
+//     amendment): its label is "Ring 1 1 2, nødnummeret", no longer "Ring
+//     112, nødnummeret" (NB.emergencyLabel). Two helpers told the 112 button
+//     from the call button by that label: callButton, which takes buttons
+//     whose names begin "Ring ", and AC7's search for the call button, which
+//     left out any name holding "112". The new label begins "Ring " and holds
+//     no "112", so each now also leaves out the button whose visible text is
+//     "112", the text the owner kept. What each test asserts is unchanged.
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import type * as ExpoRouterTesting from 'expo-router/testing-library';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import type { ComponentType } from 'react';
 
 import { fakeApi, parsedOrText } from '../../../../../packages/test-kit/src/fake-api.ts';
 import { fakePhone } from '../../../../../packages/test-kit/src/fake-phone.ts';
@@ -55,10 +71,29 @@ import {
   roleOf,
   shownTexts,
   spelled,
+  textOf,
   type HostNode,
 } from '../../../../../packages/test-kit/src/rendered-tree.ts';
 import en from '../../shared/translations/en.json';
 import nb from '../../shared/translations/nb.json';
+
+/** CallPermissionLine's props, as permission.tsx types them: CALL_PHONE as read, the settings-only state, and the ask. */
+interface PermissionLineProps {
+  permission: {
+    permission: 'granted' | 'notGranted' | null;
+    settingsOnly: boolean;
+    ask: () => Promise<'granted' | 'denied' | 'neverAskAgain'>;
+  };
+}
+
+/**
+ * What features/call/index.ts exports that this file renders on its own:
+ * CallPermissionLine (CALL-01, approach 4). Declared here, so the file
+ * handles a typed value however the module types it.
+ */
+interface CallFeatureExports {
+  CallPermissionLine: ComponentType<PermissionLineProps>;
+}
 
 // ---------------------------------------------------------------------------
 // The world outside the app.
@@ -174,7 +209,9 @@ jest.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
 // ---------------------------------------------------------------------------
 
 const NB = {
-  emergencyLabel: 'Ring 112, nødnummeret',
+  // RG-03 (review loop 1; the owner's answer, D-141's fourth amendment): was
+  // "Ring 112, nødnummeret".
+  emergencyLabel: 'Ring 1 1 2, nødnummeret',
   call: (name: string) => `Ring ${name}`,
   callHint: (number: string) => `Ringer ${spelled(number)}`,
   callFailed: (number: string) => `Telefonen kunne ikke starte samtalen. Ring ${number} selv.`,
@@ -303,9 +340,25 @@ const texts = (screen: Screen): string[] => shownTexts(hostNodes(screen)).map(({
 const buttons = (screen: Screen): HostNode[] =>
   hostNodes(screen).filter((node) => roleOf(node) === 'button');
 
-/** The 112 button: exactly one, or it throws. */
+/** The 112 button's visible text, which the owner kept when its label changed (D-141's fourth amendment). */
+const EMERGENCY_TEXT = '112';
+
+/** Whether a button is the 112 button, by its label or by its visible text, "112". */
+const isEmergencyButton = (node: HostNode): boolean =>
+  labelOf(node) === NB.emergencyLabel || textOf(node) === EMERGENCY_TEXT;
+
+/**
+ * The 112 button: exactly one, or it throws.
+ *
+ * RG-03 (review loop 1): found by its label or its visible text
+ * (isEmergencyButton), no longer by its label alone. This file measures the
+ * 112 button's size and place beside the call button (CALL-01-AC1), not its
+ * words; those are CALL-02's, asserted in full in emergency.test.tsx on every
+ * screen (CALL-02-AC1, AC6), where the owner's new label is held. Still
+ * exactly one button, or the test fails.
+ */
 function emergencyButton(screen: Screen): HostNode {
-  const found = buttons(screen).filter((node) => labelOf(node) === NB.emergencyLabel);
+  const found = buttons(screen).filter(isEmergencyButton);
   const [only] = found;
   if (found.length !== 1 || only === undefined) {
     throw new Error(`expected one 112 button, found ${String(found.length)}`);
@@ -313,11 +366,34 @@ function emergencyButton(screen: Screen): HostNode {
   return only;
 }
 
+/**
+ * The screen-reader labels a message is read by: its own, and those of the
+ * elements above it up to the one that announces it (its live region), each
+ * once. A label on any of them is what TalkBack reads for the message.
+ */
+function labelsReadFor(message: HostNode): string[] {
+  const chain: HostNode[] = [];
+  for (const node of [message, ...ancestorsOf(message)]) {
+    chain.push(node);
+    if (
+      node.props['accessibilityLiveRegion'] === 'assertive' ||
+      node.props['aria-live'] === 'assertive'
+    ) {
+      break;
+    }
+  }
+  return [
+    ...new Set(chain.map((node) => labelOf(node)).filter((label) => label !== null)),
+  ] as string[];
+}
+
 /** The call button, "Ring {name}" with a #1, "Velg hvem du vil ringe" without: exactly one, or it throws. */
 function callButton(screen: Screen): HostNode {
+  // RG-03 (review loop 1): the 112 button is left out by its visible text as
+  // well as by its label (isEmergencyButton); see the file's header.
   const found = buttons(screen).filter(
     (node) =>
-      labelOf(node) !== NB.emergencyLabel &&
+      !isEmergencyButton(node) &&
       (beginning(NB.none).test(nameOf(node)) || nameOf(node).startsWith('Ring ')),
   );
   const [only] = found;
@@ -894,6 +970,118 @@ describe('CALL-01-AC4: without the permission, the button still calls, and the h
     expect(screen.queryByText(NB.permissionMissing)).toBeNull();
     expect(screen.queryByRole('button', { name: exactly(NB.permissionAllow) })).toBeNull();
   });
+
+  // Review loop 1 (a11y-i18n-reviewer 3): without CALL_PHONE a tap opens the
+  // dialer and places no call, so the hint must not promise one ("Ringer …").
+  test('CALL-01-AC4: while the permission is not granted, the call button’s hint is "Knappen åpner telefonappen, og du må trykke ring der.", not "Ringer …"; once it is granted and AppState becomes active, "Ringer " and the number spelled return', async () => {
+    await phoneWith('set');
+    mockPhone.permission = 'notGranted';
+    const screen = await launch();
+    await screen.findByText(NB.permissionMissing);
+
+    expect(hintOf(callButton(screen))).toBe(NB.permissionMissing);
+
+    mockPhone.permission = 'granted';
+    await backToTheForeground();
+    await app().testing.waitFor(() => {
+      expect(screen.queryByText(NB.permissionMissing)).toBeNull();
+    });
+    expect(hintOf(callButton(screen))).toBe(NB.callHint(FIRST.number));
+  });
+
+  test('CALL-01-AC4: the permission revoked while the app was in the background: when AppState next becomes active, the call button’s hint becomes "Knappen åpner telefonappen, og du må trykke ring der."', async () => {
+    const screen = await homeWithFirstContact();
+    await settle();
+    expect(hintOf(callButton(screen))).toBe(NB.callHint(FIRST.number));
+
+    mockPhone.permission = 'notGranted';
+    await backToTheForeground();
+
+    await screen.findByText(NB.permissionMissing);
+    expect(hintOf(callButton(screen))).toBe(NB.permissionMissing);
+  });
+});
+
+// Review loop 1 (code-reviewer 4): iOS is task 12's. The line speaks of
+// Android's permission and its dialog, so on any other platform it renders
+// nothing, whatever it is given.
+
+/** Every permission state the line can be given: CALL_PHONE as read, and the settings-only state. */
+const PERMISSION_STATES: [string, PermissionLineProps['permission']][] = [
+  [
+    'not granted',
+    { permission: 'notGranted', settingsOnly: false, ask: () => Promise.resolve('denied') },
+  ],
+  [
+    'not granted, Android asking no more',
+    { permission: 'notGranted', settingsOnly: true, ask: () => Promise.resolve('neverAskAgain') },
+  ],
+  [
+    'granted',
+    { permission: 'granted', settingsOnly: false, ask: () => Promise.resolve('granted') },
+  ],
+  ['not read yet', { permission: null, settingsOnly: false, ask: () => Promise.resolve('denied') }],
+];
+
+/** CallPermissionLine alone, on `os`, with the app's own translations, in a fresh module registry. */
+async function renderPermissionLine(
+  os: 'ios' | 'android',
+  permission: PermissionLineProps['permission'],
+): Promise<Screen> {
+  if (launched !== undefined) {
+    await launched.testing.cleanup();
+    launched = undefined;
+  }
+  jest.resetModules();
+  mockLanguage = 'nb-NO';
+  const native: ReactNative = jest.requireActual('react-native');
+  (native.Platform as { OS: string }).OS = os;
+  const testing: typeof ExpoRouterTesting = jest.requireActual('expo-router/testing-library');
+  // React Native Testing Library's own render, from the `pure` entry this file
+  // mocks in its place above: the one expo-router/testing-library re-exports,
+  // whose types leave `render` out. Its cleanup is the file's afterEach.
+  const rntl: typeof import('@testing-library/react-native/pure') = jest.requireActual(
+    '@testing-library/react-native/pure',
+  );
+  const react: typeof import('react') = jest.requireActual('react');
+  const { I18nextProvider }: typeof import('react-i18next') = jest.requireActual('react-i18next');
+  const i18n: { default: Parameters<typeof I18nextProvider>[0]['i18n'] } = jest.requireActual(
+    '../../shared/translations',
+  );
+  const { CallPermissionLine } = jest.requireActual<CallFeatureExports>('./index');
+  launched = { testing, native, back: [], appState: [] };
+  await rntl.render(
+    react.createElement(
+      I18nextProvider,
+      { i18n: i18n.default },
+      react.createElement(CallPermissionLine, { permission }),
+    ),
+  );
+  return testing.screen;
+}
+
+describe('CALL-01-AC4: the line about the call permission is Android’s alone', () => {
+  test.each(PERMISSION_STATES)(
+    'CALL-01-AC4: with the platform faked as iOS, CallPermissionLine renders nothing, given the permission %s',
+    async (_what, permission) => {
+      const screen = await renderPermissionLine('ios', permission);
+
+      expect(screen.toJSON()).toBeNull();
+      expect(texts(screen)).toEqual([]);
+      expect(buttons(screen)).toEqual([]);
+    },
+  );
+
+  test('CALL-01-AC4: the control: on Android, given the permission not granted, it renders the line and "Tillat telefonsamtaler"', async () => {
+    const [, notGranted] = PERMISSION_STATES[0] ?? [];
+    if (notGranted === undefined) {
+      throw new Error('no permission state to render');
+    }
+    const screen = await renderPermissionLine('android', notGranted);
+
+    expect(screen.getByText(NB.permissionMissing)).toBeTruthy();
+    expect(screen.getByRole('button', { name: exactly(NB.permissionAllow) })).toBeTruthy();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -931,6 +1119,30 @@ describe('CALL-01-AC5: a call the phone cannot start is said, with the number', 
       await press(await findCallButton(screen, NB.call(FIRST.name)));
       await settle();
       expect(mockPhone.timesCalled('callNumber') + mockPhone.timesCalled('openDialer')).toBe(2);
+    },
+  );
+
+  // Review loop 1 (a11y-i18n-reviewer 4): read as written, the number is a
+  // figure ("forty-four million …"); spelled, it can be dialled by ear, as
+  // #1's number is read (GRP-02-AC10).
+  test.each([
+    ['with the permission', 'granted'],
+    ['without it', 'notGranted'],
+  ] as ['with the permission' | 'without it', 'granted' | 'notGranted'][])(
+    'CALL-01-AC5: %s, the message’s screen-reader label is the same sentence with the number’s characters separated by single spaces, "Telefonen kunne ikke starte samtalen. Ring + d d … selv.", and its visible text is unchanged',
+    async (_what, permission) => {
+      await phoneWith('set');
+      mockPhone.permission = permission;
+      mockPhone.fail('callNumber', new Error('synthetic: neither path started the call'));
+      mockPhone.fail('openDialer', new Error('synthetic: no dialer'));
+      const screen = await launch();
+
+      await press(await findCallButton(screen, NB.call(FIRST.name)));
+      const message = await screen.findByText(NB.callFailed(FIRST.number));
+
+      expect(textOf(message)).toBe(NB.callFailed(FIRST.number));
+      expect(labelsReadFor(message)).toEqual([NB.callFailed(spelled(FIRST.number))]);
+      expect(spelled(FIRST.number)).toBe(Array.from(FIRST.number).join(' '));
     },
   );
 });
@@ -1061,8 +1273,15 @@ describe('CALL-01-AC7: nothing says the call does more than call', () => {
         expect(buttons(screen).length).toBeGreaterThanOrEqual(2);
       });
       const home = everythingSaid(screen);
+      // RG-03 (review loop 1): the 112 button is also left out by its visible
+      // text, "112" (isEmergencyButton): its new label, "Ring 1 1 2, …", holds
+      // no "112", and without this the search would press it first, and the
+      // setup screen's texts would go unread. See the file's header.
       const call = buttons(screen).find(
-        (node) => !nameOf(node).includes('112') && !/^(Inviter|Se |Invite|See )/.test(nameOf(node)),
+        (node) =>
+          !isEmergencyButton(node) &&
+          !nameOf(node).includes('112') &&
+          !/^(Inviter|Se |Invite|See )/.test(nameOf(node)),
       );
       if (call === undefined) {
         throw new Error('the home screen has no call button');

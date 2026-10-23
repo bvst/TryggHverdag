@@ -363,6 +363,22 @@ describe('CALL-01-AC2: with the call permission, the tap starts the call to #1; 
     },
   );
 
+  // Review loop 1 (test-auditor 2): the case above shows the cleaning on a
+  // string with no separator in it. This one has a space beside the comma,
+  // so a URI built from the string as given would hold a space, or %20.
+  test.each(PERMISSION)(
+    'CALL-01-AC2: a not-plain number with a separator, 112 ,5, %s: the dialer opens with tel:112%%2C5, built from the cleaned string, its comma encoded, with no space and no encoded space, and ACTION_CALL is never started',
+    async (_permission, granted) => {
+      mockPlatform.granted = granted;
+
+      await phone().callNumber('112 ,5');
+
+      expect(callsStarted()).toEqual([]);
+      expect(linking.opened).toEqual(['tel:112%2C5']);
+      expect(linking.opened.join('')).not.toMatch(/ |%20/i);
+    },
+  );
+
   test('CALL-01-AC2: it never asks Linking.canOpenURL first, which answers false on Android 11 and later without a <queries> entry', async () => {
     mockPlatform.granted = true;
     await phone().callNumber(MOBILE);
@@ -382,6 +398,24 @@ describe('CALL-01-AC4: without the permission, the button still calls, through t
     await phone().callNumber(MOBILE);
 
     expect(callsPlaced()).toEqual([]);
+    expect(linking.opened).toEqual([`tel:${MOBILE}`]);
+  });
+
+  // Review loop 1 (safety-reviewer 2): reading the permission can itself
+  // fail. A read that fails is a permission not known to be held: the dialer
+  // still opens, and the button does not fail because of the read.
+  test('CALL-01-AC4: when reading the permission (PermissionsAndroid.check) rejects, callNumber treats it as not granted: it opens the dialer with tel: and the cleaned number, never starts ACTION_CALL, and does not reject', async () => {
+    mockPlatform.granted = true;
+    const native: ReactNative = jest.requireActual('react-native');
+    jest
+      .spyOn(native.PermissionsAndroid, 'check')
+      .mockImplementation(() =>
+        Promise.reject(new Error('synthetic: the permission could not be read')),
+      );
+
+    await expect(phone().callNumber(SPACED)).resolves.toBeUndefined();
+
+    expect(callsStarted()).toEqual([]);
     expect(linking.opened).toEqual([`tel:${MOBILE}`]);
   });
 

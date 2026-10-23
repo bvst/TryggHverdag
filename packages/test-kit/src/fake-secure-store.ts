@@ -21,6 +21,16 @@
  * With a `journal`, it writes `secure-store <op> <key>` into it as each call
  * is made, so a test can order its calls against the phone fake's.
  *
+ * It refuses what `expo-secure-store` refuses (GRP-02-AC2, review loop 1;
+ * D-100: a fake more lenient than the real thing quietly weakens what the
+ * tests prove): a key that is not a string matching /^[\w.-]+$/, in every
+ * read, write and delete, and a value that is not a string, in every write.
+ * As the store does (its `ensureValidKey` and `isValidValue`, read in the
+ * installed 57.0.4), with its own messages, before anything else: before a
+ * refusal a test set, and before a held read waits. The async functions
+ * reject, the sync ones throw; the call is recorded, as refused, and nothing
+ * is kept or removed.
+ *
  * The constants are the module's names with distinct values; the app passes
  * them through and never reads their value.
  *
@@ -79,6 +89,23 @@ export interface FakeSecureStore {
 /** Every key: a refusal that applies to all of them. */
 const EVERY_KEY = '*';
 
+/** expo-secure-store's own messages (build/SecureStore.js, 57.0.4). */
+const INVALID_KEY =
+  'Invalid key provided to SecureStore. Keys must not be empty and contain only alphanumeric characters, ".", "-", and "_".';
+const INVALID_VALUE =
+  'Invalid value provided to SecureStore. Values must be strings; consider JSON-encoding your values if they are serializable.';
+
+/** What expo-secure-store refuses before it reaches the Keystore, or nothing. */
+function invalid(op: SecureStoreOp, key: unknown, value: unknown): Error | undefined {
+  if (typeof key !== 'string' || !/^[\w.-]+$/.test(key)) {
+    return new Error(INVALID_KEY);
+  }
+  if (op === 'set' && typeof value !== 'string') {
+    return new Error(INVALID_VALUE);
+  }
+  return undefined;
+}
+
 export function fakeSecureStore({ journal }: { journal?: string[] } = {}): FakeSecureStore {
   const items = new Map<string, string>();
   let calls: SecureStoreCall[] = [];
@@ -88,15 +115,21 @@ export function fakeSecureStore({ journal }: { journal?: string[] } = {}): FakeS
   const refusalOf = (op: SecureStoreOp, key: string): Error | undefined =>
     refusals.get(`${op} ${key}`) ?? refusals.get(`${op} ${EVERY_KEY}`);
 
-  /** Records the call, and says whether it is refused, and with what. */
+  /** Records the call, and says whether it is refused, and with what: the store's own checks first. */
   const record = (
     op: SecureStoreOp,
     key: string,
     value: string | null,
     options: unknown,
   ): Error | undefined => {
-    const refused = refusalOf(op, key);
-    calls.push({ op, key, value, options, refused: refused !== undefined });
+    const refused = invalid(op, key, op === 'set' ? value : null) ?? refusalOf(op, key);
+    calls.push({
+      op,
+      key,
+      value: typeof value === 'string' ? value : null,
+      options,
+      refused: refused !== undefined,
+    });
     journal?.push(`secure-store ${op} ${key}${refused === undefined ? '' : ' refused'}`);
     return refused;
   };
@@ -135,7 +168,8 @@ export function fakeSecureStore({ journal }: { journal?: string[] } = {}): FakeS
   return {
     module: {
       getItemAsync: (key, options) => {
-        if (heldReads === null) {
+        // The store checks the key before anything waits.
+        if (heldReads === null || invalid('get', key, null) !== undefined) {
           return settle(() => read(key, options));
         }
         const waiting = heldReads;

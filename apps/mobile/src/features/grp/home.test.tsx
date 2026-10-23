@@ -33,6 +33,24 @@
 // Test data is synthetic (RG-07): every number and name comes from the test
 // kit's phone-number fixtures (HK-07), and is built into the shapes a person
 // types at run time.
+//
+// Review loop 1 (GRP-02.md, "Review loop 1"):
+//   - Added: AC1 and AC8, the explaining button's accessible name is its
+//     title, ". ", and its line; AC3 and AC4, "Lagre" dismisses the keyboard
+//     and a refusal's message sits above "Lagre"; AC6, a #1 left behind by a
+//     refused delete on a 401 is deleted by the next join, and a 403, 404 or
+//     409 keeps the credential and #1; AC11 (new), a view opened inside the
+//     home route starts at its top, with focus on its heading.
+//   - The secure-store fake now refuses what expo-secure-store refuses
+//     (GRP-02-AC2; its own tests are in packages/test-kit), so every test
+//     here runs against a store that refuses a bad key or a value that is
+//     not a string.
+//   - RG-03, the owner's answer for the 112 button (D-141's fourth
+//     amendment): its label is "Ring 1 1 2, nødnummeret", no longer "Ring
+//     112, nødnummeret" (NB.emergencyLabel). callButton told the 112 button
+//     from the call button by that label; the new one also begins "Ring ",
+//     so it now also leaves out the button whose visible text is "112", the
+//     text the owner kept. What each test asserts is unchanged.
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import type * as ExpoRouterTesting from 'expo-router/testing-library';
 import { readFileSync } from 'node:fs';
@@ -59,8 +77,10 @@ import {
   labelOf,
   nameOf,
   roleOf,
+  sameFiber,
   shownTexts,
   spelled,
+  textOf,
   type FiberLike,
   type HostNode,
 } from '../../../../../packages/test-kit/src/rendered-tree.ts';
@@ -194,7 +214,16 @@ for (const method of ['log', 'info', 'warn', 'error', 'debug'] as const) {
 // ---------------------------------------------------------------------------
 
 const NB = {
-  emergencyLabel: 'Ring 112, nødnummeret',
+  // RG-03 (review loop 1; the owner's answer, D-141's fourth amendment): was
+  // "Ring 112, nødnummeret".
+  emergencyLabel: 'Ring 1 1 2, nødnummeret',
+  // Added in review loop 1, for AC11: the views inside the home route, and
+  // the way back from each.
+  invite: 'Inviter noen',
+  members: 'Se medlemmene',
+  inviteTitle: 'Ny invitasjon',
+  membersTitle: 'Medlemmer',
+  back: 'Tilbake',
   call: (name: string) => `Ring ${name}`,
   callFailed: (number: string) => `Telefonen kunne ikke starte samtalen. Ring ${number} selv.`,
   none: 'Velg hvem du vil ringe',
@@ -335,9 +364,12 @@ const buttons = (screen: Screen): HostNode[] =>
  * du vil ringe" without one. Exactly one, or it throws, saying what is there.
  */
 function callButton(screen: Screen): HostNode {
+  // RG-03 (review loop 1): the 112 button is left out by its visible text,
+  // "112", as well as by its label; see the file's header.
   const found = buttons(screen).filter(
     (node) =>
       labelOf(node) !== NB.emergencyLabel &&
+      textOf(node) !== '112' &&
       (beginning(NB.none).test(nameOf(node)) || nameOf(node).startsWith('Ring ')),
   );
   const [only] = found;
@@ -393,6 +425,8 @@ const JOIN_KEY = 'joinKey';
 
 /** A synthetic credential, made at run time (gitleaks reads every committed line). */
 const CREDENTIAL = 'C'.repeat(20) + 'd'.repeat(13) + '-_0123456789';
+/** Another, the one a new join is given (review loop 1, GRP-02-AC6), in the same shape. */
+const NEW_CREDENTIAL = 'N'.repeat(20) + 'e'.repeat(13) + '-_9876543210';
 const MEMBER_ID = 'b2b2b2b2-0000-4000-8000-00000000000b';
 const MEMBER_NAME = 'Testmedlem ØKVAR';
 
@@ -631,7 +665,48 @@ describe('GRP-02-AC1: with no #1, the call button explains how to set one, and o
     expect(mockPhone.timesCalled('openDialer')).toBe(0);
     expect(mockPhone.timesCalled('askCallPermission')).toBe(0);
   });
+
+  // Review loop 1 (a11y-i18n-reviewer 2): a hint may be turned off in the
+  // screen reader's settings, so the line that says why the button is there
+  // is in its name, after the title.
+  test('GRP-02-AC1: the explaining button’s accessibilityLabel carries both texts, the title then the line: "Velg hvem du vil ringe. Du har ikke valgt en nummer 1-kontakt. Trykk for å velge."; the line is not carried only as a hint', async () => {
+    await phoneHolding();
+    const screen = await launch();
+
+    const button = await findCallButton(screen, NB.none);
+
+    expect(labelOf(button)).toBe(`${NB.none}. ${NB.noneHint}`);
+    expect(labelOf(button)).toBe(
+      'Velg hvem du vil ringe. Du har ikke valgt en nummer 1-kontakt. Trykk for å velge.',
+    );
+  });
+
+  // Review loop 1 (the main session's decision under D-031): the L7 flows find
+  // and tap the call button by its ID, since the explaining form's label is
+  // its title and its line together (scripts/lib/e2e-android.test.mjs holds
+  // the flows' half). The ID is the same in every form, and no other element
+  // carries it.
+  test.each<[string, Contact | { raw: string } | undefined, string]>([
+    ['the explaining form, with no #1', undefined, NB.none],
+    ['the explaining form, with #1 unreadable', { raw: '{"name": "Testkontakt' }, NB.none],
+    ['the form that calls, "Ring {name}"', FIRST, NB.call(FIRST.name)],
+  ])(
+    'GRP-02-AC1: the call button carries testID="trygghverdag-call-button" in %s, and no other element on the home screen does',
+    async (_form, firstContact, name) => {
+      await phoneHolding(firstContact === undefined ? {} : { firstContact });
+      const screen = await launch();
+
+      const button = await findCallButton(screen, name);
+
+      const carrying = hostNodes(screen).filter((node) => node.props['testID'] === CALL_BUTTON_ID);
+      expect(carrying).toHaveLength(1);
+      expect(carrying[0]).toBe(button);
+    },
+  );
 });
+
+/** The call button's ID, its testID in every form, which the L7 flows tap it by (review loop 1). */
+const CALL_BUTTON_ID = 'trygghverdag-call-button';
 
 // ---------------------------------------------------------------------------
 // AC2: chosen by name and number, kept, and shown.
@@ -752,6 +827,50 @@ describe('GRP-02-AC3: any phone number, and only a phone number, on the setup sc
 
     expect(api.sent()).toEqual([]);
   });
+
+  // Review loop 1 (a11y-i18n-reviewer 7): with the phone keypad up, a refusal
+  // shown under "Lagre" sits under the keyboard. So "Lagre" puts the keyboard
+  // away, and the refusal is drawn above the button.
+  test.each([
+    ['a refused number', `${MOBILE}A`],
+    ['a usable number', MOBILE],
+  ])(
+    'GRP-02-AC3: pressing "Lagre" with %s dismisses the keyboard: React Native’s Keyboard.dismiss is called',
+    async (_what, typed) => {
+      await phoneHolding();
+      const screen = await launch();
+      await press(await findCallButton(screen, NB.none));
+      await screen.findByText(NB.title);
+      await type(screen, NB.nameLabel, FIRST.name);
+      await type(screen, NB.numberLabel, typed);
+      const dismiss = jest.spyOn(app().native.Keyboard, 'dismiss');
+
+      await pressButton(screen, NB.save);
+      await settle();
+
+      expect(dismiss).toHaveBeenCalled();
+    },
+  );
+
+  test('GRP-02-AC3: a refused number’s message, "Nummeret ser ikke riktig ut. …", comes before "Lagre" in the rendered tree’s order, so it sits above the button', async () => {
+    await phoneHolding();
+    const screen = await launch();
+    await press(await findCallButton(screen, NB.none));
+    await screen.findByText(NB.title);
+    await type(screen, NB.nameLabel, FIRST.name);
+    await type(screen, NB.numberLabel, `${MOBILE}A`);
+
+    await pressButton(screen, NB.save);
+    const message = await screen.findByText(NB.numberNotUsable);
+
+    const order = hostNodes(screen);
+    const save = buttons(screen).find((node) => nameOf(node) === NB.save);
+    if (save === undefined) {
+      throw new Error('the setup screen has no "Lagre"');
+    }
+    expect(order.indexOf(message)).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf(message)).toBeLessThan(order.indexOf(save));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -791,6 +910,27 @@ describe('GRP-02-AC4: #1’s name follows the contract’s display-name rule', (
       ).toEqual([]);
     },
   );
+
+  // Review loop 1 (a11y-i18n-reviewer 7): as AC3's message, above "Lagre".
+  test('GRP-02-AC4: a refused name’s message, "Navnet kan ikke brukes. …", comes before "Lagre" in the rendered tree’s order, so it sits above the button', async () => {
+    await phoneHolding();
+    const screen = await launch();
+    await press(await findCallButton(screen, NB.none));
+    await screen.findByText(NB.title);
+    await type(screen, NB.nameLabel, '   ');
+    await type(screen, NB.numberLabel, MOBILE);
+
+    await pressButton(screen, NB.save);
+    const message = await screen.findByText(NB.nameNotUsable);
+
+    const order = hostNodes(screen);
+    const save = buttons(screen).find((node) => nameOf(node) === NB.save);
+    if (save === undefined) {
+      throw new Error('the setup screen has no "Lagre"');
+    }
+    expect(order.indexOf(message)).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf(message)).toBeLessThan(order.indexOf(save));
+  });
 
   test.each(ACCEPTED_NAMES)('GRP-02-AC4: the name %s is accepted and shown', async (name) => {
     await phoneHolding();
@@ -1034,6 +1174,99 @@ describe('GRP-02-AC6: #1 stays on the phone', () => {
       expect(screen.getByText(NB.shown(FIRST.name))).toBeTruthy();
     },
   );
+
+  // Review loop 1 (safety-reviewer 3; CALL-02-AC8 holds the screen's half):
+  // only a 401 signs out. Any other 4xx is the server not saying who this
+  // phone is, so #1 and the credential stay for the retry.
+  test.each([
+    ['403', 403, 'FORBIDDEN'],
+    ['404', 404, 'NOT_FOUND'],
+    ['409', 409, 'CONFLICT'],
+  ] as [string, number, string][])(
+    'GRP-02-AC6: GET /v1/me answered %s keeps the credential and #1’s key, and the home screen shows #1 with "Vi fikk ikke kontakt med serveren. Prøv igjen om litt." and "Prøv igjen", and no join screen: only a 401 signs out',
+    async (_what, status, code) => {
+      await phoneHolding({ firstContact: FIRST });
+      const key = await firstContactKey();
+      api.always(ME, { status, body: { code, status } });
+
+      const screen = await launch();
+
+      expect(await screen.findByText(NB.unreachable)).toBeTruthy();
+      expect(screen.getByRole('button', { name: exactly(NB.retry) })).toBeTruthy();
+      await expectShown(screen, FIRST);
+      expect(mockStore.items.get(key)).toBe(JSON.stringify(FIRST));
+      expect(mockStore.items.get(CREDENTIAL_KEY)).toBe(CREDENTIAL);
+      expect(mockStore.callsFor('delete', key)).toEqual([]);
+      expect(mockStore.callsFor('delete', CREDENTIAL_KEY)).toEqual([]);
+      expect(screen.queryByText(NB.joinTitle)).toBeNull();
+      expect(screen.queryByText(NB.signedOut)).toBeNull();
+    },
+  );
+
+  // Review loop 1 (privacy-security-reviewer S1; the retention rule): the
+  // delete at a 401 is one secure-store call, which the store can refuse.
+  // The #1 left behind belongs to a home screen that is gone, so a join
+  // that saves a new credential deletes it too, best effort.
+  test('GRP-02-AC6: when the store refuses #1’s delete on a 401, the join that saves a new credential deletes it: after the join and a restart (a fresh module registry, secure storage kept), the home screen shows no #1, and #1’s key is gone', async () => {
+    await phoneHolding({ firstContact: FIRST });
+    const key = await firstContactKey();
+    mockStore.refuse('delete', key, new Error('synthetic: the Keystore refused the delete'));
+    api.always(ME, { status: 401, body: { code: 'UNAUTHORIZED', status: 401 } });
+    const screen = await launch();
+    expect(await screen.findByText(NB.signedOut)).toBeTruthy();
+    // Not vacuous: the 401's delete was asked, and refused, so #1 is still kept.
+    expect(mockStore.callsFor('delete', key).some(({ refused }) => refused)).toBe(true);
+    expect(mockStore.items.has(key)).toBe(true);
+
+    mockStore.allowAll();
+    api.reply(JOIN, {
+      status: 201,
+      body: { credential: NEW_CREDENTIAL, userId: MEMBER_ID, role: 'MEMBER' },
+    });
+    api.always(ME, meAnswer());
+    await type(screen, NB.joinCode, 'ABCDE-FGHJK-MNPQR-STVWX');
+    await type(screen, NB.joinName, MEMBER_NAME);
+    await pressButton(screen, NB.joinSubmit);
+    await findCallButton(screen, NB.none);
+    await settle();
+
+    expect(mockStore.items.get(CREDENTIAL_KEY)).toBe(NEW_CREDENTIAL);
+    expect(mockStore.items.has(key)).toBe(false);
+    const again = await launch();
+    await findCallButton(again, NB.none);
+    await settle();
+    expect(again.queryByText(NB.shown(FIRST.name))).toBeNull();
+    expect(texts(again).filter((text) => text.startsWith('Nummer 1:'))).toEqual([]);
+    expect(mockStore.items.has(key)).toBe(false);
+  });
+
+  test('GRP-02-AC6: if the store also refuses #1’s delete at the join, the join still completes: it asked for the delete, the new credential is saved, and the home screen shows (best effort)', async () => {
+    await phoneHolding({ firstContact: FIRST });
+    const key = await firstContactKey();
+    mockStore.refuse('delete', key, new Error('synthetic: the Keystore refused the delete'));
+    api.always(ME, { status: 401, body: { code: 'UNAUTHORIZED', status: 401 } });
+    const screen = await launch();
+    await screen.findByText(NB.signedOut);
+    const refusedBefore = mockStore.callsFor('delete', key).length;
+
+    api.reply(JOIN, {
+      status: 201,
+      body: { credential: NEW_CREDENTIAL, userId: MEMBER_ID, role: 'MEMBER' },
+    });
+    api.always(ME, meAnswer());
+    await type(screen, NB.joinCode, 'ABCDE-FGHJK-MNPQR-STVWX');
+    await type(screen, NB.joinName, MEMBER_NAME);
+    await pressButton(screen, NB.joinSubmit);
+    await findCallButton(screen, NB.none);
+    await settle();
+
+    // Not vacuous: the join asked for #1's delete, and the store refused it.
+    const atTheJoin = mockStore.callsFor('delete', key).slice(refusedBefore);
+    expect(atTheJoin.length).toBeGreaterThan(0);
+    expect(atTheJoin.every(({ refused }) => refused)).toBe(true);
+    expect(mockStore.items.get(CREDENTIAL_KEY)).toBe(NEW_CREDENTIAL);
+    expect(screen.queryByText(NB.joinTitle)).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1161,6 +1394,36 @@ describe('GRP-02-AC8: a #1 that cannot be saved or read is said, never hidden', 
       expect(await screen.findByText(NB.title)).toBeTruthy();
       expect(mockPhone.timesCalled('callNumber')).toBe(0);
       expect(mockPhone.timesCalled('openDialer')).toBe(0);
+    },
+  );
+
+  // Review loop 1 (a11y-i18n-reviewer 2): as AC1's, the button's name carries
+  // the line that says why it is there, after its title.
+  test.each<[string, string | null]>([
+    ['the read of #1 rejects', null],
+    ...UNREADABLE.map(([what, raw]): [string, string] => [`the stored #1 is ${what}`, raw]),
+  ])(
+    'GRP-02-AC8: when %s, the button’s accessibilityLabel carries both texts, the title then the line: "Velg hvem du vil ringe. Vi fikk ikke lest hvem du skal ringe. Trykk for å velge igjen."',
+    async (_what, raw) => {
+      if (raw === null) {
+        await phoneHolding({ firstContact: FIRST });
+        mockStore.refuse(
+          'get',
+          await firstContactKey(),
+          new Error('synthetic: the Keystore refused the read'),
+        );
+      } else {
+        await phoneHolding({ firstContact: { raw } });
+      }
+      const screen = await launch();
+
+      const button = await findCallButton(screen, NB.none);
+      await screen.findByText(NB.unreadable);
+
+      expect(labelOf(button)).toBe(`${NB.none}. ${NB.unreadable}`);
+      expect(labelOf(button)).toBe(
+        'Velg hvem du vil ringe. Vi fikk ikke lest hvem du skal ringe. Trykk for å velge igjen.',
+      );
     },
   );
 
@@ -1378,4 +1641,225 @@ describe('GRP-02-AC10: every word is translated, every field labelled', () => {
     expect(labelled).toContain(spelled(FOREIGN_NORMALISED));
     expect(spelled(FOREIGN_NORMALISED)).toMatch(/^\+ 4 4 7 7 0 0 9 0 0 1 2 3$/);
   });
+});
+
+// ---------------------------------------------------------------------------
+// AC11 (review loop 1, code-reviewer 3 and a11y-i18n-reviewer 6): a view
+// opened inside the home route starts at its top, with focus on its heading.
+//
+// The home, setup, invite and members views are drawn inside one route, so
+// inside one Screen and one ScrollView (CALL-02, approach 1). Without a reset,
+// a view opened from a home screen scrolled down at a large font opens
+// scrolled down too, its heading out of sight, and a screen reader stays
+// where the old view's button was. How the reset is made is the
+// implementer's (GRP-02-AC11), so these hold what can be observed of either
+// way React Native offers, and nothing else:
+//   - the scroll: Screen's ScrollView told to go to the top after the change
+//     (its scrollTo, with y 0, or no y, which is 0), or a new ScrollView in
+//     its place (remounted, so it starts at 0). jest has no layout, so the
+//     offset itself cannot be read.
+//   - the focus: AccessibilityInfo.sendAccessibilityEvent(heading, 'focus'),
+//     or AccessibilityInfo.setAccessibilityFocus given the heading's ref, to
+//     an element whose text, or label, is the new view's heading. React
+//     Native's jest preset mocks both, so each call is recorded.
+// ---------------------------------------------------------------------------
+
+/** The heading of each view the home route draws, as nb.json words it. */
+const HEADINGS = {
+  home: NB.memberTitle,
+  setup: NB.title,
+  invite: NB.inviteTitle,
+  members: NB.membersTitle,
+} as const;
+
+type HomeRouteView = keyof typeof HEADINGS;
+
+const LIST = 'GET /v1/group/members';
+
+/** The host element of a rendered node, by its fiber. */
+const fiberOf = (node: HostNode): FiberLike | null =>
+  (node as unknown as { unstable_fiber: FiberLike | null }).unstable_fiber;
+
+/** The ScrollViews on screen, as host elements. */
+const scrollViews = (screen: Screen): HostNode[] =>
+  hostNodes(screen).filter((node) => node.type === 'RCTScrollView');
+
+/** The text React children hold, through strings, numbers, arrays and elements. */
+function childrenText(children: unknown): string {
+  if (typeof children === 'string' || typeof children === 'number') {
+    return String(children);
+  }
+  if (Array.isArray(children)) {
+    return children.map(childrenText).join('');
+  }
+  if (typeof children === 'object' && children !== null && 'props' in children) {
+    return childrenText((children as { props: { children?: unknown } }).props.children);
+  }
+  return '';
+}
+
+/** What a ref or element that focus was sent to says: its label, or the text it holds; null when it is neither. */
+function textOfTarget(target: unknown): string | null {
+  if (typeof target !== 'object' || target === null || !('props' in target)) {
+    return null;
+  }
+  const props = (target as { props: { accessibilityLabel?: unknown; children?: unknown } }).props;
+  if (typeof props.accessibilityLabel === 'string' && props.accessibilityLabel !== '') {
+    return props.accessibilityLabel;
+  }
+  return childrenText(props.children);
+}
+
+/**
+ * From now on, what happens to Screen's ScrollView and to the screen reader's
+ * focus: whether the ScrollView was sent to the top or replaced, and the
+ * texts of what focus was sent to, in order.
+ */
+function watchViewChange(screen: Screen): {
+  scrolledToTop: () => boolean;
+  focusedOn: () => (string | null)[];
+} {
+  const native = app().native;
+  const scrollTo = (native.ScrollView.prototype as unknown as { scrollTo: jest.Mock }).scrollTo;
+  const sendEvent = native.AccessibilityInfo.sendAccessibilityEvent as unknown as jest.Mock;
+  const setFocus = native.AccessibilityInfo.setAccessibilityFocus as unknown as jest.Mock;
+  scrollTo.mockClear();
+  sendEvent.mockClear();
+  setFocus.mockClear();
+  const [scroll, ...more] = scrollViews(screen);
+  if (scroll === undefined || more.length > 0) {
+    throw new Error(`expected one ScrollView, Screen's, found ${String(more.length + 1)}`);
+  }
+  const before = fiberOf(scroll);
+  return {
+    scrolledToTop: () => {
+      const toTop = scrollTo.mock.calls.some(([options]) => {
+        if (options === undefined || options === 0) {
+          return true;
+        }
+        if (typeof options === 'object' && options !== null) {
+          const { y } = options as { y?: unknown };
+          return y === undefined || y === 0;
+        }
+        return false;
+      });
+      const [now] = scrollViews(screen);
+      const after = now === undefined ? null : fiberOf(now);
+      const replaced = before !== null && after !== null && !sameFiber(before, after);
+      return toTop || replaced;
+    },
+    focusedOn: () => [
+      ...sendEvent.mock.calls
+        .filter(([, type]) => type === 'focus')
+        .map(([target]) => textOfTarget(target)),
+      ...setFocus.mock.calls.map(([target]) => textOfTarget(target)),
+    ],
+  };
+}
+
+/** Scrolls Screen's ScrollView down, as a thumb would on a long screen at a large font. */
+async function scrollDown(screen: Screen): Promise<void> {
+  const [scroll] = scrollViews(screen);
+  if (scroll === undefined) {
+    throw new Error('no ScrollView on screen');
+  }
+  await app().testing.fireEvent.scroll(
+    scroll as Parameters<Launched['testing']['fireEvent']['scroll']>[0],
+    {
+      nativeEvent: {
+        contentOffset: { x: 0, y: 640 },
+        contentSize: { width: 400, height: 2400 },
+        layoutMeasurement: { width: 400, height: 800 },
+      },
+    },
+  );
+  await settle();
+}
+
+/** On the admin's home screen, with no #1: opens `view` and waits for its heading. */
+async function openView(screen: Screen, view: HomeRouteView): Promise<void> {
+  await screen.findByText(NB.memberTitle);
+  if (view === 'setup') {
+    await press(await findCallButton(screen, NB.none));
+  } else if (view === 'invite') {
+    await pressButton(screen, NB.invite);
+  } else if (view === 'members') {
+    await pressButton(screen, NB.members);
+  }
+  await screen.findByText(HEADINGS[view]);
+  await settle();
+}
+
+/** A change of view: its name, the view it starts from, the one it opens, and how a person makes it. */
+type ViewChange = [string, HomeRouteView, HomeRouteView, (screen: Screen) => Promise<void>];
+
+/** Each change of view inside the home route. */
+const VIEW_CHANGES: ViewChange[] = [
+  [
+    'the home screen to the setup screen, by the call button',
+    'home',
+    'setup',
+    async (screen) => {
+      await press(await findCallButton(screen, NB.none));
+    },
+  ],
+  [
+    'the setup screen to the home screen, by "Avbryt"',
+    'setup',
+    'home',
+    (screen) => pressButton(screen, NB.cancel),
+  ],
+  [
+    'the home screen to the invite screen, by "Inviter noen"',
+    'home',
+    'invite',
+    (screen) => pressButton(screen, NB.invite),
+  ],
+  [
+    'the invite screen to the home screen, by "Tilbake"',
+    'invite',
+    'home',
+    (screen) => pressButton(screen, NB.back),
+  ],
+  [
+    'the home screen to the members screen, by "Se medlemmene"',
+    'home',
+    'members',
+    (screen) => pressButton(screen, NB.members),
+  ],
+  [
+    'the members screen to the home screen, by "Tilbake"',
+    'members',
+    'home',
+    (screen) => pressButton(screen, NB.back),
+  ],
+];
+
+describe('GRP-02-AC11: a view opened inside the home route starts at its top, with focus on its heading', () => {
+  test.each(VIEW_CHANGES)(
+    'GRP-02-AC11: from %s, at a large font size and scrolled down: Screen’s ScrollView goes to the top, and screen-reader focus is set on the new view’s heading',
+    async (_change, from, to, change) => {
+      await phoneHolding({ role: 'ADMIN' });
+      api.always(LIST, {
+        status: 200,
+        body: { members: [{ userId: MEMBER_ID, displayName: MEMBER_NAME, role: 'ADMIN' }] },
+      });
+      const screen = await launch();
+      // The phone's font scale, large, as the test can set it (jest has no layout).
+      jest.spyOn(app().native.PixelRatio, 'getFontScale').mockReturnValue(2);
+      await openView(screen, from);
+      await scrollDown(screen);
+      const watch = watchViewChange(screen);
+
+      await change(screen);
+      await screen.findByText(HEADINGS[to]);
+      await settle();
+
+      await app().testing.waitFor(() => {
+        expect(watch.focusedOn()).toContain(HEADINGS[to]);
+      });
+      expect(watch.scrolledToTop()).toBe(true);
+      expect(watch.focusedOn().filter((text) => text !== HEADINGS[to])).toEqual([]);
+    },
+  );
 });

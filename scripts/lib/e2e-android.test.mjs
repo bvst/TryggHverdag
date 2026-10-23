@@ -2693,8 +2693,43 @@ const headerOf = (name) => {
 const TOUCH =
   /^\s*-?\s*(tapOn|doubleTapOn|longPressOn|inputText|inputRandom\w*|eraseText|swipe|scroll\w*|pasteText|copyTextFrom)\b/;
 
-/** The steps that open the dialer or a call: a tap of the app's 112 button or its call button. */
-const OPENS_THE_DIALER = /^\s*-?\s*tapOn:\s*\$\{(EMERGENCY_LABEL|CALL_BUTTON)\}\s*$/;
+/**
+ * The call button's ID (review loop 1, D-031): its testID in both its forms,
+ * the explaining one and "Ring {name}". The flows tap it by this, since the
+ * explaining form's screen-reader label carries its title and its line
+ * together, and its title alone may match no element.
+ */
+const CALL_BUTTON_ID = 'trygghverdag-call-button';
+
+/** Whether a line is the `id:` of a selector, naming the call button. */
+const isCallButtonId = (line) =>
+  new RegExp(`^\\s+id:\\s*['"]?${CALL_BUTTON_ID}['"]?\\s*$`).test(line ?? '');
+
+/**
+ * Whether the step at `at` opens the dialer or a call: a tap of the app's 112
+ * button, or of its call button when it reads "Ring {name}".
+ *
+ * RG-03 (review loop 1): this was one regular expression for one line,
+ * `tapOn: ${EMERGENCY_LABEL}` or `tapOn: ${CALL_BUTTON}`. The flows now tap the
+ * call button by its ID (CALL_BUTTON_ID), a step of two lines, and the ID is
+ * the same in both the button's forms. So a tap by ID counts as opening a
+ * call where the flow last named the call button "Ring {name}"
+ * (`${CALL_BUTTON}`), and not where it last named its explaining title
+ * (`${CHOOSE_CONTACT}`): that tap opens the setup screen.
+ */
+function opensTheDialer(steps, at) {
+  const line = steps[at] ?? '';
+  if (/^\s*-?\s*tapOn:\s*\$\{(EMERGENCY_LABEL|CALL_BUTTON)\}\s*$/.test(line)) {
+    return true;
+  }
+  if (!/^\s*-\s*tapOn:\s*$/.test(line) || !isCallButtonId(steps[at + 1])) {
+    return false;
+  }
+  const named = steps
+    .slice(0, at)
+    .findLast((earlier) => /\$\{(CALL_BUTTON|CHOOSE_CONTACT)\}/.test(earlier));
+  return named !== undefined && named.includes('${CALL_BUTTON}');
+}
 
 // CALL-02's L7 112 step and SPIKE-01-AC10's rule: a test never taps anything
 // in the dialer. From step 1 on, apps/mobile/e2e/ needs the owner and
@@ -2705,7 +2740,7 @@ describe('the flows that reach the dialer never tap in it', () => {
   const reaching = () =>
     flows().filter(
       (name) =>
-        stepsOf(name).some((line) => OPENS_THE_DIALER.test(line)) ||
+        stepsOf(name).some((_line, at, steps) => opensTheDialer(steps, at)) ||
         name === 'back-from-the-dialer.yaml',
     );
 
@@ -2731,7 +2766,7 @@ describe('the flows that reach the dialer never tap in it', () => {
   test('CALL-02-AC3: after the step that opens the dialer or a call, a flow touches nothing: no tap, no typing, no swipe, no scroll; and the way back presses back alone', () => {
     const touching = reaching().flatMap((name) => {
       const steps = stepsOf(name);
-      const opened = steps.findIndex((line) => OPENS_THE_DIALER.test(line));
+      const opened = steps.findIndex((_line, at) => opensTheDialer(steps, at));
       const after = name === 'back-from-the-dialer.yaml' ? steps : steps.slice(opened + 1);
       return after.filter((line) => TOUCH.test(line)).map((line) => `${name}: ${line.trim()}`);
     });
@@ -2758,6 +2793,158 @@ describe('the flows that reach the dialer never tap in it', () => {
     ).toEqual([]);
     expect(stepsOf('first-contact.yaml').join('\n')).toMatch(/all:\s*deny/);
     expect(stepsOf('call-without-permission.yaml').join('\n')).toMatch(/phone:\s*deny/);
+  });
+});
+
+/** A flow's steps as blocks: each `- step` line with the indented lines under it. */
+const blocksOf = (name) => {
+  const blocks = [];
+  for (const line of stepsOf(name)) {
+    if (/^-\s/.test(line) || blocks.length === 0) {
+      blocks.push([line]);
+    } else {
+      blocks.at(-1)?.push(line);
+    }
+  }
+  return blocks.map((lines) => lines.join('\n'));
+};
+
+/** The ID a block looks for, or null: `id: …` under a selector. */
+const idIn = (block) => /^\s+id:\s*['"]?([\w.-]+)['"]?\s*$/m.exec(block)?.[1] ?? null;
+
+// CALL-02-AC3 (L7; review loop 1, safety-reviewer 1): the app's own 112
+// button shows "112" and is labelled "Ring 1 1 2, nødnummeret", so a "112"
+// found while the app is still in front proves nothing about the dialer.
+// After the tap, emergency-112.yaml waits, bounded, until an element only the
+// app draws, found by its ID, is gone, and only then looks for 112. The L5
+// test in features/call/emergency.test.tsx holds that the ID is the 112
+// button's own testID. Until CI's android-e2e has run the fixed flow, "the
+// dialer opens with 112" is unobserved: this session has no emulator.
+describe('CALL-02-AC3: emergency-112 waits until the app is gone before it reads the dialer', () => {
+  const FLOW = 'emergency-112.yaml';
+  const TAP = /^-\s*tapOn:\s*\$\{EMERGENCY_LABEL\}\s*$/;
+  const WAIT_GONE = /^-\s*extendedWaitUntil:\s*\n\s+notVisible:\s*\n\s+id:\s*\S+/;
+
+  test('CALL-02-AC3: straight after the 112 tap, the flow waits until an element found by its ID is no longer visible, with a timeout of at most 30 s and nothing optional, and only after that wait does it look for 112', () => {
+    const blocks = blocksOf(FLOW);
+    const tap = blocks.findIndex((block) => TAP.test(block));
+    const wait = blocks.findIndex((block, at) => at > tap && WAIT_GONE.test(block));
+    const firstNumber = blocks.findIndex(
+      (block, at) => at > tap && block.includes('${EMERGENCY_NUMBER}'),
+    );
+    const timeout = Number(/^\s+timeout:\s*(\d+)\s*$/m.exec(blocks[wait] ?? '')?.[1] ?? NaN);
+
+    expect(tap, blocks.join('\n')).toBeGreaterThan(-1);
+    expect(wait, blocks.join('\n')).toBe(tap + 1);
+    expect(firstNumber).toBeGreaterThan(wait);
+    expect(timeout).toBeGreaterThan(0);
+    expect(timeout).toBeLessThanOrEqual(30_000);
+    expect(blocks[wait]).not.toMatch(/\boptional\s*:/);
+  });
+
+  test('CALL-02-AC3: before the tap, the flow asserts the same ID visible, so the wait cannot pass at once on an ID nothing carries', () => {
+    const blocks = blocksOf(FLOW);
+    const tap = blocks.findIndex((block) => TAP.test(block));
+    const waited = idIn(blocks.find((block, at) => at > tap && WAIT_GONE.test(block)) ?? '');
+    const seenBefore = blocks
+      .slice(0, tap)
+      .filter((block) => /^-\s*assertVisible:\s*$/m.test(block) && !/notVisible/.test(block))
+      .map(idIn);
+
+    expect(waited).not.toBeNull();
+    expect(seenBefore).toContain(waited);
+  });
+
+  test('CALL-02-AC3: the flow ends with the dialer in front: after the 112 tap it presses no key, and launches, stops, opens or runs nothing, so the focused window the script reads after it is the dialer this flow left', () => {
+    const blocks = blocksOf(FLOW);
+    const tap = blocks.findIndex((block) => TAP.test(block));
+    const leaving = blocks
+      .slice(tap + 1)
+      .filter((block) =>
+        /^-\s*(pressKey|back|launchApp|stopApp|killApp|clearState|openLink|runFlow|runScript|evalScript|startRecording|setLocation|travel)\b/.test(
+          block,
+        ),
+      );
+
+    expect(tap).toBeGreaterThan(-1);
+    expect(leaving).toEqual([]);
+  });
+});
+
+// Review loop 1 (the main session's decision under D-031, after the red
+// step): the flows find and tap the call button by its ID, its testID in both
+// its forms, and never by a text. Its explaining form's screen-reader label
+// is its title and its line together, so its title alone may match no
+// element on the emulator. features/grp/home.test.tsx holds that the button
+// carries the ID in both forms.
+describe('the flows tap the call button by its ID', () => {
+  const flows = () => readdirSync(FLOWS).filter((name) => /\.ya?ml$/.test(name));
+  /** The flows that tap the call button by its ID. */
+  const tappingById = () =>
+    flows().filter((name) =>
+      blocksOf(name).some(
+        (block) => /^-\s*tapOn:\s*$/m.test(block) && block.split('\n').some(isCallButtonId),
+      ),
+    );
+
+  test('GRP-02-AC1, CALL-01-AC2 and CALL-01-AC4: no flow taps the call button by a text, neither "Ring {name}" (${CALL_BUTTON}) nor its explaining title (${CHOOSE_CONTACT})', () => {
+    const byText = flows().flatMap((name) =>
+      stepsOf(name)
+        .filter((line) => /tapOn:\s*['"]?[^'"\n]*\$\{(CALL_BUTTON|CHOOSE_CONTACT)\}/.test(line))
+        .map((line) => `${name}: ${line.trim()}`),
+    );
+
+    expect(byText).toEqual([]);
+  });
+
+  test('GRP-02-AC1, CALL-01-AC2 and CALL-01-AC4: first-contact, call-with-permission and call-without-permission tap the call button by its ID, trygghverdag-call-button', () => {
+    expect(tappingById().sort()).toEqual(
+      ['call-with-permission.yaml', 'call-without-permission.yaml', 'first-contact.yaml'].sort(),
+    );
+  });
+
+  test('GRP-02-AC1: first-contact.yaml finds the explaining call button by its ID: it waits for the ID before it taps it, and asserts the title and the line, as the button’s label or the text drawn in it', () => {
+    const blocks = blocksOf('first-contact.yaml');
+    const tap = blocks.findIndex(
+      (block) => /^-\s*tapOn:\s*$/m.test(block) && block.split('\n').some(isCallButtonId),
+    );
+    const wait = blocks.findIndex(
+      (block) =>
+        /^-\s*extendedWaitUntil:\s*\n\s+visible:\s*$/m.test(block) &&
+        block.split('\n').some(isCallButtonId),
+    );
+    const before = blocks.slice(wait + 1, tap);
+
+    expect(wait).toBeGreaterThan(-1);
+    expect(tap).toBeGreaterThan(wait);
+    expect(before).toContain("- assertVisible: '${CHOOSE_CONTACT}.*'");
+    expect(before).toContain("- assertVisible: '.*${NO_CONTACT_HINT}'");
+  });
+
+  test('GRP-02-AC1: the patterns first-contact.yaml asserts match the explaining button’s whole label and each of its texts, as Maestro reads them, and nothing that is only one of them', () => {
+    const nb = JSON.parse(readFileSync(NB, 'utf8'));
+    const title = String(textAt(nb, 'grp.firstContact.none'));
+    const line = String(textAt(nb, 'grp.firstContact.noneHint'));
+    const env = envOf(
+      maestroTestCommand({
+        maestro: 'maestro',
+        report: 'report.xml',
+        appId: 'no.example.placeholder',
+        translations: nb,
+        bootstrapCode: BOOTSTRAP_CODE,
+        firstContact: EMULATOR_FIRST_CONTACT,
+      }),
+    );
+    /** A flow's pattern with the script's values in it, as Maestro matches a text: whole, any case. */
+    const asMaestroReads = (pattern) =>
+      new RegExp(`^(?:${pattern.replace(/\$\{(\w+)\}/g, (_all, name) => env[name] ?? '')})$`, 'is');
+    const label = `${title}. ${line}`;
+
+    expect(asMaestroReads('${CHOOSE_CONTACT}.*').test(label)).toBe(true);
+    expect(asMaestroReads('${CHOOSE_CONTACT}.*').test(title)).toBe(true);
+    expect(asMaestroReads('.*${NO_CONTACT_HINT}').test(label)).toBe(true);
+    expect(asMaestroReads('.*${NO_CONTACT_HINT}').test(line)).toBe(true);
+    expect(asMaestroReads('${CHOOSE_CONTACT}.*').test(`Ring ${title}`)).toBe(false);
   });
 });
 
@@ -2852,7 +3039,9 @@ describe('the flows assert 112 on every screen they reach', () => {
 
   test.each([
     ['the join screen', 'emergency-112.yaml', /visible:\s*\$\{JOIN_TITLE\}/],
-    ['the home screen', 'first-contact.yaml', /visible:\s*\$\{CHOOSE_CONTACT\}/],
+    // RG-03 (review loop 1): first-contact.yaml now waits for the explaining
+    // call button by its ID (CALL_BUTTON_ID), no longer by `${CHOOSE_CONTACT}`.
+    ['the home screen', 'first-contact.yaml', /^\s+id:\s*['"]?trygghverdag-call-button['"]?\s*$/],
     ['the setup screen', 'first-contact.yaml', /visible:\s*\$\{SETUP_TITLE\}/],
     [
       'the setup screen with the keyboard up',
@@ -3250,6 +3439,11 @@ describe('flowTags: a flow’s tags, as Maestro reads them from its config secti
   });
 });
 
+/** Words that say a flow is not in the folder (CALL-01, approach 9, review loop 1). */
+const ABSENT = /\b(absent|missing|not in\b|is not there|not found|no such)/i;
+/** Words that say a flow is in the folder but not tagged scripted. */
+const UNTAGGED = /\bnot tagged\b|\buntagged\b|\bwithout the scripted tag\b/i;
+
 describe('scriptedFlowsToRun: the scripted flows, in the script’s order', () => {
   /** The folder as the order expects it: each flow of SCRIPTED_FLOWS tagged, and one that is not. */
   const allOrdered = () => [
@@ -3263,16 +3457,63 @@ describe('scriptedFlowsToRun: the scripted flows, in the script’s order', () =
     expect(result).toEqual({ ok: true, run: [...SCRIPTED_FLOWS], absent: [] });
   });
 
-  test('INF-06-AC9: a flow in the order but not in the folder is not run, and is listed as absent', () => {
+  // RG-03 (CALL-01, approach 9, review loop 1, code-reviewer 1): this test was
+  // "a flow in the order but not in the folder is not run, and is listed as
+  // absent", with ok: true: the run went on without it, and the script only
+  // printed its name. A flow that silently drops out of the order takes its
+  // Telecom and dialer checks with it, so the spec now has it stop the run,
+  // before any flow runs, with a message naming the flow and saying which of
+  // the two it is: absent, or present but not tagged scripted.
+  test('INF-06-AC9: a flow in the order but not in the folder stops the run: not ok, and the message names it and says it is not in the folder, not that it is untagged', () => {
     const result = scriptedFlowsToRun(
       allOrdered().filter(({ name }) => name !== 'large-text.yaml'),
     );
 
-    expect(result.ok).toBe(true);
-    expect(result.absent).toEqual(['large-text.yaml']);
-    expect(result.run.map(({ flow }) => flow)).toEqual(
-      SCRIPTED_FLOWS.map(({ flow }) => flow).filter((flow) => flow !== 'large-text.yaml'),
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('large-text.yaml');
+    expect(result.message).toMatch(ABSENT);
+    expect(result.message).not.toMatch(UNTAGGED);
+  });
+
+  test('INF-06-AC9: a flow in the order that is in the folder but not tagged scripted stops the run: not ok, and the message names it and says it is not tagged scripted, not that it is absent', () => {
+    const result = scriptedFlowsToRun(
+      allOrdered().map((flow) =>
+        flow.name === 'large-text.yaml' ? { ...flow, text: flowWithTags(undefined) } : flow,
+      ),
     );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('large-text.yaml');
+    expect(result.message).toMatch(UNTAGGED);
+    expect(result.message).not.toMatch(ABSENT);
+  });
+
+  test('INF-06-AC9: a flow in the order tagged only otherwise (slow) is not tagged scripted: it stops the run, named', () => {
+    const result = scriptedFlowsToRun(
+      allOrdered().map((flow) =>
+        flow.name === 'emergency-112.yaml' ? { ...flow, text: flowWithTags(['slow']) } : flow,
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('emergency-112.yaml');
+    expect(result.message).toMatch(UNTAGGED);
+  });
+
+  test('INF-06-AC9: one flow absent and another untagged: not ok, and the message names each, with what is wrong with it', () => {
+    const result = scriptedFlowsToRun(
+      allOrdered()
+        .filter(({ name }) => name !== 'large-text.yaml')
+        .map((flow) =>
+          flow.name === 'emergency-112.yaml' ? { ...flow, text: flowWithTags(undefined) } : flow,
+        ),
+    );
+
+    expect(result.ok).toBe(false);
+    const lines = result.message.split(/(?<=\.)\s+|\n/);
+    const about = (flow) => lines.filter((line) => line.includes(flow)).join(' ');
+    expect(about('large-text.yaml')).toMatch(ABSENT);
+    expect(about('emergency-112.yaml')).toMatch(UNTAGGED);
   });
 
   test('INF-06-AC9: one flow tagged scripted that the order does not name: not ok, and the message names it, in the singular', () => {

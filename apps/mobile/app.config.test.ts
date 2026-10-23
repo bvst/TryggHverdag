@@ -75,6 +75,20 @@ describe('the app config', () => {
     expect(resolvedConfig().userInterfaceStyle).toBe('dark');
   });
 
+  // Review loop 1 (a11y-i18n-reviewer 1): on Android, userInterfaceStyle takes
+  // effect only with expo-system-ui installed (@expo/config-types says so),
+  // so the app declares it among its dependencies, at the version Expo SDK 57
+  // pins (CALL-02, approach 5): the range the installed expo package's
+  // bundledNativeModules.json gives it, as `expo install` would write it.
+  test('CALL-02-AC7: apps/mobile/package.json declares expo-system-ui among its dependencies, at the version the Expo SDK pins, without which Android does not apply userInterfaceStyle', () => {
+    const fields: DependencyFields = manifest;
+    const pinned: Record<string, string> = jest.requireActual('expo/bundledNativeModules.json');
+
+    // Not vacuous: the SDK pins a version of it.
+    expect(pinned['expo-system-ui']).toMatch(/^~\d+\.\d+\.\d+$/);
+    expect(fields.dependencies?.['expo-system-ui']).toBe(pinned['expo-system-ui']);
+  });
+
   // CALL-01-AC3 (approach 3): "the call starts on the tap" needs Android's
   // CALL_PHONE (SPIKE-01, S6), so the release build declares it, to be asked
   // for when the first #1 is saved. The four permissions the skeleton blocks

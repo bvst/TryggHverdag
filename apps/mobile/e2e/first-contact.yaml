@@ -63,14 +63,22 @@ tags:
     permissions:
       all: deny
 # The home screen, with no #1: the call button explains, and is no dead button
-# (GRP-02-AC1). 112 is there (CALL-02-AC1).
+# (GRP-02-AC1). 112 is there (CALL-02-AC1). The call button is found by its
+# ID, trygghverdag-call-button, its testID in both its forms (review loop 1):
+# its screen-reader label carries its title and its line together ("Velg hvem
+# du vil ringe. Du har ikke valgt …"), so its title alone may match no element.
+# What it says is matched as the label or as the text drawn in it: the title
+# at the start, the line at the end.
 - extendedWaitUntil:
-    visible: ${CHOOSE_CONTACT}
+    visible:
+      id: trygghverdag-call-button
     timeout: 30000
-- assertVisible: ${NO_CONTACT_HINT}
+- assertVisible: '${CHOOSE_CONTACT}.*'
+- assertVisible: '.*${NO_CONTACT_HINT}'
 - assertVisible: ${EMERGENCY_LABEL}
 - assertNotVisible: ${CHANGE_CONTACT}
-- tapOn: ${CHOOSE_CONTACT}
+- tapOn:
+    id: trygghverdag-call-button
 # The setup screen, with 112, and the line that says why the call permission
 # is wanted (CALL-01-AC3).
 - extendedWaitUntil:

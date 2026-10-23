@@ -22,9 +22,26 @@
 #     role (`cmd role get-role-holders android.app.role.DIALER`), and
 #     Telecom's record again, which must show no new call (scripts/lib's
 #     readers, CALL-02-AC3);
-#   - after it: back-from-the-dialer.yaml, which leaves the dialer by Android's
-#     back key alone, unless call-without-permission.yaml's dialer was the one
-#     it left.
+#   - nothing after the 112 tap presses a key, or launches, stops or opens
+#     anything, so the window the script reads after the flow is the dialer
+#     this flow left in front;
+#   - only once that window check has passed does the script press Android's
+#     back key, once, as its last step for this flow, so the run never leaves
+#     the dialer showing 112 (review loop 1, D-031). Back is not a tap:
+#     nothing in the dialer is touched. A failed check presses nothing.
+#
+# After the tap, the app must be gone before the dialer is read (CALL-02-AC3,
+# review loop 1, safety-reviewer 1). The app's own 112 button shows "112" too,
+# so a "112" found while the app is still in front proves nothing about the
+# dialer. So the flow waits, at most 15 s, until the 112 button, found by its
+# ID, is no longer visible, and fails if it still is; only then does it look
+# for 112. The ID is the button's testID, which React Native gives Android as
+# its resource ID: an element only the app draws (features/call/emergency.test.tsx
+# holds that the 112 button carries it, and nothing else on the screen does).
+# The flow asserts the same ID visible before the tap, so a wait on an ID
+# nothing carries cannot pass at once. An ID is not a text a reader sees, so
+# it is written here. Until CI's android-e2e has run this flow, "the dialer
+# opens with 112" is unobserved (CALL-02-AC3).
 #
 # Nothing a reader sees is written here: scripts/e2e-android.mjs passes every
 # string in with -e, read from nb.json, and 112 from the app's own constant.
@@ -47,7 +64,16 @@ tags:
     timeout: 30000
 # The join screen: 112 is there before anyone has joined (Q4, D-141).
 - assertVisible: ${EMERGENCY_LABEL}
+# The element the wait after the tap looks for, there before it.
+- assertVisible:
+    id: trygghverdag-emergency-button
 - tapOn: ${EMERGENCY_LABEL}
+# The app gone: its 112 button no longer visible, within 15 s, or the flow
+# fails. Until then, a "112" on screen could be the app's own.
+- extendedWaitUntil:
+    notVisible:
+      id: trygghverdag-emergency-button
+    timeout: 15000
 # The dialer, with 112 in it. Read only. Its field may wrap the digits in
 # formatting marks, so the pattern allows anything but a digit around them:
 # "112" matches, "1123" does not.

@@ -311,6 +311,20 @@ const WORLD_MAESTRO = [
   "  at('invocations.jsonl'),",
   "  JSON.stringify({ args, flow, fontScale: read('font_scale'), callPhone: read('call_phone') }) + '\\n',",
   ');',
+  // Review loop 1 (CALL-01, approach 9): a run not of one scripted flow, the
+  // first run, plays the test's own first run when it has one (firstRun):
+  // the report the test wrote, its crash buffer, and its exit status.
+  'if (flow === null && config.firstRun !== undefined) {',
+  "  const output = after('--output');",
+  "  if (output !== undefined) writeFileSync(output, readFileSync(config.firstRun.report, 'utf8'));",
+  '  if (config.firstRun.crashes !== undefined) {',
+  '    writeFileSync(',
+  '      config.firstRun.crashes,',
+  "      config.firstRun.crashLines.map((line) => line.replace('$app', app)).join('\\n') + '\\n',",
+  '    );',
+  '  }',
+  '  process.exit(config.firstRun.exit);',
+  '}',
   'const effect = (flow === null ? undefined : config.effects[flow]) ?? {};',
   'for (const call of effect.calls ?? []) {',
   "  const id = Number(read('call_count') || '0') + 1;",
@@ -369,6 +383,7 @@ function setUpWorld({ dir, stateDir, flowsDir, world }) {
     stateDir,
     scripted,
     effects: world.effects ?? {},
+    firstRun: world.firstRun,
     firstRunReport: junit(
       flows.filter(({ name }) => !scripted.includes(name)).map(({ name }) => [name, 'SUCCESS']),
     ),
@@ -1055,6 +1070,20 @@ function expectWaitedOut(wait, { deadline, interval }, output) {
  *   `extraFlows` adds synthetic flows, by file name. `world` is the stand-in
  *   emulator's world for the scripted flows (WORLD_MAESTRO, worldAnswers):
  *   each flow's `effects`, and what Android `refuse`s.
+ *
+ *   Amended again in review loop 1 (CALL-01, approach 9; RG-03 in the
+ *   test-changes list): a flow the script's order names that is absent from
+ *   the folder, or there but not tagged `scripted`, now stops the run before
+ *   any flow runs. The default 'unscripted' copy lacks every scripted flow,
+ *   so every run past the install would stop there, and the tests of INF-06's
+ *   one run, its preflight and its waits would no longer reach what they
+ *   test. So `copyFlows` is 'all' by default, the folder as CI has it, and a
+ *   run given no `world` gets the stand-in emulator's world as it should be
+ *   (AS_IT_SHOULD_BE), with its first run played as before: the report
+ *   `flows` makes, Maestro's exit status `maestroExit`, and the crash buffer
+ *   `crash` asks for (WORLD_MAESTRO's `firstRun`). The scripted flows then run
+ *   after a first run that passes, each as it should. 'unscripted' stays, for
+ *   the test that the run stops when they are absent.
  */
 async function runPastPreflight({
   args = ['--skip-build'],
@@ -1076,7 +1105,8 @@ async function runPastPreflight({
   // timing out first with nothing to show.
   timeout = 50_000,
   stopAfter,
-  copyFlows = 'unscripted',
+  // RG-03 (review loop 1): was 'unscripted'; see the amendment above.
+  copyFlows = 'all',
   extraFlows = {},
   world,
 } = {}) {
@@ -1133,10 +1163,25 @@ async function runPastPreflight({
 
     writeFileSync(report, junit(flows));
     const stateDir = path.join(dir, 'world');
+    // Review loop 1: with every flow copied and no world given, the world as
+    // it should be, with this test's own first run (see the amendment above).
+    const worldInUse =
+      world ??
+      (copyFlows === 'all'
+        ? {
+            effects: AS_IT_SHOULD_BE,
+            firstRun: {
+              report,
+              exit: maestroExit,
+              crashes: crash ? crashes : undefined,
+              crashLines: CRASH_BUFFER,
+            },
+          }
+        : undefined);
     const worldFiles =
-      world === undefined
+      worldInUse === undefined
         ? undefined
-        : setUpWorld({ dir, stateDir, flowsDir: path.join(root, APP, 'e2e'), world });
+        : setUpWorld({ dir, stateDir, flowsDir: path.join(root, APP, 'e2e'), world: worldInUse });
     const archive = Buffer.from('a stand-in for maestro.zip');
     await ensureMaestro({
       root,
@@ -1177,7 +1222,7 @@ async function runPastPreflight({
           installDir,
           slowStarts,
           slowStartDir,
-          world: world === undefined ? undefined : { stateDir, refuse: world.refuse },
+          world: worldInUse === undefined ? undefined : { stateDir, refuse: worldInUse.refuse },
         }),
       );
     }
@@ -1585,7 +1630,15 @@ function expectInstallGaveUp(
  * waits for the package manager, shows each attempt, and then runs the flows,
  * once", with the tests' short interval between installs.
  */
-function expectInstalledOnThirdAttempt({ code, output, calls, sleeps, readTimes, installTimes }) {
+function expectInstalledOnThirdAttempt({
+  code,
+  output,
+  calls,
+  invocations,
+  sleeps,
+  readTimes,
+  installTimes,
+}) {
   expect(calls.filter(isInstallCall).length, output).toBe(3);
   // Each not-ready attempt is in the log, where CI shows it.
   expect(output).toContain('PackageManagerInternal');
@@ -1610,7 +1663,16 @@ function expectInstalledOnThirdAttempt({ code, output, calls, sleeps, readTimes,
     SHORT_INSTALL_INTERVAL,
   ]);
   // A wait for the device, not a retry of a flow: the flows ran once, after the install worked.
-  expect(calls.filter(isFlowRun).length, output).toBe(1);
+  // RG-03 (review loop 1, CALL-01 approach 9): was "exactly one run of the
+  // flows". The harness now copies every flow, the scripted ones included
+  // (runPastPreflight's amendment), so the first run is followed by one run
+  // of each scripted flow. What this holds is unchanged: no run of the flows
+  // was repeated. The first run, once; each scripted flow, once.
+  const runs = flowRunsOf({ calls, invocations });
+  const scriptedRuns = runs.filter(({ flow }) => flow !== null).map(({ flow }) => flow);
+  expect(runs.length, output).toBe(calls.filter(isFlowRun).length);
+  expect(runs.filter(({ flow }) => flow === null).length, output).toBe(1);
+  expect(scriptedRuns, output).toEqual([...new Set(scriptedRuns)]);
   expect(calls.findIndex(isFlowRun), output).toBeGreaterThan(calls.findLastIndex(isInstallCall));
   expect(code, output).toBe(0);
   expect(output).toMatch(/\b1 of 1 flows? passed/);
@@ -2338,6 +2400,11 @@ const isFontReset = (call) =>
  * A call to adb that ends a call: the end-call key, the emulator console's
  * `gsm cancel`, or the phone service's end call. How is the script's choice.
  */
+/**
+ * A call to adb that presses Android's back key (review loop 1): the key's
+ * name, or its code, 4.
+ */
+const pressesBack = (call) => /^adb\b.*\binput\b.*\bkeyevent\b.*\b(KEYCODE_BACK|4)\b/.test(call);
 const endsTheCall = (call) =>
   /^adb\b.*\bkeyevent\b.*\b(KEYCODE_ENDCALL|6)\b/.test(call) ||
   /^adb\b.*\bgsm\b.*\bcancel\b/.test(call) ||
@@ -2650,5 +2717,153 @@ describe('CALL-01, approach 9: e2e:android runs each flow tagged scripted on its
     expect(code, output).not.toBe(0);
     expect(code, 'it was killed rather than finishing').not.toBeNull();
     expect(stderr, output).toContain('unordered-scripted');
+  });
+
+  // Review loop 1 (code-reviewer 1; CALL-01, approach 9): a flow named in the
+  // script's order that is absent, or there but not tagged scripted, stops
+  // the run before any flow runs, named, and said which of the two it is. It
+  // was only printed as "not run": a flow that silently drops out of the
+  // order takes its Telecom and dialer checks with it.
+  test('INF-06-AC9: with the scripted flows absent from the folder, the run stops before any flow runs, and the message names each one and says it is not there', async () => {
+    const { code, stderr, output, calls } = await runPastPreflight({ copyFlows: 'unscripted' });
+
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    expect(calls.filter(isFlowRun), output).toEqual([]);
+    for (const flow of SCRIPTED) {
+      expect(stderr, output).toContain(flow);
+    }
+    expect(stderr, output).toMatch(/\b(absent|missing|not in\b|is not there|not found|no such)/i);
+    expect(output).not.toMatch(/flows? passed/);
+  });
+
+  test('INF-06-AC9: with a scripted flow there but not tagged scripted, the run stops before any flow runs, and the message names it and says it is not tagged', async () => {
+    const tagged = readFileSync(path.join(REPO, APP, 'e2e', 'large-text.yaml'), 'utf8');
+    const untagged = tagged.replace(/^tags:\n(?:[ \t]+-[^\n]*\n)+/m, '');
+    // Not vacuous: the copy lost its tag, and nothing else.
+    expect(maestroTags(tagged)).toContain('scripted');
+    expect(maestroTags(untagged)).toEqual([]);
+
+    const { code, stderr, output, calls } = await runScripted({
+      extraFlows: { 'large-text.yaml': untagged },
+    });
+
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    expect(calls.filter(isFlowRun), output).toEqual([]);
+    expect(stderr, output).toContain('large-text.yaml');
+    expect(stderr, output).toMatch(/\bnot tagged\b|\buntagged\b|\bwithout the scripted tag\b/i);
+  });
+
+  // CALL-02-AC3 (review loop 1): the check that the dialer is in front after
+  // emergency-112 must read the window the flow left. The flow presses
+  // nothing after its tap (scripts/lib/e2e-android.test.mjs); this holds the
+  // script's half: it reads the window before it presses any key or runs
+  // another flow.
+  test('CALL-02-AC3: after emergency-112 runs, the script reads the focused window before it presses any key, so it reads the dialer the flow left in front', async () => {
+    const { output, calls, invocations } = await runScripted();
+    const run = flowRunsOf({ calls, invocations }).find(
+      ({ flow }) => flow === 'emergency-112.yaml',
+    );
+    if (run === undefined) {
+      throw new Error(`emergency-112.yaml never ran on its own\n${output}`);
+    }
+    const windowRead = run.after.findIndex(isWindowRead);
+
+    expect(windowRead, output).toBeGreaterThan(-1);
+    expect(
+      run.after.slice(0, windowRead).filter((call) => /\binput\b.*\bkeyevent\b/.test(call)),
+      output,
+    ).toEqual([]);
+  });
+
+  // Review loop 1 (the main session's decision under D-031, after the red
+  // step): the run never leaves the dialer showing 112. After a flow that
+  // leaves the dialer in front, the script reads the focused window first,
+  // and only once that check has passed does it press Android's back key,
+  // once, as its last step for that flow, before the next flow's steps. The
+  // flow itself still presses nothing (scripts/lib/e2e-android.test.mjs).
+  test('CALL-02-AC3 and CALL-01-AC4: after each flow that leaves the dialer in front, the script presses Android’s back key once, after its reads of Telecom’s record and the focused window, never before, and before the next flow’s steps', async () => {
+    const { output, calls, invocations } = await runScripted();
+    const runs = flowRunsOf({ calls, invocations });
+    const dialerFlows = Object.entries(STEPS)
+      .filter(([, need]) => need.dialer === true)
+      .map(([flow]) => flow)
+      .sort();
+
+    // Not vacuous: the two flows that leave the dialer in front.
+    expect(dialerFlows).toEqual(['call-without-permission.yaml', 'emergency-112.yaml']);
+    for (const flow of dialerFlows) {
+      const run = runs.find((candidate) => candidate.flow === flow);
+      if (run === undefined) {
+        throw new Error(`${flow} never ran on its own\n${output}`);
+      }
+      const telecomRead = run.after.findIndex(isTelecomRead);
+      const windowRead = run.after.findIndex(isWindowRead);
+      const backs = run.after.flatMap((call, at) => (pressesBack(call) ? [at] : []));
+      const nextSteps = run.after.findIndex(
+        (call, at) =>
+          at > windowRead && (isFontWrite(call) || /\bpm\b.*\b(grant|revoke)\b/.test(call)),
+      );
+
+      expect({ flow, backs: backs.length }, output).toEqual({ flow, backs: 1 });
+      expect(windowRead, output).toBeGreaterThan(-1);
+      expect(backs[0], output).toBeGreaterThan(windowRead);
+      expect(backs[0], output).toBeGreaterThan(telecomRead);
+      if (nextSteps !== -1) {
+        expect(backs[0], output).toBeLessThan(nextSteps);
+      }
+    }
+  });
+
+  test('CALL-02-AC3: no back key is pressed after a flow that does not leave the dialer in front, nor after the first run', async () => {
+    const { output, calls, invocations } = await runScripted();
+    const runs = flowRunsOf({ calls, invocations });
+    const others = runs.filter(({ flow }) => flow === null || STEPS[flow]?.dialer !== true);
+
+    // Not vacuous: the first run and five scripted flows.
+    expect(others.length, output).toBe(6);
+    expect(
+      others.flatMap(({ flow, after }) =>
+        after.filter(pressesBack).map((call) => `${String(flow)}: ${call}`),
+      ),
+      output,
+    ).toEqual([]);
+  });
+
+  test.each([
+    ['emergency-112', 'emergency-112.yaml'],
+    ['call-without-permission', 'call-without-permission.yaml'],
+  ])(
+    'CALL-02-AC3: when the dialer is not in front after %s, the run fails naming the flow, and no back key is pressed after it',
+    async (name, flow) => {
+      const { code, stderr, output, calls, invocations } = await runScripted({
+        effects: { [name]: { focus: 'app' } },
+      });
+      const run = flowRunsOf({ calls, invocations }).find((candidate) => candidate.flow === flow);
+
+      expect(code, output).not.toBe(0);
+      expect(code, 'it was killed rather than finishing').not.toBeNull();
+      expect(stderr, output).toContain(flow);
+      expect(run, output).toBeDefined();
+      expect(run?.after.some(isWindowRead), output).toBe(true);
+      expect(run?.after.filter(pressesBack), output).toEqual([]);
+    },
+  );
+});
+
+// CALL-01, approach 9 (review loop 1, code-reviewer 2): e2e-android.mjs
+// imports the test kit's .ts phone-number fixture, which Node runs only with
+// type stripping on by default, from 22.18. So the root package.json's
+// engines.node floor is 22.18.0; the ceiling stays below 23. CI reads .nvmrc,
+// "22", which installs the latest 22.
+describe('INF-06-AC9: the Node the script needs', () => {
+  test('INF-06-AC9 (CALL-01, approach 9): the root package.json’s engines.node is ">=22.18.0 <23", since the script imports a .ts file, which Node runs by default from 22.18', () => {
+    const manifest = JSON.parse(readFileSync(path.join(REPO, 'package.json'), 'utf8'));
+    const script = readFileSync(SCRIPT, 'utf8');
+
+    // Not vacuous: the script does import a .ts file.
+    expect(script).toMatch(/^import\b[^;]*\bfrom\s+'[^']+\.ts';$/m);
+    expect(manifest.engines?.node).toBe('>=22.18.0 <23');
   });
 });

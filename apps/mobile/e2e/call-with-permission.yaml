@@ -37,7 +37,10 @@ tags:
 - extendedWaitUntil:
     visible: ${CALL_BUTTON}
     timeout: 30000
-- tapOn: ${CALL_BUTTON}
+# Tapped by its ID, trygghverdag-call-button, its testID in both its forms
+# (review loop 1); the wait above holds that it reads "Ring {name}".
+- tapOn:
+    id: trygghverdag-call-button
 # The call screen comes up; nothing in it is touched. Waiting here gives Telecom
 # time to dial before the script reads it.
 - waitForAnimationToEnd:
