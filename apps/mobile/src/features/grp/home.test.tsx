@@ -247,7 +247,11 @@ const NB = {
   cancel: 'Avbryt',
   numberNotUsable: 'Nummeret ser ikke riktig ut. Bruk bare sifre, gjerne med + og landskode først.',
   nameNotUsable: 'Navnet kan ikke brukes. Det må ha minst ett synlig tegn, og ingen skjulte tegn.',
-  notSaved: 'Nummeret ble ikke lagret. Prøv igjen.',
+  // RG-03 (GRP-02-AC8, spec 3e4c9f2; a11y-i18n-reviewer on PR #101): was
+  // "Nummeret ble ikke lagret. Prøv igjen.". The spec's text changed, because
+  // the save writes the name and the number together; the assertions that use
+  // it are as strict as before, the whole text, matched exactly.
+  notSaved: 'Kontakten ble ikke lagret. Prøv igjen.',
   unreachable: 'Vi fikk ikke kontakt med serveren. Prøv igjen om litt.',
   retry: 'Prøv igjen',
   joinTitle: 'Bli med i gruppen',
@@ -1463,7 +1467,10 @@ describe('GRP-02-AC8: a #1 that cannot be saved or read is said, never hidden', 
     ['the first #1', null],
     ['a change of #1', FIRST],
   ])(
-    'GRP-02-AC8: when secure storage refuses to save %s, the setup screen says "Nummeret ble ikke lagret. Prøv igjen.", and the home screen, once returned to, shows the earlier #1, or none',
+    // RG-03 (GRP-02-AC8, spec 3e4c9f2): the title quoted "Nummeret ble ikke
+    // lagret. Prøv igjen."; it quotes the spec's new text. The test's body is
+    // unchanged and asserts NB.notSaved in full, as before.
+    'GRP-02-AC8: when secure storage refuses to save %s, the setup screen says "Kontakten ble ikke lagret. Prøv igjen.", and the home screen, once returned to, shows the earlier #1, or none',
     async (_what, earlier) => {
       await phoneHolding(earlier === null ? {} : { firstContact: earlier });
       const key = await firstContactKey();

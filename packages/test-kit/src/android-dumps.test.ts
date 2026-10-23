@@ -2,11 +2,15 @@
 import { describe, expect, test } from 'vitest';
 import {
   DIALER_PACKAGE,
+  WAKEFULNESS,
   appWindow,
   callRecord,
   dialerWindow,
+  dialingEvents,
   dialledEvents,
+  endingEvents,
   maskedAddress,
+  powerDump,
   roleHoldersOutput,
   telecomDump,
   windowDump,
@@ -48,5 +52,35 @@ describe('the emulator’s dumps, as the L7 script reads them', () => {
     );
     expect(roleHoldersOutput([DIALER_PACKAGE])).toBe(`${DIALER_PACKAGE}\n`);
     expect(roleHoldersOutput([])).toBe('');
+  });
+
+  test('a call in progress has its events up to SET_DIALING and none that end it; an ended call adds SET_DISCONNECTED, LOG_CALL and DESTROYED, in that order', () => {
+    const address = maskedAddress(NUMBER);
+    const name = (event: string) => /^\S+ - ([A-Z_]+)/.exec(event)?.[1];
+
+    expect(dialingEvents('a.b', address).map(name)).toEqual([
+      'CREATED',
+      'SET_CONNECTING',
+      'START_CONNECTION',
+      'SET_DIALING',
+    ]);
+    expect(endingEvents(address).map(name)).toEqual(['SET_DISCONNECTED', 'LOG_CALL', 'DESTROYED']);
+    expect(dialledEvents('a.b', address)).toEqual([
+      ...dialingEvents('a.b', address),
+      ...endingEvents(address),
+    ]);
+  });
+
+  test('the power dump holds one mWakefulness= line with the value given, beside mWakefulnessChanging=; given null, no mWakefulness= line', () => {
+    for (const value of WAKEFULNESS) {
+      const lines = powerDump(value).split('\n');
+      expect(lines.filter((line) => /^\s*mWakefulness=/.test(line))).toEqual([
+        `  mWakefulness=${value}`,
+      ]);
+      expect(lines).toContain('  mWakefulnessChanging=false');
+    }
+    const without = powerDump(null).split('\n');
+    expect(without.filter((line) => /^\s*mWakefulness=/.test(line))).toEqual([]);
+    expect(without).toContain('  mWakefulnessChanging=false');
   });
 });

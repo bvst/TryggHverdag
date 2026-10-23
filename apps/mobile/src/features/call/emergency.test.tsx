@@ -312,9 +312,14 @@ const TABLE: [string, string, string][] = [
     "That name can't be used. It needs at least one visible character, and no hidden ones.",
   ],
   [
+    // RG-03 (GRP-02-AC8, spec 3e4c9f2; CALL-02's translations table): were
+    // "Nummeret ble ikke lagret. Prøv igjen." and "The number was not saved.
+    // Try again.". The spec's text changed, because the save writes the name
+    // and the number together; the row is still matched in full, in both
+    // languages, as strictly as before.
     'grp.firstContact.notSaved',
-    'Nummeret ble ikke lagret. Prøv igjen.',
-    'The number was not saved. Try again.',
+    'Kontakten ble ikke lagret. Prøv igjen.',
+    'The contact was not saved. Try again.',
   ],
   [
     'grp.member.unreachable',

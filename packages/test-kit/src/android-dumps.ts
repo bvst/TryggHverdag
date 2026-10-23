@@ -3,7 +3,8 @@
  * the dialer (CALL-01-AC2, CALL-01-AC4 and CALL-02-AC3): Telecom's record in
  * `adb shell dumpsys telecom`, the focused window in `adb shell dumpsys window`,
  * and the dialer role's holders in `adb shell cmd role get-role-holders
- * android.app.role.DIALER`.
+ * android.app.role.DIALER`; and, for CALL-01's approach 9 after PR #101's
+ * first android-e2e, the phone's wakefulness in `adb shell dumpsys power`.
  *
  * Shared by the tests of scripts/lib/call-records.mjs, which read these
  * dumps, and by the stand-in emulator of scripts/e2e-android.test.mjs, which
@@ -49,17 +50,38 @@ export function telecomHead(dialer: string = DIALER_PACKAGE): string[] {
   ];
 }
 
-/** A call's events, from CREATED on, as the sample has them; `by` is the package that placed it. */
-export function dialledEvents(by: string, address: string): string[] {
+/**
+ * A call's events from CREATED to SET_DIALING, as the sample has them: placed
+ * and dialling, and not yet ended, so a call still in progress (CALL-01,
+ * approach 9: the end-call key only while Telecom shows one). `by` is the
+ * package that placed it.
+ */
+export function dialingEvents(by: string, address: string): string[] {
   return [
     `21:00:00.556 - CREATED (${by};requestedAcct:none, selfMgd:false):TSI.pC(cgat)@AOA`,
     `21:00:00.575 - SET_CONNECTING (${TELEPHONY}):TSI.pC->CM.fOCP(cgat)@AOA`,
     `21:00:01.436 - START_CONNECTION (${address} via:com.android.phone):SBC.oSC(cap)@AOM`,
     '21:00:02.599 - SET_DIALING (dialing set explicitly):(...->CS.crCo)->CSW.hCCC(cap/cast)@E-E-AOM',
+  ];
+}
+
+/**
+ * The events Telecom adds to a call's record as it ends, as the sample has
+ * them: disconnected (there, by the network, REMOTE, 0.14 s after dialling),
+ * logged, and destroyed. SET_DISCONNECTED and DESTROYED are Telecom's own
+ * names for a call that has ended (SPIKE-01's s6.test.mjs).
+ */
+export function endingEvents(address: string): string[] {
+  return [
     '21:00:02.743 - SET_DISCONNECTED (disconnected set explicitly> DisconnectCause [ Code: (REMOTE) ]):CSW.sDc(cap)@AQA',
     `21:00:02.818 - LOG_CALL (number=${address.slice(4)},postDial=,pres=1,code=REMOTE):CSW.sDc(cap)@AQA`,
     '21:00:03.007 - DESTROYED:CSW.rC->CM.pR(cap)@AQ0',
   ];
+}
+
+/** A call's events, from CREATED on, as the sample has them, ended; `by` is the package that placed it. */
+export function dialledEvents(by: string, address: string): string[] {
+  return [...dialingEvents(by, address), ...endingEvents(address)];
 }
 
 /** One call's record under "Historical Events:". */
@@ -114,4 +136,43 @@ export function appWindow(app: string): string {
 /** `adb shell cmd role get-role-holders <role>`: one package per line. */
 export function roleHoldersOutput(packages: readonly string[]): string {
   return packages.map((name) => `${name}\n`).join('');
+}
+
+/**
+ * The values `mWakefulness=` takes in `adb shell dumpsys power`, as
+ * PowerManagerInternal.wakefulnessToString names them. Only `Awake` is a phone
+ * whose screen Maestro can read (CALL-01, approach 9).
+ */
+export const WAKEFULNESS = ['Awake', 'Asleep', 'Dreaming', 'Dozing'] as const;
+
+/**
+ * `adb shell dumpsys power`, cut down to its head and the lines around the
+ * wakefulness, in the order AOSP's PowerManagerService prints them. Not
+ * captured from CI's image: no session has read that image's dump, so the
+ * shape is AOSP's, and the one line the script reads is `mWakefulness=`
+ * (CALL-01, approach 9). `mWakefulnessChanging=` stays beside it, so a reader
+ * that matches only the line's start is caught. With `wakefulness` null, the
+ * `mWakefulness=` line is left out and nothing else changes.
+ */
+export function powerDump(wakefulness: string | null): string {
+  return [
+    'POWER MANAGER (dumpsys power)',
+    '',
+    'Power Manager State:',
+    '  Settings power_manager_constants:',
+    '    no_cached_wake_locks=true',
+    '  mDirty=0x0',
+    ...(wakefulness === null ? [] : [`  mWakefulness=${wakefulness}`]),
+    '  mWakefulnessChanging=false',
+    '  mIsPowered=true',
+    '  mPlugType=1',
+    '  mBootCompleted=true',
+    '  mSystemReady=true',
+    '  mHalAutoSuspendModeEnabled=false',
+    '  mHalInteractiveModeEnabled=true',
+    '  mWakeLockSummary=0x0',
+    '',
+    'Wake Locks: size=0',
+    '',
+  ].join('\n');
 }

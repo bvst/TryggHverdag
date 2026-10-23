@@ -32,18 +32,21 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, test } from 'vitest';
-import { APK, ensureMaestro } from './lib/e2e-android.mjs';
+import { APK, SCRIPTED_FLOWS, ensureMaestro } from './lib/e2e-android.mjs';
 import {
   DIALER_PACKAGE,
   appWindow,
   callRecord,
   dialerWindow,
+  dialingEvents,
   dialledEvents,
+  endingEvents,
   maskedAddress,
+  powerDump,
   telecomDump,
   windowDump,
 } from '../packages/test-kit/src/android-dumps.ts';
-import { EMULATOR_FIRST_CONTACT } from '../packages/test-kit/src/fixtures/phone-numbers.ts';
+import { EMULATOR_FIRST_CONTACT, MOBILE } from '../packages/test-kit/src/fixtures/phone-numbers.ts';
 import { flowsRunBy, maestroTags } from '../packages/test-kit/src/maestro-flows.ts';
 
 const SCRIPT = path.resolve('scripts/e2e-android.mjs');
@@ -288,6 +291,25 @@ function maestroBody({ log, envLog, report, crashes, exit, world }) {
  *
  * The script is read by Node as a module of its own, with the world's
  * config, written as JSON by runPastPreflight, as its first argument.
+ *
+ * Amended for CALL-01, approach 9, after PR #101's first android-e2e (run
+ * 39956809738; RG-03 in the test-changes list): the device also has
+ *   wakefulness  what `dumpsys power`'s mWakefulness= line says: Awake, or
+ *                Asleep, Dozing, Dreaming;
+ *   keyguard     shown or gone: a sleep leaves it shown;
+ *   in_progress  the call still in progress, by its `to`, or empty when none
+ *                is (a call placed with `inProgress: true`).
+ * A scripted flow run while the phone is not Awake, or with the keyguard
+ * shown, shows Maestro nothing: it fails at its first wait, as
+ * call-without-permission did in that run, its report ERROR, exit 1, and
+ * does nothing to the device. Each run's record holds the wakefulness and the
+ * keyguard as it started. And `effects` may say more: `wakefulness`, the
+ * phone as the flow leaves it (its screen timed out), with the keyguard
+ * shown; `focus` 'launcher', or 'numbered' (a focused window with no package
+ * of its own and a number in its title, the launcher the focused app);
+ * `breaksDumps`, after which `dumpsys power` and `dumpsys window` fail. A
+ * call with `inProgress: true` has its events only up to SET_DIALING; the
+ * end-call key ends it (worldAnswers).
  */
 const WORLD_MAESTRO = [
   "import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';",
@@ -307,9 +329,11 @@ const WORLD_MAESTRO = [
   "  .filter((arg, i) => /\\.ya?ml$/.test(arg) && !['--config', '--output', '--debug-output'].includes(args[i - 1] ?? ''))",
   "  .map((arg) => arg.split('/').at(-1).replace(/\\.ya?ml$/, ''));",
   'const flow = named.length === 1 && config.scripted.includes(named[0]) ? named[0] : null;',
+  "const wakefulness = read('wakefulness');",
+  "const keyguard = read('keyguard');",
   'appendFileSync(',
   "  at('invocations.jsonl'),",
-  "  JSON.stringify({ args, flow, fontScale: read('font_scale'), callPhone: read('call_phone') }) + '\\n',",
+  "  JSON.stringify({ args, flow, fontScale: read('font_scale'), callPhone: read('call_phone'), wakefulness, keyguard }) + '\\n',",
   ');',
   // Review loop 1 (CALL-01, approach 9): a run not of one scripted flow, the
   // first run, plays the test's own first run when it has one (firstRun):
@@ -325,19 +349,36 @@ const WORLD_MAESTRO = [
   '  }',
   '  process.exit(config.firstRun.exit);',
   '}',
+  // CALL-01, approach 9 (run 39956809738): a sleeping or locked phone shows
+  // Maestro nothing, so a scripted flow fails at its first wait and does
+  // nothing to the device.
+  "if (flow !== null && (wakefulness !== 'Awake' || keyguard === 'shown')) {",
+  "  const output = after('--output');",
+  '  if (output !== undefined) writeFileSync(output, config.flowReports[flow].ERROR);',
+  '  process.exit(1);',
+  '}',
   'const effect = (flow === null ? undefined : config.effects[flow]) ?? {};',
   'for (const call of effect.calls ?? []) {',
   "  const id = Number(read('call_count') || '0') + 1;",
   "  writeFileSync(at('call_count'), String(id));",
   "  const by = call.by === 'app' ? app : config.dialer;",
+  '  const templates = call.inProgress === true ? config.inProgressTemplates : config.callTemplates;',
   '  appendFileSync(',
   "    at('telecom'),",
-  "    config.callTemplates[call.to].replaceAll('{ID}', String(id)).replaceAll('{BY}', by),",
+  "    templates[call.to].replaceAll('{ID}', String(id)).replaceAll('{BY}', by),",
   '  );',
+  "  if (call.inProgress === true) writeFileSync(at('in_progress'), call.to + '\\n');",
   '}',
   "if (effect.focus === 'dialer') writeFileSync(at('window'), config.dialerWindow);",
   "if (effect.focus === 'app') writeFileSync(at('window'), config.appWindow.replaceAll('{APP}', app));",
+  "if (effect.focus === 'launcher') writeFileSync(at('window'), config.launcherWindow);",
+  "if (effect.focus === 'numbered') writeFileSync(at('window'), config.numberedWindow);",
   "if (effect.callPhone !== undefined) writeFileSync(at('call_phone'), effect.callPhone + '\\n');",
+  'if (effect.wakefulness !== undefined) {',
+  "  writeFileSync(at('wakefulness'), effect.wakefulness + '\\n');",
+  "  writeFileSync(at('keyguard'), 'shown\\n');",
+  '}',
+  "if (effect.breaksDumps === true) writeFileSync(at('dumps_broken'), 'yes\\n');",
   "const status = effect.status ?? 'SUCCESS';",
   "const output = after('--output');",
   'if (output !== undefined) {',
@@ -352,8 +393,20 @@ const FIRST_CONTACT_ADDRESS = maskedAddress(EMULATOR_FIRST_CONTACT.normalised);
 const EMERGENCY_ADDRESS = maskedAddress('112');
 
 /** The launcher, in front before any flow has run. */
-const LAUNCHER_WINDOW =
-  'Window{1f2e3d4 u0 com.google.android.apps.nexuslauncher/com.google.android.apps.nexuslauncher.NexusLauncherActivity}';
+const LAUNCHER_PACKAGE = 'com.google.android.apps.nexuslauncher';
+const LAUNCHER_WINDOW = `Window{1f2e3d4 u0 ${LAUNCHER_PACKAGE}/${LAUNCHER_PACKAGE}.NexusLauncherActivity}`;
+
+/** Where the wakefulness goes in the power dump the stand-in prints (setUpWorld, worldAnswers). */
+const WAKEFULNESS_SLOT = '<<wakefulness>>';
+
+/**
+ * PRIV-07 (CALL-01, approach 9): a window with no package of its own and
+ * another synthetic number in its title, as a heads-up or a popup's title
+ * could hold one, and the line the window dump lists it on. MOBILE is the test
+ * kit's, and the script is never given it.
+ */
+const NUMBERED_WINDOW = `Window{2b3c4d5 u0 Ringer ${MOBILE}}`;
+const NUMBERED_WINDOW_LINE = `  Window #2 ${NUMBERED_WINDOW}:`;
 
 /**
  * Writes the stand-in emulator's world for a run (WORLD_MAESTRO) to
@@ -363,13 +416,59 @@ const LAUNCHER_WINDOW =
  * config WORLD_MAESTRO reads: which flows in `flowsDir` are scripted, each
  * one's report, and the dumps it writes. Returns where the script and its
  * config are.
+ *
+ * Amended for CALL-01, approach 9, after PR #101's first android-e2e: the
+ * phone starts Awake with no keyguard, and no call in progress; and the
+ * files worldAnswers prints `dumpsys power` from, and the events it adds
+ * when the end-call key ends a call in progress (call-end-<to>). With
+ * `world.unmasked` (PRIV-07: an emulator image may print a number unmasked),
+ * Telecom's record shows every address in full, its history holds, before
+ * the run, an incoming call from another of the test kit's synthetic numbers
+ * (MOBILE, which the script is never given), and every window dump holds a
+ * window with that number in its title. Nothing here dials: each is a line in
+ * a file the stand-in prints.
  */
 function setUpWorld({ dir, stateDir, flowsDir, world }) {
+  const firstAddress =
+    world.unmasked === true ? `tel:${EMULATOR_FIRST_CONTACT.normalised}` : FIRST_CONTACT_ADDRESS;
+  const emergencyAddress = world.unmasked === true ? 'tel:112' : EMERGENCY_ADDRESS;
+  const otherAddress = `tel:${MOBILE}`;
+  const withNumberedWindow = (dump) =>
+    world.unmasked === true
+      ? dump.replace('  mCurrentFocus=', `${NUMBERED_WINDOW_LINE}\n  mCurrentFocus=`)
+      : dump;
   mkdirSync(stateDir, { recursive: true });
-  writeFileSync(path.join(stateDir, 'telecom'), telecomDump([]));
-  writeFileSync(path.join(stateDir, 'window'), windowDump(LAUNCHER_WINDOW));
+  writeFileSync(
+    path.join(stateDir, 'telecom'),
+    telecomDump(
+      world.unmasked === true
+        ? [
+            callRecord({
+              id: 0,
+              direction: 'MT - incoming',
+              address: otherAddress,
+              events: dialledEvents(DIALER_PACKAGE, otherAddress),
+            }),
+          ]
+        : [],
+    ),
+  );
+  writeFileSync(path.join(stateDir, 'window'), withNumberedWindow(windowDump(LAUNCHER_WINDOW)));
   writeFileSync(path.join(stateDir, 'font_scale'), '1.0\n');
   writeFileSync(path.join(stateDir, 'call_phone'), 'granted\n');
+  writeFileSync(path.join(stateDir, 'wakefulness'), 'Awake\n');
+  writeFileSync(path.join(stateDir, 'keyguard'), 'gone\n');
+  writeFileSync(path.join(stateDir, 'in_progress'), '');
+  const [powerHead = '', powerTail = ''] = powerDump(WAKEFULNESS_SLOT).split(WAKEFULNESS_SLOT);
+  writeFileSync(path.join(stateDir, 'power-head'), powerHead);
+  writeFileSync(path.join(stateDir, 'power-tail'), powerTail);
+  writeFileSync(path.join(stateDir, 'power-no-line'), powerDump(null));
+  const endLines = (to) =>
+    `${endingEvents(to)
+      .map((event) => `    ${event}`)
+      .join('\n')}\n`;
+  writeFileSync(path.join(stateDir, 'call-end-first'), endLines(firstAddress));
+  writeFileSync(path.join(stateDir, 'call-end-emergency'), endLines(emergencyAddress));
   const flows = readdirSync(flowsDir)
     .filter((name) => /\.ya?ml$/.test(name))
     .map((name) => ({
@@ -379,6 +478,10 @@ function setUpWorld({ dir, stateDir, flowsDir, world }) {
   const scripted = flows.filter(({ tags }) => tags.includes('scripted')).map(({ name }) => name);
   const template = (address) =>
     `${callRecord({ id: '{ID}', address, events: dialledEvents('{BY}', address) }).join('\n')}\n`;
+  // CALL-01, approach 9: a call placed with `inProgress: true` has its events
+  // only up to SET_DIALING; the end-call key adds the rest (call-end-<to>).
+  const inProgress = (to) =>
+    `${callRecord({ id: '{ID}', address: to, events: dialingEvents('{BY}', to) }).join('\n')}\n`;
   const config = {
     stateDir,
     scripted,
@@ -393,12 +496,20 @@ function setUpWorld({ dir, stateDir, flowsDir, world }) {
         { SUCCESS: junit([[name, 'SUCCESS']]), ERROR: junit([[name, 'ERROR']]) },
       ]),
     ),
+    // Amended for CALL-01, approach 9 (PRIV-07): with `unmasked`, the
+    // addresses in full; otherwise masked, as before.
     callTemplates: {
-      first: template(FIRST_CONTACT_ADDRESS),
-      emergency: template(EMERGENCY_ADDRESS),
+      first: template(firstAddress),
+      emergency: template(emergencyAddress),
     },
-    dialerWindow: windowDump(dialerWindow()),
-    appWindow: windowDump(appWindow('{APP}')),
+    inProgressTemplates: {
+      first: inProgress(firstAddress),
+      emergency: inProgress(emergencyAddress),
+    },
+    dialerWindow: withNumberedWindow(windowDump(dialerWindow())),
+    appWindow: withNumberedWindow(windowDump(appWindow('{APP}'))),
+    launcherWindow: withNumberedWindow(windowDump(LAUNCHER_WINDOW)),
+    numberedWindow: withNumberedWindow(windowDump(NUMBERED_WINDOW, LAUNCHER_WINDOW)),
     dialer: DIALER_PACKAGE,
   };
   const files = {
@@ -419,7 +530,21 @@ function setUpWorld({ dir, stateDir, flowsDir, world }) {
  * a SecurityException does: every `pm revoke` of CALL_PHONE ('revoke'), or
  * every font size above 1 ('largeFont').
  *
- * @param {{ stateDir: string, refuse?: 'revoke' | 'largeFont' }} world
+ * Amended for CALL-01, approach 9, after PR #101's first android-e2e (RG-03
+ * in the test-changes list): `dumpsys power` prints the power dump with its
+ * mWakefulness= line holding the phone's wakefulness; the wake key
+ * (KEYCODE_WAKEUP, or its code 224) makes the phone Awake; `wm
+ * dismiss-keyguard` lifts the keyguard, but only from an Awake phone; and the
+ * end-call key (KEYCODE_ENDCALL, or its code 6) ends the call in progress,
+ * adding its ending events to Telecom's record, or, with no call in progress,
+ * puts the phone to sleep with the keyguard shown, as Android's
+ * END_BUTTON_BEHAVIOR_SLEEP does (inferred in run 39956809738, not seen). Once
+ * a flow has broken them (`breaksDumps`), `dumpsys power` and `dumpsys window`
+ * fail as a missing service does. `refuse` may also be 'wake' (the wake key
+ * leaves the phone as it was) or 'powerRead' (`dumpsys power` prints its dump
+ * with no mWakefulness= line).
+ *
+ * @param {{ stateDir: string, refuse?: 'revoke' | 'largeFont' | 'wake' | 'powerRead' }} world
  */
 function worldAnswers({ stateDir, refuse }) {
   const file = (name) => `"${path.join(stateDir, name)}"`;
@@ -428,9 +553,36 @@ function worldAnswers({ stateDir, refuse }) {
     '        echo "java.lang.SecurityException: refused by the stand-in emulator (synthetic)" >&2',
     '        exit 1',
   ];
+  /** A dump that fails, as one from a missing service does, once a flow has broken the dumps. */
+  const broken = (service) =>
+    `        if [ -s ${file('dumps_broken')} ]; then echo "Can't find service: ${service}" >&2; exit 1; fi`;
   return [
     `      *dumpsys*telecom*) /bin/cat ${file('telecom')} ;;`,
-    `      *dumpsys*window*) /bin/cat ${file('window')} ;;`,
+    '      *dumpsys*window*)',
+    broken('window'),
+    `        /bin/cat ${file('window')} ;;`,
+    '      *dumpsys*power*)',
+    broken('power'),
+    ...(refuse === 'powerRead'
+      ? [`        /bin/cat ${file('power-no-line')} ;;`]
+      : [
+          `        read -r w < ${file('wakefulness')}`,
+          `        /bin/cat ${file('power-head')}; printf '%s' "$w"; /bin/cat ${file('power-tail')} ;;`,
+        ]),
+    '      *input*keyevent*KEYCODE_WAKEUP*|*input*keyevent\\ 224)',
+    refuse === 'wake' ? '        ;;' : `        echo Awake > ${file('wakefulness')} ;;`,
+    '      *wm*dismiss-keyguard*)',
+    `        read -r w < ${file('wakefulness')}`,
+    `        if [ "$w" = Awake ]; then echo gone > ${file('keyguard')}; fi ;;`,
+    '      *input*keyevent*KEYCODE_ENDCALL*|*input*keyevent\\ 6)',
+    `        if [ -s ${file('in_progress')} ]; then`,
+    `          read -r to < ${file('in_progress')}`,
+    `          /bin/cat "${stateDir}/call-end-$to" >> ${file('telecom')}`,
+    `          : > ${file('in_progress')}`,
+    '        else',
+    `          echo Asleep > ${file('wakefulness')}`,
+    `          echo shown > ${file('keyguard')}`,
+    '        fi ;;',
     `      *get-role-holders*android.app.role.DIALER*) echo "${DIALER_PACKAGE}" ;;`,
     '      *pm*grant*android.permission.CALL_PHONE*)',
     `        echo granted > ${file('call_phone')} ;;`,
@@ -1304,6 +1456,11 @@ async function runPastPreflight({
         .filter((line) => line !== '')
         .map((line) => JSON.parse(line)),
       fontScaleAtEnd: lines(path.join(stateDir, 'font_scale')).join(''),
+      // Added for CALL-01, approach 9 (PRIV-07): what Telecom's record and the
+      // window dump held at the end, so a test can show that the numbers it
+      // keeps out of the job log were there to leak.
+      telecomAtEnd: lines(path.join(stateDir, 'telecom')).join('\n'),
+      windowAtEnd: lines(path.join(stateDir, 'window')).join('\n'),
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -2355,11 +2512,26 @@ const UNSCRIPTED = APP_FLOWS.filter(({ tags }) => !tags.includes('scripted'))
  * call-with-permission.yaml places one call, by the app, to #1, and the
  * dialer's call screen comes to the front; the flows that open the dialer
  * leave it in front; the others leave the app there.
+ *
+ * RG-03 (CALL-01, approach 9, after PR #101's first android-e2e): the call
+ * call-with-permission places was ended in Telecom's record by the time the
+ * script read it (dialledEvents, SET_DISCONNECTED and DESTROYED included). It
+ * is now still in progress (`inProgress: true`: its events up to SET_DIALING)
+ * until the script's end-call key ends it. Approach 9 now presses that key
+ * only while Telecom shows the call in progress, and the existing assertion
+ * that the call is ended after call-with-permission (the "each scripted flow
+ * gets its steps" test, `endsCall`) is unchanged; it holds in a world where
+ * there is a call to end. A call already ended when the flow ends, as
+ * SPIKE-01's emulator call was (the network ended it 0.14 s after dialling),
+ * is the world of the tests below that reproduce run 39956809738.
  */
 const AS_IT_SHOULD_BE = {
   'first-admin-invites': { focus: 'app' },
   'first-contact': { focus: 'app', callPhone: 'granted' },
-  'call-with-permission': { calls: [{ by: 'app', to: 'first' }], focus: 'dialer' },
+  'call-with-permission': {
+    calls: [{ by: 'app', to: 'first', inProgress: true }],
+    focus: 'dialer',
+  },
   'call-without-permission': { focus: 'dialer' },
   'back-from-the-dialer': { focus: 'app' },
   'large-text': { focus: 'app' },
@@ -2410,12 +2582,17 @@ const endsTheCall = (call) =>
   /^adb\b.*\bgsm\b.*\bcancel\b/.test(call) ||
   /^adb\b.*\bservice\s+call\s+phone\b/.test(call);
 
-/** A run with every flow copied and the stand-in emulator's world, as it should be unless `effects` or `refuse` say otherwise. */
-const runScripted = ({ effects = {}, refuse, extraFlows } = {}) =>
+/**
+ * A run with every flow copied and the stand-in emulator's world, as it should
+ * be unless `effects` or `refuse` say otherwise. Amended for CALL-01, approach
+ * 9 (PRIV-07): `unmasked` has Telecom's record and the window dumps hold
+ * numbers in full (setUpWorld).
+ */
+const runScripted = ({ effects = {}, refuse, extraFlows, unmasked } = {}) =>
   runPastPreflight({
     copyFlows: 'all',
     extraFlows,
-    world: { effects: { ...AS_IT_SHOULD_BE, ...effects }, refuse },
+    world: { effects: { ...AS_IT_SHOULD_BE, ...effects }, refuse, unmasked },
   });
 
 /**
@@ -2850,6 +3027,366 @@ describe('CALL-01, approach 9: e2e:android runs each flow tagged scripted on its
       expect(run?.after.filter(pressesBack), output).toEqual([]);
     },
   );
+});
+
+// CALL-01, approach 9, after PR #101's first android-e2e (run 39956809738,
+// job 120424570385; the coordinating session's choice under D-031). That
+// run's job log shows call-with-permission passing with its call placed, the
+// script pressing KEYCODE_ENDCALL, and call-without-permission failing at its
+// first wait, 30 s for the permission line. With no call in progress,
+// Android's end-call key puts the phone to sleep (END_BUTTON_BEHAVIOR_SLEEP),
+// and a sleeping phone shows Maestro nothing: inferred, not seen. So:
+//   - before each scripted flow, the script reads the phone's wakefulness
+//     (`dumpsys power`, its mWakefulness= line); not Awake, it presses
+//     KEYCODE_WAKEUP, lifts the keyguard (`wm dismiss-keyguard`), says so,
+//     naming the flow and what it read, and reads again; still not Awake, or
+//     no such line, stops the run;
+//   - after call-with-permission, the end-call key only while Telecom shows
+//     the call in progress; once it has ended, nothing, and the job log says
+//     it had already ended, naming the events read, never the number;
+//   - when a scripted flow fails, the phone's wakefulness and the focused
+//     window's package are printed, best effort, and the failure stays the
+//     flow's.
+// The stand-in emulator's world models the phone (WORLD_MAESTRO,
+// worldAnswers): a flow run asleep or locked fails at its first wait, and
+// the end-call key with no call in progress puts the phone to sleep.
+
+/** Calls to adb that read the phone's wakefulness, press its wake key, lift its keyguard, or press any key. */
+const isPowerRead = (call) => /^adb\b.*\bdumpsys\b.*\bpower\b/.test(call);
+const pressesWake = (call) =>
+  /^adb\b.*\binput\b.*\bkeyevent\b.*\b(KEYCODE_WAKEUP|224)\b/.test(call);
+const liftsKeyguard = (call) => /^adb\b.*\bwm\b.*\bdismiss-keyguard\b/.test(call);
+const pressesKey = (call) => /^adb\b.*\binput\b.*\bkeyevent\b/.test(call);
+
+/** The names of a call's events, as Telecom's record lists them (the test kit's event lines). */
+const eventNames = (events) => events.map((event) => /^\S+ - ([A-Z_]+)/.exec(event)?.[1] ?? '');
+
+/** The flows in the script's own order (SCRIPTED_FLOWS), by file name. */
+const SCRIPT_ORDER = SCRIPTED_FLOWS.map(({ flow }) => flow);
+
+/** A line that says something could not be read. */
+const UNREAD = /\bunread\b|\bcould not be read\b|\bnot read\b/i;
+
+/** A job-log line that says the end-call key was pressed. */
+const SAYS_END_CALL = /KEYCODE_ENDCALL|\bend[- ]?call key\b/i;
+
+/** The world in which call-with-permission's call has ended by the time the flow ends (SPIKE-01's emulator call: the network ended it 0.14 s after dialling). */
+const CALL_ALREADY_ENDED = {
+  'call-with-permission': { calls: [{ by: 'app', to: 'first' }], focus: 'dialer' },
+};
+
+/**
+ * PRIV-07 (privacy-security-reviewer on PR #101): every six digits in a row
+ * of `number`'s. Any longer run of its digits holds one of these.
+ */
+function sixDigitRuns(number) {
+  const digits = number.replace(/\D/g, '');
+  return Array.from({ length: Math.max(digits.length - 5, 0) }, (_, at) =>
+    digits.slice(at, at + 6),
+  );
+}
+
+/** `line` with the spaces, dashes, dots, slashes and brackets between digits taken out, so a number written in groups reads as its digits. */
+const digitsJoined = (line) => line.replace(/(\d)[\s\-.()/]+(?=\d)/g, '$1');
+
+/**
+ * The Maestro command lines the script prints before each run (`  $ …/maestro
+ * test …`). They hand #1's number to the flows, by design: FIRST_CONTACT_NUMBER
+ * and FIRST_CONTACT_NUMBER_SHOWN (maestroTestCommand), as the flows type and
+ * match it. So #1's number is held out of every other line, and not these.
+ */
+const isMaestroCommandLine = (line) => /^\s*\$ \S*\/maestro test\b/.test(line);
+
+/**
+ * PRIV-07: the lines of `output` that hold six digits in a row of a number the
+ * dumps held in full. MOBILE, which the script is never given, in no line at
+ * all; #1's in no line but the Maestro command lines.
+ */
+function numberLeaks(output) {
+  const lines = output.split('\n');
+  const holding = (number) => (line) =>
+    sixDigitRuns(number).some((run) => digitsJoined(line).includes(run));
+  return [
+    ...lines.filter(holding(MOBILE)).map((line) => `MOBILE: ${line}`),
+    ...lines
+      .filter((line) => !isMaestroCommandLine(line))
+      .filter(holding(EMULATOR_FIRST_CONTACT.normalised))
+      .map((line) => `#1: ${line}`),
+  ];
+}
+
+describe('CALL-01, approach 9 (PR #101’s first android-e2e): an awake, unlocked phone before each scripted flow, the end-call key only during a call, and evidence when a flow fails', () => {
+  test('PRIV-07 (the check the tests below use): a number is caught whole, in groups, or by six of its digits; #1’s is allowed only in the Maestro command lines', () => {
+    const own = EMULATOR_FIRST_CONTACT.normalised;
+    const grouped = `${MOBILE.slice(0, 3)} ${MOBILE.slice(3, 5)} ${MOBILE.slice(5)}`;
+
+    expect(numberLeaks(`e2e:android: ${MOBILE}`)).toHaveLength(1);
+    expect(numberLeaks(`e2e:android: ${grouped}`)).toHaveLength(1);
+    expect(numberLeaks(`e2e:android: …${MOBILE.slice(-6)}`)).toHaveLength(1);
+    expect(numberLeaks(`e2e:android: ${EMULATOR_FIRST_CONTACT.typed}`)).toHaveLength(1);
+    expect(numberLeaks(`e2e:android: tel:${own}`)).toHaveLength(1);
+    expect(
+      numberLeaks(`  $ /x/maestro/bin/maestro test -e FIRST_CONTACT_NUMBER_SHOWN=${own}`),
+    ).toEqual([]);
+    expect(numberLeaks(`  $ /x/maestro/bin/maestro test -e OTHER=${MOBILE}`)).toHaveLength(1);
+    expect(numberLeaks(`e2e:android: tel:${maskedAddress(own).slice(4)}`)).toEqual([]);
+  });
+
+  test('CALL-01-AC2, CALL-01-AC3, CALL-01-AC4 and CALL-01-AC8: before each scripted flow, the script reads the phone’s wakefulness (dumpsys power), after every key it pressed since the flow before; with the phone awake, it presses nothing to wake it', async () => {
+    const { code, output, calls, invocations } = await runScripted();
+    const scripted = flowRunsOf({ calls, invocations }).filter(({ flow }) => flow !== null);
+    const unread = scripted.flatMap(({ flow, before }) => {
+      const lastRead = before.findLastIndex(isPowerRead);
+      const lastKey = before.findLastIndex((call) => pressesKey(call) && !pressesWake(call));
+      if (lastRead === -1) return [`${String(flow)}: the wakefulness not read before it`];
+      if (lastKey > lastRead) {
+        return [
+          `${String(flow)}: a key pressed after the wakefulness was read: ${before[lastKey]}`,
+        ];
+      }
+      return [];
+    });
+
+    // Not vacuous: every scripted flow ran on its own.
+    expect(scripted.map(({ flow }) => flow).sort(), output).toEqual(SCRIPTED);
+    expect(unread, output).toEqual([]);
+    expect(
+      calls.filter((call) => pressesWake(call) || liftsKeyguard(call)),
+      output,
+    ).toEqual([]);
+    expect(code, output).toBe(0);
+  });
+
+  test.each(['Asleep', 'Dozing', 'Dreaming'])(
+    'CALL-01-AC2, CALL-01-AC3, CALL-01-AC4 and CALL-01-AC8: when the wakefulness read before a scripted flow is %s, the script presses KEYCODE_WAKEUP, then lifts the keyguard, says so in the job log naming the flow and what it read, reads again, and runs the flow awake and unlocked',
+    async (wakefulness) => {
+      const { code, stdout, output, calls, invocations } = await runScripted({
+        effects: { 'first-contact': { ...AS_IT_SHOULD_BE['first-contact'], wakefulness } },
+      });
+      const runs = flowRunsOf({ calls, invocations });
+      const next = runs[runs.findIndex(({ flow }) => flow === 'first-contact.yaml') + 1];
+      if (next === undefined || next.flow === null) {
+        throw new Error(`no scripted flow ran after first-contact.yaml\n${output}`);
+      }
+      const name = next.flow.replace(/\.yaml$/, '');
+      const steps = next.before.flatMap((call) => {
+        if (isPowerRead(call)) return ['read'];
+        if (pressesWake(call)) return ['wake'];
+        if (liftsKeyguard(call)) return ['lift the keyguard'];
+        return [];
+      });
+      const started = invocations.find((invocation) => invocation.flow === name);
+
+      expect({ flow: next.flow, steps }, output).toEqual({
+        flow: next.flow,
+        steps: ['read', 'wake', 'lift the keyguard', 'read'],
+      });
+      expect(
+        stdout.split('\n').filter((line) => line.includes(name) && line.includes(wakefulness)),
+        output,
+      ).not.toEqual([]);
+      expect({ wakefulness: started?.wakefulness, keyguard: started?.keyguard }, output).toEqual({
+        wakefulness: 'Awake',
+        keyguard: 'gone',
+      });
+      expect(code, output).toBe(0);
+    },
+  );
+
+  test('CALL-01-AC2, CALL-01-AC3, CALL-01-AC4 and CALL-01-AC8: when the phone is still not Awake after the wake key and the keyguard, the run stops before the flow runs, naming the flow and the step, and the font size is still reset', async () => {
+    const { code, stderr, output, calls, invocations, fontScaleAtEnd } = await runScripted({
+      effects: { 'first-contact': { ...AS_IT_SHOULD_BE['first-contact'], wakefulness: 'Asleep' } },
+      refuse: 'wake',
+    });
+    const next = SCRIPT_ORDER[SCRIPT_ORDER.indexOf('first-contact.yaml') + 1] ?? '';
+    const contact = calls.findIndex(
+      (call) => isFlowRun(call) && /\bfirst-contact\.yaml\b/.test(call),
+    );
+    const after = calls.slice(contact + 1);
+    const ran = invocations.filter(({ flow }) => flow !== null).map(({ flow }) => flow);
+
+    // Not vacuous: first-contact ran, and a flow comes after it in the order.
+    expect(contact, output).toBeGreaterThan(-1);
+    expect(next, output).not.toBe('');
+    // The run stopped there: no flow ran after first-contact, on a phone still asleep.
+    expect(ran.at(-1), output).toBe('first-contact');
+    expect(after.filter(pressesWake).length, output).toBe(1);
+    expect(after.filter(isPowerRead).length, output).toBe(2);
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    expect(stderr, output).toContain(next);
+    expect(stderr, output).toMatch(/\b(awake|wake|woke|wakefulness)\b/i);
+    expect(after.slice(after.findLastIndex(isPowerRead) + 1).some(isFontReset), output).toBe(true);
+    expect(Number(fontScaleAtEnd), output).toBe(1);
+  });
+
+  test('CALL-01-AC2, CALL-01-AC3, CALL-01-AC4 and CALL-01-AC8: dumpsys power output with no mWakefulness= line stops the run before the first scripted flow runs, naming it, never read as awake', async () => {
+    const { code, stderr, output, calls, invocations, fontScaleAtEnd } = await runScripted({
+      refuse: 'powerRead',
+    });
+    const first = SCRIPT_ORDER[0] ?? '';
+
+    expect(
+      invocations.filter(({ flow }) => flow !== null).map(({ flow }) => flow),
+      output,
+    ).toEqual([]);
+    expect(calls.some(isPowerRead), output).toBe(true);
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    expect(first, output).toBe('first-admin-invites.yaml');
+    expect(stderr, output).toContain(first);
+    expect(stderr, output).toMatch(/\bmWakefulness\b|\bwakefulness\b/i);
+    expect(Number(fontScaleAtEnd), output).toBe(1);
+  });
+
+  test('CALL-01-AC2: while Telecom shows call-with-permission’s call in progress, the script presses the end-call key once, after reading Telecom’s record, and says so, naming the events it read', async () => {
+    const { code, stdout, output, calls, invocations } = await runScripted();
+    const run = flowRunsOf({ calls, invocations }).find(
+      ({ flow }) => flow === 'call-with-permission.yaml',
+    );
+    if (run === undefined)
+      throw new Error(`call-with-permission.yaml never ran on its own\n${output}`);
+    const read = run.after.findIndex(isTelecomRead);
+    const ends = run.after.flatMap((call, at) => (endsTheCall(call) ? [at] : []));
+    const events = eventNames(dialingEvents('a.b', 'tel:x'));
+
+    expect(ends.length, output).toBe(1);
+    expect(ends[0], output).toBeGreaterThan(read);
+    expect(
+      stdout
+        .split('\n')
+        .filter(
+          (line) => SAYS_END_CALL.test(line) && events.every((event) => line.includes(event)),
+        ),
+      output,
+    ).not.toEqual([]);
+    expect(code, output).toBe(0);
+  });
+
+  test('CALL-01-AC2 and CALL-01-AC4 (run 39956809738): when call-with-permission’s call has already ended in Telecom’s record, the script presses no key after it, says the call had already ended, naming the events it read, and call-without-permission runs with the phone awake and unlocked', async () => {
+    const { code, stdout, output, calls, invocations } = await runScripted({
+      effects: CALL_ALREADY_ENDED,
+    });
+    const run = flowRunsOf({ calls, invocations }).find(
+      ({ flow }) => flow === 'call-with-permission.yaml',
+    );
+    if (run === undefined)
+      throw new Error(`call-with-permission.yaml never ran on its own\n${output}`);
+    const events = eventNames(dialledEvents('a.b', 'tel:x'));
+    const without = invocations.find(({ flow }) => flow === 'call-without-permission');
+
+    expect(run.after.filter(pressesKey), output).toEqual([]);
+    expect(
+      stdout
+        .split('\n')
+        .filter(
+          (line) =>
+            /\balready ended\b/i.test(line) && events.every((event) => line.includes(event)),
+        ),
+      output,
+    ).not.toEqual([]);
+    expect({ wakefulness: without?.wakefulness, keyguard: without?.keyguard }, output).toEqual({
+      wakefulness: 'Awake',
+      keyguard: 'gone',
+    });
+    expect(code, output).toBe(0);
+  });
+
+  test.each([
+    ['in progress', {}, SAYS_END_CALL],
+    ['already ended', CALL_ALREADY_ENDED, /\balready ended\b/i],
+  ])(
+    'CALL-01-AC2 and PRIV-07: with Telecom’s record and the window dumps holding numbers in full, the job-log line for call-with-permission’s call (%s) names its events, and no number, nor six of its digits, appears in the job log',
+    async (_case, effects, says) => {
+      const { code, stdout, output, telecomAtEnd } = await runScripted({
+        effects,
+        unmasked: true,
+      });
+
+      // Not vacuous: Telecom's record held both numbers in full, to be read.
+      expect(telecomAtEnd).toContain(`tel:${EMULATOR_FIRST_CONTACT.normalised}`);
+      expect(telecomAtEnd).toContain(`tel:${MOBILE}`);
+      expect(numberLeaks(output), output).toEqual([]);
+      // Not vacuous: the line about the call is there.
+      expect(
+        stdout.split('\n').filter((line) => says.test(line) && line.includes('SET_DIALING')),
+        output,
+      ).not.toEqual([]);
+      expect(code, output).toBe(0);
+    },
+  );
+
+  test('CALL-01-AC2, CALL-01-AC3, CALL-01-AC4 and CALL-01-AC8: when a scripted flow fails, before the run stops the script reads and prints the phone’s wakefulness and the focused window’s package, and the failure stays the flow’s', async () => {
+    const { code, stderr, output, calls, invocations } = await runScripted({
+      effects: {
+        'call-without-permission': { focus: 'launcher', wakefulness: 'Dozing', status: 'ERROR' },
+      },
+    });
+    const run = flowRunsOf({ calls, invocations }).find(
+      ({ flow }) => flow === 'call-without-permission.yaml',
+    );
+
+    expect(run, output).toBeDefined();
+    expect(run?.after.some(isPowerRead), output).toBe(true);
+    expect(run?.after.some(isWindowRead), output).toBe(true);
+    expect(output).toContain('Dozing');
+    expect(output).toContain(LAUNCHER_PACKAGE);
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    expect(stderr, output).toContain('call-without-permission');
+    expect(stderr, output).toMatch(/\bMaestro\b/);
+  });
+
+  test('CALL-01-AC2, CALL-01-AC3, CALL-01-AC4 and CALL-01-AC8: when that evidence cannot be read, it is printed as unread, and the failure stays the flow’s', async () => {
+    const { code, stderr, output, calls, fontScaleAtEnd } = await runScripted({
+      effects: {
+        'call-without-permission': { focus: 'dialer', status: 'ERROR', breaksDumps: true },
+      },
+    });
+    const lines = output.split('\n');
+    const failed = calls.findIndex(
+      (call) => isFlowRun(call) && /\bcall-without-permission\.yaml\b/.test(call),
+    );
+
+    expect(
+      lines.filter((line) => /wakeful/i.test(line) && UNREAD.test(line)),
+      output,
+    ).not.toEqual([]);
+    expect(
+      lines.filter((line) => /\b(window|package|focus|focused)\b/i.test(line) && UNREAD.test(line)),
+      output,
+    ).not.toEqual([]);
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+    expect(stderr, output).toContain('call-without-permission');
+    expect(stderr, output).toMatch(/\bMaestro\b/);
+    expect(output, 'a stack trace, not a message').not.toMatch(/^\s+at .+:\d+:\d+\)?$/m);
+    expect(failed, output).toBeGreaterThan(-1);
+    expect(calls.slice(failed + 1).some(isFontReset), output).toBe(true);
+    expect(Number(fontScaleAtEnd), output).toBe(1);
+  });
+
+  test('CALL-01-AC2, CALL-01-AC3, CALL-01-AC4, CALL-01-AC8 and PRIV-07: with numbers in full in Telecom’s record and the window dump, the evidence of a failed flow names the wakefulness and the package, and no number, nor six of its digits, appears in the job log', async () => {
+    const { code, output, telecomAtEnd, windowAtEnd } = await runScripted({
+      unmasked: true,
+      effects: {
+        'call-without-permission': { focus: 'numbered', wakefulness: 'Dozing', status: 'ERROR' },
+      },
+    });
+
+    // Not vacuous: Telecom's record held both numbers in full, and the focused
+    // window's own line held one, when the evidence was read.
+    expect(telecomAtEnd).toContain(`tel:${EMULATOR_FIRST_CONTACT.normalised}`);
+    expect(telecomAtEnd).toContain(`tel:${MOBILE}`);
+    expect(windowAtEnd).toContain(`mCurrentFocus=${NUMBERED_WINDOW}`);
+    expect(numberLeaks(output), output).toEqual([]);
+    // Not vacuous: the evidence is there. The focused window has no package
+    // of its own, so the package is the focused app's, the launcher's.
+    expect(output).toContain('Dozing');
+    expect(output).toContain(LAUNCHER_PACKAGE);
+    expect(code, output).not.toBe(0);
+    expect(code, 'it was killed rather than finishing').not.toBeNull();
+  });
 });
 
 // CALL-01, approach 9 (review loop 1, code-reviewer 2): e2e-android.mjs
