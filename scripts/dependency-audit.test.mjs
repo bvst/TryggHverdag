@@ -1,6 +1,6 @@
 /**
- * BUG-11 and BUG-15: the dependency audit's two accepted advisories, each only
- * by its own decision.
+ * BUG-11, BUG-15 and BUG-64: the dependency audit's three accepted advisories,
+ * each only by its own decision.
  *
  * CI's required `security` job runs `pnpm audit --audit-level high`. Twice, a
  * high advisory with no patched version, published after `main`'s last green
@@ -24,7 +24,7 @@
  * declaring `^1.2.1`; `postcss` is reached through Vitest's Vite and through
  * `@expo/metro-config`, the app's bundler config. The root package.json
  * overrides the advisory's range to `^1.2.2`. Ignoring it instead fails
- * BUG-15's pin of exactly two ignored advisories.
+ * BUG-15's pin of exactly the decided ignored advisories.
  *
  * BUG-24 is the same kind, the same day: GHSA-pqg4-j6r4-53mv (critical:
  * command injection through `quote()` in `shell-quote` >=1.8.4 <1.11.0). The
@@ -44,17 +44,44 @@
  * file cannot say why a line is there, so `VITE_FLOOR_WHY` says it here,
  * where removing the line fails.
  *
+ * BUG-64 is both kinds at once. On 2026-10-25 the audit failed on `main`'s own
+ * checkout (run 40197588527) on two high advisories:
+ *   - GHSA-mrhx-c7xc-m3w5 (zod <4.6.6: "Zod can exhaust memory while
+ *     validating oversized constrained collections"), on two paths:
+ *     `apps__server>zod` at 4.6.5, and `apps__mobile>expo>@expo/cli>zod` at
+ *     3.25.76. The server's zod, and the API contracts', comes from the
+ *     workspace catalog, and is fixed: the contracts' zod schemas are what the
+ *     server validates requests with, which is what the advisory is about.
+ *     `@expo/cli`, Expo's command-line tool, declares `zod ^3.25.76` even at
+ *     its newest (58.1.15, read with `pnpm view` on 2026-10-25), and no 3.x is
+ *     patched, so its zod is accepted (D-143) and ignored by the ID in the root
+ *     package.json, as D-093 and D-104 are. That ignore is global: pnpm drops
+ *     the advisory wherever it turns up, the server included. So the lockfile
+ *     is read for it: every zod the server and the contracts reach is 4.6.6
+ *     or later, and the only zod below 4.6.6 is the one `@expo/cli` depends
+ *     on, reached from apps/mobile alone. The lockfile also held zod 4.6.5
+ *     through `@stryker-mutator/core > mutation-server-protocol`
+ *     (`zod ^4.1.12`), a root dev dependency the audit's paths did not list;
+ *     D-143's premise check fails on it too, because the ignore hides it as
+ *     well.
+ *   - GHSA-xjj6-f33q-929c (undici >=8.0.0 <8.12.2: a denial of service through
+ *     an unhandled error on excessive content-encodings), on one path,
+ *     `apps__server>@testcontainers/postgresql>testcontainers>undici` at
+ *     8.11.0: the server's integration-test containers, a dev dependency.
+ *     testcontainers declares `^8.9.0` (12.1.0, the locked one) and `^8.11.2`
+ *     (12.2.1, its newest), so 8.12.2 is in range. Fixed, a row in `PATCHED`.
+ *
  * An ignore list is a quiet way to stop a gate from seeing anything, so these
  * tests read files instead of running the audit: a `pnpm audit` run reads the
  * registry's advisory data, which changes whenever an advisory is published, and
  * a unit test must not change its answer with the news. What they pin, and
  * nothing more:
  *   - the root package.json's `pnpm.auditConfig.ignoreGhsas` lists
- *     GHSA-86w9-cpqp-85rv and GHSA-vfj7-8cjw-p6xm (the reproductions: without
- *     either, the audit fails every pull request);
- *   - `ignoreGhsas` holds exactly those two, each named by its own owner's
- *     decision, D-093 and D-104. A third fails this pin until the ID is added
- *     to `DECIDED_IGNORES`, beside which its premise test belongs;
+ *     GHSA-86w9-cpqp-85rv, GHSA-vfj7-8cjw-p6xm and GHSA-mrhx-c7xc-m3w5 (the
+ *     reproductions: without any one, the audit fails every pull request);
+ *   - `ignoreGhsas` holds exactly those three, each named by its own owner's
+ *     decision, D-093, D-104 and D-143. A fourth fails this pin until the ID
+ *     is added to `DECIDED_IGNORES`, beside which its premise test belongs;
  *   - every ID in `ignoreGhsas` or `ignoreCves` is named by an entry in
  *     docs/plan/decisions.md whose status starts "Accepted (owner," or
  *     "Accepted (owner)", D-093's form. Delegated, partly accepted, accepted in
@@ -96,6 +123,17 @@
  *     `braces`' only dependent is `micromatch`, which almost every glob
  *     library goes through, so the server depending on `micromatch`, or on
  *     `jest-message-util`, which reaches it, left every other test here green;
+ *   - D-143's two halves, read from pnpm-lock.yaml with the same walk, upward
+ *     from every locked zod short of 4.6.6 (below it, or not plain semver and
+ *     so not comparable with it). The fixed half: neither apps/server nor
+ *     packages/contracts reaches one, by any dependency field or `link:`. The
+ *     accepted half, D-143's premise: the packages that depend on one are
+ *     exactly `@expo/cli`, no workspace package depends on one directly, and
+ *     the importers that reach one are exactly apps/mobile. Each is read by
+ *     what depends on the zod and where it is reached from, never by its
+ *     version string: a second zod short of 4.6.6 anywhere else fails, even
+ *     one at `@expo/cli`'s own 3.25.76. No zod short of 4.6.6 at all fails
+ *     too: D-143's prompt to remove the ignore, made loud;
  *   - BUG-23's and BUG-24's fixes, one row each in `PATCHED`, read from
  *     pnpm-lock.yaml: no `source-map-js` the lockfile resolves, by a
  *     `packages` or a `snapshots` key, is in >=1.0.0 <1.2.2, and no
@@ -115,6 +153,11 @@
  *     `shell-quote`, every vite below 8.3.3 fails. That includes the older
  *     lines' own fixed releases (7.3.7, 8.1.6, 8.2.4), which the audit would
  *     pass: the check is a floor, as the root dev dependency is;
+ *   - BUG-64's undici fix, its row in `PATCHED`, read the same way: no
+ *     `undici` the lockfile resolves is in >=8.0.0 <8.12.2,
+ *     GHSA-xjj6-f33q-929c's own range, as BUG-23's row keeps to its
+ *     advisory's. 8.12.2 also fixes two moderate advisories with the same
+ *     range, GHSA-4qv8-2p9j-2685 and GHSA-f72v-6w45-q472;
  *   - the root package.json's `devDependencies.vite` has a floor of 8.3.3 or
  *     later (`^`, `~` or an exact version): the means BUG-61's fix found,
  *     pinned so that a cleanup of a dev dependency nothing imports fails here,
@@ -136,17 +179,29 @@
  *     pinned;
  *   - whether app source imports `micromatch` or `braces`. D-104's context
  *     reads that none does; nothing here reads the source;
- *   - a later decision that supersedes D-093 or D-104. The lookup finds the
- *     owner's acceptance, and does not read whether a later entry withdrew it
- *     (BUG-11's open gap). Removing the ID from `ignoreGhsas` is the loud
+ *   - a new path to `@expo/cli`'s zod *inside* apps/mobile, as for `braces`:
+ *     the walk allows apps/mobile, and a second `@expo/cli` there is still
+ *     `@expo/cli`;
+ *   - what `@expo/cli` does with zod. D-143 accepts it as Expo's command-line
+ *     tool, not the app's runtime; nothing here reads that tool's source or
+ *     the app bundle;
+ *   - an undici below 8.0.0. GHSA-xjj6-f33q-929c's range starts at 8.0.0, and
+ *     its row follows it, so an undici 7.x passes here. Other high advisories
+ *     cover the 7.x line below 7.29.1, and none covers 7.30.1 (npm's bulk
+ *     advisory endpoint, 2026-10-25): such a 7.x fails the audit itself, which
+ *     no ignore here covers, and not this check;
+ *   - a later decision that supersedes D-093, D-104 or D-143. The lookup finds
+ *     the owner's acceptance, and does not read whether a later entry withdrew
+ *     it (BUG-11's open gap). Removing the ID from `ignoreGhsas` is the loud
  *     path: the tests here then fail until they change with it;
  *   - copies of `braces` bundled inside other packages, which neither the
  *     lockfile nor the audit can see: those in Vite's bundled chokidar, tsx,
  *     prettier and `resolve-workspace-root`. All are tooling; the server runs
  *     under Node's type stripping, not tsx;
- *   - how BUG-23's and BUG-24's fixes reach the lockfile: the root
- *     package.json's overrides are not read, only what the lockfile resolves.
- *     `source-map-js`, `shell-quote` or `vite` leaving the lockfile passes the
+ *   - how BUG-23's, BUG-24's and BUG-64's fixes reach the lockfile: the root
+ *     package.json's overrides, the workspace catalog's zod and any other
+ *     means are not read, only what the lockfile resolves. `source-map-js`,
+ *     `shell-quote`, `vite` or `undici` leaving the lockfile passes the
  *     lockfile check, because nothing then resolves in the range. BUG-61's
  *     means, the root dev dependency, is the one read (above);
  *   - `source-map-js` and `shell-quote` in the spike's lockfile, which holds
@@ -207,12 +262,24 @@ const ACCEPTED_ADVISORY = 'GHSA-86w9-cpqp-85rv';
 const BRACES_ADVISORY = 'GHSA-vfj7-8cjw-p6xm';
 
 /**
+ * The advisory the owner accepted on 2026-10-25 (D-143), for `@expo/cli`'s
+ * zod only: zod's. The server's and the contracts' zod is fixed instead.
+ */
+const ZOD_ADVISORY = 'GHSA-mrhx-c7xc-m3w5';
+
+/**
  * Every advisory the audit may ignore, and the decision that accepted it. Exactly
- * these: a third needs its own owner's decision and its own premise test here.
+ * these: another needs its own owner's decision and its own premise test here.
+ *
+ * RG-03, BUG-64: this pin held two (D-093, D-104) and now holds three. The
+ * owner's decision D-143 adds exactly one, GHSA-mrhx-c7xc-m3w5, with its
+ * premise tests (D-143's two halves, below). The pin stays exact: a fourth,
+ * or one of these three missing, still fails.
  */
 const DECIDED_IGNORES = new Map([
   [ACCEPTED_ADVISORY, 'D-093'],
   [BRACES_ADVISORY, 'D-104'],
+  [ZOD_ADVISORY, 'D-143'],
 ]);
 
 /**
@@ -856,10 +923,20 @@ function dependentsIndex(lock) {
  * up. So the claim pinned is the stronger one: no path at all.
  */
 function importersReaching(lock, name) {
+  return importersReachingFrom(
+    lock,
+    [...lock.snapshots.keys()].filter((key) => packageName(key) === name),
+  );
+}
+
+/**
+ * `importersReaching`, from the given snapshot keys rather than from every
+ * snapshot of one package: BUG-64 walks from the zods short of 4.6.6 only,
+ * not from the fixed ones beside them.
+ */
+function importersReachingFrom(lock, keys) {
   const index = dependentsIndex(lock);
-  const queue = [...lock.snapshots.keys()]
-    .filter((key) => packageName(key) === name)
-    .map(snapshotNode);
+  const queue = keys.map(snapshotNode);
   const below = new Map(queue.map((node) => [node, null]));
   for (let i = 0; i < queue.length; i += 1) {
     for (const dependent of index.get(queue[i]) ?? []) {
@@ -1059,7 +1136,8 @@ const D104_REACH_CHANGED =
  * `vulnerableFrom` (null: from the first version there is) up to, and not
  * including, `fixedAt`. `lockedBefore` is what the lockfile held when the audit
  * failed. The ranges were read from npm's bulk advisory endpoint, the data
- * `pnpm audit` reads, on 2026-10-06 (BUG-23, BUG-24) and 2026-10-20 (BUG-61).
+ * `pnpm audit` reads, on 2026-10-06 (BUG-23, BUG-24), 2026-10-20 (BUG-61) and
+ * 2026-10-25 (BUG-64).
  */
 const PATCHED = [
   {
@@ -1104,6 +1182,19 @@ const PATCHED = [
     vulnerableFrom: null,
     fixedAt: '8.3.3',
     lockedBefore: '8.3.0',
+  },
+  {
+    bug: 'BUG-64',
+    name: 'undici',
+    advisory: 'GHSA-xjj6-f33q-929c',
+    // The advisory's own range, >=8.0.0 <8.12.2, as `pnpm audit --json` and
+    // the endpoint gave it on 2026-10-25; the moderate GHSA-4qv8-2p9j-2685
+    // and GHSA-f72v-6w45-q472 have the same 8.x range. An undici 7.x is
+    // outside it and passes here, as a 0.x source-map-js does for BUG-23; the
+    // 7.x line's own advisories are the audit's to catch (see "Not pinned").
+    vulnerableFrom: '8.0.0',
+    fixedAt: '8.12.2',
+    lockedBefore: '8.11.0',
   },
 ];
 
@@ -1187,11 +1278,14 @@ function shortOfFix(lock, fix) {
  * (read from a scratch install, 2026-10-06), source-map-js 1.2.2 through
  * magicast, under the coverage tool, and through postcss, reached here from
  * vitest; shell-quote 1.11.0 through the app's react-native and its
- * react-devtools-core; and vite 8.3.3 as the root's own dev dependency and as
- * vitest's peer. The overrides and the dev dependency are floors (`^1.2.2`,
- * `^1.11.0`, `^8.3.3`), so a real install may lock a later version: the same
- * scratch install locked shell-quote 1.12.0, and BUG-61's fix locked vite
- * 8.3.4.
+ * react-devtools-core; vite 8.3.3 as the root's own dev dependency and as
+ * vitest's peer; and undici 8.12.2 through the server's testcontainers, here
+ * with an override in BUG-23's and BUG-24's form (BUG-64's fix may move undici
+ * without one, since testcontainers' own range admits 8.12.2; the check reads
+ * only what the lockfile resolves, either way). The overrides and the dev
+ * dependency are floors (`^1.2.2`, `^1.11.0`, `^8.3.3`, `^8.12.2`), so a real
+ * install may lock a later version: the same scratch install locked
+ * shell-quote 1.12.0, and BUG-61's fix locked vite 8.3.4.
  */
 const PATCHED_SAMPLE_LOCK = `lockfileVersion: '9.0'
 
@@ -1202,6 +1296,7 @@ settings:
 overrides:
   source-map-js@>=1.0.0 <1.2.2: ^1.2.2
   shell-quote@<1.11.0: ^1.11.0
+  undici@>=8.0.0 <8.12.2: ^8.12.2
 
 importers:
 
@@ -1223,7 +1318,16 @@ importers:
         specifier: 0.86.3
         version: 0.86.3
 
+  apps/server:
+    devDependencies:
+      '@testcontainers/postgresql':
+        specifier: ^12.1.0
+        version: 12.1.0
+
 packages:
+
+  '@testcontainers/postgresql@12.1.0':
+    resolution: {integrity: sha512-synthetic}
 
   '@vitest/coverage-v8@5.0.1':
     resolution: {integrity: sha512-synthetic}
@@ -1250,6 +1354,12 @@ packages:
     resolution: {integrity: sha512-synthetic}
     engines: {node: '>=0.10.0'}
 
+  testcontainers@12.1.0:
+    resolution: {integrity: sha512-synthetic}
+
+  undici@8.12.2:
+    resolution: {integrity: sha512-synthetic}
+
   vite@8.3.3:
     resolution: {integrity: sha512-synthetic}
 
@@ -1260,6 +1370,10 @@ packages:
     resolution: {integrity: sha512-synthetic}
 
 snapshots:
+
+  '@testcontainers/postgresql@12.1.0':
+    dependencies:
+      testcontainers: 12.1.0
 
   '@vitest/coverage-v8@5.0.1(vitest@5.0.1)':
     dependencies:
@@ -1290,6 +1404,12 @@ snapshots:
 
   source-map-js@1.2.2: {}
 
+  testcontainers@12.1.0:
+    dependencies:
+      undici: 8.12.2
+
+  undici@8.12.2: {}
+
   vite@8.3.3: {}
 
   vitest@5.0.1:
@@ -1298,6 +1418,214 @@ snapshots:
       vite: 8.3.3
 
   ws@7.5.13: {}
+`;
+
+// --- BUG-64: zod, fixed for the server and the contracts, accepted for Expo's tool ---
+
+/**
+ * GHSA-mrhx-c7xc-m3w5's range, in `placeAgainst`'s form: every zod below
+ * 4.6.6, the whole 3.x line included, which has no patched release.
+ */
+const ZOD_FIX = { vulnerableFrom: null, fixedAt: '4.6.6' };
+
+/**
+ * Where D-143 fixes the advisory instead of accepting it: the server, and the
+ * API contracts whose zod schemas it validates requests with. Both take zod
+ * from the workspace catalog.
+ */
+const D143_FIXED_IN = ['apps/server', 'packages/contracts'];
+
+/** The one package D-143 accepts a zod short of 4.6.6 under: Expo's command-line tool, which declares `zod ^3.25.76`. */
+const D143_DEPENDENTS = ['@expo/cli'];
+
+/** The one workspace package D-143 leaves that zod reachable from: the app, through expo. */
+const D143_REACHED_FROM = ['apps/mobile'];
+
+/**
+ * The snapshot keys of every zod short of 4.6.6: in its range, or not plain
+ * semver (a git, file or tarball source), which cannot be called fixed. Read
+ * from the `snapshots` keys, where the walk starts; the `packages` keys hold
+ * no edges to walk.
+ */
+function zodShortOfFix(lock) {
+  return [...lock.snapshots.keys()].filter(
+    (key) =>
+      packageName(key) === 'zod' &&
+      placeAgainst(key.slice('zod@'.length).replace(/\(.*$/, ''), ZOD_FIX) !== 'fixed',
+  );
+}
+
+/**
+ * What depends on the given snapshots directly: the snapshots' package names,
+ * and the importers' paths. Read from `dependentsIndex`, so a dependency the
+ * reader cannot place throws here as it does in the walk.
+ */
+function directDependents(lock, keys) {
+  const index = dependentsIndex(lock);
+  const nodes = keys.flatMap((key) => index.get(snapshotNode(key)) ?? []);
+  const named = (kind) => nodes.filter((n) => n.startsWith(`${kind} `)).map(nodeName);
+  return {
+    packages: [...new Set(named('snapshot').map(packageName))].sort(),
+    importers: [...new Set(named('importer'))].sort(),
+  };
+}
+
+/**
+ * D-143's fixed half: each of the server and the contracts that reaches a zod
+ * short of 4.6.6, by any dependency field or `link:`, with one shortest
+ * chain. Empty when neither does.
+ */
+function zodFixChanges(lock) {
+  const reached = importersReachingFrom(lock, zodShortOfFix(lock));
+  return D143_FIXED_IN.filter((at) => reached.has(at)).map(
+    (at) => `${at} reaches a zod short of 4.6.6: ${reached.get(at).join(' > ')}`,
+  );
+}
+
+/**
+ * D-143's accepted half, its premise: how the lockfile differs from it, read
+ * by what depends on each zod short of 4.6.6 and where it is reached from,
+ * never by its version string. Empty when the packages that depend on one are
+ * exactly `@expo/cli`, no workspace package depends on one directly, and the
+ * importers that reach one are exactly apps/mobile.
+ */
+function zodPremiseChanges(lock) {
+  const short = zodShortOfFix(lock);
+  if (short.length === 0) {
+    return [
+      "no zod short of 4.6.6 is locked: @expo/cli no longer needs D-143's exception, so remove the ignore",
+    ];
+  }
+  const changes = [];
+  const versions = short.map((key) => key.slice('zod@'.length)).join(', ');
+  const dependents = directDependents(lock, short);
+  if (dependents.packages.join() !== D143_DEPENDENTS.join()) {
+    changes.push(
+      `the packages that depend on a zod short of 4.6.6 (${versions}) are [${dependents.packages.join(', ')}], not [${D143_DEPENDENTS.join(', ')}]`,
+    );
+  }
+  if (dependents.importers.length > 0) {
+    changes.push(
+      `workspace packages depend on a zod short of 4.6.6 directly: ${dependents.importers.join(', ')}`,
+    );
+  }
+  const reached = importersReachingFrom(lock, short);
+  const importers = [...reached.keys()];
+  if (importers.join() !== D143_REACHED_FROM.join()) {
+    changes.push(
+      `the workspace packages that reach a zod short of 4.6.6 are [${importers.join(', ')}], not [${D143_REACHED_FROM.join(', ')}]`,
+      ...importers
+        .filter((at) => !D143_REACHED_FROM.includes(at))
+        .map((at) => `${at} reaches a zod short of 4.6.6: ${reached.get(at).join(' > ')}`),
+    );
+  }
+  return changes;
+}
+
+const D143_FIX_SHORT =
+  'GHSA-mrhx-c7xc-m3w5 is fixed for the server and the contracts (D-143), not accepted: the ignore is global, and would hide this';
+
+const D143_PREMISE_CHANGED = "D-143's premise changed: decide again, or remove the ignore";
+
+/**
+ * A synthetic lockfile in v9's form, as BUG-64's fix leaves it: the server and
+ * the contracts at zod 4.6.6, from the catalog, the contracts' `@orpc/zod`
+ * holding it as a peer, the server and the app linking the contracts; and
+ * `@expo/cli` at zod 3.25.76, reached from the app through expo, and from
+ * nothing else.
+ */
+const ZOD_SAMPLE_LOCK = `lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+
+importers:
+
+  .:
+    devDependencies:
+      vitest:
+        specifier: ^5.0.1
+        version: 5.0.1
+
+  apps/mobile:
+    dependencies:
+      '@trygghverdag/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      expo:
+        specifier: ~57.0.25
+        version: 57.0.25(react@19.2.3)
+
+  apps/server:
+    dependencies:
+      '@trygghverdag/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.6
+    devDependencies:
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1
+
+  packages/contracts:
+    dependencies:
+      '@orpc/zod':
+        specifier: ^1.15.3
+        version: 1.15.3(zod@4.6.6)
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.6
+    devDependencies:
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1
+
+packages:
+
+  '@expo/cli@57.0.27':
+    resolution: {integrity: sha512-synthetic}
+    hasBin: true
+
+  '@orpc/zod@1.15.3':
+    resolution: {integrity: sha512-synthetic}
+    peerDependencies:
+      zod: '>=3.25.0'
+
+  expo@57.0.25:
+    resolution: {integrity: sha512-synthetic}
+
+  vitest@5.0.1:
+    resolution: {integrity: sha512-synthetic}
+
+  zod@3.25.76:
+    resolution: {integrity: sha512-synthetic}
+
+  zod@4.6.6:
+    resolution: {integrity: sha512-synthetic}
+
+snapshots:
+
+  '@expo/cli@57.0.27(expo@57.0.25(react@19.2.3))':
+    dependencies:
+      zod: 3.25.76
+    transitivePeerDependencies:
+      - supports-color
+
+  '@orpc/zod@1.15.3(zod@4.6.6)':
+    dependencies:
+      zod: 4.6.6
+
+  expo@57.0.25(react@19.2.3):
+    dependencies:
+      '@expo/cli': 57.0.27(expo@57.0.25(react@19.2.3))
+
+  vitest@5.0.1: {}
+
+  zod@3.25.76: {}
+
+  zod@4.6.6: {}
 `;
 
 describe('the dependency audit ignores what the owner accepted, and nothing else', () => {
@@ -1315,6 +1643,15 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
     ).toEqual(expect.arrayContaining([BRACES_ADVISORY]));
   });
 
+  test('BUG-64: GHSA-mrhx-c7xc-m3w5 is ignored by the dependency audit', () => {
+    // The reproduction: `@expo/cli`'s zod 3.25.76 has no patched 3.x, so
+    // without the ignore the audit fails every pull request (D-143).
+    expect(
+      auditConfig?.ignoreGhsas,
+      "the root package.json's pnpm.auditConfig.ignoreGhsas does not list D-143's accepted advisory",
+    ).toEqual(expect.arrayContaining([ZOD_ADVISORY]));
+  });
+
   test('BUG-11: every advisory the audit ignores is accepted by a decision', () => {
     const entries = decisionEntries(decisionLog);
     const unaccepted = ignoredIds(auditConfig)
@@ -1327,14 +1664,16 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
     ).toEqual([]);
   });
 
-  test('BUG-15: the audit ignores exactly the two accepted advisories, each named by its own decision (D-093, D-104)', () => {
+  test('BUG-15, BUG-64: the audit ignores exactly the three accepted advisories, each named by its own decision (D-093, D-104, D-143)', () => {
     // Sorted, because pnpm reads the list as a set; a duplicate still shows,
-    // as a longer list. A third advisory, even one an owner's decision names,
+    // as a longer list. A fourth advisory, even one an owner's decision names,
     // fails here until the ID is added to DECIDED_IGNORES, beside which its
-    // premise test belongs.
+    // premise test belongs. RG-03: BUG-64 renamed this test from "exactly the
+    // two" and its message from "D-093's and D-104's", because the owner's
+    // decision D-143 adds exactly one; the assertions are unchanged.
     expect(
       [...(auditConfig?.ignoreGhsas ?? [])].sort(),
-      "pnpm.auditConfig.ignoreGhsas is not exactly D-093's and D-104's advisories",
+      "pnpm.auditConfig.ignoreGhsas is not exactly D-093's, D-104's and D-143's advisories",
     ).toEqual([...DECIDED_IGNORES.keys()].sort());
 
     const entries = decisionEntries(decisionLog);
@@ -1919,6 +2258,253 @@ describe('the dependency audit ignores what the owner accepted, and nothing else
     );
   });
 
+  test("BUG-64: every zod that apps/server and packages/contracts reach is 4.6.6 or later, so D-143's ignore hides nothing there", () => {
+    const lock = readLockfile(read('pnpm-lock.yaml'));
+
+    expect(
+      lock.lockfileVersion,
+      'pnpm-lock.yaml is not lockfile v9, the form this reader knows',
+    ).toMatch(/^9\./);
+    // The walk reaches both from zod at all, so "neither reaches a zod short
+    // of 4.6.6" is walked, not assumed.
+    expect(
+      [...importersReaching(lock, 'zod').keys()],
+      'the walk did not reach apps/server and packages/contracts from zod',
+    ).toEqual(expect.arrayContaining(D143_FIXED_IN));
+    expect(zodFixChanges(lock), D143_FIX_SHORT).toEqual([]);
+  });
+
+  test("BUG-64: D-143's premise holds in the lockfile: the only zod short of 4.6.6 is the one @expo/cli depends on, reached from apps/mobile alone", () => {
+    const lock = readLockfile(read('pnpm-lock.yaml'));
+
+    expect(
+      lock.lockfileVersion,
+      'pnpm-lock.yaml is not lockfile v9, the form this reader knows',
+    ).toMatch(/^9\./);
+    // The reader found the app depending on expo, so "only apps/mobile
+    // reaches it" is read, not assumed.
+    expect(
+      dependentsOf(lock, 'expo').importers,
+      'the lockfile reader did not find apps/mobile depending on expo',
+    ).toContain('apps/mobile');
+    expect(zodPremiseChanges(lock), D143_PREMISE_CHANGED).toEqual([]);
+  });
+
+  test('BUG-64: the zod checks fail when the server or the contracts reach a zod short of 4.6.6, by a dependency, a dev dependency, an alias, a peer or a link, and on a second one anywhere else, even at the version @expo/cli holds', () => {
+    // The shape D-143 was decided on: apps/mobile > expo > @expo/cli > zod
+    // 3.25.76, and every other zod at 4.6.6.
+    const sample = readLockfile(ZOD_SAMPLE_LOCK);
+    expect(sample.lockfileVersion).toBe('9.0');
+    expect(zodShortOfFix(sample)).toEqual(['zod@3.25.76']);
+    expect([...importersReaching(sample, 'zod').keys()]).toEqual([
+      'apps/mobile',
+      'apps/server',
+      'packages/contracts',
+    ]);
+    expect([...importersReachingFrom(sample, zodShortOfFix(sample))]).toEqual([
+      [
+        'apps/mobile',
+        [
+          'apps/mobile',
+          'expo@57.0.25(react@19.2.3)',
+          '@expo/cli@57.0.27(expo@57.0.25(react@19.2.3))',
+          'zod@3.25.76',
+        ],
+      ],
+    ]);
+    expect(zodFixChanges(sample)).toEqual([]);
+    expect(zodPremiseChanges(sample)).toEqual([]);
+
+    const fixOf = (text) => zodFixChanges(readLockfile(text));
+    const premiseOf = (text) => zodPremiseChanges(readLockfile(text));
+    // A package added at the end of both sections, with its snapshot's
+    // dependencies. Where it sits does not change what the reader finds.
+    const quoted = (name) => (name.startsWith('@') ? `'${name}'` : name);
+    const withPackage = (text, key, dependencies = {}) => {
+      const lines = Object.entries(dependencies).map(([n, v]) => `      ${quoted(n)}: ${v}\n`);
+      const snapshot =
+        lines.length === 0
+          ? `  ${quoted(key)}: {}\n`
+          : `  ${quoted(key)}:\n    dependencies:\n${lines.join('')}`;
+      return `${edited(text, ['\nsnapshots:\n', `\n  ${quoted(key)}:\n    resolution: {integrity: sha512-synthetic}\n\nsnapshots:\n`])}\n${snapshot}`;
+    };
+    const serverDeps = '  apps/server:\n    dependencies:\n';
+    const serverDevEnd = '        version: 5.0.1\n\n  packages/contracts:\n';
+    const mobileExpo = '        version: 57.0.25(react@19.2.3)\n';
+
+    // The lockfile the audit failed on: the server and the contracts at
+    // 4.6.5, the catalog's version then.
+    const before = edited(
+      ZOD_SAMPLE_LOCK,
+      ['zod@4.6.6', 'zod@4.6.5'],
+      ['zod: 4.6.6', 'zod: 4.6.5'],
+      ['version: 4.6.6', 'version: 4.6.5'],
+    );
+    expect(fixOf(before)).toEqual([
+      'apps/server reaches a zod short of 4.6.6: apps/server > zod@4.6.5',
+      'packages/contracts reaches a zod short of 4.6.6: packages/contracts > zod@4.6.5',
+    ]);
+    expect(premiseOf(before)).toEqual([
+      'the packages that depend on a zod short of 4.6.6 (3.25.76, 4.6.5) are [@expo/cli, @orpc/zod], not [@expo/cli]',
+      'workspace packages depend on a zod short of 4.6.6 directly: apps/server, packages/contracts',
+      'the workspace packages that reach a zod short of 4.6.6 are [apps/mobile, apps/server, packages/contracts], not [apps/mobile]',
+      'apps/server reaches a zod short of 4.6.6: apps/server > zod@4.6.5',
+      'packages/contracts reaches a zod short of 4.6.6: packages/contracts > zod@4.6.5',
+    ]);
+
+    // The server's zod at @expo/cli's own version, through an alias: the
+    // version string alone is the accepted one.
+    const serverAlias = edited(ZOD_SAMPLE_LOCK, [
+      serverDeps,
+      `${serverDeps}      legacy-zod:\n        specifier: npm:zod@^3.25.76\n        version: zod@3.25.76\n`,
+    ]);
+    expect(zodShortOfFix(readLockfile(serverAlias))).toEqual(['zod@3.25.76']);
+    expect(fixOf(serverAlias)).toEqual([
+      'apps/server reaches a zod short of 4.6.6: apps/server > zod@3.25.76',
+    ]);
+    expect(premiseOf(serverAlias)).toEqual([
+      'workspace packages depend on a zod short of 4.6.6 directly: apps/server',
+      'the workspace packages that reach a zod short of 4.6.6 are [apps/mobile, apps/server], not [apps/mobile]',
+      'apps/server reaches a zod short of 4.6.6: apps/server > zod@3.25.76',
+    ]);
+
+    // The server reaches one through a dev dependency, which the ignore hides
+    // as much as any other.
+    const serverDev = withPackage(
+      withPackage(
+        edited(ZOD_SAMPLE_LOCK, [
+          serverDevEnd,
+          `        version: 5.0.1\n      '@synthetic/migrator':\n        specifier: ^1.0.0\n        version: 1.0.0\n\n  packages/contracts:\n`,
+        ]),
+        '@synthetic/migrator@1.0.0',
+        { zod: '3.24.1' },
+      ),
+      'zod@3.24.1',
+    );
+    expect(fixOf(serverDev)).toEqual([
+      'apps/server reaches a zod short of 4.6.6: apps/server > @synthetic/migrator@1.0.0 > zod@3.24.1',
+    ]);
+    expect(premiseOf(serverDev)).toEqual([
+      'the packages that depend on a zod short of 4.6.6 (3.25.76, 3.24.1) are [@expo/cli, @synthetic/migrator], not [@expo/cli]',
+      'the workspace packages that reach a zod short of 4.6.6 are [apps/mobile, apps/server], not [apps/mobile]',
+      'apps/server reaches a zod short of 4.6.6: apps/server > @synthetic/migrator@1.0.0 > zod@3.24.1',
+    ]);
+
+    // The server links the app, and so reaches @expo/cli's own zod: only the
+    // link shows it.
+    const serverLinksMobile = edited(ZOD_SAMPLE_LOCK, [
+      serverDeps,
+      `${serverDeps}      '@trygghverdag/mobile':\n        specifier: workspace:*\n        version: link:../mobile\n`,
+    ]);
+    expect(fixOf(serverLinksMobile)).toEqual([
+      'apps/server reaches a zod short of 4.6.6: apps/server > apps/mobile > expo@57.0.25(react@19.2.3) > @expo/cli@57.0.27(expo@57.0.25(react@19.2.3)) > zod@3.25.76',
+    ]);
+    expect(premiseOf(serverLinksMobile)).toEqual([
+      'the workspace packages that reach a zod short of 4.6.6 are [apps/mobile, apps/server], not [apps/mobile]',
+      'apps/server reaches a zod short of 4.6.6: apps/server > apps/mobile > expo@57.0.25(react@19.2.3) > @expo/cli@57.0.27(expo@57.0.25(react@19.2.3)) > zod@3.25.76',
+    ]);
+
+    // The contracts' `@orpc/zod` resolves its zod peer to @expo/cli's 3.25.76,
+    // though the contracts' own zod is fixed. The server links the contracts,
+    // so it reaches it too.
+    const peerOld = edited(
+      ZOD_SAMPLE_LOCK,
+      ['1.15.3(zod@4.6.6)', '1.15.3(zod@3.25.76)'],
+      ['      zod: 4.6.6\n', '      zod: 3.25.76\n'],
+    );
+    expect(fixOf(peerOld)).toEqual([
+      'apps/server reaches a zod short of 4.6.6: apps/server > packages/contracts > @orpc/zod@1.15.3(zod@3.25.76) > zod@3.25.76',
+      'packages/contracts reaches a zod short of 4.6.6: packages/contracts > @orpc/zod@1.15.3(zod@3.25.76) > zod@3.25.76',
+    ]);
+    expect(premiseOf(peerOld)).toEqual([
+      'the packages that depend on a zod short of 4.6.6 (3.25.76) are [@expo/cli, @orpc/zod], not [@expo/cli]',
+      'the workspace packages that reach a zod short of 4.6.6 are [apps/mobile, apps/server, packages/contracts], not [apps/mobile]',
+      'apps/server reaches a zod short of 4.6.6: apps/server > packages/contracts > @orpc/zod@1.15.3(zod@3.25.76) > zod@3.25.76',
+      'packages/contracts reaches a zod short of 4.6.6: packages/contracts > @orpc/zod@1.15.3(zod@3.25.76) > zod@3.25.76',
+    ]);
+
+    // A zod the check cannot compare with 4.6.6 cannot be called fixed.
+    const tarball = withPackage(
+      edited(ZOD_SAMPLE_LOCK, [
+        "        specifier: 'catalog:'\n        version: 4.6.6\n",
+        '        specifier: https://example.invalid/zod-4.6.6.tgz\n        version: https://example.invalid/zod-4.6.6.tgz\n',
+      ]),
+      'zod@https://example.invalid/zod-4.6.6.tgz',
+    );
+    expect(fixOf(tarball)).toEqual([
+      'apps/server reaches a zod short of 4.6.6: apps/server > zod@https://example.invalid/zod-4.6.6.tgz',
+      'packages/contracts reaches a zod short of 4.6.6: packages/contracts > zod@https://example.invalid/zod-4.6.6.tgz',
+    ]);
+
+    // The fix check passes on every case below; only the premise sees them.
+    //
+    // The root reaches one through Stryker, as the lockfile did when the audit
+    // failed (`. > @stryker-mutator/core > mutation-server-protocol > zod
+    // 4.6.5`), a path the audit's output did not list.
+    const rootStryker = withPackage(
+      withPackage(
+        withPackage(
+          edited(ZOD_SAMPLE_LOCK, [
+            '  .:\n    devDependencies:\n',
+            "  .:\n    devDependencies:\n      '@stryker-mutator/core':\n        specifier: ^10.0.0\n        version: 10.0.0\n",
+          ]),
+          '@stryker-mutator/core@10.0.0',
+          { 'mutation-server-protocol': '0.4.1' },
+        ),
+        'mutation-server-protocol@0.4.1',
+        { zod: '4.6.5' },
+      ),
+      'zod@4.6.5',
+    );
+    expect(premiseOf(rootStryker)).toEqual([
+      'the packages that depend on a zod short of 4.6.6 (3.25.76, 4.6.5) are [@expo/cli, mutation-server-protocol], not [@expo/cli]',
+      'the workspace packages that reach a zod short of 4.6.6 are [., apps/mobile], not [apps/mobile]',
+      '. reaches a zod short of 4.6.6: . > @stryker-mutator/core@10.0.0 > mutation-server-protocol@0.4.1 > zod@4.6.5',
+    ]);
+
+    // A second zod at @expo/cli's own 3.25.76, under another package in the
+    // app: the same version string, the same importer, and only its
+    // dependent shows it. A check by version string would pass it.
+    const secondAtExpos = withPackage(
+      edited(ZOD_SAMPLE_LOCK, [
+        mobileExpo,
+        `${mobileExpo}      '@synthetic/forms':\n        specifier: ^2.0.0\n        version: 2.0.0\n`,
+      ]),
+      '@synthetic/forms@2.0.0',
+      { zod: '3.25.76' },
+    );
+    expect(zodShortOfFix(readLockfile(secondAtExpos))).toEqual(['zod@3.25.76']);
+    expect(premiseOf(secondAtExpos)).toEqual([
+      'the packages that depend on a zod short of 4.6.6 (3.25.76) are [@expo/cli, @synthetic/forms], not [@expo/cli]',
+    ]);
+
+    // The app itself depends on @expo/cli's zod directly: the importer is the
+    // accepted one, the path is not.
+    const mobileDirect = edited(ZOD_SAMPLE_LOCK, [
+      mobileExpo,
+      `${mobileExpo}      zod:\n        specifier: ^3.25.76\n        version: 3.25.76\n`,
+    ]);
+    expect(premiseOf(mobileDirect)).toEqual([
+      'workspace packages depend on a zod short of 4.6.6 directly: apps/mobile',
+    ]);
+
+    // Expo moves @expo/cli to a fixed zod: D-143's exception is no longer
+    // needed, and the ignore should go.
+    const expoFixed = edited(
+      ZOD_SAMPLE_LOCK,
+      ['      zod: 3.25.76\n', '      zod: 4.6.6\n'],
+      ['  zod@3.25.76:\n    resolution: {integrity: sha512-synthetic}\n\n', ''],
+      ['  zod@3.25.76: {}\n\n', ''],
+    );
+    expect(premiseOf(expoFixed)).toEqual([
+      "no zod short of 4.6.6 is locked: @expo/cli no longer needs D-143's exception, so remove the ignore",
+    ]);
+
+    for (const text of [rootStryker, secondAtExpos, mobileDirect, expoFixed]) {
+      expect(fixOf(text)).toEqual([]);
+    }
+  });
+
   test("BUG-11: the decision lookup reads the log as it is written: only an owner's acceptance counts, not a delegated, bare, partial, in-principle or proposed one, nor no status at all", () => {
     // The log's own forms, from docs/plan/decisions.md.
     const entries = decisionEntries(decisionLog);
@@ -2075,12 +2661,17 @@ describe('the dependency audit passes on a patched version where there is one, n
     ).toEqual(Array.from({ length: 9 }, () => 'no floor'));
   });
 
-  test('BUG-23, BUG-24, BUG-61: the check fails on a lockfile holding source-map-js 1.2.1, shell-quote 1.10.0 or vite 8.3.0, in either section, and passes on one holding only 1.2.2, 1.11.0 and 8.3.3 or later', () => {
+  test('BUG-23, BUG-24, BUG-61, BUG-64: the check fails on a lockfile holding source-map-js 1.2.1, shell-quote 1.10.0, vite 8.3.0 or undici 8.11.0, in either section, and passes on one holding only 1.2.2, 1.11.0, 8.3.3 and 8.12.2 or later', () => {
+    // RG-03, BUG-64: renamed from "BUG-23, BUG-24, BUG-61: … source-map-js
+    // 1.2.1, shell-quote 1.10.0 or vite 8.3.0 …", and given one row, for the
+    // undici row BUG-64 adds to PATCHED, as BUG-61 did for vite. No row or
+    // assertion is removed or changed.
+    //
     // Per fix: the lines the fix writes into the lockfile (an override, or
     // for BUG-61 the root's own dev dependency), a second path to the version
     // the lockfile held before (beside the fixed one), a later version that a
-    // floor (`^1.2.2`, `^1.11.0`, `^8.3.3`) may lock, a version below the
-    // advisory's own range, and what the check says of each.
+    // floor (`^1.2.2`, `^1.11.0`, `^8.3.3`, `^8.12.2`) may lock, a version
+    // below the advisory's own range, and what the check says of each.
     const controls = [
       {
         fix: PATCHED[0],
@@ -2141,6 +2732,27 @@ describe('the dependency audit passes on a patched version where there is one, n
         inRange: ['vite 8.3.0 is locked, in <8.3.3, which 8.3.3 fixes (GHSA-587h-7wmj-h5pm)'],
         unplaced: [
           'vite https://example.invalid/vite-8.3.3.tgz is locked, a version that cannot be compared with 8.3.3',
+        ],
+      },
+      {
+        fix: PATCHED[3],
+        // The sample's override, in BUG-23's form (see PATCHED_SAMPLE_LOCK).
+        fixedBy: '  undici@>=8.0.0 <8.12.2: ^8.12.2\n',
+        // A second path, from @testcontainers/postgresql itself, not overridden.
+        secondPath: [
+          "  '@testcontainers/postgresql@12.1.0':\n    dependencies:\n      testcontainers: 12.1.0\n",
+          "  '@testcontainers/postgresql@12.1.0':\n    dependencies:\n      testcontainers: 12.1.0\n      undici: 8.11.0\n",
+        ],
+        // undici's newest on 2026-10-25 (`pnpm view undici version`).
+        later: '8.12.3',
+        // Below GHSA-xjj6-f33q-929c's 8.0.0, and outside every undici
+        // advisory npm's bulk endpoint gave on 2026-10-25.
+        belowAdvisory: { version: '7.30.1', short: [] },
+        inRange: [
+          'undici 8.11.0 is locked, in >=8.0.0 <8.12.2, which 8.12.2 fixes (GHSA-xjj6-f33q-929c)',
+        ],
+        unplaced: [
+          'undici https://example.invalid/undici-8.12.2.tgz is locked, a version that cannot be compared with 8.12.2',
         ],
       },
     ];
@@ -2224,14 +2836,18 @@ describe('the dependency audit passes on a patched version where there is one, n
       expect(lockedVersions(readLockfile(floor), name)).toEqual([later]);
       expect(check(floor)).toEqual([]);
 
-      // A version below the advisory's own range: source-map-js 0.6.2 is
-      // outside every range here and passes; shell-quote 1.6.1 is inside
-      // other advisories' and fails.
+      // A version below the advisory's own range: source-map-js 0.6.2 and
+      // undici 7.30.1 are outside every range here and pass; shell-quote
+      // 1.6.1 is inside other advisories' and fails.
       expect(check(beside(belowAdvisory.version))).toEqual(belowAdvisory.short);
     }
   });
 
-  test('BUG-23, BUG-24, BUG-61: where each fix draws its line: in the range, before it, fixed, or not comparable', () => {
+  test('BUG-23, BUG-24, BUG-61, BUG-64: where each fix draws its line: in the range, before it, fixed, or not comparable', () => {
+    // RG-03, BUG-64: renamed from "BUG-23, BUG-24, BUG-61: …", and given one
+    // row and one range, for the undici row BUG-64 adds to PATCHED, as BUG-61
+    // did for vite. No row or assertion is removed or changed.
+    //
     // Each part is compared as a number: 1.9.9 and 1.10.0 are below 1.11.0,
     // though "1.9.9" sorts after "1.11.0" as text. A pre-release is below its
     // release. The `file:` rows hold the pattern's start anchor: each ends in
@@ -2288,6 +2904,26 @@ describe('the dependency audit passes on a patched version where there is one, n
         fixed: ['8.3.3', '8.3.3+build.7', '8.3.4', '8.3.10', '8.4.0', '8.10.0', '9.0.0'],
         unplaced: ['github:synthetic/vite', 'file:vendor/vite-8.3.3', '8.3', ''],
       },
+      {
+        fix: PATCHED[3],
+        // GHSA-xjj6-f33q-929c's own range: 8.11.0, which the lockfile held,
+        // and 8.11.2, the floor testcontainers' newest declares.
+        'in range': [
+          '8.0.0',
+          '8.9.0',
+          '8.11.0',
+          '8.11.2',
+          '8.12.1',
+          '8.12.1+build.7',
+          '8.12.2-rc.1',
+        ],
+        // Below its 8.0.0: no red here. 7.16.0 is inside other high
+        // advisories (7.x below 7.29.1), which the audit itself fails, and
+        // which this row does not read; 7.30.1 is outside every one.
+        'before range': ['7.16.0', '7.30.1', '7.99.99', '8.0.0-rc.1'],
+        fixed: ['8.12.2', '8.12.2+build.7', '8.12.3', '8.12.10', '8.13.0', '8.100.0', '9.0.0'],
+        unplaced: ['github:synthetic/undici', 'file:vendor/undici-8.12.2', '8.12', ''],
+      },
     ];
     expect(boundaries.map((b) => b.fix)).toEqual(PATCHED);
 
@@ -2299,6 +2935,11 @@ describe('the dependency audit passes on a patched version where there is one, n
         ).toEqual(versions.map(() => place));
       }
     }
-    expect(PATCHED.map(rangeOf)).toEqual(['>=1.0.0 <1.2.2', '<1.11.0', '<8.3.3']);
+    expect(PATCHED.map(rangeOf)).toEqual([
+      '>=1.0.0 <1.2.2',
+      '<1.11.0',
+      '<8.3.3',
+      '>=8.0.0 <8.12.2',
+    ]);
   });
 });
