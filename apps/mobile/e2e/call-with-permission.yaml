@@ -1,0 +1,47 @@
+# CALL-01-AC2 (L7): with Android's call permission, one tap of the call button
+# starts the call to #1, with no second tap.
+#
+# NEVER TAP ANYTHING IN THE DIALER, OR IN THE CALL SCREEN. This flow taps the
+# app's call button once, and then only waits: no tap, no input, no swipe after
+# it. Maestro cannot see a call, so it asserts nothing of one: the script reads
+# Telecom's record instead, as SPIKE-01's S6 did. The number is #1's, from
+# Ofcom's range reserved for drama, never 112 or any emergency number, and the
+# emulator has no network: the call reaches no one (SPIKE-01-AC10's rule).
+#
+# Tagged `scripted` (CALL-01, approach 9): scripts/e2e-android.mjs runs it on
+# its own, one `maestro test` for this flow alone, in the order the script
+# holds, with the script's steps around it:
+#   - it runs after first-contact.yaml, and needs its state: #1 chosen, and
+#     CALL_PHONE granted, as Android's dialog left it;
+#   - before it, the script makes sure CALL_PHONE is granted
+#     (`adb shell pm grant <app> android.permission.CALL_PHONE`, unless the
+#     dialog's grant is known to hold), sets the phone's usual font size, and
+#     reads Telecom's record (`dumpsys telecom`) as the baseline;
+#   - after it, the script reads Telecom's record again: exactly one new
+#     outgoing call, created by the app itself, not by the dialer, that reached
+#     SET_DIALING, to #1's number as Telecom shows it (scripts/lib's readers);
+#     then it ends the call;
+#   - the app is launched with the phone permission allowed, as the dialog
+#     left it; Maestro is never left to choose (see first-contact.yaml).
+#   APP_ID       the Android application ID
+#   CALL_BUTTON  call.button.call, filled with #1's synthetic name
+#
+# Never add `retry:` or `optional: true` to a step here (see app-starts.yaml).
+appId: ${APP_ID}
+tags:
+  - scripted
+---
+- launchApp:
+    permissions:
+      phone: allow
+- extendedWaitUntil:
+    visible: ${CALL_BUTTON}
+    timeout: 30000
+# Tapped by its ID, trygghverdag-call-button, its testID in both its forms
+# (review loop 1); the wait above holds that it reads "Ring {name}".
+- tapOn:
+    id: trygghverdag-call-button
+# The call screen comes up; nothing in it is touched. Waiting here gives Telecom
+# time to dial before the script reads it.
+- waitForAnimationToEnd:
+    timeout: 5000

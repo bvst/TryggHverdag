@@ -274,6 +274,25 @@ module.exports = {
       },
     },
     {
+      name: 'calling-reaches-no-other-feature',
+      severity: 'error',
+      comment:
+        'CALL-01-AC6 (D-141): calling needs no server and no journey. features/call/ imports nothing from another feature, its index included, and nothing from the safety core, its index included, so the call button and 112 cannot come to depend on the group session, a journey or the server. Imports within call/ and into src/shared/ stay open.',
+      from: { path: '^apps/mobile/src/features/call/' },
+      to: { path: ['^apps/mobile/src/features/(?!call/)', SAFETY_CORE] },
+    },
+    {
+      name: 'the-ui-kit-reaches-only-the-calls-index',
+      severity: 'error',
+      comment:
+        "CALL-02-AC13 (D-141): Screen, EmergencyBar and the error fallback must never reach the group session, so a screen that crashes, or the root layout's providers throwing, still shows 112. Nothing in src/shared/ui/ imports from src/features/ but features/call's index; with CALL-01-AC6's rule, nothing there reaches features/grp at all.",
+      from: { path: '^apps/mobile/src/shared/ui/' },
+      to: {
+        path: '^apps/mobile/src/features/',
+        pathNot: '^apps/mobile/src/features/call/index\\.tsx?$',
+      },
+    },
+    {
       name: 'contracts-depend-on-nothing-of-ours',
       severity: 'error',
       comment:
@@ -285,8 +304,8 @@ module.exports = {
       name: 'test-kit-belongs-in-tests',
       severity: 'error',
       comment:
-        'RG-07: fakes and synthetic data are for tests. Shipping code must never import them.',
-      from: { pathNot: [TEST_FILE, '^packages/test-kit/'] },
+        "RG-07: fakes and synthetic data are for tests. Shipping code must never import them. The L7 runner, scripts/e2e-android.mjs, runs tests and ships nothing: it types the test kit's synthetic #1 on the emulator (GRP-02, HK-07), from the one file allowed to hold it, rather than a second copy.",
+      from: { pathNot: [TEST_FILE, '^packages/test-kit/', '^scripts/e2e-android\\.mjs$'] },
       to: { path: '^packages/test-kit/' },
     },
     {

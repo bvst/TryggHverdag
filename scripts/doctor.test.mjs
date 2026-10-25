@@ -5,6 +5,8 @@
 // rather than Claude's own account (A-06, D-042). A false green is the worst
 // answer a safety-critical project's doctor can give, so every check here runs
 // against a fake system: the real machine is never asked.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { runChecks } from './doctor.mjs';
 
@@ -345,5 +347,65 @@ describe('platform', () => {
     expect(asked).not.toContain('docker');
     expect(asked).not.toContain('maestro');
     expect(asked).not.toContain('ssh');
+  });
+});
+
+// Review loop 1 of M3 task 2 (CALL-01, approach 9; the main session's decision
+// under D-031): scripts/e2e-android.mjs imports the test kit's .ts fixture,
+// which Node runs by default only from 22.18, so the root package.json's
+// engines.node floor rose to 22.18.0. The doctor's Node check must name the
+// same floor, read from there by these tests, so the two cannot drift. The
+// check reads the version of the Node running it, so each test runs it as if
+// Node were another version, by swapping process.versions for the one call
+// and putting the real one back.
+
+/** The root package.json's engines.node floor, `>=X.Y.Z`, as [X, Y, Z]. */
+function enginesFloor() {
+  const manifest = JSON.parse(readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+  const floor = /^>=\s*(\d+)\.(\d+)\.(\d+)\b/.exec(manifest.engines?.node ?? '');
+  if (floor === null) {
+    throw new Error(`engines.node names no ">=X.Y.Z" floor: ${String(manifest.engines?.node)}`);
+  }
+  return floor.slice(1).map(Number);
+}
+
+/** The doctor's Node check, run as if the Node running it were `version`. */
+function nodeCheckOn(version) {
+  const real = Object.getOwnPropertyDescriptor(process, 'versions');
+  Object.defineProperty(process, 'versions', {
+    ...real,
+    value: { ...process.versions, node: version },
+  });
+  try {
+    return run(fakeSystem(), 'Node');
+  } finally {
+    Object.defineProperty(process, 'versions', real);
+  }
+}
+
+describe('Node', () => {
+  test('INF-00 (CALL-01, approach 9): Node 22.17, which cannot run e2e-android’s .ts import by default, is missing, and the fix names 22.18', () => {
+    const result = nodeCheckOn('22.17.9');
+
+    expect(result.status).toBe('missing');
+    expect(result.detail).toContain('22.17.9');
+    expect(result.fix).toContain('22.18');
+  });
+
+  test('INF-00 (CALL-01, approach 9): the Node check’s floor is the root package.json’s engines.node floor: just below it is missing, and the fix names it; at it is ok', () => {
+    const [major, minor, patch] = enginesFloor();
+    const below = patch > 0 ? `${major}.${minor}.${patch - 1}` : `${major}.${minor - 1}.99`;
+
+    const under = nodeCheckOn(below);
+    const at = nodeCheckOn(`${major}.${minor}.${patch}`);
+
+    expect(under.status).toBe('missing');
+    expect(under.fix).toContain(`${major}.${minor}`);
+    expect(at.status).toBe('ok');
+    expect(process.versions.node).not.toBe(below);
+  });
+
+  test('INF-00: a Node above engines.node’s ceiling, 23, is missing', () => {
+    expect(nodeCheckOn('23.0.0').status).toBe('missing');
   });
 });

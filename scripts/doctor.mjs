@@ -193,15 +193,19 @@ export const checks = [
     name: 'Node 22',
     platforms: 'any',
     why: 'The whole toolchain is built on Node 22 LTS',
+    // The floor is the root package.json's engines.node, ">=22.18.0 <23":
+    // scripts/e2e-android.mjs imports the test kit's .ts fixture, which Node
+    // runs by default, with type stripping, only from 22.18 (CALL-01,
+    // approach 9). A test reads both, so they cannot drift apart.
     check: () => {
       const major = Number(process.versions.node.split('.')[0]);
       const minor = Number(process.versions.node.split('.')[1]);
-      const good = major === 22 && minor >= 13;
+      const good = major === 22 && minor >= 18;
       return good
         ? ok(`v${process.versions.node}`)
         : missing(
             `v${process.versions.node}`,
-            'Install Node 22.13 or newer (the repository pins 22 in .node-version)',
+            'Install Node 22.18 or newer, below 23 (the repository pins 22 in .node-version)',
           );
     },
   },
