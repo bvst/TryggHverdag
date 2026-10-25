@@ -1,6 +1,6 @@
 # Progress log
 
-**Last updated:** 2026-10-23 · **Milestone:** M3 started (2026-10-20, D-134): twelve tasks; **task 1, GRP-01, is done: [#96](https://github.com/bvst/TryggHverdag/pull/96) was squash-merged as `bd83b21` on 2026-10-21, after `urso-agent` approved it**; task 2, the home screen (GRP-02, CALL-01, CALL-02), is built and through two review loops, every review PASS, on the session branch (head `72ad66d`), and is **ready for its pull request, which is to be opened**: the owner answered (D-141, 2026-10-22) and its step 1 was merged by the owner as [#100](https://github.com/bvst/TryggHverdag/pull/100), `50214c0`, on 2026-10-22 (task 1's step 1 was [#94](https://github.com/bvst/TryggHverdag/pull/94), `60b46ee`) · **M2 closed 2026-10-23 (D-142, the owner's choice of 2026-10-22):** all nine tasks done, the last REL-10 in [#77](https://github.com/bvst/TryggHverdag/pull/77) (`b6c6074`); closed on window B of REL-10-AC19 (A-35), with BUG-63 open · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
+**Last updated:** 2026-10-25 · **Milestone:** M3 started (2026-10-20, D-134): twelve tasks; **tasks 1 and 2 are done: GRP-01 in [#96](https://github.com/bvst/TryggHverdag/pull/96) (squashed as `bd83b21`, 2026-10-21) and the home screen (GRP-02, CALL-01, CALL-02) in [#101](https://github.com/bvst/TryggHverdag/pull/101) (squashed as `05bfb73`, 2026-10-25), each after `urso-agent` approved it**; **task 3, start a journey (JRN-01, JRN-02, LOST-01's phone half), is next in D-134's order and not started**; **BUG-64 runs first, on the session branch, and its fix is committed:** `main`'s dependency audit has been red since #101 merged, on two high advisories that were published or changed in npm's data after #101's last green run; the owner answered on 2026-10-25 (D-143), red `8d437af` and green `e47dee5` are on the branch, and the pull request is **to be opened** (task 1's step 1 was [#94](https://github.com/bvst/TryggHverdag/pull/94), `60b46ee`; task 2's was [#100](https://github.com/bvst/TryggHverdag/pull/100), `50214c0`) · **M2 closed 2026-10-23 (D-142, the owner's choice of 2026-10-22):** all nine tasks done, the last REL-10 in [#77](https://github.com/bvst/TryggHverdag/pull/77) (`b6c6074`); closed on window B of REL-10-AC19 (A-35), with BUG-63 open · M1 closed 2026-10-01 (D-088) · M0 closed 2026-09-29 (D-083)
 
 What is true **right now**. The narrative — why each thing was built and what
 went wrong on the way — is in [`progress/m0.md`](progress/m0.md) for M0,
@@ -35,8 +35,10 @@ in D-134 and [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | | BUG-60 | test-author's Bash guard denies writes only under `apps/*/src/**` and `packages/contracts/**` (`.claude/agents/test-author.md`, line 20), while its Edit and Write hook (line 16) allows only `**/*.test.ts`, `.tsx` and `.mjs` files, `apps/mobile/e2e/**` and `packages/test-kit/**`. So a shell write by test-author could reach production files that hook would refuse, such as non-test `.mjs` files in `scripts/`, `infra/` and `.github/`; and a shell write skips the Edit hooks and the post-edit checks. In review loop 1, test-author edited `scripts/lib/merge-rules.test.mjs` with a shell script: that was its own file, but the post-edit checks did not run, so it redid the edit with Edit. **What was checked:** the two frontmatter lines (16 and 20) were read. What `guard-paths.mjs` and `guard-bash.mjs` enforce for test-author with those arguments, and whether the global guard (D-120) already refuses some of these paths, was **not** checked; no shell write by test-author to a production file is known. The same family as BUG-56 | ⚪ **Queued**, for the owner to schedule (`.claude/` needs the owner's approval). Claude recommends denying shell writes to every non-test path for test-author, mirroring the Edit hook's rule, or refusing shell writes to tracked files for both roles |
 | | BUG-61 | `pnpm audit --audit-level high` turned red on #96 at `155fef6` on a new advisory, GHSA-587h-7wmj-h5pm: `vite` >=8.3.0 <=8.3.2, patched in 8.3.3, reached only through `vitest`. It was published after the branch's last green audit, so `main` would fail the same way (`6b7cd97`'s reasoning; `main`'s own run before the fix was not read). Found 2026-10-20 | ✅ **Done** — 2026-10-21, in GRP-01's merge, [#96](https://github.com/bvst/TryggHverdag/pull/96), `bd83b21`; `security` passed in `main`'s `ci` run 39557013605. The fix, `6b7cd97`: a root dev dependency `vite: ^8.3.3`, locked at 8.3.4. It is the only way found to move vitest's auto-installed peer: a pnpm override changed only the peer range, and `pnpm up --depth Infinity` left vite at 8.3.0. Pinned by `dbe2c7a`: a `PATCHED` row in `scripts/dependency-audit.test.mjs` and a test that holds the dev dependency, with its reason. Record: `progress/m3.md` |
 | | BUG-62 | `pnpm audit` reports a moderate advisory, GHSA-5r4p-p66f-jhc7, in `hono` >=4.12.4 <4.13.11, patched in 4.13.11. `apps/server` depends on `hono` `^4.13.8`, installed as 4.13.8, a production dependency of the API. The advisory (CWE-174, created 2026-10-20) is about `serveStatic` decoding the request path a second time, so middleware mounted on a static prefix can be bypassed; "Applications that serve only public files are not affected." `apps/` does not use `serveStatic` (a grep finds no use), so it is not exploitable in the API today. CI's audit runs at `--audit-level high`, so it is not red. Found 2026-10-21 | ⚪ **Queued**, for the owner to schedule. Claude recommends bumping `hono` to `^4.13.11` in a small `/bugfix`, or with the next dependency batch, so a later use of `serveStatic` does not inherit it |
-| 2 | GRP-02, CALL-01, CALL-02 | The home screen: the #1 contact (a name and a number, kept on the phone only), the call button, and 112 on every screen | 🟡 **Ready for its pull request, which is to be opened** (head `72ad66d`, pushed). Built and through two review loops; every review PASS. Specs: `docs/specs/GRP-02.md`, `CALL-01.md`, `CALL-02.md`. The owner's answers are D-141 and its four amendments, each as Claude recommended: all of `shared/ui/`, `e2e/` and `src/app/` join step 1, and the 112 button is read "Ring 1 1 2, nødnummeret", digit by digit. **Step 1 is done:** [#100](https://github.com/bvst/TryggHverdag/pull/100) was merged by the owner as `50214c0` on 2026-10-22. `features/call/`, `shared/ui/`, `e2e/` and `src/app/` need the owner and the safety review; [#95](https://github.com/bvst/TryggHverdag/pull/95) was closed without a merge, its bump is in #100. **The build:** red `ebf2faf`, green `0930b86`, five reviews of `cff3021`; loop 1 red `91665eb`, green `e128741`, with `a54f735` (an order-dependent jest failure, from a virtual mock of an installed package); loop 2 red `f3be1e1`, green `9c7c498`, test-only `72ad66d`. **On `72ad66d`:** `gate:quick` 3 passed, mobile jest 706 passed. On `9c7c498`, `gate:full` 11 passed, 0 failed, 3 not possible yet (L3, L7, and CI-01, run apart: `gate:integrity` 5 of 5). **Not verified:** L3 and L7 could not run here, so CI's `android-e2e` is where the Maestro flows first run and where "the dialer opens with 112 filled in" is first observed (D-141); how TalkBack reads the 112 label. **Owner:** approve the pull request (D-042; it adds `expo-system-ui` to `apps/mobile/package.json`), and kept the 112 label on WCAG 2.5.3 (2026-10-23, below). No folder is a mutation path until task 3 (D-081 item 13). The follow-ups: "In flight" below; the story and the evidence: `progress/m3.md` |
-| 3 to 12 | D-134 | In the order of D-134: start a journey (JRN-01, JRN-02, LOST-01's phone half); the safety permission check (GRP-03); "I'm home" and the two-hour stop (JRN-05, JRN-06); real push; the alert screen (HELP-01); what responders see (JRN-03); responder setup (GRP-04); real SMS (LINK Mobility) and the SMS sign-in code; CALL-03, LOST-04, LOST-05; iOS and the stores | ⚪ Not started. One at a time (D-134); A-11 is needed by task 6, A-12 by task 10, A-03 by task 12 |
+| 2 | GRP-02, CALL-01, CALL-02 | The home screen: the #1 contact (a name and a number, kept on the phone only), the call button, and 112 on every screen | ✅ **Done** — 2026-10-25, [#101](https://github.com/bvst/TryggHverdag/pull/101), squashed as `05bfb73` at 13:26:02 UTC (GitHub's API: merged by `urso-agent`). `urso-agent`'s approval of 2026-10-23, on `96c04b7`, was dismissed that day at 13:12:48 UTC by a push (`dismiss_stale_reviews_on_push` is on in the `main` ruleset; the API gives `2cc97d9` as the dismissal commit); it approved `16c46f3` at 13:25:47 UTC on 2026-10-25, and auto-merge (squash, on since 2026-10-23) merged 15 seconds later. **On `16c46f3` all 26 checks succeeded** (GitHub's API), `android-e2e` and the five `ai-review` checks among them: safety, privacy-security, test-auditor, code and a11y-i18n, each with a PASS comment. `test-auditor` planted 21 faults in a copy of `16c46f3`, in the new script code and in `session.tsx`, and each made a test fail (its comment). **`android-e2e` failed twice first** (`96c04b7`, run 39956809738; `2cc97d9`, run 39959347972, a push of specs only), in the step that boots the emulator and runs the flows; the coordinating session read the log of the first at `call-without-permission.yaml`'s first wait, right after the script pressed `KEYCODE_ENDCALL`. The fix, CALL-01 approach 9 (red `2ad0ce6`, green `0acf098`), wakes the phone before each scripted flow and presses end-call only while a call is in progress. **The run on `16c46f3` (job 120473565944) confirmed the cause,** on the coordinating session's reading of its log (a session cannot open job logs): the call to #1 had already ended, so "No key pressed"; no wake line was printed for any flow; every flow passed. It is the first observation on a device of CALL-01-AC2 (one outgoing call to #1's number, placed by `no.trygghverdag.placeholder` with no second tap), CALL-01-AC4 (the dialer in front, no new call) and CALL-02-AC3 (`emergency-112`: the dialer in front, and Telecom's record shows no new call). **On `main` at `05bfb73`** (job conclusions, GitHub's API): `ci` run 40197588527 failed in `security` only, on BUG-64 (below), and `mutation-group` was skipped; `deploy-staging` run 40197588530 succeeded. Specs: `docs/specs/GRP-02.md`, `CALL-01.md`, `CALL-02.md`; the owner's answers are D-141 and its four amendments; step 1 was [#100](https://github.com/bvst/TryggHverdag/pull/100) (`50214c0`). **Not verified:** how TalkBack reads "Ring 1 1 2, nødnummeret" (a real phone, L9); anything on iOS (task 12). No folder is a mutation path until task 3 (D-081 item 13). The follow-ups: "In flight" below; the story and the evidence: `progress/m3.md` |
+| | BUG-64 | `pnpm audit --audit-level high` failed on `main` at `05bfb73`, the merge of #101 (`security`, job 121181676976 of `ci` run 40197588527), and so fails every pull request, on two new high advisories. **GHSA-mrhx-c7xc-m3w5** (zod below 4.6.6: oversized constrained collections exhaust memory), on `apps__server>zod` (4.6.5) and on `apps__mobile>expo>@expo/cli>zod` (3.25.76); **GHSA-xjj6-f33q-929c** (undici 8.0.0 up to 8.12.1: a denial of service through excessive content-encodings), on `apps__server>@testcontainers/postgresql>testcontainers>undici` (8.11.0), a dev dependency. Not #101's: its `security` passed on `16c46f3`, #101 added no zod or undici, and the audit on `50214c0` gives the same result today. What changed is npm's audit data, after 14:36 UTC on 2026-10-23 (D-143 has the dates). `@expo/cli` declares `zod ^3.25.76` even in its newest version, 58.1.15 (`pnpm view`, 2026-10-25), and no 3.x is patched. Found 2026-10-25 | 🟡 **Fixed on this branch, pull request to be opened** (`claude/busy-faraday-40n2zl`, reset to `main` at `05bfb73`). **Red** `8d437af` (`test-author`, `scripts/dependency-audit.test.mjs` only); **green** `e47dee5` (the implementer's: `package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml`). On a `git archive` of `e47dee5`, `pnpm audit --audit-level high` exits 0 ("17 vulnerabilities found", "2 low | 13 moderate | 2 high (2 ignored)") and `scripts/dependency-audit.test.mjs` passes 29 of 29 (2026-10-25). Not reviewed yet; `gate:full` and CI not run on it. **The owner's answer (D-143, 2026-10-25):** "Godta den, registrert (Recommended)": zod 4.6.6 or later for everything but `@expo/cli`, undici 8.12.2 or later, and GHSA-mrhx-c7xc-m3w5 ignored by its ID for `@expo/cli`'s zod only, as D-093 did for `node-forge`. The ignore is global, so the test pins that the server and the contracts reach no zod below 4.6.6, that `@expo/cli`'s is the only one and is reached from `apps/mobile` alone, and that the ignore list is exactly D-093's, D-104's and D-143's. It also found `@orpc/zod` and `mutation-server-protocol` (under Stryker) on 4.6.5; the fix moves them too. Reconsidered when Expo moves to zod 4: the premise test then says "remove the ignore". Record: `progress/m3.md` |
+| 3 | JRN-01, JRN-02, LOST-01 (phone half) | Start a journey: the safety core, the location SDK in the background, a heartbeat every 60 s, the "sharing" notice that stays on screen. Mutation testing of the safety core is set up before its first code (D-081 item 13) | ⚪ **Next** in D-134's order; not started. BUG-64 goes first (a bug fix may run between tasks, D-134). A-29 is needed for real phones only |
+| 4 to 12 | D-134 | In the order of D-134: the safety permission check (GRP-03); "I'm home" and the two-hour stop (JRN-05, JRN-06); real push; the alert screen (HELP-01); what responders see (JRN-03); responder setup (GRP-04); real SMS (LINK Mobility) and the SMS sign-in code; CALL-03, LOST-04, LOST-05; iOS and the stores | ⚪ Not started. One at a time (D-134); A-11 is needed by task 6, A-12 by task 10, A-03 by task 12 |
 
 ## M2 at a glance
 
@@ -188,17 +190,20 @@ could not record a verdict at all (D-069, D-070, D-073).
 
 ## What the owner still needs to do
 
-**Task 2's pull request (home screen), when it is open.** It needs your approval
-(D-042). It adds `expo-system-ui` to `apps/mobile/package.json`, so that the
-always-dark theme applies on Android (Claude's choice under D-031; MIT, Expo's
-pin for SDK 57).
+**BUG-64's pull request, when it is open.** It changes the root `package.json`
+and, with D-143, `docs/plan/decisions.md`. Both have code owners
+(`.github/CODEOWNERS` lists you and `urso-agent`; D-042), so it waits for a code
+owner's approval. You have already answered its one question (D-143,
+2026-10-25).
 
-**The 112 button's name and WCAG 2.5.3 (Label in Name): answered 2026-10-23,
-"Behold som nå"** (keep it), as Claude recommended. Its screen-reader name stays
-"Ring 1 1 2, nødnummeret" (D-141), which TalkBack reads digit by digit; it does not
-contain the visible "112", so a Voice Access user who says "tap 112" may not
-reach it (they can still use "show numbers"). A known trade-off, to look at again
-with real users; CALL-02's loop-2 table records it.
+**A question for you, not asked yet: should the other files under
+`apps/mobile/src/features/grp/` have a code owner?** CI's `privacy-security-reviewer`
+raised it on #101. D-139 gave eleven sign-in files an owner; `.github/CODEOWNERS`
+(read 2026-10-25) lists two of them under `features/grp/`, `session.tsx` and
+`join-key.ts`, so the screens and `first-contact.ts` have none. The reviewer also
+noted that no lint rule keeps raw `fetch` inside `shared/api/`. Changing
+CODEOWNERS is yours; a lint rule is the alternative. The coordinating session has
+queued it for you and has not asked.
 
 **A-36 — the plan and apply are done; the join is yours.** On 2026-10-21
 `infra-staging` ran the plan (run 39564821518, job 119104478062: "Plan: 1 to
@@ -273,8 +278,8 @@ workflow differs from the default branch. Those pull requests need a manual merg
 [#95](https://github.com/bvst/TryggHverdag/pull/95)) with task 2's step 1,
 [#100](https://github.com/bvst/TryggHverdag/pull/100) (`50214c0`, 2026-10-22);
 #95 was closed without a merge. The workflows name SHA `db77d4d`, the commit
-tag `v1.0.254` points to (`git ls-remote`, 2026-10-22). Nothing was open from
-Dependabot on 2026-10-23 (`gh api`).
+tag `v1.0.254` points to (`git ls-remote`, 2026-10-22). No pull request at all
+was open on 2026-10-25 (`gh api`).
 
 **Done, and recorded elsewhere:** A-04 to A-10, A-15 to A-26 (bar A-22's leftover),
 A-28 and A-32 to A-35 (A-35 closed M2: D-142). Each row is in [`plan/README.md`](plan/README.md), and the evidence is
@@ -440,7 +445,7 @@ The things that still bite, and cost a session hours the first time.
   is [`progress/m2.md`](progress/m2.md) and M1's is
   [`progress/m1.md`](progress/m1.md), so a bug's next `BUG-<n>` has to be looked
   for in all four files, in this one and in `decisions.md`. The next one is
-  **BUG-64** (BUG-13 to BUG-63 are taken). The last paragraph of
+  **BUG-65** (BUG-13 to BUG-64 are taken). The last paragraph of
   `progress/m1.md` says why.
 - **gitleaks scans the pull request's whole history, not only its tree.** A
   credential-shaped literal stays a finding after the commit that removes it
@@ -450,10 +455,17 @@ The things that still bite, and cost a session hours the first time.
   (SEC-06); a squash-merge leaves the commit off `main`, so the line is removed
   afterwards (done for GRP-01 in #97, `f3e682c`).
 - **The dependency audit can turn red with no change of ours,** on an advisory
-  published after the last green run (BUG-15, BUG-23, BUG-24, BUG-61). Read the
-  job log for the advisory; when a fixed version exists, add a `PATCHED` row in
-  `scripts/dependency-audit.test.mjs`. A pnpm override did not move an
-  auto-installed peer (vite); a root dev dependency did.
+  published, or changed in npm's data, after the last green run (BUG-15, BUG-23,
+  BUG-24, BUG-61, BUG-64). Read the job log for the advisory; when a fixed version
+  exists, add a `PATCHED` row in `scripts/dependency-audit.test.mjs`. A pnpm
+  override did not move an auto-installed peer (vite); a root dev dependency did.
+  An ID in `ignoreGhsas` is **global**: it hides the advisory on every path, the
+  server's included (D-143), so an ignore needs a test of where the ignored
+  package is reached from. **A session cannot open a job's log** (the log host
+  answers 403 to its `gh`): reproduce the audit instead, from a `git archive <sha>
+  package.json pnpm-lock.yaml pnpm-workspace.yaml apps packages` in a scratch
+  folder, with `pnpm audit --audit-level high` there. On 2026-10-25 that printed
+  the same summary line and paths as the failed job's.
 - **`git log origin/main..HEAD` is not the task's commits.** Every task is
   squash-merged and this session branch is reused, so the range also lists each
   earlier pull request's own commits: 396 on 2026-10-20, for a task of 48. Count
@@ -522,39 +534,44 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**Task 2 (GRP-02, CALL-01, CALL-02) is ready for its pull request, which is to be
-opened.** The session branch `claude/busy-faraday-40n2zl` is pushed at `72ad66d`;
-`gh api` showed no open pull request on 2026-10-23. Built, and through two review
-loops with every review PASS. The M3 table above has the row, and the story, with
-the evidence, is in `progress/m3.md` ("two review loops done …").
-- **Step 1 is done:** [#100](https://github.com/bvst/TryggHverdag/pull/100),
-  `50214c0` (merged by the owner, 2026-10-22).
-- **The loops:** the five reviews of `cff3021`; loop 1 red `91665eb`, green
-  `e128741`; the order-dependent jest failure `a54f735`; loop 2 red `f3be1e1`,
-  green `9c7c498`; test-only `72ad66d`. Delta reviews of both loops: all PASS.
-  `code-reviewer`'s verdicts are the coordinating session's word, not a committed
-  note.
-- **Checks:** on `9c7c498`, `gate:full` 11 passed, 0 failed, 3 not possible yet
-  (L3, L7, and CI-01 run apart: `gate:integrity` 5 of 5). On `72ad66d`,
-  `gate:quick` 3 passed and mobile jest 706 passed.
-- **Not run here:** L3 and L7. CI's `android-e2e` is the first time the Maestro
-  flows run.
-- **Follow-ups, queued and not done:**
-  1. the `expo/build` / `expo/src` deep-path pattern and its probe (CALL-01
-     Risks);
-  2. the start's secure-store calls have no time limit (`safety-reviewer`); a
-     limit in `shared/secure-storage.ts` would be the fix, and Expo's Android
-     delete always settles today;
-  3. on iOS, Keychain items, the credential included, can outlive an uninstall
-     (`privacy-security-reviewer`); it belongs in task 12's spec;
-  4. the 112 button's name and WCAG 2.5.3: the owner kept it (2026-10-23), a
-     trade-off to look at again with real users;
-  5. the two BUG-17 follow-ups: the stale docblock above `timelinePhase` in
-     `scripts/e2e-android.test.mjs` (a `test-author` change), and the "Emulators
-     only" comment on `checkDevices` in `scripts/lib/e2e-android.mjs`, which should
-     say the run also roots `adbd` (the BUG-17 row has the detail);
-  6. the mock guard's obscure spellings (`{ ['virtual']: true }`, `jest['mock']`,
-     an aliased `jest`): `test-auditor` rated them a note, no action.
+**BUG-64 is in flight** (the row is in the M3 table). The session branch
+`claude/busy-faraday-40n2zl` was reset to `main` at `05bfb73` and holds
+`test-author`'s red commit `8d437af` (`scripts/dependency-audit.test.mjs` only)
+and the implementer's green `e47dee5` (`package.json`, `pnpm-workspace.yaml`,
+`pnpm-lock.yaml`). The pull request is to be opened, and the fix has not been
+reviewed or run through `gate:full` or CI. Task 3 is next in D-134's order.
+
+**Task 2 is done** ([#101](https://github.com/bvst/TryggHverdag/pull/101),
+`05bfb73`, 2026-10-25; the row is in the M3 table). Its follow-ups, queued and not
+done, from the reviews of `16c46f3` and the loops before it:
+1. the `expo/build` / `expo/src` deep-path pattern and its probe (CALL-01 Risks);
+2. the start's delete of #1 has no time limit (`safety-reviewer`, loop 2, and again
+   on `16c46f3`); a limit in `shared/secure-storage.ts` would be the fix, and
+   Expo's Android delete always settles today;
+3. `safety-reviewer`, on `16c46f3`, about `e2e:android`: `svc power stayon true` for
+   the whole run, the first, unscripted run included (it has no wake check); and
+   the window between reading Telecom and pressing end-call;
+4. `code-reviewer`, on `16c46f3`: a `label`/`title` default in `LargeButton`;
+   `flowTags` (`scripts/lib/e2e-android.mjs`) and `maestroTags`
+   (`packages/test-kit/src/maestro-flows.ts`) duplicated; `SEPARATORS` in
+   `phone.ts` and `first-contact.ts`, held together by a test; a comment on why
+   `features/call` imports the kit directly; `type View` renamed in
+   `home-screen.tsx`. From its first review: the app's lint rules out of
+   `eslint.config.mjs` and into `packages/config/eslint/`;
+5. `a11y-i18n-reviewer`: a live region on `Waiting` (`shared/ui/kit.tsx`; from GRP-01);
+6. **the owner's call,** `privacy-security-reviewer`: files under `features/grp/`
+   without a code owner, or a lint rule keeping raw `fetch` in `shared/api/` (the
+   question is under "What the owner still needs to do");
+7. on iOS, Keychain items, the credential included, can outlive an uninstall
+   (`privacy-security-reviewer`); it belongs in task 12's spec;
+8. the 112 button's name and WCAG 2.5.3: the owner kept it (2026-10-23), a
+   trade-off to look at again with real users;
+9. the two BUG-17 follow-ups: the stale docblock above `timelinePhase` in
+   `scripts/e2e-android.test.mjs` (a `test-author` change), and the "Emulators
+   only" comment on `checkDevices` in `scripts/lib/e2e-android.mjs`, which should
+   say the run also roots `adbd` (the BUG-17 row has the detail);
+10. the mock guard's obscure spellings (`{ ['virtual']: true }`, `jest['mock']`, an
+    aliased `jest`): `test-auditor` rated them a note, no action.
 
 **Carried into M3, from M2's decisions:**
 - Before M3 pushes the "I'm on it" notice on either platform, a real-phone test

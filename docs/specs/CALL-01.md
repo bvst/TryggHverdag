@@ -423,7 +423,13 @@ and why": tracked requirements this task does not deliver are named in words.
      (`END_BUTTON_BEHAVIOR_SLEEP`) puts the phone to sleep, and a sleeping
      phone shows Maestro nothing. That the call had already ended, and that
      the phone slept, is inferred, not seen: the job log holds neither, and
-     the debug artifact could not be read from the session. So:
+     the debug artifact could not be read from the session. *Confirmed on
+     `16c46f3`* (job 120473565944, with the steps below in place): "the new
+     call had already ended (Telecom's events for it: CREATED, …,
+     SET_DISCONNECTED, LOG_CALL, …, DESTROYED). No key pressed."; no wake
+     was needed before any flow, and every flow passed. The emulator's call
+     ends by itself before the script reads Telecom, so the unconditional
+     end-call key always met no call. So:
      - **Before each scripted flow,** the script reads the phone's
        wakefulness (`dumpsys power`, its `mWakefulness=` line). If it is not
        `Awake`, it wakes the phone (`input keyevent KEYCODE_WAKEUP`), lifts

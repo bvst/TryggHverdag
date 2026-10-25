@@ -6857,3 +6857,169 @@ any other path is work, not a candidate for the same treatment.
   - The next milestone is M3, under way since 2026-10-20 (D-134).
   - Amends D-128 by a note and adds one dated sentence to D-140; supersedes
     nothing.
+
+## D-143 — The dependency audit accepts a third advisory, for Expo's tool's zod only: oversized collections (BUG-64)
+- **Date:** 2026-10-25 · **Status:** Accepted (owner, 2026-10-25: "Godta den,
+  registrert (Recommended)", "Accept it, recorded"). Asked in session, in
+  Norwegian, with Claude's recommendation, which the answer takes; the
+  alternative offered was "Tving zod 4 inn i Expo", "Force zod 4 into Expo" ·
+  **Section:** 8 (SEC-06). D-142 is the last number taken on `main`, so this is
+  D-143.
+- **Context:**
+  - **The question.** The text of the question is not in this record; what it
+    named is the coordinating session's account, and what it set before the
+    owner was:
+    - the advisory, which is new on `main` and not from #101;
+    - that the server's zod and undici can be updated;
+    - that Expo's tool, even 58.1.15, uses zod 3.25.76 with no fixed 3.x, used
+      only when the app is built, reading only our own configuration files.
+  - **The two options,** in the coordinating session's words:
+    - **"Godta den, registrert (Recommended)":** BUG-64 updates the server's
+      zod to 4.6.6 or later and undici to 8.12.2 or later, and accepts
+      GHSA-mrhx-c7xc-m3w5 only for the Expo tool's path, as D-093 does for
+      `node-forge`. A test ensures the server and the contracts always use zod
+      4.6.6 or later, and the acceptance is reconsidered when Expo moves to
+      zod 4.
+    - **"Tving zod 4 inn i Expo":** override `@expo/cli`'s zod to 4.6.6. There
+      would be no exception, but zod 4 is not fully compatible with zod 3, so
+      Expo's tool could break the app's build, and that would show only in
+      CI's `android-e2e`.
+  - **The failure.** CI's required `security` job runs
+    `pnpm audit --audit-level high`. On 2026-10-25 it failed on `main`'s own
+    checkout, `05bfb73`, the squash merge of #101: `ci` run 40197588527, job
+    121181676976. The coordinating session read the job log: "21
+    vulnerabilities found · Severity: 2 low | 15 moderate | 4 high (1
+    ignored)". **Checked for this record:** GitHub's API gives the job's
+    conclusion, `failure`, and one annotation, "Process completed with exit
+    code 1"; every other job of that run succeeded, except `mutation-group`,
+    which was skipped; and `deploy-staging` (run 40197588530) succeeded. A
+    session cannot open a job's log (the log host answers 403), so the audit
+    was run again on a `git archive` of `05bfb73` in a scratch folder, with
+    `pnpm audit --audit-level high` (pnpm 10.33.0, 2026-10-25). It printed the
+    same summary line, and two high advisories:
+    - [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5),
+      "Zod can exhaust memory while validating oversized constrained
+      collections": vulnerable `<4.6.6`, patched `>=4.6.6`. Two paths:
+      `apps__mobile>expo>@expo/cli>zod` and `apps__server>zod`.
+    - [GHSA-xjj6-f33q-929c](https://github.com/advisories/GHSA-xjj6-f33q-929c),
+      "undici vulnerable to Denial of Service via unhandled error on excessive
+      content-encodings": vulnerable `>=8.0.0 <8.12.2`, patched `>=8.12.2`. One
+      path: `apps__server>@testcontainers/postgresql>testcontainers>undici`.
+  - **Not #101's failure.** `security` passed on #101's head, `16c46f3`, at
+    14:36:51 UTC on 2026-10-23 (check run 120473566122). #101's change to the
+    root `package.json` is `engines.node`, and to the lockfile two new app
+    packages, `expo-intent-launcher` and `expo-system-ui`, with no zod and no
+    undici (`git diff 50214c0 05bfb73`). The same audit on a `git archive` of
+    `50214c0`, the commit before it, gives the same two advisories today. So
+    what changed is npm's audit data. By `pnpm audit --json` (2026-10-25), npm
+    holds GHSA-xjj6-f33q-929c as created 22:14:31 UTC on 2026-10-23, and
+    GHSA-mrhx-c7xc-m3w5 as created 2026-10-01 and **updated** 18:26:52 UTC on
+    2026-10-23. Both times are after the green run; what the update changed in
+    the second is not shown by that data. Every pull request fails the check
+    until this is handled, as with D-093 and D-104.
+  - **Where zod 3.25.76 lives.** One snapshot depends on it: `@expo/cli`, Expo's
+    command-line tool (locked 57.0.27, reached from `apps/mobile` through
+    `expo`; `pnpm-lock.yaml` at `05bfb73`). `pnpm view @expo/cli` on
+    2026-10-25: `latest` is 58.1.15 (published 23:27 UTC on 2026-10-23), and it
+    still declares `zod ^3.25.76`. No 3.x is patched: the advisory's patched
+    range starts at 4.6.6.
+    - **What it does with zod** (read in the installed 57.0.27 on 2026-10-25;
+      58.1.15 was not installed and not read). In `build/`, `require("zod")`
+      appears in two files only, both under `src/start/server/`:
+      - `DevToolsPlugin.schema.js` holds the shape of a dev-tools plugin's
+        descriptor (strings, enums, a union and arrays, `commands` with
+        `.min(1)`) and of the output lines a plugin's command-line extension
+        returns (an array of objects). `DevToolsPlugin` checks a descriptor
+        with `PluginSchema.safeParse` and refuses the plugin with "Invalid
+        plugin configuration"; the descriptors come from autolinking's scan of
+        the packages installed in the project for their `devtools` platform
+        (`DevToolsPluginManager`). The output lines are the parsed text a
+        plugin's own extension printed (`DevToolsPluginCliExtensionResults`).
+      - `createMCPDevToolsExtensionSchema.js` builds a flat object schema (an
+        enum, numbers, booleans and strings, `.strict()`) for the tool a
+        plugin's commands become in Expo's MCP server. It holds no collection.
+      So what zod checks there is what installed packages describe and print,
+      in the development server's code (`start/server`), not a request from a
+      user or the network.
+    - **A difference from the question,** which said the tool uses zod "when
+      the app is built". The code read above is the development server's. Both
+      are developer tooling that reads what is installed in this repository, so
+      the risk is the same kind: neither is the app's runtime nor the server.
+      Whether `expo prebuild`, `expo export` or the release build load those
+      two files at all was not traced.
+  - **The other zod users, and undici.** The server and `packages/contracts`
+    take zod from the workspace catalog (4.6.5 locked). The contracts' zod
+    schemas are what the server validates requests with, which is what the
+    advisory is about. Two more locked 4.6.5, found by BUG-64's lockfile test
+    (`test-author`): `@orpc/zod` 1.15.3, whose peer range is `>=3.25.0`, and
+    `mutation-server-protocol` 0.4.1, under `@stryker-mutator/core`, which
+    declares `zod ^4.1.12`. undici 8.11.0 comes through `testcontainers`
+    12.1.0 (declares `undici ^8.9.0`; its newest, 12.2.1, declares `^8.11.2`),
+    the server's integration-test containers, a dev dependency, so 8.12.2 is
+    in range.
+  - **The ignore is global.** pnpm drops an advisory when
+    `auditConfig.ignoreGhsas` lists its ID, wherever it turns up (read in
+    pnpm 10.33.0's bundle; `scripts/dependency-audit.test.mjs` says so in its
+    header). So an ignore for `@expo/cli`'s zod would also hide the same
+    advisory on the server's zod, and on `mutation-server-protocol`'s. The
+    test below is what keeps that from happening.
+- **Decision:**
+  1. **Fix what has a patch.** Every zod short of 4.6.6 is moved to 4.6.6 or
+     later, for every package but `@expo/cli`, and undici to 8.12.2 or later.
+     The means are BUG-64's to choose (D-031); the test reads what the
+     lockfile resolves, not how.
+  2. **Accept GHSA-mrhx-c7xc-m3w5 by its ID** in the root `package.json`'s
+     `pnpm.auditConfig.ignoreGhsas`, beside D-093's and D-104's, for
+     `@expo/cli`'s zod only. Everything else stays at `--audit-level high`.
+     Because the ignore is global, `scripts/dependency-audit.test.mjs`
+     (BUG-64) pins three things:
+     - every zod that `apps/server` and `packages/contracts` reach is 4.6.6 or
+       later, by any dependency field or `link:`;
+     - the only zod below 4.6.6 is `@expo/cli`'s: the packages that depend on
+       one are exactly `@expo/cli`, no workspace package depends on one
+       directly, and the workspace packages that reach one are exactly
+       `apps/mobile`;
+     - the ignore list is exactly D-093's, D-104's and D-143's advisories, each
+       named by its own owner-accepted decision.
+  3. **Reconsider when Expo moves `@expo/cli` to zod 4.** The premise test
+     then fails with "no zod short of 4.6.6 is locked: @expo/cli no longer
+     needs D-143's exception, so remove the ignore", so the moment is not left
+     to memory. It fails with "D-143's premise changed: decide again, or
+     remove the ignore" if anything else, such as a server dependency, comes to
+     depend on a zod short of 4.6.6.
+- **Risk, stated plainly:** at worst, an oversized collection in a descriptor
+  or in a plugin's output, which `@expo/cli`'s zod validates, exhausts the
+  memory of a developer's or CI's run of the tool. That reading of the
+  advisory's title is Claude's and was not tested. It would fail loudly and
+  touch no one's data or safety. What the tool validates comes from packages
+  installed in this repository (above), so a crafted collection would have to
+  come from a package that is already part of the installation. The ignore
+  accepts that a future flow could give the tool input from a user or the
+  network; the premise test does not read that, and says so under "Not
+  pinned".
+- **Consequences:**
+  - BUG-64 is its own small pull request to `main`. Red is `8d437af`
+    (`test-author`, `scripts/dependency-audit.test.mjs` only); green is
+    `e47dee5` (the implementer's, in `package.json`, `pnpm-workspace.yaml` and
+    `pnpm-lock.yaml`).
+  - The pin on the ignore list was "exactly the two" (D-093, D-104) and is now
+    exactly three. `test-author` renamed that test and its message under RG-03,
+    with the reason beside the change; the assertions are the same.
+  - **Not pinned:**
+    - a later decision superseding this one (removing the ID is the loud
+      path);
+    - what `@expo/cli` does with zod, which is read above, not tested;
+    - a new path to `@expo/cli`'s zod inside `apps/mobile`: the walk allows
+      `apps/mobile`, and a second `@expo/cli` there is still `@expo/cli`;
+    - an undici below 8.0.0, which GHSA-xjj6-f33q-929c's range does not cover;
+      such a version fails the audit itself, where no ignore applies.
+  - **Not covered:** `spikes/background-safety/app/` has its own lockfile, and
+    it holds zod 3.25.76 and 4.6.5 (read 2026-10-25). Neither CI's audit nor
+    Dependabot reads it, as D-093 says; the spike code is throwaway and never
+    imported.
+  - **Revisit** when Expo moves to zod 4, or when the advisory changes. Nothing
+    tells the project when that happens besides the premise test: A-31
+    (Dependabot alerts) is still open in `plan/README.md`, the gap D-093 and
+    D-104 name. A session could not read the alerts setting (GitHub's API
+    answered 403 on 2026-10-25), so whether they are on now is not verified.
+  - Supersedes nothing.
