@@ -37,6 +37,8 @@ in D-134 and [`plan/10-roadmap.md`](plan/10-roadmap.md); the story is in
 | | BUG-62 | `pnpm audit` reports a moderate advisory, GHSA-5r4p-p66f-jhc7, in `hono` >=4.12.4 <4.13.11, patched in 4.13.11. `apps/server` depends on `hono` `^4.13.8`, installed as 4.13.8, a production dependency of the API. The advisory (CWE-174, created 2026-10-20) is about `serveStatic` decoding the request path a second time, so middleware mounted on a static prefix can be bypassed; "Applications that serve only public files are not affected." `apps/` does not use `serveStatic` (a grep finds no use), so it is not exploitable in the API today. CI's audit runs at `--audit-level high`, so it is not red. Found 2026-10-21 | ⚪ **Queued**, for the owner to schedule. Claude recommends bumping `hono` to `^4.13.11` in a small `/bugfix`, or with the next dependency batch, so a later use of `serveStatic` does not inherit it |
 | 2 | GRP-02, CALL-01, CALL-02 | The home screen: the #1 contact (a name and a number, kept on the phone only), the call button, and 112 on every screen | ✅ **Done** — 2026-10-25, [#101](https://github.com/bvst/TryggHverdag/pull/101), squashed as `05bfb73` at 13:26:02 UTC (GitHub's API: merged by `urso-agent`). `urso-agent`'s approval of 2026-10-23, on `96c04b7`, was dismissed that day at 13:12:48 UTC by a push (`dismiss_stale_reviews_on_push` is on in the `main` ruleset; the API gives `2cc97d9` as the dismissal commit); it approved `16c46f3` at 13:25:47 UTC on 2026-10-25, and auto-merge (squash, on since 2026-10-23) merged 15 seconds later. **On `16c46f3` all 26 checks succeeded** (GitHub's API), `android-e2e` and the five `ai-review` checks among them: safety, privacy-security, test-auditor, code and a11y-i18n, each with a PASS comment. `test-auditor` planted 21 faults in a copy of `16c46f3`, in the new script code and in `session.tsx`, and each made a test fail (its comment). **`android-e2e` failed twice first** (`96c04b7`, run 39956809738; `2cc97d9`, run 39959347972, a push of specs only), in the step that boots the emulator and runs the flows; the coordinating session read the log of the first at `call-without-permission.yaml`'s first wait, right after the script pressed `KEYCODE_ENDCALL`. The fix, CALL-01 approach 9 (red `2ad0ce6`, green `0acf098`), wakes the phone before each scripted flow and presses end-call only while a call is in progress. **The run on `16c46f3` (job 120473565944) confirmed the cause,** on the coordinating session's reading of its log (a session cannot open job logs): the call to #1 had already ended, so "No key pressed"; no wake line was printed for any flow; every flow passed. It is the first observation on a device of CALL-01-AC2 (one outgoing call to #1's number, placed by `no.trygghverdag.placeholder` with no second tap), CALL-01-AC4 (the dialer in front, no new call) and CALL-02-AC3 (`emergency-112`: the dialer in front, and Telecom's record shows no new call). **On `main` at `05bfb73`** (job conclusions, GitHub's API): `ci` run 40197588527 failed in `security` only, on BUG-64 (below), and `mutation-group` was skipped; `deploy-staging` run 40197588530 succeeded. Specs: `docs/specs/GRP-02.md`, `CALL-01.md`, `CALL-02.md`; the owner's answers are D-141 and its four amendments; step 1 was [#100](https://github.com/bvst/TryggHverdag/pull/100) (`50214c0`). **Not verified:** how TalkBack reads "Ring 1 1 2, nødnummeret" (a real phone, L9); anything on iOS (task 12). No folder is a mutation path until task 3 (D-081 item 13). The follow-ups: "In flight" below; the story and the evidence: `progress/m3.md` |
 | | BUG-64 | `pnpm audit --audit-level high` failed on `main` at `05bfb73`, the merge of #101 (`security`, job 121181676976 of `ci` run 40197588527), and so failed every pull request, on two new high advisories. **GHSA-mrhx-c7xc-m3w5** (zod below 4.6.6: oversized constrained collections exhaust memory), on `apps__server>zod` (4.6.5) and on `apps__mobile>expo>@expo/cli>zod` (3.25.76); **GHSA-xjj6-f33q-929c** (undici 8.0.0 up to 8.12.1: a denial of service through excessive content-encodings), on `apps__server>@testcontainers/postgresql>testcontainers>undici` (8.11.0), a dev dependency. Not #101's: its `security` passed on `16c46f3`, #101 added no zod or undici, and the audit on `50214c0` gives the same result. What changed is npm's audit data, after 14:36 UTC on 2026-10-23 (D-143 has the dates). `@expo/cli` declares `zod ^3.25.76` even in 58.1.15 (`pnpm view`, 2026-10-25), and no 3.x is patched. Found 2026-10-25 | ✅ **Done** — 2026-10-26, [#104](https://github.com/bvst/TryggHverdag/pull/104), squashed as `35a3290` at 06:20:04 UTC (GitHub's API: merged by `urso-agent`, whose approval of `3092a35` is stamped 06:19:50 UTC; the pull request had waited for it since 20:02 UTC on 2026-10-25, with auto-merge on). `35a3290` and the reviewed head `3092a35` have the same tree. **The fix:** zod 4.6.7 and undici 8.12.3 locked (workspace catalog `zod: ^4.6.6`, two root overrides), and GHSA-mrhx-c7xc-m3w5 ignored by its ID for `@expo/cli`'s zod only, as D-093 did for `node-forge`: **the owner's answer (D-143, 2026-10-25), "Godta den, registrert (Recommended)".** The ignore is global, so `scripts/dependency-audit.test.mjs` pins that the server and the contracts reach no zod below 4.6.6, that `@expo/cli`'s is the only one and is reached from `apps/mobile` alone, and that the ignore list is exactly D-093's, D-104's and D-143's. Reconsidered when Expo moves to zod 4: the premise test then says "remove the ignore". **The green is two commits, not one.** Red `8d437af` (`test-author`, the test file only) fails 5 of 29. The fix `e47dee5` (the implementer's: `package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml`) is **not green alone:** on its own tree the audit test passes 27 of 29 and fails the two decision checks, "BUG-11: every advisory the audit ignores is accepted by a decision" and "BUG-15, BUG-64: …exactly the three accepted advisories…", because it adds the ignore and D-143 lands only in `3092a35`. `3092a35` (D-143 and the records) passes 29 of 29. (`test-auditor` on #104; I ran all three trees on 2026-10-26 and got 5, 2 and 0 failures.) **Reviews on `3092a35`:** 17 of the 18 check runs succeeded and `mutation-group` was skipped; the five `ai-review` checks are among the 17. Three posted a PASS comment (code, privacy-security, test-auditor). Safety and a11y-i18n posted none and finished in 3 s and 6 s, which looks like "did not apply to this diff"; that is read from the timings, not from a log. `test-auditor` planted 21 faults in the new lockfile checks and 20 were caught; the survivor is the peer-suffix strip in `zodShortOfFix`, which it judged fail-safe. **On `main` at `35a3290`** (job conclusions, GitHub's API): `ci` run 40279208647 succeeded, `security` (job 121428516942) among its eleven successful jobs, and `mutation-group` was skipped; `deploy-staging` run 40279208537 succeeded. So `main` is green again after `05bfb73`'s red `security`. Dependabot alerts are off (A-31, below), so nothing automated would notice a change to D-143's advisory. Record: `progress/m3.md` |
+| | BUG-65 | `scripts/dependency-audit.test.mjs`'s check that nothing but the root `package.json` sets pnpm's audit settings read `pnpm-workspace.yaml`, the root `.npmrc` and the workflows as raw text, but pnpm decodes them (YAML escapes in a double-quoted key, `ini`'s JSON-decoding of a quoted name, `${NAME-fallback}` filled in from the environment), so a name spelled with escapes or an environment variable got past it. **Shown end to end with pnpm 10.33.0**, in a scratch copy: `pnpm audit --audit-level high` exits 0 with "2 high (2 ignored)", and the control, with no ignore anywhere, exits 1, for (a) `auditConfig` and `ignoreGhsas` written with unicode escapes in the workspace file (the coordinating session re-ran this one itself on 2026-10-26: exit 0 against the control's 1), (b) a workspace key `pnpm${TRYGG_UNSET-f}ile` that pnpm fills in to `pnpmfile`, naming a hook, (c) a quoted, JSON-escaped pnpmfile name in `.npmrc`, and (d) an environment-filled pnpmfile name in `.npmrc`. The workflow case (escaped YAML in `.github/workflows`) was read in pnpm's bundle and not run, since workflows are code-owned. Found by `privacy-security-reviewer` on #105 | 🟡 **In #105**, not merged: red `5620397` (4 of its tests fail, 29 pass), green `96c7156` (before the squash). Test-only, one file. The workspace file is parsed as YAML, every scalar at every depth is decoded and checked, a key containing `${` is refused, and a parse error or a warning is refused, never read as clean; `.npmrc` names are decoded by a port of `ini` 1.3.8's `decode`; workflow scalars are decoded, and any audit other than `pnpm audit --audit-level high` is refused, a folded `run: >` included. The raw-text checks stay, and `tests:changes` says "1 changed test file(s), none weakened (RG-03)" (I ran it on 2026-10-26). The parser is `yaml` 2.9.1, which the lockfile resolves as the root vite's peer, loaded the way `stryker-config.test.mjs` loads its own: no dependency or lockfile change, and if the peer goes the tests fail with a named error. **Not pinned:** a command a workflow builds at run time (shell quoting, `${{ }}` expressions, repository variables). D-144 (the two pnpm files' code owner) still follows #105. Record: `progress/m3.md`, 2026-10-26 |
+| | BUG-66 | A `registry=` line in the root `.npmrc` makes `pnpm audit` ask that server for advisories. `.npmrc` has no code owner, and no check read that setting. **Found and reproduced** by the coordinating session on 2026-10-26, while verifying BUG-65, in a scratch copy with pnpm 10.33.0: a local server answering every request with zero vulnerabilities (it logged `POST /-/npm/v1/security/audits/quick`) made `pnpm audit --audit-level high` exit 0, "No known vulnerabilities found"; the unchanged `.npmrc` exits 1, "2 high". **What did not redirect the audit** (exit 1, real advisories): a `registry:` key in `pnpm-workspace.yaml`, and `registry=` in `apps/mobile/.npmrc`. In CI the `security` job runs `pnpm install --frozen-lockfile` and then `pnpm audit --audit-level high`, and both read the root `.npmrc`, so an attacker would need a pass-through registry that serves the real packages and reports no advisories, which is feasible | 🟡 **In #105**, not merged: red `6e96a4c` (1 of its tests fails, 38 pass), green `c37d0f0` (before the squash). Test-only, the same file. The root `.npmrc` may hold only the settings in `RC_SETTINGS`, today just `engine-strict`; every decoded name is checked, section names included. Adding a setting is a change to this test, and `/scripts/` is code-owned, so the owner approves it. Controls refused: registry, scoped registry, an auth line, `registry[]`, escaped and quoted registry names, proxy, https-proxy, strict-ssl, cafile, noproxy and a `[registry]` section. **Not tried:** proxy, `strict-ssl` and the certificate settings as routes; the list refuses them either way. `.npmrc` itself still has no CODEOWNERS entry: queued, not asked (follow-up 14, under "In flight"). Record: `progress/m3.md`, 2026-10-26 |
 | 3 | JRN-01, JRN-02, LOST-01 (phone half) | Start a journey: the safety core, the location SDK in the background, a heartbeat every 60 s, the "sharing" notice that stays on screen. Mutation testing of the safety core is set up before its first code (D-081 item 13) | ⚪ **Next** in D-134's order; not started. A-29 is needed for real phones only |
 | 4 to 12 | D-134 | In the order of D-134: the safety permission check (GRP-03); "I'm home" and the two-hour stop (JRN-05, JRN-06); real push; the alert screen (HELP-01); what responders see (JRN-03); responder setup (GRP-04); real SMS (LINK Mobility) and the SMS sign-in code; CALL-03, LOST-04, LOST-05; iOS and the stores | ⚪ Not started. One at a time (D-134); A-11 is needed by task 6, A-12 by task 10, A-03 by task 12 |
 
@@ -193,18 +195,18 @@ could not record a verdict at all (D-069, D-070, D-073).
 **Answered 2026-10-26: `/pnpm-workspace.yaml` and `/pnpm-lock.yaml` get a code
 owner.** Asked in session with the evidence below, the owner chose "Ja, begge
 filene (Recommended)"; D-144 records it in its own small pull request after #105
-merges (one session branch). Until both are merged the route below stays open.
-`.github/CODEOWNERS` has no entry for either, and neither is in
-`OWNER_APPROVAL_PATHS` (read 2026-10-26). pnpm 10.33.0 reads `auditConfig` from the
-workspace file and that list replaces `package.json`'s (tried in a scratch copy,
-2026-10-26), so an ignore there could silence the required `security` check
-(`privacy-security-reviewer`, on #104). **That route is open today:**
-`scripts/dependency-audit.test.mjs` matches the file's raw text, but pnpm decodes
-YAML escapes, so `"audit\u0043onfig": {"ignore\u0047hsas": [...]}` passes the test
-and `pnpm audit` exits 0 with the ignores applied (control: exit 1). Found by
-`privacy-security-reviewer` on #105 and reproduced on 2026-10-26; BUG-65 makes the
-test read the file as pnpm does. Every other change to the two files has no owner
-either (overrides: BUG-25). The change is like #98 and #100 (CODEOWNERS plus
+merges (one session branch). `.github/CODEOWNERS` has no entry for either, and
+neither is in `OWNER_APPROVAL_PATHS` (read 2026-10-26). pnpm 10.33.0 reads
+`auditConfig` from the workspace file and that list replaces `package.json`'s (tried
+in a scratch copy, 2026-10-26), so an ignore there could silence the required
+`security` check (`privacy-security-reviewer`, on #104). **BUG-65's check in #105
+closes the escaped-key route** (on `main` it stays open until #105 merges):
+`scripts/dependency-audit.test.mjs` matched the file's raw text, but pnpm decodes YAML
+escapes, so `"audit\u0043onfig": {"ignore\u0047hsas": [...]}` passed the test
+and `pnpm audit` exited 0 with the ignores applied (control: exit 1). The test now
+parses the file as YAML and checks what it decodes. That is a test, not an owner:
+**until D-144's pull request merges, every other change to the two files has no
+owner** (overrides: BUG-25). The change is like #98 and #100 (CODEOWNERS plus
 `OWNER_APPROVAL_PATHS`). The detail is in `progress/m3.md`, 2026-10-26.
 
 **A-31 — turn on Dependabot alerts** (Settings → Code security). Verified off:
@@ -467,7 +469,7 @@ The things that still bite, and cost a session hours the first time.
   is [`progress/m2.md`](progress/m2.md) and M1's is
   [`progress/m1.md`](progress/m1.md), so a bug's next `BUG-<n>` has to be looked
   for in all four files, in this one and in `decisions.md`. The next one is
-  **BUG-66** (BUG-13 to BUG-65 are taken). The last paragraph of
+  **BUG-67** (BUG-13 to BUG-66 are taken). The last paragraph of
   `progress/m1.md` says why.
 - **gitleaks scans the pull request's whole history, not only its tree.** A
   credential-shaped literal stays a finding after the commit that removes it
@@ -556,20 +558,32 @@ The things that still bite, and cost a session hours the first time.
 
 ## In flight
 
-**BUG-65, in #105 with this record.** `scripts/dependency-audit.test.mjs`'s check that
-nothing but the root `package.json` sets pnpm's audit settings reads
-`pnpm-workspace.yaml` as raw text, but pnpm decodes YAML escapes:
-`"audit\u0043onfig": {"ignore\u0047hsas": [...]}` in that file passes the check, and
-`pnpm audit --audit-level high` exits 0 with the ignores applied (the control, with
-no ignore anywhere, exits 1). `pnpm-workspace.yaml` has no code owner, so a pull
-request touching only it could silence the required `security` check without the
-owner. Found by `privacy-security-reviewer` on #105; reproduced by the coordinating
-session on 2026-10-26 in a scratch copy. The fix: the check reads the file as pnpm
-does. The code-owner question below stands, and is more urgent.
+**BUG-65 and BUG-66 are in #105 with their fixes** (not merged; both are test-only
+changes to `scripts/dependency-audit.test.mjs`; the detail is in `progress/m3.md`,
+2026-10-26).
+
+**BUG-65** (red `5620397`, green `96c7156`, before the squash). The check that nothing
+but the root `package.json` sets pnpm's audit settings read `pnpm-workspace.yaml`,
+`.npmrc` and the workflows as raw text, but pnpm decodes them, so escaped or
+environment-filled names got past it: with pnpm 10.33.0, `pnpm audit --audit-level
+high` exited 0 ("2 high (2 ignored)") where the control exited 1. Found by
+`privacy-security-reviewer` on #105. The test now reads each file as pnpm and GitHub
+do (YAML scalars decoded at every depth, `ini`'s decoding of `.npmrc` names, a `${`
+in a key refused, a file that does not parse refused), and the raw-text checks stay.
+Not pinned: a command a workflow builds at run time.
+
+**BUG-66** (red `6e96a4c`, green `c37d0f0`; found and fixed in the same pull request).
+A `registry=` line in the root `.npmrc` makes `pnpm audit` ask that server for
+advisories: in a scratch copy on 2026-10-26, a local server that reported none made
+the audit exit 0 ("No known vulnerabilities found"), and the unchanged `.npmrc` exits
+1 ("2 high"). CI's `security` job installs and audits with that file, which has no
+code owner, and no check read the setting. The root `.npmrc` may now hold only the
+settings in the test's `RC_SETTINGS`, today `engine-strict`.
 
 BUG-64 is done ([#104](https://github.com/bvst/TryggHverdag/pull/104), `35a3290`,
 2026-10-26; the row is in the M3 table), and task 3 is next in D-134's order. The
-next free IDs are **BUG-66** and **D-144**.
+next free IDs are **BUG-67** and **D-144**; D-144 (the owner's answer on the two pnpm
+files' code owner) is unwritten and follows #105 in its own pull request.
 
 **Follow-ups, queued and not done.** Task 2
 ([#101](https://github.com/bvst/TryggHverdag/pull/101), `05bfb73`, 2026-10-25), from
@@ -604,8 +618,9 @@ the reviews of `16c46f3` and the loops before it:
     aliased `jest`): `test-auditor` rated them a note, no action.
 
 From BUG-64 (#104):
-11. **the owner's call:** a code owner for `/pnpm-workspace.yaml` and
-    `/pnpm-lock.yaml` (under "What the owner still needs to do");
+11. a code owner for `/pnpm-workspace.yaml` and `/pnpm-lock.yaml`: **the owner said
+    yes on 2026-10-26;** D-144 follows #105 in its own pull request (under "What the
+    owner still needs to do");
 12. **D-104's advisory no longer appears.** GHSA-vfj7-8cjw-p6xm (`braces`) is absent
     from npm's audit data (the implementer, 2026-10-25; confirmed 2026-10-26 by an
     audit of `35a3290` with no ignore list: the only highs are `node-forge` and
@@ -614,6 +629,13 @@ From BUG-64 (#104):
 13. whether a release or export build loads `@expo/cli`'s two zod files is untraced
     (D-143): the owner was told the tool uses zod "when the app is built", and the
     code read is the dev server's.
+
+From BUG-66 (#105):
+14. **a code owner for the root `.npmrc`: queued, not asked.** `.github/CODEOWNERS`
+    has no line for it and `scripts/lib/merge-rules.mjs` does not name it (read
+    2026-10-26). The owner's D-144 answer names only `pnpm-workspace.yaml` and
+    `pnpm-lock.yaml`. BUG-66's allowlist is a test; a code owner would also put every
+    other change to the file before the owner. The change would be like D-144's.
 
 **Carried into M3, from M2's decisions:**
 - Before M3 pushes the "I'm on it" notice on either platform, a real-phone test
