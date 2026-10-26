@@ -7096,7 +7096,10 @@ any other path is work, not a candidate for the same treatment.
       - a package's own `.npmrc` with `script-shell` hijacked a run only from
         inside that package's folder. From the root (`--filter`, `-r`) the
         script ran and failed. No package has one today (`git ls-files`,
-        2026-10-26: the only tracked `.npmrc` is the root's).
+        2026-10-26: the only tracked `.npmrc` is the root's). *Later the same
+        day: turbo runs each package's script from that package's folder, so
+        such a file does reach the typecheck ("Verified 2026-10-26", under
+        Consequences).*
     - **The reviewer's own runs,** reported and not repeated by us: in a
       `git archive` copy of `357cd4f` with `scriptShell: /bin/true`,
       `pnpm run test:unit` and `pnpm run licenses:check` exited 0 having run
@@ -7200,9 +7203,14 @@ any other path is work, not a candidate for the same treatment.
     Claude chose the wording of each reason, the order, and the points under
     Consequences (D-031).
   - **Not in this decision:**
-    - `/.nvmrc`, which has no code owner either: queued, not asked
-      (`progress.md`, follow-up 18);
-    - a package's own `.npmrc` or `.pnpmfile.cjs` (none exists today), and the
+    - `/.nvmrc`, `/.node-version` and `/turbo.json`, which have no code owner
+      either (tracked, and in neither CODEOWNERS nor `OWNER_APPROVAL_PATHS`,
+      read 2026-10-26): `/.nvmrc` is queued, not asked (`progress.md`,
+      follow-up 18); the other two are `privacy-security-reviewer`'s note N4 on
+      `7dda5b8`, noted and not decided;
+    - a package's own `.npmrc`, `pnpm-workspace.yaml` or `.pnpmfile.cjs` (none
+      exists today). They get no CODEOWNERS line here; a test refuses them
+      instead (`94cdebc`, "Verified 2026-10-26" below). The same goes for the
       two files under `spikes/background-safety/app/` (its own
       `pnpm-workspace.yaml` and `pnpm-lock.yaml`, outside the workspace; D-093
       and D-143 say CI's audit does not read that lockfile). A leading `/`
@@ -7242,8 +7250,10 @@ any other path is work, not a candidate for the same treatment.
   - **The check before pnpm (BUG-69) is still to come,** its own bug and pull
     request after #105. Claude's plan: a Node script with no dependencies, so
     it can run before `pnpm install`, which checks the `.npmrc` byte pin, the
-    workspace file's line grammar and that no root `.pnpmfile.cjs` exists, and
-    which runs before the first pnpm command in every job that gates a merge.
+    workspace file's line grammar, that no root `.pnpmfile.cjs` exists, and
+    that none of the three settings files exists in a package folder (the test
+    of `94cdebc` refuses them only in a run that reaches it), and which runs
+    before the first pnpm command in every job that gates a merge.
     A skipped required check counts as passed, so each such job must run it
     unconditionally. Until then the owner's review of these files is what
     stands between a pull request and the route; it is not a check that runs.
@@ -7265,12 +7275,65 @@ any other path is work, not a candidate for the same treatment.
     one path and no other. `/packages/contracts/package.json` is under
     `packages/contracts/**`, which the filter lists (read 2026-10-26), so it
     summons `safety-reviewer` by path already, and the other four are not
-    under `/apps/`.
+    under `/apps/`. `427641c` then made the eleven one list,
+    `SAFETY_FILTER_EXCEPTIONS`, read by the filter test and by the four D-141
+    guards (CALL-01-AC9 and CALL-02-AC10 to AC12), which had kept a copy of
+    ten (`test-auditor` on `7dda5b8`; `test-author` planted an exception under
+    `/apps/mobile/e2e/` in a scratch copy, and the four passed at `7dda5b8`;
+    CALL-02-AC11 now fails on it). The comment on the eleventh now says what
+    is true: the reviewer's brief names dependencies, not install scripts
+    (`.claude/agents/privacy-security-reviewer.md`, lines 3, 24 and 25), and
+    BUG-68's fix in CI is what closes that.
+  - **Verified 2026-10-26, after the reviews of `7dda5b8`** (this entry's
+    "Not verified" list, as first written, had turbo's folder open):
+    - **CI and reviews on `7dda5b8`** (GitHub's REST API and #105's comments,
+      read 2026-10-26): all 17 checks succeeded and `mutation-group` was
+      skipped; all five reviewers passed. `privacy-security-reviewer` cleared
+      the BLOCK that the six lines answer. Its note N1: a last-match check of
+      CODEOWNERS over 808 paths found exactly six files gaining
+      `@bvst @urso-agent` and none losing an owner, and GitHub's
+      `codeowners/errors` returned none.
+    - **Turbo runs each package's script from that package's folder.**
+      `privacy-security-reviewer` found it first (S1): with a deliberate type
+      error in `apps/server/src` and `apps/server/.npmrc` holding
+      `script-shell=/bin/true`, `pnpm run typecheck` exited 0, "5 successful,
+      5 total", and the error got through; without the line it failed with
+      TS2322. A package-level `scriptShell` in `pnpm-workspace.yaml` did the
+      same, and a package-level `.pnpmfile.cjs` alone did not (the reviewer's
+      runs). **The coordinating session reproduced it on this repository**
+      with pnpm 10.33.0: with a temporary type error in `apps/server/src`,
+      `pnpm exec turbo run typecheck --filter=@trygghverdag/server --force`
+      exits 2 (TS2322); with `apps/server/.npmrc` holding
+      `script-shell=/bin/true` added, it exits 0, "4 successful", with no
+      TS2322. Both probe files were removed. So a package's own settings file
+      can make that package's typecheck, a step of `gate:static` (`ci.yml`,
+      `pnpm run gate:static`), pass having run nothing. **It was open on
+      `main` too.** `turbo.json` defines one task, `typecheck`, and the root
+      script of that name is `turbo run typecheck` (read 2026-10-26).
+    - **Not affected** (the reviewer's list): commands started from the root
+      with `--filter … run`, such as the mobile jest suite in `test:unit`; the
+      audit; the licence check; and the unit, system and integration tests.
+    - **How #105 answers it, and not by code owner.** `94cdebc` (`test-author`)
+      adds a test, run by the root Vitest run, whose configuration is
+      code-owned, that refuses any `.npmrc`, `pnpm-workspace.yaml` or
+      `.pnpmfile.cjs` in the repository except the root's two and
+      `spikes/background-safety/app/pnpm-workspace.yaml`, which is outside the
+      root workspace. It walks the tree with no git subprocess and skips
+      `node_modules` and `.git`; the test's own comment says the files it
+      refuses cannot switch it off, because the root run starts from the root.
+      The coordinating session probed it: with `apps/server/.npmrc` added it
+      fails (1 failed, 52 passed), and the file was removed afterwards. The
+      same commit adds named fixtures: `scriptShell: /bin/true` is refused by
+      the line grammar and `WORKSPACE_SETTINGS`, and `script-shell=/bin/true`
+      by `RC_SETTINGS`. The gate, merge-rules, gate-integrity,
+      dependency-audit and decision tests pass 404 of 404 (the coordinating
+      session's run, and mine), and `tests:changes` reports none weakened.
+      BUG-69's check before pnpm in CI stays queued, and refuses such files
+      too.
   - **Not verified here:**
-    - whether turbo runs a package's script from that package's folder, which
-      is the case where a package-level `.npmrc` can hijack the shell;
     - the reviewer's full combined attack (a shell the pull request chooses,
       through every required check, to a merge): each half was shown, but the
-      whole was never run in CI;
+      whole was never run in CI. The reviewer says the same of the route
+      through CI, reproduced locally only;
     - any pnpm version but 10.33.0.
   - Extends D-139: more owner paths, the same mechanism. Supersedes nothing.
