@@ -214,6 +214,11 @@
  *     subprocess, `node_modules`, `.git` and `.stryker-tmp` skipped, but the
  *     root's two and spikes/background-safety/app/pnpm-workspace.yaml, which
  *     is outside the root workspace (`PNPM_SETTINGS_ALLOWED`);
+ *   - BUG-69's workspace list (B1): pnpm-workspace.yaml's `packages:` and the
+ *     root package.json's `workspaces` each name exactly `WORKSPACE_FOLDERS`,
+ *     with no glob; each named folder has a package.json that is a path the
+ *     owner must approve; and every folder under apps/ and packages/ with a
+ *     package.json is named in both;
  *   - D-093's premise, read from pnpm-lock.yaml (lockfile v9): the packages
  *     that depend on `node-forge` are exactly `@expo/cli` and
  *     `@expo/code-signing-certificates`, the second's only dependent is
@@ -428,6 +433,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
+import { OWNER_APPROVAL_PATHS } from './lib/merge-rules.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (file) => readFileSync(path.join(root, file), 'utf8');
@@ -1034,6 +1040,44 @@ function pnpmSettingsFiles(top) {
   };
   walk('');
   return found.toSorted();
+}
+
+/**
+ * BUG-69 (privacy-security-reviewer's B1 on #105): the workspace's packages,
+ * by folder. With `apps/*` and `packages/*` in pnpm-workspace.yaml and in the
+ * root package.json's `workspaces`, a pull request that adds only
+ * apps/<new>/package.json, which no CODEOWNERS line owns, adds a workspace
+ * package, and CI's `pnpm install --frozen-lockfile` runs its `preinstall`
+ * or `postinstall` in every required job. That script can write
+ * `script-shell=/bin/true` to the root .npmrc, and every `pnpm run` after it
+ * passes having run nothing (reproduced with pnpm 10.33.0, 2026-10-26; with
+ * the packages named, the install left the .npmrc alone). Named, a new
+ * package needs a line in both files, each code-owned (D-144), and each
+ * named package's package.json is a path the owner must approve.
+ */
+const WORKSPACE_FOLDERS = [
+  'apps/mobile',
+  'apps/server',
+  'packages/config',
+  'packages/contracts',
+  'packages/test-kit',
+];
+
+/** BUG-69: a workspace entry pnpm would expand as a glob, not read as one folder. */
+const WORKSPACE_GLOB = /[*?[\]{}!]/;
+
+/**
+ * BUG-69: the workspace's two lists as written: pnpm-workspace.yaml's
+ * `packages:`, as the YAML parser reads it (the line grammar holds every line
+ * of that file to shapes pnpm's parser reads the same way), and the root
+ * package.json's `workspaces`. A list that is missing or not a list of
+ * strings comes back as it is, and fails the comparisons below.
+ */
+function workspaceLists() {
+  return {
+    pnpm: yamlLibrary().parse(read('pnpm-workspace.yaml'))?.packages,
+    manifest: manifest.workspaces,
+  };
 }
 
 /**
@@ -3424,6 +3468,66 @@ packages:
     } finally {
       rmSync(top, { recursive: true, force: true });
     }
+  });
+
+  test('BUG-69: pnpm-workspace.yaml and package.json each name exactly the five package folders, with no glob, so a new folder under apps/ or packages/ is no workspace package until the owner approves a line for it', () => {
+    const lists = workspaceLists();
+    const globs = (list) =>
+      (Array.isArray(list) ? list : [list]).filter((entry) => WORKSPACE_GLOB.test(String(entry)));
+
+    expect(
+      { pnpm: globs(lists.pnpm), manifest: globs(lists.manifest) },
+      'workspace entries that are globs: a pull request that adds a package.json under one becomes a workspace package, and CI installs it and runs its install scripts with no owner approving it (B1)',
+    ).toEqual({ pnpm: [], manifest: [] });
+    expect({
+      pnpm: Array.isArray(lists.pnpm) ? lists.pnpm.toSorted() : lists.pnpm,
+      manifest: Array.isArray(lists.manifest) ? lists.manifest.toSorted() : lists.manifest,
+    }).toEqual({ pnpm: WORKSPACE_FOLDERS, manifest: WORKSPACE_FOLDERS });
+  });
+
+  test("BUG-69: each package folder the workspace names has a package.json, and it is a path the owner must approve, so a named package's install scripts cannot change unseen", () => {
+    const lists = workspaceLists();
+    const named = [
+      ...new Set([
+        ...WORKSPACE_FOLDERS,
+        ...(Array.isArray(lists.pnpm) ? lists.pnpm : []),
+        ...(Array.isArray(lists.manifest) ? lists.manifest : []),
+      ]),
+    ];
+    // An owner path covers a file when it is that file, or a folder it is in.
+    const owned = (file) =>
+      OWNER_APPROVAL_PATHS.some(
+        (owner) => owner === `/${file}` || (owner.endsWith('/') && `/${file}`.startsWith(owner)),
+      );
+
+    expect(
+      named.filter((folder) => !existsSync(path.join(root, String(folder), 'package.json'))),
+      'workspace entries that are not a folder with a package.json',
+    ).toEqual([]);
+    expect(
+      named.map((folder) => `${folder}/package.json`).filter((file) => !owned(file)),
+      "workspace packages whose package.json is no path the owner must approve: its install scripts run in CI's install",
+    ).toEqual([]);
+  });
+
+  test('BUG-69: every folder under apps/ and packages/ that has a package.json is one both workspace lists name, so none is left out of the workspace unseen', () => {
+    const lists = workspaceLists();
+    const names = (list, folder) => Array.isArray(list) && list.includes(folder);
+    const found = ['apps', 'packages'].flatMap((parent) =>
+      readdirSync(path.join(root, parent), { withFileTypes: true })
+        .filter(
+          (entry) =>
+            entry.isDirectory() && existsSync(path.join(root, parent, entry.name, 'package.json')),
+        )
+        .map((entry) => `${parent}/${entry.name}`),
+    );
+
+    // The walk found the packages, so "none is left out" is read, not assumed.
+    expect(found, 'the walk found no package under apps/').toContain('apps/server');
+    expect(
+      found.filter((folder) => !names(lists.pnpm, folder) || !names(lists.manifest, folder)),
+      'folders with a package.json that pnpm-workspace.yaml or package.json does not name',
+    ).toEqual([]);
   });
 
   test("BUG-11: D-093's premise holds in the lockfile: node-forge comes only through Expo's command-line tool, at a version the advisory covers", () => {
