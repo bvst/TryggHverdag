@@ -1,10 +1,16 @@
 # pnpm reads this file; dependency-cruiser reads the "workspaces" field in
 # package.json instead. Both lists must say the same thing, and the import check
 # stops with an explanation if they ever drift apart
-# (packages/config/dependency-cruiser.cjs).
+# (packages/config/dependency-cruiser.cjs). The packages are named by folder,
+# not globbed, so a new package must be added here and in package.json: with a
+# glob, a pull request that adds a package.json under apps/ or packages/ would
+# have its install scripts run in CI with no owner approving it (B1, D-144).
 packages:
-  - apps/*
-  - packages/*
+  - apps/mobile
+  - apps/server
+  - packages/config
+  - packages/contracts
+  - packages/test-kit
 
 # One place for versions that every package shares.
 catalog:

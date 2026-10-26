@@ -5,8 +5,11 @@
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "workspaces": [
-    "apps/*",
-    "packages/*"
+    "apps/mobile",
+    "apps/server",
+    "packages/config",
+    "packages/contracts",
+    "packages/test-kit"
   ],
   "engines": {
     "node": ">=22.18.0 <23",
